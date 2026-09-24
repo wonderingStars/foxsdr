@@ -1283,6 +1283,11 @@ void Pipeline::sourceThreadMain(double chainRateHz,
 }
 
 void Pipeline::dspThreadMain() {
+    // THE REAL-TIME THREAD, marked for the plugin API: every plugin process()
+    // and pull() runs on this thread, and the host functions a plugin must not
+    // call from here (the settings store, which allocates) refuse it by this
+    // mark rather than by trusting the plugin to know where it is.
+    const cascade::core::RealtimeThreadScope realtime;
     try {
         dspThreadBody();
     } catch (const std::exception& e) {
@@ -1680,6 +1685,21 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
     autoNotchHz_.store(autoNotchL_->frequencyHz(), std::memory_order_relaxed);
     nrL_->process(outL_.data(), k, outL_.data());
     nrR_->process(outR_.data(), k, outR_.data());
+
+    // --- IN-CHAIN AUDIO PROCESSOR PLUGINS (host API level 1) ----------------
+    //
+    // HERE, and the position is the design (plugin_abi.h,
+    // CascadeAudioProcessorApi): AFTER the host's own ear-facing processing,
+    // so a processor refines what the notch and the noise reduction made
+    // rather than being undone by them; AFTER the decoder tap far above, so
+    // no third party can reshape what a decoder measures; and BEFORE the patch
+    // page's audio, a plugin's AUDIO_OUT takeover and the hard mute, so the
+    // mute lamp, the recorder, the web stream and the speakers all carry the
+    // processed audio and never disagree about what is playing. A no-op with
+    // no processor loaded; stereo at 48 kHz, in place.
+    if (PluginRunner* runner = pluginRunner_.load(std::memory_order_acquire)) {
+        runner->processAudioChain(outL_.data(), outR_.data(), k);
+    }
 
     // --- A PLUGIN'S OWN AUDIO, WHICH REPLACES THE DEMODULATED AUDIO ---------
     //

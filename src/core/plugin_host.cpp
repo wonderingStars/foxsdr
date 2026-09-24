@@ -299,6 +299,10 @@ LoadedPlugin loadOne(const fs::path& p) {
                        ? static_cast<const CascadeAudioOutApi*>(
                              findCapabilityTable(desc, CASCADE_CAP_AUDIO_OUT))
                        : nullptr;
+    rec.audioProcessor = (desc->capabilities & CASCADE_CAP_AUDIO_PROCESSOR) != 0u
+                             ? static_cast<const CascadeAudioProcessorApi*>(
+                                   findCapabilityTable(desc, CASCADE_CAP_AUDIO_PROCESSOR))
+                             : nullptr;
     rec.nativeHandle = static_cast<void*>(mod);
     rec.loaded = true;
     return rec;
@@ -555,6 +559,31 @@ PluginRejection validatePluginDesc(const CascadePluginDesc* desc) {
         // let it look like a working audio source.
     }
 
+    // HOST API LEVEL 1: an in-chain audio processor. Checked exactly like the
+    // decoder tables - size first, then every mandatory pointer - and counted
+    // toward `usable`: transforming the audio the user hears is a job on its
+    // own, unlike a preset or the host-client permission.
+    if ((desc->capabilities & CASCADE_CAP_AUDIO_PROCESSOR) != 0u) {
+        const void* raw = findCapabilityTable(desc, CASCADE_CAP_AUDIO_PROCESSOR);
+        if (raw == nullptr) {
+            return PluginRejection::MissingAudioProcessorApi;
+        }
+        const auto* a = static_cast<const CascadeAudioProcessorApi*>(raw);
+        if (a->structSize != static_cast<uint32_t>(sizeof(CascadeAudioProcessorApi))) {
+            return PluginRejection::AudioProcessorStructSizeMismatch;
+        }
+        if (a->create == nullptr || a->process == nullptr || a->destroy == nullptr ||
+            !isNonEmpty(a->title)) {
+            return PluginRejection::MissingAudioProcessorFunction;
+        }
+        // Reserved means reserved: a future flag this host cannot honour must
+        // not be silently ignored on a table that rewrites what the user hears.
+        if (a->flags != 0u) {
+            return PluginRejection::AudioProcessorReservedNotZero;
+        }
+        ++usable;
+    }
+
     if ((desc->capabilities & CASCADE_CAP_HOST_CLIENT) != 0u) {
         const void* raw = findCapabilityTable(desc, CASCADE_CAP_HOST_CLIENT);
         if (raw == nullptr) {
@@ -711,6 +740,14 @@ const char* pluginRejectionMessage(PluginRejection r) {
             return "audio-out declares neither mono nor stereo";
         case PluginRejection::MissingAudioOutFunction:
             return "audio-out table has a null function pointer";
+        case PluginRejection::MissingAudioProcessorApi:
+            return "declares CASCADE_CAP_AUDIO_PROCESSOR but supplies no processor table";
+        case PluginRejection::AudioProcessorStructSizeMismatch:
+            return "audio processor table size does not match this host's";
+        case PluginRejection::MissingAudioProcessorFunction:
+            return "audio processor table has a null function pointer or no title";
+        case PluginRejection::AudioProcessorReservedNotZero:
+            return "audio processor sets reserved flags this host does not understand";
         case PluginRejection::MissingHostClientApi:
             return "declares CASCADE_CAP_HOST_CLIENT but supplies no table";
         case PluginRejection::HostClientStructSizeMismatch:
@@ -959,6 +996,7 @@ std::size_t resolveDuplicatePlugins(std::vector<LoadedPlugin>& records) {
         r.basemap = nullptr;
         r.trackInfo = nullptr;
         r.audioOut = nullptr;
+        r.audioProcessor = nullptr;
         ++skipped;
     }
     return skipped;

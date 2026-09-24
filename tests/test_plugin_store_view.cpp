@@ -251,8 +251,10 @@ void testReachSummary() {
     CHECK(moduleReachSummary(fittedRow(CASCADE_CAP_TRACK_INFO)) ==
           "may fetch from a server it chose");
 
-    // THE TUNE GRANT - the one permission this product actually enforces, and
-    // the only place a row states a granted fact rather than a declared one.
+    // THE TUNE GRANT - one of the two permissions this product actually
+    // enforces (the other, since host API level 1, is the radio-settings grant
+    // on the Fitted modules plate), and the only place a row states a granted
+    // fact rather than a declared one.
     ModulePlate asks = fittedRow(CASCADE_CAP_HOST_CLIENT);
     CHECK(asks.haveTuneGrant);
     CHECK(!asks.tuneGranted);

@@ -49,6 +49,7 @@
 
 #include "core/host_image.hpp"
 #include "core/plugin_abi.h"
+#include "core/plugin_api.hpp"
 #include "core/plugin_host.hpp"
 #include "dsp/resampler.hpp"
 
@@ -197,6 +198,37 @@ public:
     // DSP or control thread. The receiver moved; effective from the next
     // process call. Cheap and safe to call when nothing has changed.
     void retune(double centreHz);
+
+    // ----- The stream clock (host API level 1, CascadeStreamInfo) -----------
+    //
+    // Where the runner records what a plugin cannot see from inside process():
+    // an EPOCH that begins at every rebuild (a rate change, a source change,
+    // a rescan - exactly when decoders are destroyed and re-created) and ends
+    // at clear(), and how many frames each tap has been handed in it. Written
+    // only under mutex_, which is what makes the clock single-writer; read
+    // lock-free by PluginApiCore::getStreamInfo from any thread - including
+    // from inside a plugin's process(), where taking mutex_ would deadlock.
+    // Null (the default) records nothing.
+    void setStreamClock(std::shared_ptr<StreamClock> clock);
+
+    // ----- In-chain audio processors (CASCADE_CAP_AUDIO_PROCESSOR) ----------
+    //
+    // DSP thread, real-time, under the same lock as processAudio. `left` and
+    // `right` are `frames` of the audio the user is about to hear, at the
+    // audio rate rebuild() was given; every processor runs over them IN
+    // PLACE, in load order, each fed the previous one's output. With no
+    // processor loaded this returns at once and touches nothing.
+    //
+    // A processor's non-finite output is replaced with silence before the
+    // next processor or the speakers see it, and counted (processorNonFinite):
+    // one NaN reaching a sound device can silence it until it is reopened.
+    void processAudioChain(float* left, float* right, std::size_t frames);
+
+    // Any thread. The processors running now, "<title> (<plugin>)" in chain
+    // order, for the status card; and the non-finite samples replaced since
+    // the last rebuild.
+    std::vector<std::string> processorTitles() const;
+    std::uint64_t processorNonFinite() const;
 
     // ----- The plugin audio path (CASCADE_CAP_AUDIO_OUT) --------------------
     //
@@ -454,7 +486,24 @@ private:
     // instance, on the transition, by whichever poll saw the negative return.
     void failLocked(std::size_t statusIndex, const std::string& name);
 
+    // One in-chain processor. Created at rebuild on the control thread,
+    // run by processAudioChain on the DSP thread, destroyed with the lock
+    // dropped like every other instance.
+    struct ProcessorInstance {
+        const CascadeAudioProcessorApi* api = nullptr;
+        void* handle = nullptr;
+        std::string name;
+        std::string title;
+    };
+    // Frames the interleaved scratch is sized for at rebuild; a larger block
+    // grows it once (the pipeline's own buffers follow the same rule).
+    static constexpr std::size_t kChainReserveFrames = 16384;
+
     mutable std::mutex mutex_;
+    std::vector<ProcessorInstance> processors_;
+    std::vector<float> chainBuf_;
+    std::uint64_t processorNonFinite_ = 0;
+    std::shared_ptr<StreamClock> clock_;
     // Read only inside rebuild(), under the same lock as everything else, so
     // a stop that arrives while the DSP thread is running cannot race the
     // instance vectors it decides the contents of.

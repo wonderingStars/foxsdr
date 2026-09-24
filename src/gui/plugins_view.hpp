@@ -141,6 +141,25 @@ struct FittedModule {
     // the user granted it, per module, defaulting to off.
     bool tuneAllowed = false;
 
+    // --- HOST API LEVEL 1 (0.99.31) -----------------------------------------
+    // PluginApiCore::settingsRequesters() contains this file: the module has
+    // asked at least once to change a receiver SETTING (mode, gains, volume,
+    // ...), so the SETTINGS grant means something for it. A key offered to a
+    // module that never asks would be a control that changes nothing.
+    bool settingsCapable = false;
+    // PluginUi::settingsAllowed(file) - the second grant, off by default.
+    bool settingsAllowed = false;
+    // The module's own command keys (CascadeHostApi::add_command), in the
+    // order it added them. Labels are the module's own text, drawn as given.
+    struct Command {
+        std::uint32_t id = 0;
+        std::string label;
+    };
+    std::vector<Command> commands;
+    // The newest WARN/ERROR it logged (CascadeHostApi::log), or empty.
+    std::uint32_t noticeLevel = 0;
+    std::string notice;
+
     // Size of the file on disk in bytes. 0 means NOT MEASURED and the shared
     // plate says so; it never prints a clean zero, which would be the opposite
     // claim. There is no size in any descriptor, so this can only ever come
@@ -218,6 +237,10 @@ struct FittedModulesAction {
         Stop,      // AppWindow::setPluginStopped(file, true)
         Remove,    // AppWindow::removeInstalledPlugin(file)
         SetTune,   // AppWindow::setPluginTuneAllowed(file, flag)
+        // Host API level 1: AppWindow::setPluginSettingsAllowed(file, flag),
+        // and a press of one of the module's own command keys (id).
+        SetSettings,
+        Command,
         // AppWindow::resetPageWindows(). THE WAY BACK FROM A WINDOW DRAGGED
         // TOO SMALL TO USE. A page's resize grip is invisible by design, so a
         // decoder window pulled down to its rail leaves almost nothing to take
@@ -229,7 +252,8 @@ struct FittedModulesAction {
     };
     Kind kind = Kind::None;
     std::string file;   // empty for Rescan
-    bool flag = false;  // SetTune: the grant being asked for
+    bool flag = false;  // SetTune/SetSettings: the grant being asked for
+    std::uint32_t commandId = 0;  // Command: which of the module's keys
 };
 
 // --- what the window SAYS, decided without ImGui -----------------------------

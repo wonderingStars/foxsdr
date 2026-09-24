@@ -979,6 +979,28 @@ private:
     // grants along with the instances — without this a rescan silently revoked
     // every permission the user had given.
     void applyPluginTuneGrants();
+
+    // --- HOST API LEVEL 1 (0.99.31) - see core/plugin_api.hpp ---------------
+    //
+    // The SETTINGS grant, the level-1 twin of the tune grant: same keying,
+    // same persistence, same re-application after every rebuild.
+    void setPluginSettingsAllowed(const std::string& pluginKey, bool allowed);
+    void applyPluginSettingsGrants();
+    // ONCE A FRAME, straight after applyWebControls: applies what plugins
+    // asked of the receiver (through applyControlRequest, the code a click or
+    // a browser goes through), turns their log lines into decoder-output lines
+    // and plate notices, folds their settings into the config, and publishes
+    // the receiver snapshot they read. GUI thread - the only thread that may
+    // touch the receiver, which is the whole reason plugin requests are queued.
+    void applyPluginApi();
+    // The snapshot half of the above, on its own so a control applied this
+    // frame is visible to a plugin in the same frame's snapshot.
+    void publishPluginApiState();
+    // ONE control request, applied. Extracted from applyWebControls unchanged,
+    // so the browser, CAT and a plugin all go through literally the same code.
+    void applyControlRequest(const cascade::net::ControlRequest& r);
+    // The plugins' spectrum and waterfall marks, over the panel at (x0, y0).
+    void drawPluginMarkers(float x0, float y0, float width, float height, bool waterfall);
     // HOW MANY LOADED MODULES ARE DECODERS AT ALL - the denominator under the
     // word DECODERS, and under the rail's fed-of-fitted chip.
     //
@@ -3084,6 +3106,24 @@ private:
     // instances on every rescan, so the permission has to survive somewhere
     // that a rescan does not touch.
     std::vector<std::string> pluginTuneAllowed_;
+    // AppConfig::pluginSettingsAllowed - the durable copy of the level-1
+    // SETTINGS grant, for exactly the reason pluginTuneAllowed_ is one.
+    std::vector<std::string> pluginSettingsAllowed_;
+    // AppConfig::pluginSettings - the durable copy of every plugin's own
+    // settings. PluginApiCore holds the live one; applyPluginApi copies it
+    // here whenever its generation moves, and currentConfig() saves this.
+    std::map<std::string, std::map<std::string, std::string>> pluginSettings_;
+    std::uint64_t pluginSettingsGen_ = 0;
+    // The newest WARN or ERROR each plugin logged, by module file name, for
+    // the notice on its plate. Session only, like the decoder output.
+    struct PluginNotice {
+        std::uint32_t level = 0;
+        std::string text;
+    };
+    std::map<std::string, PluginNotice> pluginNotices_;
+    // The plugins' marks, copied out of the core only when its sequence moves.
+    std::vector<cascade::core::HostMarker> pluginMarkers_;
+    std::uint64_t pluginMarkersSeq_ = 0;
     // AppConfig::pluginsStopped. The durable copy of "the user stopped this
     // plugin", by module file name, held here for the same reason the grants
     // are: PluginRunner and PluginUi are rebuilt on every source change and

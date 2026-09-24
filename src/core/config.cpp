@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/config.hpp"
 
+#include "core/plugin_api.hpp"
 #include "core/telemetry.hpp"
 // clampScopeRangeNm(): the radar scope's ladder of range steps.
 //
@@ -419,6 +420,26 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     getStringArray(j, "closedWindows", out.closedWindows);
     getStringArray(j, "pluginsStopped", out.pluginsStopped);
     getStringArray(j, "pluginMuteOverride", out.pluginMuteOverride);
+    // Host API level 1 (0.99.31). The grant is a list like the others; the
+    // settings store is an object of objects, read element-wise: a member
+    // that is not an object, or a value that is not a string, is a hand-edit
+    // and is skipped rather than failing the whole file.
+    getStringArray(j, "pluginSettingsAllowed", out.pluginSettingsAllowed);
+    {
+        const auto it = j.find("pluginSettings");
+        if (it != j.end() && it->is_object()) {
+            std::map<std::string, std::map<std::string, std::string>> m;
+            for (auto p = it->begin(); p != it->end(); ++p) {
+                if (!p.value().is_object()) { continue; }
+                std::map<std::string, std::string> kv;
+                for (auto e = p.value().begin(); e != p.value().end(); ++e) {
+                    if (e.value().is_string()) { kv[e.key()] = e.value().get<std::string>(); }
+                }
+                m[p.key()] = std::move(kv);
+            }
+            out.pluginSettings = std::move(m);
+        }
+    }
     // The user's own presets. Element-wise tolerant like mapPages: an entry
     // that is not an object is a hand-edit and is skipped; every other rule
     // (key, frequency, label, caps, duplicates) is sanitiseUserPresets', below.
@@ -663,6 +684,12 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     // duplicate here would be a preference that flipped twice - which is the
     // same as not being there at all, but only if something removes it.
     out.pluginMuteOverride = sanitisePluginNames(out.pluginMuteOverride);
+    // The settings grant: the same list of module file names, the same rule.
+    out.pluginSettingsAllowed = sanitisePluginNames(out.pluginSettingsAllowed);
+    // The plugins' own settings, by the SAME bounds the live API enforces on
+    // settings_set, so nothing a hand-edit put in the file can reach a plugin
+    // that the plugin could not have written itself.
+    out.pluginSettings = sanitisePluginSettings(out.pluginSettings);
     out.userPresets = sanitiseUserPresets(out.userPresets);
     // And the rebound keys, from the same function for the fourth time. An
     // empty line could name no action, and a line repeated verbatim is one
@@ -785,6 +812,16 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
     j["closedWindows"] = cfg.closedWindows;
     j["pluginsStopped"] = cfg.pluginsStopped;
     j["pluginMuteOverride"] = cfg.pluginMuteOverride;
+    j["pluginSettingsAllowed"] = cfg.pluginSettingsAllowed;
+    {
+        json ps = json::object();
+        for (const auto& [plugin, kv] : cfg.pluginSettings) {
+            json o = json::object();
+            for (const auto& [k, v] : kv) { o[k] = v; }
+            ps[plugin] = std::move(o);
+        }
+        j["pluginSettings"] = std::move(ps);
+    }
     {
         json presets = json::array();
         for (const UserPreset& p : cfg.userPresets) {

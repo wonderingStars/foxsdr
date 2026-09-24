@@ -97,6 +97,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -719,6 +720,26 @@ struct AppConfig {
     //
     // Sanitized on load exactly like the two lists above.
     std::vector<std::string> pluginMuteOverride;
+
+    // --- Host API level 1 (0.99.31): the SETTINGS grant -----------------------
+    // Module FILE NAMES the user has allowed to change the receiver's settings
+    // - mode, bandwidth, squelch, gains, sample rate, volume, mute, start and
+    // stop (plugin_abi.h, PERMISSION). A NEW list rather than a widening of
+    // pluginTuneAllowed, deliberately: a user who granted a satellite tracker
+    // "receiver control" to follow Doppler granted tuning and nothing else, and
+    // an existing setting must not quietly come to mean more than it did.
+    // Empty by default - the secure state - and sanitized on load exactly like
+    // pluginTuneAllowed, by the same function.
+    std::vector<std::string> pluginSettingsAllowed;
+
+    // --- Host API level 1 (0.99.31): each plugin's own settings ---------------
+    // What plugins stored through CascadeHostApi::settings_set, kept here so
+    // the application's one crash-safe, off-thread config write carries them:
+    // plugin NAME (the descriptor's, which survives an upgrade; the file name
+    // does not) -> key -> value. The host never interprets a value. Sanitized
+    // on load by core::sanitisePluginSettings - the same bounds the API applies
+    // to a live write (key alphabet, value length, keys per plugin, plugins).
+    std::map<std::string, std::map<std::string, std::string>> pluginSettings;
 
     // --- The user's own presets, per decoder (0.99.4) --------------------------
     // Frequencies the user saved against one plugin with the "Save" key beside

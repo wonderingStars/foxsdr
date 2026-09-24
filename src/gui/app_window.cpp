@@ -56,6 +56,7 @@
 // startup update check runs at all, and what the Settings > Updates row says.
 #include "core/package_identity.hpp"
 #include "gui/band_plan_style.hpp"
+#include "gui/plugin_markers.hpp"
 #include "gui/rate_follow_status.hpp"
 #include "gui/scope_face.hpp"
 // The demod scope's tube, and the window function its spectrum position needs.
@@ -689,6 +690,11 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            a.fittedModulesHeight == b.fittedModulesHeight &&
            a.pluginLastUpdateCheck == b.pluginLastUpdateCheck &&
            a.pluginTuneAllowed == b.pluginTuneAllowed &&
+           // Host API level 1: without these a plugin's stored setting, or a
+           // settings grant, would reach the file only when something else
+           // happened to change in the same session.
+           a.pluginSettingsAllowed == b.pluginSettingsAllowed &&
+           a.pluginSettings == b.pluginSettings &&
            a.pluginsStopped == b.pluginsStopped &&
            a.pluginMuteOverride == b.pluginMuteOverride &&
            a.userPresets == b.userPresets &&
@@ -3014,6 +3020,11 @@ void AppWindow::drawUi() {
     // panels are drawn so the window shows the new state this frame rather
     // than one frame late.
     applyWebControls();
+    // And what PLUGINS asked for (host API level 1), by the same code, in the
+    // same place and for the same reason - then the snapshot they read is
+    // published, so it already carries this frame's changes. Before
+    // updateAudioMute below, which applies a plugin's set_muted.
+    applyPluginApi();
     if (!pendingDropPath_.empty()) {
         const std::string dropped = std::move(pendingDropPath_);
         pendingDropPath_.clear();
@@ -8816,6 +8827,10 @@ void AppWindow::drawCenterPanels() {
     if (bookmarkMarkers_ && !freqMgr_.list().empty()) {
         drawBookmarkMarkers(specPos.x, specPos.y, width, spectrumHeight);
     }
+    // The plugins' own marks (host API level 1), over the bookmarks and under
+    // the gridlines and the VFO overlay, which stay the topmost furniture: a
+    // plugin can annotate the spectrum, never cover the user's tuning.
+    drawPluginMarkers(specPos.x, specPos.y, width, spectrumHeight, false);
 
     for (int i = 0; i < tickCount; ++i) {
         // ticks() only returns in-view frequencies, so x stays in-panel.
@@ -8950,6 +8965,11 @@ void AppWindow::drawCenterPanels() {
     wfChrome.decoding = !decodeLine.empty() ? decodeLine.c_str() : nullptr;
     waterfall_->draw(width, waterfallHeight, u0, u1, wfChrome);
     const bool wfHovered = ImGui::IsItemHovered();
+    // Plugin marks down the waterfall too, unless a mark asked to stay on the
+    // spectrum. Drawn straight after the picture and before the VFO line, so
+    // the user's own marker stays on top. Draw calls only - no widget - so a
+    // mark can never take a click meant for the waterfall.
+    drawPluginMarkers(wfPos.x, wfPos.y, width, waterfallHeight, true);
 
     // Thin VFO marker on the waterfall (the parity spec's "where am I tuned"
     // line), culled when the tuned frequency is scrolled out of view.
@@ -10336,30 +10356,14 @@ void AppWindow::refreshPluginRunner() {
     // plugin the user stopped.
     pluginRunner_.setStopped(pluginsStopped_);
     pluginUi_.setStopped(pluginsStopped_);
-    pipeline_.setPluginRunner(nullptr);
-    if (patchRunning_) {
-        // THE PATCH HAS THE DECODERS (0.99.18). While it runs the
-        // receiver runs only on the generator, and a plugin publishes its map
-        // targets through ONE snapshot per module (the ADS-B plugin says so in
-        // its own source) - so the receiver's ADS-B instance, fed generator
-        // noise, would overwrite the aircraft the patch's ADS-B instance is
-        // finding, every block. No receiver decoders while the patch runs;
-        // stopping it calls this again and they come back.
-        pluginRunner_.clear();
-    } else {
-        pluginRunner_.rebuild(pluginHost_.plugins(), cascade::core::Pipeline::kAudioRateHz,
-                              pipeline_.inputRateHz(),
-                              pipeline_.activeSource().centerFrequencyHz());
-        pipeline_.setPluginRunner(&pluginRunner_);
-    }
-    // AND THE MUTE SNAPSHOT AFTER THE REBUILD, not before it. It carries the
-    // running state, and running now means the runner is ACTUALLY FEEDING the
-    // plugin (see rebuildMuteStates) - a question only the rebuild above can
-    // answer, because it is the rebuild that decides which decoders the
-    // receiver's current rate can drive. Built first, this would answer it
-    // from the receiver the user has just left.
-    rebuildMuteStates();
-
+    // THE HOST TABLE FIRST, THEN THE DECODERS (0.99.31). The ABI promises that
+    // attach() runs before any capability's create() (CascadeHostClientApi);
+    // the runner used to be rebuilt first, so on the first rebuild of a
+    // session a decoder's create() ran before its plugin had been handed the
+    // table. With host API level 1 a plugin reads its settings and the
+    // receiver from there, so the promise is now kept: the GUI half (which is
+    // what attaches) is rebuilt here, and the runner below it.
+    //
     // The GUI-side capabilities are rebuilt HERE too, and for the same reason:
     // a track source created against one receiver state should not survive a
     // source change. Doing it in this one function means the two halves of the
@@ -10390,7 +10394,38 @@ void AppWindow::refreshPluginRunner() {
         return CASCADE_TUNE_OK;
     };
     pluginUi_.setServices(std::move(svc));
+    // THE GRANTS GO IN BEFORE THE REBUILD as well as after it (below): a
+    // plugin may ask for the receiver from inside its attach(), and must be
+    // answered by the grant the user gave, not by a clear() the rescan did.
+    applyPluginTuneGrants();
+    applyPluginSettingsGrants();
     pluginUi_.rebuild(pluginHost_.plugins());
+    // The receiver's stream clock, which the runner writes and the
+    // level-1 get_stream_info reads (CascadeStreamInfo).
+    pluginRunner_.setStreamClock(pluginUi_.api().streamClock());
+    pipeline_.setPluginRunner(nullptr);
+    if (patchRunning_) {
+        // THE PATCH HAS THE DECODERS (0.99.18). While it runs the
+        // receiver runs only on the generator, and a plugin publishes its map
+        // targets through ONE snapshot per module (the ADS-B plugin says so in
+        // its own source) - so the receiver's ADS-B instance, fed generator
+        // noise, would overwrite the aircraft the patch's ADS-B instance is
+        // finding, every block. No receiver decoders while the patch runs;
+        // stopping it calls this again and they come back.
+        pluginRunner_.clear();
+    } else {
+        pluginRunner_.rebuild(pluginHost_.plugins(), cascade::core::Pipeline::kAudioRateHz,
+                              pipeline_.inputRateHz(),
+                              pipeline_.activeSource().centerFrequencyHz());
+        pipeline_.setPluginRunner(&pluginRunner_);
+    }
+    // AND THE MUTE SNAPSHOT AFTER THE REBUILD, not before it. It carries the
+    // running state, and running now means the runner is ACTUALLY FEEDING the
+    // plugin (see rebuildMuteStates) - a question only the rebuild above can
+    // answer, because it is the rebuild that decides which decoders the
+    // receiver's current rate can drive. Built first, this would answer it
+    // from the receiver the user has just left.
+    rebuildMuteStates();
 
     // DEMONSTRATION instruments open their windows by themselves. This is the
     // one deliberate exception to "nothing opens but by your hand" (0.79.1),
@@ -10439,6 +10474,7 @@ void AppWindow::refreshPluginRunner() {
     // a rescan would silently revoke every permission the user had given — and
     // the tracker that worked a moment ago would go quiet with no explanation.
     applyPluginTuneGrants();
+    applyPluginSettingsGrants();
 }
 
 // GL_CLAMP_TO_EDGE is OpenGL 1.2; the headers Windows ships stop at 1.1, and
@@ -14049,6 +14085,7 @@ void AppWindow::drawFittedModulesWindow() {
         model.receiverRunning = pipeline_.running();
         const std::vector<cascade::core::DecoderStatus> status = pluginRunner_.status();
         const std::vector<cascade::core::LoadedPlugin>& list = pluginHost_.plugins();
+        const std::vector<std::string> settingsAskers = pluginUi_.api().settingsRequesters();
         model.modules.reserve(list.size());
         for (const cascade::core::LoadedPlugin& p : list) {
             const std::string file = cascade::core::pluginKey(p);
@@ -14066,6 +14103,18 @@ void AppWindow::drawFittedModulesWindow() {
                 p, pluginIsStopped(file), pluginRunner_.isFeeding(file),
                 std::move(idleDetail),
                 pluginUi_.tuneAllowed(cascade::core::PluginUi::tuneKey(p)));
+            // Host API level 1: the settings grant (offered only to a module
+            // that has asked), its command keys and its newest warning.
+            m.settingsCapable = std::find(settingsAskers.begin(), settingsAskers.end(), file) !=
+                                settingsAskers.end();
+            m.settingsAllowed = pluginUi_.settingsAllowed(file);
+            for (const cascade::core::HostCommand& hc : pluginUi_.api().commands(file)) {
+                m.commands.push_back(cascade::gui::FittedModule::Command{hc.id, hc.label});
+            }
+            if (const auto nit = pluginNotices_.find(file); nit != pluginNotices_.end()) {
+                m.noticeLevel = nit->second.level;
+                m.notice = nit->second.text;
+            }
             // THE ONLY SIZE THERE IS. No descriptor carries one, so it can
             // only come from stat-ing the file; a failure leaves it at 0,
             // which the shared plate reads as "not measured" and never draws
@@ -14141,6 +14190,14 @@ void AppWindow::drawFittedModulesWindow() {
                 break;
             case cascade::gui::FittedModulesAction::Kind::SetTune:
                 setPluginTuneAllowed(act.file, act.flag);
+                break;
+            case cascade::gui::FittedModulesAction::Kind::SetSettings:
+                setPluginSettingsAllowed(act.file, act.flag);
+                break;
+            case cascade::gui::FittedModulesAction::Kind::Command:
+                // Queued for the plugin to take with poll_command; nothing of
+                // the plugin's runs here, on the GUI thread's frame.
+                pluginUi_.api().pressCommand(act.file, act.commandId);
                 break;
             case cascade::gui::FittedModulesAction::Kind::ResetWindows:
                 // Safe from inside this page's own body: beginPage has already
@@ -16338,6 +16395,224 @@ void AppWindow::setPluginTuneAllowed(const std::string& pluginKey, bool allowed)
     } else if (!allowed && it != pluginTuneAllowed_.end()) {
         pluginTuneAllowed_.erase(it);
     }
+}
+
+// --- HOST API LEVEL 1 (0.99.31) -------------------------------------------------
+
+void AppWindow::applyPluginSettingsGrants() {
+    for (const std::string& k : pluginSettingsAllowed_) { pluginUi_.setSettingsAllowed(k, true); }
+}
+
+void AppWindow::setPluginSettingsAllowed(const std::string& pluginKey, bool allowed) {
+    // The live grant and the durable one in one place, exactly as the tune
+    // grant does, so a grant that took effect can never fail to be saved.
+    pluginUi_.setSettingsAllowed(pluginKey, allowed);
+    const auto it =
+        std::find(pluginSettingsAllowed_.begin(), pluginSettingsAllowed_.end(), pluginKey);
+    if (allowed && it == pluginSettingsAllowed_.end()) {
+        pluginSettingsAllowed_.push_back(pluginKey);
+    } else if (!allowed && it != pluginSettingsAllowed_.end()) {
+        pluginSettingsAllowed_.erase(it);
+    }
+}
+
+void AppWindow::publishPluginApiState() {
+    // Everything read here is read on the GUI thread, which is the contract
+    // activeSource() and its readbacks require - the same reads, from the
+    // same members, that publishWebSnapshot makes for the browser, so a
+    // plugin and a browser can never be told two different things.
+    cascade::core::ReceiverFacts f;
+    cascade::source::IqSource& src = pipeline_.activeSource();
+    f.running = pipeline_.running();
+    f.deviceOpen = device_ != nullptr;
+    f.muted = userMuted_;
+    f.deviceAgc = deviceAgc_;
+    f.agcSupported = deviceAgcSupported_;
+    f.stereo = pipeline_.stereoActive();
+    f.centreHz = src.centerFrequencyHz();
+    f.vfoOffsetHz = pipeline_.vfoOffsetHz();
+    f.sampleRateHz = src.sampleRateHz();
+    f.bandwidthHz = vfoBandwidthHz_;
+    f.squelchDb = static_cast<double>(squelchDb_);
+    f.volume = static_cast<double>(volume_);
+    f.signalDb = static_cast<double>(pipeline_.signalPowerDb());
+    f.demodMode = cascade::gui::abiDemodForModeIndex(modeIndex_);
+    cascade::core::formatUtf8(f.deviceName, sizeof(f.deviceName), "%s",
+                              src.name() != nullptr ? src.name() : "");
+    if (device_ != nullptr) {
+        const std::size_t n =
+            std::min<std::size_t>(deviceGainRanges_.size(), cascade::core::kMaxPublishedGains);
+        for (std::size_t i = 0; i < n; ++i) {
+            const cascade::source::GainInfo& g = deviceGainRanges_[i];
+            cascade::core::PublishedGain& pg = f.gains[i];
+            cascade::core::formatUtf8(pg.name, sizeof(pg.name), "%s", g.name.c_str());
+            pg.unit = g.unit == cascade::source::GainUnit::Decibels ? CASCADE_GAIN_UNIT_DB
+                                                                    : CASCADE_GAIN_UNIT_STEPS;
+            pg.minDb = g.minDb;
+            pg.maxDb = g.maxDb;
+            pg.stepDb = g.stepDb;
+            // THE READBACK MIRROR, as the sliders and the browser show it.
+            pg.currentDb = i < deviceGainsDb_.size() ? static_cast<double>(deviceGainsDb_[i]) : 0.0;
+        }
+        f.gainCount = static_cast<std::uint32_t>(n);
+        // The rates the Rate combo offers, from the same list it is built on.
+        const std::size_t r =
+            std::min<std::size_t>(deviceRatesHz_.size(), cascade::core::kMaxPublishedRates);
+        for (std::size_t i = 0; i < r; ++i) { f.rates[i] = deviceRatesHz_[i]; }
+        f.rateCount = static_cast<std::uint32_t>(r);
+    }
+    f.outputRateHz = cascade::core::Pipeline::kAudioRateHz;
+    f.outputFrames = pipeline_.audioSamplesProduced();
+    pluginUi_.api().publish(f);
+}
+
+void AppWindow::applyPluginApi() {
+    cascade::core::PluginApiCore& api = pluginUi_.api();
+
+    // --- 1. What plugins asked of the receiver -------------------------------
+    //
+    // Applied in the order they were asked, each through the SAME code a click
+    // or a browser request goes through (applyControlRequest), so a plugin can
+    // do nothing to the receiver that the user could not do themselves, and
+    // gets every clamp and readback the user would. The permission is checked
+    // AGAIN here: a grant revoked, or a plugin stopped, between the request and
+    // this frame must stop the request from acting (controlStillAllowed).
+    std::vector<cascade::core::PluginControl> controls;
+    api.takeControls(controls);
+    for (const cascade::core::PluginControl& c : controls) {
+        if (!api.controlStillAllowed(c)) { continue; }
+        using K = cascade::core::PluginControl::Kind;
+        if (c.kind == K::Frequency) {
+            // The frequency READOUT's own path: the VFO offset is kept and the
+            // radio's centre moves - which is not what ControlRequest::centerHz
+            // means, so it does not go through it.
+            tuneAbsoluteHz(c.value);
+            continue;
+        }
+        if (c.kind == K::Muted) {
+            // The user's own mute (the MUTE key's flag); updateAudioMute later
+            // this frame applies it with the rest of the mute policy.
+            userMuted_ = c.flag;
+            continue;
+        }
+        cascade::net::ControlRequest r;
+        switch (c.kind) {
+            case K::VfoOffset: r.vfoOffsetHz = c.value; break;
+            case K::Mode:
+                // ABI numbering to the button table: NFM..RAW are 1..8 and the
+                // table is in that order (tune_control.hpp,
+                // abiDemodForModeIndex). Range-checked when it was queued.
+                r.mode = kModeMap[c.mode - 1u];
+                break;
+            case K::Bandwidth: r.bandwidthHz = c.value; break;
+            case K::Squelch: r.squelchDb = c.value; break;
+            case K::SampleRate: r.sampleRateHz = c.value; break;
+            case K::Gain:
+                r.gainName = std::string(c.gainName);
+                r.gainDb = c.value;
+                break;
+            case K::DeviceAgc: r.agc = c.flag; break;
+            case K::Running: r.running = c.flag; break;
+            case K::Volume: r.volume = c.value; break;
+            case K::Frequency:
+            case K::Muted:
+                break;
+        }
+        if (!r.empty()) { applyControlRequest(r); }
+    }
+
+    // --- 2. What plugins said ---------------------------------------------------
+    //
+    // Into the decoder output, which is where a user already looks when a
+    // plugin is quiet, one line per line of text. WARN and ERROR also become
+    // the notice on the plugin's plate in Fitted modules. NOT into the
+    // diagnostic log: that file can travel with a problem report, and a
+    // plugin's words are shown to the user, not collected (plugin_abi.h, log).
+    std::vector<cascade::core::PluginLogLine> lines;
+    api.takeLog(lines);
+    for (const cascade::core::PluginLogLine& l : lines) {
+        std::size_t from = 0;
+        while (from <= l.text.size()) {
+            std::size_t to = l.text.find('\n', from);
+            if (to == std::string::npos) { to = l.text.size(); }
+            std::string part = l.text.substr(from, to - from);
+            if (!part.empty() && part.back() == '\r') { part.pop_back(); }
+            if (!part.empty()) {
+                cascade::core::DecodedLine d;
+                d.plugin = l.name;
+                d.text = std::move(part);
+                decoderLog_.push_back(std::move(d));
+            }
+            from = to + 1;
+        }
+        if (l.level >= CASCADE_LOG_WARN) { pluginNotices_[l.key] = PluginNotice{l.level, l.text}; }
+    }
+
+    // --- 3. What plugins stored ------------------------------------------------
+    //
+    // Copied into the durable map only when the store actually changed, so an
+    // idle frame costs one lock and one compare. currentConfig() saves the
+    // durable map through the ordinary debounced, off-thread config write.
+    const std::uint64_t gen = api.settingsGeneration();
+    if (gen != pluginSettingsGen_) {
+        pluginSettingsGen_ = gen;
+        pluginSettings_ = api.settingsSnapshot();
+    }
+
+    // --- 4. What plugins marked ------------------------------------------------
+    const std::uint64_t ms = api.markersSeq();
+    if (ms != pluginMarkersSeq_) {
+        pluginMarkersSeq_ = ms;
+        api.markers(pluginMarkers_);
+    }
+
+    // --- 5. What plugins may read ----------------------------------------------
+    //
+    // LAST, so a control applied above is already in the snapshot a plugin
+    // reads this frame.
+    publishPluginApiState();
+}
+
+void AppWindow::drawPluginMarkers(float x0, float y0, float width, float height,
+                                  bool waterfall) {
+    if (pluginMarkers_.empty() || width <= 0.0f || height <= 0.0f) { return; }
+    const double lo = scale_.viewLowHz();
+    const double hi = scale_.viewHighHz();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->PushClipRect(ImVec2(x0, y0), ImVec2(x0 + width, y0 + height), true);
+    ImFont* font = cascade::gui::fonts::ui();
+    const float fontPx = ImGui::GetFontSize() * 0.8f;
+    // Names under the panel's own header lines, like the bookmarks', and one
+    // line lower so a plugin's mark and a bookmark at one frequency do not
+    // print over each other.
+    const float headerY = (!waterfall && spectrum_ != nullptr) ? spectrum_->headerBottom() : y0;
+    const float labelY = headerY + 2.0f * (ImGui::GetTextLineHeight() + 2.0f);
+    for (const cascade::core::HostMarker& hm : pluginMarkers_) {
+        const cascade::gui::PluginMarkerDraw d =
+            cascade::gui::pluginMarkerGeometry(hm.m, lo, hi, x0, width, waterfall);
+        if (!d.visible) { continue; }
+        const ImU32 line = d.colour;
+        if (d.span) {
+            dl->AddRectFilled(ImVec2(d.x0, y0), ImVec2(d.x1, y0 + height),
+                              cascade::gui::theme::withAlpha(line, 0.14f));
+            dl->AddLine(ImVec2(d.x0, y0), ImVec2(d.x0, y0 + height), line, 1.0f);
+            dl->AddLine(ImVec2(d.x1, y0), ImVec2(d.x1, y0 + height), line, 1.0f);
+        } else if (d.dashed) {
+            for (float y = y0; y < y0 + height; y += 8.0f) {
+                dl->AddLine(ImVec2(d.x0, y), ImVec2(d.x0, std::min(y + 4.0f, y0 + height)), line,
+                            1.0f);
+            }
+        } else {
+            dl->AddLine(ImVec2(d.x0, y0), ImVec2(d.x0, y0 + height), line, 1.0f);
+        }
+        // The label on the spectrum only: on the waterfall it would scroll
+        // nowhere and sit over the picture for ever.
+        if (!waterfall && hm.m.label[0] != '\0' && d.x0 + 3.0f < x0 + width) {
+            dl->AddText(font, fontPx, ImVec2(d.x0 + 3.0f, labelY),
+                        cascade::gui::theme::withAlpha(line, 0.95f), hm.m.label);
+        }
+    }
+    dl->PopClipRect();
 }
 
 std::size_t AppWindow::loadedDecoderCount() const {
@@ -20652,6 +20927,418 @@ void AppWindow::applyScopeWindowVisibility() {
     scopeWasOn_ = scopeMode_;
 }
 
+// ONE REQUEST, APPLIED - the body of the loop applyWebControls used to run
+// inline, moved out unchanged so that a request from a browser, from CAT and
+// from a plugin (host API level 1, applyPluginApi) all take literally the
+// same code: the same clamps against the live rate, the same readbacks, the
+// same "move the bandwidth to the new mode's default". GUI thread only.
+void AppWindow::applyControlRequest(const cascade::net::ControlRequest& r) {
+    if (r.running.has_value()) {
+        if (*r.running) {
+            pipeline_.start();
+        } else {
+            pipeline_.stop();
+        }
+    }
+    if (r.centerHz.has_value()) {
+        // The GUI's own absolute-tune path, so the RDS/stereo decoders are
+        // told to forget the old station exactly as they are for a tune
+        // made from this window.
+        retuneSourceHz(*r.centerHz);
+    }
+    if (r.mode.has_value()) {
+        // Mapped by NAME, never by index: the button table's order and the
+        // DemodMode enum's order deliberately differ.
+        const std::string want = cascade::dsp::modeName(*r.mode);
+        for (int i = 0; i < 8; ++i) {
+            if (want == kModeNames[i]) {
+                modeIndex_ = i;
+                pipeline_.setDemodMode(kModeMap[i]);
+                // A mode button here also moves the bandwidth to that
+                // mode's default, so a browser mode change behaves the
+                // same way. An explicit bandwidthHz in the SAME request
+                // still wins, because it is applied below.
+                bandwidthIndex_ = kModeDefaultBw[i];
+                vfoBandwidthHz_ = kBwHz[bandwidthIndex_];
+                pipeline_.setVfoBandwidthHz(vfoBandwidthHz_);
+                break;
+            }
+        }
+    }
+    // Bandwidth before offset: the offset's limit depends on it.
+    if (r.bandwidthHz.has_value()) {
+        const double bwHi = kVfoBwMaxChanFrac * pipeline_.channelRateHz();
+        vfoBandwidthHz_ = std::max(kVfoBwMinHz, std::min(*r.bandwidthHz, bwHi));
+        pipeline_.setVfoBandwidthHz(vfoBandwidthHz_);
+        // -1 when the browser asked for a width the list does not carry:
+        // the combo shows what the VFO is, and ticks nothing.
+        bandwidthIndex_ = bandwidthStepIndex(vfoBandwidthHz_);
+    }
+    if (r.vfoOffsetHz.has_value()) {
+        // Clamped against the LIVE rate, the same rule the config restore
+        // uses — web_control's range check is a sanity bound, not this.
+        const double lim = 0.5 * pipeline_.inputRateHz() - 0.5 * vfoBandwidthHz_;
+        const double off =
+            (lim > 0.0) ? std::clamp(*r.vfoOffsetHz, -lim, lim) : 0.0;
+        pipeline_.setVfoOffsetHz(off);
+        vfoOffsetKhz_ = static_cast<float>(off / 1000.0);
+    }
+    if (r.squelchDb.has_value()) {
+        squelchDb_ = static_cast<float>(*r.squelchDb);
+        pipeline_.setSquelchDb(squelchDb_);
+    }
+    if (r.volume.has_value()) {
+        volume_ = static_cast<float>(*r.volume);
+        pipeline_.audio().setVolume(volume_);
+    }
+    // Display range. The same minimum-span rule the desktop sliders
+    // enforce, applied against whichever end the request did not supply —
+    // a degenerate or inverted span is a divide-by-zero where dB is mapped
+    // to pixels.
+    if (r.dbMin.has_value() || r.dbMax.has_value()) {
+        float lo = r.dbMin.has_value() ? static_cast<float>(*r.dbMin) : dbMin_;
+        float hi = r.dbMax.has_value() ? static_cast<float>(*r.dbMax) : dbMax_;
+        if (lo > hi - kMinDbSpan) {
+            // Push back the end the caller actually moved, so the other
+            // does not shift under them.
+            if (r.dbMin.has_value()) {
+                lo = hi - kMinDbSpan;
+            } else {
+                hi = lo + kMinDbSpan;
+            }
+        }
+        dbMin_ = lo;
+        dbMax_ = hi;
+        spectrum_->setRange(dbMin_, dbMax_);
+    }
+    if (r.deemphasisIndex.has_value()) {
+        deemphIndex_ = *r.deemphasisIndex;
+        pipeline_.setDeemphasisUs(kDeemphUs[deemphIndex_]);
+    }
+    if (r.stereoEnabled.has_value()) {
+        stereoEnabled_ = *r.stereoEnabled;
+        pipeline_.setStereoEnabled(stereoEnabled_);
+    }
+    if (r.nrEnabled.has_value()) {
+        nrEnabled_ = *r.nrEnabled;
+        pipeline_.setNoiseReductionEnabled(nrEnabled_);
+    }
+    if (r.nrStrength.has_value()) {
+        nrStrength_ = static_cast<float>(*r.nrStrength);
+        pipeline_.setNoiseReductionStrength(nrStrength_);
+    }
+    if (r.notchEnabled.has_value()) {
+        notchEnabled_ = *r.notchEnabled;
+        pipeline_.setNotchEnabled(notchEnabled_);
+    }
+    if (r.notchFreqHz.has_value()) {
+        notchFreqHz_ = static_cast<float>(*r.notchFreqHz);
+        pipeline_.setNotchFrequencyHz(static_cast<double>(notchFreqHz_));
+    }
+    if (r.notchQ.has_value()) {
+        notchQ_ = static_cast<float>(*r.notchQ);
+        pipeline_.setNotchQ(static_cast<double>(notchQ_));
+    }
+    if (r.autoNotch.has_value()) {
+        autoNotch_ = *r.autoNotch;
+        pipeline_.setAutoNotchEnabled(autoNotch_);
+    }
+
+    // --- Source ---------------------------------------------------------
+    // All of this runs on the GUI thread by construction (applyWebControls
+    // is called from drawUi), which is what makes it safe to touch the
+    // source at all.
+    if (r.scanDevices.value_or(false)) {
+        // The native list always refreshes (scanNative opens nothing);
+        // the SoapySDR scan goes through the same gate as the panel's
+        // Refresh (0.90.1), so with a radio open it defers rather than
+        // scans, logs why once, and the browser keeps the list it had.
+        scanNative();
+        scanSoapy();
+    }
+    if (r.sourceKind.has_value()) {
+        if (*r.sourceKind == "siggen") {
+            selectSource(0);
+        } else if (r.soapyArgs.has_value()) {
+            // Matched against the ENUMERATED list rather than passed to a
+            // driver verbatim: a browser must not be able to hand
+            // arbitrary kwargs to a vendor module or arbitrary args to a
+            // native driver, and an unknown string is simply not a device
+            // this receiver has seen. The KIND is matched too - a native
+            // row and a Soapy row for one dongle carry the same serial.
+            bool found = false;
+            if (isNativeSourceKind(*r.sourceKind)) {
+                for (std::size_t i = 0; i < nativeDevices_.size(); ++i) {
+                    if (nativeDevices_[i].driver == *r.sourceKind &&
+                        nativeDevices_[i].args == *r.soapyArgs) {
+                        selectSource(kNativeRowBase + static_cast<int>(i));
+                        found = true;
+                        break;
+                    }
+                }
+            } else {
+                for (std::size_t i = 0; i < soapyDevices_.size(); ++i) {
+                    if (soapyDevices_[i].args == *r.soapyArgs) {
+                        selectSource(soapyRowBase() + static_cast<int>(i));
+                        found = true;
+                        break;
+                    }
+                }
+            }
+            if (!found) {
+                sourceError_ = "no scanned device matches those arguments; "
+                               "rescan and try again";
+            }
+        }
+    }
+    // The remaining source settings only mean anything with a device open.
+    if (device_ != nullptr) {
+        if (r.antenna.has_value()) {
+            if (device_->setAntenna(*r.antenna)) {
+                deviceAntenna_ = device_->antenna();  // readback, not the request
+            } else {
+                sourceError_ = device_->lastError();
+            }
+        }
+        if (r.sampleRateHz.has_value()) {
+            if (device_->setSampleRateHz(*r.sampleRateHz)) {
+                // THE DESKTOP'S RATE COMBO FOLLOWS, and it did not until
+                // 0.91.0. Measured on the bench: a browser set 2.4 MS/s on
+                // a native RTL-SDR, the radio ran at 2.4, the deck read
+                // 2.400 MS/s, and the Source section's own Rate control
+                // still said 1.024 - the value that had been selected
+                // before. A panel disagreeing with the radio it is
+                // driving is the defect the readback rule exists to stop,
+                // and every other control here already followed (the
+                // antenna and the gains both read back). Same call the
+                // plugin-preset path makes for the same reason.
+                deviceRateIndex_ = nearestIndex(
+                    deviceRatesHz_, pipeline_.activeSource().sampleRateHz());
+                followInputRate();
+            } else {
+                sourceError_ = device_->lastError();
+            }
+        }
+        if (r.gainName.has_value() && r.gainDb.has_value()) {
+            if (device_->setGainDb(*r.gainName, *r.gainDb)) {
+                for (std::size_t i = 0; i < deviceGainNames_.size(); ++i) {
+                    if (deviceGainNames_[i] == *r.gainName &&
+                        i < deviceGainsDb_.size()) {
+                        // THE READBACK, not the request - the same rule
+                        // the panel's own sliders follow. A driver that
+                        // quantises (every one of these does) otherwise
+                        // leaves the browser's number on the desktop
+                        // slider while the radio holds another.
+                        deviceGainsDb_[i] =
+                            static_cast<float>(device_->gainDb(*r.gainName));
+                    }
+                }
+            } else {
+                sourceError_ = device_->lastError();
+            }
+        }
+        if (r.agc.has_value() && deviceAgcSupported_) {
+            if (device_->setAutoGain(*r.agc)) {
+                deviceAgc_ = *r.agc;
+            } else {
+                sourceError_ = device_->lastError();
+            }
+        }
+    }
+
+    // --- Recorder --------------------------------------------------------
+    // The install/teardown ORDER is the Recorder contract's, not a choice:
+    // start() then set*Recorder for a new take, set*Recorder(nullptr) then
+    // stop() to end one. The stop* helpers already do the second.
+    if (r.recordIq.has_value()) {
+        if (*r.recordIq && !iqRecorder_.recording()) {
+            const double rate = pipeline_.inputRateHz();
+            std::string err;
+            if (iqRecorder_.start(cascade::core::RecordKind::BasebandIq,
+                                  recordDir_, rate, err)) {
+                iqRecordRateHz_ = rate;
+                iqRecordStartS_ = ImGui::GetTime();
+                pipeline_.setIqRecorder(&iqRecorder_);
+                recordError_.clear();
+            } else {
+                recordError_ = err;
+            }
+        } else if (!*r.recordIq) {
+            stopIqRecording();
+        }
+    }
+    if (r.recordAudio.has_value()) {
+        if (*r.recordAudio && !audioRecorder_.recording()) {
+            std::string err;
+            if (audioRecorder_.start(cascade::core::RecordKind::Audio, recordDir_,
+                                     cascade::core::Pipeline::kAudioRateHz, err)) {
+                audioRecordStartS_ = ImGui::GetTime();
+                pipeline_.setAudioRecorder(&audioRecorder_);
+                recordError_.clear();
+            } else {
+                recordError_ = err;
+            }
+        } else if (!*r.recordAudio) {
+            stopAudioRecording();
+        }
+    }
+
+    // --- Bookmarks -------------------------------------------------------
+    // Indexes are re-checked against the LIVE list: the browser's copy can
+    // be a poll out of date, and acting on a stale index would tune to, or
+    // delete, the wrong entry.
+    if (r.bookmarkAdd.has_value()) {
+        cascade::core::Bookmark b;
+        b.name = *r.bookmarkAdd;
+        b.freqHz = currentAbsoluteHz();
+        b.mode = kModeNames[modeIndex_];
+        b.bandwidthHz = vfoBandwidthHz_;
+        freqMgr_.add(b);
+        saveBookmarks();
+    }
+    if (r.bookmarkTune.has_value()) {
+        // The browser's row number, mapped back to the real list.
+        const std::size_t row = static_cast<std::size_t>(*r.bookmarkTune);
+        const std::size_t i = row < webBookmarkIndex_.size() ? webBookmarkIndex_[row] : ~std::size_t{0};
+        if (i < freqMgr_.list().size()) {
+            const cascade::core::Bookmark b = freqMgr_.list()[i];
+            for (int m = 0; m < 8; ++m) {
+                if (b.mode == kModeNames[m]) {
+                    modeIndex_ = m;
+                    pipeline_.setDemodMode(kModeMap[m]);
+                    break;
+                }
+            }
+            const double bwHi = kVfoBwMaxChanFrac * pipeline_.channelRateHz();
+            vfoBandwidthHz_ = std::max(kVfoBwMinHz, std::min(b.bandwidthHz, bwHi));
+            pipeline_.setVfoBandwidthHz(vfoBandwidthHz_);
+            // -1 for a bookmark whose bandwidth is none of the steps.
+            bandwidthIndex_ = bandwidthStepIndex(vfoBandwidthHz_);
+            tuneAbsoluteHz(b.freqHz);
+        }
+    }
+    if (r.bookmarkRemove.has_value()) {
+        const std::size_t row = static_cast<std::size_t>(*r.bookmarkRemove);
+        const std::size_t i = row < webBookmarkIndex_.size() ? webBookmarkIndex_[row] : ~std::size_t{0};
+        if (freqMgr_.removeAt(i)) {
+            saveBookmarks();
+        }
+    }
+
+    // --- Scanner ---------------------------------------------------------
+    if (r.scanStartHz.has_value()) { scanStartMhz_ = *r.scanStartHz / 1.0e6; }
+    if (r.scanStopHz.has_value()) { scanStopMhz_ = *r.scanStopHz / 1.0e6; }
+    if (r.scanStepHz.has_value()) { scanStepKhz_ = *r.scanStepHz / 1.0e3; }
+    // --- Plugins ---------------------------------------------------------
+    if (r.pluginFetch.value_or(false)) {
+        startCatalogFetch();
+    }
+    if (r.pluginInstall.has_value()) {
+        // The legal notice must be acknowledged explicitly, exactly as the
+        // desktop requires a ticked box — and the gate is the SAME
+        // predicate, so a plugin the window refuses to install is refused
+        // here too, for the same stated reason.
+        const bool ack = r.acknowledgeNotice.value_or(false);
+        bool done = false;
+        for (int i = 0; i < static_cast<int>(catalog_.size()); ++i) {
+            if (catalog_[static_cast<std::size_t>(i)].id != *r.pluginInstall) {
+                continue;
+            }
+            const std::string blocked = pluginInstallBlockedReason(i, ack);
+            if (!blocked.empty()) {
+                installError_ = blocked;
+            } else {
+                startInstall(catalog_[static_cast<std::size_t>(i)]);
+            }
+            done = true;
+            break;
+        }
+        if (!done) {
+            // English, as every reason in installError_ is; the pages
+            // translate it where they draw it (gui::trStoredReason).
+            installError_ = FOX_TR_NOOP("no catalogue entry with that id; fetch the "
+                                        "catalogue and try again");
+        }
+    }
+    if (r.pluginRemove.has_value()) {
+        removeInstalledPlugin(*r.pluginRemove);
+    }
+    if (r.pluginTuneName.has_value() && r.pluginTuneAllowed.has_value()) {
+        setPluginTuneAllowed(*r.pluginTuneName, *r.pluginTuneAllowed);
+    }
+    if (r.pluginPresetName.has_value() && r.pluginPresetIndex.has_value()) {
+        // Re-read the preset from the PLUGIN rather than trusting anything
+        // the browser echoed back, and re-apply the same validity test, so
+        // the only numbers that reach the receiver are ones the plugin
+        // itself just produced. Then applyPluginPreset — the identical
+        // path the desktop button takes, which also sets the mode,
+        // bandwidth and device rate and opens the plugin's windows.
+        for (const cascade::core::LoadedPlugin& lp : pluginHost_.plugins()) {
+            if (lp.name != *r.pluginPresetName || lp.preset == nullptr) { continue; }
+            const auto idx = static_cast<std::uint32_t>(*r.pluginPresetIndex);
+            if (idx >= lp.preset->count() || idx >= kMaxPresetsPerPlugin) { break; }
+            CascadePreset ps{};
+            ps.structSize = static_cast<std::uint32_t>(sizeof(CascadePreset));
+            if (lp.preset->get(idx, &ps) != 1) { break; }
+            if (!cascade::gui::presetIsValid(ps)) { break; }
+            applyPluginPreset(lp, ps);
+            break;
+        }
+    }
+
+    if (r.scannerActive.has_value()) {
+        if (*r.scannerActive) {
+            cascade::core::Scanner::Params p;
+            p.startHz = scanStartMhz_ * 1.0e6;
+            p.stopHz = scanStopMhz_ * 1.0e6;
+            p.stepHz = scanStepKhz_ * 1.0e3;
+            p.dwellMs = scanDwellMs_;
+            p.holdMs = scanHoldMs_;
+            p.resumeMs = scanResumeMs_;
+            p.listenMs = scanListenMs_;
+            // configure() sanitizes (swaps a reversed range, floors the
+            // step), so the browser's values get the same treatment the
+            // panel's do.
+            scanner_.configure(p);
+            scanner_.start(ImGui::GetTime() * 1000.0);
+            scannerHasExpected_ = false;
+        } else {
+            scanner_.stop();
+        }
+    }
+    if (r.scannerSkip.value_or(false) && scanner_.active()) {
+        scanner_.skip();
+        scannerHasExpected_ = false;
+    }
+
+    // --- THE REMOTE TRANSMIT KEY (0.95.1) --------------------------------
+    //
+    // The LAST thing applied in this loop, and the only one here that can
+    // put RF out of a connector. Three things have to be true before it
+    // does, and they are deliberately checked in three different places:
+    // the server refuses the request unless the snapshot it is publishing
+    // says a transmitter is available, this re-checks against the state
+    // THIS frame rather than the one the browser saw, and
+    // core::Transmitter refuses a key with no radio behind it whatever
+    // either of us believes.
+    //
+    // A key is an ASSERTION WITH A DEADLINE, not a switch: keyRemote()
+    // buys kRemotePttHoldMs and the browser has to keep asking. So a
+    // request that arrives while the page is shut is dropped rather than
+    // remembered, and nothing here can leave a key pending.
+    if (r.transmitPtt.has_value()) {
+        if (*r.transmitPtt) {
+            if (transmitOpen_ && transmitter_.haveSink()) {
+                transmitter_.keyRemote();
+            } else {
+                transmitter_.releaseRemote("there is no transmitter open");
+            }
+        } else {
+            transmitter_.releaseRemote("the remote let go");
+        }
+    }
+}
+
 void AppWindow::applyWebControls() {
     std::vector<cascade::net::ControlRequest> requests =
         webServer_.takePendingControls();
@@ -20670,410 +21357,7 @@ void AppWindow::applyWebControls() {
                         std::make_move_iterator(fromCat.end()));
     }
     for (const cascade::net::ControlRequest& r : requests) {
-        if (r.running.has_value()) {
-            if (*r.running) {
-                pipeline_.start();
-            } else {
-                pipeline_.stop();
-            }
-        }
-        if (r.centerHz.has_value()) {
-            // The GUI's own absolute-tune path, so the RDS/stereo decoders are
-            // told to forget the old station exactly as they are for a tune
-            // made from this window.
-            retuneSourceHz(*r.centerHz);
-        }
-        if (r.mode.has_value()) {
-            // Mapped by NAME, never by index: the button table's order and the
-            // DemodMode enum's order deliberately differ.
-            const std::string want = cascade::dsp::modeName(*r.mode);
-            for (int i = 0; i < 8; ++i) {
-                if (want == kModeNames[i]) {
-                    modeIndex_ = i;
-                    pipeline_.setDemodMode(kModeMap[i]);
-                    // A mode button here also moves the bandwidth to that
-                    // mode's default, so a browser mode change behaves the
-                    // same way. An explicit bandwidthHz in the SAME request
-                    // still wins, because it is applied below.
-                    bandwidthIndex_ = kModeDefaultBw[i];
-                    vfoBandwidthHz_ = kBwHz[bandwidthIndex_];
-                    pipeline_.setVfoBandwidthHz(vfoBandwidthHz_);
-                    break;
-                }
-            }
-        }
-        // Bandwidth before offset: the offset's limit depends on it.
-        if (r.bandwidthHz.has_value()) {
-            const double bwHi = kVfoBwMaxChanFrac * pipeline_.channelRateHz();
-            vfoBandwidthHz_ = std::max(kVfoBwMinHz, std::min(*r.bandwidthHz, bwHi));
-            pipeline_.setVfoBandwidthHz(vfoBandwidthHz_);
-            // -1 when the browser asked for a width the list does not carry:
-            // the combo shows what the VFO is, and ticks nothing.
-            bandwidthIndex_ = bandwidthStepIndex(vfoBandwidthHz_);
-        }
-        if (r.vfoOffsetHz.has_value()) {
-            // Clamped against the LIVE rate, the same rule the config restore
-            // uses — web_control's range check is a sanity bound, not this.
-            const double lim = 0.5 * pipeline_.inputRateHz() - 0.5 * vfoBandwidthHz_;
-            const double off =
-                (lim > 0.0) ? std::clamp(*r.vfoOffsetHz, -lim, lim) : 0.0;
-            pipeline_.setVfoOffsetHz(off);
-            vfoOffsetKhz_ = static_cast<float>(off / 1000.0);
-        }
-        if (r.squelchDb.has_value()) {
-            squelchDb_ = static_cast<float>(*r.squelchDb);
-            pipeline_.setSquelchDb(squelchDb_);
-        }
-        if (r.volume.has_value()) {
-            volume_ = static_cast<float>(*r.volume);
-            pipeline_.audio().setVolume(volume_);
-        }
-        // Display range. The same minimum-span rule the desktop sliders
-        // enforce, applied against whichever end the request did not supply —
-        // a degenerate or inverted span is a divide-by-zero where dB is mapped
-        // to pixels.
-        if (r.dbMin.has_value() || r.dbMax.has_value()) {
-            float lo = r.dbMin.has_value() ? static_cast<float>(*r.dbMin) : dbMin_;
-            float hi = r.dbMax.has_value() ? static_cast<float>(*r.dbMax) : dbMax_;
-            if (lo > hi - kMinDbSpan) {
-                // Push back the end the caller actually moved, so the other
-                // does not shift under them.
-                if (r.dbMin.has_value()) {
-                    lo = hi - kMinDbSpan;
-                } else {
-                    hi = lo + kMinDbSpan;
-                }
-            }
-            dbMin_ = lo;
-            dbMax_ = hi;
-            spectrum_->setRange(dbMin_, dbMax_);
-        }
-        if (r.deemphasisIndex.has_value()) {
-            deemphIndex_ = *r.deemphasisIndex;
-            pipeline_.setDeemphasisUs(kDeemphUs[deemphIndex_]);
-        }
-        if (r.stereoEnabled.has_value()) {
-            stereoEnabled_ = *r.stereoEnabled;
-            pipeline_.setStereoEnabled(stereoEnabled_);
-        }
-        if (r.nrEnabled.has_value()) {
-            nrEnabled_ = *r.nrEnabled;
-            pipeline_.setNoiseReductionEnabled(nrEnabled_);
-        }
-        if (r.nrStrength.has_value()) {
-            nrStrength_ = static_cast<float>(*r.nrStrength);
-            pipeline_.setNoiseReductionStrength(nrStrength_);
-        }
-        if (r.notchEnabled.has_value()) {
-            notchEnabled_ = *r.notchEnabled;
-            pipeline_.setNotchEnabled(notchEnabled_);
-        }
-        if (r.notchFreqHz.has_value()) {
-            notchFreqHz_ = static_cast<float>(*r.notchFreqHz);
-            pipeline_.setNotchFrequencyHz(static_cast<double>(notchFreqHz_));
-        }
-        if (r.notchQ.has_value()) {
-            notchQ_ = static_cast<float>(*r.notchQ);
-            pipeline_.setNotchQ(static_cast<double>(notchQ_));
-        }
-        if (r.autoNotch.has_value()) {
-            autoNotch_ = *r.autoNotch;
-            pipeline_.setAutoNotchEnabled(autoNotch_);
-        }
-
-        // --- Source ---------------------------------------------------------
-        // All of this runs on the GUI thread by construction (applyWebControls
-        // is called from drawUi), which is what makes it safe to touch the
-        // source at all.
-        if (r.scanDevices.value_or(false)) {
-            // The native list always refreshes (scanNative opens nothing);
-            // the SoapySDR scan goes through the same gate as the panel's
-            // Refresh (0.90.1), so with a radio open it defers rather than
-            // scans, logs why once, and the browser keeps the list it had.
-            scanNative();
-            scanSoapy();
-        }
-        if (r.sourceKind.has_value()) {
-            if (*r.sourceKind == "siggen") {
-                selectSource(0);
-            } else if (r.soapyArgs.has_value()) {
-                // Matched against the ENUMERATED list rather than passed to a
-                // driver verbatim: a browser must not be able to hand
-                // arbitrary kwargs to a vendor module or arbitrary args to a
-                // native driver, and an unknown string is simply not a device
-                // this receiver has seen. The KIND is matched too - a native
-                // row and a Soapy row for one dongle carry the same serial.
-                bool found = false;
-                if (isNativeSourceKind(*r.sourceKind)) {
-                    for (std::size_t i = 0; i < nativeDevices_.size(); ++i) {
-                        if (nativeDevices_[i].driver == *r.sourceKind &&
-                            nativeDevices_[i].args == *r.soapyArgs) {
-                            selectSource(kNativeRowBase + static_cast<int>(i));
-                            found = true;
-                            break;
-                        }
-                    }
-                } else {
-                    for (std::size_t i = 0; i < soapyDevices_.size(); ++i) {
-                        if (soapyDevices_[i].args == *r.soapyArgs) {
-                            selectSource(soapyRowBase() + static_cast<int>(i));
-                            found = true;
-                            break;
-                        }
-                    }
-                }
-                if (!found) {
-                    sourceError_ = "no scanned device matches those arguments; "
-                                   "rescan and try again";
-                }
-            }
-        }
-        // The remaining source settings only mean anything with a device open.
-        if (device_ != nullptr) {
-            if (r.antenna.has_value()) {
-                if (device_->setAntenna(*r.antenna)) {
-                    deviceAntenna_ = device_->antenna();  // readback, not the request
-                } else {
-                    sourceError_ = device_->lastError();
-                }
-            }
-            if (r.sampleRateHz.has_value()) {
-                if (device_->setSampleRateHz(*r.sampleRateHz)) {
-                    // THE DESKTOP'S RATE COMBO FOLLOWS, and it did not until
-                    // 0.91.0. Measured on the bench: a browser set 2.4 MS/s on
-                    // a native RTL-SDR, the radio ran at 2.4, the deck read
-                    // 2.400 MS/s, and the Source section's own Rate control
-                    // still said 1.024 - the value that had been selected
-                    // before. A panel disagreeing with the radio it is
-                    // driving is the defect the readback rule exists to stop,
-                    // and every other control here already followed (the
-                    // antenna and the gains both read back). Same call the
-                    // plugin-preset path makes for the same reason.
-                    deviceRateIndex_ = nearestIndex(
-                        deviceRatesHz_, pipeline_.activeSource().sampleRateHz());
-                    followInputRate();
-                } else {
-                    sourceError_ = device_->lastError();
-                }
-            }
-            if (r.gainName.has_value() && r.gainDb.has_value()) {
-                if (device_->setGainDb(*r.gainName, *r.gainDb)) {
-                    for (std::size_t i = 0; i < deviceGainNames_.size(); ++i) {
-                        if (deviceGainNames_[i] == *r.gainName &&
-                            i < deviceGainsDb_.size()) {
-                            // THE READBACK, not the request - the same rule
-                            // the panel's own sliders follow. A driver that
-                            // quantises (every one of these does) otherwise
-                            // leaves the browser's number on the desktop
-                            // slider while the radio holds another.
-                            deviceGainsDb_[i] =
-                                static_cast<float>(device_->gainDb(*r.gainName));
-                        }
-                    }
-                } else {
-                    sourceError_ = device_->lastError();
-                }
-            }
-            if (r.agc.has_value() && deviceAgcSupported_) {
-                if (device_->setAutoGain(*r.agc)) {
-                    deviceAgc_ = *r.agc;
-                } else {
-                    sourceError_ = device_->lastError();
-                }
-            }
-        }
-
-        // --- Recorder --------------------------------------------------------
-        // The install/teardown ORDER is the Recorder contract's, not a choice:
-        // start() then set*Recorder for a new take, set*Recorder(nullptr) then
-        // stop() to end one. The stop* helpers already do the second.
-        if (r.recordIq.has_value()) {
-            if (*r.recordIq && !iqRecorder_.recording()) {
-                const double rate = pipeline_.inputRateHz();
-                std::string err;
-                if (iqRecorder_.start(cascade::core::RecordKind::BasebandIq,
-                                      recordDir_, rate, err)) {
-                    iqRecordRateHz_ = rate;
-                    iqRecordStartS_ = ImGui::GetTime();
-                    pipeline_.setIqRecorder(&iqRecorder_);
-                    recordError_.clear();
-                } else {
-                    recordError_ = err;
-                }
-            } else if (!*r.recordIq) {
-                stopIqRecording();
-            }
-        }
-        if (r.recordAudio.has_value()) {
-            if (*r.recordAudio && !audioRecorder_.recording()) {
-                std::string err;
-                if (audioRecorder_.start(cascade::core::RecordKind::Audio, recordDir_,
-                                         cascade::core::Pipeline::kAudioRateHz, err)) {
-                    audioRecordStartS_ = ImGui::GetTime();
-                    pipeline_.setAudioRecorder(&audioRecorder_);
-                    recordError_.clear();
-                } else {
-                    recordError_ = err;
-                }
-            } else if (!*r.recordAudio) {
-                stopAudioRecording();
-            }
-        }
-
-        // --- Bookmarks -------------------------------------------------------
-        // Indexes are re-checked against the LIVE list: the browser's copy can
-        // be a poll out of date, and acting on a stale index would tune to, or
-        // delete, the wrong entry.
-        if (r.bookmarkAdd.has_value()) {
-            cascade::core::Bookmark b;
-            b.name = *r.bookmarkAdd;
-            b.freqHz = currentAbsoluteHz();
-            b.mode = kModeNames[modeIndex_];
-            b.bandwidthHz = vfoBandwidthHz_;
-            freqMgr_.add(b);
-            saveBookmarks();
-        }
-        if (r.bookmarkTune.has_value()) {
-            // The browser's row number, mapped back to the real list.
-            const std::size_t row = static_cast<std::size_t>(*r.bookmarkTune);
-            const std::size_t i = row < webBookmarkIndex_.size() ? webBookmarkIndex_[row] : ~std::size_t{0};
-            if (i < freqMgr_.list().size()) {
-                const cascade::core::Bookmark b = freqMgr_.list()[i];
-                for (int m = 0; m < 8; ++m) {
-                    if (b.mode == kModeNames[m]) {
-                        modeIndex_ = m;
-                        pipeline_.setDemodMode(kModeMap[m]);
-                        break;
-                    }
-                }
-                const double bwHi = kVfoBwMaxChanFrac * pipeline_.channelRateHz();
-                vfoBandwidthHz_ = std::max(kVfoBwMinHz, std::min(b.bandwidthHz, bwHi));
-                pipeline_.setVfoBandwidthHz(vfoBandwidthHz_);
-                // -1 for a bookmark whose bandwidth is none of the steps.
-                bandwidthIndex_ = bandwidthStepIndex(vfoBandwidthHz_);
-                tuneAbsoluteHz(b.freqHz);
-            }
-        }
-        if (r.bookmarkRemove.has_value()) {
-            const std::size_t row = static_cast<std::size_t>(*r.bookmarkRemove);
-            const std::size_t i = row < webBookmarkIndex_.size() ? webBookmarkIndex_[row] : ~std::size_t{0};
-            if (freqMgr_.removeAt(i)) {
-                saveBookmarks();
-            }
-        }
-
-        // --- Scanner ---------------------------------------------------------
-        if (r.scanStartHz.has_value()) { scanStartMhz_ = *r.scanStartHz / 1.0e6; }
-        if (r.scanStopHz.has_value()) { scanStopMhz_ = *r.scanStopHz / 1.0e6; }
-        if (r.scanStepHz.has_value()) { scanStepKhz_ = *r.scanStepHz / 1.0e3; }
-        // --- Plugins ---------------------------------------------------------
-        if (r.pluginFetch.value_or(false)) {
-            startCatalogFetch();
-        }
-        if (r.pluginInstall.has_value()) {
-            // The legal notice must be acknowledged explicitly, exactly as the
-            // desktop requires a ticked box — and the gate is the SAME
-            // predicate, so a plugin the window refuses to install is refused
-            // here too, for the same stated reason.
-            const bool ack = r.acknowledgeNotice.value_or(false);
-            bool done = false;
-            for (int i = 0; i < static_cast<int>(catalog_.size()); ++i) {
-                if (catalog_[static_cast<std::size_t>(i)].id != *r.pluginInstall) {
-                    continue;
-                }
-                const std::string blocked = pluginInstallBlockedReason(i, ack);
-                if (!blocked.empty()) {
-                    installError_ = blocked;
-                } else {
-                    startInstall(catalog_[static_cast<std::size_t>(i)]);
-                }
-                done = true;
-                break;
-            }
-            if (!done) {
-                // English, as every reason in installError_ is; the pages
-                // translate it where they draw it (gui::trStoredReason).
-                installError_ = FOX_TR_NOOP("no catalogue entry with that id; fetch the "
-                                            "catalogue and try again");
-            }
-        }
-        if (r.pluginRemove.has_value()) {
-            removeInstalledPlugin(*r.pluginRemove);
-        }
-        if (r.pluginTuneName.has_value() && r.pluginTuneAllowed.has_value()) {
-            setPluginTuneAllowed(*r.pluginTuneName, *r.pluginTuneAllowed);
-        }
-        if (r.pluginPresetName.has_value() && r.pluginPresetIndex.has_value()) {
-            // Re-read the preset from the PLUGIN rather than trusting anything
-            // the browser echoed back, and re-apply the same validity test, so
-            // the only numbers that reach the receiver are ones the plugin
-            // itself just produced. Then applyPluginPreset — the identical
-            // path the desktop button takes, which also sets the mode,
-            // bandwidth and device rate and opens the plugin's windows.
-            for (const cascade::core::LoadedPlugin& lp : pluginHost_.plugins()) {
-                if (lp.name != *r.pluginPresetName || lp.preset == nullptr) { continue; }
-                const auto idx = static_cast<std::uint32_t>(*r.pluginPresetIndex);
-                if (idx >= lp.preset->count() || idx >= kMaxPresetsPerPlugin) { break; }
-                CascadePreset ps{};
-                ps.structSize = static_cast<std::uint32_t>(sizeof(CascadePreset));
-                if (lp.preset->get(idx, &ps) != 1) { break; }
-                if (!cascade::gui::presetIsValid(ps)) { break; }
-                applyPluginPreset(lp, ps);
-                break;
-            }
-        }
-
-        if (r.scannerActive.has_value()) {
-            if (*r.scannerActive) {
-                cascade::core::Scanner::Params p;
-                p.startHz = scanStartMhz_ * 1.0e6;
-                p.stopHz = scanStopMhz_ * 1.0e6;
-                p.stepHz = scanStepKhz_ * 1.0e3;
-                p.dwellMs = scanDwellMs_;
-                p.holdMs = scanHoldMs_;
-                p.resumeMs = scanResumeMs_;
-                p.listenMs = scanListenMs_;
-                // configure() sanitizes (swaps a reversed range, floors the
-                // step), so the browser's values get the same treatment the
-                // panel's do.
-                scanner_.configure(p);
-                scanner_.start(ImGui::GetTime() * 1000.0);
-                scannerHasExpected_ = false;
-            } else {
-                scanner_.stop();
-            }
-        }
-        if (r.scannerSkip.value_or(false) && scanner_.active()) {
-            scanner_.skip();
-            scannerHasExpected_ = false;
-        }
-
-        // --- THE REMOTE TRANSMIT KEY (0.95.1) --------------------------------
-        //
-        // The LAST thing applied in this loop, and the only one here that can
-        // put RF out of a connector. Three things have to be true before it
-        // does, and they are deliberately checked in three different places:
-        // the server refuses the request unless the snapshot it is publishing
-        // says a transmitter is available, this re-checks against the state
-        // THIS frame rather than the one the browser saw, and
-        // core::Transmitter refuses a key with no radio behind it whatever
-        // either of us believes.
-        //
-        // A key is an ASSERTION WITH A DEADLINE, not a switch: keyRemote()
-        // buys kRemotePttHoldMs and the browser has to keep asking. So a
-        // request that arrives while the page is shut is dropped rather than
-        // remembered, and nothing here can leave a key pending.
-        if (r.transmitPtt.has_value()) {
-            if (*r.transmitPtt) {
-                if (transmitOpen_ && transmitter_.haveSink()) {
-                    transmitter_.keyRemote();
-                } else {
-                    transmitter_.releaseRemote("there is no transmitter open");
-                }
-            } else {
-                transmitter_.releaseRemote("the remote let go");
-            }
-        }
+        applyControlRequest(r);
     }
 
     // --- THE STANDING CONDITIONS ON THE REMOTE KEY ---------------------------
@@ -22330,6 +22614,15 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     // would have re-applied them.
     pluginTuneAllowed_ = cfg.pluginTuneAllowed;
     applyPluginTuneGrants();
+    // Host API level 1: the settings grant, and the plugins' own settings -
+    // loaded into the live store BEFORE the refreshPluginRunner below
+    // re-attaches every plugin, so a plugin reading its settings from
+    // attach() finds them there.
+    pluginSettingsAllowed_ = cfg.pluginSettingsAllowed;
+    applyPluginSettingsGrants();
+    pluginSettings_ = cfg.pluginSettings;
+    pluginUi_.api().loadSettings(pluginSettings_);
+    pluginSettingsGen_ = pluginUi_.api().settingsGeneration();
     // STOPS ARE APPLIED, not merely stored, for a stronger version of the same
     // reason: the scan in the constructor has already built every plugin's
     // instances against the default source, so a plugin the user stopped last
@@ -22877,6 +23170,8 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.fittedModulesHeight = fittedWinH_;
     cfg.pluginLastUpdateCheck = pluginLastUpdateCheck_;
     cfg.pluginTuneAllowed = pluginTuneAllowed_;
+    cfg.pluginSettingsAllowed = pluginSettingsAllowed_;
+    cfg.pluginSettings = pluginSettings_;
     cfg.pluginsStopped = pluginsStopped_;
     // closedWindows is written empty: nothing reads it since 0.79.1 (see
     // applyConfig), and an empty list is what an older build would take to

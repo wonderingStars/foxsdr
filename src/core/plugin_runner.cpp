@@ -3,6 +3,7 @@
 #include "core/plugin_runner.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -72,6 +73,13 @@ std::string failureSentence(const std::string& name) {
            "once more.";
 }
 
+// The host clock an epoch is stamped with (CascadeStreamInfo::epochStartUnixMs).
+std::int64_t nowUnixMs() {
+    return static_cast<std::int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                         std::chrono::system_clock::now().time_since_epoch())
+                                         .count());
+}
+
 }  // namespace
 
 PluginRunner::~PluginRunner() { clear(); }
@@ -104,6 +112,11 @@ void PluginRunner::rebuild(const std::vector<LoadedPlugin>& plugins, double audi
     iqRateHz_ = iqRateHz;
     centreHz_ = centreHz;
     pollBuf_.resize(kPollBufBytes);
+    // A NEW EPOCH BEFORE ANY create(), so a decoder that reads the stream
+    // clock from inside its create() sees the stream it is about to be fed.
+    if (clock_) { clock_->beginEpoch(iqRateHz, audioRateHz, nowUnixMs()); }
+    processorNonFinite_ = 0;
+    chainBuf_.reserve(2u * kChainReserveFrames);
 
     for (const LoadedPlugin& lp : plugins) {
         if (!lp.loaded) { continue; }
@@ -310,10 +323,49 @@ void PluginRunner::rebuild(const std::vector<LoadedPlugin>& plugins, double audi
             audioInstances_.push_back(std::move(a));
         }
 
+        // AN IN-CHAIN AUDIO PROCESSOR (host API level 1). Its own instance,
+        // not riding on a decoder's the way the audio-out table does: it is
+        // fed the audio the user hears, not a decoder's stream, and a plugin
+        // that only processes has no decoder to ride on. Stereo at the audio
+        // rate, because that is the shape of the chain where it runs (see
+        // processAudioChain and the ABI's CascadeAudioProcessorApi).
+        if (lp.audioProcessor != nullptr && audioRateHz > 0.0) {
+            void* h = lp.audioProcessor->create(static_cast<uint32_t>(audioRateHz), 2u);
+            if (h != nullptr) {
+                ProcessorInstance p;
+                p.api = lp.audioProcessor;
+                p.handle = h;
+                p.name = lp.name;
+                p.title = lp.audioProcessor->title != nullptr ? lp.audioProcessor->title
+                                                              : lp.name;
+                processors_.push_back(std::move(p));
+                // A ROW LIKE ANY DECODER'S, so the module reads FED on its
+                // plate while its processor runs (isFeeding answers from these
+                // rows) instead of "takes no signal" - which a module rewriting
+                // the audio the user hears plainly does not deserve.
+                DecoderStatus st;
+                st.plugin = lp.name;
+                st.reason = DecoderIdleReason::Running;
+                st.stream = DecoderStream::Audio;
+                st.detail = "\"" + lp.name + "\" is processing the audio you hear.";
+                status_.push_back(std::move(st));
+            } else {
+                DecoderStatus st;
+                st.plugin = lp.name;
+                st.reason = DecoderIdleReason::CreateFailed;
+                st.stream = DecoderStream::None;
+                st.detail = "\"" + lp.name +
+                            "\" failed to start its audio processor (its create() returned "
+                            "nothing), so the audio is not being processed.";
+                status_.push_back(std::move(st));
+            }
+        }
+
         // No table this runner drives: say so rather than leaving the plugin
-        // looking loaded-and-working.
-        if (!started && lp.decoder == nullptr && lp.iqDecoder == nullptr &&
-            lp.imageDecoder == nullptr) {
+        // looking loaded-and-working. A plugin that ONLY processes audio is
+        // driven all the same - it is simply not a decoder.
+        if (!started && lp.audioProcessor == nullptr && lp.decoder == nullptr &&
+            lp.iqDecoder == nullptr && lp.imageDecoder == nullptr) {
             DecoderStatus st;
             st.plugin = lp.name;
             st.reason = DecoderIdleReason::NoAudioTable;
@@ -343,6 +395,10 @@ bool PluginRunner::isFeeding(const std::string& pluginKey) const {
 void PluginRunner::processIq(const float* interleaved, std::size_t frames) {
     if (interleaved == nullptr || frames == 0) { return; }
     std::lock_guard<std::mutex> lock(mutex_);
+    // Counted whether or not anything takes these samples: the clock times
+    // the STREAM, and every instance created this epoch is handed every block
+    // from here on, so the count is also what each of them has received.
+    if (clock_) { clock_->addIq(frames); }
     if (iqInstances_.empty() && iqImageCount_ == 0) { return; }
     // Same two rules as processAudio: a permanently failed instance is fed
     // nothing, and the count only moves when something was actually fed.
@@ -385,6 +441,57 @@ void PluginRunner::retune(double centreHz) {
 void PluginRunner::clear() {
     std::unique_lock<std::mutex> lock(mutex_);
     destroyInstances(lock);
+    // THE STREAM ENDS HERE. A new epoch with no rates says so: a plugin still
+    // reading the clock (a patch-page instance, a worker thread) sees the
+    // epoch move and both rates at zero rather than a count frozen mid-run.
+    if (clock_) { clock_->beginEpoch(0.0, 0.0, nowUnixMs()); }
+}
+
+void PluginRunner::setStreamClock(std::shared_ptr<StreamClock> clock) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    clock_ = std::move(clock);
+}
+
+void PluginRunner::processAudioChain(float* left, float* right, std::size_t frames) {
+    if (left == nullptr || right == nullptr || frames == 0) { return; }
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (processors_.empty()) { return; }
+    // Reserved at rebuild; only a block larger than any before grows it.
+    if (chainBuf_.size() < 2u * frames) { chainBuf_.resize(2u * frames); }
+    float* ilv = chainBuf_.data();
+    for (std::size_t i = 0; i < frames; ++i) {
+        ilv[2u * i] = left[i];
+        ilv[2u * i + 1u] = right[i];
+    }
+    for (ProcessorInstance& p : processors_) {
+        p.api->process(p.handle, ilv, frames);
+        // AFTER EACH ONE, so the next processor is never handed a NaN either:
+        // a processor that divides by its input would turn one into a block.
+        for (std::size_t i = 0; i < 2u * frames; ++i) {
+            if (!std::isfinite(ilv[i])) {
+                ilv[i] = 0.0f;
+                ++processorNonFinite_;
+            }
+        }
+    }
+    for (std::size_t i = 0; i < frames; ++i) {
+        left[i] = ilv[2u * i];
+        right[i] = ilv[2u * i + 1u];
+    }
+}
+
+std::vector<std::string> PluginRunner::processorTitles() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<std::string> out;
+    for (const ProcessorInstance& p : processors_) {
+        out.push_back(p.title + " (" + p.name + ")");
+    }
+    return out;
+}
+
+std::uint64_t PluginRunner::processorNonFinite() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return processorNonFinite_;
 }
 
 void PluginRunner::destroyInstances(std::unique_lock<std::mutex>& lock) {
@@ -412,6 +519,8 @@ void PluginRunner::destroyInstances(std::unique_lock<std::mutex>& lock) {
     std::vector<Instance> deadAudio;
     std::vector<IqInstance> deadIq;
     std::vector<ImageInstance> deadImage;
+    std::vector<ProcessorInstance> deadProc;
+    deadProc.swap(processors_);
     deadAudio.swap(instances_);
     deadIq.swap(iqInstances_);
     deadImage.swap(imageInstances_);
@@ -434,17 +543,22 @@ void PluginRunner::destroyInstances(std::unique_lock<std::mutex>& lock) {
     for (ImageInstance& i : deadImage) {
         if (i.api != nullptr && i.handle != nullptr) { i.api->destroy(i.handle); }
     }
+    for (ProcessorInstance& p : deadProc) {
+        if (p.api != nullptr && p.handle != nullptr) { p.api->destroy(p.handle); }
+    }
     // The moved-out vectors are released here, with the lock still down: a
     // resampler's buffers are a free() and belong outside it too.
     deadAudio.clear();
     deadIq.clear();
     deadImage.clear();
+    deadProc.clear();
     lock.lock();
 }
 
 void PluginRunner::processAudio(const float* mono, std::size_t frames) {
     if (mono == nullptr || frames == 0) { return; }
     std::lock_guard<std::mutex> lock(mutex_);
+    if (clock_) { clock_->addAudio(frames); }  // see processIq
     if (instances_.empty() && audioImageCount_ == 0) { return; }
     // NOTHING IS HANDED TO AN INSTANCE THAT HAS FAILED PERMANENTLY, and the
     // frame count is only raised if something actually took the samples. The

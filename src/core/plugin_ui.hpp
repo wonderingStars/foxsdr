@@ -32,7 +32,10 @@
 #include <string>
 #include <vector>
 
+#include <memory>
+
 #include "core/plugin_abi.h"
+#include "core/plugin_api.hpp"
 #include "core/plugin_host.hpp"
 
 namespace cascade::core {
@@ -626,9 +629,39 @@ public:
     // hold from the moment the module is scanned, before anything can be
     // re-applied. A stop that evaporated in clear() would let a stopped plugin
     // run for one rebuild after every rescan.
-    void setStopped(std::vector<std::string> keys) { stopped_.set(std::move(keys)); }
+    //
+    // The level-1 API is told too (PluginApiCore::setStopped), so a stopped
+    // plugin's marks and commands leave the screen at once and its queued
+    // requests are refused rather than applied.
+    void setStopped(std::vector<std::string> keys) {
+        api_->setStopped(keys);
+        stopped_.set(std::move(keys));
+    }
     bool isStopped(const std::string& pluginKey) const {
         return stopped_.contains(pluginKey);
+    }
+
+    // --- HOST API LEVEL 1 ---------------------------------------------------
+    //
+    // Everything behind the level-1 functions of CascadeHostApi lives in the
+    // PluginApiCore this object owns; see core/plugin_api.hpp. AppWindow
+    // publishes the receiver snapshot into it and drains its queues once a
+    // frame. Shared, because every host bridge handed to a plugin holds it
+    // too and outlives this object (see hostBridgeCount).
+    PluginApiCore& api() { return *api_; }
+    const PluginApiCore& api() const { return *api_; }
+    const std::shared_ptr<PluginApiCore>& apiShared() const { return api_; }
+
+    // THE SETTINGS GRANT - the second per-plugin permission, separate from
+    // the tune grant so that a grant a user already gave keeps meaning exactly
+    // what it meant (plugin_abi.h, PERMISSION). Keyed on tuneKey(), off by
+    // default, cleared by clear() and re-applied by the owner like the tune
+    // grant is.
+    void setSettingsAllowed(const std::string& pluginKey, bool allowed) {
+        api_->setSettingsGranted(pluginKey, allowed);
+    }
+    bool settingsAllowed(const std::string& pluginKey) const {
+        return api_->settingsGranted(pluginKey);
     }
 
     // Destroys every instance. Must run BEFORE the plugin host unloads the
@@ -805,6 +838,8 @@ private:
     mutable std::mutex servicesMutex_;
     HostServices services_;
     PluginStopSet stopped_;
+    // Created with this object, shared with every bridge. See api().
+    std::shared_ptr<PluginApiCore> api_ = std::make_shared<PluginApiCore>();
     std::vector<std::string> tuneRequesters_;
     std::vector<std::string> tuneAllowed_;
     std::string lastDenied_;

@@ -135,6 +135,11 @@ enum class PluginRejection {
                            // state its rate cannot be resampled.
     AudioOutBadChannels,   // channels neither 1 nor 2
     MissingAudioOutFunction,  // pull or active NULL
+    // --- Host API level 1: the in-chain audio processor ---------------------
+    MissingAudioProcessorApi,
+    AudioProcessorStructSizeMismatch,
+    MissingAudioProcessorFunction,  // create/process/destroy NULL, or no title
+    AudioProcessorReservedNotZero,  // flags is reserved and must be 0
 };
 
 // The whole compatibility decision, as a pure function of the descriptor, so
@@ -190,6 +195,9 @@ struct LoadedPlugin {
     // CascadeAudioOutApi), so a record with this set and no decoder table is a
     // plugin the runner will never pull from.
     const CascadeAudioOutApi* audioOut = nullptr;
+    // CASCADE_CAP_AUDIO_PROCESSOR (host API level 1): transforms the
+    // demodulated audio in place. Driven by PluginRunner.
+    const CascadeAudioProcessorApi* audioProcessor = nullptr;
 
     // HMODULE (Windows) or dlopen handle (POSIX), as void* so this header
     // stays free of <windows.h>. Null unless `loaded`.

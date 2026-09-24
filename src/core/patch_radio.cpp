@@ -8,6 +8,7 @@
 #include <complex>
 
 #include "core/diag_log.hpp"
+#include "core/plugin_api.hpp"
 #include "dsp/spectrum.hpp"
 
 namespace cascade::core::patch {
@@ -133,6 +134,10 @@ std::uint64_t PatchRadio::blocksRead() const {
 namespace {
 
 void readerBody(const std::shared_ptr<PatchRadio::Shared>& shp) {
+    // A patch radio's reader runs its decoders' process() calls, so it is a
+    // real-time thread for the plugin API exactly as the pipeline's DSP
+    // thread is (see core/plugin_api.hpp, RealtimeThreadScope).
+    const cascade::core::RealtimeThreadScope realtime;
     PatchRadio::Shared& sh = *shp;
     cascade::source::IqSource& src = *sh.src;
     using clock = std::chrono::steady_clock;

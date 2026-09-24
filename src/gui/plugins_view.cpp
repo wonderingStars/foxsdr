@@ -30,12 +30,13 @@ using cascade::i18n::trId;
 
 namespace {
 
-// The three bits that make a module something PluginRunner can feed - it
-// creates an instance for a decoder, an I/Q decoder or an image decoder and
-// for nothing else. A module with none of them is fed nothing, by design and
-// not by fault, which is the whole of the NoSignal state.
-constexpr std::uint32_t kSignalCaps =
-    CASCADE_CAP_DECODER | CASCADE_CAP_IQ_DECODER | CASCADE_CAP_IMAGE_DECODER;
+// The bits that make a module something PluginRunner can feed - it creates an
+// instance for a decoder, an I/Q decoder, an image decoder or (host API level
+// 1) an in-chain audio processor, and for nothing else. A module with none of
+// them is fed nothing, by design and not by fault, which is the whole of the
+// NoSignal state.
+constexpr std::uint32_t kSignalCaps = CASCADE_CAP_DECODER | CASCADE_CAP_IQ_DECODER |
+                                      CASCADE_CAP_IMAGE_DECODER | CASCADE_CAP_AUDIO_PROCESSOR;
 
 }  // namespace
 
@@ -1139,6 +1140,57 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck,
                 py += keyH + 8.0f;
             }
 
+            // THE SECOND ENFORCED REACH (host API level 1): the SETTINGS
+            // grant. Offered by the same rule as the tune key - only to a
+            // module that has actually asked - and kept separate from it so a
+            // grant already given keeps meaning only what it meant.
+            if (m.loaded && m.settingsCapable) {
+                if (drawDeckKey(pdl, ImVec2(po.x, py), ImVec2(po.x + innerW, py + keyH),
+                                m.settingsAllowed ? tr("REVOKE RADIO SETTINGS")
+                                                  : tr("GRANT RADIO SETTINGS"),
+                                true, "platesettings")) {
+                    act.kind = FittedModulesAction::Kind::SetSettings;
+                    act.file = m.file;
+                    act.flag = !m.settingsAllowed;
+                }
+                py += keyH + 8.0f;
+                static const char* kSettingsNote = FOX_TR_NOOP(
+                    "Radio settings lets this module change the mode, bandwidth, squelch, "
+                    "gains, sample rate, volume and mute, and start or stop the receiver. It "
+                    "is separate from receiver control, which only lets it tune.");
+                drawNote(pdl, ImVec2(po.x, py), innerW, theme::kBrassShade, tr(kSettingsNote));
+                py += noteHeight(innerW, tr(kSettingsNote)) + 8.0f;
+            }
+
+            // THE MODULE'S OWN KEYS (host API level 1, add_command): what it
+            // offers to do when asked, labelled in its own words - which is
+            // why they are drawn as given and not translated. Two to a row.
+            if (m.loaded && !m.stopped && !m.commands.empty()) {
+                const float halfW = (innerW - 8.0f) * 0.5f;
+                for (std::size_t ci = 0; ci < m.commands.size(); ++ci) {
+                    const bool left = (ci % 2u) == 0u;
+                    const float kx = left ? po.x : po.x + halfW + 8.0f;
+                    char kid[32];
+                    std::snprintf(kid, sizeof(kid), "platecmd%zu", ci);
+                    if (drawDeckKey(pdl, ImVec2(kx, py), ImVec2(kx + halfW, py + keyH),
+                                    m.commands[ci].label.c_str(), true, kid)) {
+                        act.kind = FittedModulesAction::Kind::Command;
+                        act.file = m.file;
+                        act.commandId = m.commands[ci].id;
+                    }
+                    if (!left || ci + 1u == m.commands.size()) { py += keyH + 8.0f; }
+                }
+            }
+
+            // WHAT THE MODULE LAST WARNED ABOUT (host API level 1, log at
+            // WARN or ERROR), in its own words, as an alarm for an error.
+            if (m.loaded && !m.notice.empty()) {
+                const ImU32 accent =
+                    m.noticeLevel >= CASCADE_LOG_ERROR ? theme::kAlarm : theme::kGold;
+                drawNote(pdl, ImVec2(po.x, py), innerW, accent, m.notice.c_str());
+                py += noteHeight(innerW, m.notice.c_str()) + 8.0f;
+            }
+
             // WHAT REMOVING KEEPS - read off the remove path, one setting at a
             // time, rather than copied from the design.
             //
@@ -1159,13 +1211,20 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck,
             // again by that same file and by nothing else. The map page keys
             // on the module's own display name instead, which is why it is
             // stated separately rather than lumped in with "them".
+            //
+            // HOST API LEVEL 1 ADDED TWO MORE, and the sentence says which key
+            // each is on: the radio-settings grant (pluginSettingsAllowed_) is
+            // a FILE NAME like the tune grant, and the module's own settings
+            // (pluginSettings_) are keyed on its NAME - so they survive an
+            // upgrade that changes the file name, which the grants do not.
             static const char* kKept = FOX_TR_NOOP(
                 "Removing deletes the file and nothing else. The stop, the "
-                "receiver-control grant and the mute setting are all remembered against "
-                "this module's FILE NAME, and any map page's position against the name "
-                "the module calls itself, so fitting this same file again finds every one "
-                "of them as it was. A build that arrives under a different file name is a "
-                "different key, and starts from the defaults.");
+                "receiver-control and radio-settings grants and the mute setting are all "
+                "remembered against this module's FILE NAME, and any map page's position "
+                "and the module's own settings against the name the module calls itself, "
+                "so fitting this same file again finds every one of them as it was. A "
+                "build that arrives under a different file name is a different key, and "
+                "starts from the defaults, apart from its own settings.");
             drawNote(pdl, ImVec2(po.x, py), innerW, theme::kBrassShade, tr(kKept));
             py += noteHeight(innerW, tr(kKept)) + 8.0f;
 

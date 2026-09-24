@@ -579,6 +579,12 @@ std::vector<ReachRow> collectReach(const ModulePlate& m) {
         r.push_back({tr("Plays sound through FoxSDR"),
                      tr("Replaces the receiver's audio while it is decoding."), false});
     }
+    if ((c & CASCADE_CAP_AUDIO_PROCESSOR) != 0u) {
+        // CHANGES, not replaces - the row above's opposite, and the user needs
+        // to know which of the two a module does before a voice sounds odd.
+        r.push_back({tr("Audio processor"),
+                     tr("Changes the receiver's audio before you hear it."), false});
+    }
     if ((c & CASCADE_CAP_TRACK_SOURCE) != 0u) {
         r.push_back({tr("Map targets"),
                      tr("Publishes positions the host draws on its map."), false});
@@ -601,8 +607,11 @@ std::vector<ReachRow> collectReach(const ModulePlate& m) {
     if ((c & CASCADE_CAP_HOST_CLIENT) != 0u) {
         std::string d;
         if (!m.haveTuneGrant) {
-            d = tr("Refused unless you grant it, per module. This grant is the one "
-                   "permission the console actually enforces.");
+            // TWO GRANTS since host API level 1 (0.99.31): this one, and the
+            // radio-settings grant on the module's plate in Fitted modules.
+            d = tr("Refused unless you grant it, per module. This grant and the "
+                   "radio-settings grant are the only permissions the console actually "
+                   "enforces.");
         } else if (m.tuneGranted) {
             d = tr("GRANTED. It may retune the receiver on its own, without asking again.");
         } else {
@@ -682,12 +691,14 @@ const char* kReachRefused = FOX_TR_NOOP(
     "loaded. That is not the same as a module which declares nothing.");
 
 const char* kReachTuneNote = FOX_TR_NOOP(
-    "The tune grant above is the one permission this console does enforce: without it "
-    "every request to retune is refused. Nothing else in the list is a gate.");
+    "The tune grant above and the radio-settings grant are the only permissions this "
+    "console does enforce: without them every request to retune, or to change the "
+    "receiver's settings, is refused. Nothing else in the list is a gate.");
 
 const char* kReachNoTuneNote = FOX_TR_NOOP(
-    "The one permission this console enforces is the per-module tune grant, and this "
-    "module does not ask for it. Nothing else in the list is a gate.");
+    "The only permissions this console enforces are the per-module tune and "
+    "radio-settings grants, and this module asks for neither. Nothing else in the list "
+    "is a gate.");
 
 // One pass that both measures and draws, so the two can never drift apart.
 float layoutPlate(ImDrawList* dl, const ImVec2& tl, float width, const ModulePlate& m,

@@ -45,6 +45,8 @@ bool moduleProvides(const LoadedPlugin& p, std::uint32_t capMask) {
         // does. test_module_census walks CASCADE_CAP_ALL_KNOWN bit by bit
         // against this table so the next one cannot be forgotten either.
         {CASCADE_CAP_AUDIO_OUT, p.audioOut},
+        // Host API level 1: transforms the demodulated audio in place.
+        {CASCADE_CAP_AUDIO_PROCESSOR, p.audioProcessor},
     };
     for (const Entry& e : table) {
         if ((capMask & e.bit) != 0u && e.table != nullptr) { return true; }

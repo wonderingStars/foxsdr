@@ -2,6 +2,8 @@
 
 #include "core/plugin_ui.hpp"
 
+#include "core/version.hpp"
+
 #include <algorithm>
 #include <cctype>
 #include <chrono>
@@ -264,6 +266,12 @@ struct HostCtx {
     PluginUi* self = nullptr;
     std::string plugin;  // PluginUi::tuneKey(), not the display name
     CascadeHostApi api{};
+    // HOST API LEVEL 1. The core is SHARED with the PluginUi that issued this
+    // bridge and outlives it, so a level-1 call through a bridge whose owner
+    // is gone still lands in live memory and is answered DETACHED - unlike
+    // the four original functions, which have to test `self` for that.
+    std::shared_ptr<PluginApiCore> core;
+    PluginApiClient* client = nullptr;  // owned by `core`, never freed before it
 };
 
 namespace {
@@ -280,10 +288,17 @@ std::int64_t hostTime(void* ctx);
 // the storage in place. Declared here for ~PluginUi, defined with the store.
 void detachBridges(const PluginUi* owner);
 
+// Fills the level-1 members of a bridge's table. Defined with the level-1
+// trampolines below.
+void fillLevel1(HostCtx& c);
+
 }  // namespace
 
 PluginUi::~PluginUi() {
     clear();
+    // Every level-1 call from here on is answered DETACHED, whatever bridge
+    // it arrives through - the core itself lives on in the bridges.
+    api_->setAttached(false);
     // DETACHED, NOT FREED. A plugin may still be loaded and still holding a
     // bridge that points here; once this object is gone, a call through it
     // would lock a destroyed mutex and read a destroyed std::function - which
@@ -383,6 +398,167 @@ std::int64_t hostTime(void* ctx) {
     }
 }
 
+// --- HOST API LEVEL 1 trampolines --------------------------------------------
+//
+// Each one recovers the bridge, hands the call to the shared PluginApiCore
+// with the bridge's own client, and answers CASCADE_API_FAILED if anything in
+// the host threw - the same no-exception promise the four above keep, for the
+// same reason. None of them reads `self`: the core outlives the PluginUi, and
+// that is what lets a call after the owner has gone be answered rather than
+// be a use-after-free.
+template <class F>
+std::int32_t level1(void* ctx, F&& f) {
+    try {
+        auto* c = static_cast<HostCtx*>(ctx);
+        if (c == nullptr || !c->core || c->client == nullptr) { return CASCADE_API_DETACHED; }
+        return f(*c->core, *c->client);
+    } catch (...) {
+        return CASCADE_API_FAILED;
+    }
+}
+
+std::int32_t l1GetState(void* ctx, CascadeReceiverState* out) {
+    return level1(ctx, [&](PluginApiCore& a, PluginApiClient& c) { return a.getState(c, out); });
+}
+std::int32_t l1GetGain(void* ctx, std::uint32_t index, CascadeGainInfo* out) {
+    return level1(ctx,
+                  [&](PluginApiCore& a, PluginApiClient& c) { return a.getGain(c, index, out); });
+}
+std::int32_t l1GetRates(void* ctx, double* out, std::uint32_t cap) {
+    return level1(ctx, [&](PluginApiCore& a, PluginApiClient& c) {
+        return a.getSampleRates(c, out, cap);
+    });
+}
+std::int32_t l1GetStream(void* ctx, CascadeStreamInfo* out) {
+    return level1(ctx,
+                  [&](PluginApiCore& a, PluginApiClient& c) { return a.getStreamInfo(c, out); });
+}
+
+std::int32_t l1Control(void* ctx, PluginControl::Kind kind, double value, std::uint32_t mode,
+                       bool flag, const char* gainName) {
+    return level1(ctx, [&](PluginApiCore& a, PluginApiClient& c) {
+        PluginControl r;
+        r.kind = kind;
+        r.value = value;
+        r.mode = mode;
+        r.flag = flag;
+        if (gainName != nullptr) {
+            // Copied here, bounded: the plugin's string is never read again.
+            std::size_t n = 0;
+            while (n + 1 < sizeof(r.gainName) && gainName[n] != '\0') {
+                r.gainName[n] = gainName[n];
+                ++n;
+            }
+            r.gainName[n] = '\0';
+            // A name longer than any the host publishes cannot match one.
+            if (gainName[n] != '\0') { return static_cast<std::int32_t>(CASCADE_API_UNSUPPORTED); }
+        }
+        return a.requestControl(c, r);
+    });
+}
+
+using K = PluginControl::Kind;
+std::int32_t l1SetFrequency(void* ctx, double hz) {
+    return l1Control(ctx, K::Frequency, hz, 0, false, nullptr);
+}
+std::int32_t l1SetVfoOffset(void* ctx, double hz) {
+    return l1Control(ctx, K::VfoOffset, hz, 0, false, nullptr);
+}
+std::int32_t l1SetMode(void* ctx, std::uint32_t mode) {
+    return l1Control(ctx, K::Mode, 0.0, mode, false, nullptr);
+}
+std::int32_t l1SetBandwidth(void* ctx, double hz) {
+    return l1Control(ctx, K::Bandwidth, hz, 0, false, nullptr);
+}
+std::int32_t l1SetSquelch(void* ctx, double db) {
+    return l1Control(ctx, K::Squelch, db, 0, false, nullptr);
+}
+std::int32_t l1SetSampleRate(void* ctx, double hz) {
+    return l1Control(ctx, K::SampleRate, hz, 0, false, nullptr);
+}
+std::int32_t l1SetGain(void* ctx, const char* name, double db) {
+    if (name == nullptr) { return CASCADE_API_BAD_ARGUMENT; }
+    return l1Control(ctx, K::Gain, db, 0, false, name);
+}
+std::int32_t l1SetDeviceAgc(void* ctx, std::int32_t on) {
+    return l1Control(ctx, K::DeviceAgc, 0.0, 0, on != 0, nullptr);
+}
+std::int32_t l1SetRunning(void* ctx, std::int32_t on) {
+    return l1Control(ctx, K::Running, 0.0, 0, on != 0, nullptr);
+}
+std::int32_t l1SetVolume(void* ctx, double v) {
+    return l1Control(ctx, K::Volume, v, 0, false, nullptr);
+}
+std::int32_t l1SetMuted(void* ctx, std::int32_t on) {
+    return l1Control(ctx, K::Muted, 0.0, 0, on != 0, nullptr);
+}
+
+std::int32_t l1SetMarker(void* ctx, const CascadeMarker* m) {
+    return level1(ctx, [&](PluginApiCore& a, PluginApiClient& c) { return a.setMarker(c, m); });
+}
+std::int32_t l1RemoveMarker(void* ctx, std::uint32_t id) {
+    return level1(ctx,
+                  [&](PluginApiCore& a, PluginApiClient& c) { return a.removeMarker(c, id); });
+}
+std::int32_t l1ClearMarkers(void* ctx) {
+    return level1(ctx, [&](PluginApiCore& a, PluginApiClient& c) { return a.clearMarkers(c); });
+}
+std::int32_t l1SettingsGet(void* ctx, const char* key, char* buf, std::size_t cap) {
+    return level1(ctx, [&](PluginApiCore& a, PluginApiClient& c) {
+        return a.settingsGet(c, key, buf, cap);
+    });
+}
+std::int32_t l1SettingsSet(void* ctx, const char* key, const char* value) {
+    return level1(ctx,
+                  [&](PluginApiCore& a, PluginApiClient& c) { return a.settingsSet(c, key, value); });
+}
+std::int32_t l1Log(void* ctx, std::uint32_t level, const char* text) {
+    return level1(ctx, [&](PluginApiCore& a, PluginApiClient& c) { return a.log(c, level, text); });
+}
+std::int32_t l1AddCommand(void* ctx, std::uint32_t id, const char* label) {
+    return level1(ctx,
+                  [&](PluginApiCore& a, PluginApiClient& c) { return a.addCommand(c, id, label); });
+}
+std::int32_t l1RemoveCommand(void* ctx, std::uint32_t id) {
+    return level1(ctx,
+                  [&](PluginApiCore& a, PluginApiClient& c) { return a.removeCommand(c, id); });
+}
+std::int32_t l1PollCommand(void* ctx, std::uint32_t* id) {
+    return level1(ctx, [&](PluginApiCore& a, PluginApiClient& c) { return a.pollCommand(c, id); });
+}
+
+void fillLevel1(HostCtx& c) {
+    CascadeHostApi& t = c.api;
+    t.apiLevel = CASCADE_HOST_API_LEVEL;
+    t.knownCapabilities = CASCADE_CAP_ALL_KNOWN;
+    t.hostName = "FoxSDR";
+    t.hostVersion = cascade::versionString();
+    t.get_state = &l1GetState;
+    t.get_gain = &l1GetGain;
+    t.get_sample_rates = &l1GetRates;
+    t.get_stream_info = &l1GetStream;
+    t.set_frequency = &l1SetFrequency;
+    t.set_vfo_offset = &l1SetVfoOffset;
+    t.set_mode = &l1SetMode;
+    t.set_bandwidth = &l1SetBandwidth;
+    t.set_squelch = &l1SetSquelch;
+    t.set_sample_rate = &l1SetSampleRate;
+    t.set_gain = &l1SetGain;
+    t.set_device_agc = &l1SetDeviceAgc;
+    t.set_running = &l1SetRunning;
+    t.set_volume = &l1SetVolume;
+    t.set_muted = &l1SetMuted;
+    t.set_marker = &l1SetMarker;
+    t.remove_marker = &l1RemoveMarker;
+    t.clear_markers = &l1ClearMarkers;
+    t.settings_get = &l1SettingsGet;
+    t.settings_set = &l1SettingsSet;
+    t.log = &l1Log;
+    t.add_command = &l1AddCommand;
+    t.remove_command = &l1RemoveCommand;
+    t.poll_command = &l1PollCommand;
+}
+
 }  // namespace
 
 std::size_t hostBridgeCount() { return ctxStore().size(); }
@@ -397,6 +573,26 @@ std::size_t attachedHostBridgeCount() {
 
 void PluginUi::rebuild(const std::vector<LoadedPlugin>& plugins) {
     destroyInstances();
+
+    // WHICH PLUGINS THE LEVEL-1 API ANSWERS FOR, decided BEFORE any attach():
+    // a plugin that reads its settings or the receiver from inside attach()
+    // - the natural place to - must find itself live, not DETACHED. The same
+    // rule as the loop below (loaded, not stopped, declares the host table),
+    // and one call, so a plugin that stays attached across this rebuild never
+    // sees a transient DETACHED either. Everything else loses its marks,
+    // commands and queued requests here (PluginApiCore::setLiveSet).
+    {
+        std::vector<std::string> live;
+        for (const LoadedPlugin& lp : plugins) {
+            if (!lp.loaded || stopped_.contains(lp)) { continue; }
+            if (lp.hostClient == nullptr || lp.hostClient->attach == nullptr) { continue; }
+            const std::string key = tuneKey(lp);
+            if (key.empty()) { continue; }
+            api_->client(key, lp.name);
+            live.push_back(key);
+        }
+        api_->setLiveSet(live);
+    }
 
     for (const LoadedPlugin& lp : plugins) {
         if (!lp.loaded) { continue; }
@@ -434,6 +630,12 @@ void PluginUi::rebuild(const std::vector<LoadedPlugin>& plugins) {
                 owned->api.sample_rate_hz = &hostRate;
                 owned->api.request_tune = &hostTune;
                 owned->api.unix_time_ms = &hostTime;
+                // HOST API LEVEL 1: the same table, grown at the end. A plugin
+                // built before level 1 reads only the four members above at
+                // the offsets they have always had (plugin_abi.h, VERSIONING).
+                owned->core = api_;
+                if (!key.empty()) { owned->client = &api_->client(key, lp.name); }
+                fillLevel1(*owned);
                 bridge = owned.get();
                 ctxStore().push_back(std::move(owned));
             }
@@ -836,6 +1038,14 @@ void PluginUi::clear() {
     tuneRequesters_.clear();
     tuneAllowed_.clear();
     lastDenied_.clear();
+    // The level-1 half of the same reset: no plugin is live until the next
+    // rebuild attaches it (a call in between is answered DETACHED and its
+    // marks and commands are gone), and the grants go with the tune grants,
+    // to be re-applied by the owner after the rescan exactly as those are.
+    // AFTER destroyInstances, so a plugin saving its settings from destroy()
+    // still finds itself live.
+    api_->setLiveSet({});
+    api_->clearGrants();
 }
 
 void PluginUi::destroyInstances() {
@@ -1161,6 +1371,10 @@ bool PluginUi::tuneAllowed(const std::string& pluginKey) const {
 
 void PluginUi::setTuneAllowed(const std::string& pluginKey, bool allowed) {
     if (pluginKey.empty()) { return; }
+    // Mirrored into the level-1 core, whose copy is the one a plugin thread
+    // reads (lock-free, per client) - set_frequency and set_vfo_offset need
+    // the same grant request_tune does.
+    api_->setTuneGranted(pluginKey, allowed);
     const auto it = std::find(tuneAllowed_.begin(), tuneAllowed_.end(), pluginKey);
     if (allowed && it == tuneAllowed_.end()) {
         tuneAllowed_.push_back(pluginKey);

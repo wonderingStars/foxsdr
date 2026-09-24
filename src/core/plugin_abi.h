@@ -237,7 +237,8 @@ extern "C" {
 #define CASCADE_CAP_TRACK_INFO 0x00000100u
 #define CASCADE_CAP_INSTRUMENT 0x00000200u
 #define CASCADE_CAP_AUDIO_OUT 0x00000400u
-#define CASCADE_CAP_ALL_KNOWN 0x000007FFu /* OR of every bit THIS host knows */
+#define CASCADE_CAP_AUDIO_PROCESSOR 0x00000800u /* host API level 1 - see below */
+#define CASCADE_CAP_ALL_KNOWN 0x00000FFFu /* OR of every bit THIS host knows */
 
 /*
  * The four bits above 0x04 were added WITHOUT an ABI bump, which is the whole
@@ -261,6 +262,13 @@ extern "C" {
  * bit existed the only thing it could do with it was write a WAV file and
  * leave the speakers playing the raw OFDM hiss the demodulator made of a
  * digital carrier. See CascadeAudioOutApi below.
+ *
+ * CASCADE_CAP_AUDIO_PROCESSOR (0x800) came with HOST API LEVEL 1 (FoxSDR
+ * 0.99.31), the same way: a plugin that TRANSFORMS the demodulated audio in
+ * place - a voice filter, a de-hisser, a level meter that also rides the gain
+ * - rather than replacing it. See CascadeAudioProcessorApi below, and the
+ * "HOST API LEVEL 1" section above CascadeHostApi for the rest of what that
+ * level added and why it did not need a new ABI version.
  */
 
 /*
@@ -1090,6 +1098,80 @@ typedef struct CascadeAudioOutApi {
 } CascadeAudioOutApi;
 
 /* ==========================================================================
+ * CASCADE_CAP_AUDIO_PROCESSOR - the plugin TRANSFORMS the receiver's audio.
+ *
+ * (Host API level 1, FoxSDR 0.99.31.)
+ *
+ * AUDIO_OUT above REPLACES what the speakers play; this one sits IN the chain
+ * and changes it. A voice-band filter, a spectral de-hisser, a CTCSS notch, a
+ * compressor, a meter that also rides the level: each of them wants the audio
+ * the user is listening to, and wants to hand back a modified version of it
+ * rather than a different programme.
+ *
+ * WHERE IT SITS, and why there. After the host's own ear-facing processing
+ * (AGC, squelch, the notch, the auto-notch and the noise reduction) and
+ * BEFORE the volume, the mute, the audio recorder, the web stream and the
+ * sound device - so everything the user can observe of the audio is the
+ * processed audio, and the lamp, the recorder and the speakers can never
+ * disagree about what is playing. Deliberately AFTER the point the decoder
+ * plugins are fed: a processor exists to make audio pleasant to a person, and
+ * a decoder that measures must never be handed a signal a third party chose
+ * to reshape. And BEFORE a plugin's own AUDIO_OUT takeover and the patch
+ * page's audio: those are finished programmes, not the demodulated channel.
+ *
+ * THE STREAM. 32-bit float, interleaved, `channels` per frame, at `rateHz`.
+ * The host passes 48000 Hz and 2 channels today - the rate and the shape of
+ * its own audio chain at that point - and a plugin must honour whatever
+ * create() is told rather than assume those numbers. The block is modified
+ * IN PLACE and must come back the same length: a processor with look-ahead
+ * carries its own delay line. Samples are nominally [-1, +1] and not
+ * hard-clipped. The host replaces any NaN or infinity a processor returns
+ * with silence and counts it, because one non-finite sample reaching a sound
+ * device can silence it until the stream is reopened.
+ *
+ * SEVERAL PROCESSORS run in plugin LOAD ORDER (sorted file name), each fed
+ * the previous one's output. A STOPPED plugin gets no instance, which is the
+ * bypass switch: stop the plugin and the chain is exactly what it was.
+ *
+ * THREADING - the decoder tables' rules exactly. create() and destroy() come
+ * from the host's control thread; process() from the real-time audio thread,
+ * never concurrently with itself, and it must not block, allocate, perform I/O
+ * or throw. A rate or channel change is a destroy() and a fresh create(), not
+ * a call into a live instance.
+ *
+ * A HOST OLDER THAN LEVEL 1 IGNORES THE BIT (unknown capability bits are
+ * ignored, not refused - see the capability comment), so a plugin that
+ * processes AND decodes still decodes there; a plugin that ONLY processes is
+ * refused there as "built for a newer version of FoxSDR", which is true.
+ *
+ * EVERY function pointer here must be non-NULL, `title` must be non-empty, and
+ * none of them may throw.
+ * ==========================================================================
+ */
+typedef struct CascadeAudioProcessorApi {
+    /* sizeof(CascadeAudioProcessorApi) as the PLUGIN compiled it. Checked. */
+    uint32_t structSize;
+
+    /* Reserved, must be 0. */
+    uint32_t flags;
+
+    /* What the processor is called where the host lists it, e.g. "Voice
+     * filter". Static storage, non-NULL, non-empty. */
+    const char *title;
+
+    /* One instance for audio at `rateHz` with `channels` interleaved channels.
+     * NULL on failure (the host then leaves the chain untouched). */
+    void *(*create)(uint32_t rateHz, uint32_t channels);
+
+    /* Transforms `frames` frames (frames * channels floats) IN PLACE. The
+     * pointer is borrowed for the call. Real-time thread. */
+    void (*process)(void *handle, float *interleaved, size_t frames);
+
+    /* Destroys an instance. Called once, after the last process(). */
+    void (*destroy)(void *handle);
+} CascadeAudioProcessorApi;
+
+/* ==========================================================================
  * CASCADE_CAP_HOST_CLIENT - the only capability that points the other way.
  *
  * Everything else is the plugin producing something. This one lets a plugin
@@ -1113,7 +1195,304 @@ typedef struct CascadeAudioOutApi {
 #define CASCADE_TUNE_NO_DEVICE (-3)
 #define CASCADE_TUNE_FAILED (-4)     /* the device refused or errored */
 
+/* ==========================================================================
+ * HOST API LEVEL 1 (FoxSDR 0.99.31) - the whole receiver, through one table.
+ * ==========================================================================
+ *
+ * Up to here CascadeHostApi offered four functions: where the receiver is,
+ * what it samples at, a request to move it, and the time. Everything else a
+ * plugin might reasonably want - the mode, the bandwidth, the gains, whether
+ * the receiver is even running, somewhere to keep its own settings, a way to
+ * tell the user something, a mark on the spectrum - it could not have at all.
+ * Level 1 adds all of that, to the SAME table, in a way designed so that
+ * nothing has to change shape again when the next thing is added.
+ *
+ * ---------------------------------------------------------------------------
+ * VERSIONING: STILL ABI 3, AND WHY NOT ABI 4
+ * ---------------------------------------------------------------------------
+ *
+ * Two routes were open. ABI 4, with the host also accepting 3, would have
+ * meant two descriptor dialects in the loader for ever and a flag day for the
+ * catalogue (every published plugin rebuilt and republished to get anything
+ * new) - the exact cost ABI 3 was restructured to stop paying. And nothing
+ * here NEEDS it: the descriptor does not change, no existing table changes,
+ * and no existing function changes meaning.
+ *
+ * So this stays ABI 3, and grows in the two ways ABI 3 already provides:
+ *
+ *   1. CascadeHostApi GROWS AT THE END. `structSize` has been its first field
+ *      since it existed, and it is now the table's version: the host sets it
+ *      to sizeof(CascadeHostApi) as the HOST compiled it, and a plugin may
+ *      touch a member only if structSize covers it. That is what
+ *      CASCADE_HOST_HAS() below checks, and it is what makes BOTH directions
+ *      work with no negotiation:
+ *        - an OLD plugin (built before level 1) on this host reads the first
+ *          four functions at the offsets they have always had and never looks
+ *          further. It cannot tell the table grew. Proven against every
+ *          published plugin binary by tests/test_plugin_abi3_compat.cpp.
+ *        - a NEW plugin on an OLD host sees structSize == 48 (64-bit), so
+ *          CASCADE_HOST_HAS(host, get_state) is false and it degrades: it
+ *          keeps decoding and simply does not offer what needs the newer
+ *          host. Nothing it built against is called on a host that lacks it.
+ *      MEMBERS ARE ONLY EVER APPENDED. Never reordered, never removed, never
+ *      retyped. A function that turns out wrong is left in place, documented
+ *      as superseded, and its replacement appended.
+ *   2. NEW PLUGIN-SIDE FACILITIES ARE NEW CAPABILITY BITS, exactly as every
+ *      bit above 0x04 was. Level 1 adds one, CASCADE_CAP_AUDIO_PROCESSOR.
+ *
+ * `apiLevel` then names WHICH GENERATION of the table's SEMANTICS a host
+ * implements (this header: CASCADE_HOST_API_LEVEL), for the rare question
+ * structSize cannot answer ("does this host also honour X in Y"). And
+ * `knownCapabilities` is the host's CASCADE_CAP_ALL_KNOWN, so a plugin can
+ * find out whether a capability it declares will be used here.
+ *
+ * ---------------------------------------------------------------------------
+ * THREADING - the contract for every level-1 function
+ * ---------------------------------------------------------------------------
+ *
+ * EVERY level-1 function may be called from ANY thread - the GUI thread, the
+ * real-time DSP thread inside process(), a plugin's own worker - except
+ * settings_get and settings_set, which refuse the real-time thread (below).
+ * What makes that true, and what it costs:
+ *
+ *   - NOTHING IS APPLIED ON THE CALLER'S THREAD. Every set_* call is VALIDATED
+ *     and PERMISSION-CHECKED immediately and its answer returned at once, and
+ *     the change itself is queued and applied by the host's GUI thread at the
+ *     start of its next frame - the same thread, the same code and the same
+ *     clamping a click on the window or a request from the web API goes
+ *     through. CASCADE_API_OK therefore means "accepted and queued", not
+ *     "done": read the result back with get_state, whose sequence counters
+ *     move when it lands (normally within one frame, ~16 ms).
+ *   - READS NEVER WAIT. get_state, get_gain, get_sample_rates and
+ *     get_stream_info read a snapshot the GUI thread publishes each frame
+ *     through a sequence lock, with no mutex at all, so the real-time thread
+ *     can call them freely. A read that happens to overlap a publish retries
+ *     a bounded number of times and, in the rare case it still overlaps,
+ *     answers CASCADE_API_BUSY rather than wait: ask again next block.
+ *   - EVERYTHING ELSE takes a host-internal lock held only for a bounded copy
+ *     of host data - never across a call into any plugin, never across I/O -
+ *     so no call can make the DSP or GUI thread wait on plugin work. The
+ *     queued paths (controls, log lines, command invocations) are fixed-size
+ *     rings: a call never allocates, and a full ring answers CASCADE_API_BUSY
+ *     rather than growing.
+ *   - NO CALLBACKS. The host never calls plugin code to deliver a level-1
+ *     event; the plugin asks (get_state's counters, poll_command). A callback
+ *     would have to run on SOME host thread, holding SOME host state, into
+ *     code that may be mid-unload - which is how the Survey Engine shutdown
+ *     crash happened with the four functions this table started with. A
+ *     polled counter cannot call into an unloaded module.
+ *
+ * AFTER UNLOAD. Every call made through a table the host has shut down (the
+ * plugin was stopped, its module is being unloaded, the host is exiting)
+ * answers CASCADE_API_DETACHED and does nothing. Strings a plugin passes in
+ * are COPIED before the call returns, so nothing the host keeps can point
+ * into an unloaded image.
+ *
+ * ---------------------------------------------------------------------------
+ * PERMISSION - two grants, both per plugin, both off by default
+ * ---------------------------------------------------------------------------
+ *
+ *   TUNE (the grant request_tune has always needed; the user's "GRANT
+ *   RECEIVER CONTROL" key): set_frequency, set_vfo_offset.
+ *   SETTINGS (new, a separate "GRANT RADIO SETTINGS" key): set_mode,
+ *   set_bandwidth, set_squelch, set_sample_rate, set_gain, set_device_agc,
+ *   set_running, set_volume, set_muted.
+ *
+ * They are separate so that a grant a user gave a satellite tracker to follow
+ * Doppler keeps meaning exactly that and nothing more. A refused call answers
+ * CASCADE_API_DENIED, and the host offers the SETTINGS key only to a plugin
+ * that has asked at least once. A STOPPED plugin is refused everything.
+ * Reads, the settings store, log lines, markers and commands need no grant:
+ * none of them can change what the receiver does.
+ *
+ * WHAT THE HOST DOES NOT OFFER, deliberately: no file access, no network
+ * access, no device enumeration or opening, no drawing surface. A plugin that
+ * needs a file or a socket uses its own; routing them through the host would
+ * only launder them.
+ */
+#define CASCADE_HOST_API_LEVEL 1u
+
+/* True when the host table `host` covers member `m` - i.e. the host that
+ * filled it was built with that member. Use it before touching ANY member
+ * after unix_time_ms. */
+#define CASCADE_HOST_COVERS(host, m)                                           \
+    ((host) != NULL &&                                                         \
+     (host)->structSize >= (uint32_t)(offsetof(CascadeHostApi, m) + sizeof((host)->m)))
+
+/* True when the host table provides FUNCTION `fn`: covered AND non-NULL. A
+ * level-1 host fills every function it covers; NULL is reserved for a future
+ * host that deliberately does not implement one on some platform. */
+#define CASCADE_HOST_HAS(host, fn) (CASCADE_HOST_COVERS(host, fn) && (host)->fn != NULL)
+
+/*
+ * Answers of every level-1 function. The first four have the SAME values as
+ * CASCADE_TUNE_*, so code that already understands request_tune understands
+ * these.
+ */
+#define CASCADE_API_OK 0
+#define CASCADE_API_DENIED (-1)       /* no grant, or the plugin is stopped */
+#define CASCADE_API_OUT_OF_RANGE (-2) /* a value outside what the host accepts */
+#define CASCADE_API_NO_DEVICE (-3)    /* needs an open radio and there is none */
+#define CASCADE_API_FAILED (-4)       /* the host could not do it */
+#define CASCADE_API_BAD_ARGUMENT (-5) /* NULL, NaN, a malformed struct or key */
+#define CASCADE_API_UNSUPPORTED (-6)  /* this host or radio has no such thing */
+#define CASCADE_API_BUSY (-7)         /* a bounded queue is full; try later */
+#define CASCADE_API_DETACHED (-8)     /* this table has been shut down */
+#define CASCADE_API_NOT_FOUND (-9)    /* no such settings key / marker / command */
+#define CASCADE_API_LIMIT (-10)       /* a per-plugin quota is full */
+#define CASCADE_API_WRONG_THREAD (-11)/* not allowed on the real-time thread */
+
+/* --- In/out structs ---------------------------------------------------------
+ *
+ * Every struct below starts with `structSize`, set by the PLUGIN to sizeof()
+ * as IT compiled it. The host reads or writes only the first
+ * min(its own sizeof, structSize) bytes and, for a struct it FILLS, writes the
+ * number it filled back into structSize. So each struct can grow at the end
+ * later, like the table does, without an old plugin or an old host reading
+ * past what the other allocated. A structSize smaller than the level-1 size is
+ * CASCADE_API_BAD_ARGUMENT. */
+
+/* CascadeReceiverState::flags. */
+#define CASCADE_STATE_RUNNING 0x00000001u        /* the receiver is streaming */
+#define CASCADE_STATE_DEVICE_OPEN 0x00000002u    /* a radio (not the generator) */
+#define CASCADE_STATE_MUTED 0x00000004u          /* the user's mute is on */
+#define CASCADE_STATE_DEVICE_AGC 0x00000008u     /* the radio's own AGC is on */
+#define CASCADE_STATE_AGC_SUPPORTED 0x00000010u  /* ...and it has one */
+#define CASCADE_STATE_SQUELCH_OPEN 0x00000020u   /* signalDb > squelchDb */
+#define CASCADE_STATE_STEREO 0x00000040u         /* WFM stereo pilot in use */
+#define CASCADE_STATE_TUNE_GRANTED 0x00000100u   /* THIS plugin may tune */
+#define CASCADE_STATE_SETTINGS_GRANTED 0x00000200u /* THIS plugin may set */
+#define CASCADE_STATE_STOPPED 0x00000400u        /* THIS plugin is stopped */
+
+#define CASCADE_DEVICE_NAME_CHARS 64
+
+/*
+ * Everything a plugin can read about the receiver, in one consistent copy.
+ *
+ * CHANGE NOTIFICATION IS A COUNTER, NOT A CALLBACK (see THREADING above for
+ * why). `seq` advances whenever anything below except the two measurements
+ * (signalDb, sMeter) changes, and the four group counters say WHICH: a plugin
+ * that cares only about tuning keeps the last tuneSeq it saw and compares.
+ * Counters never go backwards within a host session and start above zero, so
+ * a plugin may use 0 as "never read".
+ */
+typedef struct CascadeReceiverState {
+    uint32_t structSize;
+    uint32_t flags;             /* CASCADE_STATE_* */
+    uint64_t seq;               /* any change below */
+    uint64_t tuneSeq;           /* centreHz, vfoOffsetHz */
+    uint64_t modeSeq;           /* demodMode, bandwidthHz, squelchDb */
+    uint64_t deviceSeq;         /* the radio, its rate, gains, AGC, running */
+    uint64_t audioSeq;          /* volume, mute */
+    double centreHz;            /* the radio's centre frequency (DC) */
+    double vfoOffsetHz;         /* the tuned channel's offset from centre */
+    double tunedHz;             /* centreHz + vfoOffsetHz: what is heard */
+    double sampleRateHz;        /* the active source's rate - the signal
+                                 * generator's when no radio is open (see
+                                 * CASCADE_STATE_DEVICE_OPEN) */
+    double bandwidthHz;         /* the tuned channel's width */
+    double squelchDb;           /* threshold, on signalDb's scale */
+    double volume;              /* 0..1, the user's volume dial */
+    double signalDb;            /* channel power, dB full scale - measured */
+    double sMeter;              /* 0..1: the host's S-meter bar, which maps
+                                 * signalDb over [-120, 0] dB. The host has no
+                                 * calibrated dBm scale, so there are no
+                                 * S-units: this IS the meter the user sees. */
+    uint32_t demodMode;         /* CASCADE_DEMOD_* (never UNCHANGED) */
+    uint32_t gainCount;         /* stages get_gain can describe, 0..16 */
+    char deviceName[CASCADE_DEVICE_NAME_CHARS]; /* "Signal generator" when no
+                                 * radio is open; NUL-terminated UTF-8 */
+} CascadeReceiverState;
+
+/* A gain stage of the open radio, as its driver describes it. */
+#define CASCADE_GAIN_NAME_CHARS 32
+#define CASCADE_GAIN_UNIT_DB 0u     /* minDb..currentDb are decibels */
+#define CASCADE_GAIN_UNIT_STEPS 1u  /* ...the hardware's own steps (Airspy) */
+typedef struct CascadeGainInfo {
+    uint32_t structSize;
+    uint32_t unit;              /* CASCADE_GAIN_UNIT_* */
+    char name[CASCADE_GAIN_NAME_CHARS]; /* pass this to set_gain verbatim */
+    double minDb;
+    double maxDb;
+    double stepDb;
+    double currentDb;           /* the READBACK, not the last request */
+} CascadeGainInfo;
+
+/*
+ * The receiver's streams, as the plugin taps are fed them. What a decoder
+ * cannot work out from inside process(): WHEN its samples were, and whether
+ * the stream it is counting is still the one it started counting.
+ *
+ * AN EPOCH IS ONE UNBROKEN STREAM. It advances whenever the host rebuilds the
+ * decoder instances - a sample-rate change, a source change, a rescan, the
+ * patch page taking the radio - which is exactly when a decoder is destroyed
+ * and created again. Within an epoch the frame counters count every sample
+ * handed to the taps, with no gaps, from epochStartUnixMs; so sample n of the
+ * I/Q tap was captured at about epochStartUnixMs + 1000 * n / iqRateHz.
+ * "About": the host clock is read when the epoch starts, and USB buffering
+ * puts the true capture time some milliseconds earlier.
+ *
+ * DESCRIBES THE RECEIVER'S CHAIN. A decoder instance the patch page created is
+ * fed from its own radio at the rate its create() was told; these counters do
+ * not describe that stream.
+ */
+typedef struct CascadeStreamInfo {
+    uint32_t structSize;
+    uint32_t flags;             /* reserved, 0 */
+    uint64_t epoch;             /* starts at 1; +1 per rebuild */
+    int64_t epochStartUnixMs;   /* host clock when this epoch began */
+    double iqRateHz;            /* the raw I/Q tap (CASCADE_CAP_IQ_DECODER) */
+    double audioRateHz;         /* the audio tap, before per-decoder resampling */
+    double outputRateHz;        /* the speakers' rate (and a processor's) */
+    uint64_t iqFrames;          /* complex samples handed to the I/Q tap */
+    uint64_t audioFrames;       /* samples handed to the audio tap */
+    uint64_t outputFrames;      /* frames produced for the speakers */
+} CascadeStreamInfo;
+
+/*
+ * A mark a plugin puts on the spectrum and the waterfall: a frequency it is
+ * watching, a channel it found, the band it is surveying. The host draws it in
+ * the plugin's colour with the label beside it, and never lets a plugin's
+ * marks cover the user's own tuning controls or block a click.
+ */
+#define CASCADE_MARKER_POINT 0u     /* a line at freqHz */
+#define CASCADE_MARKER_SPAN 1u      /* a shaded band freqHz .. freqHz+widthHz */
+#define CASCADE_MARKER_FLAG_DASHED 0x00000001u
+#define CASCADE_MARKER_FLAG_SPECTRUM_ONLY 0x00000002u /* not on the waterfall */
+#define CASCADE_MARKER_LABEL_CHARS 32
+#define CASCADE_MAX_MARKERS_PER_PLUGIN 64u
+typedef struct CascadeMarker {
+    uint32_t structSize;
+    uint32_t id;                /* the plugin's own; setting an id REPLACES */
+    uint32_t kind;              /* CASCADE_MARKER_POINT or _SPAN */
+    uint32_t flags;             /* CASCADE_MARKER_FLAG_* */
+    double freqHz;              /* absolute RF, > 0 */
+    double widthHz;             /* SPAN: > 0 and <= 1e10; POINT: ignored */
+    uint32_t colourRgba;        /* 0xRRGGBBAA; 0 = the host's plugin colour */
+    uint32_t reserved;          /* 0 */
+    char label[CASCADE_MARKER_LABEL_CHARS]; /* may be empty; UTF-8 */
+} CascadeMarker;
+
+/* The settings store. Keys: 1..63 bytes of [A-Za-z0-9._-]. Values: UTF-8
+ * text, at most CASCADE_SETTING_VALUE_BYTES - 1 bytes, no NUL. */
+#define CASCADE_SETTING_KEY_CHARS 64
+#define CASCADE_SETTING_VALUE_BYTES 4096u
+#define CASCADE_MAX_SETTINGS_PER_PLUGIN 64u
+
+/* Log levels. */
+#define CASCADE_LOG_DEBUG 0u   /* dropped by this host - keep it in your build */
+#define CASCADE_LOG_INFO 1u    /* a line in the decoder output */
+#define CASCADE_LOG_WARN 2u    /* ...and the notice on the plugin's plate */
+#define CASCADE_LOG_ERROR 3u   /* ...likewise, drawn as an alarm */
+#define CASCADE_LOG_TEXT_BYTES 512u /* longer text is cut at a code point */
+
+/* Commands: keys the host draws on the plugin's plate in Fitted modules. */
+#define CASCADE_COMMAND_LABEL_CHARS 32
+#define CASCADE_MAX_COMMANDS_PER_PLUGIN 8u
+
 typedef struct CascadeHostApi {
+    /* sizeof(CascadeHostApi) as the HOST compiled it. THIS IS THE TABLE'S
+     * VERSION: see HOST API LEVEL 1 above, and use CASCADE_HOST_HAS(). */
     uint32_t structSize;
 
     /* Opaque host context. Pass it back unchanged as the first argument of
@@ -1135,6 +1514,125 @@ typedef struct CascadeHostApi {
      * clock, which is exactly what a pass predictor replaying a capture
      * needs. */
     int64_t (*unix_time_ms)(void *ctx);
+
+    /* ===== HOST API LEVEL 1 - everything below is appended; check with
+     * CASCADE_HOST_HAS / CASCADE_HOST_COVERS before use. ================== */
+
+    /* CASCADE_HOST_API_LEVEL of the host that filled this table. */
+    uint32_t apiLevel;
+    /* The host's CASCADE_CAP_ALL_KNOWN: capability bits it will use. */
+    uint32_t knownCapabilities;
+    /* "FoxSDR" and its version ("0.99.31"). Static, NUL-terminated. For
+     * diagnostics and messages - never branch on them; branch on
+     * CASCADE_HOST_HAS and apiLevel. */
+    const char *hostName;
+    const char *hostVersion;
+
+    /* ---- Receiver state: reads. Any thread, never wait. ------------------ */
+
+    /* Fills `out` (set out->structSize first). CASCADE_API_OK; or
+     * BAD_ARGUMENT for a NULL/short struct; BUSY in the rare case the read
+     * kept overlapping a publish (see THREADING); DETACHED. */
+    int32_t (*get_state)(void *ctx, CascadeReceiverState *out);
+
+    /* Gain stage `index` (0 .. state.gainCount-1) of the open radio.
+     * NOT_FOUND past the end (including "no radio open"). */
+    int32_t (*get_gain)(void *ctx, uint32_t index, CascadeGainInfo *out);
+
+    /* The sample rates the open radio offers, in Hz, as its driver lists
+     * them - the values set_sample_rate is sure to accept. Copies up to `cap`
+     * into `out` and returns HOW MANY THERE ARE, which may be more than `cap`
+     * (pass cap 0 to ask the count). 0 with no radio open. BAD_ARGUMENT for
+     * a NULL `out` with a non-zero `cap`. */
+    int32_t (*get_sample_rates)(void *ctx, double *out, uint32_t cap);
+
+    /* The receiver's stream clock. See CascadeStreamInfo. */
+    int32_t (*get_stream_info)(void *ctx, CascadeStreamInfo *out);
+
+    /* ---- Receiver control: REQUESTS, applied on the GUI thread's next
+     * frame. OK = accepted and queued. Any thread. See PERMISSION above. -- */
+
+    /* TUNE grant. Puts the tuned channel on `tunedHz` (0 < f < 1e12) the way
+     * the frequency readout does: the VFO offset is kept and the radio's
+     * centre moves. (request_tune, by contrast, moves the centre itself.) */
+    int32_t (*set_frequency)(void *ctx, double tunedHz);
+    /* TUNE grant. |offset| < 1e8; the host clamps it into the live band. */
+    int32_t (*set_vfo_offset)(void *ctx, double offsetHz);
+
+    /* SETTINGS grant. CASCADE_DEMOD_NFM .. _RAW. The bandwidth moves to that
+     * mode's default, exactly as the mode keys do; follow with set_bandwidth
+     * to choose another. UNCHANGED or an unknown mode is OUT_OF_RANGE. */
+    int32_t (*set_mode)(void *ctx, uint32_t demodMode);
+    /* SETTINGS grant. 100 Hz .. 10 MHz; clamped to the live channel. */
+    int32_t (*set_bandwidth)(void *ctx, double hz);
+    /* SETTINGS grant. Threshold in dB, -200 .. +20 (-200 = always open). */
+    int32_t (*set_squelch)(void *ctx, double thresholdDb);
+    /* SETTINGS grant. NO_DEVICE without a radio; the radio may round or
+     * refuse, and get_state says what it did. */
+    int32_t (*set_sample_rate)(void *ctx, double hz);
+    /* SETTINGS grant. `name` exactly as get_gain reported it (copied). */
+    int32_t (*set_gain)(void *ctx, const char *name, double db);
+    /* SETTINGS grant. The radio's own AGC; UNSUPPORTED if it has none. */
+    int32_t (*set_device_agc)(void *ctx, int32_t on);
+    /* SETTINGS grant. Start (non-zero) or stop the receiver. */
+    int32_t (*set_running)(void *ctx, int32_t running);
+    /* SETTINGS grant. The user's volume dial, 0..1. */
+    int32_t (*set_volume)(void *ctx, double volume);
+    /* SETTINGS grant. The user's mute. */
+    int32_t (*set_muted)(void *ctx, int32_t muted);
+
+    /* ---- Spectrum and waterfall marks. Any thread, no grant. ------------- */
+
+    /* Adds, or replaces by id, one mark. LIMIT past
+     * CASCADE_MAX_MARKERS_PER_PLUGIN. The struct and its label are copied. */
+    int32_t (*set_marker)(void *ctx, const CascadeMarker *marker);
+    /* NOT_FOUND for an id this plugin has not set. */
+    int32_t (*remove_marker)(void *ctx, uint32_t id);
+    /* Removes all of this plugin's marks. The host also removes them when the
+     * plugin is stopped or unloaded. */
+    int32_t (*clear_markers)(void *ctx);
+
+    /* ---- The plugin's own settings, persisted by the host in its config
+     * file, keyed on the plugin's NAME (so they survive an upgrade, which
+     * changes the file name). Any thread EXCEPT the real-time thread, which
+     * gets CASCADE_API_WRONG_THREAD: these copy up to 4 KB and may allocate.
+     * No grant. A plugin sees only its own keys. -------------------------- */
+
+    /* Returns the value's length in bytes (>= 0) and copies as much of it as
+     * fits, always NUL-terminated when cap > 0 - so a return >= cap means it
+     * was cut. NOT_FOUND when the key is not set. */
+    int32_t (*settings_get)(void *ctx, const char *key, char *buf, size_t cap);
+    /* Stores `value` (copied); NULL deletes the key. LIMIT past
+     * CASCADE_MAX_SETTINGS_PER_PLUGIN keys, OUT_OF_RANGE for a value too
+     * long, BAD_ARGUMENT for a bad key or a value that is not UTF-8.
+     *
+     * Written to disk by the host's own config save, not by the call: within
+     * a few seconds while the application runs. The application's LAST save
+     * happens before plugins are destroyed at exit, so a value first set from
+     * inside destroy() is not guaranteed to reach the disk - store a setting
+     * when it CHANGES, not on the way out. */
+    int32_t (*settings_set)(void *ctx, const char *key, const char *value);
+
+    /* ---- Telling the user something. Any thread, no grant. -------------- */
+
+    /* One message at CASCADE_LOG_*. Copied; cut at CASCADE_LOG_TEXT_BYTES.
+     * BUSY when the host's queue is full (it holds 256 between frames). The
+     * host does NOT write these into its diagnostic log or any report: they
+     * are shown, not collected. */
+    int32_t (*log)(void *ctx, uint32_t level, const char *text);
+
+    /* ---- Commands: keys on the plugin's plate. Any thread, no grant. ---- */
+
+    /* Adds, or relabels, command `id` (non-zero). LIMIT past
+     * CASCADE_MAX_COMMANDS_PER_PLUGIN. */
+    int32_t (*add_command)(void *ctx, uint32_t id, const char *label);
+    /* NOT_FOUND for an id this plugin has not added. */
+    int32_t (*remove_command)(void *ctx, uint32_t id);
+    /* Takes the oldest press of one of this plugin's commands: returns 1 and
+     * sets *id, or 0 when none is waiting. Presses wait in a queue of 16 per
+     * plugin; the oldest is dropped past that. Poll it from wherever the
+     * plugin already runs regularly (a poll_rows, a process()). */
+    int32_t (*poll_command)(void *ctx, uint32_t *id);
 } CascadeHostApi;
 
 /*
@@ -1420,7 +1918,14 @@ typedef struct CascadeHostClientApi {
     /* Called ONCE, before any other capability's create(), with a table that
      * remains valid for as long as the plugin is loaded. The plugin should
      * store the pointer. A plugin that declares this capability but does not
-     * need the table may ignore it; the host still calls. */
+     * need the table may ignore it; the host still calls.
+     *
+     * Declaring this capability is also how a plugin gets the HOST API LEVEL
+     * 1 functions: they are members of this same table. There is no second
+     * attach and no second bit - check host->structSize with CASCADE_HOST_HAS.
+     *
+     * The host may call attach again after a rescan or a source change; it
+     * then passes THE SAME POINTER, so storing it once is correct. */
     void (*attach)(const CascadeHostApi *host);
 } CascadeHostClientApi;
 
@@ -1641,6 +2146,12 @@ static inline const CascadeInstrumentApi *cascade_plugin_instrument(
 static inline const CascadeAudioOutApi *cascade_plugin_audio_out(
     const CascadePluginDesc *desc) {
     return (const CascadeAudioOutApi *)cascade_plugin_capability(desc, CASCADE_CAP_AUDIO_OUT);
+}
+
+static inline const CascadeAudioProcessorApi *cascade_plugin_audio_processor(
+    const CascadePluginDesc *desc) {
+    return (const CascadeAudioProcessorApi *)cascade_plugin_capability(
+        desc, CASCADE_CAP_AUDIO_PROCESSOR);
 }
 
 static inline const CascadeHostClientApi *cascade_plugin_host_client(

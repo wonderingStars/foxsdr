@@ -61,7 +61,7 @@ Internal project/binary name: `cascade`.
 
 ## Where it is now
 
-The current release is **0.99.30** (September 2026), in open beta and free for
+The current release is **0.99.31** (September 2026), in open beta and free for
 noncommercial use, with its decoders and instruments delivered as plugins from
 a catalogue. These are screenshots of an earlier shipping build.
 
@@ -1156,6 +1156,31 @@ module which is no longer fitted — a permission nobody can see is one nobody
 can take back. The grant is per plugin and is remembered
 between sessions.
 
+**The host API for plugins** (0.99.31, host API level 1). A plugin that declares
+the host-client capability can now read the whole receiver - frequency, VFO
+offset, mode, bandwidth, squelch, gains, the radio's sample rates, volume,
+mute, whether it is running, which radio it is, the signal level and the
+S-meter - and can ask to change any of it. Asking to **tune** needs the same
+**GRANT RECEIVER CONTROL** as before; asking to change anything else (mode,
+bandwidth, squelch, gains, sample rate, volume, mute, start or stop) needs a
+separate **GRANT RADIO SETTINGS** key, which appears on the module's plate once
+the module has asked. The two are kept apart so that a grant you already gave a
+satellite tracker still means only what it meant. A request is applied by the
+application itself on its next frame, through the same code a click or a
+browser request goes through, and a stopped or ungranted module's requests are
+refused outright. A plugin can also put **marks** on the spectrum and waterfall,
+keep **its own settings** (saved in the config file under the plugin's name, so
+they survive an update), show **messages** in the Decoder output window (a
+warning or an error also appears on its plate), and offer **keys of its own** on
+its plate. And a new capability lets a plugin **process the audio you hear** in
+place - a filter, a limiter - after the receiver's own processing and before
+the volume, the mute, the recorder and the speakers; stopping the module takes
+it out of the chain. None of this lets a plugin reach files or the network
+through the application, and none of it changes the plugin ABI: every plugin
+built before it keeps loading and working unchanged. Authors: see
+[docs/PLUGIN-API.md](docs/PLUGIN-API.md), and the "Host API tour" example in
+the plugin repository.
+
 Security model, in one line: every download is https, sha256-verified against
 the catalogue before it is allowed to become a file, size-capped, refused on a
 cross-host redirect, and written under a sanitised bare filename inside the
@@ -1174,7 +1199,11 @@ Compatibility is ABI-exact. A plugin must be built against this host's
 `src/core/plugin_abi.h` and declare exactly its ABI version — a near miss is
 refused rather than loaded, because a struct-layout difference becomes memory
 corruption days later. A plugin built for an older FoxSDR therefore needs a
-new build from its author; no update can fix it.
+new build from its author; no update can fix it. Within ABI 3, though, the
+header only ever grows: new capabilities are new bits, and the host table
+grows at its end with its size as its version, so a plugin built against a
+newer header still loads on an older FoxSDR and simply goes without what that
+FoxSDR does not offer.
 
 Retirement: the catalogue may publish a minimum supported version per plugin.
 That floor is cached locally the moment a catalogue is seen, so it applies
