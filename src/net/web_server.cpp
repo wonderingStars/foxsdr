@@ -2326,6 +2326,19 @@ function reflect(s) {
 // has stopped being a hand on a key" releases: the pointer coming up anywhere,
 // the gesture being cancelled, the window losing focus, and the tab being
 // hidden.
+//
+// AND THE SESSION GOING (0.99.35). stopPolling() (kAppJs3) calls pttRelease():
+// every caller of it is the page losing its session or signing out - a 401
+// from any request, the sign-in form coming up, LOG OUT - and reflectTransmit()
+// below, the one automatic release, runs only from the status poller that
+// stopPolling() has just stopped. Before this a key held when the session went
+// (a web password changed at the desk revokes every session) kept its
+// keep-alive POSTing transmitPtt:true twice a second into a page showing its
+// sign-in form, until the pointer happened to come up. The server refused
+// every one, so no RF resulted - but a page must not keep asserting a key it
+// can no longer close. pttRelease() is a no-op when nothing is held, and its
+// own release POST answering 401 re-enters stopPolling() harmlessly.
+// tests/test_web_server.cpp testLosingTheSessionMidHoldLetsGoOfTheKey.
 constexpr char kAppJs2p[] = R"JS(
 const PTT_REPEAT_MS = 500;
 let pttDown = false, pttTimer = null;
@@ -2744,9 +2757,12 @@ function startPolling() {
   specTimer = setInterval(() => { pollSpectrum(); }, 66);
   pollStatus(); pollSpectrum();
 }
+// Lets go of the transmit key too: every caller is the session going, and
+// reflectTransmit's release runs only from the poller stopped here (kAppJs2p).
 function stopPolling() {
   if (timer) { clearInterval(timer); timer = null; }
   if (specTimer) { clearInterval(specTimer); specTimer = null; }
+  pttRelease();
 }
 
 async function refreshSession() {

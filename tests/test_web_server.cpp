@@ -2229,6 +2229,119 @@ void testThePageKeyIsHeldAndReleases() {
     server.stop();
 }
 
+// LOSING THE SESSION WHILE THE KEY IS HELD LETS GO OF IT.
+//
+// A web password changed at the desk (which revokes every session) or a
+// session reaching its lifetime while somebody holds the browser's PTT: the
+// next keep-alive POST answers 401, and control() stops the pollers and shows
+// the sign-in form. Before 0.99.35 it did nothing about the key - and the ONE
+// automatic release, reflectTransmit()'s "no transmitter" check, runs only
+// from the status poller that 401 had just stopped. So pttTimer went on
+// POSTing {transmitPtt:true} twice a second into a page showing its sign-in
+// form, until the pointer happened to come up.
+//
+// Behavioural, through the SERVED functions: pttPress, pttRelease, pttSend,
+// control and stopPolling are lifted out of /app.js and run under node against
+// a fetch that answers 401 and timers the driver owns, so "is the keep-alive
+// still live" is a count of intervals rather than a guess about time.
+void testLosingTheSessionMidHoldLetsGoOfTheKey() {
+    const std::string js = fetchAppJs();
+    CHECK(js.size() > 10000u);
+
+    const fs::path dir = scratchDir();
+    if (!haveNode(dir)) {
+        std::printf("SKIP testLosingTheSessionMidHoldLetsGoOfTheKey: node is not on PATH\n");
+        return;
+    }
+    const fs::path jsPath = dir / "app_ptt401.js";
+    CHECK(writeFile(jsPath, js));
+
+    const char* kDriver = R"NODE(
+const fs = require('fs');
+const src = fs.readFileSync(process.argv[2], 'utf8');
+// One function's source, with its `async` if it has one.
+function block(name) {
+  let i = src.indexOf('function ' + name + '(');
+  if (i < 0) throw new Error('missing function ' + name);
+  if (src.slice(i - 6, i) === 'async ') i -= 6;
+  let depth = 0, opened = false;
+  for (let j = i; j < src.length; j++) {
+    if (src[j] === '{') { depth++; opened = true; }
+    else if (src[j] === '}') { depth--; if (opened && depth === 0) return src.slice(i, j + 1); }
+  }
+  throw new Error('unterminated function ' + name);
+}
+function line(prefix) {
+  const i = src.indexOf('\n' + prefix);
+  if (i < 0) throw new Error('missing ' + prefix);
+  return src.slice(i + 1, src.indexOf('\n', i + 1));
+}
+const stubs = `
+const live = new Map(); let nextId = 1;
+function setInterval(fn, ms) { const id = nextId++; live.set(id, fn); return id; }
+function clearInterval(id) { live.delete(id); }
+function setTimeout(fn, ms) { return 0; }
+const posts = [];
+let sessionChecks = 0;
+async function fetch(url, opts) {
+  posts.push(JSON.parse(opts.body));
+  return { status: 401, ok: false, json: async () => ({}) };
+}
+async function refreshSession() { sessionChecks++; }
+function setLinkUp(up) {}
+function pollStatus() {}
+function El() { this.disabled = false; this.textContent = '';
+  this.classList = { add() {}, remove() {}, toggle() {} }; }
+const els = { ptt: new El(), ctlError: new El() };
+function $(id) { return els[id] || new El(); }
+let timer = null;
+`;
+const prelude = [stubs, line('const PTT_REPEAT_MS'), line('let pttDown'),
+                 line('let specTimer'), block('pttSend'), block('pttPress'),
+                 block('pttRelease'), block('control'), block('stopPolling')].join('\n');
+const run = new Function(prelude + `
+return async function () {
+  // The page is signed in and polling, and somebody is holding the key.
+  timer = setInterval(() => {}, 250);
+  specTimer = setInterval(() => {}, 66);
+  pttPress({ cancelable: false });
+  const heldBefore = pttDown;
+  // Let the first keep-alive's 401 land and everything it awaits settle.
+  for (let k = 0; k < 50; k++) await new Promise((r) => setImmediate(r));
+  const postsAt401 = posts.length;
+  // Time passes: every interval that is still live fires, twice.
+  for (let round = 0; round < 2; round++) {
+    for (const fn of Array.from(live.values())) fn();
+    for (let k = 0; k < 50; k++) await new Promise((r) => setImmediate(r));
+  }
+  const keyedAfter = posts.slice(postsAt401).filter((p) => p.transmitPtt === true).length;
+  const released = posts.filter((p) => p.transmitPtt === false).length;
+  return 'heldBefore=' + (heldBefore ? 1 : 0) + ' pttDown=' + (pttDown ? 1 : 0) +
+         ' live=' + live.size + ' keyedAfter401=' + keyedAfter + ' released=' + released +
+         ' sessionChecks=' + sessionChecks;
+};`)();
+run().then((s) => console.log(s)).catch((e) => { console.error(e); process.exit(2); });
+)NODE";
+    const fs::path driver = dir / "ptt401_driver.js";
+    CHECK(writeFile(driver, kDriver));
+
+    std::string output;
+    const int rc = runCaptured("node \"" + driver.string() + "\" \"" + jsPath.string() + "\"",
+                               dir / "ptt401.txt", output);
+    std::printf("session lost mid-hold: %s", output.c_str());
+    CHECK(rc == 0);
+    // THE CONTROL: the key really was held when the session went.
+    CHECK(output.find("heldBefore=1") != std::string::npos);
+    // And the 401 was seen as a lost session, which is the path under test.
+    CHECK(output.find("sessionChecks=0") == std::string::npos);
+    // THE CHECKS THIS TEST EXISTS FOR: the page let go of the key, nothing is
+    // left ticking - not the keep-alive, not the pollers - and no assertion of
+    // the key was sent after the server said the session had gone.
+    CHECK(output.find("pttDown=0") != std::string::npos);
+    CHECK(output.find("live=0") != std::string::npos);
+    CHECK(output.find("keyedAfter401=0") != std::string::npos);
+}
+
 }  // namespace
 
 int main() {
@@ -2262,5 +2375,6 @@ int main() {
     testStoppingTheServerReleasesTheKey();
     testTransmitStatusFieldsReachTheBrowser();
     testThePageKeyIsHeldAndReleases();
+    testLosingTheSessionMidHoldLetsGoOfTheKey();
     return testSummary("test_web_server");
 }
