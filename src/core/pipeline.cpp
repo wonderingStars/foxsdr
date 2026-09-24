@@ -40,9 +40,18 @@ constexpr double kTwoPi = 6.283185307179586476925286766559;
 // hiccup on the DSP side does not force sample drops, and at least 8 FFT
 // blocks so accumulation never starves at low sample rates. Rounded up to a
 // power of two because SpscRing requires it.
-std::size_t ringCapacityFor(const Pipeline::Config& cfg) {
-    double want = 4.0 * cfg.sampleRateHz * 0.010;
-    const double blocks = 8.0 * static_cast<double>(cfg.fftSize);
+//
+// `rateHz` is the SOURCE's rate, because a chunk is 10 ms of the source's
+// rate (sourceThreadBody). This used to be sized once, in the constructor,
+// from the rate the pipeline was BUILT at - 2 MS/s in the app, 131072
+// samples - so a 20 MS/s source handed the ring 200000 samples per read and
+// a third of every chunk was dropped with the DSP thread idle. The ring is
+// now re-sized for the incoming source at each source-thread spawn (start(),
+// setSource()), never below the construction size; see
+// ringCapacityForActiveSourceLocked() and resizeRingLocked().
+std::size_t ringCapacityFor(double rateHz, std::size_t fftSize) {
+    double want = 4.0 * rateHz * 0.010;
+    const double blocks = 8.0 * static_cast<double>(fftSize);
     if (want < blocks) { want = blocks; }
     std::size_t cap = 1;
     while (static_cast<double>(cap) < want) { cap <<= 1; }
@@ -245,7 +254,8 @@ constexpr std::chrono::seconds kSourceJoinWait{3};
 Pipeline::Pipeline(Config cfg)
     : cfg_(cfg),
       builtin_(cfg.sampleRateHz),
-      ring_(ringCapacityFor(cfg)),
+      ringFloor_(ringCapacityFor(cfg.sampleRateHz, cfg.fftSize)),
+      ring_(std::make_unique<cascade::dsp::SpscRing<std::complex<float>>>(ringFloor_)),
       estimator_(cfg.fftSize, cascade::dsp::WindowType::BlackmanHarris),
       vfoDecim_(decimationForInputRate(cfg.sampleRateHz)),
       vfoBandwidthHz_(kDefaultVfoBandwidthHz),
@@ -542,13 +552,69 @@ void Pipeline::setSource(std::unique_ptr<cascade::source::IqSource> s) {
         // Resume: start the incoming source BEFORE its thread exists so the
         // first read() never races the device open, then respawn.
         active_->start();
+        // A source at a different rate needs a different ring: one read is
+        // 10 ms of ITS rate, and a ring sized for the outgoing source can be
+        // smaller than a single read of the incoming one. The DSP thread
+        // (the ring's consumer) keeps running across an ordinary swap, so it
+        // is taken out of the way only when the ring really has to change,
+        // and brought back after the source thread exists. The partial FFT
+        // block it was accumulating is dropped with it - a source swap is a
+        // stream discontinuity anyway.
+        const std::size_t ringWant = ringCapacityForActiveSourceLocked();
+        const bool newRing = ring_->capacity() != ringWant;
+        if (newRing && dspThread_.joinable()) {
+            dspRun_.store(false, std::memory_order_relaxed);
+            dspThread_.join();
+        }
+        resizeRingLocked(ringWant);
         srcRun_.store(true, std::memory_order_relaxed);
         // cfg_.sampleRateHz is read HERE, under controlMutex_, and handed to
         // the thread; see sourceThreadMain's declaration. spawnSourceThread
         // also mints this generation's stop token/exit latch — zombie-safety
         // for whatever stop() eventually ends this session (see stop()).
         spawnSourceThread(cfg_.sampleRateHz);
+        if (newRing) {
+            dspRun_.store(true, std::memory_order_relaxed);
+            dspThread_ = std::thread(&Pipeline::dspThreadMain, this);
+        }
     }
+}
+
+std::size_t Pipeline::ringCapacity() {
+    std::lock_guard<std::mutex> lk(controlMutex_);
+    return ring_->capacity();
+}
+
+// Caller holds controlMutex_. The ring capacity the ACTIVE source needs: the
+// rate the source thread will size its chunks from, with the same fallback
+// sourceThreadBody uses for a source that reports a nonsense rate.
+//
+// NEVER BELOW THE CONSTRUCTION-TIME SIZE (ringFloor_). Sized purely from the
+// source, a source slower than the construction rate would get a SMALLER ring
+// than it has always had - a 400 kHz source 16384 samples instead of 65536 -
+// and on a loaded machine a DSP stall that the old ring rode out drops
+// samples (test_source_swap's conservation check did exactly that). The fix
+// this sizing exists for is only ever about a source whose one read does not
+// fit, so only such a source gets more.
+std::size_t Pipeline::ringCapacityForActiveSourceLocked() const {
+    double rate = active_->sampleRateHz();
+    if (!(rate > 0.0)) { rate = cfg_.sampleRateHz; }
+    const std::size_t want = ringCapacityFor(rate, cfg_.fftSize);
+    return want > ringFloor_ ? want : ringFloor_;
+}
+
+// Caller holds controlMutex_, and NEITHER worker thread may be running: the
+// source thread (the ring's producer) is joined, never spawned, or abandoned
+// inside a driver read, and the DSP thread (its consumer) is joined. An
+// abandoned source thread cannot write into the ring being replaced: it
+// re-tests its own generation's stop token the moment its read returns and
+// before it touches the ring, and that token was cleared before the thread
+// was given up on. The ring is only replaced when its size must change, so a
+// source swap at an unchanged rate keeps the ring (and, in setSource(), the
+// running DSP thread) exactly as they were.
+void Pipeline::resizeRingLocked(std::size_t capacity) {
+    if (ring_->capacity() == capacity) { return; }
+    ring_ = std::make_unique<cascade::dsp::SpscRing<std::complex<float>>>(capacity);
 }
 
 cascade::source::IqSource& Pipeline::activeSource() {
@@ -611,7 +677,7 @@ void Pipeline::start() {
     // Draining here is safe — both threads are joined at this point.
     estimator_.reset();
     std::complex<float> scratch[256];
-    while (ring_.read(scratch, 256) != 0) {}
+    while (ring_->read(scratch, 256) != 0) {}
 
     // Same fresh-acquisition treatment for the audio chain: clear filter
     // histories, oscillator phases, AGC gain, resampler state, and the meter.
@@ -646,6 +712,11 @@ void Pipeline::start() {
     // the thread runs, read() yields nothing, no frames appear, and the
     // reason stays readable through activeSource().lastError().
     active_->start();
+
+    // Both threads are joined here, so the ring can be re-sized for the rate
+    // this source will actually deliver at - read after start(), as the
+    // source thread itself reads it.
+    resizeRingLocked(ringCapacityForActiveSourceLocked());
 
     run_.store(true, std::memory_order_relaxed);
     srcRun_.store(true, std::memory_order_relaxed);
@@ -1149,7 +1220,9 @@ bool Pipeline::setInputRateHz(double rateHz) {
 
     // Commit the new rate only after the rebuild cannot fail anymore, so a
     // refused/aborted call really did change nothing. The spectrum estimator
-    // and the ring are deliberately untouched (rate-agnostic; see header).
+    // and the ring are deliberately untouched (the estimator is
+    // rate-agnostic, and the ring follows the SOURCE's rate at its thread's
+    // spawn; see header).
     cfg_.sampleRateHz = rateHz;
     // ...and the lock-free mirror inputRateHz() reads, in the same breath as
     // the field it mirrors, so the two can never disagree.
@@ -1364,7 +1437,9 @@ void Pipeline::sourceThreadBody(double chainRateHz,
                 // Same overflow policy as the free-running path: if the DSP
                 // side stalled and the ring is full, the excess is dropped
                 // (write() accepts what fits) — never block a live device.
-                ring_.write(buf.data(), got);
+                // Counted, so the loss is never silent.
+                const std::size_t put = ring_->write(buf.data(), got);
+                if (put < got) { ringDropped_.fetch_add(got - put, std::memory_order_relaxed); }
             }
             // Device loss does NOT arrive here as an exception: a source that
             // let the driver's throw escape would be torn down mid-fault, so
@@ -1418,8 +1493,21 @@ void Pipeline::sourceThreadBody(double chainRateHz,
         // Same post-read token test as the self-paced loop, same reasons.
         if (!stopToken.load(std::memory_order_relaxed)) { return; }
         // A real-time source must not block: if the DSP side stalled and the
-        // ring is full, the overflow is dropped (write() accepts what fits).
-        ring_.write(buf.data(), got);
+        // ring is full, the overflow is dropped (write() accepts what fits),
+        // and counted.
+        const std::size_t put = ring_->write(buf.data(), got);
+        if (put < got) { ringDropped_.fetch_add(got - put, std::memory_order_relaxed); }
+        // The same fault poll as the self-paced branch, and it matters MORE
+        // here: a free-running source cannot report failure through read() at
+        // all (IqFileSource zero-fills and still returns n, because a 0 would
+        // only mean "retry"), so faulted() is its one way out. Without this
+        // poll a recording truncated or deleted mid-play latched its fault
+        // and nobody read it - the spectrum scrolled on zeros, the FAIL lamp
+        // stayed dark and an active recording captured silence.
+        if (src.faulted()) {
+            noteThreadFault("source thread", src.lastError());
+            return;
+        }
 
         std::this_thread::sleep_until(next);
         next += period;
@@ -1441,7 +1529,7 @@ void Pipeline::dspThreadBody() {
     // srcRun_ lets setSource quiesce the source thread alone.
     while (run_.load(std::memory_order_relaxed) &&
            dspRun_.load(std::memory_order_relaxed)) {
-        filled += ring_.read(acc.data() + filled, n - filled);
+        filled += ring_->read(acc.data() + filled, n - filled);
         if (filled < n) {
             // Ring drained mid-block: yield instead of spinning. 1 ms is far
             // below the 10 ms production cadence, so this never limits the

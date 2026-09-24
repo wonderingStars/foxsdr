@@ -18,6 +18,18 @@ namespace {
 // host passes at least 256.
 constexpr std::size_t kPollBufBytes = 8192;
 
+// THE MOST poll_text() CALLS ONE DECODER GETS PER BLOCK (128 KiB of text at
+// kPollBufBytes a call). The drain loops run on the real-time DSP thread with
+// mutex_ held, and they used to loop until the decoder answered 0 - so one
+// decoder whose poll_text kept answering a positive count (a read cursor that
+// never advances) spun the DSP thread for ever and froze the audio, every
+// other decoder and every GUI reader of this runner behind it. Whatever is
+// still pending after the budget is simply read on the next block: nothing is
+// lost, a well-behaved decoder never comes near the limit, and a broken one
+// costs a bounded slice of each block instead of the whole thread. Same idea
+// as the patch runner's pollText (8 tries of 1 KiB).
+constexpr int kMaxPollsPerBlock = 16;
+
 std::string rateSentence(const std::string& name, double want, double have,
                          const char* stream) {
     char buf[320];
@@ -934,7 +946,8 @@ void PluginRunner::pollLocked() {
         // feeding a dead instance for the rest of the session while every
         // panel went on describing it as decoding.
         if (i.failed) { continue; }
-        for (;;) {
+        // Bounded - see kMaxPollsPerBlock. The rest waits for the next block.
+        for (int k = 0; k < kMaxPollsPerBlock; ++k) {
             const int32_t n =
                 i.api->poll_text(i.handle, pollBuf_.data(), pollBuf_.size());
             if (n < 0) {  // failed for good
@@ -954,7 +967,8 @@ void PluginRunner::pollIqLocked() {
     for (IqInstance& i : iqInstances_) {
         // Same rule as pollLocked: negative is permanent failure, not silence.
         if (i.failed) { continue; }
-        for (;;) {
+        // And the same bound (kMaxPollsPerBlock).
+        for (int k = 0; k < kMaxPollsPerBlock; ++k) {
             const int32_t n =
                 i.api->poll_text(i.handle, pollBuf_.data(), pollBuf_.size());
             if (n < 0) {
@@ -976,7 +990,8 @@ void PluginRunner::pollImageTextLocked(std::uint32_t inputKind) {
         // flag is one per instance because a permanent failure is a property
         // of the decoder, not of the call that happened to report it.
         if (i.failed || i.inputKind != inputKind) { continue; }
-        for (;;) {
+        // And the same bound (kMaxPollsPerBlock).
+        for (int k = 0; k < kMaxPollsPerBlock; ++k) {
             const int32_t n =
                 i.api->poll_text(i.handle, pollBuf_.data(), pollBuf_.size());
             if (n < 0) {

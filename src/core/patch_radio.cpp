@@ -93,6 +93,24 @@ void PatchRadio::stop() {
             "patch: radio '%s' did not stop within %d ms - its reader is left to finish "
             "on its own",
             label_.c_str(), kStopWaitMs);
+        // BUT ITS DECODERS ARE NOT LEFT WITH IT. The old Shared owns the
+        // runner, and the runner owns every decoder plugin handle this radio
+        // runs. Once sh_ is swapped below, nothing else can reach that runner
+        // - the app's plugin-unload flush walks the radios it still holds, and
+        // this one has just been dropped - so without this the handles died
+        // whenever the driver let the thread go: destroy() on the reader
+        // thread, which the ABI forbids, and after a rescan or at exit into a
+        // plugin module already unmapped. flushNow() destroys them HERE, on
+        // the control thread, now. Its wait is for the reader to leave
+        // runner.process(), and the reader is not in there: it is parked in
+        // the driver's read(), outside the runner, which is why it was
+        // abandoned. When it does come back it finds an empty runner and
+        // run == false, and leaves without touching plugin code. (Were the
+        // reader instead stuck inside a plugin's own process() call, this
+        // waits for that call, exactly as the unload path's flushNow() on the
+        // same runner always has: destroying a handle under its own running
+        // call would be the crash this exists to prevent.)
+        sh_->runner.flushNow();
         thread_.detach();
         // A fresh Shared for this object, so nothing it does from here on can
         // touch what the abandoned thread still holds.

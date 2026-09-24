@@ -23,7 +23,11 @@
 // driver that does not honour the abort is ABANDONED rather than waited on
 // forever: the thread keeps a reference to everything it touches, so it can
 // finish whenever the driver lets it go without reading freed memory - the
-// same policy the receiver applies to a wedged vendor stack.
+// same policy the receiver applies to a wedged vendor stack. Its DECODERS are
+// not abandoned with it: stop() flushes the runner first, so every plugin
+// handle is destroyed on the calling thread before stop() returns, never
+// later on the abandoned one (by which time a rescan may have unmapped the
+// plugin's module).
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
@@ -55,7 +59,8 @@ public:
     bool start(std::string& error);
 
     // Stops and joins (or, past kStopWaitMs, abandons) the reader. Idempotent.
-    // After it returns no further process() runs on this radio's runner.
+    // After it returns no further process() runs on this radio's runner, and
+    // on the abandon path every decoder handle it held is already destroyed.
     void stop();
 
     static constexpr int kStopWaitMs = 3000;
