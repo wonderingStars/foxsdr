@@ -46,7 +46,12 @@
 // the kernel may still write into those buffers, and a freed buffer under a
 // live DMA write is a worse defect than a leak on a path that only happens
 // when a device has already gone wrong. Same reasoning as SoapySource's
-// abandoned-driver policy, one layer down.
+// abandoned-driver policy, one layer down. A control transfer whose
+// cancellation does not land within the same bound is leaked the same way,
+// and never held the caller's buffer or a stack OVERLAPPED to begin with.
+// Leaked means handed to abandonRequest()'s process-lifetime store - NOT kept
+// in the device, whose own member teardown would free it moments later
+// (tests/test_winusb_abandon.cpp).
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "usb/usb_device.hpp"
@@ -73,6 +78,10 @@
 // Device Parameters as strings.
 #include <objbase.h>
 // clang-format on
+
+#include <atomic>
+
+#include "usb/winusb_device.hpp"
 
 #endif  // _WIN32
 
@@ -245,21 +254,60 @@ std::wstring hardwareIdFragment(std::uint16_t vid, std::uint16_t pid) {
 // The device itself.
 // ---------------------------------------------------------------------------
 
+// Request blocks alive in this process; see liveUsbRequestsForTest().
+std::atomic<std::size_t> g_liveRequests{0};
+
+// One overlapped request: the buffer the kernel reads or writes, the
+// OVERLAPPED it completes, and the event it signals. Both the bulk ring and
+// the control path are made of these, and both hand one to the kernel for as
+// long as it may still touch it - which, after a cancel that did not land,
+// is longer than the device lives.
+struct Request {
+    Request() { g_liveRequests.fetch_add(1, std::memory_order_relaxed); }
+    ~Request() {
+        if (event != nullptr) { ::CloseHandle(event); }
+        g_liveRequests.fetch_sub(1, std::memory_order_relaxed);
+    }
+    Request(const Request&) = delete;
+    Request& operator=(const Request&) = delete;
+
+    OVERLAPPED overlapped{};
+    HANDLE event = nullptr;
+    std::vector<std::uint8_t> buffer;
+    bool pending = false;
+};
+
+// THE LEAK, and where it lives. A request whose cancellation did not land
+// within kAbortDrainWait may still be completed by the kernel - bytes into
+// its buffer, status into its OVERLAPPED, a SetEvent on its event - at any
+// later moment. So it is handed here, to a store that is never destroyed:
+// not a member of the device (the device's own member teardown freed the
+// "leaked" ring microseconds after the leak, which is what this replaced),
+// and not a plain static (its destructor would run at exit while the kernel
+// may still hold the requests). Heap-allocated on first use and never
+// deleted, so "for the life of the process" is literally true. It is also
+// what keeps them reachable for a debugger.
+void abandonRequest(std::unique_ptr<Request> req) {
+    if (req == nullptr) { return; }
+    static std::mutex* const mutex = new std::mutex;
+    static auto* const store = new std::vector<std::unique_ptr<Request>>;
+    std::lock_guard<std::mutex> lk(*mutex);
+    store->push_back(std::move(req));
+}
+
 class WinUsbDevice final : public UsbDevice {
 public:
-    WinUsbDevice(HANDLE file, WINUSB_INTERFACE_HANDLE winusb, std::string path)
-        : file_(file), winusb_(winusb), path_(std::move(path)) {
-        controlEvent_ = ::CreateEventW(nullptr, TRUE, FALSE, nullptr);
-    }
+    WinUsbDevice(const WinUsbApi& api, HANDLE file, WINUSB_INTERFACE_HANDLE winusb,
+                 std::string path)
+        : api_(&api), file_(file), winusb_(winusb), path_(std::move(path)) {}
 
     ~WinUsbDevice() override {
         endBulkStream();
-        if (controlEvent_ != nullptr) { ::CloseHandle(controlEvent_); }
-        if (winusb_ != nullptr) { ::WinUsb_Free(winusb_); }
-        if (file_ != INVALID_HANDLE_VALUE) { ::CloseHandle(file_); }
-        // Buffers the drain gave up on are deliberately never freed; see the
-        // file header. leaked_ keeps them reachable for a debugger and makes
-        // the leak a fact rather than an accident.
+        if (winusb_ != nullptr) { api_->winUsbFree(winusb_); }
+        if (file_ != INVALID_HANDLE_VALUE) { api_->closeFile(file_); }
+        // Requests the drain gave up on are not ours any more: endBulkStream()
+        // and control() hand them to abandonRequest(), so nothing this
+        // object's member teardown frees can still be in the kernel's hands.
     }
 
     WinUsbDevice(const WinUsbDevice&) = delete;
@@ -268,14 +316,13 @@ public:
     int controlOut(std::uint8_t requestType, std::uint8_t request, std::uint16_t value,
                    std::uint16_t index, const std::uint8_t* data, std::size_t len,
                    unsigned timeoutMs) override {
-        return control(requestType, request, value, index, const_cast<std::uint8_t*>(data), len,
-                       timeoutMs);
+        return control(requestType, request, value, index, data, nullptr, len, timeoutMs);
     }
 
     int controlIn(std::uint8_t requestType, std::uint8_t request, std::uint16_t value,
                   std::uint16_t index, std::uint8_t* data, std::size_t len,
                   unsigned timeoutMs) override {
-        return control(requestType, request, value, index, data, len, timeoutMs);
+        return control(requestType, request, value, index, nullptr, data, len, timeoutMs);
     }
 
     bool beginBulkStream(std::uint8_t endpoint, std::size_t bufferBytes,
@@ -301,7 +348,7 @@ public:
         // the pipe. This is what keeps a 2.4 MS/s stream from adding a copy
         // and a scheduling hop per buffer.
         UCHAR raw = TRUE;
-        if (::WinUsb_SetPipePolicy(winusb_, endpoint, RAW_IO, sizeof(raw), &raw) == FALSE) {
+        if (api_->setPipePolicy(winusb_, endpoint, RAW_IO, sizeof(raw), &raw) == FALSE) {
             setError(lastErrorText("WinUsb_SetPipePolicy(RAW_IO)", ::GetLastError()));
             return false;
         }
@@ -313,14 +360,14 @@ public:
         // the first read returns Windows error 31 and the SECOND one
         // delivers 16384 bytes. Off, the stall is permanent.
         UCHAR on = TRUE;
-        ::WinUsb_SetPipePolicy(winusb_, endpoint, AUTO_CLEAR_STALL, sizeof(on), &on);
+        api_->setPipePolicy(winusb_, endpoint, AUTO_CLEAR_STALL, sizeof(on), &on);
 
         // NO SELECTIVE SUSPEND WHILE A RADIO IS STREAMING. Whether WinUSB
         // idles this device at all comes from its INF, which on a
         // Zadig-installed dongle is not ours to predict; a receiver that is
         // asleep delivers nothing and reports no error.
         UCHAR off = FALSE;
-        ::WinUsb_SetPowerPolicy(winusb_, AUTO_SUSPEND, sizeof(off), &off);
+        api_->setPowerPolicy(winusb_, AUTO_SUSPEND, sizeof(off), &off);
 
         // THE PIPE IS RESET BEFORE THE FIRST READ, and this is not
         // defensive tidiness - it is the difference between a dongle that
@@ -340,7 +387,7 @@ public:
         // driver was first run against, in which every read on a correctly
         // configured dongle timed out with no error at all until an
         // unrelated libusb program had claimed and released the interface.
-        ::WinUsb_ResetPipe(winusb_, endpoint);
+        api_->resetPipe(winusb_, endpoint);
 
         endpoint_ = endpoint;
         ring_.clear();
@@ -383,7 +430,7 @@ public:
             return -1;
         }
         DWORD moved = 0;
-        if (::WinUsb_GetOverlappedResult(winusb_, &req.overlapped, &moved, FALSE) == FALSE) {
+        if (api_->getOverlappedResult(winusb_, &req.overlapped, &moved, FALSE) == FALSE) {
             const DWORD err = ::GetLastError();
             req.pending = false;
             // A device that has gone (unplugged, or the driver torn from
@@ -407,11 +454,11 @@ public:
             // Both, in this order: AbortPipe tells the function driver to
             // fail everything queued on the pipe, CancelIoEx covers requests
             // the I/O manager has not handed down yet.
-            ::WinUsb_AbortPipe(winusb_, endpoint_);
+            api_->abortPipe(winusb_, endpoint_);
         }
         for (auto& slot : ring_) {
             if (slot && slot->pending && file_ != INVALID_HANDLE_VALUE) {
-                ::CancelIoEx(file_, &slot->overlapped);
+                api_->cancelIoEx(file_, &slot->overlapped);
             }
         }
         // ONE deadline for the whole ring, exactly as the header states.
@@ -427,25 +474,24 @@ public:
             }
             if (::WaitForSingleObject(slot->event, budget) == WAIT_OBJECT_0) {
                 DWORD moved = 0;
-                ::WinUsb_GetOverlappedResult(winusb_, &slot->overlapped, &moved, FALSE);
+                api_->getOverlappedResult(winusb_, &slot->overlapped, &moved, FALSE);
                 slot->pending = false;
             } else {
                 allDrained = false;
             }
         }
         if (allDrained) {
-            for (auto& slot : ring_) {
-                if (slot && slot->event != nullptr) { ::CloseHandle(slot->event); }
-            }
-            ring_.clear();
+            ring_.clear();  // each Request closes its own event
         } else {
             // THE LEAK, on purpose. At least one request is still live in the
             // kernel with a pointer into slot->buffer; freeing it would hand
-            // the DMA engine memory the allocator has given away. Moving the
-            // whole ring aside keeps every buffer and event alive for the
-            // life of the process and leaves the next beginBulkStream() a
-            // clean slate.
-            for (auto& slot : ring_) { leaked_.push_back(std::move(slot)); }
+            // the DMA engine memory the allocator has given away. The whole
+            // ring goes to abandonRequest(), which keeps every buffer and
+            // event alive for the life of the process - past this device's
+            // own destruction, which is the case that matters: a driver
+            // resets its UsbDevice straight after the failure that got it
+            // here - and leaves the next beginBulkStream() a clean slate.
+            for (auto& slot : ring_) { abandonRequest(std::move(slot)); }
             ring_.clear();
             setError("a cancelled bulk read did not complete within the drain bound; its "
                      "buffer is deliberately leaked rather than freed under the device");
@@ -458,7 +504,7 @@ public:
 
     bool resetPipe(std::uint8_t endpoint) override {
         if (winusb_ == nullptr) { return false; }
-        if (::WinUsb_ResetPipe(winusb_, endpoint) == FALSE) {
+        if (api_->resetPipe(winusb_, endpoint) == FALSE) {
             setError(lastErrorText("WinUsb_ResetPipe", ::GetLastError()));
             return false;
         }
@@ -469,13 +515,6 @@ public:
     const std::string& lastError() const override { return lastError_; }
 
 private:
-    struct Request {
-        OVERLAPPED overlapped{};
-        HANDLE event = nullptr;
-        std::vector<std::uint8_t> buffer;
-        bool pending = false;
-    };
-
     static constexpr std::size_t kMaxPacketBytes = 512;
     static constexpr std::size_t kMaxRingSize = 32;
 
@@ -486,7 +525,7 @@ private:
         ::ResetEvent(req.event);
         req.overlapped.hEvent = req.event;
         ULONG moved = 0;
-        if (::WinUsb_ReadPipe(winusb_, endpoint_, req.buffer.data(),
+        if (api_->readPipe(winusb_, endpoint_, req.buffer.data(),
                               static_cast<ULONG>(req.buffer.size()), &moved,
                               &req.overlapped) != FALSE) {
             // Completed synchronously; the event is signalled either way, so
@@ -504,8 +543,11 @@ private:
         return false;
     }
 
+    // `out` is the caller's bytes for an OUT transfer and `in` the caller's
+    // buffer for an IN one; the other is null (both are when len is 0).
     int control(std::uint8_t requestType, std::uint8_t request, std::uint16_t value,
-                std::uint16_t index, std::uint8_t* data, std::size_t len, unsigned timeoutMs) {
+                std::uint16_t index, const std::uint8_t* out, std::uint8_t* in, std::size_t len,
+                unsigned timeoutMs) {
         if (winusb_ == nullptr) {
             setError("control transfer on a closed device");
             return -1;
@@ -514,14 +556,35 @@ private:
             setError("control transfer longer than a USB setup packet can describe");
             return -1;
         }
-        // One shared OVERLAPPED and event, so two threads may not be in here
+        // One control request per device, so two threads may not be in here
         // at once. The drivers serialise their own control calls anyway; this
         // is the belt to that braces.
         std::lock_guard<std::mutex> lk(controlMutex_);
-        if (controlEvent_ == nullptr) {
-            setError("control transfer with no event object");
-            return -1;
+
+        // THE KERNEL NEVER HOLDS THE CALLER'S MEMORY, OR THIS FRAME'S. The
+        // transfer runs on a heap Request - its own OVERLAPPED, its own event,
+        // its own copy of the data - because a transfer whose cancellation
+        // does not land in time is still the kernel's when this function
+        // returns, and a late completion then writes its status and bytes
+        // into whatever that memory has become. With a stack OVERLAPPED and
+        // the caller's `data` that was a dead stack frame and a buffer the
+        // caller had long since reused; and with one event shared by every
+        // transfer, the stale completion also woke the NEXT transfer early.
+        // A request that has to be abandoned is handed to abandonRequest()
+        // and the next transfer gets a fresh one, event and all.
+        if (control_ == nullptr) {
+            auto fresh = std::make_unique<Request>();
+            fresh->event = ::CreateEventW(nullptr, TRUE, FALSE, nullptr);
+            if (fresh->event == nullptr) {
+                setError(lastErrorText("CreateEvent for a control transfer", ::GetLastError()));
+                return -1;
+            }
+            control_ = std::move(fresh);
         }
+        Request& req = *control_;
+        req.buffer.resize(len);
+        if (out != nullptr && len > 0) { std::memcpy(req.buffer.data(), out, len); }
+
         WINUSB_SETUP_PACKET setup{};
         setup.RequestType = requestType;
         setup.Request = request;
@@ -529,51 +592,68 @@ private:
         setup.Index = index;
         setup.Length = static_cast<USHORT>(len);
 
-        OVERLAPPED ov{};
-        ::ResetEvent(controlEvent_);
-        ov.hEvent = controlEvent_;
+        std::memset(&req.overlapped, 0, sizeof(req.overlapped));
+        ::ResetEvent(req.event);
+        req.overlapped.hEvent = req.event;
         ULONG moved = 0;
-        if (::WinUsb_ControlTransfer(winusb_, setup, data, static_cast<ULONG>(len), &moved, &ov) !=
-            FALSE) {
-            return static_cast<int>(moved);
+        if (api_->controlTransfer(winusb_, setup, len > 0 ? req.buffer.data() : nullptr,
+                                  static_cast<ULONG>(len), &moved, &req.overlapped) != FALSE) {
+            return finishControl(req, in, moved);
         }
         const DWORD err = ::GetLastError();
         if (err != ERROR_IO_PENDING) {
             setError(lastErrorText("a control transfer", err));
             return -1;
         }
-        const DWORD waited = ::WaitForSingleObject(controlEvent_, timeoutMs);
+        const DWORD waited = ::WaitForSingleObject(req.event, timeoutMs);
         if (waited != WAIT_OBJECT_0) {
             // Bounded, and then abandoned properly rather than left in
-            // flight: cancel, and wait for the cancellation itself (which the
-            // I/O manager completes promptly - it is not another device
-            // round trip) so `data` is not written after we return.
-            ::CancelIoEx(file_, &ov);
-            ::WaitForSingleObject(controlEvent_,
-                                  static_cast<DWORD>(kAbortDrainWait.count()));
+            // flight: cancel, and wait - bounded again - for the cancellation
+            // itself, which on a healthy bus the I/O manager completes
+            // promptly.
+            api_->cancelIoEx(file_, &req.overlapped);
+            if (::WaitForSingleObject(req.event, static_cast<DWORD>(kAbortDrainWait.count())) !=
+                WAIT_OBJECT_0) {
+                // THE CANCEL DID NOT LAND: the kernel still holds this request.
+                // Leaked on purpose, exactly as endBulkStream() leaks a ring
+                // that will not drain; the caller's buffer was never in it.
+                abandonRequest(std::move(control_));
+                setError("a control transfer did not answer within its timeout, and its "
+                         "cancellation did not complete within the drain bound; its buffer is "
+                         "deliberately leaked rather than freed under the device");
+                return -1;
+            }
             setError("a control transfer did not answer within its timeout");
             return -1;
         }
-        if (::WinUsb_GetOverlappedResult(winusb_, &ov, &moved, FALSE) == FALSE) {
+        if (api_->getOverlappedResult(winusb_, &req.overlapped, &moved, FALSE) == FALSE) {
             setError(lastErrorText("a control transfer", ::GetLastError()));
             return -1;
         }
-        return static_cast<int>(moved);
+        return finishControl(req, in, moved);
     }
 
+    // The count the transfer really moved (never more than was asked for),
+    // with an IN transfer's bytes copied out to the caller.
+    static int finishControl(const Request& req, std::uint8_t* in, ULONG moved) {
+        const std::size_t got = std::min<std::size_t>(moved, req.buffer.size());
+        if (in != nullptr && got > 0) { std::memcpy(in, req.buffer.data(), got); }
+        return static_cast<int>(got);
+    }
+
+    const WinUsbApi* api_;
     HANDLE file_ = INVALID_HANDLE_VALUE;
     WINUSB_INTERFACE_HANDLE winusb_ = nullptr;
     std::string path_;
     std::string lastError_;
 
     std::mutex controlMutex_;
-    HANDLE controlEvent_ = nullptr;
+    std::unique_ptr<Request> control_;  // created on first use; see control()
 
     std::uint8_t endpoint_ = 0;
     bool streaming_ = false;
     std::size_t head_ = 0;
     std::vector<std::unique_ptr<Request>> ring_;
-    std::vector<std::unique_ptr<Request>> leaked_;
 };
 
 #endif  // _WIN32
@@ -819,8 +899,28 @@ std::unique_ptr<UsbDevice> openWinUsb(const std::string& path, std::string& erro
         ::CloseHandle(file);
         return nullptr;
     }
-    return std::make_unique<WinUsbDevice>(file, winusb, path);
+    return std::make_unique<WinUsbDevice>(realWinUsbApi(), file, winusb, path);
 }
+
+// --- the test seam (usb/winusb_device.hpp) ----------------------------------
+
+const WinUsbApi& realWinUsbApi() {
+    static const WinUsbApi api = {
+        &::WinUsb_ControlTransfer, &::WinUsb_ReadPipe,       &::WinUsb_GetOverlappedResult,
+        &::WinUsb_AbortPipe,       &::WinUsb_ResetPipe,      &::WinUsb_SetPipePolicy,
+        &::WinUsb_SetPowerPolicy,  &::WinUsb_Free,           &::CancelIoEx,
+        &::CloseHandle,
+    };
+    return api;
+}
+
+std::unique_ptr<UsbDevice> makeWinUsbDeviceForTest(const WinUsbApi& api, HANDLE file,
+                                                   WINUSB_INTERFACE_HANDLE winusb,
+                                                   std::string path) {
+    return std::make_unique<WinUsbDevice>(api, file, winusb, std::move(path));
+}
+
+std::size_t liveUsbRequestsForTest() { return g_liveRequests.load(std::memory_order_relaxed); }
 
 #elif defined(__linux__)  // !_WIN32 && __linux__
 

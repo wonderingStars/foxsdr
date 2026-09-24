@@ -424,6 +424,14 @@ public:
     // is deleted.
     static unsigned long long readersAbandoned();
 
+    // Tests only: does the reader's link still point at a device? The same
+    // accessor, for the same reason, as HackRfSource::linkHoldsDeviceForTest:
+    // after an abandonment the stranded reader dereferences link_->dev, so
+    // closeDevice() must leave it alone, and the zombie never calls back into
+    // the fake once `run` is false - only the driver can be asked. Read-only,
+    // taken under the device mutex, and called from nowhere in the product.
+    bool linkHoldsDeviceForTest() const;
+
     // Tests only: switch the host DSP off, which is airspyhf_set_lib_dsp(0)
     // (airspyhf.c:1592-1596). With it off the samples are the device's own,
     // scaled by the filter gain and nothing else - which is how a test proves

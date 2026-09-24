@@ -1513,12 +1513,45 @@ int main() {
         CHECK(!src.running());
         CHECK(src.faultedWhile() == "waiting for the sample reader to stop");
 
+        // ...AND closeDevice() ON AN ABANDONED READER LEAVES ITS DEVICE
+        // POINTER ALONE - the guard HackRfSource got in 0.93.0 (its test 9),
+        // which this driver did not have: closeDevice() nulled link_->dev
+        // unconditionally, a data race with the stranded reader's next
+        // `link->dev->readBulk` and, on the iteration where it has just
+        // passed its `run` check, a null dereference. Asked of the driver
+        // because the zombie never calls back into the fake once `run` is
+        // false, so no transport-level observation can see it.
+        CHECK(src.linkHoldsDeviceForTest());
+        src.closeDevice();
+        if (!src.linkHoldsDeviceForTest()) {
+            std::printf("     closeDevice() cleared link_->dev under an abandoned reader\n");
+        }
+        CHECK(src.linkHoldsDeviceForTest());
+
         // Let the stranded reader finish. The device it is inside was leaked
         // deliberately (see stopStreamingLocked), so it has somewhere valid to
         // land; without this the suite would leave a thread sleeping in it.
         fake->releaseBlock.store(true);
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
         src.closeDevice();
+    }
+
+    // =====================================================================
+    // 14b. A HEALTHY CLOSE DOES clear link_->dev - the other half of the
+    //      guard above, and why it is a condition rather than a deletion: a
+    //      close that joined its reader has freed the device for real, and a
+    //      link left pointing at it would be a dangling pointer instead.
+    // =====================================================================
+    {
+        AirspySource src;
+        attachFake(src);
+        CHECK(src.open(""));
+        CHECK(src.start());
+        CHECK(src.linkHoldsDeviceForTest());
+        src.stop();
+        CHECK(!src.faulted());  // the reader exited; nothing was abandoned
+        src.closeDevice();
+        CHECK(!src.linkHoldsDeviceForTest());
     }
 
     // =====================================================================
