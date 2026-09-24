@@ -123,57 +123,11 @@ namespace {
 // still find it. It moved because the remembered-source rule beside it needs
 // the same list, and a rule kept in this .cpp is a rule no test can reach.
 
-// THE BIAS TEE, AND WHY IT IS A dynamic_cast AND NOT A DeviceSource METHOD.
-//
-// Putting 4.5 V on an antenna connector is not a thing every radio does, and
-// it is not "a port to choose": each of these drivers keeps it out of
-// antennas() deliberately, so that something iterating a list of port names
-// can never switch power on. Adding it to DeviceSource would give every
-// future source - a file, the generator, a Soapy device whose vendor module
-// has no such concept - a method it has to answer, and the honest answer for
-// most of them is "there is no such thing here".
-//
-// So the panel asks the concrete type, in exactly one place. Six drivers have
-// one this panel can reach:
-//   HackRfSource     - always present on a HackRF One
-//   AirspySource     - always present (a GPIO write, see its setBiasT)
-//   AirspyHfSource   - only on some boards, which is why the driver ASKS at
-//                      open (GET_BIAS_TEE_COUNT) and answers biasTeeSupported()
-//   SdrPlaySource    - per model, and per ANTENNA on an RSPdx, which is why it
-//                      too answers biasTeeSupported() rather than assuming
-//   MiriSdrSource    - a bit in the band-switch word, always writable (its own
-//                      header records the two bands where it does nothing)
-//   Rx888Source      - the HF port's. The VHF port has a SECOND one, reached
-//                      through setVhfBiasT, and it is deliberately not on this
-//                      checkbox: one box that meant a different connector
-//                      depending on the tuned frequency is exactly the kind of
-//                      control that puts power somewhere nobody expected.
-// The RTL-SDR's is NOT here, and that is said out loud rather than left to be
-// noticed: RtlSdrSource has one, spelled setBiasTee(), but its open-time
-// policy is its own (it will not switch on from an EEPROM that reads as
-// zeroes, because a bare dongle would otherwise put 4.5 V on the antenna at
-// open), and reconciling a persisted checkbox with that policy is a decision
-// this change did not make. A dongle owner reaches it the way they did
-// before: not from here.
-//
-// `fn` is called with the concrete driver when there is one; false is
-// returned untouched when there is not, which is the common case.
-template <typename Fn>
-bool withBiasTee(cascade::source::DeviceSource* dev, Fn&& fn) {
-    if (auto* h = dynamic_cast<cascade::source::HackRfSource*>(dev)) { return fn(*h); }
-    if (auto* a = dynamic_cast<cascade::source::AirspySource*>(dev)) { return fn(*a); }
-    if (auto* hf = dynamic_cast<cascade::source::AirspyHfSource*>(dev)) {
-        if (!hf->biasTeeSupported()) { return false; }
-        return fn(*hf);
-    }
-    if (auto* sp = dynamic_cast<cascade::source::SdrPlaySource*>(dev)) {
-        if (!sp->biasTeeSupported()) { return false; }
-        return fn(*sp);
-    }
-    if (auto* m = dynamic_cast<cascade::source::MiriSdrSource*>(dev)) { return fn(*m); }
-    if (auto* r = dynamic_cast<cascade::source::Rx888Source*>(dev)) { return fn(*r); }
-    return false;
-}
+// THE BIAS TEE - which radios have one, why that is a dynamic_cast and not a
+// DeviceSource method, and the RTL-SDR's own rule for what is put back after
+// an open - lives in gui/bias_tee.hpp (withBiasTee, biasTeeAfterOpen,
+// biasTeeTicked), where tests/test_rtl_bias_tee.cpp can reach it. Unqualified
+// calls here still find it: it is in cascade::gui.
 
 // THE RSP's THREE OTHER SWITCHES, EACH ONE DRIVER WIDE. Same argument as
 // withBiasTee - they are not ports and not gains, and DeviceSource would have
@@ -620,6 +574,7 @@ void applyWindowIcon(GLFWwindow* window) {
 bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppConfig& b) {
     return a.sourceKind == b.sourceKind && a.soapyArgs == b.soapyArgs &&
            a.nativeArgs == b.nativeArgs && a.nativeBiasT == b.nativeBiasT &&
+           a.rtlBiasTArgs == b.rtlBiasTArgs && a.rtlBiasT == b.rtlBiasT &&
            a.plutoUri == b.plutoUri && a.soapyAntenna == b.soapyAntenna &&
            a.iqFilePath == b.iqFilePath && a.centerHz == b.centerHz &&
            a.mode == b.mode && a.bandwidthHz == b.bandwidthHz &&
@@ -7336,14 +7291,14 @@ void AppWindow::drawSourceSection() {
         // the state shown is the driver's READBACK: a control transfer the
         // radio refused must leave the box where it was, because a ticked box
         // over a radio with no power on the port is the same lie the antenna
-        // combo was fixed for.
-        if (deviceBiasTPresent_) {
-            if (ImGui::Checkbox(trId("Bias tee"), &deviceBiasT_)) {
-                withBiasTee(device_, [this](auto& d) {
-                    if (!d.setBiasT(deviceBiasT_)) { sourceError_ = d.lastError(); }
-                    deviceBiasT_ = d.biasT();
-                    return true;
-                });
+        // combo was fixed for. What a tick remembers, and for which radio, is
+        // gui/bias_tee.hpp's (biasTeeTicked).
+        if (biasTeePanel_.present) {
+            bool box = biasTeePanel_.shown;
+            if (ImGui::Checkbox(trId("Bias tee"), &box)) {
+                std::string err;
+                biasTeeTicked(biasTeePanel_, device_, deviceArgs_, box, &err);
+                if (!err.empty()) { sourceError_ = err; }
             }
             if (ImGui::IsItemHovered()) {
                 ImGui::SetTooltip(
@@ -7860,7 +7815,7 @@ void AppWindow::finishDeviceOpen(DeviceOpenResult r) {
     // the make() that just finished on the worker. One shared function with
     // the synchronous config restore, which used to keep its own copy of this
     // and had already drifted from it.
-    adoptDeviceMirrors(*r.dev, r.kind, r.requestRateHz);
+    adoptDeviceMirrors(*r.dev, r.kind, r.args, r.requestRateHz);
     if (r.recovery) {
         // THE GAINS THE USER HAD, written over the defaults just primed: a
         // reopen after a driver fault is the same radio to the user, and a
@@ -8433,7 +8388,7 @@ std::string AppWindow::nativeLabelFor(const std::string& args) const {
 }
 
 void AppWindow::adoptDeviceMirrors(cascade::source::DeviceSource& dev, const std::string& kind,
-                                   double requestRateHz) {
+                                   const std::string& args, double requestRateHz) {
     // ONE COPY OF THIS, shared by the worker-thread open and the synchronous
     // config restore. There were two before, and they had already drifted:
     // only one of them pointed the Rate combo at the device's ACTUAL readback
@@ -8489,29 +8444,14 @@ void AppWindow::adoptDeviceMirrors(cascade::source::DeviceSource& dev, const std
     }
 
     // THE BIAS TEE, AFTER THE DEVICE IS UP, and only when the radio has one
-    // this panel can reach. Every one of these drivers switches it OFF as
-    // part of open() - deliberately, so that a previous application cannot
-    // leave power on an antenna port with nothing on screen saying so - which
-    // means the saved setting has to be re-applied here or a mast-head
-    // amplifier would go dark on every launch.
-    //
-    // The READBACK is what the checkbox then shows, never the request: a
-    // control transfer the radio refused must leave the box unticked rather
-    // than claiming power that is not there.
-    //
-    // A RADIO WITHOUT ONE LEAVES THE SETTING ALONE rather than clearing it.
-    // The checkbox is not drawn for it, so nothing on screen can claim power
-    // that is not there - but a user who ticked it for the HackRF on their
-    // bench and then spent an evening on the RTL-SDR should not find it
-    // unticked when they go back, and clearing it here is what would do that.
-    deviceBiasTPresent_ = withBiasTee(&dev, [](auto&) { return true; });
-    if (deviceBiasTPresent_) {
-        withBiasTee(&dev, [this](auto& d) {
-            d.setBiasT(deviceBiasT_);
-            deviceBiasT_ = d.biasT();
-            return true;
-        });
-    }
+    // this panel can reach. The six non-RTL drivers switch it OFF as part of
+    // open(), so their saved setting is re-applied here or a mast-head
+    // amplifier would go dark on every launch; an RTL-SDR gets back only what
+    // was remembered for THAT dongle, and never an "on" on a dongle with no
+    // EEPROM. The checkbox then shows the READBACK. A radio without one
+    // leaves every remembered setting alone. The whole rule, and why, is
+    // biasTeeAfterOpen in gui/bias_tee.hpp.
+    biasTeeAfterOpen(biasTeePanel_, dev, args);
 
     // THE PER-RADIO SWITCHES, READ AND NOT WRITTEN. Unlike the bias tee these
     // carry no saved value to push (see app_window.hpp for why none of them
@@ -8569,7 +8509,7 @@ std::unique_ptr<cascade::source::DeviceSource> AppWindow::openDeviceSync(
     if (!dev->setSampleRateHz(requestRateHz)) {
         sourceError_ = dev->lastError();
     }
-    adoptDeviceMirrors(*dev, kind, requestRateHz);
+    adoptDeviceMirrors(*dev, kind, args, requestRateHz);
     return dev;
 }
 
@@ -22442,8 +22382,11 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     // by the next save. adoptDeviceMirrors is what applies it to a radio that
     // does open - every one of these drivers switches the bias tee off during
     // open(), so it has to be re-applied afterwards or a mast-head amplifier
-    // goes dark on every launch.
-    deviceBiasT_ = cfg.nativeBiasT;
+    // goes dark on every launch. The RTL-SDR's memory rides beside it: which
+    // dongle, and which way (gui/bias_tee.hpp says why it is separate).
+    biasTeePanel_.other = cfg.nativeBiasT;
+    biasTeePanel_.rtlArgs = cfg.rtlBiasTArgs;
+    biasTeePanel_.rtlOn = cfg.rtlBiasT;
     // THE PLUTO'S ADDRESS IS SEEDED HERE TOO, and it has to be before the
     // scanNative() further down: that is what builds the Pluto's row, the
     // row's args are "uri=" plus this box, and the restore below finds the
@@ -23100,7 +23043,9 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     // one that could ever fall back. See AppConfig::nativeArgs.
     cfg.soapyArgs = src.soapyArgs;
     cfg.nativeArgs = src.nativeArgs;
-    cfg.nativeBiasT = deviceBiasT_;
+    cfg.nativeBiasT = biasTeePanel_.other;
+    cfg.rtlBiasTArgs = biasTeePanel_.rtlArgs;
+    cfg.rtlBiasT = biasTeePanel_.rtlOn;
     // WHAT IS IN THE BOX, not what opened. A Pluto that is on the bench has
     // its address in nativeArgs as well; this field is the typing, and it has
     // to survive a launch in which the board never answered so it can be

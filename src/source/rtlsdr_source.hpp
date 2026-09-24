@@ -153,8 +153,29 @@ public:
     // open unless the dongle's EEPROM says it is wired permanently on,
     // because a user who does not know it is on can damage a receiver that is
     // not expecting it.
-    bool setBiasTee(bool on);
-    bool biasTee() const { return biasTee_.load(std::memory_order_relaxed); }
+    //
+    // SPELLED setBiasT/biasT, the same as every other native driver, so the
+    // Source panel's one dispatch (gui/bias_tee.hpp) reaches it with the same
+    // call. It was setBiasTee/biasTee until the RTL-SDR joined that checkbox;
+    // nothing outside this driver called the old setter, so no alias was
+    // kept.
+    //
+    // biasT() is the READBACK: it moves only when the dongle accepted the
+    // GPIO writes, so a refused switch leaves it where it was.
+    bool setBiasT(bool on);
+    bool biasT() const { return biasTee_.load(std::memory_order_relaxed); }
+
+    // WHAT THE EEPROM SAID AT OPEN, which the panel needs to decide whether a
+    // remembered "on" may be put back (gui/bias_tee.hpp).
+    //   eepromValid()         - the configuration EEPROM carried the RTL2832U
+    //                           header 0x28 0x32. False on a dongle with no
+    //                           EEPROM at all, which reads as zeroes.
+    //   biasTForcedByEeprom() - a valid EEPROM whose byte 7 bit 1 is clear:
+    //                           the maker wired the bias tee permanently on,
+    //                           and open() switched it on because of that.
+    // Both false while closed.
+    bool eepromValid() const { return eepromValid_.load(std::memory_order_relaxed); }
+    bool biasTForcedByEeprom() const { return biasTForced_.load(std::memory_order_relaxed); }
 
     // The crystal trim, in parts per million. Every RTL2832U dongle is a few
     // ppm out and the error is proportional, so it is worth tens of kHz at
@@ -259,6 +280,8 @@ private:
     std::atomic<double> sampleRateHz_{0.0};
     std::atomic<double> centerFrequencyHz_{0.0};
     std::atomic<bool> biasTee_{false};
+    std::atomic<bool> eepromValid_{false};
+    std::atomic<bool> biasTForced_{false};
     std::atomic<int> ppm_{0};
 
     // TUNES THAT DID NOT LOCK, counted rather than narrated. A PLL that will

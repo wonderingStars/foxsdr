@@ -109,6 +109,8 @@ AppConfig junkConfig() {
     c.soapyArgs = "garbage";
     c.nativeArgs = "garbage";
     c.nativeBiasT = true;  // default is false: a load that forgets it is caught
+    c.rtlBiasTArgs = "garbage";
+    c.rtlBiasT = true;
     // Junk that is NOT empty, because empty is what the loader substitutes
     // its default for - a load that forgot this field entirely would leave
     // the caller's value here and pass a test that used "".
@@ -271,6 +273,8 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     CHECK(a.soapyArgs == b.soapyArgs);
     CHECK(a.nativeArgs == b.nativeArgs);
     CHECK(a.nativeBiasT == b.nativeBiasT);
+    CHECK(a.rtlBiasTArgs == b.rtlBiasTArgs);
+    CHECK(a.rtlBiasT == b.rtlBiasT);
     CHECK(a.plutoUri == b.plutoUri);
     CHECK(a.iqFilePath == b.iqFilePath);
     CHECK(a.centerHz == b.centerHz);
@@ -479,6 +483,8 @@ int main() {
         // launch.
         in.nativeArgs = "serial=00000001";
         in.nativeBiasT = true;
+        in.rtlBiasTArgs = "serial=00000042";
+        in.rtlBiasT = true;
         in.plutoUri = "ip:pluto.local";
         in.iqFilePath = "C:/iq/capture_2msps.wav";
         in.centerHz = 433920000.0;
@@ -914,6 +920,19 @@ int main() {
         CHECK(writeText(path, "{\"schemaVersion\":1,\"sourceKind\":\"airspy\"}\n"));
         CHECK(ConfigStore::load(path, out, err));
         CHECK(!out.nativeBiasT);
+        // ...and the RTL-SDR's own memory loads as "nothing remembered" from
+        // a config that predates it - no dongle named, and off.
+        CHECK(out.rtlBiasTArgs.empty());
+        CHECK(!out.rtlBiasT);
+        out = junkConfig();
+        CHECK(writeText(path, "{\"schemaVersion\":1,\"rtlBiasTArgs\":\"serial=00000042\","
+                              "\"rtlBiasT\":true}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.rtlBiasTArgs == "serial=00000042");
+        CHECK(out.rtlBiasT);
+        // The two memories are independent: the dongle's does not set the
+        // other radios' setting.
+        CHECK(!out.nativeBiasT);
 
         // A CONFIG WRITTEN BEFORE 0.91.0 HAS NO nativeArgs AT ALL, and must
         // load with an empty one rather than whatever the caller's variable
@@ -1294,6 +1313,16 @@ int main() {
                 CHECK(!cascade::gui::configsEqual(base, other));
                 CHECK(!cascade::gui::configsEqual(other, base));
             }
+            // The RTL-SDR's bias tee memory, both halves: a tick on a dongle
+            // is a change the file has to see.
+            AppConfig rtlArgs = base;
+            rtlArgs.rtlBiasTArgs = "serial=00000042";
+            CHECK(!cascade::gui::configsEqual(base, rtlArgs));
+            CHECK(!cascade::gui::configsEqual(rtlArgs, base));
+            AppConfig rtlOn = base;
+            rtlOn.rtlBiasT = true;
+            CHECK(!cascade::gui::configsEqual(base, rtlOn));
+            CHECK(!cascade::gui::configsEqual(rtlOn, base));
         }
     }
 

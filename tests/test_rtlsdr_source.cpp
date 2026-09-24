@@ -460,7 +460,9 @@ int main() {
         // RTL2832U magic, so the force-on bit is not believed - which is the
         // guard that stops 4.5 V appearing on a stranger's coax because a
         // dongle had no EEPROM at all.
-        CHECK(!src.biasTee());
+        CHECK(!src.biasT());
+        CHECK(!src.eepromValid());
+        CHECK(!src.biasTForcedByEeprom());
     }
 
     // =======================================================================

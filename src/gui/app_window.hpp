@@ -131,6 +131,8 @@ struct GLFWwindow;
 #include "source/rx888_source.hpp"
 #include "source/sdrplay_source.hpp"
 #include "usb/usb_device.hpp"
+// The bias tee checkbox's state and rules (no ImGui in it).
+#include "gui/bias_tee.hpp"
 
 namespace cascade::gui {
 
@@ -1517,8 +1519,10 @@ private:
     // push a value to agree with it. Shared by finishDeviceOpen and
     // openDeviceSync so the async and synchronous opens cannot drift apart -
     // they had two copies of this before, and they had already drifted.
+    // `args` is what the device was opened with; the RTL-SDR's bias tee rule
+    // needs it to know WHICH dongle this is.
     void adoptDeviceMirrors(cascade::source::DeviceSource& dev, const std::string& kind,
-                            double requestRateHz);
+                            const std::string& args, double requestRateHz);
 
     // Makes the DSP chain follow activeSource().sampleRateHz() (rate-follow).
     // A pipeline refusal — fractional channel rate — keeps the old chain and
@@ -1880,15 +1884,17 @@ private:
     bool deviceAgc_ = false;
 
     // THE BIAS TEE. Present only when the OPEN device is one of the native
-    // drivers that has one and can say so (see withBiasTee in app_window.cpp
-    // for which, and for why this is not a DeviceSource method).
-    // deviceBiasT_ is the persisted setting as well as the checkbox's mirror:
-    // it is seeded from AppConfig::nativeBiasT at restore, applied to the
-    // radio by adoptDeviceMirrors after every open, and read BACK from the
-    // driver afterwards so the box can never claim power the hardware did not
-    // switch on.
-    bool deviceBiasTPresent_ = false;
-    bool deviceBiasT_ = false;
+    // drivers that has one and can say so (see withBiasTee in
+    // gui/bias_tee.hpp for which, and for why this is not a DeviceSource
+    // method). `shown` is the checkbox and is always the driver's READBACK;
+    // `other` is AppConfig::nativeBiasT (the six non-RTL radios' one setting)
+    // and rtlArgs/rtlOn are AppConfig::rtlBiasTArgs/rtlBiasT (the RTL-SDR's,
+    // tied to one dongle). All three memories are seeded at restore, applied
+    // by adoptDeviceMirrors after every open through biasTeeAfterOpen, and
+    // changed only by a tick (biasTeeTicked) or, for `other`, by the readback
+    // after a non-RTL open - exactly as deviceBiasT_ was before the RTL-SDR
+    // joined.
+    cascade::gui::BiasTeePanel biasTeePanel_;
 
     // THE SWITCHES THAT BELONG TO ONE RADIO EACH, and are NOT persisted.
     //
@@ -1899,8 +1905,8 @@ private:
     // driver deliberately puts the radio into a known state at open. So these
     // mirror the DRIVER'S READBACK for the session and nothing more - which
     // also means there is no stale saved value to reconcile against a
-    // driver's open-time policy, the exact reconciliation the RTL-SDR's bias
-    // tee is kept out of withBiasTee to avoid.
+    // driver's open-time policy, the reconciliation the RTL-SDR's bias tee
+    // needed a rule of its own for (gui/bias_tee.hpp, rtlBiasTeeAtOpen).
     //
     // "Present" is asked of the CONCRETE TYPE once per open, because these
     // are per-model even within one driver: an RSP1A has no HDR mode, an

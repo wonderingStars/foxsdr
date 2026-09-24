@@ -124,7 +124,7 @@ int rtlsdrCheckMain(int argc, char** argv) {
     std::printf("mean magnitude %.4f, peak %.4f\n", mean, peak);
     const std::string health = src.streamHealthLine();
     if (!health.empty()) { std::printf("%s\n", health.c_str()); }
-    std::printf("bias tee: %s\n", src.biasTee() ? "on" : "off");
+    std::printf("bias tee: %s\n", src.biasT() ? "on" : "off");
 
     // The three ways this can be a failure while still having "worked":
     // nothing arrived, or what arrived is a flat line (a dead ADC reads a

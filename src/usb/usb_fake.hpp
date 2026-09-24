@@ -20,6 +20,7 @@
 #include <cstdio>
 #include <chrono>
 #include <deque>
+#include <functional>
 #include <map>
 #include <string>
 #include <thread>
@@ -89,6 +90,27 @@ public:
         inAnswers[InKey{request, value, index}] = std::move(bytes);
     }
 
+    // ANSWERS THAT CHANGE FROM ONE READ TO THE NEXT, for a device that reads
+    // the same (request, value, index) repeatedly and expects a different
+    // byte each time - the RTL2832U's EEPROM is the case: its address pointer
+    // auto-increments, so eight identical single-byte reads return eight
+    // different bytes. Consumed front first; once a key's queue is empty the
+    // plain answerIn() script (or defaultInByte) answers it again.
+    std::map<InKey, std::deque<std::vector<std::uint8_t>>> inQueue;
+
+    void queueIn(std::uint8_t request, std::uint16_t value, std::uint16_t index,
+                 std::vector<std::uint8_t> bytes) {
+        inQueue[InKey{request, value, index}].push_back(std::move(bytes));
+    }
+
+    // Called with every OUT transfer after it is recorded, so a test can make
+    // the fake REMEMBER a register a driver writes and answer it back on the
+    // next read. Without it every read-modify-write reads the default byte,
+    // and a test cannot tell a driver that preserves other bits from one that
+    // clobbers them - which is exactly the question two users of one GPIO
+    // register raise.
+    std::function<void(const FakeControl&)> onControlOut;
+
     // Bulk payloads, served one per readBulk() call. An empty entry means
     // "this read times out" (readBulk returns 0), which is how a test drives
     // the reader thread's retry path without real timing.
@@ -116,11 +138,14 @@ public:
         c.value = value;
         c.index = index;
         if (data != nullptr && len > 0) { c.data.assign(data, data + len); }
-        controls.push_back(std::move(c));
+        controls.push_back(c);
         if (failControlAfter >= 0 && controlCalls > failControlAfter) {
             lastError_ = "fake: control transfer failed";
             return -1;
         }
+        // Only a transfer the device ACCEPTED reaches the register model: a
+        // refused write must not change what the next read answers.
+        if (onControlOut) { onControlOut(c); }
         return static_cast<int>(len);
     }
 
@@ -156,6 +181,27 @@ public:
             c.index = index;
             controls.push_back(std::move(c));
             return 0;
+        }
+        const auto q = inQueue.find(InKey{request, value, index});
+        if (!descriptor && q != inQueue.end() && !q->second.empty()) {
+            const std::vector<std::uint8_t> next = q->second.front();
+            q->second.pop_front();
+            for (std::size_t i = 0; i < len; ++i) {
+                data[i] = (i < next.size()) ? next[i] : defaultInByte;
+            }
+            FakeControl c;
+            c.out = false;
+            c.requestType = requestType;
+            c.request = request;
+            c.value = value;
+            c.index = index;
+            c.data.assign(data, data + len);
+            controls.push_back(std::move(c));
+            if (failControlAfter >= 0 && controlCalls > failControlAfter) {
+                lastError_ = "fake: control transfer failed";
+                return -1;
+            }
+            return static_cast<int>(len);
         }
         const auto it = inAnswers.find(InKey{request, value, index});
         std::size_t moved = len;

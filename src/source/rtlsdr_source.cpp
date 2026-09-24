@@ -545,13 +545,21 @@ bool RtlSdrSource::bringUpLocked() {
     // answers every byte as zero, and zero has that bit CLEAR - so trusting
     // the byte unconditionally switches 4.5 V onto the antenna of exactly the
     // cheap dongles least likely to survive it.
+    //
+    // Both facts are kept for the Source panel, which decides whether a
+    // remembered "on" may be put back after this open (gui/bias_tee.hpp):
+    // a dongle with no EEPROM never gets one back.
     std::uint8_t eeprom[8] = {0};
     bool forceBiasTee = false;
-    if (rtl.readEeprom(eeprom, 0, sizeof(eeprom)) && eeprom[0] == 0x28 && eeprom[1] == 0x32) {
-        forceBiasTee = (eeprom[7] & 0x02) == 0;
-    }
-    rtl.setBiasTee(forceBiasTee);
-    biasTee_.store(forceBiasTee, std::memory_order_relaxed);
+    const bool eepromValid =
+        rtl.readEeprom(eeprom, 0, sizeof(eeprom)) && eeprom[0] == 0x28 && eeprom[1] == 0x32;
+    if (eepromValid) { forceBiasTee = (eeprom[7] & 0x02) == 0; }
+    eepromValid_.store(eepromValid, std::memory_order_relaxed);
+    biasTForced_.store(forceBiasTee, std::memory_order_relaxed);
+    // THE READBACK FOLLOWS THE WRITE, as it does in setBiasT: a dongle that
+    // refused the GPIO writes has not switched anything on.
+    const bool wrote = rtl.setBiasTee(forceBiasTee);
+    biasTee_.store(wrote ? forceBiasTee : false, std::memory_order_relaxed);
 
     // A rate, a gain and a frequency, so the panel is not looking at a dead
     // device the moment it opens.
@@ -610,6 +618,11 @@ void RtlSdrSource::teardownLocked() noexcept {
     running_.store(false, std::memory_order_relaxed);
     sampleRateHz_.store(0.0, std::memory_order_relaxed);
     centerFrequencyHz_.store(0.0, std::memory_order_relaxed);
+    // A closed radio has no bias tee to report on, and a stale "on" here
+    // would be read by the next panel that asked.
+    biasTee_.store(false, std::memory_order_relaxed);
+    eepromValid_.store(false, std::memory_order_relaxed);
+    biasTForced_.store(false, std::memory_order_relaxed);
     std::lock_guard<std::mutex> lk(link_->errorMutex);
     link_->name = "RTL-SDR: (no device)";
 }
@@ -1086,7 +1099,7 @@ bool RtlSdrSource::setAntenna(const std::string& name) {
 
 // --- extras -----------------------------------------------------------------
 
-bool RtlSdrSource::setBiasTee(bool on) {
+bool RtlSdrSource::setBiasT(bool on) {
     std::unique_lock<std::timed_mutex> lk(link_->mutex, kDeviceLockWait);
     if (!lk.owns_lock() || !link_->rtl) {
         setError("the radio is busy; try again");

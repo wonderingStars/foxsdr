@@ -223,6 +223,8 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     getString(j, "soapyArgs", out.soapyArgs);
     getString(j, "nativeArgs", out.nativeArgs);
     getBool(j, "nativeBiasT", out.nativeBiasT);
+    getString(j, "rtlBiasTArgs", out.rtlBiasTArgs);
+    getBool(j, "rtlBiasT", out.rtlBiasT);
     getString(j, "plutoUri", out.plutoUri);
     getString(j, "soapyAntenna", out.soapyAntenna);
     getString(j, "iqFilePath", out.iqFilePath);
@@ -706,6 +708,8 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
     j["soapyArgs"] = cfg.soapyArgs;
     j["nativeArgs"] = cfg.nativeArgs;
     j["nativeBiasT"] = cfg.nativeBiasT;
+    j["rtlBiasTArgs"] = cfg.rtlBiasTArgs;
+    j["rtlBiasT"] = cfg.rtlBiasT;
     j["plutoUri"] = cfg.plutoUri;
     j["soapyAntenna"] = cfg.soapyAntenna;
     j["iqFilePath"] = cfg.iqFilePath;

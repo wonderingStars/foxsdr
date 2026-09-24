@@ -807,6 +807,24 @@ is believed, because a dongle with no EEPROM at all reads as zeroes and zero
 means "force it on". Switching 4.5 V onto somebody's antenna because their
 dongle had no configuration memory is not a default worth having.
 
+**Turning it on** is the same **Bias tee** checkbox the other radios have, below
+the gain sliders in the Source section, and it appears for every RTL-SDR opened
+natively. Tick it to power a mast-head LNA from an RTL-SDR Blog V3 or V4, a
+NooElec stick with a bias tee, or any other dongle whose maker wired one to the
+RTL2832U's GPIO 0 (on a dongle with nothing on that pin the box does nothing).
+The box always shows what the dongle actually did, so a switch it refused leaves
+the box where it was. FoxSDR remembers the setting against **that dongle, by its
+serial**, and puts it back the next time that dongle opens — but never on
+another dongle, never on one listed by position rather than serial, and never on
+a dongle with no EEPROM: such a dongle has no serial of its own to be recognised
+by, so its bias tee comes on only when you tick the box in that session. A
+dongle whose EEPROM forces the bias tee on opens with the box ticked, as it
+always has; untick it and FoxSDR switches it off and remembers that for that
+dongle too. The HackRF, Airspy and other radios keep their own separate setting,
+so ticking the box for one does not put power on the other. Two dongles
+programmed with the same serial (many ship as `00000001`) cannot be told apart;
+give each its own with `rtl_eeprom -s` if you use more than one.
+
 **The RTL-SDR Blog V4** is supported as a V4 rather than as a generic R828D:
 below 28.8 MHz the tuner is asked for the upconverted frequency, the dongle's
 own GPIO throws the upconverter switch, the tracking filter is bypassed on that

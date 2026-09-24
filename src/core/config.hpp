@@ -161,6 +161,19 @@ struct AppConfig {
     // setting belongs to "the radio this receiver is set up around", which is
     // what nativeArgs names.
     bool nativeBiasT = false;
+    // THE RTL-SDR's BIAS TEE, REMEMBERED AGAINST ONE DONGLE, and kept apart
+    // from nativeBiasT on purpose. rtlBiasTArgs is the native args
+    // ("serial=00000001") of the dongle the user last ticked or unticked the
+    // box on, rtlBiasT which way. After an open, an "off" is put back on that
+    // dongle, and an "on" only when it is named by SERIAL and its EEPROM is
+    // valid - a dongle with no EEPROM has no identity to be "the same dongle"
+    // by, so it is switched on only by a tick in the session. Sharing
+    // nativeBiasT would have carried a HackRF's "on" onto whatever cheap
+    // dongle was opened next. The rule and its reasons: gui/bias_tee.hpp,
+    // rtlBiasTeeAtOpen. Both default to "nothing remembered", which is what
+    // every earlier config loads as.
+    std::string rtlBiasTArgs;
+    bool rtlBiasT = false;
     // WHERE THE PLUTO IS, and it is a field of its own because it is the one
     // radio FoxSDR cannot find by looking.
     //
