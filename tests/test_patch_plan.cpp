@@ -802,6 +802,15 @@ int main() {
         g.mutableNode(b)->device = "rtlsdr|serial=00000002";
         const Plan q = compile(g, std::vector<RadioInfo>{});
         CHECK(!has(q, b, Problem::DeviceTwice));
+        // A DONGLE WITH NO SERIAL is listed natively by index and through
+        // SoapySDR with no serial at all. The two rows are one USB device,
+        // and a second open of it either fails or splits its samples between
+        // two readers - so the second radio is refused, as by serial above.
+        g.mutableNode(a)->device = "rtlsdr|index=0";
+        g.mutableNode(b)->device = "soapy|driver=rtlsdr,label=Generic RTL2832U OEM";
+        const Plan s = compile(g, std::vector<RadioInfo>{});
+        CHECK(!has(s, a, Problem::DeviceTwice));
+        CHECK(has(s, b, Problem::DeviceTwice));
     }
 
     // [M4] A DECODER THAT DOES NOT NEED SOUND DOES NOT OFFER IT: an audio

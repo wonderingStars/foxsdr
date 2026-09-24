@@ -7221,10 +7221,16 @@ void AppWindow::drawSourceSection() {
             for (std::size_t i = 0; i < deviceRateLabels_.size(); ++i) {
                 const bool sel = (static_cast<int>(i) == deviceRateIndex_);
                 if (ImGui::Selectable(deviceRateLabels_[i].c_str(), sel) && !sel) {
-                    if (!device_->setSampleRateHz(deviceRatesHz_[i])) {
-                        sourceError_ = device_->lastError();
-                    } else {
-                        deviceRateIndex_ = static_cast<int>(i);
+                    // A COERCED rate returns true and says why through
+                    // lastError() (an RX888 in VHF mode, a Pluto above its
+                    // maximum); applySourceRate puts that reason on the line,
+                    // and the combo points at the READBACK - through 0.99.34 it
+                    // pointed at the entry asked for.
+                    const cascade::gui::RateSetOutcome set =
+                        cascade::gui::applySourceRate(*device_, deviceRatesHz_[i], sourceError_);
+                    sourceError_ = set.sourceError;
+                    if (set.ok) {
+                        deviceRateIndex_ = nearestIndex(deviceRatesHz_, set.landedHz);
                         // Rate-follow (P5): rebuild the DSP chain for the
                         // ACTUAL device readback so demod/audio and the
                         // frequency axis all track the hardware, not the
@@ -8033,8 +8039,9 @@ void AppWindow::launchDeviceOpen(DeviceOpenResult r, const std::string& busyLabe
             }
         }
         // A rate refusal is not fatal (the panel shows the actual readback
-        // either way) but is surfaced.
-        if (!dev->setSampleRateHz(r.requestRateHz)) { r.error = dev->lastError(); }
+        // either way) but is surfaced - and so is a rate the driver coerced
+        // on a call that succeeded.
+        r.error = cascade::gui::applySourceRate(*dev, r.requestRateHz, r.error).sourceError;
         r.dev = std::move(dev);
         return std::move(r);
     });
@@ -8564,10 +8571,9 @@ std::unique_ptr<cascade::source::DeviceSource> AppWindow::openDeviceSync(
         return nullptr;
     }
     // A rate refusal is not fatal (the panel shows the actual readback
-    // either way) but is surfaced.
-    if (!dev->setSampleRateHz(requestRateHz)) {
-        sourceError_ = dev->lastError();
-    }
+    // either way) but is surfaced - and so is a rate the driver coerced on a
+    // call that succeeded.
+    sourceError_ = cascade::gui::applySourceRate(*dev, requestRateHz, sourceError_).sourceError;
     adoptDeviceMirrors(*dev, kind, args, requestRateHz);
     return dev;
 }
@@ -16272,7 +16278,12 @@ void AppWindow::applyPluginPreset(const cascade::core::LoadedPlugin& p,
     // the decoder will say so itself rather than the host guessing.
     if (ps.sampleRateHz > 0.0 && device_ != nullptr &&
         pipeline_.activeSource().sampleRateHz() != ps.sampleRateHz) {
-        if (device_->setSampleRateHz(ps.sampleRateHz)) {
+        const cascade::gui::RateSetOutcome set =
+            cascade::gui::applySourceRate(*device_, ps.sampleRateHz, sourceError_);
+        if (set.ok) {
+            // A rate the driver COERCED is said (the refusal stays advisory,
+            // as above).
+            sourceError_ = set.sourceError;
             // The combo follows, or it would keep showing the rate the user
             // last picked while the radio ran at another.
             deviceRateIndex_ =
@@ -20291,6 +20302,10 @@ void AppWindow::applyRetuneNow(double centerHz, bool isPluginPreset) {
     // a repeated command cannot keep the decoders permanently reset.
     cascade::source::IqSource& src = pipeline_.activeSource();
     if (src.centerFrequencyHz() == centerHz) { return; }
+    // What the rate and the source's own error line were BEFORE the tune: a
+    // tune can move the rate too (below).
+    const double rateBeforeHz = src.sampleRateHz();
+    const std::string errBefore = src.lastError();
     const bool applied = src.setCenterFrequencyHz(centerHz);
     // Out-of-band applies (a device open's carry-across) pace the next burst
     // off this moment too, so the coalescer's clock never lags an apply.
@@ -20323,6 +20338,24 @@ void AppWindow::applyRetuneNow(double centerHz, bool isPluginPreset) {
         noteTuneMismatch(centerHz, landedHz, isPluginPreset);
     } else {
         noteTuneRefused(centerHz, isPluginPreset);
+    }
+
+    // A TUNE THAT MOVED THE RATE. An RX888 tuned from HF into VHF at more than
+    // 8 MS/s narrows its rate to what the tuner's IF allows, inside
+    // setCenterFrequencyHz, and says so through lastError() on a call that
+    // returned true. Through 0.99.34 nothing here looked: the chain kept
+    // running at the old rate (a wrong span, every decoder on the wrong time
+    // base), the Rate combo kept the old entry, and the reason was unread.
+    if (applied) {
+        const cascade::gui::RetuneRateOutcome moved =
+            cascade::gui::rateAfterRetune(src, rateBeforeHz, errBefore, sourceError_);
+        if (moved.rateMoved) {
+            sourceError_ = moved.sourceError;
+            if (device_ != nullptr) {
+                deviceRateIndex_ = nearestIndex(deviceRatesHz_, moved.rateHz);
+            }
+            followInputRate();
+        }
     }
 }
 
@@ -21159,7 +21192,11 @@ void AppWindow::applyControlRequest(const cascade::net::ControlRequest& r) {
             }
         }
         if (r.sampleRateHz.has_value()) {
-            if (device_->setSampleRateHz(*r.sampleRateHz)) {
+            // The refusal's reason, or a coercion's, lands on the line.
+            const cascade::gui::RateSetOutcome set =
+                cascade::gui::applySourceRate(*device_, *r.sampleRateHz, sourceError_);
+            sourceError_ = set.sourceError;
+            if (set.ok) {
                 // THE DESKTOP'S RATE COMBO FOLLOWS, and it did not until
                 // 0.91.0. Measured on the bench: a browser set 2.4 MS/s on
                 // a native RTL-SDR, the radio ran at 2.4, the deck read
@@ -21173,8 +21210,6 @@ void AppWindow::applyControlRequest(const cascade::net::ControlRequest& r) {
                 deviceRateIndex_ = nearestIndex(
                     deviceRatesHz_, pipeline_.activeSource().sampleRateHz());
                 followInputRate();
-            } else {
-                sourceError_ = device_->lastError();
             }
         }
         if (r.gainName.has_value() && r.gainDb.has_value()) {

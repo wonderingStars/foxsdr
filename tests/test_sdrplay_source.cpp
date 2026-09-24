@@ -812,6 +812,46 @@ void testOverloadIsCountedAndAcknowledged() {
     CHECK(!src.faulted());
 }
 
+// THE ACKNOWLEDGEMENT GOES TO THE TUNER THE EVENT IS ABOUT. An RSPduo's
+// tuner can be swapped on a LIVE stream (SwapRspDuoActiveTuner), and through
+// 0.99.34 the acknowledgement was addressed with the tuner copied into the
+// Link at Init - the old one - so after a swap to Tuner 2 an overload on
+// Tuner 2 was acknowledged for Tuner 1, and the service, told nothing about
+// the tuner that was overloading, kept re-reporting it.
+void testOverloadAckFollowsALiveTunerSwap() {
+    FakeSdrPlayApi fake;
+    fake.addRspDuo("1809001ABC");
+    SdrPlaySource src;
+    CHECK(openOn(src, fake));
+    CHECK(src.antenna() == "Tuner 1");
+    CHECK(src.start());
+
+    // Before any swap the service reports, and is answered on, Tuner A.
+    fake.calls.clear();
+    fake.fireOverload(true, abi::Tuner_A);
+    CHECK((fake.calls == std::vector<std::string>{FakeSdrPlayApi::updateCall(
+                            abi::Update_Ctrl_OverloadMsgAck, 0)}));
+    CHECK(fake.lastUpdateTuner == abi::Tuner_A);
+
+    // LIVE swap to Tuner 2, then Tuner 2 overloads.
+    CHECK(src.setAntenna("Tuner 2"));
+    CHECK(src.antenna() == "Tuner 2");
+    CHECK(fake.releaseCount == 0);  // the live swap, not a release-and-reselect
+    fake.calls.clear();
+    fake.lastUpdateTuner = abi::Tuner_Neither;
+    fake.fireOverload(true, abi::Tuner_B);
+    CHECK(src.overloadEvents() == 2);
+    CHECK((fake.calls == std::vector<std::string>{FakeSdrPlayApi::updateCall(
+                            abi::Update_Ctrl_OverloadMsgAck, 0)}));
+    CHECK(fake.lastUpdateTuner == abi::Tuner_B);
+
+    // ...and the "corrected" that follows is answered on the same tuner.
+    fake.lastUpdateTuner = abi::Tuner_Neither;
+    fake.fireOverload(false, abi::Tuner_B);
+    CHECK(fake.lastUpdateTuner == abi::Tuner_B);
+    src.stop();
+}
+
 // --- 11. the switches -----------------------------------------------------
 
 void testBiasTeeAndNotchesPerModel() {
@@ -1924,6 +1964,7 @@ int main() {
     testDeviceRemovedFaultsTheSource();
     testDeviceFailureAndMasterLossAlsoFault();
     testOverloadIsCountedAndAcknowledged();
+    testOverloadAckFollowsALiveTunerSwap();
     testBiasTeeAndNotchesPerModel();
     testStopAndCloseAreBoundedAndIdempotent();
     testCloseWithoutOpenIsSafe();

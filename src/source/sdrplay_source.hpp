@@ -634,7 +634,10 @@ private:
         // arrives after this object is gone still has a valid table, a valid
         // device handle and a valid tuner, and touches nothing that has been
         // freed. Written by startStreamingLocked before Init, cleared after
-        // Uninit, and never touched while the service is calling.
+        // Uninit, and never touched while the service is calling. `tuner` is
+        // the tuner active AT INIT and only a fallback: an RSPduo's tuner can
+        // be swapped live without this being rewritten, so the acknowledgement
+        // goes to the tuner the service names in the event itself.
         const sdrplay_abi::Api* api = nullptr;
         void* dev = nullptr;
         sdrplay_abi::TunerSelectT tuner = sdrplay_abi::Tuner_Neither;

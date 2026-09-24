@@ -64,6 +64,24 @@ int main() {
         CHECK(!sameDevice("rtlsdr|serial=1", "rtlsdr|serial=2"));
         CHECK(sameDevice("rtlsdr|serial=00000001", "soapy|driver=rtlsdr, SERIAL = 00000001"));
         CHECK(!sameDevice("rtlsdr|index=0", "rtlsdr|index=1"));   // no serial: key decides
+        // A DONGLE WITH NO SERIAL, listed twice (through 0.99.34 these were
+        // "different radios"): natively by index, and through SoapySDR by
+        // the module that drives the same hardware. Neither key can prove
+        // they differ, so they are one radio - the native rows already cover
+        // every dongle of that family, so refusing the pair costs nothing.
+        CHECK(sameDevice("rtlsdr|index=0", "soapy|driver=rtlsdr,label=Generic RTL2832U"));
+        CHECK(sameDevice("soapy|driver=rtlsdr,serial=", "rtlsdr|index=0"));
+        CHECK(sameDevice("rtlsdr|serial=00000001", "soapy|driver=RTLSDR"));  // soapy side blank
+        CHECK(sameDevice("mirisdr|index=0", "soapy|driver=miri"));           // SoapyMiri's name
+        CHECK(sameDevice("rx888|index=0", "soapy|driver=sddc"));             // SoapySDDC's name
+        // ...but only within one family, and serials still decide when both
+        // sides have one.
+        CHECK(!sameDevice("rtlsdr|index=0", "soapy|driver=hackrf"));
+        CHECK(!sameDevice("rtlsdr|index=0", "soapy|driver=uhd,type=b200"));
+        CHECK(!sameDevice("rtlsdr|serial=00000001", "soapy|driver=rtlsdr,serial=00000002"));
+        // Two SoapySDR rows of one driver come from one scan, which lists
+        // each device once: they are two radios, as before.
+        CHECK(!sameDevice("soapy|driver=rtlsdr,label=a", "soapy|driver=rtlsdr,label=b"));
         CHECK(argField("a=1,serial=xyz,b=2", "SERIAL") == "xyz");
         CHECK(argField("a=1", "serial").empty());
     }

@@ -16,7 +16,9 @@
 //
 // "THE SAME DEVICE" IS DECIDED BY SERIAL WHEN BOTH KEYS CARRY ONE. The same
 // dongle can be listed twice, once by its native driver and once through
-// SoapySDR, under different keys; the serial is what they share.
+// SoapySDR, under different keys; the serial is what they share. When either
+// side has no serial, a native row and a SoapySDR row of the same family are
+// taken to be the same dongle (see sameDevice).
 //
 // OUTPUT KEYS (Node::device on an audio Sink):
 //   "" or "wav"        a WAV file in the recordings folder (the default: the
@@ -90,15 +92,60 @@ inline std::string argField(const std::string& args, const std::string& name) {
     return {};
 }
 
+// The native driver key for a SoapySDR module's driver name - "rtlsdr" for
+// SoapyRTLSDR's "rtlsdr", "mirisdr" for SoapyMiri's "miri", "rx888" for
+// SoapySDDC's "sddc" - or "" for a module no native driver shares hardware
+// with (a B200, a LimeSDR). `soapyDriver` is lower case. The Pluto is absent
+// on purpose: SoapyPlutoSDR addresses a board by URI, not by a USB identity.
+// THE ONE TABLE: gui::nativeKeyForSoapyDriver answers from it too.
+inline std::string nativeFamilyForSoapyDriver(const std::string& soapyDriver) {
+    if (soapyDriver == "rtlsdr" || soapyDriver == "hackrf" || soapyDriver == "airspy" ||
+        soapyDriver == "airspyhf" || soapyDriver == "sdrplay") {
+        return soapyDriver;
+    }
+    if (soapyDriver == "miri") { return "mirisdr"; }
+    if (soapyDriver == "sddc") { return "rx888"; }
+    return std::string();
+}
+
+namespace detail {
+
+// Whether one key is a native row and the other a SoapySDR row whose module
+// drives the same family of hardware ("rtlsdr|..." and "soapy|driver=rtlsdr").
+inline bool sameFamilyAcrossStacks(const std::string& a, const std::string& b) {
+    const std::string da = deviceDriver(a);
+    const std::string db = deviceDriver(b);
+    const bool soapyA = da == "soapy";
+    const bool soapyB = db == "soapy";
+    if (soapyA == soapyB) { return false; }
+    const std::string& native = soapyA ? db : da;
+    std::string module = argField(deviceArgs(soapyA ? a : b), "driver");
+    for (char& c : module) { c = static_cast<char>(std::tolower(static_cast<unsigned char>(c))); }
+    const std::string family = nativeFamilyForSoapyDriver(module);
+    return !family.empty() && family == native;
+}
+
+}  // namespace detail
+
 // Whether two radio keys name the same physical radio. The generator is never
 // "the same device" as anything - it is not a device. Empty keys (no radio
 // chosen yet) never clash either.
+//
+// Two serials decide. WITHOUT a serial on both sides, a native row and a
+// SoapySDR row of the same family are the SAME radio: a dongle with no serial
+// in its USB descriptor is listed natively as "rtlsdr|index=0" and by
+// SoapyRTLSDR with a blank serial, and nothing in either key can show they
+// differ. Through 0.99.34 that pair counted as two radios, and two patch
+// Radio nodes could open one dongle through two driver stacks. Treating it as
+// one costs nothing real: the native list already has a row for every dongle
+// of that family.
 inline bool sameDevice(const std::string& a, const std::string& b) {
     if (a.empty() || b.empty() || isGeneratorKey(a) || isGeneratorKey(b)) { return false; }
     if (a == b) { return true; }
     const std::string sa = argField(deviceArgs(a), "serial");
     const std::string sb = argField(deviceArgs(b), "serial");
-    return !sa.empty() && sa == sb;
+    if (!sa.empty() && !sb.empty()) { return sa == sb; }
+    return detail::sameFamilyAcrossStacks(a, b);
 }
 
 // --- where a speaker's sound goes ------------------------------------------

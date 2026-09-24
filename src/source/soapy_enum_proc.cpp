@@ -589,6 +589,35 @@ std::vector<std::string> sessionFaultedNames() {
     return out;
 }
 
+// THE SESSION'S TOO-SLOW-BESIDE-A-RADIO LIST (bug hunt 2026-09-24). Filled
+// only by a per-driver child in a scan beside an open radio that ran out its
+// WHOLE budget; read only by later such scans, so a wedged driver is waited
+// out once rather than on every Refresh while the radio stays open. Not a
+// crash, so it is not on the list above (whose panel note says "crashed"), and
+// the whole-bus scan still asks it - and a whole-bus scan that answers in time
+// clears it, because every driver answered that one.
+std::vector<std::string>& sessionSlowList() {
+    static std::vector<std::string> list;
+    return list;
+}
+
+void rememberSlowDriver(const std::string& driver) {
+    const std::string name = lowerAscii(driver);
+    std::lock_guard<std::mutex> lk(sessionMutex());
+    auto& list = sessionSlowList();
+    if (std::find(list.begin(), list.end(), name) == list.end()) { list.push_back(name); }
+}
+
+std::vector<std::string> sessionSlowNames() {
+    std::lock_guard<std::mutex> lk(sessionMutex());
+    return sessionSlowList();
+}
+
+void forgetSlowDrivers() {
+    std::lock_guard<std::mutex> lk(sessionMutex());
+    sessionSlowList().clear();
+}
+
 // The --skip= argument: only names a command line can carry unquoted and
 // unsplit, which every SoapySDR driver key is. Anything else is left off the
 // list rather than risking a mangled argument - it is then asked, which is
@@ -668,6 +697,7 @@ std::vector<FaultedDriver> sessionFaultedDrivers() {
 void clearSessionFaultedDriversForTest() {
     std::lock_guard<std::mutex> lk(sessionMutex());
     sessionList().clear();
+    sessionSlowList().clear();
 }
 
 std::string childFaultSignatureTag(const std::string& driver) {
@@ -741,8 +771,28 @@ std::string lowerAscii(std::string s) {
 // empty, `restricted` false) it asks every driver. While radios are open
 // (`restricted` true) it is the ONLY walk: options.skipDrivers are left out,
 // because their probe would open a device this process is streaming from.
+//
+// ONE BUDGET FOR THE WALK BESIDE AN OPEN RADIO (bug hunt 2026-09-24). The
+// children run one after another, and each used to get the full timeoutMs of
+// its own, so N wedged drivers cost N budgets back to back while the panel
+// said "Scanning...". Beside a radio the whole walk - the listing included -
+// is now bounded by the ordinary scan's own worst case, attempts x timeoutMs;
+// a child gets what is left of it (never more than timeoutMs), and a driver
+// whose turn comes after it is spent is named in outOfTimeDrivers, not asked.
+// A driver that ran out its WHOLE timeoutMs is remembered (sessionSlowList)
+// and not asked beside a radio again this session. The sweep after a
+// whole-bus death is unchanged: it exists to find the culprit, and cutting it
+// short could leave the culprit unnamed.
 void sweepEachDriver(const std::string& helper, const EnumOptions& options,
                      const std::string& crashDir, EnumResult& result, bool restricted) {
+    using Clock = std::chrono::steady_clock;
+    const unsigned long budgetMs =
+        options.timeoutMs * static_cast<unsigned long>(options.attempts > 0 ? options.attempts : 1);
+    const Clock::time_point deadline = Clock::now() + std::chrono::milliseconds(budgetMs);
+    // A child needs time to start and load the modules before it can answer
+    // at all; one given less than this would only be killed.
+    constexpr unsigned long kMinChildMs = 250;
+
     EnumResult listing;
     runOneChild(helper, options.timeoutMs, crashDir, listing, "--list-drivers");
     result.sweepChildren += listing.attempts;
@@ -768,6 +818,8 @@ void sweepEachDriver(const std::string& helper, const EnumOptions& options,
     // A driver that already killed a child of its own this session is not
     // asked again, beside an open radio or after a whole-bus death alike.
     const std::vector<std::string> faultedBefore = sessionFaultedNames();
+    const std::vector<std::string> slowBefore =
+        restricted ? sessionSlowNames() : std::vector<std::string>();
     std::vector<std::string> asked;
     for (const std::string& d : listing.drivers) {
         const std::string low = lowerAscii(d);
@@ -780,6 +832,8 @@ void sweepEachDriver(const std::string& helper, const EnumOptions& options,
                           low) == result.sessionSkippedDrivers.end()) {
                 result.sessionSkippedDrivers.push_back(low);
             }
+        } else if (std::find(slowBefore.begin(), slowBefore.end(), low) != slowBefore.end()) {
+            result.sessionSlowDrivers.push_back(low);
         } else {
             asked.push_back(d);
         }
@@ -789,14 +843,45 @@ void sweepEachDriver(const std::string& helper, const EnumOptions& options,
             "soapy: not asking %s - it crashed a device scan earlier in this session",
             joinNames(result.sessionSkippedDrivers, 8).c_str());
     }
+    if (!result.sessionSlowDrivers.empty()) {
+        core::diagWarnf(
+            "soapy: not asking %s beside an open radio - it did not answer within %lu ms "
+            "earlier in this session",
+            joinNames(result.sessionSlowDrivers, 8).c_str(), options.timeoutMs);
+    }
 
     result.sweptPerDriver = true;
-    result.sweptDrivers = asked;
     std::vector<SoapyDeviceInfo> found;
-    for (const std::string& driver : asked) {
+    for (std::size_t i = 0; i < asked.size(); ++i) {
+        const std::string& driver = asked[i];
+        unsigned long childMs = options.timeoutMs;
+        if (restricted) {
+            const auto left =
+                std::chrono::duration_cast<std::chrono::milliseconds>(deadline - Clock::now())
+                    .count();
+            if (left < static_cast<long long>(kMinChildMs)) {
+                for (std::size_t j = i; j < asked.size(); ++j) {
+                    result.outOfTimeDrivers.push_back(asked[j]);
+                }
+                core::diagWarnf(
+                    "soapy: the scan beside an open radio spent its %lu ms before asking %s - "
+                    "not asked this scan",
+                    budgetMs, joinNames(result.outOfTimeDrivers, 8).c_str());
+                break;
+            }
+            if (static_cast<unsigned long long>(left) < childMs) {
+                childMs = static_cast<unsigned long>(left);
+            }
+        }
+        result.sweptDrivers.push_back(driver);
         EnumResult one;
-        runOneChild(helper, options.timeoutMs, crashDir, one, "--driver=" + driver);
+        runOneChild(helper, childMs, crashDir, one, "--driver=" + driver);
         result.sweepChildren += one.attempts;
+        if (restricted && one.outcome == EnumOutcome::ChildTimedOut &&
+            childMs == options.timeoutMs) {
+            // Its WHOLE budget, and no answer: waited out once is enough.
+            rememberSlowDriver(driver);
+        }
         if (one.outcome == EnumOutcome::Ok) {
             for (SoapyDeviceInfo& d : one.devices) { found.push_back(std::move(d)); }
             continue;
@@ -822,10 +907,17 @@ void sweepEachDriver(const std::string& helper, const EnumOptions& options,
             rememberFaultedDriver(driver, one.exitCode);
         }
         result.faultedDrivers.push_back(driver);
-        core::diagWarnf(
-            "soapy: the '%s' driver faulted during discovery (exit 0x%08lX) - it is "
-            "skipped for this scan; every other driver was still asked",
-            driver.c_str(), one.exitCode);
+        if (one.outcome == EnumOutcome::ChildTimedOut) {
+            core::diagWarnf(
+                "soapy: the '%s' driver did not answer within %lu ms and was stopped - it is "
+                "skipped for this scan",
+                driver.c_str(), childMs);
+        } else {
+            core::diagWarnf(
+                "soapy: the '%s' driver faulted during discovery (exit 0x%08lX) - it is "
+                "skipped for this scan; every other driver was still asked",
+                driver.c_str(), one.exitCode);
+        }
     }
 
     result.devices = std::move(found);
@@ -833,7 +925,8 @@ void sweepEachDriver(const std::string& helper, const EnumOptions& options,
         // Ok unless every driver asked died: the list is the honest answer for
         // the drivers that could be asked. Leaving every driver out (only the
         // open radios' families are installed) is Ok and empty, not a death.
-        const bool allDied = !asked.empty() && result.faultedDrivers.size() == asked.size();
+        const bool allDied = !result.sweptDrivers.empty() &&
+                             result.faultedDrivers.size() == result.sweptDrivers.size();
         result.outcome = allDied ? EnumOutcome::ChildDied : EnumOutcome::Ok;
         if (!allDied) { result.exitCode = 0; }
         std::string left;
@@ -841,7 +934,8 @@ void sweepEachDriver(const std::string& helper, const EnumOptions& options,
         core::diagLogf(
             "soapy: scanned beside an open radio - %d driver(s) asked, %d left out (%s: their "
             "probe would reset the open radio), %d faulted, %d device(s) listed",
-            static_cast<int>(asked.size()), static_cast<int>(result.skippedDrivers.size()),
+            static_cast<int>(result.sweptDrivers.size()),
+            static_cast<int>(result.skippedDrivers.size()),
             left.empty() ? "none" : left.c_str(), static_cast<int>(result.faultedDrivers.size()),
             static_cast<int>(result.devices.size()));
         return;
@@ -850,13 +944,13 @@ void sweepEachDriver(const std::string& helper, const EnumOptions& options,
     // drivers that worked, and the ones that did not are named in the log and
     // in faultedDrivers. Only a sweep that produced nothing at all stays a
     // death, so the caller's "no devices" message is still reached.
-    if (!result.devices.empty() || result.faultedDrivers.size() < asked.size()) {
+    if (!result.devices.empty() || result.faultedDrivers.size() < result.sweptDrivers.size()) {
         result.outcome = EnumOutcome::Ok;
         result.exitCode = 0;
         core::diagWarnf(
             "soapy: the whole-bus scan died, so each driver was asked separately - "
             "%d driver(s) asked, %d faulted, %d device(s) listed",
-            static_cast<int>(asked.size()),
+            static_cast<int>(result.sweptDrivers.size()),
             static_cast<int>(result.faultedDrivers.size()),
             static_cast<int>(result.devices.size()));
     }
@@ -964,6 +1058,10 @@ EnumResult enumerateIsolated(const EnumOptions& options) {
                     result.exitCode, i + 1, maxAttempts, running.c_str());
             }
         }
+        // THE WHOLE BUS ANSWERED IN TIME, every driver on it included (the
+        // too-slow-beside-a-radio list is not handed to --skip), so none of
+        // them is too slow any more.
+        if (result.outcome == EnumOutcome::Ok) { forgetSlowDrivers(); }
         // EVERY ATTEMPT DIED. One bad driver must not hide the rest.
         if (result.outcome == EnumOutcome::ChildDied && options.perDriverSweep) {
             sweepEachDriver(helper, options, childCrashDir, result, false);

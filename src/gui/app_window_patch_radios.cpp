@@ -38,6 +38,7 @@
 #include "core/mp3_writer.hpp"
 #include "core/patch_audio.hpp"
 #include "core/patch_devices.hpp"
+#include "gui/rate_follow_status.hpp"
 #include "gui/scope_face.hpp"
 #include "gui/theme.hpp"
 #include "source/siggen_source.hpp"
@@ -441,10 +442,16 @@ void AppWindow::patchReconcile() {
             }
             // A rate or a centre the radio refuses is not fatal: it keeps its
             // own, the face shows what it is actually running at, and the
-            // reason is kept.
-            if (!dev->setSampleRateHz(rate)) {
+            // reason is kept - as is the reason for a rate the driver COERCED
+            // on a call that succeeded (an RX888 in VHF mode, a Pluto above
+            // its maximum), which through 0.99.34 was never read.
+            const cascade::gui::RateSetOutcome set =
+                cascade::gui::applySourceRate(*dev, rate, std::string());
+            if (!set.ok) {
                 r.error = "the radio refused " + std::to_string(rate / 1e6).substr(0, 5) +
                           " MS/s and runs at its own rate";
+            } else if (!set.sourceError.empty()) {
+                r.error = set.sourceError;
             }
             if (centre > 0.0) { dev->setCenterFrequencyHz(centre); }
             // A patch radio has no gain slider of its own yet, so the radio's
