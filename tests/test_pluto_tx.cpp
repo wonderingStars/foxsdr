@@ -36,6 +36,7 @@
 #include <thread>
 #include <vector>
 
+#include "core/diag_log.hpp"
 #include "iiod_fake_server.hpp"
 #include "source/pluto_tx.hpp"
 #include "test_check.hpp"
@@ -399,6 +400,19 @@ int main() {
 
         tx.stop();
         CHECK(!tx.running());
+
+        // THE START LINE says the rate and the power and NEVER the frequency
+        // (0.99.33: it used to print "tx: started - 433.000000 MHz, ...").
+        int started = 0;
+        for (const std::string& l : cascade::core::DiagLog::instance().ringSnapshot()) {
+            if (l.find("tx: started") == std::string::npos) { continue; }
+            ++started;
+            std::printf("start line: %s\n", l.c_str());
+            CHECK(l.find("MHz") == std::string::npos);
+            CHECK(l.find("S/s") != std::string::npos);
+            CHECK(l.find("power -20.00 dB") != std::string::npos);
+        }
+        CHECK(started >= 1);
     }
 
     // =====================================================================

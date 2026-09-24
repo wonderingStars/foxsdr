@@ -1077,6 +1077,10 @@ int main() {
         for (const std::string& line : cascade::core::DiagLog::instance().ringSnapshot()) {
             if (line.find("did not lock at") == std::string::npos) { continue; }
             ++warnings;
+            // WHERE it failed is the frequency the user tuned to, and no
+            // report may carry it (0.99.33: this line said "at 100.0000 MHz").
+            CHECK(line.find("100.0000") == std::string::npos);
+            CHECK(line.find("100000000") == std::string::npos);
             if (line.find("28.8000 MHz reference") != std::string::npos &&
                 line.find("RTL-SDR Blog V4") != std::string::npos) {
                 namedTheReference = true;

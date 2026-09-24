@@ -61,6 +61,25 @@ constexpr double kPatchRatesHz[] = {1.0e6,  1.024e6, 2.0e6, 2.048e6, 2.4e6,
 
 double radioRate(const pc::Node& n) { return n.rateHz > 0.0 ? n.rateHz : kPatchDefaultRateHz; }
 
+// WHAT THE PATCH LOGS. Nodes are named by the user, and a radio's label ends
+// in its serial, so a log line names a node by its NUMBER and a radio by its
+// model - and never says what it is tuned to. Every uploaded line is also
+// scrubbed (core::scrubUploadLog); this keeps the local log to the same rule.
+std::string modelOnly(const std::string& label) {
+    const std::size_t at = label.find(" (serial ");
+    return at == std::string::npos ? label : label.substr(0, at);
+}
+
+// A speaker's destination by KIND: the WAV/MP3 file is named after the node,
+// which the user named.
+const char* destKind(const pc::AudioDest* dest) {
+    if (dest == nullptr) { return "nothing"; }
+    const std::string d = dest->describe();
+    if (d.rfind("WAV", 0) == 0) { return "a WAV file"; }
+    if (d.rfind("MP3", 0) == 0) { return "an MP3 file"; }
+    return "an output device";
+}
+
 std::string openedAs(const pc::Node& n) {
     char buf[48];
     std::snprintf(buf, sizeof(buf), "@%.17g", radioRate(n));
@@ -261,8 +280,8 @@ void AppWindow::patchReconcile() {
         if (!r.src) {
             patchRadioError_[id] = r.error.empty() ? "the device would not open" : r.error;
             patchRadioFailedAs_[id] = as;
-            cascade::core::diagWarnf("patch: radio '%s' would not open: %s", n->name.c_str(),
-                                     patchRadioError_[id].c_str());
+            cascade::core::diagWarnf("patch: radio node %u would not open: %s",
+                                     static_cast<unsigned>(id), patchRadioError_[id].c_str());
             continue;
         }
         auto radio = std::make_unique<pc::PatchRadio>(id, std::move(r.src), r.label);
@@ -270,15 +289,15 @@ void AppWindow::patchReconcile() {
         if (!radio->start(err)) {
             patchRadioError_[id] = err;
             patchRadioFailedAs_[id] = as;
-            cascade::core::diagWarnf("patch: radio '%s' would not start: %s", n->name.c_str(),
-                                     err.c_str());
+            cascade::core::diagWarnf("patch: radio node %u would not start: %s",
+                                     static_cast<unsigned>(id), err.c_str());
             continue;
         }
         if (!r.error.empty()) { patchRadioError_[id] = r.error; } else { patchRadioError_.erase(id); }
         patchRadioFailedAs_.erase(id);
-        cascade::core::diagLogf("patch: radio '%s' running %s at %.0f S/s, %.6f MHz",
-                                n->name.c_str(), r.label.c_str(), radio->rateHz(),
-                                radio->centreHz() / 1e6);
+        cascade::core::diagLogf("patch: radio node %u running %s at %.0f S/s",
+                                static_cast<unsigned>(id), modelOnly(r.label).c_str(),
+                                radio->rateHz());
         patchRadioOpenedAs_[id] = as;
         patchRadios_[id] = std::move(radio);
         patchRadioSig_.erase(id);
@@ -508,8 +527,8 @@ void AppWindow::patchPublishSets() {
         } else {
             patchDestError_[sp.sink] = err;
         }
-        cascade::core::diagLogf("patch: speaker '%s' -> %s%s%s", n->name.c_str(),
-                                dest ? dest->describe().c_str() : "nothing",
+        cascade::core::diagLogf("patch: speaker node %u -> %s%s%s",
+                                static_cast<unsigned>(sp.sink), destKind(dest.get()),
                                 err.empty() ? "" : " - ", err.c_str());
     }
     // Speakers that stopped playing lose their output. The file is finalised
@@ -537,13 +556,17 @@ void AppWindow::patchPublishSets() {
         for (const auto& d : set->decoders) {
             patchDecoderFaces_.erase(d->node);
             patchFirstLineLogged_.erase(d->node);
-            cascade::core::diagLogf("patch: decoder '%s' started on radio %u at %.0f Hz",
-                                    d->name.c_str(), static_cast<unsigned>(id), d->rateHz);
+            const pc::Node* dn = patchGraph_.find(d->node);
+            cascade::core::diagLogf("patch: decoder node %u (%s) started on radio node %u at "
+                                    "%.0f S/s",
+                                    static_cast<unsigned>(d->node),
+                                    dn != nullptr ? dn->plugin.c_str() : "?",
+                                    static_cast<unsigned>(id), d->rateHz);
         }
         for (const pc::NodeId r : set->refused) {
             const pc::Node* n = patchGraph_.find(r);
-            cascade::core::diagLogf("patch: decoder '%s' (%s) refused to start",
-                                    n != nullptr ? n->name.c_str() : "?",
+            cascade::core::diagLogf("patch: decoder node %u (%s) refused to start",
+                                    static_cast<unsigned>(r),
                                     n != nullptr ? n->plugin.c_str() : "?");
         }
         radio->runner().publish(std::move(set));
@@ -738,7 +761,8 @@ void AppWindow::drawPatchRadioSwitch(pc::Node& n) {
     if (ImGui::SmallButton(n.on ? trId("ON###radioOn") : trId("OFF###radioOn"))) {
         n.on = !n.on;
         patchUi_.dirty = true;
-        cascade::core::diagLogf("patch: radio '%s' switched %s", n.name.c_str(), n.on ? "on" : "off");
+        cascade::core::diagLogf("patch: radio node %u switched %s", static_cast<unsigned>(n.id),
+                                n.on ? "on" : "off");
     }
     ImGui::PopStyleColor(2);
     if (ImGui::IsItemHovered()) {

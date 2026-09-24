@@ -61,7 +61,7 @@ Internal project/binary name: `cascade`.
 
 ## Where it is now
 
-The current release is **0.99.32** (September 2026), in open beta and free for
+The current release is **0.99.33** (September 2026), in open beta and free for
 noncommercial use, with its decoders and instruments delivered as plugins from
 a catalogue. These are screenshots of an earlier shipping build.
 
@@ -1759,6 +1759,11 @@ holds the request, the code and that document to each other in both directions.
   are limited to twenty lines a second, serial numbers are stripped and the
   digits of any line that mentions a frequency are masked before a line is
   kept, and a developer running from a terminal keeps their stderr untouched.
+  Since 0.99.33 every line - FoxSDR's own as well - is scrubbed again as a
+  report or a diagnostics bundle is put together: serials, USB device
+  instance ids, account names in paths, quoted names and any unlabelled
+  number on a line about a frequency are masked, and libusb's listing of the
+  machine's USB devices is left out (PRIVACY.md has the exact rule).
   A crash report also now says how long the session had been running
   (`uptime-sec`) and whether the thread that faulted was one of FoxSDR's own
   or one a driver created (`fault-thread-own`), and the uploaded copy carries

@@ -281,6 +281,20 @@ the panel:
   `<stripped>` and masks every digit on a line that mentions a frequency,
   tuning or hertz — SoapyRTLSDR's `Setting center freq: N` is exactly the
   thing PRIVACY.md promises a report never carries.
+- **Every line is scrubbed again on the way out (0.99.33).** Until then only
+  driver lines were scrubbed, and FoxSDR's own `source: asked for 433.917000
+  MHz ...`, `patch: radio 'Loft Airband' running ... MHz` and `tx: keyed -
+  ... at ... MHz` went into uploaded reports verbatim. Now
+  `core::scrubUploadLog` runs at the one point each upload is assembled
+  (crash_upload.cpp's payload, diag_report.cpp's bundle) on EVERY line:
+  serials (the word, `SN:`/`S/N:`, `AIRSPY_SN:`, SoapySDR's ` :: ` label,
+  a USB instance id's last segment) become `<stripped>`, a path's account
+  name `<user>`, single-quoted names `'<name>'`, and on a line that mentions
+  a frequency every number becomes `#` unless a unit, a word or its shape
+  says otherwise (S/s, ms, dB, `firmware 2.1`, `(-5)`, `0x...`, `R820T`).
+  libusb info/debug lines that list the machine's USB devices are left out,
+  one line counting them. diag_log.hpp has the rule in full and
+  tests/test_upload_scrub.cpp holds each part against every upload path.
 
 And the report itself carries two more facts, in a `--- process ---` block
 after the stack (before the stacks, in a freeze report): `uptime-sec`, the

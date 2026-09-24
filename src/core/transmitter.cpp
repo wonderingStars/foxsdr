@@ -437,8 +437,10 @@ bool Transmitter::keyDownLocked() {
 
     transmitting_.store(true, std::memory_order_relaxed);
     startThread();
-    diagLogf("tx: keyed - %s at %.6f MHz, %.0f S/s", dsp::txModeName(modulator_.mode()),
-             sink_->centerFrequencyHz() / 1e6, sink_->sampleRateHz());
+    // The mode and the rate, never the frequency: what somebody transmits on
+    // is as private as what they listen to (PRIVACY.md).
+    diagLogf("tx: keyed - %s, %.0f S/s", dsp::txModeName(modulator_.mode()),
+             sink_->sampleRateHz());
     return true;
 }
 

@@ -748,8 +748,8 @@ bool PlutoTx::start() {
     clearError();
     const bool ok = startWritingLocked();
     if (ok) {
-        core::diagLogf("tx: started - %.6f MHz, %.0f S/s, power %.2f dB",
-                       centerFrequencyHz_.load(std::memory_order_relaxed) / 1e6,
+        // Never the frequency (see Transmitter::key's log line).
+        core::diagLogf("tx: started - %.0f S/s, power %.2f dB",
                        sampleRateHz_.load(std::memory_order_relaxed),
                        gainDb_.load(std::memory_order_relaxed));
     }

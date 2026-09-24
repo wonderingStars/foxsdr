@@ -5,6 +5,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/diag_report.hpp"
 
+#include "core/diag_log.hpp"
+
 #include <atomic>
 #include <cstdio>
 #include <cstring>
@@ -553,15 +555,20 @@ std::string buildDiagnosticsBundle(const DiagBundleInput& in) {
         out += value.empty() ? std::string("(none)") : value;
         out += "\n";
     };
-    kv("log-path", in.logPath);
-    kv("crash-dir", in.crashDir);
+    // Paths under the user's profile: never with the account name in them
+    // (core::scrubUploadPath). The bundle is made to be pasted into a public
+    // bug report, and one was, with "C:\Users\<their name>\..." in it.
+    kv("log-path", scrubUploadPath(in.logPath));
+    kv("crash-dir", scrubUploadPath(in.crashDir));
     out += in.lastRunUnclean ? "last-run-unclean: yes\n" : "last-run-unclean: no\n";
     out += "launches: " + std::to_string(in.launches) + "\n";
     out += "crashes: " + std::to_string(in.crashes) + "\n";
     out += "log-lines-total: " + std::to_string(in.logLinesTotal) + "\n";
 
     out += "\n--- log ---\n";
-    for (const std::string& line : in.logLines) {
+    // Scrubbed exactly as an uploaded report's log is (core::scrubUploadLog):
+    // a bundle is made to be pasted into an email or a public issue.
+    for (const std::string& line : scrubUploadLog(in.logLines)) {
         out += line;
         out += "\n";
     }

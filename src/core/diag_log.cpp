@@ -4,12 +4,14 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/diag_log.hpp"
 
+#include <cctype>
 #include <cstdarg>
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <chrono>
 #include <filesystem>
+#include <initializer_list>
 #include <system_error>
 #include <thread>
 
@@ -364,16 +366,38 @@ bool isTokenChar(char c) {
            c == '-' || c == '_';
 }
 
-}  // namespace
+bool isDigitChar(char c) { return c >= '0' && c <= '9'; }
+bool isAlphaChar(char c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'); }
+bool isAlnumChar(char c) { return isDigitChar(c) || isAlphaChar(c); }
 
-std::string scrubVendorLine(const std::string& line) {
-    static constexpr char kStripped[] = "<stripped>";
-    std::string out = line;
+constexpr char kStripped[] = "<stripped>";
+constexpr std::size_t kStrippedLen = sizeof(kStripped) - 1;
 
-    // Serial numbers: "serial=EDR04ZDB2", "Serial: 00000001", "serial number
-    // 1234". The value after the word is replaced; the word stays so a reader
-    // still knows the driver named one. The lower-case shadow is rebuilt after
-    // every replacement because the replacement changes the offsets.
+// Where a serial VALUE ends: token characters, and a ':' only when more of
+// them follow it. The native Airspy names itself "AIRSPY_SN:26A464DC28593E93"
+// - one value - and a rule that stopped at the colon stripped the prefix and
+// kept the serial (found in a field report, 0.99.33).
+std::size_t serialValueEnd(const std::string& s, std::size_t p) {
+    std::size_t e = p;
+    while (e < s.size()) {
+        if (isTokenChar(s[e])) {
+            ++e;
+        } else if (s[e] == ':' && e > p && e + 1 < s.size() && isTokenChar(s[e + 1])) {
+            ++e;
+        } else {
+            break;
+        }
+    }
+    return e;
+}
+
+// Serial numbers, wherever a line names one. The value is replaced by
+// <stripped>; the word stays, so a reader still knows a serial was there.
+// The lower-case shadow is rebuilt after every replacement because the
+// replacement changes the offsets.
+void stripSerials(std::string& out) {
+    // 1. After the word: "serial=EDR04ZDB2", "Serial: 00000001", "serial
+    //    number 1234", "serial_number=...", "(serial AIRSPY_SN:26A4...)".
     std::size_t from = 0;
     for (;;) {
         const std::string low = lowerAscii(out);
@@ -382,30 +406,475 @@ std::string scrubVendorLine(const std::string& line) {
         std::size_t p = at + 6;
         auto skipSep = [&]() {
             while (p < out.size() && (out[p] == ' ' || out[p] == ':' || out[p] == '=' ||
-                                      out[p] == '#' || out[p] == '\t')) {
+                                      out[p] == '#' || out[p] == '\t' || out[p] == '"' ||
+                                      out[p] == '\'')) {
                 ++p;
             }
         };
-        skipSep();
-        // "serial number 1234" / "serial no 1234": the word between is not the
-        // value.
-        if (low.compare(p, 6, "number") == 0) {
-            p += 6;
-            skipSep();
-        } else if (low.compare(p, 2, "no") == 0 &&
-                   (p + 2 >= low.size() || !isTokenChar(low[p + 2]))) {
-            p += 2;
-            skipSep();
+        // The rest of a key the word starts: "serial_number=", "serialNumber:",
+        // udev's "ID_SERIAL_SHORT=" - none of that is the value.
+        for (;;) {
+            if (p < out.size() && isAlphaChar(out[p])) {
+                ++p;
+            } else if (p + 1 < out.size() && (out[p] == '_' || out[p] == '-') &&
+                       isAlphaChar(out[p + 1])) {
+                p += 2;
+            } else {
+                break;
+            }
         }
-        std::size_t e = p;
-        while (e < out.size() && isTokenChar(out[e])) { ++e; }
+        // "serial number 1234", "serial no 1234": the word between, after a
+        // space, is not the value either.
+        std::size_t q = p;
+        while (q < low.size() && low[q] == ' ') { ++q; }
+        for (const char* w : {"number", "num", "no"}) {
+            const std::size_t wl = std::strlen(w);
+            if (low.compare(q, wl, w) == 0 && (q + wl >= low.size() || !isTokenChar(low[q + wl]))) {
+                p = q + wl;
+                break;
+            }
+        }
+        skipSep();
+        const std::size_t e = serialValueEnd(out, p);
         if (e > p) {
             out.replace(p, e - p, kStripped);
-            from = p + (sizeof(kStripped) - 1);
+            from = p + kStrippedLen;
+        } else {
+            from = (p > at + 6) ? p : at + 6;
+        }
+    }
+
+    // 2. A keyed serial with no word: "SN: 1234", "sn=1234", "S/N: 1234",
+    //    and the Airspy's own "AIRSPY_SN:26A4..." when it appears bare. The key
+    //    must start a word ('_' counts as a joiner, so AIRSPY_SN qualifies and
+    //    "isn't" does not) and be followed by ':' or '='.
+    from = 0;
+    for (;;) {
+        const std::string low = lowerAscii(out);
+        std::size_t at = std::string::npos;
+        std::size_t keyLen = 0;
+        for (const char* k : {"s/n", "sn"}) {
+            const std::size_t a = low.find(k, from);
+            if (a < at) {
+                at = a;
+                keyLen = std::strlen(k);
+            }
+        }
+        if (at == std::string::npos) { break; }
+        from = at + keyLen;
+        if (at > 0 && isAlnumChar(low[at - 1])) { continue; }
+        std::size_t p = at + keyLen;
+        while (p < out.size() && out[p] == ' ') { ++p; }
+        if (p >= out.size() || (out[p] != ':' && out[p] != '=')) { continue; }
+        ++p;
+        while (p < out.size() && (out[p] == ' ' || out[p] == '"' || out[p] == '\'')) { ++p; }
+        const std::size_t e = serialValueEnd(out, p);
+        if (e > p) {
+            out.replace(p, e - p, kStripped);
+            from = p + kStrippedLen;
+        }
+    }
+}
+
+bool endsSegment(char c) {
+    return c == '\\' || c == '/' || c == '#' || c == '\'' || c == '"' || c == ' ' || c == '\t' ||
+           c == ')' || c == ']' || c == ',' || c == ';' || c == ':' || c == '{';
+}
+
+// A Windows device instance id: "USB\VID_0DB0&PID_0076\7E59240920A2", and
+// the interface path form "\\?\usb#vid_0bda&pid_2838#00000001#{guid}". The
+// segment after the hardware id is the device's serial number, or an id the
+// bus derived from where it is plugged in; either way it names one physical
+// device and becomes <stripped>. The hardware id (which kind of device) stays.
+void maskUsbInstanceIds(std::string& s) {
+    std::size_t from = 0;
+    for (;;) {
+        const std::string low = lowerAscii(s);
+        const std::size_t v = low.find("vid_", from);
+        if (v == std::string::npos) { break; }
+        from = v + 4;
+        std::size_t e = v;
+        while (e < s.size() && !endsSegment(s[e])) { ++e; }
+        const std::size_t pid = low.find("&pid_", v);
+        if (pid == std::string::npos || pid >= e) { continue; }
+        if (e >= s.size() || (s[e] != '\\' && s[e] != '#')) { continue; }
+        const std::size_t p = e + 1;
+        std::size_t q = p;
+        while (q < s.size() && !endsSegment(s[q])) { ++q; }
+        if (q > p) {
+            s.replace(p, q - p, kStripped);
+            from = p + kStrippedLen;
+        }
+    }
+}
+
+// SoapySDR's device label: "<product> :: <serial>" (rtlsdrSupport builds it
+// from the product and serial strings with exactly that separator). Whatever
+// follows " :: " up to the next separator becomes <stripped>.
+void maskSoapyLabelSerials(std::string& s) {
+    std::size_t from = 0;
+    for (;;) {
+        const std::size_t at = s.find(" :: ", from);
+        if (at == std::string::npos) { break; }
+        const std::size_t p = at + 4;
+        std::size_t e = p;
+        while (e < s.size() && !endsSegment(s[e])) { ++e; }
+        if (e > p) {
+            s.replace(p, e - p, kStripped);
+            from = p + kStrippedLen;
         } else {
             from = p;
         }
     }
+}
+
+// A libusb info/debug line that names a device instance id is libusb LISTING
+// THE MACHINE'S USB DEVICES - "no DeviceInterfaceGUID registered for
+// 'USB\VID_046D&PID_C336...'", "The following device has no driver: ...". It
+// inventories the keyboard, the mouse and everything else plugged in, none of
+// which a radio report needs, so such lines are left out of uploads entirely.
+// An error or a warning naming a device is kept, with its instance id masked.
+bool isUsbInventoryLine(const std::string& line) {
+    const std::string low = lowerAscii(line);
+    const bool listing = low.find("libusb: info") != std::string::npos ||
+                         low.find("libusb: debug") != std::string::npos;
+    if (!listing) { return false; }
+    const std::size_t v = low.find("vid_");
+    return v != std::string::npos && low.find("&pid_", v) != std::string::npos;
+}
+
+// The account name in a path: C:\Users\<name>\..., /home/<name>/...,
+// /Users/<name>/... The segment after the key is replaced by <user> up to the
+// next separator or quote (a Windows account name can contain spaces, so a
+// space does not end it).
+void maskUserDirs(std::string& s) {
+    static constexpr char kUser[] = "<user>";
+    std::size_t from = 0;
+    for (;;) {
+        const std::string low = lowerAscii(s);
+        std::size_t at = std::string::npos;
+        std::size_t keyLen = 0;
+        for (const char* k : {"\\users\\", "/users/", "/home/"}) {
+            const std::size_t a = low.find(k, from);
+            if (a < at) {
+                at = a;
+                keyLen = std::strlen(k);
+            }
+        }
+        if (at == std::string::npos) { break; }
+        const std::size_t p = at + keyLen;
+        std::size_t e = p;
+        while (e < s.size() && s[e] != '\\' && s[e] != '/' && s[e] != '\'' && s[e] != '"' &&
+               s[e] != ')' && s[e] != ']' && s[e] != ',' && s[e] != ';') {
+            ++e;
+        }
+        if (e > p) { s.replace(p, e - p, kUser); }
+        from = p + (sizeof(kUser) - 1);
+    }
+}
+
+// Anything in single quotes is a NAME - a patch node's, a speaker's, a
+// preset's - and names are typed by the user. The text between the quotes
+// becomes <name>. An apostrophe inside a word ("the tuner's PLL") is not a
+// quote: an opening quote must not follow a letter or digit, and a closing
+// one must not be followed by one. A quote the line was cut off inside masks
+// the rest of the line, because the name is whatever came after it.
+void maskQuotedNames(std::string& s) {
+    static const std::string kName = "<name>";
+    std::size_t i = 0;
+    while (i < s.size()) {
+        if (s[i] != '\'' || (i > 0 && isAlnumChar(s[i - 1]))) {
+            ++i;
+            continue;
+        }
+        std::size_t close = std::string::npos;
+        for (std::size_t j = i + 1; j < s.size(); ++j) {
+            if (s[j] == '\'' && (j + 1 >= s.size() || !isAlnumChar(s[j + 1]))) {
+                close = j;
+                break;
+            }
+        }
+        if (close == std::string::npos) {
+            if (i + 1 < s.size()) { s.replace(i + 1, std::string::npos, kName); }
+            break;
+        }
+        if (close == i + 1) {
+            i = close + 1;
+            continue;
+        }
+        // A quoted USB hardware id, its instance segment already stripped,
+        // is which KIND of device a driver could not reach - not a name.
+        const std::string inner = lowerAscii(s.substr(i + 1, close - (i + 1)));
+        if (inner.rfind("usb\\vid_", 0) == 0 || inner.rfind("\\\\?\\usb#vid_", 0) == 0) {
+            i = close + 1;
+            continue;
+        }
+        s.replace(i + 1, close - (i + 1), kName);
+        i = i + 1 + kName.size() + 1;
+    }
+}
+
+// Words that make a line one whose unlabelled numbers might be a frequency.
+bool mentionsFrequency(const std::string& low) {
+    for (const char* k : {"hz", "freq", "tune", "tuning", "centre", "center", "vfo", "asked for",
+                          "answered", "range", "transmit", "keyed", "preset", "offset",
+                          "carrier"}) {
+        if (low.find(k) != std::string::npos) { return true; }
+    }
+    return false;
+}
+
+bool oneOf(const std::string& w, std::initializer_list<const char*> set) {
+    for (const char* s : set) {
+        if (w == s) { return true; }
+    }
+    return false;
+}
+
+// Units that say a number is NOT a frequency: sample rates, time, level,
+// size, counts. A number carrying one survives on any line.
+bool isSafeUnit(const std::string& u) {
+    return oneOf(u, {"s/s",   "ks/s",   "ms/s",   "gs/s",    "sps",   "ksps",  "msps",   "gsps",
+                     "ms",    "s",      "sec",    "secs",    "second", "seconds", "us",   "\xc2\xb5s",
+                     "ns",    "min",    "mins",   "minutes", "db",    "dbm",   "dbfs",   "%",
+                     "bytes", "byte",   "b",      "kb",      "kib",   "mb",    "mib",    "gb",
+                     "gib",   "bit",    "bits",   "lines",   "line",  "blocks", "block", "samples",
+                     "sample", "frames", "frame", "times",   "tries", "attempts", "tune", "tunes",
+                     "ppm",   "x"});
+}
+
+bool isHertzUnit(const std::string& u) { return oneOf(u, {"hz", "khz", "mhz", "ghz", "thz"}); }
+
+// A number directly after one of these words is an identifier or a code,
+// never a frequency: "firmware 2.1", "board id 0", "tuner 2", "error 5".
+bool followsSafeWord(const std::string& s, std::size_t start) {
+    std::size_t e = start;
+    while (e > 0 && (s[e - 1] == ' ' || s[e - 1] == ':' || s[e - 1] == '=')) { --e; }
+    std::size_t b = e;
+    while (b > 0 && isAlnumChar(s[b - 1])) { --b; }
+    if (b == e) { return false; }
+    const std::string w = lowerAscii(s.substr(b, e - b));
+    return oneOf(w, {"firmware", "version", "ver", "api", "build", "rev", "revision", "id",
+                     "tuner", "error", "err", "errno", "code", "exit", "status", "rc", "attempt",
+                     "retry"});
+}
+
+// DEFAULT DENY, for a line that mentions a frequency: every free-standing
+// number becomes "#" unless something says it is not a frequency - a safe
+// unit, a safe word before it, a 0x prefix, or a small negative integer (a
+// driver error code, "(-5)"). A number glued to a word is part of a name
+// (B200, R820T, v1.0.0-rc10, AD9363) and is left alone. A number carrying a
+// hertz unit is masked whatever else is true of it.
+void maskNumbers(std::string& s) {
+    std::string out;
+    out.reserve(s.size());
+    const std::size_t n = s.size();
+    std::size_t i = 0;
+    while (i < n) {
+        const char c = s[i];
+        const bool prevWordy = i > 0 && (isAlnumChar(s[i - 1]) || s[i - 1] == '_');
+        const bool signStart = (c == '-' || c == '+') && i + 1 < n && isDigitChar(s[i + 1]) &&
+                               !prevWordy && !(i > 0 && s[i - 1] == '.');
+        if (!isDigitChar(c) && !signStart) {
+            out += c;
+            ++i;
+            continue;
+        }
+        if (isDigitChar(c) && prevWordy) {
+            // Inside an identifier: copy the rest of it untouched.
+            std::size_t e = i;
+            while (e < n && (isAlnumChar(s[e]) || s[e] == '_' || s[e] == '.' || s[e] == '-')) { ++e; }
+            out.append(s, i, e - i);
+            i = e;
+            continue;
+        }
+        const std::size_t start = i;
+        if (c == '0' && i + 2 < n && (s[i + 1] == 'x' || s[i + 1] == 'X') &&
+            std::isxdigit(static_cast<unsigned char>(s[i + 2])) != 0) {
+            std::size_t e = i + 2;
+            while (e < n && std::isxdigit(static_cast<unsigned char>(s[e])) != 0) { ++e; }
+            out.append(s, i, e - i);
+            i = e;
+            continue;
+        }
+        if (signStart) { ++i; }
+        bool fraction = false;
+        while (i < n && isDigitChar(s[i])) { ++i; }
+        while (i + 1 < n && (s[i] == '.' || s[i] == ',') && isDigitChar(s[i + 1])) {
+            fraction = true;
+            ++i;
+            while (i < n && isDigitChar(s[i])) { ++i; }
+        }
+        if (i < n && (s[i] == 'e' || s[i] == 'E')) {
+            std::size_t j = i + 1;
+            if (j < n && (s[j] == '+' || s[j] == '-')) { ++j; }
+            if (j < n && isDigitChar(s[j])) {
+                i = j;
+                while (i < n && isDigitChar(s[i])) { ++i; }
+                fraction = true;
+            }
+        }
+        const std::size_t end = i;
+        std::size_t u = end;
+        if (u < n && s[u] == ' ') { ++u; }
+        std::size_t ue = u;
+        while (ue < n && (isAlphaChar(s[ue]) || s[ue] == '/' || s[ue] == '%' ||
+                          static_cast<unsigned char>(s[ue]) == 0xC2 ||
+                          static_cast<unsigned char>(s[ue]) == 0xB5)) {
+            ++ue;
+        }
+        if (u == end && ue > u && ue < n && (isDigitChar(s[ue]) || s[ue] == '_')) {
+            // Digits, letters, digits with no space: a hex id or a part
+            // number ("651FD5EB77...", "2832U2"), not a quantity with a unit.
+            std::size_t e = ue;
+            while (e < n && (isAlnumChar(s[e]) || s[e] == '_')) { ++e; }
+            out.append(s, start, e - start);
+            i = e;
+            continue;
+        }
+        const std::string unit = lowerAscii(s.substr(u, ue - u));
+        const std::size_t digits = end - start - (signStart ? 1u : 0u);
+        bool keep = false;
+        if (isHertzUnit(unit)) {
+            keep = false;
+        } else if (isSafeUnit(unit)) {
+            keep = true;
+        } else if (s[start] == '-' && !fraction && digits <= 4) {
+            keep = true;
+        } else if (followsSafeWord(s, start)) {
+            keep = true;
+        }
+        if (keep) {
+            out.append(s, start, end - start);
+        } else {
+            out += '#';
+        }
+    }
+    s.swap(out);
+}
+
+// "###.######" -> "#". A run of masked digits still says how many there were,
+// and the count of digits in a frequency says which band it is in. Any run of
+// '#' with only '.' and ',' between them becomes one '#'.
+void collapseMasks(std::string& s) {
+    std::string out;
+    out.reserve(s.size());
+    std::size_t i = 0;
+    while (i < s.size()) {
+        if (s[i] != '#') {
+            out += s[i++];
+            continue;
+        }
+        std::size_t last = i;
+        std::size_t j = i + 1;
+        while (j < s.size() && (s[j] == '#' || s[j] == '.' || s[j] == ',')) {
+            if (s[j] == '#') { last = j; }
+            ++j;
+        }
+        out += '#';
+        i = last + 1;
+    }
+    s.swap(out);
+}
+
+// The DiagLog stamp, "HH:MM:SS.mmm", which is not data about anybody.
+std::size_t stampLength(const std::string& s) {
+    if (s.size() < 12) { return 0; }
+    static const char kShape[] = "dd:dd:dd.ddd";
+    for (std::size_t k = 0; k < 12; ++k) {
+        if (kShape[k] == 'd' ? !isDigitChar(s[k]) : s[k] != kShape[k]) { return 0; }
+    }
+    return 12;
+}
+
+}  // namespace
+
+std::string scrubUploadLine(const std::string& line) {
+    const std::size_t stamp = stampLength(line);
+    std::string body = line.substr(stamp);
+    stripSerials(body);
+    maskUsbInstanceIds(body);
+    maskSoapyLabelSerials(body);
+    maskUserDirs(body);
+    maskQuotedNames(body);
+    // A line at the ring's width was CUT: whatever named its numbers may be
+    // in the part that was lost ("... at 2048000 S/s, 127.825" with the
+    // " MHz" gone), so it is treated as naming a frequency.
+    const bool cut = line.size() >= static_cast<std::size_t>(DiagLog::kLineBytes) - 1u;
+    if (cut || mentionsFrequency(lowerAscii(body))) { maskNumbers(body); }
+    collapseMasks(body);
+    return line.substr(0, stamp) + body;
+}
+
+std::string scrubUploadPath(const std::string& path) {
+    std::string out = path;
+    // 1. The base directory, written as the variable it came from. This finds
+    //    the account name wherever the profile lives (a redirected profile on
+    //    D:\ has no \Users\ in it for step 2 to find).
+#if defined(_WIN32)
+    const char* const vars[] = {"LOCALAPPDATA"};
+#else
+    const char* const vars[] = {"XDG_STATE_HOME", "HOME"};
+#endif
+    for (const char* var : vars) {
+        const char* v = std::getenv(var);
+        if (v == nullptr) { continue; }
+        std::string base = v;
+        while (base.size() > 1 && (base.back() == '\\' || base.back() == '/')) { base.pop_back(); }
+        if (base.size() < 2 || out.size() < base.size()) { continue; }
+#if defined(_WIN32)
+        const bool prefix = lowerAscii(out.substr(0, base.size())) == lowerAscii(base);
+        const std::string name = std::string("%") + var + "%";
+#else
+        const bool prefix = out.compare(0, base.size(), base) == 0;
+        const std::string name = std::string("$") + var;
+#endif
+        const bool whole = out.size() == base.size() || out[base.size()] == '\\' ||
+                           out[base.size()] == '/';
+        if (prefix && whole) {
+            out = name + out.substr(base.size());
+            break;
+        }
+    }
+    // 2. Whatever is left (a FOXSDR_DIAG_DIR override, say) is still shown,
+    //    because where the files ARE is the point of the field - with the
+    //    account name masked by the same rule a log line gets.
+    maskUserDirs(out);
+    return out;
+}
+
+std::vector<std::string> scrubUploadLog(const std::vector<std::string>& lines) {
+    std::vector<std::string> out;
+    out.reserve(lines.size());
+    std::size_t i = 0;
+    while (i < lines.size()) {
+        if (!isUsbInventoryLine(lines[i])) {
+            out.push_back(scrubUploadLine(lines[i]));
+            ++i;
+            continue;
+        }
+        // A run of listing lines becomes ONE line that says how many were left
+        // out, stamped like the first of them, so a reader knows the driver
+        // was listing devices and that the report is not hiding anything else.
+        const std::size_t first = i;
+        while (i < lines.size() && isUsbInventoryLine(lines[i])) { ++i; }
+        const std::size_t stamp = stampLength(lines[first]);
+        std::string marker = lines[first].substr(0, stamp);
+        if (stamp > 0) { marker += " info "; }
+        marker += "vendor: libusb: " + std::to_string(i - first) +
+                  ((i - first) == 1 ? " line" : " lines") +
+                  " listing this machine's USB devices left out";
+        out.push_back(marker);
+    }
+    return out;
+}
+
+std::string scrubVendorLine(const std::string& line) {
+    std::string out = line;
+
+    // Serial numbers - the same rule every uploaded line gets, see
+    // stripSerials above.
+    stripSerials(out);
 
     // Anything that names a frequency, tuning or hertz has its digits masked.
     // What somebody listens to must never reach a report, and a driver's

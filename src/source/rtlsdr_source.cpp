@@ -876,10 +876,13 @@ bool RtlSdrSource::retuneLocked(double hz) {
             // must survive that: the identity and the reference first, the
             // advice second.
             if (unlockedTunes_.fetch_add(1, std::memory_order_relaxed) == 0) {
-                core::diagWarnf("source: the tuner's PLL did not lock at %.4f MHz - %s from a "
-                                "%.4f MHz reference; deaf there, though samples keep flowing",
-                                hz / 1e6, tuner.name(),
-                                static_cast<double>(tuner.xtalHz()) / 1e6);
+                // Not WHERE it failed to lock: that is the frequency the user
+                // tuned to, which no report may carry (PRIVACY.md). The tuner
+                // and the reference are what diagnose it.
+                core::diagWarnf("source: the tuner's PLL did not lock at the requested frequency - "
+                                "%s from a %.4f MHz reference; deaf there, though samples keep "
+                                "flowing",
+                                tuner.name(), static_cast<double>(tuner.xtalHz()) / 1e6);
                 core::diagWarnf("source: if no frequency locks, close the radio and reopen it - "
                                 "a PLL reference that does not match the board fails at every "
                                 "frequency. Send this log if it persists.");

@@ -452,8 +452,15 @@ nlohmann::json buildPayload(const ParsedReport& r, const std::string& installId,
     if (maxLog > 0) {
         // The LAST maxLog lines: the end of the ring is the part next to the
         // fault. Keeping the first n would carry the least useful half.
-        const std::size_t start = (r.log.size() > maxLog) ? r.log.size() - maxLog : 0;
-        for (std::size_t i = start; i < r.log.size(); ++i) { log.push_back(r.log[i]); }
+        // EVERY LINE IS SCRUBBED HERE, whoever wrote it: this is the one
+        // place a crash or freeze report's log becomes bytes that leave the
+        // machine. See core::scrubUploadLog for the rule, and
+        // tests/test_upload_scrub.cpp for the lines that used to leak.
+        // Scrubbed BEFORE the tail is taken, so device-listing lines that are
+        // left out do not use up the lines the report can carry.
+        const std::vector<std::string> kept = scrubUploadLog(r.log);
+        const std::size_t start = (kept.size() > maxLog) ? kept.size() - maxLog : 0;
+        for (std::size_t i = start; i < kept.size(); ++i) { log.push_back(kept[i]); }
     }
     j["log"] = std::move(log);
 

@@ -23,6 +23,7 @@
 #include <thread>
 #include <vector>
 
+#include "core/diag_log.hpp"
 #include "core/transmitter.hpp"
 #include "test_check.hpp"
 
@@ -325,11 +326,27 @@ int main() {
         tx.setSink(std::move(sink));
         tx.setInput(TxInput::Tone);
         tx.setMode(TxMode::AM);
+        CHECK(tx.setFrequencyHz(145.4875e6));
+        cascade::core::DiagLog::instance().resetForTest();
 
         tx.setPttHeld(true);
         tx.tick();
         CHECK(tx.transmitting());
         CHECK(raw->starts.load() == 1);
+
+        // THE KEY-DOWN LINE says the mode and the rate and NEVER the
+        // frequency (0.99.33: it used to print "at 145.487500 MHz").
+        {
+            int keyed = 0;
+            for (const std::string& l : cascade::core::DiagLog::instance().ringSnapshot()) {
+                if (l.find("tx: keyed") == std::string::npos) { continue; }
+                ++keyed;
+                std::printf("key-down line: %s\n", l.c_str());
+                CHECK(l.find("MHz") == std::string::npos);
+                CHECK(l.find("480000 S/s") != std::string::npos);
+            }
+            CHECK(keyed == 1);
+        }
 
         // It really is feeding the radio, at about the rate the radio runs
         // at - a transmitter that keyed and sent nothing is the failure this

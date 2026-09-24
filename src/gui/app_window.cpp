@@ -17416,9 +17416,14 @@ void AppWindow::pumpDecoderOutput() {
             ++face.lines;
         }
         if (patchFirstLineLogged_.insert(pl.node).second) {
-            cascade::core::diagLogf("patch: first line from '%s'%s: %.160s", pl.source.c_str(),
+            // THAT a decoder produced text, and how much - never the text.
+            // It is decoded traffic (a pager message, an aircraft), which
+            // PRIVACY.md says no report carries, and this line used to carry
+            // the first 160 characters of it.
+            cascade::core::diagLogf("patch: first line from decoder node %u%s (%zu characters)",
+                                    static_cast<unsigned>(pl.node),
                                     patchDecoderIsShown(pl.node) ? "" : " (not wired to a Text out)",
-                                    pl.text.c_str());
+                                    pl.text.size());
         }
         if (!patchDecoderIsShown(pl.node)) { continue; }
         // Onto the face of every Text out this decoder is wired to.
@@ -19814,7 +19819,18 @@ void AppWindow::importBookmarkFile(const std::string& path) {
     cascade::core::ImportResult r = cascade::core::importFrequencyFile(p);
     if (!r.error.empty() && r.items.empty()) {
         bookmarkImportNote_ = cascade::core::formatText(tr("Could not import: %s"), r.error.c_str());
-        cascade::core::diagWarnf("bookmarks: import of %s failed: %s", p.c_str(), r.error.c_str());
+        // The file's KIND, never its name or path: "never the name or path of
+        // a file you opened" (PRIVACY.md), and a frequency list's name is
+        // usually what is on it.
+        // importFrequencyFile's "cannot open" names the path; the log does not.
+        std::string why = r.error;
+        for (std::size_t at = why.find(p); !p.empty() && at != std::string::npos;
+             at = why.find(p, at)) {
+            why.replace(at, p.size(), "(the file)");
+        }
+        cascade::core::diagWarnf("bookmarks: an import (%s) failed: %s",
+                                 std::filesystem::path(p).extension().string().c_str(),
+                                 why.c_str());
         return;
     }
     const std::size_t found = r.items.size();
@@ -19828,8 +19844,8 @@ void AppWindow::importBookmarkFile(const std::string& path) {
                   r.skipped > 0 ? ", some had no usable frequency" : "",
                   r.shifted > 0 ? ", converter Shift values were not applied" : "");
     bookmarkImportNote_ = note;
-    cascade::core::diagLogf("bookmarks: imported %s (%s) - %zu read, %zu added, %zu skipped, %zu shifted, %.0f ms",
-                            p.c_str(), r.format.c_str(), found, added, r.skipped, r.shifted, ms);
+    cascade::core::diagLogf("bookmarks: imported a %s file - %zu read, %zu added, %zu skipped, %zu shifted, %.0f ms",
+                            r.format.c_str(), found, added, r.skipped, r.shifted, ms);
     if (added > 0) { saveBookmarks(); }
 }
 
@@ -20296,10 +20312,15 @@ void AppWindow::noteTuneRefused(double requestHz, bool isPluginPreset) {
     tuneMismatchNote_ = note;
     if (requestHz == lastRefusedRequestHz_) { return; }
     lastRefusedRequestHz_ = requestHz;
-    cascade::core::diagLogf("source: asked for %.6f MHz, the %s refused it - its range is "
-                            "%.6f to %.6f MHz",
-                            requestHz / 1.0e6, pipeline_.activeSource().name(), rangeLoHz / 1.0e6,
-                            rangeHiHz / 1.0e6);
+    // WHERE the request fell against the range, never either frequency: what
+    // somebody tunes to must not reach a report (PRIVACY.md), and "below its
+    // range" diagnoses the refusal as well as the number did.
+    const char* where = !hasRange                 ? "(it publishes no range)"
+                        : requestHz < rangeLoHz   ? "below its range"
+                        : requestHz > rangeHiHz   ? "above its range"
+                                                  : "inside its range";
+    cascade::core::diagLogf("source: the %s refused a tune %s", pipeline_.activeSource().name(),
+                            where);
 }
 
 void AppWindow::noteTuneMismatch(double requestHz, double answeredHz, bool isPluginPreset) {
@@ -20323,9 +20344,15 @@ void AppWindow::noteTuneMismatch(double requestHz, double answeredHz, bool isPlu
     }
     lastMismatchRequestHz_ = requestHz;
     lastMismatchAnswerHz_ = answeredHz;
-    cascade::core::diagLogf("source: asked for %.6f MHz, the %s answered %.6f MHz",
-                            requestHz / 1.0e6, pipeline_.activeSource().name(),
-                            answeredHz / 1.0e6);
+    // HOW FAR OFF and whether the radio clamped to its range, never either
+    // frequency (see noteTuneRefused). The error in ppm alone does not say
+    // what was tuned.
+    const bool atEdge = hasRange && (std::fabs(answeredHz - rangeLoHz) < 1.0 ||
+                                     std::fabs(answeredHz - rangeHiHz) < 1.0);
+    const double ppm = (requestHz != 0.0) ? (answeredHz - requestHz) / requestHz * 1.0e6 : 0.0;
+    cascade::core::diagLogf("source: the %s answered a tune somewhere else (%s, %+.0f ppm)",
+                            pipeline_.activeSource().name(),
+                            atEdge ? "at the edge of its range" : "not at a range edge", ppm);
 }
 
 double AppWindow::currentAbsoluteHz() {

@@ -185,12 +185,62 @@ private:
 };
 
 // A vendor line, made safe to keep. Serial numbers are stripped ("serial=X",
-// "Serial: X") and every digit in a line that mentions a frequency, tuning or
-// hertz is masked, because PRIVACY.md promises that no report ever carries
-// what somebody was listening to, and a driver's "Setting center freq: N" is
-// exactly that. Sample rates and error codes on other lines pass untouched.
-// Pure: tested directly in tests/test_vendor_lines.cpp.
+// "Serial: X", "SN: X", "AIRSPY_SN:X") and every digit in a line that
+// mentions a frequency, tuning or hertz is masked, because PRIVACY.md
+// promises that no report ever carries what somebody was listening to, and a
+// driver's "Setting center freq: N" is exactly that. Sample rates and error
+// codes on other lines pass untouched. Pure: tested directly in
+// tests/test_vendor_lines.cpp.
 std::string scrubVendorLine(const std::string& line);
+
+// A log line, made safe to LEAVE THE MACHINE. Applied to every line - ours,
+// a driver's, a plugin host's - at the one point each upload is assembled
+// (crash_upload.cpp's payload, diag_report.cpp's bundle), because a rule that
+// relies on every call site remembering it has already failed once: until
+// 0.99.33 only driver lines were scrubbed, and the application's own
+// "asked for 433.917000 MHz" went out verbatim.
+//
+// The rule, in order (tests/test_upload_scrub.cpp holds each part):
+//   1. a leading "HH:MM:SS.mmm" stamp is kept as it is;
+//   2. serial numbers become <stripped>: after the word "serial" (and keys it
+//      starts, "serial_number=", udev's "ID_SERIAL_SHORT="), after a key
+//      "SN:", "S/N:", "AIRSPY_SN:", after SoapySDR's "<product> :: ", and the
+//      instance segment of a Windows USB device id ("USB\VID_x&PID_y\<this>",
+//      "\\?\usb#vid_x&pid_y#<this>#{guid}");
+//   3. the account name in a path (\Users\X\, /home/X/, /Users/X/) becomes
+//      <user>;
+//   4. anything in single quotes - the names users type for patch nodes,
+//      speakers, presets - becomes '<name>' (a quoted USB hardware id is
+//      kept, its instance segment already stripped);
+//   5. on a line that mentions hertz, a frequency, tuning, a centre, the VFO,
+//      a range, an offset, a carrier, a preset, transmitting or keying, or
+//      "asked for"/"answered" - and on a line cut off at the ring's width -
+//      EVERY free-standing number becomes '#', except a number with a sample
+//      rate, time, level, size or count unit (S/s, Msps, ms, dB, bytes,
+//      tunes...), a hex number, a small negative error code, or a number
+//      after "firmware", "version", "id", "tuner", "error", "code"...; a
+//      number with a hertz unit is masked whatever else is true of it, and
+//      a number glued to a word (B200, R820T, v1.0.0) is part of a name;
+//   6. any run of '#' becomes a single '#', so a masked frequency does not
+//      say how many digits it had.
+// A line with none of these in it is returned byte for byte.
+std::string scrubUploadLine(const std::string& line);
+
+// THE ENTRY POINT the upload assemblers call: every line through
+// scrubUploadLine, and libusb's info/debug lines that LIST the machine's USB
+// devices ("no DeviceInterfaceGUID registered for 'USB\VID_046D&PID_C336...'")
+// left out entirely - they inventory the keyboard and mouse, not the radio. A
+// run of them becomes one line saying how many were left out.
+std::vector<std::string> scrubUploadLog(const std::vector<std::string>& lines);
+
+// A PATH made safe to show outside the machine - the bundle's `log-path` and
+// `crash-dir`. The base directory is written as the variable it came from
+// ("%LOCALAPPDATA%\FoxSDR\logs/foxsdr.log", "$HOME/.local/state/foxsdr/..."),
+// which removes the account name wherever the profile lives; anything else
+// (a FOXSDR_DIAG_DIR override) keeps its shape with the account name after
+// \Users\, /home/ or /Users/ masked as <user>. A real bundle pasted into a bug
+// report in 0.99.32 read "C:\Users\Utente\AppData\Local\FoxSDR\logs/...".
+std::string scrubUploadPath(const std::string& path);
 
 // STDERR CAPTURE (Windows only; elsewhere returns false and changes nothing).
 //
