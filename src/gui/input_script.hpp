@@ -13,7 +13,8 @@
 // ONLY IN A BOUNDED --frames RUN (see AppWindow::run), off unless
 // FOXSDR_INPUT_SCRIPT names a file, like every other test hook here.
 //
-// The format, one step per line; '#' starts a comment:
+// The format, one step per line; '#' starts a comment, except in a text
+// step, which types the whole rest of its line - '#' included:
 //
 //   <frame> world <x> <y>     pointer to patch-canvas (world) coordinates
 //   <frame> screen <x> <y>    pointer to ImGui screen coordinates
@@ -98,9 +99,23 @@ inline ScriptParse parseInputScript(const std::string& text) {
             st.verb = ScriptStep::Verb::Wheel;
             ok = static_cast<bool>(s >> st.y) && st.y != 0.0f;
         } else if (verb == "text") {
+            // THE REST OF THE RAW LINE, not of the comment-stripped body: a
+            // '#' is something to type here ("Channel #12"), and cutting the
+            // payload at it typed "Channel " as a perfectly good step with
+            // nothing counted in `bad`. The body is a prefix of the line, so
+            // the stream's position in it is the same position in the line.
             st.verb = ScriptStep::Verb::Text;
-            std::getline(s, st.arg);
-            if (!st.arg.empty() && st.arg.front() == ' ') { st.arg.erase(0, 1); }
+            const std::streamoff at = s.tellg();
+            const std::size_t from =
+                (at < 0) ? body.size() : static_cast<std::size_t>(at);
+            // What follows the verb is whitespace, or the '#' that ended the
+            // body. "5 text#12" stays what it always was, a text step with
+            // nothing to type; otherwise one separating space is dropped,
+            // exactly as before.
+            if (from < line.size() && line[from] != '#') {
+                st.arg = line.substr(from);
+                if (!st.arg.empty() && st.arg.front() == ' ') { st.arg.erase(0, 1); }
+            }
             ok = !st.arg.empty();
         } else {
             ok = false;

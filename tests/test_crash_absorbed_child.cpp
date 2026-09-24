@@ -24,6 +24,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <set>
@@ -176,6 +177,67 @@ void checkChildFaultReport() {
 }
 
 // ---------------------------------------------------------------------------
+// 1b. ELEVEN REPORTS IN ONE SECOND ARE ELEVEN FILES.
+//
+// The report name is crash-<local time to the second>-<pid>-<seq>.txt and the
+// file is opened CREATE_ALWAYS, so the sequence number is the only thing that
+// separates two reports written in the same second. The Windows writer used
+// to print only its last digit (seq % 10): the 11th report of a second
+// reused the 1st report's name and truncated it, which is the exact loss the
+// file's own comment promised could not happen - and a burst of child deaths
+// in one device scan is the case with the most to lose.
+//
+// Aligned to the start of a wall-clock second so all eleven land inside it; a
+// burst that straddles a tick proves nothing about a same-second collision, so
+// it is retried rather than counted.
+// ---------------------------------------------------------------------------
+void checkBurstOfElevenIsElevenFiles() {
+    const fs::path dir = scratchDir("burst");
+    constexpr int kReports = 11;
+    bool sameSecond = false;
+    std::vector<fs::path> files;
+    for (int tryNo = 0; tryNo < 5 && !sameSecond; ++tryNo) {
+        std::error_code ec;
+        fs::remove_all(dir, ec);
+        CrashHandlerConfig cfg;
+        cfg.crashDir = dir.string();
+        cfg.enabled = true;
+        cfg.minidump = false;
+        cfg.exitAfterReport = false;
+        installCrashHandlers(cfg);
+
+        const std::time_t start = std::time(nullptr);
+        while (std::time(nullptr) == start) {}
+        const std::time_t tick = std::time(nullptr);
+        for (int k = 1; k <= kReports; ++k) {
+            reportAbsorbedChildFault("burst test child death", 0xC0000005ul, k);
+        }
+        sameSecond = (std::time(nullptr) == tick);
+        files = filesIn(dir);
+    }
+    CHECK(sameSecond);
+    std::printf("--- burst: %zu report file(s) for %d reports ---\n", files.size(), kReports);
+    CHECK(files.size() == static_cast<std::size_t>(kReports));
+
+    // Every report survived WHOLE: each attempt number is present exactly
+    // once, so none of them was truncated and rewritten by a later one.
+    std::multiset<int> attempts;
+    for (const fs::path& f : files) {
+        const std::string text = readFile(f);
+        const std::size_t at = text.find("child-attempt: ");
+        if (at != std::string::npos) {
+            attempts.insert(std::atoi(text.c_str() + at + std::strlen("child-attempt: ")));
+        }
+    }
+    std::multiset<int> expected;
+    for (int k = 1; k <= kReports; ++k) { expected.insert(k); }
+    CHECK(attempts == expected);
+
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+}
+
+// ---------------------------------------------------------------------------
 // 2. The frame capture's own policy.
 // ---------------------------------------------------------------------------
 void checkFrameCapturePolicy() {
@@ -229,5 +291,6 @@ void checkFrameCapturePolicy() {
 int main() {
     checkFrameCapturePolicy();
     checkChildFaultReport();
+    checkBurstOfElevenIsElevenFiles();
     return testSummary("test_crash_absorbed_child");
 }

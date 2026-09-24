@@ -21,8 +21,10 @@
 #ifndef CASCADE_GUI_TRACK_DETAIL_VIEW_HPP
 #define CASCADE_GUI_TRACK_DETAIL_VIEW_HPP
 
+#include <cstdint>
 #include <vector>
 
+#include "core/plugin_abi.h"
 #include "core/plugin_ui.hpp"
 #include "gui/track_info_cache.hpp"
 #include "gui/track_metrics.hpp"
@@ -30,8 +32,35 @@
 
 namespace cascade::gui {
 
+// WHAT THE TARGET IS, in the detail block's own vocabulary: the ABI's
+// CASCADE_TRACK_* number as a TrackKind. The block decides from this whether an
+// altitude and a speed are lettered in feet and knots or in kilometres and
+// km/s, so it is set HERE, inside the adapter every surface goes through,
+// rather than by each caller after the fact. It used to be the callers' job -
+// app_window.cpp and map_view.cpp each carried a copy of this switch and
+// assigned .kind by hand - and drawTrackDetail() below, which makes the two
+// calls back to back, left no room to do it: a satellite drawn through it
+// came out at "1381234 ft" doing "14890 kt".
+//
+// The translation lives in this header and not in track_metrics.hpp because
+// that one is deliberately free of plugin_abi.h; see its file comment.
+//
+// A STATION AND ANYTHING THIS BUILD HAS NO NAME FOR KEEP THE AVIATION UNITS.
+// An APRS station reports its altitude in feet and its speed in knots, so
+// those are the right units for it and not a fallback. Only
+// CASCADE_TRACK_SATELLITE is orbital - the same rule map_view.cpp's
+// orbitalLadder() uses for the map's colours.
+inline TrackKind detailTrackKind(std::uint32_t kind) {
+    switch (kind) {
+        case CASCADE_TRACK_SATELLITE: return TrackKind::Satellite;
+        case CASCADE_TRACK_AIRCRAFT: return TrackKind::Aircraft;
+        case CASCADE_TRACK_VESSEL: return TrackKind::Vessel;
+        default: return TrackKind::Other;
+    }
+}
+
 // Everything the block can say about `ht`, gathered from the track itself and
-// from the track-info plugin's cache.
+// from the track-info plugin's cache - including what kind of target it is.
 //
 // ASKING THE CACHE IS WHAT STARTS THE LOOKUP, which is why this takes the cache
 // rather than an already-fetched answer: hovering a target is exactly the
@@ -44,6 +73,7 @@ inline TrackDetailInput makeTrackDetailInput(const cascade::core::HostTrack& ht,
     TrackDetailInput in;
     in.label = (ht.t.label[0] != '\0') ? ht.t.label : ht.t.id;
     in.id = ht.t.id;
+    in.kind = detailTrackKind(ht.t.kind);
     in.source = ht.plugin;
     in.latDeg = ht.t.latDeg;
     in.lonDeg = ht.t.lonDeg;
