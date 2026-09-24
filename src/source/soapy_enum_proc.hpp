@@ -234,6 +234,18 @@ struct EnumResult {
     // Drivers left out of this scan because a child already DIED asking them
     // earlier in this session - see sessionFaultedDrivers(). Lower-cased.
     std::vector<std::string> sessionSkippedDrivers;
+
+    // A SCAN BESIDE AN OPEN RADIO ONLY. Drivers left out because their own
+    // child ran out its whole budget in an earlier such scan this session
+    // (bug hunt 2026-09-24): asking again would only wait it out again on
+    // every Refresh. Lower-cased. Cleared by a whole-bus scan that answers in
+    // time.
+    std::vector<std::string> sessionSlowDrivers;
+
+    // A SCAN BESIDE AN OPEN RADIO ONLY. Drivers the sweep did not ask because
+    // its one budget (attempts x timeoutMs, the ordinary scan's own worst
+    // case) was spent before their turn - by drivers that did not answer.
+    std::vector<std::string> outOfTimeDrivers;
 };
 
 struct EnumOptions {
@@ -299,6 +311,12 @@ struct EnumOptions {
     // the danger is to a device of the SAME family as the driver probing, and
     // gui/device_scan_plan.hpp decides which families are open. Empty (the
     // default) is the ordinary scan, unchanged.
+    //
+    // ONE BUDGET for that walk (bug hunt 2026-09-24): the children run one
+    // after another, and the walk as a whole - listing included - is bounded
+    // by attempts x timeoutMs, the ordinary scan's own worst case; each child
+    // gets what is left, never more than timeoutMs. See
+    // EnumResult::outOfTimeDrivers and EnumResult::sessionSlowDrivers.
     std::vector<std::string> skipDrivers;
 };
 
@@ -324,7 +342,9 @@ struct FaultedDriver {
 std::vector<FaultedDriver> sessionFaultedDrivers();
 
 // Back to the start-of-session state (empty). Tests only: the list starts
-// empty and nothing else fills it, so this IS the initial state.
+// empty and nothing else fills it, so this IS the initial state. Clears the
+// too-slow-beside-a-radio list (EnumResult::sessionSlowDrivers) too, which
+// likewise starts empty.
 void clearSessionFaultedDriversForTest();
 
 // THE GROUPING TAG of a contained child death, hashed into the report's

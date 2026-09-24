@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "core/i18n.hpp"
+#include "core/patch_devices.hpp"
 #include "core/plugin_abi.h"
 #include "core/plugin_ui.hpp"
 #include "core/user_presets.hpp"
@@ -1043,14 +1044,11 @@ inline bool nativeSerialMatches(const std::string& nativeArgs, const std::string
 // rather than by serial, so there is no "is this the same physical radio"
 // comparison to make - and with no USB serial on either side, answering a
 // saved Soapy Pluto with our row would be a guess dressed up as a match.
+//
+// The table itself lives in core/patch_devices.hpp (nativeFamilyForSoapyDriver),
+// because the patch page's one-device-one-radio rule needs the same answer.
 inline std::string nativeKeyForSoapyDriver(const std::string& soapyDriver) {
-    if (soapyDriver == "rtlsdr" || soapyDriver == "hackrf" || soapyDriver == "airspy" ||
-        soapyDriver == "airspyhf" || soapyDriver == "sdrplay") {
-        return soapyDriver;
-    }
-    if (soapyDriver == "miri") { return "mirisdr"; }
-    if (soapyDriver == "sddc") { return "rx888"; }
-    return std::string();
+    return cascade::core::patch::nativeFamilyForSoapyDriver(soapyDriver);
 }
 
 inline std::optional<cascade::source::NativeDeviceInfo> preferNativeFor(

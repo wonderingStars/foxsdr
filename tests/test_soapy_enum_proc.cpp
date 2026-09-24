@@ -375,6 +375,46 @@ int fakeHelper(int argc, char** argv) {
                     cap);
         return 0;
     }
+    if (mode == "slowdriver" || mode == "manywedged") {
+        // A DRIVER THAT NEVER ANSWERS, beside a radio that is open (bug hunt
+        // 2026-09-24, soapy-enum-2). "slowdriver": good, wedged, late - the
+        // middle one sleeps a minute when asked on its own. "manywedged":
+        // three that sleep, then one good one. The whole bus answers at once
+        // with the healthy rows, which is what "the bus is fine now" looks
+        // like to the parent.
+        const std::string driver = driverArg(argc, argv);
+        const char* cap = gotCrashDir ? "true" : "false";
+        const bool many = mode == "manywedged";
+        if (askedToListDrivers(argc, argv)) {
+            std::printf("{\"schema\":1,\"runtime\":true,\"guardedCalls\":1,\"capture\":%s,"
+                        "\"drivers\":%s,\"devices\":[]}\n",
+                        cap,
+                        many ? "[\"w1\",\"w2\",\"w3\",\"good\"]"
+                             : "[\"good\",\"wedged\",\"late\"]");
+            return 0;
+        }
+        const bool wedged = many ? (driver == "w1" || driver == "w2" || driver == "w3")
+                                 : driver == "wedged";
+        if (wedged) {
+            probeLine(true, driver.c_str());
+#ifdef _WIN32
+            ::Sleep(60000);
+#else
+            ::sleep(60);
+#endif
+            return 0;
+        }
+        if (driver.empty()) {
+            std::printf("{\"schema\":1,\"runtime\":true,\"guardedCalls\":2,\"capture\":%s,"
+                        "\"devices\":[{\"label\":\"good radio\",\"args\":\"driver=good,serial=1\"}]}\n",
+                        cap);
+            return 0;
+        }
+        std::printf("{\"schema\":1,\"runtime\":true,\"guardedCalls\":1,\"capture\":%s,"
+                    "\"devices\":[{\"label\":\"%s radio\",\"args\":\"driver=%s,serial=1\"}]}\n",
+                    cap, driver.c_str(), driver.c_str());
+        return 0;
+    }
     if (mode == "garbage") {
         std::printf("this is not json at all\n");
         return 0;
@@ -1069,6 +1109,90 @@ int main(int argc, char** argv) {
         CHECK(r.outcome == EnumOutcome::SpawnFailed);
         CHECK(!r.fellBackInProcess);
         CHECK(r.devices.empty());
+    }
+    {
+        // A WEDGED DRIVER BESIDE AN OPEN RADIO IS PAID FOR ONCE (bug hunt
+        // 2026-09-24, soapy-enum-2). The sweep asks each driver in a child of
+        // its own, one after another; a driver whose child ran out its whole
+        // budget used to be asked again - and waited out again - on every
+        // Refresh and every patch parts-bin open for as long as the radio
+        // stayed open. It is now left out of later scans BESIDE AN OPEN RADIO
+        // for the session, until a whole-bus scan answers in time.
+        cascade::source::clearSessionFaultedDriversForTest();
+        setMode("slowdriver");
+        EnumOptions o;
+        o.helperPath = self;
+        o.allowInProcessFallback = false;
+        o.timeoutMs = 1500;
+        o.skipDrivers = {"rtlsdr"};
+        const EnumResult first = enumerateIsolated(o);
+        const std::vector<std::string> askedAll{"good", "wedged", "late"};
+        const std::vector<std::string> onlyWedged{"wedged"};
+        const Rows healthy{{"good radio", "driver=good,serial=1"},
+                           {"late radio", "driver=late,serial=1"}};
+        CHECK(first.outcome == EnumOutcome::Ok);
+        CHECK(first.sweptDrivers == askedAll);
+        CHECK(first.faultedDrivers == onlyWedged);  // named, as a timeout
+        CHECK(rowsOf(first) == healthy);            // the drivers after it still asked
+        CHECK(first.sessionSlowDrivers.empty());
+
+        // THE SECOND SCAN does not ask it, lists the same radios, and does not
+        // wait out the budget again.
+        const EnumResult second = enumerateIsolated(o);
+        const std::vector<std::string> askedHealthy{"good", "late"};
+        std::printf("slow driver: first scan %lu ms, second %lu ms (budget 1500)\n",
+                    first.elapsedMs, second.elapsedMs);
+        CHECK(second.outcome == EnumOutcome::Ok);
+        CHECK(second.sweptDrivers == askedHealthy);
+        CHECK(second.sessionSlowDrivers == onlyWedged);
+        CHECK(rowsOf(second) == healthy);
+        CHECK(second.elapsedMs < 1500u);
+        // A timeout is not a crash: the panel's "it crashed the device scan"
+        // list stays empty, and the WHOLE-BUS scan still asks it.
+        CHECK(cascade::source::sessionFaultedDrivers().empty());
+
+        // A WHOLE-BUS SCAN THAT ANSWERS IN TIME clears it - every driver
+        // answered that one - so the next scan beside a radio asks it again.
+        EnumOptions whole = o;
+        whole.skipDrivers.clear();
+        const EnumResult bus = enumerateIsolated(whole);
+        CHECK(bus.outcome == EnumOutcome::Ok);
+        const EnumResult third = enumerateIsolated(o);
+        CHECK(third.sweptDrivers == askedAll);
+        CHECK(third.sessionSlowDrivers.empty());
+        cascade::source::clearSessionFaultedDriversForTest();
+    }
+    {
+        // THE SWEEP HAS ONE BUDGET, not one per driver. Three wedged drivers
+        // used to cost three full budgets back to back (plus the listing):
+        // here 1000 ms each, over three seconds of "Scanning...". The sweep is
+        // now bounded by the ordinary scan's own worst case - attempts x
+        // timeoutMs - and a driver it ran out of time for is named, not asked.
+        cascade::source::clearSessionFaultedDriversForTest();
+        setMode("manywedged");
+        EnumOptions o;
+        o.helperPath = self;
+        o.allowInProcessFallback = false;
+        o.timeoutMs = 1000;
+        o.attempts = 2;  // the budget: 2 x 1000 ms
+        o.skipDrivers = {"rtlsdr"};
+        const EnumResult r = enumerateIsolated(o);
+        std::printf("many wedged: %lu ms, budget 2000\n", r.elapsedMs);
+        const std::vector<std::string> asked{"w1", "w2"};
+        const std::vector<std::string> outOfTime{"w3", "good"};
+        CHECK(r.sweptDrivers == asked);
+        CHECK(r.outOfTimeDrivers == outOfTime);
+        CHECK(r.faultedDrivers == asked);
+        // 2000 ms of budget plus the kill and spawn overheads; three full
+        // budgets would be over 3000.
+        CHECK(r.elapsedMs < 2800u);
+        // Only a driver that had its WHOLE budget and still did not answer is
+        // held back next time; w2 was cut short by the sweep's deadline.
+        const EnumResult next = enumerateIsolated(o);
+        const std::vector<std::string> slow{"w1"};
+        CHECK(next.sessionSlowDrivers == slow);
+        CHECK(!next.sweptDrivers.empty() && next.sweptDrivers.front() == "w2");
+        cascade::source::clearSessionFaultedDriversForTest();
     }
 
     // --- ChildDied: the fault this file exists for, contained ---------------

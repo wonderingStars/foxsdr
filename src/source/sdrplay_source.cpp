@@ -1072,7 +1072,6 @@ void SdrPlaySource::streamCallbackB(short* xi, short* xq, abi::StreamCbParamsT* 
 
 void SdrPlaySource::eventCallback(abi::EventT eventId, abi::TunerSelectT tuner,
                                   abi::EventParamsT* params, void* ctx) {
-    (void) tuner;
     Link* linkPtr = static_cast<Link*>(ctx);
     if (linkPtr == nullptr) { return; }
     Link& link = *linkPtr;
@@ -1102,10 +1101,20 @@ void SdrPlaySource::eventCallback(abi::EventT eventId, abi::TunerSelectT tuner,
             // THE ACKNOWLEDGEMENT IS NOT OPTIONAL. The service keeps
             // re-reporting an overload until it is acknowledged, so an
             // application that only logs the event gets a log full of it and
-            // a service that never moves on. Every argument comes out of the
-            // Link, so this is safe even on a stranded one.
+            // a service that never moves on. Every other argument comes out of
+            // the Link, so this is safe even on a stranded one.
+            //
+            // ADDRESSED TO THE TUNER THE SERVICE NAMED, which is the tuner the
+            // overload is about. link.tuner is the one active at Init, and an
+            // RSPduo's tuner can be swapped on a live stream
+            // (SwapRspDuoActiveTuner) without the Link being touched - through
+            // 0.99.34 an overload on Tuner 2 after such a swap was acknowledged
+            // for Tuner 1, so the real one was never cleared. link.tuner is
+            // only the fallback for a service that names neither tuner.
+            const abi::TunerSelectT ackTuner =
+                (tuner == abi::Tuner_A || tuner == abi::Tuner_B) ? tuner : link.tuner;
             if (link.api != nullptr && link.api->Update != nullptr && link.dev != nullptr) {
-                link.api->Update(link.dev, link.tuner, abi::Update_Ctrl_OverloadMsgAck,
+                link.api->Update(link.dev, ackTuner, abi::Update_Ctrl_OverloadMsgAck,
                                  abi::Update_Ext1_None);
             }
             break;

@@ -92,23 +92,29 @@ inline std::string driverOf(const std::string& args) {
 // the caller must not scan at all, because it cannot say what is safe.
 //
 // Native families map to the Soapy module that drives the same hardware. The
-// Mirics chip (mirisdr) is claimed by the SDRplay module as well as SoapyMiri,
-// so all of those are left out; an RX888 is SoapySDDC's.
+// Mirics chip is claimed by the SDRplay module as well as SoapyMiri, and the
+// claim runs BOTH WAYS: an RSP1/RSP1A/RSP2 is the same Mirics chip on the bus
+// whether it was opened through the native Mirics driver (mirisdr), the native
+// SDRplay API driver (sdrplay) or either SoapySDR module - so every one of
+// those leaves all three module names out. Through 0.99.34 "sdrplay" left out
+// only {"sdrplay"}, and a scan beside an open RSP still ran SoapyMiri's probe.
+// An RX888 is SoapySDDC's.
 inline std::vector<std::string> soapyModulesForFamily(const std::string& kind,
                                                       const std::string& args, bool& known) {
     known = true;
+    static const std::vector<std::string> kMirics = {"sdrplay", "miri", "mirisdr"};
     const std::string k = detail::lowerAscii(kind);
     if (k == "siggen" || k == "file" || k.empty()) { return {}; }
     if (k == "rtlsdr") { return {"rtlsdr"}; }
     if (k == "hackrf") { return {"hackrf"}; }
     if (k == "airspy") { return {"airspy"}; }
     if (k == "airspyhf") { return {"airspyhf"}; }
-    if (k == "sdrplay") { return {"sdrplay"}; }
-    if (k == "mirisdr") { return {"sdrplay", "miri", "mirisdr"}; }
+    if (k == "sdrplay" || k == "mirisdr") { return kMirics; }
     if (k == "rx888") { return {"sddc"}; }
     if (k == "pluto") { return {"plutosdr"}; }
     if (k == "soapy") {
         const std::string d = detail::driverOf(args);
+        if (d == "sdrplay" || d == "miri" || d == "mirisdr") { return kMirics; }
         if (!d.empty()) { return {d}; }
     }
     known = false;

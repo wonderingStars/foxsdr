@@ -273,6 +273,11 @@ public:
     // --- what the tests observe ------------------------------------------
 
     std::vector<std::string> calls;
+    // The tuner selector the most recent Update was addressed to - Tuner_A,
+    // Tuner_B, or Tuner_Neither before any Update. The call log above records
+    // only the reason, which cannot tell an acknowledgement sent to the right
+    // tuner from one sent to the wrong one.
+    abi::TunerSelectT lastUpdateTuner = abi::Tuner_Neither;
     InitSnapshot atInit;
     int openCount = 0;
     int closeCount = 0;
@@ -326,10 +331,14 @@ public:
         streamA(const_cast<short*>(xi), const_cast<short*>(xq), &p, n, 0, cbContext);
     }
 
-    void fireEvent(abi::EventT id, const abi::EventParamsT& p) {
+    // `tuner` is the selector the service passes with the event - the tuner
+    // the event is ABOUT. Tuner_A unless a test says otherwise, which is what
+    // every single-tuner model reports.
+    void fireEvent(abi::EventT id, const abi::EventParamsT& p,
+                   abi::TunerSelectT tuner = abi::Tuner_A) {
         if (eventCb == nullptr) { return; }
         abi::EventParamsT copy = p;
-        eventCb(id, abi::Tuner_A, &copy, cbContext);
+        eventCb(id, tuner, &copy, cbContext);
     }
 
     void fireDeviceRemoved() {
@@ -337,11 +346,11 @@ public:
         fireEvent(abi::DeviceRemoved, p);
     }
 
-    void fireOverload(bool detected) {
+    void fireOverload(bool detected, abi::TunerSelectT tuner = abi::Tuner_A) {
         abi::EventParamsT p{};
         p.powerOverloadParams.powerOverloadChangeType =
             detected ? abi::Overload_Detected : abi::Overload_Corrected;
-        fireEvent(abi::PowerOverloadChange, p);
+        fireEvent(abi::PowerOverloadChange, p, tuner);
     }
 
     void fireGainChange(double currGain) {
@@ -637,7 +646,7 @@ private:
         FakeSdrPlayApi* f = instance();
         if (f == nullptr) { return abi::Fail; }
         (void) dev;
-        (void) tuner;
+        f->lastUpdateTuner = tuner;
         f->note(updateCall(static_cast<unsigned int>(reason), static_cast<unsigned int>(ext1)));
         // A SERVICE THAT NEVER ANSWERS A CONTROL. See hangInUpdate: noted
         // first, so the call is on the record before it disappears, and

@@ -73,9 +73,23 @@ void testTheFamilyTable() {
     CHECK(soapyModulesForFamily("hackrf", "", known) == Names({"hackrf"}) && known);
     CHECK(soapyModulesForFamily("airspy", "", known) == Names({"airspy"}) && known);
     CHECK(soapyModulesForFamily("airspyhf", "", known) == Names({"airspyhf"}) && known);
-    CHECK(soapyModulesForFamily("sdrplay", "", known) == Names({"sdrplay"}) && known);
-    // A Mirics chip is claimed by the SDRplay module as well as SoapyMiri.
+    // A Mirics chip is claimed by the SDRplay module as well as SoapyMiri -
+    // and the claim runs BOTH WAYS. An RSP1/RSP1A/RSP2 opened through the
+    // native SDRplay API driver is still a Mirics chip on the bus, so
+    // SoapyMiri's probe can reach it exactly as SoapySDRPlay's can reach a
+    // unit opened by the native Mirics driver. Through 0.99.34 "sdrplay" left
+    // out only {"sdrplay"}, and a scan beside an open RSP still asked miri.
+    CHECK(soapyModulesForFamily("sdrplay", "", known) == Names({"sdrplay", "miri", "mirisdr"}) &&
+          known);
     CHECK(soapyModulesForFamily("mirisdr", "", known) == Names({"sdrplay", "miri", "mirisdr"}) &&
+          known);
+    // The same unit opened THROUGH SoapySDR, by either module, is the same
+    // chip with the same two modules able to probe it.
+    CHECK(soapyModulesForFamily("soapy", "driver=sdrplay,serial=1", known) ==
+              Names({"sdrplay", "miri", "mirisdr"}) &&
+          known);
+    CHECK(soapyModulesForFamily("soapy", "driver=miri,index=0", known) ==
+              Names({"sdrplay", "miri", "mirisdr"}) &&
           known);
     CHECK(soapyModulesForFamily("rx888", "", known) == Names({"sddc"}) && known);
     CHECK(soapyModulesForFamily("pluto", "", known) == Names({"plutosdr"}) && known);
@@ -117,6 +131,15 @@ void testWhatAScanInFlightMayProbe() {
     // A Mirics chip is only safe when every module that claims it was left out.
     CHECK(scanMayProbe(Names({"sdrplay"}), "mirisdr", ""));
     CHECK(!scanMayProbe(Names({"sdrplay", "miri", "mirisdr"}), "mirisdr", ""));
+    // ...and so is an RSP opened through the SDRplay API: a scan that left
+    // out only the SDRplay module still asks SoapyMiri, which can reach it.
+    CHECK(scanMayProbe(Names({"sdrplay"}), "sdrplay", ""));
+    CHECK(!scanMayProbe(Names({"sdrplay", "miri", "mirisdr"}), "sdrplay", ""));
+    // THE REPORTED CASE, through the plan: an RSP open on the native SDRplay
+    // driver leaves every module that claims a Mirics chip out of the scan.
+    const auto rsp = planSoapyScan({{"sdrplay", "serial=1811003EFB"}}, 0, false);
+    CHECK(rsp.mode == SoapyScanMode::SkipSome);
+    CHECK(rsp.skipDrivers == Names({"sdrplay", "miri", "mirisdr"}));
     // Unknown families are assumed probed.
     CHECK(scanMayProbe(Names({"rtlsdr"}), "newradio", ""));
     CHECK(scanMayProbe(Names({"rtlsdr"}), "soapy", "serial=9"));
