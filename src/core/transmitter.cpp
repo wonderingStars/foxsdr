@@ -192,7 +192,7 @@ void Transmitter::setInput(TxInput in) {
     input_ = in;
     // Whatever the microphone had queued belongs to the moment before the
     // operator chose it. drain() again at key-down catches the rest.
-    audioIn_.drain();
+    audioIn_->drain();
 }
 
 TxInput Transmitter::input() const {
@@ -289,7 +289,15 @@ std::uint64_t Transmitter::blocksShort() const {
     return shortBlocks_.load(std::memory_order_relaxed);
 }
 
-float Transmitter::takeInputPeak() { return audioIn_.takePeak(); }
+float Transmitter::takeInputPeak() { return audioIn_->takePeak(); }
+
+std::function<bool(int)> Transmitter::microphoneOpener() {
+    // BY VALUE, and that is the whole point: the worker this is handed to may
+    // still be inside waveInOpen when the Transmitter is destroyed, so it holds
+    // the microphone alive rather than a pointer back into an object that is
+    // gone. The same shape as Pipeline::audioOpener.
+    return [in = audioIn_](int deviceIndex) { return in->open(deviceIndex, 48000.0); };
+}
 
 void Transmitter::setError(std::string msg) {
     std::lock_guard<std::mutex> lk(errorMutex_);
@@ -428,7 +436,7 @@ bool Transmitter::keyDownLocked() {
     modulator_.reset();
     modulator_.setSampleRateHz(48000.0);
     tone_.setSampleRateHz(48000.0);
-    audioIn_.drain();
+    audioIn_->drain();
     interp_.configure(48000.0, sink_->sampleRateHz());
     modulator_.setKeyed(true);
     blocks_.store(0, std::memory_order_relaxed);
@@ -562,7 +570,7 @@ void Transmitter::threadBody() {
             if (input_ == TxInput::Tone) {
                 tone_.generate(audio.data(), kAudioBlock);
             } else {
-                const std::size_t got = audioIn_.read(audio.data(), kAudioBlock);
+                const std::size_t got = audioIn_->read(audio.data(), kAudioBlock);
                 if (got < kAudioBlock) {
                     // Padded rather than waited for. A microphone that is
                     // momentarily behind should cost a few milliseconds of

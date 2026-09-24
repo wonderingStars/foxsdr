@@ -92,6 +92,7 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -254,8 +255,27 @@ public:
     // The microphone. Owned here because the transmitter is the only thing
     // that reads it, and because opening a microphone is itself something
     // that should not happen until somebody asks for a transmitter.
-    sink::AudioIn& audioIn() { return audioIn_; }
-    const sink::AudioIn& audioIn() const { return audioIn_; }
+    //
+    // HELD BY shared_ptr for the reason Pipeline holds its AudioOut that way:
+    // opening a device is a blocking driver call (Pa_OpenStream on WMME is
+    // waveInOpen, with no timeout), so the GUI runs it on a gui::AudioOpen
+    // worker and abandons that worker at quit rather than joining it - and an
+    // abandoned worker can still be inside the driver after this Transmitter is
+    // gone. Do not call audioIn().open() from the frame loop; use
+    // microphoneOpener().
+    sink::AudioIn& audioIn() { return *audioIn_; }
+    const sink::AudioIn& audioIn() const { return *audioIn_; }
+
+    // The open, packaged to run on a worker that may outlive this object: the
+    // callable owns a reference to the microphone and touches nothing else of
+    // the transmitter. Takes the PortAudio input index (-1 = the system
+    // default) and opens it at the modulator's 48 kHz.
+    std::function<bool(int)> microphoneOpener();
+
+    // TEST-ONLY: how many owners the microphone has - 1 for this object, plus
+    // one per live opener. It is how tests/test_transmitter.cpp proves the
+    // opener holds the microphone rather than a pointer back into here.
+    long microphoneOwners() const { return audioIn_.use_count(); }
 
     // --- the key -------------------------------------------------------------
 
@@ -361,7 +381,7 @@ private:
 
     dsp::Modulator modulator_;
     dsp::ToneGenerator tone_;
-    sink::AudioIn audioIn_;
+    std::shared_ptr<sink::AudioIn> audioIn_ = std::make_shared<sink::AudioIn>();
     TxInterpolator interp_;
     TxInput input_ = TxInput::Tone;
 

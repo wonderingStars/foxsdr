@@ -672,6 +672,10 @@ private:
     // frame, BEFORE pollAudioHealth: the watchdog must not judge a sink that
     // an open has just handed back.
     void pollAudioOpen();
+    // The same collect for the microphone's gate (micOpen_). Once per frame,
+    // whether or not the TX page is drawn, so an open that finishes while the
+    // page is closed is still collected and its worker released.
+    void pollMicOpen();
     // Asks for an output device through audioOpen_, and applies the result
     // immediately when the device answered inside the bound. `recovery` marks
     // a request the audio watchdog made rather than the user, so only those
@@ -2927,6 +2931,14 @@ private:
     // The microphone's peak, decayed towards zero so the meter falls rather
     // than flickering - a bar redrawn from one 10 ms peak a frame is unreadable.
     float transmitPeak_ = 0.0f;
+    // THE MICROPHONE'S OPEN, OFF THIS THREAD. Pa_OpenStream on an input is
+    // waveInOpen, with the same missing timeout as the output side's
+    // waveOutOpen that held this thread 57 s in the field, so the MIC key goes
+    // through the same gate as audioOpen_ (bug hunt 2026-09-24,
+    // audio-sink-02). Bound to Transmitter::microphoneOpener(), which owns the
+    // microphone, so the worker can be abandoned at quit. Nothing on this
+    // thread may query the microphone while inFlight() is true.
+    cascade::gui::AudioOpen micOpen_;
 
     // --- THE FUNCTION SELECT RAIL'S BANK -------------------------------------
     // Which of the five banks (gui/rail_banks.hpp) the rail is showing, as
@@ -3483,24 +3495,28 @@ private:
     // pair declared after the future would be destroyed while that read is in
     // flight.
     //
-    // THE SAME APPLIES TO EVERY OTHER MEMBER EITHER WORKER TOUCHES, which is
-    // why the three result slots below moved up here from after the futures.
-    // The atomics are only what the workers READ; these are what they WRITE.
+    // THE SAME APPLIES TO EVERY OTHER MEMBER THE WORKER TOUCHES, which is why
+    // the two result slots below moved up here from after the future. The
+    // atomics are only what the worker READS; these are what it WRITES.
     // downloadUpdate() is handed updateResultPath_ and updateResultError_ by
-    // reference and assigns to them as it goes, and checkForUpdate() does the
-    // same with updateResult_ and updateResultError_ — so declared after the
-    // futures they were std::string and UpdateInfo destructors running while a
-    // worker thread was mid-assignment into them, a use-after-free reached
-    // through a dangling `this` rather than a data race the flags could stop.
-    // The blocking future destructor that makes quit slow is also the only
-    // thing that makes this ordering enough: it guarantees both workers have
-    // returned before anything declared above the futures is destroyed.
+    // reference and assigns to them as it goes - so declared after the future
+    // they were std::string destructors running while a worker thread was
+    // mid-assignment into them, a use-after-free reached through a dangling
+    // `this` rather than a data race the flags could stop. The blocking future
+    // destructor is also the only thing that makes this ordering enough: it
+    // guarantees the worker has returned before anything declared above the
+    // future is destroyed.
+    //
+    // THE CHECK IS NOT IN THAT ARRANGEMENT ANY MORE. It used to write
+    // updateResult_ the same way, which is what forced ~AppWindow to wait for
+    // it - and a check stalled in WinHTTP has no flag to poll. updateCheck_
+    // returns its outcome by value and captures nothing of this window, so
+    // ~AppWindow can abandon it (core::UpdateCheckTask).
     std::atomic<float> updateProgress_{0.0f};
     std::atomic<bool> updateCancel_{false};
-    cascade::core::UpdateInfo updateResult_;
     std::string updateResultError_;
     std::string updateResultPath_;
-    std::future<bool> updateCheckFuture_;
+    cascade::core::UpdateCheckTask updateCheck_;
     std::future<bool> updateDownloadFuture_;
 
     // WHICH CATALOGUE ROW IS SELECTED, AND WHETHER ITS NOTICE WAS TICKED, both

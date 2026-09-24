@@ -44,6 +44,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/plugin_repo.hpp"
 
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -1408,6 +1409,25 @@ int main() {
             }
             // The disagreements are SAID, not silently repaired.
             CHECK(inv.notes.size() >= 3u);
+
+            // AND SAID TO THE USER, not only to a notes vector nothing reads
+            // (bug hunt 2026-09-24, plugin-store-2): the changed file gets a
+            // sentence the fitted modules plate draws, naming the file and
+            // saying what is wrong with it. Matched as NTFS matches names.
+            const std::string changed =
+                PluginRepo::changedSinceInstallNote(inv.plugins, mod("cascade_pocsag"));
+            CHECK(changed.find(mod("cascade_pocsag")) != std::string::npos);
+            CHECK(changed.find("not the file that was installed") != std::string::npos);
+            std::string upper = mod("cascade_pocsag");
+            for (char& c : upper) { c = static_cast<char>(std::toupper(static_cast<unsigned char>(c))); }
+            CHECK(PluginRepo::changedSinceInstallNote(inv.plugins, upper) == changed);
+            if (changed.empty()) { std::printf("  a tampered plugin file gets no sentence\n"); }
+            // A MISSING file is not a CHANGED one, an unmanaged file has no
+            // record to disagree with, and an unknown name says nothing.
+            CHECK(PluginRepo::changedSinceInstallNote(inv.plugins, mod("cascade_flex")).empty());
+            CHECK(PluginRepo::changedSinceInstallNote(inv.plugins, mod("stranger")).empty());
+            CHECK(PluginRepo::changedSinceInstallNote(inv.plugins, "").empty());
+            CHECK(PluginRepo::changedSinceInstallNote({}, mod("cascade_pocsag")).empty());
             CHECK(fs::exists(d / mod("stranger")));  // unmanaged means untouched
             // ...and the manifest itself was not rewritten by a mere read.
             std::vector<InstalledPlugin> stillThere;
@@ -1440,6 +1460,8 @@ int main() {
                 CHECK(!inv.plugins[0].missingFromDisk);
                 CHECK(!inv.plugins[0].digestMismatch);
             }
+            // Unchanged bytes: nothing to tell anybody.
+            CHECK(PluginRepo::changedSinceInstallNote(inv.plugins, mod("cascade_pocsag")).empty());
             CHECK(inv.unmanaged.empty());
             std::error_code ec;
             fs::remove_all(d2, ec);

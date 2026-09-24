@@ -160,6 +160,13 @@ struct FittedModule {
     std::uint32_t noticeLevel = 0;
     std::string notice;
 
+    // PluginRepo::changedSinceInstallNote for this file: the bytes on disk are
+    // not the ones sha256-verified when it was installed. Empty when they are,
+    // or when no install record exists (a hand-fitted module has nothing to
+    // disagree with). The HOST's finding, never the module's - it is drawn
+    // apart from `notice` so a module cannot overwrite it by logging.
+    std::string integrityNote;
+
     // Size of the file on disk in bytes. 0 means NOT MEASURED and the shared
     // plate says so; it never prints a clean zero, which would be the opposite
     // claim. There is no size in any descriptor, so this can only ever come

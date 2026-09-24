@@ -26,7 +26,10 @@
 #define CASCADE_CORE_UPDATER_HPP
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
+#include <functional>
+#include <future>
 #include <string>
 #include <vector>
 
@@ -121,6 +124,68 @@ std::string updateEndpoint();
 bool downloadUpdate(const UpdateInfo& info, std::string& outPath, std::string& error,
                     std::atomic<float>* progress = nullptr,
                     std::atomic<bool>* cancel = nullptr);
+
+// What one update check came back with - the whole of it, BY VALUE, so the
+// worker that produced it writes nothing that anybody else owns.
+struct UpdateCheckOutcome {
+    bool ok = false;
+    UpdateInfo info;
+    std::string error;
+};
+
+// The once-per-launch update check, run off the GUI thread, AND ABANDONABLE.
+//
+// WHY IT IS A TYPE. The check is a blocking GET with no cancel that can reach
+// it: httpsGet polls a flag only between chunks, and a check stalled inside
+// WinHttpConnect / SendRequest / ReceiveResponse sits there until WinHTTP's own
+// timeouts (10/10/20/30 s, per redirect hop) give up. It used to live in a
+// std::async future that was a member of AppWindow, and such a future's
+// destructor BLOCKS until the worker returns - so quitting while foxsdr.com
+// was slow held ~AppWindow, window gone and process still running, for as long
+// as those timeouts took (bug hunt 2026-09-24, updater-installer-1).
+//
+// WHAT MAKES ABANDONING SAFE is that the work returns its outcome by value and
+// captures nothing it does not own: no `this`, no member slot to write into
+// after the owner has gone. reap() waits a short grace (a check that is
+// finished, or nearly, is taken right there) and otherwise hands the future to
+// a detached drainer, which takes the result and throws it away. The check
+// touches no static state after its network call returns, so a drainer still
+// running at process exit is simply ended with the process.
+class UpdateCheckTask {
+public:
+    using Work = std::function<UpdateCheckOutcome()>;
+
+    // How long reap() - and so the destructor - waits before abandoning.
+    static constexpr std::chrono::milliseconds kQuitGrace{250};
+    // poll()'s ready-check: zero by construction, named so it is not a bare
+    // literal duration (tests/test_shutdown_budget.cpp scans for those).
+    static constexpr std::chrono::milliseconds kNoWait{0};
+
+    UpdateCheckTask() = default;
+    ~UpdateCheckTask();
+    UpdateCheckTask(const UpdateCheckTask&) = delete;
+    UpdateCheckTask& operator=(const UpdateCheckTask&) = delete;
+
+    // Starts `work` on its own thread. Ignored while a check is in flight.
+    void start(Work work);
+
+    // True from start() until poll() has handed the outcome over, or reap()
+    // has let it go.
+    bool running() const { return future_.valid(); }
+
+    // True ONCE, when the work has finished: `out` then holds its outcome.
+    // Never blocks.
+    bool poll(UpdateCheckOutcome& out);
+
+    // Waits up to `grace` for the work; if it is still running, abandons it to
+    // a detached drainer. Returns true when the work had finished (or nothing
+    // was running), false when it was abandoned. Either way running() is false
+    // afterwards and nothing this object owns is waited on again.
+    bool reap(std::chrono::milliseconds grace = kQuitGrace);
+
+private:
+    std::future<UpdateCheckOutcome> future_;
+};
 
 }  // namespace cascade::core
 

@@ -484,6 +484,16 @@ public:
     static bool loadInventory(const std::string& pluginsDir, PluginInventory& out,
                               std::string& error);
 
+    // THE SENTENCE A USER IS SHOWN for module file `file` when loadInventory
+    // found its bytes are not the ones sha256-verified at install
+    // (InstalledPlugin::digestMismatch), or EMPTY when no record for that file
+    // says so. Matched case-insensitively, as NTFS names are. The fitted
+    // modules window draws it on the module's plate: the re-hash exists to
+    // catch a manual overwrite, disk corruption or something worse, and a
+    // finding nobody is told about is a finding thrown away.
+    static std::string changedSinceInstallNote(const std::vector<InstalledPlugin>& records,
+                                               const std::string& file);
+
     // ---- Cached catalogue policy ------------------------------------------
     //
     // The policy for `id`, or a CachedPolicy with known == false if no

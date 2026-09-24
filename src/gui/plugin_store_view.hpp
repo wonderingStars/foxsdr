@@ -559,9 +559,21 @@ struct PluginStoreDeck {
     // not the one above. It covers every module in the run that carries a
     // maker's notice, the window names them beside it, and it is not persisted
     // anywhere - a consent that survived a restart would be a consent nobody
-    // remembers giving.
+    // remembers giving. For the same reason it does not survive a catalogue
+    // refresh (forgetCatalogueConsent, below) or the end of the run it was
+    // given for: until 2026-09-24 it lived as long as the process, so a tick
+    // given against one catalogue's notices covered the next one's too.
     bool addAllAck = false;
 };
+
+// THE CATALOGUE IS BEING REPLACED: every consent given against the old one
+// goes with it. The selection, because a fetch can leave the same index naming
+// a different module; the single-module tick, because it was consent for the
+// module that index used to name; and the ADD ALL tick, because it was given
+// against the notices the OLD catalogue listed - a new or reworded notice in
+// the next one has been read by nobody. Called by AppWindow::startCatalogFetch
+// at the moment the ground moves.
+void forgetCatalogueConsent(PluginStoreDeck& deck);
 
 // ===========================================================================
 // ADD ALL - the whole decision, in one pure function

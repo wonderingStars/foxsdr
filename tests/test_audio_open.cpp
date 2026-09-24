@@ -34,6 +34,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <memory>
 #include <string>
 #include <thread>
@@ -468,6 +470,53 @@ void checkUnboundGateRefuses() {
     CHECK(!gate.result().ok);
 }
 
+// --- 8. THE MICROPHONE GOES THROUGH THE SAME GATE ---------------------------
+//
+// Bug hunt 2026-09-24, audio-sink-02: the TX page's MICROPHONE key called
+// sink::AudioIn::open straight from the frame loop. That is Pa_OpenStream on
+// the GUI thread - waveInOpen, with no timeout - which is the 57-second freeze
+// this whole file exists for, on the input side where nobody had carried the
+// fix over. The call site lives in AppWindow, which no test can construct, so
+// this reads the GUI sources themselves: no GUI file may open the microphone
+// directly, and the TX page must use the Transmitter's own opener (which owns
+// the microphone, so an abandoned worker cannot outlive it - test_transmitter
+// pins that half).
+void checkMicrophoneIsNotOpenedOnTheGuiThread() {
+    const fs::path guiDir = fs::path(__FILE__).parent_path().parent_path() / "src" / "gui";
+    std::error_code ec;
+    CHECK(fs::is_directory(guiDir, ec));
+    int scanned = 0;
+    int directOpens = 0;
+    int openerUses = 0;
+    for (const auto& entry : fs::directory_iterator(guiDir, ec)) {
+        const fs::path p = entry.path();
+        if (p.extension() != ".cpp" && p.extension() != ".hpp") { continue; }
+        std::ifstream in(p, std::ios::binary);
+        const std::string text((std::istreambuf_iterator<char>(in)),
+                               std::istreambuf_iterator<char>());
+        ++scanned;
+        std::size_t line = 1;
+        std::size_t lineStart = 0;
+        for (std::size_t i = 0; i < text.size(); ++i) {
+            if (text[i] != '\n') { continue; }
+            const std::string l = text.substr(lineStart, i - lineStart);
+            const std::size_t code = l.find("//");
+            const std::string body = code == std::string::npos ? l : l.substr(0, code);
+            if (body.find("audioIn().open(") != std::string::npos) {
+                std::printf("  %s:%zu opens the microphone on the calling thread\n",
+                            p.filename().string().c_str(), line);
+                ++directOpens;
+            }
+            if (body.find("microphoneOpener()") != std::string::npos) { ++openerUses; }
+            ++line;
+            lineStart = i + 1;
+        }
+    }
+    CHECK(scanned > 10);
+    CHECK(directOpens == 0);
+    CHECK(openerUses >= 1);
+}
+
 }  // namespace
 
 int main() {
@@ -479,5 +528,6 @@ int main() {
     checkQuitAbandonsAWedgedOpen();
     checkRealOpenerOnAWorkerThread();
     checkUnboundGateRefuses();
+    checkMicrophoneIsNotOpenedOnTheGuiThread();
     return testSummary("test_audio_open");
 }

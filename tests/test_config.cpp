@@ -1323,6 +1323,42 @@ int main() {
             rtlOn.rtlBiasT = true;
             CHECK(!cascade::gui::configsEqual(base, rtlOn));
             CHECK(!cascade::gui::configsEqual(rtlOn, base));
+
+            // The transmitter's settings, the rail bank, the rebound keys and
+            // the update-check switch: every one of them is changed by a click
+            // that calls no save of its own, so the debounce is the only thing
+            // that writes it before a clean exit. Without these a TX power or
+            // split set in a session that then crashed came back as the OLD
+            // value the next morning (bug hunt 2026-09-24, config-persist-1).
+            // Each pair is named, so a failure says which field went missing.
+            struct Change {
+                const char* name;
+                void (*apply)(AppConfig&);
+            };
+            const Change changes[] = {
+                {"transmitMode", [](AppConfig& c) { c.transmitMode = 3; }},
+                {"transmitInput", [](AppConfig& c) { c.transmitInput = 0; }},
+                {"transmitPowerDb", [](AppConfig& c) { c.transmitPowerDb = -40.0; }},
+                {"transmitSplit", [](AppConfig& c) { c.transmitSplit = true; }},
+                {"transmitSplitHz", [](AppConfig& c) { c.transmitSplitHz = 433.5e6; }},
+                {"transmitToneHz", [](AppConfig& c) { c.transmitToneHz = 1750.0; }},
+                {"transmitMonitor", [](AppConfig& c) { c.transmitMonitor = true; }},
+                {"transmitArgs", [](AppConfig& c) { c.transmitArgs = "driver=plutosdr"; }},
+                {"railBank", [](AppConfig& c) { c.railBank = 4; }},
+                {"keyBindings", [](AppConfig& c) { c.keyBindings = {"mute=Ctrl+Shift+M"}; }},
+                {"updateCheckEnabled", [](AppConfig& c) { c.updateCheckEnabled = false; }},
+            };
+            for (const Change& ch : changes) {
+                AppConfig other = base;
+                ch.apply(other);
+                const bool seenAB = !cascade::gui::configsEqual(base, other);
+                const bool seenBA = !cascade::gui::configsEqual(other, base);
+                if (!seenAB || !seenBA) {
+                    std::printf("  configsEqual cannot see %s\n", ch.name);
+                }
+                CHECK(seenAB);
+                CHECK(seenBA);
+            }
         }
     }
 

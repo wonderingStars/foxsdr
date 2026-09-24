@@ -17,6 +17,7 @@
 #include <cmath>
 #include <complex>
 #include <cstdio>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -783,6 +784,36 @@ int main() {
         swap.setSink(nullptr);
         CHECK(!swap.transmitting());
         CHECK(!swap.remoteKeyed());
+    }
+
+    // =====================================================================
+    // 5. THE MICROPHONE OPENER OWNS THE MICROPHONE
+    //
+    //    Bug hunt 2026-09-24, audio-sink-02: the MIC key now opens the
+    //    microphone on a gui::AudioOpen worker, which is ABANDONED at quit if
+    //    waveInOpen has not come back - so the worker can outlive this
+    //    Transmitter. That is only safe if the callable it runs holds the
+    //    microphone itself, never a pointer back into here.
+    // =====================================================================
+    {
+        std::function<bool(int)> open;
+        long whileAlive = 0;
+        {
+            Transmitter tx;
+            CHECK(tx.microphoneOwners() == 1);
+            open = tx.microphoneOpener();
+            whileAlive = tx.microphoneOwners();
+        }
+        // One owner for the transmitter, one for the opener.
+        CHECK(whileAlive == 2);
+        if (whileAlive != 2) {
+            std::printf("  the microphone opener holds %ld owners, not 2\n", whileAlive);
+        }
+        // The transmitter is gone and the opener still has a microphone to act
+        // on. An index no PortAudio build has is refused without opening
+        // anything - no microphone on any bench is touched by this check.
+        CHECK(open);
+        if (open) { CHECK(!open(1 << 20)); }
     }
 
     return testSummary("test_transmitter");

@@ -688,7 +688,21 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            // not survive a restart unless something else happened to trigger
            // a save.
            a.diagnosticsEnabled == b.diagnosticsEnabled &&
-           a.diagnosticsMinidump == b.diagnosticsMinidump;
+           a.diagnosticsMinidump == b.diagnosticsMinidump &&
+           // The transmitter's settings (never the key - there is no field
+           // for it), the rail bank, the rebound keys and the update-check
+           // switch. Each is changed by a press that calls no save of its
+           // own, so without them here a TX power or split set in a session
+           // that then crashed came back next launch as the OLD value.
+           // transmitOpen and demodScopeOpen stay out on purpose: both are
+           // saved and not restored (startupState clears them), so the exit
+           // save is the only write either needs.
+           a.transmitMode == b.transmitMode && a.transmitInput == b.transmitInput &&
+           a.transmitPowerDb == b.transmitPowerDb && a.transmitSplit == b.transmitSplit &&
+           a.transmitSplitHz == b.transmitSplitHz && a.transmitToneHz == b.transmitToneHz &&
+           a.transmitMonitor == b.transmitMonitor && a.transmitArgs == b.transmitArgs &&
+           a.railBank == b.railBank && a.keyBindings == b.keyBindings &&
+           a.updateCheckEnabled == b.updateCheckEnabled;
 }
 
 namespace {
@@ -984,6 +998,10 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
     // spends. Bound here, before anything can ask for a device.
     audioOpen_.bind(pipeline_.audioOpener(), [this] { watchdog_.pause(); },
                     [this] { watchdog_.resume(); });
+    // And the microphone, for the same reason: waveInOpen has no timeout
+    // either. The opener is the Transmitter's and owns the microphone.
+    micOpen_.bind(transmitter_.microphoneOpener(), [this] { watchdog_.pause(); },
+                  [this] { watchdog_.resume(); });
 
     // THE CONFIG WRITE IS BLOCKING WORK AND DOES NOT BELONG ON THIS THREAD
     // EITHER. gui/config_writer.hpp carries the field report ("hang ntdll.dll
@@ -1083,6 +1101,13 @@ AppWindow::~AppWindow() {
     // ".part" file on the way.
     updateCancel_.store(true, std::memory_order_relaxed);
 
+    // The once-per-launch update CHECK is the same problem with no flag that
+    // could help: a GET stalled inside WinHttpConnect/Send/Receive polls
+    // nothing until WinHTTP's timeouts give up (tens of seconds). It returns
+    // its outcome by value and owns everything it touches, so a check still
+    // running after a short grace is abandoned rather than waited for.
+    updateCheck_.reap();
+
     // Same problem, no cancel to reach for: a device open may still be inside
     // SoapySDR::Device::make(). See reapPendingDeviceOpen for the semantics.
     reapPendingDeviceOpen();
@@ -1094,6 +1119,9 @@ AppWindow::~AppWindow() {
     // safe to abandon because the opener holds the sink alive by shared_ptr
     // (see Pipeline::audioOpener).
     audioOpen_.reap();
+    // The microphone's gate, same argument: waveInOpen has no timeout either,
+    // and Transmitter::microphoneOpener owns the microphone it opens.
+    micOpen_.reap();
 
     // The GPS reader's thread, if a read is still running when the window is
     // destroyed without run()'s teardown (a failed backend init, a test that
@@ -3252,6 +3280,7 @@ void AppWindow::drawUi() {
     // not judge a stream an open is still installing.
     pollAudioOpen();
     pollAudioHealth();
+    pollMicOpen();
     // "Still running" beat, five-minute cadence. A no-op when reporting is
     // off, and never blocks - see HeartbeatSender::poll.
     telemetryHeartbeat_.poll(ImGui::GetTime());
@@ -3359,6 +3388,13 @@ bool AppWindow::requestAudioOpen(int deviceIndex, bool recovery) {
 void AppWindow::pollAudioOpen() {
     if (!audioOpen_.poll()) { return; }
     applyAudioOpenResult();
+}
+
+void AppWindow::pollMicOpen() {
+    if (!micOpen_.poll()) { return; }
+    // The "still opening" line goes; a refusal says so in its place.
+    if (transmitError_ == kAudioBusyNote) { transmitError_.clear(); }
+    if (!micOpen_.result().ok) { transmitError_ = FOX_TR_NOOP("no microphone could be opened"); }
 }
 
 void AppWindow::applyAudioOpenResult() {
@@ -6500,9 +6536,13 @@ void AppWindow::startUpdateCheck() {
     updateError_.clear();
     const std::string endpoint = cascade::core::updateEndpoint();
     const std::string version = cascade::versionString();
-    updateCheckFuture_ = std::async(std::launch::async, [this, endpoint, version]() {
-        return cascade::core::checkForUpdate(endpoint, version, "", updateResult_,
-                                             updateResultError_);
+    // NOTHING OF `this` IS CAPTURED: the outcome comes back by value, which is
+    // what lets ~AppWindow abandon a check stalled inside WinHTTP instead of
+    // waiting out its timeouts (see core::UpdateCheckTask).
+    updateCheck_.start([endpoint, version]() {
+        cascade::core::UpdateCheckOutcome o;
+        o.ok = cascade::core::checkForUpdate(endpoint, version, "", o.info, o.error);
+        return o;
     });
 }
 
@@ -6526,17 +6566,16 @@ void AppWindow::startUpdateDownload() {
 void AppWindow::pollUpdateAsync() {
     constexpr auto kNoWait = std::chrono::seconds(0);
 
-    if (updatePending_ && !updateDownloading_ && updateCheckFuture_.valid() &&
-        updateCheckFuture_.wait_for(kNoWait) == std::future_status::ready) {
-        const bool ok = updateCheckFuture_.get();
+    cascade::core::UpdateCheckOutcome checked;
+    if (updatePending_ && !updateDownloading_ && updateCheck_.poll(checked)) {
         updatePending_ = false;
-        if (ok) {
-            update_ = updateResult_;
+        if (checked.ok) {
+            update_ = checked.info;
         } else {
             // A failed check is NOT shown. The user did not ask, and an
             // application that interrupts listening to say it could not reach a
             // server is worse than one that quietly tries again next launch.
-            updateError_ = updateResultError_;
+            updateError_ = checked.error;
         }
     }
 
@@ -6596,7 +6635,8 @@ bool AppWindow::launchInstaller(const std::string& path) {
         // elevation through its manifest, and only the shell will show that
         // prompt. The return is the documented "> 32 means it started"
         // convention.
-        const std::wstring wide(path.begin(), path.end());
+        const std::wstring wide = cascade::gui::installerPathWide(path);
+        if (wide.empty()) { return false; }
         const HINSTANCE rc = ::ShellExecuteW(nullptr, L"open", wide.c_str(), nullptr, nullptr,
                                              SW_SHOWNORMAL);
         return reinterpret_cast<std::intptr_t>(rc) > 32;
@@ -9334,6 +9374,13 @@ void AppWindow::rescanPlugins() {
     // A corrupt or absent manifest is an ordinary state and its own kind of
     // fail-open: nothing is recorded, so nothing is retired.
     (void)cascade::core::PluginRepo::loadInventory(pluginDir_, pluginInventory_, invError);
+    // WHAT RECONCILIATION FOUND, one line each - above all a file whose bytes
+    // are not the ones sha256-verified at install, which is a manual overwrite
+    // or something worse. The fitted modules plate says it too
+    // (changedSinceInstallNote); this is the record that outlives the window.
+    for (const std::string& note : pluginInventory_.notes) {
+        cascade::core::diagLogf("plugin inventory: %s", note.c_str());
+    }
     pluginBlocked_ = cascade::core::PluginRepo::blockedPlugins(pluginInventory_.plugins,
                                                                pluginInventory_.policies);
 
@@ -9928,11 +9975,9 @@ void AppWindow::startCatalogFetch() {
     // moves, but the tick is consent for ONE plugin and a fetch that replaces
     // the whole catalogue can leave the same index pointing at a different
     // module - so it is cleared here, at the moment the ground moves, rather
-    // than left to a rule that is about a different event.
-    if (pluginStoreDeck_) {
-        pluginStoreDeck_->selected = -1;
-        pluginStoreDeck_->legalAck = false;
-    }
+    // than left to a rule that is about a different event. The ADD ALL tick
+    // goes too: it was given against the notices the old catalogue listed.
+    if (pluginStoreDeck_) { cascade::gui::forgetCatalogueConsent(*pluginStoreDeck_); }
     catalogError_.clear();
     catalogStatus_.clear();
     installError_.clear();
@@ -10255,6 +10300,9 @@ void AppWindow::pumpAddAll() {
     cascade::core::diagLogf("plugin store: add all finished - %s", logged.c_str());
     addAllRun_.active = false;
     addAllRun_.currentName.clear();
+    // THE TICK WAS FOR THIS RUN. It named the notices this run would take, and
+    // the run has taken them; the next press is a new decision.
+    if (pluginStoreDeck_) { pluginStoreDeck_->addAllAck = false; }
 }
 
 void AppWindow::removeInstalledPlugin(const std::string& fileName) {
@@ -14074,6 +14122,10 @@ void AppWindow::drawFittedModulesWindow() {
                 m.noticeLevel = nit->second.level;
                 m.notice = nit->second.text;
             }
+            // The re-hash's finding, keyed on the FILE (pluginKey), which is
+            // what the install record names.
+            m.integrityNote = cascade::core::PluginRepo::changedSinceInstallNote(
+                pluginInventory_.plugins, file);
             // THE ONLY SIZE THERE IS. No descriptor carries one, so it can
             // only come from stat-ing the file; a failure leaves it at 0,
             // which the shared plate reads as "not measured" and never draws
@@ -17867,6 +17919,10 @@ void AppWindow::drawTransmitPage() {
 
     // --- the input -----------------------------------------------------------
     ImGui::TextUnformatted(tr("INPUT"));
+    // WHILE THE MICROPHONE IS STILL OPENING the keys are dead: the worker owns
+    // the microphone, and a second press could only queue a second open.
+    const bool micOpening = micOpen_.inFlight();
+    ImGui::BeginDisabled(micOpening);
     for (int i = 0; i < cascade::core::kTxInputCount; ++i) {
         ImGui::SameLine();
         const bool on = (transmitInputIndex_ == i);
@@ -17880,18 +17936,31 @@ void AppWindow::drawTransmitPage() {
         if (ImGui::Button(trId(cascade::core::txInputName(in)), ImVec2(70.0f, 0.0f))) {
             transmitInputIndex_ = i;
             transmitter_.setInput(in);
-            if (in == cascade::core::TxInput::Microphone &&
+            if (in == cascade::core::TxInput::Microphone && !micOpening &&
                 !transmitter_.audioIn().running()) {
                 // Opened WHEN IT IS CHOSEN and not before: a microphone that
                 // is open from launch is one that is listening to a room
                 // nobody asked it to listen to.
-                if (!transmitter_.audioIn().open(-1, 48000.0)) {
-                    transmitError_ = FOX_TR_NOOP("no microphone could be opened");
+                //
+                // AND NOT ON THIS THREAD. Pa_OpenStream here is waveInOpen,
+                // which has no timeout; micOpen_ runs it on a worker and this
+                // frame waits at most AudioOpen::kOpenBound under a watchdog
+                // pause. A healthy microphone answers inside that, exactly as
+                // before; one that does not leaves the window running and says
+                // so, and pollMicOpen() takes the answer when it comes.
+                const cascade::gui::AudioOpen::Outcome outcome = micOpen_.request(-1);
+                if (outcome == cascade::gui::AudioOpen::Outcome::Finished) {
+                    if (!micOpen_.result().ok) {
+                        transmitError_ = FOX_TR_NOOP("no microphone could be opened");
+                    }
+                } else {
+                    transmitError_ = kAudioBusyNote;
                 }
             }
         }
         if (on) { ImGui::PopStyleColor(2); }
     }
+    ImGui::EndDisabled();
     if (transmitInputIndex_ == static_cast<int>(cascade::core::TxInput::Tone)) {
         ImGui::SameLine();
         double tone = transmitToneHz_;
@@ -19003,6 +19072,9 @@ void AppWindow::reportPluginStatus() {
                 static_cast<int>(pluginInventory_.unmanaged.size()));
     if (!pluginEnforceError_.empty()) {
         std::printf("plugin enforce: %s\n", pluginEnforceError_.c_str());
+    }
+    for (const std::string& note : pluginInventory_.notes) {
+        std::printf("plugin inventory: %s\n", note.c_str());
     }
     for (const cascade::core::LoadedPlugin& p : list) {
         const std::string file = std::filesystem::path(p.path).filename().string();
