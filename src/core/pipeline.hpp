@@ -197,6 +197,18 @@ public:
     int abandonedSourceThreads() const {
         return srcThreadsAbandoned_.load(std::memory_order_relaxed);
     }
+    // Diagnostics/tests: samples the source thread read but the ring had no
+    // room for (SpscRing::write accepts only what fits). Never reset, so a
+    // caller measures a window by taking a difference. Before this counter
+    // existed the loss was silent: a ring too small for one source read
+    // dropped part of every chunk and nothing anywhere said so.
+    std::uint64_t ringDroppedSamples() const {
+        return ringDropped_.load(std::memory_order_relaxed);
+    }
+    // Diagnostics/tests: the ring's current capacity in samples. Sized from
+    // the SOURCE's rate each time a source thread is spawned, never below the
+    // construction-time size (see ringCapacityForActiveSourceLocked).
+    std::size_t ringCapacity();
     // True when a worker thread aborted on an exception — a USB SDR pulled
     // mid-stream being the case that motivated it. Latched until start().
     bool faulted() const;
@@ -218,7 +230,11 @@ public:
     //   5. incoming source start(), srcRun_ set, source thread respawned
     // The DSP thread keeps running throughout, draining whatever the ring
     // still holds, so consumers see at worst a brief frame-rate dip — never
-    // a stall, a deadlock, or a frame from a half-swapped source.
+    // a stall, a deadlock, or a frame from a half-swapped source. The one
+    // exception is an incoming source whose rate needs a different ring size
+    // (one read is 10 ms of the SOURCE's rate): then, between steps 5's
+    // start() and the respawn, the DSP thread is joined, the ring replaced,
+    // and the DSP thread restarted once the new source thread exists.
     //
     // ZOMBIE-SAFETY ADDENDUM. Steps 1-3 assume the outgoing thread is alive
     // and its driver eventually returns from read() — precisely what
@@ -478,9 +494,13 @@ public:
     // new rate regime). What does not: the spectrum estimator (fftSize is
     // unchanged and the estimator is rate-agnostic — the displayed span
     // simply reinterprets, which is the caller's frequency-axis job), the
-    // ring (its capacity stays the construction-time sizing, so headroom in
-    // milliseconds shrinks at higher rates — still >= 8 FFT blocks for any
-    // accepted rate), seq numbering, and the audio tap/counters.
+    // ring (sized for the SOURCE's rate when its thread was spawned, by
+    // start() or setSource(); this call leaves the source thread running, so
+    // it cannot replace the ring under it. A device whose rate is changed
+    // live keeps both the ring and its read size from that spawn, so each
+    // read still fits and only the headroom in milliseconds shrinks; any
+    // overflow is counted in ringDroppedSamples()), seq numbering, and the
+    // audio tap/counters.
     //
     // Calling with the CURRENT rate is a cheap no-op returning true. Safe to
     // call stopped (no threads to quiesce — the chain is rebuilt for the next
@@ -640,6 +660,12 @@ private:
     // identically by start() and the setSource() resume path so the two
     // spawn sites cannot drift apart on this contract.
     void spawnSourceThread(double chainRateHz);
+    // The ring capacity the active source needs, and the replacement of the
+    // ring when that differs from what it has. Both need controlMutex_;
+    // resizeRingLocked additionally needs both worker threads stopped (see
+    // the .cpp).
+    std::size_t ringCapacityForActiveSourceLocked() const;
+    void resizeRingLocked(std::size_t capacity);
     void noteThreadFault(const char* where, const char* what);
     void processAudioBlock(const std::complex<float>* in, std::size_t n);
     // Rebuilds the rate-dependent parts of the stereo/RDS/audio-post chain
@@ -686,7 +712,15 @@ private:
     cascade::source::SigGenSource builtin_;
     std::unique_ptr<cascade::source::IqSource> external_;
     cascade::source::IqSource* active_ = nullptr;  // ctor sets &builtin_
-    cascade::dsp::SpscRing<std::complex<float>> ring_;
+    // The construction-time ring size, and the least the ring is ever given:
+    // a source is sized UP from it when one of its reads would not fit, never
+    // down (see ringCapacityForActiveSourceLocked). Declared before ring_,
+    // which is built from it.
+    const std::size_t ringFloor_;
+    // Owned through a pointer because its SIZE follows the source: it is
+    // replaced (resizeRingLocked) at a source-thread spawn whose source needs
+    // a different capacity, and only while neither worker thread runs.
+    std::unique_ptr<cascade::dsp::SpscRing<std::complex<float>>> ring_;
     cascade::dsp::SpectrumEstimator estimator_;   // touched only by the DSP thread while running
 
     // Single latest-frame slot. seq lives inside latest_ and NEVER resets —
@@ -914,6 +948,8 @@ private:
     // timing alone - and "zero for healthy sessions" is the assertion
     // that keeps kSourceJoinWait honest.
     std::atomic<int> srcThreadsAbandoned_{0};
+    // See ringDroppedSamples(). Written only by the source thread.
+    std::atomic<std::uint64_t> ringDropped_{0};
 
     std::shared_ptr<std::atomic<bool>> srcStopToken_;
     std::future<void> srcExitFuture_;
