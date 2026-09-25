@@ -5,8 +5,11 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
+#include <algorithm>
 #include <cmath>
+#include <map>
 #include <string>
+#include <vector>
 
 #include "core/config.hpp"
 #include "core/freq_converter.hpp"
@@ -49,11 +52,16 @@ inline cascade::core::AppConfig::SoundCard soundCardToConfig(
 // opens the way the Source section has it set up when it is the same card -
 // real or I/Q, the channel, the swap, the centre - and as real mono on the
 // left channel otherwise. The patch's own rate is applied after the open.
+//
+// "The same card" is the card's IDENTITY (source::sameSoundCard): a patch
+// saved while ALSA called the card hw:1,0 still matches the section's card
+// after a boot that calls it hw:2,0. The key's own name is kept - it is what
+// the open resolves (matchSoundCard, by the same identity).
 inline std::string soundCardArgsForPatch(const std::string& keyArgs,
                                          const cascade::source::SoundCardSettings& section) {
     cascade::source::SoundCardSettings s;
     if (!cascade::source::parseSoundCardArgs(keyArgs, s)) { return keyArgs; }
-    if (s.device == section.device && s.hostApi == section.hostApi) {
+    if (cascade::source::sameSoundCard(s.device, s.hostApi, section.device, section.hostApi)) {
         const std::string device = s.device;
         const std::string api = s.hostApi;
         s = section;
@@ -80,9 +88,17 @@ inline std::string soundCardArgsForPatch(const std::string& keyArgs,
 //     tens of kHz); an up-converter's output is its LO and above - VHF -
 //     which no sound card samples. A stored Up (another session, a key
 //     shared with a patch radio) reads as Off, and the section says why.
+//
+// KEYED BY THE CARD'S IDENTITY (source::soundCardIdentityName): on Linux the
+// ALSA name carries a card number that can change at every boot, so the key
+// has "(hw:*,M)" where the name has "(hw:N,M)" - otherwise a renumbered boot
+// would find no converter for the card. Every other host API keys by the
+// exact name, as before. A patch radio's key (the full name) is brought to
+// the same form before any lookup (soundCardCanonicalKey).
 inline std::string soundCardConverterKey(const std::string& device, const std::string& hostApi) {
-    return cascade::core::converterRadioKey("soundcard",
-                                            cascade::source::soundCardDeviceArgs(device, hostApi));
+    return cascade::core::converterRadioKey(
+        "soundcard",
+        cascade::source::soundCardDeviceArgs(cascade::source::soundCardIdentityName(device, hostApi), hostApi));
 }
 
 // The card's device args out of a converter key; false for any other key.
@@ -91,6 +107,33 @@ inline bool soundCardKeyArgs(const std::string& key, std::string& args) {
     if (key.compare(0, prefix.size(), prefix) != 0) { return false; }
     args = key.substr(prefix.size());
     return true;
+}
+
+// Any key naming a sound card, in the form its converter is kept under; any
+// other key unchanged.
+inline std::string soundCardCanonicalKey(const std::string& key) {
+    std::string args;
+    if (!soundCardKeyArgs(key, args)) { return key; }
+    cascade::source::SoundCardSettings s;
+    if (!cascade::source::parseSoundCardArgs(args, s)) { return key; }
+    return soundCardConverterKey(s.device, s.hostApi);
+}
+
+// A config written before the converters were keyed by identity names an
+// ALSA card by its full name: moved to the identity key when the config is
+// read. A key already in the identity form wins over a moved one, and of two
+// old keys for the same card (two boots' numbers) the first in the map wins.
+inline std::map<std::string, cascade::core::ConverterSetting> migrateSoundCardConverterKeys(
+    const std::map<std::string, cascade::core::ConverterSetting>& in) {
+    std::map<std::string, cascade::core::ConverterSetting> out;
+    for (const auto& [key, s] : in) {
+        if (soundCardCanonicalKey(key) == key) { out[key] = s; }
+    }
+    for (const auto& [key, s] : in) {
+        const std::string canon = soundCardCanonicalKey(key);
+        if (canon != key) { out.emplace(canon, s); }
+    }
+    return out;
 }
 
 struct SoundCardConverter {
@@ -126,7 +169,9 @@ inline cascade::source::SoundCardFormat soundCardFormatForKey(
     if (!cascade::source::parseSoundCardArgs(keyArgs, k)) {
         return cascade::source::SoundCardFormat::RealMono;
     }
-    if (receiverOnCard && k.device == live.device && k.hostApi == live.hostApi) { return live.format; }
+    if (receiverOnCard && cascade::source::sameSoundCard(k.device, k.hostApi, live.device, live.hostApi)) {
+        return live.format;
+    }
     cascade::source::SoundCardSettings opened;
     if (!cascade::source::parseSoundCardArgs(soundCardArgsForPatch(keyArgs, section), opened)) {
         return cascade::source::SoundCardFormat::RealMono;
@@ -268,6 +313,80 @@ inline bool soundCardReopenReleasesFirst(bool liveIsSoundCard,
     }
     if (!m.candidates.empty()) { return false; }
     return want.device == live.device && want.hostApi == live.hostApi;
+}
+
+// A RE-OPEN THAT CHANGES NOTHING - the dead card's row picked again, or Open
+// pressed with the settings it is running with. The card is still released
+// first, but there is nothing different to fall back to: it is tried once,
+// and a refusal is said as "did not open", not as new settings refused and
+// the old ones refused too (the third review's item 4). Only what the open
+// would do differently counts: the channel in real mode, the swap and the
+// centre in I/Q.
+inline bool soundCardSameSettings(const cascade::source::SoundCardSettings& a,
+                                  const cascade::source::SoundCardSettings& b) {
+    if (!cascade::source::sameSoundCard(a.device, a.hostApi, b.device, b.hostApi)) { return false; }
+    if (a.cardRateHz != b.cardRateHz || a.format != b.format) { return false; }
+    if (a.format == cascade::source::SoundCardFormat::RealMono) { return a.channel == b.channel; }
+    return a.swapIq == b.swapIq && a.iqCentreHz == b.iqCentreHz;
+}
+
+// WHAT A CARD RECEIVES ON THE AIR - the "Receives X to Y." line - with these
+// settings and the converter stored for the card: the card's span (0 .. rate/2
+// in real mode, the centre +/- rate/2 in I/Q) through what the card can have in
+// front of it (soundCardConverter: nothing for I/Q, a down-converter for
+// real), by the same conversion the frequency counter reads (airFromRadio).
+// An inverting converter swaps the edges; nothing is below 0 Hz.
+struct SoundCardAirSpan {
+    double loHz = 0.0;
+    double hiHz = 0.0;
+};
+inline SoundCardAirSpan soundCardAirSpan(const cascade::source::SoundCardSettings& s,
+                                         const cascade::core::ConverterSetting& stored) {
+    const cascade::core::ConverterSetting eff = soundCardConverter(stored, s.format).effective;
+    const double rate = cascade::source::soundCardIqRateHz(s);
+    const double centre = cascade::source::soundCardCentreHz(s);
+    const double a = cascade::core::airFromRadio(eff, std::max(0.0, centre - rate / 2.0));
+    const double b = cascade::core::airFromRadio(eff, centre + rate / 2.0);
+    SoundCardAirSpan out;
+    out.loHz = std::max(0.0, std::min(a, b));
+    out.hiHz = std::max(a, b);
+    return out;
+}
+
+// A DEAD CARD ON LINUX IS NOT OPENED AGAIN IN THE SAME SESSION (the third
+// review's item 6). PortAudio's list of inputs is fixed when FoxSDR starts,
+// and an ALSA entry opens by its card number: pull the card, plug a DIFFERENT
+// one in, and ALSA gives the new card the old number - so "OldCard (hw:N,M)"
+// would open the new card under the old card's name. The application already
+// says to restart FoxSDR after plugging or unplugging a card; a re-pick or an
+// Open of the dead card says it again instead of opening whatever is at that
+// index now. A WASAPI entry keeps its identity (Windows names the endpoint,
+// not a slot), so on Windows a dead card is reopened as before.
+inline bool soundCardDeadReopenNeedsRestart(bool installedCardDead,
+                                            const cascade::source::SoundCardSettings& live,
+                                            const cascade::source::SoundCardSettings& want,
+                                            const std::vector<cascade::source::SoundCardDevice>& list) {
+    return installedCardDead && live.hostApi == cascade::source::kAlsaHostApi &&
+           soundCardReopenReleasesFirst(true, live, want, list);
+}
+
+// WHICH CARD THE CONFIG NAMES (the third review's item 1): the card that RAN,
+// never the Source section's edits that were never Opened - the next launch
+// opens what is saved, so saving the edits would start it on a card, a rate
+// or a format that never ran. In order: the card running now; the card the
+// patch page has borrowed (`lent`, with the generator standing in); the card
+// a failed restore, a release for a re-Open or a patch hand-back left
+// remembered (`remembered`); and only when no card is running, lent or
+// remembered, the section's settings - the card as last set up.
+inline const cascade::source::SoundCardSettings& soundCardToSave(
+    const std::string& liveKind, const cascade::source::SoundCardSettings& live, bool lent,
+    const cascade::source::SoundCardSettings& lentCard, bool remembered,
+    const cascade::source::SoundCardSettings& rememberedCard,
+    const cascade::source::SoundCardSettings& section) {
+    if (liveKind == "soundcard") { return live; }
+    if (liveKind == "siggen" && lent) { return lentCard; }
+    if (liveKind == "siggen" && remembered) { return rememberedCard; }
+    return section;
 }
 
 }  // namespace cascade::gui

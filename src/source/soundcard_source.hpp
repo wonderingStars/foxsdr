@@ -205,6 +205,22 @@ struct AlsaHwName {
 // True, with `out` filled, for a name ending in " (hw:N,M)" or " (plughw:N,M)".
 bool parseAlsaHwName(const std::string& name, AlsaHwName& out);
 
+// The host API PortAudio's ALSA backend reports (pa_linux_alsa.c,
+// PaAlsa_Initialize: "ALSA").
+inline constexpr const char kAlsaHostApi[] = "ALSA";
+
+// A CARD'S IDENTITY, for anything that is KEPT for a card from one launch to
+// the next (its converter, a patch radio's match to the Source section): the
+// same identity matchSoundCard uses. An ALSA hardware name loses its card
+// number N - "<card>: <pcm> (hw:*,M)" - because N is only the order ALSA found
+// the cards in at this boot; every other name, and every other host API, is
+// its own identity, unchanged (a WASAPI name is stable, and a Windows key in
+// an existing config must still be found).
+std::string soundCardIdentityName(const std::string& name, const std::string& hostApi);
+// The same card by that identity: the same host API and the same identity name.
+bool sameSoundCard(const std::string& aName, const std::string& aHostApi, const std::string& bName,
+                   const std::string& bHostApi);
+
 // Which listed device the settings name.
 //
 // `exact` (a name chosen from this process's list - pickedFromList): an exact

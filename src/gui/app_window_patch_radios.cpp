@@ -734,6 +734,7 @@ void AppWindow::patchStopAll(bool restoreMain) {
         if (!restoreKeep_.valid()) {
             restoreKeep_ = cascade::gui::rememberedSourceAfterFailedOpen(
                 "soundcard", cfgSoapyArgs_, cfgNativeArgs_, std::string(), keep.rateHz);
+            soundCardRemembered_ = keep.card;
             restoreKeepLabel_ = keep.label;
         }
         cascade::core::diagLogf("patch: handing %s back to the receiver", keep.label.c_str());

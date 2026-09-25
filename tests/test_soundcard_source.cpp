@@ -32,6 +32,7 @@
 #include <filesystem>
 #include <functional>
 #include <future>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <random>
@@ -2035,7 +2036,9 @@ void testSameCardReopen() {
     // settings to fall back on. The release is installSource(nullptr) since
     // the merge with 0.99.37 (every source swap goes through installSource,
     // which ends a recording first - test_stop_ends_recordings), and the
-    // worker's open also takes the backend factory (the test seam).
+    // worker's open also takes the backend factory (the test seam). The old
+    // settings are the fallback unless they ARE the new ones (the third
+    // review's item 4: tried once - test_soundcard_app_paths proves that).
     {
         const std::string text = readSource("src/gui/app_window_soundcard.cpp");
         const std::size_t fn = text.find("void AppWindow::launchSoundCardOpen(");
@@ -2049,7 +2052,7 @@ void testSameCardReopen() {
         const std::size_t fallback =
             openCall == std::string::npos
                 ? std::string::npos
-                : text.find("settings, r.devices, release ? &previous : nullptr", openCall);
+                : text.find("settings, r.devices, (release && !same) ? &previous : nullptr", openCall);
         CHECK(fallback == std::string::npos || fallback - openCall < 120);
         std::printf("launchSoundCardOpen: decide@%zu release@%zu worker@%zu fallback@%zu\n", decide, releaseAt,
                     worker, fallback);
@@ -2077,6 +2080,18 @@ void testSameCardReopen() {
         SoundCardSettings saved = base;
         saved.pickedFromList = false;
         CHECK(cascade::gui::soundCardReopenReleasesFirst(true, live, saved, two));
+        // THE SAME NAME UNDER ANOTHER HOST API is another entry - and another
+        // stream (the third review's R12): the other order, nothing released.
+        SoundCardDevice otherApi = list[0];
+        otherApi.index = 98;
+        otherApi.hostApi = "Windows WDM-KS";
+        const std::vector<SoundCardDevice> apis = {list[0], otherApi};
+        SoundCardSettings wantApi = base;
+        wantApi.hostApi = otherApi.hostApi;
+        CHECK(!cascade::gui::soundCardReopenReleasesFirst(true, live, wantApi, apis));
+        wantApi.pickedFromList = false;
+        CHECK(!cascade::gui::soundCardReopenReleasesFirst(true, live, wantApi, apis));
+        CHECK(cascade::gui::soundCardReopenReleasesFirst(true, live, base, apis));
     }
 
     // A REFUSED NEW OPEN RESTORES THE OLD STREAM - never nothing running,
@@ -2157,6 +2172,69 @@ void testAlsaIdentity() {
     CHECK(parseAlsaHwName("HDA Intel PCH: ALC892 Analog (plughw:0,2)", n));
     CHECK(n.stripped == "HDA Intel PCH: ALC892 Analog" && n.card == 0 && n.device == 2);
     CHECK(parseAlsaHwName("Card: dev (hw:12,3)", n) && n.card == 12 && n.device == 3);
+    // A card whose own name has brackets in it (the review's R14): the LAST
+    // " (" is the one that opens "(hw:N,M)".
+    CHECK(parseAlsaHwName("USB Audio (Rev 2): USB Audio (hw:1,0)", n));
+    CHECK(n.stripped == "USB Audio (Rev 2): USB Audio" && n.card == 1 && n.device == 0);
+    CHECK(parseAlsaHwName("Card (A) (B): dev (x) (plughw:3,1)", n));
+    CHECK(n.stripped == "Card (A) (B): dev (x)" && n.card == 3 && n.device == 1);
+
+    // THE CARD'S OWN SETTINGS FOLLOW IT ACROSS A RENUMBERING (the third
+    // review's item 5): its converter key and a patch radio's match to the
+    // Source section are the card's IDENTITY - the name without the card
+    // number, and the PCM device - exactly what matchSoundCard uses.
+    {
+        using cascade::gui::soundCardConverterKey;
+        const std::string hw1 = "USB Audio CODEC: USB Audio (hw:1,0)";
+        const std::string hw2 = "USB Audio CODEC: USB Audio (hw:2,0)";
+        CHECK(soundCardConverterKey(hw1, "ALSA") == soundCardConverterKey(hw2, "ALSA"));
+        CHECK(soundCardConverterKey(hw1, "ALSA") ==
+              soundCardConverterKey("USB Audio CODEC: USB Audio (plughw:4,0)", "ALSA"));
+        CHECK(soundCardConverterKey(hw1, "ALSA") !=
+              soundCardConverterKey("USB Audio CODEC: USB Audio (hw:1,1)", "ALSA"));
+        CHECK(soundCardConverterKey(hw1, "ALSA") !=
+              soundCardConverterKey("Other Card: USB Audio (hw:1,0)", "ALSA"));
+        // Every other host API: the exact name, as before (a Windows key in an
+        // existing config is still found).
+        CHECK(soundCardConverterKey("Line (USB Audio CODEC)", "Windows WASAPI") ==
+              cascade::core::converterRadioKey(
+                  "soundcard", cascade::source::soundCardDeviceArgs("Line (USB Audio CODEC)", "Windows WASAPI")));
+        CHECK(soundCardConverterKey("X (hw:1,0)", "JACK Audio Connection Kit") !=
+              soundCardConverterKey("X (hw:2,0)", "JACK Audio Connection Kit"));
+        // An identity key reads back as itself.
+        std::string args;
+        CHECK(cascade::gui::soundCardKeyArgs(soundCardConverterKey(hw1, "ALSA"), args));
+        SoundCardSettings k;
+        CHECK(cascade::source::parseSoundCardArgs(args, k));
+        CHECK(soundCardConverterKey(k.device, k.hostApi) == soundCardConverterKey(hw1, "ALSA"));
+
+        // A patch radio saved as hw:2,0 last boot, the section's card hw:1,0
+        // now: the same card, so the section's format.
+        SoundCardSettings section;
+        section.device = hw1;
+        section.hostApi = "ALSA";
+        section.format = SoundCardFormat::IqStereo;
+        section.cardRateHz = 96000.0;
+        section.iqCentreHz = 7.05e6;
+        SoundCardSettings same;
+        CHECK(cascade::source::parseSoundCardArgs(
+            cascade::gui::soundCardArgsForPatch(cascade::source::soundCardDeviceArgs(hw2, "ALSA"), section), same));
+        CHECK(same.format == SoundCardFormat::IqStereo);
+        CHECK(same.device == hw2);  // the key's own name: what the list has now
+        CHECK_NEAR(same.iqCentreHz, 7.05e6, 0.001);
+        SoundCardSettings other;
+        CHECK(cascade::source::parseSoundCardArgs(
+            cascade::gui::soundCardArgsForPatch(
+                cascade::source::soundCardDeviceArgs("USB Audio CODEC: USB Audio (hw:2,1)", "ALSA"), section),
+            other));
+        CHECK(other.format == SoundCardFormat::RealMono);
+        // ...and the converter's format rule reads the running card the same way.
+        SoundCardSettings live = section;
+        SoundCardSettings realSection = section;
+        realSection.format = SoundCardFormat::RealMono;
+        CHECK(cascade::gui::soundCardFormatForKey(cascade::source::soundCardDeviceArgs(hw2, "ALSA"), true, live,
+                                                  realSection) == SoundCardFormat::IqStereo);
+    }
     for (const char* no : {"default", "pulse", "sysdefault", "dsnoop", "dmix", "hw:CARD=CODEC,DEV=0",
                            "Card: dev (hw:1,0) extra", "Card: dev (hw:a,0)", "Card: dev (hw:1,)",
                            "Card: dev (hw:1)", "(hw:1,0)", "Card: dev (hw:-1,0)", "Card: dev (hdmi:1,0)",
@@ -2629,6 +2707,103 @@ void testStreamListSerialised() {
     CHECK(unguarded == 0);
 }
 
+// The third review's item 2: EVERY Pa_CloseStream in the product takes the
+// stream-list guard too (a close takes the stream off PortAudio's unlocked
+// list, exactly as an open puts it on), and the guard is taken in the mode
+// its thread allows. The audio output's and the microphone's opens AND closes
+// can be on the GUI thread (~AudioOut at exit, the patch page's speaker), so
+// they take it NoWait; only the sound card's worker and closer paths
+// (source/soundcard_source.cpp) may wait for it.
+void testStreamListGuardModes() {
+    namespace fs = std::filesystem;
+    struct Guard {
+        std::string file;
+        std::size_t at;
+        bool noWait;
+    };
+    std::vector<Guard> guards;
+    int closeSites = 0;
+    int closeUnguarded = 0;
+    std::map<std::string, int> closesPerFile;
+    const auto commentLine = [](const std::string& text, std::size_t at) {
+        const std::size_t bol = text.rfind('\n', at);
+        const std::size_t from = bol == std::string::npos ? 0 : bol + 1;
+        return text.substr(from, at - from).find("//") != std::string::npos;
+    };
+    const auto isIdent = [](char c) {
+        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
+    };
+    for (const auto& e : fs::recursive_directory_iterator(fs::path(CASCADE_SOURCE_DIR) / "src")) {
+        if (!e.is_regular_file()) { continue; }
+        const std::string ext = e.path().extension().string();
+        if ((ext != ".cpp" && ext != ".hpp") || e.path().filename() == "lang_assets.hpp") { continue; }
+        const std::string rel = fs::relative(e.path(), fs::path(CASCADE_SOURCE_DIR)).generic_string();
+        const std::string text = readSource(rel);
+        // A guard DECLARATION: "PaStreamListGuard <name>;" or "(...)" after the name.
+        const std::string word = "PaStreamListGuard ";
+        std::vector<std::size_t> declsHere;
+        for (std::size_t at = text.find(word); at != std::string::npos; at = text.find(word, at + 1)) {
+            if (commentLine(text, at)) { continue; }
+            std::size_t p = at + word.size();
+            const std::size_t nameAt = p;
+            while (p < text.size() && isIdent(text[p])) { ++p; }
+            if (p == nameAt || p >= text.size() || (text[p] != ';' && text[p] != '(')) { continue; }
+            std::string args;
+            if (text[p] == '(') {
+                const std::size_t close = text.find(')', p);
+                if (close == std::string::npos) { continue; }
+                args = text.substr(p + 1, close - p - 1);
+            }
+            guards.push_back({rel, at, args.find("NoWait") != std::string::npos});
+            declsHere.push_back(at);
+        }
+        // Every Pa_CloseStream call has a guard declared earlier IN ITS OWN
+        // FUNCTION (from the previous column-0 "}" to the call).
+        for (std::size_t at = text.find("Pa_CloseStream("); at != std::string::npos;
+             at = text.find("Pa_CloseStream(", at + 1)) {
+            if (commentLine(text, at)) { continue; }
+            ++closeSites;
+            ++closesPerFile[rel];
+            const std::size_t fnStart = text.rfind("\n}", at);
+            const std::size_t from = fnStart == std::string::npos ? 0 : fnStart;
+            const bool guarded = std::any_of(declsHere.begin(), declsHere.end(),
+                                             [&](std::size_t d) { return d > from && d < at; });
+            if (!guarded) {
+                ++closeUnguarded;
+                std::printf("      %s: Pa_CloseStream without the stream-list guard in its function\n",
+                            rel.c_str());
+            }
+        }
+    }
+    int noWaitSink = 0;
+    int waitCard = 0;
+    int misplaced = 0;
+    for (const Guard& g : guards) {
+        const bool sink = g.file == "src/sink/audio_out.cpp" || g.file == "src/sink/audio_in.cpp";
+        const bool card = g.file == "src/source/soundcard_source.cpp";
+        if (sink && g.noWait) {
+            ++noWaitSink;
+        } else if (card && !g.noWait) {
+            ++waitCard;
+        } else {
+            ++misplaced;
+            std::printf("      %s: a %s stream-list guard where it must not be\n", g.file.c_str(),
+                        g.noWait ? "NoWait" : "WAITING");
+        }
+    }
+    std::printf("stream list: %zu guard(s) - %d NoWait in the audio output/input, %d waiting in the sound "
+                "card, %d misplaced; %d Pa_CloseStream call(s), %d unguarded\n",
+                guards.size(), noWaitSink, waitCard, misplaced, closeSites, closeUnguarded);
+    // audio_out and audio_in: one guard for the open, one for the close, each.
+    CHECK(noWaitSink == 4);
+    CHECK(waitCard >= 3);
+    CHECK(misplaced == 0);
+    CHECK(closesPerFile["src/sink/audio_out.cpp"] == 2);
+    CHECK(closesPerFile["src/sink/audio_in.cpp"] == 2);
+    CHECK(closeSites == 4);
+    CHECK(closeUnguarded == 0);
+}
+
 // The second review's X8: alive() is asked from the source thread (and now
 // from closeDevice) and must never block - a poll stuck inside the host API
 // answers "busy is not dead" to anyone else who asks meanwhile.
@@ -2817,6 +2992,7 @@ int main() {
     testCloseWaits();
     testPatchUsesRunningCard();
     testStreamListSerialised();
+    testStreamListGuardModes();
     testAliveNeverBlocks();
     testBackendClosesBeforeTerminate();
     // Before anything else in this process initialises the real PortAudio.

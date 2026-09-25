@@ -122,7 +122,13 @@ void AudioIn::close() {
     // Abort rather than Stop: Stop would block until the device drained, and
     // there is nothing in an input queue worth waiting for.
     Pa_AbortStream(static_cast<PaStream*>(stream_));
-    Pa_CloseStream(static_cast<PaStream*>(stream_));
+    {
+        // The stream comes off PortAudio's unlocked list here (see
+        // sink/pa_init.hpp); NoWait, like the open - never a wait on
+        // whatever thread closes the microphone.
+        PaStreamListGuard closeGuard(PaStreamListGuard::NoWait);
+        Pa_CloseStream(static_cast<PaStream*>(stream_));
+    }
     stream_ = nullptr;
     running_ = false;
 }

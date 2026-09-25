@@ -1966,12 +1966,22 @@ private:
         // settings - to fall back on.
         bool released = false;
         cascade::source::SoundCardSettings previous;
+        // `wanted` IS `previous` (gui::soundCardSameSettings): released and
+        // tried once, with nothing different to fall back to.
+        bool sameAsPrevious = false;
         bool restoredPrevious = false;  // src runs `previous`: `wanted` was refused
         std::string previousRefused;    // ...and why `previous` did not come back either
     };
-    // What the controls show and the config saves, whether or not the card is
-    // the source in use - the same rule as the I/Q file's path.
+    // What the controls show, whether or not the card is the source in use -
+    // the same rule as the I/Q file's path. The config saves it only when no
+    // card is running, lent to the patch page or remembered
+    // (gui::soundCardToSave): these are edits until Open is pressed.
     cascade::source::SoundCardSettings soundCard_;
+    // The card restoreKeep_ names when its kind is "soundcard" - the saved
+    // card a startup restore could not open, the card released for a re-Open,
+    // the card handed back by the patch page - as it last RAN (or as the
+    // config had it). Meaningful only while restoreKeep_ names a card.
+    cascade::source::SoundCardSettings soundCardRemembered_;
     // The settings of the card as it is RUNNING (set when one is installed;
     // meaningful only while sourceKind_ is "soundcard"). The centre box reads
     // its format: a real-mode card has no centre to move. The patch page's
@@ -2017,6 +2027,10 @@ private:
     // "device=...,api=...": the Source section's settings when it is the same
     // card, real mono on the left channel otherwise.
     std::string soundCardPatchArgs(const std::string& keyArgs) const;
+    // "Receives X to Y." under the Source section's controls, from the
+    // settings shown: the AIR range, through the converter stored for the
+    // section's card (gui::soundCardAirSpan).
+    std::string soundCardReceivesText() const;
 
     // Consumes finished scan/open futures; called once per frame.
     void pollSourceAsync();

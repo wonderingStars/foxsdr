@@ -186,10 +186,6 @@ bool parseDigits(const std::string& s, std::size_t& at, int& out) {
     return true;
 }
 
-// The host API PortAudio's ALSA backend reports (pa_linux_alsa.c,
-// PaAlsa_Initialize: "ALSA").
-constexpr const char* kAlsaHostApi = "ALSA";
-
 }  // namespace
 
 bool parseAlsaHwName(const std::string& name, AlsaHwName& out) {
@@ -256,6 +252,20 @@ SoundCardMatch matchSoundCard(const std::vector<SoundCardDevice>& list, const st
         }
     }
     return m;
+}
+
+std::string soundCardIdentityName(const std::string& name, const std::string& hostApi) {
+    AlsaHwName hw;
+    if (hostApi != kAlsaHostApi || !parseAlsaHwName(name, hw)) { return name; }
+    // "(hw:*,M)": not a name parseAlsaHwName accepts, so an identity is its
+    // own identity.
+    return hw.stripped + " (hw:*," + std::to_string(hw.device) + ")";
+}
+
+bool sameSoundCard(const std::string& aName, const std::string& aHostApi, const std::string& bName,
+                   const std::string& bHostApi) {
+    return aHostApi == bHostApi &&
+           soundCardIdentityName(aName, aHostApi) == soundCardIdentityName(bName, bHostApi);
 }
 
 int findSoundCard(const std::vector<SoundCardDevice>& list, const std::string& name,

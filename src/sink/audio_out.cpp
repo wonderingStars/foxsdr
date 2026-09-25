@@ -164,7 +164,14 @@ void AudioOut::closeLocked() {
     // should cut output immediately. Any samples still in the ring are
     // discarded by the next open()'s drain.
     Pa_AbortStream(static_cast<PaStream*>(stream_));
-    Pa_CloseStream(static_cast<PaStream*>(stream_));
+    {
+        // Pa_CloseStream takes the stream off PortAudio's unlocked list of
+        // open streams as its first act (see sink/pa_init.hpp), while a sound
+        // card may be opening or closing on another thread. NoWait, like the
+        // open: ~AudioOut runs on the GUI thread at exit.
+        PaStreamListGuard closeGuard(PaStreamListGuard::NoWait);
+        Pa_CloseStream(static_cast<PaStream*>(stream_));
+    }
     stream_ = nullptr;
     running_ = false;
 }

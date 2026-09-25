@@ -78,6 +78,26 @@ void AppWindow::launchSoundCardOpen(bool restore, const SoundCardSettings& setti
     if (soundCardOpenPending_) { return; }
     const std::vector<SoundCardDevice> list = soundCardDevices_;
     const bool listed = soundCardListed_;
+    // A DEAD CARD ON LINUX is not opened again by its index - ALSA may have
+    // given that number to another card plugged in since, which would open
+    // under this card's name (gui::soundCardDeadReopenNeedsRestart). Refused
+    // with the restart the application asks for after any plug or unplug;
+    // the dead card stays installed, and the config goes on naming it.
+    if (!restore && sourceKind_ == "soundcard" &&
+        cascade::gui::soundCardDeadReopenNeedsRestart(installedSoundCardDead(), soundCardLive_, settings,
+                                                      list)) {
+        const std::string label = soundCardLive_.device + " (" + soundCardLive_.hostApi + ")";
+        cascade::core::formatUtf8(sourceError_,
+                                  tr("%s has stopped. Sound cards are listed when FoxSDR starts, and on "
+                                     "Linux another card plugged in since can take its place in that list, "
+                                     "so it is not opened again: restart FoxSDR after plugging or "
+                                     "unplugging a card."),
+                                  label.c_str());
+        cascade::core::diagWarnf("source: the sound card %s has stopped; not reopened by its ALSA index "
+                                 "(restart FoxSDR)",
+                                 label.c_str());
+        return;
+    }
     // RE-OPENING THE CARD THAT IS RUNNING - a new rate, channel or format on
     // the same card. Windows will not open a second stream on a card in
     // exclusive use, nor exclusive mode on a card that is already streaming,
@@ -93,6 +113,10 @@ void AppWindow::launchSoundCardOpen(bool restore, const SoundCardSettings& setti
         !restore && cascade::gui::soundCardReopenReleasesFirst(sourceKind_ == "soundcard", soundCardLive_,
                                                                settings, list);
     SoundCardSettings previous;
+    // NOTHING CHANGES (a dead card picked again, Open pressed as it runs):
+    // released all the same, but tried once - there is nothing different to
+    // fall back to (gui::soundCardSameSettings).
+    const bool same = release && cascade::gui::soundCardSameSettings(settings, soundCardLive_);
     if (release) {
         previous = soundCardLive_;
         cascade::core::diagLogf("source: releasing the sound card %s (%s) to open it with new settings",
@@ -111,12 +135,13 @@ void AppWindow::launchSoundCardOpen(bool restore, const SoundCardSettings& setti
         restoreKeep_ = cascade::gui::rememberedSourceAfterFailedOpen(
             "soundcard", cfgSoapyArgs_, cfgNativeArgs_, std::string(),
             cascade::source::soundCardIqRateHz(previous));
+        soundCardRemembered_ = previous;
         restoreKeepLabel_.clear();
         followInputRate();
     }
     const std::uint64_t gen = sourceGen_;
     soundCardOpenFuture_ =
-        std::async(std::launch::async, [settings, list, listed, gen, restore, release, previous,
+        std::async(std::launch::async, [settings, list, listed, gen, restore, release, same, previous,
                                         factory = soundCardBackendFactory()] {
             SoundCardOpenResult r;
             r.gen = gen;
@@ -124,6 +149,7 @@ void AppWindow::launchSoundCardOpen(bool restore, const SoundCardSettings& setti
             r.wanted = settings;
             r.released = release;
             r.previous = previous;
+            r.sameAsPrevious = same;
             // PortAudio's list does not change while the application runs
             // (every PortAudio user in the process shares one snapshot), so a
             // list the section already has is the list; only a first open
@@ -132,7 +158,7 @@ void AppWindow::launchSoundCardOpen(bool restore, const SoundCardSettings& setti
                                : (factory ? factory() : cascade::source::makePortAudioSoundCardBackend())
                                      ->listDevices();
             cascade::source::SoundCardOpenOutcome out = cascade::source::openSoundCardOrRestore(
-                settings, r.devices, release ? &previous : nullptr, factory);
+                settings, r.devices, (release && !same) ? &previous : nullptr, factory);
             r.restoredPrevious = out.restoredPrevious;
             // A coerced rate on success; why it was refused otherwise.
             r.error = (out.src && !out.restoredPrevious) ? out.note : out.refused;
@@ -181,10 +207,16 @@ void AppWindow::pollSoundCard() {
         soundCard_ = r.previous;
         restoreKeepLabel_ = std::string(tr("Sound card")) + ": " + r.previous.device;
         soundCardMissing_.clear();
-        cascade::core::formatUtf8(sourceError_,
-                                  tr("%s did not open with the new settings (%s), and reopening it as it "
-                                     "was failed too (%s)."),
-                                  label.c_str(), r.error.c_str(), r.previousRefused.c_str());
+        if (r.sameAsPrevious) {
+            // Nothing new was asked for: one attempt, one reason.
+            cascade::core::formatUtf8(sourceError_, tr("%s did not open (%s)."), label.c_str(),
+                                      r.error.c_str());
+        } else {
+            cascade::core::formatUtf8(sourceError_,
+                                      tr("%s did not open with the new settings (%s), and reopening it as "
+                                         "it was failed too (%s)."),
+                                      label.c_str(), r.error.c_str(), r.previousRefused.c_str());
+        }
         return;
     }
     if (!r.src) {
@@ -311,6 +343,20 @@ void AppWindow::reapSoundCardWorkers() {
 
 std::string AppWindow::soundCardPatchArgs(const std::string& keyArgs) const {
     return soundCardArgsForPatch(keyArgs, soundCard_);
+}
+
+std::string AppWindow::soundCardReceivesText() const {
+    // THE AIR, as the counter reads it: through the converter kept for the
+    // SECTION's card, by the section's format (an I/Q card takes none).
+    const cascade::core::ConverterSetting stored = cascade::core::converterFor(
+        converters_,
+        resolveConverterKey(cascade::gui::soundCardConverterKey(soundCard_.device, soundCard_.hostApi)));
+    const cascade::gui::SoundCardAirSpan span = cascade::gui::soundCardAirSpan(soundCard_, stored);
+    const std::string lo = soundCardHzText(span.loHz);
+    const std::string hi = soundCardHzText(span.hiHz);
+    std::string line;
+    cascade::core::formatUtf8(line, tr("Receives %s to %s."), lo.c_str(), hi.c_str());
+    return line;
 }
 
 bool AppWindow::retuneFixedCentre(double centerHz) {
@@ -476,12 +522,7 @@ void AppWindow::drawSoundCardControls() {
 
     // WHAT IT RECEIVES, before and after Open, from the settings shown.
     {
-        const double rate = cascade::source::soundCardIqRateHz(soundCard_);
-        const double centre = cascade::source::soundCardCentreHz(soundCard_);
-        const std::string lo = soundCardHzText(std::max(0.0, centre - rate / 2.0));
-        const std::string hi = soundCardHzText(centre + rate / 2.0);
-        std::string line;
-        cascade::core::formatUtf8(line, tr("Receives %s to %s."), lo.c_str(), hi.c_str());
+        const std::string line = soundCardReceivesText();
         ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
         ImGui::TextWrapped("%s", line.c_str());
         // NO MME NOTE ANY MORE: MME entries are not listed at all (see

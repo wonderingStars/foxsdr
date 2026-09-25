@@ -75,9 +75,13 @@ struct CardWorld {
     std::mutex m;
     std::vector<SoundCardDevice> devices;
     std::atomic<int> opens{0};         // successful opens, every backend
+    std::atomic<int> attempts{0};      // every open() asked, refused or not
     std::atomic<bool> dead{false};     // every open card: quiet, and not alive
     std::atomic<bool> holdOpen{false}; // open() waits while set (an open in flight)
     std::atomic<bool> refuse{false};   // open() refuses
+    std::atomic<double> refuseRate{0.0};  // open() refuses this card rate only
+    std::atomic<int> openNow[4]{};     // streams open now, per device index (& 3)
+    std::atomic<int> overlaps{0};      // an open while the same device was still open
 };
 CardWorld g_cards;
 
@@ -90,17 +94,20 @@ public:
         return g_cards.devices;
     }
 
-    bool open(const SoundCardDevice&, int channels, double, bool, PushFn push, void* user,
+    bool open(const SoundCardDevice& dv, int channels, double rateHz, bool, PushFn push, void* user,
               std::string& error) override {
         const auto t0 = std::chrono::steady_clock::now();
         while (g_cards.holdOpen.load() && std::chrono::steady_clock::now() - t0 < std::chrono::seconds(20)) {
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
-        if (g_cards.refuse.load()) {
+        ++g_cards.attempts;
+        if (g_cards.refuse.load() || rateHz == g_cards.refuseRate.load()) {
             error = "fake refused";
             return false;
         }
         close();
+        idx_ = dv.index;
+        if (g_cards.openNow[idx_ & 3].fetch_add(1) != 0) { ++g_cards.overlaps; }
         push_ = push;
         user_ = user;
         channels_ = channels;
@@ -114,7 +121,7 @@ public:
     void close() override {
         feeding_ = false;
         if (feeder_.joinable()) { feeder_.join(); }
-        open_ = false;
+        if (open_.exchange(false) && idx_ >= 0) { g_cards.openNow[idx_ & 3].fetch_sub(1); }
     }
 
     bool alive() override { return open_.load() && !g_cards.dead.load(); }
@@ -129,6 +136,7 @@ private:
         }
     }
 
+    int idx_ = -1;
     PushFn push_ = nullptr;
     void* user_ = nullptr;
     int channels_ = 1;
@@ -139,11 +147,11 @@ private:
 
 std::shared_ptr<SoundCardBackend> makeCard() { return std::make_shared<FakeCard>(); }
 
-SoundCardDevice device(int index, const char* name) {
+SoundCardDevice device(int index, const char* name, const char* api = kApi) {
     SoundCardDevice d;
     d.index = index;
     d.name = name;
-    d.hostApi = kApi;
+    d.hostApi = api;
     d.maxInputChannels = 2;
     d.defaultRateHz = 48000.0;
     d.isDefault = index == 0;
@@ -155,15 +163,31 @@ void resetCards() {
     std::lock_guard<std::mutex> lk(g_cards.m);
     g_cards.devices = {device(0, kCardA), device(1, kCardB)};
     g_cards.opens = 0;
+    g_cards.attempts = 0;
     g_cards.dead = false;
     g_cards.holdOpen = false;
     g_cards.refuse = false;
+    g_cards.refuseRate = 0.0;
+    g_cards.overlaps = 0;
 }
 
-SoundCardSettings card(const char* name, SoundCardFormat f, double rateHz, double iqCentreHz = 0.0) {
+// A LINUX MACHINE, as PortAudio's ALSA backend names its inputs: the card
+// number N in "(hw:N,M)" is the order ALSA found the cards in at this boot.
+const char* const kAlsa = "ALSA";
+const char* const kUsbHw1 = "USB Audio CODEC: USB Audio (hw:1,0)";
+const char* const kUsbHw2 = "USB Audio CODEC: USB Audio (hw:2,0)";
+const char* const kHdaHw0 = "HDA Intel PCH: ALC892 Analog (hw:0,0)";
+
+void setAlsaCards(const char* usbName) {
+    std::lock_guard<std::mutex> lk(g_cards.m);
+    g_cards.devices = {device(0, kHdaHw0, kAlsa), device(1, usbName, kAlsa)};
+}
+
+SoundCardSettings card(const char* name, SoundCardFormat f, double rateHz, double iqCentreHz = 0.0,
+                       const char* api = kApi) {
     SoundCardSettings s;
     s.device = name;
-    s.hostApi = kApi;
+    s.hostApi = api;
     s.cardRateHz = rateHz;
     s.format = f;
     s.iqCentreHz = iqCentreHz;
@@ -173,8 +197,8 @@ SoundCardSettings card(const char* name, SoundCardFormat f, double rateHz, doubl
 
 // The converter key a card is kept under (the patch page's device key for
 // the same card - core::converterRadioKey IS the patch key).
-std::string cardKey(const char* name) {
-    return cascade::core::converterRadioKey("soundcard", cascade::source::soundCardDeviceArgs(name, kApi));
+std::string cardKey(const char* name, const char* api = kApi) {
+    return cascade::core::converterRadioKey("soundcard", cascade::source::soundCardDeviceArgs(name, api));
 }
 
 // --- The native radios (listed, never opened) -------------------------------------
@@ -265,6 +289,30 @@ struct AppWindowTestAccess {
         return settle(a);
     }
     static bool pending(AppWindow& a) { return a.soundCardOpenPending_; }
+    // The Source section's controls, edited and not Opened.
+    static void setSection(AppWindow& a, const SoundCardSettings& s) { a.soundCard_ = s; }
+    static SoundCardSettings section(AppWindow& a) { return a.soundCard_; }
+    static SoundCardSettings liveCard(AppWindow& a) { return a.soundCardLive_; }
+    static std::string err(AppWindow& a) { return a.sourceError_; }
+    static std::string keepKind(AppWindow& a) { return a.restoreKeep_.kind; }
+    static std::string keepLabel(AppWindow& a) { return a.restoreKeepLabel_; }
+    static double rateNow(AppWindow& a) { return a.pipeline_.activeSource().sampleRateHz(); }
+    // The "Receives X to Y." line under the Source section's controls.
+    static std::string receives(AppWindow& a) { return a.soundCardReceivesText(); }
+    // THE PATCH PAGE takes the receiver's card when the patch starts (one
+    // reconcile, as the first frame of a running patch), and hands it back
+    // on STOP. The page's first-frame scan is not under test.
+    static void startPatch(AppWindow& a) {
+        a.patchRunning_ = true;
+        a.patchWasOpen_ = true;
+        a.patchReconcile();
+    }
+    static bool lent(AppWindow& a) { return a.patchMainKeep_.valid; }
+    static bool stopPatch(AppWindow& a) {
+        a.patchRunning_ = false;
+        a.patchStopAll(true);
+        return settle(a);
+    }
     static void restore(AppWindow& a, const cascade::core::AppConfig& cfg) { a.applyConfig(cfg); }
     static cascade::core::AppConfig saved(AppWindow& a) { return a.currentConfig(); }
     static const std::string& kind(AppWindow& a) { return a.sourceKind_; }
@@ -307,6 +355,8 @@ struct AppWindowTestAccess {
     static void changeConverter(AppWindow& a, const ConverterSetting& s) { a.changeConverter(s); }
     static ConverterSetting live(AppWindow& a) { return a.pipeline_.converter(); }
     static std::string keyNow(AppWindow& a) { return a.converterRadioKeyNow(); }
+    // The converter a patch radio with this key is given.
+    static ConverterSetting forKey(AppWindow& a, const std::string& key) { return a.converterForKey(key); }
     static std::vector<ConverterMode> offered(AppWindow& a) { return a.converterModesOffered(); }
     static std::string unusableNote(AppWindow& a) { return a.converterUnusableNote(); }
     static double airCentre(AppWindow& a) { return a.pipeline_.activeSource().centerFrequencyHz(); }
@@ -640,6 +690,424 @@ void testRealCardTunesThroughTheConverterOnce() {
     CHECK_NEAR(Access::counter(app), 10.015e6, 0.5);
 }
 
+// --- F: the third review (4ab1ff0) ----------------------------------------------------------
+
+// The running card goes quiet and says it is dead, as an unplugged one does.
+bool killCard(cascade::gui::AppWindow& app) {
+    Access::startCard(app);
+    g_cards.dead = true;
+    const auto t0 = std::chrono::steady_clock::now();
+    while (!Access::cardDead(app) && std::chrono::steady_clock::now() - t0 < std::chrono::seconds(6)) {
+        Access::readOnce(app);
+    }
+    return Access::cardDead(app);
+}
+
+// Item 1 (probes P1, P6): THE CONFIG NAMES THE CARD THAT RAN, never the
+// Source section's unopened edits - the next launch opens what it saves.
+void testConfigNamesTheCardThatRan() {
+    std::printf("  the config names the card that ran, never the section's unopened edits\n");
+    resetCards();
+    setNative({});
+    {
+        cascade::gui::AppWindow app;
+        CHECK(Access::listCards(app));
+        CHECK(Access::open(app, card(kCardA, SoundCardFormat::RealMono, 48000.0)));
+        // Card B, I/Q, 96 kHz picked in the section - and Open never pressed.
+        Access::setSection(app, card(kCardB, SoundCardFormat::IqStereo, 96000.0, 7.0e6));
+        const cascade::core::AppConfig cfg = Access::saved(app);
+        std::printf("    running A, section B: cfg names \"%s\" %.0f Hz %s\n", cfg.soundCard.device.c_str(),
+                    cfg.soundCard.rateHz, cfg.soundCard.format.c_str());
+        CHECK(cfg.sourceKind == "soundcard");
+        CHECK(cfg.soundCard.device == kCardA);
+        CHECK(cfg.soundCard.rateHz == 48000.0);
+        CHECK(cfg.soundCard.format == "real");
+        // P6: a same-card re-Open in flight (the card released, the generator
+        // standing in): the card as it RAN, not the settings being tried.
+        g_cards.holdOpen = true;
+        Access::startOpen(app, card(kCardA, SoundCardFormat::RealMono, 96000.0));
+        const cascade::core::AppConfig mid = Access::saved(app);
+        std::printf("    re-Open in flight: cfg %s, %.0f Hz\n", mid.sourceKind.c_str(), mid.soundCard.rateHz);
+        CHECK(mid.sourceKind == "soundcard");
+        CHECK(mid.soundCard.device == kCardA);
+        CHECK(mid.soundCard.rateHz == 48000.0);
+        g_cards.holdOpen = false;
+        CHECK(Access::settle(app));
+        // Opened: now the new rate is what ran.
+        CHECK(Access::saved(app).soundCard.rateHz == 96000.0);
+        // The generator chosen deliberately: no card live or remembered, so
+        // the section's settings are what the file keeps.
+        Access::pick(app, 0);
+        Access::setSection(app, card(kCardB, SoundCardFormat::RealMono, 48000.0));
+        const cascade::core::AppConfig gen = Access::saved(app);
+        CHECK(gen.sourceKind == "siggen");
+        CHECK(gen.soundCard.device == kCardB);
+    }
+    // A startup restore that could not open the saved card keeps naming it,
+    // whatever the section is edited to afterwards.
+    {
+        cascade::gui::AppWindow app;
+        CHECK(Access::listCards(app));
+        g_cards.refuse = true;
+        cascade::core::AppConfig cfg;
+        cfg.sourceKind = "soundcard";
+        cfg.soundCard.device = kCardA;
+        cfg.soundCard.hostApi = kApi;
+        cfg.soundCard.rateHz = 48000.0;
+        Access::restore(app, cfg);
+        CHECK(Access::settle(app));
+        CHECK(Access::kind(app) == "siggen");
+        Access::setSection(app, card(kCardB, SoundCardFormat::IqStereo, 96000.0, 7.0e6));
+        const cascade::core::AppConfig out = Access::saved(app);
+        CHECK(out.sourceKind == "soundcard");
+        CHECK(out.soundCard.device == kCardA);
+        CHECK(out.soundCard.rateHz == 48000.0);
+        g_cards.refuse = false;
+    }
+}
+
+// Item 7 R17: A CARD LENT TO THE PATCH is what the config names - the card
+// as it ran, never the section's edits - and neither radio slot is touched.
+void testLentCardIsSaved() {
+    std::printf("  a card lent to the patch page is saved as it ran; the radio slots keep theirs\n");
+    resetCards();
+    setNative({});
+    cascade::gui::AppWindow app;
+    CHECK(Access::listCards(app));
+    CHECK(Access::open(app, card(kCardA, SoundCardFormat::RealMono, 48000.0)));
+    Access::setSection(app, card(kCardB, SoundCardFormat::IqStereo, 96000.0, 7.0e6));
+    Access::startPatch(app);
+    CHECK(Access::lent(app));
+    CHECK(Access::kind(app) == "siggen");
+    const cascade::core::AppConfig cfg = Access::saved(app);
+    std::printf("    lent: cfg %s \"%s\" %.0f Hz, nativeArgs \"%s\" soapyArgs \"%s\"\n", cfg.sourceKind.c_str(),
+                cfg.soundCard.device.c_str(), cfg.soundCard.rateHz, cfg.nativeArgs.c_str(), cfg.soapyArgs.c_str());
+    CHECK(cfg.sourceKind == "soundcard");
+    CHECK(cfg.soundCard.device == kCardA);
+    CHECK(cfg.soundCard.rateHz == 48000.0);
+    CHECK(cfg.nativeArgs.empty());
+    CHECK(cfg.soapyArgs.empty());
+    // STOP: the card comes back as it was lent.
+    CHECK(Access::stopPatch(app));
+    CHECK(Access::kind(app) == "soundcard");
+    CHECK(Access::liveCard(app).device == kCardA);
+    CHECK(Access::rateNow(app) == 24000.0);
+
+    // Lent again, and this time the hand-back is refused: the config goes on
+    // naming the card as it was lent, not the section's edits.
+    Access::setSection(app, card(kCardB, SoundCardFormat::IqStereo, 96000.0, 7.0e6));
+    Access::startPatch(app);
+    CHECK(Access::lent(app));
+    g_cards.refuse = true;
+    CHECK(Access::stopPatch(app));
+    CHECK(Access::kind(app) == "siggen");
+    const cascade::core::AppConfig after = Access::saved(app);
+    CHECK(after.sourceKind == "soundcard");
+    CHECK(after.soundCard.device == kCardA);
+    CHECK(after.soundCard.rateHz == 48000.0);
+    g_cards.refuse = false;
+}
+
+// Item 3: "Receives X to Y." is the AIR range, through the card's converter.
+void testReceivesLineThroughTheConverter() {
+    std::printf("  the Receives line is the air range, through the section card's converter\n");
+    resetCards();
+    setNative({});
+    cascade::gui::AppWindow app;
+    CHECK(Access::listCards(app));
+    CHECK(Access::open(app, card(kCardA, SoundCardFormat::RealMono, 48000.0)));
+    std::printf("    no converter: \"%s\"\n", Access::receives(app).c_str());
+    CHECK(Access::receives(app) == "Receives 0 kHz to 24 kHz.");
+    Access::changeConverter(app, down(10.0e6));
+    std::printf("    down 10 MHz: \"%s\" (counter %.0f Hz)\n", Access::receives(app).c_str(), Access::counter(app));
+    CHECK(Access::receives(app) == "Receives 10.0000 MHz to 10.0240 MHz.");
+    // Inverted: air = LO - radio, so the edges swap.
+    Access::changeConverter(app, {ConverterMode::Down, 10.0e6, true});
+    CHECK(Access::receives(app) == "Receives 9.9760 MHz to 10.0000 MHz.");
+    Access::changeConverter(app, down(10.0e6));
+    // The section set up for card B (not Opened): B's own converter.
+    Access::setConverter(app, cardKey(kCardB), down(3.0e6));
+    Access::setSection(app, card(kCardB, SoundCardFormat::RealMono, 48000.0));
+    CHECK(Access::receives(app) == "Receives 3.0000 MHz to 3.0240 MHz.");
+    // The section set up for I/Q on A: an I/Q card takes no converter; the
+    // typed centre is the air.
+    Access::setSection(app, card(kCardA, SoundCardFormat::IqStereo, 96000.0, 7.1e6));
+    CHECK(Access::receives(app) == "Receives 7.0520 MHz to 7.1480 MHz.");
+}
+
+// Item 4: a re-Open whose settings are what was running - a dead card picked
+// again, or Open pressed with nothing changed - is tried ONCE, and a refusal
+// is said as a plain "did not open".
+void testSameSettingsTriedOnce() {
+    std::printf("  a re-Open with the running settings is tried once and said plainly\n");
+    const std::string expect =
+        std::string(kCardA) + " (" + kApi + ") did not open (\"" + kCardA + "\": fake refused).";
+    // Open pressed with the running settings.
+    {
+        resetCards();
+        setNative({});
+        cascade::gui::AppWindow app;
+        CHECK(Access::listCards(app));
+        CHECK(Access::open(app, card(kCardA, SoundCardFormat::RealMono, 48000.0)));
+        const int before = g_cards.attempts.load();
+        g_cards.refuse = true;
+        CHECK(Access::open(app, card(kCardA, SoundCardFormat::RealMono, 48000.0)));
+        std::printf("    same settings: %d attempt(s), \"%s\"\n", g_cards.attempts.load() - before,
+                    Access::err(app).c_str());
+        CHECK(g_cards.attempts.load() == before + 1);
+        CHECK(Access::err(app) == expect);
+        CHECK(Access::kind(app) == "siggen");
+        CHECK(Access::lamp(app));
+        CHECK(Access::saved(app).sourceKind == "soundcard");
+        g_cards.refuse = false;
+    }
+    // The dead card's row picked again.
+    {
+        resetCards();
+        setNative({});
+        cascade::gui::AppWindow app;
+        CHECK(Access::listCards(app));
+        CHECK(Access::open(app, card(kCardA, SoundCardFormat::RealMono, 48000.0)));
+        CHECK(killCard(app));
+        g_cards.refuse = true;
+        const int before = g_cards.attempts.load();
+        Access::pick(app, Access::kSoundCardRow);
+        CHECK(Access::settle(app));
+        std::printf("    dead re-pick: %d attempt(s), \"%s\"\n", g_cards.attempts.load() - before,
+                    Access::err(app).c_str());
+        CHECK(g_cards.attempts.load() == before + 1);
+        CHECK(Access::err(app) == expect);
+        g_cards.refuse = false;
+        g_cards.dead = false;
+    }
+    // New settings still get the old ones to fall back on (two attempts).
+    {
+        resetCards();
+        setNative({});
+        cascade::gui::AppWindow app;
+        CHECK(Access::listCards(app));
+        CHECK(Access::open(app, card(kCardA, SoundCardFormat::RealMono, 48000.0)));
+        g_cards.refuse = true;
+        const int before = g_cards.attempts.load();
+        CHECK(Access::open(app, card(kCardA, SoundCardFormat::RealMono, 96000.0)));
+        CHECK(g_cards.attempts.load() == before + 2);
+        CHECK(Access::err(app).find("and reopening it as it was failed too") != std::string::npos);
+        g_cards.refuse = false;
+    }
+}
+
+// Item 5: ON LINUX a card's converter, and a patch radio's match to the
+// section, survive ALSA numbering the card differently at the next boot.
+void testAlsaConverterSurvivesRenumbering() {
+    std::printf("  an ALSA card's converter survives the card being renumbered at the next boot\n");
+    resetCards();
+    setNative({});
+    setAlsaCards(kUsbHw1);
+    cascade::core::AppConfig saved;
+    {
+        cascade::gui::AppWindow app;
+        CHECK(Access::listCards(app));
+        CHECK(Access::open(app, card(kUsbHw1, SoundCardFormat::RealMono, 48000.0, 0.0, kAlsa)));
+        Access::changeConverter(app, down(10.0e6));
+        CHECK(Access::live(app) == down(10.0e6));
+        saved = Access::saved(app);
+    }
+    // The next boot: the same card is hw:2,0.
+    setAlsaCards(kUsbHw2);
+    {
+        cascade::gui::AppWindow app;
+        Access::restore(app, saved);
+        CHECK(Access::settle(app));
+        CHECK(Access::kind(app) == "soundcard");
+        std::printf("    renumbered: live \"%s\", converter %s\n", Access::liveCard(app).device.c_str(),
+                    cascade::core::converterActive(Access::live(app)) ? "applied" : "LOST");
+        CHECK(Access::liveCard(app).device == kUsbHw2);
+        CHECK(Access::live(app) == down(10.0e6));
+        CHECK(Access::airCentre(app) == 10.012e6);
+        // A patch radio names the card by its full name - this boot's, or
+        // the one it was saved under last boot: the same converter.
+        CHECK(Access::forKey(app, cardKey(kUsbHw2, kAlsa)) == down(10.0e6));
+        CHECK(Access::forKey(app, cardKey(kUsbHw1, kAlsa)) == down(10.0e6));
+        // ...and another PCM device on the card is another input.
+        CHECK(!cascade::core::converterActive(
+            Access::forKey(app, cardKey("USB Audio CODEC: USB Audio (hw:2,1)", kAlsa))));
+    }
+    // A config written before this rule, keyed by the full name: migrated.
+    {
+        cascade::core::AppConfig old = saved;
+        old.converters.clear();
+        old.converters[cardKey(kUsbHw1, kAlsa)] = down(7.0e6);
+        cascade::gui::AppWindow app;
+        Access::restore(app, old);
+        CHECK(Access::settle(app));
+        CHECK(Access::kind(app) == "soundcard");
+        CHECK(Access::live(app) == down(7.0e6));
+        CHECK(Access::stored(app, Access::keyNow(app)) == down(7.0e6));
+    }
+    resetCards();
+}
+
+// Item 6: ON LINUX a dead card is not reopened by its index - ALSA may have
+// given that index to another card plugged in since - but refused with the
+// restart sentence. (The seam is the host API, so this runs everywhere;
+// testPickingADeadCardReopensIt is the Windows half, unchanged.)
+void testAlsaDeadCardAsksForARestart() {
+    std::printf("  a dead ALSA card is refused with the restart sentence, never reopened by index\n");
+    resetCards();
+    setNative({});
+    setAlsaCards(kUsbHw1);
+    cascade::gui::AppWindow app;
+    CHECK(Access::listCards(app));
+    CHECK(Access::open(app, card(kUsbHw1, SoundCardFormat::RealMono, 48000.0, 0.0, kAlsa)));
+    // A HEALTHY ALSA card re-Opened with new settings is simply reopened.
+    CHECK(Access::open(app, card(kUsbHw1, SoundCardFormat::RealMono, 96000.0, 0.0, kAlsa)));
+    CHECK(Access::kind(app) == "soundcard");
+    CHECK(Access::rateNow(app) == 48000.0);
+    CHECK(Access::err(app).empty());
+    CHECK(Access::open(app, card(kUsbHw1, SoundCardFormat::RealMono, 48000.0, 0.0, kAlsa)));
+    CHECK(Access::rateNow(app) == 24000.0);
+    CHECK(killCard(app));
+    g_cards.dead = false;  // "a card" answers again at that index
+    const int before = g_cards.attempts.load();
+    Access::pick(app, Access::kSoundCardRow);
+    CHECK(Access::settle(app));
+    std::printf("    re-pick: %d attempt(s), \"%s\"\n", g_cards.attempts.load() - before, Access::err(app).c_str());
+    CHECK(g_cards.attempts.load() == before);
+    CHECK(Access::err(app).find("restart FoxSDR") != std::string::npos);
+    CHECK(Access::err(app).find(kUsbHw1) != std::string::npos);
+    // Open with new settings on the same dead card: refused the same way.
+    Access::setSection(app, card(kUsbHw1, SoundCardFormat::RealMono, 96000.0, 0.0, kAlsa));
+    CHECK(Access::open(app, Access::section(app)));
+    CHECK(g_cards.attempts.load() == before);
+    CHECK(Access::err(app).find("restart FoxSDR") != std::string::npos);
+    // The config goes on naming the card.
+    CHECK(Access::saved(app).sourceKind == "soundcard");
+    CHECK(Access::saved(app).soundCard.device == kUsbHw1);
+    resetCards();
+}
+
+// Item 7 R3 (probe P2): released, and NEITHER the new settings nor the old
+// ones open. The section shows what ran; the config names it; the combo says
+// so; a later Open with the card back simply opens it.
+void testReleasedAndBothRefused() {
+    std::printf("  a released card whose new and old settings are both refused\n");
+    resetCards();
+    setNative({});
+    cascade::gui::AppWindow app;
+    CHECK(Access::listCards(app));
+    CHECK(Access::open(app, card(kCardA, SoundCardFormat::RealMono, 48000.0)));
+    g_cards.refuse = true;
+    Access::startOpen(app, card(kCardA, SoundCardFormat::RealMono, 96000.0));
+    CHECK(Access::kind(app) == "siggen");
+    CHECK(Access::settle(app));
+    const cascade::core::AppConfig cfg = Access::saved(app);
+    CHECK(Access::kind(app) == "siggen");
+    CHECK(Access::lamp(app));
+    CHECK(Access::section(app).cardRateHz == 48000.0);
+    CHECK(Access::section(app).device == kCardA);
+    CHECK(!Access::keepLabel(app).empty());
+    CHECK(Access::err(app).find("and reopening it as it was failed too") != std::string::npos);
+    CHECK(cfg.sourceKind == "soundcard");
+    CHECK(cfg.soundCard.device == kCardA);
+    CHECK(cfg.soundCard.rateHz == 48000.0);
+    CHECK(g_cards.overlaps.load() == 0);
+    g_cards.refuse = false;
+    CHECK(Access::open(app, Access::section(app)));
+    CHECK(Access::kind(app) == "soundcard");
+    CHECK(!Access::lamp(app));
+    CHECK(Access::keepKind(app).empty());
+}
+
+// Item 7 R4, R5 (probe P5): the generator picked while a released card
+// reopens. Whether the reopen then succeeds or fails, the choice stands: no
+// card is installed, and nothing is said about a card nobody is waiting for.
+void testGeneratorPickedDuringRelease() {
+    std::printf("  the generator picked while a released card reopens: the choice stands\n");
+    for (const bool refused : {false, true}) {
+        resetCards();
+        setNative({});
+        cascade::gui::AppWindow app;
+        CHECK(Access::listCards(app));
+        CHECK(Access::open(app, card(kCardA, SoundCardFormat::RealMono, 48000.0)));
+        g_cards.holdOpen = true;
+        g_cards.refuse = refused;
+        Access::startOpen(app, card(kCardA, SoundCardFormat::RealMono, 96000.0));
+        Access::pick(app, 0);
+        g_cards.holdOpen = false;
+        CHECK(Access::settle(app));
+        const cascade::core::AppConfig cfg = Access::saved(app);
+        std::printf("    reopen %s: kind %s, sel %d, err \"%s\", label \"%s\", cfg %s\n",
+                    refused ? "refused" : "opened", Access::kind(app).c_str(), Access::sel(app),
+                    Access::err(app).c_str(), Access::keepLabel(app).c_str(), cfg.sourceKind.c_str());
+        CHECK(Access::kind(app) == "siggen");
+        CHECK(Access::sel(app) == 0);
+        CHECK(cfg.sourceKind == "siggen");
+        CHECK(Access::err(app).empty());
+        CHECK(Access::keepLabel(app).empty());
+        CHECK(!Access::lamp(app));
+        CHECK(g_cards.openNow[0].load() == 0);  // the card that opened late was closed again
+        g_cards.refuse = false;
+    }
+}
+
+// Item 7 R23: another card's Open refused while card A runs - the section
+// goes back to A, which is what is running.
+void testFailedOtherCardKeepsTheSection() {
+    std::printf("  a refused Open of another card puts the section back on the running one\n");
+    resetCards();
+    setNative({});
+    cascade::gui::AppWindow app;
+    CHECK(Access::listCards(app));
+    CHECK(Access::open(app, card(kCardA, SoundCardFormat::RealMono, 48000.0)));
+    g_cards.refuse = true;
+    CHECK(Access::open(app, card(kCardB, SoundCardFormat::IqStereo, 96000.0, 7.0e6)));
+    CHECK(Access::kind(app) == "soundcard");
+    CHECK(Access::liveCard(app).device == kCardA);
+    CHECK(Access::section(app).device == kCardA);
+    CHECK(Access::section(app).cardRateHz == 48000.0);
+    CHECK(Access::section(app).format == SoundCardFormat::RealMono);
+    CHECK(!Access::err(app).empty());
+    g_cards.refuse = false;
+}
+
+// Item 7 R16: the converter belongs to the RUNNING card, whatever the
+// section has been edited to.
+void testConverterKeyFollowsTheRunningCard() {
+    std::printf("  the converter key is the running card's, not the section's\n");
+    resetCards();
+    setNative({});
+    cascade::gui::AppWindow app;
+    CHECK(Access::listCards(app));
+    CHECK(Access::open(app, card(kCardA, SoundCardFormat::RealMono, 48000.0)));
+    Access::setSection(app, card(kCardB, SoundCardFormat::RealMono, 48000.0));
+    CHECK(Access::keyNow(app) == cardKey(kCardA));
+    Access::changeConverter(app, down(10.0e6));
+    CHECK(Access::stored(app, cardKey(kCardA)) == down(10.0e6));
+    CHECK(!cascade::core::converterActive(Access::stored(app, cardKey(kCardB))));
+    CHECK(Access::live(app) == down(10.0e6));
+}
+
+// Item 7 R18: a dead card picked again reopens AS IT RAN, not as the section
+// has been edited meanwhile.
+void testDeadRepickIgnoresSectionEdits() {
+    std::printf("  a dead card picked again reopens as it ran, not as the section was edited\n");
+    resetCards();
+    setNative({});
+    cascade::gui::AppWindow app;
+    CHECK(Access::listCards(app));
+    CHECK(Access::open(app, card(kCardA, SoundCardFormat::RealMono, 48000.0)));
+    Access::setSection(app, card(kCardB, SoundCardFormat::IqStereo, 96000.0, 7.0e6));
+    CHECK(killCard(app));
+    g_cards.dead = false;
+    Access::pick(app, Access::kSoundCardRow);
+    CHECK(Access::settle(app));
+    CHECK(Access::kind(app) == "soundcard");
+    CHECK(Access::liveCard(app).device == kCardA);
+    CHECK(Access::liveCard(app).format == SoundCardFormat::RealMono);
+    CHECK(Access::rateNow(app) == 24000.0);
+    CHECK(Access::section(app).device == kCardA);
+}
+
 }  // namespace
 
 int main() {
@@ -657,6 +1125,18 @@ int main() {
     testIqCardHasNoConverter();
     testRealCardTakesADownConverterOnly();
     testRealCardTunesThroughTheConverterOnce();
+    // The third review (4ab1ff0).
+    testConfigNamesTheCardThatRan();
+    testLentCardIsSaved();
+    testReceivesLineThroughTheConverter();
+    testSameSettingsTriedOnce();
+    testAlsaConverterSurvivesRenumbering();
+    testAlsaDeadCardAsksForARestart();
+    testReleasedAndBothRefused();
+    testGeneratorPickedDuringRelease();
+    testFailedOtherCardKeepsTheSection();
+    testConverterKeyFollowsTheRunningCard();
+    testDeadRepickIgnoresSectionEdits();
 
     std::error_code ec;
     std::filesystem::remove_all(g_scratch, ec);

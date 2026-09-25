@@ -793,8 +793,8 @@ const KnownWait kKnownWaits[] = {
     {"src/sink/pa_init.hpp", "kStreamListWaitMs", 0,
      "PortAudio's stream-list lock (PaStreamListGuard): waited for only by a sound card's open "
      "(on a worker) and its close (on the card's own closer thread, detached); the audio output "
-     "and microphone take it NoWait and their closes not at all, so no thread the teardown runs "
-     "on ever waits for it"},
+     "and microphone take it NoWait for their opens and their closes alike, so no thread the "
+     "teardown runs on ever waits for it"},
 
     // THE TRANSMITTER (0.95.0), AND IT IS THE FIRST COLUMN THAT ADDS.
     //

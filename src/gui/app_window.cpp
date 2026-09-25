@@ -8705,7 +8705,11 @@ void AppWindow::selectSource(int idx, std::optional<double> carryAirHz) {
         // (PortAudio lists inputs once per session - the card's own fault
         // sentence says so), and the open's failure is then said as any
         // other. The dead card is released first (launchSoundCardOpen, same
-        // card) and not waited for.
+        // card) and not waited for, and tried once (its settings are the
+        // ones it ran with). ON LINUX it is not reopened at all: an ALSA
+        // entry opens by card number, which another card plugged in since
+        // may now have, so launchSoundCardOpen refuses with the restart
+        // sentence instead (gui::soundCardDeadReopenNeedsRestart).
         sourceSel_ = kSoundCardRow;
         if (installedCardDead) {
             cascade::core::diagLogf("source: reopening the sound card %s (%s), which had stopped",
@@ -23635,7 +23639,10 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     // THE CONVERTERS, BEFORE ANY SOURCE IS RESTORED: cfg.centerHz is the AIR
     // frequency the last session was on, and the radio below is told it
     // through its own converter (radioHzForSource / applyConverterForSource).
-    converters_ = cascade::core::sanitiseConverters(cfg.converters);
+    // A sound card's converter written under its full ALSA name (before the
+    // identity key) is moved to the key it is looked up by now
+    // (gui::soundCardConverterKey); nothing else is touched.
+    converters_ = cascade::gui::migrateSoundCardConverterKeys(cascade::core::sanitiseConverters(cfg.converters));
 
     // Source restore. The generator is always safe (it is already active);
     // a file is restored only if the path still opens; a Soapy device only
@@ -23653,6 +23660,7 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
         // names it too only once the open has actually failed.
         restoreKeep_ = cascade::gui::rememberedSourceAfterFailedOpen(
             cfg.sourceKind, cfg.soapyArgs, cfg.nativeArgs, cfg.iqFilePath, cfg.sampleRateHz);
+        soundCardRemembered_ = soundCard_;  // the card the config names, whatever the section becomes
         restoreKeepLabel_.clear();
         sourceSel_ = kSoundCardRow;
         launchSoundCardOpen(/*restore=*/true, soundCard_);
@@ -24086,8 +24094,9 @@ cascade::core::AppConfig AppWindow::currentConfig() {
             keep.soapyArgs = patchMainKeep_.args;
             keep.nativeArgs = cfgNativeArgs_;
         } else if (patchMainKeep_.kind == "soundcard") {
-            // A lent sound card is named by cfg.soundCard (below); both radio
-            // slots keep what they had.
+            // A lent sound card is named by cfg.soundCard (below, the card as
+            // it was lent - patchMainKeep_.card); both radio slots keep what
+            // they had.
             keep.soapyArgs = cfgSoapyArgs_;
             keep.nativeArgs = cfgNativeArgs_;
         } else {
@@ -24128,9 +24137,15 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     // wrote this out EMPTY - the path box came back blank on the next start
     // and nothing anywhere said which file had gone.
     cfg.iqFilePath = src.filePath;
-    // The sound card's settings as the Source section holds them - the card
-    // as opened when one is, or as last set up when not.
-    cfg.soundCard = cascade::gui::soundCardToConfig(soundCard_);
+    // THE SOUND CARD THAT RAN, never the Source section's unopened edits: the
+    // next launch opens exactly what is written here. The running card; the
+    // card the patch page has borrowed; the card a failed restore, a re-Open's
+    // release or a hand-back left remembered; and only when there is none of
+    // those, the section's settings - the card as last set up
+    // (gui::soundCardToSave).
+    cfg.soundCard = cascade::gui::soundCardToConfig(cascade::gui::soundCardToSave(
+        sourceKind_, soundCardLive_, patchMainKeep_.valid && patchMainKeep_.kind == "soundcard",
+        patchMainKeep_.card, restoreKeep_.kind == "soundcard", soundCardRemembered_, soundCard_));
     cfg.centerHz = pipeline_.activeSource().centerFrequencyHz();
     cfg.mode = kModeNames[modeIndex_];
     cfg.bandwidthHz = vfoBandwidthHz_;

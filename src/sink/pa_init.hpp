@@ -27,9 +27,10 @@
 // anything (RemoveOpenStream, "be sure to call this _before_ closing the
 // stream"). A sound card is closed on a thread of its own, so a close can now
 // run while an open does - two unlocked writers on one list. PaStreamListGuard
-// is held around every Pa_OpenStream in the product and around a sound card's
-// Pa_CloseStream (on its closer thread, or on the worker whose open failed),
-// so those list changes happen one at a time.
+// is held around every Pa_OpenStream and every Pa_CloseStream in the product
+// (a sound card's on its closer thread, or on the worker whose open failed;
+// the audio output's and the microphone's wherever they run), so those list
+// changes happen one at a time.
 //
 // AND WHY IT CANNOT HANG ANYBODY. A close that has stopped answering holds the
 // guard for as long as it hangs - but by then it is inside the host API's own
@@ -45,8 +46,10 @@
 // and the Pipeline constructor opens the default output on the thread that
 // builds it - so AudioOut and AudioIn take the guard with NoWait: they hold it
 // if it is free (and a sound card open or close that comes along meanwhile
-// waits its turn), and go ahead at once if it is not. Their OWN closes do not
-// take it at all (~AudioOut can run on the GUI thread at exit).
+// waits its turn), and go ahead at once if it is not. Their CLOSES take it the
+// same way, NoWait (~AudioOut can run on the GUI thread at exit): a close
+// changes the list exactly as an open does, and a close that finds the lock
+// held goes ahead rather than make the GUI thread wait.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
