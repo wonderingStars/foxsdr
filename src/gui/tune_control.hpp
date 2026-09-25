@@ -995,11 +995,16 @@ inline bool deckMetersFit(float barW, const CounterLayout& c, float scale) {
 // In 1 and 2 the banner is laid out on one line (words, then the key) or on
 // two (the words over the key), at the bar's own font size or a whole pixel
 // or more smaller - never below kMuteKeyMinPx, the size at which a key's label
-// is still read at a glance. The KEY IS ALWAYS WHOLE inside its place. Of
-// every way that fits, the one that shows the whole sentence at the largest
-// size wins; when none shows it whole, the largest key with the most of the
-// words, which are then SHORTENED WITH AN ELLIPSIS (app_window.cpp puts the
-// full sentence in a tooltip over both the words and the key).
+// is still read at a glance. The KEY IS ALWAYS WHOLE inside its place, and it
+// takes the LARGEST size any place and arrangement allows - the key is what the
+// banner is for. The words then take their own size, no larger than the key's
+// and no smaller than the floor, the largest at which the whole sentence fits
+// beside or above the key; when it fits nowhere, they keep the key's size and
+// are SHORTENED WITH AN ELLIPSIS (app_window.cpp puts the full sentence in a
+// tooltip over both the words and the key). Between arrangements: the larger
+// key, then the whole sentence, then the larger words, then more of them.
+// (The first cut shared one size between them, and on Linux's narrower face
+// four names in English shrank the key to 13 px to show the sentence whole.)
 //
 // THE WIDTHS ARE MEASURED AT EACH SIZE, not scaled from the bar's: a face's
 // advances do not shrink in proportion (at 15 px a key came out 1.4 px wider
@@ -1031,7 +1036,8 @@ inline int muteBannerSizes(float lineH, float* px, int max) {
 struct MuteBannerLayout {
     int slot = 0;            // 0 middle, 1 over the meters, 2 the master cluster's head
     int lines = 1;           // 1: words then key; 2: words over the key
-    float px = 0.0f;         // the font size words and key are drawn at
+    float px = 0.0f;         // the font size the KEY is drawn at
+    float wordsPx = 0.0f;    // the font size the words are drawn at (never above px)
     // The place, bar-relative pixels: everything is drawn clipped to it, and
     // everything is laid out inside it.
     float x0 = 0.0f, y0 = 0.0f, x1 = 0.0f, y1 = 0.0f;
@@ -1065,6 +1071,7 @@ inline MuteBannerLayout layoutMuteBanner(float barW, float scale, float coreW, b
     if (muteBannerMiddleW(barW, ruleCoreW) >= std::max(kMuteBannerMinW, bannerW)) {
         best.slot = 0;
         best.px = full.px;
+        best.wordsPx = full.px;
         best.x0 = clusterEnd;
         best.y0 = 62.0f * scale;
         best.x1 = clusterEnd + bannerW;
@@ -1098,39 +1105,52 @@ inline MuteBannerLayout layoutMuteBanner(float barW, float scale, float coreW, b
         const float h = p.y1 - p.y0;
         if (w <= 0.0f || h <= 0.0f) { continue; }
         for (int lines = 1; lines <= 2; ++lines) {
-            // Largest first: the first size whose key fits, and the first whose
-            // whole sentence fits beside (or over) the key.
-            int keyFits = -1;
-            int wholeFits = -1;
-            for (int i = 0; i < n; ++i) {
+            // THE KEY FIRST: the largest size at which it is whole here - on two
+            // lines, with room above it for a line of words at the floor.
+            int k = -1;
+            for (int i = 0; i < n && k < 0; ++i) {
                 const MuteBannerSize& z = sizes[i];
                 if (z.px < kMuteKeyMinPx - 1.0e-3f) { break; }
                 const float kw = z.keyLabelW + 2.0f * keyPadX;
-                const float tall = lines == 1 ? z.px : 2.0f * z.px + kMuteBannerLineGap;
-                if (kw > w || tall > h) { continue; }
-                if (keyFits < 0) { keyFits = i; }
-                const bool whole = lines == 1 ? z.wordsW + gap + kw <= w : z.wordsW <= w;
-                if (whole) {
-                    wholeFits = i;
-                    break;
-                }
+                const float tall =
+                    lines == 1 ? z.px : z.px + kMuteBannerLineGap + kMuteKeyMinPx;
+                if (kw <= w && tall <= h) { k = i; }
             }
-            if (keyFits < 0) { continue; }  // the key cannot be whole and readable here
-            const bool whole = wholeFits >= 0;
-            const MuteBannerSize& z = sizes[whole ? wholeFits : keyFits];
-            const float keyW = z.keyLabelW + 2.0f * keyPadX;
-            // What of the words is shown: all, or the room left before the key.
-            float room = lines == 1 ? w - keyW - gap : w;
-            if (!whole && room < 2.0f * z.px) { room = 0.0f; }  // too little to say anything in
-            const float shown = whole ? z.wordsW : std::max(0.0f, room);
-            // Ranked: the whole sentence first, then the larger size, then more
-            // of the words; ties keep the earlier (one line, over the meters).
+            if (k < 0) { continue; }  // the key cannot be whole and readable here
+            const MuteBannerSize& kz = sizes[k];
+            const float keyW = kz.keyLabelW + 2.0f * keyPadX;
+            // THEN THE WORDS: the largest size - no larger than the key's, no
+            // smaller than the floor - at which the whole sentence fits in what
+            // the key leaves (beside it, or on the line above it).
+            const float room = lines == 1 ? w - keyW - gap : w;
+            const float lineRoom = lines == 1 ? h : h - kz.px - kMuteBannerLineGap;
+            int wi = -1;
+            for (int i = k; i < n && wi < 0; ++i) {
+                const MuteBannerSize& z = sizes[i];
+                if (z.px < kMuteKeyMinPx - 1.0e-3f) { break; }
+                if (z.wordsW <= room && z.px <= lineRoom) { wi = i; }
+            }
+            const bool whole = wi >= 0;
+            // Shortened, the words keep the key's size, or the largest their line holds.
+            int si = k;
+            while (!whole && si < n - 1 && sizes[si].px > lineRoom) { ++si; }
+            const MuteBannerSize& wz = sizes[whole ? wi : si];
+            float shown = whole ? wz.wordsW : std::max(0.0f, room);
+            if (!whole && (room < 2.0f * wz.px || wz.px > lineRoom ||
+                           wz.px < kMuteKeyMinPx - 1.0e-3f)) {
+                shown = 0.0f;  // too little room to say anything in: the tooltip says it
+            }
+            // Ranked: the larger KEY first, then the whole sentence, then larger
+            // words, then more of them; ties keep the earlier (one line, over
+            // the meters).
             bool better = !have;
             if (have) {
-                if (whole != best.wordsWhole) {
+                if (std::fabs(kz.px - best.px) > 1.0e-3f) {
+                    better = kz.px > best.px;
+                } else if (whole != best.wordsWhole) {
                     better = whole;
-                } else if (std::fabs(z.px - best.px) > 1.0e-3f) {
-                    better = z.px > best.px;
+                } else if (std::fabs(wz.px - best.wordsPx) > 1.0e-3f) {
+                    better = wz.px > best.wordsPx;
                 } else {
                     better = shown > bestShown + 0.5f;
                 }
@@ -1141,7 +1161,8 @@ inline MuteBannerLayout layoutMuteBanner(float barW, float scale, float coreW, b
             MuteBannerLayout l;
             l.slot = p.slot;
             l.lines = lines;
-            l.px = z.px;
+            l.px = kz.px;
+            l.wordsPx = wz.px;
             l.x0 = p.x0;
             l.y0 = p.y0;
             l.x1 = p.x1;
@@ -1149,21 +1170,22 @@ inline MuteBannerLayout layoutMuteBanner(float barW, float scale, float coreW, b
             l.wordsWhole = whole;
             l.wordsDrawnW = shown;
             l.keyW = keyW;
-            l.keyH = z.px;
+            l.keyH = kz.px;
             const float left = p.x0 + 1.0f;
             if (lines == 1) {
-                const float top = p.y0 + std::max(0.0f, (h - z.px) * 0.5f);
+                // One line, centred on the key's height; smaller words centred on it.
+                const float top = p.y0 + std::max(0.0f, (h - kz.px) * 0.5f);
                 l.wordsX = left;
-                l.wordsY = top;
+                l.wordsY = top + (kz.px - wz.px) * 0.5f;
                 l.keyX = shown > 0.0f ? left + shown + gap : left;
                 l.keyY = top;
             } else {
-                const float top =
-                    p.y0 + std::max(0.0f, (h - 2.0f * z.px - kMuteBannerLineGap) * 0.5f);
+                const float block = wz.px + kMuteBannerLineGap + kz.px;
+                const float top = p.y0 + std::max(0.0f, (h - block) * 0.5f);
                 l.wordsX = left;
                 l.wordsY = top;
                 l.keyX = left;
-                l.keyY = top + z.px + kMuteBannerLineGap;
+                l.keyY = top + wz.px + kMuteBannerLineGap;
             }
             best = l;
         }
@@ -1178,6 +1200,7 @@ inline MuteBannerLayout layoutMuteBanner(float barW, float scale, float coreW, b
         const MuteBannerSize& z = sizes[n - 1];
         best.slot = p.slot;
         best.px = z.px;
+        best.wordsPx = z.px;
         best.x0 = p.x0;
         best.y0 = p.y0;
         best.keyW = z.keyLabelW + 2.0f * keyPadX;

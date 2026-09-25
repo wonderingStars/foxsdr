@@ -20,8 +20,11 @@
  *
  *   - the key lies WHOLE inside the place the banner is clipped to, and inside
  *     the bar - so nothing of it is clipped away;
- *   - its lettering is at least kMuteKeyMinPx (13 px): the floor below which a
- *     key's label stops being read at a glance (the bar's own words are 17);
+ *   - its lettering is at least 13 px: the floor below which a key's label
+ *     stops being read at a glance (the bar's own words are 17) - and words
+ *     drawn beside it are at least 13 px too, and never larger than the key;
+ *   - on today's own 1280 x 720 window the key is at the bar's FULL size in
+ *     every language and for any count: the words give way, never the key;
  *   - the key and the words lie on no part of the deck (transport, master
  *     cluster, counter plate, volume dial, meters), and not on each other;
  *   - the words stay inside the place too (they are shortened with an
@@ -214,7 +217,7 @@ int main() {
                     const Box key{l.keyX, l.keyY, l.keyX + std::max(l.keyW, realKeyW),
                                   l.keyY + l.keyH};
                     const Box words{l.wordsX, l.wordsY, l.wordsX + l.wordsDrawnW,
-                                    l.wordsY + l.px};
+                                    l.wordsY + l.wordsPx};
                     const float keyPx = l.px;
                     smallestKeyPx = std::min(smallestKeyPx, keyPx);
                     // Off the middle the layout keeps a pixel clear at each end
@@ -226,25 +229,46 @@ int main() {
                                                   : Box{place.x0 + 1.0f, place.y0, place.x1 - 1.0f,
                                                         place.y1};
                     const bool keyWhole = inside(key, inner) && inside(key, bar);
-                    const bool keyReadable = keyPx >= kKeyFloorPx - 1.0e-3f &&
-                                             l.keyH >= kKeyFloorPx - 1.0e-3f;
+                    const bool keyReadable =
+                        keyPx >= kKeyFloorPx - 1.0e-3f && l.keyH >= kKeyFloorPx - 1.0e-3f;
+                    // Words drawn are read too: never under the floor, and
+                    // never larger than the key they introduce.
+                    const bool wordsReadable = l.wordsDrawnW <= 0.0f ||
+                                               (l.wordsPx >= kKeyFloorPx - 1.0e-3f &&
+                                                l.wordsPx <= l.px + 1.0e-3f);
+                    // THE WORDS GIVE WAY, NEVER THE KEY: whatever they say, the
+                    // key is as large as it would be with nothing to say at all.
+                    // (Ranking the whole sentence above the key's size drew it at
+                    // 13 px on Linux's narrower face, four names, 1280 x 720.)
+                    cascade::gui::MuteBannerSize bare[cascade::gui::kMuteBannerMaxSizes];
+                    for (int i = 0; i < m.nSizes; ++i) {
+                        bare[i] = m.sizes[n][i];
+                        bare[i].wordsW = 0.0f;
+                    }
+                    const MuteBannerLayout alone = cascade::gui::layoutMuteBanner(
+                        barW, s, coreW, layout.scale >= 2, meters, bare, m.nSizes, m.keyPadX,
+                        m.gap);
+                    const bool keyFirst = l.slot == 0 || l.px >= alone.px - 1.0e-3f;
                     const bool wordsIn = l.wordsDrawnW <= 0.0f ||
                                          (inside(words, place) && inside(words, bar));
                     bool clear = !(l.wordsDrawnW > 0.0f && hit(key, words));
                     for (const Box& part : parts) {
                         clear = clear && !hit(key, part) && !(l.wordsDrawnW > 0.0f && hit(words, part));
                     }
-                    const bool ok = keyWhole && keyReadable && wordsIn && clear;
+                    const bool ok =
+                        keyWhole && keyReadable && wordsReadable && keyFirst && wordsIn && clear;
                     if (!ok) {
                         if (bad < 12) {
                             std::printf("    %s/%s layout %dx%s bar %.0f, %d name(s): slot %d key "
                                         "(%.1f,%.1f)-(%.1f,%.1f) at %.1f px in place "
-                                        "(%.1f,%.1f)-(%.1f,%.1f)%s%s%s%s\n",
+                                        "(%.1f,%.1f)-(%.1f,%.1f)%s%s%s%s%s%s\n",
                                         m.theme.c_str(), m.lang.c_str(), layout.scale,
                                         layout.switches ? "+sw" : "", barW, n, l.slot, key.x0,
                                         key.y0, key.x1, key.y1, keyPx, place.x0, place.y0,
                                         place.x1, place.y1, keyWhole ? "" : " KEY CLIPPED",
                                         keyReadable ? "" : " KEY TOO SMALL",
+                                        wordsReadable ? "" : " WORDS TOO SMALL/LARGE",
+                                        keyFirst ? "" : " KEY SHRUNK FOR THE WORDS",
                                         wordsIn ? "" : " WORDS OUTSIDE",
                                         clear ? "" : " ON A PART");
                         }
@@ -285,7 +309,8 @@ int main() {
 
     // --- the reviewer's case, reported: today's first-launch bar, one to four names ---
     for (const Measured& m : all) {
-        if (m.theme != "today" || (m.lang != "en" && m.lang != "pl")) { continue; }
+        if (m.theme != "today") { continue; }
+        const bool print = m.lang == "en" || m.lang == "pl";
         const CounterLayout today{1, true};
         for (int n = 1; n <= 4; ++n) {
             const MuteBannerLayout l = cascade::gui::layoutMuteBanner(
@@ -293,16 +318,15 @@ int main() {
                 cascade::gui::metersFitOnBar(cascade::gui::kFirstLaunchBarW,
                                              cascade::gui::kDeckCoreW),
                 m.sizes[n], m.nSizes, m.keyPadX, m.gap);
-            std::printf("  today/%s at 1280 x 720, %d name(s): slot %d, %d line(s), %.0f px, "
-                        "words %s, key (%.1f,%.1f) %.1f x %.1f\n",
-                        m.lang.c_str(), n, l.slot, l.lines, l.px,
+            if (print) std::printf("  today/%s at 1280 x 720, %d name(s): slot %d, %d line(s), key %.0f px, "
+                        "words %.0f px %s, key (%.1f,%.1f) %.1f x %.1f\n",
+                        m.lang.c_str(), n, l.slot, l.lines, l.px, l.wordsPx,
                         l.wordsWhole ? "whole" : "shortened", l.keyX, l.keyY, l.keyW, l.keyH);
-            // In English, today's own default window keeps the key at the bar's
-            // full size whatever the count. (Polish, one name: the whole
-            // sentence at 15 px beats a shortened one at 17 - the ranking's
-            // rule - and is printed above, not required.)
-            if (m.lang == "en") { CHECK_NEAR(l.px, m.lineH, 1.0e-6f); }
-            CHECK(l.px >= kKeyFloorPx);
+            // Today's own default window keeps the KEY at the bar's full size
+            // whatever the count and the language: the words give way, never
+            // the key. (The first cut shared one size, and on Linux's narrower
+            // face four English names drew the key at 13 px.)
+            CHECK_NEAR(l.px, m.lineH, 1.0e-6f);
         }
     }
 

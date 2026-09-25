@@ -17576,17 +17576,20 @@ std::string AppWindow::muteBannerSubject() const {
 
 void AppWindow::drawMuteBanner(const cascade::gui::MuteBannerLayout& mb, const ImVec2& barTL,
                                const std::string& words) {
-    const bool smaller = mb.px > 0.0f && mb.px < ImGui::GetFontSize() - 1.0e-3f;
-    if (smaller) { ImGui::PushFont(nullptr, mb.px); }
+    const float barPx = ImGui::GetFontSize();
     // Everything is drawn inside the place it was given, so nothing can spill
     // onto a part of the deck - and the layout puts the key wholly inside it,
     // so the clip can never take any of the key.
     ImGui::PushClipRect(ImVec2(barTL.x + mb.x0, barTL.y + mb.y0),
                         ImVec2(barTL.x + mb.x1, barTL.y + mb.y1), true);
-    const float lineH = ImGui::GetFontSize();
     float wx1 = barTL.x + mb.keyX;
     float wy1 = barTL.y + mb.keyY;
+    bool hovered = false;
     if (mb.wordsDrawnW > 0.0f) {
+        // The words at their own size (the key's, or smaller to be whole).
+        const bool smaller = mb.wordsPx > 0.0f && mb.wordsPx < barPx - 1.0e-3f;
+        if (smaller) { ImGui::PushFont(nullptr, mb.wordsPx); }
+        const float lineH = ImGui::GetFontSize();
         const ImVec2 wp(barTL.x + mb.wordsX, barTL.y + mb.wordsY);
         ImGui::SetCursorScreenPos(wp);
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
@@ -17594,24 +17597,29 @@ void AppWindow::drawMuteBanner(const cascade::gui::MuteBannerLayout& mb, const I
             ImGui::TextUnformatted(words.c_str());
         } else {
             // As many of the words as fit, then an ellipsis; the item under
-            // them is what the tooltip below hangs from.
+            // them is what the tooltip hangs from.
             const ImVec2 wmax(wp.x + mb.wordsDrawnW, wp.y + lineH);
             ImGui::Dummy(ImVec2(mb.wordsDrawnW, lineH));
             ImGui::RenderTextEllipsis(ImGui::GetWindowDrawList(), wp, wmax, wmax.x, words.c_str(),
                                       nullptr, nullptr);
         }
         ImGui::PopStyleColor();
-        if (!mb.wordsWhole && ImGui::IsItemHovered()) { ImGui::SetTooltip("%s", words.c_str()); }
+        hovered = ImGui::IsItemHovered();
         wx1 = ImGui::GetItemRectMax().x;
         wy1 = ImGui::GetItemRectMax().y;
+        if (smaller) { ImGui::PopFont(); }
     }
+    // The key at the largest size the layout found for it.
+    const bool keySmaller = mb.px > 0.0f && mb.px < barPx - 1.0e-3f;
+    if (keySmaller) { ImGui::PushFont(nullptr, mb.px); }
     ImGui::SetCursorScreenPos(ImVec2(barTL.x + mb.keyX, barTL.y + mb.keyY));
     if (ImGui::SmallButton(trId("Stop plugin##mute_banner"))) {
         stopMutingPlugins(mutedByKeys_);
     }
-    if (!mb.wordsWhole && ImGui::IsItemHovered()) { ImGui::SetTooltip("%s", words.c_str()); }
+    hovered = hovered || ImGui::IsItemHovered();
     const ImVec2 k0 = ImGui::GetItemRectMin();
     const ImVec2 k1 = ImGui::GetItemRectMax();
+    if (keySmaller) { ImGui::PopFont(); }
     // THE CENSUS: the banner as drawn (words and key), the key ImGui laid out,
     // and the clip it is drawn under - test_theme_census requires the key
     // whole inside that clip, at least 13 px, and on no part of the deck.
@@ -17623,7 +17631,8 @@ void AppWindow::drawMuteBanner(const cascade::gui::MuteBannerLayout& mb, const I
     cascade::gui::census::rect("deck:mute.clip", barTL.x + mb.x0, barTL.y + mb.y0,
                                barTL.x + mb.x1, barTL.y + mb.y1);
     ImGui::PopClipRect();
-    if (smaller) { ImGui::PopFont(); }
+    // The whole sentence, at the bar's own size, over shortened words or the key.
+    if (!mb.wordsWhole && hovered) { ImGui::SetTooltip("%s", words.c_str()); }
 }
 
 void AppWindow::drawPluginTuneControls() {

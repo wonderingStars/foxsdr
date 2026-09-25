@@ -762,9 +762,12 @@ int main() {
                         const Box place{l.x0, l.y0, l.x1, l.y1};
                         const Box key{l.keyX, l.keyY, l.keyX + l.keyW, l.keyY + l.keyH};
                         const Box words{l.wordsX, l.wordsY, l.wordsX + l.wordsDrawnW,
-                                        l.wordsY + l.px};
+                                        l.wordsY + l.wordsPx};
                         const bool keyWhole = within(key, place) && within(key, bar);
-                        const bool readable = l.px >= 13.0f - 1.0e-3f && l.keyH >= 13.0f - 1.0e-3f;
+                        const bool readable =
+                            l.px >= 13.0f - 1.0e-3f && l.keyH >= 13.0f - 1.0e-3f &&
+                            (l.wordsDrawnW <= 0.0f ||
+                             (l.wordsPx >= 13.0f - 1.0e-3f && l.wordsPx <= l.px + 1.0e-3f));
                         const bool wordsIn = l.wordsDrawnW <= 0.0f || within(words, place);
                         bool clear = !(l.wordsDrawnW > 0.0f && hit(words, key));
                         for (const Box& part : parts) {
