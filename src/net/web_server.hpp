@@ -241,6 +241,10 @@ struct RadioStatus {
     std::uint64_t audioBytes = 0;
     std::string recordDir;
     std::string recordError;
+    // Why a take ended when nothing went wrong (the source was changed on
+    // purpose). Shown beside the recorder, and deliberately NOT an error:
+    // the page's FAIL lamp reads recordError and sourceError only.
+    std::string recordNotice;
 
     // --- Bookmarks ---------------------------------------------------------
     struct Bookmark {

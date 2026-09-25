@@ -282,6 +282,7 @@ Pipeline::Pipeline(Config cfg)
       audio_(std::make_shared<cascade::sink::AudioOut>()),
       tapBuf_(2 * kAudioTapSize, 0.0f) {
     active_ = &builtin_;  // the generator feeds the ring until setSource says otherwise
+    airView_.bind(active_);  // no converter until the caller sets one
     estimator_.setAlpha(cfg.averagingAlpha);
     demod_.setMode(cascade::dsp::DemodMode::WFM);  // default mode per spec
     // WFM de-emphasis belongs to StereoFm, never to the discriminator (see the
@@ -541,6 +542,14 @@ void Pipeline::setSource(std::unique_ptr<cascade::source::IqSource> s) {
         external_.reset();
         active_ = &builtin_;  // null restores the built-in generator
     }
+    // THE CONVERTER DOES NOT FOLLOW ONE RADIO ONTO THE NEXT. The view is
+    // re-pointed at the incoming source and put back to OFF before that
+    // source's thread exists; the caller applies the new radio's own setting
+    // (AppWindow::applyConverterForSource). A 125 MHz up-converter's offset
+    // carried onto a radio with no converter in front of it would tune every
+    // frequency 125 MHz away from where the counter says it is.
+    airView_.bind(active_);
+    airView_.setConverter(ConverterSetting{});
     {
         // A new antenna is a new station: drop the decoded RDS content and
         // the pilot lock with the old source. controlMutex_ -> audioMutex_ is
@@ -619,7 +628,22 @@ void Pipeline::resizeRingLocked(std::size_t capacity) {
 
 cascade::source::IqSource& Pipeline::activeSource() {
     std::lock_guard<std::mutex> lk(controlMutex_);
+    return airView_;
+}
+
+cascade::source::IqSource& Pipeline::rawSource() {
+    std::lock_guard<std::mutex> lk(controlMutex_);
     return *active_;
+}
+
+void Pipeline::setConverter(const ConverterSetting& s) {
+    std::lock_guard<std::mutex> lk(controlMutex_);
+    airView_.setConverter(s);
+}
+
+ConverterSetting Pipeline::converter() {
+    std::lock_guard<std::mutex> lk(controlMutex_);
+    return airView_.converter();
 }
 
 const char* Pipeline::activeSourceName() {
@@ -1433,6 +1457,12 @@ void Pipeline::sourceThreadBody(double chainRateHz,
                srcRun_.load(std::memory_order_relaxed)) {
             const std::size_t got = src.read(buf.data(), chunk);
             if (!stopToken.load(std::memory_order_relaxed)) { return; }
+            // AN INVERTING CONVERTER MIRRORS THE BAND, and this is where it is
+            // put back the right way round - after the token test above, so an
+            // abandoned generation never reaches it (see airView_).
+            if (got != 0 && airView_.mirrors()) {
+                cascade::core::conjugateInPlace(buf.data(), got);
+            }
             if (got != 0) {
                 // Same overflow policy as the free-running path: if the DSP
                 // side stalled and the ring is full, the excess is dropped
@@ -1492,6 +1522,9 @@ void Pipeline::sourceThreadBody(double chainRateHz,
         const std::size_t got = src.read(buf.data(), chunk);
         // Same post-read token test as the self-paced loop, same reasons.
         if (!stopToken.load(std::memory_order_relaxed)) { return; }
+        // The same mirror as the self-paced loop: a generator or a file the
+        // user put an inverting converter on is read back to front too.
+        if (airView_.mirrors()) { cascade::core::conjugateInPlace(buf.data(), got); }
         // A real-time source must not block: if the DSP side stalled and the
         // ring is full, the overflow is dropped (write() accepts what fits),
         // and counted.

@@ -121,10 +121,13 @@ using namespace cascade::gui::wxface;
 // theme.hpp, and the header above says why: the bench has no role for "a pale
 // polariser with dark segments on it" because nothing else on the bench is a
 // liquid-crystal display. They are named for what they are so a later reader
-// can see they are one material and not four strays.
-constexpr ImU32 kGlassTop = IM_COL32(0x9A, 0xA6, 0x89, 0xFF);
-constexpr ImU32 kGlassBottom = IM_COL32(0x84, 0x90, 0x77, 0xFF);
-constexpr ImU32 kGlassInk = IM_COL32(0x15, 0x19, 0x11, 0xFF);
+// can see they are one material and not four strays. Under another theme the
+// glass is that theme's counter window - digitBg, with digit for the ink -
+// which is the one role a segment display maps to (Field Radio's counter is
+// itself a green LCD).
+constexpr theme::Tone kGlassTop{0x9A, 0xA6, 0x89, 0xFF, theme::ink::DigitBgTop};
+constexpr theme::Tone kGlassBottom{0x84, 0x90, 0x77, 0xFF, theme::ink::DigitBgBot};
+constexpr theme::Tone kGlassInk{0x15, 0x19, 0x11, 0xFF, theme::ink::Digit};
 // The unlit segment: the same ink at the alpha a real cell's off state shows
 // against its polariser. Low enough not to be read as a figure, high enough
 // that the empty cell is visibly a cell.
@@ -133,7 +136,7 @@ constexpr ImU32 kGlassInk = IM_COL32(0x15, 0x19, 0x11, 0xFF);
 // size a ghost at 30 was reading as a lit segment's neighbour - a 1 with its
 // unlit segments showing came out as a blurred 8. Eighteen keeps the empty
 // cell visible as a cell, which is the job, without competing with the ink.
-constexpr ImU32 kGlassGhost = IM_COL32(0x15, 0x19, 0x11, 0x12);
+constexpr theme::Tone kGlassGhost{0x15, 0x19, 0x11, 0x12, theme::ink::Digit};
 
 // A live LCD is very slightly italic, which is most of what separates a real
 // segment display from a font pretending to be one.
@@ -243,8 +246,7 @@ void drawDegreeC(ImDrawList* dl, float x, float y, float h) {
 // equipment does not do - it has no need to, because it only ever shows one
 // channel at a time - and this face does because it shows all three at once.
 void drawChannelGlyph(ImDrawList* dl, float x, float y, float h, int channel, bool live) {
-    const ImU32 col = live ? kGlassInk
-                           : ((kGlassInk & 0x00FFFFFFu) | (0x55u << IM_COL32_A_SHIFT));
+    const ImU32 col = live ? kGlassInk : kGlassInk.withA(0x55);
     const float t = std::max(1.2f, h * 0.10f);
     const float cx = x + t;
     const float cy = y + h * 0.5f;
@@ -253,9 +255,7 @@ void drawChannelGlyph(ImDrawList* dl, float x, float y, float h, int channel, bo
         const float r = h * (0.18f * static_cast<float>(i) + 0.10f);
         const bool on = i <= channel;
         dl->PathArcTo(ImVec2(cx, cy), r, -0.9f, 0.9f, 10);
-        dl->PathStroke(on ? col
-                          : ((kGlassInk & 0x00FFFFFFu) | (0x1Eu << IM_COL32_A_SHIFT)),
-                       ImDrawFlags_None, t);
+        dl->PathStroke(on ? col : kGlassInk.withA(0x1E), ImDrawFlags_None, t);
     }
 }
 
@@ -282,8 +282,7 @@ void drawBatteryLow(ImDrawList* dl, float x, float y, float w, float h) {
 float glassText(ImDrawList* dl, float x, float y, const char* s, float px, float alpha,
                 float maxX) {
     ImFont* f = fonts::ui();
-    const ImU32 col = (kGlassInk & 0x00FFFFFFu) |
-                      (static_cast<ImU32>(std::lround(255.0f * alpha)) << IM_COL32_A_SHIFT);
+    const ImU32 col = kGlassInk.withA(static_cast<int>(std::lround(255.0f * alpha)));
     // ONE POINT OF SLACK, and it is not a fudge. A caller that measures a
     // string with CalcTextSizeA and then lays it out flush against maxX hands
     // this function a wrap width equal to the string's own width, and ImGui
@@ -569,8 +568,8 @@ float drawWeatherConsoleFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     // draw list has no gradient that is not axis-aligned and a real cover
     // glass reflects the room in a band, not a blur.
     dl->AddRectFilledMultiColor(ImVec2(gx0, gy0), ImVec2(gx1, gy0 + (gy1 - gy0) * 0.18f),
-                                IM_COL32(255, 255, 255, 34), IM_COL32(255, 255, 255, 18),
-                                IM_COL32(255, 255, 255, 0), IM_COL32(255, 255, 255, 0));
+                                theme::sheen(34), theme::sheen(18), theme::sheen(0),
+                                theme::sheen(0));
 
     dl->PushClipRect(ImVec2(gx0, gy0), ImVec2(gx1, gy1), true);
 
@@ -612,7 +611,7 @@ float drawWeatherConsoleFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         // channel area.
         dl->AddLine(ImVec2(ix0, iy0), ImVec2(ix1, iy0), kGlassGhost, 1.0f);
         dl->AddLine(ImVec2(ix0, iy0), ImVec2(ix1, iy0),
-                    (kGlassInk & 0x00FFFFFFu) | (0x40u << IM_COL32_A_SHIFT), 1.0f);
+                    kGlassInk.withA(0x40), 1.0f);
         iy0 += 4.0f;
     }
 
@@ -632,7 +631,7 @@ float drawWeatherConsoleFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
             // The printed division between compartments.
             const float dx = b.x0 - panelGap * 0.5f;
             dl->AddLine(ImVec2(dx, iy0 + 1.0f), ImVec2(dx, iy1 - 1.0f),
-                        (kGlassInk & 0x00FFFFFFu) | (0x30u << IM_COL32_A_SHIFT), 1.0f);
+                        kGlassInk.withA(0x30), 1.0f);
         }
         drawChannelPanel(dl, b.x0, b.x1, iy0, iy1, i + 1, in, st);
     }

@@ -171,6 +171,41 @@ std::string AppWindow::patchDeviceLabel(const std::string& key) const {
     return buf;
 }
 
+bool AppWindow::setPatchRadioCentre(pc::Node& n, double airHz) {
+    // THE RADIO decides, not the sign of the air figure: a node's centre is an
+    // AIR frequency and may be carried in below 0 Hz through an up-converter,
+    // so refusing everything <= 0 here made such a centre impossible to type
+    // back in. What must hold is that the radio behind the node's converter
+    // is told something above 0 Hz.
+    const cascade::core::ConverterSetting conv = converterForKey(n.device);
+    if (!cascade::core::radioCentreTakeable(conv, airHz)) {
+        std::string msg;
+        if (cascade::core::converterActive(conv)) {
+            cascade::core::formatUtf8(
+                msg, tr("%s is out of reach through the %s: the radio would have to tune to 0 Hz or below."),
+                cascade::core::converterHzText(airHz).c_str(), converterName(conv).c_str());
+        } else {
+            cascade::core::formatUtf8(msg, tr("A radio cannot tune to %s - type a centre above 0 Hz."),
+                                      cascade::core::converterHzText(airHz).c_str());
+        }
+        patchCentreNote_[n.id] = msg;
+        return false;
+    }
+    n.freqHz = airHz;
+    n.centreChosen = true;   // 0 Hz on the air is a centre too
+    patchCentreNote_.erase(n.id);
+    patchUi_.dirty = true;
+    return true;
+}
+
+void AppWindow::drawPatchCentreNote(const pc::Node& n) {
+    const auto it = patchCentreNote_.find(n.id);
+    if (it == patchCentreNote_.end()) { return; }
+    ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
+    ImGui::TextWrapped("%s", it->second.c_str());
+    ImGui::PopStyleColor();
+}
+
 std::string AppWindow::patchDefaultDeviceKey() const {
     const auto taken = [this](const std::string& key) {
         for (const pc::Node& n : patchGraph_.nodes()) {
@@ -254,7 +289,9 @@ void AppWindow::patchReconcile() {
                                loan.card.hostApi + ")"
                          : deviceModel_;
         keep.rateHz = pipeline_.activeSource().sampleRateHz();
-        keep.centreHz = pipeline_.activeSource().centerFrequencyHz();
+        // The AIR centre, which may be below 0 Hz through a converter; no
+        // value only when the radio has never been tuned.
+        keep.centreHz = carriedAirCentre();
         cascade::core::diagLogf(
             "patch: the receiver's radio (%s) is handed to the patch page; the receiver "
             "runs on the signal generator until the patch is stopped",
@@ -271,7 +308,13 @@ void AppWindow::patchReconcile() {
             if (n0.kind != pc::NodeKind::Radio || !n0.device.empty()) { continue; }
             if (pc::Node* n = patchGraph_.mutableNode(n0.id)) {
                 n->device = pc::makeDeviceKey(keep.kind, keep.args);
-                if (n->freqHz <= 0.0) { n->freqHz = keep.centreHz; }
+                // A node with a centre of its own keeps it. The carried one is
+                // marked chosen, never judged by its value: 0 Hz on the air is
+                // a centre (see pc::Node::centreChosen).
+                if (!pc::radioCentreSet(*n) && keep.centreHz.has_value()) {
+                    n->freqHz = *keep.centreHz;
+                    n->centreChosen = true;
+                }
                 if (n->rateHz <= 0.0) { n->rateHz = keep.rateHz; }
                 patchUi_.dirty = true;
             }
@@ -305,6 +348,10 @@ void AppWindow::patchReconcile() {
             continue;
         }
         auto radio = std::make_unique<pc::PatchRadio>(id, std::move(r.src), r.label);
+        // THE SAME CONVERTER the receiver uses for this device (keyed alike:
+        // core::converterRadioKey IS the patch device key), so the node's
+        // frequency is an air frequency here too.
+        radio->setConverter(converterForKey(n->device));
         std::string err;
         if (!radio->start(err)) {
             patchRadioError_[id] = err;
@@ -373,8 +420,14 @@ void AppWindow::patchReconcile() {
             // Running: follow the node's centre, and learn it from the device
             // when the node has none.
             pc::PatchRadio& r = *patchRadios_[id];
-            if (n->freqHz <= 0.0) {
+            // A converter changed in the Source section while this radio runs
+            // takes effect here; the follow below then retunes the radio so
+            // the node's AIR frequency is what it hears.
+            const cascade::core::ConverterSetting conv = converterForKey(n->device);
+            if (r.converter() != conv) { r.setConverter(conv); }
+            if (!pc::radioCentreSet(*n)) {
                 n->freqHz = r.centreHz();
+                n->centreChosen = true;
                 patchUi_.dirty = true;
             } else if (std::fabs(r.centreHz() - n->freqHz) > 0.5) {
                 if (!r.setCentreHz(n->freqHz)) {
@@ -389,17 +442,25 @@ void AppWindow::patchReconcile() {
         if (patchRadioFailedAs_.count(id) != 0 && patchRadioFailedAs_[id] == as) { continue; }
         const double rate = radioRate(*n);
         const double centre = n->freqHz;
+        // The node's frequency is AIR; the device is told it through the
+        // converter remembered for it (off unless the user set one there).
+        const cascade::core::ConverterSetting conv = converterForKey(n->device);
         if (pc::isGeneratorKey(n->device)) {
             auto radio = std::make_unique<pc::PatchRadio>(
-                id, makePatchGenerator(rate, centre > 0.0 ? centre : 100.0e6), "Signal generator");
+                id,
+                makePatchGenerator(rate, cascade::core::radioFromAir(
+                                             conv, pc::radioCentreSet(*n) ? centre : 100.0e6)),
+                "Signal generator");
+            radio->setConverter(conv);
             std::string err;
             if (!radio->start(err)) {
                 patchRadioError_[id] = err;
                 patchRadioFailedAs_[id] = as;
                 continue;
             }
-            if (n->freqHz <= 0.0) {
+            if (!pc::radioCentreSet(*n)) {
                 n->freqHz = radio->centreHz();
+                n->centreChosen = true;
                 patchUi_.dirty = true;
             }
             patchRadioError_.erase(id);
@@ -425,8 +486,17 @@ void AppWindow::patchReconcile() {
         const std::string label = patchDeviceLabel(n->device);
         patchRadioPendingAs_[id] = as;
         patchRadioError_.erase(id);
+        // Converted HERE, on the GUI thread that owns the remembered settings;
+        // the worker only ever sees the radio's own figure. No value = "leave
+        // it": a node with no centre yet, or one this radio's converter cannot
+        // deliver. The node's AIR centre may be below 0 Hz (see
+        // pc::radioCentreSet) - whether it can be sent is airReachable's call.
+        const std::optional<double> radioCentre =
+            (pc::radioCentreSet(*n) && cascade::core::airReachable(conv, centre))
+                ? std::optional<double>(cascade::core::radioFromAir(conv, centre))
+                : std::nullopt;
         patchRadioPending_[id] = std::async(std::launch::async, [driver, args, label, rate,
-                                                                 centre]() {
+                                                                 centre = radioCentre]() {
             PatchRadioOpen r;
             r.label = label;
             // SoapySDR's modules are loaded by its enumeration, and the
@@ -475,7 +545,7 @@ void AppWindow::patchReconcile() {
             } else if (!set.sourceError.empty()) {
                 r.error = set.sourceError;
             }
-            if (centre > 0.0) { dev->setCenterFrequencyHz(centre); }
+            if (centre.has_value()) { dev->setCenterFrequencyHz(*centre); }
             // A patch radio has no gain slider of its own yet, so the radio's
             // own automatic gain is used where it has one - a dongle left at
             // its power-on gain hears very little.
@@ -652,11 +722,36 @@ void AppWindow::patchStopAll(bool restoreMain) {
     // --- the receiver gets its radio back ---------------------------------------
     const PatchMainKeep keep = patchMainKeep_;
     patchMainKeep_ = PatchMainKeep{};
+    // THE RADIO STAYS SAVED UNTIL IT IS BACK (0.99.36). patchMainKeep_ was the
+    // only thing making the exit save name it, and it has just been cleared:
+    // a hand-back that finds the radio unlisted, or whose open fails, used to
+    // leave the config naming the generator. Remembered the way a startup
+    // restore that could not open it is; a successful open clears it.
+    if (!restoreKeep_.valid()) {
+        cascade::gui::RememberedSource r;
+        r.kind = keep.kind;
+        if (keep.kind == "soapy") {
+            r.soapyArgs = keep.args;
+            r.nativeArgs = cfgNativeArgs_;
+        } else if (keep.kind == "soundcard") {
+            // A sound card is named by cfg.soundCard; both radio slots keep
+            // what they had (the same rule as currentConfig's lent card).
+            r.soapyArgs = cfgSoapyArgs_;
+            r.nativeArgs = cfgNativeArgs_;
+        } else {
+            r.nativeArgs = keep.args;
+            r.soapyArgs = cfgSoapyArgs_;
+        }
+        r.sampleRateHz = keep.rateHz;
+        restoreKeep_ = r;
+        restoreKeepLabel_ = keep.label;
+    }
     // A SOUND CARD goes back through its own row: reopened on a worker AS IT
     // WAS RUNNING when the patch took it (keep.card) - not with whatever the
     // Source section's controls were edited to meanwhile. The patch radio
     // above has already been destroyed, and its close waited for, so the
-    // card is free.
+    // card is free. A successful open clears the remembered card above
+    // (pollSoundCard); a failed one leaves the config naming it.
     if (keep.kind == "soundcard") {
         cascade::core::diagLogf("patch: handing %s back to the receiver", keep.label.c_str());
         sourceSel_ = kSoundCardRow;
@@ -686,10 +781,12 @@ void AppWindow::patchStopAll(bool restoreMain) {
                                  keep.label.c_str());
         return;
     }
-    // Back where it was tuned when the patch took it.
-    if (keep.centreHz > 0.0) { pipeline_.activeSource().setCenterFrequencyHz(keep.centreHz); }
+    // Back where it was tuned when the patch took it: the AIR centre is handed
+    // to the open itself, which sends it through THIS radio's converter. (It
+    // used to be parked on the generator standing in and read back from
+    // there, which lost a centre below 0 Hz on the air.)
     cascade::core::diagLogf("patch: handing %s back to the receiver", keep.label.c_str());
-    selectSource(row);
+    selectSource(row, keep.centreHz);
 }
 
 void AppWindow::patchPressStart() {
@@ -748,10 +845,14 @@ void AppWindow::drawPatchTransport() {
     // ALL OFF: larger, red, and always there. Every radio's switch goes off
     // and the patch stops.
     ImGui::SetCursorScreenPos(ImVec2(at.x + kR * 2.5f, at.y + kR * 0.25f));
-    ImGui::PushStyleColor(ImGuiCol_Button, cascade::gui::theme::kAlarm);
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, cascade::gui::theme::kAlarmHot);
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, cascade::gui::theme::kAlarmHot);
-    ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::kIvory);
+    // A STOP control, so the stop button's roles (foxsdr-ui/1 stopBg and
+    // stopText): today's rust and ivory exactly, and never Night Watch's
+    // near-white "bad" as the face of a key that size.
+    namespace th = cascade::gui::theme;
+    ImGui::PushStyleColor(ImGuiCol_Button, th::toneHex(0xB8552F, 255, th::ink::StopBgBot));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, th::toneHex(0xE07A4E, 255, th::ink::StopBgTop));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, th::toneHex(0xE07A4E, 255, th::ink::StopBgTop));
+    ImGui::PushStyleColor(ImGuiCol_Text, th::toneHex(0xEFE7D2, 255, th::ink::StopText));
     if (ImGui::Button(trId("ALL OFF###patchalloff"), ImVec2(150.0f, kR * 1.7f))) {
         patchAllOff();
     }
@@ -1021,11 +1122,10 @@ void AppWindow::drawPatchRadioInspector(pc::Node& n) {
     double mhz = n.freqHz / 1e6;
     ImGui::SetNextItemWidth(-FLT_MIN);
     if (ImGui::InputDouble("##patchcentre", &mhz, 0.1, 1.0, "%.6f",
-                           ImGuiInputTextFlags_EnterReturnsTrue) &&
-        mhz > 0.0) {
-        n.freqHz = mhz * 1e6;
-        patchUi_.dirty = true;
+                           ImGuiInputTextFlags_EnterReturnsTrue)) {
+        setPatchRadioCentre(n, mhz * 1e6);
     }
+    drawPatchCentreNote(n);
 
     ImGui::Spacing();
     ImGui::TextUnformatted(tr("Sample rate"));

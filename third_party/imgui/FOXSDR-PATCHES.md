@@ -71,3 +71,51 @@ ends the span the same way upstream's branches do.
    English comparison is against the version actually vendored.
 5. Run `test_cjk_wrap`: English and Korean must show `0 differ`, Chinese and
    Japanese `0 faults`.
+
+## popup-colours - a colour table for every popup-like window
+
+**Files:** `imgui.h` (one declaration, at the end of `namespace ImGui`),
+`imgui_internal.h` (one field, `FoxPopupColorsPushed`, at the end of
+`ImGuiWindowStackData`), `imgui.cpp` (`ImGui::FoxSetPopupColors` and its
+table just above `ImGui::Begin`, a push loop in `Begin`, a pop in `End`).
+
+**Why.** ImGui letters a popup - a combo's list, a context menu, a modal, a
+tooltip - in the same `ImGuiCol_Text` as every window, and there is no hook
+between "a popup window begins" and "its contents are drawn". FoxSDR's
+themes (`src/gui/theme.hpp`) give menus their own ground and ink
+(foxsdr-ui/1's menuBg / menuText / menuHi / menuBorder), and on Field Radio -
+cream menus over olive panels - the shared Text colour put cream words on a
+cream list at 1.09:1 in every combo, tooltip and context menu (found by the
+themes review, 2026-09-25). Pushing the menu ink at each call site would have
+meant well over a hundred tooltips plus every combo and popup, and ImGui's
+own internal popups, with nothing to stop the next one being missed.
+
+**What it changes.** `FoxSetPopupColors(idx, col, count)` copies a table of
+at most 32 `(ImGuiCol, ImVec4)` pairs. `Begin()` pushes the whole table,
+straight after it records the window's stack sizes, for any window with
+`ImGuiWindowFlags_Popup` or `ImGuiWindowFlags_Tooltip` (popups, combo lists,
+menus and submenus, modals, tooltips) and counts the pushes in the window's
+stack entry; `End()` pops exactly that many just before its own stack-size
+check, so the pushes belong to the window's scope and never trip ImGui's
+"PopStyleColor too many / too few" error checks. `theme::applyTheme()` sets
+the table; `theme::popupColours()` returns it for a test.
+
+**What it does not change.** With the table empty (count 0, the default, and
+what FoxSDR's default "today" bench sets) nothing is pushed or popped: the
+library behaves byte for byte as upstream. Ordinary windows and child windows
+are never touched.
+
+**Re-applying on an ImGui upgrade.**
+1. Vendor the new upstream unmodified first (`THIRD_PARTY.md`).
+2. `grep -n "FOXSDR PATCH (popup-colours)"` in the previous copies finds the
+   four places. Put the table and `FoxSetPopupColors` above `ImGui::Begin`;
+   the push loop directly after `ErrorRecoveryStoreState(&window_stack_data.
+   StackSizesInBegin)` / `g.StackSizesInBeginForCurrentWindow = ...` in
+   `Begin` (it must come AFTER the stored sizes); the pop directly before
+   `ErrorRecoveryTryToRecoverWindowState` in `End` (it must come BEFORE it);
+   the field in `ImGuiWindowStackData`; the declaration in `imgui.h`.
+   If upstream has gained per-window-kind style colours of its own, prefer
+   those and drop the patch.
+3. Run `test_theme`: its "every pair ImGui draws - window, tooltip, popup,
+   modal" section reads the colours a live tooltip, popup and modal draw with,
+   and fails for Field Radio (1.09:1) if the push does not happen.

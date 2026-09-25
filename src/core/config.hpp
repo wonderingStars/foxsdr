@@ -107,6 +107,7 @@
 // copied string literal is deliberate: the catalogue origin is a security
 // -relevant constant, and two copies of it that can drift is exactly how a
 // build ends up quietly pointing at the wrong host.
+#include "core/freq_converter.hpp"
 #include "core/plugin_repo.hpp"
 #include "core/user_presets.hpp"
 
@@ -175,6 +176,16 @@ struct AppConfig {
     // every earlier config loads as.
     std::string rtlBiasTArgs;
     bool rtlBiasT = false;
+    // THE UP- OR DOWN-CONVERTER IN FRONT OF EACH RADIO (0.99.36), remembered
+    // per radio like the RTL-SDR's bias tee: radio key (core::converterRadioKey
+    // - "siggen", "file", or "<kind>|<args>") -> mode, local oscillator and
+    // whether it inverts. Stored as the list "converters", each entry
+    // {"radio", "mode": "off"|"up"|"down", "loHz", "inverted"}. EMPTY BY
+    // DEFAULT, so every radio starts with no converter; a mode the file spells
+    // any other way reads as "off", an LO outside core::converterLoValid turns
+    // that entry off, entries with no radio are dropped and the list is capped
+    // at core::kMaxConverterRadios (core::sanitiseConverters).
+    std::map<std::string, ConverterSetting> converters;
     // WHERE THE PLUTO IS, and it is a field of its own because it is the one
     // radio FoxSDR cannot find by looking.
     //
@@ -284,6 +295,23 @@ struct AppConfig {
     // config string is the NAME of a style, and what the name means belongs
     // where the cells are painted.
     std::string tunerDisplayStyle = "nixie";
+
+    // --- the interface theme (2026-09-25) ------------------------------------
+    // WHICH OF THE SIX LOOKS the application wears: "today" (the bench as it
+    // has been), "classic-xl", "night", "glass", "daylight" or "field" - the
+    // foxsdr-ui/1 preset names, and the vocabulary gui::theme::themeFromKey
+    // reads. Defaults to "today" and an unknown value loads as "today", on the
+    // tunerDisplayStyle rule: the file is user-editable and a typo must leave
+    // the application looking like itself.
+    std::string uiTheme = "today";
+    // THE COUNTER'S OWN SETTINGS, which a theme sets when it is picked and the
+    // user may change afterwards (the counter's right-click menu, or Display):
+    // the figures at 1x or 2x (clamped to 1..2 on load), whether the UP/DN
+    // tuner switches stand under them, and how large every OTHER live figure
+    // is drawn (foxsdr-ui/1 sizes.readings, clamped to 1.0..3.0).
+    int counterScale = 1;
+    bool counterSwitches = true;
+    float readingsScale = 1.0f;
 
     // --- Language and country (core/i18n.hpp, core/countries.hpp) -----------
     // The interface language as the user chose it: "auto" follows the

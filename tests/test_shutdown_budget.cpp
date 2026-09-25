@@ -627,6 +627,11 @@ const KnownWait kKnownWaits[] = {
     {"src/source/sdrplay_source.hpp", "kStreamHealthWindow", 0,
      "not a wait at all - the tally window before one \"source: stream health ...\" line is "
      "written, matching SoapySource's; nothing sleeps or blocks on it"},
+    {"src/source/sdrplay_source.hpp", "kStreamStallLimit", 0,
+     "not a wait at all (0.99.36) - how long a running stream may go without one service "
+     "callback before read() declares it stalled. Compared against a clock on a read that came "
+     "back empty; nothing sleeps or blocks on it, and on expiry the teardown makes FEWER vendor "
+     "calls (none), not more"},
     // AND THE ONE WAIT THAT IS SPENT ON THE GUI THREAD BY A SCAN (0.96.1).
     // enumerateSdrPlayWith runs the vendor calls on a worker and waits this
     // long for them, because sdrplay_api_Open/LockDeviceApi/GetDevices take no

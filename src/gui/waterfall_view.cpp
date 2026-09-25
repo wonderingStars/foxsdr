@@ -9,8 +9,10 @@
 #include <chrono>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <cstdio>
 #include <limits>
+#include <utility>
 
 #include <imgui.h>
 
@@ -61,7 +63,7 @@ float lumaOf(int r, int g, int b) {
 // same property (4.6 -> 41.7 -> 105.1 -> 141.9 -> 145.2) and it was kept.
 //
 // THE FLOOR IS DELIBERATELY LIFTED off the reference's own value. The 1960s
-// design starts its ramp at #050A06, which is within a couple of luma units of
+// design starts its ramp at rgb 5, 10, 6, which is within a couple of luma units of
 // the panel it is painted on - and a signal a few dB above the noise floor
 // would simply not be visible. This table starts at luma 14.7 instead: still
 // unmistakably "nothing there", still darker than any real signal, but far
@@ -73,43 +75,59 @@ float lumaOf(int r, int g, int b) {
 // The top stop is a warm cream rather than white: it has to be the brightest
 // entry in the table, and a pure white would leave nothing above it for the
 // eye to read a peak against.
+//
+// THE STOPS NOW COME FROM THE THEME IN FORCE (theme::waterfallStops()): on
+// today's bench they are exactly the five described above - quiet phosphor
+// (6, 20, 10), green, phosphor, yellow-green and the cream anchor
+// (240, 235, 180) - and tests/test_waterfall_view.cpp pins today's whole
+// table to the byte. Another theme's ramp runs from its wfLow to its wfTop.
 struct Rgb {
     float r, g, b;
 };
 constexpr float kStopPos[5] = {0.0f, 0.20f, 0.45f, 0.75f, 1.0f};
-constexpr Rgb kStopRgb[5] = {
-    {6.0f, 20.0f, 10.0f},      // quiet phosphor (exact at norm 0)
-    {10.0f, 70.0f, 35.0f},     // green
-    {30.0f, 140.0f, 60.0f},    // phosphor
-    {150.0f, 200.0f, 60.0f},   // yellow-green
-    {240.0f, 235.0f, 180.0f},  // cream anchor (exact at norm 1)
-};
 
-const std::array<ImU32, 256>& colorLut() {
-    // Magic static: built once, thread-safe, no static-init-order hazards.
-    static const std::array<ImU32, 256> lut = [] {
-        std::array<int, 256> r{};
-        std::array<int, 256> g{};
-        std::array<int, 256> b{};
-        for (int i = 0; i < 256; ++i) {
-            const float t = static_cast<float>(i) / 255.0f;
-            int seg = 3;
-            for (int s = 0; s < 4; ++s) {
-                if (t <= kStopPos[s + 1]) {
-                    seg = s;
-                    break;
-                }
+Rgb rgbOf(ImU32 c) {
+    return Rgb{static_cast<float>((c >> IM_COL32_R_SHIFT) & 0xFFu),
+               static_cast<float>((c >> IM_COL32_G_SHIFT) & 0xFFu),
+               static_cast<float>((c >> IM_COL32_B_SHIFT) & 0xFFu)};
+}
+
+std::array<ImU32, 256> buildColorLut() {
+    const theme::WfStops stops = theme::waterfallStops();
+    Rgb stopRgb[5];
+    for (int s = 0; s < 5; ++s) {
+        stopRgb[s] = rgbOf(stops.c[s]);
+    }
+    std::array<int, 256> r{};
+    std::array<int, 256> g{};
+    std::array<int, 256> b{};
+    for (int i = 0; i < 256; ++i) {
+        const float t = static_cast<float>(i) / 255.0f;
+        int seg = 3;
+        for (int s = 0; s < 4; ++s) {
+            if (t <= kStopPos[s + 1]) {
+                seg = s;
+                break;
             }
-            const float u = (t - kStopPos[seg]) / (kStopPos[seg + 1] - kStopPos[seg]);
-            const Rgb& a = kStopRgb[seg];
-            const Rgb& c = kStopRgb[seg + 1];
-            r[i] = static_cast<int>(a.r + (c.r - a.r) * u + 0.5f);
-            g[i] = static_cast<int>(a.g + (c.g - a.g) * u + 0.5f);
-            b[i] = static_cast<int>(a.b + (c.b - a.b) * u + 0.5f);
         }
+        const float u = (t - kStopPos[seg]) / (kStopPos[seg + 1] - kStopPos[seg]);
+        const Rgb& a = stopRgb[seg];
+        const Rgb& c = stopRgb[seg + 1];
+        r[i] = static_cast<int>(a.r + (c.r - a.r) * u + 0.5f);
+        g[i] = static_cast<int>(a.g + (c.g - a.g) * u + 0.5f);
+        b[i] = static_cast<int>(a.b + (c.b - a.b) * u + 0.5f);
+    }
+    // THE MONOTONE PROPERTY HOLDS IN THE DIRECTION THE RAMP RUNS. On a ramp
+    // whose top is brighter than its bottom (today's, and every dark theme's)
+    // a stronger signal must never read darker; on one whose top is DARKER
+    // (Daylight Lab: a near-white wfLow up to a dark navy wfTop, which is how
+    // a light instrument draws a strong signal) it must never read lighter.
+    // Either way entry 255 - the wfTop anchor - is never touched.
+    const bool rising = lumaOf(r[255], g[255], b[255]) >= lumaOf(r[0], g[0], b[0]);
+    if (rising) {
         // Rounding each channel independently can dip luma by up to ~1 unit
         // between neighbors on shallow segments. Sweep backward from the
-        // fixed red anchor, darkening any entry brighter than its hotter
+        // fixed top anchor, darkening any entry brighter than its hotter
         // neighbor. Green goes first: it has the largest luma weight (fewest
         // steps) and lowering G near the top is exactly the natural
         // green -> yellow -> cream hue motion. Entry 255 is never touched and
@@ -128,13 +146,54 @@ const std::array<ImU32, 256>& colorLut() {
                 }
             }
         }
-        std::array<ImU32, 256> out{};
-        for (int i = 0; i < 256; ++i) {
-            out[i] = IM_COL32(r[i], g[i], b[i], 255);
+    } else {
+        // The mirror: sweep backward from the fixed dark top anchor,
+        // LIGHTENING any entry darker than its stronger neighbour, green
+        // first for the same reason. Entry 0 sits well above entry 1 in luma
+        // on a falling ramp, so both anchors again survive byte-exact.
+        for (int i = 254; i >= 0; --i) {
+            while (lumaOf(r[i], g[i], b[i]) < lumaOf(r[i + 1], g[i + 1], b[i + 1])) {
+                if (g[i] < 255) {
+                    ++g[i];
+                } else if (r[i] < 255) {
+                    ++r[i];
+                } else if (b[i] < 255) {
+                    ++b[i];
+                } else {
+                    break;  // all white cannot be too dark; defensive only
+                }
+            }
         }
-        return out;
-    }();
-    return lut;
+    }
+    std::array<ImU32, 256> out{};
+    for (int i = 0; i < 256; ++i) {
+        out[i] = IM_COL32(r[i], g[i], b[i], 255);  // theme-exempt: built from theme::waterfallStops()
+    }
+    return out;
+}
+
+// The table for the theme in force, rebuilt the first time it is asked for
+// after theme::generation() moves (a setTheme). GUI THREAD ONLY: every caller
+// - addLine, the ring's pre-fill, the strength key, the patch page's small
+// waterfall in app_window.cpp - runs on it, and a rebuild is a plain write.
+struct ColorLut {
+    std::array<ImU32, 256> table{};
+    std::uint32_t generation = 0;  // theme::generation() starts at 1
+};
+
+ColorLut& lutState() {
+    static ColorLut s;
+    return s;
+}
+
+const std::array<ImU32, 256>& colorLut() {
+    ColorLut& s = lutState();
+    const std::uint32_t gen = theme::generation();
+    if (s.generation != gen) {
+        s.table = buildColorLut();
+        s.generation = gen;
+    }
+    return s.table;
 }
 
 // --- the bench chrome --------------------------------------------------------
@@ -169,6 +228,24 @@ const std::array<ImU32, 256>& colorLut() {
 constexpr float kChromePad = 6.0f;
 constexpr float kChromeInset = 9.0f;
 
+// THE CHROME'S INKS, by the role each one plays in the theme model (the
+// Receiver mockup draws the time axis, the strength key and the foot plate as
+// a panel with a border, muted lettering and the live figures in the reading
+// ink). Each is today's exact value - the bench letters these plates in
+// phosphor on glass - and re-placed on those roles in any other theme.
+namespace ink = theme::ink;
+constexpr theme::Tone kPlateFill{13, 11, 7, 255, ink::Panel};      // today kVoid, the glass
+constexpr theme::Tone kPlateEdge{74, 66, 52, 255, ink::Border};    // today kBrassDark
+constexpr theme::Tone kStripEdge{156, 144, 120, 255, ink::Border}; // today kBrassTint
+// Axis figures, the dB scale and the scroll line: full phosphor today,
+// the muted lettering the mockup gives them elsewhere.
+constexpr theme::Tone kAxisInk{143, 217, 160, 255, ink::Muted};
+// The quieter caption and tick marks beside them: today's dim phosphor, a
+// third of the way from muted towards the panel it sits on elsewhere.
+constexpr theme::Tone kAxisDim{95, 138, 85, 255, ink::Muted, ink::Panel};
+// A live figure about the picture (the floor/ceiling pair, the decode line).
+constexpr theme::Tone kReadingInk{143, 217, 160, 255, ink::Reading};
+
 float textWidth(ImFont* font, float px, const char* text) {
     if (font == nullptr || text == nullptr || text[0] == '\0') {
         return 0.0f;
@@ -182,15 +259,15 @@ float textWidth(ImFont* font, float px, const char* text) {
 // is most wanted.
 //
 // 0.76 WAS NOT ENOUGH OPACITY TO MAKE THAT TRUE. Over the ramp's cream anchor
-// a quarter of #F0EBB4 still came through, leaving the plate at a luminance
+// a quarter of that cream still came through, leaving the plate at a luminance
 // the dim phosphor the key and the foot lines are lettered in reads against at
 // 2.5:1 - which is not "quieter", it is gone. At 0.84 the same worst case is a
 // plate the same text sits on at 8:1. The plate is the same colour it always
 // was; it is simply doing the job the paragraph above says it is for.
 void addGlassPlate(ImDrawList* dl, const ImVec2& tl, const ImVec2& br) {
-    dl->AddRectFilled(tl, br, theme::withAlpha(theme::kVoid, 0.84f),
+    dl->AddRectFilled(tl, br, theme::withAlpha(kPlateFill, 0.84f),
                       theme::kPanelRounding);
-    dl->AddRect(tl, br, theme::withAlpha(theme::kBrassDark, 0.85f),
+    dl->AddRect(tl, br, theme::withAlpha(kPlateEdge, 0.85f),
                 theme::kPanelRounding, 0, theme::kHairline);
 }
 
@@ -429,7 +506,9 @@ float drawTimeStrip(ImDrawList* dl, const ImVec2& tl, float w, float h, double n
     // of these was written in the dim tone. On a busy picture that was 1.6:1
     // and on a quiet one 4.9:1; it is 7.1:1 and 11.7:1 now, and the heading
     // above them is still visibly the quieter of the two.
-    const ImU32 kFigureInk = theme::kPhosphor;
+    // (Elsewhere than today's bench, the mockup's muted lettering - see
+    // kAxisInk.)
+    const ImU32 kFigureInk = kAxisInk;
 
     // THE BREAK: the single row where the picture jumps furthest in age, which
     // is where the lines stopped arriving. The ladder cannot describe it - a
@@ -491,9 +570,9 @@ float drawTimeStrip(ImDrawList* dl, const ImVec2& tl, float w, float h, double n
     // luminance as the figures written on it: 1.6:1, which is an axis that
     // disappears precisely when the waterfall is worth reading. Same colour,
     // same recessed look, enough of it to letter on.
-    dl->AddRectFilled(tl, sBR, theme::withAlpha(theme::kVoid, 0.80f));
+    dl->AddRectFilled(tl, sBR, theme::withAlpha(kPlateFill, 0.80f));
     dl->AddLine(ImVec2(sBR.x, tl.y), ImVec2(sBR.x, sBR.y),
-                theme::withAlpha(theme::kBrassTint, 0.20f), theme::kHairline);
+                theme::withAlpha(kStripEdge, 0.20f), theme::kHairline);
     // Where a partly-filled history ends, the gutter is closed off with the
     // face's own deck rail rather than trailing away into the empty picture -
     // the axis has a foot, and it is visibly not the foot of the widget.
@@ -505,7 +584,7 @@ float drawTimeStrip(ImDrawList* dl, const ImVec2& tl, float w, float h, double n
     // side of a picture; with it they read "16s ago".
     const float capY = tl.y + 3.0f;
     dl->AddText(cf, px, ImVec2(tl.x + kChromePad, capY),
-                theme::withAlpha(theme::kPhosphorDim, 0.85f), agoWord);
+                theme::withAlpha(kAxisDim, 0.85f), agoWord);
 
     const float firstY = capY + px + 4.0f;
     const float rowH = h / static_cast<float>(totalRows);
@@ -561,7 +640,7 @@ float drawTimeStrip(ImDrawList* dl, const ImVec2& tl, float w, float h, double n
         // The tick crosses the strip's edge and overhangs the picture, the
         // way an axis on an instrument does.
         dl->AddLine(ImVec2(sBR.x - 4.0f, y), ImVec2(sBR.x + 5.0f, y),
-                    theme::withAlpha(theme::kPhosphorDim, 0.55f), theme::kHairline);
+                    theme::withAlpha(kAxisDim, 0.55f), theme::kHairline);
         dl->AddText(lf, px, ImVec2(sBR.x - kChromePad - tw, y - px * 0.5f),
                     kFigureInk, buf);
     }
@@ -652,7 +731,7 @@ float drawStrengthKey(ImDrawList* dl, const ImVec2& tl, float w, float h, float 
                           waterfallColor(norm));
     }
     dl->AddRect(ImVec2(barL, barTop), ImVec2(barR, barTop + barH),
-                theme::withAlpha(theme::kBrassDark, 0.90f), 0.0f, 0, theme::kHairline);
+                theme::withAlpha(kPlateEdge, 0.90f), 0.0f, 0, theme::kHairline);
 
     // The dB scale beneath the bar. Each label is positioned from its own
     // value, so a label and the colour above it cannot drift apart; the
@@ -710,18 +789,18 @@ float drawStrengthKey(ImDrawList* dl, const ImVec2& tl, float w, float h, float 
         // this is the scale that says which colour in the bar means what, and
         // in the dim tone on this plate it measured 2.5:1 over a bright
         // picture. The plate's captions below stay engraved-quiet.
-        dl->AddText(nf, px, ImVec2(barL + ticks[i].x, tickY), theme::kPhosphor,
+        dl->AddText(nf, px, ImVec2(barL + ticks[i].x, tickY), kAxisInk,
                     ticks[i].text);
     }
 
     const float ruleY = tickY + lineH + 2.0f;
     dl->AddLine(ImVec2(barL, ruleY), ImVec2(barR, ruleY),
-                theme::withAlpha(theme::kBrassDark, 0.90f), theme::kHairline);
+                theme::withAlpha(kPlateEdge, 0.90f), theme::kHairline);
 
     const float pairY = ruleY + 3.0f;
     dl->AddText(cf, px, ImVec2(barL, pairY), theme::kInkFaint, pairCap);
     const float pw = textWidth(nf, px, pairText);
-    dl->AddText(nf, px, ImVec2(barR - pw, pairY), theme::kPhosphor, pairText);
+    dl->AddText(nf, px, ImVec2(barR - pw, pairY), kReadingInk, pairText);
 
     if (partial) {
         // AMBER, because it is a reading about the picture rather than part of
@@ -845,11 +924,11 @@ void drawFootLines(ImDrawList* dl, const ImVec2& tl, float w, float h, float lef
         // (the rate and the history the picture holds) at 2.5:1 over a bright
         // waterfall. 6.3:1 there now, and still visibly the quieter line.
         dl->AddText(sf, spx, ImVec2(fTL.x + kChromePad, y),
-                    theme::withAlpha(theme::kPhosphor, 0.85f), scrollText.c_str());
+                    theme::withAlpha(kAxisInk, 0.85f), scrollText.c_str());
         y += spx + lineGap;
     }
     if (haveDecode) {
-        dl->AddText(sf, dpx, ImVec2(fTL.x + kChromePad, y), theme::kPhosphor, decoding);
+        dl->AddText(sf, dpx, ImVec2(fTL.x + kChromePad, y), kReadingInk, decoding);
     }
 }
 
@@ -901,10 +980,51 @@ WaterfallView::WaterfallView(int width, int height)
     // waterfall, not uninitialized texels.
     pixels_.assign(static_cast<std::size_t>(width_) * static_cast<std::size_t>(height_),
                    waterfallColor(0.0f));
+    paintedLut_ = colorLut();
+    paintedGen_ = theme::generation();
     // One arrival stamp per row. The values are never read before the row is
     // written - filled_ gates every reader - so zero here is a placeholder and
     // not a claim that these rows arrived at the epoch.
     times_.assign(static_cast<std::size_t>(height_), 0.0);
+}
+
+void WaterfallView::followTheme() {
+    const std::array<ImU32, 256>& lut = colorLut();
+    const std::uint32_t gen = theme::generation();
+    if (gen == paintedGen_) {
+        return;
+    }
+    if (lut != paintedLut_ && !pixels_.empty()) {
+        // Every pixel in the ring is an entry of paintedLut_ (mapLineToPixels
+        // and the pre-fill write nothing else), so the old table inverted is
+        // exact. Sorted (colour, index) pairs: a colour the rounding sweep
+        // left in two neighbouring entries maps to the lower one, which in
+        // the new table is the same place on the ramp to within one step.
+        std::array<std::pair<ImU32, int>, 256> inv{};
+        for (int i = 0; i < 256; ++i) {
+            inv[static_cast<std::size_t>(i)] = {paintedLut_[static_cast<std::size_t>(i)], i};
+        }
+        std::sort(inv.begin(), inv.end());
+        // Rows are long runs of a few colours; remember the last answer.
+        ImU32 lastFrom = pixels_[0] + 1u;
+        ImU32 lastTo = 0;
+        for (ImU32& px : pixels_) {
+            if (px == lastFrom) {
+                px = lastTo;
+                continue;
+            }
+            const auto it = std::lower_bound(
+                inv.begin(), inv.end(), std::pair<ImU32, int>{px, -1});
+            lastFrom = px;
+            if (it != inv.end() && it->first == px) {
+                px = lut[static_cast<std::size_t>(it->second)];
+            }
+            lastTo = px;
+        }
+        pendingRows_ = height_;  // the whole texture changed
+    }
+    paintedLut_ = lut;
+    paintedGen_ = gen;
 }
 
 double WaterfallView::nowSeconds() noexcept {
@@ -931,6 +1051,8 @@ void WaterfallView::addLine(const float* dbBins, int n, float dbMin, float dbMax
     if (width_ <= 0 || height_ <= 0) {
         return;
     }
+    // The history first, so the ring never holds two palettes at once.
+    followTheme();
     // What the row ABOVE this one was mapped through and when it arrived, both
     // read before the cursor moves off it.
     const bool hadRows = (filled_ > 0);
@@ -1148,6 +1270,9 @@ void WaterfallView::draw(float width, float height, double u0, double u1) {
     if (width_ <= 0 || height_ <= 0 || width <= 0.0f || height <= 0.0f) {
         return;
     }
+    // A theme switch repaints the history before it is uploaded, even with
+    // no new line arriving (a stopped receiver).
+    followTheme();
     if (texture_ == 0) {
         GLuint id = 0;
         glGenTextures(1, &id);

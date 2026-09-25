@@ -495,7 +495,7 @@ float drawNavBearingFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     // light. The diagonal wash this replaced had a straight edge across the
     // dial and rendered as a smudge on the card rather than as a reflection.
     dl->PathArcTo(caseC, glassR - 1.5f, kPiF * 1.05f, kPiF * 1.62f, 24);
-    dl->PathStroke(IM_COL32(255, 255, 255, 26), ImDrawFlags_None, 2.0f);
+    dl->PathStroke(theme::sheen(26), ImDrawFlags_None, 2.0f);
 
     // --- the selector, in the corner it lives in -----------------------------
     // A REAL PROTRUDING KNOB SITS OVER ITS OWN BEZEL, which is why this one is

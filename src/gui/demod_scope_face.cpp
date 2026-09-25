@@ -47,36 +47,40 @@ namespace {
 // A service scope's glass is nearly black with a green cast, not the radar
 // tube's #0a1c0d: a short-persist P31 screen sits dark between sweeps and the
 // trace is what is bright. These are the theme's phosphor taken down to the
-// ground and up to the beam rather than a second green invented here.
-constexpr ImU32 kGlass = IM_COL32(9, 18, 11, 255);
-constexpr ImU32 kGlassEdge = IM_COL32(5, 10, 6, 255);
+// ground and up to the beam rather than a second green invented here. Under
+// another theme: the glass is the well with a breath of trace in it, the
+// graticule is grid, the beam is trace (its hot core a step towards label),
+// and the held peaks sit by the reading colour.
+constexpr theme::Tone kGlass{9, 18, 11, 255, theme::ink::Well, theme::ink::Trace};
+constexpr theme::Tone kGlassEdge{5, 10, 6, 255, theme::ink::Well, theme::ink::Trace};
 // The graticule, engraved on the inside of the face: faint for the ordinary
 // rules, brighter for the two axes, which is how a hand finds zero volts and
 // mid-sweep without counting squares.
-constexpr ImU32 kRule = IM_COL32(143, 217, 160, 38);
-constexpr ImU32 kRuleAxis = IM_COL32(143, 217, 160, 92);
-constexpr ImU32 kRuleTick = IM_COL32(143, 217, 160, 70);
+constexpr theme::Tone kRule{143, 217, 160, 38, theme::ink::Grid};
+constexpr theme::Tone kRuleAxis{143, 217, 160, 92, theme::ink::Grid};
+constexpr theme::Tone kRuleTick{143, 217, 160, 70, theme::ink::Grid};
 // The beam, and the bloom around it. A CRT's spot is not one pixel wide; the
 // halo is what keeps a fast trace visible when the envelope in a column is a
 // single line.
-constexpr ImU32 kBeam = IM_COL32(180, 255, 195, 235);
-constexpr ImU32 kBeamGlow = IM_COL32(143, 217, 160, 64);
+constexpr theme::Tone kBeam{180, 255, 195, 235, theme::ink::Trace, theme::ink::Label};
+constexpr theme::Tone kBeamGlow{143, 217, 160, 64, theme::ink::Trace};
 // The SECOND beam, for the Q trace beside I. Dimmer and cooler, so which is
 // which can be read from the picture and not only from the legend beside it.
-constexpr ImU32 kBeamQ = IM_COL32(120, 200, 235, 225);
-constexpr ImU32 kBeamQGlow = IM_COL32(120, 200, 235, 56);
+// No role pair brackets the cool second beam, so under another theme it is a
+// fixed step from trace towards the well: dimmer, as the Q legend is.
+ImU32 beamQ(int alpha) {
+    return theme::toneMix(120, 200, 235, alpha, theme::ink::Trace, theme::ink::Well, 0.30f);
+}
 // One dark row every three pixels: the same scan-line treatment the radar tube
 // wears, so the two faces read as glass from the same era.
-constexpr ImU32 kScanLine = IM_COL32(0, 0, 0, 30);
+constexpr int kScanLineAlpha = 30;
 // PERSIST: the remembered trace, the same phosphor at a fraction of the beam's
 // brightness, so the live trace always reads as the one on top.
-constexpr ImU32 kPersist = IM_COL32(143, 217, 160, 105);
-constexpr ImU32 kPersistGlow = IM_COL32(143, 217, 160, 34);
-constexpr ImU32 kPersistQ = IM_COL32(120, 200, 235, 95);
-constexpr ImU32 kPersistQGlow = IM_COL32(120, 200, 235, 30);
+constexpr theme::Tone kPersist{143, 217, 160, 105, theme::ink::Trace};
+constexpr theme::Tone kPersistGlow{143, 217, 160, 34, theme::ink::Trace};
 // PERSIST on a spectrum: the held peaks in amber over a faint wash.
-constexpr ImU32 kHold = IM_COL32(236, 186, 92, 200);
-constexpr ImU32 kHoldWash = IM_COL32(236, 186, 92, 22);
+constexpr theme::Tone kHold{236, 186, 92, 200, theme::ink::Reading, theme::ink::Label};
+constexpr theme::Tone kHoldWash{236, 186, 92, 22, theme::ink::Reading, theme::ink::Label};
 
 // A word on the glass, in the panel's own faces. Kept as one helper because
 // every caption on this face is set the same way and a second hand-rolled
@@ -131,7 +135,7 @@ void addGraticule(ImDrawList* dl, const ImVec2& a, const ImVec2& b) {
 
 void addScanLines(ImDrawList* dl, const ImVec2& a, const ImVec2& b) {
     for (float y = a.y + 1.5f; y < b.y; y += 3.0f) {
-        dl->AddLine(ImVec2(a.x, y), ImVec2(b.x, y), kScanLine, 1.0f);
+        dl->AddLine(ImVec2(a.x, y), ImVec2(b.x, y), theme::shadow(kScanLineAlpha), 1.0f);
     }
 }
 
@@ -537,10 +541,10 @@ void drawDemodScopeFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
                                                                 feed.dtS, fullRange, bbKey, &mLo,
                                                                 &mHi)) {
                         addTrace(dl, mLo, mHi, cols, a.x, unitsPerDiv, qCentre, divPx,
-                                 kPersistQ, kPersistQGlow);
+                                 beamQ(95), beamQ(30));
                     }
-                    addTrace(dl, lo, hi, cols, a.x, unitsPerDiv, qCentre, divPx, kBeamQ,
-                             kBeamQGlow);
+                    addTrace(dl, lo, hi, cols, a.x, unitsPerDiv, qCentre, divPx, beamQ(225),
+                             beamQ(56));
                 }
                 // EACH LETTER ONE DIVISION ABOVE ITS OWN TRACE, which is
                 // inside the glass. Two divisions put the I above the top rule
@@ -582,7 +586,7 @@ void drawDemodScopeFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
                         kMaxPoints / 4);
                     for (const ScopeMemory::Ghost& g : feed.memory->ghosts(feed.nowS)) {
                         const float w = ScopeMemory::ghostWeight(feed.nowS - g.t);
-                        const ImU32 col = IM_COL32(143, 217, 160, static_cast<int>(90.0f * w));
+                        const ImU32 col = kBeamGlow.withA(static_cast<int>(90.0f * w));
                         for (std::size_t k = 1; k < g.i.size(); ++k) {
                             float x0 = 0.0f, y0 = 0.0f, x1 = 0.0f, y1 = 0.0f;
                             scopeVectorPoint(g.i[k - 1], g.q[k - 1], unitsPerDiv, cx, yCentre,

@@ -224,10 +224,9 @@ void drawTuningMeter(ImDrawList* dl, const ImVec2& tl, float width, float height
     const ImVec2 fTL(tl.x, faceTop);
     const ImVec2 fBR(tl.x + width, faceTop + faceH);
 
-    dl->AddRectFilledMultiColor(fTL, fBR, IM_COL32(0xF3, 0xEC, 0xD6, 255),
-                                IM_COL32(0xF3, 0xEC, 0xD6, 255),
-                                IM_COL32(0xD8, 0xCF, 0xB4, 255),
-                                IM_COL32(0xD8, 0xCF, 0xB4, 255));
+    const ImU32 faceHi = theme::tone(0xF3, 0xEC, 0xD6, 255, theme::ink::MeterFaceTop);
+    const ImU32 faceLo = theme::tone(0xD8, 0xCF, 0xB4, 255, theme::ink::MeterFaceBot);
+    dl->AddRectFilledMultiColor(fTL, fBR, faceHi, faceHi, faceLo, faceLo);
     dl->AddRect(fTL, fBR, theme::kBrassBright, 3.0f, 0, 2.0f);
 
     const ImVec2 pivot(tl.x + width * 0.5f, fBR.y - 4.0f);
@@ -237,6 +236,10 @@ void drawTuningMeter(ImDrawList* dl, const ImVec2& tl, float width, float height
     const float armByWidth = (width * 0.5f - 3.0f) / std::max(0.01f, reach);
     const float armR = std::min(armByHeight, armByWidth);
 
+    // The scale's print is the meter's own ink, not the deck's engraving: it
+    // sits on the face, and a theme with a pale face and pale deck ink would
+    // otherwise letter it invisibly.
+    const ImU32 scaleInk = theme::tone(0x3B, 0x35, 0x29, 255, theme::ink::MeterInk);
     for (int i = 0; i < 9; ++i) {
         const float t = static_cast<float>(i) / 8.0f;
         const float deg = -kHalfSweepDeg + 2.0f * kHalfSweepDeg * t;
@@ -245,7 +248,7 @@ void drawTuningMeter(ImDrawList* dl, const ImVec2& tl, float width, float height
         const float sy = -std::cos(a);
         const bool stop = (i <= 1 || i >= 7);
         const bool centre = (i == 4);
-        const ImU32 col = stop ? theme::kAlarm : theme::kEngraved;
+        const ImU32 col = stop ? theme::kAlarm : scaleInk;
         const float inner = centre ? 0.72f : 0.80f;
         dl->AddLine(ImVec2(pivot.x + sx * armR * inner, pivot.y + sy * armR * inner),
                     ImVec2(pivot.x + sx * armR * 0.94f, pivot.y + sy * armR * 0.94f),
@@ -261,10 +264,10 @@ void drawTuningMeter(ImDrawList* dl, const ImVec2& tl, float width, float height
     const float ey = -std::cos(ea) * armR * 0.99f;
     const ImVec2 lo = ef->CalcTextSizeA(endPx, FLT_MAX, 0.0f, "-");
     dl->AddText(ef, endPx, ImVec2(pivot.x - ex - lo.x * 0.5f, pivot.y + ey - lo.y),
-                theme::kEngraved, "-");
+                scaleInk, "-");
     const ImVec2 hi = ef->CalcTextSizeA(endPx, FLT_MAX, 0.0f, "+");
     dl->AddText(ef, endPx, ImVec2(pivot.x + ex - hi.x * 0.5f, pivot.y + ey - hi.y),
-                theme::kEngraved, "+");
+                scaleInk, "+");
 
     if (haveReading) {
         float f = frac01;
@@ -275,10 +278,16 @@ void drawTuningMeter(ImDrawList* dl, const ImVec2& tl, float width, float height
         const float sx = std::sin(a);
         const float sy = -std::cos(a);
         dl->AddLine(pivot, ImVec2(pivot.x + sx * armR * 0.88f, pivot.y + sy * armR * 0.88f),
-                    theme::kAlarm, 1.8f);
-        dl->AddCircleFilled(pivot, 3.4f, theme::kEnamel, 12);
+                    theme::tone(0xB8, 0x55, 0x2F, 255, theme::ink::MeterNeedle), 1.8f);
+        dl->AddCircleFilled(pivot, 3.4f,
+                            theme::tone(0x2A, 0x25, 0x1C, 255, theme::ink::MeterFace,
+                                        theme::ink::MeterInk),
+                            12);
     } else {
-        dl->AddCircleFilled(pivot, 3.4f, theme::kInkMuted, 12);
+        dl->AddCircleFilled(pivot, 3.4f,
+                            theme::tone(0x9C, 0x90, 0x78, 255, theme::ink::MeterFace,
+                                        theme::ink::MeterInk),
+                            12);
     }
 
     // The unit beside the pivot rather than above it: above is where the
@@ -287,7 +296,7 @@ void drawTuningMeter(ImDrawList* dl, const ImVec2& tl, float width, float height
     const ImVec2 us = ef->CalcTextSizeA(upx, FLT_MAX, 0.0f, "Hz");
     const float ux = pivot.x + armR * 0.16f;
     if (ux + us.x < fBR.x - 3.0f) {
-        dl->AddText(ef, upx, ImVec2(ux, pivot.y - us.y - 2.0f), theme::kEngraved, "Hz");
+        dl->AddText(ef, upx, ImVec2(ux, pivot.y - us.y - 2.0f), scaleInk, "Hz");
     }
 
     if (val[0] != '\0') {
@@ -361,14 +370,16 @@ void drawPaperSlot(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, bool have
     if (pBR.x - pTL.x < 12.0f) { return; }
 
     // The chart. Paper white at the lip, going to the cream of a thermal roll
-    // further down, with the slot's own shadow across the top of it.
-    dl->AddRectFilledMultiColor(pTL, pBR, IM_COL32(0xF6, 0xF1, 0xE2, 255),
-                                IM_COL32(0xF6, 0xF1, 0xE2, 255),
-                                IM_COL32(0xDE, 0xD6, 0xBE, 255),
-                                IM_COL32(0xDE, 0xD6, 0xBE, 255));
+    // further down, with the slot's own shadow across the top of it. The sheet
+    // and everything printed on it are the theme's meter face and meter ink.
+    constexpr theme::Ink kFace = theme::ink::MeterFace;
+    constexpr theme::Ink kInk = theme::ink::MeterInk;
+    const ImU32 paperLip = theme::tone(0xF6, 0xF1, 0xE2, 255, kFace, kInk);
+    const ImU32 paperRoll = theme::tone(0xDE, 0xD6, 0xBE, 255, kFace, kInk);
+    dl->AddRectFilledMultiColor(pTL, pBR, paperLip, paperLip, paperRoll, paperRoll);
     const float shade = std::min(6.0f, len * 0.4f);
     dl->AddRectFilledMultiColor(pTL, ImVec2(pBR.x, pTL.y + shade),
-                                IM_COL32(0, 0, 0, 120), IM_COL32(0, 0, 0, 120),
+                                theme::shadow(120), theme::shadow(120),
                                 IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, 0));
 
     // The ruling, sliding down as lines arrive. One rule per fifty lines is
@@ -379,20 +390,20 @@ void drawPaperSlot(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, bool have
     const float off = fx::ruleOffset(lines, pitch, 50.0);
     for (float y = pTL.y + off; y < pBR.y; y += pitch) {
         dl->AddLine(ImVec2(pTL.x + 4.0f, y), ImVec2(pBR.x - 4.0f, y),
-                    IM_COL32(0x6E, 0x65, 0x52, 64), 1.0f);
+                    theme::tone(0x6E, 0x65, 0x52, 64, kFace, kInk), 1.0f);
     }
     dl->PopClipRect();
 
     // The sheet's own edges: a hairline of shade down each side, which is
     // what stops a pale rectangle from looking painted on the panel.
-    dl->AddLine(ImVec2(pTL.x, pTL.y), ImVec2(pTL.x, pBR.y), IM_COL32(0, 0, 0, 90), 1.0f);
-    dl->AddLine(ImVec2(pBR.x, pTL.y), ImVec2(pBR.x, pBR.y), IM_COL32(0, 0, 0, 90), 1.0f);
+    dl->AddLine(ImVec2(pTL.x, pTL.y), ImVec2(pTL.x, pBR.y), theme::shadow(90), 1.0f);
+    dl->AddLine(ImVec2(pBR.x, pTL.y), ImVec2(pBR.x, pBR.y), theme::shadow(90), 1.0f);
 
     // The cut edge, and the shadow it throws into the well.
     dl->AddLine(ImVec2(pTL.x, pBR.y), ImVec2(pBR.x, pBR.y),
-                IM_COL32(0x9C, 0x90, 0x78, 220), 1.0f);
+                theme::tone(0x9C, 0x90, 0x78, 220, kFace, kInk), 1.0f);
     dl->AddRectFilledMultiColor(ImVec2(pTL.x, pBR.y), ImVec2(pBR.x, pBR.y + 5.0f),
-                                IM_COL32(0, 0, 0, 150), IM_COL32(0, 0, 0, 150),
+                                theme::shadow(150), theme::shadow(150),
                                 IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, 0));
 }
 

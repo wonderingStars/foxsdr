@@ -226,6 +226,28 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     getBool(j, "nativeBiasT", out.nativeBiasT);
     getString(j, "rtlBiasTArgs", out.rtlBiasTArgs);
     getBool(j, "rtlBiasT", out.rtlBiasT);
+    // The converters, element-wise tolerant like userPresets: an entry that is
+    // not an object is skipped, and every other rule (unknown mode = off, a bad
+    // LO = off, no radio = dropped, the cap) is sanitiseConverters', below.
+    {
+        const auto it = j.find("converters");
+        if (it != j.end() && it->is_array()) {
+            std::map<std::string, ConverterSetting> conv;
+            for (const auto& e : *it) {
+                if (!e.is_object()) { continue; }
+                std::string radio;
+                std::string mode;
+                ConverterSetting s;
+                getString(e, "radio", radio);
+                getString(e, "mode", mode);
+                getDouble(e, "loHz", s.loHz);
+                getBool(e, "inverted", s.inverted);
+                s.mode = converterModeFromKey(mode);
+                conv[radio] = s;
+            }
+            out.converters = std::move(conv);
+        }
+    }
     getString(j, "plutoUri", out.plutoUri);
     getString(j, "soapyAntenna", out.soapyAntenna);
     getString(j, "iqFilePath", out.iqFilePath);
@@ -300,6 +322,24 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
         out.tunerDisplayStyle != "plain") {
         out.tunerDisplayStyle = "nixie";
     }
+    // THE INTERFACE THEME, on the same rule: one of the six foxsdr-ui/1 preset
+    // names, anything else today's bench. The names are MIRRORED from
+    // gui/theme.cpp's preset table (core must not depend on gui);
+    // tests/test_config.cpp holds the two lists together.
+    getString(j, "uiTheme", out.uiTheme);
+    if (out.uiTheme != "today" && out.uiTheme != "classic-xl" && out.uiTheme != "night" &&
+        out.uiTheme != "glass" && out.uiTheme != "daylight" && out.uiTheme != "field") {
+        out.uiTheme = "today";
+    }
+    // The counter's own settings. The scale is the two the painter draws; the
+    // readings size is foxsdr-ui/1's sizes.readings range. Clamped here so a
+    // hand-edited value never reaches the geometry.
+    getInt(j, "counterScale", out.counterScale);
+    out.counterScale = std::clamp(out.counterScale, 1, 2);
+    getBool(j, "counterSwitches", out.counterSwitches);
+    getFloat(j, "readingsScale", out.readingsScale);
+    if (!(out.readingsScale >= 1.0f)) { out.readingsScale = 1.0f; }
+    if (out.readingsScale > 3.0f) { out.readingsScale = 3.0f; }
     // Both default true, so an older config that has never heard of them
     // arrives with trails drawn and coloured - see AppConfig for why the two
     // are separate switches. Neither has a range to clamp: a bool read by
@@ -714,6 +754,7 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     // that the plugin could not have written itself.
     out.pluginSettings = sanitisePluginSettings(out.pluginSettings);
     out.userPresets = sanitiseUserPresets(out.userPresets);
+    out.converters = sanitiseConverters(out.converters);
     // And the rebound keys, from the same function for the fourth time. An
     // empty line could name no action, and a line repeated verbatim is one
     // rebind stated twice - both are noise a hand-edit leaves behind, and the
@@ -731,6 +772,18 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
     j["nativeBiasT"] = cfg.nativeBiasT;
     j["rtlBiasTArgs"] = cfg.rtlBiasTArgs;
     j["rtlBiasT"] = cfg.rtlBiasT;
+    {
+        json conv = json::array();
+        for (const auto& [radio, s] : cfg.converters) {
+            json e;
+            e["radio"] = radio;
+            e["mode"] = converterModeKey(s.mode);
+            e["loHz"] = s.loHz;
+            e["inverted"] = s.inverted;
+            conv.push_back(std::move(e));
+        }
+        j["converters"] = std::move(conv);
+    }
     j["plutoUri"] = cfg.plutoUri;
     j["soapyAntenna"] = cfg.soapyAntenna;
     j["iqFilePath"] = cfg.iqFilePath;
@@ -764,6 +817,10 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
     j["bandPlanSize"] = cfg.bandPlanSize;
     j["bandPlanPalette"] = cfg.bandPlanPalette;
     j["tunerDisplayStyle"] = cfg.tunerDisplayStyle;
+    j["uiTheme"] = cfg.uiTheme;
+    j["counterScale"] = cfg.counterScale;
+    j["counterSwitches"] = cfg.counterSwitches;
+    j["readingsScale"] = cfg.readingsScale;
     j["mapTrails"] = cfg.mapTrails;
     j["mapTrailAltitudeColours"] = cfg.mapTrailAltitudeColours;
     j["mapTrailStyle"] = cfg.mapTrailStyle;

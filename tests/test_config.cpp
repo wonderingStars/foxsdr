@@ -51,6 +51,10 @@
 // the real store because the defect they fix is only visible as a config that
 // came back without the radio in it.
 #include "gui/tune_control.hpp"
+// The interface theme's vocabulary: the config mirrors gui::theme's six preset
+// names rather than including it (core must not depend on gui), and the theme
+// block below holds the two sides to the same list.
+#include "gui/theme.hpp"
 // The keyboard table. AppConfig::keyBindings is only a list of strings; what a
 // line MEANS lives here, and the round trip that matters to a user is
 // "table -> lines -> file -> lines -> table", which needs both halves.
@@ -111,6 +115,8 @@ AppConfig junkConfig() {
     c.nativeBiasT = true;  // default is false: a load that forgets it is caught
     c.rtlBiasTArgs = "garbage";
     c.rtlBiasT = true;
+    // A converter the file never mentioned must not survive a load.
+    c.converters["garbage"] = {cascade::core::ConverterMode::Up, 99.0e6, true};
     // Junk that is NOT empty, because empty is what the loader substitutes
     // its default for - a load that forgot this field entirely would leave
     // the caller's value here and pass a test that used "".
@@ -146,6 +152,13 @@ AppConfig junkConfig() {
     // Not a style name the painter knows, so a load path that forgets the
     // assignment leaves this junk in place instead of the default face.
     c.tunerDisplayStyle = "bogus";
+    // The theme and the counter's own settings: a name no preset has, a scale
+    // and a readings size out of range, and the switches away from their
+    // default - so a load path that forgets any of them leaves junk behind.
+    c.uiTheme = "bogus";
+    c.counterScale = 99;
+    c.counterSwitches = false;
+    c.readingsScale = -5.0f;
     // Language and country: away from "auto" and "" (not chosen), and not
     // the round-trip fixture's values either, so a load path that forgot
     // either field leaves this junk behind and fails.
@@ -275,6 +288,7 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     CHECK(a.nativeBiasT == b.nativeBiasT);
     CHECK(a.rtlBiasTArgs == b.rtlBiasTArgs);
     CHECK(a.rtlBiasT == b.rtlBiasT);
+    CHECK(a.converters == b.converters);
     CHECK(a.plutoUri == b.plutoUri);
     CHECK(a.iqFilePath == b.iqFilePath);
     CHECK(a.centerHz == b.centerHz);
@@ -299,6 +313,10 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     CHECK(a.bandPlanSize == b.bandPlanSize);
     CHECK(a.bandPlanPalette == b.bandPlanPalette);
     CHECK(a.tunerDisplayStyle == b.tunerDisplayStyle);
+    CHECK(a.uiTheme == b.uiTheme);
+    CHECK(a.counterScale == b.counterScale);
+    CHECK(a.counterSwitches == b.counterSwitches);
+    CHECK(a.readingsScale == b.readingsScale);
     CHECK(a.language == b.language);
     CHECK(a.country == b.country);
     CHECK(a.mapTrails == b.mapTrails);
@@ -485,6 +503,22 @@ int main() {
         in.nativeBiasT = true;
         in.rtlBiasTArgs = "serial=00000042";
         in.rtlBiasT = true;
+        // THE CONVERTERS, one of each shape: the tester's 125 MHz up-converter
+        // on a dongle, an inverting down-converter set explicitly on the
+        // generator, and one switched OFF that keeps the LO it was given.
+        in.converters["rtlsdr|serial=00000001"] = {cascade::core::ConverterMode::Up, 125.0e6,
+                                                   false};
+        in.converters["siggen"] = {cascade::core::ConverterMode::Down, 9.75e9, true};
+        in.converters["hackrf|serial=abc"] = {cascade::core::ConverterMode::Off, 2.0e6, false};
+        // LOs a LOSSY WRITER cannot carry: every other LO above is round
+        // enough to survive a float (125e6) or nine significant digits
+        // (9.75e9), which is how a writer that rounded or narrowed the LO
+        // passed this test before. 124998123 Hz needs nine digits and more
+        // than a float's 24 bits; 10489123457 Hz needs eleven.
+        in.converters["airspy|serial=odd"] = {cascade::core::ConverterMode::Up, 124998123.0,
+                                              false};
+        in.converters["rx888|serial=lnb"] = {cascade::core::ConverterMode::Down, 10489123457.0,
+                                             true};
         in.plutoUri = "ip:pluto.local";
         in.iqFilePath = "C:/iq/capture_2msps.wav";
         in.centerHz = 433920000.0;
@@ -520,6 +554,13 @@ int main() {
         // what came back rather than either end's fallback - and proves the
         // unknown-name guard did not "correct" a style the user actually chose.
         in.tunerDisplayStyle = "neon";
+        // A real theme that is neither the default nor junk, the counter at
+        // 2x with its switches away, and a dyadic readings size (exact through
+        // float -> text -> float) inside the range and off its default.
+        in.uiTheme = "glass";
+        in.counterScale = 2;
+        in.counterSwitches = false;
+        in.readingsScale = 1.5f;
         // Neither default ("auto", "") nor junkConfig()'s value, so the
         // roundtrip proves the file is what came back.
         in.language = "pt-BR";
@@ -934,6 +975,64 @@ int main() {
         // other radios' setting.
         CHECK(!out.nativeBiasT);
 
+        // THE CONVERTERS (0.99.36), per radio. A config that predates them
+        // has none - every radio, the generator and a file start with no
+        // converter - and anything the file cannot mean reads as OFF.
+        using cascade::core::ConverterMode;
+        out = junkConfig();
+        CHECK(writeText(path, "{\"schemaVersion\":1}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.converters.empty());
+        out = junkConfig();
+        CHECK(writeText(path,
+                        "{\"schemaVersion\":1,\"converters\":["
+                        "{\"radio\":\"rtlsdr|serial=00000001\",\"mode\":\"up\",\"loHz\":125000000,"
+                        "\"inverted\":false},"
+                        "{\"radio\":\"rtlsdr|serial=00000002\",\"mode\":\"sideways\",\"loHz\":2000000},"
+                        "{\"radio\":\"hackrf|serial=x\",\"mode\":\"down\",\"loHz\":-5,\"inverted\":true},"
+                        "{\"radio\":\"airspy|serial=y\",\"mode\":\"up\"},"
+                        "{\"mode\":\"up\",\"loHz\":125000000},"
+                        "\"not an object\","
+                        "{\"radio\":\"siggen\",\"mode\":\"down\",\"loHz\":9750000000,\"inverted\":true},"
+                        "{\"radio\":\"rtlsdr|serial=00000003\",\"mode\":\"up\","
+                        "\"loHz\":124998123.45678912}"
+                        "]}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.converters.count("garbage") == 0);
+        CHECK(out.converters.count("") == 0);  // no radio: dropped
+        CHECK(out.converters.size() == 6);
+        {
+            const auto& c1 = out.converters["rtlsdr|serial=00000001"];
+            CHECK(c1.mode == ConverterMode::Up);
+            CHECK(c1.loHz == 125.0e6);
+            CHECK(!c1.inverted);
+            // An unknown mode is OFF, and keeps the (valid) LO it was given.
+            const auto& c2 = out.converters["rtlsdr|serial=00000002"];
+            CHECK(c2.mode == ConverterMode::Off);
+            CHECK(c2.loHz == 2.0e6);
+            // A negative LO turns the converter off and forgets the LO.
+            const auto& c3 = out.converters["hackrf|serial=x"];
+            CHECK(c3.mode == ConverterMode::Off);
+            CHECK(c3.loHz == 0.0);
+            // A mode with no LO at all: off.
+            CHECK(out.converters["airspy|serial=y"].mode == ConverterMode::Off);
+            const auto& c5 = out.converters["siggen"];
+            CHECK(c5.mode == ConverterMode::Down);
+            CHECK(c5.loHz == 9.75e9);
+            CHECK(c5.inverted);
+            // A FRACTIONAL LO is rounded to whole hertz on load: a radio keeps
+            // whole hertz, and a fraction here would read every tune back a
+            // fraction of a hertz away from where it was asked for.
+            const auto& c6 = out.converters["rtlsdr|serial=00000003"];
+            CHECK(c6.mode == ConverterMode::Up);
+            CHECK(c6.loHz == 124998123.0);
+        }
+        // Not an array: nothing remembered, rather than a guess.
+        out = junkConfig();
+        CHECK(writeText(path, "{\"schemaVersion\":1,\"converters\":{\"siggen\":\"up\"}}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.converters.empty());
+
         // A CONFIG WRITTEN BEFORE 0.91.0 HAS NO nativeArgs AT ALL, and must
         // load with an empty one rather than whatever the caller's variable
         // happened to hold - the same "every field is assigned on every path"
@@ -1347,6 +1446,14 @@ int main() {
                 {"railBank", [](AppConfig& c) { c.railBank = 4; }},
                 {"keyBindings", [](AppConfig& c) { c.keyBindings = {"mute=Ctrl+Shift+M"}; }},
                 {"updateCheckEnabled", [](AppConfig& c) { c.updateCheckEnabled = false; }},
+                // The converters (0.99.36): set in the Source section, which
+                // calls no save of its own - a new one, and a changed LO, a
+                // changed inversion and a switch-off of an existing one.
+                {"converters (new)",
+                 [](AppConfig& c) {
+                     c.converters["rtlsdr|serial=1"] = {cascade::core::ConverterMode::Up, 125.0e6,
+                                                        false};
+                 }},
             };
             for (const Change& ch : changes) {
                 AppConfig other = base;
@@ -1359,7 +1466,134 @@ int main() {
                 CHECK(seenAB);
                 CHECK(seenBA);
             }
+            // ...and every field of an EXISTING converter, not only its arrival.
+            {
+                AppConfig withConv = base;
+                withConv.converters["rtlsdr|serial=1"] = {cascade::core::ConverterMode::Up,
+                                                          125.0e6, false};
+                CHECK(cascade::gui::configsEqual(withConv, withConv));
+                AppConfig lo = withConv;
+                lo.converters["rtlsdr|serial=1"].loHz = 100.0e6;
+                AppConfig inv = withConv;
+                inv.converters["rtlsdr|serial=1"].inverted = true;
+                AppConfig off = withConv;
+                off.converters["rtlsdr|serial=1"].mode = cascade::core::ConverterMode::Off;
+                for (const AppConfig* o : {&lo, &inv, &off}) {
+                    CHECK(!cascade::gui::configsEqual(withConv, *o));
+                    CHECK(!cascade::gui::configsEqual(*o, withConv));
+                }
+            }
         }
+    }
+
+    // --- the interface theme and the counter's settings (config.hpp) -----------
+    //
+    // Six looks, stored by name; the DEFAULT is today's bench, so nobody's
+    // application changes under them on upgrade.
+    {
+        const std::string path = p("ui_theme.json");
+        AppConfig out;
+        std::string err;
+
+        // ABSENT: an upgraded install that has never heard of the keys keeps
+        // today's bench, the 1x counter with its switches, readings at 1.0.
+        const AppConfig d;
+        CHECK(d.uiTheme == "today");
+        CHECK(d.counterScale == 1);
+        CHECK(d.counterSwitches);
+        CHECK(d.readingsScale == 1.0f);
+        CHECK(writeText(path, "{}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.uiTheme == "today");
+        CHECK(out.counterScale == 1);
+        CHECK(out.counterSwitches);
+        CHECK(out.readingsScale == 1.0f);
+
+        // EACH REAL NAME SURVIVES THE FILE, one at a time (the roundtrip only
+        // carries one), and the theme layer reads the stored name as the SAME
+        // preset - a name the file accepts but the painter reads as Today
+        // would be a setting that saves and then does nothing.
+        const char* names[] = {"today", "classic-xl", "night", "glass", "daylight", "field"};
+        static_assert(sizeof(names) / sizeof(names[0]) ==
+                          static_cast<std::size_t>(cascade::gui::theme::kThemeCount),
+                      "one name per preset");
+        for (const char* name : names) {
+            CHECK(writeText(path, std::string("{\"uiTheme\":\"") + name + "\"}\n"));
+            CHECK(ConfigStore::load(path, out, err));
+            CHECK(out.uiTheme == name);
+            CHECK(std::string(cascade::gui::theme::themeKey(
+                      cascade::gui::theme::themeFromKey(out.uiTheme))) == name);
+        }
+
+        // AN UNKNOWN NAME IS TODAY, NOT A REFUSAL AND NOT A GAP - wrong case,
+        // a stray space, the display name instead of the key, and wrong JSON
+        // types included.
+        for (const char* bad : {"\"\"", "\"Night\"", "\"night \"", "\"Night Watch\"",
+                                "\"classic_xl\"", "7", "null", "[\"glass\"]"}) {
+            CHECK(writeText(path, std::string("{\"uiTheme\":") + bad + "}\n"));
+            CHECK(ConfigStore::load(path, out, err));
+            CHECK(out.uiTheme == "today");
+        }
+
+        // THE COUNTER SCALE is 1 or 2 - the two the painter draws - and a
+        // hand-edited value outside that is pulled to the nearer end rather
+        // than reaching the geometry.
+        const struct {
+            const char* json;
+            int want;
+        } scales[] = {{"1", 1}, {"2", 2}, {"0", 1}, {"-3", 1}, {"3", 2}, {"99", 2},
+                      {"\"2\"", 1}, {"null", 1}};
+        for (const auto& s : scales) {
+            CHECK(writeText(path, std::string("{\"counterScale\":") + s.json + "}\n"));
+            CHECK(ConfigStore::load(path, out, err));
+            if (out.counterScale != s.want) {
+                std::printf("  counterScale %s loaded as %d, want %d\n", s.json,
+                            out.counterScale, s.want);
+            }
+            CHECK(out.counterScale == s.want);
+        }
+
+        // THE READINGS SIZE is foxsdr-ui/1's sizes.readings range, 1.0 - 3.0.
+        const struct {
+            const char* json;
+            float want;
+        } readings[] = {{"1.0", 1.0f}, {"1.5", 1.5f}, {"3", 3.0f}, {"0.5", 1.0f},
+                        {"-5", 1.0f},  {"9", 3.0f},   {"\"2\"", 1.0f}};
+        for (const auto& r : readings) {
+            CHECK(writeText(path, std::string("{\"readingsScale\":") + r.json + "}\n"));
+            CHECK(ConfigStore::load(path, out, err));
+            CHECK(out.readingsScale == r.want);
+        }
+
+        // The switches: a bool, carried as written.
+        CHECK(writeText(path, "{\"counterSwitches\":false}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(!out.counterSwitches);
+
+        // THE SAVE DEBOUNCE HAS TO SEE ALL FOUR: each is changed by a click
+        // (the Display picker, or the counter's own right-click menu) that
+        // calls no save of its own, so configsEqual is the only thing that
+        // writes it before a clean exit.
+        const AppConfig base;
+        CHECK(cascade::gui::configsEqual(base, base));  // control
+        for (const char* name : {"classic-xl", "night", "glass", "daylight", "field", "bogus"}) {
+            AppConfig other = base;
+            other.uiTheme = name;
+            CHECK(!cascade::gui::configsEqual(base, other));
+            CHECK(!cascade::gui::configsEqual(other, base));
+        }
+        AppConfig scaled = base;
+        scaled.counterScale = 2;
+        CHECK(!cascade::gui::configsEqual(base, scaled));
+        CHECK(!cascade::gui::configsEqual(scaled, base));
+        AppConfig noSwitches = base;
+        noSwitches.counterSwitches = false;
+        CHECK(!cascade::gui::configsEqual(base, noSwitches));
+        CHECK(!cascade::gui::configsEqual(noSwitches, base));
+        AppConfig bigReadings = base;
+        bigReadings.readingsScale = 1.4f;
+        CHECK(!cascade::gui::configsEqual(base, bigReadings));
+        CHECK(!cascade::gui::configsEqual(bigReadings, base));
     }
 
     // --- language and country (documented in config.hpp) ---------------------

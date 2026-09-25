@@ -1457,6 +1457,7 @@ struct ImGuiWindowStackData
     ImGuiErrorRecoveryState StackSizesInBegin;          // Store size of various stacks for asserting
     bool                    DisabledOverrideReenable;   // Non-child window override disabled flag
     float                   DisabledOverrideReenableAlphaBackup;
+    int                     FoxPopupColorsPushed;       // FOXSDR PATCH (popup-colours): pushed by Begin(), popped by End()
 };
 
 struct ImGuiShrinkWidthItem

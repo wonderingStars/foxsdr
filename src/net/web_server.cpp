@@ -2154,6 +2154,7 @@ function reflectExtras(s) {
   const parts = [];
   if (s.iqRecording) parts.push('IQ ' + fmtBytes(s.iqBytes));
   if (s.audioRecording) parts.push('audio ' + fmtBytes(s.audioBytes));
+  if (s.recordNotice) parts.push(s.recordNotice);
   if (!parts.length && s.recordDir) parts.push('into ' + s.recordDir);
   $('recInfo').textContent = parts.join('  |  ');
   $('recError').textContent = s.recordError || '';
@@ -3469,6 +3470,7 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
         j["audioBytes"] = s.audioBytes;
         j["recordDir"] = s.recordDir;
         j["recordError"] = s.recordError;
+        j["recordNotice"] = s.recordNotice;
         j["scannerActive"] = s.scannerActive;
         j["scannerState"] = s.scannerState;
         j["scanStartHz"] = s.scanStartHz;

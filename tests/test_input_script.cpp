@@ -65,6 +65,18 @@ int main() {
         CHECK(p.steps.size() == 2u && p.steps[0].verb == ScriptStep::Verb::Down);
     }
 
+    // [3b] The RIGHT button (themes, 2026-09-25: the counter's menu opens on a
+    // right-click, and a scripted run has to be able to open it). Its own
+    // two verbs, never confused with the left button's.
+    {
+        const ScriptParse p = parseInputScript("5 rdown\n6 rup\n7 down\n");
+        CHECK(p.bad == 0);
+        CHECK(p.steps.size() == 3u);
+        CHECK(p.steps.size() == 3u && p.steps[0].verb == ScriptStep::Verb::RightDown);
+        CHECK(p.steps.size() == 3u && p.steps[1].verb == ScriptStep::Verb::RightUp);
+        CHECK(p.steps.size() == 3u && p.steps[2].verb == ScriptStep::Verb::Down);
+    }
+
     // [4] The wheel: notches as given, and a wheel that moves nothing is a
     // mistake, not a step.
     {

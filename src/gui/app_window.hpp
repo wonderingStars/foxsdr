@@ -14,6 +14,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <string>
 #include <utility>
@@ -86,6 +87,7 @@ struct GLFWwindow;
 #include "gui/tune_control.hpp"
 #include "source/soundcard_source.hpp"
 #include "gui/device_scan_plan.hpp"
+#include "gui/source_fallback.hpp"
 #include "gui/viewport_policy.hpp"
 // CoverageMap, TrackSortKey: the pure arithmetic behind the map's three
 // receiver-relative features. Header-only and ImGui-free, so including it here
@@ -638,6 +640,31 @@ public:
     void setDiagToggle(int mode);
 
 private:
+    // THE TEST SEAM for the paths that carry a frequency from one radio to the
+    // next (tests/test_converter_app_paths.cpp): a device switch, the startup
+    // restore, the reopen after a driver fault and the patch page's take-over
+    // and hand-back. Each is AppWindow code that no pure function can stand in
+    // for, so the test drives the real members through this friend, with the
+    // two hooks below standing in for the hardware. Both are null in every
+    // build of the application - nothing ever sets them outside that test -
+    // and each is read at exactly one place.
+    friend struct AppWindowTestAccess;
+    // NO DEFAULT MEMBER INITIALISERS, on purpose: GCC refuses them on a
+    // nested struct used by an inline static member of the enclosing class
+    // ("required before the end of its enclosing class"). testHooks_ below is
+    // value-initialised, which makes both pointers null all the same.
+    struct TestHooks {
+        // Replaces makeDeviceSource's construction when set: the "radio" a
+        // worker or the restore opens is the test's own recording fake.
+        std::unique_ptr<cascade::source::DeviceSource> (*makeDevice)(const std::string& kind);
+        // Replaces scanNative's USB walk when set: the list it returns IS the
+        // native device list, so no test ever enumerates the desk's radios.
+        std::vector<cascade::source::NativeDeviceInfo> (*nativeScan)();
+    };
+    // Set by the test before any AppWindow exists and never changed while one
+    // does, so the worker threads that read makeDevice race with nothing.
+    inline static TestHooks testHooks_{};
+
     // One plugin's map page — declared ahead of the drawing methods that take
     // it, defined in full beside the map state below.
     struct MapPage;
@@ -781,7 +808,15 @@ private:
     // Combo-row click handler: 0 = generator, 1 = IQ file (panel only — the
     // pipeline switches on a successful Open), 2+i = soapyDevices_[i]
     // (opens immediately; on failure the combo selection is left unchanged).
-    void selectSource(int idx);
+    // A device row carries the receiver's air centre across to the radio it
+    // opens (carriedAirCentre); `carryAirHz`, when given, is carried instead -
+    // the patch page's hand-back, whose frequency belongs to the radio it
+    // took, not to the generator standing in for it.
+    void selectSource(int idx, std::optional<double> carryAirHz = std::nullopt);
+    // The Pluto row's Open key: closes the radio in use and opens the board at
+    // the address typed in plutoUri_, carrying the air frequency read BEFORE
+    // the close. Its own member so the converter test can press it.
+    void openPlutoFromBox();
     void drawCenterPanels();
     // THE SLIM TICK STRIP BETWEEN THE PANELS IS GONE, and this is where it was
     // declared. SpectrumView now letters the frequency axis along the foot of
@@ -1162,7 +1197,15 @@ private:
     // The modal that offers to stop the plugins holding the audio down, and
     // the banner that stays when the user declines.
     void drawMutePopup();
-    void drawMuteBanner();
+    // What the banner names, or "" when there is no banner to draw. The test
+    // seam FOXSDR_FORCE_MUTE_BANNER=<name> draws it naming <name> whatever
+    // the audio is doing, so the theme census can place and measure it.
+    std::string muteBannerSubject() const;
+    // Draws the banner where layoutMuteBanner put it (bar-relative, from the
+    // bar's top-left `barTL`): the words - whole, or shortened with the full
+    // sentence in a tooltip - and the "Stop plugin" key, always whole.
+    void drawMuteBanner(const cascade::gui::MuteBannerLayout& mb, const ImVec2& barTL,
+                        const std::string& words);
     // Stops exactly the plugins named by `keys`, through the ordinary stop
     // path, in one rebuild. The caller passes the keys its own message named -
     // the banner passes mutedByKeys_, the popup passes what it captured - so a
@@ -1210,6 +1253,9 @@ private:
     // --- the patch page ------------------------------------------------------
     // The canvas: radios, channels, decoders and displays wired together.
     void drawPatchPage();
+    // The starter patch (one Radio node on the receiver's radio, at its air
+    // centre) when the page opens with none; a no-op once seeded.
+    void seedPatchIfNeeded();
     // The key that opens it, FIRST in the SIGNAL PATH bank. It goes there
     // rather than in VIEW by the same test that put the recorder and the
     // transmitter in that bank: a patch is not a way of LOOKING at the signal
@@ -1373,6 +1419,63 @@ private:
     // Stop path calls them unconditionally.
     void stopIqRecording();
     void stopAudioRecording();
+    // A TAKE BELONGS TO ONE UNBROKEN RUN OF ONE SOURCE. Four things end it
+    // besides the Stop buttons in the Recorder section, and each is one
+    // routine below so no path can forget:
+    //
+    // stopReceiver - THE ONE WAY A USER STOPS THE RECEIVER. The STOP dome,
+    // the Start/Stop key, the radar scope's POWER button and
+    // applyControlRequest (the web remote and plugins through the host API;
+    // CAT can read the run state but has no command that sets it) all call
+    // it. Through 0.99.35 only the dome and the key ended the takes: a stop
+    // from the remote or the POWER button left both recorders open with
+    // zero-length headers on disk, and the next start appended to the same
+    // files across the gap. The takes end when the receiver is running or
+    // FAULTED (a latched fault is proof it was running): a take armed on a
+    // cleanly stopped receiver ("press Play to feed the recorders") is not
+    // ended by a stop that stops nothing, exactly as the dome, which reads
+    // START there, cannot end it either.
+    //
+    // endTakesOnFault - once per frame. The frame that first sees the
+    // pipeline's fault latch ends both takes and says why on screen and in
+    // the log: the fault drops the run flag, so nothing else would, and a
+    // START or the automatic reopen of a SoapySDR radio would otherwise
+    // restart the receiver with the recorders still hooked in and splice
+    // the same take across the gap.
+    //
+    // startReceiver - THE ONE WAY THE RECEIVER IS STARTED (dome, key, POWER,
+    // web remote and plugins, the SoapySDR recovery restart, and the startup
+    // start). A start clears the fault latch, so it asks endTakesOnFault
+    // first, while the latch is still up (a fault that landed after this
+    // frame's check would otherwise vanish unseen), and then forgets the old
+    // edge, so a second fault within a frame of the START is a new one.
+    //
+    // installSource - every pipeline_.setSource() goes through it, and it
+    // ends the I/Q take BEFORE the swap: an I/Q recording is one source's
+    // baseband, and a switch at the same rate (the generator standing in for
+    // a radio the patch page borrowed, say) kept writing the new source's
+    // samples into it. The AUDIO take carries on: it records what the
+    // speaker plays, whose 48 kHz format no source change touches, and a
+    // retune - which changes what it hears just as much - never ended it.
+    //
+    // endTakes - the shared end: taps out, headers patched, the reason in
+    // the diagnostic log and on screen and the web page - as an ERROR
+    // (recordError_, which lights the web FAIL lamp) for a fault, kept beside
+    // any error already showing, or as a NOTICE (recordNotice_, which does
+    // not) for a source the user chose to change. Returns whether anything
+    // was recording.
+    //
+    // tests/test_stop_ends_recordings.cpp holds every pipeline_.stop() in
+    // src/gui to stopReceiver and run()'s teardown, every
+    // pipeline_.start() to startReceiver, every pipeline_.setSource() to
+    // installSource, and drives the stop, the faults and the same-rate
+    // switch through the real application.
+    void stopReceiver();
+    void startReceiver();
+    void endTakesOnFault();
+    void installSource(std::unique_ptr<cascade::source::IqSource> src);
+    bool endTakes(bool iq, bool audio, const char* why, bool asError);
+    bool faultSeen_ = false;  // endTakesOnFault's edge: the latch as last frame saw it
     // The Recorder section's own "Record audio" path, lifted out of the button
     // so the keyboard presses the SAME button rather than a second copy of it
     // that could drift from the one on screen. Returns whether a take started;
@@ -1519,7 +1622,16 @@ private:
     // The label of the native row whose args are `args`, or the args
     // themselves when no row matches (a device that has since been
     // unplugged). Used for the model string a log line names the radio by.
-    std::string nativeLabelFor(const std::string& args) const;
+    //
+    // THE DRIVER IS PART OF THE MATCH (0.99.36): an RSP's native Mirics row
+    // and its SDRplay API row carry the SAME args ("serial=..."), and matching
+    // args alone named an API-opened RSP1 "Mirics MSi2500" in the 0.99.27 log.
+    std::string nativeLabelFor(const std::string& kind, const std::string& args) const;
+
+    // The Source combo, one key per row, index-aligned with it - see
+    // gui::refindSourceRow, which keeps the selection on the same radio when
+    // a re-scan moves the rows (0.99.36).
+    std::vector<cascade::gui::SourceRowKey> sourceRowKeys() const;
 
     // Fills every panel mirror (rates, gains and their ranges, AGC, antenna)
     // from an open DeviceSource, priming the hardware where the panel has to
@@ -1743,7 +1855,25 @@ private:
     // comes up at 100 MHz - so without carrying this across, changing device
     // silently retunes the receiver and the audio stops. Captured before the
     // switch because by the time the open finishes, the old source is gone.
-    double keepCenterHz = 0.0;
+    //
+    // AN AIR FREQUENCY, AND IT MAY BE NEGATIVE: with the VFO parked above a
+    // VLF station the band centre sits below 0 Hz on the air, which through an
+    // up-converter is an ordinary tune (core::airReachable). So "nothing to
+    // carry" is its own state - no value - and never a zero or a sign
+    // (carriedAirCentre decides which). The new radio's converter judges
+    // whether it can be delivered.
+    std::optional<double> keepCenterHz;
+    // THE RADIO FREQUENCY AN RSP IS TUNED TO BEFORE ITS STREAM STARTS (the
+    // 0.99.36 pre-Init tune), already converted through that radio's
+    // converter on the GUI thread by launchDeviceOpen - the worker has no
+    // converter state, and keepCenterHz is an AIR frequency. No value: no
+    // pre-tune (nothing to carry, not an RSP, or not deliverable).
+    std::optional<double> preTuneRadioHz;
+    // THE NATIVE RADIO THIS OPEN FELL BACK FROM (converter key), when the
+    // worker opened the dongle through SoapySDR because the native driver
+    // refused its tuner; empty otherwise. finishDeviceOpen uses it so the
+    // converter set for that radio still applies (converterKeyAlias_).
+    std::string fellBackFromKey;
     // WHAT AN AUTOMATIC REOPEN HAS TO PUT BACK (pollSoapyRecovery, 0.90.1).
     // The ordinary open primes every gain to its default and leaves AGC off;
     // a reopen after a driver fault is not a new radio to the user, so the
@@ -1757,6 +1887,12 @@ private:
     std::vector<float> recoveryGainsDb;
     bool recoveryAgc = false;
     bool recoveryRestart = false;
+    // THE RADIO CLOSED TO MAKE THIS ATTEMPT (0.99.36), as the config would
+    // have named it, and what it was called. Invalid when nothing was closed.
+    // A failed open remembers it (gui::rememberAfterFailedSwitch) so the exit
+    // save does not write the generator in its place.
+    cascade::gui::RememberedSource closedRadio;
+    std::string closedLabel;
     };
     std::future<std::vector<cascade::source::SoapyDeviceInfo>> soapyScanFuture_;
     std::future<DeviceOpenResult> deviceOpenFuture_;
@@ -1880,6 +2016,11 @@ private:
     // the result. A reopen that fails leaves the ordinary failed-open state
     // and message, and nothing tries again.
     void pollSoapyRecovery();
+    // The reopen itself, once pollSoapyRecovery has judged it due: reads the
+    // rate, gains, running state and AIR centre off the dead radio (device_),
+    // closes it and launches the open. Split from the gate so the carry-across
+    // it starts is testable without a real SoapySDR fault.
+    void reopenAfterDriverFault();
     // The worker-thread open shared by selectSource and pollSoapyRecovery:
     // closes nothing (the caller has), stamps the request with sourceGen_,
     // and sets deviceOpenPending_/deviceBusyLabel_. `r` carries the args, the
@@ -1966,6 +2107,87 @@ private:
     // joined.
     cascade::gui::BiasTeePanel biasTeePanel_;
 
+    // --- THE CONVERTER IN FRONT OF THE RADIO (0.99.36, app_window_converter.cpp)
+    //
+    // An up- or down-converter between the antenna and the radio, set in the
+    // Source section and REMEMBERED PER RADIO (AppConfig::converters, keyed by
+    // core::converterRadioKey). The arithmetic is core/freq_converter.hpp's;
+    // the translation is the pipeline's (activeSource() speaks air - see
+    // Pipeline::setConverter), so nothing in this window converts anything
+    // itself. What this window does is choose WHICH setting applies: after
+    // every source install (setSource puts the pipeline back to OFF), the
+    // installed radio's own.
+    //
+    // Every install site calls applyConverterForSource() straight after its
+    // setSource and before any tune, so a carried-across frequency is sent
+    // through the NEW radio's converter. radioHzForSource() is for the two
+    // places that tune a source BEFORE it is installed (the restore at start
+    // and the IQ file's Open).
+    void drawConverterControls();
+    std::string converterRadioKeyNow() const;
+    cascade::core::ConverterSetting converterForKey(const std::string& radioKey) const;
+    void applyConverterForSource();
+    double radioHzForSource(const std::string& kind, const std::string& args, double airHz) const;
+    // The user changed the converter for the radio in use: remember it, apply
+    // it, and keep the AIR frequency - the radio is retuned to what the new
+    // setting makes of it. Only when the radio cannot go there (0 Hz or below,
+    // or outside its published range) does it stay put, the counter relabel
+    // and the note say what the radio reaches. An I/Q file always relabels.
+    void changeConverter(const cascade::core::ConverterSetting& s);
+    // "125 MHz up-converter" and its three siblings, translated.
+    std::string converterName(const cascade::core::ConverterSetting& s) const;
+    // The status column's line while a converter is on, "" otherwise;
+    // shortForm names the converter by its LO only, for a narrow column.
+    std::string converterStatusLine(bool shortForm = false);
+    // A tune the converter could not deliver, or the radio refused or moved,
+    // stated in AIR terms. "" when no converter is on (the plain sentences in
+    // gui/tune_control.hpp speak then).
+    std::string converterTuneNote(double requestAirHz, bool refused, double answeredAirHz,
+                                  bool isPluginPreset);
+    // The AIR centre a source switch carries to the next radio, or no value
+    // when the installed source has none to give. Judged at the RADIO: a
+    // readback at or below 0 Hz is a device that was never tuned, while the
+    // air figure itself may legitimately be negative (see
+    // DeviceOpenResult::keepCenterHz).
+    std::optional<double> carriedAirCentre();
+    // THE SAME RADIO UNDER ANOTHER KEY FOR THIS SESSION. When a native open
+    // falls back to SoapySDR the dongle is the one the user chose, but its key
+    // is the Soapy one; the alias maps that key to the native one so the
+    // converter set for the radio still applies - and changes made while it is
+    // open are kept under the native key, where the next native open looks.
+    // Not saved: the next session makes the same decision again. Installed
+    // only when the Soapy key has no ACTIVE converter of its own (an Off
+    // record is none) and both keys name the dongle by the same serial
+    // (gui::fallbackNamesTheSameDongle).
+    std::map<std::string, std::string> converterKeyAlias_;
+    // Soapy keys a fallback opened WITHOUT carrying the native radio's
+    // converter, because nothing showed it was the same dongle; the Source
+    // section says so (converterAliasNote). This session only.
+    std::set<std::string> converterNotCarried_;
+    // The air centre a converter change could NOT keep (the radio could not
+    // follow it, so the counter relabelled), with the radio it was held for and
+    // where that radio sat. The next change uses it instead of the relabelled
+    // figure while the radio is still there, so off-then-on and a typo-then-
+    // fix come back to the same station. Cleared by every source install.
+    // (No default member initialisers: GCC refuses them on a nested struct
+    // an std::optional member instantiates inside the class - see TestHooks.)
+    struct ConverterHeldAir {
+        std::string key;
+        double airHz;
+        double radioHz;
+    };
+    std::optional<ConverterHeldAir> converterHeldAir_;
+    std::string resolveConverterKey(const std::string& radioKey) const;
+    void noteConverterFallback(const std::string& nativeKey, const std::string& fallbackKey);
+    // The one line the Source section shows while such an alias is in force
+    // and the converter is on, or while a converter was NOT carried and none
+    // is set here; "" otherwise.
+    std::string converterAliasNote();
+    std::map<std::string, cascade::core::ConverterSetting> converters_;
+    char converterLoBuf_[40] = {};
+    std::string converterLoSeededFor_;  // the radio key + LO the field was seeded from
+    bool converterLoBad_ = false;
+
     // THE SWITCHES THAT BELONG TO ONE RADIO EACH, and are NOT persisted.
     //
     // The bias tee above is saved because leaving it off silently costs a
@@ -2042,6 +2264,11 @@ private:
     std::string sdrPlayAdvice_;
     std::string sdrPlayApiDetail_;
     bool sdrPlayRowsFound_ = false;
+    // The label each SDRplay API row last showed, by its args (0.99.36). A
+    // radio this process has selected is not in the API's list, so its row is
+    // put back from here (source::withClaimedSdrPlayRows) under the name the
+    // user picked it by.
+    std::map<std::string, std::string> sdrPlaySeenLabels_;
 
     // --- Frequency scale + view interaction state (P5) -----------------------
     // ONE scale owns the x <-> Hz <-> bin mapping for both center panels, fed
@@ -2138,6 +2365,10 @@ private:
     cascade::core::Recorder audioRecorder_;
     std::string recordDir_;    // %USERPROFILE%/Documents/SDR-recordings
     std::string recordError_;  // red text in the Recorder section; "" = none
+    // Why a take ended when nothing went WRONG (the user changed source):
+    // muted text in the Recorder section and its own field on the web page,
+    // so it never lights FAIL there. Cleared with recordError_ by a Record.
+    std::string recordNotice_;
     double iqRecordStartS_ = 0.0;     // ImGui::GetTime() at take start, for
     double audioRecordStartS_ = 0.0;  // the elapsed-wall-time readout
     // Input rate the live IQ take's WAV header was written for. A rate-follow
@@ -2233,6 +2464,31 @@ private:
     // where the config arrives and nowhere else. Defaults to the plate the
     // deck has always had.
     cascade::gui::TunerStyle tunerStyle_ = cascade::gui::TunerStyle::Nixie;
+
+    // --- THE INTERFACE THEME (2026-09-25; gui/theme.hpp) ----------------------
+    // The look chosen in Display, by its foxsdr-ui/1 key (AppConfig::uiTheme).
+    // Applied only between frames, by applyPendingTheme() - the palette, the
+    // ImGui style and the typeface pair all change together, never half way
+    // through a frame. Starts pending so the first frame applies whatever
+    // applyConfig restored.
+    std::string uiThemeKey_ = "today";
+    bool themeApplyPending_ = true;
+    void applyPendingTheme();
+    // Pick a theme from the Display picker: the palette AND the counter's and
+    // readings' preset sizes (Bench Classic XL is the 2x counter without its
+    // switches), which the user may then change on their own.
+    void pickTheme(const std::string& key);
+    // The counter's own settings (AppConfig::counterScale / counterSwitches)
+    // and every other live figure's size (readingsScale). Read every frame.
+    int counterScale_ = 1;
+    bool counterSwitches_ = true;
+    float readingsScale_ = 1.0f;
+    // The status column's height at which its cards last failed to fit at the
+    // enlarged reading size (-1: never). See drawStatusColumn's card().
+    float statusEnlargeFailedRoom_ = -1.0f;
+    // The counter's right-click menu: Enlarge figures / Normal size / Show
+    // tuner switches / Counter face / Enlarge every reading.
+    void drawCounterMenu();
 
     // Plugin host: scanned once at construction and on Rescan. Owns the
     // loaded modules, so it must outlive nothing in particular here — but it
@@ -2838,6 +3094,9 @@ private:
     // Why a radio is not running, when it tried and failed; drawn on its face
     // and turned into Problem::RadioFailed for the plan.
     std::map<cascade::core::patch::NodeId, std::string> patchRadioError_;
+    // Why a centre typed on a Radio node was refused (setPatchRadioCentre);
+    // cleared by the next one taken.
+    std::map<cascade::core::patch::NodeId, std::string> patchCentreNote_;
     // The "<key>@<rate>" that failed, so a radio that would not open is not
     // retried every frame - only when its device or rate is changed.
     std::map<cascade::core::patch::NodeId, std::string> patchRadioFailedAs_;
@@ -2870,7 +3129,10 @@ private:
         std::string args;
         std::string label;
         double rateHz = 0.0;
-        double centreHz = 0.0;
+        // The receiver's AIR centre when the patch took the radio; no value
+        // when it had none to give. May be below 0 Hz (see
+        // DeviceOpenResult::keepCenterHz).
+        std::optional<double> centreHz;
         // A lent SOUND CARD, as it was running when the patch took it - what
         // the hand-back reopens (gui::receiverSourceForPatch).
         cascade::source::SoundCardSettings card;
@@ -2887,6 +3149,12 @@ private:
     // no other Radio has it, else the first free device listed, else the
     // generator.
     std::string patchDefaultDeviceKey() const;
+    // A centre typed on a Radio node (its face or the panel): taken when the
+    // radio behind the node's converter would be told something above 0 Hz
+    // (core::radioCentreTakeable), refused with a sentence otherwise
+    // (patchCentreNote_, drawn by drawPatchCentreNote). True when taken.
+    bool setPatchRadioCentre(cascade::core::patch::Node& n, double airHz);
+    void drawPatchCentreNote(const cascade::core::patch::Node& n);
     // Per frame while the page is open: take the receiver's radio, open and
     // close radios to match the nodes, make and drop speaker outputs, and
     // publish each radio's set when it has changed.

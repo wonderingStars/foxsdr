@@ -210,7 +210,7 @@ void drawStationLamp(ImDrawList* dl, const ImVec2& c, float r, ImU32 colour, boo
         dl->AddCircleFilled(ImVec2(c.x - r * 0.08f, c.y - r * 0.10f), r * 0.54f,
                             theme::withAlpha(theme::kIvory, 0.20f), 36);
         dl->AddCircleFilled(ImVec2(c.x - r * 0.32f, c.y - r * 0.36f), r * 0.17f,
-                            IM_COL32(255, 255, 255, 150), 24);
+                            theme::sheen(150), 24);
     } else {
         dl->AddCircleFilled(c, r, theme::kVoid, 48);
         dl->AddCircleFilled(c, r, theme::withAlpha(colour, 0.26f), 48);

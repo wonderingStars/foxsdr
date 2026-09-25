@@ -59,6 +59,11 @@ endforeach()
 # The app doubles as a smoke test. The PASS_REGULAR_EXPRESSION makes the
 # exact-count half of the --frames contract observable: rendering N+1 frames
 # (or none) fails even though the exit code would still be 0.
+# The theme census starts the application sixteen times (eight layouts at two
+# window sizes), so it gets more than the loop's two minutes - most of all on a
+# software-rendered Linux runner.
+set_tests_properties(test_theme_census PROPERTIES TIMEOUT 600)
+
 add_test(NAME app_smoke COMMAND cascade --frames 3)
 set_tests_properties(app_smoke PROPERTIES
     TIMEOUT 60

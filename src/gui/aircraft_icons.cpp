@@ -17,6 +17,7 @@
 #endif
 
 #include "gui/aircraft_icon_pixels.hpp"
+#include "gui/theme.hpp"
 #include "gui/track_silhouette.hpp"
 
 namespace cascade::gui {
@@ -257,7 +258,7 @@ bool drawAircraftIcon(ImDrawList* dl, const ImVec2& centre, double courseDeg, fl
     if (dl == nullptr || i < 0 || i >= kAircraftIconCount) { return false; }
     if (!ensureTextures()) { return false; }
     const float al = std::clamp(alpha, 0.0f, 1.0f);
-    const ImU32 tint = IM_COL32(255, 255, 255, static_cast<int>(std::lround(al * 255.0f)));
+    const ImU32 tint = IM_COL32(255, 255, 255, static_cast<int>(std::lround(al * 255.0f)));  // theme-exempt: identity tint, draws the icon's own pixel art
     const ImVec2 off = aircraftShadowOffset(sizePx);
     addQuad(dl, gTex[i].shadow,
             aircraftIconQuad(ImVec2(centre.x + off.x, centre.y + off.y), courseDeg, sizePx), tint);
@@ -276,7 +277,7 @@ void drawAircraftMarker(ImDrawList* dl, const ImVec2& centre, double courseDeg, 
         return (altitudeCol & ~IM_COL32_A_MASK) |
                (static_cast<ImU32>(std::lround(static_cast<float>(a8) * f)) << IM_COL32_A_SHIFT);
     };
-    const ImU32 rim = IM_COL32(0, 0, 0, a8);
+    const ImU32 rim = theme::shadow(static_cast<int>(a8));  // black on today's bench
     const float haloR = sizePx * 0.42f;
     if (altKnown) { dl->AddCircleFilled(centre, haloR, withAlpha(0.38f)); }
     dl->AddCircle(centre, haloR, withAlpha(0.9f), 0, 1.5f);

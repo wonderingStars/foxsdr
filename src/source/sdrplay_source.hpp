@@ -84,9 +84,10 @@
 // stop() and closeDevice() return without waiting on anything at all. What
 // that costs is real and is said plainly rather than discovered: the RSP
 // stays selected in the service and this process's SDRplay session is
-// finished until FoxSDR is restarted - which is the same restart the "restart
-// the SDRplay API service, then open the radio again" sentence already asks
-// for. See vendorUnreachableLocked().
+// finished until FoxSDR is restarted - which is the restart every sentence
+// the user is shown then asks for ("restart the SDRplay API service, then
+// restart FoxSDR"; until 0.99.36 two of them said "then open the radio again",
+// which a lost session refuses). See vendorUnreachableLocked().
 //
 // ...AND THE RULE ONLY WORKS IF EVERY FAILURE THAT MEANS IT GETS RECORDED.
 // 0.97.1's hang report is the same freeze one call further round: a GUI
@@ -243,6 +244,14 @@ const char* sdrPlayControlHungSentence();
 // pinned by a test, like the two above; unlike the hold-off it never expires,
 // so it names both restarts the user needs.
 const char* sdrPlaySessionLostSentence();
+
+// WHAT THE RECEIVER SAYS WHEN THE SERVICE SIMPLY STOPS DELIVERING (0.99.36).
+// Every other sentence above is the answer to a CALL; this one is for the
+// stream going quiet with nothing having been asked - the 0.95.0 RSP1A,
+// 0.97.0 RSPdx, 0.97.1 RSP1 and 0.99.27 RSP2 logs each show gaps of 5 to 98
+// seconds during which FoxSDR still called itself running and said nothing.
+// See SdrPlaySource::kStreamStallLimit. One string, pinned by a test.
+const char* sdrPlayStreamStalledSentence();
 
 // True while the hold-off above is still running, i.e. the last enumeration
 // abandoned a wedged service and the next ones are skipping it.
@@ -402,6 +411,28 @@ public:
     // health ..." line is written. Matches SoapySource's window exactly, so a
     // report from an RSP is comparable with one from any other radio.
     static constexpr std::chrono::milliseconds kStreamHealthWindow{60000};
+
+    // Not a wait either: HOW LONG A RUNNING STREAM MAY GO WITHOUT A SINGLE
+    // CALLBACK before the service is treated as gone (0.99.36).
+    //
+    // WHY. A service that stops delivering raises nothing: no call is in
+    // flight to answer ServiceNotResponding, so faulted() stayed false and the
+    // receiver called itself running on an empty ring until the user happened
+    // to press something - 49 s in the 0.95.0 RSP1A log, 51 s in the 0.99.27
+    // RSP1 log, 85 s in the 0.99.27 RSP2 log, 99 s in the 0.97.0 RSPdx log,
+    // every one of them ending in a service that answered the next call with
+    // sdrplay_api_ServiceNotResponding. A healthy RSP's longest gap in those
+    // same logs is 45 to 55 ms, and a rate change's reset is a fraction of a
+    // second, so five seconds is two orders of magnitude clear of anything a
+    // working service does.
+    //
+    // CHECKED IN read(), on the pipeline's source thread, and costs nothing
+    // there: one clock read on a read that came back empty. On expiry the
+    // stream is treated exactly as a service that answered (14): the fault is
+    // raised with sdrPlayStreamStalledSentence(), the session is marked lost,
+    // and the teardown makes no call into the vendor DLL (the 0.96.4 and
+    // 0.97.0 hang reports are a teardown entering a wedged service).
+    static constexpr std::chrono::milliseconds kStreamStallLimit{5000};
 
     // TESTS ONLY, and per instance so two tests can never see each other's
     // API. There is no RSP and no SDRplay API on the machine this driver was
@@ -608,6 +639,9 @@ public:
     // nothing has been read since the last line.
     std::string streamHealthLine();
     void setStreamHealthWindowForTest(std::chrono::milliseconds w);
+    // TESTS ONLY: a shorter kStreamStallLimit, so a test can prove the stall
+    // is named without waiting five seconds for it.
+    void setStreamStallLimitForTest(std::chrono::milliseconds w);
 
     // Samples the service delivered that did not fit in the ring - the host
     // fell behind, not the radio.
@@ -695,6 +729,24 @@ private:
         std::atomic<std::int64_t> cbWindowStartNs{0};
         std::atomic<std::int64_t> cbLastSamplesNs{0};
 
+        // THE STALL CLOCK (0.99.36), separate from the health window's because
+        // that one is reset every time a window closes. lastCallbackNs is
+        // written by EVERY stream callback, samples or not - a callback at all
+        // proves the service is still calling us; streamStartNs is set just
+        // before Init so a service that never delivers a first block is caught
+        // too. Both steady_clock ns, 0 meaning "none". See kStreamStallLimit.
+        std::atomic<std::int64_t> lastCallbackNs{0};
+        std::atomic<std::int64_t> streamStartNs{0};
+        // THE READER'S HALF (the 0c59853 review): when the current run of
+        // back-to-back empty reads began, and when the last empty read was.
+        // A stall needs BOTH clocks past the limit, so a whole-process freeze
+        // (sleep/resume, a paused VM, a debugger) - which stops the reader as
+        // well as the callbacks - does not look like a silent service.
+        std::atomic<std::int64_t> emptySinceNs{0};
+        std::atomic<std::int64_t> lastEmptyReadNs{0};
+        std::atomic<std::int64_t> stallLimitNs{
+            std::chrono::duration_cast<std::chrono::nanoseconds>(kStreamStallLimit).count()};
+
         // What the EVENT callback would have logged, left for read() to log
         // (0.99.32, the same rule): one bit per kind of line, see kEventLog*.
         std::atomic<unsigned int> pendingEventLogs{0};
@@ -765,8 +817,9 @@ private:
 
     // TRUE WHEN NO THREAD OF OURS MAY ENTER THE VENDOR DLL FOR THIS DEVICE
     // AGAIN - the whole of the rule the file header states, in one place so
-    // that updateLocked, stopStreamingLocked and closeDevice cannot drift
-    // apart about it. devMutex_ held, like every other *Locked helper.
+    // that updateLocked, stopStreamingLocked, closeDevice and every setter
+    // cannot drift apart about it. devMutex_ held, like every other *Locked
+    // helper.
     //
     // DELIBERATELY NOT deviceDead(). That is raised by an UNPLUGGED radio too
     // (eventCallback's DeviceRemoved), and an unplugged radio leaves a healthy
@@ -775,7 +828,25 @@ private:
     // would trade a hang nobody has reported for a receiver that cannot be
     // re-plugged without restarting the application. Only the two conditions
     // below mean the SERVICE is gone.
-    bool vendorUnreachableLocked() const { return controlAbandoned_ || serviceGone_; }
+    bool vendorUnreachableLocked() const {
+        return controlAbandoned_ || serviceGone_ || streamStalled_.load(std::memory_order_acquire);
+    }
+
+    // THE FIRST LINE OF EVERY SETTER (the review of 6e308c3). True - with
+    // lastError "<what> refused: <the sentence for why>" - when the vendor DLL
+    // is unreachable, and then the setter returns false having touched
+    // NOTHING: not the parameter block, not a readback mirror, not the API.
+    // It has to come before the setter's "nothing changed" shortcut as well
+    // as before its writes: after an abandoned control the block still holds
+    // the abandoned request, so the shortcut answered "already there" for a
+    // frequency the radio never reached, and a different frequency was
+    // written into a block a worker of ours may still be reading.
+    bool refuseIfVendorUnreachableLocked(const char* what);
+
+    // The source thread's half of kStreamStallLimit: called by read() when it
+    // came back empty. Raises the fault once and never takes devMutex_ - read()
+    // must not queue behind a GUI-thread control in flight.
+    void checkForStallFromRead();
 
     // A SERVICE THAT HAS STOPPED ANSWERING IS A DEAD DEVICE, NOT A FAILED CALL.
     //
@@ -842,6 +913,13 @@ private:
     // for the same reason controlAbandoned_ is: a fresh session is a fresh
     // device.
     bool serviceGone_ = false;
+
+    // TRUE ONCE THE STREAM HAS GONE kStreamStallLimit WITHOUT A CALLBACK
+    // (0.99.36). The third half of vendorUnreachableLocked(), and ATOMIC where
+    // the other two are plain bools: it is raised by read() on the pipeline's
+    // source thread, which does not hold devMutex_ and must not wait for it.
+    // Cleared by open(), like the other two.
+    std::atomic<bool> streamStalled_{false};
 
     // Lock-free mirrors, so per-frame GUI readouts never wait behind an API
     // call in flight.

@@ -618,6 +618,71 @@ inline FreqRect switchRectForCell(float plateTLx, float plateTLy, int cellIndex,
     return FreqRect{x0, y0, x0 + kFreqCellW * scale, y0 + kFreqSwitchHalfH * scale};
 }
 
+// --- THE COUNTER'S SIZE AND ITS SWITCHES (themes, 2026-09-25) ------------------
+//
+// Bench Classic XL (gui/theme.hpp) draws the figures twice the size with the
+// tuner switches put away, and any theme may do either from the Display
+// section or the counter's own right-click menu. A layout is those two
+// choices; the DEFAULT layout is today's plate, number for number - every
+// function below answers exactly what the constants above answer for it, and
+// tests/test_tune_control.cpp holds them to that.
+//
+// AT 2x THE TUBE IS TWICE AS TALL (the figure is sized from the tube's height,
+// so it is genuinely drawn larger) and 48 units wide rather than 56: a Nova
+// Mono figure at twice the size is 30 units across, and the narrower cell is
+// what lets the enlarged deck keep both meters on a 1280 x 720 window. The
+// switch area keeps its size - a switch is a switch - and without the
+// switches the bezel loses that area and the gap above it.
+struct CounterLayout {
+    int scale = 1;          // 1 or 2
+    bool switches = true;   // the UP/DN toggle switches under the tubes
+};
+inline constexpr float kFreqCellW2x = 48.0f;
+
+inline float counterCellW(const CounterLayout& c) {
+    return c.scale >= 2 ? kFreqCellW2x : kFreqCellW;
+}
+inline float counterTubeH(const CounterLayout& c) {
+    return c.scale >= 2 ? 2.0f * kFreqTubeH : kFreqTubeH;
+}
+inline float counterBezelW(const CounterLayout& c) {
+    return static_cast<float>(kFreqDigitCells) * counterCellW(c) +
+           static_cast<float>(kFreqDigitCells - 1) * kFreqCellGap + kFreqBezelPadX * 2.0f;
+}
+inline float counterBezelH(const CounterLayout& c) {
+    return kFreqBezelPadY + counterTubeH(c) +
+           (c.switches ? kFreqTubeSwitchGap + kFreqSwitchH : 0.0f) + kFreqBezelPadY;
+}
+inline float counterPlateW(const CounterLayout& c) {
+    return counterBezelW(c) + kFreqPlatePadX * 2.0f;
+}
+inline float counterPlateH(const CounterLayout& c) {
+    return kFreqPlatePadTop + kFreqPlateHeaderH + kFreqPlateHeaderGap + counterBezelH(c) +
+           kFreqPlateFooterGap + kFreqPlateFooterH + kFreqPlatePadBottom;
+}
+inline float counterCellLeftX(float plateTLx, int cellIndex, float scale,
+                              const CounterLayout& c) {
+    return plateTLx + (kFreqBezelX + kFreqBezelPadX +
+                       static_cast<float>(cellIndex) * (counterCellW(c) + kFreqCellGap)) *
+                          scale;
+}
+inline FreqRect tubeRectForCell(float plateTLx, float plateTLy, int cellIndex, float scale,
+                                const CounterLayout& c) {
+    const float x0 = counterCellLeftX(plateTLx, cellIndex, scale, c);
+    const float y0 = plateTLy + (kFreqBezelY + kFreqBezelPadY) * scale;
+    return FreqRect{x0, y0, x0 + counterCellW(c) * scale, y0 + counterTubeH(c) * scale};
+}
+// The switch halves are laid out under the tube as they always were; on a
+// layout without switches nothing asks for them.
+inline FreqRect switchRectForCell(float plateTLx, float plateTLy, int cellIndex, bool upperHalf,
+                                  float scale, const CounterLayout& c) {
+    const float x0 = counterCellLeftX(plateTLx, cellIndex, scale, c);
+    const float areaTopY =
+        plateTLy + (kFreqBezelY + kFreqBezelPadY + counterTubeH(c) + kFreqTubeSwitchGap) * scale;
+    const float y0 = upperHalf ? areaTopY : areaTopY + kFreqSwitchHalfH * scale;
+    return FreqRect{x0, y0, x0 + counterCellW(c) * scale, y0 + kFreqSwitchHalfH * scale};
+}
+
 // --- HOW A DIGIT CELL IS PAINTED -------------------------------------------
 //
 // WHY THIS IS A SETTING AT ALL. GitHub issue #1: "Would be nice to be able to
@@ -835,6 +900,333 @@ inline constexpr float muteBannerMiddleW(float barW, float coreW) {
 }
 inline constexpr bool muteBannerTakesTheMiddle(float barW, float coreW) {
     return muteBannerMiddleW(barW, coreW) >= kMuteBannerMinW;
+}
+
+// --- THE DECK AROUND A LAYOUT (themes, 2026-09-25) ------------------------------
+//
+// The bar's fixed measurements, which app_window.cpp places the deck from: the
+// master divider, the plate's top, the clear brass under it and the bar's own
+// 160 units. The counter stands 12 past the divider, its own divider 12 past
+// the plate, and the volume dial 61 past that - so a wider plate moves the
+// dial and the end of the cluster right by exactly its extra width.
+inline constexpr float kDeckBarH = 160.0f;
+inline constexpr float kDeckPlateTopY = 20.0f;
+inline constexpr float kDeckPlateFootMarginY = 10.0f;
+inline constexpr float kDeckMasterDividerX = 384.0f;
+
+inline float deckCounterDividerX(const CounterLayout& c) {
+    return kDeckMasterDividerX + 12.0f + counterPlateW(c) + 12.0f;
+}
+inline float deckVolumeCx(const CounterLayout& c) { return deckCounterDividerX(c) + 61.0f; }
+inline float deckCoreW(const CounterLayout& c) {
+    return kDeckCoreW + (counterPlateW(c) - kFreqPlateW);
+}
+// THE HEIGHT A LAYOUT'S BAR WOULD NEED at scale 1: today's plate and the 2x
+// plate without switches both stand inside 160; the 2x plate WITH its
+// switches is 161 tall and would need 191 - which deckScale does not allow,
+// drawing that deck at 160/191 instead.
+inline float deckBarH(const CounterLayout& c) {
+    return std::max(kDeckBarH, kDeckPlateTopY + counterPlateH(c) + kDeckPlateFootMarginY);
+}
+// What the two meters take at the bar's right, in screen pixels (they do not
+// scale): the clearance from the cluster, both faces, the gap between and the
+// right margin.
+inline constexpr float kDeckMeterReserve =
+    kMeterCoreClearance + 2.0f * kMeterW + kMeterGap + kMeterRightMargin;
+
+// THE BAR'S SCALE for a layout. Today's rule, exactly, for the 1x counter: the
+// bar shrinks only when the window is narrower than the cluster, and the
+// meters are dropped where they do not fit. THE ENLARGED COUNTER MAY NOT COST
+// THE METERS: its cluster is wider, and at 1280 x 720 the meters would no
+// longer fit beside it, so the whole deck is drawn smaller - figures, dial,
+// lamps and all, never below minScale - until they do. At a window wide
+// enough for both (a bar of about 1400 or more) it is drawn at full size.
+inline float deckScale(float availW, const CounterLayout& c, float minScale) {
+    const float coreW = deckCoreW(c);
+    float s = 1.0f;
+    if (availW > 0.0f && availW < coreW) { s = std::max(minScale, availW / coreW); }
+    if (c.scale >= 2 && availW > 0.0f) {
+        const float room = (availW - kDeckMeterReserve) / coreW;
+        if (room < s) { s = std::max(minScale, room); }
+    }
+    // AND THE BAR IS NEVER DRAWN TALLER THAN TODAY'S. The owner's words on the
+    // plate's first cut, which still bind: "we don't want to affect the size of
+    // the top bar". A plate that needs a taller bar (2x with its switches) is
+    // drawn smaller instead - and the body below keeps every pixel it had, so
+    // no status card is pushed off the column (the theme census caught
+    // exactly that at 1280 x 720 before this line existed).
+    const float tall = deckBarH(c);
+    if (tall > kDeckBarH) { s = std::min(s, kDeckBarH / tall); }
+    return s;
+}
+// Whether the meters are drawn: today's rule for the 1x counter; for the 2x one
+// the cluster is measured at the scale it is drawn at.
+inline bool deckMetersFit(float barW, const CounterLayout& c, float scale) {
+    if (c.scale < 2) { return metersFitOnBar(barW, kDeckCoreW); }
+    return meter1XOnBar(barW) >= deckCoreW(c) * scale + kMeterCoreClearance - 1.0e-3f;
+}
+
+// --- WHERE THE BANNER GOES WHEN THE MIDDLE IS TAKEN (repair rounds, 2026-09-25) -----
+//
+// The first fallback was a fixed point, (300, 124) in deck units - the strip
+// "under the counter" - and there is no such strip: the plate stands 121 of
+// the bar's 160 units tall, so that point lies on the plate's switch row and
+// footer. Today's bench put the banner over its own UP / DN switches at
+// 1280 x 720 (0.99.35 already did), and Bench Classic XL, whose 2x cluster
+// leaves no middle at 1600 x 1000 either, laid it across the enlarged tubes.
+//
+// The second fallback moved it off the deck and CLIPPED it to its new place,
+// shrinking the whole line to fit - and the clip took the "Stop plugin" key:
+// on today's default 1280 x 720 window two decoders named drew it at 9 px,
+// three cut it to "Stop p", four removed it. A clipped ImGui item cannot be
+// clicked, so the banner offered no working way to do what it asks.
+//
+// SO THE KEY IS PLACED FIRST AND THE WORDS GET WHAT IS LEFT. The banner takes
+// one of three places that are OFF every part of the deck, in bar-relative
+// screen pixels:
+//   0  THE MIDDLE, exactly as 0.99.35 drew it, when it holds the whole banner
+//      (and the rule's 220): words and key on one line at (cluster end + 12,
+//      62 units down), the words one item spacing in;
+//   1  OVER THE METERS: the strip across the bar's top, right of the cluster,
+//      above the meter faces (which stand 28 px down) - or down to the
+//      middle's line when the meters are not drawn;
+//   2  THE MASTER CLUSTER'S HEAD: the clear brass above the MASTER caption
+//      (52 units down) and right of the transport, left of the divider.
+// In 1 and 2 the banner is laid out on one line (words, then the key) or on
+// two (the words over the key), at the bar's own font size or a whole pixel
+// or more smaller - never below kMuteKeyMinPx, the size at which a key's label
+// is still read at a glance. The KEY IS ALWAYS WHOLE inside its place, and it
+// takes the LARGEST size any place and arrangement allows - the key is what the
+// banner is for. The words then take their own size, no larger than the key's
+// and no smaller than the floor, the largest at which the whole sentence fits
+// beside or above the key; when it fits nowhere, they keep the key's size and
+// are SHORTENED WITH AN ELLIPSIS (app_window.cpp puts the full sentence in a
+// tooltip over both the words and the key). Between arrangements: the larger
+// key, then the whole sentence, then the larger words, then more of them.
+// (The first cut shared one size between them, and on Linux's narrower face
+// four names in English shrank the key to 13 px to show the sentence whole.)
+//
+// THE WIDTHS ARE MEASURED AT EACH SIZE, not scaled from the bar's: a face's
+// advances do not shrink in proportion (at 15 px a key came out 1.4 px wider
+// than 15/17 of its 17-px width, and a key laid out from the scaled figure ran
+// past its place by exactly that). tests/test_mute_banner.cpp holds all of it
+// against every catalogue's real widths in every theme's typeface.
+inline constexpr float kMuteKeyMinPx = 13.0f;
+inline constexpr float kMeterTopPx = 28.0f;        // the meters' top edge below the bar's
+inline constexpr float kMuteBannerLineGap = 1.0f;  // between the words and the key, two lines
+inline constexpr int kMuteBannerMaxSizes = 16;
+
+// The banner measured at one font size: the sentence and the key's label.
+struct MuteBannerSize {
+    float px = 0.0f;
+    float wordsW = 0.0f;
+    float keyLabelW = 0.0f;
+};
+
+// The sizes the banner may be drawn at: the bar's own `lineH`, then a whole
+// pixel smaller at a time down to kMuteKeyMinPx. Returns how many (at least 1).
+inline int muteBannerSizes(float lineH, float* px, int max) {
+    int n = 0;
+    for (float s = lineH; n < max && (n == 0 || s >= kMuteKeyMinPx - 1.0e-3f); s -= 1.0f) {
+        px[n++] = s;
+    }
+    return n;
+}
+
+struct MuteBannerLayout {
+    int slot = 0;            // 0 middle, 1 over the meters, 2 the master cluster's head
+    int lines = 1;           // 1: words then key; 2: words over the key
+    float px = 0.0f;         // the font size the KEY is drawn at
+    float wordsPx = 0.0f;    // the font size the words are drawn at (never above px)
+    // The place, bar-relative pixels: everything is drawn clipped to it, and
+    // everything is laid out inside it.
+    float x0 = 0.0f, y0 = 0.0f, x1 = 0.0f, y1 = 0.0f;
+    // The words' top-left and the width they are drawn in: all of them when
+    // wordsWhole, else as many as fit before an ellipsis (0: none are drawn,
+    // the room left being too small to say anything in).
+    float wordsX = 0.0f, wordsY = 0.0f, wordsDrawnW = 0.0f;
+    bool wordsWhole = true;
+    // The key, whole: its top-left, its width (label plus padding) and height.
+    float keyX = 0.0f, keyY = 0.0f, keyW = 0.0f, keyH = 0.0f;
+};
+
+// barW / scale: the bar's width and the deck's scale; coreW: the fixed
+// cluster's width in deck units; coreScaled: measure the middle rule against
+// the cluster as drawn (the 2x counter) rather than today's 1x rule;
+// metersShown: whether the two meters are on the bar. sizes[0..n) are the
+// banner measured at muteBannerSizes(), largest (the bar's font) first;
+// keyPadX is the key's horizontal padding and gap the item spacing - neither
+// changes with the font.
+inline MuteBannerLayout layoutMuteBanner(float barW, float scale, float coreW, bool coreScaled,
+                                         bool metersShown, const MuteBannerSize* sizes, int n,
+                                         float keyPadX, float gap) {
+    MuteBannerLayout best;
+    if (n <= 0) { return best; }
+    const MuteBannerSize& full = sizes[0];
+    const float keyW1 = full.keyLabelW + 2.0f * keyPadX;
+    const float bannerW = gap + full.wordsW + gap + keyW1;
+    const float ruleCoreW = coreScaled ? coreW * scale : coreW;
+    const float clusterEnd = coreW * scale + kMuteBannerEdgeClearance;
+    // 0 - the middle, exactly where and how it always went when it fits.
+    if (muteBannerMiddleW(barW, ruleCoreW) >= std::max(kMuteBannerMinW, bannerW)) {
+        best.slot = 0;
+        best.px = full.px;
+        best.wordsPx = full.px;
+        best.x0 = clusterEnd;
+        best.y0 = 62.0f * scale;
+        best.x1 = clusterEnd + bannerW;
+        best.y1 = best.y0 + full.px;
+        best.wordsX = clusterEnd + gap;
+        best.wordsY = best.y0;
+        best.wordsDrawnW = full.wordsW;
+        best.keyX = best.wordsX + full.wordsW + gap;
+        best.keyY = best.y0;
+        best.keyW = keyW1;
+        best.keyH = full.px;
+        return best;
+    }
+    struct Place {
+        int slot;
+        float x0, y0, x1, y1;
+    };
+    // 1 - across the top, right of the cluster, clear of the meter faces.
+    // 2 - the master cluster's head: past the transport (74 + 46 units, and
+    // clear metal), short of the divider, above the MASTER caption.
+    const Place places[2] = {
+        {1, clusterEnd, 3.0f,
+         metersShown ? barW - kMeterRightMargin : barW - kMuteBannerEdgeClearance,
+         metersShown ? kMeterTopPx - 2.0f : 62.0f * scale},
+        {2, 130.0f * scale, 4.0f * scale, (kDeckMasterDividerX - 6.0f) * scale, 48.0f * scale},
+    };
+    bool have = false;
+    float bestShown = -1.0f;
+    for (const Place& p : places) {
+        const float w = p.x1 - p.x0 - 2.0f;  // a pixel's margin each side
+        const float h = p.y1 - p.y0;
+        if (w <= 0.0f || h <= 0.0f) { continue; }
+        for (int lines = 1; lines <= 2; ++lines) {
+            // THE KEY FIRST: the largest size at which it is whole here - on two
+            // lines, with room above it for a line of words at the floor.
+            int k = -1;
+            for (int i = 0; i < n && k < 0; ++i) {
+                const MuteBannerSize& z = sizes[i];
+                if (z.px < kMuteKeyMinPx - 1.0e-3f) { break; }
+                const float kw = z.keyLabelW + 2.0f * keyPadX;
+                const float tall =
+                    lines == 1 ? z.px : z.px + kMuteBannerLineGap + kMuteKeyMinPx;
+                if (kw <= w && tall <= h) { k = i; }
+            }
+            if (k < 0) { continue; }  // the key cannot be whole and readable here
+            const MuteBannerSize& kz = sizes[k];
+            const float keyW = kz.keyLabelW + 2.0f * keyPadX;
+            // THEN THE WORDS: the largest size - no larger than the key's, no
+            // smaller than the floor - at which the whole sentence fits in what
+            // the key leaves (beside it, or on the line above it).
+            const float room = lines == 1 ? w - keyW - gap : w;
+            const float lineRoom = lines == 1 ? h : h - kz.px - kMuteBannerLineGap;
+            int wi = -1;
+            for (int i = k; i < n && wi < 0; ++i) {
+                const MuteBannerSize& z = sizes[i];
+                if (z.px < kMuteKeyMinPx - 1.0e-3f) { break; }
+                if (z.wordsW <= room && z.px <= lineRoom) { wi = i; }
+            }
+            const bool whole = wi >= 0;
+            // Shortened, the words keep the key's size, or the largest their line holds.
+            int si = k;
+            while (!whole && si < n - 1 && sizes[si].px > lineRoom) { ++si; }
+            const MuteBannerSize& wz = sizes[whole ? wi : si];
+            float shown = whole ? wz.wordsW : std::max(0.0f, room);
+            if (!whole && (room < 2.0f * wz.px || wz.px > lineRoom ||
+                           wz.px < kMuteKeyMinPx - 1.0e-3f)) {
+                shown = 0.0f;  // too little room to say anything in: the tooltip says it
+            }
+            // Ranked: the larger KEY first, then the whole sentence, then larger
+            // words, then more of them; ties keep the earlier (one line, over
+            // the meters).
+            bool better = !have;
+            if (have) {
+                if (std::fabs(kz.px - best.px) > 1.0e-3f) {
+                    better = kz.px > best.px;
+                } else if (whole != best.wordsWhole) {
+                    better = whole;
+                } else if (std::fabs(wz.px - best.wordsPx) > 1.0e-3f) {
+                    better = wz.px > best.wordsPx;
+                } else {
+                    better = shown > bestShown + 0.5f;
+                }
+            }
+            if (!better) { continue; }
+            have = true;
+            bestShown = shown;
+            MuteBannerLayout l;
+            l.slot = p.slot;
+            l.lines = lines;
+            l.px = kz.px;
+            l.wordsPx = wz.px;
+            l.x0 = p.x0;
+            l.y0 = p.y0;
+            l.x1 = p.x1;
+            l.y1 = p.y1;
+            l.wordsWhole = whole;
+            l.wordsDrawnW = shown;
+            l.keyW = keyW;
+            l.keyH = kz.px;
+            const float left = p.x0 + 1.0f;
+            if (lines == 1) {
+                // One line, centred on the key's height; smaller words centred on it.
+                const float top = p.y0 + std::max(0.0f, (h - kz.px) * 0.5f);
+                l.wordsX = left;
+                l.wordsY = top + (kz.px - wz.px) * 0.5f;
+                l.keyX = shown > 0.0f ? left + shown + gap : left;
+                l.keyY = top;
+            } else {
+                const float block = wz.px + kMuteBannerLineGap + kz.px;
+                const float top = p.y0 + std::max(0.0f, (h - block) * 0.5f);
+                l.wordsX = left;
+                l.wordsY = top;
+                l.keyX = left;
+                l.keyY = top + wz.px + kMuteBannerLineGap;
+            }
+            best = l;
+        }
+    }
+    if (!have) {
+        // No place holds a readable key - which the bar's floor scale rules
+        // out (test_mute_banner proves it from the narrowest window up). Draw
+        // it at the smallest size in the master cluster's head regardless,
+        // widening the place to hold it: a key a little past its place is
+        // still a key, where a clipped one is not.
+        const Place& p = places[1];
+        const MuteBannerSize& z = sizes[n - 1];
+        best.slot = p.slot;
+        best.px = z.px;
+        best.wordsPx = z.px;
+        best.x0 = p.x0;
+        best.y0 = p.y0;
+        best.keyW = z.keyLabelW + 2.0f * keyPadX;
+        best.keyH = z.px;
+        best.x1 = std::max(p.x1, p.x0 + best.keyW + 2.0f);
+        best.y1 = std::max(p.y1, p.y0 + z.px);
+        best.wordsWhole = false;
+        best.wordsDrawnW = 0.0f;
+        best.keyX = p.x0 + 1.0f;
+        best.keyY = p.y0;
+    }
+    return best;
+}
+
+// "A", "A and B", "A, B and C": the decoders a mute banner and its dialog name.
+// Several data decoders running at once is an ordinary thing to do - ADS-B and
+// AIS share no band but a user watching both has both running - and a message
+// that named only the first would send them to stop a plugin that was not the
+// whole reason.
+inline std::string joinMuteNames(const std::vector<std::string>& names) {
+    std::string s;
+    for (std::size_t i = 0; i < names.size(); ++i) {
+        if (i > 0) { s += (i + 1 == names.size()) ? " and " : ", "; }
+        s += names[i];
+    }
+    return s;
 }
 
 // --- WHAT A GAIN READS AS, and it is not always decibels --------------------
@@ -1091,6 +1483,24 @@ inline constexpr const char* kTunerUnsupportedMarker = "tuner is not one this dr
 
 inline bool nativeOpenShouldFallBack(const std::string& error) {
     return error.find(kTunerUnsupportedMarker) != std::string::npos;
+}
+
+// WHETHER A SoapySDR FALLBACK PROVABLY OPENED THE DONGLE THE NATIVE ROW NAMED,
+// so the converter set for that dongle may follow it (AppWindow's converter
+// alias). Both keys are "<driver>|<args>" (core::converterRadioKey). Only a
+// SERIAL settles it: SoapySDR given "driver=rtlsdr" alone opens whichever
+// dongle it finds first, which with two plugged in need not be the one whose
+// row the user picked - and carrying a 125 MHz converter onto a dongle with
+// none would put every frequency 125 MHz out without a word. No serial, or
+// serials that differ, is "not provably the same".
+inline bool fallbackNamesTheSameDongle(const std::string& nativeKey,
+                                       const std::string& soapyKey) {
+    namespace pc = cascade::core::patch;
+    const std::string soapySerial =
+        cascade::source::argValue(pc::deviceArgs(soapyKey), "serial");
+    if (soapySerial.empty()) { return false; }
+    return nativeSerialMatches(pc::deviceArgs(nativeKey), soapySerial,
+                               pc::deviceDriver(nativeKey));
 }
 
 // --- The saved radio outlives a restore that could not open it -------------
