@@ -8197,7 +8197,14 @@ void AppWindow::pollSoapyRecovery() {
 }
 
 void AppWindow::selectSource(int idx) {
-    if (idx == sourceSel_) { return; }  // re-click on the current row: no-op
+    // RE-CLICK ON THE CURRENT ROW: a no-op - unless the radio installed there
+    // has DIED (unplugged, or a driver fault the receiver latched), when the
+    // screen says "Reconnect it and pick the source again" and picking it
+    // must do exactly that: close the dead radio and open it again (0.99.36,
+    // the 0c59853 review; gui::pickOpensRow). Every family, not only an RSP.
+    const bool installedDead =
+        device_ != nullptr && (pipeline_.faulted() || device_->deviceDead());
+    if (!cascade::gui::pickOpensRow(idx, sourceSel_, installedDead)) { return; }
 
     // BUSY CHECK ON EVERY ROW, not just the device rows (adjudicated fix #4
     // for the 0.62.0 field crashes: selectSource(0) and the web route lacked

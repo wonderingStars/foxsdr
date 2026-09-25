@@ -427,6 +427,8 @@ void testASilentStreamIsNamedAndTheRadioIsLeftAlone() {
     CHECK(shown.find(cascade::source::sdrPlayStreamStalledSentence()) != std::string::npos);
     CHECK(shown.find("restart FoxSDR") != std::string::npos);
     CHECK(ringHas("source: SDRplay stream stalled"));
+    // Review note 4: the teardown line says WHICH of the three it was.
+    // (Checked after the stop below.)
 
     // THE TEARDOWN NEVER ENTERS THE WEDGED SERVICE, and the session is not
     // handed to anything else in this process.
@@ -436,6 +438,8 @@ void testASilentStreamIsNamedAndTheRadioIsLeftAlone() {
     src.closeDevice();
     CHECK(fake.countStarting("Uninit") == 0);
     CHECK(fake.countStarting("ReleaseDevice") == 0);
+    CHECK(ringHas("source: SDRplay stopped without Uninit - the stream stopped delivering samples"));
+    CHECK(!ringHas("stopped without Uninit - the service stopped answering"));
     SdrPlaySource again;
     again.setApiForTest(&fake.table);
     CHECK(!again.open(""));
@@ -463,6 +467,82 @@ void testAStreamThatNeverStartsIsNamedToo() {
     CHECK(fake.countStarting("Uninit") == 0);
 }
 
+// --- 6. a WHOLE-PROCESS freeze is not a stalled service (review note 1) -------
+//
+// Laptop sleep, a paused VM, a debugger break: every thread stops - the
+// service's callback thread in this process AND the pipeline's reader - and
+// the clock does not. On resume the first read can come back empty before the
+// first callback, with "no callback for ages" true of the clock and false of
+// the service. A stall is therefore only declared when the READER has been
+// seeing nothing, read after read, for the whole limit.
+void testAProcessFreezeIsNotAStall() {
+    cascade::core::DiagLog::instance().resetForTest();
+    FakeSdrPlayApi fake;
+    fake.addDevice("1811003EFB", abi::kRsp1A);
+    SdrPlaySource src;
+    src.setApiForTest(&fake.table);
+    CHECK(src.open(""));
+    src.setStreamStallLimitForTest(std::chrono::milliseconds(500));
+    CHECK(src.start());
+    fake.startService(kBlock, kPeriod, kWedgeAfter);
+    {
+        Reader reader(src);
+        CHECK(waitFor([&] { return reader.got.load() > 20ull * kBlock; }, 3000));
+    }  // the reader stops...
+    fake.stopService();  // ...and so does the service's thread: the freeze
+    std::vector<std::complex<float>> buf(20000);
+    while (src.read(buf.data(), buf.size()) > 0) {}
+    std::this_thread::sleep_for(std::chrono::milliseconds(1200));  // frozen, > the limit
+
+    // Resume: the reader's first read lands before the service's first block.
+    CHECK(src.read(buf.data(), buf.size()) == 0);
+    const bool falselyAccused = src.faulted();
+    std::printf("first empty read after a 1.2 s freeze (limit 0.5 s): %s\n",
+                falselyAccused ? "STALL DECLARED" : "no stall");
+    CHECK(!falselyAccused);
+    fake.startService(kBlock, kPeriod, kWedgeAfter);
+    {
+        Reader reader(src);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        CHECK(reader.got.load() > 20ull * kBlock);
+    }
+    CHECK(!src.faulted());
+    CHECK(!ringHas("stream stalled"));
+    fake.stopService();
+    src.stop();
+    CHECK(fake.countStarting("Uninit") == 1);  // a healthy radio is torn down normally
+    src.closeDevice();
+}
+
+// --- 7. the stall clock starts when Init RETURNS (review note 2) --------------
+//
+// Init is unbounded and the stream cannot deliver before it returns, so time
+// spent inside it is not silence. A reader already running (the pipeline's
+// thread) sees "accepting" before Init begins.
+void testTheStallClockStartsAfterInit() {
+    cascade::core::DiagLog::instance().resetForTest();
+    FakeSdrPlayApi fake;
+    fake.addDevice("1811003EFB", abi::kRsp1A);
+    fake.initDelayMs.store(900);
+    SdrPlaySource src;
+    src.setApiForTest(&fake.table);
+    CHECK(src.open(""));
+    src.setStreamStallLimitForTest(std::chrono::milliseconds(300));
+    fake.startService(kBlock, kPeriod, kWedgeAfter);
+    Reader reader(src);  // reading before and throughout Init
+    CHECK(src.start());  // 900 ms inside Init, then the service delivers at once
+    std::this_thread::sleep_for(std::chrono::milliseconds(600));
+    const bool accused = src.faulted();
+    std::printf("slow Init (900 ms, limit 300 ms): %s\n", accused ? "STALL DECLARED" : "no stall");
+    CHECK(!accused);
+    CHECK(reader.got.load() > 0);
+    reader.run.store(false);
+    if (reader.t.joinable()) { reader.t.join(); }
+    fake.stopService();
+    src.stop();
+    src.closeDevice();
+}
+
 }  // namespace
 
 int main() {
@@ -472,5 +552,7 @@ int main() {
     testTheEventCallbackNeverWaitsOnTheDiagnosticLog();
     testASilentStreamIsNamedAndTheRadioIsLeftAlone();
     testAStreamThatNeverStartsIsNamedToo();
+    testAProcessFreezeIsNotAStall();
+    testTheStallClockStartsAfterInit();
     return testSummary("test_sdrplay_stall");
 }

@@ -87,6 +87,20 @@ inline std::string radioNotOpenedSentence(const std::string& wanted, const std::
     return s;
 }
 
+// --- 3b. picking the row of a radio that has died ------------------------------
+//
+// Picking the row that is already selected was a no-op - right for a radio
+// that is playing, and a dead end for one that has died: an unplugged RSP
+// stays listed and ticked (the process still holds it), the screen says
+// "Reconnect it and pick the source again", and picking it did nothing at all
+// (the 0c59853 review). A pick of the selected row now goes through when the
+// installed radio is dead or the receiver has latched its fault: the dead
+// radio is closed and opened again, for every family, which is what the
+// sentence on the screen promised.
+inline bool pickOpensRow(int picked, int selected, bool installedRadioDead) {
+    return picked != selected || installedRadioDead;
+}
+
 // --- 4. the combo selection across a re-scan ---------------------------------
 //
 // The Source combo is one list: the generator, the I/Q file, the native rows,

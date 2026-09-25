@@ -266,6 +266,12 @@ public:
         if (serviceThread_.joinable()) { serviceThread_.join(); }
     }
 
+    // A SLOW Init (0.99.36 review): Init takes this long before it installs
+    // the callbacks. The real call is unbounded and has been seen taking
+    // seconds; a stall clock started before it would count Init's own time
+    // as silence.
+    std::atomic<int> initDelayMs{0};
+
     std::atomic<bool> serviceWedged{false};
     std::atomic<long long> longestCallbackUs{0};
     std::atomic<unsigned long long> serviceBlocks{0};
@@ -579,6 +585,9 @@ private:
         FakeSdrPlayApi* f = instance();
         if (f == nullptr || cbs == nullptr) { return abi::Fail; }
         f->note("Init");
+        if (f->initDelayMs.load() > 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(f->initDelayMs.load()));
+        }
         // A WEDGED SERVICE still holds the stream it stopped delivering, so a
         // second Init is refused exactly as both field logs show it.
         if (f->serviceWedged.load()) { return abi::AlreadyInitialised; }

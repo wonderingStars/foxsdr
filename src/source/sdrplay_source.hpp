@@ -737,6 +737,13 @@ private:
         // too. Both steady_clock ns, 0 meaning "none". See kStreamStallLimit.
         std::atomic<std::int64_t> lastCallbackNs{0};
         std::atomic<std::int64_t> streamStartNs{0};
+        // THE READER'S HALF (the 0c59853 review): when the current run of
+        // back-to-back empty reads began, and when the last empty read was.
+        // A stall needs BOTH clocks past the limit, so a whole-process freeze
+        // (sleep/resume, a paused VM, a debugger) - which stops the reader as
+        // well as the callbacks - does not look like a silent service.
+        std::atomic<std::int64_t> emptySinceNs{0};
+        std::atomic<std::int64_t> lastEmptyReadNs{0};
         std::atomic<std::int64_t> stallLimitNs{
             std::chrono::duration_cast<std::chrono::nanoseconds>(kStreamStallLimit).count()};
 

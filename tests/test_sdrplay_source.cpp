@@ -371,6 +371,117 @@ void testATuneBeforeStartLeavesNothingToSendAfterInit() {
     src.closeDevice();
 }
 
+// --- 5b'. a REFUSED change leaves the parameter block where the radio is ------
+//
+// THE INDEPENDENT REVIEW OF 0c59853 (blocking). Every setter writes the field
+// into the service's parameter block and THEN sends the Update - and on an
+// ordinary refusal (abi::Fail: the radio is alive and simply said no) the
+// field was never put back. 0c59853's "nothing to send when nothing changes"
+// then read that field as the radio's state: the reviewer's probe - refuse a
+// retune, ask for the same frequency again - got true, sent nothing, and read
+// back a frequency the radio had never gone to. The block is also what Init
+// programs on the next start, so a refused bias-tee ON would have powered the
+// antenna socket at the next START while the panel said off.
+void testARefusedChangeLeavesTheBlockWhereTheRadioIs() {
+    FakeSdrPlayApi fake;
+    fake.addDevice("1811003EFB", abi::kRsp1A);
+    SdrPlaySource src;
+    CHECK(openOn(src, fake));
+    CHECK(src.start());
+
+    // THE REVIEWER'S PROBE.
+    fake.updateResult = abi::Fail;
+    CHECK(src.setCenterFrequencyHz(101100000.0) == false);
+    CHECK(!src.deviceDead());  // an ordinary refusal, not a dead service
+    CHECK_NEAR(fake.chA.tunerParams.rfFreq.rfHz, 100000000.0, 1.0);
+    CHECK_NEAR(src.centerFrequencyHz(), 100000000.0, 1.0);
+    fake.updateResult = abi::Success;
+    fake.calls.clear();
+    const bool retried = src.setCenterFrequencyHz(101100000.0);
+    const int updates = fake.countStarting("Update(");
+    std::printf("retry after a refused retune: returned %s, %d Update(s) sent, readback %.0f Hz\n",
+                retried ? "true" : "false", updates, src.centerFrequencyHz());
+    CHECK(retried);
+    CHECK(updates == 1);
+    CHECK_NEAR(src.centerFrequencyHz(), 101100000.0, 1.0);
+
+    // THE GAINS: a refused IF or LNA change must be re-sent when asked again.
+    fake.updateResult = abi::Fail;
+    const int grBefore = fake.chA.tunerParams.gain.gRdB;
+    const int lnaBefore = fake.chA.tunerParams.gain.LNAstate;
+    CHECK(src.setGainDb("IF", -30.0) == false);
+    CHECK(fake.chA.tunerParams.gain.gRdB == grBefore);
+    CHECK(src.setGainDb("LNA", 5.0) == false);
+    CHECK(fake.chA.tunerParams.gain.LNAstate == lnaBefore);
+    fake.updateResult = abi::Success;
+    fake.calls.clear();
+    CHECK(src.setGainDb("IF", -30.0));
+    CHECK(src.setGainDb("LNA", 5.0));
+    CHECK(fake.countStarting("Update(") == 2);
+    CHECK(fake.chA.tunerParams.gain.gRdB == 30);
+    CHECK(fake.chA.tunerParams.gain.LNAstate == 5);
+
+    // THE SAMPLE RATE: every field of the plan comes back.
+    const double fsBefore = fake.devParams.fsFreq.fsHz;
+    const int ifBefore = static_cast<int>(fake.chA.tunerParams.ifType);
+    const int bwBefore = static_cast<int>(fake.chA.tunerParams.bwType);
+    const int decBefore = fake.chA.ctrlParams.decimation.decimationFactor;
+    const int decEnBefore = fake.chA.ctrlParams.decimation.enable;
+    fake.updateResult = abi::Fail;
+    CHECK(src.setSampleRateHz(8000000.0) == false);
+    CHECK(fake.devParams.fsFreq.fsHz == fsBefore);
+    CHECK(static_cast<int>(fake.chA.tunerParams.ifType) == ifBefore);
+    CHECK(static_cast<int>(fake.chA.tunerParams.bwType) == bwBefore);
+    CHECK(fake.chA.ctrlParams.decimation.decimationFactor == decBefore);
+    CHECK(fake.chA.ctrlParams.decimation.enable == decEnBefore);
+    CHECK_NEAR(src.sampleRateHz(), 2000000.0, 1.0);
+
+    // THE BIAS TEE: a refused ON must not be left for the next Init to apply.
+    CHECK(src.setBiasT(true) == false);
+    CHECK(fake.chA.rsp1aTunerParams.biasTEnable == 0);
+    CHECK(src.biasT() == false);
+    CHECK(src.setRfNotch(true) == false);
+    CHECK(fake.devParams.rsp1aParams.rfNotchEnable == 0);
+
+    // THE AGC SET POINT: the mirror as well as the block.
+    fake.updateResult = abi::Success;
+    CHECK(src.setAutoGain(true));
+    fake.updateResult = abi::Fail;
+    CHECK(src.setAgcSetPointDbfs(-30) == false);
+    CHECK(fake.chA.ctrlParams.agc.setPoint_dBfs == -60);
+    CHECK(src.agcSetPointDbfs() == -60);
+    fake.updateResult = abi::Success;
+
+    // AND WHAT THE NEXT START PROGRAMMES is the radio's real state.
+    src.stop();
+    CHECK(src.start());
+    CHECK(fake.atInit.taken);
+    CHECK_NEAR(fake.atInit.rfHz, 101100000.0, 1.0);
+    CHECK(fake.chA.rsp1aTunerParams.biasTEnable == 0);
+    src.stop();
+    src.closeDevice();
+}
+
+void testARefusedAntennaChangeLeavesTheBlockWhereTheRadioIs() {
+    FakeSdrPlayApi fake;
+    fake.addDevice("2208054321", abi::kRspDx);
+    SdrPlaySource src;
+    CHECK(openOn(src, fake));
+    CHECK(src.start());
+    fake.updateResult = abi::Fail;
+    CHECK(src.setAntenna("Antenna C") == false);
+    CHECK(fake.devParams.rspDxParams.antennaSel == abi::RspDx_ANTENNA_A);
+    CHECK(src.antenna() == "Antenna A");
+    CHECK(src.setBiasT(true) == false);
+    CHECK(fake.devParams.rspDxParams.biasTEnable == 0);
+    CHECK(src.setHdrMode(true) == false);
+    CHECK(fake.devParams.rspDxParams.hdrEnable == 0);
+    CHECK(src.hdrMode() == false);
+    fake.updateResult = abi::Success;
+    src.stop();
+    src.closeDevice();
+}
+
 // --- 5c. every sentence after a lost session names the restart that works ---
 //
 // 0.99.28 made a lost session process-wide (Api::sessionLost): no scan and no
@@ -2052,6 +2163,8 @@ int main() {
     testTune();
     testAnUnchangedFrequencySendsNoUpdate();
     testATuneBeforeStartLeavesNothingToSendAfterInit();
+    testARefusedChangeLeavesTheBlockWhereTheRadioIs();
+    testARefusedAntennaChangeLeavesTheBlockWhereTheRadioIs();
     testEverySentenceAfterALostSessionNamesTheRestartThatWorks();
     testGains();
     testAgc();

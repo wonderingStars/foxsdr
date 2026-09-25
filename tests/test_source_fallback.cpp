@@ -113,6 +113,21 @@ void testTheSentenceSaysWhichRadioWhyAndWhereTheReceiverIs() {
     CHECK(u.find("HackRF One did not open. The receiver") == 0);
 }
 
+// --- 3b. picking a dead radio's row opens it again ----------------------------
+void testPickingADeadRadiosRowOpensItAgain() {
+    using cascade::gui::pickOpensRow;
+    // A playing radio: re-picking its row changes nothing (as always).
+    CHECK(!pickOpensRow(3, 3, false));
+    // THE REVIEW'S CASE: an unplugged RSP, reconnected, its row picked as the
+    // screen says - it must be opened again.
+    CHECK(pickOpensRow(3, 3, true));
+    // Any other row opens, dead or not.
+    CHECK(pickOpensRow(4, 3, false));
+    CHECK(pickOpensRow(0, 3, true));
+    // The generator re-picked while the generator runs: nothing to do.
+    CHECK(!pickOpensRow(0, 0, false));
+}
+
 // --- 4. the selection across a re-scan ----------------------------------------
 void testTheSelectionFollowsTheRadioNotTheIndex() {
     using cascade::gui::refindSourceRow;
@@ -149,6 +164,7 @@ int main() {
     testTheGenericAdviceNeverContradictsTheDriver();
     testAFailedSwitchKeepsTheRadioThatWorked();
     testTheSentenceSaysWhichRadioWhyAndWhereTheReceiverIs();
+    testPickingADeadRadiosRowOpensItAgain();
     testTheSelectionFollowsTheRadioNotTheIndex();
     return testSummary("test_source_fallback");
 }
