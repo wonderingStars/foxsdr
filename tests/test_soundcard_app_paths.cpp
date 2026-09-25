@@ -548,11 +548,19 @@ void testIqCardHasNoConverter() {
     CHECK(Access::airCentre(app) == 7.1e6);
     CHECK(Access::radioNow(app) == 7.1e6);
 
-    // Even asked directly, nothing is put between the card and the air.
+    // Even asked directly, nothing is put between the card and the air -
+    // neither kind: an up-converter is refused in front of any card, so the
+    // DOWN-converter is what proves the I/Q rule itself (the first break-it
+    // pass removed that rule and an up-only check stayed green).
     Access::changeConverter(app, up(125.0e6));
     CHECK(!cascade::core::converterActive(Access::live(app)));
     CHECK(Access::radioNow(app) == 7.1e6);
     CHECK(Access::airCentre(app) == 7.1e6);
+    Access::changeConverter(app, down(7.0e6));
+    CHECK(!cascade::core::converterActive(Access::live(app)));
+    CHECK(Access::radioNow(app) == 7.1e6);
+    CHECK(Access::airCentre(app) == 7.1e6);
+    CHECK(Access::unusableNote(app).empty());
 
     // A new centre typed: the card, the section and the config all say the
     // SAME figure, so the next launch opens where this one was.
@@ -562,6 +570,14 @@ void testIqCardHasNoConverter() {
     const cascade::core::AppConfig cfg = Access::saved(app);
     CHECK(cfg.soundCard.centreHz == 7.2e6);
     CHECK(cfg.centerHz == 7.2e6);
+
+    // A down-converter already stored for the card when it opens in I/Q
+    // mode is not applied either.
+    Access::setConverter(app, cardKey(kCardB), down(7.0e6));
+    CHECK(Access::open(app, card(kCardB, SoundCardFormat::IqStereo, 96000.0, 7.1e6)));
+    CHECK(!cascade::core::converterActive(Access::live(app)));
+    CHECK(Access::airCentre(app) == 7.1e6);
+    CHECK(Access::radioNow(app) == 7.1e6);
 }
 
 void testRealCardTakesADownConverterOnly() {
