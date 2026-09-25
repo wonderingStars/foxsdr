@@ -1396,6 +1396,13 @@ private:
     // restart the receiver with the recorders still hooked in and splice
     // the same take across the gap.
     //
+    // startReceiver - THE ONE WAY THE RECEIVER IS STARTED (dome, key, POWER,
+    // web remote and plugins, the SoapySDR recovery restart, and the startup
+    // start). A start clears the fault latch, so it asks endTakesOnFault
+    // first, while the latch is still up (a fault that landed after this
+    // frame's check would otherwise vanish unseen), and then forgets the old
+    // edge, so a second fault within a frame of the START is a new one.
+    //
     // installSource - every pipeline_.setSource() goes through it, and it
     // ends the I/Q take BEFORE the swap: an I/Q recording is one source's
     // baseband, and a switch at the same rate (the generator standing in for
@@ -1405,17 +1412,22 @@ private:
     // retune - which changes what it hears just as much - never ended it.
     //
     // endTakes - the shared end: taps out, headers patched, the reason in
-    // recordError_ (shown in the Recorder section and sent to the web page)
-    // and in the diagnostic log. Returns whether anything was recording.
+    // the diagnostic log and on screen and the web page - as an ERROR
+    // (recordError_, which lights the web FAIL lamp) for a fault, kept beside
+    // any error already showing, or as a NOTICE (recordNotice_, which does
+    // not) for a source the user chose to change. Returns whether anything
+    // was recording.
     //
     // tests/test_stop_ends_recordings.cpp holds every pipeline_.stop() in
     // src/gui to stopReceiver and run()'s teardown, every
-    // pipeline_.setSource() to installSource, and drives the stop, fault
-    // and same-rate switch through the real application.
+    // pipeline_.start() to startReceiver, every pipeline_.setSource() to
+    // installSource, and drives the stop, the faults and the same-rate
+    // switch through the real application.
     void stopReceiver();
+    void startReceiver();
     void endTakesOnFault();
     void installSource(std::unique_ptr<cascade::source::IqSource> src);
-    bool endTakes(bool iq, bool audio, const char* why);
+    bool endTakes(bool iq, bool audio, const char* why, bool asError);
     bool faultSeen_ = false;  // endTakesOnFault's edge: the latch as last frame saw it
     // The Recorder section's own "Record audio" path, lifted out of the button
     // so the keyboard presses the SAME button rather than a second copy of it
@@ -2117,6 +2129,10 @@ private:
     cascade::core::Recorder audioRecorder_;
     std::string recordDir_;    // %USERPROFILE%/Documents/SDR-recordings
     std::string recordError_;  // red text in the Recorder section; "" = none
+    // Why a take ended when nothing went WRONG (the user changed source):
+    // muted text in the Recorder section and its own field on the web page,
+    // so it never lights FAIL there. Cleared with recordError_ by a Record.
+    std::string recordNotice_;
     double iqRecordStartS_ = 0.0;     // ImGui::GetTime() at take start, for
     double audioRecordStartS_ = 0.0;  // the elapsed-wall-time readout
     // Input rate the live IQ take's WAV header was written for. A rate-follow

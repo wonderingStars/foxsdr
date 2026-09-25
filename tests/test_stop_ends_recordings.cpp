@@ -29,24 +29,44 @@
 //      fault      - on an I/Q file, which is the fault seam: the file is
 //                   overwritten with a stub mid-take, the source's read fails
 //                   and the pipeline latches the fault. Both takes must end
-//                   on that alone, with the reason reported, and a START
-//                   afterwards must not reopen or grow them.
+//                   on that alone, with the reason reported BESIDE an earlier
+//                   refused start (never over it); a take armed after the
+//                   fault must survive until a stop; a SECOND fault within a
+//                   frame of a START (both takes armed, START pressed on the
+//                   still-broken file) must end them too; and a START after
+//                   all that must not reopen or grow any file.
 //      switch     - on an I/Q file at the generator's own 2 MS/s, switched
 //                   to the generator from the web remote: the I/Q take must
-//                   end at the switch, the audio take carries on.
+//                   end at the switch with the reason as a NOTICE (not an
+//                   error, which would light the web FAIL lamp), and the
+//                   audio take carries on.
 //    Every session runs with every profile directory, the recording
 //    directory and every network endpoint in scratch or at a closed port,
 //    asserts its source before recording anything (never a radio), and
 //    removes its scratch tree on every path out.
 //
-// 2. EVERY STOP AND EVERY SOURCE SWAP GOES THROUGH ONE ROUTINE. POWER, the
+// 2. EVERY STOP, START AND SOURCE SWAP GOES THROUGH ONE ROUTINE. POWER, the
 //    key and the patch page cannot be pressed from here without pixel
 //    coordinates, so the source of src/gui is read: pipeline_.stop() may
-//    appear only in stopReceiver() and run()'s teardown, pipeline_.setSource
-//    only in installSource(); stopReceiver() must end both takes before it
-//    stops the pipeline; and each of the four user stop paths must call it.
+//    appear only in stopReceiver() and run()'s teardown, pipeline_.start()
+//    only in startReceiver(), pipeline_.setSource only in installSource();
+//    stopReceiver() must end both takes before it stops the pipeline;
+//    startReceiver() must ask about a fault before it starts and forget the
+//    old fault after; and each of the four user stop paths must call
+//    stopReceiver().
+//
+// WHAT IS NOT COVERED. The dome, the key and POWER are held only by the
+// source scan, never pressed. A fault that lands AFTER a frame's check and is
+// then cleared by a start in the SAME frame is closed by startReceiver()
+// asking first, which the scan pins; the timing itself is not staged, since
+// nothing here can place a fault between two lines of one frame. The
+// SoapySDR automatic reopen (pollSoapyRecovery) needs a vendor driver that
+// faults and is covered by reading only. The web page's FAIL lamp is
+// JavaScript in the browser; this test checks the field it reads
+// (recordError) and not the lamp.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#include "core/recorder.hpp"
 #include "test_check.hpp"
 
 #include <httplib.h>
@@ -57,6 +77,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -337,6 +358,7 @@ std::vector<Take> takes(const fs::path& dir, const char* prefix) {
     for (const auto& e : fs::directory_iterator(dir, ec)) {
         const std::string name = e.path().filename().string();
         if (name.rfind(prefix, 0) != 0 || e.path().extension() != ".wav") { continue; }
+        if (!e.is_regular_file(ec)) { continue; }  // the fault session's blockers
         Take t;
         t.path = e.path();
         t.fileBytes = fs::file_size(e.path(), ec);
@@ -367,6 +389,45 @@ void checkFinalised(const std::vector<Take>& t, const char* what) {
         CHECK(k.declaredData > 0);
         CHECK(static_cast<std::uintmax_t>(k.declaredData) + 44u == k.fileBytes);
     }
+}
+
+// Every take in the directory is CLOSED: its header declares exactly the
+// bytes after it. Zero is allowed - a take armed while stopped may end before
+// a sample reached it - but a header that disagrees with its file is a take
+// nothing finalised.
+void checkAllClosed(const fs::path& dir, const char* what) {
+    for (const char* prefix : {"iq_", "audio_"}) {
+        for (const Take& k : takes(dir, prefix)) {
+            std::printf("  %s: %s  file %llu bytes, header declares %u data bytes\n", what,
+                        k.path.filename().string().c_str(),
+                        static_cast<unsigned long long>(k.fileBytes), k.declaredData);
+            CHECK(k.headerOk);
+            CHECK(static_cast<std::uintmax_t>(k.declaredData) + 44u == k.fileBytes);
+        }
+    }
+}
+
+// Directories squatting on the names an audio take started in the next few
+// seconds would be given, so the recorder's open fails: a real refused start
+// with a real error, to prove a later fault does not write over it. Named by
+// the recorder's own pure makeFilename, so a format change moves them too.
+std::vector<fs::path> blockAudioNames(const fs::path& recDir) {
+    std::vector<fs::path> made;
+    std::error_code ec;
+    const std::time_t now = std::time(nullptr);
+    for (int k = -1; k <= 8; ++k) {
+        const std::time_t t = now + k;
+        std::tm tm{};
+#if defined(_WIN32)
+        localtime_s(&tm, &t);
+#else
+        localtime_r(&t, &tm);
+#endif
+        const fs::path p = recDir / cascade::core::Recorder::makeFilename(
+                                        cascade::core::RecordKind::Audio, 48000.0, tm);
+        if (!fs::exists(p, ec) && fs::create_directories(p, ec)) { made.push_back(p); }
+    }
+    return made;
 }
 
 // --- An I/Q file for the file-source sessions ----------------------------------------
@@ -526,6 +587,8 @@ public:
                     static_cast<unsigned long long>(ju(s, "audioBytes")));
         const std::string err = s.value("recordError", std::string());
         if (!err.empty()) { std::printf("  %s: recordError \"%s\"\n", when, err.c_str()); }
+        const std::string note = s.value("recordNotice", std::string());
+        if (!note.empty()) { std::printf("  %s: recordNotice \"%s\"\n", when, note.c_str()); }
     }
 
     // A few frames more, so a take that is going to end has had every chance.
@@ -650,6 +713,28 @@ void faultEndsTakes() {
     nlohmann::json s;
     if (!ss.startTaping(s)) { return; }
 
+    // AN EARLIER ERROR, A REAL ONE: the audio take is stopped and restarted
+    // into a directory whose next names are taken, so the recorder refuses
+    // it. The I/Q take is still running into the fault below.
+    CHECK(control(cli, R"({"recordAudio":false})"));
+    CHECK(waitStatus(cli, s, 20000,
+                     [](const nlohmann::json& j) { return !jb(j, "audioRecording"); }));
+    std::this_thread::sleep_for(std::chrono::milliseconds(1100));  // a fresh name
+    const std::vector<fs::path> blockers = blockAudioNames(ss.recDir());
+    CHECK(!blockers.empty());
+    CHECK(control(cli, R"({"recordAudio":true})"));
+    CHECK(waitStatus(cli, s, 20000, [](const nlohmann::json& j) {
+        return !j.value("recordError", std::string()).empty();
+    }));
+    const std::string refused = s.value("recordError", std::string());
+    std::printf("  refused audio start: \"%s\"\n", refused.c_str());
+    CHECK(!refused.empty());
+    CHECK(!jb(s, "audioRecording"));
+    for (const fs::path& p : blockers) {
+        std::error_code e;
+        fs::remove(p, e);
+    }
+
     // THE FAULT: the file shrinks under the source's read position, the read
     // fails, the source latches it and the pipeline goes down with it. Nobody
     // presses anything.
@@ -663,12 +748,15 @@ void faultEndsTakes() {
     CHECK(!jb(s, "running"));
     CHECK(!jb(s, "iqRecording"));
     CHECK(!jb(s, "audioRecording"));
-    // Said, not left to be noticed.
-    CHECK(s.value("recordError", std::string()).find("fault") != std::string::npos);
+    // Said, not left to be noticed - and said BESIDE the refused start, not
+    // over it: both are still true.
+    const std::string afterFault = s.value("recordError", std::string());
+    CHECK(afterFault.find("fault") != std::string::npos);
+    CHECK(afterFault.find(refused) != std::string::npos);
     const std::vector<Take> iq1 = takes(ss.recDir(), "iq_");
     const std::vector<Take> au1 = takes(ss.recDir(), "audio_");
     checkFinalised(iq1, "iq take after the fault");
-    checkFinalised(au1, "audio take after the fault");
+    checkFinalised(au1, "audio take stopped before the fault");
 
     // A take armed AFTER the fault is the user's choice and survives the
     // frames that follow (the fault is acted on at its edge, not every frame
@@ -690,9 +778,40 @@ void faultEndsTakes() {
                 jb(s, "audioRecording") ? 1 : 0);
     CHECK(!jb(s, "audioRecording"));
 
-    // START after the fault. A faulted I/Q file stays faulted until it is
-    // opened again (its latch clears only in open(), which a browser cannot
-    // reach), so the user does what the FAIL lamp invites: picks the
+    // A SECOND FAULT WITHIN A FRAME OF THE START (the reviewer's reproduction
+    // of 2026-09-25). Both takes are armed after the fault, and START is
+    // pressed with the file still broken: start() clears the latch, the
+    // source is still faulted, and the pipeline faults again before the next
+    // frame. Before startReceiver() forgot the old edge, the GUI saw the
+    // latch up both before and after and never acted: iqRecording=1
+    // audioRecording=1 on a faulted receiver, no reason shown.
+    std::this_thread::sleep_for(std::chrono::milliseconds(1100));
+    CHECK(control(cli, R"({"recordIq":true,"recordAudio":true})"));
+    CHECK(waitStatus(cli, s, 20000, [](const nlohmann::json& j) {
+        return jb(j, "iqRecording") && jb(j, "audioRecording");
+    }));
+    CHECK(s.value("recordError", std::string()).empty());  // a Record clears it
+    CHECK(control(cli, R"({"running":true})"));
+    s = ss.settle(700);
+    ss.print("after START into a second fault", s);
+    CHECK(jb(s, "faulted"));
+    CHECK(!jb(s, "running"));
+    CHECK(!jb(s, "iqRecording"));
+    CHECK(!jb(s, "audioRecording"));
+    CHECK(s.value("recordError", std::string()).find("fault") != std::string::npos);
+    checkAllClosed(ss.recDir(), "after the second fault");
+    struct Size {
+        fs::path p;
+        std::uintmax_t n;
+    };
+    std::vector<Size> sizes;
+    for (const char* prefix : {"iq_", "audio_"}) {
+        for (const Take& t : takes(ss.recDir(), prefix)) { sizes.push_back({t.path, t.fileBytes}); }
+    }
+
+    // START after the fault, for real. A faulted I/Q file stays faulted until
+    // it is opened again (its latch clears only in open(), which a browser
+    // cannot reach), so the user does what the FAIL lamp invites: picks the
     // generator and presses START. The pipeline's fault latch is still up
     // when START arrives - a source swap never clears it - so this is the
     // START-after-a-fault path, and the receiver really runs again. No take
@@ -708,13 +827,12 @@ void faultEndsTakes() {
     ss.print("after START", s);
     CHECK(!jb(s, "iqRecording"));
     CHECK(!jb(s, "audioRecording"));
-    CHECK(sameSize(takes(ss.recDir(), "iq_"), iq1));
-    // The first audio take by its own path: the armed one above is a second
-    // file beside it.
-    for (const Take& t : au1) {
+    // Every file already written stays exactly as it was closed.
+    for (const Size& z : sizes) {
         std::error_code e;
-        CHECK(fs::file_size(t.path, e) == t.fileBytes);
+        CHECK(fs::file_size(z.p, e) == z.n);
     }
+    CHECK(sizes.size() >= 4);  // first I/Q + stopped audio + armed audio + the pair
     ss.close();
 }
 
@@ -760,7 +878,10 @@ void sameRateSwitchEndsIqTake() {
     CHECK(rateAfter == rateBefore);
     CHECK(jb(s, "running"));
     CHECK(!jb(s, "iqRecording"));
-    CHECK(s.value("recordError", std::string()).find("source") != std::string::npos);
+    // Said as a NOTICE, not an error: nothing went wrong, and the web page's
+    // FAIL lamp lights for any recordError (lampFail in web_server.cpp).
+    CHECK(s.value("recordNotice", std::string()).find("source") != std::string::npos);
+    CHECK(s.value("recordError", std::string()).empty());
     const std::vector<Take> iq1 = takes(ss.recDir(), "iq_");
     checkFinalised(iq1, "iq take after the switch");
     // The audio take carries on: it is what the speaker plays, and a source
@@ -840,6 +961,9 @@ void everyStopUsesTheRoutine() {
     int elsewhere = 0;
     int swapsInInstall = 0;
     int swapsElsewhere = 0;
+    int startsInRoutine = 0;
+    int startsElsewhere = 0;
+    std::string startBody;
     std::vector<std::string> callers;  // members that call stopReceiver()
     std::string routineBody;
     for (const auto& e : fs::directory_iterator(gui, ec)) {
@@ -872,6 +996,23 @@ void everyStopUsesTheRoutine() {
                                 m.c_str(), e.path().filename().string().c_str(), i + 1);
                 }
             }
+            if (l.find("pipeline_.start()") != std::string::npos) {
+                const std::string m = enclosingMember(lines, i);
+                if (m == "startReceiver") {
+                    ++startsInRoutine;
+                } else {
+                    ++startsElsewhere;
+                    std::printf("FAIL: pipeline_.start() outside startReceiver(), in "
+                                "AppWindow::%s at %s:%zu\n",
+                                m.c_str(), e.path().filename().string().c_str(), i + 1);
+                }
+            }
+            if (l.rfind("void AppWindow::startReceiver()", 0) == 0) {
+                for (std::size_t k = i; k < lines.size(); ++k) {
+                    startBody += lines[k] + "\n";
+                    if (k > i && lines[k].rfind("}", 0) == 0) { break; }
+                }
+            }
             if (l.find("stopReceiver()") != std::string::npos &&
                 l.find("AppWindow::stopReceiver()") == std::string::npos &&
                 l.find("void stopReceiver()") == std::string::npos) {
@@ -894,6 +1035,17 @@ void everyStopUsesTheRoutine() {
                 swapsElsewhere);
     CHECK(swapsInInstall == 1);
     CHECK(swapsElsewhere == 0);
+    std::printf("  pipeline_.start(): %d in startReceiver, %d elsewhere\n", startsInRoutine,
+                startsElsewhere);
+    CHECK(startsInRoutine == 1);
+    CHECK(startsElsewhere == 0);
+    // startReceiver asks about a fault BEFORE the start clears the latch, and
+    // forgets the old edge AFTER it.
+    const std::size_t sAsk = startBody.find("endTakesOnFault()");
+    const std::size_t sStart = startBody.find("pipeline_.start()");
+    const std::size_t sReset = startBody.find("faultSeen_ = false");
+    CHECK(sAsk != std::string::npos && sStart != std::string::npos && sAsk < sStart);
+    CHECK(sReset != std::string::npos && sStart != std::string::npos && sStart < sReset);
 
     // The routine ends both takes, and does it BEFORE the pipeline stops.
     const std::size_t iq = routineBody.find("stopIqRecording()");

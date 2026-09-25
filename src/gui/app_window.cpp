@@ -1344,7 +1344,7 @@ int AppWindow::run(int frames) {
     // contract is untouched.
     const char* decodeHook = (frames >= 0) ? std::getenv("CASCADE_DECODE_TEST") : nullptr;
     if (frames < 0 || (decodeHook != nullptr && *decodeHook != '\0')) {
-        pipeline_.start();
+        startReceiver();
     }
 
     // Bounded-run plugin-catalogue hook (see app_window.hpp). Read HERE, not
@@ -4533,7 +4533,7 @@ void AppWindow::drawToolbar() {
             // the one stop every path shares).
             stopReceiver();
         } else {
-            pipeline_.start();
+            startReceiver();
         }
     }
     if (ImGui::IsItemHovered()) {
@@ -7976,7 +7976,7 @@ void AppWindow::finishDeviceOpen(DeviceOpenResult r) {
         // takes "Device stopped" and the FAIL lamp off the deck. A receiver
         // that was stopped stays stopped: the reopen is a repair, not a
         // Play press.
-        if (r.recoveryRestart) { pipeline_.start(); }
+        if (r.recoveryRestart) { startReceiver(); }
         cascade::core::diagLogf("source: reopened %s at %.0f S/s after the driver fault%s",
                                 deviceModel_.c_str(),
                                 pipeline_.activeSource().sampleRateHz(),
@@ -8119,7 +8119,7 @@ void AppWindow::pollSoapyRecovery() {
     // that the file cannot show. endTakesOnFault has usually done this
     // already, on the frame the pipeline's latch rose; this is for a radio
     // declared dead without the pipeline's source thread raising it.
-    endTakes(true, true, "the radio faulted");
+    endTakes(true, true, "the radio faulted", true);
     device_ = nullptr;
     soapyView_ = nullptr;
     deviceArgs_.clear();
@@ -13622,7 +13622,7 @@ void AppWindow::drawScopeMode() {
                 // to be a bare pipeline_.stop() that left a take open.
                 stopReceiver();
             } else {
-                pipeline_.start();
+                startReceiver();
             }
         }
         const char* lbl = tr("POWER");
@@ -19385,6 +19385,7 @@ void AppWindow::drawRecorderSection() {
             if (iqRecorder_.start(cascade::core::RecordKind::BasebandIq,
                                   recordDir_, rate, err)) {
                 recordError_.clear();
+                recordNotice_.clear();
                 iqRecordRateHz_ = rate;
                 iqRecordStartS_ = ImGui::GetTime();
                 // Install AFTER start(): the tap must never feed a recorder
@@ -19455,6 +19456,12 @@ void AppWindow::drawRecorderSection() {
         ImGui::TextWrapped("%s", recordError_.c_str());
         ImGui::PopStyleColor();
     }
+    // A notice, not an error: in the ordinary muted text, never the red.
+    if (!recordNotice_.empty()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        ImGui::TextWrapped("%s", recordNotice_.c_str());
+        ImGui::PopStyleColor();
+    }
 }
 
 void AppWindow::stopIqRecording() {
@@ -19472,25 +19479,59 @@ void AppWindow::stopAudioRecording() {
     audioRecorder_.stop();
 }
 
-bool AppWindow::endTakes(bool iq, bool audio, const char* why) {
+bool AppWindow::endTakes(bool iq, bool audio, const char* why, bool asError) {
     const bool endIq = iq && iqRecorder_.recording();
     const bool endAudio = audio && audioRecorder_.recording();
     if (!endIq && !endAudio) { return false; }
     if (endIq) { stopIqRecording(); }
     if (endAudio) { stopAudioRecording(); }
     // Said, not left to be noticed: the Recorder section and the web page
-    // both show recordError_, and the next Record press clears it.
+    // both show it, and the next Record press clears it.
     const char* what = (endIq && endAudio) ? "I/Q and audio recordings" :
                        endIq               ? "I/Q recording"
                                            : "audio recording";
     // Plain English, like the source errors beside it: a tr() key here
     // would need an entry in every catalogue under resources/lang.
-    recordError_ = std::string("The ") + what + " ended because " + why +
-                   ((endIq && endAudio) ? ". The files are closed and complete"
-                                        : ". The file is closed and complete") +
-                   "; press Record to start a new one.";
-    cascade::core::diagWarnf("recorder: %s ended because %s", what, why);
+    const std::string line = std::string("The ") + what + " ended because " + why +
+                             ((endIq && endAudio) ? ". The files are closed and complete"
+                                                  : ". The file is closed and complete") +
+                             "; press Record to start a new one.";
+    // An ERROR (a fault) is kept beside whatever error was already showing -
+    // a refused start, say - rather than written over it: the earlier one is
+    // still true and may be the more useful of the two. A NOTICE (a source
+    // the user chose to change) is not an error at all and must not light the
+    // web page's FAIL lamp, which reads recordError; it has its own field.
+    std::string& slot = asError ? recordError_ : recordNotice_;
+    if (slot.empty()) {
+        slot = line;
+    } else if (slot.find(line) == std::string::npos) {
+        slot += " " + line;
+    }
+    if (asError) {
+        cascade::core::diagWarnf("recorder: %s ended because %s", what, why);
+    } else {
+        cascade::core::diagLogf("recorder: %s ended because %s", what, why);
+    }
     return true;
+}
+
+void AppWindow::startReceiver() {
+    // THE ONE WAY THE RECEIVER IS STARTED, and it exists for the fault edge.
+    // endTakesOnFault acts once per fault, at the top of each frame; a start
+    // clears the pipeline's latch. So a fault that lands after this frame's
+    // check and is then cleared by a start in the same frame would never be
+    // seen at all - and the take would carry on across it. Asked here, while
+    // the latch is still up.
+    endTakesOnFault();
+    pipeline_.start();
+    // A start from a faulted, stopped pipeline clears the latch, so whatever
+    // the latch does next is a NEW fault: forget the old edge. Without this a
+    // second fault landing within a frame of the START (a file or radio that
+    // is still broken) found faultSeen_ still true and was never acted on -
+    // a take armed after the first fault ran straight on through it. A start
+    // that found the pipeline already running changed nothing, and then the
+    // latch is down and faultSeen_ already false.
+    faultSeen_ = false;
 }
 
 void AppWindow::stopReceiver() {
@@ -19519,7 +19560,7 @@ void AppWindow::endTakesOnFault() {
     // ending it every frame would make Record look broken while the lamp is
     // lit. Pipeline::start clears the latch, so the next fault is a new edge.
     const bool faulted = pipeline_.faulted();
-    if (faulted && !faultSeen_) { endTakes(true, true, "the receiver stopped on a fault"); }
+    if (faulted && !faultSeen_) { endTakes(true, true, "the receiver stopped on a fault", true); }
     faultSeen_ = faulted;
 }
 
@@ -19527,7 +19568,7 @@ void AppWindow::installSource(std::unique_ptr<cascade::source::IqSource> src) {
     // BEFORE the swap: setSource keeps the DSP thread running across it, so
     // a take ended afterwards would already hold the first blocks of the new
     // source.
-    endTakes(true, false, "the source changed");
+    endTakes(true, false, "the source changed", false);
     pipeline_.setSource(std::move(src));
 }
 
@@ -19540,6 +19581,7 @@ bool AppWindow::startAudioRecording() {
         return false;
     }
     recordError_.clear();
+    recordNotice_.clear();
     audioRecordStartS_ = ImGui::GetTime();
     // Install AFTER start(): the tap must never feed a recorder that is not
     // accepting (Pipeline::setAudioRecorder contract).
@@ -19722,7 +19764,7 @@ void AppWindow::applyKeyAction(cascade::gui::KeyAction action) {
                 // sample flow it was taping.
                 stopReceiver();
             } else {
-                pipeline_.start();
+                startReceiver();
             }
             cascade::core::diagLogf("key: start/stop -> %s",
                                     pipeline_.running() ? "running" : "stopped");
@@ -20865,6 +20907,7 @@ void AppWindow::publishWebSnapshot() {
     s.audioBytes = audioRecorder_.bytesWritten();
     s.recordDir = recordDir_;
     s.recordError = recordError_;
+    s.recordNotice = recordNotice_;
 
     // A FEW HUNDRED AT MOST go to the browser: an imported list of 33 000
     // would be copied every frame and serialised on every poll, for a page
@@ -21093,7 +21136,7 @@ void AppWindow::applyScopeWindowVisibility() {
 void AppWindow::applyControlRequest(const cascade::net::ControlRequest& r) {
     if (r.running.has_value()) {
         if (*r.running) {
-            pipeline_.start();
+            startReceiver();
         } else {
             // The web remote's and a plugin's stop is the dome's stop,
             // recordings included. (CAT reaches this function too but has no
@@ -21325,6 +21368,7 @@ void AppWindow::applyControlRequest(const cascade::net::ControlRequest& r) {
                 iqRecordStartS_ = ImGui::GetTime();
                 pipeline_.setIqRecorder(&iqRecorder_);
                 recordError_.clear();
+                recordNotice_.clear();
             } else {
                 recordError_ = err;
             }
@@ -21340,6 +21384,7 @@ void AppWindow::applyControlRequest(const cascade::net::ControlRequest& r) {
                 audioRecordStartS_ = ImGui::GetTime();
                 pipeline_.setAudioRecorder(&audioRecorder_);
                 recordError_.clear();
+                recordNotice_.clear();
             } else {
                 recordError_ = err;
             }
