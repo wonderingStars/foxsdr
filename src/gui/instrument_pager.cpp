@@ -84,21 +84,33 @@ namespace {
 
 // --- the two materials this face owns ---------------------------------------
 //
-// The mouldings. Cool where the bench is warm, because the object is.
-constexpr ImU32 kCaseHi = IM_COL32(0x3C, 0x3C, 0x40, 0xFF);
-constexpr ImU32 kCaseLo = IM_COL32(0x20, 0x20, 0x24, 0xFF);
-constexpr ImU32 kCaseEdge = IM_COL32(0x55, 0x55, 0x5A, 0xFF);
-constexpr ImU32 kCaseCut = IM_COL32(0x14, 0x14, 0x17, 0xFF);
-constexpr ImU32 kCasePlate = IM_COL32(0x8A, 0x8A, 0x90, 0xFF);
+// The mouldings. Cool where the bench is warm, because the object is. Under
+// another theme they are that theme's panel shades: the shell between
+// panelHead and border, its slots between well and panelHead, the moulded
+// lettering the muted ink.
+constexpr theme::Tone kCaseHi{0x3C, 0x3C, 0x40, 0xFF, theme::ink::PanelHead, theme::ink::Border};
+constexpr theme::Tone kCaseLo{0x20, 0x20, 0x24, 0xFF, theme::ink::PanelHead, theme::ink::Border};
+constexpr theme::Tone kCaseEdge{0x55, 0x55, 0x5A, 0xFF, theme::ink::Border, theme::ink::White};
+constexpr theme::Tone kCaseCut{0x14, 0x14, 0x17, 0xFF, theme::ink::Well, theme::ink::PanelHead};
+constexpr theme::Tone kCasePlate{0x8A, 0x8A, 0x90, 0xFF, theme::ink::Border, theme::ink::Muted};
 
 // The liquid crystal. Lit is the electroluminescent back light on; unlit is the
 // same glass in ambient light; dead is an unaddressed panel, which is what a
 // pager that has heard nothing shows and is NOT a screen full of zeros.
-constexpr ImU32 kLcdLit = IM_COL32(0xA6, 0xB8, 0x76, 0xFF);
-constexpr ImU32 kLcdIdle = IM_COL32(0x86, 0x96, 0x6C, 0xFF);
-constexpr ImU32 kLcdDead = IM_COL32(0x5C, 0x64, 0x54, 0xFF);
-constexpr ImU32 kLcdSeg = IM_COL32(0x18, 0x20, 0x14, 0xFF);
-constexpr ImU32 kLcdSegSoft = IM_COL32(0x18, 0x20, 0x14, 0x66);
+// Under another theme the panel is that theme's counter window: lit IS
+// digitBg, idle and dead are fixed steps from it towards digitDim, and the
+// characters are digit - Field Radio's counter is itself a green LCD.
+constexpr theme::Tone kLcdLit{0xA6, 0xB8, 0x76, 0xFF, theme::ink::DigitBg};
+ImU32 lcdIdle() {
+    return theme::toneMix(0x86, 0x96, 0x6C, 0xFF, theme::ink::DigitBg, theme::ink::DigitDim,
+                          0.35f);
+}
+ImU32 lcdDead() {
+    return theme::toneMix(0x5C, 0x64, 0x54, 0xFF, theme::ink::DigitBg, theme::ink::DigitDim,
+                          0.70f);
+}
+constexpr theme::Tone kLcdSeg{0x18, 0x20, 0x14, 0xFF, theme::ink::Digit};
+constexpr theme::Tone kLcdSegSoft{0x18, 0x20, 0x14, 0x66, theme::ink::Digit};
 
 // --- small lettering helpers ------------------------------------------------
 
@@ -284,13 +296,13 @@ float drawPagerFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         // The panel itself. Lit while something is ringing - the back light on
         // an Advisor comes up with the page - idle otherwise, and DEAD when
         // the plugin has given us nothing at all.
-        const ImU32 ground = !have ? kLcdDead : (ringing ? kLcdLit : kLcdIdle);
+        const ImU32 ground =
+            !have ? lcdDead() : (ringing ? static_cast<ImU32>(kLcdLit) : lcdIdle());
         dl->AddRectFilled(glassTL, glassBR, ground, 0.0f);
         // A liquid-crystal panel is darker towards the bottom of its viewing
         // cone; two flat stops are enough to stop it reading as paper.
-        dl->AddRectFilledMultiColor(glassTL, glassBR, IM_COL32(255, 255, 255, 16),
-                                    IM_COL32(255, 255, 255, 10), IM_COL32(0, 0, 0, 26),
-                                    IM_COL32(0, 0, 0, 30));
+        dl->AddRectFilledMultiColor(glassTL, glassBR, theme::sheen(16), theme::sheen(10),
+                                    theme::shadow(26), theme::shadow(30));
 
         // The pixel grid. This is what separates a liquid-crystal panel from a
         // box with text in it: the same faint lattice runs across the whole
@@ -298,7 +310,7 @@ float drawPagerFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         const float dotW = m.cellW / 6.0f;
         const float dotH = m.cellH / 8.0f;
         if (dotW >= 1.6f) {
-            const ImU32 grid = IM_COL32(0, 0, 0, 20);
+            const ImU32 grid = theme::shadow(20);
             for (float x = glassTL.x + dotW; x < glassBR.x - 0.5f; x += dotW) {
                 dl->AddLine(ImVec2(x, glassTL.y), ImVec2(x, glassBR.y), grid, 1.0f);
             }
@@ -399,7 +411,7 @@ float drawPagerFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         const ImVec2 gBR(caseBR.x - sideInset,
                          std::min(bayBR.y - 8.0f - plateRoom, lcdTop + bezelPad + 24.0f));
         if (gBR.y > gTL.y + 6.0f) {
-            dl->AddRectFilled(gTL, gBR, kLcdDead, 1.0f);
+            dl->AddRectFilled(gTL, gBR, lcdDead(), 1.0f);
             addBenchBevel(dl, gTL, gBR, 1.0f, false);
             lcdBottom = gBR.y;
         }

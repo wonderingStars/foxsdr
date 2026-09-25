@@ -91,14 +91,18 @@ namespace {
 // Deliberately NOT in theme.hpp: the palette there is the bench's metal, ink
 // and phosphor, and paper is none of those. These five tones exist only
 // inside this instrument and naming them anywhere else would invite the next
-// face to put a reading on parchment.
-constexpr ImU32 kPaper = IM_COL32(0xE8, 0xE1, 0xCC, 0xFF);
-constexpr ImU32 kPaperLit = IM_COL32(0xF2, 0xEC, 0xDA, 0xFF);
-constexpr ImU32 kPaperEdge = IM_COL32(0xC3, 0xBA, 0xA1, 0xFF);
+// face to put a reading on parchment. Under another theme the strip is that
+// theme's meter face and the print its meter ink - the one light-ground,
+// dark-ink pair every preset defines - each tone placed between the two.
+constexpr theme::Ink kFace = theme::ink::MeterFace;
+constexpr theme::Ink kInk = theme::ink::MeterInk;
+constexpr theme::Tone kPaper{0xE8, 0xE1, 0xCC, 0xFF, kFace, kInk};
+constexpr theme::Tone kPaperLit{0xF2, 0xEC, 0xDA, 0xFF, kFace, kInk};
+constexpr theme::Tone kPaperEdge{0xC3, 0xBA, 0xA1, 0xFF, kFace, kInk};
 // Thermal print is a warm near-black, not ink-black, and it fades: the older
 // message on the strip is printed in the faint tone.
-constexpr ImU32 kPrint = IM_COL32(0x2E, 0x2A, 0x22, 0xFF);
-constexpr ImU32 kPrintFaint = IM_COL32(0x6E, 0x66, 0x57, 0xFF);
+constexpr theme::Tone kPrint{0x2E, 0x2A, 0x22, 0xFF, kFace, kInk};
+constexpr theme::Tone kPrintFaint{0x6E, 0x66, 0x57, 0xFF, kFace, kInk};
 
 // --- when the last message arrived -----------------------------------------
 //
@@ -527,7 +531,7 @@ float drawTeleprinterFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     // the strip's top edge so the paper reads as coming out from behind it.
     dl->AddRectFilledMultiColor(ImVec2(pTL.x, pTL.y + slotBarH),
                                 ImVec2(pBR.x, pTL.y + slotBarH + 7.0f),
-                                IM_COL32(0, 0, 0, 90), IM_COL32(0, 0, 0, 90),
+                                theme::shadow(90), theme::shadow(90),
                                 IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, 0));
     drawSlotAndTearBar(dl, bayTL.x + 5.0f, bayBR.x - 5.0f, pTL.y, slotBarH);
 

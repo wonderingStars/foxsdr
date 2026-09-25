@@ -45,11 +45,11 @@ ImU32 colourFor(std::uint32_t kind) {
         // basemap plugin is installed. Red is the one hue an OSM raster style
         // does not use for large areas (its reds are thin motorway lines), so
         // an aircraft stays findable against it.
-        case CASCADE_TRACK_AIRCRAFT: c = IM_COL32(235, 40, 40, 255); break;
-        case CASCADE_TRACK_VESSEL:   c = IM_COL32(120, 255, 170, 255); break;
-        case CASCADE_TRACK_STATION:  c = IM_COL32(255, 210, 120, 255); break;
-        case CASCADE_TRACK_SATELLITE:c = IM_COL32(230, 150, 255, 255); break;
-        default:                     c = IM_COL32(200, 200, 200, 255); break;
+        case CASCADE_TRACK_AIRCRAFT: c = IM_COL32(235, 40, 40, 255); break;  // theme-exempt: per-kind target colour (meaning)
+        case CASCADE_TRACK_VESSEL:   c = IM_COL32(120, 255, 170, 255); break;  // theme-exempt: per-kind target colour (meaning)
+        case CASCADE_TRACK_STATION:  c = IM_COL32(255, 210, 120, 255); break;  // theme-exempt: per-kind target colour (meaning)
+        case CASCADE_TRACK_SATELLITE:c = IM_COL32(230, 150, 255, 255); break;  // theme-exempt: per-kind target colour (meaning)
+        default:                     c = IM_COL32(200, 200, 200, 255); break;  // theme-exempt: per-kind target colour (meaning)
     }
     return c;
 }
@@ -112,12 +112,12 @@ int bandCountFor(std::uint32_t kind) {
 
 ImU32 colourForTrack(const CascadeTrack& t) {
     if ((t.flags & CASCADE_TRACK_FLAG_EMERGENCY) != 0u) {
-        return IM_COL32(255, 45, 45, 255);
+        return IM_COL32(255, 45, 45, 255);  // theme-exempt: emergency squawk hue (meaning)
     }
     const int band = bandIndexFor(t.kind, t.altM);
     if (band < 0) { return colourFor(t.kind); }
     const AltBandStyle& s = bandStyleFor(t.kind, band);
-    return IM_COL32(s.r, s.g, s.b, 255);
+    return IM_COL32(s.r, s.g, s.b, 255);  // theme-exempt: altitude-band colour (a measurement)
 }
 
 // Applies a 0..1 fade to a colour's alpha. Faded rather than removed while the
@@ -177,7 +177,18 @@ ImU32 fadedColour(ImU32 c, float alpha) {
 void addMapLabel(ImDrawList* dl, const ImVec2& at, ImU32 col, const char* text) {
     if (dl == nullptr || text == nullptr || text[0] == '\0') { return; }
     const unsigned int a = (col >> IM_COL32_A_SHIFT) & 0xFFu;
-    const ImU32 halo = IM_COL32(0, 0, 0, (a * 120u) / 255u);
+    // Black on today's bench, whose map inks are all light. In another theme
+    // the halo is the opposite of the ink it surrounds: the preset's shadow
+    // behind a light ink (an altitude colour, a dark theme's caption), the
+    // map's own ground - the well - behind a dark one, so Daylight Lab's dark
+    // lettering gets a LIGHT halo. Same job, "an outline that does not depend
+    // on what is underneath", done the right way round.
+    const int haloA = static_cast<int>((a * 120u) / 255u);
+    const float inkLuma = 0.299f * static_cast<float>((col >> IM_COL32_R_SHIFT) & 0xFFu) +
+                          0.587f * static_cast<float>((col >> IM_COL32_G_SHIFT) & 0xFFu) +
+                          0.114f * static_cast<float>((col >> IM_COL32_B_SHIFT) & 0xFFu);
+    const ImU32 halo = inkLuma >= 110.0f ? theme::shadowOf(0, 0, 0, haloA)
+                                         : theme::tone(0, 0, 0, haloA, theme::ink::Well);
     dl->AddText(ImVec2(at.x - 1.0f, at.y), halo, text);
     dl->AddText(ImVec2(at.x + 1.0f, at.y), halo, text);
     dl->AddText(ImVec2(at.x, at.y - 1.0f), halo, text);
@@ -1041,8 +1052,15 @@ void MapView::draw(float width, float height,
         // Land is drawn in brass, because that is what it is: the plate the
         // readings sit on. The blue-grey it used to be was a chart convention
         // borrowed from nothing else in the product.
-        const ImU32 landCol = theme::kBrassMid;
-        const ImU32 landFill = theme::kBrassDark;
+        //
+        // THIS IS THE APPLICATION'S LOOK, NOT GEOGRAPHY'S, so it follows the
+        // theme: the fill is the border tone (today's dark brass exactly) and
+        // the coast sits 44% of the way from it towards the muted ink (today's
+        // mid brass exactly), which keeps the coast tellable from the fill in
+        // every theme - lighter on a dark one, darker on Daylight Lab's white.
+        const ImU32 landCol =
+            theme::tone(110, 101, 82, 255, theme::ink::Border, theme::ink::Muted);
+        const ImU32 landFill = theme::tone(74, 66, 52, 255, theme::ink::Border);
         // The same constant the map's own ground is filled with at the top of
         // this function, so an inland sea is the map showing through rather
         // than a second, nearly-matching dark.
@@ -1209,7 +1227,9 @@ void MapView::draw(float width, float height,
     const double step = graticuleStep(spanDeg_);
     // A graticule is engraved into the plate and its numbers are a caption on
     // it - never a reading, which is why neither of them is amber.
-    const ImU32 gridCol = theme::kEngraved;
+    // (Today's engraved ink exactly; in another theme a faint step from the
+    // map's glass towards the theme's graticule colour.)
+    const ImU32 gridCol = theme::tone(59, 53, 41, 255, theme::ink::Well, theme::ink::Grid);
     // THE GRATICULE STOPS AT THE POLES, because that is where the world stops.
     // A whole-world view in a viewport taller than two to one has to leave
     // slack above and below - 360 degrees of longitude across a portrait pane
@@ -1374,10 +1394,14 @@ void MapView::draw(float width, float height,
         // the whole reason to look at one - and AddConvexPolyFilled on a
         // concave outline fills the triangle fan rather than the shape,
         // painting over exactly the nulls the picture exists to show.
-        dl->AddConcavePolyFilled(pts, CoverageMap::kBuckets,
-                                 theme::withAlpha(theme::kPhosphorDim, 34.0f / 255.0f));
+        // (The trace role: today's phosphor and dim phosphor exactly.)
+        dl->AddConcavePolyFilled(
+            pts, CoverageMap::kBuckets,
+            theme::withAlpha(theme::tone(95, 138, 85, 255, theme::ink::Well, theme::ink::Trace),
+                             34.0f / 255.0f));
         dl->AddPolyline(pts, CoverageMap::kBuckets,
-                        theme::withAlpha(theme::kPhosphor, 190.0f / 255.0f),
+                        theme::withAlpha(theme::tone(143, 217, 160, 255, theme::ink::Trace),
+                                         190.0f / 255.0f),
                         ImDrawFlags_Closed, 1.5f);
     }
 
@@ -1434,7 +1458,8 @@ void MapView::draw(float width, float height,
                 }
             }
             const ImU32 col =
-                fadedColour((base & 0x00FFFFFFu) | (120u << IM_COL32_A_SHIFT), pres.alpha);
+                fadedColour((base & ~(0xFFu << IM_COL32_A_SHIFT)) | (120u << IM_COL32_A_SHIFT),
+                            pres.alpha);
 
             // COLOURED ALONG ITS LENGTH, which the comment that stood here
             // said was impossible - and it was, from the path alone. A
@@ -1484,7 +1509,7 @@ void MapView::draw(float width, float height,
             if (banded) {
                 for (int b = 0; b < ownerBands; ++b) {
                     const AltBandStyle& bs = bandStyleFor(ownerKind, b);
-                    bandCol[b] = fadedColour(IM_COL32(bs.r, bs.g, bs.b, 120), pres.alpha);
+                    bandCol[b] = fadedColour(IM_COL32(bs.r, bs.g, bs.b, 120), pres.alpha);  // theme-exempt: altitude-band colour (a measurement)
                 }
                 // PER VERTEX, not per segment endpoint: adjacent segments share
                 // a vertex, so asking once per vertex halves the lookups. NaN
@@ -1636,7 +1661,7 @@ void MapView::draw(float width, float height,
         const float iconPx = static_cast<float>(aircraftIconPx_);
         if ((ht.t.flags & CASCADE_TRACK_FLAG_EMERGENCY) != 0u) {
             dl->AddCircle(s, isAircraft ? aircraftMarkerRadius(iconPx) + 3.0f : 16.0f,
-                          fadedColour(IM_COL32(255, 45, 45, 255), pres.alpha), 0, 2.0f);
+                          fadedColour(IM_COL32(255, 45, 45, 255), pres.alpha), 0, 2.0f);  // theme-exempt: emergency squawk hue (meaning)
         }
 
         if (isAircraft) {
@@ -1769,7 +1794,7 @@ void MapView::draw(float width, float height,
                 // so the two cannot disagree about where the label starts.
                 dl->AddRectFilled(ImVec2(tl.x + pad, y + (lh - sw) * 0.5f),
                                   ImVec2(tl.x + pad + sw, y + (lh + sw) * 0.5f),
-                                  IM_COL32(s.r, s.g, s.b, 255), 2.0f);
+                                  IM_COL32(s.r, s.g, s.b, 255), 2.0f);  // theme-exempt: altitude-band legend swatch (a measurement)
                 // The band SWATCH keeps its measured colour (see altBandStyle);
                 // the label beside it is a caption on glass, so it is cream.
                 dl->AddText(ImVec2(tl.x + pad + sw + pad, y), theme::kCream, s.label);

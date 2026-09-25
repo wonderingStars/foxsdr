@@ -113,21 +113,29 @@ constexpr float kPi = 3.14159265358979323846f;
 // palette entry used once is a palette entry that drifts. The pair is the
 // grey-green of a reflective twisted-nematic panel and the near-black its
 // segments go: about 11:1, which is what lets the register be read at arm's
-// length the way the rule demands.
-constexpr ImU32 kLcdTop = IM_COL32(0x9E, 0xA8, 0x90, 0xFF);
-constexpr ImU32 kLcdBottom = IM_COL32(0x86, 0x91, 0x79, 0xFF);
-constexpr ImU32 kLcdLit = IM_COL32(0x17, 0x1B, 0x11, 0xFF);
+// length the way the rule demands. Under another theme the LCD is that
+// theme's counter window (digitBg, digit, digitDim for the ghost bars) - Field
+// Radio's counter IS a green LCD - and the dial, its label and its print are
+// placed between the theme's meterFace and meterInk.
+constexpr theme::Tone kLcdTop{0x9E, 0xA8, 0x90, 0xFF, theme::ink::DigitBgTop};
+constexpr theme::Tone kLcdBottom{0x86, 0x91, 0x79, 0xFF, theme::ink::DigitBgBot};
+constexpr theme::Tone kLcdLit{0x17, 0x1B, 0x11, 0xFF, theme::ink::Digit};
 // The unlit segment. A real panel's inactive bars are faintly visible against
 // the ground, and drawing them is what makes an empty register read as a
 // display that is switched on with nothing to say - rather than as a hole.
-constexpr ImU32 kLcdGhost = IM_COL32(0x92, 0x9C, 0x85, 0xFF);
+constexpr theme::Tone kLcdGhost{0x92, 0x9C, 0x85, 0xFF, theme::ink::DigitDim};
 // The printed label under the display: paper, and ink on paper.
-constexpr ImU32 kLabelPaper = IM_COL32(0xE7, 0xE1, 0xD1, 0xFF);
-constexpr ImU32 kLabelInk = IM_COL32(0x22, 0x1E, 0x17, 0xFF);
+constexpr theme::Tone kLabelPaper{0xE7, 0xE1, 0xD1, 0xFF, theme::ink::MeterFace,
+                                  theme::ink::MeterInk};
+constexpr theme::Tone kLabelInk{0x22, 0x1E, 0x17, 0xFF, theme::ink::MeterFace,
+                                theme::ink::MeterInk};
 // The dial the whole lot is printed on.
-constexpr ImU32 kDialTop = IM_COL32(0xE9, 0xE2, 0xCE, 0xFF);
-constexpr ImU32 kDialBottom = IM_COL32(0xC9, 0xC1, 0xAB, 0xFF);
-constexpr ImU32 kDialInk = IM_COL32(0x3A, 0x34, 0x28, 0xFF);
+constexpr theme::Tone kDialTop{0xE9, 0xE2, 0xCE, 0xFF, theme::ink::MeterFace,
+                               theme::ink::MeterInk};
+constexpr theme::Tone kDialBottom{0xC9, 0xC1, 0xAB, 0xFF, theme::ink::MeterFace,
+                                  theme::ink::MeterInk};
+constexpr theme::Tone kDialInk{0x3A, 0x34, 0x28, 0xFF, theme::ink::MeterFace,
+                               theme::ink::MeterInk};
 
 // One bar of a seven-segment cell, as a flat hexagon - square in the middle
 // and mitred at both ends, which is how a real segment is cut and what stops
@@ -286,7 +294,9 @@ float drawMeterFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     // stacked discs offset upward - enough to stop it reading as a flat disc.
     dl->AddCircleFilled(c, dialR, kDialBottom, 0);
     dl->AddCircleFilled(ImVec2(c.x, c.y - dialR * 0.10f), dialR * 0.95f,
-                        IM_COL32(0xDC, 0xD5, 0xC0, 0xFF), 0);
+                        theme::tone(0xDC, 0xD5, 0xC0, 0xFF, theme::ink::MeterFace,
+                                    theme::ink::MeterInk),
+                        0);
     dl->AddCircleFilled(ImVec2(c.x, c.y - dialR * 0.20f), dialR * 0.80f, kDialTop, 0);
     dl->AddCircle(c, dialR, theme::withAlpha(theme::kVoid, 0.45f), 0, 1.0f);
 
@@ -327,7 +337,7 @@ float drawMeterFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         // the glass sheen across the top. Three rectangles and a gradient.
         dl->AddRectFilled(ImVec2(lcdTL.x - 3.0f, lcdTL.y - 3.0f),
                           ImVec2(lcdBR.x + 3.0f, lcdBR.y + 3.0f),
-                          IM_COL32(0x4A, 0x4C, 0x42, 0xFF), 2.0f);
+                          theme::tone(0x4A, 0x4C, 0x42, 0xFF, theme::ink::Border), 2.0f);
         dl->AddRectFilledMultiColor(lcdTL, lcdBR, kLcdTop, kLcdTop, kLcdBottom,
                                     kLcdBottom);
         dl->AddRect(lcdTL, lcdBR, theme::withAlpha(theme::kVoid, 0.55f), 0.0f, 0, 1.0f);
@@ -423,7 +433,8 @@ float drawMeterFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         };
         for (int i = 0; i < 2; ++i) {
             const ImVec2 lc(c.x + r * (i == 0 ? -0.20f : 0.20f), c.y + r * 0.60f);
-            dl->AddCircleFilled(lc, lr + 1.5f, IM_COL32(0x4A, 0x42, 0x34, 0xFF), 16);
+            dl->AddCircleFilled(lc, lr + 1.5f,
+                                theme::tone(0x4A, 0x42, 0x34, 0xFF, theme::ink::CtrlBorder), 16);
             if (pair[i].lit) {
                 for (int g = 3; g >= 1; --g) {
                     dl->AddCircleFilled(lc, lr + static_cast<float>(g) * 1.4f,
@@ -431,7 +442,7 @@ float drawMeterFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
                 }
                 dl->AddCircleFilled(lc, lr, pair[i].colour, 16);
                 dl->AddCircleFilled(ImVec2(lc.x - lr * 0.28f, lc.y - lr * 0.30f), lr * 0.38f,
-                                    IM_COL32(255, 255, 255, 80), 10);
+                                    theme::sheen(80), 10);
             } else {
                 dl->AddCircleFilled(lc, lr, theme::withAlpha(pair[i].colour, 0.22f), 16);
             }
@@ -449,12 +460,12 @@ float drawMeterFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     for (int i = 0; i < 5; ++i) {
         const float rr = dialR * (0.98f - static_cast<float>(i) * 0.055f);
         dl->PathArcTo(c, rr, kPi * 1.08f, kPi * 1.52f);
-        dl->PathStroke(IM_COL32(255, 255, 255, static_cast<int>(18 - i * 3)),
+        dl->PathStroke(theme::sheen(static_cast<int>(18 - i * 3)),
                        ImDrawFlags_None, dialR * 0.07f);
     }
     dl->PathArcTo(c, dialR * 0.93f, kPi * 1.14f, kPi * 1.40f);
-    dl->PathStroke(IM_COL32(255, 255, 255, 70), ImDrawFlags_None, 1.5f);
-    dl->AddCircle(c, dialR * 1.005f, IM_COL32(255, 255, 255, 34), 0, 1.5f);
+    dl->PathStroke(theme::sheen(70), ImDrawFlags_None, 1.5f);
+    dl->AddCircle(c, dialR * 1.005f, theme::sheen(34), 0, 1.5f);
 
     float used = std::max(c.y + r, bTL.y) + 8.0f;
 

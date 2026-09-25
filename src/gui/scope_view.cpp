@@ -68,15 +68,21 @@ constexpr double kWorldKm = 2.0 * kPi * kEarthRadiusKm;
 // well on its own and was completely wrong beside the reference - which is the
 // whole lesson: a colour is only right relative to the thing it is meant to
 // match, and "looks like a radar" is not the specification.
-constexpr ImU32 kSurround = IM_COL32(16, 17, 8, 255);      // the bay behind the tube
-constexpr ImU32 kBezelIn = IM_COL32(26, 27, 20, 255);      // #1a1b14, 10 px
-constexpr ImU32 kBezelOut = IM_COL32(52, 54, 42, 255);     // #34362a, 2 px
-constexpr ImU32 kGround = IM_COL32(10, 28, 13, 255);       // #0a1c0d, the face
-constexpr ImU32 kCoast = IM_COL32(90, 160, 70, 210);
-constexpr ImU32 kRing = IM_COL32(134, 214, 74, 36);        // rgba(--acc,.14)
-constexpr ImU32 kRim = IM_COL32(134, 214, 74, 77);         // rgba(--acc,.30)
-constexpr ImU32 kTick = IM_COL32(134, 214, 74, 90);
-constexpr ImU32 kChrome = IM_COL32(124, 138, 95, 255);     // #7c8a5f
+//
+// THEMES (2026-09-25): each value is still today's, written as a theme::Tone -
+// the literal plus the role it plays - so today's bench draws it bit for bit
+// and any other theme places it on that role: the bay is a shade between the
+// well and the panel head, the tube is the well, the phosphor is the trace.
+namespace ink = theme::ink;
+constexpr theme::Tone kSurround{16, 17, 8, 255, ink::Well, ink::PanelHead};   // the bay behind the tube
+constexpr theme::Tone kBezelIn{26, 27, 20, 255, ink::Well, ink::PanelHead};   // #1a1b14, 10 px
+constexpr theme::Tone kBezelOut{52, 54, 42, 255, ink::Panel, ink::Border};    // #34362a, 2 px
+constexpr theme::Tone kGround{10, 28, 13, 255, ink::Well};                    // #0a1c0d, the face
+constexpr theme::Tone kCoast{90, 160, 70, 210, ink::Well, ink::Trace};
+constexpr theme::Tone kRing{134, 214, 74, 36, ink::Trace};        // rgba(--acc,.14)
+constexpr theme::Tone kRim{134, 214, 74, 77, ink::Trace};         // rgba(--acc,.30)
+constexpr theme::Tone kTick{134, 214, 74, 90, ink::Trace};
+constexpr theme::Tone kChrome{124, 138, 95, 255, ink::Muted};     // #7c8a5f
 // LIFTED OFF THE DESIGN'S OWN #5d6a45, and this is the one value on this face
 // that is deliberately not the reference's. It is the dim half of the chrome,
 // and what it letters is not decoration: the inner range rings' labels - the
@@ -87,19 +93,20 @@ constexpr ImU32 kChrome = IM_COL32(124, 138, 95, 255);     // #7c8a5f
 // report named. #748656 is the same colour taken up until it measures 4.4:1 on
 // the tube and 4.7:1 on the surround; it is still visibly the dimmer of the
 // two chromes, so the hierarchy the design draws survives.
-constexpr ImU32 kChromeDim = IM_COL32(116, 132, 86, 255);  // was #5d6a45
-constexpr ImU32 kPanelLabel = IM_COL32(95, 138, 60, 255);  // --acc-dim
-constexpr ImU32 kPanelValue = IM_COL32(183, 245, 106, 255);  // --acc-bright
+constexpr theme::Tone kChromeDim{116, 132, 86, 255, ink::Muted, ink::Well};  // was #5d6a45
+constexpr theme::Tone kPanelLabel{95, 138, 60, 255, ink::Muted};              // --acc-dim
+constexpr theme::Tone kPanelValue{183, 245, 106, 255, ink::Reading};          // --acc-bright
 // The panel's secondary ink, and it carries PROSE - "NOTHING BEING HEARD", the
 // paragraph explaining why the sky is empty, the range and bearing under every
 // row in the register, and the note at the foot of the flight page. At
 // (111,122,92) that is 4.1:1 on the panel's glass; this is the same hue at
 // 4.9:1. A label a user is meant to read is not a decorative legend.
-constexpr ImU32 kPanelDim = IM_COL32(124, 136, 104, 255);
+constexpr theme::Tone kPanelDim{124, 136, 104, 255, ink::Muted, ink::Well};
 // The one hue nothing else on the scope uses, which is the whole reason it is
 // reserved. Matches the map's emergency colour exactly, so a target that is
-// red on one is red on the other.
-constexpr ImU32 kAlert = IM_COL32(255, 45, 45, 255);
+// red on one is red on the other - in every theme, which is why it is not
+// placed on a role.
+constexpr ImU32 kAlert = IM_COL32(255, 45, 45, 255);  // theme-exempt: emergency target hue, shared with map_view's
 
 // --- fitting a word to the thing that holds it --------------------------------
 //
@@ -153,16 +160,16 @@ void addClippedText(ImDrawList* dl, ImFont* font, float px, const ImVec2& at, Im
 // saturate/hue-rotate pair does. Sea reads darker than land, coasts stay
 // legible, and nothing on the face is the wrong colour by more than the
 // residual chroma the wash does not cover.
-constexpr ImU32 kTileTint = IM_COL32(196, 226, 150, 217);   // .85 alpha
-constexpr ImU32 kPhosphorWash = IM_COL32(24, 74, 26, 120);
+constexpr theme::Tone kTileTint{196, 226, 150, 217, ink::Trace, ink::White};   // .85 alpha
+constexpr theme::Tone kPhosphorWash{24, 74, 26, 120, ink::Well, ink::Trace};
 
-constexpr ImU32 kPhosphor = IM_COL32(134, 214, 74, 255);
-constexpr ImU32 kRingLine = IM_COL32(134, 214, 74, 36);     // rgba(...,.14)
-constexpr ImU32 kRingOuter = IM_COL32(134, 214, 74, 77);    // rgba(...,.30)
-constexpr ImU32 kCrossHair = IM_COL32(134, 214, 74, 41);    // rgba(...,.16)
-constexpr ImU32 kHomeDot = IM_COL32(224, 95, 208, 255);     // #e05fd0
-constexpr ImU32 kRingText = IM_COL32(134, 214, 74, 140);
-constexpr ImU32 kScanLine = IM_COL32(0, 0, 0, 56);          // rgba(0,0,0,.22)
+constexpr theme::Tone kPhosphor{134, 214, 74, 255, ink::Trace};
+constexpr theme::Tone kRingLine{134, 214, 74, 36, ink::Trace};     // rgba(...,.14)
+constexpr theme::Tone kRingOuter{134, 214, 74, 77, ink::Trace};    // rgba(...,.30)
+constexpr theme::Tone kCrossHair{134, 214, 74, 41, ink::Trace};    // rgba(...,.16)
+constexpr ImU32 kHomeDot = IM_COL32(224, 95, 208, 255);  // theme-exempt: #e05fd0, the view centre's reserved magenta, never a target or graticule hue
+constexpr theme::Tone kRingText{134, 214, 74, 140, ink::Trace};
+// The scan lines are pure black at .22 (rgba(0,0,0,.22)): theme::shadow(56).
 
 // A wedge of the sweep, as a fan of independent triangles so the alpha ramp is
 // carried per vertex. The design's conic-gradient runs from .30 alpha at the
@@ -191,9 +198,9 @@ void addSweepFan(ImDrawList* dl, const ImVec2& c, float radius, double leadDeg) 
         dl->PrimWriteIdx(static_cast<ImDrawIdx>(dl->_VtxCurrentIdx));
         dl->PrimWriteIdx(static_cast<ImDrawIdx>(dl->_VtxCurrentIdx + 1));
         dl->PrimWriteIdx(static_cast<ImDrawIdx>(dl->_VtxCurrentIdx + 2));
-        dl->PrimWriteVtx(c, uv, IM_COL32(134, 214, 74, (alpha0 + alpha1) / 2));
-        dl->PrimWriteVtx(p0, uv, IM_COL32(134, 214, 74, alpha0));
-        dl->PrimWriteVtx(p1, uv, IM_COL32(134, 214, 74, alpha1));
+        dl->PrimWriteVtx(c, uv, kPhosphor.withA((alpha0 + alpha1) / 2));
+        dl->PrimWriteVtx(p0, uv, kPhosphor.withA(alpha0));
+        dl->PrimWriteVtx(p1, uv, kPhosphor.withA(alpha1));
     }
 }
 
@@ -207,7 +214,7 @@ void addScanLines(ImDrawList* dl, const ImVec2& c, float radius) {
                                               static_cast<float>(dy) * static_cast<float>(dy)));
         if (half < 1.0f) { continue; }
         const float y = c.y + static_cast<float>(dy) + 0.5f;
-        dl->AddLine(ImVec2(c.x - half, y), ImVec2(c.x + half, y), kScanLine, 1.0f);
+        dl->AddLine(ImVec2(c.x - half, y), ImVec2(c.x + half, y), theme::shadow(56), 1.0f);
     }
 }
 
@@ -225,7 +232,7 @@ void addVignette(ImDrawList* dl, const ImVec2& c, float radius) {
         const float f = std::min(1.0f, t1 / 0.82f);
         const int alpha = static_cast<int>(87.0f * f * f);
         if (alpha <= 0) { continue; }
-        dl->AddCircle(c, radius * (t0 + t1) * 0.5f, IM_COL32(0, 0, 0, alpha), 64,
+        dl->AddCircle(c, radius * (t0 + t1) * 0.5f, theme::shadow(alpha), 64,
                       radius / kRings + 1.0f);
     }
 }
@@ -267,10 +274,10 @@ ImU32 targetColour(const CascadeTrack& t) {
         // this view an unknown altitude takes a neutral grey and keeps the
         // hollow outline that already distinguishes it from sea level. Red on
         // this scope means one thing.
-        return IM_COL32(196, 204, 212, 255);
+        return IM_COL32(196, 204, 212, 255);  // theme-exempt: target palette - "no altitude" beside the altitude ramp
     }
     const AltBandStyle& s = altBandStyle(band);
-    return IM_COL32(s.r, s.g, s.b, 255);
+    return IM_COL32(s.r, s.g, s.b, 255);  // theme-exempt: altitude band colour from altBandStyle
 }
 
 // Applies a 0..1 fade to a colour's alpha, so a target that has gone quiet
@@ -368,12 +375,13 @@ int drawLcdTabs(const ImVec2& tl, float width, int current) {
         // The key's own lip, then the cap: two rects, which is what makes it
         // read as a key standing proud rather than a coloured rectangle.
         dl->AddRectFilled(ImVec2(a.x, a.y + 2.0f), ImVec2(b.x, b.y + 2.0f),
-                          IM_COL32(16, 17, 9, 255), 6.0f);
+                          theme::tone(16, 17, 9, 255, ink::CtrlBorder), 6.0f);
         dl->AddRectFilled(a, b,
-                          on ? IM_COL32(60, 74, 42, 255) : IM_COL32(45, 46, 36, 255),
+                          on ? theme::tone(60, 74, 42, 255, ink::ActiveBg)
+                             : theme::tone(45, 46, 36, 255, ink::Ctrl),
                           6.0f);
         dl->AddLine(ImVec2(a.x + 6.0f, a.y + 1.0f), ImVec2(b.x - 6.0f, a.y + 1.0f),
-                    IM_COL32(255, 255, 255, on ? 46 : 20), 1.0f);
+                    theme::sheen(on ? 46 : 20), 1.0f);
         // FITTED TO THE KEY. Three keys share the panel's width, so the widest
         // word - FLIGHT - has a third of a 260 px panel minus the gaps to sit
         // in, and a word wider than its own key is drawn over the key beside
@@ -389,7 +397,8 @@ int drawLcdTabs(const ImVec2& tl, float width, int current) {
         addClippedText(dl, tf, tpx,
                        ImVec2((a.x + b.x) * 0.5f - sz.x * 0.5f,
                               (a.y + b.y) * 0.5f - sz.y * 0.5f),
-                       on ? IM_COL32(220, 240, 182, 255) : IM_COL32(141, 147, 121, 255),
+                       on ? theme::tone(220, 240, 182, 255, ink::ActiveText)
+                          : theme::tone(141, 147, 121, 255, ink::CtrlText),
                        label, a.x, b.x);
     }
     return chosen;
@@ -433,8 +442,8 @@ void drawScopePanel(float width, float height, const cascade::core::HostTrack* s
     // what a hand may touch, glass is what the radio received.
     const ImVec2 gTL(bayTL.x + pad, bayTL.y + pad + tabsH + 10.0f);
     const ImVec2 gBR(bayBR.x - pad, bayBR.y - pad);
-    bdl->AddRectFilled(gTL, gBR, IM_COL32(8, 22, 11, 255), 8.0f);
-    bdl->AddRect(gTL, gBR, IM_COL32(37, 48, 32, 255), 8.0f, 0, 1.0f);
+    bdl->AddRectFilled(gTL, gBR, theme::tone(8, 22, 11, 255, ink::Well), 8.0f);
+    bdl->AddRect(gTL, gBR, theme::tone(37, 48, 32, 255, ink::Well, ink::Border), 8.0f, 0, 1.0f);
 
     ImGui::SetCursorScreenPos(ImVec2(gTL.x + 10.0f, gTL.y + 8.0f));
     ImGui::BeginChild("##scopepanel", ImVec2(gBR.x - gTL.x - 20.0f, gBR.y - gTL.y - 16.0f),
@@ -614,7 +623,8 @@ void drawScopePanel(float width, float height, const cascade::core::HostTrack* s
                 ImDrawList* d = ImGui::GetWindowDrawList();
                 if (picked || ImGui::IsItemHovered()) {
                     d->AddRectFilled(tl, ImVec2(tl.x + w, tl.y + rowH),
-                                     IM_COL32(134, 214, 74, picked ? 34 : 16), 3.0f);
+                                     theme::tone(134, 214, 74, picked ? 34 : 16, ink::Sel),
+                                     3.0f);
                 }
                 // The callsign where one has been heard, the ICAO address
                 // where none has - never a blank, which would read as an
@@ -645,7 +655,7 @@ void drawScopePanel(float width, float height, const cascade::core::HostTrack* s
                 const AltBandStyle& bs = altBandStyle(band < 0 ? 0 : band);
                 d->AddText(ImVec2(tl.x + w - asz.x - 4.0f, tl.y + 2.0f),
                            band < 0 ? kPanelDim
-                                    : IM_COL32(bs.r, bs.g, bs.b, 255),
+                                    : IM_COL32(bs.r, bs.g, bs.b, 255),  // theme-exempt: altitude band colour from altBandStyle
                            altTxt.c_str());
                 // Range and bearing from the aerial on the second line.
                 std::string sub;
@@ -658,7 +668,7 @@ void drawScopePanel(float width, float height, const cascade::core::HostTrack* s
                 d->AddText(ImVec2(tl.x + 4.0f, tl.y + ImGui::GetTextLineHeight() + 3.0f),
                            kPanelDim, sub.c_str());
                 d->AddLine(ImVec2(tl.x, tl.y + rowH), ImVec2(tl.x + w, tl.y + rowH),
-                           IM_COL32(134, 214, 74, 28), 1.0f);
+                           kPhosphor.withA(28), 1.0f);
                 ImGui::PopID();
             }
             ImGui::EndChild();
@@ -687,19 +697,20 @@ void drawScopePanel(float width, float height, const cascade::core::HostTrack* s
             ImDrawList* d = ImGui::GetWindowDrawList();
             if (ImGui::IsItemHovered()) {
                 d->AddRectFilled(tl, ImVec2(tl.x + w, tl.y + rowH),
-                                 IM_COL32(134, 214, 74, 18), 3.0f);
+                                 theme::tone(134, 214, 74, 18, ink::Sel), 3.0f);
             }
             d->AddText(ImVec2(tl.x + 2.0f, tl.y + 5.0f), kPanelLabel, label);
             const ImVec2 vs = ImGui::CalcTextSize(v);
             const ImVec2 pTL(tl.x + w - vs.x - 16.0f, tl.y + 3.0f);
             const ImVec2 pBR(tl.x + w - 2.0f, tl.y + rowH - 3.0f);
             d->AddRectFilled(pTL, pBR,
-                             on ? IM_COL32(134, 214, 74, 40) : IM_COL32(120, 140, 90, 30),
+                             on ? kPhosphor.withA(40)
+                                : theme::tone(120, 140, 90, 30, ink::Muted),
                              3.0f);
             d->AddText(ImVec2(pTL.x + 7.0f, tl.y + 5.0f),
                        on ? kPanelValue : kPanelDim, v);
             d->AddLine(ImVec2(tl.x, tl.y + rowH), ImVec2(tl.x + w, tl.y + rowH),
-                       IM_COL32(134, 214, 74, 33), 1.0f);
+                       kPhosphor.withA(33), 1.0f);
             ImGui::PopID();
             return hit;
         };
@@ -842,28 +853,35 @@ namespace {
 // above: the bezel is a moulded case in the photograph, not a lit surface, and
 // giving it the screen's greens would make the whole window read as one glowing
 // slab with no depth to it.
-constexpr ImU32 kCaseFill = IM_COL32(26, 28, 30, 255);
-constexpr ImU32 kCaseEdge = IM_COL32(58, 62, 66, 255);
-constexpr ImU32 kCaseInset = IM_COL32(16, 18, 20, 255);
-constexpr ImU32 kScrewRim = IM_COL32(74, 78, 82, 255);
-constexpr ImU32 kScrewFill = IM_COL32(38, 41, 44, 255);
-constexpr ImU32 kPowerLit = IM_COL32(64, 226, 106, 255);
-constexpr ImU32 kPowerDark = IM_COL32(48, 58, 50, 255);
+// In any other theme the case is a shade of the panel head, its edges and
+// screws shades of the border, and the power lamp the ok / off lamp roles.
+constexpr theme::Tone kCaseFill{26, 28, 30, 255, ink::Well, ink::PanelHead};
+constexpr theme::Tone kCaseEdge{58, 62, 66, 255, ink::PanelHead, ink::Border};
+constexpr theme::Tone kCaseInset{16, 18, 20, 255, ink::Well, ink::PanelHead};
+constexpr theme::Tone kScrewRim{74, 78, 82, 255, ink::Border, ink::White};
+constexpr theme::Tone kScrewFill{38, 41, 44, 255, ink::PanelHead, ink::Border};
+constexpr theme::Tone kPowerLit{64, 226, 106, 255, ink::Ok};
+constexpr theme::Tone kPowerDark{48, 58, 50, 255, ink::Off};
 
 }  // namespace
 
 // The bay every group of controls is recessed into.
 void addScopeBay(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, bool lower) {
     if (dl == nullptr || br.x - tl.x < 4.0f || br.y - tl.y < 4.0f) { return; }
-    const ImU32 top = lower ? IM_COL32(34, 35, 27, 255) : IM_COL32(28, 29, 22, 255);
-    const ImU32 bot = lower ? IM_COL32(19, 20, 9, 255) : IM_COL32(16, 17, 8, 255);
-    const ImU32 edge = lower ? IM_COL32(51, 52, 42, 255) : IM_COL32(47, 48, 38, 255);
+    // Shades between the well and the panel head (the fills) and between the
+    // panel head and the border (the edge), in whatever theme is in force.
+    const ImU32 top = lower ? theme::tone(34, 35, 27, 255, ink::Well, ink::PanelHead)
+                            : theme::tone(28, 29, 22, 255, ink::Well, ink::PanelHead);
+    const ImU32 bot = lower ? theme::tone(19, 20, 9, 255, ink::Well, ink::PanelHead)
+                            : theme::tone(16, 17, 8, 255, ink::Well, ink::PanelHead);
+    const ImU32 edge = lower ? theme::tone(51, 52, 42, 255, ink::PanelHead, ink::Border)
+                             : theme::tone(47, 48, 38, 255, ink::PanelHead, ink::Border);
     constexpr float kRound = 10.0f;
     // AddRectFilledMultiColor cannot round its corners, so the rounded shape is
     // laid down first in the mid tone and the gradient is inset by the corner
     // radius. What shows in the four corner arcs is the mid tone, which at this
     // contrast is indistinguishable from the ramp continuing through them.
-    const ImU32 mid = IM_COL32(23, 24, 15, 255);
+    const ImU32 mid = theme::tone(23, 24, 15, 255, ink::Well, ink::PanelHead);
     dl->AddRectFilled(tl, br, mid, kRound);
     if (br.x - tl.x > kRound * 2.0f) {
         dl->AddRectFilledMultiColor(ImVec2(tl.x + kRound, tl.y),
@@ -873,7 +891,7 @@ void addScopeBay(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, bool lower)
     // The 1 px top highlight, which is what makes the panel read as lit from
     // above rather than as a flat hole.
     dl->AddLine(ImVec2(tl.x + kRound, tl.y + 1.0f), ImVec2(br.x - kRound, tl.y + 1.0f),
-                IM_COL32(255, 255, 255, 14), 1.0f);
+                theme::sheen(14), 1.0f);
 }
 
 // THE SEGMENTED BARGRAPH, which is what the design actually specifies and what
@@ -939,10 +957,11 @@ void drawScopeGauge(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         if (on) {
             // The glow, as two grown rectangles rather than a blur.
             dl->AddRectFilled(ImVec2(x0 - 1.0f, y0s - 1.0f), ImVec2(x1 + 1.0f, y1s + 1.0f),
-                              IM_COL32(154, 216, 79, 40), 2.0f);
+                              theme::tone(154, 216, 79, 40, ink::Ok), 2.0f);
         }
         dl->AddRectFilled(ImVec2(x0, y0s), ImVec2(x1, y1s),
-                          on ? IM_COL32(154, 216, 79, 255) : IM_COL32(120, 140, 90, 33),
+                          on ? theme::tone(154, 216, 79, 255, ink::Ok)
+                             : theme::tone(120, 140, 90, 33, ink::Muted),
                           1.0f);
     }
 
@@ -961,7 +980,8 @@ void drawScopeGauge(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
                    kChrome, cap, tl.x, br.x);
     addClippedText(dl, rf, rpx,
                    ImVec2((tl.x + br.x) * 0.5f - rsz.x * 0.5f, br.y - 4.0f - rsz.y),
-                   haveReading ? IM_COL32(154, 216, 79, 255) : kChromeDim, rd, tl.x, br.x);
+                   haveReading ? theme::tone(154, 216, 79, 255, ink::Reading) : kChromeDim, rd,
+                   tl.x, br.x);
 }
 
 // The odometer drums. Each digit sits in its own machined aperture with the
@@ -1009,15 +1029,16 @@ void drawScopeDrums(ImDrawList* dl, const ImVec2& tl, float cellW, float cellH,
         const float x = tl.x + static_cast<float>(i) * (cellW + 3.0f);
         const ImVec2 cTL(x, rowY);
         const ImVec2 cBR(x + cellW, rowY + cellH);
-        dl->AddRectFilled(cTL, cBR, IM_COL32(14, 15, 10, 255), 3.0f);
-        dl->AddRect(cTL, cBR, IM_COL32(58, 59, 47, 255), 3.0f, 0, 1.0f);
+        dl->AddRectFilled(cTL, cBR, theme::tone(14, 15, 10, 255, ink::DigitBg), 3.0f);
+        dl->AddRect(cTL, cBR, theme::tone(58, 59, 47, 255, ink::PanelHead, ink::Border), 3.0f, 0,
+                    1.0f);
         // The recess, top and bottom, as one band each.
         dl->AddRectFilledMultiColor(cTL, ImVec2(cBR.x, cTL.y + cellH * 0.28f),
-                                    IM_COL32(0, 0, 0, 190), IM_COL32(0, 0, 0, 190),
+                                    theme::shadow(190), theme::shadow(190),
                                     IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, 0));
         dl->AddRectFilledMultiColor(ImVec2(cTL.x, cBR.y - cellH * 0.28f), cBR,
                                     IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, 0),
-                                    IM_COL32(0, 0, 0, 190), IM_COL32(0, 0, 0, 190));
+                                    theme::shadow(190), theme::shadow(190));
         int place = 1;
         for (int k = 0; k < digits - 1 - i; ++k) { place *= 10; }
         const int digit = (v / place) % 10;
@@ -1030,7 +1051,7 @@ void drawScopeDrums(ImDrawList* dl, const ImVec2& tl, float cellW, float cellH,
         dl->AddText(font, px,
                     ImVec2((cTL.x + cBR.x) * 0.5f - sz.x * 0.5f,
                            (cTL.y + cBR.y) * 0.5f - sz.y * 0.5f),
-                    IM_COL32(231, 234, 212, 255), txt);
+                    theme::tone(231, 234, 212, 255, ink::Digit), txt);
     }
 }
 
@@ -1051,8 +1072,9 @@ void drawScopeKnobTicks(ImDrawList* dl, const ImVec2& centre, float radius,
         const float x = centre.x + static_cast<float>(std::sin(a)) * rx - sz.x * 0.5f;
         const float y = centre.y - static_cast<float>(std::cos(a)) * ry - sz.y * 0.5f;
         dl->AddText(ImVec2(x, y),
-                    i == selectedIndex ? IM_COL32(223, 226, 205, 255)
-                                       : IM_COL32(107, 112, 89, 255),
+                    i == selectedIndex
+                        ? theme::tone(223, 226, 205, 255, ink::Label)
+                        : theme::tone(107, 112, 89, 255, ink::Muted, ink::PanelHead),
                     txt);
     }
 }
@@ -1064,17 +1086,21 @@ void drawScopeKnobTicks(ImDrawList* dl, const ImVec2& centre, float radius,
 // hairline, the well's #100d09 and #2a251c, and the dial's #8b8069 brass with
 // a #EFE7D2 pointer.
 
-constexpr ImU32 kAmber = IM_COL32(240, 168, 64, 255);
-constexpr ImU32 kAmberDim = IM_COL32(138, 90, 42, 255);
-constexpr ImU32 kBrass = IM_COL32(139, 128, 105, 255);
-constexpr ImU32 kBenchInk = IM_COL32(59, 53, 41, 255);
-constexpr ImU32 kIvory = IM_COL32(239, 231, 210, 255);
+// As tones: today's value and the foxsdr-ui/1 role each one is (the counter's
+// digit and dimmed digit, a knob's ring - the border - and its pointer cap,
+// and the ink engraved into the deck round the volume dial).
+constexpr theme::Tone kAmber{240, 168, 64, 255, ink::Digit};
+constexpr theme::Tone kAmberDim{138, 90, 42, 255, ink::DigitDim};
+constexpr theme::Tone kBrass{139, 128, 105, 255, ink::Border};
+constexpr theme::Tone kBenchInk{59, 53, 41, 255, ink::DeckInk};
+constexpr theme::Tone kIvory{239, 231, 210, 255, ink::KnobCap};
 
 // --- the cabinet's own workshop ----------------------------------------------
 //
-// Everything below this line takes its colour from theme.hpp BY NAME. The five
-// constants above predate that file and are left alone because the functions
-// already shipped against them; nothing new here adds a sixth hex literal.
+// Everything below this line takes its colour from theme.hpp: by a legacy
+// name, or as a tone - today's value with the role it plays - where the
+// legacy name meant something else (a shadow drawn in kVoid, a stop dome
+// drawn in the alarm rust).
 
 namespace {
 
@@ -1097,6 +1123,14 @@ ImU32 mixCol(ImU32 a, ImU32 b, float t) {
         out |= (v & 0xFFu) << shift;
     }
     return out;
+}
+
+// A SHADOW TODAY DRAWS IN kVoid (#0D0B07) at `alpha`: exactly that on today's
+// bench, the preset's shadow elsewhere. kVoid itself is the WELL in the theme
+// in force, which Daylight Lab paints white - a drop shadow drawn in it would
+// be a glow.
+ImU32 voidShadow(float alpha) {
+    return theme::withAlpha(theme::shadowOf(0x0D, 0x0B, 0x07, 255), alpha);
 }
 
 // LETTER-SPACING, trackedWidth / fitTrackedPx / addTrackedText, is
@@ -1134,7 +1168,7 @@ void addBenchBevel(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, float rou
     // screw, every dome on the face is lit from the same direction, which is
     // what lets an eye read proud-versus-sunk without being told.
     const ImU32 light = theme::withAlpha(theme::kBrassTint, 0.80f);
-    const ImU32 shadow = theme::withAlpha(theme::kVoid, 0.70f);
+    const ImU32 shadow = voidShadow(0.70f);
     const ImU32 upper = raised ? light : shadow;
     const ImU32 lower = raised ? shadow : light;
 
@@ -1165,7 +1199,7 @@ void addCabinetScrew(ImDrawList* dl, const ImVec2& centre, float radius, float s
     // ring is lighter than the panel and the hole darker, which is the whole
     // reason a screw reads as a hole and not as a dot.
     dl->AddCircleFilled(ImVec2(centre.x, centre.y + radius * 0.12f), radius * 1.30f,
-                        theme::withAlpha(theme::kVoid, 0.40f), 0);
+                        voidShadow(0.40f), 0);
     dl->AddCircleFilled(centre, radius * 1.24f, theme::kBrassShade, 0);
     addBenchBevel(dl, ImVec2(centre.x - radius * 1.24f, centre.y - radius * 1.24f),
                   ImVec2(centre.x + radius * 1.24f, centre.y + radius * 1.24f),
@@ -1188,7 +1222,7 @@ void addCabinetScrew(ImDrawList* dl, const ImVec2& centre, float radius, float s
     const float th = std::max(1.5f, radius * 0.24f);
     const ImVec2 p0(centre.x - sx * len, centre.y - sy * len);
     const ImVec2 p1(centre.x + sx * len, centre.y + sy * len);
-    dl->AddLine(p0, p1, theme::kVoid, th);
+    dl->AddLine(p0, p1, voidShadow(1.0f), th);
     // The slot's lit far wall, one pixel down-right of the cut.
     const float ox = -sy * (th * 0.5f);
     const float oy = sx * (th * 0.5f);
@@ -1202,16 +1236,15 @@ void addBenchRail(ImDrawList* dl, float x0, float x1, float y) {
     if (dl == nullptr || x1 - x0 < 2.0f) { return; }
     dl->AddLine(ImVec2(x0, y), ImVec2(x1, y),
                 theme::withAlpha(theme::kBrassTint, 0.75f), theme::kHairline);
-    dl->AddLine(ImVec2(x0, y + 1.0f), ImVec2(x1, y + 1.0f),
-                theme::withAlpha(theme::kVoid, 0.65f), theme::kHairline);
+    dl->AddLine(ImVec2(x0, y + 1.0f), ImVec2(x1, y + 1.0f), voidShadow(0.65f),
+                theme::kHairline);
 }
 
 void addBenchDivider(ImDrawList* dl, float x, float y0, float y1) {
     if (dl == nullptr || y1 - y0 < 2.0f) { return; }
     // Dark first, then its lit far wall: the same groove the rail is, stood on
     // end and lit from the same upper left.
-    dl->AddLine(ImVec2(x, y0), ImVec2(x, y1), theme::withAlpha(theme::kVoid, 0.65f),
-                theme::kHairline);
+    dl->AddLine(ImVec2(x, y0), ImVec2(x, y1), voidShadow(0.65f), theme::kHairline);
     dl->AddLine(ImVec2(x + 1.0f, y0), ImVec2(x + 1.0f, y1),
                 theme::withAlpha(theme::kBrassTint, 0.55f), theme::kHairline);
 }
@@ -1235,12 +1268,15 @@ bool drawBenchStopButton(ImDrawList* dl, const ImVec2& centre, float radius,
 
     // The bezel: a brass ring standing proud of the panel, with its own shadow
     // under it and the standard bevel round its lip.
+    // In foxsdr-ui/1 terms the bezel is stopRing (today exactly the mid brass),
+    // its inner step a darker shade of it.
     dl->AddCircleFilled(ImVec2(centre.x, centre.y + radius * 0.08f), radius * 1.06f,
-                        theme::withAlpha(theme::kVoid, 0.55f), 0);
-    dl->AddCircleFilled(centre, radius, theme::kBrassMid, 0);
+                        voidShadow(0.55f), 0);
+    dl->AddCircleFilled(centre, radius, theme::toneHex(0x6E6552, 255, ink::StopRing), 0);
     addBenchBevel(dl, ImVec2(centre.x - radius, centre.y - radius),
                   ImVec2(centre.x + radius, centre.y + radius), radius, true);
-    dl->AddCircleFilled(centre, radius * 0.86f, theme::kBrassDark, 0);
+    dl->AddCircleFilled(centre, radius * 0.86f,
+                        theme::toneHex(0x4A4234, 255, ink::StopRing, ink::Black), 0);
 
     // THE DOME. A radial gradient is not something a draw list can express, so
     // it is built the way the knobs on this panel already are: a stack of discs
@@ -1255,8 +1291,12 @@ bool drawBenchStopButton(ImDrawList* dl, const ImVec2& centre, float radius,
     const float faceR = radius * 0.80f;
     const float press = held ? 1.0f : 0.0f;
     const ImVec2 faceC(centre.x, centre.y + press * 1.0f);
-    ImU32 rim = theme::kAlarm;
-    ImU32 crown = hovered ? theme::kAlarmHot : mixCol(theme::kAlarm, theme::kAlarmHot, 0.75f);
+    // The ramp runs between stopBg's two stops - today exactly the alarm rust
+    // and its hot highlight, which is what these were drawn in.
+    const ImU32 stopBot = theme::toneHex(0xB8552F, 255, ink::StopBgBot);
+    const ImU32 stopTop = theme::toneHex(0xE07A4E, 255, ink::StopBgTop);
+    ImU32 rim = stopBot;
+    ImU32 crown = hovered ? stopTop : mixCol(stopBot, stopTop, 0.75f);
     if (!running) {
         // Drained rather than recoloured: the same object with the light off.
         rim = mixCol(rim, theme::kEnamel, 0.62f);
@@ -1275,7 +1315,8 @@ bool drawBenchStopButton(ImDrawList* dl, const ImVec2& centre, float radius,
     if (!held) {
         dl->PathArcTo(ImVec2(faceC.x - faceR * 0.16f, faceC.y - faceR * 0.18f),
                       faceR * 0.64f, kPiF * 1.06f, kPiF * 1.46f, 20);
-        dl->PathStroke(theme::withAlpha(theme::kIvory, running ? 0.42f : 0.22f),
+        dl->PathStroke(theme::withAlpha(theme::sheenOf(0xEF, 0xE7, 0xD2, 255),
+                                        running ? 0.42f : 0.22f),
                        ImDrawFlags_None, std::max(1.5f, faceR * 0.11f));
     }
 
@@ -1308,10 +1349,12 @@ bool drawBenchStopButton(ImDrawList* dl, const ImVec2& centre, float radius,
         const ImVec2 wAt(faceC.x - tw * 0.5f, faceC.y - ts.y * 0.5f);
         // Cut into the dome: the lit lower lip under the letter, then the cut.
         addTrackedText(dl, f, px, ImVec2(wAt.x, wAt.y + 1.0f),
-                       theme::withAlpha(theme::kIvory, 0.20f), word, track);
-        addTrackedText(dl, f, px, wAt,
-                       theme::withAlpha(theme::kEnamelDark, running ? 1.0f : 0.75f), word,
+                       theme::withAlpha(theme::sheenOf(0xEF, 0xE7, 0xD2, 255), 0.20f), word,
                        track);
+        addTrackedText(dl, f, px, wAt,
+                       theme::withAlpha(theme::toneHex(0x1F1B14, 255, ink::StopText),
+                                        running ? 1.0f : 0.75f),
+                       word, track);
     }
 
     if (focused) {
@@ -1339,7 +1382,7 @@ bool drawBenchKey(ImDrawList* dl, const ImVec2& tl, float size, bool on) {
         // Proud metal casts a shadow; sunk metal does not. That one difference
         // is the whole state indication, before any colour is involved.
         dl->AddRectFilled(ImVec2(tl.x + 1.0f, tl.y + 1.5f), ImVec2(br.x + 1.0f, br.y + 1.5f),
-                          theme::withAlpha(theme::kVoid, 0.45f), theme::kKeyRounding);
+                          voidShadow(0.45f), theme::kKeyRounding);
     }
     ImU32 face = down ? theme::kBrassDark : theme::kBrassMid;
     if (hovered && !down) { face = theme::kBrassBright; }
@@ -1347,10 +1390,8 @@ bool drawBenchKey(ImDrawList* dl, const ImVec2& tl, float size, bool on) {
     if (down) {
         // The inner shadow a pressed key sits under.
         dl->AddRectFilledMultiColor(tl, ImVec2(br.x, tl.y + size * 0.45f),
-                                    theme::withAlpha(theme::kVoid, 0.55f),
-                                    theme::withAlpha(theme::kVoid, 0.55f),
-                                    theme::withAlpha(theme::kVoid, 0.0f),
-                                    theme::withAlpha(theme::kVoid, 0.0f));
+                                    voidShadow(0.55f), voidShadow(0.55f), voidShadow(0.0f),
+                                    voidShadow(0.0f));
     }
     addBenchBevel(dl, tl, br, theme::kKeyRounding, !down);
     if (focused) {
@@ -1407,7 +1448,7 @@ float addBenchPlate(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, const ch
         if (x < tl.x + 8.0f) { x = tl.x + 8.0f; }
         const float titleMaxX = br.x - 8.0f;
         addTrackedText(dl, f, px, ImVec2(x + 1.0f, y + 1.0f),
-                       theme::withAlpha(theme::kVoid, 0.60f), title, track, titleMaxX);
+                       voidShadow(0.60f), title, track, titleMaxX);
         addTrackedText(dl, f, px, ImVec2(x, y), theme::kIvory, title, track, titleMaxX);
         y += f->CalcTextSizeA(px, FLT_MAX, 0.0f, title).y + 5.0f;
     }
@@ -1430,7 +1471,7 @@ void addBenchGroupCaption(ImDrawList* dl, const ImVec2& at, float width,
     const float tw = trackedWidth(f, px, caption, track);
     const float capMaxX = at.x + width;
     addTrackedText(dl, f, px, ImVec2(at.x + 1.0f, at.y + 1.0f),
-                   theme::withAlpha(theme::kVoid, 0.55f), caption, track, capMaxX);
+                   voidShadow(0.55f), caption, track, capMaxX);
     // kInkMuted RATHER THAN kInkFaint. These are the rail's section heads -
     // SIGNAL PATH, DECODE - and they are how a user finds the control they
     // came for, not ornament. On the plate's dark enamel the faint ink
@@ -1449,12 +1490,14 @@ void addBenchGroupCaption(ImDrawList* dl, const ImVec2& at, float width,
 
 void drawFreqDrumWell(ImDrawList* dl, const ImVec2& tl, const ImVec2& br) {
     if (dl == nullptr) { return; }
-    dl->AddRectFilled(tl, br, IM_COL32(16, 13, 9, 255), 3.0f);
+    // A shade of the counter's own ground (digitBg), edged in a shade towards
+    // the border.
+    dl->AddRectFilled(tl, br, theme::tone(16, 13, 9, 255, ink::DigitBgBot, ink::DigitBg), 3.0f);
     // The recess: two inset rings rather than a blur, which ImGui has not.
-    dl->AddRect(tl, br, IM_COL32(42, 37, 28, 255), 3.0f, 0, 2.0f);
+    dl->AddRect(tl, br, theme::tone(42, 37, 28, 255, ink::DigitBg, ink::Border), 3.0f, 0, 2.0f);
     dl->AddRectFilledMultiColor(ImVec2(tl.x + 2.0f, tl.y + 2.0f),
                                 ImVec2(br.x - 2.0f, tl.y + 10.0f),
-                                IM_COL32(0, 0, 0, 150), IM_COL32(0, 0, 0, 150),
+                                theme::shadow(150), theme::shadow(150),
                                 IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, 0));
 }
 
@@ -1464,14 +1507,13 @@ void drawFreqDrumCell(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, char d
     // The drum face: a three-stop vertical gradient, lighter across the
     // middle, which is what makes a flat rectangle read as a curved surface
     // seen through a window.
+    // Both stops are shades between digitBg's own two stops.
     const float midY = (tl.y + br.y) * 0.5f;
-    dl->AddRectFilledMultiColor(tl, ImVec2(br.x, midY), IM_COL32(13, 11, 7, 255),
-                                IM_COL32(13, 11, 7, 255), IM_COL32(24, 20, 16, 255),
-                                IM_COL32(24, 20, 16, 255));
-    dl->AddRectFilledMultiColor(ImVec2(tl.x, midY), br, IM_COL32(24, 20, 16, 255),
-                                IM_COL32(24, 20, 16, 255), IM_COL32(13, 11, 7, 255),
-                                IM_COL32(13, 11, 7, 255));
-    dl->AddRect(tl, br, kBenchInk, 0.0f, 0, 1.0f);
+    const ImU32 edge = theme::tone(13, 11, 7, 255, ink::DigitBgBot, ink::DigitBgTop);
+    const ImU32 middle = theme::tone(24, 20, 16, 255, ink::DigitBgBot, ink::DigitBgTop);
+    dl->AddRectFilledMultiColor(tl, ImVec2(br.x, midY), edge, edge, middle, middle);
+    dl->AddRectFilledMultiColor(ImVec2(tl.x, midY), br, middle, middle, edge, edge);
+    dl->AddRect(tl, br, theme::tone(59, 53, 41, 255, ink::Border), 0.0f, 0, 1.0f);
 
     const char txt[2] = {digit, '\0'};
     // THE COUNTER IS MONOSPACED, and this is the whole reason a third face is
@@ -1485,7 +1527,7 @@ void drawFreqDrumCell(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, char d
     // The glow, as offset copies. A lit digit on a dark drum is most of what
     // makes this read as a nixie rather than as text on a box.
     if (bright) {
-        const ImU32 halo = IM_COL32(240, 168, 64, 40);
+        const ImU32 halo = kAmber.withA(40);
         dl->AddText(font, fontPx, ImVec2(at.x - 1.0f, at.y), halo, txt);
         dl->AddText(font, fontPx, ImVec2(at.x + 1.0f, at.y), halo, txt);
         dl->AddText(font, fontPx, ImVec2(at.x, at.y - 1.0f), halo, txt);
@@ -1511,12 +1553,14 @@ void drawFreqDrumCell(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, char d
 void drawBenchKnobFace(ImDrawList* dl, const ImVec2& centre, float radius, float angleDeg) {
     if (dl == nullptr || radius < 6.0f) { return; }
     dl->AddCircleFilled(ImVec2(centre.x, centre.y + radius * 0.10f), radius * 1.02f,
-                        IM_COL32(0, 0, 0, 110), 0);
-    dl->AddCircleFilled(centre, radius, IM_COL32(13, 11, 7, 255), 0);
+                        theme::shadow(110), 0);
+    // The disc walks knob's two stops, dark outer to lit inner.
+    dl->AddCircleFilled(centre, radius, theme::tone(13, 11, 7, 255, ink::KnobBot), 0);
     dl->AddCircleFilled(ImVec2(centre.x - radius * 0.14f, centre.y - radius * 0.22f),
-                        radius * 0.80f, IM_COL32(25, 21, 16, 255), 0);
+                        radius * 0.80f, theme::tone(25, 21, 16, 255, ink::KnobBot, ink::KnobTop),
+                        0);
     dl->AddCircleFilled(ImVec2(centre.x - radius * 0.22f, centre.y - radius * 0.30f),
-                        radius * 0.48f, IM_COL32(47, 42, 33, 255), 0);
+                        radius * 0.48f, theme::tone(47, 42, 33, 255, ink::KnobTop), 0);
     // The brass ring, which is the whole character of this control.
     dl->AddCircle(centre, radius - 1.0f, kBrass, 0, std::max(2.0f, radius * 0.14f));
 
@@ -1581,7 +1625,8 @@ void drawBenchLamp(ImDrawList* dl, const ImVec2& centre, float radius, ImU32 col
                    bool lit, const char* caption) {
     if (dl == nullptr || radius < 2.0f) { return; }
     // The bezel it is set into, then the lens.
-    dl->AddCircleFilled(centre, radius + 1.5f, IM_COL32(42, 37, 28, 255), 20);
+    dl->AddCircleFilled(centre, radius + 1.5f, theme::tone(42, 37, 28, 255, ink::Well, ink::Border),
+                        20);
     if (lit) {
         // The bloom, as three grown discs rather than a blur.
         for (int i = 3; i >= 1; --i) {
@@ -1593,7 +1638,7 @@ void drawBenchLamp(ImDrawList* dl, const ImVec2& centre, float radius, ImU32 col
         dl->AddCircleFilled(centre, radius, colour, 20);
         // The highlight, off-centre, which is what makes a disc read as glass.
         dl->AddCircleFilled(ImVec2(centre.x - radius * 0.28f, centre.y - radius * 0.30f),
-                            radius * 0.38f, IM_COL32(255, 255, 255, 70), 12);
+                            radius * 0.38f, theme::sheen(70), 12);
     } else {
         // Unlit is the lamp's own hue taken right down - not grey, because an
         // unlit red lamp and an unlit green one are different objects and a
@@ -1603,7 +1648,8 @@ void drawBenchLamp(ImDrawList* dl, const ImVec2& centre, float radius, ImU32 col
                                                       << IM_COL32_A_SHIFT),
                             20);
     }
-    dl->AddCircle(centre, radius + 1.5f, IM_COL32(0x8B, 0x80, 0x69, 190), 20, 1.0f);
+    dl->AddCircle(centre, radius + 1.5f, theme::tone(0x8B, 0x80, 0x69, 190, ink::Border), 20,
+                  1.0f);
 
     if (caption != nullptr && caption[0] != '\0') {
         // THE UNLIT CAPTION WAS ALMOST INVISIBLE, and it is the half of this
@@ -1620,9 +1666,16 @@ void drawBenchLamp(ImDrawList* dl, const ImVec2& centre, float radius, ImU32 col
         const float px = ImGui::GetFontSize();
         const ImVec2 sz = f->CalcTextSizeA(px, FLT_MAX, 0.0f, caption);
         const ImVec2 at(centre.x - sz.x * 0.5f, centre.y + radius + 4.0f);
-        dl->AddText(f, px, ImVec2(at.x + 1.0f, at.y + 1.0f),
-                    theme::withAlpha(theme::kVoid, 0.55f), caption);
-        dl->AddText(f, px, at, lit ? theme::kIvory : theme::kCream, caption);
+        //
+        // IN ANY OTHER THEME the word is the deck's own ink (foxsdr-ui/1's
+        // deckInk, which is how the mockups letter RUN / DEC / MUTE / FAIL),
+        // unlit a quarter of the way towards the deck so lit and unlit still
+        // differ; the cut under it is the preset's shadow.
+        dl->AddText(f, px, ImVec2(at.x + 1.0f, at.y + 1.0f), voidShadow(0.55f), caption);
+        dl->AddText(f, px, at,
+                    lit ? theme::tone(0xEF, 0xE7, 0xD2, 255, ink::DeckInk)
+                        : theme::toneMix(0xD8, 0xCF, 0xB4, 255, ink::DeckInk, ink::Deck, 0.25f),
+                    caption);
     }
 }
 
@@ -1651,7 +1704,8 @@ void drawBenchMeter(ImDrawList* dl, const ImVec2& tl, float width, float height,
     const char* cap = (caption != nullptr) ? caption : "";
     const char* val = (valueLine != nullptr) ? valueLine : "";
     const float cpx = fitTextPx(cf, tiny, cap, width - 4.0f);
-    const float vpx = fitTextPx(vf, tiny, val, width - 4.0f);
+    // The value line is a reading: it follows "Enlarge every reading".
+    const float vpx = fitTextPx(vf, tiny * theme::readingsScale(), val, width - 4.0f);
     const ImVec2 cs = cf->CalcTextSizeA(cpx, FLT_MAX, 0.0f, cap);
     const ImVec2 vs = vf->CalcTextSizeA(vpx, FLT_MAX, 0.0f, val);
     const float capH = (cap[0] != '\0') ? cs.y : 0.0f;
@@ -1676,10 +1730,12 @@ void drawBenchMeter(ImDrawList* dl, const ImVec2& tl, float width, float height,
         // pass under it is the lit lower lip of the cut, the same thing
         // drawBenchStopButton letters its dome with.
         const ImVec2 capAt(tl.x + width * 0.5f - cs.x * 0.5f, tl.y);
+        // In any other theme: the deck's ink over the preset's sheen.
         addClippedText(dl, cf, cpx, ImVec2(capAt.x, capAt.y + 1.0f),
-                       theme::withAlpha(theme::kBrassTint, 0.55f), cap, tl.x,
-                       tl.x + width);
-        addClippedText(dl, cf, cpx, capAt, theme::kVoid, cap, tl.x, tl.x + width);
+                       theme::withAlpha(theme::sheenOf(0x9C, 0x90, 0x78, 255), 0.55f), cap,
+                       tl.x, tl.x + width);
+        addClippedText(dl, cf, cpx, capAt, theme::tone(0x0D, 0x0B, 0x07, 255, ink::DeckInk), cap,
+                       tl.x, tl.x + width);
     }
 
     const float faceTop = tl.y + capH + 3.0f;
@@ -1688,12 +1744,12 @@ void drawBenchMeter(ImDrawList* dl, const ImVec2& tl, float width, float height,
     const ImVec2 fTL(tl.x, faceTop);
     const ImVec2 fBR(tl.x + width, faceTop + faceH);
 
-    // The tombstone face: cream, with a brass bezel.
-    dl->AddRectFilledMultiColor(fTL, fBR, IM_COL32(0xF3, 0xEC, 0xD6, 255),
-                                IM_COL32(0xF3, 0xEC, 0xD6, 255),
-                                IM_COL32(0xD8, 0xCF, 0xB4, 255),
-                                IM_COL32(0xD8, 0xCF, 0xB4, 255));
-    dl->AddRect(fTL, fBR, IM_COL32(0x8B, 0x80, 0x69, 255), 3.0f, 0, 2.0f);
+    // The tombstone face: cream, with a brass bezel - meterFace's two stops
+    // and the border in foxsdr-ui/1 terms.
+    const ImU32 faceTopCol = theme::tone(0xF3, 0xEC, 0xD6, 255, ink::MeterFaceTop);
+    const ImU32 faceBotCol = theme::tone(0xD8, 0xCF, 0xB4, 255, ink::MeterFaceBot);
+    dl->AddRectFilledMultiColor(fTL, fBR, faceTopCol, faceTopCol, faceBotCol, faceBotCol);
+    dl->AddRect(fTL, fBR, theme::tone(0x8B, 0x80, 0x69, 255, ink::Border), 3.0f, 0, 2.0f);
 
     // The pivot sits below the face so the needle sweeps the top of it, which
     // is how a moving-coil meter is actually built.
@@ -1721,8 +1777,8 @@ void drawBenchMeter(ImDrawList* dl, const ImVec2& tl, float width, float height,
         const float a = deg * 3.14159265f / 180.0f;
         const float sx = std::sin(a);
         const float sy = -std::cos(a);
-        const ImU32 col = (i >= 7) ? IM_COL32(0xB8, 0x55, 0x2F, 255)
-                                   : IM_COL32(0x3B, 0x35, 0x29, 255);
+        const ImU32 col = (i >= 7) ? theme::tone(0xB8, 0x55, 0x2F, 255, ink::MeterNeedle)
+                                   : theme::tone(0x3B, 0x35, 0x29, 255, ink::MeterInk);
         dl->AddLine(ImVec2(pivot.x + sx * armR * 0.80f, pivot.y + sy * armR * 0.80f),
                     ImVec2(pivot.x + sx * armR * 0.94f, pivot.y + sy * armR * 0.94f), col,
                     (i % 4 == 0) ? 1.8f : 1.0f);
@@ -1737,12 +1793,13 @@ void drawBenchMeter(ImDrawList* dl, const ImVec2& tl, float width, float height,
         const float sx = std::sin(a);
         const float sy = -std::cos(a);
         dl->AddLine(pivot, ImVec2(pivot.x + sx * armR * 0.88f, pivot.y + sy * armR * 0.88f),
-                    IM_COL32(0xB8, 0x55, 0x2F, 255), 1.8f);
-        dl->AddCircleFilled(pivot, 3.4f, IM_COL32(0x2A, 0x25, 0x1C, 255), 12);
+                    theme::tone(0xB8, 0x55, 0x2F, 255, ink::MeterNeedle), 1.8f);
+        dl->AddCircleFilled(pivot, 3.4f, theme::tone(0x2A, 0x25, 0x1C, 255, ink::MeterInk), 12);
     } else {
         // NO NEEDLE AT ALL. See the header: a needle at rest would be a
         // measurement of zero, and there is no measurement.
-        dl->AddCircleFilled(pivot, 3.4f, IM_COL32(0x9C, 0x90, 0x78, 255), 12);
+        dl->AddCircleFilled(pivot, 3.4f,
+                            theme::tone(0x9C, 0x90, 0x78, 255, ink::MeterInk, ink::MeterFace), 12);
     }
 
     // THE UNIT, PRINTED ON THE FACE BESIDE THE PIVOT, the way a moving-coil
@@ -1761,7 +1818,7 @@ void drawBenchMeter(ImDrawList* dl, const ImVec2& tl, float width, float height,
         const float ux = pivot.x + armR * 0.16f;
         if (ux + us.x < fBR.x - 3.0f) {
             dl->AddText(uf, upx, ImVec2(ux, pivot.y - us.y - 2.0f),
-                        cascade::gui::theme::kEngraved, unitLabel);
+                        theme::tone(0x3B, 0x35, 0x29, 255, ink::MeterInk), unitLabel);
         }
     }
 
@@ -1778,8 +1835,10 @@ void drawBenchMeter(ImDrawList* dl, const ImVec2& tl, float width, float height,
         // nothing to report. Cream is 3.6:1 on the same ground and still
         // plainly quieter than the ivory a live figure gets.
         addClippedText(dl, vf, vpx, ImVec2(tl.x + width * 0.5f - vs.x * 0.5f, fBR.y + 3.0f),
-                       haveReading ? theme::kIvory : theme::kCream, val, tl.x,
-                       tl.x + width);
+                       haveReading
+                           ? theme::tone(0xEF, 0xE7, 0xD2, 255, ink::DeckInk)
+                           : theme::toneMix(0xD8, 0xCF, 0xB4, 255, ink::DeckInk, ink::Deck, 0.25f),
+                       val, tl.x, tl.x + width);
     }
 }
 
@@ -1816,11 +1875,12 @@ void drawRailChip(ImDrawList* dl, const ImVec2& headerMin, const ImVec2& headerM
         const float nameRoom = ImGui::GetFontSize() * 3.75f;
         if (cTL.x > headerMin.x + nameRoom) {
             // A chip is a READING about that section, so it goes on glass in
-            // amber rather than being engraved into the plate.
-            dl->AddRectFilled(cTL, cBR, IM_COL32(0x14, 0x11, 0x0C, 220), 2.0f);
-            dl->AddRect(cTL, cBR, IM_COL32(0x8B, 0x80, 0x69, 120), 2.0f, 0, 1.0f);
+            // amber rather than being engraved into the plate. In foxsdr-ui/1
+            // terms it is a tag: tag ground, tagText ink, a border edge.
+            dl->AddRectFilled(cTL, cBR, theme::tone(0x14, 0x11, 0x0C, 220, ink::Tag), 2.0f);
+            dl->AddRect(cTL, cBR, theme::tone(0x8B, 0x80, 0x69, 120, ink::Border), 2.0f, 0, 1.0f);
             dl->AddText(cf, cpx, ImVec2(cTL.x + padX, cy - ts.y * 0.5f),
-                        IM_COL32(0xF0, 0xA8, 0x40, 255), chipText);
+                        theme::tone(0xF0, 0xA8, 0x40, 255, ink::TagText), chipText);
         }
     }
 }
@@ -1887,17 +1947,23 @@ int drawScopeKnob(ImDrawList* dl, const ImVec2& centre, float radius,
     // The eccentric highlight is what does most of the work. A disc shaded
     // concentrically reads as a hole; the same disc lit off-centre reads as
     // something turned on a lathe.
+    // Every disc is a shade along the knob's two stops (the lit inner ones
+    // run past the top stop, as they do today), the rim the border.
     dl->AddCircleFilled(ImVec2(centre.x, centre.y + radius * 0.06f), radius * 1.04f,
-                        IM_COL32(0, 0, 0, 120), 48);
-    dl->AddCircleFilled(centre, radius, IM_COL32(12, 13, 15, 255), 48);
-    dl->AddCircleFilled(centre, radius * 0.93f, IM_COL32(30, 32, 35, 255), 48);
+                        theme::shadow(120), 48);
+    dl->AddCircleFilled(centre, radius, theme::tone(12, 13, 15, 255, ink::KnobBot, ink::KnobTop),
+                        48);
+    dl->AddCircleFilled(centre, radius * 0.93f,
+                        theme::tone(30, 32, 35, 255, ink::KnobBot, ink::KnobTop), 48);
     dl->AddCircleFilled(ImVec2(centre.x - radius * 0.16f, centre.y - radius * 0.20f),
-                        radius * 0.74f, IM_COL32(46, 49, 53, 255), 48);
+                        radius * 0.74f, theme::tone(46, 49, 53, 255, ink::KnobBot, ink::KnobTop),
+                        48);
     dl->AddCircleFilled(ImVec2(centre.x - radius * 0.24f, centre.y - radius * 0.30f),
-                        radius * 0.46f, IM_COL32(62, 66, 71, 255), 48);
+                        radius * 0.46f, theme::tone(62, 66, 71, 255, ink::KnobBot, ink::KnobTop),
+                        48);
     // The rim, and the one part that answers the pointer.
-    dl->AddCircle(centre, radius * 0.93f, hovered ? kRim : IM_COL32(78, 82, 88, 255), 48,
-                  1.6f);
+    dl->AddCircle(centre, radius * 0.93f,
+                  hovered ? kRim : theme::tone(78, 82, 88, 255, ink::Border), 48, 1.6f);
     // THE POINTER RUNS THE WHOLE RADIUS, as it does in the photograph - a full
     // white index line from the middle out, not a tick near the edge - AND IT
     // POINTS AT THE SETTING. The 270-degree sweep is the same one the scale
@@ -1913,7 +1979,7 @@ int drawScopeKnob(ImDrawList* dl, const ImVec2& centre, float radius,
         const float sy = -std::cos(a);
         dl->AddLine(ImVec2(centre.x + sx * radius * 0.04f, centre.y + sy * radius * 0.04f),
                     ImVec2(centre.x + sx * radius * 0.86f, centre.y + sy * radius * 0.86f),
-                    IM_COL32(236, 240, 245, 255), std::max(2.0f, radius * 0.09f));
+                    theme::tone(236, 240, 245, 255, ink::KnobCap), std::max(2.0f, radius * 0.09f));
     }
 
     const float lineH = ImGui::GetTextLineHeight();
@@ -1954,20 +2020,23 @@ bool drawScopePowerButton(ImDrawList* dl, const ImVec2& centre, float radius,
             const float g = radius * (1.0f + 0.10f * static_cast<float>(i));
             const int alpha = 26 - i * 3;
             if (alpha <= 0) { continue; }
-            dl->AddCircleFilled(centre, g, IM_COL32(110, 226, 74, alpha), 44);
+            dl->AddCircleFilled(centre, g, theme::tone(110, 226, 74, alpha, ink::Ok), 44);
         }
     }
 
     // The well the lamp sits in, and its own shadow.
-    dl->AddCircleFilled(centre, radius, IM_COL32(10, 11, 12, 255), 48);
-    dl->AddCircle(centre, radius, IM_COL32(52, 56, 52, 255), 48, 1.4f);
+    dl->AddCircleFilled(centre, radius, theme::tone(10, 11, 12, 255, ink::Well), 48);
+    dl->AddCircle(centre, radius, theme::tone(52, 56, 52, 255, ink::Well, ink::Border), 48, 1.4f);
 
     // The lit ring. Bright when the receiver runs, a dead olive when it does
     // not - and the state is spelled out in words beside it by the caller, so
     // the colour is never carrying it alone.
     const float ringR = radius * 0.66f;
-    const ImU32 lit = hovered ? IM_COL32(150, 255, 110, 255) : IM_COL32(110, 226, 74, 255);
-    const ImU32 dark = IM_COL32(38, 52, 34, 255);
+    // The ok lamp, a quarter of the way to white under the hand; the off lamp.
+    const ImU32 lit = hovered
+                          ? theme::toneMix(150, 255, 110, 255, ink::Ok, ink::White, 0.25f)
+                          : theme::tone(110, 226, 74, 255, ink::Ok);
+    const ImU32 dark = theme::tone(38, 52, 34, 255, ink::Off);
     dl->AddCircle(centre, ringR, running ? lit : dark, 48,
                   std::max(2.5f, radius * 0.12f));
 
@@ -2228,7 +2297,7 @@ void ScopeView::draw(float width, float height,
         if (tx1 - tx0 > maxSpan) { tx1 = tx0 + maxSpan; }
         if (ty1 - ty0 > maxSpan) { ty1 = ty0 + maxSpan; }
 
-        const ImU32 tileCol = optPhosphor_ ? kTileTint : IM_COL32(255, 255, 255, 217);
+        const ImU32 tileCol = optPhosphor_ ? kTileTint : IM_COL32(255, 255, 255, 217);  // theme-exempt: phosphor off draws the map tile in its own colours
         const double full = static_cast<double>(rangeNm_);
         const float clipMargin = 2.0f;
         for (long ty = ty0; ty <= ty1; ++ty) {
@@ -2444,8 +2513,8 @@ void ScopeView::draw(float width, float height,
                 const int alpha = static_cast<int>((60.0f + 150.0f * t) *
                                                   (picked ? 1.0f : 0.75f));
                 const ImU32 col = (band < 0)
-                                      ? IM_COL32(134, 214, 74, alpha)
-                                      : IM_COL32(bs.r, bs.g, bs.b, alpha);
+                                      ? kPhosphor.withA(alpha)
+                                      : IM_COL32(bs.r, bs.g, bs.b, alpha);  // theme-exempt: altitude band colour from altBandStyle
                 const ImVec2 A(static_cast<float>(qa.x), static_cast<float>(qa.y));
                 const ImVec2 B(static_cast<float>(qb.x), static_cast<float>(qb.y));
                 // RIBBON is the same path drawn wide. It is not a different
@@ -2610,8 +2679,8 @@ void ScopeView::draw(float width, float height,
     // THE MIDDLE OF THE VIEW, always at the middle of the tube. This is the
     // point every ring is a distance from, so it is the one mark that must be
     // locatable to the pixel wherever the view has been dragged to.
-    dl->AddCircleFilled(centre, 7.0f, IM_COL32(224, 95, 208, 40), 16);
-    dl->AddCircleFilled(centre, 5.0f, IM_COL32(224, 95, 208, 90), 16);
+    dl->AddCircleFilled(centre, 7.0f, IM_COL32(224, 95, 208, 40), 16);  // theme-exempt: the view centre's reserved magenta (kHomeDot)
+    dl->AddCircleFilled(centre, 5.0f, IM_COL32(224, 95, 208, 90), 16);  // theme-exempt: the view centre's reserved magenta (kHomeDot)
     dl->AddCircleFilled(centre, 3.5f, kHomeDot, 16);
 
     // AND THE ANTENNA, WHEREVER THE MAP HAS CARRIED IT. Drawn only once the

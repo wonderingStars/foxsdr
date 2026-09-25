@@ -544,6 +544,120 @@ int main() {
         CHECK(meter1XOnBar(kFirstLaunchBarW) >= kDeckCoreW + kMeterCoreClearance);
     }
 
+    // --- THE COUNTER'S SIZE AND ITS SWITCHES (themes, 2026-09-25) -----------------
+    // Bench Classic XL doubles the figures and puts the tuner switches away;
+    // the user can set either on any theme. Four layouts, and each must (a)
+    // leave today's plate exactly as it was, (b) draw its figures genuinely
+    // larger rather than the same tube stretched, and (c) keep every deck part
+    // - lamps, counter, volume dial and BOTH meters - on the bar a fresh
+    // 1280 x 720 window opens with, without one standing on another.
+    {
+        using cascade::gui::CounterLayout;
+        std::printf("  the counter's four layouts: today unchanged, 2x genuinely larger, "
+                    "nothing hidden at 1280 x 720\n");
+        const CounterLayout today{1, true};
+        const CounterLayout bare{1, false};
+        const CounterLayout big{2, false};
+        const CounterLayout bigSwitched{2, true};
+
+        // (a) TODAY'S PLATE, number for number, and the default layout IS today.
+        CHECK_NEAR(cascade::gui::counterPlateW(today), kFreqPlateW, 1.0e-4f);
+        CHECK_NEAR(cascade::gui::counterPlateH(today), kFreqPlateH, 1.0e-4f);
+        CHECK_NEAR(cascade::gui::counterPlateW(CounterLayout{}), kFreqPlateW, 1.0e-4f);
+        for (int i = 0; i < kFreqDigitCells; ++i) {
+            const FreqRect a = tubeRectForCell(396.0f, 20.0f, i, 0.8f);
+            const FreqRect b = tubeRectForCell(396.0f, 20.0f, i, 0.8f, today);
+            CHECK(a.x0 == b.x0 && a.y0 == b.y0 && a.x1 == b.x1 && a.y1 == b.y1);
+            for (const bool up : {true, false}) {
+                const FreqRect c = switchRectForCell(396.0f, 20.0f, i, up, 0.8f);
+                const FreqRect d = switchRectForCell(396.0f, 20.0f, i, up, 0.8f, today);
+                CHECK(c.x0 == d.x0 && c.y0 == d.y0 && c.x1 == d.x1 && c.y1 == d.y1);
+            }
+        }
+        CHECK_NEAR(cascade::gui::deckCoreW(today), kDeckCoreW, 1.0e-4f);
+        CHECK_NEAR(cascade::gui::deckBarH(today), 160.0f, 1.0e-4f);
+
+        // WITHOUT THE SWITCHES the bezel loses exactly the switch area and the
+        // gap above it, and nothing else moves.
+        CHECK_NEAR(cascade::gui::counterPlateH(bare),
+                   kFreqPlateH - kFreqSwitchH - kFreqTubeSwitchGap, 1.0e-4f);
+        CHECK_NEAR(cascade::gui::counterPlateW(bare), kFreqPlateW, 1.0e-4f);
+
+        // (b) GENUINELY LARGER: the tube is twice as tall (the figure is sized
+        // from the tube's height), wider, and the ten stay in order with the
+        // plate's gap between neighbours and inside the bezel and the plate.
+        for (const CounterLayout& c : {big, bigSwitched}) {
+            const FreqRect t0 = tubeRectForCell(0.0f, 0.0f, 0, 1.0f, c);
+            CHECK_NEAR(t0.y1 - t0.y0, 2.0f * kFreqTubeH, 1.0e-4f);
+            CHECK(t0.x1 - t0.x0 > kFreqCellW);
+            for (int i = 0; i < kFreqDigitCells; ++i) {
+                const FreqRect t = tubeRectForCell(0.0f, 0.0f, i, 1.0f, c);
+                CHECK(t.x0 >= kFreqPlatePadX);
+                CHECK(t.x1 <= cascade::gui::counterPlateW(c) - kFreqPlatePadX);
+                CHECK(t.y1 <= cascade::gui::counterPlateH(c));
+                if (i > 0) {
+                    const FreqRect p = tubeRectForCell(0.0f, 0.0f, i - 1, 1.0f, c);
+                    CHECK(t.x0 - p.x1 >= 6.0f - 1.0e-4f);
+                }
+                if (c.switches) {
+                    // The switch halves stand under their own tube, inside the plate.
+                    const FreqRect u = switchRectForCell(0.0f, 0.0f, i, true, 1.0f, c);
+                    const FreqRect d = switchRectForCell(0.0f, 0.0f, i, false, 1.0f, c);
+                    CHECK(u.y0 >= t.y1 + kFreqTubeSwitchGap - 1.0e-4f);
+                    CHECK_NEAR(u.y1, d.y0, 1.0e-4f);
+                    CHECK(d.y1 <= cascade::gui::counterPlateH(c));
+                    CHECK(u.x0 >= t.x0 - 1.0e-4f && u.x1 <= t.x1 + 1.0e-4f);
+                }
+            }
+        }
+
+        // (c) THE DECK AT FIRST LAUNCH, and wider. For every layout: the plate
+        // stands inside the bar, clear of the master divider and of the volume
+        // dial; the dial stays inside the cluster; the meters are ON the bar
+        // and clear of the cluster; and the figures are no smaller than today's.
+        for (const float barW : {kFirstLaunchBarW, 1552.0f, 1870.0f}) {
+            for (const CounterLayout& c : {today, bare, big, bigSwitched}) {
+                const float s = cascade::gui::deckScale(barW, c, 0.62f);
+                CHECK(s > 0.0f && s <= 1.0f);
+                const float plateL = (cascade::gui::kDeckMasterDividerX + 12.0f) * s;
+                const float plateR = plateL + cascade::gui::counterPlateW(c) * s;
+                const float plateB = (cascade::gui::kDeckPlateTopY + cascade::gui::counterPlateH(c)) * s;
+                CHECK(plateB <= cascade::gui::deckBarH(c) * s + 1.0e-3f);
+                // The bar is never drawn taller than today's 160 units: the
+                // body below keeps its height whatever the counter wears.
+                CHECK(cascade::gui::deckBarH(c) * s <= 160.0f + 1.0e-3f);
+                const float dialL = (cascade::gui::deckVolumeCx(c) - 26.0f) * s;
+                const float dialR = (cascade::gui::deckVolumeCx(c) + 26.0f) * s;
+                CHECK(plateR < dialL);
+                CHECK(dialR <= cascade::gui::deckCoreW(c) * s);
+                const bool meters = cascade::gui::deckMetersFit(barW, c, s);
+                if (!meters) {
+                    std::printf("  meters dropped at bar %.0f for %dx%s (scale %.3f)\n", barW,
+                                c.scale, c.switches ? " with switches" : "", s);
+                }
+                CHECK(meters);
+                CHECK(meter1XOnBar(barW) >= cascade::gui::deckCoreW(c) * s + kMeterCoreClearance - 1.0e-3f);
+                const FreqRect t = tubeRectForCell(0.0f, 0.0f, 0, s, c);
+                CHECK(t.y1 - t.y0 >= kFreqTubeH - 1.0e-4f);
+                if (c.scale == 2) {
+                    // Larger than today's at the SAME window, and at full size
+                    // once the window has room for it.
+                    CHECK(t.y1 - t.y0 >= 1.5f * kFreqTubeH);
+                    // (Classic XL's own layout; with its switches the plate
+                    // is drawn to the bar's height instead - see deckScale.)
+                    if (barW >= 1552.0f && !c.switches) { CHECK_NEAR(s, 1.0f, 1.0e-4f); }
+                } else {
+                    CHECK_NEAR(s, 1.0f, 1.0e-4f);
+                }
+            }
+        }
+        // Today's bar keeps today's rule exactly, meters and all.
+        CHECK(cascade::gui::deckMetersFit(kFirstLaunchBarW, today, 1.0f) ==
+              metersFitOnBar(kFirstLaunchBarW, kDeckCoreW));
+        CHECK(cascade::gui::deckMetersFit(1201.0f, today, 1.0f) ==
+              metersFitOnBar(1201.0f, kDeckCoreW));
+    }
+
     // --- the mute banner: the middle when there is room, under the counter otherwise
     // Same terms as the meters rule, so the banner cannot be told the middle
     // is free while the meters are standing in it.

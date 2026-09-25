@@ -618,6 +618,71 @@ inline FreqRect switchRectForCell(float plateTLx, float plateTLy, int cellIndex,
     return FreqRect{x0, y0, x0 + kFreqCellW * scale, y0 + kFreqSwitchHalfH * scale};
 }
 
+// --- THE COUNTER'S SIZE AND ITS SWITCHES (themes, 2026-09-25) ------------------
+//
+// Bench Classic XL (gui/theme.hpp) draws the figures twice the size with the
+// tuner switches put away, and any theme may do either from the Display
+// section or the counter's own right-click menu. A layout is those two
+// choices; the DEFAULT layout is today's plate, number for number - every
+// function below answers exactly what the constants above answer for it, and
+// tests/test_tune_control.cpp holds them to that.
+//
+// AT 2x THE TUBE IS TWICE AS TALL (the figure is sized from the tube's height,
+// so it is genuinely drawn larger) and 48 units wide rather than 56: a Nova
+// Mono figure at twice the size is 30 units across, and the narrower cell is
+// what lets the enlarged deck keep both meters on a 1280 x 720 window. The
+// switch area keeps its size - a switch is a switch - and without the
+// switches the bezel loses that area and the gap above it.
+struct CounterLayout {
+    int scale = 1;          // 1 or 2
+    bool switches = true;   // the UP/DN toggle switches under the tubes
+};
+inline constexpr float kFreqCellW2x = 48.0f;
+
+inline float counterCellW(const CounterLayout& c) {
+    return c.scale >= 2 ? kFreqCellW2x : kFreqCellW;
+}
+inline float counterTubeH(const CounterLayout& c) {
+    return c.scale >= 2 ? 2.0f * kFreqTubeH : kFreqTubeH;
+}
+inline float counterBezelW(const CounterLayout& c) {
+    return static_cast<float>(kFreqDigitCells) * counterCellW(c) +
+           static_cast<float>(kFreqDigitCells - 1) * kFreqCellGap + kFreqBezelPadX * 2.0f;
+}
+inline float counterBezelH(const CounterLayout& c) {
+    return kFreqBezelPadY + counterTubeH(c) +
+           (c.switches ? kFreqTubeSwitchGap + kFreqSwitchH : 0.0f) + kFreqBezelPadY;
+}
+inline float counterPlateW(const CounterLayout& c) {
+    return counterBezelW(c) + kFreqPlatePadX * 2.0f;
+}
+inline float counterPlateH(const CounterLayout& c) {
+    return kFreqPlatePadTop + kFreqPlateHeaderH + kFreqPlateHeaderGap + counterBezelH(c) +
+           kFreqPlateFooterGap + kFreqPlateFooterH + kFreqPlatePadBottom;
+}
+inline float counterCellLeftX(float plateTLx, int cellIndex, float scale,
+                              const CounterLayout& c) {
+    return plateTLx + (kFreqBezelX + kFreqBezelPadX +
+                       static_cast<float>(cellIndex) * (counterCellW(c) + kFreqCellGap)) *
+                          scale;
+}
+inline FreqRect tubeRectForCell(float plateTLx, float plateTLy, int cellIndex, float scale,
+                                const CounterLayout& c) {
+    const float x0 = counterCellLeftX(plateTLx, cellIndex, scale, c);
+    const float y0 = plateTLy + (kFreqBezelY + kFreqBezelPadY) * scale;
+    return FreqRect{x0, y0, x0 + counterCellW(c) * scale, y0 + counterTubeH(c) * scale};
+}
+// The switch halves are laid out under the tube as they always were; on a
+// layout without switches nothing asks for them.
+inline FreqRect switchRectForCell(float plateTLx, float plateTLy, int cellIndex, bool upperHalf,
+                                  float scale, const CounterLayout& c) {
+    const float x0 = counterCellLeftX(plateTLx, cellIndex, scale, c);
+    const float areaTopY =
+        plateTLy + (kFreqBezelY + kFreqBezelPadY + counterTubeH(c) + kFreqTubeSwitchGap) * scale;
+    const float y0 = upperHalf ? areaTopY : areaTopY + kFreqSwitchHalfH * scale;
+    return FreqRect{x0, y0, x0 + counterCellW(c) * scale, y0 + kFreqSwitchHalfH * scale};
+}
+
 // --- HOW A DIGIT CELL IS PAINTED -------------------------------------------
 //
 // WHY THIS IS A SETTING AT ALL. GitHub issue #1: "Would be nice to be able to
@@ -835,6 +900,70 @@ inline constexpr float muteBannerMiddleW(float barW, float coreW) {
 }
 inline constexpr bool muteBannerTakesTheMiddle(float barW, float coreW) {
     return muteBannerMiddleW(barW, coreW) >= kMuteBannerMinW;
+}
+
+// --- THE DECK AROUND A LAYOUT (themes, 2026-09-25) ------------------------------
+//
+// The bar's fixed measurements, which app_window.cpp places the deck from: the
+// master divider, the plate's top, the clear brass under it and the bar's own
+// 160 units. The counter stands 12 past the divider, its own divider 12 past
+// the plate, and the volume dial 61 past that - so a wider plate moves the
+// dial and the end of the cluster right by exactly its extra width.
+inline constexpr float kDeckBarH = 160.0f;
+inline constexpr float kDeckPlateTopY = 20.0f;
+inline constexpr float kDeckPlateFootMarginY = 10.0f;
+inline constexpr float kDeckMasterDividerX = 384.0f;
+
+inline float deckCounterDividerX(const CounterLayout& c) {
+    return kDeckMasterDividerX + 12.0f + counterPlateW(c) + 12.0f;
+}
+inline float deckVolumeCx(const CounterLayout& c) { return deckCounterDividerX(c) + 61.0f; }
+inline float deckCoreW(const CounterLayout& c) {
+    return kDeckCoreW + (counterPlateW(c) - kFreqPlateW);
+}
+// THE HEIGHT A LAYOUT'S BAR WOULD NEED at scale 1: today's plate and the 2x
+// plate without switches both stand inside 160; the 2x plate WITH its
+// switches is 161 tall and would need 191 - which deckScale does not allow,
+// drawing that deck at 160/191 instead.
+inline float deckBarH(const CounterLayout& c) {
+    return std::max(kDeckBarH, kDeckPlateTopY + counterPlateH(c) + kDeckPlateFootMarginY);
+}
+// What the two meters take at the bar's right, in screen pixels (they do not
+// scale): the clearance from the cluster, both faces, the gap between and the
+// right margin.
+inline constexpr float kDeckMeterReserve =
+    kMeterCoreClearance + 2.0f * kMeterW + kMeterGap + kMeterRightMargin;
+
+// THE BAR'S SCALE for a layout. Today's rule, exactly, for the 1x counter: the
+// bar shrinks only when the window is narrower than the cluster, and the
+// meters are dropped where they do not fit. THE ENLARGED COUNTER MAY NOT COST
+// THE METERS: its cluster is wider, and at 1280 x 720 the meters would no
+// longer fit beside it, so the whole deck is drawn smaller - figures, dial,
+// lamps and all, never below minScale - until they do. At a window wide
+// enough for both (a bar of about 1400 or more) it is drawn at full size.
+inline float deckScale(float availW, const CounterLayout& c, float minScale) {
+    const float coreW = deckCoreW(c);
+    float s = 1.0f;
+    if (availW > 0.0f && availW < coreW) { s = std::max(minScale, availW / coreW); }
+    if (c.scale >= 2 && availW > 0.0f) {
+        const float room = (availW - kDeckMeterReserve) / coreW;
+        if (room < s) { s = std::max(minScale, room); }
+    }
+    // AND THE BAR IS NEVER DRAWN TALLER THAN TODAY'S. The owner's words on the
+    // plate's first cut, which still bind: "we don't want to affect the size of
+    // the top bar". A plate that needs a taller bar (2x with its switches) is
+    // drawn smaller instead - and the body below keeps every pixel it had, so
+    // no status card is pushed off the column (the theme census caught
+    // exactly that at 1280 x 720 before this line existed).
+    const float tall = deckBarH(c);
+    if (tall > kDeckBarH) { s = std::min(s, kDeckBarH / tall); }
+    return s;
+}
+// Whether the meters are drawn: today's rule for the 1x counter; for the 2x one
+// the cluster is measured at the scale it is drawn at.
+inline bool deckMetersFit(float barW, const CounterLayout& c, float scale) {
+    if (c.scale < 2) { return metersFitOnBar(barW, kDeckCoreW); }
+    return meter1XOnBar(barW) >= deckCoreW(c) * scale + kMeterCoreClearance - 1.0e-3f;
 }
 
 // --- WHAT A GAIN READS AS, and it is not always decibels --------------------

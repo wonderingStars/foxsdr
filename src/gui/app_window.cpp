@@ -68,6 +68,7 @@
 #include "gui/fonts.hpp"
 #include "gui/text_fit.hpp"
 #include "gui/theme.hpp"
+#include "gui/ui_census.hpp"
 #include "gui/map_view.hpp"
 // WHY EVERY "nothing here" SENTENCE IN THIS FILE COMES FROM ONE PLACE. An empty
 // list from PluginUi or PluginRunner is not evidence about the disk - both skip
@@ -229,12 +230,24 @@ constexpr int kWaterfallHistory = 512;
 // and a zero/inverted span would degrade to the widgets' flat-line fallback.
 constexpr float kMinDbSpan = 10.0f;
 
+// "Enlarge every reading": the size every live figure is drawn at when the
+// Display checkbox or the counter's menu turns it on - Bench Classic XL's own
+// foxsdr-ui/1 sizes.readings.
+constexpr float kEnlargedReadings = 1.4f;
+
 // Source-menu error color: readable red on the dark theme, used for
 // open()/setter failures surfaced from IqSource::lastError().
 // THE ONE RED. Defined from the theme rather than beside it: there used to be
 // a second, near-identical red written inline elsewhere in this file, which is
 // how a product ends up with two failure colours that are not quite the same.
-const ImVec4 kErrorRed = cascade::gui::theme::bad();
+//
+// A VALUE READ WHEN IT IS USED, not when this file starts: the theme can change
+// under a running application, and a namespace-scope ImVec4 would also have
+// been initialised before theme.cpp had filled the palette in.
+struct ErrorRed {
+    operator ImVec4() const { return cascade::gui::theme::bad(); }
+};
+constexpr ErrorRed kErrorRed{};
 
 // Soapy sample-rate choices. 2 MS/s (index 1) is the default because it is
 // the rate the DSP chain was configured at (kSampleRateHz); the other rates
@@ -372,8 +385,11 @@ constexpr double kConfigDebounceS = 2.0;
 // separable; the waterfall marker reuses the spectrum overlay's warm
 // center-line color. (The axis strip's own three colours went with it when
 // SpectrumView took over lettering the frequency scale.)
-constexpr ImU32 kTickGridColor = IM_COL32(255, 255, 255, 18);
-constexpr ImU32 kWfMarkerColor = IM_COL32(255, 170, 60, 200);
+// Theme tones (gui/theme.hpp): the graticule and the accent line.
+constexpr cascade::gui::theme::Tone kTickGridColor{255, 255, 255, 18,
+                                                   cascade::gui::theme::ink::Grid};
+constexpr cascade::gui::theme::Tone kWfMarkerColor{255, 170, 60, 200,
+                                                   cascade::gui::theme::ink::Accent};
 
 // The frequency readout's 10 digit places, most significant first (digit i
 // steps by cascade::gui::digitPlaceHz(i) on a wheel tick over its tube, or a
@@ -598,6 +614,11 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            // it here a choice would reach the file only when something else
            // changed in the same session.
            a.tunerDisplayStyle == b.tunerDisplayStyle &&
+           // The theme and the counter's own settings: each changed by a click
+           // (Display, or the counter's right-click menu) that saves nothing
+           // itself, so the debounce must see them.
+           a.uiTheme == b.uiTheme && a.counterScale == b.counterScale &&
+           a.counterSwitches == b.counterSwitches && a.readingsScale == b.readingsScale &&
            a.mapTrails == b.mapTrails &&
            a.mapTrailAltitudeColours == b.mapTrailAltitudeColours &&
            a.mapTrailStyle == b.mapTrailStyle &&
@@ -1545,7 +1566,10 @@ int AppWindow::run(int frames) {
             presentGrace.update(glfwGetTime(), displayChanged, hidden);
         }
 
-        // BETWEEN FRAMES: the one place the interface language may change.
+        // BETWEEN FRAMES: the one place the interface theme and language may
+        // change. The theme first, so a typeface pair it asks for is built by
+        // the same applyPending the language ends with.
+        applyPendingTheme();
         applyPendingLanguage();
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
@@ -1764,6 +1788,11 @@ int AppWindow::run(int frames) {
             }
         }
 
+        // THE CENSUS (gui/ui_census.hpp): walk the rail through its five banks,
+        // three frames each, so every bank's sections are drawn in one run.
+        if (cascade::gui::census::enabled()) {
+            setRailBank((rendered / 3) % cascade::gui::kRailBankCount);
+        }
         drawUi();
 
         // Collects a config write configWriter_ finished, whether it was
@@ -2246,6 +2275,10 @@ int AppWindow::run(int frames) {
     // "rendered 3 frames" via PASS_REGULAR_EXPRESSION, so an off-by-one in the
     // frame bound goes red instead of shipping silently.
     std::printf("cascade: rendered %d frames\n", rendered);
+    if (cascade::gui::census::enabled()) {
+        std::printf("cascade: ui census %s\n",
+                    cascade::gui::census::write() ? "written" : "NOT WRITTEN");
+    }
     // What a scripted run did to the patch, as the document itself: sizes,
     // frequencies and node counts are then checked as numbers, not by eye.
     if (inputScriptActive_) {
@@ -2360,13 +2393,14 @@ float drawCabinet(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, float minM
     // down flat first and the gradient inset by the radius - the same trick
     // addBenchPlate uses, and at this contrast the corners are
     // indistinguishable from the ramp continuing through them.
-    dl->AddRectFilled(tl, br, cascade::gui::theme::kBrassShade, round);
+    // THE CABINET IS foxsdr-ui/1's "frame": the metal round the whole face that
+    // the window's name and its keys sit on.
+    const ImU32 frameTop = theme::toneHex(0x7D7360, 255, theme::ink::Frame);
+    const ImU32 frameBot = theme::toneHex(0x6E6552, 255, theme::ink::Frame, theme::ink::Black);
+    dl->AddRectFilled(tl, br, frameTop, round);
     if (w > round * 2.0f) {
         dl->AddRectFilledMultiColor(ImVec2(tl.x + round, tl.y), ImVec2(br.x - round, br.y),
-                                    cascade::gui::theme::kBrassShade,
-                                    cascade::gui::theme::kBrassShade,
-                                    cascade::gui::theme::kBrassMid,
-                                    cascade::gui::theme::kBrassMid);
+                                    frameTop, frameTop, frameBot, frameBot);
     }
     cascade::gui::addBenchBevel(dl, tl, br, round, true);
 
@@ -2424,6 +2458,7 @@ constexpr float kKeyWordPadX = 3.0f;
 bool benchWordKey(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, const char* label,
                   bool enabled, const char* id) {
     if (dl == nullptr || br.x - tl.x < 12.0f || br.y - tl.y < 8.0f) { return false; }
+    cascade::gui::census::note(std::string("key:") + (id != nullptr ? id : ""));
     ImGui::PushID(id);
     ImGui::SetCursorScreenPos(tl);
     ImGui::BeginDisabled(!enabled);
@@ -2444,15 +2479,18 @@ bool benchWordKey(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, const char
         // Proud metal casts a shadow and pressed metal does not, which is the
         // state indication before any colour is used.
         if (!held) {
-            dl->AddRectFilled(
-                ImVec2(tl.x + 1.0f, tl.y + 2.0f), ImVec2(br.x + 1.0f, br.y + 2.0f),
-                cascade::gui::theme::withAlpha(cascade::gui::theme::kVoid, 0.45f), r);
+            dl->AddRectFilled(ImVec2(tl.x + 1.0f, tl.y + 2.0f), ImVec2(br.x + 1.0f, br.y + 2.0f),
+                              theme::shadowOf(0x0D, 0x0B, 0x07, 115), r);
         }
-        const ImU32 top = held      ? cascade::gui::theme::kBrassMid
-                          : hovered ? cascade::gui::theme::kIvory
-                                    : cascade::gui::theme::kCream;
-        const ImU32 bot =
-            held ? cascade::gui::theme::kBrassDark : cascade::gui::theme::kBrassBright;
+        // A KEY IS foxsdr-ui/1's "ctrl": its face at rest, a step toward the
+        // lit key under the hand, and the lit key ("activeBg") while pressed.
+        const ImU32 top =
+            held      ? theme::toneHex(0x6E6552, 255, theme::ink::ActiveBgTop)
+            : hovered ? theme::toneMix(0xEF, 0xE7, 0xD2, 255, theme::ink::CtrlTop,
+                                       theme::ink::ActiveBgTop, 0.35f)
+                      : theme::toneHex(0xD8CFB4, 255, theme::ink::CtrlTop);
+        const ImU32 bot = held ? theme::toneHex(0x4A4234, 255, theme::ink::ActiveBgBot)
+                               : theme::toneHex(0x8B8069, 255, theme::ink::CtrlBot);
         dl->AddRectFilled(tl, br, bot, r);
         if (br.x - tl.x > r * 2.0f) {
             dl->AddRectFilledMultiColor(ImVec2(tl.x + r, tl.y), ImVec2(br.x - r, br.y), top,
@@ -2472,8 +2510,10 @@ bool benchWordKey(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, const char
     // is drawn smaller rather than hung out over the key's edges.
     cascade::gui::addFittedCentred(
         dl, cascade::gui::fonts::ui(), cascade::gui::fonts::kTinySize, tl, br,
-        enabled ? cascade::gui::theme::kEnamel : cascade::gui::theme::kInkFaint, label,
-        kKeyWordPadX, held ? 1.0f : 0.0f);
+        enabled ? theme::toneHex(0x2A251C, 255, held ? theme::ink::ActiveText
+                                                     : theme::ink::CtrlText)
+                : cascade::gui::theme::kInkFaint,
+        label, kKeyWordPadX, held ? 1.0f : 0.0f);
     return pressed;
 }
 
@@ -2660,6 +2700,7 @@ bool benchSection(const char* label, bool defaultOpen, const char* chipText = nu
     static ImGuiID pendingId = 0;
     static bool pendingOpen = false;
     const ImGuiID rowId = ImGui::GetID(label);
+    cascade::gui::census::note(std::string("section:") + (label != nullptr ? label : ""));
     if (pendingId == rowId) {
         ImGui::SetNextItemOpen(pendingOpen);
         pendingId = 0;
@@ -2722,11 +2763,15 @@ bool benchSection(const char* label, bool defaultOpen, const char* chipText = nu
     const ImVec2 pTL(kBR.x + cascade::gui::kRailKeyGap, tl.y + 1.0f);
     const ImVec2 pBR(br.x, br.y - 1.0f);
     if (pBR.x > pTL.x + 24.0f) {
-        ImU32 plate = cascade::gui::theme::kBrassDark;
+        // The plate is a control ("ctrl"), a step toward the lit key under the
+        // hand and further while held (theme.hpp, toneMix).
+        ImU32 plate = theme::toneHex(0x4A4234, 255, theme::ink::Ctrl);
         if (held) {
-            plate = cascade::gui::theme::kBrassShade;
+            plate = theme::toneMix(0x7D, 0x73, 0x60, 255, theme::ink::Ctrl,
+                                   theme::ink::ActiveBg, 0.55f);
         } else if (hovered) {
-            plate = cascade::gui::theme::kBrassMid;
+            plate = theme::toneMix(0x6E, 0x65, 0x52, 255, theme::ink::Ctrl,
+                                   theme::ink::ActiveBg, 0.25f);
         }
         dl->AddRectFilled(pTL, pBR, plate, cascade::gui::theme::kKeyRounding);
         cascade::gui::addBenchBevel(dl, pTL, pBR, cascade::gui::theme::kKeyRounding, true);
@@ -2736,7 +2781,9 @@ bool benchSection(const char* label, bool defaultOpen, const char* chipText = nu
         // the word has to STOP is railPlateLabel's business: it is measured
         // against the chip that is about to be landed on the same plate.
         railPlateLabel(dl, tl, br, pTL.x, labelPx, shown.c_str(), chipText,
-                       open ? cascade::gui::theme::kIvory : cascade::gui::theme::kCream);
+                       open ? theme::toneHex(0xEFE7D2, 255, theme::ink::CtrlText)
+                            : theme::toneHex(0xD8CFB4, 255, theme::ink::CtrlText,
+                                             theme::ink::Ctrl));
     }
 
     // THE STATE OF THE SECTION, READ WITHOUT OPENING IT: a chip naming what it
@@ -2837,6 +2884,7 @@ bool benchSwitchRow(const char* label, bool on, const char* chipText,
                     ImU32 lampColour, bool lampLit, bool enabled,
                     const char* tooltip) {
     benchRailFlush();
+    cascade::gui::census::note(std::string("switch:") + (label != nullptr ? label : ""));
     // Same rule as benchSection: the visible name stops at the id suffix, so
     // "Satellites map###satmap:X" letters the words and not the plumbing -
     // and the name is held whole, however long its translation.
@@ -2886,11 +2934,14 @@ bool benchSwitchRow(const char* label, bool on, const char* chipText,
         // "this one is just less important".
         ImU32 plate = cascade::gui::theme::kEnamel;
         if (enabled) {
-            plate = cascade::gui::theme::kBrassDark;
+            // A control ("ctrl"), as benchSection's plate is.
+            plate = theme::toneHex(0x4A4234, 255, theme::ink::Ctrl);
             if (held) {
-                plate = cascade::gui::theme::kBrassShade;
+                plate = theme::toneMix(0x7D, 0x73, 0x60, 255, theme::ink::Ctrl,
+                                       theme::ink::ActiveBg, 0.55f);
             } else if (hovered) {
-                plate = cascade::gui::theme::kBrassMid;
+                plate = theme::toneMix(0x6E, 0x65, 0x52, 255, theme::ink::Ctrl,
+                                       theme::ink::ActiveBg, 0.25f);
             }
         }
         dl->AddRectFilled(pTL, pBR, plate, cascade::gui::theme::kKeyRounding);
@@ -2904,8 +2955,9 @@ bool benchSwitchRow(const char* label, bool on, const char* chipText,
         // railPlateLabel's measured limit keeps it off the chip.
         railPlateLabel(dl, tl, br, pTL.x, labelPx, shown.c_str(), chipText,
                        !enabled ? cascade::gui::theme::kInkFaint
-                                : (on ? cascade::gui::theme::kIvory
-                                      : cascade::gui::theme::kCream));
+                                : (on ? theme::toneHex(0xEFE7D2, 255, theme::ink::CtrlText)
+                                      : theme::toneHex(0xD8CFB4, 255, theme::ink::CtrlText,
+                                                       theme::ink::Ctrl)));
     }
 
     if (chipText != nullptr) {
@@ -2955,6 +3007,8 @@ void benchGroup(const char* caption) {
 }  // namespace
 
 void AppWindow::drawUi() {
+    // "Enlarge every reading", handed to the drawing sites for this frame.
+    cascade::gui::theme::setReadingsScale(readingsScale_);
     // THE KEYBOARD, FIRST. ImGui has just finished NewFrame, so WantTextInput
     // and the popup stack are this frame's answers rather than last frame's,
     // and nothing has been submitted yet - so a key that starts the receiver,
@@ -3133,8 +3187,8 @@ void AppWindow::drawUi() {
         ImDrawList* ddl = ImGui::GetForegroundDrawList();
         const ImVec2 at(rootTL.x + 300.0f, rootTL.y + 4.0f);
         ddl->AddRectFilled(ImVec2(at.x - 4.0f, at.y - 2.0f), ImVec2(at.x + 1200.0f, at.y + 16.0f),
-                           IM_COL32(0, 0, 0, 200));
-        ddl->AddText(at, IM_COL32(255, 255, 0, 255), line);
+                           IM_COL32(0, 0, 0, 200));  // theme-exempt: FOXSDR_DEBUG_INPUT ledger, a developer instrument
+        ddl->AddText(at, IM_COL32(255, 255, 0, 255), line);  // theme-exempt: FOXSDR_DEBUG_INPUT ledger
     }
     const float bodyInset = cabinetM + 3.0f;
     ImGui::SetCursorScreenPos(ImVec2(rootTL.x + bodyInset, rootTL.y + bodyInset));
@@ -3662,9 +3716,11 @@ void AppWindow::drawStatusColumn() {
     ImFont* legendF = cascade::gui::fonts::legend();
     ImFont* uiF = cascade::gui::fonts::ui();
     const float tinyPx = cascade::gui::fonts::kTinySize;
-    const float valuePx = cascade::gui::fonts::kUiSize;
+    const float valuePx = cascade::gui::fonts::kUiSize * cascade::gui::theme::readingsScale();
     const float tinyH = legendF->CalcTextSizeA(tinyPx, FLT_MAX, 0.0f, "X").y;
     const float valueH = uiF->CalcTextSizeA(valuePx, FLT_MAX, 0.0f, "X").y;
+    const float baseValuePx = cascade::gui::fonts::kUiSize;
+    const float baseValueH = uiF->CalcTextSizeA(baseValuePx, FLT_MAX, 0.0f, "X").y;
 
     // THE MAKER'S PLATE IS MEASURED FIRST AND DRAWN LAST, so the cards know
     // where they have to stop. A card laid over it would be dark lettering on
@@ -3709,6 +3765,9 @@ void AppWindow::drawStatusColumn() {
     const float cardL = colTL.x + kPad;
     const float cardR = colBR.x - kPad;
     float y = bodyTop;
+    const bool enlargeCards =
+        valuePx > baseValuePx &&
+        !(statusEnlargeFailedRoom_ >= 0.0f && cardsBottom - bodyTop <= statusEnlargeFailedRoom_ + 0.5f);
 
     const double nowS = ImGui::GetTime();
     const ImU32 kFaint = cascade::gui::theme::kInkFaint;
@@ -3744,14 +3803,31 @@ void AppWindow::drawStatusColumn() {
                 cascade::gui::fittedLineHeight(legendF, tinyPx, lines[i].text, room, fits[i]);
             linesH += 1.0f + std::max(tinyH, lh);
         }
-        const float h = 6.0f + tinyH + 2.0f + valueH + linesH + 6.0f;
+        // "ENLARGE EVERY READING" NEVER COSTS A CARD. The column's cards are
+        // drawn at the enlarged size only while all of them fit at it: the
+        // first frame one does not, the column's height is remembered and the
+        // cards go back to today's size until the column is taller than that
+        // (statusEnlargeFailedRoom_), and the card that did not fit is tried
+        // at today's size at once. A smaller figure is still a reading; a
+        // skipped card is not. (The theme census found WEB ACCESS dropping at
+        // 1280 x 720 before this existed.)
+        float cardValuePx = enlargeCards ? valuePx : baseValuePx;
+        float cardValueH = enlargeCards ? valueH : baseValueH;
+        float h = 6.0f + tinyH + 2.0f + cardValueH + linesH + 6.0f;
+        if (y + h > cardsBottom && cardValuePx > baseValuePx) {
+            statusEnlargeFailedRoom_ = cardsBottom - bodyTop;
+            cardValuePx = baseValuePx;
+            cardValueH = baseValueH;
+            h = 6.0f + tinyH + 2.0f + cardValueH + linesH + 6.0f;
+        }
         if (y + h > cardsBottom) { return; }
+        cascade::gui::census::note(std::string("status:") + caption);
         const ImVec2 tl(cardL, y);
         const ImVec2 br(cardR, y + h);
-        dl->AddRectFilled(tl, br, cascade::gui::theme::kWell,
+        // A status card is a well ("well") with a border ("border").
+        dl->AddRectFilled(tl, br, theme::toneHex(0x14110C, 255, theme::ink::Well),
                           cascade::gui::theme::kKeyRounding);
-        dl->AddRect(tl, br,
-                    cascade::gui::theme::withAlpha(cascade::gui::theme::kBrassDark, 0.90f),
+        dl->AddRect(tl, br, theme::toneHex(0x4A4234, 230, theme::ink::Border),
                     cascade::gui::theme::kKeyRounding, 0, cascade::gui::theme::kHairline);
         // raised=false: the hairline of light along the BOTTOM and right, which
         // is the whole difference between a card sitting on the plate and one
@@ -3772,10 +3848,10 @@ void AppWindow::drawStatusColumn() {
         ty += tinyH + 2.0f;
         ImFont* valueF = statusValueFace(value);
         dl->AddText(valueF,
-                    cascade::gui::fitTextPx(valueF, valuePx, value, room,
-                                            cascade::gui::fitFloorFor(valuePx)),
+                    cascade::gui::fitTextPx(valueF, cardValuePx, value, room,
+                                            cascade::gui::fitFloorFor(cardValuePx)),
                     ImVec2(tl.x + 8.0f, ty), valueCol, value);
-        ty += valueH;
+        ty += cardValueH;
         for (int i = 0; i < lineCount && i < kMaxLines; ++i) {
             ty += 1.0f;
             float lh = tinyH;
@@ -4254,14 +4330,14 @@ void AppWindow::drawStatusColumn() {
     // column too short to hold it above the title rule.
     if (plateShown && plateTL.y > bodyTop && plateBR.x > plateTL.x + 16.0f) {
         const float round = cascade::gui::theme::kKeyRounding;
-        dl->AddRectFilled(plateTL, plateBR, cascade::gui::theme::kBrassShade, round);
+        // The maker's plate is the deck's metal ("deck"), engraved in its ink.
+        const ImU32 makerTop = theme::toneHex(0x7D7360, 255, theme::ink::DeckTop);
+        const ImU32 makerBot = theme::toneHex(0x6E6552, 255, theme::ink::DeckBot);
+        dl->AddRectFilled(plateTL, plateBR, makerTop, round);
         if (plateBR.x - plateTL.x > round * 2.0f) {
             dl->AddRectFilledMultiColor(ImVec2(plateTL.x + round, plateTL.y),
-                                        ImVec2(plateBR.x - round, plateBR.y),
-                                        cascade::gui::theme::kBrassShade,
-                                        cascade::gui::theme::kBrassShade,
-                                        cascade::gui::theme::kBrassMid,
-                                        cascade::gui::theme::kBrassMid);
+                                        ImVec2(plateBR.x - round, plateBR.y), makerTop,
+                                        makerTop, makerBot, makerBot);
         }
         cascade::gui::addBenchBevel(dl, plateTL, plateBR, round, true);
         const float midX = (plateTL.x + plateBR.x) * 0.5f;
@@ -4316,6 +4392,11 @@ static_assert(kPlateTopY + cascade::gui::kFreqPlateH + kPlateFootMarginY <= kBar
 // be checked against it without an open frame; it is the bar's scale
 // reference below and the left limit of the meters and the mute banner.
 constexpr float kCoreW = cascade::gui::kDeckCoreW;
+// The deck's measurements for other counter layouts live in tune_control.hpp
+// (deckCoreW, deckBarH, deckVolumeCx) and are built from the same numbers.
+static_assert(kBarH == cascade::gui::kDeckBarH && kPlateTopY == cascade::gui::kDeckPlateTopY &&
+                  kPlateFootMarginY == cascade::gui::kDeckPlateFootMarginY,
+              "the deck's measurements and tune_control.hpp's copy must agree");
 // Where the MASTER compartment ends and the counter's begins. 272 in the
 // reference; 320 in 0.84.0 so the four lamps stand in one row under Georgia,
 // 384 in 0.84.1 ("move the counter and the volume dial over, it looks a
@@ -4435,7 +4516,8 @@ void barEngrave(ImDrawList* dl, ImVec2 at, float px, const char* text, bool cent
     if (centred) { at.x -= barTrackedWidth(f, px, text, track) * 0.5f; }
     const ImU32 lip =
         cascade::gui::theme::withAlpha(cascade::gui::theme::kBrassTint, 0.75f);
-    const ImU32 cut = cascade::gui::theme::withAlpha(cascade::gui::theme::kVoid, 0.90f);
+    // The cut is the deck's own ink (foxsdr-ui/1 "deckInk").
+    const ImU32 cut = theme::tone(0x0D, 0x0B, 0x07, 230, theme::ink::DeckInk);
     float x = at.x;
     for (const char* p = text; *p != '\0';) {
         unsigned int cp = 0;
@@ -4469,11 +4551,16 @@ void AppWindow::drawToolbar() {
     // that limit existed this floor was a claim the code could not keep: at
     // 300 px of width the dial was drawn 160 px past the bar's right edge, the
     // child clipped it, and the application had no volume control at all.
-    float scale = 1.0f;
-    if (availW > 0.0f && availW < kCoreW) {
-        scale = std::max(kBarMinScale, availW / kCoreW);
-    }
-    const float barH = kBarH * scale;
+    //
+    // THE COUNTER'S LAYOUT DECIDES THE CLUSTER (themes, 2026-09-25): its size
+    // and whether it has switches (gui/tune_control.hpp, CounterLayout). The
+    // 1x counter keeps today's rule exactly; the enlarged one may not cost the
+    // meters, so the deck is drawn smaller until they fit (deckScale), and a
+    // 2x plate with its switches makes the bar taller (deckBarH).
+    const cascade::gui::CounterLayout layout{counterScale_, counterSwitches_};
+    const float coreW = cascade::gui::deckCoreW(layout);
+    const float scale = cascade::gui::deckScale(availW, layout, kBarMinScale);
+    const float barH = cascade::gui::deckBarH(layout) * scale;
 
     // DRAWN IN A CHILD, so the bar clips itself. Explicit geometry means an
     // item can be asked for at a position a narrow window cannot hold, and a
@@ -4510,16 +4597,19 @@ void AppWindow::drawToolbar() {
 
     // The brass the deck is machined from, lit from above like every other
     // surface on this face.
-    dl->AddRectFilledMultiColor(barTL, barBR, cascade::gui::theme::kBrassShade,
-                                cascade::gui::theme::kBrassShade,
-                                cascade::gui::theme::kBrassMid,
-                                cascade::gui::theme::kBrassMid);
+    // (foxsdr-ui/1 "deck": its two stops.)
+    const ImU32 deckTop = theme::toneHex(0x7D7360, 255, theme::ink::DeckTop);
+    const ImU32 deckBot = theme::toneHex(0x6E6552, 255, theme::ink::DeckBot);
+    dl->AddRectFilledMultiColor(barTL, barBR, deckTop, deckTop, deckBot, deckBot);
 
     // --- the transport ------------------------------------------------------
     // The label reads the pipeline, not a local flag, so the button can never
     // disagree with the actual thread state - drawBenchStopButton letters
     // itself STOP or START from the same bool.
     const bool running = pipeline_.running();
+    cascade::gui::census::note("deck:stop");
+    cascade::gui::census::rect("deck:stop", X(74.0f) - S(46.0f), Y(85.0f) - S(46.0f),
+                               X(74.0f) + S(46.0f), Y(85.0f) + S(46.0f));
     if (cascade::gui::drawBenchStopButton(dl, ImVec2(X(74.0f), Y(85.0f)), S(46.0f),
                                           running)) {
         if (running) {
@@ -4631,6 +4721,13 @@ void AppWindow::drawToolbar() {
         const float lampPitch = std::max(S(28.0f), widestWord + S(6.0f));
         const float firstX = roomL + widestWord * 0.5f;
         for (int i = 0; i < 4; ++i) {
+            {
+                const float lx = firstX + lampPitch * static_cast<float>(i);
+                const std::string nm = "deck:lamp" + std::to_string(i);
+                cascade::gui::census::note(nm);
+                cascade::gui::census::rect(nm, lx - widestWord * 0.5f, Y(86.0f) - S(7.0f),
+                                           lx + widestWord * 0.5f, Y(86.0f) + S(7.0f));
+            }
             cascade::gui::drawBenchLamp(
                 dl, ImVec2(firstX + lampPitch * static_cast<float>(i), Y(86.0f)), S(7.0f),
                 lamps[i].colour, lamps[i].lit, lamps[i].word);
@@ -4646,14 +4743,22 @@ void AppWindow::drawToolbar() {
     // at either end, the way a plate bolted over a panel's grooves would.
     cascade::gui::addBenchDivider(dl, X(kMasterDividerX), Y(30.0f), Y(135.0f));
     drawFrequencyReadout(X(kMasterDividerX + 12.0f), Y(kPlateTopY), scale);
-    cascade::gui::addBenchDivider(dl, X(kCounterDividerX), Y(30.0f), Y(135.0f));
+    cascade::gui::census::note("deck:counter");
+    cascade::gui::census::rect("deck:counter", X(kMasterDividerX + 12.0f), Y(kPlateTopY),
+                               X(kMasterDividerX + 12.0f + cascade::gui::counterPlateW(layout)),
+                               Y(kPlateTopY + cascade::gui::counterPlateH(layout)));
+    cascade::gui::addBenchDivider(dl, X(cascade::gui::deckCounterDividerX(layout)), Y(30.0f),
+                                  Y(135.0f));
     // THE VOLUME IS A DIAL, in the handoff's 1960s brass. A slider is a
     // perfectly good control and completely wrong on a bench receiver; this
     // one turns, carries its own tick arc, and answers the wheel as well as
     // the hand so it is still usable without a drag.
     {
-        const float cx = X(kVolumeCx);
+        const float cx = X(cascade::gui::deckVolumeCx(layout));
         barEngrave(dl, ImVec2(cx, Y(42.0f)), capPx, tr("VOLUME"), true);
+        cascade::gui::census::note("deck:volume");
+        cascade::gui::census::rect("deck:volume", cx - S(kVolumeR), Y(82.0f) - S(kVolumeR),
+                                   cx + S(kVolumeR), Y(82.0f) + S(kVolumeR));
         const float moved = cascade::gui::drawBrassVolumeKnob(
             dl, ImVec2(cx, Y(82.0f)), S(kVolumeR), volume_);
         if (ImGui::IsItemHovered()) {
@@ -4670,10 +4775,11 @@ void AppWindow::drawToolbar() {
         char vtxt[16];
         std::snprintf(vtxt, sizeof(vtxt), "%.2f", static_cast<double>(volume_));
         ImFont* vf = cascade::gui::fonts::reading();
-        const float vpx = std::max(11.0f, cascade::gui::fonts::kReadingSize * scale);
+        const float vpx = std::max(11.0f, cascade::gui::fonts::kReadingSize * scale *
+                                              cascade::gui::theme::readingsScale());
         const ImVec2 vs = vf->CalcTextSizeA(vpx, FLT_MAX, 0.0f, vtxt);
         dl->AddText(vf, vpx, ImVec2(cx - vs.x * 0.5f, Y(118.0f)),
-                    cascade::gui::theme::kCream, vtxt);
+                    theme::toneHex(0xD8CFB4, 255, theme::ink::DeckInk), vtxt);
     }
 
     // THE TWO METERS, and BOTH ARE DRIVEN BY THE FIGURE PRINTED UNDER THEM.
@@ -4710,7 +4816,7 @@ void AppWindow::drawToolbar() {
     // into the volume dial - the rule, and why it is as tight as it is, are
     // metersFitOnBar's in gui/tune_control.hpp, where a test holds it to the
     // bar a fresh install opens with.
-    const bool showMeters = cascade::gui::metersFitOnBar(barW, kCoreW);
+    const bool showMeters = cascade::gui::deckMetersFit(barW, layout, scale);
     if (showMeters) {
         const float my = barTL.y + 28.0f;
 
@@ -4722,6 +4828,8 @@ void AppWindow::drawToolbar() {
         char rateTxt[32];
         std::snprintf(rateTxt, sizeof(rateTxt), haveRate ? "%.3f MS/s" : "--",
                       rate / 1.0e6);
+        cascade::gui::census::note("deck:meter.rate");
+        cascade::gui::census::rect("deck:meter.rate", meter1X, my, meter1X + kMeterW, my + meterH);
         cascade::gui::drawBenchMeter(dl, ImVec2(meter1X, my), kMeterW, meterH,
                                      tr("SAMPLE RATE"), static_cast<float>(rate / 10.0e6),
                                      haveRate, rateTxt, "MS/s");
@@ -4761,6 +4869,9 @@ void AppWindow::drawToolbar() {
                                                       ImGui::GetIO().DeltaTime);
         char volTxt[32];
         cascade::gui::formatVolumeText(volTxt, sizeof(volTxt), audible, haveAudio);
+        cascade::gui::census::note("deck:meter.volume");
+        cascade::gui::census::rect("deck:meter.volume", meter2X, my, meter2X + kMeterW,
+                                   my + meterH);
         cascade::gui::drawBenchMeter(dl, ImVec2(meter2X, my), kMeterW, meterH,
                                      tr("VOLUME"), volumeNeedle_, haveAudio, volTxt,
                                      "dB");
@@ -4777,8 +4888,9 @@ void AppWindow::drawToolbar() {
     // gui/tune_control.hpp decides which, in the same terms the meters rule
     // uses, so the two cannot disagree about where the middle ends.
     {
-        ImVec2 at(X(kCoreW) + cascade::gui::kMuteBannerEdgeClearance, Y(62.0f));
-        if (!cascade::gui::muteBannerTakesTheMiddle(barW, kCoreW)) {
+        ImVec2 at(X(coreW) + cascade::gui::kMuteBannerEdgeClearance, Y(62.0f));
+        if (!cascade::gui::muteBannerTakesTheMiddle(barW,
+                                                    layout.scale >= 2 ? coreW * scale : coreW)) {
             at = ImVec2(X(300.0f), Y(124.0f));
         }
         ImGui::SetCursorScreenPos(at);
@@ -4929,7 +5041,7 @@ void drawTunerPlateBody(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, floa
         const float grow = static_cast<float>(i) * 2.0f * s;
         const float drop = static_cast<float>(i) * 1.5f * s;
         dl->AddRectFilled(ImVec2(tl.x - grow, tl.y - grow + drop),
-                          ImVec2(br.x + grow, br.y + grow + drop), IM_COL32(0, 0, 0, 34),
+                          ImVec2(br.x + grow, br.y + grow + drop), theme::shadow(34),
                           r + grow);
     }
     // THE EDGE ("0 0 0 3px #22251a"), then the body in the mid tone with the
@@ -4938,46 +5050,46 @@ void drawTunerPlateBody(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, floa
     // of the corner radius and the corners keep the mid tone, which at four
     // units is not a thing an eye can find.
     dl->AddRectFilled(ImVec2(tl.x - edge, tl.y - edge), ImVec2(br.x + edge, br.y + edge),
-                      hexCol(0x22251a), r + edge);
-    dl->AddRectFilled(tl, br, hexCol(0x4b4f39), r);
+                      theme::toneHex(0x22251a, 255, theme::ink::PlateBot, theme::ink::Black), r + edge);
+    dl->AddRectFilled(tl, br, theme::toneHex(0x4b4f39, 255, theme::ink::PlateTop, theme::ink::PlateBot), r);
     const float midY = (tl.y + br.y) * 0.5f;
-    dl->AddRectFilledMultiColor(ImVec2(tl.x + r, tl.y), ImVec2(br.x - r, midY), hexCol(0x5d6247),
-                                hexCol(0x5d6247), hexCol(0x4b4f39), hexCol(0x4b4f39));
+    dl->AddRectFilledMultiColor(ImVec2(tl.x + r, tl.y), ImVec2(br.x - r, midY), theme::toneHex(0x5d6247, 255, theme::ink::PlateTop),
+                                theme::toneHex(0x5d6247, 255, theme::ink::PlateTop), theme::toneHex(0x4b4f39, 255, theme::ink::PlateTop, theme::ink::PlateBot), theme::toneHex(0x4b4f39, 255, theme::ink::PlateTop, theme::ink::PlateBot));
     dl->AddRectFilledMultiColor(ImVec2(tl.x, tl.y + r), ImVec2(tl.x + r, midY),
-                                lerpCol(hexCol(0x5d6247), hexCol(0x4b4f39), r / (midY - tl.y)),
-                                lerpCol(hexCol(0x5d6247), hexCol(0x4b4f39), r / (midY - tl.y)),
-                                hexCol(0x4b4f39), hexCol(0x4b4f39));
+                                lerpCol(theme::toneHex(0x5d6247, 255, theme::ink::PlateTop), theme::toneHex(0x4b4f39, 255, theme::ink::PlateTop, theme::ink::PlateBot), r / (midY - tl.y)),
+                                lerpCol(theme::toneHex(0x5d6247, 255, theme::ink::PlateTop), theme::toneHex(0x4b4f39, 255, theme::ink::PlateTop, theme::ink::PlateBot), r / (midY - tl.y)),
+                                theme::toneHex(0x4b4f39, 255, theme::ink::PlateTop, theme::ink::PlateBot), theme::toneHex(0x4b4f39, 255, theme::ink::PlateTop, theme::ink::PlateBot));
     dl->AddRectFilledMultiColor(ImVec2(br.x - r, tl.y + r), ImVec2(br.x, midY),
-                                lerpCol(hexCol(0x5d6247), hexCol(0x4b4f39), r / (midY - tl.y)),
-                                lerpCol(hexCol(0x5d6247), hexCol(0x4b4f39), r / (midY - tl.y)),
-                                hexCol(0x4b4f39), hexCol(0x4b4f39));
-    dl->AddRectFilledMultiColor(ImVec2(tl.x + r, midY), ImVec2(br.x - r, br.y), hexCol(0x4b4f39),
-                                hexCol(0x4b4f39), hexCol(0x3e422f), hexCol(0x3e422f));
-    dl->AddRectFilledMultiColor(ImVec2(tl.x, midY), ImVec2(tl.x + r, br.y - r), hexCol(0x4b4f39),
-                                hexCol(0x4b4f39),
-                                lerpCol(hexCol(0x4b4f39), hexCol(0x3e422f), 1.0f - r / (br.y - midY)),
-                                lerpCol(hexCol(0x4b4f39), hexCol(0x3e422f), 1.0f - r / (br.y - midY)));
-    dl->AddRectFilledMultiColor(ImVec2(br.x - r, midY), ImVec2(br.x, br.y - r), hexCol(0x4b4f39),
-                                hexCol(0x4b4f39),
-                                lerpCol(hexCol(0x4b4f39), hexCol(0x3e422f), 1.0f - r / (br.y - midY)),
-                                lerpCol(hexCol(0x4b4f39), hexCol(0x3e422f), 1.0f - r / (br.y - midY)));
+                                lerpCol(theme::toneHex(0x5d6247, 255, theme::ink::PlateTop), theme::toneHex(0x4b4f39, 255, theme::ink::PlateTop, theme::ink::PlateBot), r / (midY - tl.y)),
+                                lerpCol(theme::toneHex(0x5d6247, 255, theme::ink::PlateTop), theme::toneHex(0x4b4f39, 255, theme::ink::PlateTop, theme::ink::PlateBot), r / (midY - tl.y)),
+                                theme::toneHex(0x4b4f39, 255, theme::ink::PlateTop, theme::ink::PlateBot), theme::toneHex(0x4b4f39, 255, theme::ink::PlateTop, theme::ink::PlateBot));
+    dl->AddRectFilledMultiColor(ImVec2(tl.x + r, midY), ImVec2(br.x - r, br.y), theme::toneHex(0x4b4f39, 255, theme::ink::PlateTop, theme::ink::PlateBot),
+                                theme::toneHex(0x4b4f39, 255, theme::ink::PlateTop, theme::ink::PlateBot), theme::toneHex(0x3e422f, 255, theme::ink::PlateBot), theme::toneHex(0x3e422f, 255, theme::ink::PlateBot));
+    dl->AddRectFilledMultiColor(ImVec2(tl.x, midY), ImVec2(tl.x + r, br.y - r), theme::toneHex(0x4b4f39, 255, theme::ink::PlateTop, theme::ink::PlateBot),
+                                theme::toneHex(0x4b4f39, 255, theme::ink::PlateTop, theme::ink::PlateBot),
+                                lerpCol(theme::toneHex(0x4b4f39, 255, theme::ink::PlateTop, theme::ink::PlateBot), theme::toneHex(0x3e422f, 255, theme::ink::PlateBot), 1.0f - r / (br.y - midY)),
+                                lerpCol(theme::toneHex(0x4b4f39, 255, theme::ink::PlateTop, theme::ink::PlateBot), theme::toneHex(0x3e422f, 255, theme::ink::PlateBot), 1.0f - r / (br.y - midY)));
+    dl->AddRectFilledMultiColor(ImVec2(br.x - r, midY), ImVec2(br.x, br.y - r), theme::toneHex(0x4b4f39, 255, theme::ink::PlateTop, theme::ink::PlateBot),
+                                theme::toneHex(0x4b4f39, 255, theme::ink::PlateTop, theme::ink::PlateBot),
+                                lerpCol(theme::toneHex(0x4b4f39, 255, theme::ink::PlateTop, theme::ink::PlateBot), theme::toneHex(0x3e422f, 255, theme::ink::PlateBot), 1.0f - r / (br.y - midY)),
+                                lerpCol(theme::toneHex(0x4b4f39, 255, theme::ink::PlateTop, theme::ink::PlateBot), theme::toneHex(0x3e422f, 255, theme::ink::PlateBot), 1.0f - r / (br.y - midY)));
     // THE INSET LIP ("0 2px 0 #6f745a inset") along the top and the inset
     // shadow ("0 -2px 0 #262a1c inset") along the bottom: the two hairlines
     // that make a flat fill read as a plate with a thickness.
     const float lip = std::max(1.0f, 1.5f * s);
-    dl->AddRectFilled(ImVec2(tl.x + r, tl.y), ImVec2(br.x - r, tl.y + lip), hexCol(0x6f745a));
-    dl->AddRectFilled(ImVec2(tl.x + r, br.y - lip), ImVec2(br.x - r, br.y), hexCol(0x262a1c));
+    dl->AddRectFilled(ImVec2(tl.x + r, tl.y), ImVec2(br.x - r, tl.y + lip), theme::toneHex(0x6f745a, 255, theme::ink::PlateTop, theme::ink::White));
+    dl->AddRectFilled(ImVec2(tl.x + r, br.y - lip), ImVec2(br.x - r, br.y), theme::toneHex(0x262a1c, 255, theme::ink::PlateBot, theme::ink::Black));
 
     // THE FOUR RIVETS, radial "#a9ad93, #5a5d47 60%, #2b2d20" lit from 35%/30%,
     // each with its one-pixel shadow beneath.
-    const GradStop rivet[3] = {{0.0f, hexCol(0xa9ad93)}, {0.6f, hexCol(0x5a5d47)},
-                               {1.0f, hexCol(0x2b2d20)}};
+    const GradStop rivet[3] = {{0.0f, theme::toneHex(0xa9ad93, 255, theme::ink::PlateTop, theme::ink::White)}, {0.6f, theme::toneHex(0x5a5d47, 255, theme::ink::PlateTop, theme::ink::PlateBot)},
+                               {1.0f, theme::toneHex(0x2b2d20, 255, theme::ink::PlateBot, theme::ink::Black)}};
     const float inset = cascade::gui::kFreqPlateRivetInset * s;
     const float rr = cascade::gui::kFreqPlateRivetR * s;
     const ImVec2 at[4] = {ImVec2(tl.x + inset, tl.y + inset), ImVec2(br.x - inset, tl.y + inset),
                           ImVec2(tl.x + inset, br.y - inset), ImVec2(br.x - inset, br.y - inset)};
     for (const ImVec2& c : at) {
-        dl->AddCircleFilled(ImVec2(c.x, c.y + 1.0f * s), rr + 0.5f * s, IM_COL32(0, 0, 0, 150), 0);
+        dl->AddCircleFilled(ImVec2(c.x, c.y + 1.0f * s), rr + 0.5f * s, theme::shadow(150), 0);
         radialDisc(dl, c, rr, ImVec2(-0.3f, -0.4f), rivet, 3, 0.85f, 8);
     }
 }
@@ -5006,28 +5118,28 @@ float drawTunerNamePlate(ImDrawList* dl, const ImVec2& plateTL, float s) {
     // gradient (#c9c3ab to #a9a38b), then the lit top lip (#e6e0c8) and the
     // dark bottom lip (#7d785f) that give it an edge.
     dl->AddRectFilled(ImVec2(tl.x - 1.0f * s, tl.y + 1.0f * s), ImVec2(br.x + 1.0f * s, br.y + 3.0f * s),
-                      IM_COL32(0, 0, 0, 70), 2.0f * s);
-    dl->AddRectFilled(ImVec2(tl.x, tl.y + 1.0f * s), ImVec2(br.x, br.y + 2.0f * s), IM_COL32(0, 0, 0, 90),
+                      theme::shadow(70), 2.0f * s);
+    dl->AddRectFilled(ImVec2(tl.x, tl.y + 1.0f * s), ImVec2(br.x, br.y + 2.0f * s), theme::shadow(90),
                       2.0f * s);
-    dl->AddRectFilledMultiColor(tl, br, hexCol(0xc9c3ab), hexCol(0xc9c3ab), hexCol(0xa9a38b),
-                                hexCol(0xa9a38b));
-    dl->AddLine(ImVec2(tl.x, tl.y + 0.5f), ImVec2(br.x, tl.y + 0.5f), hexCol(0xe6e0c8), 1.0f);
-    dl->AddLine(ImVec2(tl.x, br.y - 0.5f), ImVec2(br.x, br.y - 0.5f), hexCol(0x7d785f), 1.0f);
+    dl->AddRectFilledMultiColor(tl, br, theme::toneHex(0xc9c3ab, 255, theme::ink::PlateInk, theme::ink::White), theme::toneHex(0xc9c3ab, 255, theme::ink::PlateInk, theme::ink::White), theme::toneHex(0xa9a38b, 255, theme::ink::PlateInk, theme::ink::PlateBot),
+                                theme::toneHex(0xa9a38b, 255, theme::ink::PlateInk, theme::ink::PlateBot));
+    dl->AddLine(ImVec2(tl.x, tl.y + 0.5f), ImVec2(br.x, tl.y + 0.5f), theme::toneHex(0xe6e0c8, 255, theme::ink::PlateInk, theme::ink::White), 1.0f);
+    dl->AddLine(ImVec2(tl.x, br.y - 0.5f), ImVec2(br.x, br.y - 0.5f), theme::toneHex(0x7d785f, 255, theme::ink::PlateInk, theme::ink::PlateBot), 1.0f);
     // The two screw dots (#4a4634, lit beneath with #ddd8c0).
     const float cy = (tl.y + br.y) * 0.5f;
     const float dr = dot * 0.5f;
     for (const float cx : {tl.x + pad + dr, br.x - pad - dr}) {
-        dl->AddCircleFilled(ImVec2(cx, cy + 1.0f), dr, hexCol(0xddd8c0), 0);
-        dl->AddCircleFilled(ImVec2(cx, cy), dr, hexCol(0x4a4634), 0);
+        dl->AddCircleFilled(ImVec2(cx, cy + 1.0f), dr, theme::toneHex(0xddd8c0, 255, theme::ink::PlateInk, theme::ink::White), 0);
+        dl->AddCircleFilled(ImVec2(cx, cy), dr, theme::toneHex(0x4a4634, 255, theme::ink::PlateBot, theme::ink::PlateInk), 0);
     }
     // The engraving: ink #2b2a20 over a light shadow one pixel down
     // (text-shadow 0 1px 0 rgba(255,255,255,.35)) - the cut and the lit lip
     // of the cut, the same treatment barEngrave gives the deck's captions.
     const float textH = f->CalcTextSizeA(px, FLT_MAX, 0.0f, "T").y;
     const ImVec2 textAt(tl.x + pad + dot + gap, cy - textH * 0.5f);
-    plateTrackedText(dl, f, px, ImVec2(textAt.x, textAt.y + 1.0f), IM_COL32(255, 255, 255, 90), title,
+    plateTrackedText(dl, f, px, ImVec2(textAt.x, textAt.y + 1.0f), theme::sheen(90), title,
                      track);
-    plateTrackedText(dl, f, px, textAt, hexCol(0x2b2a20), title, track);
+    plateTrackedText(dl, f, px, textAt, theme::toneHex(0x2b2a20, 255, theme::ink::PlateBot, theme::ink::Black), title, track);
     return br.x;
 }
 
@@ -5055,14 +5167,14 @@ void drawTunerStatusCluster(ImDrawList* dl, const ImVec2& plateTL, const ImVec2&
     const float readW = plateTrackedText(nullptr, rf, rpx, ImVec2(0.0f, 0.0f), 0u, mhz, rtrack);
     const float readH = rf->CalcTextSizeA(rpx, FLT_MAX, 0.0f, "0").y;
     x -= readW;
-    plateTrackedText(dl, rf, rpx, ImVec2(x, cy - readH * 0.5f), hexCol(0xe8c98a), mhz, rtrack);
+    plateTrackedText(dl, rf, rpx, ImVec2(x, cy - readH * 0.5f), theme::toneHex(0xe8c98a, 255, theme::ink::Reading), mhz, rtrack);
     x -= gap;
 
     // "MHz" (#c9c9b0).
     const float labelH = lf->CalcTextSizeA(lpx, FLT_MAX, 0.0f, "M").y;
     const float mhzW = plateTrackedText(nullptr, lf, lpx, ImVec2(0.0f, 0.0f), 0u, "MHz", ltrack);
     x -= mhzW;
-    plateTrackedText(dl, lf, lpx, ImVec2(x, cy - labelH * 0.5f), hexCol(0xc9c9b0), "MHz", ltrack);
+    plateTrackedText(dl, lf, lpx, ImVec2(x, cy - labelH * 0.5f), theme::toneHex(0xc9c9b0, 255, theme::ink::PlateInk), "MHz", ltrack);
     x -= gap;
 
     // THE POWER LAMP: 14 units in the reference, radial "#ffb04a, #c4451a
@@ -5080,15 +5192,15 @@ void drawTunerStatusCluster(ImDrawList* dl, const ImVec2& plateTL, const ImVec2&
     if (lit) {
         for (int i = 4; i >= 1; --i) {
             dl->AddCircleFilled(lc, lr + ringDark + ringLite + static_cast<float>(i) * 1.5f * s,
-                                IM_COL32(255, 120, 40, 22), 0);
+                                theme::tone(255, 120, 40, 22, theme::ink::Accent), 0);
         }
     }
-    dl->AddCircleFilled(lc, lr + ringDark + ringLite, hexCol(0x6a6e55), 0);
-    dl->AddCircleFilled(lc, lr + ringDark, hexCol(0x2a2c20), 0);
-    const GradStop lampOn[3] = {{0.0f, hexCol(0xffb04a)}, {0.6f, hexCol(0xc4451a)},
-                                {1.0f, hexCol(0x5a1a08)}};
-    const GradStop lampOff[3] = {{0.0f, hexCol(0x7a3a1a)}, {0.6f, hexCol(0x3a1208)},
-                                 {1.0f, hexCol(0x1a0804)}};
+    dl->AddCircleFilled(lc, lr + ringDark + ringLite, theme::toneHex(0x6a6e55, 255, theme::ink::PlateTop, theme::ink::White), 0);
+    dl->AddCircleFilled(lc, lr + ringDark, theme::toneHex(0x2a2c20, 255, theme::ink::PlateBot, theme::ink::Black), 0);
+    const GradStop lampOn[3] = {{0.0f, theme::toneHex(0xffb04a, 255, theme::ink::Accent, theme::ink::White)}, {0.6f, theme::toneHex(0xc4451a, 255, theme::ink::Accent, theme::ink::Black)},
+                                {1.0f, theme::toneHex(0x5a1a08, 255, theme::ink::Accent, theme::ink::Black)}};
+    const GradStop lampOff[3] = {{0.0f, theme::toneHex(0x7a3a1a, 255, theme::ink::Accent, theme::ink::Black)}, {0.6f, theme::toneHex(0x3a1208, 255, theme::ink::Accent, theme::ink::Black)},
+                                 {1.0f, theme::toneHex(0x1a0804, 255, theme::ink::Accent, theme::ink::Black)}};
     radialDisc(dl, lc, lr, ImVec2(-0.2f, -0.3f), lit ? lampOn : lampOff, 3, 0.9f, 10);
     x = lc.x - lr - ringDark - ringLite - gap;
 
@@ -5096,7 +5208,7 @@ void drawTunerStatusCluster(ImDrawList* dl, const ImVec2& plateTL, const ImVec2&
     const char* rcvr = tr("RCVR");
     const float rcvrW = plateTrackedText(nullptr, lf, lpx, ImVec2(0.0f, 0.0f), 0u, rcvr, ltrack);
     x -= rcvrW;
-    plateTrackedText(dl, lf, lpx, ImVec2(x, cy - labelH * 0.5f), hexCol(0xc9c9b0), rcvr, ltrack);
+    plateTrackedText(dl, lf, lpx, ImVec2(x, cy - labelH * 0.5f), theme::toneHex(0xc9c9b0, 255, theme::ink::PlateInk), rcvr, ltrack);
 }
 
 // --- the bezel ----------------------------------------------------------------
@@ -5105,16 +5217,18 @@ void drawTunerStatusCluster(ImDrawList* dl, const ImVec2& plateTL, const ImVec2&
 // 3 here, the rings 1.5 each - the whole trim is 3 units, which is what the
 // 5-unit plate padding around it has room for beside the rivets. The
 // reference's inset shadow at its top is black on black and is not drawn.
-void drawTunerBezel(ImDrawList* dl, const ImVec2& plateTL, float s) {
+void drawTunerBezel(ImDrawList* dl, const ImVec2& plateTL, float s,
+                    const cascade::gui::CounterLayout& layout) {
     const ImVec2 tl(plateTL.x + cascade::gui::kFreqBezelX * s, plateTL.y + cascade::gui::kFreqBezelY * s);
-    const ImVec2 br(tl.x + cascade::gui::kFreqBezelW * s, tl.y + cascade::gui::kFreqBezelH * s);
+    const ImVec2 br(tl.x + cascade::gui::counterBezelW(layout) * s,
+                    tl.y + cascade::gui::counterBezelH(layout) * s);
     const float r = 3.0f * s;
     const float ring = std::max(1.0f, 1.5f * s);
     dl->AddRectFilled(ImVec2(tl.x - ring * 2.0f, tl.y - ring * 2.0f),
-                      ImVec2(br.x + ring * 2.0f, br.y + ring * 2.0f), hexCol(0x6a6e55), r + ring * 2.0f);
-    dl->AddRectFilled(ImVec2(tl.x - ring, tl.y - ring), ImVec2(br.x + ring, br.y + ring), hexCol(0x2a2c20),
+                      ImVec2(br.x + ring * 2.0f, br.y + ring * 2.0f), theme::toneHex(0x6a6e55, 255, theme::ink::PlateTop, theme::ink::White), r + ring * 2.0f);
+    dl->AddRectFilled(ImVec2(tl.x - ring, tl.y - ring), ImVec2(br.x + ring, br.y + ring), theme::toneHex(0x2a2c20, 255, theme::ink::PlateBot, theme::ink::Black),
                       r + ring);
-    dl->AddRectFilled(tl, br, hexCol(0x0b0b09), r);
+    dl->AddRectFilled(tl, br, theme::toneHex(0x0b0b09, 255, theme::ink::DigitBgBot, theme::ink::DigitBgTop), r);
 }
 
 // --- the footer line ---------------------------------------------------------
@@ -5131,11 +5245,11 @@ void drawTunerFooter(ImDrawList* dl, const ImVec2& plateTL, const ImVec2& plateB
     const char* left = "GHz  \xC2\xB7  MHz  \xC2\xB7  kHz  \xC2\xB7  Hz";
     const char* right = "TYPE R-390   SER. 1157";
     plateTrackedText(dl, f, px, ImVec2(plateTL.x + cascade::gui::kFreqPlatePadX * s, cy - h * 0.5f),
-                     hexCol(0xb9b99f), left, track);
+                     theme::toneHex(0xb9b99f, 255, theme::ink::PlateInk), left, track);
     const float rw = plateTrackedText(nullptr, f, px, ImVec2(0.0f, 0.0f), 0u, right, track);
     plateTrackedText(dl, f, px,
                      ImVec2(plateBR.x - cascade::gui::kFreqPlatePadX * s - rw, cy - h * 0.5f),
-                     hexCol(0xb9b99f), right, track);
+                     theme::toneHex(0xb9b99f, 255, theme::ink::PlateInk), right, track);
 }
 
 // --- one Nixie tube ------------------------------------------------------------
@@ -5170,20 +5284,21 @@ void drawNixieTube(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, char digi
     // the glass, the outer one darker.
     tubePath(dl, ImVec2(tl.x - 2.5f * s, tl.y - 2.5f * s), ImVec2(br.x + 2.5f * s, br.y + 2.5f * s),
              rTop + 2.5f * s, rBot + 2.5f * s);
-    dl->PathStroke(hexCol(0x1a1510), ImDrawFlags_Closed, std::max(1.0f, 1.0f * s));
+    dl->PathStroke(theme::toneHex(0x1a1510, 255, theme::ink::DigitBgBot, theme::ink::DigitBgTop), ImDrawFlags_Closed, std::max(1.0f, 1.0f * s));
     tubePath(dl, ImVec2(tl.x - 1.0f * s, tl.y - 1.0f * s), ImVec2(br.x + 1.0f * s, br.y + 1.0f * s),
              rTop + 1.0f * s, rBot + 1.0f * s);
-    dl->PathStroke(hexCol(0x3a2c1c), ImDrawFlags_Closed, std::max(1.0f, 2.0f * s));
+    dl->PathStroke(theme::toneHex(0x3a2c1c, 255, theme::ink::DigitBgBot, theme::ink::DigitBgTop), ImDrawFlags_Closed, std::max(1.0f, 2.0f * s));
 
     // THE INTERIOR: the glass filled in the gradient's outer colour, then the
     // "ellipse at 50% 20%" gradient as concentric ellipses clipped to the
     // glass - "#2a1d10 0%, #120c06 60%, #050403 100%".
     tubePath(dl, tl, br, rTop, rBot);
-    dl->PathFillConvex(hexCol(paint.cellRgb));
+    dl->PathFillConvex(theme::toneHex(paint.cellRgb, 255, theme::ink::DigitBgBot));
     dl->PushClipRect(tl, br, true);
     {
-        const GradStop glass[3] = {{0.0f, hexCol(0x2a1d10)}, {0.6f, hexCol(0x120c06)},
-                                   {1.0f, hexCol(paint.cellRgb)}};
+        const GradStop glass[3] = {{0.0f, theme::toneHex(0x2a1d10, 255, theme::ink::DigitBgTop)},
+                                   {0.6f, theme::toneHex(0x120c06, 255, theme::ink::DigitBgTop, theme::ink::DigitBgBot)},
+                                   {1.0f, theme::toneHex(paint.cellRgb, 255, theme::ink::DigitBgBot)}};
         const ImVec2 gc(tl.x + w * 0.5f, tl.y + h * 0.2f);
         const float rx = w * 0.71f;
         const float ry = h * 1.13f;
@@ -5197,14 +5312,14 @@ void drawNixieTube(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, char digi
         // horizontal.
         const float pitch = std::max(3.0f, 5.0f * s);
         for (float x = tl.x + pitch; x < br.x; x += pitch) {
-            dl->AddLine(ImVec2(x, tl.y), ImVec2(x, br.y), IM_COL32(255, 180, 90, 15), 1.0f);
+            dl->AddLine(ImVec2(x, tl.y), ImVec2(x, br.y), theme::tone(255, 180, 90, 15, theme::ink::Digit), 1.0f);
         }
         for (float y = tl.y + pitch; y < br.y; y += pitch) {
-            dl->AddLine(ImVec2(tl.x, y), ImVec2(br.x, y), IM_COL32(255, 180, 90, 13), 1.0f);
+            dl->AddLine(ImVec2(tl.x, y), ImVec2(br.x, y), theme::tone(255, 180, 90, 13, theme::ink::Digit), 1.0f);
         }
         // The inset top highlight ("0 2px 0 rgba(255,255,255,.08) inset").
         dl->AddLine(ImVec2(tl.x + rTop, tl.y + 1.0f), ImVec2(br.x - rTop, tl.y + 1.0f),
-                    IM_COL32(255, 255, 255, 20), std::max(1.0f, 2.0f * s));
+                    theme::sheen(20), std::max(1.0f, 2.0f * s));
 
         // THE FIGURES. Nova Mono, centred - the monospaced digit face the
         // counter has always used, so a 1 sits where a 8 did.
@@ -5221,7 +5336,7 @@ void drawNixieTube(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, char digi
         const ImVec2 at(tl.x + (w - sz.x) * 0.5f, tl.y + (h - sz.y) * 0.5f);
         // The ghost cathode: every tube carries all ten figures stacked, and
         // the unlit ones show faintly - rgba(120,70,30,.28).
-        dl->AddText(font, fontPx, at8, IM_COL32(120, 70, 30, 71), "8");
+        dl->AddText(font, fontPx, at8, theme::tone(120, 70, 30, 71, theme::ink::DigitDim, theme::ink::Digit), "8");
         if (bright) {
             // THE GLOW, three text-shadows in the reference ("0 0 6px #ff8a1f,
             // 0 0 14px #ff6a00, 0 0 28px rgba(255,90,0,.6)"): the widest as a
@@ -5233,7 +5348,7 @@ void drawNixieTube(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, char digi
                 dl->AddEllipseFilled(gc2,
                                      ImVec2(sz.x * 0.45f + paint.haloUnits * s * t,
                                             sz.y * 0.45f + paint.haloUnits * s * t),
-                                     IM_COL32(255, 90, 0, 14), 0.0f, 0);
+                                     theme::tone(255, 90, 0, 14, theme::ink::Digit), 0.0f, 0);
             }
             // The two rings' reach is the style's (glowSpread, whose half is
             // also the floor the outer ring had); the WIDER ring's colour stays
@@ -5241,8 +5356,8 @@ void drawNixieTube(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, char digi
             // reader actually sees around the figure - is the style's.
             const float o2 = std::max(paint.glowSpread * 0.5f, paint.glowSpread * s);
             const float o1 = std::max(1.0f, 1.5f * s);
-            const ImU32 wide = IM_COL32(255, 106, 0, 36);
-            const ImU32 tight = hexCol(paint.glowRgb, paint.glowAlpha);
+            const ImU32 wide = theme::tone(255, 106, 0, 36, theme::ink::Digit);
+            const ImU32 tight = theme::toneHex(paint.glowRgb, paint.glowAlpha, theme::ink::Digit);
             const float diag = 0.7071f;
             const ImVec2 ring[8] = {ImVec2(1, 0), ImVec2(-1, 0), ImVec2(0, 1), ImVec2(0, -1),
                                     ImVec2(diag, diag), ImVec2(-diag, diag), ImVec2(diag, -diag),
@@ -5259,11 +5374,11 @@ void drawNixieTube(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, char digi
                                 txt);
                 }
             }
-            dl->AddText(font, fontPx, at, hexCol(paint.digitRgb, paint.digitAlpha), txt);
+            dl->AddText(font, fontPx, at, theme::toneHex(paint.digitRgb, paint.digitAlpha, theme::ink::Digit), txt);
         } else {
             // A leading zero: lit only enough to be read as a figure that is
             // there, with none of the glow that says it carries value.
-            dl->AddText(font, fontPx, at, hexCol(paint.digitRgb, paint.dimAlpha), txt);
+            dl->AddText(font, fontPx, at, theme::toneHex(paint.digitRgb, paint.dimAlpha, theme::ink::Digit), txt);
         }
     }
     dl->PopClipRect();
@@ -5297,8 +5412,8 @@ void drawFlatDigitCell(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, char 
     // trade away. The corner radius is the plate's own 4-unit corner, halved,
     // which keeps ten cells reading as ten cells rather than as one bar.
     const float r = std::max(1.0f, 2.0f * s);
-    dl->AddRectFilled(tl, br, hexCol(paint.cellRgb), r);
-    dl->AddRect(tl, br, IM_COL32(255, 255, 255, 18), r, 0, std::max(1.0f, 1.0f * s));
+    dl->AddRectFilled(tl, br, theme::toneHex(paint.cellRgb, 255, theme::ink::DigitBg), r);
+    dl->AddRect(tl, br, theme::tone(255, 255, 255, 18, theme::ink::Border), r, 0, std::max(1.0f, 1.0f * s));
     dl->PushClipRect(tl, br, true);
     {
         // The same monospaced digit face the counter has always used, so a 1
@@ -5324,8 +5439,8 @@ void drawFlatDigitCell(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, char 
                         gc,
                         ImVec2(sz.x * 0.45f + paint.haloUnits * s * t,
                                sz.y * 0.45f + paint.haloUnits * s * t),
-                        hexCol(paint.glowRgb,
-                               static_cast<unsigned>(paint.glowAlpha) / 6u),
+                        theme::toneHex(paint.glowRgb,
+                               static_cast<int>(static_cast<unsigned>(paint.glowAlpha) / 6u), theme::ink::Digit),
                         0.0f, 0);
                 }
             }
@@ -5340,7 +5455,7 @@ void drawFlatDigitCell(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, char 
                 const unsigned a = std::max(
                     1u, static_cast<unsigned>(paint.glowAlpha) * static_cast<unsigned>(k + 1) /
                             static_cast<unsigned>(paint.glowLayers));
-                const ImU32 col = hexCol(paint.glowRgb, a);
+                const ImU32 col = theme::toneHex(paint.glowRgb, static_cast<int>(a), theme::ink::Digit);
                 for (const ImVec2& d : ring) {
                     dl->AddText(font, fontPx, ImVec2(at.x + d.x * off, at.y + d.y * off), col, txt);
                 }
@@ -5351,7 +5466,7 @@ void drawFlatDigitCell(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, char 
         // difference between a neon sign and a smear. A leading zero carries no
         // value and is dimmed, the deck's own rule in every style.
         dl->AddText(font, fontPx, at,
-                    hexCol(paint.digitRgb, bright ? paint.digitAlpha : paint.dimAlpha), txt);
+                    theme::toneHex(paint.digitRgb, bright ? paint.digitAlpha : paint.dimAlpha, theme::ink::Digit), txt);
     }
     dl->PopClipRect();
 }
@@ -5405,7 +5520,7 @@ void drawToggleSwitch(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, bool u
         const ImVec2 at(cx - wordW * 0.5f, i == 0 ? tl.y : br.y - sh);
         // addTrackedText stops BEFORE a glyph that would pass maxX, so a cut
         // word ends on a whole letter, never on a sliver of one.
-        cascade::gui::addTrackedText(dl, f, spx, at, hexCol(0xd8d3b8), words[i], strack,
+        cascade::gui::addTrackedText(dl, f, spx, at, theme::toneHex(0xd8d3b8, 255, theme::ink::PlateInk), words[i], strack,
                                      fit.fits ? FLT_MAX : at.x + keep - 1.5f);
     }
 
@@ -5416,16 +5531,16 @@ void drawToggleSwitch(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, bool u
     const ImVec2 cc(cx, tl.y + h * 0.5f);
     const float collarR = 7.0f * s;
     const float ring = std::max(1.0f, 1.5f * s);
-    dl->AddCircleFilled(ImVec2(cc.x, cc.y + 1.0f * s), collarR + ring + 1.0f * s, IM_COL32(0, 0, 0, 120), 0);
-    dl->AddCircleFilled(cc, collarR + ring, hexCol(0x6b6f54), 0);
-    const GradStop chrome[4] = {{0.0f, hexCol(0xd9d9d2)}, {0.45f, hexCol(0x8f9088)},
-                                {0.75f, hexCol(0x4a4b45)}, {1.0f, hexCol(0x262722)}};
+    dl->AddCircleFilled(ImVec2(cc.x, cc.y + 1.0f * s), collarR + ring + 1.0f * s, theme::shadow(120), 0);
+    dl->AddCircleFilled(cc, collarR + ring, theme::toneHex(0x6b6f54, 255, theme::ink::PlateTop, theme::ink::White), 0);
+    const GradStop chrome[4] = {{0.0f, theme::toneHex(0xd9d9d2, 255, theme::ink::KnobCap, theme::ink::KnobBot)}, {0.45f, theme::toneHex(0x8f9088, 255, theme::ink::KnobCap, theme::ink::KnobBot)},
+                                {0.75f, theme::toneHex(0x4a4b45, 255, theme::ink::KnobCap, theme::ink::KnobBot)}, {1.0f, theme::toneHex(0x262722, 255, theme::ink::KnobCap, theme::ink::KnobBot)}};
     radialDisc(dl, cc, collarR, ImVec2(-0.2f, -0.3f), chrome, 4, 0.85f, 12);
     // THE BORE the lever comes out of: "#0f0f0c" with a lit top edge inside.
     const float boreR = collarR * (6.0f / 13.0f);
-    dl->AddCircleFilled(cc, boreR, hexCol(0x0f0f0c), 0);
+    dl->AddCircleFilled(cc, boreR, theme::toneHex(0x0f0f0c, 255, theme::ink::KnobBot, theme::ink::Black), 0);
     dl->AddLine(ImVec2(cc.x - boreR * 0.6f, cc.y - boreR + 1.0f), ImVec2(cc.x + boreR * 0.6f, cc.y - boreR + 1.0f),
-                IM_COL32(255, 255, 255, 60), 1.0f);
+                theme::sheen(60), 1.0f);
 
     // THE LEVER: 8 x 30 in the reference, turning about a point 4 below the
     // collar's centre, 0 degrees hanging down and 180 standing up. Here it
@@ -5451,18 +5566,18 @@ void drawToggleSwitch(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, bool u
     // Shadow ("0 2px 3px rgba(0,0,0,.6)"), then the steel: "#3a3a35, #8a8a82
     // 45%, #3a3a35" across its width, as two banded rects.
     dl->AddRectFilled(ImVec2(lx0 - 1.0f, y0 + 2.0f * s), ImVec2(lx1 + 1.0f, y1 + 2.0f * s),
-                      IM_COL32(0, 0, 0, 110), leverW * 0.5f);
+                      theme::shadow(110), leverW * 0.5f);
     const float lmid = lx0 + leverW * 0.45f;
-    dl->AddRectFilledMultiColor(ImVec2(lx0, y0), ImVec2(lmid, y1), hexCol(0x3a3a35), hexCol(0x8a8a82),
-                                hexCol(0x8a8a82), hexCol(0x3a3a35));
-    dl->AddRectFilledMultiColor(ImVec2(lmid, y0), ImVec2(lx1, y1), hexCol(0x8a8a82), hexCol(0x3a3a35),
-                                hexCol(0x3a3a35), hexCol(0x8a8a82));
+    dl->AddRectFilledMultiColor(ImVec2(lx0, y0), ImVec2(lmid, y1), theme::toneHex(0x3a3a35, 255, theme::ink::KnobCap, theme::ink::KnobBot), theme::toneHex(0x8a8a82, 255, theme::ink::KnobCap, theme::ink::KnobBot),
+                                theme::toneHex(0x8a8a82, 255, theme::ink::KnobCap, theme::ink::KnobBot), theme::toneHex(0x3a3a35, 255, theme::ink::KnobCap, theme::ink::KnobBot));
+    dl->AddRectFilledMultiColor(ImVec2(lmid, y0), ImVec2(lx1, y1), theme::toneHex(0x8a8a82, 255, theme::ink::KnobCap, theme::ink::KnobBot), theme::toneHex(0x3a3a35, 255, theme::ink::KnobCap, theme::ink::KnobBot),
+                                theme::toneHex(0x3a3a35, 255, theme::ink::KnobCap, theme::ink::KnobBot), theme::toneHex(0x8a8a82, 255, theme::ink::KnobCap, theme::ink::KnobBot));
     // THE BALL TIP: radial "#fff, #b9b9b1 45%, #5a5a54 80%, #2a2a26" lit
     // from 35%/30%, with its own shadow.
     const ImVec2 bc(cx, pivotY + dir * ballAt);
-    dl->AddCircleFilled(ImVec2(bc.x, bc.y + 2.0f * s), ballR + 0.5f * s, IM_COL32(0, 0, 0, 120), 0);
-    const GradStop ball[4] = {{0.0f, hexCol(0xffffff)}, {0.45f, hexCol(0xb9b9b1)},
-                              {0.8f, hexCol(0x5a5a54)}, {1.0f, hexCol(0x2a2a26)}};
+    dl->AddCircleFilled(ImVec2(bc.x, bc.y + 2.0f * s), ballR + 0.5f * s, theme::shadow(120), 0);
+    const GradStop ball[4] = {{0.0f, theme::toneHex(0xffffff, 255, theme::ink::KnobCap, theme::ink::KnobBot)}, {0.45f, theme::toneHex(0xb9b9b1, 255, theme::ink::KnobCap, theme::ink::KnobBot)},
+                              {0.8f, theme::toneHex(0x5a5a54, 255, theme::ink::KnobCap, theme::ink::KnobBot)}, {1.0f, theme::toneHex(0x2a2a26, 255, theme::ink::KnobCap, theme::ink::KnobBot)}};
     radialDisc(dl, bc, ballR, ImVec2(-0.3f, -0.4f), ball, 4, 0.9f, 10);
 }
 
@@ -5499,7 +5614,7 @@ bool switchHalfButton(const ImVec2& tl, const ImVec2& br, bool upperHalf, int ce
         ImGui::SetTooltip("%s", upperHalf ? tr("Step this digit up") : tr("Step this digit down"));
     }
     if (debugOutline) {
-        ImGui::GetForegroundDrawList()->AddRect(outTL, outBR, IM_COL32(255, 255, 0, 255), 0.0f,
+        ImGui::GetForegroundDrawList()->AddRect(outTL, outBR, IM_COL32(255, 255, 0, 255), 0.0f,  // theme-exempt: FOXSDR_DEBUG_INPUT hit-box outline, a developer instrument
                                                 1.0f, 0);
     }
     return fired;
@@ -5576,8 +5691,16 @@ void AppWindow::drawFrequencyReadout(float plateX, float plateY, float scale) {
     // fills it cannot disagree about where the counter ends.
     ImDrawList* fdl = ImGui::GetWindowDrawList();
     const float s = scale;
+    // THE LAYOUT (themes): 1x or 2x figures, with or without the switches. The
+    // default is today's plate exactly (gui/tune_control.hpp, CounterLayout).
+    const cascade::gui::CounterLayout layout{counterScale_, counterSwitches_};
+    // What the cells' own furniture (glow, rims, mesh) is drawn at: the bar's
+    // scale times the counter's, so a doubled tube is a bigger tube, not a
+    // stretched one.
+    const float cellS = s * static_cast<float>(layout.scale >= 2 ? 2 : 1);
     const ImVec2 ptl(plateX, plateY);
-    const ImVec2 pbr(plateX + kFreqPlateW * s, plateY + kFreqPlateH * s);
+    const ImVec2 pbr(plateX + cascade::gui::counterPlateW(layout) * s,
+                     plateY + cascade::gui::counterPlateH(layout) * s);
     drawTunerPlateBody(fdl, ptl, pbr, s);
     drawTunerNamePlate(fdl, ptl, s);
     // The readout is the same TUNED quantity the tubes show, in MHz to four
@@ -5585,7 +5708,7 @@ void AppWindow::drawFrequencyReadout(float plateX, float plateY, float scale) {
     char mhz[32];
     std::snprintf(mhz, sizeof(mhz), "%.4f", std::min(hz, kMaxDisplayHz) / 1.0e6);
     drawTunerStatusCluster(fdl, ptl, pbr, s, pipeline_.running(), mhz);
-    drawTunerBezel(fdl, ptl, s);
+    drawTunerBezel(fdl, ptl, s, layout);
     drawTunerFooter(fdl, ptl, pbr, s);
 
     char digits[16];
@@ -5621,17 +5744,21 @@ void AppWindow::drawFrequencyReadout(float plateX, float plateY, float scale) {
         // THE TUBE, a real item first: the wheel over it tunes this digit and
         // a click opens the typed editor, exactly as the drum aperture it
         // replaces did. Drawn from the rectangle ImGui just registered.
-        const cascade::gui::FreqRect tube = cascade::gui::tubeRectForCell(ptl.x, ptl.y, i, s);
+        const cascade::gui::FreqRect tube =
+            cascade::gui::tubeRectForCell(ptl.x, ptl.y, i, s, layout);
         ImGui::SetCursorScreenPos(ImVec2(tube.x0, tube.y0));
         ImGui::InvisibleButton(("##fd" + std::to_string(i)).c_str(),
                                ImVec2(tube.x1 - tube.x0, tube.y1 - tube.y0));
         if (cellPaint.glassFurniture) {
             drawNixieTube(fdl, ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), digits[i],
-                          significant, s, cellPaint);
+                          significant, cellS, cellPaint);
         } else {
             drawFlatDigitCell(fdl, ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), digits[i],
-                              significant, s, cellPaint);
+                              significant, cellS, cellPaint);
         }
+        // THE COUNTER'S MENU is a right-click on any figure (and on the plate
+        // around them, below).
+        if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) { ImGui::OpenPopup("##counter_menu"); }
 
         // Per-digit wheel tuning. Fractional wheel deltas (touchpads) below
         // one notch still step once, in the delta's direction. Not while the
@@ -5681,8 +5808,15 @@ void AppWindow::drawFrequencyReadout(float plateX, float plateY, float scale) {
         // union of what ImGui registered for the two, so the switch a hand
         // sees and the halves a click lands on cannot be different
         // rectangles.
-        const cascade::gui::FreqRect swUp = cascade::gui::switchRectForCell(ptl.x, ptl.y, i, true, s);
-        const cascade::gui::FreqRect swDn = cascade::gui::switchRectForCell(ptl.x, ptl.y, i, false, s);
+        //
+        // PUT AWAY (Bench Classic XL, or the counter's menu): no switch and no
+        // switch item at all - the wheel over the tube and the typed editor
+        // still tune every digit.
+        if (!layout.switches) { continue; }
+        const cascade::gui::FreqRect swUp =
+            cascade::gui::switchRectForCell(ptl.x, ptl.y, i, true, s, layout);
+        const cascade::gui::FreqRect swDn =
+            cascade::gui::switchRectForCell(ptl.x, ptl.y, i, false, s, layout);
         ImVec2 upTL, upBR, dnTL, dnBR;
         if (switchHalfButton(ImVec2(swUp.x0, swUp.y0), ImVec2(swUp.x1, swUp.y1), true, i,
                              debugSwitchOutline, upTL, upBR)) {
@@ -5698,6 +5832,18 @@ void AppWindow::drawFrequencyReadout(float plateX, float plateY, float scale) {
                          ImVec2(std::max(upBR.x, dnBR.x), dnBR.y), freqLeverUp_[i], s);
     }
 
+    // THE REST OF THE PLATE answers the right-click too - the name plate, the
+    // bezel between the tubes, the footer - so the menu is found wherever on
+    // the counter a hand tries.
+    if (ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) &&
+        ImGui::IsMouseHoveringRect(ptl, pbr) && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+        ImGui::OpenPopup("##counter_menu");
+    }
+    if (ImGui::BeginPopup("##counter_menu")) {
+        drawCounterMenu();
+        ImGui::EndPopup();
+    }
+
     // --- Typed entry (click a tube) ------------------------------------------
     // Enter commits, Escape or clicking away cancels. The field is seeded in
     // MHz because that is how frequencies are spoken; parseFrequencyHz still
@@ -5705,10 +5851,11 @@ void AppWindow::drawFrequencyReadout(float plateX, float plateY, float scale) {
     // THE TUBES so it sits over them and takes the hover: typing a frequency
     // belongs in the counter's own row, at the size the row has room for.
     if (freqEditing_) {
-        const cascade::gui::FreqRect t0 = cascade::gui::tubeRectForCell(ptl.x, ptl.y, 0, s);
+        const cascade::gui::FreqRect t0 = cascade::gui::tubeRectForCell(ptl.x, ptl.y, 0, s, layout);
         const cascade::gui::FreqRect t9 =
-            cascade::gui::tubeRectForCell(ptl.x, ptl.y, kFreqCells - 1, s);
-        ImGui::PushFont(cascade::gui::fonts::ui(), std::max(14.0f, kFreqTubeH * s * 0.60f));
+            cascade::gui::tubeRectForCell(ptl.x, ptl.y, kFreqCells - 1, s, layout);
+        ImGui::PushFont(cascade::gui::fonts::ui(),
+                        std::max(14.0f, cascade::gui::counterTubeH(layout) * s * 0.60f));
         const float inputH = ImGui::GetFrameHeight();
         ImGui::SetCursorScreenPos(ImVec2(t0.x0, t0.y0 + (t0.y1 - t0.y0 - inputH) * 0.5f));
         ImGui::SetNextItemWidth(t9.x1 - t0.x0);
@@ -6124,6 +6271,72 @@ void AppWindow::drawTrailWidthControl(const char* label) {
     }
 }
 
+// --- THE INTERFACE THEME ----------------------------------------------------
+//
+// BETWEEN FRAMES, like the language: the palette, ImGui's style and the
+// typeface pair change together, so no frame is ever drawn half in one theme.
+// Today's bench asks for no pair of its own (preferredFontPair returns ""), so
+// the atlas it runs on is exactly the one it always had.
+void AppWindow::applyPendingTheme() {
+    if (!themeApplyPending_) { return; }
+    themeApplyPending_ = false;
+    const cascade::gui::theme::ThemeId id = cascade::gui::theme::themeFromKey(uiThemeKey_);
+    cascade::gui::theme::setTheme(id);
+    cascade::gui::theme::applyTheme();
+    cascade::gui::fonts::setPreferredPair(cascade::gui::theme::preferredFontPair(id));
+    // The waterfall's rows already painted keep the colours they were painted
+    // in and scroll away; new rows use the theme's colormap from the next one.
+    cascade::core::diagLogf("theme: %s", uiThemeKey_.c_str());
+}
+
+void AppWindow::pickTheme(const std::string& key) {
+    const cascade::gui::theme::ThemeId id = cascade::gui::theme::themeFromKey(key);
+    const cascade::gui::theme::Preset& p = cascade::gui::theme::preset(id);
+    uiThemeKey_ = p.key;
+    themeApplyPending_ = true;
+    // THE PRESET'S COUNTER AND READINGS COME WITH IT - Bench Classic XL is
+    // today's palette with the figures doubled and the switches put away - and
+    // the user can change each of them afterwards (Display, or the counter's
+    // right-click menu). A face the application does not draw yet (foxsdr-ui/1
+    // "lcd") is drawn plain, as the format says a reader must.
+    counterScale_ = p.counter.scale >= 1.5f ? 2 : 1;
+    counterSwitches_ = p.counter.switches;
+    readingsScale_ = std::clamp(p.sizes.readings, 1.0f, 3.0f);
+    const std::string face = p.counter.face;
+    tunerStyle_ = (face == "nixie" || face == "neon") ? cascade::gui::tunerStyleFromName(face)
+                                                      : cascade::gui::TunerStyle::Plain;
+}
+
+// THE COUNTER'S OWN MENU (right-click anywhere on the tuner plate): the same
+// four choices the Display section offers, where the thing they change is.
+// The mockup the owner approved puts exactly these on the counter.
+void AppWindow::drawCounterMenu() {
+    ImGui::TextDisabled("%s", tr("TUNED - HERTZ"));
+    ImGui::Separator();
+    if (ImGui::MenuItem(trId("Enlarge figures"), nullptr, counterScale_ >= 2)) {
+        counterScale_ = 2;
+    }
+    if (ImGui::MenuItem(trId("Normal size"), nullptr, counterScale_ < 2)) { counterScale_ = 1; }
+    ImGui::Separator();
+    if (ImGui::MenuItem(trId("Show tuner switches"), nullptr, counterSwitches_)) {
+        counterSwitches_ = !counterSwitches_;
+    }
+    if (ImGui::BeginMenu(trId("Counter face"))) {
+        for (int k = 0; k < cascade::gui::kTunerStyleCount; ++k) {
+            const cascade::gui::TunerStyle st =
+                cascade::gui::tunerStyleFromName(cascade::gui::kTunerStyleNames[k]);
+            const std::string item = std::string(tr(cascade::gui::kTunerStyleLabels[k])) +
+                                     "###face_" + cascade::gui::kTunerStyleNames[k];
+            if (ImGui::MenuItem(item.c_str(), nullptr, tunerStyle_ == st)) { tunerStyle_ = st; }
+        }
+        ImGui::EndMenu();
+    }
+    ImGui::Separator();
+    if (ImGui::MenuItem(trId("Enlarge every reading"), nullptr, readingsScale_ > 1.0f)) {
+        readingsScale_ = readingsScale_ > 1.0f ? 1.0f : kEnlargedReadings;
+    }
+}
+
 void AppWindow::drawDisplaySection() {
     // THE BAND PLAN OVERLAY IS THE ONLY THING IN THIS SECTION THAT IS EITHER
     // ON OR OFF, so it is what the chip reports and the comment says so rather
@@ -6138,6 +6351,28 @@ void AppWindow::drawDisplaySection() {
                              !bandPlan_.entries().empty();
     if (benchSection(trId("Display"), true, bandPlanOverlay_ ? tr("PLAN") : tr("PLAIN"),
                      cascade::gui::theme::kPhosphor, planDrawing)) {
+        // THE THEME (2026-09-25): the six looks, by the names the owner
+        // approved them under. First in the section because it is the widest
+        // change a user can make to what they see. Applied between frames
+        // (applyPendingTheme); the pick brings the preset's counter and
+        // readings sizes with it (pickTheme), which the rows below and the
+        // counter's own right-click menu can then change.
+        {
+            const cascade::gui::theme::ThemeId now =
+                cascade::gui::theme::themeFromKey(uiThemeKey_);
+            int themeIndex = static_cast<int>(now);
+            const char* themeItems[cascade::gui::theme::kThemeCount];
+            for (int k = 0; k < cascade::gui::theme::kThemeCount; ++k) {
+                themeItems[k] =
+                    tr(cascade::gui::theme::themeLabel(static_cast<cascade::gui::theme::ThemeId>(k)));
+            }
+            if (ImGui::Combo(cascade::gui::labelAboveIfNeeded(trId("Theme")), &themeIndex,
+                             themeItems, cascade::gui::theme::kThemeCount) &&
+                themeIndex != static_cast<int>(now)) {
+                pickTheme(cascade::gui::theme::themeKey(
+                    static_cast<cascade::gui::theme::ThemeId>(themeIndex)));
+            }
+        }
         // One shared dB range drives both the spectrum axis and the waterfall
         // colormap so the two panels always agree on what "hot" means.
         const bool minChanged =
@@ -6186,6 +6421,26 @@ void AppWindow::drawDisplaySection() {
             tunerStyle_ = cascade::gui::tunerStyleFromName(
                 cascade::gui::kTunerStyleNames[std::clamp(
                     styleIndex, 0, cascade::gui::kTunerStyleCount - 1)]);
+        }
+        // THE COUNTER'S SIZE AND ITS SWITCHES. The same three choices the
+        // counter's right-click menu offers, here too, because a menu on a
+        // right-click is a thing a user has to be told exists.
+        {
+            int sizeIndex = counterScale_ >= 2 ? 1 : 0;
+            const char* sizeItems[2] = {tr("Normal size"), tr("Enlarged figures")};
+            if (ImGui::Combo(cascade::gui::labelAboveIfNeeded(trId("Counter figures")), &sizeIndex,
+                             sizeItems, 2)) {
+                counterScale_ = sizeIndex == 1 ? 2 : 1;
+            }
+            ImGui::Checkbox(trId("Tuner switches"), &counterSwitches_);
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("%s", tr("The UP and DN switches under each figure. The wheel "
+                                           "over a figure still tunes it without them."));
+            }
+            bool bigReadings = readingsScale_ > 1.0f;
+            if (ImGui::Checkbox(trId("Enlarge every reading"), &bigReadings)) {
+                readingsScale_ = bigReadings ? kEnlargedReadings : 1.0f;
+            }
         }
 
         // THE AIRCRAFT ICON SIZE (owner, 2026-09-23: "allow the user to
@@ -6358,6 +6613,8 @@ void AppWindow::drawDecodeBank() {
 static bool benchBankKey(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
                          const char* label, bool on, const char* tooltip, int index) {
     if (dl == nullptr || br.x - tl.x < 12.0f || br.y - tl.y < 8.0f) { return false; }
+    cascade::gui::census::note("bank:" + std::to_string(index));
+    cascade::gui::census::rect("bank:" + std::to_string(index), tl.x, tl.y, br.x, br.y);
     ImGui::PushID(index);
     ImGui::SetCursorScreenPos(tl);
     const bool pressed = ImGui::InvisibleButton("##bankkey", ImVec2(br.x - tl.x, br.y - tl.y));
@@ -6374,12 +6631,16 @@ static bool benchBankKey(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     // benchWordKey, so the two parts read as one family.
     if (!down) {
         dl->AddRectFilled(ImVec2(tl.x + 1.0f, tl.y + 2.0f), ImVec2(br.x + 1.0f, br.y + 2.0f),
-                          cascade::gui::theme::withAlpha(cascade::gui::theme::kVoid, 0.45f), r);
+                          theme::shadowOf(0x0D, 0x0B, 0x07, 115), r);
     }
-    const ImU32 top = down      ? cascade::gui::theme::kBrassMid
-                      : hovered ? cascade::gui::theme::kIvory
-                                : cascade::gui::theme::kCream;
-    const ImU32 bot = down ? cascade::gui::theme::kBrassDark : cascade::gui::theme::kBrassBright;
+    // A bank key is a control ("ctrl") at rest and the lit key ("activeBg")
+    // while it is in - foxsdr-ui/1's FUNCTION SELECT tabs.
+    const ImU32 top = down      ? theme::toneHex(0x6E6552, 255, theme::ink::ActiveBgTop)
+                      : hovered ? theme::toneMix(0xEF, 0xE7, 0xD2, 255, theme::ink::CtrlTop,
+                                                 theme::ink::ActiveBgTop, 0.35f)
+                                : theme::toneHex(0xD8CFB4, 255, theme::ink::CtrlTop);
+    const ImU32 bot = down ? theme::toneHex(0x4A4234, 255, theme::ink::ActiveBgBot)
+                           : theme::toneHex(0x8B8069, 255, theme::ink::CtrlBot);
     dl->AddRectFilled(tl, br, bot, r);
     if (br.x - tl.x > r * 2.0f) {
         dl->AddRectFilledMultiColor(ImVec2(tl.x + r, tl.y), ImVec2(br.x - r, br.y), top, top,
@@ -6402,9 +6663,9 @@ static bool benchBankKey(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         if (on) {
             dl->AddRectFilled(ImVec2(sTL.x - 1.0f, sTL.y - 1.0f),
                               ImVec2(sBR.x + 1.0f, sBR.y + 1.0f),
-                              cascade::gui::theme::withAlpha(cascade::gui::theme::kPhosphor, 0.25f),
+                              theme::toneHex(0x8FD9A0, 64, theme::ink::ActiveLine),
                               2.0f);
-            dl->AddRectFilled(sTL, sBR, cascade::gui::theme::kPhosphor, 1.0f);
+            dl->AddRectFilled(sTL, sBR, theme::toneHex(0x8FD9A0, 255, theme::ink::ActiveLine), 1.0f);
         }
     }
     // The word, cut into the brass: ink on metal, never amber. Fitted to the
@@ -6418,7 +6679,8 @@ static bool benchBankKey(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         lf->CalcTextSizeA(cascade::gui::kBankKeyWordFloorPx, FLT_MAX, 0.0f, label).x,
         br.x - tl.x);
     cascade::gui::addFittedCentred(dl, lf, cascade::gui::fonts::kTinySize, tl, br,
-                                   on ? cascade::gui::theme::kIvory : cascade::gui::theme::kEnamel,
+                                   on ? theme::toneHex(0xEFE7D2, 255, theme::ink::ActiveText)
+                                      : theme::toneHex(0x2A251C, 255, theme::ink::CtrlText),
                                    label, padX, down ? 1.0f : 0.0f,
                                    cascade::gui::kBankKeyWordFloorPx);
     return pressed;
@@ -10925,7 +11187,7 @@ bool AppWindow::beginPage(const char* id, const char* title, bool* open, int fla
         if (gripLit) { ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNWSE); }
         const ImU32 groove = gripLit ? cascade::gui::theme::kPhosphor
                                      : cascade::gui::theme::kEnamelDark;
-        const ImU32 lip = IM_COL32(0xE8, 0xDA, 0xB8, gripLit ? 0x00 : 0x90);
+        const ImU32 lip = theme::sheenOf(0xE8, 0xDA, 0xB8, gripLit ? 0x00 : 0x90);
         for (const float c : {36.0f, 42.0f, 48.0f}) {
             const ImVec2 a(br.x - 3.0f, br.y - (c - 3.0f));
             const ImVec2 b(br.x - (c - 3.0f), br.y - 3.0f);
@@ -11716,6 +11978,12 @@ void AppWindow::applyInputScript(long frame) {
                 break;
             case cascade::gui::ScriptStep::Verb::Up:
                 io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+                break;
+            case cascade::gui::ScriptStep::Verb::RightDown:
+                io.AddMouseButtonEvent(ImGuiMouseButton_Right, true);
+                break;
+            case cascade::gui::ScriptStep::Verb::RightUp:
+                io.AddMouseButtonEvent(ImGuiMouseButton_Right, false);
                 break;
             case cascade::gui::ScriptStep::Verb::Key: {
                 // A down and an up in one frame is still two frames to ImGui:
@@ -13064,7 +13332,7 @@ void AppWindow::drawScopeMode() {
         // A READING, not a legend: the bench letters its controls in ivory and
         // its numbers in amber, and this is a number.
         ImGui::PushStyleColor(ImGuiCol_Text,
-                              ImVec4(240.0f / 255.0f, 168.0f / 255.0f, 64.0f / 255.0f, 1.0f));
+                              theme::vec(theme::tone(240, 168, 64, 255, theme::ink::Reading)));
         ImGui::TextUnformatted(txt.c_str());
         ImGui::PopStyleColor();
     }
@@ -13210,24 +13478,27 @@ void AppWindow::drawScopeMode() {
     {
         constexpr float kRound = 12.0f;
         const float midY = faceTL.y + (faceBR.y - faceTL.y) * 0.55f;
-        dl->AddRectFilled(faceTL, faceBR, IM_COL32(20, 21, 15, 255), kRound);
+        // Theme tones: the case is the theme's own enamel, between its well
+        // and its panel.
+        const ImU32 caseTop = theme::tone(38, 39, 31, 255, theme::ink::PanelHead, theme::ink::Panel);
+        const ImU32 caseMid = theme::tone(20, 21, 15, 255, theme::ink::Well, theme::ink::PanelHead);
+        const ImU32 caseFoot = theme::tone(15, 16, 11, 255, theme::ink::Well, theme::ink::PanelHead);
+        dl->AddRectFilled(faceTL, faceBR, theme::tone(20, 21, 15, 255, theme::ink::Well, theme::ink::PanelHead), kRound);
         if (faceBR.x - faceTL.x > kRound * 2.0f) {
             dl->AddRectFilledMultiColor(
                 ImVec2(faceTL.x + kRound, faceTL.y), ImVec2(faceBR.x - kRound, midY),
-                IM_COL32(38, 39, 31, 255), IM_COL32(38, 39, 31, 255),
-                IM_COL32(20, 21, 15, 255), IM_COL32(20, 21, 15, 255));
+                caseTop, caseTop, caseMid, caseMid);
             dl->AddRectFilledMultiColor(
                 ImVec2(faceTL.x + kRound, midY), ImVec2(faceBR.x - kRound, faceBR.y),
-                IM_COL32(20, 21, 15, 255), IM_COL32(20, 21, 15, 255),
-                IM_COL32(15, 16, 11, 255), IM_COL32(15, 16, 11, 255));
+                caseMid, caseMid, caseFoot, caseFoot);
         }
-        dl->AddRect(faceTL, faceBR, IM_COL32(46, 47, 38, 255), kRound, 0, 1.0f);
+        dl->AddRect(faceTL, faceBR, theme::tone(46, 47, 38, 255, theme::ink::Panel, theme::ink::Border), kRound, 0, 1.0f);
         dl->AddLine(ImVec2(faceTL.x + kRound, faceTL.y + 1.0f),
                     ImVec2(faceBR.x - kRound, faceTL.y + 1.0f),
-                    IM_COL32(255, 255, 255, 15), 1.0f);
+                    theme::sheen(15), 1.0f);
         dl->AddRect(ImVec2(faceTL.x + 12.0f, faceTL.y + 12.0f),
                     ImVec2(faceBR.x - 12.0f, faceBR.y - 12.0f),
-                    IM_COL32(255, 255, 255, 10), kRound, 0, 1.0f);
+                    theme::sheen(10), kRound, 0, 1.0f);
     }
     // The four corner fixings, each a machined disc with a slot at its own
     // angle - four identical screws read as a repeated sprite, and a real
@@ -13245,17 +13516,17 @@ void AppWindow::drawScopeMode() {
             const ImVec2 c = screws[i];
             // An eccentric highlight rather than a flat disc: the design lights
             // every round part from 35%/30%, and a centred one reads as a hole.
-            dl->AddCircleFilled(c, screwR, IM_COL32(27, 28, 22, 255), 24);
+            dl->AddCircleFilled(c, screwR, theme::tone(27, 28, 22, 255, theme::ink::Well, theme::ink::Panel), 24);
             dl->AddCircleFilled(ImVec2(c.x - screwR * 0.18f, c.y - screwR * 0.22f),
-                                screwR * 0.72f, IM_COL32(58, 59, 50, 255), 24);
+                                screwR * 0.72f, theme::tone(58, 59, 50, 255, theme::ink::Panel, theme::ink::Border), 24);
             dl->AddCircleFilled(ImVec2(c.x - screwR * 0.26f, c.y - screwR * 0.30f),
-                                screwR * 0.40f, IM_COL32(74, 75, 64, 255), 24);
-            dl->AddCircle(c, screwR, IM_COL32(13, 14, 10, 255), 24, 2.0f);
+                                screwR * 0.40f, theme::tone(74, 75, 64, 255, theme::ink::Border, theme::ink::CtrlTop), 24);
+            dl->AddCircle(c, screwR, theme::tone(13, 14, 10, 255, theme::ink::Well), 24, 2.0f);
             const float a = slotDeg[i] * 3.14159265f / 180.0f;
             const float sx = std::cos(a) * 7.0f;
             const float sy = std::sin(a) * 7.0f;
             dl->AddLine(ImVec2(c.x - sx, c.y - sy), ImVec2(c.x + sx, c.y + sy),
-                        IM_COL32(12, 13, 9, 255), 4.0f);
+                        theme::tone(12, 13, 9, 255, theme::ink::Well, theme::ink::Black), 4.0f);
         }
     }
 
@@ -13414,7 +13685,7 @@ void AppWindow::drawScopeMode() {
             dl->AddText(ImGui::GetFont(), wordPx,
                         ImVec2(pTL.x + padL + side + 10.0f * scale,
                                pTL.y + padT + side * 0.5f - wordPx * 0.62f),
-                        IM_COL32(223, 226, 205, 255), "FOX");
+                        theme::tone(223, 226, 205, 255, theme::ink::Label), "FOX");
             // The diamond the reference sets after the wordmark - a rotated
             // square, in the brand's own green.
             const float dSide = std::max(6.0f, 11.0f * scale);
@@ -13425,12 +13696,12 @@ void AppWindow::drawScopeMode() {
             const float dcy = pTL.y + padT + side * 0.5f;
             const ImVec2 dia[4] = {ImVec2(dcx, dcy - dSide), ImVec2(dcx + dSide, dcy),
                                    ImVec2(dcx, dcy + dSide), ImVec2(dcx - dSide, dcy)};
-            dl->AddConvexPolyFilled(dia, 4, IM_COL32(122, 179, 58, 255));
+            dl->AddConvexPolyFilled(dia, 4, theme::tone(122, 179, 58, 255, theme::ink::Trace));
             // The sub-line, widely tracked as an engraved plate is.
             const float subPx = std::max(9.0f, 11.0f * scale);
             dl->AddText(ImGui::GetFont(), subPx,
                         ImVec2(pTL.x + padL, pTL.y + padT + side + 8.0f * scale),
-                        IM_COL32(127, 134, 108, 255), "& SCHIRMYVER INDUSTRIES");
+                        theme::tone(127, 134, 108, 255, theme::ink::Muted), "& SCHIRMYVER INDUSTRIES");
         }
 
         // THE ODOMETER COUNTERS. The range the face is set to and the number of
@@ -13593,7 +13864,7 @@ void AppWindow::drawScopeMode() {
             dl->AddText(ImVec2(knobC.x - nsz.x * 0.5f,
                                knobC.y + knobR * 1.30f + ImGui::GetTextLineHeight() +
                                    10.0f),
-                        IM_COL32(127, 134, 108, 255), note);
+                        theme::tone(127, 134, 108, 255, theme::ink::Muted), note);
         }
     }
 
@@ -13619,13 +13890,13 @@ void AppWindow::drawScopeMode() {
         const ImVec2 lsz = ImGui::CalcTextSize(lbl);
         dl->AddText(ImVec2(c.x - lsz.x * 0.5f,
                            c.y - lampR - ImGui::GetTextLineHeight() - 8.0f),
-                    IM_COL32(207, 211, 188, 255), lbl);
+                    theme::tone(207, 211, 188, 255, theme::ink::Text), lbl);
         // What the lamp means, spelled out. A lit lamp with no word beside it
         // is a state carried by colour alone, which this design forbids.
         const char* state = running ? tr("ON LINE") : tr("STANDBY");
         const ImVec2 ssz = ImGui::CalcTextSize(state);
         dl->AddText(ImVec2(c.x - ssz.x * 0.5f, c.y + lampR + 8.0f),
-                    IM_COL32(127, 134, 108, 255), state);
+                    theme::tone(127, 134, 108, 255, theme::ink::Muted), state);
     }
 
     scopeRangeNm_ = scope_.rangeNm();
@@ -19340,9 +19611,9 @@ void AppWindow::drawBandPlanOverlay(float x0, float y0, float width, float heigh
                 placedLabels.push_back(ImVec4(labelX, labelY, labelX + sz.x, labelY + sz.y));
                 if (labelFont != nullptr) {
                     drawList->AddText(labelFont, geom.labelPx, ImVec2(labelX, labelY),
-                                      IM_COL32(235, 235, 235, 200), b->name.c_str());
+                                      theme::tone(235, 235, 235, 200, theme::ink::Label), b->name.c_str());
                 } else {
-                    drawList->AddText(ImVec2(labelX, labelY), IM_COL32(235, 235, 235, 200),
+                    drawList->AddText(ImVec2(labelX, labelY), theme::tone(235, 235, 235, 200, theme::ink::Label),
                                       b->name.c_str());
                 }
             }
@@ -22583,6 +22854,14 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     // answer Nixie for one anyway - two guards for a user-editable file, and
     // neither of them in the draw loop.
     tunerStyle_ = cascade::gui::tunerStyleFromName(cfg.tunerDisplayStyle);
+    // The theme, through its key (unknown = today, as the loader already
+    // ensured), and the counter's own settings exactly as saved - a theme's
+    // preset sizes apply when it is PICKED, never over a saved choice.
+    uiThemeKey_ = cascade::gui::theme::themeKey(cascade::gui::theme::themeFromKey(cfg.uiTheme));
+    themeApplyPending_ = true;
+    counterScale_ = std::clamp(cfg.counterScale, 1, 2);
+    counterSwitches_ = cfg.counterSwitches;
+    readingsScale_ = std::clamp(cfg.readingsScale, 1.0f, 3.0f);
     // The trail switches. Not pushed into any MapView here: a page may not
     // exist yet (they are created as track-capable plugins appear), and the
     // page loop hands both to every view it draws anyway - which is also what
@@ -23214,6 +23493,10 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.bandPlanSize = kBandPlanSizeKeys[std::clamp(bandPlanSizeIndex_, 0, 2)];
     cfg.bandPlanPalette = kBandPlanPaletteKeys[std::clamp(bandPlanPaletteIndex_, 0, 2)];
     cfg.tunerDisplayStyle = cascade::gui::tunerStyleName(tunerStyle_);
+    cfg.uiTheme = uiThemeKey_;
+    cfg.counterScale = counterScale_;
+    cfg.counterSwitches = counterSwitches_;
+    cfg.readingsScale = readingsScale_;
     cfg.mapTrails = mapTrails_;
     cfg.mapTrailAltitudeColours = mapTrailAltColours_;
     cfg.mapTrailStyle = mapTrailStyle_;

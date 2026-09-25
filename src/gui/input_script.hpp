@@ -19,6 +19,7 @@
 //   <frame> world <x> <y>     pointer to patch-canvas (world) coordinates
 //   <frame> screen <x> <y>    pointer to ImGui screen coordinates
 //   <frame> down | up         left button
+//   <frame> rdown | rup       right button (the counter's menu, 2026-09-25)
 //   <frame> key <name>        tap a key: enter, delete, backspace, escape,
 //                             tab, ctrl+a
 //   <frame> text <chars...>   type the rest of the line
@@ -34,7 +35,7 @@
 namespace cascade::gui {
 
 struct ScriptStep {
-    enum class Verb { World, Screen, Down, Up, Key, Text, Wheel };
+    enum class Verb { World, Screen, Down, Up, Key, Text, Wheel, RightDown, RightUp };
     long frame = 0;
     Verb verb = Verb::World;
     float x = 0.0f;
@@ -90,6 +91,10 @@ inline ScriptParse parseInputScript(const std::string& text) {
             st.verb = ScriptStep::Verb::Down;
         } else if (verb == "up") {
             st.verb = ScriptStep::Verb::Up;
+        } else if (verb == "rdown") {
+            st.verb = ScriptStep::Verb::RightDown;
+        } else if (verb == "rup") {
+            st.verb = ScriptStep::Verb::RightUp;
         } else if (verb == "key") {
             st.verb = ScriptStep::Verb::Key;
             ok = static_cast<bool>(s >> st.arg) && knownScriptKey(st.arg);

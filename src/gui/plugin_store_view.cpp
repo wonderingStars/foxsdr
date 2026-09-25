@@ -2001,9 +2001,9 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
         // user typed is a control. The count beneath it is the reading.
         ImGui::SetCursorScreenPos(ImVec2(fTL.x + 7.0f, fTL.y + 3.0f));
         ImGui::SetNextItemWidth(fBR.x - fTL.x - 14.0f);
-        ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
-        ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
-        ImGui::PushStyleColor(ImGuiCol_FrameBgActive, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
+        ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));  // theme-exempt: fully transparent, the drum well shows through
+        ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));  // theme-exempt: fully transparent, the drum well shows through
+        ImGui::PushStyleColor(ImGuiCol_FrameBgActive, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));  // theme-exempt: fully transparent, the drum well shows through
         ImGui::PushStyleColor(ImGuiCol_Text, theme::vec(theme::kIvory));
         // The field's PLACEHOLDER, which is the only instruction the search
         // gives before anything is typed - muted rather than faint for that.

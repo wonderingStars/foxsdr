@@ -34,6 +34,7 @@
 #include <cstdint>
 
 #include "core/plugin_abi.h"
+#include "gui/theme.hpp"
 #include "imgui.h"
 
 namespace cascade::gui {
@@ -197,7 +198,8 @@ inline constexpr double kSilPi = 3.14159265358979323846;
 // disc is not merely a circle with no orientation.
 inline void addRotorDisc(ImDrawList* dl, const ImVec2& c, double courseDeg, float scale,
                          ImU32 col, bool filled) {
-    const ImU32 rim = IM_COL32(0, 0, 0, (col >> IM_COL32_A_SHIFT) & 0xFFu);
+    // The rim is a shadow: black on today's bench, the preset's shadow ink.
+    const ImU32 rim = theme::shadow(static_cast<int>((col >> IM_COL32_A_SHIFT) & 0xFFu));
     const double a = (std::isnan(courseDeg) ? 0.0 : courseDeg) * kSilPi / 180.0;
     dl->AddCircle(c, scale * 0.95f, col, 0, scale * 0.16f);
     // Two blades, offset from the heading so neither lies along it: a blade
@@ -246,7 +248,8 @@ inline void addTrackSymbol(ImDrawList* dl, const ImVec2& c, double courseDeg, fl
     // reading as a shape rather than a smudge. The rim takes its alpha FROM
     // the fill colour so an ageing target fades as one thing - a solid black
     // outline around a ghost would read as a different, newer object.
-    const ImU32 rim = IM_COL32(0, 0, 0, (col >> IM_COL32_A_SHIFT) & 0xFFu);
+    // (theme::shadow: black on today's bench, the preset's shadow ink.)
+    const ImU32 rim = theme::shadow(static_cast<int>((col >> IM_COL32_A_SHIFT) & 0xFFu));
     if (filled) {
         dl->AddConcavePolyFilled(pts, n, col);
         dl->AddPolyline(pts, n, rim, ImDrawFlags_Closed, 1.5f);
