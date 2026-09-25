@@ -43,6 +43,9 @@ void reportAbsorbedChild(const char* reason, unsigned long childExitCode, int at
 // mayWalkCurrentThread half of the Windows hook's contract.
 int captureFramesForTest(bool mayWalkCurrentThread);
 
+// See core::holdFaultPathForTest.
+void holdFaultPathForTest();
+
 // The Linux stand-in for TestFaultKind::InvalidParameter. glibc has no CRT
 // invalid-parameter fail-fast to exercise, so this is the closest honest
 // equivalent: a runtime-detected fatal condition (a direct abort()) reported

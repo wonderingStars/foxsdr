@@ -127,6 +127,14 @@ struct AppConfig {
     // essentially nothing.
     std::string soapyAntenna;
     std::string soapyArgs;                  // kwargs of the last soapy device
+    // LOOK FOR NETWORK USRPs (2026-09-25), OFF BY DEFAULT. The device scan
+    // asks UHD for USRPs only when one could be here: an Ettus/NI USRP on the
+    // USB bus, or a saved source that is one (gui/device_scan_plan.hpp,
+    // soapyDriversWithNoHardware). A USRP on the network - N2xx, X3xx, N3xx,
+    // E3xx - or on PCIe is on no USB bus, so it is only looked for when this
+    // is on. Field report F204602B5329B268: UHD's probe killed the scan's
+    // child on a machine whose only radio was an SDRplay.
+    bool lookForNetworkUsrps = false;
     // ARGS OF THE LAST NATIVE DEVICE, and a SEPARATE FIELD from soapyArgs on
     // purpose rather than one shared slot with sourceKind deciding which
     // grammar it holds.

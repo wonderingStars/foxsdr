@@ -475,9 +475,11 @@ std::vector<SoapyDeviceInfo> SoapySource::enumerate() {
     return enumerateIsolated().devices;
 }
 
-std::vector<SoapyDeviceInfo> SoapySource::enumerate(const std::vector<std::string>& skipDrivers) {
+std::vector<SoapyDeviceInfo> SoapySource::enumerate(const std::vector<std::string>& skipDrivers,
+                                                    const std::vector<std::string>& absentDrivers) {
     EnumOptions options;
     options.skipDrivers = skipDrivers;
+    options.absentDrivers = absentDrivers;
     return enumerateIsolated(options).devices;
 }
 

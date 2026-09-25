@@ -415,6 +415,88 @@ int fakeHelper(int argc, char** argv) {
                     cap, driver.c_str(), driver.c_str());
         return 0;
     }
+    if (mode == "uhdtrap") {
+        // FIELD REPORT F204602B5329B268's MACHINE, faked (2026-09-25): an
+        // SDRplay and no USRP, where UHD's probe is the one that dies. The
+        // listing has "good" and "uhd"; asking uhd - on its own, or as part
+        // of a whole bus that was not told to --skip it - dies with 43, so a
+        // scan that asks it when it was told not to is a named failure.
+        const std::string driver = driverArg(argc, argv);
+        const char* cap = gotCrashDir ? "true" : "false";
+        if (askedToListDrivers(argc, argv)) {
+            std::printf("{\"schema\":1,\"runtime\":true,\"guardedCalls\":1,\"capture\":%s,"
+                        "\"drivers\":[\"good\",\"uhd\"],\"devices\":[]}\n", cap);
+            return 0;
+        }
+        if (driver == "uhd") { return 43; }
+        if (driver.empty() && !listNames(skipArg(argc, argv), "uhd")) { return 43; }
+        std::printf("{\"schema\":1,\"runtime\":true,\"guardedCalls\":2,\"capture\":%s,"
+                    "\"devices\":[{\"label\":\"good radio\",\"args\":\"driver=good,serial=9\"}]}\n",
+                    cap);
+        return 0;
+    }
+    if (mode == "armeduhd") {
+        // THE REAL CHILD'S HANDLER, dying in the uhd probe: the listing names
+        // only "uhd", and asked for it the child arms exactly as the real
+        // helper does (armEnumerateHelperProcess, with the directory the
+        // parent handed down) and then faults. What reaches the parent is
+        // whatever that production handler writes to the pipe.
+        const std::string driver = driverArg(argc, argv);
+        if (askedToListDrivers(argc, argv)) {
+            std::printf("{\"schema\":1,\"runtime\":true,\"guardedCalls\":1,\"capture\":%s,"
+                        "\"drivers\":[\"uhd\"],\"devices\":[]}\n",
+                        gotCrashDir ? "true" : "false");
+            return 0;
+        }
+        std::string crashDir;
+        for (int i = 1; i < argc; ++i) {
+            const char* flag = "--crash-dir=";
+            if (std::strncmp(argv[i], flag, std::strlen(flag)) == 0) {
+                crashDir = argv[i] + std::strlen(flag);
+            }
+        }
+        cascade::source::armEnumerateHelperProcess(crashDir.c_str());
+        probeLine(true, driver.empty() ? "uhd" : driver.c_str());
+        cascade::core::raiseTestFault(cascade::core::TestFaultKind::AccessViolation);
+        return 0;  // unreachable
+    }
+    if (mode == "armedwholebus" || mode == "fieldline") {
+        // THE WHOLE-BUS DEATH'S REASON, AT FULL LENGTH (review of 5e7b968).
+        // The listing fails (exit 5), so no sweep follows and the only
+        // reports are the whole-bus ones. Asked for the whole bus, the child
+        // logs the field machine's probes and leaves two still running, then
+        // dies:
+        //   armedwholebus  through the PRODUCTION handler
+        //                  (armEnumerateHelperProcess + a real fault), whose
+        //                  line names this test binary - longer than libusb's;
+        //   fieldline      writing the field's own longest line verbatim,
+        //                  then dying with its code.
+        if (askedToListDrivers(argc, argv)) { return 5; }
+        probeLine(true, "sdrplay");
+        probeLine(true, "uhd");
+        probeLine(true, "rtlsdr");
+        probeLine(false, "rtlsdr");
+        if (mode == "fieldline") {
+            const std::string line = std::string(cascade::core::kFaultLinePrefix) +
+                                     "access violation 0xC0000005 at libusb-1.0.dll+0x10490\n";
+            std::fwrite(line.data(), 1, line.size(), stdout);
+            std::fflush(stdout);
+#ifdef _WIN32
+            ::TerminateProcess(::GetCurrentProcess(), 0xC0000005u);
+#endif
+            std::_Exit(139);
+        }
+        std::string crashDir;
+        for (int i = 1; i < argc; ++i) {
+            const char* flag = "--crash-dir=";
+            if (std::strncmp(argv[i], flag, std::strlen(flag)) == 0) {
+                crashDir = argv[i] + std::strlen(flag);
+            }
+        }
+        cascade::source::armEnumerateHelperProcess(crashDir.c_str());
+        cascade::core::raiseTestFault(cascade::core::TestFaultKind::AccessViolation);
+        return 0;  // unreachable
+    }
     if (mode == "garbage") {
         std::printf("this is not json at all\n");
         return 0;
@@ -1095,6 +1177,87 @@ int main(int argc, char** argv) {
         CHECK(r.sweepChildren == 0);
         CHECK(r.skippedDrivers.empty());
     }
+    // --- FIELD REPORT F204602B5329B268: UHD IS NOT ASKED WITH NOTHING TO FIND
+    //
+    // 0.99.35: the child probing driver=uhd died on a machine whose only radio
+    // was an SDRplay. EnumOptions::absentDrivers leaves a driver out of every
+    // walk - the whole bus (through the child's --skip), the sweep after a
+    // whole-bus death, and the walk beside an open radio - WITHOUT turning the
+    // scan into a beside-a-radio walk. The fake dies with 43 whenever uhd is
+    // asked, so asking it anyway is a named failure.
+    {
+        // THE CONTROL: told nothing, the fake machine's whole bus dies twice
+        // and the sweep's uhd child dies too. Without this the checks below
+        // could pass against a fake that never dies at all.
+        cascade::source::clearSessionFaultedDriversForTest();
+        setMode("uhdtrap");
+        EnumOptions o;
+        o.helperPath = self;
+        o.allowInProcessFallback = false;
+        const EnumResult r = enumerateIsolated(o);
+        const std::vector<std::string> wantUhd{"uhd"};
+        CHECK(r.attempts == 2);
+        CHECK(r.childDeaths == 3);
+        CHECK(r.faultedDrivers == wantUhd);
+        CHECK(r.absentDrivers.empty());
+        cascade::source::clearSessionFaultedDriversForTest();
+    }
+    {
+        // THE FIX: one whole-bus child, told to skip uhd, and nothing dies.
+        setMode("uhdtrap");
+        EnumOptions o;
+        o.helperPath = self;
+        o.allowInProcessFallback = false;
+        o.absentDrivers = {"UHD"};  // case does not matter
+        const EnumResult r = enumerateIsolated(o);
+        const Rows wantRows{{"good radio", "driver=good,serial=9"}};
+        const std::vector<std::string> wantUhd{"uhd"};
+        CHECK(r.outcome == EnumOutcome::Ok);
+        CHECK(rowsOf(r) == wantRows);
+        CHECK(r.attempts == 1);       // the ordinary single whole-bus child...
+        CHECK(r.sweepChildren == 0);  // ...not a per-driver walk
+        CHECK(r.childDeaths == 0);
+        CHECK(r.absentDrivers == wantUhd);
+        CHECK(r.skippedDrivers.empty());
+        CHECK(r.sessionSkippedDrivers.empty());
+        CHECK(cascade::source::sessionFaultedDrivers().empty());
+    }
+    {
+        // ...AND BESIDE AN OPEN RADIO, where every driver is asked on its own:
+        // uhd is not among them.
+        setMode("uhdtrap");
+        EnumOptions o;
+        o.helperPath = self;
+        o.allowInProcessFallback = false;
+        o.skipDrivers = {"sdrplay"};
+        o.absentDrivers = {"uhd"};
+        const EnumResult r = enumerateIsolated(o);
+        const std::vector<std::string> wantGood{"good"};
+        const std::vector<std::string> wantUhd{"uhd"};
+        CHECK(r.outcome == EnumOutcome::Ok);
+        CHECK(r.sweptDrivers == wantGood);
+        CHECK(r.childDeaths == 0);
+        CHECK(r.absentDrivers == wantUhd);
+        CHECK(r.faultedDrivers.empty());
+        cascade::source::clearSessionFaultedDriversForTest();
+    }
+    // WHAT A CHILD'S HANDLER SAID, read off its stdout (childFaultLineFrom):
+    // the exact bytes core::faultLine writes, found even glued to a vendor's
+    // unterminated printf, two lines at most, printable ASCII only - a
+    // newline in there would forge a report field - and capped.
+    {
+        using cascade::source::childFaultLineFrom;
+        const std::string p = cascade::core::kFaultLinePrefix;
+        CHECK(childFaultLineFrom("").empty());
+        CHECK(childFaultLineFrom("cascade-probe: begin uhd\n").empty());
+        CHECK(childFaultLineFrom(p + "access violation 0xC0000005 at libusb-1.0.dll+0x10490\n") ==
+              "access violation 0xC0000005 at libusb-1.0.dll+0x10490");
+        CHECK(childFaultLineFrom("vendor chatter" + p + "abort 0xE0000006 at x.dll+0x1\r\n") ==
+              "abort 0xE0000006 at x.dll+0x1");
+        CHECK(childFaultLineFrom(p + "a\n" + p + "b\n" + p + "c\n") == "a; b");
+        CHECK(childFaultLineFrom(p + "bad\tbyte\x01here\n") == "bad?byte?here");
+        CHECK(childFaultLineFrom(p + std::string(400, 'x') + "\n").size() == 160u);
+    }
     {
         // NO IN-PROCESS FALLBACK BESIDE AN OPEN RADIO. With no helper, the
         // ordinary scan walks the bus in this process; a scan told to leave a
@@ -1728,6 +1891,109 @@ int main(int argc, char** argv) {
             CHECK(c2.childDeaths == 0);
             CHECK(c2.sessionSkippedDrivers == wantSdrplay);
 
+            cascade::source::clearSessionFaultedDriversForTest();
+            clearReports();
+        }
+
+        // --- F204602B5329B268: THE PARENT SAYS WHAT THE CHILD DIED OF --------
+        //
+        // The child probing uhd died with 0xE0000002 - its own handler could
+        // not finish - and the parent's report could name nothing but that
+        // code. The child's handler now writes one line to the pipe BEFORE its
+        // report (armEnumerateHelperProcess sets faultLineToStdout), and the
+        // parent's per-driver report carries it. Staged with the production
+        // arming in a real child that really faults, beside an "open radio"
+        // so the per-driver report is the one filed.
+        {
+            const auto clearReports = [&dir]() {
+                std::error_code rec;
+                for (const auto& p : crashReports(dir)) { std::filesystem::remove(p, rec); }
+            };
+            clearReports();
+            cascade::source::clearSessionFaultedDriversForTest();
+            setMode("armeduhd");
+            EnumOptions o;
+            o.helperPath = self;
+            o.allowInProcessFallback = false;
+            o.skipDrivers = {"sdrplay"};
+            const EnumResult r = enumerateIsolated(o);
+            std::printf("armed uhd child: outcome=%s exit=0x%08lX line=[%s] reports=%zu\n",
+                        enumOutcomeName(r.outcome), r.deathExitCode, r.childFaultLine.c_str(),
+                        crashReports(dir).size());
+            const std::vector<std::string> wantUhd{"uhd"};
+            CHECK(r.faultedDrivers == wantUhd);
+            CHECK(r.childFaultLine.rfind("access violation", 0) == 0);
+            CHECK(r.childFaultLine.find(" at ") != std::string::npos);
+            const std::string body = allReportText(dir);
+            // The child's own report AND the parent's.
+            CHECK(crashReports(dir).size() == 2u);
+            CHECK(body.find("died probing driver=uhd (contained: every other driver was still "
+                            "probed) - child: access violation") != std::string::npos);
+            // THE SITE KEEPS 200 CHARACTERS OF A REASON (crash.go clip), and
+            // the driver's name is in the half that must survive.
+            const std::size_t at = body.find("reason: SDR device enumeration child process died "
+                                             "probing driver=uhd");
+            CHECK(at != std::string::npos);
+            if (at != std::string::npos) {
+                const std::size_t eol = body.find('\n', at);
+                const std::size_t len = (eol == std::string::npos ? body.size() : eol) - at -
+                                        std::strlen("reason: ");
+                std::printf("per-driver reason: %zu characters\n", len);
+                CHECK(len <= 200u);
+            }
+            cascade::source::clearSessionFaultedDriversForTest();
+            clearReports();
+        }
+
+        // --- THE WHOLE-BUS REASON FITS THE SITE'S 200 CHARACTERS ------------
+        //
+        // Review of 5e7b968: the whole-bus reason put the child's line BEFORE
+        // "still probing when it died: ...", and at 237-244 characters the
+        // site's clip (crash.go, clip(in.Reason, 200)) cut the driver list -
+        // the one thing that reason exists to carry. Both the production
+        // handler's line and the field's own libusb line, with the field
+        // machine's drivers still probing: every parent reason within 200,
+        // the driver list whole, and the child's words kept where they fit.
+        for (const char* m : {"armedwholebus", "fieldline"}) {
+            const auto clearReports = [&dir]() {
+                std::error_code rec;
+                for (const auto& p : crashReports(dir)) { std::filesystem::remove(p, rec); }
+            };
+            clearReports();
+            cascade::source::clearSessionFaultedDriversForTest();
+            setMode(m);
+            EnumOptions o;
+            o.helperPath = self;
+            o.allowInProcessFallback = false;
+            const EnumResult r = enumerateIsolated(o);
+            CHECK(r.outcome == EnumOutcome::ChildDied);
+            CHECK(r.childDeaths == 2);
+            CHECK(r.childFaultLine.rfind("access violation", 0) == 0);
+            const std::string body = allReportText(dir);
+            std::size_t pos = 0;
+            int wholeBus = 0;
+            while ((pos = body.find("reason: SDR device enumeration child process died", pos)) !=
+                   std::string::npos) {
+                const std::size_t eol = body.find('\n', pos);
+                const std::string reason =
+                    body.substr(pos + std::strlen("reason: "),
+                                (eol == std::string::npos ? body.size() : eol) - pos -
+                                    std::strlen("reason: "));
+                pos = (eol == std::string::npos) ? body.size() : eol;
+                ++wholeBus;
+                std::printf("%s whole-bus reason (%zu chars): %s\n", m, reason.size(),
+                            reason.c_str());
+                CHECK(reason.size() <= 200u);
+                CHECK(reason.find("still probing when it died: sdrplay, uhd") !=
+                      std::string::npos);
+                CHECK(reason.find(" - child: access violation") != std::string::npos);
+                // The drivers first: only the child's words are ever cut.
+                CHECK(reason.find("still probing when it died") < reason.find(" - child: "));
+                if (std::strcmp(m, "fieldline") == 0) {
+                    CHECK(reason.find("libusb-1.0.dll+0x10490") != std::string::npos);
+                }
+            }
+            CHECK(wholeBus == 2);
             cascade::source::clearSessionFaultedDriversForTest();
             clearReports();
         }

@@ -158,7 +158,14 @@ public:
     // The same scan with these drivers left out, which is safe to run while a
     // radio of theirs is open (2026-09-23) - see EnumOptions::skipDrivers and
     // gui/device_scan_plan.hpp. Empty is exactly enumerate().
-    static std::vector<SoapyDeviceInfo> enumerate(const std::vector<std::string>& skipDrivers);
+    //
+    // `absentDrivers` are left out because nothing of theirs can be here
+    // (EnumOptions::absentDrivers, 2026-09-25: UHD with no USRP on the USB
+    // bus); unlike skipDrivers they do not turn the scan into a walk beside
+    // an open radio.
+    static std::vector<SoapyDeviceInfo> enumerate(const std::vector<std::string>& skipDrivers,
+                                                  const std::vector<std::string>& absentDrivers =
+                                                      std::vector<std::string>());
 
     // The walk itself, in THIS process, under the structured-exception guard
     // (source/vendor_guard.hpp). This is what the child process runs, and what

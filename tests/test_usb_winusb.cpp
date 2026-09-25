@@ -25,6 +25,10 @@
 #include "usb/usb_device.hpp"
 #include "usb/usb_fake.hpp"
 
+#if defined(__linux__)
+#include <dirent.h>
+#endif
+
 using cascade::usb::FakeUsbDevice;
 using cascade::usb::UsbDeviceInfo;
 using cascade::usb::UsbId;
@@ -399,6 +403,58 @@ int main() {
             // An empty id list asks about nothing and must not walk anything.
             CHECK(cascade::usb::enumerateUnbound(std::vector<cascade::usb::UsbId>()).empty());
         }
+    }
+
+    // EVERY USB DEVICE PRESENT (2026-09-25), which is how the device scan
+    // decides whether UHD has anything to find (F204602B5329B268). The parser
+    // first - the one part that can be wrong without a device - then the live
+    // listing, which opens nothing.
+    {
+        using cascade::usb::usbIdFromHardwareId;
+        using cascade::usb::UsbId;
+        UsbId id{0, 0};
+        CHECK(usbIdFromHardwareId("USB\\VID_2500&PID_0020&REV_0001", id));
+        CHECK(id.vid == 0x2500 && id.pid == 0x0020);
+        CHECK(usbIdFromHardwareId("usb\\vid_3923&pid_7814", id));
+        CHECK(id.vid == 0x3923 && id.pid == 0x7814);
+        // A composite child's id carries the pair too.
+        CHECK(usbIdFromHardwareId("USB\\VID_0BDA&PID_2838&MI_00", id));
+        CHECK(id.vid == 0x0BDA && id.pid == 0x2838);
+        // The first of several ids, as the property joins them.
+        CHECK(usbIdFromHardwareId("USB\\VID_1DF7&PID_3060&REV_0100\nUSB\\VID_1DF7&PID_3060", id));
+        CHECK(id.vid == 0x1DF7 && id.pid == 0x3060);
+        // Nothing half-formed is a pair, and a refusal leaves `out` alone.
+        id = UsbId{0x1111, 0x2222};
+        for (const char* bad : {"", "USB\\ROOT_HUB30", "USB\\VID_2500", "USB\\VID_2500&PID_00",
+                                "USB\\VID_25G0&PID_0020", "USB\\VID_2500&MI_00&PID_0020",
+                                "HID\\VID_2500PID_0020"}) {
+            CHECK(!usbIdFromHardwareId(bad, id));
+        }
+        CHECK(id.vid == 0x1111 && id.pid == 0x2222);
+
+        std::vector<UsbId> present{{0xDEAD, 0xBEEF}};
+        const bool listed = cascade::usb::presentUsbIds(present);
+        bool usrp = false;
+        for (const UsbId& p : present) {
+            CHECK(!(p.vid == 0xDEAD && p.pid == 0xBEEF));  // the list was replaced
+            if (p.vid == 0x2500) { usrp = true; }
+        }
+        std::printf("live USB listing: listed=%d, %zu distinct ids, Ettus device present=%d\n",
+                    listed ? 1 : 0, present.size(), usrp ? 1 : 0);
+#if defined(_WIN32)
+        CHECK(listed);
+#elif defined(__linux__)
+        // Listed exactly when sysfs can be read (review of 5e7b968: an
+        // unreadable bus is a failed listing, never an empty one). A WSL or
+        // container build box has no /sys/bus/usb/devices at all, and must
+        // then answer false - which this check used to call a failure.
+        DIR* sysfs = ::opendir("/sys/bus/usb/devices");
+        const bool readable = sysfs != nullptr;
+        if (sysfs != nullptr) { ::closedir(sysfs); }
+        std::printf("sysfs readable=%d\n", readable ? 1 : 0);
+        CHECK(listed == readable);
+        if (!readable) { CHECK(present.empty()); }
+#endif
     }
 
     return testSummary("test_usb_winusb");

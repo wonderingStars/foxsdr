@@ -660,6 +660,41 @@ private:
 
 }  // namespace
 
+bool usbIdFromHardwareId(const std::string& hardwareId, UsbId& out) {
+    const auto upper = [](char c) {
+        return (c >= 'a' && c <= 'z') ? static_cast<char>(c - 'a' + 'A') : c;
+    };
+    std::string s;
+    s.reserve(hardwareId.size());
+    for (char c : hardwareId) { s.push_back(upper(c)); }
+    const auto hex4 = [&s](std::size_t at, std::uint16_t& v) {
+        if (at + 4 > s.size()) { return false; }
+        unsigned acc = 0;
+        for (std::size_t i = at; i < at + 4; ++i) {
+            const char c = s[i];
+            unsigned d = 0;
+            if (c >= '0' && c <= '9') {
+                d = static_cast<unsigned>(c - '0');
+            } else if (c >= 'A' && c <= 'F') {
+                d = static_cast<unsigned>(c - 'A' + 10);
+            } else {
+                return false;
+            }
+            acc = acc * 16u + d;
+        }
+        v = static_cast<std::uint16_t>(acc);
+        return true;
+    };
+    const std::size_t vidAt = s.find("VID_");
+    if (vidAt == std::string::npos) { return false; }
+    const std::size_t pidAt = s.find("PID_", vidAt + 4);
+    if (pidAt == std::string::npos || pidAt != vidAt + 9 || s[vidAt + 8] != '&') { return false; }
+    UsbId id{0, 0};
+    if (!hex4(vidAt + 4, id.vid) || !hex4(pidAt + 4, id.pid)) { return false; }
+    out = id;
+    return true;
+}
+
 // THE CLASSIFICATION, and the two rules in it that a bench with one correctly
 // bound dongle can never exercise.
 //
@@ -862,6 +897,30 @@ std::vector<UsbDeviceInfo> enumerateUnbound(const std::vector<UsbId>& ids) {
     return unboundFrom(nodes);
 }
 
+bool presentUsbIds(std::vector<UsbId>& out) {
+    out.clear();
+    // Every PRESENT devnode the USB bus driver enumerated, of every class -
+    // the same walk as above, narrowed to the "USB" enumerator, reading one
+    // property each. Nothing is opened (rule 1).
+    const HDEVINFO set =
+        ::SetupDiGetClassDevsW(nullptr, L"USB", nullptr, DIGCF_ALLCLASSES | DIGCF_PRESENT);
+    if (set == INVALID_HANDLE_VALUE) { return false; }
+    SP_DEVINFO_DATA info{};
+    info.cbSize = sizeof(info);
+    for (DWORD i = 0; ::SetupDiEnumDeviceInfo(set, i, &info) != FALSE; ++i) {
+        const std::wstring hw = deviceStringProperty(set, info, DEVPKEY_Device_HardwareIds);
+        UsbId id{0, 0};
+        if (!usbIdFromHardwareId(narrow(hw.c_str()), id)) { continue; }
+        bool seen = false;
+        for (const UsbId& o : out) {
+            if (o.vid == id.vid && o.pid == id.pid) { seen = true; }
+        }
+        if (!seen) { out.push_back(id); }
+    }
+    ::SetupDiDestroyDeviceInfoList(set);
+    return true;
+}
+
 std::unique_ptr<UsbDevice> openWinUsb(const std::string& path, std::string& error) {
     error.clear();
     const std::wstring wpath = widen(path);
@@ -954,6 +1013,12 @@ std::vector<UsbDeviceInfo> enumerateUnbound(const std::vector<UsbId>&) {
 std::unique_ptr<UsbDevice> openWinUsb(const std::string&, std::string& error) {
     error = "native USB radio support needs WinUSB (Windows) or usbfs (Linux) in this build";
     return nullptr;
+}
+
+bool presentUsbIds(std::vector<UsbId>& out) {
+    // No listing on this platform: absence is unknown, not "nothing here".
+    out.clear();
+    return false;
 }
 
 #endif  // _WIN32 / __linux__ / other
