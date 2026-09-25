@@ -20,6 +20,8 @@
 #include <complex>
 #include <cstddef>
 #include <cstdio>
+#include <cstring>
+#include <memory>
 #include <string>
 #include <thread>
 #include <vector>
@@ -307,6 +309,695 @@ void testTune() {
 
     CHECK(src.setCenterFrequencyHz(500.0) == false);
     CHECK_NEAR(src.centerFrequencyHz(), 101100000.0, 1.0);
+}
+
+// --- 5b. no live Update the radio does not need (0.99.36) --------------------
+//
+// THREE FIELD LOGS, ONE SHAPE. 0.95.0 (RSP1A, API 3.15), 0.96.2 (RSP1A, API
+// 3.09) and 0.99.27 (RSP1, API 3.15) each read "opened SDRplay ... (sdrplay)"
+// followed by the retune failing - five seconds later with
+// ServiceNotResponding, or abandoned at kControlWait - and that retune is the
+// carry-across tune AppWindow::finishDeviceOpen issues milliseconds after the
+// stream was started. It was sent even when there was nothing to change. Why
+// the service does not answer an Update that early is NOT known (no RSP here);
+// what is proved below is that FoxSDR no longer sends one: a tune written
+// before start() reaches the radio through Init, and a tune to where the radio
+// already is makes no vendor call at all.
+
+void testAnUnchangedFrequencySendsNoUpdate() {
+    FakeSdrPlayApi fake;
+    fake.addDevice("1811003EFB", abi::kRsp1A);
+    SdrPlaySource src;
+    CHECK(openOn(src, fake));
+    CHECK(src.start());
+    fake.calls.clear();
+
+    // open() leaves the radio at 100 MHz (applyKnownStateLocked).
+    CHECK(src.setCenterFrequencyHz(100000000.0));
+    CHECK_NEAR(src.centerFrequencyHz(), 100000000.0, 1.0);
+    CHECK(fake.countStarting("Update(") == 0);
+
+    // A real change still goes to the radio, once.
+    CHECK(src.setCenterFrequencyHz(101100000.0));
+    CHECK(fake.countStarting("Update(") == 1);
+    // ...and the same frequency again is nothing.
+    CHECK(src.setCenterFrequencyHz(101100000.0));
+    CHECK(fake.countStarting("Update(") == 1);
+    src.stop();
+    src.closeDevice();
+}
+
+void testATuneBeforeStartLeavesNothingToSendAfterInit() {
+    FakeSdrPlayApi fake;
+    fake.addDevice("1811003EFB", abi::kRsp1A);
+    SdrPlaySource src;
+    CHECK(openOn(src, fake));
+    fake.calls.clear();
+
+    // What the open worker now does with the frequency being carried across:
+    // written while nothing streams, so it is only the parameter block.
+    CHECK(src.setCenterFrequencyHz(97300000.0));
+    CHECK(fake.countStarting("Update(") == 0);
+
+    // The stream starts ON that frequency...
+    CHECK(src.start());
+    CHECK(fake.atInit.taken);
+    CHECK_NEAR(fake.atInit.rfHz, 97300000.0, 1.0);
+
+    // ...and the carry-across tune the GUI still makes once the radio is
+    // installed (applyRetuneNow, for its range check and readback) finds it
+    // already there: no Update immediately after Init.
+    CHECK(src.setCenterFrequencyHz(97300000.0));
+    CHECK(fake.countStarting("Update(") == 0);
+    src.stop();
+    src.closeDevice();
+}
+
+// --- 5b'. a REFUSED change leaves the parameter block where the radio is ------
+//
+// THE INDEPENDENT REVIEW OF 0c59853 (blocking). Every setter writes the field
+// into the service's parameter block and THEN sends the Update - and on an
+// ordinary refusal (abi::Fail: the radio is alive and simply said no) the
+// field was never put back. 0c59853's "nothing to send when nothing changes"
+// then read that field as the radio's state: the reviewer's probe - refuse a
+// retune, ask for the same frequency again - got true, sent nothing, and read
+// back a frequency the radio had never gone to. The block is also what Init
+// programs on the next start, so a refused bias-tee ON would have powered the
+// antenna socket at the next START while the panel said off.
+void testARefusedChangeLeavesTheBlockWhereTheRadioIs() {
+    FakeSdrPlayApi fake;
+    fake.addDevice("1811003EFB", abi::kRsp1A);
+    SdrPlaySource src;
+    CHECK(openOn(src, fake));
+    CHECK(src.start());
+
+    // THE REVIEWER'S PROBE.
+    fake.updateResult = abi::Fail;
+    CHECK(src.setCenterFrequencyHz(101100000.0) == false);
+    CHECK(!src.deviceDead());  // an ordinary refusal, not a dead service
+    CHECK_NEAR(fake.chA.tunerParams.rfFreq.rfHz, 100000000.0, 1.0);
+    CHECK_NEAR(src.centerFrequencyHz(), 100000000.0, 1.0);
+    fake.updateResult = abi::Success;
+    fake.calls.clear();
+    const bool retried = src.setCenterFrequencyHz(101100000.0);
+    const int updates = fake.countStarting("Update(");
+    std::printf("retry after a refused retune: returned %s, %d Update(s) sent, readback %.0f Hz\n",
+                retried ? "true" : "false", updates, src.centerFrequencyHz());
+    CHECK(retried);
+    CHECK(updates == 1);
+    CHECK_NEAR(src.centerFrequencyHz(), 101100000.0, 1.0);
+
+    // THE GAINS: a refused IF or LNA change must be re-sent when asked again.
+    fake.updateResult = abi::Fail;
+    const int grBefore = fake.chA.tunerParams.gain.gRdB;
+    const int lnaBefore = fake.chA.tunerParams.gain.LNAstate;
+    CHECK(src.setGainDb("IF", -30.0) == false);
+    CHECK(fake.chA.tunerParams.gain.gRdB == grBefore);
+    CHECK(src.setGainDb("LNA", 5.0) == false);
+    CHECK(fake.chA.tunerParams.gain.LNAstate == lnaBefore);
+    fake.updateResult = abi::Success;
+    fake.calls.clear();
+    CHECK(src.setGainDb("IF", -30.0));
+    CHECK(src.setGainDb("LNA", 5.0));
+    CHECK(fake.countStarting("Update(") == 2);
+    CHECK(fake.chA.tunerParams.gain.gRdB == 30);
+    CHECK(fake.chA.tunerParams.gain.LNAstate == 5);
+
+    // THE SAMPLE RATE: every field of the plan comes back.
+    const double fsBefore = fake.devParams.fsFreq.fsHz;
+    const int ifBefore = static_cast<int>(fake.chA.tunerParams.ifType);
+    const int bwBefore = static_cast<int>(fake.chA.tunerParams.bwType);
+    const int decBefore = fake.chA.ctrlParams.decimation.decimationFactor;
+    const int decEnBefore = fake.chA.ctrlParams.decimation.enable;
+    fake.updateResult = abi::Fail;
+    CHECK(src.setSampleRateHz(8000000.0) == false);
+    CHECK(fake.devParams.fsFreq.fsHz == fsBefore);
+    CHECK(static_cast<int>(fake.chA.tunerParams.ifType) == ifBefore);
+    CHECK(static_cast<int>(fake.chA.tunerParams.bwType) == bwBefore);
+    CHECK(fake.chA.ctrlParams.decimation.decimationFactor == decBefore);
+    CHECK(fake.chA.ctrlParams.decimation.enable == decEnBefore);
+    CHECK_NEAR(src.sampleRateHz(), 2000000.0, 1.0);
+
+    // THE BIAS TEE: a refused ON must not be left for the next Init to apply.
+    CHECK(src.setBiasT(true) == false);
+    CHECK(fake.chA.rsp1aTunerParams.biasTEnable == 0);
+    CHECK(src.biasT() == false);
+    CHECK(src.setRfNotch(true) == false);
+    CHECK(fake.devParams.rsp1aParams.rfNotchEnable == 0);
+
+    // THE AGC SET POINT: the mirror as well as the block.
+    fake.updateResult = abi::Success;
+    CHECK(src.setAutoGain(true));
+    fake.updateResult = abi::Fail;
+    CHECK(src.setAgcSetPointDbfs(-30) == false);
+    CHECK(fake.chA.ctrlParams.agc.setPoint_dBfs == -60);
+    CHECK(src.agcSetPointDbfs() == -60);
+    fake.updateResult = abi::Success;
+
+    // AND WHAT THE NEXT START PROGRAMMES is the radio's real state.
+    src.stop();
+    CHECK(src.start());
+    CHECK(fake.atInit.taken);
+    CHECK_NEAR(fake.atInit.rfHz, 101100000.0, 1.0);
+    CHECK(fake.chA.rsp1aTunerParams.biasTEnable == 0);
+    src.stop();
+    src.closeDevice();
+}
+
+void testARefusedAntennaChangeLeavesTheBlockWhereTheRadioIs() {
+    FakeSdrPlayApi fake;
+    fake.addDevice("2208054321", abi::kRspDx);
+    SdrPlaySource src;
+    CHECK(openOn(src, fake));
+    CHECK(src.start());
+    fake.updateResult = abi::Fail;
+    CHECK(src.setAntenna("Antenna C") == false);
+    CHECK(fake.devParams.rspDxParams.antennaSel == abi::RspDx_ANTENNA_A);
+    CHECK(src.antenna() == "Antenna A");
+    CHECK(src.setBiasT(true) == false);
+    CHECK(fake.devParams.rspDxParams.biasTEnable == 0);
+    CHECK(src.setHdrMode(true) == false);
+    CHECK(fake.devParams.rspDxParams.hdrEnable == 0);
+    CHECK(src.hdrMode() == false);
+    fake.updateResult = abi::Success;
+    src.stop();
+    src.closeDevice();
+}
+
+// --- 5c. every sentence after a lost session names the restart that works ---
+//
+// 0.99.28 made a lost session process-wide (Api::sessionLost): no scan and no
+// open() reaches the API again until FoxSDR restarts. Two sentences written
+// before that still told the user "restart the SDRplay API service, then open
+// the radio again" - and opening it again is exactly what cannot work: the
+// receiver closes the dead radio first, the open is refused, and the user is
+// left on the signal generator having done what the screen said.
+void testEverySentenceAfterALostSessionNamesTheRestartThatWorks() {
+    const std::string hung = cascade::source::sdrPlayControlHungSentence();
+    CHECK(hung.find("restart FoxSDR") != std::string::npos);
+    CHECK(hung.find("open the radio again") == std::string::npos);
+
+    FakeSdrPlayApi fake;
+    fake.addDevice("1811003EFB", abi::kRsp1A);
+    SdrPlaySource src;
+    CHECK(openOn(src, fake));
+    CHECK(src.start());
+    fake.updateResult = abi::ServiceNotResponding;
+    CHECK(src.setCenterFrequencyHz(101100000.0) == false);
+    CHECK(src.deviceDead());
+    const std::string shown = src.lastError();
+    std::printf("after ServiceNotResponding the receiver shows \"%s\"\n", shown.c_str());
+    CHECK(shown.find("restart FoxSDR") != std::string::npos);
+    CHECK(shown.find("open the radio again") == std::string::npos);
+
+    // ...and the proof the old instruction was wrong: opening it again is
+    // refused while this process lives.
+    src.stop();
+    src.closeDevice();
+    SdrPlaySource again;
+    CHECK(openOn(again, fake) == false);
+}
+
+// --- 5d. a radio the vendor DLL is lost to takes no setting at all ---------
+//
+// THE REVIEW OF 6e308c3. Once a control has been abandoned inside the vendor's
+// Update, the stream has been declared stalled or the service has answered
+// ServiceNotResponding, every setter still WROTE the parameter block, and each
+// "nothing changed" shortcut ran before anything looked at that state. The
+// reviewer's probe after an abandoned 101.1 MHz retune: asking 101.1 MHz again
+// answered true with nothing sent (the abandoned write was still in the block),
+// and asking 102 MHz answered false with the block now reading 102 MHz - under
+// a worker of ours that may still be inside Update reading it. The comment
+// over undoRefused claimed the block was left alone; it was not.
+//
+// The rule pinned here: in any of those three states EVERY setter refuses
+// before it touches anything - the same-value request included - and the
+// block, the readbacks and the call log are exactly what they were.
+
+struct BlockBytes {
+    abi::DevParamsT dev;
+    abi::RxChannelParamsT a;
+    abi::RxChannelParamsT b;
+};
+
+BlockBytes blockOf(const FakeSdrPlayApi& f) {
+    BlockBytes s;
+    std::memcpy(&s.dev, &f.devParams, sizeof(s.dev));
+    std::memcpy(&s.a, &f.chA, sizeof(s.a));
+    std::memcpy(&s.b, &f.chB, sizeof(s.b));
+    return s;
+}
+
+bool sameBlock(const BlockBytes& x, const BlockBytes& y) {
+    return std::memcmp(&x.dev, &y.dev, sizeof(x.dev)) == 0 &&
+           std::memcmp(&x.a, &y.a, sizeof(x.a)) == 0 &&
+           std::memcmp(&x.b, &y.b, sizeof(x.b)) == 0;
+}
+
+// Every setter an RSP1A has, each with a value that changes something and,
+// where the setter has a "nothing changed" shortcut, with the value it is
+// already at. Returns how many answered true; the answer must be none.
+int everySetterAccepted(SdrPlaySource& src, FakeSdrPlayApi& fake, double blockHz,
+                        const char* when) {
+    const BlockBytes before = blockOf(fake);
+    const std::size_t callsBefore = fake.calls.size();
+    const double hz = src.centerFrequencyHz();
+    const double rate = src.sampleRateHz();
+    const double ifDb = src.gainDb("IF");
+    const double lna = src.gainDb("LNA");
+    const bool agc = src.autoGain();
+    const int setPoint = src.agcSetPointDbfs();
+    const bool bias = src.biasT();
+    const bool notch = src.rfNotch();
+    const bool dab = src.dabNotch();
+    const std::string ant = src.antenna();
+
+    struct Try {
+        const char* what;
+        bool ok;
+    };
+    // A braced list is evaluated left to right, so this is also the order the
+    // calls are made in.
+    const std::vector<Try> tries = {
+        {"retune to the frequency the block holds", src.setCenterFrequencyHz(blockHz)},
+        {"retune to 102 MHz", src.setCenterFrequencyHz(102000000.0)},
+        {"the rate it is at", src.setSampleRateHz(2000000.0)},
+        {"8 MS/s", src.setSampleRateHz(8000000.0)},
+        {"the IF gain it is at", src.setGainDb("IF", -40.0)},
+        {"IF gain -30 dB", src.setGainDb("IF", -30.0)},
+        {"the LNA state it is at", src.setGainDb("LNA", 0.0)},
+        {"LNA state 5", src.setGainDb("LNA", 5.0)},
+        {"AGC off (it is off)", src.setAutoGain(false)},
+        {"AGC on", src.setAutoGain(true)},
+        {"AGC set point -30", src.setAgcSetPointDbfs(-30)},
+        {"the antenna it is on", src.setAntenna("RX")},
+        {"bias tee on", src.setBiasT(true)},
+        {"FM notch on", src.setRfNotch(true)},
+        {"DAB notch on", src.setDabNotch(true)},
+    };
+    int accepted = 0;
+    for (const Try& t : tries) {
+        if (t.ok) {
+            ++accepted;
+            std::printf("     %s: \"%s\" was ACCEPTED\n", when, t.what);
+        }
+    }
+    const bool blockKept = sameBlock(before, blockOf(fake));
+    const std::size_t sent = fake.calls.size() - callsBefore;
+    std::printf("%s: %d of %zu setters accepted, %zu vendor call(s), block %s, retune reads "
+                "%.0f Hz\n",
+                when, accepted, tries.size(), sent, blockKept ? "unchanged" : "WRITTEN",
+                fake.chA.tunerParams.rfFreq.rfHz);
+    CHECK(blockKept);
+    CHECK(sent == 0);
+    // The readbacks are the radio's, not the requests'.
+    CHECK(src.centerFrequencyHz() == hz);
+    CHECK(src.sampleRateHz() == rate);
+    CHECK(src.gainDb("IF") == ifDb);
+    CHECK(src.gainDb("LNA") == lna);
+    CHECK(src.autoGain() == agc);
+    CHECK(src.agcSetPointDbfs() == setPoint);
+    CHECK(src.biasT() == bias);
+    CHECK(src.rfNotch() == notch);
+    CHECK(src.dabNotch() == dab);
+    CHECK(src.antenna() == ant);
+    // ...and what the user is shown still says what to do about it.
+    CHECK(std::string(src.lastError()).find("restart FoxSDR") != std::string::npos);
+    CHECK(src.deviceDead());
+    return accepted;
+}
+
+void testALostRadioTakesNoSettingAtAll() {
+    {   // 1. AN ABANDONED CONTROL - the reviewer's probe. On the heap and never
+        // destroyed, like every test that abandons a worker inside its fake.
+        FakeSdrPlayApi* fake = new FakeSdrPlayApi();
+        fake->addDevice("1811003EFB", abi::kRsp1A);
+        SdrPlaySource* src = new SdrPlaySource();
+        CHECK(openOn(*src, *fake));
+        CHECK(src->start());
+        fake->hangInUpdate.store(true);
+        CHECK(src->setCenterFrequencyHz(101100000.0) == false);  // kControlWait, then abandoned
+        CHECK(fake->insideUpdate.load());
+        CHECK(src->deviceDead());
+        // The abandoned retune's OWN write stays where it is: the worker may
+        // still be reading it. Nothing after it may add to it.
+        CHECK_NEAR(fake->chA.tunerParams.rfFreq.rfHz, 101100000.0, 1.0);
+        CHECK(everySetterAccepted(*src, *fake, 101100000.0, "after an abandoned control") == 0);
+        fake->releaseUpdateHang.store(true);
+        for (int i = 0; i < 500 && !fake->leftUpdate.load(); ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        CHECK(fake->leftUpdate.load());
+    }
+    {   // 2. A STREAM DECLARED STALLED: nothing ever called back.
+        FakeSdrPlayApi fake;
+        fake.addDevice("1811003EFB", abi::kRsp1A);
+        SdrPlaySource src;
+        CHECK(openOn(src, fake));
+        src.setStreamStallLimitForTest(std::chrono::milliseconds(300));
+        CHECK(src.start());
+        std::vector<std::complex<float>> buf(4096);
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(3000);
+        while (!src.faulted() && std::chrono::steady_clock::now() < deadline) {
+            (void) src.read(buf.data(), buf.size());
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        CHECK(src.faulted());
+        CHECK(everySetterAccepted(src, fake, 100000000.0, "after the stream stalled") == 0);
+        src.stop();
+        src.closeDevice();
+    }
+    {   // 3. THE SERVICE ANSWERED ServiceNotResponding - streaming, and then
+        // stopped, where every setter used to fall through to "not streaming,
+        // the block IS the radio" and answer true.
+        FakeSdrPlayApi fake;
+        fake.addDevice("1811003EFB", abi::kRsp1A);
+        SdrPlaySource src;
+        CHECK(openOn(src, fake));
+        CHECK(src.start());
+        fake.updateResult = abi::ServiceNotResponding;
+        CHECK(src.setCenterFrequencyHz(101100000.0) == false);
+        CHECK(src.deviceDead());
+        CHECK_NEAR(fake.chA.tunerParams.rfFreq.rfHz, 100000000.0, 1.0);  // a refusal: put back
+        CHECK(everySetterAccepted(src, fake, 100000000.0, "after ServiceNotResponding, live") ==
+              0);
+        src.stop();
+        CHECK(fake.countStarting("Uninit") == 0);
+        CHECK(everySetterAccepted(src, fake, 100000000.0, "after ServiceNotResponding, stopped") ==
+              0);
+        src.closeDevice();
+    }
+}
+
+// --- 5d-2. the lost-session rule is the SESSION'S, and a fresh one lifts it --
+//
+// THE THIRD REVIEW OF fix/rsp-fallback. testALostRadioTakesNoSettingAtAll pins
+// the refusal for the object whose OWN call lost the service. The reviewer's
+// probe then found three things nothing pinned:
+//   - a second radio (B) streaming beside the one that lost the service (A)
+//     still took a setting: its LNA change answered true and sent one Update
+//     into the session the process had already declared lost, because every
+//     setter asked only about its own object's flags;
+//   - open() clearing those flags is what lets the SAME object take settings
+//     again once the service really is back (here, a fresh fake's table), and
+//     removing that reset broke nothing;
+//   - a radio the USER stopped while healthy must not be called stalled by
+//     reads that come back empty afterwards, and nothing but a probe said so.
+
+// Every setter an RSPdx has - all ten, the RSPdx being the model that has all
+// of them - each asked for the value it is already at and for one that changes
+// something. `second` picks the other set of changing values, so a second pass
+// over the same object is a real change as well.
+struct SetterPass {
+    int accepted = 0;
+    int tried = 0;
+    int updates = 0;  // Update( calls the pass sent
+};
+
+SetterPass everyRspDxSetter(SdrPlaySource& src, FakeSdrPlayApi& fake, bool second,
+                            const char* when) {
+    const int updatesBefore = fake.countStarting("Update(");
+    struct Try {
+        const char* what;
+        bool ok;
+    };
+    // A braced list is evaluated left to right, so each readback used as an
+    // argument is read after the setter before it has run.
+    const std::vector<Try> tries = {
+        {"retune to where it is", src.setCenterFrequencyHz(src.centerFrequencyHz())},
+        {"retune", src.setCenterFrequencyHz(second ? 96000000.0 : 95000000.0)},
+        {"the rate it is at", src.setSampleRateHz(src.sampleRateHz())},
+        {"a new rate", src.setSampleRateHz(second ? 2000000.0 : 8000000.0)},
+        {"the IF gain it is at", src.setGainDb("IF", src.gainDb("IF"))},
+        {"a new IF gain", src.setGainDb("IF", second ? -40.0 : -30.0)},
+        {"the LNA state it is at", src.setGainDb("LNA", src.gainDb("LNA"))},
+        {"a new LNA state", src.setGainDb("LNA", second ? 5.0 : 3.0)},
+        // Off as it is, on, a set point under it, and off again - so the AGC
+        // ends where it began and a manual IF gain in the next pass is legal.
+        {"the AGC as it is (off)", src.setAutoGain(src.autoGain())},
+        {"AGC on", src.setAutoGain(true)},
+        {"a new AGC set point", src.setAgcSetPointDbfs(second ? -40 : -30)},
+        {"AGC off again", src.setAutoGain(false)},
+        {"the antenna it is on", src.setAntenna(src.antenna())},
+        {"a new antenna", src.setAntenna(second ? "Antenna A" : "Antenna B")},
+        {"bias tee the other way", src.setBiasT(!src.biasT())},
+        {"FM notch the other way", src.setRfNotch(!src.rfNotch())},
+        {"DAB notch the other way", src.setDabNotch(!src.dabNotch())},
+        {"HDR mode as it is", src.setHdrMode(src.hdrMode())},
+        {"HDR mode the other way", src.setHdrMode(!src.hdrMode())},
+    };
+    SetterPass p;
+    p.tried = static_cast<int>(tries.size());
+    for (const Try& t : tries) {
+        if (t.ok) {
+            ++p.accepted;
+        } else {
+            // No reason printed: every call has run by now, so lastError()
+            // holds the LAST refusal's message, not this one's.
+            std::printf("     %s: \"%s\" was refused\n", when, t.what);
+        }
+    }
+    p.updates = fake.countStarting("Update(") - updatesBefore;
+    std::printf("%s: %d of %d setters accepted, %d Update(s)\n", when, p.accepted, p.tried,
+                p.updates);
+    return p;
+}
+
+struct Readbacks {
+    double hz, rate, ifDb, lna;
+    bool agc;
+    int setPoint;
+    std::string ant;
+    bool bias, notch, dab, hdr;
+};
+
+Readbacks readbacksOf(SdrPlaySource& s) {
+    return {s.centerFrequencyHz(), s.sampleRateHz(), s.gainDb("IF"), s.gainDb("LNA"),
+            s.autoGain(),          s.agcSetPointDbfs(), s.antenna(),  s.biasT(),
+            s.rfNotch(),           s.dabNotch(),        s.hdrMode()};
+}
+
+bool sameReadbacks(const Readbacks& x, const Readbacks& y) {
+    return x.hz == y.hz && x.rate == y.rate && x.ifDb == y.ifDb && x.lna == y.lna &&
+           x.agc == y.agc && x.setPoint == y.setPoint && x.ant == y.ant && x.bias == y.bias &&
+           x.notch == y.notch && x.dab == y.dab && x.hdr == y.hdr;
+}
+
+void testALostSessionRefusesTheOtherRadiosSettingsToo() {
+    FakeSdrPlayApi fake;
+    fake.addDevice("2305000AAA", abi::kRspDx);
+    fake.addDevice("2305000BBB", abi::kRspDx);
+    SdrPlaySource a;
+    SdrPlaySource b;
+    CHECK(openOn(a, fake, "index=0"));
+    CHECK(a.start());
+    CHECK(openOn(b, fake, "index=1"));
+    CHECK(b.start());  // started last, so the fake's acknowledgements are B's
+    // B is healthy and live: a setting it is given is sent and taken.
+    CHECK(b.setGainDb("LNA", 2.0));
+    CHECK(fake.countStarting("Update(") == 1);
+
+    // A's retune is answered ServiceNotResponding: A is dead and the process's
+    // session is lost.
+    fake.updateResult = abi::ServiceNotResponding;
+    CHECK(a.setCenterFrequencyHz(101100000.0) == false);
+    CHECK(a.deviceDead());
+    // From here anything B sent would be TAKEN - so a refusal below is B's
+    // own, not the fake's.
+    fake.updateResult = abi::Success;
+
+    const BlockBytes before = blockOf(fake);
+    const std::size_t callsBefore = fake.calls.size();
+    const Readbacks was = readbacksOf(b);
+    const SetterPass p = everyRspDxSetter(b, fake, false, "B after A lost the session");
+    const std::size_t sent = fake.calls.size() - callsBefore;
+    std::printf("B after A lost the session: %zu vendor call(s), block %s\n", sent,
+                sameBlock(before, blockOf(fake)) ? "unchanged" : "WRITTEN");
+    CHECK(p.accepted == 0);
+    CHECK(p.updates == 0);
+    CHECK(sent == 0);
+    CHECK(sameBlock(before, blockOf(fake)));
+    CHECK(sameReadbacks(was, readbacksOf(b)));
+    // ...and what B shows is the sentence that says what to do.
+    CHECK(std::string(b.lastError()).find("restart the SDRplay API service, then restart FoxSDR") !=
+          std::string::npos);
+
+    a.stop();
+    a.closeDevice();
+    b.stop();
+    b.closeDevice();
+}
+
+void testTheSameRadioReopenedAfterALossTakesSettingsAgain() {
+    for (int way = 0; way < 2; ++way) {
+        const bool stall = (way == 1);
+        // Declared before the source so both outlive it. One fake at a time
+        // (see FakeSdrPlayApi's constructor): the lost one goes before the
+        // fresh one is made.
+        std::unique_ptr<FakeSdrPlayApi> lost(new FakeSdrPlayApi());
+        std::unique_ptr<FakeSdrPlayApi> fresh;
+        SdrPlaySource src;
+        lost->addDevice("2305000CCC", abi::kRspDx);
+        CHECK(openOn(src, *lost));
+        if (stall) {
+            src.setStreamStallLimitForTest(std::chrono::milliseconds(300));
+            CHECK(src.start());
+            std::vector<std::complex<float>> buf(4096);
+            const auto deadline =
+                std::chrono::steady_clock::now() + std::chrono::milliseconds(3000);
+            while (!src.faulted() && std::chrono::steady_clock::now() < deadline) {
+                (void) src.read(buf.data(), buf.size());
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+        } else {
+            CHECK(src.start());
+            lost->updateResult = abi::ServiceNotResponding;
+            CHECK(src.setCenterFrequencyHz(101100000.0) == false);
+        }
+        CHECK(src.deviceDead());
+        src.stop();
+        src.closeDevice();
+
+        // THE SERVICE IS BACK: a fresh table, whose session is not lost, and
+        // the SAME object opened on it.
+        lost.reset();
+        fresh.reset(new FakeSdrPlayApi());
+        fresh->addDevice("2305000CCC", abi::kRspDx);
+        CHECK(openOn(src, *fresh));
+        CHECK(!src.faulted());
+        CHECK(!src.deviceDead());
+        const char* stopped = stall ? "reopened after a stall, stopped"
+                                    : "reopened after a service loss, stopped";
+        const char* live = stall ? "reopened after a stall, live"
+                                 : "reopened after a service loss, live";
+        const SetterPass s = everyRspDxSetter(src, *fresh, false, stopped);
+        CHECK(s.accepted == s.tried);
+        CHECK(s.updates == 0);  // not streaming: the block IS the radio
+        CHECK(src.start());
+        const SetterPass l = everyRspDxSetter(src, *fresh, true, live);
+        CHECK(l.accepted == l.tried);
+        CHECK(l.updates > 0);
+        CHECK(!src.deviceDead());
+        src.stop();
+        src.closeDevice();
+    }
+}
+
+void testAUserStopIsNotAStall() {
+    FakeSdrPlayApi fake;
+    fake.addDevice("2305000DDD", abi::kRspDx);
+    SdrPlaySource src;
+    CHECK(openOn(src, fake));
+    src.setStreamStallLimitForTest(std::chrono::milliseconds(300));
+    CHECK(src.start());
+    src.stop();  // the user's STOP, on a healthy radio
+
+    // Read past the stall limit four times over, as the pipeline's source
+    // thread does while the radio sits stopped.
+    std::vector<std::complex<float>> buf(4096);
+    const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(1200);
+    int reads = 0;
+    while (std::chrono::steady_clock::now() < until) {
+        (void) src.read(buf.data(), buf.size());
+        ++reads;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    std::printf("user-stopped radio read %d time(s) over 1200 ms against a 300 ms limit: %s\n",
+                reads, src.faulted() ? "FAULTED" : "not faulted");
+    CHECK(!src.faulted());
+    CHECK(!src.deviceDead());
+    const SetterPass s = everyRspDxSetter(src, fake, false, "user-stopped, read past the limit");
+    CHECK(s.accepted == s.tried);
+    CHECK(s.updates == 0);
+    CHECK(src.start());
+    const SetterPass l = everyRspDxSetter(src, fake, true, "restarted after the user's stop, live");
+    CHECK(l.accepted == l.tried);
+    CHECK(l.updates > 0);
+    CHECK(!src.faulted());
+    src.stop();
+    src.closeDevice();
+}
+
+// --- 5e. a change refused HALF-WAY reads back where the radio stopped --------
+//
+// THE REVIEW OF 6e308c3, point 3. Two setters send two Updates, and the second
+// can be refused after the first was taken:
+//   - an RSP2 on Hi-Z asked for Antenna B comes off the AM port first (taken)
+//     and then moves the antenna switch (refused): the radio is on port 2, and
+//     antenna() still said "Hi-Z";
+//   - setAutoGain(false) turns the AGC off (taken) and then restores our IF
+//     gain (refused): it answered TRUE, and gainDb("IF") reported a number the
+//     radio is not at.
+// Either way the caller must hear false, and every readback must be what the
+// radio actually accepted.
+void testAChangeRefusedHalfWayReadsBackWhereTheRadioStopped() {
+    {   // THE RSP2's ANTENNA.
+        FakeSdrPlayApi fake;
+        fake.addDevice("1706012347", abi::kRsp2);
+        SdrPlaySource src;
+        CHECK(openOn(src, fake));
+        CHECK(src.start());
+        CHECK(src.setAntenna("Hi-Z"));
+        CHECK(fake.chA.rsp2TunerParams.amPortSel == abi::Rsp2_AMPORT_1);
+        CHECK(fake.chA.rsp2TunerParams.antennaSel == abi::Rsp2_ANTENNA_A);
+        fake.calls.clear();
+        fake.refuseUpdateAfter = 1;  // the AM port is taken, the antenna switch refused
+        const bool ok = src.setAntenna("Antenna B");
+        std::printf("RSP2 Hi-Z -> Antenna B, switch refused: returned %s, %d Update(s), antenna() "
+                    "reads \"%s\", AM port %d, antenna sel %d\n",
+                    ok ? "true" : "false", fake.countStarting("Update("), src.antenna().c_str(),
+                    static_cast<int>(fake.chA.rsp2TunerParams.amPortSel),
+                    static_cast<int>(fake.chA.rsp2TunerParams.antennaSel));
+        CHECK(ok == false);
+        CHECK(fake.countStarting("Update(") == 2);  // both were really sent
+        CHECK(fake.chA.rsp2TunerParams.amPortSel == abi::Rsp2_AMPORT_2);    // taken
+        CHECK(fake.chA.rsp2TunerParams.antennaSel == abi::Rsp2_ANTENNA_A);  // put back
+        CHECK(src.antenna() == "Antenna A");  // port 2, switch on A: where the radio is
+        CHECK(!src.deviceDead());             // an ordinary refusal
+        // ...and asking again sends only the switch, because the port is done.
+        fake.calls.clear();
+        CHECK(src.setAntenna("Antenna B"));
+        CHECK((fake.calls == std::vector<std::string>{FakeSdrPlayApi::updateCall(
+                                abi::Update_Rsp2_AntennaControl, abi::Update_Ext1_None)}));
+        CHECK(src.antenna() == "Antenna B");
+        src.stop();
+        src.closeDevice();
+    }
+    {   // THE AGC GOING OFF.
+        FakeSdrPlayApi fake;
+        fake.addDevice("1811003EFB", abi::kRsp1A);
+        SdrPlaySource src;
+        CHECK(openOn(src, fake));
+        CHECK(src.start());
+        CHECK(src.setGainDb("IF", -33.0));
+        CHECK(src.setAutoGain(true));
+        // The service's AGC loop owns gRdB while it runs and leaves its own
+        // number there - which is why coming off it restores ours at all.
+        fake.chA.tunerParams.gain.gRdB = 47;
+        fake.calls.clear();
+        fake.refuseUpdateAfter = 1;  // AGC off is taken, the IF gain restore refused
+        const bool ok = src.setAutoGain(false);
+        std::printf("AGC off taken, IF restore refused: returned %s, %d Update(s), autoGain %d, "
+                    "gainDb(IF) %.0f, block gRdB %d\n",
+                    ok ? "true" : "false", fake.countStarting("Update("),
+                    src.autoGain() ? 1 : 0, src.gainDb("IF"),
+                    static_cast<int>(fake.chA.tunerParams.gain.gRdB));
+        CHECK(ok == false);
+        CHECK(fake.countStarting("Update(") == 2);
+        CHECK(fake.chA.ctrlParams.agc.enable == abi::AGC_DISABLE);  // taken
+        CHECK(src.autoGain() == false);                              // ...and said so
+        CHECK(fake.chA.tunerParams.gain.gRdB == 47);                 // put back
+        CHECK_NEAR(src.gainDb("IF"), -47.0, 1e-9);                   // where the radio IS
+        CHECK(!src.deviceDead());
+        // ...and our number is then a real change, sent once.
+        fake.calls.clear();
+        CHECK(src.setGainDb("IF", -33.0));
+        CHECK(fake.countStarting("Update(") == 1);
+        CHECK(fake.chA.tunerParams.gain.gRdB == 33);
+        CHECK_NEAR(src.gainDb("IF"), -33.0, 1e-9);
+        src.stop();
+        src.closeDevice();
+    }
 }
 
 // --- 6. gains -------------------------------------------------------------
@@ -1954,6 +2645,12 @@ int main() {
     testOpenSelectInitOrderAndParameters();
     testOpenBySerialSuffixAndIndex();
     testTune();
+    testAnUnchangedFrequencySendsNoUpdate();
+    testATuneBeforeStartLeavesNothingToSendAfterInit();
+    testARefusedChangeLeavesTheBlockWhereTheRadioIs();
+    testARefusedAntennaChangeLeavesTheBlockWhereTheRadioIs();
+    testEverySentenceAfterALostSessionNamesTheRestartThatWorks();
+    testAChangeRefusedHalfWayReadsBackWhereTheRadioStopped();
     testGains();
     testAgc();
     testAntennasPerModel();
@@ -1981,6 +2678,10 @@ int main() {
     testATeardownAfterAnAbandonedControlNeverEntersTheVendorDll();
     testStopsOwnUninitGoingServiceNotRespondingKeepsCloseDeviceOffTheVendorDll();
     testALostSessionIsNeverEnteredAgainByAScanOrAnOpen();
+    testALostRadioTakesNoSettingAtAll();
+    testALostSessionRefusesTheOtherRadiosSettingsToo();
+    testTheSameRadioReopenedAfterALossTakesSettingsAgain();
+    testAUserStopIsNotAStall();
     // LAST, and deliberately: it abandons a worker inside its own fake and
     // releases it again, and nothing that follows should have to reason about
     // a thread this one left running.

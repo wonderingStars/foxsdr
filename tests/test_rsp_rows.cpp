@@ -126,5 +126,64 @@ int main() {
     }
     CHECK(withoutDuplicateRsps({}).empty());
 
+    // --- the radio this process has open stays in the list (0.99.36) --------
+    //
+    // The API does not list a radio this process has selected (see
+    // withClaimedSdrPlayRows). Before 0.99.36 every re-scan while an RSP was
+    // playing dropped its row.
+    using cascade::source::withClaimedSdrPlayRows;
+    {
+        // An RSPdx open in the receiver: the API lists nothing, and without
+        // the claimed row the Source list is just the Pluto.
+        const std::vector<NativeDeviceInfo> scanned{
+            row("pluto", "ADALM-Pluto (network)", "uri=ip:192.168.2.1"),
+        };
+        const std::vector<NativeDeviceInfo> claimed{
+            row("sdrplay", "SDRplay RSPdx (serial 2208054321)", "serial=2208054321"),
+        };
+        const std::vector<std::string> want{"ADALM-Pluto (network)",
+                                            "SDRplay RSPdx (serial 2208054321)"};
+        CHECK(labelsOf(withClaimedSdrPlayRows(scanned, claimed)) == want);
+    }
+    {
+        // An RSP1A open through the API: the API lists nothing, the native
+        // Mirics row for the SAME radio is back - and it must stay hidden,
+        // which only works once the claimed row is in the list again.
+        const std::vector<NativeDeviceInfo> scanned{
+            row("mirisdr", "SDRplay RSP1A (serial 1811003EFB)", "serial=1811003EFB"),
+        };
+        const std::vector<NativeDeviceInfo> claimed{
+            row("sdrplay", "SDRplay RSP1A (serial 1811003EFB)", "serial=1811003EFB"),
+        };
+        const std::vector<NativeDeviceInfo> shown =
+            withoutDuplicateRsps(withClaimedSdrPlayRows(scanned, claimed));
+        CHECK(shown.size() == 1);
+        if (shown.size() == 1) {
+            CHECK(shown[0].driver == "sdrplay");
+            CHECK(shown[0].args == "serial=1811003EFB");
+        }
+    }
+    {
+        // Already listed (an API that does list it, or a second copy): never
+        // twice.
+        const std::vector<NativeDeviceInfo> scanned{
+            row("sdrplay", "SDRplay RSP2 (serial 222)", "serial=222"),
+        };
+        const std::vector<NativeDeviceInfo> claimed{
+            row("sdrplay", "SDRplay RSP2 (serial 222)", "serial=222"),
+        };
+        CHECK(withClaimedSdrPlayRows(scanned, claimed).size() == 1);
+    }
+    {
+        // Only API rows are ever added back: a native radio the process holds
+        // is enumerated by SetupAPI, which never hides it.
+        const std::vector<NativeDeviceInfo> scanned{};
+        const std::vector<NativeDeviceInfo> claimed{
+            row("rtlsdr", "RTL2838UHIDIR", "serial=00000001"),
+        };
+        CHECK(withClaimedSdrPlayRows(scanned, claimed).empty());
+    }
+    CHECK(withClaimedSdrPlayRows({}, {}).empty());
+
     return testSummary("test_rsp_rows");
 }

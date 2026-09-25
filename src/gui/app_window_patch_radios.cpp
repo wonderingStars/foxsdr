@@ -623,6 +623,25 @@ void AppWindow::patchStopAll(bool restoreMain) {
     // --- the receiver gets its radio back ---------------------------------------
     const PatchMainKeep keep = patchMainKeep_;
     patchMainKeep_ = PatchMainKeep{};
+    // THE RADIO STAYS SAVED UNTIL IT IS BACK (0.99.36). patchMainKeep_ was the
+    // only thing making the exit save name it, and it has just been cleared:
+    // a hand-back that finds the radio unlisted, or whose open fails, used to
+    // leave the config naming the generator. Remembered the way a startup
+    // restore that could not open it is; a successful open clears it.
+    if (!restoreKeep_.valid()) {
+        cascade::gui::RememberedSource r;
+        r.kind = keep.kind;
+        if (keep.kind == "soapy") {
+            r.soapyArgs = keep.args;
+            r.nativeArgs = cfgNativeArgs_;
+        } else {
+            r.nativeArgs = keep.args;
+            r.soapyArgs = cfgSoapyArgs_;
+        }
+        r.sampleRateHz = keep.rateHz;
+        restoreKeep_ = r;
+        restoreKeepLabel_ = keep.label;
+    }
     int row = -1;
     if (keep.kind == "soapy") {
         for (std::size_t i = 0; i < soapyDevices_.size(); ++i) {

@@ -119,6 +119,16 @@ public:
     // sdrplay_api_ServiceNotResponding is the service declaring itself gone
     // through a DIFFERENT call than the one updateLocked already watches.
     abi::ErrT uninitResult = abi::Success;
+    // ONE REFUSAL PART-WAY THROUGH A SEQUENCE (the 6e308c3 review). Two
+    // setters send two Updates in a row - an RSP2 coming off Hi-Z (the AM
+    // port, then the antenna switch) and the AGC going off (the AGC, then the
+    // IF gain it restores) - and the case updateResult cannot express is the
+    // FIRST being taken and the SECOND refused. -1 is off; N >= 0 lets N
+    // Updates through and refuses the next one with refuseUpdateResult, then
+    // turns itself off. Read and written by the driver's Update worker, which
+    // is joined before the setter returns, so a plain int is enough.
+    int refuseUpdateAfter = -1;
+    abi::ErrT refuseUpdateResult = abi::Fail;
     // The service acknowledges a queued Update through the changed flags in
     // the next stream callback. With this on, the fake fires an empty callback
     // carrying the right flag the instant the Update returns - which is what
@@ -265,6 +275,12 @@ public:
         serviceStop_.store(true);
         if (serviceThread_.joinable()) { serviceThread_.join(); }
     }
+
+    // A SLOW Init (0.99.36 review): Init takes this long before it installs
+    // the callbacks. The real call is unbounded and has been seen taking
+    // seconds; a stall clock started before it would count Init's own time
+    // as silence.
+    std::atomic<int> initDelayMs{0};
 
     std::atomic<bool> serviceWedged{false};
     std::atomic<long long> longestCallbackUs{0};
@@ -579,6 +595,9 @@ private:
         FakeSdrPlayApi* f = instance();
         if (f == nullptr || cbs == nullptr) { return abi::Fail; }
         f->note("Init");
+        if (f->initDelayMs.load() > 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(f->initDelayMs.load()));
+        }
         // A WEDGED SERVICE still holds the stream it stopped delivering, so a
         // second Init is refused exactly as both field logs show it.
         if (f->serviceWedged.load()) { return abi::AlreadyInitialised; }
@@ -662,6 +681,11 @@ private:
             return f->updateResult;
         }
         if (f->serviceWedged.load()) { return abi::ServiceNotResponding; }
+        if (f->refuseUpdateAfter == 0) {
+            f->refuseUpdateAfter = -1;
+            return f->refuseUpdateResult;
+        }
+        if (f->refuseUpdateAfter > 0) { --f->refuseUpdateAfter; }
         if (f->updateResult != abi::Success) { return f->updateResult; }
 
         if (f->autoAck && f->streamA != nullptr) {
