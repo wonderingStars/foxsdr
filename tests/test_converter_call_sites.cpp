@@ -120,6 +120,10 @@ const Allowed kAllowed[] = {
      "makePatchGenerator: every caller passes radioFromAir(...) of the node's air frequency"},
     {"app_window_patch_radios.cpp", "dev->setCenterFrequencyHz(*centre)",
      "patch open worker: `centre` is the lambda's copy of radioCentre, converted on the GUI thread"},
+    {"app_window.cpp", "dev->setCenterFrequencyHz(*r.preTuneRadioHz)",
+     "RSP pre-Init tune on the open worker: preTuneRadioHz is radioFromAir(...) of keepCenterHz, "
+     "converted on the GUI thread in launchDeviceOpen (test_converter_app_paths "
+     "testRspPreTuneGoesThroughItsConverter)"},
 };
 
 // Files that ARE the translation layer, or never speak to the receiving radio.

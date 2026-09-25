@@ -1100,6 +1100,35 @@ void testTypedNodeCentre() {
     CHECK(Access::patchRadioAir(app, a) == 0.0);
 }
 
+// 0.99.36 TUNES AN RSP BEFORE ITS STREAM STARTS (the pre-Init tune the service
+// answers), and 0.99.37 merged that with the converter: the frequency carried
+// is an AIR one, so the RSP must be told it THROUGH ITS OWN CONVERTER, before
+// start - never the air figure raw. The release merge found the raw write.
+void testRspPreTuneGoesThroughItsConverter(double airCentre, double vfo) {
+    std::printf("  an RSP is told the carried frequency through its converter before its stream "
+                "starts (air centre %.0f Hz)\n",
+                airCentre);
+    resetRegistry();
+    const std::string rspArgs = "serial=RSP0000A";
+    {
+        std::lock_guard<std::mutex> lk(g_reg.m);
+        g_reg.native = {{"rtlsdr", "Generic RTL2832U A", kArgsA},
+                        {"sdrplay", "SDRplay RSP1A", rspArgs}};
+    }
+    cascade::gui::AppWindow app;
+    onRadioA(app, airCentre, vfo);
+    Access::setConverter(app, "sdrplay|" + rspArgs, up(125.0e6));
+    const std::size_t r = madeCount();
+    CHECK(Access::selectNative(app, rspArgs));
+    CHECK(made(r).kind == "sdrplay");
+    // The first thing the RSP heard is the radio frequency, and it was never
+    // started before hearing it (tunesAtStart: -1 = not started in this test,
+    // 0 would mean streamed at its default before the first tune).
+    CHECK(firstTune(r) == airCentre + 125.0e6);
+    CHECK(made(r).tunesAtStart != 0);
+    CHECK(Access::airCentre(app) == airCentre);
+}
+
 }  // namespace
 
 int main() {
@@ -1135,6 +1164,8 @@ int main() {
     testNoSerialNoAlias();
     testFallbackSameDongleRule();
     testTypedNodeCentre();
+    testRspPreTuneGoesThroughItsConverter(kAirCentre, kVfo);
+    testRspPreTuneGoesThroughItsConverter(kStation, 0.0);
 
     std::error_code ec;
     std::filesystem::remove_all(g_scratch, ec);
