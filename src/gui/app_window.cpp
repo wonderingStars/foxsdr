@@ -4888,38 +4888,44 @@ void AppWindow::drawToolbar() {
     // It takes the bar's open middle where there is one wide enough for it -
     // in the same terms the meters rule uses, so the two cannot disagree about
     // where the middle ends - and otherwise the clear brass across the top of
-    // the bar or at the head of the master cluster, drawn smaller if it has to
-    // be: placeMuteBanner in gui/tune_control.hpp, where a test sweeps every
-    // bar width against every part of the deck. It is never laid over the
-    // counter - the old fallback, "under the counter", was on the counter.
+    // the bar or at the head of the master cluster: layoutMuteBanner in
+    // gui/tune_control.hpp, where tests/test_mute_banner.cpp sweeps every bar
+    // width, every catalogue's real widths and one to six decoders named
+    // against every part of the deck. It is never laid over the counter, and
+    // its "Stop plugin" key is always drawn WHOLE and at least 13 px - the
+    // words give way instead, shortened with an ellipsis and read in full in
+    // the tooltip over them and over the key.
     if (const std::string who = muteBannerSubject(); !who.empty()) {
         std::string words;
         cascade::core::formatUtf8(words, tr("Sound muted by %s"), who.c_str());
+        const char* keyLabel = trId("Stop plugin##mute_banner");
         const ImGuiStyle& st = ImGui::GetStyle();
-        const float glyphW = ImGui::CalcTextSize(words.c_str()).x +
-                             ImGui::CalcTextSize(trId("Stop plugin##mute_banner"), nullptr, true).x;
-        // The Dummy's SameLine and the key's own SameLine, and the key's padding.
-        const float fixedW = 2.0f * st.ItemSpacing.x + 2.0f * st.FramePadding.x;
-        const cascade::gui::MuteBannerPlace place = cascade::gui::placeMuteBanner(
-            barW, scale, coreW, layout.scale >= 2, showMeters, glyphW, fixedW,
-            ImGui::GetFontSize());
-        const ImVec2 at(barTL.x + place.x, barTL.y + place.y);
-        const bool smaller = place.fontScale < 1.0f;
-        if (smaller) { ImGui::PushFont(nullptr, ImGui::GetFontSize() * place.fontScale); }
-        ImGui::PushClipRect(ImVec2(barTL.x + place.x0, barTL.y + place.y0),
-                            ImVec2(barTL.x + place.x1, barTL.y + place.y1), true);
-        ImGui::SetCursorScreenPos(at);
-        // A zero-sized item so the SameLine drawMuteBanner opens with has a
-        // line to resume: the banner lays itself out and this is the only way
-        // to tell it where.
-        ImGui::Dummy(ImVec2(0.0f, 0.0f));
-        if (drawMuteBanner()) {
-            cascade::gui::census::note("deck:mute");
-            cascade::gui::census::rect("deck:mute", at.x, at.y, ImGui::GetItemRectMax().x,
-                                       ImGui::GetItemRectMax().y);
+        // Measured at every size it may be drawn at, because a face's widths do
+        // not shrink in proportion to its size - but the smaller sizes only
+        // when the middle does not hold it at the bar's own: asking ImGui 1.92
+        // for a size bakes that size into the atlas, and a middle banner must
+        // leave the frame exactly as 0.99.35's did.
+        float px[cascade::gui::kMuteBannerMaxSizes];
+        const int n = cascade::gui::muteBannerSizes(ImGui::GetFontSize(), px,
+                                                    cascade::gui::kMuteBannerMaxSizes);
+        cascade::gui::MuteBannerSize sizes[cascade::gui::kMuteBannerMaxSizes];
+        const auto measure = [&](int i) {
+            if (i > 0) { ImGui::PushFont(nullptr, px[i]); }
+            sizes[i].px = px[i];
+            sizes[i].wordsW = ImGui::CalcTextSize(words.c_str()).x;
+            sizes[i].keyLabelW = ImGui::CalcTextSize(keyLabel, nullptr, true).x;
+            if (i > 0) { ImGui::PopFont(); }
+        };
+        measure(0);
+        cascade::gui::MuteBannerLayout mb = cascade::gui::layoutMuteBanner(
+            barW, scale, coreW, layout.scale >= 2, showMeters, sizes, 1, st.FramePadding.x,
+            st.ItemSpacing.x);
+        if (mb.slot != 0) {
+            for (int i = 1; i < n; ++i) { measure(i); }
+            mb = cascade::gui::layoutMuteBanner(barW, scale, coreW, layout.scale >= 2, showMeters,
+                                                sizes, n, st.FramePadding.x, st.ItemSpacing.x);
         }
-        ImGui::PopClipRect();
-        if (smaller) { ImGui::PopFont(); }
+        drawMuteBanner(mb, barTL, words);
     }
 
     // THE RAIL ACROSS THE FOOT. A light hairline directly above a dark one,
@@ -17365,18 +17371,9 @@ void AppWindow::rebuildMuteStates() {
 }
 
 std::string AppWindow::muteNameList(const std::vector<std::string>& names) {
-    if (names.empty()) { return std::string(); }
-    if (names.size() == 1) { return names[0]; }
-    // "A and B" for two, "A, B and C" beyond. Several data decoders running at
-    // once is an ordinary thing to do - ADS-B and AIS share no band but a user
-    // watching both has both running - and a message that named only the first
-    // would send them to stop a plugin that was not the whole reason.
-    std::string s;
-    for (std::size_t i = 0; i < names.size(); ++i) {
-        if (i > 0) { s += (i + 1 == names.size()) ? " and " : ", "; }
-        s += names[i];
-    }
-    return s;
+    // "A and B" for two, "A, B and C" beyond: gui/tune_control.hpp, where the
+    // mute banner's test measures the same sentence the banner draws.
+    return cascade::gui::joinMuteNames(names);
 }
 
 std::string AppWindow::muteSubjectText() const {
@@ -17577,18 +17574,56 @@ std::string AppWindow::muteBannerSubject() const {
     return muteSubjectText();
 }
 
-bool AppWindow::drawMuteBanner() {
-    const std::string who = muteBannerSubject();
-    if (who.empty()) { return false; }
-    ImGui::SameLine();
-    ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
-    ImGui::Text(tr("Sound muted by %s"), who.c_str());
-    ImGui::PopStyleColor();
-    ImGui::SameLine();
+void AppWindow::drawMuteBanner(const cascade::gui::MuteBannerLayout& mb, const ImVec2& barTL,
+                               const std::string& words) {
+    const bool smaller = mb.px > 0.0f && mb.px < ImGui::GetFontSize() - 1.0e-3f;
+    if (smaller) { ImGui::PushFont(nullptr, mb.px); }
+    // Everything is drawn inside the place it was given, so nothing can spill
+    // onto a part of the deck - and the layout puts the key wholly inside it,
+    // so the clip can never take any of the key.
+    ImGui::PushClipRect(ImVec2(barTL.x + mb.x0, barTL.y + mb.y0),
+                        ImVec2(barTL.x + mb.x1, barTL.y + mb.y1), true);
+    const float lineH = ImGui::GetFontSize();
+    float wx1 = barTL.x + mb.keyX;
+    float wy1 = barTL.y + mb.keyY;
+    if (mb.wordsDrawnW > 0.0f) {
+        const ImVec2 wp(barTL.x + mb.wordsX, barTL.y + mb.wordsY);
+        ImGui::SetCursorScreenPos(wp);
+        ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
+        if (mb.wordsWhole) {
+            ImGui::TextUnformatted(words.c_str());
+        } else {
+            // As many of the words as fit, then an ellipsis; the item under
+            // them is what the tooltip below hangs from.
+            const ImVec2 wmax(wp.x + mb.wordsDrawnW, wp.y + lineH);
+            ImGui::Dummy(ImVec2(mb.wordsDrawnW, lineH));
+            ImGui::RenderTextEllipsis(ImGui::GetWindowDrawList(), wp, wmax, wmax.x, words.c_str(),
+                                      nullptr, nullptr);
+        }
+        ImGui::PopStyleColor();
+        if (!mb.wordsWhole && ImGui::IsItemHovered()) { ImGui::SetTooltip("%s", words.c_str()); }
+        wx1 = ImGui::GetItemRectMax().x;
+        wy1 = ImGui::GetItemRectMax().y;
+    }
+    ImGui::SetCursorScreenPos(ImVec2(barTL.x + mb.keyX, barTL.y + mb.keyY));
     if (ImGui::SmallButton(trId("Stop plugin##mute_banner"))) {
         stopMutingPlugins(mutedByKeys_);
     }
-    return true;
+    if (!mb.wordsWhole && ImGui::IsItemHovered()) { ImGui::SetTooltip("%s", words.c_str()); }
+    const ImVec2 k0 = ImGui::GetItemRectMin();
+    const ImVec2 k1 = ImGui::GetItemRectMax();
+    // THE CENSUS: the banner as drawn (words and key), the key ImGui laid out,
+    // and the clip it is drawn under - test_theme_census requires the key
+    // whole inside that clip, at least 13 px, and on no part of the deck.
+    cascade::gui::census::note("deck:mute");
+    cascade::gui::census::rect("deck:mute", std::min(barTL.x + mb.wordsX, k0.x),
+                               std::min(barTL.y + mb.wordsY, k0.y), std::max(wx1, k1.x),
+                               std::max(wy1, k1.y));
+    cascade::gui::census::rect("deck:mute.key", k0.x, k0.y, k1.x, k1.y);
+    cascade::gui::census::rect("deck:mute.clip", barTL.x + mb.x0, barTL.y + mb.y0,
+                               barTL.x + mb.x1, barTL.y + mb.y1);
+    ImGui::PopClipRect();
+    if (smaller) { ImGui::PopFont(); }
 }
 
 void AppWindow::drawPluginTuneControls() {

@@ -1165,9 +1165,11 @@ private:
     // seam FOXSDR_FORCE_MUTE_BANNER=<name> draws it naming <name> whatever
     // the audio is doing, so the theme census can place and measure it.
     std::string muteBannerSubject() const;
-    // Draws the banner on the current line at the current font size; returns
-    // whether there was one to draw.
-    bool drawMuteBanner();
+    // Draws the banner where layoutMuteBanner put it (bar-relative, from the
+    // bar's top-left `barTL`): the words - whole, or shortened with the full
+    // sentence in a tooltip - and the "Stop plugin" key, always whole.
+    void drawMuteBanner(const cascade::gui::MuteBannerLayout& mb, const ImVec2& barTL,
+                        const std::string& words);
     // Stops exactly the plugins named by `keys`, through the ordinary stop
     // path, in one rebuild. The caller passes the keys its own message named -
     // the banner passes mutedByKeys_, the popup passes what it captured - so a

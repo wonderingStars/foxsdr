@@ -872,6 +872,56 @@ ImU32 inkFor(ImU32 ink, ImU32 toward, const ImU32* grounds, int n, double min = 
     return out;
 }
 
+// --- A CONTROL'S STATES LOOK DIFFERENT (repair round 2, 2026-09-25) ----------------
+//
+// surfaceFor() makes each state's ground readable on its own, and in doing so
+// can land two states on the same colour: it stops every ground at the first
+// shade the label reads on, so Field Radio's hovered and pressed keys came out
+// 1.006:1 apart and Daylight Lab's hovered row WAS its selected row. A press
+// that does not show is a press the user makes twice. So after legibility,
+// each state is moved away from the others until every two of a control's
+// states (idle, under the hand, pressed or selected) stand kStateStep apart in
+// luminance - away from the label first, which can only make it read better,
+// and only if that runs out of room, back toward it as far as legibility
+// allows. 1.2 is just under the weakest step today's own bench takes between
+// states (a field hovered to held, 1.227:1): every theme gives at least
+// today's feedback, in luminance, which is what survives colour-blindness.
+constexpr double kStateStep = 1.2;
+
+// `c`, moved as little as it takes to stand kStateStep from each of `others`
+// while `ink` still reads on it at kReadable.
+ImU32 apartFrom(ImU32 c, ImU32 ink, const ImU32* others, int n) {
+    const auto ok = [&](ImU32 x) {
+        if (contrastRatio(ink, x) < kReadable) { return false; }
+        for (int i = 0; i < n; ++i) {
+            if (contrastRatio(x, others[i]) < kStateStep) { return false; }
+        }
+        return true;
+    };
+    const ImU32 opaqueC = c | (0xFFu << IM_COL32_A_SHIFT);
+    if (ok(opaqueC)) { return opaqueC; }
+    const ImU32 pole = luminance(ink) > luminance(c) ? IM_COL32(0, 0, 0, 255)
+                                                      : IM_COL32(255, 255, 255, 255);
+    for (const ImU32 toward : {pole, ink | (0xFFu << IM_COL32_A_SHIFT)}) {
+        for (int k = 1; k <= 128; ++k) {
+            const ImU32 x = mix(opaqueC, toward, static_cast<float>(k) / 128.0f);
+            if (ok(x)) { return x; }
+        }
+    }
+    return opaqueC;  // no room either way: test_theme names the pair
+}
+
+struct States {
+    ImU32 idle, hover, press;
+};
+// A control's three grounds, each already readable under `ink`, held apart.
+States stateLadder(ImU32 ink, ImU32 idle, ImU32 hover, ImU32 press) {
+    States s{idle, apartFrom(hover, ink, &idle, 1), press};
+    const ImU32 both[2] = {s.idle, s.hover};
+    s.press = apartFrom(press, ink, both, 2);
+    return s;
+}
+
 // --- THE POPUP PALETTE ------------------------------------------------------------
 //
 // IMGUI LETTERS A POPUP IN THE SAME ImGuiCol_Text AS A WINDOW, and foxsdr-ui/1
@@ -895,9 +945,14 @@ int buildPopupColours(ImGuiCol* idx, ImVec4* col) {
     const ImU32 mt = role(Role::MenuText);
     const ImU32 mh = role(Role::MenuHi);
     const ImU32 mbd = role(Role::MenuBorder);
-    const ImU32 rest = surfaceFor(mt, mh);
-    const ImU32 hover = surfaceFor(mt, mix(mh, mt, 0.12f));
-    const ImU32 held = surfaceFor(mt, mix(mh, mt, 0.22f));
+    // A key, a row and a tab at rest, under the hand and held; a field at rest,
+    // hovered and being edited - each ground readable, and every two apart.
+    const States keys = stateLadder(mt, surfaceFor(mt, mh), surfaceFor(mt, mix(mh, mt, 0.12f)),
+                                    surfaceFor(mt, mix(mh, mt, 0.22f)));
+    const ImU32 rest = keys.idle;
+    const ImU32 hover = keys.hover;
+    const ImU32 held = keys.press;
+    const States fields = stateLadder(mt, surfaceFor(mt, mix(mb, mh, 0.5f)), rest, hover);
     int n = 0;
     const auto put = [&](ImGuiCol i, ImU32 c) {
         idx[n] = i;
@@ -919,9 +974,9 @@ int buildPopupColours(ImGuiCol* idx, ImVec4* col) {
     put(ImGuiCol_Header, rest);
     put(ImGuiCol_HeaderHovered, hover);
     put(ImGuiCol_HeaderActive, held);
-    put(ImGuiCol_FrameBg, surfaceFor(mt, mix(mb, mh, 0.5f)));
-    put(ImGuiCol_FrameBgHovered, rest);
-    put(ImGuiCol_FrameBgActive, hover);
+    put(ImGuiCol_FrameBg, fields.idle);
+    put(ImGuiCol_FrameBgHovered, fields.hover);
+    put(ImGuiCol_FrameBgActive, fields.press);
     put(ImGuiCol_TitleBg, rest);
     put(ImGuiCol_TitleBgActive, rest);
     put(ImGuiCol_TitleBgCollapsed, rest);
@@ -985,17 +1040,32 @@ void applyRoleStyleColours(ImVec4* c) {
     // label needs, and a key that is LATCHED lit is drawn with activeText on
     // the true activeBg by pushLitKeyColours(). Field Radio's pressed key was
     // cream on gold at 1.57:1 before this.
-    c[ImGuiCol_FrameBg] = vec(surfaceFor(label, well));
-    c[ImGuiCol_FrameBgHovered] = vec(surfaceFor(label, mix(well, ctrl, 0.45f)));
-    c[ImGuiCol_FrameBgActive] = vec(surfaceFor(label, mix(well, active, 0.35f)));
+    //
+    // AND EVERY TWO STATES OF ONE CONTROL STAND APART (stateLadder): a key, a
+    // selectable row, a tab and a field each show the hand arriving and the
+    // press landing, which readability alone had stopped doing (Field Radio's
+    // hovered and pressed keys were 1.006:1, Daylight Lab's hovered row was its
+    // selected row).
+    const States fields =
+        stateLadder(label, surfaceFor(label, well), surfaceFor(label, mix(well, ctrl, 0.45f)),
+                    surfaceFor(label, mix(well, active, 0.35f)));
+    c[ImGuiCol_FrameBg] = vec(fields.idle);
+    c[ImGuiCol_FrameBgHovered] = vec(fields.hover);
+    c[ImGuiCol_FrameBgActive] = vec(fields.press);
 
-    c[ImGuiCol_Button] = vec(surfaceFor(label, ctrl));
-    c[ImGuiCol_ButtonHovered] = vec(surfaceFor(label, mix(ctrl, active, 0.35f)));
-    c[ImGuiCol_ButtonActive] = vec(surfaceFor(label, active));
+    const States keys =
+        stateLadder(label, surfaceFor(label, ctrl), surfaceFor(label, mix(ctrl, active, 0.35f)),
+                    surfaceFor(label, active));
+    c[ImGuiCol_Button] = vec(keys.idle);
+    c[ImGuiCol_ButtonHovered] = vec(keys.hover);
+    c[ImGuiCol_ButtonActive] = vec(keys.press);
 
-    c[ImGuiCol_Header] = vec(surfaceFor(label, ctrl));
-    c[ImGuiCol_HeaderHovered] = vec(surfaceFor(label, menuHi));
-    c[ImGuiCol_HeaderActive] = vec(surfaceFor(label, mix(menuHi, active, 0.5f)));
+    const States rows =
+        stateLadder(label, surfaceFor(label, ctrl), surfaceFor(label, menuHi),
+                    surfaceFor(label, mix(menuHi, active, 0.5f)));
+    c[ImGuiCol_Header] = vec(rows.idle);
+    c[ImGuiCol_HeaderHovered] = vec(rows.hover);
+    c[ImGuiCol_HeaderActive] = vec(rows.press);
 
     c[ImGuiCol_TitleBg] = vec(surfaceFor(label, role(Role::PanelHead)));
     c[ImGuiCol_TitleBgActive] = vec(surfaceFor(label, role(Role::Frame)));
@@ -1023,12 +1093,16 @@ void applyRoleStyleColours(ImVec4* c) {
     c[ImGuiCol_ResizeGripHovered] = vec(ctrlBorder);
     c[ImGuiCol_ResizeGripActive] = vec(accent);
 
-    c[ImGuiCol_Tab] = vec(surfaceFor(label, ctrl));
-    c[ImGuiCol_TabHovered] = vec(surfaceFor(label, mix(ctrl, active, 0.35f)));
-    c[ImGuiCol_TabSelected] = vec(surfaceFor(label, active));
+    // A tab is a key: the same three grounds.
+    c[ImGuiCol_Tab] = vec(keys.idle);
+    c[ImGuiCol_TabHovered] = vec(keys.hover);
+    c[ImGuiCol_TabSelected] = vec(keys.press);
     c[ImGuiCol_TabSelectedOverline] = vec(role(Role::ActiveLine));
-    c[ImGuiCol_TabDimmed] = vec(surfaceFor(label, panel));
-    c[ImGuiCol_TabDimmedSelected] = vec(surfaceFor(label, ctrl));
+    {
+        const ImU32 dimmed = surfaceFor(label, panel);
+        c[ImGuiCol_TabDimmed] = vec(dimmed);
+        c[ImGuiCol_TabDimmedSelected] = vec(apartFrom(surfaceFor(label, ctrl), label, &dimmed, 1));
+    }
 
     c[ImGuiCol_TableHeaderBg] = vec(surfaceFor(label, role(Role::PanelHead)));
     c[ImGuiCol_TableBorderStrong] = vec(border);
@@ -1121,12 +1195,17 @@ int pushLitKeyColours() {
         ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
         return 1;
     }
-    // foxsdr-ui/1's lit key: activeText on activeBg, whatever the hand is doing.
+    // foxsdr-ui/1's lit key: activeText on activeBg - and, like any key, it
+    // answers the hand: under it and held, its face steps away from the lit
+    // colour (kStateStep, the legend still reading on each), where the first
+    // cut pushed the one colour for all three and a press on a lit key showed
+    // nothing at all.
     const ImU32 ink = role(Role::ActiveText);
     const ImU32 face = surfaceFor(ink, role(Role::ActiveBg));
-    ImGui::PushStyleColor(ImGuiCol_Button, vec(face));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, vec(face));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, vec(face));
+    const States lit = stateLadder(ink, face, face, face);
+    ImGui::PushStyleColor(ImGuiCol_Button, vec(lit.idle));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, vec(lit.hover));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, vec(lit.press));
     ImGui::PushStyleColor(ImGuiCol_Text, vec(ink));
     return 4;
 }

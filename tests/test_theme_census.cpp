@@ -192,7 +192,13 @@ int main() {
     // over its own switch row at 1280). The seam draws it naming this decoder,
     // at the length the real banner has, so it is placed and measured with
     // the deck's other parts.
-    setEnv("FOXSDR_FORCE_MUTE_BANNER", "ADS-B Decoder");
+    //
+    // FOUR DECODERS NAMED, not one (repair round 2): the banner's fallback was
+    // clipped to its place, and with four names on today's own 1280 x 720 bar
+    // the clip took the "Stop plugin" key away altogether. The longest banner
+    // is the one that proves the key survives.
+    setEnv("FOXSDR_FORCE_MUTE_BANNER",
+           "ADS-B Decoder, AIS Decoder, APRS Decoder and Nearby Signal Catch");
 
     // The six presets as a user who PICKED each one has them (the counter and
     // readings sizes a pick brings), and the two layouts no preset ships but a
@@ -280,6 +286,43 @@ int main() {
                                     l.name, m.x0, m.y0, m.x1, m.y1, o.x0, o.y0, o.x1, o.y1);
                     }
                     CHECK(inside);
+                }
+            }
+            // THE KEY IS WHOLE, READABLE AND ON NOTHING. Measured from the key
+            // ImGui actually laid out, against the clip the banner is drawn
+            // under: a key outside its clip is a key partly or wholly cut away,
+            // and a cut-away ImGui item cannot be clicked.
+            {
+                const auto key = c.rects.find("deck:mute.key");
+                const auto clip = c.rects.find("deck:mute.clip");
+                const auto bar = c.rects.find("deck:bar");
+                CHECK(key != c.rects.end());
+                CHECK(clip != c.rects.end());
+                if (key != c.rects.end() && clip != c.rects.end() && bar != c.rects.end()) {
+                    const Rect& k = key->second;
+                    const Rect& o = clip->second;
+                    const Rect& b = bar->second;
+                    const float e = 0.01f;
+                    const bool whole = k.x0 >= o.x0 - e && k.y0 >= o.y0 - e && k.x1 <= o.x1 + e &&
+                                       k.y1 <= o.y1 + e && k.x0 >= b.x0 && k.y0 >= b.y0 &&
+                                       k.x1 <= b.x1 && k.y1 <= b.y1;
+                    const float px = k.y1 - k.y0;  // a small key's height IS its lettering
+                    if (!whole || px < 13.0f - 1.0e-3f) {
+                        std::printf("    %s: the Stop plugin key (%.1f,%.1f)-(%.1f,%.1f), %.1f px, "
+                                    "clip (%.1f,%.1f)-(%.1f,%.1f)%s%s\n",
+                                    l.name, k.x0, k.y0, k.x1, k.y1, px, o.x0, o.y0, o.x1, o.y1,
+                                    whole ? "" : " CLIPPED", px < 13.0f ? " TOO SMALL" : "");
+                    }
+                    CHECK(whole);
+                    CHECK(px >= 13.0f - 1.0e-3f);
+                    for (const char* part : deckParts) {
+                        if (std::string(part) == "deck:mute") { continue; }
+                        const auto p = c.rects.find(part);
+                        if (p == c.rects.end()) { continue; }  // failed above
+                        const bool on = overlaps(k, p->second);
+                        if (on) { std::printf("    %s: the Stop plugin key is on %s\n", l.name, part); }
+                        CHECK(!on);
+                    }
                 }
             }
             for (std::size_t i = 0; i < std::size(deckParts); ++i) {

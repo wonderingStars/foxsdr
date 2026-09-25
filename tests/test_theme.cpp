@@ -76,10 +76,126 @@ ImU32 over(const ImVec4& top, ImU32 base) {
                          top.z * a + b.z * (1.0f - a), 1.0f));
 }
 
+// --- A CONTROL'S STATES MUST LOOK DIFFERENT (repair round 2, 2026-09-25) -------------
+//
+// Round 1 made every state ground readable under the label by darkening (or
+// lightening) it until the label reached 4.5:1 - and in Field Radio that
+// stopped a key's hovered and pressed grounds at the same place: 1.006:1
+// apart in luminance (CIEDE2000 4.4), where today's bench moves 23. A press
+// that does not show is a press the user repeats. Every pair of states of a
+// key, a selectable row, a tab and a field - idle, hovered, pressed/selected -
+// is read from the same live frame and held apart.
+//
+// THE RULE IS LUMINANCE CONTRAST >= 1.2 between any two states. Luminance,
+// because it is what survives colour-blindness and glare - a change of hue
+// alone is invisible to one man in twelve; 1.2, because it is just under the
+// weakest step today's own bench takes between states (a field hovered to
+// held, 1.227:1), so every theme gives at least today's feedback. CIEDE2000
+// is printed alongside as the perceptual check, not required: it compresses
+// lightness steps in the darks, where Night Watch's red-on-black lives.
+constexpr double kStateStep = 1.2;
+struct Step {
+    std::string scope;    // "window", "tooltip", "popup", "modal", "litkey"
+    std::string widget;   // "Button", "Header", "Tab", "TabDimmed", "Frame"
+    std::string a, b;     // the two states
+    double ratio = 0.0;   // luminance contrast between their grounds
+    double de00 = 0.0;    // CIEDE2000 between them
+};
+std::vector<Step> g_steps;
+
+// CIEDE2000 (Sharma, Wu & Dalal 2005) between two sRGB colours, D65.
+double deltaE2000(ImU32 x, ImU32 y) {
+    const auto lab = [](ImU32 c, double* L, double* A, double* B) {
+        const auto lin = [](double v) {
+            v /= 255.0;
+            return v <= 0.04045 ? v / 12.92 : std::pow((v + 0.055) / 1.055, 2.4);
+        };
+        const double r = lin((c >> IM_COL32_R_SHIFT) & 0xFF);
+        const double g = lin((c >> IM_COL32_G_SHIFT) & 0xFF);
+        const double b = lin((c >> IM_COL32_B_SHIFT) & 0xFF);
+        const double X = (0.4124564 * r + 0.3575761 * g + 0.1804375 * b) / 0.95047;
+        const double Y = (0.2126729 * r + 0.7151522 * g + 0.0721750 * b);
+        const double Z = (0.0193339 * r + 0.1191920 * g + 0.9503041 * b) / 1.08883;
+        const auto f = [](double t) {
+            return t > 216.0 / 24389.0 ? std::cbrt(t) : (24389.0 / 27.0 * t + 16.0) / 116.0;
+        };
+        *L = 116.0 * f(Y) - 16.0;
+        *A = 500.0 * (f(X) - f(Y));
+        *B = 200.0 * (f(Y) - f(Z));
+    };
+    double L1, a1, b1, L2, a2, b2;
+    lab(x, &L1, &a1, &b1);
+    lab(y, &L2, &a2, &b2);
+    const double kPi = 3.14159265358979323846;
+    const double deg = kPi / 180.0;
+    const double C1 = std::hypot(a1, b1), C2 = std::hypot(a2, b2);
+    const double Cm = 0.5 * (C1 + C2);
+    const double G = 0.5 * (1.0 - std::sqrt(std::pow(Cm, 7) / (std::pow(Cm, 7) + std::pow(25.0, 7))));
+    const double ap1 = (1.0 + G) * a1, ap2 = (1.0 + G) * a2;
+    const double Cp1 = std::hypot(ap1, b1), Cp2 = std::hypot(ap2, b2);
+    const auto hue = [&](double bb, double ap) {
+        if (bb == 0.0 && ap == 0.0) { return 0.0; }
+        double h = std::atan2(bb, ap) / deg;
+        return h < 0.0 ? h + 360.0 : h;
+    };
+    const double hp1 = hue(b1, ap1), hp2 = hue(b2, ap2);
+    const double dLp = L2 - L1, dCp = Cp2 - Cp1;
+    double dhp = 0.0;
+    if (Cp1 * Cp2 != 0.0) {
+        dhp = hp2 - hp1;
+        if (dhp > 180.0) { dhp -= 360.0; } else if (dhp < -180.0) { dhp += 360.0; }
+    }
+    const double dHp = 2.0 * std::sqrt(Cp1 * Cp2) * std::sin(dhp * deg / 2.0);
+    const double Lpm = 0.5 * (L1 + L2), Cpm = 0.5 * (Cp1 + Cp2);
+    double hpm = hp1 + hp2;
+    if (Cp1 * Cp2 != 0.0) {
+        if (std::fabs(hp1 - hp2) > 180.0) { hpm += (hp1 + hp2 < 360.0) ? 360.0 : -360.0; }
+        hpm *= 0.5;
+    }
+    const double T = 1.0 - 0.17 * std::cos((hpm - 30.0) * deg) + 0.24 * std::cos(2.0 * hpm * deg) +
+                     0.32 * std::cos((3.0 * hpm + 6.0) * deg) - 0.20 * std::cos((4.0 * hpm - 63.0) * deg);
+    const double dTheta = 30.0 * std::exp(-std::pow((hpm - 275.0) / 25.0, 2.0));
+    const double Rc = 2.0 * std::sqrt(std::pow(Cpm, 7) / (std::pow(Cpm, 7) + std::pow(25.0, 7)));
+    const double Sl = 1.0 + 0.015 * std::pow(Lpm - 50.0, 2.0) / std::sqrt(20.0 + std::pow(Lpm - 50.0, 2.0));
+    const double Sc = 1.0 + 0.045 * Cpm;
+    const double Sh = 1.0 + 0.015 * Cpm * T;
+    const double Rt = -std::sin(2.0 * dTheta * deg) * Rc;
+    return std::sqrt(std::pow(dLp / Sl, 2.0) + std::pow(dCp / Sc, 2.0) + std::pow(dHp / Sh, 2.0) +
+                     Rt * (dCp / Sc) * (dHp / Sh));
+}
+
+// Every pair of states of one widget, over the scope's ground.
+void readStates(const char* scope, const char* widget,
+                const std::vector<std::pair<const char*, ImGuiCol>>& states, ImU32 ground) {
+    for (std::size_t i = 0; i < states.size(); ++i) {
+        for (std::size_t j = i + 1; j < states.size(); ++j) {
+            const ImU32 a = over(ImGui::GetStyleColorVec4(states[i].second), ground);
+            const ImU32 b = over(ImGui::GetStyleColorVec4(states[j].second), ground);
+            g_steps.push_back({scope, widget, states[i].first, states[j].first,
+                               th::contrastRatio(a, b), deltaE2000(a, b)});
+        }
+    }
+}
+
 // Every text-bearing surface a scope can draw, with the ink ImGui letters on it.
 void readScope(const char* scope, bool popupLike, std::vector<Pair>& out) {
     const auto c = [](ImGuiCol i) { return ImGui::GetStyleColorVec4(i); };
     const ImU32 ground = opaque(c(popupLike ? ImGuiCol_PopupBg : ImGuiCol_WindowBg));
+    readStates(scope, "Button",
+               {{"Button", ImGuiCol_Button}, {"ButtonHovered", ImGuiCol_ButtonHovered},
+                {"ButtonActive", ImGuiCol_ButtonActive}}, ground);
+    readStates(scope, "Header",
+               {{"Header", ImGuiCol_Header}, {"HeaderHovered", ImGuiCol_HeaderHovered},
+                {"HeaderActive", ImGuiCol_HeaderActive}}, ground);
+    readStates(scope, "Tab",
+               {{"Tab", ImGuiCol_Tab}, {"TabHovered", ImGuiCol_TabHovered},
+                {"TabSelected", ImGuiCol_TabSelected}}, ground);
+    readStates(scope, "TabDimmed",
+               {{"TabDimmed", ImGuiCol_TabDimmed}, {"TabDimmedSelected", ImGuiCol_TabDimmedSelected}},
+               ground);
+    readStates(scope, "Frame",
+               {{"FrameBg", ImGuiCol_FrameBg}, {"FrameBgHovered", ImGuiCol_FrameBgHovered},
+                {"FrameBgActive", ImGuiCol_FrameBgActive}}, ground);
     const ImU32 text = opaque(c(ImGuiCol_Text));
     const ImU32 disabled = opaque(c(ImGuiCol_TextDisabled));
     struct S {
@@ -149,6 +265,10 @@ std::vector<Pair> drawnPairs() {
             out.push_back({"litkey", "Text", f.first,
                            th::contrastRatio(ink, over(ImGui::GetStyleColorVec4(f.second), ground))});
         }
+        // And it answers the hand: rest, under the hand and held all differ.
+        readStates("litkey", "LitKey",
+                   {{"Button", ImGuiCol_Button}, {"ButtonHovered", ImGuiCol_ButtonHovered},
+                    {"ButtonActive", ImGuiCol_ButtonActive}}, ground);
         ImGui::PopStyleColor(n);
     }
     ImGui::BeginTooltip();
@@ -496,7 +616,36 @@ int main() {
             const ThemeId id = static_cast<ThemeId>(i);
             th::setTheme(id);
             th::applyTheme();
+            g_steps.clear();
             const std::vector<Pair> pairs = drawnPairs();
+            // EVERY STATE OF A CONTROL DIFFERS FROM EVERY OTHER, by kStateStep
+            // (today's bench is exactly 0.99.35's and is only reported).
+            {
+                double worst = 1.0e9;
+                double worstDe = 1.0e9;
+                std::string worstWhat;
+                for (const Step& s : g_steps) {
+                    if (std::getenv("FOXSDR_THEME_PRINT_STATES") != nullptr) {
+                        std::printf("STATE %s %s %s %s/%s %.3f dE00 %.1f\n", th::themeKey(id),
+                                    s.scope.c_str(), s.widget.c_str(), s.a.c_str(), s.b.c_str(),
+                                    s.ratio, s.de00);
+                    }
+                    if (!th::isTodayPalette() && !(s.ratio >= kStateStep)) {
+                        std::printf("  %s: %s %s %s vs %s is %.3f:1 apart (dE00 %.1f)\n",
+                                    th::themeKey(id), s.scope.c_str(), s.widget.c_str(),
+                                    s.a.c_str(), s.b.c_str(), s.ratio, s.de00);
+                    }
+                    if (!th::isTodayPalette()) { CHECK(s.ratio >= kStateStep); }
+                    if (s.ratio < worst) {
+                        worst = s.ratio;
+                        worstWhat = s.scope + " " + s.a + "/" + s.b;
+                    }
+                    worstDe = std::min(worstDe, s.de00);
+                }
+                CHECK(g_steps.size() >= 4u * 13u + 3u);
+                std::printf("  %-10s states: %zu pairs, closest %.3f:1 (%s), smallest dE00 %.1f\n",
+                            th::themeKey(id), g_steps.size(), worst, worstWhat.c_str(), worstDe);
+            }
             CHECK(pairs.size() >= 4u * 24u);
             const bool today = th::isTodayPalette();
             // Today's bench pushes nothing over its popups (0.99.35 exactly);

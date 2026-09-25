@@ -686,29 +686,51 @@ int main() {
     }
 
     // --- the mute banner, wherever the middle is taken: never on a part of the deck ------
-    // REPAIR ROUND (2026-09-25): the fallback was a fixed point on the counter's
-    // own switch row and footer, and Bench Classic XL's 2x cluster sent the
-    // banner there at 1600 x 1000 as well. Every bar width from below the
-    // narrowest window to a 2400-px one, all three counter layouts, three
-    // banner lengths: the banner lies inside the bar and off the transport, the
-    // master cluster, the counter plate, the volume dial and the meters.
+    // REPAIR ROUNDS (2026-09-25): the fallback was a fixed point on the counter's
+    // own switch row and footer; then a place the banner was CLIPPED to, which
+    // cut its "Stop plugin" key away. Every bar width from below the narrowest
+    // window to a 2400-px one, all four counter layouts, three sentence lengths
+    // and a short and a long key label: the key lies WHOLE inside its place and
+    // the bar, is lettered at 13 px or more, and neither it nor the words touch
+    // the transport, the master cluster, the counter plate, the volume dial or
+    // the meters. (tests/test_mute_banner.cpp does the same with every
+    // catalogue's real widths in every theme's typeface.)
     {
-        std::printf("  the mute banner never lies on a part of the deck, at any width\n");
+        std::printf("  the mute banner's key is whole, readable and on no part of the deck\n");
         using cascade::gui::CounterLayout;
-        using cascade::gui::placeMuteBanner;
+        using cascade::gui::layoutMuteBanner;
+        using cascade::gui::MuteBannerLayout;
         struct Box {
             float x0, y0, x1, y1;
         };
         const auto hit = [](const Box& a, const Box& b) {
             return a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1;
         };
+        const auto within = [](const Box& a, const Box& o) {
+            return a.x0 >= o.x0 - 0.01f && a.y0 >= o.y0 - 0.01f && a.x1 <= o.x1 + 0.01f &&
+                   a.y1 <= o.y1 + 0.01f;
+        };
         const float lineH = 17.0f;
-        const float fixedW = 32.0f;
+        const float padX = 8.0f;
+        const float gap = 8.0f;
         const float meterH = 66.0f + lineH * 2.0f + 8.0f;
+        // The banner at the sizes the application measures it at (17 px down to
+        // 13), its widths here in proportion - the real, non-proportional ones
+        // are test_mute_banner's.
+        const auto sized = [&](float wordsW, float keyLabelW,
+                               cascade::gui::MuteBannerSize* out) {
+            float px[cascade::gui::kMuteBannerMaxSizes];
+            const int n = cascade::gui::muteBannerSizes(lineH, px, cascade::gui::kMuteBannerMaxSizes);
+            for (int i = 0; i < n; ++i) {
+                out[i] = {px[i], wordsW * px[i] / lineH, keyLabelW * px[i] / lineH};
+            }
+            return n;
+        };
+        cascade::gui::MuteBannerSize sz[cascade::gui::kMuteBannerMaxSizes];
         int placed = 0;
         int bySlot[3] = {0, 0, 0};
-        for (const CounterLayout layout :
-             {CounterLayout{1, true}, CounterLayout{2, false}, CounterLayout{2, true}}) {
+        for (const CounterLayout layout : {CounterLayout{1, true}, CounterLayout{1, false},
+                                           CounterLayout{2, false}, CounterLayout{2, true}}) {
             for (float barW = static_cast<float>(kDeckMinWindowW) - 50.0f; barW <= 2400.0f;
                  barW += 7.0f) {
                 const float s = cascade::gui::deckScale(barW, layout, 0.62f);
@@ -730,32 +752,44 @@ int main() {
                     parts.push_back({meter1XOnBar(barW), 28.0f, meter2XOnBar(barW) + kMeterW,
                                      28.0f + meterH});
                 }
-                for (const float glyphW : {120.0f, 277.0f, 400.0f}) {
-                    const cascade::gui::MuteBannerPlace p = placeMuteBanner(
-                        barW, s, coreW, layout.scale >= 2, meters, glyphW, fixedW, lineH);
-                    ++placed;
-                    ++bySlot[p.slot];
-                    // What is drawn: the banner at its size, clipped to its place.
-                    const Box drawn{std::max(p.x, p.x0), std::max(p.y, p.y0),
-                                    std::min(p.x + glyphW * p.fontScale + fixedW, p.x1),
-                                    std::min(p.y + lineH * p.fontScale, p.y1)};
-                    const bool inBar = drawn.x0 >= bar.x0 && drawn.y0 >= bar.y0 &&
-                                       drawn.x1 <= bar.x1 + 0.01f && drawn.y1 <= bar.y1 + 0.01f;
-                    bool clear = true;
-                    for (const Box& part : parts) { clear = clear && !hit(drawn, part); }
-                    if (!inBar || !clear) {
-                        std::printf("    layout %dx%s bar %.0f glyphs %.0f: slot %d at (%.1f, %.1f) "
-                                    "x%.2f %s\n",
-                                    layout.scale, layout.switches ? "+sw" : "", barW, glyphW,
-                                    p.slot, p.x, p.y, p.fontScale,
-                                    inBar ? "ON A PART" : "OUT OF THE BAR");
+                for (const float wordsW : {120.0f, 277.0f, 560.0f}) {
+                    for (const float keyLabelW : {70.0f, 135.0f}) {
+                        const int nz = sized(wordsW, keyLabelW, sz);
+                        const MuteBannerLayout l = layoutMuteBanner(
+                            barW, s, coreW, layout.scale >= 2, meters, sz, nz, padX, gap);
+                        ++placed;
+                        ++bySlot[l.slot];
+                        const Box place{l.x0, l.y0, l.x1, l.y1};
+                        const Box key{l.keyX, l.keyY, l.keyX + l.keyW, l.keyY + l.keyH};
+                        const Box words{l.wordsX, l.wordsY, l.wordsX + l.wordsDrawnW,
+                                        l.wordsY + l.px};
+                        const bool keyWhole = within(key, place) && within(key, bar);
+                        const bool readable = l.px >= 13.0f - 1.0e-3f && l.keyH >= 13.0f - 1.0e-3f;
+                        const bool wordsIn = l.wordsDrawnW <= 0.0f || within(words, place);
+                        bool clear = !(l.wordsDrawnW > 0.0f && hit(words, key));
+                        for (const Box& part : parts) {
+                            clear = clear && !hit(key, part) &&
+                                    !(l.wordsDrawnW > 0.0f && hit(words, part));
+                        }
+                        if (!keyWhole || !readable || !wordsIn || !clear) {
+                            std::printf("    layout %dx%s bar %.0f words %.0f key %.0f: slot %d "
+                                        "key (%.1f,%.1f)-(%.1f,%.1f) %.1f px%s%s%s%s\n",
+                                        layout.scale, layout.switches ? "+sw" : "", barW, wordsW,
+                                        keyLabelW, l.slot, key.x0, key.y0, key.x1, key.y1,
+                                        l.px, keyWhole ? "" : " CLIPPED",
+                                        readable ? "" : " TOO SMALL",
+                                        wordsIn ? "" : " WORDS OUT", clear ? "" : " ON A PART");
+                        }
+                        CHECK(keyWhole);
+                        CHECK(readable);
+                        CHECK(wordsIn);
+                        CHECK(clear);
+                        // A banner the middle holds is drawn there whole, at full size.
+                        if (l.slot == 0) {
+                            CHECK_NEAR(l.px, lineH, 1.0e-6f);
+                            CHECK(l.wordsWhole);
+                        }
                     }
-                    CHECK(inBar);
-                    CHECK(clear);
-                    // Never smaller than the deck's nine-pixel floor.
-                    CHECK(lineH * p.fontScale >= cascade::gui::kMuteBannerMinFontPx - 1.0e-3f);
-                    // A banner the middle holds is drawn there at full size.
-                    if (p.slot == 0) { CHECK_NEAR(p.fontScale, 1.0f, 1.0e-6f); }
                 }
             }
         }
@@ -764,30 +798,30 @@ int main() {
         // All three places are exercised, or the sweep proves less than it says.
         CHECK(bySlot[0] > 0 && bySlot[1] > 0 && bySlot[2] > 0);
 
-        // TODAY AT 1600 x 1000 (a 1552 bar): the middle, exactly where it always went.
+        // TODAY AT 1600 x 1000 (a 1552 bar): the middle, exactly where it always
+        // went - the words one item spacing past (cluster end + 12, 62).
         {
             const CounterLayout today{1, true};
-            const cascade::gui::MuteBannerPlace p =
-                placeMuteBanner(1552.0f, 1.0f, cascade::gui::deckCoreW(today), false,
-                                metersFitOnBar(1552.0f, kDeckCoreW), 277.0f, fixedW, lineH);
-            CHECK(p.slot == 0);
-            CHECK_NEAR(p.x, kDeckCoreW + cascade::gui::kMuteBannerEdgeClearance, 1.0e-4f);
-            CHECK_NEAR(p.y, 62.0f, 1.0e-4f);
+            const int nz = sized(200.0f, 70.0f, sz);
+            const MuteBannerLayout l =
+                layoutMuteBanner(1552.0f, 1.0f, cascade::gui::deckCoreW(today), false,
+                                 metersFitOnBar(1552.0f, kDeckCoreW), sz, nz, padX, gap);
+            CHECK(l.slot == 0);
+            CHECK_NEAR(l.wordsX, kDeckCoreW + cascade::gui::kMuteBannerEdgeClearance + gap, 1.0e-4f);
+            CHECK_NEAR(l.wordsY, 62.0f, 1.0e-4f);
+            CHECK_NEAR(l.keyX, l.wordsX + 200.0f + gap, 1.0e-4f);
         }
-        // TODAY AT FIRST LAUNCH, and CLASSIC XL at 1600 and at first launch: not
-        // the middle (there is none wide enough), across the top, and drawn at
-        // more than 84% of its size (Classic XL at first launch, the tightest,
-        // has 268 px for a 309-px banner: 0.845).
-        for (const float barW : {kFirstLaunchBarW, 1552.0f}) {
-            for (const CounterLayout layout : {CounterLayout{1, true}, CounterLayout{2, false}}) {
-                if (layout.scale == 1 && barW > 1500.0f) { continue; }
-                const float s = cascade::gui::deckScale(barW, layout, 0.62f);
-                const cascade::gui::MuteBannerPlace p = placeMuteBanner(
-                    barW, s, cascade::gui::deckCoreW(layout), layout.scale >= 2,
-                    cascade::gui::deckMetersFit(barW, layout, s), 277.0f, fixedW, lineH);
-                CHECK(p.slot == 1);
-                CHECK(p.fontScale > 0.84f);
-            }
+        // TODAY AT FIRST LAUNCH (1232), one decoder named in English (about 200
+        // px of words, a 70-px key): not the middle, and the key at FULL size.
+        {
+            const CounterLayout today{1, true};
+            const int nz = sized(200.0f, 70.0f, sz);
+            const MuteBannerLayout l = layoutMuteBanner(
+                kFirstLaunchBarW, 1.0f, cascade::gui::deckCoreW(today), false,
+                metersFitOnBar(kFirstLaunchBarW, kDeckCoreW), sz, nz, padX, gap);
+            CHECK(l.slot != 0);
+            CHECK_NEAR(l.px, lineH, 1.0e-6f);
+            CHECK(l.wordsWhole);
         }
     }
 
