@@ -596,40 +596,59 @@ on a worker thread, so a slow audio device never holds the window.
   the card's rate, removes the mirror image and shows the band on its true air
   frequency: a card at 192 kHz shows 0 - 96 kHz, and a 17.2 kHz transmitter
   sits at 17.2 kHz. A card has no tuner, so typing a frequency moves the
-  receiver inside that span instead of retuning anything, and a frequency
-  outside it is refused with a sentence saying what the card receives. In
+  receiver inside that span instead of retuning anything. The receive filter
+  has to fit in the span too, so the reach is the span less half the filter at
+  each end (1.2 - 94.8 kHz for a 2.4 kHz filter on a 192 kHz card), and a
+  frequency outside that reach is refused with a sentence giving it - never
+  moved to the nearest edge. A filter wider than the whole span (WFM on a
+  96 kHz card) centres the receiver and refuses every tune until it is
+  narrowed. In
   `tests/test_soundcard_source.cpp` a 17.2 kHz tone through a simulated card at
   192 kHz lands at 17.2 kHz on the spectrum and USB on 16.4 kHz turns it into
   an 800 Hz audio tone, measured at the end of the real pipeline; USB on
   17.6 kHz, where the tone is on the lower sideband, does not hear it.
 - **I/Q (stereo)** takes left as I and right as Q, with a **Swap I/Q** switch for
   hardware wired the other way round (the symptom is a mirrored spectrum), and
-  a **Centre (MHz)** box for what the external receiver is tuned to.
+  a **Centre (MHz)** box for what the external receiver is tuned to. The box
+  moves the running receiver only while the card is running in I/Q mode;
+  otherwise it is kept for the next **Open**.
 
 The card is remembered by its **name and host API**, never by its position in
 the list, and a saved card that is not there at startup is named on screen as
 not connected while the settings are kept - no other input is ever opened in
-its place. Cards are listed when FoxSDR starts (PortAudio's device list is
-fixed for the session), so a card plugged in later needs a restart. A card
-pulled out while it runs stops the receiver with the reason on screen: at once
-when the audio system reports it, and after two seconds of silence when it
-does not.
+its place. **After unplugging or plugging in a card, restart FoxSDR**: cards
+are listed when FoxSDR starts, because PortAudio builds its device list once
+and keeps it for the session, and every message about a missing or stopped
+card says the same. A card pulled out while it runs stops the receiver with
+the reason on screen: at once when the audio system reports it, and after two
+seconds of silence when it does not. Closing a card never holds the window
+up: the close runs on a thread of its own, a healthy card's close is waited
+for at most one second (so the same card can be reopened straight away), a
+card that has already failed is not waited for at all, and on exit nothing is.
 
-**On Windows, pick the card's Windows WASAPI entry.** Its list holds the rate
-the Windows mixer is set to, plus - where the card allows exclusive mode - the
-rates its hardware accepts there, marked "(exclusive)": those open the card in
-exclusive mode, so FoxSDR has it to itself while it runs, and are meant to reach
-the card's own rates without anybody changing a Windows sound setting (not yet
-seen on a 192 kHz card; the bench headset offers no exclusive-mode rate).
-The MME entry accepts every rate and lets Windows resample to it, so a rate
-there above the card's own adds no bandwidth - on the bench a headset
-microphone whose WASAPI entry offers 48 kHz alone lists every rate from 8 to
-384 kHz under MME. On Linux the inputs are PortAudio's ALSA devices.
+**On Windows the list holds WASAPI inputs only.** Its list for each card holds
+the rate the Windows mixer is set to, plus - where the card allows exclusive
+mode - the rates its hardware accepts there, marked "(exclusive)": those open
+the card in exclusive mode, so FoxSDR has it to itself while it runs, and are
+meant to reach the card's own rates without anybody changing a Windows sound
+setting (not yet seen on a 192 kHz card; the bench headset offers no
+exclusive-mode rate). MME and DirectSound entries are not offered at all. MME
+keeps each input as a number Windows gives out again whenever a card is
+plugged in or pulled out, so a card saved by name could reopen as a different
+one; it also accepts every rate and resamples, so its rates say nothing about
+the card; and its "Sound Mapper" (like DirectSound's "Primary Sound Capture
+Driver") follows whatever the Windows default input is. A card saved from an
+MME entry by an earlier development build is shown as not connected. On Linux
+the inputs are PortAudio's ALSA devices.
 
 The patch page offers every listed card to its radios as well; the card opens
 as the Source section has it set up when it is the same card, and as real mono
-on the left channel otherwise. An I/Q recording of a sound card captures what
-the spectrum shows (the complex stream, at half the card's rate in real mode).
+on the left channel otherwise. While the patch runs it takes the receiver's
+own card the way it takes the receiver's radio - the receiver runs on the
+signal generator and gets the card back when the patch stops - so a patch
+radio on that card never opens a second stream on it. An I/Q recording of a
+sound card captures what the spectrum shows (the complex stream, at half the
+card's rate in real mode).
 
 Not yet verified on real hardware at 192 kHz or on a VLF antenna: the bench has
 a headset microphone at 48 kHz, which opened, streamed and drew its (very

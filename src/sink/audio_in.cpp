@@ -6,6 +6,8 @@
 
 #include <portaudio.h>
 
+#include "sink/pa_init.hpp"
+
 #include <cmath>
 
 namespace cascade::sink {
@@ -33,13 +35,15 @@ int paInCallback(const void* input, void* /*output*/, unsigned long frameCount,
 
 }  // namespace
 
-AudioIn::AudioIn() : ring_(kRingCapacity) { paOk_ = (Pa_Initialize() == paNoError); }
+// Through the one shared, locked initialiser (sink/pa_init.hpp): PortAudio's
+// own count of Initialize/Terminate pairs is a plain int.
+AudioIn::AudioIn() : ring_(kRingCapacity) { paOk_ = paInitializeShared(); }
 
 AudioIn::~AudioIn() {
     close();
     // Guarded release: Pa_Terminate() must pair with a SUCCESSFUL
     // Pa_Initialize() - PortAudio refcounts the pairs across instances.
-    if (paOk_) { Pa_Terminate(); }
+    if (paOk_) { paTerminateShared(); }
 }
 
 std::vector<AudioDevice> AudioIn::listInputDevices() {

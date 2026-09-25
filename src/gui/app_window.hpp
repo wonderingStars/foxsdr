@@ -1816,6 +1816,10 @@ private:
     // What the controls show and the config saves, whether or not the card is
     // the source in use - the same rule as the I/Q file's path.
     cascade::source::SoundCardSettings soundCard_;
+    // The settings of the card as it is RUNNING (set when one is installed;
+    // meaningful only while sourceKind_ is "soundcard"). The centre box reads
+    // its format: a real-mode card has no centre to move.
+    cascade::source::SoundCardSettings soundCardLive_;
     std::vector<cascade::source::SoundCardDevice> soundCardDevices_;
     bool soundCardListed_ = false;  // soundCardDevices_ holds a finished enumeration
     std::future<std::vector<cascade::source::SoundCardDevice>> soundCardScanFuture_;

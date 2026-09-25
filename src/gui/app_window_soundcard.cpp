@@ -160,8 +160,11 @@ void AppWindow::pollSoundCard() {
     deviceArgs_.clear();
     deviceModel_.clear();
     ++sourceGen_;
-    // The settings as OPENED: the rate the card is really running at.
+    // The settings as OPENED: the rate the card is really running at. The
+    // section's copy is what the user edits next; the live copy is what is
+    // actually running (the centre box asks it which mode that is).
     soundCard_ = r.src->settings();
+    soundCardLive_ = soundCard_;
     pipeline_.setSource(std::move(r.src));
     sourceKind_ = "soundcard";
     restoreKeep_ = cascade::gui::RememberedSource{};
@@ -171,13 +174,14 @@ void AppWindow::pollSoundCard() {
     followInputRate();
     // THE VFO STAYS WHERE IT WAS if that is inside what the card receives (a
     // saved session's offset is restored before the card finishes opening);
-    // otherwise it is brought inside, exactly as a click near the edge is.
-    const double lim = 0.5 * pipeline_.inputRateHz() - 0.5 * vfoBandwidthHz_;
+    // otherwise it is brought inside, exactly as a click near the edge is -
+    // and CENTRED when the filter is wider than the whole span (WFM's 150 kHz
+    // on a 96 kHz card), where there is no inside to bring it to.
     const double off = pipeline_.vfoOffsetHz();
-    if (lim > 0.0 && std::fabs(off) > lim) {
-        const double clamped = std::clamp(off, -lim, lim);
-        pipeline_.setVfoOffsetHz(clamped);
-        vfoOffsetKhz_ = static_cast<float>(clamped / 1000.0);
+    const double inside = cascade::gui::vfoOffsetInsideSpan(off, pipeline_.inputRateHz(), vfoBandwidthHz_);
+    if (inside != off) {
+        pipeline_.setVfoOffsetHz(inside);
+        vfoOffsetKhz_ = static_cast<float>(inside / 1000.0);
     }
     cascade::core::diagLogf("source: opened the sound card %s (%s) at %.0f Hz, %s", soundCard_.device.c_str(),
                             soundCard_.hostApi.c_str(), soundCard_.cardRateHz,
@@ -214,14 +218,27 @@ std::string AppWindow::soundCardPatchArgs(const std::string& keyArgs) const {
 bool AppWindow::retuneFixedCentre(double centerHz) {
     if (sourceKind_ != "soundcard") { return false; }
     cascade::source::IqSource& src = pipeline_.activeSource();
+    // The filter's width is part of where the VFO can go: a tune reported as
+    // inside is one setVfoToAbsoluteHz takes exactly as asked, never clamped.
     const FixedCentreTune t = tuneWithFixedCentre(centerHz, pipeline_.vfoOffsetHz(),
-                                                  src.centerFrequencyHz(), src.sampleRateHz());
+                                                  src.centerFrequencyHz(), src.sampleRateHz(),
+                                                  vfoBandwidthHz_);
+    if (t.tooWide) {
+        const std::string bw = soundCardHzText(vfoBandwidthHz_);
+        const std::string span = soundCardHzText(src.sampleRateHz());
+        cascade::core::formatUtf8(tuneMismatchNote_,
+                                  tr("The %s filter is wider than the %s the sound card receives; "
+                                     "narrow it to tune."),
+                                  bw.c_str(), span.c_str());
+        return true;
+    }
     if (!t.inside) {
         const std::string want = soundCardHzText(t.wantAbsHz);
         const std::string lo = soundCardHzText(std::max(0.0, t.loHz));
         const std::string hi = soundCardHzText(t.hiHz);
         cascade::core::formatUtf8(tuneMismatchNote_,
-                                  tr("%s is outside what the sound card receives (%s to %s)."),
+                                  tr("%s is outside what the sound card can tune to with this "
+                                     "filter (%s to %s)."),
                                   want.c_str(), lo.c_str(), hi.c_str());
         return true;
     }
@@ -307,10 +324,14 @@ void AppWindow::drawSoundCardControls() {
                                ImGuiInputTextFlags_EnterReturnsTrue) &&
             std::isfinite(soundCardCentreMhz_)) {
             soundCard_.iqCentreHz = soundCardCentreMhz_ * 1.0e6;
-            // A card that is already running in I/Q mode takes the new
+            // A card that is already running IN I/Q MODE takes the new
             // centre at once: it is only a record of where the external
-            // receiver is tuned, and the whole receiver follows it.
-            if (sourceKind_ == "soundcard" && !soundCardOpenPending_) {
+            // receiver is tuned, and the whole receiver follows it. A card
+            // running in real mode keeps it for the next Open (see
+            // soundCardCentreAppliesLive).
+            if (cascade::gui::soundCardCentreAppliesLive(sourceKind_ == "soundcard", soundCardOpenPending_,
+                                                         soundCardLive_.format)) {
+                soundCardLive_.iqCentreHz = soundCard_.iqCentreHz;
                 applyRetuneNow(soundCard_.iqCentreHz, false);
             }
         }
@@ -360,17 +381,10 @@ void AppWindow::drawSoundCardControls() {
         cascade::core::formatUtf8(line, tr("Receives %s to %s."), lo.c_str(), hi.c_str());
         ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
         ImGui::TextWrapped("%s", line.c_str());
-        // MME TAKES ANY RATE AND WINDOWS RESAMPLES IT. Measured on this
-        // product's own bench: a headset microphone whose WASAPI entry offers
-        // 48 kHz alone lists every rate from 8 to 384 kHz under MME. A rate
-        // above the card's own there adds no bandwidth, only a wider picture
-        // of nothing - which is exactly the trap a VLF listener must not fall
-        // into.
-        if (soundCard_.hostApi == "MME") {
-            ImGui::TextWrapped("%s", tr("MME accepts any rate and Windows resamples to it, so a rate "
-                                        "above the card's own adds no bandwidth. The Windows WASAPI "
-                                        "entry offers the rates the card really runs at."));
-        }
+        // NO MME NOTE ANY MORE: MME entries are not listed at all (see
+        // "ONLY HOST APIs WHOSE DEVICES KEEP THEIR IDENTITY" in
+        // source/soundcard_source.hpp), so every rate offered here is one the
+        // card really takes.
         ImGui::PopStyleColor();
     }
     if (!soundCardMissing_.empty()) {

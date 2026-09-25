@@ -40,6 +40,7 @@
 #include "core/patch_devices.hpp"
 #include "gui/rate_follow_status.hpp"
 #include "gui/scope_face.hpp"
+#include "gui/soundcard_panel.hpp"
 #include "gui/theme.hpp"
 #include "source/siggen_source.hpp"
 #include "source/soapy_source.hpp"
@@ -233,13 +234,22 @@ void AppWindow::patchReconcile() {
     // ONLY WHILE THE PATCH RUNS (0.99.18): an open page with the patch stopped
     // leaves the receiver alone, so a patch can be built while listening.
     // Only a live DEVICE is taken (a file or the generator is not a radio),
-    // and never mid-open: the answer is waited for, then taken.
-    if (patchRunning_ && device_ != nullptr && !deviceOpenPending_) {
+    // and never mid-open: the answer is waited for, then taken. The
+    // receiver's SOUND CARD is lent the same way (gui::receiverSourceForPatch):
+    // left with the receiver, a patch radio on the same card would open a
+    // second stream on it, which WASAPI exclusive mode refuses outright.
+    const cascade::gui::ReceiverLoan loan = cascade::gui::receiverSourceForPatch(
+        patchRunning_, sourceKind_, device_ != nullptr, deviceOpenPending_, deviceArgs_,
+        soundCardOpenPending_, soundCard_);
+    if (loan.take) {
         PatchMainKeep keep;
         keep.valid = true;
-        keep.kind = sourceKind_;
-        keep.args = deviceArgs_;
-        keep.label = deviceModel_;
+        keep.kind = loan.kind;
+        keep.args = loan.args;
+        keep.label = loan.kind == "soundcard"
+                         ? std::string(tr("Sound card")) + ": " + soundCard_.device + " (" +
+                               soundCard_.hostApi + ")"
+                         : deviceModel_;
         keep.rateHz = pipeline_.activeSource().sampleRateHz();
         keep.centreHz = pipeline_.activeSource().centerFrequencyHz();
         cascade::core::diagLogf(
@@ -632,6 +642,16 @@ void AppWindow::patchStopAll(bool restoreMain) {
     // --- the receiver gets its radio back ---------------------------------------
     const PatchMainKeep keep = patchMainKeep_;
     patchMainKeep_ = PatchMainKeep{};
+    // A SOUND CARD goes back through its own row: reopened on a worker with
+    // the Source section's settings, which the section kept while the patch
+    // had the card (the patch radio above has already been destroyed, and its
+    // close waited for, so the card is free).
+    if (keep.kind == "soundcard") {
+        cascade::core::diagLogf("patch: handing %s back to the receiver", keep.label.c_str());
+        sourceSel_ = kSoundCardRow;
+        launchSoundCardOpen(false);
+        return;
+    }
     int row = -1;
     if (keep.kind == "soapy") {
         for (std::size_t i = 0; i < soapyDevices_.size(); ++i) {

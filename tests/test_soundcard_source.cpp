@@ -5,10 +5,13 @@
 //
 // NO SOUND CARD IS USED. The source is handed a FAKE backend that lists
 // scripted devices and pushes scripted frames through exactly the callback
-// path PortAudio drives, so ctest needs no audio hardware. The one section
-// that talks to the real PortAudio only ENUMERATES (nothing is opened) and
-// asserts nothing about what it finds: it is there to prove the backend runs
-// on each platform's host API, and it prints what it saw.
+// path PortAudio drives, so ctest needs no audio hardware. The REAL PortAudio
+// backend is also run against a SCRIPTED PortAudio (section 12): a Windows
+// machine's worth of host APIs to prove only WASAPI is offered, and an abort
+// that never returns to prove no lock a close holds is one a list, an open or
+// a construction takes. The two sections that talk to the real PortAudio
+// only initialise it and ENUMERATE (nothing is opened) and assert nothing
+// about what they find beyond PortAudio's own init count.
 //
 // THE HEADLINE MEASUREMENT is the tester's own case: SAQ on 17.2 kHz through a
 // card at 192 kHz. A synthetic 17.2 kHz tone on the card must land at 17.2 kHz
@@ -24,6 +27,7 @@
 #include <chrono>
 #include <cmath>
 #include <complex>
+#include <condition_variable>
 #include <cstdio>
 #include <filesystem>
 #include <functional>
@@ -44,6 +48,7 @@
 #endif
 
 #include "core/config.hpp"
+#include "core/patch_devices.hpp"
 #include "core/pipeline.hpp"
 #include "dsp/demod.hpp"
 #include "dsp/fft.hpp"
@@ -51,6 +56,8 @@
 #include "gui/device_scan_plan.hpp"
 #include "gui/soundcard_panel.hpp"
 #include "gui/tune_control.hpp"
+#include "sink/pa_init.hpp"
+#include "source/soundcard_portaudio.hpp"
 #include "source/soundcard_source.hpp"
 #include "test_check.hpp"
 
@@ -95,7 +102,7 @@ public:
         lastChannels = channels;
         lastRate = rateHz;
         lastExclusive = exclusive;
-        if (failOpen) {
+        if (failOpen || std::find(refuseRatesHz.begin(), refuseRatesHz.end(), rateHz) != refuseRatesHz.end()) {
             error = "fake refused";
             return false;
         }
@@ -115,7 +122,13 @@ public:
         isOpen_ = false;
     }
 
-    bool alive() override { return isOpen_ && aliveFlag.load(); }
+    bool alive() override {
+        ++aliveCalls;
+        return isOpen_ && aliveFlag.load();
+    }
+
+    std::atomic<int> aliveCalls{0};
+    std::vector<double> refuseRatesHz;  // card rates open() refuses
 
     // The card goes quiet (unplugged): no more callbacks.
     void stopFeeding() {
@@ -886,18 +899,76 @@ void testRememberedAndTune() {
     CHECK(saved.kind == "soundcard");
 
     // Tuning a fixed centre moves the VFO instead. Real card at 192 kHz:
-    // centre 48 kHz, span 0 - 96 kHz.
-    const auto t = cascade::gui::tuneWithFixedCentre(17200.0, 0.0, 48000.0, 96000.0);
+    // centre 48 kHz, span 0 - 96 kHz, a 2.4 kHz USB filter.
+    const auto t = cascade::gui::tuneWithFixedCentre(17200.0, 0.0, 48000.0, 96000.0, 2400.0);
     CHECK(t.inside);
     CHECK_NEAR(t.wantAbsHz, 17200.0, 0.0);
     // The offset the caller was keeping is part of where it wanted the VFO.
-    const auto k = cascade::gui::tuneWithFixedCentre(48000.0, -31600.0, 48000.0, 96000.0);
+    const auto k = cascade::gui::tuneWithFixedCentre(48000.0, -31600.0, 48000.0, 96000.0, 2400.0);
     CHECK(k.inside);
     CHECK_NEAR(k.wantAbsHz, 16400.0, 0.0);
-    const auto out = cascade::gui::tuneWithFixedCentre(120000.0, 0.0, 48000.0, 96000.0);
+    const auto out = cascade::gui::tuneWithFixedCentre(120000.0, 0.0, 48000.0, 96000.0, 2400.0);
     CHECK(!out.inside);
-    CHECK_NEAR(out.loHz, 0.0, 0.0);
-    CHECK_NEAR(out.hiHz, 96000.0, 0.0);
+    CHECK(!out.tooWide);
+    // The sentence gives the VFO's REACH with this filter: the span less half
+    // the filter at each end.
+    CHECK_NEAR(out.loHz, 1200.0, 0.0);
+    CHECK_NEAR(out.hiHz, 94800.0, 0.0);
+}
+
+// Item 5 of the review: "inside" and the VFO's own clamp must be ONE rule. A
+// tune within half a filter of the span's edge used to be reported inside and
+// then moved by setVfoToAbsoluteHz's clamp - "never clamped" said the header.
+void testFixedCentreEdge() {
+    using cascade::gui::tuneWithFixedCentre;
+    using cascade::gui::vfoOffsetInsideSpan;
+    const double c = 48000.0, rate = 96000.0, bw = 2400.0;
+    // The very edge of the reach is inside, and lands exactly as asked.
+    const auto edge = tuneWithFixedCentre(94800.0, 0.0, c, rate, bw);
+    CHECK(edge.inside);
+    CHECK_NEAR(vfoOffsetInsideSpan(edge.wantAbsHz - c, rate, bw), edge.wantAbsHz - c, 0.0);
+    // Half a hertz past it is refused - and so is 95 kHz, INSIDE the span but
+    // within half the filter of its edge (the reviewer's case).
+    CHECK(!tuneWithFixedCentre(94800.5, 0.0, c, rate, bw).inside);
+    CHECK(!tuneWithFixedCentre(95000.0, 0.0, c, rate, bw).inside);
+    CHECK(!tuneWithFixedCentre(1000.0, 0.0, c, rate, bw).inside);
+    CHECK(tuneWithFixedCentre(1200.0, 0.0, c, rate, bw).inside);
+    // THE PROPERTY, swept across and beyond the span in 100 Hz steps for three
+    // filters: a tune is inside exactly when the VFO's clamp leaves it alone.
+    int disagreements = 0;
+    int insideCount = 0;
+    for (const double w : {2400.0, 12000.0, 50000.0}) {
+        for (double want = -10000.0; want <= 110000.0; want += 100.0) {
+            const auto r = tuneWithFixedCentre(want, 0.0, c, rate, w);
+            const double off = want - c;
+            const bool unclamped = vfoOffsetInsideSpan(off, rate, w) == off;
+            if (r.inside != unclamped) { ++disagreements; }
+            if (r.inside) { ++insideCount; }
+        }
+    }
+    std::printf("fixed centre: %d tunes inside, %d disagreements with the VFO clamp\n", insideCount,
+                disagreements);
+    CHECK(disagreements == 0);
+    CHECK(insideCount > 1000);  // the sweep really did cover the reach
+    // A filter wider than the span leaves no reach: every tune is refused,
+    // with that reason, and never lands half outside.
+    const auto wide = tuneWithFixedCentre(48000.0, 0.0, c, rate, 150000.0);
+    CHECK(wide.tooWide);
+    CHECK(!wide.inside);
+    CHECK(tuneWithFixedCentre(48000.0, 0.0, c, rate, 96000.0).tooWide);  // exactly the span
+    CHECK(!tuneWithFixedCentre(48000.0, 0.0, c, rate, 95999.0).tooWide);
+}
+
+// Item 4 of the review: WFM's 150 kHz filter on a 96 kHz card left the VFO
+// wherever it was - half outside what the card delivers. It is centred.
+void testVfoInsideSpan() {
+    using cascade::gui::vfoOffsetInsideSpan;
+    CHECK_NEAR(vfoOffsetInsideSpan(30000.0, 96000.0, 150000.0), 0.0, 0.0);   // wider: centred
+    CHECK_NEAR(vfoOffsetInsideSpan(-30000.0, 96000.0, 96000.0), 0.0, 0.0);   // exactly the span
+    CHECK_NEAR(vfoOffsetInsideSpan(60000.0, 96000.0, 2400.0), 46800.0, 0.0);  // brought inside
+    CHECK_NEAR(vfoOffsetInsideSpan(-60000.0, 96000.0, 2400.0), -46800.0, 0.0);
+    CHECK_NEAR(vfoOffsetInsideSpan(-31600.0, 96000.0, 2400.0), -31600.0, 0.0);  // left alone
+    CHECK_NEAR(vfoOffsetInsideSpan(46800.0, 96000.0, 2400.0), 46800.0, 0.0);    // on the edge
 }
 
 // The patch page: a radio's key names only the card; the Source section's
@@ -927,6 +998,835 @@ void testPatchRules() {
     CHECK(other.hostApi == "Windows WASAPI");
     CHECK(other.format == SoundCardFormat::RealMono && other.channel == 0 && !other.swapIq);
     CHECK(!cascade::gui::scanMayProbe({"rtlsdr"}, "soundcard", key));
+}
+
+// --- 10. the review's items: the capture block, start, rates, the alive poll ----------
+
+// R1/R4: the realtime callback writes WHOLE frames and counts a block that did
+// not fit. A 4-frame (8-float) ring offered 5 stereo frames keeps the first 4
+// exactly and counts one overrun.
+void testWholeFramesAndOverruns() {
+    SoundCardSource::Capture cap(8);
+    cap.channels.store(2);
+    const float block[10] = {1, -1, 2, -2, 3, -3, 4, -4, 5, -5};
+    SoundCardSource::pushFrames(&cap, block, 5);
+    CHECK(cap.ring.size() == 8);
+    CHECK(cap.overruns.load() == 1);
+    float got[8] = {};
+    CHECK(cap.ring.read(got, 8) == 8);
+    bool same = true;
+    for (int i = 0; i < 8; ++i) { same = same && got[i] == block[i]; }
+    CHECK(same);
+    // A block that fits is not an overrun.
+    SoundCardSource::pushFrames(&cap, block, 3);
+    CHECK(cap.overruns.load() == 1);
+    CHECK(cap.ring.size() == 6);
+    // Two free floats in a stereo ring are ONE frame, not two samples of two.
+    SoundCardSource::pushFrames(&cap, block, 2);
+    CHECK(cap.ring.size() == 8);
+    CHECK(cap.overruns.load() == 2);
+}
+
+// A stereo I/Q generator whose I sample is a constant level, so the first
+// sample read says which push it came from.
+Generator constantIq(float level) {
+    return [=](float* out, std::size_t frames, std::uint64_t /*first*/, int ch) {
+        for (std::size_t i = 0; i < frames; ++i) {
+            out[i * static_cast<std::size_t>(ch)] = level;
+            out[i * static_cast<std::size_t>(ch) + 1] = 0.0f;
+        }
+    };
+}
+
+SoundCardSettings iqSettings(const std::string& name, double rate) {
+    SoundCardSettings s;
+    s.device = name;
+    s.hostApi = "Windows WASAPI";
+    s.cardRateHz = rate;
+    s.format = SoundCardFormat::IqStereo;
+    return s;
+}
+
+// R3: what the card captured while the pipeline was stopped is stale, and
+// start() throws it away.
+void testStartDrainsStale() {
+    auto fake = std::make_shared<FakeBackend>();
+    fake->devices = {stereoCard("USB Audio CODEC", "Windows WASAPI", 0, ratesUpTo192k())};
+    SoundCardSource src = makeSource(fake);
+    CHECK(src.openWith(iqSettings("USB Audio CODEC", 48000.0)));
+    pushGenerated(*fake, 2, 3000, constantIq(0.25f));  // captured before start: stale
+    CHECK(src.start());
+    pushGenerated(*fake, 2, 1000, constantIq(0.75f));  // after start: fresh
+    std::vector<std::complex<float>> buf(4096);
+    const std::size_t got = src.read(buf.data(), buf.size());
+    CHECK(got == 1000);
+    CHECK_NEAR(got != 0 ? buf[0].real() : 0.0f, 0.75f, 0.0);
+}
+
+// R6 and item 7: a new rate reopens the card and it is still RUNNING; a rate
+// the card refuses puts it back as it was and says so; and when even that
+// fails the card is reported closed, never as running.
+void testRateChange() {
+    // (a) accepted: running again, samples flow.
+    {
+        auto fake = std::make_shared<FakeBackend>();
+        fake->devices = {stereoCard("USB Audio CODEC", "Windows WASAPI", 0, ratesUpTo192k())};
+        SoundCardSource src = makeSource(fake);
+        CHECK(src.openWith(iqSettings("USB Audio CODEC", 48000.0)));
+        CHECK(src.start());
+        CHECK(src.setSampleRateHz(96000.0));
+        CHECK(src.running());
+        CHECK_NEAR(fake->lastRate, 96000.0, 0.0);
+        pushGenerated(*fake, 2, 500, constantIq(0.5f));
+        std::vector<std::complex<float>> buf(1024);
+        CHECK(src.read(buf.data(), buf.size()) == 500);
+    }
+    // (b) refused: back at 48 kHz, running, and the reason on the line.
+    {
+        auto fake = std::make_shared<FakeBackend>();
+        fake->devices = {stereoCard("USB Audio CODEC", "Windows WASAPI", 0, ratesUpTo192k())};
+        fake->refuseRatesHz = {96000.0};
+        SoundCardSource src = makeSource(fake);
+        CHECK(src.openWith(iqSettings("USB Audio CODEC", 48000.0)));
+        CHECK(src.start());
+        CHECK(!src.setSampleRateHz(96000.0));
+        CHECK(src.isOpen());
+        CHECK(src.running());
+        CHECK_NEAR(src.sampleRateHz(), 48000.0, 0.0);
+        CHECK_NEAR(fake->lastRate, 48000.0, 0.0);
+        const std::string why = src.lastError();
+        std::printf("rate change refused: \"%s\"\n", why.c_str());
+        CHECK(why.find("fake refused") != std::string::npos);
+        CHECK(why.find("still running at 48000 Hz") != std::string::npos);
+        pushGenerated(*fake, 2, 500, constantIq(0.5f));
+        std::vector<std::complex<float>> buf(1024);
+        CHECK(src.read(buf.data(), buf.size()) == 500);
+    }
+    // (c) refused, and the old rate will not reopen either: CLOSED, and start()
+    // refuses with both reasons.
+    {
+        auto fake = std::make_shared<FakeBackend>();
+        fake->devices = {stereoCard("USB Audio CODEC", "Windows WASAPI", 0, ratesUpTo192k())};
+        SoundCardSource src = makeSource(fake);
+        CHECK(src.openWith(iqSettings("USB Audio CODEC", 48000.0)));
+        CHECK(src.start());
+        fake->failOpen = true;
+        CHECK(!src.setSampleRateHz(96000.0));
+        CHECK(!src.isOpen());
+        CHECK(!src.running());
+        CHECK(!src.start());
+        const std::string why = src.lastError();
+        std::printf("rate change and restore both refused: \"%s\"\n", why.c_str());
+        CHECK(why.find("could not be reopened at 48000 Hz") != std::string::npos);
+    }
+}
+
+// R8: while it waits for samples, read() asks the backend alive() every
+// kAlivePollMs - not on every 2 ms turn of its wait.
+void testAlivePollInterval() {
+    auto fake = std::make_shared<FakeBackend>();
+    fake->devices = {stereoCard("USB Audio CODEC", "Windows WASAPI", 0, ratesUpTo192k())};
+    SoundCardSource src = makeSource(fake);
+    CHECK(src.openWith(iqSettings("USB Audio CODEC", 48000.0)));
+    CHECK(src.start());
+    const int before = fake->aliveCalls.load();
+    std::vector<std::complex<float>> buf(512);
+    const auto t0 = Clock::now();
+    while (Clock::now() - t0 < std::chrono::milliseconds(1000)) { (void)src.read(buf.data(), buf.size()); }
+    const int calls = fake->aliveCalls.load() - before;
+    std::printf("alive poll: %d calls in 1 s of waiting (every %lld ms)\n", calls,
+                static_cast<long long>(SoundCardSource::kAlivePollMs.count()));
+    CHECK(!src.faulted());
+    CHECK(calls >= 2 && calls <= 5);
+}
+
+// R7: the config's rate bounds, the LOWER one too.
+void testConfigRateBounds() {
+    using cascade::core::AppConfig;
+    using cascade::core::ConfigStore;
+    const std::string path = tempPath("bounds");
+    for (const double rate : {4000.0, 7999.0, 8000.0, 768000.0, 768001.0}) {
+        AppConfig cfg;
+        cfg.soundCard.rateHz = rate;
+        std::string err;
+        CHECK(ConfigStore::save(path, cfg, err));
+        AppConfig back;
+        CHECK(ConfigStore::load(path, back, err));
+        const bool inRange = rate >= 8000.0 && rate <= 768000.0;
+        CHECK_NEAR(back.soundCard.rateHz, inRange ? rate : 48000.0, 0.0);
+    }
+    std::error_code ec;
+    std::filesystem::remove(path, ec);
+}
+
+// Item 3: every message about a card that is missing or has stopped gives the
+// same, true, advice - restart FoxSDR - and none of them "press Open".
+void testRecoveryAdvice() {
+    std::vector<std::string> lines;
+    {
+        auto fake = std::make_shared<FakeBackend>();
+        fake->devices = {stereoCard("Mic", "Windows WASAPI", 0, ratesUpTo192k())};
+        SoundCardSource src = makeSource(fake);
+        CHECK(!src.openWith(iqSettings("USB Audio CODEC", 48000.0)));
+        lines.push_back(src.lastError());
+    }
+    {
+        auto fake = std::make_shared<FakeBackend>();
+        fake->devices = {stereoCard("USB Audio CODEC", "Windows WASAPI", 0, ratesUpTo192k())};
+        SoundCardSource src = makeSource(fake);
+        CHECK(src.openWith(iqSettings("USB Audio CODEC", 48000.0)));
+        CHECK(src.start());
+        fake->aliveFlag = false;
+        std::vector<std::complex<float>> buf(512);
+        const auto t0 = Clock::now();
+        while (!src.faulted() && Clock::now() - t0 < std::chrono::seconds(3)) { (void)src.read(buf.data(), buf.size()); }
+        lines.push_back(src.lastError());
+    }
+    {
+        auto fake = std::make_shared<FakeBackend>();
+        fake->devices = {stereoCard("USB Audio CODEC", "Windows WASAPI", 0, ratesUpTo192k())};
+        SoundCardSource src = makeSource(fake);
+        CHECK(src.openWith(iqSettings("USB Audio CODEC", 48000.0)));
+        CHECK(src.start());
+        std::vector<std::complex<float>> buf(512);
+        const auto t0 = Clock::now();
+        while (!src.faulted() && Clock::now() - t0 < std::chrono::seconds(4)) { (void)src.read(buf.data(), buf.size()); }
+        lines.push_back(src.lastError());
+    }
+    CHECK(lines.size() == 3);
+    for (const std::string& l : lines) {
+        std::printf("advice: \"%s\"\n", l.c_str());
+        CHECK(l.find("restart FoxSDR") != std::string::npos);
+        CHECK(l.find("press Open") == std::string::npos);
+    }
+}
+
+// Items 6 and 7: the patch page takes the receiver's sound card as it takes a
+// radio, under the key its device list gives that card; the centre box moves
+// only a card RUNNING in I/Q mode.
+void testPatchLoanAndCentreBox() {
+    using cascade::gui::receiverSourceForPatch;
+    SoundCardSettings card;
+    card.device = "Line In (2- USB, rev|2)";
+    card.hostApi = "Windows WASAPI";
+    card.format = SoundCardFormat::IqStereo;
+    const auto l = receiverSourceForPatch(true, "soundcard", false, false, "", false, card);
+    CHECK(l.take);
+    CHECK(l.kind == "soundcard");
+    // The same key the patch's device list offers for that card, so a patch
+    // radio already on it is on the lent card and not a second stream.
+    const std::string listed = cascade::core::patch::makeDeviceKey(
+        "soundcard", cascade::source::soundCardDeviceArgs(card.device, card.hostApi));
+    CHECK(cascade::core::patch::makeDeviceKey(l.kind, l.args) == listed);
+    // ...and it opens there as the Source section has it set up.
+    SoundCardSettings opened;
+    CHECK(cascade::source::parseSoundCardArgs(cascade::gui::soundCardArgsForPatch(l.args, card), opened));
+    CHECK(opened.format == SoundCardFormat::IqStereo && opened.device == card.device);
+    // Nothing while the patch is stopped, while an open is resolving, or from
+    // a file or the generator; a radio as before.
+    CHECK(!receiverSourceForPatch(false, "soundcard", false, false, "", false, card).take);
+    CHECK(!receiverSourceForPatch(true, "soundcard", false, false, "", true, card).take);
+    CHECK(!receiverSourceForPatch(true, "soundcard", false, true, "", false, card).take);
+    CHECK(!receiverSourceForPatch(true, "siggen", false, false, "", false, card).take);
+    CHECK(!receiverSourceForPatch(true, "file", false, false, "", false, card).take);
+    const auto r = receiverSourceForPatch(true, "rtlsdr", true, false, "serial=1", false, card);
+    CHECK(r.take && r.kind == "rtlsdr" && r.args == "serial=1");
+    CHECK(!receiverSourceForPatch(true, "rtlsdr", true, true, "serial=1", false, card).take);
+
+    using cascade::gui::soundCardCentreAppliesLive;
+    CHECK(soundCardCentreAppliesLive(true, false, SoundCardFormat::IqStereo));
+    CHECK(!soundCardCentreAppliesLive(true, false, SoundCardFormat::RealMono));  // the review's case
+    CHECK(!soundCardCentreAppliesLive(false, false, SoundCardFormat::IqStereo));
+    CHECK(!soundCardCentreAppliesLive(true, true, SoundCardFormat::IqStereo));
+}
+
+// --- 11. a close that never returns ----------------------------------------------------
+
+// Runs `f` on a thread of its own and says whether it finished within `bound`.
+// The future is kept (a std::async future's destructor waits), so a step that
+// hung is joined only after the test has released whatever hung it.
+struct Bounded {
+    std::future<void> fut;
+    bool finished = false;
+    double ms = 0.0;
+};
+
+Bounded runBounded(std::function<void()> f, std::chrono::milliseconds bound) {
+    Bounded b;
+    const auto t0 = Clock::now();
+    b.fut = std::async(std::launch::async, std::move(f));
+    b.finished = b.fut.wait_for(bound) == std::future_status::ready;
+    b.ms = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
+    return b;
+}
+
+// A BACKEND WHOSE CLOSE NEVER RETURNS, with the lock a real backend has:
+// open, list and close all take this backend's own mutex, and the close holds
+// it while it hangs - which is what 6b5aead's PortAudio backend did (with a
+// lock shared by every backend). A source that closes on the caller's thread,
+// or opens again on the backend its close took, waits on that lock for ever.
+class HangingBackend final : public SoundCardBackend {
+public:
+    struct Gate {
+        std::mutex m;
+        std::condition_variable cv;
+        bool released = false;
+        std::atomic<int> hung{0};    // closes that are hanging now
+        std::atomic<int> closed{0};  // closes that have returned
+    };
+
+    HangingBackend(std::shared_ptr<Gate> gate, bool hangOnClose, std::vector<SoundCardDevice> devices)
+        : gate_(std::move(gate)), hang_(hangOnClose), devices_(std::move(devices)) {}
+
+    std::vector<SoundCardDevice> listDevices() override {
+        std::lock_guard<std::mutex> lk(m_);
+        return devices_;
+    }
+    bool open(const SoundCardDevice&, int, double, bool, PushFn push, void* user, std::string& error) override {
+        std::lock_guard<std::mutex> lk(m_);
+        if (open_) {
+            error = "already open";
+            return false;
+        }
+        push_ = push;
+        user_ = user;
+        open_ = true;
+        return true;
+    }
+    void close() override {
+        std::lock_guard<std::mutex> lk(m_);
+        if (!open_) { return; }
+        if (hang_) {
+            ++gate_->hung;
+            std::unique_lock<std::mutex> g(gate_->m);
+            gate_->cv.wait(g, [this] { return gate_->released; });
+            --gate_->hung;
+        }
+        open_ = false;
+        ++gate_->closed;
+    }
+    bool alive() override {
+        std::unique_lock<std::mutex> lk(m_, std::try_to_lock);
+        return !lk.owns_lock() || open_;
+    }
+    void push(const float* x, std::size_t frames) {
+        if (push_ != nullptr) { push_(user_, x, frames); }
+    }
+
+private:
+    std::shared_ptr<Gate> gate_;
+    bool hang_;
+    std::vector<SoundCardDevice> devices_;
+    std::mutex m_;
+    bool open_ = false;
+    PushFn push_ = nullptr;
+    void* user_ = nullptr;
+};
+
+void releaseGate(HangingBackend::Gate& g) {
+    {
+        std::lock_guard<std::mutex> lk(g.m);
+        g.released = true;
+    }
+    g.cv.notify_all();
+}
+
+// Item 1, at the source: a switch, a destroy and a new open all finish within
+// a bound while a close hangs, and the hung close is left on its own thread.
+void testHungCloseAtTheSource() {
+    const std::vector<SoundCardDevice> devices = {
+        stereoCard("USB Audio CODEC", "Windows WASAPI", 0, ratesUpTo192k())};
+    const auto bound = SoundCardSource::kCloseWaitMs + std::chrono::milliseconds(700);
+
+    // (a) A HEALTHY card whose close hangs: destroying the source costs at
+    // most kCloseWaitMs, the close is counted as left behind, and the SAME
+    // source object opens again at once on a fresh backend.
+    {
+        auto gate = std::make_shared<HangingBackend::Gate>();
+        std::vector<std::shared_ptr<HangingBackend>> made;
+        std::mutex madeM;
+        auto src = std::make_unique<SoundCardSource>([&]() -> std::shared_ptr<SoundCardBackend> {
+            std::lock_guard<std::mutex> lk(madeM);
+            // Only the FIRST backend hangs on close.
+            made.push_back(std::make_shared<HangingBackend>(gate, made.empty(), devices));
+            return made.back();
+        });
+        CHECK(src->openWith(iqSettings("USB Audio CODEC", 48000.0)));
+        CHECK(src->start());
+        const std::uint64_t abandonedBefore = SoundCardSource::abandonedCloses();
+        // The source is reopened (a new rate is the same path: close, open).
+        Bounded reopen = runBounded([&] { (void)src->openWith(iqSettings("USB Audio CODEC", 96000.0)); }, bound);
+        std::printf("hung close: a reopen of the same source took %.0f ms (%s)\n", reopen.ms,
+                    reopen.finished ? "finished" : "STILL WAITING");
+        CHECK(reopen.finished);
+        CHECK(gate->hung.load() == 1);
+        CHECK(SoundCardSource::abandonedCloses() == abandonedBefore + 1);
+        if (!reopen.finished) {
+            // RED: the reopen is stuck behind the hung close. Let it go before
+            // anything else touches the source.
+            releaseGate(*gate);
+            reopen.fut.get();
+        }
+        if (reopen.finished) {
+            CHECK(src->isOpen());
+            CHECK(src->start());
+            {
+                std::lock_guard<std::mutex> lk(madeM);
+                CHECK(made.size() == 2);  // a fresh backend, not the one the close took
+                const float frame[2] = {0.5f, 0.0f};
+                if (made.size() == 2) { made[1]->push(frame, 1); }
+            }
+            std::vector<std::complex<float>> buf(16);
+            CHECK(src->read(buf.data(), buf.size()) == 1);
+        }
+        // Destroying it (a source switch, the exit) is prompt too: its own
+        // backend's close does not hang.
+        Bounded destroy = runBounded([&] { src.reset(); }, bound);
+        std::printf("hung close: destroying the reopened source took %.0f ms\n", destroy.ms);
+        CHECK(destroy.finished);
+        releaseGate(*gate);
+        if (reopen.fut.valid()) { reopen.fut.get(); }
+        if (destroy.fut.valid()) { destroy.fut.get(); }
+        const auto t0 = Clock::now();
+        while (gate->closed.load() < 2 && Clock::now() - t0 < std::chrono::seconds(3)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        CHECK(gate->closed.load() == 2);  // the hung close finished once released
+    }
+
+    // (b) The destroy itself, with the close hanging: bounded by kCloseWaitMs.
+    {
+        auto gate = std::make_shared<HangingBackend::Gate>();
+        auto src = std::make_unique<SoundCardSource>([&]() -> std::shared_ptr<SoundCardBackend> {
+            return std::make_shared<HangingBackend>(gate, true, devices);
+        });
+        CHECK(src->openWith(iqSettings("USB Audio CODEC", 48000.0)));
+        Bounded destroy = runBounded([&] { src.reset(); }, bound);
+        std::printf("hung close: destroying a healthy source took %.0f ms (budget %lld ms)\n", destroy.ms,
+                    static_cast<long long>(SoundCardSource::kCloseWaitMs.count()));
+        CHECK(destroy.finished);
+        CHECK(destroy.ms >= static_cast<double>(SoundCardSource::kCloseWaitMs.count()) - 20.0);
+        releaseGate(*gate);
+        if (destroy.fut.valid()) { destroy.fut.get(); }
+    }
+
+    // (c) A card that has FAILED is not waited for at all - through the
+    // pipeline, as the application swaps it out.
+    {
+        auto gate = std::make_shared<HangingBackend::Gate>();
+        std::shared_ptr<HangingBackend> dead;
+        auto src = std::make_unique<SoundCardSource>([&]() -> std::shared_ptr<SoundCardBackend> {
+            dead = std::make_shared<HangingBackend>(gate, true, devices);
+            return dead;
+        });
+        CHECK(src->openWith(iqSettings("USB Audio CODEC", 48000.0)));
+        cascade::core::Pipeline::Config cfg;
+        cfg.audioEnabled = false;
+        cascade::core::Pipeline p(cfg);
+        p.setSource(std::move(src));
+        CHECK(p.setInputRateHz(p.activeSource().sampleRateHz()));
+        p.start();
+        // Nothing arrives: the stall latches the card dead.
+        const auto t0 = Clock::now();
+        while (!p.faulted() && Clock::now() - t0 < std::chrono::seconds(4)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+        CHECK(p.faulted());
+        p.stop();
+        Bounded swap = runBounded([&] { p.setSource(nullptr); }, bound);
+        std::printf("hung close: swapping out a dead card took %.0f ms\n", swap.ms);
+        CHECK(swap.finished);
+        CHECK(swap.ms < 300.0);
+        releaseGate(*gate);
+        if (swap.fut.valid()) { swap.fut.get(); }
+    }
+
+    // (d) The teardown switch: once the application's exit has begun no
+    // close is waited for, healthy or not.
+    {
+        auto gate = std::make_shared<HangingBackend::Gate>();
+        auto src = std::make_unique<SoundCardSource>([&]() -> std::shared_ptr<SoundCardBackend> {
+            return std::make_shared<HangingBackend>(gate, true, devices);
+        });
+        CHECK(src->openWith(iqSettings("USB Audio CODEC", 48000.0)));
+        SoundCardSource::setCloseWaitEnabled(false);
+        Bounded destroy = runBounded([&] { src.reset(); }, bound);
+        SoundCardSource::setCloseWaitEnabled(true);
+        std::printf("hung close: destroying at exit took %.0f ms\n", destroy.ms);
+        CHECK(destroy.finished);
+        CHECK(destroy.ms < 300.0);
+        releaseGate(*gate);
+        if (destroy.fut.valid()) { destroy.fut.get(); }
+    }
+}
+
+// --- 12. the REAL PortAudio backend, over a scripted PortAudio ------------------------
+
+namespace fakepa {
+
+std::vector<PaHostApiInfo> apis;
+std::vector<PaDeviceInfo> devs;
+std::vector<std::string> names;  // storage behind devs[i].name
+PaDeviceIndex defaultIn = paNoDevice;
+std::atomic<int> inits{0};
+std::atomic<int> openCalls{0};
+std::atomic<int> closeCalls{0};
+std::atomic<int> listCalls{0};
+
+struct Stream {
+    PaStreamCallback* cb = nullptr;
+    void* user = nullptr;
+    std::atomic<bool> active{false};
+};
+constexpr int kStreams = 32;
+Stream streams[kStreams];
+int streamIds[kStreams];
+std::atomic<int> nextStream{0};
+
+// The one stream whose abort never returns until released.
+std::atomic<void*> hangOn{nullptr};
+std::mutex gateM;
+std::condition_variable gateCv;
+bool released = false;
+std::atomic<int> hung{0};
+
+int indexOf(PaStream* s) { return static_cast<int>(static_cast<int*>(s) - streamIds); }
+
+PaError initialize() {
+    ++inits;
+    return paNoError;
+}
+PaError terminate() {
+    --inits;
+    return paNoError;
+}
+PaDeviceIndex getDeviceCount() {
+    ++listCalls;
+    return static_cast<PaDeviceIndex>(devs.size());
+}
+PaDeviceIndex getDefaultInputDevice() { return defaultIn; }
+const PaDeviceInfo* getDeviceInfo(PaDeviceIndex i) {
+    return (i >= 0 && i < static_cast<PaDeviceIndex>(devs.size())) ? &devs[static_cast<std::size_t>(i)] : nullptr;
+}
+const PaHostApiInfo* getHostApiInfo(PaHostApiIndex h) {
+    return (h >= 0 && h < static_cast<PaHostApiIndex>(apis.size())) ? &apis[static_cast<std::size_t>(h)] : nullptr;
+}
+PaError isFormatSupported(const PaStreamParameters* in, const PaStreamParameters*, double rate) {
+    // Shared mode: 48 kHz. Exclusive (a WASAPI stream-info block): 192 kHz.
+    const bool excl = in != nullptr && in->hostApiSpecificStreamInfo != nullptr;
+    return (excl ? rate == 192000.0 : rate == 48000.0) ? paFormatIsSupported : paInvalidSampleRate;
+}
+PaError openStream(PaStream** s, const PaStreamParameters*, const PaStreamParameters*, double, unsigned long,
+                   PaStreamFlags, PaStreamCallback* cb, void* user) {
+    ++openCalls;
+    const int k = nextStream++ % kStreams;
+    streams[k].cb = cb;
+    streams[k].user = user;
+    streams[k].active = true;
+    *s = &streamIds[k];
+    return paNoError;
+}
+PaError startStream(PaStream*) { return paNoError; }
+PaError abortStream(PaStream* s) {
+    if (s == hangOn.load()) {
+        ++hung;
+        std::unique_lock<std::mutex> lk(gateM);
+        gateCv.wait(lk, [] { return released; });
+        --hung;
+    }
+    streams[indexOf(s)].active = false;
+    return paNoError;
+}
+PaError closeStream(PaStream*) {
+    ++closeCalls;
+    return paNoError;
+}
+PaError isStreamActive(PaStream* s) { return streams[indexOf(s)].active.load() ? 1 : 0; }
+const char* getErrorText(PaError) { return "scripted PortAudio error"; }
+
+const cascade::source::SoundCardPaApi kApi = {
+    &initialize,      &terminate,  &getDeviceCount, &getDefaultInputDevice, &getDeviceInfo,
+    &getHostApiInfo,  &isFormatSupported, &openStream, &startStream, &abortStream,
+    &closeStream,     &isStreamActive, &getErrorText,
+};
+
+void addApi(PaHostApiTypeId type, const char* name) {
+    PaHostApiInfo a{};
+    a.structVersion = 1;
+    a.type = type;
+    a.name = name;
+    a.defaultInputDevice = paNoDevice;
+    a.defaultOutputDevice = paNoDevice;
+    apis.push_back(a);
+}
+
+void addDevice(const char* name, PaHostApiIndex api, int inputs, bool apiDefault = false) {
+    PaDeviceInfo d{};
+    d.structVersion = 2;
+    d.hostApi = api;
+    d.maxInputChannels = inputs;
+    d.maxOutputChannels = inputs == 0 ? 2 : 0;
+    d.defaultHighInputLatency = 0.1;
+    d.defaultSampleRate = 48000.0;
+    names.emplace_back(name);
+    devs.push_back(d);
+    if (apiDefault) { apis[static_cast<std::size_t>(api)].defaultInputDevice = static_cast<PaDeviceIndex>(devs.size() - 1); }
+}
+
+// Names are pointed at AFTER every push_back, when neither vector moves again.
+void seal() {
+    for (std::size_t i = 0; i < devs.size(); ++i) { devs[i].name = names[i].c_str(); }
+    for (auto& a : apis) { a.deviceCount = 0; }
+    for (const auto& d : devs) { ++apis[static_cast<std::size_t>(d.hostApi)].deviceCount; }
+}
+
+// What a Windows machine with one USB codec lists, under every host API
+// PortAudio has - plus an ALSA entry, so the rule is seen to keep Linux's.
+void scriptWindowsMachine() {
+    apis.clear();
+    devs.clear();
+    names.clear();
+    addApi(paMME, "MME");
+    addApi(paDirectSound, "Windows DirectSound");
+    addApi(paWASAPI, "Windows WASAPI");
+    addApi(paWDMKS, "Windows WDM-KS");
+    addApi(paALSA, "ALSA");
+    addDevice("Microsoft Sound Mapper - Input", 0, 2, true);   // 0
+    addDevice("USB Audio CODEC", 0, 2);                        // 1
+    addDevice("Primary Sound Capture Driver", 1, 2, true);     // 2
+    addDevice("Microphone (USB Audio CODEC)", 1, 2);           // 3
+    addDevice("Microphone (USB Audio CODEC)", 2, 2, true);     // 4 <- WASAPI
+    addDevice("Line (USB Audio CODEC)", 3, 2);                 // 5
+    addDevice("hw:CARD=CODEC,DEV=0", 4, 2);                    // 6 <- ALSA
+    addDevice("Speakers (USB Audio CODEC)", 2, 0);             // 7 output only
+    seal();
+    // PortAudio's own default input on Windows is MME's - the mapper.
+    defaultIn = 0;
+}
+
+}  // namespace fakepa
+
+// Item 2: only host APIs whose inputs keep their identity are offered, and a
+// card saved from an MME entry is NOT FOUND - never substituted.
+void testHostApiFilter() {
+    fakepa::scriptWindowsMachine();
+    auto b = cascade::source::makePortAudioSoundCardBackend(fakepa::kApi);
+    const std::vector<SoundCardDevice> list = b->listDevices();
+    for (const SoundCardDevice& d : list) {
+        std::printf("scripted machine lists: [%d] %s\n", d.index, cascade::source::soundCardDeviceLabel(d).c_str());
+    }
+    CHECK(list.size() == 2);
+    const bool wasapiOnly = list.size() == 2 && list[0].index == 4 && list[0].hostApi == "Windows WASAPI" &&
+                            list[1].index == 6 && list[1].hostApi == "ALSA";
+    CHECK(wasapiOnly);
+    for (const SoundCardDevice& d : list) {
+        CHECK(d.name.find("Mapper") == std::string::npos);
+        CHECK(d.name.find("Primary Sound") == std::string::npos);
+        CHECK(d.hostApi != "MME" && d.hostApi != "Windows DirectSound" && d.hostApi != "Windows WDM-KS");
+    }
+    // The WASAPI entry's rates: 48 kHz shared, 192 kHz exclusive (Windows).
+    if (!list.empty()) {
+        CHECK(!list[0].rates.empty() && list[0].rates[0].hz == 48000.0 && !list[0].rates[0].exclusive);
+    }
+    // PortAudio's own default is the MME mapper, which is not offered; the
+    // default row is WASAPI's own default input instead.
+    CHECK(cascade::source::findSoundCard(list, "", "") == 0);
+
+    // A card saved by an earlier build from its MME entry: not connected, and
+    // nothing at all opened in its place.
+    const int opensBefore = fakepa::openCalls.load();
+    SoundCardSource src([] { return cascade::source::makePortAudioSoundCardBackend(fakepa::kApi); });
+    SoundCardSettings mme;
+    mme.device = "USB Audio CODEC";
+    mme.hostApi = "MME";
+    CHECK(!src.openWith(mme));
+    CHECK(fakepa::openCalls.load() == opensBefore);
+    CHECK(std::string(src.lastError()).find("not connected") != std::string::npos);
+    SoundCardSettings mapper;
+    mapper.device = "Microsoft Sound Mapper - Input";
+    mapper.hostApi = "MME";
+    CHECK(!src.openWith(mapper));
+    CHECK(fakepa::openCalls.load() == opensBefore);
+    // ...and the backend itself refuses an MME entry handed to it directly,
+    // whatever list it came from.
+    SoundCardDevice stale;
+    stale.index = 1;
+    stale.name = "USB Audio CODEC";
+    stale.hostApi = "MME";
+    stale.maxInputChannels = 2;
+    std::string err;
+    auto b2 = cascade::source::makePortAudioSoundCardBackend(fakepa::kApi);
+    CHECK(!b2->open(stale, 2, 48000.0, false, &SoundCardSource::pushFrames, nullptr, err));
+    CHECK(fakepa::openCalls.load() == opensBefore);
+    // The pure rule.
+    CHECK(!cascade::source::soundCardHostApiListed(paMME));
+    CHECK(!cascade::source::soundCardHostApiListed(paDirectSound));
+    CHECK(cascade::source::soundCardHostApiListed(paWASAPI));
+    CHECK(cascade::source::soundCardHostApiListed(paALSA));
+}
+
+// Item 1, in the REAL backend: while one card's abort hangs inside the host
+// API, another backend enumerates, a new source opens and streams, and the
+// hung source's destroy is bounded - so no lock the close holds is one that
+// construction, listing or opening takes. (6b5aead's backend took ONE lock for
+// all of them, and its close held it through Pa_AbortStream.)
+void testRealBackendHungAbort() {
+    fakepa::scriptWindowsMachine();
+    const auto bound = SoundCardSource::kCloseWaitMs + std::chrono::milliseconds(700);
+    const auto factory = [] { return cascade::source::makePortAudioSoundCardBackend(fakepa::kApi); };
+    const int initsBefore = fakepa::inits.load();
+
+    // A backend made on this thread calls nothing.
+    {
+        auto idle = cascade::source::makePortAudioSoundCardBackend(fakepa::kApi);
+        CHECK(fakepa::inits.load() == initsBefore);
+    }
+
+    auto a = std::make_unique<SoundCardSource>(factory);
+    CHECK(a->openWith(iqSettings("Microphone (USB Audio CODEC)", 48000.0)));
+    CHECK(a->start());
+    const int aStream = (fakepa::nextStream.load() - 1) % fakepa::kStreams;
+    fakepa::hangOn = &fakepa::streamIds[aStream];
+
+    // The source is destroyed (a switch, the exit) and its abort hangs.
+    Bounded destroyA = runBounded([&] { a.reset(); }, bound);
+    std::printf("real backend: destroying a source whose abort hangs took %.0f ms\n", destroyA.ms);
+    CHECK(destroyA.finished);
+    CHECK(fakepa::hung.load() == 1);
+
+    // With that abort still hung: another backend enumerates...
+    Bounded list = runBounded(
+        [&] {
+            auto b = cascade::source::makePortAudioSoundCardBackend(fakepa::kApi);
+            CHECK(b->listDevices().size() == 2);
+        },
+        std::chrono::milliseconds(700));
+    std::printf("real backend: an enumeration beside the hung abort took %.0f ms (%s)\n", list.ms,
+                list.finished ? "finished" : "STILL WAITING");
+    CHECK(list.finished);
+
+    // ...a new source is made, opened and streams...
+    std::unique_ptr<SoundCardSource> c;
+    Bounded openC = runBounded(
+        [&] {
+            c = std::make_unique<SoundCardSource>(factory);
+            CHECK(c->openWith(iqSettings("Microphone (USB Audio CODEC)", 48000.0)));
+            CHECK(c->start());
+        },
+        std::chrono::milliseconds(700));
+    std::printf("real backend: a new open beside the hung abort took %.0f ms (%s)\n", openC.ms,
+                openC.finished ? "finished" : "STILL WAITING");
+    CHECK(openC.finished);
+    if (openC.finished && c && c->isOpen()) {
+        const int k = (fakepa::nextStream.load() - 1) % fakepa::kStreams;
+        const float frame[2] = {0.5f, 0.0f};
+        fakepa::streams[k].cb(frame, nullptr, 1, nullptr, 0, fakepa::streams[k].user);
+        std::vector<std::complex<float>> buf(16);
+        CHECK(c->read(buf.data(), buf.size()) == 1);
+        // ...and a switch away from it through a pipeline is prompt.
+        cascade::core::Pipeline::Config cfg;
+        cfg.audioEnabled = false;
+        cascade::core::Pipeline p(cfg);
+        p.setSource(std::move(c));
+        Bounded swap = runBounded([&] { p.setSource(nullptr); }, bound);
+        std::printf("real backend: a source switch beside the hung abort took %.0f ms\n", swap.ms);
+        CHECK(swap.finished);
+        CHECK(swap.ms < 500.0);
+        {
+            std::lock_guard<std::mutex> lk(fakepa::gateM);
+            fakepa::released = true;
+        }
+        fakepa::gateCv.notify_all();
+        if (swap.fut.valid()) { swap.fut.get(); }
+    }
+    // Release the hang, and everything that waited behind it finishes.
+    {
+        std::lock_guard<std::mutex> lk(fakepa::gateM);
+        fakepa::released = true;
+    }
+    fakepa::gateCv.notify_all();
+    if (destroyA.fut.valid()) { destroyA.fut.get(); }
+    if (list.fut.valid()) { list.fut.get(); }
+    if (openC.fut.valid()) { openC.fut.get(); }
+    c.reset();
+    // Every backend's initialisation is returned once its close has: the
+    // hung one's too, now that it has finished.
+    const auto t0 = Clock::now();
+    while ((fakepa::hung.load() != 0 || fakepa::inits.load() != initsBefore) &&
+           Clock::now() - t0 < std::chrono::seconds(3)) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    CHECK(fakepa::hung.load() == 0);
+    CHECK(fakepa::inits.load() == initsBefore);
+    fakepa::hangOn = nullptr;
+}
+
+// Item 8: every Pa_Initialize and Pa_Terminate in the product goes through the
+// one locked helper (PortAudio's own count is a plain int), and the helper
+// keeps the count exact under contention.
+void testPortAudioInitShared() {
+    // The source, read: no other call site.
+    namespace fs = std::filesystem;
+    int offenders = 0;
+    int sites = 0;
+    for (const auto& e : fs::recursive_directory_iterator(fs::path(CASCADE_SOURCE_DIR) / "src")) {
+        if (!e.is_regular_file()) { continue; }
+        const std::string ext = e.path().extension().string();
+        if (ext != ".cpp" && ext != ".hpp" && ext != ".h") { continue; }
+        if (e.path().filename() == "lang_assets.hpp") { continue; }
+        std::FILE* f = std::fopen(e.path().string().c_str(), "rb");
+        if (f == nullptr) { continue; }
+        std::string text;
+        char buf[65536];
+        std::size_t n = 0;
+        while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) { text.append(buf, n); }
+        std::fclose(f);
+        for (const char* call : {"Pa_Initialize()", "Pa_Terminate()"}) {
+            for (std::size_t at = text.find(call); at != std::string::npos; at = text.find(call, at + 1)) {
+                // A call, not a mention in a comment: the line up to it has no "//".
+                const std::size_t bol = text.rfind('\n', at);
+                const std::string head = text.substr(bol == std::string::npos ? 0 : bol + 1,
+                                                     at - (bol == std::string::npos ? 0 : bol + 1));
+                if (head.find("//") != std::string::npos) { continue; }
+                ++sites;
+                if (e.path().filename() != "pa_init.cpp") {
+                    ++offenders;
+                    std::printf("      %s calls %s outside sink/pa_init.cpp\n", e.path().string().c_str(), call);
+                }
+            }
+        }
+    }
+    CHECK(sites == 2);  // the helper's own two
+    CHECK(offenders == 0);
+
+    // Under contention: with one initialisation held, eight threads pair
+    // thousands of initialise/terminate calls; afterwards releasing the held
+    // one must leave PortAudio uninitialised - the count came back exact.
+    if (!cascade::sink::paInitializeShared()) {
+        std::printf("      PortAudio would not initialise here; contention half skipped\n");
+        return;
+    }
+    std::vector<std::thread> ts;
+    std::atomic<int> failed{0};
+    for (int t = 0; t < 8; ++t) {
+        ts.emplace_back([&failed] {
+            for (int i = 0; i < 20000; ++i) {
+                if (!cascade::sink::paInitializeShared()) {
+                    ++failed;
+                    continue;
+                }
+                cascade::sink::paTerminateShared();
+            }
+        });
+    }
+    for (auto& t : ts) { t.join(); }
+    CHECK(failed.load() == 0);
+    CHECK(Pa_GetDeviceCount() >= 0);  // still initialised: ours is held
+    cascade::sink::paTerminateShared();
+    const PaDeviceIndex after = Pa_GetDeviceCount();
+    std::printf("pa init: after 160000 contended pairs, released: Pa_GetDeviceCount() = %d (%s)\n",
+                static_cast<int>(after), after == paNotInitialized ? "uninitialised, count exact" : "COUNT DRIFTED");
+    CHECK(after == paNotInitialized);
 }
 
 // --- 9. the real PortAudio backend, enumeration only --------------------------------
@@ -969,6 +1869,21 @@ int main() {
     testConfigRoundTrip();
     testRememberedAndTune();
     testPatchRules();
+    // The review of 6b5aead, item by item.
+    testFixedCentreEdge();
+    testVfoInsideSpan();
+    testWholeFramesAndOverruns();
+    testStartDrainsStale();
+    testRateChange();
+    testAlivePollInterval();
+    testConfigRateBounds();
+    testRecoveryAdvice();
+    testPatchLoanAndCentreBox();
+    testHungCloseAtTheSource();
+    testHostApiFilter();
+    testRealBackendHungAbort();
+    // Before anything else in this process initialises the real PortAudio.
+    testPortAudioInitShared();
     testRealBackendEnumerates();
     return testSummary("test_soundcard_source");
 }

@@ -13,14 +13,19 @@
 #ifdef _WIN32
 #include <pa_win_wasapi.h>
 #endif
+#include "sink/pa_init.hpp"
+#include "source/soundcard_portaudio.hpp"
 #endif
 
 #include <algorithm>
 #include <cmath>
+#include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
 #include <mutex>
 #include <thread>
+
+#include "core/diag_log.hpp"
 
 namespace cascade::source {
 
@@ -225,41 +230,63 @@ std::shared_ptr<SoundCardBackend> makePortAudioSoundCardBackend() {
 
 namespace {
 
-// ONE LOCK FOR EVERY PORTAUDIO CALL THE SOUND CARD MAKES. The list, the probes
-// behind it, the opens and the closes can each come from a different thread -
-// the Source section's worker, a patch node's worker, the pipeline's source
-// thread asking alive(), a thread closing a dead card - and PortAudio is not
-// documented as safe for concurrent calls into one host API. alive() only
-// ever TRIES it, so the source thread never waits behind a slow probe.
-std::mutex& paMutex() {
-    static std::mutex m;
-    return m;
+// THE LIST-AND-OPEN LOCK. An enumeration (every rate of every input asked of
+// the host API) and an open can each come from a different thread - the
+// Source section's worker, a patch radio's worker - and PortAudio is not
+// documented as safe for concurrent calls into one host API, so the sound card
+// takes them one at a time. NOTHING ELSE EVER TAKES IT: not a close or an
+// abort (which may never return on a card that has gone - see "CLOSING" in
+// soundcard_source.hpp), not alive(), not a constructor or a destructor. So
+// the most a hung close can hold up is its own closer thread. Allocated once
+// and never destroyed, for the reason sink/pa_init.cpp gives.
+std::mutex& listOpenMutex() {
+    static std::mutex* const m = new std::mutex;
+    return *m;
 }
+
+PaError realInitialize() { return sink::paInitializeShared() ? paNoError : paNotInitialized; }
+
+PaError realTerminate() {
+    sink::paTerminateShared();
+    return paNoError;
+}
+
+const SoundCardPaApi kRealPaApi = {
+    &realInitialize,     &realTerminate,  &Pa_GetDeviceCount, &Pa_GetDefaultInputDevice,
+    &Pa_GetDeviceInfo,   &Pa_GetHostApiInfo, &Pa_IsFormatSupported, &Pa_OpenStream,
+    &Pa_StartStream,     &Pa_AbortStream, &Pa_CloseStream,    &Pa_IsStreamActive,
+    &Pa_GetErrorText,
+};
 
 class PortAudioSoundCardBackend final : public SoundCardBackend {
 public:
-    PortAudioSoundCardBackend() {
-        std::lock_guard<std::mutex> lk(paMutex());
-        paOk_ = (Pa_Initialize() == paNoError);
-    }
+    // Calls nothing: PortAudio is initialised by the first list or open, on
+    // the worker that asks (see makePortAudioSoundCardBackend).
+    explicit PortAudioSoundCardBackend(const SoundCardPaApi& api) : api_(api) {}
 
     ~PortAudioSoundCardBackend() override {
         close();
-        std::lock_guard<std::mutex> lk(paMutex());
         // Paired with OUR successful Pa_Initialize only; PortAudio refcounts.
-        if (paOk_) { Pa_Terminate(); }
+        // A backend whose close never returned never gets here, so its
+        // initialisation keeps PortAudio from being torn down under it.
+        if (paOk_) { api_.terminate(); }
     }
 
     std::vector<SoundCardDevice> listDevices() override {
         std::vector<SoundCardDevice> out;
-        std::lock_guard<std::mutex> lk(paMutex());
-        if (!paOk_) { return out; }
-        const PaDeviceIndex count = Pa_GetDeviceCount();
-        const PaDeviceIndex def = Pa_GetDefaultInputDevice();
+        if (!initialised()) { return out; }
+        std::lock_guard<std::mutex> lk(listOpenMutex());
+        const PaDeviceIndex count = api_.getDeviceCount();
+        const PaDeviceIndex def = api_.getDefaultInputDevice();
+        std::vector<std::size_t> apiDefaults;  // rows that are their host API's default input
         for (PaDeviceIndex i = 0; i < count; ++i) {
-            const PaDeviceInfo* info = Pa_GetDeviceInfo(i);
+            const PaDeviceInfo* info = api_.getDeviceInfo(i);
             if (info == nullptr || info->maxInputChannels < 1) { continue; }
-            const PaHostApiInfo* api = Pa_GetHostApiInfo(info->hostApi);
+            const PaHostApiInfo* api = api_.getHostApiInfo(info->hostApi);
+            // Only host APIs whose inputs keep their identity - never MME's
+            // renumbered waveIn IDs, never a mapper that follows the Windows
+            // default (see the header).
+            if (api == nullptr || !soundCardHostApiListed(api->type)) { continue; }
             SoundCardDevice d;
             d.index = static_cast<int>(i);
             d.name = info->name != nullptr ? info->name : "";
@@ -267,6 +294,7 @@ public:
             d.maxInputChannels = info->maxInputChannels;
             d.defaultRateHz = info->defaultSampleRate;
             d.isDefault = (i == def);
+            if (api->defaultInputDevice == i) { apiDefaults.push_back(out.size()); }
             PaStreamParameters p{};
             p.device = i;
             p.channelCount = std::min(2, info->maxInputChannels);
@@ -283,7 +311,7 @@ public:
 #endif
             for (const double hz : kCandidateRatesHz) {
                 p.hostApiSpecificStreamInfo = nullptr;
-                if (Pa_IsFormatSupported(&p, nullptr, hz) == paFormatIsSupported) {
+                if (api_.isFormatSupported(&p, nullptr, hz) == paFormatIsSupported) {
                     d.rates.push_back({hz, false});
                     continue;
                 }
@@ -295,7 +323,7 @@ public:
                 // changing a Windows setting.
                 if (wasapi) {
                     p.hostApiSpecificStreamInfo = &excl;
-                    if (Pa_IsFormatSupported(&p, nullptr, hz) == paFormatIsSupported) {
+                    if (api_.isFormatSupported(&p, nullptr, hz) == paFormatIsSupported) {
                         d.rates.push_back({hz, true});
                     }
                 }
@@ -303,24 +331,44 @@ public:
             }
             out.push_back(std::move(d));
         }
+        // THE DEFAULT INPUT when PortAudio's own is not offered. On Windows
+        // Pa_GetDefaultInputDevice() is MME's - the Sound Mapper - which is
+        // hidden above; the default row is then the first listed host API's
+        // own default input (WASAPI's is the Windows default capture device).
+        const bool haveDefault =
+            std::any_of(out.begin(), out.end(), [](const SoundCardDevice& x) { return x.isDefault; });
+        if (!haveDefault && !apiDefaults.empty()) { out[apiDefaults.front()].isDefault = true; }
         return out;
     }
 
     bool open(const SoundCardDevice& dev, int channels, double rateHz, bool exclusive,
               PushFn push, void* user, std::string& error) override {
-        close();
-        std::lock_guard<std::mutex> lk(paMutex());
-        if (!paOk_) {
+        {
+            // ONE STREAM PER BACKEND, and a backend is never reopened after a
+            // close (the source makes a new one): a close runs on a thread of
+            // its own and may still be using this object.
+            std::lock_guard<std::mutex> s(streamMutex_);
+            if (stream_ != nullptr) {
+                error = "this input already has a stream open";
+                return false;
+            }
+        }
+        if (!initialised()) {
             error = "the audio system (PortAudio) did not start";
             return false;
         }
-        const PaDeviceInfo* info =
-            (dev.index >= 0 && dev.index < Pa_GetDeviceCount()) ? Pa_GetDeviceInfo(dev.index) : nullptr;
+        std::lock_guard<std::mutex> lk(listOpenMutex());
+        const PaDeviceInfo* info = (dev.index >= 0 && dev.index < api_.getDeviceCount())
+                                       ? api_.getDeviceInfo(dev.index)
+                                       : nullptr;
+        const PaHostApiInfo* hostApi = info != nullptr ? api_.getHostApiInfo(info->hostApi) : nullptr;
         // The index came from THIS process's list, which PortAudio does not
-        // renumber while it is initialised; the name check is the belt to
-        // that brace, so a stale index can never open a different card.
-        if (info == nullptr || info->name == nullptr || dev.name != info->name ||
-            info->maxInputChannels < channels) {
+        // renumber while it is initialised; the name and host API checks are
+        // the belt to that brace, so a stale index - or an entry from a host
+        // API this source does not offer - can never open a different card.
+        if (info == nullptr || info->name == nullptr || dev.name != info->name || hostApi == nullptr ||
+            hostApi->name == nullptr || dev.hostApi != hostApi->name ||
+            !soundCardHostApiListed(hostApi->type) || info->maxInputChannels < channels) {
             error = "\"" + dev.name + "\" is no longer in the list of inputs";
             return false;
         }
@@ -334,8 +382,7 @@ public:
         p.hostApiSpecificStreamInfo = nullptr;
 #ifdef _WIN32
         PaWasapiStreamInfo excl{};
-        const PaHostApiInfo* api = Pa_GetHostApiInfo(info->hostApi);
-        if (exclusive && api != nullptr && api->type == paWASAPI) {
+        if (exclusive && hostApi->type == paWASAPI) {
             excl.size = sizeof(PaWasapiStreamInfo);
             excl.hostApiType = paWASAPI;
             excl.version = 1;
@@ -348,38 +395,47 @@ public:
         cb_.push = push;
         cb_.user = user;
         PaStream* s = nullptr;
-        PaError e = Pa_OpenStream(&s, &p, nullptr, rateHz, paFramesPerBufferUnspecified, paNoFlag,
-                                  &PortAudioSoundCardBackend::callback, &cb_);
+        PaError e = api_.openStream(&s, &p, nullptr, rateHz, paFramesPerBufferUnspecified, paNoFlag,
+                                    &PortAudioSoundCardBackend::callback, &cb_);
         if (e != paNoError) {
-            error = std::string("the card refused to open: ") + Pa_GetErrorText(e);
+            error = std::string("the card refused to open: ") + api_.getErrorText(e);
             return false;
         }
-        e = Pa_StartStream(s);
+        e = api_.startStream(s);
         if (e != paNoError) {
-            Pa_CloseStream(s);
-            error = std::string("the card would not start: ") + Pa_GetErrorText(e);
+            api_.closeStream(s);
+            error = std::string("the card would not start: ") + api_.getErrorText(e);
             return false;
         }
+        std::lock_guard<std::mutex> sl(streamMutex_);
         stream_ = s;
         return true;
     }
 
     void close() override {
-        std::lock_guard<std::mutex> lk(paMutex());
-        if (stream_ == nullptr) { return; }
+        // THE HANDLE IS TAKEN OUT UNDER THIS BACKEND'S OWN LOCK, AND CLOSED
+        // OUTSIDE ANY LOCK. From here the caller - the source's closer thread
+        // - owns the stream exclusively, so a close that never returns holds
+        // nothing an open, a list, alive() or another backend needs.
+        PaStream* s = nullptr;
+        {
+            std::lock_guard<std::mutex> lk(streamMutex_);
+            s = stream_;
+            stream_ = nullptr;
+        }
+        if (s == nullptr) { return; }
         // Abort, not Stop: nothing in an input queue is worth waiting for.
-        Pa_AbortStream(stream_);
-        Pa_CloseStream(stream_);
-        stream_ = nullptr;
+        api_.abortStream(s);
+        api_.closeStream(s);
     }
 
     bool alive() override {
-        std::unique_lock<std::mutex> lk(paMutex(), std::try_to_lock);
+        std::unique_lock<std::mutex> lk(streamMutex_, std::try_to_lock);
         if (!lk.owns_lock()) { return true; }  // busy is not dead - see the header
         if (stream_ == nullptr) { return false; }
         // 1 = the callback is being called. 0 or an error code is a stream
         // that has stopped, which is what a vanished device produces.
-        return Pa_IsStreamActive(stream_) == 1;
+        return api_.isStreamActive(stream_) == 1;
     }
 
 private:
@@ -400,26 +456,85 @@ private:
         return paContinue;
     }
 
+    // PortAudio's initialisation for this backend, taken once, by the first
+    // list or open (a worker), never by the constructor.
+    bool initialised() {
+        std::call_once(initOnce_, [this] { paOk_ = (api_.initialize() == paNoError); });
+        return paOk_;
+    }
+
+    const SoundCardPaApi& api_;
+    std::once_flag initOnce_;
     bool paOk_ = false;
+    // Guards stream_ only, and only for as long as it takes to read or swap
+    // it (and for alive()'s one query) - never across an open or a close.
+    std::mutex streamMutex_;
     PaStream* stream_ = nullptr;
     Cb cb_;
 };
 
 }  // namespace
 
+bool soundCardHostApiListed(PaHostApiTypeId type) {
+    switch (type) {
+        case paMME:          // renumbered waveIn IDs, resampled rates, the mapper
+        case paDirectSound:  // "Primary Sound Capture Driver" follows the default
+        case paWDMKS:        // not in this build; not offered if it ever is
+        case paASIO:         // not in this build; not offered if it ever is
+            return false;
+        default:
+            return true;
+    }
+}
+
+const SoundCardPaApi& realSoundCardPaApi() { return kRealPaApi; }
+
+std::shared_ptr<SoundCardBackend> makePortAudioSoundCardBackend(const SoundCardPaApi& api) {
+    return std::make_shared<PortAudioSoundCardBackend>(api);
+}
+
 std::shared_ptr<SoundCardBackend> makePortAudioSoundCardBackend() {
-    return std::make_shared<PortAudioSoundCardBackend>();
+    return makePortAudioSoundCardBackend(kRealPaApi);
 }
 
 #endif  // CASCADE_ANDROID
 
 // --- the source ------------------------------------------------------------------
 
+namespace {
+
+std::atomic<std::uint64_t> gAbandonedCloses{0};
+std::atomic<bool> gCloseWaitEnabled{true};
+
+// How a closer thread tells closeDevice() it has finished, if anyone is still
+// waiting to hear it.
+struct CloseDone {
+    std::mutex m;
+    std::condition_variable cv;
+    bool done = false;
+};
+
+}  // namespace
+
+// The constructor asks the factory for nothing: see BackendFactory.
 SoundCardSource::SoundCardSource(BackendFactory factory)
-    : factory_(factory ? std::move(factory) : BackendFactory(&makePortAudioSoundCardBackend)),
-      backend_(factory_()) {}
+    : factory_(factory ? std::move(factory)
+                       : BackendFactory([] { return makePortAudioSoundCardBackend(); })) {}
 
 SoundCardSource::~SoundCardSource() { closeDevice(); }
+
+std::uint64_t SoundCardSource::abandonedCloses() {
+    return gAbandonedCloses.load(std::memory_order_relaxed);
+}
+
+void SoundCardSource::setCloseWaitEnabled(bool on) {
+    gCloseWaitEnabled.store(on, std::memory_order_relaxed);
+}
+
+SoundCardBackend& SoundCardSource::backend() {
+    if (!backend_) { backend_ = factory_(); }
+    return *backend_;
+}
 
 std::uint64_t SoundCardSource::overruns() const {
     return cap_ ? cap_->overruns.load(std::memory_order_relaxed) : 0;
@@ -440,7 +555,7 @@ void SoundCardSource::pushFrames(void* user, const float* interleaved, std::size
 
 bool SoundCardSource::openWith(const SoundCardSettings& s) {
     closeDevice();
-    const std::vector<SoundCardDevice> list = backend_->listDevices();
+    const std::vector<SoundCardDevice> list = backend().listDevices();
     return openLocked(s, list);
 }
 
@@ -456,9 +571,11 @@ bool SoundCardSource::openLocked(const SoundCardSettings& s, const std::vector<S
         if (s.device.empty()) {
             error_ = "no sound card input is present";
         } else {
-            // NEVER ANOTHER CARD IN ITS PLACE - see the file header.
+            // NEVER ANOTHER CARD IN ITS PLACE - see the file header. A card
+            // saved from an MME entry lands here too: MME is not listed.
             error_ = "\"" + s.device + "\" (" + s.hostApi +
-                     ") is not connected; no other input was opened in its place";
+                     ") is not connected; no other input was opened in its place. Sound cards are "
+                     "listed when FoxSDR starts: plug it in and restart FoxSDR";
         }
         return false;
     }
@@ -486,11 +603,12 @@ bool SoundCardSource::openLocked(const SoundCardSettings& s, const std::vector<S
     auto cap = std::make_shared<Capture>(kRingFloats);
     cap->channels.store(channels, std::memory_order_relaxed);
     std::string err;
-    if (!backend_->open(dev, channels, pick.hz, pick.exclusive, &SoundCardSource::pushFrames,
+    if (!backend().open(dev, channels, pick.hz, pick.exclusive, &SoundCardSource::pushFrames,
                         cap.get(), err)) {
         error_ = "\"" + dev.name + "\": " + err;
         return false;
     }
+    closedBecause_.clear();
     cap_ = std::move(cap);
     device_ = dev;
     channels_ = channels;
@@ -530,21 +648,46 @@ void SoundCardSource::closeDevice() {
     stopRequested_.store(true, std::memory_order_relaxed);
     if (!open_) { return; }
     open_ = false;
-    if (faulted()) {
-        // A CARD THAT DIED IS CLOSED ON A THREAD OF ITS OWN. A host API asked
-        // to close a stream on a device that has gone is the one call here
-        // nobody can promise returns promptly, and this runs on the GUI
-        // thread (a source swap destroys the old source there). The thread
-        // owns the backend and the capture block, so a last callback during
-        // the close still has somewhere to write.
-        std::thread([b = backend_, c = cap_]() { b->close(); }).detach();
-        // ...and this source never touches that backend again: a reopen on it
-        // would race the close, which could then shut the NEW stream.
-        backend_ = factory_();
-    } else {
-        backend_->close();
-    }
+    const bool dead = faulted();
+    // EVERY CLOSE RUNS ON A THREAD OF ITS OWN (see "CLOSING" in the header).
+    // A host API asked to close a stream can take as long as it likes - for
+    // ever, on a card that has gone - and this runs on the GUI thread (a
+    // source swap, a patch radio, the exit). The thread takes the backend and
+    // the capture block with it: the stream is then its alone, a last
+    // callback during the close still has somewhere to write, and PortAudio's
+    // termination for that backend happens there too, after the close.
+    // THIS SOURCE NEVER TOUCHES THAT BACKEND AGAIN - the next open asks the
+    // factory for a new one - so a close still running can never shut a
+    // stream opened after it.
+    auto done = std::make_shared<CloseDone>();
+    std::thread([b = std::move(backend_), c = std::move(cap_), done]() mutable {
+        b->close();
+        b.reset();
+        c.reset();
+        {
+            std::lock_guard<std::mutex> lk(done->m);
+            done->done = true;
+        }
+        done->cv.notify_all();
+    }).detach();
+    backend_.reset();
     cap_.reset();
+    // A card that has already failed is not waited for at all, and nothing
+    // is once the application's teardown has begun (setCloseWaitEnabled). A
+    // healthy one otherwise is, for a bounded time, so that reopening the
+    // same card straight away (a new rate; WASAPI exclusive mode; the patch
+    // page taking the receiver's card) finds it free.
+    if (dead || !gCloseWaitEnabled.load(std::memory_order_relaxed)) { return; }
+    const std::chrono::milliseconds budget = kCloseWaitMs;
+    std::unique_lock<std::mutex> lk(done->m);
+    if (!done->cv.wait_for(lk, budget, [&done] { return done->done; })) {
+        gAbandonedCloses.fetch_add(1, std::memory_order_relaxed);
+        cascade::core::diagWarnf(
+            "source: the sound card %s (%s) did not close within %lld ms; the close is left to "
+            "finish on a thread of its own",
+            settings_.device.c_str(), settings_.hostApi.c_str(),
+            static_cast<long long>(kCloseWaitMs.count()));
+    }
 }
 
 bool SoundCardSource::setGainDb(const std::string& /*name*/, double /*db*/) {
@@ -580,7 +723,8 @@ std::string SoundCardSource::faultedWhile() const { return faulted() ? "streamin
 
 bool SoundCardSource::start() {
     if (!open_) {
-        error_ = "no sound card is open";
+        // A rate change that could not put the card back says why it is shut.
+        error_ = closedBecause_.empty() ? std::string("no sound card is open") : closedBecause_;
         return false;
     }
     if (faulted()) { return false; }
@@ -616,11 +760,30 @@ bool SoundCardSource::setSampleRateHz(double hz) {
     // A new rate is a new stream. The card is re-found in the list it was
     // opened from, so a reopen never enumerates.
     const std::vector<SoundCardDevice> list{device_};
+    const SoundCardSettings before = settings_;
     const bool wasRunning = running();
     closeDevice();
-    if (!openLocked(s, list)) { return false; }
-    if (wasRunning) { start(); }
-    return true;
+    if (openLocked(s, list)) {
+        if (wasRunning) { start(); }
+        return true;
+    }
+    // THE CARD REFUSED THE NEW RATE. Put it back as it was - the rate it had,
+    // running again if it was - so the caller's "the radio refused this rate
+    // and runs at its own" is true.
+    const std::string refused = error_;
+    char buf[96];
+    if (openLocked(before, list)) {
+        if (wasRunning) { start(); }
+        std::snprintf(buf, sizeof(buf), "; it is still running at %.0f Hz", settings_.cardRateHz);
+        error_ = refused + buf;
+        return false;
+    }
+    // ...and when even that fails the card is CLOSED, and says so: isOpen()
+    // is false and start() refuses with both reasons.
+    std::snprintf(buf, sizeof(buf), "; it could not be reopened at %.0f Hz either: ", before.cardRateHz);
+    closedBecause_ = refused + buf + error_;
+    error_ = closedBecause_;
+    return false;
 }
 
 double SoundCardSource::centerFrequencyHz() const { return soundCardCentreHz(settings_); }
@@ -660,9 +823,12 @@ std::size_t SoundCardSource::read(std::complex<float>* dst, std::size_t n) {
         if (availFrames != 0) { break; }
         const auto t = std::chrono::steady_clock::now();
         if (t - lastDataAt_ >= kStallMs) {
+            // THE SAME ADVICE AS EVERY OTHER MESSAGE ABOUT A CARD: PortAudio's
+            // list of inputs is fixed for the session (see the header).
             latchFault("the sound card \"" + settings_.device + "\" (" + settings_.hostApi +
                        ") has delivered nothing for 2 s - unplugged, or taken by another "
-                       "program? Plug it back in and press Open");
+                       "program? Sound cards are listed when FoxSDR starts: after plugging a card "
+                       "back in, restart FoxSDR");
             return 0;
         }
         if (t - lastAlivePollAt_ >= kAlivePollMs) {
@@ -670,8 +836,8 @@ std::size_t SoundCardSource::read(std::complex<float>* dst, std::size_t n) {
             if (!backend_->alive()) {
                 latchFault("the input stream of \"" + settings_.device + "\" (" +
                            settings_.hostApi +
-                           ") stopped - the card was unplugged or taken away. Plug it back in "
-                           "and press Open");
+                           ") stopped - the card was unplugged or taken away. Sound cards are "
+                           "listed when FoxSDR starts: after plugging it back in, restart FoxSDR");
                 return 0;
             }
         }

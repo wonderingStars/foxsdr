@@ -28,6 +28,30 @@
 // quietly replaced by whichever card happens to answer, because a receiver
 // that silently moved to the laptop's microphone would look like a dead band.
 //
+// ONLY HOST APIs WHOSE DEVICES KEEP THEIR IDENTITY. The name rule is only as
+// good as the host API behind the name, and on Windows two of them break it:
+//   - MME. PortAudio keeps each MME input as the numeric waveIn ID Windows
+//     gave it at Pa_Initialize (pa_win_wmme.c, winMmeDeviceIds), and Windows
+//     renumbers waveIn IDs whenever a card is plugged in or pulled out - so
+//     after a replug the saved NAME can open a DIFFERENT card. MME also
+//     accepts any rate and resamples, so it never shows what a card really
+//     runs at.
+//   - The mapper entries ("Microsoft Sound Mapper - Input" under MME,
+//     "Primary Sound Capture Driver" under DirectSound) follow whatever the
+//     Windows default input is, which is exactly "another input opened in its
+//     place".
+// So on Windows only WASAPI is offered: PortAudio holds each WASAPI input as
+// the endpoint's own IMMDevice and ID string (pa_win_wasapi.c), and its rates
+// are the ones the card really takes. DirectSound, WDM-KS and ASIO are not in
+// this build (CMakeLists.txt) and are hidden too should one ever be switched
+// on. A card saved from an MME entry by an earlier build is simply not in the
+// list - reported as not connected, never substituted.
+//
+// A CARD PLUGGED IN OR PULLED OUT NEEDS A RESTART OF FOXSDR. PortAudio builds
+// its device list at Pa_Initialize and never rebuilds it while it stays
+// initialised, which with the audio output always open is the whole session.
+// Every message about a missing or unplugged card says exactly that.
+//
 // THE SEAM. Everything PortAudio does is behind SoundCardBackend: listing the
 // input devices and their rates, opening a stream that calls back with
 // interleaved float frames, closing it, and saying whether it is still alive.
@@ -41,6 +65,22 @@
 // pipeline's source thread is the CONSUMER and does the conversion. open()
 // and enumeration call into the audio stack and can block for as long as a
 // host API likes, so the application only ever calls them on a worker.
+//
+// CLOSING NEVER HOLDS ANYONE ELSE UP. Closing a stream on a card that has gone
+// is the one audio call nobody can promise returns, and the source is closed
+// on the GUI thread (a source switch, a patch radio switched off, the exit).
+// So a close is handed, with the backend and the capture block, to a thread of
+// its own, which from then on owns that stream exclusively: it takes no lock
+// that an open, an enumeration, a construction or another close takes (the
+// PortAudio backend's only shared lock is its list-and-open lock, which a
+// close never touches, and PortAudio's init count is locked only around
+// Pa_Initialize and Pa_Terminate - sink/pa_init.hpp). The caller waits for a
+// HEALTHY card's close for at most kCloseWaitMs - long enough that reopening
+// the same card (a new rate, WASAPI exclusive mode) finds it free - and not at
+// all for a card that has already failed; a close that has not finished by
+// then is left to finish on its own thread, logged, and counted
+// (abandonedCloses). The backend that close took is never used again: the
+// next open makes a new one.
 //
 // LIVENESS. A USB card pulled out mid-stream does not tell PortAudio anything:
 // the callback simply stops being called. read() therefore watches for it -
@@ -161,7 +201,10 @@ public:
     virtual bool open(const SoundCardDevice& dev, int channels, double rateHz, bool exclusive,
                       PushFn push, void* user, std::string& error) = 0;
 
-    // Stops and closes the stream. Idempotent.
+    // Stops and closes the stream. Idempotent. MAY NEVER RETURN on a card
+    // that has gone: the source only ever calls it on a closer thread of its
+    // own (see "CLOSING" above), so it must not hold anything that open(),
+    // listDevices() or another backend needs while it waits.
     virtual void close() = 0;
 
     // True while a stream is open AND the host API still says it is running.
@@ -171,18 +214,23 @@ public:
     virtual bool alive() = 0;
 };
 
-// The real one. Each backend holds its own Pa_Initialize, so the list it
-// enumerates is PortAudio's snapshot for as long as ANY PortAudio user in the
-// process is alive - which, with the audio output always open, is the whole
-// session: a card plugged in after launch is seen by the next launch.
+// The real one. Making it calls nothing: each backend takes its own
+// Pa_Initialize the first time it lists or opens (so constructing one on the
+// GUI thread costs nothing and waits on nothing). The list it enumerates is
+// PortAudio's snapshot for as long as ANY PortAudio user in the process is
+// alive - which, with the audio output always open, is the whole session: a
+// card plugged in after launch is seen by the next launch. On Windows it lists
+// WASAPI inputs only (see the file header).
 std::shared_ptr<SoundCardBackend> makePortAudioSoundCardBackend();
 
 class SoundCardSource final : public DeviceSource {
 public:
     // Where the backend comes from. An empty factory means PortAudio. It is a
-    // FACTORY rather than one backend because a card that died is closed on a
-    // thread of its own (see closeDevice), which takes that backend with it -
-    // a reopen of the same source object then needs a fresh one.
+    // FACTORY rather than one backend because every close is handed to a
+    // thread of its own (see "CLOSING" in the file header), which takes that
+    // backend with it - the next open of the same source object then asks for
+    // a fresh one. It is asked lazily, by the opens and never by the
+    // constructor or a close, so it runs where the opens run: on a worker.
     using BackendFactory = std::function<std::shared_ptr<SoundCardBackend>()>;
     explicit SoundCardSource(BackendFactory factory = {});
     ~SoundCardSource() override;
@@ -200,6 +248,23 @@ public:
     // How long one read() waits for samples before returning 0 (the IqSource
     // bound for self-paced sources is ~100 ms).
     static constexpr std::chrono::milliseconds kReadWaitMs{100};
+    // How long closeDevice() waits for a HEALTHY card's close to finish on its
+    // closer thread before leaving it there (a card that has already failed
+    // is not waited for at all). A WASAPI close takes milliseconds; this is
+    // the most a close that has hung inside the host API can cost the thread
+    // that asked - a source switch, a patch radio, the exit.
+    static constexpr std::chrono::milliseconds kCloseWaitMs{1000};
+
+    // Closes, process-wide, that did not finish within the wait above and
+    // were left on their own threads. Monotonic.
+    static std::uint64_t abandonedCloses();
+    // THE EXIT WAITS FOR NO CLOSE. AppWindow::run() switches the wait off as
+    // its teardown begins (the patch's radios are destroyed inside the
+    // stretch the shutdown budget times, and the receiver's source after it),
+    // so every close from then on is handed to its thread and not waited for
+    // at all: a card is released by the process exiting if its close has not
+    // finished. Process-wide; on by default.
+    static void setCloseWaitEnabled(bool on);
 
     // Opens the card the settings name, with those settings. BLOCKING (it
     // enumerates, then opens): call it on a worker. A device the settings
@@ -257,7 +322,11 @@ public:
     std::string antenna() const override;
     // COMPLEX rates, as IqSource::sampleRateHz reports them: half the card's
     // rates in REAL mode. setSampleRateHz takes one of these and reopens the
-    // stream at the matching card rate (blocking - off the GUI thread).
+    // stream at the matching card rate (blocking - off the GUI thread). A
+    // reopen the card refuses puts the card back at the rate it had, running
+    // again if it was, and answers false with the card's reason; if even that
+    // reopen fails the card is left CLOSED - isOpen() false, and start()
+    // refusing with both reasons - never reported as running.
     std::vector<double> supportedSampleRatesHz() const override;
     bool frequencyRangeHz(double& loHz, double& hiHz) const override;
     bool deviceDead() const override { return faulted(); }
@@ -289,6 +358,9 @@ public:
 private:
     bool openLocked(const SoundCardSettings& s, const std::vector<SoundCardDevice>& list);
     void latchFault(const std::string& why);
+    // The backend for the next open: a fresh one from the factory whenever
+    // the last one went with a close.
+    SoundCardBackend& backend();
 
     // 2^18 floats: 680 ms of stereo at 192 kHz. The pipeline reads every
     // 10 ms; the depth is for a GUI or scheduler hiccup, not for latency.
@@ -319,6 +391,9 @@ private:
     // either pointer without a lock, which the IqSource contract requires.
     std::string error_;
     std::string faultMsg_;
+    // Why the card is closed when a rate change could not put it back (see
+    // setSampleRateHz); start() refuses with this. Empty otherwise.
+    std::string closedBecause_;
 };
 
 }  // namespace cascade::source

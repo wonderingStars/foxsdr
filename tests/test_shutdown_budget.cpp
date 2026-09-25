@@ -780,6 +780,11 @@ const KnownWait kKnownWaits[] = {
     {"src/source/soundcard_source.hpp", "kAlivePollMs", 0,
      "not a wait - how often read(), while it waits for samples, asks the backend whether the "
      "stream is still running; the ask is a try-lock that never blocks"},
+    {"src/source/soundcard_source.hpp", "kCloseWaitMs", 0,
+     "SoundCardSource::closeDevice()'s wait for a healthy card's close on its closer thread - "
+     "switched off by AppWindow::run() (SoundCardSource::setCloseWaitEnabled(false)) straight "
+     "after watchdog_.beginShutdown(), so neither the patch radios destroyed inside the budget "
+     "nor the receiver's source destroyed after watchdog_.stop() waits on it"},
 
     // THE TRANSMITTER (0.95.0), AND IT IS THE FIRST COLUMN THAT ADDS.
     //

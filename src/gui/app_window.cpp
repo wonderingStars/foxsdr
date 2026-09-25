@@ -2042,6 +2042,12 @@ int AppWindow::run(int frames) {
 
     watchdog_.beginShutdown();
     const auto teardownStart = std::chrono::steady_clock::now();
+    // NO SOUND CARD CLOSE IS WAITED FOR FROM HERE ON: each is handed to its
+    // own thread and left there (a card is released by the process exiting),
+    // so a card whose close hangs cannot spend this budget - the patch's
+    // radios below are destroyed inside it (source/soundcard_source.hpp,
+    // "CLOSING").
+    cascade::source::SoundCardSource::setCloseWaitEnabled(false);
 
     // THE TRANSMITTER BEFORE ANYTHING ELSE, AND IT IS NOT A STYLE CHOICE.
     // Everything else in this teardown can take its time; a radio that is
@@ -9057,9 +9063,9 @@ void AppWindow::setVfoToAbsoluteHz(double wantAbsHz, bool snap) {
     double off = wantAbsHz - pipeline_.activeSource().centerFrequencyHz();
     // Keep the whole band inside the baseband +/- inputRate/2, exactly as the
     // drag path does — clicking near the panel edge must not park the filter
-    // half outside the spectrum we actually receive.
-    const double lim = 0.5 * pipeline_.inputRateHz() - 0.5 * vfoBandwidthHz_;
-    off = (lim > 0.0) ? std::clamp(off, -lim, lim) : 0.0;
+    // half outside the spectrum we actually receive. The same limit a sound
+    // card's tune is judged against (gui::tuneWithFixedCentre), from one place.
+    off = cascade::gui::vfoOffsetInsideSpan(off, pipeline_.inputRateHz(), vfoBandwidthHz_);
     pipeline_.setVfoOffsetHz(off);
     vfoOffsetKhz_ = static_cast<float>(off / 1000.0);
 }
@@ -23198,6 +23204,11 @@ cascade::core::AppConfig AppWindow::currentConfig() {
         keep.kind = patchMainKeep_.kind;
         if (patchMainKeep_.kind == "soapy") {
             keep.soapyArgs = patchMainKeep_.args;
+            keep.nativeArgs = cfgNativeArgs_;
+        } else if (patchMainKeep_.kind == "soundcard") {
+            // A lent sound card is named by cfg.soundCard (below); both radio
+            // slots keep what they had.
+            keep.soapyArgs = cfgSoapyArgs_;
             keep.nativeArgs = cfgNativeArgs_;
         } else {
             keep.nativeArgs = patchMainKeep_.args;
