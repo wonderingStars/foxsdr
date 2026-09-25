@@ -74,11 +74,35 @@ cc::ConverterSetting AppWindow::converterForKey(const std::string& radioKey) con
 
 void AppWindow::noteConverterFallback(const std::string& nativeKey,
                                       const std::string& fallbackKey) {
+    converterNotCarried_.erase(fallbackKey);
+    if (nativeKey.empty() || nativeKey == fallbackKey) { return; }
     // A Soapy key with a converter of its own keeps it: the user set that one
-    // for this very way of reaching the dongle.
-    if (nativeKey.empty() || nativeKey == fallbackKey || converters_.count(fallbackKey) != 0) {
+    // for this very way of reaching the dongle. ONLY AN ACTIVE ONE counts - a
+    // record left OFF (changeConverter stores Off too, to remember the LO) is
+    // "none", and must not silently stop the radio's own converter applying.
+    if (cc::converterActive(cc::converterFor(converters_, fallbackKey))) {
+        converterKeyAlias_.erase(fallbackKey);
         return;
     }
+    // ONLY THE SAME DONGLE, PROVABLY (gui::fallbackNamesTheSameDongle): with
+    // no serial in the Soapy args SoapySDR may have opened a different dongle
+    // from the one the native row named. Then nothing is carried, and the
+    // Source section says so when the native radio had a converter to carry.
+    if (!cascade::gui::fallbackNamesTheSameDongle(nativeKey, fallbackKey)) {
+        converterKeyAlias_.erase(fallbackKey);
+        if (cc::converterActive(cc::converterFor(converters_, nativeKey))) {
+            converterNotCarried_.insert(fallbackKey);
+            cascade::core::diagLogf("source: the SoapySDR fallback names no serial the native "
+                                    "radio matches; its converter is not carried");
+        }
+        return;
+    }
+    // EDITS MADE WHILE THIS ALIAS IS IN FORCE ARE STORED UNDER THE NATIVE KEY
+    // ONLY (converterRadioKeyNow resolves through it), never under the Soapy
+    // one. Accepted: the dongle is the native radio, the native key is where
+    // the next native open looks, and a later fallback aliases again and
+    // finds the edit there. The Soapy key simply never gets a record of its
+    // own this way.
     converterKeyAlias_[fallbackKey] = nativeKey;
     const cc::ConverterSetting s = converterForKey(fallbackKey);
     // Which way it is set, never a frequency (see changeConverter).
@@ -90,6 +114,13 @@ void AppWindow::noteConverterFallback(const std::string& nativeKey,
 
 std::string AppWindow::converterAliasNote() {
     const std::string raw = cc::converterRadioKey(sourceKind_, deviceArgs_);
+    // Said until the user sets a converter here themselves.
+    if (converterNotCarried_.count(raw) != 0 && !cc::converterActive(pipeline_.converter())) {
+        return tr("Opened through SoapySDR because the native driver refused this radio. The "
+                  "converter set for it was not carried over: with no serial number the two "
+                  "drivers cannot be shown to be the same dongle. Set one here if this radio "
+                  "needs it.");
+    }
     if (converterKeyAlias_.count(raw) == 0) { return {}; }
     if (!cc::converterActive(pipeline_.converter())) { return {}; }
     return tr("Opened through SoapySDR because the native driver refused this radio - the "
@@ -107,6 +138,7 @@ std::optional<double> AppWindow::carriedAirCentre() {
 
 void AppWindow::applyConverterForSource() {
     pipeline_.setConverter(converterForKey(converterRadioKeyNow()));
+    converterHeldAir_.reset();   // a station held for the radio just replaced
     // The LO field re-seeds from the radio now installed.
     converterLoSeededFor_.clear();
     converterLoBad_ = false;
@@ -211,33 +243,78 @@ std::string AppWindow::converterTuneNote(double requestAirHz, bool refused, doub
 
 void AppWindow::changeConverter(const cc::ConverterSetting& s) {
     const std::string key = converterRadioKeyNow();
-    const std::optional<double> airBefore = carriedAirCentre();
+    std::optional<double> airBefore = carriedAirCentre();
+    // THE STATION A RELABEL COULD NOT KEEP (see below), while the radio has
+    // not moved since: switching a converter off from 17.2 kHz leaves the
+    // dongle on 125.0172 MHz and the counter reading that, and switching it
+    // straight back on must find 17.2 kHz again - not keep 125.0172 MHz on
+    // the air and send the radio to 250.0172 MHz. A tune moves the radio
+    // (and a source install clears this), so any later change starts afresh.
+    const double radioNowHz = pipeline_.rawSource().centerFrequencyHz();
+    if (converterHeldAir_.has_value() && converterHeldAir_->key == key &&
+        converterHeldAir_->radioHz == radioNowHz && airBefore.has_value()) {
+        airBefore = converterHeldAir_->airHz;
+    }
+    converterHeldAir_.reset();
     // STORED EVEN WHEN OFF, so switching back on finds the LO the user typed
     // (sanitiseConverter keeps a valid LO whatever the mode).
     converters_[key] = cc::sanitiseConverter(s);
     const cc::ConverterSetting eff = converterForKey(key);
     pipeline_.setConverter(eff);
+    tuneMismatchNote_.clear();
 
-    // THE RADIO STAYS WHERE IT IS; the counter relabels. A user who switches
-    // a converter on is usually already tuned to its output (the tester had
-    // his dongle on 125.0172 MHz to hear SAQ), and the counter now simply says
-    // 17.2 kHz. The exception is a relabel whose TUNED frequency lands below
-    // 0 Hz - a dongle left on 100 MHz behind a 125 MHz up-converter - where
-    // there is nothing to show: then the AIR frequency is kept and the radio
-    // moves, through the ordinary tune path so a refusal is reported the
-    // ordinary way. Judged on the tuned frequency, not the band centre: a
-    // centre below 0 Hz on the air with the VFO parked above a VLF station
-    // (the dongle on 124.7164 MHz, the VFO 300 kHz up, hearing 16.4 kHz) is
-    // exactly the relabel the user wants.
-    const double tunedNow = pipeline_.activeSource().centerFrequencyHz() + pipeline_.vfoOffsetHz();
-    if (cc::converterActive(eff) && !(tunedNow >= 0.0) && airBefore.has_value()) {
-        retuneCoalescer_.clearPending();
-        applyRetuneNow(*airBefore);
+    // THE AIR FREQUENCY STAYS; THE RADIO FOLLOWS. On every change - on, off,
+    // mode, LO, inversion - the station the user is listening to is kept (the
+    // air centre, and with it the VFO's station) and the radio is retuned to
+    // what the new setting makes of it. SYMMETRIC, which the rule before it
+    // was not: that one relabelled unless the result fell below 0 Hz, so an LO
+    // typo (125 -> 1250 MHz) moved the radio to 1250.0172 MHz while correcting
+    // it (1250 -> 125) only relabelled the counter to 1125.0172 MHz, and the
+    // station was gone; the quick LO keys moved the radio one way round and
+    // relabelled the other (second review, probe P2).
+    //
+    // ONLY WHEN THE RADIO CAN GO THERE: above 0 Hz at the radio, and inside
+    // the range the radio publishes. Otherwise it stays where it is, the
+    // counter relabels to what it now hears, and the note says what the radio
+    // reaches (converterTuneNote, or the plain sentence with the converter
+    // off). No value in airBefore is a radio that was never tuned: there is
+    // no station to keep, and the relabel is all there is.
+    //
+    // AN I/Q FILE IS NOT A RADIO. Its frequency is where the recording was
+    // made; a converter set on it is there to relabel a recording made at the
+    // radio's frequency, so a file always relabels.
+    if (airBefore.has_value() && sourceKind_ != "file") {
+        const double airHz = *airBefore;
+        const double radioHz = cc::radioFromAir(eff, airHz);
+        double rLo = 0.0;
+        double rHi = 0.0;
+        const bool hasRange =
+            device_ != nullptr && device_->frequencyRangeHz(rLo, rHi) && rHi > rLo;
+        const bool reachable = std::isfinite(radioHz) && radioHz > 0.0 &&
+                               (!hasRange || (radioHz >= rLo && radioHz <= rHi));
+        if (reachable) {
+            retuneCoalescer_.clearPending();
+            applyRetuneNow(airHz);
+        } else {
+            converterHeldAir_ = ConverterHeldAir{key, airHz, radioNowHz};
+            tuneMismatchNote_ =
+                cc::converterActive(eff)
+                    ? converterTuneNote(airHz, /*refused=*/true, 0.0, /*isPluginPreset=*/false)
+                    : cascade::gui::tuneRefusedMessage(airHz, hasRange, rLo, rHi,
+                                                       /*isPluginPreset=*/false);
+            // Where it fell, never the frequency (PRIVACY.md).
+            cascade::core::diagLogf("source: converter change: the %s cannot follow the air "
+                                    "frequency (%s); it stays where it was",
+                                    pipeline_.activeSource().name(),
+                                    !(radioHz > 0.0) ? "0 Hz or below at the radio"
+                                    : radioHz < rLo   ? "below its range"
+                                                      : "above its range");
+        }
     }
-    // A new frequency as far as everything downstream is concerned.
+    // A new frequency as far as everything downstream is concerned (a relabel
+    // is one too; applyRetuneNow already told them when the radio moved).
     pipeline_.resetRds();
     pluginRunner_.retune(pipeline_.activeSource().centerFrequencyHz());
-    tuneMismatchNote_.clear();
     converterLoSeededFor_.clear();
     // Which way it was set, never a frequency (PRIVACY.md: what somebody
     // tunes to stays out of reports - an LO says which band they listen to).

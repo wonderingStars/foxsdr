@@ -33,6 +33,7 @@ using cascade::core::converterModeKey;
 using cascade::core::converterRadioKey;
 using cascade::core::kMaxConverterRadios;
 using cascade::core::parseConverterLoHz;
+using cascade::core::radioCentreTakeable;
 using cascade::core::radioFromAir;
 using cascade::core::sanitiseConverter;
 using cascade::core::sanitiseConverters;
@@ -338,10 +339,40 @@ void testLoIsWholeHertz() {
     }
 }
 
+// A centre typed on a patch Radio node: taken when the RADIO would be told
+// something above 0 Hz, converter or not (radioCentreTakeable).
+void testRadioCentreTakeable() {
+    std::printf("  a typed radio centre is judged at the radio, above 0 Hz\n");
+    const ConverterSetting off{};
+    // No converter: air IS radio, so above 0 Hz only.
+    CHECK(radioCentreTakeable(off, 1.0));
+    CHECK(radioCentreTakeable(off, 100.0e6));
+    CHECK(!radioCentreTakeable(off, 0.0));
+    CHECK(!radioCentreTakeable(off, -1.0));
+    // Behind a 125 MHz up-converter, 0 Hz and a negative air centre are taken
+    // (125 MHz and 124.7164 MHz at the radio)...
+    CHECK(radioCentreTakeable(up(125.0e6), 0.0));
+    CHECK(radioCentreTakeable(up(125.0e6), -283600.0));
+    CHECK(radioCentreTakeable(up(125.0e6), -124999999.0));   // 1 Hz at the radio
+    // ...down to, not including, 0 Hz at the radio.
+    CHECK(!radioCentreTakeable(up(125.0e6), -125.0e6));
+    CHECK(!radioCentreTakeable(up(125.0e6), -200.0e6));
+    // A down-converter's floor is its LO; an inverted one's ceiling is.
+    CHECK(!radioCentreTakeable(down(9.75e9), 9.75e9));
+    CHECK(radioCentreTakeable(down(9.75e9), 10.489e9));
+    CHECK(radioCentreTakeable(up(125.0e6, true), 124.0e6));
+    CHECK(!radioCentreTakeable(up(125.0e6, true), 125.0e6));
+    // Not a number, and infinity (which is "> 0" arithmetically), are never
+    // a centre.
+    CHECK(!radioCentreTakeable(up(125.0e6), std::nan("")));
+    CHECK(!radioCentreTakeable(off, std::numeric_limits<double>::infinity()));
+}
+
 }  // namespace
 
 int main() {
     std::printf("test_freq_converter\n");
+    testRadioCentreTakeable();
     testLoIsWholeHertz();
     testOffIsIdentity();
     testSaqExamples();

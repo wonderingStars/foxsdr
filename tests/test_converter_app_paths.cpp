@@ -28,6 +28,7 @@
 #include <atomic>
 #include <chrono>
 #include <complex>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -78,6 +79,9 @@ struct Registry {
     // A native open that fails the way the RTL-SDR driver refuses an E4000:
     // with the sentence gui::nativeOpenShouldFallBack recognises.
     std::atomic<bool> nativeRtlRefuses{false};
+    // Radios made while this is set read 0 Hz until a tune takes - the
+    // "never tuned" readback carriedAirCentre must treat as no frequency.
+    std::atomic<bool> startAtZero{false};
     std::vector<cascade::source::NativeDeviceInfo> native;
 };
 Registry g_reg;
@@ -164,7 +168,9 @@ private:
     std::shared_ptr<Record> rec_;
     std::atomic<bool> abort_{true};
     double rate_ = 2.4e6;
-    double centre_ = 100.0e6;  // where an RTL-SDR's driver leaves it
+    // Where an RTL-SDR's driver leaves it, or 0 Hz for a radio made to read
+    // "never tuned" (Registry::startAtZero).
+    double centre_ = g_reg.startAtZero.load() ? 0.0 : 100.0e6;
     bool open_ = false;
     std::string error_;
 };
@@ -206,6 +212,7 @@ void resetRegistry() {
     g_reg.made.clear();
     g_reg.native.clear();
     g_reg.nativeRtlRefuses = false;
+    g_reg.startAtZero = false;
 }
 
 // Per-user directories pointed at a scratch folder, before any AppWindow
@@ -306,6 +313,31 @@ struct AppWindowTestAccess {
     static void changeConverter(AppWindow& a, const ConverterSetting& s) { a.changeConverter(s); }
     static void scanNativeForTest(AppWindow& a) { a.scanNative(); }
     static std::string aliasNote(AppWindow& a) { return a.converterAliasNote(); }
+    static bool hasStored(AppWindow& a, const std::string& k) { return a.converters_.count(k) != 0; }
+    static ConverterSetting stored(AppWindow& a, const std::string& k) {
+        const auto it = a.converters_.find(k);
+        return it == a.converters_.end() ? ConverterSetting{} : it->second;
+    }
+    static void selectGenerator(AppWindow& a) { a.selectSource(0); }
+    // What the radio itself was last told and kept (the raw source).
+    static double radioNow(AppWindow& a) { return a.pipeline_.rawSource().centerFrequencyHz(); }
+    // The note line under the counter (a coerced, refused or unreachable tune).
+    static std::string tuneNote(AppWindow& a) { return a.tuneMismatchNote_; }
+
+    // The Pluto row: selecting it only selects (see selectSource); Open
+    // closes the radio in use and opens the board at the typed address.
+    static bool selectPlutoRow(AppWindow& a, const std::string& args) {
+        a.scanNative();
+        const int row = nativeRow(a, args);
+        if (row < 0) { return false; }
+        a.selectSource(row);
+        return a.sourceSel_ == row;
+    }
+    static bool openPluto(AppWindow& a, const std::string& uri) {
+        std::snprintf(a.plutoUri_, sizeof(a.plutoUri_), "%s", uri.c_str());
+        a.openPlutoFromBox();
+        return waitOpen(a);
+    }
 
     // --- the patch page ---------------------------------------------------------
     static cascade::core::patch::NodeId addRadioNode(AppWindow& a, const std::string& device,
@@ -323,6 +355,26 @@ struct AppWindowTestAccess {
     }
     static const cascade::core::patch::Node* node(AppWindow& a, cascade::core::patch::NodeId id) {
         return a.patchGraph_.find(id);
+    }
+    // The page's starter patch, seeded as opening the page seeds it; returns
+    // its Radio node (kNoNode when there is none).
+    static cascade::core::patch::NodeId seedPatch(AppWindow& a) {
+        namespace pc = cascade::core::patch;
+        a.patchSeeded_ = false;
+        a.seedPatchIfNeeded();
+        for (const pc::Node& n : a.patchGraph_.nodes()) {
+            if (n.kind == pc::NodeKind::Radio) { return n.id; }
+        }
+        return pc::kNoNode;
+    }
+    // A centre typed on the node's face (or the panel): true when taken.
+    static bool typeCentre(AppWindow& a, cascade::core::patch::NodeId id, double airHz) {
+        cascade::core::patch::Node* n = a.patchGraph_.mutableNode(id);
+        return n != nullptr && a.setPatchRadioCentre(*n, airHz);
+    }
+    static std::string centreNote(AppWindow& a, cascade::core::patch::NodeId id) {
+        const auto it = a.patchCentreNote_.find(id);
+        return it == a.patchCentreNote_.end() ? std::string() : it->second;
     }
     // One reconcile per frame, until the node's radio runs (or 20 s).
     static bool runPatchUntilOpen(AppWindow& a, cascade::core::patch::NodeId id) {
@@ -572,25 +624,480 @@ void testSoapyFallbackKeepsTheConverter(bool viaRestore) {
     CHECK(!Access::aliasNote(app).empty());
 }
 
-void testSwitchingOnRelabelsANegativeCentre() {
-    std::printf("  switching a converter on relabels a band whose centre is below 0 Hz on the "
-                "air\n");
+// --- A converter change keeps the AIR frequency ------------------------------
+//
+// THE RULE (orchestrator's decision after the second review): on ANY change -
+// on, off, mode, LO, inversion - the air frequency the user is listening to
+// stays, and the radio is retuned to what the new setting makes of it, when
+// the radio can go there. Only when it cannot does the radio stay put and the
+// counter relabel, with the sentence saying what the radio reaches.
+
+void testSwitchingOnKeepsTheAirFrequency() {
+    std::printf("  switching a converter on keeps the air frequency and moves the radio\n");
     resetRegistry();
     twoDongles();
     cascade::gui::AppWindow app;
-    // Radio A with NO converter yet, already on the converter's output: the
-    // radio at 124.7164 MHz with the VFO 300 kHz up - the tester's dongle,
-    // tuned by hand to hear 16.4 kHz.
+    // Radio A with NO converter yet: 124.7164 MHz on the air, VFO 300 kHz up.
     const std::size_t idx = madeCount();
     CHECK(Access::selectNative(app, kArgsA));
     Access::setVfo(app, kVfo);
     Access::tune(app, 124716400.0);
-    const std::size_t toldBefore = made(idx).tunes.size();
+    CHECK(Access::counter(app) == 125016400.0);
     Access::changeConverter(app, up(125.0e6));
-    // The radio stays where it is; the counter now says what it hears.
-    CHECK(made(idx).tunes.size() == toldBefore);
+    // 124.7164 MHz on the air through a 125 MHz up-converter: 249.7164 MHz.
+    CHECK(made(idx).tunes.back() == 249716400.0);
+    CHECK(Access::radioNow(app) == 249716400.0);
+    CHECK(Access::airCentre(app) == 124716400.0);
+    CHECK(Access::counter(app) == 125016400.0);
+    CHECK(Access::tuneNote(app).empty());
+}
+
+// PROBE P2 of the second review: an LO typo moved the radio, and correcting
+// it only relabelled - the station was lost.
+void testLoTypoRoundTrip() {
+    std::printf("  an LO typo and its correction come back to the same air and radio frequency\n");
+    resetRegistry();
+    twoDongles();
+    cascade::gui::AppWindow app;
+    Access::setConverter(app, kKeyA, up(125.0e6));
+    const std::size_t idx = madeCount();
+    CHECK(Access::selectNative(app, kArgsA));
+    Access::setVfo(app, 0.0);
+    Access::tune(app, 17200.0);
+    CHECK(made(idx).tunes.back() == 125017200.0);
+    Access::changeConverter(app, up(1250.0e6));    // the typo
+    CHECK(Access::radioNow(app) == 1250017200.0);
+    CHECK(Access::counter(app) == 17200.0);
+    Access::changeConverter(app, up(125.0e6));     // corrected
+    CHECK(made(idx).tunes.back() == 125017200.0);
+    CHECK(Access::radioNow(app) == 125017200.0);
+    CHECK(Access::counter(app) == 17200.0);
+}
+
+// The quick LO keys, both ways round: 125 -> 100 -> 125 and 100 -> 125 -> 100
+// each end where they began, at the air AND at the radio.
+void testQuickKeysRoundTrip(double startLo, double otherLo) {
+    std::printf("  quick LO keys %.0f -> %.0f -> %.0f MHz return to the same frequencies\n",
+                startLo / 1e6, otherLo / 1e6, startLo / 1e6);
+    resetRegistry();
+    twoDongles();
+    cascade::gui::AppWindow app;
+    Access::setConverter(app, kKeyA, up(startLo));
+    const std::size_t idx = madeCount();
+    CHECK(Access::selectNative(app, kArgsA));
+    Access::setVfo(app, kVfo);
+    Access::tune(app, kAirCentre);
+    const double radioStart = kAirCentre + startLo;
+    CHECK(Access::radioNow(app) == radioStart);
+    CHECK(Access::counter(app) == kStation);
+    Access::changeConverter(app, up(otherLo));
+    CHECK(made(idx).tunes.back() == kAirCentre + otherLo);
     CHECK(Access::airCentre(app) == kAirCentre);
     CHECK(Access::counter(app) == kStation);
+    Access::changeConverter(app, up(startLo));
+    CHECK(made(idx).tunes.back() == radioStart);
+    CHECK(Access::radioNow(app) == radioStart);
+    CHECK(Access::airCentre(app) == kAirCentre);
+    CHECK(Access::counter(app) == kStation);
+}
+
+// Where the new setting would put the radio outside what it covers, the
+// radio stays and the counter relabels - and the note says what it reaches.
+void testUnreachableChangeRelabels() {
+    std::printf("  a converter change the radio cannot follow leaves it put, relabelled, and "
+                "says why\n");
+    resetRegistry();
+    twoDongles();
+    cascade::gui::AppWindow app;
+    Access::setConverter(app, kKeyA, up(125.0e6));
+    const std::size_t idx = madeCount();
+    CHECK(Access::selectNative(app, kArgsA));
+    Access::setVfo(app, 0.0);
+    Access::tune(app, 17200.0);
+    const std::size_t told = made(idx).tunes.size();
+    // 17.2 kHz through a 2 GHz LO is 2000.0172 MHz: past the dongle's top.
+    Access::changeConverter(app, up(2000.0e6));
+    CHECK(made(idx).tunes.size() == told);        // never asked
+    CHECK(Access::radioNow(app) == 125017200.0);
+    CHECK(Access::counter(app) == 125017200.0 - 2000.0e6);
+    CHECK(Access::tuneNote(app).find("stayed where it was") != std::string::npos);
+    // Back to 125 MHz: the station it could not keep is found again - the
+    // radio never moved, nothing is sent, and nothing is left to say.
+    Access::changeConverter(app, up(125.0e6));
+    CHECK(made(idx).tunes.size() == told);
+    CHECK(Access::radioNow(app) == 125017200.0);
+    CHECK(Access::counter(app) == 17200.0);
+    CHECK(Access::tuneNote(app).empty());
+    // OFF: 17.2 kHz is below the dongle's 24 MHz, so the radio stays at
+    // 125.0172 MHz and the counter now says so, with the radio's range.
+    Access::changeConverter(app, ConverterSetting{});
+    CHECK(made(idx).tunes.size() == told);
+    CHECK(Access::radioNow(app) == 125017200.0);
+    CHECK(Access::counter(app) == 125017200.0);
+    CHECK(Access::tuneNote(app).find("Its range is") != std::string::npos);
+    // ...and ON AGAIN: back on 17.2 kHz, the radio unmoved - not 125.0172 MHz
+    // kept on the air and the radio sent to 250.0172 MHz.
+    Access::changeConverter(app, up(125.0e6));
+    CHECK(made(idx).tunes.size() == told);
+    CHECK(Access::radioNow(app) == 125017200.0);
+    CHECK(Access::counter(app) == 17200.0);
+    CHECK(Access::tuneNote(app).empty());
+
+    // WHAT IT REACHES, said: 100 MHz on the air is 225 MHz at the radio; a
+    // 1700 MHz LO would need 1800 MHz, past the top - and through that LO the
+    // dongle covers 0 Hz to 66 MHz.
+    Access::tune(app, 100.0e6);
+    CHECK(Access::radioNow(app) == 225.0e6);
+    Access::changeConverter(app, up(1700.0e6));
+    CHECK(Access::radioNow(app) == 225.0e6);
+    CHECK(Access::counter(app) == 225.0e6 - 1700.0e6);
+    CHECK(Access::tuneNote(app).find("reaches") != std::string::npos);
+    Access::changeConverter(app, up(125.0e6));
+    CHECK(Access::radioNow(app) == 225.0e6);
+    CHECK(Access::counter(app) == 100.0e6);
+    // A 125 MHz DOWN-converter would need -25 MHz at the radio.
+    Access::changeConverter(app, {ConverterMode::Down, 125.0e6, false});
+    CHECK(Access::radioNow(app) == 225.0e6);
+    CHECK(Access::counter(app) == 350.0e6);
+    CHECK(Access::tuneNote(app).find("out of reach") != std::string::npos);
+    Access::changeConverter(app, up(125.0e6));
+    CHECK(Access::radioNow(app) == 225.0e6);
+    CHECK(Access::counter(app) == 100.0e6);
+    CHECK(Access::tuneNote(app).empty());
+    // A TUNE ends the hold: the relabelled figure after it is the station.
+    Access::changeConverter(app, up(1700.0e6));     // unreachable: held 100 MHz
+    Access::tune(app, 225.0e6 - 1700.0e6 + 10.0e6); // the radio moves to 235 MHz
+    CHECK(Access::radioNow(app) == 235.0e6);
+    Access::changeConverter(app, up(125.0e6));      // keeps -1465 MHz: unreachable
+    CHECK(Access::radioNow(app) == 235.0e6);
+    CHECK(Access::counter(app) == 110.0e6);
+}
+
+// An I/Q FILE is not a radio: its frequency is where the recording was made,
+// and a converter set for it relabels - that is the whole of what it is for.
+void testFileRelabels() {
+    std::printf("  a converter set on an I/Q file relabels it\n");
+    resetRegistry();
+    const std::filesystem::path wav = g_scratch / "converter_relabel.wav";
+    {
+        // 16-bit stereo PCM WAV, 48 kS/s, 4800 frames of silence.
+        const std::uint32_t frames = 4800;
+        const std::uint32_t dataBytes = frames * 4;
+        std::FILE* f = std::fopen(wav.string().c_str(), "wb");
+        CHECK(f != nullptr);
+        if (f == nullptr) { return; }
+        const auto u32 = [f](std::uint32_t v) {
+            const unsigned char b[4] = {static_cast<unsigned char>(v), static_cast<unsigned char>(v >> 8),
+                                        static_cast<unsigned char>(v >> 16),
+                                        static_cast<unsigned char>(v >> 24)};
+            std::fwrite(b, 1, 4, f);
+        };
+        const auto u16 = [f](std::uint16_t v) {
+            const unsigned char b[2] = {static_cast<unsigned char>(v), static_cast<unsigned char>(v >> 8)};
+            std::fwrite(b, 1, 2, f);
+        };
+        std::fwrite("RIFF", 1, 4, f);
+        u32(36 + dataBytes);
+        std::fwrite("WAVEfmt ", 1, 8, f);
+        u32(16);
+        u16(1);
+        u16(2);
+        u32(48000);
+        u32(48000 * 4);
+        u16(4);
+        u16(16);
+        std::fwrite("data", 1, 4, f);
+        u32(dataBytes);
+        const std::vector<unsigned char> zeros(dataBytes, 0);
+        std::fwrite(zeros.data(), 1, zeros.size(), f);
+        std::fclose(f);
+    }
+    cascade::gui::AppWindow app;
+    cascade::core::AppConfig cfg;
+    cfg.sourceKind = "file";
+    cfg.iqFilePath = wav.string();
+    cfg.centerHz = 125017200.0;
+    cfg.vfoOffsetHz = 0.0;
+    Access::restore(app, cfg);
+    CHECK(Access::kind(app) == "file");
+    CHECK(Access::radioNow(app) == 125017200.0);
+    Access::changeConverter(app, up(125.0e6));
+    CHECK(Access::radioNow(app) == 125017200.0);   // the recording's own figure
+    CHECK(Access::counter(app) == 17200.0);        // now read through the converter
+}
+
+// PROBE P1 of the second review: the receiver at EXACTLY 0 Hz on the air (the
+// dongle on 125 MHz behind a 125 MHz up-converter) is a frequency, and the
+// patch take-over must carry it - the node's stored 0 is not "no centre" here.
+void testZeroAirCentreTakeOver() {
+    std::printf("  the patch take-over carries an air centre of exactly 0 Hz\n");
+    resetRegistry();
+    twoDongles();
+    cascade::gui::AppWindow app;
+    onRadioA(app, 0.0, kStation);
+    CHECK(Access::counter(app) == kStation);
+    const auto id = Access::addRadioNode(app, std::string(), 0.0);
+    const std::size_t patchIdx = madeCount();
+    CHECK(Access::runPatchUntilOpen(app, id));
+    CHECK(firstTune(patchIdx) == 125.0e6);
+    for (const double t : made(patchIdx).tunes) { CHECK(t == 125.0e6); }
+    CHECK(Access::patchRadioAir(app, id) == 0.0);
+    const cascade::core::patch::Node* n = Access::node(app, id);
+    CHECK(n != nullptr && n->freqHz == 0.0);
+}
+
+// The page's starter patch takes the receiver's radio at its AIR centre - a
+// negative one (N13 of the second review), and exactly 0 Hz (P1 again).
+void testPatchSeedCarriesTheAirCentre(double airCentre, double vfo) {
+    std::printf("  the starter patch takes the receiver's air centre (%.0f Hz)\n", airCentre);
+    resetRegistry();
+    twoDongles();
+    cascade::gui::AppWindow app;
+    onRadioA(app, airCentre, vfo);
+    const auto id = Access::seedPatch(app);
+    const cascade::core::patch::Node* n = Access::node(app, id);
+    CHECK(n != nullptr);
+    if (n != nullptr) {
+        CHECK(n->device == kKeyA);
+        CHECK(n->freqHz == airCentre);
+    }
+    const std::size_t patchIdx = madeCount();
+    CHECK(Access::runPatchUntilOpen(app, id));
+    CHECK(firstTune(patchIdx) == airCentre + 125.0e6);
+    for (const double t : made(patchIdx).tunes) { CHECK(t == airCentre + 125.0e6); }
+    CHECK(Access::patchRadioAir(app, id) == airCentre);
+}
+
+// A node that already has a centre of its own keeps it when it takes the
+// receiver's radio (N6 of the second review).
+void testTakeOverKeepsANodesOwnCentre() {
+    std::printf("  the patch take-over keeps a node's own centre\n");
+    resetRegistry();
+    twoDongles();
+    cascade::gui::AppWindow app;
+    onRadioA(app, kAirCentre, kVfo);
+    const auto id = Access::addRadioNode(app, std::string(), kStation);
+    const std::size_t patchIdx = madeCount();
+    CHECK(Access::runPatchUntilOpen(app, id));
+    const cascade::core::patch::Node* n = Access::node(app, id);
+    CHECK(n != nullptr);
+    if (n != nullptr) {
+        CHECK(n->device == kKeyA);
+        CHECK(n->freqHz == kStation);
+    }
+    CHECK(firstTune(patchIdx) == kStation + 125.0e6);
+    CHECK(Access::patchRadioAir(app, id) == kStation);
+}
+
+// A radio that reads 0 Hz has never been tuned and has nothing to carry: the
+// next radio is told nothing, not "0 Hz at the radio, read through the
+// converter" (N1 of the second review).
+void testUntunedRadioCarriesNothing() {
+    std::printf("  a radio that was never tuned carries no frequency to the next one\n");
+    resetRegistry();
+    twoDongles();
+    g_reg.startAtZero = true;
+    cascade::gui::AppWindow app;
+    Access::setConverter(app, kKeyA, up(125.0e6));   // B has none
+    // The generator on 2 GHz: through A's converter that is 2.125 GHz, which
+    // A refuses - so A stays on its never-tuned 0 Hz.
+    Access::tune(app, 2.0e9);
+    const std::size_t a = madeCount();
+    CHECK(Access::selectNative(app, kArgsA));
+    CHECK(!made(a).tunes.empty());
+    CHECK(Access::radioNow(app) == 0.0);
+    const std::size_t b = madeCount();
+    CHECK(Access::selectNative(app, kArgsB));
+    CHECK(made(b).args == kArgsB);
+    CHECK(made(b).tunes.empty());
+}
+
+// The Pluto's Open key reads the frequency to carry BEFORE it closes the radio
+// in use (N9 of the second review), and sends it through the Pluto's own
+// converter.
+void testPlutoCarriesTheAirFrequency() {
+    std::printf("  the Pluto's Open carries the air frequency read before the close\n");
+    resetRegistry();
+    const std::string plutoArgs = "uri=ip:192.168.2.1";
+    {
+        std::lock_guard<std::mutex> lk(g_reg.m);
+        g_reg.native = {{"rtlsdr", "Generic RTL2832U A", kArgsA},
+                        {"rtlsdr", "Generic RTL2832U B", kArgsB},
+                        {"pluto", "ADALM-Pluto", plutoArgs}};
+    }
+    cascade::gui::AppWindow app;
+    onRadioA(app, kAirCentre, kVfo);
+    Access::setConverter(app, "pluto|" + plutoArgs, up(100.0e6));
+    CHECK(Access::selectPlutoRow(app, plutoArgs));
+    const std::size_t pl = madeCount();
+    CHECK(Access::openPluto(app, "ip:192.168.2.1"));
+    CHECK(madeCount() == pl + 1);
+    CHECK(made(pl).kind == "pluto");
+    CHECK(firstTune(pl) == kAirCentre + 100.0e6);
+    CHECK(Access::live(app) == up(100.0e6));
+    CHECK(Access::airCentre(app) == kAirCentre);
+    CHECK(Access::counter(app) == kStation);
+}
+
+// --- The SoapySDR fallback's alias, at its edges -----------------------------
+
+// Opens the E4000 dongle the way the Source combo does (the Soapy row, swapped
+// to the native driver, refused, reopened through SoapySDR) and returns the
+// index of the SoapySDR radio.
+std::size_t fallBackToSoapy(cascade::gui::AppWindow& app, const std::string& nativeArgs,
+                            const std::string& soapyArgs) {
+    {
+        std::lock_guard<std::mutex> lk(g_reg.m);
+        g_reg.native = {{"rtlsdr", "Generic RTL2832U (E4000)", nativeArgs}};
+    }
+    g_reg.nativeRtlRefuses = true;
+    Access::setVfo(app, 0.0);
+    Access::tune(app, kStation);  // the generator, carried across
+    Access::scanNativeForTest(app);
+    const std::size_t idx = madeCount();
+    CHECK(Access::selectSoapy(app, soapyArgs, "Generic RTL2832U"));
+    CHECK(madeCount() == idx + 2);
+    CHECK(made(idx).kind == "rtlsdr");
+    CHECK(made(idx + 1).kind == "soapy");
+    CHECK(Access::kind(app) == "soapy");
+    return idx + 1;
+}
+
+// PROBE P3: an edit made while the alias is in force is stored under the
+// NATIVE key (where the next native open looks) and takes effect at once.
+void testAliasEditLandsUnderTheNativeKey() {
+    std::printf("  a converter edit while aliased lands under the native key and applies\n");
+    resetRegistry();
+    const std::string nativeArgs = "serial=0000E400";
+    const std::string soapyArgs = "driver=rtlsdr,serial=0000E400";
+    cascade::gui::AppWindow app;
+    Access::setConverter(app, "rtlsdr|" + nativeArgs, up(125.0e6));
+    const std::size_t s = fallBackToSoapy(app, nativeArgs, soapyArgs);
+    CHECK(firstTune(s) == kStation + 125.0e6);
+    CHECK(Access::live(app) == up(125.0e6));
+    Access::changeConverter(app, up(100.0e6));
+    CHECK(Access::stored(app, "rtlsdr|" + nativeArgs) == up(100.0e6));
+    CHECK(!Access::hasStored(app, "soapy|" + soapyArgs));
+    CHECK(Access::live(app) == up(100.0e6));
+    CHECK(made(s).tunes.back() == kStation + 100.0e6);
+    CHECK(Access::counter(app) == kStation);
+    // A different radio afterwards gets none of it.
+    Access::selectGenerator(app);
+    CHECK(Access::selectSoapy(app, "driver=uhd,serial=31E0000", "B200"));
+    CHECK(Access::live(app) == ConverterSetting{});
+}
+
+// A Soapy key with an ACTIVE converter of its own keeps it (N3).
+void testSoapyKeyKeepsItsOwnConverter() {
+    std::printf("  a SoapySDR key with a converter of its own keeps it on the fallback\n");
+    resetRegistry();
+    const std::string nativeArgs = "serial=0000E400";
+    const std::string soapyArgs = "driver=rtlsdr,serial=0000E400";
+    cascade::gui::AppWindow app;
+    Access::setConverter(app, "rtlsdr|" + nativeArgs, up(125.0e6));
+    Access::setConverter(app, "soapy|" + soapyArgs, up(100.0e6));
+    const std::size_t s = fallBackToSoapy(app, nativeArgs, soapyArgs);
+    CHECK(firstTune(s) == kStation + 100.0e6);
+    CHECK(Access::live(app) == up(100.0e6));
+    CHECK(Access::aliasNote(app).empty());
+}
+
+// ...but an OFF record on the Soapy key is "none" (item 5a): the native
+// converter is carried, not silently dropped.
+void testSoapyOffRecordIsNone() {
+    std::printf("  an Off record on the SoapySDR key does not block the radio's converter\n");
+    resetRegistry();
+    const std::string nativeArgs = "serial=0000E400";
+    const std::string soapyArgs = "driver=rtlsdr,serial=0000E400";
+    cascade::gui::AppWindow app;
+    Access::setConverter(app, "rtlsdr|" + nativeArgs, up(125.0e6));
+    Access::setConverter(app, "soapy|" + soapyArgs, {ConverterMode::Off, 100.0e6, false});
+    const std::size_t s = fallBackToSoapy(app, nativeArgs, soapyArgs);
+    CHECK(firstTune(s) == kStation + 125.0e6);
+    CHECK(Access::live(app) == up(125.0e6));
+    CHECK(!Access::aliasNote(app).empty());
+}
+
+// With NO serial in the Soapy args, SoapySDR may open a different dongle from
+// the one the native row named (item 5b): the converter is not carried, and
+// the note says so.
+void testNoSerialNoAlias() {
+    std::printf("  a SoapySDR fallback with no serial does not carry the converter, and says so\n");
+    resetRegistry();
+    const std::string nativeArgs = "serial=0000E400";
+    const std::string soapyArgs = "driver=rtlsdr";
+    cascade::gui::AppWindow app;
+    Access::setConverter(app, "rtlsdr|" + nativeArgs, up(125.0e6));
+    const std::size_t s = fallBackToSoapy(app, nativeArgs, soapyArgs);
+    CHECK(firstTune(s) == kStation);               // raw: no converter applied
+    CHECK(Access::live(app) == ConverterSetting{});
+    const std::string note = Access::aliasNote(app);
+    CHECK(note.find("not carried") != std::string::npos);
+    // An edit made here is this key's own, not the native radio's.
+    Access::changeConverter(app, up(100.0e6));
+    CHECK(Access::stored(app, "rtlsdr|" + nativeArgs) == up(125.0e6));
+    CHECK(Access::stored(app, "soapy|" + soapyArgs) == up(100.0e6));
+    CHECK(Access::aliasNote(app).find("not carried") == std::string::npos);
+}
+
+// The rule under the alias, on its own: only a serial on the Soapy side that
+// matches the native row's settles "the same dongle".
+void testFallbackSameDongleRule() {
+    std::printf("  a SoapySDR fallback is the same dongle only by a matching serial\n");
+    using cascade::gui::fallbackNamesTheSameDongle;
+    CHECK(fallbackNamesTheSameDongle("rtlsdr|serial=0000E400", "soapy|driver=rtlsdr,serial=0000E400"));
+    // Case and the long/short forms match as the prefer-native rule matches them.
+    CHECK(fallbackNamesTheSameDongle("rtlsdr|serial=0000e400", "soapy|driver=rtlsdr,serial=0000E400"));
+    CHECK(fallbackNamesTheSameDongle("rtlsdr|serial=0000E400", "soapy|driver=rtlsdr,serial=E400"));
+    // No serial on the Soapy side: SoapySDR picks whichever dongle it finds.
+    CHECK(!fallbackNamesTheSameDongle("rtlsdr|serial=0000E400", "soapy|driver=rtlsdr"));
+    // A different serial is a different dongle; none on the native side too.
+    CHECK(!fallbackNamesTheSameDongle("rtlsdr|serial=0000E400", "soapy|driver=rtlsdr,serial=0000F00D"));
+    CHECK(!fallbackNamesTheSameDongle("rtlsdr|", "soapy|driver=rtlsdr,serial=0000E400"));
+    CHECK(!fallbackNamesTheSameDongle("", "soapy|driver=rtlsdr,serial=0000E400"));
+}
+
+// --- A centre typed on a Radio node (item 6) ----------------------------------
+
+void testTypedNodeCentre() {
+    std::printf("  a Radio node takes any centre its radio can be told, and refuses the rest\n");
+    resetRegistry();
+    twoDongles();
+    cascade::gui::AppWindow app;
+    Access::setConverter(app, kKeyA, up(125.0e6));   // B has none
+    const auto a = Access::addRadioNode(app, kKeyA, kStation);
+    const auto b = Access::addRadioNode(app, kKeyB, 100.0e6);
+    // Behind the 125 MHz up-converter: -283.6 kHz is 124.7164 MHz at the radio.
+    CHECK(Access::typeCentre(app, a, kAirCentre));
+    CHECK(Access::node(app, a)->freqHz == kAirCentre);
+    CHECK(Access::centreNote(app, a).empty());
+    // -125 MHz would be 0 Hz at the radio, and -200 MHz below it: refused,
+    // said, and the node keeps what it had.
+    CHECK(!Access::typeCentre(app, a, -125.0e6));
+    CHECK(!Access::centreNote(app, a).empty());
+    CHECK(!Access::typeCentre(app, a, -200.0e6));
+    CHECK(Access::node(app, a)->freqHz == kAirCentre);
+    // 0 Hz on the air is 125 MHz at the radio: a centre, and it clears the note.
+    CHECK(Access::typeCentre(app, a, 0.0));
+    CHECK(Access::node(app, a)->freqHz == 0.0);
+    CHECK(Access::centreNote(app, a).empty());
+    // With no converter the radio frequency IS the air one: above 0 Hz only.
+    CHECK(!Access::typeCentre(app, b, 0.0));
+    CHECK(!Access::typeCentre(app, b, -1.0));
+    CHECK(!Access::centreNote(app, b).empty());
+    CHECK(Access::node(app, b)->freqHz == 100.0e6);
+    CHECK(Access::typeCentre(app, b, 1.0e6));
+    CHECK(Access::node(app, b)->freqHz == 1.0e6);
+    // ...and the 0 Hz centre on A is what A's radio is told when it opens.
+    const std::size_t idx = madeCount();
+    CHECK(Access::runPatchUntilOpen(app, a));
+    std::size_t aIdx = idx;
+    for (std::size_t i = idx; i < madeCount(); ++i) {
+        if (made(i).args == kArgsA) { aIdx = i; }
+    }
+    CHECK(made(aIdx).args == kArgsA);
+    CHECK(firstTune(aIdx) == 125.0e6);
+    CHECK(Access::patchRadioAir(app, a) == 0.0);
 }
 
 }  // namespace
@@ -610,7 +1117,24 @@ int main() {
     testPatchOpen();
     testSoapyFallbackKeepsTheConverter(false);
     testSoapyFallbackKeepsTheConverter(true);
-    testSwitchingOnRelabelsANegativeCentre();
+    testSwitchingOnKeepsTheAirFrequency();
+    testLoTypoRoundTrip();
+    testQuickKeysRoundTrip(125.0e6, 100.0e6);
+    testQuickKeysRoundTrip(100.0e6, 125.0e6);
+    testUnreachableChangeRelabels();
+    testFileRelabels();
+    testZeroAirCentreTakeOver();
+    testPatchSeedCarriesTheAirCentre(kAirCentre, kVfo);
+    testPatchSeedCarriesTheAirCentre(0.0, kStation);
+    testTakeOverKeepsANodesOwnCentre();
+    testUntunedRadioCarriesNothing();
+    testPlutoCarriesTheAirFrequency();
+    testAliasEditLandsUnderTheNativeKey();
+    testSoapyKeyKeepsItsOwnConverter();
+    testSoapyOffRecordIsNone();
+    testNoSerialNoAlias();
+    testFallbackSameDongleRule();
+    testTypedNodeCentre();
 
     std::error_code ec;
     std::filesystem::remove_all(g_scratch, ec);

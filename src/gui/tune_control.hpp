@@ -1093,6 +1093,24 @@ inline bool nativeOpenShouldFallBack(const std::string& error) {
     return error.find(kTunerUnsupportedMarker) != std::string::npos;
 }
 
+// WHETHER A SoapySDR FALLBACK PROVABLY OPENED THE DONGLE THE NATIVE ROW NAMED,
+// so the converter set for that dongle may follow it (AppWindow's converter
+// alias). Both keys are "<driver>|<args>" (core::converterRadioKey). Only a
+// SERIAL settles it: SoapySDR given "driver=rtlsdr" alone opens whichever
+// dongle it finds first, which with two plugged in need not be the one whose
+// row the user picked - and carrying a 125 MHz converter onto a dongle with
+// none would put every frequency 125 MHz out without a word. No serial, or
+// serials that differ, is "not provably the same".
+inline bool fallbackNamesTheSameDongle(const std::string& nativeKey,
+                                       const std::string& soapyKey) {
+    namespace pc = cascade::core::patch;
+    const std::string soapySerial =
+        cascade::source::argValue(pc::deviceArgs(soapyKey), "serial");
+    if (soapySerial.empty()) { return false; }
+    return nativeSerialMatches(pc::deviceArgs(nativeKey), soapySerial,
+                               pc::deviceDriver(nativeKey));
+}
+
 // --- The saved radio outlives a restore that could not open it -------------
 
 // ONE PLACE DECIDES WHICH SOURCE KINDS ARE NATIVE DRIVERS. There are eight of

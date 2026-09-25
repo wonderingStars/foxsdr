@@ -123,6 +123,16 @@ inline bool airReachable(const ConverterSetting& s, double airHz) {
     return std::isfinite(airHz) && radioFromAir(s, airHz) > 0.0;
 }
 
+// WHETHER A CENTRE TYPED FOR A RADIO CAN BE TAKEN: the radio frequency it
+// maps to must be above 0 Hz, converter or not. Unlike airReachable this has
+// an opinion with no converter (air IS radio then, so above 0 Hz only), and
+// through an up-converter it takes an air centre of 0 Hz or below - -283.6 kHz
+// behind a 125 MHz up-converter is 124.7164 MHz at the radio. Used by the
+// patch page's Radio node, whose centre may be carried in negative.
+inline bool radioCentreTakeable(const ConverterSetting& s, double airHz) {
+    return std::isfinite(airHz) && radioFromAir(s, airHz) > 0.0;
+}
+
 // The lowest TUNED air frequency (source centre + VFO offset) a tuning
 // control - the counter's wheel and switches, the tuning keys - may step
 // down to. With no converter it is the rule those controls always had: never

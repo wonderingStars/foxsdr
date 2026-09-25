@@ -811,6 +811,10 @@ private:
     // the patch page's hand-back, whose frequency belongs to the radio it
     // took, not to the generator standing in for it.
     void selectSource(int idx, std::optional<double> carryAirHz = std::nullopt);
+    // The Pluto row's Open key: closes the radio in use and opens the board at
+    // the address typed in plutoUri_, carrying the air frequency read BEFORE
+    // the close. Its own member so the converter test can press it.
+    void openPlutoFromBox();
     void drawCenterPanels();
     // THE SLIM TICK STRIP BETWEEN THE PANELS IS GONE, and this is where it was
     // declared. SpectrumView now letters the frequency axis along the foot of
@@ -1239,6 +1243,9 @@ private:
     // --- the patch page ------------------------------------------------------
     // The canvas: radios, channels, decoders and displays wired together.
     void drawPatchPage();
+    // The starter patch (one Radio node on the receiver's radio, at its air
+    // centre) when the page opens with none; a no-op once seeded.
+    void seedPatchIfNeeded();
     // The key that opens it, FIRST in the SIGNAL PATH bank. It goes there
     // rather than in VIEW by the same test that put the recorder and the
     // transmitter in that bank: a patch is not a way of LOOKING at the signal
@@ -1969,9 +1976,10 @@ private:
     void applyConverterForSource();
     double radioHzForSource(const std::string& kind, const std::string& args, double airHz) const;
     // The user changed the converter for the radio in use: remember it, apply
-    // it, and keep the RADIO where it is (the counter relabels to the air
-    // frequency it is now known to be hearing) - unless that air frequency is
-    // below 0 Hz, in which case the air frequency is kept and the radio moved.
+    // it, and keep the AIR frequency - the radio is retuned to what the new
+    // setting makes of it. Only when the radio cannot go there (0 Hz or below,
+    // or outside its published range) does it stay put, the counter relabel
+    // and the note say what the radio reaches. An I/Q file always relabels.
     void changeConverter(const cascade::core::ConverterSetting& s);
     // "125 MHz up-converter" and its three siblings, translated.
     std::string converterName(const cascade::core::ConverterSetting& s) const;
@@ -1995,12 +2003,32 @@ private:
     // converter set for the radio still applies - and changes made while it is
     // open are kept under the native key, where the next native open looks.
     // Not saved: the next session makes the same decision again. Installed
-    // only when the Soapy key has no converter of its own.
+    // only when the Soapy key has no ACTIVE converter of its own (an Off
+    // record is none) and both keys name the dongle by the same serial
+    // (gui::fallbackNamesTheSameDongle).
     std::map<std::string, std::string> converterKeyAlias_;
+    // Soapy keys a fallback opened WITHOUT carrying the native radio's
+    // converter, because nothing showed it was the same dongle; the Source
+    // section says so (converterAliasNote). This session only.
+    std::set<std::string> converterNotCarried_;
+    // The air centre a converter change could NOT keep (the radio could not
+    // follow it, so the counter relabelled), with the radio it was held for and
+    // where that radio sat. The next change uses it instead of the relabelled
+    // figure while the radio is still there, so off-then-on and a typo-then-
+    // fix come back to the same station. Cleared by every source install.
+    // (No default member initialisers: GCC refuses them on a nested struct
+    // an std::optional member instantiates inside the class - see TestHooks.)
+    struct ConverterHeldAir {
+        std::string key;
+        double airHz;
+        double radioHz;
+    };
+    std::optional<ConverterHeldAir> converterHeldAir_;
     std::string resolveConverterKey(const std::string& radioKey) const;
     void noteConverterFallback(const std::string& nativeKey, const std::string& fallbackKey);
     // The one line the Source section shows while such an alias is in force
-    // and the converter is on; "" otherwise.
+    // and the converter is on, or while a converter was NOT carried and none
+    // is set here; "" otherwise.
     std::string converterAliasNote();
     std::map<std::string, cascade::core::ConverterSetting> converters_;
     char converterLoBuf_[40] = {};
@@ -2879,6 +2907,9 @@ private:
     // Why a radio is not running, when it tried and failed; drawn on its face
     // and turned into Problem::RadioFailed for the plan.
     std::map<cascade::core::patch::NodeId, std::string> patchRadioError_;
+    // Why a centre typed on a Radio node was refused (setPatchRadioCentre);
+    // cleared by the next one taken.
+    std::map<cascade::core::patch::NodeId, std::string> patchCentreNote_;
     // The "<key>@<rate>" that failed, so a radio that would not open is not
     // retried every frame - only when its device or rate is changed.
     std::map<cascade::core::patch::NodeId, std::string> patchRadioFailedAs_;
@@ -2928,6 +2959,12 @@ private:
     // no other Radio has it, else the first free device listed, else the
     // generator.
     std::string patchDefaultDeviceKey() const;
+    // A centre typed on a Radio node (its face or the panel): taken when the
+    // radio behind the node's converter would be told something above 0 Hz
+    // (core::radioCentreTakeable), refused with a sentence otherwise
+    // (patchCentreNote_, drawn by drawPatchCentreNote). True when taken.
+    bool setPatchRadioCentre(cascade::core::patch::Node& n, double airHz);
+    void drawPatchCentreNote(const cascade::core::patch::Node& n);
     // Per frame while the page is open: take the receiver's radio, open and
     // close radios to match the nodes, make and drop speaker outputs, and
     // publish each radio's set when it has changed.

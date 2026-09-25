@@ -7220,40 +7220,7 @@ void AppWindow::drawSourceSection() {
                 "this machine has an mDNS responder, and any address or host name can be "
                 "typed. Nothing is contacted until you press Open."));
             ImGui::PopStyleColor();
-            if (openPluto) {
-                sourceError_.clear();
-                // Through the SAME worker-thread open every other radio uses,
-                // so a board that is not there spends its connect bound off
-                // the GUI thread and the window keeps drawing. The row's args
-                // are re-derived from the box here rather than read out of
-                // nativeDevices_, because the user may have typed since the
-                // list was built.
-                const std::string args = std::string("uri=") + plutoUri_;
-                // The frequency to carry, read BEFORE the close below: after
-                // it the generator is what answers.
-                const std::optional<double> keepCenterHz = carriedAirCentre();
-                if (device_ != nullptr) {
-                    cascade::core::diagLogf(
-                        "source: closing %s before opening the ADALM-Pluto",
-                        deviceModel_.c_str());
-                    device_ = nullptr;
-                    soapyView_ = nullptr;
-                    deviceArgs_.clear();
-                    deviceModel_.clear();
-                    ++sourceGen_;
-                    pipeline_.setSource(nullptr);
-                    sourceKind_ = "siggen";
-                    applyConverterForSource();
-                    followInputRate();
-                }
-                DeviceOpenResult req;
-                req.kind = kPlutoDriverKey;
-                req.args = args;
-                req.row = sourceSel_;
-                req.requestRateHz = kSoapyRateHz[kSoapyRateDefaultIndex];
-                req.keepCenterHz = keepCenterHz;
-                launchDeviceOpen(std::move(req), "ADALM-Pluto at " + std::string(plutoUri_));
-            }
+            if (openPluto) { openPlutoFromBox(); }
         }
     }
 
@@ -8221,6 +8188,39 @@ void AppWindow::reopenAfterDriverFault() {
     applyConverterForSource();
     followInputRate();
     launchDeviceOpen(std::move(r), label);
+}
+
+void AppWindow::openPlutoFromBox() {
+    sourceError_.clear();
+    // Through the SAME worker-thread open every other radio uses, so a board
+    // that is not there spends its connect bound off the GUI thread and the
+    // window keeps drawing. The row's args are re-derived from the box here
+    // rather than read out of nativeDevices_, because the user may have typed
+    // since the list was built.
+    const std::string args = std::string("uri=") + plutoUri_;
+    // The frequency to carry, read BEFORE the close below: after it the
+    // generator is what answers.
+    const std::optional<double> keepCenterHz = carriedAirCentre();
+    if (device_ != nullptr) {
+        cascade::core::diagLogf("source: closing %s before opening the ADALM-Pluto",
+                                deviceModel_.c_str());
+        device_ = nullptr;
+        soapyView_ = nullptr;
+        deviceArgs_.clear();
+        deviceModel_.clear();
+        ++sourceGen_;
+        pipeline_.setSource(nullptr);
+        sourceKind_ = "siggen";
+        applyConverterForSource();
+        followInputRate();
+    }
+    DeviceOpenResult req;
+    req.kind = kPlutoDriverKey;
+    req.args = args;
+    req.row = sourceSel_;
+    req.requestRateHz = kSoapyRateHz[kSoapyRateDefaultIndex];
+    req.keepCenterHz = keepCenterHz;
+    launchDeviceOpen(std::move(req), "ADALM-Pluto at " + std::string(plutoUri_));
 }
 
 void AppWindow::selectSource(int idx, std::optional<double> carryAirHz) {
@@ -12022,14 +12022,13 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
                 double mhz = n.freqHz / 1e6;
                 ImGui::SetNextItemWidth(faceW);
                 if (ImGui::InputDouble("##rc", &mhz, 0.0, 0.0, "%.6f MHz",
-                                       ImGuiInputTextFlags_EnterReturnsTrue) &&
-                    mhz > 0.0) {
-                    n.freqHz = mhz * 1e6;
-                    patchUi_.dirty = true;
+                                       ImGuiInputTextFlags_EnterReturnsTrue)) {
+                    setPatchRadioCentre(n, mhz * 1e6);
                 }
                 if (ImGui::IsItemHovered()) {
                     ImGui::SetTooltip("%s", tr("The radio's centre. Type a frequency and press Enter."));
                 }
+                drawPatchCentreNote(n);
                 const auto run = patchRadios_.find(n.id);
                 const auto err = patchRadioError_.find(n.id);
                 if (run != patchRadios_.end()) {
@@ -12443,6 +12442,39 @@ void AppWindow::drawPatchSection() {
     }
 }
 
+void AppWindow::seedPatchIfNeeded() {
+    // The patch a page opens with when the user has none: one radio, nothing
+    // wired. An empty canvas gives no clue what a node even is; one node does,
+    // and one node is not an opinion about what they want to build.
+    if (patchSeeded_) { return; }
+    patchSeeded_ = true;
+    cascade::gui::patch::seedDefaultPatch(patchGraph_, "Radio");
+    // The starter radio is the receiver's own radio or, with none, the
+    // generator - named now, because the patch no longer starts (and so
+    // takes the receiver's radio) the moment the page opens.
+    for (const cascade::core::patch::Node& n0 : patchGraph_.nodes()) {
+        if (n0.kind != cascade::core::patch::NodeKind::Radio) { continue; }
+        if (cascade::core::patch::Node* n = patchGraph_.mutableNode(n0.id)) {
+            if (n->device.empty()) {
+                n->device = patchDefaultDeviceKey();
+                // The receiver's AIR centre, which may be below 0 Hz
+                // through a converter (core::patch::radioCentreSet) or be
+                // exactly 0 Hz - marked chosen, never judged by its value.
+                if (!cascade::core::patch::radioCentreSet(*n) && device_ != nullptr) {
+                    if (const std::optional<double> c = carriedAirCentre()) {
+                        n->freqHz = *c;
+                        n->centreChosen = true;
+                    }
+                }
+            }
+        }
+    }
+    // The starter counts as a change, or it would be rebuilt from
+    // scratch on every launch and the first node the user drags
+    // would be the only thing that ever persisted.
+    patchUi_.dirty = true;
+}
+
 void AppWindow::drawPatchPage() {
     // FIRST, AND EVERY FRAME, open or not. The DSP thread never destroys a
     // patch it stops running; it hands it back, and this is where it dies -
@@ -12473,33 +12505,7 @@ void AppWindow::drawPatchPage() {
         return;
     }
 
-    // The patch a page opens with when the user has none: one radio, nothing
-    // wired. An empty canvas gives no clue what a node even is; one node does,
-    // and one node is not an opinion about what they want to build.
-    if (!patchSeeded_) {
-        patchSeeded_ = true;
-        cascade::gui::patch::seedDefaultPatch(patchGraph_, "Radio");
-        // The starter radio is the receiver's own radio or, with none, the
-        // generator - named now, because the patch no longer starts (and so
-        // takes the receiver's radio) the moment the page opens.
-        for (const cascade::core::patch::Node& n0 : patchGraph_.nodes()) {
-            if (n0.kind != cascade::core::patch::NodeKind::Radio) { continue; }
-            if (cascade::core::patch::Node* n = patchGraph_.mutableNode(n0.id)) {
-                if (n->device.empty()) {
-                    n->device = patchDefaultDeviceKey();
-                    // The receiver's AIR centre, which may be below 0 Hz
-                    // through a converter (core::patch::radioCentreSet).
-                    if (!cascade::core::patch::radioCentreSet(*n) && device_ != nullptr) {
-                        if (const std::optional<double> c = carriedAirCentre()) { n->freqHz = *c; }
-                    }
-                }
-            }
-        }
-        // The starter counts as a change, or it would be rebuilt from
-        // scratch on every launch and the first node the user drags
-        // would be the only thing that ever persisted.
-        patchUi_.dirty = true;
-    }
+    seedPatchIfNeeded();
 
     // Square-ish and large: a patch is read across, and a canvas that starts
     // small teaches the user to pan before it teaches them anything else.

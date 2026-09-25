@@ -173,7 +173,8 @@ void testTuneAndReadback() {
     CHECK(p.rawSource().setCenterFrequencyHz(100017200.0));
     p.setConverter(up(100.0e6));
     CHECK(p.activeSource().centerFrequencyHz() == 17200.0);
-    // Switching a converter on does NOT retune the radio: it relabels.
+    // The PIPELINE's setConverter does not retune the radio: it relabels.
+    // (Whether the radio then moves is AppWindow::changeConverter's call.)
     CHECK(p.rawSource().centerFrequencyHz() == 100017200.0);
 
     // Inverted: radio = LO - air.

@@ -164,6 +164,41 @@ std::string AppWindow::patchDeviceLabel(const std::string& key) const {
     return buf;
 }
 
+bool AppWindow::setPatchRadioCentre(pc::Node& n, double airHz) {
+    // THE RADIO decides, not the sign of the air figure: a node's centre is an
+    // AIR frequency and may be carried in below 0 Hz through an up-converter,
+    // so refusing everything <= 0 here made such a centre impossible to type
+    // back in. What must hold is that the radio behind the node's converter
+    // is told something above 0 Hz.
+    const cascade::core::ConverterSetting conv = converterForKey(n.device);
+    if (!cascade::core::radioCentreTakeable(conv, airHz)) {
+        std::string msg;
+        if (cascade::core::converterActive(conv)) {
+            cascade::core::formatUtf8(
+                msg, tr("%s is out of reach through the %s: the radio would have to tune to 0 Hz or below."),
+                cascade::core::converterHzText(airHz).c_str(), converterName(conv).c_str());
+        } else {
+            cascade::core::formatUtf8(msg, tr("A radio cannot tune to %s - type a centre above 0 Hz."),
+                                      cascade::core::converterHzText(airHz).c_str());
+        }
+        patchCentreNote_[n.id] = msg;
+        return false;
+    }
+    n.freqHz = airHz;
+    n.centreChosen = true;   // 0 Hz on the air is a centre too
+    patchCentreNote_.erase(n.id);
+    patchUi_.dirty = true;
+    return true;
+}
+
+void AppWindow::drawPatchCentreNote(const pc::Node& n) {
+    const auto it = patchCentreNote_.find(n.id);
+    if (it == patchCentreNote_.end()) { return; }
+    ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
+    ImGui::TextWrapped("%s", it->second.c_str());
+    ImGui::PopStyleColor();
+}
+
 std::string AppWindow::patchDefaultDeviceKey() const {
     const auto taken = [this](const std::string& key) {
         for (const pc::Node& n : patchGraph_.nodes()) {
@@ -254,8 +289,12 @@ void AppWindow::patchReconcile() {
             if (n0.kind != pc::NodeKind::Radio || !n0.device.empty()) { continue; }
             if (pc::Node* n = patchGraph_.mutableNode(n0.id)) {
                 n->device = pc::makeDeviceKey(keep.kind, keep.args);
+                // A node with a centre of its own keeps it. The carried one is
+                // marked chosen, never judged by its value: 0 Hz on the air is
+                // a centre (see pc::Node::centreChosen).
                 if (!pc::radioCentreSet(*n) && keep.centreHz.has_value()) {
                     n->freqHz = *keep.centreHz;
+                    n->centreChosen = true;
                 }
                 if (n->rateHz <= 0.0) { n->rateHz = keep.rateHz; }
                 patchUi_.dirty = true;
@@ -369,6 +408,7 @@ void AppWindow::patchReconcile() {
             if (r.converter() != conv) { r.setConverter(conv); }
             if (!pc::radioCentreSet(*n)) {
                 n->freqHz = r.centreHz();
+                n->centreChosen = true;
                 patchUi_.dirty = true;
             } else if (std::fabs(r.centreHz() - n->freqHz) > 0.5) {
                 if (!r.setCentreHz(n->freqHz)) {
@@ -401,6 +441,7 @@ void AppWindow::patchReconcile() {
             }
             if (!pc::radioCentreSet(*n)) {
                 n->freqHz = radio->centreHz();
+                n->centreChosen = true;
                 patchUi_.dirty = true;
             }
             patchRadioError_.erase(id);
@@ -1012,11 +1053,10 @@ void AppWindow::drawPatchRadioInspector(pc::Node& n) {
     double mhz = n.freqHz / 1e6;
     ImGui::SetNextItemWidth(-FLT_MIN);
     if (ImGui::InputDouble("##patchcentre", &mhz, 0.1, 1.0, "%.6f",
-                           ImGuiInputTextFlags_EnterReturnsTrue) &&
-        mhz > 0.0) {
-        n.freqHz = mhz * 1e6;
-        patchUi_.dirty = true;
+                           ImGuiInputTextFlags_EnterReturnsTrue)) {
+        setPatchRadioCentre(n, mhz * 1e6);
     }
+    drawPatchCentreNote(n);
 
     ImGui::Spacing();
     ImGui::TextUnformatted(tr("Sample rate"));
