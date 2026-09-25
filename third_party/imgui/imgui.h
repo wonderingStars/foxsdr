@@ -1201,6 +1201,13 @@ namespace ImGui
     IMGUI_API ImGuiViewport* FindViewportByID(ImGuiID viewport_id);                 // this is a helper for backends.
     IMGUI_API ImGuiViewport* FindViewportByPlatformHandle(void* platform_handle);   // this is a helper for backends. the type platform_handle is decided by the backend (e.g. HWND, MyWindow*, GLFWwindow* etc.)
 
+    // FOXSDR PATCH BEGIN (popup-colours) - see third_party/imgui/FOXSDR-PATCHES.md.
+    // Colours pushed for the whole of every popup, menu, combo list, modal and tooltip window
+    // (Begin() with ImGuiWindowFlags_Popup or ImGuiWindowFlags_Tooltip) and popped at its End().
+    // The table is copied (at most 32 entries); count 0 - the default - pushes nothing.
+    IMGUI_API void          FoxSetPopupColors(const ImGuiCol* idx, const ImVec4* col, int count);
+    // FOXSDR PATCH END (popup-colours)
+
 } // namespace ImGui
 
 //-----------------------------------------------------------------------------

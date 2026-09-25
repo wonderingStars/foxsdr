@@ -1162,7 +1162,15 @@ private:
     // The modal that offers to stop the plugins holding the audio down, and
     // the banner that stays when the user declines.
     void drawMutePopup();
-    void drawMuteBanner();
+    // What the banner names, or "" when there is no banner to draw. The test
+    // seam FOXSDR_FORCE_MUTE_BANNER=<name> draws it naming <name> whatever
+    // the audio is doing, so the theme census can place and measure it.
+    std::string muteBannerSubject() const;
+    // Draws the banner where layoutMuteBanner put it (bar-relative, from the
+    // bar's top-left `barTL`): the words - whole, or shortened with the full
+    // sentence in a tooltip - and the "Stop plugin" key, always whole.
+    void drawMuteBanner(const cascade::gui::MuteBannerLayout& mb, const ImVec2& barTL,
+                        const std::string& words);
     // Stops exactly the plugins named by `keys`, through the ordinary stop
     // path, in one rebuild. The caller passes the keys its own message named -
     // the banner passes mutedByKeys_, the popup passes what it captured - so a
@@ -2249,6 +2257,31 @@ private:
     // where the config arrives and nowhere else. Defaults to the plate the
     // deck has always had.
     cascade::gui::TunerStyle tunerStyle_ = cascade::gui::TunerStyle::Nixie;
+
+    // --- THE INTERFACE THEME (2026-09-25; gui/theme.hpp) ----------------------
+    // The look chosen in Display, by its foxsdr-ui/1 key (AppConfig::uiTheme).
+    // Applied only between frames, by applyPendingTheme() - the palette, the
+    // ImGui style and the typeface pair all change together, never half way
+    // through a frame. Starts pending so the first frame applies whatever
+    // applyConfig restored.
+    std::string uiThemeKey_ = "today";
+    bool themeApplyPending_ = true;
+    void applyPendingTheme();
+    // Pick a theme from the Display picker: the palette AND the counter's and
+    // readings' preset sizes (Bench Classic XL is the 2x counter without its
+    // switches), which the user may then change on their own.
+    void pickTheme(const std::string& key);
+    // The counter's own settings (AppConfig::counterScale / counterSwitches)
+    // and every other live figure's size (readingsScale). Read every frame.
+    int counterScale_ = 1;
+    bool counterSwitches_ = true;
+    float readingsScale_ = 1.0f;
+    // The status column's height at which its cards last failed to fit at the
+    // enlarged reading size (-1: never). See drawStatusColumn's card().
+    float statusEnlargeFailedRoom_ = -1.0f;
+    // The counter's right-click menu: Enlarge figures / Normal size / Show
+    // tuner switches / Counter face / Enlarge every reading.
+    void drawCounterMenu();
 
     // Plugin host: scanned once at construction and on Rescan. Owns the
     // loaded modules, so it must outlive nothing in particular here — but it

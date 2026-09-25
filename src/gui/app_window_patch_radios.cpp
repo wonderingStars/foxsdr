@@ -727,10 +727,14 @@ void AppWindow::drawPatchTransport() {
     // ALL OFF: larger, red, and always there. Every radio's switch goes off
     // and the patch stops.
     ImGui::SetCursorScreenPos(ImVec2(at.x + kR * 2.5f, at.y + kR * 0.25f));
-    ImGui::PushStyleColor(ImGuiCol_Button, cascade::gui::theme::kAlarm);
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, cascade::gui::theme::kAlarmHot);
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, cascade::gui::theme::kAlarmHot);
-    ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::kIvory);
+    // A STOP control, so the stop button's roles (foxsdr-ui/1 stopBg and
+    // stopText): today's rust and ivory exactly, and never Night Watch's
+    // near-white "bad" as the face of a key that size.
+    namespace th = cascade::gui::theme;
+    ImGui::PushStyleColor(ImGuiCol_Button, th::toneHex(0xB8552F, 255, th::ink::StopBgBot));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, th::toneHex(0xE07A4E, 255, th::ink::StopBgTop));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, th::toneHex(0xE07A4E, 255, th::ink::StopBgTop));
+    ImGui::PushStyleColor(ImGuiCol_Text, th::toneHex(0xEFE7D2, 255, th::ink::StopText));
     if (ImGui::Button(trId("ALL OFF###patchalloff"), ImVec2(150.0f, kR * 1.7f))) {
         patchAllOff();
     }

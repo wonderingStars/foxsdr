@@ -206,7 +206,8 @@ void drawDistressLamp(ImDrawList* dl, const ImVec2& c, float r, bool lit, bool b
         }
         dl->AddCircleFilled(c, r, theme::kAlarmHot, 0);
         dl->AddCircleFilled(ImVec2(c.x - r * 0.10f, c.y - r * 0.12f), r * 0.72f,
-                            IM_COL32(0xFF, 0xB0, 0x80, 220), 0);
+                            theme::tone(0xFF, 0xB0, 0x80, 220, theme::ink::Bad, theme::ink::White),
+                            0);
     } else if (lit) {
         // The dark half of the blink: still plainly a lit lamp between
         // flashes, not the same thing as an alarm that has cleared.
@@ -224,8 +225,8 @@ void drawDistressLamp(ImDrawList* dl, const ImVec2& c, float r, bool lit, bool b
     // THE GUARD. A ring of clear plastic standing off the lens on two lugs,
     // with one specular streak across it. Drawn whether the lamp is lit or not,
     // because it is part of the panel and not part of the alarm.
-    dl->AddCircle(c, r * 1.02f, IM_COL32(0xEF, 0xE7, 0xD2, 70), 0, 2.0f);
-    dl->AddCircle(c, r * 0.94f, IM_COL32(0xEF, 0xE7, 0xD2, 34), 0, 1.0f);
+    dl->AddCircle(c, r * 1.02f, theme::sheenOf(0xEF, 0xE7, 0xD2, 70), 0, 2.0f);
+    dl->AddCircle(c, r * 0.94f, theme::sheenOf(0xEF, 0xE7, 0xD2, 34), 0, 1.0f);
     const float lug = r * 0.30f;
     for (int s = -1; s <= 1; s += 2) {
         const float lx = c.x + static_cast<float>(s) * r * 0.86f;
@@ -237,7 +238,7 @@ void drawDistressLamp(ImDrawList* dl, const ImVec2& c, float r, bool lit, bool b
     const float a0 = kPiF * 1.08f;
     const float a1 = kPiF * 1.42f;
     dl->PathArcTo(c, r * 0.80f, a0, a1, 12);
-    dl->PathStroke(IM_COL32(255, 255, 255, lit && bright ? 90 : 55), ImDrawFlags_None,
+    dl->PathStroke(theme::sheen(lit && bright ? 90 : 55), ImDrawFlags_None,
                    std::max(1.5f, r * 0.10f));
 }
 
@@ -335,10 +336,9 @@ void drawCentreZeroMeter(ImDrawList* dl, const ImVec2& tl, float width, float he
     const ImVec2 fTL(tl.x, faceTop);
     const ImVec2 fBR(tl.x + width, faceTop + faceH);
 
-    dl->AddRectFilledMultiColor(fTL, fBR, IM_COL32(0xF3, 0xEC, 0xD6, 255),
-                                IM_COL32(0xF3, 0xEC, 0xD6, 255),
-                                IM_COL32(0xD8, 0xCF, 0xB4, 255),
-                                IM_COL32(0xD8, 0xCF, 0xB4, 255));
+    const ImU32 faceHi = theme::tone(0xF3, 0xEC, 0xD6, 255, theme::ink::MeterFaceTop);
+    const ImU32 faceLo = theme::tone(0xD8, 0xCF, 0xB4, 255, theme::ink::MeterFaceBot);
+    dl->AddRectFilledMultiColor(fTL, fBR, faceHi, faceHi, faceLo, faceLo);
     dl->AddRect(fTL, fBR, theme::kBrassBright, 3.0f, 0, 2.0f);
 
     const ImVec2 pivot(tl.x + width * 0.5f, fBR.y - 4.0f);
@@ -351,6 +351,10 @@ void drawCentreZeroMeter(ImDrawList* dl, const ImVec2& tl, float width, float he
     // NINE TICKS, AND THE RED IS AT BOTH ENDS. On a centre-zero scale the far
     // stops are equally wrong in opposite directions, and the heavy tick in the
     // middle is the reading the instrument exists to find.
+    // The scale's print is the meter's own ink, not the deck's engraving: it
+    // sits on the face, and a theme with a pale face and pale deck ink would
+    // otherwise letter it invisibly.
+    const ImU32 scaleInk = theme::tone(0x3B, 0x35, 0x29, 255, theme::ink::MeterInk);
     for (int i = 0; i < 9; ++i) {
         const float t = static_cast<float>(i) / 8.0f;
         const float deg = -kHalfSweepDeg + 2.0f * kHalfSweepDeg * t;
@@ -358,7 +362,7 @@ void drawCentreZeroMeter(ImDrawList* dl, const ImVec2& tl, float width, float he
         const float sx = std::sin(a);
         const float sy = -std::cos(a);
         const bool edge = (i <= 1 || i >= 7);
-        const ImU32 col = edge ? theme::kAlarm : theme::kEngraved;
+        const ImU32 col = edge ? theme::kAlarm : scaleInk;
         const float th = (i == 4) ? 2.4f : (edge ? 1.6f : 1.0f);
         const float in = (i == 4) ? 0.72f : 0.80f;
         dl->AddLine(ImVec2(pivot.x + sx * armR * in, pivot.y + sy * armR * in),
@@ -373,12 +377,18 @@ void drawCentreZeroMeter(ImDrawList* dl, const ImVec2& tl, float width, float he
         dl->AddLine(pivot,
                     ImVec2(pivot.x + std::sin(a) * armR * 0.88f,
                            pivot.y - std::cos(a) * armR * 0.88f),
-                    theme::kAlarm, 1.8f);
-        dl->AddCircleFilled(pivot, 3.4f, theme::kEnamel, 12);
+                    theme::tone(0xB8, 0x55, 0x2F, 255, theme::ink::MeterNeedle), 1.8f);
+        dl->AddCircleFilled(pivot, 3.4f,
+                            theme::tone(0x2A, 0x25, 0x1C, 255, theme::ink::MeterFace,
+                                        theme::ink::MeterInk),
+                            12);
     } else {
         // No needle at all: a needle resting on the centre tick would read as
         // "measured, and the beacon is exactly on frequency".
-        dl->AddCircleFilled(pivot, 3.4f, theme::kInkMuted, 12);
+        dl->AddCircleFilled(pivot, 3.4f,
+                            theme::tone(0x9C, 0x90, 0x78, 255, theme::ink::MeterFace,
+                                        theme::ink::MeterInk),
+                            12);
     }
 
     // The unit, printed beside the pivot the way a moving-coil meter names its
@@ -387,7 +397,7 @@ void drawCentreZeroMeter(ImDrawList* dl, const ImVec2& tl, float width, float he
     const ImVec2 us = vf->CalcTextSizeA(upx, FLT_MAX, 0.0f, "kHz");
     if (pivot.x + armR * 0.16f + us.x < fBR.x - 3.0f) {
         dl->AddText(vf, upx, ImVec2(pivot.x + armR * 0.16f, pivot.y - us.y - 2.0f),
-                    theme::kEngraved, "kHz");
+                    scaleInk, "kHz");
     }
 
     dl->AddText(vf, vpx, ImVec2(tl.x + width * 0.5f - vs.x * 0.5f, fBR.y + 3.0f),

@@ -18,6 +18,7 @@
 #include <limits>
 #include <vector>
 
+#include "gui/theme.hpp"
 #include "test_check.hpp"
 
 using cascade::gui::mapLineToPixels;
@@ -99,6 +100,138 @@ void testColorMonotonicBrightness() {
     // already proved across all 256 entries.
     CHECK(chR(hot) > chB(hot) && chG(hot) > chB(hot));
     CHECK(lumaOf(hot) > lumaOf(warm));
+}
+
+// --- the colormap follows the theme in force -------------------------------
+//
+// The table is rebuilt from theme::waterfallStops() whenever the theme's
+// generation moves. Three things are pinned here: under today's bench the
+// table is the 0.99.35 table to the byte (the FNV-1a hash below was taken from
+// the build BEFORE the table became theme-driven); under every other theme
+// its two ends are that theme's wfLow and wfTop exactly; and it stays
+// brightness-monotonic in the direction its own ramp runs - Daylight Lab's
+// runs from a near-white wfLow to a dark navy wfTop, so there the strongest
+// signal is the DARKEST entry and luma must never increase along the table.
+
+std::uint32_t lutHash() {
+    std::uint32_t h = 2166136261u;
+    for (int i = 0; i < 256; ++i) {
+        const ImU32 c = waterfallColor(static_cast<float>(i) / 255.0f);
+        for (int k = 0; k < 4; ++k) {
+            h ^= (c >> (8 * k)) & 0xFFu;
+            h *= 16777619u;
+        }
+    }
+    return h;
+}
+
+// The whole table read back through the public lookup, entry i at norm i/255.
+std::vector<ImU32> lutEntries() {
+    std::vector<ImU32> out;
+    for (int i = 0; i < 256; ++i) {
+        out.push_back(waterfallColor(static_cast<float>(i) / 255.0f));
+    }
+    return out;
+}
+
+// +1: luma never decreases along the table; -1: it never increases.
+bool lutMonotone(int direction) {
+    double prev = lumaOf(waterfallColor(0.0f));
+    for (int i = 1; i < 256; ++i) {
+        const double luma = lumaOf(waterfallColor(static_cast<float>(i) / 255.0f));
+        if (direction > 0 ? (luma < prev - 1e-3) : (luma > prev + 1e-3)) {
+            return false;
+        }
+        prev = luma;
+    }
+    return true;
+}
+
+// Taken from the pre-theme build of this very table (0.99.35's colorLut).
+constexpr std::uint32_t kTodayLutHash = 0x83D03066u;
+
+void testColormapFollowsTheme() {
+    namespace theme = cascade::gui::theme;
+    using theme::Role;
+    using theme::ThemeId;
+    theme::setTheme(ThemeId::Today);
+    const std::vector<ImU32> today = lutEntries();
+    CHECK(lutHash() == kTodayLutHash);
+
+    struct Case {
+        ThemeId id;
+        int direction;
+    };
+    const Case cases[] = {{ThemeId::Night, +1},
+                          {ThemeId::Glass, +1},
+                          {ThemeId::Daylight, -1},
+                          {ThemeId::Field, +1},
+                          {ThemeId::ClassicXl, +1}};
+    for (const Case& c : cases) {
+        theme::setTheme(c.id);
+        CHECK(waterfallColor(0.0f) == theme::role(Role::WfLow));
+        CHECK(waterfallColor(1.0f) == theme::role(Role::WfTop));
+        CHECK(lutMonotone(c.direction));
+        for (int i = 0; i < 256; ++i) {
+            CHECK(chA(waterfallColor(static_cast<float>(i) / 255.0f)) == 255);
+        }
+    }
+    // Night Watch really is a different table (it would be a hollow check if
+    // the ends matched by accident and the middle were today's).
+    theme::setTheme(ThemeId::Night);
+    CHECK(lutEntries() != today);
+    // Daylight's strongest signal is its darkest entry.
+    theme::setTheme(ThemeId::Daylight);
+    CHECK(lumaOf(waterfallColor(1.0f)) < lumaOf(waterfallColor(0.0f)));
+
+    // And back: today's table again, byte for byte.
+    theme::setTheme(ThemeId::Today);
+    CHECK(lutEntries() == today);
+    CHECK(lutHash() == kTodayLutHash);
+}
+
+// A theme switch repaints the history already in the ring, not just the lines
+// that arrive afterwards: theme.hpp's contract is that switching repaints
+// everything on the next frame, and a paused receiver would otherwise keep
+// the old palette on screen indefinitely.
+bool rowIsUniform(const WaterfallView& wf, int row, ImU32 expected);  // below
+
+void testRingRepaintsOnThemeSwitch() {
+    namespace theme = cascade::gui::theme;
+    using theme::ThemeId;
+    theme::setTheme(ThemeId::Today);
+    WaterfallView wf(8, 6);
+    const float levels[3] = {0.0f, 0.5f, 1.0f};
+    std::vector<int> rows;
+    for (const float lv : levels) {
+        std::vector<float> bins(8, -100.0f + lv * 100.0f);
+        wf.addLine(bins.data(), 8, -100.0f, 0.0f, 1.0);
+        rows.push_back(wf.rowCursor());
+    }
+    theme::setTheme(ThemeId::Night);
+    // One more line: the ring has now seen the new generation.
+    std::vector<float> quiet(8, -100.0f);
+    wf.addLine(quiet.data(), 8, -100.0f, 0.0f, 2.0);
+    for (int k = 0; k < 3; ++k) {
+        const ImU32* px = wf.rowPixels(rows[static_cast<std::size_t>(k)]);
+        CHECK(px != nullptr);
+        if (px != nullptr) {
+            CHECK(px[0] == waterfallColor(levels[k]));
+            CHECK(px[7] == waterfallColor(levels[k]));
+        }
+    }
+    // The constructor's pre-fill (never written) is the floor colour too.
+    const int unwritten = (wf.rowCursor() + wf.filledRows()) % wf.texHeight();
+    CHECK(rowIsUniform(wf, unwritten, waterfallColor(0.0f)));
+
+    // Back to today: the same rows are today's colours again, exactly.
+    theme::setTheme(ThemeId::Today);
+    wf.addLine(quiet.data(), 8, -100.0f, 0.0f, 3.0);
+    for (int k = 0; k < 3; ++k) {
+        const ImU32* px = wf.rowPixels(rows[static_cast<std::size_t>(k)]);
+        CHECK(px != nullptr && px[3] == waterfallColor(levels[k]));
+    }
+    CHECK(waterfallColor(0.0f) == IM_COL32(6, 20, 10, 255));
 }
 
 // --- mapLineToPixels ------------------------------------------------------
@@ -960,6 +1093,8 @@ int main() {
     testColorEndpoints();
     testColorClamping();
     testColorMonotonicBrightness();
+    testColormapFollowsTheme();
+    testRingRepaintsOnThemeSwitch();
     testMapIdentity();
     testMapUpsample();
     testMapDownsample();

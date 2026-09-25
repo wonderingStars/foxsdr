@@ -3,9 +3,10 @@
 Every library the application links is vendored here, pinned to the exact
 revision the app was built and tested against, so an upstream change can never
 break or alter this build. Sources are verbatim upstream copies — **no vendored
-file has been modified**, with ONE documented exception: a fenced patch to Dear
-ImGui's word wrap for Chinese and Japanese (`imgui/FOXSDR-PATCHES.md`). Each
-subdirectory keeps its upstream license file.
+file has been modified**, with ONE documented exception: Dear ImGui carries two
+fenced patches, its word wrap for Chinese and Japanese and a colour table pushed
+for every popup-like window (`imgui/FOXSDR-PATCHES.md`). Each subdirectory keeps
+its upstream license file.
 
 Those license files, plus SoapySDR's, are reproduced verbatim in
 `installer/THIRD-PARTY-LICENSES.txt`, the aggregate notice shipped with the
@@ -50,13 +51,20 @@ vcpkg fetches the full repo archive instead, so its hash is not comparable.)
 ## Per-library notes
 
 ### Dear ImGui (`third_party/imgui/`)
-**Patched in one place** (0.99.28): `ImFontCalcWordWrapPositionEx` in
+**Patched in two places.** First (0.99.28): `ImFontCalcWordWrapPositionEx` in
 `imgui_draw.cpp` breaks Chinese and Japanese lines between characters and
 keeps closing marks off the start of a line. Every changed line is fenced by
 `FOXSDR PATCH (cjk-wrap)` comments; what it does, why, and how to re-apply it
 on an upgrade are in `imgui/FOXSDR-PATCHES.md`, and `tests/test_cjk_wrap.cpp`
-proves English and Korean still wrap byte for byte as upstream does. The
-archive hash in the table is of the UNPATCHED upstream archive.
+proves English and Korean still wrap byte for byte as upstream does.
+**And in a second place** (themes, 2026-09-25): `Begin()` / `End()` in
+`imgui.cpp` push and pop a colour table (`ImGui::FoxSetPopupColors`, declared
+in `imgui.h`; a counter in `imgui_internal.h`'s `ImGuiWindowStackData`) for
+every popup, menu, combo list, modal and tooltip, so a theme can letter its
+menus in their own ink. Fenced by `FOXSDR PATCH (popup-colours)`; an empty
+table - FoxSDR's default bench - pushes nothing. `tests/test_theme.cpp` reads
+the colours a live tooltip, popup and modal draw with and goes red without it.
+The archive hash in the table is of the UNPATCHED upstream archive.
 
 Vendored subset per spec: the core sources (`imgui*.cpp/h`, `imconfig.h`,
 `imstb_*.h`), the two backends the app uses

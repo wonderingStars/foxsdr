@@ -10,25 +10,32 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
+#include <cstdint>
 #include <vector>
 
 #include <imgui.h>
 
 namespace cascade::gui {
 
-// Colormap LUT lookup. Input clamped to [0, 1] (NaN reads as 0). Progression
-// deep blue -> cyan -> yellow -> red with monotonically non-decreasing
+// Colormap LUT lookup, in the theme in force. Input clamped to [0, 1] (NaN
+// reads as 0). On today's bench the progression is quiet phosphor -> green ->
+// phosphor -> yellow-green -> cream with monotonically non-decreasing
 // perceived brightness (0.299R + 0.587G + 0.114B) across the whole table —
 // enforced at LUT build time, because rounding independent channels of a
 // piecewise-linear ramp can otherwise dip by a fraction of a luma unit.
+// Another theme's ramp runs from its wfLow role to its wfTop role; one whose
+// top is darker than its bottom (Daylight Lab) is monotone the other way, so
+// the strongest signal is always the end of the ramp furthest from the floor.
 //
 // Contract constants a display (and the tests) may rely on:
-//   waterfallColor(0.0f) == IM_COL32(  6,  20,  10, 255)   // quiet phosphor
-//   waterfallColor(1.0f) == IM_COL32(240, 235, 180, 255)   // cream anchor
+//   waterfallColor(0.0f) == the theme's wfLow  (today: rgb 6, 20, 10 - quiet phosphor)
+//   waterfallColor(1.0f) == the theme's wfTop  (today: rgb 240, 235, 180 - cream anchor)
 // The top anchor is a warm cream rather than white because it must be the
 // brightest entry in the table and still leave the eye somewhere to read a
 // peak; the bottom anchor is lifted off true black so a signal a few dB above
-// the noise floor stays visible. All entries are fully opaque.
+// the noise floor stays visible. All entries are fully opaque. The table is
+// rebuilt when theme::generation() moves; GUI thread only.
 ImU32 waterfallColor(float norm01);
 
 // Converts one spectrum line into one texture row: clamped normalization
@@ -363,7 +370,19 @@ public:
 private:
     int width_ = 0;
     int height_ = 0;
+    // Recolours the ring when the theme has changed since it was painted
+    // (theme::generation() moved): every pixel is a colormap entry, so each
+    // is looked up in the table it was painted with and replaced by the same
+    // entry of the table in force, and the whole texture is re-uploaded. A
+    // paused receiver would otherwise keep the old palette on screen for as
+    // long as it stayed paused. Called from addLine() and draw() (GUI thread).
+    void followTheme();
+
     std::vector<ImU32> pixels_;  // row-major width_ x height_ CPU ring
+    // The colormap the ring was painted with, and the theme generation it
+    // belongs to (see followTheme()).
+    std::array<ImU32, 256> paintedLut_{};
+    std::uint32_t paintedGen_ = 0;
     // When each ring row arrived, on nowSeconds()' clock. Parallel to the
     // pixel ring and read only for rows the ring has actually been handed
     // (the first filled_ of them, from cursor_ outward). One double a row:

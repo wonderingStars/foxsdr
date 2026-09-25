@@ -290,6 +290,24 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
         out.tunerDisplayStyle != "plain") {
         out.tunerDisplayStyle = "nixie";
     }
+    // THE INTERFACE THEME, on the same rule: one of the six foxsdr-ui/1 preset
+    // names, anything else today's bench. The names are MIRRORED from
+    // gui/theme.cpp's preset table (core must not depend on gui);
+    // tests/test_config.cpp holds the two lists together.
+    getString(j, "uiTheme", out.uiTheme);
+    if (out.uiTheme != "today" && out.uiTheme != "classic-xl" && out.uiTheme != "night" &&
+        out.uiTheme != "glass" && out.uiTheme != "daylight" && out.uiTheme != "field") {
+        out.uiTheme = "today";
+    }
+    // The counter's own settings. The scale is the two the painter draws; the
+    // readings size is foxsdr-ui/1's sizes.readings range. Clamped here so a
+    // hand-edited value never reaches the geometry.
+    getInt(j, "counterScale", out.counterScale);
+    out.counterScale = std::clamp(out.counterScale, 1, 2);
+    getBool(j, "counterSwitches", out.counterSwitches);
+    getFloat(j, "readingsScale", out.readingsScale);
+    if (!(out.readingsScale >= 1.0f)) { out.readingsScale = 1.0f; }
+    if (out.readingsScale > 3.0f) { out.readingsScale = 3.0f; }
     // Both default true, so an older config that has never heard of them
     // arrives with trails drawn and coloured - see AppConfig for why the two
     // are separate switches. Neither has a range to clamp: a bool read by
@@ -739,6 +757,10 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
     j["bandPlanSize"] = cfg.bandPlanSize;
     j["bandPlanPalette"] = cfg.bandPlanPalette;
     j["tunerDisplayStyle"] = cfg.tunerDisplayStyle;
+    j["uiTheme"] = cfg.uiTheme;
+    j["counterScale"] = cfg.counterScale;
+    j["counterSwitches"] = cfg.counterSwitches;
+    j["readingsScale"] = cfg.readingsScale;
     j["mapTrails"] = cfg.mapTrails;
     j["mapTrailAltitudeColours"] = cfg.mapTrailAltitudeColours;
     j["mapTrailStyle"] = cfg.mapTrailStyle;

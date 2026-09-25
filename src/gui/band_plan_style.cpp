@@ -3,6 +3,7 @@
 
 #include "core/band_plan.hpp"
 #include "gui/fonts.hpp"
+#include "gui/theme.hpp"
 
 namespace cascade::gui {
 
@@ -73,23 +74,26 @@ std::uint32_t vividColor(const std::string& service) {
     // every class, so no single service reads louder than its neighbours.
     constexpr std::uint32_t kAlpha = 0x80u;
     const auto rgba = [](std::uint32_t rgb) { return (rgb << 8) | kAlpha; };
-    if (service == "broadcast") { return rgba(0xFF8C00u); }  // saturated orange
-    if (service == "amateur") { return rgba(0x00B7FFu); }    // saturated azure
-    if (service == "aviation") { return rgba(0x00E676u); }   // saturated green
-    if (service == "marine") { return rgba(0x2979FFu); }     // saturated blue
-    if (service == "mobile") { return rgba(0xFF3D00u); }     // saturated red-orange
-    if (service == "satellite") { return rgba(0xE91E8Cu); }  // saturated magenta
-    if (service == "iss") { return rgba(0xFFEA00u); }        // saturated yellow
-    return rgba(0xBDBDBDu);  // unclassified: light grey, still plainly visible
+    if (service == "broadcast") { return rgba(0xFF8C00u); }  // saturated orange  // theme-exempt: band-plan service colour
+    if (service == "amateur") { return rgba(0x00B7FFu); }    // saturated azure  // theme-exempt: band-plan service colour
+    if (service == "aviation") { return rgba(0x00E676u); }   // saturated green  // theme-exempt: band-plan service colour
+    if (service == "marine") { return rgba(0x2979FFu); }     // saturated blue  // theme-exempt: band-plan service colour
+    if (service == "mobile") { return rgba(0xFF3D00u); }     // saturated red-orange  // theme-exempt: band-plan service colour
+    if (service == "satellite") { return rgba(0xE91E8Cu); }  // saturated magenta  // theme-exempt: band-plan service colour
+    if (service == "iss") { return rgba(0xFFEA00u); }        // saturated yellow  // theme-exempt: band-plan service colour
+    return rgba(0xBDBDBDu);  // unclassified: light grey, still plainly visible  // theme-exempt: band-plan service colour
 }
 
 std::uint32_t monoColor(const std::string& service) {
-    // One accent hue - the instrument's own amber, matching theme::kAmber's
-    // RGB (0xF0A840) - graded by alpha per class instead of by hue, so a
-    // reader who finds the rainbow noisy still gets classes that are told
-    // apart, by shade.
-    constexpr std::uint32_t kAccentRgb = 0xF0A840u;
-    const auto graded = [](std::uint32_t a) { return (kAccentRgb << 8) | a; };
+    // One accent hue - the instrument's own accent, which on today's bench is
+    // the amber a reading uses - graded by alpha per class instead of by hue,
+    // so a reader who finds the rainbow noisy still gets classes that are
+    // told apart, by shade. It is the THEME'S accent, so it follows the theme.
+    const ImU32 accent = theme::tone(240, 168, 64, 255, theme::ink::Accent);
+    const std::uint32_t kAccentRgb = (((accent >> IM_COL32_R_SHIFT) & 0xFFu) << 16) |
+                                     (((accent >> IM_COL32_G_SHIFT) & 0xFFu) << 8) |
+                                     ((accent >> IM_COL32_B_SHIFT) & 0xFFu);
+    const auto graded = [kAccentRgb](std::uint32_t a) { return (kAccentRgb << 8) | a; };
     if (service == "broadcast") { return graded(0x90u); }
     if (service == "amateur") { return graded(0x80u); }
     if (service == "aviation") { return graded(0x70u); }

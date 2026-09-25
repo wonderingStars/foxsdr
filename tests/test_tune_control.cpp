@@ -544,6 +544,120 @@ int main() {
         CHECK(meter1XOnBar(kFirstLaunchBarW) >= kDeckCoreW + kMeterCoreClearance);
     }
 
+    // --- THE COUNTER'S SIZE AND ITS SWITCHES (themes, 2026-09-25) -----------------
+    // Bench Classic XL doubles the figures and puts the tuner switches away;
+    // the user can set either on any theme. Four layouts, and each must (a)
+    // leave today's plate exactly as it was, (b) draw its figures genuinely
+    // larger rather than the same tube stretched, and (c) keep every deck part
+    // - lamps, counter, volume dial and BOTH meters - on the bar a fresh
+    // 1280 x 720 window opens with, without one standing on another.
+    {
+        using cascade::gui::CounterLayout;
+        std::printf("  the counter's four layouts: today unchanged, 2x genuinely larger, "
+                    "nothing hidden at 1280 x 720\n");
+        const CounterLayout today{1, true};
+        const CounterLayout bare{1, false};
+        const CounterLayout big{2, false};
+        const CounterLayout bigSwitched{2, true};
+
+        // (a) TODAY'S PLATE, number for number, and the default layout IS today.
+        CHECK_NEAR(cascade::gui::counterPlateW(today), kFreqPlateW, 1.0e-4f);
+        CHECK_NEAR(cascade::gui::counterPlateH(today), kFreqPlateH, 1.0e-4f);
+        CHECK_NEAR(cascade::gui::counterPlateW(CounterLayout{}), kFreqPlateW, 1.0e-4f);
+        for (int i = 0; i < kFreqDigitCells; ++i) {
+            const FreqRect a = tubeRectForCell(396.0f, 20.0f, i, 0.8f);
+            const FreqRect b = tubeRectForCell(396.0f, 20.0f, i, 0.8f, today);
+            CHECK(a.x0 == b.x0 && a.y0 == b.y0 && a.x1 == b.x1 && a.y1 == b.y1);
+            for (const bool up : {true, false}) {
+                const FreqRect c = switchRectForCell(396.0f, 20.0f, i, up, 0.8f);
+                const FreqRect d = switchRectForCell(396.0f, 20.0f, i, up, 0.8f, today);
+                CHECK(c.x0 == d.x0 && c.y0 == d.y0 && c.x1 == d.x1 && c.y1 == d.y1);
+            }
+        }
+        CHECK_NEAR(cascade::gui::deckCoreW(today), kDeckCoreW, 1.0e-4f);
+        CHECK_NEAR(cascade::gui::deckBarH(today), 160.0f, 1.0e-4f);
+
+        // WITHOUT THE SWITCHES the bezel loses exactly the switch area and the
+        // gap above it, and nothing else moves.
+        CHECK_NEAR(cascade::gui::counterPlateH(bare),
+                   kFreqPlateH - kFreqSwitchH - kFreqTubeSwitchGap, 1.0e-4f);
+        CHECK_NEAR(cascade::gui::counterPlateW(bare), kFreqPlateW, 1.0e-4f);
+
+        // (b) GENUINELY LARGER: the tube is twice as tall (the figure is sized
+        // from the tube's height), wider, and the ten stay in order with the
+        // plate's gap between neighbours and inside the bezel and the plate.
+        for (const CounterLayout& c : {big, bigSwitched}) {
+            const FreqRect t0 = tubeRectForCell(0.0f, 0.0f, 0, 1.0f, c);
+            CHECK_NEAR(t0.y1 - t0.y0, 2.0f * kFreqTubeH, 1.0e-4f);
+            CHECK(t0.x1 - t0.x0 > kFreqCellW);
+            for (int i = 0; i < kFreqDigitCells; ++i) {
+                const FreqRect t = tubeRectForCell(0.0f, 0.0f, i, 1.0f, c);
+                CHECK(t.x0 >= kFreqPlatePadX);
+                CHECK(t.x1 <= cascade::gui::counterPlateW(c) - kFreqPlatePadX);
+                CHECK(t.y1 <= cascade::gui::counterPlateH(c));
+                if (i > 0) {
+                    const FreqRect p = tubeRectForCell(0.0f, 0.0f, i - 1, 1.0f, c);
+                    CHECK(t.x0 - p.x1 >= 6.0f - 1.0e-4f);
+                }
+                if (c.switches) {
+                    // The switch halves stand under their own tube, inside the plate.
+                    const FreqRect u = switchRectForCell(0.0f, 0.0f, i, true, 1.0f, c);
+                    const FreqRect d = switchRectForCell(0.0f, 0.0f, i, false, 1.0f, c);
+                    CHECK(u.y0 >= t.y1 + kFreqTubeSwitchGap - 1.0e-4f);
+                    CHECK_NEAR(u.y1, d.y0, 1.0e-4f);
+                    CHECK(d.y1 <= cascade::gui::counterPlateH(c));
+                    CHECK(u.x0 >= t.x0 - 1.0e-4f && u.x1 <= t.x1 + 1.0e-4f);
+                }
+            }
+        }
+
+        // (c) THE DECK AT FIRST LAUNCH, and wider. For every layout: the plate
+        // stands inside the bar, clear of the master divider and of the volume
+        // dial; the dial stays inside the cluster; the meters are ON the bar
+        // and clear of the cluster; and the figures are no smaller than today's.
+        for (const float barW : {kFirstLaunchBarW, 1552.0f, 1870.0f}) {
+            for (const CounterLayout& c : {today, bare, big, bigSwitched}) {
+                const float s = cascade::gui::deckScale(barW, c, 0.62f);
+                CHECK(s > 0.0f && s <= 1.0f);
+                const float plateL = (cascade::gui::kDeckMasterDividerX + 12.0f) * s;
+                const float plateR = plateL + cascade::gui::counterPlateW(c) * s;
+                const float plateB = (cascade::gui::kDeckPlateTopY + cascade::gui::counterPlateH(c)) * s;
+                CHECK(plateB <= cascade::gui::deckBarH(c) * s + 1.0e-3f);
+                // The bar is never drawn taller than today's 160 units: the
+                // body below keeps its height whatever the counter wears.
+                CHECK(cascade::gui::deckBarH(c) * s <= 160.0f + 1.0e-3f);
+                const float dialL = (cascade::gui::deckVolumeCx(c) - 26.0f) * s;
+                const float dialR = (cascade::gui::deckVolumeCx(c) + 26.0f) * s;
+                CHECK(plateR < dialL);
+                CHECK(dialR <= cascade::gui::deckCoreW(c) * s);
+                const bool meters = cascade::gui::deckMetersFit(barW, c, s);
+                if (!meters) {
+                    std::printf("  meters dropped at bar %.0f for %dx%s (scale %.3f)\n", barW,
+                                c.scale, c.switches ? " with switches" : "", s);
+                }
+                CHECK(meters);
+                CHECK(meter1XOnBar(barW) >= cascade::gui::deckCoreW(c) * s + kMeterCoreClearance - 1.0e-3f);
+                const FreqRect t = tubeRectForCell(0.0f, 0.0f, 0, s, c);
+                CHECK(t.y1 - t.y0 >= kFreqTubeH - 1.0e-4f);
+                if (c.scale == 2) {
+                    // Larger than today's at the SAME window, and at full size
+                    // once the window has room for it.
+                    CHECK(t.y1 - t.y0 >= 1.5f * kFreqTubeH);
+                    // (Classic XL's own layout; with its switches the plate
+                    // is drawn to the bar's height instead - see deckScale.)
+                    if (barW >= 1552.0f && !c.switches) { CHECK_NEAR(s, 1.0f, 1.0e-4f); }
+                } else {
+                    CHECK_NEAR(s, 1.0f, 1.0e-4f);
+                }
+            }
+        }
+        // Today's bar keeps today's rule exactly, meters and all.
+        CHECK(cascade::gui::deckMetersFit(kFirstLaunchBarW, today, 1.0f) ==
+              metersFitOnBar(kFirstLaunchBarW, kDeckCoreW));
+        CHECK(cascade::gui::deckMetersFit(1201.0f, today, 1.0f) ==
+              metersFitOnBar(1201.0f, kDeckCoreW));
+    }
+
     // --- the mute banner: the middle when there is room, under the counter otherwise
     // Same terms as the meters rule, so the banner cannot be told the middle
     // is free while the meters are standing in it.
@@ -566,9 +680,152 @@ int main() {
         CHECK(muteBannerTakesTheMiddle(1438.0f, kDeckCoreW));
         CHECK_NEAR(muteBannerMiddleW(1438.0f, kDeckCoreW), 220.0f, 1.0e-4f);
         CHECK(metersFitOnBar(1438.0f, kDeckCoreW));
-        // The narrowest window: no meters, no room - under the counter.
+        // The narrowest window: no meters, no room in the middle.
         CHECK(!muteBannerTakesTheMiddle(static_cast<float>(kDeckMinWindowW) - 50.0f,
                                         kDeckCoreW));
+    }
+
+    // --- the mute banner, wherever the middle is taken: never on a part of the deck ------
+    // REPAIR ROUNDS (2026-09-25): the fallback was a fixed point on the counter's
+    // own switch row and footer; then a place the banner was CLIPPED to, which
+    // cut its "Stop plugin" key away. Every bar width from below the narrowest
+    // window to a 2400-px one, all four counter layouts, three sentence lengths
+    // and a short and a long key label: the key lies WHOLE inside its place and
+    // the bar, is lettered at 13 px or more, and neither it nor the words touch
+    // the transport, the master cluster, the counter plate, the volume dial or
+    // the meters. (tests/test_mute_banner.cpp does the same with every
+    // catalogue's real widths in every theme's typeface.)
+    {
+        std::printf("  the mute banner's key is whole, readable and on no part of the deck\n");
+        using cascade::gui::CounterLayout;
+        using cascade::gui::layoutMuteBanner;
+        using cascade::gui::MuteBannerLayout;
+        struct Box {
+            float x0, y0, x1, y1;
+        };
+        const auto hit = [](const Box& a, const Box& b) {
+            return a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1;
+        };
+        const auto within = [](const Box& a, const Box& o) {
+            return a.x0 >= o.x0 - 0.01f && a.y0 >= o.y0 - 0.01f && a.x1 <= o.x1 + 0.01f &&
+                   a.y1 <= o.y1 + 0.01f;
+        };
+        const float lineH = 17.0f;
+        const float padX = 8.0f;
+        const float gap = 8.0f;
+        const float meterH = 66.0f + lineH * 2.0f + 8.0f;
+        // The banner at the sizes the application measures it at (17 px down to
+        // 13), its widths here in proportion - the real, non-proportional ones
+        // are test_mute_banner's.
+        const auto sized = [&](float wordsW, float keyLabelW,
+                               cascade::gui::MuteBannerSize* out) {
+            float px[cascade::gui::kMuteBannerMaxSizes];
+            const int n = cascade::gui::muteBannerSizes(lineH, px, cascade::gui::kMuteBannerMaxSizes);
+            for (int i = 0; i < n; ++i) {
+                out[i] = {px[i], wordsW * px[i] / lineH, keyLabelW * px[i] / lineH};
+            }
+            return n;
+        };
+        cascade::gui::MuteBannerSize sz[cascade::gui::kMuteBannerMaxSizes];
+        int placed = 0;
+        int bySlot[3] = {0, 0, 0};
+        for (const CounterLayout layout : {CounterLayout{1, true}, CounterLayout{1, false},
+                                           CounterLayout{2, false}, CounterLayout{2, true}}) {
+            for (float barW = static_cast<float>(kDeckMinWindowW) - 50.0f; barW <= 2400.0f;
+                 barW += 7.0f) {
+                const float s = cascade::gui::deckScale(barW, layout, 0.62f);
+                const float coreW = cascade::gui::deckCoreW(layout);
+                const bool meters = cascade::gui::deckMetersFit(barW, layout, s);
+                const float plateW = cascade::gui::counterPlateW(layout);
+                const float plateH = cascade::gui::counterPlateH(layout);
+                const float volCx = cascade::gui::deckVolumeCx(layout);
+                const Box bar{0.0f, 0.0f, barW, cascade::gui::deckBarH(layout) * s};
+                std::vector<Box> parts = {
+                    {28.0f * s, 39.0f * s, 120.0f * s, 131.0f * s},     // the transport
+                    {150.0f * s, 50.0f * s, 378.0f * s, 140.0f * s},    // MASTER, lamps, words
+                    {396.0f * s, 20.0f * s, (396.0f + plateW) * s,      // the counter plate
+                     (20.0f + plateH) * s},
+                    {(volCx - 30.0f) * s, 38.0f * s, (volCx + 30.0f) * s,  // the volume dial
+                     130.0f * s},
+                };
+                if (meters) {
+                    parts.push_back({meter1XOnBar(barW), 28.0f, meter2XOnBar(barW) + kMeterW,
+                                     28.0f + meterH});
+                }
+                for (const float wordsW : {120.0f, 277.0f, 560.0f}) {
+                    for (const float keyLabelW : {70.0f, 135.0f}) {
+                        const int nz = sized(wordsW, keyLabelW, sz);
+                        const MuteBannerLayout l = layoutMuteBanner(
+                            barW, s, coreW, layout.scale >= 2, meters, sz, nz, padX, gap);
+                        ++placed;
+                        ++bySlot[l.slot];
+                        const Box place{l.x0, l.y0, l.x1, l.y1};
+                        const Box key{l.keyX, l.keyY, l.keyX + l.keyW, l.keyY + l.keyH};
+                        const Box words{l.wordsX, l.wordsY, l.wordsX + l.wordsDrawnW,
+                                        l.wordsY + l.wordsPx};
+                        const bool keyWhole = within(key, place) && within(key, bar);
+                        const bool readable =
+                            l.px >= 13.0f - 1.0e-3f && l.keyH >= 13.0f - 1.0e-3f &&
+                            (l.wordsDrawnW <= 0.0f ||
+                             (l.wordsPx >= 13.0f - 1.0e-3f && l.wordsPx <= l.px + 1.0e-3f));
+                        const bool wordsIn = l.wordsDrawnW <= 0.0f || within(words, place);
+                        bool clear = !(l.wordsDrawnW > 0.0f && hit(words, key));
+                        for (const Box& part : parts) {
+                            clear = clear && !hit(key, part) &&
+                                    !(l.wordsDrawnW > 0.0f && hit(words, part));
+                        }
+                        if (!keyWhole || !readable || !wordsIn || !clear) {
+                            std::printf("    layout %dx%s bar %.0f words %.0f key %.0f: slot %d "
+                                        "key (%.1f,%.1f)-(%.1f,%.1f) %.1f px%s%s%s%s\n",
+                                        layout.scale, layout.switches ? "+sw" : "", barW, wordsW,
+                                        keyLabelW, l.slot, key.x0, key.y0, key.x1, key.y1,
+                                        l.px, keyWhole ? "" : " CLIPPED",
+                                        readable ? "" : " TOO SMALL",
+                                        wordsIn ? "" : " WORDS OUT", clear ? "" : " ON A PART");
+                        }
+                        CHECK(keyWhole);
+                        CHECK(readable);
+                        CHECK(wordsIn);
+                        CHECK(clear);
+                        // A banner the middle holds is drawn there whole, at full size.
+                        if (l.slot == 0) {
+                            CHECK_NEAR(l.px, lineH, 1.0e-6f);
+                            CHECK(l.wordsWhole);
+                        }
+                    }
+                }
+            }
+        }
+        std::printf("    %d placements: %d middle, %d over the meters, %d at the master head\n",
+                    placed, bySlot[0], bySlot[1], bySlot[2]);
+        // All three places are exercised, or the sweep proves less than it says.
+        CHECK(bySlot[0] > 0 && bySlot[1] > 0 && bySlot[2] > 0);
+
+        // TODAY AT 1600 x 1000 (a 1552 bar): the middle, exactly where it always
+        // went - the words one item spacing past (cluster end + 12, 62).
+        {
+            const CounterLayout today{1, true};
+            const int nz = sized(200.0f, 70.0f, sz);
+            const MuteBannerLayout l =
+                layoutMuteBanner(1552.0f, 1.0f, cascade::gui::deckCoreW(today), false,
+                                 metersFitOnBar(1552.0f, kDeckCoreW), sz, nz, padX, gap);
+            CHECK(l.slot == 0);
+            CHECK_NEAR(l.wordsX, kDeckCoreW + cascade::gui::kMuteBannerEdgeClearance + gap, 1.0e-4f);
+            CHECK_NEAR(l.wordsY, 62.0f, 1.0e-4f);
+            CHECK_NEAR(l.keyX, l.wordsX + 200.0f + gap, 1.0e-4f);
+        }
+        // TODAY AT FIRST LAUNCH (1232), one decoder named in English (about 200
+        // px of words, a 70-px key): not the middle, and the key at FULL size.
+        {
+            const CounterLayout today{1, true};
+            const int nz = sized(200.0f, 70.0f, sz);
+            const MuteBannerLayout l = layoutMuteBanner(
+                kFirstLaunchBarW, 1.0f, cascade::gui::deckCoreW(today), false,
+                metersFitOnBar(kFirstLaunchBarW, kDeckCoreW), sz, nz, padX, gap);
+            CHECK(l.slot != 0);
+            CHECK_NEAR(l.px, lineH, 1.0e-6f);
+            CHECK(l.wordsWhole);
+        }
     }
 
     // --- deviceScanAllowed: no device scan while a radio is open ---------------

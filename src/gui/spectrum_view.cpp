@@ -36,31 +36,32 @@ namespace {
 // graticule under a green trace is much less separable than a neutral one,
 // and the graticule's whole job is to be legible without competing.
 //
-// kBackground is the one colour here with no name in theme.hpp: the palette's
-// darkest ground (kVoid) is a warm near-black for brass, and this is the cool
-// near-black GREEN the three display tubes share. It stays a literal, and the
-// waterfall and the scope carry the same one.
-constexpr ImU32 kBackground = IM_COL32(5, 10, 6, 255);
-constexpr ImU32 kTrace = theme::kPhosphor;
-constexpr ImU32 kGridLine = IM_COL32(255, 255, 255, 26);
+// kBackground is the cool near-black GREEN the three display tubes share on
+// today's bench - the display's glass, which is foxsdr-ui/1's "well". The
+// waterfall and the scope carry the same one. (Theme tones: see theme.hpp.)
+constexpr theme::Tone kBackground{5, 10, 6, 255, theme::ink::Well};
+constexpr theme::Tone kTrace{0x8F, 0xD9, 0xA0, 255, theme::ink::Trace};
+constexpr theme::Tone kGridLine{255, 255, 255, 26, theme::ink::Grid};
 
 // VFO overlay: fill translucent enough that the trace stays readable through
 // it, edges brighter so the grab targets are visible, and a warm center line
 // that cannot be confused with the cool blue trace. Dragging brightens the
-// fill so the user gets immediate "you have it" feedback.
-constexpr ImU32 kVfoFill = IM_COL32(255, 255, 255, 28);
-constexpr ImU32 kVfoFillDragging = IM_COL32(255, 255, 255, 52);
-constexpr ImU32 kVfoEdge = IM_COL32(255, 255, 255, 140);
+// fill so the user gets immediate "you have it" feedback. The passband is
+// foxsdr-ui/1's "sel" - the selection tint - and its centre line the accent.
+constexpr theme::Tone kVfoFill{255, 255, 255, 28, theme::ink::Sel};
+constexpr theme::Tone kVfoFillDragging{255, 255, 255, 52, theme::ink::Sel};
+constexpr theme::Tone kVfoEdge{255, 255, 255, 140, theme::ink::Sel};
 // The centre line takes the bench's amber, which is this product's colour for
 // a figure - and is still the one warm mark on a cool face, which is why it
 // could never be confused with the trace.
-constexpr ImU32 kVfoCenter = IM_COL32(0xF0, 0xA8, 0x40, 200);
+constexpr theme::Tone kVfoCenter{0xF0, 0xA8, 0x40, 200, theme::ink::Accent};
 
 // The well is a recess cut into the panel, so its corners are machined, not
 // square, and its bevel is the sunk one. Both numbers live here rather than at
 // each call site for the reason theme.hpp gives: a frame drawn at three
-// different radii stops reading as one object.
-constexpr float kWellRounding = theme::kPanelRounding;
+// different radii stops reading as one object. (A reference: the radius
+// follows the theme in force.)
+const float& kWellRounding = theme::kPanelRounding;
 constexpr float kChromePad = 8.0f;
 
 // Below these the annotations are not small, they are illegible and they cover
@@ -339,7 +340,8 @@ void drawChrome(ImDrawList* dl, const ImVec2& p0, const ImVec2& p1, const float*
     ImFont* readFont = fonts::reading();
     const float tinyPx = fonts::kTinySize;
     const float legendPx = fonts::kLegendSize;
-    const float readPx = fonts::kReadingSize;
+    // "Enlarge every reading" (theme.hpp, readingsScale): the peak figure.
+    const float readPx = fonts::kReadingSize * theme::readingsScale();
     const float tinyH = lineHeight(uiFont, tinyPx);
     const float legendH = lineHeight(legendFont, legendPx);
     const float readH = lineHeight(readFont, readPx);
@@ -535,9 +537,12 @@ void drawChrome(ImDrawList* dl, const ImVec2& p0, const ImVec2& p1, const float*
         char spanText[32];
         formatSpan(chrome->spanHz, spanText, sizeof(spanText));
         const float capW = trackedWidth(legendFont, tinyPx, kSpanCaption, 0.7f);
-        const float valW = textWidth(uiFont, tinyPx, spanText);
+        // The span's figure follows "Enlarge every reading"; its caption does not.
+        const float spanPx = tinyPx * theme::readingsScale();
+        const float spanH = lineHeight(uiFont, spanPx);
+        const float valW = textWidth(uiFont, spanPx, spanText);
         const float boxW = std::max(capW, valW) + 12.0f;
-        const float boxH = tinyH * 2.0f + 9.0f;
+        const float boxH = tinyH + spanH + 9.0f;
         const ImVec2 br(p1.x - kChromePad, axisTop - 4.0f);
         const ImVec2 tl(br.x - boxW, br.y - boxH);
         if (tl.x > p0.x + w * 0.45f && tl.y > headerBottom) {
@@ -546,7 +551,7 @@ void drawChrome(ImDrawList* dl, const ImVec2& p0, const ImVec2& p1, const float*
             addTrackedText(dl, legendFont, tinyPx, ImVec2(tl.x + 6.0f, tl.y + 3.0f), kDim,
                            kSpanCaption, 0.7f);
             // A reading, so amber; carrying its unit, so the UI face.
-            dl->AddText(uiFont, tinyPx, ImVec2(tl.x + 6.0f, tl.y + 3.0f + tinyH),
+            dl->AddText(uiFont, spanPx, ImVec2(tl.x + 6.0f, tl.y + 3.0f + tinyH),
                         theme::kAmber, spanText);
         }
     }

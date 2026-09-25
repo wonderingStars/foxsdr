@@ -187,6 +187,9 @@ std::string gWantLanguage = "en";
 bool gWantNames = false;
 bool gNamesDone = false;  // names faces added for the chain in force
 bool gDirty = false;
+// The pair the interface THEME asks for first (setPreferredPair); empty is the
+// application's own order - Georgia, then Saira, then Noto.
+std::string gPreferPair;
 
 // The em every face in a role is drawn at: its REFERENCE face's, the one
 // English is lettered in here (fonts.hpp says why).
@@ -408,6 +411,13 @@ Chain planChain(const std::string& languageCode) {
                      embedded("Saira Condensed SemiBold", fontdata::kFontLegendTtf,
                               fontdata::kFontLegendTtfLen)});
     pairs.push_back({"Noto Sans Condensed", notoUi, notoLegend});
+    // THE THEME'S PAIR GOES FIRST when it names one (gui/theme.hpp,
+    // preferredFontPair) - and still only wins if it has every letter the
+    // catalogue needs, so a theme can never cost a language its glyphs.
+    if (!gPreferPair.empty()) {
+        std::stable_partition(pairs.begin(), pairs.end(),
+                              [](const Pair& q) { return gPreferPair == q.name; });
+    }
 
     // THE FIRST PAIR WITH EVERY LETTER. When none has them all (a stray
     // character nothing embedded draws), the one missing fewest, earliest on
@@ -486,6 +496,13 @@ const char* unavailableReason(const std::string& languageCode) {
 void applyLanguage(const std::string& languageCode) {
     if (languageCode != gWantLanguage) {
         gWantLanguage = languageCode;
+        gDirty = true;
+    }
+}
+
+void setPreferredPair(const std::string& pair) {
+    if (pair != gPreferPair) {
+        gPreferPair = pair;
         gDirty = true;
     }
 }

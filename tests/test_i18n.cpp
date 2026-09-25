@@ -1150,6 +1150,51 @@ void testCjkTemplateJoins() {
     CHECK(faults == 0);
 }
 
+// THE THEMES' WORDS SAY DIFFERENT THINGS IN EVERY LANGUAGE. "Enlarge figures"
+// (the counter menu's switch) and "Enlarged figures" (the Display row's size,
+// beside "Normal size") sit a menu apart and mean different things - and the
+// first Chinese catalogues gave both the same four characters, so the two
+// controls read as one (repair round, 2026-09-25). Every key the six themes
+// added must translate to a string no other of them uses.
+void testThemeWordsDistinct() {
+    std::printf("  the themes' own words translate to distinct strings in every catalogue\n");
+    const char* const kThemeKeys[] = {
+        "Bench Classic XL", "Counter face", "Counter figures", "Daylight Lab",
+        "Enlarge every reading", "Enlarge figures", "Enlarged figures", "Field Radio",
+        "Glass Cockpit", "Night Watch", "Normal size", "Show tuner switches",
+        "The UP and DN switches under each figure. The wheel over a figure still tunes it "
+        "without them.",
+        "Theme", "Today's bench", "Tuner switches",
+    };
+    int faults = 0;
+    int catalogues = 0;
+    for (const fs::path& path : catalogueFiles()) {
+        std::string bytes;
+        CHECK(readExact(path, bytes));
+        const nlohmann::json j = nlohmann::json::parse(bytes, nullptr, false);
+        if (j.is_discarded() || !j.contains("strings")) {
+            CHECK(false);
+            continue;
+        }
+        ++catalogues;
+        const auto& strings = j["strings"];
+        std::map<std::string, std::string> seen;  // translation -> the key that had it
+        for (const char* key : kThemeKeys) {
+            const auto it = strings.find(key);
+            if (it == strings.end() || !it->is_string()) { continue; }
+            const std::string v = it->get<std::string>();
+            const auto [at, fresh] = seen.emplace(v, key);
+            if (!fresh) {
+                std::printf("      %s: \"%s\" and \"%s\" both translate to \"%s\"\n",
+                            path.stem().string().c_str(), at->second.c_str(), key, v.c_str());
+                ++faults;
+            }
+        }
+    }
+    CHECK(catalogues >= 30);
+    CHECK(faults == 0);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -1176,5 +1221,6 @@ int main(int argc, char** argv) {
     testShippedCatalogues();
     testEmbeddedMatchesFiles();
     testCjkTemplateJoins();
+    testThemeWordsDistinct();
     return testSummary("test_i18n");
 }

@@ -265,6 +265,23 @@ struct AppConfig {
     // where the cells are painted.
     std::string tunerDisplayStyle = "nixie";
 
+    // --- the interface theme (2026-09-25) ------------------------------------
+    // WHICH OF THE SIX LOOKS the application wears: "today" (the bench as it
+    // has been), "classic-xl", "night", "glass", "daylight" or "field" - the
+    // foxsdr-ui/1 preset names, and the vocabulary gui::theme::themeFromKey
+    // reads. Defaults to "today" and an unknown value loads as "today", on the
+    // tunerDisplayStyle rule: the file is user-editable and a typo must leave
+    // the application looking like itself.
+    std::string uiTheme = "today";
+    // THE COUNTER'S OWN SETTINGS, which a theme sets when it is picked and the
+    // user may change afterwards (the counter's right-click menu, or Display):
+    // the figures at 1x or 2x (clamped to 1..2 on load), whether the UP/DN
+    // tuner switches stand under them, and how large every OTHER live figure
+    // is drawn (foxsdr-ui/1 sizes.readings, clamped to 1.0..3.0).
+    int counterScale = 1;
+    bool counterSwitches = true;
+    float readingsScale = 1.0f;
+
     // --- Language and country (core/i18n.hpp, core/countries.hpp) -----------
     // The interface language as the user chose it: "auto" follows the
     // operating system's language when the build carries a catalogue for it,

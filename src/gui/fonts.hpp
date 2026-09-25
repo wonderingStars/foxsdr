@@ -230,6 +230,12 @@ const char* unavailableReason(const std::string& languageCode);
 // in the atlas.
 void applyLanguage(const std::string& languageCode);
 
+// Record the typeface pair the interface THEME asks for ("" = the
+// application's own order, "Saira Condensed", "Noto Sans Condensed" or
+// "Georgia"); applyPending() rebuilds the atlas with it first in line. A pair
+// that lacks a letter the catalogue in force needs is still passed over.
+void setPreferredPair(const std::string& pair);
+
 // Record that the language list is on screen: applyPending() adds, behind the
 // chain in force, the system faces the drawable languages' own names need
 // ("日本語", "한국어") - once, and only for names the chain cannot draw.
