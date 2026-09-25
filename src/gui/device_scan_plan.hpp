@@ -165,7 +165,9 @@ inline SoapyScanPlan planSoapyScan(const std::vector<OpenRadio>& open, int soapy
 inline bool scanMayProbe(const std::vector<std::string>& scanSkip, const std::string& kind,
                          const std::string& args) {
     const std::string k = detail::lowerAscii(kind);
-    if (k == "siggen" || k == "file" || k.empty()) { return false; }
+    // A sound card is reached through the audio stack, never the USB bus a
+    // SoapySDR probe walks.
+    if (k == "siggen" || k == "file" || k == "soundcard" || k.empty()) { return false; }
     if (scanSkip.empty()) { return true; }
     bool known = true;
     const std::vector<std::string> mods = soapyModulesForFamily(kind, args, known);

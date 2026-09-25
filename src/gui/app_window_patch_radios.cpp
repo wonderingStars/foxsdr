@@ -126,6 +126,12 @@ std::vector<AppWindow::PatchDeviceChoice> AppWindow::patchDeviceChoices() const 
         // parentheses, nothing else to translate.
         out.push_back({pc::makeDeviceKey("soapy", d.args), d.label + " (SoapySDR)"});
     }
+    // Every sound card input the Source section has listed (the list is asked
+    // for when the patch page is open - see pollSoundCard).
+    for (const cascade::source::SoundCardDevice& d : soundCardDevices_) {
+        out.push_back({pc::makeDeviceKey("soundcard", cascade::source::soundCardDeviceArgs(d.name, d.hostApi)),
+                       std::string(tr("Sound card")) + ": " + cascade::source::soundCardDeviceLabel(d)});
+    }
     // The receiver's own radio, even when no list currently shows it (a
     // SoapySDR device is only listed after a scan).
     if (patchMainKeep_.valid) {
@@ -391,7 +397,10 @@ void AppWindow::patchReconcile() {
             continue;
         }
         const std::string driver = pc::deviceDriver(n->device);
-        const std::string args = pc::deviceArgs(n->device);
+        // A sound card opens as the Source section has it set up when it is
+        // the same card (format, channel, centre), plain real mono otherwise.
+        const std::string args = driver == "soundcard" ? soundCardPatchArgs(pc::deviceArgs(n->device))
+                                                       : pc::deviceArgs(n->device);
         // NOT UNDER A SCAN THAT MAY PROBE IT (2026-09-23). The Source panel
         // greys itself out while a scan runs, so the receiver never opens a
         // radio under one; the patch opens its own radios and did not wait -

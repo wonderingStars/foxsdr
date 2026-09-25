@@ -766,6 +766,21 @@ const KnownWait kKnownWaits[] = {
      "not a wait at all - the Pluto reader's tally window before it writes its stream-health "
      "line, matching SoapySource's; nothing sleeps or blocks on it"},
 
+    // THE SOUND CARD SOURCE (0.99.36). Nothing it does on stop() waits: stop()
+    // sets a flag the read loop tests every 2 ms, and the stream itself is
+    // closed by the source's destructor - which, like every other source's,
+    // runs from ~AppWindow after watchdog_.stop() (see the RESIDUAL note above).
+    {"src/source/soundcard_source.hpp", "kReadWaitMs", 0,
+     "SoundCardSource::read()'s wait for samples, spent on the pipeline's source thread and "
+     "cut short by stop() within one 2 ms poll - the teardown waits for that thread through "
+     "kSourceJoinWait, never on this"},
+    {"src/source/soundcard_source.hpp", "kStallMs", 0,
+     "not a wait - how long read() lets an open card deliver nothing before it latches the "
+     "card as dead; measured on the source thread, never waited on by anyone"},
+    {"src/source/soundcard_source.hpp", "kAlivePollMs", 0,
+     "not a wait - how often read(), while it waits for samples, asks the backend whether the "
+     "stream is still running; the ask is a try-lock that never blocks"},
+
     // THE TRANSMITTER (0.95.0), AND IT IS THE FIRST COLUMN THAT ADDS.
     //
     // Everything above this block is a SOURCE, and exactly one source is

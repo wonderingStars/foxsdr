@@ -1207,7 +1207,12 @@ inline RememberedSource rememberedSourceAfterFailedOpen(const std::string& saved
     // carries iqFilePath so the box comes back filled in, and only a config
     // whose KIND is "file" was actually listening to it.
     const bool file = (savedKind == "file") && !savedFilePath.empty();
-    if (!soapy && !native && !file) { return keep; }
+    // A SOUND CARD names its device in AppConfig::soundCard, which is saved
+    // from the Source section's own settings whatever the live source is - so
+    // the kind is all that has to be carried for the next launch to try the
+    // same card again.
+    const bool soundCard = (savedKind == "soundcard");
+    if (!soapy && !native && !file && !soundCard) { return keep; }
     keep.kind = savedKind;
     keep.soapyArgs = savedSoapyArgs;
     keep.nativeArgs = savedNativeArgs;

@@ -584,6 +584,58 @@ in `installer/THIRD-PARTY-LICENSES.txt`, and nothing of libiio is linked or
 shipped.
 
 
+## A sound card as the receiver
+
+**Below about 100 kHz a sound card is the receiver**, which is how SAQrx listens
+to SAQ Grimeton on 17.2 kHz, and a stereo card is also the classic input of an
+I/Q receiver such as a SoftRock. The Source list has a **Sound card** row for
+both. Choosing it shows the controls and opens nothing; **Open** opens the card
+on a worker thread, so a slow audio device never holds the window.
+
+- **Real (mono)** takes the left or right channel as real audio from 0 to half
+  the card's rate, removes the mirror image and shows the band on its true air
+  frequency: a card at 192 kHz shows 0 - 96 kHz, and a 17.2 kHz transmitter
+  sits at 17.2 kHz. A card has no tuner, so typing a frequency moves the
+  receiver inside that span instead of retuning anything, and a frequency
+  outside it is refused with a sentence saying what the card receives. In
+  `tests/test_soundcard_source.cpp` a 17.2 kHz tone through a simulated card at
+  192 kHz lands at 17.2 kHz on the spectrum and USB on 16.4 kHz turns it into
+  an 800 Hz audio tone, measured at the end of the real pipeline; USB on
+  17.6 kHz, where the tone is on the lower sideband, does not hear it.
+- **I/Q (stereo)** takes left as I and right as Q, with a **Swap I/Q** switch for
+  hardware wired the other way round (the symptom is a mirrored spectrum), and
+  a **Centre (MHz)** box for what the external receiver is tuned to.
+
+The card is remembered by its **name and host API**, never by its position in
+the list, and a saved card that is not there at startup is named on screen as
+not connected while the settings are kept - no other input is ever opened in
+its place. Cards are listed when FoxSDR starts (PortAudio's device list is
+fixed for the session), so a card plugged in later needs a restart. A card
+pulled out while it runs stops the receiver with the reason on screen: at once
+when the audio system reports it, and after two seconds of silence when it
+does not.
+
+**On Windows, pick the card's Windows WASAPI entry.** Its list holds the rate
+the Windows mixer is set to, plus - where the card allows exclusive mode - the
+rates its hardware accepts there, marked "(exclusive)": those open the card in
+exclusive mode, so FoxSDR has it to itself while it runs, and are meant to reach
+the card's own rates without anybody changing a Windows sound setting (not yet
+seen on a 192 kHz card; the bench headset offers no exclusive-mode rate).
+The MME entry accepts every rate and lets Windows resample to it, so a rate
+there above the card's own adds no bandwidth - on the bench a headset
+microphone whose WASAPI entry offers 48 kHz alone lists every rate from 8 to
+384 kHz under MME. On Linux the inputs are PortAudio's ALSA devices.
+
+The patch page offers every listed card to its radios as well; the card opens
+as the Source section has it set up when it is the same card, and as real mono
+on the left channel otherwise. An I/Q recording of a sound card captures what
+the spectrum shows (the complex stream, at half the card's rate in real mode).
+
+Not yet verified on real hardware at 192 kHz or on a VLF antenna: the bench has
+a headset microphone at 48 kHz, which opened, streamed and drew its (very
+quiet) spectrum from 0 to 24 kHz in an isolated run.
+
+
 ## Transmitting
 
 **FoxSDR transmits, through an ADALM-Pluto, over the same IIOD protocol it
