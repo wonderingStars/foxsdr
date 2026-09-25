@@ -1,39 +1,50 @@
-// test_stop_ends_recordings.cpp - every way of stopping the receiver ends
-// the recordings it was taping, through the real application.
+// test_stop_ends_recordings.cpp - a recording belongs to one unbroken run of
+// one source: every way the receiver stops, faults or changes source ends the
+// takes it should, through the real application.
 //
-// THE BUG (0.99.35, found by review of app_window.cpp). The desktop STOP dome
-// and the Start/Stop key both ended any IQ or audio take before stopping the
-// pipeline - "a take can never outlive the sample flow it was taping" - but
-// two other stop paths only called pipeline_.stop():
-//   * applyControlRequest with running=false, which is the stop used by the
-//     WEB REMOTE, by CAT and by PLUGINS through the host API;
-//   * the radar scope's POWER button.
-// A stop from any of those left the take open: the REC state stayed on, the
-// WAV header still declared zero samples on disk, and the next start from
-// anywhere appended to the same file across the gap.
+// THE BUGS (0.99.35, found by review of app_window.cpp).
+//   * The desktop STOP dome and the Start/Stop key ended any IQ or audio take
+//     before stopping the pipeline, but applyControlRequest with
+//     running=false (the stop used by the WEB REMOTE and by PLUGINS through
+//     the host API; CAT has no command that sets the run state) and the radar
+//     scope's POWER button only called pipeline_.stop(). The take was left
+//     open: REC still on, the WAV header still declaring zero samples on
+//     disk, and the next start appended to the same file across the gap.
+//   * A DRIVER FAULT drops the run flag, so nothing ended the takes at all:
+//     the REC card kept its clock running over files nothing was reaching,
+//     and a START (or the automatic reopen of a SoapySDR radio) restarted the
+//     receiver with the recorders still hooked in, splicing the same take
+//     across the fault.
+//   * A SOURCE SWITCH AT THE SAME SAMPLE RATE (to the generator, or the patch
+//     page borrowing the receiver's radio) kept an I/Q take open and filled
+//     it with the NEW source's samples. Only a rate change ended it.
 //
 // TWO HALVES, because the paths are not equally reachable from a test:
 //
-// 1. END TO END, through the web remote (the entry point a user touches for
-//    applyControlRequest). The application is started as a child with the
-//    web server on a loopback port; the test starts the receiver and both
-//    recorders over HTTP, stops the receiver over HTTP, and then looks at
-//    what the application says AND at the files on disk: both takes must be
-//    over, and each WAV header must declare exactly the bytes the file
-//    holds. It then starts the receiver again and requires that no take
-//    reopened and no file grew. The child runs on the signal generator only
-//    (asserted before anything is recorded), with every profile directory,
-//    the recording directory and every network endpoint pointed into
-//    scratch or at a closed port.
+// 1. END TO END. The application is started as a child with the web server
+//    on a loopback port and driven over HTTP; what it reports AND the files
+//    on disk are checked. Three sessions:
+//      web stop   - on the generator: record, stop, restart; both takes must
+//                   end at the stop with honest headers and stay ended.
+//      fault      - on an I/Q file, which is the fault seam: the file is
+//                   overwritten with a stub mid-take, the source's read fails
+//                   and the pipeline latches the fault. Both takes must end
+//                   on that alone, with the reason reported, and a START
+//                   afterwards must not reopen or grow them.
+//      switch     - on an I/Q file at the generator's own 2 MS/s, switched
+//                   to the generator from the web remote: the I/Q take must
+//                   end at the switch, the audio take carries on.
+//    Every session runs with every profile directory, the recording
+//    directory and every network endpoint in scratch or at a closed port,
+//    asserts its source before recording anything (never a radio), and
+//    removes its scratch tree on every path out.
 //
-// 2. EVERY STOP GOES THROUGH ONE ROUTINE. The POWER button and the key cannot
-//    be pressed from here without driving pixel coordinates, so the source
-//    of src/gui is read instead: a call to pipeline_.stop() anywhere except
-//    AppWindow::stopReceiver() (and run()'s teardown, which ends the takes
-//    itself further up) fails with its file and line, stopReceiver() must
-//    end both takes BEFORE it stops the pipeline, and each of the four user
-//    stop paths must call it. A fifth stop path added later without the
-//    routine fails here the day it is written.
+// 2. EVERY STOP AND EVERY SOURCE SWAP GOES THROUGH ONE ROUTINE. POWER, the
+//    key and the patch page cannot be pressed from here without pixel
+//    coordinates, so the source of src/gui is read: pipeline_.stop() may
+//    appear only in stopReceiver() and run()'s teardown, pipeline_.setSource
+//    only in installSource(); stopReceiver() must end both takes before it
+//    stops the pipeline; and each of the four user stop paths must call it.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "test_check.hpp"
@@ -49,6 +60,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <memory>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -357,171 +369,409 @@ void checkFinalised(const std::vector<Take>& t, const char* what) {
     }
 }
 
-void endToEndWebStop() {
-    const fs::path dir = scratchDir();
-    std::error_code ec;
-    fs::remove_all(dir, ec);
-    const fs::path home = dir / "home";
-    for (const char* sub : {"appdata", "localappdata", "diag", "home", "xdg"}) {
-        fs::create_directories(dir / sub, ec);
+// --- An I/Q file for the file-source sessions ----------------------------------------
+
+void putU16(std::vector<unsigned char>& v, std::uint16_t x) {
+    v.push_back(static_cast<unsigned char>(x & 0xFFu));
+    v.push_back(static_cast<unsigned char>((x >> 8) & 0xFFu));
+}
+
+void putU32(std::vector<unsigned char>& v, std::uint32_t x) {
+    for (int s = 0; s < 32; s += 8) { v.push_back(static_cast<unsigned char>((x >> s) & 0xFFu)); }
+}
+
+// 16-bit PCM I/Q, the layout test_pipeline_file_fault uses.
+std::vector<unsigned char> iqWav(std::uint32_t rateHz, std::uint32_t frames) {
+    std::vector<unsigned char> v;
+    const std::uint32_t dataBytes = frames * 4u;
+    v.insert(v.end(), {'R', 'I', 'F', 'F'});
+    putU32(v, 36u + dataBytes);
+    v.insert(v.end(), {'W', 'A', 'V', 'E', 'f', 'm', 't', ' '});
+    putU32(v, 16u);
+    putU16(v, 1u);           // PCM
+    putU16(v, 2u);           // I and Q
+    putU32(v, rateHz);
+    putU32(v, rateHz * 4u);  // byte rate
+    putU16(v, 4u);           // block align
+    putU16(v, 16u);          // bits
+    v.insert(v.end(), {'d', 'a', 't', 'a'});
+    putU32(v, dataBytes);
+    for (std::uint32_t i = 0; i < frames; ++i) {
+        putU16(v, static_cast<std::uint16_t>(1000 + (i % 97)));
+        putU16(v, static_cast<std::uint16_t>(2000 + (i % 89)));
     }
-    const fs::path recDir = home / "Documents" / "SDR-recordings";
+    return v;
+}
 
-    const int port = freeLoopbackPort();
-    CHECK(port > 0);
-    if (port <= 0) { return; }
+bool writeBytes(const fs::path& path, const std::vector<unsigned char>& bytes) {
+    std::ofstream f(path, std::ios::binary | std::ios::trunc);
+    f.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+    return static_cast<bool>(f);
+}
 
-    const fs::path cfgPath = dir / "config.json";
-    {
-        std::ofstream cfg(cfgPath, std::ios::binary | std::ios::trunc);
-        cfg << "{\n"
-               "  \"webEnabled\": true,\n"
-               "  \"webBindAddress\": \"127.0.0.1\",\n"
-               "  \"webPort\": "
-            << port
-            << ",\n"
-               "  \"telemetryEnabled\": false,\n"
-               "  \"updateCheckEnabled\": false\n"
-               "}\n";
-    }
+// The generator's rate, so a file at this rate makes a switch to the
+// generator a SAME-RATE switch - the case the input-rate follow never caught.
+constexpr std::uint32_t kFileRateHz = 2000000u;
 
-    setEnv("CASCADE_CONFIG_TEST", cfgPath.string());
-    setEnv("APPDATA", (dir / "appdata").string());
-    setEnv("LOCALAPPDATA", (dir / "localappdata").string());
-    setEnv("FOXSDR_DIAG_DIR", (dir / "diag").string());
-    // The recording directory is <profile>/Documents/SDR-recordings, so the
-    // profile goes into scratch too. Nothing here opens a radio, so hiding
-    // vendor SDKs under the real profile costs nothing.
-    setEnv("USERPROFILE", home.string());
-    setEnv("HOME", home.string());
-    setEnv("XDG_CONFIG_HOME", (dir / "xdg" / "config").string());
-    setEnv("XDG_DATA_HOME", (dir / "xdg" / "data").string());
-    setEnv("XDG_CACHE_HOME", (dir / "xdg" / "cache").string());
-    setEnv("XDG_STATE_HOME", (dir / "xdg" / "state").string());
-    setEnv("FOXSDR_TELEMETRY_URL", "http://127.0.0.1:9/");
-    setEnv("FOXSDR_CRASH_URL", "http://127.0.0.1:9/");
-    setEnv("FOXSDR_UPDATE_URL", "http://127.0.0.1:9/");
-    setEnv("FOXSDR_REPORTS_URL", "http://127.0.0.1:9/");
+// --- One child application, from start to scratch removed --------------------------
 
-    const fs::path logPath = dir / "child.log";
-    Child child;
-    const bool started = child.start(logPath);
-    CHECK(started);
-    if (!started) { return; }
-
-    httplib::Client cli("127.0.0.1", port);
-    cli.set_connection_timeout(2, 0);
-    cli.set_read_timeout(5, 0);
-
-    const auto dumpLog = [&]() {
-        std::ifstream in(logPath, std::ios::binary);
-        std::stringstream ss;
-        ss << in.rdbuf();
-        std::printf("--- child output ---\n%s\n--------------------\n", ss.str().c_str());
-    };
-
-    // 1. The server is up and the radio is the signal generator.
-    nlohmann::json s;
-    bool up = false;
-    const auto upBy = std::chrono::steady_clock::now() + std::chrono::seconds(60);
-    while (std::chrono::steady_clock::now() < upBy && child.alive()) {
-        // The server answers from startup, before the first frame has
-        // published a snapshot; an empty recordDir is that default.
-        if (getStatus(cli, s) && !s.value("recordDir", std::string()).empty()) {
-            up = true;
-            break;
+class Session {
+public:
+    // `sourceCfg` is extra config JSON (with a trailing comma) naming the
+    // source; `wantKind` is the source the status must report before anything
+    // is recorded.
+    bool open(const char* name, const std::string& sourceCfg, const char* wantKind) {
+        failedAtStart_ = g_checksFailed;
+        dir_ = scratchDir() / name;
+        std::error_code ec;
+        fs::remove_all(dir_, ec);
+        for (const char* sub : {"appdata", "localappdata", "diag", "home", "xdg"}) {
+            fs::create_directories(dir_ / sub, ec);
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    }
-    CHECK(up);
-    if (!up) {
-        dumpLog();
-        child.finish();
-        return;
-    }
-    const std::string kind = s.value("sourceKind", std::string());
-    const std::string shownDir = s.value("recordDir", std::string());
-    std::printf("  child: source %s, recording into %s\n", kind.c_str(), shownDir.c_str());
-    CHECK(kind == "siggen");
-    CHECK(fs::weakly_canonical(fs::path(shownDir), ec) == fs::weakly_canonical(recDir, ec));
-    if (kind != "siggen" ||
-        fs::weakly_canonical(fs::path(shownDir), ec) != fs::weakly_canonical(recDir, ec)) {
-        child.finish();
-        return;  // never record anywhere but scratch, never from a radio
+        recDir_ = dir_ / "home" / "Documents" / "SDR-recordings";
+
+        const int port = freeLoopbackPort();
+        CHECK(port > 0);
+        if (port <= 0) { return false; }
+
+        const fs::path cfgPath = dir_ / "config.json";
+        {
+            std::ofstream cfg(cfgPath, std::ios::binary | std::ios::trunc);
+            cfg << "{\n" << sourceCfg
+                << "  \"webEnabled\": true,\n"
+                   "  \"webBindAddress\": \"127.0.0.1\",\n"
+                   "  \"webPort\": "
+                << port
+                << ",\n"
+                   "  \"telemetryEnabled\": false,\n"
+                   "  \"updateCheckEnabled\": false\n"
+                   "}\n";
+        }
+
+        setEnv("CASCADE_CONFIG_TEST", cfgPath.string());
+        setEnv("APPDATA", (dir_ / "appdata").string());
+        setEnv("LOCALAPPDATA", (dir_ / "localappdata").string());
+        setEnv("FOXSDR_DIAG_DIR", (dir_ / "diag").string());
+        // The recording directory is <profile>/Documents/SDR-recordings, so
+        // the profile goes into scratch too. Nothing here opens a radio, so
+        // hiding vendor SDKs under the real profile costs nothing.
+        setEnv("USERPROFILE", (dir_ / "home").string());
+        setEnv("HOME", (dir_ / "home").string());
+        setEnv("XDG_CONFIG_HOME", (dir_ / "xdg" / "config").string());
+        setEnv("XDG_DATA_HOME", (dir_ / "xdg" / "data").string());
+        setEnv("XDG_CACHE_HOME", (dir_ / "xdg" / "cache").string());
+        setEnv("XDG_STATE_HOME", (dir_ / "xdg" / "state").string());
+        for (const char* url : {"FOXSDR_TELEMETRY_URL", "FOXSDR_CRASH_URL", "FOXSDR_UPDATE_URL",
+                                "FOXSDR_REPORTS_URL", "FOXSDR_FEATURE_URL",
+                                "FOXSDR_PROBLEM_URL"}) {
+            setEnv(url, "http://127.0.0.1:9/");
+        }
+
+        const bool started = child_.start(dir_ / "child.log");
+        CHECK(started);
+        if (!started) { return false; }
+
+        cli_ = std::make_unique<httplib::Client>("127.0.0.1", port);
+        cli_->set_connection_timeout(2, 0);
+        cli_->set_read_timeout(5, 0);
+
+        nlohmann::json s;
+        bool up = false;
+        const auto upBy = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+        while (std::chrono::steady_clock::now() < upBy && child_.alive()) {
+            // The server answers from startup, before the first frame has
+            // published a snapshot; an empty recordDir is that default.
+            if (getStatus(*cli_, s) && !s.value("recordDir", std::string()).empty()) {
+                up = true;
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        CHECK(up);
+        if (!up) { return false; }
+        const std::string kind = s.value("sourceKind", std::string());
+        const std::string shownDir = s.value("recordDir", std::string());
+        std::printf("  [%s] source %s, recording into %s\n", name, kind.c_str(), shownDir.c_str());
+        CHECK(kind == wantKind);
+        const bool inScratch =
+            fs::weakly_canonical(fs::path(shownDir), ec) == fs::weakly_canonical(recDir_, ec);
+        CHECK(inScratch);
+        // Never record anywhere but scratch, never from anything but the
+        // source this session asked for.
+        return kind == wantKind && inScratch;
     }
 
-    // 2. Receiver on, both takes running and growing.
-    CHECK(control(cli, R"({"running":true})"));
-    CHECK(waitStatus(cli, s, 20000, [](const nlohmann::json& j) { return jb(j, "running"); }));
-    CHECK(control(cli, R"({"recordIq":true,"recordAudio":true})"));
-    const bool taping = waitStatus(cli, s, 20000, [](const nlohmann::json& j) {
-        return jb(j, "iqRecording") && jb(j, "audioRecording") && ju(j, "iqBytes") > 0 &&
-               ju(j, "audioBytes") > 0;
-    });
-    CHECK(taping);
-    std::printf("  recording: iq %llu bytes, audio %llu bytes\n",
-                static_cast<unsigned long long>(ju(s, "iqBytes")),
-                static_cast<unsigned long long>(ju(s, "audioBytes")));
+    // Receiver on, both takes running and growing.
+    bool startTaping(nlohmann::json& s) {
+        CHECK(control(*cli_, R"({"running":true})"));
+        CHECK(waitStatus(*cli_, s, 20000, [](const nlohmann::json& j) { return jb(j, "running"); }));
+        CHECK(control(*cli_, R"({"recordIq":true,"recordAudio":true})"));
+        const bool taping = waitStatus(*cli_, s, 20000, [](const nlohmann::json& j) {
+            return jb(j, "iqRecording") && jb(j, "audioRecording") && ju(j, "iqBytes") > 0 &&
+                   ju(j, "audioBytes") > 0;
+        });
+        CHECK(taping);
+        std::printf("  recording: iq %llu bytes, audio %llu bytes\n",
+                    static_cast<unsigned long long>(ju(s, "iqBytes")),
+                    static_cast<unsigned long long>(ju(s, "audioBytes")));
+        return taping;
+    }
 
-    // 3. STOP, from the web remote: applyControlRequest with running=false.
-    CHECK(control(cli, R"({"running":false})"));
-    const bool stopped =
-        waitStatus(cli, s, 20000, [](const nlohmann::json& j) { return !jb(j, "running"); });
-    CHECK(stopped);
+    void print(const char* when, const nlohmann::json& s) const {
+        std::printf("  %s: running=%d faulted=%d iqRecording=%d audioRecording=%d iq %llu audio "
+                    "%llu\n",
+                    when, jb(s, "running") ? 1 : 0, jb(s, "faulted") ? 1 : 0,
+                    jb(s, "iqRecording") ? 1 : 0, jb(s, "audioRecording") ? 1 : 0,
+                    static_cast<unsigned long long>(ju(s, "iqBytes")),
+                    static_cast<unsigned long long>(ju(s, "audioBytes")));
+        const std::string err = s.value("recordError", std::string());
+        if (!err.empty()) { std::printf("  %s: recordError \"%s\"\n", when, err.c_str()); }
+    }
+
     // A few frames more, so a take that is going to end has had every chance.
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
-    CHECK(getStatus(cli, s));
-    const std::uint64_t iqAtStop = ju(s, "iqBytes");
-    const std::uint64_t audioAtStop = ju(s, "audioBytes");
-    std::printf("  after web stop: running=%d iqRecording=%d audioRecording=%d iq %llu audio %llu\n",
-                jb(s, "running") ? 1 : 0, jb(s, "iqRecording") ? 1 : 0,
-                jb(s, "audioRecording") ? 1 : 0, static_cast<unsigned long long>(iqAtStop),
-                static_cast<unsigned long long>(audioAtStop));
+    nlohmann::json settle(int ms = 500) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+        nlohmann::json s;
+        CHECK(getStatus(*cli_, s));
+        return s;
+    }
+
+    // Closes the child through its own window, then removes the scratch tree.
+    // Runs on EVERY path out: the destructor calls it too, so an early return
+    // cannot leave a child running or a directory behind.
+    void close() {
+        if (closed_) { return; }
+        closed_ = true;
+        cli_.reset();
+        const bool clean = child_.finish();
+        CHECK(clean);
+        if (g_checksFailed > failedAtStart_) {
+            std::ifstream in(dir_ / "child.log", std::ios::binary);
+            std::stringstream ss;
+            ss << in.rdbuf();
+            std::printf("--- child output ---\n%s\n--------------------\n", ss.str().c_str());
+        }
+        std::error_code ec;
+        fs::remove_all(dir_, ec);
+    }
+
+    ~Session() { close(); }
+
+    httplib::Client& cli() { return *cli_; }
+    const fs::path& dir() const { return dir_; }
+    const fs::path& recDir() const { return recDir_; }
+
+private:
+    fs::path dir_;
+    fs::path recDir_;
+    Child child_;
+    std::unique_ptr<httplib::Client> cli_;
+    int failedAtStart_ = 0;
+    bool closed_ = false;
+};
+
+bool sameSize(const std::vector<Take>& a, const std::vector<Take>& b) {
+    return a.size() == 1 && b.size() == 1 && a[0].fileBytes == b[0].fileBytes;
+}
+
+// --- Session 1: a stop from the web remote ----------------------------------------------
+
+void webStopEndsTakes() {
+    Session ss;
+    if (!ss.open("webstop", "", "siggen")) { return; }
+    httplib::Client& cli = ss.cli();
+    nlohmann::json s;
+    if (!ss.startTaping(s)) { return; }
+
+    // STOP, from the web remote: applyControlRequest with running=false.
+    CHECK(control(cli, R"({"running":false})"));
+    CHECK(waitStatus(cli, s, 20000, [](const nlohmann::json& j) { return !jb(j, "running"); }));
+    s = ss.settle();
+    ss.print("after web stop", s);
     CHECK(!jb(s, "iqRecording"));
     CHECK(!jb(s, "audioRecording"));
+    // A user's own stop is not news: no reason line for it.
+    CHECK(s.value("recordError", std::string()).empty());
     // ...and on disk: both files closed with honest headers.
-    const std::vector<Take> iq1 = takes(recDir, "iq_");
-    const std::vector<Take> au1 = takes(recDir, "audio_");
+    const std::vector<Take> iq1 = takes(ss.recDir(), "iq_");
+    const std::vector<Take> au1 = takes(ss.recDir(), "audio_");
     checkFinalised(iq1, "iq take after stop");
     checkFinalised(au1, "audio take after stop");
 
-    // 4. START again. No take may reopen, and no file may grow: the old bug
-    //    appended the second run to the first take across the gap.
+    // START again. No take may reopen, and no file may grow: the old bug
+    // appended the second run to the first take across the gap.
     CHECK(control(cli, R"({"running":true})"));
     CHECK(waitStatus(cli, s, 20000, [](const nlohmann::json& j) { return jb(j, "running"); }));
-    std::this_thread::sleep_for(std::chrono::milliseconds(700));
-    CHECK(getStatus(cli, s));
-    std::printf("  after restart: running=%d iqRecording=%d audioRecording=%d iq %llu audio %llu\n",
-                jb(s, "running") ? 1 : 0, jb(s, "iqRecording") ? 1 : 0,
-                jb(s, "audioRecording") ? 1 : 0,
-                static_cast<unsigned long long>(ju(s, "iqBytes")),
-                static_cast<unsigned long long>(ju(s, "audioBytes")));
+    s = ss.settle(700);
+    ss.print("after restart", s);
     CHECK(!jb(s, "iqRecording"));
     CHECK(!jb(s, "audioRecording"));
-    const std::vector<Take> iq2 = takes(recDir, "iq_");
-    const std::vector<Take> au2 = takes(recDir, "audio_");
-    CHECK(iq2.size() == 1 && iq1.size() == 1 && iq2[0].fileBytes == iq1[0].fileBytes);
-    CHECK(au2.size() == 1 && au1.size() == 1 && au2[0].fileBytes == au1[0].fileBytes);
+    CHECK(sameSize(takes(ss.recDir(), "iq_"), iq1));
+    CHECK(sameSize(takes(ss.recDir(), "audio_"), au1));
 
-    // 5. A stop sent to a receiver that is ALREADY stopped must not end a take
-    //    armed while stopped ("press Play to feed the recorders") - the dome
-    //    cannot do that either, since it reads START on a stopped receiver.
+    // A stop sent to a receiver that is ALREADY stopped must not end a take
+    // armed while stopped ("press Play to feed the recorders") - the dome
+    // cannot do that either, since it reads START on a stopped receiver.
     CHECK(control(cli, R"({"running":false})"));
     CHECK(waitStatus(cli, s, 20000, [](const nlohmann::json& j) { return !jb(j, "running"); }));
     CHECK(control(cli, R"({"recordAudio":true})"));
     CHECK(waitStatus(cli, s, 20000,
                      [](const nlohmann::json& j) { return jb(j, "audioRecording"); }));
     CHECK(control(cli, R"({"running":false})"));
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
-    CHECK(getStatus(cli, s));
+    s = ss.settle();
     std::printf("  armed while stopped, then stop again: audioRecording=%d\n",
                 jb(s, "audioRecording") ? 1 : 0);
     CHECK(jb(s, "audioRecording"));
+}
 
-    const bool clean = child.finish();
-    CHECK(clean);
-    if (g_checksFailed > 0) { dumpLog(); }
-    fs::remove_all(dir, ec);
+// --- Session 2: a fault mid-take ---------------------------------------------------------
+
+void faultEndsTakes() {
+    // The I/Q file lives BESIDE the session tree, which open() recreates, and
+    // exists before open() because the config restore opens it at startup.
+    // Declared before the session so it is removed AFTER the child has gone.
+    const fs::path src = scratchDir() / "fault-src";
+    struct RemoveSrc {
+        fs::path p;
+        ~RemoveSrc() {
+            std::error_code e;
+            fs::remove_all(p, e);
+        }
+    } removeSrc{src};
+    std::error_code ec;
+    fs::create_directories(src, ec);
+    const fs::path in = src / "in.wav";
+    CHECK(writeBytes(in, iqWav(kFileRateHz, 1000000u)));
+    const std::string cfg = "  \"sourceKind\": \"file\",\n  \"iqFilePath\": \"" +
+                            in.generic_string() + "\",\n";
+    Session ss;
+    if (!ss.open("fault", cfg, "file")) { return; }
+    httplib::Client& cli = ss.cli();
+    nlohmann::json s;
+    if (!ss.startTaping(s)) { return; }
+
+    // THE FAULT: the file shrinks under the source's read position, the read
+    // fails, the source latches it and the pipeline goes down with it. Nobody
+    // presses anything.
+    CHECK(writeBytes(in, iqWav(kFileRateHz, 8u)));
+    const bool faulted =
+        waitStatus(cli, s, 20000, [](const nlohmann::json& j) { return jb(j, "faulted"); });
+    CHECK(faulted);
+    s = ss.settle();
+    ss.print("after the fault", s);
+    CHECK(jb(s, "faulted"));
+    CHECK(!jb(s, "running"));
+    CHECK(!jb(s, "iqRecording"));
+    CHECK(!jb(s, "audioRecording"));
+    // Said, not left to be noticed.
+    CHECK(s.value("recordError", std::string()).find("fault") != std::string::npos);
+    const std::vector<Take> iq1 = takes(ss.recDir(), "iq_");
+    const std::vector<Take> au1 = takes(ss.recDir(), "audio_");
+    checkFinalised(iq1, "iq take after the fault");
+    checkFinalised(au1, "audio take after the fault");
+
+    // A take armed AFTER the fault is the user's choice and survives the
+    // frames that follow (the fault is acted on at its edge, not every frame
+    // it stays latched)... Armed a second later so its file cannot take the
+    // first one's name (names are to the second, and a same-second name
+    // truncates).
+    std::this_thread::sleep_for(std::chrono::milliseconds(1100));
+    CHECK(control(cli, R"({"recordAudio":true})"));
+    CHECK(waitStatus(cli, s, 20000,
+                     [](const nlohmann::json& j) { return jb(j, "audioRecording"); }));
+    s = ss.settle();
+    std::printf("  armed after the fault: audioRecording=%d\n", jb(s, "audioRecording") ? 1 : 0);
+    CHECK(jb(s, "audioRecording"));
+    // ...and a STOP sent to the faulted receiver ends it: a latched fault is
+    // proof the receiver was running, so this stop stops something.
+    CHECK(control(cli, R"({"running":false})"));
+    s = ss.settle();
+    std::printf("  stop on the faulted receiver: audioRecording=%d\n",
+                jb(s, "audioRecording") ? 1 : 0);
+    CHECK(!jb(s, "audioRecording"));
+
+    // START after the fault. A faulted I/Q file stays faulted until it is
+    // opened again (its latch clears only in open(), which a browser cannot
+    // reach), so the user does what the FAIL lamp invites: picks the
+    // generator and presses START. The pipeline's fault latch is still up
+    // when START arrives - a source swap never clears it - so this is the
+    // START-after-a-fault path, and the receiver really runs again. No take
+    // may come back with it; on 0.99.35 the same take resumed here, the
+    // file's samples before the fault spliced to the generator's after it.
+    CHECK(control(cli, R"({"sourceKind":"siggen"})"));
+    CHECK(waitStatus(cli, s, 20000, [](const nlohmann::json& j) {
+        return j.value("sourceKind", std::string()) == "siggen";
+    }));
+    CHECK(control(cli, R"({"running":true})"));
+    CHECK(waitStatus(cli, s, 20000, [](const nlohmann::json& j) { return jb(j, "running"); }));
+    s = ss.settle(700);
+    ss.print("after START", s);
+    CHECK(!jb(s, "iqRecording"));
+    CHECK(!jb(s, "audioRecording"));
+    CHECK(sameSize(takes(ss.recDir(), "iq_"), iq1));
+    // The first audio take by its own path: the armed one above is a second
+    // file beside it.
+    for (const Take& t : au1) {
+        std::error_code e;
+        CHECK(fs::file_size(t.path, e) == t.fileBytes);
+    }
+    ss.close();
+}
+
+// --- Session 3: a source switch at the same rate -------------------------------------------
+
+void sameRateSwitchEndsIqTake() {
+    // The I/Q file lives BESIDE the session tree, which open() recreates, and
+    // exists before open() because the config restore opens it at startup.
+    // Declared before the session so it is removed AFTER the child has gone.
+    const fs::path src = scratchDir() / "switch-src";
+    struct RemoveSrc {
+        fs::path p;
+        ~RemoveSrc() {
+            std::error_code e;
+            fs::remove_all(p, e);
+        }
+    } removeSrc{src};
+    std::error_code ec;
+    fs::create_directories(src, ec);
+    const fs::path in = src / "in.wav";
+    CHECK(writeBytes(in, iqWav(kFileRateHz, 1000000u)));
+    const std::string cfg = "  \"sourceKind\": \"file\",\n  \"iqFilePath\": \"" +
+                            in.generic_string() + "\",\n";
+    Session ss;
+    if (!ss.open("switch", cfg, "file")) { return; }
+    httplib::Client& cli = ss.cli();
+    nlohmann::json s;
+    if (!ss.startTaping(s)) { return; }
+    const double rateBefore = s.value("sampleRateHz", 0.0);
+
+    // To the generator, from the web remote: the same selectSource(0) the
+    // patch page uses when it borrows the receiver's radio.
+    CHECK(control(cli, R"({"sourceKind":"siggen"})"));
+    CHECK(waitStatus(cli, s, 20000, [](const nlohmann::json& j) {
+        return j.value("sourceKind", std::string()) == "siggen";
+    }));
+    s = ss.settle();
+    ss.print("after the switch", s);
+    const double rateAfter = s.value("sampleRateHz", 0.0);
+    std::printf("  rate %.0f -> %.0f S/s\n", rateBefore, rateAfter);
+    // The case under test: nothing about the RATE changed.
+    CHECK(rateBefore == static_cast<double>(kFileRateHz));
+    CHECK(rateAfter == rateBefore);
+    CHECK(jb(s, "running"));
+    CHECK(!jb(s, "iqRecording"));
+    CHECK(s.value("recordError", std::string()).find("source") != std::string::npos);
+    const std::vector<Take> iq1 = takes(ss.recDir(), "iq_");
+    checkFinalised(iq1, "iq take after the switch");
+    // The audio take carries on: it is what the speaker plays, and a source
+    // change does not change its format any more than a retune does.
+    CHECK(jb(s, "audioRecording"));
+    const std::uint64_t audioAt = ju(s, "audioBytes");
+    s = ss.settle(700);
+    CHECK(jb(s, "audioRecording"));
+    CHECK(ju(s, "audioBytes") > audioAt);
+    CHECK(sameSize(takes(ss.recDir(), "iq_"), iq1));
+    ss.close();
 }
 
 // --- Half 2: the source ----------------------------------------------------------
@@ -588,6 +838,8 @@ void everyStopUsesTheRoutine() {
     int inRoutine = 0;
     int inTeardown = 0;
     int elsewhere = 0;
+    int swapsInInstall = 0;
+    int swapsElsewhere = 0;
     std::vector<std::string> callers;  // members that call stopReceiver()
     std::string routineBody;
     for (const auto& e : fs::directory_iterator(gui, ec)) {
@@ -605,6 +857,17 @@ void everyStopUsesTheRoutine() {
                 } else {
                     ++elsewhere;
                     std::printf("FAIL: pipeline_.stop() outside stopReceiver(), in "
+                                "AppWindow::%s at %s:%zu\n",
+                                m.c_str(), e.path().filename().string().c_str(), i + 1);
+                }
+            }
+            if (l.find("pipeline_.setSource(") != std::string::npos) {
+                const std::string m = enclosingMember(lines, i);
+                if (m == "installSource") {
+                    ++swapsInInstall;
+                } else {
+                    ++swapsElsewhere;
+                    std::printf("FAIL: pipeline_.setSource() outside installSource(), in "
                                 "AppWindow::%s at %s:%zu\n",
                                 m.c_str(), e.path().filename().string().c_str(), i + 1);
                 }
@@ -627,6 +890,10 @@ void everyStopUsesTheRoutine() {
     CHECK(inRoutine == 1);
     CHECK(inTeardown == 1);
     CHECK(elsewhere == 0);
+    std::printf("  pipeline_.setSource(): %d in installSource, %d elsewhere\n", swapsInInstall,
+                swapsElsewhere);
+    CHECK(swapsInInstall == 1);
+    CHECK(swapsElsewhere == 0);
 
     // The routine ends both takes, and does it BEFORE the pipeline stops.
     const std::size_t iq = routineBody.find("stopIqRecording()");
@@ -639,7 +906,7 @@ void everyStopUsesTheRoutine() {
     CHECK(iq < st);
     CHECK(au < st);
 
-    // The four user stop paths: the dome, the key, the remote/CAT/plugin
+    // The four user stop paths: the dome, the key, the web remote/plugin
     // request, and the radar scope's POWER button.
     for (const char* m : {"drawToolbar", "applyKeyAction", "applyControlRequest", "drawScopeMode"}) {
         bool found = false;
@@ -654,6 +921,10 @@ void everyStopUsesTheRoutine() {
 int main() {
     std::setvbuf(stdout, nullptr, _IONBF, 0);  // a hang still shows how far it got
     everyStopUsesTheRoutine();
-    endToEndWebStop();
+    webStopEndsTakes();
+    faultEndsTakes();
+    sameRateSwitchEndsIqTake();
+    std::error_code ec;
+    fs::remove_all(scratchDir(), ec);
     return testSummary("test_stop_ends_recordings");
 }

@@ -1372,20 +1372,51 @@ private:
     // Stop path calls them unconditionally.
     void stopIqRecording();
     void stopAudioRecording();
-    // THE ONE WAY A USER STOPS THE RECEIVER. The STOP dome, the Start/Stop
-    // key, the radar scope's POWER button and applyControlRequest (the web
-    // remote, CAT and plugins through the host API) all call this, so a take
-    // can never outlive the sample flow it was taping whichever of them was
-    // used. Through 0.99.35 only the dome and the key ended the takes: a stop
+    // A TAKE BELONGS TO ONE UNBROKEN RUN OF ONE SOURCE. Four things end it
+    // besides the Stop buttons in the Recorder section, and each is one
+    // routine below so no path can forget:
+    //
+    // stopReceiver - THE ONE WAY A USER STOPS THE RECEIVER. The STOP dome,
+    // the Start/Stop key, the radar scope's POWER button and
+    // applyControlRequest (the web remote and plugins through the host API;
+    // CAT can read the run state but has no command that sets it) all call
+    // it. Through 0.99.35 only the dome and the key ended the takes: a stop
     // from the remote or the POWER button left both recorders open with
     // zero-length headers on disk, and the next start appended to the same
-    // files across the gap. The takes end only when the receiver is actually
-    // RUNNING: a take armed on a stopped receiver ("press Play to feed the
-    // recorders") is not ended by a stop that stops nothing, exactly as the
-    // dome, which reads START there, cannot end it either.
+    // files across the gap. The takes end when the receiver is running or
+    // FAULTED (a latched fault is proof it was running): a take armed on a
+    // cleanly stopped receiver ("press Play to feed the recorders") is not
+    // ended by a stop that stops nothing, exactly as the dome, which reads
+    // START there, cannot end it either.
+    //
+    // endTakesOnFault - once per frame. The frame that first sees the
+    // pipeline's fault latch ends both takes and says why on screen and in
+    // the log: the fault drops the run flag, so nothing else would, and a
+    // START or the automatic reopen of a SoapySDR radio would otherwise
+    // restart the receiver with the recorders still hooked in and splice
+    // the same take across the gap.
+    //
+    // installSource - every pipeline_.setSource() goes through it, and it
+    // ends the I/Q take BEFORE the swap: an I/Q recording is one source's
+    // baseband, and a switch at the same rate (the generator standing in for
+    // a radio the patch page borrowed, say) kept writing the new source's
+    // samples into it. The AUDIO take carries on: it records what the
+    // speaker plays, whose 48 kHz format no source change touches, and a
+    // retune - which changes what it hears just as much - never ended it.
+    //
+    // endTakes - the shared end: taps out, headers patched, the reason in
+    // recordError_ (shown in the Recorder section and sent to the web page)
+    // and in the diagnostic log. Returns whether anything was recording.
+    //
     // tests/test_stop_ends_recordings.cpp holds every pipeline_.stop() in
-    // src/gui to this routine and run()'s teardown.
+    // src/gui to stopReceiver and run()'s teardown, every
+    // pipeline_.setSource() to installSource, and drives the stop, fault
+    // and same-rate switch through the real application.
     void stopReceiver();
+    void endTakesOnFault();
+    void installSource(std::unique_ptr<cascade::source::IqSource> src);
+    bool endTakes(bool iq, bool audio, const char* why);
+    bool faultSeen_ = false;  // endTakesOnFault's edge: the latch as last frame saw it
     // The Recorder section's own "Record audio" path, lifted out of the button
     // so the keyboard presses the SAME button rather than a second copy of it
     // that could drift from the one on screen. Returns whether a take started;

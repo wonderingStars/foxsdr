@@ -2977,6 +2977,9 @@ void AppWindow::drawUi() {
     transmitPttHeld_ = false;
     transmitLatchPressed_ = false;
     transmitPageLive_ = false;
+    // A fault ends the takes on the first frame that sees it, before any stop
+    // or start a browser or plugin queued can run below (see the header).
+    endTakesOnFault();
     // Before anything is drawn: the decoders' output is bounded in the runner
     // and must be collected whether or not the panel that shows it is open.
     pumpDecoderOutput();
@@ -7116,7 +7119,7 @@ void AppWindow::drawSourceSection() {
                 deviceModel_.clear();
                 sourceError_.clear();
                 ++sourceGen_;  // a device open still in flight is now stale
-                pipeline_.setSource(std::move(file));
+                installSource(std::move(file));
                 sourceKind_ = "file";
                 iqOpenPath_ = iqPath_;
                 // A file is a deliberate choice of source like any other, so
@@ -7180,7 +7183,7 @@ void AppWindow::drawSourceSection() {
                     deviceArgs_.clear();
                     deviceModel_.clear();
                     ++sourceGen_;
-                    pipeline_.setSource(nullptr);
+                    installSource(nullptr);
                     sourceKind_ = "siggen";
                     followInputRate();
                 }
@@ -7922,7 +7925,7 @@ void AppWindow::finishDeviceOpen(DeviceOpenResult r) {
     restoreKeep_ = cascade::gui::RememberedSource{};
     restoreKeepLabel_.clear();
     ++sourceGen_;  // this install is itself a source change
-    pipeline_.setSource(std::move(r.dev));
+    installSource(std::move(r.dev));
     sourceKind_ = r.kind;
     sourceSel_ = r.row;
     // SERIAL STRIPPED, exactly as everywhere else this string is recorded.
@@ -8109,12 +8112,20 @@ void AppWindow::pollSoapyRecovery() {
     // stream. Whether it can is the driver's answer to give: it is made
     // under the same guard as every open, and a fault or a refusal there is
     // the ordinary failed open, reported the ordinary way.
+    //
+    // BOTH TAKES END FIRST. The reopen restarts the receiver on its own, and
+    // a recording carried across it would splice the stretch before the
+    // fault onto whatever the reopened radio hears, with a gap in between
+    // that the file cannot show. endTakesOnFault has usually done this
+    // already, on the frame the pipeline's latch rose; this is for a radio
+    // declared dead without the pipeline's source thread raising it.
+    endTakes(true, true, "the radio faulted");
     device_ = nullptr;
     soapyView_ = nullptr;
     deviceArgs_.clear();
     deviceModel_.clear();
     ++sourceGen_;
-    pipeline_.setSource(nullptr);
+    installSource(nullptr);
     sourceKind_ = "siggen";
     followInputRate();
     launchDeviceOpen(std::move(r), label);
@@ -8149,7 +8160,7 @@ void AppWindow::selectSource(int idx) {
         deviceArgs_.clear();
         deviceModel_.clear();
         ++sourceGen_;  // a device open still in flight is now stale
-        pipeline_.setSource(nullptr);
+        installSource(nullptr);
         sourceKind_ = "siggen";
         sourceSel_ = 0;
         followInputRate();  // back to the generator's fixed 2 MS/s
@@ -8240,7 +8251,7 @@ void AppWindow::selectSource(int idx) {
         deviceArgs_.clear();
         deviceModel_.clear();
         ++sourceGen_;
-        pipeline_.setSource(nullptr);
+        installSource(nullptr);
         sourceKind_ = "siggen";
         // The DSP chain must follow the source that is actually installed —
         // if the open below fails, the generator would otherwise keep running
@@ -19461,13 +19472,36 @@ void AppWindow::stopAudioRecording() {
     audioRecorder_.stop();
 }
 
+bool AppWindow::endTakes(bool iq, bool audio, const char* why) {
+    const bool endIq = iq && iqRecorder_.recording();
+    const bool endAudio = audio && audioRecorder_.recording();
+    if (!endIq && !endAudio) { return false; }
+    if (endIq) { stopIqRecording(); }
+    if (endAudio) { stopAudioRecording(); }
+    // Said, not left to be noticed: the Recorder section and the web page
+    // both show recordError_, and the next Record press clears it.
+    const char* what = (endIq && endAudio) ? "I/Q and audio recordings" :
+                       endIq               ? "I/Q recording"
+                                           : "audio recording";
+    // Plain English, like the source errors beside it: a tr() key here
+    // would need an entry in every catalogue under resources/lang.
+    recordError_ = std::string("The ") + what + " ended because " + why +
+                   ((endIq && endAudio) ? ". The files are closed and complete"
+                                        : ". The file is closed and complete") +
+                   "; press Record to start a new one.";
+    cascade::core::diagWarnf("recorder: %s ended because %s", what, why);
+    return true;
+}
+
 void AppWindow::stopReceiver() {
     // Play-stop while recording stops the recording cleanly (spec): taps
     // uninstalled and both WAVs finalized BEFORE the DSP threads join, so a
     // take can never outlive the sample flow it was taping. Only when the
-    // receiver is running - see the header for why a stop that stops nothing
-    // leaves an armed take alone.
-    if (pipeline_.running()) {
+    // receiver is running or faulted - see the header for why a stop that
+    // stops nothing leaves an armed take alone. Silent, as it always was: the
+    // user pressed Stop, and "the recording ended because you stopped" is
+    // not news.
+    if (pipeline_.running() || pipeline_.faulted()) {
         stopIqRecording();
         stopAudioRecording();
     }
@@ -19477,6 +19511,24 @@ void AppWindow::stopReceiver() {
     // the fault left behind. Joins within ~10 ms, an acceptable one-off hitch
     // on the GUI thread for a Stop.
     pipeline_.stop();
+}
+
+void AppWindow::endTakesOnFault() {
+    // On the EDGE, not the level: a take the user arms after seeing FAIL is
+    // their choice (it waits for Play like any take armed while stopped), and
+    // ending it every frame would make Record look broken while the lamp is
+    // lit. Pipeline::start clears the latch, so the next fault is a new edge.
+    const bool faulted = pipeline_.faulted();
+    if (faulted && !faultSeen_) { endTakes(true, true, "the receiver stopped on a fault"); }
+    faultSeen_ = faulted;
+}
+
+void AppWindow::installSource(std::unique_ptr<cascade::source::IqSource> src) {
+    // BEFORE the swap: setSource keeps the DSP thread running across it, so
+    // a take ended afterwards would already hold the first blocks of the new
+    // source.
+    endTakes(true, false, "the source changed");
+    pipeline_.setSource(std::move(src));
 }
 
 bool AppWindow::startAudioRecording() {
@@ -21043,10 +21095,11 @@ void AppWindow::applyControlRequest(const cascade::net::ControlRequest& r) {
         if (*r.running) {
             pipeline_.start();
         } else {
-            // The web remote's, CAT's and a plugin's stop is the dome's stop,
-            // recordings included. A bare pipeline_.stop() here left both
-            // takes open with zero-length headers, and the next start from
-            // anywhere appended to them across the gap.
+            // The web remote's and a plugin's stop is the dome's stop,
+            // recordings included. (CAT reaches this function too but has no
+            // command that sets the run state.) A bare pipeline_.stop() here
+            // left both takes open with zero-length headers, and the next
+            // start from anywhere appended to them across the gap.
             stopReceiver();
         }
     }
@@ -22784,7 +22837,7 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
             // counter's contract is "every install bumps it" — an invariant
             // with an exception in it is one nobody can rely on later.
             ++sourceGen_;
-            pipeline_.setSource(std::move(file));
+            installSource(std::move(file));
             sourceKind_ = "file";
             sourceSel_ = 1;
             followInputRate();
@@ -22889,7 +22942,7 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
                 cfgSoapyArgs_ = cfg.soapyArgs;
             }
             ++sourceGen_;  // same invariant as the file branch above
-            pipeline_.setSource(std::move(dev));
+            installSource(std::move(dev));
             sourceKind_ = kind;
             // Point the combo at the restored device if this machine still
             // enumerates it; -1 otherwise (preview falls back to live name).
