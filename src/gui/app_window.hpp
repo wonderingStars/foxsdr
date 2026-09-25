@@ -647,14 +647,17 @@ private:
     // build of the application - nothing ever sets them outside that test -
     // and each is read at exactly one place.
     friend struct AppWindowTestAccess;
+    // NO DEFAULT MEMBER INITIALISERS, on purpose: GCC refuses them on a
+    // nested struct used by an inline static member of the enclosing class
+    // ("required before the end of its enclosing class"). testHooks_ below is
+    // value-initialised, which makes both pointers null all the same.
     struct TestHooks {
         // Replaces makeDeviceSource's construction when set: the "radio" a
         // worker or the restore opens is the test's own recording fake.
-        std::unique_ptr<cascade::source::DeviceSource> (*makeDevice)(const std::string& kind) =
-            nullptr;
+        std::unique_ptr<cascade::source::DeviceSource> (*makeDevice)(const std::string& kind);
         // Replaces scanNative's USB walk when set: the list it returns IS the
         // native device list, so no test ever enumerates the desk's radios.
-        std::vector<cascade::source::NativeDeviceInfo> (*nativeScan)() = nullptr;
+        std::vector<cascade::source::NativeDeviceInfo> (*nativeScan)();
     };
     // Set by the test before any AppWindow exists and never changed while one
     // does, so the worker threads that read makeDevice race with nothing.
