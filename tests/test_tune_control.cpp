@@ -748,6 +748,11 @@ int main() {
                     {(volCx - 30.0f) * s, 38.0f * s, (volCx + 30.0f) * s,  // the volume dial
                      130.0f * s},
                 };
+                {
+                    // The bias tee key under the lamp row, where it would stand.
+                    const cascade::gui::FreqRect bk = cascade::gui::deckBiasKeyArea();
+                    parts.push_back({bk.x0 * s, bk.y0 * s, bk.x1 * s, bk.y1 * s});
+                }
                 if (meters) {
                     parts.push_back({meter1XOnBar(barW), 28.0f, meter2XOnBar(barW) + kMeterW,
                                      28.0f + meterH});

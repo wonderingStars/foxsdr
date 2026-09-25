@@ -189,6 +189,12 @@ int main() {
                 {396.0f * s, 20.0f * s, (396.0f + plateW) * s, (20.0f + plateH) * s},  // plate
                 {(volCx - 30.0f) * s, 38.0f * s, (volCx + 30.0f) * s, 130.0f * s},   // dial
             };
+            {
+                // The bias tee key under the lamp row (drawn only for a radio
+                // with one - so the banner must keep off where it would be).
+                const cascade::gui::FreqRect bk = cascade::gui::deckBiasKeyArea();
+                parts.push_back({bk.x0 * s, bk.y0 * s, bk.x1 * s, bk.y1 * s});
+            }
             if (meters) {
                 const float meterH = 66.0f + 17.0f * 2.0f + 8.0f;
                 parts.push_back({cascade::gui::meter1XOnBar(barW), 28.0f,

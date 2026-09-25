@@ -3294,6 +3294,8 @@ void AppWindow::drawUi() {
     // would nest it in that window's ID stack, where the dim overlay it draws
     // would sit under the panels it is meant to block.
     drawMutePopup();
+    // The deck's bias tee question, at the top level for the same reason.
+    drawBiasKeyConfirm();
 
     // ...and the unclean-exit offer beside it, for the same reason: a
     // top-level thing belongs at the top level, not nested in the borderless
@@ -4727,17 +4729,73 @@ void AppWindow::drawToolbar() {
         const float firstX = roomL + widestWord * 0.5f;
         for (int i = 0; i < 4; ++i) {
             {
+                // THE LAMP AND ITS WORD, which drawBenchLamp letters 4 px under
+                // the lens at the size pushed above: the word is part of the
+                // lamp (it is what makes it readable cold), so the census
+                // measures down to its foot - which is what the bias tee key
+                // below the row has to stand clear of.
                 const float lx = firstX + lampPitch * static_cast<float>(i);
                 cascade::gui::census::note("deck:lamp", i);
                 cascade::gui::census::rect("deck:lamp", i, lx - widestWord * 0.5f,
                                            Y(86.0f) - S(7.0f), lx + widestWord * 0.5f,
-                                           Y(86.0f) + S(7.0f));
+                                           Y(86.0f) + S(7.0f) + 4.0f + lampCapPx);
             }
             cascade::gui::drawBenchLamp(
                 dl, ImVec2(firstX + lampPitch * static_cast<float>(i), Y(86.0f)), S(7.0f),
                 lamps[i].colour, lamps[i].lit, lamps[i].word);
         }
         ImGui::PopFont();
+    }
+
+    // THE BIAS TEE KEY (2026-09-25; "add bias tee to the main panel"). In the
+    // MASTER compartment under the lamp row, at the lamps' own left edge: an
+    // illuminated key - the rail's square key with a lamp set in its face -
+    // and its caption cut into the brass beside it, the deck's treatment for a
+    // label. DRAWN ONLY while the open radio has a bias tee, so the deck of
+    // every radio without one (and of the generator) is exactly what it was.
+    //
+    // The lamp is the driver's READBACK and nothing else (biasKeyPanel), and
+    // it is amber, the deck's caution lamp - the MUTE lamp's hue: something
+    // the user switched is in effect on the signal path. A press goes to
+    // biasKeyPressed: off at once, on only through the confirmation dialog the
+    // first time for each radio in a session (gui/bias_tee.hpp says why).
+    if (const cascade::gui::BiasTeePanel bk = biasKeyPanel(); bk.present) {
+        const cascade::gui::FreqRect area = cascade::gui::deckBiasKeyArea();
+        const ImVec2 kTL(X(area.x0), Y(area.y0));
+        const float kSize = S(cascade::gui::kDeckBiasKeySize);
+        const bool pressed = cascade::gui::drawBenchKey(dl, kTL, kSize, bk.shown);
+        const bool keyHovered = ImGui::IsItemHovered();
+        cascade::gui::drawBenchLamp(dl, ImVec2(kTL.x + kSize * 0.5f, kTL.y + kSize * 0.5f),
+                                    S(4.0f), cascade::gui::theme::kAmber, bk.shown, nullptr);
+        // The caption, fitted to the compartment: a longer word in another
+        // language is lettered smaller (never under nine pixels) rather than
+        // run under the divider, and clipped there as the last resort.
+        const char* caption = tr("BIAS TEE");
+        ImFont* lf = cascade::gui::fonts::legend();
+        const float capX = kTL.x + kSize + S(cascade::gui::kDeckBiasCaptionGap);
+        const float capRoom = X(area.x1) - capX;
+        float bpx = capPx;
+        float bw = barTrackedWidth(lf, bpx, caption, bpx * 0.24f);
+        if (bw > capRoom && bw > 0.0f) {
+            bpx = std::max(9.0f, bpx * capRoom / bw);
+            bw = barTrackedWidth(lf, bpx, caption, bpx * 0.24f);
+        }
+        const float capY = kTL.y + (kSize - bpx) * 0.5f;
+        const float capR = capX + std::min(bw, capRoom);
+        dl->PushClipRect(ImVec2(capX, barTL.y), ImVec2(X(area.x1), barBR.y), true);
+        barEngrave(dl, ImVec2(capX, capY), bpx, caption, false);
+        dl->PopClipRect();
+        cascade::gui::census::note("deck:bias");
+        cascade::gui::census::rect("deck:bias", kTL.x, std::min(kTL.y, capY), capR,
+                                   std::max(kTL.y + kSize, capY + bpx));
+        // THE CHECKBOX'S OWN WARNING, over the key and over its caption.
+        if (keyHovered || ImGui::IsMouseHoveringRect(ImVec2(capX, capY), ImVec2(capR, capY + bpx))) {
+            ImGui::SetTooltip(
+                "%s", tr("Sends about 4.5 V up the antenna cable to power an amplifier at the "
+                         "mast. Leave it off unless you have one: equipment that is not "
+                         "expecting power on the connector can be damaged by it."));
+        }
+        if (pressed) { biasKeyPressed(); }
     }
 
     // --- the counter --------------------------------------------------------
@@ -7687,13 +7745,12 @@ void AppWindow::drawSourceSection() {
         // over a radio with no power on the port is the same lie the antenna
         // combo was fixed for. What a tick remembers, and for which radio, is
         // gui/bias_tee.hpp's (biasTeeTicked).
+        //
+        // The deck's BIAS TEE key shows the same `shown` and switches through
+        // the same switchBiasTee, so the box and the key always agree.
         if (biasTeePanel_.present) {
             bool box = biasTeePanel_.shown;
-            if (ImGui::Checkbox(trId("Bias tee"), &box)) {
-                std::string err;
-                biasTeeTicked(biasTeePanel_, device_, deviceArgs_, box, &err);
-                if (!err.empty()) { sourceError_ = err; }
-            }
+            if (ImGui::Checkbox(trId("Bias tee"), &box)) { switchBiasTee(box); }
             if (ImGui::IsItemHovered()) {
                 ImGui::SetTooltip(
                     tr("Sends about 4.5 V up the antenna cable to power an amplifier at the "

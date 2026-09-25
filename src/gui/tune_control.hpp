@@ -914,6 +914,31 @@ inline constexpr float kDeckPlateTopY = 20.0f;
 inline constexpr float kDeckPlateFootMarginY = 10.0f;
 inline constexpr float kDeckMasterDividerX = 384.0f;
 
+// THE BIAS TEE KEY (2026-09-25), in the MASTER compartment under the lamp row:
+// a square illuminated key at the lamps' own left edge, its engraved caption
+// beside it, running no further than the compartment's divider less the same
+// 6 units the lamps keep. Drawn only while the open radio has a bias tee
+// (gui/bias_tee.hpp). The lamp row's words end 111 units down at full size
+// (the row at 86, lamp radius 7, 4 px and a 14 px caption), and the bar's
+// foot rail stands 3 px above its 160: the key takes 122..142, with clear
+// brass above and below it at every scale the bar is drawn at - the census
+// (tests/test_theme_census.cpp) measures it against the lamps' words in every
+// theme, and test_mute_banner / test_tune_control keep the banner off it.
+inline constexpr float kDeckBiasKeyX = 150.0f;
+inline constexpr float kDeckBiasKeyY = 122.0f;
+inline constexpr float kDeckBiasKeySize = 20.0f;
+inline constexpr float kDeckBiasCaptionGap = 8.0f;
+inline constexpr float kDeckBiasRightX = kDeckMasterDividerX - 6.0f;
+static_assert(kDeckBiasKeyY + kDeckBiasKeySize + 10.0f <= kDeckBarH,
+              "the bias tee key must stand clear of the deck's foot rail");
+static_assert(kDeckBiasKeyY >= 86.0f + 7.0f + 4.0f + 14.0f + 6.0f,
+              "the bias tee key must stand clear of the lamp row's words at full size");
+// The whole key and the room its caption may use, in deck units (scale 1): the
+// part of the deck the mute banner's sweeps keep clear of.
+inline FreqRect deckBiasKeyArea() {
+    return {kDeckBiasKeyX, kDeckBiasKeyY, kDeckBiasRightX, kDeckBiasKeyY + kDeckBiasKeySize};
+}
+
 inline float deckCounterDividerX(const CounterLayout& c) {
     return kDeckMasterDividerX + 12.0f + counterPlateW(c) + 12.0f;
 }

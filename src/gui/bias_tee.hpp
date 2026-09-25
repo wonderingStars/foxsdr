@@ -12,6 +12,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 #include "source/airspy_source.hpp"
 #include "source/airspyhf_source.hpp"
@@ -225,6 +226,121 @@ inline void biasTeeTicked(BiasTeePanel& p, cascade::source::DeviceSource* dev,
         }
         return true;
     });
+}
+
+// --- THE DECK'S BIAS TEE KEY (2026-09-25) ------------------------------------
+//
+// A tester asked for a bias-tee button, and the owner's words were "add bias
+// tee to the main panel": the checkbox above lives in the Source section, a
+// rail bank and a scroll away from the deck a user actually looks at. So the
+// deck carries a key for it - drawn ONLY while the open radio has a bias tee
+// this panel reaches (BiasTeePanel::present), its lamp lit exactly when the
+// driver's readback says the power is on (BiasTeePanel::shown), and every
+// change it makes goes through biasTeeTicked, the checkbox's own path. There
+// is one state and two controls showing it, so they cannot disagree, and a
+// refusal leaves both where they were.
+//
+// WHAT THE KEY ADDS IS A GATE ON THE DANGEROUS DIRECTION. The checkbox is a
+// labelled control inside a settings panel, reached on purpose. A key on the
+// deck sits beside START, under the hand, and a stray click there must not put
+// about 4.5 V up a coax that may end in something not built to take it. So:
+//
+//   * OFF IS ALWAYS IMMEDIATE. Taking power off is never the harmful way, and
+//     a user reaching for it in a hurry must not meet a question.
+//   * ON ASKS, the first time for each radio in a session: a confirmation
+//     dialog, which is the application's existing way of making an action
+//     deliberate ("Stop following?", "Sound is muted"). Press-and-hold was the
+//     alternative and was not chosen: nothing on this deck is held to confirm
+//     (the one held key in FoxSDR is the transmitter's PTT, which means "while
+//     held", the opposite contract), a short click on a hold key does nothing
+//     at all and reads as a broken key, and a hold cannot carry the warning -
+//     the dialog puts the same sentence the checkbox's tooltip carries in front
+//     of the user at exactly the moment it matters.
+//   * ONCE CONFIRMED FOR A RADIO, later presses in the same session switch at
+//     once - but only for a radio named by its SERIAL. "index=0" names a place
+//     in a USB walk, which is a different radio the day a second one is
+//     plugged in (the same argument rtlArgsNameADongle makes), so a radio known
+//     only by position is asked every time. Nothing is saved: the next launch
+//     asks again.
+//
+// No ImGui here: AppWindow draws the key and the dialog, and these functions
+// decide what a press and an answer DO, so tests/test_bias_key.cpp can hold
+// them without an open frame.
+struct BiasKeyGate {
+    // The radios ("kind|args") whose first switch-on was confirmed this
+    // session. Only serial-named radios are ever added.
+    std::vector<std::string> confirmed;
+    // The dialog is up, asking about this radio ("kind|args").
+    bool asking = false;
+    std::string askingFor;
+};
+
+enum class BiasKeyAction {
+    Nothing,    // no bias tee on the open radio: the key is not even drawn
+    SwitchOff,  // immediate, always
+    SwitchOn,   // confirmed earlier this session for this very radio
+    Ask,        // the dialog opens; nothing is switched yet
+};
+
+// The identity a confirmation is remembered under - the same "kind|args"
+// shape the converter memory keys radios by.
+inline std::string biasKeyRadio(const std::string& kind, const std::string& args) {
+    return kind + "|" + args;
+}
+
+// Whether a confirmation for this radio may be remembered for the session.
+inline bool biasKeyMayRemember(const std::string& args) {
+    return !cascade::source::argValue(args, "serial").empty();
+}
+
+inline bool biasKeyConfirmedFor(const BiasKeyGate& g, const std::string& radio) {
+    for (const std::string& r : g.confirmed) {
+        if (r == radio) { return true; }
+    }
+    return false;
+}
+
+// THE KEY WAS PRESSED. `radio` is biasKeyRadio(kind, args) of the radio open
+// now. Decides from the READBACK (p.shown), never from what the key last
+// asked for: a lamp that is lit means power is on the port, so the press takes
+// it off.
+inline BiasKeyAction biasKeyPress(BiasKeyGate& g, const BiasTeePanel& p,
+                                  const std::string& radio) {
+    if (!p.present) { return BiasKeyAction::Nothing; }
+    if (p.shown) { return BiasKeyAction::SwitchOff; }
+    if (biasKeyConfirmedFor(g, radio)) { return BiasKeyAction::SwitchOn; }
+    g.asking = true;
+    g.askingFor = radio;
+    return BiasKeyAction::Ask;
+}
+
+// THE DIALOG WAS ANSWERED "turn it on". True means switch on now. It is false
+// - and nothing is remembered - when the question no longer applies: the
+// radio it asked about is not the one open now, or the open radio has no bias
+// tee any more. `mayRemember` is biasKeyMayRemember(args) of that radio.
+inline bool biasKeyConfirm(BiasKeyGate& g, const BiasTeePanel& p, const std::string& radio,
+                           bool mayRemember) {
+    const bool applies = g.asking && p.present && radio == g.askingFor;
+    g.asking = false;
+    g.askingFor.clear();
+    if (!applies) { return false; }
+    if (mayRemember && !biasKeyConfirmedFor(g, radio)) { g.confirmed.push_back(radio); }
+    return true;
+}
+
+// THE DIALOG WAS ANSWERED "cancel", or withdrawn: nothing is switched and
+// nothing is remembered.
+inline void biasKeyCancel(BiasKeyGate& g) {
+    g.asking = false;
+    g.askingFor.clear();
+}
+
+// Whether a dialog that is up still asks a question that applies: the radio
+// it names is still the open one, and still has a bias tee. The dialog closes
+// itself when this turns false, the way "Stop following?" does.
+inline bool biasKeyQuestionStands(const BiasKeyGate& g, const BiasTeePanel& p,
+                                  const std::string& radio) {
+    return g.asking && p.present && radio == g.askingFor;
 }
 
 }  // namespace cascade::gui
