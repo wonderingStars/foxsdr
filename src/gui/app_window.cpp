@@ -2122,7 +2122,10 @@ int AppWindow::run(int frames) {
 
     // Closing the window while receiving must not leave DSP threads pacing a
     // dead display; stop before teardown so the join happens while the object
-    // graph is still fully alive.
+    // graph is still fully alive. Not stopReceiver(): the takes were already
+    // ended further up this teardown ("Closing the window mid-take"), and
+    // this is the one pipeline_.stop() tests/test_stop_ends_recordings allows
+    // outside it.
     pipeline_.stop();
 
     // THE CLEAN-EXIT MARKER, after the pipeline join. The join above — DSP
@@ -4523,15 +4526,9 @@ void AppWindow::drawToolbar() {
     if (cascade::gui::drawBenchStopButton(dl, ImVec2(X(74.0f), Y(85.0f)), S(46.0f),
                                           running)) {
         if (running) {
-            // Play-stop while recording stops the recording cleanly (spec):
-            // taps uninstalled and both WAVs finalized BEFORE the DSP
-            // threads join, so a take can never outlive the sample flow it
-            // was taping. No-ops when nothing is recording.
-            stopIqRecording();
-            stopAudioRecording();
-            // Joins both pipeline threads; they exit within ~10 ms, which is
-            // an acceptable one-off hitch on the GUI thread for a Stop click.
-            pipeline_.stop();
+            // Ends any take, then joins both pipeline threads (stopReceiver:
+            // the one stop every path shares).
+            stopReceiver();
         } else {
             pipeline_.start();
         }
@@ -13610,7 +13607,9 @@ void AppWindow::drawScopeMode() {
         const float lampR = std::max(18.0f, 30.0f * scale);
         if (cascade::gui::drawScopePowerButton(dl, c, lampR, running)) {
             if (running) {
-                pipeline_.stop();
+                // The same stop as the dome, recordings included: this used
+                // to be a bare pipeline_.stop() that left a take open.
+                stopReceiver();
             } else {
                 pipeline_.start();
             }
@@ -19462,6 +19461,24 @@ void AppWindow::stopAudioRecording() {
     audioRecorder_.stop();
 }
 
+void AppWindow::stopReceiver() {
+    // Play-stop while recording stops the recording cleanly (spec): taps
+    // uninstalled and both WAVs finalized BEFORE the DSP threads join, so a
+    // take can never outlive the sample flow it was taping. Only when the
+    // receiver is running - see the header for why a stop that stops nothing
+    // leaves an armed take alone.
+    if (pipeline_.running()) {
+        stopIqRecording();
+        stopAudioRecording();
+    }
+    // Unconditional, as applyControlRequest's own stop always was (the dome,
+    // the key and POWER only ever call this on a running receiver): on a
+    // faulted pipeline, run flag already down, it still joins the threads
+    // the fault left behind. Joins within ~10 ms, an acceptable one-off hitch
+    // on the GUI thread for a Stop.
+    pipeline_.stop();
+}
+
 bool AppWindow::startAudioRecording() {
     if (audioRecorder_.recording()) { return true; }
     std::string err;
@@ -19649,11 +19666,9 @@ void AppWindow::applyKeyAction(cascade::gui::KeyAction action) {
     switch (action) {
         case KeyAction::StartStop:
             if (pipeline_.running()) {
-                // The toolbar's own stop, in the toolbar's own order: a take
-                // can never outlive the sample flow it was taping.
-                stopIqRecording();
-                stopAudioRecording();
-                pipeline_.stop();
+                // The toolbar's own stop: a take can never outlive the
+                // sample flow it was taping.
+                stopReceiver();
             } else {
                 pipeline_.start();
             }
@@ -21028,7 +21043,11 @@ void AppWindow::applyControlRequest(const cascade::net::ControlRequest& r) {
         if (*r.running) {
             pipeline_.start();
         } else {
-            pipeline_.stop();
+            // The web remote's, CAT's and a plugin's stop is the dome's stop,
+            // recordings included. A bare pipeline_.stop() here left both
+            // takes open with zero-length headers, and the next start from
+            // anywhere appended to them across the gap.
+            stopReceiver();
         }
     }
     if (r.centerHz.has_value()) {

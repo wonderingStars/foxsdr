@@ -1372,6 +1372,20 @@ private:
     // Stop path calls them unconditionally.
     void stopIqRecording();
     void stopAudioRecording();
+    // THE ONE WAY A USER STOPS THE RECEIVER. The STOP dome, the Start/Stop
+    // key, the radar scope's POWER button and applyControlRequest (the web
+    // remote, CAT and plugins through the host API) all call this, so a take
+    // can never outlive the sample flow it was taping whichever of them was
+    // used. Through 0.99.35 only the dome and the key ended the takes: a stop
+    // from the remote or the POWER button left both recorders open with
+    // zero-length headers on disk, and the next start appended to the same
+    // files across the gap. The takes end only when the receiver is actually
+    // RUNNING: a take armed on a stopped receiver ("press Play to feed the
+    // recorders") is not ended by a stop that stops nothing, exactly as the
+    // dome, which reads START there, cannot end it either.
+    // tests/test_stop_ends_recordings.cpp holds every pipeline_.stop() in
+    // src/gui to this routine and run()'s teardown.
+    void stopReceiver();
     // The Recorder section's own "Record audio" path, lifted out of the button
     // so the keyboard presses the SAME button rather than a second copy of it
     // that could drift from the one on screen. Returns whether a take started;
