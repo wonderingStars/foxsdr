@@ -1161,7 +1161,13 @@ private:
     // The modal that offers to stop the plugins holding the audio down, and
     // the banner that stays when the user declines.
     void drawMutePopup();
-    void drawMuteBanner();
+    // What the banner names, or "" when there is no banner to draw. The test
+    // seam FOXSDR_FORCE_MUTE_BANNER=<name> draws it naming <name> whatever
+    // the audio is doing, so the theme census can place and measure it.
+    std::string muteBannerSubject() const;
+    // Draws the banner on the current line at the current font size; returns
+    // whether there was one to draw.
+    bool drawMuteBanner();
     // Stops exactly the plugins named by `keys`, through the ordinary stop
     // path, in one rebuild. The caller passes the keys its own message named -
     // the banner passes mutedByKeys_, the popup passes what it captured - so a

@@ -966,6 +966,100 @@ inline bool deckMetersFit(float barW, const CounterLayout& c, float scale) {
     return meter1XOnBar(barW) >= deckCoreW(c) * scale + kMeterCoreClearance - 1.0e-3f;
 }
 
+// --- WHERE THE BANNER GOES WHEN THE MIDDLE IS TAKEN (repair round, 2026-09-25) ------
+//
+// The first fallback was a fixed point, (300, 124) in deck units - the strip
+// "under the counter" - and there is no such strip: the plate stands 121 of
+// the bar's 160 units tall, so that point lies on the plate's switch row and
+// footer. Today's bench put the banner over its own UP / DN switches at
+// 1280 x 720 (0.99.35 already did), and Bench Classic XL, whose 2x cluster
+// leaves no middle at 1600 x 1000 either, laid it across the enlarged tubes.
+//
+// So the banner now takes one of three places that are OFF every part of the
+// deck, in bar-relative screen pixels:
+//   0  THE MIDDLE, as before, when it is as wide as the banner itself (and
+//      the rule's 220), at (cluster end + 12, 62 units down);
+//   1  OVER THE METERS: the strip across the bar's top, right of the cluster,
+//      above the meter faces (which stand 28 px down) - or down to the
+//      middle's line when the meters are not drawn;
+//   2  THE MASTER CLUSTER'S HEAD: the clear brass above the MASTER caption
+//      (52 units down) and right of the transport, left of the divider.
+// Between 1 and 2 it takes the wider; if the banner is wider than that it is
+// drawn smaller - down to kMuteBannerMinFontPx, the deck's own nine-pixel
+// floor - and past that clipped to the place, never spread over a part.
+inline constexpr float kMuteBannerMinFontPx = 9.0f;
+inline constexpr float kMeterTopPx = 28.0f;  // the meters' top edge below the bar's
+
+struct MuteBannerPlace {
+    int slot = 0;            // 0 middle, 1 over the meters, 2 the master cluster's head
+    float x = 0.0f;          // the banner's top-left, bar-relative screen pixels
+    float y = 0.0f;
+    float fontScale = 1.0f;  // of the bar's font; below 1 when drawn smaller
+    // The place it was given (it is clipped to this), bar-relative pixels.
+    float x0 = 0.0f, y0 = 0.0f, x1 = 0.0f, y1 = 0.0f;
+};
+
+// barW / scale: the bar's width and the deck's scale; coreW: the fixed
+// cluster's width in deck units; coreScaled: measure the middle rule against
+// the cluster as drawn (the 2x counter) rather than today's 1x rule;
+// metersShown: whether the two meters are on the bar; glyphW: the banner's
+// lettering at the bar's font (words plus key label); fixedW: the part of its
+// width that does not scale with the font (spacing and the key's padding);
+// lineH: its height at the bar's font.
+inline MuteBannerPlace placeMuteBanner(float barW, float scale, float coreW, bool coreScaled,
+                                       bool metersShown, float glyphW, float fixedW,
+                                       float lineH) {
+    MuteBannerPlace p;
+    const float bannerW = glyphW + fixedW;
+    const float ruleCoreW = coreScaled ? coreW * scale : coreW;
+    const float clusterEnd = coreW * scale + kMuteBannerEdgeClearance;
+    // 0 - the middle, exactly where it always went when it fits.
+    if (muteBannerMiddleW(barW, ruleCoreW) >= std::max(kMuteBannerMinW, bannerW)) {
+        p.slot = 0;
+        p.x = clusterEnd;
+        p.y = 62.0f * scale;
+        p.x0 = p.x;
+        p.y0 = p.y;
+        p.x1 = p.x + bannerW;
+        p.y1 = p.y + lineH;
+        return p;
+    }
+    // 1 - across the top, right of the cluster, clear of the meter faces.
+    const float x1r = metersShown ? barW - kMeterRightMargin : barW - kMuteBannerEdgeClearance;
+    const float y1r = metersShown ? kMeterTopPx - 2.0f : 62.0f * scale;
+    // 2 - the master cluster's head: past the transport (74 + 46 units, and
+    // clear metal), short of the divider, above the MASTER caption.
+    const float x0m = 130.0f * scale;
+    const float x1m = (kDeckMasterDividerX - 6.0f) * scale;
+    const float y0m = 4.0f * scale;
+    const float y1m = 48.0f * scale;
+    const float wr = x1r - clusterEnd;
+    const float wm = x1m - x0m;
+    if (wr >= wm) {
+        p.slot = 1;
+        p.x0 = clusterEnd;
+        p.y0 = 3.0f;
+        p.x1 = x1r;
+        p.y1 = y1r;
+    } else {
+        p.slot = 2;
+        p.x0 = x0m;
+        p.y0 = y0m;
+        p.x1 = x1m;
+        p.y1 = y1m;
+    }
+    const float room = std::max(0.0f, p.x1 - p.x0 - 2.0f);
+    float fs = 1.0f;
+    if (bannerW > room && glyphW > 0.0f) { fs = std::max(0.0f, (room - fixedW) / glyphW); }
+    // Nor taller than the place.
+    if (lineH > 0.0f && lineH * fs > p.y1 - p.y0) { fs = (p.y1 - p.y0) / lineH; }
+    const float floorScale = lineH > 0.0f ? kMuteBannerMinFontPx / lineH : 1.0f;
+    p.fontScale = std::min(1.0f, std::max(fs, floorScale));
+    p.x = p.x0;
+    p.y = p.y0 + std::max(0.0f, (p.y1 - p.y0 - lineH * p.fontScale) * 0.5f);
+    return p;
+}
+
 // --- WHAT A GAIN READS AS, and it is not always decibels --------------------
 //
 // THE DEFECT THIS EXISTS FOR. Every consumer of source::GainInfo lettered its

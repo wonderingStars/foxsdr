@@ -88,6 +88,7 @@
 #include "gui/spectrum_view.hpp"
 #include "gui/track_detail_view.hpp"
 #include "gui/tune_control.hpp"
+#include "gui/tuner_ink.hpp"
 #include "gui/volume_meter.hpp"
 #include "gui/waterfall_view.hpp"
 #include "gui/present_grace.hpp"
@@ -2458,7 +2459,7 @@ constexpr float kKeyWordPadX = 3.0f;
 bool benchWordKey(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, const char* label,
                   bool enabled, const char* id) {
     if (dl == nullptr || br.x - tl.x < 12.0f || br.y - tl.y < 8.0f) { return false; }
-    cascade::gui::census::note(std::string("key:") + (id != nullptr ? id : ""));
+    cascade::gui::census::note("key:", id != nullptr ? id : "");
     ImGui::PushID(id);
     ImGui::SetCursorScreenPos(tl);
     ImGui::BeginDisabled(!enabled);
@@ -2700,7 +2701,7 @@ bool benchSection(const char* label, bool defaultOpen, const char* chipText = nu
     static ImGuiID pendingId = 0;
     static bool pendingOpen = false;
     const ImGuiID rowId = ImGui::GetID(label);
-    cascade::gui::census::note(std::string("section:") + (label != nullptr ? label : ""));
+    cascade::gui::census::note("section:", label != nullptr ? label : "");
     if (pendingId == rowId) {
         ImGui::SetNextItemOpen(pendingOpen);
         pendingId = 0;
@@ -2884,7 +2885,7 @@ bool benchSwitchRow(const char* label, bool on, const char* chipText,
                     ImU32 lampColour, bool lampLit, bool enabled,
                     const char* tooltip) {
     benchRailFlush();
-    cascade::gui::census::note(std::string("switch:") + (label != nullptr ? label : ""));
+    cascade::gui::census::note("switch:", label != nullptr ? label : "");
     // Same rule as benchSection: the visible name stops at the id suffix, so
     // "Satellites map###satmap:X" letters the words and not the plumbing -
     // and the name is held whole, however long its translation.
@@ -3821,7 +3822,7 @@ void AppWindow::drawStatusColumn() {
             h = 6.0f + tinyH + 2.0f + cardValueH + linesH + 6.0f;
         }
         if (y + h > cardsBottom) { return; }
-        cascade::gui::census::note(std::string("status:") + caption);
+        cascade::gui::census::note("status:", caption);
         const ImVec2 tl(cardL, y);
         const ImVec2 br(cardR, y + h);
         // A status card is a well ("well") with a border ("border").
@@ -4586,6 +4587,7 @@ void AppWindow::drawToolbar() {
     const ImVec2 barTL = ImGui::GetWindowPos();
     const float barW = ImGui::GetWindowSize().x;
     const ImVec2 barBR(barTL.x + barW, barTL.y + barH);
+    cascade::gui::census::rect("deck:bar", barTL.x, barTL.y, barBR.x, barBR.y);
     // Reference units to screen pixels, in one place: X and Y for a position,
     // S for a length.
     const auto X = [&](float u) { return barTL.x + u * scale; };
@@ -4723,10 +4725,10 @@ void AppWindow::drawToolbar() {
         for (int i = 0; i < 4; ++i) {
             {
                 const float lx = firstX + lampPitch * static_cast<float>(i);
-                const std::string nm = "deck:lamp" + std::to_string(i);
-                cascade::gui::census::note(nm);
-                cascade::gui::census::rect(nm, lx - widestWord * 0.5f, Y(86.0f) - S(7.0f),
-                                           lx + widestWord * 0.5f, Y(86.0f) + S(7.0f));
+                cascade::gui::census::note("deck:lamp", i);
+                cascade::gui::census::rect("deck:lamp", i, lx - widestWord * 0.5f,
+                                           Y(86.0f) - S(7.0f), lx + widestWord * 0.5f,
+                                           Y(86.0f) + S(7.0f));
             }
             cascade::gui::drawBenchLamp(
                 dl, ImVec2(firstX + lampPitch * static_cast<float>(i), Y(86.0f)), S(7.0f),
@@ -4883,22 +4885,41 @@ void AppWindow::drawToolbar() {
     // are the readout that just changed and the volume control that is not
     // the reason there is no sound.
     //
-    // It takes the bar's open middle where there is one, and the strip under
-    // the counter where there is not - muteBannerTakesTheMiddle in
-    // gui/tune_control.hpp decides which, in the same terms the meters rule
-    // uses, so the two cannot disagree about where the middle ends.
-    {
-        ImVec2 at(X(coreW) + cascade::gui::kMuteBannerEdgeClearance, Y(62.0f));
-        if (!cascade::gui::muteBannerTakesTheMiddle(barW,
-                                                    layout.scale >= 2 ? coreW * scale : coreW)) {
-            at = ImVec2(X(300.0f), Y(124.0f));
-        }
+    // It takes the bar's open middle where there is one wide enough for it -
+    // in the same terms the meters rule uses, so the two cannot disagree about
+    // where the middle ends - and otherwise the clear brass across the top of
+    // the bar or at the head of the master cluster, drawn smaller if it has to
+    // be: placeMuteBanner in gui/tune_control.hpp, where a test sweeps every
+    // bar width against every part of the deck. It is never laid over the
+    // counter - the old fallback, "under the counter", was on the counter.
+    if (const std::string who = muteBannerSubject(); !who.empty()) {
+        std::string words;
+        cascade::core::formatUtf8(words, tr("Sound muted by %s"), who.c_str());
+        const ImGuiStyle& st = ImGui::GetStyle();
+        const float glyphW = ImGui::CalcTextSize(words.c_str()).x +
+                             ImGui::CalcTextSize(trId("Stop plugin##mute_banner"), nullptr, true).x;
+        // The Dummy's SameLine and the key's own SameLine, and the key's padding.
+        const float fixedW = 2.0f * st.ItemSpacing.x + 2.0f * st.FramePadding.x;
+        const cascade::gui::MuteBannerPlace place = cascade::gui::placeMuteBanner(
+            barW, scale, coreW, layout.scale >= 2, showMeters, glyphW, fixedW,
+            ImGui::GetFontSize());
+        const ImVec2 at(barTL.x + place.x, barTL.y + place.y);
+        const bool smaller = place.fontScale < 1.0f;
+        if (smaller) { ImGui::PushFont(nullptr, ImGui::GetFontSize() * place.fontScale); }
+        ImGui::PushClipRect(ImVec2(barTL.x + place.x0, barTL.y + place.y0),
+                            ImVec2(barTL.x + place.x1, barTL.y + place.y1), true);
         ImGui::SetCursorScreenPos(at);
         // A zero-sized item so the SameLine drawMuteBanner opens with has a
         // line to resume: the banner lays itself out and this is the only way
         // to tell it where.
         ImGui::Dummy(ImVec2(0.0f, 0.0f));
-        drawMuteBanner();
+        if (drawMuteBanner()) {
+            cascade::gui::census::note("deck:mute");
+            cascade::gui::census::rect("deck:mute", at.x, at.y, ImGui::GetItemRectMax().x,
+                                       ImGui::GetItemRectMax().y);
+        }
+        ImGui::PopClipRect();
+        if (smaller) { ImGui::PopFont(); }
     }
 
     // THE RAIL ACROSS THE FOOT. A light hairline directly above a dark one,
@@ -5228,7 +5249,7 @@ void drawTunerBezel(ImDrawList* dl, const ImVec2& plateTL, float s,
                       ImVec2(br.x + ring * 2.0f, br.y + ring * 2.0f), theme::toneHex(0x6a6e55, 255, theme::ink::PlateTop, theme::ink::White), r + ring * 2.0f);
     dl->AddRectFilled(ImVec2(tl.x - ring, tl.y - ring), ImVec2(br.x + ring, br.y + ring), theme::toneHex(0x2a2c20, 255, theme::ink::PlateBot, theme::ink::Black),
                       r + ring);
-    dl->AddRectFilled(tl, br, theme::toneHex(0x0b0b09, 255, theme::ink::DigitBgBot, theme::ink::DigitBgTop), r);
+    dl->AddRectFilled(tl, br, cascade::gui::tunerBezelGround(), r);
 }
 
 // --- the footer line ---------------------------------------------------------
@@ -5357,7 +5378,7 @@ void drawNixieTube(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, char digi
             const float o2 = std::max(paint.glowSpread * 0.5f, paint.glowSpread * s);
             const float o1 = std::max(1.0f, 1.5f * s);
             const ImU32 wide = theme::tone(255, 106, 0, 36, theme::ink::Digit);
-            const ImU32 tight = theme::toneHex(paint.glowRgb, paint.glowAlpha, theme::ink::Digit);
+            const ImU32 tight = cascade::gui::tunerGlowInk(paint, paint.glowAlpha);
             const float diag = 0.7071f;
             const ImVec2 ring[8] = {ImVec2(1, 0), ImVec2(-1, 0), ImVec2(0, 1), ImVec2(0, -1),
                                     ImVec2(diag, diag), ImVec2(-diag, diag), ImVec2(diag, -diag),
@@ -5374,11 +5395,11 @@ void drawNixieTube(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, char digi
                                 txt);
                 }
             }
-            dl->AddText(font, fontPx, at, theme::toneHex(paint.digitRgb, paint.digitAlpha, theme::ink::Digit), txt);
+            dl->AddText(font, fontPx, at, cascade::gui::tunerFigureInk(paint, paint.digitAlpha), txt);
         } else {
             // A leading zero: lit only enough to be read as a figure that is
             // there, with none of the glow that says it carries value.
-            dl->AddText(font, fontPx, at, theme::toneHex(paint.digitRgb, paint.dimAlpha, theme::ink::Digit), txt);
+            dl->AddText(font, fontPx, at, cascade::gui::tunerFigureInk(paint, paint.dimAlpha), txt);
         }
     }
     dl->PopClipRect();
@@ -5412,7 +5433,7 @@ void drawFlatDigitCell(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, char 
     // trade away. The corner radius is the plate's own 4-unit corner, halved,
     // which keeps ten cells reading as ten cells rather than as one bar.
     const float r = std::max(1.0f, 2.0f * s);
-    dl->AddRectFilled(tl, br, theme::toneHex(paint.cellRgb, 255, theme::ink::DigitBg), r);
+    dl->AddRectFilled(tl, br, cascade::gui::tunerCellGround(paint), r);
     dl->AddRect(tl, br, theme::tone(255, 255, 255, 18, theme::ink::Border), r, 0, std::max(1.0f, 1.0f * s));
     dl->PushClipRect(tl, br, true);
     {
@@ -5439,8 +5460,8 @@ void drawFlatDigitCell(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, char 
                         gc,
                         ImVec2(sz.x * 0.45f + paint.haloUnits * s * t,
                                sz.y * 0.45f + paint.haloUnits * s * t),
-                        theme::toneHex(paint.glowRgb,
-                               static_cast<int>(static_cast<unsigned>(paint.glowAlpha) / 6u), theme::ink::Digit),
+                        cascade::gui::tunerGlowInk(
+                            paint, static_cast<int>(static_cast<unsigned>(paint.glowAlpha) / 6u)),
                         0.0f, 0);
                 }
             }
@@ -5455,7 +5476,7 @@ void drawFlatDigitCell(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, char 
                 const unsigned a = std::max(
                     1u, static_cast<unsigned>(paint.glowAlpha) * static_cast<unsigned>(k + 1) /
                             static_cast<unsigned>(paint.glowLayers));
-                const ImU32 col = theme::toneHex(paint.glowRgb, static_cast<int>(a), theme::ink::Digit);
+                const ImU32 col = cascade::gui::tunerGlowInk(paint, static_cast<int>(a));
                 for (const ImVec2& d : ring) {
                     dl->AddText(font, fontPx, ImVec2(at.x + d.x * off, at.y + d.y * off), col, txt);
                 }
@@ -5466,7 +5487,8 @@ void drawFlatDigitCell(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, char 
         // difference between a neon sign and a smear. A leading zero carries no
         // value and is dimmed, the deck's own rule in every style.
         dl->AddText(font, fontPx, at,
-                    theme::toneHex(paint.digitRgb, bright ? paint.digitAlpha : paint.dimAlpha, theme::ink::Digit), txt);
+                    cascade::gui::tunerFigureInk(paint, bright ? paint.digitAlpha : paint.dimAlpha),
+                    txt);
     }
     dl->PopClipRect();
 }
@@ -5520,7 +5542,7 @@ void drawToggleSwitch(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, bool u
         const ImVec2 at(cx - wordW * 0.5f, i == 0 ? tl.y : br.y - sh);
         // addTrackedText stops BEFORE a glyph that would pass maxX, so a cut
         // word ends on a whole letter, never on a sliver of one.
-        cascade::gui::addTrackedText(dl, f, spx, at, theme::toneHex(0xd8d3b8, 255, theme::ink::PlateInk), words[i], strack,
+        cascade::gui::addTrackedText(dl, f, spx, at, cascade::gui::tunerStencilInk(), words[i], strack,
                                      fit.fits ? FLT_MAX : at.x + keep - 1.5f);
     }
 
@@ -6056,16 +6078,15 @@ void AppWindow::drawRadioSection() {
         for (int i = 0; i < 8; ++i) {
             if (i % kColumns != 0) { ImGui::SameLine(); }
             const bool selected = (i == modeIndex_);
-            if (selected) {
-                ImGui::PushStyleColor(ImGuiCol_Button,
-                                      ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-            }
+            // The lit key: today's pressed brass, or foxsdr-ui/1's activeText
+            // on activeBg (Field Radio lettered it cream on gold, 1.57:1).
+            const int litPushed = selected ? cascade::gui::theme::pushLitKeyColours() : 0;
             // setModeIndex, not the six lines that used to be here: the mode
             // KEYS press this same button (see applyKeyAction), and two copies
             // of "what changing mode does" is how a key ends up setting the
             // demodulator without its bandwidth.
             if (ImGui::Button(kModeNames[i], ImVec2(cellWidth, 0.0f))) { setModeIndex(i); }
-            if (selected) { ImGui::PopStyleColor(); }
+            if (litPushed > 0) { ImGui::PopStyleColor(litPushed); }
         }
 
         // VFO offset from the input center. The slider edits kHz (a 1 Hz-per-
@@ -6284,8 +6305,11 @@ void AppWindow::applyPendingTheme() {
     cascade::gui::theme::setTheme(id);
     cascade::gui::theme::applyTheme();
     cascade::gui::fonts::setPreferredPair(cascade::gui::theme::preferredFontPair(id));
-    // The waterfall's rows already painted keep the colours they were painted
-    // in and scroll away; new rows use the theme's colormap from the next one.
+    // The waterfall follows on its next draw or line, whichever comes first
+    // (a stopped receiver still draws): WaterfallView::followTheme sees the
+    // generation move and repaints the rows already on screen in the new
+    // colormap - every pixel is an entry of the old table, so it maps exactly -
+    // so the history does not keep the old theme's colours while it scrolls.
     cascade::core::diagLogf("theme: %s", uiThemeKey_.c_str());
 }
 
@@ -6613,8 +6637,8 @@ void AppWindow::drawDecodeBank() {
 static bool benchBankKey(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
                          const char* label, bool on, const char* tooltip, int index) {
     if (dl == nullptr || br.x - tl.x < 12.0f || br.y - tl.y < 8.0f) { return false; }
-    cascade::gui::census::note("bank:" + std::to_string(index));
-    cascade::gui::census::rect("bank:" + std::to_string(index), tl.x, tl.y, br.x, br.y);
+    cascade::gui::census::note("bank:", index);
+    cascade::gui::census::rect("bank:", index, tl.x, tl.y, br.x, br.y);
     ImGui::PushID(index);
     ImGui::SetCursorScreenPos(tl);
     const bool pressed = ImGui::InvisibleButton("##bankkey", ImVec2(br.x - tl.x, br.y - tl.y));
@@ -17117,7 +17141,8 @@ void AppWindow::drawPresetKeys(const std::string& pluginKey, const std::string& 
             ImGui::PushStyleColor(ImGuiCol_Button,
                                   cascade::gui::theme::vec(cascade::gui::theme::kBrassDark));
             ImGui::PushStyleColor(ImGuiCol_Text,
-                                  cascade::gui::theme::vec(cascade::gui::theme::kPhosphor));
+                                  cascade::gui::theme::vec(cascade::gui::theme::legible(
+                                      cascade::gui::theme::kPhosphor, cascade::gui::theme::kBrassDark)));
         }
         // A PRESS ONLY RECORDS. See pendingPresetRequest_'s own comment for
         // why applying here, mid-iteration of drawPluginWindows' lists, is
@@ -17535,15 +17560,26 @@ void AppWindow::drawMutePopup() {
     ImGui::EndPopup();
 }
 
-void AppWindow::drawMuteBanner() {
+std::string AppWindow::muteBannerSubject() const {
+    // THE CENSUS SEAM: the banner drawn naming this, so every layout the theme
+    // census runs places and measures it (tests/test_theme_census.cpp).
+    static const char* const forced = [] {
+        const char* v = std::getenv("FOXSDR_FORCE_MUTE_BANNER");
+        return (v != nullptr && v[0] != '\0') ? v : nullptr;
+    }();
+    if (forced != nullptr) { return forced; }
     // Only while the LATCH is holding: on a preset the mute is explained by
     // where the radio is pointed, and the Sinks panel says so. Off the preset
     // it is explained by nothing at all unless this is here, which is the
     // whole of the "silent with no reason" failure this product's idle
     // reasons already exist to prevent.
-    if (!muteKeptRunning_) { return; }
-    const std::string who = muteSubjectText();
-    if (who.empty()) { return; }
+    if (!muteKeptRunning_) { return {}; }
+    return muteSubjectText();
+}
+
+bool AppWindow::drawMuteBanner() {
+    const std::string who = muteBannerSubject();
+    if (who.empty()) { return false; }
     ImGui::SameLine();
     ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
     ImGui::Text(tr("Sound muted by %s"), who.c_str());
@@ -17552,6 +17588,7 @@ void AppWindow::drawMuteBanner() {
     if (ImGui::SmallButton(trId("Stop plugin##mute_banner"))) {
         stopMutingPlugins(mutedByKeys_);
     }
+    return true;
 }
 
 void AppWindow::drawPluginTuneControls() {
@@ -18122,7 +18159,8 @@ void AppWindow::drawTransmitPage() {
             ImGui::PushStyleColor(ImGuiCol_Button,
                                   cascade::gui::theme::vec(cascade::gui::theme::kAlarm));
             ImGui::PushStyleColor(ImGuiCol_Text,
-                                  cascade::gui::theme::vec(cascade::gui::theme::kIvory));
+                                  cascade::gui::theme::vec(cascade::gui::theme::legible(
+                                      cascade::gui::theme::kIvory, cascade::gui::theme::kAlarm)));
         }
         if (ImGui::Button(trId("SPLIT##txsplit"), ImVec2(80.0f, 0.0f))) {
             transmitSplit_ = !transmitSplit_;
@@ -18156,7 +18194,8 @@ void AppWindow::drawTransmitPage() {
             ImGui::PushStyleColor(ImGuiCol_Button,
                                   cascade::gui::theme::vec(cascade::gui::theme::kBrassDark));
             ImGui::PushStyleColor(ImGuiCol_Text,
-                                  cascade::gui::theme::vec(cascade::gui::theme::kPhosphor));
+                                  cascade::gui::theme::vec(cascade::gui::theme::legible(
+                                      cascade::gui::theme::kPhosphor, cascade::gui::theme::kBrassDark)));
         }
         if (ImGui::Button(cascade::dsp::txModeName(m), ImVec2(64.0f, 0.0f))) {
             transmitModeIndex_ = i;
@@ -18215,7 +18254,8 @@ void AppWindow::drawTransmitPage() {
             ImGui::PushStyleColor(ImGuiCol_Button,
                                   cascade::gui::theme::vec(cascade::gui::theme::kBrassDark));
             ImGui::PushStyleColor(ImGuiCol_Text,
-                                  cascade::gui::theme::vec(cascade::gui::theme::kPhosphor));
+                                  cascade::gui::theme::vec(cascade::gui::theme::legible(
+                                      cascade::gui::theme::kPhosphor, cascade::gui::theme::kBrassDark)));
         }
         if (ImGui::Button(trId(cascade::core::txInputName(in)), ImVec2(70.0f, 0.0f))) {
             transmitInputIndex_ = i;
@@ -18290,7 +18330,8 @@ void AppWindow::drawTransmitPage() {
             ImGui::PushStyleColor(ImGuiCol_Button,
                                   cascade::gui::theme::vec(cascade::gui::theme::kAlarmHot));
             ImGui::PushStyleColor(ImGuiCol_Text,
-                                  cascade::gui::theme::vec(cascade::gui::theme::kIvory));
+                                  cascade::gui::theme::vec(cascade::gui::theme::legible(
+                                      cascade::gui::theme::kIvory, cascade::gui::theme::kAlarmHot)));
         }
         ImGui::Button("PTT##txptt", ImVec2(160.0f, 56.0f));
         // HELD, NOT CLICKED. IsItemActive is true for exactly as long as the
@@ -18332,7 +18373,8 @@ void AppWindow::drawTransmitPage() {
             ImGui::PushStyleColor(ImGuiCol_Button,
                                   cascade::gui::theme::vec(cascade::gui::theme::kAlarm));
             ImGui::PushStyleColor(ImGuiCol_Text,
-                                  cascade::gui::theme::vec(cascade::gui::theme::kIvory));
+                                  cascade::gui::theme::vec(cascade::gui::theme::legible(
+                                      cascade::gui::theme::kIvory, cascade::gui::theme::kAlarm)));
         }
         if (ImGui::Button(trId("LATCH##txlatch"), ImVec2(100.0f, 56.0f))) {
             transmitLatchPressed_ = true;
@@ -19126,7 +19168,8 @@ void AppWindow::drawDemodScopePage() {
                 ImGui::PushStyleColor(ImGuiCol_Button,
                                       cascade::gui::theme::vec(cascade::gui::theme::kBrassDark));
                 ImGui::PushStyleColor(ImGuiCol_Text,
-                                      cascade::gui::theme::vec(cascade::gui::theme::kPhosphor));
+                                      cascade::gui::theme::vec(cascade::gui::theme::legible(
+                                          cascade::gui::theme::kPhosphor, cascade::gui::theme::kBrassDark)));
             }
             // 84 px keys: a longer word is drawn smaller, not cut.
             if (cascade::gui::fittedButton(trId(cascade::gui::scopeSignalKey(s)),
@@ -19206,7 +19249,8 @@ void AppWindow::drawDemodScopePage() {
                 ImGui::PushStyleColor(ImGuiCol_Button,
                                       cascade::gui::theme::vec(cascade::gui::theme::kBrassDark));
                 ImGui::PushStyleColor(ImGuiCol_Text,
-                                      cascade::gui::theme::vec(cascade::gui::theme::kPhosphor));
+                                      cascade::gui::theme::vec(cascade::gui::theme::legible(
+                                          cascade::gui::theme::kPhosphor, cascade::gui::theme::kBrassDark)));
             }
             if (cascade::gui::fittedButton(trId(cascade::gui::scopeDisplayKey(d)),
                                            ImVec2(84.0f, 0.0f))) {

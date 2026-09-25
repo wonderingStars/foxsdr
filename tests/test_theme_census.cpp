@@ -18,7 +18,9 @@
  * opens with:
  *   - every theme draws EXACTLY the parts today's bench draws at that size;
  *   - the deck's parts never overlap, and both meters are on it - including
- *     the enlarged counter with its switches, the tallest and widest deck.
+ *     the enlarged counter with its switches, the tallest and widest deck -
+ *     and the mute banner, drawn in every run through a test seam, lies whole
+ *     on the bar and on none of them.
  *
  * Isolated like every other test that starts the application: its own config
  * (CASCADE_CONFIG_TEST), APPDATA / LOCALAPPDATA / XDG dirs in a scratch folder,
@@ -183,6 +185,14 @@ int main() {
     }
     setEnv("FOXSDR_OPEN_SECTIONS", "all");
     setEnv("FOXSDR_SINGLE_VIEWPORT", "1");
+    // THE MUTE BANNER, DRAWN IN EVERY RUN. It appears only while a decoder the
+    // user kept running holds the sound down, so an ordinary census never sees
+    // it - and Bench Classic XL's first cut laid it across the lower half of
+    // the enlarged figures at 1600 x 1000 and 1280 x 720 (today's bench put it
+    // over its own switch row at 1280). The seam draws it naming this decoder,
+    // at the length the real banner has, so it is placed and measured with
+    // the deck's other parts.
+    setEnv("FOXSDR_FORCE_MUTE_BANNER", "ADS-B Decoder");
 
     // The six presets as a user who PICKED each one has them (the counter and
     // readings sizes a pick brings), and the two layouts no preset ships but a
@@ -207,11 +217,12 @@ int main() {
     // The parts every run must have drawn, whatever the theme.
     std::vector<std::string> required = {"deck:stop",       "deck:lamp0",       "deck:lamp1",
                                          "deck:lamp2",      "deck:lamp3",       "deck:counter",
-                                         "deck:volume",     "deck:meter.rate",  "deck:meter.volume"};
+                                         "deck:volume",     "deck:meter.rate",  "deck:meter.volume",
+                                         "deck:mute"};
     for (int b = 0; b < 5; ++b) { required.push_back("bank:" + std::to_string(b)); }
     const char* deckParts[] = {"deck:stop",   "deck:lamp0",   "deck:lamp1",      "deck:lamp2",
                                "deck:lamp3",  "deck:counter", "deck:volume",     "deck:meter.rate",
-                               "deck:meter.volume"};
+                               "deck:meter.volume", "deck:mute"};
 
     for (const char* size : {"1600x1000", "1280x720"}) {
         std::printf("  window %s\n", size);
@@ -246,12 +257,36 @@ int main() {
                 if (c.items.count(r) == 0) { std::printf("    %s lacks %s\n", l.name, r.c_str()); }
                 CHECK(c.items.count(r) == 1);
             }
-            // THE DECK'S PARTS STAND APART.
+            // THE DECK'S PARTS STAND APART - every one of them measured: a part
+            // with no rectangle is a failure here, never a pair quietly skipped.
+            for (const char* part : deckParts) {
+                if (c.rects.count(part) == 0) {
+                    std::printf("    %s: %s drew no rectangle\n", l.name, part);
+                }
+                CHECK(c.rects.count(part) == 1);
+            }
+            // The banner is on the deck, whole: inside the bar, not clipped by it.
+            {
+                const auto bar = c.rects.find("deck:bar");
+                const auto mute = c.rects.find("deck:mute");
+                CHECK(bar != c.rects.end());
+                if (bar != c.rects.end() && mute != c.rects.end()) {
+                    const Rect& o = bar->second;
+                    const Rect& m = mute->second;
+                    const bool inside = m.x0 >= o.x0 && m.y0 >= o.y0 && m.x1 <= o.x1 && m.y1 <= o.y1;
+                    if (!inside) {
+                        std::printf("    %s: the mute banner (%.0f,%.0f)-(%.0f,%.0f) leaves the bar "
+                                    "(%.0f,%.0f)-(%.0f,%.0f)\n",
+                                    l.name, m.x0, m.y0, m.x1, m.y1, o.x0, o.y0, o.x1, o.y1);
+                    }
+                    CHECK(inside);
+                }
+            }
             for (std::size_t i = 0; i < std::size(deckParts); ++i) {
                 for (std::size_t j = i + 1; j < std::size(deckParts); ++j) {
                     const auto a = c.rects.find(deckParts[i]);
                     const auto b = c.rects.find(deckParts[j]);
-                    if (a == c.rects.end() || b == c.rects.end()) { continue; }
+                    if (a == c.rects.end() || b == c.rects.end()) { continue; }  // failed above
                     const bool hit = overlaps(a->second, b->second);
                     if (hit) {
                         std::printf("    %s: %s overlaps %s\n", l.name, deckParts[i],

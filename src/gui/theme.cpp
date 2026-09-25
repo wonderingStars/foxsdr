@@ -595,6 +595,7 @@ ImU32 roleBottom(Role r) { return cur().colors[static_cast<int>(r)].bottom; }
 ImU32 inkValue(const Preset& p, Ink i) {
     if (i.role == kInkBlack) { return IM_COL32(0, 0, 0, 255); }
     if (i.role == kInkWhite) { return IM_COL32(255, 255, 255, 255); }
+    if (i.role == kInkSheen) { return p.sheen | (0xFFu << IM_COL32_A_SHIFT); }
     if (i.role >= kRoleCount) { return IM_COL32(255, 0, 255, 255); }
     const Surface& s = p.colors[i.role];
     if (i.part == 1) { return s.top; }
@@ -815,6 +816,128 @@ ImU32 mix(ImU32 a, ImU32 b, float t) {
            (ch(IM_COL32_B_SHIFT) << IM_COL32_B_SHIFT) | (ch(IM_COL32_A_SHIFT) << IM_COL32_A_SHIFT);
 }
 
+// THE READABILITY FLOOR the five other themes' own style is built to: WCAG's
+// 4.5:1 for body text, with a little headroom so a colour rounded to eight
+// bits a channel cannot land a hair under it.
+constexpr double kReadable = 4.55;
+
+// `c` moved along the line to `pole` just far enough that `ink` reads on it
+// at `min` (found on the eight-bit colour actually drawn). Returns `c` when it
+// already does, and the pole itself when nothing short of it would.
+ImU32 moveUntil(ImU32 c, ImU32 pole, double min, ImU32 ink, bool moveInk) {
+    const auto ok = [&](ImU32 x) {
+        return contrastRatio(moveInk ? x : ink, moveInk ? c : x) >= min;
+    };
+    const ImU32 start = moveInk ? ink : c;
+    if (ok(start)) { return start; }
+    if (!ok(mix(start, pole, 1.0f))) { return mix(start, pole, 1.0f); }
+    float lo = 0.0f;
+    float hi = 1.0f;
+    for (int i = 0; i < 24; ++i) {
+        const float mid = 0.5f * (lo + hi);
+        if (ok(mix(start, pole, mid))) {
+            hi = mid;
+        } else {
+            lo = mid;
+        }
+    }
+    return mix(start, pole, hi);
+}
+
+// A SURFACE THE INK CAN BE READ ON: `surface`, moved away from `ink` - darker
+// under a light ink, lighter under a dark one - only as far as it has to be.
+// This is what keeps ImGui's own state colours (a hovered key, a pressed one,
+// the selected tab) readable: ImGui letters every one of them in the single
+// ImGuiCol_Text, so the ground has to give way, not the ink.
+ImU32 surfaceFor(ImU32 ink, ImU32 surface, double min = kReadable) {
+    const ImU32 pole = luminance(ink) > luminance(surface) ? IM_COL32(0, 0, 0, 255)
+                                                            : IM_COL32(255, 255, 255, 255);
+    return moveUntil(surface, pole, min, ink, false) | (0xFFu << IM_COL32_A_SHIFT);
+}
+
+// An INK that reads on every one of `grounds`: `ink`, moved toward `toward`
+// (the stronger ink of the same family) until the worst ground reaches `min`.
+ImU32 inkFor(ImU32 ink, ImU32 toward, const ImU32* grounds, int n, double min = kReadable) {
+    ImU32 worst = grounds[0];
+    for (int i = 1; i < n; ++i) {
+        if (contrastRatio(ink, grounds[i]) < contrastRatio(ink, worst)) { worst = grounds[i]; }
+    }
+    ImU32 out = moveUntil(worst, toward, min, ink, true);
+    // The worst ground decided it; the rest are no harder, but check them all.
+    for (int i = 0; i < n; ++i) {
+        if (contrastRatio(out, grounds[i]) < min) {
+            out = moveUntil(grounds[i], toward, min, out, true);
+        }
+    }
+    return out;
+}
+
+// --- THE POPUP PALETTE ------------------------------------------------------------
+//
+// IMGUI LETTERS A POPUP IN THE SAME ImGuiCol_Text AS A WINDOW, and foxsdr-ui/1
+// gives menus their own ground and ink (menuBg, menuText, menuHi, menuBorder).
+// On a theme whose menus are the same polarity as its panels that is invisible;
+// on Field Radio - cream menus over olive panels - it put cream words on a
+// cream list, 1.09:1, in every combo, tooltip and context menu. So every
+// popup-like window (a popup, a combo's list, a menu, a modal, a tooltip) is
+// drawn with this table pushed over the style for its whole extent: the vendored
+// ImGui does the pushing (FOXSDR PATCH popup-colours), so no call site - there
+// are over a hundred tooltips alone - can forget it. Everything a popup can
+// letter or hold is here: its words and quiet words, and the grounds of the
+// keys, fields, list rows, title bars, tabs and table headers inside it, each
+// made readable under menuText. Today's bench pushes nothing: its menus are
+// the same enamel its windows are, exactly as 0.99.35 drew them.
+constexpr int kPopupColourMax = 32;
+
+int buildPopupColours(ImGuiCol* idx, ImVec4* col) {
+    if (isTodayPalette()) { return 0; }
+    const ImU32 mb = role(Role::MenuBg);
+    const ImU32 mt = role(Role::MenuText);
+    const ImU32 mh = role(Role::MenuHi);
+    const ImU32 mbd = role(Role::MenuBorder);
+    const ImU32 rest = surfaceFor(mt, mh);
+    const ImU32 hover = surfaceFor(mt, mix(mh, mt, 0.12f));
+    const ImU32 held = surfaceFor(mt, mix(mh, mt, 0.22f));
+    int n = 0;
+    const auto put = [&](ImGuiCol i, ImU32 c) {
+        idx[n] = i;
+        col[n] = vec(c);
+        ++n;
+    };
+    put(ImGuiCol_Text, mt);
+    // Quieter than the words, and still read: halfway to the ground, then back
+    // toward menuText as far as the popup's ground needs.
+    put(ImGuiCol_TextDisabled, inkFor(mix(mt, mb, 0.45f), mt, &mb, 1));
+    put(ImGuiCol_Border, mbd);
+    put(ImGuiCol_Separator, mbd);
+    put(ImGuiCol_CheckMark, mt);
+    // A child inside a popup is the popup's own ground, not a dark well in it.
+    put(ImGuiCol_ChildBg, IM_COL32(0, 0, 0, 0));
+    put(ImGuiCol_Button, rest);
+    put(ImGuiCol_ButtonHovered, hover);
+    put(ImGuiCol_ButtonActive, held);
+    put(ImGuiCol_Header, rest);
+    put(ImGuiCol_HeaderHovered, hover);
+    put(ImGuiCol_HeaderActive, held);
+    put(ImGuiCol_FrameBg, surfaceFor(mt, mix(mb, mh, 0.5f)));
+    put(ImGuiCol_FrameBgHovered, rest);
+    put(ImGuiCol_FrameBgActive, hover);
+    put(ImGuiCol_TitleBg, rest);
+    put(ImGuiCol_TitleBgActive, rest);
+    put(ImGuiCol_TitleBgCollapsed, rest);
+    put(ImGuiCol_MenuBarBg, rest);
+    put(ImGuiCol_Tab, rest);
+    put(ImGuiCol_TabHovered, hover);
+    put(ImGuiCol_TabSelected, held);
+    put(ImGuiCol_TabDimmed, rest);
+    put(ImGuiCol_TabDimmedSelected, hover);
+    put(ImGuiCol_TableHeaderBg, rest);
+    put(ImGuiCol_TableRowBgAlt, withAlpha(mt, 0.04f));
+    put(ImGuiCol_TableBorderStrong, mbd);
+    put(ImGuiCol_TableBorderLight, withAlpha(mbd, 0.5f));
+    return n;
+}
+
 // EVERY OTHER THEME: the same widget roles, read from foxsdr-ui/1's names -
 // a field is a well holding text, a button is a control, a header a control
 // plate, a menu the menu roles, anything that moves to show a value the accent.
@@ -833,31 +956,50 @@ void applyRoleStyleColours(ImVec4* c) {
 
     c[ImGuiCol_WindowBg] = vec(bg);
     c[ImGuiCol_ChildBg] = vec(withAlpha(well, 0.55f));
+    // A popup's GROUND is menuBg; its words, and everything else it letters,
+    // are the popup palette (buildPopupColours), pushed over this style for
+    // every popup-like window.
     c[ImGuiCol_PopupBg] = vec(role(Role::MenuBg));
-    c[ImGuiCol_MenuBarBg] = vec(role(Role::PanelHead));
+    c[ImGuiCol_MenuBarBg] = vec(surfaceFor(label, role(Role::PanelHead)));
 
     c[ImGuiCol_Text] = vec(label);
-    c[ImGuiCol_TextDisabled] = vec(mix(muted, panel, 0.35f));
+    // QUIET, BUT READ. This application prints information in TextDisabled
+    // ("RDS: no data", the MONO flag, the target list's ids), so it is held to
+    // 4.5:1 on the window and on a child's well like any other words - muted
+    // ink a third of the way to the panel, brought back toward the label only
+    // as far as that takes (Daylight Lab's drew at 2.15:1 before this).
+    {
+        const ImU32 grounds[2] = {bg, mix(bg, well, 0.55f)};
+        c[ImGuiCol_TextDisabled] = vec(inkFor(mix(muted, panel, 0.35f), label, grounds, 2));
+    }
     c[ImGuiCol_TextSelectedBg] = vec(withAlpha(role(Role::Sel), 0.35f));
 
     c[ImGuiCol_Border] = vec(border);
     c[ImGuiCol_BorderShadow] = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
 
-    c[ImGuiCol_FrameBg] = vec(well);
-    c[ImGuiCol_FrameBgHovered] = vec(mix(well, ctrl, 0.45f));
-    c[ImGuiCol_FrameBgActive] = vec(mix(well, active, 0.35f));
+    // EVERY GROUND IMGUI LETTERS ON is made readable under the label
+    // (surfaceFor): a key hovered or held, a selected row, the selected tab.
+    // The lit key's own foxsdr-ui/1 colour (activeBg) carries activeText, and
+    // ImGui cannot letter one state of a key in a different ink - so its
+    // PRESSED state is the lit key's colour taken as dark (or as light) as the
+    // label needs, and a key that is LATCHED lit is drawn with activeText on
+    // the true activeBg by pushLitKeyColours(). Field Radio's pressed key was
+    // cream on gold at 1.57:1 before this.
+    c[ImGuiCol_FrameBg] = vec(surfaceFor(label, well));
+    c[ImGuiCol_FrameBgHovered] = vec(surfaceFor(label, mix(well, ctrl, 0.45f)));
+    c[ImGuiCol_FrameBgActive] = vec(surfaceFor(label, mix(well, active, 0.35f)));
 
-    c[ImGuiCol_Button] = vec(ctrl);
-    c[ImGuiCol_ButtonHovered] = vec(mix(ctrl, active, 0.35f));
-    c[ImGuiCol_ButtonActive] = vec(active);
+    c[ImGuiCol_Button] = vec(surfaceFor(label, ctrl));
+    c[ImGuiCol_ButtonHovered] = vec(surfaceFor(label, mix(ctrl, active, 0.35f)));
+    c[ImGuiCol_ButtonActive] = vec(surfaceFor(label, active));
 
-    c[ImGuiCol_Header] = vec(ctrl);
-    c[ImGuiCol_HeaderHovered] = vec(menuHi);
-    c[ImGuiCol_HeaderActive] = vec(mix(menuHi, active, 0.5f));
+    c[ImGuiCol_Header] = vec(surfaceFor(label, ctrl));
+    c[ImGuiCol_HeaderHovered] = vec(surfaceFor(label, menuHi));
+    c[ImGuiCol_HeaderActive] = vec(surfaceFor(label, mix(menuHi, active, 0.5f)));
 
-    c[ImGuiCol_TitleBg] = vec(role(Role::PanelHead));
-    c[ImGuiCol_TitleBgActive] = vec(role(Role::Frame));
-    c[ImGuiCol_TitleBgCollapsed] = vec(role(Role::PanelHead));
+    c[ImGuiCol_TitleBg] = vec(surfaceFor(label, role(Role::PanelHead)));
+    c[ImGuiCol_TitleBgActive] = vec(surfaceFor(label, role(Role::Frame)));
+    c[ImGuiCol_TitleBgCollapsed] = vec(surfaceFor(label, role(Role::PanelHead)));
 
     c[ImGuiCol_CheckMark] = vec(accent);
     c[ImGuiCol_SliderGrab] = vec(accent);
@@ -881,14 +1023,14 @@ void applyRoleStyleColours(ImVec4* c) {
     c[ImGuiCol_ResizeGripHovered] = vec(ctrlBorder);
     c[ImGuiCol_ResizeGripActive] = vec(accent);
 
-    c[ImGuiCol_Tab] = vec(ctrl);
-    c[ImGuiCol_TabHovered] = vec(mix(ctrl, active, 0.35f));
-    c[ImGuiCol_TabSelected] = vec(active);
+    c[ImGuiCol_Tab] = vec(surfaceFor(label, ctrl));
+    c[ImGuiCol_TabHovered] = vec(surfaceFor(label, mix(ctrl, active, 0.35f)));
+    c[ImGuiCol_TabSelected] = vec(surfaceFor(label, active));
     c[ImGuiCol_TabSelectedOverline] = vec(role(Role::ActiveLine));
-    c[ImGuiCol_TabDimmed] = vec(panel);
-    c[ImGuiCol_TabDimmedSelected] = vec(ctrl);
+    c[ImGuiCol_TabDimmed] = vec(surfaceFor(label, panel));
+    c[ImGuiCol_TabDimmedSelected] = vec(surfaceFor(label, ctrl));
 
-    c[ImGuiCol_TableHeaderBg] = vec(role(Role::PanelHead));
+    c[ImGuiCol_TableHeaderBg] = vec(surfaceFor(label, role(Role::PanelHead)));
     c[ImGuiCol_TableBorderStrong] = vec(border);
     c[ImGuiCol_TableBorderLight] = vec(withAlpha(border, 0.5f));
     c[ImGuiCol_TableRowBg] = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
@@ -940,6 +1082,53 @@ void applyTheme() {
     // background must be fully opaque. ImGui uses WindowBg for viewports; the
     // alpha set above is what keeps a map page from rendering see-through.
     s.Colors[ImGuiCol_WindowBg].w = 1.0f;
+
+    // Every popup-like window's own palette (none under today's bench).
+    ImGuiCol idx[kPopupColourMax];
+    ImVec4 col[kPopupColourMax];
+    const int n = buildPopupColours(idx, col);
+    ImGui::FoxSetPopupColors(idx, col, n);
+}
+
+int popupColours(ImGuiCol* idx, ImVec4* col, int max) {
+    ImGuiCol i[kPopupColourMax];
+    ImVec4 c[kPopupColourMax];
+    const int n = std::min(buildPopupColours(i, c), std::max(max, 0));
+    for (int k = 0; k < n; ++k) {
+        idx[k] = i[k];
+        col[k] = c[k];
+    }
+    return n;
+}
+
+ImU32 legible(ImU32 ink, ImU32 surface, double minRatio) {
+    // TODAY IS FROZEN: its inks are exactly what 0.99.35 drew, readable or not.
+    if (isTodayPalette()) { return ink; }
+    const ImU32 white = IM_COL32(255, 255, 255, 255);
+    const ImU32 black = IM_COL32(0, 0, 0, 255);
+    const ImU32 pole = contrastRatio(white, surface) >= contrastRatio(black, surface) ? white : black;
+    const ImU32 a = ink & (0xFFu << IM_COL32_A_SHIFT);
+    return (moveUntil(surface, pole, minRatio, ink | (0xFFu << IM_COL32_A_SHIFT), true) &
+            ~(0xFFu << IM_COL32_A_SHIFT)) |
+           a;
+}
+
+double relativeLuminance(ImU32 c) { return luminance(c); }
+
+int pushLitKeyColours() {
+    if (isTodayPalette()) {
+        // 0.99.35's lit key, exactly: the pressed brass, lettered in the style's ivory.
+        ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+        return 1;
+    }
+    // foxsdr-ui/1's lit key: activeText on activeBg, whatever the hand is doing.
+    const ImU32 ink = role(Role::ActiveText);
+    const ImU32 face = surfaceFor(ink, role(Role::ActiveBg));
+    ImGui::PushStyleColor(ImGuiCol_Button, vec(face));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, vec(face));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, vec(face));
+    ImGui::PushStyleColor(ImGuiCol_Text, vec(ink));
+    return 4;
 }
 
 }  // namespace cascade::gui::theme

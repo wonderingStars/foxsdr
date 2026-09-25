@@ -18,14 +18,18 @@
  *
  * SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
  */
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "gui/theme.hpp"
+#include "gui/tune_control.hpp"
+#include "gui/tuner_ink.hpp"
 #include "test_check.hpp"
 
 namespace th = cascade::gui::theme;
@@ -39,6 +43,190 @@ constexpr ImU32 rgb(unsigned hex) {
 }
 
 const th::Surface& col(const th::Preset& p, Role r) { return p.colors[static_cast<int>(r)]; }
+
+// --- THE PAIRS IMGUI REALLY DRAWS ------------------------------------------------
+//
+// WHY THIS IS READ FROM A LIVE FRAME (repair round, 2026-09-25). The first cut
+// of this test held menuText to 4.5:1 on menuBg - and Field Radio's combo
+// lists, tooltips and menus drew at 1.09:1, because ImGui letters a popup in
+// ImGuiCol_Text, not in anything called menuText. A test of the palette's
+// intended pairs cannot see the pair the library actually draws. So these are
+// read from the style STACK inside a real (headless) frame: an ordinary
+// window, a tooltip, a popup and a modal, each asked for the colours it would
+// draw with at that moment - whatever theme.cpp or anything else pushed.
+struct Pair {
+    std::string scope;    // "window", "tooltip", "popup", "modal"
+    std::string ink;      // "Text" / "TextDisabled"
+    std::string surface;  // the ImGuiCol_ the ink is drawn on
+    double ratio = 0.0;
+};
+
+ImU32 opaque(const ImVec4& v) {
+    const auto c = [](float f) {
+        return static_cast<int>(std::lround(std::fmin(std::fmax(f, 0.0f), 1.0f) * 255.0f));
+    };
+    return IM_COL32(c(v.x), c(v.y), c(v.z), 255);
+}
+
+// `top` composited over the opaque `base`, as the GPU blends it.
+ImU32 over(const ImVec4& top, ImU32 base) {
+    const ImVec4 b = th::vec(base);
+    const float a = top.w;
+    return opaque(ImVec4(top.x * a + b.x * (1.0f - a), top.y * a + b.y * (1.0f - a),
+                         top.z * a + b.z * (1.0f - a), 1.0f));
+}
+
+// Every text-bearing surface a scope can draw, with the ink ImGui letters on it.
+void readScope(const char* scope, bool popupLike, std::vector<Pair>& out) {
+    const auto c = [](ImGuiCol i) { return ImGui::GetStyleColorVec4(i); };
+    const ImU32 ground = opaque(c(popupLike ? ImGuiCol_PopupBg : ImGuiCol_WindowBg));
+    const ImU32 text = opaque(c(ImGuiCol_Text));
+    const ImU32 disabled = opaque(c(ImGuiCol_TextDisabled));
+    struct S {
+        const char* name;
+        ImGuiCol idx;
+    };
+    const S surfaces[] = {
+        {"ChildBg", ImGuiCol_ChildBg},
+        {"FrameBg", ImGuiCol_FrameBg},
+        {"FrameBgHovered", ImGuiCol_FrameBgHovered},
+        {"FrameBgActive", ImGuiCol_FrameBgActive},
+        {"Button", ImGuiCol_Button},
+        {"ButtonHovered", ImGuiCol_ButtonHovered},
+        {"ButtonActive", ImGuiCol_ButtonActive},
+        {"Header", ImGuiCol_Header},
+        {"HeaderHovered", ImGuiCol_HeaderHovered},
+        {"HeaderActive", ImGuiCol_HeaderActive},
+        {"TitleBg", ImGuiCol_TitleBg},
+        {"TitleBgActive", ImGuiCol_TitleBgActive},
+        {"TitleBgCollapsed", ImGuiCol_TitleBgCollapsed},
+        {"MenuBarBg", ImGuiCol_MenuBarBg},
+        {"Tab", ImGuiCol_Tab},
+        {"TabHovered", ImGuiCol_TabHovered},
+        {"TabSelected", ImGuiCol_TabSelected},
+        {"TabDimmed", ImGuiCol_TabDimmed},
+        {"TabDimmedSelected", ImGuiCol_TabDimmedSelected},
+        {"TableHeaderBg", ImGuiCol_TableHeaderBg},
+        {"TableRowBgAlt", ImGuiCol_TableRowBgAlt},
+    };
+    out.push_back({scope, "Text", popupLike ? "PopupBg" : "WindowBg",
+                   th::contrastRatio(text, ground)});
+    for (const S& s : surfaces) {
+        out.push_back({scope, "Text", s.name, th::contrastRatio(text, over(c(s.idx), ground))});
+    }
+    // DISABLED TEXT IS HELD TO 4.5:1 TOO, not to a lower bar. WCAG exempts an
+    // INACTIVE CONTROL from contrast, but this application prints information
+    // in ImGuiCol_TextDisabled - "RDS: no data", the MONO flag, the target
+    // list's id column, a track's secondary lines - so it is secondary text a
+    // user reads, not a control that is off. It only has to look quieter than
+    // Text, which is checked separately.
+    out.push_back({scope, "TextDisabled", popupLike ? "PopupBg" : "WindowBg",
+                   th::contrastRatio(disabled, ground)});
+    out.push_back({scope, "TextDisabled", "ChildBg",
+                   th::contrastRatio(disabled, over(c(ImGuiCol_ChildBg), ground))});
+}
+
+// One headless frame of the theme in force: a window, and inside it a tooltip,
+// an open popup and an open modal - the four scopes anything is lettered in.
+std::vector<Pair> drawnPairs() {
+    std::vector<Pair> out;
+    ImGui::NewFrame();
+    ImGui::SetNextWindowPos(ImVec2(10.0f, 10.0f));
+    ImGui::SetNextWindowSize(ImVec2(300.0f, 200.0f));
+    ImGui::Begin("pairs-window");
+    readScope("window", false, out);
+    {
+        // A KEY LATCHED LIT (the selected demodulator): at rest, under the
+        // hand and held, its legend on its face.
+        const int n = th::pushLitKeyColours();
+        CHECK(n >= 1);
+        const ImU32 ground = opaque(ImGui::GetStyleColorVec4(ImGuiCol_WindowBg));
+        const ImU32 ink = opaque(ImGui::GetStyleColorVec4(ImGuiCol_Text));
+        const std::pair<const char*, ImGuiCol> faces[] = {{"Button", ImGuiCol_Button},
+                                                          {"ButtonHovered", ImGuiCol_ButtonHovered},
+                                                          {"ButtonActive", ImGuiCol_ButtonActive}};
+        for (const auto& f : faces) {
+            out.push_back({"litkey", "Text", f.first,
+                           th::contrastRatio(ink, over(ImGui::GetStyleColorVec4(f.second), ground))});
+        }
+        ImGui::PopStyleColor(n);
+    }
+    ImGui::BeginTooltip();
+    readScope("tooltip", true, out);
+    ImGui::EndTooltip();
+    ImGui::OpenPopup("pairs-popup");
+    if (ImGui::BeginPopup("pairs-popup")) {
+        readScope("popup", true, out);
+        ImGui::EndPopup();
+    } else {
+        std::printf("  the probe popup did not open - no popup pairs read\n");
+        CHECK(false);
+    }
+    ImGui::OpenPopup("pairs-modal");
+    if (ImGui::BeginPopupModal("pairs-modal")) {
+        readScope("modal", true, out);
+        ImGui::EndPopup();
+    } else {
+        std::printf("  the probe modal did not open - no modal pairs read\n");
+        CHECK(false);
+    }
+    // After every scope has closed, the window's own ink is back.
+    const ImU32 after = opaque(ImGui::GetStyleColorVec4(ImGuiCol_Text));
+    CHECK(after == opaque(ImGui::GetStyle().Colors[ImGuiCol_Text]));
+    ImGui::End();
+    ImGui::Render();
+    return out;
+}
+
+// TODAY'S BENCH MAY NOT MOVE BY ONE PIXEL (the owner's rule for this change),
+// and some of the pairs it has always drawn are below 4.5:1: ivory legends
+// engraved on brass keys, headers and tabs - captions cut into metal, which
+// theme.hpp allows below 4.5 - and its faint disabled ink. They are pinned
+// here at exactly the ratio 0.99.35 draws, so today cannot get WORSE either,
+// and every pair not listed must reach 4.5 like every other theme's.
+struct Frozen {
+    const char* scope;
+    const char* ink;
+    const char* surface;
+    double ratio;
+};
+// Measured from 0.99.35's style (applyBenchStyleColours) in this test's own
+// frame: ivory #EFE7D2 on the lit brass #8B8069 a hovered key, a held header
+// and a hovered tab show, and the faint ink #7D7360 on the enamel.
+const std::vector<Frozen> kTodayFrozen = {
+    {"window", "Text", "ButtonHovered", 3.1601},
+    {"window", "Text", "HeaderActive", 3.1601},
+    {"window", "Text", "TabHovered", 3.1601},
+    {"window", "TextDisabled", "WindowBg", 3.6675},
+    {"window", "TextDisabled", "ChildBg", 3.8615},
+    {"tooltip", "Text", "ButtonHovered", 3.1601},
+    {"tooltip", "Text", "HeaderActive", 3.1601},
+    {"tooltip", "Text", "TabHovered", 3.1601},
+    {"tooltip", "TextDisabled", "PopupBg", 3.2563},
+    {"tooltip", "TextDisabled", "ChildBg", 3.7061},
+    {"popup", "Text", "ButtonHovered", 3.1601},
+    {"popup", "Text", "HeaderActive", 3.1601},
+    {"popup", "Text", "TabHovered", 3.1601},
+    {"popup", "TextDisabled", "PopupBg", 3.2563},
+    {"popup", "TextDisabled", "ChildBg", 3.7061},
+    {"modal", "Text", "ButtonHovered", 3.1601},
+    {"modal", "Text", "HeaderActive", 3.1601},
+    {"modal", "Text", "TabHovered", 3.1601},
+    {"modal", "TextDisabled", "PopupBg", 3.2563},
+    {"modal", "TextDisabled", "ChildBg", 3.7061},
+    // The lit mode key under the hand: 0.99.35 pushed only its rest colour.
+    {"litkey", "Text", "ButtonHovered", 3.1601},
+};
+
+bool frozenMatch(const Pair& p, double* want) {
+    for (const Frozen& f : kTodayFrozen) {
+        if (p.scope == f.scope && p.ink == f.ink && p.surface == f.surface) {
+            *want = f.ratio;
+            return true;
+        }
+    }
+    return false;
+}
 
 void requireContrast(const th::Preset& p, Role ink, Role surface, bool bothStops) {
     const ImU32 fg = col(p, ink).top;
@@ -291,6 +479,189 @@ int main() {
         th::setTheme(ThemeId::Today);
         CHECK(th::kAmber == rgb(0xF0A840));
         CHECK(th::isTodayPalette());
+    }
+
+    // --- what ImGui really letters, in every scope, in every theme -----------------------
+    {
+        std::printf("  every pair ImGui draws - window, tooltip, popup, modal - is readable\n");
+        IMGUI_CHECKVERSION();
+        ImGui::CreateContext();
+        ImGuiIO& io = ImGui::GetIO();
+        io.DisplaySize = ImVec2(1280.0f, 720.0f);
+        io.DeltaTime = 1.0f / 60.0f;
+        io.IniFilename = nullptr;
+        io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures;
+        io.Fonts->AddFontDefault();
+        for (int i = 0; i < th::kThemeCount; ++i) {
+            const ThemeId id = static_cast<ThemeId>(i);
+            th::setTheme(id);
+            th::applyTheme();
+            const std::vector<Pair> pairs = drawnPairs();
+            CHECK(pairs.size() >= 4u * 24u);
+            const bool today = th::isTodayPalette();
+            // Today's bench pushes nothing over its popups (0.99.35 exactly);
+            // every other theme letters them in its own menuText.
+            {
+                ImGuiCol idx[32];
+                ImVec4 pc[32];
+                const int n = th::popupColours(idx, pc, 32);
+                CHECK(today ? n == 0 : n > 0);
+                bool textIsMenuText = false;
+                for (int k = 0; k < n; ++k) {
+                    if (idx[k] == ImGuiCol_Text) {
+                        textIsMenuText = opaque(pc[k]) == th::role(Role::MenuText);
+                    }
+                }
+                CHECK(today || textIsMenuText);
+            }
+            for (const Pair& p : pairs) {
+                double want = 0.0;
+                if (today && frozenMatch(p, &want)) {
+                    if (!(std::fabs(p.ratio - want) < 0.005)) {
+                        std::printf("  %s: frozen pair %s %s on %s moved: %.3f, pinned %.3f\n",
+                                    th::themeKey(id), p.scope.c_str(), p.ink.c_str(),
+                                    p.surface.c_str(), p.ratio, want);
+                    }
+                    CHECK(std::fabs(p.ratio - want) < 0.005);
+                    continue;
+                }
+                if (!(p.ratio >= 4.5)) {
+                    std::printf("  %s: %s %s on %s is %.2f:1\n", th::themeKey(id),
+                                p.scope.c_str(), p.ink.c_str(), p.surface.c_str(), p.ratio);
+                    if (std::getenv("FOXSDR_THEME_PRINT_FROZEN") != nullptr && today) {
+                        std::printf("FROZEN {\"%s\", \"%s\", \"%s\", %.4f},\n", p.scope.c_str(),
+                                    p.ink.c_str(), p.surface.c_str(), p.ratio);
+                    }
+                }
+                CHECK(p.ratio >= 4.5);
+            }
+            // DISABLED MUST STILL LOOK DISABLED: quieter than Text on the same
+            // ground, by a margin an eye can see (not today's, which is frozen).
+            if (!today) {
+                for (const Pair& d : pairs) {
+                    if (d.ink != "TextDisabled" || d.surface == "ChildBg") { continue; }
+                    for (const Pair& t : pairs) {
+                        if (t.scope == d.scope && t.ink == "Text" && t.surface == d.surface) {
+                            if (!(t.ratio >= d.ratio * 1.2)) {
+                                std::printf("  %s: %s disabled text %.2f is not quieter than text "
+                                            "%.2f\n",
+                                            th::themeKey(id), d.scope.c_str(), d.ratio, t.ratio);
+                            }
+                            CHECK(t.ratio >= d.ratio * 1.2);
+                        }
+                    }
+                }
+            }
+        }
+        th::setTheme(ThemeId::Today);
+        th::applyTheme();
+        ImGui::DestroyContext();
+    }
+
+    // --- the counter: a figure hotter than its glow, and switch words that read ---------
+    //
+    // NIGHT WATCH'S NEON SMEARED (repair round, 2026-09-25): the figure's
+    // near-white core and its glow were both anchored to the digit role alone,
+    // so outside today both became the digit colour and the figure was the
+    // same colour as its halo. And Field Radio's UP / DN stencils were plate
+    // ink - cream - on a bezel that in Field is the LCD's own light green.
+    // These read the painters' own inks (gui/tuner_ink.hpp).
+    {
+        std::printf("  every glowing figure is hotter than its glow, and readable on its cell\n");
+        using cascade::gui::TunerStyle;
+        for (int i = 0; i < th::kThemeCount; ++i) {
+            const ThemeId id = static_cast<ThemeId>(i);
+            th::setTheme(id);
+            for (const TunerStyle style : {TunerStyle::Nixie, TunerStyle::Neon, TunerStyle::Plain}) {
+                const cascade::gui::TunerCellPaint p = cascade::gui::tunerCellPaint(style);
+                const ImU32 figure = cascade::gui::tunerFigureInk(p, 255);
+                const double onCell =
+                    th::contrastRatio(figure, cascade::gui::tunerCellGround(p));
+                if (!(onCell >= 4.5)) {
+                    std::printf("  %s %s: the figure is %.2f:1 on its cell\n", th::themeKey(id),
+                                cascade::gui::tunerStyleName(style), onCell);
+                }
+                CHECK(onCell >= 4.5);
+                if (p.glowLayers == 0) { continue; }
+                // Every glow the painters draw around it: the style's own ring
+                // colour, and the Nixie's two reference shadows.
+                const ImU32 glows[3] = {cascade::gui::tunerGlowInk(p, 255),
+                                        th::tone(255, 106, 0, 255, th::ink::Digit),
+                                        th::tone(255, 90, 0, 255, th::ink::Digit)};
+                for (int g = 0; g < (style == TunerStyle::Nixie ? 3 : 1); ++g) {
+                    const double fl = th::relativeLuminance(figure);
+                    const double gl = th::relativeLuminance(glows[g]);
+                    if (!(fl > gl + 0.01)) {
+                        std::printf("  %s %s: the figure (L %.3f) is not hotter than glow %d "
+                                    "(L %.3f)\n",
+                                    th::themeKey(id), cascade::gui::tunerStyleName(style), fl, g, gl);
+                    }
+                    CHECK(fl > gl + 0.01);
+                }
+            }
+            const double stencil = th::contrastRatio(cascade::gui::tunerStencilInk(),
+                                                     cascade::gui::tunerBezelGround());
+            if (!(stencil >= 4.5)) {
+                std::printf("  %s: UP / DN are %.2f:1 on the bezel\n", th::themeKey(id), stencil);
+            }
+            CHECK(stencil >= 4.5);
+        }
+        // TODAY'S COUNTER, BIT FOR BIT, in all three faces.
+        th::setTheme(ThemeId::Today);
+        using cascade::gui::tunerCellPaint;
+        CHECK(cascade::gui::tunerFigureInk(tunerCellPaint(TunerStyle::Neon), 255) ==
+              IM_COL32(0xD6, 0xFE, 0xFF, 255));
+        CHECK(cascade::gui::tunerFigureInk(tunerCellPaint(TunerStyle::Neon), 70) ==
+              IM_COL32(0xD6, 0xFE, 0xFF, 70));
+        CHECK(cascade::gui::tunerGlowInk(tunerCellPaint(TunerStyle::Neon), 90) ==
+              IM_COL32(0x00, 0xD0, 0xFF, 90));
+        CHECK(cascade::gui::tunerFigureInk(tunerCellPaint(TunerStyle::Nixie), 255) ==
+              IM_COL32(0xFF, 0xB3, 0x47, 255));
+        CHECK(cascade::gui::tunerGlowInk(tunerCellPaint(TunerStyle::Nixie), 70) ==
+              IM_COL32(0xFF, 0x8A, 0x1F, 70));
+        CHECK(cascade::gui::tunerFigureInk(tunerCellPaint(TunerStyle::Plain), 255) ==
+              IM_COL32(0xFF, 0xFF, 0xFF, 255));
+        CHECK(cascade::gui::tunerStencilInk() == IM_COL32(0xD8, 0xD3, 0xB8, 255));
+        CHECK(cascade::gui::tunerBezelGround() == IM_COL32(0x0B, 0x0B, 0x09, 255));
+        th::setTheme(ThemeId::ClassicXl);
+        CHECK(cascade::gui::tunerFigureInk(tunerCellPaint(TunerStyle::Neon), 255) ==
+              IM_COL32(0xD6, 0xFE, 0xFF, 255));
+        th::setTheme(ThemeId::Today);
+    }
+
+    // --- legible(): the lit keys' legends --------------------------------------------------
+    // The transmit and scope pages letter a lit key phosphor on dark brass, and
+    // SPLIT / LATCH / PTT ivory on rust - pairs no preset was checked for, and
+    // under Night Watch and Glass Cockpit ivory-on-"bad" stood at 1.8:1. They
+    // are lettered through legible() now: today's inks exactly, every other
+    // theme's readable.
+    {
+        std::printf("  a lit key's legend reads on its face, and today's is untouched\n");
+        for (int i = 0; i < th::kThemeCount; ++i) {
+            const ThemeId id = static_cast<ThemeId>(i);
+            th::setTheme(id);
+            const std::pair<ImU32, ImU32> keys[] = {{th::kPhosphor, th::kBrassDark},
+                                                    {th::kIvory, th::kAlarm},
+                                                    {th::kIvory, th::kAlarmHot}};
+            for (const auto& k : keys) {
+                const ImU32 ink = th::legible(k.first, k.second);
+                if (th::isTodayPalette()) {
+                    CHECK(ink == k.first);
+                    continue;
+                }
+                const double r = th::contrastRatio(ink, k.second);
+                if (!(r >= 4.5)) {
+                    std::printf("  %s: a lit legend is %.2f:1 on its key\n", th::themeKey(id), r);
+                }
+                CHECK(r >= 4.5);
+                // An ink that already reads is left exactly as it is.
+                if (th::contrastRatio(k.first, k.second) >= 4.5) { CHECK(ink == k.first); }
+            }
+            // Alpha is the caller's.
+            CHECK((th::legible(th::withAlpha(th::kIvory, 0.5f), th::kAlarm) >> IM_COL32_A_SHIFT) ==
+                  (th::withAlpha(th::kIvory, 0.5f) >> IM_COL32_A_SHIFT));
+        }
+        th::setTheme(ThemeId::Today);
     }
 
     // --- the readings size ----------------------------------------------------------------

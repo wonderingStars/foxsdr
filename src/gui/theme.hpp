@@ -53,7 +53,11 @@
 // at rest and not acceptable for a number somebody is trying to read at arm's
 // length. So: a caption may be engraved; a live figure must be on glass.
 // tests/test_theme.cpp holds every preset's reading, text, label and digit to
-// 4.5:1 against the surfaces they sit on.
+// 4.5:1 against the surfaces they sit on - and, read from a live frame, every
+// pair ImGui itself letters (the words on each key, field, row, tab and title
+// bar, in a window, a tooltip, a popup and a modal; the quiet TextDisabled
+// ink too), because the palette's intended pairs are not always the drawn
+// ones: Field Radio's menus were cream on cream until that test existed.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #ifndef CASCADE_GUI_THEME_HPP
@@ -102,6 +106,9 @@ struct Ink {
 };
 inline constexpr std::uint8_t kInkBlack = 250;
 inline constexpr std::uint8_t kInkWhite = 251;
+// The preset's lit-edge colour (Preset::sheen, opaque): white on every bench but
+// Night Watch's, whose highlights are red.
+inline constexpr std::uint8_t kInkSheen = 252;
 
 namespace ink {
 #define FOX_THEME_INK(name, role)                                                      \
@@ -160,6 +167,7 @@ FOX_THEME_INK(Sel, Sel)
 #undef FOX_THEME_INK
 inline constexpr Ink Black{kInkBlack, 0};
 inline constexpr Ink White{kInkWhite, 0};
+inline constexpr Ink Sheen{kInkSheen, 0};
 }  // namespace ink
 
 // --- the six presets -----------------------------------------------------------
@@ -370,6 +378,30 @@ ImU32 withAlpha(ImU32 packed, float alpha);
 // --- readability -----------------------------------------------------------------
 // WCAG 2 contrast ratio between two opaque colours (alpha ignored), 1..21.
 double contrastRatio(ImU32 a, ImU32 b);
+// WCAG 2 relative luminance, 0 (black) .. 1 (white); alpha ignored.
+double relativeLuminance(ImU32 c);
+// AN INK THAT CAN BE READ ON `surface`: under today's bench, `ink` exactly
+// (today is frozen); under any other theme, `ink` moved toward white or black -
+// whichever the surface is further from - only as far as `minRatio` needs. For
+// words a call site letters on a ground the palette does not pair it with (a
+// caption on the counter's bezel, a latched key's legend). Alpha is kept.
+ImU32 legible(ImU32 ink, ImU32 surface, double minRatio = 4.5);
+
+// --- popups and lit keys ------------------------------------------------------------
+//
+// EVERY POPUP-LIKE WINDOW - popup, combo list, menu, modal, tooltip - is drawn
+// with a palette of its own pushed over the style (menuText on menuBg, and
+// every key, field, row and title bar inside it made readable under that ink).
+// applyTheme() hands it to the vendored ImGui, which pushes it in Begin() and
+// pops it in End() (third_party/imgui/FOXSDR-PATCHES.md, popup-colours), so no
+// call site can forget it. Today's bench has none. This returns the table in
+// force (at most `max` entries) for a test to inspect.
+int popupColours(ImGuiCol* idx, ImVec4* col, int max);
+// A KEY LATCHED LIT - the selected demodulator, say. Pushes the colours and
+// returns how many to pop: today's bench exactly as 0.99.35 drew it (the
+// pressed brass); every other theme foxsdr-ui/1's lit key, activeText on
+// activeBg, the same whether hovered, pressed or at rest.
+int pushLitKeyColours();
 
 // --- semantics ---------------------------------------------------------------
 //

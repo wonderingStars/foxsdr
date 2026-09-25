@@ -7821,6 +7821,28 @@ static void SetWindowActiveForSkipRefresh(ImGuiWindow* window)
 //   You can use the "##" or "###" markers to use the same label with different id, or same id with different label. See documentation at the top of this file.
 // - Return false when window is collapsed, so you can early out in your code. You always need to call ImGui::End() even if false is returned.
 // - Passing 'bool* p_open' displays a Close button on the upper-right corner of the window, the pointed value will be set to false when the button is pressed.
+// FOXSDR PATCH BEGIN (popup-colours) - see third_party/imgui/FOXSDR-PATCHES.md.
+// The colours every popup-like window is drawn with over the style. Process-wide
+// rather than per context: FoxSDR runs one context, and the table is set between frames.
+static ImGuiCol GFoxPopupColorIdx[32];
+static ImVec4   GFoxPopupColorVal[32];
+static int      GFoxPopupColorCount = 0;
+
+void ImGui::FoxSetPopupColors(const ImGuiCol* idx, const ImVec4* col, int count)
+{
+    if (count < 0 || idx == NULL || col == NULL)
+        count = 0;
+    if (count > IM_ARRAYSIZE(GFoxPopupColorIdx))
+        count = IM_ARRAYSIZE(GFoxPopupColorIdx);
+    for (int n = 0; n < count; n++)
+    {
+        GFoxPopupColorIdx[n] = idx[n];
+        GFoxPopupColorVal[n] = col[n];
+    }
+    GFoxPopupColorCount = count;
+}
+// FOXSDR PATCH END (popup-colours)
+
 bool ImGui::Begin(const char* name, bool* p_open, ImGuiWindowFlags flags)
 {
     ImGuiContext& g = *GImGui;
@@ -7928,6 +7950,13 @@ bool ImGui::Begin(const char* name, bool* p_open, ImGuiWindowFlags flags)
     window_stack_data.DisabledOverrideReenableAlphaBackup = 0.0f;
     ErrorRecoveryStoreState(&window_stack_data.StackSizesInBegin);
     g.StackSizesInBeginForCurrentWindow = &window_stack_data.StackSizesInBegin;
+    // FOXSDR PATCH BEGIN (popup-colours): pushed AFTER the stack sizes are stored, so they
+    // belong to this window's scope and End() pops them before its own stack check.
+    window_stack_data.FoxPopupColorsPushed = 0;
+    if (flags & (ImGuiWindowFlags_Popup | ImGuiWindowFlags_Tooltip))
+        for (int n = 0; n < GFoxPopupColorCount; n++, window_stack_data.FoxPopupColorsPushed++)
+            PushStyleColor(GFoxPopupColorIdx[n], GFoxPopupColorVal[n]);
+    // FOXSDR PATCH END (popup-colours)
     if (flags & ImGuiWindowFlags_ChildMenu)
         g.BeginMenuDepth++;
 
@@ -8850,6 +8879,10 @@ void ImGui::End()
         g.BeginMenuDepth--;
     if (window->Flags & ImGuiWindowFlags_Popup)
         g.BeginPopupStack.pop_back();
+
+    // FOXSDR PATCH (popup-colours): the colours Begin() pushed for a popup-like window.
+    if (window_stack_data.FoxPopupColorsPushed > 0)
+        PopStyleColor(window_stack_data.FoxPopupColorsPushed);
 
     // Error handling, state recovery
     if (g.IO.ConfigErrorRecovery)

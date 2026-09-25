@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <map>
 #include <set>
+#include <string>
 
 namespace cascade::gui::census {
 
@@ -35,17 +36,28 @@ std::map<std::string, Rect>& rects() {
 
 }  // namespace
 
-bool enabled() { return path() != nullptr; }
+namespace detail {
 
-void note(const std::string& what) {
-    if (!enabled()) { return; }
-    items().insert(what);
+bool readEnabled() { return path() != nullptr; }
+
+void noteParts(std::string_view prefix, std::string_view name) {
+    items().insert(std::string(prefix) + std::string(name));
 }
 
-void rect(const std::string& what, float x0, float y0, float x1, float y1) {
-    if (!enabled()) { return; }
-    rects()[what] = Rect{x0, y0, x1, y1};
+void noteIndex(std::string_view prefix, int index) {
+    items().insert(std::string(prefix) + std::to_string(index));
 }
+
+void rectParts(std::string_view prefix, std::string_view name, float x0, float y0, float x1,
+               float y1) {
+    rects()[std::string(prefix) + std::string(name)] = Rect{x0, y0, x1, y1};
+}
+
+void rectIndex(std::string_view prefix, int index, float x0, float y0, float x1, float y1) {
+    rects()[std::string(prefix) + std::to_string(index)] = Rect{x0, y0, x1, y1};
+}
+
+}  // namespace detail
 
 bool write() {
     if (!enabled()) { return false; }
