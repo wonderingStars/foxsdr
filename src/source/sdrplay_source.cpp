@@ -864,7 +864,17 @@ bool SdrPlaySource::noteIfServiceDead(abi::ErrT err, const char* what) {
 }
 
 bool SdrPlaySource::refuseIfVendorUnreachableLocked(const char* what) {
-    if (!vendorUnreachableLocked()) { return false; }
+    // THE SESSION TOO, not only this object's own flags (the third review of
+    // fix/rsp-fallback): with radio B streaming and radio A answered
+    // ServiceNotResponding, B's LNA change was taken and sent one Update into
+    // the session the process had already declared lost - start() and open()
+    // ask sessionIsLost, and until here no setter did. Only for an OPEN radio:
+    // a closed one's setters send nothing and refuse anyway, and asking the
+    // process table from one would load the vendor DLL just to find that out.
+    // Such a refusal falls through to the service sentence below, which names
+    // the restart that works.
+    const bool sessionLost = openMirror_.load(std::memory_order_relaxed) && sessionIsLost(api());
+    if (!vendorUnreachableLocked() && !sessionLost) { return false; }
     // The same three sentences, in the same order of precedence, that
     // stopStreamingLocked names the three causes with.
     const char* why = controlAbandoned_ ? sdrPlayControlHungSentence()
