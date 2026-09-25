@@ -1809,6 +1809,11 @@ private:
 
     std::vector<cascade::source::SoapyDeviceInfo> soapyDevices_;
     bool soapyScanned_ = false;  // one lazy scan done (scanSoapy())
+    // AppConfig::lookForNetworkUsrps, and the Soapy args the config named at
+    // start-up - both read by scanSoapy() for the UHD rule
+    // (gui::soapyDriversWithNoHardware).
+    bool lookForNetworkUsrps_ = false;
+    std::string startupSoapyArgs_;
     // A deferral has been logged for the radio currently open. The combo's
     // lazy scan asks on every frame the dropdown is open, so without this the
     // one diag line would be written sixty times a second; cleared the moment

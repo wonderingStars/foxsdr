@@ -231,6 +231,23 @@ struct EnumResult {
     // another driver's thread than the one that did the damage.
     std::vector<std::string> inFlightDrivers;
 
+    // WHAT THE CHILD'S OWN CRASH HANDLER SAID IT DIED OF, for the most recent
+    // child that died or was killed - the core::kFaultLinePrefix lines it
+    // writes to this pipe before its report (CrashHandlerConfig::
+    // faultLineToStdout), prefix removed, printable ASCII only, joined with
+    // "; ". Empty when it said nothing: capture off, or a death no handler saw.
+    //
+    // Field report F204602B5329B268 (0.99.35): a child probing driver=uhd died
+    // with 0xE0000002, which names nothing, and the parent's report could say
+    // no more than that. With this line the parent's own report carries the
+    // fault's code and module even when the child's report is lost.
+    std::string childFaultLine;
+
+    // Drivers left out because no hardware of theirs can be present - see
+    // EnumOptions::absentDrivers. Lower-cased; only the ones the listing (or,
+    // for the whole bus, the options) actually named.
+    std::vector<std::string> absentDrivers;
+
     // Drivers left out of this scan because a child already DIED asking them
     // earlier in this session - see sessionFaultedDrivers(). Lower-cased.
     std::vector<std::string> sessionSkippedDrivers;
@@ -318,6 +335,20 @@ struct EnumOptions {
     // gets what is left, never more than timeoutMs. See
     // EnumResult::outOfTimeDrivers and EnumResult::sessionSlowDrivers.
     std::vector<std::string> skipDrivers;
+
+    // DRIVERS NOT TO ASK BECAUSE NOTHING OF THEIRS IS HERE (F204602B5329B268,
+    // 2026-09-25). Unlike skipDrivers this does NOT make the scan a
+    // beside-a-radio walk: the whole bus is still probed in one child, which
+    // is simply told to leave these out (the same --skip the session's
+    // faulted drivers use), and the per-driver sweep and the in-process
+    // fallback leave them out too. Case is ignored.
+    //
+    // The caller decides - gui/device_scan_plan.hpp, soapyDriversWithNoHardware:
+    // today that is "uhd" when no Ettus or NI USRP is on the USB bus, the
+    // saved source is not a USRP and network USRP discovery is off. UHD's
+    // probe was the one that died in the field report, on a machine whose
+    // only radio was an SDRplay, and it had nothing to find there.
+    std::vector<std::string> absentDrivers;
 };
 
 // Enumerates in a child process. Never throws.
@@ -366,6 +397,11 @@ std::string childFaultSignatureTag(const std::string& driver);
 // a driver's probe begins and ends, so the writer and the reader cannot drift
 // apart - and so a test's fake helper speaks the real format. Ends in '\n'.
 std::string probeMarkerLine(bool begin, const std::string& driver);
+
+// What a child's crash handler said on its stdout (EnumResult::childFaultLine),
+// read out of everything the child wrote. Exposed so the reader is tested
+// against the exact bytes the handler writes.
+std::string childFaultLineFrom(const std::string& childStdout);
 
 // The helper this process would run, or empty if it cannot find one. In order:
 //

@@ -184,7 +184,12 @@ asked when the process died (an installed driver's short name, such as `uhd` or
 `sdrplay` - never a device, a serial number or anything about you), or, for the
 search that asks every driver at once, the drivers still being asked when it
 stopped; and its `signature` is derived from that driver name in place of a
-faulting module, so each driver's failures group on their own.
+faulting module, so each driver's failures group on their own. The `reason`
+line can also end with what that small process's own crash handler said it
+died of, in one short line - the kind of fault, its code, and the program
+module and offset it happened at (for example `access violation 0xC0000005 at
+libusb-1.0.dll+0x10490`). Those are the same facts its own report carries, and
+nothing else.
 That
 small process can also write a report of its own, into the same folder and with
 the same fields, and only when diagnostics are switched on: it is handed the

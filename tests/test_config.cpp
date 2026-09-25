@@ -1499,6 +1499,9 @@ int main() {
                 {"railBank", [](AppConfig& c) { c.railBank = 4; }},
                 {"keyBindings", [](AppConfig& c) { c.keyBindings = {"mute=Ctrl+Shift+M"}; }},
                 {"updateCheckEnabled", [](AppConfig& c) { c.updateCheckEnabled = false; }},
+                // Look for network USRPs (2026-09-25): a Source-section tick
+                // that calls no save of its own.
+                {"lookForNetworkUsrps", [](AppConfig& c) { c.lookForNetworkUsrps = true; }},
                 // The converters (0.99.36): set in the Source section, which
                 // calls no save of its own - a new one, and a changed LO, a
                 // changed inversion and a switch-off of an existing one.
@@ -3564,6 +3567,37 @@ int main() {
         AppConfig blank = junkConfig();
         CHECK(ConfigStore::load(none, blank, err));
         CHECK(blank.patch.empty());
+    }
+
+    // --- Look for network USRPs (2026-09-25) ---------------------------------
+    //
+    // OFF unless the user turned it on: a config that never mentions it - every
+    // config written before this build - must not start asking UHD to walk the
+    // network and the USB bus on a machine with no USRP (F204602B5329B268).
+    // On survives a round trip; a value of the wrong type is the default.
+    {
+        CHECK(!AppConfig{}.lookForNetworkUsrps);
+        std::string err;
+        const std::string none = p("usrp_absent.json");
+        CHECK(writeText(none, "{}\n"));
+        AppConfig blank = junkConfig();
+        blank.lookForNetworkUsrps = true;
+        CHECK(ConfigStore::load(none, blank, err));
+        CHECK(!blank.lookForNetworkUsrps);
+
+        AppConfig in;
+        in.lookForNetworkUsrps = true;
+        const std::string path = p("usrp_roundtrip.json");
+        CHECK(ConfigStore::save(path, in, err));
+        AppConfig out;
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.lookForNetworkUsrps);
+
+        const std::string bad = p("usrp_badtype.json");
+        CHECK(writeText(bad, "{\"lookForNetworkUsrps\": \"yes\"}\n"));
+        AppConfig typed;
+        CHECK(ConfigStore::load(bad, typed, err));
+        CHECK(!typed.lookForNetworkUsrps);
     }
 
     const int rc = testSummary("test_config");

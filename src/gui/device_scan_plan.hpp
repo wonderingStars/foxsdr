@@ -28,6 +28,7 @@
 #pragma once
 
 #include <algorithm>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -185,6 +186,70 @@ inline bool rowFromSkippedDriver(const std::vector<std::string>& skipDrivers,
     const std::string d = detail::driverOf(rowArgs);
     return !d.empty() &&
            std::find(skipDrivers.begin(), skipDrivers.end(), d) != skipDrivers.end();
+}
+
+// ---------------------------------------------------------------------------
+// DRIVERS WITH NOTHING TO FIND (2026-09-25)
+// ---------------------------------------------------------------------------
+//
+// Field report F204602B5329B268 (0.99.35, Windows 10.0.28000): the SoapySDR
+// scan's child probing driver=uhd died, on a machine whose only radio was an
+// SDRplay RSPdx. UHD's discovery loads libusb and walks the whole USB bus on a
+// thread per device family, and that walk is where this product's known UHD
+// faults live - so on a machine with no USRP it costs a crash risk and finds
+// nothing. It is asked only when a USRP could be there.
+//
+// One USB device as the read-only SetupAPI / sysfs listing reports it
+// (usb::presentUsbIds - nothing is opened to produce it).
+struct UsbVidPid {
+    std::uint16_t vid = 0;
+    std::uint16_t pid = 0;
+};
+
+// THE USB IDS UHD LOOKS FOR, taken from UHD itself rather than remembered
+// (checked 2026-09-25 against EttusResearch/uhd master and v4.8.0.0:
+// host/lib/usrp/b200/b200_iface.hpp B200_VENDOR_ID 0x2500, B200_VENDOR_NI_ID
+// 0x3923, B200_PRODUCT_ID 0x0020, B200MINI 0x0021, B205MINI 0x0022, B206MINI
+// 0x0023, B200_PRODUCT_NI_ID 0x7813, B210_PRODUCT_NI_ID 0x7814 - the list
+// b200_find searches, b200_vid_pid_pairs in b200_impl.hpp; host/utils/
+// uhd-usrp.rules, which adds the USRP1 fffe:0002 and the B100 2500:0002; and
+// the WinUSB INFs UHD 4.10's installer ships in share/uhd/images). Every
+// Ettus product is matched by vendor alone, so a future one is not missed;
+// National Instruments makes a great deal that is not a USRP, so its vendor
+// id counts only with the two B2xx product ids. The FX3 bootloader ids
+// (04b4:00f3/00f0) are NOT here: b200_find never searches them - only UHD's
+// b2xx_fx3_utils recovery tool does.
+inline bool isUsrpUsbId(const UsbVidPid& id) {
+    if (id.vid == 0x2500) { return true; }
+    if (id.vid == 0x3923 && (id.pid == 0x7813 || id.pid == 0x7814)) { return true; }
+    if (id.vid == 0xFFFE && id.pid == 0x0002) { return true; }
+    return false;
+}
+
+// Which SoapySDR drivers this scan should not ask, because nothing of theirs
+// can be here. Today at most {"uhd"}, which is left out unless ANY of:
+//
+//   - `usbListed` is false: the USB listing itself failed, so absence is
+//     unknown and the probe runs as it always did (never a guess towards
+//     hiding a radio);
+//   - a USRP is on the USB bus (isUsrpUsbId);
+//   - one of `namedSoapyArgs` is a UHD device ("driver=uhd,...") - the saved
+//     source, the open one, or a patch radio: the user has one, and a
+//     network USRP's address lives in exactly these args;
+//   - `lookForNetworkUsrps`: the Settings switch (off by default) for USRPs
+//     UHD finds over the network (N2xx, X3xx, N3xx, E3xx over Ethernet) or on
+//     PCIe (X3xx via NI-RIO), none of which is on the USB bus.
+inline std::vector<std::string> soapyDriversWithNoHardware(
+    const std::vector<UsbVidPid>& presentUsb, bool usbListed,
+    const std::vector<std::string>& namedSoapyArgs, bool lookForNetworkUsrps) {
+    if (!usbListed || lookForNetworkUsrps) { return {}; }
+    for (const UsbVidPid& id : presentUsb) {
+        if (isUsrpUsbId(id)) { return {}; }
+    }
+    for (const std::string& args : namedSoapyArgs) {
+        if (detail::driverOf(args) == "uhd") { return {}; }
+    }
+    return {"uhd"};
 }
 
 }  // namespace cascade::gui

@@ -4,14 +4,24 @@
 // WHAT THE FAULT PATH TOUCHES, in full, so the claim in the header can be
 // checked rather than believed:
 //
-//   CreateFileA / WriteFile / CloseHandle   kernel calls, no CRT buffering
+//   NtCreateFile / WriteFile / CloseHandle  kernel calls, no CRT buffering
 //   GetLocalTime / GetCurrentProcessId      TEB and shared-page reads
 //   RtlCaptureStackBackTrace or
 //   RtlLookupFunctionEntry + RtlVirtualUnwind
+//   Sleep, only while ANOTHER thread's report is being written
 //   memcpy, and integer rendering written by hand
 //
 // It allocates nothing, opens no CRT stream, takes none of this application's
-// locks, and calls no snprintf (which can take a locale lock). The two large
+// locks, and calls no snprintf (which can take a locale lock).
+//
+// NOT EVEN THE PROCESS HEAP, and that was not true until F204602B5329B268
+// (0.99.35). The report used to be opened with CreateFileA, whose DOS-to-NT
+// path conversion allocates from the process heap - so a fault on a thread
+// whose neighbour held the heap lock stalled the handler (6 of 8 staged runs
+// never wrote a report and were killed at the timeout), and a heap that the
+// fault itself had trashed left no report in 5 of 8. The report is now
+// created with NtCreateFile on an NT path built on the HEALTHY path (see
+// prepareNtCrashDir), which is a system call and nothing else. The two large
 // buffers it needs - the log ring copy and a CONTEXT to unwind - are STATIC,
 // not stack locals, because the fault this most needs to survive is a stack
 // overflow, where there is barely a page of stack left.
@@ -34,6 +44,7 @@
 #include <csignal>
 #include <cstdlib>
 #include <cstring>
+#include <cwchar>
 #include <exception>
 #include <filesystem>
 #include <stdexcept>
@@ -46,6 +57,7 @@
 #include <dbghelp.h>
 #include <intrin.h>
 #include <io.h>
+#include <winternl.h>
 #pragma comment(lib, "dbghelp.lib")
 #elif defined(__linux__)
 // The Linux implementation of every entry point below - see
@@ -69,22 +81,186 @@ char g_lastPath[kPathBytes] = {};
 bool g_enabled = false;
 bool g_minidump = false;
 bool g_exitAfterReport = false;
-long g_inHandler = 0;   // InterlockedCompareExchange guard against re-entry
 long g_reportSeq = 0;
 
 // The ring copy. 48 KiB in BSS rather than on a stack that may have just
-// overflowed. Safe to be static because g_inHandler admits exactly one
-// handler at a time.
+// overflowed. Safe to be static because the fault path (acquireFaultPath)
+// admits exactly one writer at a time.
 char g_ringBuf[DiagLog::kRingLines * DiagLog::kLineBytes + 1] = {};
 
 // Everything else the fault path needs is static for the same reason: a stack
 // overflow leaves roughly one page of stack, and 62 frames plus two paths plus
 // a module record is more than that page can safely hold. Static is safe here
-// only because g_inHandler admits exactly one handler at a time.
+// only because acquireFaultPath admits exactly one writer at a time.
 char g_reportPath[kPathBytes] = {};
 char g_dumpPath[kPathBytes] = {};
 
 #if defined(_WIN32)
+// ---------------------------------------------------------------------------
+// ONE WRITER AT A TIME, and a second thread WAITS for it rather than killing it
+// ---------------------------------------------------------------------------
+//
+// Field report F204602B5329B268 (0.99.35): the enumeration child probing
+// driver=uhd died with 0xE0000002, this file's "entered twice" code. Until
+// then every entry point shared one flag and treated ANY second entry as a
+// fault inside the handler: TerminateProcess, at once. But UHD's discovery
+// runs every device family's find function on a thread of its own, and the
+// memory the known libusb fault corrupts is shared by all of them - so two
+// threads dying together is the ordinary shape of that fault, not an
+// exotic one. The second thread's TerminateProcess killed the FIRST thread
+// in the middle of its report: measured, 8 of 8 staged runs left a truncated
+// report and the exit code 0xE0000002, which names nothing
+// (tests/test_crash_second_fault.cpp).
+//
+// So the entry records WHICH thread holds the fault path:
+//
+//   - the SAME thread entering again is a fault inside the handler. That is
+//     still fatal - retrying would recurse - but it now says so on the way
+//     out (handlerCannotRun) instead of vanishing.
+//   - ANOTHER thread waits, up to kOtherThreadWaitMs, for the first report to
+//     finish. With exitAfterReport the first handler then terminates the
+//     process with the FIRST fault's code and a complete report; otherwise it
+//     releases the path and this thread writes its own report after it.
+//
+// The absorbed-fault entry points take the same path, which they did not
+// before: they write into the same static buffers, and nothing stopped an
+// absorbed report and a fatal one from building their paths in the same
+// g_reportPath at once.
+volatile LONG g_faultPathThread = 0;  // the thread id holding it; 0 = free
+volatile LONG g_cannotRunEntries = 0;
+
+// Long enough for any report that is going to finish (they take
+// milliseconds), and well inside the 20 s the enumeration parent waits for a
+// child - so a handler that really is stuck still leaves the parent a line
+// saying so instead of a timeout.
+constexpr DWORD kOtherThreadWaitMs = 10000;
+
+enum class FaultPathEntry { Acquired, SameThread, TimedOut };
+
+FaultPathEntry acquireFaultPath(DWORD waitMs) {
+    const LONG me = static_cast<LONG>(::GetCurrentThreadId());
+    const ULONGLONG start = ::GetTickCount64();
+    for (;;) {
+        const LONG held = ::InterlockedCompareExchange(&g_faultPathThread, me, 0);
+        if (held == 0) { return FaultPathEntry::Acquired; }
+        if (held == me) { return FaultPathEntry::SameThread; }
+        if (::GetTickCount64() - start >= waitMs) { return FaultPathEntry::TimedOut; }
+        ::Sleep(5);
+    }
+}
+
+void releaseFaultPath() { ::InterlockedExchange(&g_faultPathThread, 0); }
+
+// The report file currently open, so a fault INSIDE the handler can still say
+// so at the end of it. Written only by the thread holding the fault path.
+volatile HANDLE g_openReport = INVALID_HANDLE_VALUE;
+
+// Where faultLineToStdout writes; captured on the healthy path.
+HANDLE g_faultLine = INVALID_HANDLE_VALUE;
+
+// ---------------------------------------------------------------------------
+// Opening the report WITHOUT the process heap
+// ---------------------------------------------------------------------------
+using NtCreateFileFn = LONG(NTAPI*)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, PIO_STATUS_BLOCK,
+                                    PLARGE_INTEGER, ULONG, ULONG, ULONG, ULONG, PVOID, ULONG);
+NtCreateFileFn g_ntCreateFile = nullptr;
+constexpr std::size_t kNtPathChars = 1024;
+// "\??\C:\Users\...\crashes\" - the crash directory as an NT path, built on
+// the healthy path; the fault path only appends a file name to it.
+wchar_t g_ntDir[kNtPathChars] = {};
+std::size_t g_ntDirLen = 0;
+wchar_t g_ntFile[kNtPathChars] = {};
+
+// From ntifs.h, which a user-mode build does not include.
+constexpr ULONG kFileOverwriteIf = 0x00000005;
+constexpr ULONG kFileNonDirectoryFile = 0x00000040;
+constexpr ULONG kFileSynchronousIoNonalert = 0x00000020;
+constexpr ULONG kObjCaseInsensitive = 0x00000040;
+
+// HEALTHY PATH ONLY. g_crashDir is interpreted exactly as CreateFileA would
+// interpret it (the ANSI code page, which is UTF-8 when the manifest says so),
+// made absolute, and given the NT prefix for its kind: a drive path, a UNC
+// share, or one that already carries the \\?\ prefix. Anything this cannot
+// render leaves g_ntDirLen 0, and the fault path falls back to CreateFileA -
+// which is what every build before this one did.
+void prepareNtCrashDir() {
+    g_ntDirLen = 0;
+    g_ntDir[0] = L'\0';
+    if (g_ntCreateFile == nullptr) {
+        HMODULE ntdll = ::GetModuleHandleW(L"ntdll.dll");
+        if (ntdll != nullptr) {
+            g_ntCreateFile = reinterpret_cast<NtCreateFileFn>(
+                reinterpret_cast<void*>(::GetProcAddress(ntdll, "NtCreateFile")));
+        }
+    }
+    if (g_ntCreateFile == nullptr || g_crashDir[0] == '\0') { return; }
+    wchar_t wide[kNtPathChars] = {};
+    if (::MultiByteToWideChar(CP_ACP, 0, g_crashDir, -1, wide, static_cast<int>(kNtPathChars)) ==
+        0) {
+        return;
+    }
+    wchar_t full[kNtPathChars] = {};
+    const DWORD n = ::GetFullPathNameW(wide, static_cast<DWORD>(kNtPathChars), full, nullptr);
+    if (n == 0 || n >= kNtPathChars) { return; }
+    const wchar_t* rest = full;
+    const wchar_t* prefix = L"\\??\\";
+    if (std::wcsncmp(full, L"\\\\?\\", 4) == 0 || std::wcsncmp(full, L"\\\\.\\", 4) == 0) {
+        rest = full + 4;  // already a device path: "\\?\X:\..." or "\\?\UNC\..."
+    } else if (std::wcsncmp(full, L"\\\\", 2) == 0) {
+        prefix = L"\\??\\UNC\\";
+        rest = full + 2;
+    }
+    std::size_t at = 0;
+    for (std::size_t i = 0; prefix[i] != L'\0' && at + 1 < kNtPathChars; ++i) {
+        g_ntDir[at++] = prefix[i];
+    }
+    for (std::size_t i = 0; rest[i] != L'\0' && at + 1 < kNtPathChars; ++i) {
+        g_ntDir[at++] = rest[i];
+    }
+    if (at == 0 || at + 2 >= kNtPathChars) { return; }
+    if (g_ntDir[at - 1] != L'\\') { g_ntDir[at++] = L'\\'; }
+    g_ntDir[at] = L'\0';
+    g_ntDirLen = at;
+}
+
+// Opens `win32Path` (built by buildReportPath, so its last component is plain
+// ASCII) for writing. NtCreateFile on the prepared NT directory when there is
+// one; CreateFileA otherwise.
+HANDLE openForFaultPath(const char* win32Path) {
+    if (g_ntCreateFile != nullptr && g_ntDirLen > 0) {
+        const char* name = win32Path;
+        for (const char* p = win32Path; *p != '\0'; ++p) {
+            if (*p == '\\' || *p == '/') { name = p + 1; }
+        }
+        std::size_t at = 0;
+        for (; at < g_ntDirLen; ++at) { g_ntFile[at] = g_ntDir[at]; }
+        for (std::size_t i = 0; name[i] != '\0' && at + 1 < kNtPathChars; ++i) {
+            g_ntFile[at++] = static_cast<wchar_t>(static_cast<unsigned char>(name[i]));
+        }
+        g_ntFile[at] = L'\0';
+        UNICODE_STRING us;
+        us.Buffer = g_ntFile;
+        us.Length = static_cast<USHORT>(at * sizeof(wchar_t));
+        us.MaximumLength = static_cast<USHORT>((at + 1) * sizeof(wchar_t));
+        OBJECT_ATTRIBUTES oa;
+        std::memset(&oa, 0, sizeof(oa));
+        oa.Length = sizeof(oa);
+        oa.ObjectName = &us;
+        oa.Attributes = kObjCaseInsensitive;
+        IO_STATUS_BLOCK iosb;
+        std::memset(&iosb, 0, sizeof(iosb));
+        HANDLE h = nullptr;
+        const LONG status = g_ntCreateFile(&h, FILE_GENERIC_WRITE, &oa, &iosb, nullptr,
+                                           FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ,
+                                           kFileOverwriteIf,
+                                           kFileNonDirectoryFile | kFileSynchronousIoNonalert,
+                                           nullptr, 0);
+        if (status >= 0 && h != nullptr) { return h; }
+    }
+    return ::CreateFileA(win32Path, GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS,
+                         FILE_ATTRIBUTE_NORMAL, nullptr);
+}
+
 unsigned long long g_frames[kMaxFrames] = {};
 CONTEXT g_walkContext;  // ditto: 1.2 KiB, and unwinding mutates it
 // The base of the main executable image, read at install time, so the fault
@@ -403,8 +579,7 @@ void writeMinidump(EXCEPTION_POINTERS* ep, const char* txtPath) {
     for (int i = 0; i < 4; ++i) { g_dumpPath[at++] = ext[i]; }
     g_dumpPath[at] = '\0';
 
-    HANDLE h = ::CreateFileA(g_dumpPath, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
-                             FILE_ATTRIBUTE_NORMAL, nullptr);
+    HANDLE h = openForFaultPath(g_dumpPath);
     if (h == INVALID_HANDLE_VALUE) { return; }
     MINIDUMP_EXCEPTION_INFORMATION mei{};
     mei.ThreadId = ::GetCurrentThreadId();
@@ -523,9 +698,9 @@ void writeReport(const char* reason, unsigned long code, std::uintptr_t faultAdd
     buildReportPath(g_reportPath, kPathBytes, "crash-", seq);
 
     Emit e;
-    e.h = ::CreateFileA(g_reportPath, GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS,
-                        FILE_ATTRIBUTE_NORMAL, nullptr);
+    e.h = openForFaultPath(g_reportPath);
     if (e.h == INVALID_HANDLE_VALUE) { return; }
+    g_openReport = e.h;
 
     DiagModule fm;
     std::uintptr_t foff = 0;
@@ -630,6 +805,7 @@ void writeReport(const char* reason, unsigned long code, std::uintptr_t faultAdd
 
     writeModules(e);
     writeRing(e);
+    g_openReport = INVALID_HANDLE_VALUE;
     ::CloseHandle(e.h);
 
     std::memcpy(g_lastPath, g_reportPath, kPathBytes);
@@ -648,13 +824,75 @@ void finish(unsigned long exitCode) {
     ::TerminateProcess(::GetCurrentProcess(), exitCode);
 }
 
-LONG WINAPI sehFilter(EXCEPTION_POINTERS* ep) {
-    if (::InterlockedCompareExchange(&g_inHandler, 1, 0) != 0) {
-        // A fault INSIDE the handler. Do not try again; die quietly rather
-        // than recursing until the stack is gone.
-        ::TerminateProcess(::GetCurrentProcess(), 0xE0000002ul);
-        return EXCEPTION_CONTINUE_SEARCH;
+// THE LINE FOR THE PARENT (CrashHandlerConfig::faultLineToStdout), written
+// FIRST, before the report: whatever becomes of the report, the process that
+// reads this one's stdout learns what it died of.
+void faultLine(const char* what, unsigned long code, std::uintptr_t addr) {
+    if (g_faultLine == INVALID_HANDLE_VALUE) { return; }
+    Emit e;
+    e.h = g_faultLine;
+    e.str(kFaultLinePrefix);
+    e.str(what);
+    e.str(" 0x");
+    e.hex(code, 8);
+    e.str(" at ");
+    e.addr(addr);
+    e.str("\n");
+}
+
+// THE HANDLER CANNOT RUN, and says so on the way out rather than vanishing.
+// `sameThread` is a fault INSIDE the handler (this thread already holds the
+// fault path); otherwise another thread's report did not finish within
+// kOtherThreadWaitMs. Either way the process dies with 0xE0000002, as it
+// always has - but the parent's line and the end of the half-written report
+// now carry what this thread was about to report.
+//
+// Entered at most once: anything here that faults again comes straight back
+// in, and the second arrival just terminates.
+[[noreturn]] void handlerCannotRun(bool sameThread, const char* what, unsigned long code,
+                                   std::uintptr_t addr) {
+    if (::InterlockedIncrement(&g_cannotRunEntries) == 1) {
+        const char* why = sameThread ? "second fault inside the crash handler"
+                                     : "crash handler did not finish on another thread";
+        if (g_faultLine != INVALID_HANDLE_VALUE) {
+            Emit e;
+            e.h = g_faultLine;
+            e.str(kFaultLinePrefix);
+            e.str(why);
+            e.str(": ");
+            e.str(what);
+            e.str(" 0x");
+            e.hex(code, 8);
+            e.str("\n");
+        }
+        const HANDLE open = g_openReport;
+        if (open != INVALID_HANDLE_VALUE) {
+            Emit e;
+            e.h = open;
+            e.str("\n--- ");
+            e.str(why);
+            e.str(" ---\n");
+            e.str(what);
+            e.str(" 0x");
+            e.hex(code, 8);
+            e.str(" at ");
+            e.addr(addr);
+            e.str("\n");
+        }
     }
+    ::TerminateProcess(::GetCurrentProcess(), 0xE0000002ul);
+    for (;;) { ::Sleep(INFINITE); }
+}
+
+// Every fatal entry point starts here: take the fault path, or report why it
+// cannot be taken. Returns only when this thread holds it.
+void enterFatal(const char* what, unsigned long code, std::uintptr_t addr) {
+    const FaultPathEntry entry = acquireFaultPath(kOtherThreadWaitMs);
+    if (entry == FaultPathEntry::Acquired) { return; }
+    handlerCannotRun(entry == FaultPathEntry::SameThread, what, code, addr);
+}
+
+LONG WINAPI sehFilter(EXCEPTION_POINTERS* ep) {
     const unsigned long code =
         (ep != nullptr && ep->ExceptionRecord != nullptr)
             ? static_cast<unsigned long>(ep->ExceptionRecord->ExceptionCode)
@@ -663,8 +901,6 @@ LONG WINAPI sehFilter(EXCEPTION_POINTERS* ep) {
         (ep != nullptr && ep->ExceptionRecord != nullptr)
             ? reinterpret_cast<std::uintptr_t>(ep->ExceptionRecord->ExceptionAddress)
             : 0u;
-    stderrAttribution(code, addr);
-
     const char* reason = "structured exception";
     switch (code) {
         case EXCEPTION_ACCESS_VIOLATION: reason = "access violation"; break;
@@ -674,30 +910,32 @@ LONG WINAPI sehFilter(EXCEPTION_POINTERS* ep) {
         case 0xE06D7363ul: reason = "unhandled c++ exception"; break;
         default: break;
     }
+    enterFatal(reason, code, addr);
+    faultLine(reason, code, addr);
+    stderrAttribution(code, addr);
     writeReport(reason, code, addr, ep);
     finish(code != 0 ? code : 0xE0000001ul);
     // Production default: let the original exception continue to Windows, so
     // WER still behaves exactly as it always has on a user's machine. Any
     // filter that was already installed still gets its turn.
-    ::InterlockedExchange(&g_inHandler, 0);
+    releaseFaultPath();
     if (g_prevSehFilter != nullptr) { return g_prevSehFilter(ep); }
     return EXCEPTION_CONTINUE_SEARCH;
 }
 
 void onTerminate() {
-    if (::InterlockedCompareExchange(&g_inHandler, 1, 0) != 0) {
-        ::TerminateProcess(::GetCurrentProcess(), 0xE0000002ul);
-        return;
-    }
     // The faulting address is this handler's own return site, which resolves
     // to the module whose exception escaped - which is the useful half.
     void* here = _ReturnAddress();
+    enterFatal("std::terminate", 0xE0000003ul, reinterpret_cast<std::uintptr_t>(here));
+    faultLine("std::terminate", 0xE0000003ul, reinterpret_cast<std::uintptr_t>(here));
     writeReport("std::terminate", 0xE0000003ul, reinterpret_cast<std::uintptr_t>(here), nullptr);
     finish(0xE0000003ul);
     // The report is already written, so the SIGABRT net must not write a
     // second one for the same fault: stand it down and let the process die
     // exactly the way it always did.
     std::signal(SIGABRT, SIG_DFL);
+    releaseFaultPath();
     if (g_prevTerminate != nullptr && g_prevTerminate != &onTerminate) { g_prevTerminate(); }
     ::abort();
 }
@@ -718,43 +956,39 @@ void onTerminate() {
 // SIGABRT before it fast-fails. So this catches the default terminate on any
 // thread, a failed assert, and a direct abort().
 void __cdecl onAbortSignal(int) {
-    if (::InterlockedCompareExchange(&g_inHandler, 1, 0) != 0) {
-        ::TerminateProcess(::GetCurrentProcess(), 0xE0000002ul);
-        return;
-    }
     void* here = _ReturnAddress();
-    writeReport("abort (std::terminate on a thread with no handler, or a direct abort)",
-                0xE0000006ul, reinterpret_cast<std::uintptr_t>(here), nullptr);
+    const char* reason = "abort (std::terminate on a thread with no handler, or a direct abort)";
+    enterFatal("abort", 0xE0000006ul, reinterpret_cast<std::uintptr_t>(here));
+    faultLine("abort", 0xE0000006ul, reinterpret_cast<std::uintptr_t>(here));
+    writeReport(reason, 0xE0000006ul, reinterpret_cast<std::uintptr_t>(here), nullptr);
     finish(0xE0000006ul);
     ::_exit(3);
 }
 
 void __cdecl onPureCall() {
-    if (::InterlockedCompareExchange(&g_inHandler, 1, 0) != 0) {
-        ::TerminateProcess(::GetCurrentProcess(), 0xE0000002ul);
-        return;
-    }
     void* here = _ReturnAddress();
+    enterFatal("purecall", 0xE0000004ul, reinterpret_cast<std::uintptr_t>(here));
+    faultLine("purecall", 0xE0000004ul, reinterpret_cast<std::uintptr_t>(here));
     writeReport("purecall", 0xE0000004ul, reinterpret_cast<std::uintptr_t>(here), nullptr);
     finish(0xE0000004ul);
     std::signal(SIGABRT, SIG_DFL);  // see onTerminate: one fault, one report
+    releaseFaultPath();
     ::abort();
 }
 
 void __cdecl onInvalidParameter(const wchar_t*, const wchar_t*, const wchar_t*, unsigned int,
                                 uintptr_t) {
-    if (::InterlockedCompareExchange(&g_inHandler, 1, 0) != 0) {
-        ::TerminateProcess(::GetCurrentProcess(), 0xE0000002ul);
-        return;
-    }
     // The wide-character arguments are DELIBERATELY dropped: they are only
     // populated in a debug CRT, and formatting them would mean a CRT call on
     // the fault path for a string that is empty in every shipped build.
     void* here = _ReturnAddress();
+    enterFatal("invalid parameter", 0xE0000005ul, reinterpret_cast<std::uintptr_t>(here));
+    faultLine("invalid parameter", 0xE0000005ul, reinterpret_cast<std::uintptr_t>(here));
     writeReport("invalid parameter", 0xE0000005ul, reinterpret_cast<std::uintptr_t>(here),
                 nullptr);
     finish(0xE0000005ul);
     std::signal(SIGABRT, SIG_DFL);  // see onTerminate: one fault, one report
+    releaseFaultPath();
     ::abort();
 }
 #endif  // _WIN32
@@ -791,6 +1025,18 @@ void installCrashHandlers(const CrashHandlerConfig& cfg) {
         }
     } else {
         g_enabled = false;
+    }
+    // The NT path the fault path opens the report on, without the heap - see
+    // prepareNtCrashDir. Built whether or not capture is on, because the
+    // Settings toggle can turn it on mid-session (setCrashCaptureEnabled
+    // builds it again then).
+    prepareNtCrashDir();
+    // The parent's line (faultLineToStdout). The handle as it is NOW: the
+    // enumeration child's stdout is the pipe its parent reads.
+    g_faultLine = INVALID_HANDLE_VALUE;
+    if (cfg.faultLineToStdout) {
+        const HANDLE out = ::GetStdHandle(STD_OUTPUT_HANDLE);
+        if (out != nullptr) { g_faultLine = out; }
     }
 
     // The stack-headroom API the frame capture consults, resolved HERE because
@@ -844,6 +1090,7 @@ void setCrashCaptureEnabled(bool enabled, bool minidump) {
             g_enabled = false;
         }
     }
+    prepareNtCrashDir();
     g_minidump = minidump;
     if (g_minidump && g_miniDumpWriteDump == nullptr) {
         HMODULE dbghelp = ::LoadLibraryA("dbghelp.dll");
@@ -887,18 +1134,20 @@ std::string activeCrashDir() {
 void reportAbsorbedFault(const char* reason, unsigned long code, const void* faultAddress,
                          void* exceptionPointers) {
 #if defined(_WIN32)
-    // A SEPARATE latch from g_inHandler, and that is not tidiness. g_inHandler
-    // means "a FATAL handler is running"; sehFilter reads a set g_inHandler as
-    // proof it has faulted inside itself and answers by killing the process.
-    // Borrowing it here would turn a real crash that happened to land while
-    // this absorbed report was being written into a silent TerminateProcess
-    // with no report at all.
-    static long inAbsorbed = 0;
-    if (::InterlockedCompareExchange(&inAbsorbed, 1, 0) != 0) { return; }
+    // THE SAME FAULT PATH AS THE FATAL HANDLERS (F204602B5329B268): it writes
+    // into the same static buffers, so it must hold the same writer. A fatal
+    // fault on ANOTHER thread while this report is written waits for it and
+    // then reports its own; one on THIS thread is a fault inside the report
+    // writer and is named as that. Before, this path had a latch of its own,
+    // so an absorbed report and a fatal one could build their paths in the
+    // same g_reportPath at once. A report already being written on this
+    // thread, or one that never finished on another, means this one is not
+    // written - the old latch's answer, kept.
+    if (acquireFaultPath(kOtherThreadWaitMs) != FaultPathEntry::Acquired) { return; }
     writeReport(reason != nullptr ? reason : "absorbed fault", code,
                 reinterpret_cast<std::uintptr_t>(faultAddress),
                 static_cast<EXCEPTION_POINTERS*>(exceptionPointers));
-    ::InterlockedExchange(&inAbsorbed, 0);
+    releaseFaultPath();
 #elif defined(__linux__)
     // No POSIX equivalent of EXCEPTION_POINTERS: every absorbed-fault caller
     // on this platform reports the calling thread's own stack, exactly as
@@ -917,11 +1166,8 @@ void reportAbsorbedFault(const char* reason, unsigned long code, const void* fau
 void reportAbsorbedChildFault(const char* reason, unsigned long childExitCode, int attempt,
                               const char* signatureTag) {
 #if defined(_WIN32)
-    // The same latch reportAbsorbedFault uses, and for the same reason: a real
-    // crash landing mid-write must not be turned into a silent TerminateProcess
-    // by borrowing the fatal handler's.
-    static long inAbsorbedChild = 0;
-    if (::InterlockedCompareExchange(&inAbsorbedChild, 1, 0) != 0) { return; }
+    // The same writer as every other report - see reportAbsorbedFault.
+    if (acquireFaultPath(kOtherThreadWaitMs) != FaultPathEntry::Acquired) { return; }
     ChildFault child;
     child.exitCode = childExitCode;
     child.attempt = attempt;
@@ -932,7 +1178,7 @@ void reportAbsorbedChildFault(const char* reason, unsigned long childExitCode, i
     // distinguishes one child death from another.
     writeReport(reason != nullptr ? reason : "child process fault (contained)", childExitCode,
                 0u, nullptr, &child);
-    ::InterlockedExchange(&inAbsorbedChild, 0);
+    releaseFaultPath();
 #elif defined(__linux__)
     posix_detail::reportAbsorbedChild(reason, childExitCode, attempt, signatureTag);
 #else
@@ -957,6 +1203,14 @@ int captureFramesForTest(void* exceptionPointers, bool mayWalkCurrentThread) {
     (void)exceptionPointers;
     (void)mayWalkCurrentThread;
     return 0;
+#endif
+}
+
+void holdFaultPathForTest() {
+#if defined(_WIN32)
+    (void)acquireFaultPath(0);
+#elif defined(__linux__)
+    posix_detail::holdFaultPathForTest();
 #endif
 }
 

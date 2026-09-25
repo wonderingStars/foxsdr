@@ -379,11 +379,13 @@ void runOneChild(const std::string& helper, unsigned long timeoutMs,
 
     if (out.outcome == EnumOutcome::ChildTimedOut) {
         out.inFlightDrivers = probesStillRunning(text);
+        out.childFaultLine = childFaultLineFrom(text);
         return;
     }
     if (exitCode != 0) {
         out.outcome = EnumOutcome::ChildDied;
         out.inFlightDrivers = probesStillRunning(text);
+        out.childFaultLine = childFaultLineFrom(text);
         return;
     }
     if (!parseChildOutput(text, out)) {
@@ -537,11 +539,13 @@ void runOneChild(const std::string& helper, unsigned long timeoutMs,
 
     if (out.outcome == EnumOutcome::ChildTimedOut) {
         out.inFlightDrivers = probesStillRunning(text);
+        out.childFaultLine = childFaultLineFrom(text);
         return;
     }
     if (exitCode != 0) {
         out.outcome = EnumOutcome::ChildDied;
         out.inFlightDrivers = probesStillRunning(text);
+        out.childFaultLine = childFaultLineFrom(text);
         return;
     }
     if (!parseChildOutput(text, out)) {
@@ -678,6 +682,15 @@ std::vector<std::string> probesStillRunning(const std::string& text) {
     return running;
 }
 
+// The child's fault line as a reason suffix. Capped harder than the field
+// itself: the site keeps 200 characters of a reason, and the base sentence
+// (which names the driver) is the half that must survive.
+std::string childSaid(const std::string& line) {
+    if (line.empty()) { return std::string(); }
+    constexpr std::size_t kMostInReason = 72;
+    return " - child: " + line.substr(0, kMostInReason);
+}
+
 std::string joinNames(const std::vector<std::string>& names, std::size_t most) {
     std::string out;
     for (std::size_t i = 0; i < names.size() && i < most; ++i) {
@@ -707,6 +720,37 @@ std::string childFaultSignatureTag(const std::string& driver) {
 
 std::string probeMarkerLine(bool begin, const std::string& driver) {
     return std::string(kProbeMarker) + (begin ? "begin " : "end ") + driver + "\n";
+}
+
+std::string childFaultLineFrom(const std::string& childStdout) {
+    // Found ANYWHERE in a line, like the probe markers: a vendor printf with
+    // no newline must not hide it. At most two lines (the fault, then why the
+    // handler could not finish), printable ASCII only - this text goes into a
+    // report line, where a newline would forge a field - and capped, because
+    // the site clips a reason at 200 characters and the driver name must not
+    // be what gets cut.
+    constexpr std::size_t kMostLines = 2;
+    constexpr std::size_t kMostChars = 160;
+    const std::string prefix(core::kFaultLinePrefix);
+    std::string out;
+    std::size_t lines = 0;
+    std::size_t pos = 0;
+    while (lines < kMostLines && (pos = childStdout.find(prefix, pos)) != std::string::npos) {
+        pos += prefix.size();
+        const std::size_t eol = childStdout.find_first_of("\r\n", pos);
+        const std::size_t end = (eol == std::string::npos) ? childStdout.size() : eol;
+        std::string line;
+        for (std::size_t i = pos; i < end; ++i) {
+            const unsigned char c = static_cast<unsigned char>(childStdout[i]);
+            line.push_back((c >= 0x20 && c < 0x7F) ? static_cast<char>(c) : '?');
+        }
+        pos = end;
+        if (line.empty()) { continue; }
+        out += (out.empty() ? "" : "; ") + line;
+        ++lines;
+    }
+    if (out.size() > kMostChars) { out.resize(kMostChars); }
+    return out;
 }
 
 const char* enumOutcomeName(EnumOutcome outcome) noexcept {
@@ -815,6 +859,8 @@ void sweepEachDriver(const std::string& helper, const EnumOptions& options,
 
     std::vector<std::string> skip;
     for (const std::string& s : options.skipDrivers) { skip.push_back(lowerAscii(s)); }
+    std::vector<std::string> absent;
+    for (const std::string& s : options.absentDrivers) { absent.push_back(lowerAscii(s)); }
     // A driver that already killed a child of its own this session is not
     // asked again, beside an open radio or after a whole-bus death alike.
     const std::vector<std::string> faultedBefore = sessionFaultedNames();
@@ -825,6 +871,12 @@ void sweepEachDriver(const std::string& helper, const EnumOptions& options,
         const std::string low = lowerAscii(d);
         if (std::find(skip.begin(), skip.end(), low) != skip.end()) {
             result.skippedDrivers.push_back(low);
+        } else if (std::find(absent.begin(), absent.end(), low) != absent.end()) {
+            // Nothing of its family is here to find (EnumOptions::absentDrivers).
+            if (std::find(result.absentDrivers.begin(), result.absentDrivers.end(), low) ==
+                result.absentDrivers.end()) {
+                result.absentDrivers.push_back(low);
+            }
         } else if (std::find(faultedBefore.begin(), faultedBefore.end(), low) !=
                    faultedBefore.end()) {
             // Already listed when the whole-bus child was told to skip it.
@@ -886,6 +938,8 @@ void sweepEachDriver(const std::string& helper, const EnumOptions& options,
             for (SoapyDeviceInfo& d : one.devices) { found.push_back(std::move(d)); }
             continue;
         }
+        // The most recent death's or kill's own words, as the header promises.
+        result.childFaultLine = one.childFaultLine;
         if (one.outcome == EnumOutcome::ChildDied) {
             result.childDeaths += 1;
             result.deathExitCode = one.exitCode;
@@ -896,9 +950,14 @@ void sweepEachDriver(const std::string& helper, const EnumOptions& options,
             // which, and hashed to the same signature as the whole-bus death
             // filed moments before it - so the uploader dropped it as a
             // duplicate and the name never left the machine.
+            // AND WHAT THE CHILD SAID IT DIED OF (F204602B5329B268), when its
+            // handler got that far: the code and module of the fault itself,
+            // which the exit code alone cannot give when the handler could
+            // not finish.
             const std::string reason =
                 "SDR device enumeration child process died probing driver=" +
-                reportSafeName(driver) + " (contained: every other driver was still probed)";
+                reportSafeName(driver) + " (contained: every other driver was still probed)" +
+                childSaid(one.childFaultLine);
             core::reportAbsorbedChildFault(reason.c_str(), one.exitCode, 1,
                                            childFaultSignatureTag(driver).c_str());
             // Deterministic by now: the driver died with nothing else running
@@ -915,8 +974,9 @@ void sweepEachDriver(const std::string& helper, const EnumOptions& options,
         } else {
             core::diagWarnf(
                 "soapy: the '%s' driver faulted during discovery (exit 0x%08lX) - it is "
-                "skipped for this scan; every other driver was still asked",
-                driver.c_str(), one.exitCode);
+                "skipped for this scan; every other driver was still asked%s%s",
+                driver.c_str(), one.exitCode, one.childFaultLine.empty() ? "" : " - the child said: ",
+                one.childFaultLine.c_str());
         }
     }
 
@@ -979,14 +1039,30 @@ EnumResult enumerateIsolated(const EnumOptions& options) {
         for (const std::string& d : sessionFaultedNames()) {
             if (skippableName(d)) { sessionSkip.push_back(d); }
         }
+        // ...AND SO ARE THE DRIVERS WITH NOTHING HERE TO FIND, through the
+        // same argument (EnumOptions::absentDrivers).
+        std::vector<std::string> absentSkip;
+        for (const std::string& d : options.absentDrivers) {
+            const std::string low = lowerAscii(d);
+            if (skippableName(low) &&
+                std::find(sessionSkip.begin(), sessionSkip.end(), low) == sessionSkip.end() &&
+                std::find(absentSkip.begin(), absentSkip.end(), low) == absentSkip.end()) {
+                absentSkip.push_back(low);
+            }
+        }
         std::string skipArg;
         for (const std::string& d : sessionSkip) { skipArg += (skipArg.empty() ? "" : ",") + d; }
-        if (!skipArg.empty()) {
-            skipArg = "--skip=" + skipArg;
+        for (const std::string& d : absentSkip) { skipArg += (skipArg.empty() ? "" : ",") + d; }
+        if (!sessionSkip.empty()) {
             core::diagWarnf(
                 "soapy: not asking %s - it crashed a device scan earlier in this session",
                 joinNames(sessionSkip, 8).c_str());
         }
+        if (!absentSkip.empty()) {
+            core::diagLogf("soapy: not asking %s - no hardware of theirs is on this machine",
+                           joinNames(absentSkip, 8).c_str());
+        }
+        if (!skipArg.empty()) { skipArg = "--skip=" + skipArg; }
 
         const int maxAttempts = (options.attempts > 0) ? options.attempts : 1;
         for (int i = 0; i < maxAttempts; ++i) {
@@ -1003,6 +1079,7 @@ EnumResult enumerateIsolated(const EnumOptions& options) {
             }
             result = attempt;
             result.sessionSkippedDrivers = sessionSkip;
+            result.absentDrivers = absentSkip;
             // Only a DEATH is worth another child; see EnumOptions::attempts
             // for why a timeout is not.
             if (result.outcome != EnumOutcome::ChildDied) { break; }
@@ -1047,7 +1124,7 @@ EnumResult enumerateIsolated(const EnumOptions& options) {
             const std::string reason =
                 "SDR device enumeration child process died (contained: the parent "
                 "survived and re-probed)" +
-                running;
+                childSaid(result.childFaultLine) + running;
             core::reportAbsorbedChildFault(reason.c_str(), result.exitCode, i + 1,
                                            childFaultSignatureTag(std::string()).c_str());
 
@@ -1083,8 +1160,16 @@ EnumResult enumerateIsolated(const EnumOptions& options) {
         // In THIS process a driver that killed a child would kill the session,
         // so the session's faulted drivers are certainly not asked here.
         const std::vector<std::string> faulted = sessionFaultedNames();
-        result.devices = faulted.empty() ? SoapySource::enumerateInProcess()
-                                         : SoapySource::enumerateInProcessEach(faulted, {});
+        std::vector<std::string> leaveOut = faulted;
+        for (const std::string& d : options.absentDrivers) {
+            const std::string low = lowerAscii(d);
+            if (std::find(leaveOut.begin(), leaveOut.end(), low) == leaveOut.end()) {
+                leaveOut.push_back(low);
+                result.absentDrivers.push_back(low);
+            }
+        }
+        result.devices = leaveOut.empty() ? SoapySource::enumerateInProcess()
+                                          : SoapySource::enumerateInProcessEach(leaveOut, {});
         result.sessionSkippedDrivers = faulted;
         result.fellBackInProcess = true;
     }
@@ -1186,6 +1271,11 @@ void armEnumerateHelperProcess(const char* crashDir) {
         cfg.enabled = true;
         cfg.minidump = false;
         cfg.exitAfterReport = true;
+        // AND A LINE ON STDOUT, which is the parent's pipe, before the report
+        // (F204602B5329B268): the parent's report then says what the child
+        // died of even when the child's own report never gets written. See
+        // EnumResult::childFaultLine.
+        cfg.faultLineToStdout = true;
         core::installCrashHandlers(cfg);
         return;
     }

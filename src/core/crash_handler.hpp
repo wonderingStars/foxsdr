@@ -97,7 +97,25 @@ struct CrashHandlerConfig {
     // to block an unattended run. Only the child processes in
     // tests/test_crash_capture.cpp set this.
     bool exitAfterReport = false;
+
+    // ONE LINE ON STDOUT AS THE HANDLER STARTS, for a process whose stdout is
+    // read by its parent: the SDR enumeration child (source/soapy_enum_proc),
+    // and nothing else. Written before the report, with a raw WriteFile/write
+    // on the handle captured at install time, so it reaches the parent even
+    // when the report cannot be finished:
+    //
+    //   cascade-fault: access violation 0xC0000005 at libusb-1.0.dll+0x10490
+    //
+    // and, when the handler could not run at all (a fault INSIDE it, or
+    // another thread's report that never finished), a line that says so -
+    // see kFaultLinePrefix below. Field report F204602B5329B268: a child died
+    // with 0xE0000002 and the parent could say nothing about what it died of.
+    bool faultLineToStdout = false;
 };
+
+// The prefix of every line faultLineToStdout writes. Shared with the parent
+// that reads them, so the writer and the reader cannot drift apart.
+constexpr const char* kFaultLinePrefix = "cascade-fault: ";
 
 // Install as early in main() as possible - before anything that could fault
 // has had a chance to. Idempotent; a second call replaces the configuration.
@@ -197,6 +215,14 @@ void reportAbsorbedChildFault(const char* reason, unsigned long childExitCode, i
 // zeroed ContextRecord returns 0 rather than quietly substituting the calling
 // thread's stack for the one that was asked for.
 int captureFramesForTest(void* exceptionPointers, bool mayWalkCurrentThread);
+
+// TEST HOOK. Takes the fault path on the calling thread and never gives it
+// back, exactly as a handler that is still writing its report holds it - so a
+// test child can stage the two cases in which the handler cannot run: a fault
+// on THIS thread afterwards (a fault inside the handler) and a fault on
+// another thread (a report that never finishes). Neither can be staged
+// through a real fault from ctest. Never called by the application.
+void holdFaultPathForTest();
 
 // TEST HOOK. Raises a real fault of the requested kind so a child process can
 // prove the handler catches it and writes a readable report. A crash handler

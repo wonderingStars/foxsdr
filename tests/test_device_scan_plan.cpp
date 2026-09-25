@@ -151,6 +151,78 @@ void testRowsWithoutADriverAreNotKeptBlindly() {
     CHECK(rowFromSkippedDriver(Names({"uhd"}), "type=b200,Driver=UHD,serial=31"));
 }
 
+// --- F204602B5329B268: UHD IS ASKED ONLY WHEN A USRP COULD BE HERE ---------
+//
+// The child probing driver=uhd died on a machine whose only radio was an
+// SDRplay RSPdx. The rule, with a fake USB list standing in for the SetupAPI
+// / sysfs listing: no USRP on the bus -> uhd left out; a USRP plugged in, a
+// saved or open UHD source, or the network switch -> asked.
+void testUhdIsAskedOnlyWhenAUsrpCouldBeHere() {
+    using cascade::gui::isUsrpUsbId;
+    using cascade::gui::soapyDriversWithNoHardware;
+    using cascade::gui::UsbVidPid;
+    const Names uhd{"uhd"};
+
+    // The field machine: an SDRplay RSPdx (1df7:3060) and ordinary USB kit.
+    const std::vector<UsbVidPid> sdrplayOnly{{0x1DF7, 0x3060}, {0x046D, 0xC52B}, {0x8087, 0x0026}};
+    CHECK(soapyDriversWithNoHardware(sdrplayOnly, true, Names({}), false) == uhd);
+    // An empty bus is still a listing that answered.
+    CHECK(soapyDriversWithNoHardware({}, true, Names({}), false) == uhd);
+    // Soapy args naming other drivers do not bring uhd back.
+    CHECK(soapyDriversWithNoHardware(sdrplayOnly, true,
+                                     Names({"driver=sdrplay,serial=1", "", "driver=rtlsdr"}),
+                                     false) == uhd);
+
+    // A USRP ON THE BUS, every id UHD itself searches (b200_iface.hpp /
+    // uhd-usrp.rules): each alone brings uhd back.
+    const std::vector<UsbVidPid> usrps{{0x2500, 0x0020},   // B200/B210
+                                       {0x2500, 0x0021},   // B200mini
+                                       {0x2500, 0x0022},   // B205mini
+                                       {0x2500, 0x0023},   // B206mini
+                                       {0x2500, 0x0002},   // B100
+                                       {0x2500, 0x7777},   // any later Ettus product
+                                       {0x3923, 0x7813},   // NI-branded B200
+                                       {0x3923, 0x7814},   // NI-branded B210
+                                       {0xFFFE, 0x0002}};  // USRP1
+    for (const UsbVidPid& id : usrps) {
+        CHECK(isUsrpUsbId(id));
+        std::vector<UsbVidPid> bus = sdrplayOnly;
+        bus.push_back(id);
+        CHECK(soapyDriversWithNoHardware(bus, true, Names({}), false).empty());
+    }
+    // National Instruments makes much that is not a USRP, and a bare FX3
+    // bootloader is not something b200_find looks for.
+    for (const UsbVidPid& id : std::vector<UsbVidPid>{{0x3923, 0x7812},
+                                                      {0x3923, 0x7815},
+                                                      {0x3923, 0x7166},
+                                                      {0x04B4, 0x00F3},
+                                                      {0x04B4, 0x00F0},
+                                                      {0xFFFE, 0x0003},
+                                                      {0x2501, 0x0020}}) {
+        CHECK(!isUsrpUsbId(id));
+        std::vector<UsbVidPid> bus = sdrplayOnly;
+        bus.push_back(id);
+        CHECK(soapyDriversWithNoHardware(bus, true, Names({}), false) == uhd);
+    }
+
+    // A SAVED OR OPEN UHD SOURCE: the user has a USRP - on the network, or
+    // switched off today - and its args are how the scan knows. Case and
+    // spacing as a hand-edited config might spell them.
+    CHECK(soapyDriversWithNoHardware(sdrplayOnly, true, Names({"driver=uhd,serial=31"}), false)
+              .empty());
+    CHECK(soapyDriversWithNoHardware(sdrplayOnly, true,
+                                     Names({"", "type=usrp2, Driver = UHD ,addr=192.168.10.2"}),
+                                     false)
+              .empty());
+
+    // THE NETWORK SWITCH.
+    CHECK(soapyDriversWithNoHardware(sdrplayOnly, true, Names({}), true).empty());
+
+    // A LISTING THAT FAILED is not an empty bus: absence is unknown, and the
+    // probe runs as it always did.
+    CHECK(soapyDriversWithNoHardware({}, false, Names({}), false).empty());
+}
+
 }  // namespace
 
 int main() {
@@ -162,5 +234,6 @@ int main() {
     testItDefersWhenItCannotVouch();
     testWhatAScanInFlightMayProbe();
     testRowsWithoutADriverAreNotKeptBlindly();
+    testUhdIsAskedOnlyWhenAUsrpCouldBeHere();
     return testSummary("test_device_scan_plan");
 }

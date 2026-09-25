@@ -84,9 +84,16 @@ char g_crashDir[kPathBytes] = {};
 char g_lastPath[kPathBytes] = {};
 bool g_enabled = false;
 bool g_exitAfterReport = false;
-std::atomic<int> g_inHandler{0};
-std::atomic<int> g_inAbsorbed{0};
-std::atomic<int> g_inAbsorbedChild{0};
+// WHICH THREAD HOLDS THE FAULT PATH (0 = none) - the same rule as
+// crash_handler.cpp's acquireFaultPath, for the same field report
+// (F204602B5329B268): a second thread faulting while a report is written
+// WAITS for it instead of killing the process mid-report with 0xE2, and only
+// the SAME thread arriving again counts as a fault inside the handler. The
+// absorbed-fault paths take it too, since they write the same static buffers.
+std::atomic<long> g_faultPathTid{0};
+std::atomic<int> g_cannotRunEntries{0};
+// Where CrashHandlerConfig::faultLineToStdout writes; -1 = nowhere.
+int g_faultLineFd = -1;
 std::atomic<long> g_reportSeq{0};
 
 char g_ringBuf[DiagLog::kRingLines * DiagLog::kLineBytes + 1] = {};
@@ -114,11 +121,30 @@ alignas(16) char g_altStack[kAltStackBytes] = {};
 
 pid_t posixGetTid() { return static_cast<pid_t>(::syscall(SYS_gettid)); }
 
-bool enterHandler() {
-    int expected = 0;
-    return g_inHandler.compare_exchange_strong(expected, 1, std::memory_order_acq_rel);
+enum class FaultPathEntry { Acquired, SameThread, TimedOut };
+
+// Waits up to about `waitMs` for another thread's report, in 5 ms naps.
+// nanosleep, not a clock read against a deadline: it is on the
+// async-signal-safe list and needs nothing else.
+FaultPathEntry acquireFaultPath(unsigned waitMs) {
+    const long me = static_cast<long>(posixGetTid());
+    const unsigned naps = waitMs / 5u;
+    for (unsigned i = 0;; ++i) {
+        long expected = 0;
+        if (g_faultPathTid.compare_exchange_strong(expected, me, std::memory_order_acq_rel)) {
+            return FaultPathEntry::Acquired;
+        }
+        if (expected == me) { return FaultPathEntry::SameThread; }
+        if (i >= naps) { return FaultPathEntry::TimedOut; }
+        struct timespec nap {0, 5 * 1000 * 1000};
+        ::nanosleep(&nap, nullptr);
+    }
 }
-void exitHandler() { g_inHandler.store(0, std::memory_order_release); }
+void exitHandler() { g_faultPathTid.store(0, std::memory_order_release); }
+
+// Long enough for any report that is going to finish, well inside the 20 s
+// the enumeration parent gives a child. See crash_handler.cpp.
+constexpr unsigned kOtherThreadWaitMs = 10000;
 
 // ---------------------------------------------------------------------------
 // The allocation-free writer
@@ -419,6 +445,46 @@ void finish(unsigned long exitCode) {
     ::_exit(static_cast<int>(exitCode == 0 ? 1u : (exitCode & 0x7Fu ? exitCode & 0x7Fu : 1u)));
 }
 
+// The parent's line (CrashHandlerConfig::faultLineToStdout), written before
+// the report. See crash_handler.cpp's faultLine.
+void faultLine(const char* what, unsigned long code, std::uintptr_t addr) {
+    if (g_faultLineFd < 0) { return; }
+    Emit e;
+    e.fd = g_faultLineFd;
+    e.str(kFaultLinePrefix);
+    e.str(what);
+    e.str(" 0x");
+    e.hex(code, 8);
+    e.str(" at ");
+    e.addr(addr);
+    e.str("\n");
+}
+
+// The handler cannot run - a fault inside it on this thread, or another
+// thread's report that never finished. Says so on the parent's line, then
+// dies with 0xE2 as it always has. Entered at most once.
+[[noreturn]] void handlerCannotRun(bool sameThread, const char* what, unsigned long code) {
+    if (g_cannotRunEntries.fetch_add(1) == 0 && g_faultLineFd >= 0) {
+        Emit e;
+        e.fd = g_faultLineFd;
+        e.str(kFaultLinePrefix);
+        e.str(sameThread ? "second fault inside the crash handler"
+                         : "crash handler did not finish on another thread");
+        e.str(": ");
+        e.str(what);
+        e.str(" 0x");
+        e.hex(code, 8);
+        e.str("\n");
+    }
+    ::_exit(0xE2);
+}
+
+void enterFatal(const char* what, unsigned long code) {
+    const FaultPathEntry entry = acquireFaultPath(kOtherThreadWaitMs);
+    if (entry == FaultPathEntry::Acquired) { return; }
+    handlerCannotRun(entry == FaultPathEntry::SameThread, what, code);
+}
+
 const char* reasonForSignal(int sig) {
     switch (sig) {
         case SIGSEGV: return "access violation (SIGSEGV)";
@@ -445,10 +511,9 @@ const char* reasonForSignal(int sig) {
 // (crash_handler.cpp's Windows report uses ExceptionAddress, the faulting
 // INSTRUCTION, for the same reason).
 void faultSignalHandler(int sig, siginfo_t* /*info*/, void* ucontextVoid) {
-    if (!enterHandler()) {
-        // A fault INSIDE the handler. Die quietly rather than recursing.
-        ::_exit(0xE2);
-    }
+    // Another thread's report is waited for; a fault inside this handler on
+    // this thread still dies with 0xE2, saying so first.
+    enterFatal(reasonForSignal(sig), static_cast<unsigned long>(sig));
     auto* ctx = static_cast<unw_context_t*>(ucontextVoid);
     std::uintptr_t addr = 0;
     {
@@ -460,9 +525,10 @@ void faultSignalHandler(int sig, siginfo_t* /*info*/, void* ucontextVoid) {
             }
         }
     }
+    faultLine(reasonForSignal(sig), static_cast<unsigned long>(sig), addr);
     writeReport(reasonForSignal(sig), static_cast<unsigned long>(sig), addr, ctx, true, nullptr);
-    exitHandler();
     finish(static_cast<unsigned long>(sig));
+    exitHandler();
 
     // Production default: reset to the OS's own handling and re-raise, so a
     // user's machine still gets whatever it always got (a core dump if
@@ -480,12 +546,13 @@ void faultSignalHandler(int sig, siginfo_t* /*info*/, void* ucontextVoid) {
 }
 
 void onTerminatePosix() {
-    if (!enterHandler()) { ::_exit(0xE2); }
     void* here = __builtin_return_address(0);
+    enterFatal("std::terminate", kCodeTerminate);
+    faultLine("std::terminate", kCodeTerminate, reinterpret_cast<std::uintptr_t>(here));
     writeReport("std::terminate", kCodeTerminate, reinterpret_cast<std::uintptr_t>(here), nullptr,
                 true, nullptr);
-    exitHandler();
     finish(kCodeTerminate);
+    exitHandler();
     // The SIGABRT net (faultSignalHandler) must not write a second report for
     // the abort() below - stand it down first, exactly as
     // crash_handler.cpp's onTerminate does before its own abort().
@@ -518,12 +585,13 @@ void onTerminatePosix() {
 // (nothing in this codebase makes a virtual call before that), the two are
 // equivalent for every report this product will ever write.
 extern "C" void __cxa_pure_virtual() {
-    if (!enterHandler()) { ::_exit(0xE2); }
     void* here = __builtin_return_address(0);
+    enterFatal("purecall", kCodePureCall);
+    faultLine("purecall", kCodePureCall, reinterpret_cast<std::uintptr_t>(here));
     writeReport("purecall", kCodePureCall, reinterpret_cast<std::uintptr_t>(here), nullptr, true,
                 nullptr);
-    exitHandler();
     finish(kCodePureCall);
+    exitHandler();
     struct sigaction dfl {};
     dfl.sa_handler = SIG_DFL;
     ::sigemptyset(&dfl.sa_mask);
@@ -559,6 +627,8 @@ void install(const CrashHandlerConfig& cfg) {
     } else {
         g_enabled = false;
     }
+    // The parent's line: the enumeration child's stdout is its parent's pipe.
+    g_faultLineFd = cfg.faultLineToStdout ? STDOUT_FILENO : -1;
 
     if (moduleCount() == 0) { refreshModuleTable(); }
     {
@@ -615,28 +685,28 @@ std::string activeDir() {
     return std::string(g_crashDir);
 }
 
+// The absorbed paths hold the same fault path as the fatal ones, since they
+// write the same static buffers - see crash_handler.cpp's reportAbsorbedFault.
 void reportAbsorbed(const char* reason, unsigned long code, const void* faultAddress) {
-    int expected = 0;
-    if (!g_inAbsorbed.compare_exchange_strong(expected, 1, std::memory_order_acq_rel)) { return; }
+    if (acquireFaultPath(kOtherThreadWaitMs) != FaultPathEntry::Acquired) { return; }
     writeReport(reason != nullptr ? reason : "absorbed fault", code,
                 reinterpret_cast<std::uintptr_t>(faultAddress), nullptr, true, nullptr);
-    g_inAbsorbed.store(0, std::memory_order_release);
+    exitHandler();
 }
 
 void reportAbsorbedChild(const char* reason, unsigned long childExitCode, int attempt,
                          const char* signatureTag) {
-    int expected = 0;
-    if (!g_inAbsorbedChild.compare_exchange_strong(expected, 1, std::memory_order_acq_rel)) {
-        return;
-    }
+    if (acquireFaultPath(kOtherThreadWaitMs) != FaultPathEntry::Acquired) { return; }
     ChildFault child;
     child.exitCode = childExitCode;
     child.attempt = attempt;
     child.signatureTag = signatureTag;
     writeReport(reason != nullptr ? reason : "child process fault (contained)", childExitCode, 0u,
                 nullptr, false, &child);
-    g_inAbsorbedChild.store(0, std::memory_order_release);
+    exitHandler();
 }
+
+void holdFaultPathForTest() { (void)acquireFaultPath(0); }
 
 int captureFramesForTest(bool mayWalkCurrentThread) {
     if (!mayWalkCurrentThread) { return 0; }
@@ -654,14 +724,14 @@ int captureFramesForTest(bool mayWalkCurrentThread) {
     // tests/test_crash_capture.cpp's platform-neutral
     // `r.text.find("invalid parameter")` check pass on both platforms without
     // needing to know which one produced the report.
-    if (enterHandler()) {
+    if (acquireFaultPath(kOtherThreadWaitMs) == FaultPathEntry::Acquired) {
         void* here = __builtin_return_address(0);
         writeReport(
             "invalid parameter (posix equivalent: glibc has no CRT invalid-parameter "
             "fail-fast, so this test exercises a direct abort() instead)",
             kCodeInvalidParameter, reinterpret_cast<std::uintptr_t>(here), nullptr, true, nullptr);
-        exitHandler();
         finish(kCodeInvalidParameter);
+        exitHandler();
         struct sigaction dfl {};
         dfl.sa_handler = SIG_DFL;
         ::sigemptyset(&dfl.sa_mask);

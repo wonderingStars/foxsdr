@@ -224,6 +224,7 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
 
     getString(j, "sourceKind", out.sourceKind);
     getString(j, "soapyArgs", out.soapyArgs);
+    getBool(j, "lookForNetworkUsrps", out.lookForNetworkUsrps);
     getString(j, "nativeArgs", out.nativeArgs);
     // THE BIAS TEE, PER RADIO (AppConfig::biasTee). Element-wise tolerant: an
     // entry that is not a bool, or whose key is not "<kind>|<args>", is
@@ -802,6 +803,7 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
     j["schemaVersion"] = cfg.schemaVersion;
     j["sourceKind"] = cfg.sourceKind;
     j["soapyArgs"] = cfg.soapyArgs;
+    j["lookForNetworkUsrps"] = cfg.lookForNetworkUsrps;
     j["nativeArgs"] = cfg.nativeArgs;
     {
         json bias = json::object();

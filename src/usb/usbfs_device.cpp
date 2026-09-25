@@ -267,6 +267,24 @@ std::vector<UsbDeviceInfo> enumerateWinUsb(const std::vector<UsbId>& ids) {
     return sysfsUsbNodesToDevices(readSysfsUsbNodes("/sys/bus/usb/devices"), ids);
 }
 
+bool presentUsbIds(std::vector<UsbId>& out) {
+    // The same sysfs walk, every device node (an interface child carries no
+    // ids - see sysfsUsbNodesToDevices), each pair once. A missing
+    // /sys/bus/usb/devices is an empty bus here exactly as it is for
+    // enumerateWinUsb(): a container or VM with no USB exposed has no USB
+    // device for anything to find.
+    out.clear();
+    for (const SysfsUsbNode& n : readSysfsUsbNodes("/sys/bus/usb/devices")) {
+        if (!n.hasIds) { continue; }
+        bool seen = false;
+        for (const UsbId& o : out) {
+            if (o.vid == n.vid && o.pid == n.pid) { seen = true; }
+        }
+        if (!seen) { out.push_back(UsbId{n.vid, n.pid}); }
+    }
+    return true;
+}
+
 std::vector<UsbDeviceInfo> enumerateUnbound(const std::vector<UsbId>&) {
     // See the file header: on Linux, USBDEVFS_DISCONNECT_CLAIM (in
     // openWinUsb() below) detaches whatever kernel driver - dvb_usb_rtl28xxu

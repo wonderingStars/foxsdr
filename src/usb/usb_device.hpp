@@ -147,6 +147,24 @@ struct UsbNode {
 
 std::vector<UsbDeviceInfo> unboundFrom(const std::vector<UsbNode>& nodes);
 
+// EVERY USB DEVICE PRESENT, as VID/PID pairs, whatever it is and whatever it
+// is bound to - so a caller can ask "is there any hardware of this family on
+// the bus at all" before letting a vendor module walk it (2026-09-25: UHD's
+// probe, which the SoapySDR scan now skips on a machine with no USRP - see
+// gui/device_scan_plan.hpp, soapyDriversWithNoHardware). Rule 1 holds: the
+// same SetupAPI / sysfs property reads as the lists above, nothing opened.
+// Each pair at most once, in the order found.
+//
+// Returns false when the listing itself could not be taken (SetupAPI refused,
+// or a platform with no transport): the caller must then treat absence as
+// UNKNOWN, never as "nothing here".
+bool presentUsbIds(std::vector<UsbId>& out);
+
+// The VID/PID in a Windows hardware id ("USB\VID_2500&PID_0020&REV_0001",
+// either case). Portable and pure so it is tested on every platform; false
+// when the id carries no complete pair.
+bool usbIdFromHardwareId(const std::string& hardwareId, UsbId& out);
+
 // Standard request-type bits, so drivers do not spell 0x40 and 0xC0.
 constexpr std::uint8_t kRequestTypeVendorOut = 0x40;  // host to device
 constexpr std::uint8_t kRequestTypeVendorIn = 0xC0;   // device to host

@@ -97,6 +97,8 @@
 #include "source/iq_file_source.hpp"
 #include "source/rsp_rows.hpp"
 #include "source/soapy_enum_proc.hpp"
+#include "gui/device_scan_plan.hpp"
+#include "usb/usb_device.hpp"
 
 #ifdef _WIN32
 // ShellExecuteW, for handing the verified installer to the shell so its
@@ -593,6 +595,8 @@ void applyWindowIcon(GLFWwindow* window) {
 bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppConfig& b) {
     return a.sourceKind == b.sourceKind && a.soapyArgs == b.soapyArgs &&
            a.nativeArgs == b.nativeArgs &&
+           // A tick in the Source section that calls no save of its own.
+           a.lookForNetworkUsrps == b.lookForNetworkUsrps &&
            // The per-radio bias tee memory: switched by the checkbox and the
            // deck's key, neither of which saves on its own.
            a.biasTee == b.biasTee &&
@@ -7339,6 +7343,19 @@ void AppWindow::drawSourceSection() {
         scanNative();
         scanSoapy();  // defers itself, and says so once, while a radio is open
     }
+    // LOOK FOR NETWORK USRPs (2026-09-25), off by default: UHD is only asked
+    // when a USRP could be here (gui::soapyDriversWithNoHardware), and a USRP
+    // on the network is on no USB bus. Ticking it rescans at once, so the
+    // radio it is for appears without a second click.
+    ImGui::SameLine();
+    if (ImGui::Checkbox(trId("Look for network USRPs"), &lookForNetworkUsrps_)) {
+        if (lookForNetworkUsrps_) { scanSoapy(); }
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("%s", tr("Ask UHD for USRPs on the network (N200, X310, N310 and the "
+                                   "like) as well as on USB. A USB USRP is always looked for "
+                                   "when one is plugged in."));
+    }
     if (scanGated) {
         // WHAT THE SCAN DOES BESIDE AN OPEN RADIO (2026-09-23): usually it
         // still runs, leaving out only the open radios' own drivers; it is
@@ -8085,11 +8102,34 @@ void AppWindow::scanSoapy() {
     soapyScanPending_ = true;
     soapyScanSkip_ = skip;
     soapyScanPartial_ = !whole;
+    // UHD IS ASKED ONLY WHEN A USRP COULD BE HERE (F204602B5329B268, 0.99.35:
+    // its probe killed the scan's child on a machine whose only radio was an
+    // SDRplay). The Soapy args this session knows of - the file's, the last
+    // Soapy radio's, the open one's and every patch radio's - say whether the
+    // user has one; the USB listing, taken on the scan's own thread below
+    // because SetupAPI is not free, says whether one is plugged in. See
+    // gui::soapyDriversWithNoHardware.
+    std::vector<std::string> namedSoapyArgs = {startupSoapyArgs_, cfgSoapyArgs_};
+    if (sourceKind_ == "soapy") { namedSoapyArgs.push_back(deviceArgs_); }
+    for (const cascade::core::patch::Node& n : patchGraph_.nodes()) {
+        if (cascade::core::patch::deviceDriver(n.device) == "soapy") {
+            namedSoapyArgs.push_back(cascade::core::patch::deviceArgs(n.device));
+        }
+    }
+    const bool lookForNetworkUsrps = lookForNetworkUsrps_;
     // enumerate() never throws and is simply empty on a machine with no
     // vendor modules; this is also the hot-plug refresh path.
-    soapyScanFuture_ = std::async(std::launch::async, [skip] {
-        return skip.empty() ? cascade::source::SoapySource::enumerate()
-                            : cascade::source::SoapySource::enumerate(skip);
+    soapyScanFuture_ = std::async(std::launch::async, [skip, namedSoapyArgs,
+                                                       lookForNetworkUsrps] {
+        std::vector<cascade::usb::UsbId> present;
+        const bool listed = cascade::usb::presentUsbIds(present);
+        std::vector<cascade::gui::UsbVidPid> ids;
+        for (const cascade::usb::UsbId& id : present) { ids.push_back({id.vid, id.pid}); }
+        const std::vector<std::string> absent = cascade::gui::soapyDriversWithNoHardware(
+            ids, listed, namedSoapyArgs, lookForNetworkUsrps);
+        return (skip.empty() && absent.empty())
+                   ? cascade::source::SoapySource::enumerate()
+                   : cascade::source::SoapySource::enumerate(skip, absent);
     });
 }
 
@@ -23434,6 +23474,12 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     // rectangle, every setting, every position survives. Everything below
     // reads `cfg`, the start-up state, never `saved`.
     const cascade::core::AppConfig cfg = cascade::core::startupState(saved);
+    // The device scan's UHD rule (gui::soapyDriversWithNoHardware): the switch,
+    // and the Soapy args the file named whether or not that radio opens this
+    // launch - a USRP that is switched off or unreachable today is still one
+    // the user has.
+    lookForNetworkUsrps_ = cfg.lookForNetworkUsrps;
+    startupSoapyArgs_ = cfg.soapyArgs;
     // Panel mirrors + always-safe DSP settings first (none of these can
     // fail; load() already range-sanitized volume/split/db*).
     volume_ = cfg.volume;
@@ -24181,6 +24227,7 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     // one that could ever fall back. See AppConfig::nativeArgs.
     cfg.soapyArgs = src.soapyArgs;
     cfg.nativeArgs = src.nativeArgs;
+    cfg.lookForNetworkUsrps = lookForNetworkUsrps_;
     cfg.biasTee = biasTeePanel_.remembered;
     // Every radio's converter, including those not open now: a converter is
     // part of how that radio is cabled, and must survive a session without it.
