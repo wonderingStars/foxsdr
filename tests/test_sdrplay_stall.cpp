@@ -307,12 +307,15 @@ void testAStartAfterTheServiceStoppedAnsweringNeverEntersInit() {
     // the last frequency and rate it was given.
     CHECK(src->centerFrequencyHz() == 97300000.0);
     CHECK(src->sampleRateHz() == 2000000.0);
-    // And the request itself reaches nothing: 0 Hz is refused by the range
-    // check before any vendor call, and even an in-range tune on the stopped,
-    // dead radio only writes the parameter block.
+    // And the request itself reaches nothing: 0 Hz is refused, and so - since
+    // the review of 6e308c3 - is an in-range tune on the stopped, dead radio.
+    // It used to be accepted and written into the parameter block for an Init
+    // that can never come; now every setter refuses once the service is gone,
+    // before it touches the block (testALostRadioTakesNoSettingAtAll).
     const int updatesBefore = fake.countStarting("Update(");
     CHECK(!src->setCenterFrequencyHz(0.0));
-    CHECK(src->setCenterFrequencyHz(96000000.0));
+    CHECK(!src->setCenterFrequencyHz(96000000.0));
+    CHECK(src->centerFrequencyHz() == 97300000.0);
     CHECK(fake.countStarting("Update(") == updatesBefore);
 
     // The user's START, twice, as in the log.
@@ -543,6 +546,85 @@ void testTheStallClockStartsAfterInit() {
     src.closeDevice();
 }
 
+// --- 8. a SLOW reader still gets a stall named (review of 6e308c3) ------------
+//
+// Test 6's freeze rule was "a gap of more than 250 ms between two empty reads
+// starts a new run". On a loaded machine the pipeline's reader itself is late
+// by more than that - the reviewer measured no stall declared in 20 s at 8x CPU
+// oversubscription, and 14.4 s at 4x, against a 5 s limit - so the very rule
+// that stops a freeze being called a stall also hid a real one. Here the
+// reader is slow on purpose: 300 to 400 ms between empty reads, with not one
+// callback from the service. The stall must still be named, within the limit
+// plus a bounded margin.
+void testAStallIsStillNamedWhenTheReaderIsSlow() {
+    cascade::core::DiagLog::instance().resetForTest();
+    FakeSdrPlayApi fake;
+    fake.addDevice("1811003EFB", abi::kRsp1A);
+    SdrPlaySource src;
+    src.setApiForTest(&fake.table);
+    CHECK(src.open(""));
+    std::vector<std::complex<float>> buf(20000);
+
+    // FIRST, WHAT A HEALTHY READER'S CADENCE IS ON THIS MACHINE, before start()
+    // so the stall clock is not running: read() as the pipeline calls it, a
+    // kReadWait wait and a 1 ms back-off per empty read. Printed, not asserted:
+    // it is what the gap rule's comment quotes.
+    {
+        constexpr int kReads = 40;
+        const auto t0 = Clock::now();
+        for (int i = 0; i < kReads; ++i) {
+            (void) src.read(buf.data(), buf.size());
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        const double perRead =
+            std::chrono::duration<double, std::milli>(Clock::now() - t0).count() / kReads;
+        std::printf("a healthy reader's empty reads here are %.1f ms apart (kReadWait %lld ms)\n",
+                    perRead, static_cast<long long>(SdrPlaySource::kReadWait.count()));
+    }
+
+    constexpr long long kLimitMs = 1000;
+    src.setStreamStallLimitForTest(std::chrono::milliseconds(kLimitMs));
+    CHECK(src.start());  // no service thread: not one callback will come
+
+    const auto t0 = Clock::now();
+    long long longestGapMs = 0;
+    int reads = 0;
+    auto prev = Clock::now();
+    while (!src.faulted() && Clock::now() - t0 < std::chrono::milliseconds(4000)) {
+        (void) src.read(buf.data(), buf.size());
+        const auto now = Clock::now();
+        if (reads > 0) {
+            const long long gap =
+                std::chrono::duration_cast<std::chrono::milliseconds>(now - prev).count();
+            if (gap > longestGapMs) { longestGapMs = gap; }
+        }
+        prev = now;
+        ++reads;
+        if (src.faulted()) { break; }
+        std::this_thread::sleep_for(std::chrono::milliseconds((reads % 2 == 0) ? 300 : 380));
+    }
+    const bool named = src.faulted();
+    const long long ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - t0).count();
+    std::printf("slow reader (%d reads, longest gap %lld ms, limit %lld ms): stall %s after "
+                "%lld ms\n",
+                reads, longestGapMs, kLimitMs, named ? "named" : "NOT named", ms);
+    // The gaps really were longer than the old 250 ms rule allowed - without
+    // this the test would pass against a reader that was never slow.
+    CHECK(longestGapMs > 250);
+    CHECK(named);
+    // Not early: the reader saw nothing for the whole limit first.
+    CHECK(ms >= kLimitMs);
+    // And bounded: the limit, plus at most two of the slow gaps before the
+    // read that notices it.
+    CHECK(ms <= kLimitMs + 1000);
+    CHECK(std::string(src.lastError()).find(cascade::source::sdrPlayStreamStalledSentence()) !=
+          std::string::npos);
+    src.stop();
+    src.closeDevice();
+    CHECK(fake.countStarting("Uninit") == 0);
+}
+
 }  // namespace
 
 int main() {
@@ -554,5 +636,6 @@ int main() {
     testAStreamThatNeverStartsIsNamedToo();
     testAProcessFreezeIsNotAStall();
     testTheStallClockStartsAfterInit();
+    testAStallIsStillNamedWhenTheReaderIsSlow();
     return testSummary("test_sdrplay_stall");
 }

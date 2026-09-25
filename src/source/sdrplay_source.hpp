@@ -817,8 +817,9 @@ private:
 
     // TRUE WHEN NO THREAD OF OURS MAY ENTER THE VENDOR DLL FOR THIS DEVICE
     // AGAIN - the whole of the rule the file header states, in one place so
-    // that updateLocked, stopStreamingLocked and closeDevice cannot drift
-    // apart about it. devMutex_ held, like every other *Locked helper.
+    // that updateLocked, stopStreamingLocked, closeDevice and every setter
+    // cannot drift apart about it. devMutex_ held, like every other *Locked
+    // helper.
     //
     // DELIBERATELY NOT deviceDead(). That is raised by an UNPLUGGED radio too
     // (eventCallback's DeviceRemoved), and an unplugged radio leaves a healthy
@@ -830,6 +831,17 @@ private:
     bool vendorUnreachableLocked() const {
         return controlAbandoned_ || serviceGone_ || streamStalled_.load(std::memory_order_acquire);
     }
+
+    // THE FIRST LINE OF EVERY SETTER (the review of 6e308c3). True - with
+    // lastError "<what> refused: <the sentence for why>" - when the vendor DLL
+    // is unreachable, and then the setter returns false having touched
+    // NOTHING: not the parameter block, not a readback mirror, not the API.
+    // It has to come before the setter's "nothing changed" shortcut as well
+    // as before its writes: after an abandoned control the block still holds
+    // the abandoned request, so the shortcut answered "already there" for a
+    // frequency the radio never reached, and a different frequency was
+    // written into a block a worker of ours may still be reading.
+    bool refuseIfVendorUnreachableLocked(const char* what);
 
     // The source thread's half of kStreamStallLimit: called by read() when it
     // came back empty. Raises the fault once and never takes devMutex_ - read()

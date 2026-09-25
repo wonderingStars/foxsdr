@@ -84,11 +84,23 @@ private:
 
 // ...EXCEPT after an abandoned control: a worker of ours is still inside the
 // vendor's Update and may be reading the block, the device is dead for good,
-// and nothing will ever be sent for it again - so the block is left alone
-// rather than written under that thread.
+// and nothing will ever be sent for it again - so the fields that control was
+// sent with are left as they are rather than written under that thread. That
+// is the LAST write the block gets for this device. Every setter's first line
+// is refuseIfVendorUnreachableLocked, ahead of its "nothing changed" shortcut
+// and ahead of any write (the review of 6e308c3: until then a setter after the
+// abandonment still wrote its field and only then met the refusal in
+// updateLocked), so from the abandonment on the block really is left alone.
 void undoRefused(BlockRollback& rb, bool controlAbandoned) {
     if (!controlAbandoned) { rb.undo(); }
 }
+
+// What the receiver says once the service has answered
+// sdrplay_api_ServiceNotResponding - one string, because noteIfServiceDead
+// raises the fault with it and every setter refused afterwards repeats it.
+const char* const kServiceStoppedAnsweringSentence =
+    "the SDRplay service stopped answering - restart the SDRplay API service, then restart "
+    "FoxSDR";
 
 // The API answers an error code; this is what goes in the log and in
 // lastError(). GetErrorString is optional in the table (a fake need not have
@@ -845,11 +857,23 @@ bool SdrPlaySource::noteIfServiceDead(abi::ErrT err, const char* what) {
     // since 0.99.36: markSessionLost above means opening the radio again is
     // refused until then, which the old "then open the radio again" sent the
     // user straight into.
-    noteFaultOn(*link_, what,
-                "the SDRplay service stopped answering - restart the SDRplay API service, "
-                "then restart FoxSDR");
+    noteFaultOn(*link_, what, kServiceStoppedAnsweringSentence);
     core::diagWarnf("source: SDRplay %s - the service stopped answering; the radio is released",
                     what);
+    return true;
+}
+
+bool SdrPlaySource::refuseIfVendorUnreachableLocked(const char* what) {
+    if (!vendorUnreachableLocked()) { return false; }
+    // The same three sentences, in the same order of precedence, that
+    // stopStreamingLocked names the three causes with.
+    const char* why = controlAbandoned_ ? sdrPlayControlHungSentence()
+                      : streamStalled_.load(std::memory_order_acquire)
+                          ? sdrPlayStreamStalledSentence()
+                          : kServiceStoppedAnsweringSentence;
+    // Only the message: faulted()/deviceDead() were raised by whatever made
+    // the DLL unreachable, and nothing here is new information about the radio.
+    setError(std::string(what) + " refused: " + why);
     return true;
 }
 
@@ -1896,6 +1920,9 @@ bool SdrPlaySource::frequencyRangeHz(double& loHz, double& hiHz) const {
 
 bool SdrPlaySource::setCenterFrequencyHz(double hz) {
     std::lock_guard<std::mutex> lk(devMutex_);
+    // FIRST, before the unchanged-frequency shortcut below: after an abandoned
+    // retune the block holds the frequency the radio never reached.
+    if (refuseIfVendorUnreachableLocked("retune")) { return false; }
     double lo = 0.0;
     double hi = 0.0;
     frequencyRangeHz(lo, hi);
@@ -1947,6 +1974,7 @@ std::vector<double> SdrPlaySource::supportedSampleRatesHz() const {
 
 bool SdrPlaySource::setSampleRateHz(double hz) {
     std::lock_guard<std::mutex> lk(devMutex_);
+    if (refuseIfVendorUnreachableLocked("sample rate change")) { return false; }
     abi::RxChannelParamsT* ch = chParamsLocked();
     if (ch == nullptr || deviceParams_ == nullptr) {
         setError("no SDRplay device is open");
@@ -2033,6 +2061,9 @@ double SdrPlaySource::gainDb(const std::string& name) const {
 
 bool SdrPlaySource::setGainDb(const std::string& name, double db) {
     std::lock_guard<std::mutex> lk(devMutex_);
+    if (refuseIfVendorUnreachableLocked((name == "LNA") ? "LNA state change" : "IF gain change")) {
+        return false;
+    }
     abi::RxChannelParamsT* ch = chParamsLocked();
     if (ch == nullptr) {
         setError("no SDRplay device is open");
@@ -2085,6 +2116,7 @@ bool SdrPlaySource::setGainDb(const std::string& name, double db) {
 
 bool SdrPlaySource::setAutoGain(bool on) {
     std::lock_guard<std::mutex> lk(devMutex_);
+    if (refuseIfVendorUnreachableLocked("AGC change")) { return false; }
     abi::RxChannelParamsT* ch = chParamsLocked();
     if (ch == nullptr) {
         setError("no SDRplay device is open");
@@ -2109,10 +2141,18 @@ bool SdrPlaySource::setAutoGain(bool on) {
         // the service refuses that, leave the field saying what the radio IS
         // at, so the next IF change is not taken for "nothing to send".
         BlockRollback rb;
+        const int loopLeft = ch->tunerParams.gain.gRdB;
         rb.save(ch->tunerParams.gain.gRdB);
         ch->tunerParams.gain.gRdB = ifReductionDb_.load(std::memory_order_relaxed);
         if (!updateLocked(abi::Update_Tuner_Gr, abi::Update_Ext1_None, "IF gain restore")) {
             undoRefused(rb, controlAbandoned_);
+            // HALF OF THIS WAS TAKEN (the review of 6e308c3). The AGC is off -
+            // that Update was accepted, and autoGain() says so - but the radio
+            // kept the reduction the loop left, so gainDb("IF") reports THAT
+            // rather than our number, and the caller hears false: until then
+            // this answered true with a gain the radio was not at.
+            ifReductionDb_.store(loopLeft, std::memory_order_relaxed);
+            return false;
         }
     }
     return true;
@@ -2120,6 +2160,7 @@ bool SdrPlaySource::setAutoGain(bool on) {
 
 bool SdrPlaySource::setAgcSetPointDbfs(int dbfs) {
     std::lock_guard<std::mutex> lk(devMutex_);
+    if (refuseIfVendorUnreachableLocked("AGC set point change")) { return false; }
     abi::RxChannelParamsT* ch = chParamsLocked();
     if (ch == nullptr) {
         setError("no SDRplay device is open");
@@ -2200,6 +2241,7 @@ bool SdrPlaySource::reselectTunerLocked(abi::TunerSelectT tuner) {
 
 bool SdrPlaySource::setAntenna(const std::string& name) {
     std::lock_guard<std::mutex> lk(devMutex_);
+    if (refuseIfVendorUnreachableLocked("antenna change")) { return false; }
     const unsigned char hw = hwVer_.load(std::memory_order_relaxed);
     const std::vector<std::string> list = sdrPlayAntennas(hw, device_.rspDuoMode);
     if (std::find(list.begin(), list.end(), name) == list.end()) {
@@ -2241,6 +2283,7 @@ bool SdrPlaySource::setAntenna(const std::string& name) {
                 return false;
             }
         } else {
+            bool cameOffHiZ = false;
             if (ch->rsp2TunerParams.amPortSel == abi::Rsp2_AMPORT_1) {
                 // Come off Hi-Z FIRST: the antenna switch means nothing while
                 // the AM port owns the input.
@@ -2252,16 +2295,26 @@ bool SdrPlaySource::setAntenna(const std::string& name) {
                     undoRefused(rbPort, controlAbandoned_);
                     return false;
                 }
+                cameOffHiZ = true;
             }
             // The port change above was TAKEN if we got here, so only the
             // antenna switch is put back on a refusal of this one.
             BlockRollback rb;
+            const abi::Rsp2AntennaSelectT switchWas = ch->rsp2TunerParams.antennaSel;
             rb.save(ch->rsp2TunerParams.antennaSel);
             ch->rsp2TunerParams.antennaSel =
                 (name == "Antenna B") ? abi::Rsp2_ANTENNA_B : abi::Rsp2_ANTENNA_A;
             if (!updateLocked(abi::Update_Rsp2_AntennaControl, abi::Update_Ext1_None,
                               "antenna change")) {
                 undoRefused(rb, controlAbandoned_);
+                if (cameOffHiZ) {
+                    // ...AND THE RADIO IS NO LONGER ON Hi-Z (the review of
+                    // 6e308c3): it is on port 2 with the switch where it was,
+                    // so that is what antenna() says - it used to go on
+                    // saying "Hi-Z". Still false: the request was not met.
+                    std::lock_guard<std::mutex> nlk(nameMutex_);
+                    antenna_ = (switchWas == abi::Rsp2_ANTENNA_B) ? "Antenna B" : "Antenna A";
+                }
                 return false;
             }
         }
@@ -2318,6 +2371,7 @@ bool SdrPlaySource::biasTeeSupported() const {
 
 bool SdrPlaySource::setBiasT(bool on) {
     std::lock_guard<std::mutex> lk(devMutex_);
+    if (refuseIfVendorUnreachableLocked("bias tee change")) { return false; }
     abi::RxChannelParamsT* ch = chParamsLocked();
     if (ch == nullptr) {
         setError("no SDRplay device is open");
@@ -2384,6 +2438,7 @@ bool SdrPlaySource::rfNotchSupported() const {
 
 bool SdrPlaySource::setRfNotch(bool on) {
     std::lock_guard<std::mutex> lk(devMutex_);
+    if (refuseIfVendorUnreachableLocked("FM notch change")) { return false; }
     abi::RxChannelParamsT* ch = chParamsLocked();
     if (ch == nullptr) {
         setError("no SDRplay device is open");
@@ -2455,6 +2510,7 @@ bool SdrPlaySource::dabNotchSupported() const {
 
 bool SdrPlaySource::setDabNotch(bool on) {
     std::lock_guard<std::mutex> lk(devMutex_);
+    if (refuseIfVendorUnreachableLocked("DAB notch change")) { return false; }
     abi::RxChannelParamsT* ch = chParamsLocked();
     if (ch == nullptr) {
         setError("no SDRplay device is open");
@@ -2511,6 +2567,7 @@ bool SdrPlaySource::hdrModeSupported() const {
 
 bool SdrPlaySource::setHdrMode(bool on) {
     std::lock_guard<std::mutex> lk(devMutex_);
+    if (refuseIfVendorUnreachableLocked("HDR mode change")) { return false; }
     if (!hdrModeSupported()) {
         setError("HDR mode is an RSPdx feature");
         return false;
@@ -2582,16 +2639,29 @@ void SdrPlaySource::checkForStallFromRead() {
     const std::int64_t limit = link_->stallLimitNs.load(std::memory_order_relaxed);
 
     // THE READER MUST HAVE BEEN SEEING NOTHING, READ AFTER READ, FOR THE WHOLE
-    // LIMIT (the 0c59853 review). A healthy pipeline reads every ~20 ms
-    // (kReadWait plus its own 1 ms back-off); a gap far longer than that
-    // between two empty reads means THIS process was not running - laptop
-    // sleep, a paused VM, a debugger - and then the service's callback thread,
-    // which lives in this process too, was not running either. Such a gap
-    // starts a new run instead of counting as silence.
-    constexpr std::int64_t kReaderGapNs = 250LL * 1000000LL;
+    // LIMIT (the 0c59853 review). A healthy pipeline's empty reads are about
+    // 46 ms apart on this Windows desk, not the ~20 ms kReadWait suggests:
+    // measured by testAStallIsStillNamedWhenTheReaderIsSlow, and consistent
+    // with the 20 ms wait and the pipeline's 1 ms back-off each being rounded
+    // up to the 15.6 ms timer tick. A gap far longer than that between two
+    // empty reads means THIS process was not running - laptop sleep, a paused
+    // VM, a debugger - and then the service's callback thread, which lives in
+    // this process too, was not running either. Such a gap starts a new run
+    // instead of counting as silence.
+    //
+    // "FAR LONGER" IS max(1 s, limit / 4) - 1.25 s at the real limit (the
+    // review of 6e308c3). It was a fixed 250 ms, and a busy machine's reader
+    // is later than that on its own: every late read restarted the run, so a
+    // real stall was declared after 14.4 s at 4x CPU oversubscription and not
+    // at all in 20 s at 8x, against a 5 s limit - the rule that keeps a freeze
+    // from being called a stall hid the stall. A second and more is still a
+    // freeze by any measure (a healthy read is twenty-odd times sooner), and a
+    // shorter freeze counted as silence can only matter if the reader AND the
+    // callback clock below then both see nothing for the rest of the limit.
+    const std::int64_t readerGapNs = std::max<std::int64_t>(1000LL * 1000000LL, limit / 4);
     const std::int64_t prevEmpty = link_->lastEmptyReadNs.exchange(now, std::memory_order_relaxed);
     std::int64_t emptySince = link_->emptySinceNs.load(std::memory_order_relaxed);
-    if (prevEmpty == 0 || now - prevEmpty > kReaderGapNs || emptySince == 0) {
+    if (prevEmpty == 0 || now - prevEmpty > readerGapNs || emptySince == 0) {
         link_->emptySinceNs.store(now, std::memory_order_relaxed);
         return;
     }
