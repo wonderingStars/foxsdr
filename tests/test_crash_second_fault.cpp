@@ -51,6 +51,7 @@
 #include "core/crash_handler.hpp"
 #include "core/diag_log.hpp"
 #include "core/diag_report.hpp"
+#include "source/soapy_enum_proc.hpp"
 #include "test_check.hpp"
 
 #if defined(_WIN32)
@@ -74,6 +75,7 @@ enum Mode {
     kHeapTrashed = 5,    // freed heap blocks overwritten, then a fault
     kHeldSameThread = 6, // the fault path is held by THIS thread: a fault inside the handler
     kHeldOtherThread = 7,  // held by another thread that never finishes
+    kNoisyStdout = 8,    // another thread writing to stdout the whole time
 };
 
 const char* modeName(int m) {
@@ -85,6 +87,7 @@ const char* modeName(int m) {
         case kHeapTrashed: return "heap-trashed";
         case kHeldSameThread: return "held-same-thread";
         case kHeldOtherThread: return "held-other-thread";
+        case kNoisyStdout: return "noisy-stdout";
         default: return "?";
     }
 }
@@ -168,6 +171,31 @@ int secondFaultChild(int mode, const std::string& dir) {
     installCrashHandlers(cfg);
 
     switch (mode) {
+        case kNoisyStdout: {
+            // ANOTHER THREAD WRITING TO THE SAME PIPE the whole time - a
+            // vendor module's printf, in the field - in small raw writes
+            // with no newline, so anything of it that lands inside the
+            // handler's line is carried into the parent's reason. '#' is a
+            // byte the line itself never contains.
+            std::atomic<bool> going{false};
+            std::thread noisy([&going] {
+                static const char kNoise[] = "########";
+                going.store(true);
+                for (;;) {
+#if defined(_WIN32)
+                    DWORD w = 0;
+                    ::WriteFile(::GetStdHandle(STD_OUTPUT_HANDLE), kNoise, 8, &w, nullptr);
+#else
+                    (void)!::write(STDOUT_FILENO, kNoise, 8);
+#endif
+                }
+            });
+            noisy.detach();
+            while (!going.load()) { std::this_thread::sleep_for(std::chrono::milliseconds(1)); }
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            faultNow();
+            break;
+        }
         case kHeldSameThread: {
             holdFaultPathForTest();
             faultNow();
@@ -443,6 +471,33 @@ void expectCannotRun(int mode, const std::string& why) {
     if (g_checksFailed == 0) { fs::remove_all(dir, ec); }
 }
 
+// THE LINE ARRIVES WHOLE with another thread writing to the same pipe (review
+// of 5e7b968): the parent's reader (source::childFaultLineFrom, the production
+// one) must read the fault line and nothing of the other writer's bytes.
+void expectCleanFaultLine() {
+    int clean = 0;
+    for (int run = 0; run < g_runs; ++run) {
+        const fs::path dir = scratchDir(std::string("noisy-") + std::to_string(run));
+        std::error_code ec;
+        fs::remove_all(dir, ec);
+        fs::create_directories(dir, ec);
+        const Outcome o = runChild(kNoisyStdout, dir);
+        const std::string line = cascade::source::childFaultLineFrom(o.stdoutText);
+        const bool ok = !o.timedOut && o.exitCode == kAccessViolation &&
+                        line.rfind("access violation", 0) == 0 &&
+                        line.find('#') == std::string::npos && line.find(" at ") != std::string::npos;
+        if (ok) {
+            ++clean;
+        } else {
+            std::printf("  noisy-stdout run %d: exit 0x%08lX, %zu stdout bytes, line [%s]\n", run,
+                        o.exitCode, o.stdoutText.size(), line.c_str());
+        }
+        fs::remove_all(dir, ec);
+    }
+    std::printf("noisy-stdout: %d of %d runs gave the parent a clean fault line\n", clean, g_runs);
+    CHECK(clean == g_runs);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -482,5 +537,6 @@ int main(int argc, char** argv) {
     // The two ways the handler genuinely cannot run, staged with the hook.
     expectCannotRun(kHeldSameThread, "second fault inside the crash handler");
     expectCannotRun(kHeldOtherThread, "crash handler did not finish on another thread");
+    expectCleanFaultLine();
     return testSummary("test_crash_second_fault");
 }

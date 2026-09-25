@@ -151,8 +151,17 @@ constexpr unsigned kOtherThreadWaitMs = 10000;
 // ---------------------------------------------------------------------------
 struct Emit {
     int fd = -1;
+    // With `buf` set, everything is appended there (at most cap-1 bytes) for
+    // the caller to write in ONE call - see faultLine. Fixed storage only.
+    char* buf = nullptr;
+    std::size_t cap = 0;
+    mutable std::size_t len = 0;
 
     void raw(const char* s, std::size_t n) const {
+        if (buf != nullptr) {
+            for (std::size_t i = 0; i < n && len + 1 < cap; ++i) { buf[len++] = s[i]; }
+            return;
+        }
         if (fd < 0 || n == 0) { return; }
         // A short write is possible even for a small buffer (a signal landing
         // mid-write); looping costs nothing and a partial report is still
@@ -447,17 +456,34 @@ void finish(unsigned long exitCode) {
 
 // The parent's line (CrashHandlerConfig::faultLineToStdout), written before
 // the report. See crash_handler.cpp's faultLine.
+// BUILT WHOLE, THEN WRITTEN ONCE, for the reason crash_handler.cpp's
+// faultLine gives: another thread writing to the same pipe must not land
+// inside the line. A write() of this size to a pipe is atomic (under
+// PIPE_BUF). Two buffers because the two writers can be different threads.
+char g_faultLineBuf[512] = {};
+char g_cannotRunLineBuf[512] = {};
+
+void writeLineOnce(const Emit& built) {
+    if (g_faultLineFd < 0 || built.len == 0) { return; }
+    Emit out;
+    out.fd = g_faultLineFd;
+    out.raw(built.buf, built.len);
+}
+
 void faultLine(const char* what, unsigned long code, std::uintptr_t addr) {
     if (g_faultLineFd < 0) { return; }
     Emit e;
-    e.fd = g_faultLineFd;
+    e.buf = g_faultLineBuf;
+    e.cap = sizeof(g_faultLineBuf);
     e.str(kFaultLinePrefix);
     e.str(what);
     e.str(" 0x");
     e.hex(code, 8);
     e.str(" at ");
     e.addr(addr);
+    if (e.len + 1 >= e.cap) { e.len = e.cap - 2; }
     e.str("\n");
+    writeLineOnce(e);
 }
 
 // The handler cannot run - a fault inside it on this thread, or another
@@ -466,7 +492,8 @@ void faultLine(const char* what, unsigned long code, std::uintptr_t addr) {
 [[noreturn]] void handlerCannotRun(bool sameThread, const char* what, unsigned long code) {
     if (g_cannotRunEntries.fetch_add(1) == 0 && g_faultLineFd >= 0) {
         Emit e;
-        e.fd = g_faultLineFd;
+        e.buf = g_cannotRunLineBuf;
+        e.cap = sizeof(g_cannotRunLineBuf);
         e.str(kFaultLinePrefix);
         e.str(sameThread ? "second fault inside the crash handler"
                          : "crash handler did not finish on another thread");
@@ -474,7 +501,9 @@ void faultLine(const char* what, unsigned long code, std::uintptr_t addr) {
         e.str(what);
         e.str(" 0x");
         e.hex(code, 8);
+        if (e.len + 1 >= e.cap) { e.len = e.cap - 2; }
         e.str("\n");
+        writeLineOnce(e);
     }
     ::_exit(0xE2);
 }

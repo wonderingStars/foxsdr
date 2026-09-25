@@ -223,6 +223,38 @@ void testUhdIsAskedOnlyWhenAUsrpCouldBeHere() {
     CHECK(soapyDriversWithNoHardware({}, false, Names({}), false).empty());
 }
 
+// THE HINT UNDER THE SOURCE LIST (review of 5e7b968): shown exactly when the
+// scan left UHD out, and never otherwise - driven from the same answer the
+// scan used, end to end through the rule above.
+void testTheNetworkUsrpHintOnlyWhenUhdWasSkipped() {
+    using cascade::gui::networkUsrpHint;
+    using cascade::gui::soapyDriversWithNoHardware;
+    using cascade::gui::UsbVidPid;
+    const std::string want =
+        "Network USRPs are not searched - tick Look for network USRPs to include them";
+    const std::vector<UsbVidPid> sdrplayOnly{{0x1DF7, 0x3060}};
+    const std::vector<UsbVidPid> withB200{{0x1DF7, 0x3060}, {0x2500, 0x0020}};
+
+    // Skipped: the hint, word for word (it is a catalogue key).
+    const char* skipped =
+        networkUsrpHint(soapyDriversWithNoHardware(sdrplayOnly, true, Names({}), false));
+    CHECK(skipped != nullptr);
+    CHECK(skipped != nullptr && want == skipped);
+    CHECK(networkUsrpHint(Names({"UHD"})) != nullptr);
+
+    // Asked, every way the rule asks: no hint.
+    CHECK(networkUsrpHint(soapyDriversWithNoHardware(withB200, true, Names({}), false)) ==
+          nullptr);
+    CHECK(networkUsrpHint(soapyDriversWithNoHardware(sdrplayOnly, true, Names({}), true)) ==
+          nullptr);
+    CHECK(networkUsrpHint(soapyDriversWithNoHardware(
+              sdrplayOnly, true, Names({"driver=uhd,addr=192.168.10.2"}), false)) == nullptr);
+    CHECK(networkUsrpHint(soapyDriversWithNoHardware({}, false, Names({}), false)) == nullptr);
+    // Other drivers left out are not UHD.
+    CHECK(networkUsrpHint(Names({})) == nullptr);
+    CHECK(networkUsrpHint(Names({"rtlsdr", "uhdx", "sdrplay"})) == nullptr);
+}
+
 }  // namespace
 
 int main() {
@@ -235,5 +267,6 @@ int main() {
     testWhatAScanInFlightMayProbe();
     testRowsWithoutADriverAreNotKeptBlindly();
     testUhdIsAskedOnlyWhenAUsrpCouldBeHere();
+    testTheNetworkUsrpHintOnlyWhenUhdWasSkipped();
     return testSummary("test_device_scan_plan");
 }

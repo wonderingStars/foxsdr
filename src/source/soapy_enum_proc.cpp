@@ -682,13 +682,23 @@ std::vector<std::string> probesStillRunning(const std::string& text) {
     return running;
 }
 
-// The child's fault line as a reason suffix. Capped harder than the field
-// itself: the site keeps 200 characters of a reason, and the base sentence
-// (which names the driver) is the half that must survive.
-std::string childSaid(const std::string& line) {
-    if (line.empty()) { return std::string(); }
-    constexpr std::size_t kMostInReason = 72;
-    return " - child: " + line.substr(0, kMostInReason);
+// THE SITE KEEPS 200 CHARACTERS OF A REASON (foxsdr-site crash.go,
+// clip(in.Reason, 200)), so a child-death reason is budgeted to that.
+constexpr std::size_t kReasonBudget = 200;
+
+// `head` - everything the parent itself knows, the driver names included -
+// followed by the child's own line, which is the ONLY part ever shortened to
+// fit, and is left out altogether when not even a few characters of it would
+// fit. Review of 5e7b968: the child's line used to sit in the middle of the
+// whole-bus reason, and at 237-246 characters the clip cut off "still
+// probing when it died: <drivers>", the one thing that reason exists to say.
+std::string withChildSaid(const std::string& head, const std::string& line) {
+    static const std::string kSep = " - child: ";
+    constexpr std::size_t kLeastWorthKeeping = 8;
+    if (line.empty() || head.size() + kSep.size() + kLeastWorthKeeping > kReasonBudget) {
+        return head;
+    }
+    return head + kSep + line.substr(0, kReasonBudget - head.size() - kSep.size());
 }
 
 std::string joinNames(const std::vector<std::string>& names, std::size_t most) {
@@ -954,10 +964,10 @@ void sweepEachDriver(const std::string& helper, const EnumOptions& options,
             // handler got that far: the code and module of the fault itself,
             // which the exit code alone cannot give when the handler could
             // not finish.
-            const std::string reason =
+            const std::string reason = withChildSaid(
                 "SDR device enumeration child process died probing driver=" +
-                reportSafeName(driver) + " (contained: every other driver was still probed)" +
-                childSaid(one.childFaultLine);
+                    reportSafeName(driver) + " (contained: every other driver was still probed)",
+                one.childFaultLine);
             core::reportAbsorbedChildFault(reason.c_str(), one.exitCode, 1,
                                            childFaultSignatureTag(driver).c_str());
             // Deterministic by now: the driver died with nothing else running
@@ -1114,17 +1124,24 @@ EnumResult enumerateIsolated(const EnumOptions& options) {
             // follows a second death is what names a culprit. Its own
             // signature, so it is not one group with every other child death
             // of the same exit code.
+            //
+            // The drivers come BEFORE the child's own line, and the whole
+            // reason fits the site's 200 characters (withChildSaid). The
+            // clause is short on purpose - "every driver probes at once in
+            // this walk; " went, because it is true of every whole-bus
+            // report and cost the 42 characters the child's module name
+            // needs: with it, the field's own line kept only "access
+            // violation 0xC000000".
             const std::string running =
                 result.inFlightDrivers.empty()
                     ? std::string(" - no driver's probe had begun (it died while the driver "
                                   "modules were loading)")
-                    : " - every driver probes at once in this walk; still probing when it "
-                      "died: " +
-                          joinNames(result.inFlightDrivers, 8);
-            const std::string reason =
+                    : " - still probing when it died: " + joinNames(result.inFlightDrivers, 8);
+            const std::string reason = withChildSaid(
                 "SDR device enumeration child process died (contained: the parent "
                 "survived and re-probed)" +
-                childSaid(result.childFaultLine) + running;
+                    running,
+                result.childFaultLine);
             core::reportAbsorbedChildFault(reason.c_str(), result.exitCode, i + 1,
                                            childFaultSignatureTag(std::string()).c_str());
 

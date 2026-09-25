@@ -268,13 +268,22 @@ std::vector<UsbDeviceInfo> enumerateWinUsb(const std::vector<UsbId>& ids) {
 }
 
 bool presentUsbIds(std::vector<UsbId>& out) {
+    return presentUsbIdsFrom("/sys/bus/usb/devices", out);
+}
+
+bool presentUsbIdsFrom(const std::string& sysfsDevicesDir, std::vector<UsbId>& out) {
     // The same sysfs walk, every device node (an interface child carries no
-    // ids - see sysfsUsbNodesToDevices), each pair once. A missing
-    // /sys/bus/usb/devices is an empty bus here exactly as it is for
-    // enumerateWinUsb(): a container or VM with no USB exposed has no USB
-    // device for anything to find.
+    // ids - see sysfsUsbNodesToDevices), each pair once.
     out.clear();
-    for (const SysfsUsbNode& n : readSysfsUsbNodes("/sys/bus/usb/devices")) {
+    // AN UNREADABLE DIRECTORY IS A FAILED LISTING, not an empty bus (review
+    // of 5e7b968). readSysfsUsbNodes answers both with an empty list, which is
+    // right for enumerateWinUsb - no radio to open either way - and wrong
+    // here, where "empty" means "no USRP, leave UHD out": a USB USRP on a
+    // machine whose sysfs this process cannot read would vanish from the scan.
+    DIR* probe = ::opendir(sysfsDevicesDir.c_str());
+    if (probe == nullptr) { return false; }
+    ::closedir(probe);
+    for (const SysfsUsbNode& n : readSysfsUsbNodes(sysfsDevicesDir)) {
         if (!n.hasIds) { continue; }
         bool seen = false;
         for (const UsbId& o : out) {

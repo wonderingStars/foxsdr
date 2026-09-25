@@ -460,6 +460,43 @@ int fakeHelper(int argc, char** argv) {
         cascade::core::raiseTestFault(cascade::core::TestFaultKind::AccessViolation);
         return 0;  // unreachable
     }
+    if (mode == "armedwholebus" || mode == "fieldline") {
+        // THE WHOLE-BUS DEATH'S REASON, AT FULL LENGTH (review of 5e7b968).
+        // The listing fails (exit 5), so no sweep follows and the only
+        // reports are the whole-bus ones. Asked for the whole bus, the child
+        // logs the field machine's probes and leaves two still running, then
+        // dies:
+        //   armedwholebus  through the PRODUCTION handler
+        //                  (armEnumerateHelperProcess + a real fault), whose
+        //                  line names this test binary - longer than libusb's;
+        //   fieldline      writing the field's own longest line verbatim,
+        //                  then dying with its code.
+        if (askedToListDrivers(argc, argv)) { return 5; }
+        probeLine(true, "sdrplay");
+        probeLine(true, "uhd");
+        probeLine(true, "rtlsdr");
+        probeLine(false, "rtlsdr");
+        if (mode == "fieldline") {
+            const std::string line = std::string(cascade::core::kFaultLinePrefix) +
+                                     "access violation 0xC0000005 at libusb-1.0.dll+0x10490\n";
+            std::fwrite(line.data(), 1, line.size(), stdout);
+            std::fflush(stdout);
+#ifdef _WIN32
+            ::TerminateProcess(::GetCurrentProcess(), 0xC0000005u);
+#endif
+            std::_Exit(139);
+        }
+        std::string crashDir;
+        for (int i = 1; i < argc; ++i) {
+            const char* flag = "--crash-dir=";
+            if (std::strncmp(argv[i], flag, std::strlen(flag)) == 0) {
+                crashDir = argv[i] + std::strlen(flag);
+            }
+        }
+        cascade::source::armEnumerateHelperProcess(crashDir.c_str());
+        cascade::core::raiseTestFault(cascade::core::TestFaultKind::AccessViolation);
+        return 0;  // unreachable
+    }
     if (mode == "garbage") {
         std::printf("this is not json at all\n");
         return 0;
@@ -1904,6 +1941,59 @@ int main(int argc, char** argv) {
                 std::printf("per-driver reason: %zu characters\n", len);
                 CHECK(len <= 200u);
             }
+            cascade::source::clearSessionFaultedDriversForTest();
+            clearReports();
+        }
+
+        // --- THE WHOLE-BUS REASON FITS THE SITE'S 200 CHARACTERS ------------
+        //
+        // Review of 5e7b968: the whole-bus reason put the child's line BEFORE
+        // "still probing when it died: ...", and at 237-244 characters the
+        // site's clip (crash.go, clip(in.Reason, 200)) cut the driver list -
+        // the one thing that reason exists to carry. Both the production
+        // handler's line and the field's own libusb line, with the field
+        // machine's drivers still probing: every parent reason within 200,
+        // the driver list whole, and the child's words kept where they fit.
+        for (const char* m : {"armedwholebus", "fieldline"}) {
+            const auto clearReports = [&dir]() {
+                std::error_code rec;
+                for (const auto& p : crashReports(dir)) { std::filesystem::remove(p, rec); }
+            };
+            clearReports();
+            cascade::source::clearSessionFaultedDriversForTest();
+            setMode(m);
+            EnumOptions o;
+            o.helperPath = self;
+            o.allowInProcessFallback = false;
+            const EnumResult r = enumerateIsolated(o);
+            CHECK(r.outcome == EnumOutcome::ChildDied);
+            CHECK(r.childDeaths == 2);
+            CHECK(r.childFaultLine.rfind("access violation", 0) == 0);
+            const std::string body = allReportText(dir);
+            std::size_t pos = 0;
+            int wholeBus = 0;
+            while ((pos = body.find("reason: SDR device enumeration child process died", pos)) !=
+                   std::string::npos) {
+                const std::size_t eol = body.find('\n', pos);
+                const std::string reason =
+                    body.substr(pos + std::strlen("reason: "),
+                                (eol == std::string::npos ? body.size() : eol) - pos -
+                                    std::strlen("reason: "));
+                pos = (eol == std::string::npos) ? body.size() : eol;
+                ++wholeBus;
+                std::printf("%s whole-bus reason (%zu chars): %s\n", m, reason.size(),
+                            reason.c_str());
+                CHECK(reason.size() <= 200u);
+                CHECK(reason.find("still probing when it died: sdrplay, uhd") !=
+                      std::string::npos);
+                CHECK(reason.find(" - child: access violation") != std::string::npos);
+                // The drivers first: only the child's words are ever cut.
+                CHECK(reason.find("still probing when it died") < reason.find(" - child: "));
+                if (std::strcmp(m, "fieldline") == 0) {
+                    CHECK(reason.find("libusb-1.0.dll+0x10490") != std::string::npos);
+                }
+            }
+            CHECK(wholeBus == 2);
             cascade::source::clearSessionFaultedDriversForTest();
             clearReports();
         }

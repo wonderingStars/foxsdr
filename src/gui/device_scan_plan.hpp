@@ -32,6 +32,8 @@
 #include <string>
 #include <vector>
 
+#include "core/i18n.hpp"  // FOX_TR_NOOP only
+
 namespace cascade::gui {
 
 // One open radio: its family as the receiver and the patch name it ("rtlsdr",
@@ -250,6 +252,23 @@ inline std::vector<std::string> soapyDriversWithNoHardware(
         if (detail::driverOf(args) == "uhd") { return {}; }
     }
     return {"uhd"};
+}
+
+// THE ONE LINE UNDER THE SOURCE LIST when the last scan left UHD out (review
+// of 5e7b968): a user whose USRP is on the network, and who has never opened
+// it here, would otherwise lose it from the list with nothing on screen to
+// say why or what to do. English, marked for the catalogues; the Source
+// section draws tr() of it. Null - nothing drawn - whenever UHD was asked.
+// `absentDrivers` is the scan's own list (soapyDriversWithNoHardware), so
+// the line can never claim a skip that did not happen.
+inline const char* networkUsrpHint(const std::vector<std::string>& absentDrivers) {
+    for (const std::string& d : absentDrivers) {
+        if (detail::lowerAscii(d) == "uhd") {
+            return FOX_TR_NOOP(
+                "Network USRPs are not searched - tick Look for network USRPs to include them");
+        }
+    }
+    return nullptr;
 }
 
 }  // namespace cascade::gui

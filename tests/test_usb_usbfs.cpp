@@ -411,6 +411,58 @@ int main() {
         }
     }
 
+    // --- 7. EVERY USB ID PRESENT, and when the listing itself failed --------
+    // presentUsbIds() decides whether the device scan asks UHD at all
+    // (F204602B5329B268). An UNREADABLE sysfs directory must answer "listing
+    // failed" - absence unknown, so UHD is asked as it always was - never
+    // "an empty bus", which would silently drop a USB USRP from the scan
+    // (review of 5e7b968; the Windows side already answers false when
+    // SetupAPI refuses). Root reads through permission bits, so the
+    // unreadable cases are a missing path and a path that is a file.
+    {
+        std::vector<UsbId> ids{{0xDEAD, 0xBEEF}};
+        CHECK(!cascade::usb::presentUsbIdsFrom("/nonexistent/foxsdr/sys/bus/usb/devices", ids));
+        CHECK(ids.empty());
+
+        char tmpl[] = "/tmp/foxsdr_usbfs_present_XXXXXX";
+        const char* dir = ::mkdtemp(tmpl);
+        CHECK(dir != nullptr);
+        if (dir != nullptr) {
+            const std::string root = dir;
+            const std::string notADir = root + "/plain-file";
+            writeFile(notADir, "not a directory\n");
+            ids = {{0xDEAD, 0xBEEF}};
+            CHECK(!cascade::usb::presentUsbIdsFrom(notADir, ids));
+            CHECK(ids.empty());
+
+            // A readable bus: two identical B200s, a root hub, and the
+            // B200's interface child (no ids) - one pair each, in order.
+            const std::string bus = root + "/devices";
+            makeDir(bus);
+            for (const char* node : {"usb1", "1-1", "1-2"}) { makeDir(bus + "/" + node); }
+            writeFile(bus + "/usb1/idVendor", "1d6b\n");
+            writeFile(bus + "/usb1/idProduct", "0002\n");
+            writeFile(bus + "/1-1/idVendor", "2500\n");
+            writeFile(bus + "/1-1/idProduct", "0020\n");
+            writeFile(bus + "/1-2/idVendor", "2500\n");
+            writeFile(bus + "/1-2/idProduct", "0020\n");
+            makeDir(bus + "/1-1:1.0");
+            CHECK(cascade::usb::presentUsbIdsFrom(bus, ids));
+            CHECK(ids.size() == 2u);
+            bool usrp = false;
+            for (const UsbId& id : ids) { usrp = usrp || (id.vid == 0x2500 && id.pid == 0x0020); }
+            CHECK(usrp);
+            // And an empty but READABLE bus is a listing that answered.
+            const std::string empty = root + "/empty";
+            makeDir(empty);
+            CHECK(cascade::usb::presentUsbIdsFrom(empty, ids));
+            CHECK(ids.empty());
+
+            const std::string cleanup = "rm -rf '" + root + "'";
+            CHECK(std::system(cleanup.c_str()) == 0);
+        }
+    }
+
     return testSummary("test_usb_usbfs");
 }
 

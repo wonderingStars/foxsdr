@@ -62,6 +62,14 @@ std::vector<SysfsUsbNode> readSysfsUsbNodes(const std::string& sysfsDevicesDir);
 std::vector<UsbDeviceInfo> sysfsUsbNodesToDevices(const std::vector<SysfsUsbNode>& nodes,
                                                    const std::vector<UsbId>& ids);
 
+// presentUsbIds() (usb_device.hpp) read from `sysfsDevicesDir` - the real one
+// is presentUsbIdsFrom("/sys/bus/usb/devices", out). False when the directory
+// cannot be read at all (missing, not a directory, no permission): the same
+// "listing failed, absence unknown" the Windows side gives when SetupAPI
+// refuses, so the caller asks UHD as it always did rather than treating an
+// unreadable bus as an empty one.
+bool presentUsbIdsFrom(const std::string& sysfsDevicesDir, std::vector<UsbId>& out);
+
 }  // namespace cascade::usb
 
 #endif  // __linux__

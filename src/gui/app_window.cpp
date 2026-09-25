@@ -7356,6 +7356,15 @@ void AppWindow::drawSourceSection() {
                                    "like) as well as on USB. A USB USRP is always looked for "
                                    "when one is plugged in."));
     }
+    // SAID WHEN THE LAST SCAN LEFT UHD OUT, so a network USRP that is not in
+    // the list is not missing silently (gui::networkUsrpHint). Not while the
+    // box is ticked: the rescan that tick starts is about to answer it.
+    if (const char* hint = cascade::gui::networkUsrpHint(soapyAbsentDrivers_);
+        hint != nullptr && !lookForNetworkUsrps_) {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        ImGui::TextWrapped("%s", tr(hint));
+        ImGui::PopStyleColor();
+    }
     if (scanGated) {
         // WHAT THE SCAN DOES BESIDE AN OPEN RADIO (2026-09-23): usually it
         // still runs, leaving out only the open radios' own drivers; it is
@@ -8117,16 +8126,21 @@ void AppWindow::scanSoapy() {
         }
     }
     const bool lookForNetworkUsrps = lookForNetworkUsrps_;
+    soapyScanAbsent_ = std::make_shared<std::vector<std::string>>();
+    const std::shared_ptr<std::vector<std::string>> absentOut = soapyScanAbsent_;
     // enumerate() never throws and is simply empty on a machine with no
     // vendor modules; this is also the hot-plug refresh path.
     soapyScanFuture_ = std::async(std::launch::async, [skip, namedSoapyArgs,
-                                                       lookForNetworkUsrps] {
+                                                       lookForNetworkUsrps, absentOut] {
         std::vector<cascade::usb::UsbId> present;
         const bool listed = cascade::usb::presentUsbIds(present);
         std::vector<cascade::gui::UsbVidPid> ids;
         for (const cascade::usb::UsbId& id : present) { ids.push_back({id.vid, id.pid}); }
         const std::vector<std::string> absent = cascade::gui::soapyDriversWithNoHardware(
             ids, listed, namedSoapyArgs, lookForNetworkUsrps);
+        // Handed back for the hint under the Source list; the future being
+        // ready is what makes it safe to read there.
+        *absentOut = absent;
         return (skip.empty() && absent.empty())
                    ? cascade::source::SoapySource::enumerate()
                    : cascade::source::SoapySource::enumerate(skip, absent);
@@ -8159,6 +8173,11 @@ void AppWindow::pollSourceAsync() {
         }
         soapyScanSkip_.clear();
         soapyScanPending_ = false;
+        // What THIS scan left out for having nothing to find - replacing the
+        // last scan's, so the hint follows the list it sits under.
+        soapyAbsentDrivers_ =
+            soapyScanAbsent_ ? *soapyScanAbsent_ : std::vector<std::string>();
+        soapyScanAbsent_.reset();
         if (sourceSel_ >= kNativeRowBase || sourceSel_ < 0) {
             // Re-find the open device by its args (labels can repeat); if it
             // vanished from the scan the device stays open and selected, and

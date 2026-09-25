@@ -283,8 +283,18 @@ std::terminate_handler g_prevTerminate = nullptr;
 // ---------------------------------------------------------------------------
 struct Emit {
     HANDLE h = INVALID_HANDLE_VALUE;
+    // With `buf` set, everything is appended there instead (at most cap-1
+    // bytes) and nothing is written until the caller writes it in ONE call -
+    // see faultLine for why that matters. Fixed storage, never the heap.
+    char* buf = nullptr;
+    std::size_t cap = 0;
+    mutable std::size_t len = 0;
 
     void raw(const char* s, std::size_t n) const {
+        if (buf != nullptr) {
+            for (std::size_t i = 0; i < n && len + 1 < cap; ++i) { buf[len++] = s[i]; }
+            return;
+        }
         if (h == INVALID_HANDLE_VALUE || n == 0) { return; }
         DWORD written = 0;
         ::WriteFile(h, s, static_cast<DWORD>(n), &written, nullptr);
@@ -827,17 +837,41 @@ void finish(unsigned long exitCode) {
 // THE LINE FOR THE PARENT (CrashHandlerConfig::faultLineToStdout), written
 // FIRST, before the report: whatever becomes of the report, the process that
 // reads this one's stdout learns what it died of.
+//
+// BUILT WHOLE, THEN WRITTEN ONCE (review of 5e7b968). It used to go out in
+// eight WriteFile calls, and any other thread writing to the same pipe - a
+// vendor module's printf - landed between them: 7 of 8 staged runs carried
+// that thread's bytes into the line, and so into the uploaded reason
+// (tests/test_crash_second_fault.cpp, noisy-stdout). A single write of a line
+// this short reaches the pipe in one piece. Two buffers, not one: this one is
+// written only by the thread holding the fault path, the next only by the
+// first thread that finds it cannot run - which may be a different thread at
+// the same moment.
+char g_faultLineBuf[512] = {};
+char g_cannotRunLineBuf[512] = {};
+
+void writeLineOnce(const Emit& built) {
+    if (g_faultLine == INVALID_HANDLE_VALUE || built.len == 0) { return; }
+    DWORD written = 0;
+    ::WriteFile(g_faultLine, built.buf, static_cast<DWORD>(built.len), &written, nullptr);
+}
+
 void faultLine(const char* what, unsigned long code, std::uintptr_t addr) {
     if (g_faultLine == INVALID_HANDLE_VALUE) { return; }
     Emit e;
-    e.h = g_faultLine;
+    e.buf = g_faultLineBuf;
+    e.cap = sizeof(g_faultLineBuf);
     e.str(kFaultLinePrefix);
     e.str(what);
     e.str(" 0x");
     e.hex(code, 8);
     e.str(" at ");
     e.addr(addr);
+    // The newline survives a truncation: without it the line runs into
+    // whatever the pipe carries next.
+    if (e.len + 1 >= e.cap) { e.len = e.cap - 2; }
     e.str("\n");
+    writeLineOnce(e);
 }
 
 // THE HANDLER CANNOT RUN, and says so on the way out rather than vanishing.
@@ -856,14 +890,17 @@ void faultLine(const char* what, unsigned long code, std::uintptr_t addr) {
                                      : "crash handler did not finish on another thread";
         if (g_faultLine != INVALID_HANDLE_VALUE) {
             Emit e;
-            e.h = g_faultLine;
+            e.buf = g_cannotRunLineBuf;
+            e.cap = sizeof(g_cannotRunLineBuf);
             e.str(kFaultLinePrefix);
             e.str(why);
             e.str(": ");
             e.str(what);
             e.str(" 0x");
             e.hex(code, 8);
+            if (e.len + 1 >= e.cap) { e.len = e.cap - 2; }
             e.str("\n");
+            writeLineOnce(e);
         }
         const HANDLE open = g_openReport;
         if (open != INVALID_HANDLE_VALUE) {

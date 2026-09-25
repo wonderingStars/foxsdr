@@ -1814,6 +1814,12 @@ private:
     // (gui::soapyDriversWithNoHardware).
     bool lookForNetworkUsrps_ = false;
     std::string startupSoapyArgs_;
+    // The drivers the scan in flight left out for having nothing to find,
+    // written by the scan's own thread before its future is ready (so read
+    // safely once it is) - and the last completed scan's, which is what
+    // gui::networkUsrpHint draws from under the Source list.
+    std::shared_ptr<std::vector<std::string>> soapyScanAbsent_;
+    std::vector<std::string> soapyAbsentDrivers_;
     // A deferral has been logged for the radio currently open. The combo's
     // lazy scan asks on every frame the dropdown is open, so without this the
     // one diag line would be written sixty times a second; cleared the moment
