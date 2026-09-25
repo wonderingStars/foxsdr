@@ -39,6 +39,7 @@
 #define CASCADE_CORE_PATCH_GRAPH_HPP
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -168,7 +169,30 @@ struct Node {
     //                    closed even while the patch runs. Saved, so a patch
     //                    of five radios comes back with the same ones on.
     bool on = true;
+    //   Radio    centreChosen  THIS SESSION ONLY, never saved: freqHz is a
+    //                    centre even though it is 0. The file keeps 0 for
+    //                    "none chosen" (a format-1 node has no settings), but
+    //                    live, 0 Hz on the air is a real centre - a dongle on
+    //                    125 MHz behind a 125 MHz up-converter - and the patch
+    //                    take-over, the starter patch and a typed centre set
+    //                    this so they never go through the 0 sentinel. A
+    //                    patch saved with such a node reads back as "none",
+    //                    and the radio then reports where it is.
+    bool centreChosen = false;
 };
+
+// WHETHER A RADIO NODE HAS A CENTRE YET. The document stores 0 for "none
+// chosen" (a format-1 node has no settings at all), and that is the only
+// value that means it: a Radio's centre is an AIR frequency, and with an up-
+// converter in front of the radio it may lie below 0 Hz - a 16.4 kHz station
+// with the band centred 300 kHz below it is -283.6 kHz on the air and
+// 124.7164 MHz at a radio behind a 125 MHz converter. Reading "<= 0" as
+// "none" threw that centre away and left the radio at its driver's default.
+// (Channel nodes are stations, and keep their own "> 0" rule.) A live 0 Hz
+// centre is marked with Node::centreChosen rather than read off the value.
+inline bool radioCentreSet(const Node& n) {
+    return std::isfinite(n.freqHz) && (n.centreChosen || n.freqHz != 0.0);
+}
 
 // The squelch range the controls offer, in dB of channel power.
 inline constexpr float kSquelchMinDb = -120.0f;

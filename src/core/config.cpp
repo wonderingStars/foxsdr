@@ -225,6 +225,28 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     getBool(j, "nativeBiasT", out.nativeBiasT);
     getString(j, "rtlBiasTArgs", out.rtlBiasTArgs);
     getBool(j, "rtlBiasT", out.rtlBiasT);
+    // The converters, element-wise tolerant like userPresets: an entry that is
+    // not an object is skipped, and every other rule (unknown mode = off, a bad
+    // LO = off, no radio = dropped, the cap) is sanitiseConverters', below.
+    {
+        const auto it = j.find("converters");
+        if (it != j.end() && it->is_array()) {
+            std::map<std::string, ConverterSetting> conv;
+            for (const auto& e : *it) {
+                if (!e.is_object()) { continue; }
+                std::string radio;
+                std::string mode;
+                ConverterSetting s;
+                getString(e, "radio", radio);
+                getString(e, "mode", mode);
+                getDouble(e, "loHz", s.loHz);
+                getBool(e, "inverted", s.inverted);
+                s.mode = converterModeFromKey(mode);
+                conv[radio] = s;
+            }
+            out.converters = std::move(conv);
+        }
+    }
     getString(j, "plutoUri", out.plutoUri);
     getString(j, "soapyAntenna", out.soapyAntenna);
     getString(j, "iqFilePath", out.iqFilePath);
@@ -711,6 +733,7 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     // that the plugin could not have written itself.
     out.pluginSettings = sanitisePluginSettings(out.pluginSettings);
     out.userPresets = sanitiseUserPresets(out.userPresets);
+    out.converters = sanitiseConverters(out.converters);
     // And the rebound keys, from the same function for the fourth time. An
     // empty line could name no action, and a line repeated verbatim is one
     // rebind stated twice - both are noise a hand-edit leaves behind, and the
@@ -728,6 +751,18 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
     j["nativeBiasT"] = cfg.nativeBiasT;
     j["rtlBiasTArgs"] = cfg.rtlBiasTArgs;
     j["rtlBiasT"] = cfg.rtlBiasT;
+    {
+        json conv = json::array();
+        for (const auto& [radio, s] : cfg.converters) {
+            json e;
+            e["radio"] = radio;
+            e["mode"] = converterModeKey(s.mode);
+            e["loHz"] = s.loHz;
+            e["inverted"] = s.inverted;
+            conv.push_back(std::move(e));
+        }
+        j["converters"] = std::move(conv);
+    }
     j["plutoUri"] = cfg.plutoUri;
     j["soapyAntenna"] = cfg.soapyAntenna;
     j["iqFilePath"] = cfg.iqFilePath;

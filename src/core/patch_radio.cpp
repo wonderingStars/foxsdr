@@ -25,6 +25,9 @@ struct PatchRadio::Shared {
     std::atomic<bool> run{false};
     std::atomic<bool> done{false};
     std::atomic<std::uint64_t> blocks{0};
+    // An inverting converter in front of the radio: the reader conjugates what
+    // it reads so the band is the right way round (PatchRadio::setConverter).
+    std::atomic<bool> mirror{false};
 
     mutable std::mutex specMutex;
     std::vector<float> specDb;
@@ -49,6 +52,12 @@ PatchRadio::PatchRadio(NodeId node, std::unique_ptr<cascade::source::IqSource> s
                        std::string label)
     : node_(node), label_(std::move(label)), sh_(std::make_shared<Shared>()) {
     sh_->src = std::move(source);
+    view_.bind(sh_->src.get());
+}
+
+void PatchRadio::setConverter(const cascade::core::ConverterSetting& s) {
+    view_.setConverter(s);
+    sh_->mirror.store(view_.mirrors(), std::memory_order_relaxed);
 }
 
 PatchRadio::~PatchRadio() { stop(); }
@@ -113,8 +122,10 @@ void PatchRadio::stop() {
         sh_->runner.flushNow();
         thread_.detach();
         // A fresh Shared for this object, so nothing it does from here on can
-        // touch what the abandoned thread still holds.
+        // touch what the abandoned thread still holds - the converter view
+        // included, which must stop pointing at the source the thread kept.
         sh_ = std::make_shared<Shared>();
+        view_.bind(nullptr);
     }
 }
 
@@ -124,10 +135,12 @@ bool PatchRadio::running() const {
 
 double PatchRadio::rateHz() const { return sh_->src ? sh_->src->sampleRateHz() : 0.0; }
 
-double PatchRadio::centreHz() const { return sh_->src ? sh_->src->centerFrequencyHz() : 0.0; }
+// Both through the converter view: the patch page speaks air frequencies, the
+// same as the receiver, and only the radio is told the converted one.
+double PatchRadio::centreHz() const { return sh_->src ? view_.centerFrequencyHz() : 0.0; }
 
 bool PatchRadio::setCentreHz(double hz) {
-    return sh_->src ? sh_->src->setCenterFrequencyHz(hz) : false;
+    return sh_->src ? view_.setCenterFrequencyHz(hz) : false;
 }
 
 Runner& PatchRadio::runner() { return sh_->runner; }
@@ -193,6 +206,9 @@ void readerBody(const std::shared_ptr<PatchRadio::Shared>& shp) {
             break;
         }
         if (got == 0) { continue; }
+        if (sh.mirror.load(std::memory_order_relaxed)) {
+            cascade::core::conjugateInPlace(buf.data(), got);
+        }
         produced += got;
         sh.blocks.fetch_add(1, std::memory_order_relaxed);
 

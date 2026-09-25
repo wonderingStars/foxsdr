@@ -40,7 +40,9 @@
 #include <thread>
 #include <vector>
 
+#include "core/freq_converter.hpp"
 #include "core/patch_runner.hpp"
+#include "source/converter_view.hpp"
 #include "source/iq_source.hpp"
 
 namespace cascade::core::patch {
@@ -71,10 +73,20 @@ public:
 
     // The device's own readback. GUI thread.
     double rateHz() const;
+    // The AIR frequency the radio is hearing: its readback seen through the
+    // converter (0.99.36; exactly the readback when there is none).
     double centreHz() const;
-    // Retunes the device. GUI thread; sources accept a retune while their
-    // reader is inside read(), as the receiver's own retune relies on.
+    // Retunes the device to the AIR frequency `hz` - the radio is told the
+    // converted one. GUI thread; sources accept a retune while their reader
+    // is inside read(), as the receiver's own retune relies on.
     bool setCentreHz(double hz);
+
+    // The up- or down-converter in front of this radio (core/freq_converter.hpp),
+    // the same per-radio setting the receiver uses for this device. OFF until
+    // set. Does not retune: the readback is read through the new setting, and
+    // an inverting converter's mirror applies from the next block read.
+    void setConverter(const cascade::core::ConverterSetting& s);
+    cascade::core::ConverterSetting converter() const { return view_.converter(); }
 
     // The runner holding this radio's strips. publish() and reap() from the
     // GUI thread; the reader thread is its DSP thread.
@@ -99,6 +111,9 @@ private:
     NodeId node_;
     std::string label_;
     std::shared_ptr<Shared> sh_;
+    // sh_->src seen through the converter: centreHz()/setCentreHz() go through
+    // it. The reader thread reads the raw source and asks Shared::mirror.
+    cascade::source::ConverterView view_;
     std::thread thread_;
     bool started_ = false;
 };

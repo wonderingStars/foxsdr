@@ -593,6 +593,9 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
     return a.sourceKind == b.sourceKind && a.soapyArgs == b.soapyArgs &&
            a.nativeArgs == b.nativeArgs && a.nativeBiasT == b.nativeBiasT &&
            a.rtlBiasTArgs == b.rtlBiasTArgs && a.rtlBiasT == b.rtlBiasT &&
+           // The per-radio converters: set in the Source section, which calls
+           // no save of its own.
+           a.converters == b.converters &&
            a.plutoUri == b.plutoUri && a.soapyAntenna == b.soapyAntenna &&
            a.iqFilePath == b.iqFilePath && a.centerHz == b.centerHz &&
            a.mode == b.mode && a.bandwidthHz == b.bandwidthHz &&
@@ -5261,7 +5264,15 @@ void drawTunerBezel(ImDrawList* dl, const ImVec2& plateTL, float s,
 // --- the footer line ---------------------------------------------------------
 // "GHz . MHz . kHz . Hz" at the left and "TYPE R-390   SER. 1157" at the
 // right, in the label cream (#b9b99f), letter-spaced .22em.
-void drawTunerFooter(ImDrawList* dl, const ImVec2& plateTL, const ImVec2& plateBR, float s) {
+//
+// THE CONVERTER TAKES THE RIGHT-HAND PLATE (0.99.36). While an up- or
+// down-converter is on, the tubes show the AIR frequency and the radio sits
+// somewhere else entirely, so the maker's plate gives way to what says so -
+// `converterCaption` (the translated "via 125 MHz up-converter", or its short
+// "125 MHz LO" form when the long one does not fit), lit in the warning
+// colour. Empty or null: the maker's plate, exactly as before.
+void drawTunerFooter(ImDrawList* dl, const ImVec2& plateTL, const ImVec2& plateBR, float s,
+                     const char* converterCaption, const char* converterShort) {
     ImFont* f = cascade::gui::fonts::ui();
     // Nine - the reference's 10 brought down to the 9-unit footer row, and
     // the smallest lettering this deck allows.
@@ -5271,12 +5282,23 @@ void drawTunerFooter(ImDrawList* dl, const ImVec2& plateTL, const ImVec2& plateB
     const float cy = plateBR.y - (cascade::gui::kFreqPlatePadBottom + cascade::gui::kFreqPlateFooterH * 0.5f) * s;
     const char* left = "GHz  \xC2\xB7  MHz  \xC2\xB7  kHz  \xC2\xB7  Hz";
     const char* right = "TYPE R-390   SER. 1157";
-    plateTrackedText(dl, f, px, ImVec2(plateTL.x + cascade::gui::kFreqPlatePadX * s, cy - h * 0.5f),
-                     theme::toneHex(0xb9b99f, 255, theme::ink::PlateInk), left, track);
+    ImU32 rightCol = theme::toneHex(0xb9b99f, 255, theme::ink::PlateInk);
+    const float lw = plateTrackedText(dl, f, px,
+                                      ImVec2(plateTL.x + cascade::gui::kFreqPlatePadX * s, cy - h * 0.5f),
+                                      theme::toneHex(0xb9b99f, 255, theme::ink::PlateInk), left, track);
+    if (converterCaption != nullptr && converterCaption[0] != '\0') {
+        // Room between the unit legend and the plate's right padding, with a
+        // gap the width of two letters.
+        const float room = (plateBR.x - plateTL.x) - 2.0f * cascade::gui::kFreqPlatePadX * s - lw -
+                           2.0f * px;
+        const float cw = plateTrackedText(nullptr, f, px, ImVec2(0.0f, 0.0f), 0u, converterCaption, track);
+        right = (cw <= room || converterShort == nullptr) ? converterCaption : converterShort;
+        rightCol = ImGui::GetColorU32(cascade::gui::theme::warning());
+    }
     const float rw = plateTrackedText(nullptr, f, px, ImVec2(0.0f, 0.0f), 0u, right, track);
     plateTrackedText(dl, f, px,
                      ImVec2(plateBR.x - cascade::gui::kFreqPlatePadX * s - rw, cy - h * 0.5f),
-                     theme::toneHex(0xb9b99f, 255, theme::ink::PlateInk), right, track);
+                     rightCol, right, track);
 }
 
 // --- one Nixie tube ------------------------------------------------------------
@@ -5693,8 +5715,11 @@ void AppWindow::drawFrequencyReadout(float plateX, float plateY, float scale) {
     const double hz = std::max(0.0, currentAbsoluteHz());
     // A tune may never ask the source for a negative centre, so the lowest
     // TUNED frequency the wheel can reach is the offset itself when that
-    // offset is positive.
-    const double minTunedHz = std::max(0.0, pipeline_.vfoOffsetHz());
+    // offset is positive. Through a converter it is the RADIO that must stay
+    // above 0 Hz, not the air centre (core::minTunedAirHz): a VLF listener
+    // with the VFO parked up must still be able to wheel down to 16.4 kHz.
+    const double minTunedHz =
+        cascade::core::minTunedAirHz(pipeline_.converter(), pipeline_.vfoOffsetHz());
 
     // THE QUICK-TUNE KEY, answered here rather than where it was pressed. The
     // editor is seeded from the TUNED figure the tubes are showing - the same
@@ -5737,7 +5762,18 @@ void AppWindow::drawFrequencyReadout(float plateX, float plateY, float scale) {
     std::snprintf(mhz, sizeof(mhz), "%.4f", std::min(hz, kMaxDisplayHz) / 1.0e6);
     drawTunerStatusCluster(fdl, ptl, pbr, s, pipeline_.running(), mhz);
     drawTunerBezel(fdl, ptl, s, layout);
-    drawTunerFooter(fdl, ptl, pbr, s);
+    {
+        // THE TUBES SHOW THE AIR FREQUENCY; the plate says when that is not
+        // what the radio itself is tuned to (see drawTunerFooter).
+        const cascade::core::ConverterSetting conv = pipeline_.converter();
+        std::string caption;
+        std::string shortCaption;
+        if (cascade::core::converterActive(conv)) {
+            cascade::core::formatUtf8(caption, tr("via %s"), converterName(conv).c_str());
+            shortCaption = cascade::core::converterHzText(conv.loHz) + " LO";
+        }
+        drawTunerFooter(fdl, ptl, pbr, s, caption.c_str(), shortCaption.c_str());
+    }
 
     char digits[16];
     std::snprintf(digits, sizeof(digits), "%010llu",
@@ -5953,7 +5989,13 @@ void AppWindow::drawMenuColumn() {
     // The sections scroll inside an inner child sized to leave room for the
     // status footer, so the footer stays pinned to the bottom of the column
     // regardless of how many sections are open.
-    const float footerHeight = 2.0f * ImGui::GetTextLineHeightWithSpacing() +
+    // A THIRD LINE while a converter is on (see converterStatusLine): the
+    // counter shows the air frequency, and the radio's own figure - which is
+    // what anybody looking at the radio's lights or another program sees -
+    // must be on screen too, or the two would read as a disagreement.
+    const std::string converterLine = converterStatusLine();
+    const float footerLines = converterLine.empty() ? 2.0f : 3.0f;
+    const float footerHeight = footerLines * ImGui::GetTextLineHeightWithSpacing() +
                                ImGui::GetStyle().ItemSpacing.y + 4.0f;
     ImGui::SetCursorScreenPos(ImVec2(colTL.x + kPlatePad, bodyTop));
     // Transparent, so the plate's own ground carries the whole rail: the
@@ -6059,6 +6101,15 @@ void AppWindow::drawMenuColumn() {
     ImGui::Text(tr("%.4g MS/s | ch %.4g kHz | underruns %llu"),
                 src.sampleRateHz() / 1.0e6, pipeline_.channelRateHz() / 1.0e3,
                 static_cast<unsigned long long>(pipeline_.audio().underruns()));
+    if (!converterLine.empty()) {
+        // The short form when the full name would run off the column.
+        const bool fits = ImGui::CalcTextSize(converterLine.c_str()).x <=
+                          ImGui::GetContentRegionAvail().x;
+        const std::string line = fits ? converterLine : converterStatusLine(true);
+        ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
+        ImGui::TextUnformatted(line.c_str());
+        ImGui::PopStyleColor();
+    }
 }
 
 // The Radio section of the rail: mode keys, VFO, bandwidth, squelch,
@@ -7417,9 +7468,12 @@ void AppWindow::drawSourceSection() {
             } else {
                 // Carry the displayed frequency over: a file's center is
                 // nominal anyway, and a readout that jumps to 0 on source
-                // switch would read as a tuning bug.
-                file->setCenterFrequencyHz(
-                    pipeline_.activeSource().centerFrequencyHz());
+                // switch would read as a tuning bug. The AIR frequency carries
+                // over; the file is told it through its own converter, which
+                // is off unless the user set one for I/Q files.
+                const double fileRadioHz = radioHzForSource(
+                    "file", std::string(), pipeline_.activeSource().centerFrequencyHz());
+                if (fileRadioHz >= 0.0) { file->setCenterFrequencyHz(fileRadioHz); }
                 device_ = nullptr;  // before setSource destroys a live device
                 soapyView_ = nullptr;
                 deviceArgs_.clear();
@@ -7428,6 +7482,7 @@ void AppWindow::drawSourceSection() {
                 ++sourceGen_;  // a device open still in flight is now stale
                 installSource(std::move(file));
                 sourceKind_ = "file";
+                applyConverterForSource();
                 iqOpenPath_ = iqPath_;
                 // A file is a deliberate choice of source like any other, so
                 // a radio remembered from a failed restore is superseded here
@@ -7472,41 +7527,7 @@ void AppWindow::drawSourceSection() {
                 "this machine has an mDNS responder, and any address or host name can be "
                 "typed. Nothing is contacted until you press Open."));
             ImGui::PopStyleColor();
-            if (openPluto) {
-                sourceError_.clear();
-                // Through the SAME worker-thread open every other radio uses,
-                // so a board that is not there spends its connect bound off
-                // the GUI thread and the window keeps drawing. The row's args
-                // are re-derived from the box here rather than read out of
-                // nativeDevices_, because the user may have typed since the
-                // list was built.
-                const std::string args = std::string("uri=") + plutoUri_;
-                DeviceOpenResult req;
-                if (device_ != nullptr) {
-                    // Carried with the request, as selectSource does (0.99.36).
-                    req.closedRadio = cascade::gui::rememberedSourceAfterFailedOpen(
-                        sourceKind_, cfgSoapyArgs_, cfgNativeArgs_, "",
-                        pipeline_.activeSource().sampleRateHz());
-                    req.closedLabel = deviceModel_;
-                    cascade::core::diagLogf(
-                        "source: closing %s before opening the ADALM-Pluto",
-                        deviceModel_.c_str());
-                    device_ = nullptr;
-                    soapyView_ = nullptr;
-                    deviceArgs_.clear();
-                    deviceModel_.clear();
-                    ++sourceGen_;
-                    installSource(nullptr);
-                    sourceKind_ = "siggen";
-                    followInputRate();
-                }
-                req.kind = kPlutoDriverKey;
-                req.args = args;
-                req.row = sourceSel_;
-                req.requestRateHz = kSoapyRateHz[kSoapyRateDefaultIndex];
-                req.keepCenterHz = pipeline_.activeSource().centerFrequencyHz();
-                launchDeviceOpen(std::move(req), "ADALM-Pluto at " + std::string(plutoUri_));
-            }
+            if (openPluto) { openPlutoFromBox(); }
         }
     }
 
@@ -7765,6 +7786,10 @@ void AppWindow::drawSourceSection() {
             }
         }
     }
+
+    // The up- or down-converter in front of whatever source is installed
+    // (app_window_converter.cpp), remembered per radio.
+    drawConverterControls();
 
     if (!sourceError_.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, kErrorRed);
@@ -8272,6 +8297,15 @@ void AppWindow::finishDeviceOpen(DeviceOpenResult r) {
     ++sourceGen_;  // this install is itself a source change
     installSource(std::move(r.dev));
     sourceKind_ = r.kind;
+    // A dongle the native driver refused, opened through SoapySDR instead, is
+    // still the radio the user chose: its converter comes with it.
+    if (!r.fellBackFromKey.empty()) {
+        noteConverterFallback(r.fellBackFromKey, cascade::core::converterRadioKey(r.kind, r.args));
+    }
+    // THIS radio's converter, before the carry-across below tunes it: the air
+    // frequency the user was on is sent through the converter in front of the
+    // radio now open, not the one in front of the radio just closed.
+    applyConverterForSource();
     sourceSel_ = r.row;
     // SERIAL STRIPPED, exactly as everywhere else this string is recorded.
     // "which radio, at what rate" is the single most useful line in the run-up
@@ -8291,22 +8325,30 @@ void AppWindow::finishDeviceOpen(DeviceOpenResult r) {
     // the level fell to the noise floor, the squelch stayed shut, and the
     // audio stopped: it reads as "changing device breaks the sound" rather
     // than "your radio is now tuned somewhere else".
-    if (r.keepCenterHz > 0.0) {
+    //
+    // WHETHER there is a frequency is its own question (keepCenterHz has a
+    // value), never a sign: the AIR centre may sit below 0 Hz through an
+    // up-converter and still be an ordinary tune for this radio.
+    if (r.keepCenterHz.has_value()) {
+        const double keepHz = *r.keepCenterHz;
         // A tune the coalescer was still holding was aimed at the OLD source;
         // the carry-across below supersedes it. Applied unpaced, because the
-        // readback two lines down must be valid on return.
+        // readback two lines down must be valid on return. A frequency THIS
+        // radio's converter cannot deliver is refused by the pipeline's view
+        // without reaching the radio, and noteTuneRefused says why.
         retuneCoalescer_.clearPending();
-        applyRetuneNow(r.keepCenterHz);
+        applyRetuneNow(keepHz);
         // Not every radio covers every band, so say so rather than leaving
         // the user on a frequency they did not choose. The readback is the
         // authority - a device may clamp to its range or land on a nearby
-        // tuning step.
+        // tuning step. (An unreachable one has the converter's sentence.)
         const double landed = pipeline_.activeSource().centerFrequencyHz();
-        if (std::fabs(landed - r.keepCenterHz) > 1000.0) {
+        if (cascade::core::airReachable(pipeline_.converter(), keepHz) &&
+            std::fabs(landed - keepHz) > 1000.0) {
             char buf[128];
             std::snprintf(buf, sizeof(buf),
                           "this radio could not tune %.6f MHz; it is on %.6f MHz",
-                          r.keepCenterHz / 1e6, landed / 1e6);
+                          keepHz / 1e6, landed / 1e6);
             sourceError_ = buf;
         }
     }
@@ -8336,6 +8378,19 @@ void AppWindow::launchDeviceOpen(DeviceOpenResult r, const std::string& busyLabe
     // yet, so the counter is NOT bumped here — only the answer's right to be
     // applied is recorded.
     deviceOpenReqGen_ = sourceGen_;
+    // The RSP pre-Init tune (see the worker below) is a RADIO frequency, so
+    // it is converted here, on the GUI thread that owns the converter table,
+    // for the radio this request names. Only a frequency the radio can be
+    // told (above 0 Hz, and deliverable through its converter) is written.
+    r.preTuneRadioHz.reset();
+    if (r.kind == "sdrplay" && r.keepCenterHz.has_value()) {
+        const cascade::core::ConverterSetting conv =
+            converterForKey(cascade::core::converterRadioKey(r.kind, r.args));
+        if (cascade::core::airReachable(conv, *r.keepCenterHz)) {
+            const double radioHz = cascade::core::radioFromAir(conv, *r.keepCenterHz);
+            if (radioHz > 0.0) { r.preTuneRadioHz = radioHz; }
+        }
+    }
     // The open runs on a worker: Device::make() is the multi-second, USB-bus
     // -walking call that used to freeze the GUI here. The request travels
     // into the worker and comes back as the answer, with the device (or the
@@ -8362,8 +8417,14 @@ void AppWindow::launchDeviceOpen(DeviceOpenResult r, const std::string& busyLabe
                     "source: the native %s driver refused this radio (%s); opening it "
                     "through SoapySDR instead",
                     r.kind.c_str(), r.error.c_str());
-                auto soapy = std::make_unique<cascade::source::SoapySource>();
-                if (soapy->open(r.fallbackSoapyArgs)) {
+                // Through makeDeviceSource like every other construction, so
+                // "soapy" means one thing everywhere (and the test seam's
+                // fake stands in here too).
+                std::unique_ptr<cascade::source::DeviceSource> soapy = makeDeviceSource("soapy");
+                if (soapy && soapy->open(r.fallbackSoapyArgs)) {
+                    // The radio the user chose, under its native key, so its
+                    // converter follows it onto the Soapy one.
+                    r.fellBackFromKey = cascade::core::converterRadioKey(r.kind, r.args);
                     r.kind = "soapy";
                     r.args = r.fallbackSoapyArgs;
                     r.error.clear();
@@ -8395,8 +8456,10 @@ void AppWindow::launchDeviceOpen(DeviceOpenResult r, const std::string& busyLabe
         // not known - there is no RSP on the bench - so this removes the call
         // rather than claiming to have explained it. The same order the
         // startup restore and the patch radios already use.
-        if (r.kind == "sdrplay" && r.keepCenterHz > 0.0) {
-            (void) dev->setCenterFrequencyHz(r.keepCenterHz);
+        // THROUGH THE CONVERTER (0.99.37): keepCenterHz is an AIR frequency;
+        // launchDeviceOpen converted it for this radio as preTuneRadioHz.
+        if (r.kind == "sdrplay" && r.preTuneRadioHz.has_value()) {
+            (void) dev->setCenterFrequencyHz(*r.preTuneRadioHz);
         }
         r.dev = std::move(dev);
         return std::move(r);
@@ -8427,6 +8490,15 @@ void AppWindow::pollSoapyRecovery() {
     // condemns its own device the same way) is held off for the minute
     // rather than tried again on the next frame.
     soapyReopenAttemptSec_ = now;
+    reopenAfterDriverFault();
+}
+
+void AppWindow::reopenAfterDriverFault() {
+    // What pollSoapyRecovery decided is due. Everything below reads the dead
+    // radio through device_ - the same object as soapyView_ whenever that
+    // gate let it through - so the reopen itself is DeviceSource work and a
+    // test can drive it with a device of its own (AppWindowTestAccess).
+    if (device_ == nullptr) { return; }
 
     // EVERYTHING THE REOPEN NEEDS IS READ FROM THE DEAD SOURCE FIRST. Its
     // mirrors survive the fault on purpose (a rate or a retune that faulted
@@ -8436,10 +8508,14 @@ void AppWindow::pollSoapyRecovery() {
     r.kind = "soapy";
     r.args = deviceArgs_;
     r.row = sourceSel_;
-    const double confirmedRateHz = soapyView_->sampleRateHz();
+    const double confirmedRateHz = device_->sampleRateHz();
     r.requestRateHz = confirmedRateHz > 0.0 ? confirmedRateHz
                                             : kSoapyRateHz[kSoapyRateDefaultIndex];
-    r.keepCenterHz = soapyView_->centerFrequencyHz();
+    // Through the pipeline, not the Soapy object: the device IS the active
+    // source here, and only the pipeline's view speaks the AIR frequency the
+    // reopen carries across (the same one it will be sent through again) -
+    // which may be below 0 Hz on the air and is still a frequency.
+    r.keepCenterHz = carriedAirCentre();
     r.recovery = true;
     r.recoveryGainNames = deviceGainNames_;
     r.recoveryGainsDb = deviceGainsDb_;
@@ -8448,7 +8524,7 @@ void AppWindow::pollSoapyRecovery() {
     // source thread, which exists only while the receiver runs, so a latched
     // fault is proof it was running when the driver went.
     r.recoveryRestart = pipeline_.running() || pipeline_.faulted();
-    std::string what = soapyView_->faultedWhile();
+    std::string what = device_->faultedWhile();
     if (what.empty()) { what = "a driver call"; }
     std::string label = pipeline_.activeSource().name();
     const std::size_t colon = label.rfind(": ");
@@ -8492,11 +8568,50 @@ void AppWindow::pollSoapyRecovery() {
     ++sourceGen_;
     installSource(nullptr);
     sourceKind_ = "siggen";
+    applyConverterForSource();
     followInputRate();
     launchDeviceOpen(std::move(r), label);
 }
 
-void AppWindow::selectSource(int idx) {
+void AppWindow::openPlutoFromBox() {
+    sourceError_.clear();
+    // Through the SAME worker-thread open every other radio uses, so a board
+    // that is not there spends its connect bound off the GUI thread and the
+    // window keeps drawing. The row's args are re-derived from the box here
+    // rather than read out of nativeDevices_, because the user may have typed
+    // since the list was built.
+    const std::string args = std::string("uri=") + plutoUri_;
+    // The frequency to carry, read BEFORE the close below: after it the
+    // generator is what answers.
+    const std::optional<double> keepCenterHz = carriedAirCentre();
+    DeviceOpenResult req;
+    if (device_ != nullptr) {
+        // Carried with the request, as selectSource does (0.99.36).
+        req.closedRadio = cascade::gui::rememberedSourceAfterFailedOpen(
+            sourceKind_, cfgSoapyArgs_, cfgNativeArgs_, "",
+            pipeline_.activeSource().sampleRateHz());
+        req.closedLabel = deviceModel_;
+        cascade::core::diagLogf("source: closing %s before opening the ADALM-Pluto",
+                                deviceModel_.c_str());
+        device_ = nullptr;
+        soapyView_ = nullptr;
+        deviceArgs_.clear();
+        deviceModel_.clear();
+        ++sourceGen_;
+        installSource(nullptr);
+        sourceKind_ = "siggen";
+        applyConverterForSource();
+        followInputRate();
+    }
+    req.kind = kPlutoDriverKey;
+    req.args = args;
+    req.row = sourceSel_;
+    req.requestRateHz = kSoapyRateHz[kSoapyRateDefaultIndex];
+    req.keepCenterHz = keepCenterHz;
+    launchDeviceOpen(std::move(req), "ADALM-Pluto at " + std::string(plutoUri_));
+}
+
+void AppWindow::selectSource(int idx, std::optional<double> carryAirHz) {
     // RE-CLICK ON THE CURRENT ROW: a no-op - unless the radio installed there
     // has DIED (unplugged, or a driver fault the receiver latched), when the
     // screen says "Reconnect it and pick the source again" and picking it
@@ -8534,6 +8649,7 @@ void AppWindow::selectSource(int idx) {
         ++sourceGen_;  // a device open still in flight is now stale
         installSource(nullptr);
         sourceKind_ = "siggen";
+        applyConverterForSource();
         sourceSel_ = 0;
         followInputRate();  // back to the generator's fixed 2 MS/s
         cascade::core::diagLogf("source: switched to the built-in generator");
@@ -8600,10 +8716,12 @@ void AppWindow::selectSource(int idx) {
     // until it resolves; on failure finishDeviceOpen settles the combo on
     // whatever is actually installed.
     const double rate = kSoapyRateHz[kSoapyRateDefaultIndex];
-    // Read the tuned frequency NOW: the old source is closed below, and a
-    // device that has never been opened reports 0, which finishDeviceOpen
-    // treats as "nothing to carry".
-    const double keepCenterHz = pipeline_.activeSource().centerFrequencyHz();
+    // Read the tuned frequency NOW: the old source is closed below. A device
+    // that has never been tuned has nothing to carry (carriedAirCentre); a
+    // caller that knows better - the patch page handing a radio back - says
+    // what to carry instead.
+    const std::optional<double> keepCenterHz =
+        carryAirHz.has_value() ? carryAirHz : carriedAirCentre();
 
     // CLOSE THE OLD RADIO BEFORE OPENING THE NEW ONE (adjudicated fix #3 for
     // the 0.62.0 field crashes). The previous flow opened the new device on
@@ -8634,6 +8752,7 @@ void AppWindow::selectSource(int idx) {
         ++sourceGen_;
         installSource(nullptr);
         sourceKind_ = "siggen";
+        applyConverterForSource();
         // The DSP chain must follow the source that is actually installed —
         // if the open below fails, the generator would otherwise keep running
         // at the closed radio's rate.
@@ -8657,6 +8776,7 @@ std::unique_ptr<cascade::source::DeviceSource> AppWindow::makeDeviceSource(
     // synchronous config restore and the prefer-native fallback all construct
     // drivers, and three copies of this switch would be three chances for
     // "rtlsdr" to mean something different in one of them.
+    if (testHooks_.makeDevice != nullptr) { return testHooks_.makeDevice(kind); }
     if (kind == "rtlsdr") { return std::make_unique<cascade::source::RtlSdrSource>(); }
     if (kind == "hackrf") { return std::make_unique<cascade::source::HackRfSource>(); }
     if (kind == "airspy") { return std::make_unique<cascade::source::AirspySource>(); }
@@ -8678,6 +8798,17 @@ void AppWindow::scanNative() {
     // 0.90.0 field report behind gui::deviceScanAllowed). So this runs on the
     // GUI thread, inline, whenever the list might be stale, including while a
     // radio of ours is streaming.
+    if (testHooks_.nativeScan != nullptr) {
+        // The test's list stands in for the USB walk (see testHooks_): no
+        // enumeration of any kind runs, and nothing is reported unbound.
+        nativeDevices_ = testHooks_.nativeScan();
+        nativeRowLabels_.clear();
+        for (const cascade::source::NativeDeviceInfo& d : nativeDevices_) {
+            nativeRowLabels_.push_back(d.label);
+        }
+        nativeUnbound_.clear();
+        return;
+    }
     //
     // ...AND THE SELECTION FOLLOWS THE RADIO, NOT THE INDEX (0.99.36). The
     // combo's selection is a row number, and this rebuilds the rows; one
@@ -12367,14 +12498,13 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
                 double mhz = n.freqHz / 1e6;
                 ImGui::SetNextItemWidth(faceW);
                 if (ImGui::InputDouble("##rc", &mhz, 0.0, 0.0, "%.6f MHz",
-                                       ImGuiInputTextFlags_EnterReturnsTrue) &&
-                    mhz > 0.0) {
-                    n.freqHz = mhz * 1e6;
-                    patchUi_.dirty = true;
+                                       ImGuiInputTextFlags_EnterReturnsTrue)) {
+                    setPatchRadioCentre(n, mhz * 1e6);
                 }
                 if (ImGui::IsItemHovered()) {
                     ImGui::SetTooltip("%s", tr("The radio's centre. Type a frequency and press Enter."));
                 }
+                drawPatchCentreNote(n);
                 const auto run = patchRadios_.find(n.id);
                 const auto err = patchRadioError_.find(n.id);
                 if (run != patchRadios_.end()) {
@@ -12788,6 +12918,39 @@ void AppWindow::drawPatchSection() {
     }
 }
 
+void AppWindow::seedPatchIfNeeded() {
+    // The patch a page opens with when the user has none: one radio, nothing
+    // wired. An empty canvas gives no clue what a node even is; one node does,
+    // and one node is not an opinion about what they want to build.
+    if (patchSeeded_) { return; }
+    patchSeeded_ = true;
+    cascade::gui::patch::seedDefaultPatch(patchGraph_, "Radio");
+    // The starter radio is the receiver's own radio or, with none, the
+    // generator - named now, because the patch no longer starts (and so
+    // takes the receiver's radio) the moment the page opens.
+    for (const cascade::core::patch::Node& n0 : patchGraph_.nodes()) {
+        if (n0.kind != cascade::core::patch::NodeKind::Radio) { continue; }
+        if (cascade::core::patch::Node* n = patchGraph_.mutableNode(n0.id)) {
+            if (n->device.empty()) {
+                n->device = patchDefaultDeviceKey();
+                // The receiver's AIR centre, which may be below 0 Hz
+                // through a converter (core::patch::radioCentreSet) or be
+                // exactly 0 Hz - marked chosen, never judged by its value.
+                if (!cascade::core::patch::radioCentreSet(*n) && device_ != nullptr) {
+                    if (const std::optional<double> c = carriedAirCentre()) {
+                        n->freqHz = *c;
+                        n->centreChosen = true;
+                    }
+                }
+            }
+        }
+    }
+    // The starter counts as a change, or it would be rebuilt from
+    // scratch on every launch and the first node the user drags
+    // would be the only thing that ever persisted.
+    patchUi_.dirty = true;
+}
+
 void AppWindow::drawPatchPage() {
     // FIRST, AND EVERY FRAME, open or not. The DSP thread never destroys a
     // patch it stops running; it hands it back, and this is where it dies -
@@ -12818,31 +12981,7 @@ void AppWindow::drawPatchPage() {
         return;
     }
 
-    // The patch a page opens with when the user has none: one radio, nothing
-    // wired. An empty canvas gives no clue what a node even is; one node does,
-    // and one node is not an opinion about what they want to build.
-    if (!patchSeeded_) {
-        patchSeeded_ = true;
-        cascade::gui::patch::seedDefaultPatch(patchGraph_, "Radio");
-        // The starter radio is the receiver's own radio or, with none, the
-        // generator - named now, because the patch no longer starts (and so
-        // takes the receiver's radio) the moment the page opens.
-        for (const cascade::core::patch::Node& n0 : patchGraph_.nodes()) {
-            if (n0.kind != cascade::core::patch::NodeKind::Radio) { continue; }
-            if (cascade::core::patch::Node* n = patchGraph_.mutableNode(n0.id)) {
-                if (n->device.empty()) {
-                    n->device = patchDefaultDeviceKey();
-                    if (n->freqHz <= 0.0 && device_ != nullptr) {
-                        n->freqHz = pipeline_.activeSource().centerFrequencyHz();
-                    }
-                }
-            }
-        }
-        // The starter counts as a change, or it would be rebuilt from
-        // scratch on every launch and the first node the user drags
-        // would be the only thing that ever persisted.
-        patchUi_.dirty = true;
-    }
+    seedPatchIfNeeded();
 
     // Square-ish and large: a patch is read across, and a canvas that starts
     // small teaches the user to pan before it teaches them anything else.
@@ -20269,7 +20408,9 @@ void AppWindow::applyKeyAction(cascade::gui::KeyAction action) {
     constexpr int kKeyTuneStepCell = 5;
 
     const double hz = std::max(0.0, currentAbsoluteHz());
-    const double minTunedHz = std::max(0.0, pipeline_.vfoOffsetHz());
+    // The same floor as the counter's (core::minTunedAirHz).
+    const double minTunedHz =
+        cascade::core::minTunedAirHz(pipeline_.converter(), pipeline_.vfoOffsetHz());
 
     switch (action) {
         case KeyAction::StartStop:
@@ -20993,19 +21134,30 @@ void AppWindow::noteTuneRefused(double requestHz, bool isPluginPreset) {
     double rangeLoHz = 0.0;
     double rangeHiHz = 0.0;
     const bool hasRange = device_ != nullptr && device_->frequencyRangeHz(rangeLoHz, rangeHiHz);
-    const std::string note = cascade::gui::tuneRefusedMessage(requestHz, hasRange, rangeLoHz,
-                                                              rangeHiHz, isPluginPreset);
+    // requestHz is an AIR frequency (activeSource() speaks air). With a
+    // converter on, the sentence is the converter's, in air terms; without
+    // one, air and radio are the same number and the plain sentence speaks.
+    const cascade::core::ConverterSetting conv = pipeline_.converter();
+    const std::string note =
+        cascade::core::converterActive(conv)
+            ? converterTuneNote(requestHz, /*refused=*/true, 0.0, isPluginPreset)
+            : cascade::gui::tuneRefusedMessage(requestHz, hasRange, rangeLoHz, rangeHiHz,
+                                               isPluginPreset);
     if (note.empty()) { return; }
     tuneMismatchNote_ = note;
     if (requestHz == lastRefusedRequestHz_) { return; }
     lastRefusedRequestHz_ = requestHz;
     // WHERE the request fell against the range, never either frequency: what
     // somebody tunes to must not reach a report (PRIVACY.md), and "below its
-    // range" diagnoses the refusal as well as the number did.
-    const char* where = !hasRange                 ? "(it publishes no range)"
-                        : requestHz < rangeLoHz   ? "below its range"
-                        : requestHz > rangeHiHz   ? "above its range"
-                                                  : "inside its range";
+    // range" diagnoses the refusal as well as the number did. Judged at the
+    // RADIO, which is where the range is.
+    const double radioHz = cascade::core::radioFromAir(conv, requestHz);
+    const char* where = !cascade::core::airReachable(conv, requestHz)
+                            ? "(beyond what the converter can deliver)"
+                        : !hasRange             ? "(it publishes no range)"
+                        : radioHz < rangeLoHz   ? "below its range"
+                        : radioHz > rangeHiHz   ? "above its range"
+                                                : "inside its range";
     cascade::core::diagLogf("source: the %s refused a tune %s", pipeline_.activeSource().name(),
                             where);
 }
@@ -21018,8 +21170,14 @@ void AppWindow::noteTuneMismatch(double requestHz, double answeredHz, bool isPlu
     // means (drop the range sentence rather than print a sentinel as if it
     // were a fact).
     const bool hasRange = device_ != nullptr && device_->frequencyRangeHz(rangeLoHz, rangeHiHz);
-    tuneMismatchNote_ = cascade::gui::tuneMismatchMessage(requestHz, answeredHz, hasRange,
-                                                          rangeLoHz, rangeHiHz, isPluginPreset);
+    // Both figures are AIR frequencies; with a converter on the sentence says
+    // so in the converter's terms (see noteTuneRefused).
+    const cascade::core::ConverterSetting conv = pipeline_.converter();
+    tuneMismatchNote_ =
+        cascade::core::converterActive(conv)
+            ? converterTuneNote(requestHz, /*refused=*/false, answeredHz, isPluginPreset)
+            : cascade::gui::tuneMismatchMessage(requestHz, answeredHz, hasRange, rangeLoHz,
+                                                rangeHiHz, isPluginPreset);
     if (tuneMismatchNote_.empty()) { return; }
     // ONCE PER DISTINCT REQUEST. A repeated identical command (a user pressing
     // the same preset twice, or the scanner dwelling on a frequency the radio
@@ -21034,9 +21192,14 @@ void AppWindow::noteTuneMismatch(double requestHz, double answeredHz, bool isPlu
     // HOW FAR OFF and whether the radio clamped to its range, never either
     // frequency (see noteTuneRefused). The error in ppm alone does not say
     // what was tuned.
-    const bool atEdge = hasRange && (std::fabs(answeredHz - rangeLoHz) < 1.0 ||
-                                     std::fabs(answeredHz - rangeHiHz) < 1.0);
-    const double ppm = (requestHz != 0.0) ? (answeredHz - requestHz) / requestHz * 1.0e6 : 0.0;
+    // At the RADIO: that is where the range and the synthesiser are.
+    const double requestRadioHz = cascade::core::radioFromAir(conv, requestHz);
+    const double answeredRadioHz = cascade::core::radioFromAir(conv, answeredHz);
+    const bool atEdge = hasRange && (std::fabs(answeredRadioHz - rangeLoHz) < 1.0 ||
+                                     std::fabs(answeredRadioHz - rangeHiHz) < 1.0);
+    const double ppm = (requestRadioHz != 0.0)
+                           ? (answeredRadioHz - requestRadioHz) / requestRadioHz * 1.0e6
+                           : 0.0;
     cascade::core::diagLogf("source: the %s answered a tune somewhere else (%s, %+.0f ppm)",
                             pipeline_.activeSource().name(),
                             atEdge ? "at the edge of its range" : "not at a range edge", ppm);
@@ -23390,6 +23553,11 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
         }
     }
 
+    // THE CONVERTERS, BEFORE ANY SOURCE IS RESTORED: cfg.centerHz is the AIR
+    // frequency the last session was on, and the radio below is told it
+    // through its own converter (radioHzForSource / applyConverterForSource).
+    converters_ = cascade::core::sanitiseConverters(cfg.converters);
+
     // Source restore. The generator is always safe (it is already active);
     // a file is restored only if the path still opens; a Soapy device only
     // if its args re-open. Any failure falls back to the generator silently
@@ -23397,7 +23565,8 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     if (cfg.sourceKind == "file") {
         auto file = std::make_unique<cascade::source::IqFileSource>();
         if (file->open(cfg.iqFilePath)) {
-            file->setCenterFrequencyHz(cfg.centerHz);
+            const double fileRadioHz = radioHzForSource("file", std::string(), cfg.centerHz);
+            if (fileRadioHz >= 0.0) { file->setCenterFrequencyHz(fileRadioHz); }
             cascade::core::formatUtf8(iqPath_, sizeof(iqPath_), "%s", cfg.iqFilePath.c_str());
             iqOpenPath_ = cfg.iqFilePath;
             // No open can be in flight during the startup restore, but the
@@ -23406,6 +23575,7 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
             ++sourceGen_;
             installSource(std::move(file));
             sourceKind_ = "file";
+            applyConverterForSource();
             sourceSel_ = 1;
             followInputRate();
             cascade::core::diagLogf("source: restored an I/Q file at %.0f S/s",
@@ -23486,12 +23656,25 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
                 "source: the native %s driver refused the saved radio (%s); opening it "
                 "through SoapySDR instead",
                 kind.c_str(), sourceError_.c_str());
+            const std::string nativeKey = cascade::core::converterRadioKey(kind, args);
             kind = "soapy";
             args = fallbackSoapyArgs;
             dev = openDeviceSync(kind, args, cfg.sampleRateHz);
+            // The radio the user chose, reached another way: its converter
+            // comes with it (before the saved frequency is converted below).
+            if (dev) { noteConverterFallback(nativeKey, cascade::core::converterRadioKey(kind, args)); }
         }
         if (dev) {
-            dev->setCenterFrequencyHz(cfg.centerHz);
+            // The saved AIR frequency, told to the radio through the
+            // converter remembered for it (the radio has not been installed
+            // yet, so the pipeline's view cannot do it here).
+            // A frequency the converter cannot deliver (0 Hz or below at the
+            // radio) is not sent at all; the radio stays at its own default.
+            const double radioHz = radioHzForSource(kind, args, cfg.centerHz);
+            if (radioHz > 0.0 || !cascade::core::converterActive(converterForKey(
+                                     cascade::core::converterRadioKey(kind, args)))) {
+                dev->setCenterFrequencyHz(radioHz);
+            }
             device_ = dev.get();
             soapyView_ = dynamic_cast<cascade::source::SoapySource*>(device_);
             deviceArgs_ = args;
@@ -23511,6 +23694,7 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
             ++sourceGen_;  // same invariant as the file branch above
             installSource(std::move(dev));
             sourceKind_ = kind;
+            applyConverterForSource();
             // Point the combo at the restored device if this machine still
             // enumerates it; -1 otherwise (preview falls back to live name).
             sourceSel_ = -1;
@@ -23588,7 +23772,10 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     }
     if (sourceKind_ == "siggen") {
         // Generator kept (or fallen back to): carry the saved center so the
-        // readout matches the last session. Nominal-center set cannot fail.
+        // readout matches the last session. Nominal-center set cannot fail -
+        // unless the user set a converter on the generator that cannot
+        // deliver that air frequency, which then leaves the nominal alone.
+        applyConverterForSource();
         pipeline_.activeSource().setCenterFrequencyHz(cfg.centerHz);
     }
 
@@ -23824,6 +24011,9 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.nativeBiasT = biasTeePanel_.other;
     cfg.rtlBiasTArgs = biasTeePanel_.rtlArgs;
     cfg.rtlBiasT = biasTeePanel_.rtlOn;
+    // Every radio's converter, including those not open now: a converter is
+    // part of how that radio is cabled, and must survive a session without it.
+    cfg.converters = converters_;
     // WHAT IS IN THE BOX, not what opened. A Pluto that is on the bench has
     // its address in nativeArgs as well; this field is the typing, and it has
     // to survive a launch in which the board never answered so it can be
