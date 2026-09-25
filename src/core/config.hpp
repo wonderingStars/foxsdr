@@ -106,6 +106,7 @@
 // copied string literal is deliberate: the catalogue origin is a security
 // -relevant constant, and two copies of it that can drift is exactly how a
 // build ends up quietly pointing at the wrong host.
+#include "core/freq_converter.hpp"
 #include "core/plugin_repo.hpp"
 #include "core/user_presets.hpp"
 
@@ -174,6 +175,16 @@ struct AppConfig {
     // every earlier config loads as.
     std::string rtlBiasTArgs;
     bool rtlBiasT = false;
+    // THE UP- OR DOWN-CONVERTER IN FRONT OF EACH RADIO (0.99.36), remembered
+    // per radio like the RTL-SDR's bias tee: radio key (core::converterRadioKey
+    // - "siggen", "file", or "<kind>|<args>") -> mode, local oscillator and
+    // whether it inverts. Stored as the list "converters", each entry
+    // {"radio", "mode": "off"|"up"|"down", "loHz", "inverted"}. EMPTY BY
+    // DEFAULT, so every radio starts with no converter; a mode the file spells
+    // any other way reads as "off", an LO outside core::converterLoValid turns
+    // that entry off, entries with no radio are dropped and the list is capped
+    // at core::kMaxConverterRadios (core::sanitiseConverters).
+    std::map<std::string, ConverterSetting> converters;
     // WHERE THE PLUTO IS, and it is a field of its own because it is the one
     // radio FoxSDR cannot find by looking.
     //

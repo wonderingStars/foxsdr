@@ -116,6 +116,8 @@
 // other carries complex.
 #include "core/scope_tap.hpp"
 #include "sink/audio_out.hpp"
+#include "core/freq_converter.hpp"
+#include "source/converter_view.hpp"
 #include "source/iq_source.hpp"
 #include "source/siggen_source.hpp"
 
@@ -265,8 +267,32 @@ public:
     // only until the next setSource(), which may destroy the object; per the
     // IqSource threading contract both are meant for the GUI/control thread,
     // the same thread that performs swaps.
+    //
+    // IT SPEAKS AIR FREQUENCIES (0.99.36). What comes back is the converter
+    // view (source/converter_view.hpp) over that source: with an up- or
+    // down-converter set, centerFrequencyHz() is where the signal really is
+    // and setCenterFrequencyHz() takes that same air frequency, telling the
+    // radio the converted one. With no converter - the state every install
+    // starts in - it is the source exactly. Everything the application tunes
+    // or reads goes through here, which is what makes it the one translation
+    // layer; the radio's own figure is rawSource()'s.
     cascade::source::IqSource& activeSource();
     const char* activeSourceName();
+
+    // The source itself, speaking the RADIO's frequency. For the few readers
+    // that must say what the radio was told (the status column's "radio at
+    // ..." line); never for tuning.
+    cascade::source::IqSource& rawSource();
+
+    // --- The converter in front of the radio (0.99.36) -----------------------
+    // See core/freq_converter.hpp. GUI/control thread. setSource() puts it back
+    // to OFF on every swap, so a converter never follows one radio onto the
+    // next: the caller applies the new radio's own remembered setting after
+    // the swap. Changing it does not retune the radio - the readback is simply
+    // read through the new setting - which is what the caller wants when the
+    // user switches a converter on over a radio already tuned to its output.
+    void setConverter(const ConverterSetting& s);
+    ConverterSetting converter();
 
     // --- Audio chain control (P3) -------------------------------------------
     // All of these are callable from any thread while the pipeline runs: they
@@ -712,6 +738,12 @@ private:
     cascade::source::SigGenSource builtin_;
     std::unique_ptr<cascade::source::IqSource> external_;
     cascade::source::IqSource* active_ = nullptr;  // ctor sets &builtin_
+    // activeSource(): active_ seen through the converter (0.99.36). Re-bound
+    // to active_ at every swap, and its converter reset to OFF there. The
+    // source thread never reads THROUGH it - only its mirrors() flag, after
+    // its own stop-token test - because an abandoned thread must never be
+    // re-pointed at the next session's source by a swap it slept through.
+    cascade::source::ConverterView airView_;
     // The construction-time ring size, and the least the ring is ever given:
     // a source is sized UP from it when one of its reads would not fit, never
     // down (see ringCapacityForActiveSourceLocked). Declared before ring_,

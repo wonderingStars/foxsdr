@@ -286,6 +286,10 @@ void AppWindow::patchReconcile() {
             continue;
         }
         auto radio = std::make_unique<pc::PatchRadio>(id, std::move(r.src), r.label);
+        // THE SAME CONVERTER the receiver uses for this device (keyed alike:
+        // core::converterRadioKey IS the patch device key), so the node's
+        // frequency is an air frequency here too.
+        radio->setConverter(converterForKey(n->device));
         std::string err;
         if (!radio->start(err)) {
             patchRadioError_[id] = err;
@@ -354,6 +358,11 @@ void AppWindow::patchReconcile() {
             // Running: follow the node's centre, and learn it from the device
             // when the node has none.
             pc::PatchRadio& r = *patchRadios_[id];
+            // A converter changed in the Source section while this radio runs
+            // takes effect here; the follow below then retunes the radio so
+            // the node's AIR frequency is what it hears.
+            const cascade::core::ConverterSetting conv = converterForKey(n->device);
+            if (r.converter() != conv) { r.setConverter(conv); }
             if (n->freqHz <= 0.0) {
                 n->freqHz = r.centreHz();
                 patchUi_.dirty = true;
@@ -370,9 +379,16 @@ void AppWindow::patchReconcile() {
         if (patchRadioFailedAs_.count(id) != 0 && patchRadioFailedAs_[id] == as) { continue; }
         const double rate = radioRate(*n);
         const double centre = n->freqHz;
+        // The node's frequency is AIR; the device is told it through the
+        // converter remembered for it (off unless the user set one there).
+        const cascade::core::ConverterSetting conv = converterForKey(n->device);
         if (pc::isGeneratorKey(n->device)) {
             auto radio = std::make_unique<pc::PatchRadio>(
-                id, makePatchGenerator(rate, centre > 0.0 ? centre : 100.0e6), "Signal generator");
+                id,
+                makePatchGenerator(rate, cascade::core::radioFromAir(
+                                             conv, centre > 0.0 ? centre : 100.0e6)),
+                "Signal generator");
+            radio->setConverter(conv);
             std::string err;
             if (!radio->start(err)) {
                 patchRadioError_[id] = err;
@@ -403,8 +419,14 @@ void AppWindow::patchReconcile() {
         const std::string label = patchDeviceLabel(n->device);
         patchRadioPendingAs_[id] = as;
         patchRadioError_.erase(id);
+        // Converted HERE, on the GUI thread that owns the remembered settings;
+        // the worker only ever sees the radio's own figure. 0 = "leave it".
+        const double radioCentre =
+            (centre > 0.0 && cascade::core::airReachable(conv, centre))
+                ? cascade::core::radioFromAir(conv, centre)
+                : 0.0;
         patchRadioPending_[id] = std::async(std::launch::async, [driver, args, label, rate,
-                                                                 centre]() {
+                                                                 centre = radioCentre]() {
             PatchRadioOpen r;
             r.label = label;
             // SoapySDR's modules are loaded by its enumeration, and the

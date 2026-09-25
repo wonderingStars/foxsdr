@@ -1900,6 +1900,47 @@ private:
     // joined.
     cascade::gui::BiasTeePanel biasTeePanel_;
 
+    // --- THE CONVERTER IN FRONT OF THE RADIO (0.99.36, app_window_converter.cpp)
+    //
+    // An up- or down-converter between the antenna and the radio, set in the
+    // Source section and REMEMBERED PER RADIO (AppConfig::converters, keyed by
+    // core::converterRadioKey). The arithmetic is core/freq_converter.hpp's;
+    // the translation is the pipeline's (activeSource() speaks air - see
+    // Pipeline::setConverter), so nothing in this window converts anything
+    // itself. What this window does is choose WHICH setting applies: after
+    // every source install (setSource puts the pipeline back to OFF), the
+    // installed radio's own.
+    //
+    // Every install site calls applyConverterForSource() straight after its
+    // setSource and before any tune, so a carried-across frequency is sent
+    // through the NEW radio's converter. radioHzForSource() is for the two
+    // places that tune a source BEFORE it is installed (the restore at start
+    // and the IQ file's Open).
+    void drawConverterControls();
+    std::string converterRadioKeyNow() const;
+    cascade::core::ConverterSetting converterForKey(const std::string& radioKey) const;
+    void applyConverterForSource();
+    double radioHzForSource(const std::string& kind, const std::string& args, double airHz) const;
+    // The user changed the converter for the radio in use: remember it, apply
+    // it, and keep the RADIO where it is (the counter relabels to the air
+    // frequency it is now known to be hearing) - unless that air frequency is
+    // below 0 Hz, in which case the air frequency is kept and the radio moved.
+    void changeConverter(const cascade::core::ConverterSetting& s);
+    // "125 MHz up-converter" and its three siblings, translated.
+    std::string converterName(const cascade::core::ConverterSetting& s) const;
+    // The status column's line while a converter is on, "" otherwise;
+    // shortForm names the converter by its LO only, for a narrow column.
+    std::string converterStatusLine(bool shortForm = false);
+    // A tune the converter could not deliver, or the radio refused or moved,
+    // stated in AIR terms. "" when no converter is on (the plain sentences in
+    // gui/tune_control.hpp speak then).
+    std::string converterTuneNote(double requestAirHz, bool refused, double answeredAirHz,
+                                  bool isPluginPreset);
+    std::map<std::string, cascade::core::ConverterSetting> converters_;
+    char converterLoBuf_[40] = {};
+    std::string converterLoSeededFor_;  // the radio key + LO the field was seeded from
+    bool converterLoBad_ = false;
+
     // THE SWITCHES THAT BELONG TO ONE RADIO EACH, and are NOT persisted.
     //
     // The bias tee above is saved because leaving it off silently costs a

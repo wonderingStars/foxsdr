@@ -111,6 +111,8 @@ AppConfig junkConfig() {
     c.nativeBiasT = true;  // default is false: a load that forgets it is caught
     c.rtlBiasTArgs = "garbage";
     c.rtlBiasT = true;
+    // A converter the file never mentioned must not survive a load.
+    c.converters["garbage"] = {cascade::core::ConverterMode::Up, 99.0e6, true};
     // Junk that is NOT empty, because empty is what the loader substitutes
     // its default for - a load that forgot this field entirely would leave
     // the caller's value here and pass a test that used "".
@@ -275,6 +277,7 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     CHECK(a.nativeBiasT == b.nativeBiasT);
     CHECK(a.rtlBiasTArgs == b.rtlBiasTArgs);
     CHECK(a.rtlBiasT == b.rtlBiasT);
+    CHECK(a.converters == b.converters);
     CHECK(a.plutoUri == b.plutoUri);
     CHECK(a.iqFilePath == b.iqFilePath);
     CHECK(a.centerHz == b.centerHz);
@@ -485,6 +488,13 @@ int main() {
         in.nativeBiasT = true;
         in.rtlBiasTArgs = "serial=00000042";
         in.rtlBiasT = true;
+        // THE CONVERTERS, one of each shape: the tester's 125 MHz up-converter
+        // on a dongle, an inverting down-converter set explicitly on the
+        // generator, and one switched OFF that keeps the LO it was given.
+        in.converters["rtlsdr|serial=00000001"] = {cascade::core::ConverterMode::Up, 125.0e6,
+                                                   false};
+        in.converters["siggen"] = {cascade::core::ConverterMode::Down, 9.75e9, true};
+        in.converters["hackrf|serial=abc"] = {cascade::core::ConverterMode::Off, 2.0e6, false};
         in.plutoUri = "ip:pluto.local";
         in.iqFilePath = "C:/iq/capture_2msps.wav";
         in.centerHz = 433920000.0;
@@ -934,6 +944,56 @@ int main() {
         // other radios' setting.
         CHECK(!out.nativeBiasT);
 
+        // THE CONVERTERS (0.99.36), per radio. A config that predates them
+        // has none - every radio, the generator and a file start with no
+        // converter - and anything the file cannot mean reads as OFF.
+        using cascade::core::ConverterMode;
+        out = junkConfig();
+        CHECK(writeText(path, "{\"schemaVersion\":1}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.converters.empty());
+        out = junkConfig();
+        CHECK(writeText(path,
+                        "{\"schemaVersion\":1,\"converters\":["
+                        "{\"radio\":\"rtlsdr|serial=00000001\",\"mode\":\"up\",\"loHz\":125000000,"
+                        "\"inverted\":false},"
+                        "{\"radio\":\"rtlsdr|serial=00000002\",\"mode\":\"sideways\",\"loHz\":2000000},"
+                        "{\"radio\":\"hackrf|serial=x\",\"mode\":\"down\",\"loHz\":-5,\"inverted\":true},"
+                        "{\"radio\":\"airspy|serial=y\",\"mode\":\"up\"},"
+                        "{\"mode\":\"up\",\"loHz\":125000000},"
+                        "\"not an object\","
+                        "{\"radio\":\"siggen\",\"mode\":\"down\",\"loHz\":9750000000,\"inverted\":true}"
+                        "]}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.converters.count("garbage") == 0);
+        CHECK(out.converters.count("") == 0);  // no radio: dropped
+        CHECK(out.converters.size() == 5);
+        {
+            const auto& c1 = out.converters["rtlsdr|serial=00000001"];
+            CHECK(c1.mode == ConverterMode::Up);
+            CHECK(c1.loHz == 125.0e6);
+            CHECK(!c1.inverted);
+            // An unknown mode is OFF, and keeps the (valid) LO it was given.
+            const auto& c2 = out.converters["rtlsdr|serial=00000002"];
+            CHECK(c2.mode == ConverterMode::Off);
+            CHECK(c2.loHz == 2.0e6);
+            // A negative LO turns the converter off and forgets the LO.
+            const auto& c3 = out.converters["hackrf|serial=x"];
+            CHECK(c3.mode == ConverterMode::Off);
+            CHECK(c3.loHz == 0.0);
+            // A mode with no LO at all: off.
+            CHECK(out.converters["airspy|serial=y"].mode == ConverterMode::Off);
+            const auto& c5 = out.converters["siggen"];
+            CHECK(c5.mode == ConverterMode::Down);
+            CHECK(c5.loHz == 9.75e9);
+            CHECK(c5.inverted);
+        }
+        // Not an array: nothing remembered, rather than a guess.
+        out = junkConfig();
+        CHECK(writeText(path, "{\"schemaVersion\":1,\"converters\":{\"siggen\":\"up\"}}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.converters.empty());
+
         // A CONFIG WRITTEN BEFORE 0.91.0 HAS NO nativeArgs AT ALL, and must
         // load with an empty one rather than whatever the caller's variable
         // happened to hold - the same "every field is assigned on every path"
@@ -1347,6 +1407,14 @@ int main() {
                 {"railBank", [](AppConfig& c) { c.railBank = 4; }},
                 {"keyBindings", [](AppConfig& c) { c.keyBindings = {"mute=Ctrl+Shift+M"}; }},
                 {"updateCheckEnabled", [](AppConfig& c) { c.updateCheckEnabled = false; }},
+                // The converters (0.99.36): set in the Source section, which
+                // calls no save of its own - a new one, and a changed LO, a
+                // changed inversion and a switch-off of an existing one.
+                {"converters (new)",
+                 [](AppConfig& c) {
+                     c.converters["rtlsdr|serial=1"] = {cascade::core::ConverterMode::Up, 125.0e6,
+                                                        false};
+                 }},
             };
             for (const Change& ch : changes) {
                 AppConfig other = base;
@@ -1358,6 +1426,23 @@ int main() {
                 }
                 CHECK(seenAB);
                 CHECK(seenBA);
+            }
+            // ...and every field of an EXISTING converter, not only its arrival.
+            {
+                AppConfig withConv = base;
+                withConv.converters["rtlsdr|serial=1"] = {cascade::core::ConverterMode::Up,
+                                                          125.0e6, false};
+                CHECK(cascade::gui::configsEqual(withConv, withConv));
+                AppConfig lo = withConv;
+                lo.converters["rtlsdr|serial=1"].loHz = 100.0e6;
+                AppConfig inv = withConv;
+                inv.converters["rtlsdr|serial=1"].inverted = true;
+                AppConfig off = withConv;
+                off.converters["rtlsdr|serial=1"].mode = cascade::core::ConverterMode::Off;
+                for (const AppConfig* o : {&lo, &inv, &off}) {
+                    CHECK(!cascade::gui::configsEqual(withConv, *o));
+                    CHECK(!cascade::gui::configsEqual(*o, withConv));
+                }
             }
         }
     }
