@@ -6753,11 +6753,18 @@ void AppWindow::drawSourceSection() {
     // runs: the colour says which state and the lamp says there is one, which
     // is the rule the whole rail keeps.
     const bool sourceFaulted = pipeline_.faulted();
+    // A RADIO THE GENERATOR IS STANDING IN FOR lights the lamp too (0.99.36):
+    // the section may be folded, and its chip then reads only "generator" -
+    // true, and silent about the radio that did not open. The reason is in
+    // the red line inside.
+    const bool radioNotOpen =
+        restoreKeep_.valid() && restoreKeep_.kind != "file" && device_ == nullptr &&
+        sourceKind_ == "siggen";
     const bool sourceOpen =
         benchSection(trId("Source"), true, sourceChip.c_str(),
-                     sourceFaulted ? cascade::gui::theme::kAlarm
-                                   : cascade::gui::theme::kPhosphor,
-                     sourceFaulted || pipeline_.running());
+                     (sourceFaulted || radioNotOpen) ? cascade::gui::theme::kAlarm
+                                                     : cascade::gui::theme::kPhosphor,
+                     sourceFaulted || radioNotOpen || pipeline_.running());
     if (!sourceOpen) { return; }
 
     // Row label for a combo index; -1 (active device dropped by a Refresh)
@@ -6788,8 +6795,16 @@ void AppWindow::drawSourceSection() {
     // being unplugged mid-stream. Say so plainly: the spectrum has frozen and
     // without this the app just looks hung.
     if (pipeline_.faulted()) {
-        ImGui::TextColored(kErrorRed, tr("Device stopped: %s"), pipeline_.faultMessage().c_str());
-        ImGui::TextWrapped(tr("Reconnect it and pick the source again, or switch to the signal generator."));
+        const std::string faultMessage = pipeline_.faultMessage();
+        ImGui::TextColored(kErrorRed, tr("Device stopped: %s"), faultMessage.c_str());
+        // NOT UNDER A DRIVER THAT HAS ALREADY SAID WHAT TO DO (0.99.36). The
+        // SDRplay lost-session sentences end "then restart FoxSDR", because
+        // picking that radio again is refused until then - and this line
+        // telling the user to pick it again is what sent them to the
+        // generator. See gui::reconnectAdviceApplies.
+        if (cascade::gui::reconnectAdviceApplies(faultMessage)) {
+            ImGui::TextWrapped(tr("Reconnect it and pick the source again, or switch to the signal generator."));
+        }
     }
 
     const bool soapyBusy = soapyScanPending_ || deviceOpenPending_;
@@ -7174,7 +7189,13 @@ void AppWindow::drawSourceSection() {
                 // nativeDevices_, because the user may have typed since the
                 // list was built.
                 const std::string args = std::string("uri=") + plutoUri_;
+                DeviceOpenResult req;
                 if (device_ != nullptr) {
+                    // Carried with the request, as selectSource does (0.99.36).
+                    req.closedRadio = cascade::gui::rememberedSourceAfterFailedOpen(
+                        sourceKind_, cfgSoapyArgs_, cfgNativeArgs_, "",
+                        pipeline_.activeSource().sampleRateHz());
+                    req.closedLabel = deviceModel_;
                     cascade::core::diagLogf(
                         "source: closing %s before opening the ADALM-Pluto",
                         deviceModel_.c_str());
@@ -7187,7 +7208,6 @@ void AppWindow::drawSourceSection() {
                     sourceKind_ = "siggen";
                     followInputRate();
                 }
-                DeviceOpenResult req;
                 req.kind = kPlutoDriverKey;
                 req.args = args;
                 req.row = sourceSel_;
@@ -7702,7 +7722,10 @@ void AppWindow::pollSourceAsync() {
             // selection is simply looked up again rather than assumed.
             sourceSel_ = -1;
             for (std::size_t i = 0; i < nativeDevices_.size(); ++i) {
+                // BY DRIVER AND ARGS (0.99.36): an RSP's native Mirics row and
+                // its SDRplay API row carry the same "serial=..." args.
                 if (device_ != nullptr && soapyView_ == nullptr &&
+                    nativeDevices_[i].driver == sourceKind_ &&
                     nativeDevices_[i].args == deviceArgs_) {
                     sourceSel_ = kNativeRowBase + static_cast<int>(i);
                 }
@@ -7844,7 +7867,8 @@ void AppWindow::finishDeviceOpen(DeviceOpenResult r) {
     // old radio was closed before the attempt), so a selection still pointing
     // at a device row would be a readout disagreeing with the hardware.
     if (!r.dev) {
-        sourceError_ = r.error.empty() ? "device open failed" : r.error;
+        const std::string why = r.error.empty() ? "device open failed" : r.error;
+        sourceError_ = why;
         if (r.recovery) {
             // THE ONE AUTOMATIC REOPEN DID NOT TAKE. The dead radio was
             // closed before the attempt, the generator is what is installed,
@@ -7859,13 +7883,42 @@ void AppWindow::finishDeviceOpen(DeviceOpenResult r) {
                 "radio again",
                 cascade::core::sanitiseDevice(r.args).c_str(), r.error.c_str());
         }
+        // THE GENERATOR STOOD IN FOR A RADIO - SAY SO, AND KEEP THE RADIO THAT
+        // WORKED (0.99.36). The receiver closed the radio it had before this
+        // attempt (selectSource's close-first rule), so the generator is what
+        // is running. Before 0.99.36 nothing was remembered here and the exit
+        // save wrote "siggen": re-opening an RSP whose service had died - which
+        // is what the screen then told the user to do - made every later
+        // launch start on the generator too. Only when the generator is what
+        // is installed: a user who was playing an I/Q file still is.
+        if (device_ == nullptr && sourceKind_ == "siggen") {
+            if (!restoreKeep_.valid()) {
+                restoreKeep_ = cascade::gui::rememberAfterFailedSwitch(restoreKeep_, r.closedRadio);
+                if (restoreKeep_.valid()) { restoreKeepLabel_ = r.closedLabel; }
+            }
+            // The model, never the args, in the log (serial numbers): the
+            // same rule as every other source line.
+            std::string model = (r.kind == "soapy")
+                                    ? cascade::core::sanitiseDevice(r.args)
+                                    : modelFromNativeLabel(nativeLabelFor(r.kind, r.args));
+            if (model.empty() || model == r.args) { model = r.kind; }
+            if (!r.recovery) {
+                // Which radio, why, and where the receiver is now - on the
+                // screen, under the combo, where the reason already went.
+                const std::string wanted = deviceBusyLabel_.empty() ? model : deviceBusyLabel_;
+                sourceError_ = cascade::gui::radioNotOpenedSentence(wanted, why);
+            }
+            cascade::core::diagWarnf(
+                "source: %s (%s) did not open - the receiver is on the signal generator%s",
+                model.c_str(), r.kind.c_str(),
+                restoreKeep_.valid() ? "; the saved radio is kept for the next start" : "");
+        }
         // ...and the combo settles on whatever IS installed - unless a saved
         // radio is still being remembered for the config, in which case -1
         // keeps the preview naming that radio instead of ticking a generator
         // nobody chose. Same rule as the restore's failure path.
-        if (device_ == nullptr && sourceKind_ == "siggen" && sourceSel_ != 1 &&
-            !restoreKeep_.valid()) {
-            sourceSel_ = 0;
+        if (device_ == nullptr && sourceKind_ == "siggen" && sourceSel_ != 1) {
+            sourceSel_ = restoreKeep_.valid() ? -1 : 0;
         }
         return;
     }
@@ -7912,7 +7965,7 @@ void AppWindow::finishDeviceOpen(DeviceOpenResult r) {
     soapyView_ = dynamic_cast<cascade::source::SoapySource*>(device_);
     deviceArgs_ = r.args;
     deviceModel_ = (r.kind == "soapy") ? cascade::core::sanitiseDevice(r.args)
-                                       : modelFromNativeLabel(nativeLabelFor(r.args));
+                                       : modelFromNativeLabel(nativeLabelFor(r.kind, r.args));
     if (r.kind == "soapy") {
         cfgSoapyArgs_ = r.args;
     } else {
@@ -8038,6 +8091,21 @@ void AppWindow::launchDeviceOpen(DeviceOpenResult r, const std::string& busyLabe
         // either way) but is surfaced - and so is a rate the driver coerced
         // on a call that succeeded.
         r.error = cascade::gui::applySourceRate(*dev, r.requestRateHz, r.error).sourceError;
+        // AN RSP IS TUNED BEFORE ITS STREAM STARTS (0.99.36). The carry-across
+        // tune below in finishDeviceOpen runs after setSource has started the
+        // radio, so on an RSP it was a live sdrplay_api_Update milliseconds
+        // after sdrplay_api_Init - and three field logs (0.95.0 and 0.96.2
+        // RSP1A, 0.99.27 RSP1) show the service never answering exactly that
+        // Update. Written here, while nothing streams, it is only the
+        // parameter block and reaches the radio through Init; the later tune
+        // then finds it already there and sends nothing (SdrPlaySource::
+        // setCenterFrequencyHz). Why the service does not answer that early is
+        // not known - there is no RSP on the bench - so this removes the call
+        // rather than claiming to have explained it. The same order the
+        // startup restore and the patch radios already use.
+        if (r.kind == "sdrplay" && r.keepCenterHz > 0.0) {
+            (void) dev->setCenterFrequencyHz(r.keepCenterHz);
+        }
         r.dev = std::move(dev);
         return std::move(r);
     });
@@ -8096,6 +8164,11 @@ void AppWindow::pollSoapyRecovery() {
     cascade::core::diagLogf("source: the driver faulted while %s; reopening %s at %.0f S/s",
                             what.c_str(), cascade::core::sanitiseDevice(r.args).c_str(),
                             r.requestRateHz);
+    // Remembered if the reopen fails (0.99.36), so the exit save does not
+    // write the generator over a radio that only needed a restart.
+    r.closedRadio = cascade::gui::rememberedSourceAfterFailedOpen(
+        sourceKind_, cfgSoapyArgs_, cfgNativeArgs_, "", r.requestRateHz);
+    r.closedLabel = deviceModel_;
 
     // CLOSE THE DEAD RADIO BEFORE OPENING IT AGAIN - the same order as
     // selectSource (adjudicated fix #3 for the 0.62.0 field crashes: two
@@ -8235,7 +8308,16 @@ void AppWindow::selectSource(int idx) {
     // then let the worker call Device::make. The cost is honest: if the new
     // device fails to open, the receiver is on the generator with the reason
     // shown, not silently back on a radio it had to close to try.
+    //
+    // ...AND THE CLOSED RADIO IS CARRIED WITH THE REQUEST (0.99.36), exactly
+    // as the exit save would have named it, so a failed open leaves the
+    // config naming the radio that worked instead of the generator.
+    cascade::gui::RememberedSource closedRadio;
+    std::string closedLabel;
     if (device_ != nullptr) {
+        closedRadio = cascade::gui::rememberedSourceAfterFailedOpen(
+            sourceKind_, cfgSoapyArgs_, cfgNativeArgs_, "", pipeline_.activeSource().sampleRateHz());
+        closedLabel = deviceModel_;
         cascade::core::diagLogf("source: closing %s before opening another device",
                                 deviceModel_.c_str());
         device_ = nullptr;
@@ -8257,6 +8339,8 @@ void AppWindow::selectSource(int idx) {
     req.row = idx;
     req.requestRateHz = rate;
     req.keepCenterHz = keepCenterHz;
+    req.closedRadio = std::move(closedRadio);
+    req.closedLabel = std::move(closedLabel);
     launchDeviceOpen(std::move(req), label);
 }
 
@@ -8287,6 +8371,12 @@ void AppWindow::scanNative() {
     // 0.90.0 field report behind gui::deviceScanAllowed). So this runs on the
     // GUI thread, inline, whenever the list might be stale, including while a
     // radio of ours is streaming.
+    //
+    // ...AND THE SELECTION FOLLOWS THE RADIO, NOT THE INDEX (0.99.36). The
+    // combo's selection is a row number, and this rebuilds the rows; one
+    // that appears or vanishes moves every row after it. Keyed now, found
+    // again at the end.
+    const std::vector<cascade::gui::SourceRowKey> rowsBefore = sourceRowKeys();
     nativeDevices_ = cascade::source::enumerateRtlSdr();
     for (cascade::source::NativeDeviceInfo& d : cascade::source::enumerateHackRf()) {
         nativeDevices_.push_back(std::move(d));
@@ -8318,7 +8408,36 @@ void AppWindow::scanNative() {
     // LoadLibrary, cached for the life of the process.
     const std::size_t beforeSdrPlay = nativeDevices_.size();
     for (cascade::source::NativeDeviceInfo& d : cascade::source::enumerateSdrPlay()) {
+        sdrPlaySeenLabels_[d.args] = d.label;
         nativeDevices_.push_back(std::move(d));
+    }
+    // THE RSP THIS PROCESS HAS OPEN IS NOT IN THAT LIST (0.99.36). The API
+    // lists the radios free to select, and a selected one is not free - the
+    // reference module puts "the cached results for claimed handles" back
+    // after every GetDevices for exactly this reason. Without it, opening the
+    // Source combo while an RSP played dropped the RSP's row. Claimed here:
+    // the receiver's radio and every patch radio opened through the API.
+    {
+        std::vector<cascade::source::NativeDeviceInfo> claimed;
+        const auto claim = [&](const std::string& args, const std::string& fallbackName) {
+            cascade::source::NativeDeviceInfo c;
+            c.driver = "sdrplay";
+            c.args = args;
+            const auto seen = sdrPlaySeenLabels_.find(args);
+            c.label = (seen != sdrPlaySeenLabels_.end()) ? seen->second : fallbackName;
+            claimed.push_back(std::move(c));
+        };
+        if (device_ != nullptr && soapyView_ == nullptr && sourceKind_ == "sdrplay" &&
+            !deviceArgs_.empty()) {
+            claim(deviceArgs_, pipeline_.activeSourceName());
+        }
+        for (const auto& [id, as] : patchRadioOpenedAs_) {
+            if (patchRadios_.find(id) == patchRadios_.end()) { continue; }
+            const std::string key = as.substr(0, as.rfind('@'));
+            if (cascade::core::patch::deviceDriver(key) != "sdrplay") { continue; }
+            claim(cascade::core::patch::deviceArgs(key), "SDRplay");
+        }
+        nativeDevices_ = cascade::source::withClaimedSdrPlayRows(nativeDevices_, claimed);
     }
     sdrPlayRowsFound_ = nativeDevices_.size() > beforeSdrPlay;
 
@@ -8440,13 +8559,42 @@ void AppWindow::scanNative() {
         ids.push_back(id);
     }
     nativeUnbound_ = cascade::usb::enumerateUnbound(ids);
+
+    // THE SELECTION, FOUND AGAIN BY WHAT IT IS (see the top of this function).
+    // A native radio that is installed but was not the selected row (the combo
+    // showed its live name, -1) is pointed at again when its row is back.
+    sourceSel_ = cascade::gui::refindSourceRow(rowsBefore, sourceSel_, sourceRowKeys());
+    if (sourceSel_ < 0 && device_ != nullptr && soapyView_ == nullptr) {
+        for (std::size_t i = 0; i < nativeDevices_.size(); ++i) {
+            if (nativeDevices_[i].driver == sourceKind_ && nativeDevices_[i].args == deviceArgs_) {
+                sourceSel_ = kNativeRowBase + static_cast<int>(i);
+            }
+        }
+    }
 }
 
-std::string AppWindow::nativeLabelFor(const std::string& args) const {
+std::string AppWindow::nativeLabelFor(const std::string& kind, const std::string& args) const {
     for (const cascade::source::NativeDeviceInfo& d : nativeDevices_) {
-        if (d.args == args) { return d.label; }
+        if (d.driver == kind && d.args == args) { return d.label; }
     }
     return args;
+}
+
+std::vector<cascade::gui::SourceRowKey> AppWindow::sourceRowKeys() const {
+    std::vector<cascade::gui::SourceRowKey> keys;
+    keys.reserve(static_cast<std::size_t>(soapyRowBase()) + soapyDevices_.size());
+    keys.push_back({"siggen", ""});
+    keys.push_back({"file", ""});
+    for (const cascade::source::NativeDeviceInfo& d : nativeDevices_) {
+        // THE PLUTO ROW BY ITS FAMILY ALONE: there is only ever one, and its
+        // args are whatever the address box held when the list was built, so
+        // an address typed since would otherwise lose the selection.
+        keys.push_back({d.driver, d.driver == kPlutoDriverKey ? std::string() : d.args});
+    }
+    for (const cascade::source::SoapyDeviceInfo& d : soapyDevices_) {
+        keys.push_back({"soapy", d.args});
+    }
+    return keys;
 }
 
 void AppWindow::adoptDeviceMirrors(cascade::source::DeviceSource& dev, const std::string& kind,
@@ -22857,7 +23005,7 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
             soapyView_ = dynamic_cast<cascade::source::SoapySource*>(device_);
             deviceArgs_ = args;
             deviceModel_ = (kind == "soapy") ? cascade::core::sanitiseDevice(args)
-                                             : modelFromNativeLabel(nativeLabelFor(args));
+                                             : modelFromNativeLabel(nativeLabelFor(kind, args));
             if (kind == "soapy") {
                 cfgSoapyArgs_ = args;
                 cfgNativeArgs_ = cfg.nativeArgs;
@@ -22899,9 +23047,19 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
             // the device ARGUMENTS back, and those carry the serial number.
             // Same rule as the line above and as every other place these
             // strings are recorded: the sanitised model, never the raw args.
-            cascade::core::diagWarnf("source: the saved radio (%s, %s) did not reopen",
-                                     cascade::core::sanitiseDevice(cfg.soapyArgs).c_str(),
-                                     kind.c_str());
+            //
+            // THE MODEL OF THE RADIO THAT WAS TRIED (0.99.36). This used to
+            // print cfg.soapyArgs, which is empty for every native radio, so
+            // the field logs read "the saved radio (, sdrplay) did not
+            // reopen" and named nothing.
+            std::string triedModel = (kind == "soapy")
+                                         ? cascade::core::sanitiseDevice(args)
+                                         : modelFromNativeLabel(nativeLabelFor(kind, args));
+            if (triedModel.empty() || triedModel == args) { triedModel = kind; }
+            cascade::core::diagWarnf(
+                "source: the saved radio (%s, %s) did not reopen - the receiver is on the signal "
+                "generator and the radio stays saved",
+                triedModel.c_str(), kind.c_str());
 
             // ...AND THE CONFIG GOES ON NAMING IT. The session runs on the
             // generator above, which is right - it has to run on something -
@@ -22924,9 +23082,12 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
             // instead. Not a privacy rule like the log line above, because
             // this string never leaves the screen; it is simply not a name.
             std::string label = (kind == "soapy") ? cascade::core::sanitiseDevice(args)
-                                                  : modelFromNativeLabel(nativeLabelFor(args));
+                                                  : modelFromNativeLabel(nativeLabelFor(kind, args));
             if (label.empty() || label == args) { label = kind; }
             restoreKeepLabel_ = label;
+            // Which radio, why, and where the receiver is - the driver's own
+            // reason is kept verbatim inside the sentence (0.99.36).
+            sourceError_ = cascade::gui::radioNotOpenedSentence(label, sourceError_);
             // NOTHING IS TICKED IN THE DROPDOWN. -1 is the same "the live
             // source is not one of these rows" the Refresh path uses; the
             // preview names the saved radio instead, so the generator is

@@ -647,8 +647,22 @@ const char* sdrPlayControlHungSentence() {
     // formatted sentence and a changed constant drift apart in silence.
     static_assert(SdrPlaySource::kControlWait == std::chrono::milliseconds(1000),
                   "the sentence below quotes one second");
+    // "...THEN RESTART FoxSDR", not "then open the radio again" (0.99.36):
+    // an abandoned control marks the process's session lost (0.99.28), and a
+    // lost session refuses every open until FoxSDR restarts - so the old
+    // instruction closed the dead radio, failed to open it, and left the user
+    // on the signal generator for having followed it.
     return "the SDRplay service did not answer within 1 s - restart the SDRplay API service, "
-           "then open the radio again";
+           "then restart FoxSDR";
+}
+
+const char* sdrPlayStreamStalledSentence() {
+    // The number is kStreamStallLimit, spelled out and pinned like the two
+    // above.
+    static_assert(SdrPlaySource::kStreamStallLimit == std::chrono::milliseconds(5000),
+                  "the sentence below quotes five seconds");
+    return "the SDRplay service stopped delivering samples (nothing for 5 s) - restart the "
+           "SDRplay API service, then restart FoxSDR";
 }
 
 const char* sdrPlaySessionLostSentence() {
@@ -794,10 +808,13 @@ bool SdrPlaySource::noteIfServiceDead(abi::ErrT err, const char* what) {
     // problem and the same remedy: the service, not the radio, is what has to
     // be restarted. Said once here rather than left to the caller's generic
     // "<what> failed: ServiceNotResponding (14)", which reads as a refused
-    // request rather than as a receiver that is gone.
+    // request rather than as a receiver that is gone. "THEN RESTART FoxSDR"
+    // since 0.99.36: markSessionLost above means opening the radio again is
+    // refused until then, which the old "then open the radio again" sent the
+    // user straight into.
     noteFaultOn(*link_, what,
                 "the SDRplay service stopped answering - restart the SDRplay API service, "
-                "then open the radio again");
+                "then restart FoxSDR");
     core::diagWarnf("source: SDRplay %s - the service stopped answering; the radio is released",
                     what);
     return true;
@@ -990,6 +1007,9 @@ void SdrPlaySource::streamCallbackA(short* xi, short* xq, abi::StreamCbParamsT* 
     Link* link = static_cast<Link*>(ctx);
     if (link == nullptr) { return; }
     link->inCallback.fetch_add(1, std::memory_order_acq_rel);
+    // ANY callback proves the service is still calling us - an acknowledgement
+    // with no samples included. One atomic store; see kStreamStallLimit.
+    link->lastCallbackNs.store(steadyNowNs(), std::memory_order_relaxed);
 
     if (params != nullptr) {
         // The service's acknowledgement that a queued Update has taken effect.
@@ -1364,6 +1384,7 @@ bool SdrPlaySource::open(const std::string& args) {
     // belongs to the device that was open before this one.
     controlAbandoned_ = false;
     serviceGone_ = false;
+    streamStalled_.store(false, std::memory_order_release);
 
     std::string error;
     if (!acquireSessionLocked(error)) {
@@ -1470,6 +1491,10 @@ bool SdrPlaySource::startStreamingLocked() {
     link_->api = &a;
     link_->dev = device_.dev;
     link_->tuner = device_.tuner;
+    // The stall clock starts now, so a service that never delivers a first
+    // block is caught as surely as one that stops later.
+    link_->lastCallbackNs.store(0, std::memory_order_relaxed);
+    link_->streamStartNs.store(steadyNowNs(), std::memory_order_relaxed);
 
     abi::CallbackFnsT cbs{};
     cbs.StreamACbFn = &SdrPlaySource::streamCallbackA;
@@ -1685,10 +1710,13 @@ std::size_t SdrPlaySource::read(std::complex<float>* dst, std::size_t n) {
     }
     got = link_->ring.read(dst, n);
     if (got == 0) {
-        std::lock_guard<std::mutex> hl(link_->healthMutex);
-        if (link_->cbWindowStartNs.load(std::memory_order_acquire) != 0) {
-            ++link_->health.timeouts;
+        {
+            std::lock_guard<std::mutex> hl(link_->healthMutex);
+            if (link_->cbWindowStartNs.load(std::memory_order_acquire) != 0) {
+                ++link_->health.timeouts;
+            }
         }
+        checkForStallFromRead();
     }
     return got;
 }
@@ -1710,6 +1738,14 @@ bool SdrPlaySource::updateLocked(abi::ReasonForUpdateT reason, abi::ReasonForUpd
     // working would park one per click.
     if (controlAbandoned_) {
         setError(std::string(what) + " refused: " + sdrPlayControlHungSentence());
+        return false;
+    }
+    // ...AND NEITHER DOES A STREAM THAT HAS BEEN DECLARED STALLED (0.99.36):
+    // the service stopped calling us without a word, which is the same
+    // service a control would now walk into for kControlWait and abandon a
+    // worker inside.
+    if (streamStalled_.load(std::memory_order_acquire)) {
+        setError(std::string(what) + " refused: " + sdrPlayStreamStalledSentence());
         return false;
     }
 
@@ -1829,6 +1865,18 @@ bool SdrPlaySource::setCenterFrequencyHz(double hz) {
     if (ch == nullptr) {
         setError("no SDRplay device is open");
         return false;
+    }
+    // NOTHING TO SEND WHEN NOTHING CHANGES (0.99.36). The radio is already
+    // programmed with this frequency - by Init, if it was written before
+    // start(), or by an earlier Update - so a live Update would only ask the
+    // service to redo work. The one that mattered is the carry-across tune
+    // AppWindow makes the instant a radio is installed: three field logs
+    // (0.95.0, 0.96.2, 0.99.27) show the service never answering the first
+    // Update sent that soon after Init. The reference makes the same check
+    // (SoapySDRPlay3 setFrequency compares rfHz before updating).
+    if (ch->tunerParams.rfFreq.rfHz == hz) {
+        centerFrequencyHz_.store(hz, std::memory_order_relaxed);
+        return true;
     }
     ch->tunerParams.rfFreq.rfHz = hz;
     if (!updateLocked(abi::Update_Tuner_Frf, abi::Update_Ext1_None, "retune")) { return false; }
@@ -2386,6 +2434,42 @@ std::string SdrPlaySource::streamHealthLine() {
 void SdrPlaySource::setStreamHealthWindowForTest(std::chrono::milliseconds w) {
     std::lock_guard<std::mutex> lk(link_->healthMutex);
     link_->healthWindow = w;
+}
+
+void SdrPlaySource::setStreamStallLimitForTest(std::chrono::milliseconds w) {
+    link_->stallLimitNs.store(std::chrono::duration_cast<std::chrono::nanoseconds>(w).count(),
+                              std::memory_order_relaxed);
+}
+
+void SdrPlaySource::checkForStallFromRead() {
+    // THE PIPELINE'S SOURCE THREAD, on a read that came back empty. No
+    // devMutex_: a GUI-thread control can hold it for up to kControlWait +
+    // kUpdateWait, and the reader must not queue behind that. Everything read
+    // here is atomic, and the one thing raised (streamStalled_) is read by
+    // vendorUnreachableLocked() as an atomic too.
+    if (!link_->accepting.load(std::memory_order_relaxed)) { return; }
+    if (streamStalled_.load(std::memory_order_acquire)) { return; }
+    const std::int64_t start = link_->streamStartNs.load(std::memory_order_relaxed);
+    if (start == 0) { return; }
+    const std::int64_t last = link_->lastCallbackNs.load(std::memory_order_relaxed);
+    const std::int64_t since = (last > start) ? last : start;
+    const std::int64_t now = steadyNowNs();
+    const std::int64_t limit = link_->stallLimitNs.load(std::memory_order_relaxed);
+    if (now - since < limit) { return; }
+    if (streamStalled_.exchange(true, std::memory_order_acq_rel)) { return; }
+
+    // THE SAME TREATMENT AS A SERVICE THAT ANSWERED (14). Nothing of ours
+    // enters the vendor DLL for this device again (vendorUnreachableLocked),
+    // and the process's session is finished (markSessionLost): the 0.97.0
+    // RSPdx hang report is a teardown walking into exactly this service.
+    // link_->api is the table Init was called through, written before Init.
+    if (link_->api != nullptr) {
+        markSessionLost(*link_->api, "the stream stopped delivering samples");
+    }
+    noteFaultOn(*link_, "stream", sdrPlayStreamStalledSentence());
+    core::diagWarnf("source: SDRplay stream stalled - no callback for %lld ms; the service is "
+                    "treated as gone and the radio is released",
+                    static_cast<long long>((now - since) / 1000000));
 }
 
 std::uint64_t SdrPlaySource::droppedSamples() const {

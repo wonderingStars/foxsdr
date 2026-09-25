@@ -381,6 +381,88 @@ void testTheEventCallbackNeverWaitsOnTheDiagnosticLog() {
     src.closeDevice();
 }
 
+// --- 5. a stream that goes quiet is NAMED, and the radio is left alone -------
+//
+// THE SILENT HALF OF EVERY LOG ABOVE (0.99.36). Between the last block and the
+// user's next click, FoxSDR said nothing at all: 49 s (0.95.0 RSP1A), 51 s
+// (0.99.27 RSP1), 85 s (0.99.27 RSP2), 99 s (0.97.0 RSPdx) of a receiver that
+// called itself running on an empty ring. Nothing raises a fault because no
+// call is in flight to be refused. Here the service stops delivering without
+// a word - serviceWedged, exactly the fake's model of those logs - and the
+// receiver must say so within kStreamStallLimit (shortened for the test), in
+// the pinned sentence, and then tear down WITHOUT entering the vendor DLL: the
+// 0.97.0 RSPdx report is a GUI thread that never came back from a teardown
+// call into that wedged service.
+void testASilentStreamIsNamedAndTheRadioIsLeftAlone() {
+    cascade::core::DiagLog::instance().resetForTest();
+    FakeSdrPlayApi fake;
+    fake.addDevice("1706012347", abi::kRspDx);
+    SdrPlaySource src;
+    src.setApiForTest(&fake.table);
+    CHECK(src.open(""));
+    // 500 ms: far above the fake's 1 ms period and any scheduling hiccup on a
+    // machine building in parallel, far below the 3 s the check waits.
+    src.setStreamStallLimitForTest(std::chrono::milliseconds(500));
+    CHECK(src.start());
+    Reader reader(src);
+    fake.startService(kBlock, kPeriod, kWedgeAfter);
+
+    // A HEALTHY STREAM RUNS WELL PAST THE LIMIT AND IS NOT ACCUSED OF ANYTHING.
+    std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+    CHECK(!src.faulted());
+    CHECK(reader.got.load() > 100ull * kBlock);
+
+    // The service stops calling us. Nothing is asked of it, nothing refuses.
+    fake.serviceWedged.store(true);
+    const auto t0 = Clock::now();
+    const bool named = waitFor([&] { return src.faulted(); }, 3000);
+    const long long ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - t0).count();
+    std::printf("stream went quiet: fault raised %s after %lld ms (limit 500 ms)\n",
+                named ? "yes" : "NO", ms);
+    CHECK(named);
+    CHECK(src.deviceDead());
+    const std::string shown = src.lastError();
+    std::printf("the receiver shows \"%s\"\n", shown.c_str());
+    CHECK(shown.find(cascade::source::sdrPlayStreamStalledSentence()) != std::string::npos);
+    CHECK(shown.find("restart FoxSDR") != std::string::npos);
+    CHECK(ringHas("source: SDRplay stream stalled"));
+
+    // THE TEARDOWN NEVER ENTERS THE WEDGED SERVICE, and the session is not
+    // handed to anything else in this process.
+    reader.run.store(false);
+    if (reader.t.joinable()) { reader.t.join(); }
+    src.stop();
+    src.closeDevice();
+    CHECK(fake.countStarting("Uninit") == 0);
+    CHECK(fake.countStarting("ReleaseDevice") == 0);
+    SdrPlaySource again;
+    again.setApiForTest(&fake.table);
+    CHECK(!again.open(""));
+    fake.stopService();
+}
+
+// ...AND A SERVICE THAT NEVER DELIVERS A FIRST BLOCK IS CAUGHT THE SAME WAY.
+void testAStreamThatNeverStartsIsNamedToo() {
+    cascade::core::DiagLog::instance().resetForTest();
+    FakeSdrPlayApi fake;
+    fake.addDevice("1811003EFB", abi::kRsp1A);
+    SdrPlaySource src;
+    src.setApiForTest(&fake.table);
+    CHECK(src.open(""));
+    src.setStreamStallLimitForTest(std::chrono::milliseconds(300));
+    CHECK(src.start());  // no service thread: not one callback will come
+    Reader reader(src);
+    CHECK(waitFor([&] { return src.faulted(); }, 3000));
+    CHECK(std::string(src.lastError()).find(cascade::source::sdrPlayStreamStalledSentence()) !=
+          std::string::npos);
+    reader.run.store(false);
+    if (reader.t.joinable()) { reader.t.join(); }
+    src.stop();
+    src.closeDevice();
+    CHECK(fake.countStarting("Uninit") == 0);
+}
+
 }  // namespace
 
 int main() {
@@ -388,5 +470,7 @@ int main() {
     testAPluginReloadStormNeverReachesTheVendorThread();
     testAStartAfterTheServiceStoppedAnsweringNeverEntersInit();
     testTheEventCallbackNeverWaitsOnTheDiagnosticLog();
+    testASilentStreamIsNamedAndTheRadioIsLeftAlone();
+    testAStreamThatNeverStartsIsNamedToo();
     return testSummary("test_sdrplay_stall");
 }

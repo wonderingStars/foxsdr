@@ -108,6 +108,44 @@ inline std::vector<NativeDeviceInfo> withoutDuplicateRsps(
     return out;
 }
 
+// THE RADIO THIS PROCESS HAS OPEN IS NOT IN THE API'S LIST (0.99.36).
+//
+// sdrplay_api_GetDevices lists the RSPs that are free to select, and a radio
+// this process has SELECTED is not one of them - the header above already
+// relies on that for "the other being open elsewhere", and SDRplay's own
+// SoapySDR module (SoapySDRPlay3 Registration.cpp, findSDRPlay) works around
+// it by adding "the cached results for claimed handles" back after every
+// GetDevices. FoxSDR did not, so the Source combo re-read the list every time
+// it was opened and the RSP the receiver was playing VANISHED from it: the
+// row index then pointed at whatever row slid into its place (the Pluto row,
+// or the native Mirics row for the same radio, which the duplicate rule could
+// no longer hide because the API now listed nothing), and a patch radio handed
+// back to the receiver was "not listed any more".
+//
+// `claimed` is every SDRplay radio this process has open - driver "sdrplay",
+// its args exactly as the row that opened it carried them, and the label that
+// row showed. Each one the list does not already carry is appended, in the
+// order given, so the list says what the process holds. Anything that is not
+// an API row is ignored: only the API has this blind spot. Call BEFORE
+// withoutDuplicateRsps, so the native duplicate of a claimed radio stays
+// hidden.
+inline std::vector<NativeDeviceInfo> withClaimedSdrPlayRows(
+    const std::vector<NativeDeviceInfo>& rows, const std::vector<NativeDeviceInfo>& claimed) {
+    std::vector<NativeDeviceInfo> out = rows;
+    for (const NativeDeviceInfo& c : claimed) {
+        if (c.driver != "sdrplay") { continue; }
+        bool listed = false;
+        for (const NativeDeviceInfo& r : out) {
+            if (r.driver == c.driver && r.args == c.args) {
+                listed = true;
+                break;
+            }
+        }
+        if (!listed) { out.push_back(c); }
+    }
+    return out;
+}
+
 }  // namespace cascade::source
 
 #endif  // CASCADE_SOURCE_RSP_ROWS_HPP

@@ -309,6 +309,102 @@ void testTune() {
     CHECK_NEAR(src.centerFrequencyHz(), 101100000.0, 1.0);
 }
 
+// --- 5b. no live Update the radio does not need (0.99.36) --------------------
+//
+// THREE FIELD LOGS, ONE SHAPE. 0.95.0 (RSP1A, API 3.15), 0.96.2 (RSP1A, API
+// 3.09) and 0.99.27 (RSP1, API 3.15) each read "opened SDRplay ... (sdrplay)"
+// followed by the retune failing - five seconds later with
+// ServiceNotResponding, or abandoned at kControlWait - and that retune is the
+// carry-across tune AppWindow::finishDeviceOpen issues milliseconds after the
+// stream was started. It was sent even when there was nothing to change. Why
+// the service does not answer an Update that early is NOT known (no RSP here);
+// what is proved below is that FoxSDR no longer sends one: a tune written
+// before start() reaches the radio through Init, and a tune to where the radio
+// already is makes no vendor call at all.
+
+void testAnUnchangedFrequencySendsNoUpdate() {
+    FakeSdrPlayApi fake;
+    fake.addDevice("1811003EFB", abi::kRsp1A);
+    SdrPlaySource src;
+    CHECK(openOn(src, fake));
+    CHECK(src.start());
+    fake.calls.clear();
+
+    // open() leaves the radio at 100 MHz (applyKnownStateLocked).
+    CHECK(src.setCenterFrequencyHz(100000000.0));
+    CHECK_NEAR(src.centerFrequencyHz(), 100000000.0, 1.0);
+    CHECK(fake.countStarting("Update(") == 0);
+
+    // A real change still goes to the radio, once.
+    CHECK(src.setCenterFrequencyHz(101100000.0));
+    CHECK(fake.countStarting("Update(") == 1);
+    // ...and the same frequency again is nothing.
+    CHECK(src.setCenterFrequencyHz(101100000.0));
+    CHECK(fake.countStarting("Update(") == 1);
+    src.stop();
+    src.closeDevice();
+}
+
+void testATuneBeforeStartLeavesNothingToSendAfterInit() {
+    FakeSdrPlayApi fake;
+    fake.addDevice("1811003EFB", abi::kRsp1A);
+    SdrPlaySource src;
+    CHECK(openOn(src, fake));
+    fake.calls.clear();
+
+    // What the open worker now does with the frequency being carried across:
+    // written while nothing streams, so it is only the parameter block.
+    CHECK(src.setCenterFrequencyHz(97300000.0));
+    CHECK(fake.countStarting("Update(") == 0);
+
+    // The stream starts ON that frequency...
+    CHECK(src.start());
+    CHECK(fake.atInit.taken);
+    CHECK_NEAR(fake.atInit.rfHz, 97300000.0, 1.0);
+
+    // ...and the carry-across tune the GUI still makes once the radio is
+    // installed (applyRetuneNow, for its range check and readback) finds it
+    // already there: no Update immediately after Init.
+    CHECK(src.setCenterFrequencyHz(97300000.0));
+    CHECK(fake.countStarting("Update(") == 0);
+    src.stop();
+    src.closeDevice();
+}
+
+// --- 5c. every sentence after a lost session names the restart that works ---
+//
+// 0.99.28 made a lost session process-wide (Api::sessionLost): no scan and no
+// open() reaches the API again until FoxSDR restarts. Two sentences written
+// before that still told the user "restart the SDRplay API service, then open
+// the radio again" - and opening it again is exactly what cannot work: the
+// receiver closes the dead radio first, the open is refused, and the user is
+// left on the signal generator having done what the screen said.
+void testEverySentenceAfterALostSessionNamesTheRestartThatWorks() {
+    const std::string hung = cascade::source::sdrPlayControlHungSentence();
+    CHECK(hung.find("restart FoxSDR") != std::string::npos);
+    CHECK(hung.find("open the radio again") == std::string::npos);
+
+    FakeSdrPlayApi fake;
+    fake.addDevice("1811003EFB", abi::kRsp1A);
+    SdrPlaySource src;
+    CHECK(openOn(src, fake));
+    CHECK(src.start());
+    fake.updateResult = abi::ServiceNotResponding;
+    CHECK(src.setCenterFrequencyHz(101100000.0) == false);
+    CHECK(src.deviceDead());
+    const std::string shown = src.lastError();
+    std::printf("after ServiceNotResponding the receiver shows \"%s\"\n", shown.c_str());
+    CHECK(shown.find("restart FoxSDR") != std::string::npos);
+    CHECK(shown.find("open the radio again") == std::string::npos);
+
+    // ...and the proof the old instruction was wrong: opening it again is
+    // refused while this process lives.
+    src.stop();
+    src.closeDevice();
+    SdrPlaySource again;
+    CHECK(openOn(again, fake) == false);
+}
+
 // --- 6. gains -------------------------------------------------------------
 
 void testGains() {
@@ -1954,6 +2050,9 @@ int main() {
     testOpenSelectInitOrderAndParameters();
     testOpenBySerialSuffixAndIndex();
     testTune();
+    testAnUnchangedFrequencySendsNoUpdate();
+    testATuneBeforeStartLeavesNothingToSendAfterInit();
+    testEverySentenceAfterALostSessionNamesTheRestartThatWorks();
     testGains();
     testAgc();
     testAntennasPerModel();

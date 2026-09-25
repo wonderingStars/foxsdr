@@ -85,6 +85,7 @@ struct GLFWwindow;
 #include "gui/readout_hold.hpp"
 #include "gui/tune_control.hpp"
 #include "gui/device_scan_plan.hpp"
+#include "gui/source_fallback.hpp"
 #include "gui/viewport_policy.hpp"
 // CoverageMap, TrackSortKey: the pure arithmetic behind the map's three
 // receiver-relative features. Header-only and ImGui-free, so including it here
@@ -1516,7 +1517,16 @@ private:
     // The label of the native row whose args are `args`, or the args
     // themselves when no row matches (a device that has since been
     // unplugged). Used for the model string a log line names the radio by.
-    std::string nativeLabelFor(const std::string& args) const;
+    //
+    // THE DRIVER IS PART OF THE MATCH (0.99.36): an RSP's native Mirics row
+    // and its SDRplay API row carry the SAME args ("serial=..."), and matching
+    // args alone named an API-opened RSP1 "Mirics MSi2500" in the 0.99.27 log.
+    std::string nativeLabelFor(const std::string& kind, const std::string& args) const;
+
+    // The Source combo, one key per row, index-aligned with it - see
+    // gui::refindSourceRow, which keeps the selection on the same radio when
+    // a re-scan moves the rows (0.99.36).
+    std::vector<cascade::gui::SourceRowKey> sourceRowKeys() const;
 
     // Fills every panel mirror (rates, gains and their ranges, AGC, antenna)
     // from an open DeviceSource, priming the hardware where the panel has to
@@ -1754,6 +1764,12 @@ private:
     std::vector<float> recoveryGainsDb;
     bool recoveryAgc = false;
     bool recoveryRestart = false;
+    // THE RADIO CLOSED TO MAKE THIS ATTEMPT (0.99.36), as the config would
+    // have named it, and what it was called. Invalid when nothing was closed.
+    // A failed open remembers it (gui::rememberAfterFailedSwitch) so the exit
+    // save does not write the generator in its place.
+    cascade::gui::RememberedSource closedRadio;
+    std::string closedLabel;
     };
     std::future<std::vector<cascade::source::SoapyDeviceInfo>> soapyScanFuture_;
     std::future<DeviceOpenResult> deviceOpenFuture_;
@@ -1976,6 +1992,11 @@ private:
     std::string sdrPlayAdvice_;
     std::string sdrPlayApiDetail_;
     bool sdrPlayRowsFound_ = false;
+    // The label each SDRplay API row last showed, by its args (0.99.36). A
+    // radio this process has selected is not in the API's list, so its row is
+    // put back from here (source::withClaimedSdrPlayRows) under the name the
+    // user picked it by.
+    std::map<std::string, std::string> sdrPlaySeenLabels_;
 
     // --- Frequency scale + view interaction state (P5) -----------------------
     // ONE scale owns the x <-> Hz <-> bin mapping for both center panels, fed
