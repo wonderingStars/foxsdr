@@ -46,9 +46,12 @@
 #include <unistd.h>
 #endif
 
+#include "airspy_fake_usb.hpp"
+#include "core/config.hpp"
 #include "gui/app_window.hpp"
 #include "gui/bias_tee.hpp"
 #include "hackrf_fake_usb.hpp"
+#include "source/airspy_source.hpp"
 #include "source/device_source.hpp"
 #include "source/hackrf_source.hpp"
 #include "test_check.hpp"
@@ -64,12 +67,19 @@ constexpr std::uint8_t kAntennaEnable = 23;
 constexpr const char* kSerial = "0000000000000000457863c8";
 const std::string kHackArgs = std::string("serial=") + kSerial;
 const std::string kHackIndexArgs = "index=0";
+// A SECOND HackRF, and an Airspy: the radios a remembered "on" must never
+// reach (repair round 1, F1).
+constexpr const char* kSerialB = "00000000000000000000000b";
+const std::string kHackArgsB = std::string("serial=") + kSerialB;
+constexpr const char* kAirspySerial = "644866c83f1a51df";
+const std::string kAirspyArgs = std::string("serial=") + kAirspySerial;
 
 struct Registry {
     std::mutex m;
     // The fake behind the most recently made HackRF (owned by that driver).
     FakeHackRfUsb* hack = nullptr;
     int hackMade = 0;
+    cascade::test::FakeAirspyUsb* airspy = nullptr;
 };
 Registry g_reg;
 
@@ -128,17 +138,45 @@ std::unique_ptr<cascade::source::DeviceSource> makeFake(const std::string& kind)
         // THE SHIPPING DRIVER on a fake wire: its open() enumerates this list
         // instead of WinUSB and gets this device instead of a real handle.
         auto src = std::make_unique<cascade::source::HackRfSource>();
-        cascade::usb::UsbDeviceInfo d;
-        d.vid = 0x1D50;
-        d.pid = 0x6089;
-        d.path = "\\\\?\\usb#vid_1d50&pid_6089#fake#{a5dcbf10}";
-        d.serial = kSerial;
-        d.description = "HackRF One";
+        // TWO HackRFs on the bus, told apart by serial (the driver's open
+        // picks the one its args name; index=0 is the first).
+        std::vector<cascade::usb::UsbDeviceInfo> devs;
+        for (const char* serial : {kSerial, kSerialB}) {
+            cascade::usb::UsbDeviceInfo d;
+            d.vid = 0x1D50;
+            d.pid = 0x6089;
+            d.path = std::string("\\\\?\\usb#vid_1d50&pid_6089#fake") + serial;
+            d.serial = serial;
+            d.description = "HackRF One";
+            devs.push_back(d);
+        }
         auto owned = std::make_unique<FakeHackRfUsb>();
         {
             std::lock_guard<std::mutex> lk(g_reg.m);
             g_reg.hack = owned.get();
             ++g_reg.hackMade;
+        }
+        auto holder =
+            std::make_shared<std::unique_ptr<cascade::usb::UsbDevice>>(std::move(owned));
+        src->setTransportForTest(devs, [holder](const std::string&, std::string& error) {
+            if (*holder == nullptr) { error = "fake: already handed out"; }
+            return std::move(*holder);
+        });
+        return src;
+    }
+    if (kind == "airspy") {
+        // THE SHIPPING Airspy driver on its own fake wire: another family.
+        auto src = std::make_unique<cascade::source::AirspySource>();
+        cascade::usb::UsbDeviceInfo d;
+        d.vid = 0x1D50;
+        d.pid = 0x60A1;
+        d.path = "\\\\?\\usb#vid_1d50&pid_60a1#fake#{a5dcbf10}";
+        d.serial = kAirspySerial;
+        d.description = "AIRSPY";
+        auto owned = std::make_unique<cascade::test::FakeAirspyUsb>();
+        {
+            std::lock_guard<std::mutex> lk(g_reg.m);
+            g_reg.airspy = owned.get();
         }
         auto holder =
             std::make_shared<std::unique_ptr<cascade::usb::UsbDevice>>(std::move(owned));
@@ -152,7 +190,10 @@ std::unique_ptr<cascade::source::DeviceSource> makeFake(const std::string& kind)
 }
 
 std::vector<cascade::source::NativeDeviceInfo> fakeScan() {
-    return {{"hackrf", "HackRF One", kHackArgs}, {"hackrf", "HackRF One (by index)", kHackIndexArgs}};
+    return {{"hackrf", "HackRF One", kHackArgs},
+            {"hackrf", "HackRF One (by index)", kHackIndexArgs},
+            {"hackrf", "HackRF One B", kHackArgsB},
+            {"airspy", "Airspy R2", kAirspyArgs}};
 }
 
 FakeHackRfUsb* hack() {
@@ -265,6 +306,21 @@ struct AppWindowTestAccess {
     static bool driverBiasT(AppWindow& a) {
         auto* h = dynamic_cast<cascade::source::HackRfSource*>(a.device_);
         return h != nullptr && h->biasT();
+    }
+    // The open radio's bias tee as its OWN driver reports it, any family
+    // (false when there is no radio or it has none).
+    static bool radioBiasT(AppWindow& a) {
+        return a.device_ != nullptr &&
+               withBiasTee(a.device_, [](auto& d) { return d.biasT(); });
+    }
+    static std::string radioName(AppWindow& a) {
+        return a.device_ != nullptr ? std::string(a.device_->name()) : std::string("(none)");
+    }
+    // What the application would save now, and a restore from it.
+    static cascade::core::AppConfig config(AppWindow& a) { return a.currentConfig(); }
+    static void restore(AppWindow& a, const cascade::core::AppConfig& cfg) { a.applyConfig(cfg); }
+    static void seedMemory(AppWindow& a, const std::string& key, bool on) {
+        a.biasTeePanel_.remembered[key] = on;
     }
 };
 
@@ -410,15 +466,183 @@ void testRefusalChangesNothing() {
     Access::clearSourceError(app2);
     hack()->failingRequests.push_back(kAntennaEnable);
     Access::press(app2);
-    std::printf("      refused off: asking %d driver %d key %d box %d error \"%s\"\n",
-                Access::asking(app2), Access::driverBiasT(app2), Access::keyLit(app2),
+    std::printf("      refused off: asking %d driver %d key shown %d box %d error \"%s\"\n",
+                Access::asking(app2), Access::driverBiasT(app2), Access::keyShown(app2),
                 Access::boxTicked(app2), Access::sourceError(app2).c_str());
     CHECK(!Access::asking(app2));  // off is never asked about, refused or not
     CHECK(Access::driverBiasT(app2));
-    CHECK(Access::keyLit(app2));
+    // The box still shows the readback (power is still on the port); the key
+    // is gone, because on a HackRF a refused transfer is a radio that stopped
+    // answering (repair round 1, F3: no key over a dead radio - [12]).
     CHECK(Access::boxTicked(app2));
+    CHECK(!Access::keyShown(app2));
     CHECK(!Access::sourceError(app2).empty());
     hack()->failingRequests.clear();
+}
+
+// --- REPAIR ROUND 1 (review of 97815fc) -------------------------------------------
+
+// F1: a "yes" on radio A fed the ONE saved nativeBiasT, which every HackRF,
+// Airspy, Airspy HF+, SDRplay, Mirics and RX888 then opened with.
+void testOnIsRememberedForThatRadioOnly() {
+    std::printf("  [7] an on remembered for one radio powers no other radio at its open\n");
+    cascade::gui::AppWindow app;
+    CHECK(Access::selectNative(app, kHackArgs));
+    Access::press(app);
+    Access::clearQueued(app);
+    Access::answer(app, true);
+    CHECK(Access::radioBiasT(app));
+    // Another HackRF (same family, another serial).
+    CHECK(Access::selectNative(app, kHackArgsB));
+    std::printf("      HackRF B at open: %s, bias tee %d\n", Access::radioName(app).c_str(),
+                Access::radioBiasT(app));
+    CHECK(Access::keyShown(app));
+    CHECK(!Access::radioBiasT(app));
+    CHECK(!Access::keyLit(app));
+    // Another family.
+    CHECK(Access::selectNative(app, kAirspyArgs));
+    std::printf("      Airspy at open: %s, bias tee %d\n", Access::radioName(app).c_str(),
+                Access::radioBiasT(app));
+    CHECK(Access::keyShown(app));
+    CHECK(!Access::radioBiasT(app));
+    // ...and A itself comes back ON at its own next open this session.
+    CHECK(Access::selectNative(app, kHackArgs));
+    std::printf("      HackRF A reopened: bias tee %d\n", Access::radioBiasT(app));
+    CHECK(Access::radioBiasT(app));
+    CHECK(Access::keyLit(app));
+}
+
+void testRememberedAcrossALaunch() {
+    std::printf("  [8] the saved memory: A comes up on at a later launch, B and the Airspy do not\n");
+    cascade::core::AppConfig saved;
+    {
+        cascade::gui::AppWindow app;
+        CHECK(Access::selectNative(app, kHackArgs));
+        Access::press(app);
+        Access::clearQueued(app);
+        Access::answer(app, true);
+        CHECK(Access::radioBiasT(app));
+        saved = Access::config(app);
+    }
+    for (const std::string& args : {kHackArgs, kHackArgsB, kAirspyArgs}) {
+        cascade::gui::AppWindow app;
+        Access::restore(app, saved);
+        CHECK(Access::selectNative(app, args));
+        const bool want = args == kHackArgs;
+        std::printf("      fresh launch, %s: bias tee %d (want %d)\n", args.c_str(),
+                    Access::radioBiasT(app), want);
+        CHECK(Access::radioBiasT(app) == want);
+        CHECK(Access::keyLit(app) == want);
+    }
+}
+
+void testPositionNamedRadioIsNeverRemembered() {
+    std::printf("  [9] a radio named by position is never remembered: it opens off every time\n");
+    cascade::core::AppConfig saved;
+    {
+        cascade::gui::AppWindow app;
+        CHECK(Access::selectNative(app, kHackIndexArgs));
+        Access::press(app);
+        Access::clearQueued(app);
+        Access::answer(app, true);
+        CHECK(Access::radioBiasT(app));
+        // Reopened in the same session: off.
+        Access::selectGenerator(app);
+        CHECK(Access::selectNative(app, kHackIndexArgs));
+        std::printf("      index=0 reopened: bias tee %d\n", Access::radioBiasT(app));
+        CHECK(!Access::radioBiasT(app));
+        // It powers nothing else either.
+        CHECK(Access::selectNative(app, kHackArgsB));
+        CHECK(!Access::radioBiasT(app));
+        saved = Access::config(app);
+    }
+    cascade::gui::AppWindow app;
+    Access::restore(app, saved);
+    CHECK(Access::selectNative(app, kHackIndexArgs));
+    CHECK(!Access::radioBiasT(app));
+    // THE OPEN'S OWN GUARD: an "on" for a position that got into the memory
+    // anyway (no rule writes one, and a load drops one - this is the third
+    // line) is still not applied.
+    Access::selectGenerator(app);
+    Access::seedMemory(app, cascade::core::biasTeeRadioKey("hackrf", kHackIndexArgs), true);
+    CHECK(Access::selectNative(app, kHackIndexArgs));
+    std::printf("      index=0 with an on forced into the memory: bias tee %d\n",
+                Access::radioBiasT(app));
+    CHECK(!Access::radioBiasT(app));
+}
+
+void testOldGlobalSettingIgnored() {
+    std::printf("  [10] a config carrying the old global nativeBiasT powers nothing\n");
+    const std::filesystem::path p = g_scratch / "old_config.json";
+    {
+        std::FILE* f = std::fopen(p.string().c_str(), "wb");
+        CHECK(f != nullptr);
+        if (f != nullptr) {
+            std::fputs("{\"schemaVersion\":1,\"nativeBiasT\":true}\n", f);
+            std::fclose(f);
+        }
+    }
+    cascade::core::AppConfig cfg;
+    std::string err;
+    CHECK(cascade::core::ConfigStore::load(p.string(), cfg, err));
+    for (const std::string& args : {kHackArgs, kAirspyArgs}) {
+        cascade::gui::AppWindow app;
+        Access::restore(app, cfg);
+        CHECK(Access::selectNative(app, args));
+        std::printf("      %s under the old setting: bias tee %d\n", args.c_str(),
+                    Access::radioBiasT(app));
+        CHECK(!Access::radioBiasT(app));
+    }
+}
+
+void testCheckboxSharesTheRule() {
+    std::printf("  [11] the checkbox remembers exactly as the key does\n");
+    cascade::core::AppConfig saved;
+    {
+        cascade::gui::AppWindow app;
+        CHECK(Access::selectNative(app, kHackArgs));
+        Access::tick(app, true);
+        CHECK(Access::radioBiasT(app));
+        CHECK(Access::selectNative(app, kAirspyArgs));
+        CHECK(!Access::radioBiasT(app));
+        saved = Access::config(app);
+    }
+    for (const std::string& args : {kHackArgs, kHackArgsB, kAirspyArgs}) {
+        cascade::gui::AppWindow app;
+        Access::restore(app, saved);
+        CHECK(Access::selectNative(app, args));
+        CHECK(Access::radioBiasT(app) == (args == kHackArgs));
+    }
+    // And an untick forgets: A opens off afterwards.
+    {
+        cascade::gui::AppWindow app;
+        Access::restore(app, saved);
+        CHECK(Access::selectNative(app, kHackArgs));
+        CHECK(Access::radioBiasT(app));
+        Access::tick(app, false);
+        saved = Access::config(app);
+    }
+    cascade::gui::AppWindow app;
+    Access::restore(app, saved);
+    CHECK(Access::selectNative(app, kHackArgs));
+    CHECK(!Access::radioBiasT(app));
+}
+
+// F3: no key over a radio that has stopped answering.
+void testNoKeyOverADeadRadio() {
+    std::printf("  [12] a radio that stopped answering has no key\n");
+    cascade::gui::AppWindow app;
+    CHECK(Access::selectNative(app, kHackArgs));
+    CHECK(Access::keyShown(app));
+    // A failed control transfer is a HackRF that stopped answering.
+    hack()->failingRequests.push_back(kAntennaEnable);
+    Access::tick(app, true);
+    hack()->failingRequests.clear();
+    std::printf("      after the fault: key shown %d\n", Access::keyShown(app));
+    CHECK(!Access::keyShown(app));
+    // And a press on it (a stale frame) does nothing and asks nothing.
+    Access::press(app);
+    CHECK(!Access::asking(app));
 }
 
 void testQuestionThatNoLongerApplies() {
@@ -497,6 +721,12 @@ int main() {
     testRefusalChangesNothing();
     testQuestionThatNoLongerApplies();
     testPositionNamedRadioIsAlwaysAsked();
+    testOnIsRememberedForThatRadioOnly();
+    testRememberedAcrossALaunch();
+    testPositionNamedRadioIsNeverRemembered();
+    testOldGlobalSettingIgnored();
+    testCheckboxSharesTheRule();
+    testNoKeyOverADeadRadio();
 
     std::error_code ec;
     std::filesystem::remove_all(g_scratch, ec);

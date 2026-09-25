@@ -23,6 +23,7 @@
 
 #include "core/i18n.hpp"
 #include "gui/bias_tee.hpp"
+#include "gui/ui_census.hpp"
 
 namespace cascade::gui {
 
@@ -38,26 +39,23 @@ constexpr const char* kStandInArgs = "serial=0";
 
 }  // namespace
 
-AppWindow::BiasStandIn AppWindow::biasStandIn() {
-    static const BiasStandIn mode = [] {
-        const char* v = std::getenv("FOXSDR_FORCE_BIAS_KEY");
-        if (v == nullptr) { return BiasStandIn::None; }
-        if (std::strcmp(v, "accept") == 0) { return BiasStandIn::Accept; }
-        if (std::strcmp(v, "refuse") == 0) { return BiasStandIn::Refuse; }
-        return BiasStandIn::None;
-    }();
-    return mode;
-}
-
 bool AppWindow::biasTeeReachable() const {
     // biasTeePanel_.present is written after each OPEN and by nothing else, so
     // on its own it outlives the radio: a HackRF closed for the generator left
     // it true (test_bias_key_app [5] caught the key still drawn over the
     // generator). The Source panel's checkbox never showed that, because it is
     // drawn inside the open device's own panel; the deck has no such frame. So
-    // the key asks the question live - a radio IS open, and withBiasTee still
-    // reaches a bias tee on it (an RSPdx answers per antenna).
-    return biasTeePanel_.present && device_ != nullptr &&
+    // the key asks the question live - a radio IS open, it is still answering,
+    // and withBiasTee still reaches a bias tee on it (an RSPdx answers per
+    // antenna).
+    //
+    // A RADIO THAT HAS STOPPED ANSWERING HAS NO KEY (repair round 1, F3). Its
+    // driver refuses every transfer from then on, so a key over it could only
+    // ever be pressed for nothing, and its lamp would be a readback the radio
+    // can no longer confirm; the FAIL lamp beside it and the Source panel are
+    // where a dead radio is reported, and the reopen that follows a driver
+    // fault puts the key back with the radio.
+    return biasTeePanel_.present && device_ != nullptr && !device_->deviceDead() &&
            withBiasTee(device_, [](auto&) { return true; });
 }
 
@@ -86,7 +84,7 @@ void AppWindow::switchBiasTee(bool want) {
     if (biasStandInActive()) {
         // A stand-in driver: it takes the change, or refuses it and says so
         // exactly where a real driver's refusal is shown.
-        if (biasStandIn() == BiasStandIn::Accept) {
+        if (biasStandIn_ == BiasStandIn::Accept) {
             biasStandInOn_ = want;
         } else {
             sourceError_ = "stand-in bias tee (FOXSDR_FORCE_BIAS_KEY=refuse): switching the "
@@ -161,15 +159,30 @@ void AppWindow::drawBiasKeyConfirm() {
                        tr("Sends about 4.5 V up the antenna cable to power an amplifier at the "
                           "mast. Leave it off unless you have one: equipment that is not "
                           "expecting power on the connector can be damaged by it."));
+    // WHAT "YES" LEAVES BEHIND, said truthfully (repair round 1, F1): the
+    // per-radio memory (biasTeeRemember) keeps an "on" for a radio named by
+    // its serial and for no other.
     if (biasKeyMayRememberNow()) {
-        ImGui::TextWrapped("%s", tr("FoxSDR will not ask again for this radio until it is "
-                                    "restarted."));
+        ImGui::TextWrapped("%s", tr("FoxSDR will switch it on again whenever this radio is "
+                                    "opened, until you turn it off."));
+    } else {
+        ImGui::TextWrapped("%s", tr("This radio has no serial number FoxSDR can tell it apart "
+                                    "by, so the bias tee will be off the next time it is "
+                                    "opened."));
     }
     ImGui::PopTextWrapPos();
     ImGui::Spacing();
+    // For the bounded-run test (tests/test_bias_key_run.cpp): the dialog was
+    // up, and where its "Turn it on" key is, so a script can press it.
+    cascade::gui::census::note("dialog:bias_key_confirm");
     if (ImGui::Button(trId("Turn it on##bias_key_confirm"))) {
         biasKeyAnswered(true);
         ImGui::CloseCurrentPopup();
+    }
+    {
+        const ImVec2 a = ImGui::GetItemRectMin();
+        const ImVec2 b = ImGui::GetItemRectMax();
+        cascade::gui::census::rect("dialog:bias_key_confirm.yes", a.x, a.y, b.x, b.y);
     }
     ImGui::SameLine();
     if (ImGui::Button(trId("Cancel##bias_key_confirm"))) {

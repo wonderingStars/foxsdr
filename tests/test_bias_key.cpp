@@ -168,11 +168,66 @@ void testPlace() {
     std::printf("    %d bar widths and layouts checked\n", checked);
 }
 
+// REPAIR ROUND 1, F1: the memory is PER RADIO.
+void testMemory() {
+    std::printf("  the memory: per radio, an on only for a radio named by serial\n");
+    using cascade::gui::biasTeeRecalled;
+    using cascade::gui::biasTeeRemember;
+    BiasTeePanel p;
+    // An on for HackRF A is A's alone.
+    biasTeeRemember(p, "hackrf", "serial=A1", true);
+    CHECK(biasTeeRecalled(p, "hackrf", "serial=A1") == 1);
+    CHECK(biasTeeRecalled(p, "hackrf", "serial=B2") == -1);  // same family, other radio
+    CHECK(biasTeeRecalled(p, "airspy", "serial=A1") == -1);  // other family, same serial
+    CHECK(biasTeeRecalled(p, "hackrf", "index=0") == -1);    // a position is not A
+    // The key is the serial, whatever else the args carry.
+    CHECK(biasTeeRecalled(p, "hackrf", "serial=A1,foo=bar") == 1);
+    // An off overwrites it.
+    biasTeeRemember(p, "hackrf", "serial=A1", false);
+    CHECK(biasTeeRecalled(p, "hackrf", "serial=A1") == 0);
+    // A radio named by position: an ON is never kept - and it forgets any
+    // earlier entry - while an OFF is.
+    biasTeeRemember(p, "rtlsdr", "index=0", false);
+    CHECK(biasTeeRecalled(p, "rtlsdr", "index=0") == 0);
+    biasTeeRemember(p, "rtlsdr", "index=0", true);
+    CHECK(biasTeeRecalled(p, "rtlsdr", "index=0") == -1);
+    biasTeeRemember(p, "hackrf", "", true);
+    CHECK(biasTeeRecalled(p, "hackrf", "") == -1);
+    // The cap: a new radio past it is not remembered (errs towards no power);
+    // one already in the memory can still change.
+    BiasTeePanel full;
+    for (std::size_t i = 0; i < cascade::core::kBiasTeeMemoryCap; ++i) {
+        biasTeeRemember(full, "hackrf", "serial=" + std::to_string(i), true);
+    }
+    CHECK(full.remembered.size() == cascade::core::kBiasTeeMemoryCap);
+    biasTeeRemember(full, "hackrf", "serial=new", true);
+    CHECK(biasTeeRecalled(full, "hackrf", "serial=new") == -1);
+    biasTeeRemember(full, "hackrf", "serial=0", false);
+    CHECK(biasTeeRecalled(full, "hackrf", "serial=0") == 0);
+}
+
+// REPAIR ROUND 1, F4: the stand-in only in a bounded run.
+void testStandInOnlyInABoundedRun() {
+    std::printf("  the stand-in: bounded runs only\n");
+    using cascade::gui::BiasStandIn;
+    using cascade::gui::biasStandInFor;
+    CHECK(biasStandInFor("accept", true) == BiasStandIn::Accept);
+    CHECK(biasStandInFor("refuse", true) == BiasStandIn::Refuse);
+    // AN INTERACTIVE LAUNCH IGNORES THE VARIABLE, whatever it says.
+    CHECK(biasStandInFor("accept", false) == BiasStandIn::None);
+    CHECK(biasStandInFor("refuse", false) == BiasStandIn::None);
+    CHECK(biasStandInFor(nullptr, true) == BiasStandIn::None);
+    CHECK(biasStandInFor("", true) == BiasStandIn::None);
+    CHECK(biasStandInFor("yes", true) == BiasStandIn::None);
+}
+
 }  // namespace
 
 int main() {
     std::printf("test_bias_key\n");
     testGate();
     testPlace();
+    testMemory();
+    testStandInOnlyInABoundedRun();
     return testSummary("test_bias_key");
 }

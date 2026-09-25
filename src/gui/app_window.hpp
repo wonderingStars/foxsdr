@@ -2032,13 +2032,11 @@ private:
     // drivers that has one and can say so (see withBiasTee in
     // gui/bias_tee.hpp for which, and for why this is not a DeviceSource
     // method). `shown` is the checkbox and is always the driver's READBACK;
-    // `other` is AppConfig::nativeBiasT (the six non-RTL radios' one setting)
-    // and rtlArgs/rtlOn are AppConfig::rtlBiasTArgs/rtlBiasT (the RTL-SDR's,
-    // tied to one dongle). All three memories are seeded at restore, applied
-    // by adoptDeviceMirrors after every open through biasTeeAfterOpen, and
-    // changed only by a tick (biasTeeTicked) or, for `other`, by the readback
-    // after a non-RTL open - exactly as deviceBiasT_ was before the RTL-SDR
-    // joined.
+    // `remembered` is AppConfig::biasTee, the memory PER RADIO (driver and
+    // serial) for every family. It is seeded at restore, applied by
+    // adoptDeviceMirrors after every open through biasTeeAfterOpen - to that
+    // radio only - and changed only when the user switches a radio, with the
+    // checkbox or the deck's key (biasTeeTicked).
     cascade::gui::BiasTeePanel biasTeePanel_;
 
     // --- THE DECK'S BIAS TEE KEY (2026-09-25, app_window_bias_key.cpp) --------
@@ -2079,11 +2077,12 @@ private:
     // every change, so tests/test_theme_census.cpp can place the key in every
     // theme and a capture can show it off, on and refused off the generator.
     // It never touches a radio: the moment a real one with a bias tee is open,
-    // that radio's readback is what the key shows.
-    enum class BiasStandIn { None, Accept, Refuse };
-    static BiasStandIn biasStandIn();
+    // that radio's readback is what the key shows. READ ONLY BY run() FOR A
+    // BOUNDED (--frames) RUN (gui::biasStandInFor), like FOXSDR_INPUT_SCRIPT:
+    // an interactive launch never has a stand-in.
+    cascade::gui::BiasStandIn biasStandIn_ = cascade::gui::BiasStandIn::None;
     bool biasStandInActive() const {
-        return biasStandIn() != BiasStandIn::None && !biasTeeReachable();
+        return biasStandIn_ != cascade::gui::BiasStandIn::None && !biasTeeReachable();
     }
     bool biasStandInOn_ = false;
 

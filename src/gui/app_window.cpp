@@ -591,8 +591,10 @@ void applyWindowIcon(GLFWwindow* window) {
 // accident, and tests/test_config.cpp asks this function directly.
 bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppConfig& b) {
     return a.sourceKind == b.sourceKind && a.soapyArgs == b.soapyArgs &&
-           a.nativeArgs == b.nativeArgs && a.nativeBiasT == b.nativeBiasT &&
-           a.rtlBiasTArgs == b.rtlBiasTArgs && a.rtlBiasT == b.rtlBiasT &&
+           a.nativeArgs == b.nativeArgs &&
+           // The per-radio bias tee memory: switched by the checkbox and the
+           // deck's key, neither of which saves on its own.
+           a.biasTee == b.biasTee &&
            // The per-radio converters: set in the Source section, which calls
            // no save of its own.
            a.converters == b.converters &&
@@ -1391,6 +1393,9 @@ int AppWindow::run(int frames) {
     if (frames >= 0) {
         const char* hook = std::getenv("CASCADE_PLUGIN_TEST");
         if (hook != nullptr && *hook != '\0') { pluginTestHook_ = hook; }
+        // The deck's bias tee stand-in (gui/bias_tee.hpp, biasStandInFor):
+        // bounded runs only, for the same reason as the script below.
+        biasStandIn_ = cascade::gui::biasStandInFor(std::getenv("FOXSDR_FORCE_BIAS_KEY"), true);
         // The scripted pointer (gui/input_script.hpp). Bounded runs only, so
         // an interactive session can never be driven by a stray variable.
         if (const char* script = std::getenv("FOXSDR_INPUT_SCRIPT");
@@ -4788,6 +4793,8 @@ void AppWindow::drawToolbar() {
         cascade::gui::census::note("deck:bias");
         cascade::gui::census::rect("deck:bias", kTL.x, std::min(kTL.y, capY), capR,
                                    std::max(kTL.y + kSize, capY + bpx));
+        // Its lamp was lit on some frame of the run (tests/test_bias_key_run).
+        if (bk.shown) { cascade::gui::census::note("deck:bias.lit"); }
         // THE CHECKBOX'S OWN WARNING, over the key and over its caption.
         if (keyHovered || ImGui::IsMouseHoveringRect(ImVec2(capX, capY), ImVec2(capR, capY + bpx))) {
             ImGui::SetTooltip(
@@ -9150,12 +9157,13 @@ void AppWindow::adoptDeviceMirrors(cascade::source::DeviceSource& dev, const std
 
     // THE BIAS TEE, AFTER THE DEVICE IS UP, and only when the radio has one
     // this panel can reach. The six non-RTL drivers switch it OFF as part of
-    // open(), so their saved setting is re-applied here or a mast-head
-    // amplifier would go dark on every launch; an RTL-SDR gets back only what
-    // was remembered for THAT dongle, and never an "on" on a dongle with no
-    // EEPROM. The checkbox then shows the READBACK. A radio without one
-    // leaves every remembered setting alone. The whole rule, and why, is
-    // biasTeeAfterOpen in gui/bias_tee.hpp.
+    // open(), so a remembered "on" is re-applied here or a mast-head
+    // amplifier would go dark on every launch - but only THIS radio's own,
+    // by driver and serial; an RTL-SDR gets back only what was remembered for
+    // THAT dongle, and never an "on" on a dongle with no EEPROM. The checkbox
+    // then shows the READBACK. A radio without one leaves every remembered
+    // setting alone. The whole rule, and why, is biasTeeAfterOpen in
+    // gui/bias_tee.hpp.
     biasTeeAfterOpen(biasTeePanel_, dev, args);
 
     // THE PER-RADIO SWITCHES, READ AND NOT WRITTEN. Unlike the bias tee these
@@ -23359,11 +23367,9 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     // by the next save. adoptDeviceMirrors is what applies it to a radio that
     // does open - every one of these drivers switches the bias tee off during
     // open(), so it has to be re-applied afterwards or a mast-head amplifier
-    // goes dark on every launch. The RTL-SDR's memory rides beside it: which
-    // dongle, and which way (gui/bias_tee.hpp says why it is separate).
-    biasTeePanel_.other = cfg.nativeBiasT;
-    biasTeePanel_.rtlArgs = cfg.rtlBiasTArgs;
-    biasTeePanel_.rtlOn = cfg.rtlBiasT;
+    // goes dark on every launch. It is PER RADIO (gui/bias_tee.hpp,
+    // BiasTeePanel::remembered): each radio gets back only its own.
+    biasTeePanel_.remembered = cfg.biasTee;
     // THE PLUTO'S ADDRESS IS SEEDED HERE TOO, and it has to be before the
     // scanNative() further down: that is what builds the Pluto's row, the
     // row's args are "uri=" plus this box, and the restore below finds the
@@ -24065,9 +24071,7 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     // one that could ever fall back. See AppConfig::nativeArgs.
     cfg.soapyArgs = src.soapyArgs;
     cfg.nativeArgs = src.nativeArgs;
-    cfg.nativeBiasT = biasTeePanel_.other;
-    cfg.rtlBiasTArgs = biasTeePanel_.rtlArgs;
-    cfg.rtlBiasT = biasTeePanel_.rtlOn;
+    cfg.biasTee = biasTeePanel_.remembered;
     // Every radio's converter, including those not open now: a converter is
     // part of how that radio is cabled, and must survive a session without it.
     cfg.converters = converters_;

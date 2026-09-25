@@ -11,9 +11,11 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
+#include <map>
 #include <string>
 #include <vector>
 
+#include "core/bias_tee_memory.hpp"
 #include "source/airspy_source.hpp"
 #include "source/airspyhf_source.hpp"
 #include "source/device_source.hpp"
@@ -82,7 +84,7 @@ bool withBiasTee(cascade::source::DeviceSource* dev, Fn&& fn) {
     return false;
 }
 
-// THE PANEL'S STATE: what the box shows, and the two memories behind it.
+// THE PANEL'S STATE: what the box shows, and the memory behind it.
 //
 //   present - draw the box at all (the open radio has a bias tee we reach)
 //   shown   - the box. ALWAYS the driver's readback, never the request: a
@@ -90,28 +92,59 @@ bool withBiasTee(cascade::source::DeviceSource* dev, Fn&& fn) {
 //             because a ticked box over a port with no power on it (or an
 //             unticked one over a port that has) is the lie the antenna combo
 //             was fixed for.
-//   other   - AppConfig::nativeBiasT: the one remembered setting for the six
-//             other radios, applied after each of their opens exactly as
-//             before the RTL-SDR joined (see config.hpp for why it is one bool)
-//   rtlArgs / rtlOn - AppConfig::rtlBiasTArgs / rtlBiasT: the RTL-SDR's OWN
-//             memory - which dongle the user last ticked or unticked, by its
-//             saved args, and which way.
+//   remembered - AppConfig::biasTee: PER RADIO, keyed by
+//             core::biasTeeRadioKey (the driver and the serial), what the user
+//             last switched each radio to and the radio accepted.
 //
-// WHY THE RTL-SDR HAS A SEPARATE MEMORY rather than sharing `other`. Sharing
-// it would carry an "on" ticked for a HackRF on the bench straight onto
-// whatever dongle is opened next, and the cheapest dongles - the ones with no
-// bias-tee circuit worth the name - are exactly the ones most likely to be
-// plugged into something that does not expect 4.5 V. And it would work the
-// other way too: an evening on an RTL-SDR would overwrite the HackRF's
-// setting with the dongle's readback, and the user's mast-head amplifier
-// would be dark when they went back to it.
+// ONE MEMORY PER RADIO, FOR EVERY FAMILY (repair round 1 of the deck key,
+// 2026-09-25). There used to be two: nativeBiasT, ONE bool that every HackRF,
+// Airspy, Airspy HF+, SDRplay, Mirics and RX888 opened with - so an "on" given
+// for the mast-head amplifier behind one radio put 4.5 V on the next radio of
+// any of those families at its open, silently, this launch and every later
+// one - and the RTL-SDR's own slot, which held one dongle (switching a second
+// dongle off forgot the first dongle's "on"). Now a radio the user switched
+// on is switched on again at ITS OWN next open, whether later this session or
+// at a later launch, and no other radio ever inherits it. What is put back and
+// when is biasTeeAfterOpen's; what is written and when is biasTeeRemember's.
 struct BiasTeePanel {
     bool present = false;
     bool shown = false;
-    bool other = false;
-    std::string rtlArgs;
-    bool rtlOn = false;
+    std::map<std::string, bool> remembered;
 };
+
+// WHAT A SWITCH THE RADIO ACCEPTED WRITES INTO THE MEMORY, for the radio
+// `kind` opened with `args`, now reading back `on`:
+//   * an ON is remembered only for a radio named by SERIAL. A radio known only
+//     by its place in a USB walk ("index=0") cannot be told from the next one
+//     in the same socket, so its "on" is not kept - it opens as its driver
+//     opens it every time (off; an RTL-SDR whose EEPROM says the maker wired
+//     it on, on - that is the dongle's own rule, not a memory) - and any
+//     earlier entry for it is dropped;
+//   * an OFF is remembered for any radio. Switching power off is never the
+//     dangerous direction, and it is what keeps an RTL-SDR whose EEPROM forces
+//     the bias tee on OFF at its next open after the user switched it off.
+// The map is capped (core::kBiasTeeMemoryCap): a new radio past the cap is not
+// remembered, which errs towards no power.
+inline void biasTeeRemember(BiasTeePanel& p, const std::string& kind, const std::string& args,
+                            bool on) {
+    const std::string key = cascade::core::biasTeeRadioKey(kind, args);
+    if (on && !cascade::core::biasTeeArgsNameARadio(args)) {
+        p.remembered.erase(key);
+        return;
+    }
+    if (p.remembered.count(key) == 0 && p.remembered.size() >= cascade::core::kBiasTeeMemoryCap) {
+        return;
+    }
+    p.remembered[key] = on;
+}
+
+// What the memory holds for this radio: 1 on, 0 off, -1 nothing.
+inline int biasTeeRecalled(const BiasTeePanel& p, const std::string& kind,
+                           const std::string& args) {
+    const auto it = p.remembered.find(cascade::core::biasTeeRadioKey(kind, args));
+    if (it == p.remembered.end()) { return -1; }
+    return it->second ? 1 : 0;
+}
 
 // DOES THIS ARGS STRING NAME ONE DONGLE, rather than a place in a list?
 // "serial=XXXXXXXX" names the dongle whose EEPROM carries that serial;
@@ -158,7 +191,11 @@ enum class RtlBiasTeeAtOpen {
 // A RESIDUAL, stated rather than hidden: two dongles programmed with the SAME
 // serial (many ship as 00000001) are indistinguishable here, exactly as they
 // are to the saved-radio restore itself - which is why rtl_eeprom -s to give
-// each dongle its own serial is the fix, not anything this rule could do.
+// each dongle its own serial is the fix, not anything this rule could do. The
+// per-radio memory (core::biasTeeRadioKey, the driver and the serial) keeps
+// that residual exactly: two dongles sharing a serial share ONE entry, so an
+// "on" remembered for one is applied to the other at its open. The same holds
+// for any two radios of one family that report the same serial.
 inline RtlBiasTeeAtOpen rtlBiasTeeAtOpen(const std::string& rememberedArgs, bool rememberedOn,
                                          const std::string& openedArgs, bool eepromValid) {
     if (rememberedArgs.empty() || rememberedArgs != openedArgs) {
@@ -176,22 +213,28 @@ inline RtlBiasTeeAtOpen rtlBiasTeeAtOpen(const std::string& rememberedArgs, bool
 //
 // Every one of the other drivers switches its bias tee OFF as part of open()
 // - deliberately, so that a previous application cannot leave power on an
-// antenna port with nothing on screen saying so - which means their saved
-// setting has to be re-applied here or a mast-head amplifier would go dark on
-// every launch. The RTL-SDR follows rtlBiasTeeAtOpen instead, and an open
-// never rewrites its memory: that changes only when the user ticks the box.
+// antenna port with nothing on screen saying so - which means a remembered
+// "on" has to be re-applied here or a mast-head amplifier would go dark on
+// every launch. It is applied only from THIS radio's own entry, and only when
+// the args name it by serial (biasTeeRemember never writes an "on" for any
+// other, but a hand-edited file could). The RTL-SDR follows rtlBiasTeeAtOpen
+// against its own entry, because its EEPROM has an opinion the others'
+// firmware does not. An open never rewrites the memory: that changes only when
+// the user switches the radio, with the checkbox or the deck's key.
 //
-// A RADIO WITHOUT ONE LEAVES BOTH MEMORIES ALONE. The checkbox is not drawn
-// for it, so nothing on screen can claim power that is not there - but a user
-// who ticked it for the HackRF on their bench and then spent an evening on a
-// file or a Soapy radio should not find it unticked when they go back.
+// A RADIO WITHOUT ONE LEAVES THE MEMORY ALONE. The checkbox is not drawn for
+// it, so nothing on screen can claim power that is not there - and a user who
+// switched it on for the HackRF on their bench and then spent an evening on a
+// file or a Soapy radio should not find it off when they go back.
 inline void biasTeeAfterOpen(BiasTeePanel& p, cascade::source::DeviceSource& dev,
                              const std::string& args) {
     p.shown = false;
     p.present = withBiasTee(&dev, [](auto&) { return true; });
     if (!p.present) { return; }
+    const int recalled = biasTeeRecalled(p, dev.driverKey(), args);
     if (auto* rtl = dynamic_cast<cascade::source::RtlSdrSource*>(&dev)) {
-        switch (rtlBiasTeeAtOpen(p.rtlArgs, p.rtlOn, args, rtl->eepromValid())) {
+        switch (rtlBiasTeeAtOpen(recalled < 0 ? std::string() : args, recalled == 1, args,
+                                 rtl->eepromValid())) {
             case RtlBiasTeeAtOpen::ApplyOn: rtl->setBiasT(true); break;
             case RtlBiasTeeAtOpen::ApplyOff: rtl->setBiasT(false); break;
             case RtlBiasTeeAtOpen::LeaveAsOpened: break;
@@ -199,31 +242,25 @@ inline void biasTeeAfterOpen(BiasTeePanel& p, cascade::source::DeviceSource& dev
         p.shown = rtl->biasT();
         return;
     }
-    withBiasTee(&dev, [&p](auto& d) {
-        d.setBiasT(p.other);
-        p.other = d.biasT();
-        p.shown = p.other;
+    const bool on = recalled == 1 && cascade::core::biasTeeArgsNameARadio(args);
+    withBiasTee(&dev, [&p, on](auto& d) {
+        d.setBiasT(on);
+        p.shown = d.biasT();
         return true;
     });
 }
 
-// THE USER TICKED OR UNTICKED THE BOX. The box then shows the readback, and
-// the memory for this kind of radio records what the radio actually did - on
-// a refusal, neither changes, and the reason goes to `error`.
+// THE USER SWITCHED IT - the Source panel's checkbox or the deck's key, which
+// both come here. The box and the key then show the readback, and the memory
+// for THIS radio records what the radio actually did (biasTeeRemember); on a
+// refusal nothing is remembered, and the reason goes to `error`.
 inline void biasTeeTicked(BiasTeePanel& p, cascade::source::DeviceSource* dev,
                           const std::string& args, bool want, std::string* error) {
     withBiasTee(dev, [&](auto& d) {
         const bool accepted = d.setBiasT(want);
         if (!accepted && error != nullptr) { *error = d.lastError(); }
         p.shown = d.biasT();
-        if (dynamic_cast<cascade::source::RtlSdrSource*>(dev) != nullptr) {
-            if (accepted) {
-                p.rtlArgs = args;
-                p.rtlOn = p.shown;
-            }
-        } else {
-            p.other = p.shown;
-        }
+        if (accepted) { biasTeeRemember(p, dev->driverKey(), args, p.shown); }
         return true;
     });
 }
@@ -260,12 +297,44 @@ inline void biasTeeTicked(BiasTeePanel& p, cascade::source::DeviceSource* dev,
 //     once - but only for a radio named by its SERIAL. "index=0" names a place
 //     in a USB walk, which is a different radio the day a second one is
 //     plugged in (the same argument rtlArgsNameADongle makes), so a radio known
-//     only by position is asked every time. Nothing is saved: the next launch
-//     asks again.
+//     only by position is asked every time. The confirmation itself is not
+//     saved: it lasts the session.
+//
+// WHAT AN "ON" LEAVES BEHIND IS NOT THE GATE'S BUSINESS, and it is the same
+// whichever control switched it: biasTeeTicked writes this radio's own entry
+// in the per-radio memory (biasTeeRemember), so a serial-named radio switched
+// on comes up on again at its own next open - this launch or a later one -
+// until the user switches it off, and no other radio ever inherits it. The
+// dialog says exactly that (or, for a radio known only by position, that it
+// will open off next time).
+//
+// WHY THE CONFIRMATION IS PER SESSION AND NOT "PER REMEMBERED RADIO". A radio
+// whose "on" is remembered is already on when it opens, so the key is lit and
+// a press switches it OFF, which is never asked about; a remembered radio the
+// key finds dark is one the user switched off (which the memory records) or
+// one whose driver refused the "on" at open. Either way the memory has nothing
+// to vouch for, so it cannot stand in for the question; the session gate only
+// spares a user toggling an amplifier on and off while they check a cable
+// from being asked every time.
 //
 // No ImGui here: AppWindow draws the key and the dialog, and these functions
 // decide what a press and an answer DO, so tests/test_bias_key.cpp can hold
 // them without an open frame.
+// THE CENSUS AND CAPTURE STAND-IN (FOXSDR_FORCE_BIAS_KEY=accept|refuse): with
+// no radio with a bias tee open, the key is drawn over a stand-in that takes
+// or refuses every change, so the theme census can place the key in every
+// theme and a test can press it. BOUNDED RUNS ONLY (--frames), like
+// FOXSDR_INPUT_SCRIPT: an interactive launch ignores the variable, so a stray
+// environment can never put a key on a user's deck that switches nothing.
+enum class BiasStandIn { None, Accept, Refuse };
+inline BiasStandIn biasStandInFor(const char* value, bool boundedRun) {
+    if (!boundedRun || value == nullptr) { return BiasStandIn::None; }
+    const std::string v(value);
+    if (v == "accept") { return BiasStandIn::Accept; }
+    if (v == "refuse") { return BiasStandIn::Refuse; }
+    return BiasStandIn::None;
+}
+
 struct BiasKeyGate {
     // The radios ("kind|args") whose first switch-on was confirmed this
     // session. Only serial-named radios are ever added.
@@ -282,15 +351,17 @@ enum class BiasKeyAction {
     Ask,        // the dialog opens; nothing is switched yet
 };
 
-// The identity a confirmation is remembered under - the same "kind|args"
-// shape the converter memory keys radios by.
+// The identity a confirmation is remembered under - the per-radio memory's own
+// key (core::biasTeeRadioKey: the driver and the serial), so the gate and the
+// memory cannot disagree about which radio is which.
 inline std::string biasKeyRadio(const std::string& kind, const std::string& args) {
-    return kind + "|" + args;
+    return cascade::core::biasTeeRadioKey(kind, args);
 }
 
-// Whether a confirmation for this radio may be remembered for the session.
+// Whether this radio is named by serial: a confirmation may then be kept for
+// the session, and an "on" is kept in the per-radio memory (biasTeeRemember).
 inline bool biasKeyMayRemember(const std::string& args) {
-    return !cascade::source::argValue(args, "serial").empty();
+    return cascade::core::biasTeeArgsNameARadio(args);
 }
 
 inline bool biasKeyConfirmedFor(const BiasKeyGate& g, const std::string& radio) {

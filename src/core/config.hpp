@@ -154,27 +154,25 @@ struct AppConfig {
     // safe answer for a receiver that may be plugged into something that does
     // not expect power.
     //
-    // ONE FIELD RATHER THAN ONE PER DRIVER: the radios that have a bias tee
-    // here (HackRF, Airspy R2/Mini, Airspy HF+, an RSP that has one, a Mirics
-    // and an RX888) are never open at once - exactly one source is installed
-    // in the pipeline at a time - and a per-kind table would record settings
-    // for radios that are not on the bench and cannot be seen on screen. The
-    // setting belongs to "the radio this receiver is set up around", which is
-    // what nativeArgs names.
-    bool nativeBiasT = false;
-    // THE RTL-SDR's BIAS TEE, REMEMBERED AGAINST ONE DONGLE, and kept apart
-    // from nativeBiasT on purpose. rtlBiasTArgs is the native args
-    // ("serial=00000001") of the dongle the user last ticked or unticked the
-    // box on, rtlBiasT which way. After an open, an "off" is put back on that
-    // dongle, and an "on" only when it is named by SERIAL and its EEPROM is
-    // valid - a dongle with no EEPROM has no identity to be "the same dongle"
-    // by, so it is switched on only by a tick in the session. Sharing
-    // nativeBiasT would have carried a HackRF's "on" onto whatever cheap
-    // dongle was opened next. The rule and its reasons: gui/bias_tee.hpp,
-    // rtlBiasTeeAtOpen. Both default to "nothing remembered", which is what
-    // every earlier config loads as.
-    std::string rtlBiasTArgs;
-    bool rtlBiasT = false;
+    // PER RADIO, FOR EVERY FAMILY (repair round 1 of the deck's bias tee key,
+    // 2026-09-25): radio key (core::biasTeeRadioKey - "<kind>|serial=<serial>",
+    // or "<kind>|<args>" for a radio with no serial) -> what the user last
+    // switched it to and the radio accepted. Stored as the object "biasTee".
+    // An "on" is only ever written for a serial-named radio, and is put back
+    // only on that radio at its own open; an "off" may be kept for any radio
+    // (it keeps an RTL-SDR whose EEPROM forces the bias tee on, off). The rules:
+    // gui/bias_tee.hpp (biasTeeRemember, biasTeeAfterOpen). EMPTY BY DEFAULT.
+    //
+    // WHAT IT REPLACED, AND WHAT A LOAD DOES WITH IT. "nativeBiasT" was ONE
+    // bool that every HackRF, Airspy, Airspy HF+, SDRplay, Mirics and RX888
+    // opened with, so an "on" given for one radio's mast-head amplifier
+    // powered the next radio of any of those families. It is NOT carried
+    // over: a load reads past it and the next save drops it, which errs
+    // towards no power (a user who wants it on switches it on once more, and
+    // from then on it is that radio's own). "rtlBiasTArgs"/"rtlBiasT" - the
+    // RTL-SDR's memory of ONE dongle, already per radio - IS carried over into
+    // this map, under the same rules (an "on" only for a serial-named dongle).
+    std::map<std::string, bool> biasTee;
     // THE UP- OR DOWN-CONVERTER IN FRONT OF EACH RADIO (0.99.36), remembered
     // per radio like the RTL-SDR's bias tee: radio key (core::converterRadioKey
     // - "siggen", "file", or "<kind>|<args>") -> mode, local oscillator and
