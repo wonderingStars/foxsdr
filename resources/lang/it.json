@@ -145,6 +145,7 @@
   "A patch has at most %zu radios.": "Una patch può avere al massimo %zu radio.",
   "A plan-position indicator for aircraft: range rings and bearing\nticks around the receiver, with a detail panel for the one you\nselect. Takes the whole window; there is a way back on its own bar.": "Un indicatore PPI per gli aerei: anelli di distanza e tacche di\nrilevamento attorno al ricevitore, con un pannello di dettagli per\nquello selezionato. Occupa tutta la finestra; si torna indietro dalla sua barra.",
   "A radio cannot tune to %s - type a centre above 0 Hz.": "Una radio non può sintonizzarsi su %s - inserisci un centro sopra 0 Hz.",
+  "A sound card takes a down-converter only: the up-converter set for this card is not used.": "Una scheda audio accetta solo un convertitore discendente: il convertitore ascendente impostato per questa scheda non viene usato.",
   "A specific address": "Un indirizzo specifico",
   "A tracker plugin reports the positions a map draws - install one from the plugin store above.": "Un plugin tracker fornisce le posizioni che la mappa disegna - installane uno dallo store dei plugin qui sopra.",
   "A window of its own": "Una finestra propria",

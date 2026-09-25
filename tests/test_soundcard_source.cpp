@@ -2032,19 +2032,25 @@ void testSameCardReopen() {
     // THE APPLICATION DOES IT IN THAT ORDER, read from its source (AppWindow
     // is not reachable from a unit test): the decision, then the release
     // through the pipeline, then the worker, which opens with the old
-    // settings to fall back on.
+    // settings to fall back on. The release is installSource(nullptr) since
+    // the merge with 0.99.37 (every source swap goes through installSource,
+    // which ends a recording first - test_stop_ends_recordings), and the
+    // worker's open also takes the backend factory (the test seam).
     {
         const std::string text = readSource("src/gui/app_window_soundcard.cpp");
         const std::size_t fn = text.find("void AppWindow::launchSoundCardOpen(");
         const std::size_t decide =
             fn == std::string::npos ? std::string::npos : text.find("soundCardReopenReleasesFirst(", fn);
         const std::size_t releaseAt =
-            decide == std::string::npos ? std::string::npos : text.find("pipeline_.setSource(nullptr);", decide);
+            decide == std::string::npos ? std::string::npos : text.find("installSource(nullptr);", decide);
         const std::size_t worker = fn == std::string::npos ? std::string::npos : text.find("std::async(", fn);
+        const std::size_t openCall =
+            worker == std::string::npos ? std::string::npos : text.find("openSoundCardOrRestore(", worker);
         const std::size_t fallback =
-            worker == std::string::npos
+            openCall == std::string::npos
                 ? std::string::npos
-                : text.find("openSoundCardOrRestore(settings, r.devices, release ? &previous : nullptr)", worker);
+                : text.find("settings, r.devices, release ? &previous : nullptr", openCall);
+        CHECK(fallback == std::string::npos || fallback - openCall < 120);
         std::printf("launchSoundCardOpen: decide@%zu release@%zu worker@%zu fallback@%zu\n", decide, releaseAt,
                     worker, fallback);
         CHECK(decide != std::string::npos && releaseAt != std::string::npos && worker != std::string::npos);

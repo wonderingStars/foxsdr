@@ -145,6 +145,7 @@
   "A patch has at most %zu radios.": "パッチに使える SDR は最大 %zu 台です。",
   "A plan-position indicator for aircraft: range rings and bearing\nticks around the receiver, with a detail panel for the one you\nselect. Takes the whole window; there is a way back on its own bar.": "航空機用の PPI 表示です。受信機を中心とした距離環と方位目盛、\n選択した機体の詳細パネルを表示します。\nウィンドウ全体を使います。戻るボタンは専用のバーにあります。",
   "A radio cannot tune to %s - type a centre above 0 Hz.": "受信機は %s に同調できません。0 Hz より上の中心周波数を入力してください。",
+  "A sound card takes a down-converter only: the up-converter set for this card is not used.": "サウンドカードに使えるのはダウンコンバーターだけです。このカードに設定されたアップコンバーターは使用されません。",
   "A specific address": "特定のアドレス",
   "A tracker plugin reports the positions a map draws - install one from the plugin store above.": "マップに描画する位置はトラッカープラグインが報告します。上のプラグインストアからインストールしてください。",
   "A window of its own": "専用ウィンドウ",

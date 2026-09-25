@@ -9,6 +9,7 @@
 #include <string>
 
 #include "core/config.hpp"
+#include "core/freq_converter.hpp"
 #include "source/soundcard_source.hpp"
 
 namespace cascade::gui {
@@ -60,6 +61,77 @@ inline std::string soundCardArgsForPatch(const std::string& keyArgs,
         s.hostApi = api;
     }
     return cascade::source::soundCardArgs(s);
+}
+
+// THE CONVERTER IN FRONT OF A SOUND CARD (0.99.37's converter, merged in).
+//
+// KEPT PER CARD, under the same key a patch radio on that card has -
+// core::converterRadioKey("soundcard", "device=...,api=...") - so two cards
+// never share one setting (the receiver's key used to be "soundcard|" for
+// every card, because a card leaves deviceArgs_ empty).
+//
+// WHAT A CARD CAN HAVE depends on its format:
+//   - I/Q (stereo): NOTHING. The centre typed in the Source section is where
+//     the external receiver is tuned - it already IS the translation from
+//     the card's baseband to the air. A converter on top would store the
+//     radio frequency in the source while the section and the config kept
+//     the typed air one, and the next launch would translate it twice.
+//   - Real (mono): a DOWN-converter only. The card samples 0 .. rate/2 (a few
+//     tens of kHz); an up-converter's output is its LO and above - VHF -
+//     which no sound card samples. A stored Up (another session, a key
+//     shared with a patch radio) reads as Off, and the section says why.
+inline std::string soundCardConverterKey(const std::string& device, const std::string& hostApi) {
+    return cascade::core::converterRadioKey("soundcard",
+                                            cascade::source::soundCardDeviceArgs(device, hostApi));
+}
+
+// The card's device args out of a converter key; false for any other key.
+inline bool soundCardKeyArgs(const std::string& key, std::string& args) {
+    static const std::string prefix = cascade::core::converterRadioKey("soundcard", "");
+    if (key.compare(0, prefix.size(), prefix) != 0) { return false; }
+    args = key.substr(prefix.size());
+    return true;
+}
+
+struct SoundCardConverter {
+    cascade::core::ConverterSetting effective;  // what the pipeline applies
+    bool offered = true;                        // the Converter controls are drawn
+    bool upRefused = false;                     // a stored up-converter reads as Off
+};
+
+inline SoundCardConverter soundCardConverter(const cascade::core::ConverterSetting& stored,
+                                             cascade::source::SoundCardFormat format) {
+    SoundCardConverter c;
+    c.effective = stored;
+    if (format == cascade::source::SoundCardFormat::IqStereo) {
+        c.effective.mode = cascade::core::ConverterMode::Off;
+        c.offered = false;
+        return c;
+    }
+    if (stored.mode == cascade::core::ConverterMode::Up) {
+        c.effective.mode = cascade::core::ConverterMode::Off;
+        c.upRefused = cascade::core::converterLoValid(stored.loHz);
+    }
+    return c;
+}
+
+// The format the card behind a converter key runs - or would open - in: the
+// running card's own when the receiver is on it; otherwise what a patch radio
+// on that card opens with (soundCardArgsForPatch: the section's settings for
+// the same card, real mono for any other).
+inline cascade::source::SoundCardFormat soundCardFormatForKey(
+    const std::string& keyArgs, bool receiverOnCard, const cascade::source::SoundCardSettings& live,
+    const cascade::source::SoundCardSettings& section) {
+    cascade::source::SoundCardSettings k;
+    if (!cascade::source::parseSoundCardArgs(keyArgs, k)) {
+        return cascade::source::SoundCardFormat::RealMono;
+    }
+    if (receiverOnCard && k.device == live.device && k.hostApi == live.hostApi) { return live.format; }
+    cascade::source::SoundCardSettings opened;
+    if (!cascade::source::parseSoundCardArgs(soundCardArgsForPatch(keyArgs, section), opened)) {
+        return cascade::source::SoundCardFormat::RealMono;
+    }
+    return opened.format;
 }
 
 // TUNING A SOURCE THAT HAS NO TUNER.

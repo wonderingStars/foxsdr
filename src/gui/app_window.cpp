@@ -7111,9 +7111,7 @@ void AppWindow::drawSourceSection() {
     // the section may be folded, and its chip then reads only "generator" -
     // true, and silent about the radio that did not open. The reason is in
     // the red line inside.
-    const bool radioNotOpen =
-        restoreKeep_.valid() && restoreKeep_.kind != "file" && device_ == nullptr &&
-        sourceKind_ == "siggen";
+    const bool radioNotOpen = radioNotOpenLit();
     const bool sourceOpen =
         benchSection(trId("Source"), true, sourceChip.c_str(),
                      (sourceFaulted || radioNotOpen) ? cascade::gui::theme::kAlarm
@@ -7200,8 +7198,12 @@ void AppWindow::drawSourceSection() {
     // had chosen that, and would disagree with the file this session is going
     // to write. No row is ticked in the list below, because none of them is
     // what is installed.
+    // Not while a sound card is opening either: the card is the one being
+    // brought back, and "(saved, not open)" would be the lamp's false alarm
+    // in words (gui::radioNotOpenLamp).
     const bool keepPreview = restoreKeep_.valid() && device_ == nullptr &&
-                             sourceKind_ == "siggen" && !restoreKeepLabel_.empty();
+                             sourceKind_ == "siggen" && !restoreKeepLabel_.empty() &&
+                             !soundCardOpenPending_;
     // "(not open)" in the preview itself, because the combo is the one place
     // a user looks to find out what the receiver is on, and the name alone
     // there would claim the radio was running.
@@ -8645,8 +8647,11 @@ void AppWindow::selectSource(int idx, std::optional<double> carryAirHz) {
     // screen says "Reconnect it and pick the source again" and picking it
     // must do exactly that: close the dead radio and open it again (0.99.36,
     // the 0c59853 review; gui::pickOpensRow). Every family, not only an RSP.
+    // A SOUND CARD that has stopped is the same promise, on its own row (it
+    // is never device_): the row picked again opens the card again.
+    const bool installedCardDead = installedSoundCardDead();
     const bool installedDead =
-        device_ != nullptr && (pipeline_.faulted() || device_->deviceDead());
+        (device_ != nullptr && (pipeline_.faulted() || device_->deviceDead())) || installedCardDead;
     if (!cascade::gui::pickOpensRow(idx, sourceSel_, installedDead)) { return; }
 
     // BUSY CHECK ON EVERY ROW, not just the device rows (adjudicated fix #4
@@ -8691,8 +8696,24 @@ void AppWindow::selectSource(int idx, std::optional<double> carryAirHz) {
     }
     if (idx == kSoundCardRow) {
         // The same for the sound card: its controls, and the list of inputs
-        // asked for on a worker the first time. Nothing opens until Open.
+        // asked for on a worker the first time. Nothing opens until Open -
+        // EXCEPT the installed card when it has died: picking its row again
+        // reopens it exactly as it was running (soundCardLive_), the same
+        // as picking a dead radio's row (gui::pickOpensRow). A card that
+        // was taken by another program, or stalled, can come back this way;
+        // one that was unplugged usually cannot until FoxSDR restarts
+        // (PortAudio lists inputs once per session - the card's own fault
+        // sentence says so), and the open's failure is then said as any
+        // other. The dead card is released first (launchSoundCardOpen, same
+        // card) and not waited for.
         sourceSel_ = kSoundCardRow;
+        if (installedCardDead) {
+            cascade::core::diagLogf("source: reopening the sound card %s (%s), which had stopped",
+                                    soundCardLive_.device.c_str(), soundCardLive_.hostApi.c_str());
+            soundCard_ = soundCardLive_;
+            launchSoundCardOpen(false, soundCardLive_);
+            return;
+        }
         if (!soundCardListed_) { scanSoundCards(); }
         return;
     }
@@ -8836,23 +8857,26 @@ void AppWindow::scanNative() {
     // 0.90.0 field report behind gui::deviceScanAllowed). So this runs on the
     // GUI thread, inline, whenever the list might be stale, including while a
     // radio of ours is streaming.
-    if (testHooks_.nativeScan != nullptr) {
-        // The test's list stands in for the USB walk (see testHooks_): no
-        // enumeration of any kind runs, and nothing is reported unbound.
-        nativeDevices_ = testHooks_.nativeScan();
-        nativeRowLabels_.clear();
-        for (const cascade::source::NativeDeviceInfo& d : nativeDevices_) {
-            nativeRowLabels_.push_back(d.label);
-        }
-        nativeUnbound_.clear();
-        return;
-    }
     //
     // ...AND THE SELECTION FOLLOWS THE RADIO, NOT THE INDEX (0.99.36). The
     // combo's selection is a row number, and this rebuilds the rows; one
     // that appears or vanishes moves every row after it. Keyed now, found
     // again at the end.
     const std::vector<cascade::gui::SourceRowKey> rowsBefore = sourceRowKeys();
+    if (testHooks_.nativeScan != nullptr) {
+        // The test's list stands in for the USB walk (see testHooks_): no
+        // enumeration of any kind runs, and nothing is reported unbound. The
+        // selection is followed exactly as after a real scan, so a test can
+        // move rows under it.
+        nativeDevices_ = testHooks_.nativeScan();
+        nativeRowLabels_.clear();
+        for (const cascade::source::NativeDeviceInfo& d : nativeDevices_) {
+            nativeRowLabels_.push_back(d.label);
+        }
+        nativeUnbound_.clear();
+        followSourceRowAfterRescan(rowsBefore);
+        return;
+    }
     nativeDevices_ = cascade::source::enumerateRtlSdr();
     for (cascade::source::NativeDeviceInfo& d : cascade::source::enumerateHackRf()) {
         nativeDevices_.push_back(std::move(d));
@@ -9036,10 +9060,14 @@ void AppWindow::scanNative() {
     }
     nativeUnbound_ = cascade::usb::enumerateUnbound(ids);
 
-    // THE SELECTION, FOUND AGAIN BY WHAT IT IS (see the top of this function).
+    followSourceRowAfterRescan(rowsBefore);
+}
+
+void AppWindow::followSourceRowAfterRescan(const std::vector<cascade::gui::SourceRowKey>& rowsBefore) {
+    // THE SELECTION, FOUND AGAIN BY WHAT IT IS (see the top of scanNative).
     // A native radio that is installed but was not the selected row (the combo
     // showed its live name, -1) is pointed at again when its row is back.
-    sourceSel_ = cascade::gui::refindSourceRow(rowsBefore, sourceSel_, sourceRowKeys());
+    sourceSel_ = cascade::gui::refindSourceRow(rowsBefore, sourceSel_, sourceRowKeys(), kNativeRowBase);
     if (sourceSel_ < 0 && device_ != nullptr && soapyView_ == nullptr) {
         for (std::size_t i = 0; i < nativeDevices_.size(); ++i) {
             if (nativeDevices_[i].driver == sourceKind_ && nativeDevices_[i].args == deviceArgs_) {
@@ -9061,6 +9089,11 @@ std::vector<cascade::gui::SourceRowKey> AppWindow::sourceRowKeys() const {
     keys.reserve(static_cast<std::size_t>(soapyRowBase()) + soapyDevices_.size());
     keys.push_back({"siggen", ""});
     keys.push_back({"file", ""});
+    // Row kSoundCardRow. Which card is not part of the row - the row is the
+    // sound card section, whatever card it is set to.
+    keys.push_back({"soundcard", ""});
+    static_assert(kSoundCardRow == 2 && kNativeRowBase == kSoundCardRow + 1,
+                  "sourceRowKeys pushes one key per fixed row, in combo order");
     for (const cascade::source::NativeDeviceInfo& d : nativeDevices_) {
         // THE PLUTO ROW BY ITS FAMILY ALONE: there is only ever one, and its
         // args are whatever the address box held when the list was built, so
@@ -9071,6 +9104,11 @@ std::vector<cascade::gui::SourceRowKey> AppWindow::sourceRowKeys() const {
         keys.push_back({"soapy", d.args});
     }
     return keys;
+}
+
+bool AppWindow::radioNotOpenLit() const {
+    return cascade::gui::radioNotOpenLamp(restoreKeep_, device_ != nullptr, sourceKind_,
+                                          soundCardOpenPending_);
 }
 
 void AppWindow::adoptDeviceMirrors(cascade::source::DeviceSource& dev, const std::string& kind,

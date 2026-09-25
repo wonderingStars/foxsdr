@@ -145,6 +145,7 @@
   "A patch has at most %zu radios.": "En patch har högst %zu radioapparater.",
   "A plan-position indicator for aircraft: range rings and bearing\nticks around the receiver, with a detail panel for the one you\nselect. Takes the whole window; there is a way back on its own bar.": "En PPI-skärm för flygplan: avståndsringar och bäringsstreck\nrunt mottagaren, med en detaljpanel för det flygplan du\nväljer. Tar hela fönstret; det finns en väg tillbaka på dess egen list.",
   "A radio cannot tune to %s - type a centre above 0 Hz.": "En radio kan inte ställas in på %s - skriv ett centrum över 0 Hz.",
+  "A sound card takes a down-converter only: the up-converter set for this card is not used.": "Ett ljudkort kan bara användas med en nedkonverterare: uppkonverteraren som är inställd för det här kortet används inte.",
   "A specific address": "En specifik adress",
   "A tracker plugin reports the positions a map draws - install one from the plugin store above.": "Ett spårningstillägg rapporterar positionerna som en karta ritar - installera ett från tilläggsbutiken ovan.",
   "A window of its own": "Ett eget fönster",

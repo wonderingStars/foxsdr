@@ -660,6 +660,11 @@ private:
         // Replaces scanNative's USB walk when set: the list it returns IS the
         // native device list, so no test ever enumerates the desk's radios.
         std::vector<cascade::source::NativeDeviceInfo> (*nativeScan)();
+        // Replaces PortAudio for the Source section's SOUND CARD when set:
+        // the list scanSoundCards asks for and every backend an open makes
+        // (tests/test_soundcard_app_paths.cpp), so no test lists or opens
+        // the desk's audio inputs.
+        std::shared_ptr<cascade::source::SoundCardBackend> (*soundCardBackend)();
     };
     // Set by the test before any AppWindow exists and never changed while one
     // does, so the worker threads that read makeDevice race with nothing.
@@ -1632,6 +1637,13 @@ private:
     // gui::refindSourceRow, which keeps the selection on the same radio when
     // a re-scan moves the rows (0.99.36).
     std::vector<cascade::gui::SourceRowKey> sourceRowKeys() const;
+    // The end of every native scan: the selection found again by what it
+    // names (rowsBefore = sourceRowKeys() before the list changed).
+    void followSourceRowAfterRescan(const std::vector<cascade::gui::SourceRowKey>& rowsBefore);
+
+    // The Source section's lamp for a saved source the generator is standing
+    // in for (0.99.36): lit while one is remembered and not open.
+    bool radioNotOpenLit() const;
 
     // Fills every panel mirror (rates, gains and their ranges, AGC, antenna)
     // from an open DeviceSource, priming the hardware where the panel has to
@@ -1982,6 +1994,9 @@ private:
     void drawSoundCardControls();
     // Enumerate on a worker; the list arrives through pollSoundCard().
     void scanSoundCards();
+    // Where a sound card backend comes from: PortAudio, or the test's fake
+    // (testHooks_.soundCardBackend). An empty factory means PortAudio.
+    static cascade::source::SoundCardSource::BackendFactory soundCardBackendFactory();
     // Open `settings` on a worker; installed by pollSoundCard() on success.
     // When they name the card that is RUNNING, it is released first (see
     // gui::soundCardReopenReleasesFirst) and reopened as it was if the new
@@ -1991,6 +2006,10 @@ private:
     void pollSoundCard();
     // At quit, the same grace-then-abandon as reapPendingDeviceOpen.
     void reapSoundCardWorkers();
+    // The installed source is a sound card that has stopped (unplugged,
+    // taken away, silent past its stall timer) - its own latch or the
+    // pipeline's. False for any other source.
+    bool installedSoundCardDead();
     // A tune asked of a source whose centre cannot move (a sound card): the
     // VFO moves inside the span instead. True when it handled the request.
     bool retuneFixedCentre(double centerHz);
@@ -2124,6 +2143,15 @@ private:
     // places that tune a source BEFORE it is installed (the restore at start
     // and the IQ file's Open).
     void drawConverterControls();
+    // The modes the Converter combo offers for the source installed, in the
+    // combo's order; EMPTY means the Converter controls are not drawn at all.
+    std::vector<cascade::core::ConverterMode> converterModesOffered() const;
+    // A sentence under the Converter controls about a setting that is stored
+    // for this source but cannot apply to it; "" when there is none.
+    std::string converterUnusableNote() const;
+    // The installed source's converter key before any alias (a sound card
+    // by its card - gui::soundCardConverterKey).
+    std::string converterRawKeyNow() const;
     std::string converterRadioKeyNow() const;
     cascade::core::ConverterSetting converterForKey(const std::string& radioKey) const;
     void applyConverterForSource();

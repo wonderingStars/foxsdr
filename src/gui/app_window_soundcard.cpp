@@ -59,12 +59,17 @@ std::string rateLabel(const SoundCardRate& r) {
 
 }  // namespace
 
+cascade::source::SoundCardSource::BackendFactory AppWindow::soundCardBackendFactory() {
+    if (testHooks_.soundCardBackend != nullptr) { return testHooks_.soundCardBackend; }
+    return {};
+}
+
 void AppWindow::scanSoundCards() {
     if (soundCardScanPending_) { return; }
     // ON A WORKER: every rate of every input is asked of the host API, and a
     // WASAPI device answers each one by activating an audio client.
-    soundCardScanFuture_ = std::async(std::launch::async, [] {
-        return cascade::source::makePortAudioSoundCardBackend()->listDevices();
+    soundCardScanFuture_ = std::async(std::launch::async, [factory = soundCardBackendFactory()] {
+        return (factory ? factory() : cascade::source::makePortAudioSoundCardBackend())->listDevices();
     });
     soundCardScanPending_ = true;
 }
@@ -95,8 +100,11 @@ void AppWindow::launchSoundCardOpen(bool restore, const SoundCardSettings& setti
         device_ = nullptr;
         soapyView_ = nullptr;
         ++sourceGen_;
-        pipeline_.setSource(nullptr);
+        // Through installSource like every other swap: a recording of the
+        // card ends here rather than taping the generator standing in.
+        installSource(nullptr);
         sourceKind_ = "siggen";
+        applyConverterForSource();
         // Until it is back - and for the rest of the session if neither the
         // new settings nor the old ones open - the config goes on naming the
         // card, exactly as after a restore that could not open it.
@@ -108,7 +116,8 @@ void AppWindow::launchSoundCardOpen(bool restore, const SoundCardSettings& setti
     }
     const std::uint64_t gen = sourceGen_;
     soundCardOpenFuture_ =
-        std::async(std::launch::async, [settings, list, listed, gen, restore, release, previous] {
+        std::async(std::launch::async, [settings, list, listed, gen, restore, release, previous,
+                                        factory = soundCardBackendFactory()] {
             SoundCardOpenResult r;
             r.gen = gen;
             r.restore = restore;
@@ -119,9 +128,11 @@ void AppWindow::launchSoundCardOpen(bool restore, const SoundCardSettings& setti
             // (every PortAudio user in the process shares one snapshot), so a
             // list the section already has is the list; only a first open
             // enumerates.
-            r.devices = listed ? list : cascade::source::makePortAudioSoundCardBackend()->listDevices();
-            cascade::source::SoundCardOpenOutcome out =
-                cascade::source::openSoundCardOrRestore(settings, r.devices, release ? &previous : nullptr);
+            r.devices = listed ? list
+                               : (factory ? factory() : cascade::source::makePortAudioSoundCardBackend())
+                                     ->listDevices();
+            cascade::source::SoundCardOpenOutcome out = cascade::source::openSoundCardOrRestore(
+                settings, r.devices, release ? &previous : nullptr, factory);
             r.restoredPrevious = out.restoredPrevious;
             // A coerced rate on success; why it was refused otherwise.
             r.error = (out.src && !out.restoredPrevious) ? out.note : out.refused;
@@ -230,8 +241,12 @@ void AppWindow::pollSoundCard() {
     // actually running (the centre box asks it which mode that is).
     soundCard_ = r.src->settings();
     soundCardLive_ = soundCard_;
-    pipeline_.setSource(std::move(r.src));
+    installSource(std::move(r.src));
     sourceKind_ = "soundcard";
+    // THIS CARD'S converter, after the install put the pipeline back to Off
+    // and before anything reads the air centre below (see
+    // soundCardConverter for what a card can have in front of it).
+    applyConverterForSource();
     restoreKeep_ = cascade::gui::RememberedSource{};
     restoreKeepLabel_.clear();
     soundCardMissing_.clear();
@@ -261,6 +276,14 @@ void AppWindow::pollSoundCard() {
                             soundCard_.hostApi.c_str(), soundCard_.cardRateHz,
                             soundCard_.format == SoundCardFormat::IqStereo ? "I/Q" : "real",
                             r.restoredPrevious ? " - as it was; the new settings were refused" : "");
+}
+
+bool AppWindow::installedSoundCardDead() {
+    if (sourceKind_ != "soundcard") { return false; }
+    // The card's own latch (SoundCardSource::deviceDead() is its faulted()),
+    // read through the air view, which forwards it - so a card that died
+    // while the receiver was stopped counts too.
+    return pipeline_.faulted() || pipeline_.activeSource().faulted();
 }
 
 void AppWindow::reapSoundCardWorkers() {

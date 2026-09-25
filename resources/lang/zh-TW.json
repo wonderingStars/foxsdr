@@ -145,6 +145,7 @@
   "A patch has at most %zu radios.": "一個接線圖最多有 %zu 部無線電。",
   "A plan-position indicator for aircraft: range rings and bearing\nticks around the receiver, with a detail panel for the one you\nselect. Takes the whole window; there is a way back on its own bar.": "航空器的平面位置顯示器：接收機周圍的距離環與方位\n刻度，並附有所選目標的詳細資料面板。\n佔用整個視窗；它自己的列上有返回按鍵。",
   "A radio cannot tune to %s - type a centre above 0 Hz.": "接收機無法調諧到 %s——請輸入高於 0 Hz 的中心頻率。",
+  "A sound card takes a down-converter only: the up-converter set for this card is not used.": "音效卡只能搭配降頻器使用：為此音效卡設定的升頻器不會被使用。",
   "A specific address": "指定位址",
   "A tracker plugin reports the positions a map draws - install one from the plugin store above.": "追蹤器外掛程式會提供地圖要繪製的位置，請從上方的外掛商店安裝一個。",
   "A window of its own": "獨立視窗",

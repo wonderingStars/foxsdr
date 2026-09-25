@@ -722,6 +722,25 @@ void AppWindow::patchStopAll(bool restoreMain) {
     // --- the receiver gets its radio back ---------------------------------------
     const PatchMainKeep keep = patchMainKeep_;
     patchMainKeep_ = PatchMainKeep{};
+    // A SOUND CARD goes back through its own row: reopened on a worker AS IT
+    // WAS RUNNING when the patch took it (keep.card) - not with whatever the
+    // Source section's controls were edited to meanwhile. The patch radio
+    // above has already been destroyed, and its close waited for, so the
+    // card is free. Until it is back the config goes on naming it (the rule
+    // below, for a card: cfg.soundCard names the card and both radio args
+    // slots keep what they had); a successful open clears that
+    // (pollSoundCard), a failed one leaves it.
+    if (keep.kind == "soundcard") {
+        if (!restoreKeep_.valid()) {
+            restoreKeep_ = cascade::gui::rememberedSourceAfterFailedOpen(
+                "soundcard", cfgSoapyArgs_, cfgNativeArgs_, std::string(), keep.rateHz);
+            restoreKeepLabel_ = keep.label;
+        }
+        cascade::core::diagLogf("patch: handing %s back to the receiver", keep.label.c_str());
+        sourceSel_ = kSoundCardRow;
+        launchSoundCardOpen(false, keep.card);
+        return;
+    }
     // THE RADIO STAYS SAVED UNTIL IT IS BACK (0.99.36). patchMainKeep_ was the
     // only thing making the exit save name it, and it has just been cleared:
     // a hand-back that finds the radio unlisted, or whose open fails, used to
@@ -733,11 +752,6 @@ void AppWindow::patchStopAll(bool restoreMain) {
         if (keep.kind == "soapy") {
             r.soapyArgs = keep.args;
             r.nativeArgs = cfgNativeArgs_;
-        } else if (keep.kind == "soundcard") {
-            // A sound card is named by cfg.soundCard; both radio slots keep
-            // what they had (the same rule as currentConfig's lent card).
-            r.soapyArgs = cfgSoapyArgs_;
-            r.nativeArgs = cfgNativeArgs_;
         } else {
             r.nativeArgs = keep.args;
             r.soapyArgs = cfgSoapyArgs_;
@@ -745,18 +759,6 @@ void AppWindow::patchStopAll(bool restoreMain) {
         r.sampleRateHz = keep.rateHz;
         restoreKeep_ = r;
         restoreKeepLabel_ = keep.label;
-    }
-    // A SOUND CARD goes back through its own row: reopened on a worker AS IT
-    // WAS RUNNING when the patch took it (keep.card) - not with whatever the
-    // Source section's controls were edited to meanwhile. The patch radio
-    // above has already been destroyed, and its close waited for, so the
-    // card is free. A successful open clears the remembered card above
-    // (pollSoundCard); a failed one leaves the config naming it.
-    if (keep.kind == "soundcard") {
-        cascade::core::diagLogf("patch: handing %s back to the receiver", keep.label.c_str());
-        sourceSel_ = kSoundCardRow;
-        launchSoundCardOpen(false, keep.card);
-        return;
     }
     int row = -1;
     if (keep.kind == "soapy") {

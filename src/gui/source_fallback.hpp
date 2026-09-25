@@ -103,29 +103,53 @@ inline bool pickOpensRow(int picked, int selected, bool installedRadioDead) {
 
 // --- 4. the combo selection across a re-scan ---------------------------------
 //
-// The Source combo is one list: the generator, the I/Q file, the native rows,
-// then the SoapySDR rows - and the selection is an INDEX into it. A re-scan
-// that adds, drops or reorders any native row moves every row after it, and
-// the index then names a different radio (the RSP's row gone and the Pluto's
-// row slid into its place, or a B200's Soapy row shifted by one). So the
-// selection is found again by what it IS.
+// The Source combo is one list: the generator, the I/Q file, the sound card,
+// the native rows, then the SoapySDR rows - and the selection is an INDEX
+// into it. A re-scan that adds, drops or reorders any native row moves every
+// row after it, and the index then names a different radio (the RSP's row
+// gone and the Pluto's row slid into its place, or a B200's Soapy row shifted
+// by one). So the selection is found again by what it IS.
 //
 // Each list is index-aligned with the combo; an entry is the row's family
-// ("siggen", "file", a native driver key, "soapy") and its args. Rows 0 and 1
-// never move. A row that is no longer listed answers -1, which the combo
+// ("siggen", "file", "soundcard", a native driver key, "soapy") and its args.
+// The first `fixedRows` rows (the generator, the file and the sound card -
+// AppWindow::kNativeRowBase of them) never move, and are never searched for a
+// radio's key. A row that is no longer listed answers -1, which the combo
 // already reads as "the live source, by its own name".
+//
+// THE COUNT IS A PARAMETER, not a literal 2, because the sound card row
+// proved the literal wrong the day it was merged in: with the keys one
+// row short, every index past the file row named the row BEFORE it, so the
+// sound card's selection fell off the end on every re-scan and a radio's
+// could land on its neighbour.
 struct SourceRowKey {
     std::string kind;
     std::string args;
     bool operator==(const SourceRowKey& o) const { return kind == o.kind && args == o.args; }
 };
 
+// --- 5. the lamp on the Source section ---------------------------------------
+//
+// A RADIO THE GENERATOR IS STANDING IN FOR lights the section's lamp (0.99.36):
+// a saved radio or sound card is remembered for the config and not open, and
+// the generator is what runs. NOT WHILE A SOUND CARD IS STILL OPENING: a
+// restored card, a card handed back by the patch page and a card re-Opened
+// with new settings all sit on the generator, remembered, for the second or
+// so their open takes on its worker - an ordinary start, not a fault. The
+// lamp lights if that open fails, when the remembered card really is not
+// running. (An I/Q file is said in the section's own words, not the lamp.)
+inline bool radioNotOpenLamp(const RememberedSource& keep, bool hasDevice,
+                             const std::string& liveKind, bool soundCardOpenPending) {
+    return keep.valid() && keep.kind != "file" && !hasDevice && liveKind == "siggen" &&
+           !soundCardOpenPending;
+}
+
 inline int refindSourceRow(const std::vector<SourceRowKey>& before, int sel,
-                           const std::vector<SourceRowKey>& after) {
-    if (sel == 0 || sel == 1) { return sel; }
+                           const std::vector<SourceRowKey>& after, int fixedRows) {
+    if (sel >= 0 && sel < fixedRows) { return sel; }
     if (sel < 0 || sel >= static_cast<int>(before.size())) { return -1; }
     const SourceRowKey& was = before[static_cast<std::size_t>(sel)];
-    for (std::size_t i = 2; i < after.size(); ++i) {
+    for (std::size_t i = static_cast<std::size_t>(fixedRows); i < after.size(); ++i) {
         if (after[i] == was) { return static_cast<int>(i); }
     }
     return -1;
