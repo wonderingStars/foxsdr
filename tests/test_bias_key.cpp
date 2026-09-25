@@ -117,6 +117,16 @@ void testGate() {
         CHECK(!biasKeyMayRemember(""));
         CHECK(biasKeyMayRemember("serial=00000001"));
         CHECK(biasKeyMayRemember("driver=x,serial=1234"));
+        // REVIEW ROUND 2: a serial that is ALL ZEROS names nothing - it is what
+        // a board with no serial programmed reports, and what every RX888
+        // bootloader reports. "00000001" (many RTL-SDRs) is kept: it is the
+        // documented shared-serial residual, and a single Blog V4 owner's
+        // restore depends on it.
+        CHECK(!biasKeyMayRemember("serial=0"));
+        CHECK(!biasKeyMayRemember("serial=0000000000000000"));
+        CHECK(!biasKeyMayRemember("serial="));
+        CHECK(!biasKeyMayRemember("serial= 000 "));
+        CHECK(biasKeyMayRemember("serial=0000000000000010"));
         CHECK(biasKeyPress(g, panel(true, false), kIdx) == BiasKeyAction::Ask);
         CHECK(biasKeyConfirm(g, panel(true, false), kIdx, biasKeyMayRemember("index=0")));
         CHECK(g.confirmed.empty());
@@ -193,17 +203,23 @@ void testMemory() {
     CHECK(biasTeeRecalled(p, "rtlsdr", "index=0") == -1);
     biasTeeRemember(p, "hackrf", "", true);
     CHECK(biasTeeRecalled(p, "hackrf", "") == -1);
+    // An all-zeros serial is a position too (review round 2).
+    biasTeeRemember(p, "rx888", "serial=0000000000000000", true);
+    CHECK(biasTeeRecalled(p, "rx888", "serial=0000000000000000") == -1);
     // The cap: a new radio past it is not remembered (errs towards no power);
     // one already in the memory can still change.
+    // (Serials from 1000: the first cut counted from "0", which review round
+    // 2 made a serial that names nothing - so an "on" for it is rightly not
+    // kept, and the fixture filled only 63 places.)
     BiasTeePanel full;
     for (std::size_t i = 0; i < cascade::core::kBiasTeeMemoryCap; ++i) {
-        biasTeeRemember(full, "hackrf", "serial=" + std::to_string(i), true);
+        biasTeeRemember(full, "hackrf", "serial=" + std::to_string(1000 + i), true);
     }
     CHECK(full.remembered.size() == cascade::core::kBiasTeeMemoryCap);
     biasTeeRemember(full, "hackrf", "serial=new", true);
     CHECK(biasTeeRecalled(full, "hackrf", "serial=new") == -1);
-    biasTeeRemember(full, "hackrf", "serial=0", false);
-    CHECK(biasTeeRecalled(full, "hackrf", "serial=0") == 0);
+    biasTeeRemember(full, "hackrf", "serial=1000", false);
+    CHECK(biasTeeRecalled(full, "hackrf", "serial=1000") == 0);
 }
 
 // REPAIR ROUND 1, F4: the stand-in only in a bounded run.

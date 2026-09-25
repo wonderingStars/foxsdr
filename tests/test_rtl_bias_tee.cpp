@@ -312,12 +312,26 @@ int main() {
             // and only a tick changes it.
             CHECK(panel.remembered == before);
 
+            // THE DECK'S DIALOG MUST NOT PROMISE A RESTORE for it (review
+            // round 2, L2): its "on" will never be put back at an open.
+            CHECK(!cascade::gui::biasTeeWillRestoreOn(panel, src, "serial=00000001"));
+
             // ...and the user CAN still tick it on in this session.
             biasTeeTicked(panel, &src, "serial=00000001", true, nullptr);
             CHECK(panel.shown);
             CHECK(gpio0High(*f));
             src.closeDevice();
         }
+    }
+    // The control: the same serial with a valid EEPROM IS promised a restore.
+    {
+        RtlSdrSource src;
+        BiasTeePanel panel;
+        openDongle(src, panel, Eeprom::Plain, "serial=00000001");
+        CHECK(cascade::gui::biasTeeWillRestoreOn(panel, src, "serial=00000001"));
+        // ...but a dongle opened by position is not.
+        CHECK(!cascade::gui::biasTeeWillRestoreOn(panel, src, "index=0"));
+        src.closeDevice();
     }
 
     // =======================================================================

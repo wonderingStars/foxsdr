@@ -35,7 +35,7 @@ namespace {
 // The stand-in's identity: a serial-named radio, so the "not asked again"
 // half of the gate can be seen in a capture as well as the first question.
 constexpr const char* kStandInKind = "stand-in";
-constexpr const char* kStandInArgs = "serial=0";
+constexpr const char* kStandInArgs = "serial=5A4E0001";
 
 }  // namespace
 
@@ -77,7 +77,12 @@ std::string AppWindow::biasKeyRadioNow() const {
 }
 
 bool AppWindow::biasKeyMayRememberNow() const {
-    return biasKeyMayRemember(biasStandInActive() ? std::string(kStandInArgs) : deviceArgs_);
+    // The stand-in is a serial-named radio with an unbounded memory of one.
+    if (biasStandInActive()) { return biasKeyMayRemember(kStandInArgs); }
+    // A real radio: exactly when an "on" switched now will be kept and put
+    // back at its next open (review round 2, L2) - which is also when the
+    // session may skip the question next time (the gate's mayRemember).
+    return device_ != nullptr && biasTeeWillRestoreOn(biasTeePanel_, *device_, deviceArgs_);
 }
 
 void AppWindow::switchBiasTee(bool want) {
@@ -159,16 +164,18 @@ void AppWindow::drawBiasKeyConfirm() {
                        tr("Sends about 4.5 V up the antenna cable to power an amplifier at the "
                           "mast. Leave it off unless you have one: equipment that is not "
                           "expecting power on the connector can be damaged by it."));
-    // WHAT "YES" LEAVES BEHIND, said truthfully (repair round 1, F1): the
-    // per-radio memory (biasTeeRemember) keeps an "on" for a radio named by
-    // its serial and for no other.
+    // WHAT "YES" LEAVES BEHIND, said truthfully (repair rounds 1 and 2): the
+    // restore is promised only when the "on" will really be kept and put back
+    // (biasTeeWillRestoreOn). Every other case - no serial or an all-zeros
+    // one, an RX888 opened through its bootloader, an RTL-SDR with no EEPROM,
+    // a full memory - gets ONE sentence that is true of all of them, rather
+    // than one per reason: FoxSDR will not be the thing that switches it on.
     if (biasKeyMayRememberNow()) {
         ImGui::TextWrapped("%s", tr("FoxSDR will switch it on again whenever this radio is "
                                     "opened, until you turn it off."));
     } else {
-        ImGui::TextWrapped("%s", tr("This radio has no serial number FoxSDR can tell it apart "
-                                    "by, so the bias tee will be off the next time it is "
-                                    "opened."));
+        ImGui::TextWrapped("%s", tr("FoxSDR cannot remember this for this radio: it will not "
+                                    "switch it on again when the radio is next opened."));
     }
     ImGui::PopTextWrapPos();
     ImGui::Spacing();

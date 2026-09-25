@@ -125,10 +125,15 @@ struct BiasTeePanel {
 //     the bias tee on OFF at its next open after the user switched it off.
 // The map is capped (core::kBiasTeeMemoryCap): a new radio past the cap is not
 // remembered, which errs towards no power.
+//
+// `identified` is whether the radio that is OPEN is the one `args` names -
+// biasTeeRadioIdentified below, which is false for more than a missing serial
+// (an RX888 opened through a firmware upload). An "on" is kept only when it
+// is true.
 inline void biasTeeRemember(BiasTeePanel& p, const std::string& kind, const std::string& args,
-                            bool on) {
+                            bool on, bool identified) {
     const std::string key = cascade::core::biasTeeRadioKey(kind, args);
-    if (on && !cascade::core::biasTeeArgsNameARadio(args)) {
+    if (on && !identified) {
         p.remembered.erase(key);
         return;
     }
@@ -136,6 +141,32 @@ inline void biasTeeRemember(BiasTeePanel& p, const std::string& kind, const std:
         return;
     }
     p.remembered[key] = on;
+}
+// ...and with the identity the args alone can give (a serial that names a
+// radio), for a caller with no open radio to ask.
+inline void biasTeeRemember(BiasTeePanel& p, const std::string& kind, const std::string& args,
+                            bool on) {
+    biasTeeRemember(p, kind, args, on, cascade::core::biasTeeArgsNameARadio(args));
+}
+
+// IS THE OPEN RADIO THE ONE ITS ARGS NAME? For the memory, only when both:
+//   * the args name a radio by serial (core::biasTeeArgsNameARadio - not
+//     "index=0", not an empty or all-zeros serial), and
+//   * the open went to THAT radio. Every driver's open() resolves the serial
+//     it was given - except an RX888 opened through its BOOTLOADER (review
+//     round 2): Rx888Source::open uploads the firmware and then opens the
+//     FIRST running RX888 on the bus, because a bootloader's Cypress serial
+//     and the running firmware's SDDC serial cannot be matched across the
+//     upload. With two on the bus that is a different radio from the one the
+//     saved args name, so A's remembered "on" powered radio B (the reviewer's
+//     probe, tests/test_bias_tee_rx888.cpp). For such an open an "on" is
+//     neither kept nor applied; an "off" still is.
+inline bool biasTeeRadioIdentified(cascade::source::DeviceSource& dev, const std::string& args) {
+    if (!cascade::core::biasTeeArgsNameARadio(args)) { return false; }
+    if (auto* r = dynamic_cast<cascade::source::Rx888Source*>(&dev)) {
+        if (r->firmwareWasUploaded()) { return false; }
+    }
+    return true;
 }
 
 // What the memory holds for this radio: 1 on, 0 off, -1 nothing.
@@ -149,9 +180,10 @@ inline int biasTeeRecalled(const BiasTeePanel& p, const std::string& kind,
 // DOES THIS ARGS STRING NAME ONE DONGLE, rather than a place in a list?
 // "serial=XXXXXXXX" names the dongle whose EEPROM carries that serial;
 // "index=0" names whichever RTL2832U the USB walk happens to find first, which
-// is a different dongle the day a second one is plugged in.
+// is a different dongle the day a second one is plugged in. An all-zeros
+// serial names nothing either (core::biasTeeArgsNameARadio, review round 2).
 inline bool rtlArgsNameADongle(const std::string& args) {
-    return !cascade::source::argValue(args, "serial").empty();
+    return cascade::core::biasTeeArgsNameARadio(args);
 }
 
 enum class RtlBiasTeeAtOpen {
@@ -242,7 +274,7 @@ inline void biasTeeAfterOpen(BiasTeePanel& p, cascade::source::DeviceSource& dev
         p.shown = rtl->biasT();
         return;
     }
-    const bool on = recalled == 1 && cascade::core::biasTeeArgsNameARadio(args);
+    const bool on = recalled == 1 && biasTeeRadioIdentified(dev, args);
     withBiasTee(&dev, [&p, on](auto& d) {
         d.setBiasT(on);
         p.shown = d.biasT();
@@ -260,9 +292,31 @@ inline void biasTeeTicked(BiasTeePanel& p, cascade::source::DeviceSource* dev,
         const bool accepted = d.setBiasT(want);
         if (!accepted && error != nullptr) { *error = d.lastError(); }
         p.shown = d.biasT();
-        if (accepted) { biasTeeRemember(p, dev->driverKey(), args, p.shown); }
+        if (accepted) {
+            biasTeeRemember(p, dev->driverKey(), args, p.shown,
+                            biasTeeRadioIdentified(*dev, args));
+        }
         return true;
     });
+}
+
+// WILL AN "ON" SWITCHED NOW COME BACK AT THIS RADIO'S NEXT OPEN? What the
+// deck's confirmation dialog may promise (review round 2, L2), and nothing
+// more: the radio is identified (biasTeeRadioIdentified), the memory has room
+// for it or already holds it (biasTeeRemember's cap), and - for an RTL-SDR -
+// its EEPROM is valid, because rtlBiasTeeAtOpen never re-applies an "on" to a
+// dongle without one.
+inline bool biasTeeWillRestoreOn(const BiasTeePanel& p, cascade::source::DeviceSource& dev,
+                                 const std::string& args) {
+    if (!biasTeeRadioIdentified(dev, args)) { return false; }
+    const std::string key = cascade::core::biasTeeRadioKey(dev.driverKey(), args);
+    if (p.remembered.count(key) == 0 && p.remembered.size() >= cascade::core::kBiasTeeMemoryCap) {
+        return false;
+    }
+    if (auto* rtl = dynamic_cast<cascade::source::RtlSdrSource*>(&dev)) {
+        if (!rtl->eepromValid()) { return false; }
+    }
+    return true;
 }
 
 // --- THE DECK'S BIAS TEE KEY (2026-09-25) ------------------------------------

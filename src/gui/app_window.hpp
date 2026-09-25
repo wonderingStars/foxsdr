@@ -2062,7 +2062,9 @@ private:
     // biasTeePanel_.present on its own outlives a close.
     bool biasTeeReachable() const;
     // "kind|args" of the radio the key speaks for (gui::biasKeyRadio), and
-    // whether a confirmation may be remembered for it (a serial-named radio).
+    // whether an "on" switched now will be kept and restored at its next open
+    // (gui::biasTeeWillRestoreOn) - what the dialog may promise, and when a
+    // confirmation may be kept for the session.
     std::string biasKeyRadioNow() const;
     bool biasKeyMayRememberNow() const;
     // The key was pressed / the dialog was answered (true: "Turn it on").

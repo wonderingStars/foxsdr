@@ -1005,6 +1005,29 @@ int main() {
                               "\"airspy|serial=x\":1,\"nobar\":true}}\n"));
         CHECK(ConfigStore::load(path, out, err));
         CHECK(out.biasTee.empty());
+        // ...nor for an all-zeros serial, which names nothing (review round 2).
+        out = junkConfig();
+        CHECK(writeText(path, "{\"schemaVersion\":1,\"biasTee\":{"
+                              "\"rx888|serial=0000000000000000\":true,"
+                              "\"rx888|serial=0000000000000000x\":false}}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.biasTee.size() == 1 && out.biasTee.count("rx888|serial=0000000000000000") == 0);
+        // THE CAP HOLDS AT LOAD (review round 2, L1): a file with 65 radios
+        // loads 64 of them - a hand-edited or hostile file cannot grow the
+        // memory past what the application itself would ever write.
+        {
+            std::string text = "{\"schemaVersion\":1,\"biasTee\":{";
+            for (int i = 0; i < 65; ++i) {
+                if (i > 0) { text += ","; }
+                text += "\"hackrf|serial=" + std::to_string(1000 + i) + "\":true";
+            }
+            text += "}}\n";
+            out = junkConfig();
+            CHECK(writeText(path, text));
+            CHECK(ConfigStore::load(path, out, err));
+            std::printf("  a 65-radio bias tee memory loads %zu\n", out.biasTee.size());
+            CHECK(out.biasTee.size() == 64);
+        }
 
         // THE CONVERTERS (0.99.36), per radio. A config that predates them
         // has none - every radio, the generator and a file start with no

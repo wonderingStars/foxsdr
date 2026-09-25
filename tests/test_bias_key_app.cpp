@@ -322,6 +322,10 @@ struct AppWindowTestAccess {
     static void seedMemory(AppWindow& a, const std::string& key, bool on) {
         a.biasTeePanel_.remembered[key] = on;
     }
+    // Whether the dialog, drawn now, would PROMISE that the radio comes back
+    // on at its next open (the restore sentence) - the member it draws from.
+    static bool promisesRestore(AppWindow& a) { return a.biasKeyMayRememberNow(); }
+    static std::size_t memorySize(AppWindow& a) { return a.biasTeePanel_.remembered.size(); }
 };
 
 }  // namespace cascade::gui
@@ -628,6 +632,39 @@ void testCheckboxSharesTheRule() {
     CHECK(!Access::radioBiasT(app));
 }
 
+// REVIEW ROUND 2 (L2): the dialog promises a restore only when the "on" will
+// actually be kept.
+void testDialogPromisesOnlyWhatIsKept() {
+    std::printf("  [13] the dialog's restore promise is true: kept radio yes, full memory no\n");
+    {
+        cascade::gui::AppWindow app;
+        CHECK(Access::selectNative(app, kHackArgs));
+        CHECK(Access::promisesRestore(app));  // serial-named, room in the memory
+        CHECK(Access::selectNative(app, kHackIndexArgs));
+        CHECK(!Access::promisesRestore(app));  // a position: nothing kept
+    }
+    // THE MEMORY IS FULL (64 other radios): an "on" for a NEW radio would not
+    // be kept, so the dialog must not promise it.
+    cascade::gui::AppWindow app;
+    for (int i = 0; i < 64; ++i) {
+        Access::seedMemory(app, "airspy|serial=" + std::to_string(5000 + i), false);
+    }
+    CHECK(Access::memorySize(app) == 64);
+    CHECK(Access::selectNative(app, kHackArgs));
+    std::printf("      memory full, a new radio: promise %d\n", Access::promisesRestore(app));
+    CHECK(!Access::promisesRestore(app));
+    // ...and it is right not to: switched on, it is not remembered.
+    Access::tick(app, true);
+    CHECK(Access::radioBiasT(app));
+    const cascade::core::AppConfig saved = Access::config(app);
+    CHECK(saved.biasTee.count(cascade::core::biasTeeRadioKey("hackrf", kHackArgs)) == 0);
+    // A radio ALREADY in the full memory can still be kept: the promise holds.
+    Access::seedMemory(app, cascade::core::biasTeeRadioKey("hackrf", kHackArgsB), false);
+    // (65 now only because the test forced it; the rule is about the key.)
+    CHECK(Access::selectNative(app, kHackArgsB));
+    CHECK(Access::promisesRestore(app));
+}
+
 // F3: no key over a radio that has stopped answering.
 void testNoKeyOverADeadRadio() {
     std::printf("  [12] a radio that stopped answering has no key\n");
@@ -727,6 +764,7 @@ int main() {
     testOldGlobalSettingIgnored();
     testCheckboxSharesTheRule();
     testNoKeyOverADeadRadio();
+    testDialogPromisesOnlyWhatIsKept();
 
     std::error_code ec;
     std::filesystem::remove_all(g_scratch, ec);

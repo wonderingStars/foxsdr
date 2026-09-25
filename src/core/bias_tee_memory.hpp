@@ -31,8 +31,18 @@
 namespace cascade::core {
 
 // Whether these args name ONE radio (by its serial).
+//
+// A SERIAL THAT IS ALL ZEROS NAMES NOTHING (review round 2, 2026-09-25): it is
+// what a board with no serial programmed reports, and it is the serial EVERY
+// RX888 bootloader reports ("0000000000000000"), so two such radios cannot be
+// told apart by it - exactly the position-not-radio case "index=0" is. An
+// empty serial is the same. "00000001" is NOT treated this way: it is the
+// factory serial of many RTL-SDRs, and the shared-serial residual it carries
+// is documented beside gui::rtlBiasTeeAtOpen rather than taken from a single
+// Blog V4 owner whose restore depends on it.
 inline bool biasTeeArgsNameARadio(const std::string& args) {
-    return !cascade::source::argValue(args, "serial").empty();
+    const std::string serial = cascade::source::argValue(args, "serial");
+    return serial.find_first_not_of('0') != std::string::npos;
 }
 
 // The memory key for the radio `kind` (the driver key, "rtlsdr", "hackrf"...)
