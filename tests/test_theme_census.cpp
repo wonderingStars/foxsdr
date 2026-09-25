@@ -199,6 +199,12 @@ int main() {
     // is the one that proves the key survives.
     setEnv("FOXSDR_FORCE_MUTE_BANNER",
            "ADS-B Decoder, AIS Decoder, APRS Decoder and Nearby Signal Catch");
+    // THE BIAS TEE KEY, DRAWN IN EVERY RUN (2026-09-25). The deck carries it
+    // only while the open radio has a bias tee, and the census runs on the
+    // generator - so the seam puts a stand-in bias tee behind the key (it
+    // never touches a radio), and the key is placed and measured with the
+    // deck's other parts, the lamps' words and the banner's key included.
+    setEnv("FOXSDR_FORCE_BIAS_KEY", "accept");
 
     // The six presets as a user who PICKED each one has them (the counter and
     // readings sizes a pick brings), and the two layouts no preset ships but a
@@ -224,11 +230,13 @@ int main() {
     std::vector<std::string> required = {"deck:stop",       "deck:lamp0",       "deck:lamp1",
                                          "deck:lamp2",      "deck:lamp3",       "deck:counter",
                                          "deck:volume",     "deck:meter.rate",  "deck:meter.volume",
-                                         "deck:mute"};
+                                         "deck:mute",       "deck:bias"};
     for (int b = 0; b < 5; ++b) { required.push_back("bank:" + std::to_string(b)); }
+    // (Each lamp's rectangle runs down to the foot of its word, so the bias
+    // tee key under the row is measured against the words, not only the lens.)
     const char* deckParts[] = {"deck:stop",   "deck:lamp0",   "deck:lamp1",      "deck:lamp2",
                                "deck:lamp3",  "deck:counter", "deck:volume",     "deck:meter.rate",
-                               "deck:meter.volume", "deck:mute"};
+                               "deck:meter.volume", "deck:mute", "deck:bias"};
 
     for (const char* size : {"1600x1000", "1280x720"}) {
         std::printf("  window %s\n", size);
@@ -284,6 +292,21 @@ int main() {
                         std::printf("    %s: the mute banner (%.0f,%.0f)-(%.0f,%.0f) leaves the bar "
                                     "(%.0f,%.0f)-(%.0f,%.0f)\n",
                                     l.name, m.x0, m.y0, m.x1, m.y1, o.x0, o.y0, o.x1, o.y1);
+                    }
+                    CHECK(inside);
+                }
+            }
+            // The bias tee key is on the deck, whole - its caption included.
+            {
+                const auto bar = c.rects.find("deck:bar");
+                const auto bias = c.rects.find("deck:bias");
+                if (bar != c.rects.end() && bias != c.rects.end()) {
+                    const Rect& o = bar->second;
+                    const Rect& k = bias->second;
+                    const bool inside = k.x0 >= o.x0 && k.y0 >= o.y0 && k.x1 <= o.x1 && k.y1 <= o.y1;
+                    if (!inside) {
+                        std::printf("    %s: the bias tee key (%.0f,%.0f)-(%.0f,%.0f) leaves the bar\n",
+                                    l.name, k.x0, k.y0, k.x1, k.y1);
                     }
                     CHECK(inside);
                 }

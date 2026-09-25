@@ -69,6 +69,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <string>
 
 #ifdef _WIN32
@@ -112,9 +113,8 @@ AppConfig junkConfig() {
     c.sourceKind = "garbage";
     c.soapyArgs = "garbage";
     c.nativeArgs = "garbage";
-    c.nativeBiasT = true;  // default is false: a load that forgets it is caught
-    c.rtlBiasTArgs = "garbage";
-    c.rtlBiasT = true;
+    // A bias tee memory the file never mentioned must not survive a load.
+    c.biasTee["garbage|serial=1"] = true;
     // A converter the file never mentioned must not survive a load.
     c.converters["garbage"] = {cascade::core::ConverterMode::Up, 99.0e6, true};
     // Junk that is NOT empty, because empty is what the loader substitutes
@@ -285,9 +285,7 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     CHECK(a.sourceKind == b.sourceKind);
     CHECK(a.soapyArgs == b.soapyArgs);
     CHECK(a.nativeArgs == b.nativeArgs);
-    CHECK(a.nativeBiasT == b.nativeBiasT);
-    CHECK(a.rtlBiasTArgs == b.rtlBiasTArgs);
-    CHECK(a.rtlBiasT == b.rtlBiasT);
+    CHECK(a.biasTee == b.biasTee);
     CHECK(a.converters == b.converters);
     CHECK(a.plutoUri == b.plutoUri);
     CHECK(a.iqFilePath == b.iqFilePath);
@@ -500,9 +498,9 @@ int main() {
         // read, or the tuner fallback has nothing to fall back to on the next
         // launch.
         in.nativeArgs = "serial=00000001";
-        in.nativeBiasT = true;
-        in.rtlBiasTArgs = "serial=00000042";
-        in.rtlBiasT = true;
+        // THE BIAS TEE, PER RADIO: an on and an off, two families.
+        in.biasTee["rtlsdr|serial=00000042"] = true;
+        in.biasTee["hackrf|serial=abc"] = false;
         // THE CONVERTERS, one of each shape: the tester's 125 MHz up-converter
         // on a dongle, an inverting down-converter set explicitly on the
         // generator, and one switched OFF that keeps the LO it was given.
@@ -954,26 +952,82 @@ int main() {
         // re-ticking it every launch is how a user ends up not noticing it is
         // off. A config that has never seen the field loads as OFF, which is
         // the safe answer and the one every pre-0.92.0 config gets.
-        CHECK(writeText(path, "{\"schemaVersion\":1,\"nativeBiasT\":true}\n"));
+        //
+        // PER RADIO SINCE THE DECK'S KEY (repair round 1): AppConfig::biasTee.
+        CHECK(writeText(path, "{\"schemaVersion\":1,\"biasTee\":{"
+                              "\"hackrf|serial=abc\":true,\"rtlsdr|serial=1\":false}}\n"));
         CHECK(ConfigStore::load(path, out, err));
-        CHECK(out.nativeBiasT);
+        CHECK(out.biasTee.size() == 2);
+        CHECK(out.biasTee.count("hackrf|serial=abc") == 1 && out.biasTee.at("hackrf|serial=abc"));
+        CHECK(out.biasTee.count("rtlsdr|serial=1") == 1 && !out.biasTee.at("rtlsdr|serial=1"));
         out = junkConfig();
         CHECK(writeText(path, "{\"schemaVersion\":1,\"sourceKind\":\"airspy\"}\n"));
         CHECK(ConfigStore::load(path, out, err));
-        CHECK(!out.nativeBiasT);
-        // ...and the RTL-SDR's own memory loads as "nothing remembered" from
-        // a config that predates it - no dongle named, and off.
-        CHECK(out.rtlBiasTArgs.empty());
-        CHECK(!out.rtlBiasT);
+        CHECK(out.biasTee.empty());
+        // THE OLD GLOBAL SETTING IS NOT CARRIED OVER. "nativeBiasT" was one
+        // bool for every HackRF, Airspy, Airspy HF+, SDRplay, Mirics and RX888;
+        // it cannot say which radio it meant, so it powers none of them - and
+        // the next save does not write it back.
+        out = junkConfig();
+        CHECK(writeText(path, "{\"schemaVersion\":1,\"nativeBiasT\":true,"
+                              "\"nativeArgs\":\"serial=abc\",\"sourceKind\":\"hackrf\"}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.biasTee.empty());
+        CHECK(ConfigStore::save(path, out, err));
+        {
+            std::ifstream in(path, std::ios::binary);
+            const std::string text((std::istreambuf_iterator<char>(in)),
+                                   std::istreambuf_iterator<char>());
+            CHECK(text.find("nativeBiasT") == std::string::npos);
+            CHECK(text.find("rtlBiasT") == std::string::npos);
+        }
+        // THE RTL-SDR's OLD MEMORY of one dongle IS carried over - it was per
+        // radio already - as that dongle's entry...
         out = junkConfig();
         CHECK(writeText(path, "{\"schemaVersion\":1,\"rtlBiasTArgs\":\"serial=00000042\","
                               "\"rtlBiasT\":true}\n"));
         CHECK(ConfigStore::load(path, out, err));
-        CHECK(out.rtlBiasTArgs == "serial=00000042");
-        CHECK(out.rtlBiasT);
-        // The two memories are independent: the dongle's does not set the
-        // other radios' setting.
-        CHECK(!out.nativeBiasT);
+        CHECK(out.biasTee.size() == 1);
+        CHECK(out.biasTee.count("rtlsdr|serial=00000042") == 1 &&
+              out.biasTee.at("rtlsdr|serial=00000042"));
+        // ...an old "off" for a dongle named by position is kept (off is never
+        // the dangerous way, and it keeps a factory-forced dongle off)...
+        out = junkConfig();
+        CHECK(writeText(path, "{\"schemaVersion\":1,\"rtlBiasTArgs\":\"index=0\","
+                              "\"rtlBiasT\":false}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.biasTee.size() == 1 && !out.biasTee.at("rtlsdr|index=0"));
+        // ...but an "on" is never kept for a radio with no serial, from the old
+        // fields or the new: it could be whichever radio answers in that socket.
+        out = junkConfig();
+        CHECK(writeText(path, "{\"schemaVersion\":1,\"rtlBiasTArgs\":\"index=0\","
+                              "\"rtlBiasT\":true,\"biasTee\":{\"hackrf|index=0\":true,"
+                              "\"airspy|serial=x\":1,\"nobar\":true}}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.biasTee.empty());
+        // ...nor for an all-zeros serial, which names nothing (review round 2).
+        out = junkConfig();
+        CHECK(writeText(path, "{\"schemaVersion\":1,\"biasTee\":{"
+                              "\"rx888|serial=0000000000000000\":true,"
+                              "\"rx888|serial=0000000000000000x\":false}}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.biasTee.size() == 1 && out.biasTee.count("rx888|serial=0000000000000000") == 0);
+        // THE CAP HOLDS AT LOAD (review round 2, L1): a file with 65 radios
+        // loads 64 of them - a hand-edited or hostile file cannot grow the
+        // memory past what the application itself would ever write.
+        {
+            std::string text = "{\"schemaVersion\":1,\"biasTee\":{";
+            for (int i = 0; i < 65; ++i) {
+                if (i > 0) { text += ","; }
+                text += "\"hackrf|serial=" + std::to_string(1000 + i) + "\":true";
+            }
+            text += "}}\n";
+            out = junkConfig();
+            CHECK(writeText(path, text));
+            CHECK(ConfigStore::load(path, out, err));
+            std::printf("  a 65-radio bias tee memory loads %zu\n", out.biasTee.size());
+            CHECK(out.biasTee.size() == 64);
+        }
 
         // THE CONVERTERS (0.99.36), per radio. A config that predates them
         // has none - every radio, the generator and a file start with no
@@ -1065,7 +1119,7 @@ int main() {
                         "{\"schemaVersion\":1,\"sourceKind\":\"rtlsdr\","
                         "\"nativeArgs\":\"serial=deadbeef\","
                         "\"soapyArgs\":\"driver=rtlsdr\","
-                        "\"soapyAntenna\":\"RX2\",\"nativeBiasT\":true,"
+                        "\"soapyAntenna\":\"RX2\",\"biasTee\":{\"rtlsdr|serial=deadbeef\":true},"
                         "\"sampleRateHz\":2400000.0,\"centerHz\":98500000.0}\n"));
         AppConfig loaded;
         std::string err;
@@ -1094,7 +1148,7 @@ int main() {
         saved.nativeArgs = src.nativeArgs;
         saved.sampleRateHz = src.sampleRateHz;
         saved.soapyAntenna = loaded.soapyAntenna;
-        saved.nativeBiasT = loaded.nativeBiasT;
+        saved.biasTee = loaded.biasTee;
         saved.centerHz = loaded.centerHz;
         CHECK(ConfigStore::save(path, saved, err));
 
@@ -1113,7 +1167,7 @@ int main() {
         // ...and the settings that describe the radio rather than the source
         // choice rode through untouched.
         CHECK(next.soapyAntenna == "RX2");
-        CHECK(next.nativeBiasT);
+        CHECK(next.biasTee.size() == 1 && next.biasTee.at("rtlsdr|serial=deadbeef"));
         CHECK(next.centerHz == 98500000.0);
 
         // A SAVED PLUTO, same sequence, and it is the case the rule was least
@@ -1412,16 +1466,15 @@ int main() {
                 CHECK(!cascade::gui::configsEqual(base, other));
                 CHECK(!cascade::gui::configsEqual(other, base));
             }
-            // The RTL-SDR's bias tee memory, both halves: a tick on a dongle
+            // The per-radio bias tee memory, both ways: a switch on any radio
             // is a change the file has to see.
-            AppConfig rtlArgs = base;
-            rtlArgs.rtlBiasTArgs = "serial=00000042";
-            CHECK(!cascade::gui::configsEqual(base, rtlArgs));
-            CHECK(!cascade::gui::configsEqual(rtlArgs, base));
-            AppConfig rtlOn = base;
-            rtlOn.rtlBiasT = true;
-            CHECK(!cascade::gui::configsEqual(base, rtlOn));
-            CHECK(!cascade::gui::configsEqual(rtlOn, base));
+            AppConfig biasOn = base;
+            biasOn.biasTee["rtlsdr|serial=00000042"] = true;
+            CHECK(!cascade::gui::configsEqual(base, biasOn));
+            CHECK(!cascade::gui::configsEqual(biasOn, base));
+            AppConfig biasOff = biasOn;
+            biasOff.biasTee["rtlsdr|serial=00000042"] = false;
+            CHECK(!cascade::gui::configsEqual(biasOn, biasOff));
 
             // The transmitter's settings, the rail bank, the rebound keys and
             // the update-check switch: every one of them is changed by a click

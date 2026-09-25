@@ -592,8 +592,10 @@ void applyWindowIcon(GLFWwindow* window) {
 // accident, and tests/test_config.cpp asks this function directly.
 bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppConfig& b) {
     return a.sourceKind == b.sourceKind && a.soapyArgs == b.soapyArgs &&
-           a.nativeArgs == b.nativeArgs && a.nativeBiasT == b.nativeBiasT &&
-           a.rtlBiasTArgs == b.rtlBiasTArgs && a.rtlBiasT == b.rtlBiasT &&
+           a.nativeArgs == b.nativeArgs &&
+           // The per-radio bias tee memory: switched by the checkbox and the
+           // deck's key, neither of which saves on its own.
+           a.biasTee == b.biasTee &&
            // The per-radio converters: set in the Source section, which calls
            // no save of its own.
            a.converters == b.converters &&
@@ -1394,6 +1396,9 @@ int AppWindow::run(int frames) {
     if (frames >= 0) {
         const char* hook = std::getenv("CASCADE_PLUGIN_TEST");
         if (hook != nullptr && *hook != '\0') { pluginTestHook_ = hook; }
+        // The deck's bias tee stand-in (gui/bias_tee.hpp, biasStandInFor):
+        // bounded runs only, for the same reason as the script below.
+        biasStandIn_ = cascade::gui::biasStandInFor(std::getenv("FOXSDR_FORCE_BIAS_KEY"), true);
         // The scripted pointer (gui/input_script.hpp). Bounded runs only, so
         // an interactive session can never be driven by a stray variable.
         if (const char* script = std::getenv("FOXSDR_INPUT_SCRIPT");
@@ -3303,6 +3308,8 @@ void AppWindow::drawUi() {
     // would nest it in that window's ID stack, where the dim overlay it draws
     // would sit under the panels it is meant to block.
     drawMutePopup();
+    // The deck's bias tee question, at the top level for the same reason.
+    drawBiasKeyConfirm();
 
     // ...and the unclean-exit offer beside it, for the same reason: a
     // top-level thing belongs at the top level, not nested in the borderless
@@ -4738,17 +4745,75 @@ void AppWindow::drawToolbar() {
         const float firstX = roomL + widestWord * 0.5f;
         for (int i = 0; i < 4; ++i) {
             {
+                // THE LAMP AND ITS WORD, which drawBenchLamp letters 4 px under
+                // the lens at the size pushed above: the word is part of the
+                // lamp (it is what makes it readable cold), so the census
+                // measures down to its foot - which is what the bias tee key
+                // below the row has to stand clear of.
                 const float lx = firstX + lampPitch * static_cast<float>(i);
                 cascade::gui::census::note("deck:lamp", i);
                 cascade::gui::census::rect("deck:lamp", i, lx - widestWord * 0.5f,
                                            Y(86.0f) - S(7.0f), lx + widestWord * 0.5f,
-                                           Y(86.0f) + S(7.0f));
+                                           Y(86.0f) + S(7.0f) + 4.0f + lampCapPx);
             }
             cascade::gui::drawBenchLamp(
                 dl, ImVec2(firstX + lampPitch * static_cast<float>(i), Y(86.0f)), S(7.0f),
                 lamps[i].colour, lamps[i].lit, lamps[i].word);
         }
         ImGui::PopFont();
+    }
+
+    // THE BIAS TEE KEY (2026-09-25; "add bias tee to the main panel"). In the
+    // MASTER compartment under the lamp row, at the lamps' own left edge: an
+    // illuminated key - the rail's square key with a lamp set in its face -
+    // and its caption cut into the brass beside it, the deck's treatment for a
+    // label. DRAWN ONLY while the open radio has a bias tee, so the deck of
+    // every radio without one (and of the generator) is exactly what it was.
+    //
+    // The lamp is the driver's READBACK and nothing else (biasKeyPanel), and
+    // it is amber, the deck's caution lamp - the MUTE lamp's hue: something
+    // the user switched is in effect on the signal path. A press goes to
+    // biasKeyPressed: off at once, on only through the confirmation dialog the
+    // first time for each radio in a session (gui/bias_tee.hpp says why).
+    if (const cascade::gui::BiasTeePanel bk = biasKeyPanel(); bk.present) {
+        const cascade::gui::FreqRect area = cascade::gui::deckBiasKeyArea();
+        const ImVec2 kTL(X(area.x0), Y(area.y0));
+        const float kSize = S(cascade::gui::kDeckBiasKeySize);
+        const bool pressed = cascade::gui::drawBenchKey(dl, kTL, kSize, bk.shown);
+        const bool keyHovered = ImGui::IsItemHovered();
+        cascade::gui::drawBenchLamp(dl, ImVec2(kTL.x + kSize * 0.5f, kTL.y + kSize * 0.5f),
+                                    S(4.0f), cascade::gui::theme::kAmber, bk.shown, nullptr);
+        // The caption, fitted to the compartment: a longer word in another
+        // language is lettered smaller (never under nine pixels) rather than
+        // run under the divider, and clipped there as the last resort.
+        const char* caption = tr("BIAS TEE");
+        ImFont* lf = cascade::gui::fonts::legend();
+        const float capX = kTL.x + kSize + S(cascade::gui::kDeckBiasCaptionGap);
+        const float capRoom = X(area.x1) - capX;
+        float bpx = capPx;
+        float bw = barTrackedWidth(lf, bpx, caption, bpx * 0.24f);
+        if (bw > capRoom && bw > 0.0f) {
+            bpx = std::max(9.0f, bpx * capRoom / bw);
+            bw = barTrackedWidth(lf, bpx, caption, bpx * 0.24f);
+        }
+        const float capY = kTL.y + (kSize - bpx) * 0.5f;
+        const float capR = capX + std::min(bw, capRoom);
+        dl->PushClipRect(ImVec2(capX, barTL.y), ImVec2(X(area.x1), barBR.y), true);
+        barEngrave(dl, ImVec2(capX, capY), bpx, caption, false);
+        dl->PopClipRect();
+        cascade::gui::census::note("deck:bias");
+        cascade::gui::census::rect("deck:bias", kTL.x, std::min(kTL.y, capY), capR,
+                                   std::max(kTL.y + kSize, capY + bpx));
+        // Its lamp was lit on some frame of the run (tests/test_bias_key_run).
+        if (bk.shown) { cascade::gui::census::note("deck:bias.lit"); }
+        // THE CHECKBOX'S OWN WARNING, over the key and over its caption.
+        if (keyHovered || ImGui::IsMouseHoveringRect(ImVec2(capX, capY), ImVec2(capR, capY + bpx))) {
+            ImGui::SetTooltip(
+                "%s", tr("Sends about 4.5 V up the antenna cable to power an amplifier at the "
+                         "mast. Leave it off unless you have one: equipment that is not "
+                         "expecting power on the connector can be damaged by it."));
+        }
+        if (pressed) { biasKeyPressed(); }
     }
 
     // --- the counter --------------------------------------------------------
@@ -7706,13 +7771,12 @@ void AppWindow::drawSourceSection() {
         // over a radio with no power on the port is the same lie the antenna
         // combo was fixed for. What a tick remembers, and for which radio, is
         // gui/bias_tee.hpp's (biasTeeTicked).
+        //
+        // The deck's BIAS TEE key shows the same `shown` and switches through
+        // the same switchBiasTee, so the box and the key always agree.
         if (biasTeePanel_.present) {
             bool box = biasTeePanel_.shown;
-            if (ImGui::Checkbox(trId("Bias tee"), &box)) {
-                std::string err;
-                biasTeeTicked(biasTeePanel_, device_, deviceArgs_, box, &err);
-                if (!err.empty()) { sourceError_ = err; }
-            }
+            if (ImGui::Checkbox(trId("Bias tee"), &box)) { switchBiasTee(box); }
             if (ImGui::IsItemHovered()) {
                 ImGui::SetTooltip(
                     tr("Sends about 4.5 V up the antenna cable to power an amplifier at the "
@@ -9173,12 +9237,13 @@ void AppWindow::adoptDeviceMirrors(cascade::source::DeviceSource& dev, const std
 
     // THE BIAS TEE, AFTER THE DEVICE IS UP, and only when the radio has one
     // this panel can reach. The six non-RTL drivers switch it OFF as part of
-    // open(), so their saved setting is re-applied here or a mast-head
-    // amplifier would go dark on every launch; an RTL-SDR gets back only what
-    // was remembered for THAT dongle, and never an "on" on a dongle with no
-    // EEPROM. The checkbox then shows the READBACK. A radio without one
-    // leaves every remembered setting alone. The whole rule, and why, is
-    // biasTeeAfterOpen in gui/bias_tee.hpp.
+    // open(), so a remembered "on" is re-applied here or a mast-head
+    // amplifier would go dark on every launch - but only THIS radio's own,
+    // by driver and serial; an RTL-SDR gets back only what was remembered for
+    // THAT dongle, and never an "on" on a dongle with no EEPROM. The checkbox
+    // then shows the READBACK. A radio without one leaves every remembered
+    // setting alone. The whole rule, and why, is biasTeeAfterOpen in
+    // gui/bias_tee.hpp.
     biasTeeAfterOpen(biasTeePanel_, dev, args);
 
     // THE PER-RADIO SWITCHES, READ AND NOT WRITTEN. Unlike the bias tee these
@@ -23385,11 +23450,9 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     // by the next save. adoptDeviceMirrors is what applies it to a radio that
     // does open - every one of these drivers switches the bias tee off during
     // open(), so it has to be re-applied afterwards or a mast-head amplifier
-    // goes dark on every launch. The RTL-SDR's memory rides beside it: which
-    // dongle, and which way (gui/bias_tee.hpp says why it is separate).
-    biasTeePanel_.other = cfg.nativeBiasT;
-    biasTeePanel_.rtlArgs = cfg.rtlBiasTArgs;
-    biasTeePanel_.rtlOn = cfg.rtlBiasT;
+    // goes dark on every launch. It is PER RADIO (gui/bias_tee.hpp,
+    // BiasTeePanel::remembered): each radio gets back only its own.
+    biasTeePanel_.remembered = cfg.biasTee;
     // THE PLUTO'S ADDRESS IS SEEDED HERE TOO, and it has to be before the
     // scanNative() further down: that is what builds the Pluto's row, the
     // row's args are "uri=" plus this box, and the restore below finds the
@@ -24118,9 +24181,7 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     // one that could ever fall back. See AppConfig::nativeArgs.
     cfg.soapyArgs = src.soapyArgs;
     cfg.nativeArgs = src.nativeArgs;
-    cfg.nativeBiasT = biasTeePanel_.other;
-    cfg.rtlBiasTArgs = biasTeePanel_.rtlArgs;
-    cfg.rtlBiasT = biasTeePanel_.rtlOn;
+    cfg.biasTee = biasTeePanel_.remembered;
     // Every radio's converter, including those not open now: a converter is
     // part of how that radio is cabled, and must survive a session without it.
     cfg.converters = converters_;

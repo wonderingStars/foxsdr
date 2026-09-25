@@ -2131,14 +2131,61 @@ private:
     // drivers that has one and can say so (see withBiasTee in
     // gui/bias_tee.hpp for which, and for why this is not a DeviceSource
     // method). `shown` is the checkbox and is always the driver's READBACK;
-    // `other` is AppConfig::nativeBiasT (the six non-RTL radios' one setting)
-    // and rtlArgs/rtlOn are AppConfig::rtlBiasTArgs/rtlBiasT (the RTL-SDR's,
-    // tied to one dongle). All three memories are seeded at restore, applied
-    // by adoptDeviceMirrors after every open through biasTeeAfterOpen, and
-    // changed only by a tick (biasTeeTicked) or, for `other`, by the readback
-    // after a non-RTL open - exactly as deviceBiasT_ was before the RTL-SDR
-    // joined.
+    // `remembered` is AppConfig::biasTee, the memory PER RADIO (driver and
+    // serial) for every family. It is seeded at restore, applied by
+    // adoptDeviceMirrors after every open through biasTeeAfterOpen - to that
+    // radio only - and changed only when the user switches a radio, with the
+    // checkbox or the deck's key (biasTeeTicked).
     cascade::gui::BiasTeePanel biasTeePanel_;
+
+    // --- THE DECK'S BIAS TEE KEY (2026-09-25, app_window_bias_key.cpp) --------
+    //
+    // A second control over biasTeePanel_, on the deck: drawn only while the
+    // open radio has a bias tee, lit exactly when `shown` is, and switching
+    // through switchBiasTee - the checkbox's own path - so the two cannot
+    // disagree. Off is immediate; on asks first, once per radio per session
+    // (gui/bias_tee.hpp, BiasKeyGate, says why a dialog and not a hold).
+    cascade::gui::BiasKeyGate biasKeyGate_;
+    // Raised by a press that has to ask; the dialog is opened from the top
+    // level (drawBiasKeyConfirm), because the press happens inside the deck's
+    // child and ImGui wants OpenPopup in the same ID stack as the modal.
+    bool biasKeyAskQueued_ = false;
+    // THE SWITCH BOTH CONTROLS USE: biasTeeTicked on the open radio, and its
+    // refusal (the driver's own lastError) into sourceError_, where every
+    // other Source-panel refusal is shown.
+    void switchBiasTee(bool want);
+    // The panel the KEY shows: biasTeePanel_, or - only while no real radio
+    // with a bias tee is open - the census/capture stand-in below.
+    cascade::gui::BiasTeePanel biasKeyPanel() const;
+    // A radio is open NOW and has a bias tee this application reaches -
+    // biasTeePanel_.present on its own outlives a close.
+    bool biasTeeReachable() const;
+    // "kind|args" of the radio the key speaks for (gui::biasKeyRadio), and
+    // whether an "on" switched now will be kept and restored at its next open
+    // (gui::biasTeeWillRestoreOn) - what the dialog may promise, and when a
+    // confirmation may be kept for the session.
+    std::string biasKeyRadioNow() const;
+    bool biasKeyMayRememberNow() const;
+    // The key was pressed / the dialog was answered (true: "Turn it on").
+    void biasKeyPressed();
+    void biasKeyAnswered(bool turnOn);
+    // The confirmation dialog, drawn every frame from drawUi beside the mute
+    // popup; it closes itself when its question stops applying.
+    void drawBiasKeyConfirm();
+    // THE CENSUS AND CAPTURE SEAM, like FOXSDR_FORCE_MUTE_BANNER: with
+    // FOXSDR_FORCE_BIAS_KEY=accept (or =refuse) and no radio with a bias tee
+    // open, the key is drawn over a STAND-IN bias tee that takes (or refuses)
+    // every change, so tests/test_theme_census.cpp can place the key in every
+    // theme and a capture can show it off, on and refused off the generator.
+    // It never touches a radio: the moment a real one with a bias tee is open,
+    // that radio's readback is what the key shows. READ ONLY BY run() FOR A
+    // BOUNDED (--frames) RUN (gui::biasStandInFor), like FOXSDR_INPUT_SCRIPT:
+    // an interactive launch never has a stand-in.
+    cascade::gui::BiasStandIn biasStandIn_ = cascade::gui::BiasStandIn::None;
+    bool biasStandInActive() const {
+        return biasStandIn_ != cascade::gui::BiasStandIn::None && !biasTeeReachable();
+    }
+    bool biasStandInOn_ = false;
 
     // --- THE CONVERTER IN FRONT OF THE RADIO (0.99.36, app_window_converter.cpp)
     //

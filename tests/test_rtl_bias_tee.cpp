@@ -16,6 +16,7 @@
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <cstdint>
+#include <map>
 #include <cstdio>
 #include <memory>
 #include <string>
@@ -139,6 +140,16 @@ bool anyGpoWriteWithBit0(const FakeUsbDevice& f) {
     return false;
 }
 
+// THE PER-RADIO MEMORY (repair round 1 of the deck key): what is remembered
+// for the dongle `args` names - 1 on, 0 off, -1 nothing - and a memory set
+// by hand, as a saved config would carry it.
+int recalled(const BiasTeePanel& p, const std::string& args) {
+    return cascade::gui::biasTeeRecalled(p, "rtlsdr", args);
+}
+void seed(BiasTeePanel& p, const std::string& kind, const std::string& args, bool on) {
+    p.remembered[cascade::core::biasTeeRadioKey(kind, args)] = on;
+}
+
 // Opens a dongle through the shipping path and runs the panel's after-open
 // step on it, as AppWindow::adoptDeviceMirrors does.
 FakeUsbDevice* openDongle(RtlSdrSource& src, BiasTeePanel& panel, Eeprom eeprom,
@@ -203,8 +214,7 @@ int main() {
         CHECK((reg(*f, kGpd) & 0x01) == 0);   // ...and not disabled
         CHECK(anyGpoWriteWithBit0(*f));
         // THE MEMORY names this dongle and says on.
-        CHECK(panel.rtlArgs == "serial=00000001");
-        CHECK(panel.rtlOn);
+        CHECK(recalled(panel, "serial=00000001") == 1);
 
         f->clear();
         biasTeeTicked(panel, &src, "serial=00000001", false, &err);
@@ -213,7 +223,7 @@ int main() {
         CHECK(!src.biasT());
         CHECK(!gpio0High(*f));
         CHECK(!gpoWrites(*f).empty());
-        CHECK(!panel.rtlOn);
+        CHECK(recalled(panel, "serial=00000001") == 0);
         src.closeDevice();
     }
 
@@ -236,8 +246,7 @@ int main() {
         CHECK(!src.biasT());
         CHECK(!gpio0High(*f));
         CHECK(!err.empty());
-        CHECK(panel.rtlArgs.empty());
-        CHECK(!panel.rtlOn);
+        CHECK(panel.remembered.empty());
 
         // On, and the UNtick is refused: the box stays ticked, because the
         // power is still on the port.
@@ -255,7 +264,7 @@ int main() {
         CHECK(src2.biasT());
         CHECK(gpio0High(*f2));
         CHECK(!err.empty());
-        CHECK(panel2.rtlOn);  // the memory still says what the port is doing
+        CHECK(recalled(panel2, "serial=00000002") == 1);  // what the port is doing
         src.closeDevice();
         src2.closeDevice();
     }
@@ -284,9 +293,9 @@ int main() {
         for (const Case& k : cases) {
             RtlSdrSource src;
             BiasTeePanel panel;
-            panel.rtlArgs = k.savedArgs;
-            panel.rtlOn = k.savedOn;
-            panel.other = k.otherOn;
+            if (!k.savedArgs.empty()) { seed(panel, "rtlsdr", k.savedArgs, k.savedOn); }
+            if (k.otherOn) { seed(panel, "hackrf", "serial=0000000000000000457863c8", true); }
+            const std::map<std::string, bool> before = panel.remembered;
             auto fake = makeDongle(Eeprom::None);
             FakeUsbDevice* f = fake.get();
             CHECK(src.openWithTransport(std::move(fake), "fake EEPROM-less dongle"));
@@ -301,9 +310,11 @@ int main() {
             CHECK(!anyGpoWriteWithBit0(*f));
             // The memory is not rewritten by an open: it is the user's choice,
             // and only a tick changes it.
-            CHECK(panel.rtlArgs == k.savedArgs);
-            CHECK(panel.rtlOn == k.savedOn);
-            CHECK(panel.other == k.otherOn);
+            CHECK(panel.remembered == before);
+
+            // THE DECK'S DIALOG MUST NOT PROMISE A RESTORE for it (review
+            // round 2, L2): its "on" will never be put back at an open.
+            CHECK(!cascade::gui::biasTeeWillRestoreOn(panel, src, "serial=00000001"));
 
             // ...and the user CAN still tick it on in this session.
             biasTeeTicked(panel, &src, "serial=00000001", true, nullptr);
@@ -311,6 +322,16 @@ int main() {
             CHECK(gpio0High(*f));
             src.closeDevice();
         }
+    }
+    // The control: the same serial with a valid EEPROM IS promised a restore.
+    {
+        RtlSdrSource src;
+        BiasTeePanel panel;
+        openDongle(src, panel, Eeprom::Plain, "serial=00000001");
+        CHECK(cascade::gui::biasTeeWillRestoreOn(panel, src, "serial=00000001"));
+        // ...but a dongle opened by position is not.
+        CHECK(!cascade::gui::biasTeeWillRestoreOn(panel, src, "index=0"));
+        src.closeDevice();
     }
 
     // =======================================================================
@@ -321,8 +342,7 @@ int main() {
         {
             RtlSdrSource src;
             BiasTeePanel panel;
-            panel.rtlArgs = "serial=00000001";
-            panel.rtlOn = true;
+            seed(panel, "rtlsdr", "serial=00000001", true);
             FakeUsbDevice* f = openDongle(src, panel, Eeprom::Plain, "serial=00000001");
             std::printf("[5] same dongle saved on: shown %d, GPO %02X\n", panel.shown,
                         reg(*f, kGpo));
@@ -335,8 +355,7 @@ int main() {
         {
             RtlSdrSource src;
             BiasTeePanel panel;
-            panel.rtlArgs = "serial=BBBBBBBB";
-            panel.rtlOn = true;
+            seed(panel, "rtlsdr", "serial=BBBBBBBB", true);
             FakeUsbDevice* f = openDongle(src, panel, Eeprom::Plain, "serial=00000001");
             std::printf("[5] different dongle saved on: shown %d, GPO %02X\n", panel.shown,
                         reg(*f, kGpo));
@@ -350,8 +369,7 @@ int main() {
         {
             RtlSdrSource src;
             BiasTeePanel panel;
-            panel.rtlArgs = "index=0";
-            panel.rtlOn = true;
+            seed(panel, "rtlsdr", "index=0", true);  // by hand: no rule writes this
             FakeUsbDevice* f = openDongle(src, panel, Eeprom::Plain, "index=0");
             std::printf("[5] index=0 saved on: shown %d\n", panel.shown);
             CHECK(!panel.shown);
@@ -363,7 +381,7 @@ int main() {
         {
             RtlSdrSource src;
             BiasTeePanel panel;
-            panel.other = true;
+            seed(panel, "hackrf", "serial=0000000000000000457863c8", true);
             FakeUsbDevice* f = openDongle(src, panel, Eeprom::Plain, "serial=00000001");
             std::printf("[5] another radio saved on: shown %d\n", panel.shown);
             CHECK(!panel.shown);
@@ -372,7 +390,8 @@ int main() {
             // radio's setting exactly as it was.
             biasTeeTicked(panel, &src, "serial=00000001", true, nullptr);
             biasTeeTicked(panel, &src, "serial=00000001", false, nullptr);
-            CHECK(panel.other);
+            CHECK(panel.remembered.at(cascade::core::biasTeeRadioKey(
+                "hackrf", "serial=0000000000000000457863c8")));
             src.closeDevice();
         }
     }
@@ -398,8 +417,7 @@ int main() {
         CHECK(!panel.shown);
         CHECK(!src.biasT());
         CHECK(!gpio0High(*f));
-        CHECK(panel.rtlArgs == "serial=00000007");
-        CHECK(!panel.rtlOn);
+        CHECK(recalled(panel, "serial=00000007") == 0);
         src.closeDevice();
 
         // The next open of THAT dongle honours the untick.

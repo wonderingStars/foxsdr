@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/config.hpp"
 
+#include "core/bias_tee_memory.hpp"
+
 #include "core/plugin_api.hpp"
 #include "core/telemetry.hpp"
 // clampScopeRangeNm(): the radar scope's ladder of range steps.
@@ -223,9 +225,41 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     getString(j, "sourceKind", out.sourceKind);
     getString(j, "soapyArgs", out.soapyArgs);
     getString(j, "nativeArgs", out.nativeArgs);
-    getBool(j, "nativeBiasT", out.nativeBiasT);
-    getString(j, "rtlBiasTArgs", out.rtlBiasTArgs);
-    getBool(j, "rtlBiasT", out.rtlBiasT);
+    // THE BIAS TEE, PER RADIO (AppConfig::biasTee). Element-wise tolerant: an
+    // entry that is not a bool, or whose key is not "<kind>|<args>", is
+    // skipped, and an "on" for a radio with no serial is dropped - the file
+    // may say it, but no rule of this application would have written it, and
+    // it would put power on whichever radio next answered in that socket.
+    {
+        const auto it = j.find("biasTee");
+        if (it != j.end() && it->is_object()) {
+            for (auto e = it->begin(); e != it->end(); ++e) {
+                if (!e.value().is_boolean()) { continue; }
+                const std::string& key = e.key();
+                const std::size_t bar = key.find('|');
+                if (bar == std::string::npos || bar == 0) { continue; }
+                const bool on = e.value().get<bool>();
+                if (on && !biasTeeArgsNameARadio(key.substr(bar + 1))) { continue; }
+                if (out.biasTee.size() >= kBiasTeeMemoryCap) { break; }
+                out.biasTee[key] = on;
+            }
+        }
+        // THE RTL-SDR's OLD MEMORY of one dongle is carried over, under the
+        // same rule. "nativeBiasT" - the one bool every other family opened
+        // with - is deliberately NOT read: it cannot say which radio it was
+        // meant for, so carrying it over would power every one of them, and
+        // the next save drops it (see config.hpp).
+        std::string rtlArgs;
+        bool rtlOn = false;
+        getString(j, "rtlBiasTArgs", rtlArgs);
+        getBool(j, "rtlBiasT", rtlOn);
+        if (!rtlArgs.empty() && (!rtlOn || biasTeeArgsNameARadio(rtlArgs))) {
+            const std::string key = biasTeeRadioKey("rtlsdr", rtlArgs);
+            if (out.biasTee.count(key) == 0 && out.biasTee.size() < kBiasTeeMemoryCap) {
+                out.biasTee[key] = rtlOn;
+            }
+        }
+    }
     // The converters, element-wise tolerant like userPresets: an entry that is
     // not an object is skipped, and every other rule (unknown mode = off, a bad
     // LO = off, no radio = dropped, the cap) is sanitiseConverters', below.
@@ -769,9 +803,11 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
     j["sourceKind"] = cfg.sourceKind;
     j["soapyArgs"] = cfg.soapyArgs;
     j["nativeArgs"] = cfg.nativeArgs;
-    j["nativeBiasT"] = cfg.nativeBiasT;
-    j["rtlBiasTArgs"] = cfg.rtlBiasTArgs;
-    j["rtlBiasT"] = cfg.rtlBiasT;
+    {
+        json bias = json::object();
+        for (const auto& [radio, on] : cfg.biasTee) { bias[radio] = on; }
+        j["biasTee"] = std::move(bias);
+    }
     {
         json conv = json::array();
         for (const auto& [radio, s] : cfg.converters) {
