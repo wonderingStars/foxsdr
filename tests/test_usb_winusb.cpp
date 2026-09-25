@@ -25,6 +25,10 @@
 #include "usb/usb_device.hpp"
 #include "usb/usb_fake.hpp"
 
+#if defined(__linux__)
+#include <dirent.h>
+#endif
+
 using cascade::usb::FakeUsbDevice;
 using cascade::usb::UsbDeviceInfo;
 using cascade::usb::UsbId;
@@ -437,8 +441,19 @@ int main() {
         }
         std::printf("live USB listing: listed=%d, %zu distinct ids, Ettus device present=%d\n",
                     listed ? 1 : 0, present.size(), usrp ? 1 : 0);
-#if defined(_WIN32) || defined(__linux__)
+#if defined(_WIN32)
         CHECK(listed);
+#elif defined(__linux__)
+        // Listed exactly when sysfs can be read (review of 5e7b968: an
+        // unreadable bus is a failed listing, never an empty one). A WSL or
+        // container build box has no /sys/bus/usb/devices at all, and must
+        // then answer false - which this check used to call a failure.
+        DIR* sysfs = ::opendir("/sys/bus/usb/devices");
+        const bool readable = sysfs != nullptr;
+        if (sysfs != nullptr) { ::closedir(sysfs); }
+        std::printf("sysfs readable=%d\n", readable ? 1 : 0);
+        CHECK(listed == readable);
+        if (!readable) { CHECK(present.empty()); }
 #endif
     }
 
