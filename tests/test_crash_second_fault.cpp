@@ -37,6 +37,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -129,14 +130,18 @@ std::vector<fs::path> reportsIn(const fs::path& dir) {
 }
 
 // A null store the optimiser cannot fold away. Out of line so each thread
-// faults in a frame of its own.
+// faults in a frame of its own. The ADDRESS is read through a volatile, not
+// written as a constant: GCC at -O3 proved a store through a constant null
+// pointer undefined and removed it, and the Linux children returned 7 ("the
+// fault did not happen") instead of dying.
 #if defined(_MSC_VER)
 __declspec(noinline)
 #else
 __attribute__((noinline))
 #endif
 void faultNow() {
-    volatile int* p = reinterpret_cast<volatile int*>(0);
+    volatile std::uintptr_t address = 0;
+    volatile int* p = reinterpret_cast<volatile int*>(static_cast<std::uintptr_t>(address));
     *p = 1;
 }
 
