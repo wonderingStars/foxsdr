@@ -211,7 +211,16 @@ inline std::string converterRadioKey(const std::string& kind, const std::string&
 
 // A setting read from a file, made safe: an invalid LO turns the converter
 // OFF (and forgets the LO) rather than keeping a mode that cannot be applied.
+//
+// AND THE LO IS WHOLE HERTZ. A radio keeps what it is told in whole hertz (an
+// RTL-SDR's tuner call takes a uint32), so a fractional LO would tell it a
+// fractional frequency, lose the fraction, and read every tune back as an air
+// frequency a fraction of a hertz from the one asked for - the counter
+// disagreeing with itself, and the repeat-tune guard (applyRetuneNow's "no-op
+// when the tune moves nothing") never matching. Rounded here, where every
+// loaded and every changed setting passes, and in parseConverterLoHz.
 inline ConverterSetting sanitiseConverter(ConverterSetting s) {
+    if (std::isfinite(s.loHz)) { s.loHz = std::round(s.loHz); }
     if (!converterLoValid(s.loHz)) {
         s.mode = ConverterMode::Off;
         s.loHz = 0.0;
@@ -309,7 +318,8 @@ inline bool parseConverterLoHz(const std::string& text, double& outHz) {
     } else {
         return false;
     }
-    const double hz = value * scale;
+    // WHOLE HERTZ, like every LO sanitiseConverter lets through: see there.
+    const double hz = std::round(value * scale);
     if (!converterLoValid(hz)) { return false; }
     outHz = hz;
     return true;

@@ -827,6 +827,7 @@
   "Open foxsdr.com": "打开 foxsdr.com",
   "Open reports folder": "打开报告文件夹",
   "Open the plugin store with the key above to fetch the update.": "用上方的按键打开插件商店以获取更新。",
+  "Opened through SoapySDR because the native driver refused this radio - the converter set for it still applies.": "原生驱动拒绝了此 SDR，已改用 SoapySDR 打开——为它设置的变频器仍然生效。",
   "Opening %s...": "正在打开 %s...",
   "Opens the bench oscilloscope: the demodulated audio on a\nten-by-eight graticule, its spectrum, and the channel I/Q as\ntwo traces and as a vector display. The time base, the\nattenuator and the input selector are on the page itself.": "打开台式示波器: 以十乘八刻度网格显示解调音频、\n其频谱，以及信道 I/Q 的两条迹线\n和矢量显示。时基、衰减器\n和输入选择器都在页面上。",
   "Opens the fitted modules window: what is installed, which\nmodules are being fed, which were refused and why, and the\nkeys that start, stop and remove them. Start tunes the radio\nto the decoder's first preset unless it is already there.": "打开“已装模块”窗口: 已安装了什么、哪些\n模块有信号馈入、哪些被拒绝及原因，以及\n启动、停止和移除它们的按键。“启动”会将 SDR 调谐\n到解码器的第一个预设，除非已经在那里。",

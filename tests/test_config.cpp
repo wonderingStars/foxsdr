@@ -495,6 +495,15 @@ int main() {
                                                    false};
         in.converters["siggen"] = {cascade::core::ConverterMode::Down, 9.75e9, true};
         in.converters["hackrf|serial=abc"] = {cascade::core::ConverterMode::Off, 2.0e6, false};
+        // LOs a LOSSY WRITER cannot carry: every other LO above is round
+        // enough to survive a float (125e6) or nine significant digits
+        // (9.75e9), which is how a writer that rounded or narrowed the LO
+        // passed this test before. 124998123 Hz needs nine digits and more
+        // than a float's 24 bits; 10489123457 Hz needs eleven.
+        in.converters["airspy|serial=odd"] = {cascade::core::ConverterMode::Up, 124998123.0,
+                                              false};
+        in.converters["rx888|serial=lnb"] = {cascade::core::ConverterMode::Down, 10489123457.0,
+                                             true};
         in.plutoUri = "ip:pluto.local";
         in.iqFilePath = "C:/iq/capture_2msps.wav";
         in.centerHz = 433920000.0;
@@ -962,12 +971,14 @@ int main() {
                         "{\"radio\":\"airspy|serial=y\",\"mode\":\"up\"},"
                         "{\"mode\":\"up\",\"loHz\":125000000},"
                         "\"not an object\","
-                        "{\"radio\":\"siggen\",\"mode\":\"down\",\"loHz\":9750000000,\"inverted\":true}"
+                        "{\"radio\":\"siggen\",\"mode\":\"down\",\"loHz\":9750000000,\"inverted\":true},"
+                        "{\"radio\":\"rtlsdr|serial=00000003\",\"mode\":\"up\","
+                        "\"loHz\":124998123.45678912}"
                         "]}\n"));
         CHECK(ConfigStore::load(path, out, err));
         CHECK(out.converters.count("garbage") == 0);
         CHECK(out.converters.count("") == 0);  // no radio: dropped
-        CHECK(out.converters.size() == 5);
+        CHECK(out.converters.size() == 6);
         {
             const auto& c1 = out.converters["rtlsdr|serial=00000001"];
             CHECK(c1.mode == ConverterMode::Up);
@@ -987,6 +998,12 @@ int main() {
             CHECK(c5.mode == ConverterMode::Down);
             CHECK(c5.loHz == 9.75e9);
             CHECK(c5.inverted);
+            // A FRACTIONAL LO is rounded to whole hertz on load: a radio keeps
+            // whole hertz, and a fraction here would read every tune back a
+            // fraction of a hertz away from where it was asked for.
+            const auto& c6 = out.converters["rtlsdr|serial=00000003"];
+            CHECK(c6.mode == ConverterMode::Up);
+            CHECK(c6.loHz == 124998123.0);
         }
         // Not an array: nothing remembered, rather than a guess.
         out = junkConfig();

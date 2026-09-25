@@ -7229,6 +7229,9 @@ void AppWindow::drawSourceSection() {
                 // nativeDevices_, because the user may have typed since the
                 // list was built.
                 const std::string args = std::string("uri=") + plutoUri_;
+                // The frequency to carry, read BEFORE the close below: after
+                // it the generator is what answers.
+                const std::optional<double> keepCenterHz = carriedAirCentre();
                 if (device_ != nullptr) {
                     cascade::core::diagLogf(
                         "source: closing %s before opening the ADALM-Pluto",
@@ -7248,7 +7251,7 @@ void AppWindow::drawSourceSection() {
                 req.args = args;
                 req.row = sourceSel_;
                 req.requestRateHz = kSoapyRateHz[kSoapyRateDefaultIndex];
-                req.keepCenterHz = pipeline_.activeSource().centerFrequencyHz();
+                req.keepCenterHz = keepCenterHz;
                 launchDeviceOpen(std::move(req), "ADALM-Pluto at " + std::string(plutoUri_));
             }
         }
@@ -7987,6 +7990,11 @@ void AppWindow::finishDeviceOpen(DeviceOpenResult r) {
     ++sourceGen_;  // this install is itself a source change
     pipeline_.setSource(std::move(r.dev));
     sourceKind_ = r.kind;
+    // A dongle the native driver refused, opened through SoapySDR instead, is
+    // still the radio the user chose: its converter comes with it.
+    if (!r.fellBackFromKey.empty()) {
+        noteConverterFallback(r.fellBackFromKey, cascade::core::converterRadioKey(r.kind, r.args));
+    }
     // THIS radio's converter, before the carry-across below tunes it: the air
     // frequency the user was on is sent through the converter in front of the
     // radio now open, not the one in front of the radio just closed.
@@ -8010,22 +8018,30 @@ void AppWindow::finishDeviceOpen(DeviceOpenResult r) {
     // the level fell to the noise floor, the squelch stayed shut, and the
     // audio stopped: it reads as "changing device breaks the sound" rather
     // than "your radio is now tuned somewhere else".
-    if (r.keepCenterHz > 0.0) {
+    //
+    // WHETHER there is a frequency is its own question (keepCenterHz has a
+    // value), never a sign: the AIR centre may sit below 0 Hz through an
+    // up-converter and still be an ordinary tune for this radio.
+    if (r.keepCenterHz.has_value()) {
+        const double keepHz = *r.keepCenterHz;
         // A tune the coalescer was still holding was aimed at the OLD source;
         // the carry-across below supersedes it. Applied unpaced, because the
-        // readback two lines down must be valid on return.
+        // readback two lines down must be valid on return. A frequency THIS
+        // radio's converter cannot deliver is refused by the pipeline's view
+        // without reaching the radio, and noteTuneRefused says why.
         retuneCoalescer_.clearPending();
-        applyRetuneNow(r.keepCenterHz);
+        applyRetuneNow(keepHz);
         // Not every radio covers every band, so say so rather than leaving
         // the user on a frequency they did not choose. The readback is the
         // authority - a device may clamp to its range or land on a nearby
-        // tuning step.
+        // tuning step. (An unreachable one has the converter's sentence.)
         const double landed = pipeline_.activeSource().centerFrequencyHz();
-        if (std::fabs(landed - r.keepCenterHz) > 1000.0) {
+        if (cascade::core::airReachable(pipeline_.converter(), keepHz) &&
+            std::fabs(landed - keepHz) > 1000.0) {
             char buf[128];
             std::snprintf(buf, sizeof(buf),
                           "this radio could not tune %.6f MHz; it is on %.6f MHz",
-                          r.keepCenterHz / 1e6, landed / 1e6);
+                          keepHz / 1e6, landed / 1e6);
             sourceError_ = buf;
         }
     }
@@ -8081,8 +8097,14 @@ void AppWindow::launchDeviceOpen(DeviceOpenResult r, const std::string& busyLabe
                     "source: the native %s driver refused this radio (%s); opening it "
                     "through SoapySDR instead",
                     r.kind.c_str(), r.error.c_str());
-                auto soapy = std::make_unique<cascade::source::SoapySource>();
-                if (soapy->open(r.fallbackSoapyArgs)) {
+                // Through makeDeviceSource like every other construction, so
+                // "soapy" means one thing everywhere (and the test seam's
+                // fake stands in here too).
+                std::unique_ptr<cascade::source::DeviceSource> soapy = makeDeviceSource("soapy");
+                if (soapy && soapy->open(r.fallbackSoapyArgs)) {
+                    // The radio the user chose, under its native key, so its
+                    // converter follows it onto the Soapy one.
+                    r.fellBackFromKey = cascade::core::converterRadioKey(r.kind, r.args);
                     r.kind = "soapy";
                     r.args = r.fallbackSoapyArgs;
                     r.error.clear();
@@ -8131,6 +8153,15 @@ void AppWindow::pollSoapyRecovery() {
     // condemns its own device the same way) is held off for the minute
     // rather than tried again on the next frame.
     soapyReopenAttemptSec_ = now;
+    reopenAfterDriverFault();
+}
+
+void AppWindow::reopenAfterDriverFault() {
+    // What pollSoapyRecovery decided is due. Everything below reads the dead
+    // radio through device_ - the same object as soapyView_ whenever that
+    // gate let it through - so the reopen itself is DeviceSource work and a
+    // test can drive it with a device of its own (AppWindowTestAccess).
+    if (device_ == nullptr) { return; }
 
     // EVERYTHING THE REOPEN NEEDS IS READ FROM THE DEAD SOURCE FIRST. Its
     // mirrors survive the fault on purpose (a rate or a retune that faulted
@@ -8140,13 +8171,14 @@ void AppWindow::pollSoapyRecovery() {
     r.kind = "soapy";
     r.args = deviceArgs_;
     r.row = sourceSel_;
-    const double confirmedRateHz = soapyView_->sampleRateHz();
+    const double confirmedRateHz = device_->sampleRateHz();
     r.requestRateHz = confirmedRateHz > 0.0 ? confirmedRateHz
                                             : kSoapyRateHz[kSoapyRateDefaultIndex];
     // Through the pipeline, not the Soapy object: the device IS the active
     // source here, and only the pipeline's view speaks the AIR frequency the
-    // reopen carries across (the same one it will be sent through again).
-    r.keepCenterHz = pipeline_.activeSource().centerFrequencyHz();
+    // reopen carries across (the same one it will be sent through again) -
+    // which may be below 0 Hz on the air and is still a frequency.
+    r.keepCenterHz = carriedAirCentre();
     r.recovery = true;
     r.recoveryGainNames = deviceGainNames_;
     r.recoveryGainsDb = deviceGainsDb_;
@@ -8155,7 +8187,7 @@ void AppWindow::pollSoapyRecovery() {
     // source thread, which exists only while the receiver runs, so a latched
     // fault is proof it was running when the driver went.
     r.recoveryRestart = pipeline_.running() || pipeline_.faulted();
-    std::string what = soapyView_->faultedWhile();
+    std::string what = device_->faultedWhile();
     if (what.empty()) { what = "a driver call"; }
     std::string label = pipeline_.activeSource().name();
     const std::size_t colon = label.rfind(": ");
@@ -8191,7 +8223,7 @@ void AppWindow::pollSoapyRecovery() {
     launchDeviceOpen(std::move(r), label);
 }
 
-void AppWindow::selectSource(int idx) {
+void AppWindow::selectSource(int idx, std::optional<double> carryAirHz) {
     if (idx == sourceSel_) { return; }  // re-click on the current row: no-op
 
     // BUSY CHECK ON EVERY ROW, not just the device rows (adjudicated fix #4
@@ -8289,10 +8321,12 @@ void AppWindow::selectSource(int idx) {
     // until it resolves; on failure finishDeviceOpen settles the combo on
     // whatever is actually installed.
     const double rate = kSoapyRateHz[kSoapyRateDefaultIndex];
-    // Read the tuned frequency NOW: the old source is closed below, and a
-    // device that has never been opened reports 0, which finishDeviceOpen
-    // treats as "nothing to carry".
-    const double keepCenterHz = pipeline_.activeSource().centerFrequencyHz();
+    // Read the tuned frequency NOW: the old source is closed below. A device
+    // that has never been tuned has nothing to carry (carriedAirCentre); a
+    // caller that knows better - the patch page handing a radio back - says
+    // what to carry instead.
+    const std::optional<double> keepCenterHz =
+        carryAirHz.has_value() ? carryAirHz : carriedAirCentre();
 
     // CLOSE THE OLD RADIO BEFORE OPENING THE NEW ONE (adjudicated fix #3 for
     // the 0.62.0 field crashes). The previous flow opened the new device on
@@ -8336,6 +8370,7 @@ std::unique_ptr<cascade::source::DeviceSource> AppWindow::makeDeviceSource(
     // synchronous config restore and the prefer-native fallback all construct
     // drivers, and three copies of this switch would be three chances for
     // "rtlsdr" to mean something different in one of them.
+    if (testHooks_.makeDevice != nullptr) { return testHooks_.makeDevice(kind); }
     if (kind == "rtlsdr") { return std::make_unique<cascade::source::RtlSdrSource>(); }
     if (kind == "hackrf") { return std::make_unique<cascade::source::HackRfSource>(); }
     if (kind == "airspy") { return std::make_unique<cascade::source::AirspySource>(); }
@@ -8357,6 +8392,17 @@ void AppWindow::scanNative() {
     // 0.90.0 field report behind gui::deviceScanAllowed). So this runs on the
     // GUI thread, inline, whenever the list might be stale, including while a
     // radio of ours is streaming.
+    if (testHooks_.nativeScan != nullptr) {
+        // The test's list stands in for the USB walk (see testHooks_): no
+        // enumeration of any kind runs, and nothing is reported unbound.
+        nativeDevices_ = testHooks_.nativeScan();
+        nativeRowLabels_.clear();
+        for (const cascade::source::NativeDeviceInfo& d : nativeDevices_) {
+            nativeRowLabels_.push_back(d.label);
+        }
+        nativeUnbound_.clear();
+        return;
+    }
     nativeDevices_ = cascade::source::enumerateRtlSdr();
     for (cascade::source::NativeDeviceInfo& d : cascade::source::enumerateHackRf()) {
         nativeDevices_.push_back(std::move(d));
@@ -12441,8 +12487,10 @@ void AppWindow::drawPatchPage() {
             if (cascade::core::patch::Node* n = patchGraph_.mutableNode(n0.id)) {
                 if (n->device.empty()) {
                     n->device = patchDefaultDeviceKey();
-                    if (n->freqHz <= 0.0 && device_ != nullptr) {
-                        n->freqHz = pipeline_.activeSource().centerFrequencyHz();
+                    // The receiver's AIR centre, which may be below 0 Hz
+                    // through a converter (core::patch::radioCentreSet).
+                    if (!cascade::core::patch::radioCentreSet(*n) && device_ != nullptr) {
+                        if (const std::optional<double> c = carriedAirCentre()) { n->freqHz = *c; }
                     }
                 }
             }
@@ -22948,9 +22996,13 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
                 "source: the native %s driver refused the saved radio (%s); opening it "
                 "through SoapySDR instead",
                 kind.c_str(), sourceError_.c_str());
+            const std::string nativeKey = cascade::core::converterRadioKey(kind, args);
             kind = "soapy";
             args = fallbackSoapyArgs;
             dev = openDeviceSync(kind, args, cfg.sampleRateHz);
+            // The radio the user chose, reached another way: its converter
+            // comes with it (before the saved frequency is converted below).
+            if (dev) { noteConverterFallback(nativeKey, cascade::core::converterRadioKey(kind, args)); }
         }
         if (dev) {
             // The saved AIR frequency, told to the radio through the

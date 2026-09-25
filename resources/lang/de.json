@@ -827,6 +827,7 @@
   "Open foxsdr.com": "foxsdr.com öffnen",
   "Open reports folder": "Berichtsordner öffnen",
   "Open the plugin store with the key above to fetch the update.": "Öffnen Sie den Plugin-Store mit der Taste oben, um das Update zu holen.",
+  "Opened through SoapySDR because the native driver refused this radio - the converter set for it still applies.": "Über SoapySDR geöffnet, weil der native Treiber dieses SDR abgelehnt hat - der dafür eingestellte Konverter gilt weiterhin.",
   "Opening %s...": "%s wird geöffnet...",
   "Opens the bench oscilloscope: the demodulated audio on a\nten-by-eight graticule, its spectrum, and the channel I/Q as\ntwo traces and as a vector display. The time base, the\nattenuator and the input selector are on the page itself.": "Öffnet das Messplatz-Oszilloskop: das demodulierte Audio auf einem\nRaster mit zehn mal acht Teilungen, sein Spektrum und das Kanal-I/Q als\nzwei Kurven und als Vektordarstellung. Zeitbasis, Abschwächer und\nEingangswahl befinden sich auf der Seite selbst.",
   "Opens the fitted modules window: what is installed, which\nmodules are being fed, which were refused and why, and the\nkeys that start, stop and remove them. Start tunes the radio\nto the decoder's first preset unless it is already there.": "Öffnet das Fenster „Eingebaute Module“: was installiert ist, welche\nModule gespeist werden, welche abgelehnt wurden und warum, und die\nTasten zum Starten, Stoppen und Entfernen. Start stimmt das SDR auf\ndas erste Preset des Decoders ab, sofern es nicht schon dort ist.",

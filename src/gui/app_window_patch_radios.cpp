@@ -235,7 +235,9 @@ void AppWindow::patchReconcile() {
         keep.args = deviceArgs_;
         keep.label = deviceModel_;
         keep.rateHz = pipeline_.activeSource().sampleRateHz();
-        keep.centreHz = pipeline_.activeSource().centerFrequencyHz();
+        // The AIR centre, which may be below 0 Hz through a converter; no
+        // value only when the radio has never been tuned.
+        keep.centreHz = carriedAirCentre();
         cascade::core::diagLogf(
             "patch: the receiver's radio (%s) is handed to the patch page; the receiver "
             "runs on the signal generator until the patch is stopped",
@@ -252,7 +254,9 @@ void AppWindow::patchReconcile() {
             if (n0.kind != pc::NodeKind::Radio || !n0.device.empty()) { continue; }
             if (pc::Node* n = patchGraph_.mutableNode(n0.id)) {
                 n->device = pc::makeDeviceKey(keep.kind, keep.args);
-                if (n->freqHz <= 0.0) { n->freqHz = keep.centreHz; }
+                if (!pc::radioCentreSet(*n) && keep.centreHz.has_value()) {
+                    n->freqHz = *keep.centreHz;
+                }
                 if (n->rateHz <= 0.0) { n->rateHz = keep.rateHz; }
                 patchUi_.dirty = true;
             }
@@ -363,7 +367,7 @@ void AppWindow::patchReconcile() {
             // the node's AIR frequency is what it hears.
             const cascade::core::ConverterSetting conv = converterForKey(n->device);
             if (r.converter() != conv) { r.setConverter(conv); }
-            if (n->freqHz <= 0.0) {
+            if (!pc::radioCentreSet(*n)) {
                 n->freqHz = r.centreHz();
                 patchUi_.dirty = true;
             } else if (std::fabs(r.centreHz() - n->freqHz) > 0.5) {
@@ -386,7 +390,7 @@ void AppWindow::patchReconcile() {
             auto radio = std::make_unique<pc::PatchRadio>(
                 id,
                 makePatchGenerator(rate, cascade::core::radioFromAir(
-                                             conv, centre > 0.0 ? centre : 100.0e6)),
+                                             conv, pc::radioCentreSet(*n) ? centre : 100.0e6)),
                 "Signal generator");
             radio->setConverter(conv);
             std::string err;
@@ -395,7 +399,7 @@ void AppWindow::patchReconcile() {
                 patchRadioFailedAs_[id] = as;
                 continue;
             }
-            if (n->freqHz <= 0.0) {
+            if (!pc::radioCentreSet(*n)) {
                 n->freqHz = radio->centreHz();
                 patchUi_.dirty = true;
             }
@@ -420,11 +424,14 @@ void AppWindow::patchReconcile() {
         patchRadioPendingAs_[id] = as;
         patchRadioError_.erase(id);
         // Converted HERE, on the GUI thread that owns the remembered settings;
-        // the worker only ever sees the radio's own figure. 0 = "leave it".
-        const double radioCentre =
-            (centre > 0.0 && cascade::core::airReachable(conv, centre))
-                ? cascade::core::radioFromAir(conv, centre)
-                : 0.0;
+        // the worker only ever sees the radio's own figure. No value = "leave
+        // it": a node with no centre yet, or one this radio's converter cannot
+        // deliver. The node's AIR centre may be below 0 Hz (see
+        // pc::radioCentreSet) - whether it can be sent is airReachable's call.
+        const std::optional<double> radioCentre =
+            (pc::radioCentreSet(*n) && cascade::core::airReachable(conv, centre))
+                ? std::optional<double>(cascade::core::radioFromAir(conv, centre))
+                : std::nullopt;
         patchRadioPending_[id] = std::async(std::launch::async, [driver, args, label, rate,
                                                                  centre = radioCentre]() {
             PatchRadioOpen r;
@@ -475,7 +482,7 @@ void AppWindow::patchReconcile() {
             } else if (!set.sourceError.empty()) {
                 r.error = set.sourceError;
             }
-            if (centre > 0.0) { dev->setCenterFrequencyHz(centre); }
+            if (centre.has_value()) { dev->setCenterFrequencyHz(*centre); }
             // A patch radio has no gain slider of its own yet, so the radio's
             // own automatic gain is used where it has one - a dongle left at
             // its power-on gain hears very little.
@@ -668,10 +675,12 @@ void AppWindow::patchStopAll(bool restoreMain) {
                                  keep.label.c_str());
         return;
     }
-    // Back where it was tuned when the patch took it.
-    if (keep.centreHz > 0.0) { pipeline_.activeSource().setCenterFrequencyHz(keep.centreHz); }
+    // Back where it was tuned when the patch took it: the AIR centre is handed
+    // to the open itself, which sends it through THIS radio's converter. (It
+    // used to be parked on the generator standing in and read back from
+    // there, which lost a centre below 0 Hz on the air.)
     cascade::core::diagLogf("patch: handing %s back to the receiver", keep.label.c_str());
-    selectSource(row);
+    selectSource(row, keep.centreHz);
 }
 
 void AppWindow::patchPressStart() {

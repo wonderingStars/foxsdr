@@ -16,8 +16,11 @@
 // test_converter_call_sites holds that to be true of the source tree.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#include <atomic>
 #include <chrono>
+#include <cmath>
 #include <complex>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <memory>
@@ -74,6 +77,52 @@ public:
     const char* lastError() const override { return "radio's own error"; }
     double centre = 100.0e6;
     int sets = 0;
+};
+
+// A SELF-PACED radio, as every hardware driver is: read() blocks until the
+// samples it hands back are due (a device's bounded read), so the pipeline
+// runs its self-paced loop for it - a different loop from the generator's,
+// with its own copy of the mirror. It delivers one tone `toneHz` above its
+// centre and counts its reads, so the test can see that loop really ran.
+class PacedToneRadio final : public cascade::source::IqSource {
+public:
+    explicit PacedToneRadio(double toneHz) : toneHz_(toneHz) {}
+    bool start() override {
+        abort_ = false;
+        return true;
+    }
+    void stop() override { abort_ = true; }
+    bool running() const override { return !abort_; }
+    bool selfPaced() const override { return true; }
+    double sampleRateHz() const override { return 1.0e6; }
+    bool setSampleRateHz(double) override { return false; }
+    double centerFrequencyHz() const override { return centre_; }
+    bool setCenterFrequencyHz(double hz) override {
+        centre_ = hz;
+        return true;
+    }
+    std::size_t read(std::complex<float>* dst, std::size_t n) override {
+        // Paced like the device it stands for: n samples take n/rate seconds.
+        std::this_thread::sleep_for(std::chrono::microseconds(static_cast<long long>(n)));
+        if (abort_) { return 0; }
+        const double step = 2.0 * 3.14159265358979323846 * toneHz_ / 1.0e6;
+        for (std::size_t i = 0; i < n; ++i) {
+            dst[i] = {static_cast<float>(std::cos(phase_)), static_cast<float>(std::sin(phase_))};
+            phase_ += step;
+            if (phase_ > 3.14159265358979323846) { phase_ -= 2.0 * 3.14159265358979323846; }
+        }
+        reads.fetch_add(1);
+        return n;
+    }
+    const char* name() const override { return "Paced tone radio"; }
+    const char* lastError() const override { return ""; }
+    std::atomic<std::uint64_t> reads{0};
+
+private:
+    double toneHz_;
+    double phase_ = 0.0;
+    double centre_ = 125.0e6;
+    std::atomic<bool> abort_{true};
 };
 
 std::size_t argmax(const std::vector<float>& v) {
@@ -205,6 +254,30 @@ void testMirrorReachesTheSpectrum() {
     p.stop();
 }
 
+// The same mirror, through the loop every HARDWARE source runs in: the
+// pipeline's self-paced loop conjugates on its own (pipeline.cpp), and the
+// generator test above never reaches it.
+void testMirrorInTheSelfPacedLoop() {
+    std::printf("  an inverting converter mirrors a self-paced (hardware) source too\n");
+    const Pipeline::Config cfg = testConfig();
+    const std::size_t above = cfg.fftSize / 2 + 128;  // +125 kHz at 1 MS/s
+    const std::size_t below = cfg.fftSize / 2 - 128;
+    Pipeline p(cfg);
+    auto radio = std::make_unique<PacedToneRadio>(125000.0);
+    PacedToneRadio* raw = radio.get();
+    p.setSource(std::move(radio));
+    CHECK(p.activeSource().selfPaced());
+    p.setConverter(up(125.0e6));  // not inverted: the band as the radio sees it
+    p.start();
+    CHECK(settledPeak(p, 40) == above);
+    p.setConverter(up(125.0e6, true));
+    CHECK(settledPeak(p, 80) == below);
+    p.setConverter(ConverterSetting{});
+    CHECK(settledPeak(p, 80) == above);
+    p.stop();
+    CHECK(raw->reads.load() > 10);  // the self-paced loop is what delivered them
+}
+
 void testPatchRadio() {
     std::printf("  the patch page's radios use the same layer\n");
     auto gen = std::make_unique<cascade::source::SigGenSource>(1.0e6);
@@ -258,6 +331,7 @@ int main() {
     testUnreachableNeverReachesTheRadio();
     testSwapNeverCarriesAConverter();
     testMirrorReachesTheSpectrum();
+    testMirrorInTheSelfPacedLoop();
     testPatchRadio();
     return testSummary("test_converter_routing");
 }

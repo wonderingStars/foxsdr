@@ -827,6 +827,7 @@
   "Open foxsdr.com": "foxsdr.com を開く",
   "Open reports folder": "レポートフォルダーを開く",
   "Open the plugin store with the key above to fetch the update.": "上のキーでプラグインストアを開き、更新を取得してください。",
+  "Opened through SoapySDR because the native driver refused this radio - the converter set for it still applies.": "ネイティブドライバーがこの SDR を拒否したため、SoapySDR 経由で開きました。この SDR に設定したコンバーターは引き続き適用されます。",
   "Opening %s...": "%s を開いています...",
   "Opens the bench oscilloscope: the demodulated audio on a\nten-by-eight graticule, its spectrum, and the channel I/Q as\ntwo traces and as a vector display. The time base, the\nattenuator and the input selector are on the page itself.": "ベンチ用オシロスコープを開きます: 10×8 目盛上の復調音声、\nそのスペクトラム、チャンネル I/Q の 2 本のトレースと\nベクトル表示。タイムベース、アッテネーター、\n入力セレクターはページ上にあります。",
   "Opens the fitted modules window: what is installed, which\nmodules are being fed, which were refused and why, and the\nkeys that start, stop and remove them. Start tunes the radio\nto the decoder's first preset unless it is already there.": "「装着モジュール」ウィンドウを開きます: インストール済みのもの、\n信号供給中のモジュール、拒否されたものとその理由、\n開始・停止・取り外しのキー。開始すると、SDR がデコーダーの\n最初のプリセットにチューニングされます（すでにそこにある場合を除く）。",

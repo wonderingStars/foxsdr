@@ -14,6 +14,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <string>
 #include <utility>
@@ -637,6 +638,28 @@ public:
     void setDiagToggle(int mode);
 
 private:
+    // THE TEST SEAM for the paths that carry a frequency from one radio to the
+    // next (tests/test_converter_app_paths.cpp): a device switch, the startup
+    // restore, the reopen after a driver fault and the patch page's take-over
+    // and hand-back. Each is AppWindow code that no pure function can stand in
+    // for, so the test drives the real members through this friend, with the
+    // two hooks below standing in for the hardware. Both are null in every
+    // build of the application - nothing ever sets them outside that test -
+    // and each is read at exactly one place.
+    friend struct AppWindowTestAccess;
+    struct TestHooks {
+        // Replaces makeDeviceSource's construction when set: the "radio" a
+        // worker or the restore opens is the test's own recording fake.
+        std::unique_ptr<cascade::source::DeviceSource> (*makeDevice)(const std::string& kind) =
+            nullptr;
+        // Replaces scanNative's USB walk when set: the list it returns IS the
+        // native device list, so no test ever enumerates the desk's radios.
+        std::vector<cascade::source::NativeDeviceInfo> (*nativeScan)() = nullptr;
+    };
+    // Set by the test before any AppWindow exists and never changed while one
+    // does, so the worker threads that read makeDevice race with nothing.
+    inline static TestHooks testHooks_{};
+
     // One plugin's map page — declared ahead of the drawing methods that take
     // it, defined in full beside the map state below.
     struct MapPage;
@@ -780,7 +803,11 @@ private:
     // Combo-row click handler: 0 = generator, 1 = IQ file (panel only — the
     // pipeline switches on a successful Open), 2+i = soapyDevices_[i]
     // (opens immediately; on failure the combo selection is left unchanged).
-    void selectSource(int idx);
+    // A device row carries the receiver's air centre across to the radio it
+    // opens (carriedAirCentre); `carryAirHz`, when given, is carried instead -
+    // the patch page's hand-back, whose frequency belongs to the radio it
+    // took, not to the generator standing in for it.
+    void selectSource(int idx, std::optional<double> carryAirHz = std::nullopt);
     void drawCenterPanels();
     // THE SLIM TICK STRIP BETWEEN THE PANELS IS GONE, and this is where it was
     // declared. SpectrumView now letters the frequency axis along the foot of
@@ -1740,7 +1767,19 @@ private:
     // comes up at 100 MHz - so without carrying this across, changing device
     // silently retunes the receiver and the audio stops. Captured before the
     // switch because by the time the open finishes, the old source is gone.
-    double keepCenterHz = 0.0;
+    //
+    // AN AIR FREQUENCY, AND IT MAY BE NEGATIVE: with the VFO parked above a
+    // VLF station the band centre sits below 0 Hz on the air, which through an
+    // up-converter is an ordinary tune (core::airReachable). So "nothing to
+    // carry" is its own state - no value - and never a zero or a sign
+    // (carriedAirCentre decides which). The new radio's converter judges
+    // whether it can be delivered.
+    std::optional<double> keepCenterHz;
+    // THE NATIVE RADIO THIS OPEN FELL BACK FROM (converter key), when the
+    // worker opened the dongle through SoapySDR because the native driver
+    // refused its tuner; empty otherwise. finishDeviceOpen uses it so the
+    // converter set for that radio still applies (converterKeyAlias_).
+    std::string fellBackFromKey;
     // WHAT AN AUTOMATIC REOPEN HAS TO PUT BACK (pollSoapyRecovery, 0.90.1).
     // The ordinary open primes every gain to its default and leaves AGC off;
     // a reopen after a driver fault is not a new radio to the user, so the
@@ -1814,6 +1853,11 @@ private:
     // the result. A reopen that fails leaves the ordinary failed-open state
     // and message, and nothing tries again.
     void pollSoapyRecovery();
+    // The reopen itself, once pollSoapyRecovery has judged it due: reads the
+    // rate, gains, running state and AIR centre off the dead radio (device_),
+    // closes it and launches the open. Split from the gate so the carry-across
+    // it starts is testable without a real SoapySDR fault.
+    void reopenAfterDriverFault();
     // The worker-thread open shared by selectSource and pollSoapyRecovery:
     // closes nothing (the caller has), stamps the request with sourceGen_,
     // and sets deviceOpenPending_/deviceBusyLabel_. `r` carries the args, the
@@ -1936,6 +1980,25 @@ private:
     // gui/tune_control.hpp speak then).
     std::string converterTuneNote(double requestAirHz, bool refused, double answeredAirHz,
                                   bool isPluginPreset);
+    // The AIR centre a source switch carries to the next radio, or no value
+    // when the installed source has none to give. Judged at the RADIO: a
+    // readback at or below 0 Hz is a device that was never tuned, while the
+    // air figure itself may legitimately be negative (see
+    // DeviceOpenResult::keepCenterHz).
+    std::optional<double> carriedAirCentre();
+    // THE SAME RADIO UNDER ANOTHER KEY FOR THIS SESSION. When a native open
+    // falls back to SoapySDR the dongle is the one the user chose, but its key
+    // is the Soapy one; the alias maps that key to the native one so the
+    // converter set for the radio still applies - and changes made while it is
+    // open are kept under the native key, where the next native open looks.
+    // Not saved: the next session makes the same decision again. Installed
+    // only when the Soapy key has no converter of its own.
+    std::map<std::string, std::string> converterKeyAlias_;
+    std::string resolveConverterKey(const std::string& radioKey) const;
+    void noteConverterFallback(const std::string& nativeKey, const std::string& fallbackKey);
+    // The one line the Source section shows while such an alias is in force
+    // and the converter is on; "" otherwise.
+    std::string converterAliasNote();
     std::map<std::string, cascade::core::ConverterSetting> converters_;
     char converterLoBuf_[40] = {};
     std::string converterLoSeededFor_;  // the radio key + LO the field was seeded from
@@ -2845,7 +2908,10 @@ private:
         std::string args;
         std::string label;
         double rateHz = 0.0;
-        double centreHz = 0.0;
+        // The receiver's AIR centre when the patch took the radio; no value
+        // when it had none to give. May be below 0 Hz (see
+        // DeviceOpenResult::keepCenterHz).
+        std::optional<double> centreHz;
     };
     PatchMainKeep patchMainKeep_;
     // One device a patch Radio can be set to, for the inspector's list.

@@ -827,6 +827,7 @@
   "Open foxsdr.com": "Открыть foxsdr.com",
   "Open reports folder": "Открыть папку отчётов",
   "Open the plugin store with the key above to fetch the update.": "Откройте магазин плагинов клавишей выше, чтобы загрузить обновление.",
+  "Opened through SoapySDR because the native driver refused this radio - the converter set for it still applies.": "Открыто через SoapySDR, потому что встроенный драйвер отказался работать с этим SDR: заданный для него конвертер по-прежнему действует.",
   "Opening %s...": "Открытие %s...",
   "Opens the bench oscilloscope: the demodulated audio on a\nten-by-eight graticule, its spectrum, and the channel I/Q as\ntwo traces and as a vector display. The time base, the\nattenuator and the input selector are on the page itself.": "Открывает лабораторный осциллограф: демодулированный звук на\nсетке десять на восемь делений, его спектр и I/Q канала в виде\nдвух лучей и векторного изображения. Развёртка, аттенюатор\nи выбор входа находятся на самой странице.",
   "Opens the fitted modules window: what is installed, which\nmodules are being fed, which were refused and why, and the\nkeys that start, stop and remove them. Start tunes the radio\nto the decoder's first preset unless it is already there.": "Открывает окно установленных модулей: что установлено, на какие\nмодули подаётся сигнал, какие отклонены и почему, и клавиши\nзапуска, остановки и удаления. Запуск настраивает SDR на первый\nпресет декодера, если он ещё не настроен туда.",

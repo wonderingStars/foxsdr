@@ -827,6 +827,7 @@
   "Open foxsdr.com": "Otvoriť foxsdr.com",
   "Open reports folder": "Otvoriť priečinok hlásení",
   "Open the plugin store with the key above to fetch the update.": "Aktualizáciu stiahnete po otvorení obchodu s pluginmi tlačidlom vyššie.",
+  "Opened through SoapySDR because the native driver refused this radio - the converter set for it still applies.": "Otvorené cez SoapySDR, pretože natívny ovládač toto rádio odmietol - konvertor nastavený preň naďalej platí.",
   "Opening %s...": "Otvára sa %s...",
   "Opens the bench oscilloscope: the demodulated audio on a\nten-by-eight graticule, its spectrum, and the channel I/Q as\ntwo traces and as a vector display. The time base, the\nattenuator and the input selector are on the page itself.": "Otvorí laboratórny osciloskop: demodulované audio na rastri\ndesať krát osem dielikov, jeho spektrum a I/Q kanála ako\ndva priebehy a ako vektorové zobrazenie. Časová základňa,\natenuátor a volič vstupu sú priamo na stránke.",
   "Opens the fitted modules window: what is installed, which\nmodules are being fed, which were refused and why, and the\nkeys that start, stop and remove them. Start tunes the radio\nto the decoder's first preset unless it is already there.": "Otvorí okno osadených modulov: čo je nainštalované, ktoré\nmoduly sú napájané, ktoré boli odmietnuté a prečo, a\ntlačidlá na ich spustenie, zastavenie a odstránenie. Spustenie naladí\nrádio na prvú predvoľbu dekodéra, ak tam ešte nie je.",

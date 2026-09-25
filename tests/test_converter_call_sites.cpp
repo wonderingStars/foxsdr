@@ -15,7 +15,8 @@
 // already converted (radioHzForSource / radioFromAir), or be one of the few
 // sites listed below with the reason it is right. A new direct call fails
 // here until somebody decides which it is. rawSource() - the radio's own
-// figure - is allowed only where the converter's own status lines print it.
+// figure - is allowed only in app_window_converter.cpp: the status lines that
+// print it, and carriedAirCentre's "was this radio ever tuned" test.
 //
 // The whole list of sites is printed, classified, on every run: it is the
 // call-site audit the converter was built from, kept current by the tree.
@@ -117,7 +118,7 @@ struct Allowed {
 const Allowed kAllowed[] = {
     {"app_window_patch_radios.cpp", "g->setCenterFrequencyHz(centreHz)",
      "makePatchGenerator: every caller passes radioFromAir(...) of the node's air frequency"},
-    {"app_window_patch_radios.cpp", "dev->setCenterFrequencyHz(centre)",
+    {"app_window_patch_radios.cpp", "dev->setCenterFrequencyHz(*centre)",
      "patch open worker: `centre` is the lambda's copy of radioCentre, converted on the GUI thread"},
 };
 
@@ -223,7 +224,7 @@ int main(int argc, char** argv) {
                     if (std::string(needle) != "rawSource(") { continue; }
                     ++raw;
                     if (name == "app_window_converter.cpp") {
-                        verdict = "RADIO FIGURE (the converter's status lines)";
+                        verdict = "RADIO FIGURE (the converter's own file: status lines, carriedAirCentre)";
                         ++allowed;
                     }
                 } else if (std::string(needle) == "rawSource(") {

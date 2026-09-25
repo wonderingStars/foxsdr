@@ -827,6 +827,7 @@
   "Open foxsdr.com": "Öppna foxsdr.com",
   "Open reports folder": "Öppna rapportmappen",
   "Open the plugin store with the key above to fetch the update.": "Öppna tilläggsbutiken med knappen ovan för att hämta uppdateringen.",
+  "Opened through SoapySDR because the native driver refused this radio - the converter set for it still applies.": "Öppnad via SoapySDR eftersom den inbyggda drivrutinen avvisade den här radion - konverteraren som är inställd för den gäller fortfarande.",
   "Opening %s...": "Öppnar %s...",
   "Opens the bench oscilloscope: the demodulated audio on a\nten-by-eight graticule, its spectrum, and the channel I/Q as\ntwo traces and as a vector display. The time base, the\nattenuator and the input selector are on the page itself.": "Öppnar bänkoscilloskopet: det demodulerade ljudet på ett\ntio-gånger-åtta-raster, dess spektrum, och kanalens I/Q som\ntvå kurvor och som vektorvisning. Tidbasen,\ndämpsatsen och ingångsväljaren finns på själva sidan.",
   "Opens the fitted modules window: what is installed, which\nmodules are being fed, which were refused and why, and the\nkeys that start, stop and remove them. Start tunes the radio\nto the decoder's first preset unless it is already there.": "Öppnar fönstret monterade moduler: vad som är installerat, vilka\nmoduler som matas, vilka som avvisades och varför, och\nknapparna som startar, stoppar och tar bort dem. Start ställer in radion\npå avkodarens första förval om den inte redan är där.",

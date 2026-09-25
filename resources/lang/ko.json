@@ -827,6 +827,7 @@
   "Open foxsdr.com": "foxsdr.com 열기",
   "Open reports folder": "보고서 폴더 열기",
   "Open the plugin store with the key above to fetch the update.": "위의 키로 플러그인 스토어를 열어 업데이트를 받으세요.",
+  "Opened through SoapySDR because the native driver refused this radio - the converter set for it still applies.": "네이티브 드라이버가 이 라디오를 거부해 SoapySDR로 열었습니다 - 이 라디오에 설정한 컨버터는 계속 적용됩니다.",
   "Opening %s...": "%s 여는 중...",
   "Opens the bench oscilloscope: the demodulated audio on a\nten-by-eight graticule, its spectrum, and the channel I/Q as\ntwo traces and as a vector display. The time base, the\nattenuator and the input selector are on the page itself.": "벤치 오실로스코프를 엽니다: 10x8 눈금 위의 복조된 오디오,\n그 스펙트럼, 그리고 채널 I/Q를 두 트레이스와 벡터 표시로\n보여 줍니다. 타임베이스, 감쇠기, 입력 선택기는\n페이지 자체에 있습니다.",
   "Opens the fitted modules window: what is installed, which\nmodules are being fed, which were refused and why, and the\nkeys that start, stop and remove them. Start tunes the radio\nto the decoder's first preset unless it is already there.": "장착된 모듈 창을 엽니다: 설치된 것, 신호를 공급받는\n모듈, 거부된 모듈과 그 이유, 그리고 모듈을 시작, 정지, 제거하는\n키가 있습니다. 시작을 누르면 이미 튜닝되어 있지 않은 한\n라디오를 디코더의 첫 프리셋으로 튜닝합니다.",

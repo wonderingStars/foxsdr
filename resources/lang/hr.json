@@ -827,6 +827,7 @@
   "Open foxsdr.com": "Otvori foxsdr.com",
   "Open reports folder": "Otvori mapu izvješća",
   "Open the plugin store with the key above to fetch the update.": "Otvorite trgovinu dodataka tipkom iznad da biste dohvatili ažuriranje.",
+  "Opened through SoapySDR because the native driver refused this radio - the converter set for it still applies.": "Otvoreno putem SoapySDR-a jer je izvorni upravljački program odbio ovaj radio - pretvarač postavljen za njega i dalje vrijedi.",
   "Opening %s...": "Otvaranje %s...",
   "Opens the bench oscilloscope: the demodulated audio on a\nten-by-eight graticule, its spectrum, and the channel I/Q as\ntwo traces and as a vector display. The time base, the\nattenuator and the input selector are on the page itself.": "Otvara laboratorijski osciloskop: demodulirani audio na\nrasteru deset puta osam podjela, njegov spektar i I/Q kanala kao\ndvije krivulje i kao vektorski prikaz. Vremenska baza,\natenuator i birač ulaza nalaze se na samoj stranici.",
   "Opens the fitted modules window: what is installed, which\nmodules are being fed, which were refused and why, and the\nkeys that start, stop and remove them. Start tunes the radio\nto the decoder's first preset unless it is already there.": "Otvara prozor ugrađenih modula: što je instalirano, koji\nmoduli dobivaju signal, koji su odbijeni i zašto, te\ntipke za njihovo pokretanje, zaustavljanje i uklanjanje. Pokretanje ugađa radio\nna prvi predložak dekodera, osim ako već nije ondje.",

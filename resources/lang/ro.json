@@ -827,6 +827,7 @@
   "Open foxsdr.com": "Deschide foxsdr.com",
   "Open reports folder": "Deschide dosarul de rapoarte",
   "Open the plugin store with the key above to fetch the update.": "Deschideți magazinul de pluginuri cu tasta de mai sus ca să descărcați actualizarea.",
+  "Opened through SoapySDR because the native driver refused this radio - the converter set for it still applies.": "Deschis prin SoapySDR deoarece driverul nativ a refuzat acest radio - convertorul setat pentru el se aplică în continuare.",
   "Opening %s...": "Se deschide %s...",
   "Opens the bench oscilloscope: the demodulated audio on a\nten-by-eight graticule, its spectrum, and the channel I/Q as\ntwo traces and as a vector display. The time base, the\nattenuator and the input selector are on the page itself.": "Deschide osciloscopul de laborator: audioul demodulat pe un\ncaroiaj de zece pe opt, spectrul lui și I/Q-ul canalului ca\ndouă trasee și ca afișaj vectorial. Baza de timp,\natenuatorul și selectorul de intrare sunt chiar pe pagină.",
   "Opens the fitted modules window: what is installed, which\nmodules are being fed, which were refused and why, and the\nkeys that start, stop and remove them. Start tunes the radio\nto the decoder's first preset unless it is already there.": "Deschide fereastra modulelor montate: ce este instalat, ce\nmodule sunt alimentate, care au fost refuzate și de ce, și\ntastele care le pornesc, le opresc și le elimină. Pornirea acordă radioul\npe prima presetare a decodorului, dacă nu este deja acolo.",

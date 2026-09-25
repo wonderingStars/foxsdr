@@ -59,12 +59,50 @@ void appendSentence(std::string& msg, const std::string& next) {
 
 }  // namespace
 
+std::string AppWindow::resolveConverterKey(const std::string& radioKey) const {
+    const auto it = converterKeyAlias_.find(radioKey);
+    return it == converterKeyAlias_.end() ? radioKey : it->second;
+}
+
 std::string AppWindow::converterRadioKeyNow() const {
-    return cc::converterRadioKey(sourceKind_, deviceArgs_);
+    return resolveConverterKey(cc::converterRadioKey(sourceKind_, deviceArgs_));
 }
 
 cc::ConverterSetting AppWindow::converterForKey(const std::string& radioKey) const {
-    return cc::converterFor(converters_, radioKey);
+    return cc::converterFor(converters_, resolveConverterKey(radioKey));
+}
+
+void AppWindow::noteConverterFallback(const std::string& nativeKey,
+                                      const std::string& fallbackKey) {
+    // A Soapy key with a converter of its own keeps it: the user set that one
+    // for this very way of reaching the dongle.
+    if (nativeKey.empty() || nativeKey == fallbackKey || converters_.count(fallbackKey) != 0) {
+        return;
+    }
+    converterKeyAlias_[fallbackKey] = nativeKey;
+    const cc::ConverterSetting s = converterForKey(fallbackKey);
+    // Which way it is set, never a frequency (see changeConverter).
+    cascade::core::diagLogf("source: the SoapySDR fallback keeps this radio's converter (%s%s)",
+                            cc::converterModeKey(cc::converterActive(s) ? s.mode
+                                                                        : cc::ConverterMode::Off),
+                            s.inverted && cc::converterActive(s) ? ", inverted" : "");
+}
+
+std::string AppWindow::converterAliasNote() {
+    const std::string raw = cc::converterRadioKey(sourceKind_, deviceArgs_);
+    if (converterKeyAlias_.count(raw) == 0) { return {}; }
+    if (!cc::converterActive(pipeline_.converter())) { return {}; }
+    return tr("Opened through SoapySDR because the native driver refused this radio - the "
+              "converter set for it still applies.");
+}
+
+std::optional<double> AppWindow::carriedAirCentre() {
+    // AT THE RADIO, because that is where "no frequency" shows: a device that
+    // was never tuned reads 0 Hz. The AIR figure is what is carried, and it
+    // may be below 0 Hz (a VLF station with the VFO parked up, through an
+    // up-converter) - which is a frequency, not the absence of one.
+    if (!(pipeline_.rawSource().centerFrequencyHz() > 0.0)) { return std::nullopt; }
+    return pipeline_.activeSource().centerFrequencyHz();
 }
 
 void AppWindow::applyConverterForSource() {
@@ -173,7 +211,7 @@ std::string AppWindow::converterTuneNote(double requestAirHz, bool refused, doub
 
 void AppWindow::changeConverter(const cc::ConverterSetting& s) {
     const std::string key = converterRadioKeyNow();
-    const double airBefore = pipeline_.activeSource().centerFrequencyHz();
+    const std::optional<double> airBefore = carriedAirCentre();
     // STORED EVEN WHEN OFF, so switching back on finds the LO the user typed
     // (sanitiseConverter keeps a valid LO whatever the mode).
     converters_[key] = cc::sanitiseConverter(s);
@@ -183,14 +221,18 @@ void AppWindow::changeConverter(const cc::ConverterSetting& s) {
     // THE RADIO STAYS WHERE IT IS; the counter relabels. A user who switches
     // a converter on is usually already tuned to its output (the tester had
     // his dongle on 125.0172 MHz to hear SAQ), and the counter now simply says
-    // 17.2 kHz. The exception is a relabel that lands below 0 Hz - a dongle
-    // left on 100 MHz behind a 125 MHz up-converter - where there is nothing
-    // to show: then the AIR frequency is kept and the radio moves, through
-    // the ordinary tune path so a refusal is reported the ordinary way.
-    const double airNow = pipeline_.activeSource().centerFrequencyHz();
-    if (cc::converterActive(eff) && !(airNow >= 0.0) && airBefore > 0.0) {
+    // 17.2 kHz. The exception is a relabel whose TUNED frequency lands below
+    // 0 Hz - a dongle left on 100 MHz behind a 125 MHz up-converter - where
+    // there is nothing to show: then the AIR frequency is kept and the radio
+    // moves, through the ordinary tune path so a refusal is reported the
+    // ordinary way. Judged on the tuned frequency, not the band centre: a
+    // centre below 0 Hz on the air with the VFO parked above a VLF station
+    // (the dongle on 124.7164 MHz, the VFO 300 kHz up, hearing 16.4 kHz) is
+    // exactly the relabel the user wants.
+    const double tunedNow = pipeline_.activeSource().centerFrequencyHz() + pipeline_.vfoOffsetHz();
+    if (cc::converterActive(eff) && !(tunedNow >= 0.0) && airBefore.has_value()) {
         retuneCoalescer_.clearPending();
-        applyRetuneNow(airBefore);
+        applyRetuneNow(*airBefore);
     }
     // A new frequency as far as everything downstream is concerned.
     pipeline_.resetRds();
@@ -234,6 +276,13 @@ void AppWindow::drawConverterControls() {
                           tr("An up- or down-converter between the antenna and this radio. FoxSDR "
                              "then shows and tunes the frequency on the air, and tells the radio "
                              "the converted one. Remembered for this radio only."));
+    }
+    // The SoapySDR fallback for a dongle the native driver refused: the same
+    // radio under another key, and the converter set for it still in force.
+    if (const std::string note = converterAliasNote(); !note.empty()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
+        ImGui::TextWrapped("%s", note.c_str());
+        ImGui::PopStyleColor();
     }
 
     if (mine.mode != cc::ConverterMode::Off) {

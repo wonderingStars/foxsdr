@@ -827,6 +827,7 @@
   "Open foxsdr.com": "Mở foxsdr.com",
   "Open reports folder": "Mở thư mục báo cáo",
   "Open the plugin store with the key above to fetch the update.": "Mở kho plugin bằng phím ở trên để tải bản cập nhật.",
+  "Opened through SoapySDR because the native driver refused this radio - the converter set for it still applies.": "Đã mở qua SoapySDR vì trình điều khiển gốc từ chối radio này - bộ đổi tần đã đặt cho nó vẫn được áp dụng.",
   "Opening %s...": "Đang mở %s...",
   "Opens the bench oscilloscope: the demodulated audio on a\nten-by-eight graticule, its spectrum, and the channel I/Q as\ntwo traces and as a vector display. The time base, the\nattenuator and the input selector are on the page itself.": "Mở máy hiện sóng: âm thanh đã giải điều chế trên lưới chia\nmười-nhân-tám, phổ của nó, và I/Q của kênh dưới dạng\nhai vết và dạng hiển thị vectơ. Cơ sở thời gian, bộ\nsuy hao và bộ chọn đầu vào nằm ngay trên trang.",
   "Opens the fitted modules window: what is installed, which\nmodules are being fed, which were refused and why, and the\nkeys that start, stop and remove them. Start tunes the radio\nto the decoder's first preset unless it is already there.": "Mở cửa sổ mô-đun đã lắp: những gì đã cài, mô-đun nào\nđang được cấp tín hiệu, mô-đun nào bị từ chối và vì sao, cùng\ncác phím khởi động, dừng và gỡ bỏ chúng. Khởi động sẽ chỉnh tần radio\ntới mục cài sẵn đầu tiên của bộ giải mã nếu chưa ở đó.",

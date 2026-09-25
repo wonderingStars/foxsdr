@@ -285,10 +285,64 @@ void testText() {
     CHECK(hz == 42.0);  // untouched by every refusal
 }
 
+// THE LO IS WHOLE HERTZ, wherever it comes from. A driver stores what it is
+// told in whole hertz (an RTL-SDR's tuner call takes a uint32), so an LO with
+// a fraction in it tells the radio a fractional frequency, the radio keeps the
+// whole part, and the readback comes back as an air frequency the user never
+// asked for: 16399.543 Hz for a 16.4 kHz tune. The counter then disagrees with
+// itself, and the repeat-tune guard (applyRetuneNow: "no-op when the tune does
+// not move anything") never matches, so every repeated command re-tunes the
+// radio and resets the decoders.
+void testLoIsWholeHertz() {
+    std::printf("  the LO is rounded to whole hertz, typed or loaded\n");
+    // TYPED: what the Local oscillator field hands to the setting.
+    double hz = 0.0;
+    CHECK(parseConverterLoHz("124.99812345 MHz", hz));
+    CHECK(hz == 124998123.0);
+    CHECK(parseConverterLoHz("124998123.6", hz));  // a bare number above 7500 is Hz
+    CHECK(hz == 124998124.0);
+    CHECK(parseConverterLoHz("9.7501234567 GHz", hz));
+    CHECK(hz == 9750123457.0);
+    // Half a hertz rounds to 1 Hz, the least LO there is; less rounds to
+    // nothing, which is no LO at all.
+    CHECK(parseConverterLoHz("0.5 Hz", hz));
+    CHECK(hz == 1.0);
+    hz = 42.0;
+    CHECK(!parseConverterLoHz("0.4 Hz", hz));
+    CHECK(hz == 42.0);
+
+    // LOADED: sanitiseConverter is what every loaded (and every changed)
+    // setting passes through.
+    const ConverterSetting s = sanitiseConverter({ConverterMode::Up, 124998123.45678912, false});
+    CHECK(s.loHz == 124998123.0);
+    CHECK(s.mode == ConverterMode::Up);
+    CHECK(sanitiseConverters({{"rtlsdr|serial=1", {ConverterMode::Down, 9750123456.789, true}}})
+              .at("rtlsdr|serial=1")
+              .loHz == 9750123457.0);
+    CHECK(sanitiseConverter({ConverterMode::Up, 0.4, false}).mode == ConverterMode::Off);
+
+    // AND WHAT THAT BUYS: a radio that keeps whole hertz reads back exactly
+    // the air frequency it was asked for - including air figures of ten and
+    // eleven digits, the band centre below 0 Hz, and a 1 Hz step.
+    const ConverterSetting settings[] = {
+        s, sanitiseConverter({ConverterMode::Up, 124998123.45678912, true}),
+        sanitiseConverter({ConverterMode::Down, 9750123456.789, false})};
+    const double airs[] = {16400.0,      17200.0,      16401.0,      -283600.0,
+                           1296123457.0, 10489123457.0, 11700123457.0, 144800000.0};
+    for (const ConverterSetting& c : settings) {
+        for (const double air : airs) {
+            if (!airReachable(c, air)) { continue; }
+            const double told = std::round(radioFromAir(c, air));  // what the radio keeps
+            CHECK(airFromRadio(c, told) == air);
+        }
+    }
+}
+
 }  // namespace
 
 int main() {
     std::printf("test_freq_converter\n");
+    testLoIsWholeHertz();
     testOffIsIdentity();
     testSaqExamples();
     testDownAndInverted();

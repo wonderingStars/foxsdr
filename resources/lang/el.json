@@ -827,6 +827,7 @@
   "Open foxsdr.com": "Άνοιγμα του foxsdr.com",
   "Open reports folder": "Άνοιγμα φακέλου αναφορών",
   "Open the plugin store with the key above to fetch the update.": "Ανοίξτε το κατάστημα πρόσθετων με το πλήκτρο παραπάνω για να λάβετε την ενημέρωση.",
+  "Opened through SoapySDR because the native driver refused this radio - the converter set for it still applies.": "Άνοιξε μέσω SoapySDR επειδή ο εγγενής οδηγός απέρριψε αυτό το SDR - ο μετατροπέας που έχει οριστεί για αυτό εξακολουθεί να ισχύει.",
   "Opening %s...": "Άνοιγμα του %s...",
   "Opens the bench oscilloscope: the demodulated audio on a\nten-by-eight graticule, its spectrum, and the channel I/Q as\ntwo traces and as a vector display. The time base, the\nattenuator and the input selector are on the page itself.": "Ανοίγει τον παλμογράφο πάγκου: τον αποδιαμορφωμένο ήχο σε\nκάνναβο δέκα επί οκτώ, το φάσμα του, και το I/Q του καναλιού ως\nδύο ίχνη και ως διανυσματική απεικόνιση. Η βάση χρόνου, ο\nεξασθενητής και ο επιλογέας εισόδου βρίσκονται στην ίδια τη σελίδα.",
   "Opens the fitted modules window: what is installed, which\nmodules are being fed, which were refused and why, and the\nkeys that start, stop and remove them. Start tunes the radio\nto the decoder's first preset unless it is already there.": "Ανοίγει το παράθυρο τοποθετημένων μονάδων: τι είναι εγκατεστημένο, ποιες\nμονάδες τροφοδοτούνται, ποιες απορρίφθηκαν και γιατί, και τα\nπλήκτρα που τις ξεκινούν, τις σταματούν και τις αφαιρούν. Η Έναρξη συντονίζει το SDR\nστην πρώτη προεπιλογή του αποκωδικοποιητή, εκτός αν είναι ήδη εκεί.",

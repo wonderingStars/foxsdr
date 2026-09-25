@@ -827,6 +827,7 @@
   "Open foxsdr.com": "foxsdr.com'u aç",
   "Open reports folder": "Raporlar klasörünü aç",
   "Open the plugin store with the key above to fetch the update.": "Güncellemeyi indirmek için yukarıdaki tuşla eklenti mağazasını açın.",
+  "Opened through SoapySDR because the native driver refused this radio - the converter set for it still applies.": "Yerel sürücü bu radyoyu reddettiği için SoapySDR üzerinden açıldı - bunun için ayarlanan dönüştürücü geçerliliğini koruyor.",
   "Opening %s...": "%s açılıyor...",
   "Opens the bench oscilloscope: the demodulated audio on a\nten-by-eight graticule, its spectrum, and the channel I/Q as\ntwo traces and as a vector display. The time base, the\nattenuator and the input selector are on the page itself.": "Laboratuvar osiloskopunu açar: on çarpı sekiz ızgarada demodüle\nses, onun spektrumu ve kanal I/Q'su iki iz olarak ve vektör\ngösterimi olarak. Zaman tabanı, zayıflatıcı ve giriş seçici\nsayfanın kendisindedir.",
   "Opens the fitted modules window: what is installed, which\nmodules are being fed, which were refused and why, and the\nkeys that start, stop and remove them. Start tunes the radio\nto the decoder's first preset unless it is already there.": "Takılı modüller penceresini açar: neyin yüklü olduğu, hangi\nmodüllerin beslendiği, hangilerinin neden reddedildiği ve onları\nbaşlatan, durduran ve kaldıran tuşlar. Başlat, radyoyu zaten orada\ndeğilse kod çözücünün ilk ön ayarına ayarlar.",

@@ -827,6 +827,7 @@
   "Open foxsdr.com": "Atvērt foxsdr.com",
   "Open reports folder": "Atvērt ziņojumu mapi",
   "Open the plugin store with the key above to fetch the update.": "Atveriet spraudņu veikalu ar taustiņu augstāk, lai lejupielādētu atjauninājumu.",
+  "Opened through SoapySDR because the native driver refused this radio - the converter set for it still applies.": "Atvērts caur SoapySDR, jo natīvais draiveris noraidīja šo radio - tam iestatītais konvertors joprojām ir spēkā.",
   "Opening %s...": "Notiek atvēršana: %s...",
   "Opens the bench oscilloscope: the demodulated audio on a\nten-by-eight graticule, its spectrum, and the channel I/Q as\ntwo traces and as a vector display. The time base, the\nattenuator and the input selector are on the page itself.": "Atver darbgalda osciloskopu: demodulētais audio uz\ndesmit reiz astoņu iedaļu režģa, tā spektrs un kanāla I/Q kā\ndivas līknes un kā vektoru displejs. Laika bāze,\nvājinātājs un ieejas pārslēdzējs ir pašā lapā.",
   "Opens the fitted modules window: what is installed, which\nmodules are being fed, which were refused and why, and the\nkeys that start, stop and remove them. Start tunes the radio\nto the decoder's first preset unless it is already there.": "Atver uzstādīto moduļu logu: kas ir instalēts, kuri\nmoduļi saņem signālu, kuri noraidīti un kāpēc, un\ntaustiņi, kas tos palaiž, aptur un noņem. Palaišana noskaņo radio\nuz dekodētāja pirmo priekšiestatījumu, ja tas jau nav tur.",
