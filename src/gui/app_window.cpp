@@ -58,6 +58,7 @@
 #include "gui/band_plan_style.hpp"
 #include "gui/plugin_markers.hpp"
 #include "gui/rate_follow_status.hpp"
+#include "gui/soundcard_panel.hpp"
 #include "gui/scope_face.hpp"
 // The demod scope's tube, and the window function its spectrum position needs.
 // The ARITHMETIC half (gui/demod_scope.hpp) arrives through app_window.hpp;
@@ -1112,6 +1113,8 @@ AppWindow::~AppWindow() {
     // Same problem, no cancel to reach for: a device open may still be inside
     // SoapySDR::Device::make(). See reapPendingDeviceOpen for the semantics.
     reapPendingDeviceOpen();
+    // The sound card's list and open, on the same terms.
+    reapSoundCardWorkers();
 
     // And the same problem again on the AUDIO device, which is the one that
     // produced it: an open still inside waveOutOpen would hold ~AudioOpen's
@@ -2072,6 +2075,12 @@ int AppWindow::run(int frames) {
 
     watchdog_.beginShutdown();
     const auto teardownStart = std::chrono::steady_clock::now();
+    // NO SOUND CARD CLOSE IS WAITED FOR FROM HERE ON: each is handed to its
+    // own thread and left there (a card is released by the process exiting),
+    // so a card whose close hangs cannot spend this budget - the patch's
+    // radios below are destroyed inside it (source/soundcard_source.hpp,
+    // "CLOSING").
+    cascade::source::SoundCardSource::setCloseWaitEnabled(false);
 
     // THE TRANSMITTER BEFORE ANYTHING ELSE, AND IT IS NOT A STYLE CHOICE.
     // Everything else in this teardown can take its time; a radio that is
@@ -3322,6 +3331,8 @@ void AppWindow::drawUi() {
     // Apply any finished SoapySDR scan/open. Last in the frame so the result
     // lands before the next draw reads the device list.
     pollSourceAsync();
+    // ...and a sound card's list or open, the same way (app_window_soundcard.cpp).
+    pollSoundCard();
     // ...and, once per frame, the one automatic reopen a radio whose driver
     // faulted gets (0.90.1). After the poll above, so a reopen that just
     // resolved is seen before this asks whether another is due.
@@ -7100,9 +7111,7 @@ void AppWindow::drawSourceSection() {
     // the section may be folded, and its chip then reads only "generator" -
     // true, and silent about the radio that did not open. The reason is in
     // the red line inside.
-    const bool radioNotOpen =
-        restoreKeep_.valid() && restoreKeep_.kind != "file" && device_ == nullptr &&
-        sourceKind_ == "siggen";
+    const bool radioNotOpen = radioNotOpenLit();
     const bool sourceOpen =
         benchSection(trId("Source"), true, sourceChip.c_str(),
                      (sourceFaulted || radioNotOpen) ? cascade::gui::theme::kAlarm
@@ -7120,6 +7129,7 @@ void AppWindow::drawSourceSection() {
     const auto rowLabel = [this](int idx) -> const char* {
         if (idx == 0) { return tr("Signal generator"); }
         if (idx == 1) { return tr("IQ file"); }
+        if (idx == kSoundCardRow) { return tr("Sound card"); }
         const int n = idx - kNativeRowBase;
         if (n >= 0 && n < static_cast<int>(nativeRowLabels_.size())) {
             return nativeRowLabels_[static_cast<std::size_t>(n)].c_str();
@@ -7188,8 +7198,12 @@ void AppWindow::drawSourceSection() {
     // had chosen that, and would disagree with the file this session is going
     // to write. No row is ticked in the list below, because none of them is
     // what is installed.
+    // Not while a sound card is opening either: the card is the one being
+    // brought back, and "(saved, not open)" would be the lamp's false alarm
+    // in words (gui::radioNotOpenLamp).
     const bool keepPreview = restoreKeep_.valid() && device_ == nullptr &&
-                             sourceKind_ == "siggen" && !restoreKeepLabel_.empty();
+                             sourceKind_ == "siggen" && !restoreKeepLabel_.empty() &&
+                             !soundCardOpenPending_;
     // "(not open)" in the preview itself, because the combo is the one place
     // a user looks to find out what the receiver is on, and the name alone
     // there would claim the radio was running.
@@ -7497,6 +7511,11 @@ void AppWindow::drawSourceSection() {
             }
         }
     }
+
+    // The sound card's controls, shown while the combo sits on its row. The
+    // same shape as the IQ file above: the switch happens on a successful
+    // Open (app_window_soundcard.cpp), never on selection.
+    if (sourceSel_ == kSoundCardRow) { drawSoundCardControls(); }
 
     // THE PLUTO'S ADDRESS, shown while the combo sits on its row, and the
     // only source in this panel whose location the user has to type.
@@ -7810,11 +7829,16 @@ void AppWindow::drawSourceSection() {
         // thing that changes is the noun: telling someone their missing .wav
         // is "the saved radio" would read as a different fault entirely.
         const bool keepFile = restoreKeep_.kind == "file";
+        const bool keepCard = restoreKeep_.kind == "soundcard";
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
         ImGui::TextWrapped(
             keepFile
                 ? tr("%s is still the saved I/Q file. The signal generator is running in its "
                      "place for this session only - FoxSDR will try the file again next time it "
+                     "starts. Choosing another source here replaces it.")
+            : keepCard
+                ? tr("%s is still the saved sound card. The signal generator is running in its "
+                     "place for this session only - FoxSDR will try the card again next time it "
                      "starts. Choosing another source here replaces it.")
                 : tr("%s is still the saved radio. The signal generator is running in its place "
                      "for this session only - FoxSDR will try the radio again next time it "
@@ -7889,6 +7913,9 @@ cascade::gui::SoapyScanPlan AppWindow::soapyScanPlan() const {
         }
         if (cascade::core::patch::isGeneratorKey(n->device)) { continue; }
         const std::string kind = cascade::core::patch::deviceDriver(n->device);
+        // A sound card is not on the bus a SoapySDR probe walks, so it has
+        // nothing to protect from one (gui::scanMayProbe says the same).
+        if (kind == "soundcard") { continue; }
         open.push_back({kind, cascade::core::patch::deviceArgs(n->device)});
         if (kind == "soapy") { ++soapyListed; }
     }
@@ -8234,7 +8261,10 @@ void AppWindow::finishDeviceOpen(DeviceOpenResult r) {
         // radio is still being remembered for the config, in which case -1
         // keeps the preview naming that radio instead of ticking a generator
         // nobody chose. Same rule as the restore's failure path.
-        if (device_ == nullptr && sourceKind_ == "siggen" && sourceSel_ != 1) {
+        // A sound card chosen while this radio was opening keeps its row, as
+        // the I/Q file's row does: it is a choice, not a stand-in.
+        if (device_ == nullptr && sourceKind_ == "siggen" && sourceSel_ != 1 &&
+            sourceSel_ != kSoundCardRow) {
             sourceSel_ = restoreKeep_.valid() ? -1 : 0;
         }
         return;
@@ -8617,8 +8647,11 @@ void AppWindow::selectSource(int idx, std::optional<double> carryAirHz) {
     // screen says "Reconnect it and pick the source again" and picking it
     // must do exactly that: close the dead radio and open it again (0.99.36,
     // the 0c59853 review; gui::pickOpensRow). Every family, not only an RSP.
+    // A SOUND CARD that has stopped is the same promise, on its own row (it
+    // is never device_): the row picked again opens the card again.
+    const bool installedCardDead = installedSoundCardDead();
     const bool installedDead =
-        device_ != nullptr && (pipeline_.faulted() || device_->deviceDead());
+        (device_ != nullptr && (pipeline_.faulted() || device_->deviceDead())) || installedCardDead;
     if (!cascade::gui::pickOpensRow(idx, sourceSel_, installedDead)) { return; }
 
     // BUSY CHECK ON EVERY ROW, not just the device rows (adjudicated fix #4
@@ -8659,6 +8692,33 @@ void AppWindow::selectSource(int idx, std::optional<double> carryAirHz) {
         // Show the path controls only; the switch happens on a successful
         // Open (see drawSourceSection) so a typo can never kill a live source.
         sourceSel_ = 1;
+        return;
+    }
+    if (idx == kSoundCardRow) {
+        // The same for the sound card: its controls, and the list of inputs
+        // asked for on a worker the first time. Nothing opens until Open -
+        // EXCEPT the installed card when it has died: picking its row again
+        // reopens it exactly as it was running (soundCardLive_), the same
+        // as picking a dead radio's row (gui::pickOpensRow). A card that
+        // was taken by another program, or stalled, can come back this way;
+        // one that was unplugged usually cannot until FoxSDR restarts
+        // (PortAudio lists inputs once per session - the card's own fault
+        // sentence says so), and the open's failure is then said as any
+        // other. The dead card is released first (launchSoundCardOpen, same
+        // card) and not waited for, and tried once (its settings are the
+        // ones it ran with). ON LINUX it is not reopened at all: an ALSA
+        // entry opens by card number, which another card plugged in since
+        // may now have, so launchSoundCardOpen refuses with the restart
+        // sentence instead (gui::soundCardDeadReopenNeedsRestart).
+        sourceSel_ = kSoundCardRow;
+        if (installedCardDead) {
+            cascade::core::diagLogf("source: reopening the sound card %s (%s), which had stopped",
+                                    soundCardLive_.device.c_str(), soundCardLive_.hostApi.c_str());
+            soundCard_ = soundCardLive_;
+            launchSoundCardOpen(false, soundCardLive_);
+            return;
+        }
+        if (!soundCardListed_) { scanSoundCards(); }
         return;
     }
 
@@ -8778,6 +8838,9 @@ std::unique_ptr<cascade::source::DeviceSource> AppWindow::makeDeviceSource(
     // "rtlsdr" to mean something different in one of them.
     if (testHooks_.makeDevice != nullptr) { return testHooks_.makeDevice(kind); }
     if (kind == "rtlsdr") { return std::make_unique<cascade::source::RtlSdrSource>(); }
+    // Reached only from the patch page's radios: the Source section opens a
+    // sound card through its own worker (app_window_soundcard.cpp).
+    if (kind == "soundcard") { return std::make_unique<cascade::source::SoundCardSource>(); }
     if (kind == "hackrf") { return std::make_unique<cascade::source::HackRfSource>(); }
     if (kind == "airspy") { return std::make_unique<cascade::source::AirspySource>(); }
     if (kind == "airspyhf") { return std::make_unique<cascade::source::AirspyHfSource>(); }
@@ -8798,23 +8861,26 @@ void AppWindow::scanNative() {
     // 0.90.0 field report behind gui::deviceScanAllowed). So this runs on the
     // GUI thread, inline, whenever the list might be stale, including while a
     // radio of ours is streaming.
-    if (testHooks_.nativeScan != nullptr) {
-        // The test's list stands in for the USB walk (see testHooks_): no
-        // enumeration of any kind runs, and nothing is reported unbound.
-        nativeDevices_ = testHooks_.nativeScan();
-        nativeRowLabels_.clear();
-        for (const cascade::source::NativeDeviceInfo& d : nativeDevices_) {
-            nativeRowLabels_.push_back(d.label);
-        }
-        nativeUnbound_.clear();
-        return;
-    }
     //
     // ...AND THE SELECTION FOLLOWS THE RADIO, NOT THE INDEX (0.99.36). The
     // combo's selection is a row number, and this rebuilds the rows; one
     // that appears or vanishes moves every row after it. Keyed now, found
     // again at the end.
     const std::vector<cascade::gui::SourceRowKey> rowsBefore = sourceRowKeys();
+    if (testHooks_.nativeScan != nullptr) {
+        // The test's list stands in for the USB walk (see testHooks_): no
+        // enumeration of any kind runs, and nothing is reported unbound. The
+        // selection is followed exactly as after a real scan, so a test can
+        // move rows under it.
+        nativeDevices_ = testHooks_.nativeScan();
+        nativeRowLabels_.clear();
+        for (const cascade::source::NativeDeviceInfo& d : nativeDevices_) {
+            nativeRowLabels_.push_back(d.label);
+        }
+        nativeUnbound_.clear();
+        followSourceRowAfterRescan(rowsBefore);
+        return;
+    }
     nativeDevices_ = cascade::source::enumerateRtlSdr();
     for (cascade::source::NativeDeviceInfo& d : cascade::source::enumerateHackRf()) {
         nativeDevices_.push_back(std::move(d));
@@ -8998,10 +9064,14 @@ void AppWindow::scanNative() {
     }
     nativeUnbound_ = cascade::usb::enumerateUnbound(ids);
 
-    // THE SELECTION, FOUND AGAIN BY WHAT IT IS (see the top of this function).
+    followSourceRowAfterRescan(rowsBefore);
+}
+
+void AppWindow::followSourceRowAfterRescan(const std::vector<cascade::gui::SourceRowKey>& rowsBefore) {
+    // THE SELECTION, FOUND AGAIN BY WHAT IT IS (see the top of scanNative).
     // A native radio that is installed but was not the selected row (the combo
     // showed its live name, -1) is pointed at again when its row is back.
-    sourceSel_ = cascade::gui::refindSourceRow(rowsBefore, sourceSel_, sourceRowKeys());
+    sourceSel_ = cascade::gui::refindSourceRow(rowsBefore, sourceSel_, sourceRowKeys(), kNativeRowBase);
     if (sourceSel_ < 0 && device_ != nullptr && soapyView_ == nullptr) {
         for (std::size_t i = 0; i < nativeDevices_.size(); ++i) {
             if (nativeDevices_[i].driver == sourceKind_ && nativeDevices_[i].args == deviceArgs_) {
@@ -9023,6 +9093,11 @@ std::vector<cascade::gui::SourceRowKey> AppWindow::sourceRowKeys() const {
     keys.reserve(static_cast<std::size_t>(soapyRowBase()) + soapyDevices_.size());
     keys.push_back({"siggen", ""});
     keys.push_back({"file", ""});
+    // Row kSoundCardRow. Which card is not part of the row - the row is the
+    // sound card section, whatever card it is set to.
+    keys.push_back({"soundcard", ""});
+    static_assert(kSoundCardRow == 2 && kNativeRowBase == kSoundCardRow + 1,
+                  "sourceRowKeys pushes one key per fixed row, in combo order");
     for (const cascade::source::NativeDeviceInfo& d : nativeDevices_) {
         // THE PLUTO ROW BY ITS FAMILY ALONE: there is only ever one, and its
         // args are whatever the address box held when the list was built, so
@@ -9033,6 +9108,11 @@ std::vector<cascade::gui::SourceRowKey> AppWindow::sourceRowKeys() const {
         keys.push_back({"soapy", d.args});
     }
     return keys;
+}
+
+bool AppWindow::radioNotOpenLit() const {
+    return cascade::gui::radioNotOpenLamp(restoreKeep_, device_ != nullptr, sourceKind_,
+                                          soundCardOpenPending_);
 }
 
 void AppWindow::adoptDeviceMirrors(cascade::source::DeviceSource& dev, const std::string& kind,
@@ -9614,9 +9694,9 @@ void AppWindow::setVfoToAbsoluteHz(double wantAbsHz, bool snap) {
     double off = wantAbsHz - pipeline_.activeSource().centerFrequencyHz();
     // Keep the whole band inside the baseband +/- inputRate/2, exactly as the
     // drag path does — clicking near the panel edge must not park the filter
-    // half outside the spectrum we actually receive.
-    const double lim = 0.5 * pipeline_.inputRateHz() - 0.5 * vfoBandwidthHz_;
-    off = (lim > 0.0) ? std::clamp(off, -lim, lim) : 0.0;
+    // half outside the spectrum we actually receive. The same limit a sound
+    // card's tune is judged against (gui::tuneWithFixedCentre), from one place.
+    off = cascade::gui::vfoOffsetInsideSpan(off, pipeline_.inputRateHz(), vfoBandwidthHz_);
     pipeline_.setVfoOffsetHz(off);
     vfoOffsetKhz_ = static_cast<float>(off / 1000.0);
 }
@@ -21042,6 +21122,9 @@ void AppWindow::retuneSourceHz(double centerHz, bool isPluginPreset) {
     // call, so whichever value was requested LAST is the one a deferred
     // apply sees — "latest wins" for the context, not just the frequency.
     pendingRetuneIsPreset_ = isPluginPreset;
+    // A SOURCE WITH NO TUNER (a sound card) is tuned by its VFO instead - see
+    // gui::tuneWithFixedCentre.
+    if (retuneFixedCentre(centerHz)) { return; }
     if (device_ == nullptr || scanner_.active()) {
         applyRetuneNow(centerHz, isPluginPreset);
         return;
@@ -23556,13 +23639,34 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     // THE CONVERTERS, BEFORE ANY SOURCE IS RESTORED: cfg.centerHz is the AIR
     // frequency the last session was on, and the radio below is told it
     // through its own converter (radioHzForSource / applyConverterForSource).
-    converters_ = cascade::core::sanitiseConverters(cfg.converters);
+    // A sound card's converter written under its full ALSA name (before the
+    // identity key) is moved to the key it is looked up by now
+    // (gui::soundCardConverterKey); nothing else is touched.
+    converters_ = cascade::gui::migrateSoundCardConverterKeys(cascade::core::sanitiseConverters(cfg.converters));
 
     // Source restore. The generator is always safe (it is already active);
     // a file is restored only if the path still opens; a Soapy device only
     // if its args re-open. Any failure falls back to the generator silently
     // except for lastError shown once in the Source section (sourceError_).
-    if (cfg.sourceKind == "file") {
+    //
+    // The sound card's settings come back whatever the source is, so the row
+    // shows what was set up last time (the same rule as the I/Q file's path).
+    soundCard_ = cascade::gui::soundCardFromConfig(cfg.soundCard);
+    if (cfg.sourceKind == "soundcard") {
+        // ON A WORKER, like every other sound card open: the first frame is
+        // drawn on the generator and the card replaces it when it answers
+        // (app_window_soundcard.cpp). Until then - and for the rest of the
+        // session if it never does - the config goes on naming it; the combo
+        // names it too only once the open has actually failed.
+        restoreKeep_ = cascade::gui::rememberedSourceAfterFailedOpen(
+            cfg.sourceKind, cfg.soapyArgs, cfg.nativeArgs, cfg.iqFilePath, cfg.sampleRateHz);
+        soundCardRemembered_ = soundCard_;  // the card the config names, whatever the section becomes
+        restoreKeepLabel_.clear();
+        sourceSel_ = kSoundCardRow;
+        launchSoundCardOpen(/*restore=*/true, soundCard_);
+        cascade::core::diagLogf("source: restoring the sound card %s (%s)", soundCard_.device.c_str(),
+                                soundCard_.hostApi.c_str());
+    } else if (cfg.sourceKind == "file") {
         auto file = std::make_unique<cascade::source::IqFileSource>();
         if (file->open(cfg.iqFilePath)) {
             const double fileRadioHz = radioHzForSource("file", std::string(), cfg.centerHz);
@@ -23989,6 +24093,12 @@ cascade::core::AppConfig AppWindow::currentConfig() {
         if (patchMainKeep_.kind == "soapy") {
             keep.soapyArgs = patchMainKeep_.args;
             keep.nativeArgs = cfgNativeArgs_;
+        } else if (patchMainKeep_.kind == "soundcard") {
+            // A lent sound card is named by cfg.soundCard (below, the card as
+            // it was lent - patchMainKeep_.card); both radio slots keep what
+            // they had.
+            keep.soapyArgs = cfgSoapyArgs_;
+            keep.nativeArgs = cfgNativeArgs_;
         } else {
             keep.nativeArgs = patchMainKeep_.args;
             keep.soapyArgs = cfgSoapyArgs_;
@@ -24027,6 +24137,15 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     // wrote this out EMPTY - the path box came back blank on the next start
     // and nothing anywhere said which file had gone.
     cfg.iqFilePath = src.filePath;
+    // THE SOUND CARD THAT RAN, never the Source section's unopened edits: the
+    // next launch opens exactly what is written here. The running card; the
+    // card the patch page has borrowed; the card a failed restore, a re-Open's
+    // release or a hand-back left remembered; and only when there is none of
+    // those, the section's settings - the card as last set up
+    // (gui::soundCardToSave).
+    cfg.soundCard = cascade::gui::soundCardToConfig(cascade::gui::soundCardToSave(
+        sourceKind_, soundCardLive_, patchMainKeep_.valid && patchMainKeep_.kind == "soundcard",
+        patchMainKeep_.card, restoreKeep_.kind == "soundcard", soundCardRemembered_, soundCard_));
     cfg.centerHz = pipeline_.activeSource().centerFrequencyHz();
     cfg.mode = kModeNames[modeIndex_];
     cfg.bandwidthHz = vfoBandwidthHz_;

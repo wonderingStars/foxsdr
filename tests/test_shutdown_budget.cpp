@@ -771,6 +771,31 @@ const KnownWait kKnownWaits[] = {
      "not a wait at all - the Pluto reader's tally window before it writes its stream-health "
      "line, matching SoapySource's; nothing sleeps or blocks on it"},
 
+    // THE SOUND CARD SOURCE (0.99.36). Nothing it does on stop() waits: stop()
+    // sets a flag the read loop tests every 2 ms, and the stream itself is
+    // closed by the source's destructor - which, like every other source's,
+    // runs from ~AppWindow after watchdog_.stop() (see the RESIDUAL note above).
+    {"src/source/soundcard_source.hpp", "kReadWaitMs", 0,
+     "SoundCardSource::read()'s wait for samples, spent on the pipeline's source thread and "
+     "cut short by stop() within one 2 ms poll - the teardown waits for that thread through "
+     "kSourceJoinWait, never on this"},
+    {"src/source/soundcard_source.hpp", "kStallMs", 0,
+     "not a wait - how long read() lets an open card deliver nothing before it latches the "
+     "card as dead; measured on the source thread, never waited on by anyone"},
+    {"src/source/soundcard_source.hpp", "kAlivePollMs", 0,
+     "not a wait - how often read(), while it waits for samples, asks the backend whether the "
+     "stream is still running; the ask is a try-lock that never blocks"},
+    {"src/source/soundcard_source.hpp", "kCloseWaitMs", 0,
+     "SoundCardSource::closeDevice()'s wait for a healthy card's close on its closer thread - "
+     "switched off by AppWindow::run() (SoundCardSource::setCloseWaitEnabled(false)) straight "
+     "after watchdog_.beginShutdown(), so neither the patch radios destroyed inside the budget "
+     "nor the receiver's source destroyed after watchdog_.stop() waits on it"},
+    {"src/sink/pa_init.hpp", "kStreamListWaitMs", 0,
+     "PortAudio's stream-list lock (PaStreamListGuard): waited for only by a sound card's open "
+     "(on a worker) and its close (on the card's own closer thread, detached); the audio output "
+     "and microphone take it NoWait for their opens and their closes alike, so no thread the "
+     "teardown runs on ever waits for it"},
+
     // THE TRANSMITTER (0.95.0), AND IT IS THE FIRST COLUMN THAT ADDS.
     //
     // Everything above this block is a SOURCE, and exactly one source is
@@ -1361,6 +1386,28 @@ int main() {
         const std::size_t pause = haveAnchors ? text.find("WatchdogPause", begin)
                                               : std::string::npos;
         CHECK(pause == std::string::npos || (stop != std::string::npos && pause > stop));
+
+        // THE SOUND CARD'S CLOSE WAIT IS OFF FOR THE WHOLE TEARDOWN. kCloseWaitMs
+        // is classified above as costing the shutdown nothing, and that is
+        // true only because run() switches it off straight after
+        // beginShutdown() - before the patch's radios (which can be sound
+        // cards) are destroyed inside the budget by patchStopAll(false). If
+        // the call went, each such radio could spend a second of the budget
+        // on a close that has hung, and the arithmetic above would still say
+        // zero. (The second review's X1: deleting the call went unseen.)
+        const std::string closeWaitOff = "SoundCardSource::setCloseWaitEnabled(false);";
+        const std::size_t off = haveAnchors ? text.find(closeWaitOff, begin) : std::string::npos;
+        const std::size_t patchStop =
+            haveAnchors ? text.find("patchStopAll(false);", begin) : std::string::npos;
+        std::printf("teardown wiring: sound card close wait off@%zu patchStopAll(false)@%zu\n", off,
+                    patchStop);
+        CHECK(off != std::string::npos && isLiveCode(text, off));
+        CHECK(off != std::string::npos && patchStop != std::string::npos && off < patchStop);
+        CHECK(off != std::string::npos && stop != std::string::npos && off < stop);
+        // ...and nothing switches it back on before the watchdog stops.
+        const std::size_t on =
+            haveAnchors ? text.find("SoundCardSource::setCloseWaitEnabled(true", begin) : std::string::npos;
+        CHECK(on == std::string::npos || (stop != std::string::npos && on > stop));
     }
 
 #if defined(_WIN32)

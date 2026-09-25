@@ -85,6 +85,7 @@ struct GLFWwindow;
 // like every other gui header included here.
 #include "gui/readout_hold.hpp"
 #include "gui/tune_control.hpp"
+#include "source/soundcard_source.hpp"
 #include "gui/device_scan_plan.hpp"
 #include "gui/source_fallback.hpp"
 #include "gui/viewport_policy.hpp"
@@ -659,6 +660,11 @@ private:
         // Replaces scanNative's USB walk when set: the list it returns IS the
         // native device list, so no test ever enumerates the desk's radios.
         std::vector<cascade::source::NativeDeviceInfo> (*nativeScan)();
+        // Replaces PortAudio for the Source section's SOUND CARD when set:
+        // the list scanSoundCards asks for and every backend an open makes
+        // (tests/test_soundcard_app_paths.cpp), so no test lists or opens
+        // the desk's audio inputs.
+        std::shared_ptr<cascade::source::SoundCardBackend> (*soundCardBackend)();
     };
     // Set by the test before any AppWindow exists and never changed while one
     // does, so the worker threads that read makeDevice race with nothing.
@@ -1607,11 +1613,13 @@ private:
     void scanNative();
 
     // WHERE EACH FAMILY'S ROWS START IN THE SOURCE COMBO. Row 0 is the
-    // generator and row 1 the IQ file; the native radios come next, and the
-    // SoapySDR devices after them. Named rather than written as "2" at the
-    // dozen sites that index this list, because one of those sites forgetting
-    // that the native block exists is an off-by-N that opens the wrong radio.
-    static constexpr int kNativeRowBase = 2;
+    // generator, row 1 the IQ file and row 2 the sound card; the native radios
+    // come next, and the SoapySDR devices after them. Named rather than written
+    // as "3" at the dozen sites that index this list, because one of those
+    // sites forgetting that the native block exists is an off-by-N that opens
+    // the wrong radio.
+    static constexpr int kSoundCardRow = 2;
+    static constexpr int kNativeRowBase = 3;
     int soapyRowBase() const {
         return kNativeRowBase + static_cast<int>(nativeDevices_.size());
     }
@@ -1629,6 +1637,13 @@ private:
     // gui::refindSourceRow, which keeps the selection on the same radio when
     // a re-scan moves the rows (0.99.36).
     std::vector<cascade::gui::SourceRowKey> sourceRowKeys() const;
+    // The end of every native scan: the selection found again by what it
+    // names (rowsBefore = sourceRowKeys() before the list changed).
+    void followSourceRowAfterRescan(const std::vector<cascade::gui::SourceRowKey>& rowsBefore);
+
+    // The Source section's lamp for a saved source the generator is standing
+    // in for (0.99.36): lit while one is remembered and not open.
+    bool radioNotOpenLit() const;
 
     // Fills every panel mirror (rates, gains and their ranges, AGC, antenna)
     // from an open DeviceSource, priming the hardware where the panel has to
@@ -1933,6 +1948,90 @@ private:
     // this reaper has nothing to release where the open reaper has a handle.
     void reapPendingSoapyScan();
 
+    // --- THE SOUND CARD SOURCE (app_window_soundcard.cpp) ---------------------
+    // Row kSoundCardRow of the Source combo. Like the IQ file and the Pluto,
+    // choosing the row shows its controls and opens nothing; Open does, on a
+    // worker, because enumerating and opening an audio device are calls into
+    // the host API that can take as long as it likes. See
+    // source/soundcard_source.hpp for the source itself.
+    struct SoundCardOpenResult {
+        std::unique_ptr<cascade::source::SoundCardSource> src;  // null on failure
+        std::string error;    // why it failed, or a coerced rate on success
+        std::vector<cascade::source::SoundCardDevice> devices;  // the list it opened from
+        std::uint64_t gen = 0;  // sourceGen_ when it was asked for
+        bool restore = false;   // the startup restore asked, not the user
+        cascade::source::SoundCardSettings wanted;  // what was asked for
+        // THE SAME CARD WAS RELEASED FIRST (gui::soundCardReopenReleasesFirst):
+        // the running card was closed before this open, with `previous` - its
+        // settings - to fall back on.
+        bool released = false;
+        cascade::source::SoundCardSettings previous;
+        // `wanted` IS `previous` (gui::soundCardSameSettings): released and
+        // tried once, with nothing different to fall back to.
+        bool sameAsPrevious = false;
+        bool restoredPrevious = false;  // src runs `previous`: `wanted` was refused
+        std::string previousRefused;    // ...and why `previous` did not come back either
+    };
+    // What the controls show, whether or not the card is the source in use -
+    // the same rule as the I/Q file's path. The config saves it only when no
+    // card is running, lent to the patch page or remembered
+    // (gui::soundCardToSave): these are edits until Open is pressed.
+    cascade::source::SoundCardSettings soundCard_;
+    // The card restoreKeep_ names when its kind is "soundcard" - the saved
+    // card a startup restore could not open, the card released for a re-Open,
+    // the card handed back by the patch page - as it last RAN (or as the
+    // config had it). Meaningful only while restoreKeep_ names a card.
+    cascade::source::SoundCardSettings soundCardRemembered_;
+    // The settings of the card as it is RUNNING (set when one is installed;
+    // meaningful only while sourceKind_ is "soundcard"). The centre box reads
+    // its format: a real-mode card has no centre to move. The patch page's
+    // loan of the card takes these, never soundCard_ (which may have been
+    // edited and not Opened), and so does a re-Open's fallback.
+    cascade::source::SoundCardSettings soundCardLive_;
+    std::vector<cascade::source::SoundCardDevice> soundCardDevices_;
+    bool soundCardListed_ = false;  // soundCardDevices_ holds a finished enumeration
+    std::future<std::vector<cascade::source::SoundCardDevice>> soundCardScanFuture_;
+    bool soundCardScanPending_ = false;
+    std::future<SoundCardOpenResult> soundCardOpenFuture_;
+    bool soundCardOpenPending_ = false;
+    // The saved card was not in the list at startup: say so under the
+    // controls until the user opens something (never replaced by another).
+    std::string soundCardMissing_;
+    // I/Q centre as typed, in MHz (the box's own unit).
+    double soundCardCentreMhz_ = 0.0;
+
+    // The Source section's controls for the row.
+    void drawSoundCardControls();
+    // Enumerate on a worker; the list arrives through pollSoundCard().
+    void scanSoundCards();
+    // Where a sound card backend comes from: PortAudio, or the test's fake
+    // (testHooks_.soundCardBackend). An empty factory means PortAudio.
+    static cascade::source::SoundCardSource::BackendFactory soundCardBackendFactory();
+    // Open `settings` on a worker; installed by pollSoundCard() on success.
+    // When they name the card that is RUNNING, it is released first (see
+    // gui::soundCardReopenReleasesFirst) and reopened as it was if the new
+    // settings are refused.
+    void launchSoundCardOpen(bool restore, const cascade::source::SoundCardSettings& settings);
+    // Once per frame: collect a finished enumeration or open.
+    void pollSoundCard();
+    // At quit, the same grace-then-abandon as reapPendingDeviceOpen.
+    void reapSoundCardWorkers();
+    // The installed source is a sound card that has stopped (unplugged,
+    // taken away, silent past its stall timer) - its own latch or the
+    // pipeline's. False for any other source.
+    bool installedSoundCardDead();
+    // A tune asked of a source whose centre cannot move (a sound card): the
+    // VFO moves inside the span instead. True when it handled the request.
+    bool retuneFixedCentre(double centerHz);
+    // The open args for a patch radio on a sound card, from its key's
+    // "device=...,api=...": the Source section's settings when it is the same
+    // card, real mono on the left channel otherwise.
+    std::string soundCardPatchArgs(const std::string& keyArgs) const;
+    // "Receives X to Y." under the Source section's controls, from the
+    // settings shown: the AIR range, through the converter stored for the
+    // section's card (gui::soundCardAirSpan).
+    std::string soundCardReceivesText() const;
+
     // Consumes finished scan/open futures; called once per frame.
     void pollSourceAsync();
     // ONE AUTOMATIC REOPEN AFTER AN ABSORBED DRIVER FAULT (0.90.1); called
@@ -2058,6 +2157,15 @@ private:
     // places that tune a source BEFORE it is installed (the restore at start
     // and the IQ file's Open).
     void drawConverterControls();
+    // The modes the Converter combo offers for the source installed, in the
+    // combo's order; EMPTY means the Converter controls are not drawn at all.
+    std::vector<cascade::core::ConverterMode> converterModesOffered() const;
+    // A sentence under the Converter controls about a setting that is stored
+    // for this source but cannot apply to it; "" when there is none.
+    std::string converterUnusableNote() const;
+    // The installed source's converter key before any alias (a sound card
+    // by its card - gui::soundCardConverterKey).
+    std::string converterRawKeyNow() const;
     std::string converterRadioKeyNow() const;
     cascade::core::ConverterSetting converterForKey(const std::string& radioKey) const;
     void applyConverterForSource();
@@ -2228,7 +2336,7 @@ private:
     // The ACTIVE source's kind as the config store spells it. Tracked at each
     // successful switch because the pipeline does not expose source identity.
     // "siggen"|"file"|"soapy"|"rtlsdr"|"hackrf"|"airspy"|"airspyhf"|
-    // "sdrplay"|"mirisdr"|"rx888"|"pluto"
+    // "sdrplay"|"mirisdr"|"rx888"|"pluto"|"soundcard"
     std::string sourceKind_ = "siggen";
 
     // WHAT THE CONFIG REMEMBERS, ONE SLOT PER FAMILY, and they are separate
@@ -3067,6 +3175,9 @@ private:
         // when it had none to give. May be below 0 Hz (see
         // DeviceOpenResult::keepCenterHz).
         std::optional<double> centreHz;
+        // A lent SOUND CARD, as it was running when the patch took it - what
+        // the hand-back reopens (gui::receiverSourceForPatch).
+        cascade::source::SoundCardSettings card;
     };
     PatchMainKeep patchMainKeep_;
     // One device a patch Radio can be set to, for the inspector's list.

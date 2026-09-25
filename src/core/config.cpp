@@ -27,6 +27,7 @@
 #include "core/serial_port.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -250,6 +251,15 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     getString(j, "plutoUri", out.plutoUri);
     getString(j, "soapyAntenna", out.soapyAntenna);
     getString(j, "iqFilePath", out.iqFilePath);
+    if (const auto sc = j.find("soundCard"); sc != j.end() && sc->is_object()) {
+        getString(*sc, "device", out.soundCard.device);
+        getString(*sc, "hostApi", out.soundCard.hostApi);
+        getDouble(*sc, "rateHz", out.soundCard.rateHz);
+        getString(*sc, "format", out.soundCard.format);
+        getInt(*sc, "channel", out.soundCard.channel);
+        getBool(*sc, "swapIq", out.soundCard.swapIq);
+        getDouble(*sc, "centreHz", out.soundCard.centreHz);
+    }
     getDouble(j, "centerHz", out.centerHz);
     getString(j, "mode", out.mode);
     getDouble(j, "bandwidthHz", out.bandwidthHz);
@@ -574,9 +584,20 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
         out.sourceKind != "hackrf" && out.sourceKind != "airspy" &&
         out.sourceKind != "airspyhf" && out.sourceKind != "sdrplay" &&
         out.sourceKind != "mirisdr" && out.sourceKind != "rx888" &&
-        out.sourceKind != "pluto") {
+        out.sourceKind != "pluto" && out.sourceKind != "soundcard") {
         out.sourceKind = defaults.sourceKind;
     }
+    // The sound card's settings, each back to its default on its own when
+    // hand-edited into nonsense (see the header).
+    if (out.soundCard.format != "real" && out.soundCard.format != "iq") {
+        out.soundCard.format = defaults.soundCard.format;
+    }
+    out.soundCard.channel = (out.soundCard.channel == 1) ? 1 : 0;
+    if (!std::isfinite(out.soundCard.rateHz) || out.soundCard.rateHz < 8000.0 ||
+        out.soundCard.rateHz > 768000.0) {
+        out.soundCard.rateHz = defaults.soundCard.rateHz;
+    }
+    if (!std::isfinite(out.soundCard.centreHz)) { out.soundCard.centreHz = 0.0; }
     // AN EMPTY PLUTO ADDRESS IS NOT A CHOICE, it is a field that was cleared
     // or a key hand-edited to "". The box would come up blank with nothing
     // saying what belongs in it, so it falls back to the address the board
@@ -766,6 +787,10 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
     j["plutoUri"] = cfg.plutoUri;
     j["soapyAntenna"] = cfg.soapyAntenna;
     j["iqFilePath"] = cfg.iqFilePath;
+    j["soundCard"] = {{"device", cfg.soundCard.device},     {"hostApi", cfg.soundCard.hostApi},
+                      {"rateHz", cfg.soundCard.rateHz},     {"format", cfg.soundCard.format},
+                      {"channel", cfg.soundCard.channel},   {"swapIq", cfg.soundCard.swapIq},
+                      {"centreHz", cfg.soundCard.centreHz}};
     j["centerHz"] = cfg.centerHz;
     j["mode"] = cfg.mode;
     j["bandwidthHz"] = cfg.bandwidthHz;

@@ -28,7 +28,8 @@
 //     degenerate or inverted span is a divide-by-zero, and clamping only one
 //     end would invent a range the user never chose)
 //   - sourceKind  must be "siggen" | "file" | "soapy" | "rtlsdr" | "hackrf" |
-//     "airspy" | "airspyhf" | "sdrplay" | "mirisdr" | "rx888" | "pluto";
+//     "airspy" | "airspyhf" | "sdrplay" | "mirisdr" | "rx888" | "pluto" |
+//     "soundcard" (a sound card's input, settings in `soundCard` below);
 //     anything else resets to "siggen" (the only source that can never fail
 //     to exist). The last eight are the native drivers, which reach their
 //     radio without any SoapySDR install at all - six of them over our own
@@ -115,7 +116,7 @@ namespace cascade::core {
 struct AppConfig {
     int schemaVersion = 1;
     // "siggen"|"file"|"soapy"|"rtlsdr"|"hackrf"|"airspy"|"airspyhf"|
-    // "sdrplay"|"mirisdr"|"rx888"|"pluto"
+    // "sdrplay"|"mirisdr"|"rx888"|"pluto"|"soundcard"
     std::string sourceKind = "siggen";
     // RX antenna port for a Soapy device, e.g. "TX/RX" or "RX2" on a B200.
     // Empty means "whatever the driver defaults to", which is what every
@@ -203,6 +204,25 @@ struct AppConfig {
     // out of the box, which is what an ADALM-Pluto on a cable answers at.
     std::string plutoUri = "ip:192.168.2.1";
     std::string iqFilePath;
+    // THE SOUND CARD SOURCE's settings (sourceKind "soundcard"), kept whether
+    // or not it is the source in use - the same rule as iqFilePath and
+    // plutoUri: what the user set up comes back in the Source section next
+    // time, and a card that was unplugged for one session is still named
+    // when it is plugged back in. The card is named by device NAME and host
+    // API, never by index (source/soundcard_source.hpp says why). Validation
+    // on load: format other than "real"/"iq" -> "real"; channel clamped to
+    // 0/1; a rate outside [8 kHz, 768 kHz] or not finite -> 48 kHz; a centre
+    // that is not finite -> 0.
+    struct SoundCard {
+        std::string device;
+        std::string hostApi;
+        double rateHz = 48000.0;
+        std::string format = "real";  // "real" (one channel, 0..rate/2) | "iq" (stereo)
+        int channel = 0;              // real: 0 = left, 1 = right
+        bool swapIq = false;          // iq: right is I
+        double centreHz = 0.0;        // iq: what the external receiver is tuned to
+    };
+    SoundCard soundCard;
     double centerHz = 100000000.0;
     std::string mode = "WFM";
     double bandwidthHz = 150000.0;

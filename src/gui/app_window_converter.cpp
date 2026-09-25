@@ -19,10 +19,12 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "gui/app_window.hpp"
 
+#include <algorithm>
 #include <cfloat>
 #include <cmath>
 #include <cstdio>
 #include <string>
+#include <vector>
 
 #include <imgui.h>
 
@@ -30,6 +32,7 @@
 #include "core/freq_converter.hpp"
 #include "core/i18n.hpp"
 #include "core/utf8_text.hpp"
+#include "gui/soundcard_panel.hpp"
 #include "gui/theme.hpp"
 #include "gui/tune_control.hpp"
 
@@ -64,12 +67,34 @@ std::string AppWindow::resolveConverterKey(const std::string& radioKey) const {
     return it == converterKeyAlias_.end() ? radioKey : it->second;
 }
 
+std::string AppWindow::converterRawKeyNow() const {
+    // A SOUND CARD BY ITS CARD: it leaves deviceArgs_ empty, and "soundcard|"
+    // would give every card one shared setting (gui::soundCardConverterKey).
+    if (sourceKind_ == "soundcard") {
+        return cascade::gui::soundCardConverterKey(soundCardLive_.device, soundCardLive_.hostApi);
+    }
+    return cc::converterRadioKey(sourceKind_, deviceArgs_);
+}
+
 std::string AppWindow::converterRadioKeyNow() const {
-    return resolveConverterKey(cc::converterRadioKey(sourceKind_, deviceArgs_));
+    return resolveConverterKey(converterRawKeyNow());
 }
 
 cc::ConverterSetting AppWindow::converterForKey(const std::string& radioKey) const {
-    return cc::converterFor(converters_, resolveConverterKey(radioKey));
+    // A patch radio names its card by the full name; the card's converter is
+    // kept under its identity (gui::soundCardConverterKey - on Linux without
+    // the ALSA card number), so the key is brought to that form first.
+    const std::string key = cascade::gui::soundCardCanonicalKey(resolveConverterKey(radioKey));
+    const cc::ConverterSetting stored = cc::converterFor(converters_, key);
+    // What a sound card can have in front of it depends on its format
+    // (gui::soundCardConverter): nothing for I/Q, a down-converter for real.
+    std::string cardArgs;
+    if (cascade::gui::soundCardKeyArgs(key, cardArgs)) {
+        const cascade::source::SoundCardFormat f = cascade::gui::soundCardFormatForKey(
+            cardArgs, sourceKind_ == "soundcard", soundCardLive_, soundCard_);
+        return cascade::gui::soundCardConverter(stored, f).effective;
+    }
+    return stored;
 }
 
 void AppWindow::noteConverterFallback(const std::string& nativeKey,
@@ -113,7 +138,7 @@ void AppWindow::noteConverterFallback(const std::string& nativeKey,
 }
 
 std::string AppWindow::converterAliasNote() {
-    const std::string raw = cc::converterRadioKey(sourceKind_, deviceArgs_);
+    const std::string raw = converterRawKeyNow();
     // Said until the user sets a converter here themselves.
     if (converterNotCarried_.count(raw) != 0 && !cc::converterActive(pipeline_.converter())) {
         return tr("Opened through SoapySDR because the native driver refused this radio. The "
@@ -282,8 +307,12 @@ void AppWindow::changeConverter(const cc::ConverterSetting& s) {
     //
     // AN I/Q FILE IS NOT A RADIO. Its frequency is where the recording was
     // made; a converter set on it is there to relabel a recording made at the
-    // radio's frequency, so a file always relabels.
-    if (airBefore.has_value() && sourceKind_ != "file") {
+    // radio's frequency, so a file always relabels. NOR IS A SOUND CARD: it
+    // has no tuner to move (a real-mode card sits at rate/4, an I/Q card
+    // where its external receiver is), so a converter in front of one only
+    // relabels what it hears - asking it to retune would be refused and
+    // said as "out of reach".
+    if (airBefore.has_value() && sourceKind_ != "file" && sourceKind_ != "soundcard") {
         const double airHz = *airBefore;
         const double radioHz = cc::radioFromAir(eff, airHz);
         double rLo = 0.0;
@@ -323,11 +352,35 @@ void AppWindow::changeConverter(const cc::ConverterSetting& s) {
                             sourceKind_.c_str());
 }
 
+std::vector<cc::ConverterMode> AppWindow::converterModesOffered() const {
+    // A SOUND CARD (gui::soundCardConverter): none at all in I/Q mode - the
+    // typed centre is the translation - and no up-converter in real mode.
+    if (sourceKind_ == "soundcard") {
+        if (soundCardLive_.format == cascade::source::SoundCardFormat::IqStereo) { return {}; }
+        return {cc::ConverterMode::Off, cc::ConverterMode::Down};
+    }
+    return {cc::ConverterMode::Off, cc::ConverterMode::Up, cc::ConverterMode::Down};
+}
+
+std::string AppWindow::converterUnusableNote() const {
+    if (sourceKind_ != "soundcard") { return {}; }
+    const cc::ConverterSetting stored = cc::converterFor(converters_, converterRadioKeyNow());
+    if (!cascade::gui::soundCardConverter(stored, soundCardLive_.format).upRefused) { return {}; }
+    return tr("A sound card takes a down-converter only: the up-converter set for this card is not used.");
+}
+
 void AppWindow::drawConverterControls() {
+    const std::vector<cc::ConverterMode> offered = converterModesOffered();
+    if (offered.empty()) { return; }
     const std::string key = converterRadioKeyNow();
     const auto stored = converters_.find(key);
-    const cc::ConverterSetting mine =
+    cc::ConverterSetting mine =
         stored == converters_.end() ? cc::ConverterSetting{} : stored->second;
+    // A stored mode this source cannot take reads as Off (the note below says
+    // why); its LO is kept for the radio or mode that can.
+    if (std::find(offered.begin(), offered.end(), mine.mode) == offered.end()) {
+        mine.mode = cc::ConverterMode::Off;
+    }
     const cc::ConverterSetting live = pipeline_.converter();
 
     ImGui::SeparatorText(tr("Converter"));
@@ -336,13 +389,18 @@ void AppWindow::drawConverterControls() {
     ImGui::BeginDisabled(deviceOpenPending_);
 
     // --- the mode ----------------------------------------------------------------
-    const char* modeNames[] = {tr("Off"), tr("Up-converter"), tr("Down-converter")};
-    int mode = static_cast<int>(mine.mode);
-    if (mode < 0 || mode > 2) { mode = 0; }
+    std::vector<const char*> modeNames;
+    int mode = 0;
+    for (std::size_t i = 0; i < offered.size(); ++i) {
+        modeNames.push_back(offered[i] == cc::ConverterMode::Up     ? tr("Up-converter")
+                            : offered[i] == cc::ConverterMode::Down ? tr("Down-converter")
+                                                                    : tr("Off"));
+        if (offered[i] == mine.mode) { mode = static_cast<int>(i); }
+    }
     ImGui::SetNextItemWidth(-FLT_MIN);
-    if (ImGui::Combo("##converter_mode", &mode, modeNames, 3)) {
+    if (ImGui::Combo("##converter_mode", &mode, modeNames.data(), static_cast<int>(modeNames.size()))) {
         cc::ConverterSetting next = mine;
-        next.mode = static_cast<cc::ConverterMode>(mode);
+        next.mode = offered[static_cast<std::size_t>(mode)];
         if (next.mode != cc::ConverterMode::Off && !cc::converterLoValid(next.loHz)) {
             next.loHz = kDefaultLoHz;
         }
@@ -357,6 +415,11 @@ void AppWindow::drawConverterControls() {
     // The SoapySDR fallback for a dongle the native driver refused: the same
     // radio under another key, and the converter set for it still in force.
     if (const std::string note = converterAliasNote(); !note.empty()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
+        ImGui::TextWrapped("%s", note.c_str());
+        ImGui::PopStyleColor();
+    }
+    if (const std::string note = converterUnusableNote(); !note.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
         ImGui::TextWrapped("%s", note.c_str());
         ImGui::PopStyleColor();

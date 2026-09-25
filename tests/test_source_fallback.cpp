@@ -133,29 +133,69 @@ void testTheSelectionFollowsTheRadioNotTheIndex() {
     using cascade::gui::refindSourceRow;
     const SourceRowKey gen{"siggen", ""};
     const SourceRowKey file{"file", ""};
+    const SourceRowKey sc{"soundcard", ""};
     const SourceRowKey rsp{"sdrplay", "serial=2208054321"};
     const SourceRowKey miri{"mirisdr", "serial=2208054321"};
     const SourceRowKey pluto{"pluto", "uri=ip:192.168.2.1"};
     const SourceRowKey b200{"soapy", "driver=uhd,serial=31"};
+    // The combo's fixed rows: generator, file, sound card
+    // (AppWindow::kNativeRowBase).
+    const int kFixed = 3;
 
     // THE RSPdx CASE: its row is gone from a re-scan and the Pluto's slides
-    // into index 2. Before 0.99.36 the combo ticked - and previewed - the
+    // into its index. Before 0.99.36 the combo ticked - and previewed - the
     // Pluto, and showed the Pluto's address box.
-    CHECK(refindSourceRow({gen, file, rsp, pluto}, 2, {gen, file, pluto}) == -1);
+    CHECK(refindSourceRow({gen, file, sc, rsp, pluto}, 3, {gen, file, sc, pluto}, kFixed) == -1);
     // ...and with the claimed row kept (withClaimedSdrPlayRows), it moves to
     // wherever the RSP now is.
-    CHECK(refindSourceRow({gen, file, rsp, pluto}, 2, {gen, file, pluto, rsp}) == 3);
+    CHECK(refindSourceRow({gen, file, sc, rsp, pluto}, 3, {gen, file, sc, pluto, rsp}, kFixed) == 4);
     // SAME ARGS, DIFFERENT DRIVER: the native Mirics row of the same RSP is
     // NOT the API row the receiver opened.
-    CHECK(refindSourceRow({gen, file, rsp, pluto}, 2, {gen, file, miri, pluto}) == -1);
+    CHECK(refindSourceRow({gen, file, sc, rsp, pluto}, 3, {gen, file, sc, miri, pluto}, kFixed) == -1);
     // A Soapy selection shifted by a native row appearing.
-    CHECK(refindSourceRow({gen, file, pluto, b200}, 3, {gen, file, rsp, pluto, b200}) == 4);
-    // Rows 0 and 1 never move, and -1 stays -1.
-    CHECK(refindSourceRow({gen, file, rsp}, 0, {gen, file}) == 0);
-    CHECK(refindSourceRow({gen, file, rsp}, 1, {gen, file}) == 1);
-    CHECK(refindSourceRow({gen, file, rsp}, -1, {gen, file, rsp}) == -1);
+    CHECK(refindSourceRow({gen, file, sc, pluto, b200}, 4, {gen, file, sc, rsp, pluto, b200}, kFixed) == 5);
+    // The fixed rows never move, and -1 stays -1.
+    CHECK(refindSourceRow({gen, file, sc, rsp}, 0, {gen, file, sc}, kFixed) == 0);
+    CHECK(refindSourceRow({gen, file, sc, rsp}, 1, {gen, file, sc}, kFixed) == 1);
+    CHECK(refindSourceRow({gen, file, sc, rsp}, -1, {gen, file, sc, rsp}, kFixed) == -1);
     // An index that was already stale stays "not a row".
-    CHECK(refindSourceRow({gen, file}, 7, {gen, file, rsp}) == -1);
+    CHECK(refindSourceRow({gen, file, sc}, 7, {gen, file, sc, rsp}, kFixed) == -1);
+
+    // THE SOUND CARD ROW IS FIXED: kept with no radio listed at all, and
+    // with radios appearing and going after it.
+    CHECK(refindSourceRow({gen, file, sc}, 2, {gen, file, sc}, kFixed) == 2);
+    CHECK(refindSourceRow({gen, file, sc}, 2, {gen, file, sc, rsp, b200}, kFixed) == 2);
+    CHECK(refindSourceRow({gen, file, sc, rsp}, 2, {gen, file, sc}, kFixed) == 2);
+    // ...and a radio's row is never found AT a fixed row, even one whose key
+    // happens to look alike: the search starts after them.
+    CHECK(refindSourceRow({gen, file, sc, sc}, 3, {gen, file, sc}, kFixed) == -1);
+}
+
+// --- 5. the lamp ----------------------------------------------------------------
+void testTheLampWaitsForASoundCardOpen() {
+    using cascade::gui::radioNotOpenLamp;
+    RememberedSource radio;
+    radio.kind = "rtlsdr";
+    radio.nativeArgs = "serial=00000001";
+    RememberedSource cardKeep;
+    cardKeep.kind = "soundcard";
+    RememberedSource fileKeep;
+    fileKeep.kind = "file";
+    fileKeep.filePath = "C:/x.wav";
+
+    // Lit: a remembered radio or card, nothing open, the generator running.
+    CHECK(radioNotOpenLamp(radio, false, "siggen", false));
+    CHECK(radioNotOpenLamp(cardKeep, false, "siggen", false));
+    // Dark while a sound card is still opening - a restore, a hand-back, a
+    // re-Open with new settings: the remembered card is being brought back.
+    CHECK(!radioNotOpenLamp(cardKeep, false, "siggen", true));
+    CHECK(!radioNotOpenLamp(radio, false, "siggen", true));
+    // Dark with nothing remembered, with a device open, with something other
+    // than the generator running, and for a file (said in its own words).
+    CHECK(!radioNotOpenLamp(RememberedSource{}, false, "siggen", false));
+    CHECK(!radioNotOpenLamp(radio, true, "siggen", false));
+    CHECK(!radioNotOpenLamp(cardKeep, false, "soundcard", false));
+    CHECK(!radioNotOpenLamp(fileKeep, false, "siggen", false));
 }
 
 }  // namespace
@@ -166,5 +206,6 @@ int main() {
     testTheSentenceSaysWhichRadioWhyAndWhereTheReceiverIs();
     testPickingADeadRadiosRowOpensItAgain();
     testTheSelectionFollowsTheRadioNotTheIndex();
+    testTheLampWaitsForASoundCardOpen();
     return testSummary("test_source_fallback");
 }

@@ -5,6 +5,8 @@
 
 #include <portaudio.h>
 
+#include "sink/pa_init.hpp"
+
 #include <cstring>
 
 namespace cascade::sink {
@@ -35,14 +37,16 @@ int paOutCallback(const void* /*input*/, void* output, unsigned long frameCount,
 }  // namespace
 
 AudioOut::AudioOut() : ring_(kRingCapacity) {
-    paOk_ = (Pa_Initialize() == paNoError);
+    // Through the one shared, locked initialiser (sink/pa_init.hpp):
+    // PortAudio's own count of Initialize/Terminate pairs is a plain int.
+    paOk_ = paInitializeShared();
 }
 
 AudioOut::~AudioOut() {
     close();
     // Guarded release: Pa_Terminate() must pair with a SUCCESSFUL
     // Pa_Initialize() — PortAudio refcounts the pairs across instances.
-    if (paOk_) { Pa_Terminate(); }
+    if (paOk_) { paTerminateShared(); }
 }
 
 std::vector<AudioDevice> AudioOut::listOutputDevices() {
@@ -112,17 +116,24 @@ bool AudioOut::open(int deviceIndex, double sampleRateHz, int channels) {
     out.hostApiSpecificStreamInfo = nullptr;
 
     PaStream* stream = nullptr;
-    // paNoFlag keeps PortAudio's default out-of-range clipping enabled: a
-    // demod transient beyond ±1.0 gets clamped instead of wrapping into
-    // full-scale noise on some host APIs.
-    if (Pa_OpenStream(&stream, nullptr, &out, sampleRateHz,
-                      paFramesPerBufferUnspecified, paNoFlag, &paOutCallback,
-                      this) != paNoError) {
-        return false;
-    }
-    if (Pa_StartStream(stream) != paNoError) {
-        Pa_CloseStream(stream);
-        return false;
+    {
+        // PortAudio's list of open streams has no lock of its own, and a
+        // sound card can be opening or closing on another thread (see
+        // sink/pa_init.hpp). NoWait: this open is sometimes on the GUI
+        // thread (the patch page's speaker, the Pipeline constructor).
+        PaStreamListGuard listGuard(PaStreamListGuard::NoWait);
+        // paNoFlag keeps PortAudio's default out-of-range clipping enabled: a
+        // demod transient beyond ±1.0 gets clamped instead of wrapping into
+        // full-scale noise on some host APIs.
+        if (Pa_OpenStream(&stream, nullptr, &out, sampleRateHz,
+                          paFramesPerBufferUnspecified, paNoFlag, &paOutCallback,
+                          this) != paNoError) {
+            return false;
+        }
+        if (Pa_StartStream(stream) != paNoError) {
+            Pa_CloseStream(stream);
+            return false;
+        }
     }
     stream_ = stream;
     running_ = true;
@@ -153,7 +164,14 @@ void AudioOut::closeLocked() {
     // should cut output immediately. Any samples still in the ring are
     // discarded by the next open()'s drain.
     Pa_AbortStream(static_cast<PaStream*>(stream_));
-    Pa_CloseStream(static_cast<PaStream*>(stream_));
+    {
+        // Pa_CloseStream takes the stream off PortAudio's unlocked list of
+        // open streams as its first act (see sink/pa_init.hpp), while a sound
+        // card may be opening or closing on another thread. NoWait, like the
+        // open: ~AudioOut runs on the GUI thread at exit.
+        PaStreamListGuard closeGuard(PaStreamListGuard::NoWait);
+        Pa_CloseStream(static_cast<PaStream*>(stream_));
+    }
     stream_ = nullptr;
     running_ = false;
 }

@@ -1064,6 +1064,14 @@ function reflectSource(s) {
       o.disabled = true;
       sel.appendChild(o);
       sel.value = '__file__';
+    } else if (s.sourceKind === 'soundcard') {
+      // The same for a sound card: shown as what is running, chosen only in
+      // the desktop window (its device list lives there).
+      const o = document.createElement('option');
+      o.value = '__soundcard__'; o.textContent = (s.sourceName || 'Sound card') + ' (choose in the app)';
+      o.disabled = true;
+      sel.appendChild(o);
+      sel.value = '__soundcard__';
     } else {
       sel.value = isRadioKind(s.sourceKind) ? (s.sourceKind + '|' + s.soapyArgs) : '';
     }

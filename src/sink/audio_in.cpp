@@ -6,6 +6,8 @@
 
 #include <portaudio.h>
 
+#include "sink/pa_init.hpp"
+
 #include <cmath>
 
 namespace cascade::sink {
@@ -33,13 +35,15 @@ int paInCallback(const void* input, void* /*output*/, unsigned long frameCount,
 
 }  // namespace
 
-AudioIn::AudioIn() : ring_(kRingCapacity) { paOk_ = (Pa_Initialize() == paNoError); }
+// Through the one shared, locked initialiser (sink/pa_init.hpp): PortAudio's
+// own count of Initialize/Terminate pairs is a plain int.
+AudioIn::AudioIn() : ring_(kRingCapacity) { paOk_ = paInitializeShared(); }
 
 AudioIn::~AudioIn() {
     close();
     // Guarded release: Pa_Terminate() must pair with a SUCCESSFUL
     // Pa_Initialize() - PortAudio refcounts the pairs across instances.
-    if (paOk_) { Pa_Terminate(); }
+    if (paOk_) { paTerminateShared(); }
 }
 
 std::vector<AudioDevice> AudioIn::listInputDevices() {
@@ -88,13 +92,18 @@ bool AudioIn::open(int deviceIndex, double sampleRateHz) {
     in.hostApiSpecificStreamInfo = nullptr;
 
     PaStream* stream = nullptr;
-    if (Pa_OpenStream(&stream, &in, nullptr, sampleRateHz, paFramesPerBufferUnspecified,
-                      paNoFlag, &paInCallback, this) != paNoError) {
-        return false;
-    }
-    if (Pa_StartStream(stream) != paNoError) {
-        Pa_CloseStream(stream);
-        return false;
+    {
+        // PortAudio's list of open streams has no lock of its own (see
+        // sink/pa_init.hpp); NoWait, like the audio output's open.
+        PaStreamListGuard listGuard(PaStreamListGuard::NoWait);
+        if (Pa_OpenStream(&stream, &in, nullptr, sampleRateHz, paFramesPerBufferUnspecified,
+                          paNoFlag, &paInCallback, this) != paNoError) {
+            return false;
+        }
+        if (Pa_StartStream(stream) != paNoError) {
+            Pa_CloseStream(stream);
+            return false;
+        }
     }
     stream_ = stream;
     running_ = true;
@@ -113,7 +122,13 @@ void AudioIn::close() {
     // Abort rather than Stop: Stop would block until the device drained, and
     // there is nothing in an input queue worth waiting for.
     Pa_AbortStream(static_cast<PaStream*>(stream_));
-    Pa_CloseStream(static_cast<PaStream*>(stream_));
+    {
+        // The stream comes off PortAudio's unlocked list here (see
+        // sink/pa_init.hpp); NoWait, like the open - never a wait on
+        // whatever thread closes the microphone.
+        PaStreamListGuard closeGuard(PaStreamListGuard::NoWait);
+        Pa_CloseStream(static_cast<PaStream*>(stream_));
+    }
     stream_ = nullptr;
     running_ = false;
 }

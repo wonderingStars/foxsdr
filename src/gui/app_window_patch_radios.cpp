@@ -40,6 +40,7 @@
 #include "core/patch_devices.hpp"
 #include "gui/rate_follow_status.hpp"
 #include "gui/scope_face.hpp"
+#include "gui/soundcard_panel.hpp"
 #include "gui/theme.hpp"
 #include "source/siggen_source.hpp"
 #include "source/soapy_source.hpp"
@@ -125,6 +126,12 @@ std::vector<AppWindow::PatchDeviceChoice> AppWindow::patchDeviceChoices() const 
         // NOT WRAPPED: "(SoapySDR)" is only the excluded product name in
         // parentheses, nothing else to translate.
         out.push_back({pc::makeDeviceKey("soapy", d.args), d.label + " (SoapySDR)"});
+    }
+    // Every sound card input the Source section has listed (the list is asked
+    // for when the patch page is open - see pollSoundCard).
+    for (const cascade::source::SoundCardDevice& d : soundCardDevices_) {
+        out.push_back({pc::makeDeviceKey("soundcard", cascade::source::soundCardDeviceArgs(d.name, d.hostApi)),
+                       std::string(tr("Sound card")) + ": " + cascade::source::soundCardDeviceLabel(d)});
     }
     // The receiver's own radio, even when no list currently shows it (a
     // SoapySDR device is only listed after a scan).
@@ -262,13 +269,25 @@ void AppWindow::patchReconcile() {
     // ONLY WHILE THE PATCH RUNS (0.99.18): an open page with the patch stopped
     // leaves the receiver alone, so a patch can be built while listening.
     // Only a live DEVICE is taken (a file or the generator is not a radio),
-    // and never mid-open: the answer is waited for, then taken.
-    if (patchRunning_ && device_ != nullptr && !deviceOpenPending_) {
+    // and never mid-open: the answer is waited for, then taken. The
+    // receiver's SOUND CARD is lent the same way (gui::receiverSourceForPatch):
+    // left with the receiver, a patch radio on the same card would open a
+    // second stream on it, which WASAPI exclusive mode refuses outright. The
+    // card is described by what is RUNNING (soundCardLive_), never by the
+    // Source section's controls, which may have been edited and not Opened.
+    const cascade::gui::ReceiverLoan loan = cascade::gui::receiverSourceForPatch(
+        patchRunning_, sourceKind_, device_ != nullptr, deviceOpenPending_, deviceArgs_,
+        soundCardOpenPending_, soundCardLive_);
+    if (loan.take) {
         PatchMainKeep keep;
         keep.valid = true;
-        keep.kind = sourceKind_;
-        keep.args = deviceArgs_;
-        keep.label = deviceModel_;
+        keep.kind = loan.kind;
+        keep.args = loan.args;
+        keep.card = loan.card;
+        keep.label = loan.kind == "soundcard"
+                         ? std::string(tr("Sound card")) + ": " + loan.card.device + " (" +
+                               loan.card.hostApi + ")"
+                         : deviceModel_;
         keep.rateHz = pipeline_.activeSource().sampleRateHz();
         // The AIR centre, which may be below 0 Hz through a converter; no
         // value only when the radio has never been tuned.
@@ -452,7 +471,10 @@ void AppWindow::patchReconcile() {
             continue;
         }
         const std::string driver = pc::deviceDriver(n->device);
-        const std::string args = pc::deviceArgs(n->device);
+        // A sound card opens as the Source section has it set up when it is
+        // the same card (format, channel, centre), plain real mono otherwise.
+        const std::string args = driver == "soundcard" ? soundCardPatchArgs(pc::deviceArgs(n->device))
+                                                       : pc::deviceArgs(n->device);
         // NOT UNDER A SCAN THAT MAY PROBE IT (2026-09-23). The Source panel
         // greys itself out while a scan runs, so the receiver never opens a
         // radio under one; the patch opens its own radios and did not wait -
@@ -667,7 +689,14 @@ void AppWindow::patchStopAll(bool restoreMain) {
     // Destroying the radios destroys their runners and every set in them - on
     // this thread, after the readers have stopped - which finalises each
     // speaker's file and destroys each decoder handle where the ABI wants it.
-    patchRadios_.clear();
+    // ONE WAIT FOR EVERY SOUND CARD AMONG THEM: each card's close is handed to
+    // its own thread as the radios go, and the batch then waits for all of
+    // them against a single kCloseWaitMs deadline - five cards whose closes
+    // hang cost one second here, not five.
+    {
+        cascade::source::SoundCardSource::CloseBatch closes;
+        patchRadios_.clear();
+    }
     patchRadioOpenedAs_.clear();
     patchRadioSig_.clear();
     patchSpectra_.clear();
@@ -693,6 +722,26 @@ void AppWindow::patchStopAll(bool restoreMain) {
     // --- the receiver gets its radio back ---------------------------------------
     const PatchMainKeep keep = patchMainKeep_;
     patchMainKeep_ = PatchMainKeep{};
+    // A SOUND CARD goes back through its own row: reopened on a worker AS IT
+    // WAS RUNNING when the patch took it (keep.card) - not with whatever the
+    // Source section's controls were edited to meanwhile. The patch radio
+    // above has already been destroyed, and its close waited for, so the
+    // card is free. Until it is back the config goes on naming it (the rule
+    // below, for a card: cfg.soundCard names the card and both radio args
+    // slots keep what they had); a successful open clears that
+    // (pollSoundCard), a failed one leaves it.
+    if (keep.kind == "soundcard") {
+        if (!restoreKeep_.valid()) {
+            restoreKeep_ = cascade::gui::rememberedSourceAfterFailedOpen(
+                "soundcard", cfgSoapyArgs_, cfgNativeArgs_, std::string(), keep.rateHz);
+            soundCardRemembered_ = keep.card;
+            restoreKeepLabel_ = keep.label;
+        }
+        cascade::core::diagLogf("patch: handing %s back to the receiver", keep.label.c_str());
+        sourceSel_ = kSoundCardRow;
+        launchSoundCardOpen(false, keep.card);
+        return;
+    }
     // THE RADIO STAYS SAVED UNTIL IT IS BACK (0.99.36). patchMainKeep_ was the
     // only thing making the exit save name it, and it has just been cleared:
     // a hand-back that finds the radio unlisted, or whose open fails, used to
