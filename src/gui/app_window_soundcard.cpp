@@ -69,29 +69,66 @@ void AppWindow::scanSoundCards() {
     soundCardScanPending_ = true;
 }
 
-void AppWindow::launchSoundCardOpen(bool restore) {
+void AppWindow::launchSoundCardOpen(bool restore, const SoundCardSettings& settings) {
     if (soundCardOpenPending_) { return; }
-    const SoundCardSettings settings = soundCard_;
     const std::vector<SoundCardDevice> list = soundCardDevices_;
     const bool listed = soundCardListed_;
+    // RE-OPENING THE CARD THAT IS RUNNING - a new rate, channel or format on
+    // the same card. Windows will not open a second stream on a card in
+    // exclusive use, nor exclusive mode on a card that is already streaming,
+    // so the new settings cannot be opened beside the old stream (the second
+    // review's probe: three of four everyday changes on a 192 kHz card were
+    // refused). The running card is therefore released FIRST, here: the
+    // pipeline goes back to the generator - setSource quiesces the source
+    // thread, and the card's close is waited for within kCloseWaitMs, as on
+    // every source switch - and the worker opens the new settings with the
+    // old ones to fall back on (source::openSoundCardOrRestore). A different
+    // card keeps the other order: it opens while the old one still runs.
+    const bool release =
+        !restore && cascade::gui::soundCardReopenReleasesFirst(sourceKind_ == "soundcard", soundCardLive_,
+                                                               settings, list);
+    SoundCardSettings previous;
+    if (release) {
+        previous = soundCardLive_;
+        cascade::core::diagLogf("source: releasing the sound card %s (%s) to open it with new settings",
+                                previous.device.c_str(), previous.hostApi.c_str());
+        device_ = nullptr;
+        soapyView_ = nullptr;
+        ++sourceGen_;
+        pipeline_.setSource(nullptr);
+        sourceKind_ = "siggen";
+        // Until it is back - and for the rest of the session if neither the
+        // new settings nor the old ones open - the config goes on naming the
+        // card, exactly as after a restore that could not open it.
+        restoreKeep_ = cascade::gui::rememberedSourceAfterFailedOpen(
+            "soundcard", cfgSoapyArgs_, cfgNativeArgs_, std::string(),
+            cascade::source::soundCardIqRateHz(previous));
+        restoreKeepLabel_.clear();
+        followInputRate();
+    }
     const std::uint64_t gen = sourceGen_;
-    soundCardOpenFuture_ = std::async(std::launch::async, [settings, list, listed, gen, restore] {
-        SoundCardOpenResult r;
-        r.gen = gen;
-        r.restore = restore;
-        // PortAudio's list does not change while the application runs (every
-        // PortAudio user in the process shares one snapshot), so a list the
-        // section already has is the list; only a first open enumerates.
-        r.devices = listed ? list : cascade::source::makePortAudioSoundCardBackend()->listDevices();
-        auto src = std::make_unique<cascade::source::SoundCardSource>();
-        if (src->openWith(settings, r.devices)) {
-            r.error = src->lastError();  // a coerced rate, or nothing
-            r.src = std::move(src);
-        } else {
-            r.error = src->lastError();
-        }
-        return r;
-    });
+    soundCardOpenFuture_ =
+        std::async(std::launch::async, [settings, list, listed, gen, restore, release, previous] {
+            SoundCardOpenResult r;
+            r.gen = gen;
+            r.restore = restore;
+            r.wanted = settings;
+            r.released = release;
+            r.previous = previous;
+            // PortAudio's list does not change while the application runs
+            // (every PortAudio user in the process shares one snapshot), so a
+            // list the section already has is the list; only a first open
+            // enumerates.
+            r.devices = listed ? list : cascade::source::makePortAudioSoundCardBackend()->listDevices();
+            cascade::source::SoundCardOpenOutcome out =
+                cascade::source::openSoundCardOrRestore(settings, r.devices, release ? &previous : nullptr);
+            r.restoredPrevious = out.restoredPrevious;
+            // A coerced rate on success; why it was refused otherwise.
+            r.error = (out.src && !out.restoredPrevious) ? out.note : out.refused;
+            r.previousRefused = out.previousRefused;
+            r.src = std::move(out.src);
+            return r;
+        });
     soundCardOpenPending_ = true;
 }
 
@@ -119,14 +156,38 @@ void AppWindow::pollSoundCard() {
         soundCardDevices_ = r.devices;
         soundCardListed_ = true;
     }
-    const std::string label = soundCard_.device + " (" + soundCard_.hostApi + ")";
+    const std::string label = r.wanted.device + " (" + r.wanted.hostApi + ")";
+    if (!r.src && r.released) {
+        // NEITHER THE NEW SETTINGS NOR THE OLD ONES OPENED. The card was
+        // released for this open, so the generator is what is running; the
+        // config goes on naming the card (restoreKeep_, set at the release),
+        // the combo says it is not open, and both reasons are on screen. The
+        // section shows the settings the card last RAN with - what the next
+        // start will try - and nothing claims it is running.
+        cascade::core::diagWarnf("source: the sound card %s did not open with new settings, nor as it was",
+                                 label.c_str());
+        if (r.gen != sourceGen_) { return; }  // another source was chosen meanwhile
+        soundCard_ = r.previous;
+        restoreKeepLabel_ = std::string(tr("Sound card")) + ": " + r.previous.device;
+        soundCardMissing_.clear();
+        cascade::core::formatUtf8(sourceError_,
+                                  tr("%s did not open with the new settings (%s), and reopening it as it "
+                                     "was failed too (%s)."),
+                                  label.c_str(), r.error.c_str(), r.previousRefused.c_str());
+        return;
+    }
     if (!r.src) {
         // NOTHING ELSE IS OPENED IN ITS PLACE. The live source stays what it
         // was - the generator after a failed restore, whatever was running
         // after a failed Open - and the reason is on screen.
-        const bool missing = !soundCard_.device.empty() &&
-                             cascade::source::findSoundCard(r.devices, soundCard_.device,
-                                                            soundCard_.hostApi) < 0;
+        const cascade::source::SoundCardMatch m = cascade::source::matchSoundCard(
+            r.devices, r.wanted.device, r.wanted.hostApi, r.wanted.pickedFromList);
+        // Missing - not two identical cards, which the error names.
+        const bool missing = !r.wanted.device.empty() && m.at < 0 && m.candidates.empty();
+        // THE SECTION SHOWS WHAT IS RUNNING. With another card still running
+        // (a different card's Open failed), its controls go back to that
+        // card's settings; the message says which card did not open.
+        if (!r.restore && sourceKind_ == "soundcard") { soundCard_ = soundCardLive_; }
         if (missing) {
             cascade::core::formatUtf8(
                 soundCardMissing_,
@@ -141,20 +202,24 @@ void AppWindow::pollSoundCard() {
         if (r.restore) {
             // The config goes on naming the card (restoreKeep_ was set when
             // the restore asked), and now the combo says so too.
-            restoreKeepLabel_ = std::string(tr("Sound card")) + ": " + soundCard_.device;
+            restoreKeepLabel_ = std::string(tr("Sound card")) + ": " + r.wanted.device;
         }
-        cascade::core::diagWarnf("source: the sound card %s (%s) did not open%s",
-                                 soundCard_.device.c_str(), soundCard_.hostApi.c_str(),
+        cascade::core::diagWarnf("source: the sound card %s did not open%s", label.c_str(),
                                  missing ? " - it is not in the list of inputs" : "");
         return;
     }
     // THE CHOICE MAY HAVE MOVED ON while the card was opening: another source
     // installed (sourceGen_ moved), another row chosen, or a radio open under
-    // way. The open card is then simply closed again.
-    if (r.gen != sourceGen_ || sourceSel_ != kSoundCardRow || deviceOpenPending_) {
+    // way. The open card is then simply closed again. A card RELEASED for this
+    // open is not given up because the combo was moved without choosing
+    // anything: nothing else is running in its place but the stand-in.
+    const bool movedOn = r.gen != sourceGen_ || deviceOpenPending_ ||
+                         (!r.released && sourceSel_ != kSoundCardRow);
+    if (movedOn) {
         cascade::core::diagLogf("source: a sound card open finished after the choice moved on");
         return;
     }
+    sourceSel_ = kSoundCardRow;
     device_ = nullptr;  // before setSource destroys a live device
     soapyView_ = nullptr;
     deviceArgs_.clear();
@@ -170,7 +235,16 @@ void AppWindow::pollSoundCard() {
     restoreKeep_ = cascade::gui::RememberedSource{};
     restoreKeepLabel_.clear();
     soundCardMissing_.clear();
-    sourceError_ = r.error;
+    if (r.restoredPrevious) {
+        // THE NEW SETTINGS WERE REFUSED and the card is running again as it
+        // was - which is what the section now shows (soundCard_ above).
+        cascade::core::formatUtf8(sourceError_,
+                                  tr("%s did not open with the new settings (%s). It is running again as "
+                                     "it was."),
+                                  label.c_str(), r.error.c_str());
+    } else {
+        sourceError_ = r.error;
+    }
     followInputRate();
     // THE VFO STAYS WHERE IT WAS if that is inside what the card receives (a
     // saved session's offset is restored before the card finishes opening);
@@ -183,9 +257,10 @@ void AppWindow::pollSoundCard() {
         pipeline_.setVfoOffsetHz(inside);
         vfoOffsetKhz_ = static_cast<float>(inside / 1000.0);
     }
-    cascade::core::diagLogf("source: opened the sound card %s (%s) at %.0f Hz, %s", soundCard_.device.c_str(),
+    cascade::core::diagLogf("source: opened the sound card %s (%s) at %.0f Hz, %s%s", soundCard_.device.c_str(),
                             soundCard_.hostApi.c_str(), soundCard_.cardRateHz,
-                            soundCard_.format == SoundCardFormat::IqStereo ? "I/Q" : "real");
+                            soundCard_.format == SoundCardFormat::IqStereo ? "I/Q" : "real",
+                            r.restoredPrevious ? " - as it was; the new settings were refused" : "");
 }
 
 void AppWindow::reapSoundCardWorkers() {
@@ -271,7 +346,9 @@ void AppWindow::drawSoundCardControls() {
 
     // THE INPUT. Named by device and host API; a saved card that is not in
     // the list keeps its name in the preview (the missing line below says why).
-    const int at = cascade::source::findSoundCard(soundCardDevices_, soundCard_.device, soundCard_.hostApi);
+    const int at = cascade::source::matchSoundCard(soundCardDevices_, soundCard_.device, soundCard_.hostApi,
+                                                   soundCard_.pickedFromList)
+                       .at;
     ImGui::SetNextItemWidth(-FLT_MIN);
     if (ImGui::BeginCombo(labelAboveIfNeeded(trId("Device##soundcard_device")),
                           label.empty() ? "-" : label.c_str())) {
@@ -282,6 +359,9 @@ void AppWindow::drawSoundCardControls() {
             if (ImGui::Selectable(cascade::source::soundCardDeviceLabel(d).c_str(), sel) && !sel) {
                 soundCard_.device = d.name;
                 soundCard_.hostApi = d.hostApi;
+                // Chosen from THIS list: it names exactly this entry, even
+                // when an identical card sits beside it (matchSoundCard).
+                soundCard_.pickedFromList = true;
                 soundCardMissing_.clear();
                 // Keep the rate if the new card offers it; otherwise its own.
                 const auto rates = cascade::source::soundCardRatesFor(d, soundCard_.format);
@@ -366,7 +446,7 @@ void AppWindow::drawSoundCardControls() {
     ImGui::BeginDisabled(!canOpen);
     if (ImGui::Button(trId("Open##soundcard_open"))) {
         sourceError_.clear();
-        launchSoundCardOpen(false);
+        launchSoundCardOpen(false, soundCard_);
     }
     ImGui::EndDisabled();
     ImGui::EndDisabled();

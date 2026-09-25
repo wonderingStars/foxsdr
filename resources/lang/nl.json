@@ -75,6 +75,8 @@
   "%s Map": "%s-kaart",
   "%s VISIBLE": "%s ZICHTBAAR",
   "%s already has %u presets of yours - forget one to save another": "%s heeft al %u presets van jou - vergeet er een om een andere op te slaan",
+  "%s did not open with the new settings (%s), and reopening it as it was failed too (%s).": "%s kon niet worden geopend met de nieuwe instellingen (%s), en opnieuw openen zoals het was mislukte ook (%s).",
+  "%s did not open with the new settings (%s). It is running again as it was.": "%s kon niet worden geopend met de nieuwe instellingen (%s). Het werkt weer zoals voorheen.",
   "%s elapsed": "%s verstreken",
   "%s image": "%s-beeld",
   "%s is available": "%s is beschikbaar",

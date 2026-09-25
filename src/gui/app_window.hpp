@@ -1812,13 +1812,23 @@ private:
         std::vector<cascade::source::SoundCardDevice> devices;  // the list it opened from
         std::uint64_t gen = 0;  // sourceGen_ when it was asked for
         bool restore = false;   // the startup restore asked, not the user
+        cascade::source::SoundCardSettings wanted;  // what was asked for
+        // THE SAME CARD WAS RELEASED FIRST (gui::soundCardReopenReleasesFirst):
+        // the running card was closed before this open, with `previous` - its
+        // settings - to fall back on.
+        bool released = false;
+        cascade::source::SoundCardSettings previous;
+        bool restoredPrevious = false;  // src runs `previous`: `wanted` was refused
+        std::string previousRefused;    // ...and why `previous` did not come back either
     };
     // What the controls show and the config saves, whether or not the card is
     // the source in use - the same rule as the I/Q file's path.
     cascade::source::SoundCardSettings soundCard_;
     // The settings of the card as it is RUNNING (set when one is installed;
     // meaningful only while sourceKind_ is "soundcard"). The centre box reads
-    // its format: a real-mode card has no centre to move.
+    // its format: a real-mode card has no centre to move. The patch page's
+    // loan of the card takes these, never soundCard_ (which may have been
+    // edited and not Opened), and so does a re-Open's fallback.
     cascade::source::SoundCardSettings soundCardLive_;
     std::vector<cascade::source::SoundCardDevice> soundCardDevices_;
     bool soundCardListed_ = false;  // soundCardDevices_ holds a finished enumeration
@@ -1836,8 +1846,11 @@ private:
     void drawSoundCardControls();
     // Enumerate on a worker; the list arrives through pollSoundCard().
     void scanSoundCards();
-    // Open soundCard_ on a worker; installed by pollSoundCard() on success.
-    void launchSoundCardOpen(bool restore);
+    // Open `settings` on a worker; installed by pollSoundCard() on success.
+    // When they name the card that is RUNNING, it is released first (see
+    // gui::soundCardReopenReleasesFirst) and reopened as it was if the new
+    // settings are refused.
+    void launchSoundCardOpen(bool restore, const cascade::source::SoundCardSettings& settings);
     // Once per frame: collect a finished enumeration or open.
     void pollSoundCard();
     // At quit, the same grace-then-abandon as reapPendingDeviceOpen.
@@ -2858,6 +2871,9 @@ private:
         std::string label;
         double rateHz = 0.0;
         double centreHz = 0.0;
+        // A lent SOUND CARD, as it was running when the patch took it - what
+        // the hand-back reopens (gui::receiverSourceForPatch).
+        cascade::source::SoundCardSettings card;
     };
     PatchMainKeep patchMainKeep_;
     // One device a patch Radio can be set to, for the inspector's list.

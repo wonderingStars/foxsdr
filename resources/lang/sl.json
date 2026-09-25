@@ -75,6 +75,8 @@
   "%s Map": "Zemljevid %s",
   "%s VISIBLE": "VIDNO: %s",
   "%s already has %u presets of yours - forget one to save another": "%s že ima največje število vaših prednastavitev (%u) - pozabite eno, da shranite drugo",
+  "%s did not open with the new settings (%s), and reopening it as it was failed too (%s).": "%s se ni odprl z novimi nastavitvami (%s), ponovno odpiranje, kot je bilo, pa prav tako ni uspelo (%s).",
+  "%s did not open with the new settings (%s). It is running again as it was.": "%s se ni odprl z novimi nastavitvami (%s). Znova deluje kot prej.",
   "%s elapsed": "preteklo: %s",
   "%s image": "slika %s",
   "%s is available": "Na voljo je %s",

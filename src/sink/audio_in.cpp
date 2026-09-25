@@ -92,13 +92,18 @@ bool AudioIn::open(int deviceIndex, double sampleRateHz) {
     in.hostApiSpecificStreamInfo = nullptr;
 
     PaStream* stream = nullptr;
-    if (Pa_OpenStream(&stream, &in, nullptr, sampleRateHz, paFramesPerBufferUnspecified,
-                      paNoFlag, &paInCallback, this) != paNoError) {
-        return false;
-    }
-    if (Pa_StartStream(stream) != paNoError) {
-        Pa_CloseStream(stream);
-        return false;
+    {
+        // PortAudio's list of open streams has no lock of its own (see
+        // sink/pa_init.hpp); NoWait, like the audio output's open.
+        PaStreamListGuard listGuard(PaStreamListGuard::NoWait);
+        if (Pa_OpenStream(&stream, &in, nullptr, sampleRateHz, paFramesPerBufferUnspecified,
+                          paNoFlag, &paInCallback, this) != paNoError) {
+            return false;
+        }
+        if (Pa_StartStream(stream) != paNoError) {
+            Pa_CloseStream(stream);
+            return false;
+        }
     }
     stream_ = stream;
     running_ = true;

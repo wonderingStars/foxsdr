@@ -75,6 +75,8 @@
   "%s Map": "Mapa %s",
   "%s VISIBLE": "VIDITEĽNÉ: %s",
   "%s already has %u presets of yours - forget one to save another": "%s už má vaše predvoľby (%u) - zabudnite jednu, aby ste mohli uložiť ďalšiu",
+  "%s did not open with the new settings (%s), and reopening it as it was failed too (%s).": "%s sa s novými nastaveniami neotvorilo (%s) a ani opätovné otvorenie v pôvodnom nastavení sa nepodarilo (%s).",
+  "%s did not open with the new settings (%s). It is running again as it was.": "%s sa s novými nastaveniami neotvorilo (%s). Opäť beží tak ako predtým.",
   "%s elapsed": "Uplynulo: %s",
   "%s image": "obrázok %s",
   "%s is available": "%s je k dispozícii",

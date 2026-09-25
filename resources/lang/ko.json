@@ -75,6 +75,8 @@
   "%s Map": "%s 지도",
   "%s VISIBLE": "%s 표시 중",
   "%s already has %u presets of yours - forget one to save another": "%s에 이미 사용자 프리셋이 %u개 있습니다 - 새로 저장하려면 하나를 삭제하세요",
+  "%s did not open with the new settings (%s), and reopening it as it was failed too (%s).": "%s을(를) 새 설정으로 열지 못했고 (%s), 이전 설정으로 다시 여는 것도 실패했습니다 (%s).",
+  "%s did not open with the new settings (%s). It is running again as it was.": "%s을(를) 새 설정으로 열지 못했습니다 (%s). 이전 설정으로 다시 동작하고 있습니다.",
   "%s elapsed": "%s 경과",
   "%s image": "%s 이미지",
   "%s is available": "%s 사용 가능",

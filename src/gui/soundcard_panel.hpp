@@ -135,10 +135,17 @@ inline bool soundCardCentreAppliesLive(bool liveIsSoundCard, bool openPending,
 // radio on the same card would open a second stream on it, which WASAPI
 // exclusive mode refuses outright. Nothing is taken while an open is still
 // resolving, or from a file or the generator.
+//
+// THE CARD IS DESCRIBED BY WHAT IS RUNNING, never by the Source section's
+// controls: those are what the user is editing and has not necessarily
+// Opened, and the card handed back when the patch stops has to come back as
+// it was taken. So `card` is the RUNNING card's settings (AppWindow::
+// soundCardLive_), and the loan carries them for the hand-back.
 struct ReceiverLoan {
     bool take = false;
     std::string kind;  // the device key's driver
     std::string args;  // the device key's args
+    cascade::source::SoundCardSettings card;  // a sound card: as it was running when taken
 };
 
 inline ReceiverLoan receiverSourceForPatch(bool patchRunning, const std::string& sourceKind,
@@ -159,8 +166,36 @@ inline ReceiverLoan receiverSourceForPatch(bool patchRunning, const std::string&
         l.take = true;
         l.kind = "soundcard";
         l.args = cascade::source::soundCardDeviceArgs(card.device, card.hostApi);
+        l.card = card;
     }
     return l;
+}
+
+// RE-OPENING THE CARD THAT IS RUNNING. Windows will not open a second stream
+// on a card that is in exclusive use, nor exclusive mode on a card that is
+// already streaming (IAudioClient::Initialize, AUDCLNT_E_DEVICE_IN_USE, which
+// PortAudio reports as an invalid device) - so a new rate, a new channel or a
+// new format on the SAME card cannot be opened beside the stream it replaces.
+// True when `want` names the card that is running (`live`): the application
+// then releases it first, and opens `want` with `live` to fall back on
+// (source::openSoundCardOrRestore). A DIFFERENT card keeps the other order -
+// the new one opens while the old one still runs, and a refusal leaves the
+// old one exactly as it was. So does a `want` that is ambiguous (two identical
+// ALSA cards): its open is refused whatever happens, and releasing the
+// running card for it would only interrupt it.
+inline bool soundCardReopenReleasesFirst(bool liveIsSoundCard,
+                                         const cascade::source::SoundCardSettings& live,
+                                         const cascade::source::SoundCardSettings& want,
+                                         const std::vector<cascade::source::SoundCardDevice>& list) {
+    if (!liveIsSoundCard || live.device.empty()) { return false; }
+    const cascade::source::SoundCardMatch m =
+        cascade::source::matchSoundCard(list, want.device, want.hostApi, want.pickedFromList);
+    if (m.at >= 0) {
+        const cascade::source::SoundCardDevice& d = list[static_cast<std::size_t>(m.at)];
+        return d.name == live.device && d.hostApi == live.hostApi;
+    }
+    if (!m.candidates.empty()) { return false; }
+    return want.device == live.device && want.hostApi == live.hostApi;
 }
 
 }  // namespace cascade::gui

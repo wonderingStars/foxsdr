@@ -75,6 +75,8 @@
   "%s Map": "Kaart: %s",
   "%s VISIBLE": "NÄHTAVAL: %s",
   "%s already has %u presets of yours - forget one to save another": "Moodulil %s on juba %u sinu eelsätet - unusta üks, et uus salvestada",
+  "%s did not open with the new settings (%s), and reopening it as it was failed too (%s).": "%s ei avanenud uute seadetega (%s) ja selle uuesti avamine endiste seadetega ebaõnnestus samuti (%s).",
+  "%s did not open with the new settings (%s). It is running again as it was.": "%s ei avanenud uute seadetega (%s). See töötab jälle nagu enne.",
   "%s elapsed": "Möödunud: %s",
   "%s image": "Pilt: %s",
   "%s is available": "Saadaval: %s",

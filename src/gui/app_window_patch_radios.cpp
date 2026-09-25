@@ -237,18 +237,21 @@ void AppWindow::patchReconcile() {
     // and never mid-open: the answer is waited for, then taken. The
     // receiver's SOUND CARD is lent the same way (gui::receiverSourceForPatch):
     // left with the receiver, a patch radio on the same card would open a
-    // second stream on it, which WASAPI exclusive mode refuses outright.
+    // second stream on it, which WASAPI exclusive mode refuses outright. The
+    // card is described by what is RUNNING (soundCardLive_), never by the
+    // Source section's controls, which may have been edited and not Opened.
     const cascade::gui::ReceiverLoan loan = cascade::gui::receiverSourceForPatch(
         patchRunning_, sourceKind_, device_ != nullptr, deviceOpenPending_, deviceArgs_,
-        soundCardOpenPending_, soundCard_);
+        soundCardOpenPending_, soundCardLive_);
     if (loan.take) {
         PatchMainKeep keep;
         keep.valid = true;
         keep.kind = loan.kind;
         keep.args = loan.args;
+        keep.card = loan.card;
         keep.label = loan.kind == "soundcard"
-                         ? std::string(tr("Sound card")) + ": " + soundCard_.device + " (" +
-                               soundCard_.hostApi + ")"
+                         ? std::string(tr("Sound card")) + ": " + loan.card.device + " (" +
+                               loan.card.hostApi + ")"
                          : deviceModel_;
         keep.rateHz = pipeline_.activeSource().sampleRateHz();
         keep.centreHz = pipeline_.activeSource().centerFrequencyHz();
@@ -616,7 +619,14 @@ void AppWindow::patchStopAll(bool restoreMain) {
     // Destroying the radios destroys their runners and every set in them - on
     // this thread, after the readers have stopped - which finalises each
     // speaker's file and destroys each decoder handle where the ABI wants it.
-    patchRadios_.clear();
+    // ONE WAIT FOR EVERY SOUND CARD AMONG THEM: each card's close is handed to
+    // its own thread as the radios go, and the batch then waits for all of
+    // them against a single kCloseWaitMs deadline - five cards whose closes
+    // hang cost one second here, not five.
+    {
+        cascade::source::SoundCardSource::CloseBatch closes;
+        patchRadios_.clear();
+    }
     patchRadioOpenedAs_.clear();
     patchRadioSig_.clear();
     patchSpectra_.clear();
@@ -642,14 +652,15 @@ void AppWindow::patchStopAll(bool restoreMain) {
     // --- the receiver gets its radio back ---------------------------------------
     const PatchMainKeep keep = patchMainKeep_;
     patchMainKeep_ = PatchMainKeep{};
-    // A SOUND CARD goes back through its own row: reopened on a worker with
-    // the Source section's settings, which the section kept while the patch
-    // had the card (the patch radio above has already been destroyed, and its
-    // close waited for, so the card is free).
+    // A SOUND CARD goes back through its own row: reopened on a worker AS IT
+    // WAS RUNNING when the patch took it (keep.card) - not with whatever the
+    // Source section's controls were edited to meanwhile. The patch radio
+    // above has already been destroyed, and its close waited for, so the
+    // card is free.
     if (keep.kind == "soundcard") {
         cascade::core::diagLogf("patch: handing %s back to the receiver", keep.label.c_str());
         sourceSel_ = kSoundCardRow;
-        launchSoundCardOpen(false);
+        launchSoundCardOpen(false, keep.card);
         return;
     }
     int row = -1;

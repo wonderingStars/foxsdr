@@ -22807,7 +22807,7 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
             cfg.sourceKind, cfg.soapyArgs, cfg.nativeArgs, cfg.iqFilePath, cfg.sampleRateHz);
         restoreKeepLabel_.clear();
         sourceSel_ = kSoundCardRow;
-        launchSoundCardOpen(/*restore=*/true);
+        launchSoundCardOpen(/*restore=*/true, soundCard_);
         cascade::core::diagLogf("source: restoring the sound card %s (%s)", soundCard_.device.c_str(),
                                 soundCard_.hostApi.c_str());
     } else if (cfg.sourceKind == "file") {

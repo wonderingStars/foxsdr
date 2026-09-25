@@ -75,6 +75,8 @@
   "%s Map": "Bản đồ %s",
   "%s VISIBLE": "HIỂN THỊ %s",
   "%s already has %u presets of yours - forget one to save another": "%s đã có %u mục cài sẵn của bạn - hãy quên bớt một mục để lưu mục khác",
+  "%s did not open with the new settings (%s), and reopening it as it was failed too (%s).": "Không mở được %s với cài đặt mới (%s), và mở lại như trước cũng không thành công (%s).",
+  "%s did not open with the new settings (%s). It is running again as it was.": "Không mở được %s với cài đặt mới (%s). Thiết bị đang chạy lại như trước.",
   "%s elapsed": "Đã qua %s",
   "%s image": "Ảnh %s",
   "%s is available": "Đã có bản %s",

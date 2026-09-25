@@ -170,18 +170,97 @@ std::string soundCardDeviceLabel(const SoundCardDevice& d) {
     return d.name + " (" + d.hostApi + ")";
 }
 
-int findSoundCard(const std::vector<SoundCardDevice>& list, const std::string& name,
-                  const std::string& hostApi) {
+namespace {
+
+// A run of decimal digits at `at`, as an int; false for none (or absurdly many).
+bool parseDigits(const std::string& s, std::size_t& at, int& out) {
+    const std::size_t from = at;
+    int v = 0;
+    while (at < s.size() && s[at] >= '0' && s[at] <= '9') {
+        if (at - from >= 6) { return false; }
+        v = v * 10 + (s[at] - '0');
+        ++at;
+    }
+    if (at == from) { return false; }
+    out = v;
+    return true;
+}
+
+// The host API PortAudio's ALSA backend reports (pa_linux_alsa.c,
+// PaAlsa_Initialize: "ALSA").
+constexpr const char* kAlsaHostApi = "ALSA";
+
+}  // namespace
+
+bool parseAlsaHwName(const std::string& name, AlsaHwName& out) {
+    // "<stripped> (hw:N,M)" or "<stripped> (plughw:N,M)", and nothing after.
+    if (name.empty() || name.back() != ')') { return false; }
+    const std::size_t open = name.rfind(" (");
+    if (open == std::string::npos || open == 0) { return false; }
+    std::size_t at = open + 2;
+    for (const char* prefix : {"plughw:", "hw:"}) {
+        const std::size_t len = std::char_traits<char>::length(prefix);
+        if (name.compare(at, len, prefix) == 0) {
+            at += len;
+            int card = -1;
+            int device = -1;
+            if (!parseDigits(name, at, card)) { return false; }
+            if (at >= name.size() || name[at] != ',') { return false; }
+            ++at;
+            if (!parseDigits(name, at, device)) { return false; }
+            if (at + 1 != name.size()) { return false; }  // only the ')' may follow
+            out.stripped = name.substr(0, open);
+            out.card = card;
+            out.device = device;
+            return true;
+        }
+    }
+    return false;
+}
+
+SoundCardMatch matchSoundCard(const std::vector<SoundCardDevice>& list, const std::string& name,
+                              const std::string& hostApi, bool exact) {
+    SoundCardMatch m;
     if (name.empty()) {
         for (std::size_t i = 0; i < list.size(); ++i) {
-            if (list[i].isDefault) { return static_cast<int>(i); }
+            if (list[i].isDefault) {
+                m.at = static_cast<int>(i);
+                return m;
+            }
         }
-        return -1;
+        return m;
+    }
+    // AN ALSA HARDWARE NAME READ BACK FROM A FILE is matched by identity -
+    // the name without the card number, and the PCM device - because the
+    // card number is only the order ALSA found the cards in at this boot.
+    AlsaHwName saved;
+    if (!exact && hostApi == kAlsaHostApi && parseAlsaHwName(name, saved)) {
+        for (std::size_t i = 0; i < list.size(); ++i) {
+            AlsaHwName here;
+            if (list[i].hostApi == hostApi && parseAlsaHwName(list[i].name, here) &&
+                here.stripped == saved.stripped && here.device == saved.device) {
+                m.candidates.push_back(static_cast<int>(i));
+            }
+        }
+        if (m.candidates.size() == 1) {
+            m.at = m.candidates.front();
+            m.candidates.clear();
+        }
+        // Two or more: identical cards, and nothing says which one this was.
+        return m;
     }
     for (std::size_t i = 0; i < list.size(); ++i) {
-        if (list[i].name == name && list[i].hostApi == hostApi) { return static_cast<int>(i); }
+        if (list[i].name == name && list[i].hostApi == hostApi) {
+            m.at = static_cast<int>(i);
+            return m;
+        }
     }
-    return -1;
+    return m;
+}
+
+int findSoundCard(const std::vector<SoundCardDevice>& list, const std::string& name,
+                  const std::string& hostApi) {
+    return matchSoundCard(list, name, hostApi, false).at;
 }
 
 std::vector<SoundCardRate> soundCardRatesFor(const SoundCardDevice& d, SoundCardFormat f) {
@@ -244,6 +323,11 @@ std::mutex& listOpenMutex() {
     return *m;
 }
 
+bool alsaHardwareName(const char* name) {
+    AlsaHwName hw;
+    return name != nullptr && parseAlsaHwName(name, hw);
+}
+
 PaError realInitialize() { return sink::paInitializeShared() ? paNoError : paNotInitialized; }
 
 PaError realTerminate() {
@@ -287,6 +371,12 @@ public:
             // renumbered waveIn IDs, never a mapper that follows the Windows
             // default (see the header).
             if (api == nullptr || !soundCardHostApiListed(api->type)) { continue; }
+            // ...and on ALSA only the HARDWARE inputs: "default", "pulse",
+            // "sysdefault", "dsnoop" and the rest of ALSA's configured PCMs
+            // follow the system default or share another device, which is
+            // "another input opened in its place" by another name (see
+            // AlsaHwName in the header).
+            if (api->type == paALSA && !alsaHardwareName(info->name)) { continue; }
             SoundCardDevice d;
             d.index = static_cast<int>(i);
             d.name = info->name != nullptr ? info->name : "";
@@ -368,7 +458,8 @@ public:
         // API this source does not offer - can never open a different card.
         if (info == nullptr || info->name == nullptr || dev.name != info->name || hostApi == nullptr ||
             hostApi->name == nullptr || dev.hostApi != hostApi->name ||
-            !soundCardHostApiListed(hostApi->type) || info->maxInputChannels < channels) {
+            !soundCardHostApiListed(hostApi->type) ||
+            (hostApi->type == paALSA && !alsaHardwareName(info->name)) || info->maxInputChannels < channels) {
             error = "\"" + dev.name + "\" is no longer in the list of inputs";
             return false;
         }
@@ -395,15 +486,24 @@ public:
         cb_.push = push;
         cb_.user = user;
         PaStream* s = nullptr;
-        PaError e = api_.openStream(&s, &p, nullptr, rateHz, paFramesPerBufferUnspecified, paNoFlag,
-                                    &PortAudioSoundCardBackend::callback, &cb_);
+        PaError e = paNoError;
+        {
+            // PortAudio's list of open streams has no lock of its own (see
+            // sink/pa_init.hpp, "THE STREAM-LIST LOCK").
+            sink::PaStreamListGuard g;
+            e = api_.openStream(&s, &p, nullptr, rateHz, paFramesPerBufferUnspecified, paNoFlag,
+                                &PortAudioSoundCardBackend::callback, &cb_);
+        }
         if (e != paNoError) {
             error = std::string("the card refused to open: ") + api_.getErrorText(e);
             return false;
         }
         e = api_.startStream(s);
         if (e != paNoError) {
-            api_.closeStream(s);
+            {
+                sink::PaStreamListGuard g;
+                api_.closeStream(s);
+            }
             error = std::string("the card would not start: ") + api_.getErrorText(e);
             return false;
         }
@@ -425,7 +525,14 @@ public:
         }
         if (s == nullptr) { return; }
         // Abort, not Stop: nothing in an input queue is worth waiting for.
+        // The abort touches no list, so it takes no lock.
         api_.abortStream(s);
+        // Pa_CloseStream takes the stream off PortAudio's unlocked list as
+        // its first act. If the host API's close then hangs, this thread
+        // keeps the guard - and everybody else stops waiting for it after
+        // kStreamListWaitMs, by when this close is past the list
+        // (sink/pa_init.hpp).
+        sink::PaStreamListGuard g;
         api_.closeStream(s);
     }
 
@@ -506,15 +613,83 @@ namespace {
 std::atomic<std::uint64_t> gAbandonedCloses{0};
 std::atomic<bool> gCloseWaitEnabled{true};
 
-// How a closer thread tells closeDevice() it has finished, if anyone is still
-// waiting to hear it.
-struct CloseDone {
+// Every capture block that exists, by address (captureAlive). Touched only
+// when a block is made or destroyed - an open or a close - never by the
+// realtime callback. Allocated once and never destroyed: a closer thread can
+// still be destroying its block while the process runs its static
+// destructors.
+std::mutex& captureRegistryMutex() {
+    static std::mutex* const m = new std::mutex;
+    return *m;
+}
+std::vector<const void*>& captureRegistry() {
+    static std::vector<const void*>* const v = new std::vector<const void*>;
+    return *v;
+}
+
+}  // namespace
+
+// How a closer thread tells whoever is waiting that it has finished.
+struct SoundCardCloseTicket {
     std::mutex m;
     std::condition_variable cv;
     bool done = false;
+    std::string label;  // "device (host API)", for the log line if it is left behind
 };
 
+SoundCardSource::Capture::Capture(std::size_t floats) : ring(floats) {
+    std::lock_guard<std::mutex> lk(captureRegistryMutex());
+    captureRegistry().push_back(this);
+}
+
+SoundCardSource::Capture::~Capture() {
+    std::lock_guard<std::mutex> lk(captureRegistryMutex());
+    auto& r = captureRegistry();
+    r.erase(std::remove(r.begin(), r.end(), static_cast<const void*>(this)), r.end());
+}
+
+bool SoundCardSource::captureAlive(const void* user) {
+    std::lock_guard<std::mutex> lk(captureRegistryMutex());
+    const auto& r = captureRegistry();
+    return std::find(r.begin(), r.end(), user) != r.end();
+}
+
+namespace {
+
+// The batch collecting this thread's closes, if one is open (CloseBatch).
+thread_local SoundCardSource::CloseBatch* tBatch = nullptr;
+
+// Waits for every ticket against ONE deadline; a close not finished by then
+// is left on its thread, counted and logged.
+void waitForCloses(const std::vector<std::shared_ptr<SoundCardCloseTicket>>& tickets,
+                   std::chrono::steady_clock::time_point deadline) {
+    for (const auto& t : tickets) {
+        std::unique_lock<std::mutex> lk(t->m);
+        if (t->cv.wait_until(lk, deadline, [&t] { return t->done; })) { continue; }
+        gAbandonedCloses.fetch_add(1, std::memory_order_relaxed);
+        cascade::core::diagWarnf(
+            "source: the sound card %s did not close within %lld ms; the close is left to finish on a "
+            "thread of its own",
+            t->label.c_str(), static_cast<long long>(SoundCardSource::kCloseWaitMs.count()));
+    }
+}
+
 }  // namespace
+
+SoundCardSource::CloseBatch::CloseBatch() : outer_(tBatch) { tBatch = this; }
+
+SoundCardSource::CloseBatch::~CloseBatch() {
+    tBatch = outer_;
+    if (outer_ != nullptr) {
+        // Nested: the outer batch waits for these along with its own.
+        outer_->tickets_.insert(outer_->tickets_.end(), tickets_.begin(), tickets_.end());
+        return;
+    }
+    // Nothing is waited for once the application's teardown has begun, even
+    // for closes collected before it did.
+    if (tickets_.empty() || !gCloseWaitEnabled.load(std::memory_order_relaxed)) { return; }
+    waitForCloses(tickets_, std::chrono::steady_clock::now() + kCloseWaitMs);
+}
 
 // The constructor asks the factory for nothing: see BackendFactory.
 SoundCardSource::SoundCardSource(BackendFactory factory)
@@ -566,7 +741,23 @@ bool SoundCardSource::openWith(const SoundCardSettings& s, const std::vector<Sou
 
 bool SoundCardSource::openLocked(const SoundCardSettings& s, const std::vector<SoundCardDevice>& list) {
     error_.clear();
-    const int at = findSoundCard(list, s.device, s.hostApi);
+    const SoundCardMatch match = matchSoundCard(list, s.device, s.hostApi, s.pickedFromList);
+    const int at = match.at;
+    if (at < 0 && !match.candidates.empty()) {
+        // TWO IDENTICAL CARDS, and a saved name that cannot say which: ALSA
+        // numbers cards in the order it finds them, which can change at every
+        // boot. Neither is opened; the user picks one from the list, which
+        // names it exactly for this session.
+        std::string both;
+        for (std::size_t i = 0; i < match.candidates.size(); ++i) {
+            if (i != 0) { both += i + 1 == match.candidates.size() ? " and " : ", "; }
+            both += "\"" + list[static_cast<std::size_t>(match.candidates[i])].name + "\"";
+        }
+        error_ = "\"" + s.device + "\" (" + s.hostApi + ") could be any of " + both +
+                 ": identical cards, which ALSA may number differently at each start, so neither was "
+                 "opened. Choose one in the list";
+        return false;
+    }
     if (at < 0) {
         if (s.device.empty()) {
             error_ = "no sound card input is present";
@@ -648,7 +839,12 @@ void SoundCardSource::closeDevice() {
     stopRequested_.store(true, std::memory_order_relaxed);
     if (!open_) { return; }
     open_ = false;
-    const bool dead = faulted();
+    // A CARD THAT IS ALREADY GONE is not waited for: one whose failure read()
+    // latched, and one the host API says has stopped - a card pulled out while
+    // the receiver was stopped, which no read() was there to notice. alive()
+    // never blocks (a backend that cannot answer at once says "alive", and is
+    // waited for, as before).
+    const bool dead = faulted() || (backend_ && !backend_->alive());
     // EVERY CLOSE RUNS ON A THREAD OF ITS OWN (see "CLOSING" in the header).
     // A host API asked to close a stream can take as long as it likes - for
     // ever, on a card that has gone - and this runs on the GUI thread (a
@@ -659,7 +855,8 @@ void SoundCardSource::closeDevice() {
     // THIS SOURCE NEVER TOUCHES THAT BACKEND AGAIN - the next open asks the
     // factory for a new one - so a close still running can never shut a
     // stream opened after it.
-    auto done = std::make_shared<CloseDone>();
+    auto done = std::make_shared<SoundCardCloseTicket>();
+    done->label = settings_.device + " (" + settings_.hostApi + ")";
     std::thread([b = std::move(backend_), c = std::move(cap_), done]() mutable {
         b->close();
         b.reset();
@@ -678,16 +875,13 @@ void SoundCardSource::closeDevice() {
     // same card straight away (a new rate; WASAPI exclusive mode; the patch
     // page taking the receiver's card) finds it free.
     if (dead || !gCloseWaitEnabled.load(std::memory_order_relaxed)) { return; }
-    const std::chrono::milliseconds budget = kCloseWaitMs;
-    std::unique_lock<std::mutex> lk(done->m);
-    if (!done->cv.wait_for(lk, budget, [&done] { return done->done; })) {
-        gAbandonedCloses.fetch_add(1, std::memory_order_relaxed);
-        cascade::core::diagWarnf(
-            "source: the sound card %s (%s) did not close within %lld ms; the close is left to "
-            "finish on a thread of its own",
-            settings_.device.c_str(), settings_.hostApi.c_str(),
-            static_cast<long long>(kCloseWaitMs.count()));
+    // Under a CloseBatch the wait is the batch's, shared with every other
+    // close it collects.
+    if (tBatch != nullptr) {
+        tBatch->tickets_.push_back(std::move(done));
+        return;
     }
+    waitForCloses({done}, std::chrono::steady_clock::now() + kCloseWaitMs);
 }
 
 bool SoundCardSource::setGainDb(const std::string& /*name*/, double /*db*/) {
@@ -870,6 +1064,33 @@ std::size_t SoundCardSource::read(std::complex<float>* dst, std::size_t n) {
 const char* SoundCardSource::lastError() const {
     if (faulted_.load(std::memory_order_acquire)) { return faultMsg_.c_str(); }
     return error_.c_str();
+}
+
+SoundCardOpenOutcome openSoundCardOrRestore(const SoundCardSettings& want,
+                                            const std::vector<SoundCardDevice>& list,
+                                            const SoundCardSettings* previous,
+                                            const SoundCardSource::BackendFactory& factory) {
+    SoundCardOpenOutcome out;
+    auto src = std::make_unique<SoundCardSource>(factory);
+    if (src->openWith(want, list)) {
+        out.note = src->lastError();  // a coerced rate, or nothing
+        out.src = std::move(src);
+        return out;
+    }
+    out.refused = src->lastError();
+    if (previous == nullptr) { return out; }
+    // THE CARD AS IT WAS. It was running a moment ago and was released only
+    // so that this open could have it; putting it back is the difference
+    // between "the new settings were refused" and a receiver that silently
+    // stopped.
+    auto back = std::make_unique<SoundCardSource>(factory);
+    if (back->openWith(*previous, list)) {
+        out.restoredPrevious = true;
+        out.src = std::move(back);
+        return out;
+    }
+    out.previousRefused = back->lastError();
+    return out;
 }
 
 }  // namespace cascade::source

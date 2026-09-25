@@ -116,17 +116,24 @@ bool AudioOut::open(int deviceIndex, double sampleRateHz, int channels) {
     out.hostApiSpecificStreamInfo = nullptr;
 
     PaStream* stream = nullptr;
-    // paNoFlag keeps PortAudio's default out-of-range clipping enabled: a
-    // demod transient beyond ±1.0 gets clamped instead of wrapping into
-    // full-scale noise on some host APIs.
-    if (Pa_OpenStream(&stream, nullptr, &out, sampleRateHz,
-                      paFramesPerBufferUnspecified, paNoFlag, &paOutCallback,
-                      this) != paNoError) {
-        return false;
-    }
-    if (Pa_StartStream(stream) != paNoError) {
-        Pa_CloseStream(stream);
-        return false;
+    {
+        // PortAudio's list of open streams has no lock of its own, and a
+        // sound card can be opening or closing on another thread (see
+        // sink/pa_init.hpp). NoWait: this open is sometimes on the GUI
+        // thread (the patch page's speaker, the Pipeline constructor).
+        PaStreamListGuard listGuard(PaStreamListGuard::NoWait);
+        // paNoFlag keeps PortAudio's default out-of-range clipping enabled: a
+        // demod transient beyond ±1.0 gets clamped instead of wrapping into
+        // full-scale noise on some host APIs.
+        if (Pa_OpenStream(&stream, nullptr, &out, sampleRateHz,
+                          paFramesPerBufferUnspecified, paNoFlag, &paOutCallback,
+                          this) != paNoError) {
+            return false;
+        }
+        if (Pa_StartStream(stream) != paNoError) {
+            Pa_CloseStream(stream);
+            return false;
+        }
     }
     stream_ = stream;
     running_ = true;

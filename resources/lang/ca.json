@@ -75,6 +75,8 @@
   "%s Map": "Mapa %s",
   "%s VISIBLE": "%s VISIBLES",
   "%s already has %u presets of yours - forget one to save another": "%s ja té %u predefinits vostres - oblideu-ne un per desar-ne un altre",
+  "%s did not open with the new settings (%s), and reopening it as it was failed too (%s).": "%s no s'ha obert amb la configuració nova (%s), i tornar-lo a obrir com estava tampoc no ha funcionat (%s).",
+  "%s did not open with the new settings (%s). It is running again as it was.": "%s no s'ha obert amb la configuració nova (%s). Torna a funcionar com abans.",
   "%s elapsed": "%s transcorreguts",
   "%s image": "Imatge de %s",
   "%s is available": "%s està disponible",

@@ -75,6 +75,8 @@
   "%s Map": "Hartă %s",
   "%s VISIBLE": "%s VIZIBILE",
   "%s already has %u presets of yours - forget one to save another": "%s are deja %u presetări ale dvs. - uitați una ca să salvați alta",
+  "%s did not open with the new settings (%s), and reopening it as it was failed too (%s).": "%s nu s-a deschis cu noile setări (%s), iar redeschiderea lui ca înainte a eșuat și ea (%s).",
+  "%s did not open with the new settings (%s). It is running again as it was.": "%s nu s-a deschis cu noile setări (%s). Funcționează din nou ca înainte.",
   "%s elapsed": "%s scurs",
   "%s image": "Imagine %s",
   "%s is available": "%s este disponibil",

@@ -75,6 +75,8 @@
   "%s Map": "%s-karta",
   "%s VISIBLE": "%s SYNLIGA",
   "%s already has %u presets of yours - forget one to save another": "%s har redan %u förval från dig - glöm ett för att spara ett nytt",
+  "%s did not open with the new settings (%s), and reopening it as it was failed too (%s).": "%s kunde inte öppnas med de nya inställningarna (%s), och att öppna den igen som förut misslyckades också (%s).",
+  "%s did not open with the new settings (%s). It is running again as it was.": "%s kunde inte öppnas med de nya inställningarna (%s). Den körs igen som förut.",
   "%s elapsed": "%s har förflutit",
   "%s image": "%s-bild",
   "%s is available": "%s är tillgänglig",

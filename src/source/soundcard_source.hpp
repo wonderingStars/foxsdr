@@ -27,6 +27,10 @@
 // that is not present is a missing device, reported as such; it is never
 // quietly replaced by whichever card happens to answer, because a receiver
 // that silently moved to the laptop's microphone would look like a dead band.
+// On Linux the NAME itself carries ALSA's card number, which can change from
+// one boot to the next, so a saved ALSA name is matched by the card's
+// identity instead - and two identical cards, which nothing can tell apart,
+// are refused by name rather than guessed between (see AlsaHwName).
 //
 // ONLY HOST APIs WHOSE DEVICES KEEP THEIR IDENTITY. The name rule is only as
 // good as the host API behind the name, and on Windows two of them break it:
@@ -70,17 +74,27 @@
 // is the one audio call nobody can promise returns, and the source is closed
 // on the GUI thread (a source switch, a patch radio switched off, the exit).
 // So a close is handed, with the backend and the capture block, to a thread of
-// its own, which from then on owns that stream exclusively: it takes no lock
-// that an open, an enumeration, a construction or another close takes (the
-// PortAudio backend's only shared lock is its list-and-open lock, which a
-// close never touches, and PortAudio's init count is locked only around
-// Pa_Initialize and Pa_Terminate - sink/pa_init.hpp). The caller waits for a
-// HEALTHY card's close for at most kCloseWaitMs - long enough that reopening
-// the same card (a new rate, WASAPI exclusive mode) finds it free - and not at
-// all for a card that has already failed; a close that has not finished by
-// then is left to finish on its own thread, logged, and counted
-// (abandonedCloses). The backend that close took is never used again: the
-// next open makes a new one.
+// its own, which from then on owns that stream exclusively. It takes no lock
+// that anything else can be made to wait on for long: not the backend's
+// list-and-open lock (never touched by a close), not PortAudio's init lock
+// (held only around Pa_Initialize and Pa_Terminate), and the one lock it does
+// take - PortAudio's stream-list lock, around Pa_CloseStream - is one that
+// every other taker gives up on after kStreamListWaitMs, and that the GUI
+// thread never waits for (sink/pa_init.hpp). The caller waits for a HEALTHY
+// card's close for at most kCloseWaitMs - long enough that reopening the same
+// card (a new rate, WASAPI exclusive mode) finds it free - and not at all for
+// a card that has already failed or that the host API says has stopped; a
+// close that has not finished by then is left to finish on its own thread,
+// logged, and counted (abandonedCloses). Several closes on one thread can
+// share one wait (CloseBatch). The backend that close took is never used
+// again: the next open makes a new one.
+//
+// RE-OPENING THE SAME CARD. Because a card in WASAPI exclusive mode takes no
+// second stream, and a streaming card cannot be switched to exclusive mode,
+// the Source section never opens new settings for the card that is running
+// beside the old stream: it releases the running card first and opens the new
+// settings with the old ones to fall back on (openSoundCardOrRestore, below;
+// gui::soundCardReopenReleasesFirst).
 //
 // LIVENESS. A USB card pulled out mid-stream does not tell PortAudio anything:
 // the callback simply stops being called. read() therefore watches for it -
@@ -123,6 +137,13 @@ struct SoundCardSettings {
     int channel = 0;              // RealMono: 0 = left, 1 = right
     bool swapIq = false;          // IqStereo: right is I, left is Q
     double iqCentreHz = 0.0;      // IqStereo: what the external receiver is tuned to
+    // THE NAME WAS CHOSEN FROM THIS PROCESS'S OWN LIST (the Source section's
+    // device combo), so it names exactly that entry. A name read back from
+    // the config or from a patch key is matched by the card's IDENTITY
+    // instead (matchSoundCard), because on Linux the name carries the ALSA
+    // card number, which can change at every boot. Never saved, never in the
+    // args: it is true only of the session that made the choice.
+    bool pickedFromList = false;
 };
 
 // The complex rate a card at s.cardRateHz delivers in s.format (fs/2 for real,
@@ -167,11 +188,47 @@ struct SoundCardDevice {
 // "name (host API)" - what the Source section's device combo shows.
 std::string soundCardDeviceLabel(const SoundCardDevice& d);
 
-// Which listed device the settings name: an exact NAME AND HOST API match,
-// the first if a machine has two identical cards. -1 when there is none - the
-// caller reports a missing device and never substitutes another one. An EMPTY
-// device name means "the system default input" (a patch node that has not
-// chosen one), and answers the default's row or -1.
+// ALSA NAMES CARRY THE CARD NUMBER. PortAudio names an ALSA hardware input
+// "<card>: <pcm> (hw:N,M)" - "(plughw:N,M)" when PA_ALSA_PLUGHW is set -
+// where N is the card number ALSA handed out at boot and M the PCM device on
+// that card (pa_linux_alsa.c, BuildDeviceList). N follows the order the cards
+// were found in, so a saved name can name a card that is now at another
+// number; M is the card's own and does not move. The same list also carries
+// ALSA's configured PCMs - "default", "pulse", "sysdefault", "dmix",
+// "dsnoop" and the like - which have no "(hw:" part at all: they follow the
+// system default or share another device, so they are not offered.
+struct AlsaHwName {
+    std::string stripped;  // "<card>: <pcm>" - the name without the "(hw:N,M)"
+    int card = -1;         // N
+    int device = -1;       // M
+};
+// True, with `out` filled, for a name ending in " (hw:N,M)" or " (plughw:N,M)".
+bool parseAlsaHwName(const std::string& name, AlsaHwName& out);
+
+// Which listed device the settings name.
+//
+// `exact` (a name chosen from this process's list - pickedFromList): an exact
+// NAME AND HOST API match, the first if there are two.
+//
+// Otherwise the same, except for an ALSA hardware name, which is matched by
+// its IDENTITY - the name without "(hw:N,M)", and the PCM device M - so a card
+// ALSA numbered differently this boot is still found. When two listed inputs
+// share that identity (two identical cards) nothing can say which one was
+// saved - ALSA may have swapped their numbers - so `at` stays -1 and
+// `candidates` lists both: the caller refuses and names them rather than
+// guessing.
+//
+// `at` is -1 when there is no match - the caller reports a missing device and
+// never substitutes another one. An EMPTY device name means "the system
+// default input" (a patch node that has not chosen one), and answers the
+// default's row or -1.
+struct SoundCardMatch {
+    int at = -1;
+    std::vector<int> candidates;  // two or more when the match is ambiguous; else empty
+};
+SoundCardMatch matchSoundCard(const std::vector<SoundCardDevice>& list, const std::string& name,
+                              const std::string& hostApi, bool exact);
+// matchSoundCard(list, name, hostApi, false).at.
 int findSoundCard(const std::vector<SoundCardDevice>& list, const std::string& name,
                   const std::string& hostApi);
 
@@ -223,6 +280,10 @@ public:
 // WASAPI inputs only (see the file header).
 std::shared_ptr<SoundCardBackend> makePortAudioSoundCardBackend();
 
+// How a closer thread tells whoever is waiting that its close has finished
+// (soundcard_source.cpp).
+struct SoundCardCloseTicket;
+
 class SoundCardSource final : public DeviceSource {
 public:
     // Where the backend comes from. An empty factory means PortAudio. It is a
@@ -249,8 +310,9 @@ public:
     // bound for self-paced sources is ~100 ms).
     static constexpr std::chrono::milliseconds kReadWaitMs{100};
     // How long closeDevice() waits for a HEALTHY card's close to finish on its
-    // closer thread before leaving it there (a card that has already failed
-    // is not waited for at all). A WASAPI close takes milliseconds; this is
+    // closer thread before leaving it there (a card that has already failed,
+    // or that the host API says has stopped, is not waited for at all). A
+    // WASAPI close takes milliseconds; this is
     // the most a close that has hung inside the host API can cost the thread
     // that asked - a source switch, a patch radio, the exit.
     static constexpr std::chrono::milliseconds kCloseWaitMs{1000};
@@ -265,6 +327,30 @@ public:
     // at all: a card is released by the process exiting if its close has not
     // finished. Process-wide; on by default.
     static void setCloseWaitEnabled(bool on);
+
+    // SEVERAL CLOSES, ONE WAIT. While a CloseBatch lives on a thread, every
+    // closeDevice() on that thread hands its close to its own thread as usual
+    // but does not wait for it; the batch's destructor then waits for all of
+    // them together, against ONE deadline kCloseWaitMs away. So stopping a
+    // patch with five sound card radios costs at most kCloseWaitMs, not five
+    // of them one after another. Batches nest (the outer one waits).
+    class CloseBatch {
+    public:
+        CloseBatch();
+        ~CloseBatch();
+        CloseBatch(const CloseBatch&) = delete;
+        CloseBatch& operator=(const CloseBatch&) = delete;
+
+    private:
+        friend class SoundCardSource;
+        CloseBatch* outer_ = nullptr;
+        std::vector<std::shared_ptr<SoundCardCloseTicket>> tickets_;
+    };
+
+    // Whether the capture block a stream's callback was handed (the `user`
+    // pointer PushFn receives) still exists. For tests: it proves a last
+    // callback during a close has somewhere to write.
+    static bool captureAlive(const void* user);
 
     // Opens the card the settings name, with those settings. BLOCKING (it
     // enumerates, then opens): call it on a worker. A device the settings
@@ -292,7 +378,12 @@ public:
     // the source is gone. So the ring lives in this block, shared between the
     // source and whoever is closing its stream, and outlives both.
     struct Capture {
-        explicit Capture(std::size_t floats) : ring(floats) {}
+        // Registered while it exists (captureAlive), so a test can see that
+        // a close's last callback still had a live block to write into.
+        explicit Capture(std::size_t floats);
+        ~Capture();
+        Capture(const Capture&) = delete;
+        Capture& operator=(const Capture&) = delete;
         dsp::SpscRing<float> ring;
         std::atomic<int> channels{1};
         std::atomic<std::uint64_t> overruns{0};
@@ -395,5 +486,25 @@ private:
     // setSampleRateHz); start() refuses with this. Empty otherwise.
     std::string closedBecause_;
 };
+
+// THE SOURCE SECTION'S OPEN, as its worker runs it (AppWindow::
+// launchSoundCardOpen). Opens `want` from `list`; if that is refused and
+// `previous` is given - the settings of the card that was running until the
+// application released it to make this open possible (the same card: WASAPI
+// will not give a card to a second stream in exclusive mode, nor exclusive
+// mode to a card already streaming, so the running stream has to go first) -
+// the card is opened again as it was, so that a refused change never leaves
+// nothing running without saying so. BLOCKING: call it on a worker.
+struct SoundCardOpenOutcome {
+    std::unique_ptr<SoundCardSource> src;  // what to install; null when nothing opened
+    bool restoredPrevious = false;         // src runs `previous`, because `want` was refused
+    std::string note;                      // `want` opened: a coerced rate, or empty
+    std::string refused;                   // why `want` did not open
+    std::string previousRefused;           // why `previous` did not open again either
+};
+SoundCardOpenOutcome openSoundCardOrRestore(const SoundCardSettings& want,
+                                            const std::vector<SoundCardDevice>& list,
+                                            const SoundCardSettings* previous,
+                                            const SoundCardSource::BackendFactory& factory = {});
 
 }  // namespace cascade::source
