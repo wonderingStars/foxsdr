@@ -12,8 +12,11 @@
 //   run      the receiver running at a fixed rate off the built-in signal
 //            generator for a fixed time; reports the process CPU and the
 //            ring's dropped samples over the window after the warm-up, and
-//            the working set at the end. (Frame times come from the frame
-//            log, gui/frame_log.hpp, which runs beside this.)
+//            the working set at the end; also how many decoder instances
+//            were being fed and how many frames they were handed, and how
+//            often the VFO offset moved (the interface-busy run's proof that
+//            its scripted slider drag landed). (Frame times come from the
+//            frame log, gui/frame_log.hpp, which runs beside this.)
 //   rates    a ladder of signal-generator rates, one window each, reporting
 //            Pipeline::ringDroppedSamples() over each window. The highest
 //            rate with zero drops is the sustained-rate figure.
@@ -156,6 +159,23 @@ private:
     double cpu0_ = 0.0, cpu1_ = 0.0, runWindow_ = 0.0;
     std::uint64_t drop0_ = 0, drop1_ = 0, audio0_ = 0, audio1_ = 0;
     std::uint64_t workingSet_ = 0, peakWorkingSet_ = 0;
+    // THE DECODERS THE FIGURE WAS TAKEN BESIDE. Section 3 measures frame time
+    // "with three decoders open"; a build whose decoders were never created,
+    // or created and never fed, does less work and would read faster. So the
+    // result says, from the plugin runner itself, how many instances were
+    // being fed at the end of the window and how many frames they were handed
+    // across it (measure_engine.ps1 refuses a run that says none).
+    void readDecoders(Pipeline& p, std::size_t& active, std::uint64_t& audioFed,
+                      std::uint64_t& iqFed, std::string* statusJson) const;
+    std::size_t decodersActive_ = 0;
+    std::uint64_t decAudio0_ = 0, decAudio1_ = 0, decIq0_ = 0, decIq1_ = 0;
+    std::string decoderStatusJson_;
+    // THE INTERFACE-BUSY RUN'S PROOF. Frames in the window, and how many of
+    // them found the VFO offset changed since the frame before: a scripted
+    // drag of the VFO slider (FOXSDR_INPUT_SCRIPT) moves it every frame, and
+    // a run whose script missed the slider reads as an idle one.
+    std::uint64_t ticks_ = 0, vfoChanges_ = 0;
+    double lastVfoHz_ = 0.0;
     // rates
     std::size_t step_ = 0;
     std::vector<RateStep> steps_;
@@ -170,6 +190,10 @@ private:
     std::int64_t commandNs_ = 0;
     double awayRatio_ = 0.0;
     bool detected_ = false;
+    // Ring drops over the retunes (from the first retune to the result): the
+    // latency figure assumes a chain that is keeping up.
+    bool latDropArmed_ = false;
+    std::uint64_t latDrop0_ = 0;
     std::vector<Retune> results_;
     std::string error_;
 };

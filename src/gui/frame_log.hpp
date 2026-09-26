@@ -15,7 +15,10 @@
 // FOXSDR_VSYNC_OFF=1 runs the swap unsynchronised, so that interval is the
 // work rather than the display's refresh period. Both are debug switches for
 // tools/measure_engine.ps1; with neither set the frame loop holds a null
-// pointer and pays one test per frame.
+// pointer and pays one test per frame. Unlike FOXSDR_MEASURE they are NOT
+// limited to bounded --frames runs: they (and FOXSDR_FRAME_CAP_HZ below) work
+// in an interactive session too, which is how a frame log of a real session
+// by hand is taken.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once

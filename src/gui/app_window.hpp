@@ -1082,7 +1082,18 @@ private:
     void submitCommand(const FoxCommand& c);
     void submitCommand(cascade::core::cmd::QueuedCommand q);
     void drainLocalCommands();
-    std::vector<cascade::core::cmd::QueuedCommand> localCommands_;
+    // Each queued command carries the sourceGen_ it was asked under. A
+    // command addressed to THE RADIO (rate, gain, AGC, antenna, bias tee,
+    // device switch) whose radio has since been closed or replaced is
+    // dropped at the drain rather than landing on whatever is open now:
+    // every assignment of device_ bumps sourceGen_, so an unchanged
+    // generation means the very device the widget was drawn for
+    // (docs/engine-stage1.md, "queued device commands").
+    struct LocalCommand {
+        cascade::core::cmd::QueuedCommand q;
+        std::uint64_t sourceGen = 0;
+    };
+    std::vector<LocalCommand> localCommands_;
 
     // Helpers the commands call, each one the body a widget or a branch of
     // applyControlRequest used to hold inline (so both paths now share it).
@@ -2555,8 +2566,9 @@ private:
     // capture of that plugin at work.
     bool pressPresetByEnvDone_ = false;
     // The browser gets at most a few hundred bookmarks (favourites and the
-    // ones nearest the tuned frequency); this maps its row numbers back.
-    std::vector<std::size_t> webBookmarkIndex_;
+    // ones nearest the tuned frequency); this maps its row numbers to their
+    // Bookmark::ids as published (never to list indices, which move).
+    std::vector<std::uint64_t> webBookmarkIds_;
 
     // --- Scanner state (P6) -----------------------------------------------------
     // The Scanner itself is a pure state machine (core/scanner.hpp); these
@@ -3961,9 +3973,13 @@ private:
     std::string catalogError_;   // red: fetch/parse failure, verbatim
     std::string catalogStatus_;  // neutral: "N plugins in the catalogue"
     // --- measurement (tools/measure_engine.ps1) ------------------------------
-    // Both null in every ordinary run: FOXSDR_FRAME_LOG and FOXSDR_MEASURE
-    // (bounded runs only) are the debug switches that create them. See
-    // gui/frame_log.hpp and core/engine_measure.hpp.
+    // All three null in every ordinary run; each is created only by its debug
+    // switch. FOXSDR_MEASURE (measure_) is honoured in a bounded --frames run
+    // ONLY. FOXSDR_FRAME_LOG (frameLog_), FOXSDR_FRAME_CAP_HZ (frameCap_) and
+    // FOXSDR_VSYNC_OFF (the swap interval, read where the window is made) are
+    // read in EVERY run, interactive ones included - an environment switch,
+    // never a setting, and there is no other way on. See gui/frame_log.hpp
+    // and core/engine_measure.hpp.
     std::unique_ptr<FrameLog> frameLog_;
     std::unique_ptr<FrameCap> frameCap_;  // FOXSDR_FRAME_CAP_HZ
     std::unique_ptr<cascade::core::EngineMeasure> measure_;

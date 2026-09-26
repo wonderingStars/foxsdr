@@ -58,6 +58,7 @@
 #include "gui/app_window.hpp"
 #include "iiod_fake_server.hpp"
 #include "imgui.h"
+#include "net/web_control.hpp"
 #include "source/device_source.hpp"
 #include "source/soundcard_source.hpp"
 #include "test_check.hpp"
@@ -308,6 +309,7 @@ struct AppWindowTestAccess {
         return a.applyCommand(q.c, q.longText);
     }
     static void submit(AppWindow& a, const FoxCommand& c) { a.submitCommand(c); }
+    static void submit(AppWindow& a, const cmd::QueuedCommand& q) { a.submitCommand(q); }
     static void drain(AppWindow& a) { a.drainLocalCommands(); }
     static std::size_t queued(AppWindow& a) { return a.localCommands_.size(); }
 
@@ -437,6 +439,21 @@ struct AppWindowTestAccess {
         return a.freqMgr_.list()[static_cast<std::size_t>(at)].id;
     }
     static const std::string& importNote(AppWindow& a) { return a.bookmarkImportNote_; }
+    // The web remote's side: the snapshot a browser reads (and the row map it
+    // leaves), and a request applied as applyWebControls applies it.
+    static void publishWeb(AppWindow& a) { a.publishReceiverState(); }
+    // The row a browser sees a bookmark on: read off the PUBLISHED snapshot
+    // (what /api/status serves - the web provider's own call), never off the
+    // row map under test.
+    static int webRowOf(AppWindow& a, const std::string& name) {
+        const cascade::net::RadioStatus status = a.webStatusNow();
+        const auto& rows = status.bookmarks;
+        for (std::size_t r = 0; r < rows.size(); ++r) {
+            if (rows[r].name == name) { return static_cast<int>(r); }
+        }
+        return -1;
+    }
+    static void webRequest(AppWindow& a, const cascade::net::ControlRequest& r) { a.applyControlRequest(r); }
     static bool scanning(AppWindow& a) { return a.scanner_.active(); }
     static double scanStartMhz(AppWindow& a) { return a.scanStartMhz_; }
     static double scanStopMhz(AppWindow& a) { return a.scanStopMhz_; }
@@ -1086,6 +1103,33 @@ void sourceOps(AppWindow& a) {
         CHECK(refused(A::apply(a, ints(FOXAPP_OP_SET_CONVERTER, 3, 0)), FOXAPI_OUT_OF_RANGE));
     }
 
+    // A QUEUED RADIO COMMAND NEVER LANDS ON A DIFFERENT RADIO. A gain asked of
+    // the open radio, then that radio replaced (a new open finishing between
+    // the widget and the drain): the drain drops the gain rather than set it
+    // on the newcomer - while a receiver command queued beside it still
+    // applies. With no change of radio, the same queued gain does land.
+    std::printf("  [queued radio commands and a change of radio]\n");
+    {
+        CHECK(A::haveDevice(a));
+        A::submit(a, text(FOXAPI_OP_SET_GAIN, "LNA", 0, 0, 17.0));
+        A::submit(a, num(FOXAPI_OP_SET_SQUELCH, -44.0));
+        // (Another radio: selecting the one already open reopens nothing.)
+        CHECK(ok(A::apply(a, text(FOXAPI_OP_SELECT_SOURCE, "soapy:driver=fake,serial=9"))));
+        CHECK(A::waitOpen(a));
+        CHECK(A::kind(a) == "soapy");
+        CHECK(A::haveDevice(a));
+        const double before = A::radioGain(a, "LNA");
+        CHECK(before != 17.0);
+        A::drain(a);
+        CHECK(A::queued(a) == 0u);
+        CHECK(A::radioGain(a, "LNA") == before);  // dropped, not applied to the new radio
+        CHECK(A::squelch(a) == -44.0f);             // the receiver's own command applied
+        // The same radio throughout: applied.
+        A::submit(a, text(FOXAPI_OP_SET_GAIN, "LNA", 0, 0, 17.0));
+        A::drain(a);
+        CHECK(A::radioGain(a, "LNA") == 17.0);
+    }
+
     // No radio open: the radio's own ops say so and change nothing.
     CHECK(ok(A::apply(a, text(FOXAPI_OP_SELECT_SOURCE, "siggen"))));
     CHECK(refused(A::apply(a, num(FOXAPI_OP_SET_SAMPLE_RATE, 1.024e6)), FOXAPI_NO_DEVICE));
@@ -1221,6 +1265,69 @@ void bookmarkOps(AppWindow& a) {
         CHECK(A::bookmarks(a).size() == before + 2u);
         CHECK(refused(A::apply(a, text(FOXAPP_OP_BOOKMARK_IMPORT_FILE, "")), FOXAPI_BAD_ARGUMENT));
     }
+}
+
+// THE WEB REMOTE'S BOOKMARK ROWS, END TO END. A browser names a bookmark by
+// its ROW in the last snapshot; applyControlRequest turns the row into the id
+// that snapshot published. The case that matters: a desktop bookmark command
+// drained at the top of the SAME frame as the web request (the drain runs
+// before applyWebControls) shifts every list index after it - the row must
+// still reach the bookmark the browser showed, never its new neighbour.
+void webBookmarkRows(AppWindow& a) {
+    std::printf("  [web bookmark rows]\n");
+    const std::uint64_t idA = A::addBookmark(a, "Web A", 30.0e6, "NFM", 12500.0);
+    (void)A::addBookmark(a, "Web B", 31.0e6, "NFM", 12500.0);
+    (void)A::addBookmark(a, "Web C", 32.0e6, "AM", 9000.0);
+    CHECK(ok(A::apply(a, num(FOXAPI_OP_SET_FREQUENCY, 31.0e6))));
+    A::publishWeb(a);  // what the browser reads
+    const int rowA = A::webRowOf(a, "Web A");
+    const int rowB = A::webRowOf(a, "Web B");
+    const int rowC = A::webRowOf(a, "Web C");
+    std::printf("      published rows: A %d, B %d, C %d\n", rowA, rowB, rowC);
+    CHECK(rowA >= 0 && rowB >= 0 && rowC >= 0);
+
+    // Frame N+1: the desktop's x on A (submitted last frame) drains first...
+    A::submit(a, ints(FOXAPI_OP_BOOKMARK_REMOVE, static_cast<std::int64_t>(idA)));
+    A::drain(a);
+    // ...then the browser's "tune to row C" arrives.
+    cascade::net::ControlRequest tune;
+    tune.bookmarkTune = rowC;
+    A::webRequest(a, tune);
+    std::printf("      after the web tune to row C: %.0f Hz, mode %s\n", A::tuned(a),
+                cascade::dsp::modeName(A::demod(a)));
+    CHECK(A::tuned(a) == 32.0e6);
+    CHECK(std::string(cascade::dsp::modeName(A::demod(a))) == "AM");
+
+    // A row whose bookmark has gone since the snapshot changes nothing.
+    cascade::net::ControlRequest gone;
+    gone.bookmarkTune = rowA;
+    A::webRequest(a, gone);
+    CHECK(A::tuned(a) == 32.0e6);
+
+    // Frame N+2: the browser reads a fresh snapshot; a desktop ADD (the
+    // bookmark lands at the tuned frequency, below B in the list) drains
+    // first, then the browser removes the row it saw B on: B goes, and
+    // nothing else does.
+    CHECK(ok(A::apply(a, num(FOXAPI_OP_SET_FREQUENCY, 29.0e6))));
+    A::publishWeb(a);
+    const int rowB2 = A::webRowOf(a, "Web B");
+    CHECK(rowB2 >= 0);
+    A::submit(a, cmd::makeText(FOXAPI_OP_BOOKMARK_ADD, "Web D").c);
+    A::drain(a);
+    const std::size_t before = A::bookmarks(a).size();
+    cascade::net::ControlRequest rm;
+    rm.bookmarkRemove = rowB2;
+    A::webRequest(a, rm);
+    CHECK(A::bookmarks(a).size() == before - 1u);
+    bool haveB = false, haveC = false, haveD = false;
+    for (const cascade::core::Bookmark& b : A::bookmarks(a)) {
+        haveB = haveB || b.name == "Web B";
+        haveC = haveC || b.name == "Web C";
+        haveD = haveD || b.name == "Web D";
+    }
+    CHECK(!haveB);
+    CHECK(haveC);
+    CHECK(haveD);
 }
 
 void scannerOps(AppWindow& a) {
@@ -1650,6 +1757,7 @@ int main() {
         sourceOps(app);
         recorderOps(app);
         bookmarkOps(app);
+        webBookmarkRows(app);
         scannerOps(app);
         pluginOps(app);
         storeOps(app);

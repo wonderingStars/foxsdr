@@ -4030,7 +4030,7 @@ void AppWindow::drawStatusColumn() {
     // keeps going silent" reports — so the second line finally prints the
     // real number the artboard always wanted, instead of leaving it invented
     // or absent.
-    cascade::sink::AudioOut& audioSink = pipeline_.audio();
+    const cascade::sink::AudioOut& audioSink = pipeline_.audio();
     // HELD, NOT LIVE (0.99.4): every figure on this card is read into one
     // snapshot that is refreshed twice a second (gui/readout_hold.hpp) - the
     // ring level moves every callback and a starving sink's count climbs by
@@ -6262,7 +6262,7 @@ void AppWindow::drawMenuColumn() {
     // for. Two clipped lines rather than one wrapped one: a long device name
     // must not push the numbers out of the reserved footer space.
     ImGui::Separator();
-    cascade::source::IqSource& src = pipeline_.activeSource();
+    const cascade::source::IqSource& src = pipeline_.activeSource();
     // Line 1: the active source, and — when a band plan is loaded — the band
     // the TUNED frequency (source centre + VFO offset, i.e. what the VFO
     // marker sits on) falls in. BandPlan::at returns the narrowest match, so
@@ -9535,7 +9535,7 @@ void AppWindow::drawCenterPanels() {
     // and the DSP input rate every frame; setSpan preserves the user's zoom
     // window whenever it still fits the new baseband, so a small retune or a
     // rate change does not silently throw the view away.
-    cascade::source::IqSource& src = pipeline_.activeSource();
+    const cascade::source::IqSource& src = pipeline_.activeSource();
     scale_.setSpan(src.centerFrequencyHz(), pipeline_.inputRateHz());
 
     const ImVec2 avail = ImGui::GetContentRegionAvail();
@@ -22128,13 +22128,17 @@ void AppWindow::fillStatusLists(cascade::net::RadioStatus& s, const std::string&
     // A FEW HUNDRED AT MOST go to the browser: an imported list of 33 000
     // would be copied every frame and serialised on every poll, for a page
     // that can only ever show a screenful. Favourites first, then the ones
-    // nearest the tuned frequency; webBookmarkIndex_ maps the browser's row
-    // numbers back to the real list for tune and remove.
+    // nearest the tuned frequency; webBookmarkIds_ maps the browser's row
+    // numbers to the bookmarks' IDS for tune and remove - ids, not list
+    // indices, because a desktop add, remove or star applied before the next
+    // web request (the command drain runs first in a frame) shifts every index
+    // after it, and a stale index names a different bookmark.
     {
         const std::vector<cascade::core::Bookmark>& all = freqMgr_.list();
-        webBookmarkIndex_ = freqMgr_.nearestSubset(currentAbsoluteHz(), 300, 100);
-        for (const std::size_t i : webBookmarkIndex_) {
+        webBookmarkIds_.clear();
+        for (const std::size_t i : freqMgr_.nearestSubset(currentAbsoluteHz(), 300, 100)) {
             const cascade::core::Bookmark& b = all[i];
+            webBookmarkIds_.push_back(b.id);
             s.bookmarks.push_back({b.name, b.freqHz, b.mode, b.bandwidthHz});
         }
     }
@@ -22338,21 +22342,48 @@ std::vector<std::string> linesOf(const std::string& text) {
 void AppWindow::submitCommand(const FoxCommand& c) {
     cascade::core::cmd::QueuedCommand q;
     q.c = c;
-    localCommands_.push_back(std::move(q));
+    submitCommand(std::move(q));
 }
 
 void AppWindow::submitCommand(cascade::core::cmd::QueuedCommand q) {
-    localCommands_.push_back(std::move(q));
+    LocalCommand lc;
+    lc.q = std::move(q);
+    lc.sourceGen = sourceGen_;
+    localCommands_.push_back(std::move(lc));
 }
+
+namespace {
+// The ops addressed to the open radio itself - the Source panel's device
+// controls, the radar scope's gain knob and the bias tee key.
+bool isDeviceScoped(std::uint32_t op) {
+    switch (op) {
+        case FOXAPI_OP_SET_SAMPLE_RATE:
+        case FOXAPI_OP_SET_GAIN:
+        case FOXAPP_OP_SET_GAIN_NO_READBACK:
+        case FOXAPI_OP_SET_DEVICE_AGC:
+        case FOXAPI_OP_SET_ANTENNA:
+        case FOXAPI_OP_SET_BIAS_TEE:
+        case FOXAPI_OP_SET_DEVICE_OPTION:
+            return true;
+        default:
+            return false;
+    }
+}
+}  // namespace
 
 void AppWindow::drainLocalCommands() {
     if (localCommands_.empty()) { return; }
     // TAKEN, THEN APPLIED: a command's own effects may queue more (none does
     // today); those wait for the next drain rather than extend this one.
-    std::vector<cascade::core::cmd::QueuedCommand> batch;
+    std::vector<LocalCommand> batch;
     batch.swap(localCommands_);
-    for (const cascade::core::cmd::QueuedCommand& q : batch) {
-        (void)applyCommand(q.c, q.longText);
+    for (const LocalCommand& lc : batch) {
+        // A radio command asked of a radio that has gone since (closed, or
+        // replaced by one that opened in between - sourceGen_ moves with
+        // every device_ change, including one made earlier in this batch) is
+        // dropped: it was drawn for that radio, never for this one.
+        if (lc.sourceGen != sourceGen_ && isDeviceScoped(lc.q.c.op)) { continue; }
+        (void)applyCommand(lc.q.c, lc.q.longText);
     }
 }
 
@@ -23128,13 +23159,11 @@ FoxCommandResult AppWindow::applyCommand(const FoxCommand& c, const std::string&
 // were (net/control_ops.cpp), by applyCommand. GUI thread only.
 void AppWindow::applyControlRequest(const cascade::net::ControlRequest& r) {
     cascade::net::ControlOpsContext ctx;
+    // The browser's row numbers name the ids the last snapshot published: an
+    // entry removed since answers NOT_FOUND, and one inserted since moves no
+    // other row onto a different bookmark.
     if (r.bookmarkTune.has_value() || r.bookmarkRemove.has_value()) {
-        // The browser's row numbers, mapped to ids while the list is the one
-        // the rows were published from.
-        ctx.bookmarkIdByRow.reserve(webBookmarkIndex_.size());
-        for (const std::size_t i : webBookmarkIndex_) {
-            ctx.bookmarkIdByRow.push_back(i < freqMgr_.list().size() ? freqMgr_.list()[i].id : 0u);
-        }
+        ctx.bookmarkIdByRow = webBookmarkIds_;
     }
     ctx.scanStartHz = scanStartMhz_ * 1.0e6;
     ctx.scanStopHz = scanStopMhz_ * 1.0e6;
