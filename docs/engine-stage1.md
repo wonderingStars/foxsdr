@@ -300,7 +300,11 @@ low-level setters only in a reviewed list of engine members.
    no longer wiped; the scanner's Start stores its range through Hz (a
    last-ulp round trip of the MHz field); a desktop source row whose device
    vanished between the click and the next frame says "no scanned device
-   matches" instead of doing nothing.
+   matches" instead of doing nothing; two Source rows with IDENTICAL kind and
+   args (the same radio listed twice) both open the first, because a row is
+   named by its id rather than its position; the mute dialog's Stop ends the
+   mute one frame after the dialog closes (the banner can show for that
+   frame).
 
 ## 8. Tests
 
