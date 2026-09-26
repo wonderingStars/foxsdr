@@ -63,17 +63,17 @@ void appendSentence(std::string& msg, const std::string& next) {
 }  // namespace
 
 std::string AppWindow::resolveConverterKey(const std::string& radioKey) const {
-    const auto it = converterKeyAlias_.find(radioKey);
-    return it == converterKeyAlias_.end() ? radioKey : it->second;
+    const auto it = engine_.converterKeyAlias_.find(radioKey);
+    return it == engine_.converterKeyAlias_.end() ? radioKey : it->second;
 }
 
 std::string AppWindow::converterRawKeyNow() const {
     // A SOUND CARD BY ITS CARD: it leaves deviceArgs_ empty, and "soundcard|"
     // would give every card one shared setting (gui::soundCardConverterKey).
-    if (sourceKind_ == "soundcard") {
-        return cascade::gui::soundCardConverterKey(soundCardLive_.device, soundCardLive_.hostApi);
+    if (engine_.sourceKind_ == "soundcard") {
+        return cascade::gui::soundCardConverterKey(engine_.soundCardLive_.device, engine_.soundCardLive_.hostApi);
     }
-    return cc::converterRadioKey(sourceKind_, deviceArgs_);
+    return cc::converterRadioKey(engine_.sourceKind_, engine_.deviceArgs_);
 }
 
 std::string AppWindow::converterRadioKeyNow() const {
@@ -85,13 +85,13 @@ cc::ConverterSetting AppWindow::converterForKey(const std::string& radioKey) con
     // kept under its identity (gui::soundCardConverterKey - on Linux without
     // the ALSA card number), so the key is brought to that form first.
     const std::string key = cascade::gui::soundCardCanonicalKey(resolveConverterKey(radioKey));
-    const cc::ConverterSetting stored = cc::converterFor(converters_, key);
+    const cc::ConverterSetting stored = cc::converterFor(engine_.converters_, key);
     // What a sound card can have in front of it depends on its format
     // (gui::soundCardConverter): nothing for I/Q, a down-converter for real.
     std::string cardArgs;
     if (cascade::gui::soundCardKeyArgs(key, cardArgs)) {
         const cascade::source::SoundCardFormat f = cascade::gui::soundCardFormatForKey(
-            cardArgs, sourceKind_ == "soundcard", soundCardLive_, soundCard_);
+            cardArgs, engine_.sourceKind_ == "soundcard", engine_.soundCardLive_, soundCard_);
         return cascade::gui::soundCardConverter(stored, f).effective;
     }
     return stored;
@@ -99,14 +99,14 @@ cc::ConverterSetting AppWindow::converterForKey(const std::string& radioKey) con
 
 void AppWindow::noteConverterFallback(const std::string& nativeKey,
                                       const std::string& fallbackKey) {
-    converterNotCarried_.erase(fallbackKey);
+    engine_.converterNotCarried_.erase(fallbackKey);
     if (nativeKey.empty() || nativeKey == fallbackKey) { return; }
     // A Soapy key with a converter of its own keeps it: the user set that one
     // for this very way of reaching the dongle. ONLY AN ACTIVE ONE counts - a
     // record left OFF (changeConverter stores Off too, to remember the LO) is
     // "none", and must not silently stop the radio's own converter applying.
-    if (cc::converterActive(cc::converterFor(converters_, fallbackKey))) {
-        converterKeyAlias_.erase(fallbackKey);
+    if (cc::converterActive(cc::converterFor(engine_.converters_, fallbackKey))) {
+        engine_.converterKeyAlias_.erase(fallbackKey);
         return;
     }
     // ONLY THE SAME DONGLE, PROVABLY (gui::fallbackNamesTheSameDongle): with
@@ -114,9 +114,9 @@ void AppWindow::noteConverterFallback(const std::string& nativeKey,
     // from the one the native row named. Then nothing is carried, and the
     // Source section says so when the native radio had a converter to carry.
     if (!cascade::gui::fallbackNamesTheSameDongle(nativeKey, fallbackKey)) {
-        converterKeyAlias_.erase(fallbackKey);
-        if (cc::converterActive(cc::converterFor(converters_, nativeKey))) {
-            converterNotCarried_.insert(fallbackKey);
+        engine_.converterKeyAlias_.erase(fallbackKey);
+        if (cc::converterActive(cc::converterFor(engine_.converters_, nativeKey))) {
+            engine_.converterNotCarried_.insert(fallbackKey);
             cascade::core::diagLogf("source: the SoapySDR fallback names no serial the native "
                                     "radio matches; its converter is not carried");
         }
@@ -128,7 +128,7 @@ void AppWindow::noteConverterFallback(const std::string& nativeKey,
     // the next native open looks, and a later fallback aliases again and
     // finds the edit there. The Soapy key simply never gets a record of its
     // own this way.
-    converterKeyAlias_[fallbackKey] = nativeKey;
+    engine_.converterKeyAlias_[fallbackKey] = nativeKey;
     const cc::ConverterSetting s = converterForKey(fallbackKey);
     // Which way it is set, never a frequency (see changeConverter).
     cascade::core::diagLogf("source: the SoapySDR fallback keeps this radio's converter (%s%s)",
@@ -140,14 +140,14 @@ void AppWindow::noteConverterFallback(const std::string& nativeKey,
 std::string AppWindow::converterAliasNote() {
     const std::string raw = converterRawKeyNow();
     // Said until the user sets a converter here themselves.
-    if (converterNotCarried_.count(raw) != 0 && !cc::converterActive(pipeline_.converter())) {
+    if (engine_.converterNotCarried_.count(raw) != 0 && !cc::converterActive(engine_.pipeline_.converter())) {
         return tr("Opened through SoapySDR because the native driver refused this radio. The "
                   "converter set for it was not carried over: with no serial number the two "
                   "drivers cannot be shown to be the same dongle. Set one here if this radio "
                   "needs it.");
     }
-    if (converterKeyAlias_.count(raw) == 0) { return {}; }
-    if (!cc::converterActive(pipeline_.converter())) { return {}; }
+    if (engine_.converterKeyAlias_.count(raw) == 0) { return {}; }
+    if (!cc::converterActive(engine_.pipeline_.converter())) { return {}; }
     return tr("Opened through SoapySDR because the native driver refused this radio - the "
               "converter set for it still applies.");
 }
@@ -157,13 +157,13 @@ std::optional<double> AppWindow::carriedAirCentre() {
     // was never tuned reads 0 Hz. The AIR figure is what is carried, and it
     // may be below 0 Hz (a VLF station with the VFO parked up, through an
     // up-converter) - which is a frequency, not the absence of one.
-    if (!(pipeline_.rawSource().centerFrequencyHz() > 0.0)) { return std::nullopt; }
-    return pipeline_.activeSource().centerFrequencyHz();
+    if (!(engine_.pipeline_.rawSource().centerFrequencyHz() > 0.0)) { return std::nullopt; }
+    return engine_.pipeline_.activeSource().centerFrequencyHz();
 }
 
 void AppWindow::applyConverterForSource() {
-    pipeline_.setConverter(converterForKey(converterRadioKeyNow()));
-    converterHeldAir_.reset();   // a station held for the radio just replaced
+    engine_.pipeline_.setConverter(converterForKey(converterRadioKeyNow()));
+    engine_.converterHeldAir_.reset();   // a station held for the radio just replaced
     // The LO field re-seeds from the radio now installed.
     converterLoSeededFor_.clear();
     converterLoBad_ = false;
@@ -192,14 +192,14 @@ std::string AppWindow::converterName(const cc::ConverterSetting& s) const {
 }
 
 std::string AppWindow::converterStatusLine(bool shortForm) {
-    const cc::ConverterSetting conv = pipeline_.converter();
+    const cc::ConverterSetting conv = engine_.pipeline_.converter();
     if (!cc::converterActive(conv)) { return {}; }
     // THE RADIO'S OWN READBACK, not a sum: this line exists so that what the
     // radio reports (its lights, another program, its own display) is on the
     // screen beside the air frequency the counter shows. The short form names
     // the converter by its LO alone, for a column too narrow for the full
     // name (an inverting converter's is the longest).
-    const double radioHz = pipeline_.rawSource().centerFrequencyHz();
+    const double radioHz = engine_.pipeline_.rawSource().centerFrequencyHz();
     const std::string name =
         shortForm ? cc::converterHzText(conv.loHz) + " LO" : converterName(conv);
     std::string out;
@@ -210,11 +210,11 @@ std::string AppWindow::converterStatusLine(bool shortForm) {
 
 std::string AppWindow::converterTuneNote(double requestAirHz, bool refused, double answeredAirHz,
                                          bool isPluginPreset) {
-    const cc::ConverterSetting conv = pipeline_.converter();
+    const cc::ConverterSetting conv = engine_.pipeline_.converter();
     if (!cc::converterActive(conv)) { return {}; }
     double rLo = 0.0;
     double rHi = 0.0;
-    const bool hasRange = device_ != nullptr && device_->frequencyRangeHz(rLo, rHi);
+    const bool hasRange = engine_.device_ != nullptr && engine_.device_->frequencyRangeHz(rLo, rHi);
     const std::string name = converterName(conv);
     const std::string air = cc::converterHzText(requestAirHz);
     const double radioHz = cc::radioFromAir(conv, requestAirHz);
@@ -275,18 +275,18 @@ void AppWindow::changeConverter(const cc::ConverterSetting& s) {
     // straight back on must find 17.2 kHz again - not keep 125.0172 MHz on
     // the air and send the radio to 250.0172 MHz. A tune moves the radio
     // (and a source install clears this), so any later change starts afresh.
-    const double radioNowHz = pipeline_.rawSource().centerFrequencyHz();
-    if (converterHeldAir_.has_value() && converterHeldAir_->key == key &&
-        converterHeldAir_->radioHz == radioNowHz && airBefore.has_value()) {
-        airBefore = converterHeldAir_->airHz;
+    const double radioNowHz = engine_.pipeline_.rawSource().centerFrequencyHz();
+    if (engine_.converterHeldAir_.has_value() && engine_.converterHeldAir_->key == key &&
+        engine_.converterHeldAir_->radioHz == radioNowHz && airBefore.has_value()) {
+        airBefore = engine_.converterHeldAir_->airHz;
     }
-    converterHeldAir_.reset();
+    engine_.converterHeldAir_.reset();
     // STORED EVEN WHEN OFF, so switching back on finds the LO the user typed
     // (sanitiseConverter keeps a valid LO whatever the mode).
-    converters_[key] = cc::sanitiseConverter(s);
+    engine_.converters_[key] = cc::sanitiseConverter(s);
     const cc::ConverterSetting eff = converterForKey(key);
-    pipeline_.setConverter(eff);
-    tuneMismatchNote_.clear();
+    engine_.pipeline_.setConverter(eff);
+    engine_.tuneMismatchNote_.clear();
 
     // THE AIR FREQUENCY STAYS; THE RADIO FOLLOWS. On every change - on, off,
     // mode, LO, inversion - the station the user is listening to is kept (the
@@ -312,21 +312,21 @@ void AppWindow::changeConverter(const cc::ConverterSetting& s) {
     // where its external receiver is), so a converter in front of one only
     // relabels what it hears - asking it to retune would be refused and
     // said as "out of reach".
-    if (airBefore.has_value() && sourceKind_ != "file" && sourceKind_ != "soundcard") {
+    if (airBefore.has_value() && engine_.sourceKind_ != "file" && engine_.sourceKind_ != "soundcard") {
         const double airHz = *airBefore;
         const double radioHz = cc::radioFromAir(eff, airHz);
         double rLo = 0.0;
         double rHi = 0.0;
         const bool hasRange =
-            device_ != nullptr && device_->frequencyRangeHz(rLo, rHi) && rHi > rLo;
+            engine_.device_ != nullptr && engine_.device_->frequencyRangeHz(rLo, rHi) && rHi > rLo;
         const bool reachable = std::isfinite(radioHz) && radioHz > 0.0 &&
                                (!hasRange || (radioHz >= rLo && radioHz <= rHi));
         if (reachable) {
-            retuneCoalescer_.clearPending();
+            engine_.retuneCoalescer_.clearPending();
             applyRetuneNow(airHz);
         } else {
-            converterHeldAir_ = ConverterHeldAir{key, airHz, radioNowHz};
-            tuneMismatchNote_ =
+            engine_.converterHeldAir_ = ConverterHeldAir{key, airHz, radioNowHz};
+            engine_.tuneMismatchNote_ =
                 cc::converterActive(eff)
                     ? converterTuneNote(airHz, /*refused=*/true, 0.0, /*isPluginPreset=*/false)
                     : cascade::gui::tuneRefusedMessage(airHz, hasRange, rLo, rHi,
@@ -334,7 +334,7 @@ void AppWindow::changeConverter(const cc::ConverterSetting& s) {
             // Where it fell, never the frequency (PRIVACY.md).
             cascade::core::diagLogf("source: converter change: the %s cannot follow the air "
                                     "frequency (%s); it stays where it was",
-                                    pipeline_.activeSource().name(),
+                                    engine_.pipeline_.activeSource().name(),
                                     !(radioHz > 0.0) ? "0 Hz or below at the radio"
                                     : radioHz < rLo   ? "below its range"
                                                       : "above its range");
@@ -342,30 +342,30 @@ void AppWindow::changeConverter(const cc::ConverterSetting& s) {
     }
     // A new frequency as far as everything downstream is concerned (a relabel
     // is one too; applyRetuneNow already told them when the radio moved).
-    pipeline_.resetRds();
-    pluginRunner_.retune(pipeline_.activeSource().centerFrequencyHz());
+    engine_.pipeline_.resetRds();
+    engine_.pluginRunner_.retune(engine_.pipeline_.activeSource().centerFrequencyHz());
     converterLoSeededFor_.clear();
     // Which way it was set, never a frequency (PRIVACY.md: what somebody
     // tunes to stays out of reports - an LO says which band they listen to).
     cascade::core::diagLogf("source: converter %s%s for the %s", cc::converterModeKey(eff.mode),
                             eff.inverted && cc::converterActive(eff) ? " (inverted)" : "",
-                            sourceKind_.c_str());
+                            engine_.sourceKind_.c_str());
 }
 
 std::vector<cc::ConverterMode> AppWindow::converterModesOffered() const {
     // A SOUND CARD (gui::soundCardConverter): none at all in I/Q mode - the
     // typed centre is the translation - and no up-converter in real mode.
-    if (sourceKind_ == "soundcard") {
-        if (soundCardLive_.format == cascade::source::SoundCardFormat::IqStereo) { return {}; }
+    if (engine_.sourceKind_ == "soundcard") {
+        if (engine_.soundCardLive_.format == cascade::source::SoundCardFormat::IqStereo) { return {}; }
         return {cc::ConverterMode::Off, cc::ConverterMode::Down};
     }
     return {cc::ConverterMode::Off, cc::ConverterMode::Up, cc::ConverterMode::Down};
 }
 
 std::string AppWindow::converterUnusableNote() const {
-    if (sourceKind_ != "soundcard") { return {}; }
-    const cc::ConverterSetting stored = cc::converterFor(converters_, converterRadioKeyNow());
-    if (!cascade::gui::soundCardConverter(stored, soundCardLive_.format).upRefused) { return {}; }
+    if (engine_.sourceKind_ != "soundcard") { return {}; }
+    const cc::ConverterSetting stored = cc::converterFor(engine_.converters_, converterRadioKeyNow());
+    if (!cascade::gui::soundCardConverter(stored, engine_.soundCardLive_.format).upRefused) { return {}; }
     return tr("A sound card takes a down-converter only: the up-converter set for this card is not used.");
 }
 
@@ -373,15 +373,15 @@ void AppWindow::drawConverterControls() {
     const std::vector<cc::ConverterMode> offered = converterModesOffered();
     if (offered.empty()) { return; }
     const std::string key = converterRadioKeyNow();
-    const auto stored = converters_.find(key);
+    const auto stored = engine_.converters_.find(key);
     cc::ConverterSetting mine =
-        stored == converters_.end() ? cc::ConverterSetting{} : stored->second;
+        stored == engine_.converters_.end() ? cc::ConverterSetting{} : stored->second;
     // A stored mode this source cannot take reads as Off (the note below says
     // why); its LO is kept for the radio or mode that can.
     if (std::find(offered.begin(), offered.end(), mine.mode) == offered.end()) {
         mine.mode = cc::ConverterMode::Off;
     }
-    const cc::ConverterSetting live = pipeline_.converter();
+    const cc::ConverterSetting live = engine_.pipeline_.converter();
     // Every change below is APP_SET_CONVERTER, applied at the top of the next
     // frame by changeConverter (the air frequency stays, the radio follows).
     const auto submitConverter = [this](const cc::ConverterSetting& s) {
@@ -394,7 +394,7 @@ void AppWindow::drawConverterControls() {
     ImGui::SeparatorText(tr("Converter"));
     // Not while a radio is being opened: the setting would land on whichever
     // radio happened to be installed at that instant.
-    ImGui::BeginDisabled(deviceOpenPending_);
+    ImGui::BeginDisabled(engine_.deviceOpenPending_);
 
     // --- the mode ----------------------------------------------------------------
     std::vector<const char*> modeNames;

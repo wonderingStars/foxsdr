@@ -217,10 +217,10 @@ namespace cascade::gui {
 
 struct AppWindowTestAccess {
     static void installHooks() {
-        AppWindow::testHooks_.makeDevice = &makeFake;
-        AppWindow::testHooks_.nativeScan = &fakeNativeScan;
-        AppWindow::testHooks_.soapyScan = &fakeSoapyScan;
-        AppWindow::testHooks_.pluginDir = &pluginDirHook;
+        cascade::engine::Engine::testHooks_.makeDevice = &makeFake;
+        cascade::engine::Engine::testHooks_.nativeScan = &fakeNativeScan;
+        cascade::engine::Engine::testHooks_.soapyScan = &fakeSoapyScan;
+        cascade::engine::Engine::testHooks_.pluginDir = &pluginDirHook;
     }
     static FoxCommandResult apply(AppWindow& a, const FoxCommand& c) { return a.applyCommand(c, {}); }
     static FoxCommandResult apply(AppWindow& a, const cmd::QueuedCommand& q) {
@@ -229,42 +229,42 @@ struct AppWindowTestAccess {
     static bool waitOpen(AppWindow& a) {
         return waitFor([&a] {
             a.pollSourceAsync();
-            return !a.deviceOpenPending_;
+            return !a.engine_.deviceOpenPending_;
         });
     }
     static bool waitSoapy(AppWindow& a) {
         return waitFor([&a] {
             a.pollSourceAsync();
-            return !a.soapyScanPending_;
+            return !a.engine_.soapyScanPending_;
         });
     }
-    static bool running(AppWindow& a) { return a.pipeline_.running(); }
+    static bool running(AppWindow& a) { return a.engine_.pipeline_.running(); }
     // A RADIO'S RETUNE IS PACED (the retune coalescer): the command queues it
     // and the frame loop lands it with pollPendingRetune, every frame. The
     // drive has no frame loop, so it does the same until the centre is there.
     static bool settleRetune(AppWindow& a, double hz) {
         return waitFor([&a, hz] {
             a.pollPendingRetune();
-            return a.pipeline_.activeSource().centerFrequencyHz() == hz;
+            return a.engine_.pipeline_.activeSource().centerFrequencyHz() == hz;
         });
     }
-    static cascade::core::PluginApiCore& api(AppWindow& a) { return a.pluginUi_.api(); }
+    static cascade::core::PluginApiCore& api(AppWindow& a) { return a.engine_.pluginUi_.api(); }
 
     // State no command sets: the strings a reader passes through verbatim.
-    static void fixRecordDir(AppWindow& a) { a.recordDir_ = "/golden/recordings"; }
+    static void fixRecordDir(AppWindow& a) { a.engine_.recordDir_ = "/golden/recordings"; }
     static void setStrings(AppWindow& a) {
-        a.sourceError_ = "golden: the source said no";
-        a.recordError_ = "golden: the disk is full";
-        a.recordNotice_ = "golden: the take ended on purpose";
-        a.catalogStatus_ = "golden: 3 plugins";
-        a.catalogError_ = "golden: catalogue error";
-        a.installReport_ = "golden: installed";
-        a.installError_ = "golden: install failed";
+        a.engine_.sourceError_ = "golden: the source said no";
+        a.engine_.recordError_ = "golden: the disk is full";
+        a.engine_.recordNotice_ = "golden: the take ended on purpose";
+        a.engine_.catalogStatus_ = "golden: 3 plugins";
+        a.engine_.catalogError_ = "golden: catalogue error";
+        a.engine_.installReport_ = "golden: installed";
+        a.engine_.installError_ = "golden: install failed";
         a.tunerStyle_ = cascade::gui::TunerStyle::Neon;
         cascade::core::DecodedLine d;
         d.plugin = "Golden decoder";
         d.text = "a decoded line";
-        a.decoderLog_.push_back(d);
+        a.engine_.decoderLog_.push_back(d);
     }
     static void setTransmitPageOpen(AppWindow& a, bool on) { a.transmitOpen_ = on; }
 

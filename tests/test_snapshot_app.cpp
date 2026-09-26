@@ -190,10 +190,10 @@ namespace cascade::gui {
 
 struct AppWindowTestAccess {
     static void installHooks() {
-        AppWindow::testHooks_.pluginDir = &pluginDirHook;
-        AppWindow::testHooks_.makeDevice = &makeFake;
-        AppWindow::testHooks_.nativeScan = &fakeNativeScan;
-        AppWindow::testHooks_.soapyScan = &fakeSoapyScan;
+        cascade::engine::Engine::testHooks_.pluginDir = &pluginDirHook;
+        cascade::engine::Engine::testHooks_.makeDevice = &makeFake;
+        cascade::engine::Engine::testHooks_.nativeScan = &fakeNativeScan;
+        cascade::engine::Engine::testHooks_.soapyScan = &fakeSoapyScan;
     }
     static FoxCommandResult apply(AppWindow& a, const FoxCommand& c) { return a.applyCommand(c, {}); }
     static FoxCommandResult apply(AppWindow& a, const cmd::QueuedCommand& q) {
@@ -202,37 +202,37 @@ struct AppWindowTestAccess {
     static bool waitOpen(AppWindow& a) {
         return waitFor([&a] {
             a.pollSourceAsync();
-            return !a.deviceOpenPending_;
+            return !a.engine_.deviceOpenPending_;
         });
     }
     static bool sourceBusy(AppWindow& a) {
         a.pollSourceAsync();
-        return a.soapyScanPending_ || a.deviceOpenPending_;
+        return a.engine_.soapyScanPending_ || a.engine_.deviceOpenPending_;
     }
-    static void setRecordDir(AppWindow& a, const std::string& d) { a.recordDir_ = d; }
+    static void setRecordDir(AppWindow& a, const std::string& d) { a.engine_.recordDir_ = d; }
     static void setTransmitPageOpen(AppWindow& a, bool on) { a.transmitOpen_ = on; }
-    static bool haveTx(AppWindow& a) { return a.transmitter_.haveSink(); }
+    static bool haveTx(AppWindow& a) { return a.engine_.transmitter_.haveSink(); }
     static std::uint64_t addBookmark(AppWindow& a, const std::string& name, double hz, const char* mode) {
         cascade::core::Bookmark b;
         b.name = name;
         b.freqHz = hz;
         b.mode = mode;
         b.bandwidthHz = 10.0e3;
-        const int at = a.freqMgr_.add(b);
-        return a.freqMgr_.list()[static_cast<std::size_t>(at)].id;
+        const int at = a.engine_.freqMgr_.add(b);
+        return a.engine_.freqMgr_.list()[static_cast<std::size_t>(at)].id;
     }
-    static int modeIndex(AppWindow& a) { return a.modeIndex_; }
+    static int modeIndex(AppWindow& a) { return a.engine_.modeIndex_; }
     static cascade::net::RadioStatus webStatus(AppWindow& a) { return a.webStatusNow(); }
     static void webRequest(AppWindow& a, const cascade::net::ControlRequest& r) { a.applyControlRequest(r); }
-    static cascade::core::ReceiverSnapshot& snapshot(AppWindow& a) { return *a.receiverSnapshot_; }
+    static cascade::core::ReceiverSnapshot& snapshot(AppWindow& a) { return *a.engine_.receiverSnapshot_; }
     static void publish(AppWindow& a) { a.publishReceiverState(); }
     static std::size_t loadedDecoders(AppWindow& a) { return a.loadedDecoderCount(); }
     static std::size_t fedDecoders(AppWindow& a) { return a.fedDecoderCount(); }
-    static std::size_t runnerActive(AppWindow& a) { return a.pluginRunner_.activeCount(); }
-    static bool running(AppWindow& a) { return a.pipeline_.running(); }
+    static std::size_t runnerActive(AppWindow& a) { return a.engine_.pluginRunner_.activeCount(); }
+    static bool running(AppWindow& a) { return a.engine_.pipeline_.running(); }
     static cascade::core::PublishedState state(AppWindow& a) {
         cascade::core::PublishedState s;
-        const bool ok = a.receiverSnapshot_->read(s);
+        const bool ok = a.engine_.receiverSnapshot_->read(s);
         CHECK(ok);
         return s;
     }

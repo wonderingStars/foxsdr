@@ -55,25 +55,25 @@ bool AppWindow::biasTeeReachable() const {
     // can no longer confirm; the FAIL lamp beside it and the Source panel are
     // where a dead radio is reported, and the reopen that follows a driver
     // fault puts the key back with the radio.
-    return biasTeePanel_.present && device_ != nullptr && !device_->deviceDead() &&
-           withBiasTee(device_, [](auto&) { return true; });
+    return engine_.biasTeePanel_.present && engine_.device_ != nullptr && !engine_.device_->deviceDead() &&
+           withBiasTee(engine_.device_, [](auto&) { return true; });
 }
 
 cascade::gui::BiasTeePanel AppWindow::biasKeyPanel() const {
     if (!biasStandInActive()) {
-        cascade::gui::BiasTeePanel p = biasTeePanel_;
+        cascade::gui::BiasTeePanel p = engine_.biasTeePanel_;
         p.present = biasTeeReachable();
         return p;
     }
     cascade::gui::BiasTeePanel p;
     p.present = true;
-    p.shown = biasStandInOn_;
+    p.shown = engine_.biasStandInOn_;
     return p;
 }
 
 std::string AppWindow::biasKeyRadioNow() const {
     if (biasStandInActive()) { return biasKeyRadio(kStandInKind, kStandInArgs); }
-    return biasKeyRadio(sourceKind_, deviceArgs_);
+    return biasKeyRadio(engine_.sourceKind_, engine_.deviceArgs_);
 }
 
 bool AppWindow::biasKeyMayRememberNow() const {
@@ -82,17 +82,17 @@ bool AppWindow::biasKeyMayRememberNow() const {
     // A real radio: exactly when an "on" switched now will be kept and put
     // back at its next open (review round 2, L2) - which is also when the
     // session may skip the question next time (the gate's mayRemember).
-    return device_ != nullptr && biasTeeWillRestoreOn(biasTeePanel_, *device_, deviceArgs_);
+    return engine_.device_ != nullptr && biasTeeWillRestoreOn(engine_.biasTeePanel_, *engine_.device_, engine_.deviceArgs_);
 }
 
 void AppWindow::switchBiasTee(bool want) {
     if (biasStandInActive()) {
         // A stand-in driver: it takes the change, or refuses it and says so
         // exactly where a real driver's refusal is shown.
-        if (biasStandIn_ == BiasStandIn::Accept) {
-            biasStandInOn_ = want;
+        if (engine_.biasStandIn_ == BiasStandIn::Accept) {
+            engine_.biasStandInOn_ = want;
         } else {
-            sourceError_ = "stand-in bias tee (FOXSDR_FORCE_BIAS_KEY=refuse): switching the "
+            engine_.sourceError_ = "stand-in bias tee (FOXSDR_FORCE_BIAS_KEY=refuse): switching the "
                            "bias-T was refused";
         }
         return;
@@ -100,8 +100,8 @@ void AppWindow::switchBiasTee(bool want) {
     // The checkbox's own path, unchanged: request, then show the READBACK; a
     // refusal leaves the box, the key and the memory where they were.
     std::string err;
-    biasTeeTicked(biasTeePanel_, device_, deviceArgs_, want, &err);
-    if (!err.empty()) { sourceError_ = err; }
+    biasTeeTicked(engine_.biasTeePanel_, engine_.device_, engine_.deviceArgs_, want, &err);
+    if (!err.empty()) { engine_.sourceError_ = err; }
 }
 
 // THE KEY AND ITS QUESTION DECIDE; SET_BIAS_TEE SWITCHES. The gate (ask the
@@ -163,8 +163,8 @@ void AppWindow::drawBiasKeyConfirm() {
     // Which radio: the driver's own name for it.
     if (biasStandInActive()) {
         ImGui::TextUnformatted("stand-in radio (FOXSDR_FORCE_BIAS_KEY)");
-    } else if (device_ != nullptr) {
-        ImGui::TextUnformatted(device_->name());
+    } else if (engine_.device_ != nullptr) {
+        ImGui::TextUnformatted(engine_.device_->name());
     }
     // THE CHECKBOX'S OWN WARNING, word for word and already translated: the
     // one sentence that says why this is being asked.

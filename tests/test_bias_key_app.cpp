@@ -247,12 +247,12 @@ namespace cascade::gui {
 // The friend AppWindow names for its tests (see AppWindow::testHooks_).
 struct AppWindowTestAccess {
     static void installHooks() {
-        AppWindow::testHooks_.makeDevice = &makeFake;
-        AppWindow::testHooks_.nativeScan = &fakeScan;
+        cascade::engine::Engine::testHooks_.makeDevice = &makeFake;
+        cascade::engine::Engine::testHooks_.nativeScan = &fakeScan;
     }
     static bool waitOpen(AppWindow& a) {
         const auto t0 = std::chrono::steady_clock::now();
-        while (a.deviceOpenPending_) {
+        while (a.engine_.deviceOpenPending_) {
             a.pollSourceAsync();
             if (std::chrono::steady_clock::now() - t0 > std::chrono::seconds(20)) { return false; }
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
@@ -261,8 +261,8 @@ struct AppWindowTestAccess {
     }
     static bool selectNative(AppWindow& a, const std::string& args) {
         a.scanNative();
-        for (std::size_t i = 0; i < a.nativeDevices_.size(); ++i) {
-            if (a.nativeDevices_[i].args == args) {
+        for (std::size_t i = 0; i < a.engine_.nativeDevices_.size(); ++i) {
+            if (a.engine_.nativeDevices_[i].args == args) {
                 a.selectSource(AppWindow::kNativeRowBase + static_cast<int>(i));
                 return waitOpen(a);
             }
@@ -274,8 +274,8 @@ struct AppWindowTestAccess {
         // keeps: a row picked before the scan is renumbered by it, and the
         // next native pick would land on the "same" row and do nothing.
         a.scanNative();
-        a.soapyDevices_.clear();
-        a.soapyDevices_.push_back({label, args});
+        a.engine_.soapyDevices_.clear();
+        a.engine_.soapyDevices_.push_back({label, args});
         a.selectSource(a.soapyRowBase());
         return waitOpen(a);
     }
@@ -286,8 +286,8 @@ struct AppWindowTestAccess {
     static bool keyLit(AppWindow& a) { return a.biasKeyPanel().shown; }
     // THE CHECKBOX, as the Source panel draws it: shown and ticked from
     // biasTeePanel_ (the stand-in never reaches it).
-    static bool boxShown(AppWindow& a) { return a.biasTeePanel_.present; }
-    static bool boxTicked(AppWindow& a) { return a.biasTeePanel_.shown; }
+    static bool boxShown(AppWindow& a) { return a.engine_.biasTeePanel_.present; }
+    static bool boxTicked(AppWindow& a) { return a.engine_.biasTeePanel_.shown; }
     // A press of the key, and the two answers - the members the deck and the
     // dialog call.
     // A press and an answer SUBMIT a command since engine stage 1; the frame
@@ -306,34 +306,34 @@ struct AppWindowTestAccess {
     static void clearQueued(AppWindow& a) { a.biasKeyAskQueued_ = false; }
     // A tick or untick of the Source panel's checkbox.
     static void tick(AppWindow& a, bool want) { a.switchBiasTee(want); }
-    static const std::string& sourceError(AppWindow& a) { return a.sourceError_; }
-    static const std::string& kind(AppWindow& a) { return a.sourceKind_; }
-    static const std::string& args(AppWindow& a) { return a.deviceArgs_; }
-    static void clearSourceError(AppWindow& a) { a.sourceError_.clear(); }
+    static const std::string& sourceError(AppWindow& a) { return a.engine_.sourceError_; }
+    static const std::string& kind(AppWindow& a) { return a.engine_.sourceKind_; }
+    static const std::string& args(AppWindow& a) { return a.engine_.deviceArgs_; }
+    static void clearSourceError(AppWindow& a) { a.engine_.sourceError_.clear(); }
     // The HackRF driver the application opened, for its readback.
     static bool driverBiasT(AppWindow& a) {
-        auto* h = dynamic_cast<cascade::source::HackRfSource*>(a.device_);
+        auto* h = dynamic_cast<cascade::source::HackRfSource*>(a.engine_.device_);
         return h != nullptr && h->biasT();
     }
     // The open radio's bias tee as its OWN driver reports it, any family
     // (false when there is no radio or it has none).
     static bool radioBiasT(AppWindow& a) {
-        return a.device_ != nullptr &&
-               withBiasTee(a.device_, [](auto& d) { return d.biasT(); });
+        return a.engine_.device_ != nullptr &&
+               withBiasTee(a.engine_.device_, [](auto& d) { return d.biasT(); });
     }
     static std::string radioName(AppWindow& a) {
-        return a.device_ != nullptr ? std::string(a.device_->name()) : std::string("(none)");
+        return a.engine_.device_ != nullptr ? std::string(a.engine_.device_->name()) : std::string("(none)");
     }
     // What the application would save now, and a restore from it.
     static cascade::core::AppConfig config(AppWindow& a) { return a.currentConfig(); }
     static void restore(AppWindow& a, const cascade::core::AppConfig& cfg) { a.applyConfig(cfg); }
     static void seedMemory(AppWindow& a, const std::string& key, bool on) {
-        a.biasTeePanel_.remembered[key] = on;
+        a.engine_.biasTeePanel_.remembered[key] = on;
     }
     // Whether the dialog, drawn now, would PROMISE that the radio comes back
     // on at its next open (the restore sentence) - the member it draws from.
     static bool promisesRestore(AppWindow& a) { return a.biasKeyMayRememberNow(); }
-    static std::size_t memorySize(AppWindow& a) { return a.biasTeePanel_.remembered.size(); }
+    static std::size_t memorySize(AppWindow& a) { return a.engine_.biasTeePanel_.remembered.size(); }
 };
 
 }  // namespace cascade::gui

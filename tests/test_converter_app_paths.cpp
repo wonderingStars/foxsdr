@@ -252,19 +252,19 @@ namespace cascade::gui {
 // The friend AppWindow names for this test (see AppWindow::testHooks_).
 struct AppWindowTestAccess {
     static void installHooks() {
-        AppWindow::testHooks_.makeDevice = &makeFake;
-        AppWindow::testHooks_.nativeScan = &fakeScan;
+        cascade::engine::Engine::testHooks_.makeDevice = &makeFake;
+        cascade::engine::Engine::testHooks_.nativeScan = &fakeScan;
     }
 
     static void setConverter(AppWindow& a, const std::string& key, const ConverterSetting& s) {
-        a.converters_[key] = s;
+        a.engine_.converters_[key] = s;
     }
 
     // Waits for the worker open to resolve and applies it, as the frame loop
     // does. False when it never resolved.
     static bool waitOpen(AppWindow& a) {
         const auto t0 = std::chrono::steady_clock::now();
-        while (a.deviceOpenPending_) {
+        while (a.engine_.deviceOpenPending_) {
             a.pollSourceAsync();
             if (std::chrono::steady_clock::now() - t0 > std::chrono::seconds(20)) { return false; }
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
@@ -273,8 +273,8 @@ struct AppWindowTestAccess {
     }
 
     static int nativeRow(AppWindow& a, const std::string& args) {
-        for (std::size_t i = 0; i < a.nativeDevices_.size(); ++i) {
-            if (a.nativeDevices_[i].args == args) {
+        for (std::size_t i = 0; i < a.engine_.nativeDevices_.size(); ++i) {
+            if (a.engine_.nativeDevices_[i].args == args) {
                 return AppWindow::kNativeRowBase + static_cast<int>(i);
             }
         }
@@ -291,8 +291,8 @@ struct AppWindowTestAccess {
     }
 
     static bool selectSoapy(AppWindow& a, const std::string& args, const std::string& label) {
-        a.soapyDevices_.clear();
-        a.soapyDevices_.push_back({label, args});
+        a.engine_.soapyDevices_.clear();
+        a.engine_.soapyDevices_.push_back({label, args});
         a.selectSource(a.soapyRowBase());
         return waitOpen(a);
     }
@@ -301,28 +301,28 @@ struct AppWindowTestAccess {
     // what is under test).
     static void tune(AppWindow& a, double airCentreHz) { a.applyRetuneNow(airCentreHz); }
 
-    static double airCentre(AppWindow& a) { return a.pipeline_.activeSource().centerFrequencyHz(); }
+    static double airCentre(AppWindow& a) { return a.engine_.pipeline_.activeSource().centerFrequencyHz(); }
     static double counter(AppWindow& a) { return a.currentAbsoluteHz(); }
-    static void setVfo(AppWindow& a, double hz) { a.pipeline_.setVfoOffsetHz(hz); }
-    static double vfo(AppWindow& a) { return a.pipeline_.vfoOffsetHz(); }
-    static ConverterSetting live(AppWindow& a) { return a.pipeline_.converter(); }
-    static const std::string& kind(AppWindow& a) { return a.sourceKind_; }
+    static void setVfo(AppWindow& a, double hz) { a.engine_.pipeline_.setVfoOffsetHz(hz); }
+    static double vfo(AppWindow& a) { return a.engine_.pipeline_.vfoOffsetHz(); }
+    static ConverterSetting live(AppWindow& a) { return a.engine_.pipeline_.converter(); }
+    static const std::string& kind(AppWindow& a) { return a.engine_.sourceKind_; }
 
     static void restore(AppWindow& a, const cascade::core::AppConfig& cfg) { a.applyConfig(cfg); }
     static void reopen(AppWindow& a) { a.reopenAfterDriverFault(); }
     static void changeConverter(AppWindow& a, const ConverterSetting& s) { a.changeConverter(s); }
     static void scanNativeForTest(AppWindow& a) { a.scanNative(); }
     static std::string aliasNote(AppWindow& a) { return a.converterAliasNote(); }
-    static bool hasStored(AppWindow& a, const std::string& k) { return a.converters_.count(k) != 0; }
+    static bool hasStored(AppWindow& a, const std::string& k) { return a.engine_.converters_.count(k) != 0; }
     static ConverterSetting stored(AppWindow& a, const std::string& k) {
-        const auto it = a.converters_.find(k);
-        return it == a.converters_.end() ? ConverterSetting{} : it->second;
+        const auto it = a.engine_.converters_.find(k);
+        return it == a.engine_.converters_.end() ? ConverterSetting{} : it->second;
     }
     static void selectGenerator(AppWindow& a) { a.selectSource(0); }
     // What the radio itself was last told and kept (the raw source).
-    static double radioNow(AppWindow& a) { return a.pipeline_.rawSource().centerFrequencyHz(); }
+    static double radioNow(AppWindow& a) { return a.engine_.pipeline_.rawSource().centerFrequencyHz(); }
     // The note line under the counter (a coerced, refused or unreachable tune).
-    static std::string tuneNote(AppWindow& a) { return a.tuneMismatchNote_; }
+    static std::string tuneNote(AppWindow& a) { return a.engine_.tuneMismatchNote_; }
 
     // The Pluto row: selecting it only selects (see selectSource); Open
     // closes the radio in use and opens the board at the typed address.
@@ -331,7 +331,7 @@ struct AppWindowTestAccess {
         const int row = nativeRow(a, args);
         if (row < 0) { return false; }
         a.selectSource(row);
-        return a.sourceSel_ == row;
+        return a.engine_.sourceSel_ == row;
     }
     static bool openPluto(AppWindow& a, const std::string& uri) {
         std::snprintf(a.plutoUri_, sizeof(a.plutoUri_), "%s", uri.c_str());
@@ -344,8 +344,8 @@ struct AppWindowTestAccess {
                                                      double freqHz) {
         namespace pc = cascade::core::patch;
         a.patchSeeded_ = true;  // no starter patch: this test builds its own
-        const pc::NodeId id = a.patchGraph_.addNode(pc::NodeKind::Radio, "Radio");
-        if (pc::Node* n = a.patchGraph_.mutableNode(id)) {
+        const pc::NodeId id = a.engine_.patchGraph_.addNode(pc::NodeKind::Radio, "Radio");
+        if (pc::Node* n = a.engine_.patchGraph_.mutableNode(id)) {
             n->device = device;
             n->freqHz = freqHz;
             n->rateHz = 2.4e6;
@@ -354,7 +354,7 @@ struct AppWindowTestAccess {
         return id;
     }
     static const cascade::core::patch::Node* node(AppWindow& a, cascade::core::patch::NodeId id) {
-        return a.patchGraph_.find(id);
+        return a.engine_.patchGraph_.find(id);
     }
     // The page's starter patch, seeded as opening the page seeds it; returns
     // its Radio node (kNoNode when there is none).
@@ -362,14 +362,14 @@ struct AppWindowTestAccess {
         namespace pc = cascade::core::patch;
         a.patchSeeded_ = false;
         a.seedPatchIfNeeded();
-        for (const pc::Node& n : a.patchGraph_.nodes()) {
+        for (const pc::Node& n : a.engine_.patchGraph_.nodes()) {
             if (n.kind == pc::NodeKind::Radio) { return n.id; }
         }
         return pc::kNoNode;
     }
     // A centre typed on the node's face (or the panel): true when taken.
     static bool typeCentre(AppWindow& a, cascade::core::patch::NodeId id, double airHz) {
-        cascade::core::patch::Node* n = a.patchGraph_.mutableNode(id);
+        cascade::core::patch::Node* n = a.engine_.patchGraph_.mutableNode(id);
         return n != nullptr && a.setPatchRadioCentre(*n, airHz);
     }
     static std::string centreNote(AppWindow& a, cascade::core::patch::NodeId id) {
@@ -378,10 +378,10 @@ struct AppWindowTestAccess {
     }
     // One reconcile per frame, until the node's radio runs (or 20 s).
     static bool runPatchUntilOpen(AppWindow& a, cascade::core::patch::NodeId id) {
-        a.patchRunning_ = true;
-        a.patchWasOpen_ = true;  // the page's first-frame scan is not under test
+        a.engine_.patchRunning_ = true;
+        a.engine_.patchWasOpen_ = true;  // the page's first-frame scan is not under test
         const auto t0 = std::chrono::steady_clock::now();
-        while (a.patchRadios_.count(id) == 0) {
+        while (a.engine_.patchRadios_.count(id) == 0) {
             a.patchReconcile();
             if (std::chrono::steady_clock::now() - t0 > std::chrono::seconds(20)) { return false; }
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
@@ -391,13 +391,13 @@ struct AppWindowTestAccess {
         return true;
     }
     static double patchRadioAir(AppWindow& a, cascade::core::patch::NodeId id) {
-        const auto it = a.patchRadios_.find(id);
-        return it == a.patchRadios_.end() ? std::nan("") : it->second->centreHz();
+        const auto it = a.engine_.patchRadios_.find(id);
+        return it == a.engine_.patchRadios_.end() ? std::nan("") : it->second->centreHz();
     }
     // STOP on the patch page: every patch radio closes and the receiver gets
     // its radio back.
     static bool stopPatch(AppWindow& a) {
-        a.patchRunning_ = false;
+        a.engine_.patchRunning_ = false;
         a.patchStopAll(true);
         return waitOpen(a);
     }

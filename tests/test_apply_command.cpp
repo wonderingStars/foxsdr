@@ -296,11 +296,11 @@ namespace cascade::gui {
 // The friend AppWindow names for its tests (see AppWindow::testHooks_).
 struct AppWindowTestAccess {
     static void installHooks() {
-        AppWindow::testHooks_.makeDevice = &makeFake;
-        AppWindow::testHooks_.nativeScan = &fakeNativeScan;
-        AppWindow::testHooks_.soapyScan = &fakeSoapyScan;
-        AppWindow::testHooks_.pluginDir = &pluginDirHook;
-        AppWindow::testHooks_.soundCardBackend = &makeCard;
+        cascade::engine::Engine::testHooks_.makeDevice = &makeFake;
+        cascade::engine::Engine::testHooks_.nativeScan = &fakeNativeScan;
+        cascade::engine::Engine::testHooks_.soapyScan = &fakeSoapyScan;
+        cascade::engine::Engine::testHooks_.pluginDir = &pluginDirHook;
+        cascade::engine::Engine::testHooks_.soundCardBackend = &makeCard;
     }
     static FoxCommandResult apply(AppWindow& a, const FoxCommand& c, const std::string& lt = {}) {
         return a.applyCommand(c, lt);
@@ -311,88 +311,88 @@ struct AppWindowTestAccess {
     static void submit(AppWindow& a, const FoxCommand& c) { a.submitCommand(c); }
     static void submit(AppWindow& a, const cmd::QueuedCommand& q) { a.submitCommand(q); }
     static void drain(AppWindow& a) { a.drainLocalCommands(); }
-    static std::size_t queued(AppWindow& a) { return a.localCommands_.size(); }
+    static std::size_t queued(AppWindow& a) { return a.engine_.localCommands_.size(); }
 
     // The receiver.
-    static bool running(AppWindow& a) { return a.pipeline_.running(); }
-    static double centre(AppWindow& a) { return a.pipeline_.activeSource().centerFrequencyHz(); }
+    static bool running(AppWindow& a) { return a.engine_.pipeline_.running(); }
+    static double centre(AppWindow& a) { return a.engine_.pipeline_.activeSource().centerFrequencyHz(); }
     static double tuned(AppWindow& a) { return a.currentAbsoluteHz(); }
-    static double vfo(AppWindow& a) { return a.pipeline_.vfoOffsetHz(); }
-    static float vfoKhz(AppWindow& a) { return a.vfoOffsetKhz_; }
-    static double inputRate(AppWindow& a) { return a.pipeline_.inputRateHz(); }
-    static double channelRate(AppWindow& a) { return a.pipeline_.channelRateHz(); }
-    static int modeIndex(AppWindow& a) { return a.modeIndex_; }
-    static cascade::dsp::DemodMode demod(AppWindow& a) { return a.pipeline_.demodMode(); }
-    static double bw(AppWindow& a) { return a.vfoBandwidthHz_; }
-    static int bwIndex(AppWindow& a) { return a.bandwidthIndex_; }
-    static float squelch(AppWindow& a) { return a.squelchDb_; }
-    static float volume(AppWindow& a) { return a.volume_; }
-    static bool muted(AppWindow& a) { return a.userMuted_; }
-    static int deemph(AppWindow& a) { return a.deemphIndex_; }
-    static double deemphUs(AppWindow& a) { return a.pipeline_.deemphasisUs(); }
-    static bool stereo(AppWindow& a) { return a.stereoEnabled_ && a.pipeline_.stereoEnabled(); }
-    static bool stereoOff(AppWindow& a) { return !a.stereoEnabled_ && !a.pipeline_.stereoEnabled(); }
-    static bool nr(AppWindow& a) { return a.nrEnabled_; }
-    static bool nrPipe(AppWindow& a) { return a.pipeline_.noiseReductionEnabled(); }
-    static float nrStrength(AppWindow& a) { return a.nrStrength_; }
-    static float nrStrengthPipe(AppWindow& a) { return a.pipeline_.noiseReductionStrength(); }
-    static bool notch(AppWindow& a) { return a.notchEnabled_ && a.pipeline_.notchEnabled(); }
-    static bool notchOff(AppWindow& a) { return !a.notchEnabled_ && !a.pipeline_.notchEnabled(); }
-    static float notchHz(AppWindow& a) { return a.notchFreqHz_; }
-    static double notchHzPipe(AppWindow& a) { return a.pipeline_.notchFrequencyHz(); }
-    static float notchQ(AppWindow& a) { return a.notchQ_; }
-    static double notchQPipe(AppWindow& a) { return a.pipeline_.notchQ(); }
-    static bool autoNotch(AppWindow& a) { return a.autoNotch_ && a.pipeline_.autoNotchEnabled(); }
-    static float dbMin(AppWindow& a) { return a.dbMin_; }
-    static float dbMax(AppWindow& a) { return a.dbMax_; }
-    static const std::string& bandPlan(AppWindow& a) { return a.bandPlanSelection_; }
+    static double vfo(AppWindow& a) { return a.engine_.pipeline_.vfoOffsetHz(); }
+    static float vfoKhz(AppWindow& a) { return a.engine_.vfoOffsetKhz_; }
+    static double inputRate(AppWindow& a) { return a.engine_.pipeline_.inputRateHz(); }
+    static double channelRate(AppWindow& a) { return a.engine_.pipeline_.channelRateHz(); }
+    static int modeIndex(AppWindow& a) { return a.engine_.modeIndex_; }
+    static cascade::dsp::DemodMode demod(AppWindow& a) { return a.engine_.pipeline_.demodMode(); }
+    static double bw(AppWindow& a) { return a.engine_.vfoBandwidthHz_; }
+    static int bwIndex(AppWindow& a) { return a.engine_.bandwidthIndex_; }
+    static float squelch(AppWindow& a) { return a.engine_.squelchDb_; }
+    static float volume(AppWindow& a) { return a.engine_.volume_; }
+    static bool muted(AppWindow& a) { return a.engine_.userMuted_; }
+    static int deemph(AppWindow& a) { return a.engine_.deemphIndex_; }
+    static double deemphUs(AppWindow& a) { return a.engine_.pipeline_.deemphasisUs(); }
+    static bool stereo(AppWindow& a) { return a.engine_.stereoEnabled_ && a.engine_.pipeline_.stereoEnabled(); }
+    static bool stereoOff(AppWindow& a) { return !a.engine_.stereoEnabled_ && !a.engine_.pipeline_.stereoEnabled(); }
+    static bool nr(AppWindow& a) { return a.engine_.nrEnabled_; }
+    static bool nrPipe(AppWindow& a) { return a.engine_.pipeline_.noiseReductionEnabled(); }
+    static float nrStrength(AppWindow& a) { return a.engine_.nrStrength_; }
+    static float nrStrengthPipe(AppWindow& a) { return a.engine_.pipeline_.noiseReductionStrength(); }
+    static bool notch(AppWindow& a) { return a.engine_.notchEnabled_ && a.engine_.pipeline_.notchEnabled(); }
+    static bool notchOff(AppWindow& a) { return !a.engine_.notchEnabled_ && !a.engine_.pipeline_.notchEnabled(); }
+    static float notchHz(AppWindow& a) { return a.engine_.notchFreqHz_; }
+    static double notchHzPipe(AppWindow& a) { return a.engine_.pipeline_.notchFrequencyHz(); }
+    static float notchQ(AppWindow& a) { return a.engine_.notchQ_; }
+    static double notchQPipe(AppWindow& a) { return a.engine_.pipeline_.notchQ(); }
+    static bool autoNotch(AppWindow& a) { return a.engine_.autoNotch_ && a.engine_.pipeline_.autoNotchEnabled(); }
+    static float dbMin(AppWindow& a) { return a.engine_.dbMin_; }
+    static float dbMax(AppWindow& a) { return a.engine_.dbMax_; }
+    static const std::string& bandPlan(AppWindow& a) { return a.engine_.bandPlanSelection_; }
 
     // The recorder.
-    static void setRecordDir(AppWindow& a, const std::string& d) { a.recordDir_ = d; }
-    static bool recIq(AppWindow& a) { return a.iqRecorder_.recording(); }
-    static bool recAudio(AppWindow& a) { return a.audioRecorder_.recording(); }
+    static void setRecordDir(AppWindow& a, const std::string& d) { a.engine_.recordDir_ = d; }
+    static bool recIq(AppWindow& a) { return a.engine_.iqRecorder_.recording(); }
+    static bool recAudio(AppWindow& a) { return a.engine_.audioRecorder_.recording(); }
 
     // The source.
-    static std::size_t nativeCount(AppWindow& a) { return a.nativeDevices_.size(); }
-    static void clearNative(AppWindow& a) { a.nativeDevices_.clear(); }
-    static std::size_t soapyCount(AppWindow& a) { return a.soapyDevices_.size(); }
+    static std::size_t nativeCount(AppWindow& a) { return a.engine_.nativeDevices_.size(); }
+    static void clearNative(AppWindow& a) { a.engine_.nativeDevices_.clear(); }
+    static std::size_t soapyCount(AppWindow& a) { return a.engine_.soapyDevices_.size(); }
     static void clearSoapy(AppWindow& a) {
-        a.soapyDevices_.clear();
-        a.soapyScanned_ = false;
-        a.soapyScanPartial_ = false;
+        a.engine_.soapyDevices_.clear();
+        a.engine_.soapyScanned_ = false;
+        a.engine_.soapyScanPartial_ = false;
     }
     static void markSoapyScanned(AppWindow& a) {
-        a.soapyScanned_ = true;
-        a.soapyScanPartial_ = false;
+        a.engine_.soapyScanned_ = true;
+        a.engine_.soapyScanPartial_ = false;
     }
-    static bool soapyPending(AppWindow& a) { return a.soapyScanPending_; }
+    static bool soapyPending(AppWindow& a) { return a.engine_.soapyScanPending_; }
     static bool waitSoapy(AppWindow& a) {
         return waitFor([&a] {
             a.pollSourceAsync();
-            return !a.soapyScanPending_;
+            return !a.engine_.soapyScanPending_;
         });
     }
-    static bool networkUsrps(AppWindow& a) { return a.lookForNetworkUsrps_; }
+    static bool networkUsrps(AppWindow& a) { return a.engine_.lookForNetworkUsrps_; }
     static bool waitOpen(AppWindow& a) {
         return waitFor([&a] {
             a.pollSourceAsync();
-            return !a.deviceOpenPending_;
+            return !a.engine_.deviceOpenPending_;
         });
     }
     static bool waitCard(AppWindow& a) {
         return waitFor([&a] {
             a.pollSoundCard();
-            return !a.soundCardOpenPending_ && !a.soundCardScanPending_;
+            return !a.engine_.soundCardOpenPending_ && !a.engine_.soundCardScanPending_;
         });
     }
-    static const std::string& kind(AppWindow& a) { return a.sourceKind_; }
-    static int sourceSel(AppWindow& a) { return a.sourceSel_; }
-    static bool haveDevice(AppWindow& a) { return a.device_ != nullptr; }
-    static const std::string& sourceError(AppWindow& a) { return a.sourceError_; }
-    static void clearSourceError(AppWindow& a) { a.sourceError_.clear(); }
+    static const std::string& kind(AppWindow& a) { return a.engine_.sourceKind_; }
+    static int sourceSel(AppWindow& a) { return a.engine_.sourceSel_; }
+    static bool haveDevice(AppWindow& a) { return a.engine_.device_ != nullptr; }
+    static const std::string& sourceError(AppWindow& a) { return a.engine_.sourceError_; }
+    static void clearSourceError(AppWindow& a) { a.engine_.sourceError_.clear(); }
     static float gain(AppWindow& a, const char* name) {
-        for (std::size_t i = 0; i < a.deviceGainNames_.size() && i < a.deviceGainsDb_.size(); ++i) {
-            if (a.deviceGainNames_[i] == name) { return a.deviceGainsDb_[i]; }
+        for (std::size_t i = 0; i < a.engine_.deviceGainNames_.size() && i < a.engine_.deviceGainsDb_.size(); ++i) {
+            if (a.engine_.deviceGainNames_[i] == name) { return a.engine_.deviceGainsDb_[i]; }
         }
         return -999.0f;
     }
@@ -400,18 +400,18 @@ struct AppWindowTestAccess {
     // must report the failure, not crash the harness in the run that has
     // something to say.
     static double radioGain(AppWindow& a, const char* name) {
-        return a.device_ != nullptr ? a.device_->gainDb(name) : -999.0;
+        return a.engine_.device_ != nullptr ? a.engine_.device_->gainDb(name) : -999.0;
     }
-    static bool agc(AppWindow& a) { return a.device_ != nullptr && a.deviceAgc_ && a.device_->autoGain(); }
+    static bool agc(AppWindow& a) { return a.engine_.device_ != nullptr && a.engine_.deviceAgc_ && a.engine_.device_->autoGain(); }
     static bool agcOff(AppWindow& a) {
-        return a.device_ != nullptr && !a.deviceAgc_ && !a.device_->autoGain();
+        return a.engine_.device_ != nullptr && !a.engine_.deviceAgc_ && !a.engine_.device_->autoGain();
     }
-    static const std::string& antenna(AppWindow& a) { return a.deviceAntenna_; }
-    static double rate(AppWindow& a) { return a.pipeline_.activeSource().sampleRateHz(); }
-    static int rateIndex(AppWindow& a) { return a.deviceRateIndex_; }
-    static void setBiasStandIn(AppWindow& a) { a.biasStandIn_ = cascade::gui::BiasStandIn::Accept; }
-    static bool biasOn(AppWindow& a) { return a.biasStandInOn_; }
-    static cascade::core::ConverterSetting converter(AppWindow& a) { return a.pipeline_.converter(); }
+    static const std::string& antenna(AppWindow& a) { return a.engine_.deviceAntenna_; }
+    static double rate(AppWindow& a) { return a.engine_.pipeline_.activeSource().sampleRateHz(); }
+    static int rateIndex(AppWindow& a) { return a.engine_.deviceRateIndex_; }
+    static void setBiasStandIn(AppWindow& a) { a.engine_.biasStandIn_ = cascade::gui::BiasStandIn::Accept; }
+    static bool biasOn(AppWindow& a) { return a.engine_.biasStandInOn_; }
+    static cascade::core::ConverterSetting converter(AppWindow& a) { return a.engine_.pipeline_.converter(); }
     static void setSoundCardForm(AppWindow& a) {
         a.soundCard_ = cascade::source::SoundCardSettings{};
         a.soundCard_.device = "Fake Card";
@@ -423,10 +423,10 @@ struct AppWindowTestAccess {
         a.soundCard_.format = cascade::source::SoundCardFormat::IqStereo;
         a.soundCard_.iqCentreHz = 7.0e6;
     }
-    static double liveIqCentre(AppWindow& a) { return a.soundCardLive_.iqCentreHz; }
+    static double liveIqCentre(AppWindow& a) { return a.engine_.soundCardLive_.iqCentreHz; }
 
     // Bookmarks and scanner.
-    static const std::vector<cascade::core::Bookmark>& bookmarks(AppWindow& a) { return a.freqMgr_.list(); }
+    static const std::vector<cascade::core::Bookmark>& bookmarks(AppWindow& a) { return a.engine_.freqMgr_.list(); }
     static std::uint64_t addBookmark(AppWindow& a, const std::string& name, double hz, const char* mode,
                                      double bwHz, const std::string& group = {}) {
         cascade::core::Bookmark b;
@@ -435,10 +435,10 @@ struct AppWindowTestAccess {
         b.mode = mode;
         b.bandwidthHz = bwHz;
         b.group = group;
-        const int at = a.freqMgr_.add(b);
-        return a.freqMgr_.list()[static_cast<std::size_t>(at)].id;
+        const int at = a.engine_.freqMgr_.add(b);
+        return a.engine_.freqMgr_.list()[static_cast<std::size_t>(at)].id;
     }
-    static const std::string& importNote(AppWindow& a) { return a.bookmarkImportNote_; }
+    static const std::string& importNote(AppWindow& a) { return a.engine_.bookmarkImportNote_; }
     // The web remote's side: the snapshot a browser reads (and the row map it
     // leaves), and a request applied as applyWebControls applies it.
     static void publishWeb(AppWindow& a) { a.publishReceiverState(); }
@@ -454,7 +454,7 @@ struct AppWindowTestAccess {
         return -1;
     }
     static void webRequest(AppWindow& a, const cascade::net::ControlRequest& r) { a.applyControlRequest(r); }
-    static bool scanning(AppWindow& a) { return a.scanner_.active(); }
+    static bool scanning(AppWindow& a) { return a.engine_.scanner_.active(); }
     static double scanStartMhz(AppWindow& a) { return a.scanStartMhz_; }
     static double scanStopMhz(AppWindow& a) { return a.scanStopMhz_; }
     static double scanStepKhz(AppWindow& a) { return a.scanStepKhz_; }
@@ -463,7 +463,7 @@ struct AppWindowTestAccess {
 
     // Plugins and the store.
     static const cascade::core::LoadedPlugin* fixture(AppWindow& a) {
-        for (const cascade::core::LoadedPlugin& p : a.pluginHost_.plugins()) {
+        for (const cascade::core::LoadedPlugin& p : a.engine_.pluginHost_.plugins()) {
             if (p.loaded && p.name == "Stage One Fixture") { return &p; }
         }
         return nullptr;
@@ -478,29 +478,29 @@ struct AppWindowTestAccess {
         return p != nullptr && a.pluginMutes(*p);
     }
     static bool tuneGranted(AppWindow& a, const std::string& key) {
-        for (const std::string& k : a.pluginTuneAllowed_) {
+        for (const std::string& k : a.engine_.pluginTuneAllowed_) {
             if (k == key) { return true; }
         }
         return false;
     }
     static bool settingsGranted(AppWindow& a, const std::string& key) {
-        for (const std::string& k : a.pluginSettingsAllowed_) {
+        for (const std::string& k : a.engine_.pluginSettingsAllowed_) {
             if (k == key) { return true; }
         }
         return false;
     }
-    static std::size_t userPresetCount(AppWindow& a) { return a.userPresets_.size(); }
-    static const std::string& presetNote(AppWindow& a) { return a.presetNote_; }
-    static void setCatalogueUrl(AppWindow& a, const std::string& u) { a.pluginCatalogueUrl_ = u; }
-    static bool storeBusy(AppWindow& a) { return a.catalogPending_ || a.installPending_; }
+    static std::size_t userPresetCount(AppWindow& a) { return a.engine_.userPresets_.size(); }
+    static const std::string& presetNote(AppWindow& a) { return a.engine_.presetNote_; }
+    static void setCatalogueUrl(AppWindow& a, const std::string& u) { a.engine_.pluginCatalogueUrl_ = u; }
+    static bool storeBusy(AppWindow& a) { return a.engine_.catalogPending_ || a.engine_.installPending_; }
     static bool waitStore(AppWindow& a) {
         return waitFor([&a] {
             a.pollPluginAsync();
-            return !a.catalogPending_ && !a.installPending_;
+            return !a.engine_.catalogPending_ && !a.engine_.installPending_;
         });
     }
-    static const std::string& installError(AppWindow& a) { return a.installError_; }
-    static void clearInstallError(AppWindow& a) { a.installError_.clear(); }
+    static const std::string& installError(AppWindow& a) { return a.engine_.installError_; }
+    static void clearInstallError(AppWindow& a) { a.engine_.installError_.clear(); }
     static void injectCatalogue(AppWindow& a) {
         cascade::core::PluginCatalogEntry e;
         e.id = "stage1-catalogue-only";
@@ -517,35 +517,35 @@ struct AppWindowTestAccess {
         pf.sha256 = std::string(64, 'a');
         e.platforms.push_back(pf);
         e.compatible = true;
-        a.catalog_.clear();
-        a.catalog_.push_back(e);
+        a.engine_.catalog_.clear();
+        a.engine_.catalog_.push_back(e);
     }
-    static bool addAllActive(AppWindow& a) { return a.addAllRun_.active; }
-    static void stopAddAll(AppWindow& a) { a.addAllRun_ = AppWindow::AddAllRun{}; }
-    static const std::string& pluginDirNow(AppWindow& a) { return a.pluginDir_; }
+    static bool addAllActive(AppWindow& a) { return a.engine_.addAllRun_.active; }
+    static void stopAddAll(AppWindow& a) { a.engine_.addAllRun_ = AppWindow::AddAllRun{}; }
+    static const std::string& pluginDirNow(AppWindow& a) { return a.engine_.pluginDir_; }
 
     // The patch page, the transmitter, audio, position, GPS.
-    static bool patchRunning(AppWindow& a) { return a.patchRunning_; }
+    static bool patchRunning(AppWindow& a) { return a.engine_.patchRunning_; }
     static void setTransmitOpen(AppWindow& a, bool on) { a.transmitOpen_ = on; }
-    static bool haveTx(AppWindow& a) { return a.transmitter_.haveSink(); }
-    static std::int64_t remoteHoldMs(AppWindow& a) { return a.transmitter_.remoteHoldRemainingMs(); }
-    static int txMode(AppWindow& a) { return a.transmitModeIndex_; }
-    static bool txSplit(AppWindow& a) { return a.transmitSplit_; }
-    static double txSplitHz(AppWindow& a) { return a.transmitSplitHz_; }
-    static double txPower(AppWindow& a) { return a.transmitPowerDb_; }
-    static int txInput(AppWindow& a) { return a.transmitInputIndex_; }
-    static double txTone(AppWindow& a) { return a.transmitToneHz_; }
-    static bool txMonitor(AppWindow& a) { return a.transmitMonitor_; }
+    static bool haveTx(AppWindow& a) { return a.engine_.transmitter_.haveSink(); }
+    static std::int64_t remoteHoldMs(AppWindow& a) { return a.engine_.transmitter_.remoteHoldRemainingMs(); }
+    static int txMode(AppWindow& a) { return a.engine_.transmitModeIndex_; }
+    static bool txSplit(AppWindow& a) { return a.engine_.transmitSplit_; }
+    static double txSplitHz(AppWindow& a) { return a.engine_.transmitSplitHz_; }
+    static double txPower(AppWindow& a) { return a.engine_.transmitPowerDb_; }
+    static int txInput(AppWindow& a) { return a.engine_.transmitInputIndex_; }
+    static double txTone(AppWindow& a) { return a.engine_.transmitToneHz_; }
+    static bool txMonitor(AppWindow& a) { return a.engine_.transmitMonitor_; }
     static const std::string& txArgs(AppWindow& a) { return a.transmitArgs_; }
-    static double txFrequency(AppWindow& a) { return a.transmitter_.frequencyHz(); }
+    static double txFrequency(AppWindow& a) { return a.engine_.transmitter_.frequencyHz(); }
     static void addAudioDevice(AppWindow& a, int paIndex, const char* name) {
-        a.devices_.push_back({paIndex, name, false});
+        a.engine_.devices_.push_back({paIndex, name, false});
     }
-    static int audioDeviceIndex(AppWindow& a) { return a.deviceIndex_; }
+    static int audioDeviceIndex(AppWindow& a) { return a.engine_.deviceIndex_; }
     static bool positionSet(AppWindow& a, double lat, double lon) {
-        return a.rxSet_ && a.rxLat_ == lat && a.rxLon_ == lon;
+        return a.engine_.rxSet_ && a.engine_.rxLat_ == lat && a.engine_.rxLon_ == lon;
     }
-    static bool gpsListening(AppWindow& a) { return a.gpsReader_.listening(); }
+    static bool gpsListening(AppWindow& a) { return a.engine_.gpsReader_.listening(); }
 };
 
 }  // namespace cascade::gui

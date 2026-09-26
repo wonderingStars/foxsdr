@@ -257,8 +257,8 @@ namespace cascade::gui {
 // The friend AppWindow names for its tests (see AppWindow::testHooks_).
 struct AppWindowTestAccess {
     static void installHooks() {
-        AppWindow::testHooks_.soundCardBackend = &makeCard;
-        AppWindow::testHooks_.nativeScan = &fakeScan;
+        cascade::engine::Engine::testHooks_.soundCardBackend = &makeCard;
+        cascade::engine::Engine::testHooks_.nativeScan = &fakeScan;
     }
 
     static constexpr int kSoundCardRow = AppWindow::kSoundCardRow;
@@ -267,7 +267,7 @@ struct AppWindowTestAccess {
     // Collects scans and opens as the frame loop does. False on a timeout.
     static bool settle(AppWindow& a) {
         const auto t0 = std::chrono::steady_clock::now();
-        while (a.soundCardOpenPending_ || a.soundCardScanPending_) {
+        while (a.engine_.soundCardOpenPending_ || a.engine_.soundCardScanPending_) {
             a.pollSoundCard();
             if (std::chrono::steady_clock::now() - t0 > std::chrono::seconds(20)) { return false; }
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
@@ -280,7 +280,7 @@ struct AppWindowTestAccess {
     }
     // The Source section's Open with these settings on the Sound card row.
     static void startOpen(AppWindow& a, const SoundCardSettings& s) {
-        a.sourceSel_ = AppWindow::kSoundCardRow;
+        a.engine_.sourceSel_ = AppWindow::kSoundCardRow;
         a.soundCard_ = s;
         a.launchSoundCardOpen(false, s);
     }
@@ -288,40 +288,40 @@ struct AppWindowTestAccess {
         startOpen(a, s);
         return settle(a);
     }
-    static bool pending(AppWindow& a) { return a.soundCardOpenPending_; }
+    static bool pending(AppWindow& a) { return a.engine_.soundCardOpenPending_; }
     // The Source section's controls, edited and not Opened.
     static void setSection(AppWindow& a, const SoundCardSettings& s) { a.soundCard_ = s; }
     static SoundCardSettings section(AppWindow& a) { return a.soundCard_; }
-    static SoundCardSettings liveCard(AppWindow& a) { return a.soundCardLive_; }
-    static std::string err(AppWindow& a) { return a.sourceError_; }
-    static std::string keepKind(AppWindow& a) { return a.restoreKeep_.kind; }
-    static std::string keepLabel(AppWindow& a) { return a.restoreKeepLabel_; }
-    static double rateNow(AppWindow& a) { return a.pipeline_.activeSource().sampleRateHz(); }
+    static SoundCardSettings liveCard(AppWindow& a) { return a.engine_.soundCardLive_; }
+    static std::string err(AppWindow& a) { return a.engine_.sourceError_; }
+    static std::string keepKind(AppWindow& a) { return a.engine_.restoreKeep_.kind; }
+    static std::string keepLabel(AppWindow& a) { return a.engine_.restoreKeepLabel_; }
+    static double rateNow(AppWindow& a) { return a.engine_.pipeline_.activeSource().sampleRateHz(); }
     // The "Receives X to Y." line under the Source section's controls.
     static std::string receives(AppWindow& a) { return a.soundCardReceivesText(); }
     // THE PATCH PAGE takes the receiver's card when the patch starts (one
     // reconcile, as the first frame of a running patch), and hands it back
     // on STOP. The page's first-frame scan is not under test.
     static void startPatch(AppWindow& a) {
-        a.patchRunning_ = true;
-        a.patchWasOpen_ = true;
+        a.engine_.patchRunning_ = true;
+        a.engine_.patchWasOpen_ = true;
         a.patchReconcile();
     }
-    static bool lent(AppWindow& a) { return a.patchMainKeep_.valid; }
+    static bool lent(AppWindow& a) { return a.engine_.patchMainKeep_.valid; }
     static bool stopPatch(AppWindow& a) {
-        a.patchRunning_ = false;
+        a.engine_.patchRunning_ = false;
         a.patchStopAll(true);
         return settle(a);
     }
     static void restore(AppWindow& a, const cascade::core::AppConfig& cfg) { a.applyConfig(cfg); }
     static cascade::core::AppConfig saved(AppWindow& a) { return a.currentConfig(); }
-    static const std::string& kind(AppWindow& a) { return a.sourceKind_; }
+    static const std::string& kind(AppWindow& a) { return a.engine_.sourceKind_; }
 
     // The Source combo.
-    static int sel(AppWindow& a) { return a.sourceSel_; }
-    static void setSel(AppWindow& a, int row) { a.sourceSel_ = row; }
+    static int sel(AppWindow& a) { return a.engine_.sourceSel_; }
+    static void setSel(AppWindow& a, int row) { a.engine_.sourceSel_ = row; }
     static void setSoapy(AppWindow& a, std::vector<cascade::source::SoapyDeviceInfo> v) {
-        a.soapyDevices_ = std::move(v);
+        a.engine_.soapyDevices_ = std::move(v);
     }
     static int soapyRowBase(AppWindow& a) { return a.soapyRowBase(); }
     static std::vector<SourceRowKey> rowKeys(AppWindow& a) { return a.sourceRowKeys(); }
@@ -333,45 +333,45 @@ struct AppWindowTestAccess {
 
     // The installed card, read by the test thread (the receiver is stopped).
     static bool cardDead(AppWindow& a) {
-        auto* dev = dynamic_cast<cascade::source::DeviceSource*>(&a.pipeline_.rawSource());
+        auto* dev = dynamic_cast<cascade::source::DeviceSource*>(&a.engine_.pipeline_.rawSource());
         return dev != nullptr && dev->deviceDead();
     }
     // What the receiver's source thread does, done by the test thread: the
     // card is started (a stopped source reads nothing) and then read.
-    static void startCard(AppWindow& a) { (void)a.pipeline_.rawSource().start(); }
+    static void startCard(AppWindow& a) { (void)a.engine_.pipeline_.rawSource().start(); }
     static void readOnce(AppWindow& a) {
         std::complex<float> buf[256];
-        (void)a.pipeline_.rawSource().read(buf, 256);
+        (void)a.engine_.pipeline_.rawSource().read(buf, 256);
     }
 
     // The converter.
     static void setConverter(AppWindow& a, const std::string& key, const ConverterSetting& s) {
-        a.converters_[key] = s;
+        a.engine_.converters_[key] = s;
     }
     static ConverterSetting stored(AppWindow& a, const std::string& key) {
-        const auto it = a.converters_.find(key);
-        return it == a.converters_.end() ? ConverterSetting{} : it->second;
+        const auto it = a.engine_.converters_.find(key);
+        return it == a.engine_.converters_.end() ? ConverterSetting{} : it->second;
     }
     static void changeConverter(AppWindow& a, const ConverterSetting& s) { a.changeConverter(s); }
-    static ConverterSetting live(AppWindow& a) { return a.pipeline_.converter(); }
+    static ConverterSetting live(AppWindow& a) { return a.engine_.pipeline_.converter(); }
     static std::string keyNow(AppWindow& a) { return a.converterRadioKeyNow(); }
     // The converter a patch radio with this key is given.
     static ConverterSetting forKey(AppWindow& a, const std::string& key) { return a.converterForKey(key); }
     static std::vector<ConverterMode> offered(AppWindow& a) { return a.converterModesOffered(); }
     static std::string unusableNote(AppWindow& a) { return a.converterUnusableNote(); }
-    static double airCentre(AppWindow& a) { return a.pipeline_.activeSource().centerFrequencyHz(); }
-    static double radioNow(AppWindow& a) { return a.pipeline_.rawSource().centerFrequencyHz(); }
+    static double airCentre(AppWindow& a) { return a.engine_.pipeline_.activeSource().centerFrequencyHz(); }
+    static double radioNow(AppWindow& a) { return a.engine_.pipeline_.rawSource().centerFrequencyHz(); }
     static double counter(AppWindow& a) { return a.currentAbsoluteHz(); }
-    static void setVfo(AppWindow& a, double hz) { a.pipeline_.setVfoOffsetHz(hz); }
-    static void setBandwidth(AppWindow& a, double hz) { a.vfoBandwidthHz_ = hz; }
-    static std::string tuneNote(AppWindow& a) { return a.tuneMismatchNote_; }
+    static void setVfo(AppWindow& a, double hz) { a.engine_.pipeline_.setVfoOffsetHz(hz); }
+    static void setBandwidth(AppWindow& a, double hz) { a.engine_.vfoBandwidthHz_ = hz; }
+    static std::string tuneNote(AppWindow& a) { return a.engine_.tuneMismatchNote_; }
     // A tune by the counter, a bookmark or a preset (retuneSourceHz).
     static void retune(AppWindow& a, double centreHz) { a.retuneSourceHz(centreHz, false); }
     // The I/Q centre box, as drawSoundCardControls applies it to a running
     // I/Q card.
     static void typeIqCentre(AppWindow& a, double hz) {
         a.soundCard_.iqCentreHz = hz;
-        a.soundCardLive_.iqCentreHz = hz;
+        a.engine_.soundCardLive_.iqCentreHz = hz;
         a.applyRetuneNow(hz, false);
     }
 };

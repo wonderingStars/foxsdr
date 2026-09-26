@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "gui/app_window.hpp"
+#include "engine/receiver_tables.hpp"
 #include "core/patch_io.hpp"
 #include "core/patch_levels.hpp"
 #include "core/patch_plan.hpp"
@@ -222,12 +223,9 @@ void drainSoapyScan(Fut& f) {
 // know how wide a row is, and a column width kept private here is a column
 // width nothing can check against.
 
-// Pipeline configuration. 2 MS/s at FFT 1024 publishes far more frames than
-// the GUI's ~60 fps polls; the latest-frame slot in Pipeline absorbs the
-// difference by design. Alpha 0.5 smooths the trace without visible lag.
-constexpr double kSampleRateHz = 2'000'000.0;
-constexpr std::size_t kFftSize = 1024;
-constexpr float kAveragingAlpha = 0.5f;
+// The pipeline configuration (kSampleRateHz, kFftSize, kAveragingAlpha) is in
+// engine/receiver_tables.hpp: the Engine builds the Pipeline with it, and the
+// waterfall below is sized from the same FFT length.
 // Waterfall history depth: 512 lines at one line per GUI frame is ~8.5 s of
 // scroll-back, plenty for a demo signal while keeping the texture small.
 constexpr int kWaterfallHistory = 512;
@@ -928,8 +926,8 @@ const char* scannerStateName(cascade::core::Scanner::State s) {
 }  // namespace
 
 AppWindow::AppWindow(std::string configPath, bool announceConfig)
-    : pipeline_(cascade::core::Pipeline::Config{kSampleRateHz, kFftSize, kAveragingAlpha,
-                                                /*audioEnabled=*/true}),
+    : engineHolder_(std::make_unique<cascade::engine::Engine>()),
+      engine_(*engineHolder_),
       spectrum_(std::make_unique<SpectrumView>()),
       waterfall_(std::make_unique<WaterfallView>(static_cast<int>(kFftSize), kWaterfallHistory)),
       // The plugin store's view and both windows' decks. Created here, where
@@ -942,32 +940,32 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
       fittedDeck_(std::make_unique<FittedModulesDeck>()) {
     configPath_ = std::move(configPath);
     configAnnounce_ = announceConfig;
-    recordDir_ = defaultRecordDir();
+    engine_.recordDir_ = defaultRecordDir();
     // Demo signal until real sources land (P4): two tones at distinct offsets
     // and levels over a noise floor, so both display axes are visibly
     // exercised — frequency (two peaks left and right of center) and
     // amplitude (different heights / waterfall colors).
-    cascade::source::SigGen& gen = pipeline_.sigGen();
+    cascade::source::SigGen& gen = engine_.pipeline_.sigGen();
     gen.setTone(0, 300000.0, -30.0f);
     gen.setTone(1, -500000.0, -45.0f);
     gen.setNoiseFloorDb(-90.0f);
-    spectrum_->setRange(dbMin_, dbMax_);
+    spectrum_->setRange(engine_.dbMin_, engine_.dbMax_);
 
     // Park the VFO on demo tone 0 so the receiver is tuned to something from
     // the first Play: WFM (the default mode) renders an unmodulated carrier
     // as near-silence, and switching to CW yields the 700 Hz sidetone.
-    pipeline_.setVfoOffsetHz(1000.0 * static_cast<double>(vfoOffsetKhz_));
-    pipeline_.audio().setVolume(volume_);
+    engine_.pipeline_.setVfoOffsetHz(1000.0 * static_cast<double>(engine_.vfoOffsetKhz_));
+    engine_.pipeline_.audio().setVolume(engine_.volume_);
     // Push every P7 mirror once so the pipeline and the panels start in
     // agreement even when no config file exists (the pipeline's own defaults
     // match these, so this is belt and braces rather than a fix-up).
-    pipeline_.setStereoEnabled(stereoEnabled_);
-    pipeline_.setNoiseReductionEnabled(nrEnabled_);
-    pipeline_.setNoiseReductionStrength(nrStrength_);
-    pipeline_.setNotchEnabled(notchEnabled_);
-    pipeline_.setNotchFrequencyHz(static_cast<double>(notchFreqHz_));
-    pipeline_.setNotchQ(static_cast<double>(notchQ_));
-    pipeline_.setAutoNotchEnabled(autoNotch_);
+    engine_.pipeline_.setStereoEnabled(engine_.stereoEnabled_);
+    engine_.pipeline_.setNoiseReductionEnabled(engine_.nrEnabled_);
+    engine_.pipeline_.setNoiseReductionStrength(engine_.nrStrength_);
+    engine_.pipeline_.setNotchEnabled(engine_.notchEnabled_);
+    engine_.pipeline_.setNotchFrequencyHz(static_cast<double>(engine_.notchFreqHz_));
+    engine_.pipeline_.setNotchQ(static_cast<double>(engine_.notchQ_));
+    engine_.pipeline_.setAutoNotchEnabled(engine_.autoNotch_);
     // Optional program data / optional user code. Both are silent no-ops when
     // their directory is absent, which is the normal case when running out of
     // a build tree — and every bounded --frames CI run takes this path.
@@ -977,8 +975,8 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
     // a config restore if the user (or an enterprise deployment) changed it.
     // Setting it here is NOT a fetch: nothing contacts the origin until CHECK
     // NOW is pressed in the plugin store window.
-    pluginCatalogueUrl_ = cascade::core::AppConfig{}.pluginCatalogueUrl;
-    cascade::core::formatUtf8(pluginUrlBuf_, sizeof(pluginUrlBuf_), "%s", pluginCatalogueUrl_.c_str());
+    engine_.pluginCatalogueUrl_ = cascade::core::AppConfig{}.pluginCatalogueUrl;
+    cascade::core::formatUtf8(pluginUrlBuf_, sizeof(pluginUrlBuf_), "%s", engine_.pluginCatalogueUrl_.c_str());
     // DELIBERATELY no SoapySDR enumeration here. Enumeration loads vendor
     // modules (SoapyUHD -> uhd.dll -> libusb) whose USB discovery faulted
     // in-process in ~2% of measured `--frames 1` runs (0xC0000005 inside
@@ -1018,11 +1016,11 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
     // opener is Pipeline's, packaged so it can outlive this window, and the
     // hooks are the watchdog's for the bounded wait the requesting frame
     // spends. Bound here, before anything can ask for a device.
-    audioOpen_.bind(pipeline_.audioOpener(), [this] { watchdog_.pause(); },
+    engine_.audioOpen_.bind(engine_.pipeline_.audioOpener(), [this] { watchdog_.pause(); },
                     [this] { watchdog_.resume(); });
     // And the microphone, for the same reason: waveInOpen has no timeout
     // either. The opener is the Transmitter's and owns the microphone.
-    micOpen_.bind(transmitter_.microphoneOpener(), [this] { watchdog_.pause(); },
+    engine_.micOpen_.bind(engine_.transmitter_.microphoneOpener(), [this] { watchdog_.pause(); },
                   [this] { watchdog_.resume(); });
 
     // THE CONFIG WRITE IS BLOCKING WORK AND DOES NOT BELONG ON THIS THREAD
@@ -1032,11 +1030,11 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
     // blocks the requesting frame, so there is nothing here to bracket.
     configWriter_.bind(cascade::core::ConfigStore::writeFile);
 
-    devices_ = pipeline_.audio().listOutputDevices();
-    for (int i = 0; i < static_cast<int>(devices_.size()); ++i) {
-        if (devices_[static_cast<std::size_t>(i)].isDefault) { deviceIndex_ = i; }
+    engine_.devices_ = engine_.pipeline_.audio().listOutputDevices();
+    for (int i = 0; i < static_cast<int>(engine_.devices_.size()); ++i) {
+        if (engine_.devices_[static_cast<std::size_t>(i)].isDefault) { engine_.deviceIndex_ = i; }
     }
-    if (deviceIndex_ < 0 && !devices_.empty()) { deviceIndex_ = 0; }
+    if (engine_.deviceIndex_ < 0 && !engine_.devices_.empty()) { engine_.deviceIndex_ = 0; }
 
     // --- Config restore (P5) ------------------------------------------------
     // Load semantics per ConfigStore: missing file -> defaults + true; a
@@ -1066,8 +1064,8 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
             // the active source reports — not an echo of the file.
             if (loaded) {
                 std::printf("config applied: mode=%s center=%.0f\n",
-                            kModeNames[modeIndex_],
-                            pipeline_.activeSource().centerFrequencyHz());
+                            kModeNames[engine_.modeIndex_],
+                            engine_.pipeline_.activeSource().centerFrequencyHz());
             } else {
                 std::printf("config applied: defaults (%s)\n", err.c_str());
             }
@@ -1083,9 +1081,9 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
         // list); a damaged file surfaces its reason in red in the Bookmarks
         // section, exactly like Source errors — no stdout/stderr, so the
         // config-test diagnostic contract stays byte-identical.
-        bookmarkPath_ = cascade::core::FreqManager::defaultPath();
+        engine_.bookmarkPath_ = cascade::core::FreqManager::defaultPath();
         std::string bmErr;
-        if (!freqMgr_.load(bookmarkPath_, bmErr)) { bookmarkError_ = bmErr; }
+        if (!engine_.freqMgr_.load(engine_.bookmarkPath_, bmErr)) { engine_.bookmarkError_ = bmErr; }
     }
 }
 
@@ -1110,7 +1108,7 @@ AppWindow::~AppWindow() {
     // thread-safe by contract and makes the worker fail out with "cancelled",
     // deleting its temp file on the way — so teardown stays bounded and no
     // partial DLL is left behind. Harmless when nothing is running.
-    pluginRepo_.cancel();
+    engine_.pluginRepo_.cancel();
 
     // The app-update download is the same problem and needs its own flag:
     // it runs through the STATIC fetch helper, which has no PluginRepo
@@ -1142,10 +1140,10 @@ AppWindow::~AppWindow() {
     // call. reap() spends a short grace and then abandons the worker; it is
     // safe to abandon because the opener holds the sink alive by shared_ptr
     // (see Pipeline::audioOpener).
-    audioOpen_.reap();
+    engine_.audioOpen_.reap();
     // The microphone's gate, same argument: waveInOpen has no timeout either,
     // and Transmitter::microphoneOpener owns the microphone it opens.
-    micOpen_.reap();
+    engine_.micOpen_.reap();
 
     // The GPS reader's thread, if a read is still running when the window is
     // destroyed without run()'s teardown (a failed backend init, a test that
@@ -1155,7 +1153,7 @@ AppWindow::~AppWindow() {
     // the port driver's open - after which the worker is abandoned to finish
     // on its own, not joined, so a Bluetooth port whose puck is off cannot
     // hold this destructor for the length of an RFCOMM connect attempt.
-    gpsReader_.stop();
+    engine_.gpsReader_.stop();
 
     // And the same again for the lazy device SCAN, which blocks in
     // SoapySDR::Device::enumerate() and is the likelier of the two to be in
@@ -1419,7 +1417,7 @@ int AppWindow::run(int frames) {
         if (hook != nullptr && *hook != '\0') { pluginTestHook_ = hook; }
         // The deck's bias tee stand-in (engine/bias_tee.hpp, biasStandInFor):
         // bounded runs only, for the same reason as the script below.
-        biasStandIn_ = cascade::gui::biasStandInFor(std::getenv("FOXSDR_FORCE_BIAS_KEY"), true);
+        engine_.biasStandIn_ = cascade::gui::biasStandInFor(std::getenv("FOXSDR_FORCE_BIAS_KEY"), true);
         // The scripted pointer (gui/input_script.hpp). Bounded runs only, so
         // an interactive session can never be driven by a stray variable.
         if (const char* script = std::getenv("FOXSDR_INPUT_SCRIPT");
@@ -1490,8 +1488,8 @@ int AppWindow::run(int frames) {
             }
             cascade::core::diagLogf("gps: startup read requested by FOXSDR_GPS_PORT on %s at %d",
                                     cascade::core::loggableSerialPortName(hookPort).c_str(), baud);
-            gpsRefusal_.clear();
-            gpsReader_.start({hookPort, baud, cascade::core::GpsReader::kDefaultTimeoutS});
+            engine_.gpsRefusal_.clear();
+            engine_.gpsReader_.start({hookPort, baud, cascade::core::GpsReader::kDefaultTimeoutS});
         }
     }
 
@@ -1510,8 +1508,8 @@ int AppWindow::run(int frames) {
         // first-poll beat at the LIVE endpoint. One machine running one copy
         // read as four "running right now". configure() still refuses an
         // empty id, so an opted-out interactive run arms nothing here either.
-        telemetryHeartbeat_.configure(cascade::core::telemetryEndpoint(),
-                                      telemetryInstallId_, cascade::versionString());
+        engine_.telemetryHeartbeat_.configure(cascade::core::telemetryEndpoint(),
+                                      engine_.telemetryInstallId_, cascade::versionString());
     }
 
     // DIAGNOSTICS, armed here rather than in the constructor: the context has
@@ -1639,9 +1637,9 @@ int AppWindow::run(int frames) {
         // the button press a headless run cannot make.
         if (!pluginTestHook_.empty() && !pluginTestStarted_) {
             pluginTestStarted_ = true;
-            pluginCatalogueUrl_ = pluginTestHook_;
+            engine_.pluginCatalogueUrl_ = pluginTestHook_;
             cascade::core::formatUtf8(pluginUrlBuf_, sizeof(pluginUrlBuf_), "%s",
-                          pluginCatalogueUrl_.c_str());
+                          engine_.pluginCatalogueUrl_.c_str());
             pluginBrowseOpen_ = true;
             startCatalogFetch();
         }
@@ -1697,9 +1695,9 @@ int AppWindow::run(int frames) {
                 if (const char* want = std::getenv("FOXSDR_SOURCE_DEVICE");
                     want != nullptr && *want != '\0') {
                     scanNative();
-                    for (std::size_t i = 0; i < nativeDevices_.size(); ++i) {
-                        if (cascade::core::patch::makeDeviceKey(nativeDevices_[i].driver,
-                                                                nativeDevices_[i].args) == want) {
+                    for (std::size_t i = 0; i < engine_.nativeDevices_.size(); ++i) {
+                        if (cascade::core::patch::makeDeviceKey(engine_.nativeDevices_[i].driver,
+                                                                engine_.nativeDevices_[i].args) == want) {
                             // The row's own command, as a click would send it.
                             submitCommand(cascade::core::cmd::makeText(
                                 FOXAPI_OP_SELECT_SOURCE,
@@ -1729,7 +1727,7 @@ int AppWindow::run(int frames) {
             // After the radio has finished opening: a device opens off the GUI
             // thread and its open re-applies the centre it had, so a tune made
             // before that lands was simply overwritten (the first capture sweep).
-            if (!pressPresetByEnvDone_ && rendered >= 30 && !deviceOpenPending_) {
+            if (!pressPresetByEnvDone_ && rendered >= 30 && !engine_.deviceOpenPending_) {
                 pressPresetByEnvDone_ = true;
                 // FOXSDR_TUNE_HZ (captures): where the receiver listens, through
                 // the same absolute-tune path the frequency dial uses.
@@ -1741,7 +1739,7 @@ int AppWindow::run(int frames) {
                 }
                 if (const char* want = std::getenv("FOXSDR_PRESS_PRESET"); want != nullptr && *want != '\0') {
                     bool found = false;
-                    for (const cascade::core::LoadedPlugin& lp : pluginHost_.plugins()) {
+                    for (const cascade::core::LoadedPlugin& lp : engine_.pluginHost_.plugins()) {
                         if (lp.name != want) { continue; }
                         found = true;
                         const std::vector<cascade::gui::IndexedPreset> ps = validatedPresets(lp);
@@ -1775,13 +1773,13 @@ int AppWindow::run(int frames) {
             // through the same function the keys on the page call.
             if (!patchStartedByEnv_) {
                 patchStartedByEnv_ = true;
-                if (std::getenv("FOXSDR_PATCH_START") != nullptr) { patchRunning_ = true; }
+                if (std::getenv("FOXSDR_PATCH_START") != nullptr) { engine_.patchRunning_ = true; }
             }
             if (const char* at = std::getenv("FOXSDR_PATCH_RUN_AT"); at != nullptr && *at != '\0') {
                 const std::string list = std::string(",") + at + ",";
                 if (list.find("," + std::to_string(rendered) + ",") != std::string::npos) {
                     // The dome's own command.
-                    submitCommand(cascade::core::cmd::makeInt(FOXAPI_OP_PATCH_RUN, patchRunning_ ? 0 : 1));
+                    submitCommand(cascade::core::cmd::makeInt(FOXAPI_OP_PATCH_RUN, engine_.patchRunning_ ? 0 : 1));
                 }
             }
             if (const char* at = std::getenv("FOXSDR_PATCH_ALLOFF_AT");
@@ -1809,7 +1807,7 @@ int AppWindow::run(int frames) {
                     cascade::core::patch::LoadResult pr =
                         cascade::core::patch::parse(text);
                     if (pr.ok) {
-                        patchGraph_ = std::move(pr.graph);
+                        engine_.patchGraph_ = std::move(pr.graph);
                         patchUi_.view.pan = cascade::gui::patch::Vec2{pr.panX, pr.panY};
                         patchUi_.view.zoom = pr.zoom;
                         patchSeeded_ = true;
@@ -1817,7 +1815,7 @@ int AppWindow::run(int frames) {
                         std::fprintf(stderr,
                                      "cascade: patch loaded from %s (%zu nodes, "
                                      "%d dropped)\n",
-                                     pf, patchGraph_.nodes().size(), pr.dropped);
+                                     pf, engine_.patchGraph_.nodes().size(), pr.dropped);
                     } else {
                         std::fprintf(stderr, "cascade: %s is not a patch\n", pf);
                     }
@@ -2075,13 +2073,13 @@ int AppWindow::run(int frames) {
             hooks.tuneVfoHz = [this](double offsetHz) {
                 submitCommand(cascade::core::cmd::makeNumInt(
                     FOXAPP_OP_VFO_TO_ABSOLUTE,
-                    pipeline_.activeSource().centerFrequencyHz() + offsetHz, 0));
+                    engine_.pipeline_.activeSource().centerFrequencyHz() + offsetHz, 0));
             };
             hooks.installSource = [this](std::unique_ptr<cascade::source::IqSource> src) {
                 installSource(std::move(src));  // the app's one swap door
                 followInputRate();
             };
-            if (!measure_->tick(pipeline_, hooks)) {
+            if (!measure_->tick(engine_.pipeline_, hooks)) {
                 measure_.reset();
                 closeRequested_ = true;
             }
@@ -2187,7 +2185,7 @@ int AppWindow::run(int frames) {
     // Pluto transmitting while a SoapySDR receiver runs is two devices across
     // one teardown, which is the case the composition note there says makes
     // the sum the right arithmetic.
-    transmitter_.stop();
+    engine_.transmitter_.stop();
 
     // THE GPS READER FIRST: its stop is bounded - one port read (200 ms)
     // while the worker is reading, GpsReader::kOpenAbandonWait (1 s, counted
@@ -2200,7 +2198,7 @@ int AppWindow::run(int frames) {
     // the save below is the one that persists it. This is what makes the
     // app-level test deterministic at a small frame count: the position is
     // on disk if the reader had it, whichever frame it arrived on.
-    gpsReader_.stop();
+    engine_.gpsReader_.stop();
     pollGpsReader();
 
     // Closing the window mid-take finalizes both recordings cleanly (same
@@ -2260,7 +2258,7 @@ int AppWindow::run(int frames) {
     // ended further up this teardown ("Closing the window mid-take"), and
     // this is the one pipeline_.stop() tests/test_stop_ends_recordings allows
     // outside it.
-    pipeline_.stop();
+    engine_.pipeline_.stop();
 
     // THE CLEAN-EXIT MARKER, after the pipeline join. The join above — DSP
     // threads, the CAT server, the USB device stack — is where the worst
@@ -2279,7 +2277,7 @@ int AppWindow::run(int frames) {
     // everything was still alive. Residual, stated plainly: a death in the
     // GL/GLFW teardown below still counts as a clean exit — the watchdog,
     // stopped last as ever, is what covers that stretch.
-    telemetryCleanExit_ = true;
+    engine_.telemetryCleanExit_ = true;
     if (!configPath_.empty()) {
         // Built on lastRequestedConfig_, not savedCfg_: the final-state save
         // just above (still async - see gui/config_writer.hpp) may not have
@@ -2393,7 +2391,7 @@ int AppWindow::run(int frames) {
         std::printf("cascade: script steps run %zu of %zu\n", inputScriptPos_,
                     inputScript_.size());
         std::printf("cascade: patch after script:\n%s",
-                    cascade::core::patch::serialise(patchGraph_, patchUi_.view.pan.x,
+                    cascade::core::patch::serialise(engine_.patchGraph_, patchUi_.view.pan.x,
                                                     patchUi_.view.pan.y, patchUi_.view.zoom)
                         .c_str());
     }
@@ -2425,18 +2423,18 @@ void AppWindow::refreshDiagContext() {
     ctx.commit = cascade::gitCommit();
     ctx.os = cascade::core::osDescription();
     ctx.arch = cascade::core::archDescription();
-    ctx.mode = kModeNames[modeIndex_];
-    ctx.sourceKind = sourceKind_;
-    ctx.sampleRateHz = pipeline_.activeSource().sampleRateHz();
+    ctx.mode = kModeNames[engine_.modeIndex_];
+    ctx.sourceKind = engine_.sourceKind_;
+    ctx.sampleRateHz = engine_.pipeline_.activeSource().sampleRateHz();
     // ANY RADIO, not just a Soapy one: what this flag tells a report reader
     // is whether third-party or USB driver code was live in the process, and
     // a native driver is as much a device open as a vendor module is.
-    ctx.deviceOpen = (device_ != nullptr);
+    ctx.deviceOpen = (engine_.device_ != nullptr);
     // MODEL ONLY - sanitiseDevice strips the serial, exactly as the usage
     // report does. A report is a support artefact, not a hardware fingerprint.
-    ctx.sdrModel = deviceModel_;
+    ctx.sdrModel = engine_.deviceModel_;
     std::size_t loaded = 0;
-    for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
+    for (const cascade::core::LoadedPlugin& p : engine_.pluginHost_.plugins()) {
         if (!p.loaded) { continue; }
         ++loaded;
         if (ctx.plugins.size() < 32) { ctx.plugins.push_back(p.name + " " + p.version); }
@@ -2450,8 +2448,8 @@ void AppWindow::refreshDiagContext() {
     // process after start-up is a device open, and that has its own refresh
     // where the open completes (pollSourceAsync) - a device open changes no
     // plugin count, so this test cannot see it.
-    if (loaded != diagPluginCount_) {
-        diagPluginCount_ = loaded;
+    if (loaded != engine_.diagPluginCount_) {
+        engine_.diagPluginCount_ = loaded;
         cascade::core::refreshModuleTable();
     }
 }
@@ -3121,7 +3119,7 @@ void AppWindow::drawUi() {
     // publish handed over through the slot - because a reader held the swap
     // lock - is installed now if no reader took it first, whether or not
     // anything changes this frame. Never waits.
-    (void)receiverSnapshot_->retryInstall();
+    (void)engine_.receiverSnapshot_->retryInstall();
     // THE COMMANDS THE WIDGETS SUBMITTED LAST FRAME, FIRST (engine extraction
     // stage 1: every control ends in applyCommand - see app_window.hpp). At
     // the top, before anything is drawn and before any list is walked, so a
@@ -3237,11 +3235,11 @@ void AppWindow::drawUi() {
     // the radio on the very next frame (gui/transmit_page.hpp, txPageKey).
     {
         const cascade::gui::TxPageKey key = cascade::gui::txPageKey(
-            transmitPageLive_, transmitter_.latched(), transmitLatchPressed_, transmitPttHeld_);
-        transmitter_.setLatched(key.latched);
-        transmitter_.setPttHeld(key.pttHeld);
+            transmitPageLive_, engine_.transmitter_.latched(), transmitLatchPressed_, transmitPttHeld_);
+        engine_.transmitter_.setLatched(key.latched);
+        engine_.transmitter_.setPttHeld(key.pttHeld);
     }
-    transmitter_.tick();
+    engine_.transmitter_.tick();
 
     // One borderless window pinned to the viewport: the app IS the layout, so
     // nothing is movable or collapsible at this level.
@@ -3367,9 +3365,9 @@ void AppWindow::drawUi() {
         // mode persists across restarts, so an install left in it would have
         // served that from its first frame. The waterfall is fed here too, or
         // leaving the mode would show a hard gap in the history.
-        if (pipeline_.getLatestFrame(lastFrame_)) {
+        if (engine_.pipeline_.getLatestFrame(lastFrame_)) {
             waterfall_->addLine(lastFrame_.dbBins.data(),
-                                static_cast<int>(lastFrame_.dbBins.size()), dbMin_, dbMax_);
+                                static_cast<int>(lastFrame_.dbBins.size()), engine_.dbMin_, engine_.dbMax_);
             // Counted here too, so the tally and the ring cannot drift apart
             // across a spell in scope mode. drawCenterPanels restarts its
             // averaging window rather than dividing this by the time the scope
@@ -3471,11 +3469,11 @@ void AppWindow::drawUi() {
     pollMicOpen();
     // "Still running" beat, five-minute cadence. A no-op when reporting is
     // off, and never blocks - see HeartbeatSender::poll.
-    telemetryHeartbeat_.poll(ImGui::GetTime());
+    engine_.telemetryHeartbeat_.poll(ImGui::GetTime());
 }
 
 void AppWindow::pollAudioHealth() {
-    cascade::sink::AudioOut& out = pipeline_.audio();
+    cascade::sink::AudioOut& out = engine_.pipeline_.audio();
     // Never opened means there is no device on this machine (or audio is
     // configured off). That is a steady state, not a fault, and retrying it
     // once a second forever would be noise.
@@ -3486,7 +3484,7 @@ void AppWindow::pollAudioHealth() {
     // inside a second, and a mark that was only ever read once a second would
     // miss most of what it exists to catch.
     const std::size_t ringFrames = out.ringFrames();
-    if (ringFrames < audioRingLowWaterFrames_) { audioRingLowWaterFrames_ = ringFrames; }
+    if (ringFrames < engine_.audioRingLowWaterFrames_) { engine_.audioRingLowWaterFrames_ = ringFrames; }
 
     const double now = ImGui::GetTime();
 
@@ -3495,41 +3493,41 @@ void AppWindow::pollAudioHealth() {
     // posture as the recorder's own status lines, and the only way a number
     // nobody watches (this goes to the log, not the screen) stays worth
     // reading when it does fire.
-    if (now - lastAudioLogSec_ >= 60.0) {
+    if (now - engine_.lastAudioLogSec_ >= 60.0) {
         const std::uint64_t underrunsNow = out.underruns();
         const std::uint64_t primingNow = out.primingCallbacks();
-        if (underrunsNow > audioUnderrunsAtLogStart_) {
+        if (underrunsNow > engine_.audioUnderrunsAtLogStart_) {
             const double rateHz = cascade::core::Pipeline::kAudioRateHz;
             const double lowWaterMs =
-                1000.0 * static_cast<double>(audioRingLowWaterFrames_) / rateHz;
+                1000.0 * static_cast<double>(engine_.audioRingLowWaterFrames_) / rateHz;
             const double capacityMs =
                 1000.0 * static_cast<double>(out.ringCapacityFrames()) / rateHz;
             cascade::core::diagLogf(
                 "audio: %llu starved callbacks in the last minute (%llu priming), "
                 "ring low water %.0f ms of %.0f ms",
-                static_cast<unsigned long long>(underrunsNow - audioUnderrunsAtLogStart_),
-                static_cast<unsigned long long>(primingNow - audioPrimingAtLogStart_),
+                static_cast<unsigned long long>(underrunsNow - engine_.audioUnderrunsAtLogStart_),
+                static_cast<unsigned long long>(primingNow - engine_.audioPrimingAtLogStart_),
                 lowWaterMs, capacityMs);
         }
-        audioUnderrunsAtLogStart_ = underrunsNow;
-        audioPrimingAtLogStart_ = primingNow;
-        audioRingLowWaterFrames_ = ringFrames;  // next minute's mark starts here
-        lastAudioLogSec_ = now;
+        engine_.audioUnderrunsAtLogStart_ = underrunsNow;
+        engine_.audioPrimingAtLogStart_ = primingNow;
+        engine_.audioRingLowWaterFrames_ = ringFrames;  // next minute's mark starts here
+        engine_.lastAudioLogSec_ = now;
     }
 
     // 1 Hz. Fast enough that a dropout is a hiccup rather than an outage,
     // slow enough that a genuinely absent device is not hammered with open
     // attempts. ImGui's clock is the frame clock, which is what "once per
     // second of running UI" should mean here.
-    if (now - lastAudioProbeSec_ < 1.0) { return; }
-    lastAudioProbeSec_ = now;
+    if (now - engine_.lastAudioProbeSec_ < 1.0) { return; }
+    engine_.lastAudioProbeSec_ = now;
 
     // AN OPEN IN FLIGHT ALREADY OWNS THE SINK. Asking a sink that a worker is
     // inside open() on whether its stream is alive is a race, and acting on
     // the answer would start a SECOND concurrent device open — which is the
     // shape of fault this whole path was written to end, not to create. The
     // frame after the open completes asks the question again.
-    if (audioOpen_.inFlight()) { return; }
+    if (engine_.audioOpen_.inFlight()) { return; }
 
     if (out.streamAlive()) { return; }
 
@@ -3537,9 +3535,9 @@ void AppWindow::pollAudioHealth() {
     // list is how recoveryDeviceIndex() resolves the remembered NAME to a
     // current index, and the reason it is done by name is that this list can
     // renumber between the open and now.
-    devices_ = out.listOutputDevices();
+    engine_.devices_ = out.listOutputDevices();
     const int target = cascade::sink::recoveryDeviceIndex(
-        out.openedDeviceRequested(), out.openedDeviceName(), devices_);
+        out.openedDeviceRequested(), out.openedDeviceName(), engine_.devices_);
 
     // OFF THIS THREAD. A dead stream is usually a device that has gone away,
     // and a device that has gone away is exactly the one whose open blocks —
@@ -3559,74 +3557,74 @@ void AppWindow::pollAudioHealth() {
 const char* const kAudioBusyNote = FOX_TR_NOOP("audio device busy - still opening");
 
 bool AppWindow::requestAudioOpen(int deviceIndex, bool recovery) {
-    const cascade::gui::AudioOpen::Outcome outcome = audioOpen_.request(
+    const cascade::gui::AudioOpen::Outcome outcome = engine_.audioOpen_.request(
         deviceIndex, recovery ? kAudioOpenByWatchdog : kAudioOpenByUser);
     if (outcome != cascade::gui::AudioOpen::Outcome::Finished) {
         // Still inside the driver. Said in the panel rather than left to look
         // like nothing happened — "I picked the device and nothing changed" is
         // how a silent wait reads, and it is the reading that sends the next
         // report to the wrong end of the chain.
-        audioHealthNote_ = tr(kAudioBusyNote);
+        engine_.audioHealthNote_ = tr(kAudioBusyNote);
         return false;
     }
     applyAudioOpenResult();
-    return audioOpen_.result().ok;
+    return engine_.audioOpen_.result().ok;
 }
 
 void AppWindow::pollAudioOpen() {
-    if (!audioOpen_.poll()) { return; }
+    if (!engine_.audioOpen_.poll()) { return; }
     applyAudioOpenResult();
 }
 
 void AppWindow::pollMicOpen() {
-    if (!micOpen_.poll()) { return; }
+    if (!engine_.micOpen_.poll()) { return; }
     // The "still opening" line goes; a refusal says so in its place.
-    if (transmitError_ == kAudioBusyNote) { transmitError_.clear(); }
-    if (!micOpen_.result().ok) { transmitError_ = FOX_TR_NOOP("no microphone could be opened"); }
+    if (engine_.transmitError_ == kAudioBusyNote) { engine_.transmitError_.clear(); }
+    if (!engine_.micOpen_.result().ok) { engine_.transmitError_ = FOX_TR_NOOP("no microphone could be opened"); }
 }
 
 void AppWindow::applyAudioOpenResult() {
-    const cascade::gui::AudioOpen::Result r = audioOpen_.result();
+    const cascade::gui::AudioOpen::Result r = engine_.audioOpen_.result();
     // THE DSP THREAD'S MIRROR, published here rather than by the worker: it
     // lives under Pipeline's audioMutex_ and belongs to the Pipeline, which an
     // abandoned worker may outlive. See Pipeline::audioOpener().
-    pipeline_.publishAudioChannels(r.ok);
+    engine_.pipeline_.publishAudioChannels(r.ok);
 
     // Re-enumerate now that the sink is this thread's again: the list is how
     // the row below is resolved, and the reason a stream died is usually that
     // a device went away — so it can be SHORTER than the one deviceIndex_ was
     // chosen against.
-    devices_ = pipeline_.audio().listOutputDevices();
+    engine_.devices_ = engine_.pipeline_.audio().listOutputDevices();
 
     if (!r.ok) {
         // Say so rather than failing silently — silent failure is the exact
         // bug this whole path exists to end. The next tick tries again.
-        audioHealthNote_ = tr("audio output stopped and could not be reopened");
+        engine_.audioHealthNote_ = tr("audio output stopped and could not be reopened");
         // The Sinks combo subscripts deviceIndex_ guarded only by "not empty",
         // so leaving a stale row against a shorter list is an out-of-bounds
         // read on the very next frame.
-        deviceIndex_ = cascade::sink::clampDeviceRow(deviceIndex_, devices_);
+        engine_.deviceIndex_ = cascade::sink::clampDeviceRow(engine_.deviceIndex_, engine_.devices_);
         return;
     }
 
     // Keep the Sinks combo honest about what is actually open. Without this
     // the panel would name the old device while audio came out of another.
-    for (int i = 0; i < static_cast<int>(devices_.size()); ++i) {
-        if (devices_[static_cast<std::size_t>(i)].index == r.deviceIndex) {
-            deviceIndex_ = i;
+    for (int i = 0; i < static_cast<int>(engine_.devices_.size()); ++i) {
+        if (engine_.devices_[static_cast<std::size_t>(i)].index == r.deviceIndex) {
+            engine_.deviceIndex_ = i;
             break;
         }
     }
     if (r.deviceIndex < 0) {
-        for (int i = 0; i < static_cast<int>(devices_.size()); ++i) {
-            if (devices_[static_cast<std::size_t>(i)].isDefault) { deviceIndex_ = i; }
+        for (int i = 0; i < static_cast<int>(engine_.devices_.size()); ++i) {
+            if (engine_.devices_[static_cast<std::size_t>(i)].isDefault) { engine_.deviceIndex_ = i; }
         }
     }
     // Neither loop above is guaranteed to assign: a target that opened but is
     // not in the list we just enumerated (it renumbered again between the two
     // calls) leaves the old row standing against the new list. Same
     // out-of-bounds, so the same clamp closes it here too.
-    deviceIndex_ = cascade::sink::clampDeviceRow(deviceIndex_, devices_);
+    engine_.deviceIndex_ = cascade::sink::clampDeviceRow(engine_.deviceIndex_, engine_.devices_);
 
     if (r.tag != kAudioOpenByWatchdog) {
         // The user picked this device themselves and can see the result. Only
@@ -3634,19 +3632,19 @@ void AppWindow::applyAudioOpenResult() {
         // a recovery note from earlier in the session is the watchdog's, and
         // stays, because "audio stopped and came back on its own" is the thing
         // a user would otherwise report as a fault in their radio.
-        if (audioHealthNote_ == tr(kAudioBusyNote)) { audioHealthNote_.clear(); }
+        if (engine_.audioHealthNote_ == tr(kAudioBusyNote)) { engine_.audioHealthNote_.clear(); }
         return;
     }
-    ++audioRecoveries_;
+    ++engine_.audioRecoveries_;
     std::string buf;
     // Two whole sentences rather than an "s" glued on: a translation's plural
     // is not a suffix.
     cascade::core::formatUtf8(buf,
-                  audioRecoveries_ == 1
+                  engine_.audioRecoveries_ == 1
                       ? tr("output device stopped and was restarted (%d time)")
                       : tr("output device stopped and was restarted (%d times)"),
-                  audioRecoveries_);
-    audioHealthNote_ = buf;
+                  engine_.audioRecoveries_);
+    engine_.audioHealthNote_ = buf;
 }
 
 namespace {
@@ -4024,7 +4022,7 @@ void AppWindow::drawStatusColumn() {
     // something other than the band the frequency readout names, and neither
     // may say so without the other. Empty is the ordinary case and changes
     // nothing on either card.
-    const std::string audioFrom = pluginRunner_.playingPlugin();
+    const std::string audioFrom = engine_.pluginRunner_.playingPlugin();
 
     // --- AUDIO ---------------------------------------------------------------
     //
@@ -4038,7 +4036,7 @@ void AppWindow::drawStatusColumn() {
     // keeps going silent" reports — so the second line finally prints the
     // real number the artboard always wanted, instead of leaving it invented
     // or absent.
-    const cascade::sink::AudioOut& audioSink = pipeline_.audio();
+    const cascade::sink::AudioOut& audioSink = engine_.pipeline_.audio();
     // HELD, NOT LIVE (0.99.4): every figure on this card is read into one
     // snapshot that is refreshed twice a second (gui/readout_hold.hpp) - the
     // ring level moves every callback and a starving sink's count climbs by
@@ -4052,8 +4050,8 @@ void AppWindow::drawStatusColumn() {
         liveAudio.ringMs = 1000.0 * static_cast<double>(audioSink.ringFrames()) / rateHz;
         liveAudio.capMs = 1000.0 * static_cast<double>(audioSink.ringCapacityFrames()) / rateHz;
     }
-    liveAudio.gaps = static_cast<unsigned long long>(pluginRunner_.audioGaps());
-    liveAudio.gapFrames = static_cast<unsigned long long>(pluginRunner_.audioGapFrames());
+    liveAudio.gaps = static_cast<unsigned long long>(engine_.pluginRunner_.audioGaps());
+    liveAudio.gapFrames = static_cast<unsigned long long>(engine_.pluginRunner_.audioGapFrames());
     const AudioReadout& shownAudio = audioHold_.value(ImGui::GetTime(), liveAudio);
     const unsigned long long under = shownAudio.underruns;
     cascade::core::formatUtf8(v, "%llu", under);
@@ -4105,14 +4103,14 @@ void AppWindow::drawStatusColumn() {
     // five-minute mean.
     if (decoderRateWindowS_ < 0.0 || nowS - decoderRateWindowS_ > 2.0 * kRateWindowS) {
         decoderRateWindowS_ = nowS;
-        decoderLinesAtWindow_ = decoderLinesTotal_;
+        decoderLinesAtWindow_ = engine_.decoderLinesTotal_;
     } else if (nowS - decoderRateWindowS_ >= kRateWindowS) {
         decoderRateSpanS_ = nowS - decoderRateWindowS_;
         decoderLinesPerSec_ = static_cast<float>(
-            static_cast<double>(decoderLinesTotal_ - decoderLinesAtWindow_) /
+            static_cast<double>(engine_.decoderLinesTotal_ - decoderLinesAtWindow_) /
             decoderRateSpanS_);
         decoderRateWindowS_ = nowS;
-        decoderLinesAtWindow_ = decoderLinesTotal_;
+        decoderLinesAtWindow_ = engine_.decoderLinesTotal_;
     }
     // BEING FED IS TWO CONDITIONS, NOT ONE. PluginRunner::activeCount says its
     // instances exist and are matched to the rate the pipeline is configured
@@ -4120,7 +4118,7 @@ void AppWindow::drawStatusColumn() {
     // hands them nothing, so the run state is checked alongside it everywhere
     // below - the first render of this column read "2 running" and "DECODING"
     // with the pipeline stopped and the picture frozen.
-    const bool rxRunning = pipeline_.running();
+    const bool rxRunning = engine_.pipeline_.running();
     // PER MODULE, not per instance - the same population the "of N fitted"
     // denominator below counts. activeCount() counts decoder INSTANCES, and a
     // module that declares both an audio decoder and an I/Q one has two, so
@@ -4226,18 +4224,18 @@ void AppWindow::drawStatusColumn() {
             }
             value = tr("MUTED");
             valueCol = cascade::gui::theme::kAmber;
-        } else if (audioOpen_.inFlight()) {
+        } else if (engine_.audioOpen_.inFlight()) {
             // Same rule as the Sinks lamp: while a worker is inside the
             // driver's open, nothing about the sink may be asked, so this says
             // the one true thing there is to say.
             lines[n++] = {tr("waiting for the output device"), kFaint};
             value = tr("OPENING");
             valueCol = cascade::gui::theme::kAmber;
-        } else if (!pipeline_.audio().everOpened()) {
+        } else if (!engine_.pipeline_.audio().everOpened()) {
             lines[n++] = {tr("no output device was opened"), kFaint};
             value = tr("NO DEVICE");
             valueCol = kMuted;
-        } else if (!pipeline_.audio().streamAlive()) {
+        } else if (!engine_.pipeline_.audio().streamAlive()) {
             // The dead-stream case the audio watchdog exists for: everything
             // upstream stays healthy and the speakers go quiet, so it has to be
             // visible from the panel rather than inferred from silence.
@@ -4246,7 +4244,7 @@ void AppWindow::drawStatusColumn() {
             valueCol = cascade::gui::theme::kAlarm;
         } else {
             cascade::core::formatUtf8(l0, "%s",
-                          pipeline_.audio().openedDeviceName().c_str());
+                          engine_.pipeline_.audio().openedDeviceName().c_str());
             lines[n++] = {l0.c_str(), kFaint, true};
         }
         // WHAT IS COMING OUT, when it is not the receiver. In PHOSPHOR, the ink
@@ -4270,17 +4268,17 @@ void AppWindow::drawStatusColumn() {
     // stamp the recorder section already takes. ONLY A LIVE RECORDER'S BYTES ARE
     // ADDED - a stopped one keeps its final total by design, and including it
     // would inflate the take that is running with the size of one that ended.
-    const bool iqTaping = iqRecorder_.recording();
-    const bool audioTaping = audioRecorder_.recording();
+    const bool iqTaping = engine_.iqRecorder_.recording();
+    const bool audioTaping = engine_.audioRecorder_.recording();
     if (iqTaping || audioTaping) {
         const char* what =
             (iqTaping && audioTaping) ? tr("IQ + AUDIO") : (iqTaping ? "IQ" : tr("AUDIO"));
-        const double startS = iqTaping ? iqRecordStartS_ : audioRecordStartS_;
+        const double startS = iqTaping ? engine_.iqRecordStartS_ : engine_.audioRecordStartS_;
         char elapsed[24];
         statusElapsed(elapsed, sizeof(elapsed), nowS - startS);
         double bytes = 0.0;
-        if (iqTaping) { bytes += static_cast<double>(iqRecorder_.bytesWritten()); }
-        if (audioTaping) { bytes += static_cast<double>(audioRecorder_.bytesWritten()); }
+        if (iqTaping) { bytes += static_cast<double>(engine_.iqRecorder_.bytesWritten()); }
+        if (audioTaping) { bytes += static_cast<double>(engine_.audioRecorder_.bytesWritten()); }
         cascade::core::formatUtf8(l0, tr("%s elapsed"), elapsed);
         cascade::core::formatUtf8(l1, tr("%.1f MB written"), bytes / (1024.0 * 1024.0));
         // A DISK THAT STOPPED TAKING THE FILE IS SAID, NOT LEFT TO BE NOTICED.
@@ -4288,8 +4286,8 @@ void AppWindow::drawStatusColumn() {
         // removed, gone read-only) and stops paying for a dead stream; from
         // out here that used to look like a take whose MB counter had frozen,
         // with the card still reading IQ in rust as if all were well.
-        const bool diskFault = (iqTaping && iqRecorder_.writeFailed()) ||
-                               (audioTaping && audioRecorder_.writeFailed());
+        const bool diskFault = (iqTaping && engine_.iqRecorder_.writeFailed()) ||
+                               (audioTaping && engine_.audioRecorder_.writeFailed());
         if (diskFault) {
             const StatusLine lines[2] = {{l1.c_str(), kFaint},
                                          {tr("disk refused the file - nothing more is being kept"),
@@ -4299,7 +4297,7 @@ void AppWindow::drawStatusColumn() {
             const StatusLine lines[2] = {{l0.c_str(), kFaint}, {l1.c_str(), kFaint}};
             card(tr("RECORDER"), cascade::gui::theme::kAlarm, what, lines, 2);
         }
-    } else if (iqRecorder_.sizeLimitReached() || audioRecorder_.sizeLimitReached()) {
+    } else if (engine_.iqRecorder_.sizeLimitReached() || engine_.audioRecorder_.sizeLimitReached()) {
         // THE TAKE ENDED ITSELF, AND SAYS SO. A WAV's data chunk is a 32-bit
         // byte count, so a recording stops at 4 GiB or stops being a valid
         // file - about four and a half minutes of I/Q at 2 MS/s. The recorder
@@ -4315,7 +4313,7 @@ void AppWindow::drawStatusColumn() {
         // file", and a full file and a refused disk both answer no. Without
         // this order a finished recording would one day be reported as a
         // failing disk.
-        const bool iqFull = iqRecorder_.sizeLimitReached();
+        const bool iqFull = engine_.iqRecorder_.sizeLimitReached();
         const StatusLine lines[2] = {
             {iqFull ? tr("I/Q take reached the 4 GB limit for a WAV file")
                     : tr("audio take reached the 4 GB limit for a WAV file"),
@@ -4370,23 +4368,23 @@ void AppWindow::drawStatusColumn() {
     // own readback of what it is delivering, so it is amber: the palette's rule
     // is that amber belongs to a measurement and nothing else.
     {
-        const bool faulted = pipeline_.faulted();
+        const bool faulted = engine_.pipeline_.faulted();
         StatusLine lines[4];
         int n = 0;
         // Translated when it is the built-in generator; a driver's own device
         // name is in no catalogue and passes through tr() unchanged.
-        cascade::core::formatUtf8(l0, "%s", tr(pipeline_.activeSource().name()));
+        cascade::core::formatUtf8(l0, "%s", tr(engine_.pipeline_.activeSource().name()));
         lines[n++] = {l0.c_str(), cascade::gui::theme::kCream, true};
-        if (device_ != nullptr && !deviceAntenna_.empty()) {
-            cascade::core::formatUtf8(l1, tr("ANTENNA %s"), deviceAntenna_.c_str());
+        if (engine_.device_ != nullptr && !engine_.deviceAntenna_.empty()) {
+            cascade::core::formatUtf8(l1, tr("ANTENNA %s"), engine_.deviceAntenna_.c_str());
             lines[n++] = {l1.c_str(), cascade::gui::theme::kCream};
         }
         l2.clear();
-        if (device_ != nullptr) {
-            if (deviceAgc_) {
+        if (engine_.device_ != nullptr) {
+            if (engine_.deviceAgc_) {
                 cascade::core::formatUtf8(l2, "%s", tr("GAIN AUTO - AGC ON"));
-            } else if (!deviceGainNames_.empty() &&
-                       deviceGainsDb_.size() == deviceGainNames_.size()) {
+            } else if (!engine_.deviceGainNames_.empty() &&
+                       engine_.deviceGainsDb_.size() == engine_.deviceGainNames_.size()) {
                 // The first element by name, and a count of the rest. Summing
                 // them would print a total this application never commanded and
                 // the driver never reported.
@@ -4395,18 +4393,18 @@ void AppWindow::drawStatusColumn() {
                 // Airspy's "LNA 7" is a register step, and this card said
                 // "LNA 7 dB" until 0.92.0.
                 const std::string gainText = cascade::gui::formatGain(
-                    deviceGainNames_[0], static_cast<double>(deviceGainsDb_[0]),
+                    engine_.deviceGainNames_[0], static_cast<double>(engine_.deviceGainsDb_[0]),
                     firstGainUnit());
-                if (deviceGainNames_.size() == 1) {
+                if (engine_.deviceGainNames_.size() == 1) {
                     cascade::core::formatUtf8(l2, "%s", gainText.c_str());
                 } else {
                     cascade::core::formatUtf8(l2, tr("%s +%zu more"), gainText.c_str(),
-                                  deviceGainNames_.size() - 1);
+                                  engine_.deviceGainNames_.size() - 1);
                 }
             }
             if (!l2.empty()) { lines[n++] = {l2.c_str(), cascade::gui::theme::kCream}; }
         }
-        const double rate = pipeline_.activeSource().sampleRateHz();
+        const double rate = engine_.pipeline_.activeSource().sampleRateHz();
         if (std::isfinite(rate) && rate > 0.0) {
             cascade::core::formatUtf8(l3, "%.3f MS/s", rate / 1.0e6);
             lines[n++] = {l3.c_str(), cascade::gui::theme::kAmber};
@@ -4745,7 +4743,7 @@ void AppWindow::drawToolbar() {
     // The label reads the pipeline, not a local flag, so the button can never
     // disagree with the actual thread state - drawBenchStopButton letters
     // itself STOP or START from the same bool.
-    const bool running = pipeline_.running();
+    const bool running = engine_.pipeline_.running();
     cascade::gui::census::note("deck:stop");
     cascade::gui::census::rect("deck:stop", X(74.0f) - S(46.0f), Y(85.0f) - S(46.0f),
                                X(74.0f) + S(46.0f), Y(85.0f) + S(46.0f));
@@ -4782,12 +4780,12 @@ void AppWindow::drawToolbar() {
         // the plugin ABI reports a successful decode, so this is the honest
         // ceiling, and MESSAGE RATE in the status column is where the traffic
         // itself is reported.
-        const bool decoding = running && pluginRunner_.activeCount() > 0;
+        const bool decoding = running && engine_.pluginRunner_.activeCount() > 0;
         // The lamp reports the AUDIO being muted, whoever muted it: a plugin
         // (which is what muteSubjectText names) or the user's own Mute key. A
         // lamp that only knew about plugins would sit dark over silent
         // speakers, which is the one thing this cluster exists to prevent.
-        const bool muted = !muteSubjectText().empty() || userMuted_;
+        const bool muted = !muteSubjectText().empty() || engine_.userMuted_;
         struct MasterLamp {
             ImU32 colour;
             bool lit;
@@ -4797,7 +4795,7 @@ void AppWindow::drawToolbar() {
             {cascade::gui::theme::kPhosphor, running, tr("RUN")},
             {cascade::gui::theme::kPhosphor, decoding, tr("DEC")},
             {cascade::gui::theme::kAmber, muted, tr("MUTE")},
-            {cascade::gui::theme::kAlarm, pipeline_.faulted(), tr("FAIL")},
+            {cascade::gui::theme::kAlarm, engine_.pipeline_.faulted(), tr("FAIL")},
         };
         // drawBenchLamp letters its caption in whatever face is bound, and the
         // UI face at its normal size runs MUTE straight into FAIL at this
@@ -4947,7 +4945,7 @@ void AppWindow::drawToolbar() {
         cascade::gui::census::rect("deck:volume", cx - S(kVolumeR), Y(82.0f) - S(kVolumeR),
                                    cx + S(kVolumeR), Y(82.0f) + S(kVolumeR));
         const float moved = cascade::gui::drawBrassVolumeKnob(
-            dl, ImVec2(cx, Y(82.0f)), S(kVolumeR), volume_);
+            dl, ImVec2(cx, Y(82.0f)), S(kVolumeR), engine_.volume_);
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip("%s", tr("Volume - drag the dial, or scroll over it"));
         }
@@ -4959,7 +4957,7 @@ void AppWindow::drawToolbar() {
         // the palette reserves amber for a reading. Figures, so the monospaced
         // face: the number stops shuffling sideways as the dial turns.
         char vtxt[16];
-        std::snprintf(vtxt, sizeof(vtxt), "%.2f", static_cast<double>(volume_));
+        std::snprintf(vtxt, sizeof(vtxt), "%.2f", static_cast<double>(engine_.volume_));
         ImFont* vf = cascade::gui::fonts::reading();
         const float vpx = std::max(11.0f, cascade::gui::fonts::kReadingSize * scale *
                                               cascade::gui::theme::readingsScale());
@@ -5009,7 +5007,7 @@ void AppWindow::drawToolbar() {
         // SAMPLE RATE: full scale 10 MS/s, which covers every device this
         // application has been run against without compressing the common
         // 2 MS/s case into the first tenth of the arc.
-        const double rate = pipeline_.activeSource().sampleRateHz();
+        const double rate = engine_.pipeline_.activeSource().sampleRateHz();
         const bool haveRate = std::isfinite(rate) && rate > 0.0;
         char rateTxt[32];
         std::snprintf(rateTxt, sizeof(rateTxt), haveRate ? "%.3f MS/s" : "--",
@@ -5042,14 +5040,14 @@ void AppWindow::drawToolbar() {
             // something the user has already stopped hearing.
             constexpr std::size_t kWindow = 2048;
             static float window[kWindow];
-            const std::size_t got = pipeline_.scopeAudio().snapshot(window, kWindow);
+            const std::size_t got = engine_.pipeline_.scopeAudio().snapshot(window, kWindow);
             if (got > 0) {
                 haveAudio = true;
                 tapPeak = cascade::gui::audioPeak(window, got);
             }
         }
         const float audible = cascade::gui::audibleAmplitude(
-            tapPeak, volume_, pipeline_.audioMuted());
+            tapPeak, engine_.volume_, engine_.pipeline_.audioMuted());
         const float target = cascade::gui::meterFraction(audible);
         volumeNeedle_ = cascade::gui::meterBallistics(volumeNeedle_, target,
                                                       ImGui::GetIO().DeltaTime);
@@ -5941,12 +5939,12 @@ void AppWindow::drawFrequencyReadout(float plateX, float plateY, float scale) {
     // decimals - the reference's own rule (Hz / 1,000,000, toFixed(4)).
     char mhz[32];
     std::snprintf(mhz, sizeof(mhz), "%.4f", std::min(hz, kMaxDisplayHz) / 1.0e6);
-    drawTunerStatusCluster(fdl, ptl, pbr, s, pipeline_.running(), mhz);
+    drawTunerStatusCluster(fdl, ptl, pbr, s, engine_.pipeline_.running(), mhz);
     drawTunerBezel(fdl, ptl, s, layout);
     {
         // THE TUBES SHOW THE AIR FREQUENCY; the plate says when that is not
         // what the radio itself is tuned to (see drawTunerFooter).
-        const cascade::core::ConverterSetting conv = pipeline_.converter();
+        const cascade::core::ConverterSetting conv = engine_.pipeline_.converter();
         std::string caption;
         std::string shortCaption;
         if (cascade::core::converterActive(conv)) {
@@ -6130,14 +6128,14 @@ void AppWindow::drawFrequencyReadout(float plateX, float plateY, float scale) {
             double typed = 0.0;
             if (parseFrequencyHz(freqEditBuf_, typed)) {
                 submitCommand(cascade::core::cmd::makeNum(FOXAPI_OP_SET_FREQUENCY, typed));
-                sourceError_.clear();
+                engine_.sourceError_.clear();
             } else {
                 // One sentence, one format string, so a translation can place
                 // the typed text where its own grammar wants it.
                 std::string msg;
                 cascade::core::formatUtf8(msg, tr("could not read frequency \"%s\""),
                               freqEditBuf_);
-                sourceError_ = msg;
+                engine_.sourceError_ = msg;
             }
             freqEditing_ = false;
         } else if (ImGui::IsKeyPressed(ImGuiKey_Escape) || (freqEditWasActive_ && !active)) {
@@ -6270,13 +6268,13 @@ void AppWindow::drawMenuColumn() {
     // for. Two clipped lines rather than one wrapped one: a long device name
     // must not push the numbers out of the reserved footer space.
     ImGui::Separator();
-    const cascade::source::IqSource& src = pipeline_.activeSource();
+    const cascade::source::IqSource& src = engine_.pipeline_.activeSource();
     // Line 1: the active source, and — when a band plan is loaded — the band
     // the TUNED frequency (source centre + VFO offset, i.e. what the VFO
     // marker sits on) falls in. BandPlan::at returns the narrowest match, so
     // this names "ISS Downlink" rather than the 2 m band containing it.
     const cascade::core::BandEntry* band =
-        bandPlan_.entries().empty() ? nullptr : bandPlan_.at(currentAbsoluteHz());
+        engine_.bandPlan_.entries().empty() ? nullptr : engine_.bandPlan_.at(currentAbsoluteHz());
     // tr() on the name: the built-in generator's name is a sentence of ours
     // ("Signal generator") and is translated; a driver's device name is not
     // in any catalogue and comes back unchanged.
@@ -6288,8 +6286,8 @@ void AppWindow::drawMenuColumn() {
     // Source rate | DSP channel rate (the Vfo's output rate the demodulator
     // runs at — this is what makes rate-follow visible) | buffer health.
     ImGui::Text(tr("%.4g MS/s | ch %.4g kHz | underruns %llu"),
-                src.sampleRateHz() / 1.0e6, pipeline_.channelRateHz() / 1.0e3,
-                static_cast<unsigned long long>(pipeline_.audio().underruns()));
+                src.sampleRateHz() / 1.0e6, engine_.pipeline_.channelRateHz() / 1.0e3,
+                static_cast<unsigned long long>(engine_.pipeline_.audio().underruns()));
     if (!converterLine.empty()) {
         // The short form when the full name would run off the column.
         const bool fits = ImGui::CalcTextSize(converterLine.c_str()).x <=
@@ -6310,9 +6308,9 @@ void AppWindow::drawMenuColumn() {
 void AppWindow::drawRadioSection() {
     // kModeNames is the one table the mode buttons and this chip both read,
     // so the rail cannot claim a mode the buttons do not show.
-    const bool radioOpen = benchSection(trId("Radio"), true, kModeNames[modeIndex_],
+    const bool radioOpen = benchSection(trId("Radio"), true, kModeNames[engine_.modeIndex_],
                                         cascade::gui::theme::kPhosphor,
-                                        pipeline_.running());
+                                        engine_.pipeline_.running());
     if (radioOpen) {
         // Mode/bandwidth tables live at namespace scope (kModeNames &co):
         // the band-snap logic and the config store share them.
@@ -6323,7 +6321,7 @@ void AppWindow::drawRadioSection() {
             static_cast<float>(kColumns);
         for (int i = 0; i < 8; ++i) {
             if (i % kColumns != 0) { ImGui::SameLine(); }
-            const bool selected = (i == modeIndex_);
+            const bool selected = (i == engine_.modeIndex_);
             // The lit key: today's pressed brass, or foxsdr-ui/1's activeText
             // on activeBg (Field Radio lettered it cream on gold, 1.57:1).
             const int litPushed = selected ? cascade::gui::theme::pushLitKeyColours() : 0;
@@ -6347,7 +6345,7 @@ void AppWindow::drawRadioSection() {
         // A COPY is edited, never the receiver's own figure: the command
         // (APP_SET_VFO_OFFSET_FREE - the slider's own span, not clamped into
         // the band) is what moves it, at the top of the next frame.
-        float vfoKhz = vfoOffsetKhz_;
+        float vfoKhz = engine_.vfoOffsetKhz_;
         if (ImGui::SliderFloat(cascade::gui::labelAboveIfNeeded(trId("VFO")), &vfoKhz,
                                -500.0f, 500.0f, "%.0f kHz")) {
             submitCommand(cascade::core::cmd::makeNum(FOXAPP_OP_SET_VFO_OFFSET_FREE,
@@ -6362,10 +6360,10 @@ void AppWindow::drawRadioSection() {
         // separates the two: the word comes from the live bandwidth, and only
         // a deliberate pick from the list changes it.
         char bwPreview[32];
-        formatBandwidth(vfoBandwidthHz_, bwPreview, sizeof(bwPreview));
+        formatBandwidth(engine_.vfoBandwidthHz_, bwPreview, sizeof(bwPreview));
         if (ImGui::BeginCombo(cascade::gui::labelAboveIfNeeded(trId("Bandwidth")), bwPreview)) {
             for (int i = 0; i < kBwCount; ++i) {
-                if (ImGui::Selectable(kBwLabels[i], bandwidthIndex_ == i)) {
+                if (ImGui::Selectable(kBwLabels[i], engine_.bandwidthIndex_ == i)) {
                     // One of the steps, exactly - never clamped (the combo's
                     // own rule, APP_SET_BANDWIDTH_STEP).
                     submitCommand(cascade::core::cmd::makeInt(FOXAPP_OP_SET_BANDWIDTH_STEP, i));
@@ -6374,23 +6372,23 @@ void AppWindow::drawRadioSection() {
                 // this one from the keyboard still lands on the step in use.
                 // With bandwidthIndex_ at -1 nothing takes the focus, which is
                 // the honest answer when the VFO is on none of them.
-                if (bandwidthIndex_ == i) { ImGui::SetItemDefaultFocus(); }
+                if (engine_.bandwidthIndex_ == i) { ImGui::SetItemDefaultFocus(); }
             }
             ImGui::EndCombo();
         }
         // A COPY is edited; SET_SQUELCH moves the receiver's threshold.
-        float squelch = squelchDb_;
+        float squelch = engine_.squelchDb_;
         if (ImGui::SliderFloat(cascade::gui::labelAboveIfNeeded(trId("Squelch")), &squelch,
                                -120.0f, 0.0f, "%.0f dB")) {
             submitCommand(cascade::core::cmd::makeNum(FOXAPI_OP_SET_SQUELCH, squelch));
         }
         // Only meaningful for the FM modes; shown greyed elsewhere so the
         // setting is discoverable without implying it does anything to SSB.
-        const bool fmMode = (modeIndex_ == 0 || modeIndex_ == 1);  // NFM, WFM
+        const bool fmMode = (engine_.modeIndex_ == 0 || engine_.modeIndex_ == 1);  // NFM, WFM
         ImGui::BeginDisabled(!fmMode);
         const char* deemphItems[kDeemphCount];
         for (int k = 0; k < kDeemphCount; ++k) { deemphItems[k] = tr(kDeemphLabels[k]); }
-        int deemph = deemphIndex_;
+        int deemph = engine_.deemphIndex_;
         if (ImGui::Combo(cascade::gui::labelAboveIfNeeded(trId("De-emph")), &deemph,
                          deemphItems, kDeemphCount)) {
             submitCommand(cascade::core::cmd::makeInt(FOXAPI_OP_SET_DEEMPHASIS, deemph));
@@ -6403,11 +6401,11 @@ void AppWindow::drawRadioSection() {
 
         // Stereo indicator + force-mono toggle + the RDS readout. Only in
         // WFM: nothing below it exists on any other demodulator.
-        if (modeIndex_ == 1) { drawStereoRdsControls(); }
+        if (engine_.modeIndex_ == 1) { drawStereoRdsControls(); }
 
         // S-meter: channel power mapped over the squelch slider's own
         // [-120, 0] dB span, so the bar and the threshold share a scale.
-        const float sDb = pipeline_.signalPowerDb();
+        const float sDb = engine_.pipeline_.signalPowerDb();
         float frac = (sDb + 120.0f) / 120.0f;
         frac = std::clamp(frac, 0.0f, 1.0f);
         char overlay[32];
@@ -6446,9 +6444,9 @@ void AppWindow::drawSinksSection() {
     // driver, and asking the sink anything while a worker is inside its open()
     // is the race engine/audio_open.hpp forbids. So it is reported on its own
     // terms and nothing below is consulted.
-    const bool sinkOpening = audioOpen_.inFlight();
-    const bool sinkOpened = !sinkOpening && pipeline_.audio().everOpened();
-    const bool sinkAlive = sinkOpened && pipeline_.audio().streamAlive();
+    const bool sinkOpening = engine_.audioOpen_.inFlight();
+    const bool sinkOpened = !sinkOpening && engine_.pipeline_.audio().everOpened();
+    const bool sinkAlive = sinkOpened && engine_.pipeline_.audio().streamAlive();
     const char* sinkChip = tr("ON");
     ImU32 sinkLamp = cascade::gui::theme::kPhosphor;
     if (sinkOpening) {
@@ -6468,17 +6466,17 @@ void AppWindow::drawSinksSection() {
     const bool sinksOpen =
         benchSection(trId("Sinks"), true, sinkChip, sinkLamp, sinkOpened || sinkOpening);
     if (sinksOpen) {
-        if (devices_.empty()) {
+        if (engine_.devices_.empty()) {
             ImGui::TextDisabled(tr("No audio output devices"));
         } else if (ImGui::BeginCombo(
                        cascade::gui::labelAboveIfNeeded(trId("Device")),
-                       devices_[static_cast<std::size_t>(deviceIndex_)].name.c_str())) {
-            for (int i = 0; i < static_cast<int>(devices_.size()); ++i) {
-                const auto& dev = devices_[static_cast<std::size_t>(i)];
+                       engine_.devices_[static_cast<std::size_t>(engine_.deviceIndex_)].name.c_str())) {
+            for (int i = 0; i < static_cast<int>(engine_.devices_.size()); ++i) {
+                const auto& dev = engine_.devices_[static_cast<std::size_t>(i)];
                 // PushID: PortAudio lists one physical device once per host
                 // API with an identical name; the index keeps ImGui IDs unique.
                 ImGui::PushID(i);
-                if (ImGui::Selectable(dev.name.c_str(), i == deviceIndex_)) {
+                if (ImGui::Selectable(dev.name.c_str(), i == engine_.deviceIndex_)) {
                     // Re-open on change: open() closes the old stream first,
                     // so this is the whole device-switch operation. Through
                     // audioOpen_, never straight at the sink (AUDIO_DEVICE's
@@ -6498,9 +6496,9 @@ void AppWindow::drawSinksSection() {
         // output device, not the radio, or the next report reads "the radio
         // keeps going silent" and points the search at the wrong end of the
         // chain.
-        if (!audioHealthNote_.empty()) {
+        if (!engine_.audioHealthNote_.empty()) {
             ImGui::TextColored(cascade::gui::theme::warning(), "%s",
-                               audioHealthNote_.c_str());
+                               engine_.audioHealthNote_.c_str());
         }
         // WHY THERE IS NO SOUND, said where the sound settings are. This is the
         // panel a user goes to when the speakers are silent, and finding a
@@ -6508,7 +6506,7 @@ void AppWindow::drawSinksSection() {
         // there - with no explanation - is exactly the dead end the 0.58.0
         // audio investigation started from. Wrapped, because the menu column
         // is narrow and a plugin name is the plugin's to choose.
-        if (!mutedBy_.empty()) {
+        if (!engine_.mutedBy_.empty()) {
             ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
             ImGui::TextWrapped(tr("Muted by %s"), muteSubjectText().c_str());
             ImGui::PopStyleColor();
@@ -6627,8 +6625,8 @@ void AppWindow::drawDisplaySection() {
     // The lamp is the overlay ACTUALLY DRAWING - asked for, no load error, and
     // a plan with bands in it - so "PLAN" with the lamp out is the honest
     // reading of "you switched it on and there is nothing installed".
-    const bool planDrawing = bandPlanOverlay_ && bandPlanError_.empty() &&
-                             !bandPlan_.entries().empty();
+    const bool planDrawing = bandPlanOverlay_ && engine_.bandPlanError_.empty() &&
+                             !engine_.bandPlan_.entries().empty();
     if (benchSection(trId("Display"), true, bandPlanOverlay_ ? tr("PLAN") : tr("PLAIN"),
                      cascade::gui::theme::kPhosphor, planDrawing)) {
         // THE THEME (2026-09-25): the six looks, by the names the owner
@@ -6659,8 +6657,8 @@ void AppWindow::drawDisplaySection() {
         // least kMinDbSpan between the endpoints by pushing back the end the
         // user is actually dragging - correcting the *other* value would make
         // an untouched slider jump under the user's eyes.
-        float dbMin = dbMin_;
-        float dbMax = dbMax_;
+        float dbMin = engine_.dbMin_;
+        float dbMax = engine_.dbMax_;
         if (ImGui::SliderFloat(cascade::gui::labelAboveIfNeeded(trId("Min dB")), &dbMin, -160.0f,
                                -20.0f, "%.0f")) {
             submitCommand(cascade::core::cmd::makeNum(FOXAPP_OP_SET_DISPLAY_MIN, dbMin));
@@ -6779,12 +6777,12 @@ void AppWindow::drawDisplaySection() {
             // see BandPlan::loadSelection. Only shown when there is more than
             // one plan to choose between: a single-plan install has no
             // decision to offer, and an empty combo would read as breakage.
-            if (bandPlanChoices_.size() > 1) {
+            if (engine_.bandPlanChoices_.size() > 1) {
                 // The plan's NAME IS TRANSLATED WHERE IT IS DRAWN
                 // (core::displayPlanName); the file's own name stays data.
                 std::string preview = tr("(all installed)");
-                for (const cascade::core::PlanInfo& p : bandPlanChoices_) {
-                    if (p.id == bandPlanSelection_) { preview = cascade::core::displayPlanName(p.name); }
+                for (const cascade::core::PlanInfo& p : engine_.bandPlanChoices_) {
+                    if (p.id == engine_.bandPlanSelection_) { preview = cascade::core::displayPlanName(p.name); }
                 }
                 if (ImGui::BeginCombo(cascade::gui::labelAboveIfNeeded(trId("Region")),
                                       preview.c_str())) {
@@ -6800,9 +6798,9 @@ void AppWindow::drawDisplaySection() {
                     // and stops at the click; nothing touches the list again
                     // until EndCombo has run. See gui/list_pick.hpp.
                     const std::size_t pick = cascade::gui::pickFromList(
-                        bandPlanChoices_,
+                        engine_.bandPlanChoices_,
                         [&](const cascade::core::PlanInfo& p, std::size_t) {
-                            const bool selected = (p.id == bandPlanSelection_);
+                            const bool selected = (p.id == engine_.bandPlanSelection_);
                             // Keyed on the plan's id, so the row's identity
                             // does not change with the language.
                             const std::string row =
@@ -6817,20 +6815,20 @@ void AppWindow::drawDisplaySection() {
                     // away from any walk of the list.
                     if (pick != cascade::gui::kNoPick) {
                         submitCommand(cascade::core::cmd::makeText(FOXAPI_OP_SET_BAND_PLAN,
-                                                                   bandPlanChoices_[pick].id));
+                                                                   engine_.bandPlanChoices_[pick].id));
                     }
                 }
             }
-            if (!bandPlanError_.empty()) {
+            if (!engine_.bandPlanError_.empty()) {
                 ImGui::PushStyleColor(ImGuiCol_Text, kErrorRed);
-                ImGui::TextWrapped("%s", bandPlanError_.c_str());
+                ImGui::TextWrapped("%s", engine_.bandPlanError_.c_str());
                 ImGui::PopStyleColor();
-            } else if (bandPlan_.entries().empty()) {
+            } else if (engine_.bandPlan_.entries().empty()) {
                 ImGui::TextDisabled(tr("no band plan installed"));
             } else {
                 ImGui::TextDisabled(tr("%s (%d bands)"),
-                                    cascade::core::displayPlanName(bandPlan_.name()).c_str(),
-                                    static_cast<int>(bandPlan_.entries().size()));
+                                    cascade::core::displayPlanName(engine_.bandPlan_.name()).c_str(),
+                                    static_cast<int>(engine_.bandPlan_.entries().size()));
             }
         }
     }
@@ -7295,11 +7293,11 @@ void AppWindow::drawSourceSection() {
     // CHARACTERS: a byte cut would split an accented letter in half.
     // The built-in generator's chip is its own short key, never cut
     // (app_window.hpp, sourceChipText).
-    const std::string sourceChip = cascade::gui::sourceChipText(pipeline_.activeSource().name());
+    const std::string sourceChip = cascade::gui::sourceChipText(engine_.pipeline_.activeSource().name());
     // Rust and lit while the pipeline is faulted, phosphor and lit while it
     // runs: the colour says which state and the lamp says there is one, which
     // is the rule the whole rail keeps.
-    const bool sourceFaulted = pipeline_.faulted();
+    const bool sourceFaulted = engine_.pipeline_.faulted();
     // A RADIO THE GENERATOR IS STANDING IN FOR lights the lamp too (0.99.36):
     // the section may be folded, and its chip then reads only "generator" -
     // true, and silent about the radio that did not open. The reason is in
@@ -7309,7 +7307,7 @@ void AppWindow::drawSourceSection() {
         benchSection(trId("Source"), true, sourceChip.c_str(),
                      (sourceFaulted || radioNotOpen) ? cascade::gui::theme::kAlarm
                                                      : cascade::gui::theme::kPhosphor,
-                     sourceFaulted || radioNotOpen || pipeline_.running());
+                     sourceFaulted || radioNotOpen || engine_.pipeline_.running());
     if (!sourceOpen) { return; }
 
     // Row label for a combo index; -1 (active device dropped by a Refresh)
@@ -7324,14 +7322,14 @@ void AppWindow::drawSourceSection() {
         if (idx == 1) { return tr("IQ file"); }
         if (idx == kSoundCardRow) { return tr("Sound card"); }
         const int n = idx - kNativeRowBase;
-        if (n >= 0 && n < static_cast<int>(nativeRowLabels_.size())) {
-            return nativeRowLabels_[static_cast<std::size_t>(n)].c_str();
+        if (n >= 0 && n < static_cast<int>(engine_.nativeRowLabels_.size())) {
+            return engine_.nativeRowLabels_[static_cast<std::size_t>(n)].c_str();
         }
         const int d = idx - soapyRowBase();
-        if (d >= 0 && d < static_cast<int>(soapyDevices_.size())) {
-            return soapyDevices_[static_cast<std::size_t>(d)].label.c_str();
+        if (d >= 0 && d < static_cast<int>(engine_.soapyDevices_.size())) {
+            return engine_.soapyDevices_[static_cast<std::size_t>(d)].label.c_str();
         }
-        return tr(pipeline_.activeSourceName());
+        return tr(engine_.pipeline_.activeSourceName());
     };
 
     // While discovery or an open is in flight the controls are disabled and
@@ -7340,8 +7338,8 @@ void AppWindow::drawSourceSection() {
     // A worker thread died on a driver exception — almost always the device
     // being unplugged mid-stream. Say so plainly: the spectrum has frozen and
     // without this the app just looks hung.
-    if (pipeline_.faulted()) {
-        const std::string faultMessage = pipeline_.faultMessage();
+    if (engine_.pipeline_.faulted()) {
+        const std::string faultMessage = engine_.pipeline_.faultMessage();
         ImGui::TextColored(kErrorRed, tr("Device stopped: %s"), faultMessage.c_str());
         // NOT UNDER A DRIVER THAT HAS ALREADY SAID WHAT TO DO (0.99.36). The
         // SDRplay lost-session sentences end "then restart FoxSDR", because
@@ -7353,12 +7351,12 @@ void AppWindow::drawSourceSection() {
         }
     }
 
-    const bool soapyBusy = soapyScanPending_ || deviceOpenPending_;
+    const bool soapyBusy = engine_.soapyScanPending_ || engine_.deviceOpenPending_;
     if (soapyBusy) {
         std::string busyLine;
-        if (deviceOpenPending_) {
+        if (engine_.deviceOpenPending_) {
             cascade::core::formatUtf8(busyLine, tr("Opening %s..."),
-                          deviceBusyLabel_.c_str());
+                          engine_.deviceBusyLabel_.c_str());
         } else {
             busyLine = tr("Scanning for devices...");
         }
@@ -7394,9 +7392,9 @@ void AppWindow::drawSourceSection() {
     // Not while a sound card is opening either: the card is the one being
     // brought back, and "(saved, not open)" would be the lamp's false alarm
     // in words (gui::radioNotOpenLamp).
-    const bool keepPreview = restoreKeep_.valid() && device_ == nullptr &&
-                             sourceKind_ == "siggen" && !restoreKeepLabel_.empty() &&
-                             !soundCardOpenPending_;
+    const bool keepPreview = engine_.restoreKeep_.valid() && engine_.device_ == nullptr &&
+                             engine_.sourceKind_ == "siggen" && !engine_.restoreKeepLabel_.empty() &&
+                             !engine_.soundCardOpenPending_;
     // "(not open)" in the preview itself, because the combo is the one place
     // a user looks to find out what the receiver is on, and the name alone
     // there would claim the radio was running.
@@ -7404,11 +7402,11 @@ void AppWindow::drawSourceSection() {
     if (keepPreview) {
         std::string keepBuf;
         cascade::core::formatUtf8(keepBuf, tr("%s (saved, not open)"),
-                      restoreKeepLabel_.c_str());
+                      engine_.restoreKeepLabel_.c_str());
         keepPreviewLabel = keepBuf;
     }
     const bool comboOpen = ImGui::BeginCombo(
-        "##source_select", keepPreview ? keepPreviewLabel.c_str() : rowLabel(sourceSel_));
+        "##source_select", keepPreview ? keepPreviewLabel.c_str() : rowLabel(engine_.sourceSel_));
     if (comboOpen) {
         // ON THE FRAME IT OPENS, not on every frame it stays open: opening
         // the dropdown IS the user asking to see devices, and the combo asks
@@ -7430,7 +7428,7 @@ void AppWindow::drawSourceSection() {
         if (!sourceComboWasOpen_) {
             (void)applyCommand(cascade::core::cmd::make(FOXAPP_OP_SCAN_DEVICES_ON_OPEN));
         }
-        const int rowCount = soapyRowBase() + static_cast<int>(soapyDevices_.size());
+        const int rowCount = soapyRowBase() + static_cast<int>(engine_.soapyDevices_.size());
         for (int i = 0; i < rowCount; ++i) {
             // PushID: two identical devices (same model, no serial in the
             // label) must still be distinct rows.
@@ -7439,11 +7437,11 @@ void AppWindow::drawSourceSection() {
             // rather than while its page is open since 0.99.18): a device row
             // here would open a radio a patch node may already hold. Shown,
             // greyed, and saying why.
-            const bool patchHasRadios = patchRunning_ && i >= kNativeRowBase;
+            const bool patchHasRadios = engine_.patchRunning_ && i >= kNativeRowBase;
             ImGui::BeginDisabled(patchHasRadios);
             // SELECT_SOURCE with the row's id, matched back to the row
             // against the lists when it is applied.
-            if (ImGui::Selectable(rowLabel(i), i == sourceSel_)) {
+            if (ImGui::Selectable(rowLabel(i), i == engine_.sourceSel_)) {
                 const std::string id = sourceIdForRow(i);
                 if (!id.empty()) {
                     submitCommand(cascade::core::cmd::makeText(FOXAPI_OP_SELECT_SOURCE, id));
@@ -7472,7 +7470,7 @@ void AppWindow::drawSourceSection() {
     // (usb_device.hpp rule 1), so it can always run, and a user who has just
     // plugged a second dongle in must be able to make it appear.
     const bool scanGated = soapyScanGated();
-    if (!scanGated) { soapyScanDeferredLogged_ = false; }  // the next radio gets its own line
+    if (!scanGated) { engine_.soapyScanDeferredLogged_ = false; }  // the next radio gets its own line
     if (ImGui::Button(trId("Refresh"))) {
         // The SoapySDR half defers itself, and says so once, while a radio is
         // open.
@@ -7483,7 +7481,7 @@ void AppWindow::drawSourceSection() {
     // on the network is on no USB bus. Ticking it rescans at once, so the
     // radio it is for appears without a second click.
     ImGui::SameLine();
-    bool lookForNetworkUsrps = lookForNetworkUsrps_;
+    bool lookForNetworkUsrps = engine_.lookForNetworkUsrps_;
     if (ImGui::Checkbox(trId("Look for network USRPs"), &lookForNetworkUsrps)) {
         submitCommand(cascade::core::cmd::makeInt(FOXAPP_OP_SET_NETWORK_USRP_SCAN,
                                                   lookForNetworkUsrps ? 1 : 0));
@@ -7496,7 +7494,7 @@ void AppWindow::drawSourceSection() {
     // SAID WHEN THE LAST SCAN LEFT UHD OUT, so a network USRP that is not in
     // the list is not missing silently (gui::networkUsrpHint). Not while the
     // box is ticked: the rescan that tick starts is about to answer it.
-    if (const char* hint = cascade::gui::networkUsrpHint(soapyAbsentDrivers_);
+    if (const char* hint = cascade::gui::networkUsrpHint(engine_.soapyAbsentDrivers_);
         hint != nullptr && !lookForNetworkUsrps) {
         ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
         ImGui::TextWrapped("%s", tr(hint));
@@ -7536,7 +7534,7 @@ void AppWindow::drawSourceSection() {
     // only one of them has been through Zadig: "no radio hardware found"
     // would never appear for them, and the missing one would be missing
     // silently. See enumerateUnbound.
-    for (const cascade::usb::UsbDeviceInfo& u : nativeUnbound_) {
+    for (const cascade::usb::UsbDeviceInfo& u : engine_.nativeUnbound_) {
         const std::string what = u.description.empty() ? std::string(tr("A USB radio")) : u.description;
         // WHICH ENTRY TO PICK IN ZADIG IS NOT THE SAME FOR EVERY RADIO, and
         // saying "Bulk-In, Interface (Interface 0)" to an Airspy owner would
@@ -7608,17 +7606,17 @@ void AppWindow::drawSourceSection() {
     // gets, and one that drops "3.x" or "sdrplay.com" sends them nowhere.
     // Both cases arrive here - no API at all, and an API too old to drive an
     // RSP - and the second of them could not reach this line until 0.94.1.
-    if (!sdrPlayRowsFound_ && !sdrPlayAdvice_.empty()) {
+    if (!engine_.sdrPlayRowsFound_ && !engine_.sdrPlayAdvice_.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
-        ImGui::TextWrapped("%s", sdrPlayAdvice_.c_str());
+        ImGui::TextWrapped("%s", engine_.sdrPlayAdvice_.c_str());
         ImGui::PopStyleColor();
         // WHERE IT LOOKED, dimmed. A user does not need it; whoever is
         // helping them does, and "which path did it try" is the first
         // question worth asking - the same reasoning as the "Where FoxSDR
         // looked" tree further down.
-        if (!sdrPlayApiDetail_.empty()) {
+        if (!engine_.sdrPlayApiDetail_.empty()) {
             ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-            ImGui::TextWrapped(tr("SDRplay API: %s"), sdrPlayApiDetail_.c_str());
+            ImGui::TextWrapped(tr("SDRplay API: %s"), engine_.sdrPlayApiDetail_.c_str());
             ImGui::PopStyleColor();
         }
     }
@@ -7636,7 +7634,7 @@ void AppWindow::drawSourceSection() {
     //
     // Shown only after a scan has actually completed and found nothing, so it
     // never flashes up during the first enumeration.
-    if (soapyScanned_ && !soapyScanPartial_ && !soapyBusy && soapyDevices_.empty()) {
+    if (engine_.soapyScanned_ && !engine_.soapyScanPartial_ && !soapyBusy && engine_.soapyDevices_.empty()) {
         ImGui::Separator();
         ImGui::TextColored(cascade::gui::theme::warning(), tr("No radio hardware found"));
         ImGui::TextWrapped(
@@ -7699,7 +7697,7 @@ void AppWindow::drawSourceSection() {
     // keeps its current source until Open succeeds: a failed open constructs
     // and destroys a throwaway IqFileSource without ever touching the
     // pipeline, so there is nothing to roll back.
-    if (sourceSel_ == 1) {
+    if (engine_.sourceSel_ == 1) {
         ImGui::SetNextItemWidth(-60.0f);
         ImGui::InputText("##iq_path", iqPath_, sizeof(iqPath_));
         ImGui::SameLine();
@@ -7715,7 +7713,7 @@ void AppWindow::drawSourceSection() {
     // The sound card's controls, shown while the combo sits on its row. The
     // same shape as the IQ file above: the switch happens on a successful
     // Open (app_window_soundcard.cpp), never on selection.
-    if (sourceSel_ == kSoundCardRow) { drawSoundCardControls(); }
+    if (engine_.sourceSel_ == kSoundCardRow) { drawSoundCardControls(); }
 
     // THE PLUTO'S ADDRESS, shown while the combo sits on its row, and the
     // only source in this panel whose location the user has to type.
@@ -7727,14 +7725,14 @@ void AppWindow::drawSourceSection() {
     // traffic, no timeout and no wait - and an Open that fails leaves
     // whatever is installed running, with the driver's own sentence in the
     // red line below.
-    if (sourceSel_ >= kNativeRowBase && sourceSel_ < soapyRowBase()) {
-        const std::size_t plutoRow = static_cast<std::size_t>(sourceSel_ - kNativeRowBase);
-        if (plutoRow < nativeDevices_.size() &&
-            nativeDevices_[plutoRow].driver == kPlutoDriverKey) {
+    if (engine_.sourceSel_ >= kNativeRowBase && engine_.sourceSel_ < soapyRowBase()) {
+        const std::size_t plutoRow = static_cast<std::size_t>(engine_.sourceSel_ - kNativeRowBase);
+        if (plutoRow < engine_.nativeDevices_.size() &&
+            engine_.nativeDevices_[plutoRow].driver == kPlutoDriverKey) {
             // Disabled while an open is already resolving, for the reason
             // selectSource refuses a row switch mid-open: a second request
             // would strand the first one's device for a stale-drop teardown.
-            ImGui::BeginDisabled(deviceOpenPending_);
+            ImGui::BeginDisabled(engine_.deviceOpenPending_);
             ImGui::SetNextItemWidth(-60.0f);
             ImGui::InputText("##pluto_uri", plutoUri_, sizeof(plutoUri_));
             ImGui::SameLine();
@@ -7759,27 +7757,27 @@ void AppWindow::drawSourceSection() {
     // stays correct while e.g. the combo previews "IQ file" pre-Open). Every
     // control below goes through DeviceSource, so a native RTL-SDR and one
     // reached through a vendor module are the same panel.
-    if (device_ != nullptr) {
+    if (engine_.device_ != nullptr) {
         // THE RATE MENU IS THE RADIO'S OWN LIST. It was a fixed 1/2/4/8 MS/s
         // combo for every device on every driver - two rows an RTL-SDR cannot
         // do at all, and without 2.4 MS/s, which is the rate ADS-B needs.
         ImGui::SetNextItemWidth(120.0f);
         const char* ratePreview =
-            (deviceRateIndex_ >= 0 &&
-             deviceRateIndex_ < static_cast<int>(deviceRateLabels_.size()))
-                ? deviceRateLabels_[static_cast<std::size_t>(deviceRateIndex_)].c_str()
+            (engine_.deviceRateIndex_ >= 0 &&
+             engine_.deviceRateIndex_ < static_cast<int>(engine_.deviceRateLabels_.size()))
+                ? engine_.deviceRateLabels_[static_cast<std::size_t>(engine_.deviceRateIndex_)].c_str()
                 : "";
         if (ImGui::BeginCombo(cascade::gui::labelAboveIfNeeded(trId("Rate")), ratePreview)) {
-            for (std::size_t i = 0; i < deviceRateLabels_.size(); ++i) {
-                const bool sel = (static_cast<int>(i) == deviceRateIndex_);
-                if (ImGui::Selectable(deviceRateLabels_[i].c_str(), sel) && !sel) {
+            for (std::size_t i = 0; i < engine_.deviceRateLabels_.size(); ++i) {
+                const bool sel = (static_cast<int>(i) == engine_.deviceRateIndex_);
+                if (ImGui::Selectable(engine_.deviceRateLabels_[i].c_str(), sel) && !sel) {
                     // SET_SAMPLE_RATE: a COERCED rate returns true and says
                     // why through lastError() (an RX888 in VHF mode, a Pluto
                     // above its maximum) - the reason goes on the line, the
                     // combo points at the READBACK, and the DSP chain and the
                     // frequency axis follow the hardware, not the request.
                     submitCommand(cascade::core::cmd::makeNum(FOXAPI_OP_SET_SAMPLE_RATE,
-                                                              deviceRatesHz_[i]));
+                                                              engine_.deviceRatesHz_[i]));
                 }
                 if (sel) { ImGui::SetItemDefaultFocus(); }
             }
@@ -7791,7 +7789,7 @@ void AppWindow::drawSourceSection() {
         // translation makes the pair too wide (gui/text_fit.hpp).
         std::string actualRate;
         cascade::core::formatUtf8(actualRate, tr("actual %.4g MS/s"),
-                                  device_->sampleRateHz() / 1.0e6);
+                                  engine_.device_->sampleRateHz() / 1.0e6);
         cascade::gui::sameLineIfFits(ImGui::CalcTextSize(actualRate.c_str()).x);
         ImGui::TextUnformatted(actualRate.c_str());
 
@@ -7801,11 +7799,11 @@ void AppWindow::drawSourceSection() {
         // while hearing essentially nothing. Measured on a B200 at 1090 MHz,
         // the difference between the two ports was 16 dB of signal-to-noise
         // and the difference between decoding aircraft and decoding none.
-        if (deviceAntennas_.size() > 1) {
+        if (engine_.deviceAntennas_.size() > 1) {
             if (ImGui::BeginCombo(cascade::gui::labelAboveIfNeeded(trId("Antenna")),
-                                  deviceAntenna_.c_str())) {
-                for (const std::string& a : deviceAntennas_) {
-                    const bool sel = (a == deviceAntenna_);
+                                  engine_.deviceAntenna_.c_str())) {
+                for (const std::string& a : engine_.deviceAntennas_) {
+                    const bool sel = (a == engine_.deviceAntenna_);
                     if (ImGui::Selectable(a.c_str(), sel) && !sel) {
                         // SET_ANTENNA reads BACK rather than assuming the
                         // request took: a driver may coerce, and the panel
@@ -7818,16 +7816,16 @@ void AppWindow::drawSourceSection() {
                 }
                 ImGui::EndCombo();
             }
-        } else if (!deviceAntenna_.empty()) {
+        } else if (!engine_.deviceAntenna_.empty()) {
             // One port, nothing to choose - but still shown, because "which
             // antenna am I on" should never be a question the UI cannot answer.
-            ImGui::Text(tr("Antenna: %s"), deviceAntenna_.c_str());
+            ImGui::Text(tr("Antenna: %s"), engine_.deviceAntenna_.c_str());
         }
 
         // A COPY of the switch; SET_DEVICE_AGC changes the radio's mode and
         // the panel's figure only when the device accepts it.
-        bool agc = deviceAgc_;
-        if (deviceAgcSupported_) {
+        bool agc = engine_.deviceAgc_;
+        if (engine_.deviceAgcSupported_) {
             if (ImGui::Checkbox(trId("Auto gain"), &agc)) {
                 submitCommand(cascade::core::cmd::makeInt(FOXAPI_OP_SET_DEVICE_AGC, agc ? 1 : 0));
             }
@@ -7846,13 +7844,13 @@ void AppWindow::drawSourceSection() {
         // from this panel and nothing ever said so. kSoapyGainMinDb/MaxDb
         // remain the fallback for a driver that reports no range at all.
         ImGui::BeginDisabled(agc);
-        for (std::size_t i = 0; i < deviceGainNames_.size(); ++i) {
+        for (std::size_t i = 0; i < engine_.deviceGainNames_.size(); ++i) {
             float loDb = kSoapyGainMinDb;
             float hiDb = kSoapyGainMaxDb;
-            if (i < deviceGainRanges_.size() &&
-                deviceGainRanges_[i].maxDb > deviceGainRanges_[i].minDb) {
-                loDb = static_cast<float>(deviceGainRanges_[i].minDb);
-                hiDb = static_cast<float>(deviceGainRanges_[i].maxDb);
+            if (i < engine_.deviceGainRanges_.size() &&
+                engine_.deviceGainRanges_[i].maxDb > engine_.deviceGainRanges_[i].minDb) {
+                loDb = static_cast<float>(engine_.deviceGainRanges_[i].minDb);
+                hiDb = static_cast<float>(engine_.deviceGainRanges_[i].maxDb);
             }
             ImGui::PushID(static_cast<int>(i));
             // AND EACH SLIDER IS LETTERED IN ITS OWN UNIT. An Airspy's five
@@ -7868,11 +7866,11 @@ void AppWindow::drawSourceSection() {
             // same lie the antenna combo was fixed for. It makes the slider
             // feel notched, because the hardware is notched. A COPY is edited
             // here, so the figure the slider shows is always the radio's.
-            float gainDb = deviceGainsDb_[i];
-            if (ImGui::SliderFloat(cascade::gui::labelAboveIfNeeded(deviceGainNames_[i].c_str()),
+            float gainDb = engine_.deviceGainsDb_[i];
+            if (ImGui::SliderFloat(cascade::gui::labelAboveIfNeeded(engine_.deviceGainNames_[i].c_str()),
                                    &gainDb, loDb, hiDb,
                                    cascade::gui::gainSliderFormat(gainUnitAt(i)))) {
-                submitCommand(cascade::core::cmd::makeText(FOXAPI_OP_SET_GAIN, deviceGainNames_[i],
+                submitCommand(cascade::core::cmd::makeText(FOXAPI_OP_SET_GAIN, engine_.deviceGainNames_[i],
                                                            0, 0, static_cast<double>(gainDb)));
             }
             ImGui::PopID();
@@ -7894,8 +7892,8 @@ void AppWindow::drawSourceSection() {
         //
         // The deck's BIAS TEE key shows the same `shown` and switches through
         // the same switchBiasTee, so the box and the key always agree.
-        if (biasTeePanel_.present) {
-            bool box = biasTeePanel_.shown;
+        if (engine_.biasTeePanel_.present) {
+            bool box = engine_.biasTeePanel_.shown;
             if (ImGui::Checkbox(trId("Bias tee"), &box)) {
                 submitCommand(cascade::core::cmd::makeInt(FOXAPI_OP_SET_BIAS_TEE, box ? 1 : 0));
             }
@@ -7920,8 +7918,8 @@ void AppWindow::drawSourceSection() {
         // where it was.
         // Each is SET_DEVICE_OPTION, named, on a COPY of the switch.
         namespace cmd = cascade::core::cmd;
-        if (deviceRfNotchPresent_) {
-            bool on = deviceRfNotch_;
+        if (engine_.deviceRfNotchPresent_) {
+            bool on = engine_.deviceRfNotch_;
             if (ImGui::Checkbox(trId("FM notch"), &on)) {
                 submitCommand(cmd::makeText(FOXAPI_OP_SET_DEVICE_OPTION, "rf_notch", on ? 1 : 0));
             }
@@ -7931,8 +7929,8 @@ void AppWindow::drawSourceSection() {
                     "strong local FM transmitter is desensitising everything else."));
             }
         }
-        if (deviceDabNotchPresent_) {
-            bool on = deviceDabNotch_;
+        if (engine_.deviceDabNotchPresent_) {
+            bool on = engine_.deviceDabNotch_;
             if (ImGui::Checkbox(trId("DAB notch"), &on)) {
                 submitCommand(cmd::makeText(FOXAPI_OP_SET_DEVICE_OPTION, "dab_notch", on ? 1 : 0));
             }
@@ -7940,8 +7938,8 @@ void AppWindow::drawSourceSection() {
                 ImGui::SetTooltip(tr("The RSP's own DAB band III notch filter."));
             }
         }
-        if (deviceHdrPresent_) {
-            bool on = deviceHdr_;
+        if (engine_.deviceHdrPresent_) {
+            bool on = engine_.deviceHdr_;
             if (ImGui::Checkbox(trId("HDR mode"), &on)) {
                 submitCommand(cmd::makeText(FOXAPI_OP_SET_DEVICE_OPTION, "hdr", on ? 1 : 0));
             }
@@ -7956,8 +7954,8 @@ void AppWindow::drawSourceSection() {
         // rather than what reaches it, and both are visible in the spectrum
         // the moment they move, which is why neither is persisted (see
         // app_window.hpp).
-        if (deviceAdcSwitchesPresent_) {
-            bool dither = deviceDither_;
+        if (engine_.deviceAdcSwitchesPresent_) {
+            bool dither = engine_.deviceDither_;
             if (ImGui::Checkbox(trId("ADC dither"), &dither)) {
                 submitCommand(cmd::makeText(FOXAPI_OP_SET_DEVICE_OPTION, "dither", dither ? 1 : 0));
             }
@@ -7966,7 +7964,7 @@ void AppWindow::drawSourceSection() {
                     tr("Adds a small noise signal inside the converter so its spurious tones "
                     "stop landing on exact frequencies. Costs a little noise floor."));
             }
-            bool randomiser = deviceRandomiser_;
+            bool randomiser = engine_.deviceRandomiser_;
             if (ImGui::Checkbox(trId("ADC randomiser"), &randomiser)) {
                 submitCommand(cmd::makeText(FOXAPI_OP_SET_DEVICE_OPTION, "randomiser",
                                             randomiser ? 1 : 0));
@@ -7984,9 +7982,9 @@ void AppWindow::drawSourceSection() {
     // (app_window_converter.cpp), remembered per radio.
     drawConverterControls();
 
-    if (!sourceError_.empty()) {
+    if (!engine_.sourceError_.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, kErrorRed);
-        ImGui::TextWrapped("%s", sourceError_.c_str());
+        ImGui::TextWrapped("%s", engine_.sourceError_.c_str());
         ImGui::PopStyleColor();
     }
 
@@ -8002,8 +8000,8 @@ void AppWindow::drawSourceSection() {
         // the same terms (gui::rememberedSourceAfterFailedOpen), so the one
         // thing that changes is the noun: telling someone their missing .wav
         // is "the saved radio" would read as a different fault entirely.
-        const bool keepFile = restoreKeep_.kind == "file";
-        const bool keepCard = restoreKeep_.kind == "soundcard";
+        const bool keepFile = engine_.restoreKeep_.kind == "file";
+        const bool keepCard = engine_.restoreKeep_.kind == "soundcard";
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
         ImGui::TextWrapped(
             keepFile
@@ -8017,7 +8015,7 @@ void AppWindow::drawSourceSection() {
                 : tr("%s is still the saved radio. The signal generator is running in its place "
                      "for this session only - FoxSDR will try the radio again next time it "
                      "starts. Choosing another source here replaces it."),
-            restoreKeepLabel_.c_str());
+            engine_.restoreKeepLabel_.c_str());
         ImGui::PopStyleColor();
     }
 
@@ -8027,9 +8025,9 @@ void AppWindow::drawSourceSection() {
     // refusing the band outright, which used to retune silently and leave the
     // counter looking wrong with no explanation anywhere. See
     // AppWindow::noteTuneMismatch.
-    if (!tuneMismatchNote_.empty()) {
+    if (!engine_.tuneMismatchNote_.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
-        ImGui::TextWrapped("%s", tuneMismatchNote_.c_str());
+        ImGui::TextWrapped("%s", engine_.tuneMismatchNote_.c_str());
         ImGui::PopStyleColor();
     }
 }
@@ -8062,9 +8060,9 @@ bool AppWindow::soapyScanGated() const {
     // of its own, natively or through SoapySDR, and a native patch dongle was
     // invisible to this gate: a whole-bus scan could have probed it
     // mid-stream exactly as the 0.90.0 report describes.
-    return device_ != nullptr || deviceOpenPending_ ||
-           cascade::source::SoapySource::anyDeviceOpen() || !patchRadios_.empty() ||
-           !patchRadioPending_.empty();
+    return engine_.device_ != nullptr || engine_.deviceOpenPending_ ||
+           cascade::source::SoapySource::anyDeviceOpen() || !engine_.patchRadios_.empty() ||
+           !engine_.patchRadioPending_.empty();
 }
 
 cascade::gui::SoapyScanPlan AppWindow::soapyScanPlan() const {
@@ -8073,12 +8071,12 @@ cascade::gui::SoapyScanPlan AppWindow::soapyScanPlan() const {
     // is not a radio. See engine/device_scan_plan.hpp for the rule.
     std::vector<cascade::gui::OpenRadio> open;
     int soapyListed = 0;
-    if (device_ != nullptr) {
-        open.push_back({sourceKind_, deviceArgs_});
-        if (sourceKind_ == "soapy") { ++soapyListed; }
+    if (engine_.device_ != nullptr) {
+        open.push_back({engine_.sourceKind_, engine_.deviceArgs_});
+        if (engine_.sourceKind_ == "soapy") { ++soapyListed; }
     }
-    for (const auto& entry : patchRadios_) {
-        const cascade::core::patch::Node* n = patchGraph_.find(entry.first);
+    for (const auto& entry : engine_.patchRadios_) {
+        const cascade::core::patch::Node* n = engine_.patchGraph_.find(entry.first);
         if (n == nullptr) {
             // A running radio whose node is gone: its family cannot be named,
             // so the plan defers - never a guess.
@@ -8095,7 +8093,7 @@ cascade::gui::SoapyScanPlan AppWindow::soapyScanPlan() const {
     }
     const int unaccounted =
         std::max(0, cascade::source::SoapySource::openDeviceCount() - soapyListed);
-    const bool opening = deviceOpenPending_ || !patchRadioPending_.empty();
+    const bool opening = engine_.deviceOpenPending_ || !engine_.patchRadioPending_.empty();
     return cascade::gui::planSoapyScan(open, unaccounted, opening);
 }
 
@@ -8104,15 +8102,15 @@ std::string AppWindow::soapyScanGateDevice() const {
     // log, and the args carry the serial (see every other sanitiseDevice
     // site). deviceModel_ is that model for either family - a native row's
     // args are nothing BUT a serial, so sanitiseDevice would answer "".
-    if (device_ != nullptr && !deviceModel_.empty()) { return deviceModel_; }
-    if (deviceOpenPending_ && !deviceBusyLabel_.empty()) { return deviceBusyLabel_; }
+    if (engine_.device_ != nullptr && !engine_.deviceModel_.empty()) { return engine_.deviceModel_; }
+    if (engine_.deviceOpenPending_ && !engine_.deviceBusyLabel_.empty()) { return engine_.deviceBusyLabel_; }
     // A patch radio, by the name the user gave its part - never its args.
-    for (const auto& entry : patchRadios_) {
-        if (const cascade::core::patch::Node* n = patchGraph_.find(entry.first)) {
+    for (const auto& entry : engine_.patchRadios_) {
+        if (const cascade::core::patch::Node* n = engine_.patchGraph_.find(entry.first)) {
             return "the patch radio '" + n->name + "'";
         }
     }
-    if (!patchRadioPending_.empty()) { return "a patch radio"; }
+    if (!engine_.patchRadioPending_.empty()) { return "a patch radio"; }
     return "a radio this session could not release";
 }
 
@@ -8140,12 +8138,12 @@ void AppWindow::scanSoapy() {
         // so nativeDevices_ always holds its row and sourceSel_ already
         // points at it. Only a Soapy device can be open with no scan behind
         // it (restored from the config, or opened before the gate closed).
-        if (soapyView_ == nullptr || deviceArgs_.empty()) { return; }
+        if (engine_.soapyView_ == nullptr || engine_.deviceArgs_.empty()) { return; }
         bool listed = false;
-        for (std::size_t i = 0; i < soapyDevices_.size(); ++i) {
-            if (soapyDevices_[i].args == deviceArgs_) {
+        for (std::size_t i = 0; i < engine_.soapyDevices_.size(); ++i) {
+            if (engine_.soapyDevices_[i].args == engine_.deviceArgs_) {
                 listed = true;
-                sourceSel_ = soapyRowBase() + static_cast<int>(i);
+                engine_.sourceSel_ = soapyRowBase() + static_cast<int>(i);
             }
         }
         if (!listed) {
@@ -8155,22 +8153,22 @@ void AppWindow::scanSoapy() {
             // are the exact string that reopens it. A later real scan
             // replaces the whole list and re-finds the device by args.
             cascade::source::SoapyDeviceInfo row;
-            row.label = pipeline_.activeSource().name();
+            row.label = engine_.pipeline_.activeSource().name();
             const std::size_t colon = row.label.rfind(": ");
             if (colon != std::string::npos) { row.label = row.label.substr(colon + 2); }
-            row.args = deviceArgs_;
-            soapyDevices_.push_back(std::move(row));
-            sourceSel_ = soapyRowBase() + static_cast<int>(soapyDevices_.size() - 1);
+            row.args = engine_.deviceArgs_;
+            engine_.soapyDevices_.push_back(std::move(row));
+            engine_.sourceSel_ = soapyRowBase() + static_cast<int>(engine_.soapyDevices_.size() - 1);
         }
     };
 
-    if (soapyScanPending_) { return; }
-    const bool whole = cascade::gui::deviceScanAllowed(soapyScanGated(), soapyScanPending_,
-                                                       deviceOpenPending_);
+    if (engine_.soapyScanPending_) { return; }
+    const bool whole = cascade::gui::deviceScanAllowed(soapyScanGated(), engine_.soapyScanPending_,
+                                                       engine_.deviceOpenPending_);
     const cascade::gui::SoapyScanPlan plan = soapyScanPlan();
     if (!whole && plan.mode != cascade::gui::SoapyScanMode::SkipSome) {
-        if (soapyScanGated() && !soapyScanDeferredLogged_) {
-            soapyScanDeferredLogged_ = true;
+        if (soapyScanGated() && !engine_.soapyScanDeferredLogged_) {
+            engine_.soapyScanDeferredLogged_ = true;
             cascade::core::diagLogf(
                 "soapy: device scan deferred while %s is open - the vendor probe opens "
                 "and resets every dongle it finds (close the radio to look for other "
@@ -8191,10 +8189,10 @@ void AppWindow::scanSoapy() {
             "probe would reset the open radio",
             soapyScanGateDevice().c_str(), names.c_str());
     }
-    soapyScanned_ = true;  // claimed now so the combo does not re-request
-    soapyScanPending_ = true;
-    soapyScanSkip_ = skip;
-    soapyScanPartial_ = !whole;
+    engine_.soapyScanned_ = true;  // claimed now so the combo does not re-request
+    engine_.soapyScanPending_ = true;
+    engine_.soapyScanSkip_ = skip;
+    engine_.soapyScanPartial_ = !whole;
     // UHD IS ASKED ONLY WHEN A USRP COULD BE HERE (F204602B5329B268, 0.99.35:
     // its probe killed the scan's child on a machine whose only radio was an
     // SDRplay). The Soapy args this session knows of - the file's, the last
@@ -8202,20 +8200,20 @@ void AppWindow::scanSoapy() {
     // user has one; the USB listing, taken on the scan's own thread below
     // because SetupAPI is not free, says whether one is plugged in. See
     // gui::soapyDriversWithNoHardware.
-    std::vector<std::string> namedSoapyArgs = {startupSoapyArgs_, cfgSoapyArgs_};
-    if (sourceKind_ == "soapy") { namedSoapyArgs.push_back(deviceArgs_); }
-    for (const cascade::core::patch::Node& n : patchGraph_.nodes()) {
+    std::vector<std::string> namedSoapyArgs = {engine_.startupSoapyArgs_, engine_.cfgSoapyArgs_};
+    if (engine_.sourceKind_ == "soapy") { namedSoapyArgs.push_back(engine_.deviceArgs_); }
+    for (const cascade::core::patch::Node& n : engine_.patchGraph_.nodes()) {
         if (cascade::core::patch::deviceDriver(n.device) == "soapy") {
             namedSoapyArgs.push_back(cascade::core::patch::deviceArgs(n.device));
         }
     }
-    const bool lookForNetworkUsrps = lookForNetworkUsrps_;
-    soapyScanAbsent_ = std::make_shared<std::vector<std::string>>();
-    const std::shared_ptr<std::vector<std::string>> absentOut = soapyScanAbsent_;
+    const bool lookForNetworkUsrps = engine_.lookForNetworkUsrps_;
+    engine_.soapyScanAbsent_ = std::make_shared<std::vector<std::string>>();
+    const std::shared_ptr<std::vector<std::string>> absentOut = engine_.soapyScanAbsent_;
     // enumerate() never throws and is simply empty on a machine with no
     // vendor modules; this is also the hot-plug refresh path.
-    const auto scanHook = testHooks_.soapyScan;  // null in every build of the application
-    soapyScanFuture_ = std::async(std::launch::async, [skip, namedSoapyArgs,
+    const auto scanHook = cascade::engine::Engine::testHooks_.soapyScan;  // null in every build of the application
+    engine_.soapyScanFuture_ = std::async(std::launch::async, [skip, namedSoapyArgs,
                                                        lookForNetworkUsrps, absentOut, scanHook] {
         if (scanHook != nullptr) { return scanHook(); }
         std::vector<cascade::usb::UsbId> present;
@@ -8236,35 +8234,35 @@ void AppWindow::scanSoapy() {
 void AppWindow::pollSourceAsync() {
     constexpr auto kNoWait = std::chrono::seconds(0);
 
-    if (soapyScanPending_ && soapyScanFuture_.valid() &&
-        soapyScanFuture_.wait_for(kNoWait) == std::future_status::ready) {
-        auto found = soapyScanFuture_.get();
+    if (engine_.soapyScanPending_ && engine_.soapyScanFuture_.valid() &&
+        engine_.soapyScanFuture_.wait_for(kNoWait) == std::future_status::ready) {
+        auto found = engine_.soapyScanFuture_.get();
         // A SCAN BESIDE AN OPEN RADIO could not see that radio's family, so
         // the rows of the drivers it left out are KEPT from the old list - the
         // open radio's own row among them - and not silently dropped.
         std::vector<cascade::source::SoapyDeviceInfo> kept;
-        for (const auto& d : soapyDevices_) {
-            if (cascade::gui::rowFromSkippedDriver(soapyScanSkip_, d.args)) { kept.push_back(d); }
+        for (const auto& d : engine_.soapyDevices_) {
+            if (cascade::gui::rowFromSkippedDriver(engine_.soapyScanSkip_, d.args)) { kept.push_back(d); }
         }
-        soapyDevices_.clear();
+        engine_.soapyDevices_.clear();
         for (auto& d : found) {
-            if (!isAudioDriver(d.args)) { soapyDevices_.push_back(std::move(d)); }
+            if (!isAudioDriver(d.args)) { engine_.soapyDevices_.push_back(std::move(d)); }
         }
         for (auto& d : kept) {
-            const bool present = std::any_of(soapyDevices_.begin(), soapyDevices_.end(),
+            const bool present = std::any_of(engine_.soapyDevices_.begin(), engine_.soapyDevices_.end(),
                                              [&](const cascade::source::SoapyDeviceInfo& x) {
                                                  return x.args == d.args;
                                              });
-            if (!present) { soapyDevices_.push_back(std::move(d)); }
+            if (!present) { engine_.soapyDevices_.push_back(std::move(d)); }
         }
-        soapyScanSkip_.clear();
-        soapyScanPending_ = false;
+        engine_.soapyScanSkip_.clear();
+        engine_.soapyScanPending_ = false;
         // What THIS scan left out for having nothing to find - replacing the
         // last scan's, so the hint follows the list it sits under.
-        soapyAbsentDrivers_ =
-            soapyScanAbsent_ ? *soapyScanAbsent_ : std::vector<std::string>();
-        soapyScanAbsent_.reset();
-        if (sourceSel_ >= kNativeRowBase || sourceSel_ < 0) {
+        engine_.soapyAbsentDrivers_ =
+            engine_.soapyScanAbsent_ ? *engine_.soapyScanAbsent_ : std::vector<std::string>();
+        engine_.soapyScanAbsent_.reset();
+        if (engine_.sourceSel_ >= kNativeRowBase || engine_.sourceSel_ < 0) {
             // Re-find the open device by its args (labels can repeat); if it
             // vanished from the scan the device stays open and selected, and
             // the preview falls back to its live name via rowLabel(-1).
@@ -8273,26 +8271,26 @@ void AppWindow::pollSourceAsync() {
             // scan did not touch nativeDevices_, but the row INDEX moves when
             // the Soapy list changes length only for Soapy rows, so a native
             // selection is simply looked up again rather than assumed.
-            sourceSel_ = -1;
-            for (std::size_t i = 0; i < nativeDevices_.size(); ++i) {
+            engine_.sourceSel_ = -1;
+            for (std::size_t i = 0; i < engine_.nativeDevices_.size(); ++i) {
                 // BY DRIVER AND ARGS (0.99.36): an RSP's native Mirics row and
                 // its SDRplay API row carry the same "serial=..." args.
-                if (device_ != nullptr && soapyView_ == nullptr &&
-                    nativeDevices_[i].driver == sourceKind_ &&
-                    nativeDevices_[i].args == deviceArgs_) {
-                    sourceSel_ = kNativeRowBase + static_cast<int>(i);
+                if (engine_.device_ != nullptr && engine_.soapyView_ == nullptr &&
+                    engine_.nativeDevices_[i].driver == engine_.sourceKind_ &&
+                    engine_.nativeDevices_[i].args == engine_.deviceArgs_) {
+                    engine_.sourceSel_ = kNativeRowBase + static_cast<int>(i);
                 }
             }
-            for (std::size_t i = 0; i < soapyDevices_.size(); ++i) {
-                if (soapyView_ != nullptr && soapyDevices_[i].args == deviceArgs_) {
-                    sourceSel_ = soapyRowBase() + static_cast<int>(i);
+            for (std::size_t i = 0; i < engine_.soapyDevices_.size(); ++i) {
+                if (engine_.soapyView_ != nullptr && engine_.soapyDevices_[i].args == engine_.deviceArgs_) {
+                    engine_.sourceSel_ = soapyRowBase() + static_cast<int>(i);
                 }
             }
         }
     }
 
-    if (deviceOpenPending_ && deviceOpenFuture_.valid() &&
-        deviceOpenFuture_.wait_for(kNoWait) == std::future_status::ready) {
+    if (engine_.deviceOpenPending_ && engine_.deviceOpenFuture_.valid() &&
+        engine_.deviceOpenFuture_.wait_for(kNoWait) == std::future_status::ready) {
         // THE MODULE TABLE, REBUILT BECAUSE THE OPEN LOADED CODE.
         //
         // SoapySDR::Device::make() maps the vendor module and everything it
@@ -8310,14 +8308,14 @@ void AppWindow::pollSourceAsync() {
         // and both of those loaded the vendor module just the same. Rebuilt
         // once per open, which is a user action, not per frame.
         cascade::core::refreshModuleTable();
-        finishDeviceOpen(deviceOpenFuture_.get());
-        deviceOpenPending_ = false;
-        deviceBusyLabel_.clear();
+        finishDeviceOpen(engine_.deviceOpenFuture_.get());
+        engine_.deviceOpenPending_ = false;
+        engine_.deviceBusyLabel_.clear();
     }
 }
 
 void AppWindow::reapPendingDeviceOpen() {
-    if (!deviceOpenPending_ || !deviceOpenFuture_.valid()) { return; }
+    if (!engine_.deviceOpenPending_ || !engine_.deviceOpenFuture_.valid()) { return; }
 
     // WHY THIS EXISTS. std::future's destructor for a std::async(launch::async)
     // task BLOCKS until the worker returns, and deviceOpenFuture_ is a member,
@@ -8333,9 +8331,9 @@ void AppWindow::reapPendingDeviceOpen() {
     // short enough not to be felt and long enough to cover every open that was
     // not actually stuck.
     constexpr auto kQuitGrace = std::chrono::milliseconds(250);
-    if (deviceOpenFuture_.wait_for(kQuitGrace) == std::future_status::ready) {
-        drainDeviceOpen(deviceOpenFuture_);
-        deviceOpenPending_ = false;
+    if (engine_.deviceOpenFuture_.wait_for(kQuitGrace) == std::future_status::ready) {
+        drainDeviceOpen(engine_.deviceOpenFuture_);
+        engine_.deviceOpenPending_ = false;
         return;
     }
 
@@ -8353,14 +8351,14 @@ void AppWindow::reapPendingDeviceOpen() {
     // That is the accepted cost — the alternative on offer is the hang above,
     // and no amount of waiting can bound a driver call that is not going to
     // return.
-    std::thread([f = std::move(deviceOpenFuture_)]() mutable {
+    std::thread([f = std::move(engine_.deviceOpenFuture_)]() mutable {
         drainDeviceOpen(f);
     }).detach();
-    deviceOpenPending_ = false;
+    engine_.deviceOpenPending_ = false;
 }
 
 void AppWindow::reapPendingSoapyScan() {
-    if (!soapyScanPending_ || !soapyScanFuture_.valid()) { return; }
+    if (!engine_.soapyScanPending_ || !engine_.soapyScanFuture_.valid()) { return; }
 
     // THE SAME BLOCKING DESTRUCTOR AS reapPendingDeviceOpen, on the other
     // future. std::async(launch::async) futures block in ~future until the
@@ -8378,9 +8376,9 @@ void AppWindow::reapPendingSoapyScan() {
     // finishing is reaped right here, keeping the common case free of an extra
     // thread and of the process-exit race below.
     constexpr auto kQuitGrace = std::chrono::milliseconds(250);
-    if (soapyScanFuture_.wait_for(kQuitGrace) == std::future_status::ready) {
-        drainSoapyScan(soapyScanFuture_);
-        soapyScanPending_ = false;
+    if (engine_.soapyScanFuture_.wait_for(kQuitGrace) == std::future_status::ready) {
+        drainSoapyScan(engine_.soapyScanFuture_);
+        engine_.soapyScanPending_ = false;
         return;
     }
 
@@ -8393,10 +8391,10 @@ void AppWindow::reapPendingSoapyScan() {
     // so the wait happens off the GUI thread. If the process exits first the
     // thread is terminated wherever it stands and nothing is left behind that
     // the operating system would not have reclaimed anyway.
-    std::thread([f = std::move(soapyScanFuture_)]() mutable {
+    std::thread([f = std::move(engine_.soapyScanFuture_)]() mutable {
         drainSoapyScan(f);
     }).detach();
-    soapyScanPending_ = false;
+    engine_.soapyScanPending_ = false;
 }
 
 void AppWindow::finishDeviceOpen(DeviceOpenResult r) {
@@ -8412,7 +8410,7 @@ void AppWindow::finishDeviceOpen(DeviceOpenResult r) {
     // error string is dropped with it on purpose — it describes a device the
     // user is no longer asking about, and showing it under the source they DID
     // choose would read as a fault in that source.
-    if (!asyncOpenStillWanted(deviceOpenReqGen_, sourceGen_)) { return; }
+    if (!asyncOpenStillWanted(engine_.deviceOpenReqGen_, engine_.sourceGen_)) { return; }
 
     // Failure: the reason lands in red under the control. The combo settles
     // on what is actually installed — since the close-first ordering in
@@ -8421,7 +8419,7 @@ void AppWindow::finishDeviceOpen(DeviceOpenResult r) {
     // at a device row would be a readout disagreeing with the hardware.
     if (!r.dev) {
         const std::string why = r.error.empty() ? "device open failed" : r.error;
-        sourceError_ = why;
+        engine_.sourceError_ = why;
         if (r.recovery) {
             // THE ONE AUTOMATIC REOPEN DID NOT TAKE. The dead radio was
             // closed before the attempt, the generator is what is installed,
@@ -8429,8 +8427,8 @@ void AppWindow::finishDeviceOpen(DeviceOpenResult r) {
             // with the driver's reason; nothing tries again
             // (pollSoapyRecovery has no device to reopen now), and the words
             // are the ones the dead-device policy has always used.
-            sourceError_ = "the radio could not be reopened after its driver faulted (" +
-                           sourceError_ + ") - restart FoxSDR to use this radio again";
+            engine_.sourceError_ = "the radio could not be reopened after its driver faulted (" +
+                           engine_.sourceError_ + ") - restart FoxSDR to use this radio again";
             cascade::core::diagWarnf(
                 "source: the reopen of %s failed (%s) - restart FoxSDR to use this "
                 "radio again",
@@ -8444,10 +8442,10 @@ void AppWindow::finishDeviceOpen(DeviceOpenResult r) {
         // is what the screen then told the user to do - made every later
         // launch start on the generator too. Only when the generator is what
         // is installed: a user who was playing an I/Q file still is.
-        if (device_ == nullptr && sourceKind_ == "siggen") {
-            if (!restoreKeep_.valid()) {
-                restoreKeep_ = cascade::gui::rememberAfterFailedSwitch(restoreKeep_, r.closedRadio);
-                if (restoreKeep_.valid()) { restoreKeepLabel_ = r.closedLabel; }
+        if (engine_.device_ == nullptr && engine_.sourceKind_ == "siggen") {
+            if (!engine_.restoreKeep_.valid()) {
+                engine_.restoreKeep_ = cascade::gui::rememberAfterFailedSwitch(engine_.restoreKeep_, r.closedRadio);
+                if (engine_.restoreKeep_.valid()) { engine_.restoreKeepLabel_ = r.closedLabel; }
             }
             // The model, never the args, in the log (serial numbers): the
             // same rule as every other source line.
@@ -8458,13 +8456,13 @@ void AppWindow::finishDeviceOpen(DeviceOpenResult r) {
             if (!r.recovery) {
                 // Which radio, why, and where the receiver is now - on the
                 // screen, under the combo, where the reason already went.
-                const std::string wanted = deviceBusyLabel_.empty() ? model : deviceBusyLabel_;
-                sourceError_ = cascade::gui::radioNotOpenedSentence(wanted, why);
+                const std::string wanted = engine_.deviceBusyLabel_.empty() ? model : engine_.deviceBusyLabel_;
+                engine_.sourceError_ = cascade::gui::radioNotOpenedSentence(wanted, why);
             }
             cascade::core::diagWarnf(
                 "source: %s (%s) did not open - the receiver is on the signal generator%s",
                 model.c_str(), r.kind.c_str(),
-                restoreKeep_.valid() ? "; the saved radio is kept for the next start" : "");
+                engine_.restoreKeep_.valid() ? "; the saved radio is kept for the next start" : "");
         }
         // ...and the combo settles on whatever IS installed - unless a saved
         // radio is still being remembered for the config, in which case -1
@@ -8472,14 +8470,14 @@ void AppWindow::finishDeviceOpen(DeviceOpenResult r) {
         // nobody chose. Same rule as the restore's failure path.
         // A sound card chosen while this radio was opening keeps its row, as
         // the I/Q file's row does: it is a choice, not a stand-in.
-        if (device_ == nullptr && sourceKind_ == "siggen" && sourceSel_ != 1 &&
-            sourceSel_ != kSoundCardRow) {
-            sourceSel_ = restoreKeep_.valid() ? -1 : 0;
+        if (engine_.device_ == nullptr && engine_.sourceKind_ == "siggen" && engine_.sourceSel_ != 1 &&
+            engine_.sourceSel_ != kSoundCardRow) {
+            engine_.sourceSel_ = engine_.restoreKeep_.valid() ? -1 : 0;
         }
         return;
     }
     // A non-fatal rate refusal still carries its reason.
-    if (!r.error.empty()) { sourceError_ = r.error; }
+    if (!r.error.empty()) { engine_.sourceError_ = r.error; }
 
     // Panel mirrors, then gain priming — all quick register writes, unlike
     // the make() that just finished on the worker. One shared function with
@@ -8496,46 +8494,46 @@ void AppWindow::finishDeviceOpen(DeviceOpenResult r) {
         // only a set the driver accepted.
         for (std::size_t i = 0; i < r.recoveryGainNames.size() && i < r.recoveryGainsDb.size();
              ++i) {
-            for (std::size_t g = 0; g < deviceGainNames_.size(); ++g) {
-                if (deviceGainNames_[g] != r.recoveryGainNames[i]) { continue; }
-                if (r.dev->setGainDb(deviceGainNames_[g],
+            for (std::size_t g = 0; g < engine_.deviceGainNames_.size(); ++g) {
+                if (engine_.deviceGainNames_[g] != r.recoveryGainNames[i]) { continue; }
+                if (r.dev->setGainDb(engine_.deviceGainNames_[g],
                                      static_cast<double>(r.recoveryGainsDb[i]))) {
-                    deviceGainsDb_[g] = r.recoveryGainsDb[i];
+                    engine_.deviceGainsDb_[g] = r.recoveryGainsDb[i];
                 }
             }
         }
-        if (r.recoveryAgc && deviceAgcSupported_ && r.dev->setAutoGain(true)) {
-            deviceAgc_ = true;
+        if (r.recoveryAgc && engine_.deviceAgcSupported_ && r.dev->setAutoGain(true)) {
+            engine_.deviceAgc_ = true;
         }
     }
     // The antenna is settled by adoptDeviceMirrors above, on the same rule it
     // always used: apply the saved port if this device has one by that name,
     // then report what the driver actually chose.
 
-    device_ = r.dev.get();
+    engine_.device_ = r.dev.get();
     // ...AND THE SAME OBJECT AS A SoapySource WHEN IT IS ONE. dynamic_cast
     // rather than trusting r.kind: this pointer is what the vendor-fault
     // recovery and the module diagnostics dereference, and a kind string that
     // ever disagreed with the object would make that a wild pointer rather
     // than a wrong caption.
-    soapyView_ = dynamic_cast<cascade::source::SoapySource*>(device_);
-    deviceArgs_ = r.args;
-    deviceModel_ = (r.kind == "soapy") ? cascade::core::sanitiseDevice(r.args)
+    engine_.soapyView_ = dynamic_cast<cascade::source::SoapySource*>(engine_.device_);
+    engine_.deviceArgs_ = r.args;
+    engine_.deviceModel_ = (r.kind == "soapy") ? cascade::core::sanitiseDevice(r.args)
                                        : modelFromNativeLabel(nativeLabelFor(r.kind, r.args));
     if (r.kind == "soapy") {
-        cfgSoapyArgs_ = r.args;
+        engine_.cfgSoapyArgs_ = r.args;
     } else {
-        cfgNativeArgs_ = r.args;
+        engine_.cfgNativeArgs_ = r.args;
     }
     // A RADIO IS OPEN, so there is nothing to remember on its behalf: whatever
     // the startup restore failed to open has just been superseded by a device
     // the user actually has. (A failed open clears nothing - the attempt did
     // not take, and the saved radio is still the best thing to try next time.)
-    restoreKeep_ = cascade::gui::RememberedSource{};
-    restoreKeepLabel_.clear();
-    ++sourceGen_;  // this install is itself a source change
+    engine_.restoreKeep_ = cascade::gui::RememberedSource{};
+    engine_.restoreKeepLabel_.clear();
+    ++engine_.sourceGen_;  // this install is itself a source change
     installSource(std::move(r.dev));
-    sourceKind_ = r.kind;
+    engine_.sourceKind_ = r.kind;
     // A dongle the native driver refused, opened through SoapySDR instead, is
     // still the radio the user chose: its converter comes with it.
     if (!r.fellBackFromKey.empty()) {
@@ -8545,15 +8543,15 @@ void AppWindow::finishDeviceOpen(DeviceOpenResult r) {
     // frequency the user was on is sent through the converter in front of the
     // radio now open, not the one in front of the radio just closed.
     applyConverterForSource();
-    sourceSel_ = r.row;
+    engine_.sourceSel_ = r.row;
     // SERIAL STRIPPED, exactly as everywhere else this string is recorded.
     // "which radio, at what rate" is the single most useful line in the run-up
     // to a fault, because vendor SDR modules are third-party code running
     // in-process and the rate decides whether the chain keeps up. WHICH
     // DRIVER opened it is on the line too now, because there are two ways to
     // reach the same dongle and a report has to say which one was taken.
-    cascade::core::diagLogf("source: opened %s (%s) at %.0f S/s", deviceModel_.c_str(),
-                            r.kind.c_str(), pipeline_.activeSource().sampleRateHz());
+    cascade::core::diagLogf("source: opened %s (%s) at %.0f S/s", engine_.deviceModel_.c_str(),
+                            r.kind.c_str(), engine_.pipeline_.activeSource().sampleRateHz());
 
     // CARRY THE FREQUENCY ACROSS, which is the whole difference between
     // changing radio and losing what you were listening to.
@@ -8575,20 +8573,20 @@ void AppWindow::finishDeviceOpen(DeviceOpenResult r) {
         // readback two lines down must be valid on return. A frequency THIS
         // radio's converter cannot deliver is refused by the pipeline's view
         // without reaching the radio, and noteTuneRefused says why.
-        retuneCoalescer_.clearPending();
+        engine_.retuneCoalescer_.clearPending();
         applyRetuneNow(keepHz);
         // Not every radio covers every band, so say so rather than leaving
         // the user on a frequency they did not choose. The readback is the
         // authority - a device may clamp to its range or land on a nearby
         // tuning step. (An unreachable one has the converter's sentence.)
-        const double landed = pipeline_.activeSource().centerFrequencyHz();
-        if (cascade::core::airReachable(pipeline_.converter(), keepHz) &&
+        const double landed = engine_.pipeline_.activeSource().centerFrequencyHz();
+        if (cascade::core::airReachable(engine_.pipeline_.converter(), keepHz) &&
             std::fabs(landed - keepHz) > 1000.0) {
             char buf[128];
             std::snprintf(buf, sizeof(buf),
                           "this radio could not tune %.6f MHz; it is on %.6f MHz",
                           keepHz / 1e6, landed / 1e6);
-            sourceError_ = buf;
+            engine_.sourceError_ = buf;
         }
     }
 
@@ -8604,19 +8602,19 @@ void AppWindow::finishDeviceOpen(DeviceOpenResult r) {
         // Play press.
         if (r.recoveryRestart) { startReceiver(); }
         cascade::core::diagLogf("source: reopened %s at %.0f S/s after the driver fault%s",
-                                deviceModel_.c_str(),
-                                pipeline_.activeSource().sampleRateHz(),
+                                engine_.deviceModel_.c_str(),
+                                engine_.pipeline_.activeSource().sampleRateHz(),
                                 r.recoveryRestart ? "; receiver restarted" : "");
     }
 }
 
 void AppWindow::launchDeviceOpen(DeviceOpenResult r, const std::string& busyLabel) {
-    deviceBusyLabel_ = busyLabel;
-    deviceOpenPending_ = true;
+    engine_.deviceBusyLabel_ = busyLabel;
+    engine_.deviceOpenPending_ = true;
     // Stamp the request with the selection it belongs to. Nothing is installed
     // yet, so the counter is NOT bumped here — only the answer's right to be
     // applied is recorded.
-    deviceOpenReqGen_ = sourceGen_;
+    engine_.deviceOpenReqGen_ = engine_.sourceGen_;
     // The RSP pre-Init tune (see the worker below) is a RADIO frequency, so
     // it is converted here, on the GUI thread that owns the converter table,
     // for the radio this request names. Only a frequency the radio can be
@@ -8634,7 +8632,7 @@ void AppWindow::launchDeviceOpen(DeviceOpenResult r, const std::string& busyLabe
     // -walking call that used to freeze the GUI here. The request travels
     // into the worker and comes back as the answer, with the device (or the
     // reason) filled in.
-    deviceOpenFuture_ = std::async(std::launch::async, [r = std::move(r)]() mutable {
+    engine_.deviceOpenFuture_ = std::async(std::launch::async, [r = std::move(r)]() mutable {
         std::unique_ptr<cascade::source::DeviceSource> dev = makeDeviceSource(r.kind);
         if (!dev) {
             r.error = "\"" + r.kind + "\" is not a source kind this build can open";
@@ -8716,19 +8714,19 @@ void AppWindow::pollSoapyRecovery() {
     // it. A native driver has neither: its faults are returned, not raised,
     // and a native radio that has gone dead has done so for a reason its own
     // lastError() already states. Reopening one on a timer would be guessing.
-    if (soapyView_ == nullptr || !soapyView_->deviceDead()) { return; }
+    if (engine_.soapyView_ == nullptr || !engine_.soapyView_->deviceDead()) { return; }
     using DeadReason = cascade::source::SoapySource::DeadReason;
-    const DeadReason reason = soapyView_->deadReason();
+    const DeadReason reason = engine_.soapyView_->deadReason();
     const double now = ImGui::GetTime();
     if (!cascade::gui::autoReopenDue(reason == DeadReason::VendorFault,
-                                     reason == DeadReason::Abandoned, deviceOpenPending_,
-                                     soapyScanPending_, now, soapyReopenAttemptSec_)) {
+                                     reason == DeadReason::Abandoned, engine_.deviceOpenPending_,
+                                     engine_.soapyScanPending_, now, engine_.soapyReopenAttemptSec_)) {
         return;
     }
     // Stamped BEFORE anything can fail, so a reopen that faults again (which
     // condemns its own device the same way) is held off for the minute
     // rather than tried again on the next frame.
-    soapyReopenAttemptSec_ = now;
+    engine_.soapyReopenAttemptSec_ = now;
     reopenAfterDriverFault();
 }
 
@@ -8737,7 +8735,7 @@ void AppWindow::reopenAfterDriverFault() {
     // radio through device_ - the same object as soapyView_ whenever that
     // gate let it through - so the reopen itself is DeviceSource work and a
     // test can drive it with a device of its own (AppWindowTestAccess).
-    if (device_ == nullptr) { return; }
+    if (engine_.device_ == nullptr) { return; }
 
     // EVERYTHING THE REOPEN NEEDS IS READ FROM THE DEAD SOURCE FIRST. Its
     // mirrors survive the fault on purpose (a rate or a retune that faulted
@@ -8745,9 +8743,9 @@ void AppWindow::reopenAfterDriverFault() {
     // the close below is what clears them.
     DeviceOpenResult r;
     r.kind = "soapy";
-    r.args = deviceArgs_;
-    r.row = sourceSel_;
-    const double confirmedRateHz = device_->sampleRateHz();
+    r.args = engine_.deviceArgs_;
+    r.row = engine_.sourceSel_;
+    const double confirmedRateHz = engine_.device_->sampleRateHz();
     r.requestRateHz = confirmedRateHz > 0.0 ? confirmedRateHz
                                             : kSoapyRateHz[kSoapyRateDefaultIndex];
     // Through the pipeline, not the Soapy object: the device IS the active
@@ -8756,16 +8754,16 @@ void AppWindow::reopenAfterDriverFault() {
     // which may be below 0 Hz on the air and is still a frequency.
     r.keepCenterHz = carriedAirCentre();
     r.recovery = true;
-    r.recoveryGainNames = deviceGainNames_;
-    r.recoveryGainsDb = deviceGainsDb_;
-    r.recoveryAgc = deviceAgc_;
+    r.recoveryGainNames = engine_.deviceGainNames_;
+    r.recoveryGainsDb = engine_.deviceGainsDb_;
+    r.recoveryAgc = engine_.deviceAgc_;
     // Running, or faulted - the pipeline's latch is raised only by its own
     // source thread, which exists only while the receiver runs, so a latched
     // fault is proof it was running when the driver went.
-    r.recoveryRestart = pipeline_.running() || pipeline_.faulted();
-    std::string what = device_->faultedWhile();
+    r.recoveryRestart = engine_.pipeline_.running() || engine_.pipeline_.faulted();
+    std::string what = engine_.device_->faultedWhile();
     if (what.empty()) { what = "a driver call"; }
-    std::string label = pipeline_.activeSource().name();
+    std::string label = engine_.pipeline_.activeSource().name();
     const std::size_t colon = label.rfind(": ");
     if (colon != std::string::npos) { label = label.substr(colon + 2); }
     cascade::core::diagLogf("source: the driver faulted while %s; reopening %s at %.0f S/s",
@@ -8774,8 +8772,8 @@ void AppWindow::reopenAfterDriverFault() {
     // Remembered if the reopen fails (0.99.36), so the exit save does not
     // write the generator over a radio that only needed a restart.
     r.closedRadio = cascade::gui::rememberedSourceAfterFailedOpen(
-        sourceKind_, cfgSoapyArgs_, cfgNativeArgs_, "", r.requestRateHz);
-    r.closedLabel = deviceModel_;
+        engine_.sourceKind_, engine_.cfgSoapyArgs_, engine_.cfgNativeArgs_, "", r.requestRateHz);
+    r.closedLabel = engine_.deviceModel_;
 
     // CLOSE THE DEAD RADIO BEFORE OPENING IT AGAIN - the same order as
     // selectSource (adjudicated fix #3 for the 0.62.0 field crashes: two
@@ -8800,13 +8798,13 @@ void AppWindow::reopenAfterDriverFault() {
     // already, on the frame the pipeline's latch rose; this is for a radio
     // declared dead without the pipeline's source thread raising it.
     endTakes(true, true, "the radio faulted", true);
-    device_ = nullptr;
-    soapyView_ = nullptr;
-    deviceArgs_.clear();
-    deviceModel_.clear();
-    ++sourceGen_;
+    engine_.device_ = nullptr;
+    engine_.soapyView_ = nullptr;
+    engine_.deviceArgs_.clear();
+    engine_.deviceModel_.clear();
+    ++engine_.sourceGen_;
     installSource(nullptr);
-    sourceKind_ = "siggen";
+    engine_.sourceKind_ = "siggen";
     applyConverterForSource();
     followInputRate();
     launchDeviceOpen(std::move(r), label);
@@ -8821,7 +8819,7 @@ void AppWindow::openPlutoFromBox() {
 }
 
 void AppWindow::openPlutoAt(const std::string& args) {
-    sourceError_.clear();
+    engine_.sourceError_.clear();
     // Through the SAME worker-thread open every other radio uses, so a board
     // that is not there spends its connect bound off the GUI thread and the
     // window keeps drawing.
@@ -8830,27 +8828,27 @@ void AppWindow::openPlutoAt(const std::string& args) {
     // generator is what answers.
     const std::optional<double> keepCenterHz = carriedAirCentre();
     DeviceOpenResult req;
-    if (device_ != nullptr) {
+    if (engine_.device_ != nullptr) {
         // Carried with the request, as selectSource does (0.99.36).
         req.closedRadio = cascade::gui::rememberedSourceAfterFailedOpen(
-            sourceKind_, cfgSoapyArgs_, cfgNativeArgs_, "",
-            pipeline_.activeSource().sampleRateHz());
-        req.closedLabel = deviceModel_;
+            engine_.sourceKind_, engine_.cfgSoapyArgs_, engine_.cfgNativeArgs_, "",
+            engine_.pipeline_.activeSource().sampleRateHz());
+        req.closedLabel = engine_.deviceModel_;
         cascade::core::diagLogf("source: closing %s before opening the ADALM-Pluto",
-                                deviceModel_.c_str());
-        device_ = nullptr;
-        soapyView_ = nullptr;
-        deviceArgs_.clear();
-        deviceModel_.clear();
-        ++sourceGen_;
+                                engine_.deviceModel_.c_str());
+        engine_.device_ = nullptr;
+        engine_.soapyView_ = nullptr;
+        engine_.deviceArgs_.clear();
+        engine_.deviceModel_.clear();
+        ++engine_.sourceGen_;
         installSource(nullptr);
-        sourceKind_ = "siggen";
+        engine_.sourceKind_ = "siggen";
         applyConverterForSource();
         followInputRate();
     }
     req.kind = kPlutoDriverKey;
     req.args = args;
-    req.row = sourceSel_;
+    req.row = engine_.sourceSel_;
     req.requestRateHz = kSoapyRateHz[kSoapyRateDefaultIndex];
     req.keepCenterHz = keepCenterHz;
     launchDeviceOpen(std::move(req), "ADALM-Pluto at " + uri);
@@ -8866,8 +8864,8 @@ void AppWindow::selectSource(int idx, std::optional<double> carryAirHz) {
     // is never device_): the row picked again opens the card again.
     const bool installedCardDead = installedSoundCardDead();
     const bool installedDead =
-        (device_ != nullptr && (pipeline_.faulted() || device_->deviceDead())) || installedCardDead;
-    if (!cascade::gui::pickOpensRow(idx, sourceSel_, installedDead)) { return; }
+        (engine_.device_ != nullptr && (engine_.pipeline_.faulted() || engine_.device_->deviceDead())) || installedCardDead;
+    if (!cascade::gui::pickOpensRow(idx, engine_.sourceSel_, installedDead)) { return; }
 
     // BUSY CHECK ON EVERY ROW, not just the device rows (adjudicated fix #4
     // for the 0.62.0 field crashes: selectSource(0) and the web route lacked
@@ -8876,8 +8874,8 @@ void AppWindow::selectSource(int idx, std::optional<double> carryAirHz) {
     // generator mid-open used to strand the resolving device for a stale-drop
     // teardown, and the combo's busy label already tells the user why the
     // click did nothing.
-    if (deviceOpenPending_) { return; }
-    sourceError_.clear();
+    if (engine_.deviceOpenPending_) { return; }
+    engine_.sourceError_.clear();
 
     if (idx == 0) {
         // A DELIBERATE CHOICE OF THE GENERATOR STILL OVERWRITES THE SAVED
@@ -8886,19 +8884,19 @@ void AppWindow::selectSource(int idx, std::optional<double> carryAirHz) {
         // the config has to be able to say so too. Cleared here rather than in
         // sourceToSave because only this side knows the difference between
         // "the generator stood in" and "the generator was chosen".
-        restoreKeep_ = cascade::gui::RememberedSource{};
-        restoreKeepLabel_.clear();
+        engine_.restoreKeep_ = cascade::gui::RememberedSource{};
+        engine_.restoreKeepLabel_.clear();
 
         // Built-in generator: null restores it, and it cannot fail.
-        device_ = nullptr;  // before setSource destroys a live device
-        soapyView_ = nullptr;
-        deviceArgs_.clear();
-        deviceModel_.clear();
-        ++sourceGen_;  // a device open still in flight is now stale
+        engine_.device_ = nullptr;  // before setSource destroys a live device
+        engine_.soapyView_ = nullptr;
+        engine_.deviceArgs_.clear();
+        engine_.deviceModel_.clear();
+        ++engine_.sourceGen_;  // a device open still in flight is now stale
         installSource(nullptr);
-        sourceKind_ = "siggen";
+        engine_.sourceKind_ = "siggen";
         applyConverterForSource();
-        sourceSel_ = 0;
+        engine_.sourceSel_ = 0;
         followInputRate();  // back to the generator's fixed 2 MS/s
         cascade::core::diagLogf("source: switched to the built-in generator");
         return;
@@ -8906,7 +8904,7 @@ void AppWindow::selectSource(int idx, std::optional<double> carryAirHz) {
     if (idx == 1) {
         // Show the path controls only; the switch happens on a successful
         // Open (see drawSourceSection) so a typo can never kill a live source.
-        sourceSel_ = 1;
+        engine_.sourceSel_ = 1;
         return;
     }
     if (idx == kSoundCardRow) {
@@ -8925,15 +8923,15 @@ void AppWindow::selectSource(int idx, std::optional<double> carryAirHz) {
         // entry opens by card number, which another card plugged in since
         // may now have, so launchSoundCardOpen refuses with the restart
         // sentence instead (gui::soundCardDeadReopenNeedsRestart).
-        sourceSel_ = kSoundCardRow;
+        engine_.sourceSel_ = kSoundCardRow;
         if (installedCardDead) {
             cascade::core::diagLogf("source: reopening the sound card %s (%s), which had stopped",
-                                    soundCardLive_.device.c_str(), soundCardLive_.hostApi.c_str());
-            soundCard_ = soundCardLive_;
-            launchSoundCardOpen(false, soundCardLive_);
+                                    engine_.soundCardLive_.device.c_str(), engine_.soundCardLive_.hostApi.c_str());
+            soundCard_ = engine_.soundCardLive_;
+            launchSoundCardOpen(false, engine_.soundCardLive_);
             return;
         }
-        if (!soundCardListed_) { scanSoundCards(); }
+        if (!engine_.soundCardListed_) { scanSoundCards(); }
         return;
     }
 
@@ -8945,10 +8943,10 @@ void AppWindow::selectSource(int idx, std::optional<double> carryAirHz) {
     std::string fallbackSoapyArgs;
     if (idx < soapyRowBase()) {
         const std::size_t n = static_cast<std::size_t>(idx - kNativeRowBase);
-        if (n >= nativeDevices_.size()) { return; }  // stale row; next frame redraws
-        kind = nativeDevices_[n].driver;
-        args = nativeDevices_[n].args;
-        label = nativeDevices_[n].label;
+        if (n >= engine_.nativeDevices_.size()) { return; }  // stale row; next frame redraws
+        kind = engine_.nativeDevices_[n].driver;
+        args = engine_.nativeDevices_[n].args;
+        label = engine_.nativeDevices_[n].label;
         // THE PLUTO ROW SELECTS AND DOES NOT CONNECT, exactly as the IQ file
         // row selects and does not open. Every other row in this list is a
         // radio that was FOUND, so choosing it can only succeed or fail
@@ -8958,23 +8956,23 @@ void AppWindow::selectSource(int idx, std::optional<double> carryAirHz) {
         // the Open key appear instead (see drawSourceSection), and the
         // pipeline keeps whatever is installed until Open succeeds.
         if (kind == kPlutoDriverKey) {
-            sourceSel_ = idx;
+            engine_.sourceSel_ = idx;
             return;
         }
     } else {
         const std::size_t d = static_cast<std::size_t>(idx - soapyRowBase());
-        if (d >= soapyDevices_.size()) { return; }  // stale row; next frame redraws
-        if (soapyScanPending_) { return; }  // one at a time (open is checked above)
+        if (d >= engine_.soapyDevices_.size()) { return; }  // stale row; next frame redraws
+        if (engine_.soapyScanPending_) { return; }  // one at a time (open is checked above)
         kind = "soapy";
-        args = soapyDevices_[d].args;
-        label = soapyDevices_[d].label;
+        args = engine_.soapyDevices_[d].args;
+        label = engine_.soapyDevices_[d].label;
         // PICKING THE SOAPY ROW FOR A DONGLE WE DRIVE OURSELVES OPENS IT
         // NATIVELY. Two rows can name one physical radio - SoapyRTLSDR's and
         // ours - and choosing a radio should not also be choosing which of
         // two code paths reaches it. The user gets the one this product can
         // be held responsible for, and the log says the swap happened.
         if (const std::optional<cascade::source::NativeDeviceInfo> nat =
-                cascade::gui::preferNativeFor("soapy", args, nativeDevices_)) {
+                cascade::gui::preferNativeFor("soapy", args, engine_.nativeDevices_)) {
             cascade::core::diagLogf(
                 "source: opening %s natively (was SoapySDR %s)",
                 modelFromNativeLabel(nat->label).c_str(),
@@ -9014,19 +9012,19 @@ void AppWindow::selectSource(int idx, std::optional<double> carryAirHz) {
     // config naming the radio that worked instead of the generator.
     cascade::gui::RememberedSource closedRadio;
     std::string closedLabel;
-    if (device_ != nullptr) {
+    if (engine_.device_ != nullptr) {
         closedRadio = cascade::gui::rememberedSourceAfterFailedOpen(
-            sourceKind_, cfgSoapyArgs_, cfgNativeArgs_, "", pipeline_.activeSource().sampleRateHz());
-        closedLabel = deviceModel_;
+            engine_.sourceKind_, engine_.cfgSoapyArgs_, engine_.cfgNativeArgs_, "", engine_.pipeline_.activeSource().sampleRateHz());
+        closedLabel = engine_.deviceModel_;
         cascade::core::diagLogf("source: closing %s before opening another device",
-                                deviceModel_.c_str());
-        device_ = nullptr;
-        soapyView_ = nullptr;
-        deviceArgs_.clear();
-        deviceModel_.clear();
-        ++sourceGen_;
+                                engine_.deviceModel_.c_str());
+        engine_.device_ = nullptr;
+        engine_.soapyView_ = nullptr;
+        engine_.deviceArgs_.clear();
+        engine_.deviceModel_.clear();
+        ++engine_.sourceGen_;
         installSource(nullptr);
-        sourceKind_ = "siggen";
+        engine_.sourceKind_ = "siggen";
         applyConverterForSource();
         // The DSP chain must follow the source that is actually installed —
         // if the open below fails, the generator would otherwise keep running
@@ -9051,7 +9049,7 @@ std::unique_ptr<cascade::source::DeviceSource> AppWindow::makeDeviceSource(
     // synchronous config restore and the prefer-native fallback all construct
     // drivers, and three copies of this switch would be three chances for
     // "rtlsdr" to mean something different in one of them.
-    if (testHooks_.makeDevice != nullptr) { return testHooks_.makeDevice(kind); }
+    if (cascade::engine::Engine::testHooks_.makeDevice != nullptr) { return cascade::engine::Engine::testHooks_.makeDevice(kind); }
     if (kind == "rtlsdr") { return std::make_unique<cascade::source::RtlSdrSource>(); }
     // Reached only from the patch page's radios: the Source section opens a
     // sound card through its own worker (app_window_soundcard.cpp).
@@ -9082,32 +9080,32 @@ void AppWindow::scanNative() {
     // that appears or vanishes moves every row after it. Keyed now, found
     // again at the end.
     const std::vector<cascade::gui::SourceRowKey> rowsBefore = sourceRowKeys();
-    if (testHooks_.nativeScan != nullptr) {
+    if (cascade::engine::Engine::testHooks_.nativeScan != nullptr) {
         // The test's list stands in for the USB walk (see testHooks_): no
         // enumeration of any kind runs, and nothing is reported unbound. The
         // selection is followed exactly as after a real scan, so a test can
         // move rows under it.
-        nativeDevices_ = testHooks_.nativeScan();
-        nativeRowLabels_.clear();
-        for (const cascade::source::NativeDeviceInfo& d : nativeDevices_) {
-            nativeRowLabels_.push_back(d.label);
+        engine_.nativeDevices_ = cascade::engine::Engine::testHooks_.nativeScan();
+        engine_.nativeRowLabels_.clear();
+        for (const cascade::source::NativeDeviceInfo& d : engine_.nativeDevices_) {
+            engine_.nativeRowLabels_.push_back(d.label);
         }
-        nativeUnbound_.clear();
+        engine_.nativeUnbound_.clear();
         followSourceRowAfterRescan(rowsBefore);
         return;
     }
-    nativeDevices_ = cascade::source::enumerateRtlSdr();
+    engine_.nativeDevices_ = cascade::source::enumerateRtlSdr();
     for (cascade::source::NativeDeviceInfo& d : cascade::source::enumerateHackRf()) {
-        nativeDevices_.push_back(std::move(d));
+        engine_.nativeDevices_.push_back(std::move(d));
     }
     for (cascade::source::NativeDeviceInfo& d : cascade::source::enumerateAirspy()) {
-        nativeDevices_.push_back(std::move(d));
+        engine_.nativeDevices_.push_back(std::move(d));
     }
     for (cascade::source::NativeDeviceInfo& d : cascade::source::enumerateAirspyHf()) {
-        nativeDevices_.push_back(std::move(d));
+        engine_.nativeDevices_.push_back(std::move(d));
     }
     for (cascade::source::NativeDeviceInfo& d : cascade::source::enumerateMiriSdr()) {
-        nativeDevices_.push_back(std::move(d));
+        engine_.nativeDevices_.push_back(std::move(d));
     }
     // BOTH RX888 IDENTITIES, and the bootloader is listed rather than hidden.
     // Out of a power cycle an RX888 has no firmware and is a Cypress
@@ -9117,7 +9115,7 @@ void AppWindow::scanNative() {
     // anywhere saying why - the same failure the unbound-device sentence
     // below exists to stop.
     for (cascade::source::NativeDeviceInfo& d : cascade::source::enumerateRx888()) {
-        nativeDevices_.push_back(std::move(d));
+        engine_.nativeDevices_.push_back(std::move(d));
     }
     // THE ONE ENUMERATION THAT IS NOT A USB WALK AND IS STILL SAFE HERE.
     // sdrplay_api_GetDevices asks the SDRplay SERVICE for a list it maintains
@@ -9125,10 +9123,10 @@ void AppWindow::scanNative() {
     // it and it can run while a radio of ours is streaming, exactly like the
     // others. On a machine with no SDRplay install it costs one failed
     // LoadLibrary, cached for the life of the process.
-    const std::size_t beforeSdrPlay = nativeDevices_.size();
+    const std::size_t beforeSdrPlay = engine_.nativeDevices_.size();
     for (cascade::source::NativeDeviceInfo& d : cascade::source::enumerateSdrPlay()) {
-        sdrPlaySeenLabels_[d.args] = d.label;
-        nativeDevices_.push_back(std::move(d));
+        engine_.sdrPlaySeenLabels_[d.args] = d.label;
+        engine_.nativeDevices_.push_back(std::move(d));
     }
     // THE RSP THIS PROCESS HAS OPEN IS NOT IN THAT LIST (0.99.36). The API
     // lists the radios free to select, and a selected one is not free - the
@@ -9142,23 +9140,23 @@ void AppWindow::scanNative() {
             cascade::source::NativeDeviceInfo c;
             c.driver = "sdrplay";
             c.args = args;
-            const auto seen = sdrPlaySeenLabels_.find(args);
-            c.label = (seen != sdrPlaySeenLabels_.end()) ? seen->second : fallbackName;
+            const auto seen = engine_.sdrPlaySeenLabels_.find(args);
+            c.label = (seen != engine_.sdrPlaySeenLabels_.end()) ? seen->second : fallbackName;
             claimed.push_back(std::move(c));
         };
-        if (device_ != nullptr && soapyView_ == nullptr && sourceKind_ == "sdrplay" &&
-            !deviceArgs_.empty()) {
-            claim(deviceArgs_, pipeline_.activeSourceName());
+        if (engine_.device_ != nullptr && engine_.soapyView_ == nullptr && engine_.sourceKind_ == "sdrplay" &&
+            !engine_.deviceArgs_.empty()) {
+            claim(engine_.deviceArgs_, engine_.pipeline_.activeSourceName());
         }
-        for (const auto& [id, as] : patchRadioOpenedAs_) {
-            if (patchRadios_.find(id) == patchRadios_.end()) { continue; }
+        for (const auto& [id, as] : engine_.patchRadioOpenedAs_) {
+            if (engine_.patchRadios_.find(id) == engine_.patchRadios_.end()) { continue; }
             const std::string key = as.substr(0, as.rfind('@'));
             if (cascade::core::patch::deviceDriver(key) != "sdrplay") { continue; }
             claim(cascade::core::patch::deviceArgs(key), "SDRplay");
         }
-        nativeDevices_ = cascade::source::withClaimedSdrPlayRows(nativeDevices_, claimed);
+        engine_.nativeDevices_ = cascade::source::withClaimedSdrPlayRows(engine_.nativeDevices_, claimed);
     }
-    sdrPlayRowsFound_ = nativeDevices_.size() > beforeSdrPlay;
+    engine_.sdrPlayRowsFound_ = engine_.nativeDevices_.size() > beforeSdrPlay;
 
     // ONE RADIO, ONE ROW (0.99.9, at the owner's word). An RSP reachable both
     // natively and through the SDRplay API was offered TWICE, under two names,
@@ -9168,9 +9166,9 @@ void AppWindow::scanNative() {
     // hiding is as narrow as it is: a row hidden in error is a radio the user
     // cannot select at all.
     {
-        const std::size_t before = nativeDevices_.size();
-        nativeDevices_ = cascade::source::withoutDuplicateRsps(nativeDevices_);
-        const std::size_t hidden = before - nativeDevices_.size();
+        const std::size_t before = engine_.nativeDevices_.size();
+        engine_.nativeDevices_ = cascade::source::withoutDuplicateRsps(engine_.nativeDevices_);
+        const std::size_t hidden = before - engine_.nativeDevices_.size();
         if (hidden > 0) {
             // LOGGED, because a row that vanishes without explanation is the
             // fault report this is trying to prevent, arriving from the other
@@ -9202,9 +9200,9 @@ void AppWindow::scanNative() {
         std::lock_guard<std::mutex> lk(sdrApi.sessionMutex);
         sdrVersion = sdrApi.version;
     }
-    sdrPlayAdvice_ = cascade::source::sdrPlayPanelAdvice(
+    engine_.sdrPlayAdvice_ = cascade::source::sdrPlayPanelAdvice(
         sdrApi.resolved, sdrVersion, cascade::source::sdrPlayLastEnumerationSkip());
-    sdrPlayApiDetail_ = sdrApi.loadDetail;
+    engine_.sdrPlayApiDetail_ = sdrApi.loadDetail;
 
     // THE PLUTO, WHICH IS NOT A DISCOVERY AT ALL. A network cannot be walked,
     // so there is no honest way to answer "is there a Pluto out there" -
@@ -9226,21 +9224,21 @@ void AppWindow::scanNative() {
         // restored Pluto's saved nativeArgs matches this row and the combo
         // settles on it (see applyConfig).
         pluto.args = std::string("uri=") + plutoUri_;
-        nativeDevices_.push_back(std::move(pluto));
+        engine_.nativeDevices_.push_back(std::move(pluto));
     }
-    nativeRowLabels_.clear();
-    for (const cascade::source::NativeDeviceInfo& d : nativeDevices_) {
+    engine_.nativeRowLabels_.clear();
+    for (const cascade::source::NativeDeviceInfo& d : engine_.nativeDevices_) {
         // "(native)" is not decoration: with a Soapy row for the same dongle
         // two lines below it, the user has to be able to see which one they
         // are picking, and which one they got. The Pluto's row is exempt: it
         // is not a radio that was found, and "(native)" on it would suggest
         // there is a non-native row for the same board somewhere.
         if (d.driver == kPlutoDriverKey) {
-            nativeRowLabels_.push_back(tr(d.label.c_str()));  // FOX_TR_NOOP where it is set
+            engine_.nativeRowLabels_.push_back(tr(d.label.c_str()));  // FOX_TR_NOOP where it is set
         } else {
             std::string rowBuf;
             cascade::core::formatUtf8(rowBuf, tr("%s (native)"), d.label.c_str());
-            nativeRowLabels_.push_back(rowBuf);
+            engine_.nativeRowLabels_.push_back(rowBuf);
         }
     }
     // ...and the radios that are HERE BUT UNREACHABLE. Listing them as rows
@@ -9277,7 +9275,7 @@ void AppWindow::scanNative() {
     for (const cascade::usb::UsbId& id : cascade::source::rx888UsbIds()) {
         ids.push_back(id);
     }
-    nativeUnbound_ = cascade::usb::enumerateUnbound(ids);
+    engine_.nativeUnbound_ = cascade::usb::enumerateUnbound(ids);
 
     followSourceRowAfterRescan(rowsBefore);
 }
@@ -9286,18 +9284,18 @@ void AppWindow::followSourceRowAfterRescan(const std::vector<cascade::gui::Sourc
     // THE SELECTION, FOUND AGAIN BY WHAT IT IS (see the top of scanNative).
     // A native radio that is installed but was not the selected row (the combo
     // showed its live name, -1) is pointed at again when its row is back.
-    sourceSel_ = cascade::gui::refindSourceRow(rowsBefore, sourceSel_, sourceRowKeys(), kNativeRowBase);
-    if (sourceSel_ < 0 && device_ != nullptr && soapyView_ == nullptr) {
-        for (std::size_t i = 0; i < nativeDevices_.size(); ++i) {
-            if (nativeDevices_[i].driver == sourceKind_ && nativeDevices_[i].args == deviceArgs_) {
-                sourceSel_ = kNativeRowBase + static_cast<int>(i);
+    engine_.sourceSel_ = cascade::gui::refindSourceRow(rowsBefore, engine_.sourceSel_, sourceRowKeys(), kNativeRowBase);
+    if (engine_.sourceSel_ < 0 && engine_.device_ != nullptr && engine_.soapyView_ == nullptr) {
+        for (std::size_t i = 0; i < engine_.nativeDevices_.size(); ++i) {
+            if (engine_.nativeDevices_[i].driver == engine_.sourceKind_ && engine_.nativeDevices_[i].args == engine_.deviceArgs_) {
+                engine_.sourceSel_ = kNativeRowBase + static_cast<int>(i);
             }
         }
     }
 }
 
 std::string AppWindow::nativeLabelFor(const std::string& kind, const std::string& args) const {
-    for (const cascade::source::NativeDeviceInfo& d : nativeDevices_) {
+    for (const cascade::source::NativeDeviceInfo& d : engine_.nativeDevices_) {
         if (d.driver == kind && d.args == args) { return d.label; }
     }
     return args;
@@ -9305,7 +9303,7 @@ std::string AppWindow::nativeLabelFor(const std::string& kind, const std::string
 
 std::vector<cascade::gui::SourceRowKey> AppWindow::sourceRowKeys() const {
     std::vector<cascade::gui::SourceRowKey> keys;
-    keys.reserve(static_cast<std::size_t>(soapyRowBase()) + soapyDevices_.size());
+    keys.reserve(static_cast<std::size_t>(soapyRowBase()) + engine_.soapyDevices_.size());
     keys.push_back({"siggen", ""});
     keys.push_back({"file", ""});
     // Row kSoundCardRow. Which card is not part of the row - the row is the
@@ -9313,21 +9311,21 @@ std::vector<cascade::gui::SourceRowKey> AppWindow::sourceRowKeys() const {
     keys.push_back({"soundcard", ""});
     static_assert(kSoundCardRow == 2 && kNativeRowBase == kSoundCardRow + 1,
                   "sourceRowKeys pushes one key per fixed row, in combo order");
-    for (const cascade::source::NativeDeviceInfo& d : nativeDevices_) {
+    for (const cascade::source::NativeDeviceInfo& d : engine_.nativeDevices_) {
         // THE PLUTO ROW BY ITS FAMILY ALONE: there is only ever one, and its
         // args are whatever the address box held when the list was built, so
         // an address typed since would otherwise lose the selection.
         keys.push_back({d.driver, d.driver == kPlutoDriverKey ? std::string() : d.args});
     }
-    for (const cascade::source::SoapyDeviceInfo& d : soapyDevices_) {
+    for (const cascade::source::SoapyDeviceInfo& d : engine_.soapyDevices_) {
         keys.push_back({"soapy", d.args});
     }
     return keys;
 }
 
 bool AppWindow::radioNotOpenLit() const {
-    return cascade::gui::radioNotOpenLamp(restoreKeep_, device_ != nullptr, sourceKind_,
-                                          soundCardOpenPending_);
+    return cascade::gui::radioNotOpenLamp(engine_.restoreKeep_, engine_.device_ != nullptr, engine_.sourceKind_,
+                                          engine_.soundCardOpenPending_);
 }
 
 void AppWindow::adoptDeviceMirrors(cascade::source::DeviceSource& dev, const std::string& kind,
@@ -9341,28 +9339,28 @@ void AppWindow::adoptDeviceMirrors(cascade::source::DeviceSource& dev, const std
     // MS/s table for every radio on every driver - which an RTL-SDR cannot
     // actually do two of (it has no 4 MS/s and no 8) and which stops 2.4 MS/s,
     // the rate ADS-B needs, from ever appearing.
-    deviceRatesHz_ = dev.supportedSampleRatesHz();
-    deviceRateLabels_.clear();
-    for (const double r : deviceRatesHz_) { deviceRateLabels_.push_back(rateLabel(r)); }
+    engine_.deviceRatesHz_ = dev.supportedSampleRatesHz();
+    engine_.deviceRateLabels_.clear();
+    for (const double r : engine_.deviceRatesHz_) { engine_.deviceRateLabels_.push_back(rateLabel(r)); }
     const double actualHz = dev.sampleRateHz();
-    deviceRateIndex_ = nearestIndex(deviceRatesHz_, actualHz > 0.0 ? actualHz : requestRateHz);
+    engine_.deviceRateIndex_ = nearestIndex(engine_.deviceRatesHz_, actualHz > 0.0 ? actualHz : requestRateHz);
 
     // AGC probe doubling as initialization: explicitly select manual gain
     // mode (matching the unchecked box). A device that says it has no gain
     // mode gets the documented "grey the checkbox" answer, not an error.
-    deviceAgcSupported_ = dev.autoGainSupported() && dev.setAutoGain(false);
-    deviceAgc_ = false;
+    engine_.deviceAgcSupported_ = dev.autoGainSupported() && dev.setAutoGain(false);
+    engine_.deviceAgc_ = false;
 
     // THE GAINS, AND THEIR REAL RANGES. The sliders were 0..60 dB for every
     // stage of every radio; they are now what the driver says it will accept.
-    deviceGainRanges_ = dev.gains();
-    deviceGainNames_.clear();
-    deviceGainsDb_.clear();
-    for (const cascade::source::GainInfo& g : deviceGainRanges_) {
-        deviceGainNames_.push_back(g.name);
-        deviceGainsDb_.push_back(0.0f);
+    engine_.deviceGainRanges_ = dev.gains();
+    engine_.deviceGainNames_.clear();
+    engine_.deviceGainsDb_.clear();
+    for (const cascade::source::GainInfo& g : engine_.deviceGainRanges_) {
+        engine_.deviceGainNames_.push_back(g.name);
+        engine_.deviceGainsDb_.push_back(0.0f);
     }
-    for (std::size_t i = 0; i < deviceGainNames_.size(); ++i) {
+    for (std::size_t i = 0; i < engine_.deviceGainNames_.size(); ++i) {
         if (kind == "soapy") {
             // UNCHANGED FOR A SOAPY DEVICE, deliberately. FoxSDR has always
             // pushed a mid-dial 30 dB into every stage of a Soapy radio at
@@ -9373,9 +9371,9 @@ void AppWindow::adoptDeviceMirrors(cascade::source::DeviceSource& dev, const std
             // stops at 16.1 used to be silently clamped by the driver and is
             // now clamped by something that can say what it did.
             const double want = std::min(std::max(static_cast<double>(kSoapyGainDefaultDb),
-                                                  deviceGainRanges_[i].minDb),
-                                         deviceGainRanges_[i].maxDb);
-            dev.setGainDb(deviceGainNames_[i], want);
+                                                  engine_.deviceGainRanges_[i].minDb),
+                                         engine_.deviceGainRanges_[i].maxDb);
+            dev.setGainDb(engine_.deviceGainNames_[i], want);
         }
         // A NATIVE DRIVER IS LEFT ALONE, and this is the difference that
         // matters. Both native drivers put the radio into a KNOWN STATE as
@@ -9383,7 +9381,7 @@ void AppWindow::adoptDeviceMirrors(cascade::source::DeviceSource& dev, const std
         // on the RTL-SDR, LNA 16 / VGA 16 / amp off on the HackRF - chosen for
         // that hardware. Overwriting it with a panel constant would throw away
         // the one thing the driver knows that the panel does not.
-        deviceGainsDb_[i] = static_cast<float>(dev.gainDb(deviceGainNames_[i]));
+        engine_.deviceGainsDb_[i] = static_cast<float>(dev.gainDb(engine_.deviceGainNames_[i]));
     }
 
     // THE BIAS TEE, AFTER THE DEVICE IS UP, and only when the radio has one
@@ -9395,7 +9393,7 @@ void AppWindow::adoptDeviceMirrors(cascade::source::DeviceSource& dev, const std
     // then shows the READBACK. A radio without one leaves every remembered
     // setting alone. The whole rule, and why, is biasTeeAfterOpen in
     // engine/bias_tee.hpp.
-    biasTeeAfterOpen(biasTeePanel_, dev, args);
+    biasTeeAfterOpen(engine_.biasTeePanel_, dev, args);
 
     // THE PER-RADIO SWITCHES, READ AND NOT WRITTEN. Unlike the bias tee these
     // carry no saved value to push (see app_window.hpp for why none of them
@@ -9404,21 +9402,21 @@ void AppWindow::adoptDeviceMirrors(cascade::source::DeviceSource& dev, const std
     // for the same reason as everywhere else in this function: a panel that
     // showed a switch the hardware did not actually take is the lie the
     // antenna combo was fixed for.
-    deviceRfNotchPresent_ = withRfNotch(&dev, [this](auto& d) {
-        deviceRfNotch_ = d.rfNotch();
+    engine_.deviceRfNotchPresent_ = withRfNotch(&dev, [this](auto& d) {
+        engine_.deviceRfNotch_ = d.rfNotch();
         return true;
     });
-    deviceDabNotchPresent_ = withDabNotch(&dev, [this](auto& d) {
-        deviceDabNotch_ = d.dabNotch();
+    engine_.deviceDabNotchPresent_ = withDabNotch(&dev, [this](auto& d) {
+        engine_.deviceDabNotch_ = d.dabNotch();
         return true;
     });
-    deviceHdrPresent_ = withHdrMode(&dev, [this](auto& d) {
-        deviceHdr_ = d.hdrMode();
+    engine_.deviceHdrPresent_ = withHdrMode(&dev, [this](auto& d) {
+        engine_.deviceHdr_ = d.hdrMode();
         return true;
     });
-    deviceAdcSwitchesPresent_ = withAdcSwitches(&dev, [this](auto& d) {
-        deviceDither_ = d.dither();
-        deviceRandomiser_ = d.randomiser();
+    engine_.deviceAdcSwitchesPresent_ = withAdcSwitches(&dev, [this](auto& d) {
+        engine_.deviceDither_ = d.dither();
+        engine_.deviceRandomiser_ = d.randomiser();
         return true;
     });
 
@@ -9426,9 +9424,9 @@ void AppWindow::adoptDeviceMirrors(cascade::source::DeviceSource& dev, const std
     // read back whatever is actually selected, so the panel never claims a
     // port the driver did not accept. Never guessed at - which port carries
     // an antenna is a fact about the user's cabling that no default can know.
-    deviceAntennas_ = dev.antennas();
-    if (!deviceAntenna_.empty()) { dev.setAntenna(deviceAntenna_); }
-    deviceAntenna_ = dev.antenna();
+    engine_.deviceAntennas_ = dev.antennas();
+    if (!engine_.deviceAntenna_.empty()) { dev.setAntenna(engine_.deviceAntenna_); }
+    engine_.deviceAntenna_ = dev.antenna();
 }
 
 std::unique_ptr<cascade::source::DeviceSource> AppWindow::openDeviceSync(
@@ -9436,28 +9434,28 @@ std::unique_ptr<cascade::source::DeviceSource> AppWindow::openDeviceSync(
     // Also guards CONFIG RESTORE, not just the dropdown: a sound card saved by
     // an older build must not come back as the radio on every launch.
     if (kind == "soapy" && isAudioDriver(args)) {
-        sourceError_ = "saved source was a sound card (driver=audio), not a radio - ignored";
+        engine_.sourceError_ = "saved source was a sound card (driver=audio), not a radio - ignored";
         return nullptr;
     }
     std::unique_ptr<cascade::source::DeviceSource> dev = makeDeviceSource(kind);
     if (!dev) {
-        sourceError_ = "saved source kind \"" + kind + "\" is not one this build can open";
+        engine_.sourceError_ = "saved source kind \"" + kind + "\" is not one this build can open";
         return nullptr;
     }
     if (!dev->open(args)) {
-        sourceError_ = dev->lastError();
+        engine_.sourceError_ = dev->lastError();
         return nullptr;
     }
     // A rate refusal is not fatal (the panel shows the actual readback
     // either way) but is surfaced - and so is a rate the driver coerced on a
     // call that succeeded.
-    sourceError_ = cascade::gui::applySourceRate(*dev, requestRateHz, sourceError_).sourceError;
+    engine_.sourceError_ = cascade::gui::applySourceRate(*dev, requestRateHz, engine_.sourceError_).sourceError;
     adoptDeviceMirrors(*dev, kind, args, requestRateHz);
     return dev;
 }
 
 void AppWindow::followInputRate() {
-    const double rate = pipeline_.activeSource().sampleRateHz();
+    const double rate = engine_.pipeline_.activeSource().sampleRateHz();
     if (!(rate > 0.0)) { return; }  // never-opened source; nothing to follow
     // A refusal (the chain kept its old rate: no decimation gives an exact
     // channel, or out of the supported range) is said on the device panel,
@@ -9465,15 +9463,15 @@ void AppWindow::followInputRate() {
     // what the DSP is still doing. The next ACCEPTED rate takes that line away
     // again - through 0.99.29 nothing did, so going back to a working rate
     // left "refused" on screen - and leaves any device error on it alone.
-    const bool accepted = pipeline_.setInputRateHz(rate);
-    sourceError_ = cascade::gui::sourceErrorAfterRateFollow(sourceError_, accepted, rate,
-                                                            pipeline_.inputRateHz());
+    const bool accepted = engine_.pipeline_.setInputRateHz(rate);
+    engine_.sourceError_ = cascade::gui::sourceErrorAfterRateFollow(engine_.sourceError_, accepted, rate,
+                                                            engine_.pipeline_.inputRateHz());
     // An ACCEPTED rate change finalizes an in-flight IQ take: the WAV header
     // rate is fixed at start(), so recording on across a rate switch would
     // produce a file that replays detuned/off-speed. (A refusal above kept
     // the old rate, so the compare — not the call — decides.) The audio take
     // is untouched: its 48 kHz output rate survives every rate switch.
-    if (iqRecorder_.recording() && pipeline_.inputRateHz() != iqRecordRateHz_) {
+    if (engine_.iqRecorder_.recording() && engine_.pipeline_.inputRateHz() != engine_.iqRecordRateHz_) {
         stopIqRecording();
     }
 
@@ -9492,11 +9490,11 @@ void AppWindow::drawCenterPanels() {
     // nothing new arrived — cheap enough to run unconditionally, which also
     // catches a frame published between the last poll and a Stop click.
     const double nowS = ImGui::GetTime();
-    if (pipeline_.getLatestFrame(lastFrame_)) {
+    if (engine_.pipeline_.getLatestFrame(lastFrame_)) {
         // One waterfall line per *new* frame (not per GUI frame): duplicate
         // lines would fake scroll speed while the pipeline is stalled.
         waterfall_->addLine(lastFrame_.dbBins.data(),
-                            static_cast<int>(lastFrame_.dbBins.size()), dbMin_, dbMax_);
+                            static_cast<int>(lastFrame_.dbBins.size()), engine_.dbMin_, engine_.dbMax_);
         ++waterfallLines_;
         // WHEN THIS FIGURE WAS TAKEN, which is what the spectrum's "HEARD n s
         // AGO" line reports. SpectrumFrame carries a sequence number and no
@@ -9543,8 +9541,8 @@ void AppWindow::drawCenterPanels() {
     // and the DSP input rate every frame; setSpan preserves the user's zoom
     // window whenever it still fits the new baseband, so a small retune or a
     // rate change does not silently throw the view away.
-    const cascade::source::IqSource& src = pipeline_.activeSource();
-    scale_.setSpan(src.centerFrequencyHz(), pipeline_.inputRateHz());
+    const cascade::source::IqSource& src = engine_.pipeline_.activeSource();
+    scale_.setSpan(src.centerFrequencyHz(), engine_.pipeline_.inputRateHz());
 
     const ImVec2 avail = ImGui::GetContentRegionAvail();
     const float splitterThickness = 6.0f;
@@ -9601,10 +9599,10 @@ void AppWindow::drawCenterPanels() {
     // passband nothing on screen shows. Only the drag's CONTINUATION moves
     // here - starting one needs the item's hover state, which does not exist
     // until the panel has been submitted, and it stays below.
-    double bandCenterAbs = src.centerFrequencyHz() + pipeline_.vfoOffsetHz();
+    double bandCenterAbs = src.centerFrequencyHz() + engine_.pipeline_.vfoOffsetHz();
     SpectrumView::VfoBand band;
-    band.x0Frac = scale_.hzToX(bandCenterAbs - 0.5 * vfoBandwidthHz_);
-    band.x1Frac = scale_.hzToX(bandCenterAbs + 0.5 * vfoBandwidthHz_);
+    band.x0Frac = scale_.hzToX(bandCenterAbs - 0.5 * engine_.vfoBandwidthHz_);
+    band.x1Frac = scale_.hzToX(bandCenterAbs + 0.5 * engine_.vfoBandwidthHz_);
     band.dragging = (vfoDrag_ != VfoDrag::None);
 
     const double mouseFrac =
@@ -9627,7 +9625,7 @@ void AppWindow::drawCenterPanels() {
                 if (!io.KeyShift) {
                     // Snap the ABSOLUTE tuned frequency to the mode's raster
                     // (kModeSnapHz table above); Shift = free tuning.
-                    const double snap = kModeSnapHz[modeIndex_];
+                    const double snap = kModeSnapHz[engine_.modeIndex_];
                     wantAbs = std::round(wantAbs / snap) * snap;
                 }
                 // SET_VFO_OFFSET keeps the whole band inside the baseband
@@ -9647,9 +9645,9 @@ void AppWindow::drawCenterPanels() {
             }
             // Recompute the band from post-drag state so the overlay tracks
             // the cursor within the same frame instead of lagging one behind.
-            bandCenterAbs = src.centerFrequencyHz() + pipeline_.vfoOffsetHz();
-            band.x0Frac = scale_.hzToX(bandCenterAbs - 0.5 * vfoBandwidthHz_);
-            band.x1Frac = scale_.hzToX(bandCenterAbs + 0.5 * vfoBandwidthHz_);
+            bandCenterAbs = src.centerFrequencyHz() + engine_.pipeline_.vfoOffsetHz();
+            band.x0Frac = scale_.hzToX(bandCenterAbs - 0.5 * engine_.vfoBandwidthHz_);
+            band.x1Frac = scale_.hzToX(bandCenterAbs + 0.5 * engine_.vfoBandwidthHz_);
             band.dragging = true;
         }
     }
@@ -9706,7 +9704,7 @@ void AppWindow::drawCenterPanels() {
     if (bandPlanOverlay_) {
         drawBandPlanOverlay(specPos.x, specPos.y, width, spectrumHeight);
     }
-    if (bookmarkMarkers_ && !freqMgr_.list().empty()) {
+    if (bookmarkMarkers_ && !engine_.freqMgr_.list().empty()) {
         drawBookmarkMarkers(specPos.x, specPos.y, width, spectrumHeight);
     }
     // The plugins' own marks (host API level 1), over the bookmarks and under
@@ -9824,8 +9822,8 @@ void AppWindow::drawCenterPanels() {
     if (std::isfinite(bandCenterAbs) && bandCenterAbs > 0.0) {
         std::string firstDecoder;
         int runningDecoders = 0;
-        if (pipeline_.running()) {
-            for (const cascade::core::DecoderStatus& s : pluginRunner_.status()) {
+        if (engine_.pipeline_.running()) {
+            for (const cascade::core::DecoderStatus& s : engine_.pluginRunner_.status()) {
                 if (s.reason != cascade::core::DecoderIdleReason::Running) { continue; }
                 if (runningDecoders == 0) { firstDecoder = s.plugin; }
                 ++runningDecoders;
@@ -9841,8 +9839,8 @@ void AppWindow::drawCenterPanels() {
                           firstDecoder.c_str(), runningDecoders - 1);
         } else {
             cascade::core::formatUtf8(decodeLine, "%s %s - %s", freqTxt,
-                          kModeNames[modeIndex_],
-                          pipeline_.running() ? tr("RECEIVING") : tr("STOPPED"));
+                          kModeNames[engine_.modeIndex_],
+                          engine_.pipeline_.running() ? tr("RECEIVING") : tr("STOPPED"));
         }
     }
     wfChrome.decoding = !decodeLine.empty() ? decodeLine.c_str() : nullptr;
@@ -9907,17 +9905,17 @@ void AppWindow::drawCenterPanels() {
 void AppWindow::setVfoToAbsoluteHz(double wantAbsHz, bool snap) {
     if (snap) {
         // Same raster as the drag path (kModeSnapHz); Shift bypasses it.
-        const double s = kModeSnapHz[modeIndex_];
+        const double s = kModeSnapHz[engine_.modeIndex_];
         wantAbsHz = std::round(wantAbsHz / s) * s;
     }
-    double off = wantAbsHz - pipeline_.activeSource().centerFrequencyHz();
+    double off = wantAbsHz - engine_.pipeline_.activeSource().centerFrequencyHz();
     // Keep the whole band inside the baseband +/- inputRate/2, exactly as the
     // drag path does — clicking near the panel edge must not park the filter
     // half outside the spectrum we actually receive. The same limit a sound
     // card's tune is judged against (gui::tuneWithFixedCentre), from one place.
-    off = cascade::gui::vfoOffsetInsideSpan(off, pipeline_.inputRateHz(), vfoBandwidthHz_);
-    pipeline_.setVfoOffsetHz(off);
-    vfoOffsetKhz_ = static_cast<float>(off / 1000.0);
+    off = cascade::gui::vfoOffsetInsideSpan(off, engine_.pipeline_.inputRateHz(), engine_.vfoBandwidthHz_);
+    engine_.pipeline_.setVfoOffsetHz(off);
+    engine_.vfoOffsetKhz_ = static_cast<float>(off / 1000.0);
 }
 
 // AppWindow::drawFreqAxis USED TO LIVE HERE - an eighteen-pixel strip of its
@@ -9933,7 +9931,7 @@ void AppWindow::drawStereoRdsControls() {
     // Force-mono toggle. The pipeline routes WFM through the stereo decoder
     // either way, so this only opens or closes its difference-channel gate —
     // which is what makes the switch click-free and tone-neutral.
-    bool stereo = stereoEnabled_;
+    bool stereo = engine_.stereoEnabled_;
     if (ImGui::Checkbox(trId("Stereo"), &stereo)) {
         submitCommand(cascade::core::cmd::makeInt(FOXAPI_OP_SET_STEREO, stereo ? 1 : 0));
     }
@@ -9945,8 +9943,8 @@ void AppWindow::drawStereoRdsControls() {
     // The indicator reports the DECODER, not the checkbox: lit only when a
     // pilot is actually locked AND stereo is enabled, dim-but-present when a
     // pilot is locked while the user forced mono, and greyed with no pilot.
-    const bool locked = pipeline_.pilotLocked();
-    const bool active = pipeline_.stereoActive();
+    const bool locked = engine_.pipeline_.pilotLocked();
+    const bool active = engine_.pipeline_.stereoActive();
     if (active) {
         ImGui::TextColored(cascade::gui::theme::good(), "ST");
     } else if (locked) {
@@ -9956,11 +9954,11 @@ void AppWindow::drawStereoRdsControls() {
     }
     if (locked) {
         ImGui::SameLine();
-        ImGui::TextDisabled(tr("pilot %.2f"), static_cast<double>(pipeline_.pilotLevel()));
+        ImGui::TextDisabled(tr("pilot %.2f"), static_cast<double>(engine_.pipeline_.pilotLevel()));
     }
 
     // --- RDS ------------------------------------------------------------------
-    const cascade::core::RdsSnapshot rds = pipeline_.rdsSnapshot();
+    const cascade::core::RdsSnapshot rds = engine_.pipeline_.rdsSnapshot();
     ImGui::SeparatorText("RDS");
     if (!rds.state.piValid && !rds.state.psValid && rds.state.radioText.empty()) {
         // Distinguish "listening, nothing yet" from "not receiving at all":
@@ -9995,8 +9993,8 @@ void AppWindow::drawAudioFilterSection() {
     // section has that is either on or off. The three switches below are what
     // the count is taken from, so the chip cannot claim a filter the panel
     // does not show engaged.
-    const int filtersOn = (nrEnabled_ ? 1 : 0) + (notchEnabled_ ? 1 : 0) +
-                          (autoNotch_ ? 1 : 0);
+    const int filtersOn = (engine_.nrEnabled_ ? 1 : 0) + (engine_.notchEnabled_ ? 1 : 0) +
+                          (engine_.autoNotch_ ? 1 : 0);
     std::string filterChip;
     if (filtersOn == 0) {
         filterChip = tr("OFF");
@@ -10022,12 +10020,12 @@ void AppWindow::drawAudioFilterSection() {
     // greyed out, so a tick greys or ungreys its slider in the frame it is
     // clicked, as it always did.
     namespace cmd = cascade::core::cmd;
-    bool nr = nrEnabled_;
+    bool nr = engine_.nrEnabled_;
     if (ImGui::Checkbox(trId("Noise reduction"), &nr)) {
         submitCommand(cmd::makeInt(FOXAPI_OP_SET_NR, nr ? 1 : 0, 0));
     }
     ImGui::BeginDisabled(!nr);
-    float nrStrength = nrStrength_;
+    float nrStrength = engine_.nrStrength_;
     if (ImGui::SliderFloat(cascade::gui::labelAboveIfNeeded(trId("Strength")), &nrStrength,
                            0.0f, 1.0f, "%.2f")) {
         submitCommand(cmd::makeNum(FOXAPP_OP_SET_NR_STRENGTH, nrStrength));
@@ -10035,33 +10033,33 @@ void AppWindow::drawAudioFilterSection() {
     ImGui::EndDisabled();
 
     ImGui::Separator();
-    bool notch = notchEnabled_;
+    bool notch = engine_.notchEnabled_;
     if (ImGui::Checkbox(trId("Notch"), &notch)) {
         submitCommand(cmd::makeInt(FOXAPI_OP_SET_NOTCH, notch ? 1 : 0, 0));
     }
     ImGui::BeginDisabled(!notch);
     // Logarithmic: a linear 10 Hz..20 kHz slider spends 90% of its travel
     // above 2 kHz, where almost no heterodyne a user wants to remove lives.
-    float notchHz = notchFreqHz_;
+    float notchHz = engine_.notchFreqHz_;
     if (ImGui::SliderFloat(cascade::gui::labelAboveIfNeeded(trId("Freq")), &notchHz,
                            10.0f, 20000.0f, "%.0f Hz", ImGuiSliderFlags_Logarithmic)) {
         submitCommand(cmd::makeNum(FOXAPP_OP_SET_NOTCH_FREQUENCY, notchHz));
     }
-    float notchQ = notchQ_;
+    float notchQ = engine_.notchQ_;
     if (ImGui::SliderFloat("Q", &notchQ, 1.0f, 200.0f, "%.0f")) {
         submitCommand(cmd::makeNum(FOXAPP_OP_SET_NOTCH_Q, notchQ));
     }
     ImGui::EndDisabled();
 
-    bool autoNotch = autoNotch_;
+    bool autoNotch = engine_.autoNotch_;
     if (ImGui::Checkbox(trId("Auto notch"), &autoNotch)) {
         submitCommand(cmd::makeInt(FOXAPI_OP_SET_AUTO_NOTCH, autoNotch ? 1 : 0));
     }
     if (autoNotch) {
         ImGui::SameLine();
-        if (pipeline_.autoNotchEngaged()) {
+        if (engine_.pipeline_.autoNotchEngaged()) {
             ImGui::TextColored(cascade::gui::theme::good(), tr("on %.0f Hz"),
-                               pipeline_.autoNotchFrequencyHz());
+                               engine_.pipeline_.autoNotchFrequencyHz());
         } else {
             ImGui::TextDisabled(tr("searching"));
         }
@@ -10076,7 +10074,7 @@ bool AppWindow::restoreQuarantinedPlugins(std::string& error) {
     error.clear();
     const std::string suffix = pluginQuarantineSuffix();
     std::error_code ec;
-    const std::filesystem::path dir(pluginDir_);
+    const std::filesystem::path dir(engine_.pluginDir_);
     if (!std::filesystem::is_directory(dir, ec)) { return true; }
 
     // Collected first, renamed after: renaming inside a directory_iterator
@@ -10125,8 +10123,8 @@ bool AppWindow::restoreQuarantinedPlugins(std::string& error) {
 bool AppWindow::quarantineBlockedPlugins(std::string& error) {
     error.clear();
     const std::string suffix = pluginQuarantineSuffix();
-    const std::filesystem::path dir(pluginDir_);
-    for (const cascade::core::BlockedPlugin& b : pluginBlocked_) {
+    const std::filesystem::path dir(engine_.pluginDir_);
+    for (const cascade::core::BlockedPlugin& b : engine_.pluginBlocked_) {
         std::string safe;
         std::string sanErr;
         if (!cascade::core::PluginRepo::sanitiseFileName(b.installed.file, safe, sanErr)) {
@@ -10162,8 +10160,8 @@ void AppWindow::detachAndUnloadPlugins() {
     // is memory inside a module about to be unmapped, and destroy() is code
     // inside that same module. Getting this order wrong is a crash in someone
     // else's DLL with no useful stack.
-    pipeline_.setPluginRunner(nullptr);
-    pluginRunner_.clear();
+    engine_.pipeline_.setPluginRunner(nullptr);
+    engine_.pluginRunner_.clear();
     // THE PATCH'S DECODERS, BY THE SAME RULE AND SYNCHRONOUSLY. A patch set
     // can hold instances of these very plugins (0.99.15), and unlike the
     // runner above it is not detached by a pointer - the DSP thread may be
@@ -10172,29 +10170,29 @@ void AppWindow::detachAndUnloadPlugins() {
     // returns. The catalogue goes too: its API pointers point into the
     // modules about to go. The page rebuilds both from whatever loads next,
     // and the empty signature makes it republish.
-    pipeline_.patchRunner().flushNow();
+    engine_.pipeline_.patchRunner().flushNow();
     // Every patch radio's runner too (0.99.17): each has its own reader
     // thread that may be inside a decoder this instant. The radios keep
     // running - only their sets go - and the cleared signatures rebuild them.
-    for (auto& [node, radio] : patchRadios_) {
+    for (auto& [node, radio] : engine_.patchRadios_) {
         (void)node;
         radio->runner().flushNow();
     }
-    patchRadioSig_.clear();
-    patchRefusedBy_.clear();
-    patchCatalogue_.clear();
-    patchApis_.clear();
-    patchDspSig_.clear();
-    patchRefused_.clear();
+    engine_.patchRadioSig_.clear();
+    engine_.patchRefusedBy_.clear();
+    engine_.patchCatalogue_.clear();
+    engine_.patchApis_.clear();
+    engine_.patchDspSig_.clear();
+    engine_.patchRefused_.clear();
     // Same rule as the runner: a track-source or panel handle is memory inside
     // a module whose destroy() is code in that same module.
-    pluginUi_.clear();
+    engine_.pluginUi_.clear();
     // And the basemap, for exactly the same reason - its handle and its tile
     // borrows live in a module about to be unmapped.
     basemap_.detach();
     trackInfo_.detach();
 
-    pluginHost_.unloadAll();
+    engine_.pluginHost_.unloadAll();
 }
 
 void AppWindow::rescanPlugins() {
@@ -10232,7 +10230,7 @@ void AppWindow::rescanPlugins() {
     // A missing plugins directory is the normal case and yields an empty list
     // without an error — the host's documented behaviour, and the reason
     // nothing here reports a failure.
-    pluginDir_ = (testHooks_.pluginDir != nullptr) ? testHooks_.pluginDir()
+    engine_.pluginDir_ = (cascade::engine::Engine::testHooks_.pluginDir != nullptr) ? cascade::engine::Engine::testHooks_.pluginDir()
                                                    : cascade::core::PluginHost::defaultPluginDir();
 
     // WHERE, not just WHAT. The lines below say which modules loaded; none of
@@ -10242,10 +10240,10 @@ void AppWindow::rescanPlugins() {
     // %LOCALAPPDATA%\foxsdr\plugins for a Program Files one or for a Store
     // package. One line, once per scan, naming the directory and the reason.
     if (cascade::core::runningInPackage()) {
-        cascade::core::diagLogf("plugins: %s (this is a Store package: %s)", pluginDir_.c_str(),
+        cascade::core::diagLogf("plugins: %s (this is a Store package: %s)", engine_.pluginDir_.c_str(),
                                 cascade::core::packageIdentity().fullName.c_str());
     } else {
-        cascade::core::diagLogf("plugins: %s", pluginDir_.c_str());
+        cascade::core::diagLogf("plugins: %s", engine_.pluginDir_.c_str());
     }
 
     // ONE ordered sequence, and the order is the feature (see the enforcement
@@ -10260,7 +10258,7 @@ void AppWindow::rescanPlugins() {
     // unmapped, and destroy() is code inside that same module. Getting this
     // order wrong is a crash in someone else's DLL with no useful stack.
     detachAndUnloadPlugins();
-    pluginEnforceError_.clear();
+    engine_.pluginEnforceError_.clear();
 
     // Un-quarantine BEFORE taking the inventory. Reconciliation and
     // planUpdates both key off "is the file there", and a plugin that this
@@ -10268,38 +10266,38 @@ void AppWindow::rescanPlugins() {
     // user — which planUpdates deliberately refuses to update, taking away the
     // one remedy a retired plugin has.
     std::string restoreError;
-    if (!restoreQuarantinedPlugins(restoreError)) { pluginEnforceError_ = restoreError; }
+    if (!restoreQuarantinedPlugins(restoreError)) { engine_.pluginEnforceError_ = restoreError; }
 
     std::string invError;
     // A corrupt or absent manifest is an ordinary state and its own kind of
     // fail-open: nothing is recorded, so nothing is retired.
-    (void)cascade::core::PluginRepo::loadInventory(pluginDir_, pluginInventory_, invError);
+    (void)cascade::core::PluginRepo::loadInventory(engine_.pluginDir_, engine_.pluginInventory_, invError);
     // WHAT RECONCILIATION FOUND, one line each - above all a file whose bytes
     // are not the ones sha256-verified at install, which is a manual overwrite
     // or something worse. The fitted modules plate says it too
     // (changedSinceInstallNote); this is the record that outlives the window.
-    for (const std::string& note : pluginInventory_.notes) {
+    for (const std::string& note : engine_.pluginInventory_.notes) {
         cascade::core::diagLogf("plugin inventory: %s", note.c_str());
     }
-    pluginBlocked_ = cascade::core::PluginRepo::blockedPlugins(pluginInventory_.plugins,
-                                                               pluginInventory_.policies);
+    engine_.pluginBlocked_ = cascade::core::PluginRepo::blockedPlugins(engine_.pluginInventory_.plugins,
+                                                               engine_.pluginInventory_.policies);
 
     std::string quarantineError;
     if (!quarantineBlockedPlugins(quarantineError)) {
         // FAIL CLOSED. Scanning now would map the retired plugin along with
         // everything else, which is the precise state this feature exists to
         // prevent, so this run gets no plugins at all and says why.
-        pluginEnforceError_ = quarantineError;
+        engine_.pluginEnforceError_ = quarantineError;
         return;
     }
 
-    pluginHost_.scan(pluginDir_);
+    engine_.pluginHost_.scan(engine_.pluginDir_);
 
     // WHICH PLUGINS ARE MAPPED, one line each, because plugins are
     // third-party code running in this process and "which one was loaded" has
     // already been the answer to real faults here. A load that FAILS is worth
     // more than one that succeeds, so both are recorded.
-    for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
+    for (const cascade::core::LoadedPlugin& p : engine_.pluginHost_.plugins()) {
         if (p.loaded) {
             cascade::core::diagLogf("plugin: loaded %s %s", p.name.c_str(),
                                     p.version.c_str());
@@ -10326,7 +10324,7 @@ std::vector<cascade::core::PluginUpdate> AppWindow::plannedPluginUpdates() const
     // Pure, and empty until a catalogue has been fetched this session:
     // catalog_ is only ever filled by the plugin store window - its first
     // open in a session, or CHECK NOW.
-    return cascade::core::PluginRepo::planUpdates(catalog_, pluginInventory_.plugins);
+    return cascade::core::PluginRepo::planUpdates(engine_.catalog_, engine_.pluginInventory_.plugins);
 }
 
 void AppWindow::drawPluginStoreSection() {
@@ -10347,10 +10345,10 @@ void AppWindow::drawPluginStoreSection() {
     // before that would be the clean-zero this product has been bitten by:
     // "nothing to update" and "we have not looked" are different statements.
     // IDLE is the second one.
-    const bool haveCatalog = !catalog_.empty();
+    const bool haveCatalog = !engine_.catalog_.empty();
     const std::size_t pendingUpdates =
         haveCatalog ? plannedPluginUpdates().size() : 0u;
-    const bool storeBusy = catalogPending_ || installPending_;
+    const bool storeBusy = engine_.catalogPending_ || engine_.installPending_;
     std::string storeChip;
     if (storeBusy) {
         // A TRANSFER IS THE MOST IMPORTANT THING THIS ROW CAN SAY, and it
@@ -10392,7 +10390,7 @@ void AppWindow::drawPluginStoreSection() {
     ImGui::SetNextItemWidth(-FLT_MIN);
     cascade::gui::inputTextWithFittedHint("##catalogue_url", tr("catalogue index.json URL"),
                              pluginUrlBuf_, sizeof(pluginUrlBuf_));
-    if (ImGui::IsItemDeactivatedAfterEdit()) { pluginCatalogueUrl_ = pluginUrlBuf_; }
+    if (ImGui::IsItemDeactivatedAfterEdit()) { engine_.pluginCatalogueUrl_ = pluginUrlBuf_; }
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip(tr("An https:// catalogue, or a path to a local index.json.\n"
                           "Read when you first open the plugin store in a session, or\n"
@@ -10441,7 +10439,7 @@ void AppWindow::drawDecodersSection() {
     // already looking at, beside the presets that started the decoder in the
     // first place. engine/running_view.hpp holds every decision and
     // tests/test_running_view.cpp drives it.
-    const std::size_t fed = pipeline_.running() ? fedDecoderCount() : 0u;
+    const std::size_t fed = engine_.pipeline_.running() ? fedDecoderCount() : 0u;
     std::string decChip;
     cascade::core::formatUtf8(decChip, tr("%zu FED"), fed);
     // VERIFICATION ONLY, the same house rule as FOXSDR_OPEN_PLUGIN_STORE: this
@@ -10464,7 +10462,7 @@ void AppWindow::drawDecodersSection() {
     // means BEING FED, which is the only sense in which a decoder is costing
     // this machine anything (running_view.hpp says why).
     const std::vector<cascade::gui::RunnableDecoder> runnable = runnableDecoders();
-    const int runningNow = cascade::gui::runningCount(runnable, pipeline_.running());
+    const int runningNow = cascade::gui::runningCount(runnable, engine_.pipeline_.running());
     std::string stopAllPressed;  // non-empty marks "stop every running key"
     if (cascade::gui::showStopAll(runningNow)) {
         const std::string note = cascade::gui::runningCostNote(runningNow);
@@ -10487,7 +10485,7 @@ void AppWindow::drawDecodersSection() {
     // Deferred past the loop, exactly as the old installed list deferred it:
     // setPluginMutes rebuilds the mute snapshot, which walks the very vector
     // being iterated, and applyPluginPreset rebuilds every decoder instance.
-    const std::vector<cascade::core::LoadedPlugin>& list = pluginHost_.plugins();
+    const std::vector<cascade::core::LoadedPlugin>& list = engine_.pluginHost_.plugins();
     int toggleMuteIdx = -1;
     bool toggleMuteTo = false;
     std::string stopKey;   // a row's STOP/START key, applied after the loop
@@ -10516,7 +10514,7 @@ void AppWindow::drawDecodersSection() {
             row.name = p.name;
             row.key = cascade::core::pluginKey(p);
             row.stopped = pluginIsStopped(row.key);
-            row.feeding = pluginRunner_.isFeeding(row.key);
+            row.feeding = engine_.pluginRunner_.isFeeding(row.key);
             if (ImGui::Button(cascade::gui::rowKeyLabel(row), ImVec2(-1.0f, 0.0f))) {
                 stopKey = row.key;
                 stopTo = cascade::gui::rowOffersStop(row);
@@ -10567,7 +10565,7 @@ void AppWindow::drawDecodersSection() {
     }
     if (!stopAllPressed.empty()) {
         std::string keys;
-        for (const std::string& key : cascade::gui::stopAllKeys(runnable, pipeline_.running())) {
+        for (const std::string& key : cascade::gui::stopAllKeys(runnable, engine_.pipeline_.running())) {
             keys += (keys.empty() ? "" : "\n") + key;
         }
         if (!keys.empty()) { submitCommand(cmd::makeText(FOXAPP_OP_DECODER_STOP_LIST, keys, 0)); }
@@ -10582,9 +10580,9 @@ void AppWindow::drawDecodersSection() {
         ImGui::TextDisabled("%s", tr("No fitted module publishes a preset or is fed a signal."));
         ImGui::PopTextWrapPos();
     }
-    if (!presetNote_.empty()) {
+    if (!engine_.presetNote_.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::good());
-        ImGui::TextWrapped("%s", presetNote_.c_str());
+        ImGui::TextWrapped("%s", engine_.presetNote_.c_str());
         ImGui::PopStyleColor();
     }
 
@@ -10603,7 +10601,7 @@ void AppWindow::drawPluginsSection() {
     // the visible half of the label, which is the news a user who never opens
     // the window still has to learn.
     const std::size_t blocked = cascade::core::PluginRepo::blockedCount(
-        pluginInventory_.plugins, pluginInventory_.policies);
+        engine_.pluginInventory_.plugins, engine_.pluginInventory_.policies);
     std::string header;
     if (blocked == 0u) {
         header = trId("Plugins###plugins");
@@ -10623,7 +10621,7 @@ void AppWindow::drawPluginsSection() {
     // signal - permanently in the bottom half of a chip whose top half counts
     // decoders being fed, so a healthy receiver reported 1/3.
     const std::size_t decoders = loadedDecoderCount();
-    const std::size_t fedPlugins = pipeline_.running() ? fedDecoderCount() : 0u;
+    const std::size_t fedPlugins = engine_.pipeline_.running() ? fedDecoderCount() : 0u;
     char pluginChip[16];
     std::snprintf(pluginChip, sizeof(pluginChip), "%zu/%zu", fedPlugins, decoders);
     // The lamp is decoding, and only that. A blocked module is already
@@ -10645,10 +10643,10 @@ void AppWindow::drawPluginsSection() {
     // What this row owes a user who has not opened the window is the fact that
     // there is something in it to read.
     int refused = 0;
-    for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
+    for (const cascade::core::LoadedPlugin& p : engine_.pluginHost_.plugins()) {
         if (!p.loaded) { ++refused; }
     }
-    const bool notFed = pipeline_.running() && decoders > fedPlugins;
+    const bool notFed = engine_.pipeline_.running() && decoders > fedPlugins;
     if (refused > 0 || notFed) {
         ImGui::PushStyleColor(ImGuiCol_Text,
                               refused > 0 ? kErrorRed : cascade::gui::theme::warning());
@@ -10672,19 +10670,19 @@ void AppWindow::drawBlockedPluginRows() {
     // An enforcement failure outranks everything else on this panel: it is the
     // one state where a retired plugin might otherwise have been loaded, and
     // the answer taken (load nothing) is drastic enough that it must be said.
-    if (!pluginEnforceError_.empty()) {
+    if (!engine_.pluginEnforceError_.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, kErrorRed);
-        ImGui::TextWrapped("%s", pluginEnforceError_.c_str());
+        ImGui::TextWrapped("%s", engine_.pluginEnforceError_.c_str());
         ImGui::PopStyleColor();
     }
-    if (pluginBlocked_.empty()) { return; }
+    if (engine_.pluginBlocked_.empty()) { return; }
 
     ImGui::SeparatorText(tr("Disabled"));
     const std::vector<cascade::core::PluginUpdate> updates = plannedPluginUpdates();
-    const bool busy = catalogPending_ || installPending_;
+    const bool busy = engine_.catalogPending_ || engine_.installPending_;
     std::string removeBlockedFile;
-    for (std::size_t i = 0; i < pluginBlocked_.size(); ++i) {
-        const cascade::core::BlockedPlugin& b = pluginBlocked_[i];
+    for (std::size_t i = 0; i < engine_.pluginBlocked_.size(); ++i) {
+        const cascade::core::BlockedPlugin& b = engine_.pluginBlocked_[i];
         ImGui::PushID(static_cast<int>(1000 + i));
         ImGui::PushStyleColor(ImGuiCol_Text, kErrorRed);
         // VERBATIM. pluginBlockMessage() is user copy, not a log line: it
@@ -10781,7 +10779,7 @@ bool AppWindow::catalogEntryInstalled(const cascade::core::PluginCatalogEntry& e
     std::string want;
     std::string err;
     if (!cascade::core::PluginRepo::sanitiseFileName(p->file, want, err)) { return false; }
-    for (const cascade::core::LoadedPlugin& lp : pluginHost_.plugins()) {
+    for (const cascade::core::LoadedPlugin& lp : engine_.pluginHost_.plugins()) {
         const std::string have = std::filesystem::path(lp.path).filename().string();
         if (equalsFileNameAscii(have, want)) { return true; }
     }
@@ -10790,7 +10788,7 @@ bool AppWindow::catalogEntryInstalled(const cascade::core::PluginCatalogEntry& e
     // calling it absent would offer an Install where Update is the remedy.
     // missingFromDisk rows are excluded: those name a file the user deleted,
     // which really is not installed any more.
-    for (const cascade::core::InstalledPlugin& ip : pluginInventory_.plugins) {
+    for (const cascade::core::InstalledPlugin& ip : engine_.pluginInventory_.plugins) {
         if (!ip.missingFromDisk && equalsFileNameAscii(ip.file, want)) { return true; }
     }
     return false;
@@ -10808,7 +10806,7 @@ const cascade::core::LoadedPlugin* AppWindow::installedPluginRecord(
     if (!cascade::core::PluginRepo::sanitiseFileName(p->file, want, err)) {
         return nullptr;
     }
-    for (const cascade::core::LoadedPlugin& lp : pluginHost_.plugins()) {
+    for (const cascade::core::LoadedPlugin& lp : engine_.pluginHost_.plugins()) {
         const std::string have = std::filesystem::path(lp.path).filename().string();
         if (equalsFileNameAscii(have, want)) { return &lp; }
     }
@@ -10824,17 +10822,17 @@ const cascade::core::LoadedPlugin* AppWindow::installedPluginRecord(
 // place that DRAWS one passes it through gui::trStoredReason(). The two that
 // carry a value are made from the formats that function recognises.
 std::string AppWindow::pluginInstallBlockedReason(int idx, bool acknowledged) const {
-    if (idx < 0 || idx >= static_cast<int>(catalog_.size())) {
+    if (idx < 0 || idx >= static_cast<int>(engine_.catalog_.size())) {
         return FOX_TR_NOOP("no plugin selected");
     }
     // One transfer at a time. PluginRepo has a single progress/cancel pair,
     // so two concurrent operations would share one progress bar and one
     // Cancel button — and a cancel would hit whichever happened to look.
-    if (catalogPending_ || installPending_) {
+    if (engine_.catalogPending_ || engine_.installPending_) {
         return FOX_TR_NOOP("a transfer is already in progress");
     }
 
-    const cascade::core::PluginCatalogEntry& e = catalog_[static_cast<std::size_t>(idx)];
+    const cascade::core::PluginCatalogEntry& e = engine_.catalog_[static_cast<std::size_t>(idx)];
     // Same exact-match rule as the loader and as install() itself: a near-miss
     // ABI is how a struct layout change becomes memory corruption days later.
     if (e.abiVersion != static_cast<std::uint32_t>(CASCADE_PLUGIN_ABI_VERSION)) {
@@ -10862,11 +10860,11 @@ std::string AppWindow::pluginInstallBlockedReason(int idx, bool acknowledged) co
 }
 
 void AppWindow::startCatalogFetch() {
-    if (catalogPending_ || installPending_) { return; }
+    if (engine_.catalogPending_ || engine_.installPending_) { return; }
     // A catalogue that could not be verified this time must not keep offering
     // installs from last time — the same all-or-nothing stance fetchIndex
     // takes with its own entries().
-    catalog_.clear();
+    engine_.catalog_.clear();
     // AND THE SELECTION AND THE CONSENT GO WITH IT. The store window clamps
     // its own selection every frame and clears its tick whenever the selection
     // moves, but the tick is consent for ONE plugin and a fetch that replaces
@@ -10875,15 +10873,15 @@ void AppWindow::startCatalogFetch() {
     // than left to a rule that is about a different event. The ADD ALL tick
     // goes too: it was given against the notices the old catalogue listed.
     if (pluginStoreDeck_) { cascade::gui::forgetCatalogueConsent(*pluginStoreDeck_); }
-    catalogError_.clear();
-    catalogStatus_.clear();
-    installError_.clear();
-    installReport_.clear();
-    catalogPending_ = true;
+    engine_.catalogError_.clear();
+    engine_.catalogStatus_.clear();
+    engine_.installError_.clear();
+    engine_.installReport_.clear();
+    engine_.catalogPending_ = true;
 
-    const std::string url = pluginCatalogueUrl_;
-    const std::string dir = pluginDir_;
-    catalogFuture_ = std::async(std::launch::async, [this, url, dir] {
+    const std::string url = engine_.pluginCatalogueUrl_;
+    const std::string dir = engine_.pluginDir_;
+    engine_.catalogFuture_ = std::async(std::launch::async, [this, url, dir] {
         CatalogFetchResult r;
         if (url.find("://") == std::string::npos) {
             // No scheme at all: a local file (see readLocalCatalogue). A URL
@@ -10891,8 +10889,8 @@ void AppWindow::startCatalogFetch() {
             // is the single place the https-only rule is enforced.
             r.ok = readLocalCatalogue(url, r.entries, r.error);
         } else {
-            r.ok = pluginRepo_.fetchIndex(url, r.error);
-            if (r.ok) { r.entries = pluginRepo_.entries(); }
+            r.ok = engine_.pluginRepo_.fetchIndex(url, r.error);
+            if (r.ok) { r.entries = engine_.pluginRepo_.entries(); }
         }
         if (r.ok) {
             // THE ONLY MOMENT A RETIREMENT FLOOR IS WRITTEN TO THIS MACHINE.
@@ -10914,20 +10912,20 @@ void AppWindow::startCatalogFetch() {
 }
 
 void AppWindow::startInstall(cascade::core::PluginCatalogEntry entry) {
-    if (catalogPending_ || installPending_) { return; }
-    installError_.clear();
-    installReport_.clear();
-    installBusyName_ = entry.name;
-    installPending_ = true;
-    const std::string dir = pluginDir_;
-    installFuture_ = std::async(
+    if (engine_.catalogPending_ || engine_.installPending_) { return; }
+    engine_.installError_.clear();
+    engine_.installReport_.clear();
+    engine_.installBusyName_ = entry.name;
+    engine_.installPending_ = true;
+    const std::string dir = engine_.pluginDir_;
+    engine_.installFuture_ = std::async(
         std::launch::async, [this, e = std::move(entry), dir]() {
             PluginInstallResult r;
             r.name = e.name;
             // Every security rule lives inside install(): ABI match, platform
             // match, file-name sanitisation, https, the byte cap, and the
             // sha256 that decides whether the temp file ever becomes a plugin.
-            r.ok = pluginRepo_.install(e, dir, r.installedPath, r.error);
+            r.ok = engine_.pluginRepo_.install(e, dir, r.installedPath, r.error);
             if (r.ok) {
                 // MANIFEST UPKEEP, without which the whole retirement feature
                 // silently no-ops: an unrecorded plugin has no id, no version
@@ -10942,15 +10940,15 @@ void AppWindow::startInstall(cascade::core::PluginCatalogEntry entry) {
 }
 
 void AppWindow::startUpdate(const cascade::core::PluginUpdate& u) {
-    if (catalogPending_ || installPending_ || u.entry == nullptr) { return; }
-    installError_.clear();
-    installReport_.clear();
-    installBusyName_ = u.entry->name;
-    installPending_ = true;
-    const std::string dir = pluginDir_;
+    if (engine_.catalogPending_ || engine_.installPending_ || u.entry == nullptr) { return; }
+    engine_.installError_.clear();
+    engine_.installReport_.clear();
+    engine_.installBusyName_ = u.entry->name;
+    engine_.installPending_ = true;
+    const std::string dir = engine_.pluginDir_;
     // The plan's entry aliases catalog_, which the GUI may replace while this
     // runs, so the worker owns a copy and the plan is re-pointed at it.
-    installFuture_ = std::async(
+    engine_.installFuture_ = std::async(
         std::launch::async, [this, plan = u, entry = *u.entry, dir]() mutable {
             PluginInstallResult r;
             r.isUpdate = true;
@@ -10959,7 +10957,7 @@ void AppWindow::startUpdate(const cascade::core::PluginUpdate& u) {
             // applyUpdate is install() plus recordInstall(), in that order and
             // with the same gauntlet — nothing here shortcuts it because "it
             // is only an update".
-            r.ok = pluginRepo_.applyUpdate(plan, dir, r.installedPath, r.error);
+            r.ok = engine_.pluginRepo_.applyUpdate(plan, dir, r.installedPath, r.error);
             return r;
         });
 }
@@ -10967,22 +10965,22 @@ void AppWindow::startUpdate(const cascade::core::PluginUpdate& u) {
 void AppWindow::pollPluginAsync() {
     constexpr auto kNoWait = std::chrono::seconds(0);
 
-    if (catalogPending_ && catalogFuture_.valid() &&
-        catalogFuture_.wait_for(kNoWait) == std::future_status::ready) {
-        CatalogFetchResult r = catalogFuture_.get();
-        catalogPending_ = false;
+    if (engine_.catalogPending_ && engine_.catalogFuture_.valid() &&
+        engine_.catalogFuture_.wait_for(kNoWait) == std::future_status::ready) {
+        CatalogFetchResult r = engine_.catalogFuture_.get();
+        engine_.catalogPending_ = false;
         if (r.ok) {
-            catalog_ = std::move(r.entries);
+            engine_.catalog_ = std::move(r.entries);
             std::string statusBuf;
             cascade::core::formatUtf8(statusBuf,
-                          catalog_.size() == 1u ? tr("%zu plugin in the catalogue")
+                          engine_.catalog_.size() == 1u ? tr("%zu plugin in the catalogue")
                                                 : tr("%zu plugins in the catalogue"),
-                          catalog_.size());
-            catalogStatus_ = statusBuf;
+                          engine_.catalog_.size());
+            engine_.catalogStatus_ = statusBuf;
             // "When the user last chose to look" — recorded here, never acted
             // on: no code path reads this to decide whether to fetch (see
             // AppConfig::pluginLastUpdateCheck).
-            pluginLastUpdateCheck_ = static_cast<std::int64_t>(std::time(nullptr));
+            engine_.pluginLastUpdateCheck_ = static_cast<std::int64_t>(std::time(nullptr));
             // The floors the worker just cached only take effect on the next
             // scan, and a user who has just been told a plugin is retired
             // should not have to restart to stop running it.
@@ -10990,19 +10988,19 @@ void AppWindow::pollPluginAsync() {
             // A cache-write failure is red text next to a catalogue that
             // nevertheless loaded: the list is real, the policy behind it was
             // not remembered, and both facts are shown.
-            if (!r.policyError.empty()) { catalogError_ = r.policyError; }
+            if (!r.policyError.empty()) { engine_.catalogError_ = r.policyError; }
         } else {
-            catalog_.clear();
-            catalogError_ = r.error;
+            engine_.catalog_.clear();
+            engine_.catalogError_ = r.error;
         }
         if (!pluginTestHook_.empty()) { reportPluginTestResult(); }
     }
 
-    if (installPending_ && installFuture_.valid() &&
-        installFuture_.wait_for(kNoWait) == std::future_status::ready) {
-        PluginInstallResult r = installFuture_.get();
-        installPending_ = false;
-        installBusyName_.clear();
+    if (engine_.installPending_ && engine_.installFuture_.valid() &&
+        engine_.installFuture_.wait_for(kNoWait) == std::future_status::ready) {
+        PluginInstallResult r = engine_.installFuture_.get();
+        engine_.installPending_ = false;
+        engine_.installBusyName_.clear();
         // The point of the rescan: the file is on disk, but it is not a
         // PLUGIN until the host has loaded and validated it — and if it fails
         // validation the user needs to see that here, immediately, rather
@@ -11018,7 +11016,7 @@ void AppWindow::pollPluginAsync() {
             cascade::core::formatUtf8(reportBuf,
                           r.isUpdate ? tr("Updated %s to %s") : tr("Installed %s to %s"),
                           r.name.c_str(), r.installedPath.c_str());
-            installReport_ = reportBuf;
+            engine_.installReport_ = reportBuf;
             if (!r.recordError.empty()) {
                 // Honest partial state: verified bytes are installed, but the
                 // plugin is unmanaged until a later install or catalogue fetch
@@ -11029,21 +11027,21 @@ void AppWindow::pollPluginAsync() {
                               tr("%s was installed, but its record could not be written: %s. "
                                  "It will not be version-checked until that is repaired."),
                               r.name.c_str(), r.recordError.c_str());
-                installError_ = recordBuf;
+                engine_.installError_ = recordBuf;
             }
         } else {
-            installError_ = r.error;
+            engine_.installError_ = r.error;
         }
         // THE RUN KEEPS ITS OWN TALLY, here, where the single authority on
         // whether a transfer succeeded already is. Reading installReport_ back
         // out of the panel afterwards would be a second opinion about the same
         // event, and the two would eventually disagree.
-        if (addAllRun_.active) {
+        if (engine_.addAllRun_.active) {
             if (r.ok) {
-                ++addAllRun_.installed;
+                ++engine_.addAllRun_.installed;
             } else {
-                ++addAllRun_.failed;
-                addAllRun_.failures.emplace_back(r.name, r.error);
+                ++engine_.addAllRun_.failed;
+                engine_.addAllRun_.failures.emplace_back(r.name, r.error);
                 cascade::core::diagLogf("plugin store: add all - %s FAILED: %s",
                                         r.name.c_str(), r.error.c_str());
             }
@@ -11056,7 +11054,7 @@ void AppWindow::pollPluginAsync() {
 // ---------------------------------------------------------------------------
 
 void AppWindow::startAddAll(bool noticesAcknowledged) {
-    if (addAllRun_.active || catalogPending_ || installPending_) { return; }
+    if (engine_.addAllRun_.active || engine_.catalogPending_ || engine_.installPending_) { return; }
     // RE-PLANNED FROM LIVE STATE, not from the plan the key was drawn against.
     // The key was drawn one frame ago from a model built one frame ago, and
     // the whole point of this queue is that it acts over many frames.
@@ -11065,26 +11063,26 @@ void AppWindow::startAddAll(bool noticesAcknowledged) {
     const cascade::gui::AddAllPlan plan =
         cascade::gui::planAddAll(model, noticesAcknowledged);
     if (!plan.blockedReason.empty()) {
-        installError_ = plan.blockedReason;
+        engine_.installError_ = plan.blockedReason;
         return;
     }
 
-    addAllRun_ = AddAllRun{};
+    engine_.addAllRun_ = AddAllRun{};
     for (int i : plan.install) {
-        addAllRun_.ids.push_back(model.modules[static_cast<std::size_t>(i)].id);
-        addAllRun_.isUpdate.push_back(false);
+        engine_.addAllRun_.ids.push_back(model.modules[static_cast<std::size_t>(i)].id);
+        engine_.addAllRun_.isUpdate.push_back(false);
     }
     for (int i : plan.update) {
-        addAllRun_.ids.push_back(model.modules[static_cast<std::size_t>(i)].id);
-        addAllRun_.isUpdate.push_back(true);
+        engine_.addAllRun_.ids.push_back(model.modules[static_cast<std::size_t>(i)].id);
+        engine_.addAllRun_.isUpdate.push_back(true);
     }
-    if (addAllRun_.ids.empty()) { return; }
-    addAllRun_.active = true;
-    addAllRun_.total = addAllRun_.ids.size();
-    addAllSummary_.clear();
-    addAllFailed_ = false;
-    installError_.clear();
-    installReport_.clear();
+    if (engine_.addAllRun_.ids.empty()) { return; }
+    engine_.addAllRun_.active = true;
+    engine_.addAllRun_.total = engine_.addAllRun_.ids.size();
+    engine_.addAllSummary_.clear();
+    engine_.addAllFailed_ = false;
+    engine_.installError_.clear();
+    engine_.installReport_.clear();
     cascade::core::diagLogf(
         "plugin store: add all starting - %zu to fetch, %zu to update, %zu passed over",
         plan.install.size(), plan.update.size(), plan.skipped.size());
@@ -11094,48 +11092,48 @@ void AppWindow::startAddAll(bool noticesAcknowledged) {
 }
 
 std::string AppWindow::addAllProgressLine() const {
-    if (!addAllRun_.active) { return {}; }
+    if (!engine_.addAllRun_.active) { return {}; }
     std::string buf;
     // "installing 4 of 23: GOES Weather Satellites (HRIT / LRIT)" - the
     // position AND the name, because a bar with no name cannot tell a user
     // which module is the slow one.
     cascade::core::formatUtf8(buf, tr("installing %zu of %zu: %s"),
-                  std::min(addAllRun_.next + 1u, addAllRun_.total), addAllRun_.total,
-                  addAllRun_.currentName.empty() ? tr("starting") : addAllRun_.currentName.c_str());
+                  std::min(engine_.addAllRun_.next + 1u, engine_.addAllRun_.total), engine_.addAllRun_.total,
+                  engine_.addAllRun_.currentName.empty() ? tr("starting") : engine_.addAllRun_.currentName.c_str());
     return buf;
 }
 
 void AppWindow::pumpAddAll() {
-    if (!addAllRun_.active) { return; }
+    if (!engine_.addAllRun_.active) { return; }
     // A transfer is in flight, or a catalogue fetch is: wait. Nothing here
     // cancels anything - CANCEL is the user's key and it stops the transfer,
     // which this queue then records as a failure and carries on past.
-    if (installPending_ || catalogPending_) { return; }
+    if (engine_.installPending_ || engine_.catalogPending_) { return; }
 
-    while (addAllRun_.next < addAllRun_.ids.size()) {
-        const std::string id = addAllRun_.ids[addAllRun_.next];
-        const bool wantUpdate = addAllRun_.isUpdate[addAllRun_.next];
-        ++addAllRun_.next;
+    while (engine_.addAllRun_.next < engine_.addAllRun_.ids.size()) {
+        const std::string id = engine_.addAllRun_.ids[engine_.addAllRun_.next];
+        const bool wantUpdate = engine_.addAllRun_.isUpdate[engine_.addAllRun_.next];
+        ++engine_.addAllRun_.next;
 
         // THE ROW IS LOOKED UP AGAIN BY ID. catalog_ may have been replaced
         // since the queue was built, and an entry that is no longer there is a
         // failure with a reason rather than a silent skip.
         int idx = -1;
-        for (int i = 0; i < static_cast<int>(catalog_.size()); ++i) {
-            if (catalog_[static_cast<std::size_t>(i)].id == id) {
+        for (int i = 0; i < static_cast<int>(engine_.catalog_.size()); ++i) {
+            if (engine_.catalog_[static_cast<std::size_t>(i)].id == id) {
                 idx = i;
                 break;
             }
         }
         if (idx < 0) {
-            ++addAllRun_.failed;
-            addAllRun_.failures.emplace_back(id, FOX_TR_NOOP("no longer in the catalogue"));
+            ++engine_.addAllRun_.failed;
+            engine_.addAllRun_.failures.emplace_back(id, FOX_TR_NOOP("no longer in the catalogue"));
             cascade::core::diagLogf(
                 "plugin store: add all - %s FAILED: no longer in the catalogue", id.c_str());
             continue;
         }
-        const cascade::core::PluginCatalogEntry& e = catalog_[static_cast<std::size_t>(idx)];
-        addAllRun_.currentName = e.name;
+        const cascade::core::PluginCatalogEntry& e = engine_.catalog_[static_cast<std::size_t>(idx)];
+        engine_.addAllRun_.currentName = e.name;
 
         if (wantUpdate) {
             const std::vector<cascade::core::PluginUpdate> plans = plannedPluginUpdates();
@@ -11143,7 +11141,7 @@ void AppWindow::pumpAddAll() {
             for (const cascade::core::PluginUpdate& u : plans) {
                 if (u.id != id) { continue; }
                 startUpdate(u);
-                started = installPending_;
+                started = engine_.installPending_;
                 break;
             }
             if (started) { return; }
@@ -11160,14 +11158,14 @@ void AppWindow::pumpAddAll() {
         const std::string blocked = pluginInstallBlockedReason(idx, true);
         if (!blocked.empty()) {
             if (blocked == "already installed") { continue; }
-            ++addAllRun_.failed;
-            addAllRun_.failures.emplace_back(e.name, blocked);
+            ++engine_.addAllRun_.failed;
+            engine_.addAllRun_.failures.emplace_back(e.name, blocked);
             cascade::core::diagLogf("plugin store: add all - %s FAILED: %s", e.name.c_str(),
                                     blocked.c_str());
             continue;
         }
         startInstall(e);
-        if (installPending_) { return; }
+        if (engine_.installPending_) { return; }
     }
 
     // --- the queue is empty: say what happened ------------------------------
@@ -11177,34 +11175,34 @@ void AppWindow::pumpAddAll() {
     // reason is the English one translated where it is shown - PluginRepo's
     // own words, which no catalogue holds, come through unchanged.
     char buf[256];
-    std::snprintf(buf, sizeof buf, "%d installed, %d failed", addAllRun_.installed,
-                  addAllRun_.failed);
+    std::snprintf(buf, sizeof buf, "%d installed, %d failed", engine_.addAllRun_.installed,
+                  engine_.addAllRun_.failed);
     std::string logged = buf;
-    addAllSummary_ = cascade::core::formatText(tr("%d installed, %d failed"),
-                              addAllRun_.installed, addAllRun_.failed);
-    addAllFailed_ = addAllRun_.failed > 0;
-    if (addAllRun_.failed > 0) {
+    engine_.addAllSummary_ = cascade::core::formatText(tr("%d installed, %d failed"),
+                              engine_.addAllRun_.installed, engine_.addAllRun_.failed);
+    engine_.addAllFailed_ = engine_.addAllRun_.failed > 0;
+    if (engine_.addAllRun_.failed > 0) {
         // NAMED, WITH THE REASON EACH GAVE. "3 failed" is a number nobody can
         // act on; the reason PluginRepo wrote is the only evidence the user
         // has, and it is carried through word for word.
         logged += ".";
-        addAllSummary_ += ".";
-        for (const auto& [name, reason] : addAllRun_.failures) {
+        engine_.addAllSummary_ += ".";
+        for (const auto& [name, reason] : engine_.addAllRun_.failures) {
             logged += " " + name + ": " + reason + ".";
-            addAllSummary_ += " " + name + ": " + cascade::gui::trStoredReason(reason) + ".";
+            engine_.addAllSummary_ += " " + name + ": " + cascade::gui::trStoredReason(reason) + ".";
         }
     }
     cascade::core::diagLogf("plugin store: add all finished - %s", logged.c_str());
-    addAllRun_.active = false;
-    addAllRun_.currentName.clear();
+    engine_.addAllRun_.active = false;
+    engine_.addAllRun_.currentName.clear();
     // THE TICK WAS FOR THIS RUN. It named the notices this run would take, and
     // the run has taken them; the next press is a new decision.
     if (pluginStoreDeck_) { pluginStoreDeck_->addAllAck = false; }
 }
 
 void AppWindow::removeInstalledPlugin(const std::string& fileName) {
-    installError_.clear();
-    installReport_.clear();
+    engine_.installError_.clear();
+    engine_.installReport_.clear();
 
     // WINDOWS CANNOT DELETE A MAPPED IMAGE. A loaded plugin's DLL is open in
     // this process, and fs::remove on it fails with a sharing violation. Two
@@ -11228,12 +11226,12 @@ void AppWindow::removeInstalledPlugin(const std::string& fileName) {
     // nothing is claimed that did not happen.
     detachAndUnloadPlugins();
     std::string err;
-    if (pluginRepo_.remove(pluginDir_, fileName, err)) {
+    if (engine_.pluginRepo_.remove(engine_.pluginDir_, fileName, err)) {
         std::string removedBuf;
         cascade::core::formatUtf8(removedBuf, tr("Removed %s"), fileName.c_str());
-        installReport_ = removedBuf;
+        engine_.installReport_ = removedBuf;
     } else {
-        installError_ = err;
+        engine_.installError_ = err;
     }
     rescanPlugins();
 }
@@ -11258,8 +11256,8 @@ void AppWindow::refreshPluginRunner() {
     // it changes: this function runs after every rescan, and a rescan is
     // exactly when the two halves have been cleared and could otherwise start a
     // plugin the user stopped.
-    pluginRunner_.setStopped(pluginsStopped_);
-    pluginUi_.setStopped(pluginsStopped_);
+    engine_.pluginRunner_.setStopped(engine_.pluginsStopped_);
+    engine_.pluginUi_.setStopped(engine_.pluginsStopped_);
     // THE HOST TABLE FIRST, THEN THE DECODERS (0.99.31). The ABI promises that
     // attach() runs before any capability's create() (CascadeHostClientApi);
     // the runner used to be rebuilt first, so on the first rebuild of a
@@ -11277,8 +11275,8 @@ void AppWindow::refreshPluginRunner() {
     // runs before any capability's create() and a tracker may read the
     // receiver while building its initial state.
     cascade::core::HostServices svc;
-    svc.centreHz = [this] { return pipeline_.activeSource().centerFrequencyHz(); };
-    svc.sampleRateHz = [this] { return pipeline_.inputRateHz(); };
+    svc.centreHz = [this] { return engine_.pipeline_.activeSource().centerFrequencyHz(); };
+    svc.sampleRateHz = [this] { return engine_.pipeline_.inputRateHz(); };
     svc.unixTimeMs = [] {
         return static_cast<std::int64_t>(
             std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -11291,24 +11289,24 @@ void AppWindow::refreshPluginRunner() {
         // the IqSource interface, and a source with no usable rate is one
         // nothing has opened - a state a plugin needs told apart from "the
         // device refused".
-        if (!(pipeline_.activeSource().sampleRateHz() > 0.0)) {
+        if (!(engine_.pipeline_.activeSource().sampleRateHz() > 0.0)) {
             return CASCADE_TUNE_NO_DEVICE;
         }
         retuneSourceHz(hz);
         return CASCADE_TUNE_OK;
     };
-    pluginUi_.setServices(std::move(svc));
+    engine_.pluginUi_.setServices(std::move(svc));
     // THE GRANTS GO IN BEFORE THE REBUILD as well as after it (below): a
     // plugin may ask for the receiver from inside its attach(), and must be
     // answered by the grant the user gave, not by a clear() the rescan did.
     applyPluginTuneGrants();
     applyPluginSettingsGrants();
-    pluginUi_.rebuild(pluginHost_.plugins());
+    engine_.pluginUi_.rebuild(engine_.pluginHost_.plugins());
     // The receiver's stream clock, which the runner writes and the
     // level-1 get_stream_info reads (CascadeStreamInfo).
-    pluginRunner_.setStreamClock(pluginUi_.api().streamClock());
-    pipeline_.setPluginRunner(nullptr);
-    if (patchRunning_) {
+    engine_.pluginRunner_.setStreamClock(engine_.pluginUi_.api().streamClock());
+    engine_.pipeline_.setPluginRunner(nullptr);
+    if (engine_.patchRunning_) {
         // THE PATCH HAS THE DECODERS (0.99.18). While it runs the
         // receiver runs only on the generator, and a plugin publishes its map
         // targets through ONE snapshot per module (the ADS-B plugin says so in
@@ -11316,12 +11314,12 @@ void AppWindow::refreshPluginRunner() {
         // noise, would overwrite the aircraft the patch's ADS-B instance is
         // finding, every block. No receiver decoders while the patch runs;
         // stopping it calls this again and they come back.
-        pluginRunner_.clear();
+        engine_.pluginRunner_.clear();
     } else {
-        pluginRunner_.rebuild(pluginHost_.plugins(), cascade::core::Pipeline::kAudioRateHz,
-                              pipeline_.inputRateHz(),
-                              pipeline_.activeSource().centerFrequencyHz());
-        pipeline_.setPluginRunner(&pluginRunner_);
+        engine_.pluginRunner_.rebuild(engine_.pluginHost_.plugins(), cascade::core::Pipeline::kAudioRateHz,
+                              engine_.pipeline_.inputRateHz(),
+                              engine_.pipeline_.activeSource().centerFrequencyHz());
+        engine_.pipeline_.setPluginRunner(&engine_.pluginRunner_);
     }
     // AND THE MUTE SNAPSHOT AFTER THE REBUILD, not before it. It carries the
     // running state, and running now means the runner is ACTUALLY FEEDING the
@@ -11337,7 +11335,7 @@ void AppWindow::refreshPluginRunner() {
     // FOXSDR_DEMO_INSTRUMENT for this launch: its whole purpose is to put a
     // face on screen to be looked at, and a switch that then required a
     // second step would be a switch for nothing.
-    for (const cascade::core::HostInstrument& in : pluginUi_.instruments()) {
+    for (const cascade::core::HostInstrument& in : engine_.pluginUi_.instruments()) {
         if (in.plugin == "Demonstration") {
             pluginWindows_.show(instrumentWindowId(in));
         }
@@ -11355,7 +11353,7 @@ void AppWindow::refreshPluginRunner() {
     // off. Skipping it in the runner and the UI half but not here would leave
     // the stopped plugin drawing the entire map background.
     const CascadeBasemapApi* wantBasemap = nullptr;
-    for (const cascade::core::LoadedPlugin& lp : pluginHost_.plugins()) {
+    for (const cascade::core::LoadedPlugin& lp : engine_.pluginHost_.plugins()) {
         if (lp.loaded && lp.basemap != nullptr &&
             !pluginIsStopped(cascade::core::pluginKey(lp))) {
             wantBasemap = lp.basemap;
@@ -11365,7 +11363,7 @@ void AppWindow::refreshPluginRunner() {
     basemap_.attach(wantBasemap);
     // Track enrichment, by the same first-wins rule and for the same reason.
     const CascadeTrackInfoApi* wantTrackInfo = nullptr;
-    for (const cascade::core::LoadedPlugin& lp : pluginHost_.plugins()) {
+    for (const cascade::core::LoadedPlugin& lp : engine_.pluginHost_.plugins()) {
         if (lp.loaded && lp.trackInfo != nullptr &&
             !pluginIsStopped(cascade::core::pluginKey(lp))) {
             wantTrackInfo = lp.trackInfo;
@@ -12027,7 +12025,7 @@ AppWindow::MapPage& AppWindow::ensureMapPage(const std::string& plugin) {
     // Receiver-wide facts reach every page at birth. Applying the position
     // here — at the one place a view is created — is what makes the old
     // "config applied before the view existed" ordering bug impossible now.
-    if (rxSet_) { page.view->setHome(rxLat_, rxLon_); }
+    if (engine_.rxSet_) { page.view->setHome(engine_.rxLat_, engine_.rxLon_); }
     // WHAT ALTITUDE THIS AIRCRAFT HAD WHERE ITS TRAIL RUNS, answered by the
     // observations PluginUi records as it polls (see altitudeNear). Installed
     // ONCE, here, for the same reason the receiver position is: this is the
@@ -12037,7 +12035,7 @@ AppWindow::MapPage& AppWindow::ensureMapPage(const std::string& plugin) {
     // and are cleared, never detached.
     page.view->setAltitudeLookup([this](const std::string& plugin, const std::string& id,
                                         double latDeg, double lonDeg, double& outAltM) {
-        return pluginUi_.altitudeNear(plugin, id, latDeg, lonDeg, outAltM);
+        return engine_.pluginUi_.altitudeNear(plugin, id, latDeg, lonDeg, outAltM);
     });
 
     // Geometry and open state: the page's own saved entry wins; failing that,
@@ -12107,9 +12105,9 @@ bool AppWindow::applyReceiverPosition(double latDeg, double lonDeg) {
     // per entry point is a check that will eventually be missing from one.
     // The predicate also refuses 0,0 (receiverPositionAcceptable says why).
     if (!cascade::gui::receiverPositionAcceptable(latDeg, lonDeg)) { return false; }
-    rxLat_ = latDeg;
-    rxLon_ = lonDeg;
-    rxSet_ = true;
+    engine_.rxLat_ = latDeg;
+    engine_.rxLon_ = lonDeg;
+    engine_.rxSet_ = true;
     // THE TYPED FIELDS FOLLOW THE APPLIED POSITION. They are the toolbar's
     // draft of this same number, and a position set from the satellites
     // window would otherwise leave them showing whatever was last typed
@@ -12123,9 +12121,9 @@ bool AppWindow::applyReceiverPosition(double latDeg, double lonDeg) {
     // once. The scope is told for the same reason - it is a third view of
     // the same antenna.
     for (MapPage& other : mapPages_) {
-        other.view->setHome(rxLat_, rxLon_);
+        other.view->setHome(engine_.rxLat_, engine_.rxLon_);
     }
-    scope_.setReceiver(rxLat_, rxLon_);
+    scope_.setReceiver(engine_.rxLat_, engine_.rxLon_);
     // A NEW ORIGIN INVALIDATES THE OLD COVERAGE. Every wedge in it was
     // measured from somewhere else, and keeping them would draw one antenna's
     // pattern around another antenna's position.
@@ -12222,7 +12220,7 @@ void AppWindow::drawRxPositionEntry() {
 void AppWindow::drawReceiverPositionOffers() {
     double tLat = 0.0;
     double tLon = 0.0;
-    const int heard = cascade::gui::scopeTrafficCentre(pluginUi_.tracks(), tLat, tLon);
+    const int heard = cascade::gui::scopeTrafficCentre(engine_.pluginUi_.tracks(), tLat, tLon);
     const bool trafficReady = heard >= cascade::gui::kScopeTrafficCentreMinAircraft &&
                               cascade::gui::receiverPositionAcceptable(tLat, tLon);
     std::string label;
@@ -12328,7 +12326,7 @@ void AppWindow::drawReceiverPositionOffers() {
 // searches the log ring for the digits).
 void AppWindow::drawGpsPositionControl() {
     using cascade::core::GpsReader;
-    const bool listening = gpsReader_.listening();
+    const bool listening = engine_.gpsReader_.listening();
 
     benchHint(tr("or read it from a GPS receiver on a serial port:"));
 
@@ -12358,8 +12356,8 @@ void AppWindow::drawGpsPositionControl() {
         // rule, so what is saved is what the port layer will be asked for.
         // The field keeps what was typed until the user changes it.
         gpsPort_ = cascade::core::sanitiseSerialPortName(gpsPortInput_);
-        gpsRefusal_.clear();
-        gpsReader_.clearResult();
+        engine_.gpsRefusal_.clear();
+        engine_.gpsReader_.clearResult();
     }
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip(tr("The serial port the GPS receiver is on - COM3, or /dev/ttyUSB0.\n"
@@ -12381,8 +12379,8 @@ void AppWindow::drawGpsPositionControl() {
             if (ImGui::Selectable(name.c_str(), name == gpsPort_)) {
                 gpsPort_ = name;
                 cascade::core::formatUtf8(gpsPortInput_, sizeof(gpsPortInput_), "%s", name.c_str());
-                gpsRefusal_.clear();
-                gpsReader_.clearResult();
+                engine_.gpsRefusal_.clear();
+                engine_.gpsReader_.clearResult();
             }
         }
         ImGui::EndPopup();
@@ -12399,8 +12397,8 @@ void AppWindow::drawGpsPositionControl() {
             std::snprintf(item, sizeof(item), "%d", baud);
             if (ImGui::Selectable(item, baud == gpsBaud_)) {
                 gpsBaud_ = baud;
-                gpsRefusal_.clear();
-                gpsReader_.clearResult();
+                engine_.gpsRefusal_.clear();
+                engine_.gpsReader_.clearResult();
             }
         }
         ImGui::EndCombo();
@@ -12446,7 +12444,7 @@ void AppWindow::drawGpsPositionControl() {
     // THE STATUS LINE, in the bench's hint ink while it is news and in the
     // warning ink when it is a problem the user has to act on. Idle draws
     // nothing at all - the row is not a place for "ready".
-    const GpsReader::Status status = gpsReader_.status();
+    const GpsReader::Status status = engine_.gpsReader_.status();
     const std::string line = cascade::core::gpsStatusLine(status);
     if (!line.empty()) {
         const bool trouble = status.state == GpsReader::State::Failed ||
@@ -12457,16 +12455,16 @@ void AppWindow::drawGpsPositionControl() {
         ImGui::TextWrapped("%s", line.c_str());
         ImGui::PopStyleColor();
     }
-    if (!gpsRefusal_.empty()) {
+    if (!engine_.gpsRefusal_.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
-        ImGui::TextWrapped("%s", gpsRefusal_.c_str());
+        ImGui::TextWrapped("%s", engine_.gpsRefusal_.c_str());
         ImGui::PopStyleColor();
     }
 }
 
 void AppWindow::pollGpsReader() {
     cascade::core::NmeaFix fix;
-    if (!gpsReader_.takeFix(fix)) { return; }
+    if (!engine_.gpsReader_.takeFix(fix)) { return; }
     // THE ONE DOOR. applyReceiverPosition moves every map page's home, tells
     // the scope, discards the coverage measured from the old origin and puts
     // the typed fields in step; a GPS fix that bypassed it would set a
@@ -12475,7 +12473,7 @@ void AppWindow::pollGpsReader() {
     // two rules have drifted - said on screen and in the log (as a fact, not
     // a coordinate) rather than swallowed.
     if (applyReceiverPosition(fix.latDeg, fix.lonDeg)) {
-        gpsRefusal_.clear();
+        engine_.gpsRefusal_.clear();
         // The rail's "Receiver position" fold opens on this frame, because
         // rxSet_ just flipped and the row the user was watching (on the
         // rail's no-position block) is about to be replaced by that fold:
@@ -12483,7 +12481,7 @@ void AppWindow::pollGpsReader() {
         gpsRowReveal_ = true;
         cascade::core::diagLogf("gps: fix applied as the receiver position");
     } else {
-        gpsRefusal_ = tr("The GPS fix was refused by the position rule (off the globe, or 0,0).");
+        engine_.gpsRefusal_ = tr("The GPS fix was refused by the position rule (off the globe, or 0,0).");
         cascade::core::diagWarnf("gps: fix refused by the acceptance rule");
     }
 }
@@ -12511,9 +12509,9 @@ void AppWindow::drawRadarSection() {
 }
 
 void AppWindow::rebuildPatchCatalogue() {
-    patchCatalogue_.clear();
-    patchApis_.clear();
-    for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
+    engine_.patchCatalogue_.clear();
+    engine_.patchApis_.clear();
+    for (const cascade::core::LoadedPlugin& p : engine_.pluginHost_.plugins()) {
         if (!p.loaded) { continue; }
         // A plugin the user has STOPPED stays out of the patch too: a stop is
         // a decision about the plugin, not about one place it runs.
@@ -12528,10 +12526,10 @@ void AppWindow::rebuildPatchCatalogue() {
             info.feed = cascade::core::patch::PortType::Audio;
             info.requiredRateHz = static_cast<double>(p.decoder->requiredRateHz);
             info.tracks = p.trackSource != nullptr;   // it can put targets on a map
-            patchCatalogue_.push_back(info);
+            engine_.patchCatalogue_.push_back(info);
             cascade::core::patch::PluginApis a;
             a.audio = p.decoder;
-            patchApis_.push_back(a);
+            engine_.patchApis_.push_back(a);
         }
         if (p.iqDecoder != nullptr) {
             cascade::core::patch::DecoderInfo info;
@@ -12540,10 +12538,10 @@ void AppWindow::rebuildPatchCatalogue() {
             info.feed = cascade::core::patch::PortType::Iq;
             info.requiredRateHz = p.iqDecoder->requiredRateHz;
             info.tracks = p.trackSource != nullptr;   // it can put targets on a map
-            patchCatalogue_.push_back(info);
+            engine_.patchCatalogue_.push_back(info);
             cascade::core::patch::PluginApis a;
             a.iq = p.iqDecoder;
-            patchApis_.push_back(a);
+            engine_.patchApis_.push_back(a);
         }
         // A PICTURE decoder (APT, WEFAX, SSTV) - either input, through one
         // table - is a part too, showing its picture on its own face.
@@ -12557,18 +12555,18 @@ void AppWindow::rebuildPatchCatalogue() {
             info.requiredRateHz = p.imageDecoder->requiredRateHz;
             info.image = true;
             info.tracks = p.trackSource != nullptr;   // it can put targets on a map
-            patchCatalogue_.push_back(info);
+            engine_.patchCatalogue_.push_back(info);
             cascade::core::patch::PluginApis a;
             a.image = p.imageDecoder;
-            patchApis_.push_back(a);
+            engine_.patchApis_.push_back(a);
         }
     }
 }
 
 bool AppWindow::patchDecoderIsShown(cascade::core::patch::NodeId node) const {
-    for (const cascade::core::patch::Wire& w : patchGraph_.wires()) {
+    for (const cascade::core::patch::Wire& w : engine_.patchGraph_.wires()) {
         if (w.from != node) { continue; }
-        const cascade::core::patch::Node* dst = patchGraph_.find(w.to);
+        const cascade::core::patch::Node* dst = engine_.patchGraph_.find(w.to);
         if (dst != nullptr && dst->kind == cascade::core::patch::NodeKind::Sink &&
             !dst->inputs.empty() && dst->inputs[0] == cascade::core::patch::PortType::Text) {
             return true;
@@ -12669,15 +12667,15 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
 
     // A closed node's memory goes with it: a waterfall of a hundred rows and a
     // log of two hundred lines are not worth keeping for a node that is gone.
-    const auto gone = [this](pc::NodeId id) { return patchGraph_.find(id) == nullptr; };
+    const auto gone = [this](pc::NodeId id) { return engine_.patchGraph_.find(id) == nullptr; };
     for (auto it = patchScopes_.begin(); it != patchScopes_.end();) {
         it = gone(it->first) ? patchScopes_.erase(it) : std::next(it);
     }
     for (auto it = patchScopeSeq_.begin(); it != patchScopeSeq_.end();) {
         it = gone(it->first) ? patchScopeSeq_.erase(it) : std::next(it);
     }
-    for (auto it = patchSinkLines_.begin(); it != patchSinkLines_.end();) {
-        it = gone(it->first) ? patchSinkLines_.erase(it) : std::next(it);
+    for (auto it = engine_.patchSinkLines_.begin(); it != engine_.patchSinkLines_.end();) {
+        it = gone(it->first) ? engine_.patchSinkLines_.erase(it) : std::next(it);
     }
     for (auto it = patchMapViews_.begin(); it != patchMapViews_.end();) {
         it = gone(it->first) ? patchMapViews_.erase(it) : std::next(it);
@@ -12712,10 +12710,10 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
     const auto phosphor = cascade::gui::theme::vec(cascade::gui::theme::kPhosphor);
 
     std::vector<pc::NodeId> ids;
-    ids.reserve(patchGraph_.nodes().size());
-    for (const pc::Node& each : patchGraph_.nodes()) { ids.push_back(each.id); }
+    ids.reserve(engine_.patchGraph_.nodes().size());
+    for (const pc::Node& each : engine_.patchGraph_.nodes()) { ids.push_back(each.id); }
     for (const pc::NodeId id : ids) {
-        pc::Node* np = patchGraph_.mutableNode(id);
+        pc::Node* np = engine_.patchGraph_.mutableNode(id);
         if (np == nullptr) { continue; }
         pc::Node& n = *np;
         const pg::Rect f = pg::faceRect(n);
@@ -12754,7 +12752,7 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
         }
         {
             bool later = false;
-            for (const pc::Node& other : patchGraph_.nodes()) {
+            for (const pc::Node& other : engine_.patchGraph_.nodes()) {
                 if (other.id == n.id) {
                     later = true;
                     continue;
@@ -12819,13 +12817,13 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
                     ImGui::SetTooltip("%s", tr("The radio's centre. Type a frequency and press Enter."));
                 }
                 drawPatchCentreNote(n);
-                const auto run = patchRadios_.find(n.id);
-                const auto err = patchRadioError_.find(n.id);
-                if (run != patchRadios_.end()) {
+                const auto run = engine_.patchRadios_.find(n.id);
+                const auto err = engine_.patchRadioError_.find(n.id);
+                if (run != engine_.patchRadios_.end()) {
                     ImGui::PushStyleColor(ImGuiCol_Text, amber);
                     ImGui::Text("%.3f MS/s", run->second->rateHz() / 1e6);
                     ImGui::PopStyleColor();
-                } else if (patchRadioPending_.count(n.id) != 0) {
+                } else if (engine_.patchRadioPending_.count(n.id) != 0) {
                     ImGui::PushStyleColor(ImGuiCol_Text, muted);
                     ImGui::TextUnformatted(tr("opening..."));
                     ImGui::PopStyleColor();
@@ -12837,21 +12835,21 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
                     ImGui::PushStyleColor(ImGuiCol_Text, muted);
                     ImGui::TextWrapped("%s", tr("Switched off."));
                     ImGui::PopStyleColor();
-                } else if (!patchRunning_) {
+                } else if (!engine_.patchRunning_) {
                     ImGui::PushStyleColor(ImGuiCol_Text, muted);
                     ImGui::TextWrapped("%s", tr("Ready - press START."));
                     ImGui::PopStyleColor();
                 } else {
                     // ONE DEVICE, ONE RADIO, said on the face of the radio that
                     // is not running because of it - not only by its edge.
-                    for (const pc::Problem pr : pc::problemsFor(patchPlan_, n.id)) {
+                    for (const pc::Problem pr : pc::problemsFor(engine_.patchPlan_, n.id)) {
                         if (pr != pc::Problem::DeviceTwice) { continue; }
                         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::bad());
                         ImGui::TextWrapped("%s", tr("Another radio here already uses this device."));
                         ImGui::PopStyleColor();
                     }
                 }
-                if (err != patchRadioError_.end()) {
+                if (err != engine_.patchRadioError_.end()) {
                     ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::bad());
                     ImGui::TextWrapped("%s", err->second.c_str());
                     ImGui::PopStyleColor();
@@ -12888,8 +12886,8 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
                     // A speaker: what it is playing, by the channel's name, and
                     // WHERE IT GOES (0.99.17) - a file by default, the speakers
                     // or another device if it is set to - with its level.
-                    const pc::Node* ch = patchGraph_.find(pc::channelFeeding(patchGraph_, n.id));
-                    std::shared_ptr<pc::AudioDest> dest = pc::destFor(patchDests_, n.id);
+                    const pc::Node* ch = engine_.patchGraph_.find(pc::channelFeeding(engine_.patchGraph_, n.id));
+                    std::shared_ptr<pc::AudioDest> dest = pc::destFor(engine_.patchDests_, n.id);
                     if (ch == nullptr) {
                         ImGui::PushStyleColor(ImGuiCol_Text, muted);
                         ImGui::TextWrapped("%s", tr("Wire a demodulator here to listen."));
@@ -12925,8 +12923,8 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
                         ImGui::TextWrapped("%s", tr("Waiting for its radio."));
                         ImGui::PopStyleColor();
                     }
-                    const auto derr = patchDestError_.find(n.id);
-                    if (derr != patchDestError_.end()) {
+                    const auto derr = engine_.patchDestError_.find(n.id);
+                    if (derr != engine_.patchDestError_.end()) {
                         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::bad());
                         ImGui::TextWrapped("%s", derr->second.c_str());
                         ImGui::PopStyleColor();
@@ -12934,8 +12932,8 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
                     break;
                 }
                 // Text out: the newest lines that fit, oldest at the top.
-                const auto it = patchSinkLines_.find(n.id);
-                if (it == patchSinkLines_.end() || it->second.empty()) {
+                const auto it = engine_.patchSinkLines_.find(n.id);
+                if (it == engine_.patchSinkLines_.end() || it->second.empty()) {
                     ImGui::PushStyleColor(ImGuiCol_Text, muted);
                     ImGui::TextWrapped("%s", tr("Decoded lines appear here."));
                     ImGui::PopStyleColor();
@@ -12968,18 +12966,18 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
                 // every planned channel marked and named. From a CHANNEL: that
                 // channel's slice, its centre marked.
                 const pc::Node* feeder = nullptr;
-                for (const pc::Wire& w : patchGraph_.wires()) {
+                for (const pc::Wire& w : engine_.patchGraph_.wires()) {
                     if (w.to == n.id) {
-                        feeder = patchGraph_.find(w.from);
+                        feeder = engine_.patchGraph_.find(w.from);
                         break;
                     }
                 }
                 // OFF ITS OWN RADIO (0.99.17): the spectrum of the radio this
                 // part hangs off, not the receiver's.
-                const pc::NodeId radioId = pc::radioOf(patchGraph_, n.id);
-                const auto rspec = patchSpectra_.find(radioId);
-                const auto rrun = patchRadios_.find(radioId);
-                const double rate = rrun != patchRadios_.end() ? rrun->second->rateHz() : 0.0;
+                const pc::NodeId radioId = pc::radioOf(engine_.patchGraph_, n.id);
+                const auto rspec = engine_.patchSpectra_.find(radioId);
+                const auto rrun = engine_.patchRadios_.find(radioId);
+                const double rate = rrun != engine_.patchRadios_.end() ? rrun->second->rateHz() : 0.0;
                 double lo = 0.0;
                 double hi = 0.0;
                 bool ok = false;
@@ -12988,7 +12986,7 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
                     hi = 0.5 * rate;
                     ok = true;
                 } else if (feeder != nullptr && feeder->kind == pc::NodeKind::Channel) {
-                    if (const pc::ChannelPlan* cp = pc::findChannel(patchPlan_, feeder->id)) {
+                    if (const pc::ChannelPlan* cp = pc::findChannel(engine_.patchPlan_, feeder->id)) {
                         lo = cp->offsetHz - 0.5 * cp->outRateHz;
                         hi = cp->offsetHz + 0.5 * cp->outRateHz;
                         ok = true;
@@ -13000,7 +12998,7 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
                     ImGui::PopStyleColor();
                     break;
                 }
-                if (rspec == patchSpectra_.end() || rspec->second.db.empty()) {
+                if (rspec == engine_.patchSpectra_.end() || rspec->second.db.empty()) {
                     ImGui::PushStyleColor(ImGuiCol_Text, muted);
                     ImGui::TextWrapped("%s", tr("No spectrum yet - its radio is not running."));
                     ImGui::PopStyleColor();
@@ -13077,9 +13075,9 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
                     }
                 };
                 if (feeder->kind == pc::NodeKind::Radio) {
-                    for (const pc::ChannelPlan& cp : patchPlan_.channels) {
+                    for (const pc::ChannelPlan& cp : engine_.patchPlan_.channels) {
                         if (cp.radio != radioId) { continue; }   // another radio's band
-                        const pc::Node* ch = patchGraph_.find(cp.node);
+                        const pc::Node* ch = engine_.patchGraph_.find(cp.node);
                         marker(cp.offsetHz, ch != nullptr ? ch->name.c_str() : nullptr);
                     }
                 } else {
@@ -13100,7 +13098,7 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
                 // should be able to click on it in patch and zoom in the same
                 // way you do in the normal map"). The sentence stays, above
                 // the chart, until a decoder is wired in.
-                const bool unwired = pc::mapSources(patchGraph_, n.id, patchCatalogue_).empty();
+                const bool unwired = pc::mapSources(engine_.patchGraph_, n.id, engine_.patchCatalogue_).empty();
                 if (unwired) {
                     ImGui::PushStyleColor(ImGuiCol_Text, muted);
                     ImGui::TextWrapped(
@@ -13132,7 +13130,7 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
                 std::unique_ptr<MapView>& view = patchMapViews_[n.id];
                 if (!view) {
                     view = std::make_unique<MapView>();
-                    if (rxSet_) { view->setHome(rxLat_, rxLon_); }
+                    if (engine_.rxSet_) { view->setHome(engine_.rxLat_, engine_.rxLon_); }
                     view->requestFitToTracks();
                 }
                 const float mapW = faceW;
@@ -13212,8 +13210,8 @@ void AppWindow::drawPatchSection() {
     // showing. An empty patch says EMPTY rather than 0, because "0 nodes" and
     // "nothing built yet" read differently to someone who has never opened it.
     std::string chip;
-    const std::size_t nodes = patchGraph_.nodes().size();
-    if (patchRunning_) {
+    const std::size_t nodes = engine_.patchGraph_.nodes().size();
+    if (engine_.patchRunning_) {
         // Running is the one thing worth saying from the rail: the receiver
         // is on the generator because of it.
         chip = tr("RUNNING");
@@ -13238,19 +13236,19 @@ void AppWindow::seedPatchIfNeeded() {
     // and one node is not an opinion about what they want to build.
     if (patchSeeded_) { return; }
     patchSeeded_ = true;
-    cascade::gui::patch::seedDefaultPatch(patchGraph_, "Radio");
+    cascade::gui::patch::seedDefaultPatch(engine_.patchGraph_, "Radio");
     // The starter radio is the receiver's own radio or, with none, the
     // generator - named now, because the patch no longer starts (and so
     // takes the receiver's radio) the moment the page opens.
-    for (const cascade::core::patch::Node& n0 : patchGraph_.nodes()) {
+    for (const cascade::core::patch::Node& n0 : engine_.patchGraph_.nodes()) {
         if (n0.kind != cascade::core::patch::NodeKind::Radio) { continue; }
-        if (cascade::core::patch::Node* n = patchGraph_.mutableNode(n0.id)) {
+        if (cascade::core::patch::Node* n = engine_.patchGraph_.mutableNode(n0.id)) {
             if (n->device.empty()) {
                 n->device = patchDefaultDeviceKey();
                 // The receiver's AIR centre, which may be below 0 Hz
                 // through a converter (core::patch::radioCentreSet) or be
                 // exactly 0 Hz - marked chosen, never judged by its value.
-                if (!cascade::core::patch::radioCentreSet(*n) && device_ != nullptr) {
+                if (!cascade::core::patch::radioCentreSet(*n) && engine_.device_ != nullptr) {
                     if (const std::optional<double> c = carriedAirCentre()) {
                         n->freqHz = *c;
                         n->centreChosen = true;
@@ -13271,21 +13269,21 @@ void AppWindow::drawPatchPage() {
     // on the GUI thread, which is the only place a plugin handle inside it
     // may be destroyed. Above the early return below because closing the
     // page is exactly what retires a set, one block AFTER the page has gone.
-    pipeline_.patchRunner().reap();
+    engine_.pipeline_.patchRunner().reap();
 
     if (!patchOpen_) {
         // CLOSING THE PAGE STOPS THE PATCH. The page took the radios over
         // when it opened, so handing them back when it closes is the only
         // symmetric answer - and a patch still playing from a window you
         // have closed is a receiver whose controls you cannot find.
-        if (patchWasOpen_) {
-            patchWasOpen_ = false;
-            patchRunning_ = false;
-            patchWasRunning_ = false;
-            pipeline_.patchRunner().clear();
+        if (engine_.patchWasOpen_) {
+            engine_.patchWasOpen_ = false;
+            engine_.patchRunning_ = false;
+            engine_.patchWasRunning_ = false;
+            engine_.pipeline_.patchRunner().clear();
             // Forgotten with the set, so reopening builds a fresh one.
-            patchDspSig_.clear();
-            patchRefused_.clear();
+            engine_.patchDspSig_.clear();
+            engine_.patchRefused_.clear();
             // Every patch radio stops, every speaker's file is finalised, and
             // the receiver gets its radio back (0.99.17).
             patchStopAll(true);
@@ -13368,7 +13366,7 @@ void AppWindow::drawPatchPage() {
             if (i != 0) { ImGui::SameLine(); }
             // AT MOST FIVE RADIOS: the key goes grey at five and says why.
             const bool full = kParts[i].kind == cascade::core::patch::NodeKind::Radio &&
-                              patchGraph_.count(cascade::core::patch::NodeKind::Radio) >=
+                              engine_.patchGraph_.count(cascade::core::patch::NodeKind::Radio) >=
                                   cascade::core::patch::kMaxRadios;
             ImGui::BeginDisabled(full);
             if (ImGui::Button(trId(kParts[i].label))) { pressedPart = i; }
@@ -13384,7 +13382,7 @@ void AppWindow::drawPatchPage() {
                               cascade::gui::theme::vec(cascade::gui::theme::kInkMuted));
         ImGui::TextUnformatted(tr("Decoders"));
         ImGui::PopStyleColor();
-        if (patchCatalogue_.empty()) {
+        if (engine_.patchCatalogue_.empty()) {
             ImGui::SameLine();
             ImGui::PushStyleColor(ImGuiCol_Text,
                                   cascade::gui::theme::vec(cascade::gui::theme::kInkMuted));
@@ -13399,26 +13397,26 @@ void AppWindow::drawPatchPage() {
         // press.
         const float rowRight = ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x;
         const float keySpacing = ImGui::GetStyle().ItemSpacing.x;
-        for (std::size_t i = 0; i < patchCatalogue_.size(); ++i) {
-            const cascade::core::patch::DecoderInfo& info = patchCatalogue_[i];
+        for (std::size_t i = 0; i < engine_.patchCatalogue_.size(); ++i) {
+            const cascade::core::patch::DecoderInfo& info = engine_.patchCatalogue_[i];
             // A DECODER THAT DOES NOT NEED SOUND DOES NOT OFFER IT (owner,
             // 0.99.17: "if the decoder doesnt need sound dont show the option
             // for it"). A module that can decode straight from the radio's I/Q
             // is offered only that way; its audio twin - a second key that
             // needs a demodulator in front of it - is left out of the bin.
             if (!info.image && info.feed == cascade::core::patch::PortType::Audio &&
-                cascade::core::patch::hasIqTwin(patchCatalogue_, i)) {
+                cascade::core::patch::hasIqTwin(engine_.patchCatalogue_, i)) {
                 continue;
             }
             // The input is in the label only when it disambiguates - a
             // module that is both an audio and an I/Q decoder shows two keys.
             bool twin = false;
-            for (std::size_t j = 0; j < patchCatalogue_.size(); ++j) {
-                if (j == i || patchCatalogue_[j].key != info.key) { continue; }
+            for (std::size_t j = 0; j < engine_.patchCatalogue_.size(); ++j) {
+                if (j == i || engine_.patchCatalogue_[j].key != info.key) { continue; }
                 // A twin that is hidden above is not a key to tell this from.
-                const bool hidden = !patchCatalogue_[j].image &&
-                                    patchCatalogue_[j].feed == cascade::core::patch::PortType::Audio &&
-                                    cascade::core::patch::hasIqTwin(patchCatalogue_, j);
+                const bool hidden = !engine_.patchCatalogue_[j].image &&
+                                    engine_.patchCatalogue_[j].feed == cascade::core::patch::PortType::Audio &&
+                                    cascade::core::patch::hasIqTwin(engine_.patchCatalogue_, j);
                 if (!hidden) { twin = true; }
             }
             // A picture decoder always says so - it is a different kind of
@@ -13484,16 +13482,16 @@ void AppWindow::drawPatchPage() {
                                             ? patchDefaultDeviceKey()
                                             : std::string{};
                 const cascade::core::patch::NodeId made =
-                    patchGraph_.addNode(p.kind, p.label, p.feed, at.x, at.y);
-                if (cascade::core::patch::Node* n = patchGraph_.mutableNode(made)) {
+                    engine_.patchGraph_.addNode(p.kind, p.label, p.feed, at.x, at.y);
+                if (cascade::core::patch::Node* n = engine_.patchGraph_.mutableNode(made)) {
                     n->device = dev;
                 }
             } else {
                 const cascade::core::patch::DecoderInfo& info =
-                    patchCatalogue_[static_cast<std::size_t>(pressedDecoder)];
-                const cascade::core::patch::NodeId made = patchGraph_.addNode(
+                    engine_.patchCatalogue_[static_cast<std::size_t>(pressedDecoder)];
+                const cascade::core::patch::NodeId made = engine_.patchGraph_.addNode(
                     cascade::core::patch::NodeKind::Decoder, info.name, info.feed, at.x, at.y);
-                if (cascade::core::patch::Node* n = patchGraph_.mutableNode(made)) {
+                if (cascade::core::patch::Node* n = engine_.patchGraph_.mutableNode(made)) {
                     n->plugin = info.key;
                 }
             }
@@ -13509,23 +13507,23 @@ void AppWindow::drawPatchPage() {
         // EACH RADIO ITS OWN (0.99.17): every channel is measured against the
         // radio it hangs off - the running device's readback, or the node's
         // settings before it opens.
-        patchPlan_ = cascade::core::patch::compile(patchGraph_, patchRadioInfos(),
-                                                   &patchCatalogue_);
+        engine_.patchPlan_ = cascade::core::patch::compile(engine_.patchGraph_, patchRadioInfos(),
+                                                   &engine_.patchCatalogue_);
         // A radio whose device would not open is a problem only the attempt
         // could find, as a refusing plugin is.
-        for (const auto& [id, as] : patchRadioFailedAs_) {
+        for (const auto& [id, as] : engine_.patchRadioFailedAs_) {
             (void)as;
-            if (patchRadios_.count(id) == 0 && patchGraph_.find(id) != nullptr) {
-                patchPlan_.problems.push_back({id, cascade::core::patch::Problem::RadioFailed});
-                patchPlan_.runnable = false;
+            if (engine_.patchRadios_.count(id) == 0 && engine_.patchGraph_.find(id) != nullptr) {
+                engine_.patchPlan_.problems.push_back({id, cascade::core::patch::Problem::RadioFailed});
+                engine_.patchPlan_.runnable = false;
             }
         }
         // A plugin that refused to create() an instance in the last build is
         // a problem the plan cannot know about - it is only discovered by
         // asking the plugin - so it is added here, where the canvas and the
         // inspector will both read it.
-        for (const cascade::core::patch::NodeId id : patchRefused_) {
-            patchPlan_.problems.push_back({id, cascade::core::patch::Problem::PluginRefused});
+        for (const cascade::core::patch::NodeId id : engine_.patchRefused_) {
+            engine_.patchPlan_.problems.push_back({id, cascade::core::patch::Problem::PluginRefused});
         }
 
         // The live half: what each planned channel is hearing, read out of
@@ -13533,11 +13531,11 @@ void AppWindow::drawPatchPage() {
         // the SAME frame the waterfall is drawing, so the number on a node
         // and the bump on the display cannot disagree.
         patchReadings_.clear();
-        for (const auto& ch : patchPlan_.channels) {
+        for (const auto& ch : engine_.patchPlan_.channels) {
             // Off ITS radio's spectrum (0.99.17), not the receiver's.
-            const auto rs = patchSpectra_.find(ch.radio);
-            const auto rr = patchRadios_.find(ch.radio);
-            if (rs == patchSpectra_.end() || rr == patchRadios_.end()) { continue; }
+            const auto rs = engine_.patchSpectra_.find(ch.radio);
+            const auto rr = engine_.patchRadios_.find(ch.radio);
+            if (rs == engine_.patchSpectra_.end() || rr == engine_.patchRadios_.end()) { continue; }
             const cascade::core::patch::Level lv = cascade::core::patch::channelLevelDb(
                 rs->second.db, rr->second->rateHz(), ch.offsetHz);
             if (lv.valid) {
@@ -13550,16 +13548,16 @@ void AppWindow::drawPatchPage() {
         // Every RUNNING decoder gets a face, including one that has said
         // nothing yet: "0 lines" on a decoder that is being fed is itself
         // the answer to "is it running".
-        for (const auto& dp : patchPlan_.decoders) {
-            if (std::find(patchRefused_.begin(), patchRefused_.end(), dp.node) !=
-                patchRefused_.end()) {
+        for (const auto& dp : engine_.patchPlan_.decoders) {
+            if (std::find(engine_.patchRefused_.begin(), engine_.patchRefused_.end(), dp.node) !=
+                engine_.patchRefused_.end()) {
                 continue;
             }
             cascade::gui::patch::NodeReading r;
             r.node = dp.node;
             r.hasDb = false;
-            const auto it = patchDecoderFaces_.find(dp.node);
-            if (it != patchDecoderFaces_.end()) {
+            const auto it = engine_.patchDecoderFaces_.find(dp.node);
+            if (it != engine_.patchDecoderFaces_.end()) {
                 r.text = it->second.last;
                 r.lines = it->second.lines;
             }
@@ -13567,7 +13565,7 @@ void AppWindow::drawPatchPage() {
         }
 
         if (avail.x > 8.0f && avail.y > 8.0f) {
-            cascade::gui::patch::drawPatchCanvas(patchGraph_, patchUi_, patchPlan_,
+            cascade::gui::patch::drawPatchCanvas(engine_.patchGraph_, patchUi_, engine_.patchPlan_,
                                                  patchReadings_, origin,
                                                  ImVec2(canvasW, avail.y));
             // AFTER the canvas, so these widgets sit on top of it and take
@@ -13582,7 +13580,7 @@ void AppWindow::drawPatchPage() {
             // question someone opening this page is actually asking. Phosphor
             // for working, rust for not - and never amber, which belongs to
             // numbers.
-            if (patchPlan_.runnable) {
+            if (engine_.patchPlan_.runnable) {
                 ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::good());
                 ImGui::TextUnformatted(tr("This patch can run."));
             } else {
@@ -13603,16 +13601,16 @@ void AppWindow::drawPatchPage() {
                     break;
                 }
             }
-            if (!patchPlan_.channels.empty()) {
+            if (!engine_.patchPlan_.channels.empty()) {
                 ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(
                                                          cascade::gui::theme::kInkMuted));
                 ImGui::Text(tr("%zu channel(s), decimate by %u"),
-                            patchPlan_.channels.size(), patchPlan_.channels[0].decimation);
+                            engine_.patchPlan_.channels.size(), engine_.patchPlan_.channels[0].decimation);
                 ImGui::PopStyleColor();
             }
             ImGui::Separator();
             cascade::core::patch::Node* sel =
-                patchGraph_.mutableNode(patchUi_.selected);
+                engine_.patchGraph_.mutableNode(patchUi_.selected);
             if (sel == nullptr) {
                 ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(
                                                          cascade::gui::theme::kInkMuted));
@@ -13701,7 +13699,7 @@ void AppWindow::drawPatchPage() {
                             sel->inputs.empty() ? cascade::core::patch::PortType::Iq
                                                 : sel->inputs[0];
                         std::string current = sel->plugin.empty() ? tr("(none)") : sel->plugin;
-                        for (const cascade::core::patch::DecoderInfo& info : patchCatalogue_) {
+                        for (const cascade::core::patch::DecoderInfo& info : engine_.patchCatalogue_) {
                             if (info.key == sel->plugin && info.feed == feed) {
                                 current = info.name;
                                 break;
@@ -13709,8 +13707,8 @@ void AppWindow::drawPatchPage() {
                         }
                         ImGui::SetNextItemWidth(-FLT_MIN);
                         if (ImGui::BeginCombo("##patchplugin", current.c_str())) {
-                            for (std::size_t i = 0; i < patchCatalogue_.size(); ++i) {
-                                const cascade::core::patch::DecoderInfo& info = patchCatalogue_[i];
+                            for (std::size_t i = 0; i < engine_.patchCatalogue_.size(); ++i) {
+                                const cascade::core::patch::DecoderInfo& info = engine_.patchCatalogue_[i];
                                 if (info.feed != feed) { continue; }
                                 ImGui::PushID(static_cast<int>(i));
                                 const bool isSel = info.key == sel->plugin;
@@ -13736,7 +13734,7 @@ void AppWindow::drawPatchPage() {
                         ImGui::PopStyleColor();
                         // What the plan will actually hand it. A number, so
                         // amber, and on its own line where it can be read.
-                        for (const cascade::core::patch::DecoderPlan& dp : patchPlan_.decoders) {
+                        for (const cascade::core::patch::DecoderPlan& dp : engine_.patchPlan_.decoders) {
                             if (dp.node != sel->id) { continue; }
                             ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(
                                                                      cascade::gui::theme::kAmber));
@@ -13771,7 +13769,7 @@ void AppWindow::drawPatchPage() {
                 }
 
                 const std::vector<cascade::core::patch::Problem> probs =
-                    cascade::core::patch::problemsFor(patchPlan_, sel->id);
+                    cascade::core::patch::problemsFor(engine_.patchPlan_, sel->id);
                 if (!probs.empty()) {
                     ImGui::Spacing();
                     ImGui::Separator();
@@ -13791,7 +13789,7 @@ void AppWindow::drawPatchPage() {
                 ImGui::Spacing();
                 ImGui::Separator();
                 if (ImGui::Button(trId("Remove this node"), ImVec2(-FLT_MIN, 0.0f))) {
-                    patchGraph_.removeNode(patchUi_.selected);
+                    engine_.patchGraph_.removeNode(patchUi_.selected);
                     patchUi_.selected = cascade::core::patch::kNoNode;
                     patchUi_.dirty = true;
                 }
@@ -13808,12 +13806,12 @@ void AppWindow::drawPatchPage() {
         // decoders and speakers on its own reader thread, and each is rebuilt
         // only when radioSignature() says something it reads has changed.
         patchPublishSets();
-        patchWasOpen_ = true;
+        engine_.patchWasOpen_ = true;
 
         if (patchUi_.dirty) {
             patchUi_.dirty = false;
             patchText_ = cascade::core::patch::serialise(
-                patchGraph_, patchUi_.view.pan.x, patchUi_.view.pan.y, patchUi_.view.zoom);
+                engine_.patchGraph_, patchUi_.view.pan.x, patchUi_.view.pan.y, patchUi_.view.zoom);
         }
     }
     endPage();
@@ -13853,7 +13851,7 @@ void AppWindow::drawScopeModeControl() {
     // entirely, so a position could be read from a GPS only on an install
     // that had never had one, and a tester who had typed a rough position
     // could never replace it with the receiver's (see drawGpsPositionControl).
-    if (!rxSet_) {
+    if (!engine_.rxSet_) {
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
         ImGui::TextWrapped("%s", tr("The scope needs the receiver's position first."));
         ImGui::PopStyleColor();
@@ -13899,9 +13897,9 @@ void AppWindow::drawScopeModeControl() {
     // one whose tracker the host refused; this line used to read "no aircraft
     // source installed" in all three, which is a lie in two of them and sends
     // the user to buy what they already own. See gui/module_census.hpp.
-    if (pluginUi_.trackPluginNames().empty()) {
+    if (engine_.pluginUi_.trackPluginNames().empty()) {
         const cascade::gui::ModuleCensus census = cascade::gui::censusModules(
-            pluginHost_.plugins(), CASCADE_CAP_TRACK_SOURCE,
+            engine_.pluginHost_.plugins(), CASCADE_CAP_TRACK_SOURCE,
             [this](const std::string& key) { return pluginIsStopped(key); });
         ImGui::PushStyleColor(ImGuiCol_Text,
                               ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
@@ -14002,7 +14000,7 @@ void AppWindow::drawScopeMode() {
     // value - it is a real place in the Gulf of Guinea, and a scope centred
     // there would draw a plausible-looking picture in which every range and
     // bearing was wrong by the distance from there to the antenna.
-    if (!rxSet_) {
+    if (!engine_.rxSet_) {
         ImGui::Spacing();
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
         ImGui::TextUnformatted(tr("The scope needs the receiver's position."));
@@ -14029,7 +14027,7 @@ void AppWindow::drawScopeMode() {
     // config) since the last time this ran, so it is pushed in every frame
     // rather than only on the button - the same rule the trail switches follow,
     // and what makes a change on any surface reach every other one immediately.
-    scope_.setReceiver(rxLat_, rxLon_);
+    scope_.setReceiver(engine_.rxLat_, engine_.rxLon_);
     // The range likewise travels in both directions: the bar's buttons write
     // scopeRangeNm_, the wheel over the face writes the view's own copy, and
     // the read-back below is what carries the wheel's change into the config.
@@ -14074,7 +14072,7 @@ void AppWindow::drawScopeMode() {
     if (!roomForFace) {
         scope_.setAircraftIconPx(aircraftIconPx_);
         scope_.setTrailWidthPx(mapTrailWidthPx_);
-        scope_.draw(avail.x, avail.y, pluginUi_.tracks(), &basemap_, &trackInfo_);
+        scope_.draw(avail.x, avail.y, engine_.pluginUi_.tracks(), &basemap_, &trackInfo_);
         scopeRangeNm_ = scope_.rangeNm();
         return;
     }
@@ -14213,8 +14211,8 @@ void AppWindow::drawScopeMode() {
     // Outboard gauges. Both are fed by a real measurement and say which; the
     // left one has a reading only when the pipeline is running, and draws its
     // scale with no bar when it does not.
-    const bool running = pipeline_.running();
-    const double sigDb = pipeline_.signalPowerDb();
+    const bool running = engine_.pipeline_.running();
+    const double sigDb = engine_.pipeline_.signalPowerDb();
     const bool haveSig = running && std::isfinite(sigDb);
     // -100..0 dBFS across the scale, which is the range the rest of this
     // application's meters already work in.
@@ -14240,7 +14238,7 @@ void AppWindow::drawScopeMode() {
     // and how high the traffic is, live on the HOME screen where they can be
     // labelled.
     std::size_t aircraft = 0;
-    for (const cascade::core::HostTrack& ht : pluginUi_.tracks()) {
+    for (const cascade::core::HostTrack& ht : engine_.pluginUi_.tracks()) {
         if (ht.t.kind == CASCADE_TRACK_AIRCRAFT) { ++aircraft; }
     }
 
@@ -14248,7 +14246,7 @@ void AppWindow::drawScopeMode() {
     bool haveAlt = false;
     const std::string& selId = scope_.selectedId();
     if (!selId.empty()) {
-        for (const cascade::core::HostTrack& ht : pluginUi_.tracks()) {
+        for (const cascade::core::HostTrack& ht : engine_.pluginUi_.tracks()) {
             if (ht.t.kind != CASCADE_TRACK_AIRCRAFT) { continue; }
             if (selId != ht.t.id) { continue; }
             if (std::isfinite(ht.t.altM)) {
@@ -14282,7 +14280,7 @@ void AppWindow::drawScopeMode() {
     ImGui::SetCursorScreenPos(ImVec2(innerL, instTop));
     scope_.setAircraftIconPx(aircraftIconPx_);
     scope_.setTrailWidthPx(mapTrailWidthPx_);
-    scope_.draw(innerR - innerL, instBot - instTop, pluginUi_.tracks(), &basemap_,
+    scope_.draw(innerR - innerL, instBot - instTop, engine_.pluginUi_.tracks(), &basemap_,
                 &trackInfo_);
 
     // --- the plinth ---------------------------------------------------------
@@ -14376,12 +14374,12 @@ void AppWindow::drawScopeMode() {
             int drumNm = scopeRangeNm_;
             const char* drumCap = tr("SET RANGE NM");
             const std::string& selId = scope_.selectedId();
-            if (!selId.empty() && rxSet_) {
-                for (const cascade::core::HostTrack& ht : pluginUi_.tracks()) {
+            if (!selId.empty() && engine_.rxSet_) {
+                for (const cascade::core::HostTrack& ht : engine_.pluginUi_.tracks()) {
                     if (ht.t.kind != CASCADE_TRACK_AIRCRAFT) { continue; }
                     if (selId != ht.t.id) { continue; }
                     const cascade::gui::ScopePolar p = cascade::gui::scopeRelative(
-                        rxLat_, rxLon_, ht.t.latDeg, ht.t.lonDeg);
+                        engine_.rxLat_, engine_.rxLon_, ht.t.latDeg, ht.t.lonDeg);
                     if (std::isfinite(p.rangeNm)) {
                         drumNm = static_cast<int>(p.rangeNm + 0.5);
                         drumCap = tr("TGT RANGE NM");
@@ -14427,8 +14425,8 @@ void AppWindow::drawScopeMode() {
         // Neither is a knob that turns and does nothing.
         const float knobR = std::max(20.0f, 30.0f * scale);
         const ImVec2 knobC((kTL.x + kBR.x) * 0.5f, plinthMid + 8.0f * scale);
-        const bool haveGain = device_ != nullptr && !deviceGainNames_.empty();
-        const bool gainLive = haveGain && !deviceAgc_;
+        const bool haveGain = engine_.device_ != nullptr && !engine_.deviceGainNames_.empty();
+        const bool gainLive = haveGain && !engine_.deviceAgc_;
 
         // WHAT THE KNOB'S TRAVEL ACTUALLY IS. The deck lettered every radio's
         // gain knob 0..60 dB, which is the number the Source sliders used to
@@ -14440,10 +14438,10 @@ void AppWindow::drawScopeMode() {
         // that reports no range.
         float knobLoDb = kSoapyGainMinDb;
         float knobHiDb = kSoapyGainMaxDb;
-        if (!deviceGainRanges_.empty() &&
-            deviceGainRanges_[0].maxDb > deviceGainRanges_[0].minDb) {
-            knobLoDb = static_cast<float>(deviceGainRanges_[0].minDb);
-            knobHiDb = static_cast<float>(deviceGainRanges_[0].maxDb);
+        if (!engine_.deviceGainRanges_.empty() &&
+            engine_.deviceGainRanges_[0].maxDb > engine_.deviceGainRanges_[0].minDb) {
+            knobLoDb = static_cast<float>(engine_.deviceGainRanges_[0].minDb);
+            knobHiDb = static_cast<float>(engine_.deviceGainRanges_[0].maxDb);
         }
         // The scale, in whole units of whatever the first stage is measured
         // in - decibels on every radio but the Airspy R2/Mini, whose five are
@@ -14458,7 +14456,7 @@ void AppWindow::drawScopeMode() {
             if (gainLive) {
                 const float span = knobHiDb - knobLoDb;
                 if (span > 0.0f) {
-                    sel = static_cast<int>((deviceGainsDb_[0] - knobLoDb) / span * 4.0f + 0.5f);
+                    sel = static_cast<int>((engine_.deviceGainsDb_[0] - knobLoDb) / span * 4.0f + 0.5f);
                     sel = std::clamp(sel, 0, 4);
                 }
             }
@@ -14468,18 +14466,18 @@ void AppWindow::drawScopeMode() {
         std::string gainTxt;
         if (!haveGain) {
             gainTxt = tr("N/A");
-        } else if (deviceAgc_) {
+        } else if (engine_.deviceAgc_) {
             gainTxt = tr("AUTO");
         } else {
             // In the first stage's OWN unit: the knob over an Airspy reads
             // "7", the step it is on, not "7 dB" of nothing.
             gainTxt = cascade::gui::formatGainValue(
-                              static_cast<double>(deviceGainsDb_[0]), firstGainUnit());
+                              static_cast<double>(engine_.deviceGainsDb_[0]), firstGainUnit());
         }
         // Where the gain sits on its own travel, so the pointer shows it.
         float gainFrac = 0.5f;
         if (haveGain && knobHiDb > knobLoDb) {
-            gainFrac = (deviceGainsDb_[0] - knobLoDb) / (knobHiDb - knobLoDb);
+            gainFrac = (engine_.deviceGainsDb_[0] - knobLoDb) / (knobHiDb - knobLoDb);
         }
         const int gainSteps = cascade::gui::drawScopeKnob(dl, knobC, knobR, tr("GAIN"),
                                                           gainTxt.c_str(), gainLive, gainFrac);
@@ -14489,21 +14487,21 @@ void AppWindow::drawScopeMode() {
             // in one comfortable sweep. On a stage measured in steps it is two
             // steps a detent - the same arithmetic, in that stage's own unit,
             // which crosses an Airspy's 0..14 LNA in seven.
-            float db = deviceGainsDb_[0] + static_cast<float>(gainSteps) * 2.0f;
+            float db = engine_.deviceGainsDb_[0] + static_cast<float>(gainSteps) * 2.0f;
             db = std::clamp(db, knobLoDb, knobHiDb);
-            if (db != deviceGainsDb_[0]) {
+            if (db != engine_.deviceGainsDb_[0]) {
                 // The knob keeps the figure it asked for, no readback - its
                 // own rule since it was drawn (APP_SET_GAIN_NO_READBACK).
                 submitCommand(cascade::core::cmd::makeText(FOXAPP_OP_SET_GAIN_NO_READBACK,
-                                                           deviceGainNames_[0], 0, 0,
+                                                           engine_.deviceGainNames_[0], 0, 0,
                                                            static_cast<double>(db)));
             }
         }
         // Which stage moved, or why nothing will.
         {
             const char* note = !haveGain   ? tr("no device")
-                               : deviceAgc_ ? tr("auto gain is on")
-                                           : deviceGainNames_[0].c_str();
+                               : engine_.deviceAgc_ ? tr("auto gain is on")
+                                           : engine_.deviceGainNames_[0].c_str();
             const ImVec2 nsz = ImGui::CalcTextSize(note);
             // BELOW THE READOUT, and measured off the same radius the readout
             // is, or the two land on each other - "30 dB" and "PGA" were
@@ -14619,43 +14617,43 @@ void AppWindow::buildPluginStoreModel(PluginStoreModel& model) {
     // same model to plan against: one transcription of a catalogue row into a
     // StoreModule, so the key and the rows cannot disagree about what is
     // fitted and what is blocked.
-    model.sourceUrl = pluginCatalogueUrl_;
+    model.sourceUrl = engine_.pluginCatalogueUrl_;
     // NOT "the catalogue is empty". Nothing here contacts the origin until
     // the user asks, so before that every count would be a claim about
     // something nobody has looked at; the window's banner says IDLE
     // instead of printing a clean zero.
-    model.haveCatalogue = !catalog_.empty();
-    model.sourceStatus = catalogStatus_;
-    model.sourceError = catalogError_;
-    model.busy = catalogPending_ || installPending_;
-    model.progress = pluginRepo_.progress();
-    if (installPending_) {
+    model.haveCatalogue = !engine_.catalog_.empty();
+    model.sourceStatus = engine_.catalogStatus_;
+    model.sourceError = engine_.catalogError_;
+    model.busy = engine_.catalogPending_ || engine_.installPending_;
+    model.progress = engine_.pluginRepo_.progress();
+    if (engine_.installPending_) {
         // One format string, so a translation can put the name where it goes.
         std::string busyBuf;
-        cascade::core::formatUtf8(busyBuf, tr("downloading %s"), installBusyName_.c_str());
+        cascade::core::formatUtf8(busyBuf, tr("downloading %s"), engine_.installBusyName_.c_str());
         model.busyLabel = busyBuf;
     } else {
-        model.busyLabel = catalogPending_ ? std::string(tr("fetching the catalogue"))
+        model.busyLabel = engine_.catalogPending_ ? std::string(tr("fetching the catalogue"))
                                           : std::string();
     }
-    model.resultReport = installReport_;
-    model.resultError = installError_;
+    model.resultReport = engine_.installReport_;
+    model.resultError = engine_.installError_;
     // THE ADD ALL RUN, from the queue that is actually driving it rather than
     // from `busy`, which cannot tell a bulk run from a single FIT.
-    model.addAllRunning = addAllRun_.active;
+    model.addAllRunning = engine_.addAllRun_.active;
     model.addAllProgress = addAllProgressLine();
-    model.addAllSummary = addAllSummary_;
-    model.addAllFailed = addAllFailed_;
+    model.addAllSummary = engine_.addAllSummary_;
+    model.addAllFailed = engine_.addAllFailed_;
 
     // The update plans, once for the whole list rather than once per row:
     // planUpdates walks the catalogue against the manifest, and asking it
     // per module would be that walk squared for no new information.
     const std::vector<cascade::core::PluginUpdate> updates = plannedPluginUpdates();
 
-    model.modules.reserve(catalog_.size());
-    for (int i = 0; i < static_cast<int>(catalog_.size()); ++i) {
+    model.modules.reserve(engine_.catalog_.size());
+    for (int i = 0; i < static_cast<int>(engine_.catalog_.size()); ++i) {
         const cascade::core::PluginCatalogEntry& e =
-            catalog_[static_cast<std::size_t>(i)];
+            engine_.catalog_[static_cast<std::size_t>(i)];
         cascade::gui::StoreModule sm;
         sm.id = e.id;
         sm.plate.name = e.name;
@@ -14715,7 +14713,7 @@ void AppWindow::buildPluginStoreModel(PluginStoreModel& model) {
             if (lp->hostClient != nullptr) {
                 sm.plate.haveTuneGrant = true;
                 sm.plate.tuneGranted =
-                    pluginUi_.tuneAllowed(cascade::core::PluginUi::tuneKey(*lp));
+                    engine_.pluginUi_.tuneAllowed(cascade::core::PluginUi::tuneKey(*lp));
             }
         }
         // WHY FIT MAY NOT BE PRESSED, from the SAME predicate the key
@@ -14769,8 +14767,8 @@ void AppWindow::drawPluginStoreWindow() {
     telemetryNotePanel("plugin store");
     // THE FIRST OPEN READS THE CATALOGUE (0.99.16, gui/store_first_open.hpp):
     // once per session, never at startup, never retried on its own.
-    if (cascade::gui::storeShouldCheckOnOpen(storeFirstOpen_, true, !catalog_.empty(),
-                                             catalogPending_ || installPending_)) {
+    if (cascade::gui::storeShouldCheckOnOpen(storeFirstOpen_, true, !engine_.catalog_.empty(),
+                                             engine_.catalogPending_ || engine_.installPending_)) {
         submitCommand(cascade::core::cmd::make(FOXAPI_OP_STORE_FETCH));
     }
 
@@ -14920,7 +14918,7 @@ void AppWindow::drawPluginStoreWindow() {
             submitCommand(cmd::makeInt(FOXAPI_OP_STORE_UPDATE_ALL, pluginStoreDeck_->addAllAck ? 1 : 0));
         }
         const int fitIdx = pluginStoreView_->fitRequested();
-        if (fitIdx >= 0 && fitIdx < static_cast<int>(catalog_.size())) {
+        if (fitIdx >= 0 && fitIdx < static_cast<int>(engine_.catalog_.size())) {
             // STORE_INSTALL RE-TESTS, never trusts: the view only offers the
             // key where the reason was empty, but the predicate covers a
             // transfer in flight and an acknowledgement that may have been
@@ -14931,14 +14929,14 @@ void AppWindow::drawPluginStoreWindow() {
             // row is asked for unacknowledged.
             const bool ack = fitIdx == pluginStoreDeck_->selected && pluginStoreDeck_->legalAck;
             submitCommand(cmd::makeText(FOXAPI_OP_STORE_INSTALL,
-                                        catalog_[static_cast<std::size_t>(fitIdx)].id, ack ? 1 : 0));
+                                        engine_.catalog_[static_cast<std::size_t>(fitIdx)].id, ack ? 1 : 0));
         }
         const int updIdx = pluginStoreView_->updateRequested();
-        if (updIdx >= 0 && updIdx < static_cast<int>(catalog_.size())) {
+        if (updIdx >= 0 && updIdx < static_cast<int>(engine_.catalog_.size())) {
             // The plan is looked up again when it is applied (APP_STORE_UPDATE):
             // planUpdates' entries point INTO catalog_, and the frame that
             // built the model is not the frame that acts on it.
-            submitCommand(cmd::makeText(FOXAPP_OP_STORE_UPDATE, catalog_[static_cast<std::size_t>(updIdx)].id));
+            submitCommand(cmd::makeText(FOXAPP_OP_STORE_UPDATE, engine_.catalog_[static_cast<std::size_t>(updIdx)].id));
         }
     }
     endPage();
@@ -14994,13 +14992,13 @@ void AppWindow::drawFittedModulesWindow() {
     if (drawn) {
         // --- what the window is told ----------------------------------------
         cascade::gui::FittedModulesModel model;
-        model.directory = pluginDir_;
+        model.directory = engine_.pluginDir_;
         // GATES FED FOR EVERY MODULE AT ONCE, which is why it is stated on the
         // panel rather than left to be inferred from four idle rows.
-        model.receiverRunning = pipeline_.running();
-        const std::vector<cascade::core::DecoderStatus> status = pluginRunner_.status();
-        const std::vector<cascade::core::LoadedPlugin>& list = pluginHost_.plugins();
-        const std::vector<std::string> settingsAskers = pluginUi_.api().settingsRequesters();
+        model.receiverRunning = engine_.pipeline_.running();
+        const std::vector<cascade::core::DecoderStatus> status = engine_.pluginRunner_.status();
+        const std::vector<cascade::core::LoadedPlugin>& list = engine_.pluginHost_.plugins();
+        const std::vector<std::string> settingsAskers = engine_.pluginUi_.api().settingsRequesters();
         model.modules.reserve(list.size());
         for (const cascade::core::LoadedPlugin& p : list) {
             const std::string file = cascade::core::pluginKey(p);
@@ -15015,25 +15013,25 @@ void AppWindow::drawFittedModulesWindow() {
                 break;
             }
             cascade::gui::FittedModule m = cascade::gui::makeFittedModule(
-                p, pluginIsStopped(file), pluginRunner_.isFeeding(file),
+                p, pluginIsStopped(file), engine_.pluginRunner_.isFeeding(file),
                 std::move(idleDetail),
-                pluginUi_.tuneAllowed(cascade::core::PluginUi::tuneKey(p)));
+                engine_.pluginUi_.tuneAllowed(cascade::core::PluginUi::tuneKey(p)));
             // Host API level 1: the settings grant (offered only to a module
             // that has asked), its command keys and its newest warning.
             m.settingsCapable = std::find(settingsAskers.begin(), settingsAskers.end(), file) !=
                                 settingsAskers.end();
-            m.settingsAllowed = pluginUi_.settingsAllowed(file);
-            for (const cascade::core::HostCommand& hc : pluginUi_.api().commands(file)) {
+            m.settingsAllowed = engine_.pluginUi_.settingsAllowed(file);
+            for (const cascade::core::HostCommand& hc : engine_.pluginUi_.api().commands(file)) {
                 m.commands.push_back(cascade::gui::FittedModule::Command{hc.id, hc.label});
             }
-            if (const auto nit = pluginNotices_.find(file); nit != pluginNotices_.end()) {
+            if (const auto nit = engine_.pluginNotices_.find(file); nit != engine_.pluginNotices_.end()) {
                 m.noticeLevel = nit->second.level;
                 m.notice = nit->second.text;
             }
             // The re-hash's finding, keyed on the FILE (pluginKey), which is
             // what the install record names.
             m.integrityNote = cascade::core::PluginRepo::changedSinceInstallNote(
-                pluginInventory_.plugins, file);
+                engine_.pluginInventory_.plugins, file);
             // THE ONLY SIZE THERE IS. No descriptor carries one, so it can
             // only come from stat-ing the file; a failure leaves it at 0,
             // which the shared plate reads as "not measured" and never draws
@@ -15048,8 +15046,8 @@ void AppWindow::drawFittedModulesWindow() {
         // the same sentence; printing it in both reads as two separate
         // outcomes, and printing it in neither loses a failed remove entirely.
         if (!pluginBrowserDrawnThisFrame_) {
-            model.report = installReport_;
-            model.error = installError_;
+            model.report = engine_.installReport_;
+            model.error = engine_.installError_;
         }
 
         // --- the cabinet ----------------------------------------------------
@@ -15237,7 +15235,7 @@ void AppWindow::drawPluginWindows() {
     // One poll per frame feeds both the map and every panel: the plugins are
     // asked once and the answer is shared, so a plugin cannot be charged twice
     // for having two kinds of output.
-    pluginUi_.poll();
+    engine_.pluginUi_.poll();
 
     // --- coverage accumulation ------------------------------------------------
     // FED HERE RATHER THAN INSIDE THE MAP WINDOW, because the antenna is
@@ -15250,13 +15248,13 @@ void AppWindow::drawPluginWindows() {
     // only thing that grows, which is to say nothing grows. The staleness rule
     // is applied first so a plugin that never evicts cannot keep re-recording
     // an aircraft it last heard an hour ago.
-    if (rxSet_) {
-        for (const cascade::core::HostTrack& ht : pluginUi_.tracks()) {
+    if (engine_.rxSet_) {
+        for (const cascade::core::HostTrack& ht : engine_.pluginUi_.tracks()) {
             if (!cascade::core::trackPresentation(ht.t.ageMs, ht.t.kind).visible) {
                 continue;
             }
-            coverage_.record(initialBearingDeg(rxLat_, rxLon_, ht.t.latDeg, ht.t.lonDeg),
-                             greatCircleKm(rxLat_, rxLon_, ht.t.latDeg, ht.t.lonDeg));
+            coverage_.record(initialBearingDeg(engine_.rxLat_, engine_.rxLon_, ht.t.latDeg, ht.t.lonDeg),
+                             greatCircleKm(engine_.rxLat_, engine_.rxLon_, ht.t.latDeg, ht.t.lonDeg));
         }
     }
 
@@ -15269,7 +15267,7 @@ void AppWindow::drawPluginWindows() {
     // empty" answers the user's question and "the page is missing" does not.
     // Pages are created lazily here and never destroyed while the app runs;
     // rescanPlugins() leaves them in place.
-    for (const std::string& name : pluginUi_.trackPluginNames()) {
+    for (const std::string& name : engine_.pluginUi_.trackPluginNames()) {
         ensureMapPage(name);
     }
     // A page whose plugin is GONE (removed, or a rescan came back without it)
@@ -15278,7 +15276,7 @@ void AppWindow::drawPluginWindows() {
     // than in rescanPlugins is what lets live pages survive a rescan with
     // their view state intact (see there).
     {
-        const std::vector<std::string>& live = pluginUi_.trackPluginNames();
+        const std::vector<std::string>& live = engine_.pluginUi_.trackPluginNames();
         bool anyDead = false;
         for (const MapPage& pg : mapPages_) {
             if (std::find(live.begin(), live.end(), pg.plugin) == live.end()) {
@@ -15308,10 +15306,10 @@ void AppWindow::drawPluginWindows() {
         // is why nothing here is measured or cached across frames.
         pageTracks_.clear();
         pagePaths_.clear();
-        for (const cascade::core::HostTrack& ht : pluginUi_.tracks()) {
+        for (const cascade::core::HostTrack& ht : engine_.pluginUi_.tracks()) {
             if (ht.plugin == page.plugin) { pageTracks_.push_back(ht); }
         }
-        for (const cascade::core::HostPath& hp : pluginUi_.paths()) {
+        for (const cascade::core::HostPath& hp : engine_.pluginUi_.paths()) {
             if (hp.plugin == page.plugin) { pagePaths_.push_back(hp); }
         }
 
@@ -15610,7 +15608,7 @@ void AppWindow::drawPluginWindows() {
                 if (ImGui::SmallButton(trId("Reset coverage"))) { coverage_.reset(); }
                 ImGui::EndDisabled();
                 ImGui::SameLine();
-                if (!rxSet_) {
+                if (!engine_.rxSet_) {
                     // DEGRADED, AND SAYING SO. Without a receiver position there is
                     // nothing to measure a bearing from, so the accumulator is
                     // never fed and the overlay would be an empty circle the user
@@ -15735,7 +15733,7 @@ void AppWindow::drawPluginWindows() {
     // decoders samples. pluginImages_ is this window's own buffer and is
     // rewritten only when a decoder produces something new, so redrawing an
     // image the user is looking at costs nothing.
-    pluginRunner_.pollImages(pluginImages_);
+    engine_.pluginRunner_.pollImages(pluginImages_);
     // THE SAVE NOTE EXPIRES, because it is a message about something that just
     // happened rather than a caption. It used to be written once and never
     // cleared, so a filename saved in the first minute of a session was still
@@ -15832,7 +15830,7 @@ void AppWindow::drawPluginWindows() {
                     // the recordings rather than in the install directory.
                     std::error_code ec;
                     const std::filesystem::path dir =
-                        std::filesystem::path(recordDir_.empty() ? "." : recordDir_);
+                        std::filesystem::path(engine_.recordDir_.empty() ? "." : engine_.recordDir_);
                     std::filesystem::create_directories(dir, ec);
                     char stamp[32];
                     const std::time_t t = std::time(nullptr);
@@ -15904,7 +15902,7 @@ void AppWindow::drawPluginWindows() {
 
     // Plugin-declared windows. Each gets its own, titled by the plugin, so two
     // plugins cannot collide in one panel.
-    for (const cascade::core::HostPanel& p : pluginUi_.panels()) {
+    for (const cascade::core::HostPanel& p : engine_.pluginUi_.panels()) {
         // The plugin NAME is part of the ImGui id, not just the title: two
         // plugins may legitimately call their window the same thing, and
         // colliding ids would merge them into one window.
@@ -15930,7 +15928,7 @@ void AppWindow::drawPluginWindows() {
 
     // INSTRUMENT windows: a face drawn as equipment, its memory beneath.
     std::size_t instrumentIndex = 0;
-    for (const cascade::core::HostInstrument& in : pluginUi_.instruments()) {
+    for (const cascade::core::HostInstrument& in : engine_.pluginUi_.instruments()) {
         const std::size_t nth = instrumentIndex++;
         const std::string id = instrumentWindowId(in);
         if (!pluginWindows_.shown(id)) { continue; }
@@ -16274,7 +16272,7 @@ void AppWindow::drawPluginWindowRows() {
             autoPresetOnClick(on, im.plugin);
         }
     }
-    for (const cascade::core::HostPanel& p : pluginUi_.panels()) {
+    for (const cascade::core::HostPanel& p : engine_.pluginUi_.panels()) {
         const std::string id = p.title + "###panel_" + p.plugin;
         const bool on = pluginWindows_.shown(id);
         std::string chip;
@@ -16289,7 +16287,7 @@ void AppWindow::drawPluginWindowRows() {
             autoPresetOnClick(on, p.plugin);
         }
     }
-    for (const cascade::core::HostInstrument& in : pluginUi_.instruments()) {
+    for (const cascade::core::HostInstrument& in : engine_.pluginUi_.instruments()) {
         const std::string id = instrumentWindowId(in);
         const bool on = pluginWindows_.shown(id);
         // NEW while an event has arrived that the window has not drawn - the
@@ -16417,7 +16415,7 @@ void AppWindow::drawMapPageSections() {
     ImGui::PushStyleColor(ImGuiCol_Text,
                           ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
     const cascade::gui::ModuleCensus census = cascade::gui::censusModules(
-        pluginHost_.plugins(), CASCADE_CAP_TRACK_SOURCE,
+        engine_.pluginHost_.plugins(), CASCADE_CAP_TRACK_SOURCE,
         [this](const std::string& key) { return pluginIsStopped(key); });
     ImGui::TextWrapped("%s",
                        cascade::gui::trackSourceAbsenceNote(
@@ -16488,9 +16486,9 @@ void AppWindow::drawTrackList(MapPage& page,
         // print "no RX" instead of a distance from the Gulf of Guinea. It also
         // sorts them to the bottom, which is the right place for a column that
         // has no values at all.
-        if (rxSet_) {
-            r.distanceKm = greatCircleKm(rxLat_, rxLon_, ht.t.latDeg, ht.t.lonDeg);
-            r.bearingDeg = initialBearingDeg(rxLat_, rxLon_, ht.t.latDeg, ht.t.lonDeg);
+        if (engine_.rxSet_) {
+            r.distanceKm = greatCircleKm(engine_.rxLat_, engine_.rxLon_, ht.t.latDeg, ht.t.lonDeg);
+            r.bearingDeg = initialBearingDeg(engine_.rxLat_, engine_.rxLon_, ht.t.latDeg, ht.t.lonDeg);
         }
         r.ageMs = ht.t.ageMs;
         r.source = i;
@@ -16533,7 +16531,7 @@ void AppWindow::drawTrackList(MapPage& page,
     // when there is a line to hold back.
     const float tableH = tableHeightReservingLines(ImGui::GetContentRegionAvail().y,
                                                    ImGui::GetTextLineHeightWithSpacing(),
-                                                   rxSet_ ? 0 : 1);
+                                                   engine_.rxSet_ ? 0 : 1);
 
     // --- how wide the three columns come out ---------------------------------
     // THE HEADINGS ARE MEASURED, NOT GUESSED. Two weights picked by eye (2.0
@@ -16663,7 +16661,7 @@ void AppWindow::drawTrackList(MapPage& page,
         // the registry lookup for every listed target.
         if (ImGui::IsItemHovered()) {
             ImGui::BeginTooltip();
-            drawTrackDetailOf(ht, &trackInfo_, rxSet_, rxLat_, rxLon_);
+            drawTrackDetailOf(ht, &trackInfo_, engine_.rxSet_, engine_.rxLat_, engine_.rxLon_);
             ImGui::EndTooltip();
         }
 
@@ -16694,7 +16692,7 @@ void AppWindow::drawTrackList(MapPage& page,
     // bearing columns to sit blank: sorting by distance with no receiver
     // position produces an order that looks arbitrary, and this is the line
     // that explains it.
-    if (!rxSet_) {
+    if (!engine_.rxSet_) {
         ImGui::TextDisabled("%s", tr("Distance and bearing need the RX position above."));
     }
 }
@@ -16752,7 +16750,7 @@ const cascade::core::HostTrack* AppWindow::findVisibleTrack(const std::string& i
     // aircraft - or freed memory - within a frame or two. Only tracks the
     // staleness rule still shows count: a dropped target must read as "no
     // longer being heard", not as its last stale values.
-    for (const cascade::core::HostTrack& ht : pluginUi_.tracks()) {
+    for (const cascade::core::HostTrack& ht : engine_.pluginUi_.tracks()) {
         if (!cascade::core::trackPresentation(ht.t.ageMs, ht.t.kind).visible) {
             continue;
         }
@@ -16841,7 +16839,7 @@ void AppWindow::drawTargetDetailsSection() {
         return;
     }
 
-    drawTrackDetailOf(*found, &trackInfo_, rxSet_, rxLat_, rxLon_);
+    drawTrackDetailOf(*found, &trackInfo_, engine_.rxSet_, engine_.rxLat_, engine_.rxLon_);
     ImGui::Separator();
     // The same two gestures the details window offers, so acting on what was
     // just read never requires finding the row it came from. Both land on the
@@ -16917,7 +16915,7 @@ void AppWindow::drawTargetDetailsWindow() {
             ImGui::Separator();
             ImGui::TextDisabled("%s", tr("No longer being reported."));
         } else {
-            drawTrackDetailOf(*found, &trackInfo_, rxSet_, rxLat_, rxLon_);
+            drawTrackDetailOf(*found, &trackInfo_, engine_.rxSet_, engine_.rxLat_, engine_.rxLon_);
             ImGui::Separator();
             // The same two gestures the row offers, as named buttons: the
             // details window is reachable from a row, and a user who got here
@@ -17064,7 +17062,7 @@ void AppWindow::drawPluginPresets(const cascade::core::LoadedPlugin& p) {
         p.decoder != nullptr || p.iqDecoder != nullptr || p.imageDecoder != nullptr;
     if (isDecoder) {
         const double hereHz =
-            pipeline_.activeSource().centerFrequencyHz() + pipeline_.vfoOffsetHz();
+            engine_.pipeline_.activeSource().centerFrequencyHz() + engine_.pipeline_.vfoOffsetHz();
         // The visible words from one format string, then the ## id as before.
         std::string saveShown;
         cascade::core::formatUtf8(saveShown, tr("+ Save %.4f MHz as a preset"),
@@ -17084,7 +17082,7 @@ void AppWindow::drawPluginPresets(const cascade::core::LoadedPlugin& p) {
 std::vector<cascade::core::UserPreset> AppWindow::userPresetsForPlugin(
     const cascade::core::LoadedPlugin& p) const {
     return cascade::core::userPresetsFor(
-        userPresets_, cascade::core::userPresetKey(cascade::core::pluginKey(p)));
+        engine_.userPresets_, cascade::core::userPresetKey(cascade::core::pluginKey(p)));
 }
 
 void AppWindow::applyUserPresetEdit(const PendingUserPresetEdit& edit) {
@@ -17093,7 +17091,7 @@ void AppWindow::applyUserPresetEdit(const PendingUserPresetEdit& edit) {
     // removed between the press and this safe point, and a save against a
     // plugin that is no longer there is a silent no-op.
     const cascade::core::LoadedPlugin* found = nullptr;
-    for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
+    for (const cascade::core::LoadedPlugin& p : engine_.pluginHost_.plugins()) {
         if (cascade::core::pluginKey(p) == edit.pluginFileKey) {
             found = &p;
             break;
@@ -17103,12 +17101,12 @@ void AppWindow::applyUserPresetEdit(const PendingUserPresetEdit& edit) {
     const std::string key = cascade::core::userPresetKey(edit.pluginFileKey);
 
     if (edit.op == PendingUserPresetEdit::Op::Forget) {
-        if (cascade::core::removeUserPreset(userPresets_, key, edit.ordinal)) {
+        if (cascade::core::removeUserPreset(engine_.userPresets_, key, edit.ordinal)) {
             rebuildMuteStates();
             std::string forgot;
             cascade::core::formatUtf8(forgot, tr("Forgot a preset for %s"),
                           found->name.c_str());
-            presetNote_ = forgot;
+            engine_.presetNote_ = forgot;
         }
         return;
     }
@@ -17119,12 +17117,12 @@ void AppWindow::applyUserPresetEdit(const PendingUserPresetEdit& edit) {
     // a property of the radio, not of the channel.
     cascade::core::UserPreset u;
     u.plugin = key;
-    u.frequencyHz = pipeline_.activeSource().centerFrequencyHz() + pipeline_.vfoOffsetHz();
-    u.demodMode = cascade::gui::abiDemodForModeIndex(modeIndex_);
-    u.bandwidthHz = vfoBandwidthHz_;
+    u.frequencyHz = engine_.pipeline_.activeSource().centerFrequencyHz() + engine_.pipeline_.vfoOffsetHz();
+    u.demodMode = cascade::gui::abiDemodForModeIndex(engine_.modeIndex_);
+    u.bandwidthHz = engine_.vfoBandwidthHz_;
     u.label = cascade::core::defaultUserPresetLabel(u.frequencyHz);
     std::string note;
-    switch (cascade::core::addUserPreset(userPresets_, u)) {
+    switch (cascade::core::addUserPreset(engine_.userPresets_, u)) {
         case cascade::core::UserPresetAdd::Added:
             rebuildMuteStates();
             cascade::core::formatUtf8(note, tr("Saved %.4f MHz as a preset for %s"),
@@ -17148,7 +17146,7 @@ void AppWindow::applyUserPresetEdit(const PendingUserPresetEdit& edit) {
             note = tr("Not saved: no usable frequency to save");
             break;
     }
-    presetNote_ = note;
+    engine_.presetNote_ = note;
 }
 
 void AppWindow::applyPluginPreset(const cascade::core::LoadedPlugin& p,
@@ -17183,42 +17181,42 @@ void AppWindow::applyPluginPreset(const cascade::core::LoadedPlugin& p,
         };
         const int idx = kAbiToIndex[ps.demodMode];
         if (idx >= 0) {
-            modeIndex_ = idx;
-            pipeline_.setDemodMode(kModeMap[idx]);
-            bandwidthIndex_ = kModeDefaultBw[idx];
-            vfoBandwidthHz_ = kBwHz[bandwidthIndex_];
-            pipeline_.setVfoBandwidthHz(vfoBandwidthHz_);
+            engine_.modeIndex_ = idx;
+            engine_.pipeline_.setDemodMode(kModeMap[idx]);
+            engine_.bandwidthIndex_ = kModeDefaultBw[idx];
+            engine_.vfoBandwidthHz_ = kBwHz[engine_.bandwidthIndex_];
+            engine_.pipeline_.setVfoBandwidthHz(engine_.vfoBandwidthHz_);
         }
     }
 
     // The device rate, before the tune, because changing it re-plans the whole
     // chain. Advisory: a source that refuses simply keeps the rate it had, and
     // the decoder will say so itself rather than the host guessing.
-    if (ps.sampleRateHz > 0.0 && device_ != nullptr &&
-        pipeline_.activeSource().sampleRateHz() != ps.sampleRateHz) {
+    if (ps.sampleRateHz > 0.0 && engine_.device_ != nullptr &&
+        engine_.pipeline_.activeSource().sampleRateHz() != ps.sampleRateHz) {
         const cascade::gui::RateSetOutcome set =
-            cascade::gui::applySourceRate(*device_, ps.sampleRateHz, sourceError_);
+            cascade::gui::applySourceRate(*engine_.device_, ps.sampleRateHz, engine_.sourceError_);
         if (set.ok) {
             // A rate the driver COERCED is said (the refusal stays advisory,
             // as above).
-            sourceError_ = set.sourceError;
+            engine_.sourceError_ = set.sourceError;
             // The combo follows, or it would keep showing the rate the user
             // last picked while the radio ran at another.
-            deviceRateIndex_ =
-                nearestIndex(deviceRatesHz_, pipeline_.activeSource().sampleRateHz());
+            engine_.deviceRateIndex_ =
+                nearestIndex(engine_.deviceRatesHz_, engine_.pipeline_.activeSource().sampleRateHz());
             followInputRate();
         }
     }
 
     if (ps.bandwidthHz > 0.0) {
-        const double bwHi = kVfoBwMaxChanFrac * pipeline_.channelRateHz();
-        vfoBandwidthHz_ = std::max(kVfoBwMinHz, std::min(ps.bandwidthHz, bwHi));
-        pipeline_.setVfoBandwidthHz(vfoBandwidthHz_);
+        const double bwHi = kVfoBwMaxChanFrac * engine_.pipeline_.channelRateHz();
+        engine_.vfoBandwidthHz_ = std::max(kVfoBwMinHz, std::min(ps.bandwidthHz, bwHi));
+        engine_.pipeline_.setVfoBandwidthHz(engine_.vfoBandwidthHz_);
         // -1 WHEN THE PRESET ASKED FOR SOMETHING THE LIST DOES NOT CARRY, and
         // that is exactly the APT case: 40 kHz is not a step, and the nearest
         // one is 12.5 kHz. Pointing the combo there made it letter a bandwidth
         // the receiver was not running and, on the next click, apply it.
-        bandwidthIndex_ = bandwidthStepIndex(vfoBandwidthHz_);
+        engine_.bandwidthIndex_ = bandwidthStepIndex(engine_.vfoBandwidthHz_);
     }
 
     // WHERE the frequency goes differs by decoder kind, and getting it wrong
@@ -17237,9 +17235,9 @@ void AppWindow::applyPluginPreset(const cascade::core::LoadedPlugin& p,
     // notice needs to say "this preset needs a receiver that covers that
     // band" rather than leaving it as an unexplained tune.
     if ((ps.flags & CASCADE_PRESET_DEVICE_CENTRE) != 0u) {
-        const double off = cascade::gui::presetVfoOffsetHz(ps.flags, pipeline_.vfoOffsetHz());
-        pipeline_.setVfoOffsetHz(off);
-        vfoOffsetKhz_ = static_cast<float>(off / 1000.0);
+        const double off = cascade::gui::presetVfoOffsetHz(ps.flags, engine_.pipeline_.vfoOffsetHz());
+        engine_.pipeline_.setVfoOffsetHz(off);
+        engine_.vfoOffsetKhz_ = static_cast<float>(off / 1000.0);
         retuneSourceHz(ps.frequencyHz, /*isPluginPreset=*/true);
     } else {
         tuneAbsoluteHz(ps.frequencyHz, /*isPluginPreset=*/true);
@@ -17269,12 +17267,12 @@ void AppWindow::applyPluginPreset(const cascade::core::LoadedPlugin& p,
     std::string note;
     cascade::core::formatUtf8(note, tr("Tuned to %.4f MHz for %s"), ps.frequencyHz / 1.0e6,
                   p.name.c_str());
-    presetNote_ = note;
+    engine_.presetNote_ = note;
 }
 
 void AppWindow::openPluginWindowsFor(const cascade::core::LoadedPlugin& p) {
     {
-        const std::vector<std::string>& trackNames = pluginUi_.trackPluginNames();
+        const std::vector<std::string>& trackNames = engine_.pluginUi_.trackPluginNames();
         if (std::find(trackNames.begin(), trackNames.end(), p.name) != trackNames.end()) {
             MapPage& pg = ensureMapPage(p.name);
             pg.open = true;
@@ -17286,20 +17284,20 @@ void AppWindow::openPluginWindowsFor(const cascade::core::LoadedPlugin& p) {
     // A panel's id carries the panel's OWN TITLE, which only the instance
     // knows, so this asks the instances rebuilt a moment ago rather than the
     // descriptor. A module may publish more than one.
-    for (const cascade::core::HostPanel& hp : pluginUi_.panels()) {
+    for (const cascade::core::HostPanel& hp : engine_.pluginUi_.panels()) {
         if (hp.plugin == p.name) { pluginWindows_.show(hp.title + "###panel_" + hp.plugin); }
     }
     bool ownWindow = p.imageDecoder != nullptr;
     {
-        const std::vector<std::string>& trackNames = pluginUi_.trackPluginNames();
+        const std::vector<std::string>& trackNames = engine_.pluginUi_.trackPluginNames();
         if (std::find(trackNames.begin(), trackNames.end(), p.name) != trackNames.end()) {
             ownWindow = true;
         }
     }
-    for (const cascade::core::HostPanel& hp : pluginUi_.panels()) {
+    for (const cascade::core::HostPanel& hp : engine_.pluginUi_.panels()) {
         if (hp.plugin == p.name) { ownWindow = true; }
     }
-    for (const cascade::core::HostInstrument& in : pluginUi_.instruments()) {
+    for (const cascade::core::HostInstrument& in : engine_.pluginUi_.instruments()) {
         if (in.plugin == p.name) {
             pluginWindows_.show(instrumentWindowId(in));
             ownWindow = true;
@@ -17323,36 +17321,36 @@ void AppWindow::applyPluginTuneGrants() {
     // written by an older build holds DISPLAY NAMES instead; those match no
     // module, so such a grant reverts to its default of OFF and shows up as a
     // revocable row rather than quietly granting anything.
-    for (const std::string& k : pluginTuneAllowed_) { pluginUi_.setTuneAllowed(k, true); }
+    for (const std::string& k : engine_.pluginTuneAllowed_) { engine_.pluginUi_.setTuneAllowed(k, true); }
 }
 
 void AppWindow::setPluginTuneAllowed(const std::string& pluginKey, bool allowed) {
-    pluginUi_.setTuneAllowed(pluginKey, allowed);
+    engine_.pluginUi_.setTuneAllowed(pluginKey, allowed);
     const auto it =
-        std::find(pluginTuneAllowed_.begin(), pluginTuneAllowed_.end(), pluginKey);
-    if (allowed && it == pluginTuneAllowed_.end()) {
-        pluginTuneAllowed_.push_back(pluginKey);
-    } else if (!allowed && it != pluginTuneAllowed_.end()) {
-        pluginTuneAllowed_.erase(it);
+        std::find(engine_.pluginTuneAllowed_.begin(), engine_.pluginTuneAllowed_.end(), pluginKey);
+    if (allowed && it == engine_.pluginTuneAllowed_.end()) {
+        engine_.pluginTuneAllowed_.push_back(pluginKey);
+    } else if (!allowed && it != engine_.pluginTuneAllowed_.end()) {
+        engine_.pluginTuneAllowed_.erase(it);
     }
 }
 
 // --- HOST API LEVEL 1 (0.99.31) -------------------------------------------------
 
 void AppWindow::applyPluginSettingsGrants() {
-    for (const std::string& k : pluginSettingsAllowed_) { pluginUi_.setSettingsAllowed(k, true); }
+    for (const std::string& k : engine_.pluginSettingsAllowed_) { engine_.pluginUi_.setSettingsAllowed(k, true); }
 }
 
 void AppWindow::setPluginSettingsAllowed(const std::string& pluginKey, bool allowed) {
     // The live grant and the durable one in one place, exactly as the tune
     // grant does, so a grant that took effect can never fail to be saved.
-    pluginUi_.setSettingsAllowed(pluginKey, allowed);
+    engine_.pluginUi_.setSettingsAllowed(pluginKey, allowed);
     const auto it =
-        std::find(pluginSettingsAllowed_.begin(), pluginSettingsAllowed_.end(), pluginKey);
-    if (allowed && it == pluginSettingsAllowed_.end()) {
-        pluginSettingsAllowed_.push_back(pluginKey);
-    } else if (!allowed && it != pluginSettingsAllowed_.end()) {
-        pluginSettingsAllowed_.erase(it);
+        std::find(engine_.pluginSettingsAllowed_.begin(), engine_.pluginSettingsAllowed_.end(), pluginKey);
+    if (allowed && it == engine_.pluginSettingsAllowed_.end()) {
+        engine_.pluginSettingsAllowed_.push_back(pluginKey);
+    } else if (!allowed && it != engine_.pluginSettingsAllowed_.end()) {
+        engine_.pluginSettingsAllowed_.erase(it);
     }
 }
 
@@ -17367,9 +17365,9 @@ void AppWindow::fillPublishedState(cascade::core::PublishedState& ps, const std:
     // docs/engine-stage2.md section 2 maps every field to its source.
     FoxReceiverState& r = ps.rx;
     cascade::core::AppStateExt& e = ps.app;
-    cascade::source::IqSource& src = pipeline_.activeSource();
-    const cascade::sink::AudioOut& sink = pipeline_.audio();
-    const bool running = pipeline_.running();
+    cascade::source::IqSource& src = engine_.pipeline_.activeSource();
+    const cascade::sink::AudioOut& sink = engine_.pipeline_.audio();
+    const bool running = engine_.pipeline_.running();
 
     // THE DECODERS, from ONE acquisition of the runner's lock (the lock its
     // DSP thread takes per block): how many instances are fed, and which
@@ -17379,16 +17377,16 @@ void AppWindow::fillPublishedState(cascade::core::PublishedState& ps, const std:
     std::size_t runnerActive = 0;
     std::uint32_t fedModules = 0;
     std::uint32_t fittedModules = 0;
-    if (running) { pluginRunner_.feedSnapshot(runnerActive, feedingKeysScratch_); }
-    for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
+    if (running) { engine_.pluginRunner_.feedSnapshot(runnerActive, engine_.feedingKeysScratch_); }
+    for (const cascade::core::LoadedPlugin& p : engine_.pluginHost_.plugins()) {
         if (!p.loaded) { continue; }
         if (p.decoder == nullptr && p.iqDecoder == nullptr && p.imageDecoder == nullptr) { continue; }
         ++fittedModules;
         if (!running) { continue; }
         const std::string key = cascade::core::pluginKey(p);
         if (key.empty()) { continue; }
-        if (std::find(feedingKeysScratch_.begin(), feedingKeysScratch_.end(), key) !=
-            feedingKeysScratch_.end()) {
+        if (std::find(engine_.feedingKeysScratch_.begin(), engine_.feedingKeysScratch_.end(), key) !=
+            engine_.feedingKeysScratch_.end()) {
             ++fedModules;
         }
     }
@@ -17397,39 +17395,39 @@ void AppWindow::fillPublishedState(cascade::core::PublishedState& ps, const std:
     // (core::receiverFlags; test_snapshot_app walks them one at a time).
     cascade::core::RxFlagSources fs;
     fs.running = running;
-    fs.deviceOpen = device_ != nullptr;
-    fs.faulted = pipeline_.faulted();
-    fs.muted = userMuted_;
-    fs.stereoEnabled = stereoEnabled_;
-    fs.stereoActive = pipeline_.stereoActive();
-    fs.nr = nrEnabled_;
-    fs.notch = notchEnabled_;
-    fs.autoNotch = autoNotch_;
-    fs.deviceAgc = deviceAgc_;
-    fs.agcSupported = deviceAgcSupported_;
-    fs.recordingIq = iqRecorder_.recording();
-    fs.recordingAudio = audioRecorder_.recording();
-    fs.scannerActive = scanner_.active();
+    fs.deviceOpen = engine_.device_ != nullptr;
+    fs.faulted = engine_.pipeline_.faulted();
+    fs.muted = engine_.userMuted_;
+    fs.stereoEnabled = engine_.stereoEnabled_;
+    fs.stereoActive = engine_.pipeline_.stereoActive();
+    fs.nr = engine_.nrEnabled_;
+    fs.notch = engine_.notchEnabled_;
+    fs.autoNotch = engine_.autoNotch_;
+    fs.deviceAgc = engine_.deviceAgc_;
+    fs.agcSupported = engine_.deviceAgcSupported_;
+    fs.recordingIq = engine_.iqRecorder_.recording();
+    fs.recordingAudio = engine_.audioRecorder_.recording();
+    fs.scannerActive = engine_.scanner_.active();
     // The DEC lamp's own predicate (drawToolbar's MASTER cluster).
     fs.decoderActive = running && runnerActive > 0;
-    fs.txAvailable = transmitter_.haveSink();
-    fs.txKeyed = transmitter_.transmitting();
-    fs.txLatched = transmitter_.latched();
+    fs.txAvailable = engine_.transmitter_.haveSink();
+    fs.txKeyed = engine_.transmitter_.transmitting();
+    fs.txLatched = engine_.transmitter_.latched();
     // The app's consent to a remote key: a transmitter open AND the Transmit
     // page on screen (what /api/status has always called transmitAvailable).
-    fs.txRemoteArmed = transmitOpen_ && transmitter_.haveSink();
+    fs.txRemoteArmed = transmitOpen_ && engine_.transmitter_.haveSink();
     fs.sinkOpen = sink.running();
     fs.webListening = webServer_.running();
 
     r.centreHz = src.centerFrequencyHz();
-    r.vfoOffsetHz = pipeline_.vfoOffsetHz();
+    r.vfoOffsetHz = engine_.pipeline_.vfoOffsetHz();
     r.tunedHz = r.centreHz + r.vfoOffsetHz;
     r.sampleRateHz = src.sampleRateHz();
-    r.channelRateHz = pipeline_.channelRateHz();
-    r.bandwidthHz = vfoBandwidthHz_;
-    r.squelchDb = static_cast<double>(squelchDb_);
-    r.volume = static_cast<double>(volume_);
-    r.signalDb = static_cast<double>(pipeline_.signalPowerDb());
+    r.channelRateHz = engine_.pipeline_.channelRateHz();
+    r.bandwidthHz = engine_.vfoBandwidthHz_;
+    r.squelchDb = static_cast<double>(engine_.squelchDb_);
+    r.volume = static_cast<double>(engine_.volume_);
+    r.signalDb = static_cast<double>(engine_.pipeline_.signalPowerDb());
     // The host's own S-meter mapping (drawRadioSection): [-120, 0] dB.
     r.sMeter = std::clamp((r.signalDb + 120.0) / 120.0, 0.0, 1.0);
     // Not filled in stage 2: the VOLUME meter reads an audio tap the deck
@@ -17439,22 +17437,22 @@ void AppWindow::fillPublishedState(cascade::core::PublishedState& ps, const std:
     // its hysteresis, is not published by the pipeline).
     fs.squelchOpen = r.signalDb > r.squelchDb;
     r.flags = cascade::core::receiverFlags(fs);
-    r.dbMin = static_cast<double>(dbMin_);
-    r.dbMax = static_cast<double>(dbMax_);
-    r.nrStrength = static_cast<double>(nrStrength_);
-    r.notchHz = static_cast<double>(notchFreqHz_);
-    r.notchQ = static_cast<double>(notchQ_);
-    r.pilotLevel = static_cast<double>(pipeline_.pilotLevel());
-    r.demodMode = cascade::gui::abiDemodForModeIndex(modeIndex_);
-    r.deemphasis = static_cast<std::uint32_t>(deemphIndex_);
-    r.gainCount = device_ != nullptr ? static_cast<std::uint32_t>(deviceGainRanges_.size()) : 0u;
+    r.dbMin = static_cast<double>(engine_.dbMin_);
+    r.dbMax = static_cast<double>(engine_.dbMax_);
+    r.nrStrength = static_cast<double>(engine_.nrStrength_);
+    r.notchHz = static_cast<double>(engine_.notchFreqHz_);
+    r.notchQ = static_cast<double>(engine_.notchQ_);
+    r.pilotLevel = static_cast<double>(engine_.pipeline_.pilotLevel());
+    r.demodMode = cascade::gui::abiDemodForModeIndex(engine_.modeIndex_);
+    r.deemphasis = static_cast<std::uint32_t>(engine_.deemphIndex_);
+    r.gainCount = engine_.device_ != nullptr ? static_cast<std::uint32_t>(engine_.deviceGainRanges_.size()) : 0u;
     r.decodersRunning = fedModules;
     r.decodersFitted = fittedModules;
-    r.txMode = static_cast<std::uint32_t>(transmitter_.mode());
+    r.txMode = static_cast<std::uint32_t>(engine_.transmitter_.mode());
     r.audioUnderruns = sink.underruns();
-    r.txFrequencyHz = transmitter_.frequencyHz();
-    r.txPowerDb = transmitter_.powerDb();
-    r.txHoldRemainingMs = transmitter_.remoteHoldRemainingMs();
+    r.txFrequencyHz = engine_.transmitter_.frequencyHz();
+    r.txPowerDb = engine_.transmitter_.powerDb();
+    r.txHoldRemainingMs = engine_.transmitter_.remoteHoldRemainingMs();
     r.txLatchRemainingMs = 0;  // OPEN: the Transmitter publishes no latch timer
     cascade::core::formatUtf8(r.deviceName, sizeof(r.deviceName), "%s",
                               src.name() != nullptr ? src.name() : "");
@@ -17463,16 +17461,16 @@ void AppWindow::fillPublishedState(cascade::core::PublishedState& ps, const std:
     // no counter moves.
     cascade::core::formatUtf8(
         r.sinkName, sizeof(r.sinkName), "%s",
-        cascade::core::keepLastGoodName(sinkNameLastGood_, sink.openedDeviceName()).c_str());
+        cascade::core::keepLastGoodName(engine_.sinkNameLastGood_, sink.openedDeviceName()).c_str());
     cascade::core::formatUtf8(r.faultMessage, sizeof(r.faultMessage), "%s", faultMessage.c_str());
     // r.txUnkeyReason: OPEN - the Transmitter keeps no sentence for it.
 
     // --- the host API level 1's tables (plugin get_gain / get_sample_rates) ---
-    if (device_ != nullptr) {
+    if (engine_.device_ != nullptr) {
         const std::size_t n =
-            std::min<std::size_t>(deviceGainRanges_.size(), cascade::core::kMaxPublishedGains);
+            std::min<std::size_t>(engine_.deviceGainRanges_.size(), cascade::core::kMaxPublishedGains);
         for (std::size_t i = 0; i < n; ++i) {
-            const cascade::source::GainInfo& g = deviceGainRanges_[i];
+            const cascade::source::GainInfo& g = engine_.deviceGainRanges_[i];
             cascade::core::PublishedGain& pg = e.gains[i];
             cascade::core::formatUtf8(pg.name, sizeof(pg.name), "%s", g.name.c_str());
             pg.unit = g.unit == cascade::source::GainUnit::Decibels ? CASCADE_GAIN_UNIT_DB
@@ -17481,25 +17479,25 @@ void AppWindow::fillPublishedState(cascade::core::PublishedState& ps, const std:
             pg.maxDb = g.maxDb;
             pg.stepDb = g.stepDb;
             // THE READBACK MIRROR, as the sliders and the browser show it.
-            pg.currentDb = i < deviceGainsDb_.size() ? static_cast<double>(deviceGainsDb_[i]) : 0.0;
+            pg.currentDb = i < engine_.deviceGainsDb_.size() ? static_cast<double>(engine_.deviceGainsDb_[i]) : 0.0;
         }
         e.abiGainCount = static_cast<std::uint32_t>(n);
         // The rates the Rate combo offers, from the same list it is built on.
         const std::size_t rn =
-            std::min<std::size_t>(deviceRatesHz_.size(), cascade::core::kMaxPublishedRates);
-        for (std::size_t i = 0; i < rn; ++i) { e.rates[i] = deviceRatesHz_[i]; }
+            std::min<std::size_t>(engine_.deviceRatesHz_.size(), cascade::core::kMaxPublishedRates);
+        for (std::size_t i = 0; i < rn; ++i) { e.rates[i] = engine_.deviceRatesHz_[i]; }
         e.rateCount = static_cast<std::uint32_t>(rn);
     }
     e.outputRateHz = cascade::core::Pipeline::kAudioRateHz;
-    e.outputFrames = pipeline_.audioSamplesProduced();
+    e.outputFrames = engine_.pipeline_.audioSamplesProduced();
 
     // --- what /api/status carries that API 0.2 has no field for --------------
-    e.rxPositionSet = rxSet_;
-    e.rxLatDeg = rxLat_;
-    e.rxLonDeg = rxLon_;
-    e.autoNotchEngaged = pipeline_.autoNotchEngaged();
-    e.autoNotchFreqHz = pipeline_.autoNotchFrequencyHz();
-    e.pilotLocked = pipeline_.pilotLocked();
+    e.rxPositionSet = engine_.rxSet_;
+    e.rxLatDeg = engine_.rxLat_;
+    e.rxLonDeg = engine_.rxLon_;
+    e.autoNotchEngaged = engine_.pipeline_.autoNotchEngaged();
+    e.autoNotchFreqHz = engine_.pipeline_.autoNotchFrequencyHz();
+    e.pilotLocked = engine_.pipeline_.pilotLocked();
     e.rdsSynced = rds.synced;
     e.rdsPiValid = rds.state.piValid;
     e.rdsPi = rds.state.pi;
@@ -17509,18 +17507,18 @@ void AppWindow::fillPublishedState(cascade::core::PublishedState& ps, const std:
     e.rdsTa = rds.state.ta;
     e.rdsGroups = rds.state.groupsDecoded;
     e.rdsErrors = rds.state.blockErrors;
-    e.sourceBusy = soapyScanPending_ || deviceOpenPending_;
+    e.sourceBusy = engine_.soapyScanPending_ || engine_.deviceOpenPending_;
     {
         const double rateHz = cascade::core::Pipeline::kAudioRateHz;
         e.audioPrimingCallbacks = sink.primingCallbacks();
         e.audioRingMs = 1000.0 * static_cast<double>(sink.ringFrames()) / rateHz;
         e.audioRingCapacityMs = 1000.0 * static_cast<double>(sink.ringCapacityFrames()) / rateHz;
     }
-    e.audioPluginGaps = pluginRunner_.audioGaps();
-    e.audioPluginGapFrames = pluginRunner_.audioGapFrames();
-    e.iqBytes = iqRecorder_.bytesWritten();
-    e.audioBytes = audioRecorder_.bytesWritten();
-    switch (scanner_.state()) {
+    e.audioPluginGaps = engine_.pluginRunner_.audioGaps();
+    e.audioPluginGapFrames = engine_.pluginRunner_.audioGapFrames();
+    e.iqBytes = engine_.iqRecorder_.bytesWritten();
+    e.audioBytes = engine_.audioRecorder_.bytesWritten();
+    switch (engine_.scanner_.state()) {
         case cascade::core::Scanner::State::Idle: e.scannerState = cascade::core::kScannerIdle; break;
         case cascade::core::Scanner::State::Scanning: e.scannerState = cascade::core::kScannerScanning; break;
         case cascade::core::Scanner::State::Paused: e.scannerState = cascade::core::kScannerPaused; break;
@@ -17529,7 +17527,7 @@ void AppWindow::fillPublishedState(cascade::core::PublishedState& ps, const std:
     e.scanStartHz = scanStartMhz_ * 1.0e6;
     e.scanStopHz = scanStopMhz_ * 1.0e6;
     e.scanStepHz = scanStepKhz_ * 1.0e3;
-    e.catalogueBusy = catalogPending_ || installPending_;
+    e.catalogueBusy = engine_.catalogPending_ || engine_.installPending_;
     e.basemapActive = basemap_.active();
     e.basemapMinZoom = basemap_.minZoom();
     e.basemapMaxZoom = basemap_.maxZoom();
@@ -17544,7 +17542,7 @@ cascade::net::RadioStatus AppWindow::webStatusNow() const {
     // the publishing thread takes it BLOCKING is applyControlRequest's own
     // readFull() (core/receiver_snapshot.hpp).
     const std::shared_ptr<const cascade::core::ReceiverSnapshot::Full> full =
-        receiverSnapshot_->readFull();
+        engine_.receiverSnapshot_->readFull();
     return cascade::net::composeRadioStatus(full->state, full->lists.get());
 }
 
@@ -17554,12 +17552,12 @@ cascade::net::RadioStatus AppWindow::catStatusNow() const {
     // overlapping a publish it takes the installed block instead - whole,
     // and at most a frame older - rather than answer nothing.
     cascade::core::PublishedState s;
-    if (!receiverSnapshot_->read(s)) { s = receiverSnapshot_->readFull()->state; }
+    if (!engine_.receiverSnapshot_->read(s)) { s = engine_.receiverSnapshot_->readFull()->state; }
     return cascade::net::composeRadioStatus(s, nullptr);
 }
 
 void AppWindow::applyPluginApi() {
-    cascade::core::PluginApiCore& api = pluginUi_.api();
+    cascade::core::PluginApiCore& api = engine_.pluginUi_.api();
 
     // --- 1. What plugins asked of the receiver -------------------------------
     //
@@ -17598,11 +17596,11 @@ void AppWindow::applyPluginApi() {
                 cascade::core::DecodedLine d;
                 d.plugin = l.name;
                 d.text = std::move(part);
-                decoderLog_.push_back(std::move(d));
+                engine_.decoderLog_.push_back(std::move(d));
             }
             from = to + 1;
         }
-        if (l.level >= CASCADE_LOG_WARN) { pluginNotices_[l.key] = PluginNotice{l.level, l.text}; }
+        if (l.level >= CASCADE_LOG_WARN) { engine_.pluginNotices_[l.key] = PluginNotice{l.level, l.text}; }
     }
 
     // --- 3. What plugins stored ------------------------------------------------
@@ -17611,16 +17609,16 @@ void AppWindow::applyPluginApi() {
     // idle frame costs one lock and one compare. currentConfig() saves the
     // durable map through the ordinary debounced, off-thread config write.
     const std::uint64_t gen = api.settingsGeneration();
-    if (gen != pluginSettingsGen_) {
-        pluginSettingsGen_ = gen;
-        pluginSettings_ = api.settingsSnapshot();
+    if (gen != engine_.pluginSettingsGen_) {
+        engine_.pluginSettingsGen_ = gen;
+        engine_.pluginSettings_ = api.settingsSnapshot();
     }
 
     // --- 4. What plugins marked ------------------------------------------------
     const std::uint64_t ms = api.markersSeq();
-    if (ms != pluginMarkersSeq_) {
-        pluginMarkersSeq_ = ms;
-        api.markers(pluginMarkers_);
+    if (ms != engine_.pluginMarkersSeq_) {
+        engine_.pluginMarkersSeq_ = ms;
+        api.markers(engine_.pluginMarkers_);
     }
 
     // (What plugins may READ is the one receiver snapshot, published by
@@ -17632,7 +17630,7 @@ void AppWindow::applyPluginApi() {
 
 void AppWindow::drawPluginMarkers(float x0, float y0, float width, float height,
                                   bool waterfall) {
-    if (pluginMarkers_.empty() || width <= 0.0f || height <= 0.0f) { return; }
+    if (engine_.pluginMarkers_.empty() || width <= 0.0f || height <= 0.0f) { return; }
     const double lo = scale_.viewLowHz();
     const double hi = scale_.viewHighHz();
     ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -17644,7 +17642,7 @@ void AppWindow::drawPluginMarkers(float x0, float y0, float width, float height,
     // print over each other.
     const float headerY = (!waterfall && spectrum_ != nullptr) ? spectrum_->headerBottom() : y0;
     const float labelY = headerY + 2.0f * (ImGui::GetTextLineHeight() + 2.0f);
-    for (const cascade::core::HostMarker& hm : pluginMarkers_) {
+    for (const cascade::core::HostMarker& hm : engine_.pluginMarkers_) {
         const cascade::gui::PluginMarkerDraw d =
             cascade::gui::pluginMarkerGeometry(hm.m, lo, hi, x0, width, waterfall);
         if (!d.visible) { continue; }
@@ -17682,7 +17680,7 @@ std::size_t AppWindow::loadedDecoderCount() const {
     // question the same way is what keeps this denominator and the runner's
     // activeCount numerator counting the same population.
     std::size_t n = 0;
-    for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
+    for (const cascade::core::LoadedPlugin& p : engine_.pluginHost_.plugins()) {
         if (!p.loaded) { continue; }
         if (p.decoder != nullptr || p.iqDecoder != nullptr || p.imageDecoder != nullptr) {
             ++n;
@@ -17693,12 +17691,12 @@ std::size_t AppWindow::loadedDecoderCount() const {
 
 std::size_t AppWindow::fedDecoderCount() const {
     std::size_t n = 0;
-    for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
+    for (const cascade::core::LoadedPlugin& p : engine_.pluginHost_.plugins()) {
         if (!p.loaded) { continue; }
         if (p.decoder == nullptr && p.iqDecoder == nullptr && p.imageDecoder == nullptr) {
             continue;
         }
-        if (pluginRunner_.isFeeding(cascade::core::pluginKey(p))) { ++n; }
+        if (engine_.pluginRunner_.isFeeding(cascade::core::pluginKey(p))) { ++n; }
     }
     return n;
 }
@@ -17707,23 +17705,23 @@ bool AppWindow::pluginIsStopped(const std::string& pluginKey) const {
     // An empty key is what a record with no path produces; it must never
     // match, or one stray entry would stop every path-less plugin at once.
     if (pluginKey.empty()) { return false; }
-    return std::find(pluginsStopped_.begin(), pluginsStopped_.end(), pluginKey) !=
-           pluginsStopped_.end();
+    return std::find(engine_.pluginsStopped_.begin(), engine_.pluginsStopped_.end(), pluginKey) !=
+           engine_.pluginsStopped_.end();
 }
 
 void AppWindow::recordPluginStopped(const std::string& pluginKey, bool stopped) {
     if (pluginKey.empty()) { return; }
-    const auto it = std::find(pluginsStopped_.begin(), pluginsStopped_.end(), pluginKey);
-    if (stopped && it == pluginsStopped_.end()) {
-        pluginsStopped_.push_back(pluginKey);
-    } else if (!stopped && it != pluginsStopped_.end()) {
-        pluginsStopped_.erase(it);
+    const auto it = std::find(engine_.pluginsStopped_.begin(), engine_.pluginsStopped_.end(), pluginKey);
+    if (stopped && it == engine_.pluginsStopped_.end()) {
+        engine_.pluginsStopped_.push_back(pluginKey);
+    } else if (!stopped && it != engine_.pluginsStopped_.end()) {
+        engine_.pluginsStopped_.erase(it);
     }
     // Down into both halves immediately. refreshPluginRunner pushes them again
     // before every rebuild, but a caller that only records (the preset path
     // does) still leaves the live objects agreeing with the durable list.
-    pluginRunner_.setStopped(pluginsStopped_);
-    pluginUi_.setStopped(pluginsStopped_);
+    engine_.pluginRunner_.setStopped(engine_.pluginsStopped_);
+    engine_.pluginUi_.setStopped(engine_.pluginsStopped_);
     // The mute snapshot holds the same running state and is read every frame,
     // so it has to follow here too, not only at the next rebuild.
     rebuildMuteStates();
@@ -17767,7 +17765,7 @@ void AppWindow::maybeAutoPreset(const std::string& pluginKey, const char* verb) 
     // up here, the same way the web control's remote preset apply does it
     // (this file's r.pluginPresetIndex handling).
     const cascade::core::LoadedPlugin* found = nullptr;
-    for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
+    for (const cascade::core::LoadedPlugin& p : engine_.pluginHost_.plugins()) {
         if (cascade::core::pluginKey(p) == pluginKey) {
             found = &p;
             break;
@@ -17796,9 +17794,9 @@ void AppWindow::maybeAutoPreset(const std::string& pluginKey, const char* verb) 
     // WHAT THE RECEIVER IS DOING RIGHT NOW — the same three numbers
     // applyPluginPreset itself moves, read back rather than assumed, so
     // "already inside" means the same thing here as it does to the button.
-    const double deviceCentreHz = pipeline_.activeSource().centerFrequencyHz();
-    const double vfoOffsetHz = pipeline_.vfoOffsetHz();
-    const double deviceRateHz = pipeline_.activeSource().sampleRateHz();
+    const double deviceCentreHz = engine_.pipeline_.activeSource().centerFrequencyHz();
+    const double vfoOffsetHz = engine_.pipeline_.vfoOffsetHz();
+    const double deviceRateHz = engine_.pipeline_.activeSource().sampleRateHz();
 
     const int idx = cascade::gui::autoPresetIndexOnStart(presets, deviceCentreHz, vfoOffsetHz,
                                                           deviceRateHz);
@@ -17820,7 +17818,7 @@ void AppWindow::maybeAutoPreset(const std::string& pluginKey, const char* verb) 
 
 std::string AppWindow::pluginKeyForDisplayName(const std::string& displayName) const {
     if (displayName.empty()) { return {}; }
-    for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
+    for (const cascade::core::LoadedPlugin& p : engine_.pluginHost_.plugins()) {
         if (p.name == displayName) { return cascade::core::pluginKey(p); }
     }
     return {};
@@ -17837,7 +17835,7 @@ std::string AppWindow::pluginKeyForDisplayName(const std::string& displayName) c
 
 const cascade::core::MutePlugin* AppWindow::muteStateForDisplayName(
     const std::string& displayName) const {
-    for (const cascade::core::MutePlugin& m : muteStates_) {
+    for (const cascade::core::MutePlugin& m : engine_.muteStates_) {
         if (m.name == displayName) { return &m; }
     }
     return nullptr;
@@ -17846,8 +17844,8 @@ const cascade::core::MutePlugin* AppWindow::muteStateForDisplayName(
 void AppWindow::drawPresetKeys(const std::string& pluginKey, const std::string& pluginName,
                                const std::vector<cascade::core::MutePreset>& presets) {
     const std::vector<cascade::gui::PresetBarKey> keys = cascade::gui::presetBarKeys(
-        presets, pipeline_.activeSource().centerFrequencyHz(), pipeline_.vfoOffsetHz(),
-        pipeline_.activeSource().sampleRateHz());
+        presets, engine_.pipeline_.activeSource().centerFrequencyHz(), engine_.pipeline_.vfoOffsetHz(),
+        engine_.pipeline_.activeSource().sampleRateHz());
     // THE WRAP IS DECIDED BEFORE THE FIRST KEY IS DRAWN, from the widths of
     // all of them and the width of the row as it stands right now - which is
     // the one moment GetContentRegionAvail() answers the question being asked
@@ -17935,7 +17933,7 @@ void AppWindow::drawPresetKeys(const std::string& pluginKey, const std::string& 
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip(tr("Save the frequency you are tuned to now (%.4f MHz) as a preset "
                              "for %s."),
-                          (pipeline_.activeSource().centerFrequencyHz() + pipeline_.vfoOffsetHz()) /
+                          (engine_.pipeline_.activeSource().centerFrequencyHz() + engine_.pipeline_.vfoOffsetHz()) /
                               1.0e6,
                           pluginName.c_str());
     }
@@ -17969,7 +17967,7 @@ void AppWindow::drawDecoderPresetBars() {
     // reason drawSatelliteMapBody's own comment gives for not drawing the
     // ordinary map bar over it).
     bool any = false;
-    for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
+    for (const cascade::core::LoadedPlugin& p : engine_.pluginHost_.plugins()) {
         if (!p.loaded || p.decoder == nullptr) { continue; }
         // A STOPPED DECODER IS SKIPPED. A preset key for a plugin the user
         // just switched off would retune the radio and start it again from
@@ -17996,9 +17994,9 @@ bool AppWindow::pluginMutes(const cascade::core::LoadedPlugin& p) const {
     const bool def = cascade::core::muteDefaultForCaps(p.capabilities);
     const std::string key = cascade::core::pluginKey(p);
     if (key.empty()) { return def; }
-    const bool overridden = std::find(pluginMuteOverride_.begin(),
-                                      pluginMuteOverride_.end(),
-                                      key) != pluginMuteOverride_.end();
+    const bool overridden = std::find(engine_.pluginMuteOverride_.begin(),
+                                      engine_.pluginMuteOverride_.end(),
+                                      key) != engine_.pluginMuteOverride_.end();
     return overridden ? !def : def;
 }
 
@@ -18010,18 +18008,18 @@ void AppWindow::setPluginMutes(const cascade::core::LoadedPlugin& p, bool mutes)
     // a redundant override that a later improvement to the default rule could
     // not reach.
     const bool wantOverride = (mutes != cascade::core::muteDefaultForCaps(p.capabilities));
-    const auto it = std::find(pluginMuteOverride_.begin(), pluginMuteOverride_.end(), key);
-    if (wantOverride && it == pluginMuteOverride_.end()) {
-        pluginMuteOverride_.push_back(key);
-    } else if (!wantOverride && it != pluginMuteOverride_.end()) {
-        pluginMuteOverride_.erase(it);
+    const auto it = std::find(engine_.pluginMuteOverride_.begin(), engine_.pluginMuteOverride_.end(), key);
+    if (wantOverride && it == engine_.pluginMuteOverride_.end()) {
+        engine_.pluginMuteOverride_.push_back(key);
+    } else if (!wantOverride && it != engine_.pluginMuteOverride_.end()) {
+        engine_.pluginMuteOverride_.erase(it);
     }
     rebuildMuteStates();
 }
 
 void AppWindow::rebuildMuteStates() {
-    muteStates_.clear();
-    for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
+    engine_.muteStates_.clear();
+    for (const cascade::core::LoadedPlugin& p : engine_.pluginHost_.plugins()) {
         if (!p.loaded) { continue; }
         cascade::core::MutePlugin m;
         m.key = cascade::core::pluginKey(p);
@@ -18042,7 +18040,7 @@ void AppWindow::rebuildMuteStates() {
         // was not being fed. Silence on behalf of a decoder the application
         // itself says is doing nothing is silence for a reason that is not a
         // reason.
-        m.running = !pluginIsStopped(m.key) && pluginRunner_.isFeeding(m.key);
+        m.running = !pluginIsStopped(m.key) && engine_.pluginRunner_.isFeeding(m.key);
         m.mutes = pluginMutes(p);
         // THE SAME ENUMERATION drawPluginPresets and the preset bars use - one
         // walk of this plugin's table, capped and filtered once, rather than
@@ -18072,7 +18070,7 @@ void AppWindow::rebuildMuteStates() {
         for (std::size_t i = 0; i < mine.size(); ++i) {
             m.presets.push_back(cascade::gui::userPresetToMutePreset(mine[i], i));
         }
-        muteStates_.push_back(std::move(m));
+        engine_.muteStates_.push_back(std::move(m));
     }
 }
 
@@ -18083,16 +18081,16 @@ std::string AppWindow::muteNameList(const std::vector<std::string>& names) {
 }
 
 std::string AppWindow::muteSubjectText() const {
-    return muteNameList(mutedBy_);
+    return muteNameList(engine_.mutedBy_);
 }
 
 void AppWindow::updateAudioMute() {
     cascade::core::TunePoint tune;
-    tune.deviceCentreHz = pipeline_.activeSource().centerFrequencyHz();
-    tune.tunedHz = tune.deviceCentreHz + pipeline_.vfoOffsetHz();
+    tune.deviceCentreHz = engine_.pipeline_.activeSource().centerFrequencyHz();
+    tune.tunedHz = tune.deviceCentreHz + engine_.pipeline_.vfoOffsetHz();
 
     const cascade::core::MuteDecision d =
-        cascade::core::muteActive(muteStates_, tune);
+        cascade::core::muteActive(engine_.muteStates_, tune);
 
     // ARE THE PLUGINS THAT WERE MUTING STILL RUNNING? This is what separates
     // "the user tuned away" from "the user stopped the plugin" - both end the
@@ -18101,12 +18099,12 @@ void AppWindow::updateAudioMute() {
     // general; see the note on cascade::core::anyStillRunning for the case
     // that proved the difference on the real application.
     const bool stillRunning =
-        cascade::core::anyStillRunning(muteStates_, mutedByKeys_);
+        cascade::core::anyStillRunning(engine_.muteStates_, engine_.mutedByKeys_);
 
     // THE EDGE, evaluated before anything is changed.
-    const bool edge = cascade::core::tuneAwayEdge(mutePrevOnPreset_, d.active);
+    const bool edge = cascade::core::tuneAwayEdge(engine_.mutePrevOnPreset_, d.active);
     if (edge && stillRunning) {
-        muteKeptRunning_ = true;  // the audio stays down until they answer
+        engine_.muteKeptRunning_ = true;  // the audio stays down until they answer
     }
     // WHAT THE DIALOG IS ABOUT is decided here, once, from the names that were
     // muting on the frame the user left the preset - and is withdrawn here too
@@ -18114,34 +18112,34 @@ void AppWindow::updateAudioMute() {
     // named stop. mutedBy_/mutedByKeys_ still hold the latched names at this
     // point (they are only recomputed below, and only while ON a preset), so
     // the edge captures the plugins the user actually tuned away from.
-    const bool wasOpen = mutePopup_.open;
-    mutePopup_ = cascade::core::advanceMutePopup(mutePopup_, d.active, edge,
-                                                 stillRunning, mutedBy_, mutedByKeys_);
-    if (mutePopup_.open && !wasOpen) {
-        mutePopupQueued_ = true;
-    } else if (!mutePopup_.open) {
+    const bool wasOpen = engine_.mutePopup_.open;
+    engine_.mutePopup_ = cascade::core::advanceMutePopup(engine_.mutePopup_, d.active, edge,
+                                                 stillRunning, engine_.mutedBy_, engine_.mutedByKeys_);
+    if (engine_.mutePopup_.open && !wasOpen) {
+        engine_.mutePopupQueued_ = true;
+    } else if (!engine_.mutePopup_.open) {
         // A withdrawal has to cancel a queue as well as an open window: the
         // queue is one frame long, and opening a dialog the frame after the
         // radio arrived on a preset would ask the question in the one place it
         // must never be asked.
-        mutePopupQueued_ = false;
+        engine_.mutePopupQueued_ = false;
     }
-    mutePrevOnPreset_ = d.active;
+    engine_.mutePrevOnPreset_ = d.active;
 
     // Coming BACK to a preset clears the latch, which is what re-arms the
     // popup: the user has to leave again to be asked again. So does the last
     // of those plugins stopping - there is then nothing to keep quiet for, and
     // a banner offering to stop a plugin that is not running would be a button
     // that does nothing.
-    if (d.active || !stillRunning) { muteKeptRunning_ = false; }
+    if (d.active || !stillRunning) { engine_.muteKeptRunning_ = false; }
 
-    const bool muted = d.active || muteKeptRunning_;
+    const bool muted = d.active || engine_.muteKeptRunning_;
     if (d.active) {
-        mutedBy_ = d.names;
-        mutedByKeys_ = d.keys;
+        engine_.mutedBy_ = d.names;
+        engine_.mutedByKeys_ = d.keys;
     } else if (!muted) {
-        mutedBy_.clear();
-        mutedByKeys_.clear();
+        engine_.mutedBy_.clear();
+        engine_.mutedByKeys_.clear();
     }
     // ...and when the latch is holding, mutedBy_ deliberately KEEPS the names
     // from the frame the user tuned away on. They are the plugins the banner
@@ -18165,8 +18163,8 @@ void AppWindow::updateAudioMute() {
     // Separate from the other two for the same reason they are separate from
     // each other: it is recomputed from the KEY every frame, and folding it
     // into either of the others would wipe whichever one it was folded into.
-    const bool txMute = transmitter_.transmitting() && !transmitMonitor_;
-    pipeline_.setAudioMuted(muted || userMuted_ || txMute);
+    const bool txMute = engine_.transmitter_.transmitting() && !engine_.transmitMonitor_;
+    engine_.pipeline_.setAudioMuted(muted || engine_.userMuted_ || txMute);
 }
 
 void AppWindow::stopMutingPlugins(const std::vector<std::string>& keys) {
@@ -18188,12 +18186,12 @@ void AppWindow::stopMutingPlugins(const std::vector<std::string>& keys) {
     // the user read as one decision.
     const std::vector<std::string> copy = keys;
     for (const std::string& k : copy) { recordPluginStopped(k, true); }
-    muteKeptRunning_ = false;
-    mutedBy_.clear();
-    mutedByKeys_.clear();
-    mutePopup_ = cascade::core::MutePopupSubject{};
-    mutePopupQueued_ = false;
-    mutePrevOnPreset_ = false;
+    engine_.muteKeptRunning_ = false;
+    engine_.mutedBy_.clear();
+    engine_.mutedByKeys_.clear();
+    engine_.mutePopup_ = cascade::core::MutePopupSubject{};
+    engine_.mutePopupQueued_ = false;
+    engine_.mutePrevOnPreset_ = false;
     refreshPluginRunner();
 }
 
@@ -18201,9 +18199,9 @@ void AppWindow::drawMutePopup() {
     // Opened here rather than at the edge: ImGui wants OpenPopup and
     // BeginPopupModal in the same ID stack, and the edge is detected before
     // this frame's windows exist.
-    if (mutePopupQueued_) {
+    if (engine_.mutePopupQueued_) {
         ImGui::OpenPopup(trId("Sound is muted##mute_popup"));
-        mutePopupQueued_ = false;
+        engine_.mutePopupQueued_ = false;
     }
     // Centred on the main window, because it is asking about something the
     // user just did to the whole radio and a dialog in the corner of a
@@ -18228,11 +18226,11 @@ void AppWindow::drawMutePopup() {
     // muteSubjectText() every frame re-labelled itself mid-question when the
     // receiver moved on to a second decoder's preset - see advanceMutePopup for
     // the measurement.
-    const std::string who = muteNameList(mutePopup_.names);
+    const std::string who = muteNameList(engine_.mutePopup_.names);
     // Withdrawn while the window was open - the radio arrived on a preset, or
     // the plugins it named were stopped from somewhere else. Closing beats
     // asking a question whose answer no longer applies.
-    if (!mutePopup_.open || who.empty()) {
+    if (!engine_.mutePopup_.open || who.empty()) {
         ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
         return;
@@ -18246,7 +18244,7 @@ void AppWindow::drawMutePopup() {
         // EXACTLY the plugins the message named (captured when it opened),
         // stopped and their mute ended by one command.
         std::string keys;
-        for (const std::string& k : mutePopup_.keys) { keys += (keys.empty() ? "" : "\n") + k; }
+        for (const std::string& k : engine_.mutePopup_.keys) { keys += (keys.empty() ? "" : "\n") + k; }
         submitCommand(cascade::core::cmd::makeText(FOXAPP_OP_DECODER_STOP_LIST, keys, 1));
         ImGui::CloseCurrentPopup();
     }
@@ -18257,11 +18255,11 @@ void AppWindow::drawMutePopup() {
         // audio here would make "keep it running" mean "and also undo the
         // muting", which is a different answer to a question nobody asked.
         // The banner is what stops that being a silent state.
-        muteKeptRunning_ = true;
+        engine_.muteKeptRunning_ = true;
         // The question has been answered, so it is no longer pending: clearing
         // the subject is what makes the NEXT one a fresh capture rather than a
         // second showing of this one.
-        mutePopup_ = cascade::core::MutePopupSubject{};
+        engine_.mutePopup_ = cascade::core::MutePopupSubject{};
         ImGui::CloseCurrentPopup();
     }
     ImGui::EndPopup();
@@ -18280,7 +18278,7 @@ std::string AppWindow::muteBannerSubject() const {
     // it is explained by nothing at all unless this is here, which is the
     // whole of the "silent with no reason" failure this product's idle
     // reasons already exist to prevent.
-    if (!muteKeptRunning_) { return {}; }
+    if (!engine_.muteKeptRunning_) { return {}; }
     return muteSubjectText();
 }
 
@@ -18326,7 +18324,7 @@ void AppWindow::drawMuteBanner(const cascade::gui::MuteBannerLayout& mb, const I
     if (ImGui::SmallButton(trId("Stop plugin##mute_banner"))) {
         // The plugins the banner is displaying, as one command.
         std::string keys;
-        for (const std::string& k : mutedByKeys_) { keys += (keys.empty() ? "" : "\n") + k; }
+        for (const std::string& k : engine_.mutedByKeys_) { keys += (keys.empty() ? "" : "\n") + k; }
         submitCommand(cascade::core::cmd::makeText(FOXAPP_OP_DECODER_STOP_LIST, keys, 1));
     }
     hovered = hovered || ImGui::IsItemHovered();
@@ -18385,10 +18383,10 @@ void AppWindow::drawPluginTuneControls() {
         bool refused = false;
     };
     std::vector<StaleGrant> stale;
-    for (const std::string& g : pluginTuneAllowed_) {
+    for (const std::string& g : engine_.pluginTuneAllowed_) {
         bool loadedHere = false;
         bool presentUnloaded = false;
-        for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
+        for (const cascade::core::LoadedPlugin& p : engine_.pluginHost_.plugins()) {
             if (cascade::core::PluginUi::tuneKey(p) != g) { continue; }
             if (p.loaded) {
                 loadedHere = true;
@@ -18402,8 +18400,8 @@ void AppWindow::drawPluginTuneControls() {
         }
         if (!loadedHere) { stale.push_back(StaleGrant{g, presentUnloaded}); }
     }
-    const std::string& denied = pluginUi_.lastDeniedPlugin();
-    const bool showDenied = !denied.empty() && !pluginUi_.tuneAllowed(denied);
+    const std::string& denied = engine_.pluginUi_.lastDeniedPlugin();
+    const bool showDenied = !denied.empty() && !engine_.pluginUi_.tuneAllowed(denied);
     if (stale.empty() && !showDenied) { return; }
 
     ImGui::SeparatorText(tr("Receiver control"));
@@ -18429,7 +18427,7 @@ void AppWindow::drawPluginTuneControls() {
         "says which of the two it is."));
     for (std::size_t i = 0; i < stale.size(); ++i) {
         ImGui::PushID(static_cast<int>(i));
-        bool allowed = pluginUi_.tuneAllowed(stale[i].file);
+        bool allowed = engine_.pluginUi_.tuneAllowed(stale[i].file);
         if (ImGui::Checkbox(stale[i].file.c_str(), &allowed)) {
             submitCommand(cascade::core::cmd::makeText(FOXAPI_OP_PLUGIN_GRANT, stale[i].file, 1,
                                                        allowed ? 1 : 0));
@@ -18456,13 +18454,13 @@ void AppWindow::pumpDecoderOutput() {
     // is bounded and drops silently by design (the DSP thread must never
     // block on the GUI), so draining only while the Plugins section happened
     // to be expanded would quietly lose decodes the user never knew existed.
-    for (cascade::core::DecodedLine& l : pluginRunner_.drainText()) {
+    for (cascade::core::DecodedLine& l : engine_.pluginRunner_.drainText()) {
         // COUNTED HERE BECAUSE THIS IS THE ONLY PLACE THAT SEES THEM ALL.
         // decoderLog_ is a bounded tail and drops its oldest entries, so its
         // size is not a count of anything; the status column's rate card
         // differences this cumulative figure over a window instead.
-        ++decoderLinesTotal_;
-        decoderLog_.push_back(std::move(l));
+        ++engine_.decoderLinesTotal_;
+        engine_.decoderLog_.push_back(std::move(l));
     }
     // The track-info plugin's status ("cannot reach the registry") lands in
     // the same log: it is the only place a user looks when a plugin is quiet.
@@ -18470,7 +18468,7 @@ void AppWindow::pumpDecoderOutput() {
         cascade::core::DecodedLine l;
         l.plugin = "Aircraft info";
         l.text = std::move(s);
-        decoderLog_.push_back(std::move(l));
+        engine_.decoderLog_.push_back(std::move(l));
     }
     // THE PATCH'S DECODERS, drained every frame for the same reason the
     // runner's are: its queue is bounded and drops. A line is SHOWN only when
@@ -18481,8 +18479,8 @@ void AppWindow::pumpDecoderOutput() {
     // Pictures: the newest per node, kept for its face.
     // From the receiver's patch runner and from EVERY patch radio's own
     // (0.99.17) - a decoder runs on whichever radio it is wired to.
-    std::vector<cascade::core::patch::Runner*> patchRunners{&pipeline_.patchRunner()};
-    for (auto& [rid, radio] : patchRadios_) {
+    std::vector<cascade::core::patch::Runner*> patchRunners{&engine_.pipeline_.patchRunner()};
+    for (auto& [rid, radio] : engine_.patchRadios_) {
         (void)rid;
         patchRunners.push_back(&radio->runner());
     }
@@ -18495,11 +18493,11 @@ void AppWindow::pumpDecoderOutput() {
     }
     for (cascade::core::patch::PatchLine& pl : patchLines) {
         {
-            PatchDecoderFace& face = patchDecoderFaces_[pl.node];
+            PatchDecoderFace& face = engine_.patchDecoderFaces_[pl.node];
             face.last = pl.text;
             ++face.lines;
         }
-        if (patchFirstLineLogged_.insert(pl.node).second) {
+        if (engine_.patchFirstLineLogged_.insert(pl.node).second) {
             // THAT a decoder produced text, and how much - never the text.
             // It is decoded traffic (a pager message, an aircraft), which
             // PRIVACY.md says no report carries, and this line used to carry
@@ -18511,25 +18509,25 @@ void AppWindow::pumpDecoderOutput() {
         }
         if (!patchDecoderIsShown(pl.node)) { continue; }
         // Onto the face of every Text out this decoder is wired to.
-        for (const cascade::core::patch::Wire& w : patchGraph_.wires()) {
+        for (const cascade::core::patch::Wire& w : engine_.patchGraph_.wires()) {
             if (w.from != pl.node) { continue; }
-            const cascade::core::patch::Node* dst = patchGraph_.find(w.to);
+            const cascade::core::patch::Node* dst = engine_.patchGraph_.find(w.to);
             if (dst == nullptr || dst->kind != cascade::core::patch::NodeKind::Sink) { continue; }
-            std::deque<std::string>& q = patchSinkLines_[w.to];
+            std::deque<std::string>& q = engine_.patchSinkLines_[w.to];
             q.push_back(pl.source + ": " + pl.text);
             while (q.size() > 200) { q.pop_front(); }
         }
-        ++decoderLinesTotal_;
+        ++engine_.decoderLinesTotal_;
         cascade::core::DecodedLine l;
         l.plugin = std::move(pl.source);
         l.text = std::move(pl.text);
-        decoderLog_.push_back(std::move(l));
+        engine_.decoderLog_.push_back(std::move(l));
     }
-    while (decoderLog_.size() > kDecoderLogMax) { decoderLog_.pop_front(); }
+    while (engine_.decoderLog_.size() > kDecoderLogMax) { engine_.decoderLog_.pop_front(); }
 }
 
 void AppWindow::drawDecoderStatusRows() {
-    const std::vector<cascade::core::DecoderStatus> st = pluginRunner_.status();
+    const std::vector<cascade::core::DecoderStatus> st = engine_.pluginRunner_.status();
 
     // THE OUTPUT WINDOW'S KEY IS DRAWN WHETHER OR NOT A DECODER IS RUNNING,
     // and this comment used to say so while the code did the opposite: the
@@ -18565,18 +18563,18 @@ void AppWindow::drawDecoderStatusRows() {
     // and no instances, and "No decoder is running" would put an idle decoder
     // on a machine that has none.
     const cascade::gui::ModuleCensus decoders = cascade::gui::censusModules(
-        pluginHost_.plugins(), cascade::gui::kDecoderCaps,
+        engine_.pluginHost_.plugins(), cascade::gui::kDecoderCaps,
         [this](const std::string& key) { return pluginIsStopped(key); });
     const bool anyDecoderFitted =
         decoders.live + decoders.stopped + decoders.refused > 0;
-    if (st.empty() || (pluginRunner_.activeCount() == 0 && !anyDecoderFitted)) {
+    if (st.empty() || (engine_.pluginRunner_.activeCount() == 0 && !anyDecoderFitted)) {
         // WRAPPED, not TextDisabled: this rail is narrow and a user may drag it
         // narrower, and a sentence that runs off the edge says nothing at all.
         ImGui::PushStyleColor(ImGuiCol_Text,
                               ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
         ImGui::TextWrapped("%s", cascade::gui::decoderAbsenceNote(decoders).c_str());
         ImGui::PopStyleColor();
-    } else if (pluginRunner_.activeCount() == 0) {
+    } else if (engine_.pluginRunner_.activeCount() == 0) {
         // A decoder IS fitted and none is running: the runner's own reason is
         // against the module in the Fitted modules window, which is the one
         // place this product answers "why is it silent".
@@ -18587,7 +18585,7 @@ void AppWindow::drawDecoderStatusRows() {
     // function for what it used to be. Anything held is enough to earn the
     // key; so is anything running, because a decoder that has not spoken yet
     // still deserves a window to speak into.
-    if (!decoderLog_.empty() || pluginRunner_.activeCount() > 0) {
+    if (!engine_.decoderLog_.empty() || engine_.pluginRunner_.activeCount() > 0) {
         if (ImGui::Button(decoderWindowOpen_ ? trId("Hide decoder output")
                                              : trId("Show decoder output"),
                           ImVec2(-1.0f, 0.0f))) {
@@ -18601,12 +18599,12 @@ void AppWindow::drawDecoderStatusRows() {
         // cumulative count pumpDecoderOutput keeps and never resets; when the
         // tail has dropped anything, the row says what the window holds rather
         // than letting its contents pass for the whole of it.
-        if (decoderLinesTotal_ > 0u) {
+        if (engine_.decoderLinesTotal_ > 0u) {
             const unsigned long long total =
-                static_cast<unsigned long long>(decoderLinesTotal_);
+                static_cast<unsigned long long>(engine_.decoderLinesTotal_);
             ImGui::TextDisabled(total == 1ull ? tr("%llu line decoded") : tr("%llu lines decoded"),
                                 total);
-            if (decoderLog_.size() >= kDecoderLogMax) {
+            if (engine_.decoderLog_.size() >= kDecoderLogMax) {
                 // WRAPPED, not TextDisabled, and on its own line: this rail is
                 // narrow and a sentence that runs off its edge says nothing at
                 // all.
@@ -18660,10 +18658,10 @@ void AppWindow::drawDecoderWindow() {
                   kSeparatePageW, kSeparatePageH)) {
         ImGui::Checkbox(trId("Follow"), &decoderAutoScroll_);
         ImGui::SameLine();
-        if (ImGui::SmallButton(trId("Clear##declog"))) { decoderLog_.clear(); }
+        if (ImGui::SmallButton(trId("Clear##declog"))) { engine_.decoderLog_.clear(); }
         ImGui::SameLine();
-        ImGui::TextDisabled(decoderLog_.size() == 1 ? tr("%d line") : tr("%d lines"),
-                            static_cast<int>(decoderLog_.size()));
+        ImGui::TextDisabled(engine_.decoderLog_.size() == 1 ? tr("%d line") : tr("%d lines"),
+                            static_cast<int>(engine_.decoderLog_.size()));
 
         // "IF I'M WATCHING ADS-B I CAN CLICK A BUTTON ON POCSAG" - the one
         // case a per-window preset bar cannot reach, because a text decoder
@@ -18673,10 +18671,10 @@ void AppWindow::drawDecoderWindow() {
 
         ImGui::BeginChild("##decoderlog", ImVec2(0.0f, 0.0f), true,
                           ImGuiWindowFlags_HorizontalScrollbar);
-    if (decoderLog_.empty()) {
+    if (engine_.decoderLog_.empty()) {
         ImGui::TextDisabled("%s", tr("Listening..."));
     }
-    for (const cascade::core::DecodedLine& l : decoderLog_) {
+    for (const cascade::core::DecodedLine& l : engine_.decoderLog_) {
         // The plugin name is dimmed and the text is not: with two decoders
         // running the tag is how you tell them apart, but the message is what
         // you are reading.
@@ -18737,9 +18735,9 @@ void AppWindow::drawTransmitSection() {
     // "ON AIR" showing and a lamp burning is the one thing on this panel that
     // has to be readable from across the room.
     const cascade::gui::TxLamp lamp = cascade::gui::txLampState(
-        transmitter_.haveSink(),
-        transmitter_.sink() != nullptr && transmitter_.sink()->faulted(),
-        transmitter_.transmitting());
+        engine_.transmitter_.haveSink(),
+        engine_.transmitter_.sink() != nullptr && engine_.transmitter_.sink()->faulted(),
+        engine_.transmitter_.transmitting());
     ImU32 colour = cascade::gui::theme::kInkFaint;
     switch (lamp) {
         case cascade::gui::TxLamp::NoRadio: colour = cascade::gui::theme::kInkFaint; break;
@@ -18749,7 +18747,7 @@ void AppWindow::drawTransmitSection() {
     }
     if (benchSwitchRow(trId("Transmit###transmit"), transmitOpen_,
                        tr(cascade::gui::txLampText(lamp)),
-                       colour, transmitter_.transmitting(), true,
+                       colour, engine_.transmitter_.transmitting(), true,
                        tr("Opens the transmitter: frequency, mode, power, input and the key.\n"
                           "Nothing here transmits until the key is held or latched, and the\n"
                           "page is the only place the key exists."))) {
@@ -18758,33 +18756,33 @@ void AppWindow::drawTransmitSection() {
 }
 
 void AppWindow::openTransmitRadio() {
-    transmitError_.clear();
+    engine_.transmitError_.clear();
     // SEEDED FROM THE RECEIVER when the receiver is a Pluto, because one board
     // doing both is the overwhelmingly common case and making the operator
     // retype an address they have already given is how a transmitter ends up
     // pointed at the wrong machine on a shared bench.
     if (transmitArgs_.empty()) {
-        transmitArgs_ = (sourceKind_ == "pluto" && !deviceArgs_.empty())
-                            ? deviceArgs_
+        transmitArgs_ = (engine_.sourceKind_ == "pluto" && !engine_.deviceArgs_.empty())
+                            ? engine_.deviceArgs_
                             : std::string("uri=ip:192.168.2.1");
     }
     auto tx = std::make_unique<cascade::source::PlutoTx>();
     if (!tx->open(transmitArgs_)) {
-        transmitError_ = tx->lastError();
+        engine_.transmitError_ = tx->lastError();
         cascade::core::diagWarnf("tx: could not open %s - %s", transmitArgs_.c_str(),
-                                 transmitError_.c_str());
+                                 engine_.transmitError_.c_str());
         return;
     }
     // THE POWER IS WRITTEN BEFORE THE SINK IS INSTALLED, and it is written
     // through the driver's own clamp - so a config file carrying a number
     // from a board with a different range lands on that board's quiet end
     // rather than on its loud one (source/pluto_tx.hpp, clampTxGainDb).
-    tx->setGainDb(transmitPowerDb_);
-    transmitPowerDb_ = tx->gainDb();
-    transmitter_.setSink(std::move(tx));
-    transmitter_.setMode(cascade::dsp::txModeFromIndex(transmitModeIndex_));
-    transmitter_.setInput(cascade::core::txInputFromIndex(transmitInputIndex_));
-    transmitter_.setToneHz(transmitToneHz_);
+    tx->setGainDb(engine_.transmitPowerDb_);
+    engine_.transmitPowerDb_ = tx->gainDb();
+    engine_.transmitter_.setSink(std::move(tx));
+    engine_.transmitter_.setMode(cascade::dsp::txModeFromIndex(engine_.transmitModeIndex_));
+    engine_.transmitter_.setInput(cascade::core::txInputFromIndex(engine_.transmitInputIndex_));
+    engine_.transmitter_.setToneHz(engine_.transmitToneHz_);
     followTransmitFrequency();
 }
 
@@ -18792,20 +18790,20 @@ void AppWindow::closeTransmitRadio() {
     // setSink(nullptr) stops and destroys whatever is there, which silences
     // it: the driver's stop() and its destructor both do, and Transmitter
     // unkeys before either runs.
-    transmitter_.setSink(nullptr);
-    transmitError_.clear();
+    engine_.transmitter_.setSink(nullptr);
+    engine_.transmitError_.clear();
 }
 
 void AppWindow::followTransmitFrequency() {
-    if (!transmitter_.haveSink()) { return; }
-    const double want = cascade::gui::txFrequencyHz(transmitSplit_, transmitSplitHz_,
+    if (!engine_.transmitter_.haveSink()) { return; }
+    const double want = cascade::gui::txFrequencyHz(engine_.transmitSplit_, engine_.transmitSplitHz_,
                                                     std::max(0.0, currentAbsoluteHz()));
     // ONLY WHEN IT HAS MOVED. This runs every frame and a Pluto's retune is a
     // WRITE on a socket; writing the same number a thousand times a second
     // would saturate the control connection and leave nothing for the
     // controls a hand is actually operating.
-    if (std::fabs(want - transmitter_.frequencyHz()) < 1.0) { return; }
-    if (!transmitter_.setFrequencyHz(want)) { transmitError_ = transmitter_.lastError(); }
+    if (std::fabs(want - engine_.transmitter_.frequencyHz()) < 1.0) { return; }
+    if (!engine_.transmitter_.setFrequencyHz(want)) { engine_.transmitError_ = engine_.transmitter_.lastError(); }
 }
 
 void AppWindow::drawTransmitPage() {
@@ -18828,9 +18826,9 @@ void AppWindow::drawTransmitPage() {
     // releases the latch and the PTT on any frame this is not set.
     transmitPageLive_ = true;
 
-    cascade::source::IqSink* sink = transmitter_.sink();
+    cascade::source::IqSink* sink = engine_.transmitter_.sink();
     const bool have = sink != nullptr;
-    const bool onAir = transmitter_.transmitting();
+    const bool onAir = engine_.transmitter_.transmitting();
 
     // THE ADDRESS IS SEEDED FOR THE EYE, not only for openTransmitRadio.
     // Doing it only inside the open left the field BLANK on the page, so the
@@ -18838,8 +18836,8 @@ void AppWindow::drawTransmitPage() {
     // after somebody had already pressed Open. Found on the first screenshot
     // of this page.
     if (transmitArgs_.empty()) {
-        transmitArgs_ = (sourceKind_ == "pluto" && !deviceArgs_.empty())
-                            ? deviceArgs_
+        transmitArgs_ = (engine_.sourceKind_ == "pluto" && !engine_.deviceArgs_.empty())
+                            ? engine_.deviceArgs_
                             : std::string("uri=ip:192.168.2.1");
     }
 
@@ -18884,12 +18882,12 @@ void AppWindow::drawTransmitPage() {
     }
     if (have) {
         ImGui::TextUnformatted(sink->name());
-    } else if (!transmitError_.empty()) {
+    } else if (!engine_.transmitError_.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kAlarmHot));
         // tr() at the point of drawing: the one sentence this page writes into
         // transmitError_ is marked below; a driver's own error falls through
         // in English.
-        ImGui::TextWrapped("%s", tr(transmitError_.c_str()));
+        ImGui::TextWrapped("%s", tr(engine_.transmitError_.c_str()));
         ImGui::PopStyleColor();
     } else {
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kInkFaint));
@@ -18905,11 +18903,11 @@ void AppWindow::drawTransmitPage() {
     // draft read the sink, so with no radio open the page lettered 0.000000
     // MHz under a control that was about to follow the receiver - a number
     // that was true about nothing.
-    double mhz = cascade::gui::txFrequencyHz(transmitSplit_, transmitSplitHz_,
+    double mhz = cascade::gui::txFrequencyHz(engine_.transmitSplit_, engine_.transmitSplitHz_,
                                              std::max(0.0, currentAbsoluteHz())) /
                  1e6;
     ImGui::SetNextItemWidth(180.0f);
-    ImGui::BeginDisabled(!transmitSplit_);
+    ImGui::BeginDisabled(!engine_.transmitSplit_);
     if (ImGui::InputDouble("MHz##txfreq", &mhz, 0.001, 0.1, "%.6f")) {
         submitCommand(cmd::makeNum(FOXAPI_OP_TX_SET_FREQUENCY, mhz * 1e6));
     }
@@ -18919,7 +18917,7 @@ void AppWindow::drawTransmitPage() {
     // LISTENING, so the key stays lit while it is on rather than being a tick
     // in a box that is easy to leave set.
     {
-        const bool on = transmitSplit_;
+        const bool on = engine_.transmitSplit_;
         if (on) {
             ImGui::PushStyleColor(ImGuiCol_Button,
                                   cascade::gui::theme::vec(cascade::gui::theme::kAlarm));
@@ -18933,7 +18931,7 @@ void AppWindow::drawTransmitPage() {
             // is (the dial, carried in the command), so the first thing that
             // happens is never a jump.
             submitCommand(cmd::makeNumInt(FOXAPI_OP_TX_SET_SPLIT, std::max(0.0, currentAbsoluteHz()),
-                                          transmitSplit_ ? 0 : 1));
+                                          engine_.transmitSplit_ ? 0 : 1));
         }
         if (on) { ImGui::PopStyleColor(2); }
     }
@@ -18944,7 +18942,7 @@ void AppWindow::drawTransmitPage() {
                                    "satellite each need, and the state in which you are not\n"
                                    "listening where you are transmitting."));
     }
-    if (!transmitSplit_) {
+    if (!engine_.transmitSplit_) {
         ImGui::SameLine();
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kInkFaint));
         ImGui::TextUnformatted(tr("following the receiver"));
@@ -18954,7 +18952,7 @@ void AppWindow::drawTransmitPage() {
     // --- the mode ------------------------------------------------------------
     for (int i = 0; i < cascade::dsp::kTxModeCount; ++i) {
         if (i > 0) { ImGui::SameLine(); }
-        const bool on = (transmitModeIndex_ == i);
+        const bool on = (engine_.transmitModeIndex_ == i);
         const cascade::dsp::TxMode m = cascade::dsp::txModeFromIndex(i);
         if (on) {
             ImGui::PushStyleColor(ImGuiCol_Button,
@@ -18975,7 +18973,7 @@ void AppWindow::drawTransmitPage() {
     double loud = 0.0;
     const bool haveRange = have && sink->gainRangeDb(quiet, loud);
     char power[32];
-    cascade::gui::formatTxPower(power, sizeof(power), transmitPowerDb_, quiet);
+    cascade::gui::formatTxPower(power, sizeof(power), engine_.transmitPowerDb_, quiet);
     // "TX POWER", not "POWER": the receiver's lamp on the scope bench is
     // "POWER" too, and the two are different words in most languages - the
     // lamp switches the receiver on, this sets how loud the transmitter is.
@@ -18988,7 +18986,7 @@ void AppWindow::drawTransmitPage() {
         // number is an ATTENUATION and 0 dB is full output. That inversion is
         // the whole reason gui/transmit_page.hpp exists: it happens once, in
         // one place, with a test on it.
-        float t = cascade::gui::txPowerFraction(transmitPowerDb_, quiet, loud);
+        float t = cascade::gui::txPowerFraction(engine_.transmitPowerDb_, quiet, loud);
         ImGui::SetNextItemWidth(240.0f);
         if (ImGui::SliderFloat("##txpower", &t, 0.0f, 1.0f, "")) {
             // TX_SET_POWER reads the board's own figure back.
@@ -19009,11 +19007,11 @@ void AppWindow::drawTransmitPage() {
     ImGui::TextUnformatted(tr("INPUT"));
     // WHILE THE MICROPHONE IS STILL OPENING the keys are dead: the worker owns
     // the microphone, and a second press could only queue a second open.
-    const bool micOpening = micOpen_.inFlight();
+    const bool micOpening = engine_.micOpen_.inFlight();
     ImGui::BeginDisabled(micOpening);
     for (int i = 0; i < cascade::core::kTxInputCount; ++i) {
         ImGui::SameLine();
-        const bool on = (transmitInputIndex_ == i);
+        const bool on = (engine_.transmitInputIndex_ == i);
         const cascade::core::TxInput in = cascade::core::txInputFromIndex(i);
         if (on) {
             ImGui::PushStyleColor(ImGuiCol_Button,
@@ -19033,9 +19031,9 @@ void AppWindow::drawTransmitPage() {
         if (on) { ImGui::PopStyleColor(2); }
     }
     ImGui::EndDisabled();
-    if (transmitInputIndex_ == static_cast<int>(cascade::core::TxInput::Tone)) {
+    if (engine_.transmitInputIndex_ == static_cast<int>(cascade::core::TxInput::Tone)) {
         ImGui::SameLine();
-        double tone = transmitToneHz_;
+        double tone = engine_.transmitToneHz_;
         ImGui::SetNextItemWidth(110.0f);
         if (ImGui::InputDouble("Hz##txtone", &tone, 50.0, 500.0, "%.0f")) {
             submitCommand(cmd::makeNum(FOXAPI_OP_TX_SET_TONE, tone));  // read back when applied
@@ -19044,7 +19042,7 @@ void AppWindow::drawTransmitPage() {
 
     // --- the audio meter -----------------------------------------------------
     {
-        const float peak = transmitter_.takeInputPeak();
+        const float peak = engine_.transmitter_.takeInputPeak();
         // DECAYED, NOT REPLACED. A bar redrawn from one 10 ms peak a frame is
         // unreadable at any frame rate; a fast rise and a slow fall is what a
         // meter with a needle in it does.
@@ -19114,7 +19112,7 @@ void AppWindow::drawTransmitPage() {
         // on its own failsafe and on the frozen-window handle - so the key is
         // drawn from what the transmitter says, and a click is only a PRESS,
         // applied by the frame loop beside the PTT (see drawUi, txPageKey).
-        const bool latchedNow = transmitter_.latched();
+        const bool latchedNow = engine_.transmitter_.latched();
         if (latchedNow) {
             ImGui::PushStyleColor(ImGuiCol_Button,
                                   cascade::gui::theme::vec(cascade::gui::theme::kAlarm));
@@ -19141,7 +19139,7 @@ void AppWindow::drawTransmitPage() {
         // the page at its default width and read "Listen while trans" - a
         // control that has clipped its own label looks like a design decision
         // rather than a fault.
-        bool monitor = transmitMonitor_;
+        bool monitor = engine_.transmitMonitor_;
         if (ImGui::Checkbox(trId("Listen while transmitting"), &monitor)) {
             submitCommand(cmd::makeInt(FOXAPI_OP_TX_SET_MONITOR, monitor ? 1 : 0));
         }
@@ -19154,13 +19152,13 @@ void AppWindow::drawTransmitPage() {
     }
 
     // --- what happened -------------------------------------------------------
-    const std::string autoReason = transmitter_.lastAutoUnkeyReason();
+    const std::string autoReason = engine_.transmitter_.lastAutoUnkeyReason();
     if (!autoReason.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kAmber));
         ImGui::TextWrapped("%s", autoReason.c_str());
         ImGui::PopStyleColor();
     }
-    const std::string txError = transmitter_.lastError();
+    const std::string txError = engine_.transmitter_.lastError();
     if (!txError.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kAlarmHot));
         ImGui::TextWrapped("%s", txError.c_str());
@@ -19683,7 +19681,7 @@ static constexpr std::size_t kScopeMpxFftSize = 8192;
 // Is there a multiplex to look at? Exactly one mode produces one, and this
 // is the only place that fact is written down in the interface.
 bool AppWindow::pipelineIsWfm() const {
-    return pipeline_.demodMode() == cascade::dsp::DemodMode::WFM;
+    return engine_.pipeline_.demodMode() == cascade::dsp::DemodMode::WFM;
 }
 
 // The saved position against today's mode. The SETTING is not rewritten - a
@@ -19702,13 +19700,13 @@ void AppWindow::gatherDemodScope(cascade::gui::DemodScopeFeed& feed) {
     const bool mpx = (sig == cascade::gui::ScopeSignal::Mpx);
 
     feed.audioRateHz = cascade::core::Pipeline::kAudioRateHz;
-    feed.iqRateHz = pipeline_.channelRateHz();
+    feed.iqRateHz = engine_.pipeline_.channelRateHz();
 
     // WHOSE SOUND IS IN THE TAP. Empty unless a plugin has taken the speakers
     // through CASCADE_CAP_AUDIO_OUT - the tap sits BELOW that handover (see
     // Pipeline::scopeAudio), so when one has, the trace really is the plugin's
     // audio and the face says so on the glass.
-    scopeAudioFrom_ = pluginRunner_.playingPlugin();
+    scopeAudioFrom_ = engine_.pluginRunner_.playingPlugin();
     feed.audioFrom = scopeAudioFrom_.empty() ? nullptr : scopeAudioFrom_.c_str();
 
     // LIVE MEANS "SAMPLES ARRIVED SINCE THE LAST FRAME", measured on the tap
@@ -19717,11 +19715,11 @@ void AppWindow::gatherDemodScope(cascade::gui::DemodScopeFeed& feed) {
     // line at zero volts - which would be a measurement nobody made.
     const double nowS = ImGui::GetTime();
     const bool audioLive =
-        cascade::gui::scopeTapLive(scopeAudioLive_, pipeline_.scopeAudio().written(), nowS);
+        cascade::gui::scopeTapLive(scopeAudioLive_, engine_.pipeline_.scopeAudio().written(), nowS);
     const bool iqLive =
-        cascade::gui::scopeTapLive(scopeIqLive_, pipeline_.scopeIq().written(), nowS);
+        cascade::gui::scopeTapLive(scopeIqLive_, engine_.pipeline_.scopeIq().written(), nowS);
     const bool mpxLive =
-        cascade::gui::scopeTapLive(scopeMpxLive_, pipeline_.scopeMpx().written(), nowS);
+        cascade::gui::scopeTapLive(scopeMpxLive_, engine_.pipeline_.scopeMpx().written(), nowS);
     scopeLive_ = baseband ? iqLive : (mpx ? mpxLive : audioLive);
     feed.live = scopeLive_;
     if (!scopeLive_) { return; }
@@ -19756,8 +19754,8 @@ void AppWindow::gatherDemodScope(cascade::gui::DemodScopeFeed& feed) {
         }
         scopeAudioBuf_.resize(fftSize);
         const std::size_t got =
-            mpx ? pipeline_.scopeMpx().snapshot(scopeAudioBuf_.data(), fftSize)
-                : pipeline_.scopeAudio().snapshot(scopeAudioBuf_.data(), fftSize);
+            mpx ? engine_.pipeline_.scopeMpx().snapshot(scopeAudioBuf_.data(), fftSize)
+                : engine_.pipeline_.scopeAudio().snapshot(scopeAudioBuf_.data(), fftSize);
         if (got < fftSize) { return; }
         scopeFftIn_.resize(fftSize);
         scopeFftOut_.resize(fftSize);
@@ -19804,7 +19802,7 @@ void AppWindow::gatherDemodScope(cascade::gui::DemodScopeFeed& feed) {
     // back short and the sweep would be drawn from whatever fitted, which is a
     // time base that quietly stops meaning what the readout says.
     const std::size_t cap =
-        baseband ? pipeline_.scopeIq().capacity() : pipeline_.scopeAudio().capacity();
+        baseband ? engine_.pipeline_.scopeIq().capacity() : engine_.pipeline_.scopeAudio().capacity();
     std::size_t want = sweep * 2;
     if (want > cap) { want = cap; }
     if (sweep > want) { sweep = want; }
@@ -19814,7 +19812,7 @@ void AppWindow::gatherDemodScope(cascade::gui::DemodScopeFeed& feed) {
 
     if (!baseband) {
         scopeAudioBuf_.resize(want);
-        const std::size_t got = pipeline_.scopeAudio().snapshot(scopeAudioBuf_.data(), want);
+        const std::size_t got = engine_.pipeline_.scopeAudio().snapshot(scopeAudioBuf_.data(), want);
         if (got < sweep) { return; }
         std::size_t start = got - sweep;  // free-running: the newest sweep
         if (search > 0) {
@@ -19828,7 +19826,7 @@ void AppWindow::gatherDemodScope(cascade::gui::DemodScopeFeed& feed) {
     }
 
     scopeIqBuf_.resize(want);
-    const std::size_t got = pipeline_.scopeIq().snapshot(scopeIqBuf_.data(), want);
+    const std::size_t got = engine_.pipeline_.scopeIq().snapshot(scopeIqBuf_.data(), want);
     if (got < sweep) { return; }
     // Split into two parallel arrays: every reduction below wants a stride of
     // one, and the face is explicit that it allocates nothing of its own.
@@ -20071,8 +20069,8 @@ void AppWindow::drawDemodScopePage() {
 }
 
 void AppWindow::removeBlockedPlugin(const std::string& fileName) {
-    installError_.clear();
-    installReport_.clear();
+    engine_.installError_.clear();
+    engine_.installReport_.clear();
 
     // THROUGH detachAndUnloadPlugins(), NEVER unloadAll() DIRECTLY. This used
     // to call unloadAll() on its own, on the reasoning that a blocked plugin
@@ -20087,16 +20085,16 @@ void AppWindow::removeBlockedPlugin(const std::string& fileName) {
     // that did not use it.
     detachAndUnloadPlugins();
     std::string err;
-    if (pluginRepo_.removeQuarantined(pluginDir_, fileName, pluginQuarantineSuffix(), err)) {
+    if (engine_.pluginRepo_.removeQuarantined(engine_.pluginDir_, fileName, pluginQuarantineSuffix(), err)) {
         // The same sentence removeInstalledPlugin() writes, and translated the
         // same way: it was the one install/remove report still joined in
         // English. Built as a string, since a file name has no set length.
         const char* fmt = tr("Removed %s");
         std::vector<char> buf(std::strlen(fmt) + fileName.size() + 8);
         cascade::core::formatUtf8(buf.data(), buf.size(), fmt, fileName.c_str());
-        installReport_ = buf.data();
+        engine_.installReport_ = buf.data();
     } else {
-        installError_ = err;
+        engine_.installError_ = err;
     }
     rescanPlugins();
 }
@@ -20105,16 +20103,16 @@ void AppWindow::reportPluginTestResult() {
     // Bounded-run diagnostic only (CASCADE_PLUGIN_TEST). Machine-readable on
     // purpose: the install gate is a UI decision, and this is the only way a
     // headless run can prove which way it went.
-    if (!catalogError_.empty()) {
+    if (!engine_.catalogError_.empty()) {
         std::printf("plugin catalogue: FAILED frame=%d %s\n", frameCounter_,
-                    catalogError_.c_str());
+                    engine_.catalogError_.c_str());
         return;
     }
     std::printf("plugin catalogue: frame=%d entries=%d\n", frameCounter_,
-                static_cast<int>(catalog_.size()));
-    for (int i = 0; i < static_cast<int>(catalog_.size()); ++i) {
+                static_cast<int>(engine_.catalog_.size()));
+    for (int i = 0; i < static_cast<int>(engine_.catalog_.size()); ++i) {
         const cascade::core::PluginCatalogEntry& e =
-            catalog_[static_cast<std::size_t>(i)];
+            engine_.catalog_[static_cast<std::size_t>(i)];
         // Both answers: what the gate says with the acknowledgement UNTICKED
         // (what the user first sees) and with it ticked. A gate that stopped
         // requiring the tick would print install=ok on the first of these.
@@ -20136,19 +20134,19 @@ void AppWindow::reportPluginStatus() {
     // "the plugin is disabled" is a claim about what is MAPPED in this
     // process, and a screenshot of a red row proves nothing about that. Every
     // number here is read from the live objects the GUI draws from.
-    const std::vector<cascade::core::LoadedPlugin>& list = pluginHost_.plugins();
+    const std::vector<cascade::core::LoadedPlugin>& list = engine_.pluginHost_.plugins();
     const std::size_t blocked = cascade::core::PluginRepo::blockedCount(
-        pluginInventory_.plugins, pluginInventory_.policies);
+        engine_.pluginInventory_.plugins, engine_.pluginInventory_.policies);
     std::printf("plugin status: dir=%s candidates=%d loaded=%d blocked=%d managed=%d "
                 "unmanaged=%d\n",
-                pluginDir_.c_str(), static_cast<int>(list.size()),
-                static_cast<int>(pluginHost_.loadedCount()), static_cast<int>(blocked),
-                static_cast<int>(pluginInventory_.plugins.size()),
-                static_cast<int>(pluginInventory_.unmanaged.size()));
-    if (!pluginEnforceError_.empty()) {
-        std::printf("plugin enforce: %s\n", pluginEnforceError_.c_str());
+                engine_.pluginDir_.c_str(), static_cast<int>(list.size()),
+                static_cast<int>(engine_.pluginHost_.loadedCount()), static_cast<int>(blocked),
+                static_cast<int>(engine_.pluginInventory_.plugins.size()),
+                static_cast<int>(engine_.pluginInventory_.unmanaged.size()));
+    if (!engine_.pluginEnforceError_.empty()) {
+        std::printf("plugin enforce: %s\n", engine_.pluginEnforceError_.c_str());
     }
-    for (const std::string& note : pluginInventory_.notes) {
+    for (const std::string& note : engine_.pluginInventory_.notes) {
         std::printf("plugin inventory: %s\n", note.c_str());
     }
     for (const cascade::core::LoadedPlugin& p : list) {
@@ -20170,11 +20168,11 @@ void AppWindow::reportPluginStatus() {
     // a rate that is obviously fine.
     std::printf("source status: kind=%s name=%s deviceRate=%.6f chainRate=%.6f "
                 "centre=%.0f running=%d error=%s\n",
-                sourceKind_.c_str(), pipeline_.activeSourceName(),
-                pipeline_.activeSource().sampleRateHz(), pipeline_.inputRateHz(),
-                pipeline_.activeSource().centerFrequencyHz(),
-                pipeline_.running() ? 1 : 0,
-                sourceError_.empty() ? "-" : sourceError_.c_str());
+                engine_.sourceKind_.c_str(), engine_.pipeline_.activeSourceName(),
+                engine_.pipeline_.activeSource().sampleRateHz(), engine_.pipeline_.inputRateHz(),
+                engine_.pipeline_.activeSource().centerFrequencyHz(),
+                engine_.pipeline_.running() ? 1 : 0,
+                engine_.sourceError_.empty() ? "-" : engine_.sourceError_.c_str());
 
     // The RUNNER, reported separately from the host, because "loaded" and
     // "being fed real audio" are different claims and the whole point of this
@@ -20186,12 +20184,12 @@ void AppWindow::reportPluginStatus() {
     // permission story: a request with no grant is a refusal the user can undo,
     // and a grant with no request is a permission nothing is using.
     std::printf("plugin ui: tracks=%d paths=%d panels=%d tuneRequests=%d tuneGranted=%d\n",
-                static_cast<int>(pluginUi_.tracks().size()),
-                static_cast<int>(pluginUi_.paths().size()),
-                static_cast<int>(pluginUi_.panels().size()),
-                static_cast<int>(pluginUi_.tuneRequesters().size()),
-                static_cast<int>(pluginTuneAllowed_.size()));
-    for (const cascade::core::HostPanel& p : pluginUi_.panels()) {
+                static_cast<int>(engine_.pluginUi_.tracks().size()),
+                static_cast<int>(engine_.pluginUi_.paths().size()),
+                static_cast<int>(engine_.pluginUi_.panels().size()),
+                static_cast<int>(engine_.pluginUi_.tuneRequesters().size()),
+                static_cast<int>(engine_.pluginTuneAllowed_.size()));
+    for (const cascade::core::HostPanel& p : engine_.pluginUi_.panels()) {
         std::printf("plugin panel: name=%s title=\"%s\" columns=%d rows=%d\n",
                     p.plugin.c_str(), p.title.c_str(), static_cast<int>(p.headings.size()),
                     static_cast<int>(p.rows.size()));
@@ -20201,7 +20199,7 @@ void AppWindow::reportPluginStatus() {
                     im.plugin.c_str(), im.width, im.height, im.format, im.complete ? 1 : 0,
                     static_cast<unsigned long long>(im.sequence), im.pixels.size());
     }
-    for (const cascade::core::HostTrack& t : pluginUi_.tracks()) {
+    for (const cascade::core::HostTrack& t : engine_.pluginUi_.tracks()) {
         std::printf("plugin track: from=%s id=%s label=%s pos=%.4f,%.4f kind=%u\n",
                     t.plugin.c_str(), t.t.id, t.t.label, t.t.latDeg, t.t.lonDeg, t.t.kind);
     }
@@ -20210,8 +20208,8 @@ void AppWindow::reportPluginStatus() {
     // "stopped=0"), because "no line" and "nothing stopped" have to be
     // distinguishable in a bounded run's output - the same rule the counts
     // above follow.
-    std::printf("plugin stopped: count=%d\n", static_cast<int>(pluginsStopped_.size()));
-    for (const std::string& k : pluginsStopped_) {
+    std::printf("plugin stopped: count=%d\n", static_cast<int>(engine_.pluginsStopped_.size()));
+    for (const std::string& k : engine_.pluginsStopped_) {
         std::printf("plugin stopped: file=%s\n", k.c_str());
     }
     // THE SNAPSHOT THE MUTE DECISION IS TAKEN FROM, one line per loaded
@@ -20222,7 +20220,7 @@ void AppWindow::reportPluginStatus() {
     // find out which plugins mute by default is to read five checkboxes off a
     // screenshot, and a README written from a screenshot is how the shipped
     // documentation came to name two plugins that do not consume I/Q.
-    for (const cascade::core::MutePlugin& m : muteStates_) {
+    for (const cascade::core::MutePlugin& m : engine_.muteStates_) {
         std::printf("plugin mute: file=%s name=%s running=%d mutes=%d presets=%d\n",
                     m.key.c_str(), m.name.c_str(), m.running ? 1 : 0, m.mutes ? 1 : 0,
                     static_cast<int>(m.presets.size()));
@@ -20231,13 +20229,13 @@ void AppWindow::reportPluginStatus() {
     // the counts above are: in a bounded run "no line" and "nothing is muting"
     // must not look the same.
     std::printf("audio mute: muted=%d by=%s\n",
-                pipeline_.audioMuted() ? 1 : 0, muteSubjectText().c_str());
+                engine_.pipeline_.audioMuted() ? 1 : 0, muteSubjectText().c_str());
     std::printf("plugin runner: active=%d lines=%d audioFed=%llu iqFed=%llu\n",
-                static_cast<int>(pluginRunner_.activeCount()),
-                static_cast<int>(decoderLog_.size()),
-                static_cast<unsigned long long>(pluginRunner_.audioFramesFed()),
-                static_cast<unsigned long long>(pluginRunner_.iqFramesFed()));
-    for (const cascade::core::DecoderStatus& s : pluginRunner_.status()) {
+                static_cast<int>(engine_.pluginRunner_.activeCount()),
+                static_cast<int>(engine_.decoderLog_.size()),
+                static_cast<unsigned long long>(engine_.pluginRunner_.audioFramesFed()),
+                static_cast<unsigned long long>(engine_.pluginRunner_.iqFramesFed()));
+    for (const cascade::core::DecoderStatus& s : engine_.pluginRunner_.status()) {
         std::printf("plugin decode: name=%s state=%s%s\n", s.plugin.c_str(),
                     s.reason == cascade::core::DecoderIdleReason::Running ? "running"
                                                                           : "idle",
@@ -20248,10 +20246,10 @@ void AppWindow::reportPluginStatus() {
     // The last few decoded lines: the only evidence that the chain from
     // antenna to plugin text actually closed.
     std::size_t shown = 0;
-    for (auto it = decoderLog_.rbegin(); it != decoderLog_.rend() && shown < 5; ++it, ++shown) {
+    for (auto it = engine_.decoderLog_.rbegin(); it != engine_.decoderLog_.rend() && shown < 5; ++it, ++shown) {
         std::printf("plugin text: [%s] %s\n", it->plugin.c_str(), it->text.c_str());
     }
-    for (const cascade::core::BlockedPlugin& b : pluginBlocked_) {
+    for (const cascade::core::BlockedPlugin& b : engine_.pluginBlocked_) {
         // mapped=1 would mean enforcement failed: the host would have a record
         // of a file it was supposed never to see.
         int mapped = 0;
@@ -20287,19 +20285,19 @@ void AppWindow::loadBandPlan() {
     // only a directory that is really there can produce an error worth
     // showing.
     if (!std::filesystem::is_directory(std::filesystem::path(dir), ec)) { return; }
-    bandPlanChoices_ = cascade::core::BandPlan::available(dir);
+    engine_.bandPlanChoices_ = cascade::core::BandPlan::available(dir);
     // Cleared before every attempt so that picking a working plan after a
     // failed one actually clears the red text — a stale error would outlive
     // the condition that caused it and make a healthy overlay look broken.
-    bandPlanError_.clear();
+    engine_.bandPlanError_.clear();
     std::string err;
-    if (!bandPlan_.loadSelection(dir, bandPlanSelection_, err)) { bandPlanError_ = err; }
+    if (!engine_.bandPlan_.loadSelection(dir, engine_.bandPlanSelection_, err)) { engine_.bandPlanError_ = err; }
 }
 
 void AppWindow::drawBandPlanOverlay(float x0, float y0, float width, float height) {
-    if (bandPlan_.entries().empty()) { return; }
+    if (engine_.bandPlan_.entries().empty()) { return; }
     const std::vector<const cascade::core::BandEntry*> vis =
-        bandPlan_.visible(scale_.viewLowHz(), scale_.viewHighHz());
+        engine_.bandPlan_.visible(scale_.viewLowHz(), scale_.viewHighHz());
     if (vis.empty()) { return; }
 
     // Size and palette (issue #1). The two enums are declared in the same
@@ -20418,7 +20416,7 @@ void AppWindow::drawBandPlanOverlay(float x0, float y0, float width, float heigh
 // --- Recorder (P6) -------------------------------------------------------------
 
 void AppWindow::drawRecorderSection() {
-    const bool taping = iqRecorder_.recording() || audioRecorder_.recording();
+    const bool taping = engine_.iqRecorder_.recording() || engine_.audioRecorder_.recording();
     const bool recorderOpen =
         benchSection(trId("Recorder"), false, taping ? tr("REC") : tr("OFF"),
                      taping ? cascade::gui::theme::kAlarm : cascade::gui::theme::kPhosphor,
@@ -20428,7 +20426,7 @@ void AppWindow::drawRecorderSection() {
 
     // Destination, always visible so the user knows where takes land. The
     // directory is created by Recorder::start on the first record.
-    ImGui::TextDisabled("%s", recordDir_.c_str());
+    ImGui::TextDisabled("%s", engine_.recordDir_.c_str());
 
     // IQ take: baseband at the DSP input rate through the pipeline's raw
     // tap. Toggle button: label and action swap with the recorder state.
@@ -20436,7 +20434,7 @@ void AppWindow::drawRecorderSection() {
     // install the tap AFTER the recorder accepts (the Pipeline contract), the
     // stops take it off first - the web remote's and the Record key's own path.
     namespace cmd = cascade::core::cmd;
-    if (!iqRecorder_.recording()) {
+    if (!engine_.iqRecorder_.recording()) {
         if (ImGui::Button(trId("Record IQ"), ImVec2(-FLT_MIN, 0.0f))) {
             submitCommand(cmd::makeInt(FOXAPI_OP_RECORD_IQ, 1));
         }
@@ -20447,13 +20445,13 @@ void AppWindow::drawRecorderSection() {
         // Elapsed is wall time since the take started; samples/MB are the
         // recorder's own accepted-byte counters, so they never overclaim.
         ImGui::Text(tr("IQ %.1f s | %llu samples | %.1f MB"),
-                    ImGui::GetTime() - iqRecordStartS_,
-                    static_cast<unsigned long long>(iqRecorder_.samplesWritten()),
-                    static_cast<double>(iqRecorder_.bytesWritten()) / 1.0e6);
+                    ImGui::GetTime() - engine_.iqRecordStartS_,
+                    static_cast<unsigned long long>(engine_.iqRecorder_.samplesWritten()),
+                    static_cast<double>(engine_.iqRecorder_.bytesWritten()) / 1.0e6);
     }
 
     // Audio take: the post-chain 48 kHz output (same point audioTap uses).
-    if (!audioRecorder_.recording()) {
+    if (!engine_.audioRecorder_.recording()) {
         // startAudioRecording, not the start/install pair that used to be here:
         // the Record key presses this same button (see applyKeyAction), and the
         // tap-after-start ordering the Pipeline contract requires is not
@@ -20466,9 +20464,9 @@ void AppWindow::drawRecorderSection() {
             submitCommand(cmd::makeInt(FOXAPI_OP_RECORD_AUDIO, 0));
         }
         ImGui::Text(tr("Audio %.1f s | %llu samples | %.1f MB"),
-                    ImGui::GetTime() - audioRecordStartS_,
-                    static_cast<unsigned long long>(audioRecorder_.samplesWritten()),
-                    static_cast<double>(audioRecorder_.bytesWritten()) / 1.0e6);
+                    ImGui::GetTime() - engine_.audioRecordStartS_,
+                    static_cast<unsigned long long>(engine_.audioRecorder_.samplesWritten()),
+                    static_cast<double>(engine_.audioRecorder_.bytesWritten()) / 1.0e6);
         // THE TAKE IS SILENT, and this is the only place that can say so while
         // it still matters. The mute sits above the mono downmix the recorder
         // is fed from (Pipeline::processAudioBlock), deliberately - a recording
@@ -20484,7 +20482,7 @@ void AppWindow::drawRecorderSection() {
         // saying otherwise here would send someone looking for a fault in a
         // file that is fine.
         const std::string mutedWho = muteSubjectText();
-        if (pipeline_.audioMuted() && !mutedWho.empty()) {
+        if (engine_.pipeline_.audioMuted() && !mutedWho.empty()) {
             ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
             ImGui::TextWrapped(tr("Muted by %s - this take is silent"),
                                mutedWho.c_str());
@@ -20495,20 +20493,20 @@ void AppWindow::drawRecorderSection() {
     // Recording is allowed while stopped (the file just stays empty until
     // samples flow), but say so instead of leaving frozen counters to read
     // like a bug. Toolbar Stop DURING a take finalizes it (drawToolbar).
-    if (!pipeline_.running() &&
-        (iqRecorder_.recording() || audioRecorder_.recording())) {
+    if (!engine_.pipeline_.running() &&
+        (engine_.iqRecorder_.recording() || engine_.audioRecorder_.recording())) {
         ImGui::TextDisabled("%s", tr("(press Play to feed the recorders)"));
     }
 
-    if (!recordError_.empty()) {
+    if (!engine_.recordError_.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, kErrorRed);
-        ImGui::TextWrapped("%s", recordError_.c_str());
+        ImGui::TextWrapped("%s", engine_.recordError_.c_str());
         ImGui::PopStyleColor();
     }
     // A notice, not an error: in the ordinary muted text, never the red.
-    if (!recordNotice_.empty()) {
+    if (!engine_.recordNotice_.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-        ImGui::TextWrapped("%s", recordNotice_.c_str());
+        ImGui::TextWrapped("%s", engine_.recordNotice_.c_str());
         ImGui::PopStyleColor();
     }
 }
@@ -20519,18 +20517,18 @@ void AppWindow::stopIqRecording() {
     // (the pointer swap serializes on the mutex the DSP thread holds across
     // writes), so stop() — which patches the header and closes the file —
     // cannot overlap a write. Both calls are no-ops when already idle.
-    pipeline_.setIqRecorder(nullptr);
-    iqRecorder_.stop();
+    engine_.pipeline_.setIqRecorder(nullptr);
+    engine_.iqRecorder_.stop();
 }
 
 void AppWindow::stopAudioRecording() {
-    pipeline_.setAudioRecorder(nullptr);
-    audioRecorder_.stop();
+    engine_.pipeline_.setAudioRecorder(nullptr);
+    engine_.audioRecorder_.stop();
 }
 
 bool AppWindow::endTakes(bool iq, bool audio, const char* why, bool asError) {
-    const bool endIq = iq && iqRecorder_.recording();
-    const bool endAudio = audio && audioRecorder_.recording();
+    const bool endIq = iq && engine_.iqRecorder_.recording();
+    const bool endAudio = audio && engine_.audioRecorder_.recording();
     if (!endIq && !endAudio) { return false; }
     if (endIq) { stopIqRecording(); }
     if (endAudio) { stopAudioRecording(); }
@@ -20550,7 +20548,7 @@ bool AppWindow::endTakes(bool iq, bool audio, const char* why, bool asError) {
     // still true and may be the more useful of the two. A NOTICE (a source
     // the user chose to change) is not an error at all and must not light the
     // web page's FAIL lamp, which reads recordError; it has its own field.
-    std::string& slot = asError ? recordError_ : recordNotice_;
+    std::string& slot = asError ? engine_.recordError_ : engine_.recordNotice_;
     if (slot.empty()) {
         slot = line;
     } else if (slot.find(line) == std::string::npos) {
@@ -20572,7 +20570,7 @@ void AppWindow::startReceiver() {
     // seen at all - and the take would carry on across it. Asked here, while
     // the latch is still up.
     endTakesOnFault();
-    pipeline_.start();
+    engine_.pipeline_.start();
     // A start from a faulted, stopped pipeline clears the latch, so whatever
     // the latch does next is a NEW fault: forget the old edge. Without this a
     // second fault landing within a frame of the START (a file or radio that
@@ -20580,7 +20578,7 @@ void AppWindow::startReceiver() {
     // a take armed after the first fault ran straight on through it. A start
     // that found the pipeline already running changed nothing, and then the
     // latch is down and faultSeen_ already false.
-    faultSeen_ = false;
+    engine_.faultSeen_ = false;
 }
 
 void AppWindow::stopReceiver() {
@@ -20591,7 +20589,7 @@ void AppWindow::stopReceiver() {
     // stops nothing leaves an armed take alone. Silent, as it always was: the
     // user pressed Stop, and "the recording ended because you stopped" is
     // not news.
-    if (pipeline_.running() || pipeline_.faulted()) {
+    if (engine_.pipeline_.running() || engine_.pipeline_.faulted()) {
         stopIqRecording();
         stopAudioRecording();
     }
@@ -20600,7 +20598,7 @@ void AppWindow::stopReceiver() {
     // faulted pipeline, run flag already down, it still joins the threads
     // the fault left behind. Joins within ~10 ms, an acceptable one-off hitch
     // on the GUI thread for a Stop.
-    pipeline_.stop();
+    engine_.pipeline_.stop();
 }
 
 void AppWindow::endTakesOnFault() {
@@ -20608,9 +20606,9 @@ void AppWindow::endTakesOnFault() {
     // their choice (it waits for Play like any take armed while stopped), and
     // ending it every frame would make Record look broken while the lamp is
     // lit. Pipeline::start clears the latch, so the next fault is a new edge.
-    const bool faulted = pipeline_.faulted();
-    if (faulted && !faultSeen_) { endTakes(true, true, "the receiver stopped on a fault", true); }
-    faultSeen_ = faulted;
+    const bool faulted = engine_.pipeline_.faulted();
+    if (faulted && !engine_.faultSeen_) { endTakes(true, true, "the receiver stopped on a fault", true); }
+    engine_.faultSeen_ = faulted;
 }
 
 void AppWindow::installSource(std::unique_ptr<cascade::source::IqSource> src) {
@@ -20618,23 +20616,23 @@ void AppWindow::installSource(std::unique_ptr<cascade::source::IqSource> src) {
     // a take ended afterwards would already hold the first blocks of the new
     // source.
     endTakes(true, false, "the source changed", false);
-    pipeline_.setSource(std::move(src));
+    engine_.pipeline_.setSource(std::move(src));
 }
 
 bool AppWindow::startAudioRecording() {
-    if (audioRecorder_.recording()) { return true; }
+    if (engine_.audioRecorder_.recording()) { return true; }
     std::string err;
-    if (!audioRecorder_.start(cascade::core::RecordKind::Audio, recordDir_,
+    if (!engine_.audioRecorder_.start(cascade::core::RecordKind::Audio, engine_.recordDir_,
                               cascade::core::Pipeline::kAudioRateHz, err)) {
-        recordError_ = err;
+        engine_.recordError_ = err;
         return false;
     }
-    recordError_.clear();
-    recordNotice_.clear();
-    audioRecordStartS_ = ImGui::GetTime();
+    engine_.recordError_.clear();
+    engine_.recordNotice_.clear();
+    engine_.audioRecordStartS_ = ImGui::GetTime();
     // Install AFTER start(): the tap must never feed a recorder that is not
     // accepting (Pipeline::setAudioRecorder contract).
-    pipeline_.setAudioRecorder(&audioRecorder_);
+    engine_.pipeline_.setAudioRecorder(&engine_.audioRecorder_);
     return true;
 }
 
@@ -20642,20 +20640,20 @@ bool AppWindow::startIqRecording() {
     // The Record IQ key's body and the web remote's recordIq, which were two
     // copies of the same six lines until stage 1. Baseband at the DSP input
     // rate through the pipeline's raw tap.
-    if (iqRecorder_.recording()) { return true; }
-    const double rate = pipeline_.inputRateHz();
+    if (engine_.iqRecorder_.recording()) { return true; }
+    const double rate = engine_.pipeline_.inputRateHz();
     std::string err;
-    if (!iqRecorder_.start(cascade::core::RecordKind::BasebandIq, recordDir_, rate, err)) {
-        recordError_ = err;
+    if (!engine_.iqRecorder_.start(cascade::core::RecordKind::BasebandIq, engine_.recordDir_, rate, err)) {
+        engine_.recordError_ = err;
         return false;
     }
-    recordError_.clear();
-    recordNotice_.clear();
-    iqRecordRateHz_ = rate;
-    iqRecordStartS_ = ImGui::GetTime();
+    engine_.recordError_.clear();
+    engine_.recordNotice_.clear();
+    engine_.iqRecordRateHz_ = rate;
+    engine_.iqRecordStartS_ = ImGui::GetTime();
     // Install AFTER start(): the tap must never feed a recorder that is not
     // accepting (Pipeline::setIqRecorder contract).
-    pipeline_.setIqRecorder(&iqRecorder_);
+    engine_.pipeline_.setIqRecorder(&engine_.iqRecorder_);
     return true;
 }
 
@@ -20671,7 +20669,7 @@ void AppWindow::openIqFile(const std::string& path) {
     // throwaway IqFileSource without ever touching the pipeline.
     auto file = std::make_unique<cascade::source::IqFileSource>();
     if (!file->open(path)) {
-        sourceError_ = file->lastError();
+        engine_.sourceError_ = file->lastError();
         return;
     }
     // Carry the displayed frequency over: a file's center is nominal anyway,
@@ -20679,28 +20677,28 @@ void AppWindow::openIqFile(const std::string& path) {
     // bug. The AIR frequency carries over; the file is told it through its
     // own converter, which is off unless the user set one for I/Q files.
     const double fileRadioHz =
-        radioHzForSource("file", std::string(), pipeline_.activeSource().centerFrequencyHz());
+        radioHzForSource("file", std::string(), engine_.pipeline_.activeSource().centerFrequencyHz());
     if (fileRadioHz >= 0.0) { file->setCenterFrequencyHz(fileRadioHz); }
-    device_ = nullptr;  // before setSource destroys a live device
-    soapyView_ = nullptr;
-    deviceArgs_.clear();
-    deviceModel_.clear();
-    sourceError_.clear();
-    ++sourceGen_;  // a device open still in flight is now stale
+    engine_.device_ = nullptr;  // before setSource destroys a live device
+    engine_.soapyView_ = nullptr;
+    engine_.deviceArgs_.clear();
+    engine_.deviceModel_.clear();
+    engine_.sourceError_.clear();
+    ++engine_.sourceGen_;  // a device open still in flight is now stale
     installSource(std::move(file));
-    sourceKind_ = "file";
+    engine_.sourceKind_ = "file";
     applyConverterForSource();
-    iqOpenPath_ = path;
+    engine_.iqOpenPath_ = path;
     // A file is a deliberate choice of source like any other, so a radio
     // remembered from a failed restore is superseded here too - see
     // selectSource's generator row.
-    restoreKeep_ = cascade::gui::RememberedSource{};
-    restoreKeepLabel_.clear();
+    engine_.restoreKeep_ = cascade::gui::RememberedSource{};
+    engine_.restoreKeepLabel_.clear();
     followInputRate();  // DSP chain + frequency axis track the file's rate
     // The RATE, never the path: a file name is the user's own data and a
     // report is a support artefact, not a listening record.
     cascade::core::diagLogf("source: opened an I/Q file at %.0f S/s",
-                            pipeline_.activeSource().sampleRateHz());
+                            engine_.pipeline_.activeSource().sampleRateHz());
 }
 
 void AppWindow::tuneToBookmark(const cascade::core::Bookmark& b) {
@@ -20713,19 +20711,19 @@ void AppWindow::tuneToBookmark(const cascade::core::Bookmark& b) {
     tuneAbsoluteHz(b.freqHz);
     for (int m = 0; m < 8; ++m) {
         if (b.mode == kModeNames[m]) {
-            modeIndex_ = m;
-            pipeline_.setDemodMode(kModeMap[m]);
+            engine_.modeIndex_ = m;
+            engine_.pipeline_.setDemodMode(kModeMap[m]);
             break;
         }
     }
     // Same clamp as the config restore: [3 kHz, 90% of channel rate].
-    const double bwHi = kVfoBwMaxChanFrac * pipeline_.channelRateHz();
-    vfoBandwidthHz_ = std::max(kVfoBwMinHz, std::min(b.bandwidthHz, bwHi));
-    pipeline_.setVfoBandwidthHz(vfoBandwidthHz_);
+    const double bwHi = kVfoBwMaxChanFrac * engine_.pipeline_.channelRateHz();
+    engine_.vfoBandwidthHz_ = std::max(kVfoBwMinHz, std::min(b.bandwidthHz, bwHi));
+    engine_.pipeline_.setVfoBandwidthHz(engine_.vfoBandwidthHz_);
     // -1 for a bookmark saved at a bandwidth the list does not carry (one
     // taken while a preset had the VFO at 40 kHz, say): the combo letters the
     // real figure and ticks nothing.
-    bandwidthIndex_ = bandwidthStepIndex(vfoBandwidthHz_);
+    engine_.bandwidthIndex_ = bandwidthStepIndex(engine_.vfoBandwidthHz_);
 }
 
 void AppWindow::addBookmarkHere(const std::string& name) {
@@ -20741,9 +20739,9 @@ void AppWindow::addBookmarkHere(const std::string& name) {
     // the spectrum overlay marks), with the live mode and the REQUESTED
     // bandwidth (the overlay's value, pre any Vfo clamp).
     b.freqHz = currentAbsoluteHz();
-    b.mode = kModeNames[modeIndex_];
-    b.bandwidthHz = vfoBandwidthHz_;
-    freqMgr_.add(std::move(b));
+    b.mode = kModeNames[engine_.modeIndex_];
+    b.bandwidthHz = engine_.vfoBandwidthHz_;
+    engine_.freqMgr_.add(std::move(b));
     saveBookmarks();
 }
 
@@ -20784,7 +20782,7 @@ bool AppWindow::selectSourceById(const std::string& id) {
         return true;
     }
     if (id == "soundcard:open") {
-        sourceError_.clear();
+        engine_.sourceError_.clear();
         launchSoundCardOpen(false, soundCard_);
         return true;
     }
@@ -20803,21 +20801,21 @@ bool AppWindow::selectSourceById(const std::string& id) {
     // The KIND is matched too - a native row and a Soapy row for one dongle
     // carry the same serial.
     if (cascade::gui::isNativeSourceKind(kind)) {
-        for (std::size_t i = 0; i < nativeDevices_.size(); ++i) {
-            if (nativeDevices_[i].driver == kind && nativeDevices_[i].args == args) {
+        for (std::size_t i = 0; i < engine_.nativeDevices_.size(); ++i) {
+            if (engine_.nativeDevices_[i].driver == kind && engine_.nativeDevices_[i].args == args) {
                 selectSource(kNativeRowBase + static_cast<int>(i));
                 return true;
             }
         }
     } else {
-        for (std::size_t i = 0; i < soapyDevices_.size(); ++i) {
-            if (soapyDevices_[i].args == args) {
+        for (std::size_t i = 0; i < engine_.soapyDevices_.size(); ++i) {
+            if (engine_.soapyDevices_[i].args == args) {
                 selectSource(soapyRowBase() + static_cast<int>(i));
                 return true;
             }
         }
     }
-    sourceError_ = "no scanned device matches those arguments; rescan and try again";
+    engine_.sourceError_ = "no scanned device matches those arguments; rescan and try again";
     return false;
 }
 
@@ -20826,13 +20824,13 @@ std::string AppWindow::sourceIdForRow(int row) const {
     if (row == 1) { return "row:iqfile"; }
     if (row == kSoundCardRow) { return "row:soundcard"; }
     const int n = row - kNativeRowBase;
-    if (n >= 0 && n < static_cast<int>(nativeDevices_.size()) && row < soapyRowBase()) {
-        const cascade::source::NativeDeviceInfo& d = nativeDevices_[static_cast<std::size_t>(n)];
+    if (n >= 0 && n < static_cast<int>(engine_.nativeDevices_.size()) && row < soapyRowBase()) {
+        const cascade::source::NativeDeviceInfo& d = engine_.nativeDevices_[static_cast<std::size_t>(n)];
         return d.driver + ":" + d.args;
     }
     const int s = row - soapyRowBase();
-    if (s >= 0 && s < static_cast<int>(soapyDevices_.size())) {
-        return "soapy:" + soapyDevices_[static_cast<std::size_t>(s)].args;
+    if (s >= 0 && s < static_cast<int>(engine_.soapyDevices_.size())) {
+        return "soapy:" + engine_.soapyDevices_[static_cast<std::size_t>(s)].args;
     }
     return {};
 }
@@ -20842,7 +20840,7 @@ std::vector<cascade::gui::RunnableDecoder> AppWindow::runnableDecoders() const {
     // means BEING FED, which is the only sense in which a decoder is costing
     // this machine anything (running_view.hpp says why).
     std::vector<cascade::gui::RunnableDecoder> runnable;
-    for (const cascade::core::LoadedPlugin& lp : pluginHost_.plugins()) {
+    for (const cascade::core::LoadedPlugin& lp : engine_.pluginHost_.plugins()) {
         if (!lp.loaded) { continue; }
         const bool isDec = lp.decoder != nullptr || lp.iqDecoder != nullptr ||
                            lp.imageDecoder != nullptr;
@@ -20851,7 +20849,7 @@ std::vector<cascade::gui::RunnableDecoder> AppWindow::runnableDecoders() const {
         rd.name = lp.name;
         rd.key = cascade::core::pluginKey(lp);
         rd.stopped = pluginIsStopped(rd.key);
-        rd.feeding = pluginRunner_.isFeeding(rd.key);
+        rd.feeding = engine_.pluginRunner_.isFeeding(rd.key);
         runnable.push_back(std::move(rd));
     }
     return runnable;
@@ -20859,14 +20857,14 @@ std::vector<cascade::gui::RunnableDecoder> AppWindow::runnableDecoders() const {
 
 void AppWindow::setModeIndex(int index) {
     if (index < 0 || index >= 8) { return; }
-    modeIndex_ = index;
-    pipeline_.setDemodMode(kModeMap[index]);
-    bandwidthIndex_ = kModeDefaultBw[index];
-    vfoBandwidthHz_ = kBwHz[bandwidthIndex_];
-    pipeline_.setVfoBandwidthHz(vfoBandwidthHz_);
+    engine_.modeIndex_ = index;
+    engine_.pipeline_.setDemodMode(kModeMap[index]);
+    engine_.bandwidthIndex_ = kModeDefaultBw[index];
+    engine_.vfoBandwidthHz_ = kBwHz[engine_.bandwidthIndex_];
+    engine_.pipeline_.setVfoBandwidthHz(engine_.vfoBandwidthHz_);
     // The MODE and its bandwidth - a demodulator change, not a tuning change.
     // No frequency reaches the log, here or anywhere else.
-    cascade::core::diagLogf("mode: %s, bandwidth %.0f", kModeNames[index], vfoBandwidthHz_);
+    cascade::core::diagLogf("mode: %s, bandwidth %.0f", kModeNames[index], engine_.vfoBandwidthHz_);
 }
 
 // --- The keyboard ------------------------------------------------------------
@@ -21033,12 +21031,12 @@ void AppWindow::applyKeyAction(cascade::gui::KeyAction action) {
             // The toolbar's own stop: a take can never outlive the sample
             // flow it was taping (RUN 0 -> stopReceiver).
             cascade::core::diagLogf("key: start/stop -> %s",
-                                    pipeline_.running() ? "stopped" : "running");
-            submitCommand(cmd::makeInt(FOXAPI_OP_RUN, pipeline_.running() ? 0 : 1));
+                                    engine_.pipeline_.running() ? "stopped" : "running");
+            submitCommand(cmd::makeInt(FOXAPI_OP_RUN, engine_.pipeline_.running() ? 0 : 1));
             break;
         case KeyAction::Mute:
-            cascade::core::diagLogf("key: mute -> %d", userMuted_ ? 0 : 1);
-            submitCommand(cmd::makeInt(FOXAPI_OP_SET_MUTED, userMuted_ ? 0 : 1));
+            cascade::core::diagLogf("key: mute -> %d", engine_.userMuted_ ? 0 : 1);
+            submitCommand(cmd::makeInt(FOXAPI_OP_SET_MUTED, engine_.userMuted_ ? 0 : 1));
             break;
         case KeyAction::VolumeUp:
         case KeyAction::VolumeDown: {
@@ -21047,7 +21045,7 @@ void AppWindow::applyKeyAction(cascade::gui::KeyAction action) {
             // a single one is a change rather than a jump.
             const float step = (action == KeyAction::VolumeUp) ? 0.05f : -0.05f;
             submitCommand(cmd::makeNum(FOXAPI_OP_SET_VOLUME,
-                                       std::clamp(volume_ + step, 0.0f, 1.0f)));
+                                       std::clamp(engine_.volume_ + step, 0.0f, 1.0f)));
             break;
         }
         case KeyAction::SquelchUp:
@@ -21056,7 +21054,7 @@ void AppWindow::applyKeyAction(cascade::gui::KeyAction action) {
             // sixty, and is about the smallest step that audibly moves the gate.
             const float step = (action == KeyAction::SquelchUp) ? 2.0f : -2.0f;
             submitCommand(cmd::makeNum(FOXAPI_OP_SET_SQUELCH,
-                                       std::clamp(squelchDb_ + step, -120.0f, 0.0f)));
+                                       std::clamp(engine_.squelchDb_ + step, -120.0f, 0.0f)));
             break;
         }
         // kModeNames order: NFM WFM AM DSB USB CW LSB RAW - FOXAPI_DEMOD_*
@@ -21127,7 +21125,7 @@ void AppWindow::applyKeyAction(cascade::gui::KeyAction action) {
             // I/Q take stays a deliberate, mouse-only decision: it writes the
             // full baseband at the input rate and fills a disk in minutes, so
             // it is not something a mis-hit key should start.
-            submitCommand(cmd::makeInt(FOXAPI_OP_RECORD_AUDIO, audioRecorder_.recording() ? 0 : 1));
+            submitCommand(cmd::makeInt(FOXAPI_OP_RECORD_AUDIO, engine_.audioRecorder_.recording() ? 0 : 1));
             break;
         case KeyAction::Screenshot:
             // The self-capture the render loop performs from the framebuffer -
@@ -21174,8 +21172,8 @@ void AppWindow::applyKeyAction(cascade::gui::KeyAction action) {
 void AppWindow::rebuildBookmarkView() {
     // The key is everything the view depends on, so an unchanged filter over
     // an unchanged list costs one string compare a frame and nothing else.
-    const std::vector<cascade::core::Bookmark>& list = freqMgr_.list();
-    if (bookmarkViewVersion_ != freqMgr_.version()) {
+    const std::vector<cascade::core::Bookmark>& list = engine_.freqMgr_.list();
+    if (bookmarkViewVersion_ != engine_.freqMgr_.version()) {
         // Group names: sorted, unique, rebuilt only when the list changed.
         std::vector<std::string> groups;
         for (const cascade::core::Bookmark& b : list) {
@@ -21194,11 +21192,11 @@ void AppWindow::rebuildBookmarkView() {
             if (bookmarkGroups_[g] == was) { bookmarkGroupSel_ = static_cast<int>(g) + 1; }
         }
     }
-    std::string key = std::to_string(freqMgr_.version()) + "|" + std::to_string(bookmarkGroupSel_) +
+    std::string key = std::to_string(engine_.freqMgr_.version()) + "|" + std::to_string(bookmarkGroupSel_) +
                       "|" + (bookmarkFavOnly_ ? "f" : "-") + "|" + bookmarkFilter_;
     if (key == bookmarkViewKey_) { return; }
     bookmarkViewKey_ = std::move(key);
-    bookmarkViewVersion_ = freqMgr_.version();
+    bookmarkViewVersion_ = engine_.freqMgr_.version();
 
     // Case-insensitive substring over name and group; a filter that reads as
     // a number also matches frequencies that start with it in MHz ("145.5").
@@ -21238,7 +21236,7 @@ void AppWindow::importBookmarkFile(const std::string& path) {
     const auto t0 = std::chrono::steady_clock::now();
     cascade::core::ImportResult r = cascade::core::importFrequencyFile(p);
     if (!r.error.empty() && r.items.empty()) {
-        bookmarkImportNote_ = cascade::core::formatText(tr("Could not import: %s"), r.error.c_str());
+        engine_.bookmarkImportNote_ = cascade::core::formatText(tr("Could not import: %s"), r.error.c_str());
         // The file's KIND, never its name or path: "never the name or path of
         // a file you opened" (PRIVACY.md), and a frequency list's name is
         // usually what is on it.
@@ -21254,7 +21252,7 @@ void AppWindow::importBookmarkFile(const std::string& path) {
         return;
     }
     const std::size_t found = r.items.size();
-    const std::size_t added = freqMgr_.addMany(std::move(r.items));
+    const std::size_t added = engine_.freqMgr_.addMany(std::move(r.items));
     const double ms =
         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
     char note[320];
@@ -21263,7 +21261,7 @@ void AppWindow::importBookmarkFile(const std::string& path) {
                   found > added ? " (the rest were already here)" : "",
                   r.skipped > 0 ? ", some had no usable frequency" : "",
                   r.shifted > 0 ? ", converter Shift values were not applied" : "");
-    bookmarkImportNote_ = note;
+    engine_.bookmarkImportNote_ = note;
     cascade::core::diagLogf("bookmarks: imported a %s file - %zu read, %zu added, %zu skipped, %zu shifted, %.0f ms",
                             r.format.c_str(), found, added, r.skipped, r.shifted, ms);
     if (added > 0) { saveBookmarks(); }
@@ -21274,7 +21272,7 @@ void AppWindow::drawBookmarksSection() {
     // about it worth reading from the rail. The lamp is lit while there is at
     // least one, so an empty list reads as empty rather than as a count the
     // user has to squint at.
-    const std::size_t bookmarkCount = freqMgr_.list().size();
+    const std::size_t bookmarkCount = engine_.freqMgr_.list().size();
     char bookmarkChip[16];
     std::snprintf(bookmarkChip, sizeof(bookmarkChip), "%zu", bookmarkCount);
     if (bookmarkOpenByEnv_) {
@@ -21338,9 +21336,9 @@ void AppWindow::drawBookmarksSection() {
                                    "frequency column (and name, group, mode, bandwidth if it has them).\n"
                                    "Importing the same file again adds nothing twice."));
     }
-    if (!bookmarkImportNote_.empty()) {
+    if (!engine_.bookmarkImportNote_.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kInkMuted));
-        ImGui::TextWrapped("%s", bookmarkImportNote_.c_str());
+        ImGui::TextWrapped("%s", engine_.bookmarkImportNote_.c_str());
         ImGui::PopStyleColor();
     }
 
@@ -21392,10 +21390,10 @@ void AppWindow::drawBookmarksSection() {
             std::vector<cascade::core::Bookmark> out;
             out.reserve(bookmarkView_.size());
             for (const std::uint32_t i : bookmarkView_) {
-                if (i < freqMgr_.list().size()) { out.push_back(freqMgr_.list()[i]); }
+                if (i < engine_.freqMgr_.list().size()) { out.push_back(engine_.freqMgr_.list()[i]); }
             }
             std::error_code ec;
-            std::filesystem::create_directories(std::filesystem::path(recordDir_), ec);
+            std::filesystem::create_directories(std::filesystem::path(engine_.recordDir_), ec);
             const std::time_t now = std::time(nullptr);
             std::tm tmv{};
 #ifdef _WIN32
@@ -21405,12 +21403,12 @@ void AppWindow::drawBookmarksSection() {
 #endif
             char name[64];
             std::strftime(name, sizeof(name), "foxsdr-frequencies-%Y%m%d-%H%M%S.xml", &tmv);
-            const std::filesystem::path path = std::filesystem::path(recordDir_) / name;
+            const std::filesystem::path path = std::filesystem::path(engine_.recordDir_) / name;
             std::ofstream f(path, std::ios::binary | std::ios::trunc);
             const std::string xml = cascade::core::exportSdrSharpXml(out);
             f.write(xml.data(), static_cast<std::streamsize>(xml.size()));
             f.close();
-            const std::string shown = recordDir_ + "/" + name;
+            const std::string shown = engine_.recordDir_ + "/" + name;
             std::string said;
             if (f) {
                 cascade::core::formatUtf8(said, tr("Exported %zu to %s"), out.size(),
@@ -21418,7 +21416,7 @@ void AppWindow::drawBookmarksSection() {
             } else {
                 cascade::core::formatUtf8(said, tr("Could not write %s"), shown.c_str());
             }
-            bookmarkImportNote_ = said;
+            engine_.bookmarkImportNote_ = said;
         }
     }
     if (bookmarkGroupSel_ > 0 && bookmarkGroupSel_ <= static_cast<int>(bookmarkGroups_.size())) {
@@ -21439,7 +21437,7 @@ void AppWindow::drawBookmarksSection() {
     // same frame still iterates.
     int deleteIdx = -1;
     int starIdx = -1;
-    const std::vector<cascade::core::Bookmark>& list = freqMgr_.list();
+    const std::vector<cascade::core::Bookmark>& list = engine_.freqMgr_.list();
     const float delW = ImGui::GetFrameHeight();
     const float rows = std::min(12.0f, static_cast<float>(bookmarkView_.size()));
     if (!bookmarkView_.empty() &&
@@ -21491,28 +21489,28 @@ void AppWindow::drawBookmarksSection() {
                                    static_cast<std::int64_t>(list[static_cast<std::size_t>(deleteIdx)].id)));
     }
 
-    if (!bookmarkError_.empty()) {
+    if (!engine_.bookmarkError_.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, kErrorRed);
-        ImGui::TextWrapped("%s", bookmarkError_.c_str());
+        ImGui::TextWrapped("%s", engine_.bookmarkError_.c_str());
         ImGui::PopStyleColor();
     }
 }
 
 void AppWindow::saveBookmarks() {
-    if (bookmarkPath_.empty()) { return; }  // hermetic run: never touch disk
-    bookmarkSaveDirty_ = true;
-    bookmarkSaveDueS_ = ImGui::GetTime() + 1.0;
+    if (engine_.bookmarkPath_.empty()) { return; }  // hermetic run: never touch disk
+    engine_.bookmarkSaveDirty_ = true;
+    engine_.bookmarkSaveDueS_ = ImGui::GetTime() + 1.0;
 }
 
 void AppWindow::flushBookmarkSave(bool force) {
-    if (!bookmarkSaveDirty_ || bookmarkPath_.empty()) { return; }
-    if (!force && ImGui::GetCurrentContext() != nullptr && ImGui::GetTime() < bookmarkSaveDueS_) { return; }
-    bookmarkSaveDirty_ = false;
+    if (!engine_.bookmarkSaveDirty_ || engine_.bookmarkPath_.empty()) { return; }
+    if (!force && ImGui::GetCurrentContext() != nullptr && ImGui::GetTime() < engine_.bookmarkSaveDueS_) { return; }
+    engine_.bookmarkSaveDirty_ = false;
     std::string err;
-    if (freqMgr_.save(bookmarkPath_, err)) {
-        bookmarkError_.clear();  // a successful save clears a stale error
+    if (engine_.freqMgr_.save(engine_.bookmarkPath_, err)) {
+        engine_.bookmarkError_.clear();  // a successful save clears a stale error
     } else {
-        bookmarkError_ = err;
+        engine_.bookmarkError_ = err;
     }
 }
 
@@ -21521,9 +21519,9 @@ void AppWindow::drawBookmarkMarkers(float x0, float y0, float width, float heigh
     // so a list of 33 000 costs what the dozen in view cost. The user who
     // asked for this said a big list made SDR# stutter; that must not happen
     // here.
-    const auto span = freqMgr_.range(scale_.viewLowHz(), scale_.viewHighHz());
+    const auto span = engine_.freqMgr_.range(scale_.viewLowHz(), scale_.viewHighHz());
     if (span.first >= span.second) { return; }
-    const std::vector<cascade::core::Bookmark>& list = freqMgr_.list();
+    const std::vector<cascade::core::Bookmark>& list = engine_.freqMgr_.list();
     ImDrawList* dl = ImGui::GetWindowDrawList();
     dl->PushClipRect(ImVec2(x0, y0), ImVec2(x0 + width, y0 + height), true);
     const ImU32 tick = cascade::gui::theme::withAlpha(cascade::gui::theme::kAmber, 0.70f);
@@ -21599,7 +21597,7 @@ void AppWindow::tuneAbsoluteHz(double absHz, bool isPluginPreset) {
     // readback, which simply won't move. isPluginPreset is only ever true from
     // applyPluginPreset, forwarded so a mismatch this produces can say which
     // plugin's button asked for it — see applyRetuneNow.
-    retuneSourceHz(absHz - pipeline_.vfoOffsetHz(), isPluginPreset);
+    retuneSourceHz(absHz - engine_.pipeline_.vfoOffsetHz(), isPluginPreset);
 }
 
 namespace {
@@ -21628,22 +21626,22 @@ void AppWindow::retuneSourceHz(double centerHz, bool isPluginPreset) {
     // same way retuneCoalescer_ itself carries centerHz: overwritten on every
     // call, so whichever value was requested LAST is the one a deferred
     // apply sees — "latest wins" for the context, not just the frequency.
-    pendingRetuneIsPreset_ = isPluginPreset;
+    engine_.pendingRetuneIsPreset_ = isPluginPreset;
     // A SOURCE WITH NO TUNER (a sound card) is tuned by its VFO instead - see
     // gui::tuneWithFixedCentre.
     if (retuneFixedCentre(centerHz)) { return; }
-    if (device_ == nullptr || scanner_.active()) {
+    if (engine_.device_ == nullptr || engine_.scanner_.active()) {
         applyRetuneNow(centerHz, isPluginPreset);
         return;
     }
-    if (retuneCoalescer_.request(centerHz, steadyNowMs())) {
+    if (engine_.retuneCoalescer_.request(centerHz, steadyNowMs())) {
         applyRetuneNow(centerHz, isPluginPreset);
     }
 }
 
 void AppWindow::pollPendingRetune() {
-    if (const std::optional<double> hz = retuneCoalescer_.due(steadyNowMs())) {
-        applyRetuneNow(*hz, pendingRetuneIsPreset_);
+    if (const std::optional<double> hz = engine_.retuneCoalescer_.due(steadyNowMs())) {
+        applyRetuneNow(*hz, engine_.pendingRetuneIsPreset_);
     }
 }
 
@@ -21654,7 +21652,7 @@ void AppWindow::applyRetuneNow(double centerHz, bool isPluginPreset) {
     // stays on screen over the new one, which is a wrong readout, not a
     // cosmetic lag. No-op when the tune does not actually move anything, so
     // a repeated command cannot keep the decoders permanently reset.
-    cascade::source::IqSource& src = pipeline_.activeSource();
+    cascade::source::IqSource& src = engine_.pipeline_.activeSource();
     if (src.centerFrequencyHz() == centerHz) { return; }
     // What the rate and the source's own error line were BEFORE the tune: a
     // tune can move the rate too (below).
@@ -21663,15 +21661,15 @@ void AppWindow::applyRetuneNow(double centerHz, bool isPluginPreset) {
     const bool applied = src.setCenterFrequencyHz(centerHz);
     // Out-of-band applies (a device open's carry-across) pace the next burst
     // off this moment too, so the coalescer's clock never lags an apply.
-    retuneCoalescer_.noteApplied(steadyNowMs());
-    pipeline_.resetRds();
+    engine_.retuneCoalescer_.noteApplied(steadyNowMs());
+    engine_.pipeline_.resetRds();
     // I/Q decoders are told for the same reason: they work on the raw band and
     // several of them (ADS-B, AIS) report when the receiver is nowhere near
     // the frequency they need. Reading back from the source rather than
     // trusting the requested value, because a device may land on a nearby
     // tuning step and the decoder should be told where it actually is.
     const double landedHz = src.centerFrequencyHz();
-    pluginRunner_.retune(landedHz);
+    engine_.pluginRunner_.retune(landedHz);
 
     // SAY WHEN THE RADIO CANNOT TUNE THERE. Measured on a USRP B200: a request
     // for 7.000 MHz landed at 30.800 MHz with sourceError_, faultMessage and
@@ -21702,11 +21700,11 @@ void AppWindow::applyRetuneNow(double centerHz, bool isPluginPreset) {
     // base), the Rate combo kept the old entry, and the reason was unread.
     if (applied) {
         const cascade::gui::RetuneRateOutcome moved =
-            cascade::gui::rateAfterRetune(src, rateBeforeHz, errBefore, sourceError_);
+            cascade::gui::rateAfterRetune(src, rateBeforeHz, errBefore, engine_.sourceError_);
         if (moved.rateMoved) {
-            sourceError_ = moved.sourceError;
-            if (device_ != nullptr) {
-                deviceRateIndex_ = nearestIndex(deviceRatesHz_, moved.rateHz);
+            engine_.sourceError_ = moved.sourceError;
+            if (engine_.device_ != nullptr) {
+                engine_.deviceRateIndex_ = nearestIndex(engine_.deviceRatesHz_, moved.rateHz);
             }
             followInputRate();
         }
@@ -21723,20 +21721,20 @@ void AppWindow::noteTuneRefused(double requestHz, bool isPluginPreset) {
     // and not a fact about the radio.
     double rangeLoHz = 0.0;
     double rangeHiHz = 0.0;
-    const bool hasRange = device_ != nullptr && device_->frequencyRangeHz(rangeLoHz, rangeHiHz);
+    const bool hasRange = engine_.device_ != nullptr && engine_.device_->frequencyRangeHz(rangeLoHz, rangeHiHz);
     // requestHz is an AIR frequency (activeSource() speaks air). With a
     // converter on, the sentence is the converter's, in air terms; without
     // one, air and radio are the same number and the plain sentence speaks.
-    const cascade::core::ConverterSetting conv = pipeline_.converter();
+    const cascade::core::ConverterSetting conv = engine_.pipeline_.converter();
     const std::string note =
         cascade::core::converterActive(conv)
             ? converterTuneNote(requestHz, /*refused=*/true, 0.0, isPluginPreset)
             : cascade::gui::tuneRefusedMessage(requestHz, hasRange, rangeLoHz, rangeHiHz,
                                                isPluginPreset);
     if (note.empty()) { return; }
-    tuneMismatchNote_ = note;
-    if (requestHz == lastRefusedRequestHz_) { return; }
-    lastRefusedRequestHz_ = requestHz;
+    engine_.tuneMismatchNote_ = note;
+    if (requestHz == engine_.lastRefusedRequestHz_) { return; }
+    engine_.lastRefusedRequestHz_ = requestHz;
     // WHERE the request fell against the range, never either frequency: what
     // somebody tunes to must not reach a report (PRIVACY.md), and "below its
     // range" diagnoses the refusal as well as the number did. Judged at the
@@ -21748,7 +21746,7 @@ void AppWindow::noteTuneRefused(double requestHz, bool isPluginPreset) {
                         : radioHz < rangeLoHz   ? "below its range"
                         : radioHz > rangeHiHz   ? "above its range"
                                                 : "inside its range";
-    cascade::core::diagLogf("source: the %s refused a tune %s", pipeline_.activeSource().name(),
+    cascade::core::diagLogf("source: the %s refused a tune %s", engine_.pipeline_.activeSource().name(),
                             where);
 }
 
@@ -21759,26 +21757,26 @@ void AppWindow::noteTuneMismatch(double requestHz, double answeredHz, bool isPlu
     // to ask about, and tuneMismatchMessage already knows what an absent one
     // means (drop the range sentence rather than print a sentinel as if it
     // were a fact).
-    const bool hasRange = device_ != nullptr && device_->frequencyRangeHz(rangeLoHz, rangeHiHz);
+    const bool hasRange = engine_.device_ != nullptr && engine_.device_->frequencyRangeHz(rangeLoHz, rangeHiHz);
     // Both figures are AIR frequencies; with a converter on the sentence says
     // so in the converter's terms (see noteTuneRefused).
-    const cascade::core::ConverterSetting conv = pipeline_.converter();
-    tuneMismatchNote_ =
+    const cascade::core::ConverterSetting conv = engine_.pipeline_.converter();
+    engine_.tuneMismatchNote_ =
         cascade::core::converterActive(conv)
             ? converterTuneNote(requestHz, /*refused=*/false, answeredHz, isPluginPreset)
             : cascade::gui::tuneMismatchMessage(requestHz, answeredHz, hasRange, rangeLoHz,
                                                 rangeHiHz, isPluginPreset);
-    if (tuneMismatchNote_.empty()) { return; }
+    if (engine_.tuneMismatchNote_.empty()) { return; }
     // ONCE PER DISTINCT REQUEST. A repeated identical command (a user pressing
     // the same preset twice, or the scanner dwelling on a frequency the radio
     // refuses) lands on the same wrong answer every time; logging it again on
     // every occurrence would fill the diagnostics bundle with one repeated
     // line and push everything else out of it.
-    if (requestHz == lastMismatchRequestHz_ && answeredHz == lastMismatchAnswerHz_) {
+    if (requestHz == engine_.lastMismatchRequestHz_ && answeredHz == engine_.lastMismatchAnswerHz_) {
         return;
     }
-    lastMismatchRequestHz_ = requestHz;
-    lastMismatchAnswerHz_ = answeredHz;
+    engine_.lastMismatchRequestHz_ = requestHz;
+    engine_.lastMismatchAnswerHz_ = answeredHz;
     // HOW FAR OFF and whether the radio clamped to its range, never either
     // frequency (see noteTuneRefused). The error in ppm alone does not say
     // what was tuned.
@@ -21791,20 +21789,20 @@ void AppWindow::noteTuneMismatch(double requestHz, double answeredHz, bool isPlu
                            ? (answeredRadioHz - requestRadioHz) / requestRadioHz * 1.0e6
                            : 0.0;
     cascade::core::diagLogf("source: the %s answered a tune somewhere else (%s, %+.0f ppm)",
-                            pipeline_.activeSource().name(),
+                            engine_.pipeline_.activeSource().name(),
                             atEdge ? "at the edge of its range" : "not at a range edge", ppm);
 }
 
 double AppWindow::currentAbsoluteHz() {
-    return pipeline_.activeSource().centerFrequencyHz() + pipeline_.vfoOffsetHz();
+    return engine_.pipeline_.activeSource().centerFrequencyHz() + engine_.pipeline_.vfoOffsetHz();
 }
 
 // --- Scanner (P6) ----------------------------------------------------------------
 
 void AppWindow::drawScannerSection() {
     const bool scannerOpen =
-        benchSection(trId("Scanner"), false, scanner_.active() ? tr("SCAN") : tr("IDLE"),
-                     cascade::gui::theme::kPhosphor, scanner_.active());
+        benchSection(trId("Scanner"), false, engine_.scanner_.active() ? tr("SCAN") : tr("IDLE"),
+                     cascade::gui::theme::kPhosphor, engine_.scanner_.active());
     if (!scannerOpen) { return; }
     telemetryNotePanel("scanner");
 
@@ -21857,7 +21855,7 @@ void AppWindow::drawScannerSection() {
     }
 
     namespace cmd = cascade::core::cmd;
-    if (edited && scanner_.active()) {
+    if (edited && engine_.scanner_.active()) {
         // APP_SCANNER_RANGE with only the reconfigure bit: a running scan
         // takes the stored parameters. The reconfigure re-emits a first tune
         // on the next tick; the user-tune baseline re-arms from that
@@ -21865,7 +21863,7 @@ void AppWindow::drawScannerSection() {
         submitCommand(cmd::makeInt(FOXAPP_OP_SCANNER_RANGE, 8));
     }
 
-    if (!scanner_.active()) {
+    if (!engine_.scanner_.active()) {
         if (ImGui::Button(trId("Start scan"), ImVec2(-FLT_MIN, 0.0f))) {
             const cascade::core::Scanner::Params p = scannerParams();
             FoxCommand run = cmd::makeInt(FOXAPI_OP_SCANNER_RUN, 1);
@@ -21891,12 +21889,12 @@ void AppWindow::drawScannerSection() {
 
     // State + frequency readout. currentHz() keeps reporting the last scan
     // frequency after a stop (Scanner contract), which reads naturally here.
-    ImGui::Text("%s | %.4f MHz", scannerStateName(scanner_.state()),
-                scanner_.currentHz() / 1.0e6);
+    ImGui::Text("%s | %.4f MHz", scannerStateName(engine_.scanner_.state()),
+                engine_.scanner_.currentHz() / 1.0e6);
 }
 
 void AppWindow::scannerFrame() {
-    if (!scanner_.active()) { return; }
+    if (!engine_.scanner_.active()) { return; }
 
     // User wins: any tune this frame that the scanner did not command —
     // digit wheel, VFO drag/slider (the offset is part of the absolute
@@ -21904,9 +21902,9 @@ void AppWindow::scannerFrame() {
     // the last commanded value, and the scan stops rather than fight the
     // user's hands. Checked BEFORE tick so the stale squelch state of a
     // just-abandoned frequency can never emit one more retune.
-    if (scannerHasExpected_ &&
-        std::fabs(currentAbsoluteHz() - scannerExpectedAbsHz_) > kScanUserTuneEpsHz) {
-        scanner_.stop();
+    if (engine_.scannerHasExpected_ &&
+        std::fabs(currentAbsoluteHz() - engine_.scannerExpectedAbsHz_) > kScanUserTuneEpsHz) {
+        engine_.scanner_.stop();
         return;
     }
 
@@ -21919,15 +21917,15 @@ void AppWindow::scannerFrame() {
     // the scan decision only "is a signal present now" matters, and the
     // S-meter is the one channel-power readout that is lock-free from the
     // GUI thread.
-    const bool squelchOpen = pipeline_.signalPowerDb() > squelchDb_;
+    const bool squelchOpen = engine_.pipeline_.signalPowerDb() > engine_.squelchDb_;
     const std::optional<double> retune =
-        scanner_.tick(ImGui::GetTime() * 1000.0, squelchOpen);
+        engine_.scanner_.tick(ImGui::GetTime() * 1000.0, squelchOpen);
     if (retune.has_value()) {
         tuneAbsoluteHz(*retune);
         // Baseline from READBACK, not the request: a device that coerces
         // the tune must not read as a user action next frame.
-        scannerExpectedAbsHz_ = currentAbsoluteHz();
-        scannerHasExpected_ = true;
+        engine_.scannerExpectedAbsHz_ = currentAbsoluteHz();
+        engine_.scannerHasExpected_ = true;
     }
 }
 
@@ -21936,7 +21934,7 @@ void AppWindow::scannerFrame() {
 // --- Web server mode (P11) ---------------------------------------------------
 
 void AppWindow::publishWebAudio() {
-    const std::uint64_t produced = pipeline_.audioSamplesProduced();
+    const std::uint64_t produced = engine_.pipeline_.audioSamplesProduced();
     if (!webServer_.running()) {
         // Keep the mark current so switching the server on later starts from
         // live rather than trying to publish everything since launch.
@@ -21958,7 +21956,7 @@ void AppWindow::publishWebAudio() {
         fresh = kTapFrames;
     }
     webAudioBuf_.resize(static_cast<std::size_t>(fresh));
-    const std::size_t got = pipeline_.audioTap(webAudioBuf_.data(), webAudioBuf_.size());
+    const std::size_t got = engine_.pipeline_.audioTap(webAudioBuf_.data(), webAudioBuf_.size());
     webServer_.pushAudio(webAudioBuf_.data(), got);
     webAudioLastProduced_ = produced;
 }
@@ -22054,20 +22052,20 @@ void AppWindow::publishReceiverState() {
     // THE ONE PUBLISH (engine stage 2). Two reads are made once and handed to
     // both halves: the fault sentence (a string copy under the pipeline's
     // lock) and the RDS snapshot (likewise).
-    const std::string faultMessage = pipeline_.faultMessage();
-    const cascade::core::RdsSnapshot rds = pipeline_.rdsSnapshot();
+    const std::string faultMessage = engine_.pipeline_.faultMessage();
+    const cascade::core::RdsSnapshot rds = engine_.pipeline_.rdsSnapshot();
     cascade::core::PublishedState ps{};
     fillPublishedState(ps, faultMessage, rds);
     std::shared_ptr<cascade::net::RadioStatus> lists = std::make_shared<cascade::net::RadioStatus>();
     std::vector<std::uint64_t> bookmarkIds;
     fillStatusLists(*lists, faultMessage, rds, bookmarkIds);
-    receiverSnapshot_->publish(ps, std::move(lists), std::move(bookmarkIds));
+    engine_.receiverSnapshot_->publish(ps, std::move(lists), std::move(bookmarkIds));
 
     // THE SPECTRUM FRAME for the browser - a stream, not state, and not part
     // of stage 2 (docs/engine-stage2.md, OPEN): copied under webMutex_ only
     // when the frame advanced, as before.
     const double centerHz = ps.rx.centreHz;
-    const double spanHz = pipeline_.inputRateHz();
+    const double spanHz = engine_.pipeline_.inputRateHz();
     std::lock_guard<std::mutex> lock(webMutex_);
     // Copy the bins only when the frame actually advanced. lastFrame_ is what
     // the spectrum panel just drew, so the browser and the window are showing
@@ -22089,13 +22087,13 @@ void AppWindow::fillStatusLists(cascade::net::RadioStatus& s, const std::string&
     // (net::composeRadioStatus puts the two together on the reader's
     // thread). Everything read here is read on the GUI thread, which is the
     // contract activeSource() and its readbacks require.
-    cascade::source::IqSource& src = pipeline_.activeSource();
+    cascade::source::IqSource& src = engine_.pipeline_.activeSource();
     s.faultMessage = faultMessage;
     s.sourceName = src.name();  // copied into a std::string here, deliberately
     // The frequency readout's face, as the NAME the page and the config file
     // both speak - see RadioStatus::tunerDisplayStyle.
     s.tunerDisplayStyle = cascade::gui::tunerStyleName(tunerStyle_);
-    s.sourceKind = sourceKind_;
+    s.sourceKind = engine_.sourceKind_;
     // THE TRANSMITTER, AS THE BROWSER SEES IT (0.95.1): transmitting,
     // transmitAvailable and the hold are figures (fillPublishedState:
     // TX_KEYED, TX_REMOTE_ARMED, txHoldRemainingMs).
@@ -22107,16 +22105,16 @@ void AppWindow::fillStatusLists(cascade::net::RadioStatus& s, const std::string&
     // operator has the transmitter in front of them - so the state the page
     // shows is the state somebody is looking at. Closing the page revokes the
     // remote key exactly as it releases the local PTT.
-    s.soapyArgs = deviceArgs_;
-    s.antenna = deviceAntenna_;
-    s.antennas = deviceAntennas_;
-    s.sourceError = sourceError_;
+    s.soapyArgs = engine_.deviceArgs_;
+    s.antenna = engine_.deviceAntenna_;
+    s.antennas = engine_.deviceAntennas_;
+    s.sourceError = engine_.sourceError_;
     // NATIVE ROWS FIRST, exactly as the desktop combo orders them, so the
     // browser's list and the application's list are the same list.
-    for (const cascade::source::NativeDeviceInfo& d : nativeDevices_) {
+    for (const cascade::source::NativeDeviceInfo& d : engine_.nativeDevices_) {
         s.devices.push_back({d.label, d.args, d.driver});
     }
-    for (const cascade::source::SoapyDeviceInfo& d : soapyDevices_) {
+    for (const cascade::source::SoapyDeviceInfo& d : engine_.soapyDevices_) {
         s.devices.push_back({d.label, d.args, "soapy"});
     }
     // THE DEVICE THAT IS ALREADY OPEN MUST APPEAR IN THE LIST even when no
@@ -22126,27 +22124,27 @@ void AppWindow::fillStatusLists(cascade::net::RadioStatus& s, const std::string&
     // source list that omitted it showed only "Signal generator" while the
     // radio was plainly working, with no way to select it back after switching
     // away.
-    if (device_ != nullptr && !deviceArgs_.empty()) {
+    if (engine_.device_ != nullptr && !engine_.deviceArgs_.empty()) {
         bool listed = false;
         for (const cascade::net::RadioStatus::SoapyDevice& d : s.devices) {
-            if (d.args == deviceArgs_ && d.kind == sourceKind_) {
+            if (d.args == engine_.deviceArgs_ && d.kind == engine_.sourceKind_) {
                 listed = true;
                 break;
             }
         }
         if (!listed) {
-            s.devices.insert(s.devices.begin(), {s.sourceName, deviceArgs_, sourceKind_});
+            s.devices.insert(s.devices.begin(), {s.sourceName, engine_.deviceArgs_, engine_.sourceKind_});
         }
     }
-    for (std::size_t i = 0; i < deviceGainNames_.size(); ++i) {
-        const double db = (i < deviceGainsDb_.size())
-                              ? static_cast<double>(deviceGainsDb_[i])
+    for (std::size_t i = 0; i < engine_.deviceGainNames_.size(); ++i) {
+        const double db = (i < engine_.deviceGainsDb_.size())
+                              ? static_cast<double>(engine_.deviceGainsDb_[i])
                               : 0.0;
         // WITH THE UNIT, so the browser can letter the number the same way
         // the desktop does. The value field keeps its name and its meaning -
         // a page written against an older build still reads it - and "unit"
         // says whether it is decibels or the radio's own steps.
-        s.gains.push_back({deviceGainNames_[i], db, cascade::gui::gainUnitWire(gainUnitAt(i))});
+        s.gains.push_back({engine_.deviceGainNames_[i], db, cascade::gui::gainUnitWire(gainUnitAt(i))});
     }
 
     // The same names the Sinks panel shows, from the same source, so the two
@@ -22157,10 +22155,10 @@ void AppWindow::fillStatusLists(cascade::net::RadioStatus& s, const std::string&
     // coming out of this radio. Empty is the ordinary case: the demodulated
     // audio is playing and the two gap counters (figures) have nothing to
     // report.
-    s.audioSource = pluginRunner_.playingPlugin();
-    s.recordDir = recordDir_;
-    s.recordError = recordError_;
-    s.recordNotice = recordNotice_;
+    s.audioSource = engine_.pluginRunner_.playingPlugin();
+    s.recordDir = engine_.recordDir_;
+    s.recordError = engine_.recordError_;
+    s.recordNotice = engine_.recordNotice_;
 
     // A FEW HUNDRED AT MOST go to the browser: an imported list of 33 000
     // would be copied every frame and serialised on every poll, for a page
@@ -22174,16 +22172,16 @@ void AppWindow::fillStatusLists(cascade::net::RadioStatus& s, const std::string&
     // from readFull()), so the map and the rows /api/status serves are always
     // from the same publish.
     {
-        const std::vector<cascade::core::Bookmark>& all = freqMgr_.list();
+        const std::vector<cascade::core::Bookmark>& all = engine_.freqMgr_.list();
         bookmarkIds.clear();
-        for (const std::size_t i : freqMgr_.nearestSubset(currentAbsoluteHz(), 300, 100)) {
+        for (const std::size_t i : engine_.freqMgr_.nearestSubset(currentAbsoluteHz(), 300, 100)) {
             const cascade::core::Bookmark& b = all[i];
             bookmarkIds.push_back(b.id);
             s.bookmarks.push_back({b.name, b.freqHz, b.mode, b.bandwidthHz});
         }
     }
 
-    for (const cascade::core::HostTrack& t : pluginUi_.tracks()) {
+    for (const cascade::core::HostTrack& t : engine_.pluginUi_.tracks()) {
         // THE SAME STALENESS RULE THE DESKTOP MAP APPLIES, so the two views do
         // not disagree about what is still flying. A dropped target simply
         // stops appearing in the snapshot; ageMs is still published for the
@@ -22226,7 +22224,7 @@ void AppWindow::fillStatusLists(cascade::net::RadioStatus& s, const std::string&
 
     s.basemap.attribution = basemap_.attribution();
 
-    for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
+    for (const cascade::core::LoadedPlugin& p : engine_.pluginHost_.plugins()) {
         cascade::net::RadioStatus::Plugin w;
         w.name = p.name;
         w.version = p.version;
@@ -22245,9 +22243,9 @@ void AppWindow::fillStatusLists(cascade::net::RadioStatus& s, const std::string&
         // Keyed on the module file (w.fileName), never on the display name:
         // the browser sends that same key back to toggle the grant, and a name
         // is the plugin's own to choose.
-        w.tuneAllowed = std::find(pluginTuneAllowed_.begin(), pluginTuneAllowed_.end(),
+        w.tuneAllowed = std::find(engine_.pluginTuneAllowed_.begin(), engine_.pluginTuneAllowed_.end(),
                                   cascade::core::PluginUi::tuneKey(p)) !=
-                        pluginTuneAllowed_.end();
+                        engine_.pluginTuneAllowed_.end();
         // Declared presets, from the SAME enumeration drawPluginPresets and
         // the preset bars use: capped, because a plugin is third-party code
         // and a list this long is not a menu, and each frequency positively
@@ -22265,12 +22263,12 @@ void AppWindow::fillStatusLists(cascade::net::RadioStatus& s, const std::string&
         s.plugins.push_back(std::move(w));
     }
 
-    s.catalogueStatus = catalogStatus_;
-    s.catalogueError = catalogError_;
-    s.installReport = installReport_;
-    s.installError = installError_;
-    for (int i = 0; i < static_cast<int>(catalog_.size()); ++i) {
-        const cascade::core::PluginCatalogEntry& e = catalog_[static_cast<std::size_t>(i)];
+    s.catalogueStatus = engine_.catalogStatus_;
+    s.catalogueError = engine_.catalogError_;
+    s.installReport = engine_.installReport_;
+    s.installError = engine_.installError_;
+    for (int i = 0; i < static_cast<int>(engine_.catalog_.size()); ++i) {
+        const cascade::core::PluginCatalogEntry& e = engine_.catalog_[static_cast<std::size_t>(i)];
         cascade::net::RadioStatus::CatalogEntry c;
         c.id = e.id;
         c.name = e.name;
@@ -22292,10 +22290,10 @@ void AppWindow::fillStatusLists(cascade::net::RadioStatus& s, const std::string&
     // too.
     {
         constexpr std::size_t kMaxWebDecoded = 60;
-        const std::size_t total = decoderLog_.size();
+        const std::size_t total = engine_.decoderLog_.size();
         const std::size_t from = (total > kMaxWebDecoded) ? total - kMaxWebDecoded : 0;
         for (std::size_t i = from; i < total; ++i) {
-            s.decoded.push_back({decoderLog_[i].plugin, decoderLog_[i].text});
+            s.decoded.push_back({engine_.decoderLog_[i].plugin, engine_.decoderLog_[i].text});
         }
     }
     // RDS text; the RDS figures are in the PublishedState.
@@ -22388,8 +22386,8 @@ void AppWindow::submitCommand(const FoxCommand& c) {
 void AppWindow::submitCommand(cascade::core::cmd::QueuedCommand q) {
     LocalCommand lc;
     lc.q = std::move(q);
-    lc.sourceGen = sourceGen_;
-    localCommands_.push_back(std::move(lc));
+    lc.sourceGen = engine_.sourceGen_;
+    engine_.localCommands_.push_back(std::move(lc));
 }
 
 namespace {
@@ -22412,17 +22410,17 @@ bool isDeviceScoped(std::uint32_t op) {
 }  // namespace
 
 void AppWindow::drainLocalCommands() {
-    if (localCommands_.empty()) { return; }
+    if (engine_.localCommands_.empty()) { return; }
     // TAKEN, THEN APPLIED: a command's own effects may queue more (none does
     // today); those wait for the next drain rather than extend this one.
     std::vector<LocalCommand> batch;
-    batch.swap(localCommands_);
+    batch.swap(engine_.localCommands_);
     for (const LocalCommand& lc : batch) {
         // A radio command asked of a radio that has gone since (closed, or
         // replaced by one that opened in between - sourceGen_ moves with
         // every device_ change, including one made earlier in this batch) is
         // dropped: it was drawn for that radio, never for this one.
-        if (lc.sourceGen != sourceGen_ && isDeviceScoped(lc.q.c.op)) { continue; }
+        if (lc.sourceGen != engine_.sourceGen_ && isDeviceScoped(lc.q.c.op)) { continue; }
         (void)applyCommand(lc.q.c, lc.q.longText);
     }
 }
@@ -22458,13 +22456,13 @@ FoxCommandResult AppWindow::applyCommand(const FoxCommand& c, const std::string&
             } else {
                 stopReceiver();
             }
-            res.applied[0] = pipeline_.running() ? 1.0 : 0.0;
+            res.applied[0] = engine_.pipeline_.running() ? 1.0 : 0.0;
             return res;
         case FOXAPI_OP_SET_CENTRE:
             // The GUI's own absolute-tune path, so the RDS/stereo decoders are
             // told to forget the old station.
             retuneSourceHz(c.num[0]);
-            res.applied[0] = pipeline_.activeSource().centerFrequencyHz();
+            res.applied[0] = engine_.pipeline_.activeSource().centerFrequencyHz();
             return res;
         case FOXAPI_OP_SET_FREQUENCY:
             // The counter's rule: the VFO offset kept, the centre follows.
@@ -22474,10 +22472,10 @@ FoxCommandResult AppWindow::applyCommand(const FoxCommand& c, const std::string&
         case FOXAPI_OP_SET_VFO_OFFSET: {
             // Clamped against the LIVE rate: the whole band stays inside the
             // baseband (the web remote, a plugin and a spectrum drag).
-            const double off = cascade::gui::vfoOffsetInsideSpan(c.num[0], pipeline_.inputRateHz(),
-                                                                 vfoBandwidthHz_);
-            pipeline_.setVfoOffsetHz(off);
-            vfoOffsetKhz_ = static_cast<float>(off / 1000.0);
+            const double off = cascade::gui::vfoOffsetInsideSpan(c.num[0], engine_.pipeline_.inputRateHz(),
+                                                                 engine_.vfoBandwidthHz_);
+            engine_.pipeline_.setVfoOffsetHz(off);
+            engine_.vfoOffsetKhz_ = static_cast<float>(off / 1000.0);
             if (off != c.num[0]) { res.flags |= FOXAPI_RESULT_CLAMPED; }
             res.applied[0] = off;
             return res;
@@ -22486,16 +22484,16 @@ FoxCommandResult AppWindow::applyCommand(const FoxCommand& c, const std::string&
             // The rail's VFO slider: its own +/-500 kHz span, never clamped to
             // the band (a divergence from SET_VFO_OFFSET kept as it was - see
             // docs/engine-stage1.md).
-            vfoOffsetKhz_ = static_cast<float>(c.num[0] / 1000.0);
-            pipeline_.setVfoOffsetHz(1000.0 * static_cast<double>(vfoOffsetKhz_));
-            res.applied[0] = pipeline_.vfoOffsetHz();
+            engine_.vfoOffsetKhz_ = static_cast<float>(c.num[0] / 1000.0);
+            engine_.pipeline_.setVfoOffsetHz(1000.0 * static_cast<double>(engine_.vfoOffsetKhz_));
+            res.applied[0] = engine_.pipeline_.vfoOffsetHz();
             return res;
         case FOXAPP_OP_VFO_TO_ABSOLUTE:
             // Click-to-tune on the spectrum or the waterfall: the snap is to
             // the mode in force WHEN APPLIED, the offset against the centre
             // in force when applied.
             setVfoToAbsoluteHz(c.num[0], on);
-            res.applied[0] = pipeline_.vfoOffsetHz();
+            res.applied[0] = engine_.pipeline_.vfoOffsetHz();
             return res;
         case FOXAPI_OP_STEP_TUNE: {
             // The counter's wheel and switches, TUNE UP/DN and the tuning
@@ -22504,7 +22502,7 @@ FoxCommandResult AppWindow::applyCommand(const FoxCommand& c, const std::string&
             if (c.ival[0] == 0) { return refuse(FOXAPI_OUT_OF_RANGE, "a step of zero steps"); }
             const double hz = std::max(0.0, currentAbsoluteHz());
             const double minTunedHz =
-                cascade::core::minTunedAirHz(pipeline_.converter(), pipeline_.vfoOffsetHz());
+                cascade::core::minTunedAirHz(engine_.pipeline_.converter(), engine_.pipeline_.vfoOffsetHz());
             const double next = std::max(
                 minTunedHz, std::max(0.0, hz + static_cast<double>(c.ival[0]) * c.num[0]));
             tuneAbsoluteHz(next);
@@ -22517,19 +22515,19 @@ FoxCommandResult AppWindow::applyCommand(const FoxCommand& c, const std::string&
             // default and logs the change the same way.
             if (c.ival[0] < 1 || c.ival[0] > 8) { return refuse(FOXAPI_OUT_OF_RANGE, "no such mode"); }
             setModeIndex(static_cast<int>(c.ival[0] - 1));
-            res.applied[0] = static_cast<double>(modeIndex_ + 1);
-            res.applied[1] = vfoBandwidthHz_;
+            res.applied[0] = static_cast<double>(engine_.modeIndex_ + 1);
+            res.applied[1] = engine_.vfoBandwidthHz_;
             return res;
         }
         case FOXAPI_OP_SET_BANDWIDTH: {
             // [3 kHz, 90% of the channel rate]; -1 for a width the steps do
             // not carry, so the combo letters the real figure and ticks none.
-            const double bwHi = kVfoBwMaxChanFrac * pipeline_.channelRateHz();
-            vfoBandwidthHz_ = std::max(kVfoBwMinHz, std::min(c.num[0], bwHi));
-            pipeline_.setVfoBandwidthHz(vfoBandwidthHz_);
-            bandwidthIndex_ = bandwidthStepIndex(vfoBandwidthHz_);
-            if (vfoBandwidthHz_ != c.num[0]) { res.flags |= FOXAPI_RESULT_CLAMPED; }
-            res.applied[0] = vfoBandwidthHz_;
+            const double bwHi = kVfoBwMaxChanFrac * engine_.pipeline_.channelRateHz();
+            engine_.vfoBandwidthHz_ = std::max(kVfoBwMinHz, std::min(c.num[0], bwHi));
+            engine_.pipeline_.setVfoBandwidthHz(engine_.vfoBandwidthHz_);
+            engine_.bandwidthIndex_ = bandwidthStepIndex(engine_.vfoBandwidthHz_);
+            if (engine_.vfoBandwidthHz_ != c.num[0]) { res.flags |= FOXAPI_RESULT_CLAMPED; }
+            res.applied[0] = engine_.vfoBandwidthHz_;
             return res;
         }
         case FOXAPP_OP_SET_BANDWIDTH_STEP:
@@ -22537,88 +22535,88 @@ FoxCommandResult AppWindow::applyCommand(const FoxCommand& c, const std::string&
             if (c.ival[0] < 0 || c.ival[0] >= kBwCount) {
                 return refuse(FOXAPI_OUT_OF_RANGE, "no such bandwidth step");
             }
-            bandwidthIndex_ = static_cast<int>(c.ival[0]);
-            vfoBandwidthHz_ = kBwHz[bandwidthIndex_];
-            pipeline_.setVfoBandwidthHz(vfoBandwidthHz_);
-            res.applied[0] = vfoBandwidthHz_;
+            engine_.bandwidthIndex_ = static_cast<int>(c.ival[0]);
+            engine_.vfoBandwidthHz_ = kBwHz[engine_.bandwidthIndex_];
+            engine_.pipeline_.setVfoBandwidthHz(engine_.vfoBandwidthHz_);
+            res.applied[0] = engine_.vfoBandwidthHz_;
             return res;
         case FOXAPP_OP_SET_BANDWIDTH_DRAG: {
             // A band edge dragged on the spectrum: clamped like SET_BANDWIDTH,
             // but the combo's step is left where it was (as it always was).
-            const double bwHi = kVfoBwMaxChanFrac * pipeline_.channelRateHz();
-            vfoBandwidthHz_ = std::max(kVfoBwMinHz, std::min(c.num[0], bwHi));
-            pipeline_.setVfoBandwidthHz(vfoBandwidthHz_);
-            if (vfoBandwidthHz_ != c.num[0]) { res.flags |= FOXAPI_RESULT_CLAMPED; }
-            res.applied[0] = vfoBandwidthHz_;
+            const double bwHi = kVfoBwMaxChanFrac * engine_.pipeline_.channelRateHz();
+            engine_.vfoBandwidthHz_ = std::max(kVfoBwMinHz, std::min(c.num[0], bwHi));
+            engine_.pipeline_.setVfoBandwidthHz(engine_.vfoBandwidthHz_);
+            if (engine_.vfoBandwidthHz_ != c.num[0]) { res.flags |= FOXAPI_RESULT_CLAMPED; }
+            res.applied[0] = engine_.vfoBandwidthHz_;
             return res;
         }
         case FOXAPI_OP_SET_SQUELCH:
-            squelchDb_ = static_cast<float>(c.num[0]);
-            pipeline_.setSquelchDb(squelchDb_);
-            res.applied[0] = squelchDb_;
+            engine_.squelchDb_ = static_cast<float>(c.num[0]);
+            engine_.pipeline_.setSquelchDb(engine_.squelchDb_);
+            res.applied[0] = engine_.squelchDb_;
             return res;
         case FOXAPI_OP_SET_VOLUME:
-            volume_ = static_cast<float>(c.num[0]);
-            pipeline_.audio().setVolume(volume_);
-            res.applied[0] = volume_;
+            engine_.volume_ = static_cast<float>(c.num[0]);
+            engine_.pipeline_.audio().setVolume(engine_.volume_);
+            res.applied[0] = engine_.volume_;
             return res;
         case FOXAPI_OP_SET_MUTED:
             // The user's own mute (the MUTE key's flag); updateAudioMute
             // applies it with the rest of the mute policy.
-            userMuted_ = on;
-            res.applied[0] = userMuted_ ? 1.0 : 0.0;
+            engine_.userMuted_ = on;
+            res.applied[0] = engine_.userMuted_ ? 1.0 : 0.0;
             return res;
         case FOXAPI_OP_SET_DEEMPHASIS:
             if (c.ival[0] < 0 || c.ival[0] >= kDeemphCount) {
                 return refuse(FOXAPI_OUT_OF_RANGE, "no such de-emphasis");
             }
-            deemphIndex_ = static_cast<int>(c.ival[0]);
-            pipeline_.setDeemphasisUs(kDeemphUs[deemphIndex_]);
-            res.applied[0] = deemphIndex_;
+            engine_.deemphIndex_ = static_cast<int>(c.ival[0]);
+            engine_.pipeline_.setDeemphasisUs(kDeemphUs[engine_.deemphIndex_]);
+            res.applied[0] = engine_.deemphIndex_;
             return res;
         case FOXAPI_OP_SET_STEREO:
-            stereoEnabled_ = on;
-            pipeline_.setStereoEnabled(stereoEnabled_);
+            engine_.stereoEnabled_ = on;
+            engine_.pipeline_.setStereoEnabled(engine_.stereoEnabled_);
             return res;
         case FOXAPI_OP_SET_NR:
-            nrEnabled_ = on;
-            pipeline_.setNoiseReductionEnabled(nrEnabled_);
+            engine_.nrEnabled_ = on;
+            engine_.pipeline_.setNoiseReductionEnabled(engine_.nrEnabled_);
             if (c.ival[1] == 1) {
-                nrStrength_ = static_cast<float>(c.num[0]);
-                pipeline_.setNoiseReductionStrength(nrStrength_);
+                engine_.nrStrength_ = static_cast<float>(c.num[0]);
+                engine_.pipeline_.setNoiseReductionStrength(engine_.nrStrength_);
             }
-            res.applied[0] = nrStrength_;
+            res.applied[0] = engine_.nrStrength_;
             return res;
         case FOXAPP_OP_SET_NR_STRENGTH:
-            nrStrength_ = static_cast<float>(c.num[0]);
-            pipeline_.setNoiseReductionStrength(nrStrength_);
-            res.applied[0] = nrStrength_;
+            engine_.nrStrength_ = static_cast<float>(c.num[0]);
+            engine_.pipeline_.setNoiseReductionStrength(engine_.nrStrength_);
+            res.applied[0] = engine_.nrStrength_;
             return res;
         case FOXAPI_OP_SET_NOTCH:
-            notchEnabled_ = on;
-            pipeline_.setNotchEnabled(notchEnabled_);
+            engine_.notchEnabled_ = on;
+            engine_.pipeline_.setNotchEnabled(engine_.notchEnabled_);
             if (c.ival[1] == 1) {
-                notchFreqHz_ = static_cast<float>(c.num[0]);
-                pipeline_.setNotchFrequencyHz(static_cast<double>(notchFreqHz_));
-                notchQ_ = static_cast<float>(c.num[1]);
-                pipeline_.setNotchQ(static_cast<double>(notchQ_));
+                engine_.notchFreqHz_ = static_cast<float>(c.num[0]);
+                engine_.pipeline_.setNotchFrequencyHz(static_cast<double>(engine_.notchFreqHz_));
+                engine_.notchQ_ = static_cast<float>(c.num[1]);
+                engine_.pipeline_.setNotchQ(static_cast<double>(engine_.notchQ_));
             }
-            res.applied[0] = notchFreqHz_;
-            res.applied[1] = notchQ_;
+            res.applied[0] = engine_.notchFreqHz_;
+            res.applied[1] = engine_.notchQ_;
             return res;
         case FOXAPP_OP_SET_NOTCH_FREQUENCY:
-            notchFreqHz_ = static_cast<float>(c.num[0]);
-            pipeline_.setNotchFrequencyHz(static_cast<double>(notchFreqHz_));
-            res.applied[0] = notchFreqHz_;
+            engine_.notchFreqHz_ = static_cast<float>(c.num[0]);
+            engine_.pipeline_.setNotchFrequencyHz(static_cast<double>(engine_.notchFreqHz_));
+            res.applied[0] = engine_.notchFreqHz_;
             return res;
         case FOXAPP_OP_SET_NOTCH_Q:
-            notchQ_ = static_cast<float>(c.num[0]);
-            pipeline_.setNotchQ(static_cast<double>(notchQ_));
-            res.applied[0] = notchQ_;
+            engine_.notchQ_ = static_cast<float>(c.num[0]);
+            engine_.pipeline_.setNotchQ(static_cast<double>(engine_.notchQ_));
+            res.applied[0] = engine_.notchQ_;
             return res;
         case FOXAPI_OP_SET_AUTO_NOTCH:
-            autoNotch_ = on;
-            pipeline_.setAutoNotchEnabled(autoNotch_);
+            engine_.autoNotch_ = on;
+            engine_.pipeline_.setAutoNotchEnabled(engine_.autoNotch_);
             return res;
 
         // --- the display -------------------------------------------------------
@@ -22630,10 +22628,10 @@ FoxCommandResult AppWindow::applyCommand(const FoxCommand& c, const std::string&
         case FOXAPP_OP_SET_DISPLAY_MIN:
         case FOXAPP_OP_SET_DISPLAY_MAX: {
             const bool maxOnly = c.op == FOXAPP_OP_SET_DISPLAY_MAX;
-            float lo = (c.op == FOXAPP_OP_SET_DISPLAY_MAX) ? dbMin_ : static_cast<float>(c.num[0]);
+            float lo = (c.op == FOXAPP_OP_SET_DISPLAY_MAX) ? engine_.dbMin_ : static_cast<float>(c.num[0]);
             float hi = (c.op == FOXAPI_OP_SET_DISPLAY_RANGE) ? static_cast<float>(c.num[1])
                        : maxOnly                              ? static_cast<float>(c.num[0])
-                                                              : dbMax_;
+                                                              : engine_.dbMax_;
             if (lo > hi - kMinDbSpan) {
                 if (maxOnly) {
                     hi = lo + kMinDbSpan;
@@ -22642,16 +22640,16 @@ FoxCommandResult AppWindow::applyCommand(const FoxCommand& c, const std::string&
                 }
                 res.flags |= FOXAPI_RESULT_CLAMPED;
             }
-            dbMin_ = lo;
-            dbMax_ = hi;
-            spectrum_->setRange(dbMin_, dbMax_);
-            res.applied[0] = dbMin_;
-            res.applied[1] = dbMax_;
+            engine_.dbMin_ = lo;
+            engine_.dbMax_ = hi;
+            spectrum_->setRange(engine_.dbMin_, engine_.dbMax_);
+            res.applied[0] = engine_.dbMin_;
+            res.applied[1] = engine_.dbMax_;
             return res;
         }
         case FOXAPI_OP_SET_BAND_PLAN:
-            if (text == bandPlanSelection_) { return refuse(FOXAPI_NO_CHANGE, "already that plan"); }
-            bandPlanSelection_ = text;
+            if (text == engine_.bandPlanSelection_) { return refuse(FOXAPI_NO_CHANGE, "already that plan"); }
+            engine_.bandPlanSelection_ = text;
             loadBandPlan();
             return res;
 
@@ -22667,11 +22665,11 @@ FoxCommandResult AppWindow::applyCommand(const FoxCommand& c, const std::string&
             // The Source list opening: the lazy first SoapySDR scan, or the
             // whole scan a partial one left owed.
             scanNative();
-            if (!soapyScanned_ || (soapyScanPartial_ && !soapyScanGated())) { scanSoapy(); }
+            if (!engine_.soapyScanned_ || (engine_.soapyScanPartial_ && !soapyScanGated())) { scanSoapy(); }
             return res;
         case FOXAPP_OP_SET_NETWORK_USRP_SCAN:
-            lookForNetworkUsrps_ = on;
-            if (lookForNetworkUsrps_) { scanSoapy(); }
+            engine_.lookForNetworkUsrps_ = on;
+            if (engine_.lookForNetworkUsrps_) { scanSoapy(); }
             return res;
         case FOXAPI_OP_SELECT_SOURCE:
             if (text.empty()) { return refuse(FOXAPI_BAD_ARGUMENT, "no source named"); }
@@ -22680,31 +22678,31 @@ FoxCommandResult AppWindow::applyCommand(const FoxCommand& c, const std::string&
             }
             return res;
         case FOXAPI_OP_SET_SAMPLE_RATE: {
-            if (device_ == nullptr) { return refuse(FOXAPI_NO_DEVICE, "no radio is open"); }
+            if (engine_.device_ == nullptr) { return refuse(FOXAPI_NO_DEVICE, "no radio is open"); }
             // The refusal's reason, or a coercion's, lands on the line; the
             // Rate combo follows the READBACK.
             const cascade::gui::RateSetOutcome set =
-                cascade::gui::applySourceRate(*device_, c.num[0], sourceError_);
-            sourceError_ = set.sourceError;
+                cascade::gui::applySourceRate(*engine_.device_, c.num[0], engine_.sourceError_);
+            engine_.sourceError_ = set.sourceError;
             if (!set.ok) { return refuse(FOXAPI_FAILED, "the radio refused the rate"); }
-            deviceRateIndex_ =
-                nearestIndex(deviceRatesHz_, pipeline_.activeSource().sampleRateHz());
+            engine_.deviceRateIndex_ =
+                nearestIndex(engine_.deviceRatesHz_, engine_.pipeline_.activeSource().sampleRateHz());
             followInputRate();
-            res.applied[0] = pipeline_.activeSource().sampleRateHz();
+            res.applied[0] = engine_.pipeline_.activeSource().sampleRateHz();
             return res;
         }
         case FOXAPI_OP_SET_GAIN: {
-            if (device_ == nullptr) { return refuse(FOXAPI_NO_DEVICE, "no radio is open"); }
-            if (!device_->setGainDb(text, c.num[0])) {
-                sourceError_ = device_->lastError();
+            if (engine_.device_ == nullptr) { return refuse(FOXAPI_NO_DEVICE, "no radio is open"); }
+            if (!engine_.device_->setGainDb(text, c.num[0])) {
+                engine_.sourceError_ = engine_.device_->lastError();
                 return refuse(FOXAPI_FAILED, "the radio refused the gain");
             }
             // THE READBACK, not the request: every one of these radios
             // quantises, and a slider left on the request would be a lie.
-            for (std::size_t i = 0; i < deviceGainNames_.size(); ++i) {
-                if (deviceGainNames_[i] == text && i < deviceGainsDb_.size()) {
-                    deviceGainsDb_[i] = static_cast<float>(device_->gainDb(text));
-                    res.applied[0] = deviceGainsDb_[i];
+            for (std::size_t i = 0; i < engine_.deviceGainNames_.size(); ++i) {
+                if (engine_.deviceGainNames_[i] == text && i < engine_.deviceGainsDb_.size()) {
+                    engine_.deviceGainsDb_[i] = static_cast<float>(engine_.device_->gainDb(text));
+                    res.applied[0] = engine_.deviceGainsDb_[i];
                 }
             }
             return res;
@@ -22712,34 +22710,34 @@ FoxCommandResult AppWindow::applyCommand(const FoxCommand& c, const std::string&
         case FOXAPP_OP_SET_GAIN_NO_READBACK: {
             // The radar scope's GAIN knob: the knob keeps the figure it asked
             // for (a divergence from SET_GAIN kept as it was).
-            if (device_ == nullptr) { return refuse(FOXAPI_NO_DEVICE, "no radio is open"); }
-            for (std::size_t i = 0; i < deviceGainNames_.size() && i < deviceGainsDb_.size(); ++i) {
-                if (deviceGainNames_[i] != text) { continue; }
-                deviceGainsDb_[i] = static_cast<float>(c.num[0]);
-                if (!device_->setGainDb(text, static_cast<double>(deviceGainsDb_[i]))) {
-                    sourceError_ = device_->lastError();
+            if (engine_.device_ == nullptr) { return refuse(FOXAPI_NO_DEVICE, "no radio is open"); }
+            for (std::size_t i = 0; i < engine_.deviceGainNames_.size() && i < engine_.deviceGainsDb_.size(); ++i) {
+                if (engine_.deviceGainNames_[i] != text) { continue; }
+                engine_.deviceGainsDb_[i] = static_cast<float>(c.num[0]);
+                if (!engine_.device_->setGainDb(text, static_cast<double>(engine_.deviceGainsDb_[i]))) {
+                    engine_.sourceError_ = engine_.device_->lastError();
                 }
-                res.applied[0] = deviceGainsDb_[i];
+                res.applied[0] = engine_.deviceGainsDb_[i];
                 return res;
             }
             return refuse(FOXAPI_NOT_FOUND, "no such gain stage");
         }
         case FOXAPI_OP_SET_DEVICE_AGC:
-            if (device_ == nullptr) { return refuse(FOXAPI_NO_DEVICE, "no radio is open"); }
-            if (!deviceAgcSupported_) { return refuse(FOXAPI_UNSUPPORTED, "no automatic gain"); }
-            if (!device_->setAutoGain(on)) {
-                sourceError_ = device_->lastError();
+            if (engine_.device_ == nullptr) { return refuse(FOXAPI_NO_DEVICE, "no radio is open"); }
+            if (!engine_.deviceAgcSupported_) { return refuse(FOXAPI_UNSUPPORTED, "no automatic gain"); }
+            if (!engine_.device_->setAutoGain(on)) {
+                engine_.sourceError_ = engine_.device_->lastError();
                 return refuse(FOXAPI_FAILED, "the radio refused");
             }
-            deviceAgc_ = on;
+            engine_.deviceAgc_ = on;
             return res;
         case FOXAPI_OP_SET_ANTENNA:
-            if (device_ == nullptr) { return refuse(FOXAPI_NO_DEVICE, "no radio is open"); }
-            if (!device_->setAntenna(text)) {
-                sourceError_ = device_->lastError();
+            if (engine_.device_ == nullptr) { return refuse(FOXAPI_NO_DEVICE, "no radio is open"); }
+            if (!engine_.device_->setAntenna(text)) {
+                engine_.sourceError_ = engine_.device_->lastError();
                 return refuse(FOXAPI_FAILED, "the radio refused the antenna");
             }
-            deviceAntenna_ = device_->antenna();  // readback, not the request
+            engine_.deviceAntenna_ = engine_.device_->antenna();  // readback, not the request
             return res;
         case FOXAPI_OP_SET_BIAS_TEE:
             // The Source panel's box and the deck's key both end here, after
@@ -22749,40 +22747,40 @@ FoxCommandResult AppWindow::applyCommand(const FoxCommand& c, const std::string&
         case FOXAPI_OP_SET_DEVICE_OPTION: {
             // The RSP's notches and HDR, the RX888's ADC pair: request, then
             // show the driver's READBACK.
-            if (device_ == nullptr) { return refuse(FOXAPI_NO_DEVICE, "no radio is open"); }
-            if (text == "rf_notch" && deviceRfNotchPresent_) {
-                deviceRfNotch_ = on;
-                withRfNotch(device_, [this](auto& d) {
-                    if (!d.setRfNotch(deviceRfNotch_)) { sourceError_ = d.lastError(); }
-                    deviceRfNotch_ = d.rfNotch();
+            if (engine_.device_ == nullptr) { return refuse(FOXAPI_NO_DEVICE, "no radio is open"); }
+            if (text == "rf_notch" && engine_.deviceRfNotchPresent_) {
+                engine_.deviceRfNotch_ = on;
+                withRfNotch(engine_.device_, [this](auto& d) {
+                    if (!d.setRfNotch(engine_.deviceRfNotch_)) { engine_.sourceError_ = d.lastError(); }
+                    engine_.deviceRfNotch_ = d.rfNotch();
                     return true;
                 });
-            } else if (text == "dab_notch" && deviceDabNotchPresent_) {
-                deviceDabNotch_ = on;
-                withDabNotch(device_, [this](auto& d) {
-                    if (!d.setDabNotch(deviceDabNotch_)) { sourceError_ = d.lastError(); }
-                    deviceDabNotch_ = d.dabNotch();
+            } else if (text == "dab_notch" && engine_.deviceDabNotchPresent_) {
+                engine_.deviceDabNotch_ = on;
+                withDabNotch(engine_.device_, [this](auto& d) {
+                    if (!d.setDabNotch(engine_.deviceDabNotch_)) { engine_.sourceError_ = d.lastError(); }
+                    engine_.deviceDabNotch_ = d.dabNotch();
                     return true;
                 });
-            } else if (text == "hdr" && deviceHdrPresent_) {
-                deviceHdr_ = on;
-                withHdrMode(device_, [this](auto& d) {
-                    if (!d.setHdrMode(deviceHdr_)) { sourceError_ = d.lastError(); }
-                    deviceHdr_ = d.hdrMode();
+            } else if (text == "hdr" && engine_.deviceHdrPresent_) {
+                engine_.deviceHdr_ = on;
+                withHdrMode(engine_.device_, [this](auto& d) {
+                    if (!d.setHdrMode(engine_.deviceHdr_)) { engine_.sourceError_ = d.lastError(); }
+                    engine_.deviceHdr_ = d.hdrMode();
                     return true;
                 });
-            } else if (text == "dither" && deviceAdcSwitchesPresent_) {
-                deviceDither_ = on;
-                withAdcSwitches(device_, [this](auto& d) {
-                    if (!d.setDither(deviceDither_)) { sourceError_ = d.lastError(); }
-                    deviceDither_ = d.dither();
+            } else if (text == "dither" && engine_.deviceAdcSwitchesPresent_) {
+                engine_.deviceDither_ = on;
+                withAdcSwitches(engine_.device_, [this](auto& d) {
+                    if (!d.setDither(engine_.deviceDither_)) { engine_.sourceError_ = d.lastError(); }
+                    engine_.deviceDither_ = d.dither();
                     return true;
                 });
-            } else if (text == "randomiser" && deviceAdcSwitchesPresent_) {
-                deviceRandomiser_ = on;
-                withAdcSwitches(device_, [this](auto& d) {
-                    if (!d.setRandomiser(deviceRandomiser_)) { sourceError_ = d.lastError(); }
-                    deviceRandomiser_ = d.randomiser();
+            } else if (text == "randomiser" && engine_.deviceAdcSwitchesPresent_) {
+                engine_.deviceRandomiser_ = on;
+                withAdcSwitches(engine_.device_, [this](auto& d) {
+                    if (!d.setRandomiser(engine_.deviceRandomiser_)) { engine_.sourceError_ = d.lastError(); }
+                    engine_.deviceRandomiser_ = d.randomiser();
                     return true;
                 });
             } else {
@@ -22795,7 +22793,7 @@ FoxCommandResult AppWindow::applyCommand(const FoxCommand& c, const std::string&
             // Not while a radio is being opened: the setting would land on
             // whichever radio happened to be installed at that instant (the
             // panel greys its controls for the same reason).
-            if (deviceOpenPending_) { return refuse(FOXAPI_BUSY, "a radio is still opening"); }
+            if (engine_.deviceOpenPending_) { return refuse(FOXAPI_BUSY, "a radio is still opening"); }
             cascade::core::ConverterSetting s;
             s.mode = static_cast<cascade::core::ConverterMode>(c.ival[0]);
             s.loHz = c.num[0];
@@ -22809,18 +22807,18 @@ FoxCommandResult AppWindow::applyCommand(const FoxCommand& c, const std::string&
             // MODE takes it at once and the whole receiver follows it; one
             // running in real mode keeps it for the next Open (the panel's
             // form holds it).
-            if (!cascade::gui::soundCardCentreAppliesLive(sourceKind_ == "soundcard", soundCardOpenPending_,
-                                                          soundCardLive_.format)) {
+            if (!cascade::gui::soundCardCentreAppliesLive(engine_.sourceKind_ == "soundcard", engine_.soundCardOpenPending_,
+                                                          engine_.soundCardLive_.format)) {
                 return refuse(FOXAPI_NO_CHANGE, "no I/Q sound card is running");
             }
-            soundCardLive_.iqCentreHz = c.num[0];
+            engine_.soundCardLive_.iqCentreHz = c.num[0];
             applyRetuneNow(c.num[0], false);
             return res;
 
         // --- the recorder ----------------------------------------------------------
         case FOXAPI_OP_RECORD_IQ:
             if (on) {
-                if (iqRecorder_.recording()) { return refuse(FOXAPI_NO_CHANGE, "already recording"); }
+                if (engine_.iqRecorder_.recording()) { return refuse(FOXAPI_NO_CHANGE, "already recording"); }
                 if (!startIqRecording()) { return refuse(FOXAPI_FAILED, "the recording could not start"); }
             } else {
                 stopIqRecording();
@@ -22828,7 +22826,7 @@ FoxCommandResult AppWindow::applyCommand(const FoxCommand& c, const std::string&
             return res;
         case FOXAPI_OP_RECORD_AUDIO:
             if (on) {
-                if (audioRecorder_.recording()) { return refuse(FOXAPI_NO_CHANGE, "already recording"); }
+                if (engine_.audioRecorder_.recording()) { return refuse(FOXAPI_NO_CHANGE, "already recording"); }
                 if (!startAudioRecording()) { return refuse(FOXAPI_FAILED, "the recording could not start"); }
             } else {
                 stopAudioRecording();
@@ -22844,25 +22842,25 @@ FoxCommandResult AppWindow::applyCommand(const FoxCommand& c, const std::string&
         case FOXAPI_OP_BOOKMARK_FAVOURITE: {
             // BY ID, re-found in the LIVE list: the list may have moved since
             // the command was made (an import, a browser's add).
-            const std::size_t i = freqMgr_.indexOfId(static_cast<std::uint64_t>(c.ival[0]));
-            if (i >= freqMgr_.list().size()) { return refuse(FOXAPI_NOT_FOUND, "no such bookmark"); }
+            const std::size_t i = engine_.freqMgr_.indexOfId(static_cast<std::uint64_t>(c.ival[0]));
+            if (i >= engine_.freqMgr_.list().size()) { return refuse(FOXAPI_NOT_FOUND, "no such bookmark"); }
             if (c.op == FOXAPI_OP_BOOKMARK_TUNE) {
-                const cascade::core::Bookmark b = freqMgr_.list()[i];
+                const cascade::core::Bookmark b = engine_.freqMgr_.list()[i];
                 tuneToBookmark(b);
             } else if (c.op == FOXAPI_OP_BOOKMARK_REMOVE) {
-                freqMgr_.removeAt(i);
+                engine_.freqMgr_.removeAt(i);
                 saveBookmarks();
             } else {
-                cascade::core::Bookmark b = freqMgr_.list()[i];
+                cascade::core::Bookmark b = engine_.freqMgr_.list()[i];
                 b.favourite = c.ival[1] != 0;
-                freqMgr_.updateAt(i, b);
+                engine_.freqMgr_.updateAt(i, b);
                 saveBookmarks();
             }
             return res;
         }
         case FOXAPI_OP_BOOKMARK_REMOVE_GROUP: {
-            const std::size_t n = freqMgr_.removeGroup(text);
-            bookmarkImportNote_ = cascade::core::formatText(tr("Removed %zu from \"%s\""), n, text.c_str());
+            const std::size_t n = engine_.freqMgr_.removeGroup(text);
+            engine_.bookmarkImportNote_ = cascade::core::formatText(tr("Removed %zu from \"%s\""), n, text.c_str());
             saveBookmarks();
             rebuildBookmarkView();
             res.applied[0] = static_cast<double>(n);
@@ -22882,17 +22880,17 @@ FoxCommandResult AppWindow::applyCommand(const FoxCommand& c, const std::string&
                 scanStartMhz_ = c.num[0] / 1.0e6;
                 scanStopMhz_ = c.num[1] / 1.0e6;
                 scanStepKhz_ = c.num[2] / 1.0e3;
-                scanner_.configure(scannerParams());
-                scanner_.start(ImGui::GetTime() * 1000.0);
-                scannerHasExpected_ = false;
+                engine_.scanner_.configure(scannerParams());
+                engine_.scanner_.start(ImGui::GetTime() * 1000.0);
+                engine_.scannerHasExpected_ = false;
             } else {
-                scanner_.stop();
+                engine_.scanner_.stop();
             }
             return res;
         case FOXAPI_OP_SCANNER_SKIP:
-            if (!scanner_.active()) { return refuse(FOXAPI_NO_CHANGE, "the scanner is not running"); }
-            scanner_.skip();
-            scannerHasExpected_ = false;
+            if (!engine_.scanner_.active()) { return refuse(FOXAPI_NO_CHANGE, "the scanner is not running"); }
+            engine_.scanner_.skip();
+            engine_.scannerHasExpected_ = false;
             return res;
         case FOXAPI_OP_SCANNER_CONFIG:
             scanDwellMs_ = c.num[0];
@@ -22901,9 +22899,9 @@ FoxCommandResult AppWindow::applyCommand(const FoxCommand& c, const std::string&
             scanListenMs_ = c.num[3];
             // A running scan takes the new timings at once (the panel's own
             // commit-on-deactivate rule).
-            if (scanner_.active()) {
-                scanner_.configure(scannerParams());
-                scannerHasExpected_ = false;
+            if (engine_.scanner_.active()) {
+                engine_.scanner_.configure(scannerParams());
+                engine_.scannerHasExpected_ = false;
             }
             return res;
         case FOXAPP_OP_SCANNER_RANGE:
@@ -22912,9 +22910,9 @@ FoxCommandResult AppWindow::applyCommand(const FoxCommand& c, const std::string&
             if ((c.ival[0] & 4) != 0) { scanStepKhz_ = c.num[2] / 1.0e3; }
             // Only the panel reconfigures a running scan; a browser's range
             // is stored for the next start, as it always was.
-            if ((c.ival[0] & 8) != 0 && scanner_.active()) {
-                scanner_.configure(scannerParams());
-                scannerHasExpected_ = false;
+            if ((c.ival[0] & 8) != 0 && engine_.scanner_.active()) {
+                engine_.scanner_.configure(scannerParams());
+                engine_.scannerHasExpected_ = false;
             }
             return res;
 
@@ -22926,7 +22924,7 @@ FoxCommandResult AppWindow::applyCommand(const FoxCommand& c, const std::string&
             return res;
         case FOXAPI_OP_DECODER_STOP_ALL:
             for (const std::string& key :
-                 cascade::gui::stopAllKeys(runnableDecoders(), pipeline_.running())) {
+                 cascade::gui::stopAllKeys(runnableDecoders(), engine_.pipeline_.running())) {
                 setPluginStopped(key, true);
             }
             return res;
@@ -22948,7 +22946,7 @@ FoxCommandResult AppWindow::applyCommand(const FoxCommand& c, const std::string&
             // only numbers that reach the receiver are ones the plugin itself
             // just produced. Named by display name (the web remote) or by
             // module file name (the preset bars).
-            for (const cascade::core::LoadedPlugin& lp : pluginHost_.plugins()) {
+            for (const cascade::core::LoadedPlugin& lp : engine_.pluginHost_.plugins()) {
                 if (lp.name != text && cascade::core::pluginKey(lp) != text) { continue; }
                 const std::uint32_t n = (lp.preset != nullptr) ? lp.preset->count() : 0u;
                 const auto idx = static_cast<std::uint32_t>(c.ival[0]);
@@ -22968,7 +22966,7 @@ FoxCommandResult AppWindow::applyCommand(const FoxCommand& c, const std::string&
         case FOXAPP_OP_USER_PRESET_APPLY: {
             // One of the user's own, re-read by ordinal: forgotten since the
             // press is a no-op.
-            for (const cascade::core::LoadedPlugin& lp : pluginHost_.plugins()) {
+            for (const cascade::core::LoadedPlugin& lp : engine_.pluginHost_.plugins()) {
                 if (cascade::core::pluginKey(lp) != text) { continue; }
                 const std::vector<cascade::core::UserPreset> mine = userPresetsForPlugin(lp);
                 if (c.ival[0] < 0 || static_cast<std::size_t>(c.ival[0]) >= mine.size()) {
@@ -23005,12 +23003,12 @@ FoxCommandResult AppWindow::applyCommand(const FoxCommand& c, const std::string&
         case FOXAPI_OP_PLUGIN_COMMAND:
             // Queued for the plugin to take with poll_command; nothing of the
             // plugin's runs here.
-            if (c.ival[0] < 0 || !pluginUi_.api().pressCommand(text, static_cast<std::uint32_t>(c.ival[0]))) {
+            if (c.ival[0] < 0 || !engine_.pluginUi_.api().pressCommand(text, static_cast<std::uint32_t>(c.ival[0]))) {
                 return refuse(FOXAPI_NOT_FOUND, "no such command key");
             }
             return res;
         case FOXAPI_OP_PLUGIN_MUTE:
-            for (const cascade::core::LoadedPlugin& lp : pluginHost_.plugins()) {
+            for (const cascade::core::LoadedPlugin& lp : engine_.pluginHost_.plugins()) {
                 if (cascade::core::pluginKey(lp) != text) { continue; }
                 setPluginMutes(lp, on);
                 return res;
@@ -23025,19 +23023,19 @@ FoxCommandResult AppWindow::applyCommand(const FoxCommand& c, const std::string&
         case FOXAPI_OP_STORE_INSTALL: {
             // The legal notice must be acknowledged explicitly, and the gate
             // is the ONE predicate the store window's FIT key uses too.
-            for (int i = 0; i < static_cast<int>(catalog_.size()); ++i) {
-                if (catalog_[static_cast<std::size_t>(i)].id != text) { continue; }
+            for (int i = 0; i < static_cast<int>(engine_.catalog_.size()); ++i) {
+                if (engine_.catalog_[static_cast<std::size_t>(i)].id != text) { continue; }
                 const std::string blocked = pluginInstallBlockedReason(i, on);
                 if (!blocked.empty()) {
-                    installError_ = blocked;
+                    engine_.installError_ = blocked;
                     return refuse(FOXAPI_DENIED, "the install was refused");
                 }
-                startInstall(catalog_[static_cast<std::size_t>(i)]);
+                startInstall(engine_.catalog_[static_cast<std::size_t>(i)]);
                 return res;
             }
             // English, as every reason in installError_ is; the pages
             // translate it where they draw it (gui::trStoredReason).
-            installError_ = FOX_TR_NOOP("no catalogue entry with that id; fetch the "
+            engine_.installError_ = FOX_TR_NOOP("no catalogue entry with that id; fetch the "
                                         "catalogue and try again");
             return refuse(FOXAPI_NOT_FOUND, "no catalogue entry with that id");
         }
@@ -23058,7 +23056,7 @@ FoxCommandResult AppWindow::applyCommand(const FoxCommand& c, const std::string&
             removeBlockedPlugin(text);
             return res;
         case FOXAPI_OP_STORE_CANCEL:
-            pluginRepo_.cancel();
+            engine_.pluginRepo_.cancel();
             return res;
         case FOXAPI_OP_STORE_UPDATE_ALL:
             startAddAll(on);
@@ -23066,7 +23064,7 @@ FoxCommandResult AppWindow::applyCommand(const FoxCommand& c, const std::string&
 
         // --- the patch page ---------------------------------------------------------------------
         case FOXAPI_OP_PATCH_RUN:
-            if (on == patchRunning_) { return refuse(FOXAPI_NO_CHANGE, "already so"); }
+            if (on == engine_.patchRunning_) { return refuse(FOXAPI_NO_CHANGE, "already so"); }
             patchPressStart();
             return res;
         case FOXAPI_OP_PATCH_ALL_OFF:
@@ -23077,7 +23075,7 @@ FoxCommandResult AppWindow::applyCommand(const FoxCommand& c, const std::string&
         case FOXAPI_OP_TX_OPEN:
             if (!text.empty()) { transmitArgs_ = text; }
             openTransmitRadio();
-            if (!transmitter_.haveSink()) { return refuse(FOXAPI_FAILED, "the transmitter did not open"); }
+            if (!engine_.transmitter_.haveSink()) { return refuse(FOXAPI_FAILED, "the transmitter did not open"); }
             return res;
         case FOXAPI_OP_TX_CLOSE:
             closeTransmitRadio();
@@ -23088,82 +23086,82 @@ FoxCommandResult AppWindow::applyCommand(const FoxCommand& c, const std::string&
             // keep asking. A request that arrives while the page is shut is
             // dropped, never remembered.
             if (on) {
-                if (transmitOpen_ && transmitter_.haveSink()) {
-                    transmitter_.keyRemote();
+                if (transmitOpen_ && engine_.transmitter_.haveSink()) {
+                    engine_.transmitter_.keyRemote();
                 } else {
-                    transmitter_.releaseRemote("there is no transmitter open");
+                    engine_.transmitter_.releaseRemote("there is no transmitter open");
                     return refuse(FOXAPI_NO_DEVICE, "there is no transmitter open");
                 }
             } else {
-                transmitter_.releaseRemote("the remote let go");
+                engine_.transmitter_.releaseRemote("the remote let go");
             }
             return res;
         case FOXAPI_OP_TX_SET_MODE:
             if (c.ival[0] < 0 || c.ival[0] >= cascade::dsp::kTxModeCount) {
                 return refuse(FOXAPI_OUT_OF_RANGE, "no such transmit mode");
             }
-            transmitModeIndex_ = static_cast<int>(c.ival[0]);
-            transmitter_.setMode(cascade::dsp::txModeFromIndex(transmitModeIndex_));
+            engine_.transmitModeIndex_ = static_cast<int>(c.ival[0]);
+            engine_.transmitter_.setMode(cascade::dsp::txModeFromIndex(engine_.transmitModeIndex_));
             return res;
         case FOXAPI_OP_TX_SET_FREQUENCY:
             // Where a SPLIT transmitter goes; with SPLIT off it follows the
             // receiver's dial and this is kept for when it is turned on.
-            transmitSplitHz_ = c.num[0];
+            engine_.transmitSplitHz_ = c.num[0];
             followTransmitFrequency();
             return res;
         case FOXAPI_OP_TX_SET_SPLIT:
-            transmitSplit_ = on;
+            engine_.transmitSplit_ = on;
             // Going INTO split starts from the frequency the command carries
             // (the page sends the receiver's dial), so the first thing that
             // happens is never a jump; coming out follows the receiver again.
-            if (transmitSplit_) { transmitSplitHz_ = c.num[0]; }
+            if (engine_.transmitSplit_) { engine_.transmitSplitHz_ = c.num[0]; }
             followTransmitFrequency();
             return res;
         case FOXAPI_OP_TX_SET_POWER:
-            transmitPowerDb_ = c.num[0];
-            transmitter_.setPowerDb(transmitPowerDb_);
-            if (transmitter_.sink() != nullptr) { transmitPowerDb_ = transmitter_.sink()->gainDb(); }
-            res.applied[0] = transmitPowerDb_;
+            engine_.transmitPowerDb_ = c.num[0];
+            engine_.transmitter_.setPowerDb(engine_.transmitPowerDb_);
+            if (engine_.transmitter_.sink() != nullptr) { engine_.transmitPowerDb_ = engine_.transmitter_.sink()->gainDb(); }
+            res.applied[0] = engine_.transmitPowerDb_;
             return res;
         case FOXAPI_OP_TX_SET_INPUT: {
             if (c.ival[0] < 0 || c.ival[0] >= cascade::core::kTxInputCount) {
                 return refuse(FOXAPI_OUT_OF_RANGE, "no such input");
             }
-            if (micOpen_.inFlight()) { return refuse(FOXAPI_BUSY, "the microphone is still opening"); }
-            transmitInputIndex_ = static_cast<int>(c.ival[0]);
-            const cascade::core::TxInput in = cascade::core::txInputFromIndex(transmitInputIndex_);
-            transmitter_.setInput(in);
-            if (in == cascade::core::TxInput::Microphone && !transmitter_.audioIn().running()) {
+            if (engine_.micOpen_.inFlight()) { return refuse(FOXAPI_BUSY, "the microphone is still opening"); }
+            engine_.transmitInputIndex_ = static_cast<int>(c.ival[0]);
+            const cascade::core::TxInput in = cascade::core::txInputFromIndex(engine_.transmitInputIndex_);
+            engine_.transmitter_.setInput(in);
+            if (in == cascade::core::TxInput::Microphone && !engine_.transmitter_.audioIn().running()) {
                 // Opened WHEN IT IS CHOSEN and not before, and NOT ON THIS
                 // THREAD: micOpen_ runs waveInOpen on a worker and this waits
                 // at most AudioOpen::kOpenBound under a watchdog pause.
-                const cascade::gui::AudioOpen::Outcome outcome = micOpen_.request(-1);
+                const cascade::gui::AudioOpen::Outcome outcome = engine_.micOpen_.request(-1);
                 if (outcome == cascade::gui::AudioOpen::Outcome::Finished) {
-                    if (!micOpen_.result().ok) {
-                        transmitError_ = FOX_TR_NOOP("no microphone could be opened");
+                    if (!engine_.micOpen_.result().ok) {
+                        engine_.transmitError_ = FOX_TR_NOOP("no microphone could be opened");
                     }
                 } else {
-                    transmitError_ = kAudioBusyNote;
+                    engine_.transmitError_ = kAudioBusyNote;
                 }
             }
             return res;
         }
         case FOXAPI_OP_TX_SET_TONE:
-            transmitToneHz_ = c.num[0];
-            transmitter_.setToneHz(transmitToneHz_);
-            transmitToneHz_ = transmitter_.toneHz();
-            res.applied[0] = transmitToneHz_;
+            engine_.transmitToneHz_ = c.num[0];
+            engine_.transmitter_.setToneHz(engine_.transmitToneHz_);
+            engine_.transmitToneHz_ = engine_.transmitter_.toneHz();
+            res.applied[0] = engine_.transmitToneHz_;
             return res;
         case FOXAPI_OP_TX_SET_MONITOR:
-            transmitMonitor_ = on;
+            engine_.transmitMonitor_ = on;
             return res;
 
         // --- audio output, position, GPS --------------------------------------------------------
         case FOXAPI_OP_AUDIO_DEVICE:
             // ival[0]: the PortAudio device index the Sinks list carries.
-            for (int i = 0; i < static_cast<int>(devices_.size()); ++i) {
-                if (devices_[static_cast<std::size_t>(i)].index != c.ival[0]) { continue; }
-                deviceIndex_ = i;
+            for (int i = 0; i < static_cast<int>(engine_.devices_.size()); ++i) {
+                if (engine_.devices_[static_cast<std::size_t>(i)].index != c.ival[0]) { continue; }
+                engine_.deviceIndex_ = i;
                 // Through audioOpen_, never straight at the sink: waveOutOpen
                 // has no timeout (the 0.96.4 field hang).
                 (void)requestAudioOpen(static_cast<int>(c.ival[0]), false);
@@ -23179,11 +23177,11 @@ FoxCommandResult AppWindow::applyCommand(const FoxCommand& c, const std::string&
         case FOXAPI_OP_GPS:
             if (on) {
                 if (text.empty()) { return refuse(FOXAPI_BAD_ARGUMENT, "no serial port named"); }
-                gpsRefusal_.clear();
-                gpsReader_.start({text, static_cast<int>(c.num[0]),
+                engine_.gpsRefusal_.clear();
+                engine_.gpsReader_.start({text, static_cast<int>(c.num[0]),
                                   cascade::core::GpsReader::kDefaultTimeoutS});
             } else {
-                gpsReader_.stop();
+                engine_.gpsReader_.stop();
             }
             return res;
 
@@ -23209,7 +23207,7 @@ void AppWindow::applyControlRequest(const cascade::net::ControlRequest& r) {
     // reader holds that lock only for a refcount copy or a slot install, so
     // the wait is that long - but it is a wait, unlike publish().
     if (r.bookmarkTune.has_value() || r.bookmarkRemove.has_value()) {
-        ctx.bookmarkIdByRow = receiverSnapshot_->readFull()->bookmarkIds;
+        ctx.bookmarkIdByRow = engine_.receiverSnapshot_->readFull()->bookmarkIds;
     }
     ctx.scanStartHz = scanStartMhz_ * 1.0e6;
     ctx.scanStopHz = scanStopMhz_ * 1.0e6;
@@ -23250,7 +23248,7 @@ void AppWindow::applyWebControls() {
     // releases the local PTT, which falls out of the per-frame rebuild for the
     // local one and has to be said here for this one.
     if (!transmitOpen_) {
-        transmitter_.releaseRemote("the transmit page was closed");
+        engine_.transmitter_.releaseRemote("the transmit page was closed");
     }
     // THE SERVER. A web server that has been stopped or has never run cannot
     // be holding a key. WebServer::stop() also queues a release for the loop
@@ -23258,7 +23256,7 @@ void AppWindow::applyWebControls() {
     // costs anything; this is the one that covers a server disabled in the
     // settings panel, where there is no stop to queue anything.
     if (!webServer_.running()) {
-        transmitter_.releaseRemote("the web server is not running");
+        engine_.transmitter_.releaseRemote("the web server is not running");
     }
 }
 
@@ -23673,8 +23671,8 @@ void AppWindow::drawUsageReportingSection() {
     // build gets it was describing an intention rather than the code. A state
     // nothing can produce is not a state; where the reports go is a fact about
     // the endpoint, not about whether the switch exists.
-    if (!benchSection(trId("Usage reporting"), false, telemetryEnabled_ ? tr("ON") : tr("OFF"),
-                      cascade::gui::theme::kPhosphor, telemetryEnabled_)) {
+    if (!benchSection(trId("Usage reporting"), false, engine_.telemetryEnabled_ ? tr("ON") : tr("OFF"),
+                      cascade::gui::theme::kPhosphor, engine_.telemetryEnabled_)) {
         return;
     }
     telemetryNotePanel("usage reporting");
@@ -23687,29 +23685,29 @@ void AppWindow::drawUsageReportingSection() {
            "address is recorded."));
     ImGui::Spacing();
 
-    bool on = telemetryEnabled_;
+    bool on = engine_.telemetryEnabled_;
     if (ImGui::Checkbox(trId("Send anonymous usage reports"), &on)) {
-        if (on && !telemetryEnabled_) {
+        if (on && !engine_.telemetryEnabled_) {
             // The id is created at the moment of consent, never before - so a
             // machine that never opts in has no identifier at all, not even an
             // unused one sitting in its config.
-            telemetryInstallId_ = cascade::core::newInstallId();
-            telemetryEnabled_ = !telemetryInstallId_.empty();
+            engine_.telemetryInstallId_ = cascade::core::newInstallId();
+            engine_.telemetryEnabled_ = !engine_.telemetryInstallId_.empty();
         } else if (!on) {
             // Off DELETES the identifier, so a later opt-in gets a new one
             // that cannot be tied to the old. Any report still waiting to be
             // sent goes with it.
-            telemetryEnabled_ = false;
-            telemetryInstallId_.clear();
+            engine_.telemetryEnabled_ = false;
+            engine_.telemetryInstallId_.clear();
         }
         // The heartbeat follows the switch in the same click: off disarms it
         // (configure refuses the now-empty id), on arms it with the new id.
-        telemetryHeartbeat_.configure(cascade::core::telemetryEndpoint(),
-                                      telemetryInstallId_, cascade::versionString());
+        engine_.telemetryHeartbeat_.configure(cascade::core::telemetryEndpoint(),
+                                      engine_.telemetryInstallId_, cascade::versionString());
     }
 
-    if (telemetryEnabled_) {
-        ImGui::TextDisabled(tr("Install id: %s"), telemetryInstallId_.c_str());
+    if (engine_.telemetryEnabled_) {
+        ImGui::TextDisabled(tr("Install id: %s"), engine_.telemetryInstallId_.c_str());
         // TWO MESSAGES, NOT ONE. This line named only the launch report while
         // HeartbeatSender has been posting a "still running" beat every five
         // minutes for as long as it has existed - PRIVACY.md documents both,
@@ -23801,7 +23799,7 @@ void AppWindow::drawSerialPortsSection() {
         ImGui::SetNextItemOpen(true, ImGuiCond_Once);
     }
 
-    const bool listening = gpsReader_.listening();
+    const bool listening = engine_.gpsReader_.listening();
     const bool open =
         benchSection(trId("Serial ports"), false, chip.c_str(), cascade::gui::theme::kPhosphor, listening);
     // THE SECOND TRIGGER: the row's own OPEN EDGE - closed last frame, open
@@ -24228,12 +24226,12 @@ void AppWindow::copyDiagnosticsBundle() {
     in.context.commit = cascade::gitCommit();
     in.context.os = cascade::core::osDescription();
     in.context.arch = cascade::core::archDescription();
-    in.context.mode = kModeNames[modeIndex_];
-    in.context.sourceKind = sourceKind_;
-    in.context.sampleRateHz = pipeline_.activeSource().sampleRateHz();
-    in.context.deviceOpen = (device_ != nullptr);
-    in.context.sdrModel = deviceModel_;
-    for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
+    in.context.mode = kModeNames[engine_.modeIndex_];
+    in.context.sourceKind = engine_.sourceKind_;
+    in.context.sampleRateHz = engine_.pipeline_.activeSource().sampleRateHz();
+    in.context.deviceOpen = (engine_.device_ != nullptr);
+    in.context.sdrModel = engine_.deviceModel_;
+    for (const cascade::core::LoadedPlugin& p : engine_.pluginHost_.plugins()) {
         if (p.loaded && in.context.plugins.size() < 32) {
             in.context.plugins.push_back(p.name + " " + p.version);
         }
@@ -24243,8 +24241,8 @@ void AppWindow::copyDiagnosticsBundle() {
     in.logPath = cascade::core::DiagLog::instance().filePath();
     in.crashDir = cascade::core::diagCrashDir();
     in.lastRunUnclean = lastRunUnclean_;
-    in.launches = telemetryLaunches_;
-    in.crashes = telemetryCrashes_;
+    in.launches = engine_.telemetryLaunches_;
+    in.crashes = engine_.telemetryCrashes_;
 
     const std::string bundle = cascade::core::buildDiagnosticsBundle(in);
     ImGui::SetClipboardText(bundle.c_str());
@@ -24283,18 +24281,18 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     // and the Soapy args the file named whether or not that radio opens this
     // launch - a USRP that is switched off or unreachable today is still one
     // the user has.
-    lookForNetworkUsrps_ = cfg.lookForNetworkUsrps;
-    startupSoapyArgs_ = cfg.soapyArgs;
+    engine_.lookForNetworkUsrps_ = cfg.lookForNetworkUsrps;
+    engine_.startupSoapyArgs_ = cfg.soapyArgs;
     // Panel mirrors + always-safe DSP settings first (none of these can
     // fail; load() already range-sanitized volume/split/db*).
-    volume_ = cfg.volume;
-    pipeline_.audio().setVolume(volume_);
-    dbMin_ = cfg.dbMin;
-    dbMax_ = cfg.dbMax;
-    spectrum_->setRange(dbMin_, dbMax_);
+    engine_.volume_ = cfg.volume;
+    engine_.pipeline_.audio().setVolume(engine_.volume_);
+    engine_.dbMin_ = cfg.dbMin;
+    engine_.dbMax_ = cfg.dbMax;
+    spectrum_->setRange(engine_.dbMin_, engine_.dbMax_);
     splitRatio_ = cfg.splitRatio;
-    squelchDb_ = cfg.squelchDb;
-    pipeline_.setSquelchDb(squelchDb_);
+    engine_.squelchDb_ = cfg.squelchDb;
+    engine_.pipeline_.setSquelchDb(engine_.squelchDb_);
     // THE BIAS TEE IS SEEDED HERE, not inside the device branch below, so
     // that a config whose saved radio does not open (unplugged, or still on
     // its vendor driver) does not have the setting quietly rewritten to false
@@ -24303,7 +24301,7 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     // open(), so it has to be re-applied afterwards or a mast-head amplifier
     // goes dark on every launch. It is PER RADIO (engine/bias_tee.hpp,
     // BiasTeePanel::remembered): each radio gets back only its own.
-    biasTeePanel_.remembered = cfg.biasTee;
+    engine_.biasTeePanel_.remembered = cfg.biasTee;
     // THE PLUTO'S ADDRESS IS SEEDED HERE TOO, and it has to be before the
     // scanNative() further down: that is what builds the Pluto's row, the
     // row's args are "uri=" plus this box, and the restore below finds the
@@ -24315,22 +24313,22 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
 
     // P7 settings. All are pure DSP switches with no failure mode, and the
     // loader has already clamped every one of them into range.
-    deemphIndex_ = cfg.deemphasisIndex;
-    pipeline_.setDeemphasisUs(kDeemphUs[deemphIndex_]);
-    stereoEnabled_ = cfg.stereoEnabled;
-    pipeline_.setStereoEnabled(stereoEnabled_);
-    nrEnabled_ = cfg.nrEnabled;
-    nrStrength_ = cfg.nrStrength;
-    pipeline_.setNoiseReductionStrength(nrStrength_);
-    pipeline_.setNoiseReductionEnabled(nrEnabled_);
-    notchFreqHz_ = static_cast<float>(cfg.notchFreqHz);
-    notchQ_ = static_cast<float>(cfg.notchQ);
-    pipeline_.setNotchFrequencyHz(cfg.notchFreqHz);
-    pipeline_.setNotchQ(cfg.notchQ);
-    notchEnabled_ = cfg.notchEnabled;
-    pipeline_.setNotchEnabled(notchEnabled_);
-    autoNotch_ = cfg.autoNotch;
-    pipeline_.setAutoNotchEnabled(autoNotch_);
+    engine_.deemphIndex_ = cfg.deemphasisIndex;
+    engine_.pipeline_.setDeemphasisUs(kDeemphUs[engine_.deemphIndex_]);
+    engine_.stereoEnabled_ = cfg.stereoEnabled;
+    engine_.pipeline_.setStereoEnabled(engine_.stereoEnabled_);
+    engine_.nrEnabled_ = cfg.nrEnabled;
+    engine_.nrStrength_ = cfg.nrStrength;
+    engine_.pipeline_.setNoiseReductionStrength(engine_.nrStrength_);
+    engine_.pipeline_.setNoiseReductionEnabled(engine_.nrEnabled_);
+    engine_.notchFreqHz_ = static_cast<float>(cfg.notchFreqHz);
+    engine_.notchQ_ = static_cast<float>(cfg.notchQ);
+    engine_.pipeline_.setNotchFrequencyHz(cfg.notchFreqHz);
+    engine_.pipeline_.setNotchQ(cfg.notchQ);
+    engine_.notchEnabled_ = cfg.notchEnabled;
+    engine_.pipeline_.setNotchEnabled(engine_.notchEnabled_);
+    engine_.autoNotch_ = cfg.autoNotch;
+    engine_.pipeline_.setAutoNotchEnabled(engine_.autoNotch_);
     bandPlanOverlay_ = cfg.bandPlanOverlay;
     // THE PATCH. Loaded through patch_io::parse, which offers every wire
     // to connect() rather than trusting the file - so a hand-edited or
@@ -24341,10 +24339,10 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     if (!cfg.patch.empty()) {
         cascade::core::patch::LoadResult pr = cascade::core::patch::parse(cfg.patch);
         if (pr.ok) {
-            patchGraph_ = std::move(pr.graph);
+            engine_.patchGraph_ = std::move(pr.graph);
             patchUi_.view.pan = cascade::gui::patch::Vec2{pr.panX, pr.panY};
             patchUi_.view.zoom = pr.zoom;
-            patchSeeded_ = !patchGraph_.nodes().empty();
+            patchSeeded_ = !engine_.patchGraph_.nodes().empty();
             patchText_ = cfg.patch;
             if (pr.dropped > 0) {
                 std::fprintf(stderr,
@@ -24359,8 +24357,8 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     // selection that differs from the default has to re-load or the user's
     // chosen region silently reverts to "world" on every launch. Guarded on
     // change so the common case does not parse the directory twice.
-    if (bandPlanSelection_ != cfg.bandPlanSelection) {
-        bandPlanSelection_ = cfg.bandPlanSelection;
+    if (engine_.bandPlanSelection_ != cfg.bandPlanSelection) {
+        engine_.bandPlanSelection_ = cfg.bandPlanSelection;
         loadBandPlan();
     }
     // Language and country: the language is applied before the next frame
@@ -24421,17 +24419,17 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     // on a launch, so the page records what was showing at the last exit and
     // opens nothing by itself.
     transmitOpen_ = cfg.transmitOpen;
-    transmitModeIndex_ = static_cast<int>(cascade::dsp::txModeFromIndex(cfg.transmitMode));
-    transmitInputIndex_ = static_cast<int>(cascade::core::txInputFromIndex(cfg.transmitInput));
-    transmitPowerDb_ = cfg.transmitPowerDb;
-    transmitSplit_ = cfg.transmitSplit;
-    transmitSplitHz_ = cfg.transmitSplitHz;
-    transmitToneHz_ = cfg.transmitToneHz;
-    transmitMonitor_ = cfg.transmitMonitor;
+    engine_.transmitModeIndex_ = static_cast<int>(cascade::dsp::txModeFromIndex(cfg.transmitMode));
+    engine_.transmitInputIndex_ = static_cast<int>(cascade::core::txInputFromIndex(cfg.transmitInput));
+    engine_.transmitPowerDb_ = cfg.transmitPowerDb;
+    engine_.transmitSplit_ = cfg.transmitSplit;
+    engine_.transmitSplitHz_ = cfg.transmitSplitHz;
+    engine_.transmitToneHz_ = cfg.transmitToneHz;
+    engine_.transmitMonitor_ = cfg.transmitMonitor;
     transmitArgs_ = cfg.transmitArgs;
-    transmitter_.setMode(cascade::dsp::txModeFromIndex(transmitModeIndex_));
-    transmitter_.setInput(cascade::core::txInputFromIndex(transmitInputIndex_));
-    transmitter_.setToneHz(transmitToneHz_);
+    engine_.transmitter_.setMode(cascade::dsp::txModeFromIndex(engine_.transmitModeIndex_));
+    engine_.transmitter_.setInput(cascade::core::txInputFromIndex(engine_.transmitInputIndex_));
+    engine_.transmitter_.setToneHz(engine_.transmitToneHz_);
     // The rail opens on the bank it was left on. Clamped again here even
     // though load() already did: this is the value a widget indexes with.
     railBank_ = static_cast<int>(cascade::gui::railBankFromIndex(cfg.railBank));
@@ -24464,22 +24462,22 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     // re-typed every launch is a position those columns could not rely on.
     // The sanitizer has already discarded anything out of range, so an unset
     // flag here means genuinely unset.
-    rxSet_ = cfg.rxPositionSet;
-    rxLat_ = cfg.rxLatDeg;
-    rxLon_ = cfg.rxLonDeg;
-    rxLatInput_ = rxLat_;
-    rxLonInput_ = rxLon_;
+    engine_.rxSet_ = cfg.rxPositionSet;
+    engine_.rxLat_ = cfg.rxLatDeg;
+    engine_.rxLon_ = cfg.rxLonDeg;
+    rxLatInput_ = engine_.rxLat_;
+    rxLonInput_ = engine_.rxLon_;
     // The GPS port and baud the user chose last time, already sanitised by
     // the store, into the field's buffer as well so the row shows the name
     // that will be opened. The reader is NOT started: a read is a click.
     gpsPort_ = cfg.gpsPort;
     gpsBaud_ = cfg.gpsBaud;
     cascade::core::formatUtf8(gpsPortInput_, sizeof(gpsPortInput_), "%s", gpsPort_.c_str());
-    if (rxSet_) {
+    if (engine_.rxSet_) {
         // Every existing page; a page created later gets the position in
         // ensureMapPage. At construction this loop is empty and harmless.
         for (MapPage& pg : mapPages_) {
-            pg.view->setHome(rxLat_, rxLon_);
+            pg.view->setHome(engine_.rxLat_, engine_.rxLon_);
         }
     }
 
@@ -24489,8 +24487,8 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     // window's open flag arrives cleared (startupState): the store opens
     // from its rail key, never by itself - which is what keeps its
     // first-open read from ever being a startup fetch.
-    pluginCatalogueUrl_ = cfg.pluginCatalogueUrl;
-    cascade::core::formatUtf8(pluginUrlBuf_, sizeof(pluginUrlBuf_), "%s", pluginCatalogueUrl_.c_str());
+    engine_.pluginCatalogueUrl_ = cfg.pluginCatalogueUrl;
+    cascade::core::formatUtf8(pluginUrlBuf_, sizeof(pluginUrlBuf_), "%s", engine_.pluginCatalogueUrl_.c_str());
     pluginBrowseOpen_ = cfg.pluginBrowserOpen;
     // The fitted modules window: its rectangle is restored, its open flag
     // arrives cleared for the same reason. Opening it later starts no scan,
@@ -24502,22 +24500,22 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     fittedWinH_ = cfg.fittedModulesHeight;
     // Restored purely so it can be saved back unchanged when the user never
     // browses this session. Nothing reads it to decide whether to fetch.
-    pluginLastUpdateCheck_ = cfg.pluginLastUpdateCheck;
+    engine_.pluginLastUpdateCheck_ = cfg.pluginLastUpdateCheck;
     // Tune grants are pushed into PluginUi immediately, not just stored: the
     // plugin scan already ran in the constructor, so a tracker created during
     // it may call request_tune on its very first poll — before any rebuild
     // would have re-applied them.
-    pluginTuneAllowed_ = cfg.pluginTuneAllowed;
+    engine_.pluginTuneAllowed_ = cfg.pluginTuneAllowed;
     applyPluginTuneGrants();
     // Host API level 1: the settings grant, and the plugins' own settings -
     // loaded into the live store BEFORE the refreshPluginRunner below
     // re-attaches every plugin, so a plugin reading its settings from
     // attach() finds them there.
-    pluginSettingsAllowed_ = cfg.pluginSettingsAllowed;
+    engine_.pluginSettingsAllowed_ = cfg.pluginSettingsAllowed;
     applyPluginSettingsGrants();
-    pluginSettings_ = cfg.pluginSettings;
-    pluginUi_.api().loadSettings(pluginSettings_);
-    pluginSettingsGen_ = pluginUi_.api().settingsGeneration();
+    engine_.pluginSettings_ = cfg.pluginSettings;
+    engine_.pluginUi_.api().loadSettings(engine_.pluginSettings_);
+    engine_.pluginSettingsGen_ = engine_.pluginUi_.api().settingsGeneration();
     // STOPS ARE APPLIED, not merely stored, for a stronger version of the same
     // reason: the scan in the constructor has already built every plugin's
     // instances against the default source, so a plugin the user stopped last
@@ -24525,7 +24523,7 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     // rebuilds it without the stopped ones, which is also what the restored
     // source needs; doing it here means a stopped plugin never survives a
     // launch even for a frame.
-    pluginsStopped_ = cfg.pluginsStopped;
+    engine_.pluginsStopped_ = cfg.pluginsStopped;
     // AppConfig::closedWindows is no longer applied. Until 0.79.1 every plugin
     // window appeared by itself and this list kept the ones the user had shut
     // from coming back; now no plugin window appears until the user opens it
@@ -24536,16 +24534,16 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     // the same reason they are restored at all: a decoder the user silenced
     // last session must not come back audible for the seconds it takes them to
     // find the checkbox again.
-    pluginMuteOverride_ = cfg.pluginMuteOverride;
+    engine_.pluginMuteOverride_ = cfg.pluginMuteOverride;
     // The user's own presets, before the same rebuild: they are baked into
     // the preset snapshot (rebuildMuteStates) the bars and the mute read.
-    userPresets_ = cfg.userPresets;
+    engine_.userPresets_ = cfg.userPresets;
     refreshPluginRunner();
 
     for (int i = 0; i < 8; ++i) {
         if (cfg.mode == kModeNames[i]) {
-            modeIndex_ = i;
-            pipeline_.setDemodMode(kModeMap[i]);
+            engine_.modeIndex_ = i;
+            engine_.pipeline_.setDemodMode(kModeMap[i]);
             break;  // an unknown mode name keeps the construction default
         }
     }
@@ -24556,7 +24554,7 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     // A sound card's converter written under its full ALSA name (before the
     // identity key) is moved to the key it is looked up by now
     // (gui::soundCardConverterKey); nothing else is touched.
-    converters_ = cascade::gui::migrateSoundCardConverterKeys(cascade::core::sanitiseConverters(cfg.converters));
+    engine_.converters_ = cascade::gui::migrateSoundCardConverterKeys(cascade::core::sanitiseConverters(cfg.converters));
 
     // Source restore. The generator is always safe (it is already active);
     // a file is restored only if the path still opens; a Soapy device only
@@ -24572,11 +24570,11 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
         // (app_window_soundcard.cpp). Until then - and for the rest of the
         // session if it never does - the config goes on naming it; the combo
         // names it too only once the open has actually failed.
-        restoreKeep_ = cascade::gui::rememberedSourceAfterFailedOpen(
+        engine_.restoreKeep_ = cascade::gui::rememberedSourceAfterFailedOpen(
             cfg.sourceKind, cfg.soapyArgs, cfg.nativeArgs, cfg.iqFilePath, cfg.sampleRateHz);
-        soundCardRemembered_ = soundCard_;  // the card the config names, whatever the section becomes
-        restoreKeepLabel_.clear();
-        sourceSel_ = kSoundCardRow;
+        engine_.soundCardRemembered_ = soundCard_;  // the card the config names, whatever the section becomes
+        engine_.restoreKeepLabel_.clear();
+        engine_.sourceSel_ = kSoundCardRow;
         launchSoundCardOpen(/*restore=*/true, soundCard_);
         cascade::core::diagLogf("source: restoring the sound card %s (%s)", soundCard_.device.c_str(),
                                 soundCard_.hostApi.c_str());
@@ -24586,20 +24584,20 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
             const double fileRadioHz = radioHzForSource("file", std::string(), cfg.centerHz);
             if (fileRadioHz >= 0.0) { file->setCenterFrequencyHz(fileRadioHz); }
             cascade::core::formatUtf8(iqPath_, sizeof(iqPath_), "%s", cfg.iqFilePath.c_str());
-            iqOpenPath_ = cfg.iqFilePath;
+            engine_.iqOpenPath_ = cfg.iqFilePath;
             // No open can be in flight during the startup restore, but the
             // counter's contract is "every install bumps it" — an invariant
             // with an exception in it is one nobody can rely on later.
-            ++sourceGen_;
+            ++engine_.sourceGen_;
             installSource(std::move(file));
-            sourceKind_ = "file";
+            engine_.sourceKind_ = "file";
             applyConverterForSource();
-            sourceSel_ = 1;
+            engine_.sourceSel_ = 1;
             followInputRate();
             cascade::core::diagLogf("source: restored an I/Q file at %.0f S/s",
-                                    pipeline_.activeSource().sampleRateHz());
+                                    engine_.pipeline_.activeSource().sampleRateHz());
         } else {
-            sourceError_ = file->lastError();
+            engine_.sourceError_ = file->lastError();
             // THE FACT, NEVER THE PATH - and the reason is five lines up in the
             // Open handler: a file name is the user's own data. The source's
             // error string is "cannot open file: <full absolute path>", and
@@ -24619,7 +24617,7 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
             // file it had been playing. The saved path is remembered instead,
             // and the box is filled in with it so the user can plug the drive
             // back in and press Open without typing it again.
-            restoreKeep_ = cascade::gui::rememberedSourceAfterFailedOpen(
+            engine_.restoreKeep_ = cascade::gui::rememberedSourceAfterFailedOpen(
                 cfg.sourceKind, cfg.soapyArgs, cfg.nativeArgs, cfg.iqFilePath, cfg.sampleRateHz);
             cascade::core::formatUtf8(iqPath_, sizeof(iqPath_), "%s", cfg.iqFilePath.c_str());
             // WHAT THE SOURCE SECTION CALLS IT: the file's own name, not the
@@ -24627,10 +24625,10 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
             // and a recording lives several folders deep. Never logged - the
             // rule above is about the ring, and this string only ever reaches
             // the screen of the person who chose the file.
-            restoreKeepLabel_ = cascade::gui::fileNameOf(cfg.iqFilePath);
+            engine_.restoreKeepLabel_ = cascade::gui::fileNameOf(cfg.iqFilePath);
             // Nothing is ticked in the dropdown, for the same reason the
             // device branch gives: the generator is not what the user chose.
-            sourceSel_ = -1;
+            engine_.sourceSel_ = -1;
         }
     } else if ((cfg.sourceKind == "soapy" && !cfg.soapyArgs.empty()) ||
                (isNativeSourceKind(cfg.sourceKind) && !cfg.nativeArgs.empty())) {
@@ -24650,7 +24648,7 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
         // gui::preferNativeFor for what "the same dongle" means and why a
         // saved serial has to match.
         if (const std::optional<cascade::source::NativeDeviceInfo> nat =
-                cascade::gui::preferNativeFor(cfg.sourceKind, cfg.soapyArgs, nativeDevices_)) {
+                cascade::gui::preferNativeFor(cfg.sourceKind, cfg.soapyArgs, engine_.nativeDevices_)) {
             cascade::core::diagLogf(
                 "source: opening %s natively (was SoapySDR %s)",
                 modelFromNativeLabel(nat->label).c_str(),
@@ -24663,17 +24661,17 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
         // Seeded BEFORE the open, because openDeviceSync applies it as part of
         // bringing the device up - the port has to be right from the first
         // sample, not corrected afterwards.
-        deviceAntenna_ = cfg.soapyAntenna;
+        engine_.deviceAntenna_ = cfg.soapyAntenna;
         auto dev = openDeviceSync(kind, args, cfg.sampleRateHz);
         if (!dev && !fallbackSoapyArgs.empty() &&
-            cascade::gui::nativeOpenShouldFallBack(sourceError_)) {
+            cascade::gui::nativeOpenShouldFallBack(engine_.sourceError_)) {
             // The dongle is one whose tuner the native driver does not
             // support (E4000, FC0012/13). It opened perfectly well through
             // SoapySDR before this release and must go on doing so.
             cascade::core::diagWarnf(
                 "source: the native %s driver refused the saved radio (%s); opening it "
                 "through SoapySDR instead",
-                kind.c_str(), sourceError_.c_str());
+                kind.c_str(), engine_.sourceError_.c_str());
             const std::string nativeKey = cascade::core::converterRadioKey(kind, args);
             kind = "soapy";
             args = fallbackSoapyArgs;
@@ -24693,46 +24691,46 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
                                      cascade::core::converterRadioKey(kind, args)))) {
                 dev->setCenterFrequencyHz(radioHz);
             }
-            device_ = dev.get();
-            soapyView_ = dynamic_cast<cascade::source::SoapySource*>(device_);
-            deviceArgs_ = args;
-            deviceModel_ = (kind == "soapy") ? cascade::core::sanitiseDevice(args)
+            engine_.device_ = dev.get();
+            engine_.soapyView_ = dynamic_cast<cascade::source::SoapySource*>(engine_.device_);
+            engine_.deviceArgs_ = args;
+            engine_.deviceModel_ = (kind == "soapy") ? cascade::core::sanitiseDevice(args)
                                              : modelFromNativeLabel(nativeLabelFor(kind, args));
             if (kind == "soapy") {
-                cfgSoapyArgs_ = args;
-                cfgNativeArgs_ = cfg.nativeArgs;
+                engine_.cfgSoapyArgs_ = args;
+                engine_.cfgNativeArgs_ = cfg.nativeArgs;
             } else {
-                cfgNativeArgs_ = args;
+                engine_.cfgNativeArgs_ = args;
                 // THE SOAPY ARGS ARE KEPT even though a native driver is what
                 // opened: they are what the prefer-native rule reads on the
                 // NEXT launch, and throwing them away would make the first
                 // native session the last one that could ever fall back.
-                cfgSoapyArgs_ = cfg.soapyArgs;
+                engine_.cfgSoapyArgs_ = cfg.soapyArgs;
             }
-            ++sourceGen_;  // same invariant as the file branch above
+            ++engine_.sourceGen_;  // same invariant as the file branch above
             installSource(std::move(dev));
-            sourceKind_ = kind;
+            engine_.sourceKind_ = kind;
             applyConverterForSource();
             // Point the combo at the restored device if this machine still
             // enumerates it; -1 otherwise (preview falls back to live name).
-            sourceSel_ = -1;
+            engine_.sourceSel_ = -1;
             if (kind == "soapy") {
-                for (std::size_t i = 0; i < soapyDevices_.size(); ++i) {
-                    if (soapyDevices_[i].args == args) {
-                        sourceSel_ = soapyRowBase() + static_cast<int>(i);
+                for (std::size_t i = 0; i < engine_.soapyDevices_.size(); ++i) {
+                    if (engine_.soapyDevices_[i].args == args) {
+                        engine_.sourceSel_ = soapyRowBase() + static_cast<int>(i);
                     }
                 }
             } else {
-                for (std::size_t i = 0; i < nativeDevices_.size(); ++i) {
-                    if (nativeDevices_[i].args == args) {
-                        sourceSel_ = kNativeRowBase + static_cast<int>(i);
+                for (std::size_t i = 0; i < engine_.nativeDevices_.size(); ++i) {
+                    if (engine_.nativeDevices_[i].args == args) {
+                        engine_.sourceSel_ = kNativeRowBase + static_cast<int>(i);
                     }
                 }
             }
             followInputRate();
             cascade::core::diagLogf("source: restored %s (%s) at %.0f S/s",
-                                    deviceModel_.c_str(), kind.c_str(),
-                                    pipeline_.activeSource().sampleRateHz());
+                                    engine_.deviceModel_.c_str(), kind.c_str(),
+                                    engine_.pipeline_.activeSource().sampleRateHz());
         } else {
             // openDeviceSync already set sourceError_. A radio that was there last
             // session and is not there now is the single most common support
@@ -24764,7 +24762,7 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
             // good. The SAVED values are remembered here, unchanged, so the
             // next start tries exactly what this one tried. See
             // gui::rememberedSourceAfterFailedOpen and gui::sourceToSave.
-            restoreKeep_ = cascade::gui::rememberedSourceAfterFailedOpen(
+            engine_.restoreKeep_ = cascade::gui::rememberedSourceAfterFailedOpen(
                 cfg.sourceKind, cfg.soapyArgs, cfg.nativeArgs, cfg.iqFilePath, cfg.sampleRateHz);
 
             // WHAT THE SOURCE SECTION CALLS IT. The enumerated label is the
@@ -24777,24 +24775,24 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
             std::string label = (kind == "soapy") ? cascade::core::sanitiseDevice(args)
                                                   : modelFromNativeLabel(nativeLabelFor(kind, args));
             if (label.empty() || label == args) { label = kind; }
-            restoreKeepLabel_ = label;
+            engine_.restoreKeepLabel_ = label;
             // Which radio, why, and where the receiver is - the driver's own
             // reason is kept verbatim inside the sentence (0.99.36).
-            sourceError_ = cascade::gui::radioNotOpenedSentence(label, sourceError_);
+            engine_.sourceError_ = cascade::gui::radioNotOpenedSentence(label, engine_.sourceError_);
             // NOTHING IS TICKED IN THE DROPDOWN. -1 is the same "the live
             // source is not one of these rows" the Refresh path uses; the
             // preview names the saved radio instead, so the generator is
             // never shown as though the user had picked it.
-            sourceSel_ = -1;
+            engine_.sourceSel_ = -1;
         }
     }
-    if (sourceKind_ == "siggen") {
+    if (engine_.sourceKind_ == "siggen") {
         // Generator kept (or fallen back to): carry the saved center so the
         // readout matches the last session. Nominal-center set cannot fail -
         // unless the user set a converter on the generator that cannot
         // deliver that air frequency, which then leaves the nominal alone.
         applyConverterForSource();
-        pipeline_.activeSource().setCenterFrequencyHz(cfg.centerHz);
+        engine_.pipeline_.activeSource().setCenterFrequencyHz(cfg.centerHz);
     }
 
     // Web server. Applied LAST in the restore so the snapshot the providers
@@ -24820,18 +24818,18 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
 
     // VFO after the source/rate restore so the clamps use the REAL rates the
     // chain ended up with, not whatever the file claimed.
-    const double bwHi = kVfoBwMaxChanFrac * pipeline_.channelRateHz();
-    vfoBandwidthHz_ = std::max(kVfoBwMinHz, std::min(cfg.bandwidthHz, bwHi));
-    pipeline_.setVfoBandwidthHz(vfoBandwidthHz_);
+    const double bwHi = kVfoBwMaxChanFrac * engine_.pipeline_.channelRateHz();
+    engine_.vfoBandwidthHz_ = std::max(kVfoBwMinHz, std::min(cfg.bandwidthHz, bwHi));
+    engine_.pipeline_.setVfoBandwidthHz(engine_.vfoBandwidthHz_);
     // The combo's tick, and -1 for a saved bandwidth that is none of the steps
     // - a config written while a plugin preset had the VFO at its own width.
     // The combo letters vfoBandwidthHz_ itself either way.
-    bandwidthIndex_ = bandwidthStepIndex(vfoBandwidthHz_);
+    engine_.bandwidthIndex_ = bandwidthStepIndex(engine_.vfoBandwidthHz_);
     double off = cfg.vfoOffsetHz;
-    const double lim = 0.5 * pipeline_.inputRateHz() - 0.5 * vfoBandwidthHz_;
+    const double lim = 0.5 * engine_.pipeline_.inputRateHz() - 0.5 * engine_.vfoBandwidthHz_;
     off = (lim > 0.0) ? std::clamp(off, -lim, lim) : 0.0;
-    pipeline_.setVfoOffsetHz(off);
-    vfoOffsetKhz_ = static_cast<float>(off / 1000.0);
+    engine_.pipeline_.setVfoOffsetHz(off);
+    engine_.vfoOffsetKhz_ = static_cast<float>(off / 1000.0);
 }
 
 void AppWindow::telemetryAccrueMode() {
@@ -24842,37 +24840,37 @@ void AppWindow::telemetryAccrueMode() {
     // The accrual carries the sub-second remainder between calls. It has to:
     // a frame is ~17 ms, so every individual delta truncates to zero seconds
     // and nothing would ever be banked.
-    const std::uint64_t secs = telemetryModeAccrual_.advance(glfwGetTime());
-    if (secs > 0) { telemetryModeSeconds_[kModeNames[modeIndex_]] += secs; }
+    const std::uint64_t secs = engine_.telemetryModeAccrual_.advance(glfwGetTime());
+    if (secs > 0) { engine_.telemetryModeSeconds_[kModeNames[engine_.modeIndex_]] += secs; }
 }
 
 void AppWindow::telemetryNotePanel(const char* name) {
     if (name == nullptr || name[0] == '\0') { return; }
     const std::string n(name);
-    if (telemetryPanels_.size() >= 16) { return; }
-    if (std::find(telemetryPanels_.begin(), telemetryPanels_.end(), n) ==
-        telemetryPanels_.end()) {
-        telemetryPanels_.push_back(n);
+    if (engine_.telemetryPanels_.size() >= 16) { return; }
+    if (std::find(engine_.telemetryPanels_.begin(), engine_.telemetryPanels_.end(), n) ==
+        engine_.telemetryPanels_.end()) {
+        engine_.telemetryPanels_.push_back(n);
     }
 }
 
 void AppWindow::telemetryStartup(const cascade::core::AppConfig& cfg) {
-    telemetryEnabled_ = cfg.telemetryEnabled;
-    telemetryInstallId_ = cfg.telemetryInstallId;
+    engine_.telemetryEnabled_ = cfg.telemetryEnabled;
+    engine_.telemetryInstallId_ = cfg.telemetryInstallId;
     // Reporting is on by default, so a first run arrives here enabled with no
     // identifier. Mint one now. If the CSPRNG fails there is no id, and
     // reporting stays off rather than falling back to anything guessable.
-    if (telemetryEnabled_ && telemetryInstallId_.empty()) {
-        telemetryInstallId_ = cascade::core::newInstallId();
-        telemetryEnabled_ = !telemetryInstallId_.empty();
+    if (engine_.telemetryEnabled_ && engine_.telemetryInstallId_.empty()) {
+        engine_.telemetryInstallId_ = cascade::core::newInstallId();
+        engine_.telemetryEnabled_ = !engine_.telemetryInstallId_.empty();
     }
-    telemetryLaunches_ = cfg.telemetryLaunches + 1;
-    telemetryCrashes_ = cfg.telemetryCrashes;
+    engine_.telemetryLaunches_ = cfg.telemetryLaunches + 1;
+    engine_.telemetryCrashes_ = cfg.telemetryCrashes;
     // The previous run never wrote its clean-exit marker, so it did not end
     // normally. This is the whole crash-counting mechanism: no crash handler,
     // no minidump, nothing uploaded from the failure itself - just the
     // observation that last time the marker was never set.
-    if (!cfg.telemetryCleanExit) { ++telemetryCrashes_; }
+    if (!cfg.telemetryCleanExit) { ++engine_.telemetryCrashes_; }
     // THE SAME MARKER, REUSED AS THE TRIGGER TO OFFER A REPORT. It already
     // detects exactly "the last run did not end normally", which is precisely
     // the moment to ask - a crash handler can write a report but it cannot ask
@@ -24885,13 +24883,13 @@ void AppWindow::telemetryStartup(const cascade::core::AppConfig& cfg) {
     crashUploadState_ = cascade::core::decodePolicyState(
         cfg.crashUploadRecent, cfg.crashUploadWindowStart, cfg.crashUploadWindowCount,
         cfg.crashUploadBlockedUntil);
-    telemetrySessionStart_ = glfwGetTime();
-    telemetryModeAccrual_.reset(telemetrySessionStart_);
+    engine_.telemetrySessionStart_ = glfwGetTime();
+    engine_.telemetryModeAccrual_.reset(engine_.telemetrySessionStart_);
     // Last session's report goes now, on a thread, while the window is coming
     // up. Nothing waits for it and nothing reports if it fails.
-    if (telemetryEnabled_ && !telemetryInstallId_.empty() &&
+    if (engine_.telemetryEnabled_ && !engine_.telemetryInstallId_.empty() &&
         !cfg.telemetryPending.empty()) {
-        telemetryReporter_.send(cascade::core::telemetryEndpoint(), cfg.telemetryPending);
+        engine_.telemetryReporter_.send(cascade::core::telemetryEndpoint(), cfg.telemetryPending);
     }
     // Heartbeats are NOT armed here: this runs for bounded --frames runs too,
     // and arming them for those put ctest's throwaway install ids on the live
@@ -24912,7 +24910,7 @@ void AppWindow::crashUploadStart() {
     // The SAME anonymous id the usage report uses, and empty when usage
     // reporting is off - because then it does not exist. A crash report must
     // not be what mints an identifier the user switched off. See PRIVACY.md.
-    p.installId = telemetryEnabled_ ? telemetryInstallId_ : std::string();
+    p.installId = engine_.telemetryEnabled_ ? engine_.telemetryInstallId_ : std::string();
     p.enabled = true;
     p.state = crashUploadState_;
     crashUploader_.start(p);
@@ -24954,32 +24952,32 @@ void AppWindow::telemetryJournal(cascade::core::AppConfig& cfg) {
     cfg.crashUploadWindowCount = crashUploadState_.windowCount;
     cfg.crashUploadBlockedUntil = crashUploadState_.blockedUntil;
 
-    cfg.telemetryEnabled = telemetryEnabled_;
-    cfg.telemetryInstallId = telemetryInstallId_;
-    cfg.telemetryLaunches = telemetryLaunches_;
-    cfg.telemetryCrashes = telemetryCrashes_;
+    cfg.telemetryEnabled = engine_.telemetryEnabled_;
+    cfg.telemetryInstallId = engine_.telemetryInstallId_;
+    cfg.telemetryLaunches = engine_.telemetryLaunches_;
+    cfg.telemetryCrashes = engine_.telemetryCrashes_;
     cfg.telemetryPending.clear();
-    if (!telemetryEnabled_ || telemetryInstallId_.empty()) {
+    if (!engine_.telemetryEnabled_ || engine_.telemetryInstallId_.empty()) {
         return;  // opted out: nothing is written, so nothing can later be sent
     }
     telemetryAccrueMode();
 
     cascade::core::TelemetryReport r;
-    r.installId = telemetryInstallId_;
+    r.installId = engine_.telemetryInstallId_;
     r.appVersion = cascade::versionString();
     r.os = cascade::core::osDescription();
     r.arch = cascade::core::archDescription();
-    r.launches = telemetryLaunches_;
-    r.crashes = telemetryCrashes_;
+    r.launches = engine_.telemetryLaunches_;
+    r.crashes = engine_.telemetryCrashes_;
     const double now = glfwGetTime();
     r.session.seconds = static_cast<std::uint64_t>(
-        now > telemetrySessionStart_ ? now - telemetrySessionStart_ : 0.0);
-    r.session.modeSeconds = telemetryModeSeconds_;
-    r.session.panels = telemetryPanels_;
+        now > engine_.telemetrySessionStart_ ? now - engine_.telemetrySessionStart_ : 0.0);
+    r.session.modeSeconds = engine_.telemetryModeSeconds_;
+    r.session.panels = engine_.telemetryPanels_;
     // MODEL ONLY - sanitiseDevice strips the serial, which the raw args carry
     // twice (once alone, once inside the label).
-    r.session.sdrModel = deviceModel_;
-    for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
+    r.session.sdrModel = engine_.deviceModel_;
+    for (const cascade::core::LoadedPlugin& p : engine_.pluginHost_.plugins()) {
         if (p.loaded && r.session.plugins.size() < 20) {
             r.session.plugins.push_back(p.name + " " + p.version);
         }
@@ -25000,30 +24998,30 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     // radio is what is saved - the same rule as a restore that could not
     // open it, applied here rather than by borrowing that state, which would
     // also relabel the Source panel.
-    cascade::gui::RememberedSource keep = restoreKeep_;
-    if (patchMainKeep_.valid) {
+    cascade::gui::RememberedSource keep = engine_.restoreKeep_;
+    if (engine_.patchMainKeep_.valid) {
         keep = cascade::gui::RememberedSource{};
-        keep.kind = patchMainKeep_.kind;
-        if (patchMainKeep_.kind == "soapy") {
-            keep.soapyArgs = patchMainKeep_.args;
-            keep.nativeArgs = cfgNativeArgs_;
-        } else if (patchMainKeep_.kind == "soundcard") {
+        keep.kind = engine_.patchMainKeep_.kind;
+        if (engine_.patchMainKeep_.kind == "soapy") {
+            keep.soapyArgs = engine_.patchMainKeep_.args;
+            keep.nativeArgs = engine_.cfgNativeArgs_;
+        } else if (engine_.patchMainKeep_.kind == "soundcard") {
             // A lent sound card is named by cfg.soundCard (below, the card as
             // it was lent - patchMainKeep_.card); both radio slots keep what
             // they had.
-            keep.soapyArgs = cfgSoapyArgs_;
-            keep.nativeArgs = cfgNativeArgs_;
+            keep.soapyArgs = engine_.cfgSoapyArgs_;
+            keep.nativeArgs = engine_.cfgNativeArgs_;
         } else {
-            keep.nativeArgs = patchMainKeep_.args;
-            keep.soapyArgs = cfgSoapyArgs_;
+            keep.nativeArgs = engine_.patchMainKeep_.args;
+            keep.soapyArgs = engine_.cfgSoapyArgs_;
         }
-        keep.sampleRateHz = patchMainKeep_.rateHz;
+        keep.sampleRateHz = engine_.patchMainKeep_.rateHz;
     }
     const cascade::gui::SavedSource src = cascade::gui::sourceToSave(
-        sourceKind_, cfgSoapyArgs_, cfgNativeArgs_, iqOpenPath_,
-        pipeline_.activeSource().sampleRateHz(), keep);
+        engine_.sourceKind_, engine_.cfgSoapyArgs_, engine_.cfgNativeArgs_, engine_.iqOpenPath_,
+        engine_.pipeline_.activeSource().sampleRateHz(), keep);
     cfg.sourceKind = src.kind;
-    cfg.soapyAntenna = deviceAntenna_;
+    cfg.soapyAntenna = engine_.deviceAntenna_;
     // ONE SLOT PER FAMILY, and BOTH are written on every save - not just the
     // one belonging to whatever is open. The Soapy args of a radio now being
     // driven natively are what the prefer-native rule reads on the next
@@ -25032,11 +25030,11 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     // one that could ever fall back. See AppConfig::nativeArgs.
     cfg.soapyArgs = src.soapyArgs;
     cfg.nativeArgs = src.nativeArgs;
-    cfg.lookForNetworkUsrps = lookForNetworkUsrps_;
-    cfg.biasTee = biasTeePanel_.remembered;
+    cfg.lookForNetworkUsrps = engine_.lookForNetworkUsrps_;
+    cfg.biasTee = engine_.biasTeePanel_.remembered;
     // Every radio's converter, including those not open now: a converter is
     // part of how that radio is cabled, and must survive a session without it.
-    cfg.converters = converters_;
+    cfg.converters = engine_.converters_;
     // WHAT IS IN THE BOX, not what opened. A Pluto that is on the bench has
     // its address in nativeArgs as well; this field is the typing, and it has
     // to survive a launch in which the board never answered so it can be
@@ -25057,32 +25055,32 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     // those, the section's settings - the card as last set up
     // (gui::soundCardToSave).
     cfg.soundCard = cascade::gui::soundCardToConfig(cascade::gui::soundCardToSave(
-        sourceKind_, soundCardLive_, patchMainKeep_.valid && patchMainKeep_.kind == "soundcard",
-        patchMainKeep_.card, restoreKeep_.kind == "soundcard", soundCardRemembered_, soundCard_));
-    cfg.centerHz = pipeline_.activeSource().centerFrequencyHz();
-    cfg.mode = kModeNames[modeIndex_];
-    cfg.bandwidthHz = vfoBandwidthHz_;
-    cfg.squelchDb = squelchDb_;
-    cfg.volume = volume_;
-    cfg.dbMin = dbMin_;
-    cfg.dbMax = dbMax_;
+        engine_.sourceKind_, engine_.soundCardLive_, engine_.patchMainKeep_.valid && engine_.patchMainKeep_.kind == "soundcard",
+        engine_.patchMainKeep_.card, engine_.restoreKeep_.kind == "soundcard", engine_.soundCardRemembered_, soundCard_));
+    cfg.centerHz = engine_.pipeline_.activeSource().centerFrequencyHz();
+    cfg.mode = kModeNames[engine_.modeIndex_];
+    cfg.bandwidthHz = engine_.vfoBandwidthHz_;
+    cfg.squelchDb = engine_.squelchDb_;
+    cfg.volume = engine_.volume_;
+    cfg.dbMin = engine_.dbMin_;
+    cfg.dbMax = engine_.dbMax_;
     cfg.splitRatio = splitRatio_;
-    cfg.vfoOffsetHz = pipeline_.vfoOffsetHz();
+    cfg.vfoOffsetHz = engine_.pipeline_.vfoOffsetHz();
     // The live rate, EXCEPT when the source being saved is a remembered radio
     // rather than the generator standing in for it: the generator's fixed
     // 2 MS/s is not a rate the user ever chose for their receiver, and it is
     // the number the next start would hand to the driver's open().
     cfg.sampleRateHz = src.sampleRateHz;
-    cfg.stereoEnabled = stereoEnabled_;
-    cfg.deemphasisIndex = deemphIndex_;
-    cfg.nrEnabled = nrEnabled_;
-    cfg.nrStrength = nrStrength_;
-    cfg.notchEnabled = notchEnabled_;
-    cfg.notchFreqHz = static_cast<double>(notchFreqHz_);
-    cfg.notchQ = static_cast<double>(notchQ_);
-    cfg.autoNotch = autoNotch_;
+    cfg.stereoEnabled = engine_.stereoEnabled_;
+    cfg.deemphasisIndex = engine_.deemphIndex_;
+    cfg.nrEnabled = engine_.nrEnabled_;
+    cfg.nrStrength = engine_.nrStrength_;
+    cfg.notchEnabled = engine_.notchEnabled_;
+    cfg.notchFreqHz = static_cast<double>(engine_.notchFreqHz_);
+    cfg.notchQ = static_cast<double>(engine_.notchQ_);
+    cfg.autoNotch = engine_.autoNotch_;
     cfg.bandPlanOverlay = bandPlanOverlay_;
-    cfg.bandPlanSelection = bandPlanSelection_;
+    cfg.bandPlanSelection = engine_.bandPlanSelection_;
     cfg.language = languageSetting_;  // as chosen: never FOXSDR_LANGUAGE
     cfg.country = countrySetting_;
     cfg.bandPlanSize = kBandPlanSizeKeys[std::clamp(bandPlanSizeIndex_, 0, 2)];
@@ -25106,13 +25104,13 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.demodScopeAutoGain = demodScope_.autoGain;
     cfg.demodScopeDisplay = demodScope_.display;
     cfg.transmitOpen = transmitOpen_;
-    cfg.transmitMode = transmitModeIndex_;
-    cfg.transmitInput = transmitInputIndex_;
-    cfg.transmitPowerDb = transmitPowerDb_;
-    cfg.transmitSplit = transmitSplit_;
-    cfg.transmitSplitHz = transmitSplitHz_;
-    cfg.transmitToneHz = transmitToneHz_;
-    cfg.transmitMonitor = transmitMonitor_;
+    cfg.transmitMode = engine_.transmitModeIndex_;
+    cfg.transmitInput = engine_.transmitInputIndex_;
+    cfg.transmitPowerDb = engine_.transmitPowerDb_;
+    cfg.transmitSplit = engine_.transmitSplit_;
+    cfg.transmitSplitHz = engine_.transmitSplitHz_;
+    cfg.transmitToneHz = engine_.transmitToneHz_;
+    cfg.transmitMonitor = engine_.transmitMonitor_;
     cfg.transmitArgs = transmitArgs_;
     // AND NOTHING FOR THE KEY: transmitPttHeld_, transmitLatchPressed_ and
     // the transmitter's latch are not written, because AppConfig has nowhere
@@ -25132,30 +25130,30 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.mapWindowHeight = mapWinH_;
     cfg.mapWindowX = mapWinX_;
     cfg.mapWindowY = mapWinY_;
-    cfg.rxPositionSet = rxSet_;
-    cfg.rxLatDeg = rxLat_;
-    cfg.rxLonDeg = rxLon_;
+    cfg.rxPositionSet = engine_.rxSet_;
+    cfg.rxLatDeg = engine_.rxLat_;
+    cfg.rxLonDeg = engine_.rxLon_;
     cfg.gpsPort = gpsPort_;
     cfg.gpsBaud = gpsBaud_;
-    cfg.pluginCatalogueUrl = pluginCatalogueUrl_;
+    cfg.pluginCatalogueUrl = engine_.pluginCatalogueUrl_;
     cfg.pluginBrowserOpen = pluginBrowseOpen_;
     cfg.fittedModulesOpen = fittedWindowOpen_;
     cfg.fittedModulesX = fittedWinX_;
     cfg.fittedModulesY = fittedWinY_;
     cfg.fittedModulesWidth = fittedWinW_;
     cfg.fittedModulesHeight = fittedWinH_;
-    cfg.pluginLastUpdateCheck = pluginLastUpdateCheck_;
-    cfg.pluginTuneAllowed = pluginTuneAllowed_;
-    cfg.pluginSettingsAllowed = pluginSettingsAllowed_;
-    cfg.pluginSettings = pluginSettings_;
-    cfg.pluginsStopped = pluginsStopped_;
+    cfg.pluginLastUpdateCheck = engine_.pluginLastUpdateCheck_;
+    cfg.pluginTuneAllowed = engine_.pluginTuneAllowed_;
+    cfg.pluginSettingsAllowed = engine_.pluginSettingsAllowed_;
+    cfg.pluginSettings = engine_.pluginSettings_;
+    cfg.pluginsStopped = engine_.pluginsStopped_;
     // closedWindows is written empty: nothing reads it since 0.79.1 (see
     // applyConfig), and an empty list is what an older build would take to
     // mean "no window was shut" - the nearest true statement it can make
     // about a session in which windows only ever open by hand.
     cfg.closedWindows.clear();
-    cfg.pluginMuteOverride = pluginMuteOverride_;
-    cfg.userPresets = userPresets_;
+    cfg.pluginMuteOverride = engine_.pluginMuteOverride_;
+    cfg.userPresets = engine_.userPresets_;
     cfg.catEnabled = catEnabled_;
     cfg.catBindAll = catBindAll_;
     cfg.catPort = catPortMirror_;
@@ -25168,7 +25166,7 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     // FALSE while running, so a start-up that reads it back knows the previous
     // session never got as far as writing true. Set only on the clean exit
     // path, which is what makes an absent marker mean "crashed".
-    cfg.telemetryCleanExit = telemetryCleanExit_;
+    cfg.telemetryCleanExit = engine_.telemetryCleanExit_;
     return cfg;
 }
 

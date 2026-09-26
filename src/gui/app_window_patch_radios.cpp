@@ -116,34 +116,34 @@ std::unique_ptr<cascade::source::SigGenSource> makePatchGenerator(double rateHz,
 std::vector<AppWindow::PatchDeviceChoice> AppWindow::patchDeviceChoices() const {
     std::vector<PatchDeviceChoice> out;
     out.push_back({pc::kGeneratorKey, tr("Signal generator")});
-    for (const cascade::source::NativeDeviceInfo& d : nativeDevices_) {
+    for (const cascade::source::NativeDeviceInfo& d : engine_.nativeDevices_) {
         // A Pluto needs its address typed in the Source panel; the patch has
         // no field for it, so it is not offered here rather than failing.
         if (d.driver == "pluto") { continue; }
         out.push_back({pc::makeDeviceKey(d.driver, d.args), d.label});
     }
-    for (const cascade::source::SoapyDeviceInfo& d : soapyDevices_) {
+    for (const cascade::source::SoapyDeviceInfo& d : engine_.soapyDevices_) {
         // NOT WRAPPED: "(SoapySDR)" is only the excluded product name in
         // parentheses, nothing else to translate.
         out.push_back({pc::makeDeviceKey("soapy", d.args), d.label + " (SoapySDR)"});
     }
     // Every sound card input the Source section has listed (the list is asked
     // for when the patch page is open - see pollSoundCard).
-    for (const cascade::source::SoundCardDevice& d : soundCardDevices_) {
+    for (const cascade::source::SoundCardDevice& d : engine_.soundCardDevices_) {
         out.push_back({pc::makeDeviceKey("soundcard", cascade::source::soundCardDeviceArgs(d.name, d.hostApi)),
                        std::string(tr("Sound card")) + ": " + cascade::source::soundCardDeviceLabel(d)});
     }
     // The receiver's own radio, even when no list currently shows it (a
     // SoapySDR device is only listed after a scan).
-    if (patchMainKeep_.valid) {
-        const std::string key = pc::makeDeviceKey(patchMainKeep_.kind, patchMainKeep_.args);
+    if (engine_.patchMainKeep_.valid) {
+        const std::string key = pc::makeDeviceKey(engine_.patchMainKeep_.kind, engine_.patchMainKeep_.args);
         const bool listed = std::any_of(out.begin(), out.end(), [&](const PatchDeviceChoice& c) {
             return c.key == key || pc::sameDevice(c.key, key);
         });
         if (!listed) {
             std::string buf;
             cascade::core::formatUtf8(buf, tr("%s (the receiver's radio)"),
-                          patchMainKeep_.label.c_str());
+                          engine_.patchMainKeep_.label.c_str());
             out.push_back({key, buf});
         }
     }
@@ -208,16 +208,16 @@ void AppWindow::drawPatchCentreNote(const pc::Node& n) {
 
 std::string AppWindow::patchDefaultDeviceKey() const {
     const auto taken = [this](const std::string& key) {
-        for (const pc::Node& n : patchGraph_.nodes()) {
+        for (const pc::Node& n : engine_.patchGraph_.nodes()) {
             if (n.kind == pc::NodeKind::Radio && pc::sameDevice(n.device, key)) { return true; }
         }
         return false;
     };
     std::vector<std::string> candidates;
-    if (patchMainKeep_.valid) {
-        candidates.push_back(pc::makeDeviceKey(patchMainKeep_.kind, patchMainKeep_.args));
-    } else if (device_ != nullptr) {
-        candidates.push_back(pc::makeDeviceKey(sourceKind_, deviceArgs_));
+    if (engine_.patchMainKeep_.valid) {
+        candidates.push_back(pc::makeDeviceKey(engine_.patchMainKeep_.kind, engine_.patchMainKeep_.args));
+    } else if (engine_.device_ != nullptr) {
+        candidates.push_back(pc::makeDeviceKey(engine_.sourceKind_, engine_.deviceArgs_));
     }
     for (const PatchDeviceChoice& c : patchDeviceChoices()) {
         if (!pc::isGeneratorKey(c.key)) { candidates.push_back(c.key); }
@@ -230,10 +230,10 @@ std::string AppWindow::patchDefaultDeviceKey() const {
 
 std::vector<pc::RadioInfo> AppWindow::patchRadioInfos() const {
     std::vector<pc::RadioInfo> out;
-    for (const pc::Node& n : patchGraph_.nodes()) {
+    for (const pc::Node& n : engine_.patchGraph_.nodes()) {
         if (n.kind != pc::NodeKind::Radio) { continue; }
-        const auto it = patchRadios_.find(n.id);
-        if (it != patchRadios_.end()) {
+        const auto it = engine_.patchRadios_.find(n.id);
+        if (it != engine_.patchRadios_.end()) {
             out.push_back({n.id, it->second->rateHz(), it->second->centreHz()});
         } else {
             // Not running yet: plan against what it is set to, so the patch
@@ -260,9 +260,9 @@ void AppWindow::patchReconcile() {
     // opening (a session restoring its source), when the plan must defer - and
     // a scan asked for only on the first frame then never happened. So the
     // wish is kept and the scan runs on the first frame the plan allows.
-    if (!patchWasOpen_) {
+    if (!engine_.patchWasOpen_) {
         scanNative();
-        patchScanWanted_ = true;
+        engine_.patchScanWanted_ = true;
     }
 
     // --- the receiver's radio goes to the patch ------------------------------
@@ -276,8 +276,8 @@ void AppWindow::patchReconcile() {
     // card is described by what is RUNNING (soundCardLive_), never by the
     // Source section's controls, which may have been edited and not Opened.
     const cascade::gui::ReceiverLoan loan = cascade::gui::receiverSourceForPatch(
-        patchRunning_, sourceKind_, device_ != nullptr, deviceOpenPending_, deviceArgs_,
-        soundCardOpenPending_, soundCardLive_);
+        engine_.patchRunning_, engine_.sourceKind_, engine_.device_ != nullptr, engine_.deviceOpenPending_, engine_.deviceArgs_,
+        engine_.soundCardOpenPending_, engine_.soundCardLive_);
     if (loan.take) {
         PatchMainKeep keep;
         keep.valid = true;
@@ -287,8 +287,8 @@ void AppWindow::patchReconcile() {
         keep.label = loan.kind == "soundcard"
                          ? std::string(tr("Sound card")) + ": " + loan.card.device + " (" +
                                loan.card.hostApi + ")"
-                         : deviceModel_;
-        keep.rateHz = pipeline_.activeSource().sampleRateHz();
+                         : engine_.deviceModel_;
+        keep.rateHz = engine_.pipeline_.activeSource().sampleRateHz();
         // The AIR centre, which may be below 0 Hz through a converter; no
         // value only when the radio has never been tuned.
         keep.centreHz = carriedAirCentre();
@@ -301,12 +301,12 @@ void AppWindow::patchReconcile() {
         // held here rather than the generator standing in for it, so a
         // session closed with the page open starts on the radio next time.
         // The Source panel meanwhile says plainly "Signal generator".
-        patchMainKeep_ = keep;
+        engine_.patchMainKeep_ = keep;
         // A patch that has not chosen a device for its radios yet gets this
         // one - the radio the user was just listening to.
-        for (const pc::Node& n0 : patchGraph_.nodes()) {
+        for (const pc::Node& n0 : engine_.patchGraph_.nodes()) {
             if (n0.kind != pc::NodeKind::Radio || !n0.device.empty()) { continue; }
-            if (pc::Node* n = patchGraph_.mutableNode(n0.id)) {
+            if (pc::Node* n = engine_.patchGraph_.mutableNode(n0.id)) {
                 n->device = pc::makeDeviceKey(keep.kind, keep.args);
                 // A node with a centre of its own keeps it. The carried one is
                 // marked chosen, never judged by its value: 0 Hz on the air is
@@ -323,28 +323,28 @@ void AppWindow::patchReconcile() {
     }
 
     // --- answers from hardware opens -------------------------------------------
-    for (auto it = patchRadioPending_.begin(); it != patchRadioPending_.end();) {
+    for (auto it = engine_.patchRadioPending_.begin(); it != engine_.patchRadioPending_.end();) {
         if (it->second.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
             ++it;
             continue;
         }
         const pc::NodeId id = it->first;
         PatchRadioOpen r = it->second.get();
-        const std::string as = patchRadioPendingAs_[id];
-        it = patchRadioPending_.erase(it);
-        patchRadioPendingAs_.erase(id);
-        const pc::Node* n = patchGraph_.find(id);
-        if (n == nullptr || openedAs(*n) != as || !n->on || !patchRunning_) {
+        const std::string as = engine_.patchRadioPendingAs_[id];
+        it = engine_.patchRadioPending_.erase(it);
+        engine_.patchRadioPendingAs_.erase(id);
+        const pc::Node* n = engine_.patchGraph_.find(id);
+        if (n == nullptr || openedAs(*n) != as || !n->on || !engine_.patchRunning_) {
             // The node went, was changed or switched off while the device
             // opened, or the patch stopped: this device is not wanted any
             // more. Dropping r closes it.
             continue;
         }
         if (!r.src) {
-            patchRadioError_[id] = r.error.empty() ? "the device would not open" : r.error;
-            patchRadioFailedAs_[id] = as;
+            engine_.patchRadioError_[id] = r.error.empty() ? "the device would not open" : r.error;
+            engine_.patchRadioFailedAs_[id] = as;
             cascade::core::diagWarnf("patch: radio node %u would not open: %s",
-                                     static_cast<unsigned>(id), patchRadioError_[id].c_str());
+                                     static_cast<unsigned>(id), engine_.patchRadioError_[id].c_str());
             continue;
         }
         auto radio = std::make_unique<pc::PatchRadio>(id, std::move(r.src), r.label);
@@ -354,20 +354,20 @@ void AppWindow::patchReconcile() {
         radio->setConverter(converterForKey(n->device));
         std::string err;
         if (!radio->start(err)) {
-            patchRadioError_[id] = err;
-            patchRadioFailedAs_[id] = as;
+            engine_.patchRadioError_[id] = err;
+            engine_.patchRadioFailedAs_[id] = as;
             cascade::core::diagWarnf("patch: radio node %u would not start: %s",
                                      static_cast<unsigned>(id), err.c_str());
             continue;
         }
-        if (!r.error.empty()) { patchRadioError_[id] = r.error; } else { patchRadioError_.erase(id); }
-        patchRadioFailedAs_.erase(id);
+        if (!r.error.empty()) { engine_.patchRadioError_[id] = r.error; } else { engine_.patchRadioError_.erase(id); }
+        engine_.patchRadioFailedAs_.erase(id);
         cascade::core::diagLogf("patch: radio node %u running %s at %.0f S/s",
                                 static_cast<unsigned>(id), modelOnly(r.label).c_str(),
                                 radio->rateHz());
-        patchRadioOpenedAs_[id] = as;
-        patchRadios_[id] = std::move(radio);
-        patchRadioSig_.erase(id);
+        engine_.patchRadioOpenedAs_[id] = as;
+        engine_.patchRadios_[id] = std::move(radio);
+        engine_.patchRadioSig_.erase(id);
     }
 
     // --- which radios should run ------------------------------------------------
@@ -375,23 +375,23 @@ void AppWindow::patchReconcile() {
     // switched off forgets why it last failed, so switching it on again is
     // also the way to try a device that would not open.
     std::set<pc::NodeId> wanted;
-    for (const pc::Node& n : patchGraph_.nodes()) {
+    for (const pc::Node& n : engine_.patchGraph_.nodes()) {
         if (n.kind != pc::NodeKind::Radio || n.device.empty()) { continue; }
         if (!n.on) {
-            patchRadioFailedAs_.erase(n.id);
-            patchRadioError_.erase(n.id);
+            engine_.patchRadioFailedAs_.erase(n.id);
+            engine_.patchRadioError_.erase(n.id);
             continue;
         }
-        if (!patchRunning_) { continue; }
-        if (deviceTakenEarlier(patchGraph_, n)) { continue; }   // DeviceTwice: never opened
+        if (!engine_.patchRunning_) { continue; }
+        if (deviceTakenEarlier(engine_.patchGraph_, n)) { continue; }   // DeviceTwice: never opened
         wanted.insert(n.id);
     }
 
     // Stop what is running and not wanted, or wanted differently.
-    for (auto it = patchRadios_.begin(); it != patchRadios_.end();) {
-        const pc::Node* n = patchGraph_.find(it->first);
+    for (auto it = engine_.patchRadios_.begin(); it != engine_.patchRadios_.end();) {
+        const pc::Node* n = engine_.patchGraph_.find(it->first);
         const bool keep = n != nullptr && wanted.count(it->first) != 0 &&
-                          patchRadioOpenedAs_[it->first] == openedAs(*n) &&
+                          engine_.patchRadioOpenedAs_[it->first] == openedAs(*n) &&
                           it->second->fault().empty();
         if (keep) {
             ++it;
@@ -399,27 +399,27 @@ void AppWindow::patchReconcile() {
         }
         const pc::NodeId id = it->first;
         if (!it->second->fault().empty()) {
-            patchRadioError_[id] = it->second->fault();
-            patchRadioFailedAs_[id] = patchRadioOpenedAs_[id];
+            engine_.patchRadioError_[id] = it->second->fault();
+            engine_.patchRadioFailedAs_[id] = engine_.patchRadioOpenedAs_[id];
             cascade::core::diagWarnf("patch: radio stopped: %s", it->second->fault().c_str());
         }
         it->second->stop();
-        it = patchRadios_.erase(it);
-        patchRadioOpenedAs_.erase(id);
-        patchRadioSig_.erase(id);
-        patchSpectra_.erase(id);
-        patchRefusedBy_.erase(id);
+        it = engine_.patchRadios_.erase(it);
+        engine_.patchRadioOpenedAs_.erase(id);
+        engine_.patchRadioSig_.erase(id);
+        engine_.patchSpectra_.erase(id);
+        engine_.patchRefusedBy_.erase(id);
     }
 
     // Start what is wanted and not running.
     for (const pc::NodeId id : wanted) {
-        pc::Node* n = patchGraph_.mutableNode(id);
+        pc::Node* n = engine_.patchGraph_.mutableNode(id);
         if (n == nullptr) { continue; }
         const std::string as = openedAs(*n);
-        if (patchRadios_.count(id) != 0) {
+        if (engine_.patchRadios_.count(id) != 0) {
             // Running: follow the node's centre, and learn it from the device
             // when the node has none.
-            pc::PatchRadio& r = *patchRadios_[id];
+            pc::PatchRadio& r = *engine_.patchRadios_[id];
             // A converter changed in the Source section while this radio runs
             // takes effect here; the follow below then retunes the radio so
             // the node's AIR frequency is what it hears.
@@ -431,15 +431,15 @@ void AppWindow::patchReconcile() {
                 patchUi_.dirty = true;
             } else if (std::fabs(r.centreHz() - n->freqHz) > 0.5) {
                 if (!r.setCentreHz(n->freqHz)) {
-                    patchRadioError_[id] = "the device refused that frequency";
+                    engine_.patchRadioError_[id] = "the device refused that frequency";
                 } else {
-                    patchRadioError_.erase(id);
+                    engine_.patchRadioError_.erase(id);
                 }
             }
             continue;
         }
-        if (patchRadioPending_.count(id) != 0) { continue; }   // its answer is coming
-        if (patchRadioFailedAs_.count(id) != 0 && patchRadioFailedAs_[id] == as) { continue; }
+        if (engine_.patchRadioPending_.count(id) != 0) { continue; }   // its answer is coming
+        if (engine_.patchRadioFailedAs_.count(id) != 0 && engine_.patchRadioFailedAs_[id] == as) { continue; }
         const double rate = radioRate(*n);
         const double centre = n->freqHz;
         // The node's frequency is AIR; the device is told it through the
@@ -454,8 +454,8 @@ void AppWindow::patchReconcile() {
             radio->setConverter(conv);
             std::string err;
             if (!radio->start(err)) {
-                patchRadioError_[id] = err;
-                patchRadioFailedAs_[id] = as;
+                engine_.patchRadioError_[id] = err;
+                engine_.patchRadioFailedAs_[id] = as;
                 continue;
             }
             if (!pc::radioCentreSet(*n)) {
@@ -463,11 +463,11 @@ void AppWindow::patchReconcile() {
                 n->centreChosen = true;
                 patchUi_.dirty = true;
             }
-            patchRadioError_.erase(id);
-            patchRadioFailedAs_.erase(id);
-            patchRadioOpenedAs_[id] = as;
-            patchRadios_[id] = std::move(radio);
-            patchRadioSig_.erase(id);
+            engine_.patchRadioError_.erase(id);
+            engine_.patchRadioFailedAs_.erase(id);
+            engine_.patchRadioOpenedAs_[id] = as;
+            engine_.patchRadios_[id] = std::move(radio);
+            engine_.patchRadioSig_.erase(id);
             continue;
         }
         const std::string driver = pc::deviceDriver(n->device);
@@ -480,12 +480,12 @@ void AppWindow::patchReconcile() {
         // radio under one; the patch opens its own radios and did not wait -
         // and a scan probing the dongle being opened is the 0.90.0 fault. It
         // waits for the scan and is started on the frame after it ends.
-        if (soapyScanPending_ && cascade::gui::scanMayProbe(soapyScanSkip_, driver, args)) {
+        if (engine_.soapyScanPending_ && cascade::gui::scanMayProbe(engine_.soapyScanSkip_, driver, args)) {
             continue;
         }
         const std::string label = patchDeviceLabel(n->device);
-        patchRadioPendingAs_[id] = as;
-        patchRadioError_.erase(id);
+        engine_.patchRadioPendingAs_[id] = as;
+        engine_.patchRadioError_.erase(id);
         // Converted HERE, on the GUI thread that owns the remembered settings;
         // the worker only ever sees the radio's own figure. No value = "leave
         // it": a node with no centre yet, or one this radio's converter cannot
@@ -495,7 +495,7 @@ void AppWindow::patchReconcile() {
             (pc::radioCentreSet(*n) && cascade::core::airReachable(conv, centre))
                 ? std::optional<double>(cascade::core::radioFromAir(conv, centre))
                 : std::nullopt;
-        patchRadioPending_[id] = std::async(std::launch::async, [driver, args, label, rate,
+        engine_.patchRadioPending_[id] = std::async(std::launch::async, [driver, args, label, rate,
                                                                  centre = radioCentre]() {
             PatchRadioOpen r;
             r.label = label;
@@ -561,16 +561,16 @@ void AppWindow::patchReconcile() {
     // yet, went WHOLE-BUS, and the radios below then opened under it. Asked
     // here, a radio just started is pending, the plan defers, and the scan
     // runs once every radio is open - leaving their drivers out.
-    if (patchScanWanted_ && !soapyScanPending_ &&
+    if (engine_.patchScanWanted_ && !engine_.soapyScanPending_ &&
         soapyScanPlan().mode != cascade::gui::SoapyScanMode::Defer) {
-        patchScanWanted_ = false;
+        engine_.patchScanWanted_ = false;
         scanSoapy();
     }
 
     // --- every radio: retire dead sets, take the newest spectrum ---------------
-    for (auto& [id, radio] : patchRadios_) {
+    for (auto& [id, radio] : engine_.patchRadios_) {
         radio->runner().reap();
-        PatchSpectrum& s = patchSpectra_[id];
+        PatchSpectrum& s = engine_.patchSpectra_[id];
         radio->spectrum(s.db, s.seq);
     }
 }
@@ -578,29 +578,29 @@ void AppWindow::patchReconcile() {
 void AppWindow::patchPublishSets() {
     // --- each speaker's output --------------------------------------------------
     std::set<pc::NodeId> live;
-    for (const pc::AudioSinkPlan& sp : patchPlan_.sinks) {
-        if (patchRadios_.count(sp.radio) == 0) { continue; }   // nothing to write yet
-        const pc::Node* n = patchGraph_.find(sp.sink);
+    for (const pc::AudioSinkPlan& sp : engine_.patchPlan_.sinks) {
+        if (engine_.patchRadios_.count(sp.radio) == 0) { continue; }   // nothing to write yet
+        const pc::Node* n = engine_.patchGraph_.find(sp.sink);
         if (n == nullptr) { continue; }
         live.insert(sp.sink);
         const std::string key = n->device.empty() ? std::string("wav") : n->device;
-        const auto made = patchDestMadeFor_.find(sp.sink);
-        if (made != patchDestMadeFor_.end() && made->second == key) { continue; }
+        const auto made = engine_.patchDestMadeFor_.find(sp.sink);
+        if (made != engine_.patchDestMadeFor_.end() && made->second == key) { continue; }
 
         std::string err;
         std::shared_ptr<pc::AudioDest> dest;
         const std::string prefix = pc::patchFilePrefix(static_cast<unsigned>(sp.sink), n->name);
         switch (pc::outputKind(key)) {
             case pc::OutputKind::Wav:
-                dest = pc::makeWavDest(recordDir_, prefix, err);
+                dest = pc::makeWavDest(engine_.recordDir_, prefix, err);
                 break;
             case pc::OutputKind::Mp3: {
-                dest = pc::makeMp3Dest(recordDir_, prefix, err);
+                dest = pc::makeMp3Dest(engine_.recordDir_, prefix, err);
                 if (!dest) {
                     // THE FILE STILL GETS WRITTEN: an MP3 this build cannot
                     // make is a WAV, and the face says so.
                     std::string werr;
-                    dest = pc::makeWavDest(recordDir_, prefix, werr);
+                    dest = pc::makeWavDest(engine_.recordDir_, prefix, werr);
                     err += dest ? " - writing WAV instead" : "; " + werr;
                 }
                 break;
@@ -613,18 +613,18 @@ void AppWindow::patchPublishSets() {
                 break;
         }
         bool replaced = false;
-        for (auto& d : patchDests_) {
+        for (auto& d : engine_.patchDests_) {
             if (d.first == sp.sink) {
                 d.second = dest;
                 replaced = true;
             }
         }
-        if (!replaced) { patchDests_.emplace_back(sp.sink, dest); }
-        patchDestMadeFor_[sp.sink] = key;
+        if (!replaced) { engine_.patchDests_.emplace_back(sp.sink, dest); }
+        engine_.patchDestMadeFor_[sp.sink] = key;
         if (err.empty()) {
-            patchDestError_.erase(sp.sink);
+            engine_.patchDestError_.erase(sp.sink);
         } else {
-            patchDestError_[sp.sink] = err;
+            engine_.patchDestError_[sp.sink] = err;
         }
         cascade::core::diagLogf("patch: speaker node %u -> %s%s%s",
                                 static_cast<unsigned>(sp.sink), destKind(dest.get()),
@@ -632,30 +632,30 @@ void AppWindow::patchPublishSets() {
     }
     // Speakers that stopped playing lose their output. The file is finalised
     // when the running set that still holds it is retired.
-    for (auto it = patchDests_.begin(); it != patchDests_.end();) {
+    for (auto it = engine_.patchDests_.begin(); it != engine_.patchDests_.end();) {
         if (live.count(it->first) != 0) {
             ++it;
             continue;
         }
-        patchDestMadeFor_.erase(it->first);
-        patchDestError_.erase(it->first);
-        it = patchDests_.erase(it);
+        engine_.patchDestMadeFor_.erase(it->first);
+        engine_.patchDestError_.erase(it->first);
+        it = engine_.patchDests_.erase(it);
     }
 
     // --- each radio's set -------------------------------------------------------
-    for (auto& [id, radio] : patchRadios_) {
+    for (auto& [id, radio] : engine_.patchRadios_) {
         const double rate = radio->rateHz();
-        const std::string sig = pc::radioSignature(patchPlan_, patchGraph_, id, rate,
-                                                   &patchCatalogue_, &patchApis_, patchDests_);
-        const auto have = patchRadioSig_.find(id);
-        if (have != patchRadioSig_.end() && have->second == sig) { continue; }
+        const std::string sig = pc::radioSignature(engine_.patchPlan_, engine_.patchGraph_, id, rate,
+                                                   &engine_.patchCatalogue_, &engine_.patchApis_, engine_.patchDests_);
+        const auto have = engine_.patchRadioSig_.find(id);
+        if (have != engine_.patchRadioSig_.end() && have->second == sig) { continue; }
         std::shared_ptr<pc::StripSet> set = pc::buildRadioSet(
-            patchPlan_, patchGraph_, id, rate, &patchCatalogue_, &patchApis_, patchDests_);
-        patchRefusedBy_[id] = set->refused;
+            engine_.patchPlan_, engine_.patchGraph_, id, rate, &engine_.patchCatalogue_, &engine_.patchApis_, engine_.patchDests_);
+        engine_.patchRefusedBy_[id] = set->refused;
         for (const auto& d : set->decoders) {
-            patchDecoderFaces_.erase(d->node);
-            patchFirstLineLogged_.erase(d->node);
-            const pc::Node* dn = patchGraph_.find(d->node);
+            engine_.patchDecoderFaces_.erase(d->node);
+            engine_.patchFirstLineLogged_.erase(d->node);
+            const pc::Node* dn = engine_.patchGraph_.find(d->node);
             cascade::core::diagLogf("patch: decoder node %u (%s) started on radio node %u at "
                                     "%.0f S/s",
                                     static_cast<unsigned>(d->node),
@@ -663,26 +663,26 @@ void AppWindow::patchPublishSets() {
                                     static_cast<unsigned>(id), d->rateHz);
         }
         for (const pc::NodeId r : set->refused) {
-            const pc::Node* n = patchGraph_.find(r);
+            const pc::Node* n = engine_.patchGraph_.find(r);
             cascade::core::diagLogf("patch: decoder node %u (%s) refused to start",
                                     static_cast<unsigned>(r),
                                     n != nullptr ? n->plugin.c_str() : "?");
         }
         radio->runner().publish(std::move(set));
-        patchRadioSig_[id] = sig;
+        engine_.patchRadioSig_[id] = sig;
     }
     // Every demodulator's squelch, live - after any publish, so a new set's
     // channels get the setting from their first block.
     patchPushSquelch();
-    patchRefused_.clear();
-    for (const auto& [id, list] : patchRefusedBy_) {
+    engine_.patchRefused_.clear();
+    for (const auto& [id, list] : engine_.patchRefusedBy_) {
         (void)id;
-        patchRefused_.insert(patchRefused_.end(), list.begin(), list.end());
+        engine_.patchRefused_.insert(engine_.patchRefused_.end(), list.begin(), list.end());
     }
 }
 
 void AppWindow::patchStopAll(bool restoreMain) {
-    for (auto& [id, radio] : patchRadios_) {
+    for (auto& [id, radio] : engine_.patchRadios_) {
         (void)id;
         radio->stop();
     }
@@ -695,33 +695,33 @@ void AppWindow::patchStopAll(bool restoreMain) {
     // hang cost one second here, not five.
     {
         cascade::source::SoundCardSource::CloseBatch closes;
-        patchRadios_.clear();
+        engine_.patchRadios_.clear();
     }
-    patchRadioOpenedAs_.clear();
-    patchRadioSig_.clear();
-    patchSpectra_.clear();
-    patchRefusedBy_.clear();
-    patchRadioError_.clear();
-    patchRadioFailedAs_.clear();
-    patchDests_.clear();
-    patchDestMadeFor_.clear();
-    patchDestError_.clear();
+    engine_.patchRadioOpenedAs_.clear();
+    engine_.patchRadioSig_.clear();
+    engine_.patchSpectra_.clear();
+    engine_.patchRefusedBy_.clear();
+    engine_.patchRadioError_.clear();
+    engine_.patchRadioFailedAs_.clear();
+    engine_.patchDests_.clear();
+    engine_.patchDestMadeFor_.clear();
+    engine_.patchDestError_.clear();
     // An open still in flight is NOT waited on here - a USB walk can take
     // seconds and this is the GUI thread. Its future moves to a thread of its
     // own that waits for the answer and drops it, which closes the device.
-    for (auto& [id, fut] : patchRadioPending_) {
+    for (auto& [id, fut] : engine_.patchRadioPending_) {
         (void)id;
         std::thread([f = std::move(fut)]() mutable {
             if (f.valid()) { (void)f.get(); }
         }).detach();
     }
-    patchRadioPending_.clear();
-    patchRadioPendingAs_.clear();
+    engine_.patchRadioPending_.clear();
+    engine_.patchRadioPendingAs_.clear();
 
-    if (!restoreMain || !patchMainKeep_.valid) { return; }
+    if (!restoreMain || !engine_.patchMainKeep_.valid) { return; }
     // --- the receiver gets its radio back ---------------------------------------
-    const PatchMainKeep keep = patchMainKeep_;
-    patchMainKeep_ = PatchMainKeep{};
+    const PatchMainKeep keep = engine_.patchMainKeep_;
+    engine_.patchMainKeep_ = PatchMainKeep{};
     // A SOUND CARD goes back through its own row: reopened on a worker AS IT
     // WAS RUNNING when the patch took it (keep.card) - not with whatever the
     // Source section's controls were edited to meanwhile. The patch radio
@@ -731,14 +731,14 @@ void AppWindow::patchStopAll(bool restoreMain) {
     // slots keep what they had); a successful open clears that
     // (pollSoundCard), a failed one leaves it.
     if (keep.kind == "soundcard") {
-        if (!restoreKeep_.valid()) {
-            restoreKeep_ = cascade::gui::rememberedSourceAfterFailedOpen(
-                "soundcard", cfgSoapyArgs_, cfgNativeArgs_, std::string(), keep.rateHz);
-            soundCardRemembered_ = keep.card;
-            restoreKeepLabel_ = keep.label;
+        if (!engine_.restoreKeep_.valid()) {
+            engine_.restoreKeep_ = cascade::gui::rememberedSourceAfterFailedOpen(
+                "soundcard", engine_.cfgSoapyArgs_, engine_.cfgNativeArgs_, std::string(), keep.rateHz);
+            engine_.soundCardRemembered_ = keep.card;
+            engine_.restoreKeepLabel_ = keep.label;
         }
         cascade::core::diagLogf("patch: handing %s back to the receiver", keep.label.c_str());
-        sourceSel_ = kSoundCardRow;
+        engine_.sourceSel_ = kSoundCardRow;
         launchSoundCardOpen(false, keep.card);
         return;
     }
@@ -747,28 +747,28 @@ void AppWindow::patchStopAll(bool restoreMain) {
     // a hand-back that finds the radio unlisted, or whose open fails, used to
     // leave the config naming the generator. Remembered the way a startup
     // restore that could not open it is; a successful open clears it.
-    if (!restoreKeep_.valid()) {
+    if (!engine_.restoreKeep_.valid()) {
         cascade::gui::RememberedSource r;
         r.kind = keep.kind;
         if (keep.kind == "soapy") {
             r.soapyArgs = keep.args;
-            r.nativeArgs = cfgNativeArgs_;
+            r.nativeArgs = engine_.cfgNativeArgs_;
         } else {
             r.nativeArgs = keep.args;
-            r.soapyArgs = cfgSoapyArgs_;
+            r.soapyArgs = engine_.cfgSoapyArgs_;
         }
         r.sampleRateHz = keep.rateHz;
-        restoreKeep_ = r;
-        restoreKeepLabel_ = keep.label;
+        engine_.restoreKeep_ = r;
+        engine_.restoreKeepLabel_ = keep.label;
     }
     int row = -1;
     if (keep.kind == "soapy") {
-        for (std::size_t i = 0; i < soapyDevices_.size(); ++i) {
-            if (soapyDevices_[i].args == keep.args) { row = soapyRowBase() + static_cast<int>(i); }
+        for (std::size_t i = 0; i < engine_.soapyDevices_.size(); ++i) {
+            if (engine_.soapyDevices_[i].args == keep.args) { row = soapyRowBase() + static_cast<int>(i); }
         }
     } else {
-        for (std::size_t i = 0; i < nativeDevices_.size(); ++i) {
-            if (nativeDevices_[i].driver == keep.kind && nativeDevices_[i].args == keep.args) {
+        for (std::size_t i = 0; i < engine_.nativeDevices_.size(); ++i) {
+            if (engine_.nativeDevices_[i].driver == keep.kind && engine_.nativeDevices_[i].args == keep.args) {
                 row = kNativeRowBase + static_cast<int>(i);
             }
         }
@@ -779,7 +779,7 @@ void AppWindow::patchStopAll(bool restoreMain) {
                       tr("the radio the patch page was using (%s) is not listed any more - "
                          "choose it again in Source"),
                       keep.label.c_str());
-        sourceError_ = buf;
+        engine_.sourceError_ = buf;
         cascade::core::diagWarnf("patch: could not hand %s back to the receiver - not listed",
                                  keep.label.c_str());
         return;
@@ -793,27 +793,27 @@ void AppWindow::patchStopAll(bool restoreMain) {
 }
 
 void AppWindow::patchPressStart() {
-    if (patchRunning_) {
-        patchRunning_ = false;
+    if (engine_.patchRunning_) {
+        engine_.patchRunning_ = false;
         return;
     }
     // START WITH EVERY RADIO SWITCHED OFF SWITCHES THEM ALL ON (see
     // switchOnForStart for why).
-    if (pc::switchOnForStart(patchGraph_)) { patchUi_.dirty = true; }
-    patchRunning_ = true;
+    if (pc::switchOnForStart(engine_.patchGraph_)) { patchUi_.dirty = true; }
+    engine_.patchRunning_ = true;
 }
 
 void AppWindow::patchAllOff() {
     // EVERY RADIO OFF, and the patch stopped: the receiver gets its radio back
     // when patchApplyRunning sees the change.
-    if (pc::switchAllRadiosOff(patchGraph_)) { patchUi_.dirty = true; }
-    patchRunning_ = false;
+    if (pc::switchAllRadiosOff(engine_.patchGraph_)) { patchUi_.dirty = true; }
+    engine_.patchRunning_ = false;
 }
 
 void AppWindow::patchApplyRunning() {
-    if (patchRunning_ == patchWasRunning_) { return; }
-    patchWasRunning_ = patchRunning_;
-    if (patchRunning_) {
+    if (engine_.patchRunning_ == engine_.patchWasRunning_) { return; }
+    engine_.patchWasRunning_ = engine_.patchRunning_;
+    if (engine_.patchRunning_) {
         cascade::core::diagLogf("patch: START - the patch's radios open");
     } else {
         cascade::core::diagLogf("patch: STOP - every patch radio closes");
@@ -835,12 +835,12 @@ void AppWindow::drawPatchTransport() {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImVec2 at = ImGui::GetCursorScreenPos();
     const ImVec2 centre(at.x + kR * 1.1f, at.y + kR * 1.1f);
-    if (drawBenchStopButton(dl, centre, kR, patchRunning_)) {
-        submitCommand(cascade::core::cmd::makeInt(FOXAPI_OP_PATCH_RUN, patchRunning_ ? 0 : 1));
+    if (drawBenchStopButton(dl, centre, kR, engine_.patchRunning_)) {
+        submitCommand(cascade::core::cmd::makeInt(FOXAPI_OP_PATCH_RUN, engine_.patchRunning_ ? 0 : 1));
     }
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip(
-            "%s", patchRunning_
+            "%s", engine_.patchRunning_
                       ? tr("Stop the patch: every patch radio closes, recordings are\n"
                            "finished, and the receiver gets its radio back.")
                       : tr("Start the patch: every radio switched on opens. The receiver\n"
@@ -869,7 +869,7 @@ void AppWindow::drawPatchTransport() {
 
     // What is running, in words.
     std::size_t radios = 0, on = 0;
-    for (const pc::Node& n : patchGraph_.nodes()) {
+    for (const pc::Node& n : engine_.patchGraph_.nodes()) {
         if (n.kind != pc::NodeKind::Radio) { continue; }
         ++radios;
         if (n.on) { ++on; }
@@ -878,13 +878,13 @@ void AppWindow::drawPatchTransport() {
     ImGui::SetCursorScreenPos(
         ImVec2(ImGui::GetCursorScreenPos().x + 8.0f, at.y + kR * 1.1f - ImGui::GetTextLineHeight() * 0.5f));
     std::string line;
-    if (patchRunning_) {
+    if (engine_.patchRunning_) {
         // Singular and plural as whole keys: an English "s" handed in by %s
         // is a word no catalogue can translate.
         cascade::core::formatUtf8(line,
                       radios == 1 ? tr("RUNNING - %zu of %zu radio open")
                                   : tr("RUNNING - %zu of %zu radios open"),
-                      patchRadios_.size(), radios);
+                      engine_.patchRadios_.size(), radios);
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kPhosphor));
     } else {
         cascade::core::formatUtf8(line,
@@ -904,7 +904,7 @@ void AppWindow::drawPatchTransport() {
 void AppWindow::drawPatchRadioSwitch(pc::Node& n) {
     // LIT while this radio is actually open, amber while it is switched on and
     // waiting (the patch stopped, or the device still opening), dark when off.
-    const bool live = patchRadios_.count(n.id) != 0;
+    const bool live = engine_.patchRadios_.count(n.id) != 0;
     const ImU32 face = !n.on ? cascade::gui::theme::kEnamel
                        : live ? cascade::gui::theme::withAlpha(cascade::gui::theme::kPhosphor, 0.45f)
                               : cascade::gui::theme::withAlpha(cascade::gui::theme::kAmber, 0.35f);
@@ -949,15 +949,15 @@ void AppWindow::patchCollectMapTargets(pc::NodeId map) {
     // which already applies the host's staleness rule - the same list the map
     // pages draw, so a patch map and a map page never disagree about what is
     // there.
-    const std::vector<std::string> sources = pc::mapSources(patchGraph_, map, patchCatalogue_);
+    const std::vector<std::string> sources = pc::mapSources(engine_.patchGraph_, map, engine_.patchCatalogue_);
     if (sources.empty()) { return; }
     const auto wanted = [&sources](const std::string& plugin) {
         return std::find(sources.begin(), sources.end(), plugin) != sources.end();
     };
-    for (const cascade::core::HostTrack& t : pluginUi_.tracks()) {
+    for (const cascade::core::HostTrack& t : engine_.pluginUi_.tracks()) {
         if (wanted(t.plugin)) { patchMapTracks_.push_back(t); }
     }
-    for (const cascade::core::HostPath& p : pluginUi_.paths()) {
+    for (const cascade::core::HostPath& p : engine_.pluginUi_.paths()) {
         if (wanted(p.plugin)) { patchMapPaths_.push_back(p); }
     }
 }
@@ -967,12 +967,12 @@ void AppWindow::drawPatchMapInspector(pc::Node& n) {
     const auto amber = cascade::gui::theme::vec(cascade::gui::theme::kAmber);
     ImGui::Spacing();
     std::size_t wired = 0;
-    for (const pc::Wire& w : patchGraph_.wires()) {
+    for (const pc::Wire& w : engine_.patchGraph_.wires()) {
         if (w.to == n.id) { ++wired; }
     }
     ImGui::Text(tr("%zu of %zu inputs wired"), wired, pc::kMapInputs);
     patchCollectMapTargets(n.id);
-    for (const std::string& src : pc::mapSources(patchGraph_, n.id, patchCatalogue_)) {
+    for (const std::string& src : pc::mapSources(engine_.patchGraph_, n.id, engine_.patchCatalogue_)) {
         std::size_t count = 0;
         for (const cascade::core::HostTrack& t : patchMapTracks_) {
             if (t.plugin == src) { ++count; }
@@ -1002,12 +1002,12 @@ void AppWindow::drawPatchMapInspector(pc::Node& n) {
 }
 
 void AppWindow::patchPushSquelch() {
-    for (const pc::Node& n : patchGraph_.nodes()) {
+    for (const pc::Node& n : engine_.patchGraph_.nodes()) {
         if (n.kind != pc::NodeKind::Demod) { continue; }
-        const pc::NodeId chan = demodChannel(patchGraph_, n.id);
+        const pc::NodeId chan = demodChannel(engine_.patchGraph_, n.id);
         if (chan == pc::kNoNode) { continue; }
-        const auto r = patchRadios_.find(pc::radioOf(patchGraph_, chan));
-        if (r == patchRadios_.end()) { continue; }
+        const auto r = engine_.patchRadios_.find(pc::radioOf(engine_.patchGraph_, chan));
+        if (r == engine_.patchRadios_.end()) { continue; }
         r->second->runner().setSquelchDb(chan, n.squelch ? n.squelchDb : pc::kSquelchOffDb);
     }
 }
@@ -1034,11 +1034,11 @@ void AppWindow::drawPatchSquelch(pc::Node& n, float width) {
         }
     }
     // WHERE TO SET IT: the level the gate is judging, and whether it is open.
-    const pc::NodeId chan = demodChannel(patchGraph_, n.id);
-    const auto r = patchRadios_.find(pc::radioOf(patchGraph_, chan));
+    const pc::NodeId chan = demodChannel(engine_.patchGraph_, n.id);
+    const auto r = engine_.patchRadios_.find(pc::radioOf(engine_.patchGraph_, chan));
     float level = 0.0f;
     bool open = false;
-    if (chan != pc::kNoNode && r != patchRadios_.end() &&
+    if (chan != pc::kNoNode && r != engine_.patchRadios_.end() &&
         r->second->runner().squelchState(chan, level, open)) {
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kAmber));
         ImGui::Text("%.0f dB", static_cast<double>(level));
@@ -1072,7 +1072,7 @@ void AppWindow::drawPatchRadioInspector(pc::Node& n) {
             // shown, greyed, with who has it - not hidden, so the user can see
             // why it is not offered.
             const pc::Node* holder = nullptr;
-            for (const pc::Node& other : patchGraph_.nodes()) {
+            for (const pc::Node& other : engine_.patchGraph_.nodes()) {
                 if (other.id != n.id && other.kind == pc::NodeKind::Radio &&
                     pc::sameDevice(other.device, c.key)) {
                     holder = &other;
@@ -1088,8 +1088,8 @@ void AppWindow::drawPatchRadioInspector(pc::Node& n) {
             // IN USE BY THE RECEIVER IS NOT "NOT AVAILABLE" (2026-09-23): the
             // receiver lends its radio to the patch when the patch starts, so
             // the row is offered, and says what will happen to it.
-            else if (device_ != nullptr &&
-                     pc::sameDevice(c.key, pc::makeDeviceKey(sourceKind_, deviceArgs_))) {
+            else if (engine_.device_ != nullptr &&
+                     pc::sameDevice(c.key, pc::makeDeviceKey(engine_.sourceKind_, engine_.deviceArgs_))) {
                 text += tr("  (the receiver's - lent to the patch when it starts)");
             }
             ImGui::BeginDisabled(holder != nullptr);
@@ -1109,12 +1109,12 @@ void AppWindow::drawPatchRadioInspector(pc::Node& n) {
     // LOOK AGAIN from here, rather than sending the user to the Source panel:
     // a radio plugged in after the page opened, or one a scan beside an open
     // radio had to leave out, is one press away (2026-09-23).
-    ImGui::BeginDisabled(soapyScanPending_);
+    ImGui::BeginDisabled(engine_.soapyScanPending_);
     if (ImGui::SmallButton(trId("Look for radios"))) {
         submitCommand(cascade::core::cmd::make(FOXAPI_OP_SCAN_DEVICES));
     }
     ImGui::EndDisabled();
-    if (soapyScanPending_) {
+    if (engine_.soapyScanPending_) {
         ImGui::SameLine();
         ImGui::PushStyleColor(ImGuiCol_Text, muted);
         ImGui::TextUnformatted(tr("looking..."));
@@ -1150,19 +1150,19 @@ void AppWindow::drawPatchRadioInspector(pc::Node& n) {
 
     // What it is actually doing.
     ImGui::Spacing();
-    const auto run = patchRadios_.find(n.id);
-    if (run != patchRadios_.end()) {
+    const auto run = engine_.patchRadios_.find(n.id);
+    if (run != engine_.patchRadios_.end()) {
         ImGui::PushStyleColor(ImGuiCol_Text, amber);
         ImGui::Text(tr("running %.3f MS/s"), run->second->rateHz() / 1e6);
         ImGui::Text(tr("at %.6f MHz"), run->second->centreHz() / 1e6);
         ImGui::PopStyleColor();
-    } else if (patchRadioPending_.count(n.id) != 0) {
+    } else if (engine_.patchRadioPending_.count(n.id) != 0) {
         ImGui::PushStyleColor(ImGuiCol_Text, muted);
         ImGui::TextUnformatted(tr("opening the device..."));
         ImGui::PopStyleColor();
     }
-    const auto err = patchRadioError_.find(n.id);
-    if (err != patchRadioError_.end()) {
+    const auto err = engine_.patchRadioError_.find(n.id);
+    if (err != engine_.patchRadioError_.end()) {
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::bad());
         ImGui::TextWrapped("%s", err->second.c_str());
         ImGui::PopStyleColor();
@@ -1206,10 +1206,10 @@ void AppWindow::drawPatchSinkInspector(pc::Node& n) {
             n.device = "speakers";
             patchUi_.dirty = true;
         }
-        for (std::size_t i = 0; i < devices_.size(); ++i) {
+        for (std::size_t i = 0; i < engine_.devices_.size(); ++i) {
             ImGui::PushID(static_cast<int>(i));
-            const std::string k = pc::makeOutputDeviceKey(devices_[i].name);
-            if (ImGui::Selectable(devices_[i].name.c_str(), key == k)) {
+            const std::string k = pc::makeOutputDeviceKey(engine_.devices_[i].name);
+            if (ImGui::Selectable(engine_.devices_[i].name.c_str(), key == k)) {
                 n.device = k;
                 patchUi_.dirty = true;
             }
@@ -1217,7 +1217,7 @@ void AppWindow::drawPatchSinkInspector(pc::Node& n) {
         }
         ImGui::EndCombo();
     }
-    for (const auto& d : patchDests_) {
+    for (const auto& d : engine_.patchDests_) {
         if (d.first != n.id || !d.second) { continue; }
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kAmber));
         ImGui::TextWrapped("%s", d.second->describe().c_str());
@@ -1230,8 +1230,8 @@ void AppWindow::drawPatchSinkInspector(pc::Node& n) {
             ImGui::PopStyleColor();
         }
     }
-    const auto err = patchDestError_.find(n.id);
-    if (err != patchDestError_.end()) {
+    const auto err = engine_.patchDestError_.find(n.id);
+    if (err != engine_.patchDestError_.end()) {
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::bad());
         ImGui::TextWrapped("%s", err->second.c_str());
         ImGui::PopStyleColor();
@@ -1239,7 +1239,7 @@ void AppWindow::drawPatchSinkInspector(pc::Node& n) {
     ImGui::PushStyleColor(ImGuiCol_Text, muted);
     if (pc::outputKind(key) == pc::OutputKind::Wav || pc::outputKind(key) == pc::OutputKind::Mp3) {
         ImGui::TextWrapped(tr("Files go in %s, one per speaker, named after it."),
-                           recordDir_.c_str());
+                           engine_.recordDir_.c_str());
     }
     ImGui::PopStyleColor();
 }

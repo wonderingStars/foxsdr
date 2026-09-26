@@ -351,6 +351,19 @@ std::vector<std::string> codeLines(const std::string& text) {
             if (c == '\'') { inChar = true; }
             code += c;
         }
+        // ENGINE STAGE 3a: the receiver's state moved into the Engine the
+        // window holds (engine_), so what was `pipeline_.stop()` is now
+        // `engine_.pipeline_.stop()`. The rules below read "engine_." as if it
+        // were not there, so a control reaching the engine's state through
+        // the window's reference is judged exactly as it was before the move.
+        for (std::size_t at = code.find("engine_."); at != std::string::npos; at = code.find("engine_.", at)) {
+            const unsigned char p = at > 0 ? static_cast<unsigned char>(code[at - 1]) : ' ';
+            if (at > 0 && (std::isalnum(p) != 0 || p == '_' || p == '.')) {
+                at += 8;
+                continue;
+            }
+            code.erase(at, 8);
+        }
         out.push_back(code);
     }
     return out;
