@@ -915,18 +915,22 @@ int main() {
         CHECK(!src.autoGain());
         // Unlike the HackRF, this radio HAS an AGC.
         CHECK(src.autoGainSupported());
-        // FIVE GAINS, AND EVERY ONE OF THEM IS STEPS, NOT DECIBELS.
+        // AN OPEN RADIO IS IN FREE MODE, so it lists Free mode's three gains
+        // (0.99.40; it listed all five modes' gains at once before, which is
+        // what an R2 owner called "mixed together") - AND EVERY ONE OF THEM
+        // IS STEPS, NOT DECIBELS.
         //
         // libairspy takes an index for all five and publishes no decibel
         // mapping, so "LNA 7.0 dB" - what the Source section, the RECEIVER
         // card, the scope knob and the browser all printed until 0.92.0 - is
         // a number nothing produced wearing a unit this radio does not use.
         // The driver is the only place that knows; if this list ever grows a
-        // sixth gain that really is decibels, this loop has to be the thing
-        // that says so rather than a panel quietly guessing.
+        // gain that really is decibels, this loop has to be the thing that
+        // says so rather than a panel quietly guessing.
+        CHECK(src.gainMode() == AirspySource::GainMode::Free);
         {
             const std::vector<cascade::source::GainInfo> g = src.gains();
-            CHECK(g.size() == 5);
+            CHECK(g.size() == 3);
             bool allSteps = !g.empty();
             std::string names;
             for (const cascade::source::GainInfo& one : g) {
@@ -1171,14 +1175,20 @@ int main() {
             CHECK(isControl("linearity: MIXER", at(c, 3), true, 15, 0, 1));
             CHECK(isControl("linearity: LNA", at(c, 4), true, 14, 0, 6));
         }
-        // The three registers now report what the TABLE programmed, not what
-        // was there before.
-        CHECK_NEAR(src.gainDb("VGA"), 10.0, 1e-9);
-        CHECK_NEAR(src.gainDb("MIXER"), 1.0, 1e-9);
-        CHECK_NEAR(src.gainDb("LNA"), 6.0, 1e-9);
+        // THE MODE IS NOW LINEARITY (0.99.40), and the gain list says so: ONE
+        // slider, the table's. Free mode's manual values are the user's own
+        // and are NOT overwritten by what the table wrote to the registers -
+        // they are what Free mode puts back (below).
+        CHECK(src.gainMode() == AirspySource::GainMode::Linearity);
+        {
+            const std::vector<cascade::source::GainInfo> g = src.gains();
+            CHECK(g.size() == 1 && g[0].name == "LINEARITY");
+            CHECK(g.size() == 1 && std::fabs(g[0].maxDb - 21.0) < 1e-9);
+        }
         CHECK_NEAR(src.gainDb("LINEARITY"), 10.0, 1e-9);
-        // ...and only ONE of the two curves describes the radio at a time.
-        CHECK_NEAR(src.gainDb("SENSITIVITY"), -1.0, 1e-9);
+        CHECK_NEAR(src.gainDb("LNA"), 8.0, 1e-9);
+        CHECK_NEAR(src.gainDb("MIXER"), 15.0, 1e-9);
+        CHECK_NEAR(src.gainDb("VGA"), 0.0, 1e-9);
 
         fake->clearControls();
         CHECK(src.setGainDb("SENSITIVITY", 10.0));
@@ -1190,8 +1200,61 @@ int main() {
             CHECK(isControl("sensitivity: MIXER", at(c, 3), true, 15, 0, 4));
             CHECK(isControl("sensitivity: LNA", at(c, 4), true, 14, 0, 12));
         }
+        CHECK(src.gainMode() == AirspySource::GainMode::Sensitivity);
+        {
+            const std::vector<cascade::source::GainInfo> g = src.gains();
+            CHECK(g.size() == 1 && g[0].name == "SENSITIVITY");
+        }
+        // EACH MODE KEEPS ITS OWN VALUE while another is in use: the
+        // linearity 10 is still 10, ready for when it is chosen again.
         CHECK_NEAR(src.gainDb("SENSITIVITY"), 10.0, 1e-9);
-        CHECK_NEAR(src.gainDb("LINEARITY"), -1.0, 1e-9);
+        CHECK_NEAR(src.gainDb("LINEARITY"), 10.0, 1e-9);
+
+        // BACK TO LINEARITY BY MODE, not by value: its stored index goes
+        // back on the radio through the table.
+        CHECK(src.setGainDb("LINEARITY", 14.0));
+        fake->clearControls();
+        CHECK(src.setGainMode(AirspySource::GainMode::Sensitivity));
+        CHECK(src.setGainMode(AirspySource::GainMode::Linearity));
+        {
+            const std::vector<AirspyControlRecord> c = fake->controls();
+            CHECK(c.size() == 10);
+            // Linearity 14 -> table index 7: vga 10, mixer 6, lna 9.
+            CHECK(isControl("mode back to linearity: VGA", at(c, 7), true, 16, 0, 10));
+            CHECK(isControl("mode back to linearity: MIXER", at(c, 8), true, 15, 0, 6));
+            CHECK(isControl("mode back to linearity: LNA", at(c, 9), true, 14, 0, 9));
+        }
+
+        // FREE MODE PUTS THE USER'S OWN THREE BACK, in the reference's order:
+        // both AGCs (off), VGA, MIXER, LNA.
+        fake->clearControls();
+        CHECK(src.setGainMode(AirspySource::GainMode::Free));
+        CHECK(src.gainMode() == AirspySource::GainMode::Free);
+        {
+            const std::vector<AirspyControlRecord> c = fake->controls();
+            CHECK(c.size() == 5);
+            CHECK(isControl("free: mixer AGC off", at(c, 0), true, 18, 0, 0));
+            CHECK(isControl("free: LNA AGC off", at(c, 1), true, 17, 0, 0));
+            CHECK(isControl("free: VGA 0", at(c, 2), true, 16, 0, 0));
+            CHECK(isControl("free: MIXER 15", at(c, 3), true, 15, 0, 15));
+            CHECK(isControl("free: LNA 8", at(c, 4), true, 14, 0, 8));
+            const std::vector<cascade::source::GainInfo> g = src.gains();
+            CHECK(g.size() == 3 && g[0].name == "LNA" && g[1].name == "MIXER" &&
+                  g[2].name == "VGA");
+        }
+
+        // A FREE-MODE NAME FROM A TABLE MODE SWITCHES TO FREE - the browser
+        // and a saved session name the gains they last saw - and puts all
+        // three on the radio, the new LNA included.
+        CHECK(src.setGainMode(AirspySource::GainMode::Linearity));
+        fake->clearControls();
+        CHECK(src.setGainDb("LNA", 3.0));
+        CHECK(src.gainMode() == AirspySource::GainMode::Free);
+        {
+            const std::vector<AirspyControlRecord> c = fake->controls();
+            CHECK(c.size() == 5);
+            CHECK(isControl("LNA from linearity: LNA 3", at(c, 4), true, 14, 0, 3));
+        }
 
         // --- the AGCs ----------------------------------------------------
         fake->clearControls();
@@ -1204,20 +1267,66 @@ int main() {
             CHECK(isControl("AGC on: mixer", at(c, 0), true, 18, 0, 1));
             CHECK(isControl("AGC on: LNA", at(c, 1), true, 17, 0, 1));
         }
+        // A STAGE AN AGC IS DRIVING IS NOT WRITTEN: the value is kept for
+        // when the AGC goes off.
+        fake->clearControls();
+        CHECK(src.setGainDb("LNA", 11.0));
+        CHECK(fake->controlCount() == 0);
+        CHECK_NEAR(src.gainDb("LNA"), 11.0, 1e-9);
         fake->clearControls();
         CHECK(src.setAutoGain(false));
         CHECK(!src.autoGain());
         {
             const std::vector<AirspyControlRecord> c = fake->controls();
-            CHECK(c.size() == 2);
+            // Both off, then both stages handed back their manual values -
+            // the LNA's being the 11 set while its AGC had it.
+            CHECK(c.size() == 4);
             CHECK(isControl("AGC off: mixer", at(c, 0), true, 18, 0, 0));
             CHECK(isControl("AGC off: LNA", at(c, 1), true, 17, 0, 0));
+            CHECK(isControl("AGC off: MIXER back", at(c, 2), true, 15, 0, 15));
+            CHECK(isControl("AGC off: LNA back", at(c, 3), true, 14, 0, 11));
         }
-        // A combined curve turns the AGC back off, because it has to.
+        // ONE AGC AT A TIME, the way Free mode offers them.
+        fake->clearControls();
+        CHECK(src.setLnaAgc(true));
+        CHECK(src.lnaAgc() && !src.mixerAgc() && !src.autoGain());
+        CHECK(src.setMixerAgc(true));
+        CHECK(src.autoGain());
+        CHECK(src.setMixerAgc(false));
+        {
+            const std::vector<AirspyControlRecord> c = fake->controls();
+            CHECK(c.size() == 4);
+            CHECK(isControl("LNA AGC on alone", at(c, 0), true, 17, 0, 1));
+            CHECK(isControl("mixer AGC on alone", at(c, 1), true, 18, 0, 1));
+            CHECK(isControl("mixer AGC off alone", at(c, 2), true, 18, 0, 0));
+            CHECK(isControl("mixer back to manual", at(c, 3), true, 15, 0, 15));
+        }
+        // A combined curve turns the AGCs off on the radio, because it has
+        // to - and auto gain reads false in a table mode.
         CHECK(src.setAutoGain(true));
         CHECK(src.autoGain());
+        fake->clearControls();
         CHECK(src.setGainDb("LINEARITY", 5.0));
         CHECK(!src.autoGain());
+        {
+            const std::vector<AirspyControlRecord> c = fake->controls();
+            CHECK(isControl("linearity: mixer AGC off", at(c, 0), true, 18, 0, 0));
+            CHECK(isControl("linearity: LNA AGC off", at(c, 1), true, 17, 0, 0));
+        }
+        // AUTO GAIN FROM A TABLE MODE IS FREE MODE WITH BOTH AGCS: the whole
+        // of Free mode goes on - AGCs on, VGA, and neither AGC stage written.
+        fake->clearControls();
+        CHECK(src.setAutoGain(true));
+        CHECK(src.gainMode() == AirspySource::GainMode::Free);
+        CHECK(src.autoGain());
+        {
+            const std::vector<AirspyControlRecord> c = fake->controls();
+            CHECK(c.size() == 3);
+            CHECK(isControl("auto from table: mixer AGC on", at(c, 0), true, 18, 0, 1));
+            CHECK(isControl("auto from table: LNA AGC on", at(c, 1), true, 17, 0, 1));
+            CHECK(isControl("auto from table: VGA", at(c, 2), true, 16, 0, 0));
+        }
+        CHECK(src.setAutoGain(false));
 
         // --- the bias tee ------------------------------------------------
         fake->clearControls();
@@ -1942,6 +2051,239 @@ int main() {
         CHECK(begins == 0);
         fake->modeSwitchDelayMs.store(10);
         src.closeDevice();
+    }
+
+    // =====================================================================
+    // 12. DECIMATION (0.99.40): the reference application's "none, 2, 4, 8,
+    //     16, 32 and 64", measured on the filter's own taps, then through the
+    //     driver.
+    // =====================================================================
+    {
+        // --- the half-band stage, from its taps ---------------------------
+        const std::vector<float> h = airspy::halfBandStageKernel();
+        CHECK(h.size() == 83);
+        double sum = 0.0;
+        for (const float t : h) { sum += static_cast<double>(t); }
+        CHECK_NEAR(sum, 1.0, 1e-6);
+        // A half-band: every even offset from the centre is exactly zero.
+        bool zeros = true;
+        for (std::size_t k = 2; k <= 40; k += 2) { zeros = zeros && h[41 + k] == 0.0f && h[41 - k] == 0.0f; }
+        CHECK(zeros);
+        const auto mag = [&h](double f) {  // f in cycles per INPUT sample
+            std::complex<double> acc(0.0, 0.0);
+            for (std::size_t l = 0; l < h.size(); ++l) {
+                acc += static_cast<double>(h[l]) *
+                       std::exp(std::complex<double>(0.0, -2.0 * kPi * f * static_cast<double>(l)));
+            }
+            return std::abs(acc);
+        };
+        // FLAT over the inner 80% of the OUTPUT band (0.20 of the input
+        // rate) and at the window's floor over everything that folds into it
+        // (0.30 and up) - the reference application's displayed span.
+        double passWorst = 0.0;
+        for (double f = 0.0; f <= 0.20; f += 0.0025) {
+            passWorst = std::max(passWorst, std::fabs(20.0 * std::log10(mag(f))));
+        }
+        double stopWorst = 0.0;
+        for (double f = 0.30; f <= 0.5; f += 0.0025) { stopWorst = std::max(stopWorst, mag(f)); }
+        std::printf("decimator stage: passband ripple %.4f dB to 0.20, stopband %.1f dB from 0.30\n",
+                    passWorst, 20.0 * std::log10(stopWorst));
+        CHECK(passWorst < 0.01);
+        CHECK(stopWorst < 3.2e-5);  // -90 dB
+        CHECK_NEAR(mag(0.25), 0.5, 1e-3);
+
+        // --- the cascade: streaming, in place, and quiet where it matters --
+        // Tones in a 1.0 complex stream decimated by 8: one inside the inner
+        // 80% of the output band comes out at unity, one that would fold INTO
+        // that inner band is gone; any split of the input gives the same
+        // answer, and out may be in.
+        constexpr unsigned kD = 8;
+        constexpr std::size_t kIn = 8192 * kD;
+        const auto toneBlock = [](double f, std::size_t n) {
+            std::vector<std::complex<float>> x(n);
+            for (std::size_t i = 0; i < n; ++i) {
+                const double a = 2.0 * kPi * f * static_cast<double>(i);
+                x[i] = {static_cast<float>(std::cos(a)), static_cast<float>(std::sin(a))};
+            }
+            return x;
+        };
+        const auto outToneAmp = [](const std::vector<std::complex<float>>& y, double fOut,
+                                   std::size_t skip) {
+            std::complex<double> acc(0.0, 0.0);
+            for (std::size_t m = skip; m < y.size(); ++m) {
+                const double a = -2.0 * kPi * fOut * static_cast<double>(m);
+                acc += std::complex<double>(y[m]) * std::complex<double>(std::cos(a), std::sin(a));
+            }
+            return std::abs(acc) / static_cast<double>(y.size() - skip);
+        };
+        const auto decimateAll = [&](const std::vector<std::complex<float>>& x, std::size_t block) {
+            airspy::PowerOfTwoDecimator d;
+            d.configure(kD);
+            std::vector<std::complex<float>> y;
+            std::vector<std::complex<float>> buf;
+            for (std::size_t p = 0; p < x.size(); p += block) {
+                const std::size_t n = std::min(block, x.size() - p);
+                buf.assign(x.begin() + static_cast<std::ptrdiff_t>(p),
+                           x.begin() + static_cast<std::ptrdiff_t>(p + n));
+                const std::size_t got = d.process(buf.data(), n, buf.data());  // in place
+                y.insert(y.end(), buf.begin(), buf.begin() + static_cast<std::ptrdiff_t>(got));
+            }
+            return y;
+        };
+        // 0.3 of the output band = 0.0375 of the input rate: inside the 80%.
+        const auto yPass = decimateAll(toneBlock(0.0375, kIn), kIn);
+        CHECK(yPass.size() == kIn / kD);
+        CHECK_NEAR(outToneAmp(yPass, 0.3, 64), 1.0, 1e-3);
+        // 0.125 + 0.0875 of the input rate: folds to -0.3 of the output band.
+        double aliasWorst = 0.0;
+        for (const double f : {0.2125, -0.2125, 0.4125, 0.1625, 0.3625, 0.46}) {
+            const auto y = decimateAll(toneBlock(f, kIn), kIn);
+            double fo = f * kD;
+            fo -= std::floor(fo + 0.5);
+            aliasWorst = std::max(aliasWorst, outToneAmp(y, fo, 64));
+        }
+        std::printf("decimator /8: worst alias into the inner 80%% %.1f dB\n",
+                    20.0 * std::log10(std::max(aliasWorst, 1e-12)));
+        CHECK(aliasWorst < 5.62e-5);  // -85 dB
+        // WHAT process() COMPUTES IS THE KERNEL ABOVE, tap for tap: one stage
+        // (/2) over a noise-like input against a plain offline convolution
+        // with halfBandStageKernel() evaluated on the even grid. The response
+        // checks above read the kernel, not the loop - a loop that skipped
+        // taps passed them all (break-it round, M6: two outer pairs dropped).
+        {
+            std::vector<std::complex<float>> noise(4096);
+            unsigned lcg = 12345u;
+            for (auto& v : noise) {
+                lcg = lcg * 1664525u + 1013904223u;
+                const float re = static_cast<float>(lcg >> 8) / 8388608.0f - 1.0f;
+                lcg = lcg * 1664525u + 1013904223u;
+                const float im = static_cast<float>(lcg >> 8) / 8388608.0f - 1.0f;
+                v = {re, im};
+            }
+            airspy::PowerOfTwoDecimator one;
+            one.configure(2);
+            std::vector<std::complex<float>> y(noise.size());
+            y.resize(one.process(noise.data(), noise.size(), y.data()));
+            CHECK(y.size() == noise.size() / 2);
+            double worstTap = 0.0;
+            for (std::size_t m = 0; m < y.size(); ++m) {
+                const std::size_t n = 2 * m;
+                std::complex<double> acc(0.0, 0.0);
+                for (std::size_t l = 0; l < h.size() && l <= n; ++l) {
+                    acc += static_cast<double>(h[l]) * std::complex<double>(noise[n - l]);
+                }
+                worstTap = std::max(worstTap, std::abs(std::complex<double>(y[m]) - acc));
+            }
+            std::printf("decimator stage vs its kernel: worst %.3g\n", worstTap);
+            CHECK(worstTap < 1.0e-5);
+        }
+        const auto x = toneBlock(0.0123, kIn);
+        const auto whole = decimateAll(x, kIn);
+        bool same = true;
+        for (const std::size_t block : {std::size_t{1}, std::size_t{7}, std::size_t{1000}}) {
+            const auto split = decimateAll(x, block);
+            same = same && split == whole;
+        }
+        CHECK(same);
+
+        // --- the choices, per board ---------------------------------------
+        {
+            AirspySource r2;
+            attachFake(r2);  // the fake answers an R2's 10 and 2.5 MS/s
+            CHECK(r2.open(""));
+            CHECK(r2.decimation() == 1);
+            // 2.5 MS/s / 64 is 39062.5 Hz, which the receiver cannot run at, so
+            // an R2 stops at 32; nothing but powers of two.
+            CHECK(r2.decimationChoices() == std::vector<unsigned>({1, 2, 4, 8, 16, 32}));
+            CHECK(!r2.setDecimation(64));
+            CHECK(std::string(r2.lastError()).find("cannot decimate by 64") != std::string::npos);
+            CHECK(!r2.setDecimation(3));
+            CHECK(!r2.setDecimation(0));
+            CHECK(r2.decimation() == 1);
+
+            // THE RATES ARE THE DELIVERED ONES: /4 on a 10 MS/s radio is a
+            // 2.5 MS/s stream, and the rate list is the board's divided by 4.
+            CHECK(r2.setDecimation(4));
+            CHECK(r2.decimation() == 4);
+            CHECK_NEAR(r2.hardwareSampleRateHz(), 10.0e6, 0.5);
+            CHECK_NEAR(r2.sampleRateHz(), 2.5e6, 0.5);
+            const std::vector<double> rates = r2.supportedSampleRatesHz();
+            CHECK(rates.size() == 2 && std::fabs(rates[0] - 625000.0) < 0.5 &&
+                  std::fabs(rates[1] - 2.5e6) < 0.5);
+            // A rate request is for a DELIVERED rate: 625 kHz is the radio at
+            // 2.5 MS/s under /4, and the firmware is sent that rate's index.
+            CHECK(r2.setSampleRateHz(625000.0));
+            CHECK_NEAR(r2.hardwareSampleRateHz(), 2.5e6, 0.5);
+            CHECK_NEAR(r2.sampleRateHz(), 625000.0, 0.5);
+            CHECK(r2.setDecimation(1));
+            CHECK_NEAR(r2.sampleRateHz(), 2.5e6, 0.5);
+            r2.closeDevice();
+        }
+        {
+            AirspySource mini;
+            FakeAirspyUsb* fake = attachFake(mini);
+            fake->sampleRates = {6000000u, 3000000u};
+            CHECK(mini.open(""));
+            // 3 MS/s / 64 = 46875 Hz: a Mini gets the whole list.
+            CHECK(mini.decimationChoices() == std::vector<unsigned>({1, 2, 4, 8, 16, 32, 64}));
+            CHECK(mini.setDecimation(64));
+            CHECK_NEAR(mini.sampleRateHz(), 93750.0, 0.5);
+            mini.closeDevice();
+        }
+
+        // --- through the driver: the stream is the converter's, decimated --
+        // Two packed buffers of a real tone go in with /4 set; what comes out
+        // is exactly the closed-form conversion put through the decimator,
+        // continuous across the buffer boundary - so decimation is applied
+        // after the converter, on every sample, and nothing else changed.
+        {
+            AirspySource src;
+            FakeAirspyUsb* fake = attachFake(src);
+            CHECK(src.open(""));
+            CHECK(src.setDecimation(4));
+            constexpr std::size_t kReal = 2 * 6144 * 8;  // two buffers of 6144 groups
+            std::vector<std::uint16_t> codes(kReal);
+            std::vector<double> reals(kReal);
+            for (std::size_t i = 0; i < kReal; ++i) {
+                // f_real = fs/4 - 0.03 fs: a complex tone at +0.03 of the
+                // radio's complex rate, 0.12 of the decimated one.
+                const double v = 0.4 * std::cos(2.0 * kPi * (0.25 - 0.015) * static_cast<double>(i));
+                codes[i] = static_cast<std::uint16_t>(std::lround(2048.0 + 2047.0 * v));
+                reals[i] = static_cast<double>(airspy::sampleToFloat(codes[i]));
+            }
+            const std::size_t half = kReal / 2;
+            fake->queueBulk(packSamples(std::vector<std::uint16_t>(codes.begin(), codes.begin() + half)));
+            fake->queueBulk(packSamples(std::vector<std::uint16_t>(codes.begin() + half, codes.end())));
+
+            const std::vector<std::complex<double>> conv = modelConvert(reals);
+            std::vector<std::complex<float>> convF(conv.size());
+            for (std::size_t i = 0; i < conv.size(); ++i) {
+                convF[i] = {static_cast<float>(conv[i].real()), static_cast<float>(conv[i].imag())};
+            }
+            airspy::PowerOfTwoDecimator ref;
+            ref.configure(4);
+            std::vector<std::complex<float>> want(convF.size());
+            want.resize(ref.process(convF.data(), convF.size(), want.data()));
+            CHECK(want.size() == kReal / 2 / 4);
+
+            CHECK(src.start());
+            std::vector<std::complex<float>> got;
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+            while (got.size() < want.size() && std::chrono::steady_clock::now() < deadline) {
+                std::complex<float> chunk[256];
+                const std::size_t n = src.read(chunk, 256);
+                got.insert(got.end(), chunk, chunk + n);
+            }
+            CHECK(got.size() == want.size());
+            double worst = 0.0;
+            for (std::size_t i = 0; i < got.size() && i < want.size(); ++i) {
+                worst = std::max(worst, static_cast<double>(std::abs(got[i] - want[i])));
+            }
+            std::printf("decimated stream vs model: worst %.3g over %zu samples\n", worst, got.size());
+            CHECK(worst < 2.0e-6);
+            src.stop();
+            src.closeDevice();
+        }
     }
 
     return testSummary("test_airspy_source");
