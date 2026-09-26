@@ -5,23 +5,23 @@
 
 #include "core/plugin_api.hpp"
 #include "core/telemetry.hpp"
-// clampScopeRangeNm(): the radar scope's ladder of range steps.
+// clampScopeRangeNm(), the demod scope's clamps and railBankFromIndex(): the
+// ladders of the settings the window keeps in this file.
 //
-// THE ONE PLACE core/ REACHES INTO gui/, and it is a considered exception
-// rather than a slip. The legal set of ranges is a property of the VIEW - it
-// is derived from what the scope can draw rings and labels for - while
-// keeping a value the view has no meaning for out of the renderer is this
-// sanitizer's whole job. Writing the ladder out a second time here is exactly
-// how the two would come to disagree, and the disagreement would be silent:
-// the file would load, the renderer would draw, and only the rings would be
-// wrong. The header is ImGui-free and pulls in no GL, no window and no
-// plugin instance, so nothing about this include reaches the application
-// shell.
+// ONE COPY, SHARED WITH THE WINDOW. The legal set of ranges (and of scope
+// signals, time bases, gain steps and rail banks) is a property of the VIEW -
+// it is what the window can draw - while keeping a value the view has no
+// meaning for out of the renderer is this sanitizer's whole job. Writing a
+// ladder out a second time here is exactly how the two would come to
+// disagree, and the disagreement would be silent: the file would load, the
+// renderer would draw, and only the rings would be wrong. So the ladders live
+// once, in core/view_settings.hpp, and the gui headers that draw them bring
+// the same names back into cascade::gui. (Until the engine was split from the
+// window they lived in gui/ and this was the one place core/ reached into it.)
+#include "core/receiver_position.hpp"
 #include "core/transmitter.hpp"
+#include "core/view_settings.hpp"
 #include "dsp/modulator.hpp"
-#include "gui/demod_scope.hpp"
-#include "gui/rail_banks.hpp"
-#include "gui/scope_view.hpp"
 // sanitiseSerialPortName() and serialBaudSupported(): the GPS port fields are
 // repaired by the port layer's own rules, so a name or a rate this file let
 // through is one the port layer will accept. A second copy of either rule
@@ -398,22 +398,22 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     // almost right keeps what it was reaching for.
     getBool(j, "scopeMode", out.scopeMode);
     getInt(j, "scopeRangeNm", out.scopeRangeNm);
-    out.scopeRangeNm = cascade::gui::clampScopeRangeNm(out.scopeRangeNm);
+    out.scopeRangeNm = cascade::core::clampScopeRangeNm(out.scopeRangeNm);
     // The demod scope, on exactly the same discipline: read, then snapped onto
     // the ladders that define it. Every one of these three indexes a constant
-    // array in gui/demod_scope.hpp, so an unclamped hand-edit would not be a
+    // array in core/view_settings.hpp, so an unclamped hand-edit would not be a
     // wrong setting - it would be a read off the end of one.
     getBool(j, "demodScopeOpen", out.demodScopeOpen);
     getInt(j, "demodScopeSignal", out.demodScopeSignal);
     out.demodScopeSignal =
-        static_cast<int>(cascade::gui::scopeSignalFromIndex(out.demodScopeSignal));
+        static_cast<int>(cascade::core::scopeSignalFromIndex(out.demodScopeSignal));
     getInt(j, "demodScopeTimebase", out.demodScopeTimebase);
-    out.demodScopeTimebase = cascade::gui::clampScopeTimebase(out.demodScopeTimebase);
+    out.demodScopeTimebase = cascade::core::clampScopeTimebase(out.demodScopeTimebase);
     getInt(j, "demodScopeGain", out.demodScopeGain);
-    out.demodScopeGain = cascade::gui::clampScopeGain(out.demodScopeGain);
+    out.demodScopeGain = cascade::core::clampScopeGain(out.demodScopeGain);
     getBool(j, "demodScopeAutoGain", out.demodScopeAutoGain);
     getInt(j, "demodScopeDisplay", out.demodScopeDisplay);
-    out.demodScopeDisplay = cascade::gui::clampScopeDisplay(out.demodScopeDisplay);
+    out.demodScopeDisplay = cascade::core::clampScopeDisplay(out.demodScopeDisplay);
     // The transmitter. Every index is snapped onto a table that exists; the
     // POWER deliberately is not, because this file does not know which board
     // will be opened - source::clampTxGainDb does it against the board's own
@@ -439,7 +439,7 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     // Same discipline for the rail's bank: read, then clamped to one that
     // exists, so a file from a build with more or fewer banks opens somewhere.
     getInt(j, "railBank", out.railBank);
-    out.railBank = static_cast<int>(cascade::gui::railBankFromIndex(out.railBank));
+    out.railBank = static_cast<int>(cascade::core::railBankFromIndex(out.railBank));
     // The rebound keys. Read here as plain strings and understood nowhere in
     // this file: gui/key_bindings.hpp turns them into a table, and a line it
     // cannot read is dropped on its own there rather than costing the user the
@@ -708,11 +708,11 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
         // applied from a control whose fields still read 0.00000. The one
         // receiver that could honestly sit at 0,0 is a buoy. The application
         // now refuses the pair at every door (receiverPositionAcceptable in
-        // gui/scope_view.hpp), and a file that carries it opens as UNSET -
+        // core/receiver_position.hpp), and a file that carries it opens as UNSET -
         // which is what puts the one-click offers back on the rail for the
         // user who has it.
         const bool inRange =
-            cascade::gui::receiverPositionAcceptable(out.rxLatDeg, out.rxLonDeg);
+            cascade::core::receiverPositionAcceptable(out.rxLatDeg, out.rxLonDeg);
         if (!out.rxPositionSet || !inRange) {
             out.rxPositionSet = false;
             out.rxLatDeg = 0.0;

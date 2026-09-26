@@ -30,14 +30,16 @@
 #define CASCADE_GUI_RAIL_BANKS_HPP
 
 #include "core/i18n.hpp"
+#include "core/view_settings.hpp"
 
 namespace cascade::gui {
 
-// The five banks, in the order the rail's captions always had them: what the
-// samples pass through, what is made of them, how it is shown, the ways in
-// from outside, and the application talking about itself.
-enum class RailBank : int { SignalPath = 0, Decode = 1, View = 2, Extend = 3, System = 4 };
-inline constexpr int kRailBankCount = 5;
+// The five banks (RailBank, kRailBankCount) and the clamp the config applies
+// to a saved one (railBankFromIndex) live in core/view_settings.hpp, because
+// the config - engine side - applies it on load. Brought back unchanged:
+using cascade::core::RailBank;
+using cascade::core::kRailBankCount;
+using cascade::core::railBankFromIndex;
 
 // The word on the key. Short, because five keys share the rail's width and a
 // key that has clipped its own label looks like a design decision rather than
@@ -64,15 +66,6 @@ inline const char* railBankCaption(RailBank b) {
         case RailBank::System: return FOX_TR_NOOP("SYSTEM");
     }
     return "";
-}
-
-// A saved bank index, clamped. The config carries an int and an old or edited
-// file can say anything; whatever it says, the rail opens on a bank that
-// exists.
-inline RailBank railBankFromIndex(int index) {
-    if (index < 0) { return RailBank::SignalPath; }
-    if (index >= kRailBankCount) { return RailBank::System; }
-    return static_cast<RailBank>(index);
 }
 
 // --- motion ------------------------------------------------------------------

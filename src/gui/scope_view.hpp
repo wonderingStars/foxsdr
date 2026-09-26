@@ -47,7 +47,9 @@
 
 #include "core/i18n.hpp"  // FOX_TR_NOOP: marked here, translated where drawn
 #include "core/plugin_ui.hpp"
+#include "core/receiver_position.hpp"
 #include "core/utf8_text.hpp"
+#include "core/view_settings.hpp"
 #include "gui/aircraft_icons.hpp"
 #include "gui/track_metrics.hpp"
 
@@ -58,27 +60,16 @@ class TrackInfoCache;
 
 // --- the range ladder --------------------------------------------------------
 
-// THE RANGE STEPS, in nautical miles. Discrete rather than continuous because
-// a scope's range is a SETTING an operator states and returns to ("I am on the
-// hundred-mile scale"), not a zoom they scrub - and because every ring, every
-// label and the corner readout are derived from it, so a free-running value
-// would print ranges like "173 NM" on rings nobody chose.
-//
-// The ladder itself is the one every ADS-B receiver of this shape offers,
-// roughly doubling from a circuit-sized 10 NM out to 400, which is past the
-// horizon for a ground station at any sane antenna height and therefore past
-// anything this radio can hear - and then two more, 800 and 1600, which are
-// not for hearing further but for PLACING. At those two the picture is a
-// region and a continent, which is what a view that has been dragged off the
-// aerial, or an operator asking where the traffic sits in the world, needs; a
-// 400 NM ceiling answered "zoom right out" with a greyed key. They are only
-// possible because the ground under the face is drawn in the scope's own
-// projection (see scopeGroundPoint): a Mercator ground matched at the middle
-// is 9% out at the edge of a 400 NM picture and would be out by three
-// quarters at 1600.
-inline constexpr int kScopeRangesNm[] = {10, 25, 50, 100, 200, 400, 800, 1600};
-inline constexpr int kScopeRangeCount =
-    static_cast<int>(sizeof(kScopeRangesNm) / sizeof(kScopeRangesNm[0]));
+// THE RANGE STEPS (kScopeRangesNm, kScopeRangeCount) and the functions that
+// find and clamp a range on them (scopeRangeIndex, scopeRangeNmAt,
+// clampScopeRangeNm) live in core/view_settings.hpp, because the config -
+// engine side - snaps a saved range onto the ladder on load. Brought back
+// into this namespace unchanged:
+using cascade::core::kScopeRangesNm;
+using cascade::core::kScopeRangeCount;
+using cascade::core::scopeRangeIndex;
+using cascade::core::scopeRangeNmAt;
+using cascade::core::clampScopeRangeNm;
 
 // The range a scope nobody has configured opens on. 200 NM is the one that
 // shows a receiver's whole realistic catchment without the picture being
@@ -94,50 +85,6 @@ inline constexpr int kScopeRingCount = 4;
 // since 1929, not a measured one - so this conversion is not an approximation
 // and needs no tolerance anywhere it is used.
 inline constexpr double kKmPerNm = 1.852;
-
-// The index on the ladder of the value closest to `nm`. Total by construction:
-// every integer has a nearest entry, so there is no "not on the ladder" answer
-// for a caller to forget to handle.
-//
-// TIES GO TO THE SMALLER RANGE. 150 NM is exactly between 100 and 200, and the
-// tighter of the two is the safer reading of an ambiguous instruction: a scope
-// set shorter than asked still draws everything inside it correctly and says
-// so in its own corner, where one set longer quietly claims reach the user did
-// not ask for.
-inline int scopeRangeIndex(int nm) {
-    int best = 0;
-    // long long throughout: `nm` arrives from a hand-edited config and may be
-    // INT_MIN, where `nm - 10` in int arithmetic is undefined behaviour rather
-    // than a large number.
-    long long bestDist = std::llabs(static_cast<long long>(nm) -
-                                    static_cast<long long>(kScopeRangesNm[0]));
-    for (int i = 1; i < kScopeRangeCount; ++i) {
-        const long long d =
-            std::llabs(static_cast<long long>(nm) - static_cast<long long>(kScopeRangesNm[i]));
-        if (d < bestDist) {  // strict, so a tie keeps the earlier - smaller - entry
-            bestDist = d;
-            best = i;
-        }
-    }
-    return best;
-}
-
-// The ladder value at `index`, bounds-safe: an index outside the ladder is
-// clamped rather than read past the end.
-inline int scopeRangeNmAt(int index) {
-    if (index < 0) { index = 0; }
-    if (index >= kScopeRangeCount) { index = kScopeRangeCount - 1; }
-    return kScopeRangesNm[index];
-}
-
-// The nearest legal range to `nm`. This is what the config sanitizer applies on
-// load, and it is not tidiness: the renderer derives four ring radii, four ring
-// labels and the corner readout from this number, so a hand-edited 173 would
-// reach the drawing code as a scale with no rings anybody chose and a readout
-// nobody could reproduce from the ladder. Snapping to the nearest keeps what
-// the edit was reaching for; discarding it back to the default would throw the
-// user's intent away for the sake of a number that was almost right.
-inline int clampScopeRangeNm(int nm) { return scopeRangeNmAt(scopeRangeIndex(nm)); }
 
 // One step up or down the ladder from `currentNm`, which is snapped to the
 // ladder first so a config-edited value cannot make a step land nowhere.
@@ -463,22 +410,11 @@ inline int scopeTileCells(int zoom) {
 
 // --- the receiver's own position --------------------------------------------
 
-// WHETHER A PAIR CAN BE THE RECEIVER. Finite and on the globe, and NOT the
-// exact origin: 0 N 0 E is a point in the Gulf of Guinea that nobody who
-// types, clicks or presses a key on this application is at, and it is the
-// value every empty field, every unset map and every zeroed struct holds. A
-// user's scope was found measuring from there, with the view dragged three
-// thousand miles to the coast it should have been on; the position had been
-// set from a control whose inputs still read 0.00000. The application
-// refuses it at every door - the typed entry, the one-click offers, the
-// config file - so that "unset" and "set to nothing" can never be the same
-// picture.
-inline bool receiverPositionAcceptable(double latDeg, double lonDeg) {
-    if (!std::isfinite(latDeg) || !std::isfinite(lonDeg)) { return false; }
-    if (latDeg < -90.0 || latDeg > 90.0 || lonDeg < -180.0 || lonDeg > 180.0) { return false; }
-    if (latDeg == 0.0 && lonDeg == 0.0) { return false; }
-    return true;
-}
+// WHETHER A PAIR CAN BE THE RECEIVER: the one rule, applied at every door a
+// position comes in by. It lives in core/receiver_position.hpp because two of
+// those doors - the config file and a GPS fix - are engine side; brought back
+// into this namespace unchanged.
+using cascade::core::receiverPositionAcceptable;
 
 // --- what the readouts say ----------------------------------------------------
 

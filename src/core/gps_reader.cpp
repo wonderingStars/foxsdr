@@ -20,7 +20,7 @@
 
 #include "core/diag_log.hpp"
 // The one acceptance rule, exactly as config.cpp reaches it. Not copied.
-#include "gui/scope_view.hpp"
+#include "core/receiver_position.hpp"
 
 namespace cascade::core {
 
@@ -243,7 +243,7 @@ void GpsReader::run(std::shared_ptr<Shared> sh, std::unique_ptr<ByteSource> sour
                 // "valid" is necessary, not sufficient: (0,0) with quality 1
                 // is a bench receiver's honest answer and is waited out.
                 if (!found && fix.valid
-                    && cascade::gui::receiverPositionAcceptable(fix.latDeg, fix.lonDeg)) {
+                    && cascade::core::receiverPositionAcceptable(fix.latDeg, fix.lonDeg)) {
                     accepted = fix;
                     found = true;
                 }

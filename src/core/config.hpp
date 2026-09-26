@@ -477,7 +477,7 @@ struct AppConfig {
 
     // railBank   which of the FUNCTION SELECT rail's five banks was showing -
     //            SIGNAL PATH, DECODE, VIEW, EXTEND, SYSTEM, as 0..4 in that
-    //            order (gui/rail_banks.hpp owns the list). Restored so the
+    //            order (core/view_settings.hpp owns the list). Restored so the
     //            rail opens where it was left. It is the ONLY part of the
     //            rail's state that survives a launch, and the comment here
     //            used to say it worked "exactly as a section's own

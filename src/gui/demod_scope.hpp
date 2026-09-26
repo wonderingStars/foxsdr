@@ -36,6 +36,7 @@
 #include <cstdio>
 
 #include "core/i18n.hpp"
+#include "core/view_settings.hpp"
 
 namespace cascade::gui {
 
@@ -67,26 +68,13 @@ inline bool scopeGridIsCentre(int i, int divisions) {
 
 // --- what the scope is looking at --------------------------------------------
 //
-// ONE INSTRUMENT WITH AN INPUT SELECTOR, not four pages. A bench scope has one
-// tube and a switch that says what is on it, and these four are that switch:
-// the demodulated audio as a trace, the same audio as a spectrum, the channel
-// I/Q as two traces, and the same I/Q as a Lissajous. Keeping them on one
-// cabinet is also what makes the comparison possible - AM, FM and SSB look
-// different in VECTOR and nearly identical in AUDIO, and that is the lesson.
-enum class ScopeSignal : int {
-    Audio = 0,       // the demodulated audio, triggered, as a trace
-    Spectrum = 1,    // the same audio, as a log-magnitude spectrum
-    Baseband = 2,    // the channel I/Q at the demodulator's input, I and Q
-    Vector = 3,      // the same I/Q, plotted I against Q
-    // THE FIFTH POSITION EXISTS ONLY IN WFM - see scopeSignalAvailable below.
-    // The broadcast multiplex is the discriminator's output before de-emphasis
-    // and before the stereo decoder: the mono sum, the pilot, the difference
-    // sidebands, RDS and any SCA, stacked in frequency. Nothing else this
-    // receiver demodulates has one, which is why this is not a setting anybody
-    // has to find - in every other mode the key is simply not there.
-    Mpx = 4
-};
-inline constexpr int kScopeSignalCount = 5;
+// The selector's positions (ScopeSignal, kScopeSignalCount) and the clamp the
+// config applies to a saved one (scopeSignalFromIndex) live in
+// core/view_settings.hpp, because the config - engine side - applies them on
+// load. Brought back into this namespace unchanged:
+using cascade::core::ScopeSignal;
+using cascade::core::kScopeSignalCount;
+using cascade::core::scopeSignalFromIndex;
 
 // The word engraved on the key. Short, because four keys share one row.
 inline const char* scopeSignalKey(ScopeSignal s) {
@@ -113,15 +101,6 @@ inline const char* scopeSignalCaption(ScopeSignal s) {
         case ScopeSignal::Mpx: return FOX_TR_NOOP("FM MULTIPLEX");
     }
     return "";
-}
-
-// A saved selector position, clamped. The config carries an int and a hand
-// edit can say anything; whatever it says, the scope opens on a signal that
-// exists.
-inline ScopeSignal scopeSignalFromIndex(int index) {
-    if (index < 0) { return ScopeSignal::Audio; }
-    if (index >= kScopeSignalCount) { return ScopeSignal::Vector; }
-    return static_cast<ScopeSignal>(index);
 }
 
 // WHICH POSITIONS EXIST RIGHT NOW. Four always; the multiplex only while the
@@ -223,27 +202,13 @@ struct DemodScopeState {
 
 // --- the display mode ------------------------------------------------------
 //
-// Asked for by a tester looking at the FM multiplex (2026-09-23): "add
-// options to the display to either incorporate some averaging or have some
-// persistence in the display". Three latched keys, the way a bench scope's
-// acquisition and display buttons work:
-//   NORM     - the live trace, exactly as before;
-//   AVG      - successive traces blended (see gui/scope_memory.hpp): a
-//              spectrum settles into its long-term shape, and a triggered
-//              waveform sheds its noise;
-//   PERSIST  - the live trace over a fading memory of where the beam has
-//              been, like a long-persistence phosphor.
-enum class ScopeDisplay : int { Normal = 0, Average = 1, Persist = 2 };
-inline constexpr int kScopeDisplayCount = 3;
-
-inline int clampScopeDisplay(int index) {
-    if (index < 0 || index >= kScopeDisplayCount) { return 0; }
-    return index;
-}
-
-inline ScopeDisplay scopeDisplayFromIndex(int index) {
-    return static_cast<ScopeDisplay>(clampScopeDisplay(index));
-}
+// NORM, AVG and PERSIST (ScopeDisplay, kScopeDisplayCount) and their clamps
+// live in core/view_settings.hpp beside the other settings the config clamps
+// on load; what each key says stays here.
+using cascade::core::ScopeDisplay;
+using cascade::core::kScopeDisplayCount;
+using cascade::core::clampScopeDisplay;
+using cascade::core::scopeDisplayFromIndex;
 
 inline const char* scopeDisplayKey(ScopeDisplay d) {
     switch (d) {
@@ -274,18 +239,11 @@ inline const char* scopeDisplayTip(ScopeDisplay d) {
 
 // --- the time base -----------------------------------------------------------
 //
-// A 1-2-5 ladder, the sequence every bench instrument's attenuator and time
-// base is stepped in, from one millisecond a division (a single cycle of a
-// 1 kHz tone spans one division) to fifty (half a second across the tube,
-// which is long enough to watch a syllable).
-inline constexpr double kScopeTimebaseMs[] = {1.0, 2.0, 5.0, 10.0, 20.0, 50.0};
-inline constexpr int kScopeTimebaseCount = 6;
-
-inline int clampScopeTimebase(int index) {
-    if (index < 0) { return 0; }
-    if (index >= kScopeTimebaseCount) { return kScopeTimebaseCount - 1; }
-    return index;
-}
+// The 1-2-5 ladder itself (kScopeTimebaseMs, kScopeTimebaseCount) and its
+// clamp live in core/view_settings.hpp: the config indexes it on load.
+using cascade::core::kScopeTimebaseMs;
+using cascade::core::kScopeTimebaseCount;
+using cascade::core::clampScopeTimebase;
 
 inline double scopeTimebaseMs(int index) {
     return kScopeTimebaseMs[clampScopeTimebase(index)];
@@ -309,19 +267,11 @@ inline std::size_t scopeSweepSamples(double msPerDiv, double rateHz) {
 
 // --- the vertical attenuator -------------------------------------------------
 //
-// Units per DIVISION, on the same 1-2-5 ladder, where one unit is full scale
-// of the audio path (a sample of 1.0). Four divisions is the top of the tube,
-// so the coarsest step here shows a signal at digital full scale filling half
-// the height and the finest resolves about a thousandth of full scale.
-inline constexpr float kScopeGainPerDiv[] = {0.002f, 0.005f, 0.01f, 0.02f, 0.05f,
-                                             0.1f,   0.2f,   0.5f,  1.0f};
-inline constexpr int kScopeGainCount = 9;
-
-inline int clampScopeGain(int index) {
-    if (index < 0) { return 0; }
-    if (index >= kScopeGainCount) { return kScopeGainCount - 1; }
-    return index;
-}
+// Units per DIVISION (kScopeGainPerDiv, kScopeGainCount) and the clamp live in
+// core/view_settings.hpp: the config indexes the ladder on load.
+using cascade::core::kScopeGainPerDiv;
+using cascade::core::kScopeGainCount;
+using cascade::core::clampScopeGain;
 
 inline float scopeGainPerDiv(int index) { return kScopeGainPerDiv[clampScopeGain(index)]; }
 

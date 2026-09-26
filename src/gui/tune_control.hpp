@@ -1,7 +1,8 @@
 // Pure tuning decisions pulled out of AppWindow so they can be checked
 // without a live source, a running pipeline or an open ImGui frame - the
-// same reason gui/scope_view.hpp carries receiverPositionAcceptable rather
-// than leaving it inline in a draw call.
+// same reason receiverPositionAcceptable (core/receiver_position.hpp, brought
+// into the window by gui/scope_view.hpp) is a function rather than inline in
+// a draw call.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
