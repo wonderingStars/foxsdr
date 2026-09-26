@@ -206,7 +206,7 @@ function Get-Median([double[]]$v) { return [FoxMeasure]::Median($v) }
 # ---------------------------------------------------------------------------
 # The environment record
 # ---------------------------------------------------------------------------
-function Get-EnvRecord([string]$windowSize) {
+function Get-EnvRecord([string]$sizeText) {
     $cv = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
     $gpus = @(Get-CimInstance Win32_VideoController | ForEach-Object {
             "$($_.Name) driver $($_.DriverVersion) $($_.CurrentHorizontalResolution)x$($_.CurrentVerticalResolution)@$($_.CurrentRefreshRate)"
@@ -223,7 +223,7 @@ function Get-EnvRecord([string]$windowSize) {
         powerPlan   = $scheme
         battery     = $battery
         cpu         = "$cpu, $([Environment]::ProcessorCount) logical"
-        windowSize  = $windowSize
+        windowSize  = $sizeText
         machine     = $env:COMPUTERNAME
     }
 }
@@ -421,9 +421,9 @@ function Get-Summary([string]$Root) {
         $vals = [ordered]@{}
         foreach ($m in $meta.measures) {
             for ($r = 1; $r -le [int]$meta.runs; ++$r) {
-                $dir = Join-Path $Root "runs\$label-$m-r$r"
-                if (-not (Test-Path $dir)) { continue }
-                $fig = Read-RunFigures $dir $m
+                $runDir = Join-Path $Root "runs\$label-$m-r$r"
+                if (-not (Test-Path $runDir)) { continue }
+                $fig = Read-RunFigures $runDir $m
                 if ($null -eq $fig) { continue }
                 foreach ($k in $fig.Keys) {
                     if (-not $vals.Contains($k)) { $vals[$k] = New-Object System.Collections.Generic.List[object] }
@@ -438,7 +438,7 @@ function Get-Summary([string]$Root) {
         }
         $builds[$label] = [ordered]@{ exe = $meta.builds.$label.exe; sha256 = $meta.builds.$label.sha256; runs = $vals; median = $med }
     }
-    $gates = @()
+    $gateRows = @()
     if ($builds.Contains('baseline') -and $builds.Contains('candidate')) {
         foreach ($g in $Gates) {
             $b = @(); $c = @()
@@ -449,7 +449,7 @@ function Get-Summary([string]$Root) {
             $row = [ordered]@{ gate = $g.name; verdict = $v }
             if ($b.Count -gt 0) { $row.baselineMedian = Get-Median ([double[]]$b); $row.baselineRange = @([FoxMeasure]::Min([double[]]$b), [FoxMeasure]::Max([double[]]$b)); $row.baselineRuns = $b }
             if ($c.Count -gt 0) { $row.candidateMedian = Get-Median ([double[]]$c); $row.candidateRange = @([FoxMeasure]::Min([double[]]$c), [FoxMeasure]::Max([double[]]$c)); $row.candidateRuns = $c }
-            $gates += $row
+            $gateRows += $row
         }
     }
     return [ordered]@{
@@ -461,7 +461,7 @@ function Get-Summary([string]$Root) {
         measures    = $meta.measures
         rateLadder  = $meta.rateLadder
         builds      = $builds
-        gates       = $gates
+        gates       = $gateRows
     }
 }
 
@@ -469,8 +469,8 @@ function Write-GateTable($summary) {
     foreach ($label in $summary.builds.Keys) {
         Write-Host ("{0}: {1}" -f $label, $summary.builds[$label].exe)
         foreach ($k in $summary.builds[$label].median.Keys) {
-            $runs = ($summary.builds[$label].runs[$k] | ForEach-Object { '{0:G5}' -f $_ }) -join ', '
-            Write-Host ("    {0,-18} median {1,12:G6}   runs [{2}]" -f $k, $summary.builds[$label].median[$k], $runs)
+            $runList = ($summary.builds[$label].runs[$k] | ForEach-Object { '{0:G5}' -f $_ }) -join ', '
+            Write-Host ("    {0,-18} median {1,12:G6}   runs [{2}]" -f $k, $summary.builds[$label].median[$k], $runList)
         }
     }
     if ($summary.gates.Count -gt 0) {
@@ -531,6 +531,34 @@ if ($SelfTest) {
     $e2 = [pscustomobject]@{ os = 'a'; gpu = 'g2'; powerPlan = 'p'; battery = 'none'; cpu = 'c'; windowSize = 'w'; machine = 'm' }
     Check ((Test-SameEnv $e1 $e1).Count -eq 0) 'same environment accepted'
     Check ((Test-SameEnv $e1 $e2).Count -eq 1) 'different GPU refused'
+    # The summary end to end, on a fabricated two-build session: every gate
+    # must come out with a verdict. (A local $gates once shadowed the
+    # script's $Gates - PowerShell names are case-insensitive - and the real
+    # session's gate table came out empty with nothing to say so.)
+    $fake = Join-Path ([IO.Path]::GetTempPath()) ("measure-selftest-" + [guid]::NewGuid().ToString('N'))
+    try {
+        foreach ($lab in @('baseline', 'candidate')) {
+            $rd = Join-Path $fake "runs\$lab-cpu-r1"
+            New-Item -ItemType Directory -Force -Path $rd | Out-Null
+            $cpu = 3.0
+            if ($lab -eq 'candidate') { $cpu = 6.0 }
+            [IO.File]::WriteAllText((Join-Path $rd 'result.json'),
+                "{`"error`": `"`", `"cpuS`": $cpu, `"windowS`": 60, `"workingSetBytes`": 104857600, `"ringDropped`": 0}")
+        }
+        $sess = [ordered]@{
+            environment = $e1; envStable = $true; runs = 1; warmupSeconds = 5; measures = @('cpu'); rateLadder = ''
+            builds = [ordered]@{ baseline = [ordered]@{ exe = 'a'; sha256 = 'x' }; candidate = [ordered]@{ exe = 'b'; sha256 = 'y' } }
+        }
+        $sess | ConvertTo-Json -Depth 5 | Set-Content -Encoding ascii (Join-Path $fake 'session.json')
+        $sum = Get-Summary $fake
+        Check (@($sum.gates).Count -eq $Gates.Count) "summary has a row per gate ($(@($sum.gates).Count))"
+        $cpuRow = @($sum.gates | Where-Object { $_.gate -like 'CPU*' })
+        Check ($cpuRow.Count -eq 1 -and $cpuRow[0].verdict -eq 'FAIL') 'summary judges the CPU gate (doubled, one run a side: FAIL)'
+        $wsRow = @($sum.gates | Where-Object { $_.gate -like 'working set*' })
+        Check ($wsRow.Count -eq 1 -and $wsRow[0].verdict -eq 'PASS') 'summary judges the working-set gate (equal: PASS)'
+    } finally {
+        Remove-Item -Recurse -Force $fake -ErrorAction SilentlyContinue
+    }
     if ($fail -eq 0) { Write-Host 'measure_engine self-test: PASS' ; exit 0 } else { Write-Host "measure_engine self-test: $fail failed"; exit 1 }
 }
 
@@ -568,10 +596,10 @@ if ($PSCmdlet.ParameterSetName -eq 'CompareFiles') {
 # copied under -Out, so a rebuild during the session cannot change what is
 # being measured, and the plugin directory the app chooses (beside the exe) is
 # the staged one rather than the build tree's.
-function Copy-Stage([string]$exe, [string]$dest) {
+function Copy-Stage([string]$exePath, [string]$dest) {
     New-Item -ItemType Directory -Force -Path $dest | Out-Null
-    $src = Split-Path -Parent $exe
-    Copy-Item -Force $exe (Join-Path $dest 'cascade.exe')
+    $src = Split-Path -Parent $exePath
+    Copy-Item -Force $exePath (Join-Path $dest 'cascade.exe')
     foreach ($dll in @(Get-ChildItem -Path $src -Filter *.dll)) { Copy-Item -Force $dll.FullName $dest }
     if (Test-Path (Join-Path $src 'resources')) { Copy-Item -Recurse -Force (Join-Path $src 'resources') $dest }
     $pd = Join-Path $dest 'plugins'
@@ -606,9 +634,9 @@ $meta | ConvertTo-Json -Depth 6 | Set-Content -Encoding ascii (Join-Path $Out 's
 foreach ($m in $Measures) {
     for ($r = 1; $r -le $Runs; ++$r) {
         foreach ($label in $builds.Keys) {
-            $dir = Join-Path $Out "runs\$label-$m-r$r"
+            $runDir = Join-Path $Out "runs\$label-$m-r$r"
             Write-Host ("[{0}] {1} {2} run {3}/{4}" -f (Get-Date).ToString('HH:mm:ss'), $label, $m, $r, $Runs)
-            [void](Invoke-Launch -Exe $builds[$label] -Dir $dir -Measure $m)
+            [void](Invoke-Launch -Exe $builds[$label] -Dir $runDir -Measure $m)
         }
     }
 }
