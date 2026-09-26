@@ -1,5 +1,5 @@
 // basemap_stand_in.hpp - a basemap that needs no plugin and no network, for
-// bounded test runs only (0.99.41).
+// bounded test runs only (0.99.42).
 //
 // WHY IT EXISTS. What a map does WITH tiles - letter the attribution the
 // basemap supplies, keep the tile cache's frame count moving so eviction and

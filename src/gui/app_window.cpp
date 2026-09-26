@@ -1655,6 +1655,15 @@ int AppWindow::run(int frames) {
             demodScopeOpenedByEnv_ = true;
             demodScopeOpen_ = true;
         }
+        // THE RADAR SCOPE, the same way but BOUNDED RUNS ONLY (0.99.42): its
+        // tiles and their credit can only be judged with it on screen
+        // (tests/test_patch_map_credit), and scopeMode is cleared at start-up.
+        if (frames >= 0 && !radarScopeOpenedByEnv_ &&
+            std::getenv("FOXSDR_OPEN_RADAR_SCOPE") != nullptr &&
+            std::getenv("FOXSDR_OPEN_RADAR_SCOPE")[0] != '\0') {
+            radarScopeOpenedByEnv_ = true;
+            scopeMode_ = true;
+        }
 
         // AND THE PATCH CANVAS, for exactly the reason the two above have
         // one: a canvas can only be judged by looking at it, nothing in a
@@ -13160,7 +13169,7 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
                 }
                 const float mapW = faceW;
                 // THE BASEMAP'S ATTRIBUTION, AS EVERY MAP PAGE LETTERS IT
-                // (0.99.41). Until now this part drew the same tiles through
+                // (0.99.42). Until now this part drew the same tiles through
                 // the same MapView and credited nothing - OpenStreetMap tiles
                 // uncredited on every patch page with the imagery plugin
                 // fitted. The line is RESERVED BEFORE the chart is sized, for
@@ -13194,7 +13203,12 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
                         ImGui::SetCursorScreenPos(ImVec2(chartTL.x, chartTL.y + mapH +
                                                                         ImGui::GetStyle().ItemSpacing.y));
                         const ImVec2 at = ImGui::GetCursorScreenPos();
-                        ImGui::PushTextWrapPos(at.x + mapW);
+                        // WINDOW-LOCAL, as ImGui's wrap position is (it adds
+                        // the window's own position back): a screen x put the
+                        // wrap a window's offset to the right, and a narrow
+                        // part's credit ran on past its chart (0.99.42).
+                        ImGui::PushTextWrapPos(at.x + mapW - ImGui::GetWindowPos().x +
+                                               ImGui::GetScrollX());
                         ImGui::TextDisabled("%s", basemap_.attribution().c_str());
                         ImGui::PopTextWrapPos();
                         const ImVec2 r0 = ImGui::GetItemRectMin();

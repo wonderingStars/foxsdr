@@ -2850,6 +2850,7 @@ private:
     bool featureRequestOpenedByEnv_ = false;
     // The same one-shot latch for FOXSDR_OPEN_DEMOD_SCOPE - see its use.
     bool demodScopeOpenedByEnv_ = false;
+    bool radarScopeOpenedByEnv_ = false;   // FOXSDR_OPEN_RADAR_SCOPE, bounded runs
     // ...and for FOXSDR_OPEN_MAP.
     bool mapOpenedByEnv_ = false;
     // The typed text and the typed contact line - IN MEMORY ONLY, per

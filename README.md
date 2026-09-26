@@ -61,7 +61,7 @@ Internal project/binary name: `cascade`.
 
 ## Where it is now
 
-The current release is **0.99.41** (September 2026), in open beta and free for
+The current release is **0.99.42** (September 2026), in open beta and free for
 noncommercial use, with its decoders and instruments delivered as plugins from
 a catalogue. These are screenshots of an earlier shipping build.
 
@@ -168,7 +168,9 @@ are still moving. What is in the current build:
   mediumwave and the FM broadcast edges all differ — so there is no single plan
   that is correct globally. Informational only; not a licensing reference.
 - **Map and decoders.** Aircraft, vessels and stations plotted together,
-  coloured by altitude band, with optional map imagery from a basemap plugin.
+  coloured by altitude band, with optional map imagery from a basemap plugin;
+  wherever its tiles are drawn - the map pages, the patch Map part and the
+  radar scope - the plugin's attribution is lettered beneath them.
   A target's **trail is coloured along its length** by the same bands, so a
   climb-out and a cruise read differently at a glance — from the altitudes the
   host watched the aircraft report as it flew the line, not from anything

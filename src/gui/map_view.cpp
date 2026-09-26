@@ -533,7 +533,7 @@ const std::vector<LandShape>& landShapes() {
 // See map_view.hpp. The caption halo above is half strength in four
 // directions ON PURPOSE - it keeps the counters of "10 km" open. A target's
 // name is a different thing to read: it sits wherever the target is, over any
-// tile at all, and over OpenStreetMap's London (0.99.41 captures) an amber
+// tile at all, and over OpenStreetMap's London (0.99.40 captures) an amber
 // callsign inside that thin halo merged with the map's own place names. So
 // here the outline is whole: all eight neighbours, at three quarters of the
 // ink's alpha (190/255 - where two passes overlap it is near opaque, which is

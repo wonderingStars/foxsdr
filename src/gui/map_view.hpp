@@ -214,7 +214,7 @@ struct MapZoomKeys {
 MapZoomKeys mapZoomKeys(float originX, float originY, float widthPx, float heightPx,
                         float keyPx, float floorPx);
 
-// A TARGET'S NAME ON THE MAP (0.99.41): the callsign, ship name or station id
+// A TARGET'S NAME ON THE MAP (0.99.42): the callsign, ship name or station id
 // beside its mark, in `col` (its altitude colour or kind colour - a
 // measurement, never repainted), with a STRONG outline: every one of the eight
 // directions one pixel out, dark behind a light ink (light behind a dark one,

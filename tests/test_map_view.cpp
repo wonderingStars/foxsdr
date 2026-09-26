@@ -580,7 +580,7 @@ void testZoomKeysDriveTheView() {
 
 }  // namespace
 
-// --- target labels over map tiles (0.99.41) -----------------------------------
+// --- target labels over map tiles (0.99.42) -----------------------------------
 //
 // OVER OPENSTREETMAP TILES THE LABELS DISAPPEARED. A callsign in its altitude
 // colour - amber, green - over London's roads and place names read as one more

@@ -1,5 +1,5 @@
 /*
- * THE PATCH MAP PART CREDITS ITS TILES, IN THE REAL APPLICATION (0.99.41).
+ * THE PATCH MAP PART CREDITS ITS TILES, IN THE REAL APPLICATION (0.99.42).
  *
  * A basemap plugin's attribution is not optional: OpenStreetMap-derived tiles
  * are ODbL, the ABI refuses a basemap that supplies none, and every map page
@@ -20,7 +20,13 @@
  *              BELOW its chart (so the zoom keys and the legend, which are in
  *              the chart, cannot cover it) and inside the part's face;
  *   endframe   the tile cache's frame ended with only the patch map on screen;
- *   none       no basemap: no credit, and the chart is still drawn.
+ *   none       no basemap: no credit, and the chart is still drawn;
+ *   narrow     a 170-wide Map part: the credit wraps inside the chart's width
+ *              instead of running on past it (review of 74735d1 - ImGui's wrap
+ *              position is window-local, and a screen x was handed to it);
+ *   scope      the radar scope, which draws the same tiles under its face:
+ *              its credit is lettered below the tube, inside its area - and
+ *              with no basemap, not at all.
  *
  * Isolated like every test that starts the application.
  *
@@ -111,7 +117,10 @@ struct Census {
 constexpr int kFrames = 60;
 fs::path g_dir;
 
-Census once(const std::string& tag, bool basemap) {
+// `mapW` is the Map part's width on the canvas (world units = pixels at zoom
+// 1); `scope` opens the radar scope instead (FOXSDR_OPEN_RADAR_SCOPE), with a
+// receiver position so it has something to draw around.
+Census once(const std::string& tag, bool basemap, int mapW = 520, bool scope = false) {
     Census c;
     const fs::path cfg = g_dir / (tag + ".json");
     const fs::path outFile = g_dir / (tag + ".census");
@@ -119,7 +128,8 @@ Census once(const std::string& tag, bool basemap) {
     {
         std::ofstream f(cfg, std::ios::binary | std::ios::trunc);
         f << "{ \"telemetryEnabled\": false, \"updateCheckEnabled\": false, "
-             "\"sourceKind\": \"siggen\", \"uiTheme\": \"today\", \"mainView\": \"patch\" }\n";
+             "\"sourceKind\": \"siggen\", \"uiTheme\": \"today\", \"mainView\": \"patch\", "
+             "\"rxPositionSet\": true, \"rxLatDeg\": 51.47, \"rxLonDeg\": -0.45 }\n";
     }
     {
         // One Map part, nothing wired: a Map part draws its chart - and asks
@@ -127,12 +137,14 @@ Census once(const std::string& tag, bool basemap) {
         std::ofstream f(patch, std::ios::binary | std::ios::trunc);
         f << "foxsdr-patch 6\n"
              "view 0 0 1\n"
-             "node 1 6 4 20 20 520 420 0 0 - - 0 1 -50 1 Map\n";
+             "node 1 6 4 20 20 "
+          << mapW << " 420 0 0 - - 0 1 -50 1 Map\n";
     }
     setEnv("CASCADE_CONFIG_TEST", cfg.string());
     setEnv("FOXSDR_UI_CENSUS", outFile.string());
     setEnv("FOXSDR_PATCH_FILE", patch.string());
     setEnv("FOXSDR_FORCE_BASEMAP", basemap ? "1" : "");
+    setEnv("FOXSDR_OPEN_RADAR_SCOPE", scope ? "1" : "");
     const std::string out =
         run("\"" + exePath() + "\" --frames " + std::to_string(kFrames) + " 2>&1");
     const bool rendered =
@@ -228,6 +240,73 @@ int main() {
         if (s.rfind("patchmap:credit", 0) == 0) { anyCredit = true; }
     }
     CHECK(!anyCredit);
+
+    // --- a NARROW Map part (review of 74735d1) ------------------------------------------
+    // ImGui's wrap position is WINDOW-local, and the first cut handed it a
+    // screen x - so the wrap landed a window's offset to the right of the part
+    // and a narrow part's credit ran on past its chart, cut off at the next
+    // node or the canvas edge. Measured: a 170-wide part lettered its credit
+    // from 456 to 743 under a chart ending at 604. The credit must stay inside
+    // the chart's width, which on a part this narrow means more than one line.
+    const float oneLine = (credit != with.rects.end()) ? credit->second.y1 - credit->second.y0
+                                                       : 0.0f;
+    const Census narrow = once("narrow", true, 170);
+    CHECK(narrow.ok);
+    CHECK(narrow.items.count(creditItem) == 1);
+    const auto nch = narrow.rects.find("patchmap:chart");
+    const auto ncr = narrow.rects.find("patchmap:credit");
+    const auto nfa = narrow.rects.find("patchmap:face");
+    CHECK(nch != narrow.rects.end() && ncr != narrow.rects.end() && nfa != narrow.rects.end());
+    if (nch != narrow.rects.end() && ncr != narrow.rects.end() && nfa != narrow.rects.end()) {
+        const Rect& ch = nch->second;
+        const Rect& cr = ncr->second;
+        std::printf("  narrow part: chart (%.0f,%.0f)-(%.0f,%.0f), credit (%.0f,%.0f)-(%.0f,%.0f), "
+                    "one line is %.0f px\n",
+                    ch.x0, ch.y0, ch.x1, ch.y1, cr.x0, cr.y0, cr.x1, cr.y1, oneLine);
+        CHECK(cr.x0 >= ch.x0 - 0.5f);
+        CHECK(cr.x1 <= ch.x1 + 0.5f);             // not past the chart's right edge
+        CHECK(cr.y1 - cr.y0 > 1.5f * oneLine);   // so it wrapped
+        CHECK(cr.y0 >= ch.y1 - 0.5f);
+        CHECK(cr.y1 <= nfa->second.y1 + 0.5f);   // and the reserved space held all of it
+    }
+
+    // --- THE RADAR SCOPE (review of 74735d1) -----------------------------------------
+    // It draws the same basemap's tiles under its face, and credited nothing
+    // anywhere on screen. The credit is lettered under the scope, inside the
+    // area it was given, below the tube.
+    const std::string scopeCredit =
+        std::string("scope:credit:") + cascade::gui::kStandInBasemapAttribution;
+    const Census scope = once("scope", true, 520, true);
+    CHECK(scope.ok);
+    CHECK(scope.items.count("scope:area") == 1);    // the scope was drawn
+    CHECK(scope.items.count("basemap:tile") == 1);  // and asked for tiles
+    const bool scopeCredited = scope.items.count(scopeCredit) == 1;
+    std::printf("  radar scope with a basemap: credit %s\n", scopeCredited ? "lettered" : "MISSING");
+    CHECK(scopeCredited);
+    const auto sar = scope.rects.find("scope:area");
+    const auto stu = scope.rects.find("scope:canvas");
+    const auto scr = scope.rects.find("scope:credit");
+    CHECK(sar != scope.rects.end() && stu != scope.rects.end() && scr != scope.rects.end());
+    if (sar != scope.rects.end() && stu != scope.rects.end() && scr != scope.rects.end()) {
+        const Rect& ar = sar->second;
+        const Rect& tu = stu->second;
+        const Rect& cr = scr->second;
+        std::printf("  scope area (%.0f,%.0f)-(%.0f,%.0f), canvas bottom %.0f, credit "
+                    "(%.0f,%.0f)-(%.0f,%.0f)\n",
+                    ar.x0, ar.y0, ar.x1, ar.y1, tu.y1, cr.x0, cr.y0, cr.x1, cr.y1);
+        CHECK(cr.y0 >= tu.y1 - 0.5f);                            // below the tube
+        CHECK(cr.x0 >= ar.x0 - 0.5f && cr.x1 <= ar.x1 + 0.5f);   // inside the area
+        CHECK(cr.y1 <= ar.y1 + 0.5f);
+        CHECK(cr.y1 - cr.y0 >= 8.0f && cr.x1 - cr.x0 >= 40.0f);
+    }
+    const Census scopeNone = once("scopenone", false, 520, true);
+    CHECK(scopeNone.ok);
+    CHECK(scopeNone.items.count("scope:area") == 1);
+    bool anyScopeCredit = false;
+    for (const std::string& s : scopeNone.items) {
+        if (s.rfind("scope:credit", 0) == 0) { anyScopeCredit = true; }
+    }
+    CHECK(!anyScopeCredit);
 
     const int rc = testSummary("test_patch_map_credit");
     if (rc == 0) { fs::remove_all(g_dir, ec); }
