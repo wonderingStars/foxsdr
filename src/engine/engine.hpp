@@ -263,6 +263,50 @@ private:
     // same persistence, same re-application after every rebuild.
     void setPluginSettingsAllowed(const std::string& pluginKey, bool allowed);
     void applyPluginSettingsGrants();
+    // ONCE A FRAME, straight after applyWebControls: applies what plugins
+    // asked of the receiver (through applyControlRequest, the code a click or
+    // a browser goes through), turns their log lines into decoder-output lines
+    // and plate notices, folds their settings into the config, and collects
+    // their marks. GUI thread - the only thread that may touch the receiver,
+    // which is the whole reason plugin requests are queued. What plugins READ
+    // is the one receiver snapshot publishReceiverState publishes later in the
+    // same frame, before anything is drawn.
+    void applyPluginApi();
+    // ONE control request (the web remote, CAT, a plugin): a TRANSLATION, and
+    // nothing else - net::controlRequestToCommands turns its fields into
+    // commands in the order they were always applied, and each goes through
+    // applyCommand below.
+    void applyControlRequest(const cascade::net::ControlRequest& r);
+
+public:
+    // --- ONE CONTROL PATH (engine extraction, stage 1) ----------------------
+    //
+    // THE ONE PLACE THE RECEIVER'S STATE CHANGES. Every desktop widget, key
+    // binding and gesture that changes the receiver, the web remote, CAT and
+    // plugins all end here as a FoxCommand (the engine API's vocabulary,
+    // third_party/foxsdr_api; app-internal extensions in
+    // core/app_commands.hpp). docs/engine-stage1.md has the op table, the
+    // rule for when a widget's command is queued and when it is applied at
+    // once, and the line between receiver state and view state; tests/
+    // test_command_path_guard.cpp fails a widget that changes the receiver
+    // any other way. GUI thread only - the same rule every setter it calls
+    // has always had. `longText` is the command's text when it did not fit
+    // FoxCommand::text (a long path); empty otherwise.
+    FoxCommandResult applyCommand(const FoxCommand& c, const std::string& longText = {});
+private:
+public:
+    // What a widget or key does: queue a command for the top of the next
+    // drain. Drained twice at the top of every frame (drawUi): once before the
+    // keyboard is read - what the widgets asked for last frame - and once
+    // after, so a key still acts in the frame it is pressed.
+    void submitCommand(const FoxCommand& c);
+private:
+public:
+    void submitCommand(cascade::core::cmd::QueuedCommand q);
+private:
+public:
+    void drainLocalCommands();
+private:
     // Each queued command carries the sourceGen_ it was asked under. A
     // command addressed to THE RADIO (rate, gain, AGC, antenna, bias tee,
     // device switch) whose radio has since been closed or replaced is
@@ -285,6 +329,7 @@ private:
     void tuneToBookmark(const cascade::core::Bookmark& b);
     void addBookmarkHere(const std::string& name);
     cascade::core::Scanner::Params scannerParams() const;
+    bool selectSourceById(const std::string& id);
     // HOW MANY LOADED MODULES ARE DECODERS AT ALL - the denominator under the
     // word DECODERS, and under the rail's fed-of-fitted chip.
     //
@@ -317,6 +362,37 @@ private:
     // it. Split from the button's action below because applyPluginPreset has
     // to start a plugin and then rebuild ONCE, having also moved the receiver.
     void recordPluginStopped(const std::string& pluginKey, bool stopped);
+    // The Stop/Start button's action: record it, then rebuild through the one
+    // lifecycle path everything else uses, so a stop tears the plugin's
+    // instances down and a start builds them against the CURRENT receiver.
+    void setPluginStopped(const std::string& pluginKey, bool stopped);
+    // "WE WANT THE USER TO HAVE TO DO NOTHING" (the owner's words). Called
+    // from setPluginStopped's own START branch only: looks the plugin back up
+    // by key, and if it carries presets and the receiver is not already
+    // sitting inside one of them (engine/tune_control.hpp's
+    // autoPresetIndexOnStart), applies the first exactly as if its own button
+    // had been pressed. A no-op for a plugin with no preset table, and never
+    // called on a stop or from config load — see the call site in
+    // setPluginStopped and core::startupState for why neither reaches here.
+    void maybeAutoPresetOnStart(const std::string& pluginKey);
+    // THE SAME RULE, for the gesture the DECODE rail actually offers: opening
+    // a plugin's own window. Since 0.79.1 a window is shown ONLY by a row's
+    // click (never restored at start-up, never self-opened - PluginWindows
+    // starts empty every launch and MapPage::open is cleared by
+    // core::startupState), so that click is exactly as deliberate an "I want
+    // this plugin now" as pressing START. Call ONLY when
+    // cascade::gui::autoPresetTriggersOnWindowClick says this frame's click
+    // just turned a window from hidden to shown - never on a click that hides
+    // one. Shares its decision and apply path with maybeAutoPresetOnStart
+    // through the private maybeAutoPreset() below; only the log line's verb
+    // differs ("window opened" here, "started" there).
+    void maybeAutoPresetOnShow(const std::string& pluginKey);
+    // The body both of the above call: find the plugin by key, decide via
+    // autoPresetIndexOnStart, apply through applyPluginPreset, and log with
+    // `verb` standing in for what just happened ("started" / "window
+    // opened"). `verb` is a string literal from the two call sites, never
+    // plugin-supplied text.
+    void maybeAutoPreset(const std::string& pluginKey, const char* verb);
     // THE REVERSE OF cascade::core::pluginKey(): HostImage/HostPanel/
     // HostInstrument/MapPage all carry a plugin's DISPLAY name (LoadedPlugin::
     // name), the same identity drawPluginWindowRows and drawMapPageSections
@@ -1476,11 +1552,19 @@ private:
     };
     std::vector<PatchDeviceChoice> patchDeviceChoices() const;
     std::string patchDeviceLabel(const std::string& key) const;
+    // Per frame while the page is open: take the receiver's radio, open and
+    // close radios to match the nodes, make and drop speaker outputs, and
+    // publish each radio's set when it has changed.
+    void patchReconcile();
     std::vector<cascade::core::patch::RadioInfo> patchRadioInfos() const;
+    // Stops every patch radio and drops every output. `restoreMain` then hands
+    // the receiver its radio back.
+    void patchStopAll(bool restoreMain);
     // The patch transport (0.99.18): the START/STOP key, the red ALL OFF,
     // what a change of running does, and each radio's own switch.
     void patchPressStart();
     void patchAllOff();
+    void patchApplyRunning();
     // Every demodulator's squelch setting, handed to the runner of the radio
     // its channel is on - every frame, lock-free, so a drag is live.
     void patchPushSquelch();

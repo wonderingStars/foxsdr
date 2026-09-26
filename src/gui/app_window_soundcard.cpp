@@ -150,7 +150,7 @@ void AppWindow::drawSoundCardControls() {
             // when it is applied.
             if (cascade::gui::soundCardCentreAppliesLive(engine_.sourceKind_ == "soundcard", engine_.soundCardOpenPending_,
                                                          engine_.soundCardLive_.format)) {
-                submitCommand(cascade::core::cmd::makeNum(FOXAPP_OP_SOUNDCARD_IQ_CENTRE,
+                engine_.submitCommand(cascade::core::cmd::makeNum(FOXAPP_OP_SOUNDCARD_IQ_CENTRE,
                                                           engine_.soundCard_.iqCentreHz));
             }
         }
@@ -186,7 +186,7 @@ void AppWindow::drawSoundCardControls() {
     if (ImGui::Button(trId("Open##soundcard_open"))) {
         // SELECT_SOURCE "soundcard:open": opens the card THIS FORM describes
         // (its settings are not in the id yet - docs/engine-stage1.md, OPEN).
-        submitCommand(cascade::core::cmd::makeText(FOXAPI_OP_SELECT_SOURCE, "soundcard:open"));
+        engine_.submitCommand(cascade::core::cmd::makeText(FOXAPI_OP_SELECT_SOURCE, "soundcard:open"));
     }
     ImGui::EndDisabled();
     ImGui::EndDisabled();

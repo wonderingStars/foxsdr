@@ -314,7 +314,7 @@ void AppWindow::drawLanguageSection() {
         // (SET_BAND_PLAN, applied at the top of the next frame): loadBandPlan()
         // rebuilds bandPlanChoices_, so it must never run under a walk of it.
         if (engine_.bandPlanSelection_ != chosen->bandPlan) {
-            submitCommand(cascade::core::cmd::makeText(FOXAPI_OP_SET_BAND_PLAN, chosen->bandPlan));
+            engine_.submitCommand(cascade::core::cmd::makeText(FOXAPI_OP_SET_BAND_PLAN, chosen->bandPlan));
         }
     }
 

@@ -303,14 +303,14 @@ struct AppWindowTestAccess {
         cascade::engine::Engine::testHooks_.soundCardBackend = &makeCard;
     }
     static FoxCommandResult apply(AppWindow& a, const FoxCommand& c, const std::string& lt = {}) {
-        return a.applyCommand(c, lt);
+        return a.engine_.applyCommand(c, lt);
     }
     static FoxCommandResult apply(AppWindow& a, const cmd::QueuedCommand& q) {
-        return a.applyCommand(q.c, q.longText);
+        return a.engine_.applyCommand(q.c, q.longText);
     }
-    static void submit(AppWindow& a, const FoxCommand& c) { a.submitCommand(c); }
-    static void submit(AppWindow& a, const cmd::QueuedCommand& q) { a.submitCommand(q); }
-    static void drain(AppWindow& a) { a.drainLocalCommands(); }
+    static void submit(AppWindow& a, const FoxCommand& c) { a.engine_.submitCommand(c); }
+    static void submit(AppWindow& a, const cmd::QueuedCommand& q) { a.engine_.submitCommand(q); }
+    static void drain(AppWindow& a) { a.engine_.drainLocalCommands(); }
     static std::size_t queued(AppWindow& a) { return a.engine_.localCommands_.size(); }
 
     // The receiver.
@@ -453,7 +453,7 @@ struct AppWindowTestAccess {
         }
         return -1;
     }
-    static void webRequest(AppWindow& a, const cascade::net::ControlRequest& r) { a.applyControlRequest(r); }
+    static void webRequest(AppWindow& a, const cascade::net::ControlRequest& r) { a.engine_.applyControlRequest(r); }
     static bool scanning(AppWindow& a) { return a.engine_.scanner_.active(); }
     static double scanStartMhz(AppWindow& a) { return a.engine_.scanStartMhz_; }
     static double scanStopMhz(AppWindow& a) { return a.engine_.scanStopMhz_; }

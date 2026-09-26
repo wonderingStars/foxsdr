@@ -195,9 +195,9 @@ struct AppWindowTestAccess {
         cascade::engine::Engine::testHooks_.nativeScan = &fakeNativeScan;
         cascade::engine::Engine::testHooks_.soapyScan = &fakeSoapyScan;
     }
-    static FoxCommandResult apply(AppWindow& a, const FoxCommand& c) { return a.applyCommand(c, {}); }
+    static FoxCommandResult apply(AppWindow& a, const FoxCommand& c) { return a.engine_.applyCommand(c, {}); }
     static FoxCommandResult apply(AppWindow& a, const cmd::QueuedCommand& q) {
-        return a.applyCommand(q.c, q.longText);
+        return a.engine_.applyCommand(q.c, q.longText);
     }
     static bool waitOpen(AppWindow& a) {
         return waitFor([&a] {
@@ -223,7 +223,7 @@ struct AppWindowTestAccess {
     }
     static int modeIndex(AppWindow& a) { return a.engine_.modeIndex_; }
     static cascade::net::RadioStatus webStatus(AppWindow& a) { return a.webStatusNow(); }
-    static void webRequest(AppWindow& a, const cascade::net::ControlRequest& r) { a.applyControlRequest(r); }
+    static void webRequest(AppWindow& a, const cascade::net::ControlRequest& r) { a.engine_.applyControlRequest(r); }
     static cascade::core::ReceiverSnapshot& snapshot(AppWindow& a) { return *a.engine_.receiverSnapshot_; }
     static void publish(AppWindow& a) { a.engine_.publishReceiverState(); }
     static std::size_t loadedDecoders(AppWindow& a) { return a.engine_.loadedDecoderCount(); }

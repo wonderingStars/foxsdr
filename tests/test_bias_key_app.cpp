@@ -294,11 +294,11 @@ struct AppWindowTestAccess {
     // drains it at the top of the next frame, and so does this.
     static void press(AppWindow& a) {
         a.biasKeyPressed();
-        a.drainLocalCommands();
+        a.engine_.drainLocalCommands();
     }
     static void answer(AppWindow& a, bool turnOn) {
         a.biasKeyAnswered(turnOn);
-        a.drainLocalCommands();
+        a.engine_.drainLocalCommands();
     }
     // The dialog is asked for (queued for the top level to open).
     static bool asking(AppWindow& a) { return a.biasKeyAskQueued_ && a.biasKeyGate_.asking; }

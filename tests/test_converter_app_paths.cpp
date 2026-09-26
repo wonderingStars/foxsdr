@@ -382,12 +382,12 @@ struct AppWindowTestAccess {
         a.engine_.patchWasOpen_ = true;  // the page's first-frame scan is not under test
         const auto t0 = std::chrono::steady_clock::now();
         while (a.engine_.patchRadios_.count(id) == 0) {
-            a.patchReconcile();
+            a.engine_.patchReconcile();
             if (std::chrono::steady_clock::now() - t0 > std::chrono::seconds(20)) { return false; }
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
         // A few more frames: the running radio's follow must not move it.
-        for (int i = 0; i < 5; ++i) { a.patchReconcile(); }
+        for (int i = 0; i < 5; ++i) { a.engine_.patchReconcile(); }
         return true;
     }
     static double patchRadioAir(AppWindow& a, cascade::core::patch::NodeId id) {
@@ -398,7 +398,7 @@ struct AppWindowTestAccess {
     // its radio back.
     static bool stopPatch(AppWindow& a) {
         a.engine_.patchRunning_ = false;
-        a.patchStopAll(true);
+        a.engine_.patchStopAll(true);
         return waitOpen(a);
     }
 };

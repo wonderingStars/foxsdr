@@ -305,12 +305,12 @@ struct AppWindowTestAccess {
     static void startPatch(AppWindow& a) {
         a.engine_.patchRunning_ = true;
         a.engine_.patchWasOpen_ = true;
-        a.patchReconcile();
+        a.engine_.patchReconcile();
     }
     static bool lent(AppWindow& a) { return a.engine_.patchMainKeep_.valid; }
     static bool stopPatch(AppWindow& a) {
         a.engine_.patchRunning_ = false;
-        a.patchStopAll(true);
+        a.engine_.patchStopAll(true);
         return settle(a);
     }
     static void restore(AppWindow& a, const cascade::core::AppConfig& cfg) { a.applyConfig(cfg); }

@@ -54,10 +54,10 @@ void AppWindow::biasKeyPressed() {
     switch (biasKeyPress(biasKeyGate_, biasKeyPanel(), engine_.biasKeyRadioNow())) {
         case BiasKeyAction::Nothing: break;
         case BiasKeyAction::SwitchOff:
-            submitCommand(cascade::core::cmd::makeInt(FOXAPI_OP_SET_BIAS_TEE, 0));
+            engine_.submitCommand(cascade::core::cmd::makeInt(FOXAPI_OP_SET_BIAS_TEE, 0));
             break;
         case BiasKeyAction::SwitchOn:
-            submitCommand(cascade::core::cmd::makeInt(FOXAPI_OP_SET_BIAS_TEE, 1));
+            engine_.submitCommand(cascade::core::cmd::makeInt(FOXAPI_OP_SET_BIAS_TEE, 1));
             break;
         case BiasKeyAction::Ask: biasKeyAskQueued_ = true; break;
     }
@@ -70,7 +70,7 @@ void AppWindow::biasKeyAnswered(bool turnOn) {
     }
     if (biasKeyConfirm(biasKeyGate_, biasKeyPanel(), engine_.biasKeyRadioNow(),
                        engine_.biasKeyMayRememberNow())) {
-        submitCommand(cascade::core::cmd::makeInt(FOXAPI_OP_SET_BIAS_TEE, 1));
+        engine_.submitCommand(cascade::core::cmd::makeInt(FOXAPI_OP_SET_BIAS_TEE, 1));
     }
 }
 

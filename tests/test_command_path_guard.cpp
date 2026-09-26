@@ -180,28 +180,13 @@ const char* const kFields[] = {
 
 // --- the window's machinery ---------------------------------------------------------
 // The window members that still drive the engine directly: construction,
-// teardown, the config restore and the web/CAT drain - and, until the stage-3a commit that moves them into src/engine, the
-// engine machinery that has not moved yet (the second group below).
+// teardown, the config restore and the web/CAT drain.
 const char* const kWindowMachinery[] = {
     "AppWindow",
     "~AppWindow",
     "applyConfig",
     "currentConfig",
     "applyWebControls",
-    // not moved yet:
-    "applyCommand",
-    "applyControlRequest",
-    "applyPluginApi",
-    "selectSourceById",
-    "drainLocalCommands",
-    "maybeAutoPreset",
-    "maybeAutoPresetOnShow",
-    "maybeAutoPresetOnStart",
-    "setPluginStopped",
-    "patchReconcile",
-    "patchStopAll",
-    "patchApplyRunning",
-    "submitCommand",
 };
 
 // The EngineHost overrides (engine/engine_host.hpp): the window's half of a

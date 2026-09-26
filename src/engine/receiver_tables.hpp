@@ -116,47 +116,6 @@ inline void formatBandwidth(double hz, char* out, std::size_t n) {
 
 // --- from gui/app_window.cpp ----------------------------------------------
 
-// THE RSP's THREE OTHER SWITCHES, EACH ONE DRIVER WIDE. Same argument as
-// withBiasTee - they are not ports and not gains, and DeviceSource would have
-// to invent an answer for every source that has no such thing - but each of
-// these is offered by exactly one driver, so there is no dispatch to do
-// beyond the cast, and the per-MODEL question is the one that matters: an
-// RSP1A has no HDR mode, an RSPdx has no DAB notch, and the driver answers
-// for the device that is actually open rather than for the family.
-template <typename Fn>
-bool withRfNotch(cascade::source::DeviceSource* dev, Fn&& fn) {
-    auto* sp = dynamic_cast<cascade::source::SdrPlaySource*>(dev);
-    if (sp == nullptr || !sp->rfNotchSupported()) { return false; }
-    return fn(*sp);
-}
-
-template <typename Fn>
-bool withDabNotch(cascade::source::DeviceSource* dev, Fn&& fn) {
-    auto* sp = dynamic_cast<cascade::source::SdrPlaySource*>(dev);
-    if (sp == nullptr || !sp->dabNotchSupported()) { return false; }
-    return fn(*sp);
-}
-
-template <typename Fn>
-bool withHdrMode(cascade::source::DeviceSource* dev, Fn&& fn) {
-    auto* sp = dynamic_cast<cascade::source::SdrPlaySource*>(dev);
-    if (sp == nullptr || !sp->hdrModeSupported()) { return false; }
-    return fn(*sp);
-}
-
-// THE RX888's ADC PAIR, and they travel together because they are one GPIO
-// word and one decision: dither trades a little noise floor for spurs that
-// stop sitting on exact frequencies, and the output randomiser undoes the
-// FX3's own scrambling. The randomiser is ONE switch on purpose - the driver
-// flips the chip and the host-side de-randomiser in the same call, because
-// turning it on at the chip alone turns the whole band into noise.
-template <typename Fn>
-bool withAdcSwitches(cascade::source::DeviceSource* dev, Fn&& fn) {
-    auto* r = dynamic_cast<cascade::source::Rx888Source*>(dev);
-    if (r == nullptr) { return false; }
-    return fn(*r);
-}
-
 // THE PLUTO'S DRIVER KEY, spelled once. The Source section has to recognise
 // its row in three places (the label, the row that must not open on
 // selection, and the address field it shows instead), and a literal in each
@@ -204,6 +163,10 @@ constexpr cascade::dsp::DemodMode kModeMap[8] = {
 constexpr double kModeSnapHz[8] = {12500.0, 100000.0, 9000.0, 1000.0,
                                    1000.0,  1000.0,   1000.0, 1000.0};
 
+constexpr double kDeemphUs[3] = {50.0, 75.0, 0.0};
+
+constexpr int kDeemphCount = 3;
+
 // VFO bandwidth clamp for edge drags and config restore:
 // [3 kHz, 90% of the channel rate]. The lower bound keeps the band visible,
 // grabbable and audible; the upper bound leaves the Vfo's decimating filter
@@ -228,25 +191,6 @@ inline bool equalsFileNameAscii(const std::string& a, const std::string& b) {
     return true;
 }
 
-// Index of the value in arr[0..n) closest to x (ties resolve low). Used to
-// point preset combos at whatever a config file or device readback holds.
-inline int nearestIndex(const double* arr, int n, double x) {
-    int best = 0;
-    for (int i = 1; i < n; ++i) {
-        if (std::fabs(arr[i] - x) < std::fabs(arr[best] - x)) { best = i; }
-    }
-    return best;
-}
-
-// The same for a device's own rate list, which is what the Rate combo shows
-// now - twelve rows on an RTL-SDR, ten on a HackRF, four on a Soapy driver
-// that reports none. Empty answers 0, which is the "no selection" the combo
-// draws as blank rather than reading past the end of a vector.
-inline int nearestIndex(const std::vector<double>& v, double x) {
-    if (v.empty()) { return 0; }
-    return nearestIndex(v.data(), static_cast<int>(v.size()), x);
-}
-
 // A NATIVE radio's MODEL WITH NO SERIAL IN IT, for the log, the crash context
 // and the scan-gate caption - the rule every diagnostic line in this file
 // keeps. core::sanitiseDevice does the job for a SoapySDR kwargs string (its
@@ -268,13 +212,6 @@ inline std::string rateLabel(double hz) {
     std::snprintf(buf, sizeof(buf), "%.3f MS/s", hz / 1.0e6);
     return buf;
 }
-
-// What the Sinks panel says while a device has not answered yet. Named because
-// it is both written and tested for: a user switch takes its own line down
-// again, and must not take the audio watchdog's recovery note with it.
-// The note is stored TRANSLATED (the Sinks panel draws audioHealthNote_ as it
-// stands), so it is written and compared through tr() in both places.
-inline const char* const kAudioBusyNote = FOX_TR_NOOP("audio device busy - still opening");
 
 // --- from gui/app_window_patch_radios.cpp ---------------------------------
 

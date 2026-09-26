@@ -2540,8 +2540,9 @@ void testCloseWaits() {
     // (f) The patch page stops its radios under one batch (read from the
     // source: AppWindow is not reachable from a unit test).
     {
-        const std::string text = readSource("src/gui/app_window_patch_radios.cpp");
-        const std::size_t fn = text.find("void AppWindow::patchStopAll(");
+        // In the Engine since stage 3a (moved verbatim from app_window_patch_radios.cpp).
+        const std::string text = readSource("src/engine/engine_patch_radios.cpp");
+        const std::size_t fn = text.find("void Engine::patchStopAll(");
         const std::size_t batch =
             fn == std::string::npos ? std::string::npos : text.find("SoundCardSource::CloseBatch", fn);
         const std::size_t clear =
@@ -2575,8 +2576,9 @@ void testPatchUsesRunningCard() {
     // The application's side of it, read from the source (the same device
     // test_shutdown_budget uses for the teardown's shape): the loan is asked
     // about soundCardLive_, the keep carries what the loan took, and the
-    // hand-back reopens exactly that.
-    const std::string text = readSource("src/gui/app_window_patch_radios.cpp");
+    // hand-back reopens exactly that. (The Engine's since stage 3a: patchReconcile
+    // and patchStopAll moved verbatim from app_window_patch_radios.cpp.)
+    const std::string text = readSource("src/engine/engine_patch_radios.cpp");
     CHECK(!text.empty());
     const std::size_t call = text.find("receiverSourceForPatch(");
     const std::size_t end = call == std::string::npos ? std::string::npos : text.find(");", call);

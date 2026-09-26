@@ -900,80 +900,11 @@ private:
     // exist. Draws nothing when there is neither a refusal nor a stale grant.
     void drawPluginTuneControls();
 
-    // ONCE A FRAME, straight after applyWebControls: applies what plugins
-    // asked of the receiver (through applyControlRequest, the code a click or
-    // a browser goes through), turns their log lines into decoder-output lines
-    // and plate notices, folds their settings into the config, and collects
-    // their marks. GUI thread - the only thread that may touch the receiver,
-    // which is the whole reason plugin requests are queued. What plugins READ
-    // is the one receiver snapshot publishReceiverState publishes later in the
-    // same frame, before anything is drawn.
-    void applyPluginApi();
-    // ONE control request (the web remote, CAT, a plugin): a TRANSLATION, and
-    // nothing else - net::controlRequestToCommands turns its fields into
-    // commands in the order they were always applied, and each goes through
-    // applyCommand below.
-    void applyControlRequest(const cascade::net::ControlRequest& r);
-
-    // --- ONE CONTROL PATH (engine extraction, stage 1) ----------------------
-    //
-    // THE ONE PLACE THE RECEIVER'S STATE CHANGES. Every desktop widget, key
-    // binding and gesture that changes the receiver, the web remote, CAT and
-    // plugins all end here as a FoxCommand (the engine API's vocabulary,
-    // third_party/foxsdr_api; app-internal extensions in
-    // core/app_commands.hpp). docs/engine-stage1.md has the op table, the
-    // rule for when a widget's command is queued and when it is applied at
-    // once, and the line between receiver state and view state; tests/
-    // test_command_path_guard.cpp fails a widget that changes the receiver
-    // any other way. GUI thread only - the same rule every setter it calls
-    // has always had. `longText` is the command's text when it did not fit
-    // FoxCommand::text (a long path); empty otherwise.
-    FoxCommandResult applyCommand(const FoxCommand& c, const std::string& longText = {});
-    // What a widget or key does: queue a command for the top of the next
-    // drain. Drained twice at the top of every frame (drawUi): once before the
-    // keyboard is read - what the widgets asked for last frame - and once
-    // after, so a key still acts in the frame it is pressed.
-    void submitCommand(const FoxCommand& c);
-    void submitCommand(cascade::core::cmd::QueuedCommand q);
-    void drainLocalCommands();
-
-    bool selectSourceById(const std::string& id);
     // The SELECT_SOURCE id of a row of the Source list (the inverse of
     // selectSourceById for every row a click can name).
     std::string sourceIdForRow(int row) const;
     // The plugins' spectrum and waterfall marks, over the panel at (x0, y0).
     void drawPluginMarkers(float x0, float y0, float width, float height, bool waterfall);
-    // The Stop/Start button's action: record it, then rebuild through the one
-    // lifecycle path everything else uses, so a stop tears the plugin's
-    // instances down and a start builds them against the CURRENT receiver.
-    void setPluginStopped(const std::string& pluginKey, bool stopped);
-    // "WE WANT THE USER TO HAVE TO DO NOTHING" (the owner's words). Called
-    // from setPluginStopped's own START branch only: looks the plugin back up
-    // by key, and if it carries presets and the receiver is not already
-    // sitting inside one of them (engine/tune_control.hpp's
-    // autoPresetIndexOnStart), applies the first exactly as if its own button
-    // had been pressed. A no-op for a plugin with no preset table, and never
-    // called on a stop or from config load — see the call site in
-    // setPluginStopped and core::startupState for why neither reaches here.
-    void maybeAutoPresetOnStart(const std::string& pluginKey);
-    // THE SAME RULE, for the gesture the DECODE rail actually offers: opening
-    // a plugin's own window. Since 0.79.1 a window is shown ONLY by a row's
-    // click (never restored at start-up, never self-opened - PluginWindows
-    // starts empty every launch and MapPage::open is cleared by
-    // core::startupState), so that click is exactly as deliberate an "I want
-    // this plugin now" as pressing START. Call ONLY when
-    // cascade::gui::autoPresetTriggersOnWindowClick says this frame's click
-    // just turned a window from hidden to shown - never on a click that hides
-    // one. Shares its decision and apply path with maybeAutoPresetOnStart
-    // through the private maybeAutoPreset() below; only the log line's verb
-    // differs ("window opened" here, "started" there).
-    void maybeAutoPresetOnShow(const std::string& pluginKey);
-    // The body both of the above call: find the plugin by key, decide via
-    // autoPresetIndexOnStart, apply through applyPluginPreset, and log with
-    // `verb` standing in for what just happened ("started" / "window
-    // opened"). `verb` is a string literal from the two call sites, never
-    // plugin-supplied text.
-    void maybeAutoPreset(const std::string& pluginKey, const char* verb);
 
     // --- Preset bars: a plugin's own window offers its own presets (0.99.0) --
     //
@@ -1967,14 +1898,6 @@ private:
     // (patchCentreNote_, drawn by drawPatchCentreNote). True when taken.
     bool setPatchRadioCentre(cascade::core::patch::Node& n, double airHz);
     void drawPatchCentreNote(const cascade::core::patch::Node& n);
-    // Per frame while the page is open: take the receiver's radio, open and
-    // close radios to match the nodes, make and drop speaker outputs, and
-    // publish each radio's set when it has changed.
-    void patchReconcile();
-    // Stops every patch radio and drops every output. `restoreMain` then hands
-    // the receiver its radio back.
-    void patchStopAll(bool restoreMain);
-    void patchApplyRunning();
     void drawPatchTransport();
     void drawPatchRadioSwitch(cascade::core::patch::Node& n);
     // THE MAP PARTS (0.99.18): each Map node's own view (its pan, zoom and

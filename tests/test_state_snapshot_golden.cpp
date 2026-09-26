@@ -222,9 +222,9 @@ struct AppWindowTestAccess {
         cascade::engine::Engine::testHooks_.soapyScan = &fakeSoapyScan;
         cascade::engine::Engine::testHooks_.pluginDir = &pluginDirHook;
     }
-    static FoxCommandResult apply(AppWindow& a, const FoxCommand& c) { return a.applyCommand(c, {}); }
+    static FoxCommandResult apply(AppWindow& a, const FoxCommand& c) { return a.engine_.applyCommand(c, {}); }
     static FoxCommandResult apply(AppWindow& a, const cmd::QueuedCommand& q) {
-        return a.applyCommand(q.c, q.longText);
+        return a.engine_.applyCommand(q.c, q.longText);
     }
     static bool waitOpen(AppWindow& a) {
         return waitFor([&a] {

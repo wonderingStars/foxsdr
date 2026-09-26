@@ -122,7 +122,7 @@ void AppWindow::drawConverterControls() {
         FoxCommand c = cascade::core::cmd::makeInt(FOXAPP_OP_SET_CONVERTER, static_cast<std::int64_t>(s.mode),
                                                    s.inverted ? 1 : 0);
         c.num[0] = s.loHz;
-        submitCommand(c);
+        engine_.submitCommand(c);
     };
 
     ImGui::SeparatorText(tr("Converter"));
