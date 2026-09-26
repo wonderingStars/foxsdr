@@ -17,6 +17,11 @@
 //       is the receiver's I/Q file one;
 //   [L] the picker's list: every playable WAV in the folders asked, each once,
 //       with its header's rate - and nothing IqFileSource would refuse;
+//   [U] a file name no conversion can spell (an unpaired UTF-16 surrogate,
+//       which NTFS allows) is skipped, never thrown out of the list;
+//   [C] what listing costs: the patch's own speaker files are passed over by
+//       name, a file already read is not read again until it changes, and
+//       one listing opens at most so many files;
 //   [O] opening one: the header's rate, the node's centre as the file's centre
 //       (nominal - nothing is "tuned"), and IqFileSource's own reason when it
 //       will not open;
@@ -49,6 +54,13 @@
 #include <vector>
 
 #if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
 #include <process.h>
 #define TEST_GETPID _getpid
 #else
@@ -241,6 +253,114 @@ int main() {
         CHECK(listIqRecordings({(root / "recordings").string(), (root / "samples").string()}, 2)
                   .size() == 2u);
         CHECK(listIqRecordings({}).empty());
+    }
+
+    // --- [U] a name no conversion can spell (review of f7d1cfc) ----------------------
+    // NTFS takes any sequence of UTF-16 units, an unpaired surrogate included,
+    // and MSVC's path::u8string() THROWS std::system_error on one. The list
+    // is read from a combo on the GUI thread, so a throw here was
+    // std::terminate - one oddly named file in the recordings folder closed
+    // the application. The list must skip what it cannot name and go on.
+#if defined(_WIN32)
+    {
+        const fs::path odd = root / "odd";
+        fs::create_directories(odd, ec);
+        const fs::path good = odd / "good_48k.wav";
+        writeToneWav(good, 48000, 1000.0, 0.2);
+        // Made by CreateFileW, as another program would make them: an
+        // extension with a lone surrogate, and a .wav whose NAME has one
+        // (a real, playable file under a name no code page can spell).
+        const std::wstring loneExt = odd.wstring() + L"\\lone.w\xDC80";
+        HANDLE h = ::CreateFileW(loneExt.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                                 FILE_ATTRIBUTE_NORMAL, nullptr);
+        CHECK(h != INVALID_HANDLE_VALUE);
+        if (h != INVALID_HANDLE_VALUE) { ::CloseHandle(h); }
+        const fs::path tmp = odd / "tmp_copy.wav";
+        writeToneWav(tmp, 48000, 1000.0, 0.2);
+        const std::wstring loneName = odd.wstring() + L"\\lone\xDC80name.wav";
+        CHECK(::MoveFileW(tmp.wstring().c_str(), loneName.c_str()) != 0);
+        bool threw = false;
+        std::vector<RecordingInfo> got;
+        try {
+            got = listIqRecordings({odd.string()});
+        } catch (...) {
+            threw = true;
+        }
+        std::printf("odd names: %s, listed %zu\n", threw ? "THREW" : "no exception", got.size());
+        CHECK(!threw);
+        CHECK(got.size() == 1u);
+        if (got.size() == 1u) { CHECK(got[0].fileName == "good_48k.wav"); }
+        // And through a cache, the path the application takes.
+        RecordingProbeCache cache;
+        threw = false;
+        try {
+            got = listIqRecordings({odd.string()}, kMaxRecordingsListed, &cache);
+        } catch (...) {
+            threw = true;
+        }
+        CHECK(!threw);
+        CHECK(got.size() == 1u);
+        ::DeleteFileW(loneExt.c_str());
+        ::DeleteFileW(loneName.c_str());
+    }
+#endif
+
+    // --- [C] what the list costs (review of f7d1cfc) -----------------------------------
+    // Every .wav used to be OPENED on the GUI thread each time a device list
+    // opened - the patch's own speaker recordings among them, which pile up in
+    // the very folder the list reads. Now: the patch's own output files are
+    // passed over by name, unopened; a file already read is not read again
+    // until its size or time changes; and one listing opens at most maxOpens.
+    {
+        const fs::path dir = root / "costs";
+        fs::create_directories(dir, ec);
+        writeToneWav(dir / "one.wav", 48000, 1000.0, 0.2);
+        writeToneWav(dir / "two.wav", 96000, 1000.0, 0.2);
+        // A PLAYABLE 2-channel file under the patch speaker's own name
+        // (core::patchFilePrefix + the timestamp makeWavDest adds), so only
+        // the name can be what keeps it out.
+        writeToneWav(dir / "patch-3-Speaker_20260926_101010.wav", 48000, 1000.0, 0.2);
+        CHECK(isPatchOutputFile("patch-3-Speaker_20260926_101010.wav"));
+        CHECK(isPatchOutputFile("PATCH-12-x_20260101_000000.WAV"));
+        CHECK(!isPatchOutputFile("patch-notes.wav"));
+        CHECK(!isPatchOutputFile("patch-.wav"));
+        CHECK(!isPatchOutputFile("mypatch-3-x.wav"));
+        CHECK(!isPatchOutputFile("one.wav"));
+
+        RecordingProbeCache cache;
+        std::vector<RecordingInfo> got = listIqRecordings({dir.string()}, kMaxRecordingsListed, &cache);
+        std::printf("costs: first listing %zu, opened %zu\n", got.size(), cache.opens);
+        CHECK(got.size() == 2u);
+        CHECK(cache.opens == 2u);   // the speaker's file was never opened
+        // Again, nothing changed: nothing opened, the same list.
+        got = listIqRecordings({dir.string()}, kMaxRecordingsListed, &cache);
+        CHECK(got.size() == 2u);
+        CHECK(cache.opens == 2u);
+        // One file rewritten at another rate: that one is read again, and the
+        // list says its new rate.
+        writeToneWav(dir / "two.wav", 250000, 1000.0, 0.3);
+        got = listIqRecordings({dir.string()}, kMaxRecordingsListed, &cache);
+        CHECK(cache.opens == 3u);
+        CHECK(got.size() == 2u);
+        if (got.size() == 2u) { CHECK(got[1].fileName == "two.wav" && got[1].rateHz == 250000.0); }
+        // A file that is not a recording is remembered as not one, and not
+        // opened again either.
+        writeToneWav(dir / "mono.wav", 48000, 1000.0, 0.2, false, 1);
+        got = listIqRecordings({dir.string()}, kMaxRecordingsListed, &cache);
+        CHECK(cache.opens == 4u);
+        CHECK(got.size() == 2u);
+        got = listIqRecordings({dir.string()}, kMaxRecordingsListed, &cache);
+        CHECK(cache.opens == 4u);
+        // THE CAP: a fresh cache allowed one open reads one file and lists
+        // only that; the next listing reads the next.
+        RecordingProbeCache small;
+        got = listIqRecordings({dir.string()}, kMaxRecordingsListed, &small, 1);
+        CHECK(small.opens == 1u);
+        CHECK(got.size() <= 1u);
+        got = listIqRecordings({dir.string()}, kMaxRecordingsListed, &small, 1);
+        CHECK(small.opens == 2u);
+        // Without a cache the cap still holds.
+        CHECK(listIqRecordings({dir.string()}, kMaxRecordingsListed, nullptr, 1).size() <= 1u);
     }
 
     // --- [O] opening one -------------------------------------------------------------

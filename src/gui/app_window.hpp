@@ -3281,6 +3281,9 @@ private:
     // core::patch::listIqRecordings when a Radio's device list is opened or
     // "Look for radios" is pressed - never at launch, and never per frame.
     std::vector<cascade::core::patch::RecordingInfo> patchRecordings_;
+    // What each file's header said, so reopening the list reads only files
+    // that are new or changed (core::patch::RecordingProbeCache).
+    cascade::core::patch::RecordingProbeCache patchRecordingCache_;
     void patchListRecordings();
     std::string patchDeviceLabel(const std::string& key) const;
     // The device a newly added Radio starts on: the receiver's own radio if

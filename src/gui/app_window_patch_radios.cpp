@@ -186,8 +186,14 @@ void AppWindow::patchListRecordings() {
     if (const char* s = std::getenv("FOXSDR_PATCH_SAMPLES"); s != nullptr && *s != '\0') {
         dirs.emplace_back(s);
     }
-    patchRecordings_ = pc::listIqRecordings(dirs);
-    cascade::core::diagLogf("patch: %zu I/Q recording(s) listed", patchRecordings_.size());
+    // THROUGH THE CACHE: a file already read is not opened again until it
+    // changes, and one listing opens at most kMaxRecordingOpens - this runs on
+    // the GUI thread, in a folder the patch's own speakers keep writing to.
+    const std::size_t opensBefore = patchRecordingCache_.opens;
+    patchRecordings_ =
+        pc::listIqRecordings(dirs, pc::kMaxRecordingsListed, &patchRecordingCache_);
+    cascade::core::diagLogf("patch: %zu I/Q recording(s) listed (%zu file(s) read)",
+                            patchRecordings_.size(), patchRecordingCache_.opens - opensBefore);
 }
 
 std::string AppWindow::patchDeviceLabel(const std::string& key) const {
@@ -294,31 +300,23 @@ std::vector<pc::RadioInfo> AppWindow::patchRadioInfos() const {
 }
 
 void AppWindow::patchReconcile() {
-    // THE DEVICE LIST IS READ WHEN THE PAGE OPENS. The native list is otherwise
-    // read only when the Source combo is opened, and a patch radio named by a
-    // saved patch would be labelled "not connected" until then. scanNative()
-    // opens nothing and is safe while radios stream (see its comment).
-    //
-    // AND THE SOAPYSDR LIST TOO (2026-09-23). A B200 is only found by the
-    // SoapySDR scan, which the page never asked for: the owner's B200 did not
-    // appear here until it had been opened in the receiver. scanSoapy() now
-    // runs beside open radios, leaving their own drivers out, so asking here
-    // is safe with the receiver or the patch streaming.
-    //
-    // WANTED, NOT FIRED ONCE: the page often opens while a radio is still
-    // opening (a session restoring its source), when the plan must defer - and
-    // a scan asked for only on the first frame then never happened. So the
-    // wish is kept and the scan runs on the first frame the plan allows.
+    // THE DEVICE LISTS. Until 0.99.40 the page read the native list and asked
+    // for the SoapySDR scan (2026-09-23: a B200 is only found by that scan)
+    // on the frame it opened. The scan is still asked for as a WISH, not fired
+    // once (patchScanWanted_, run below on the first frame the scan plan
+    // allows - a radio still opening defers it), and scanSoapy() still runs
+    // beside open radios, leaving their drivers out.
     //
     // NOT ON SHOWING THE VIEW ANY MORE (0.99.40). The patch is now the view
-    // the application opens on and is switched to and fro all day, and a
+    // the application opens on and is switched to and fro all day. A
     // SoapySDR scan asked for here would run the vendor probe - which opens
     // and resets USB radios - at every launch and every switch, the very
-    // thing the constructor refuses to do. So the view's first frame reads
-    // the native list (it opens nothing), and the SoapySDR scan waits for the
-    // user to ask for a list: a Radio's device list opened (it asks once, as
-    // the Source section's does) or "Look for radios".
-    if (!patchWasOpen_) { scanNative(); }
+    // thing the constructor refuses to do; and even the native walk (which
+    // opens nothing) asks the SDRplay service for its list, which before this
+    // happened at launch only for a user restoring a native radio. So the
+    // view asks for NO list. They are read when the user asks for one: a
+    // Radio's device list opened, "Look for radios", or a Radio part added
+    // (it starts on a free radio, so it needs the native list).
 
     // --- the receiver's radio goes to the patch ------------------------------
     // ONLY WHILE THE PATCH RUNS (0.99.18): an open page with the patch stopped
@@ -1185,11 +1183,15 @@ void AppWindow::drawPatchRadioInspector(pc::Node& n) {
             patchListsWanted_ = true;
             if (!soapyScanned_ || soapyScanPartial_) { patchScanWanted_ = true; }
         }
-        // The recordings are read afresh each time the list opens - a file
-        // saved a moment ago is in it - and on no other frame. The rows drawn
-        // this frame are the ones read last time; the new list is there on
-        // the next frame, which is the one the eye reaches it on.
-        if (ImGui::IsWindowAppearing()) { patchListRecordings(); }
+        // The native radios and the recordings are read afresh each time the
+        // list opens - a dongle plugged in or a file saved a moment ago is in
+        // it - and on no other frame, as the Source section's list is. The
+        // rows drawn this frame are the ones read last time; the new list is
+        // there on the next frame, which is the one the eye reaches it on.
+        if (ImGui::IsWindowAppearing()) {
+            scanNative();
+            patchListRecordings();
+        }
         for (std::size_t i = 0; i < choices.size(); ++i) {
             const PatchDeviceChoice& c = choices[i];
             // ONE DEVICE, ONE RADIO: a device another Radio already has is

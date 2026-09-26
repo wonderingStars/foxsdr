@@ -1346,15 +1346,15 @@ keys under the bank keys at the top of the rail switch between it and the
 receiver's spectrum, waterfall and status (so does **SIGNAL PATH → Patch**),
 and the view last chosen is the one FoxSDR opens on next time. Showing the
 patch starts nothing, and opening on it does not search for radios - the
-device lists are read when a Radio's device list is opened or **Look for
-radios** is pressed. Press a part in the bin at the top and it appears at the
+device lists are read when a Radio's device list is opened, **Look for
+radios** is pressed or a Radio part is added. Press a part in the bin at the top and it appears at the
 top-left of the canvas you are looking at (pressing again steps each new one
 down and across), then wire them port to port. Each part is the instrument
 itself, operated on its own face.
 
 | Part | What it does |
 |---|---|
-| **Radio** | One device of its own - up to five in a patch, all running at once. Choose the device and its sample rate in the panel on the right and type its centre on the node. A device can be on one Radio only; the list greys out a device another Radio already has. Its **ON/OFF** switch, first on its face, closes that radio alone while the rest of the patch keeps running. A Radio can also play an **I/Q recording**: every 2-channel WAV (16-bit PCM or 32-bit float) in the recordings folder is in its device list, played on a loop in real time. The recording sets the rate; the Radio's centre is the frequency the recording was made at, so type the frequency it was tuned to. Several Radios can play different recordings at once; one recording can be on one Radio only. |
+| **Radio** | One device of its own - up to five in a patch, all running at once. Choose the device and its sample rate in the panel on the right and type its centre on the node. A device can be on one Radio only; the list greys out a device another Radio already has. Its **ON/OFF** switch, first on its face, closes that radio alone while the rest of the patch keeps running. A Radio can also play an **I/Q recording**: every 2-channel WAV (16-bit PCM or 32-bit float) in the recordings folder is in its device list (the patch's own speaker recordings are left out), played on a loop in real time. The recording sets the rate; the Radio's centre is the frequency the recording was made at, so type the frequency it was tuned to. Several Radios can play different recordings at once; one recording can be on one Radio only. |
 | **Channel** | One frequency out of that capture, tuned, filtered and decimated. Its frequency is typed on its face; its live level is shown above. |
 | **Demod** | AM or FM demodulation of a channel, with a **squelch**: on by default at -50 dB, its threshold on a slider and the channel's live level beside it, so a speaker or a recording hears signals rather than the noise between them. Decoders behind it still get every sample. |
 | **Speaker** | Where the demodulated channel wired to it goes: a **WAV file** (the default), an **MP3 file**, **the speakers**, or any other sound output - chosen in the panel on the right. Files go in the recordings folder, one per speaker, named after it. |

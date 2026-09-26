@@ -18,6 +18,8 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -37,12 +39,43 @@ struct RecordingInfo {
 // recordings folder, few enough that listing them never stalls a frame.
 inline constexpr std::size_t kMaxRecordingsListed = 200;
 
+// The most files ONE listing opens to read a header. The listing runs on the
+// GUI thread, and the folder it reads also collects every WAV the patch's own
+// speakers write; a file already read is remembered (RecordingProbeCache), so
+// a folder bigger than this is read over the next few openings of the list.
+inline constexpr std::size_t kMaxRecordingOpens = 64;
+
+// What a listing learned of each file, so the next one need not open it
+// again: its size and time when read, and whether it plays and at what rate.
+// Keyed by iqFileIdentity(path). `opens` counts every header read made
+// through it - how a test sees the cost.
+struct RecordingProbeCache {
+    struct Entry {
+        std::uintmax_t size = 0;
+        long long mtime = 0;
+        bool playable = false;
+        double rateHz = 0.0;
+    };
+    std::map<std::string, Entry> entries;
+    std::size_t opens = 0;
+};
+
+// Whether `fileName` is one the patch writes itself - a speaker's recording,
+// "patch-<node>-<name>_<timestamp>.wav" (core::patchFilePrefix and the stamp
+// makeWavDest adds). Those are sound, never I/Q, and are passed over by name.
+bool isPatchOutputFile(const std::string& fileName);
+
 // Every playable recording directly in each of `dirs` (not in folders below
 // them), sorted by file name and then by folder; a file in two of the folders
 // asked (or one asked twice) is listed once. Empty and missing folders are
-// skipped. At most `maxListed`.
+// skipped. At most `maxListed`, and at most `maxOpens` files opened to read a
+// header - with a `cache`, only files it has not seen at their present size
+// and time count. A file whose name cannot be converted is skipped: nothing
+// here throws.
 std::vector<RecordingInfo> listIqRecordings(const std::vector<std::string>& dirs,
-                                            std::size_t maxListed = kMaxRecordingsListed);
+                                            std::size_t maxListed = kMaxRecordingsListed,
+                                            RecordingProbeCache* cache = nullptr,
+                                            std::size_t maxOpens = kMaxRecordingOpens);
 
 // Opens the recording `key` names for a patch radio: its header read, and
 // `radioHz` given it as its centre - the node's frequency (the air frequency

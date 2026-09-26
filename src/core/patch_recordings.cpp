@@ -24,10 +24,33 @@ std::string utf8(const fs::path& p) {
 }
 
 // ".wav" in any case: recorders on Windows write ".WAV" as often as ".wav".
+//
+// COMPARED ON THE PATH'S OWN CHARACTERS, never converted. On Windows those are
+// UTF-16 units, and NTFS allows any sequence of them - an unpaired surrogate
+// included - which MSVC's u8string() answers by THROWING. The first cut
+// converted the extension of every file in the folder, and one such name
+// closed the application from a combo on the GUI thread (review of f7d1cfc).
+// ASCII folding only: ".wav" is four ASCII characters, so nothing else can
+// match it.
 bool hasWavExtension(const fs::path& p) {
-    std::string ext = utf8(p.extension());
-    for (char& c : ext) { c = static_cast<char>(std::tolower(static_cast<unsigned char>(c))); }
-    return ext == ".wav";
+    // Held by value: native() is a reference INTO the path extension() returns.
+    const fs::path extPath = p.extension();
+    const auto& ext = extPath.native();
+    static constexpr char kWav[] = ".wav";
+    if (ext.size() != 4) { return false; }
+    for (std::size_t i = 0; i < 4; ++i) {
+        auto c = ext[i];
+        if (c >= 'A' && c <= 'Z') { c = static_cast<decltype(c)>(c - 'A' + 'a'); }
+        if (c != static_cast<decltype(c)>(kWav[i])) { return false; }
+    }
+    return true;
+}
+
+// The time a file was last written, as a plain number for the cache.
+long long writeStamp(const fs::directory_entry& e) {
+    std::error_code ec;
+    const auto t = e.last_write_time(ec);
+    return ec ? 0 : static_cast<long long>(t.time_since_epoch().count());
 }
 
 // THE PATH AS IqFileSource WILL OPEN IT: a narrow string, which on Windows is
@@ -58,10 +81,26 @@ bool nameBefore(const RecordingInfo& a, const RecordingInfo& b) {
 
 }  // namespace
 
+bool isPatchOutputFile(const std::string& fileName) {
+    // "patch-" (any case - Windows names are), then the node's number, then
+    // "-": the shape core::patchFilePrefix gives every speaker's file.
+    static constexpr char kPrefix[] = "patch-";
+    constexpr std::size_t n = sizeof(kPrefix) - 1;
+    if (fileName.size() <= n) { return false; }
+    for (std::size_t i = 0; i < n; ++i) {
+        if (std::tolower(static_cast<unsigned char>(fileName[i])) != kPrefix[i]) { return false; }
+    }
+    std::size_t i = n;
+    while (i < fileName.size() && std::isdigit(static_cast<unsigned char>(fileName[i])) != 0) { ++i; }
+    return i > n && i < fileName.size() && fileName[i] == '-';
+}
+
 std::vector<RecordingInfo> listIqRecordings(const std::vector<std::string>& dirs,
-                                            std::size_t maxListed) {
+                                            std::size_t maxListed, RecordingProbeCache* cache,
+                                            std::size_t maxOpens) {
     std::vector<RecordingInfo> out;
     std::set<std::string> seen;   // iqFileIdentity of every file listed
+    std::size_t opened = 0;       // header reads THIS listing made
     for (const std::string& dir : dirs) {
         if (dir.empty()) { continue; }
         std::error_code ec;
@@ -72,23 +111,57 @@ std::vector<RecordingInfo> listIqRecordings(const std::vector<std::string>& dirs
         // frame.
         for (fs::directory_iterator it(folder, ec), end; !ec && it != end; it.increment(ec)) {
             if (out.size() >= maxListed) { break; }
-            std::error_code fec;
-            if (!it->is_regular_file(fec) || fec) { continue; }
-            const fs::path& p = it->path();
-            if (!hasWavExtension(p)) { continue; }
-            std::string path;
-            if (!narrowPath(p, path)) { continue; }
-            if (!seen.insert(iqFileIdentity(path)).second) { continue; }
-            // WHAT WILL PLAY: the header read by the very class that will
-            // play it, so a file listed here opens when the patch starts.
-            cascade::source::IqFileSource probe;
-            if (!probe.open(path)) { continue; }
-            RecordingInfo r;
-            r.path = path;
-            r.fileName = utf8(p.filename());
-            r.key = makeIqFileKey(path);
-            r.rateHz = probe.sampleRateHz();
-            out.push_back(std::move(r));
+            // AND NOTHING ELSE MAY THROW OUT OF IT EITHER: a name conversion
+            // that fails (see hasWavExtension) skips that one file.
+            try {
+                std::error_code fec;
+                if (!it->is_regular_file(fec) || fec) { continue; }
+                const fs::path& p = it->path();
+                if (!hasWavExtension(p)) { continue; }
+                std::string path;
+                if (!narrowPath(p, path)) { continue; }
+                const std::string fileName = utf8(p.filename());
+                // The patch's own speaker recordings: sound, not I/Q, and they
+                // pile up in this very folder - passed over unopened.
+                if (isPatchOutputFile(fileName)) { continue; }
+                const std::string id = iqFileIdentity(path);
+                if (seen.count(id) != 0) { continue; }
+                // WHAT WILL PLAY: the header read by the very class that will
+                // play it, so a file listed here opens when the patch starts -
+                // or what a listing before this one learned, while the file is
+                // still the size and age it was then.
+                const std::uintmax_t size = it->file_size(fec);
+                const long long stamp = writeStamp(*it);
+                RecordingProbeCache::Entry entry;
+                bool known = false;
+                if (cache != nullptr) {
+                    const auto c = cache->entries.find(id);
+                    known = c != cache->entries.end() && c->second.size == size &&
+                            c->second.mtime == stamp;
+                    if (known) { entry = c->second; }
+                }
+                if (!known) {
+                    if (opened >= maxOpens) { continue; }   // the next listing reads it
+                    ++opened;
+                    if (cache != nullptr) { ++cache->opens; }
+                    cascade::source::IqFileSource probe;
+                    entry.size = size;
+                    entry.mtime = stamp;
+                    entry.playable = probe.open(path);
+                    entry.rateHz = entry.playable ? probe.sampleRateHz() : 0.0;
+                    if (cache != nullptr) { cache->entries[id] = entry; }
+                }
+                if (!entry.playable) { continue; }
+                seen.insert(id);
+                RecordingInfo r;
+                r.path = path;
+                r.fileName = fileName;
+                r.key = makeIqFileKey(path);
+                r.rateHz = entry.rateHz;
+                out.push_back(std::move(r));
+            } catch (...) {
+                continue;
+            }
         }
     }
     std::sort(out.begin(), out.end(), nameBefore);

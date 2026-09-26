@@ -124,7 +124,13 @@ Census census(const fs::path& dir, const Layout& l, const char* windowSize) {
     const fs::path outFile = dir / (tag + ".census");
     {
         std::ofstream f(cfg);
+        // THE RECEIVER VIEW (0.99.40). FoxSDR now opens on the patch view,
+        // and this census is of the receiver's face: the spectrum, the
+        // waterfall and the STATUS COLUMN. Without this every run drew the
+        // patch view, the census listed no "status:" card at all, and the
+        // WEB ACCESS check this file exists for could no longer go red.
         f << "{ \"telemetryEnabled\": false, \"updateCheckEnabled\": false, "
+             "\"mainView\": \"receiver\", "
              "\"sourceKind\": \"siggen\", \"uiTheme\": \""
           << l.theme << "\", \"tunerDisplayStyle\": \"" << l.face
           << "\", \"counterScale\": " << l.counterScale
@@ -250,6 +256,17 @@ int main() {
         std::printf("    today: %zu parts, %zu rail sections\n", base.items.size(), sections);
         // A census that saw only the first bank would be a census of nothing.
         CHECK(sections >= 15);
+        // ...and one that drew the wrong view would be a census of the wrong
+        // thing: the receiver view, its status cards and the two view keys.
+        std::size_t cards = 0;
+        for (const std::string& s : base.items) {
+            if (s.rfind("status:", 0) == 0) { ++cards; }
+        }
+        std::printf("    today: %zu status cards\n", cards);
+        CHECK(base.items.count("view:receiver") == 1);
+        CHECK(base.items.count("view:patch") == 0);
+        CHECK(base.items.count("viewkey:0") == 1 && base.items.count("viewkey:1") == 1);
+        CHECK(cards >= 6);   // AUDIO ... WEB ACCESS, RECEIVER: the column, whole
         for (const Layout& l : presets) {
             const Census c = (&l == &presets[0]) ? base : census(dir, l, size);
             CHECK(c.ok);

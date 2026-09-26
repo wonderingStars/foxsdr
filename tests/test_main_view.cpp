@@ -11,7 +11,8 @@
  *   fresh     no view in the config: the PATCH view is drawn and the
  *             receiver's spectrum area is not, it fills the main window's
  *             work area, and nothing was started or scanned for showing it -
- *             no patch START, no SoapySDR scan, no sound card listing (the
+ *             no patch START, no SoapySDR scan, no native walk, no sound card
+ *             listing (the
  *             SoapySDR probe runs only on the user's request, see the
  *             AppWindow constructor);
  *   larger    the same at a larger window: the view grows with it;
@@ -20,7 +21,11 @@
  *   remember  that config again: the receiver view from the first frame,
  *             the patch view on none of them;
  *   back      one click on the PATCH key: the config says "patch" again -
- *             and neither switch started a device scan or a listing;
+ *             and neither switch started a device scan, a listing or the
+ *             native walk;
+ *   addradio  the control: pressing the Radio part does walk the native
+ *             radios (and nothing more), so the line the checks above look
+ *             for is really written when a walk happens;
  *   running   a patch STARTED, then the RECEIVER key: the log says the view
  *             closed while running - the path that stops every patch radio and
  *             hands the receiver its radio back, as closing the page did.
@@ -288,6 +293,11 @@ int main() {
     CHECK(!logHas(fresh, "patch: START"));
     CHECK(!logHas(fresh, "soapy: device scan started"));
     CHECK(!logHas(fresh, "sound card input(s) listed"));
+    // ...nor the native walk (review of f7d1cfc): it asks the SDRplay service
+    // for its list, and before 0.99.40 ran at launch only for a user
+    // restoring a native radio. The Radio part's press below is the control
+    // that shows this line is written when a walk does happen.
+    CHECK(!logHas(fresh, "source: listing native radios"));
     // ...and the log is really being written, or the three lines above prove
     // nothing.
     CHECK(!fresh.log.empty());
@@ -340,7 +350,21 @@ int main() {
     for (const Result* r : {&sw, &back}) {
         CHECK(!logHas(*r, "soapy: device scan started"));
         CHECK(!logHas(*r, "sound card input(s) listed"));
+        CHECK(!logHas(*r, "source: listing native radios"));
         CHECK(!r->log.empty());
+    }
+
+    // --- the control: adding a Radio IS asking for the native list ---------------
+    // Its new node starts on a free radio, so the walk happens here - which is
+    // also what shows the line above is really written when there is a walk.
+    const auto radioKey = fresh.rects.find("patchpart:0");
+    CHECK(radioKey != fresh.rects.end());
+    if (radioKey != fresh.rects.end()) {
+        const Result add = once("addradio", config(nullptr),
+                                click(20, radioKey->second.cx(), radioKey->second.cy()));
+        CHECK(add.ok);
+        CHECK(logHas(add, "source: listing native radios"));
+        CHECK(!logHas(add, "soapy: device scan started"));   // the native walk only
     }
 
     // --- running: leaving the view stops a running patch -----------------------

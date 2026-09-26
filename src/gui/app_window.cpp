@@ -9046,6 +9046,9 @@ std::unique_ptr<cascade::source::DeviceSource> AppWindow::makeDeviceSource(
 }
 
 void AppWindow::scanNative() {
+    // SAID, once per walk, so a log shows when the native radios were listed -
+    // and tests/test_main_view that showing the patch view lists none.
+    cascade::core::diagLogf("source: listing native radios");
     // NO GATE, and that is the whole point of having our own transport. All
     // six USB enumerations read SetupAPI device properties and
     // never open a device, never send a transfer, never reset anything -
@@ -13412,6 +13415,12 @@ void AppWindow::drawPatchView() {
                                   cascade::core::patch::kMaxRadios;
             ImGui::BeginDisabled(full);
             if (ImGui::Button(trId(kParts[i].label))) { pressedPart = i; }
+            {
+                // Where each key is, for a scripted press (tests/test_main_view).
+                const ImVec2 k0 = ImGui::GetItemRectMin();
+                const ImVec2 k1 = ImGui::GetItemRectMax();
+                cascade::gui::census::rect("patchpart:", i, k0.x, k0.y, k1.x, k1.y);
+            }
             ImGui::EndDisabled();
             if (full && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
                 ImGui::SetTooltip(tr("A patch has at most %zu radios."),
@@ -13520,6 +13529,9 @@ void AppWindow::drawPatchView() {
                 const Part& p = kParts[pressedPart];
                 // A new radio starts on a device nothing else is using - the
                 // receiver's own radio first - so it runs the moment it lands.
+                // The native list is read for it here (0.99.40): showing the
+                // view no longer reads it, and adding a radio is asking for one.
+                if (p.kind == cascade::core::patch::NodeKind::Radio) { scanNative(); }
                 const std::string dev = p.kind == cascade::core::patch::NodeKind::Radio
                                             ? patchDefaultDeviceKey()
                                             : std::string{};
