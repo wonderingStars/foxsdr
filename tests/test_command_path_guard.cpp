@@ -270,27 +270,9 @@ const LineAllow kLineAllowed[] = {
     // drawUi IS the frame loop's body: the command drains, the remote and
     // plugin applies, the scanner, and the per-frame machinery polls.
     {"drawUi", "drainLocalCommands();"},
-    {"drawUi", "endTakesOnFault();"},
-    {"drawUi", "pumpDecoderOutput();"},
     {"drawUi", "applyWebControls();"},
-    {"drawUi", "applyPluginApi();"},
-    {"drawUi", "scannerFrame();"},
     {"drawUi", "(void)applyCommand(q.c, q.longText);"},
-    {"drawUi", "flushBookmarkSave(false);"},
-    {"drawUi", "updateAudioMute();"},
-    {"drawUi", "pollSourceAsync();"},
-    {"drawUi", "pollSoundCard();"},
-    {"drawUi", "pollSoapyRecovery();"},
-    {"drawUi", "pollPendingRetune();"},
-    {"drawUi", "pollPluginAsync();"},
-    {"drawUi", "pumpAddAll();"},
-    {"drawUi", "pollAudioOpen();"},
-    {"drawUi", "pollAudioHealth();"},
-    {"drawUi", "pollMicOpen();"},
     // ...and the transmit key rebuilt every frame - the dead-man's handle (OPEN 1).
-    {"drawUi", "transmitter_.setLatched(key.latched);"},
-    {"drawUi", "transmitter_.setPttHeld(key.pttHeld);"},
-    {"drawUi", "transmitter_.tick();"},
     // drawPatchPage: closing the page stops the patch (OPEN 2), and the
     // patch's own radios are reconciled with the graph every frame (the patch
     // page's runtime, API gap 7).
@@ -353,8 +335,22 @@ const LineAllow kLineAllowed[] = {
     {"drawPatchPage", "patchPublishSets();"},
     // the page is open this frame
     {"drawPatchPage", "patchWasOpen_ = true;"},
-    // the one publish; the window copies the spectrum frame beside it
-    {"drawUi", "publishWebSpectrum(publishReceiverState());"},
+    // the engine's frame begins: the snapshot's retry, then the first drain
+    {"drawUi", "pumpFrameBegin();"},
+    // endTakesOnFault, then pumpDecoderOutput
+    {"drawUi", "pumpInputs();"},
+    // applyPluginApi, then scannerFrame
+    {"drawUi", "pumpPlugins();"},
+    // the bookmark save and the one publish; the window copies the spectrum frame beside it
+    {"drawUi", "publishWebSpectrum(pumpPublish());"},
+    // where the receiver is decides the mute, before anything draws
+    {"drawUi", "pumpAudioMute();"},
+    // the transmit key rebuilt every frame, then the tick - the dead-man's handle (OPEN 1)
+    {"drawUi", "pumpTransmitter(transmitPageLive_, transmitLatchPressed_, transmitPttHeld_);"},
+    // the device, sound card, recovery, retune and plugin workers collected
+    {"drawUi", "pumpWorkers();"},
+    // the audio and microphone gates, the sink health, the heartbeat
+    {"drawUi", "pumpAudio();"},
 };
 
 // --- rule 5: ImGui input ---------------------------------------------------------------

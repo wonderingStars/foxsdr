@@ -648,18 +648,6 @@ void drawTrackDetailOf(const cascade::core::HostTrack& ht,
 
 // --- Recorder / Bookmarks / Scanner constants (P6) ---------------------------
 
-// Recording destination: %USERPROFILE%/Documents/SDR-recordings per spec.
-// Computed once at construction; the directory itself is created by
-// Recorder::start on the first take, never at startup. An unset USERPROFILE
-// (deliberately stripped environment) falls back to a relative directory —
-// the same "stay writable" philosophy as ConfigStore::defaultPath's ".".
-std::string defaultRecordDir() {
-    const char* home = std::getenv("USERPROFILE");
-    if (home == nullptr || *home == '\0') { home = std::getenv("HOME"); }
-    if (home == nullptr || *home == '\0') { return "SDR-recordings"; }
-    return std::string(home) + "/Documents/SDR-recordings";
-}
-
 const char* scannerStateName(cascade::core::Scanner::State s) {
     switch (s) {
     // Drawn and nothing else (the scanner status line), so the words are
@@ -689,50 +677,15 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
       fittedDeck_(std::make_unique<FittedModulesDeck>()) {
     configPath_ = std::move(configPath);
     configAnnounce_ = announceConfig;
-    engine_.recordDir_ = defaultRecordDir();
-    // Demo signal until real sources land (P4): two tones at distinct offsets
-    // and levels over a noise floor, so both display axes are visibly
-    // exercised — frequency (two peaks left and right of center) and
-    // amplitude (different heights / waterfall colors).
-    cascade::source::SigGen& gen = engine_.pipeline_.sigGen();
-    gen.setTone(0, 300000.0, -30.0f);
-    gen.setTone(1, -500000.0, -45.0f);
-    gen.setNoiseFloorDb(-90.0f);
-    spectrum_->setRange(engine_.dbMin_, engine_.dbMax_);
-
-    // Park the VFO on demo tone 0 so the receiver is tuned to something from
-    // the first Play: WFM (the default mode) renders an unmodulated carrier
-    // as near-silence, and switching to CW yields the 700 Hz sidetone.
-    engine_.pipeline_.setVfoOffsetHz(1000.0 * static_cast<double>(engine_.vfoOffsetKhz_));
-    engine_.pipeline_.audio().setVolume(engine_.volume_);
-    // Push every P7 mirror once so the pipeline and the panels start in
-    // agreement even when no config file exists (the pipeline's own defaults
-    // match these, so this is belt and braces rather than a fix-up).
-    engine_.pipeline_.setStereoEnabled(engine_.stereoEnabled_);
-    engine_.pipeline_.setNoiseReductionEnabled(engine_.nrEnabled_);
-    engine_.pipeline_.setNoiseReductionStrength(engine_.nrStrength_);
-    engine_.pipeline_.setNotchEnabled(engine_.notchEnabled_);
-    engine_.pipeline_.setNotchFrequencyHz(static_cast<double>(engine_.notchFreqHz_));
-    engine_.pipeline_.setNotchQ(static_cast<double>(engine_.notchQ_));
-    engine_.pipeline_.setAutoNotchEnabled(engine_.autoNotch_);
-    // Optional program data / optional user code. Both are silent no-ops when
-    // their directory is absent, which is the normal case when running out of
-    // a build tree — and every bounded --frames CI run takes this path.
-    engine_.loadBandPlan();
-    engine_.rescanPlugins();
-    // The catalogue URL starts at the published default and is overwritten by
-    // a config restore if the user (or an enterprise deployment) changed it.
-    // Setting it here is NOT a fetch: nothing contacts the origin until CHECK
-    // NOW is pressed in the plugin store window.
-    engine_.pluginCatalogueUrl_ = cascade::core::AppConfig{}.pluginCatalogueUrl;
+    // THE RECEIVER'S START-UP (engine stage 3a): the recording folder, the
+    // demo signal, the pipeline mirrors, the band plan, the plugin scan, the
+    // catalogue URL's default, the audio and microphone gates and the output
+    // device list - Engine::initialise, in the order this constructor always
+    // did them. The window's own start-up follows it.
+    engine_.initialise();
+    // The store's URL box starts at the engine's default (a config restore
+    // below overwrites both).
     cascade::core::formatUtf8(pluginUrlBuf_, sizeof(pluginUrlBuf_), "%s", engine_.pluginCatalogueUrl_.c_str());
-    // DELIBERATELY no SoapySDR enumeration here. Enumeration loads vendor
-    // modules (SoapyUHD -> uhd.dll -> libusb) whose USB discovery faulted
-    // in-process in ~2% of measured `--frames 1` runs (0xC0000005 inside
-    // libusb-1.0.dll during uhd::device::find — P6a, 2026-08-15). The scan
-    // now runs only on the user's explicit request (first Source-dropdown
-    // open, or Refresh — scanSoapy()), so sessions that never touch Soapy —
-    // including every bounded --frames CI run — never execute that code.
     // Web server providers. Installed once, before any start(), because the
     // server refuses to change them while running. Both do nothing but read
     // the snapshot the GUI thread publishes each frame — see the note in
@@ -760,30 +713,12 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
         return true;
     });
 
-    // THE DEVICE OPEN IS BLOCKING WORK AND DOES NOT BELONG ON THIS THREAD.
-    // engine/audio_open.hpp carries the field report and the whole argument; the
-    // opener is Pipeline's, packaged so it can outlive this window, and the
-    // hooks are the watchdog's for the bounded wait the requesting frame
-    // spends. Bound here, before anything can ask for a device.
-    engine_.audioOpen_.bind(engine_.pipeline_.audioOpener(), [this] { watchdog_.pause(); },
-                    [this] { watchdog_.resume(); });
-    // And the microphone, for the same reason: waveInOpen has no timeout
-    // either. The opener is the Transmitter's and owns the microphone.
-    engine_.micOpen_.bind(engine_.transmitter_.microphoneOpener(), [this] { watchdog_.pause(); },
-                  [this] { watchdog_.resume(); });
-
     // THE CONFIG WRITE IS BLOCKING WORK AND DOES NOT BELONG ON THIS THREAD
     // EITHER. gui/config_writer.hpp carries the field report ("hang ntdll.dll
     // @ cascade::core::ConfigStore::save", 0.96.3) and the whole argument.
     // Unlike audioOpen_ above, no watchdog hooks: config_writer.hpp never
     // blocks the requesting frame, so there is nothing here to bracket.
     configWriter_.bind(cascade::core::ConfigStore::writeFile);
-
-    engine_.devices_ = engine_.pipeline_.audio().listOutputDevices();
-    for (int i = 0; i < static_cast<int>(engine_.devices_.size()); ++i) {
-        if (engine_.devices_[static_cast<std::size_t>(i)].isDefault) { engine_.deviceIndex_ = i; }
-    }
-    if (engine_.deviceIndex_ < 0 && !engine_.devices_.empty()) { engine_.deviceIndex_ = 0; }
 
     // --- Config restore (P5) ------------------------------------------------
     // Load semantics per ConfigStore: missing file -> defaults + true; a
@@ -831,9 +766,7 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
         // list); a damaged file surfaces its reason in red in the Bookmarks
         // section, exactly like Source errors — no stdout/stderr, so the
         // config-test diagnostic contract stays byte-identical.
-        engine_.bookmarkPath_ = cascade::core::FreqManager::defaultPath();
-        std::string bmErr;
-        if (!engine_.freqMgr_.load(engine_.bookmarkPath_, bmErr)) { engine_.bookmarkError_ = bmErr; }
+        engine_.loadBookmarks();
     }
 }
 
@@ -851,14 +784,10 @@ AppWindow::~AppWindow() {
     // reads receiverSnapshot_ through it.
     catServer_.stop();
 
-    // A catalogue fetch or a plugin download may still be in flight. The
-    // std::async futures below block in their own destructors until the
-    // worker returns, so without this an app closed mid-download would sit
-    // there, apparently hung, for as long as the transfer took. cancel() is
-    // thread-safe by contract and makes the worker fail out with "cancelled",
-    // deleting its temp file on the way — so teardown stays bounded and no
-    // partial DLL is left behind. Harmless when nothing is running.
-    engine_.pluginRepo_.cancel();
+    // A catalogue fetch or a plugin download may still be in flight: the
+    // engine cancels its own (Engine::stopTransfers says why), first, as
+    // this destructor always did.
+    engine_.stopTransfers();
 
     // The app-update download is the same problem and needs its own flag:
     // it runs through the STATIC fetch helper, which has no PluginRepo
@@ -878,64 +807,11 @@ AppWindow::~AppWindow() {
     // running after a short grace is abandoned rather than waited for.
     updateCheck_.reap();
 
-    // Same problem, no cancel to reach for: a device open may still be inside
-    // SoapySDR::Device::make(). See reapPendingDeviceOpen for the semantics.
-    engine_.reapPendingDeviceOpen();
-    // The sound card's list and open, on the same terms.
-    engine_.reapSoundCardWorkers();
-
-    // And the same problem again on the AUDIO device, which is the one that
-    // produced it: an open still inside waveOutOpen would hold ~AudioOpen's
-    // future - and therefore this destructor - for the rest of the driver
-    // call. reap() spends a short grace and then abandons the worker; it is
-    // safe to abandon because the opener holds the sink alive by shared_ptr
-    // (see Pipeline::audioOpener).
-    engine_.audioOpen_.reap();
-    // The microphone's gate, same argument: waveInOpen has no timeout either,
-    // and Transmitter::microphoneOpener owns the microphone it opens.
-    engine_.micOpen_.reap();
-
-    // The GPS reader's thread, if a read is still running when the window is
-    // destroyed without run()'s teardown (a failed backend init, a test that
-    // never entered the frame loop). Its own destructor would join too; this
-    // makes the order explicit and bounded: one port read (200 ms) while it
-    // is reading, GpsReader::kOpenAbandonWait (1 s) while it is still inside
-    // the port driver's open - after which the worker is abandoned to finish
-    // on its own, not joined, so a Bluetooth port whose puck is off cannot
-    // hold this destructor for the length of an RFCOMM connect attempt.
-    engine_.gpsReader_.stop();
-
-    // And the same again for the lazy device SCAN, which blocks in
-    // SoapySDR::Device::enumerate() and is the likelier of the two to be in
-    // flight at quit — it starts the moment the source combo is opened.
-    engine_.reapPendingSoapyScan();
-
-    // THE PLUGIN SYSTEM COMES DOWN IN ONE STATED ORDER, HERE, and not as a
-    // by-product of reverse member-declaration order.
-    //
-    // detachAndUnloadPlugins() exists because that order is the feature:
-    // detach the runner from the pipeline, destroy the decoder instances,
-    // then take the GUI half and the host services away, then unmap the
-    // modules. Every OTHER path that unloads plugins (a rescan, removing an
-    // installed plugin) calls it. This one did not - it let the members fall
-    // apart on their own, and their declaration order had pluginUi_ destroyed
-    // BEFORE pluginRunner_, which is the exact reverse. A decoder's destroy()
-    // that asks the host anything therefore reached a destroyed PluginUi and
-    // a freed host-API table: Survey Engine 0.1.0 does exactly that (it
-    // timestamps the dwell it is finishing) and it crashed on 0.96.3 with an
-    // access violation on Windows and an abort inside libc++ on Android.
-    //
-    // Idempotent: whatever it clears, the member destructors below find empty.
-    // The patch's radios first, as in run()'s teardown - idempotent too.
-    engine_.patchStopAll(false);
-    engine_.detachAndUnloadPlugins();
-
-    // Safety net (run()'s teardown already does this on the normal path):
-    // the recorder members are destroyed before pipeline_ (reverse
-    // declaration order), so any tap still installed must be uninstalled
-    // first — stop*Recording clears the pipeline pointer, then finalizes.
-    engine_.stopIqRecording();
-    engine_.stopAudioRecording();
+    // THE ENGINE'S TEARDOWN (engine stage 3a): the device, sound card, audio,
+    // microphone, GPS and scan workers reaped, the patch's radios and the
+    // plugin system brought down in their stated order, the recorders
+    // stopped - Engine::teardown, in the order this destructor always did it.
+    engine_.teardown();
 }
 
 int AppWindow::run(int frames) {
@@ -2832,13 +2708,12 @@ void AppWindow::drawUi() {
     // publish handed over through the slot - because a reader held the swap
     // lock - is installed now if no reader took it first, whether or not
     // anything changes this frame. Never waits.
-    (void)engine_.receiverSnapshot_->retryInstall();
     // THE COMMANDS THE WIDGETS SUBMITTED LAST FRAME, FIRST (engine extraction
     // stage 1: every control ends in applyCommand - see app_window.hpp). At
     // the top, before anything is drawn and before any list is walked, so a
     // command that rebuilds the plugin set or the bookmark list can never do
     // it under a loop, and everything drawn below reads the state they left.
-    engine_.drainLocalCommands();
+    engine_.pumpFrameBegin();  // Engine: the snapshot retry, then this drain
     // THE KEYBOARD, FIRST. ImGui has just finished NewFrame, so WantTextInput
     // and the popup stack are this frame's answers rather than last frame's,
     // and nothing has been submitted yet - so a key that starts the receiver,
@@ -2863,10 +2738,9 @@ void AppWindow::drawUi() {
     transmitPageLive_ = false;
     // A fault ends the takes on the first frame that sees it, before any stop
     // or start a browser or plugin queued can run below (see the header).
-    engine_.endTakesOnFault();
     // Before anything is drawn: the decoders' output is bounded in the runner
     // and must be collected whether or not the panel that shows it is open.
-    engine_.pumpDecoderOutput();
+    engine_.pumpInputs();  // Engine: endTakesOnFault, then pumpDecoderOutput
     // Same contract for the web server's view of the radio: a browser must be
     // served whether or not the settings panel is expanded, and this is the
     // only thread allowed to read the source identity (see app_window.hpp).
@@ -2879,7 +2753,6 @@ void AppWindow::drawUi() {
     // below (publishReceiverState), so it already carries this frame's
     // changes. Before updateAudioMute below, which applies a plugin's
     // set_muted.
-    engine_.applyPluginApi();
     // THE SCANNER, AFTER EVERY COMMAND OF THIS FRAME HAS LANDED (moved here
     // from the end of the frame in stage 1). Its user-wins test must see any
     // manual tune made through a widget, and a widget's tune is now applied
@@ -2887,7 +2760,7 @@ void AppWindow::drawUi() {
     // so this is the first point that sees it, exactly as the end of the
     // frame used to be. A Stop scan press is likewise applied before the
     // scanner can tick once more.
-    engine_.scannerFrame();
+    engine_.pumpPlugins();  // Engine: applyPluginApi, then scannerFrame
     if (!pendingDropPath_.empty()) {
         const std::string dropped = std::move(pendingDropPath_);
         pendingDropPath_.clear();
@@ -2897,12 +2770,11 @@ void AppWindow::drawUi() {
             cascade::core::cmd::makeText(FOXAPP_OP_BOOKMARK_IMPORT_FILE, dropped);
         (void)engine_.applyCommand(q.c, q.longText);
     }
-    engine_.flushBookmarkSave(false);
     // THE ONE RECEIVER SNAPSHOT (engine stage 2): every command of this frame
     // has landed (the drains, web/CAT, plugins, the scanner, a drop), nothing
     // has been drawn yet. The plugin host API, the web server and CAT all
     // answer from what this publishes.
-    publishWebSpectrum(engine_.publishReceiverState());
+    publishWebSpectrum(engine_.pumpPublish());  // Engine: flushBookmarkSave(false), then the publish
     publishWebAudio();
     publishWebImages();
     pumpWebTiles();
@@ -2914,7 +2786,7 @@ void AppWindow::drawUi() {
     // After applyWebControls for the same reason that call is where it is: a
     // browser's tune has already landed, so the mute follows a web tune in the
     // same frame rather than one behind it.
-    engine_.updateAudioMute();
+    engine_.pumpAudioMute();
     // Plugin windows are top-level and are drawn OUTSIDE the root window, so
     // they are movable and resizable like any other window. Drawn first so the
     // root layout below owns the remaining space.
@@ -2946,13 +2818,7 @@ void AppWindow::drawUi() {
     // page - it clears the latch itself on its failsafe, a fault and the
     // frozen-window handle, and the page writing its own copy back re-keyed
     // the radio on the very next frame (gui/transmit_page.hpp, txPageKey).
-    {
-        const cascade::gui::TxPageKey key = cascade::gui::txPageKey(
-            transmitPageLive_, engine_.transmitter_.latched(), transmitLatchPressed_, transmitPttHeld_);
-        engine_.transmitter_.setLatched(key.latched);
-        engine_.transmitter_.setPttHeld(key.pttHeld);
-    }
-    engine_.transmitter_.tick();
+    engine_.pumpTransmitter(transmitPageLive_, transmitLatchPressed_, transmitPttHeld_);
 
     // One borderless window pinned to the viewport: the app IS the layout, so
     // nothing is movable or collapsible at this level.
@@ -3158,31 +3024,17 @@ void AppWindow::drawUi() {
 
     // Apply any finished SoapySDR scan/open. Last in the frame so the result
     // lands before the next draw reads the device list.
-    engine_.pollSourceAsync();
-    // ...and a sound card's list or open, the same way (app_window_soundcard.cpp).
-    engine_.pollSoundCard();
-    // ...and, once per frame, the one automatic reopen a radio whose driver
-    // faulted gets (0.90.1). After the poll above, so a reopen that just
-    // resolved is seen before this asks whether another is due.
-    engine_.pollSoapyRecovery();
-    // Release a wheel-burst retune the coalescer held back (~50 ms pacing).
-    engine_.pollPendingRetune();
-    // Same contract for the catalogue fetch / plugin download.
-    engine_.pollPluginAsync();
-    // AFTER the poll, never before: the poll is what clears installPending_
-    // when a transfer lands, and a pump that ran first would see the slot busy
-    // and waste a frame on every module in the queue.
-    engine_.pumpAddAll();
+    // Engine::pumpWorkers: pollSourceAsync (any finished SoapySDR scan/open,
+    // last in the frame so the result lands before the next draw reads the
+    // device list), pollSoundCard, pollSoapyRecovery (after the poll, so a
+    // reopen that just resolved is seen), pollPendingRetune (a held wheel
+    // burst), pollPluginAsync and - after that poll, never before - pumpAddAll.
+    engine_.pumpWorkers();
     pollUpdateAsync();
     // And the sink: everything above this line can be working perfectly while
     // the user hears nothing. The collect comes first - the health check must
     // not judge a stream an open is still installing.
-    engine_.pollAudioOpen();
-    engine_.pollAudioHealth();
-    engine_.pollMicOpen();
-    // "Still running" beat, five-minute cadence. A no-op when reporting is
-    // off, and never blocks - see HeartbeatSender::poll.
-    engine_.telemetryHeartbeat_.poll(ImGui::GetTime());
+    engine_.pumpAudio();  // Engine: pollAudioOpen, pollAudioHealth, pollMicOpen, the heartbeat
 }
 
 namespace {
@@ -18592,58 +18444,24 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     // rectangle, every setting, every position survives. Everything below
     // reads `cfg`, the start-up state, never `saved`.
     const cascade::core::AppConfig cfg = cascade::core::startupState(saved);
-    // The device scan's UHD rule (gui::soapyDriversWithNoHardware): the switch,
-    // and the Soapy args the file named whether or not that radio opens this
-    // launch - a USRP that is switched off or unreachable today is still one
-    // the user has.
-    engine_.lookForNetworkUsrps_ = cfg.lookForNetworkUsrps;
-    engine_.startupSoapyArgs_ = cfg.soapyArgs;
-    // Panel mirrors + always-safe DSP settings first (none of these can
-    // fail; load() already range-sanitized volume/split/db*).
-    engine_.volume_ = cfg.volume;
-    engine_.pipeline_.audio().setVolume(engine_.volume_);
-    engine_.dbMin_ = cfg.dbMin;
-    engine_.dbMax_ = cfg.dbMax;
-    spectrum_->setRange(engine_.dbMin_, engine_.dbMax_);
+    // THE RECEIVER'S HALF FIRST, ALL OF IT (engine stage 3a): the device scan's
+    // rule, the DSP settings, the band plan, the transmitter's settings, the
+    // receiver position, the plugins' grants/settings/stops/presets and their
+    // rebuild, the mode, the converters, the source restore and the VFO -
+    // Engine::applyConfig, in the order they always ran. What follows is the
+    // window's own state, which nothing in the engine's half reads, so
+    // restoring it afterwards rather than interleaved changes nothing
+    // (docs/engine-stage3.md lists the one reorder that is visible from
+    // outside: the web and CAT listeners now start after the VFO restore).
+    engine_.applyConfig(cfg);
+    // THE I/Q PATH BOX (this window's edit buffer) shows the saved file
+    // whenever the saved source was a file, opened or not - both branches of
+    // the engine's file restore wrote exactly this into it when the restore
+    // lived here, and no other branch touched it.
+    if (cfg.sourceKind == "file") {
+        cascade::core::formatUtf8(iqPath_, sizeof(iqPath_), "%s", cfg.iqFilePath.c_str());
+    }
     splitRatio_ = cfg.splitRatio;
-    engine_.squelchDb_ = cfg.squelchDb;
-    engine_.pipeline_.setSquelchDb(engine_.squelchDb_);
-    // THE BIAS TEE IS SEEDED HERE, not inside the device branch below, so
-    // that a config whose saved radio does not open (unplugged, or still on
-    // its vendor driver) does not have the setting quietly rewritten to false
-    // by the next save. adoptDeviceMirrors is what applies it to a radio that
-    // does open - every one of these drivers switches the bias tee off during
-    // open(), so it has to be re-applied afterwards or a mast-head amplifier
-    // goes dark on every launch. It is PER RADIO (engine/bias_tee.hpp,
-    // BiasTeePanel::remembered): each radio gets back only its own.
-    engine_.biasTeePanel_.remembered = cfg.biasTee;
-    // THE PLUTO'S ADDRESS IS SEEDED HERE TOO, and it has to be before the
-    // scanNative() further down: that is what builds the Pluto's row, the
-    // row's args are "uri=" plus this box, and the restore below finds the
-    // row to point the combo at by comparing args. Seeded from the config
-    // even when the saved source is something else entirely, because the box
-    // is the user's own typing and belongs to them, not to the session that
-    // happened to open a radio.
-    cascade::core::formatUtf8(engine_.plutoUri_, sizeof(engine_.plutoUri_), "%s", cfg.plutoUri.c_str());
-
-    // P7 settings. All are pure DSP switches with no failure mode, and the
-    // loader has already clamped every one of them into range.
-    engine_.deemphIndex_ = cfg.deemphasisIndex;
-    engine_.pipeline_.setDeemphasisUs(kDeemphUs[engine_.deemphIndex_]);
-    engine_.stereoEnabled_ = cfg.stereoEnabled;
-    engine_.pipeline_.setStereoEnabled(engine_.stereoEnabled_);
-    engine_.nrEnabled_ = cfg.nrEnabled;
-    engine_.nrStrength_ = cfg.nrStrength;
-    engine_.pipeline_.setNoiseReductionStrength(engine_.nrStrength_);
-    engine_.pipeline_.setNoiseReductionEnabled(engine_.nrEnabled_);
-    engine_.notchFreqHz_ = static_cast<float>(cfg.notchFreqHz);
-    engine_.notchQ_ = static_cast<float>(cfg.notchQ);
-    engine_.pipeline_.setNotchFrequencyHz(cfg.notchFreqHz);
-    engine_.pipeline_.setNotchQ(cfg.notchQ);
-    engine_.notchEnabled_ = cfg.notchEnabled;
-    engine_.pipeline_.setNotchEnabled(engine_.notchEnabled_);
-    engine_.autoNotch_ = cfg.autoNotch;
-    engine_.pipeline_.setAutoNotchEnabled(engine_.autoNotch_);
     bandPlanOverlay_ = cfg.bandPlanOverlay;
     // THE PATCH. Loaded through patch_io::parse, which offers every wire
     // to connect() rather than trusting the file - so a hand-edited or
@@ -18668,14 +18486,6 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     }
     bandPlanSizeIndex_ = bandPlanSizeIndexFromKey(cfg.bandPlanSize);
     bandPlanPaletteIndex_ = bandPlanPaletteIndexFromKey(cfg.bandPlanPalette);
-    // applyConfig runs AFTER the startup loadBandPlan(), so a restored
-    // selection that differs from the default has to re-load or the user's
-    // chosen region silently reverts to "world" on every launch. Guarded on
-    // change so the common case does not parse the directory twice.
-    if (engine_.bandPlanSelection_ != cfg.bandPlanSelection) {
-        engine_.bandPlanSelection_ = cfg.bandPlanSelection;
-        engine_.loadBandPlan();
-    }
     // Language and country: the language is applied before the next frame
     // (applyPendingLanguage), never here; the country only remembered - its
     // band plan was applied when it was chosen and is already in the line above.
@@ -18727,24 +18537,6 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     demodScope_.gainIndex = clampScopeGain(cfg.demodScopeGain);
     demodScope_.autoGain = cfg.demodScopeAutoGain;
     demodScope_.display = cascade::gui::clampScopeDisplay(cfg.demodScopeDisplay);
-    // THE TRANSMITTER'S SETTINGS, AND NOT ITS KEY. Everything restored here
-    // is HOW it would transmit; nothing restored here can MAKE it transmit,
-    // and there is nothing in AppConfig that could (core/config.hpp says why
-    // at length). transmitOpen_ is cleared by startupState() before this runs
-    // on a launch, so the page records what was showing at the last exit and
-    // opens nothing by itself.
-    engine_.transmitOpen_ = cfg.transmitOpen;
-    engine_.transmitModeIndex_ = static_cast<int>(cascade::dsp::txModeFromIndex(cfg.transmitMode));
-    engine_.transmitInputIndex_ = static_cast<int>(cascade::core::txInputFromIndex(cfg.transmitInput));
-    engine_.transmitPowerDb_ = cfg.transmitPowerDb;
-    engine_.transmitSplit_ = cfg.transmitSplit;
-    engine_.transmitSplitHz_ = cfg.transmitSplitHz;
-    engine_.transmitToneHz_ = cfg.transmitToneHz;
-    engine_.transmitMonitor_ = cfg.transmitMonitor;
-    engine_.transmitArgs_ = cfg.transmitArgs;
-    engine_.transmitter_.setMode(cascade::dsp::txModeFromIndex(engine_.transmitModeIndex_));
-    engine_.transmitter_.setInput(cascade::core::txInputFromIndex(engine_.transmitInputIndex_));
-    engine_.transmitter_.setToneHz(engine_.transmitToneHz_);
     // The rail opens on the bank it was left on. Clamped again here even
     // though load() already did: this is the value a widget indexes with.
     railBank_ = static_cast<int>(cascade::gui::railBankFromIndex(cfg.railBank));
@@ -18777,9 +18569,6 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     // re-typed every launch is a position those columns could not rely on.
     // The sanitizer has already discarded anything out of range, so an unset
     // flag here means genuinely unset.
-    engine_.rxSet_ = cfg.rxPositionSet;
-    engine_.rxLat_ = cfg.rxLatDeg;
-    engine_.rxLon_ = cfg.rxLonDeg;
     rxLatInput_ = engine_.rxLat_;
     rxLonInput_ = engine_.rxLon_;
     // The GPS port and baud the user chose last time, already sanitised by
@@ -18795,14 +18584,8 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
             pg.view->setHome(engine_.rxLat_, engine_.rxLon_);
         }
     }
-
-    // The plugin store. Restoring the URL does NOT start a fetch - see
-    // AppConfig::pluginCatalogueUrl. The catalogue is read only when the
-    // user opens the store (once a session) or presses CHECK NOW. The
-    // window's open flag arrives cleared (startupState): the store opens
-    // from its rail key, never by itself - which is what keeps its
-    // first-open read from ever being a startup fetch.
-    engine_.pluginCatalogueUrl_ = cfg.pluginCatalogueUrl;
+    // The store's URL box shows the restored URL (Engine::applyConfig says
+    // why restoring it starts no fetch).
     cascade::core::formatUtf8(pluginUrlBuf_, sizeof(pluginUrlBuf_), "%s", engine_.pluginCatalogueUrl_.c_str());
     pluginBrowseOpen_ = cfg.pluginBrowserOpen;
     // The fitted modules window: its rectangle is restored, its open flag
@@ -18813,303 +18596,6 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     fittedWinY_ = cfg.fittedModulesY;
     fittedWinW_ = cfg.fittedModulesWidth;
     fittedWinH_ = cfg.fittedModulesHeight;
-    // Restored purely so it can be saved back unchanged when the user never
-    // browses this session. Nothing reads it to decide whether to fetch.
-    engine_.pluginLastUpdateCheck_ = cfg.pluginLastUpdateCheck;
-    // Tune grants are pushed into PluginUi immediately, not just stored: the
-    // plugin scan already ran in the constructor, so a tracker created during
-    // it may call request_tune on its very first poll — before any rebuild
-    // would have re-applied them.
-    engine_.pluginTuneAllowed_ = cfg.pluginTuneAllowed;
-    engine_.applyPluginTuneGrants();
-    // Host API level 1: the settings grant, and the plugins' own settings -
-    // loaded into the live store BEFORE the refreshPluginRunner below
-    // re-attaches every plugin, so a plugin reading its settings from
-    // attach() finds them there.
-    engine_.pluginSettingsAllowed_ = cfg.pluginSettingsAllowed;
-    engine_.applyPluginSettingsGrants();
-    engine_.pluginSettings_ = cfg.pluginSettings;
-    engine_.pluginUi_.api().loadSettings(engine_.pluginSettings_);
-    engine_.pluginSettingsGen_ = engine_.pluginUi_.api().settingsGeneration();
-    // STOPS ARE APPLIED, not merely stored, for a stronger version of the same
-    // reason: the scan in the constructor has already built every plugin's
-    // instances against the default source, so a plugin the user stopped last
-    // session is running right now. refreshPluginRunner tears that set down and
-    // rebuilds it without the stopped ones, which is also what the restored
-    // source needs; doing it here means a stopped plugin never survives a
-    // launch even for a frame.
-    engine_.pluginsStopped_ = cfg.pluginsStopped;
-    // AppConfig::closedWindows is no longer applied. Until 0.79.1 every plugin
-    // window appeared by itself and this list kept the ones the user had shut
-    // from coming back; now no plugin window appears until the user opens it
-    // from its row, so there is nothing for the list to hold back. It is
-    // still read and written so older builds and this one agree on the file.
-    // BEFORE the rebuild, because refreshPluginRunner is what rebuilds the
-    // mute snapshot the overrides are baked into. Restored after the stops for
-    // the same reason they are restored at all: a decoder the user silenced
-    // last session must not come back audible for the seconds it takes them to
-    // find the checkbox again.
-    engine_.pluginMuteOverride_ = cfg.pluginMuteOverride;
-    // The user's own presets, before the same rebuild: they are baked into
-    // the preset snapshot (rebuildMuteStates) the bars and the mute read.
-    engine_.userPresets_ = cfg.userPresets;
-    engine_.refreshPluginRunner();
-
-    for (int i = 0; i < 8; ++i) {
-        if (cfg.mode == kModeNames[i]) {
-            engine_.modeIndex_ = i;
-            engine_.pipeline_.setDemodMode(kModeMap[i]);
-            break;  // an unknown mode name keeps the construction default
-        }
-    }
-
-    // THE CONVERTERS, BEFORE ANY SOURCE IS RESTORED: cfg.centerHz is the AIR
-    // frequency the last session was on, and the radio below is told it
-    // through its own converter (radioHzForSource / applyConverterForSource).
-    // A sound card's converter written under its full ALSA name (before the
-    // identity key) is moved to the key it is looked up by now
-    // (gui::soundCardConverterKey); nothing else is touched.
-    engine_.converters_ = cascade::gui::migrateSoundCardConverterKeys(cascade::core::sanitiseConverters(cfg.converters));
-
-    // Source restore. The generator is always safe (it is already active);
-    // a file is restored only if the path still opens; a Soapy device only
-    // if its args re-open. Any failure falls back to the generator silently
-    // except for lastError shown once in the Source section (sourceError_).
-    //
-    // The sound card's settings come back whatever the source is, so the row
-    // shows what was set up last time (the same rule as the I/Q file's path).
-    engine_.soundCard_ = cascade::gui::soundCardFromConfig(cfg.soundCard);
-    if (cfg.sourceKind == "soundcard") {
-        // ON A WORKER, like every other sound card open: the first frame is
-        // drawn on the generator and the card replaces it when it answers
-        // (app_window_soundcard.cpp). Until then - and for the rest of the
-        // session if it never does - the config goes on naming it; the combo
-        // names it too only once the open has actually failed.
-        engine_.restoreKeep_ = cascade::gui::rememberedSourceAfterFailedOpen(
-            cfg.sourceKind, cfg.soapyArgs, cfg.nativeArgs, cfg.iqFilePath, cfg.sampleRateHz);
-        engine_.soundCardRemembered_ = engine_.soundCard_;  // the card the config names, whatever the section becomes
-        engine_.restoreKeepLabel_.clear();
-        engine_.sourceSel_ = kSoundCardRow;
-        engine_.launchSoundCardOpen(/*restore=*/true, engine_.soundCard_);
-        cascade::core::diagLogf("source: restoring the sound card %s (%s)", engine_.soundCard_.device.c_str(),
-                                engine_.soundCard_.hostApi.c_str());
-    } else if (cfg.sourceKind == "file") {
-        auto file = std::make_unique<cascade::source::IqFileSource>();
-        if (file->open(cfg.iqFilePath)) {
-            const double fileRadioHz = engine_.radioHzForSource("file", std::string(), cfg.centerHz);
-            if (fileRadioHz >= 0.0) { file->setCenterFrequencyHz(fileRadioHz); }
-            cascade::core::formatUtf8(iqPath_, sizeof(iqPath_), "%s", cfg.iqFilePath.c_str());
-            engine_.iqOpenPath_ = cfg.iqFilePath;
-            // No open can be in flight during the startup restore, but the
-            // counter's contract is "every install bumps it" — an invariant
-            // with an exception in it is one nobody can rely on later.
-            ++engine_.sourceGen_;
-            engine_.installSource(std::move(file));
-            engine_.sourceKind_ = "file";
-            engine_.applyConverterForSource();
-            engine_.sourceSel_ = 1;
-            engine_.followInputRate();
-            cascade::core::diagLogf("source: restored an I/Q file at %.0f S/s",
-                                    engine_.pipeline_.activeSource().sampleRateHz());
-        } else {
-            engine_.sourceError_ = file->lastError();
-            // THE FACT, NEVER THE PATH - and the reason is five lines up in the
-            // Open handler: a file name is the user's own data. The source's
-            // error string is "cannot open file: <full absolute path>", and
-            // this line goes to the ring, which means it goes into every crash
-            // report, every hang report and the Copy diagnostics bundle. The
-            // full text stays in sourceError_, which is shown on screen to the
-            // person who already knows what they opened.
-            cascade::core::diagWarnf("source: the saved I/Q file did not reopen");
-
-            // ...AND THE CONFIG GOES ON NAMING IT, exactly as it does for a
-            // radio that did not reopen (see the device branch below). A
-            // recording goes missing the same ways a dongle does - an
-            // external drive unplugged, a folder renamed, the capture moved -
-            // and until 0.94.1 this branch left iqOpenPath_ empty, so the
-            // exit save wrote sourceKind "siggen" with iqFilePath BLANK: one
-            // session with the drive out and FoxSDR could not even say which
-            // file it had been playing. The saved path is remembered instead,
-            // and the box is filled in with it so the user can plug the drive
-            // back in and press Open without typing it again.
-            engine_.restoreKeep_ = cascade::gui::rememberedSourceAfterFailedOpen(
-                cfg.sourceKind, cfg.soapyArgs, cfg.nativeArgs, cfg.iqFilePath, cfg.sampleRateHz);
-            cascade::core::formatUtf8(iqPath_, sizeof(iqPath_), "%s", cfg.iqFilePath.c_str());
-            // WHAT THE SOURCE SECTION CALLS IT: the file's own name, not the
-            // whole path, because the preview it goes into is one combo wide
-            // and a recording lives several folders deep. Never logged - the
-            // rule above is about the ring, and this string only ever reaches
-            // the screen of the person who chose the file.
-            engine_.restoreKeepLabel_ = cascade::gui::fileNameOf(cfg.iqFilePath);
-            // Nothing is ticked in the dropdown, for the same reason the
-            // device branch gives: the generator is not what the user chose.
-            engine_.sourceSel_ = -1;
-        }
-    } else if ((cfg.sourceKind == "soapy" && !cfg.soapyArgs.empty()) ||
-               (isNativeSourceKind(cfg.sourceKind) && !cfg.nativeArgs.empty())) {
-        // The native list has to exist before the rule below can read it, and
-        // nothing has drawn a frame yet. It costs a SetupAPI walk and opens
-        // nothing (scanNative), so it is safe here where the Soapy scan
-        // deliberately is not.
-        engine_.scanNative();
-        std::string kind = cfg.sourceKind;
-        std::string args = (kind == "soapy") ? cfg.soapyArgs : cfg.nativeArgs;
-        std::string fallbackSoapyArgs;
-
-        // PREFER THE NATIVE DRIVER, AUTOMATICALLY, AND SAY SO. A config
-        // written before 0.91.0 says "soapy, driver=rtlsdr" because that was
-        // the only way to reach the dongle; the user is not going to reopen
-        // the Source section to switch over, and should not have to. See
-        // gui::preferNativeFor for what "the same dongle" means and why a
-        // saved serial has to match.
-        if (const std::optional<cascade::source::NativeDeviceInfo> nat =
-                cascade::gui::preferNativeFor(cfg.sourceKind, cfg.soapyArgs, engine_.nativeDevices_)) {
-            cascade::core::diagLogf(
-                "source: opening %s natively (was SoapySDR %s)",
-                modelFromNativeLabel(nat->label).c_str(),
-                cascade::core::sanitiseDevice(cfg.soapyArgs).c_str());
-            fallbackSoapyArgs = cfg.soapyArgs;
-            kind = nat->driver;
-            args = nat->args;
-        }
-
-        // Seeded BEFORE the open, because openDeviceSync applies it as part of
-        // bringing the device up - the port has to be right from the first
-        // sample, not corrected afterwards.
-        engine_.deviceAntenna_ = cfg.soapyAntenna;
-        auto dev = engine_.openDeviceSync(kind, args, cfg.sampleRateHz);
-        if (!dev && !fallbackSoapyArgs.empty() &&
-            cascade::gui::nativeOpenShouldFallBack(engine_.sourceError_)) {
-            // The dongle is one whose tuner the native driver does not
-            // support (E4000, FC0012/13). It opened perfectly well through
-            // SoapySDR before this release and must go on doing so.
-            cascade::core::diagWarnf(
-                "source: the native %s driver refused the saved radio (%s); opening it "
-                "through SoapySDR instead",
-                kind.c_str(), engine_.sourceError_.c_str());
-            const std::string nativeKey = cascade::core::converterRadioKey(kind, args);
-            kind = "soapy";
-            args = fallbackSoapyArgs;
-            dev = engine_.openDeviceSync(kind, args, cfg.sampleRateHz);
-            // The radio the user chose, reached another way: its converter
-            // comes with it (before the saved frequency is converted below).
-            if (dev) { engine_.noteConverterFallback(nativeKey, cascade::core::converterRadioKey(kind, args)); }
-        }
-        if (dev) {
-            // The saved AIR frequency, told to the radio through the
-            // converter remembered for it (the radio has not been installed
-            // yet, so the pipeline's view cannot do it here).
-            // A frequency the converter cannot deliver (0 Hz or below at the
-            // radio) is not sent at all; the radio stays at its own default.
-            const double radioHz = engine_.radioHzForSource(kind, args, cfg.centerHz);
-            if (radioHz > 0.0 || !cascade::core::converterActive(engine_.converterForKey(
-                                     cascade::core::converterRadioKey(kind, args)))) {
-                dev->setCenterFrequencyHz(radioHz);
-            }
-            engine_.device_ = dev.get();
-            engine_.soapyView_ = dynamic_cast<cascade::source::SoapySource*>(engine_.device_);
-            engine_.deviceArgs_ = args;
-            engine_.deviceModel_ = (kind == "soapy") ? cascade::core::sanitiseDevice(args)
-                                             : modelFromNativeLabel(engine_.nativeLabelFor(kind, args));
-            if (kind == "soapy") {
-                engine_.cfgSoapyArgs_ = args;
-                engine_.cfgNativeArgs_ = cfg.nativeArgs;
-            } else {
-                engine_.cfgNativeArgs_ = args;
-                // THE SOAPY ARGS ARE KEPT even though a native driver is what
-                // opened: they are what the prefer-native rule reads on the
-                // NEXT launch, and throwing them away would make the first
-                // native session the last one that could ever fall back.
-                engine_.cfgSoapyArgs_ = cfg.soapyArgs;
-            }
-            ++engine_.sourceGen_;  // same invariant as the file branch above
-            engine_.installSource(std::move(dev));
-            engine_.sourceKind_ = kind;
-            engine_.applyConverterForSource();
-            // Point the combo at the restored device if this machine still
-            // enumerates it; -1 otherwise (preview falls back to live name).
-            engine_.sourceSel_ = -1;
-            if (kind == "soapy") {
-                for (std::size_t i = 0; i < engine_.soapyDevices_.size(); ++i) {
-                    if (engine_.soapyDevices_[i].args == args) {
-                        engine_.sourceSel_ = engine_.soapyRowBase() + static_cast<int>(i);
-                    }
-                }
-            } else {
-                for (std::size_t i = 0; i < engine_.nativeDevices_.size(); ++i) {
-                    if (engine_.nativeDevices_[i].args == args) {
-                        engine_.sourceSel_ = kNativeRowBase + static_cast<int>(i);
-                    }
-                }
-            }
-            engine_.followInputRate();
-            cascade::core::diagLogf("source: restored %s (%s) at %.0f S/s",
-                                    engine_.deviceModel_.c_str(), kind.c_str(),
-                                    engine_.pipeline_.activeSource().sampleRateHz());
-        } else {
-            // openDeviceSync already set sourceError_. A radio that was there last
-            // session and is not there now is the single most common support
-            // question this product gets - but the driver's own message quotes
-            // the device ARGUMENTS back, and those carry the serial number.
-            // Same rule as the line above and as every other place these
-            // strings are recorded: the sanitised model, never the raw args.
-            //
-            // THE MODEL OF THE RADIO THAT WAS TRIED (0.99.36). This used to
-            // print cfg.soapyArgs, which is empty for every native radio, so
-            // the field logs read "the saved radio (, sdrplay) did not
-            // reopen" and named nothing.
-            std::string triedModel = (kind == "soapy")
-                                         ? cascade::core::sanitiseDevice(args)
-                                         : modelFromNativeLabel(engine_.nativeLabelFor(kind, args));
-            if (triedModel.empty() || triedModel == args) { triedModel = kind; }
-            cascade::core::diagWarnf(
-                "source: the saved radio (%s, %s) did not reopen - the receiver is on the signal "
-                "generator and the radio stays saved",
-                triedModel.c_str(), kind.c_str());
-
-            // ...AND THE CONFIG GOES ON NAMING IT. The session runs on the
-            // generator above, which is right - it has to run on something -
-            // but the exit save reads sourceKind_ and the cfg*Args_ mirrors,
-            // and those describe the generator. Before this, ONE session with
-            // the dongle unplugged, held by another program, or held by a
-            // second copy of FoxSDR (the report that found this) wrote back
-            // "siggen" with both args slots empty and the radio was gone for
-            // good. The SAVED values are remembered here, unchanged, so the
-            // next start tries exactly what this one tried. See
-            // gui::rememberedSourceAfterFailedOpen and gui::sourceToSave.
-            engine_.restoreKeep_ = cascade::gui::rememberedSourceAfterFailedOpen(
-                cfg.sourceKind, cfg.soapyArgs, cfg.nativeArgs, cfg.iqFilePath, cfg.sampleRateHz);
-
-            // WHAT THE SOURCE SECTION CALLS IT. The enumerated label is the
-            // best name when this machine can still see the radio (in use by
-            // another program is exactly that case); when it cannot,
-            // nativeLabelFor hands back the args verbatim, which for a native
-            // device is nothing but a serial - so the driver key is used
-            // instead. Not a privacy rule like the log line above, because
-            // this string never leaves the screen; it is simply not a name.
-            std::string label = (kind == "soapy") ? cascade::core::sanitiseDevice(args)
-                                                  : modelFromNativeLabel(engine_.nativeLabelFor(kind, args));
-            if (label.empty() || label == args) { label = kind; }
-            engine_.restoreKeepLabel_ = label;
-            // Which radio, why, and where the receiver is - the driver's own
-            // reason is kept verbatim inside the sentence (0.99.36).
-            engine_.sourceError_ = cascade::gui::radioNotOpenedSentence(label, engine_.sourceError_);
-            // NOTHING IS TICKED IN THE DROPDOWN. -1 is the same "the live
-            // source is not one of these rows" the Refresh path uses; the
-            // preview names the saved radio instead, so the generator is
-            // never shown as though the user had picked it.
-            engine_.sourceSel_ = -1;
-        }
-    }
-    if (engine_.sourceKind_ == "siggen") {
-        // Generator kept (or fallen back to): carry the saved center so the
-        // readout matches the last session. Nominal-center set cannot fail -
-        // unless the user set a converter on the generator that cannot
-        // deliver that air frequency, which then leaves the nominal alone.
-        engine_.applyConverterForSource();
-        engine_.pipeline_.activeSource().setCenterFrequencyHz(cfg.centerHz);
-    }
-
     // Web server. Applied LAST in the restore so the snapshot the providers
     // publish is assembled from a fully restored radio; applyWebSettings is
     // what decides whether anything actually listens, and it refuses on its
@@ -19130,21 +18616,6 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     catBindAll_ = cfg.catBindAll;
     catPortMirror_ = cfg.catPort;
     refreshCatServer();
-
-    // VFO after the source/rate restore so the clamps use the REAL rates the
-    // chain ended up with, not whatever the file claimed.
-    const double bwHi = kVfoBwMaxChanFrac * engine_.pipeline_.channelRateHz();
-    engine_.vfoBandwidthHz_ = std::max(kVfoBwMinHz, std::min(cfg.bandwidthHz, bwHi));
-    engine_.pipeline_.setVfoBandwidthHz(engine_.vfoBandwidthHz_);
-    // The combo's tick, and -1 for a saved bandwidth that is none of the steps
-    // - a config written while a plugin preset had the VFO at its own width.
-    // The combo letters vfoBandwidthHz_ itself either way.
-    engine_.bandwidthIndex_ = bandwidthStepIndex(engine_.vfoBandwidthHz_);
-    double off = cfg.vfoOffsetHz;
-    const double lim = 0.5 * engine_.pipeline_.inputRateHz() - 0.5 * engine_.vfoBandwidthHz_;
-    off = (lim > 0.0) ? std::clamp(off, -lim, lim) : 0.0;
-    engine_.pipeline_.setVfoOffsetHz(off);
-    engine_.vfoOffsetKhz_ = static_cast<float>(off / 1000.0);
 }
 
 void AppWindow::crashUploadStart() {
@@ -19189,100 +18660,14 @@ void AppWindow::crashUploadFinish() {
 
 cascade::core::AppConfig AppWindow::currentConfig() {
     cascade::core::AppConfig cfg;
-    // WHICH SOURCE THE FILE NAMES, which is not always the one that is
-    // running: a restore that could not open the saved radio leaves the
-    // generator installed and the radio remembered, and the radio is what
-    // goes back into the file. Everything else - a clean restore, any
-    // deliberate switch - is the live source, exactly as before.
+    // THE RECEIVER'S HALF (engine stage 3a): the source to save, every radio,
+    // DSP, plugin and transmitter setting, and the usage report's journal -
+    // Engine::fillConfig. Every field is written by exactly one half, so the
+    // order of the halves is immaterial.
+    engine_.fillConfig(cfg);
     cfg.patch = patchText_;
-    // WHILE THE PATCH PAGE HOLDS THE RECEIVER'S RADIO (0.99.17) the receiver
-    // runs on the generator only because the page borrowed its radio, so the
-    // radio is what is saved - the same rule as a restore that could not
-    // open it, applied here rather than by borrowing that state, which would
-    // also relabel the Source panel.
-    cascade::gui::RememberedSource keep = engine_.restoreKeep_;
-    if (engine_.patchMainKeep_.valid) {
-        keep = cascade::gui::RememberedSource{};
-        keep.kind = engine_.patchMainKeep_.kind;
-        if (engine_.patchMainKeep_.kind == "soapy") {
-            keep.soapyArgs = engine_.patchMainKeep_.args;
-            keep.nativeArgs = engine_.cfgNativeArgs_;
-        } else if (engine_.patchMainKeep_.kind == "soundcard") {
-            // A lent sound card is named by cfg.soundCard (below, the card as
-            // it was lent - patchMainKeep_.card); both radio slots keep what
-            // they had.
-            keep.soapyArgs = engine_.cfgSoapyArgs_;
-            keep.nativeArgs = engine_.cfgNativeArgs_;
-        } else {
-            keep.nativeArgs = engine_.patchMainKeep_.args;
-            keep.soapyArgs = engine_.cfgSoapyArgs_;
-        }
-        keep.sampleRateHz = engine_.patchMainKeep_.rateHz;
-    }
-    const cascade::gui::SavedSource src = cascade::gui::sourceToSave(
-        engine_.sourceKind_, engine_.cfgSoapyArgs_, engine_.cfgNativeArgs_, engine_.iqOpenPath_,
-        engine_.pipeline_.activeSource().sampleRateHz(), keep);
-    cfg.sourceKind = src.kind;
-    cfg.soapyAntenna = engine_.deviceAntenna_;
-    // ONE SLOT PER FAMILY, and BOTH are written on every save - not just the
-    // one belonging to whatever is open. The Soapy args of a radio now being
-    // driven natively are what the prefer-native rule reads on the next
-    // launch and what the tuner fallback needs; dropping them the moment the
-    // native driver takes over would make the first native session the last
-    // one that could ever fall back. See AppConfig::nativeArgs.
-    cfg.soapyArgs = src.soapyArgs;
-    cfg.nativeArgs = src.nativeArgs;
-    cfg.lookForNetworkUsrps = engine_.lookForNetworkUsrps_;
-    cfg.biasTee = engine_.biasTeePanel_.remembered;
-    // Every radio's converter, including those not open now: a converter is
-    // part of how that radio is cabled, and must survive a session without it.
-    cfg.converters = engine_.converters_;
-    // WHAT IS IN THE BOX, not what opened. A Pluto that is on the bench has
-    // its address in nativeArgs as well; this field is the typing, and it has
-    // to survive a launch in which the board never answered so it can be
-    // corrected next time rather than retyped from nothing.
-    cfg.plutoUri = engine_.plutoUri_;
-    // THE FILE THIS SESSION PLAYED, or the one it could not find. Normally
-    // iqOpenPath_, which is the last recording that actually opened; when the
-    // saved source was a file and the restore could not open it, the same
-    // decision that keeps a missing radio in the config keeps the path (see
-    // gui::sourceToSave). Before that, one session with the drive unplugged
-    // wrote this out EMPTY - the path box came back blank on the next start
-    // and nothing anywhere said which file had gone.
-    cfg.iqFilePath = src.filePath;
-    // THE SOUND CARD THAT RAN, never the Source section's unopened edits: the
-    // next launch opens exactly what is written here. The running card; the
-    // card the patch page has borrowed; the card a failed restore, a re-Open's
-    // release or a hand-back left remembered; and only when there is none of
-    // those, the section's settings - the card as last set up
-    // (gui::soundCardToSave).
-    cfg.soundCard = cascade::gui::soundCardToConfig(cascade::gui::soundCardToSave(
-        engine_.sourceKind_, engine_.soundCardLive_, engine_.patchMainKeep_.valid && engine_.patchMainKeep_.kind == "soundcard",
-        engine_.patchMainKeep_.card, engine_.restoreKeep_.kind == "soundcard", engine_.soundCardRemembered_, engine_.soundCard_));
-    cfg.centerHz = engine_.pipeline_.activeSource().centerFrequencyHz();
-    cfg.mode = kModeNames[engine_.modeIndex_];
-    cfg.bandwidthHz = engine_.vfoBandwidthHz_;
-    cfg.squelchDb = engine_.squelchDb_;
-    cfg.volume = engine_.volume_;
-    cfg.dbMin = engine_.dbMin_;
-    cfg.dbMax = engine_.dbMax_;
     cfg.splitRatio = splitRatio_;
-    cfg.vfoOffsetHz = engine_.pipeline_.vfoOffsetHz();
-    // The live rate, EXCEPT when the source being saved is a remembered radio
-    // rather than the generator standing in for it: the generator's fixed
-    // 2 MS/s is not a rate the user ever chose for their receiver, and it is
-    // the number the next start would hand to the driver's open().
-    cfg.sampleRateHz = src.sampleRateHz;
-    cfg.stereoEnabled = engine_.stereoEnabled_;
-    cfg.deemphasisIndex = engine_.deemphIndex_;
-    cfg.nrEnabled = engine_.nrEnabled_;
-    cfg.nrStrength = engine_.nrStrength_;
-    cfg.notchEnabled = engine_.notchEnabled_;
-    cfg.notchFreqHz = static_cast<double>(engine_.notchFreqHz_);
-    cfg.notchQ = static_cast<double>(engine_.notchQ_);
-    cfg.autoNotch = engine_.autoNotch_;
     cfg.bandPlanOverlay = bandPlanOverlay_;
-    cfg.bandPlanSelection = engine_.bandPlanSelection_;
     cfg.language = languageSetting_;  // as chosen: never FOXSDR_LANGUAGE
     cfg.country = countrySetting_;
     cfg.bandPlanSize = kBandPlanSizeKeys[std::clamp(bandPlanSizeIndex_, 0, 2)];
@@ -19305,18 +18690,6 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.demodScopeGain = demodScope_.gainIndex;
     cfg.demodScopeAutoGain = demodScope_.autoGain;
     cfg.demodScopeDisplay = demodScope_.display;
-    cfg.transmitOpen = engine_.transmitOpen_;
-    cfg.transmitMode = engine_.transmitModeIndex_;
-    cfg.transmitInput = engine_.transmitInputIndex_;
-    cfg.transmitPowerDb = engine_.transmitPowerDb_;
-    cfg.transmitSplit = engine_.transmitSplit_;
-    cfg.transmitSplitHz = engine_.transmitSplitHz_;
-    cfg.transmitToneHz = engine_.transmitToneHz_;
-    cfg.transmitMonitor = engine_.transmitMonitor_;
-    cfg.transmitArgs = engine_.transmitArgs_;
-    // AND NOTHING FOR THE KEY: transmitPttHeld_, transmitLatchPressed_ and
-    // the transmitter's latch are not written, because AppConfig has nowhere
-    // to put them and must not grow one. A saved key is a radio that comes up transmitting.
     cfg.railBank = railBank_;
     // Only the keys that DIFFER from the shipped table, so a user who never
     // rebound anything writes nothing and still gets a later build's improved
@@ -19332,30 +18705,14 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.mapWindowHeight = mapWinH_;
     cfg.mapWindowX = mapWinX_;
     cfg.mapWindowY = mapWinY_;
-    cfg.rxPositionSet = engine_.rxSet_;
-    cfg.rxLatDeg = engine_.rxLat_;
-    cfg.rxLonDeg = engine_.rxLon_;
     cfg.gpsPort = gpsPort_;
     cfg.gpsBaud = gpsBaud_;
-    cfg.pluginCatalogueUrl = engine_.pluginCatalogueUrl_;
     cfg.pluginBrowserOpen = pluginBrowseOpen_;
     cfg.fittedModulesOpen = fittedWindowOpen_;
     cfg.fittedModulesX = fittedWinX_;
     cfg.fittedModulesY = fittedWinY_;
     cfg.fittedModulesWidth = fittedWinW_;
     cfg.fittedModulesHeight = fittedWinH_;
-    cfg.pluginLastUpdateCheck = engine_.pluginLastUpdateCheck_;
-    cfg.pluginTuneAllowed = engine_.pluginTuneAllowed_;
-    cfg.pluginSettingsAllowed = engine_.pluginSettingsAllowed_;
-    cfg.pluginSettings = engine_.pluginSettings_;
-    cfg.pluginsStopped = engine_.pluginsStopped_;
-    // closedWindows is written empty: nothing reads it since 0.79.1 (see
-    // applyConfig), and an empty list is what an older build would take to
-    // mean "no window was shut" - the nearest true statement it can make
-    // about a session in which windows only ever open by hand.
-    cfg.closedWindows.clear();
-    cfg.pluginMuteOverride = engine_.pluginMuteOverride_;
-    cfg.userPresets = engine_.userPresets_;
     cfg.catEnabled = catEnabled_;
     cfg.catBindAll = catBindAll_;
     cfg.catPort = catPortMirror_;
@@ -19365,11 +18722,6 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.webUsername = webCfg_.username;
     cfg.webPasswordRecord = webCfg_.passwordRecord;
     diagnosticsJournal(cfg);
-    engine_.telemetryJournal(cfg);
-    // FALSE while running, so a start-up that reads it back knows the previous
-    // session never got as far as writing true. Set only on the clean exit
-    // path, which is what makes an absent marker mean "crashed".
-    cfg.telemetryCleanExit = engine_.telemetryCleanExit_;
     return cfg;
 }
 

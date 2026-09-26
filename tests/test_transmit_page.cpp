@@ -502,26 +502,49 @@ int main() {
     //    beginPage has actually put its controls on screen (a rolled-up page
     //    returns false there). Read from the source that ships, the device
     //    tests/test_shutdown_budget.cpp uses for its teardown ordering.
+    //
+    //    Since engine stage 3a the key is applied by the ENGINE, in
+    //    Engine::pumpTransmitter (src/engine/engine.cpp), and the frame loop
+    //    calls that phase once, with the page's three flags, where it used
+    //    to apply the key itself - so the two halves are read from the two
+    //    files (the lines are the same lines, moved).
     // =====================================================================
     {
         const std::filesystem::path src =
             std::filesystem::path(CASCADE_SOURCE_DIR) / "src" / "gui" / "app_window.cpp";
         const std::string text = readFile(src);
         CHECK(!text.empty());
+        const std::filesystem::path esrc =
+            std::filesystem::path(CASCADE_SOURCE_DIR) / "src" / "engine" / "engine.cpp";
+        const std::string etext = readFile(esrc);
+        CHECK(!etext.empty());
 
-        // Exactly one place writes the key into the transmitter...
-        const std::vector<std::size_t> latchSets = liveHits(text, "transmitter_.setLatched(");
-        const std::vector<std::size_t> pttSets = liveHits(text, "transmitter_.setPttHeld(");
-        const std::vector<std::size_t> keyCalls = liveHits(text, "cascade::gui::txPageKey(");
-        const std::vector<std::size_t> ticks = liveHits(text, "transmitter_.tick();");
+        // Exactly one place writes the key into the transmitter - the
+        // engine's phase - and the window writes it nowhere...
+        const std::vector<std::size_t> latchSets = liveHits(etext, "transmitter_.setLatched(");
+        const std::vector<std::size_t> pttSets = liveHits(etext, "transmitter_.setPttHeld(");
+        const std::vector<std::size_t> keyCalls = liveHits(etext, "cascade::gui::txPageKey(");
+        const std::vector<std::size_t> ticks = liveHits(etext, "transmitter_.tick();");
         std::printf("wiring: setLatched x%zu, setPttHeld x%zu, txPageKey x%zu, tick x%zu\n",
                     latchSets.size(), pttSets.size(), keyCalls.size(), ticks.size());
         CHECK(latchSets.size() == 1u);
         CHECK(pttSets.size() == 1u);
         CHECK(keyCalls.size() == 1u);
         CHECK(ticks.size() == 1u);
+        CHECK(liveHits(text, "transmitter_.setLatched(").empty());
+        CHECK(liveHits(text, "transmitter_.setPttHeld(").empty());
+        CHECK(liveHits(text, "txPageKey(").empty());
+        CHECK(liveHits(text, "transmitter_.tick();").empty());
+        // ...inside Engine::pumpTransmitter, which the frame loop calls once
+        // with the page's own three flags.
+        const std::size_t phase = etext.find("void Engine::pumpTransmitter(bool pageLive, bool latchPressed, bool pttHeld) {");
+        const std::size_t phaseEnd = phase == std::string::npos ? std::string::npos : etext.find("\n}", phase);
+        const std::vector<std::size_t> pumpCalls = liveHits(
+            text, "engine_.pumpTransmitter(transmitPageLive_, transmitLatchPressed_, transmitPttHeld_);");
+        CHECK(pumpCalls.size() == 1u);
 
         const std::size_t drawUi = text.find("void AppWindow::drawUi()");
+        const std::size_t drawUiEnd = drawUi == std::string::npos ? std::string::npos : text.find("\n}", drawUi);
         const std::size_t pluginWindows = liveHits(text, "    drawPluginWindows();").empty()
                                               ? std::string::npos
                                               : liveHits(text, "    drawPluginWindows();")[0];
@@ -530,23 +553,28 @@ int main() {
             pageBody == std::string::npos ? std::string::npos
                                           : text.find("\nvoid AppWindow::", pageBody + 1);
         const bool anchors = latchSets.size() == 1u && pttSets.size() == 1u &&
-                             keyCalls.size() == 1u && ticks.size() == 1u &&
-                             drawUi != std::string::npos && pluginWindows != std::string::npos &&
+                             keyCalls.size() == 1u && ticks.size() == 1u && pumpCalls.size() == 1u &&
+                             phase != std::string::npos && phaseEnd != std::string::npos &&
+                             drawUi != std::string::npos && drawUiEnd != std::string::npos &&
+                             pluginWindows != std::string::npos &&
                              pageBody != std::string::npos && pageEnd != std::string::npos;
         CHECK(anchors);
         if (anchors) {
             // ...in the frame loop, after the page has been drawn (it is drawn
-            // inside drawPluginWindows) and before the tick that acts on it.
+            // inside drawPluginWindows) - the phase's call - and, inside the
+            // phase, the rule before both writes and both writes before the
+            // tick that acts on them.
             CHECK(drawUi < pluginWindows);
-            CHECK(pluginWindows < keyCalls[0]);
+            CHECK(pluginWindows < pumpCalls[0]);
+            CHECK(pumpCalls[0] < drawUiEnd);
+            CHECK(phase < keyCalls[0] && ticks[0] < phaseEnd);
             CHECK(keyCalls[0] < latchSets[0]);
             CHECK(keyCalls[0] < pttSets[0]);
             CHECK(latchSets[0] < ticks[0]);
             CHECK(pttSets[0] < ticks[0]);
             // NOT in the page body, which is the one place that stops running
             // exactly when the key most needs releasing.
-            CHECK(!(latchSets[0] > pageBody && latchSets[0] < pageEnd));
-            CHECK(!(pttSets[0] > pageBody && pttSets[0] < pageEnd));
+            CHECK(!(pumpCalls[0] > pageBody && pumpCalls[0] < pageEnd));
 
             // The page is live only AFTER beginPage has said it is drawing -
             // the live flag set before that would count a rolled-up page.

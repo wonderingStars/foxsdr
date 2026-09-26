@@ -480,16 +480,23 @@ void checkUnboundGateRefuses() {
 // this reads the GUI sources themselves: no GUI file may open the microphone
 // directly, and the TX page must use the Transmitter's own opener (which owns
 // the microphone, so an abandoned worker cannot outlive it - test_transmitter
-// pins that half).
+// pins that half). Since engine stage 3a the gate is bound by the Engine
+// (Engine::initialise, src/engine), which runs on the same thread today and on
+// its control thread in 3b - a blocking open is as wrong on either - so both
+// directories are read.
 void checkMicrophoneIsNotOpenedOnTheGuiThread() {
-    const fs::path guiDir = fs::path(__FILE__).parent_path().parent_path() / "src" / "gui";
+    const fs::path root = fs::path(__FILE__).parent_path().parent_path() / "src";
     std::error_code ec;
-    CHECK(fs::is_directory(guiDir, ec));
+    CHECK(fs::is_directory(root / "gui", ec));
+    CHECK(fs::is_directory(root / "engine", ec));
+    std::vector<fs::path> files;
+    for (const char* dir : {"gui", "engine"}) {
+        for (const auto& entry : fs::directory_iterator(root / dir, ec)) { files.push_back(entry.path()); }
+    }
     int scanned = 0;
     int directOpens = 0;
     int openerUses = 0;
-    for (const auto& entry : fs::directory_iterator(guiDir, ec)) {
-        const fs::path p = entry.path();
+    for (const fs::path& p : files) {
         if (p.extension() != ".cpp" && p.extension() != ".hpp") { continue; }
         std::ifstream in(p, std::ios::binary);
         const std::string text((std::istreambuf_iterator<char>(in)),

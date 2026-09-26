@@ -1953,7 +1953,7 @@ public:
     // pipeline, and publishes them to receiverSnapshot_, which the plugin host
     // API, the web server and CAT all read. Also copies the newest spectrum
     // frame for the browser (the members below). Called once per frame from
-    // drawUi, unconditionally, after every command of the frame has landed
+    // pumpPublish (drawUi's phase), unconditionally, after every command of the frame has landed
     // and before anything is drawn: the panel being collapsed must not stop
     // anyone being served.
     double publishReceiverState();
@@ -1983,6 +1983,45 @@ private:
     // scanner did not make — a manual tune, and the user wins (scan stops).
     double scannerExpectedAbsHz_ = 0.0;
     bool scannerHasExpected_ = false;  // false until the scan's first retune
+
+public:
+    // --- THE ENGINE'S LIFE (engine stage 3a) ---------------------------------
+    // A front end constructs the engine, calls initialise() once, restores
+    // its config (applyConfig) and bookmarks (loadBookmarks) if its run is
+    // persistent, then runs the pump every pass - the phases one by one at
+    // the points of its own frame (gui::AppWindow::drawUi), or pump() for
+    // all of them at once. stopTransfers() then teardown() take it down;
+    // ~Engine does both for a front end that did not. GUI thread in 3a.
+    void initialise();
+    void loadBookmarks();
+    void stopTransfers();
+    void teardown();
+
+    // The receiver's half of the config (AppConfig): restore it from the
+    // start-up state (core::startupState) and write it into a snapshot.
+    // The front end owns the file and the view state beside it.
+    void applyConfig(const cascade::core::AppConfig& cfg);
+    void fillConfig(cascade::core::AppConfig& cfg);
+
+    // The per-frame pump (engine.cpp says what each phase runs, in order).
+    void pumpFrameBegin();
+    void pumpInputs();
+    void pumpPlugins();
+    double pumpPublish();  // returns the centre it published (publishReceiverState)
+    void pumpAudioMute();
+    void pumpTransmitter(bool pageLive, bool latchPressed, bool pttHeld);
+    void pumpWorkers();
+    void pumpAudio();
+    void pump();
+
+    // What the receiver published last: the one receiver snapshot (read()
+    // and readFull() are the reader side; core/receiver_snapshot.hpp).
+    std::shared_ptr<const cascade::core::ReceiverSnapshot> snapshot() const {
+        return receiverSnapshot_;
+    }
+
+private:
+    bool tornDown_ = false;  // teardown() ran (so ~Engine does not run it again)
 };
 
 }  // namespace cascade::engine

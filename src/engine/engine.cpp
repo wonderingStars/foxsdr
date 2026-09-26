@@ -60,6 +60,7 @@
 #include "engine/receiver_tables.hpp"
 #include "engine/source_fallback.hpp"
 #include "engine/tx_frequency.hpp"
+#include "engine/tx_page_key.hpp"
 
 
 namespace cascade::engine {
@@ -83,9 +84,28 @@ Engine::Engine(EngineHost& host)
       pipeline_(cascade::core::Pipeline::Config{kSampleRateHz, kFftSize, kAveragingAlpha,
                                                 /*audioEnabled=*/true}) {}
 
-Engine::~Engine() = default;
+// A front end that did not take the engine down itself (a headless one, a
+// test) gets the same teardown, in the same order, here.
+Engine::~Engine() {
+    if (!tornDown_) {
+        stopTransfers();
+        teardown();
+    }
+}
 
 namespace {
+
+// Recording destination: %USERPROFILE%/Documents/SDR-recordings per spec.
+// Computed once at construction; the directory itself is created by
+// Recorder::start on the first take, never at startup. An unset USERPROFILE
+// (deliberately stripped environment) falls back to a relative directory —
+// the same "stay writable" philosophy as ConfigStore::defaultPath's ".".
+std::string defaultRecordDir() {
+    const char* home = std::getenv("USERPROFILE");
+    if (home == nullptr || *home == '\0') { home = std::getenv("HOME"); }
+    if (home == nullptr || *home == '\0') { return "SDR-recordings"; }
+    return std::string(home) + "/Documents/SDR-recordings";
+}
 
 // The WatchdogPause the window's plugin rescan held (core/hang_watchdog.hpp),
 // through the host: paused now, resumed on every way out of the scope.
@@ -5752,6 +5772,790 @@ void Engine::telemetryJournal(cascade::core::AppConfig& cfg) {
         }
     }
     cfg.telemetryPending = r.toJson();
+}
+
+// THE RECEIVER'S HALF OF THE CONFIG RESTORE (engine stage 3a): every line of
+// AppWindow::applyConfig that set the receiver, in the order it always ran;
+// the window keeps its view state (docs/engine-stage3.md). `cfg` is the
+// start-up state (core::startupState), not the file as saved.
+void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
+    // The device scan's UHD rule (gui::soapyDriversWithNoHardware): the switch,
+    // and the Soapy args the file named whether or not that radio opens this
+    // launch - a USRP that is switched off or unreachable today is still one
+    // the user has.
+    lookForNetworkUsrps_ = cfg.lookForNetworkUsrps;
+    startupSoapyArgs_ = cfg.soapyArgs;
+    // Panel mirrors + always-safe DSP settings first (none of these can
+    // fail; load() already range-sanitized volume/split/db*).
+    volume_ = cfg.volume;
+    pipeline_.audio().setVolume(volume_);
+    dbMin_ = cfg.dbMin;
+    dbMax_ = cfg.dbMax;
+    host_.onDisplayRange(dbMin_, dbMax_);
+    squelchDb_ = cfg.squelchDb;
+    pipeline_.setSquelchDb(squelchDb_);
+    // THE BIAS TEE IS SEEDED HERE, not inside the device branch below, so
+    // that a config whose saved radio does not open (unplugged, or still on
+    // its vendor driver) does not have the setting quietly rewritten to false
+    // by the next save. adoptDeviceMirrors is what applies it to a radio that
+    // does open - every one of these drivers switches the bias tee off during
+    // open(), so it has to be re-applied afterwards or a mast-head amplifier
+    // goes dark on every launch. It is PER RADIO (engine/bias_tee.hpp,
+    // BiasTeePanel::remembered): each radio gets back only its own.
+    biasTeePanel_.remembered = cfg.biasTee;
+    // THE PLUTO'S ADDRESS IS SEEDED HERE TOO, and it has to be before the
+    // scanNative() further down: that is what builds the Pluto's row, the
+    // row's args are "uri=" plus this box, and the restore below finds the
+    // row to point the combo at by comparing args. Seeded from the config
+    // even when the saved source is something else entirely, because the box
+    // is the user's own typing and belongs to them, not to the session that
+    // happened to open a radio.
+    cascade::core::formatUtf8(plutoUri_, sizeof(plutoUri_), "%s", cfg.plutoUri.c_str());
+
+    // P7 settings. All are pure DSP switches with no failure mode, and the
+    // loader has already clamped every one of them into range.
+    deemphIndex_ = cfg.deemphasisIndex;
+    pipeline_.setDeemphasisUs(kDeemphUs[deemphIndex_]);
+    stereoEnabled_ = cfg.stereoEnabled;
+    pipeline_.setStereoEnabled(stereoEnabled_);
+    nrEnabled_ = cfg.nrEnabled;
+    nrStrength_ = cfg.nrStrength;
+    pipeline_.setNoiseReductionStrength(nrStrength_);
+    pipeline_.setNoiseReductionEnabled(nrEnabled_);
+    notchFreqHz_ = static_cast<float>(cfg.notchFreqHz);
+    notchQ_ = static_cast<float>(cfg.notchQ);
+    pipeline_.setNotchFrequencyHz(cfg.notchFreqHz);
+    pipeline_.setNotchQ(cfg.notchQ);
+    notchEnabled_ = cfg.notchEnabled;
+    pipeline_.setNotchEnabled(notchEnabled_);
+    autoNotch_ = cfg.autoNotch;
+    pipeline_.setAutoNotchEnabled(autoNotch_);
+    // applyConfig runs AFTER the startup loadBandPlan(), so a restored
+    // selection that differs from the default has to re-load or the user's
+    // chosen region silently reverts to "world" on every launch. Guarded on
+    // change so the common case does not parse the directory twice.
+    if (bandPlanSelection_ != cfg.bandPlanSelection) {
+        bandPlanSelection_ = cfg.bandPlanSelection;
+        loadBandPlan();
+    }
+    // THE TRANSMITTER'S SETTINGS, AND NOT ITS KEY. Everything restored here
+    // is HOW it would transmit; nothing restored here can MAKE it transmit,
+    // and there is nothing in AppConfig that could (core/config.hpp says why
+    // at length). transmitOpen_ is cleared by startupState() before this runs
+    // on a launch, so the page records what was showing at the last exit and
+    // opens nothing by itself.
+    transmitOpen_ = cfg.transmitOpen;
+    transmitModeIndex_ = static_cast<int>(cascade::dsp::txModeFromIndex(cfg.transmitMode));
+    transmitInputIndex_ = static_cast<int>(cascade::core::txInputFromIndex(cfg.transmitInput));
+    transmitPowerDb_ = cfg.transmitPowerDb;
+    transmitSplit_ = cfg.transmitSplit;
+    transmitSplitHz_ = cfg.transmitSplitHz;
+    transmitToneHz_ = cfg.transmitToneHz;
+    transmitMonitor_ = cfg.transmitMonitor;
+    transmitArgs_ = cfg.transmitArgs;
+    transmitter_.setMode(cascade::dsp::txModeFromIndex(transmitModeIndex_));
+    transmitter_.setInput(cascade::core::txInputFromIndex(transmitInputIndex_));
+    transmitter_.setToneHz(transmitToneHz_);
+    // The receiver's own position from the last session (the map pages are
+    // told it by the window's half of the restore, AppWindow::applyConfig).
+    rxSet_ = cfg.rxPositionSet;
+    rxLat_ = cfg.rxLatDeg;
+    rxLon_ = cfg.rxLonDeg;
+
+    // The plugin store. Restoring the URL does NOT start a fetch - see
+    // AppConfig::pluginCatalogueUrl. The catalogue is read only when the
+    // user opens the store (once a session) or presses CHECK NOW. The
+    // window's open flag arrives cleared (startupState): the store opens
+    // from its rail key, never by itself - which is what keeps its
+    // first-open read from ever being a startup fetch.
+    pluginCatalogueUrl_ = cfg.pluginCatalogueUrl;
+    // Restored purely so it can be saved back unchanged when the user never
+    // browses this session. Nothing reads it to decide whether to fetch.
+    pluginLastUpdateCheck_ = cfg.pluginLastUpdateCheck;
+    // Tune grants are pushed into PluginUi immediately, not just stored: the
+    // plugin scan already ran in the constructor, so a tracker created during
+    // it may call request_tune on its very first poll — before any rebuild
+    // would have re-applied them.
+    pluginTuneAllowed_ = cfg.pluginTuneAllowed;
+    applyPluginTuneGrants();
+    // Host API level 1: the settings grant, and the plugins' own settings -
+    // loaded into the live store BEFORE the refreshPluginRunner below
+    // re-attaches every plugin, so a plugin reading its settings from
+    // attach() finds them there.
+    pluginSettingsAllowed_ = cfg.pluginSettingsAllowed;
+    applyPluginSettingsGrants();
+    pluginSettings_ = cfg.pluginSettings;
+    pluginUi_.api().loadSettings(pluginSettings_);
+    pluginSettingsGen_ = pluginUi_.api().settingsGeneration();
+    // STOPS ARE APPLIED, not merely stored, for a stronger version of the same
+    // reason: the scan in the constructor has already built every plugin's
+    // instances against the default source, so a plugin the user stopped last
+    // session is running right now. refreshPluginRunner tears that set down and
+    // rebuilds it without the stopped ones, which is also what the restored
+    // source needs; doing it here means a stopped plugin never survives a
+    // launch even for a frame.
+    pluginsStopped_ = cfg.pluginsStopped;
+    // AppConfig::closedWindows is no longer applied. Until 0.79.1 every plugin
+    // window appeared by itself and this list kept the ones the user had shut
+    // from coming back; now no plugin window appears until the user opens it
+    // from its row, so there is nothing for the list to hold back. It is
+    // still read and written so older builds and this one agree on the file.
+    // BEFORE the rebuild, because refreshPluginRunner is what rebuilds the
+    // mute snapshot the overrides are baked into. Restored after the stops for
+    // the same reason they are restored at all: a decoder the user silenced
+    // last session must not come back audible for the seconds it takes them to
+    // find the checkbox again.
+    pluginMuteOverride_ = cfg.pluginMuteOverride;
+    // The user's own presets, before the same rebuild: they are baked into
+    // the preset snapshot (rebuildMuteStates) the bars and the mute read.
+    userPresets_ = cfg.userPresets;
+    refreshPluginRunner();
+
+    for (int i = 0; i < 8; ++i) {
+        if (cfg.mode == kModeNames[i]) {
+            modeIndex_ = i;
+            pipeline_.setDemodMode(kModeMap[i]);
+            break;  // an unknown mode name keeps the construction default
+        }
+    }
+
+    // THE CONVERTERS, BEFORE ANY SOURCE IS RESTORED: cfg.centerHz is the AIR
+    // frequency the last session was on, and the radio below is told it
+    // through its own converter (radioHzForSource / applyConverterForSource).
+    // A sound card's converter written under its full ALSA name (before the
+    // identity key) is moved to the key it is looked up by now
+    // (gui::soundCardConverterKey); nothing else is touched.
+    converters_ = cascade::gui::migrateSoundCardConverterKeys(cascade::core::sanitiseConverters(cfg.converters));
+
+    // Source restore. The generator is always safe (it is already active);
+    // a file is restored only if the path still opens; a Soapy device only
+    // if its args re-open. Any failure falls back to the generator silently
+    // except for lastError shown once in the Source section (sourceError_).
+    //
+    // The sound card's settings come back whatever the source is, so the row
+    // shows what was set up last time (the same rule as the I/Q file's path).
+    soundCard_ = cascade::gui::soundCardFromConfig(cfg.soundCard);
+    if (cfg.sourceKind == "soundcard") {
+        // ON A WORKER, like every other sound card open: the first frame is
+        // drawn on the generator and the card replaces it when it answers
+        // (app_window_soundcard.cpp). Until then - and for the rest of the
+        // session if it never does - the config goes on naming it; the combo
+        // names it too only once the open has actually failed.
+        restoreKeep_ = cascade::gui::rememberedSourceAfterFailedOpen(
+            cfg.sourceKind, cfg.soapyArgs, cfg.nativeArgs, cfg.iqFilePath, cfg.sampleRateHz);
+        soundCardRemembered_ = soundCard_;  // the card the config names, whatever the section becomes
+        restoreKeepLabel_.clear();
+        sourceSel_ = kSoundCardRow;
+        launchSoundCardOpen(/*restore=*/true, soundCard_);
+        cascade::core::diagLogf("source: restoring the sound card %s (%s)", soundCard_.device.c_str(),
+                                soundCard_.hostApi.c_str());
+    } else if (cfg.sourceKind == "file") {
+        auto file = std::make_unique<cascade::source::IqFileSource>();
+        if (file->open(cfg.iqFilePath)) {
+            const double fileRadioHz = radioHzForSource("file", std::string(), cfg.centerHz);
+            if (fileRadioHz >= 0.0) { file->setCenterFrequencyHz(fileRadioHz); }
+            iqOpenPath_ = cfg.iqFilePath;
+            // No open can be in flight during the startup restore, but the
+            // counter's contract is "every install bumps it" — an invariant
+            // with an exception in it is one nobody can rely on later.
+            ++sourceGen_;
+            installSource(std::move(file));
+            sourceKind_ = "file";
+            applyConverterForSource();
+            sourceSel_ = 1;
+            followInputRate();
+            cascade::core::diagLogf("source: restored an I/Q file at %.0f S/s",
+                                    pipeline_.activeSource().sampleRateHz());
+        } else {
+            sourceError_ = file->lastError();
+            // THE FACT, NEVER THE PATH - and the reason is five lines up in the
+            // Open handler: a file name is the user's own data. The source's
+            // error string is "cannot open file: <full absolute path>", and
+            // this line goes to the ring, which means it goes into every crash
+            // report, every hang report and the Copy diagnostics bundle. The
+            // full text stays in sourceError_, which is shown on screen to the
+            // person who already knows what they opened.
+            cascade::core::diagWarnf("source: the saved I/Q file did not reopen");
+
+            // ...AND THE CONFIG GOES ON NAMING IT, exactly as it does for a
+            // radio that did not reopen (see the device branch below). A
+            // recording goes missing the same ways a dongle does - an
+            // external drive unplugged, a folder renamed, the capture moved -
+            // and until 0.94.1 this branch left iqOpenPath_ empty, so the
+            // exit save wrote sourceKind "siggen" with iqFilePath BLANK: one
+            // session with the drive out and FoxSDR could not even say which
+            // file it had been playing. The saved path is remembered instead,
+            // and the box is filled in with it so the user can plug the drive
+            // back in and press Open without typing it again.
+            restoreKeep_ = cascade::gui::rememberedSourceAfterFailedOpen(
+                cfg.sourceKind, cfg.soapyArgs, cfg.nativeArgs, cfg.iqFilePath, cfg.sampleRateHz);
+            // WHAT THE SOURCE SECTION CALLS IT: the file's own name, not the
+            // whole path, because the preview it goes into is one combo wide
+            // and a recording lives several folders deep. Never logged - the
+            // rule above is about the ring, and this string only ever reaches
+            // the screen of the person who chose the file.
+            restoreKeepLabel_ = cascade::gui::fileNameOf(cfg.iqFilePath);
+            // Nothing is ticked in the dropdown, for the same reason the
+            // device branch gives: the generator is not what the user chose.
+            sourceSel_ = -1;
+        }
+    } else if ((cfg.sourceKind == "soapy" && !cfg.soapyArgs.empty()) ||
+               (isNativeSourceKind(cfg.sourceKind) && !cfg.nativeArgs.empty())) {
+        // The native list has to exist before the rule below can read it, and
+        // nothing has drawn a frame yet. It costs a SetupAPI walk and opens
+        // nothing (scanNative), so it is safe here where the Soapy scan
+        // deliberately is not.
+        scanNative();
+        std::string kind = cfg.sourceKind;
+        std::string args = (kind == "soapy") ? cfg.soapyArgs : cfg.nativeArgs;
+        std::string fallbackSoapyArgs;
+
+        // PREFER THE NATIVE DRIVER, AUTOMATICALLY, AND SAY SO. A config
+        // written before 0.91.0 says "soapy, driver=rtlsdr" because that was
+        // the only way to reach the dongle; the user is not going to reopen
+        // the Source section to switch over, and should not have to. See
+        // gui::preferNativeFor for what "the same dongle" means and why a
+        // saved serial has to match.
+        if (const std::optional<cascade::source::NativeDeviceInfo> nat =
+                cascade::gui::preferNativeFor(cfg.sourceKind, cfg.soapyArgs, nativeDevices_)) {
+            cascade::core::diagLogf(
+                "source: opening %s natively (was SoapySDR %s)",
+                modelFromNativeLabel(nat->label).c_str(),
+                cascade::core::sanitiseDevice(cfg.soapyArgs).c_str());
+            fallbackSoapyArgs = cfg.soapyArgs;
+            kind = nat->driver;
+            args = nat->args;
+        }
+
+        // Seeded BEFORE the open, because openDeviceSync applies it as part of
+        // bringing the device up - the port has to be right from the first
+        // sample, not corrected afterwards.
+        deviceAntenna_ = cfg.soapyAntenna;
+        auto dev = openDeviceSync(kind, args, cfg.sampleRateHz);
+        if (!dev && !fallbackSoapyArgs.empty() &&
+            cascade::gui::nativeOpenShouldFallBack(sourceError_)) {
+            // The dongle is one whose tuner the native driver does not
+            // support (E4000, FC0012/13). It opened perfectly well through
+            // SoapySDR before this release and must go on doing so.
+            cascade::core::diagWarnf(
+                "source: the native %s driver refused the saved radio (%s); opening it "
+                "through SoapySDR instead",
+                kind.c_str(), sourceError_.c_str());
+            const std::string nativeKey = cascade::core::converterRadioKey(kind, args);
+            kind = "soapy";
+            args = fallbackSoapyArgs;
+            dev = openDeviceSync(kind, args, cfg.sampleRateHz);
+            // The radio the user chose, reached another way: its converter
+            // comes with it (before the saved frequency is converted below).
+            if (dev) { noteConverterFallback(nativeKey, cascade::core::converterRadioKey(kind, args)); }
+        }
+        if (dev) {
+            // The saved AIR frequency, told to the radio through the
+            // converter remembered for it (the radio has not been installed
+            // yet, so the pipeline's view cannot do it here).
+            // A frequency the converter cannot deliver (0 Hz or below at the
+            // radio) is not sent at all; the radio stays at its own default.
+            const double radioHz = radioHzForSource(kind, args, cfg.centerHz);
+            if (radioHz > 0.0 || !cascade::core::converterActive(converterForKey(
+                                     cascade::core::converterRadioKey(kind, args)))) {
+                dev->setCenterFrequencyHz(radioHz);
+            }
+            device_ = dev.get();
+            soapyView_ = dynamic_cast<cascade::source::SoapySource*>(device_);
+            deviceArgs_ = args;
+            deviceModel_ = (kind == "soapy") ? cascade::core::sanitiseDevice(args)
+                                             : modelFromNativeLabel(nativeLabelFor(kind, args));
+            if (kind == "soapy") {
+                cfgSoapyArgs_ = args;
+                cfgNativeArgs_ = cfg.nativeArgs;
+            } else {
+                cfgNativeArgs_ = args;
+                // THE SOAPY ARGS ARE KEPT even though a native driver is what
+                // opened: they are what the prefer-native rule reads on the
+                // NEXT launch, and throwing them away would make the first
+                // native session the last one that could ever fall back.
+                cfgSoapyArgs_ = cfg.soapyArgs;
+            }
+            ++sourceGen_;  // same invariant as the file branch above
+            installSource(std::move(dev));
+            sourceKind_ = kind;
+            applyConverterForSource();
+            // Point the combo at the restored device if this machine still
+            // enumerates it; -1 otherwise (preview falls back to live name).
+            sourceSel_ = -1;
+            if (kind == "soapy") {
+                for (std::size_t i = 0; i < soapyDevices_.size(); ++i) {
+                    if (soapyDevices_[i].args == args) {
+                        sourceSel_ = soapyRowBase() + static_cast<int>(i);
+                    }
+                }
+            } else {
+                for (std::size_t i = 0; i < nativeDevices_.size(); ++i) {
+                    if (nativeDevices_[i].args == args) {
+                        sourceSel_ = kNativeRowBase + static_cast<int>(i);
+                    }
+                }
+            }
+            followInputRate();
+            cascade::core::diagLogf("source: restored %s (%s) at %.0f S/s",
+                                    deviceModel_.c_str(), kind.c_str(),
+                                    pipeline_.activeSource().sampleRateHz());
+        } else {
+            // openDeviceSync already set sourceError_. A radio that was there last
+            // session and is not there now is the single most common support
+            // question this product gets - but the driver's own message quotes
+            // the device ARGUMENTS back, and those carry the serial number.
+            // Same rule as the line above and as every other place these
+            // strings are recorded: the sanitised model, never the raw args.
+            //
+            // THE MODEL OF THE RADIO THAT WAS TRIED (0.99.36). This used to
+            // print cfg.soapyArgs, which is empty for every native radio, so
+            // the field logs read "the saved radio (, sdrplay) did not
+            // reopen" and named nothing.
+            std::string triedModel = (kind == "soapy")
+                                         ? cascade::core::sanitiseDevice(args)
+                                         : modelFromNativeLabel(nativeLabelFor(kind, args));
+            if (triedModel.empty() || triedModel == args) { triedModel = kind; }
+            cascade::core::diagWarnf(
+                "source: the saved radio (%s, %s) did not reopen - the receiver is on the signal "
+                "generator and the radio stays saved",
+                triedModel.c_str(), kind.c_str());
+
+            // ...AND THE CONFIG GOES ON NAMING IT. The session runs on the
+            // generator above, which is right - it has to run on something -
+            // but the exit save reads sourceKind_ and the cfg*Args_ mirrors,
+            // and those describe the generator. Before this, ONE session with
+            // the dongle unplugged, held by another program, or held by a
+            // second copy of FoxSDR (the report that found this) wrote back
+            // "siggen" with both args slots empty and the radio was gone for
+            // good. The SAVED values are remembered here, unchanged, so the
+            // next start tries exactly what this one tried. See
+            // gui::rememberedSourceAfterFailedOpen and gui::sourceToSave.
+            restoreKeep_ = cascade::gui::rememberedSourceAfterFailedOpen(
+                cfg.sourceKind, cfg.soapyArgs, cfg.nativeArgs, cfg.iqFilePath, cfg.sampleRateHz);
+
+            // WHAT THE SOURCE SECTION CALLS IT. The enumerated label is the
+            // best name when this machine can still see the radio (in use by
+            // another program is exactly that case); when it cannot,
+            // nativeLabelFor hands back the args verbatim, which for a native
+            // device is nothing but a serial - so the driver key is used
+            // instead. Not a privacy rule like the log line above, because
+            // this string never leaves the screen; it is simply not a name.
+            std::string label = (kind == "soapy") ? cascade::core::sanitiseDevice(args)
+                                                  : modelFromNativeLabel(nativeLabelFor(kind, args));
+            if (label.empty() || label == args) { label = kind; }
+            restoreKeepLabel_ = label;
+            // Which radio, why, and where the receiver is - the driver's own
+            // reason is kept verbatim inside the sentence (0.99.36).
+            sourceError_ = cascade::gui::radioNotOpenedSentence(label, sourceError_);
+            // NOTHING IS TICKED IN THE DROPDOWN. -1 is the same "the live
+            // source is not one of these rows" the Refresh path uses; the
+            // preview names the saved radio instead, so the generator is
+            // never shown as though the user had picked it.
+            sourceSel_ = -1;
+        }
+    }
+    if (sourceKind_ == "siggen") {
+        // Generator kept (or fallen back to): carry the saved center so the
+        // readout matches the last session. Nominal-center set cannot fail -
+        // unless the user set a converter on the generator that cannot
+        // deliver that air frequency, which then leaves the nominal alone.
+        applyConverterForSource();
+        pipeline_.activeSource().setCenterFrequencyHz(cfg.centerHz);
+    }
+
+
+    // VFO after the source/rate restore so the clamps use the REAL rates the
+    // chain ended up with, not whatever the file claimed.
+    const double bwHi = kVfoBwMaxChanFrac * pipeline_.channelRateHz();
+    vfoBandwidthHz_ = std::max(kVfoBwMinHz, std::min(cfg.bandwidthHz, bwHi));
+    pipeline_.setVfoBandwidthHz(vfoBandwidthHz_);
+    // The combo's tick, and -1 for a saved bandwidth that is none of the steps
+    // - a config written while a plugin preset had the VFO at its own width.
+    // The combo letters vfoBandwidthHz_ itself either way.
+    bandwidthIndex_ = bandwidthStepIndex(vfoBandwidthHz_);
+    double off = cfg.vfoOffsetHz;
+    const double lim = 0.5 * pipeline_.inputRateHz() - 0.5 * vfoBandwidthHz_;
+    off = (lim > 0.0) ? std::clamp(off, -lim, lim) : 0.0;
+    pipeline_.setVfoOffsetHz(off);
+    vfoOffsetKhz_ = static_cast<float>(off / 1000.0);
+}
+
+// THE RECEIVER'S HALF OF THE CONFIG SNAPSHOT (engine stage 3a): every line of
+// AppWindow::currentConfig that read the receiver, in their order. Every field
+// of AppConfig is written by exactly one half. Not const: the usage report's
+// journal (telemetryJournal) accrues the session as it is written.
+void Engine::fillConfig(cascade::core::AppConfig& cfg) {
+    // WHICH SOURCE THE FILE NAMES, which is not always the one that is
+    // running: a restore that could not open the saved radio leaves the
+    // generator installed and the radio remembered, and the radio is what
+    // goes back into the file. Everything else - a clean restore, any
+    // deliberate switch - is the live source, exactly as before.
+    // WHILE THE PATCH PAGE HOLDS THE RECEIVER'S RADIO (0.99.17) the receiver
+    // runs on the generator only because the page borrowed its radio, so the
+    // radio is what is saved - the same rule as a restore that could not
+    // open it, applied here rather than by borrowing that state, which would
+    // also relabel the Source panel.
+    cascade::gui::RememberedSource keep = restoreKeep_;
+    if (patchMainKeep_.valid) {
+        keep = cascade::gui::RememberedSource{};
+        keep.kind = patchMainKeep_.kind;
+        if (patchMainKeep_.kind == "soapy") {
+            keep.soapyArgs = patchMainKeep_.args;
+            keep.nativeArgs = cfgNativeArgs_;
+        } else if (patchMainKeep_.kind == "soundcard") {
+            // A lent sound card is named by cfg.soundCard (below, the card as
+            // it was lent - patchMainKeep_.card); both radio slots keep what
+            // they had.
+            keep.soapyArgs = cfgSoapyArgs_;
+            keep.nativeArgs = cfgNativeArgs_;
+        } else {
+            keep.nativeArgs = patchMainKeep_.args;
+            keep.soapyArgs = cfgSoapyArgs_;
+        }
+        keep.sampleRateHz = patchMainKeep_.rateHz;
+    }
+    const cascade::gui::SavedSource src = cascade::gui::sourceToSave(
+        sourceKind_, cfgSoapyArgs_, cfgNativeArgs_, iqOpenPath_,
+        pipeline_.activeSource().sampleRateHz(), keep);
+    cfg.sourceKind = src.kind;
+    cfg.soapyAntenna = deviceAntenna_;
+    // ONE SLOT PER FAMILY, and BOTH are written on every save - not just the
+    // one belonging to whatever is open. The Soapy args of a radio now being
+    // driven natively are what the prefer-native rule reads on the next
+    // launch and what the tuner fallback needs; dropping them the moment the
+    // native driver takes over would make the first native session the last
+    // one that could ever fall back. See AppConfig::nativeArgs.
+    cfg.soapyArgs = src.soapyArgs;
+    cfg.nativeArgs = src.nativeArgs;
+    cfg.lookForNetworkUsrps = lookForNetworkUsrps_;
+    cfg.biasTee = biasTeePanel_.remembered;
+    // Every radio's converter, including those not open now: a converter is
+    // part of how that radio is cabled, and must survive a session without it.
+    cfg.converters = converters_;
+    // WHAT IS IN THE BOX, not what opened. A Pluto that is on the bench has
+    // its address in nativeArgs as well; this field is the typing, and it has
+    // to survive a launch in which the board never answered so it can be
+    // corrected next time rather than retyped from nothing.
+    cfg.plutoUri = plutoUri_;
+    // THE FILE THIS SESSION PLAYED, or the one it could not find. Normally
+    // iqOpenPath_, which is the last recording that actually opened; when the
+    // saved source was a file and the restore could not open it, the same
+    // decision that keeps a missing radio in the config keeps the path (see
+    // gui::sourceToSave). Before that, one session with the drive unplugged
+    // wrote this out EMPTY - the path box came back blank on the next start
+    // and nothing anywhere said which file had gone.
+    cfg.iqFilePath = src.filePath;
+    // THE SOUND CARD THAT RAN, never the Source section's unopened edits: the
+    // next launch opens exactly what is written here. The running card; the
+    // card the patch page has borrowed; the card a failed restore, a re-Open's
+    // release or a hand-back left remembered; and only when there is none of
+    // those, the section's settings - the card as last set up
+    // (gui::soundCardToSave).
+    cfg.soundCard = cascade::gui::soundCardToConfig(cascade::gui::soundCardToSave(
+        sourceKind_, soundCardLive_, patchMainKeep_.valid && patchMainKeep_.kind == "soundcard",
+        patchMainKeep_.card, restoreKeep_.kind == "soundcard", soundCardRemembered_, soundCard_));
+    cfg.centerHz = pipeline_.activeSource().centerFrequencyHz();
+    cfg.mode = kModeNames[modeIndex_];
+    cfg.bandwidthHz = vfoBandwidthHz_;
+    cfg.squelchDb = squelchDb_;
+    cfg.volume = volume_;
+    cfg.dbMin = dbMin_;
+    cfg.dbMax = dbMax_;
+    cfg.vfoOffsetHz = pipeline_.vfoOffsetHz();
+    // The live rate, EXCEPT when the source being saved is a remembered radio
+    // rather than the generator standing in for it: the generator's fixed
+    // 2 MS/s is not a rate the user ever chose for their receiver, and it is
+    // the number the next start would hand to the driver's open().
+    cfg.sampleRateHz = src.sampleRateHz;
+    cfg.stereoEnabled = stereoEnabled_;
+    cfg.deemphasisIndex = deemphIndex_;
+    cfg.nrEnabled = nrEnabled_;
+    cfg.nrStrength = nrStrength_;
+    cfg.notchEnabled = notchEnabled_;
+    cfg.notchFreqHz = static_cast<double>(notchFreqHz_);
+    cfg.notchQ = static_cast<double>(notchQ_);
+    cfg.autoNotch = autoNotch_;
+    cfg.bandPlanSelection = bandPlanSelection_;
+    cfg.transmitOpen = transmitOpen_;
+    cfg.transmitMode = transmitModeIndex_;
+    cfg.transmitInput = transmitInputIndex_;
+    cfg.transmitPowerDb = transmitPowerDb_;
+    cfg.transmitSplit = transmitSplit_;
+    cfg.transmitSplitHz = transmitSplitHz_;
+    cfg.transmitToneHz = transmitToneHz_;
+    cfg.transmitMonitor = transmitMonitor_;
+    cfg.transmitArgs = transmitArgs_;
+    // AND NOTHING FOR THE KEY: transmitPttHeld_, transmitLatchPressed_ and
+    // the transmitter's latch are not written, because AppConfig has nowhere
+    // to put them and must not grow one. A saved key is a radio that comes up transmitting.
+    cfg.rxPositionSet = rxSet_;
+    cfg.rxLatDeg = rxLat_;
+    cfg.rxLonDeg = rxLon_;
+    cfg.pluginCatalogueUrl = pluginCatalogueUrl_;
+    cfg.pluginLastUpdateCheck = pluginLastUpdateCheck_;
+    cfg.pluginTuneAllowed = pluginTuneAllowed_;
+    cfg.pluginSettingsAllowed = pluginSettingsAllowed_;
+    cfg.pluginSettings = pluginSettings_;
+    cfg.pluginsStopped = pluginsStopped_;
+    // closedWindows is written empty: nothing reads it since 0.79.1 (see
+    // applyConfig), and an empty list is what an older build would take to
+    // mean "no window was shut" - the nearest true statement it can make
+    // about a session in which windows only ever open by hand.
+    cfg.closedWindows.clear();
+    cfg.pluginMuteOverride = pluginMuteOverride_;
+    cfg.userPresets = userPresets_;
+    telemetryJournal(cfg);
+    // FALSE while running, so a start-up that reads it back knows the previous
+    // session never got as far as writing true. Set only on the clean exit
+    // path, which is what makes an absent marker mean "crashed".
+    cfg.telemetryCleanExit = telemetryCleanExit_;
+}
+
+// THE ENGINE'S START-UP (engine stage 3a): what gui::AppWindow's constructor
+// did to the receiver before its config restore, in the order it did it. The
+// spectrum's range and the watchdog pause around a device open are the
+// host's (onDisplayRange, pause/resumeWatchdog). Called once, before
+// applyConfig and before the first pump.
+void Engine::initialise() {
+    recordDir_ = defaultRecordDir();
+    // Demo signal until real sources land (P4): two tones at distinct offsets
+    // and levels over a noise floor, so both display axes are visibly
+    // exercised — frequency (two peaks left and right of center) and
+    // amplitude (different heights / waterfall colors).
+    cascade::source::SigGen& gen = pipeline_.sigGen();
+    gen.setTone(0, 300000.0, -30.0f);
+    gen.setTone(1, -500000.0, -45.0f);
+    gen.setNoiseFloorDb(-90.0f);
+    host_.onDisplayRange(dbMin_, dbMax_);
+
+    // Park the VFO on demo tone 0 so the receiver is tuned to something from
+    // the first Play: WFM (the default mode) renders an unmodulated carrier
+    // as near-silence, and switching to CW yields the 700 Hz sidetone.
+    pipeline_.setVfoOffsetHz(1000.0 * static_cast<double>(vfoOffsetKhz_));
+    pipeline_.audio().setVolume(volume_);
+    // Push every P7 mirror once so the pipeline and the panels start in
+    // agreement even when no config file exists (the pipeline's own defaults
+    // match these, so this is belt and braces rather than a fix-up).
+    pipeline_.setStereoEnabled(stereoEnabled_);
+    pipeline_.setNoiseReductionEnabled(nrEnabled_);
+    pipeline_.setNoiseReductionStrength(nrStrength_);
+    pipeline_.setNotchEnabled(notchEnabled_);
+    pipeline_.setNotchFrequencyHz(static_cast<double>(notchFreqHz_));
+    pipeline_.setNotchQ(static_cast<double>(notchQ_));
+    pipeline_.setAutoNotchEnabled(autoNotch_);
+    // Optional program data / optional user code. Both are silent no-ops when
+    // their directory is absent, which is the normal case when running out of
+    // a build tree — and every bounded --frames CI run takes this path.
+    loadBandPlan();
+    rescanPlugins();
+    // The catalogue URL starts at the published default and is overwritten by
+    // a config restore if the user (or an enterprise deployment) changed it.
+    // Setting it here is NOT a fetch: nothing contacts the origin until CHECK
+    // NOW is pressed in the plugin store window.
+    pluginCatalogueUrl_ = cascade::core::AppConfig{}.pluginCatalogueUrl;
+    // DELIBERATELY no SoapySDR enumeration here. Enumeration loads vendor
+    // modules (SoapyUHD -> uhd.dll -> libusb) whose USB discovery faulted
+    // in-process in ~2% of measured `--frames 1` runs (0xC0000005 inside
+    // libusb-1.0.dll during uhd::device::find — P6a, 2026-08-15). The scan
+    // now runs only on the user's explicit request (first Source-dropdown
+    // open, or Refresh — scanSoapy()), so sessions that never touch Soapy —
+    // including every bounded --frames CI run — never execute that code.
+
+    // THE DEVICE OPEN IS BLOCKING WORK AND DOES NOT BELONG ON THIS THREAD.
+    // engine/audio_open.hpp carries the field report and the whole argument; the
+    // opener is Pipeline's, packaged so it can outlive this window, and the
+    // hooks are the watchdog's for the bounded wait the requesting frame
+    // spends. Bound here, before anything can ask for a device.
+    audioOpen_.bind(pipeline_.audioOpener(), [this] { host_.pauseWatchdog(); },
+                    [this] { host_.resumeWatchdog(); });
+    // And the microphone, for the same reason: waveInOpen has no timeout
+    // either. The opener is the Transmitter's and owns the microphone.
+    micOpen_.bind(transmitter_.microphoneOpener(), [this] { host_.pauseWatchdog(); },
+                  [this] { host_.resumeWatchdog(); });
+
+    devices_ = pipeline_.audio().listOutputDevices();
+    for (int i = 0; i < static_cast<int>(devices_.size()); ++i) {
+        if (devices_[static_cast<std::size_t>(i)].isDefault) { deviceIndex_ = i; }
+    }
+    if (deviceIndex_ < 0 && !devices_.empty()) { deviceIndex_ = 0; }
+}
+
+// The bookmark file (FreqManager's default path), read once at start-up by a
+// front end whose run is persistent (gui::AppWindow gates it on its config
+// path, as it always has - its constructor says why).
+void Engine::loadBookmarks() {
+    bookmarkPath_ = cascade::core::FreqManager::defaultPath();
+    std::string bmErr;
+    if (!freqMgr_.load(bookmarkPath_, bmErr)) { bookmarkError_ = bmErr; }
+}
+
+// THE ENGINE'S TRANSFERS, CANCELLED (engine stage 3a): the first step of a
+// teardown, taken before the front end's own transfers are cancelled
+// (gui::AppWindow::~AppWindow), exactly where its destructor always took it.
+void Engine::stopTransfers() {
+    // A catalogue fetch or a plugin download may still be in flight. The
+    // std::async futures below block in their own destructors until the
+    // worker returns, so without this an app closed mid-download would sit
+    // there, apparently hung, for as long as the transfer took. cancel() is
+    // thread-safe by contract and makes the worker fail out with "cancelled",
+    // deleting its temp file on the way — so teardown stays bounded and no
+    // partial DLL is left behind. Harmless when nothing is running.
+    pluginRepo_.cancel();
+}
+
+// THE ENGINE'S TEARDOWN (engine stage 3a): every worker reaped and the
+// plugin system brought down in its stated order, then the recorders - the
+// rest of what gui::AppWindow's destructor always did, in its order. Once:
+// ~Engine runs stopTransfers and this itself for a front end that did not.
+void Engine::teardown() {
+    tornDown_ = true;
+    // Same problem, no cancel to reach for: a device open may still be inside
+    // SoapySDR::Device::make(). See reapPendingDeviceOpen for the semantics.
+    reapPendingDeviceOpen();
+    // The sound card's list and open, on the same terms.
+    reapSoundCardWorkers();
+
+    // And the same problem again on the AUDIO device, which is the one that
+    // produced it: an open still inside waveOutOpen would hold ~AudioOpen's
+    // future - and therefore this destructor - for the rest of the driver
+    // call. reap() spends a short grace and then abandons the worker; it is
+    // safe to abandon because the opener holds the sink alive by shared_ptr
+    // (see Pipeline::audioOpener).
+    audioOpen_.reap();
+    // The microphone's gate, same argument: waveInOpen has no timeout either,
+    // and Transmitter::microphoneOpener owns the microphone it opens.
+    micOpen_.reap();
+
+    // The GPS reader's thread, if a read is still running when the window is
+    // destroyed without run()'s teardown (a failed backend init, a test that
+    // never entered the frame loop). Its own destructor would join too; this
+    // makes the order explicit and bounded: one port read (200 ms) while it
+    // is reading, GpsReader::kOpenAbandonWait (1 s) while it is still inside
+    // the port driver's open - after which the worker is abandoned to finish
+    // on its own, not joined, so a Bluetooth port whose puck is off cannot
+    // hold this destructor for the length of an RFCOMM connect attempt.
+    gpsReader_.stop();
+
+    // And the same again for the lazy device SCAN, which blocks in
+    // SoapySDR::Device::enumerate() and is the likelier of the two to be in
+    // flight at quit — it starts the moment the source combo is opened.
+    reapPendingSoapyScan();
+
+    // THE PLUGIN SYSTEM COMES DOWN IN ONE STATED ORDER, HERE, and not as a
+    // by-product of reverse member-declaration order.
+    //
+    // detachAndUnloadPlugins() exists because that order is the feature:
+    // detach the runner from the pipeline, destroy the decoder instances,
+    // then take the GUI half and the host services away, then unmap the
+    // modules. Every OTHER path that unloads plugins (a rescan, removing an
+    // installed plugin) calls it. This one did not - it let the members fall
+    // apart on their own, and their declaration order had pluginUi_ destroyed
+    // BEFORE pluginRunner_, which is the exact reverse. A decoder's destroy()
+    // that asks the host anything therefore reached a destroyed PluginUi and
+    // a freed host-API table: Survey Engine 0.1.0 does exactly that (it
+    // timestamps the dwell it is finishing) and it crashed on 0.96.3 with an
+    // access violation on Windows and an abort inside libc++ on Android.
+    //
+    // Idempotent: whatever it clears, the member destructors below find empty.
+    // The patch's radios first, as in run()'s teardown - idempotent too.
+    patchStopAll(false);
+    detachAndUnloadPlugins();
+
+    // Safety net (run()'s teardown already does this on the normal path):
+    // the recorder members are destroyed before pipeline_ (reverse
+    // declaration order), so any tap still installed must be uninstalled
+    // first — stop*Recording clears the pipeline pointer, then finalizes.
+    stopIqRecording();
+    stopAudioRecording();
+}
+
+// --- THE PER-FRAME PUMP (engine stage 3a) ------------------------------------
+//
+// The engine's steps of the frame loop, in the order drawUi has always run
+// them. gui::AppWindow::drawUi calls each at the point it always ran (its
+// comments there say why each is where it is), with its own steps between
+// them; pump() runs them all, in the same order, for a front end with no
+// frame of its own (tests/test_engine_headless). GUI thread in stage 3a; the
+// control thread's loop in 3b (docs/engine-stage3.md).
+
+void Engine::pumpFrameBegin() {
+    (void)receiverSnapshot_->retryInstall();
+    drainLocalCommands();
+}
+
+void Engine::pumpInputs() {
+    endTakesOnFault();
+    pumpDecoderOutput();
+}
+
+void Engine::pumpPlugins() {
+    applyPluginApi();
+    scannerFrame();
+}
+
+double Engine::pumpPublish() {
+    flushBookmarkSave(false);
+    return publishReceiverState();
+}
+
+void Engine::pumpAudioMute() { updateAudioMute(); }
+
+// The Transmit page's key, rebuilt every frame by the front end (gui::
+// AppWindow::drawUi says why it is applied here and not in the page), then
+// the tick the TX thread's dead-man's handle watches.
+void Engine::pumpTransmitter(bool pageLive, bool latchPressed, bool pttHeld) {
+    {
+        const cascade::gui::TxPageKey key = cascade::gui::txPageKey(
+            pageLive, transmitter_.latched(), latchPressed, pttHeld);
+        transmitter_.setLatched(key.latched);
+        transmitter_.setPttHeld(key.pttHeld);
+    }
+    transmitter_.tick();
+}
+
+void Engine::pumpWorkers() {
+    pollSourceAsync();
+    // ...and a sound card's list or open, the same way (app_window_soundcard.cpp).
+    pollSoundCard();
+    // ...and, once per frame, the one automatic reopen a radio whose driver
+    // faulted gets (0.90.1). After the poll above, so a reopen that just
+    // resolved is seen before this asks whether another is due.
+    pollSoapyRecovery();
+    // Release a wheel-burst retune the coalescer held back (~50 ms pacing).
+    pollPendingRetune();
+    // Same contract for the catalogue fetch / plugin download.
+    pollPluginAsync();
+    // AFTER the poll, never before: the poll is what clears installPending_
+    // when a transfer lands, and a pump that ran first would see the slot busy
+    // and waste a frame on every module in the queue.
+    pumpAddAll();
+}
+
+void Engine::pumpAudio() {
+    pollAudioOpen();
+    pollAudioHealth();
+    pollMicOpen();
+    // "Still running" beat, five-minute cadence. A no-op when reporting is
+    // off, and never blocks - see HeartbeatSender::poll.
+    telemetryHeartbeat_.poll(host_.frameTimeS());
+}
+
+// EVERY STEP, IN THE FRAME'S ORDER, for a front end with no frame: the GPS
+// read the window takes before its frame (run()), then the phases above.
+// One drain, not two: the window's second drain is for its keyboard. No
+// transmit page, so no key: pumpTransmitter(false, ...) releases it, which
+// is what a page that is not drawn asks for.
+void Engine::pump() {
+    pollGpsReader();
+    pumpFrameBegin();
+    pumpInputs();
+    pumpPlugins();
+    (void)pumpPublish();
+    pumpAudioMute();
+    pumpTransmitter(false, false, false);
+    pumpWorkers();
+    pumpAudio();
 }
 
 }  // namespace cascade::engine

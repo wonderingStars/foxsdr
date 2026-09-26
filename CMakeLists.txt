@@ -267,9 +267,11 @@ endif()
 # links both. This is step 1 of the engine extraction (the plan is
 # docs/ENGINE-EXTRACTION.md in the foxsdr-api repository): one engine, and
 # later a second front-end driven through the engine API, with no behaviour
-# change and no speed loss. Until then the window still OWNS the engine's
-# objects (AppWindow holds the Pipeline, the device, the recorder ...); this
-# split is only about which side of the line each file compiles on.
+# change and no speed loss. Since stage 3a the ENGINE owns the receiver's
+# objects (src/engine: cascade::engine::Engine holds the Pipeline, the device,
+# the recorders, the transmitter, the plugins, the scanner, the snapshot ...)
+# and the window holds an Engine and asks it (docs/engine-stage3.md); both
+# still run on one thread until stage 3b.
 #
 # THE LINE IS ENFORCED, not remembered:
 #   * cascade_engine links no imgui, glfw, OpenGL or cascade_gui (checked at
