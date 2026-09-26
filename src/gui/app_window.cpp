@@ -2049,7 +2049,7 @@ int AppWindow::run(int frames) {
                 setVfoToAbsoluteHz(pipeline_.activeSource().centerFrequencyHz() + offsetHz, false);
             };
             hooks.installSource = [this](std::unique_ptr<cascade::source::IqSource> src) {
-                pipeline_.setSource(std::move(src));
+                installSource(std::move(src));  // the app's one swap door
                 followInputRate();
             };
             if (!measure_->tick(pipeline_, hooks)) {
