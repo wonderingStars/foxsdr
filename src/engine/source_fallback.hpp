@@ -32,7 +32,7 @@
 #include <string>
 #include <vector>
 
-#include "gui/tune_control.hpp"
+#include "engine/tune_control.hpp"
 
 namespace cascade::gui {
 

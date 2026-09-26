@@ -157,7 +157,7 @@ public:
     static std::vector<SoapyDeviceInfo> enumerate();
     // The same scan with these drivers left out, which is safe to run while a
     // radio of theirs is open (2026-09-23) - see EnumOptions::skipDrivers and
-    // gui/device_scan_plan.hpp. Empty is exactly enumerate().
+    // engine/device_scan_plan.hpp. Empty is exactly enumerate().
     //
     // `absentDrivers` are left out because nothing of theirs can be here
     // (EnumOptions::absentDrivers, 2026-09-25: UHD with no USRP on the USB

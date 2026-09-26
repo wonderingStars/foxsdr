@@ -19,7 +19,7 @@
 // a radio that cannot be told apart from the next one in the same socket.
 //
 // Here, with no ImGui, because core/config.cpp needs it to migrate the old
-// RTL-SDR memory and gui/bias_tee.hpp needs it for everything else.
+// RTL-SDR memory and engine/bias_tee.hpp needs it for everything else.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once

@@ -32,9 +32,9 @@
 #include "core/freq_converter.hpp"
 #include "core/i18n.hpp"
 #include "core/utf8_text.hpp"
-#include "gui/soundcard_panel.hpp"
+#include "engine/soundcard_panel.hpp"
 #include "gui/theme.hpp"
-#include "gui/tune_control.hpp"
+#include "engine/tune_control.hpp"
 
 namespace cascade::gui {
 
@@ -228,7 +228,7 @@ std::string AppWindow::converterTuneNote(double requestAirHz, bool refused, doub
             msg, tr("%s is out of reach through the %s: the radio would have to tune to 0 Hz or below."),
             air.c_str(), name.c_str());
     } else if (refused) {
-        // The same rule as the plain sentence (gui/tune_control.hpp,
+        // The same rule as the plain sentence (engine/tune_control.hpp,
         // tuneRefusedMessage): a refusal INSIDE the radio's range is a busy
         // driver, not a fact about the radio, and says nothing.
         if (!hasRange || !(rHi > rLo) || (radioHz >= rLo && radioHz <= rHi)) { return {}; }

@@ -1,5 +1,5 @@
 // The radio that was recognised and then replaced by the signal generator
-// (0.99.36). See src/gui/source_fallback.hpp for the report and the paths.
+// (0.99.36). See src/engine/source_fallback.hpp for the report and the paths.
 //
 // Every case is about a thing the user was TOLD or a thing the NEXT LAUNCH
 // does, because those are the two ways "it switches to an internal source"
@@ -11,8 +11,8 @@
 #include <string>
 #include <vector>
 
-#include "gui/source_fallback.hpp"
-#include "gui/tune_control.hpp"
+#include "engine/source_fallback.hpp"
+#include "engine/tune_control.hpp"
 #include "source/sdrplay_source.hpp"
 #include "test_check.hpp"
 

@@ -1,7 +1,7 @@
 // THE DECK'S BIAS TEE KEY: its rules and its place, without an open frame.
 //
-// gui/bias_tee.hpp decides what a press of the key and each answer of its
-// dialog DO (BiasKeyGate); gui/tune_control.hpp says where the key stands on
+// engine/bias_tee.hpp decides what a press of the key and each answer of its
+// dialog DO (BiasKeyGate); engine/tune_control.hpp says where the key stands on
 // the deck. This holds both:
 //
 //   * a press on a radio with no bias tee does nothing and asks nothing;
@@ -24,8 +24,8 @@
 #include <cstdio>
 #include <string>
 
-#include "gui/bias_tee.hpp"
-#include "gui/tune_control.hpp"
+#include "engine/bias_tee.hpp"
+#include "engine/tune_control.hpp"
 #include "test_check.hpp"
 
 using cascade::gui::BiasKeyAction;

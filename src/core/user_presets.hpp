@@ -7,7 +7,7 @@
 // somewhere plausible and wrong is worse than no button (its own comment has
 // the argument). That left a UK listener with no way to keep 153.xxx MHz: the
 // host auto-applies a decoder's first preset when its window is opened
-// (gui/tune_control.hpp, autoPresetIndexOnStart), so opening POCSAG while
+// (engine/tune_control.hpp, autoPresetIndexOnStart), so opening POCSAG while
 // tuned to 153.050 MHz moved the radio to DAPNET's 439.9875 MHz - reported
 // from the field as "I have to change the frequency manually every time".
 //
@@ -19,7 +19,7 @@
 //
 // This file is pure: no ImGui, no plugin ABI, no receiver. The GUI's half
 // (turning one of these into a CascadePreset, the index space a preset-bar
-// key records) is in gui/tune_control.hpp.
+// key records) is in engine/tune_control.hpp.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once

@@ -216,7 +216,7 @@ const char* const kEngineMembers[] = {
 const char* const kControlMayCall[] = {"applyCommand", "AppWindow", "~AppWindow"};
 
 // Read-only queries exempt from rule 4 alone: each hands the open radio to a
-// pure predicate (gui/bias_tee.hpp) to ask whether it has a bias tee / whether
+// pure predicate (engine/bias_tee.hpp) to ask whether it has a bias tee / whether
 // an "on" would be remembered. Rules 1-3 still apply to them.
 const char* const kQueryMembers[] = {"biasTeeReachable", "biasKeyMayRememberNow"};
 

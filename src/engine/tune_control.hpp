@@ -919,7 +919,7 @@ inline constexpr float kDeckMasterDividerX = 384.0f;
 // a square illuminated key at the lamps' own left edge, its engraved caption
 // beside it, running no further than the compartment's divider less the same
 // 6 units the lamps keep. Drawn only while the open radio has a bias tee
-// (gui/bias_tee.hpp). The lamp row's words end 111 units down at full size
+// (engine/bias_tee.hpp). The lamp row's words end 111 units down at full size
 // (the row at 86, lamp radius 7, 4 px and a 14 px caption), and the bar's
 // foot rail stands 3 px above its 160: the key takes 122..142, with clear
 // brass above and below it at every scale the bar is drawn at - the census

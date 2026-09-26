@@ -121,7 +121,7 @@ public:
     // are the only stable handle across a device coming and going: PortAudio
     // indices are positions in a list that shifts when the set changes.
     // BY VALUE, not by reference: open() rewrites this string, and since
-    // 0.96.5 open() may be running on a worker thread (see gui/audio_open.hpp)
+    // 0.96.5 open() may be running on a worker thread (see engine/audio_open.hpp)
     // while the GUI asks. A reference into a string another thread is
     // assigning is a dangling read; a copy taken under the api lock is not.
     // Empty while an open is in progress - see streamAlive() for why that is

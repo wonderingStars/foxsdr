@@ -18,7 +18,7 @@
 // case), can sit behind an antivirus holding a handle on the file, or can
 // simply be a slow spinning disk. None of that is exotic, and all of it is
 // something the application has to survive rather than merely hope never
-// happens - exactly the argument gui/audio_open.hpp makes for the audio
+// happens - exactly the argument engine/audio_open.hpp makes for the audio
 // device open this class is modelled on.
 //
 // THE SHAPE, straight from that file. THE SAVE RUNS ON A WORKER

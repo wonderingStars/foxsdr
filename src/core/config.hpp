@@ -129,7 +129,7 @@ struct AppConfig {
     std::string soapyArgs;                  // kwargs of the last soapy device
     // LOOK FOR NETWORK USRPs (2026-09-25), OFF BY DEFAULT. The device scan
     // asks UHD for USRPs only when one could be here: an Ettus/NI USRP on the
-    // USB bus, or a saved source that is one (gui/device_scan_plan.hpp,
+    // USB bus, or a saved source that is one (engine/device_scan_plan.hpp,
     // soapyDriversWithNoHardware). A USRP on the network - N2xx, X3xx, N3xx,
     // E3xx - or on PCIe is on no USB bus, so it is only looked for when this
     // is on. Field report F204602B5329B268: UHD's probe killed the scan's
@@ -170,7 +170,7 @@ struct AppConfig {
     // An "on" is only ever written for a serial-named radio, and is put back
     // only on that radio at its own open; an "off" may be kept for any radio
     // (it keeps an RTL-SDR whose EEPROM forces the bias tee on, off). The rules:
-    // gui/bias_tee.hpp (biasTeeRemember, biasTeeAfterOpen). EMPTY BY DEFAULT.
+    // engine/bias_tee.hpp (biasTeeRemember, biasTeeAfterOpen). EMPTY BY DEFAULT.
     //
     // WHAT IT REPLACED, AND WHAT A LOAD DOES WITH IT. "nativeBiasT" was ONE
     // bool that every HackRF, Airspy, Airspy HF+, SDRplay, Mirics and RX888
@@ -297,7 +297,7 @@ struct AppConfig {
     // DEFAULTS TO THE EXISTING PLATE, and an unknown value loads as that
     // default rather than as nothing: this file is user-editable, and a typo
     // must leave the deck looking like itself. The vocabulary itself lives
-    // with the painter, in gui/tune_control.hpp (tunerStyleFromName) - a
+    // with the painter, in engine/tune_control.hpp (tunerStyleFromName) - a
     // config string is the NAME of a style, and what the name means belongs
     // where the cells are painted.
     std::string tunerDisplayStyle = "nixie";
@@ -1022,7 +1022,7 @@ public:
     // antivirus holding the file, and every one of them things the
     // application has to survive rather than merely hope never happens. The
     // fix follows this product's established shape for blocking work on the
-    // GUI thread (gui/audio_open.hpp): the write moves to a worker, and the
+    // GUI thread (engine/audio_open.hpp): the write moves to a worker, and the
     // worker needs the JSON text and the byte-write done as two separate
     // steps so the CHEAP one (building the JSON) can stay on the GUI thread -
     // where it belongs, because the config being saved is CURRENT state read

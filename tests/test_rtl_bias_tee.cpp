@@ -23,7 +23,7 @@
 #include <utility>
 #include <vector>
 
-#include "gui/bias_tee.hpp"
+#include "engine/bias_tee.hpp"
 #include "source/rtl2832u.hpp"
 #include "source/rtlsdr_source.hpp"
 #include "test_check.hpp"

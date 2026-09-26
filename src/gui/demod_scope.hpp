@@ -3,7 +3,7 @@
 // buffer of samples into a trace.
 //
 // WHY THIS IS A SEPARATE, ImGui-FREE HEADER. The same reason gui/scope_view.hpp
-// is one, and gui/rail_banks.hpp, and gui/tune_control.hpp: what the scope
+// is one, and gui/rail_banks.hpp, and engine/tune_control.hpp: what the scope
 // COMPUTES can be pinned by a test without a graphics context, and what it
 // DRAWS cannot. Everything that needs an ImDrawList lives in
 // gui/demod_scope_face.hpp; everything below is a value conversion. It is also

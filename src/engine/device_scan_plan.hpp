@@ -8,7 +8,7 @@
 // into the receiver itself.
 //
 // WHY IT WAS DEFERRED, and why that was broader than it had to be. The 0.90.0
-// field fault (gui/tune_control.hpp, deviceScanAllowed) was SoapyRTLSDR's probe
+// field fault (engine/tune_control.hpp, deviceScanAllowed) was SoapyRTLSDR's probe
 // opening and resetting every RTL dongle on the bus - the one this process was
 // streaming from included. That danger is to a device of the SAME FAMILY as the
 // driver doing the probing: UHD's discovery looks for Ettus hardware and never

@@ -1,4 +1,4 @@
-// Tests for gui/tune_control.hpp - the two pure decisions behind the two
+// Tests for engine/tune_control.hpp - the two pure decisions behind the two
 // tuning bugs fixed alongside this file: a band preset zeroing the VFO
 // offset it should have zeroed for an I/Q decoder but keeping for an audio
 // one, and a radio that lands somewhere other than it was asked with
@@ -15,7 +15,7 @@
 #include <vector>
 
 #include "core/plugin_abi.h"
-#include "gui/tune_control.hpp"
+#include "engine/tune_control.hpp"
 #include "test_check.hpp"
 
 using cascade::gui::autoPresetIndexOnStart;

@@ -831,7 +831,7 @@ private:
     std::unique_ptr<cascade::dsp::NoiseReduction> nrR_;
     // SHARED, NOT HELD BY VALUE, and the reason is lifetime rather than
     // sharing. A device open is a blocking driver call, so the GUI runs it on
-    // a worker (gui/audio_open.hpp) and abandons that worker at quit rather
+    // a worker (engine/audio_open.hpp) and abandons that worker at quit rather
     // than joining it - which means the worker can still be inside
     // Pa_OpenStream after this Pipeline is gone. audioOpener() hands the
     // worker a copy of this pointer, so the sink outlives the abandonment and

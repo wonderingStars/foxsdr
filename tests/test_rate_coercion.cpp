@@ -1,4 +1,4 @@
-// Tests for gui/rate_follow_status.hpp's rate-coercion rules - what the device
+// Tests for engine/rate_follow_status.hpp's rate-coercion rules - what the device
 // panel says when a radio runs at a different sample rate from the one asked,
 // on a call that SUCCEEDED.
 //
@@ -40,7 +40,7 @@
 #include <limits>
 #include <string>
 
-#include "gui/rate_follow_status.hpp"
+#include "engine/rate_follow_status.hpp"
 #include "rx888_fake_usb.hpp"
 #include "source/iq_source.hpp"
 #include "source/rx888_source.hpp"

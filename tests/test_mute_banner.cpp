@@ -48,7 +48,7 @@
 #include "core/utf8_text.hpp"
 #include "gui/fonts.hpp"
 #include "gui/theme.hpp"
-#include "gui/tune_control.hpp"
+#include "engine/tune_control.hpp"
 #include "test_check.hpp"
 
 namespace th = cascade::gui::theme;

@@ -295,6 +295,11 @@ file(GLOB CASCADE_GUI    CONFIGURE_DEPENDS src/gui/*.cpp)
 file(GLOB CASCADE_SOURCE CONFIGURE_DEPENDS src/source/*.cpp)
 file(GLOB CASCADE_SINK   CONFIGURE_DEPENDS src/sink/*.cpp)
 file(GLOB CASCADE_NET    CONFIGURE_DEPENDS src/net/*.cpp)
+# The receiver's machinery that used to live in the window (engine extraction
+# stage 3, docs/engine-stage3.md): the Engine class and the pure helpers it
+# shares with the window. Part of cascade_engine, under the same line as the
+# rest of it - no gui/ header, imgui, GLFW or OpenGL (checked below).
+file(GLOB CASCADE_ENGINE_SRC CONFIGURE_DEPENDS src/engine/*.cpp)
 # Native radio drivers talk to the hardware through our own USB transport
 # (src/usb) - WinUSB on Windows, usbfs directly on Linux - not through
 # SoapySDR modules or libusb: see src/usb/usb_device.hpp.
@@ -312,7 +317,7 @@ endif()
 
 add_library(cascade_engine STATIC
     ${CASCADE_CORE} ${CASCADE_DSP} ${CASCADE_SOURCE} ${CASCADE_SINK}
-    ${CASCADE_NET} ${CASCADE_USB})
+    ${CASCADE_NET} ${CASCADE_USB} ${CASCADE_ENGINE_SRC})
 
 target_include_directories(cascade_engine PUBLIC src "${CASCADE_COMMIT_HEADER_DIR}")
 # The engine API's command vocabulary (third_party/foxsdr_api, vendored
@@ -558,7 +563,8 @@ file(GLOB_RECURSE _cascade_engine_files
     src/source/*.cpp src/source/*.hpp src/source/*.h
     src/sink/*.cpp src/sink/*.hpp src/sink/*.h
     src/net/*.cpp src/net/*.hpp src/net/*.h
-    src/usb/*.cpp src/usb/*.hpp src/usb/*.h)
+    src/usb/*.cpp src/usb/*.hpp src/usb/*.h
+    src/engine/*.cpp src/engine/*.hpp src/engine/*.h)
 set(_cascade_engine_bad "")
 foreach(_f IN LISTS _cascade_engine_files)
     # #define lines too: `#define H "gui/x.hpp"` then `#include H` is the

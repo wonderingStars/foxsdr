@@ -428,13 +428,13 @@ const KnownWait kKnownWaits[] = {
     // nothing on the shutdown path opens an output device. The reap is the same
     // case as app_window.cpp's kQuitGrace above, in the same destructor and for
     // the same reason.
-    {"src/gui/audio_open.hpp", "kOpenBound", 0,
+    {"src/engine/audio_open.hpp", "kOpenBound", 0,
      "the bound the REQUESTING FRAME spends on a device open (Sinks combo, audio watchdog "
      "reopen) under a WatchdogPause - spent in the frame loop, which has ended before "
      "beginShutdown() raises the threshold"},
-    {"src/gui/audio_open.hpp", "kNoWait", 0,
+    {"src/engine/audio_open.hpp", "kNoWait", 0,
      "zero by construction - the once-a-frame ready-poll on a std::future, not a wait"},
-    {"src/gui/audio_open.hpp", "kQuitGrace", 0,
+    {"src/engine/audio_open.hpp", "kQuitGrace", 0,
      "AudioOpen::reap()'s grace before a still-blocked open is abandoned: called from "
      "~AppWindow after watchdog_.stop(), outside the budgeted stretch, exactly like "
      "app_window.cpp's kQuitGrace"},

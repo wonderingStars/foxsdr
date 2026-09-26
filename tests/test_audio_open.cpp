@@ -24,7 +24,7 @@
 // properties the fix must not lose while achieving it.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-#include "gui/audio_open.hpp"
+#include "engine/audio_open.hpp"
 
 #include "core/hang_watchdog.hpp"
 #include "core/pipeline.hpp"

@@ -155,7 +155,7 @@ public:
     // not expecting it.
     //
     // SPELLED setBiasT/biasT, the same as every other native driver, so the
-    // Source panel's one dispatch (gui/bias_tee.hpp) reaches it with the same
+    // Source panel's one dispatch (engine/bias_tee.hpp) reaches it with the same
     // call. It was setBiasTee/biasTee until the RTL-SDR joined that checkbox;
     // nothing outside this driver called the old setter, so no alias was
     // kept.
@@ -166,7 +166,7 @@ public:
     bool biasT() const { return biasTee_.load(std::memory_order_relaxed); }
 
     // WHAT THE EEPROM SAID AT OPEN, which the panel needs to decide whether a
-    // remembered "on" may be put back (gui/bias_tee.hpp).
+    // remembered "on" may be put back (engine/bias_tee.hpp).
     //   eepromValid()         - the configuration EEPROM carried the RTL2832U
     //                           header 0x28 0x32. False on a dongle with no
     //                           EEPROM at all, which reads as zeroes.

@@ -346,7 +346,7 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     // for a non-string, so this only has to reject a string that is not one
     // of the three names.
     //
-    // THE THREE NAMES ARE MIRRORED FROM gui/tune_control.hpp's
+    // THE THREE NAMES ARE MIRRORED FROM engine/tune_control.hpp's
     // tunerStyleFromName, deliberately rather than by including it: core must
     // not depend on gui. tests/test_config.cpp loads each name in turn and
     // asserts the painter reads back the SAME style, so a name added on one

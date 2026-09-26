@@ -7,7 +7,7 @@
 // and that is not a convenience, it is the only way any of this is checkable
 // at all. applyPluginPreset ends by rebuilding the very lists
 // AppWindow::drawPluginWindows is iterating while it draws a bar
-// (gui/tune_control.hpp's own comment on PendingPresetRequest explains the
+// (engine/tune_control.hpp's own comment on PendingPresetRequest explains the
 // hazard, the same shape 0.96.1 fixed in gui/list_pick.hpp), so the state
 // machine that keeps a key press from applying mid-iteration has to live
 // somewhere with no frame to corrupt, and this is the header that is.
@@ -21,7 +21,7 @@
 
 #include "core/plugin_abi.h"
 #include "core/plugin_ui.hpp"
-#include "gui/tune_control.hpp"
+#include "engine/tune_control.hpp"
 #include "test_check.hpp"
 
 using cascade::core::MutePreset;

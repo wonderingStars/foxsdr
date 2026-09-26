@@ -26,7 +26,7 @@
 #include <string>
 
 #include "core/bias_tee_memory.hpp"
-#include "gui/bias_tee.hpp"
+#include "engine/bias_tee.hpp"
 #include "rx888_fake_usb.hpp"
 #include "source/rx888_protocol.hpp"
 #include "source/rx888_source.hpp"

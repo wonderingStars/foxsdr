@@ -49,7 +49,7 @@
 #include "airspy_fake_usb.hpp"
 #include "core/config.hpp"
 #include "gui/app_window.hpp"
-#include "gui/bias_tee.hpp"
+#include "engine/bias_tee.hpp"
 #include "hackrf_fake_usb.hpp"
 #include "source/airspy_source.hpp"
 #include "source/device_source.hpp"

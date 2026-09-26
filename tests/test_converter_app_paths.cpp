@@ -47,7 +47,7 @@
 
 #include "core/freq_converter.hpp"
 #include "gui/app_window.hpp"
-#include "gui/tune_control.hpp"
+#include "engine/tune_control.hpp"
 #include "source/device_source.hpp"
 #include "test_check.hpp"
 

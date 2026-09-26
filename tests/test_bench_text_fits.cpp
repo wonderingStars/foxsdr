@@ -36,7 +36,7 @@
 #include "gui/map_view.hpp"
 #include "gui/plugin_store_view.hpp"
 #include "gui/text_fit.hpp"
-#include "gui/tune_control.hpp"
+#include "engine/tune_control.hpp"
 #include "imgui.h"
 #include "test_check.hpp"
 

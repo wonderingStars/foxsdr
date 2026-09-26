@@ -547,7 +547,7 @@ bool RtlSdrSource::bringUpLocked() {
     // cheap dongles least likely to survive it.
     //
     // Both facts are kept for the Source panel, which decides whether a
-    // remembered "on" may be put back after this open (gui/bias_tee.hpp):
+    // remembered "on" may be put back after this open (engine/bias_tee.hpp):
     // a dongle with no EEPROM never gets one back.
     std::uint8_t eeprom[8] = {0};
     bool forceBiasTee = false;

@@ -326,7 +326,7 @@ struct EnumOptions {
     // ignored. Why only some: the 0.90.0 field fault was SoapyRTLSDR's probe
     // opening and resetting every RTL dongle - the streaming one included - so
     // the danger is to a device of the SAME family as the driver probing, and
-    // gui/device_scan_plan.hpp decides which families are open. Empty (the
+    // engine/device_scan_plan.hpp decides which families are open. Empty (the
     // default) is the ordinary scan, unchanged.
     //
     // ONE BUDGET for that walk (bug hunt 2026-09-24): the children run one
@@ -343,7 +343,7 @@ struct EnumOptions {
     // faulted drivers use), and the per-driver sweep and the in-process
     // fallback leave them out too. Case is ignored.
     //
-    // The caller decides - gui/device_scan_plan.hpp, soapyDriversWithNoHardware:
+    // The caller decides - engine/device_scan_plan.hpp, soapyDriversWithNoHardware:
     // today that is "uhd" when no Ettus or NI USRP is on the USB bus, the
     // saved source is not a USRP and network USRP discovery is off. UHD's
     // probe was the one that died in the field report, on a machine whose

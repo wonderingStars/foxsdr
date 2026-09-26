@@ -1,4 +1,4 @@
-// Tests for gui/device_scan_plan.hpp - which SoapySDR drivers may be asked
+// Tests for engine/device_scan_plan.hpp - which SoapySDR drivers may be asked
 // for devices while radios are open.
 //
 // The report (2026-09-23): the owner's B200 never appeared on the patch page
@@ -9,7 +9,7 @@
 // vouch for one.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-#include "gui/device_scan_plan.hpp"
+#include "engine/device_scan_plan.hpp"
 
 #include <string>
 #include <vector>

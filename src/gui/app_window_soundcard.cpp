@@ -5,7 +5,7 @@
 //
 // The source itself - the conversion, the name-and-host-API rule, the
 // liveness watch - is source/soundcard_source.hpp; the rules a test can reach
-// are gui/soundcard_panel.hpp.
+// are engine/soundcard_panel.hpp.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "gui/app_window.hpp"
@@ -21,8 +21,8 @@
 #include "core/diag_log.hpp"
 #include "core/i18n.hpp"
 #include "core/utf8_text.hpp"
-#include "gui/audio_open.hpp"
-#include "gui/soundcard_panel.hpp"
+#include "engine/audio_open.hpp"
+#include "engine/soundcard_panel.hpp"
 #include "gui/text_fit.hpp"
 #include "gui/theme.hpp"
 

@@ -7,7 +7,7 @@
 // A tester asked for a bias-tee button and the owner's words were "add bias
 // tee to the main panel". The rules - drawn only for a radio that has one,
 // lit from the driver's readback, off at once, on only after a deliberate
-// "yes" the first time per radio per session - are gui/bias_tee.hpp's
+// "yes" the first time per radio per session - are engine/bias_tee.hpp's
 // (BiasKeyGate), where tests/test_bias_key.cpp holds them without a frame;
 // tests/test_bias_key_app.cpp drives these members against the shipping
 // HackRF driver on a fake USB transport.
@@ -22,7 +22,7 @@
 #include <imgui.h>
 
 #include "core/i18n.hpp"
-#include "gui/bias_tee.hpp"
+#include "engine/bias_tee.hpp"
 #include "gui/ui_census.hpp"
 
 namespace cascade::gui {

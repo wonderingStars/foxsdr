@@ -2,7 +2,7 @@
 // open, and what a tick does.
 //
 // It lives in a header of its own, rather than in app_window.cpp where it
-// began, for the reason every rule in gui/tune_control.hpp does: a rule kept
+// began, for the reason every rule in engine/tune_control.hpp does: a rule kept
 // inside the AppWindow translation unit is a rule no test can reach, and this
 // is the one control in the Source panel that puts POWER on a connector.
 // tests/test_rtl_bias_tee.cpp drives these functions against the shipping

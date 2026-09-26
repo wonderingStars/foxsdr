@@ -58,9 +58,9 @@ struct GLFWwindow;
 #include "gui/page_geometry.hpp"
 #include "gui/store_first_open.hpp"
 #include "gui/rail_banks.hpp"
-#include "gui/running_view.hpp"
+#include "engine/running_view.hpp"
 #include "gui/bench_rail.hpp"
-#include "gui/audio_open.hpp"
+#include "engine/audio_open.hpp"
 #include "gui/config_writer.hpp"
 #include "gui/shell_open.hpp"
 // The keyboard, as a table. ImGui-free by construction (it declares ImGuiKey
@@ -88,10 +88,10 @@ struct GLFWwindow;
 // RememberedSource, held by value below: the pure source decisions, ImGui-free
 // like every other gui header included here.
 #include "gui/readout_hold.hpp"
-#include "gui/tune_control.hpp"
+#include "engine/tune_control.hpp"
 #include "source/soundcard_source.hpp"
-#include "gui/device_scan_plan.hpp"
-#include "gui/source_fallback.hpp"
+#include "engine/device_scan_plan.hpp"
+#include "engine/source_fallback.hpp"
 #include "gui/viewport_policy.hpp"
 // CoverageMap, TrackSortKey: the pure arithmetic behind the map's three
 // receiver-relative features. Header-only and ImGui-free, so including it here
@@ -139,7 +139,7 @@ struct GLFWwindow;
 #include "source/sdrplay_source.hpp"
 #include "usb/usb_device.hpp"
 // The bias tee checkbox's state and rules (no ImGui in it).
-#include "gui/bias_tee.hpp"
+#include "engine/bias_tee.hpp"
 
 namespace cascade::gui {
 
@@ -821,7 +821,7 @@ private:
     std::string soapyScanGateDevice() const;
     // What scanSoapy() would do right now (2026-09-23): a whole scan, one that
     // leaves the open radios' drivers out, or nothing - built from the
-    // receiver's radio and every patch radio. See gui/device_scan_plan.hpp.
+    // receiver's radio and every patch radio. See engine/device_scan_plan.hpp.
     cascade::gui::SoapyScanPlan soapyScanPlan() const;
     // Combo-row click handler: 0 = generator, 1 = IQ file (panel only — the
     // pipeline switches on a successful Open), 2+i = soapyDevices_[i]
@@ -1149,7 +1149,7 @@ private:
     // "WE WANT THE USER TO HAVE TO DO NOTHING" (the owner's words). Called
     // from setPluginStopped's own START branch only: looks the plugin back up
     // by key, and if it carries presets and the receiver is not already
-    // sitting inside one of them (gui/tune_control.hpp's
+    // sitting inside one of them (engine/tune_control.hpp's
     // autoPresetIndexOnStart), applies the first exactly as if its own button
     // had been pressed. A no-op for a plugin with no preset table, and never
     // called on a stop or from config load — see the call site in
@@ -1460,12 +1460,12 @@ private:
     // do) and, past kTuneMismatchToleranceHz, sets tuneMismatchNote_ (shown
     // in the Source section) and logs once per distinct request. Pulled out
     // of applyRetuneNow only so its one non-trivial decision — the wording,
-    // in gui/tune_control.hpp's tuneMismatchMessage — stays testable without
+    // in engine/tune_control.hpp's tuneMismatchMessage — stays testable without
     // a device.
     void noteTuneMismatch(double requestHz, double answeredHz, bool isPluginPreset);
     // The refusal's counterpart: a tune the source would not make at all,
     // reported only when the request lies outside the range the radio itself
-    // publishes (gui/tune_control.hpp, tuneRefusedMessage). Same note line,
+    // publishes (engine/tune_control.hpp, tuneRefusedMessage). Same note line,
     // logged once per distinct request.
     void noteTuneRefused(double requestHz, bool isPluginPreset);
     double lastRefusedRequestHz_ = -1.0;
@@ -1792,7 +1792,7 @@ private:
     std::string audioHealthNote_;
     // THE DEVICE OPEN, OFF THIS THREAD. Field report "hang ntdll.dll @
     // InitializeWaveHandles" (0.96.4): picking an output device put the GUI
-    // thread inside waveOutOpen for 57 seconds. See gui/audio_open.hpp for the
+    // thread inside waveOutOpen for 57 seconds. See engine/audio_open.hpp for the
     // whole argument; what matters here is that nothing on this thread may
     // query the sink while inFlight() is true.
     cascade::gui::AudioOpen audioOpen_;
@@ -1878,7 +1878,7 @@ private:
     // the gate opens again (drawSourceSection), so the next radio gets its
     // own line.
     bool soapyScanDeferredLogged_ = false;
-    // THE SCAN BESIDE AN OPEN RADIO (2026-09-23; gui/device_scan_plan.hpp).
+    // THE SCAN BESIDE AN OPEN RADIO (2026-09-23; engine/device_scan_plan.hpp).
     // soapyScanSkip_ is the drivers the scan in flight left out - the open
     // radios' own families - and pollSourceAsync keeps the rows of those
     // drivers from the old list, since that scan could not have seen them.
@@ -2192,7 +2192,7 @@ private:
 
     // THE BIAS TEE. Present only when the OPEN device is one of the native
     // drivers that has one and can say so (see withBiasTee in
-    // gui/bias_tee.hpp for which, and for why this is not a DeviceSource
+    // engine/bias_tee.hpp for which, and for why this is not a DeviceSource
     // method). `shown` is the checkbox and is always the driver's READBACK;
     // `remembered` is AppConfig::biasTee, the memory PER RADIO (driver and
     // serial) for every family. It is seeded at restore, applied by
@@ -2207,7 +2207,7 @@ private:
     // open radio has a bias tee, lit exactly when `shown` is, and switching
     // through switchBiasTee - the checkbox's own path - so the two cannot
     // disagree. Off is immediate; on asks first, once per radio per session
-    // (gui/bias_tee.hpp, BiasKeyGate, says why a dialog and not a hold).
+    // (engine/bias_tee.hpp, BiasKeyGate, says why a dialog and not a hold).
     cascade::gui::BiasKeyGate biasKeyGate_;
     // Raised by a press that has to ask; the dialog is opened from the top
     // level (drawBiasKeyConfirm), because the press happens inside the deck's
@@ -2293,7 +2293,7 @@ private:
     std::string converterStatusLine(bool shortForm = false);
     // A tune the converter could not deliver, or the radio refused or moved,
     // stated in AIR terms. "" when no converter is on (the plain sentences in
-    // gui/tune_control.hpp speak then).
+    // engine/tune_control.hpp speak then).
     std::string converterTuneNote(double requestAirHz, bool refused, double answeredAirHz,
                                   bool isPluginPreset);
     // The AIR centre a source switch carries to the next radio, or no value
@@ -2350,7 +2350,7 @@ private:
     // mirror the DRIVER'S READBACK for the session and nothing more - which
     // also means there is no stale saved value to reconcile against a
     // driver's open-time policy, the reconciliation the RTL-SDR's bias tee
-    // needed a rule of its own for (gui/bias_tee.hpp, rtlBiasTeeAtOpen).
+    // needed a rule of its own for (engine/bias_tee.hpp, rtlBiasTeeAtOpen).
     //
     // "Present" is asked of the CONCRETE TYPE once per open, because these
     // are per-model even within one driver: an RSP1A has no HDR mode, an

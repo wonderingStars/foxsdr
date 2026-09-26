@@ -12,7 +12,7 @@
 // below are the two halves of the answer: one stops it happening, the other
 // gets an already-wrong window back.
 //
-// Same split as gui/tune_control.hpp: WHAT the geometry should be is decided
+// Same split as engine/tune_control.hpp: WHAT the geometry should be is decided
 // here, in functions with no ImGui in them; HOW it is applied stays in
 // beginPage.
 //

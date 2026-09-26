@@ -19,6 +19,7 @@
 #include <cstddef>
 
 #include "core/i18n.hpp"  // FOX_TR_NOOP: txLampText is drawn through tr()
+#include "engine/tx_frequency.hpp"
 
 namespace cascade::gui {
 
@@ -42,18 +43,9 @@ inline constexpr const char* kTxLicenceNotice =
     "country's licensing authority's, not this software's.";
 
 // --- the frequency -----------------------------------------------------------
-
-// Which frequency the transmitter should be on this frame.
 //
-// NOT SPLIT is the default and is the answer almost everybody wants: the
-// transmitter follows the receiver, so tuning the dial moves both and a reply
-// goes out where the call came in. SPLIT unlinks them, which is what a
-// repeater, a DX pile-up and a satellite all need - and which is also the
-// state where somebody transmits somewhere they are not listening, so the
-// page lights the key while it is on.
-inline double txFrequencyHz(bool split, double splitHz, double receiverHz) {
-    return split ? splitHz : receiverHz;
-}
+// txFrequencyHz is in engine/tx_frequency.hpp (included above), where the
+// engine's transmitter-follows-the-dial step can reach it.
 
 // --- the power ---------------------------------------------------------------
 //

@@ -12,7 +12,7 @@
 // without looking wrong.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-#include "gui/running_view.hpp"
+#include "engine/running_view.hpp"
 
 #include "test_check.hpp"
 

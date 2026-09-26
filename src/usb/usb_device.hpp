@@ -151,7 +151,7 @@ std::vector<UsbDeviceInfo> unboundFrom(const std::vector<UsbNode>& nodes);
 // is bound to - so a caller can ask "is there any hardware of this family on
 // the bus at all" before letting a vendor module walk it (2026-09-25: UHD's
 // probe, which the SoapySDR scan now skips on a machine with no USRP - see
-// gui/device_scan_plan.hpp, soapyDriversWithNoHardware). Rule 1 holds: the
+// engine/device_scan_plan.hpp, soapyDriversWithNoHardware). Rule 1 holds: the
 // same SetupAPI / sysfs property reads as the lists above, nothing opened.
 // Each pair at most once, in the order found.
 //
