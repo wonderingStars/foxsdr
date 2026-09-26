@@ -652,9 +652,23 @@ function Measure-Background($snapA, $snapB, [double]$wallS, [long[]]$exceptIds, 
 # recorded (3.132-3.137 GHz on the development desktop, 2026-09-26, against
 # a nominal 3187 MHz).
 $script:CycleRateHz = 0.0
+# Until the session has measured it on a quiet machine, a PROVISIONAL rate:
+# the registry's nominal clock x 0.983, what the quiet measurements read.
+$script:NominalHz = 0.0
+try { $script:NominalHz = 1e6 * [double](Get-ItemProperty 'HKLM:\HARDWARE\DESCRIPTION\System\CentralProcessor\0').'~MHz' } catch { $script:NominalHz = 0.0 }
 function Get-CycleRate {
-    if ($script:CycleRateHz -le 0) { $script:CycleRateHz = [FoxMeasure4]::CycleRateHz(1.0, 3) }
+    if ($script:CycleRateHz -gt 0) { return $script:CycleRateHz }
+    if ($script:NominalHz -gt 0) { return 0.983 * $script:NominalHz }
+    $script:CycleRateHz = [FoxMeasure4]::CycleRateHz(1.0, 3)
     return $script:CycleRateHz
+}
+# A measured rate the session can use: at least 95 % of the nominal clock
+# when the nominal is known (quiet: 98.2-98.8 %). Below it the spin was
+# preempted (measured under load) or the clock is throttled.
+function Test-CycleRate([double]$rateHz, [double]$nominalHz) {
+    if ($rateHz -le 0) { return 'no cycle rate was measured' }
+    if ($nominalHz -gt 0 -and $rateHz -lt 0.95 * $nominalHz) { return ('the cycle rate measured {0:F0} Hz, under 95 % of the nominal {1:F0} Hz: measured under load, or the clock is throttled' -f $rateHz, $nominalHz) }  # CHECK:cycle-rate-low
+    return ''
 }
 
 function Test-BackgroundOver($bg, $lim) {
@@ -1256,6 +1270,8 @@ function Get-Summary([string]$Root, [bool]$noisyOk) {
     # CPU is cycles over the session's cycle rate: a session that did not
     # measure one cannot say what any CPU figure means.
     if ([double]$knobs.cycleRateHz -le 0) { $refusals.Add('the session recorded no cycle rate (cycleRateHz), so no CPU figure can be read') }  # CHECK:session-cycle-rate
+    $rateSays = Test-CycleRate ([double]$knobs.cycleRateHz) (1e6 * [double](Get-P $meta 'registryMhz' 0))
+    if ([double]$knobs.cycleRateHz -gt 0 -and $rateSays -ne '') { $refusals.Add($rateSays) }
     # Two builds, or one measured twice (review d6).
     if ($buildBlocks.Contains('baseline') -and $buildBlocks.Contains('candidate') -and [string]$buildBlocks.baseline.sha256 -eq [string]$buildBlocks.candidate.sha256) { $refusals.Add('the baseline and the candidate are the same executable (one sha256)') }  # CHECK:session-same-exe
     $gateRows = @()
@@ -1798,6 +1814,12 @@ if ($SelfTest) {
         [void](Test-Scenario 'v_cycle_rate_missing' 'cpu' { param($sd, $m, $r) New-FakeRun $sd 'candidate' $m $r (Get-RunResult $cpus[$r - 1]) } '' 'REFUSED*' 3 $true { param($sd) $mt = Read-Json (Join-Path $sd 'session.json'); $mt.PSObject.Properties.Remove('cycleRateHz'); Write-Json $mt (Join-Path $sd 'session.json') })
         $sCyc = Test-Scenario 'v_cycles_not_times' 'cpu' { param($sd, $m, $r) New-FakeRun $sd 'candidate' $m $r (Get-RunResult $cpus[$r - 1] @{ cpuS = 0.001 }) } '' 'PASS' 0
         Check ([Math]::Abs($sCyc.builds.candidate.measures.cpu.median.cpuPct - 5.08333) -lt 0.001) "the CPU figure is the cycles' (5.083 % of a core), not the kernel time's ($($sCyc.builds.candidate.measures.cpu.median.cpuPct))"
+        # The cycle rate itself: measured under load, it is refused.
+        Check ((Test-CycleRate 3.13e9 3.187e9) -eq '') 'a quiet cycle rate (98 % of nominal) is accepted'
+        Check ((Test-CycleRate 2.57e9 3.187e9) -ne '') 'a cycle rate measured under load (81 % of nominal) is refused'
+        Check ((Test-CycleRate 3.13e9 0) -eq '') 'with no nominal clock known, any measured rate is taken'
+        [void](Test-Scenario 'v_cycle_rate_under_load' 'cpu' { param($sd, $m, $r) New-FakeRun $sd 'candidate' $m $r (Get-RunResult $cpus[$r - 1]) } '' 'REFUSED*' 3 $true { param($sd) $mt = Read-Json (Join-Path $sd 'session.json'); $mt | Add-Member -NotePropertyName registryMhz -NotePropertyValue 1250; Write-Json $mt (Join-Path $sd 'session.json') })
+        [void](Test-Scenario 'v_cycle_rate_quiet' 'cpu' { param($sd, $m, $r) New-FakeRun $sd 'candidate' $m $r (Get-RunResult $cpus[$r - 1]) } '' 'PASS' 0 $true { param($sd) $mt = Read-Json (Join-Path $sd 'session.json'); $mt | Add-Member -NotePropertyName registryMhz -NotePropertyValue 1017; Write-Json $mt (Join-Path $sd 'session.json') })
         # B4: decoders starved of audio; decoders not running.
         [void](Test-Scenario 'd1_decoders_starved' 'cpu' { param($sd, $m, $r) New-FakeRun $sd 'candidate' $m $r (Get-RunResult ($cpus[$r - 1] * 0.8) @{ decoderAudioFramesFed = 28800 }) } 'decoders-fed' 'INVALID*' 2)
         [void](Test-Scenario 'd2_decoders_not_running' 'cpu' { param($sd, $m, $r) New-FakeRun $sd 'candidate' $m $r (Get-RunResult ($cpus[$r - 1] * 0.7) @{ decoders = @([ordered]@{ plugin = 'APRS'; reason = 0; running = $true }, [ordered]@{ plugin = 'Morse (CW)'; reason = 3; running = $false }, [ordered]@{ plugin = 'EAS / SAME'; reason = 3; running = $false }) }) } 'decoders-running' 'INVALID*' 2)
@@ -2116,10 +2138,6 @@ $argProblem = Test-CommitArgs ([bool]$Candidate) $BaselineCommit $CandidateCommi
 if ($argProblem -ne '') { Write-Host "REFUSED: $argProblem"; exit 3 }
 New-Item -ItemType Directory -Force -Path $Out | Out-Null
 # The cycle rate the session converts cycles to cores with (Get-CycleRate).
-$sessionCycleRate = Get-CycleRate
-$registryMhz = 0
-try { $registryMhz = [int](Get-ItemProperty 'HKLM:\HARDWARE\DESCRIPTION\System\CentralProcessor\0').'~MHz' } catch { $registryMhz = 0 }
-Write-Host ("cycle rate: {0:F0} Hz (registry: {1} MHz)" -f $sessionCycleRate, $registryMhz)
 $knobSet = @{
     Seconds = $Seconds; WarmupSeconds = $WarmupSeconds; SoakSeconds = $SoakSeconds; RateLadder = $RateLadder
     RateWindow = $RateWindow; Retunes = $Retunes; FrameCapHz = $FrameCapHz; WindowSize = $WindowSize
@@ -2132,6 +2150,19 @@ if ($startBlocker -ne '') {
     Write-Host "BLOCKED at session start: $startBlocker"
     Write-Host "    Waiting for it to clear, up to $WaitForOthersMinutes min for the WHOLE session (-WaitForOthersMinutes); if it does not, the session stops with exit 3."
 }
+# The cycle rate, measured once the machine is quiet (the first launch's own
+# wait comes first), and refused if it was plainly measured under load.
+$firstQuiet = Wait-ForQuiet { Get-Blocker -1 } 10
+if (-not $firstQuiet.quiet) {
+    Write-Host "REFUSED: the session stopped before measuring anything - the machine never became quiet within the $WaitForOthersMinutes min budget (blocked: $($firstQuiet.blocker))"
+    exit 3
+}
+$sessionCycleRate = [FoxMeasure4]::CycleRateHz(1.0, 3)
+$rateProblem = Test-CycleRate $sessionCycleRate $script:NominalHz
+if ($rateProblem -ne '') { Write-Host "REFUSED: $rateProblem"; exit 3 }
+$script:CycleRateHz = $sessionCycleRate
+$registryMhz = [int]($script:NominalHz / 1e6)
+Write-Host ("cycle rate: {0:F0} Hz (registry: {1} MHz)" -f $sessionCycleRate, $registryMhz)
 $stagedExe = [ordered]@{ baseline = (Copy-Stage (Resolve-Path $Baseline).Path (Join-Path $Out 'stage\baseline')) }
 if ($Candidate) { $stagedExe.candidate = (Copy-Stage (Resolve-Path $Candidate).Path (Join-Path $Out 'stage\candidate')) }
 $meta = [ordered]@{
