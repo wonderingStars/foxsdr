@@ -800,7 +800,7 @@ function Get-Summary([string]$Root, [bool]$noisyOk) {
     }
 }
 
-$ExitMeaning = @{ 0 = 'every gate PASSED'; 1 = 'a gate FAILED'; 2 = 'a gate is INVALID or has NO DATA'; 3 = 'REFUSED - not comparable'; 4 = 'UNDECIDED - a gate is NOISY or needs RE-MEASURE' }
+$ExitMeaning = @{ 0 = 'every judged gate PASSED (see any NOTE on NOISY gates above)';1 = 'a gate FAILED'; 2 = 'a gate is INVALID or has NO DATA'; 3 = 'REFUSED - not comparable'; 4 = 'UNDECIDED - a gate is NOISY or needs RE-MEASURE' }
 
 function Write-GateTable($summary) {
     foreach ($label in $summary.builds.Keys) {
@@ -1187,6 +1187,8 @@ if ($PSCmdlet.ParameterSetName -eq 'CompareFiles') {
     Write-Host 'Not measured (gaps):'
     foreach ($gp in @(Get-P $sb2 'gaps' @())) { Write-Host "  - $gp" }
     $code = Get-ExitCode $rows ([bool]$AcceptNoisy)
+    $noisyRows = @($rows | Where-Object { $_.verdict -like 'NOISY*' }).Count
+    if ($AcceptNoisy -and $noisyRows -gt 0) { Write-Host "NOTE: -AcceptNoisy was given: $noisyRows NOISY gate(s) were NOT judged and do not hold the exit code." }
     Write-Host ("exit {0}: {1}" -f $code, $ExitMeaning[$code])
     exit $code
 }
