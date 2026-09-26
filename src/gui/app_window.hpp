@@ -3915,9 +3915,13 @@ private:
     std::string catalogError_;   // red: fetch/parse failure, verbatim
     std::string catalogStatus_;  // neutral: "N plugins in the catalogue"
     // --- measurement (tools/measure_engine.ps1) ------------------------------
-    // Both null in every ordinary run: FOXSDR_FRAME_LOG and FOXSDR_MEASURE
-    // (bounded runs only) are the debug switches that create them. See
-    // gui/frame_log.hpp and core/engine_measure.hpp.
+    // All three null in every ordinary run; each is created only by its debug
+    // switch. FOXSDR_MEASURE (measure_) is honoured in a bounded --frames run
+    // ONLY. FOXSDR_FRAME_LOG (frameLog_), FOXSDR_FRAME_CAP_HZ (frameCap_) and
+    // FOXSDR_VSYNC_OFF (the swap interval, read where the window is made) are
+    // read in EVERY run, interactive ones included - an environment switch,
+    // never a setting, and there is no other way on. See gui/frame_log.hpp
+    // and core/engine_measure.hpp.
     std::unique_ptr<FrameLog> frameLog_;
     std::unique_ptr<FrameCap> frameCap_;  // FOXSDR_FRAME_CAP_HZ
     std::unique_ptr<cascade::core::EngineMeasure> measure_;
