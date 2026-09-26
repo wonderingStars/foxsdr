@@ -1382,7 +1382,7 @@ itself, operated on its own face.
 | **Speaker** | Where the demodulated channel wired to it goes: a **WAV file** (the default), an **MP3 file**, **the speakers**, or any other sound output - chosen in the panel on the right. Files go in the recordings folder, one per speaker, named after it. |
 | **Spectrum** | A live trace and waterfall: of the whole capture (every channel marked and named) when wired to the Radio, of one channel when wired to that channel. |
 | **Text out** | A log of the lines from every decoder wired to it. |
-| **Map** | Aircraft, ships and stations from up to five decoders on one live map - each decoder's map output wired to one of its five inputs, so ADS-B from one radio and AIS from another share it. The same map, basemap and target details as the map pages. |
+| **Map** | Aircraft, ships and stations from up to five decoders on one live map - each decoder's map output wired to one of its five inputs, so ADS-B from one radio and AIS from another share it. The same map, basemap and target details as the map pages; with a map imagery plugin fitted, its attribution is lettered under the chart, as on the map pages. |
 | **Decoders** | One part per installed decoder plugin, by name. An I/Q decoder wired to a Channel is fed *that channel*, tuned, so several decoders on several frequencies run off one radio at once; wired to the Radio it gets the whole capture. An audio decoder goes behind a Demod. Picture decoders (APT, WEFAX, SSTV) are parts too and show their picture on the node. |
 
 A connection that cannot carry what a port produces is refused while it is

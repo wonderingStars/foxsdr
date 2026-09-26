@@ -56,6 +56,7 @@
 // startup update check runs at all, and what the Settings > Updates row says.
 #include "core/package_identity.hpp"
 #include "gui/band_plan_style.hpp"
+#include "gui/basemap_stand_in.hpp"
 #include "gui/plugin_markers.hpp"
 #include "gui/rate_follow_status.hpp"
 #include "gui/soundcard_panel.hpp"
@@ -1408,6 +1409,13 @@ int AppWindow::run(int frames) {
         // The deck's bias tee stand-in (gui/bias_tee.hpp, biasStandInFor):
         // bounded runs only, for the same reason as the script below.
         biasStandIn_ = cascade::gui::biasStandInFor(std::getenv("FOXSDR_FORCE_BIAS_KEY"), true);
+        // The stand-in basemap (gui/basemap_stand_in.hpp), the same way: a
+        // map's tiles and their attribution, with no plugin and no network.
+        basemapStandIn_ =
+            cascade::gui::standInBasemapWanted(std::getenv("FOXSDR_FORCE_BASEMAP"), true);
+        if (basemapStandIn_ && !basemap_.active()) {
+            basemap_.attach(cascade::gui::standInBasemap());
+        }
         // The scripted pointer (gui/input_script.hpp). Bounded runs only, so
         // an interactive session can never be driven by a stray variable.
         if (const char* script = std::getenv("FOXSDR_INPUT_SCRIPT");
@@ -3383,7 +3391,11 @@ void AppWindow::drawUi() {
     // scope's whole tile set on every frame and re-uploading it on the next.
     // Skipped entirely when nothing asked, so an eviction pass with no map and
     // no scope open cannot age the tile set for nothing.
-    if (basemapUsedThisFrame_) { basemap_.endFrame(); }
+    if (basemapUsedThisFrame_) {
+        // Said to the census when there are tiles to keep (tests/test_patch_map_credit).
+        if (basemap_.active()) { cascade::gui::census::note("basemap:endframe"); }
+        basemap_.endFrame();
+    }
     basemapUsedThisFrame_ = false;
 
     // Scanner driver, AFTER all widgets: any manual tune the user made this
@@ -11374,6 +11386,10 @@ void AppWindow::refreshPluginRunner() {
             break;
         }
     }
+    // A bounded run's stand-in, only where no plugin supplies one.
+    if (wantBasemap == nullptr && basemapStandIn_) {
+        wantBasemap = cascade::gui::standInBasemap();
+    }
     basemap_.attach(wantBasemap);
     // Track enrichment, by the same first-wins rule and for the same reason.
     const CascadeTrackInfoApi* wantTrackInfo = nullptr;
@@ -13143,14 +13159,54 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
                     view->requestFitToTracks();
                 }
                 const float mapW = faceW;
-                const float mapH = s1.y - ImGui::GetCursorScreenPos().y - 4.0f * zoom;
+                // THE BASEMAP'S ATTRIBUTION, AS EVERY MAP PAGE LETTERS IT
+                // (0.99.41). Until now this part drew the same tiles through
+                // the same MapView and credited nothing - OpenStreetMap tiles
+                // uncredited on every patch page with the imagery plugin
+                // fitted. The line is RESERVED BEFORE the chart is sized, for
+                // the reason the map pages give: the map fills what it is
+                // given, so a credit drawn afterwards lands outside the face.
+                // Under the chart, so the zoom keys and the legend (both
+                // inside it) can never cover it; wrapped to the face's width.
+                const bool credit = basemap_.active() && !basemap_.attribution().empty();
+                float creditH = 0.0f;
+                if (credit) {
+                    creditH = ImGui::CalcTextSize(basemap_.attribution().c_str(), nullptr, false,
+                                                  mapW)
+                                  .y +
+                              ImGui::GetStyle().ItemSpacing.y;
+                }
+                const float mapH =
+                    s1.y - ImGui::GetCursorScreenPos().y - 4.0f * zoom - creditH;
                 if (mapW > 40.0f && mapH > 40.0f) {
                     view->setTrailOptions(mapTrails_, mapTrailAltColours_);
                     view->setTrailStyle(mapTrailStyle_);
                     view->setAircraftIconPx(aircraftIconPx_);
                     view->setTrailWidthPx(mapTrailWidthPx_);
+                    const ImVec2 chartTL = ImGui::GetCursorScreenPos();
+                    cascade::gui::census::rect("patchmap:face", s0.x, s0.y, s1.x, s1.y);
+                    cascade::gui::census::rect("patchmap:chart", chartTL.x, chartTL.y,
+                                               chartTL.x + mapW, chartTL.y + mapH);
+                    cascade::gui::census::note("patchmap:chart");
                     view->draw(mapW, mapH, patchMapTracks_, patchMapPaths_, &basemap_,
                                &trackInfo_);
+                    if (credit) {
+                        ImGui::SetCursorScreenPos(ImVec2(chartTL.x, chartTL.y + mapH +
+                                                                        ImGui::GetStyle().ItemSpacing.y));
+                        const ImVec2 at = ImGui::GetCursorScreenPos();
+                        ImGui::PushTextWrapPos(at.x + mapW);
+                        ImGui::TextDisabled("%s", basemap_.attribution().c_str());
+                        ImGui::PopTextWrapPos();
+                        const ImVec2 r0 = ImGui::GetItemRectMin();
+                        const ImVec2 r1 = ImGui::GetItemRectMax();
+                        cascade::gui::census::note("patchmap:credit:", basemap_.attribution());
+                        cascade::gui::census::rect("patchmap:credit", r0.x, r0.y, r1.x, r1.y);
+                    }
+                    // ...AND THE TILE CACHE IS TOLD IT WAS USED, as the map
+                    // pages tell it: the one endFrame() at the end of drawUi
+                    // is what evicts unwanted tiles and re-asks a missing one,
+                    // and with only this part on screen it never ran.
+                    basemapUsedThisFrame_ = true;
                 }
                 break;
             }

@@ -2244,6 +2244,9 @@ private:
     // BOUNDED (--frames) RUN (gui::biasStandInFor), like FOXSDR_INPUT_SCRIPT:
     // an interactive launch never has a stand-in.
     cascade::gui::BiasStandIn biasStandIn_ = cascade::gui::BiasStandIn::None;
+    // FOXSDR_FORCE_BASEMAP in a bounded run (gui/basemap_stand_in.hpp): the
+    // stand-in basemap is attached whenever no plugin supplies one.
+    bool basemapStandIn_ = false;
     bool biasStandInActive() const {
         return biasStandIn_ != cascade::gui::BiasStandIn::None && !biasTeeReachable();
     }
