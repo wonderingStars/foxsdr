@@ -67,6 +67,19 @@ foreach(src ${CASCADE_TESTS})
     set_tests_properties(${name} PROPERTIES TIMEOUT 120)
 endforeach()
 
+# TESTS THAT RUN THE APPLICATION ITSELF (CASCADE_APP_BINDIR/cascade.exe, or
+# the exe beside the test binaries' parent for the Soapy child tests). Building
+# one of them alone must rebuild the application too, or its end-to-end half
+# drives whatever stale cascade.exe the build tree last held.
+foreach(_runs_app IN ITEMS test_bias_key_run test_crash_upload test_diag_hang test_diagnostics
+                           test_gps_app test_shutdown_budget test_startup_state
+                           test_stop_ends_recordings test_theme_census test_soapy_enum_proc
+                           test_soapy_source)
+    if(TARGET ${_runs_app})
+        add_dependencies(${_runs_app} cascade)
+    endif()
+endforeach()
+
 # THE STAGE-1 FIXTURE PLUGIN (engine extraction, docs/engine-stage1.md): a
 # real module - a decoder, two presets and a command key - so
 # test_apply_command applies the plugin ops to a loaded plugin. Built beside
