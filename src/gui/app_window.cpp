@@ -993,7 +993,10 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
     webServer_.setStatusProvider([this]() { return webStatusNow(); });
     // The CAT server reads the SAME published snapshot - and the plugin host
     // API reads it too - so a frequency read over CAT, one read in the
-    // browser and one a plugin reads can never disagree.
+    // browser and one a plugin reads come from the same publishes. They can
+    // differ only by publish: CAT and plugins read the newest state lock-free,
+    // while the browser's block may be the one before it for the moment a
+    // reader holds its swap lock (core/receiver_snapshot.hpp).
     catServer_.setStatusProvider([this]() { return catStatusNow(); });
     webServer_.setSpectrumProvider([this](cascade::net::SpectrumSnapshot& inOut) {
         std::lock_guard<std::mutex> lock(webMutex_);
@@ -3114,6 +3117,10 @@ void benchGroup(const char* caption) {
 void AppWindow::drawUi() {
     // "Enlarge every reading", handed to the drawing sites for this frame.
     cascade::gui::theme::setReadingsScale(readingsScale_);
+    // THE SNAPSHOT'S RETRY, EVERY PASS (engine stage 2): a block the last
+    // publish could neither install nor hand to a reader lands now, whether
+    // or not anything changes this frame. Never waits.
+    (void)receiverSnapshot_->retryInstall();
     // THE COMMANDS THE WIDGETS SUBMITTED LAST FRAME, FIRST (engine extraction
     // stage 1: every control ends in applyCommand - see app_window.hpp). At
     // the top, before anything is drawn and before any list is walked, so a
@@ -17363,34 +17370,55 @@ void AppWindow::fillPublishedState(cascade::core::PublishedState& ps, const std:
     const cascade::sink::AudioOut& sink = pipeline_.audio();
     const bool running = pipeline_.running();
 
-    std::uint32_t fl = 0;
-    const auto set = [&fl](bool on, std::uint32_t bit) {
-        if (on) { fl |= bit; }
-    };
-    set(running, FOXAPI_RX_RUNNING);
-    set(device_ != nullptr, FOXAPI_RX_DEVICE_OPEN);
-    set(pipeline_.faulted(), FOXAPI_RX_FAULTED);
-    set(userMuted_, FOXAPI_RX_MUTED);
-    set(stereoEnabled_, FOXAPI_RX_STEREO_ENABLED);
-    set(pipeline_.stereoActive(), FOXAPI_RX_STEREO_ACTIVE);
-    set(nrEnabled_, FOXAPI_RX_NR);
-    set(notchEnabled_, FOXAPI_RX_NOTCH);
-    set(autoNotch_, FOXAPI_RX_AUTO_NOTCH);
-    set(deviceAgc_, FOXAPI_RX_DEVICE_AGC);
-    set(deviceAgcSupported_, FOXAPI_RX_AGC_SUPPORTED);
-    set(iqRecorder_.recording(), FOXAPI_RX_RECORDING_IQ);
-    set(audioRecorder_.recording(), FOXAPI_RX_RECORDING_AUDIO);
-    set(scanner_.active(), FOXAPI_RX_SCANNER_ACTIVE);
+    // THE DECODERS, from ONE acquisition of the runner's lock (the lock its
+    // DSP thread takes per block): how many instances are fed, and which
+    // modules. The DEC lamp's predicate is running && active > 0; the DECODERS
+    // card's count is the loaded decoder modules the runner feeds
+    // (fedDecoderCount / loadedDecoderCount, asked the same way here).
+    std::size_t runnerActive = 0;
+    std::uint32_t fedModules = 0;
+    std::uint32_t fittedModules = 0;
+    if (running) { pluginRunner_.feedSnapshot(runnerActive, feedingKeysScratch_); }
+    for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
+        if (!p.loaded) { continue; }
+        if (p.decoder == nullptr && p.iqDecoder == nullptr && p.imageDecoder == nullptr) { continue; }
+        ++fittedModules;
+        if (!running) { continue; }
+        const std::string key = cascade::core::pluginKey(p);
+        if (key.empty()) { continue; }
+        if (std::find(feedingKeysScratch_.begin(), feedingKeysScratch_.end(), key) !=
+            feedingKeysScratch_.end()) {
+            ++fedModules;
+        }
+    }
+
+    // THE FLAGS: each condition, from its own source, into its own bit
+    // (core::receiverFlags; test_snapshot_app walks them one at a time).
+    cascade::core::RxFlagSources fs;
+    fs.running = running;
+    fs.deviceOpen = device_ != nullptr;
+    fs.faulted = pipeline_.faulted();
+    fs.muted = userMuted_;
+    fs.stereoEnabled = stereoEnabled_;
+    fs.stereoActive = pipeline_.stereoActive();
+    fs.nr = nrEnabled_;
+    fs.notch = notchEnabled_;
+    fs.autoNotch = autoNotch_;
+    fs.deviceAgc = deviceAgc_;
+    fs.agcSupported = deviceAgcSupported_;
+    fs.recordingIq = iqRecorder_.recording();
+    fs.recordingAudio = audioRecorder_.recording();
+    fs.scannerActive = scanner_.active();
     // The DEC lamp's own predicate (drawToolbar's MASTER cluster).
-    set(running && pluginRunner_.activeCount() > 0, FOXAPI_RX_DECODER_ACTIVE);
-    set(transmitter_.haveSink(), FOXAPI_RX_TX_AVAILABLE);
-    set(transmitter_.transmitting(), FOXAPI_RX_TX_KEYED);
-    set(transmitter_.latched(), FOXAPI_RX_TX_LATCHED);
+    fs.decoderActive = running && runnerActive > 0;
+    fs.txAvailable = transmitter_.haveSink();
+    fs.txKeyed = transmitter_.transmitting();
+    fs.txLatched = transmitter_.latched();
     // The app's consent to a remote key: a transmitter open AND the Transmit
     // page on screen (what /api/status has always called transmitAvailable).
-    set(transmitOpen_ && transmitter_.haveSink(), FOXAPI_RX_TX_REMOTE_ARMED);
-    set(sink.running(), FOXAPI_RX_SINK_OPEN);
-    set(webServer_.running(), FOXAPI_RX_WEB_LISTENING);
+    fs.txRemoteArmed = transmitOpen_ && transmitter_.haveSink();
+    fs.sinkOpen = sink.running();
+    fs.webListening = webServer_.running();
 
     r.centreHz = src.centerFrequencyHz();
     r.vfoOffsetHz = pipeline_.vfoOffsetHz();
@@ -17408,8 +17436,8 @@ void AppWindow::fillPublishedState(cascade::core::PublishedState& ps, const std:
     r.audioLevelDb = -200.0;
     // The level-1 rule the plugin API has always used (the DSP's gate, with
     // its hysteresis, is not published by the pipeline).
-    set(r.signalDb > r.squelchDb, FOXAPI_RX_SQUELCH_OPEN);
-    r.flags = fl;
+    fs.squelchOpen = r.signalDb > r.squelchDb;
+    r.flags = cascade::core::receiverFlags(fs);
     r.dbMin = static_cast<double>(dbMin_);
     r.dbMax = static_cast<double>(dbMax_);
     r.nrStrength = static_cast<double>(nrStrength_);
@@ -17419,8 +17447,8 @@ void AppWindow::fillPublishedState(cascade::core::PublishedState& ps, const std:
     r.demodMode = cascade::gui::abiDemodForModeIndex(modeIndex_);
     r.deemphasis = static_cast<std::uint32_t>(deemphIndex_);
     r.gainCount = device_ != nullptr ? static_cast<std::uint32_t>(deviceGainRanges_.size()) : 0u;
-    r.decodersRunning = running ? static_cast<std::uint32_t>(fedDecoderCount()) : 0u;
-    r.decodersFitted = static_cast<std::uint32_t>(loadedDecoderCount());
+    r.decodersRunning = fedModules;
+    r.decodersFitted = fittedModules;
     r.txMode = static_cast<std::uint32_t>(transmitter_.mode());
     r.audioUnderruns = sink.underruns();
     r.txFrequencyHz = transmitter_.frequencyHz();
@@ -17429,8 +17457,12 @@ void AppWindow::fillPublishedState(cascade::core::PublishedState& ps, const std:
     r.txLatchRemainingMs = 0;  // OPEN: the Transmitter publishes no latch timer
     cascade::core::formatUtf8(r.deviceName, sizeof(r.deviceName), "%s",
                               src.name() != nullptr ? src.name() : "");
-    cascade::core::formatUtf8(r.sinkName, sizeof(r.sinkName), "%s",
-                              sink.openedDeviceName().c_str());
+    // openedDeviceName() try-locks and answers "" while an open holds the
+    // lock: that is not a change of sink, so the last good name is kept and
+    // no counter moves.
+    cascade::core::formatUtf8(
+        r.sinkName, sizeof(r.sinkName), "%s",
+        cascade::core::keepLastGoodName(sinkNameLastGood_, sink.openedDeviceName()).c_str());
     cascade::core::formatUtf8(r.faultMessage, sizeof(r.faultMessage), "%s", faultMessage.c_str());
     // r.txUnkeyReason: OPEN - the Transmitter keeps no sentence for it.
 
@@ -22024,8 +22056,9 @@ void AppWindow::publishReceiverState() {
     cascade::core::PublishedState ps{};
     fillPublishedState(ps, faultMessage, rds);
     std::shared_ptr<cascade::net::RadioStatus> lists = std::make_shared<cascade::net::RadioStatus>();
-    fillStatusLists(*lists, faultMessage, rds);
-    receiverSnapshot_->publish(ps, std::move(lists));
+    std::vector<std::uint64_t> bookmarkIds;
+    fillStatusLists(*lists, faultMessage, rds, bookmarkIds);
+    receiverSnapshot_->publish(ps, std::move(lists), std::move(bookmarkIds));
 
     // THE SPECTRUM FRAME for the browser - a stream, not state, and not part
     // of stage 2 (docs/engine-stage2.md, OPEN): copied under webMutex_ only
@@ -22045,7 +22078,8 @@ void AppWindow::publishReceiverState() {
 }
 
 void AppWindow::fillStatusLists(cascade::net::RadioStatus& s, const std::string& faultMessage,
-                                const cascade::core::RdsSnapshot& rds) {
+                                const cascade::core::RdsSnapshot& rds,
+                                std::vector<std::uint64_t>& bookmarkIds) {
     // THE TEXT AND THE LISTS of /api/status, as the browser has always been
     // sent them: every std::string and std::vector member of RadioStatus, and
     // nothing else - the figures come from the PublishedState
@@ -22128,17 +22162,20 @@ void AppWindow::fillStatusLists(cascade::net::RadioStatus& s, const std::string&
     // A FEW HUNDRED AT MOST go to the browser: an imported list of 33 000
     // would be copied every frame and serialised on every poll, for a page
     // that can only ever show a screenful. Favourites first, then the ones
-    // nearest the tuned frequency; webBookmarkIds_ maps the browser's row
+    // nearest the tuned frequency; `bookmarkIds` maps the browser's row
     // numbers to the bookmarks' IDS for tune and remove - ids, not list
     // indices, because a desktop add, remove or star applied before the next
     // web request (the command drain runs first in a frame) shifts every index
-    // after it, and a stale index names a different bookmark.
+    // after it, and a stale index names a different bookmark. The ids travel
+    // IN THE PUBLISHED BLOCK with these rows (applyControlRequest reads them
+    // from readFull()), so the map and the rows /api/status serves are always
+    // from the same publish.
     {
         const std::vector<cascade::core::Bookmark>& all = freqMgr_.list();
-        webBookmarkIds_.clear();
+        bookmarkIds.clear();
         for (const std::size_t i : freqMgr_.nearestSubset(currentAbsoluteHz(), 300, 100)) {
             const cascade::core::Bookmark& b = all[i];
-            webBookmarkIds_.push_back(b.id);
+            bookmarkIds.push_back(b.id);
             s.bookmarks.push_back({b.name, b.freqHz, b.mode, b.bandwidthHz});
         }
     }
@@ -23159,11 +23196,15 @@ FoxCommandResult AppWindow::applyCommand(const FoxCommand& c, const std::string&
 // were (net/control_ops.cpp), by applyCommand. GUI thread only.
 void AppWindow::applyControlRequest(const cascade::net::ControlRequest& r) {
     cascade::net::ControlOpsContext ctx;
-    // The browser's row numbers name the ids the last snapshot published: an
-    // entry removed since answers NOT_FOUND, and one inserted since moves no
-    // other row onto a different bookmark.
+    // The browser's row numbers name the ids of the block /api/status is
+    // serving NOW - taken from that block itself, so a publish that has not
+    // reached the web readers yet (engine stage 2, a deferred install) cannot
+    // move a row onto a bookmark the page never showed there. An entry
+    // removed since answers NOT_FOUND, and one inserted since moves no other
+    // row. (readFull's lock is held by a reader only for a refcount; this is
+    // the GUI thread reading, once per web bookmark request.)
     if (r.bookmarkTune.has_value() || r.bookmarkRemove.has_value()) {
-        ctx.bookmarkIdByRow = webBookmarkIds_;
+        ctx.bookmarkIdByRow = receiverSnapshot_->readFull()->bookmarkIds;
     }
     ctx.scanStartHz = scanStartMhz_ * 1.0e6;
     ctx.scanStopHz = scanStopMhz_ * 1.0e6;

@@ -90,6 +90,19 @@ target_include_directories(fixture_stage1_plugin PRIVATE "${CMAKE_SOURCE_DIR}/sr
 add_dependencies(test_apply_command fixture_stage1_plugin)
 target_compile_definitions(test_apply_command PRIVATE
     FIXTURE_STAGE1_PLUGIN="$<TARGET_FILE:fixture_stage1_plugin>")
+# test_snapshot_app loads three decoders at once (engine stage 2): the same
+# fixture built under three descriptor names, since the host runs one plugin
+# per name.
+foreach(_fx IN ITEMS a b c)
+    add_library(fixture_snap_${_fx} SHARED fixture_stage1_plugin.cpp)
+    target_include_directories(fixture_snap_${_fx} PRIVATE "${CMAKE_SOURCE_DIR}/src")
+    target_compile_definitions(fixture_snap_${_fx} PRIVATE FIXTURE_NAME="Snapshot Fixture ${_fx}")
+    add_dependencies(test_snapshot_app fixture_snap_${_fx})
+endforeach()
+target_compile_definitions(test_snapshot_app PRIVATE
+    FIXTURE_SNAP_A="$<TARGET_FILE:fixture_snap_a>"
+    FIXTURE_SNAP_B="$<TARGET_FILE:fixture_snap_b>"
+    FIXTURE_SNAP_C="$<TARGET_FILE:fixture_snap_c>")
 
 # THE STAGE-2 GOLDEN RECORD (docs/engine-stage2.md): what every reader of the
 # receiver's state was told before stage 2, written by that code, compared by

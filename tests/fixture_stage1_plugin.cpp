@@ -96,10 +96,17 @@ const CascadeCapabilityEntry kCapabilities[] = {
     {CASCADE_CAP_HOST_CLIENT, static_cast<uint32_t>(sizeof(CascadeHostClientApi)), &kHostClient},
 };
 
+// The descriptor name. The host runs one plugin per NAME (resolveDuplicate-
+// Plugins), so test_snapshot_app builds this file three more times under
+// three names to have three decoders loaded at once.
+#ifndef FIXTURE_NAME
+#define FIXTURE_NAME "Stage One Fixture"
+#endif
+
 const CascadePluginDesc kDesc = {
     static_cast<uint32_t>(sizeof(CascadePluginDesc)),
     CASCADE_PLUGIN_ABI_VERSION,
-    "Stage One Fixture",
+    FIXTURE_NAME,
     "1.0.0",
     "FoxSDR tests",
     "MIT",

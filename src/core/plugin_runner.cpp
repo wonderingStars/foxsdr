@@ -1135,4 +1135,36 @@ std::size_t PluginRunner::activeCount() const {
     return n;
 }
 
+void PluginRunner::feedSnapshot(std::size_t& active, std::vector<std::string>& feedingKeys) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    // activeCount()'s count, inline (it takes the same lock).
+    std::size_t n = 0;
+    for (const Instance& i : instances_) {
+        if (!i.failed) { ++n; }
+    }
+    for (const IqInstance& i : iqInstances_) {
+        if (!i.failed) { ++n; }
+    }
+    for (const ImageInstance& i : imageInstances_) {
+        if (!i.failed) { ++n; }
+    }
+    active = n;
+    // isFeeding()'s answer for every key at once: a key is feeding when any
+    // status line with it reads Running; an empty key never is.
+    std::size_t k = 0;
+    for (const DecoderStatus& s : status_) {
+        if (s.key.empty() || s.reason != DecoderIdleReason::Running) { continue; }
+        bool seen = false;
+        for (std::size_t j = 0; j < k && !seen; ++j) { seen = feedingKeys[j] == s.key; }
+        if (seen) { continue; }
+        if (k < feedingKeys.size()) {
+            feedingKeys[k].assign(s.key);
+        } else {
+            feedingKeys.push_back(s.key);
+        }
+        ++k;
+    }
+    feedingKeys.resize(k);
+}
+
 }  // namespace cascade::core

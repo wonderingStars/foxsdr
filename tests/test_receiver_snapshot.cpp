@@ -7,10 +7,13 @@
 //      snapshot (a PublishedState whose far-apart fields carry the same
 //      number, and the whole block, whose lists must be the same publish's).
 //      Goes red when SeqlockBox::load's sequence re-check is removed.
-//   2. THE WRITER NEVER WAITS. With the lock readFull() takes held by a
-//      reader, publish() still returns at once: its block is not installed
-//      (counted), read() already has the new state, and the next publish
-//      installs. Goes red when publish() locks instead of try-locking.
+//   2. THE WRITER NEVER WAITS, AND NO BLOCK IS STRANDED (review M2). With the
+//      swap lock held by a reader, publish() returns at once and hands the
+//      block over: the next readFull() installs it with no further publish
+//      or retry (a stopped frame loop). With the hand-over lock held too, the
+//      writer keeps it and retryInstall() - the next pass, nothing changed -
+//      lands it. Goes red when publish() locks instead of try-locking, when
+//      the hand-over is removed, and when the retry does nothing.
 //   3. THE COUNTERS. Each group moves on exactly its fields; the level-1 ABI's
 //      counters keep their own groups; measurements move nothing.
 //   4. THE COMPOSE MAPPING, field by field: every RadioStatus member a web or
@@ -20,6 +23,13 @@
 //   5. THE PLUGIN API READS THE SAME OBJECT.
 //   6. THE COST: publish, read and readFull+compose, in ns (reported; a
 //      generous ceiling is checked so a pathological regression fails).
+//   7. WALKING ONE (review M1): each flag alone composes exactly its own
+//      RadioStatus boolean (every bit, assigned or not; every extension
+//      boolean; the list checked against the header), each flag SOURCE alone
+//      sets exactly its own flag (core::receiverFlags), and each flag alone
+//      gives exactly its level-1 plugin flag.
+//   8. A busy try-locked sink name moves no counter (review L6); the bookmark
+//      ids ride in the block with their rows (review L3).
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <algorithm>
@@ -30,6 +40,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <future>
 #include <memory>
 #include <regex>
@@ -205,35 +216,105 @@ void snapshotNeverTears() {
 
 // --- 2. the writer never waits ---------------------------------------------------------
 
+// Runs `f` on another thread; true when it returned within 2 s. A writer
+// that waited for a held lock would not.
+bool returnsWhileHeld(const std::function<void()>& f) {
+    std::future<void> fut = std::async(std::launch::async, f);
+    const bool returned = fut.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
+    return returned;  // (fut's destructor waits: if it blocked, it finishes once the caller unlocks)
+}
+
 void writerNeverWaits() {
-    std::printf("[2] publish() with the swap lock held by a reader\n");
+    std::printf("[2] the writer never waits, and a block it could not install still lands\n");
     ReceiverSnapshot snap;
     PublishedState s{};
     stamp(s, 1);
     snap.publish(s, std::make_shared<RadioStatus>());
     CHECK(snap.readFull()->state.rx.centreHz == 1.0);
-    const std::uint64_t deferredBefore = snap.deferredInstalls();
 
-    std::unique_lock<std::mutex> held = snap.holdSwapLockForTest();
-    stamp(s, 2);
-    std::future<void> f = std::async(std::launch::async, [&] { snap.publish(s, std::make_shared<RadioStatus>()); });
-    const bool returned = f.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
-    std::printf("      publish returned while the lock was held: %s\n", returned ? "yes" : "NO");
-    CHECK(returned);
-    held.unlock();
-    f.wait();  // (if it did wait, it has the lock now and finishes)
-    if (returned) {
+    // (a) A reader holds the swap lock: the block is HANDED OVER, and the
+    // next readFull() installs it - with no further publish and no retry, as
+    // when the frame loop stops (the Windows move/resize loop).
+    {
+        const std::uint64_t deferredBefore = snap.deferredInstalls();
+        const std::uint64_t heldBefore = snap.heldBackInstalls();
+        std::unique_lock<std::mutex> held = snap.holdSwapLockForTest();
+        stamp(s, 2);
+        bool returned = false;
+        {
+            std::future<void> fut = std::async(std::launch::async, [&] { snap.publish(s, std::make_shared<RadioStatus>()); });
+            returned = fut.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
+            if (!returned) { held.unlock(); }
+        }
+        std::printf("      (a) publish returned while the swap lock was held: %s\n", returned ? "yes" : "NO");
+        CHECK(returned);
+        if (held.owns_lock()) { held.unlock(); }
         CHECK(snap.deferredInstalls() == deferredBefore + 1u);
-        // The lock-free path already has the new state; the block is the
-        // previous publish, whole.
+        CHECK(snap.heldBackInstalls() == heldBefore);
+        CHECK(!snap.installPending());
         PublishedState r;
         CHECK(snap.read(r));
         CHECK(r.rx.centreHz == 2.0);
-        CHECK(snap.readFull()->state.rx.centreHz == 1.0);
+        const double landed = snap.readFull()->state.rx.centreHz;
+        std::printf("      (a) the next readFull, no publish, no retry: centre %.0f (published 2)\n", landed);
+        CHECK(landed == 2.0);
     }
-    stamp(s, 3);
-    snap.publish(s, std::make_shared<RadioStatus>());
-    CHECK(snap.readFull()->state.rx.centreHz == 3.0);
+
+    // (b) A reader is inside the hand-over too (both locks held): the writer
+    // keeps the block, never waits, and retryInstall() - the writer's next
+    // pass, with NOTHING changed - lands it.
+    {
+        std::unique_lock<std::mutex> held = snap.holdSwapLockForTest();
+        std::unique_lock<std::mutex> heldHandoff = snap.holdHandoffLockForTest();
+        stamp(s, 3);
+        bool returned = false;
+        {
+            std::future<void> fut = std::async(std::launch::async, [&] { snap.publish(s, std::make_shared<RadioStatus>()); });
+            returned = fut.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
+            if (!returned) {
+                heldHandoff.unlock();
+                held.unlock();
+            }
+        }
+        std::printf("      (b) publish returned with both locks held: %s\n", returned ? "yes" : "NO");
+        CHECK(returned);
+        CHECK(snap.installPending());
+        bool retryResult = true;
+        const bool retryReturned = returnsWhileHeld([&] { retryResult = snap.retryInstall(); });
+        std::printf("      (b) retryInstall returned with both locks held: %s (landed: %s)\n",
+                    retryReturned ? "yes" : "NO", retryResult ? "yes" : "no");
+        CHECK(retryReturned);
+        CHECK(!retryResult);
+        if (heldHandoff.owns_lock()) { heldHandoff.unlock(); }
+        if (held.owns_lock()) { held.unlock(); }
+        // Released: the web block is still the previous publish...
+        CHECK(snap.readFull()->state.rx.centreHz == 2.0);
+        // ...until the writer's next pass, with no state change at all.
+        CHECK(snap.retryInstall());
+        CHECK(!snap.installPending());
+        const double landed = snap.readFull()->state.rx.centreHz;
+        std::printf("      (b) after retryInstall, no change published: centre %.0f (published 3)\n", landed);
+        CHECK(landed == 3.0);
+        CHECK(snap.retryInstall());  // nothing pending: a no-op
+    }
+
+    // (c) A newer publish replaces a held-back block; an older handed-over
+    // block never overwrites a newer installed one.
+    {
+        std::unique_lock<std::mutex> held = snap.holdSwapLockForTest();
+        std::unique_lock<std::mutex> heldHandoff = snap.holdHandoffLockForTest();
+        stamp(s, 4);
+        snap.publish(s, std::make_shared<RadioStatus>());  // held back (both locks held here)
+        heldHandoff.unlock();
+        stamp(s, 5);
+        snap.publish(s, std::make_shared<RadioStatus>());  // swap lock still held: handed over
+        held.unlock();
+        CHECK(!snap.installPending());
+        CHECK(snap.readFull()->state.rx.centreHz == 5.0);
+        stamp(s, 6);
+        snap.publish(s, std::make_shared<RadioStatus>());
+        CHECK(snap.readFull()->state.rx.centreHz == 6.0);
+    }
 }
 
 // --- 3. the counters -----------------------------------------------------------------
@@ -668,6 +749,314 @@ void composeMapsEveryField() {
     CHECK(std::string(cascade::net::scannerStateName(99)).empty());
 }
 
+// --- 7. walking one: every flag, every boolean, exactly its own -------------------------
+//
+// [4] sets every flag on, then every flag off - which a mapping that reads
+// the WRONG flag passes, as long as both flags are in the set (the review's
+// `transmitAvailable = flag(TX_KEYED)`). Here each source, flag or boolean is
+// set ALONE, and exactly one thing may answer.
+
+// Every RadioStatus boolean compose writes, by name, and how to read it.
+struct BoolOut {
+    const char* name;
+    bool (*get)(const RadioStatus&);
+};
+const BoolOut kBools[] = {
+    {"running", [](const RadioStatus& o) { return o.running; }},
+    {"faulted", [](const RadioStatus& o) { return o.faulted; }},
+    {"stereoActive", [](const RadioStatus& o) { return o.stereoActive; }},
+    {"transmitting", [](const RadioStatus& o) { return o.transmitting; }},
+    {"transmitAvailable", [](const RadioStatus& o) { return o.transmitAvailable; }},
+    {"nrEnabled", [](const RadioStatus& o) { return o.nrEnabled; }},
+    {"notchEnabled", [](const RadioStatus& o) { return o.notchEnabled; }},
+    {"autoNotch", [](const RadioStatus& o) { return o.autoNotch; }},
+    {"autoNotchEngaged", [](const RadioStatus& o) { return o.autoNotchEngaged; }},
+    {"stereoEnabled", [](const RadioStatus& o) { return o.stereoEnabled; }},
+    {"pilotLocked", [](const RadioStatus& o) { return o.pilotLocked; }},
+    {"rdsSynced", [](const RadioStatus& o) { return o.rdsSynced; }},
+    {"rdsPiValid", [](const RadioStatus& o) { return o.rdsPiValid; }},
+    {"rdsPsValid", [](const RadioStatus& o) { return o.rdsPsValid; }},
+    {"rdsTp", [](const RadioStatus& o) { return o.rdsTp; }},
+    {"rdsTa", [](const RadioStatus& o) { return o.rdsTa; }},
+    {"agcSupported", [](const RadioStatus& o) { return o.agcSupported; }},
+    {"agc", [](const RadioStatus& o) { return o.agc; }},
+    {"sourceBusy", [](const RadioStatus& o) { return o.sourceBusy; }},
+    {"iqRecording", [](const RadioStatus& o) { return o.iqRecording; }},
+    {"audioRecording", [](const RadioStatus& o) { return o.audioRecording; }},
+    {"scannerActive", [](const RadioStatus& o) { return o.scannerActive; }},
+    {"rxPositionSet", [](const RadioStatus& o) { return o.rxPositionSet; }},
+    {"catalogueBusy", [](const RadioStatus& o) { return o.catalogueBusy; }},
+    {"basemap.active", [](const RadioStatus& o) { return o.basemap.active; }},
+};
+
+// Which booleans a composed status has on, as "a b c".
+std::string bools(const RadioStatus& o) {
+    std::string s;
+    for (const BoolOut& b : kBools) {
+        if (b.get(o)) { s += s.empty() ? b.name : std::string(" ") + b.name; }
+    }
+    return s;
+}
+
+// A state that is published and otherwise all zero/false - and whose
+// defaults compose would otherwise answer true (stereoEnabled's RadioStatus
+// default is true) are overwritten by compose, not kept.
+PublishedState bare() {
+    PublishedState s{};
+    s.app.published = true;
+    return s;
+}
+
+// The depth-1 `bool` members of RadioStatus, from the header.
+std::set<std::string> radioStatusBools() {
+    const std::filesystem::path p = std::filesystem::path(CASCADE_SOURCE_DIR) / "src" / "net" / "web_server.hpp";
+    std::ifstream f(p);
+    std::set<std::string> names;
+    std::string line;
+    bool in = false;
+    int depth = 0;
+    const std::regex member(R"(^\s*bool\s+([A-Za-z_]\w*)\s*(=[^;]*)?;)");
+    while (std::getline(f, line)) {
+        if (!in) {
+            if (line.rfind("struct RadioStatus {", 0) == 0) {
+                in = true;
+                depth = 1;
+            }
+            continue;
+        }
+        const std::string code = line.substr(0, line.find("//"));
+        std::smatch m;
+        if (depth == 1 && std::regex_search(code, m, member)) { names.insert(m[1].str()); }
+        // The one nested boolean that is not a list item's.
+        if (depth == 2 && code.find("bool active") != std::string::npos) { names.insert("basemap.active"); }
+        for (const char c : code) {
+            if (c == '{') { ++depth; }
+            if (c == '}') { --depth; }
+        }
+        if (depth == 0) { break; }
+    }
+    return names;
+}
+
+void walkingOneCompose() {
+    std::printf("[7a] compose: each flag alone -> exactly its own boolean\n");
+    struct FlagWant {
+        std::uint32_t bit;
+        const char* name;
+        const char* want;  // the booleans that must be on, and no others
+    };
+    const FlagWant flags[] = {
+        {FOXAPI_RX_RUNNING, "RUNNING", "running"},
+        {FOXAPI_RX_DEVICE_OPEN, "DEVICE_OPEN", ""},
+        {FOXAPI_RX_FAULTED, "FAULTED", "faulted"},
+        {FOXAPI_RX_MUTED, "MUTED", ""},
+        {FOXAPI_RX_SQUELCH_OPEN, "SQUELCH_OPEN", ""},
+        {FOXAPI_RX_STEREO_ENABLED, "STEREO_ENABLED", "stereoEnabled"},
+        {FOXAPI_RX_STEREO_ACTIVE, "STEREO_ACTIVE", "stereoActive"},
+        {FOXAPI_RX_NR, "NR", "nrEnabled"},
+        {FOXAPI_RX_NOTCH, "NOTCH", "notchEnabled"},
+        {FOXAPI_RX_AUTO_NOTCH, "AUTO_NOTCH", "autoNotch"},
+        {FOXAPI_RX_DEVICE_AGC, "DEVICE_AGC", "agc"},
+        {FOXAPI_RX_AGC_SUPPORTED, "AGC_SUPPORTED", "agcSupported"},
+        {FOXAPI_RX_RECORDING_IQ, "RECORDING_IQ", "iqRecording"},
+        {FOXAPI_RX_RECORDING_AUDIO, "RECORDING_AUDIO", "audioRecording"},
+        {FOXAPI_RX_SCANNER_ACTIVE, "SCANNER_ACTIVE", "scannerActive"},
+        {FOXAPI_RX_DECODER_ACTIVE, "DECODER_ACTIVE", ""},
+        {FOXAPI_RX_TX_AVAILABLE, "TX_AVAILABLE", ""},
+        {FOXAPI_RX_TX_KEYED, "TX_KEYED", "transmitting"},
+        {FOXAPI_RX_TX_LATCHED, "TX_LATCHED", ""},
+        {FOXAPI_RX_TX_KEY_MINE, "TX_KEY_MINE", ""},
+        {FOXAPI_RX_SINK_OPEN, "SINK_OPEN", ""},
+        {FOXAPI_RX_WEB_LISTENING, "WEB_LISTENING", ""},
+        {FOXAPI_RX_TX_REMOTE_ARMED, "TX_REMOTE_ARMED", "transmitAvailable"},
+        {FOXAPI_RX_TX_LATCH_RELEASE_FIRST, "TX_LATCH_RELEASE_FIRST", ""},
+    };
+    std::uint32_t named = 0;
+    for (const FlagWant& fw : flags) { named |= fw.bit; }
+    // Every bit, including the ones API 0.2 has not assigned: an unnamed bit
+    // must turn nothing on.
+    CHECK(bools(cascade::net::composeRadioStatus(bare(), nullptr)).empty());
+    for (int b = 0; b < 32; ++b) {
+        const std::uint32_t bit = 1u << b;
+        const char* name = "(unassigned)";
+        const char* want = "";
+        for (const FlagWant& fw : flags) {
+            if (fw.bit == bit) {
+                name = fw.name;
+                want = fw.want;
+            }
+        }
+        PublishedState s = bare();
+        s.rx.flags = bit;
+        const std::string got = bools(cascade::net::composeRadioStatus(s, nullptr));
+        const bool okay = got == want;
+        if (!okay || (named & bit) != 0u) {
+            std::printf("      %-22s -> [%s]%s\n", name, got.c_str(), okay ? "" : "   EXPECTED DIFFERENT");
+        }
+        if (!okay) { std::printf("        wanted [%s]\n", want); }
+        CHECK(okay);
+    }
+
+    std::printf("[7b] compose: each extension boolean alone -> exactly its own\n");
+    struct ExtWant {
+        const char* name;
+        void (*set)(cascade::core::AppStateExt&);
+        const char* want;
+    };
+    const ExtWant exts[] = {
+        {"autoNotchEngaged", [](cascade::core::AppStateExt& e) { e.autoNotchEngaged = true; }, "autoNotchEngaged"},
+        {"pilotLocked", [](cascade::core::AppStateExt& e) { e.pilotLocked = true; }, "pilotLocked"},
+        {"rdsSynced", [](cascade::core::AppStateExt& e) { e.rdsSynced = true; }, "rdsSynced"},
+        {"rdsPiValid", [](cascade::core::AppStateExt& e) { e.rdsPiValid = true; }, "rdsPiValid"},
+        {"rdsPsValid", [](cascade::core::AppStateExt& e) { e.rdsPsValid = true; }, "rdsPsValid"},
+        {"rdsTp", [](cascade::core::AppStateExt& e) { e.rdsTp = true; }, "rdsTp"},
+        {"rdsTa", [](cascade::core::AppStateExt& e) { e.rdsTa = true; }, "rdsTa"},
+        {"sourceBusy", [](cascade::core::AppStateExt& e) { e.sourceBusy = true; }, "sourceBusy"},
+        {"rxPositionSet", [](cascade::core::AppStateExt& e) { e.rxPositionSet = true; }, "rxPositionSet"},
+        {"catalogueBusy", [](cascade::core::AppStateExt& e) { e.catalogueBusy = true; }, "catalogueBusy"},
+        {"basemapActive", [](cascade::core::AppStateExt& e) { e.basemapActive = true; }, "basemap.active"},
+    };
+    for (const ExtWant& ew : exts) {
+        PublishedState s = bare();
+        ew.set(s.app);
+        const std::string got = bools(cascade::net::composeRadioStatus(s, nullptr));
+        const bool okay = got == ew.want;
+        std::printf("      %-22s -> [%s]%s\n", ew.name, got.c_str(), okay ? "" : "   EXPECTED DIFFERENT");
+        CHECK(okay);
+    }
+
+    // The list of booleans is every boolean RadioStatus declares.
+    const std::set<std::string> declared = radioStatusBools();
+    std::set<std::string> listed;
+    for (const BoolOut& b : kBools) { listed.insert(b.name); }
+    std::printf("      RadioStatus declares %zu booleans; this test reads %zu\n", declared.size(), listed.size());
+    CHECK(declared == listed);
+    for (const std::string& n : declared) {
+        if (listed.count(n) == 0u) { std::printf("      FAIL: RadioStatus::%s is not walked here\n", n.c_str()); }
+    }
+}
+
+void walkingOneSources() {
+    std::printf("[7c] receiverFlags: each source condition alone -> exactly its own flag\n");
+    using S = cascade::core::RxFlagSources;
+    struct SrcWant {
+        const char* name;
+        bool S::*member;
+        std::uint32_t want;
+    };
+    const SrcWant srcs[] = {
+        {"running", &S::running, FOXAPI_RX_RUNNING},
+        {"deviceOpen", &S::deviceOpen, FOXAPI_RX_DEVICE_OPEN},
+        {"faulted", &S::faulted, FOXAPI_RX_FAULTED},
+        {"muted", &S::muted, FOXAPI_RX_MUTED},
+        {"squelchOpen", &S::squelchOpen, FOXAPI_RX_SQUELCH_OPEN},
+        {"stereoEnabled", &S::stereoEnabled, FOXAPI_RX_STEREO_ENABLED},
+        {"stereoActive", &S::stereoActive, FOXAPI_RX_STEREO_ACTIVE},
+        {"nr", &S::nr, FOXAPI_RX_NR},
+        {"notch", &S::notch, FOXAPI_RX_NOTCH},
+        {"autoNotch", &S::autoNotch, FOXAPI_RX_AUTO_NOTCH},
+        {"deviceAgc", &S::deviceAgc, FOXAPI_RX_DEVICE_AGC},
+        {"agcSupported", &S::agcSupported, FOXAPI_RX_AGC_SUPPORTED},
+        {"recordingIq", &S::recordingIq, FOXAPI_RX_RECORDING_IQ},
+        {"recordingAudio", &S::recordingAudio, FOXAPI_RX_RECORDING_AUDIO},
+        {"scannerActive", &S::scannerActive, FOXAPI_RX_SCANNER_ACTIVE},
+        {"decoderActive", &S::decoderActive, FOXAPI_RX_DECODER_ACTIVE},
+        {"txAvailable", &S::txAvailable, FOXAPI_RX_TX_AVAILABLE},
+        {"txKeyed", &S::txKeyed, FOXAPI_RX_TX_KEYED},
+        {"txLatched", &S::txLatched, FOXAPI_RX_TX_LATCHED},
+        {"txRemoteArmed", &S::txRemoteArmed, FOXAPI_RX_TX_REMOTE_ARMED},
+        {"sinkOpen", &S::sinkOpen, FOXAPI_RX_SINK_OPEN},
+        {"webListening", &S::webListening, FOXAPI_RX_WEB_LISTENING},
+    };
+    // Every member of RxFlagSources is a bool and is walked here: the struct
+    // holds nothing else, so its size counts them.
+    CHECK(sizeof(S) == sizeof(srcs) / sizeof(srcs[0]) * sizeof(bool));
+    CHECK(cascade::core::receiverFlags(S{}) == 0u);
+    std::uint32_t seen = 0;
+    for (const SrcWant& w : srcs) {
+        S s{};
+        s.*(w.member) = true;
+        const std::uint32_t got = cascade::core::receiverFlags(s);
+        const bool okay = got == w.want;
+        if (!okay) { std::printf("      %-16s -> %08x, wanted %08x\n", w.name, got, w.want); }
+        CHECK(okay);
+        CHECK((seen & w.want) == 0u);  // no two sources share a flag
+        seen |= w.want;
+    }
+    // Every flag but the two per-session ones has a source.
+    CHECK(seen == (0x00FFFFFFu & ~(FOXAPI_RX_TX_KEY_MINE | FOXAPI_RX_TX_LATCH_RELEASE_FIRST)));
+    std::printf("      %zu sources, each to its own flag; flags covered %08x\n",
+                sizeof(srcs) / sizeof(srcs[0]), seen);
+}
+
+void walkingOnePluginFlags() {
+    std::printf("[7d] get_state: each flag alone -> exactly its level-1 flag\n");
+    auto snap = std::make_shared<ReceiverSnapshot>();
+    cascade::core::PluginApiCore api(snap);
+    cascade::core::PluginApiClient& c = api.client("walker.dll", "Walker");
+    api.setLiveSet({"walker.dll"});
+    struct Want {
+        std::uint32_t bit;
+        std::uint32_t want;
+    };
+    const Want map[] = {
+        {FOXAPI_RX_RUNNING, CASCADE_STATE_RUNNING},       {FOXAPI_RX_DEVICE_OPEN, CASCADE_STATE_DEVICE_OPEN},
+        {FOXAPI_RX_MUTED, CASCADE_STATE_MUTED},           {FOXAPI_RX_DEVICE_AGC, CASCADE_STATE_DEVICE_AGC},
+        {FOXAPI_RX_AGC_SUPPORTED, CASCADE_STATE_AGC_SUPPORTED},
+        {FOXAPI_RX_STEREO_ACTIVE, CASCADE_STATE_STEREO},
+    };
+    for (int b = 0; b < 32; ++b) {
+        const std::uint32_t bit = 1u << b;
+        std::uint32_t want = 0;
+        for (const Want& w : map) {
+            if (w.bit == bit) { want = w.want; }
+        }
+        PublishedState s{};
+        s.rx.flags = bit;
+        s.rx.signalDb = -200.0;  // below the squelch: SQUELCH_OPEN stays off
+        snap->publish(s, nullptr);
+        CascadeReceiverState st{};
+        st.structSize = sizeof(st);
+        CHECK(api.getState(c, &st) == CASCADE_API_OK);
+        if (st.flags != want) { std::printf("      bit %08x -> %08x, wanted %08x\n", bit, st.flags, want); }
+        CHECK(st.flags == want);
+    }
+    std::printf("      32 bits walked\n");
+}
+
+// --- 8. a busy try-locked name moves nothing; the ids travel with their rows --------
+
+void stickyNamesAndIds() {
+    std::printf("[8] a busy sink-name read keeps the last good name; bookmark ids ride in the block\n");
+    std::string last;
+    CHECK(cascade::core::keepLastGoodName(last, "") == "");
+    CHECK(cascade::core::keepLastGoodName(last, "Speakers") == "Speakers");
+    CHECK(cascade::core::keepLastGoodName(last, "") == "Speakers");  // the lock was busy
+    CHECK(cascade::core::keepLastGoodName(last, "Headphones") == "Headphones");
+
+    ReceiverSnapshot snap;
+    PublishedState s{};
+    std::string lastGood;
+    std::snprintf(s.rx.sinkName, sizeof(s.rx.sinkName), "%s",
+                  cascade::core::keepLastGoodName(lastGood, "Speakers").c_str());
+    snap.publish(s, nullptr);
+    const Seqs a = seqs(snap);
+    // The next frame's try-lock is busy: "" comes back.
+    std::snprintf(s.rx.sinkName, sizeof(s.rx.sinkName), "%s",
+                  cascade::core::keepLastGoodName(lastGood, "").c_str());
+    snap.publish(s, nullptr);
+    const std::string m = moved(a, seqs(snap));
+    std::printf("      a busy read -> counters moved: [%s]\n", m.c_str());
+    CHECK(m.empty());
+
+    auto lists = std::make_shared<RadioStatus>();
+    lists->bookmarks = {{"One", 1.0e8, "NFM", 1.0e4}, {"Two", 2.0e8, "AM", 1.0e4}};
+    snap.publish(s, lists, {41u, 42u});
+    const auto full = snap.readFull();
+    CHECK(full->lists != nullptr && full->lists->bookmarks.size() == 2u);
+    CHECK(full->bookmarkIds.size() == 2u && full->bookmarkIds[0] == 41u && full->bookmarkIds[1] == 42u);
+}
+
 // --- 5. the plugin API reads the same object ------------------------------------------
 
 void pluginApiReadsTheSharedSnapshot() {
@@ -788,6 +1177,10 @@ int main() {
     countersMoveByGroup();
     composeMapsEveryField();
     pluginApiReadsTheSharedSnapshot();
+    walkingOneCompose();
+    walkingOneSources();
+    walkingOnePluginFlags();
+    stickyNamesAndIds();
     cost();
     return testSummary("test_receiver_snapshot");
 }

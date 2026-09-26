@@ -2565,10 +2565,9 @@ private:
     // pressed once the plugins have loaded - the user's own key, for a
     // capture of that plugin at work.
     bool pressPresetByEnvDone_ = false;
-    // The browser gets at most a few hundred bookmarks (favourites and the
-    // ones nearest the tuned frequency); this maps its row numbers to their
-    // Bookmark::ids as published (never to list indices, which move).
-    std::vector<std::uint64_t> webBookmarkIds_;
+    // (The browser's bookmark rows map to Bookmark::ids through the ids
+    // published WITH them: ReceiverSnapshot::Full::bookmarkIds, engine
+    // stage 2 - never to list indices, which move.)
 
     // --- Scanner state (P6) -----------------------------------------------------
     // The Scanner itself is a pure state machine (core/scanner.hpp); these
@@ -4131,7 +4130,11 @@ private:
     void fillPublishedState(cascade::core::PublishedState& ps, const std::string& faultMessage,
                             const cascade::core::RdsSnapshot& rds);
     void fillStatusLists(cascade::net::RadioStatus& s, const std::string& faultMessage,
-                         const cascade::core::RdsSnapshot& rds);
+                         const cascade::core::RdsSnapshot& rds, std::vector<std::uint64_t>& bookmarkIds);
+    // The runner's feeding keys, reused every frame (fillPublishedState), and
+    // the last sink name a try-locked read answered (keepLastGoodName).
+    std::vector<std::string> feedingKeysScratch_;
+    std::string sinkNameLastGood_;
     // What the web server's and CAT's providers answer, from the snapshot:
     // on their own threads, never touching the pipeline or this window's
     // members. The web one takes the whole block (state and lists of one

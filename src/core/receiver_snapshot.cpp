@@ -52,6 +52,36 @@ bool gainTablesDiffer(const AppStateExt& f, const AppStateExt& o) {
 
 }  // namespace
 
+std::uint32_t receiverFlags(const RxFlagSources& s) {
+    std::uint32_t f = 0;
+    const auto set = [&f](bool on, std::uint32_t bit) {
+        if (on) { f |= bit; }
+    };
+    set(s.running, FOXAPI_RX_RUNNING);
+    set(s.deviceOpen, FOXAPI_RX_DEVICE_OPEN);
+    set(s.faulted, FOXAPI_RX_FAULTED);
+    set(s.muted, FOXAPI_RX_MUTED);
+    set(s.squelchOpen, FOXAPI_RX_SQUELCH_OPEN);
+    set(s.stereoEnabled, FOXAPI_RX_STEREO_ENABLED);
+    set(s.stereoActive, FOXAPI_RX_STEREO_ACTIVE);
+    set(s.nr, FOXAPI_RX_NR);
+    set(s.notch, FOXAPI_RX_NOTCH);
+    set(s.autoNotch, FOXAPI_RX_AUTO_NOTCH);
+    set(s.deviceAgc, FOXAPI_RX_DEVICE_AGC);
+    set(s.agcSupported, FOXAPI_RX_AGC_SUPPORTED);
+    set(s.recordingIq, FOXAPI_RX_RECORDING_IQ);
+    set(s.recordingAudio, FOXAPI_RX_RECORDING_AUDIO);
+    set(s.scannerActive, FOXAPI_RX_SCANNER_ACTIVE);
+    set(s.decoderActive, FOXAPI_RX_DECODER_ACTIVE);
+    set(s.txAvailable, FOXAPI_RX_TX_AVAILABLE);
+    set(s.txKeyed, FOXAPI_RX_TX_KEYED);
+    set(s.txLatched, FOXAPI_RX_TX_LATCHED);
+    set(s.txRemoteArmed, FOXAPI_RX_TX_REMOTE_ARMED);
+    set(s.sinkOpen, FOXAPI_RX_SINK_OPEN);
+    set(s.webListening, FOXAPI_RX_WEB_LISTENING);
+    return f;
+}
+
 PublishedState initialPublishedState() {
     PublishedState s{};
     s.rx.signalDb = -200.0;
@@ -64,11 +94,12 @@ ReceiverSnapshot::ReceiverSnapshot() {
     const PublishedState initial = initialPublishedState();
     box_.store(initial);
     last_ = initial;
-    full_ = std::make_shared<const Full>(Full{initial, nullptr});
+    full_ = std::make_shared<const Full>(Full{initial, nullptr, {}, 0});
 }
 
 void ReceiverSnapshot::publish(const PublishedState& facts,
-                               std::shared_ptr<const net::RadioStatus> lists) {
+                               std::shared_ptr<const net::RadioStatus> lists,
+                               std::vector<std::uint64_t> bookmarkIds) {
     PublishedState w = facts;
     FoxReceiverState& f = w.rx;
     AppStateExt& e = w.app;
@@ -145,20 +176,63 @@ void ReceiverSnapshot::publish(const PublishedState& facts,
     box_.store(w);
 
     // --- the whole block, for the readers that need the lists too -------------
-    std::shared_ptr<const Full> block = std::make_shared<const Full>(Full{w, std::move(lists)});
-    std::unique_lock<std::mutex> lk(fullMutex_, std::try_to_lock);
-    if (lk.owns_lock()) {
-        full_.swap(block);  // the previous block is released below, unlocked
-        lk.unlock();
-    } else {
-        deferred_.fetch_add(1, std::memory_order_relaxed);
+    // It replaces any block still held back: that one is older, and nothing
+    // ever wants an older block once a newer one exists.
+    ++generation_;
+    unsent_ = std::make_shared<const Full>(Full{w, std::move(lists), std::move(bookmarkIds), generation_});
+    if (!retryInstall()) { heldBack_.fetch_add(1, std::memory_order_relaxed); }
+}
+
+bool ReceiverSnapshot::retryInstall() {
+    if (unsent_ == nullptr) { return true; }
+    // Blocks replaced here are freed when these go out of scope - AFTER the
+    // locks below, which are declared later and so released first.
+    std::shared_ptr<const Full> released;
+    std::shared_ptr<const Full> stale;
+    {
+        std::unique_lock<std::mutex> lk(fullMutex_, std::try_to_lock);
+        if (lk.owns_lock()) {
+            released = std::move(full_);
+            full_ = std::move(unsent_);
+            // A handed-over block is older than this one: drop it. Readers
+            // take handoffMutex_ only while holding fullMutex_, which this
+            // holds, so the try cannot meet a reader; if it ever failed, the
+            // stale block would be refused by its generation anyway.
+            std::unique_lock<std::mutex> hk(handoffMutex_, std::try_to_lock);
+            if (hk.owns_lock()) { stale = std::move(handoff_); }
+            return true;
+        }
     }
+    deferred_.fetch_add(1, std::memory_order_relaxed);
+    // A reader holds the swap lock: hand the block over for it (or the next
+    // reader) to install.
+    std::unique_lock<std::mutex> hk(handoffMutex_, std::try_to_lock);
+    if (hk.owns_lock()) {
+        released = std::move(handoff_);
+        handoff_ = std::move(unsent_);
+        return true;
+    }
+    // That reader is installing a handed-over block this very instant: keep
+    // this one for the writer's next pass.
+    return false;
 }
 
 bool ReceiverSnapshot::read(PublishedState& out) const { return box_.load(out); }
 
 std::shared_ptr<const ReceiverSnapshot::Full> ReceiverSnapshot::readFull() const {
+    std::shared_ptr<const Full> released;  // freed after the locks are dropped
     std::lock_guard<std::mutex> lk(fullMutex_);
+    {
+        std::lock_guard<std::mutex> hk(handoffMutex_);
+        if (handoff_ != nullptr) {
+            if (full_ == nullptr || handoff_->generation > full_->generation) {
+                released = std::move(full_);
+                full_ = std::move(handoff_);
+            } else {
+                released = std::move(handoff_);
+            }
+        }
+    }
     return full_;
 }
 

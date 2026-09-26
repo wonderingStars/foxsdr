@@ -20,12 +20,15 @@
 //
 //   - read() is SeqlockBox::load: the writer never waits for it; a reader
 //     that keeps overlapping a write gives up (false) rather than spin.
-//   - readFull() copies a shared_ptr under fullMutex_ - the only lock here,
-//     held for a reference-count increment. The WRITER only ever TRY-locks
-//     it: if a reader happens to hold it, this publish's block is not
-//     installed and readFull() goes on answering the previous publish (whole
-//     and consistent, one frame older) until the next frame's publish. So the
-//     writer's worst case is one failed try_lock, never a wait.
+//   - readFull() copies a shared_ptr under fullMutex_, held for a
+//     reference-count increment. The WRITER only ever TRY-locks it. If a
+//     reader holds it at that instant, the writer hands the block over under
+//     a second lock (handoffMutex_, also only try-locked by the writer) and
+//     the next readFull() installs it; if that is busy too (a reader is in
+//     that very install), the writer keeps the block and retryInstall() -
+//     called on the writer's EVERY pass, change or not - lands it. So a
+//     block is never lost behind a frame loop that has stopped (the Windows
+//     move/resize loop runs no frames), and the writer never waits.
 //
 // THE COUNTERS ARE DERIVED, NOT SET. publish() compares the new facts with
 // the previous publish and advances FoxReceiverState's seq/tuneSeq/modeSeq/
@@ -42,7 +45,9 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <type_traits>
+#include <vector>
 
 #include "core/plugin_abi.h"
 #include "core/seqlock_box.hpp"
@@ -156,15 +161,61 @@ static_assert(FOXAPI_NAME_CHARS == CASCADE_DEVICE_NAME_CHARS,
 // NFM) and app.published false.
 PublishedState initialPublishedState();
 
+// THE CONDITIONS BEHIND FoxReceiverState::flags, one per flag, named for what
+// the publisher reads. receiverFlags turns them into the flag word; the
+// walking-one test (test_receiver_snapshot [7]) proves each condition sets
+// exactly its own bit, and test_snapshot_app proves the window hands each
+// condition its own source.
+struct RxFlagSources {
+    bool running = false;
+    bool deviceOpen = false;
+    bool faulted = false;
+    bool muted = false;
+    bool squelchOpen = false;
+    bool stereoEnabled = false;
+    bool stereoActive = false;
+    bool nr = false;
+    bool notch = false;
+    bool autoNotch = false;
+    bool deviceAgc = false;
+    bool agcSupported = false;
+    bool recordingIq = false;
+    bool recordingAudio = false;
+    bool scannerActive = false;
+    bool decoderActive = false;
+    bool txAvailable = false;
+    bool txKeyed = false;
+    bool txLatched = false;
+    bool txRemoteArmed = false;
+    bool sinkOpen = false;
+    bool webListening = false;
+};
+std::uint32_t receiverFlags(const RxFlagSources& s);
+
+// A NAME READ WITH A TRY-LOCK answers "" when the lock was busy (the audio
+// sink's openedDeviceName while an open runs). "" is then not news: keep the
+// last good name, so a busy lock cannot move a counter. Returns the name to
+// publish.
+inline const std::string& keepLastGoodName(std::string& lastGood, const std::string& fresh) {
+    if (!fresh.empty()) { lastGood = fresh; }
+    return lastGood;
+}
+
 class ReceiverSnapshot {
 public:
-    // One publish, whole: the state and the /api/status text and lists that
-    // were published WITH it. Immutable once installed.
+    // One publish, whole: the state, the /api/status text and lists, and the
+    // ids of the bookmarks those lists show, all from the SAME publish.
+    // Immutable once installed.
     struct Full {
         PublishedState state;
         // Strings and lists only (net/status_compose.hpp); null when the
         // publisher had none (a PluginApiCore used on its own).
         std::shared_ptr<const net::RadioStatus> lists;
+        // Bookmark::id of lists->bookmarks[i], row for row: the web remote's
+        // row numbers are resolved through THIS, so a row always names the
+        // bookmark the block it was served from showed on it.
+        std::vector<std::uint64_t> bookmarkIds;
+        std::uint64_t generation = 0;  // publishes so far; 0 = the initial block
     };
 
     ReceiverSnapshot();
@@ -172,34 +223,60 @@ public:
     ReceiverSnapshot& operator=(const ReceiverSnapshot&) = delete;
 
     // THE ONE WRITER. `facts` carries everything but the counters and
-    // structSize, which this sets; app.published is set too.
-    void publish(const PublishedState& facts, std::shared_ptr<const net::RadioStatus> lists);
+    // structSize, which this sets; app.published is set too. Never waits: the
+    // block is installed, handed over for the next reader to install, or
+    // kept for retryInstall() - see below.
+    void publish(const PublishedState& facts, std::shared_ptr<const net::RadioStatus> lists,
+                 std::vector<std::uint64_t> bookmarkIds = {});
+
+    // THE WRITER'S EVERY PASS, change or no change (the frame loop now, the
+    // control thread's every pass in stage 3). Lands a block publish() could
+    // neither install nor hand over; true when nothing is left waiting.
+    // Never waits.
+    bool retryInstall();
 
     // Any thread, lock-free. False only when SeqlockBox::kMaxTries attempts
     // all overlapped a write (out untouched) - "ask again".
     bool read(PublishedState& out) const;
 
-    // Any thread; never null. The newest publish whose block was installed.
+    // Any thread; never null. The newest block published and not still held
+    // back by the writer - installing a handed-over one first if there is
+    // one, so a reader never waits for the writer's next pass to see it.
     std::shared_ptr<const Full> readFull() const;
 
-    // Publishes whose block could not be installed because a reader held the
-    // swap lock at that instant (the writer does not wait). For the tests
-    // and the design note; readers never need it.
+    // Publishes whose block could not be installed directly because a reader
+    // held the swap lock at that instant; of those, the ones that could not
+    // even be handed over and waited for retryInstall(). For the tests and
+    // the design note; readers never need them.
     std::uint64_t deferredInstalls() const { return deferred_.load(std::memory_order_relaxed); }
+    std::uint64_t heldBackInstalls() const { return heldBack_.load(std::memory_order_relaxed); }
+    // The writer's: a block is waiting for retryInstall().
+    bool installPending() const { return unsent_ != nullptr; }
 
-    // TEST SEAM: holds the lock readFull() takes, so a test can prove that
-    // publish() does not wait for it. Nothing in the application calls it.
+    // TEST SEAMS: hold the locks readFull() takes, so a test can prove that
+    // publish() and retryInstall() never wait for them, and what they do
+    // instead. Nothing in the application calls them.
     std::unique_lock<std::mutex> holdSwapLockForTest() const {
         return std::unique_lock<std::mutex>(fullMutex_);
+    }
+    std::unique_lock<std::mutex> holdHandoffLockForTest() const {
+        return std::unique_lock<std::mutex>(handoffMutex_);
     }
 
 private:
     SeqlockBox<PublishedState> box_;
     PublishedState last_{};       // the writer's: the previous publish
     bool havePublished_ = false;  // the writer's
+    std::uint64_t generation_ = 0;       // the writer's
+    std::shared_ptr<const Full> unsent_;  // the writer's: neither installed nor handed over
+    // LOCK ORDER: fullMutex_, then handoffMutex_. Readers take them in that
+    // order (blocking); the writer only ever TRY-locks either.
     mutable std::mutex fullMutex_;
-    std::shared_ptr<const Full> full_;
+    mutable std::shared_ptr<const Full> full_;     // under fullMutex_
+    mutable std::mutex handoffMutex_;
+    mutable std::shared_ptr<const Full> handoff_;  // under handoffMutex_
     std::atomic<std::uint64_t> deferred_{0};
+    std::atomic<std::uint64_t> heldBack_{0};
 };
 
 }  // namespace cascade::core

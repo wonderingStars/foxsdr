@@ -303,6 +303,14 @@ public:
     // Number of instances currently being fed.
     std::size_t activeCount() const;
 
+    // activeCount() AND the keys isFeeding() answers true for, under ONE
+    // acquisition of the runner's mutex - the lock the DSP thread takes per
+    // block - for the once-a-frame receiver snapshot (engine stage 2), which
+    // otherwise took it once per loaded decoder. `feedingKeys` is reused:
+    // its strings are overwritten in place, so a steady set allocates
+    // nothing. Keys come out in status order, unique, never empty.
+    void feedSnapshot(std::size_t& active, std::vector<std::string>& feedingKeys) const;
+
     // How many samples have actually been handed to decoders since the last
     // rebuild. Diagnostic, but the important one: "the decoder produced
     // nothing" has two completely different causes - it was never fed, or it
