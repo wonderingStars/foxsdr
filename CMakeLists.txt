@@ -313,6 +313,10 @@ add_library(cascade_engine STATIC
     ${CASCADE_NET} ${CASCADE_USB})
 
 target_include_directories(cascade_engine PUBLIC src "${CASCADE_COMMIT_HEADER_DIR}")
+# The engine API's command vocabulary (third_party/foxsdr_api, vendored
+# unmodified): src/core/app_commands.hpp speaks FoxCommand, and so does every
+# control path that ends in AppWindow::applyCommand (docs/engine-stage1.md).
+target_include_directories(cascade_engine PUBLIC "${CASCADE_TP}/foxsdr_api")
 # See src/core/version.cpp: the reported version is injected, never written in.
 target_compile_definitions(cascade_engine PRIVATE
     CASCADE_VERSION_STRING="${CASCADE_VERSION_STRING}")

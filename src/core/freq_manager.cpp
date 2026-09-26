@@ -139,6 +139,7 @@ bool FreqManager::load(const std::string& path, std::string& error) {
             // default rather than inventing an epsilon floor.
             b.bandwidthHz = Bookmark{}.bandwidthHz;
         }
+        b.id = nextId_++;
         list_.push_back(std::move(b));
     }
 
@@ -238,9 +239,20 @@ std::size_t FreqManager::insertSorted(Bookmark b) {
                                          return f < x.freqHz;
                                      });
     const std::size_t idx = static_cast<std::size_t>(it - list_.begin());
+    // A fresh id unless the caller is re-inserting an entry that has one
+    // (updateAt keeps the edited entry's identity).
+    if (b.id == 0) { b.id = nextId_++; }
     list_.insert(it, std::move(b));
     ++version_;
     return idx;
+}
+
+std::size_t FreqManager::indexOfId(std::uint64_t id) const {
+    if (id == 0) { return list_.size(); }
+    for (std::size_t i = 0; i < list_.size(); ++i) {
+        if (list_[i].id == id) { return i; }
+    }
+    return list_.size();
 }
 
 int FreqManager::add(Bookmark b) {
@@ -263,6 +275,9 @@ int FreqManager::add(Bookmark b) {
         } while (nameInUse(candidate));
         b.name = std::move(candidate);
     }
+    // A NEW entry, whatever the caller copied it from: an id carried over
+    // from an existing bookmark would give two entries one identity.
+    b.id = 0;
     return static_cast<int>(insertSorted(std::move(b)));
 }
 
@@ -282,8 +297,12 @@ bool FreqManager::updateAt(std::size_t index, const Bookmark& b) {
     // Erase-then-reinsert rather than assign-then-sort: it reuses the one
     // insertion path that maintains the invariant, so there is exactly one
     // place where ordering can be right or wrong.
+    // The edited entry keeps its identity; the id the caller's copy carries
+    // is not trusted (it may be a different entry's, or 0).
+    Bookmark kept = b;
+    kept.id = list_[index].id;
     list_.erase(list_.begin() + static_cast<std::ptrdiff_t>(index));
-    insertSorted(b);
+    insertSorted(std::move(kept));
     return true;
 }
 
@@ -303,6 +322,7 @@ std::size_t FreqManager::addMany(std::vector<Bookmark> items) {
     for (Bookmark& b : items) {
         if (!std::isfinite(b.freqHz) || b.freqHz < 0.0) { continue; }
         if (!have.insert(key(b)).second) { continue; }
+        b.id = nextId_++;
         list_.push_back(std::move(b));
         ++added;
     }

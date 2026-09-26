@@ -85,6 +85,7 @@
 // unique_ptr behind forward declarations for exactly that reason.
 #include "gui/plugin_store_view.hpp"
 #include "gui/running_view.hpp"
+#include "net/control_ops.hpp"
 #include "gui/plugins_view.hpp"
 #include "gui/spectrum_view.hpp"
 #include "gui/track_detail_view.hpp"
@@ -1718,7 +1719,9 @@ int AppWindow::run(int frames) {
                 // the same absolute-tune path the frequency dial uses.
                 if (const char* hz = std::getenv("FOXSDR_TUNE_HZ"); hz != nullptr && *hz != '\0') {
                     const double f = std::atof(hz);
-                    if (f > 0.0) { tuneAbsoluteHz(f); }
+                    if (f > 0.0) {
+                        submitCommand(cascade::core::cmd::makeNum(FOXAPI_OP_SET_FREQUENCY, f));
+                    }
                 }
                 if (const char* want = std::getenv("FOXSDR_PRESS_PRESET"); want != nullptr && *want != '\0') {
                     bool found = false;
@@ -1727,7 +1730,11 @@ int AppWindow::run(int frames) {
                         found = true;
                         const std::vector<cascade::gui::IndexedPreset> ps = validatedPresets(lp);
                         if (!ps.empty()) {
-                            applyPluginPreset(lp, ps.front().preset);
+                            // Its key's own command, queued AFTER the tune
+                            // above so the preset still has the last word.
+                            submitCommand(cascade::core::cmd::makeText(
+                                FOXAPI_OP_PLUGIN_PRESET, cascade::core::pluginKey(lp),
+                                static_cast<std::int64_t>(ps.front().index)));
                         } else {
                             recordPluginStopped(cascade::core::pluginKey(lp), false);
                             openPluginWindowsFor(lp);
@@ -2035,18 +2042,23 @@ int AppWindow::run(int frames) {
         if (frameCap_) { frameCap_->waitForNext(); }
         ++rendered;
 
-        // The engine measurement's one step a frame, through the same calls
-        // the START key, the mode buttons and a click on the spectrum make.
+        // The engine measurement's one step a frame, through the same
+        // COMMANDS the START key, the mode buttons and a click on the spectrum
+        // submit - queued, so a tune-to-audio latency measured here includes
+        // the command path's own wait for the next frame's drain.
         if (measure_) {
             cascade::core::MeasureHooks hooks;
-            hooks.startReceiver = [this] { startReceiver(); };
+            hooks.startReceiver = [this] {
+                submitCommand(cascade::core::cmd::makeInt(FOXAPI_OP_RUN, 1));
+            };
             hooks.setMode = [this](const char* mode) {
-                for (int i = 0; i < 8; ++i) {
-                    if (std::strcmp(kModeNames[i], mode) == 0) { setModeIndex(i); }
-                }
+                submitCommand(cascade::core::cmd::makeInt(FOXAPI_OP_SET_MODE,
+                                                          cascade::core::cmd::foxDemodFromName(mode)));
             };
             hooks.tuneVfoHz = [this](double offsetHz) {
-                setVfoToAbsoluteHz(pipeline_.activeSource().centerFrequencyHz() + offsetHz, false);
+                submitCommand(cascade::core::cmd::makeNumInt(
+                    FOXAPP_OP_VFO_TO_ABSOLUTE,
+                    pipeline_.activeSource().centerFrequencyHz() + offsetHz, 0));
             };
             hooks.installSource = [this](std::unique_ptr<cascade::source::IqSource> src) {
                 installSource(std::move(src));  // the app's one swap door
@@ -3088,13 +3100,22 @@ void benchGroup(const char* caption) {
 void AppWindow::drawUi() {
     // "Enlarge every reading", handed to the drawing sites for this frame.
     cascade::gui::theme::setReadingsScale(readingsScale_);
+    // THE COMMANDS THE WIDGETS SUBMITTED LAST FRAME, FIRST (engine extraction
+    // stage 1: every control ends in applyCommand - see app_window.hpp). At
+    // the top, before anything is drawn and before any list is walked, so a
+    // command that rebuilds the plugin set or the bookmark list can never do
+    // it under a loop, and everything drawn below reads the state they left.
+    drainLocalCommands();
     // THE KEYBOARD, FIRST. ImGui has just finished NewFrame, so WantTextInput
     // and the popup stack are this frame's answers rather than last frame's,
     // and nothing has been submitted yet - so a key that starts the receiver,
     // changes the mode or moves the tuning is reflected by everything drawn
     // below it in the SAME frame instead of one behind. See
     // dispatchKeyBindings for the three states in which it performs nothing.
+    // A key SUBMITS a command like a widget does, and the second drain
+    // applies it at once - which is what keeps "the same frame".
     dispatchKeyBindings();
+    drainLocalCommands();
     // THE KEY REQUEST IS REBUILT FROM NOTHING EVERY FRAME, and this is where
     // it is cleared. Whatever is holding the PTT down - the mouse on the big
     // key, or the spacebar while the page has focus - sets it again while
@@ -3125,10 +3146,22 @@ void AppWindow::drawUi() {
     // published, so it already carries this frame's changes. Before
     // updateAudioMute below, which applies a plugin's set_muted.
     applyPluginApi();
+    // THE SCANNER, AFTER EVERY COMMAND OF THIS FRAME HAS LANDED (moved here
+    // from the end of the frame in stage 1). Its user-wins test must see any
+    // manual tune made through a widget, and a widget's tune is now applied
+    // by the drain at the top of the frame rather than inside its own draw -
+    // so this is the first point that sees it, exactly as the end of the
+    // frame used to be. A Stop scan press is likewise applied before the
+    // scanner can tick once more.
+    scannerFrame();
     if (!pendingDropPath_.empty()) {
         const std::string dropped = std::move(pendingDropPath_);
         pendingDropPath_.clear();
-        importBookmarkFile(dropped);
+        // A file dropped on the window is an import like the Import key's,
+        // applied here where the drop has always been taken.
+        const cascade::core::cmd::QueuedCommand q =
+            cascade::core::cmd::makeText(FOXAPP_OP_BOOKMARK_IMPORT_FILE, dropped);
+        (void)applyCommand(q.c, q.longText);
     }
     flushBookmarkSave(false);
     publishWebSnapshot();
@@ -3148,13 +3181,9 @@ void AppWindow::drawUi() {
     // they are movable and resizable like any other window. Drawn first so the
     // root layout below owns the remaining space.
     drawPluginWindows();
-    // THE SAFE POINT for a preset bar's key press: every loop inside
-    // drawPluginWindows that a bar could have been drawn inside of - the map
-    // pages, the image/panel/instrument windows and the Decoder output
-    // window's grouped bars - has now finished iterating, so it is safe to
-    // let applyPluginPreset rebuild the very lists those loops were walking.
-    // See pendingPresetRequest_'s own comment for the crash this avoids.
-    consumePendingPresetRequest();
+    // (A preset bar's key press used to be applied here, the first point
+    // after drawPluginWindows' loops. It is a command now, and the drain at
+    // the top of the next frame is that safe point for every control.)
     // ONCE A FRAME, AFTER THE PAGE HAS HAD ITS SAY. drawTransmitPage above is
     // what sets transmitPttHeld_, so this has to follow it or the key would
     // always be acting on the previous frame's request. It is also the stamp
@@ -3386,12 +3415,8 @@ void AppWindow::drawUi() {
     if (basemapUsedThisFrame_) { basemap_.endFrame(); }
     basemapUsedThisFrame_ = false;
 
-    // Scanner driver, AFTER all widgets: any manual tune the user made this
-    // frame (digit wheel, VFO drag, bookmark click) is already applied, so
-    // the user-wins detection inside sees this frame's state, not last
-    // frame's. Inert while the scanner is Idle — including every hermetic
-    // --frames run.
-    scannerFrame();
+    // (The scanner's frame driver ran near the top, after the command drain:
+    // see the call there for why it moved in stage 1.)
 
     // Apply any finished SoapySDR scan/open. Last in the frame so the result
     // lands before the next draw reads the device list.
@@ -4699,13 +4724,9 @@ void AppWindow::drawToolbar() {
                                X(74.0f) + S(46.0f), Y(85.0f) + S(46.0f));
     if (cascade::gui::drawBenchStopButton(dl, ImVec2(X(74.0f), Y(85.0f)), S(46.0f),
                                           running)) {
-        if (running) {
-            // Ends any take, then joins both pipeline threads (stopReceiver:
-            // the one stop every path shares).
-            stopReceiver();
-        } else {
-            startReceiver();
-        }
+        // RUN 0 ends any take, then joins both pipeline threads
+        // (stopReceiver: the one stop every path shares); RUN 1 starts.
+        submitCommand(cascade::core::cmd::makeInt(FOXAPI_OP_RUN, running ? 0 : 1));
     }
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("%s", running ? tr("Stop the receiver") : tr("Start the receiver"));
@@ -5964,17 +5985,19 @@ void AppWindow::drawFrequencyReadout(float plateX, float plateY, float scale) {
         if (!freqEditing_ && ImGui::IsItemHovered()) {
             const float wheel = ImGui::GetIO().MouseWheel;
             if (wheel != 0.0f) {
-                double ticks = static_cast<double>(static_cast<long long>(wheel));
-                if (ticks == 0.0) { ticks = (wheel > 0.0f) ? 1.0 : -1.0; }
-                const double next =
-                    std::max(minTunedHz, hz + ticks * cascade::gui::digitPlaceHz(i));
-                // THE SAME QUANTITY THE TUBES SHOW. tuneAbsoluteHz commands
-                // the source centre at (next - VFO offset), so the tuned
+                long long ticks = static_cast<long long>(wheel);
+                if (ticks == 0) { ticks = (wheel > 0.0f) ? 1 : -1; }
+                // THE SAME QUANTITY THE TUBES SHOW. STEP_TUNE commands the
+                // source centre at (tuned + ticks x this digit's place - VFO
+                // offset), floored at the counter's own floor, so the tuned
                 // figure moves by exactly this digit's place value and the
-                // offset the user set is left alone. Failure (a tune the
+                // offset the user set is left alone - reckoned from where the
+                // receiver IS when the command is applied. Failure (a tune the
                 // driver refuses) needs no handling here: the display follows
                 // the readback, which won't move.
-                tuneAbsoluteHz(next);
+                FoxCommand step = cascade::core::cmd::makeInt(FOXAPI_OP_STEP_TUNE, ticks);
+                step.num[0] = cascade::gui::digitPlaceHz(i);
+                submitCommand(step);
             }
             hoveredDigit = true;  // tooltip is drawn after the loop (see below)
             // SINGLE click opens the editor. Double-click was tried first and
@@ -6016,14 +6039,20 @@ void AppWindow::drawFrequencyReadout(float plateX, float plateY, float scale) {
         const cascade::gui::FreqRect swDn =
             cascade::gui::switchRectForCell(ptl.x, ptl.y, i, false, s, layout);
         ImVec2 upTL, upBR, dnTL, dnBR;
+        // STEP_TUNE applies cascade::gui::stepDigit's own arithmetic (one
+        // place value, floored at 0 Hz and then at minTunedHz).
         if (switchHalfButton(ImVec2(swUp.x0, swUp.y0), ImVec2(swUp.x1, swUp.y1), true, i,
                              debugSwitchOutline, upTL, upBR)) {
-            tuneAbsoluteHz(std::max(minTunedHz, cascade::gui::stepDigit(hz, i, true)));
+            FoxCommand step = cascade::core::cmd::makeInt(FOXAPI_OP_STEP_TUNE, 1);
+            step.num[0] = cascade::gui::digitPlaceHz(i);
+            submitCommand(step);
             freqLeverUp_[i] = true;
         }
         if (switchHalfButton(ImVec2(swDn.x0, swDn.y0), ImVec2(swDn.x1, swDn.y1), false, i,
                              debugSwitchOutline, dnTL, dnBR)) {
-            tuneAbsoluteHz(std::max(minTunedHz, cascade::gui::stepDigit(hz, i, false)));
+            FoxCommand step = cascade::core::cmd::makeInt(FOXAPI_OP_STEP_TUNE, -1);
+            step.num[0] = cascade::gui::digitPlaceHz(i);
+            submitCommand(step);
             freqLeverUp_[i] = false;
         }
         drawToggleSwitch(fdl, ImVec2(std::min(upTL.x, dnTL.x), upTL.y),
@@ -6074,7 +6103,7 @@ void AppWindow::drawFrequencyReadout(float plateX, float plateY, float scale) {
         if (commit) {
             double typed = 0.0;
             if (parseFrequencyHz(freqEditBuf_, typed)) {
-                tuneAbsoluteHz(typed);
+                submitCommand(cascade::core::cmd::makeNum(FOXAPI_OP_SET_FREQUENCY, typed));
                 sourceError_.clear();
             } else {
                 // One sentence, one format string, so a translation can place
@@ -6287,9 +6316,14 @@ void AppWindow::drawRadioSection() {
         // when a translation will not fit beside it (gui/text_fit.hpp), exactly
         // as "Frequency display" does in Display; an English row that fits is
         // the very same call it always was.
-        if (ImGui::SliderFloat(cascade::gui::labelAboveIfNeeded(trId("VFO")), &vfoOffsetKhz_,
+        // A COPY is edited, never the receiver's own figure: the command
+        // (APP_SET_VFO_OFFSET_FREE - the slider's own span, not clamped into
+        // the band) is what moves it, at the top of the next frame.
+        float vfoKhz = vfoOffsetKhz_;
+        if (ImGui::SliderFloat(cascade::gui::labelAboveIfNeeded(trId("VFO")), &vfoKhz,
                                -500.0f, 500.0f, "%.0f kHz")) {
-            pipeline_.setVfoOffsetHz(1000.0 * static_cast<double>(vfoOffsetKhz_));
+            submitCommand(cascade::core::cmd::makeNum(FOXAPP_OP_SET_VFO_OFFSET_FREE,
+                                                      1000.0 * static_cast<double>(vfoKhz)));
         }
         // THE PREVIEW IS THE BANDWIDTH THE RECEIVER IS RUNNING, whether or not
         // it is one of the steps below. ImGui::Combo can only show one of its
@@ -8184,8 +8218,10 @@ void AppWindow::scanSoapy() {
     const std::shared_ptr<std::vector<std::string>> absentOut = soapyScanAbsent_;
     // enumerate() never throws and is simply empty on a machine with no
     // vendor modules; this is also the hot-plug refresh path.
+    const auto scanHook = testHooks_.soapyScan;  // null in every build of the application
     soapyScanFuture_ = std::async(std::launch::async, [skip, namedSoapyArgs,
-                                                       lookForNetworkUsrps, absentOut] {
+                                                       lookForNetworkUsrps, absentOut, scanHook] {
+        if (scanHook != nullptr) { return scanHook(); }
         std::vector<cascade::usb::UsbId> present;
         const bool listed = cascade::usb::presentUsbIds(present);
         std::vector<cascade::gui::UsbVidPid> ids;
@@ -8781,13 +8817,19 @@ void AppWindow::reopenAfterDriverFault() {
 }
 
 void AppWindow::openPlutoFromBox() {
+    // The row's args are re-derived from the box here rather than read out
+    // of nativeDevices_, because the user may have typed since the list was
+    // built. What the Open key submits (SELECT_SOURCE "open-pluto:<args>");
+    // kept as a member so the converter test can press it.
+    openPlutoAt(std::string("uri=") + plutoUri_);
+}
+
+void AppWindow::openPlutoAt(const std::string& args) {
     sourceError_.clear();
     // Through the SAME worker-thread open every other radio uses, so a board
     // that is not there spends its connect bound off the GUI thread and the
-    // window keeps drawing. The row's args are re-derived from the box here
-    // rather than read out of nativeDevices_, because the user may have typed
-    // since the list was built.
-    const std::string args = std::string("uri=") + plutoUri_;
+    // window keeps drawing.
+    const std::string uri = (args.rfind("uri=", 0) == 0) ? args.substr(4) : args;
     // The frequency to carry, read BEFORE the close below: after it the
     // generator is what answers.
     const std::optional<double> keepCenterHz = carriedAirCentre();
@@ -8815,7 +8857,7 @@ void AppWindow::openPlutoFromBox() {
     req.row = sourceSel_;
     req.requestRateHz = kSoapyRateHz[kSoapyRateDefaultIndex];
     req.keepCenterHz = keepCenterHz;
-    launchDeviceOpen(std::move(req), "ADALM-Pluto at " + std::string(plutoUri_));
+    launchDeviceOpen(std::move(req), "ADALM-Pluto at " + uri);
 }
 
 void AppWindow::selectSource(int idx, std::optional<double> carryAirHz) {
@@ -9580,6 +9622,10 @@ void AppWindow::drawCenterPanels() {
             // edge keeps working; the offset/bandwidth clamps below are what
             // bound the actual tuning.
             const double mouseHz = scale_.xToHz(mouseFrac);
+            // APPLIED AT ONCE, through applyCommand - the one exception to the
+            // queue (docs/engine-stage1.md): the passband this frame measures
+            // PEAK IN PASSBAND over and paints is the one the drag just set,
+            // so the drag's effect has to exist before the panel is drawn.
             if (vfoDrag_ == VfoDrag::Center) {
                 double wantAbs = mouseHz - vfoGrabDeltaHz_;
                 if (!io.KeyShift) {
@@ -9588,24 +9634,19 @@ void AppWindow::drawCenterPanels() {
                     const double snap = kModeSnapHz[modeIndex_];
                     wantAbs = std::round(wantAbs / snap) * snap;
                 }
-                double off = wantAbs - src.centerFrequencyHz();
-                // Keep the whole band inside the baseband +/- inputRate/2.
-                // (After this clamp an extreme position may sit off-raster;
-                // the raster loses to the hard band-inside-span rule.)
-                const double lim =
-                    0.5 * pipeline_.inputRateHz() - 0.5 * vfoBandwidthHz_;
-                off = (lim > 0.0) ? std::clamp(off, -lim, lim) : 0.0;
-                pipeline_.setVfoOffsetHz(off);
-                vfoOffsetKhz_ = static_cast<float>(off / 1000.0);
+                // SET_VFO_OFFSET keeps the whole band inside the baseband
+                // +/- inputRate/2. (After that clamp an extreme position may
+                // sit off-raster; the raster loses to the hard
+                // band-inside-span rule.)
+                (void)applyCommand(cascade::core::cmd::makeNum(
+                    FOXAPI_OP_SET_VFO_OFFSET, wantAbs - src.centerFrequencyHz()));
                 ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
             } else {
                 // Either edge adjusts the bandwidth SYMMETRICALLY about the
-                // band center (the VFO filter is symmetric by construction).
-                double bw = 2.0 * std::fabs(mouseHz - bandCenterAbs);
-                const double bwHi = kVfoBwMaxChanFrac * pipeline_.channelRateHz();
-                bw = std::max(kVfoBwMinHz, std::min(bw, bwHi));
-                vfoBandwidthHz_ = bw;
-                pipeline_.setVfoBandwidthHz(bw);
+                // band center (the VFO filter is symmetric by construction);
+                // clamped to [3 kHz, 90% of the channel rate] when applied.
+                (void)applyCommand(cascade::core::cmd::makeNum(
+                    FOXAPP_OP_SET_BANDWIDTH_DRAG, 2.0 * std::fabs(mouseHz - bandCenterAbs)));
                 ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
             }
             // Recompute the band from post-drag state so the overlay tracks
@@ -9723,7 +9764,8 @@ void AppWindow::drawCenterPanels() {
             // Click anywhere off the band: jump the VFO there. Dragging the
             // band still works (handled above); this is the "just take me to
             // that signal" gesture, and it needs no grab-and-drop.
-            setVfoToAbsoluteHz(scale_.xToHz(mouseFrac), !io.KeyShift);
+            submitCommand(cascade::core::cmd::makeNumInt(FOXAPP_OP_VFO_TO_ABSOLUTE,
+                                                         scale_.xToHz(mouseFrac), io.KeyShift ? 0 : 1));
         }
         if (ImGui::IsMouseDoubleClicked(0) && hit == SpectrumView::VfoHit::None) {
             scale_.resetView();  // double-click on empty spectrum: unzoom
@@ -9838,7 +9880,10 @@ void AppWindow::drawCenterPanels() {
     if (wfPanning_) {
         if (!ImGui::IsMouseDown(0)) {
             wfPanning_ = false;
-            if (!wfMoved_) { setVfoToAbsoluteHz(scale_.xToHz(mouseFrac), !io.KeyShift); }
+            if (!wfMoved_) {
+                submitCommand(cascade::core::cmd::makeNumInt(
+                    FOXAPP_OP_VFO_TO_ABSOLUTE, scale_.xToHz(mouseFrac), io.KeyShift ? 0 : 1));
+            }
         } else {
             if (!wfMoved_ && std::fabs(io.MousePos.x - wfPressX_) > kDragSlopPx) {
                 wfMoved_ = true;
@@ -10179,7 +10224,8 @@ void AppWindow::rescanPlugins() {
     // A missing plugins directory is the normal case and yields an empty list
     // without an error — the host's documented behaviour, and the reason
     // nothing here reports a failure.
-    pluginDir_ = cascade::core::PluginHost::defaultPluginDir();
+    pluginDir_ = (testHooks_.pluginDir != nullptr) ? testHooks_.pluginDir()
+                                                   : cascade::core::PluginHost::defaultPluginDir();
 
     // WHERE, not just WHAT. The lines below say which modules loaded; none of
     // them said which of the two candidate directories they came from, and
@@ -14470,13 +14516,9 @@ void AppWindow::drawScopeMode() {
         // is the size of a thing a hand reaches for rather than a marker.
         const float lampR = std::max(18.0f, 30.0f * scale);
         if (cascade::gui::drawScopePowerButton(dl, c, lampR, running)) {
-            if (running) {
-                // The same stop as the dome, recordings included: this used
-                // to be a bare pipeline_.stop() that left a take open.
-                stopReceiver();
-            } else {
-                startReceiver();
-            }
+            // The same RUN as the dome, recordings included: this used to be
+            // a bare pipeline_.stop() that left a take open.
+            submitCommand(cascade::core::cmd::makeInt(FOXAPI_OP_RUN, running ? 0 : 1));
         }
         const char* lbl = tr("POWER");
         const ImVec2 lsz = ImGui::CalcTextSize(lbl);
@@ -16937,7 +16979,13 @@ void AppWindow::drawPluginPresets(const cascade::core::LoadedPlugin& p) {
         char label[CASCADE_PRESET_LABEL_CHARS + 32];
         cascade::core::formatUtf8(label, sizeof(label), "%s##preset%u",
                       cascade::gui::presetLabel(ps.label, p.name).c_str(), ip.index);
-        if (ImGui::Button(label, ImVec2(-1.0f, 0.0f))) { applyPluginPreset(p, ps); }
+        // A COMMAND naming the preset's RAW index, re-read from the plugin
+        // and re-validated when it is applied (PLUGIN_PRESET) - the same
+        // path a preset bar and the web remote take.
+        if (ImGui::Button(label, ImVec2(-1.0f, 0.0f))) {
+            submitCommand(cascade::core::cmd::makeText(FOXAPI_OP_PLUGIN_PRESET,
+                                                       cascade::core::pluginKey(p), ip.index));
+        }
         if (ImGui::IsItemHovered()) {
             // WHAT THIS BUTTON WILL DO FOR THIS PLUGIN, which is not the same
             // sentence for all of them. Every preset promised "and open this
@@ -16980,7 +17028,8 @@ void AppWindow::drawPluginPresets(const cascade::core::LoadedPlugin& p) {
                       static_cast<unsigned>(i));
         const float w = ImGui::GetContentRegionAvail().x - forgetW - ImGui::GetStyle().ItemSpacing.x;
         if (ImGui::Button(label, ImVec2(w > 0.0f ? w : -1.0f, 0.0f))) {
-            applyPluginPreset(p, cascade::gui::userPresetToCascade(mine[i]));
+            submitCommand(cascade::core::cmd::makeText(FOXAPP_OP_USER_PRESET_APPLY, fileKey,
+                                                       static_cast<std::int64_t>(i)));
         }
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip(tr("Your preset: tune to %.4f MHz and start this plugin"),
@@ -16990,15 +17039,16 @@ void AppWindow::drawPluginPresets(const cascade::core::LoadedPlugin& p) {
         char forget[32];
         std::snprintf(forget, sizeof(forget), "x##upforget%u", static_cast<unsigned>(i));
         if (ImGui::Button(forget)) {
-            pendingUserPresetEdit_ = {PendingUserPresetEdit::Op::Forget, fileKey, i};
+            submitCommand(cascade::core::cmd::makeText(FOXAPP_OP_USER_PRESET_FORGET_AT, fileKey,
+                                                       static_cast<std::int64_t>(i)));
         }
         if (ImGui::IsItemHovered()) { ImGui::SetTooltip("%s", tr("Forget this preset")); }
     }
 
     // SAVE WHERE YOU ARE. Offered on every DECODER, whether or not it
     // publishes presets of its own - a decoder with none is exactly the one
-    // whose user has nowhere else to keep a channel. Records only; the save
-    // happens at the safe point (see pendingUserPresetEdit_).
+    // whose user has nowhere else to keep a channel. A command; the save
+    // happens when the drain applies it (see PendingUserPresetEdit).
     const bool isDecoder =
         p.decoder != nullptr || p.iqDecoder != nullptr || p.imageDecoder != nullptr;
     if (isDecoder) {
@@ -17010,7 +17060,7 @@ void AppWindow::drawPluginPresets(const cascade::core::LoadedPlugin& p) {
                       hereHz / 1.0e6);
         const std::string save = saveShown + "##upsave";
         if (ImGui::Button(save.c_str(), ImVec2(-1.0f, 0.0f))) {
-            pendingUserPresetEdit_ = {PendingUserPresetEdit::Op::Save, fileKey, 0};
+            submitCommand(cascade::core::cmd::makeText(FOXAPI_OP_USER_PRESET_SAVE, fileKey));
         }
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip(tr("Keep the frequency, mode and bandwidth you are tuned to now as "
@@ -17026,9 +17076,7 @@ std::vector<cascade::core::UserPreset> AppWindow::userPresetsForPlugin(
         userPresets_, cascade::core::userPresetKey(cascade::core::pluginKey(p)));
 }
 
-void AppWindow::consumePendingUserPresetEdit() {
-    const PendingUserPresetEdit edit = pendingUserPresetEdit_;
-    pendingUserPresetEdit_ = PendingUserPresetEdit{};
+void AppWindow::applyUserPresetEdit(const PendingUserPresetEdit& edit) {
     if (edit.op == PendingUserPresetEdit::Op::None) { return; }
     // Re-found by key, never carried from the press: the plugin may have been
     // removed between the press and this safe point, and a save against a
@@ -17352,54 +17400,19 @@ void AppWindow::applyPluginApi() {
 
     // --- 1. What plugins asked of the receiver -------------------------------
     //
-    // Applied in the order they were asked, each through the SAME code a click
-    // or a browser request goes through (applyControlRequest), so a plugin can
-    // do nothing to the receiver that the user could not do themselves, and
-    // gets every clamp and readback the user would. The permission is checked
-    // AGAIN here: a grant revoked, or a plugin stopped, between the request and
-    // this frame must stop the request from acting (controlStillAllowed).
+    // Applied in the order they were asked, each as the SAME command the
+    // desktop control of that kind sends (net::pluginControlToCommand), through
+    // applyCommand - so a plugin can do nothing to the receiver that the user
+    // could not do themselves, and gets every clamp and readback the user
+    // would. The permission is checked AGAIN here: a grant revoked, or a
+    // plugin stopped, between the request and this frame must stop the
+    // request from acting (controlStillAllowed).
     std::vector<cascade::core::PluginControl> controls;
     api.takeControls(controls);
     for (const cascade::core::PluginControl& c : controls) {
         if (!api.controlStillAllowed(c)) { continue; }
-        using K = cascade::core::PluginControl::Kind;
-        if (c.kind == K::Frequency) {
-            // The frequency READOUT's own path: the VFO offset is kept and the
-            // radio's centre moves - which is not what ControlRequest::centerHz
-            // means, so it does not go through it.
-            tuneAbsoluteHz(c.value);
-            continue;
-        }
-        if (c.kind == K::Muted) {
-            // The user's own mute (the MUTE key's flag); updateAudioMute later
-            // this frame applies it with the rest of the mute policy.
-            userMuted_ = c.flag;
-            continue;
-        }
-        cascade::net::ControlRequest r;
-        switch (c.kind) {
-            case K::VfoOffset: r.vfoOffsetHz = c.value; break;
-            case K::Mode:
-                // ABI numbering to the button table: NFM..RAW are 1..8 and the
-                // table is in that order (tune_control.hpp,
-                // abiDemodForModeIndex). Range-checked when it was queued.
-                r.mode = kModeMap[c.mode - 1u];
-                break;
-            case K::Bandwidth: r.bandwidthHz = c.value; break;
-            case K::Squelch: r.squelchDb = c.value; break;
-            case K::SampleRate: r.sampleRateHz = c.value; break;
-            case K::Gain:
-                r.gainName = std::string(c.gainName);
-                r.gainDb = c.value;
-                break;
-            case K::DeviceAgc: r.agc = c.flag; break;
-            case K::Running: r.running = c.flag; break;
-            case K::Volume: r.volume = c.value; break;
-            case K::Frequency:
-            case K::Muted:
-                break;
-        }
-        if (!r.empty()) { applyControlRequest(r); }
+        FoxCommand command{};
+        if (cascade::net::pluginControlToCommand(c, command)) { (void)applyCommand(command); }
     }
 
     // --- 2. What plugins said ---------------------------------------------------
@@ -17712,18 +17725,30 @@ void AppWindow::drawPresetKeys(const std::string& pluginKey, const std::string& 
                                   cascade::gui::theme::vec(cascade::gui::theme::legible(
                                       cascade::gui::theme::kPhosphor, cascade::gui::theme::kBrassDark)));
         }
-        // A PRESS ONLY RECORDS. See pendingPresetRequest_'s own comment for
-        // why applying here, mid-iteration of drawPluginWindows' lists, is
-        // exactly the crash 0.96.1 fixed in a different list.
-        if (ImGui::SmallButton(label)) { pendingPresetRequest_.record(pluginKey, k.index); }
-        if (k.lit) { ImGui::PopStyleColor(2); }
+        // A PRESS ONLY SUBMITS A COMMAND. Applying here, mid-iteration of
+        // drawPluginWindows' lists, would be exactly the crash 0.96.1 fixed
+        // in a different list; the drain applies it at the top of the next
+        // frame, re-reading the preset from the plugin (or, for one of the
+        // user's own, from userPresets_ by ordinal) as it always was.
         const bool mine = cascade::gui::isUserPresetIndex(k.index);
-        // A RIGHT-CLICK FORGETS one of the user's own - recorded, like every
+        if (ImGui::SmallButton(label)) {
+            if (mine) {
+                submitCommand(cascade::core::cmd::makeText(
+                    FOXAPP_OP_USER_PRESET_APPLY, pluginKey,
+                    static_cast<std::int64_t>(k.index - cascade::gui::kUserPresetIndexBase)));
+            } else {
+                submitCommand(cascade::core::cmd::makeText(FOXAPI_OP_PLUGIN_PRESET, pluginKey,
+                                                           static_cast<std::int64_t>(k.index)));
+            }
+        }
+        if (k.lit) { ImGui::PopStyleColor(2); }
+        // A RIGHT-CLICK FORGETS one of the user's own - a command, like every
         // other press here. A plugin's own keys ignore it: those are not the
         // user's to remove.
         if (mine && ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
-            pendingUserPresetEdit_ = {PendingUserPresetEdit::Op::Forget, pluginKey,
-                                      k.index - cascade::gui::kUserPresetIndexBase};
+            submitCommand(cascade::core::cmd::makeText(
+                FOXAPP_OP_USER_PRESET_FORGET_AT, pluginKey,
+                static_cast<std::int64_t>(k.index - cascade::gui::kUserPresetIndexBase)));
         }
         if (ImGui::IsItemHovered()) {
             if (mine) {
@@ -17742,7 +17767,7 @@ void AppWindow::drawPresetKeys(const std::string& pluginKey, const std::string& 
     if (!keys.empty() && rows.back() == rows[keys.size() - 1]) { ImGui::SameLine(); }
     // The visible word is tr(kSaveKey) - the same one measured above.
     if (ImGui::SmallButton(trId("+ Save##pbarsave"))) {
-        pendingUserPresetEdit_ = {PendingUserPresetEdit::Op::Save, pluginKey, 0};
+        submitCommand(cascade::core::cmd::makeText(FOXAPI_OP_USER_PRESET_SAVE, pluginKey));
     }
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip(tr("Save the frequency you are tuned to now (%.4f MHz) as a preset "
@@ -17798,53 +17823,9 @@ void AppWindow::drawDecoderPresetBars() {
     if (any) { ImGui::Separator(); }
 }
 
-void AppWindow::consumePendingPresetRequest() {
-    // THE SAFE POINT. Called once a frame from drawUi, after drawPluginWindows
-    // has returned - so every loop over pluginImages_, pluginUi_.panels(),
-    // pluginUi_.instruments() and mapPages_ that a bar's key was drawn inside
-    // has already finished this frame, and applyPluginPreset's
-    // refreshPluginRunner() is free to rebuild every one of them.
-    // A save or a forget of the user's own presets waits for the same point,
-    // for the same reason (see pendingUserPresetEdit_).
-    consumePendingUserPresetEdit();
-    const std::optional<cascade::gui::PresetBarRequest> req = pendingPresetRequest_.take();
-    if (!req.has_value()) { return; }
-    for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
-        if (cascade::core::pluginKey(p) != req->pluginKey) { continue; }
-        // ONE OF THE USER'S OWN (0.99.4): re-read from userPresets_ by
-        // ordinal, exactly as a plugin preset is re-read from the plugin - a
-        // preset forgotten since the press is a silent no-op.
-        if (cascade::gui::isUserPresetIndex(req->presetIndex)) {
-            const std::vector<cascade::core::UserPreset> mine = userPresetsForPlugin(p);
-            const std::size_t ord = req->presetIndex - cascade::gui::kUserPresetIndexBase;
-            if (ord >= mine.size()) { return; }
-            const CascadePreset ps = cascade::gui::userPresetToCascade(mine[ord]);
-            if (!cascade::gui::presetIsValid(ps)) { return; }
-            applyPluginPreset(p, ps);
-            return;
-        }
-        // RE-READ, NEVER TRUSTED FROM THE PRESS. count() and get() are asked
-        // again, fresh, exactly as the web remote's own deferred apply does
-        // (applyWebControls' r.pluginPresetIndex handling) - the plugin the
-        // key named a moment ago may have been removed since, and the index
-        // that was valid then is only ever safe to use against a bound read
-        // now.
-        const std::uint32_t n = (p.preset != nullptr) ? p.preset->count() : 0u;
-        CascadePreset ps{};
-        ps.structSize = static_cast<std::uint32_t>(sizeof(CascadePreset));
-        const bool fetchedOk = p.preset != nullptr && req->presetIndex < n &&
-                               p.preset->get(req->presetIndex, &ps) == 1;
-        if (!cascade::gui::presetRequestStillValid(/*pluginFound=*/true, n, kMaxPresetsPerPlugin,
-                                                    req->presetIndex, fetchedOk, ps)) {
-            return;
-        }
-        applyPluginPreset(p, ps);
-        return;
-    }
-    // No loaded plugin answers to this key any more (unloaded, or removed
-    // through the store, between the press and this safe point) - a silent
-    // no-op is the whole of the contract for a stale request.
-}
+// (consumePendingPresetRequest lived here: the preset bar's safe-point apply.
+// Its re-read-and-revalidate rule is PLUGIN_PRESET's in applyCommand now, and
+// the user's-own-preset half is APP_USER_PRESET_APPLY's.)
 
 // --- Audio mute while a data decoder is running -------------------------------
 
@@ -20500,6 +20481,209 @@ bool AppWindow::startAudioRecording() {
     return true;
 }
 
+bool AppWindow::startIqRecording() {
+    // The Record IQ key's body and the web remote's recordIq, which were two
+    // copies of the same six lines until stage 1. Baseband at the DSP input
+    // rate through the pipeline's raw tap.
+    if (iqRecorder_.recording()) { return true; }
+    const double rate = pipeline_.inputRateHz();
+    std::string err;
+    if (!iqRecorder_.start(cascade::core::RecordKind::BasebandIq, recordDir_, rate, err)) {
+        recordError_ = err;
+        return false;
+    }
+    recordError_.clear();
+    recordNotice_.clear();
+    iqRecordRateHz_ = rate;
+    iqRecordStartS_ = ImGui::GetTime();
+    // Install AFTER start(): the tap must never feed a recorder that is not
+    // accepting (Pipeline::setIqRecorder contract).
+    pipeline_.setIqRecorder(&iqRecorder_);
+    return true;
+}
+
+// --- The helpers applyCommand calls (engine extraction, stage 1) ---------------
+//
+// Each is the body a widget, or a branch of applyControlRequest, used to hold
+// inline - moved, not rewritten - so the desktop and the remote paths now
+// share one copy.
+
+void AppWindow::openIqFile(const std::string& path) {
+    // The Source panel's IQ file Open. The pipeline keeps its current source
+    // until the open succeeds: a failed open constructs and destroys a
+    // throwaway IqFileSource without ever touching the pipeline.
+    auto file = std::make_unique<cascade::source::IqFileSource>();
+    if (!file->open(path)) {
+        sourceError_ = file->lastError();
+        return;
+    }
+    // Carry the displayed frequency over: a file's center is nominal anyway,
+    // and a readout that jumps to 0 on source switch would read as a tuning
+    // bug. The AIR frequency carries over; the file is told it through its
+    // own converter, which is off unless the user set one for I/Q files.
+    const double fileRadioHz =
+        radioHzForSource("file", std::string(), pipeline_.activeSource().centerFrequencyHz());
+    if (fileRadioHz >= 0.0) { file->setCenterFrequencyHz(fileRadioHz); }
+    device_ = nullptr;  // before setSource destroys a live device
+    soapyView_ = nullptr;
+    deviceArgs_.clear();
+    deviceModel_.clear();
+    sourceError_.clear();
+    ++sourceGen_;  // a device open still in flight is now stale
+    installSource(std::move(file));
+    sourceKind_ = "file";
+    applyConverterForSource();
+    iqOpenPath_ = path;
+    // A file is a deliberate choice of source like any other, so a radio
+    // remembered from a failed restore is superseded here too - see
+    // selectSource's generator row.
+    restoreKeep_ = cascade::gui::RememberedSource{};
+    restoreKeepLabel_.clear();
+    followInputRate();  // DSP chain + frequency axis track the file's rate
+    // The RATE, never the path: a file name is the user's own data and a
+    // report is a support artefact, not a listening record.
+    cascade::core::diagLogf("source: opened an I/Q file at %.0f S/s",
+                            pipeline_.activeSource().sampleRateHz());
+}
+
+void AppWindow::tuneToBookmark(const cascade::core::Bookmark& b) {
+    // Click-to-tune on a bookmark row, and the web remote's bookmarkTune -
+    // the DESKTOP's order, which is the one both take since stage 1:
+    // frequency through the shared absolute-tune path (same as scanner
+    // retunes), then mode and bandwidth. An unknown mode name - a newer
+    // build's file, kept verbatim by FreqManager on purpose - leaves the
+    // current mode untouched.
+    tuneAbsoluteHz(b.freqHz);
+    for (int m = 0; m < 8; ++m) {
+        if (b.mode == kModeNames[m]) {
+            modeIndex_ = m;
+            pipeline_.setDemodMode(kModeMap[m]);
+            break;
+        }
+    }
+    // Same clamp as the config restore: [3 kHz, 90% of channel rate].
+    const double bwHi = kVfoBwMaxChanFrac * pipeline_.channelRateHz();
+    vfoBandwidthHz_ = std::max(kVfoBwMinHz, std::min(b.bandwidthHz, bwHi));
+    pipeline_.setVfoBandwidthHz(vfoBandwidthHz_);
+    // -1 for a bookmark saved at a bandwidth the list does not carry (one
+    // taken while a preset had the VFO at 40 kHz, say): the combo letters the
+    // real figure and ticks nothing.
+    bandwidthIndex_ = bandwidthStepIndex(vfoBandwidthHz_);
+}
+
+void AppWindow::addBookmarkHere(const std::string& name) {
+    cascade::core::Bookmark b;
+    b.name = name;
+    if (b.name.empty()) {
+        // A nameless row would render blank; default to the frequency.
+        char def[32];
+        std::snprintf(def, sizeof(def), "%.4f MHz", currentAbsoluteHz() / 1.0e6);
+        b.name = def;
+    }
+    // "Current" is the tuned station: center readback + VFO offset (the band
+    // the spectrum overlay marks), with the live mode and the REQUESTED
+    // bandwidth (the overlay's value, pre any Vfo clamp).
+    b.freqHz = currentAbsoluteHz();
+    b.mode = kModeNames[modeIndex_];
+    b.bandwidthHz = vfoBandwidthHz_;
+    freqMgr_.add(std::move(b));
+    saveBookmarks();
+}
+
+cascade::core::Scanner::Params AppWindow::scannerParams() const {
+    // The stored parameters -> Params. Scanner::configure sanitizes (swap,
+    // step floor, negative times), so the raw values can be handed over.
+    cascade::core::Scanner::Params p;
+    p.startHz = scanStartMhz_ * 1.0e6;
+    p.stopHz = scanStopMhz_ * 1.0e6;
+    p.stepHz = scanStepKhz_ * 1.0e3;
+    p.dwellMs = scanDwellMs_;
+    p.holdMs = scanHoldMs_;
+    p.resumeMs = scanResumeMs_;
+    p.listenMs = scanListenMs_;
+    return p;
+}
+
+bool AppWindow::selectSourceById(const std::string& id) {
+    // THE IDS (docs/engine-stage1.md): "siggen"; "<kind>:<args>" for a scanned
+    // device (kind "soapy" or a native driver key); "row:iqfile" and
+    // "row:soundcard" for the two rows that only show their panel;
+    // "file:<path>" and "open-pluto:<args>" for the panels' Open keys; and
+    // "soundcard:open" for the sound card panel's Open, which opens the card
+    // the panel describes (its settings are not in the id - OPEN, see the
+    // doc). Every scanned-device id is MATCHED against the enumerated lists,
+    // never handed to a driver verbatim: a browser must not be able to pass
+    // arbitrary kwargs to a vendor module.
+    if (id == "siggen") {
+        selectSource(0);
+        return true;
+    }
+    if (id == "row:iqfile") {
+        selectSource(1);
+        return true;
+    }
+    if (id == "row:soundcard") {
+        selectSource(kSoundCardRow);
+        return true;
+    }
+    if (id == "soundcard:open") {
+        sourceError_.clear();
+        launchSoundCardOpen(false, soundCard_);
+        return true;
+    }
+    const std::size_t colon = id.find(':');
+    if (colon == std::string::npos) { return false; }
+    const std::string kind = id.substr(0, colon);
+    const std::string args = id.substr(colon + 1);
+    if (kind == "file") {
+        openIqFile(args);
+        return true;
+    }
+    if (kind == "open-pluto") {
+        openPlutoAt(args);
+        return true;
+    }
+    // The KIND is matched too - a native row and a Soapy row for one dongle
+    // carry the same serial.
+    if (cascade::gui::isNativeSourceKind(kind)) {
+        for (std::size_t i = 0; i < nativeDevices_.size(); ++i) {
+            if (nativeDevices_[i].driver == kind && nativeDevices_[i].args == args) {
+                selectSource(kNativeRowBase + static_cast<int>(i));
+                return true;
+            }
+        }
+    } else {
+        for (std::size_t i = 0; i < soapyDevices_.size(); ++i) {
+            if (soapyDevices_[i].args == args) {
+                selectSource(soapyRowBase() + static_cast<int>(i));
+                return true;
+            }
+        }
+    }
+    sourceError_ = "no scanned device matches those arguments; rescan and try again";
+    return false;
+}
+
+std::vector<cascade::gui::RunnableDecoder> AppWindow::runnableDecoders() const {
+    // Built from the runner rather than from the loaded list: "running" here
+    // means BEING FED, which is the only sense in which a decoder is costing
+    // this machine anything (running_view.hpp says why).
+    std::vector<cascade::gui::RunnableDecoder> runnable;
+    for (const cascade::core::LoadedPlugin& lp : pluginHost_.plugins()) {
+        if (!lp.loaded) { continue; }
+        const bool isDec = lp.decoder != nullptr || lp.iqDecoder != nullptr ||
+                           lp.imageDecoder != nullptr;
+        if (!isDec) { continue; }
+        cascade::gui::RunnableDecoder rd;
+        rd.name = lp.name;
+        rd.key = cascade::core::pluginKey(lp);
+        rd.stopped = pluginIsStopped(rd.key);
+        rd.feeding = pluginRunner_.isFeeding(rd.key);
+        runnable.push_back(std::move(rd));
+    }
+    return runnable;
+}
+
 void AppWindow::setModeIndex(int index) {
     if (index < 0 || index >= 8) { return; }
     modeIndex_ = index;
@@ -20665,26 +20849,23 @@ void AppWindow::applyKeyAction(cascade::gui::KeyAction action) {
     // tube can never disagree.
     constexpr int kKeyTuneStepCell = 5;
 
-    const double hz = std::max(0.0, currentAbsoluteHz());
-    // The same floor as the counter's (core::minTunedAirHz).
-    const double minTunedHz =
-        cascade::core::minTunedAirHz(pipeline_.converter(), pipeline_.vfoOffsetHz());
-
+    // EVERY ACTION THAT CHANGES THE RECEIVER SUBMITS A COMMAND (stage 1). The
+    // key is dispatched after the drain of last frame's widget commands and
+    // before a second drain in the same frame (drawUi), so what the values
+    // below are read from is the state the receiver is in, and the command
+    // still lands before anything is drawn.
+    namespace cmd = cascade::core::cmd;
     switch (action) {
         case KeyAction::StartStop:
-            if (pipeline_.running()) {
-                // The toolbar's own stop: a take can never outlive the
-                // sample flow it was taping.
-                stopReceiver();
-            } else {
-                startReceiver();
-            }
+            // The toolbar's own stop: a take can never outlive the sample
+            // flow it was taping (RUN 0 -> stopReceiver).
             cascade::core::diagLogf("key: start/stop -> %s",
-                                    pipeline_.running() ? "running" : "stopped");
+                                    pipeline_.running() ? "stopped" : "running");
+            submitCommand(cmd::makeInt(FOXAPI_OP_RUN, pipeline_.running() ? 0 : 1));
             break;
         case KeyAction::Mute:
-            userMuted_ = !userMuted_;
-            cascade::core::diagLogf("key: mute -> %d", userMuted_ ? 1 : 0);
+            cascade::core::diagLogf("key: mute -> %d", userMuted_ ? 0 : 1);
+            submitCommand(cmd::makeInt(FOXAPI_OP_SET_MUTED, userMuted_ ? 0 : 1));
             break;
         case KeyAction::VolumeUp:
         case KeyAction::VolumeDown: {
@@ -20692,8 +20873,8 @@ void AppWindow::applyKeyAction(cascade::gui::KeyAction action) {
             // to full, which is a reachable number of taps and fine enough that
             // a single one is a change rather than a jump.
             const float step = (action == KeyAction::VolumeUp) ? 0.05f : -0.05f;
-            volume_ = std::clamp(volume_ + step, 0.0f, 1.0f);
-            pipeline_.audio().setVolume(volume_);
+            submitCommand(cmd::makeNum(FOXAPI_OP_SET_VOLUME,
+                                       std::clamp(volume_ + step, 0.0f, 1.0f)));
             break;
         }
         case KeyAction::SquelchUp:
@@ -20701,29 +20882,33 @@ void AppWindow::applyKeyAction(cascade::gui::KeyAction action) {
             // The slider's own span is [-120, 0] dB; 2 dB a press crosses it in
             // sixty, and is about the smallest step that audibly moves the gate.
             const float step = (action == KeyAction::SquelchUp) ? 2.0f : -2.0f;
-            squelchDb_ = std::clamp(squelchDb_ + step, -120.0f, 0.0f);
-            pipeline_.setSquelchDb(squelchDb_);
+            submitCommand(cmd::makeNum(FOXAPI_OP_SET_SQUELCH,
+                                       std::clamp(squelchDb_ + step, -120.0f, 0.0f)));
             break;
         }
-        // kModeNames order: NFM WFM AM DSB USB CW LSB RAW. Indices rather than
-        // a name lookup, because this switch is already the mapping and a
-        // second one by string would be a second place to get it wrong.
-        case KeyAction::ModeNFM: setModeIndex(0); break;
-        case KeyAction::ModeWFM: setModeIndex(1); break;
-        case KeyAction::ModeAM: setModeIndex(2); break;
-        case KeyAction::ModeDSB: setModeIndex(3); break;
-        case KeyAction::ModeUSB: setModeIndex(4); break;
-        case KeyAction::ModeCW: setModeIndex(5); break;
-        case KeyAction::ModeLSB: setModeIndex(6); break;
-        case KeyAction::ModeRAW: setModeIndex(7); break;
+        // kModeNames order: NFM WFM AM DSB USB CW LSB RAW - FOXAPI_DEMOD_*
+        // 1..8. Indices rather than a name lookup, because this switch is
+        // already the mapping and a second one by string would be a second
+        // place to get it wrong.
+        case KeyAction::ModeNFM: submitCommand(cmd::makeInt(FOXAPI_OP_SET_MODE, FOXAPI_DEMOD_NFM)); break;
+        case KeyAction::ModeWFM: submitCommand(cmd::makeInt(FOXAPI_OP_SET_MODE, FOXAPI_DEMOD_WFM)); break;
+        case KeyAction::ModeAM: submitCommand(cmd::makeInt(FOXAPI_OP_SET_MODE, FOXAPI_DEMOD_AM)); break;
+        case KeyAction::ModeDSB: submitCommand(cmd::makeInt(FOXAPI_OP_SET_MODE, FOXAPI_DEMOD_DSB)); break;
+        case KeyAction::ModeUSB: submitCommand(cmd::makeInt(FOXAPI_OP_SET_MODE, FOXAPI_DEMOD_USB)); break;
+        case KeyAction::ModeCW: submitCommand(cmd::makeInt(FOXAPI_OP_SET_MODE, FOXAPI_DEMOD_CW)); break;
+        case KeyAction::ModeLSB: submitCommand(cmd::makeInt(FOXAPI_OP_SET_MODE, FOXAPI_DEMOD_LSB)); break;
+        case KeyAction::ModeRAW: submitCommand(cmd::makeInt(FOXAPI_OP_SET_MODE, FOXAPI_DEMOD_RAW)); break;
         case KeyAction::TuneStepUp:
-            tuneAbsoluteHz(
-                std::max(minTunedHz, cascade::gui::stepDigit(hz, kKeyTuneStepCell, true)));
+        case KeyAction::TuneStepDown: {
+            // One step on the 10 kHz digit: the counter switch's own
+            // arithmetic (STEP_TUNE is cascade::gui::stepDigit, floored at
+            // the counter's floor).
+            FoxCommand step =
+                cmd::makeInt(FOXAPI_OP_STEP_TUNE, action == KeyAction::TuneStepUp ? 1 : -1);
+            step.num[0] = cascade::gui::digitPlaceHz(kKeyTuneStepCell);
+            submitCommand(step);
             break;
-        case KeyAction::TuneStepDown:
-            tuneAbsoluteHz(
-                std::max(minTunedHz, cascade::gui::stepDigit(hz, kKeyTuneStepCell, false)));
-            break;
+        }
         case KeyAction::TuneSpanUp:
         case KeyAction::TuneSpanDown: {
             // HDSDR moves the LO by the VISIBLE spectrum width, which is what
@@ -20735,8 +20920,10 @@ void AppWindow::applyKeyAction(cascade::gui::KeyAction action) {
             // is the honest answer rather than a guess at a width.
             const double span = scale_.viewHighHz() - scale_.viewLowHz();
             if (!(span > 0.0)) { break; }
-            const double delta = (action == KeyAction::TuneSpanUp) ? span : -span;
-            tuneAbsoluteHz(std::max(minTunedHz, hz + delta));
+            FoxCommand step =
+                cmd::makeInt(FOXAPI_OP_STEP_TUNE, action == KeyAction::TuneSpanUp ? 1 : -1);
+            step.num[0] = span;
+            submitCommand(step);
             break;
         }
         case KeyAction::QuickTune:
@@ -22066,424 +22253,828 @@ void AppWindow::applyScopeWindowVisibility() {
     scopeWasOn_ = scopeMode_;
 }
 
-// ONE REQUEST, APPLIED - the body of the loop applyWebControls used to run
-// inline, moved out unchanged so that a request from a browser, from CAT and
-// from a plugin (host API level 1, applyPluginApi) all take literally the
-// same code: the same clamps against the live rate, the same readbacks, the
-// same "move the bandwidth to the new mode's default". GUI thread only.
-void AppWindow::applyControlRequest(const cascade::net::ControlRequest& r) {
-    if (r.running.has_value()) {
-        if (*r.running) {
-            startReceiver();
-        } else {
-            // The web remote's and a plugin's stop is the dome's stop,
-            // recordings included. (CAT reaches this function too but has no
-            // command that sets the run state.) A bare pipeline_.stop() here
-            // left both takes open with zero-length headers, and the next
-            // start from anywhere appended to them across the gap.
-            stopReceiver();
-        }
-    }
-    if (r.centerHz.has_value()) {
-        // The GUI's own absolute-tune path, so the RDS/stereo decoders are
-        // told to forget the old station exactly as they are for a tune
-        // made from this window.
-        retuneSourceHz(*r.centerHz);
-    }
-    if (r.mode.has_value()) {
-        // Mapped by NAME, never by index: the button table's order and the
-        // DemodMode enum's order deliberately differ.
-        const std::string want = cascade::dsp::modeName(*r.mode);
-        for (int i = 0; i < 8; ++i) {
-            if (want == kModeNames[i]) {
-                modeIndex_ = i;
-                pipeline_.setDemodMode(kModeMap[i]);
-                // A mode button here also moves the bandwidth to that
-                // mode's default, so a browser mode change behaves the
-                // same way. An explicit bandwidthHz in the SAME request
-                // still wins, because it is applied below.
-                bandwidthIndex_ = kModeDefaultBw[i];
-                vfoBandwidthHz_ = kBwHz[bandwidthIndex_];
-                pipeline_.setVfoBandwidthHz(vfoBandwidthHz_);
-                break;
-            }
-        }
-    }
-    // Bandwidth before offset: the offset's limit depends on it.
-    if (r.bandwidthHz.has_value()) {
-        const double bwHi = kVfoBwMaxChanFrac * pipeline_.channelRateHz();
-        vfoBandwidthHz_ = std::max(kVfoBwMinHz, std::min(*r.bandwidthHz, bwHi));
-        pipeline_.setVfoBandwidthHz(vfoBandwidthHz_);
-        // -1 when the browser asked for a width the list does not carry:
-        // the combo shows what the VFO is, and ticks nothing.
-        bandwidthIndex_ = bandwidthStepIndex(vfoBandwidthHz_);
-    }
-    if (r.vfoOffsetHz.has_value()) {
-        // Clamped against the LIVE rate, the same rule the config restore
-        // uses — web_control's range check is a sanity bound, not this.
-        const double lim = 0.5 * pipeline_.inputRateHz() - 0.5 * vfoBandwidthHz_;
-        const double off =
-            (lim > 0.0) ? std::clamp(*r.vfoOffsetHz, -lim, lim) : 0.0;
-        pipeline_.setVfoOffsetHz(off);
-        vfoOffsetKhz_ = static_cast<float>(off / 1000.0);
-    }
-    if (r.squelchDb.has_value()) {
-        squelchDb_ = static_cast<float>(*r.squelchDb);
-        pipeline_.setSquelchDb(squelchDb_);
-    }
-    if (r.volume.has_value()) {
-        volume_ = static_cast<float>(*r.volume);
-        pipeline_.audio().setVolume(volume_);
-    }
-    // Display range. The same minimum-span rule the desktop sliders
-    // enforce, applied against whichever end the request did not supply —
-    // a degenerate or inverted span is a divide-by-zero where dB is mapped
-    // to pixels.
-    if (r.dbMin.has_value() || r.dbMax.has_value()) {
-        float lo = r.dbMin.has_value() ? static_cast<float>(*r.dbMin) : dbMin_;
-        float hi = r.dbMax.has_value() ? static_cast<float>(*r.dbMax) : dbMax_;
-        if (lo > hi - kMinDbSpan) {
-            // Push back the end the caller actually moved, so the other
-            // does not shift under them.
-            if (r.dbMin.has_value()) {
-                lo = hi - kMinDbSpan;
-            } else {
-                hi = lo + kMinDbSpan;
-            }
-        }
-        dbMin_ = lo;
-        dbMax_ = hi;
-        spectrum_->setRange(dbMin_, dbMax_);
-    }
-    if (r.deemphasisIndex.has_value()) {
-        deemphIndex_ = *r.deemphasisIndex;
-        pipeline_.setDeemphasisUs(kDeemphUs[deemphIndex_]);
-    }
-    if (r.stereoEnabled.has_value()) {
-        stereoEnabled_ = *r.stereoEnabled;
-        pipeline_.setStereoEnabled(stereoEnabled_);
-    }
-    if (r.nrEnabled.has_value()) {
-        nrEnabled_ = *r.nrEnabled;
-        pipeline_.setNoiseReductionEnabled(nrEnabled_);
-    }
-    if (r.nrStrength.has_value()) {
-        nrStrength_ = static_cast<float>(*r.nrStrength);
-        pipeline_.setNoiseReductionStrength(nrStrength_);
-    }
-    if (r.notchEnabled.has_value()) {
-        notchEnabled_ = *r.notchEnabled;
-        pipeline_.setNotchEnabled(notchEnabled_);
-    }
-    if (r.notchFreqHz.has_value()) {
-        notchFreqHz_ = static_cast<float>(*r.notchFreqHz);
-        pipeline_.setNotchFrequencyHz(static_cast<double>(notchFreqHz_));
-    }
-    if (r.notchQ.has_value()) {
-        notchQ_ = static_cast<float>(*r.notchQ);
-        pipeline_.setNotchQ(static_cast<double>(notchQ_));
-    }
-    if (r.autoNotch.has_value()) {
-        autoNotch_ = *r.autoNotch;
-        pipeline_.setAutoNotchEnabled(autoNotch_);
-    }
+// --- ONE CONTROL PATH (engine extraction, stage 1) -----------------------------
+//
+// applyCommand is THE place the receiver's state changes. See app_window.hpp
+// and docs/engine-stage1.md for the op table, the extension ops and the rule
+// for when a widget's command is queued (the default) and when it is applied
+// at once (a gesture whose own drawing reads what it sets, in the same frame).
 
-    // --- Source ---------------------------------------------------------
-    // All of this runs on the GUI thread by construction (applyWebControls
-    // is called from drawUi), which is what makes it safe to touch the
-    // source at all.
-    if (r.scanDevices.value_or(false)) {
-        // The native list always refreshes (scanNative opens nothing);
-        // the SoapySDR scan goes through the same gate as the panel's
-        // Refresh (0.90.1), so with a radio open it defers rather than
-        // scans, logs why once, and the browser keeps the list it had.
-        scanNative();
-        scanSoapy();
-    }
-    if (r.sourceKind.has_value()) {
-        if (*r.sourceKind == "siggen") {
-            selectSource(0);
-        } else if (r.soapyArgs.has_value()) {
-            // Matched against the ENUMERATED list rather than passed to a
-            // driver verbatim: a browser must not be able to hand
-            // arbitrary kwargs to a vendor module or arbitrary args to a
-            // native driver, and an unknown string is simply not a device
-            // this receiver has seen. The KIND is matched too - a native
-            // row and a Soapy row for one dongle carry the same serial.
-            bool found = false;
-            if (isNativeSourceKind(*r.sourceKind)) {
-                for (std::size_t i = 0; i < nativeDevices_.size(); ++i) {
-                    if (nativeDevices_[i].driver == *r.sourceKind &&
-                        nativeDevices_[i].args == *r.soapyArgs) {
-                        selectSource(kNativeRowBase + static_cast<int>(i));
-                        found = true;
-                        break;
-                    }
-                }
-            } else {
-                for (std::size_t i = 0; i < soapyDevices_.size(); ++i) {
-                    if (soapyDevices_[i].args == *r.soapyArgs) {
-                        selectSource(soapyRowBase() + static_cast<int>(i));
-                        found = true;
-                        break;
-                    }
-                }
-            }
-            if (!found) {
-                sourceError_ = "no scanned device matches those arguments; "
-                               "rescan and try again";
-            }
-        }
-    }
-    // The remaining source settings only mean anything with a device open.
-    if (device_ != nullptr) {
-        if (r.antenna.has_value()) {
-            if (device_->setAntenna(*r.antenna)) {
-                deviceAntenna_ = device_->antenna();  // readback, not the request
-            } else {
-                sourceError_ = device_->lastError();
-            }
-        }
-        if (r.sampleRateHz.has_value()) {
-            // The refusal's reason, or a coercion's, lands on the line.
-            const cascade::gui::RateSetOutcome set =
-                cascade::gui::applySourceRate(*device_, *r.sampleRateHz, sourceError_);
-            sourceError_ = set.sourceError;
-            if (set.ok) {
-                // THE DESKTOP'S RATE COMBO FOLLOWS, and it did not until
-                // 0.91.0. Measured on the bench: a browser set 2.4 MS/s on
-                // a native RTL-SDR, the radio ran at 2.4, the deck read
-                // 2.400 MS/s, and the Source section's own Rate control
-                // still said 1.024 - the value that had been selected
-                // before. A panel disagreeing with the radio it is
-                // driving is the defect the readback rule exists to stop,
-                // and every other control here already followed (the
-                // antenna and the gains both read back). Same call the
-                // plugin-preset path makes for the same reason.
-                deviceRateIndex_ = nearestIndex(
-                    deviceRatesHz_, pipeline_.activeSource().sampleRateHz());
-                followInputRate();
-            }
-        }
-        if (r.gainName.has_value() && r.gainDb.has_value()) {
-            if (device_->setGainDb(*r.gainName, *r.gainDb)) {
-                for (std::size_t i = 0; i < deviceGainNames_.size(); ++i) {
-                    if (deviceGainNames_[i] == *r.gainName &&
-                        i < deviceGainsDb_.size()) {
-                        // THE READBACK, not the request - the same rule
-                        // the panel's own sliders follow. A driver that
-                        // quantises (every one of these does) otherwise
-                        // leaves the browser's number on the desktop
-                        // slider while the radio holds another.
-                        deviceGainsDb_[i] =
-                            static_cast<float>(device_->gainDb(*r.gainName));
-                    }
-                }
-            } else {
-                sourceError_ = device_->lastError();
-            }
-        }
-        if (r.agc.has_value() && deviceAgcSupported_) {
-            if (device_->setAutoGain(*r.agc)) {
-                deviceAgc_ = *r.agc;
-            } else {
-                sourceError_ = device_->lastError();
-            }
-        }
-    }
+namespace {
 
-    // --- Recorder --------------------------------------------------------
-    // The install/teardown ORDER is the Recorder contract's, not a choice:
-    // start() then set*Recorder for a new take, set*Recorder(nullptr) then
-    // stop() to end one. The stop* helpers already do the second.
-    if (r.recordIq.has_value()) {
-        if (*r.recordIq && !iqRecorder_.recording()) {
-            const double rate = pipeline_.inputRateHz();
-            std::string err;
-            if (iqRecorder_.start(cascade::core::RecordKind::BasebandIq,
-                                  recordDir_, rate, err)) {
-                iqRecordRateHz_ = rate;
-                iqRecordStartS_ = ImGui::GetTime();
-                pipeline_.setIqRecorder(&iqRecorder_);
-                recordError_.clear();
-                recordNotice_.clear();
-            } else {
-                recordError_ = err;
-            }
-        } else if (!*r.recordIq) {
-            stopIqRecording();
-        }
-    }
-    if (r.recordAudio.has_value()) {
-        if (*r.recordAudio && !audioRecorder_.recording()) {
-            std::string err;
-            if (audioRecorder_.start(cascade::core::RecordKind::Audio, recordDir_,
-                                     cascade::core::Pipeline::kAudioRateHz, err)) {
-                audioRecordStartS_ = ImGui::GetTime();
-                pipeline_.setAudioRecorder(&audioRecorder_);
-                recordError_.clear();
-                recordNotice_.clear();
-            } else {
-                recordError_ = err;
-            }
-        } else if (!*r.recordAudio) {
-            stopAudioRecording();
-        }
-    }
+FoxCommandResult commandResultFor(const FoxCommand& c) {
+    FoxCommandResult r;
+    std::memset(&r, 0, sizeof(r));
+    r.structSize = static_cast<std::uint32_t>(sizeof(FoxCommandResult));
+    r.status = FOXAPI_OK;
+    r.op = c.op;
+    return r;
+}
 
-    // --- Bookmarks -------------------------------------------------------
-    // Indexes are re-checked against the LIVE list: the browser's copy can
-    // be a poll out of date, and acting on a stale index would tune to, or
-    // delete, the wrong entry.
-    if (r.bookmarkAdd.has_value()) {
-        cascade::core::Bookmark b;
-        b.name = *r.bookmarkAdd;
-        b.freqHz = currentAbsoluteHz();
-        b.mode = kModeNames[modeIndex_];
-        b.bandwidthHz = vfoBandwidthHz_;
-        freqMgr_.add(b);
-        saveBookmarks();
+// Plugin keys (module file names) carried one per line in a command's text.
+std::vector<std::string> linesOf(const std::string& text) {
+    std::vector<std::string> out;
+    std::size_t from = 0;
+    while (from <= text.size()) {
+        std::size_t to = text.find('\n', from);
+        if (to == std::string::npos) { to = text.size(); }
+        if (to > from) { out.push_back(text.substr(from, to - from)); }
+        from = to + 1;
     }
-    if (r.bookmarkTune.has_value()) {
-        // The browser's row number, mapped back to the real list.
-        const std::size_t row = static_cast<std::size_t>(*r.bookmarkTune);
-        const std::size_t i = row < webBookmarkIndex_.size() ? webBookmarkIndex_[row] : ~std::size_t{0};
-        if (i < freqMgr_.list().size()) {
-            const cascade::core::Bookmark b = freqMgr_.list()[i];
-            for (int m = 0; m < 8; ++m) {
-                if (b.mode == kModeNames[m]) {
-                    modeIndex_ = m;
-                    pipeline_.setDemodMode(kModeMap[m]);
-                    break;
-                }
+    return out;
+}
+
+}  // namespace
+
+void AppWindow::submitCommand(const FoxCommand& c) {
+    cascade::core::cmd::QueuedCommand q;
+    q.c = c;
+    localCommands_.push_back(std::move(q));
+}
+
+void AppWindow::submitCommand(cascade::core::cmd::QueuedCommand q) {
+    localCommands_.push_back(std::move(q));
+}
+
+void AppWindow::drainLocalCommands() {
+    if (localCommands_.empty()) { return; }
+    // TAKEN, THEN APPLIED: a command's own effects may queue more (none does
+    // today); those wait for the next drain rather than extend this one.
+    std::vector<cascade::core::cmd::QueuedCommand> batch;
+    batch.swap(localCommands_);
+    for (const cascade::core::cmd::QueuedCommand& q : batch) {
+        (void)applyCommand(q.c, q.longText);
+    }
+}
+
+FoxCommandResult AppWindow::applyCommand(const FoxCommand& c, const std::string& longText) {
+    namespace cmd = cascade::core::cmd;
+    FoxCommandResult res = commandResultFor(c);
+    // A refusal changes NOTHING and says why (the API's rule 2).
+    const auto refuse = [&res](std::int32_t status, const char* why) {
+        res.status = status;
+        res.flags |= FOXAPI_RESULT_REFUSED;
+        std::snprintf(res.message, sizeof(res.message), "%s", why);
+        return res;
+    };
+    // NaN and infinity never reach a setter from any client: every numeric
+    // slot an op does not use is zero, so all four are checked. Ranges stay
+    // where they were enforced before stage 1 (the web and CAT parsers, the
+    // plugin host API, the widgets' own spans) - see docs/engine-stage1.md.
+    for (const double v : c.num) {
+        if (!std::isfinite(v)) { return refuse(FOXAPI_BAD_ARGUMENT, "not a finite number"); }
+    }
+    const bool on = c.ival[0] != 0;
+    const std::string text = cmd::textOf(c, longText);
+
+    switch (c.op) {
+        // --- the receiver ----------------------------------------------------
+        case FOXAPI_OP_RUN:
+            // The dome, the Start/Stop key, the scope's POWER, the web remote
+            // and a plugin all stop through stopReceiver - recordings first
+            // (0.99.36) - and start through startReceiver.
+            if (on) {
+                startReceiver();
+            } else {
+                stopReceiver();
             }
+            res.applied[0] = pipeline_.running() ? 1.0 : 0.0;
+            return res;
+        case FOXAPI_OP_SET_CENTRE:
+            // The GUI's own absolute-tune path, so the RDS/stereo decoders are
+            // told to forget the old station.
+            retuneSourceHz(c.num[0]);
+            res.applied[0] = pipeline_.activeSource().centerFrequencyHz();
+            return res;
+        case FOXAPI_OP_SET_FREQUENCY:
+            // The counter's rule: the VFO offset kept, the centre follows.
+            tuneAbsoluteHz(c.num[0]);
+            res.applied[0] = currentAbsoluteHz();
+            return res;
+        case FOXAPI_OP_SET_VFO_OFFSET: {
+            // Clamped against the LIVE rate: the whole band stays inside the
+            // baseband (the web remote, a plugin and a spectrum drag).
+            const double off = cascade::gui::vfoOffsetInsideSpan(c.num[0], pipeline_.inputRateHz(),
+                                                                 vfoBandwidthHz_);
+            pipeline_.setVfoOffsetHz(off);
+            vfoOffsetKhz_ = static_cast<float>(off / 1000.0);
+            if (off != c.num[0]) { res.flags |= FOXAPI_RESULT_CLAMPED; }
+            res.applied[0] = off;
+            return res;
+        }
+        case FOXAPP_OP_SET_VFO_OFFSET_FREE:
+            // The rail's VFO slider: its own +/-500 kHz span, never clamped to
+            // the band (a divergence from SET_VFO_OFFSET kept as it was - see
+            // docs/engine-stage1.md).
+            vfoOffsetKhz_ = static_cast<float>(c.num[0] / 1000.0);
+            pipeline_.setVfoOffsetHz(1000.0 * static_cast<double>(vfoOffsetKhz_));
+            res.applied[0] = pipeline_.vfoOffsetHz();
+            return res;
+        case FOXAPP_OP_VFO_TO_ABSOLUTE:
+            // Click-to-tune on the spectrum or the waterfall: the snap is to
+            // the mode in force WHEN APPLIED, the offset against the centre
+            // in force when applied.
+            setVfoToAbsoluteHz(c.num[0], on);
+            res.applied[0] = pipeline_.vfoOffsetHz();
+            return res;
+        case FOXAPI_OP_STEP_TUNE: {
+            // The counter's wheel and switches, TUNE UP/DN and the tuning
+            // keys: from where the receiver IS when this is applied, floored
+            // at 0 Hz and at the counter's own floor (core::minTunedAirHz).
+            if (c.ival[0] == 0) { return refuse(FOXAPI_OUT_OF_RANGE, "a step of zero steps"); }
+            const double hz = std::max(0.0, currentAbsoluteHz());
+            const double minTunedHz =
+                cascade::core::minTunedAirHz(pipeline_.converter(), pipeline_.vfoOffsetHz());
+            const double next = std::max(
+                minTunedHz, std::max(0.0, hz + static_cast<double>(c.ival[0]) * c.num[0]));
+            tuneAbsoluteHz(next);
+            res.applied[0] = currentAbsoluteHz();
+            return res;
+        }
+        case FOXAPI_OP_SET_MODE: {
+            // FOXAPI_DEMOD_* is the mode keys' order, 1-based. The keys'
+            // setModeIndex, so every client moves the bandwidth to the mode's
+            // default and logs the change the same way.
+            if (c.ival[0] < 1 || c.ival[0] > 8) { return refuse(FOXAPI_OUT_OF_RANGE, "no such mode"); }
+            setModeIndex(static_cast<int>(c.ival[0] - 1));
+            res.applied[0] = static_cast<double>(modeIndex_ + 1);
+            res.applied[1] = vfoBandwidthHz_;
+            return res;
+        }
+        case FOXAPI_OP_SET_BANDWIDTH: {
+            // [3 kHz, 90% of the channel rate]; -1 for a width the steps do
+            // not carry, so the combo letters the real figure and ticks none.
             const double bwHi = kVfoBwMaxChanFrac * pipeline_.channelRateHz();
-            vfoBandwidthHz_ = std::max(kVfoBwMinHz, std::min(b.bandwidthHz, bwHi));
+            vfoBandwidthHz_ = std::max(kVfoBwMinHz, std::min(c.num[0], bwHi));
             pipeline_.setVfoBandwidthHz(vfoBandwidthHz_);
-            // -1 for a bookmark whose bandwidth is none of the steps.
             bandwidthIndex_ = bandwidthStepIndex(vfoBandwidthHz_);
-            tuneAbsoluteHz(b.freqHz);
+            if (vfoBandwidthHz_ != c.num[0]) { res.flags |= FOXAPI_RESULT_CLAMPED; }
+            res.applied[0] = vfoBandwidthHz_;
+            return res;
         }
-    }
-    if (r.bookmarkRemove.has_value()) {
-        const std::size_t row = static_cast<std::size_t>(*r.bookmarkRemove);
-        const std::size_t i = row < webBookmarkIndex_.size() ? webBookmarkIndex_[row] : ~std::size_t{0};
-        if (freqMgr_.removeAt(i)) {
-            saveBookmarks();
+        case FOXAPP_OP_SET_BANDWIDTH_STEP:
+            // The rail's combo: one of the steps, exactly, never clamped.
+            if (c.ival[0] < 0 || c.ival[0] >= kBwCount) {
+                return refuse(FOXAPI_OUT_OF_RANGE, "no such bandwidth step");
+            }
+            bandwidthIndex_ = static_cast<int>(c.ival[0]);
+            vfoBandwidthHz_ = kBwHz[bandwidthIndex_];
+            pipeline_.setVfoBandwidthHz(vfoBandwidthHz_);
+            res.applied[0] = vfoBandwidthHz_;
+            return res;
+        case FOXAPP_OP_SET_BANDWIDTH_DRAG: {
+            // A band edge dragged on the spectrum: clamped like SET_BANDWIDTH,
+            // but the combo's step is left where it was (as it always was).
+            const double bwHi = kVfoBwMaxChanFrac * pipeline_.channelRateHz();
+            vfoBandwidthHz_ = std::max(kVfoBwMinHz, std::min(c.num[0], bwHi));
+            pipeline_.setVfoBandwidthHz(vfoBandwidthHz_);
+            if (vfoBandwidthHz_ != c.num[0]) { res.flags |= FOXAPI_RESULT_CLAMPED; }
+            res.applied[0] = vfoBandwidthHz_;
+            return res;
         }
-    }
+        case FOXAPI_OP_SET_SQUELCH:
+            squelchDb_ = static_cast<float>(c.num[0]);
+            pipeline_.setSquelchDb(squelchDb_);
+            res.applied[0] = squelchDb_;
+            return res;
+        case FOXAPI_OP_SET_VOLUME:
+            volume_ = static_cast<float>(c.num[0]);
+            pipeline_.audio().setVolume(volume_);
+            res.applied[0] = volume_;
+            return res;
+        case FOXAPI_OP_SET_MUTED:
+            // The user's own mute (the MUTE key's flag); updateAudioMute
+            // applies it with the rest of the mute policy.
+            userMuted_ = on;
+            res.applied[0] = userMuted_ ? 1.0 : 0.0;
+            return res;
+        case FOXAPI_OP_SET_DEEMPHASIS:
+            if (c.ival[0] < 0 || c.ival[0] >= kDeemphCount) {
+                return refuse(FOXAPI_OUT_OF_RANGE, "no such de-emphasis");
+            }
+            deemphIndex_ = static_cast<int>(c.ival[0]);
+            pipeline_.setDeemphasisUs(kDeemphUs[deemphIndex_]);
+            res.applied[0] = deemphIndex_;
+            return res;
+        case FOXAPI_OP_SET_STEREO:
+            stereoEnabled_ = on;
+            pipeline_.setStereoEnabled(stereoEnabled_);
+            return res;
+        case FOXAPI_OP_SET_NR:
+            nrEnabled_ = on;
+            pipeline_.setNoiseReductionEnabled(nrEnabled_);
+            if (c.ival[1] == 1) {
+                nrStrength_ = static_cast<float>(c.num[0]);
+                pipeline_.setNoiseReductionStrength(nrStrength_);
+            }
+            res.applied[0] = nrStrength_;
+            return res;
+        case FOXAPP_OP_SET_NR_STRENGTH:
+            nrStrength_ = static_cast<float>(c.num[0]);
+            pipeline_.setNoiseReductionStrength(nrStrength_);
+            res.applied[0] = nrStrength_;
+            return res;
+        case FOXAPI_OP_SET_NOTCH:
+            notchEnabled_ = on;
+            pipeline_.setNotchEnabled(notchEnabled_);
+            if (c.ival[1] == 1) {
+                notchFreqHz_ = static_cast<float>(c.num[0]);
+                pipeline_.setNotchFrequencyHz(static_cast<double>(notchFreqHz_));
+                notchQ_ = static_cast<float>(c.num[1]);
+                pipeline_.setNotchQ(static_cast<double>(notchQ_));
+            }
+            res.applied[0] = notchFreqHz_;
+            res.applied[1] = notchQ_;
+            return res;
+        case FOXAPP_OP_SET_NOTCH_FREQUENCY:
+            notchFreqHz_ = static_cast<float>(c.num[0]);
+            pipeline_.setNotchFrequencyHz(static_cast<double>(notchFreqHz_));
+            res.applied[0] = notchFreqHz_;
+            return res;
+        case FOXAPP_OP_SET_NOTCH_Q:
+            notchQ_ = static_cast<float>(c.num[0]);
+            pipeline_.setNotchQ(static_cast<double>(notchQ_));
+            res.applied[0] = notchQ_;
+            return res;
+        case FOXAPI_OP_SET_AUTO_NOTCH:
+            autoNotch_ = on;
+            pipeline_.setAutoNotchEnabled(autoNotch_);
+            return res;
 
-    // --- Scanner ---------------------------------------------------------
-    if (r.scanStartHz.has_value()) { scanStartMhz_ = *r.scanStartHz / 1.0e6; }
-    if (r.scanStopHz.has_value()) { scanStopMhz_ = *r.scanStopHz / 1.0e6; }
-    if (r.scanStepHz.has_value()) { scanStepKhz_ = *r.scanStepHz / 1.0e3; }
-    // --- Plugins ---------------------------------------------------------
-    if (r.pluginFetch.value_or(false)) {
-        startCatalogFetch();
-    }
-    if (r.pluginInstall.has_value()) {
-        // The legal notice must be acknowledged explicitly, exactly as the
-        // desktop requires a ticked box — and the gate is the SAME
-        // predicate, so a plugin the window refuses to install is refused
-        // here too, for the same stated reason.
-        const bool ack = r.acknowledgeNotice.value_or(false);
-        bool done = false;
-        for (int i = 0; i < static_cast<int>(catalog_.size()); ++i) {
-            if (catalog_[static_cast<std::size_t>(i)].id != *r.pluginInstall) {
-                continue;
+        // --- the display -------------------------------------------------------
+        // The minimum span is kept by pushing back the end that MOVED, so the
+        // other one does not shift under the user; with both given, dbMin
+        // yields. A degenerate or inverted span is a divide-by-zero where dB
+        // is mapped to pixels.
+        case FOXAPI_OP_SET_DISPLAY_RANGE:
+        case FOXAPP_OP_SET_DISPLAY_MIN:
+        case FOXAPP_OP_SET_DISPLAY_MAX: {
+            const bool maxOnly = c.op == FOXAPP_OP_SET_DISPLAY_MAX;
+            float lo = (c.op == FOXAPP_OP_SET_DISPLAY_MAX) ? dbMin_ : static_cast<float>(c.num[0]);
+            float hi = (c.op == FOXAPI_OP_SET_DISPLAY_RANGE) ? static_cast<float>(c.num[1])
+                       : maxOnly                              ? static_cast<float>(c.num[0])
+                                                              : dbMax_;
+            if (lo > hi - kMinDbSpan) {
+                if (maxOnly) {
+                    hi = lo + kMinDbSpan;
+                } else {
+                    lo = hi - kMinDbSpan;
+                }
+                res.flags |= FOXAPI_RESULT_CLAMPED;
             }
-            const std::string blocked = pluginInstallBlockedReason(i, ack);
-            if (!blocked.empty()) {
-                installError_ = blocked;
-            } else {
-                startInstall(catalog_[static_cast<std::size_t>(i)]);
-            }
-            done = true;
-            break;
+            dbMin_ = lo;
+            dbMax_ = hi;
+            spectrum_->setRange(dbMin_, dbMax_);
+            res.applied[0] = dbMin_;
+            res.applied[1] = dbMax_;
+            return res;
         }
-        if (!done) {
+        case FOXAPI_OP_SET_BAND_PLAN:
+            if (text == bandPlanSelection_) { return refuse(FOXAPI_NO_CHANGE, "already that plan"); }
+            bandPlanSelection_ = text;
+            loadBandPlan();
+            return res;
+
+        // --- the source and the radio ------------------------------------------------
+        case FOXAPI_OP_SCAN_DEVICES:
+            // The native list always refreshes (it opens nothing); the
+            // SoapySDR scan goes through its own gate, which defers while a
+            // radio is open and says why once.
+            scanNative();
+            scanSoapy();
+            return res;
+        case FOXAPP_OP_SCAN_DEVICES_ON_OPEN:
+            // The Source list opening: the lazy first SoapySDR scan, or the
+            // whole scan a partial one left owed.
+            scanNative();
+            if (!soapyScanned_ || (soapyScanPartial_ && !soapyScanGated())) { scanSoapy(); }
+            return res;
+        case FOXAPP_OP_SET_NETWORK_USRP_SCAN:
+            lookForNetworkUsrps_ = on;
+            if (lookForNetworkUsrps_) { scanSoapy(); }
+            return res;
+        case FOXAPI_OP_SELECT_SOURCE:
+            if (text.empty()) { return refuse(FOXAPI_BAD_ARGUMENT, "no source named"); }
+            if (!selectSourceById(text)) {
+                return refuse(FOXAPI_NOT_FOUND, "no scanned device matches that id");
+            }
+            return res;
+        case FOXAPI_OP_SET_SAMPLE_RATE: {
+            if (device_ == nullptr) { return refuse(FOXAPI_NO_DEVICE, "no radio is open"); }
+            // The refusal's reason, or a coercion's, lands on the line; the
+            // Rate combo follows the READBACK.
+            const cascade::gui::RateSetOutcome set =
+                cascade::gui::applySourceRate(*device_, c.num[0], sourceError_);
+            sourceError_ = set.sourceError;
+            if (!set.ok) { return refuse(FOXAPI_FAILED, "the radio refused the rate"); }
+            deviceRateIndex_ =
+                nearestIndex(deviceRatesHz_, pipeline_.activeSource().sampleRateHz());
+            followInputRate();
+            res.applied[0] = pipeline_.activeSource().sampleRateHz();
+            return res;
+        }
+        case FOXAPI_OP_SET_GAIN: {
+            if (device_ == nullptr) { return refuse(FOXAPI_NO_DEVICE, "no radio is open"); }
+            if (!device_->setGainDb(text, c.num[0])) {
+                sourceError_ = device_->lastError();
+                return refuse(FOXAPI_FAILED, "the radio refused the gain");
+            }
+            // THE READBACK, not the request: every one of these radios
+            // quantises, and a slider left on the request would be a lie.
+            for (std::size_t i = 0; i < deviceGainNames_.size(); ++i) {
+                if (deviceGainNames_[i] == text && i < deviceGainsDb_.size()) {
+                    deviceGainsDb_[i] = static_cast<float>(device_->gainDb(text));
+                    res.applied[0] = deviceGainsDb_[i];
+                }
+            }
+            return res;
+        }
+        case FOXAPP_OP_SET_GAIN_NO_READBACK: {
+            // The radar scope's GAIN knob: the knob keeps the figure it asked
+            // for (a divergence from SET_GAIN kept as it was).
+            if (device_ == nullptr) { return refuse(FOXAPI_NO_DEVICE, "no radio is open"); }
+            for (std::size_t i = 0; i < deviceGainNames_.size() && i < deviceGainsDb_.size(); ++i) {
+                if (deviceGainNames_[i] != text) { continue; }
+                deviceGainsDb_[i] = static_cast<float>(c.num[0]);
+                if (!device_->setGainDb(text, static_cast<double>(deviceGainsDb_[i]))) {
+                    sourceError_ = device_->lastError();
+                }
+                res.applied[0] = deviceGainsDb_[i];
+                return res;
+            }
+            return refuse(FOXAPI_NOT_FOUND, "no such gain stage");
+        }
+        case FOXAPI_OP_SET_DEVICE_AGC:
+            if (device_ == nullptr) { return refuse(FOXAPI_NO_DEVICE, "no radio is open"); }
+            if (!deviceAgcSupported_) { return refuse(FOXAPI_UNSUPPORTED, "no automatic gain"); }
+            if (!device_->setAutoGain(on)) {
+                sourceError_ = device_->lastError();
+                return refuse(FOXAPI_FAILED, "the radio refused");
+            }
+            deviceAgc_ = on;
+            return res;
+        case FOXAPI_OP_SET_ANTENNA:
+            if (device_ == nullptr) { return refuse(FOXAPI_NO_DEVICE, "no radio is open"); }
+            if (!device_->setAntenna(text)) {
+                sourceError_ = device_->lastError();
+                return refuse(FOXAPI_FAILED, "the radio refused the antenna");
+            }
+            deviceAntenna_ = device_->antenna();  // readback, not the request
+            return res;
+        case FOXAPI_OP_SET_BIAS_TEE:
+            // The Source panel's box and the deck's key both end here, after
+            // the key's own question has been answered (biasKeyPressed).
+            switchBiasTee(on);
+            return res;
+        case FOXAPI_OP_SET_DEVICE_OPTION: {
+            // The RSP's notches and HDR, the RX888's ADC pair: request, then
+            // show the driver's READBACK.
+            if (device_ == nullptr) { return refuse(FOXAPI_NO_DEVICE, "no radio is open"); }
+            if (text == "rf_notch" && deviceRfNotchPresent_) {
+                deviceRfNotch_ = on;
+                withRfNotch(device_, [this](auto& d) {
+                    if (!d.setRfNotch(deviceRfNotch_)) { sourceError_ = d.lastError(); }
+                    deviceRfNotch_ = d.rfNotch();
+                    return true;
+                });
+            } else if (text == "dab_notch" && deviceDabNotchPresent_) {
+                deviceDabNotch_ = on;
+                withDabNotch(device_, [this](auto& d) {
+                    if (!d.setDabNotch(deviceDabNotch_)) { sourceError_ = d.lastError(); }
+                    deviceDabNotch_ = d.dabNotch();
+                    return true;
+                });
+            } else if (text == "hdr" && deviceHdrPresent_) {
+                deviceHdr_ = on;
+                withHdrMode(device_, [this](auto& d) {
+                    if (!d.setHdrMode(deviceHdr_)) { sourceError_ = d.lastError(); }
+                    deviceHdr_ = d.hdrMode();
+                    return true;
+                });
+            } else if (text == "dither" && deviceAdcSwitchesPresent_) {
+                deviceDither_ = on;
+                withAdcSwitches(device_, [this](auto& d) {
+                    if (!d.setDither(deviceDither_)) { sourceError_ = d.lastError(); }
+                    deviceDither_ = d.dither();
+                    return true;
+                });
+            } else if (text == "randomiser" && deviceAdcSwitchesPresent_) {
+                deviceRandomiser_ = on;
+                withAdcSwitches(device_, [this](auto& d) {
+                    if (!d.setRandomiser(deviceRandomiser_)) { sourceError_ = d.lastError(); }
+                    deviceRandomiser_ = d.randomiser();
+                    return true;
+                });
+            } else {
+                return refuse(FOXAPI_UNSUPPORTED, "this radio has no such switch");
+            }
+            return res;
+        }
+        case FOXAPP_OP_SET_CONVERTER: {
+            if (c.ival[0] < 0 || c.ival[0] > 2) { return refuse(FOXAPI_OUT_OF_RANGE, "no such converter mode"); }
+            cascade::core::ConverterSetting s;
+            s.mode = static_cast<cascade::core::ConverterMode>(c.ival[0]);
+            s.loHz = c.num[0];
+            s.inverted = c.ival[1] != 0;
+            changeConverter(s);
+            return res;
+        }
+
+        // --- the recorder ----------------------------------------------------------
+        case FOXAPI_OP_RECORD_IQ:
+            if (on) {
+                if (iqRecorder_.recording()) { return refuse(FOXAPI_NO_CHANGE, "already recording"); }
+                if (!startIqRecording()) { return refuse(FOXAPI_FAILED, "the recording could not start"); }
+            } else {
+                stopIqRecording();
+            }
+            return res;
+        case FOXAPI_OP_RECORD_AUDIO:
+            if (on) {
+                if (audioRecorder_.recording()) { return refuse(FOXAPI_NO_CHANGE, "already recording"); }
+                if (!startAudioRecording()) { return refuse(FOXAPI_FAILED, "the recording could not start"); }
+            } else {
+                stopAudioRecording();
+            }
+            return res;
+
+        // --- bookmarks ------------------------------------------------------------------
+        case FOXAPI_OP_BOOKMARK_ADD:
+            addBookmarkHere(text);
+            return res;
+        case FOXAPI_OP_BOOKMARK_TUNE:
+        case FOXAPI_OP_BOOKMARK_REMOVE:
+        case FOXAPI_OP_BOOKMARK_FAVOURITE: {
+            // BY ID, re-found in the LIVE list: the list may have moved since
+            // the command was made (an import, a browser's add).
+            const std::size_t i = freqMgr_.indexOfId(static_cast<std::uint64_t>(c.ival[0]));
+            if (i >= freqMgr_.list().size()) { return refuse(FOXAPI_NOT_FOUND, "no such bookmark"); }
+            if (c.op == FOXAPI_OP_BOOKMARK_TUNE) {
+                const cascade::core::Bookmark b = freqMgr_.list()[i];
+                tuneToBookmark(b);
+            } else if (c.op == FOXAPI_OP_BOOKMARK_REMOVE) {
+                freqMgr_.removeAt(i);
+                saveBookmarks();
+            } else {
+                cascade::core::Bookmark b = freqMgr_.list()[i];
+                b.favourite = c.ival[1] != 0;
+                freqMgr_.updateAt(i, b);
+                saveBookmarks();
+            }
+            return res;
+        }
+        case FOXAPI_OP_BOOKMARK_REMOVE_GROUP: {
+            const std::size_t n = freqMgr_.removeGroup(text);
+            bookmarkImportNote_ = cascade::core::formatText(tr("Removed %zu from \"%s\""), n, text.c_str());
+            saveBookmarks();
+            rebuildBookmarkView();
+            res.applied[0] = static_cast<double>(n);
+            return res;
+        }
+        case FOXAPP_OP_BOOKMARK_IMPORT_FILE:
+            if (text.empty()) { return refuse(FOXAPI_BAD_ARGUMENT, "no file named"); }
+            importBookmarkFile(text);
+            return res;
+
+        // --- the scanner -------------------------------------------------------------------
+        case FOXAPI_OP_SCANNER_RUN:
+            if (on) {
+                // The range travels with the command and is kept as the
+                // scanner's stored range; configure() sanitizes it (swaps a
+                // reversed range, floors the step) whoever sent it.
+                scanStartMhz_ = c.num[0] / 1.0e6;
+                scanStopMhz_ = c.num[1] / 1.0e6;
+                scanStepKhz_ = c.num[2] / 1.0e3;
+                scanner_.configure(scannerParams());
+                scanner_.start(ImGui::GetTime() * 1000.0);
+                scannerHasExpected_ = false;
+            } else {
+                scanner_.stop();
+            }
+            return res;
+        case FOXAPI_OP_SCANNER_SKIP:
+            if (!scanner_.active()) { return refuse(FOXAPI_NO_CHANGE, "the scanner is not running"); }
+            scanner_.skip();
+            scannerHasExpected_ = false;
+            return res;
+        case FOXAPI_OP_SCANNER_CONFIG:
+            scanDwellMs_ = c.num[0];
+            scanHoldMs_ = c.num[1];
+            scanResumeMs_ = c.num[2];
+            scanListenMs_ = c.num[3];
+            // A running scan takes the new timings at once (the panel's own
+            // commit-on-deactivate rule).
+            if (scanner_.active()) {
+                scanner_.configure(scannerParams());
+                scannerHasExpected_ = false;
+            }
+            return res;
+        case FOXAPP_OP_SCANNER_RANGE:
+            if ((c.ival[0] & 1) != 0) { scanStartMhz_ = c.num[0] / 1.0e6; }
+            if ((c.ival[0] & 2) != 0) { scanStopMhz_ = c.num[1] / 1.0e6; }
+            if ((c.ival[0] & 4) != 0) { scanStepKhz_ = c.num[2] / 1.0e3; }
+            // Only the panel reconfigures a running scan; a browser's range
+            // is stored for the next start, as it always was.
+            if ((c.ival[0] & 8) != 0 && scanner_.active()) {
+                scanner_.configure(scannerParams());
+                scannerHasExpected_ = false;
+            }
+            return res;
+
+        // --- decoders and plugins ------------------------------------------------------------
+        case FOXAPI_OP_DECODER_START:
+        case FOXAPI_OP_DECODER_STOP:
+            if (text.empty()) { return refuse(FOXAPI_BAD_ARGUMENT, "no plugin named"); }
+            setPluginStopped(text, c.op == FOXAPI_OP_DECODER_STOP);
+            return res;
+        case FOXAPI_OP_DECODER_STOP_ALL:
+            for (const std::string& key :
+                 cascade::gui::stopAllKeys(runnableDecoders(), pipeline_.running())) {
+                setPluginStopped(key, true);
+            }
+            return res;
+        case FOXAPP_OP_DECODER_STOP_LIST: {
+            // THE KEYS THE USER WAS SHOWN: STOP ALL's from the frame it was
+            // drawn, the mute dialog's from when it opened - never "whatever
+            // is running now".
+            const std::vector<std::string> keys = linesOf(text);
+            if (c.ival[0] == 1) {
+                stopMutingPlugins(keys);
+            } else {
+                for (const std::string& key : keys) { setPluginStopped(key, true); }
+            }
+            return res;
+        }
+        case FOXAPI_OP_PLUGIN_PRESET: {
+            // RE-READ FROM THE PLUGIN, never trusted from the press: count()
+            // and get() are asked again and the preset re-validated, so the
+            // only numbers that reach the receiver are ones the plugin itself
+            // just produced. Named by display name (the web remote) or by
+            // module file name (the preset bars).
+            for (const cascade::core::LoadedPlugin& lp : pluginHost_.plugins()) {
+                if (lp.name != text && cascade::core::pluginKey(lp) != text) { continue; }
+                const std::uint32_t n = (lp.preset != nullptr) ? lp.preset->count() : 0u;
+                const auto idx = static_cast<std::uint32_t>(c.ival[0]);
+                CascadePreset ps{};
+                ps.structSize = static_cast<std::uint32_t>(sizeof(CascadePreset));
+                const bool fetchedOk = c.ival[0] >= 0 && lp.preset != nullptr && idx < n &&
+                                       lp.preset->get(idx, &ps) == 1;
+                if (!cascade::gui::presetRequestStillValid(true, n, kMaxPresetsPerPlugin, idx,
+                                                            fetchedOk, ps)) {
+                    return refuse(FOXAPI_NOT_FOUND, "no such preset");
+                }
+                applyPluginPreset(lp, ps);
+                return res;
+            }
+            return refuse(FOXAPI_NOT_FOUND, "no such plugin");
+        }
+        case FOXAPP_OP_USER_PRESET_APPLY: {
+            // One of the user's own, re-read by ordinal: forgotten since the
+            // press is a no-op.
+            for (const cascade::core::LoadedPlugin& lp : pluginHost_.plugins()) {
+                if (cascade::core::pluginKey(lp) != text) { continue; }
+                const std::vector<cascade::core::UserPreset> mine = userPresetsForPlugin(lp);
+                if (c.ival[0] < 0 || static_cast<std::size_t>(c.ival[0]) >= mine.size()) {
+                    return refuse(FOXAPI_NOT_FOUND, "no such preset");
+                }
+                const CascadePreset ps =
+                    cascade::gui::userPresetToCascade(mine[static_cast<std::size_t>(c.ival[0])]);
+                if (!cascade::gui::presetIsValid(ps)) { return refuse(FOXAPI_NOT_FOUND, "no such preset"); }
+                applyPluginPreset(lp, ps);
+                return res;
+            }
+            return refuse(FOXAPI_NOT_FOUND, "no such plugin");
+        }
+        case FOXAPI_OP_USER_PRESET_SAVE:
+            applyUserPresetEdit({PendingUserPresetEdit::Op::Save, text, 0});
+            return res;
+        case FOXAPP_OP_USER_PRESET_FORGET_AT:
+            if (c.ival[0] < 0) { return refuse(FOXAPI_OUT_OF_RANGE, "no such preset"); }
+            applyUserPresetEdit(
+                {PendingUserPresetEdit::Op::Forget, text, static_cast<std::size_t>(c.ival[0])});
+            return res;
+        case FOXAPP_OP_PLUGIN_AUTO_PRESET:
+            maybeAutoPreset(text, c.ival[0] == 1 ? "window opened" : "started");
+            return res;
+        case FOXAPI_OP_PLUGIN_GRANT:
+            if (c.ival[0] == 1) {
+                setPluginTuneAllowed(text, c.ival[1] != 0);
+            } else if (c.ival[0] == 2) {
+                setPluginSettingsAllowed(text, c.ival[1] != 0);
+            } else {
+                return refuse(FOXAPI_OUT_OF_RANGE, "no such grant");
+            }
+            return res;
+        case FOXAPI_OP_PLUGIN_COMMAND:
+            // Queued for the plugin to take with poll_command; nothing of the
+            // plugin's runs here.
+            if (c.ival[0] < 0 || !pluginUi_.api().pressCommand(text, static_cast<std::uint32_t>(c.ival[0]))) {
+                return refuse(FOXAPI_NOT_FOUND, "no such command key");
+            }
+            return res;
+        case FOXAPI_OP_PLUGIN_MUTE:
+            for (const cascade::core::LoadedPlugin& lp : pluginHost_.plugins()) {
+                if (cascade::core::pluginKey(lp) != text) { continue; }
+                setPluginMutes(lp, on);
+                return res;
+            }
+            return refuse(FOXAPI_NOT_FOUND, "no such plugin");
+        case FOXAPI_OP_PLUGIN_RESCAN:
+            rescanPlugins();
+            return res;
+        case FOXAPI_OP_STORE_FETCH:
+            startCatalogFetch();
+            return res;
+        case FOXAPI_OP_STORE_INSTALL: {
+            // The legal notice must be acknowledged explicitly, and the gate
+            // is the ONE predicate the store window's FIT key uses too.
+            for (int i = 0; i < static_cast<int>(catalog_.size()); ++i) {
+                if (catalog_[static_cast<std::size_t>(i)].id != text) { continue; }
+                const std::string blocked = pluginInstallBlockedReason(i, on);
+                if (!blocked.empty()) {
+                    installError_ = blocked;
+                    return refuse(FOXAPI_DENIED, "the install was refused");
+                }
+                startInstall(catalog_[static_cast<std::size_t>(i)]);
+                return res;
+            }
             // English, as every reason in installError_ is; the pages
             // translate it where they draw it (gui::trStoredReason).
             installError_ = FOX_TR_NOOP("no catalogue entry with that id; fetch the "
                                         "catalogue and try again");
+            return refuse(FOXAPI_NOT_FOUND, "no catalogue entry with that id");
         }
-    }
-    if (r.pluginRemove.has_value()) {
-        removeInstalledPlugin(*r.pluginRemove);
-    }
-    if (r.pluginTuneName.has_value() && r.pluginTuneAllowed.has_value()) {
-        setPluginTuneAllowed(*r.pluginTuneName, *r.pluginTuneAllowed);
-    }
-    if (r.pluginPresetName.has_value() && r.pluginPresetIndex.has_value()) {
-        // Re-read the preset from the PLUGIN rather than trusting anything
-        // the browser echoed back, and re-apply the same validity test, so
-        // the only numbers that reach the receiver are ones the plugin
-        // itself just produced. Then applyPluginPreset — the identical
-        // path the desktop button takes, which also sets the mode,
-        // bandwidth and device rate and opens the plugin's windows.
-        for (const cascade::core::LoadedPlugin& lp : pluginHost_.plugins()) {
-            if (lp.name != *r.pluginPresetName || lp.preset == nullptr) { continue; }
-            const auto idx = static_cast<std::uint32_t>(*r.pluginPresetIndex);
-            if (idx >= lp.preset->count() || idx >= kMaxPresetsPerPlugin) { break; }
-            CascadePreset ps{};
-            ps.structSize = static_cast<std::uint32_t>(sizeof(CascadePreset));
-            if (lp.preset->get(idx, &ps) != 1) { break; }
-            if (!cascade::gui::presetIsValid(ps)) { break; }
-            applyPluginPreset(lp, ps);
-            break;
-        }
-    }
-
-    if (r.scannerActive.has_value()) {
-        if (*r.scannerActive) {
-            cascade::core::Scanner::Params p;
-            p.startHz = scanStartMhz_ * 1.0e6;
-            p.stopHz = scanStopMhz_ * 1.0e6;
-            p.stepHz = scanStepKhz_ * 1.0e3;
-            p.dwellMs = scanDwellMs_;
-            p.holdMs = scanHoldMs_;
-            p.resumeMs = scanResumeMs_;
-            p.listenMs = scanListenMs_;
-            // configure() sanitizes (swaps a reversed range, floors the
-            // step), so the browser's values get the same treatment the
-            // panel's do.
-            scanner_.configure(p);
-            scanner_.start(ImGui::GetTime() * 1000.0);
-            scannerHasExpected_ = false;
-        } else {
-            scanner_.stop();
-        }
-    }
-    if (r.scannerSkip.value_or(false) && scanner_.active()) {
-        scanner_.skip();
-        scannerHasExpected_ = false;
-    }
-
-    // --- THE REMOTE TRANSMIT KEY (0.95.1) --------------------------------
-    //
-    // The LAST thing applied in this loop, and the only one here that can
-    // put RF out of a connector. Three things have to be true before it
-    // does, and they are deliberately checked in three different places:
-    // the server refuses the request unless the snapshot it is publishing
-    // says a transmitter is available, this re-checks against the state
-    // THIS frame rather than the one the browser saw, and
-    // core::Transmitter refuses a key with no radio behind it whatever
-    // either of us believes.
-    //
-    // A key is an ASSERTION WITH A DEADLINE, not a switch: keyRemote()
-    // buys kRemotePttHoldMs and the browser has to keep asking. So a
-    // request that arrives while the page is shut is dropped rather than
-    // remembered, and nothing here can leave a key pending.
-    if (r.transmitPtt.has_value()) {
-        if (*r.transmitPtt) {
-            if (transmitOpen_ && transmitter_.haveSink()) {
-                transmitter_.keyRemote();
-            } else {
-                transmitter_.releaseRemote("there is no transmitter open");
+        case FOXAPP_OP_STORE_UPDATE: {
+            // The plan is looked up again rather than captured with the key:
+            // planUpdates' entries point INTO catalog_.
+            for (const cascade::core::PluginUpdate& u : plannedPluginUpdates()) {
+                if (u.id != text) { continue; }
+                startUpdate(u);
+                return res;
             }
-        } else {
-            transmitter_.releaseRemote("the remote let go");
+            return refuse(FOXAPI_NOT_FOUND, "no update planned for that plugin");
         }
+        case FOXAPI_OP_STORE_REMOVE:
+            removeInstalledPlugin(text);
+            return res;
+        case FOXAPP_OP_STORE_REMOVE_BLOCKED:
+            removeBlockedPlugin(text);
+            return res;
+        case FOXAPI_OP_STORE_CANCEL:
+            pluginRepo_.cancel();
+            return res;
+        case FOXAPI_OP_STORE_UPDATE_ALL:
+            startAddAll(on);
+            return res;
+
+        // --- the patch page ---------------------------------------------------------------------
+        case FOXAPI_OP_PATCH_RUN:
+            if (on == patchRunning_) { return refuse(FOXAPI_NO_CHANGE, "already so"); }
+            patchPressStart();
+            return res;
+        case FOXAPI_OP_PATCH_ALL_OFF:
+            patchAllOff();
+            return res;
+
+        // --- the transmitter (the local key is not a command in stage 1) --------------
+        case FOXAPI_OP_TX_OPEN:
+            if (!text.empty()) { transmitArgs_ = text; }
+            openTransmitRadio();
+            if (!transmitter_.haveSink()) { return refuse(FOXAPI_FAILED, "the transmitter did not open"); }
+            return res;
+        case FOXAPI_OP_TX_CLOSE:
+            closeTransmitRadio();
+            return res;
+        case FOXAPI_OP_TX_PTT:
+            // THE REMOTE KEY (0.95.1): an assertion with a deadline, not a
+            // switch - keyRemote() buys kRemotePttHoldMs and the browser has to
+            // keep asking. A request that arrives while the page is shut is
+            // dropped, never remembered.
+            if (on) {
+                if (transmitOpen_ && transmitter_.haveSink()) {
+                    transmitter_.keyRemote();
+                } else {
+                    transmitter_.releaseRemote("there is no transmitter open");
+                    return refuse(FOXAPI_NO_DEVICE, "there is no transmitter open");
+                }
+            } else {
+                transmitter_.releaseRemote("the remote let go");
+            }
+            return res;
+        case FOXAPI_OP_TX_SET_MODE:
+            if (c.ival[0] < 0 || c.ival[0] >= cascade::dsp::kTxModeCount) {
+                return refuse(FOXAPI_OUT_OF_RANGE, "no such transmit mode");
+            }
+            transmitModeIndex_ = static_cast<int>(c.ival[0]);
+            transmitter_.setMode(cascade::dsp::txModeFromIndex(transmitModeIndex_));
+            return res;
+        case FOXAPI_OP_TX_SET_FREQUENCY:
+            // Where a SPLIT transmitter goes; with SPLIT off it follows the
+            // receiver's dial and this is kept for when it is turned on.
+            transmitSplitHz_ = c.num[0];
+            followTransmitFrequency();
+            return res;
+        case FOXAPI_OP_TX_SET_SPLIT:
+            transmitSplit_ = on;
+            // Going INTO split starts from the frequency the command carries
+            // (the page sends the receiver's dial), so the first thing that
+            // happens is never a jump; coming out follows the receiver again.
+            if (transmitSplit_) { transmitSplitHz_ = c.num[0]; }
+            followTransmitFrequency();
+            return res;
+        case FOXAPI_OP_TX_SET_POWER:
+            transmitPowerDb_ = c.num[0];
+            transmitter_.setPowerDb(transmitPowerDb_);
+            if (transmitter_.sink() != nullptr) { transmitPowerDb_ = transmitter_.sink()->gainDb(); }
+            res.applied[0] = transmitPowerDb_;
+            return res;
+        case FOXAPI_OP_TX_SET_INPUT: {
+            if (c.ival[0] < 0 || c.ival[0] >= cascade::core::kTxInputCount) {
+                return refuse(FOXAPI_OUT_OF_RANGE, "no such input");
+            }
+            if (micOpen_.inFlight()) { return refuse(FOXAPI_BUSY, "the microphone is still opening"); }
+            transmitInputIndex_ = static_cast<int>(c.ival[0]);
+            const cascade::core::TxInput in = cascade::core::txInputFromIndex(transmitInputIndex_);
+            transmitter_.setInput(in);
+            if (in == cascade::core::TxInput::Microphone && !transmitter_.audioIn().running()) {
+                // Opened WHEN IT IS CHOSEN and not before, and NOT ON THIS
+                // THREAD: micOpen_ runs waveInOpen on a worker and this waits
+                // at most AudioOpen::kOpenBound under a watchdog pause.
+                const cascade::gui::AudioOpen::Outcome outcome = micOpen_.request(-1);
+                if (outcome == cascade::gui::AudioOpen::Outcome::Finished) {
+                    if (!micOpen_.result().ok) {
+                        transmitError_ = FOX_TR_NOOP("no microphone could be opened");
+                    }
+                } else {
+                    transmitError_ = kAudioBusyNote;
+                }
+            }
+            return res;
+        }
+        case FOXAPI_OP_TX_SET_TONE:
+            transmitToneHz_ = c.num[0];
+            transmitter_.setToneHz(transmitToneHz_);
+            transmitToneHz_ = transmitter_.toneHz();
+            res.applied[0] = transmitToneHz_;
+            return res;
+        case FOXAPI_OP_TX_SET_MONITOR:
+            transmitMonitor_ = on;
+            return res;
+
+        // --- audio output, position, GPS --------------------------------------------------------
+        case FOXAPI_OP_AUDIO_DEVICE:
+            // ival[0]: the PortAudio device index the Sinks list carries.
+            for (int i = 0; i < static_cast<int>(devices_.size()); ++i) {
+                if (devices_[static_cast<std::size_t>(i)].index != c.ival[0]) { continue; }
+                deviceIndex_ = i;
+                // Through audioOpen_, never straight at the sink: waveOutOpen
+                // has no timeout (the 0.96.4 field hang).
+                (void)requestAudioOpen(static_cast<int>(c.ival[0]), false);
+                return res;
+            }
+            return refuse(FOXAPI_NOT_FOUND, "no such audio device");
+        case FOXAPI_OP_SET_POSITION:
+            // REFUSED, never clamped, by the one rule (receiverPositionAcceptable).
+            if (!applyReceiverPosition(c.num[0], c.num[1])) {
+                return refuse(FOXAPI_OUT_OF_RANGE, "not a receiver position");
+            }
+            return res;
+        case FOXAPI_OP_GPS:
+            if (on) {
+                if (text.empty()) { return refuse(FOXAPI_BAD_ARGUMENT, "no serial port named"); }
+                gpsRefusal_.clear();
+                gpsReader_.start({text, static_cast<int>(c.num[0]),
+                                  cascade::core::GpsReader::kDefaultTimeoutS});
+            } else {
+                gpsReader_.stop();
+            }
+            return res;
+
+        default:
+            break;
+    }
+    return refuse(FOXAPI_UNSUPPORTED, "this build has no such operation");
+}
+
+// ONE REQUEST, TRANSLATED. The web remote, CAT and a plugin's queued controls
+// used to run a private copy of what each field does; they now turn into the
+// same commands a desktop widget sends, applied in the order the fields always
+// were (net/control_ops.cpp), by applyCommand. GUI thread only.
+void AppWindow::applyControlRequest(const cascade::net::ControlRequest& r) {
+    cascade::net::ControlOpsContext ctx;
+    if (r.bookmarkTune.has_value() || r.bookmarkRemove.has_value()) {
+        // The browser's row numbers, mapped to ids while the list is the one
+        // the rows were published from.
+        ctx.bookmarkIdByRow.reserve(webBookmarkIndex_.size());
+        for (const std::size_t i : webBookmarkIndex_) {
+            ctx.bookmarkIdByRow.push_back(i < freqMgr_.list().size() ? freqMgr_.list()[i].id : 0u);
+        }
+    }
+    ctx.scanStartHz = scanStartMhz_ * 1.0e6;
+    ctx.scanStopHz = scanStopMhz_ * 1.0e6;
+    ctx.scanStepHz = scanStepKhz_ * 1.0e3;
+    for (const cascade::core::cmd::QueuedCommand& q : cascade::net::controlRequestToCommands(r, ctx)) {
+        (void)applyCommand(q.c, q.longText);
     }
 }
 

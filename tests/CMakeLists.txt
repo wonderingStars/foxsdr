@@ -67,6 +67,17 @@ foreach(src ${CASCADE_TESTS})
     set_tests_properties(${name} PROPERTIES TIMEOUT 120)
 endforeach()
 
+# THE STAGE-1 FIXTURE PLUGIN (engine extraction, docs/engine-stage1.md): a
+# real module - a decoder, two presets and a command key - so
+# test_apply_command applies the plugin ops to a loaded plugin. Built beside
+# the tests; the test copies it into its OWN scratch plugin directory
+# (AppWindow::testHooks_.pluginDir), never where other tests look.
+add_library(fixture_stage1_plugin SHARED fixture_stage1_plugin.cpp)
+target_include_directories(fixture_stage1_plugin PRIVATE "${CMAKE_SOURCE_DIR}/src")
+add_dependencies(test_apply_command fixture_stage1_plugin)
+target_compile_definitions(test_apply_command PRIVATE
+    FIXTURE_STAGE1_PLUGIN="$<TARGET_FILE:fixture_stage1_plugin>")
+
 # The engine, whole archive, linked with nothing of the window (top-level
 # CMakeLists.txt, "the line between them"). The build is the real check; this
 # confirms the binary it produced runs.

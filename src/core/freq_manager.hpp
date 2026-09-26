@@ -57,6 +57,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <utility>
 #include <vector>
@@ -70,6 +71,12 @@ struct Bookmark {
     double bandwidthHz = 150000;
     std::string group;       // "" = ungrouped
     bool favourite = false;
+    // STABLE FOR THE ENTRY'S LIFETIME IN THIS SESSION, never saved (engine
+    // extraction stage 1: the engine API names a bookmark by id, not by list
+    // index, because an index moves under every insert). Assigned by
+    // FreqManager on every way an entry enters the list, kept across updateAt,
+    // and never reused within a session; 0 means "not in a list".
+    std::uint64_t id = 0;
 };
 
 class FreqManager {
@@ -138,6 +145,10 @@ public:
     // group names) can be cached and rebuilt only when it is stale.
     unsigned version() const { return version_; }
 
+    // The index of the entry with this id, or size() when there is none (the
+    // id was 0, or the entry has been removed).
+    std::size_t indexOfId(std::uint64_t id) const;
+
 private:
     // Sorted insert helper: keeps list_ ordered and returns the landing
     // index. upper_bound (not lower_bound) so equal frequencies append
@@ -146,6 +157,7 @@ private:
 
     std::vector<Bookmark> list_;
     unsigned version_ = 0;
+    std::uint64_t nextId_ = 1;  // Bookmark::id's source; 0 is never handed out
 };
 
 }  // namespace cascade::core

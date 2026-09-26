@@ -25,6 +25,7 @@
 // headless build depend on one.
 struct GLFWwindow;
 
+#include "core/app_commands.hpp"
 #include "core/band_plan.hpp"
 #include "core/config.hpp"
 #include "core/freq_manager.hpp"
@@ -57,6 +58,7 @@ struct GLFWwindow;
 #include "gui/page_geometry.hpp"
 #include "gui/store_first_open.hpp"
 #include "gui/rail_banks.hpp"
+#include "gui/running_view.hpp"
 #include "gui/bench_rail.hpp"
 #include "gui/audio_open.hpp"
 #include "gui/config_writer.hpp"
@@ -667,6 +669,15 @@ private:
         // (tests/test_soundcard_app_paths.cpp), so no test lists or opens
         // the desk's audio inputs.
         std::shared_ptr<cascade::source::SoundCardBackend> (*soundCardBackend)();
+        // Replaces PluginHost::defaultPluginDir() in rescanPlugins when set:
+        // tests/test_apply_command.cpp loads its fixture plugin from its own
+        // scratch directory, never from beside the test binaries, where every
+        // other test that builds an AppWindow would load it too.
+        std::string (*pluginDir)();
+        // Replaces SoapySource::enumerate on scanSoapy's worker when set: the
+        // device-scan commands are applied in tests without a vendor probe
+        // ever touching the desk's radios (it opens and resets what it finds).
+        std::vector<cascade::source::SoapyDeviceInfo> (*soapyScan)();
     };
     // Set by the test before any AppWindow exists and never changed while one
     // does, so the worker threads that read makeDevice race with nothing.
@@ -1045,9 +1056,45 @@ private:
     // The snapshot half of the above, on its own so a control applied this
     // frame is visible to a plugin in the same frame's snapshot.
     void publishPluginApiState();
-    // ONE control request, applied. Extracted from applyWebControls unchanged,
-    // so the browser, CAT and a plugin all go through literally the same code.
+    // ONE control request (the web remote, CAT, a plugin): a TRANSLATION, and
+    // nothing else - net::controlRequestToCommands turns its fields into
+    // commands in the order they were always applied, and each goes through
+    // applyCommand below.
     void applyControlRequest(const cascade::net::ControlRequest& r);
+
+    // --- ONE CONTROL PATH (engine extraction, stage 1) ----------------------
+    //
+    // THE ONE PLACE THE RECEIVER'S STATE CHANGES. Every desktop widget, key
+    // binding and gesture that changes the receiver, the web remote, CAT and
+    // plugins all end here as a FoxCommand (the engine API's vocabulary,
+    // third_party/foxsdr_api; app-internal extensions in
+    // core/app_commands.hpp). docs/engine-stage1.md has the op table, the
+    // rule for when a widget's command is queued and when it is applied at
+    // once, and the line between receiver state and view state; tests/
+    // test_command_path_guard.cpp fails a widget that changes the receiver
+    // any other way. GUI thread only - the same rule every setter it calls
+    // has always had. `longText` is the command's text when it did not fit
+    // FoxCommand::text (a long path); empty otherwise.
+    FoxCommandResult applyCommand(const FoxCommand& c, const std::string& longText = {});
+    // What a widget or key does: queue a command for the top of the next
+    // drain. Drained twice at the top of every frame (drawUi): once before the
+    // keyboard is read - what the widgets asked for last frame - and once
+    // after, so a key still acts in the frame it is pressed.
+    void submitCommand(const FoxCommand& c);
+    void submitCommand(cascade::core::cmd::QueuedCommand q);
+    void drainLocalCommands();
+    std::vector<cascade::core::cmd::QueuedCommand> localCommands_;
+
+    // Helpers the commands call, each one the body a widget or a branch of
+    // applyControlRequest used to hold inline (so both paths now share it).
+    // GUI thread, like applyCommand.
+    bool startIqRecording();
+    void openIqFile(const std::string& path);
+    void openPlutoAt(const std::string& args);
+    void tuneToBookmark(const cascade::core::Bookmark& b);
+    void addBookmarkHere(const std::string& name);
+    cascade::core::Scanner::Params scannerParams() const;
+    bool selectSourceById(const std::string& id);
     // The plugins' spectrum and waterfall marks, over the panel at (x0, y0).
     void drawPluginMarkers(float x0, float y0, float width, float height, bool waterfall);
     // HOW MANY LOADED MODULES ARE DECODERS AT ALL - the denominator under the
@@ -1138,17 +1185,18 @@ private:
     // THE BAR FOR ONE WINDOW: a map page, an image window, a panel or an
     // instrument window, each of which owns exactly one plugin and knows its
     // own display name. Draws nothing and costs no vertical space when that
-    // plugin publishes no valid preset. A key's own press only RECORDS a
-    // request into pendingPresetRequest_ — see the long comment beside that
-    // member for why the apply cannot happen here, mid-iteration of the very
-    // lists a preset's own apply rebuilds.
+    // plugin publishes no valid preset. A key's own press only SUBMITS a
+    // command (PLUGIN_PRESET / APP_USER_PRESET_APPLY), applied by the drain at
+    // the top of the next frame - never here, mid-iteration of the very lists
+    // a preset's own apply rebuilds (the crash 0.96.1 fixed in
+    // gui/list_pick.hpp).
     void drawPluginPresetBar(const std::string& displayName);
     // THE SHARED DRAWING OF ONE PLUGIN'S ROW OF KEYS, used by
     // drawPluginPresetBar (one plugin, its own bar) and drawDecoderPresetBars
     // (several text decoders, one bar each, grouped under the shared Decoder
     // output window). Wraps within the available width via
-    // cascade::gui::presetBarRows; every press records into
-    // pendingPresetRequest_ under `pluginKey`, never applies inline.
+    // cascade::gui::presetBarRows; every press submits a command naming
+    // `pluginKey`, never applies inline.
     void drawPresetKeys(const std::string& pluginKey, const std::string& pluginName,
                         const std::vector<cascade::core::MutePreset>& presets);
     // THE GROUPED BAR IN THE SHARED DECODER OUTPUT WINDOW — "if I'm watching
@@ -1160,25 +1208,14 @@ private:
     // for a plugin the user just switched off would be confusing, and the
     // rail's own "Start"/preset buttons are already the way back in.
     void drawDecoderPresetBars();
-    // THE SAFE POINT: called once a frame, from drawUi, AFTER drawPluginWindows
-    // has finished every one of its loops — never from inside one. Consumes
-    // pendingPresetRequest_ (at most one; see its own comment) and, if there
-    // is one, re-resolves it against the CURRENT plugin list and preset
-    // table (cascade::gui::presetRequestStillValid) rather than trusting
-    // anything carried from the frame the key was pressed on. A plugin
-    // unloaded in between, or an index that no longer names a valid preset,
-    // is a silent no-op — exactly the contract a stale request must have.
-    void consumePendingPresetRequest();
+    // The rows a STOP ALL key or DECODER_STOP_ALL judges: every loaded
+    // decoder, with whether the user stopped it and whether it is fed.
+    std::vector<cascade::gui::RunnableDecoder> runnableDecoders() const;
     // The user's own presets for one loaded plugin, in saved order (see
     // core/user_presets.hpp). Keyed by the version-stripped module id, so a
     // plugin update keeps them.
     std::vector<cascade::core::UserPreset> userPresetsForPlugin(
         const cascade::core::LoadedPlugin& p) const;
-    // Applies pendingUserPresetEdit_ if there is one: a Save stores the
-    // receiver's CURRENT tuning (absolute frequency, mode, channel bandwidth)
-    // against that plugin, a Forget removes one. Reports what happened in
-    // presetNote_. Called only from the safe point.
-    void consumePendingUserPresetEdit();
 
     // --- Audio mute while a data decoder is running (see plugin_ui.hpp) -------
     // The EFFECTIVE "mute audio while running" setting for one plugin: the
@@ -3637,37 +3674,37 @@ private:
     // What the last preset click did, shown under the list — a receiver that
     // moved with no acknowledgement reads as a button that did nothing.
     std::string presetNote_;
-    // A PRESET-BAR KEY PRESS, recorded and not yet applied. Every bar drawn
-    // inside drawPluginWindows (the map/image/panel/instrument pages, and the
-    // grouped bar in the Decoder output window) records into this rather than
-    // calling applyPluginPreset directly — applyPluginPreset ends with
-    // refreshPluginRunner(), which rebuilds the very panel/instrument/image
-    // lists and map pages drawPluginWindows is iterating at that moment, and
-    // rebuilding a list a for-loop is still walking is exactly the shape of
-    // the crash 0.96.1 fixed in gui/list_pick.hpp. consumePendingPresetRequest
-    // is the only reader, called once a frame from drawUi AFTER
-    // drawPluginWindows returns — never from inside it.
-    cascade::gui::PendingPresetRequest pendingPresetRequest_;
+    // (A preset-bar key press used to be recorded into a pendingPresetRequest_
+    // member and applied at a mid-frame safe point, because applyPluginPreset
+    // rebuilds the lists drawPluginWindows walks. Since stage 1 a press
+    // submits a command, and the command drain at the TOP of the next frame -
+    // before any list is walked - is that safe point for every control.)
 
     // --- The user's own presets (0.99.4) ---------------------------------------
     // AppConfig::userPresets, for every plugin (see core/user_presets.hpp for
     // what they are and why). Held here, like the plugin lists above, because
     // everything that acts on them is rebuilt underneath them.
     std::vector<cascade::core::UserPreset> userPresets_;
-    // A SAVE OR A FORGET, recorded and not yet applied. Both end in
-    // rebuildMuteStates(), which replaces the muteStates_ entry a preset bar
-    // is reading its keys from while it draws them - so, exactly like
-    // pendingPresetRequest_, a press only records and the edit happens at the
-    // same safe point (consumePendingPresetRequest). `pluginFileKey` is the
-    // module file name (core::pluginKey); the version-stripped key the list
-    // is stored under is derived from it when the edit is applied.
+    // A SAVE OR A FORGET. Both end in rebuildMuteStates(), which replaces the
+    // muteStates_ entry a preset bar is reading its keys from while it draws
+    // them - so a press only submits a command (USER_PRESET_SAVE,
+    // APP_USER_PRESET_FORGET_AT) and the edit happens at the top of the next
+    // frame. `pluginFileKey` is the module file name (core::pluginKey); the
+    // version-stripped key the list is stored under is derived from it when
+    // the edit is applied.
     struct PendingUserPresetEdit {
         enum class Op { None, Save, Forget };
         Op op = Op::None;
         std::string pluginFileKey;
         std::size_t ordinal = 0;  // Forget only: which of that plugin's presets
     };
-    PendingUserPresetEdit pendingUserPresetEdit_;
+    // A save or a forget of the user's own presets, applied: a Save stores
+    // the receiver's CURRENT tuning (absolute frequency, mode, channel
+    // bandwidth) against that plugin, a Forget removes one. Reports what
+    // happened in presetNote_. Reached only through applyCommand
+    // (USER_PRESET_SAVE, APP_USER_PRESET_FORGET_AT), which the drain runs at
+    // the top of a frame - the safe point these edits always waited for.
+    void applyUserPresetEdit(const PendingUserPresetEdit& edit);
 
     // --- Readouts held long enough to read (0.99.4) ---------------------------
     // See gui/readout_hold.hpp. FRAME TIME's text is the mean of the last half

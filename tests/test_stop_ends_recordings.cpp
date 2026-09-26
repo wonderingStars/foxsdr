@@ -965,6 +965,7 @@ void everyStopUsesTheRoutine() {
     int startsElsewhere = 0;
     std::string startBody;
     std::vector<std::string> callers;  // members that call stopReceiver()
+    std::vector<std::string> runSenders;  // members that send or apply FOXAPI_OP_RUN
     std::string routineBody;
     for (const auto& e : fs::directory_iterator(gui, ec)) {
         const std::string ext = e.path().extension().string();
@@ -1018,6 +1019,9 @@ void everyStopUsesTheRoutine() {
                 l.find("void stopReceiver()") == std::string::npos) {
                 callers.push_back(enclosingMember(lines, i));
             }
+            if (l.find("FOXAPI_OP_RUN") != std::string::npos) {
+                runSenders.push_back(enclosingMember(lines, i));
+            }
             if (l.rfind("void AppWindow::stopReceiver()", 0) == 0) {
                 for (std::size_t k = i; k < lines.size(); ++k) {
                     routineBody += lines[k] + "\n";
@@ -1058,13 +1062,34 @@ void everyStopUsesTheRoutine() {
     CHECK(iq < st);
     CHECK(au < st);
 
-    // The four user stop paths: the dome, the key, the web remote/plugin
-    // request, and the radar scope's POWER button.
-    for (const char* m : {"drawToolbar", "applyKeyAction", "applyControlRequest", "drawScopeMode"}) {
+    // THE ONE CONTROL PATH (engine extraction stage 1). Every user stop is a
+    // RUN 0 command, and the command's one implementation - applyCommand -
+    // is what calls stopReceiver(). So: applyCommand must call it, and each
+    // of the desktop's three stop paths - the dome (drawToolbar), the key
+    // (applyKeyAction) and the radar scope's POWER (drawScopeMode) - must
+    // send FOXAPI_OP_RUN. The web remote's and a plugin's stop reach the same
+    // RUN through net::controlRequestToCommands and pluginControlToCommand,
+    // whose field-by-field mapping tests/test_control_ops.cpp pins; the
+    // end-to-end web stop above still proves the takes end.
+    {
         bool found = false;
-        for (const std::string& c : callers) { found = found || c == m; }
-        if (!found) { std::printf("FAIL: AppWindow::%s does not call stopReceiver()\n", m); }
+        for (const std::string& c : callers) { found = found || c == "applyCommand"; }
+        if (!found) { std::printf("FAIL: AppWindow::applyCommand does not call stopReceiver()\n"); }
         CHECK(found);
+    }
+    for (const char* m : {"drawToolbar", "applyKeyAction", "drawScopeMode"}) {
+        bool found = false;
+        for (const std::string& c : runSenders) { found = found || c == m; }
+        if (!found) { std::printf("FAIL: AppWindow::%s does not send FOXAPI_OP_RUN\n", m); }
+        CHECK(found);
+    }
+    // ...and nothing else calls stopReceiver() any more: a new widget that
+    // stopped the receiver directly would bypass the command path.
+    for (const std::string& c : callers) {
+        if (c != "applyCommand") {
+            std::printf("FAIL: AppWindow::%s calls stopReceiver() directly\n", c.c_str());
+        }
+        CHECK(c == "applyCommand");
     }
 }
 
