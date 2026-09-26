@@ -7,9 +7,11 @@
 //       (review L4: one runner lock per publish).
 //   [2] WALKING ONE through the window (review M1): each source condition,
 //       changed alone through its control, changes exactly its own flag.
-//   [3] THE WEB ROWS AND THEIR IDS ARE ONE BLOCK (review L3): while a newer
-//       block is held back, a row tunes the bookmark the served block shows
-//       on it; once it lands, the new row.
+//   [3] THE WEB ROWS AND THEIR IDS ARE ONE BLOCK (review L3): until the next
+//       publish, a row tunes the bookmark the served block shows on it, not
+//       what the live list holds; a publish made while a reader holds the
+//       swap lock reaches the very next reader through the hand-over slot
+//       (stage 3's re-check, L-a), and its row 0 is the new one.
 //
 // HERMETIC, like test_apply_command: no config, scratch folders, fake radio,
 // fake scans, the fixture plugins in a plugin directory of this test's own.
@@ -426,18 +428,14 @@ void webRowsFollowTheirBlock(AppWindow& a) {
     const cascade::net::RadioStatus s1 = A::webStatus(a);
     CHECK(s1.bookmarks.size() == 2u && s1.bookmarks[0].name == "Row A");
 
-    // A reader is inside both locks as the next publish arrives: its block is
-    // held back. The desktop has added D, which sorts in above A.
+    // The desktop adds D, which sorts in above A - and nothing has been
+    // PUBLISHED since. /api/status still serves the old block, and a web row
+    // is resolved against the block current when the request is applied: the
+    // page's row 0 is still A (AM), whatever the live list now holds.
     cascade::core::ReceiverSnapshot& snap = A::snapshot(a);
-    {
-        std::unique_lock<std::mutex> held = snap.holdSwapLockForTest();
-        std::unique_lock<std::mutex> heldHandoff = snap.holdHandoffLockForTest();
-        A::addBookmark(a, "Row D", 100.1e6, "USB");
-        A::publish(a);
-    }
-    CHECK(snap.installPending());
+    A::addBookmark(a, "Row D", 100.1e6, "USB");
     const cascade::net::RadioStatus s2 = A::webStatus(a);
-    std::printf("      /api/status row 0 while the new block waits: %s\n",
+    std::printf("      /api/status row 0 before the next publish: %s\n",
                 s2.bookmarks.empty() ? "(none)" : s2.bookmarks[0].name.c_str());
     CHECK(!s2.bookmarks.empty() && s2.bookmarks[0].name == "Row A");
     // The page tunes the row it shows: 0 is A (AM).
@@ -447,10 +445,19 @@ void webRowsFollowTheirBlock(AppWindow& a) {
     std::printf("      web tune of row 0 -> mode index %d (AM is 2, USB 4)\n", A::modeIndex(a));
     CHECK(A::modeIndex(a) == 2);
 
-    // The writer's next pass lands the block, nothing else changing; row 0
-    // is D now, for the page and for the map alike.
-    CHECK(snap.retryInstall());
+    // The next publish arrives while a reader holds the swap lock: the block
+    // goes through the hand-over slot, and the very next reader installs it -
+    // no further pass of the writer (stage 3's lock-free slot). Row 0 is D
+    // now, for the page and for the web remote alike.
+    {
+        std::unique_lock<std::mutex> held = snap.holdSwapLockForTest();
+        A::publish(a);
+    }
+    CHECK(snap.installPending());
     const cascade::net::RadioStatus s3 = A::webStatus(a);
+    CHECK(!snap.installPending());
+    std::printf("      /api/status row 0 once the handed-over block is read: %s\n",
+                s3.bookmarks.empty() ? "(none)" : s3.bookmarks[0].name.c_str());
     CHECK(!s3.bookmarks.empty() && s3.bookmarks[0].name == "Row D");
     A::webRequest(a, tune);
     CHECK(A::modeIndex(a) == 4);

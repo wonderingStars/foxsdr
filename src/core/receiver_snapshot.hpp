@@ -21,14 +21,25 @@
 //   - read() is SeqlockBox::load: the writer never waits for it; a reader
 //     that keeps overlapping a write gives up (false) rather than spin.
 //   - readFull() copies a shared_ptr under fullMutex_, held for a
-//     reference-count increment. The WRITER only ever TRY-locks it. If a
-//     reader holds it at that instant, the writer hands the block over under
-//     a second lock (handoffMutex_, also only try-locked by the writer) and
-//     the next readFull() installs it; if that is busy too (a reader is in
-//     that very install), the writer keeps the block and retryInstall() -
-//     called on the writer's EVERY pass, change or not - lands it. So a
-//     block is never lost behind a frame loop that has stopped (the Windows
-//     move/resize loop runs no frames), and the writer never waits.
+//     reference-count increment (and, at most, the install of a handed-over
+//     block). The WRITER only ever TRY-locks it. If a reader holds it at that
+//     instant, the writer HANDS THE BLOCK OVER through a lock-free slot - one
+//     atomic pointer exchange, which cannot fail - and frees whatever older
+//     block it takes back out; the next readFull() takes the slot's block and
+//     installs it, under the lock it holds anyway. So a publish is visible to
+//     every readFull() that starts after publish() returns, with no further
+//     pass of the writer - a frame loop that has stopped (the Windows
+//     move/resize loop runs no frames) strands nothing - and the writer
+//     never waits. retryInstall(), on the writer's every pass, only moves a
+//     slot block into place early, so its memory is released on the writer.
+//
+//   A READFULL() FROM THE WRITER'S OWN THREAD IS A SHORT BLOCKING LOCK. The
+//   writer's publish() and retryInstall() never wait; but the thread that
+//   publishes also reads the whole block in one place - applyControlRequest,
+//   resolving the web remote's bookmark rows (Engine::applyControlRequest
+//   since engine stage 3; the GUI thread in 3a, the engine's control thread
+//   from 3b) - and that readFull() takes fullMutex_ like any reader, so it
+//   can wait for another reader's refcount copy or slot install.
 //
 // THE COUNTERS ARE DERIVED, NOT SET. publish() compares the new facts with
 // the previous publish and advances FoxReceiverState's seq/tuneSeq/modeSeq/
@@ -212,8 +223,11 @@ public:
         // publisher had none (a PluginApiCore used on its own).
         std::shared_ptr<const net::RadioStatus> lists;
         // Bookmark::id of lists->bookmarks[i], row for row: the web remote's
-        // row numbers are resolved through THIS, so a row always names the
-        // bookmark the block it was served from showed on it.
+        // row numbers are resolved through THIS - the ids of the block
+        // current when the request is APPLIED (readFull() at that moment),
+        // which is the block /api/status serves then. The browser's own rows
+        // are from its last poll, so a row that moved since names what is on
+        // it now (docs/engine-stage2.md section 4).
         std::vector<std::uint64_t> bookmarkIds;
         std::uint64_t generation = 0;  // publishes so far; 0 = the initial block
     };
@@ -224,15 +238,19 @@ public:
 
     // THE ONE WRITER. `facts` carries everything but the counters and
     // structSize, which this sets; app.published is set too. Never waits: the
-    // block is installed, handed over for the next reader to install, or
-    // kept for retryInstall() - see below.
+    // block is installed, or handed over through the slot for the next
+    // reader to install - either way every readFull() that starts after this
+    // returns sees it (or a newer one).
     void publish(const PublishedState& facts, std::shared_ptr<const net::RadioStatus> lists,
                  std::vector<std::uint64_t> bookmarkIds = {});
 
     // THE WRITER'S EVERY PASS, change or no change (the frame loop now, the
-    // control thread's every pass in stage 3). Lands a block publish() could
-    // neither install nor hand over; true when nothing is left waiting.
-    // Never waits.
+    // control thread's every pass from stage 3b). Installs a handed-over block
+    // if the swap lock is free, so the block it replaces is released on the
+    // writer rather than by a reader; true when the slot is empty afterwards.
+    // Never waits. Not needed for any reader to SEE a block (the next
+    // readFull() installs it) - it keeps the slot from holding a block, and
+    // the old installed one alive, through a long stretch with no readers.
     bool retryInstall();
 
     // Any thread, lock-free. False only when SeqlockBox::kMaxTries attempts
@@ -245,38 +263,43 @@ public:
     std::shared_ptr<const Full> readFull() const;
 
     // Publishes whose block could not be installed directly because a reader
-    // held the swap lock at that instant; of those, the ones that could not
-    // even be handed over and waited for retryInstall(). For the tests and
-    // the design note; readers never need them.
+    // held the swap lock at that instant, and so went through the slot. A
+    // retryInstall() that finds the lock busy counts nothing: its block is
+    // already in the slot. For the tests and the design note.
     std::uint64_t deferredInstalls() const { return deferred_.load(std::memory_order_relaxed); }
-    std::uint64_t heldBackInstalls() const { return heldBack_.load(std::memory_order_relaxed); }
-    // The writer's: a block is waiting for retryInstall().
-    bool installPending() const { return unsent_ != nullptr; }
+    // WRITER-SIDE AND TESTS ONLY - never read by the window or any reader: a
+    // handed-over block is in the slot, waiting for the next readFull() or
+    // retryInstall() to install it.
+    bool installPending() const { return handoff_.load(std::memory_order_acquire) != nullptr; }
 
-    // TEST SEAMS: hold the locks readFull() takes, so a test can prove that
-    // publish() and retryInstall() never wait for them, and what they do
-    // instead. Nothing in the application calls them.
+    // TEST SEAM: hold the lock readFull() takes, so a test can prove that
+    // publish() and retryInstall() never wait for it, and what they do
+    // instead. Nothing in the application calls it.
     std::unique_lock<std::mutex> holdSwapLockForTest() const {
         return std::unique_lock<std::mutex>(fullMutex_);
     }
-    std::unique_lock<std::mutex> holdHandoffLockForTest() const {
-        return std::unique_lock<std::mutex>(handoffMutex_);
-    }
+
+    ~ReceiverSnapshot();
 
 private:
     SeqlockBox<PublishedState> box_;
     PublishedState last_{};       // the writer's: the previous publish
     bool havePublished_ = false;  // the writer's
     std::uint64_t generation_ = 0;       // the writer's
-    std::shared_ptr<const Full> unsent_;  // the writer's: neither installed nor handed over
-    // LOCK ORDER: fullMutex_, then handoffMutex_. Readers take them in that
-    // order (blocking); the writer only ever TRY-locks either.
+    // Readers take fullMutex_ (blocking); the writer only ever TRY-locks it.
     mutable std::mutex fullMutex_;
-    mutable std::shared_ptr<const Full> full_;     // under fullMutex_
-    mutable std::mutex handoffMutex_;
-    mutable std::shared_ptr<const Full> handoff_;  // under handoffMutex_
+    mutable std::shared_ptr<const Full> full_;  // under fullMutex_
+    // THE HAND-OVER SLOT: a heap-held pointer to a block, or null. The
+    // writer EXCHANGES its block in (never waits, never fails) and frees what
+    // comes back, which is always an older block of its own; a reader
+    // exchanges it OUT only while holding fullMutex_, and installs it unless
+    // the installed block is newer (the generation check). Whoever takes a
+    // pointer out owns it, so nothing is freed twice or read after freeing.
+    mutable std::atomic<std::shared_ptr<const Full>*> handoff_{nullptr};
     std::atomic<std::uint64_t> deferred_{0};
-    std::atomic<std::uint64_t> heldBack_{0};
+    // Installs `block` (publish's last step): directly if the swap lock is
+    // free, else through the slot.
+    void install(std::shared_ptr<const Full> block);
 };
 
 }  // namespace cascade::core

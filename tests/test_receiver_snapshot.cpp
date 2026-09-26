@@ -7,13 +7,18 @@
 //      snapshot (a PublishedState whose far-apart fields carry the same
 //      number, and the whole block, whose lists must be the same publish's).
 //      Goes red when SeqlockBox::load's sequence re-check is removed.
-//   2. THE WRITER NEVER WAITS, AND NO BLOCK IS STRANDED (review M2). With the
-//      swap lock held by a reader, publish() returns at once and hands the
-//      block over: the next readFull() installs it with no further publish
-//      or retry (a stopped frame loop). With the hand-over lock held too, the
-//      writer keeps it and retryInstall() - the next pass, nothing changed -
-//      lands it. Goes red when publish() locks instead of try-locking, when
-//      the hand-over is removed, and when the retry does nothing.
+//   2. THE WRITER NEVER WAITS, AND NO BLOCK IS STRANDED (review M2, and the
+//      stage-3 concurrency re-check's L-a: the hand-over is a lock-free slot).
+//      With the swap lock held by a reader, publish() returns at once and
+//      hands the block over through the slot: the next readFull() installs it
+//      with no further publish or retry (a stopped frame loop). A second
+//      publish while the lock is still held replaces the slot's block and
+//      FREES the older one, on the writer; retryInstall() with the lock held
+//      returns at once, and with it free lands the slot's block with no
+//      readFull() at all. Goes red when publish() locks instead of trying,
+//      when the writer drops its block instead of handing it over, when a
+//      reader never takes the slot, and when the writer keeps what the slot
+//      hands back.
 //   3. THE COUNTERS. Each group moves on exactly its fields; the level-1 ABI's
 //      counters keep their own groups; measurements move nothing.
 //   4. THE COMPOSE MAPPING, field by field: every RadioStatus member a web or
@@ -232,12 +237,11 @@ void writerNeverWaits() {
     snap.publish(s, std::make_shared<RadioStatus>());
     CHECK(snap.readFull()->state.rx.centreHz == 1.0);
 
-    // (a) A reader holds the swap lock: the block is HANDED OVER, and the
-    // next readFull() installs it - with no further publish and no retry, as
-    // when the frame loop stops (the Windows move/resize loop).
+    // (a) A reader holds the swap lock: the block is HANDED OVER through the
+    // slot, and the next readFull() installs it - with no further publish and
+    // no retry, as when the frame loop stops (the Windows move/resize loop).
     {
         const std::uint64_t deferredBefore = snap.deferredInstalls();
-        const std::uint64_t heldBefore = snap.heldBackInstalls();
         std::unique_lock<std::mutex> held = snap.holdSwapLockForTest();
         stamp(s, 2);
         bool returned = false;
@@ -250,70 +254,92 @@ void writerNeverWaits() {
         CHECK(returned);
         if (held.owns_lock()) { held.unlock(); }
         CHECK(snap.deferredInstalls() == deferredBefore + 1u);
-        CHECK(snap.heldBackInstalls() == heldBefore);
-        CHECK(!snap.installPending());
+        CHECK(snap.installPending());  // in the slot, for the next reader
         PublishedState r;
         CHECK(snap.read(r));
         CHECK(r.rx.centreHz == 2.0);
         const double landed = snap.readFull()->state.rx.centreHz;
         std::printf("      (a) the next readFull, no publish, no retry: centre %.0f (published 2)\n", landed);
         CHECK(landed == 2.0);
+        CHECK(!snap.installPending());  // the reader took it out
     }
 
-    // (b) A reader is inside the hand-over too (both locks held): the writer
-    // keeps the block, never waits, and retryInstall() - the writer's next
-    // pass, with NOTHING changed - lands it.
+    // (b) Two publishes while a reader holds the lock: the slot keeps only the
+    // newer, and the older is FREED BY THE WRITER at the second exchange -
+    // never left for anyone. retryInstall() with the lock held returns at
+    // once; with it free it lands the slot's block with no readFull() at all.
     {
+        std::weak_ptr<RadioStatus> older;
         std::unique_lock<std::mutex> held = snap.holdSwapLockForTest();
-        std::unique_lock<std::mutex> heldHandoff = snap.holdHandoffLockForTest();
-        stamp(s, 3);
+        {
+            auto lists3 = std::make_shared<RadioStatus>();
+            older = lists3;
+            stamp(s, 3);
+            snap.publish(s, std::move(lists3));
+        }
+        CHECK(!older.expired());  // the slot holds block 3
+        stamp(s, 4);
         bool returned = false;
         {
             std::future<void> fut = std::async(std::launch::async, [&] { snap.publish(s, std::make_shared<RadioStatus>()); });
             returned = fut.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
-            if (!returned) {
-                heldHandoff.unlock();
-                held.unlock();
-            }
+            if (!returned) { held.unlock(); }
         }
-        std::printf("      (b) publish returned with both locks held: %s\n", returned ? "yes" : "NO");
+        std::printf("      (b) a second publish returned with the lock still held: %s; the older block %s\n",
+                    returned ? "yes" : "NO", older.expired() ? "freed by the writer" : "STILL ALIVE");
         CHECK(returned);
+        CHECK(older.expired());
         CHECK(snap.installPending());
         bool retryResult = true;
         const bool retryReturned = returnsWhileHeld([&] { retryResult = snap.retryInstall(); });
-        std::printf("      (b) retryInstall returned with both locks held: %s (landed: %s)\n",
+        std::printf("      (b) retryInstall returned with the lock held: %s (landed: %s)\n",
                     retryReturned ? "yes" : "NO", retryResult ? "yes" : "no");
         CHECK(retryReturned);
         CHECK(!retryResult);
-        if (heldHandoff.owns_lock()) { heldHandoff.unlock(); }
         if (held.owns_lock()) { held.unlock(); }
-        // Released: the web block is still the previous publish...
-        CHECK(snap.readFull()->state.rx.centreHz == 2.0);
-        // ...until the writer's next pass, with no state change at all.
+        // Released, and nobody reads: the writer's next pass lands it.
         CHECK(snap.retryInstall());
         CHECK(!snap.installPending());
         const double landed = snap.readFull()->state.rx.centreHz;
-        std::printf("      (b) after retryInstall, no change published: centre %.0f (published 3)\n", landed);
-        CHECK(landed == 3.0);
+        std::printf("      (b) after retryInstall: centre %.0f (published 4)\n", landed);
+        CHECK(landed == 4.0);
         CHECK(snap.retryInstall());  // nothing pending: a no-op
     }
 
-    // (c) A newer publish replaces a held-back block; an older handed-over
-    // block never overwrites a newer installed one.
+    // (c) A publish with the lock free installs directly and clears an older
+    // block from the slot (freeing it) - a slot block never outlives a newer
+    // installed one.
     {
-        std::unique_lock<std::mutex> held = snap.holdSwapLockForTest();
-        std::unique_lock<std::mutex> heldHandoff = snap.holdHandoffLockForTest();
-        stamp(s, 4);
-        snap.publish(s, std::make_shared<RadioStatus>());  // held back (both locks held here)
-        heldHandoff.unlock();
-        stamp(s, 5);
-        snap.publish(s, std::make_shared<RadioStatus>());  // swap lock still held: handed over
-        held.unlock();
-        CHECK(!snap.installPending());
-        CHECK(snap.readFull()->state.rx.centreHz == 5.0);
+        std::weak_ptr<RadioStatus> older;
+        {
+            std::unique_lock<std::mutex> held = snap.holdSwapLockForTest();
+            auto lists5 = std::make_shared<RadioStatus>();
+            older = lists5;
+            stamp(s, 5);
+            snap.publish(s, std::move(lists5));  // lock held: into the slot
+        }
+        CHECK(snap.installPending());
         stamp(s, 6);
-        snap.publish(s, std::make_shared<RadioStatus>());
+        snap.publish(s, std::make_shared<RadioStatus>());  // lock free: installed directly
+        CHECK(!snap.installPending());
+        CHECK(older.expired());
         CHECK(snap.readFull()->state.rx.centreHz == 6.0);
+    }
+
+    // (d) A block left in the slot when the snapshot goes is freed with it.
+    {
+        std::weak_ptr<RadioStatus> left;
+        {
+            ReceiverSnapshot other;
+            std::unique_lock<std::mutex> held = other.holdSwapLockForTest();
+            auto lists = std::make_shared<RadioStatus>();
+            left = lists;
+            stamp(s, 1);
+            other.publish(s, std::move(lists));
+            held.unlock();
+            CHECK(other.installPending());
+        }
+        CHECK(left.expired());
     }
 }
 

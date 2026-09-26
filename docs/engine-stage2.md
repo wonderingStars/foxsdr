@@ -203,6 +203,20 @@ snapshot, published once a frame. So nothing a reader is told became older:
   `is_lock_free()` is false (a lock the writer would wait on), and the
   Android NDK r27's libc++ 18 does not define it
   (`__cpp_lib_atomic_shared_ptr` absent).
+  **Amended in stage 3a (the concurrency re-check's L-a, docs/engine-stage3.md):**
+  the hand-over is now a lock-free slot holding a RAW pointer to a heap-held
+  block pointer - one `std::atomic<T*>` exchange the writer cannot fail,
+  freeing the older block it takes back - so no block is ever held back for
+  `retryInstall()`, and a publish is visible to every `readFull()` that starts
+  after it returns. `tests/test_snapshot_stress` (adopted from the re-check)
+  holds it.
+  **Correction (re-check L-b):** "the GUI thread never waits" is true of
+  `publish()` and `retryInstall()` only. The publishing thread ALSO calls
+  `readFull()` itself - `applyControlRequest`, resolving the web remote's
+  bookmark rows - and that takes `fullMutex_` BLOCKING, like any reader: a
+  short wait (a reader holds it for a refcount copy or a slot install), but a
+  wait. From stage 3a it is `Engine::applyControlRequest` on the GUI thread;
+  from 3b it runs on the engine's control thread.
 - **The counters are derived, not set**: `publish()` compares each group's
   fields with the previous publish. Engine API: tune = centre, offset; mode =
   demod, bandwidth, squelch, de-emphasis, NR strength, notch Hz/Q and the

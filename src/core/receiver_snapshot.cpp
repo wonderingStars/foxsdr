@@ -176,62 +176,76 @@ void ReceiverSnapshot::publish(const PublishedState& facts,
     box_.store(w);
 
     // --- the whole block, for the readers that need the lists too -------------
-    // It replaces any block still held back: that one is older, and nothing
-    // ever wants an older block once a newer one exists.
     ++generation_;
-    unsent_ = std::make_shared<const Full>(Full{w, std::move(lists), std::move(bookmarkIds), generation_});
-    if (!retryInstall()) { heldBack_.fetch_add(1, std::memory_order_relaxed); }
+    install(std::make_shared<const Full>(Full{w, std::move(lists), std::move(bookmarkIds), generation_}));
 }
 
-bool ReceiverSnapshot::retryInstall() {
-    if (unsent_ == nullptr) { return true; }
+ReceiverSnapshot::~ReceiverSnapshot() {
+    // A block still in the slot is owned by the slot: nobody else can take it
+    // now (readers and the writer are gone before the snapshot is).
+    delete handoff_.exchange(nullptr, std::memory_order_acq_rel);
+}
+
+void ReceiverSnapshot::install(std::shared_ptr<const Full> block) {
     // Blocks replaced here are freed when these go out of scope - AFTER the
-    // locks below, which are declared later and so released first.
+    // lock below, which is declared later and so released first.
     std::shared_ptr<const Full> released;
-    std::shared_ptr<const Full> stale;
+    std::unique_ptr<std::shared_ptr<const Full>> stale;
     {
         std::unique_lock<std::mutex> lk(fullMutex_, std::try_to_lock);
         if (lk.owns_lock()) {
             released = std::move(full_);
-            full_ = std::move(unsent_);
-            // A handed-over block is older than this one: drop it. Readers
-            // take handoffMutex_ only while holding fullMutex_, which this
-            // holds, so the try cannot meet a reader; if it ever failed, the
-            // stale block would be refused by its generation anyway.
-            std::unique_lock<std::mutex> hk(handoffMutex_, std::try_to_lock);
-            if (hk.owns_lock()) { stale = std::move(handoff_); }
-            return true;
+            full_ = std::move(block);
+            // A block still in the slot is an earlier publish of this same
+            // writer, so older than this one: take it out and drop it. No
+            // reader can be taking it - they take the slot only under the
+            // lock this holds.
+            stale.reset(handoff_.exchange(nullptr, std::memory_order_acq_rel));
+            return;
         }
     }
+    // A reader holds the swap lock: hand the block over through the slot for
+    // it (or the next reader) to install. The exchange cannot fail or wait;
+    // what comes back is an older block of this writer's, freed here.
     deferred_.fetch_add(1, std::memory_order_relaxed);
-    // A reader holds the swap lock: hand the block over for it (or the next
-    // reader) to install.
-    std::unique_lock<std::mutex> hk(handoffMutex_, std::try_to_lock);
-    if (hk.owns_lock()) {
-        released = std::move(handoff_);
-        handoff_ = std::move(unsent_);
-        return true;
+    stale.reset(handoff_.exchange(new std::shared_ptr<const Full>(std::move(block)),
+                                  std::memory_order_acq_rel));
+}
+
+bool ReceiverSnapshot::retryInstall() {
+    if (handoff_.load(std::memory_order_acquire) == nullptr) { return true; }
+    std::shared_ptr<const Full> released;  // freed after the lock is dropped
+    std::unique_ptr<std::shared_ptr<const Full>> taken;
+    std::unique_lock<std::mutex> lk(fullMutex_, std::try_to_lock);
+    if (!lk.owns_lock()) {
+        // A reader holds the lock - and will install the slot's block itself.
+        return false;
     }
-    // That reader is installing a handed-over block this very instant: keep
-    // this one for the writer's next pass.
-    return false;
+    taken.reset(handoff_.exchange(nullptr, std::memory_order_acq_rel));
+    if (taken != nullptr && *taken != nullptr &&
+        (full_ == nullptr || (*taken)->generation > full_->generation)) {
+        released = std::move(full_);
+        full_ = std::move(*taken);
+    }
+    return true;
 }
 
 bool ReceiverSnapshot::read(PublishedState& out) const { return box_.load(out); }
 
 std::shared_ptr<const ReceiverSnapshot::Full> ReceiverSnapshot::readFull() const {
-    std::shared_ptr<const Full> released;  // freed after the locks are dropped
+    // Freed after the lock is dropped (declared first, so destroyed last).
+    std::shared_ptr<const Full> released;
+    std::unique_ptr<std::shared_ptr<const Full>> taken;
     std::lock_guard<std::mutex> lk(fullMutex_);
-    {
-        std::lock_guard<std::mutex> hk(handoffMutex_);
-        if (handoff_ != nullptr) {
-            if (full_ == nullptr || handoff_->generation > full_->generation) {
-                released = std::move(full_);
-                full_ = std::move(handoff_);
-            } else {
-                released = std::move(handoff_);
-            }
-        }
+    taken.reset(handoff_.exchange(nullptr, std::memory_order_acq_rel));
+    // THE GENERATION CHECK: a handed-over block never replaces a newer
+    // installed one. (The writer clears the slot whenever it installs
+    // directly, so today the slot never holds an older block than full_;
+    // the check keeps that true whatever a later change does.)
+    if (taken != nullptr && *taken != nullptr &&
+        (full_ == nullptr || (*taken)->generation > full_->generation)) {
+        released = std::move(full_);
+        full_ = std::move(*taken);
     }
     return full_;
 }

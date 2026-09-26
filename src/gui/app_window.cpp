@@ -3118,8 +3118,9 @@ void AppWindow::drawUi() {
     // "Enlarge every reading", handed to the drawing sites for this frame.
     cascade::gui::theme::setReadingsScale(readingsScale_);
     // THE SNAPSHOT'S RETRY, EVERY PASS (engine stage 2): a block the last
-    // publish could neither install nor hand to a reader lands now, whether
-    // or not anything changes this frame. Never waits.
+    // publish handed over through the slot - because a reader held the swap
+    // lock - is installed now if no reader took it first, whether or not
+    // anything changes this frame. Never waits.
     (void)receiverSnapshot_->retryInstall();
     // THE COMMANDS THE WIDGETS SUBMITTED LAST FRAME, FIRST (engine extraction
     // stage 1: every control ends in applyCommand - see app_window.hpp). At
@@ -17538,8 +17539,10 @@ void AppWindow::fillPublishedState(cascade::core::PublishedState& ps, const std:
 cascade::net::RadioStatus AppWindow::webStatusNow() const {
     // The whole block of one publish - figures and lists together - so a
     // browser can never be shown two fields from different frames. The lock
-    // inside readFull() is held for a reference count; the GUI thread only
-    // ever try-locks it (core/receiver_snapshot.hpp).
+    // inside readFull() is held for a reference count (or the install of a
+    // handed-over block); the publish only ever try-locks it - the one place
+    // the publishing thread takes it BLOCKING is applyControlRequest's own
+    // readFull() (core/receiver_snapshot.hpp).
     const std::shared_ptr<const cascade::core::ReceiverSnapshot::Full> full =
         receiverSnapshot_->readFull();
     return cascade::net::composeRadioStatus(full->state, full->lists.get());
@@ -23197,12 +23200,14 @@ FoxCommandResult AppWindow::applyCommand(const FoxCommand& c, const std::string&
 void AppWindow::applyControlRequest(const cascade::net::ControlRequest& r) {
     cascade::net::ControlOpsContext ctx;
     // The browser's row numbers name the ids of the block /api/status is
-    // serving NOW - taken from that block itself, so a publish that has not
-    // reached the web readers yet (engine stage 2, a deferred install) cannot
-    // move a row onto a bookmark the page never showed there. An entry
-    // removed since answers NOT_FOUND, and one inserted since moves no other
-    // row. (readFull's lock is held by a reader only for a refcount; this is
-    // the GUI thread reading, once per web bookmark request.)
+    // serving NOW - taken from that block itself, the block current when this
+    // request is APPLIED, so a row never lands on a bookmark /api/status is
+    // not showing there. An entry removed since answers NOT_FOUND, and one
+    // inserted since moves no other row. THIS READFULL() IS A SHORT BLOCKING
+    // LOCK taken by the publishing thread itself (the GUI thread in stage 3a;
+    // the engine's control thread from 3b), once per web bookmark request: a
+    // reader holds that lock only for a refcount copy or a slot install, so
+    // the wait is that long - but it is a wait, unlike publish().
     if (r.bookmarkTune.has_value() || r.bookmarkRemove.has_value()) {
         ctx.bookmarkIdByRow = receiverSnapshot_->readFull()->bookmarkIds;
     }
