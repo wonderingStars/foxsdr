@@ -61,7 +61,7 @@ Internal project/binary name: `cascade`.
 
 ## Where it is now
 
-The current release is **0.99.39** (September 2026), in open beta and free for
+The current release is **0.99.41** (September 2026), in open beta and free for
 noncommercial use, with its decoders and instruments delivered as plugins from
 a catalogue. These are screenshots of an earlier shipping build.
 
@@ -284,7 +284,7 @@ signal. The conversion uses libairspy's own half-band kernel, so the spectrum ag
 every other Airspy application about where a signal is, and the mirror image that a
 real-to-complex conversion has to suppress is measured 61 dB down.
 
-**Three gain modes, one at a time** (0.99.40), as Airspy's own software offers them:
+**Three gain modes, one at a time** (0.99.41), as Airspy's own software offers them:
 **Sensitive**, **Linear** and **Free**. Sensitive and Linear are one **Gain** slider each,
 0 to 21, over libairspy's two curated walks up all three of the R820T's stages at once —
 linearity trades sensitivity for headroom against a strong neighbouring signal,
@@ -297,10 +297,12 @@ hardware's own steps rather than decibels — libairspy publishes no decibel map
 them and FoxSDR does not invent one — so everywhere a gain is shown (the Source sliders,
 the RECEIVER card, the scope deck's GAIN knob, the browser interface) it is a bare step
 number. The browser and the plugin API see only the chosen mode's gains too; naming a
-gain from another mode switches to it. FoxSDR's generic auto-gain switch is Free mode with
-both AGCs on.
+gain from another mode switches to it in the browser, but the plugin API refuses any
+gain name outside the current mode's published list (CASCADE_API_UNSUPPORTED) rather
+than switching modes on a plugin's behalf. FoxSDR's generic auto-gain switch is Free
+mode with both AGCs on.
 
-**Decimation** (0.99.40): none, 2, 4, 8, 16 or 32 on an R2 and up to 64 on a Mini, as in
+**Decimation** (0.99.41): none, 2, 4, 8, 16 or 32 on an R2 and up to 64 on a Mini, as in
 Airspy's own software. It divides what the radio delivers by that factor before anything
 else sees it — half-band filters, flat and alias-free over the inner 80% of the new band
 and more than 90 dB down on everything that would fold into it — so the span narrows, the

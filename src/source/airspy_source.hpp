@@ -39,13 +39,13 @@
 //     own set; this driver does not know which in advance and does not need to.
 //  3. THE SAMPLES ARRIVE PACKED. Three bytes per two samples, so 12 bits of
 //     ADC cost 12 bits of USB rather than 16. Enabled at open.
-//  4. THERE ARE THREE GAIN MODES (0.99.40), one at a time as the reference
+//  4. THERE ARE THREE GAIN MODES (0.99.41), one at a time as the reference
 //     application offers them: two of libairspy's curated walks up all three
 //     registers at once (LINEARITY, SENSITIVITY) and Free - the three
 //     registers (LNA, MIXER, VGA) by hand. gains() lists only the chosen
 //     mode's. And unlike the HackRF there IS an AGC - two of them, one per
 //     stage, switched separately in Free mode.
-//  5. SOFTWARE DECIMATION (0.99.40, airspy_decimator.hpp) divides the
+//  5. SOFTWARE DECIMATION (0.99.41, airspy_decimator.hpp) divides the
 //     delivered rate by 1..64 on the reader thread, and every rate this
 //     source reports is the DELIVERED one.
 //
@@ -304,7 +304,7 @@ public:
         return gainMode() == GainMode::Free && lnaAgc() && mixerAgc();
     }
 
-    // --- DECIMATION (0.99.40) ----------------------------------------------
+    // --- DECIMATION (0.99.41) ----------------------------------------------
     //
     // The reference application's software decimation (see
     // airspy_decimator.hpp): the converter's complex stream divided by 1, 2,

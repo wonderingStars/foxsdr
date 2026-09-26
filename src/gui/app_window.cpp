@@ -8679,7 +8679,7 @@ void AppWindow::launchDeviceOpen(DeviceOpenResult r, const std::string& busyLabe
                 return std::move(r);  // r.dev stays null: the GUI thread reports it
             }
         }
-        // AN AIRSPY's REMEMBERED STATE FIRST (0.99.40): its decimation decides
+        // AN AIRSPY's REMEMBERED STATE FIRST (0.99.41): its decimation decides
         // which rates the request below is matched against.
         if (r.airspyAtOpen.has_value()) {
             if (cascade::source::AirspySource* air = cascade::gui::asAirspy(dev.get())) {

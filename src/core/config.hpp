@@ -193,7 +193,7 @@ struct AppConfig {
     // that entry off, entries with no radio are dropped and the list is capped
     // at core::kMaxConverterRadios (core::sanitiseConverters).
     std::map<std::string, ConverterSetting> converters;
-    // EACH AIRSPY R2 / MINI's GAIN MODE, GAINS AND DECIMATION (0.99.40),
+    // EACH AIRSPY R2 / MINI's GAIN MODE, GAINS AND DECIMATION (0.99.41),
     // remembered per radio under the bias tee's key ("airspy|serial=<serial>")
     // - see core/airspy_settings.hpp. Stored as the object "airspy", each
     // value {"mode": "linear"|"sensitive"|"free", "linearity", "sensitivity",

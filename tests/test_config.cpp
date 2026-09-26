@@ -571,7 +571,7 @@ int main() {
                                               false};
         in.converters["rx888|serial=lnb"] = {cascade::core::ConverterMode::Down, 10489123457.0,
                                              true};
-        // THE AIRSPYS (0.99.40): one in each gain mode, every field off its
+        // THE AIRSPYS (0.99.41): one in each gain mode, every field off its
         // default, and a decimation on each.
         {
             cascade::core::AirspySetting lin;
@@ -876,7 +876,7 @@ int main() {
         checkEqual(out2, AppConfig{});
     }
 
-    // --- the Airspy memory, as a hand-edited file might have it (0.99.40) -----
+    // --- the Airspy memory, as a hand-edited file might have it (0.99.41) -----
     // Out-of-range gains clamp, an unknown mode is Free, a decimation that is
     // not a power of two up to 64 is none, a wrong-typed field keeps its
     // default, a non-object entry and a key that does not name an Airspy are

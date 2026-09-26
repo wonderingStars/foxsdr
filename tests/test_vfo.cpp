@@ -386,7 +386,7 @@ int main() {
         CHECK(worst < 3.162e-3);
     }
 
-    // --- A HIGH-RATE INPUT IS CHANNELIZED IN STAGES (0.99.40) ----------------
+    // --- A HIGH-RATE INPUT IS CHANNELIZED IN STAGES (0.99.41) ----------------
     // An Airspy R2 at 10 MS/s, an Airspy Mini at 6, a B200 at 8: the channel
     // filter used to be ONE windowed sinc at the input rate, and its length
     // grows with that rate - 1673 taps at 10 MS/s, 33.5 multiply-adds for

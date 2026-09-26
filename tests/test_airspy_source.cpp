@@ -916,7 +916,7 @@ int main() {
         // Unlike the HackRF, this radio HAS an AGC.
         CHECK(src.autoGainSupported());
         // AN OPEN RADIO IS IN FREE MODE, so it lists Free mode's three gains
-        // (0.99.40; it listed all five modes' gains at once before, which is
+        // (0.99.41; it listed all five modes' gains at once before, which is
         // what an R2 owner called "mixed together") - AND EVERY ONE OF THEM
         // IS STEPS, NOT DECIBELS.
         //
@@ -1175,7 +1175,7 @@ int main() {
             CHECK(isControl("linearity: MIXER", at(c, 3), true, 15, 0, 1));
             CHECK(isControl("linearity: LNA", at(c, 4), true, 14, 0, 6));
         }
-        // THE MODE IS NOW LINEARITY (0.99.40), and the gain list says so: ONE
+        // THE MODE IS NOW LINEARITY (0.99.41), and the gain list says so: ONE
         // slider, the table's. Free mode's manual values are the user's own
         // and are NOT overwritten by what the table wrote to the registers -
         // they are what Free mode puts back (below).
@@ -2054,7 +2054,7 @@ int main() {
     }
 
     // =====================================================================
-    // 12. DECIMATION (0.99.40): the reference application's "none, 2, 4, 8,
+    // 12. DECIMATION (0.99.41): the reference application's "none, 2, 4, 8,
     //     16, 32 and 64", measured on the filter's own taps, then through the
     //     driver.
     // =====================================================================

@@ -1910,7 +1910,7 @@ private:
     // converter state, and keepCenterHz is an AIR frequency. No value: no
     // pre-tune (nothing to carry, not an RSP, or not deliverable).
     std::optional<double> preTuneRadioHz;
-    // AN AIRSPY's REMEMBERED GAIN MODE, GAINS AND DECIMATION (0.99.40), copied
+    // AN AIRSPY's REMEMBERED GAIN MODE, GAINS AND DECIMATION (0.99.41), copied
     // from airspyMemory_ on the GUI thread by launchDeviceOpen so the worker
     // can put them on the radio straight after open() and BEFORE it asks for
     // the rate: the saved rate is a decimated one, and asked for first it is
@@ -2162,7 +2162,7 @@ private:
     bool deviceAgcSupported_ = false;
     bool deviceAgc_ = false;
 
-    // THE AIRSPY R2 / MINI's OWN CONTROLS (0.99.40, gui/app_window_airspy.cpp):
+    // THE AIRSPY R2 / MINI's OWN CONTROLS (0.99.41, gui/app_window_airspy.cpp):
     // one gain mode at a time - Sensitive, Linear or Free, the reference
     // Airspy application's three - with only that mode's sliders, Free mode's
     // two AGC switches, and the software decimation. Draws them and answers

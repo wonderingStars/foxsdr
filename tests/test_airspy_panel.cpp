@@ -1,4 +1,4 @@
-// test_airspy_panel.cpp - the Airspy R2 / Mini memory (0.99.40): what the
+// test_airspy_panel.cpp - the Airspy R2 / Mini memory (0.99.41): what the
 // Source section writes when the user changes the gain mode, a gain, an AGC
 // or the decimation, and what it puts back when that radio opens again -
 // against the byte-exact fake radio, so "put back" is read off the USB

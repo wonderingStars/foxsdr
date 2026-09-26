@@ -1,5 +1,5 @@
 // app_window_airspy.cpp - the Source section's Airspy R2 / Mini controls
-// (0.99.40): the gain mode, only that mode's sliders, Free mode's two AGC
+// (0.99.41): the gain mode, only that mode's sliders, Free mode's two AGC
 // switches, and the software decimation - laid out the way the reference
 // Airspy application offers them ("Gain: Sensitive/Linear/Free" and
 // "Decimation: none, 2, 4, 8, 16, 32 and 64", SDRsharp - The Guide v2.1).

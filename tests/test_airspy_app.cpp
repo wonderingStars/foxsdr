@@ -1,5 +1,5 @@
 // test_airspy_app.cpp - the Airspy R2 / Mini controls in the REAL application
-// (0.99.40): the gain mode the Source section's buttons choose, the web
+// (0.99.41): the gain mode the Source section's buttons choose, the web
 // remote's gain by name, the decimation the combo chooses and the chain
 // following it, and all of it put back at the next launch - AppWindow's own
 // members, with a byte-exact fake radio behind the device hook, so no radio
