@@ -1441,6 +1441,9 @@ int AppWindow::run(int frames) {
     // The frame log (gui/frame_log.hpp): allocated here, before the first
     // frame, and written once after the loop.
     frameLog_ = cascade::gui::FrameLog::fromEnvironment();
+    // ...and the measurement's frame-rate cap (same header), for a display
+    // whose driver does not honour the swap interval.
+    frameCap_ = cascade::gui::FrameCap::fromEnvironment();
 
     // THE GPS READ AT START-UP, when FOXSDR_GPS_PORT names a device (and
     // FOXSDR_GPS_BAUD a rate; 9600 otherwise). The same start the rail's key
@@ -1559,6 +1562,7 @@ int AppWindow::run(int frames) {
 
         // The start of the frame, before the events are polled.
         if (frameLog_) { frameLog_->frameStart(); }
+        if (frameCap_) { frameCap_->frameStart(); }
 
         // The heartbeat. One relaxed store; the whole hang-detection scheme is
         // "did this line run recently", so it must stay cheap enough that
@@ -2028,6 +2032,7 @@ int AppWindow::run(int frames) {
 
         glfwSwapBuffers(window);
         if (frameLog_) { frameLog_->frameEnd(); }
+        if (frameCap_) { frameCap_->waitForNext(); }
         ++rendered;
 
         // The engine measurement's one step a frame, through the same calls

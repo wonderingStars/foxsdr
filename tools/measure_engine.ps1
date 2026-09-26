@@ -13,13 +13,15 @@
                Frame time = interval between consecutive frame STARTS (taken
                before event polling), first WarmupSeconds discarded; per run
                the mean and the nearest-rank 99th percentile.
-      cpu      FOXSDR_MEASURE=run with vsync ON (as a user runs it): process
-               CPU over the window after the warm-up, as % of one core, and
-               the working set at the end. NOTE: on the development desktop
-               the swap interval of 1 is not honoured (measured ~1300 frames
-               a second either way), so this figure is dominated by the GUI
-               thread rendering flat out, and it falls sharply whenever the
-               window is covered or minimised. Leave the window alone.
+      cpu      FOXSDR_MEASURE=run at a display's frame rate: process CPU over
+               the window after the warm-up, as % of one core, and the
+               working set at the end. The rate is imposed by the clock
+               (FOXSDR_FRAME_CAP_HZ, -FrameCapHz 60) because on the
+               development desktop the swap interval of 1 is not honoured
+               (~1300 frames a second either way): uncapped, the figure was
+               the GUI thread and the driver's threads rendering flat out
+               and spread 4-27 s of CPU a minute between runs of one
+               binary. latency and rates run at the same cap.
       latency  FOXSDR_MEASURE=latency: tone at +100 kHz, the VFO moved off it
                and back on through the click-to-tune path, the audio sample
                clock from the command to the first 256-sample block in
@@ -87,6 +89,11 @@ param(
     [Parameter(ParameterSetName = 'Measure')] [string]$RateLadder = '14336000,16384000,18432000,20480000,22528000,24576000,28672000',
     [Parameter(ParameterSetName = 'Measure')] [double]$RateWindow = 60,
     [Parameter(ParameterSetName = 'Measure')] [int]$Retunes = 50,
+    # The frame rate the cpu, latency and rates launches are paced to
+    # (FOXSDR_FRAME_CAP_HZ): what a synchronised display imposes, imposed by
+    # the clock because this desktop's driver does not honour the swap
+    # interval. 0 leaves them uncapped.
+    [Parameter(ParameterSetName = 'Measure')] [int]$FrameCapHz = 60,
     # Decoder plugin DLLs to load in every launch (the "three decoders open"
     # of the frame-time measure). Copied into each staged build's plugins\.
     [Parameter(ParameterSetName = 'Measure')] [string[]]$Plugins = @(),
@@ -264,12 +271,13 @@ function Invoke-Launch {
         FOXSDR_MEASURE             = $null
         FOXSDR_FRAME_LOG           = $null
         FOXSDR_VSYNC_OFF           = $null
+        FOXSDR_FRAME_CAP_HZ        = $null
     }
     switch ($Measure) {
         'frames' { $vars.FOXSDR_MEASURE = 'run'; $vars.FOXSDR_FRAME_LOG = (Join-Path $Dir 'frames.log'); $vars.FOXSDR_VSYNC_OFF = '1' }
-        'cpu' { $vars.FOXSDR_MEASURE = 'run' }
-        'latency' { $vars.FOXSDR_MEASURE = 'latency' }
-        'rates' { $vars.FOXSDR_MEASURE = 'rates' }
+        'cpu' { $vars.FOXSDR_MEASURE = 'run'; $vars.FOXSDR_FRAME_CAP_HZ = "$FrameCapHz" }
+        'latency' { $vars.FOXSDR_MEASURE = 'latency'; $vars.FOXSDR_FRAME_CAP_HZ = "$FrameCapHz" }
+        'rates' { $vars.FOXSDR_MEASURE = 'rates'; $vars.FOXSDR_FRAME_CAP_HZ = "$FrameCapHz" }
         default { throw "unknown measure $Measure" }
     }
     $timeout = 120 + $Seconds
@@ -584,6 +592,7 @@ $meta = [ordered]@{
     warmupSeconds = $WarmupSeconds
     measures      = $Measures
     rateLadder    = $RateLadder
+    frameCapHz    = $FrameCapHz
     plugins       = @($Plugins | ForEach-Object { Split-Path -Leaf $_ })
     builds        = [ordered]@{}
 }

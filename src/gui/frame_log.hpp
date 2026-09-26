@@ -108,4 +108,35 @@ private:
     std::vector<std::int64_t> work_;
 };
 
+// FOXSDR_FRAME_CAP_HZ=<n>: the frame loop paced to n frames a second by the
+// clock, for the CPU measurement's "interface idle at a fixed rate".
+//
+// WHY, WHEN THE SWAP IS ALREADY SYNCHRONISED. On the development desktop the
+// swap interval of 1 is not honoured - the driver presents unsynchronised and
+// the loop renders ~1300 frames a second either way - so a CPU figure taken
+// "with vsync on" measured the GUI thread rendering flat out, and moved with
+// whatever the driver's own threads were doing (baseline runs of the same
+// binary spread from 4 s to 27 s of CPU a minute). The measurement needs the
+// frame rate a synchronised display would impose, so it imposes one: after
+// the swap, the loop waits until 1/n s after the frame's start. A
+// high-resolution waitable timer on Windows (the default timer tick is
+// 15.6 ms, coarser than a 60 Hz frame); sleep_until elsewhere.
+class FrameCap {
+public:
+    // Null unless FOXSDR_FRAME_CAP_HZ names a rate in (0, 1000].
+    static std::unique_ptr<FrameCap> fromEnvironment();
+    ~FrameCap();
+    FrameCap(const FrameCap&) = delete;
+    FrameCap& operator=(const FrameCap&) = delete;
+
+    void frameStart();  // top of the frame
+    void waitForNext();  // after the swap: until one period after frameStart
+
+private:
+    explicit FrameCap(double hz);
+    std::int64_t periodNs_ = 0;
+    std::int64_t startNs_ = 0;
+    void* timer_ = nullptr;  // Windows waitable timer handle, or null
+};
+
 }  // namespace cascade::gui

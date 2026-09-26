@@ -3919,6 +3919,7 @@ private:
     // (bounded runs only) are the debug switches that create them. See
     // gui/frame_log.hpp and core/engine_measure.hpp.
     std::unique_ptr<FrameLog> frameLog_;
+    std::unique_ptr<FrameCap> frameCap_;  // FOXSDR_FRAME_CAP_HZ
     std::unique_ptr<cascade::core::EngineMeasure> measure_;
     // --- update check --------------------------------------------------------
     bool closeRequested_ = false;     // set by the updater; the run loop honours it
