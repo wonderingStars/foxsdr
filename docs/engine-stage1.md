@@ -166,6 +166,22 @@ later. Keys and the spectrum drag are unchanged. The engine measurement's
 hooks submit commands too, so its tune-to-audio latency now includes this
 wait (after the frame's swap, the next frame's drain is a few ms away).
 
+**Queued device commands never reach a different radio.** Each queued
+command carries the `sourceGen_` it was submitted under. A command addressed
+to the open radio itself - `SET_SAMPLE_RATE`, `SET_GAIN`,
+`APP_SET_GAIN_NO_READBACK`, `SET_DEVICE_AGC`, `SET_ANTENNA`, `SET_BIAS_TEE`,
+`SET_DEVICE_OPTION` - whose generation has moved by the time it is drained
+is dropped, not applied. Every assignment of `device_` (the two installs,
+`finishDeviceOpen` and the config restore, and every close) bumps
+`sourceGen_`, so an unchanged generation means the very radio the widget was
+drawn for; a changed one means that radio has been closed or replaced -
+by an open that finished at the end of the frame the slider moved, or by a
+source change earlier in the same drain. Before stage 1 such a setting went
+to the old radio just before it was replaced, so dropping it gives the same
+outcome on the radio that is now open (nothing). Receiver commands queued
+beside it still apply. Pinned by `test_apply_command`'s "queued radio
+commands and a change of radio" case (red with the drop removed).
+
 ## 4. The line: receiver state, view state, forms, settings
 
 **Receiver state** - converted: everything the engine API models as engine
@@ -206,10 +222,46 @@ watchdog's reopen, the GPS fix (`pollGpsReader`), the patch page's radio
 hand-over, the mute policy (`updateAudioMute`), the transmitter's per-frame
 key (OPEN 1), and the frame loop's verification seams where noted.
 
-`tests/test_command_path_guard.cpp` holds the line: rule A forbids every
-state-changing token (the setters, the helpers, assignments to receiver
-fields, addresses handed to ImGui) in any widget member; rule B allows the
-low-level setters only in a reviewed list of engine members.
+`tests/test_command_path_guard.cpp` holds the line. It scans EVERY `.cpp` in
+`src/gui` and splits each file into definitions at their column-0 heads
+(`AppWindow::x`, free functions in files that also define `AppWindow`
+members). A definition is either an **engine member** - on the reviewed
+`kEngineMembers` list (`applyCommand` and the helpers it calls, the device,
+plugin, store and patch machinery, the pollers, `applyConfig`, the with*
+free helpers) - or a **control**, which is everything else, drawn or not.
+In a control:
+
+- **A. helper calls**: no call of a receiver helper or of any engine member
+  by name (except `applyCommand`), so a new helper that changes state cannot
+  be reached from a widget without being reviewed onto the list;
+- **B. engine-object calls**: a call on an engine object (`pipeline_`,
+  `device_`, `soapyView_`, `transmitter_`, `freqMgr_`, `scanner_`, the two
+  recorders, `gpsReader_`, the plugin repo/host/runner/UI, the open
+  futures, the coalescer) must be one of the read-only accessors, through a
+  chain too (`pipeline_.activeSource().setX` is caught); a bare
+  `pipeline_.activeSource()` / `audio()` / `rawSource()` is allowed only
+  bound to a `const` reference;
+- **C. field writes**: no assignment, compound assignment, `++`/`--`,
+  subscripted write, mutator call (`push_back`, `clear`, `erase`, `reset`
+  ...) or `&` address (the ImGui pointer idiom) of any of the 48 receiver
+  fields, with or without `this->`;
+- **D. engine objects handed out**: no engine object passed as an argument
+  (`helper(pipeline_)`, `f(*device_)`), which is how a free helper would
+  reach the engine; two reviewed queries (`biasTeeReachable`,
+  `biasKeyMayRememberNow`) are exempt from D only.
+
+An engine member may contain no ImGui input call (a control does not belong
+there). `drawUi`, `drawPatchPage`, `drawTransmitPage` and `run` are controls
+with a few named LINES allowed (`kLineAllowed`): the frame's machinery
+(the drains, `applyWebControls`, `scannerFrame`, the pollers, the
+transmitter's per-frame key - OPEN 1), the patch page's close/reap and
+reconcile (OPEN 2 and 10), `followTransmitFrequency`, and `run`'s
+verification seams and teardown. Every name on every allow-list must still
+exist, so a rename cannot silently widen the exemption. The reviewer's
+bypass probes (a transitive helper, a field write in a new panel, a
+`Pipeline&` free helper, a setter in `drawUi`, a new `.cpp`) and four more
+(a Button inside an engine member, a non-const `activeSource()`,
+`this->volume_ =`, a renamed allow-list entry) are each red.
 
 ## 5. Extension ops (`FOXAPP_OP_*`), each with why API 0.2 lacks it
 
@@ -252,6 +304,20 @@ low-level setters only in a reviewed list of engine members.
 - A web request carrying `bookmarkAdd` and `bookmarkTune`/`bookmarkRemove`
   resolved the row to an index AFTER the add had shifted the list; rows are
   now resolved to ids before anything in the request is applied.
+- **The browser's bookmark rows are bookmark IDS, taken when the snapshot is
+  published** (`webBookmarkIds_`, was `webBookmarkIndex_` of list indices).
+  The command drain runs before `applyWebControls` in a frame, so a desktop
+  add, remove or star submitted in the frame the browser read its snapshot
+  shifts every list index after it before the browser's tune or remove
+  arrives: a stale index named the NEIGHBOUR (measured with the old mapping
+  restored: the tune to row C landed on a 50 MHz bookmark in NFM, the remove
+  of row B removed the new bookmark instead). With ids, the row reaches the
+  bookmark the browser showed, or answers NOT_FOUND if it has gone
+  (`test_apply_command`, "web bookmark rows"). Still true, and older than
+  stage 1: the browser's list is the favourites plus the 100 nearest the
+  tuned frequency, so its ROW ORDER changes as the tuning moves - a row read
+  from a snapshot older than the latest publish can still name a different
+  bookmark. Only an id in the request (a web API change) closes that.
 
 ## 7. OPEN
 
@@ -305,6 +371,21 @@ low-level setters only in a reviewed list of engine members.
    named by its id rather than its position; the mute dialog's Stop ends the
    mute one frame after the dialog closes (the banner can show for that
    frame).
+9. **A web, CAT or plugin mode change now writes a diagnostic log line.**
+   `SET_MODE` goes through `setModeIndex`, the keys' helper, which logs
+   "mode: %s, bandwidth %.0f" (section 6: that is what unifying the mode
+   branch means). The old web/plugin path did not log, so a plugin calling
+   `set_mode` in a loop now pushes older lines out of the diagnostic ring a
+   crash report carries. Left as it is: logging only on a change would also
+   change what the desktop keys log. Rate-limiting the ring's writers is the
+   better fix and belongs with the sessions work.
+10. **Editing the patch graph is not a command.** Adding, moving, wiring and
+    removing nodes on the Patch page edit `patchGraph_` directly (editing a
+    document, like a form), and a running patch follows the edited graph
+    through `patchReconcile` / `patchApplyRunning` each frame - the two
+    `drawPatchPage` lines the guard allows. API 0.2 has whole-document
+    `PATCH_LOAD`, `PATCH_RUN` and `PATCH_ALL_OFF` only; node-level edit ops
+    are a later stage's.
 
 ## 8. Tests
 
@@ -316,9 +397,18 @@ low-level setters only in a reviewed list of engine members.
 - `tests/test_control_ops.cpp`: every `ControlRequest` field translates to its
   commands (a header scan fails a field added without a row), the historical
   order, the long text, every plugin control kind, the mode numbering.
-- `tests/test_command_path_guard.cpp`: rules A and B of section 4.
+- `tests/test_command_path_guard.cpp`: rules A-D of section 4 over every
+  `src/gui/*.cpp`; takes an optional source root on its command line, which
+  is how the bypass probes were run against copies of the tree.
 - `tests/test_stop_ends_recordings.cpp`: `applyCommand` is the only caller of
   `stopReceiver`; the dome, key and POWER send `RUN`.
+
+Every test that runs `cascade.exe` (`test_stop_ends_recordings`,
+`test_bias_key_run`, `test_crash_upload`, `test_diag_hang`,
+`test_diagnostics`, `test_gps_app`, `test_shutdown_budget`,
+`test_startup_state`, `test_theme_census`, `test_soapy_enum_proc`,
+`test_soapy_source`) now depends on the `cascade` target, so building one
+alone relinks the application first instead of driving a stale exe.
 
 Every one was seen red (the behaviour it names broken, the exe deleted and
 relinked with a changed hash, where the test compiles what it tests) and
