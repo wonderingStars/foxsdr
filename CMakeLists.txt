@@ -242,7 +242,7 @@ endif()
 
 # ---------------------------------------------------------------------------
 # Warnings — /W4 applies to OUR code only (cascade_flags is linked by
-# cascade_lib, never by the vendored targets, which build at their defaults;
+# cascade_engine, and through it cascade_gui, never by the vendored targets, which build at their defaults;
 # vendored headers are SYSTEM includes, so they stay warning-silent in our
 # translation units too).
 # ---------------------------------------------------------------------------
@@ -257,8 +257,29 @@ else()
 endif()
 
 # ---------------------------------------------------------------------------
-# Core library — everything except main() and the tests
+# The two libraries: the ENGINE and the WINDOW
 # ---------------------------------------------------------------------------
+#
+# cascade_engine is everything that is not the window - core, dsp, source,
+# sink, net, usb: the radio, the DSP, the decoder host, the recorder, the
+# transmitter, the web and CAT servers, crash reporting. cascade_gui is the
+# window (src/gui, Dear ImGui, GLFW, OpenGL) and links the engine. cascade.exe
+# links both. This is step 1 of the engine extraction (the plan is
+# docs/ENGINE-EXTRACTION.md in the foxsdr-api repository): one engine, and
+# later a second front-end driven through the engine API, with no behaviour
+# change and no speed loss. Until then the window still OWNS the engine's
+# objects (AppWindow holds the Pipeline, the device, the recorder ...); this
+# split is only about which side of the line each file compiles on.
+#
+# THE LINE IS ENFORCED, not remembered:
+#   * cascade_engine links no imgui, glfw or OpenGL (checked below, at
+#     configure time, against the target's own link list);
+#   * no engine source or header may include a gui/ header, imgui, GLFW or
+#     an ImGui backend (every file scanned below, at configure time);
+#   * cascade_engine_link_check links EVERY engine object (whole archive)
+#     into an executable with nothing of the window, so an engine file that
+#     calls into src/gui without including it fails the build rather than
+#     waiting for the day something else is linked against the engine.
 
 file(GLOB CASCADE_CORE   CONFIGURE_DEPENDS src/core/*.cpp)
 # Linux-only: sigaction/libunwind/dl_iterate_phdr, none of which exist on
@@ -285,22 +306,24 @@ if(NOT (UNIX AND NOT APPLE))
     list(FILTER CASCADE_USB EXCLUDE REGEX "usbfs_device\\.cpp$")
 endif()
 
-add_library(cascade_lib STATIC
-    ${CASCADE_CORE} ${CASCADE_DSP} ${CASCADE_GUI} ${CASCADE_SOURCE} ${CASCADE_SINK}
+# --- the engine --------------------------------------------------------------
+
+add_library(cascade_engine STATIC
+    ${CASCADE_CORE} ${CASCADE_DSP} ${CASCADE_SOURCE} ${CASCADE_SINK}
     ${CASCADE_NET} ${CASCADE_USB})
 
-target_include_directories(cascade_lib PUBLIC src "${CASCADE_COMMIT_HEADER_DIR}")
+target_include_directories(cascade_engine PUBLIC src "${CASCADE_COMMIT_HEADER_DIR}")
 # See src/core/version.cpp: the reported version is injected, never written in.
-target_compile_definitions(cascade_lib PRIVATE
+target_compile_definitions(cascade_engine PRIVATE
     CASCADE_VERSION_STRING="${CASCADE_VERSION_STRING}")
 # The commit comes from the generated header instead, so it is re-read on every
 # build rather than frozen at configure time.
-add_dependencies(cascade_lib cascade_git_commit)
+add_dependencies(cascade_engine cascade_git_commit)
 # PUBLIC, and only these two: the test binaries need to find the application
 # binary and the symbol archive in order to assert that this build's PDB was
 # actually archived under the build id a report would quote. Nothing in the
 # library itself reads them.
-target_compile_definitions(cascade_lib PUBLIC
+target_compile_definitions(cascade_engine PUBLIC
     CASCADE_APP_BINDIR="$<TARGET_FILE_DIR:cascade>"
     CASCADE_SYMBOL_ARCHIVE_DIR="${CASCADE_SYMBOL_ARCHIVE}"
     # ...and these three so tests/test_diagnostics.cpp can hold the commit a
@@ -314,11 +337,8 @@ target_compile_definitions(cascade_lib PUBLIC
 # Vendored targets are listed BEFORE SoapySDR so third_party/ include dirs
 # always precede vcpkg's shared installed-include root (which still contains
 # same-named headers for other consumers of that vcpkg tree).
-target_link_libraries(cascade_lib PUBLIC
+target_link_libraries(cascade_engine PUBLIC
     cascade_flags
-    imgui
-    glfw
-    OpenGL::GL
     portaudio_static
     cascade_json
     cascade_pffft
@@ -330,10 +350,10 @@ if(WIN32)
     # device interface (never opening a device to list it), WinUSB for the
     # pipes. All three are inbox on Windows 10+, so the installer payload
     # contract (cascade.exe + SoapySDR.dll) does not change.
-    target_link_libraries(cascade_lib PUBLIC winusb setupapi cfgmgr32)
+    target_link_libraries(cascade_engine PUBLIC winusb setupapi cfgmgr32)
     # Media Foundation: Windows' own MP3 encoder for the patch page's MP3
     # output (core/mp3_writer.cpp, 0.99.17).
-    target_link_libraries(cascade_lib PUBLIC mf mfplat mfreadwrite mfuuid ole32)
+    target_link_libraries(cascade_engine PUBLIC mf mfplat mfreadwrite mfuuid ole32)
 endif()
 
 if(NOT WIN32)
@@ -341,10 +361,84 @@ if(NOT WIN32)
     # catalogue's HTTPS client (cpp-httplib built with
     # CPPHTTPLIB_OPENSSL_SUPPORT). Windows takes both from the OS instead —
     # CNG and WinHTTP — which is why neither is a dependency there.
-    target_link_libraries(cascade_lib PUBLIC OpenSSL::Crypto OpenSSL::SSL)
+    target_link_libraries(cascade_engine PUBLIC OpenSSL::Crypto OpenSSL::SSL)
     # The stack unwinder crash_handler_posix.cpp and hang_watchdog.cpp use.
     # See the find_package(PkgConfig)/pkg_check_modules block above.
-    target_link_libraries(cascade_lib PUBLIC PkgConfig::LIBUNWIND)
+    target_link_libraries(cascade_engine PUBLIC PkgConfig::LIBUNWIND)
+endif()
+
+# --- the window --------------------------------------------------------------
+
+add_library(cascade_gui STATIC ${CASCADE_GUI})
+# The window's own include root first, then imgui, GLFW and OpenGL BEFORE the
+# engine: the engine carries SoapySDR, whose include root is vcpkg's shared
+# installed-include directory, and that directory holds other packages'
+# copies of same-named headers (imgui.h among them). Listed in this order the
+# window's include search is the one the single pre-split library gave it -
+# src, the generated commit header, the vendored imgui/GLFW roots, then the
+# engine's vendored roots, then vcpkg - so no window translation unit can pick
+# up a different imgui.h than the imgui library it links.
+target_include_directories(cascade_gui PUBLIC src "${CASCADE_COMMIT_HEADER_DIR}")
+target_link_libraries(cascade_gui PUBLIC
+    imgui
+    glfw
+    OpenGL::GL
+    cascade_engine)
+
+# --- the line between them, enforced -----------------------------------------
+
+# 1. The engine links nothing of the window.
+get_target_property(_cascade_engine_links cascade_engine LINK_LIBRARIES)
+foreach(_lib IN ITEMS imgui glfw OpenGL::GL cascade_gui)
+    if(_lib IN_LIST _cascade_engine_links)
+        message(FATAL_ERROR "cascade_engine links ${_lib}: the engine must not depend on the window")
+    endif()
+endforeach()
+
+# 2. No engine file includes a window header. Every source AND header under
+#    the engine's directories, scanned line by line for an #include of gui/,
+#    Dear ImGui (imgui*.h, the backends) or GLFW. A comment that merely
+#    mentions gui/ is fine; an include is not.
+file(GLOB _cascade_engine_files
+    src/core/*.cpp src/core/*.hpp src/core/*.h
+    src/dsp/*.cpp src/dsp/*.hpp src/dsp/*.h
+    src/source/*.cpp src/source/*.hpp src/source/*.h
+    src/sink/*.cpp src/sink/*.hpp src/sink/*.h
+    src/net/*.cpp src/net/*.hpp src/net/*.h
+    src/usb/*.cpp src/usb/*.hpp src/usb/*.h)
+set(_cascade_engine_bad "")
+foreach(_f IN LISTS _cascade_engine_files)
+    file(STRINGS "${_f}" _hits REGEX
+         "^[ \t]*#[ \t]*include[ \t]*[<\"](gui/|imgui|GLFW/|backends/imgui)")
+    if(_hits)
+        string(APPEND _cascade_engine_bad "\n  ${_f}: ${_hits}")
+    endif()
+endforeach()
+if(_cascade_engine_bad)
+    message(FATAL_ERROR
+        "Engine files include window headers (the engine may not depend on src/gui, "
+        "imgui or GLFW - move the code or invert the dependency):${_cascade_engine_bad}")
+endif()
+
+# 3. Every engine object links on its own. WHOLE ARCHIVE, because an ordinary
+#    link pulls only the objects main() reaches, and a file nothing reaches
+#    would hide a call into src/gui until the day something did.
+add_executable(cascade_engine_link_check tests/engine_link_check.cpp)
+if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.24)
+    target_link_libraries(cascade_engine_link_check PRIVATE
+        "$<LINK_LIBRARY:WHOLE_ARCHIVE,cascade_engine>")
+elseif(MSVC)
+    target_link_libraries(cascade_engine_link_check PRIVATE cascade_engine)
+    target_link_options(cascade_engine_link_check PRIVATE
+        "/WHOLEARCHIVE:$<TARGET_FILE:cascade_engine>")
+else()
+    target_link_libraries(cascade_engine_link_check PRIVATE
+        -Wl,--whole-archive cascade_engine -Wl,--no-whole-archive)
+endif()
+if(WIN32 AND TARGET SoapySDR)
+    add_custom_command(TARGET cascade_engine_link_check POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                $<TARGET_FILE:SoapySDR> $<TARGET_FILE_DIR:cascade_engine_link_check>)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -353,8 +447,8 @@ endif()
 
 # Windows executable icon (Explorer, taskbar, Alt-Tab, Add/Remove Programs).
 # The .rc must be a SOURCE of the EXECUTABLE target - rc.exe compiles it and
-# the linker embeds the RT_GROUP_ICON - and only of the executable: cascade_lib
-# and the test binaries neither need it nor should carry it. The runtime window
+# the linker embeds the RT_GROUP_ICON - and only of the executable: the two
+# libraries and the test binaries neither need it nor should carry it. The runtime window
 # icon is a separate mechanism set in AppWindow::run; see
 # resources/icon/README.md.
 if(WIN32)
@@ -363,7 +457,8 @@ if(WIN32)
 else()
     add_executable(cascade src/main.cpp)
 endif()
-target_link_libraries(cascade PRIVATE cascade_lib)
+# The window, and through it the engine.
+target_link_libraries(cascade PRIVATE cascade_gui)
 
 # ---------------------------------------------------------------------------
 # foxsdr-reports - the reader that makes an uploaded report readable
@@ -380,7 +475,8 @@ target_link_libraries(cascade PRIVATE cascade_lib)
 # somebody remembers to compile it is a tool that will not compile on the day a
 # report matters.
 add_executable(foxsdr-reports tools/report-reader/main.cpp)
-target_link_libraries(foxsdr-reports PRIVATE cascade_lib)
+# Engine only: the reader resolves reports against symbols/ and draws nothing.
+target_link_libraries(foxsdr-reports PRIVATE cascade_engine)
 
 # Delay-load SoapySDR so a missing or broken hardware runtime cannot stop the
 # app from starting. Without this the Windows loader kills the process before

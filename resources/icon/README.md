@@ -99,7 +99,7 @@ with:
 ```cmake
 # Windows executable icon (Explorer, taskbar, Alt-Tab). The .rc must be a
 # SOURCE of the executable target — MSVC compiles it with rc.exe and the
-# linker embeds the RT_GROUP_ICON — and only of the executable: cascade_lib
+# linker embeds the RT_GROUP_ICON — and only of the executable: the libraries
 # and the test binaries neither need it nor should carry it. The runtime
 # window icon is set separately in AppWindow::run; see resources/icon/README.md.
 if(WIN32)
@@ -111,7 +111,7 @@ add_executable(cascade
     $<$<BOOL:${WIN32}>:${CMAKE_CURRENT_SOURCE_DIR}/resources/icon/foxsdr.rc>)
 ```
 
-Nothing else changes: `target_link_libraries(cascade PRIVATE cascade_lib)` and
+Nothing else changes: `target_link_libraries(cascade PRIVATE cascade_gui)` and
 the `/DELAYLOAD` block below it stay exactly as they are.
 
 Those lines were verified against CMake 3.20+ with the Visual Studio 17 2022

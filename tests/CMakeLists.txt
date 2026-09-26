@@ -6,7 +6,18 @@ file(GLOB CASCADE_TESTS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/test_*.cp
 foreach(src ${CASCADE_TESTS})
     get_filename_component(name "${src}" NAME_WE)
     add_executable(${name} "${src}")
-    target_link_libraries(${name} PRIVATE cascade_lib)
+    # The library a test links follows what it includes: a test that reaches
+    # into the window (a gui/ header, imgui, GLFW) links cascade_gui, which
+    # brings the engine with it; every other test links the ENGINE ALONE - so
+    # each of those is also a small proof that the engine code it exercises
+    # needs nothing of the window to link.
+    file(STRINGS "${src}" _window_includes REGEX
+         "^[ \t]*#[ \t]*include[ \t]*[<\"](gui/|imgui|GLFW/|backends/imgui)")
+    if(_window_includes)
+        target_link_libraries(${name} PRIVATE cascade_gui)
+    else()
+        target_link_libraries(${name} PRIVATE cascade_engine)
+    endif()
     target_include_directories(${name} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
     # Put SoapySDR.dll beside the test binary EXPLICITLY.
     #
@@ -55,6 +66,14 @@ foreach(src ${CASCADE_TESTS})
     # it forever — ctest's default per-test timeout is 1500 s.
     set_tests_properties(${name} PROPERTIES TIMEOUT 120)
 endforeach()
+
+# The engine, whole archive, linked with nothing of the window (top-level
+# CMakeLists.txt, "the line between them"). The build is the real check; this
+# confirms the binary it produced runs.
+add_test(NAME engine_link_check COMMAND cascade_engine_link_check)
+set_tests_properties(engine_link_check PROPERTIES
+    TIMEOUT 30
+    PASS_REGULAR_EXPRESSION "cascade_engine links on its own: FoxSDR")
 
 # The app doubles as a smoke test. The PASS_REGULAR_EXPRESSION makes the
 # exact-count half of the --frames contract observable: rendering N+1 frames

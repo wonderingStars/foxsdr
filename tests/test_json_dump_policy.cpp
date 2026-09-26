@@ -120,7 +120,7 @@ int main(int argc, char** argv) {
     // registration to supply it). Falling back to CASCADE_SOURCE_DIR - the
     // same compile-time definition tests/test_diagnostics.cpp and
     // tests/test_crash_upload.cpp already use, propagated PUBLIC from
-    // cascade_lib into every test binary - keeps this runnable standalone
+    // cascade_engine into every test binary - keeps this runnable standalone
     // with no arguments at all, e.g. from an IDE's "run test" button.
     const fs::path srcDir = (argc >= 2) ? fs::path(argv[1]) : fs::path(CASCADE_SOURCE_DIR) / "src";
 
