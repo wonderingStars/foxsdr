@@ -186,13 +186,6 @@ constexpr cascade::dsp::DemodMode kModeMap[8] = {
     cascade::dsp::DemodMode::USB, cascade::dsp::DemodMode::CW,
     cascade::dsp::DemodMode::LSB, cascade::dsp::DemodMode::RAW};
 
-// Per-mode default bandwidth (index into kBwHz), applied when a mode button
-// is clicked; the combo still allows any override. Rationale: WFM broadcast
-// channel 150k; NFM two-way channel 12.5k; AM/DSB broadcast channel ~10k
-// (both sidebands); SSB/CW voice/keying fits in 3k; RAW passes the full
-// 200k channel for diagnostics.
-constexpr int kModeDefaultBw[8] = {2, 1, 3, 3, 5, 5, 5, 0};
-
 // Band-snap intervals for dragging the VFO CENTER on the spectrum, indexed
 // in kModeNames order. The snap applies to the ABSOLUTE tuned frequency
 // (source center + VFO offset), not the raw offset, so snapped stations land
@@ -211,15 +204,13 @@ constexpr int kModeDefaultBw[8] = {2, 1, 3, 3, 5, 5, 5, 0};
 constexpr double kModeSnapHz[8] = {12500.0, 100000.0, 9000.0, 1000.0,
                                    1000.0,  1000.0,   1000.0, 1000.0};
 
-// SoapyAudio advertises every sound card on the machine as a SoapySDR device.
-// They are not receivers: no tuner (centerFrequencyHz reads 0), no RF, and
-// selecting one silently swaps your radio for a microphone input — which then
-// gets persisted to config and restored on the next launch, so the real SDR
-// appears to have "stopped being detected". They are filtered out of the
-// Source list entirely, matching the policy --soapy-check already applies.
-inline bool isAudioDriver(const std::string& args) {
-    return args.find("driver=audio") != std::string::npos;
-}
+// VFO bandwidth clamp for edge drags and config restore:
+// [3 kHz, 90% of the channel rate]. The lower bound keeps the band visible,
+// grabbable and audible; the upper bound leaves the Vfo's decimating filter
+// a transition band instead of demanding a brick wall at Nyquist.
+constexpr double kVfoBwMinHz = 3000.0;
+
+constexpr double kVfoBwMaxChanFrac = 0.9;
 
 // ASCII case-insensitive equality. Used only to compare plugin FILE NAMES,
 // which sanitiseFileName() has already restricted to [A-Za-z0-9._-] — so a
@@ -254,6 +245,18 @@ inline int nearestIndex(const double* arr, int n, double x) {
 inline int nearestIndex(const std::vector<double>& v, double x) {
     if (v.empty()) { return 0; }
     return nearestIndex(v.data(), static_cast<int>(v.size()), x);
+}
+
+// A NATIVE radio's MODEL WITH NO SERIAL IN IT, for the log, the crash context
+// and the scan-gate caption - the rule every diagnostic line in this file
+// keeps. core::sanitiseDevice does the job for a SoapySDR kwargs string (its
+// allow list is driver/product/type, so a serial can never survive it), but a
+// native row's args are nothing but "serial=00000001" and sanitising them
+// leaves an empty string. The model has to come out of the LABEL instead,
+// which is the bus-reported description with the serial appended in brackets.
+inline std::string modelFromNativeLabel(const std::string& label) {
+    const std::size_t at = label.find(" (serial ");
+    return at == std::string::npos ? label : label.substr(0, at);
 }
 
 // "2.400 MS/s" - three decimals because the rates that differ do so in the

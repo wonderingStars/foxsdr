@@ -265,7 +265,7 @@ struct AppWindowTestAccess {
     static bool waitOpen(AppWindow& a) {
         const auto t0 = std::chrono::steady_clock::now();
         while (a.engine_.deviceOpenPending_) {
-            a.pollSourceAsync();
+            a.engine_.pollSourceAsync();
             if (std::chrono::steady_clock::now() - t0 > std::chrono::seconds(20)) { return false; }
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
@@ -283,23 +283,23 @@ struct AppWindowTestAccess {
 
     // Selects a native row as the Source combo would, and waits for it.
     static bool selectNative(AppWindow& a, const std::string& args) {
-        a.scanNative();
+        a.engine_.scanNative();
         const int row = nativeRow(a, args);
         if (row < 0) { return false; }
-        a.selectSource(row);
+        a.engine_.selectSource(row);
         return waitOpen(a);
     }
 
     static bool selectSoapy(AppWindow& a, const std::string& args, const std::string& label) {
         a.engine_.soapyDevices_.clear();
         a.engine_.soapyDevices_.push_back({label, args});
-        a.selectSource(a.engine_.soapyRowBase());
+        a.engine_.selectSource(a.engine_.soapyRowBase());
         return waitOpen(a);
     }
 
     // A tune by the counter, applied at once (the coalescer's pacing is not
     // what is under test).
-    static void tune(AppWindow& a, double airCentreHz) { a.applyRetuneNow(airCentreHz); }
+    static void tune(AppWindow& a, double airCentreHz) { a.engine_.applyRetuneNow(airCentreHz); }
 
     static double airCentre(AppWindow& a) { return a.engine_.pipeline_.activeSource().centerFrequencyHz(); }
     static double counter(AppWindow& a) { return a.engine_.currentAbsoluteHz(); }
@@ -309,16 +309,16 @@ struct AppWindowTestAccess {
     static const std::string& kind(AppWindow& a) { return a.engine_.sourceKind_; }
 
     static void restore(AppWindow& a, const cascade::core::AppConfig& cfg) { a.applyConfig(cfg); }
-    static void reopen(AppWindow& a) { a.reopenAfterDriverFault(); }
-    static void changeConverter(AppWindow& a, const ConverterSetting& s) { a.changeConverter(s); }
-    static void scanNativeForTest(AppWindow& a) { a.scanNative(); }
+    static void reopen(AppWindow& a) { a.engine_.reopenAfterDriverFault(); }
+    static void changeConverter(AppWindow& a, const ConverterSetting& s) { a.engine_.changeConverter(s); }
+    static void scanNativeForTest(AppWindow& a) { a.engine_.scanNative(); }
     static std::string aliasNote(AppWindow& a) { return a.converterAliasNote(); }
     static bool hasStored(AppWindow& a, const std::string& k) { return a.engine_.converters_.count(k) != 0; }
     static ConverterSetting stored(AppWindow& a, const std::string& k) {
         const auto it = a.engine_.converters_.find(k);
         return it == a.engine_.converters_.end() ? ConverterSetting{} : it->second;
     }
-    static void selectGenerator(AppWindow& a) { a.selectSource(0); }
+    static void selectGenerator(AppWindow& a) { a.engine_.selectSource(0); }
     // What the radio itself was last told and kept (the raw source).
     static double radioNow(AppWindow& a) { return a.engine_.pipeline_.rawSource().centerFrequencyHz(); }
     // The note line under the counter (a coerced, refused or unreachable tune).
@@ -327,15 +327,15 @@ struct AppWindowTestAccess {
     // The Pluto row: selecting it only selects (see selectSource); Open
     // closes the radio in use and opens the board at the typed address.
     static bool selectPlutoRow(AppWindow& a, const std::string& args) {
-        a.scanNative();
+        a.engine_.scanNative();
         const int row = nativeRow(a, args);
         if (row < 0) { return false; }
-        a.selectSource(row);
+        a.engine_.selectSource(row);
         return a.engine_.sourceSel_ == row;
     }
     static bool openPluto(AppWindow& a, const std::string& uri) {
         std::snprintf(a.engine_.plutoUri_, sizeof(a.engine_.plutoUri_), "%s", uri.c_str());
-        a.openPlutoFromBox();
+        a.engine_.openPlutoFromBox();
         return waitOpen(a);
     }
 

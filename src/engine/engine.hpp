@@ -195,6 +195,18 @@ private:
     // leaves the open radios' drivers out, or nothing - built from the
     // receiver's radio and every patch radio. See engine/device_scan_plan.hpp.
     cascade::gui::SoapyScanPlan soapyScanPlan() const;
+    // Combo-row click handler: 0 = generator, 1 = IQ file (panel only — the
+    // pipeline switches on a successful Open), 2+i = soapyDevices_[i]
+    // (opens immediately; on failure the combo selection is left unchanged).
+    // A device row carries the receiver's air centre across to the radio it
+    // opens (carriedAirCentre); `carryAirHz`, when given, is carried instead -
+    // the patch page's hand-back, whose frequency belongs to the radio it
+    // took, not to the generator standing in for it.
+    void selectSource(int idx, std::optional<double> carryAirHz = std::nullopt);
+    // The Pluto row's Open key: closes the radio in use and opens the board at
+    // the address typed in plutoUri_, carrying the air frequency read BEFORE
+    // the close. Its own member so the converter test can press it.
+    void openPlutoFromBox();
     // ONCE A FRAME, and once more after the last frame: takes the fix the
     // reader accepted, if there is one, and hands it to applyReceiverPosition
     // - the only door a position enters by. The single-shot takeFix() is
@@ -213,6 +225,14 @@ private:
     // must not be able to install a receiver at the pole and quietly make
     // every distance on the window wrong. Answers whether it applied.
     bool applyReceiverPosition(double latDeg, double lonDeg);
+    // Tunes to a preset, sets the mode/bandwidth/device rate it asks for,
+    // rebuilds the decoders against the new receiver state, and opens what
+    // that plugin contributes. The ONLY callers are a button and the deferred
+    // preset-bar/web-remote apply paths, each of which has already re-read
+    // and re-validated `ps` from the plugin itself: a preset is a plugin
+    // publishing where it listens, never a plugin retuning the radio — that
+    // still needs the separate per-plugin permission.
+    void applyPluginPreset(const cascade::core::LoadedPlugin& p, const CascadePreset& ps);
     // THE ONE ENUMERATION, used by drawPluginPresets, maybeAutoPreset,
     // rebuildMuteStates and the web status snapshot: walks `p`'s preset table
     // (capped at kMaxPresetsPerPlugin, exactly as every consumer has always
@@ -260,6 +280,9 @@ private:
     // applyControlRequest used to hold inline (so both paths now share it).
     // GUI thread, like applyCommand.
     bool startIqRecording();
+    void openIqFile(const std::string& path);
+    void openPlutoAt(const std::string& args);
+    void tuneToBookmark(const cascade::core::Bookmark& b);
     void addBookmarkHere(const std::string& name);
     cascade::core::Scanner::Params scannerParams() const;
     // HOW MANY LOADED MODULES ARE DECODERS AT ALL - the denominator under the
@@ -333,6 +356,11 @@ private:
     // Once per frame: evaluate the policy against where the receiver actually
     // is, push the result into the pipeline, and arm the popup on the edge.
     void updateAudioMute();
+    // Stops exactly the plugins named by `keys`, through the ordinary stop
+    // path, in one rebuild. The caller passes the keys its own message named -
+    // the banner passes mutedByKeys_, the popup passes what it captured - so a
+    // button can never stop something other than what the words above it said.
+    void stopMutingPlugins(const std::vector<std::string>& keys);
     // "ADS-B decoder", or "ADS-B decoder and AIS decoder", or a comma list.
     // One place, because the popup, the banner and the Sinks panel all have to
     // name the same plugins the same way.
@@ -350,9 +378,36 @@ private:
     // drawUi unconditionally, because the runner's buffer is bounded and
     // draining only when the panel is visible would drop output silently.
     void pumpDecoderOutput();
+    // Rebuilds every decoder instance against the CURRENT source rate and
+    // centre frequency. Called after any source change, because both are
+    // passed to a decoder's create() and cannot be changed afterwards.
+    void refreshPluginRunner();
     // Band plan (optional program data) and plugins (optional user
     // installs) — both silently absent when their directory does not exist.
     void loadBandPlan();
+    void rescanPlugins();
+    // Every tune that moves the SOURCE centre has to tell the pipeline, which
+    // cannot see it: the RDS/stereo decoders must forget the old station.
+    //
+    // For a hardware (Soapy) source this is a REQUEST, paced through
+    // retuneCoalescer_: bursts (one wheel notch per frame is 60-144 tunes a
+    // second) collapse to at most one device call per ~50 ms, latest value
+    // winning — the gesture that produced the most frequent 0.62.0 field
+    // crash. A single tune still applies immediately. The generator and IQ
+    // file sources apply immediately always (no USB to pace).
+    //
+    // isPluginPreset: true only from applyPluginPreset, and only so a
+    // mismatch this retune produces (see noteTuneMismatch) can say the
+    // PRESET needs a receiver that covers that band, rather than leaving an
+    // unexplained tune. Every other caller takes the default.
+    void retuneSourceHz(double centerHz, bool isPluginPreset = false);
+    // The unpaced apply: setCenterFrequencyHz + decoder resets + readback.
+    // Call directly only where the readback must be valid on return (the
+    // carry-across on a fresh device open); everything else goes through
+    // retuneSourceHz.
+    void applyRetuneNow(double centerHz, bool isPluginPreset = false);
+    // Frame-loop poll releasing a held retune once its interval has passed.
+    void pollPendingRetune();
     // Compares what applyRetuneNow asked for against what the source actually
     // landed on (SoapySDR devices coerce; the generator and IQ file never
     // do) and, past kTuneMismatchToleranceHz, sets tuneMismatchNote_ (shown
@@ -426,6 +481,7 @@ private:
     // installSource, and drives the stop, the faults and the same-rate
     // switch through the real application.
     void stopReceiver();
+    void startReceiver();
     void endTakesOnFault();
     void installSource(std::unique_ptr<cascade::source::IqSource> src);
     bool endTakes(bool iq, bool audio, const char* why, bool asError);
@@ -445,10 +501,22 @@ private:
     // one that also cleared a user's mute would make the Mute key stop working
     // the moment a decoder was running. The pipeline is told the OR of the two.
     bool userMuted_ = false;
+
+    // ONE absolute-tune path shared by bookmark click-to-tune and scanner
+    // retunes: commands the SOURCE center to (absHz - VFO offset) through
+    // activeSource().setCenterFrequencyHz — the same setter + readback path
+    // the toolbar digit wheel uses — so the VFO band (whose offset is
+    // preserved) lands on absHz and the display follows the readback.
+    void tuneAbsoluteHz(double absHz, bool isPluginPreset = false);
     // The tuned station: source center readback + VFO offset (what the VFO
     // band marks on the spectrum). This is what a bookmark captures and what
     // the scanner's user-tune detection compares.
     double currentAbsoluteHz();
+
+    // Once-per-GUI-frame scanner driver (called at the end of drawUi):
+    // detects manual tunes (user wins -> stop), feeds tick() with ImGui's
+    // clock and the squelch-open state, applies returned retunes.
+    void scannerFrame();
 
     // Persists the bookmark list after a mutation; failures land in
     // bookmarkError_ (red text). No-op in hermetic mode (empty path).
@@ -477,6 +545,11 @@ private:
     // worker, the synchronous restore and any future caller cannot disagree.
     static std::unique_ptr<cascade::source::DeviceSource> makeDeviceSource(
         const std::string& kind);
+
+    // Re-reads nativeDevices_ and nativeUnbound_ from the transport. Cheap,
+    // ungated and safe at any time - see nativeDevices_ for why a native
+    // enumeration is nothing like a Soapy scan.
+    void scanNative();
 
     // WHERE EACH FAMILY'S ROWS START IN THE SOURCE COMBO. Row 0 is the
     // generator, row 1 the IQ file and row 2 the sound card; the native radios
@@ -516,6 +589,11 @@ private:
     // needs it to know WHICH dongle this is.
     void adoptDeviceMirrors(cascade::source::DeviceSource& dev, const std::string& kind,
                             const std::string& args, double requestRateHz);
+
+    // Makes the DSP chain follow activeSource().sampleRateHz() (rate-follow).
+    // A pipeline refusal — fractional channel rate — keeps the old chain and
+    // surfaces the reason in sourceError_.
+    void followInputRate();
 
     // DSP pipeline plus the two live display widgets it feeds. The views are
     // held by unique_ptr for two reasons: the forward declarations above, and
@@ -794,6 +872,13 @@ private:
     // Where a sound card backend comes from: PortAudio, or the test's fake
     // (testHooks_.soundCardBackend). An empty factory means PortAudio.
     static cascade::source::SoundCardSource::BackendFactory soundCardBackendFactory();
+    // Open `settings` on a worker; installed by pollSoundCard() on success.
+    // When they name the card that is RUNNING, it is released first (see
+    // gui::soundCardReopenReleasesFirst) and reopened as it was if the new
+    // settings are refused.
+    void launchSoundCardOpen(bool restore, const cascade::source::SoundCardSettings& settings);
+    // Once per frame: collect a finished enumeration or open.
+    void pollSoundCard();
     // At quit, the same grace-then-abandon as reapPendingDeviceOpen.
     void reapSoundCardWorkers();
     // The installed source is a sound card that has stopped (unplugged,
@@ -807,11 +892,37 @@ private:
     // "device=...,api=...": the Source section's settings when it is the same
     // card, real mono on the left channel otherwise.
     std::string soundCardPatchArgs(const std::string& keyArgs) const;
+
+    // Consumes finished scan/open futures; called once per frame.
+    void pollSourceAsync();
+    // ONE AUTOMATIC REOPEN AFTER AN ABSORBED DRIVER FAULT (0.90.1); called
+    // once per frame after pollSourceAsync. The 0.90.0 field report (NESDR
+    // SMArt v5, 2026-09-09): a rate change faulted inside rtlsdr.dll, the
+    // guard absorbed it, the device was condemned, and the radio stayed dead
+    // - deck reading FAIL - until FoxSDR was restarted, though the fault was
+    // on our own call frame and every thread of ours was out of the module.
+    // When the open device is dead by such a fault (SoapySource::deadReason
+    // == VendorFault - never Abandoned, whose driver still has a thread of
+    // ours parked inside it), nothing is in flight, and no attempt was made
+    // in the last kSoapyReopenHoldoffSec (gui::autoReopenDue), this closes
+    // the dead source exactly as selectSource does and reopens the same args
+    // at the same rate through launchDeviceOpen, with the state to restore in
+    // the result. A reopen that fails leaves the ordinary failed-open state
+    // and message, and nothing tries again.
+    void pollSoapyRecovery();
+    // The reopen itself, once pollSoapyRecovery has judged it due: reads the
+    // rate, gains, running state and AIR centre off the dead radio (device_),
+    // closes it and launches the open. Split from the gate so the carry-across
+    // it starts is testable without a real SoapySDR fault.
+    void reopenAfterDriverFault();
     // The worker-thread open shared by selectSource and pollSoapyRecovery:
     // closes nothing (the caller has), stamps the request with sourceGen_,
     // and sets deviceOpenPending_/deviceBusyLabel_. `r` carries the args, the
     // row, the rate, the centre to carry across and any recovery payload.
     void launchDeviceOpen(DeviceOpenResult r, const std::string& busyLabel);
+    // Applies a resolved open on the GUI thread (panel mirrors, gain priming,
+    // pipeline install). Takes ownership of r.dev.
+    void finishDeviceOpen(DeviceOpenResult r);
     // Combo selection. -1 means "active device no longer in the list" (a
     // Refresh dropped it); the preview then falls back to the active source
     // name. Distinct from the ACTIVE source: selecting "IQ file" only shows
@@ -920,6 +1031,12 @@ private:
     cascade::core::ConverterSetting converterForKey(const std::string& radioKey) const;
     void applyConverterForSource();
     double radioHzForSource(const std::string& kind, const std::string& args, double airHz) const;
+    // The user changed the converter for the radio in use: remember it, apply
+    // it, and keep the AIR frequency - the radio is retuned to what the new
+    // setting makes of it. Only when the radio cannot go there (0 Hz or below,
+    // or outside its published range) does it stay put, the counter relabel
+    // and the note say what the radio reaches. An I/Q file always relabels.
+    void changeConverter(const cascade::core::ConverterSetting& s);
     // "125 MHz up-converter" and its three siblings, translated.
     std::string converterName(const cascade::core::ConverterSetting& s) const;
     // A tune the converter could not deliver, or the radio refused or moved,
@@ -1686,6 +1803,10 @@ private:
     // that failed with the reason each gave. Kept until the next run starts.
     std::string addAllSummary_;
     bool addAllFailed_ = false;
+
+    // Consumes finished catalogue/install futures; called once per frame from
+    // drawUi, right beside pollSourceAsync.
+    void pollPluginAsync();
     // True if the catalogue entry's file name already exists in the plugins
     // directory, comparing against every record PluginHost produced — loaded
     // AND refused — and against the manifest's own records. A refused DLL
@@ -1718,6 +1839,16 @@ private:
     // function answers "would this be installable if the box were ticked",
     // which is what makes the gate observable in a headless run.
     std::string pluginInstallBlockedReason(int idx, bool acknowledged) const;
+
+    // Deletes one installed plugin (see drawPluginsSection for the
+    // unload-first rationale) and rescans.
+    void removeInstalledPlugin(const std::string& fileName);
+
+    // Deletes one BLOCKED (retired or ABI-mismatched) plugin. Separate from
+    // removeInstalledPlugin because a blocked plugin is not on disk under its
+    // own name: it has been renamed aside with pluginQuarantineSuffix(), so it
+    // needs PluginRepo::removeQuarantined rather than remove().
+    void removeBlockedPlugin(const std::string& fileName);
     std::string pluginCatalogueUrl_;  // committed value (persisted)
     std::vector<cascade::core::PluginCatalogEntry> catalog_;
     std::string catalogError_;   // red: fetch/parse failure, verbatim
@@ -1731,6 +1862,18 @@ private:
     // the deck: two copies of a consent flag is one copy too many.
     std::string installReport_;  // green: last successful install/remove
     std::string installError_;   // red: last failed install/remove, verbatim
+public:
+    // THE ONE PUBLISH (engine stage 2, docs/engine-stage2.md): fills a
+    // PublishedState - FoxReceiverState and the app's extension - and the
+    // /api/status text and lists from this window's members and the
+    // pipeline, and publishes them to receiverSnapshot_, which the plugin host
+    // API, the web server and CAT all read. Also copies the newest spectrum
+    // frame for the browser (the members below). Called once per frame from
+    // drawUi, unconditionally, after every command of the frame has landed
+    // and before anything is drawn: the panel being collapsed must not stop
+    // anyone being served.
+    double publishReceiverState();
+private:
     // Its two halves. Every read is a GUI-thread read, which is the contract
     // activeSource() and its readbacks require. `faultMessage` and `rds` are
     // read once by the caller and handed to both.

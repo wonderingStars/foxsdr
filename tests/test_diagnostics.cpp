@@ -506,7 +506,9 @@ int main() {
     // finishSoapyOpen, which returns early on a failed open and on one the
     // user has moved on from - both of which loaded the module just the same.
     {
-        const fs::path src = fs::path(CASCADE_SOURCE_DIR) / "src" / "gui" / "app_window.cpp";
+        // In the Engine since stage 3a (pollSourceAsync moved verbatim from
+        // app_window.cpp).
+        const fs::path src = fs::path(CASCADE_SOURCE_DIR) / "src" / "engine" / "engine.cpp";
         const std::string text = readFile(src);
         CHECK(!text.empty());
 

@@ -222,4 +222,90 @@ std::string Engine::converterTuneNote(double requestAirHz, bool refused, double 
     return msg;
 }
 
+void Engine::changeConverter(const cc::ConverterSetting& s) {
+    const std::string key = converterRadioKeyNow();
+    std::optional<double> airBefore = carriedAirCentre();
+    // THE STATION A RELABEL COULD NOT KEEP (see below), while the radio has
+    // not moved since: switching a converter off from 17.2 kHz leaves the
+    // dongle on 125.0172 MHz and the counter reading that, and switching it
+    // straight back on must find 17.2 kHz again - not keep 125.0172 MHz on
+    // the air and send the radio to 250.0172 MHz. A tune moves the radio
+    // (and a source install clears this), so any later change starts afresh.
+    const double radioNowHz = pipeline_.rawSource().centerFrequencyHz();
+    if (converterHeldAir_.has_value() && converterHeldAir_->key == key &&
+        converterHeldAir_->radioHz == radioNowHz && airBefore.has_value()) {
+        airBefore = converterHeldAir_->airHz;
+    }
+    converterHeldAir_.reset();
+    // STORED EVEN WHEN OFF, so switching back on finds the LO the user typed
+    // (sanitiseConverter keeps a valid LO whatever the mode).
+    converters_[key] = cc::sanitiseConverter(s);
+    const cc::ConverterSetting eff = converterForKey(key);
+    pipeline_.setConverter(eff);
+    tuneMismatchNote_.clear();
+
+    // THE AIR FREQUENCY STAYS; THE RADIO FOLLOWS. On every change - on, off,
+    // mode, LO, inversion - the station the user is listening to is kept (the
+    // air centre, and with it the VFO's station) and the radio is retuned to
+    // what the new setting makes of it. SYMMETRIC, which the rule before it
+    // was not: that one relabelled unless the result fell below 0 Hz, so an LO
+    // typo (125 -> 1250 MHz) moved the radio to 1250.0172 MHz while correcting
+    // it (1250 -> 125) only relabelled the counter to 1125.0172 MHz, and the
+    // station was gone; the quick LO keys moved the radio one way round and
+    // relabelled the other (second review, probe P2).
+    //
+    // ONLY WHEN THE RADIO CAN GO THERE: above 0 Hz at the radio, and inside
+    // the range the radio publishes. Otherwise it stays where it is, the
+    // counter relabels to what it now hears, and the note says what the radio
+    // reaches (converterTuneNote, or the plain sentence with the converter
+    // off). No value in airBefore is a radio that was never tuned: there is
+    // no station to keep, and the relabel is all there is.
+    //
+    // AN I/Q FILE IS NOT A RADIO. Its frequency is where the recording was
+    // made; a converter set on it is there to relabel a recording made at the
+    // radio's frequency, so a file always relabels. NOR IS A SOUND CARD: it
+    // has no tuner to move (a real-mode card sits at rate/4, an I/Q card
+    // where its external receiver is), so a converter in front of one only
+    // relabels what it hears - asking it to retune would be refused and
+    // said as "out of reach".
+    if (airBefore.has_value() && sourceKind_ != "file" && sourceKind_ != "soundcard") {
+        const double airHz = *airBefore;
+        const double radioHz = cc::radioFromAir(eff, airHz);
+        double rLo = 0.0;
+        double rHi = 0.0;
+        const bool hasRange =
+            device_ != nullptr && device_->frequencyRangeHz(rLo, rHi) && rHi > rLo;
+        const bool reachable = std::isfinite(radioHz) && radioHz > 0.0 &&
+                               (!hasRange || (radioHz >= rLo && radioHz <= rHi));
+        if (reachable) {
+            retuneCoalescer_.clearPending();
+            applyRetuneNow(airHz);
+        } else {
+            converterHeldAir_ = ConverterHeldAir{key, airHz, radioNowHz};
+            tuneMismatchNote_ =
+                cc::converterActive(eff)
+                    ? converterTuneNote(airHz, /*refused=*/true, 0.0, /*isPluginPreset=*/false)
+                    : cascade::gui::tuneRefusedMessage(airHz, hasRange, rLo, rHi,
+                                                       /*isPluginPreset=*/false);
+            // Where it fell, never the frequency (PRIVACY.md).
+            cascade::core::diagLogf("source: converter change: the %s cannot follow the air "
+                                    "frequency (%s); it stays where it was",
+                                    pipeline_.activeSource().name(),
+                                    !(radioHz > 0.0) ? "0 Hz or below at the radio"
+                                    : radioHz < rLo   ? "below its range"
+                                                      : "above its range");
+        }
+    }
+    // A new frequency as far as everything downstream is concerned (a relabel
+    // is one too; applyRetuneNow already told them when the radio moved).
+    pipeline_.resetRds();
+    pluginRunner_.retune(pipeline_.activeSource().centerFrequencyHz());
+    host_.onConverterChanged(false);
+    // Which way it was set, never a frequency (PRIVACY.md: what somebody
+    // tunes to stays out of reports - an LO says which band they listen to).
+    cascade::core::diagLogf("source: converter %s%s for the %s", cc::converterModeKey(eff.mode),
+                            eff.inverted && cc::converterActive(eff) ? " (inverted)" : "",
+                            sourceKind_.c_str());
+}
+
 }  // namespace cascade::engine

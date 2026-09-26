@@ -201,12 +201,12 @@ struct AppWindowTestAccess {
     }
     static bool waitOpen(AppWindow& a) {
         return waitFor([&a] {
-            a.pollSourceAsync();
+            a.engine_.pollSourceAsync();
             return !a.engine_.deviceOpenPending_;
         });
     }
     static bool sourceBusy(AppWindow& a) {
-        a.pollSourceAsync();
+        a.engine_.pollSourceAsync();
         return a.engine_.soapyScanPending_ || a.engine_.deviceOpenPending_;
     }
     static void setRecordDir(AppWindow& a, const std::string& d) { a.engine_.recordDir_ = d; }
@@ -225,7 +225,7 @@ struct AppWindowTestAccess {
     static cascade::net::RadioStatus webStatus(AppWindow& a) { return a.webStatusNow(); }
     static void webRequest(AppWindow& a, const cascade::net::ControlRequest& r) { a.applyControlRequest(r); }
     static cascade::core::ReceiverSnapshot& snapshot(AppWindow& a) { return *a.engine_.receiverSnapshot_; }
-    static void publish(AppWindow& a) { a.publishReceiverState(); }
+    static void publish(AppWindow& a) { a.engine_.publishReceiverState(); }
     static std::size_t loadedDecoders(AppWindow& a) { return a.engine_.loadedDecoderCount(); }
     static std::size_t fedDecoders(AppWindow& a) { return a.engine_.fedDecoderCount(); }
     static std::size_t runnerActive(AppWindow& a) { return a.engine_.pluginRunner_.activeCount(); }
@@ -238,7 +238,7 @@ struct AppWindowTestAccess {
     }
     static double publishNs(AppWindow& a, int n) {
         const auto t0 = std::chrono::steady_clock::now();
-        for (int i = 0; i < n; ++i) { a.publishReceiverState(); }
+        for (int i = 0; i < n; ++i) { a.engine_.publishReceiverState(); }
         return std::chrono::duration<double, std::nano>(std::chrono::steady_clock::now() - t0).count() / n;
     }
 };

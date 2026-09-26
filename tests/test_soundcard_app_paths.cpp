@@ -268,7 +268,7 @@ struct AppWindowTestAccess {
     static bool settle(AppWindow& a) {
         const auto t0 = std::chrono::steady_clock::now();
         while (a.engine_.soundCardOpenPending_ || a.engine_.soundCardScanPending_) {
-            a.pollSoundCard();
+            a.engine_.pollSoundCard();
             if (std::chrono::steady_clock::now() - t0 > std::chrono::seconds(20)) { return false; }
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
@@ -282,7 +282,7 @@ struct AppWindowTestAccess {
     static void startOpen(AppWindow& a, const SoundCardSettings& s) {
         a.engine_.sourceSel_ = AppWindow::kSoundCardRow;
         a.engine_.soundCard_ = s;
-        a.launchSoundCardOpen(false, s);
+        a.engine_.launchSoundCardOpen(false, s);
     }
     static bool open(AppWindow& a, const SoundCardSettings& s) {
         startOpen(a, s);
@@ -325,8 +325,8 @@ struct AppWindowTestAccess {
     }
     static int soapyRowBase(AppWindow& a) { return a.engine_.soapyRowBase(); }
     static std::vector<SourceRowKey> rowKeys(AppWindow& a) { return a.engine_.sourceRowKeys(); }
-    static void scanNative(AppWindow& a) { a.scanNative(); }
-    static void pick(AppWindow& a, int row) { a.selectSource(row); }
+    static void scanNative(AppWindow& a) { a.engine_.scanNative(); }
+    static void pick(AppWindow& a, int row) { a.engine_.selectSource(row); }
 
     // The lamp.
     static bool lamp(AppWindow& a) { return a.radioNotOpenLit(); }
@@ -352,7 +352,7 @@ struct AppWindowTestAccess {
         const auto it = a.engine_.converters_.find(key);
         return it == a.engine_.converters_.end() ? ConverterSetting{} : it->second;
     }
-    static void changeConverter(AppWindow& a, const ConverterSetting& s) { a.changeConverter(s); }
+    static void changeConverter(AppWindow& a, const ConverterSetting& s) { a.engine_.changeConverter(s); }
     static ConverterSetting live(AppWindow& a) { return a.engine_.pipeline_.converter(); }
     static std::string keyNow(AppWindow& a) { return a.engine_.converterRadioKeyNow(); }
     // The converter a patch radio with this key is given.
@@ -366,13 +366,13 @@ struct AppWindowTestAccess {
     static void setBandwidth(AppWindow& a, double hz) { a.engine_.vfoBandwidthHz_ = hz; }
     static std::string tuneNote(AppWindow& a) { return a.engine_.tuneMismatchNote_; }
     // A tune by the counter, a bookmark or a preset (retuneSourceHz).
-    static void retune(AppWindow& a, double centreHz) { a.retuneSourceHz(centreHz, false); }
+    static void retune(AppWindow& a, double centreHz) { a.engine_.retuneSourceHz(centreHz, false); }
     // The I/Q centre box, as drawSoundCardControls applies it to a running
     // I/Q card.
     static void typeIqCentre(AppWindow& a, double hz) {
         a.engine_.soundCard_.iqCentreHz = hz;
         a.engine_.soundCardLive_.iqCentreHz = hz;
-        a.applyRetuneNow(hz, false);
+        a.engine_.applyRetuneNow(hz, false);
     }
 };
 

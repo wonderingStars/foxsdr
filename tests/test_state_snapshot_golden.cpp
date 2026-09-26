@@ -228,13 +228,13 @@ struct AppWindowTestAccess {
     }
     static bool waitOpen(AppWindow& a) {
         return waitFor([&a] {
-            a.pollSourceAsync();
+            a.engine_.pollSourceAsync();
             return !a.engine_.deviceOpenPending_;
         });
     }
     static bool waitSoapy(AppWindow& a) {
         return waitFor([&a] {
-            a.pollSourceAsync();
+            a.engine_.pollSourceAsync();
             return !a.engine_.soapyScanPending_;
         });
     }
@@ -244,7 +244,7 @@ struct AppWindowTestAccess {
     // drive has no frame loop, so it does the same until the centre is there.
     static bool settleRetune(AppWindow& a, double hz) {
         return waitFor([&a, hz] {
-            a.pollPendingRetune();
+            a.engine_.pollPendingRetune();
             return a.engine_.pipeline_.activeSource().centerFrequencyHz() == hz;
         });
     }
@@ -274,13 +274,13 @@ struct AppWindowTestAccess {
     // publishes - publishPluginApiState and publishWebSnapshot - and a copy
     // of webStatus_ under webMutex_ for both providers.) The plugin reads
     // below need no switch: they go through PluginApiCore either way.
-    static void publish(AppWindow& a) { a.publishReceiverState(); }
+    static void publish(AppWindow& a) { a.engine_.publishReceiverState(); }
     static cascade::net::RadioStatus webStatus(AppWindow& a) { return a.webStatusNow(); }
     static cascade::net::RadioStatus catStatus(AppWindow& a) { return a.catStatusNow(); }
     // Engine stage 2's cost, measured on the real window (report only).
     static double publishNs(AppWindow& a, int n) {
         const auto t0 = std::chrono::steady_clock::now();
-        for (int i = 0; i < n; ++i) { a.publishReceiverState(); }
+        for (int i = 0; i < n; ++i) { a.engine_.publishReceiverState(); }
         const auto t1 = std::chrono::steady_clock::now();
         return std::chrono::duration<double, std::nano>(t1 - t0).count() / n;
     }

@@ -2040,8 +2040,9 @@ void testSameCardReopen() {
     // settings are the fallback unless they ARE the new ones (the third
     // review's item 4: tried once - test_soundcard_app_paths proves that).
     {
-        const std::string text = readSource("src/gui/app_window_soundcard.cpp");
-        const std::size_t fn = text.find("void AppWindow::launchSoundCardOpen(");
+        // In the Engine since stage 3a (moved verbatim from app_window_soundcard.cpp).
+        const std::string text = readSource("src/engine/engine_soundcard.cpp");
+        const std::size_t fn = text.find("void Engine::launchSoundCardOpen(");
         const std::size_t decide =
             fn == std::string::npos ? std::string::npos : text.find("soundCardReopenReleasesFirst(", fn);
         const std::size_t releaseAt =

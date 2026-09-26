@@ -422,6 +422,9 @@ const KnownWait kKnownWaits[] = {
      "watchdog_.stop(), outside the budgeted stretch"},
     {"src/gui/app_window.cpp", "kNoWait", 0,
      "zero by construction - a ready-poll on a std::future, not a wait"},
+    {"src/engine/engine.cpp", "kNoWait", 0,
+     "zero by construction - the same ready-polls (the device scan/open and the store's "
+     "futures), moved verbatim from app_window.cpp in engine stage 3a"},
     // THE AUDIO DEVICE OPEN (0.96.5), and why both of its waits are zero here.
     // The 0.96.4 field hang "ntdll.dll @ InitializeWaveHandles" was a
     // synchronous waveOutOpen on the FRAME LOOP - the Sinks combo and the audio

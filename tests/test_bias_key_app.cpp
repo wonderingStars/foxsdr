@@ -253,17 +253,17 @@ struct AppWindowTestAccess {
     static bool waitOpen(AppWindow& a) {
         const auto t0 = std::chrono::steady_clock::now();
         while (a.engine_.deviceOpenPending_) {
-            a.pollSourceAsync();
+            a.engine_.pollSourceAsync();
             if (std::chrono::steady_clock::now() - t0 > std::chrono::seconds(20)) { return false; }
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
         return true;
     }
     static bool selectNative(AppWindow& a, const std::string& args) {
-        a.scanNative();
+        a.engine_.scanNative();
         for (std::size_t i = 0; i < a.engine_.nativeDevices_.size(); ++i) {
             if (a.engine_.nativeDevices_[i].args == args) {
-                a.selectSource(AppWindow::kNativeRowBase + static_cast<int>(i));
+                a.engine_.selectSource(AppWindow::kNativeRowBase + static_cast<int>(i));
                 return waitOpen(a);
             }
         }
@@ -273,13 +273,13 @@ struct AppWindowTestAccess {
         // The native rows first, so the SoapySDR row's number is the one it
         // keeps: a row picked before the scan is renumbered by it, and the
         // next native pick would land on the "same" row and do nothing.
-        a.scanNative();
+        a.engine_.scanNative();
         a.engine_.soapyDevices_.clear();
         a.engine_.soapyDevices_.push_back({label, args});
-        a.selectSource(a.engine_.soapyRowBase());
+        a.engine_.selectSource(a.engine_.soapyRowBase());
         return waitOpen(a);
     }
-    static void selectGenerator(AppWindow& a) { a.selectSource(0); }
+    static void selectGenerator(AppWindow& a) { a.engine_.selectSource(0); }
 
     // THE KEY, as drawToolbar draws it: shown and lit from biasKeyPanel().
     static bool keyShown(AppWindow& a) { return a.biasKeyPanel().present; }

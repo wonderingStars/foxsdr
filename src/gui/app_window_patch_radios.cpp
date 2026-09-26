@@ -173,7 +173,7 @@ void AppWindow::patchReconcile() {
     // a scan asked for only on the first frame then never happened. So the
     // wish is kept and the scan runs on the first frame the plan allows.
     if (!engine_.patchWasOpen_) {
-        scanNative();
+        engine_.scanNative();
         engine_.patchScanWanted_ = true;
     }
 
@@ -208,7 +208,7 @@ void AppWindow::patchReconcile() {
             "patch: the receiver's radio (%s) is handed to the patch page; the receiver "
             "runs on the signal generator until the patch is stopped",
             keep.label.c_str());
-        selectSource(0);
+        engine_.selectSource(0);
         // ...AND THE CONFIG STILL NAMES IT: currentConfig() saves the radio
         // held here rather than the generator standing in for it, so a
         // session closed with the page open starts on the radio next time.
@@ -545,7 +545,7 @@ void AppWindow::patchStopAll(bool restoreMain) {
         }
         cascade::core::diagLogf("patch: handing %s back to the receiver", keep.label.c_str());
         engine_.sourceSel_ = kSoundCardRow;
-        launchSoundCardOpen(false, keep.card);
+        engine_.launchSoundCardOpen(false, keep.card);
         return;
     }
     // THE RADIO STAYS SAVED UNTIL IT IS BACK (0.99.36). patchMainKeep_ was the
@@ -595,7 +595,7 @@ void AppWindow::patchStopAll(bool restoreMain) {
     // used to be parked on the generator standing in and read back from
     // there, which lost a centre below 0 Hz on the air.)
     cascade::core::diagLogf("patch: handing %s back to the receiver", keep.label.c_str());
-    selectSource(row, keep.centreHz);
+    engine_.selectSource(row, keep.centreHz);
 }
 
 void AppWindow::patchApplyRunning() {
@@ -611,7 +611,7 @@ void AppWindow::patchApplyRunning() {
     }
     // The receiver's decoders stand down while the patch runs and come back
     // when it stops.
-    refreshPluginRunner();
+    engine_.refreshPluginRunner();
 }
 
 void AppWindow::drawPatchTransport() {

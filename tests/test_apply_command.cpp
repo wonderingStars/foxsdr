@@ -368,20 +368,20 @@ struct AppWindowTestAccess {
     static bool soapyPending(AppWindow& a) { return a.engine_.soapyScanPending_; }
     static bool waitSoapy(AppWindow& a) {
         return waitFor([&a] {
-            a.pollSourceAsync();
+            a.engine_.pollSourceAsync();
             return !a.engine_.soapyScanPending_;
         });
     }
     static bool networkUsrps(AppWindow& a) { return a.engine_.lookForNetworkUsrps_; }
     static bool waitOpen(AppWindow& a) {
         return waitFor([&a] {
-            a.pollSourceAsync();
+            a.engine_.pollSourceAsync();
             return !a.engine_.deviceOpenPending_;
         });
     }
     static bool waitCard(AppWindow& a) {
         return waitFor([&a] {
-            a.pollSoundCard();
+            a.engine_.pollSoundCard();
             return !a.engine_.soundCardOpenPending_ && !a.engine_.soundCardScanPending_;
         });
     }
@@ -441,7 +441,7 @@ struct AppWindowTestAccess {
     static const std::string& importNote(AppWindow& a) { return a.engine_.bookmarkImportNote_; }
     // The web remote's side: the snapshot a browser reads (and the row map it
     // leaves), and a request applied as applyWebControls applies it.
-    static void publishWeb(AppWindow& a) { a.publishReceiverState(); }
+    static void publishWeb(AppWindow& a) { a.engine_.publishReceiverState(); }
     // The row a browser sees a bookmark on: read off the PUBLISHED snapshot
     // (what /api/status serves - the web provider's own call), never off the
     // row map under test.
@@ -495,7 +495,7 @@ struct AppWindowTestAccess {
     static bool storeBusy(AppWindow& a) { return a.engine_.catalogPending_ || a.engine_.installPending_; }
     static bool waitStore(AppWindow& a) {
         return waitFor([&a] {
-            a.pollPluginAsync();
+            a.engine_.pollPluginAsync();
             return !a.engine_.catalogPending_ && !a.engine_.installPending_;
         });
     }
