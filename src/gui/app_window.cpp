@@ -4015,7 +4015,7 @@ void AppWindow::drawStatusColumn() {
     // keeps going silent" reports — so the second line finally prints the
     // real number the artboard always wanted, instead of leaving it invented
     // or absent.
-    cascade::sink::AudioOut& audioSink = pipeline_.audio();
+    const cascade::sink::AudioOut& audioSink = pipeline_.audio();
     // HELD, NOT LIVE (0.99.4): every figure on this card is read into one
     // snapshot that is refreshed twice a second (gui/readout_hold.hpp) - the
     // ring level moves every callback and a starving sink's count climbs by
@@ -6247,7 +6247,7 @@ void AppWindow::drawMenuColumn() {
     // for. Two clipped lines rather than one wrapped one: a long device name
     // must not push the numbers out of the reserved footer space.
     ImGui::Separator();
-    cascade::source::IqSource& src = pipeline_.activeSource();
+    const cascade::source::IqSource& src = pipeline_.activeSource();
     // Line 1: the active source, and — when a band plan is loaded — the band
     // the TUNED frequency (source centre + VFO offset, i.e. what the VFO
     // marker sits on) falls in. BandPlan::at returns the narrowest match, so
@@ -9520,7 +9520,7 @@ void AppWindow::drawCenterPanels() {
     // and the DSP input rate every frame; setSpan preserves the user's zoom
     // window whenever it still fits the new baseband, so a small retune or a
     // rate change does not silently throw the view away.
-    cascade::source::IqSource& src = pipeline_.activeSource();
+    const cascade::source::IqSource& src = pipeline_.activeSource();
     scale_.setSpan(src.centerFrequencyHz(), pipeline_.inputRateHz());
 
     const ImVec2 avail = ImGui::GetContentRegionAvail();
