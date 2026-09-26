@@ -43,6 +43,7 @@
 #include "core/host_image.hpp"
 #include "core/plugin_abi.h"
 #include "core/plugin_api.hpp"
+#include "receiver_facts_helper.hpp"
 #include "core/plugin_host.hpp"
 #include "core/plugin_runner.hpp"
 #include "core/plugin_ui.hpp"
@@ -155,12 +156,12 @@ int main() {
                 .count());
     };
     ui.setServices(std::move(svc));
-    cascade::core::ReceiverFacts f;
+    testfacts::ReceiverFacts f;
     f.running = true;
     f.centreHz = 1090.0e6;
     f.sampleRateHz = 2.4e6;
     f.outputRateHz = 48000.0;
-    ui.api().publish(f);
+    testfacts::publish(ui.api(), f);
     ui.rebuild(host.plugins());
     // Attached = a live client in the level-1 core: one per host-client plugin.
     CHECK(ui.api().clientCount() == hostClients);

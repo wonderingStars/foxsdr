@@ -167,7 +167,9 @@ PluginSettingsMap sanitisePluginSettings(const PluginSettingsMap& in) {
 // PluginApiCore - host side
 // ---------------------------------------------------------------------------
 
-PluginApiCore::PluginApiCore() : clock_(std::make_shared<StreamClock>()) {}
+PluginApiCore::PluginApiCore(std::shared_ptr<ReceiverSnapshot> snapshot)
+    : snapshot_(snapshot != nullptr ? std::move(snapshot) : std::make_shared<ReceiverSnapshot>()),
+      clock_(std::make_shared<StreamClock>()) {}
 
 PluginApiClient& PluginApiCore::client(const std::string& key, const std::string& name) {
     std::lock_guard<std::mutex> lk(mutex_);
@@ -284,45 +286,6 @@ std::vector<std::string> PluginApiCore::settingsRequesters() const {
         if (c->askedSettings.load(std::memory_order_acquire)) { out.push_back(c->key); }
     }
     return out;
-}
-
-void PluginApiCore::publish(const ReceiverFacts& f) {
-    Published& w = writer_;
-    const ReceiverFacts& o = w.facts;
-    const bool first = !havePublished_;
-    const bool tune = first || f.centreHz != o.centreHz || f.vfoOffsetHz != o.vfoOffsetHz;
-    const bool mode = first || f.demodMode != o.demodMode || f.bandwidthHz != o.bandwidthHz ||
-                      f.squelchDb != o.squelchDb;
-    bool gainsMoved = f.gainCount != o.gainCount;
-    for (std::uint32_t i = 0; !gainsMoved && i < f.gainCount && i < kMaxPublishedGains; ++i) {
-        const PublishedGain& a = f.gains[i];
-        const PublishedGain& b = o.gains[i];
-        gainsMoved = std::strncmp(a.name, b.name, CASCADE_GAIN_NAME_CHARS) != 0 ||
-                     a.unit != b.unit || a.minDb != b.minDb || a.maxDb != b.maxDb ||
-                     a.stepDb != b.stepDb || a.currentDb != b.currentDb;
-    }
-    bool ratesMoved = f.rateCount != o.rateCount;
-    for (std::uint32_t i = 0; !ratesMoved && i < f.rateCount && i < kMaxPublishedRates; ++i) {
-        ratesMoved = f.rates[i] != o.rates[i];
-    }
-    gainsMoved = gainsMoved || ratesMoved;
-    const bool device = first || f.running != o.running || f.deviceOpen != o.deviceOpen ||
-                        f.deviceAgc != o.deviceAgc || f.agcSupported != o.agcSupported ||
-                        f.sampleRateHz != o.sampleRateHz ||
-                        std::strncmp(f.deviceName, o.deviceName, CASCADE_DEVICE_NAME_CHARS) != 0 ||
-                        gainsMoved;
-    const bool audio = first || f.volume != o.volume || f.muted != o.muted;
-    // The stereo flag is state too, though it belongs to no group of its
-    // own: it moves the overall counter only.
-    const bool other = first || f.stereo != o.stereo;
-    if (tune) { ++w.tuneSeq; }
-    if (mode) { ++w.modeSeq; }
-    if (device) { ++w.deviceSeq; }
-    if (audio) { ++w.audioSeq; }
-    if (tune || mode || device || audio || other) { ++w.seq; }
-    w.facts = f;
-    havePublished_ = true;
-    snapshot_.store(w);
 }
 
 void PluginApiCore::takeControls(std::vector<PluginControl>& out) {
@@ -469,25 +432,27 @@ std::int32_t PluginApiCore::getState(const PluginApiClient& c,
     if (out == nullptr || out->structSize < sizeof(CascadeReceiverState)) {
         return CASCADE_API_BAD_ARGUMENT;
     }
-    Published p;
-    if (!snapshot_.load(p)) { return CASCADE_API_BUSY; }
-    const ReceiverFacts& f = p.facts;
+    PublishedState p;
+    if (!snapshot_->read(p)) { return CASCADE_API_BUSY; }
+    const FoxReceiverState& f = p.rx;
     CascadeReceiverState s{};
     std::uint32_t flags = 0;
-    if (f.running) { flags |= CASCADE_STATE_RUNNING; }
-    if (f.deviceOpen) { flags |= CASCADE_STATE_DEVICE_OPEN; }
-    if (f.muted) { flags |= CASCADE_STATE_MUTED; }
-    if (f.deviceAgc) { flags |= CASCADE_STATE_DEVICE_AGC; }
-    if (f.agcSupported) { flags |= CASCADE_STATE_AGC_SUPPORTED; }
+    if ((f.flags & FOXAPI_RX_RUNNING) != 0u) { flags |= CASCADE_STATE_RUNNING; }
+    if ((f.flags & FOXAPI_RX_DEVICE_OPEN) != 0u) { flags |= CASCADE_STATE_DEVICE_OPEN; }
+    if ((f.flags & FOXAPI_RX_MUTED) != 0u) { flags |= CASCADE_STATE_MUTED; }
+    if ((f.flags & FOXAPI_RX_DEVICE_AGC) != 0u) { flags |= CASCADE_STATE_DEVICE_AGC; }
+    if ((f.flags & FOXAPI_RX_AGC_SUPPORTED) != 0u) { flags |= CASCADE_STATE_AGC_SUPPORTED; }
+    // The level-1 rule, kept: open when the level is above the threshold, as
+    // the plugin sees both (FOXAPI_RX_SQUELCH_OPEN is the DSP's own lamp).
     if (f.signalDb > f.squelchDb) { flags |= CASCADE_STATE_SQUELCH_OPEN; }
-    if (f.stereo) { flags |= CASCADE_STATE_STEREO; }
+    if ((f.flags & FOXAPI_RX_STEREO_ACTIVE) != 0u) { flags |= CASCADE_STATE_STEREO; }
     flags |= c.grants.load(std::memory_order_acquire);
     s.flags = flags;
-    s.seq = p.seq;
-    s.tuneSeq = p.tuneSeq;
-    s.modeSeq = p.modeSeq;
-    s.deviceSeq = p.deviceSeq;
-    s.audioSeq = p.audioSeq;
+    s.seq = p.app.abiSeq;
+    s.tuneSeq = p.app.abiTuneSeq;
+    s.modeSeq = p.app.abiModeSeq;
+    s.deviceSeq = p.app.abiDeviceSeq;
+    s.audioSeq = p.app.abiAudioSeq;
     s.centreHz = f.centreHz;
     s.vfoOffsetHz = f.vfoOffsetHz;
     s.tunedHz = f.centreHz + f.vfoOffsetHz;
@@ -499,7 +464,7 @@ std::int32_t PluginApiCore::getState(const PluginApiClient& c,
     // The host's own S-meter mapping (drawRadioSection): [-120, 0] dB.
     s.sMeter = std::clamp((f.signalDb + 120.0) / 120.0, 0.0, 1.0);
     s.demodMode = f.demodMode;
-    s.gainCount = std::min<std::uint32_t>(f.gainCount, kMaxPublishedGains);
+    s.gainCount = std::min<std::uint32_t>(p.app.abiGainCount, kMaxPublishedGains);
     std::memcpy(s.deviceName, f.deviceName, sizeof(s.deviceName));
     s.deviceName[CASCADE_DEVICE_NAME_CHARS - 1] = '\0';
     // Only as many bytes as BOTH sides know about - see the header's note on
@@ -518,12 +483,12 @@ std::int32_t PluginApiCore::getGain(const PluginApiClient& c, std::uint32_t inde
     if (out == nullptr || out->structSize < sizeof(CascadeGainInfo)) {
         return CASCADE_API_BAD_ARGUMENT;
     }
-    Published p;
-    if (!snapshot_.load(p)) { return CASCADE_API_BUSY; }
-    if (index >= p.facts.gainCount || index >= kMaxPublishedGains) {
+    PublishedState p;
+    if (!snapshot_->read(p)) { return CASCADE_API_BUSY; }
+    if (index >= p.app.abiGainCount || index >= kMaxPublishedGains) {
         return CASCADE_API_NOT_FOUND;
     }
-    const PublishedGain& src = p.facts.gains[index];
+    const PublishedGain& src = p.app.gains[index];
     CascadeGainInfo gi{};
     gi.unit = src.unit;
     std::memcpy(gi.name, src.name, sizeof(gi.name));
@@ -543,12 +508,12 @@ std::int32_t PluginApiCore::getSampleRates(const PluginApiClient& c, double* out
     const std::int32_t g = gate(c);
     if (g != CASCADE_API_OK) { return g; }
     if (out == nullptr && cap != 0u) { return CASCADE_API_BAD_ARGUMENT; }
-    Published p;
-    if (!snapshot_.load(p)) { return CASCADE_API_BUSY; }
-    if (!p.facts.deviceOpen) { return 0; }
+    PublishedState p;
+    if (!snapshot_->read(p)) { return CASCADE_API_BUSY; }
+    if ((p.rx.flags & FOXAPI_RX_DEVICE_OPEN) == 0u) { return 0; }
     const std::uint32_t n =
-        std::min<std::uint32_t>(p.facts.rateCount, static_cast<std::uint32_t>(kMaxPublishedRates));
-    for (std::uint32_t i = 0; i < n && i < cap; ++i) { out[i] = p.facts.rates[i]; }
+        std::min<std::uint32_t>(p.app.rateCount, static_cast<std::uint32_t>(kMaxPublishedRates));
+    for (std::uint32_t i = 0; i < n && i < cap; ++i) { out[i] = p.app.rates[i]; }
     return static_cast<std::int32_t>(n);
 }
 
@@ -561,17 +526,17 @@ std::int32_t PluginApiCore::getStreamInfo(const PluginApiClient& c,
     }
     StreamFacts sf;
     if (!clock_->read(sf)) { return CASCADE_API_BUSY; }
-    Published p;
-    if (!snapshot_.load(p)) { return CASCADE_API_BUSY; }
+    PublishedState p;
+    if (!snapshot_->read(p)) { return CASCADE_API_BUSY; }
     CascadeStreamInfo si{};
     si.epoch = sf.epoch;
     si.epochStartUnixMs = sf.epochStartUnixMs;
     si.iqRateHz = sf.iqRateHz;
     si.audioRateHz = sf.audioRateHz;
-    si.outputRateHz = p.facts.outputRateHz;
+    si.outputRateHz = p.app.outputRateHz;
     si.iqFrames = sf.iqFrames;
     si.audioFrames = sf.audioFrames;
-    si.outputFrames = p.facts.outputFrames;
+    si.outputFrames = p.app.outputFrames;
     const std::size_t n = std::min<std::size_t>(out->structSize, sizeof(CascadeStreamInfo));
     si.structSize = static_cast<std::uint32_t>(n);
     std::memcpy(out, &si, n);
@@ -654,18 +619,18 @@ std::int32_t PluginApiCore::requestControl(PluginApiClient& c, const PluginContr
 
     // What needs a radio, against the snapshot the plugin could itself read.
     if (req.kind == K::SampleRate || req.kind == K::Gain || req.kind == K::DeviceAgc) {
-        Published p;
-        if (!snapshot_.load(p)) { return CASCADE_API_BUSY; }
-        if (!p.facts.deviceOpen) { return CASCADE_API_NO_DEVICE; }
-        if (req.kind == K::DeviceAgc && !p.facts.agcSupported) {
+        PublishedState p;
+        if (!snapshot_->read(p)) { return CASCADE_API_BUSY; }
+        if ((p.rx.flags & FOXAPI_RX_DEVICE_OPEN) == 0u) { return CASCADE_API_NO_DEVICE; }
+        if (req.kind == K::DeviceAgc && (p.rx.flags & FOXAPI_RX_AGC_SUPPORTED) == 0u) {
             return CASCADE_API_UNSUPPORTED;
         }
         if (req.kind == K::Gain) {
             const PublishedGain* found = nullptr;
-            for (std::uint32_t i = 0; i < p.facts.gainCount && i < kMaxPublishedGains; ++i) {
-                if (std::strncmp(p.facts.gains[i].name, req.gainName,
+            for (std::uint32_t i = 0; i < p.app.abiGainCount && i < kMaxPublishedGains; ++i) {
+                if (std::strncmp(p.app.gains[i].name, req.gainName,
                                  CASCADE_GAIN_NAME_CHARS) == 0) {
-                    found = &p.facts.gains[i];
+                    found = &p.app.gains[i];
                     break;
                 }
             }

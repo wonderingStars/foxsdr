@@ -23,6 +23,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
 
@@ -86,6 +87,7 @@
 #include "gui/plugin_store_view.hpp"
 #include "gui/running_view.hpp"
 #include "net/control_ops.hpp"
+#include "net/status_compose.hpp"
 #include "gui/plugins_view.hpp"
 #include "gui/spectrum_view.hpp"
 #include "gui/track_detail_view.hpp"
@@ -284,6 +286,19 @@ cascade::gui::AppWindow* g_dropTarget = nullptr;
 
 constexpr const char* kModeNames[8] = {"NFM", "WFM", "AM", "DSB",
                                        "USB", "CW",  "LSB", "RAW"};
+// The web and CAT readers name the mode from the published FOXAPI_DEMOD_*
+// (net::kDemodNames, indexed modeIndex_ + 1 - gui::abiDemodForModeIndex):
+// the two tables must be one list, word for word.
+static_assert(
+    [] {
+        for (int i = 0; i < 8; ++i) {
+            if (std::string_view(kModeNames[i]) != std::string_view(cascade::net::kDemodNames[i + 1])) {
+                return false;
+            }
+        }
+        return true;
+    }(),
+    "kModeNames and net::kDemodNames must name the modes identically");
 constexpr cascade::dsp::DemodMode kModeMap[8] = {
     cascade::dsp::DemodMode::NFM, cascade::dsp::DemodMode::WFM,
     cascade::dsp::DemodMode::AM,  cascade::dsp::DemodMode::DSB,
@@ -972,19 +987,14 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
     // open, or Refresh — scanSoapy()), so sessions that never touch Soapy —
     // including every bounded --frames CI run — never execute that code.
     // Web server providers. Installed once, before any start(), because the
-    // server refuses to change them while running. Both do nothing but copy
+    // server refuses to change them while running. Both do nothing but read
     // the snapshot the GUI thread publishes each frame — see the note in
     // app_window.hpp for why they must not touch the pipeline directly.
-    webServer_.setStatusProvider([this]() {
-        std::lock_guard<std::mutex> lock(webMutex_);
-        return webStatus_;
-    });
-    // The CAT server reads the SAME published snapshot, so a frequency read
-    // over CAT and one read in the browser can never disagree.
-    catServer_.setStatusProvider([this]() {
-        std::lock_guard<std::mutex> lock(webMutex_);
-        return webStatus_;
-    });
+    webServer_.setStatusProvider([this]() { return webStatusNow(); });
+    // The CAT server reads the SAME published snapshot - and the plugin host
+    // API reads it too - so a frequency read over CAT, one read in the
+    // browser and one a plugin reads can never disagree.
+    catServer_.setStatusProvider([this]() { return catStatusNow(); });
     webServer_.setSpectrumProvider([this](cascade::net::SpectrumSnapshot& inOut) {
         std::lock_guard<std::mutex> lock(webMutex_);
         // Same contract as Pipeline::getLatestFrame: nothing newer than the
@@ -1080,14 +1090,14 @@ AppWindow::~AppWindow() {
     // FIRST, before anything else is torn down: stop serving.
     //
     // The server's provider callbacks capture `this` and read webMutex_,
-    // webStatus_ and webBins_, all of which are declared AFTER webServer_ and
-    // are therefore destroyed BEFORE it. Relying on ~WebServer to stop the
-    // listener would mean a request in flight could touch a destroyed mutex
-    // during teardown. stop() joins the listener thread, so once it returns no
-    // handler is running or can start.
+    // webBins_ and receiverSnapshot_; the first two are declared AFTER
+    // webServer_ and are therefore destroyed BEFORE it. Relying on ~WebServer
+    // to stop the listener would mean a request in flight could touch a
+    // destroyed mutex during teardown. stop() joins the listener thread, so
+    // once it returns no handler is running or can start.
     webServer_.stop();
     // Same reasoning for the CAT server: its provider captures `this` and
-    // locks webMutex_, which is declared after it and destroyed first.
+    // reads receiverSnapshot_ through it.
     catServer_.stop();
 
     // A catalogue fetch or a plugin download may still be in flight. The
@@ -3146,9 +3156,10 @@ void AppWindow::drawUi() {
     // than one frame late.
     applyWebControls();
     // And what PLUGINS asked for (host API level 1), by the same code, in the
-    // same place and for the same reason - then the snapshot they read is
-    // published, so it already carries this frame's changes. Before
-    // updateAudioMute below, which applies a plugin's set_muted.
+    // same place and for the same reason. The snapshot they read is published
+    // below (publishReceiverState), so it already carries this frame's
+    // changes. Before updateAudioMute below, which applies a plugin's
+    // set_muted.
     applyPluginApi();
     // THE SCANNER, AFTER EVERY COMMAND OF THIS FRAME HAS LANDED (moved here
     // from the end of the frame in stage 1). Its user-wins test must see any
@@ -3168,7 +3179,11 @@ void AppWindow::drawUi() {
         (void)applyCommand(q.c, q.longText);
     }
     flushBookmarkSave(false);
-    publishWebSnapshot();
+    // THE ONE RECEIVER SNAPSHOT (engine stage 2): every command of this frame
+    // has landed (the drains, web/CAT, plugins, the scanner, a drop), nothing
+    // has been drawn yet. The plugin host API, the web server and CAT all
+    // answer from what this publishes.
+    publishReceiverState();
     publishWebAudio();
     publishWebImages();
     pumpWebTiles();
@@ -3336,7 +3351,7 @@ void AppWindow::drawUi() {
     if (scopeMode_) {
         // THE SPECTRUM IS STILL CONSUMED IN SCOPE MODE, even though nothing
         // here draws it. getLatestFrame is what advances lastFrame_, and
-        // publishWebSnapshot copies its bins for the browser only when the
+        // publishReceiverState copies its bins for the browser only when the
         // sequence moves - so skipping it left the web UI serving the last
         // spectrum captured before the mode was entered, underneath a status
         // line that kept reporting the CURRENT frequency and mode. A picture
@@ -17333,35 +17348,99 @@ void AppWindow::setPluginSettingsAllowed(const std::string& pluginKey, bool allo
     }
 }
 
-void AppWindow::publishPluginApiState() {
+void AppWindow::fillPublishedState(cascade::core::PublishedState& ps, const std::string& faultMessage,
+                                   const cascade::core::RdsSnapshot& rds) {
     // Everything read here is read on the GUI thread, which is the contract
-    // activeSource() and its readbacks require - the same reads, from the
-    // same members, that publishWebSnapshot makes for the browser, so a
-    // plugin and a browser can never be told two different things.
-    cascade::core::ReceiverFacts f;
+    // activeSource() and its readbacks require. Every figure a reader of the
+    // receiver is told - a plugin, a browser, a logging program over CAT -
+    // comes from these reads, once, so none of them can be told two
+    // different things. Where a figure was read for the plugin API and for
+    // the browser before stage 2, the expression is the one both used.
+    // docs/engine-stage2.md section 2 maps every field to its source.
+    FoxReceiverState& r = ps.rx;
+    cascade::core::AppStateExt& e = ps.app;
     cascade::source::IqSource& src = pipeline_.activeSource();
-    f.running = pipeline_.running();
-    f.deviceOpen = device_ != nullptr;
-    f.muted = userMuted_;
-    f.deviceAgc = deviceAgc_;
-    f.agcSupported = deviceAgcSupported_;
-    f.stereo = pipeline_.stereoActive();
-    f.centreHz = src.centerFrequencyHz();
-    f.vfoOffsetHz = pipeline_.vfoOffsetHz();
-    f.sampleRateHz = src.sampleRateHz();
-    f.bandwidthHz = vfoBandwidthHz_;
-    f.squelchDb = static_cast<double>(squelchDb_);
-    f.volume = static_cast<double>(volume_);
-    f.signalDb = static_cast<double>(pipeline_.signalPowerDb());
-    f.demodMode = cascade::gui::abiDemodForModeIndex(modeIndex_);
-    cascade::core::formatUtf8(f.deviceName, sizeof(f.deviceName), "%s",
+    const cascade::sink::AudioOut& sink = pipeline_.audio();
+    const bool running = pipeline_.running();
+
+    std::uint32_t fl = 0;
+    const auto set = [&fl](bool on, std::uint32_t bit) {
+        if (on) { fl |= bit; }
+    };
+    set(running, FOXAPI_RX_RUNNING);
+    set(device_ != nullptr, FOXAPI_RX_DEVICE_OPEN);
+    set(pipeline_.faulted(), FOXAPI_RX_FAULTED);
+    set(userMuted_, FOXAPI_RX_MUTED);
+    set(stereoEnabled_, FOXAPI_RX_STEREO_ENABLED);
+    set(pipeline_.stereoActive(), FOXAPI_RX_STEREO_ACTIVE);
+    set(nrEnabled_, FOXAPI_RX_NR);
+    set(notchEnabled_, FOXAPI_RX_NOTCH);
+    set(autoNotch_, FOXAPI_RX_AUTO_NOTCH);
+    set(deviceAgc_, FOXAPI_RX_DEVICE_AGC);
+    set(deviceAgcSupported_, FOXAPI_RX_AGC_SUPPORTED);
+    set(iqRecorder_.recording(), FOXAPI_RX_RECORDING_IQ);
+    set(audioRecorder_.recording(), FOXAPI_RX_RECORDING_AUDIO);
+    set(scanner_.active(), FOXAPI_RX_SCANNER_ACTIVE);
+    // The DEC lamp's own predicate (drawToolbar's MASTER cluster).
+    set(running && pluginRunner_.activeCount() > 0, FOXAPI_RX_DECODER_ACTIVE);
+    set(transmitter_.haveSink(), FOXAPI_RX_TX_AVAILABLE);
+    set(transmitter_.transmitting(), FOXAPI_RX_TX_KEYED);
+    set(transmitter_.latched(), FOXAPI_RX_TX_LATCHED);
+    // The app's consent to a remote key: a transmitter open AND the Transmit
+    // page on screen (what /api/status has always called transmitAvailable).
+    set(transmitOpen_ && transmitter_.haveSink(), FOXAPI_RX_TX_REMOTE_ARMED);
+    set(sink.running(), FOXAPI_RX_SINK_OPEN);
+    set(webServer_.running(), FOXAPI_RX_WEB_LISTENING);
+
+    r.centreHz = src.centerFrequencyHz();
+    r.vfoOffsetHz = pipeline_.vfoOffsetHz();
+    r.tunedHz = r.centreHz + r.vfoOffsetHz;
+    r.sampleRateHz = src.sampleRateHz();
+    r.channelRateHz = pipeline_.channelRateHz();
+    r.bandwidthHz = vfoBandwidthHz_;
+    r.squelchDb = static_cast<double>(squelchDb_);
+    r.volume = static_cast<double>(volume_);
+    r.signalDb = static_cast<double>(pipeline_.signalPowerDb());
+    // The host's own S-meter mapping (drawRadioSection): [-120, 0] dB.
+    r.sMeter = std::clamp((r.signalDb + 120.0) / 120.0, 0.0, 1.0);
+    // Not filled in stage 2: the VOLUME meter reads an audio tap the deck
+    // drains itself (docs/engine-stage2.md, OPEN). -200 is "no level".
+    r.audioLevelDb = -200.0;
+    // The level-1 rule the plugin API has always used (the DSP's gate, with
+    // its hysteresis, is not published by the pipeline).
+    set(r.signalDb > r.squelchDb, FOXAPI_RX_SQUELCH_OPEN);
+    r.flags = fl;
+    r.dbMin = static_cast<double>(dbMin_);
+    r.dbMax = static_cast<double>(dbMax_);
+    r.nrStrength = static_cast<double>(nrStrength_);
+    r.notchHz = static_cast<double>(notchFreqHz_);
+    r.notchQ = static_cast<double>(notchQ_);
+    r.pilotLevel = static_cast<double>(pipeline_.pilotLevel());
+    r.demodMode = cascade::gui::abiDemodForModeIndex(modeIndex_);
+    r.deemphasis = static_cast<std::uint32_t>(deemphIndex_);
+    r.gainCount = device_ != nullptr ? static_cast<std::uint32_t>(deviceGainRanges_.size()) : 0u;
+    r.decodersRunning = running ? static_cast<std::uint32_t>(fedDecoderCount()) : 0u;
+    r.decodersFitted = static_cast<std::uint32_t>(loadedDecoderCount());
+    r.txMode = static_cast<std::uint32_t>(transmitter_.mode());
+    r.audioUnderruns = sink.underruns();
+    r.txFrequencyHz = transmitter_.frequencyHz();
+    r.txPowerDb = transmitter_.powerDb();
+    r.txHoldRemainingMs = transmitter_.remoteHoldRemainingMs();
+    r.txLatchRemainingMs = 0;  // OPEN: the Transmitter publishes no latch timer
+    cascade::core::formatUtf8(r.deviceName, sizeof(r.deviceName), "%s",
                               src.name() != nullptr ? src.name() : "");
+    cascade::core::formatUtf8(r.sinkName, sizeof(r.sinkName), "%s",
+                              sink.openedDeviceName().c_str());
+    cascade::core::formatUtf8(r.faultMessage, sizeof(r.faultMessage), "%s", faultMessage.c_str());
+    // r.txUnkeyReason: OPEN - the Transmitter keeps no sentence for it.
+
+    // --- the host API level 1's tables (plugin get_gain / get_sample_rates) ---
     if (device_ != nullptr) {
         const std::size_t n =
             std::min<std::size_t>(deviceGainRanges_.size(), cascade::core::kMaxPublishedGains);
         for (std::size_t i = 0; i < n; ++i) {
             const cascade::source::GainInfo& g = deviceGainRanges_[i];
-            cascade::core::PublishedGain& pg = f.gains[i];
+            cascade::core::PublishedGain& pg = e.gains[i];
             cascade::core::formatUtf8(pg.name, sizeof(pg.name), "%s", g.name.c_str());
             pg.unit = g.unit == cascade::source::GainUnit::Decibels ? CASCADE_GAIN_UNIT_DB
                                                                     : CASCADE_GAIN_UNIT_STEPS;
@@ -17371,16 +17450,77 @@ void AppWindow::publishPluginApiState() {
             // THE READBACK MIRROR, as the sliders and the browser show it.
             pg.currentDb = i < deviceGainsDb_.size() ? static_cast<double>(deviceGainsDb_[i]) : 0.0;
         }
-        f.gainCount = static_cast<std::uint32_t>(n);
+        e.abiGainCount = static_cast<std::uint32_t>(n);
         // The rates the Rate combo offers, from the same list it is built on.
-        const std::size_t r =
+        const std::size_t rn =
             std::min<std::size_t>(deviceRatesHz_.size(), cascade::core::kMaxPublishedRates);
-        for (std::size_t i = 0; i < r; ++i) { f.rates[i] = deviceRatesHz_[i]; }
-        f.rateCount = static_cast<std::uint32_t>(r);
+        for (std::size_t i = 0; i < rn; ++i) { e.rates[i] = deviceRatesHz_[i]; }
+        e.rateCount = static_cast<std::uint32_t>(rn);
     }
-    f.outputRateHz = cascade::core::Pipeline::kAudioRateHz;
-    f.outputFrames = pipeline_.audioSamplesProduced();
-    pluginUi_.api().publish(f);
+    e.outputRateHz = cascade::core::Pipeline::kAudioRateHz;
+    e.outputFrames = pipeline_.audioSamplesProduced();
+
+    // --- what /api/status carries that API 0.2 has no field for --------------
+    e.rxPositionSet = rxSet_;
+    e.rxLatDeg = rxLat_;
+    e.rxLonDeg = rxLon_;
+    e.autoNotchEngaged = pipeline_.autoNotchEngaged();
+    e.autoNotchFreqHz = pipeline_.autoNotchFrequencyHz();
+    e.pilotLocked = pipeline_.pilotLocked();
+    e.rdsSynced = rds.synced;
+    e.rdsPiValid = rds.state.piValid;
+    e.rdsPi = rds.state.pi;
+    e.rdsPsValid = rds.state.psValid;
+    e.rdsPty = rds.state.pty;
+    e.rdsTp = rds.state.tp;
+    e.rdsTa = rds.state.ta;
+    e.rdsGroups = rds.state.groupsDecoded;
+    e.rdsErrors = rds.state.blockErrors;
+    e.sourceBusy = soapyScanPending_ || deviceOpenPending_;
+    {
+        const double rateHz = cascade::core::Pipeline::kAudioRateHz;
+        e.audioPrimingCallbacks = sink.primingCallbacks();
+        e.audioRingMs = 1000.0 * static_cast<double>(sink.ringFrames()) / rateHz;
+        e.audioRingCapacityMs = 1000.0 * static_cast<double>(sink.ringCapacityFrames()) / rateHz;
+    }
+    e.audioPluginGaps = pluginRunner_.audioGaps();
+    e.audioPluginGapFrames = pluginRunner_.audioGapFrames();
+    e.iqBytes = iqRecorder_.bytesWritten();
+    e.audioBytes = audioRecorder_.bytesWritten();
+    switch (scanner_.state()) {
+        case cascade::core::Scanner::State::Idle: e.scannerState = cascade::core::kScannerIdle; break;
+        case cascade::core::Scanner::State::Scanning: e.scannerState = cascade::core::kScannerScanning; break;
+        case cascade::core::Scanner::State::Paused: e.scannerState = cascade::core::kScannerPaused; break;
+        case cascade::core::Scanner::State::Holding: e.scannerState = cascade::core::kScannerHolding; break;
+    }
+    e.scanStartHz = scanStartMhz_ * 1.0e6;
+    e.scanStopHz = scanStopMhz_ * 1.0e6;
+    e.scanStepHz = scanStepKhz_ * 1.0e3;
+    e.catalogueBusy = catalogPending_ || installPending_;
+    e.basemapActive = basemap_.active();
+    e.basemapMinZoom = basemap_.minZoom();
+    e.basemapMaxZoom = basemap_.maxZoom();
+    e.basemapTileSize = basemap_.tileSize();
+}
+
+cascade::net::RadioStatus AppWindow::webStatusNow() const {
+    // The whole block of one publish - figures and lists together - so a
+    // browser can never be shown two fields from different frames. The lock
+    // inside readFull() is held for a reference count; the GUI thread only
+    // ever try-locks it (core/receiver_snapshot.hpp).
+    const std::shared_ptr<const cascade::core::ReceiverSnapshot::Full> full =
+        receiverSnapshot_->readFull();
+    return cascade::net::composeRadioStatus(full->state, full->lists.get());
+}
+
+cascade::net::RadioStatus AppWindow::catStatusNow() const {
+    // CAT reads figures only (frequency, offset, rate, mode, bandwidth, run
+    // state), so it takes them lock-free. In the rare case a read keeps
+    // overlapping a publish it takes the installed block instead - whole,
+    // and at most a frame older - rather than answer nothing.
+    cascade::core::PublishedState s;
+    if (!receiverSnapshot_->read(s)) { s = receiverSnapshot_->readFull()->state; }
+    return cascade::net::composeRadioStatus(s, nullptr);
 }
 
 void AppWindow::applyPluginApi() {
@@ -17448,11 +17588,11 @@ void AppWindow::applyPluginApi() {
         api.markers(pluginMarkers_);
     }
 
-    // --- 5. What plugins may read ----------------------------------------------
-    //
-    // LAST, so a control applied above is already in the snapshot a plugin
-    // reads this frame.
-    publishPluginApiState();
+    // (What plugins may READ is the one receiver snapshot, published by
+    // publishReceiverState later in this frame - after the scanner and before
+    // anything is drawn - so a control applied above is already in the
+    // snapshot a plugin reads this frame, exactly as when this function
+    // published a snapshot of its own.)
 }
 
 void AppWindow::drawPluginMarkers(float x0, float y0, float width, float height,
@@ -21875,48 +22015,53 @@ void AppWindow::pumpWebTiles() {
     }
 }
 
-void AppWindow::publishWebSnapshot() {
-    // Everything read here is read on the GUI thread, which is the contract
-    // activeSource() and its readbacks require. The server's providers only
-    // ever copy what this leaves behind.
+void AppWindow::publishReceiverState() {
+    // THE ONE PUBLISH (engine stage 2). Two reads are made once and handed to
+    // both halves: the fault sentence (a string copy under the pipeline's
+    // lock) and the RDS snapshot (likewise).
+    const std::string faultMessage = pipeline_.faultMessage();
+    const cascade::core::RdsSnapshot rds = pipeline_.rdsSnapshot();
+    cascade::core::PublishedState ps{};
+    fillPublishedState(ps, faultMessage, rds);
+    std::shared_ptr<cascade::net::RadioStatus> lists = std::make_shared<cascade::net::RadioStatus>();
+    fillStatusLists(*lists, faultMessage, rds);
+    receiverSnapshot_->publish(ps, std::move(lists));
+
+    // THE SPECTRUM FRAME for the browser - a stream, not state, and not part
+    // of stage 2 (docs/engine-stage2.md, OPEN): copied under webMutex_ only
+    // when the frame advanced, as before.
+    const double centerHz = ps.rx.centreHz;
+    const double spanHz = pipeline_.inputRateHz();
+    std::lock_guard<std::mutex> lock(webMutex_);
+    // Copy the bins only when the frame actually advanced. lastFrame_ is what
+    // the spectrum panel just drew, so the browser and the window are showing
+    // the same data by construction.
+    if (lastFrame_.seq != webSeq_) {
+        webSeq_ = lastFrame_.seq;
+        webBins_ = lastFrame_.dbBins;
+        webSnapCenterHz_ = centerHz;
+        webSnapSpanHz_ = spanHz;
+    }
+}
+
+void AppWindow::fillStatusLists(cascade::net::RadioStatus& s, const std::string& faultMessage,
+                                const cascade::core::RdsSnapshot& rds) {
+    // THE TEXT AND THE LISTS of /api/status, as the browser has always been
+    // sent them: every std::string and std::vector member of RadioStatus, and
+    // nothing else - the figures come from the PublishedState
+    // (net::composeRadioStatus puts the two together on the reader's
+    // thread). Everything read here is read on the GUI thread, which is the
+    // contract activeSource() and its readbacks require.
     cascade::source::IqSource& src = pipeline_.activeSource();
-    cascade::net::RadioStatus s;
-    s.rxPositionSet = rxSet_;
-    s.rxLatDeg = rxLat_;
-    s.rxLonDeg = rxLon_;
-    s.running = pipeline_.running();
-    s.faulted = pipeline_.faulted();
-    s.faultMessage = pipeline_.faultMessage();
-    s.centerHz = src.centerFrequencyHz();
-    s.sampleRateHz = src.sampleRateHz();
+    s.faultMessage = faultMessage;
     s.sourceName = src.name();  // copied into a std::string here, deliberately
-    s.vfoOffsetHz = pipeline_.vfoOffsetHz();
-    s.bandwidthHz = vfoBandwidthHz_;
-    s.mode = kModeNames[modeIndex_];
-    s.signalDb = pipeline_.signalPowerDb();
-    s.stereoActive = pipeline_.stereoActive();
-    s.squelchDb = squelchDb_;
-    s.volume = volume_;
-    s.dbMin = dbMin_;
-    s.dbMax = dbMax_;
     // The frequency readout's face, as the NAME the page and the config file
     // both speak - see RadioStatus::tunerDisplayStyle.
     s.tunerDisplayStyle = cascade::gui::tunerStyleName(tunerStyle_);
-    s.deemphasisIndex = deemphIndex_;
-    s.nrEnabled = nrEnabled_;
-    s.nrStrength = nrStrength_;
-    s.notchEnabled = notchEnabled_;
-    s.notchFreqHz = static_cast<double>(notchFreqHz_);
-    s.notchQ = static_cast<double>(notchQ_);
-    s.autoNotch = autoNotch_;
-    s.autoNotchEngaged = pipeline_.autoNotchEngaged();
-    s.autoNotchFreqHz = pipeline_.autoNotchFrequencyHz();
-    s.stereoEnabled = stereoEnabled_;
-    s.pilotLocked = pipeline_.pilotLocked();
     s.sourceKind = sourceKind_;
-    // THE TRANSMITTER, AS THE BROWSER SEES IT (0.95.1). Whether it is on the
-    // air, whether the remote key may be closed at all, and how much of the
-    // current hold is left.
+    // THE TRANSMITTER, AS THE BROWSER SEES IT (0.95.1): transmitting,
+    // transmitAvailable and the hold are figures (fillPublishedState:
+    // TX_KEYED, TX_REMOTE_ARMED, txHoldRemainingMs).
     //
     // transmitAvailable IS TWO CONDITIONS, and the second one is the point: a
     // radio has to be open AND the transmit page has to be on screen. Opening
@@ -21925,15 +22070,9 @@ void AppWindow::publishWebSnapshot() {
     // operator has the transmitter in front of them - so the state the page
     // shows is the state somebody is looking at. Closing the page revokes the
     // remote key exactly as it releases the local PTT.
-    s.transmitting = transmitter_.transmitting();
-    s.transmitAvailable = transmitOpen_ && transmitter_.haveSink();
-    s.transmitRemoteHoldMs = transmitter_.remoteHoldRemainingMs();
     s.soapyArgs = deviceArgs_;
     s.antenna = deviceAntenna_;
     s.antennas = deviceAntennas_;
-    s.agcSupported = deviceAgcSupported_;
-    s.agc = deviceAgc_;
-    s.sourceBusy = soapyScanPending_ || deviceOpenPending_;
     s.sourceError = sourceError_;
     // NATIVE ROWS FIRST, exactly as the desktop combo orders them, so the
     // browser's list and the application's list are the same list.
@@ -21973,29 +22112,15 @@ void AppWindow::publishWebSnapshot() {
         s.gains.push_back({deviceGainNames_[i], db, cascade::gui::gainUnitWire(gainUnitAt(i))});
     }
 
-    s.iqRecording = iqRecorder_.recording();
     // The same names the Sinks panel shows, from the same source, so the two
     // clients cannot disagree about why the radio is quiet.
     s.audioMutedBy = muteSubjectText();
-    {
-        const cascade::sink::AudioOut& sink = pipeline_.audio();
-        const double rateHz = cascade::core::Pipeline::kAudioRateHz;
-        s.audioUnderruns = sink.underruns();
-        s.audioPrimingCallbacks = sink.primingCallbacks();
-        s.audioRingMs = 1000.0 * static_cast<double>(sink.ringFrames()) / rateHz;
-        s.audioRingCapacityMs =
-            1000.0 * static_cast<double>(sink.ringCapacityFrames()) / rateHz;
-    }
     // WHO THE SPEAKERS BELONG TO, from the same runner the SINK card asks, so
     // the browser and the bench cannot tell different stories about what is
     // coming out of this radio. Empty is the ordinary case: the demodulated
-    // audio is playing and the two gap counters have nothing to report.
+    // audio is playing and the two gap counters (figures) have nothing to
+    // report.
     s.audioSource = pluginRunner_.playingPlugin();
-    s.audioPluginGaps = pluginRunner_.audioGaps();
-    s.audioPluginGapFrames = pluginRunner_.audioGapFrames();
-    s.audioRecording = audioRecorder_.recording();
-    s.iqBytes = iqRecorder_.bytesWritten();
-    s.audioBytes = audioRecorder_.bytesWritten();
     s.recordDir = recordDir_;
     s.recordError = recordError_;
     s.recordNotice = recordNotice_;
@@ -22013,17 +22138,6 @@ void AppWindow::publishWebSnapshot() {
             s.bookmarks.push_back({b.name, b.freqHz, b.mode, b.bandwidthHz});
         }
     }
-
-    s.scannerActive = scanner_.active();
-    switch (scanner_.state()) {
-        case cascade::core::Scanner::State::Idle: s.scannerState = "idle"; break;
-        case cascade::core::Scanner::State::Scanning: s.scannerState = "scanning"; break;
-        case cascade::core::Scanner::State::Paused: s.scannerState = "paused"; break;
-        case cascade::core::Scanner::State::Holding: s.scannerState = "holding"; break;
-    }
-    s.scanStartHz = scanStartMhz_ * 1.0e6;
-    s.scanStopHz = scanStopMhz_ * 1.0e6;
-    s.scanStepHz = scanStepKhz_ * 1.0e3;
 
     for (const cascade::core::HostTrack& t : pluginUi_.tracks()) {
         // THE SAME STALENESS RULE THE DESKTOP MAP APPLIES, so the two views do
@@ -22066,11 +22180,7 @@ void AppWindow::publishWebSnapshot() {
         s.images.push_back({im.plugin, im.width, im.height, im.complete, im.revision});
     }
 
-    s.basemap.active = basemap_.active();
     s.basemap.attribution = basemap_.attribution();
-    s.basemap.minZoom = basemap_.minZoom();
-    s.basemap.maxZoom = basemap_.maxZoom();
-    s.basemap.tileSize = basemap_.tileSize();
 
     for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
         cascade::net::RadioStatus::Plugin w;
@@ -22113,7 +22223,6 @@ void AppWindow::publishWebSnapshot() {
 
     s.catalogueStatus = catalogStatus_;
     s.catalogueError = catalogError_;
-    s.catalogueBusy = catalogPending_ || installPending_;
     s.installReport = installReport_;
     s.installError = installError_;
     for (int i = 0; i < static_cast<int>(catalog_.size()); ++i) {
@@ -22145,35 +22254,9 @@ void AppWindow::publishWebSnapshot() {
             s.decoded.push_back({decoderLog_[i].plugin, decoderLog_[i].text});
         }
     }
-    {
-        const cascade::core::RdsSnapshot rds = pipeline_.rdsSnapshot();
-        s.rdsSynced = rds.synced;
-        s.rdsPiValid = rds.state.piValid;
-        s.rdsPi = rds.state.pi;
-        s.rdsPsValid = rds.state.psValid;
-        s.rdsPs = rds.state.ps;
-        s.rdsRadioText = rds.state.radioText;
-        s.rdsPty = rds.state.pty;
-        s.rdsTp = rds.state.tp;
-        s.rdsTa = rds.state.ta;
-        s.rdsGroups = rds.state.groupsDecoded;
-        s.rdsErrors = rds.state.blockErrors;
-    }
-
-    const double centerHz = s.centerHz;
-    const double spanHz = pipeline_.inputRateHz();
-
-    std::lock_guard<std::mutex> lock(webMutex_);
-    webStatus_ = std::move(s);
-    // Copy the bins only when the frame actually advanced. lastFrame_ is what
-    // the spectrum panel just drew, so the browser and the window are showing
-    // the same data by construction.
-    if (lastFrame_.seq != webSeq_) {
-        webSeq_ = lastFrame_.seq;
-        webBins_ = lastFrame_.dbBins;
-        webSnapCenterHz_ = centerHz;
-        webSnapSpanHz_ = spanHz;
-    }
+    // RDS text; the RDS figures are in the PublishedState.
+    s.rdsPs = rds.state.ps;
+    s.rdsRadioText = rds.state.radioText;
 }
 
 // Hide or show every torn-off window the application owns, following scope

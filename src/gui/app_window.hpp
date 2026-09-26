@@ -1049,13 +1049,12 @@ private:
     // ONCE A FRAME, straight after applyWebControls: applies what plugins
     // asked of the receiver (through applyControlRequest, the code a click or
     // a browser goes through), turns their log lines into decoder-output lines
-    // and plate notices, folds their settings into the config, and publishes
-    // the receiver snapshot they read. GUI thread - the only thread that may
-    // touch the receiver, which is the whole reason plugin requests are queued.
+    // and plate notices, folds their settings into the config, and collects
+    // their marks. GUI thread - the only thread that may touch the receiver,
+    // which is the whole reason plugin requests are queued. What plugins READ
+    // is the one receiver snapshot publishReceiverState publishes later in the
+    // same frame, before anything is drawn.
     void applyPluginApi();
-    // The snapshot half of the above, on its own so a control applied this
-    // frame is visible to a plugin in the same frame's snapshot.
-    void publishPluginApiState();
     // ONE control request (the web remote, CAT, a plugin): a TRANSLATION, and
     // nothing else - net::controlRequestToCommands turns its fields into
     // commands in the order they were always applied, and each goes through
@@ -2650,7 +2649,14 @@ private:
     // that call reached a dead host: an access violation on Windows and an
     // abort inside libc++ on Android, both reported from the field on
     // 2026-09-16 from the same plugin at shutdown.
-    cascade::core::PluginUi pluginUi_;
+    //
+    // THE ONE RECEIVER SNAPSHOT (engine stage 2, core/receiver_snapshot.hpp),
+    // declared first so pluginUi_ can be built on it: publishReceiverState
+    // fills it once a frame, and the plugin host API, the web server and CAT
+    // all answer from it. Shared, because plugin bridges outlive this window.
+    std::shared_ptr<cascade::core::ReceiverSnapshot> receiverSnapshot_ =
+        std::make_shared<cascade::core::ReceiverSnapshot>();
+    cascade::core::PluginUi pluginUi_{receiverSnapshot_};
     // Drives the loaded decoders with real audio. Declared AFTER pluginHost_
     // and pluginUi_ so it is destroyed BEFORE both: the runner's destructor
     // calls each plugin's destroy(), which is code inside a module the host
@@ -4061,8 +4067,9 @@ private:
     // same contract. Calling either from a request handler would be a race that
     // shows up as a torn string or a dangling pointer under exactly the
     // conditions — a source swap — that are hardest to reproduce. So the GUI
-    // thread assembles one consistent snapshot per frame under webMutex_, and
-    // the providers do nothing but copy it out.
+    // thread publishes one consistent snapshot per frame (receiverSnapshot_,
+    // engine stage 2), and the providers do nothing but read it - without a
+    // lock the GUI thread ever waits for.
     void drawCatSection();
     void drawWebSection();
     // Copies audio produced since the last frame into the server's ring.
@@ -4092,10 +4099,29 @@ private:
     // server's store instead of serving the old source's imagery as the new's.
     bool webTilesActive_ = false;
     std::string webTileAttribution_;
-    // Copies the current radio state and newest spectrum frame into the
-    // members below. Called once per frame from drawUi, unconditionally: the
-    // panel being collapsed must not stop the browser being served.
-    void publishWebSnapshot();
+    // THE ONE PUBLISH (engine stage 2, docs/engine-stage2.md): fills a
+    // PublishedState - FoxReceiverState and the app's extension - and the
+    // /api/status text and lists from this window's members and the
+    // pipeline, and publishes them to receiverSnapshot_, which the plugin host
+    // API, the web server and CAT all read. Also copies the newest spectrum
+    // frame for the browser (the members below). Called once per frame from
+    // drawUi, unconditionally, after every command of the frame has landed
+    // and before anything is drawn: the panel being collapsed must not stop
+    // anyone being served.
+    void publishReceiverState();
+    // Its two halves. Every read is a GUI-thread read, which is the contract
+    // activeSource() and its readbacks require. `faultMessage` and `rds` are
+    // read once by the caller and handed to both.
+    void fillPublishedState(cascade::core::PublishedState& ps, const std::string& faultMessage,
+                            const cascade::core::RdsSnapshot& rds);
+    void fillStatusLists(cascade::net::RadioStatus& s, const std::string& faultMessage,
+                         const cascade::core::RdsSnapshot& rds);
+    // What the web server's and CAT's providers answer, from the snapshot:
+    // on their own threads, never touching the pipeline or this window's
+    // members. The web one takes the whole block (state and lists of one
+    // publish); CAT reads only figures, lock-free.
+    cascade::net::RadioStatus webStatusNow() const;
+    cascade::net::RadioStatus catStatusNow() const;
     // Drains the server's control queue and applies each request to the radio.
     // Called once per frame from drawUi, on the GUI thread, because that is
     // the only thread allowed to move the SOURCE — the HTTP handler validated
@@ -4175,8 +4201,8 @@ private:
     std::uint64_t webAudioLastProduced_ = 0;
     std::vector<float> webAudioBuf_;
 
+    // The spectrum frame for the browser (the status is receiverSnapshot_).
     mutable std::mutex webMutex_;
-    cascade::net::RadioStatus webStatus_;
     std::vector<float> webBins_;
     std::uint64_t webSeq_ = 0;
     double webSnapCenterHz_ = 0.0;

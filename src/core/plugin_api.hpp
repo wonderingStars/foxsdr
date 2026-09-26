@@ -19,9 +19,10 @@
 //     thread at the start of its next frame, through the same code a click or
 //     a web request goes through. The plugin is told at once whether it was
 //     ACCEPTED, and sees it LAND through the snapshot's counters.
-//   - READS TAKE NO LOCK. The snapshot is published through a sequence lock
-//     (SeqlockBox below), so the DSP thread can read it without ever waiting
-//     for the GUI thread.
+//   - READS TAKE NO LOCK. The snapshot is the application's one receiver
+//     snapshot (core/receiver_snapshot.hpp), published through a sequence
+//     lock (core/seqlock_box.hpp), so the DSP thread can read it without ever
+//     waiting for the GUI thread.
 //   - EVERYTHING ELSE TAKES mutex_, held only for a bounded copy of host data.
 //     No plugin code is ever called with it held (this class calls no plugin
 //     code at all), no I/O happens under it, and the queues are fixed-size
@@ -55,6 +56,8 @@
 #include <vector>
 
 #include "core/plugin_abi.h"
+#include "core/receiver_snapshot.hpp"
+#include "core/seqlock_box.hpp"
 
 namespace cascade::core {
 
@@ -77,113 +80,17 @@ public:
 bool onRealtimeThread();
 
 // ---------------------------------------------------------------------------
-// A value one thread writes and any thread reads, without a lock
+// What plugins read about the receiver
 // ---------------------------------------------------------------------------
 //
-// A sequence lock over a trivially copyable T, stored as relaxed atomic words
-// so that a reader racing a writer is not undefined behaviour - it reads a
-// torn copy, sees the sequence moved, and reads again. The writer never
-// waits. A reader waits only while a write is IN PROGRESS, which is a copy of
-// a few hundred bytes; it gives up after kMaxTries rather than spin for ever
-// behind a writer that was preempted mid-copy, and says so by returning false.
-//
-// ONE WRITER AT A TIME. Two concurrent writers would interleave their words;
-// every user of this class names the lock or the thread that serialises them.
-template <class T>
-class SeqlockBox {
-    static_assert(std::is_trivially_copyable_v<T>, "SeqlockBox holds plain data only");
-
-public:
-    static constexpr int kMaxTries = 4096;
-
-    SeqlockBox() {
-        T zero{};
-        store(zero);
-        seq_.store(0, std::memory_order_relaxed);
-    }
-
-    void store(const T& v) {
-        std::uint64_t words[kWords] = {};
-        std::memcpy(words, &v, sizeof(T));
-        const std::uint64_t s = seq_.load(std::memory_order_relaxed);
-        seq_.store(s + 1, std::memory_order_relaxed);   // odd: write in progress
-        std::atomic_thread_fence(std::memory_order_release);
-        for (std::size_t i = 0; i < kWords; ++i) {
-            data_[i].store(words[i], std::memory_order_relaxed);
-        }
-        seq_.store(s + 2, std::memory_order_release);   // even: consistent
-    }
-
-    // True with `out` filled from one consistent write; false (out untouched)
-    // only if kMaxTries attempts all overlapped a write.
-    bool load(T& out) const {
-        for (int attempt = 0; attempt < kMaxTries; ++attempt) {
-            const std::uint64_t s1 = seq_.load(std::memory_order_acquire);
-            if ((s1 & 1u) != 0u) { continue; }
-            std::uint64_t words[kWords];
-            for (std::size_t i = 0; i < kWords; ++i) {
-                words[i] = data_[i].load(std::memory_order_relaxed);
-            }
-            std::atomic_thread_fence(std::memory_order_acquire);
-            if (seq_.load(std::memory_order_relaxed) == s1) {
-                std::memcpy(&out, words, sizeof(T));
-                return true;
-            }
-        }
-        return false;
-    }
-
-private:
-    static constexpr std::size_t kWords = (sizeof(T) + 7u) / 8u;
-    std::atomic<std::uint64_t> seq_{0};
-    std::array<std::atomic<std::uint64_t>, kWords> data_{};
-};
-
-// ---------------------------------------------------------------------------
-// What the GUI thread publishes about the receiver, once a frame
-// ---------------------------------------------------------------------------
-
-inline constexpr std::size_t kMaxPublishedGains = 16;
-// Sample rates a radio offers. The RTL-SDR lists twelve and the HackRF a
-// handful; 32 leaves room without making the snapshot large.
-inline constexpr std::size_t kMaxPublishedRates = 32;
-
-struct PublishedGain {
-    char name[CASCADE_GAIN_NAME_CHARS] = {};
-    std::uint32_t unit = CASCADE_GAIN_UNIT_DB;
-    double minDb = 0.0;
-    double maxDb = 0.0;
-    double stepDb = 0.0;
-    double currentDb = 0.0;
-};
-
-// The FACTS, as AppWindow reads them off the pipeline and the device. Plain
-// data, so it can go through a SeqlockBox. The sequence counters are NOT
-// here: publish() derives them by comparing one frame's facts with the last,
-// so no caller can forget to bump one.
-struct ReceiverFacts {
-    bool running = false;
-    bool deviceOpen = false;
-    bool muted = false;
-    bool deviceAgc = false;
-    bool agcSupported = false;
-    bool stereo = false;
-    double centreHz = 0.0;
-    double vfoOffsetHz = 0.0;
-    double sampleRateHz = 0.0;
-    double bandwidthHz = 0.0;
-    double squelchDb = 0.0;
-    double volume = 0.0;
-    double signalDb = -200.0;    // measurement: never bumps a counter
-    std::uint32_t demodMode = CASCADE_DEMOD_NFM;
-    char deviceName[CASCADE_DEVICE_NAME_CHARS] = {};
-    std::uint32_t gainCount = 0;
-    PublishedGain gains[kMaxPublishedGains];
-    std::uint32_t rateCount = 0;
-    double rates[kMaxPublishedRates] = {};
-    double outputRateHz = 0.0;
-    std::uint64_t outputFrames = 0;  // measurement: never bumps a counter
-};
+// THE ONE RECEIVER SNAPSHOT (engine stage 2, core/receiver_snapshot.hpp).
+// This class used to keep a snapshot of its own, published by AppWindow from
+// its own copy of the facts; it now reads the snapshot every reader shares -
+// the web server's /api/status and CAT read the same one - so a plugin, a
+// browser and a logging program can never be told two different things. The
+// level-1 ABI's own sequence counters (whose groups differ from the engine
+// API's) are derived in the same publish and carried in the snapshot's
+// extension (AppStateExt::abiSeq...).
 
 // The stream clock the plugin runner keeps (see CascadeStreamInfo). Written
 // only under the runner's own mutex, which is what makes it single-writer.
@@ -299,7 +206,11 @@ PluginSettingsMap sanitisePluginSettings(const PluginSettingsMap& in);
 
 class PluginApiCore {
 public:
-    PluginApiCore();
+    // `snapshot` is the receiver snapshot this core's reads answer from - the
+    // application's one, shared with every other reader. Null makes a private
+    // one that nothing publishes (a PluginUi built on its own, as the tests
+    // build it, answers the never-published state until someone does).
+    explicit PluginApiCore(std::shared_ptr<ReceiverSnapshot> snapshot = nullptr);
     PluginApiCore(const PluginApiCore&) = delete;
     PluginApiCore& operator=(const PluginApiCore&) = delete;
 
@@ -333,9 +244,11 @@ public:
     // Module keys that have asked for a SETTINGS-grant function.
     std::vector<std::string> settingsRequesters() const;
 
-    // The snapshot. Derives the sequence counters from the previous facts.
-    // GUI thread only (the SeqlockBox's single writer).
-    void publish(const ReceiverFacts& facts);
+    // The receiver snapshot the reads answer from. Published by its owner (the
+    // application, once a frame), never by this class. Never null; the same
+    // object for this core's whole life.
+    ReceiverSnapshot& snapshot() const { return *snapshot_; }
+    const std::shared_ptr<ReceiverSnapshot>& snapshotShared() const { return snapshot_; }
 
     // The stream clock the runner writes (shared with it).
     const std::shared_ptr<StreamClock>& streamClock() const { return clock_; }
@@ -402,14 +315,6 @@ public:
     static constexpr std::size_t kPressQueue = 16;
 
 private:
-    struct Published {
-        ReceiverFacts facts;
-        std::uint64_t seq = 0;
-        std::uint64_t tuneSeq = 0;
-        std::uint64_t modeSeq = 0;
-        std::uint64_t deviceSeq = 0;
-        std::uint64_t audioSeq = 0;
-    };
     struct LogEntry {
         std::size_t client = 0;
         std::uint32_t level = 0;
@@ -436,9 +341,9 @@ private:
     void refreshGrantsLocked(PluginApiClient& c);
 
     std::atomic<bool> attached_{true};
-    SeqlockBox<Published> snapshot_;
-    Published writer_{};       // GUI thread only: the last published facts
-    bool havePublished_ = false;
+    // Set once, in the constructor, and never reassigned: plugin threads read
+    // through it with no lock.
+    const std::shared_ptr<ReceiverSnapshot> snapshot_;
     std::shared_ptr<StreamClock> clock_;
 
     mutable std::mutex mutex_;

@@ -19,7 +19,8 @@
 // WRITTEN BY THE CODE BEFORE STAGE 2 (commit "Engine stage 2, capture", on
 // top of bca426f) with FOXSDR_WRITE_GOLDEN=1. The only lines of this file
 // that differ between that capture and stage 2 are the three in
-// AppWindowTestAccess marked THE PATH UNDER TEST.
+// AppWindowTestAccess marked THE PATH UNDER TEST, and a report-only timing
+// of the stage-2 publish taken after the last record.
 //
 // WHAT IS MASKED, and why. Two sets of figures are replaced by a fixed word
 // before rendering, in the capture and now alike, because they are not a
@@ -259,19 +260,20 @@ struct AppWindowTestAccess {
     static void setTransmitPageOpen(AppWindow& a, bool on) { a.transmitOpen_ = on; }
 
     // ===== THE PATH UNDER TEST ================================================
-    // The capture (before stage 2): the two per-frame publishes, and what the
-    // web and CAT providers returned - the one webStatus_ under webMutex_.
-    static void publish(AppWindow& a) {
-        a.publishPluginApiState();
-        a.publishWebSnapshot();
-    }
-    static cascade::net::RadioStatus webStatus(AppWindow& a) {
-        std::lock_guard<std::mutex> lock(a.webMutex_);
-        return a.webStatus_;
-    }
-    static cascade::net::RadioStatus catStatus(AppWindow& a) {
-        std::lock_guard<std::mutex> lock(a.webMutex_);
-        return a.webStatus_;
+    // Stage 2: the one publish, and exactly what the web server's and CAT's
+    // providers call. (At the capture these three were the two per-frame
+    // publishes - publishPluginApiState and publishWebSnapshot - and a copy
+    // of webStatus_ under webMutex_ for both providers.) The plugin reads
+    // below need no switch: they go through PluginApiCore either way.
+    static void publish(AppWindow& a) { a.publishReceiverState(); }
+    static cascade::net::RadioStatus webStatus(AppWindow& a) { return a.webStatusNow(); }
+    static cascade::net::RadioStatus catStatus(AppWindow& a) { return a.catStatusNow(); }
+    // Engine stage 2's cost, measured on the real window (report only).
+    static double publishNs(AppWindow& a, int n) {
+        const auto t0 = std::chrono::steady_clock::now();
+        for (int i = 0; i < n; ++i) { a.publishReceiverState(); }
+        const auto t1 = std::chrono::steady_clock::now();
+        return std::chrono::duration<double, std::nano>(t1 - t0).count() / n;
     }
     // ==========================================================================
 };
@@ -612,6 +614,9 @@ int main() {
     {
         AppWindow app;
         drive(app);
+        // After every record, so it cannot move a counter the golden holds.
+        std::printf("  window publish (the whole of publishReceiverState): %.0f ns/frame\n",
+                    A::publishNs(app, 2000));
     }
     compareOrWrite();
     ImGui::DestroyContext();

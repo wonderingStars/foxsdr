@@ -583,6 +583,12 @@ MutePopupSubject advanceMutePopup(const MutePopupSubject& prev, bool onPreset,
 class PluginUi {
 public:
     PluginUi() = default;
+    // The application's: plugins read the ONE receiver snapshot it publishes
+    // once a frame (core/receiver_snapshot.hpp), the same one the web server
+    // and CAT read. The default constructor gives the API a private snapshot
+    // nothing publishes.
+    explicit PluginUi(std::shared_ptr<ReceiverSnapshot> snapshot)
+        : api_(std::make_shared<PluginApiCore>(std::move(snapshot))) {}
     ~PluginUi();
 
     PluginUi(const PluginUi&) = delete;

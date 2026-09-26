@@ -46,6 +46,7 @@
 #include "core/pipeline.hpp"
 #include "core/plugin_abi.h"
 #include "core/plugin_api.hpp"
+#include "receiver_facts_helper.hpp"
 #include "core/plugin_host.hpp"
 #include "core/plugin_runner.hpp"
 #include "core/plugin_ui.hpp"
@@ -60,7 +61,7 @@ using cascade::core::PluginControl;
 using cascade::core::PluginRejection;
 using cascade::core::PluginRunner;
 using cascade::core::PluginUi;
-using cascade::core::ReceiverFacts;
+using testfacts::ReceiverFacts;
 using cascade::core::RealtimeThreadScope;
 
 namespace fs = std::filesystem;
@@ -365,7 +366,7 @@ void testState() {
     CHECK(rc == CASCADE_API_OK);
     CHECK(s.seq == 0u);
 
-    ui.api().publish(facts());
+    testfacts::publish(ui.api(), facts());
     s = state(0, &rc);
     CHECK(rc == CASCADE_API_OK);
     CHECK(s.structSize == sizeof(CascadeReceiverState));
@@ -402,13 +403,13 @@ void testState() {
     ReceiverFacts f = facts();
     f.signalDb = -80.0;          // measurement only
     f.outputFrames = 999999;     // measurement only
-    ui.api().publish(f);
+    testfacts::publish(ui.api(), f);
     s = state(0);
     CHECK(s.seq == before.seq);
     CHECK(s.signalDb == -80.0);
     CHECK((s.flags & CASCADE_STATE_SQUELCH_OPEN) == 0u);  // -80 < -60
     f.centreHz = 146.0e6;        // tune group
-    ui.api().publish(f);
+    testfacts::publish(ui.api(), f);
     s = state(0);
     CHECK(s.tuneSeq == before.tuneSeq + 1u);
     CHECK(s.modeSeq == before.modeSeq);
@@ -416,22 +417,22 @@ void testState() {
     CHECK(s.audioSeq == before.audioSeq);
     CHECK(s.seq == before.seq + 1u);
     f.demodMode = CASCADE_DEMOD_AM;  // mode group
-    ui.api().publish(f);
+    testfacts::publish(ui.api(), f);
     s = state(0);
     CHECK(s.modeSeq == before.modeSeq + 1u);
     CHECK(s.tuneSeq == before.tuneSeq + 1u);
     f.gains[0].currentDb = 30.0;  // device group, through a gain readback
-    ui.api().publish(f);
+    testfacts::publish(ui.api(), f);
     s = state(0);
     CHECK(s.deviceSeq == before.deviceSeq + 1u);
     f.muted = true;  // audio group
-    ui.api().publish(f);
+    testfacts::publish(ui.api(), f);
     s = state(0);
     CHECK(s.audioSeq == before.audioSeq + 1u);
     CHECK((s.flags & CASCADE_STATE_MUTED) != 0u);
     // An identical publish moves nothing at all.
     const CascadeReceiverState same = s;
-    ui.api().publish(f);
+    testfacts::publish(ui.api(), f);
     s = state(0);
     CHECK(s.seq == same.seq);
 
@@ -460,14 +461,14 @@ void testState() {
     // A new list moves the device counter.
     const std::uint64_t devBefore = state(0).deviceSeq;
     f.rates[2] = 3.2e6;
-    ui.api().publish(f);
+    testfacts::publish(ui.api(), f);
     CHECK(state(0).deviceSeq == devBefore + 1u);
     // No radio, no rates.
     ReceiverFacts nodev = f;
     nodev.deviceOpen = false;
-    ui.api().publish(nodev);
+    testfacts::publish(ui.api(), nodev);
     CHECK(H(0)->get_sample_rates(C(0), rates, 8) == 0);
-    ui.api().publish(f);
+    testfacts::publish(ui.api(), f);
 
     // [V] Malformed arguments: refused, nothing written.
     CHECK(H(0)->get_state(C(0), nullptr) == CASCADE_API_BAD_ARGUMENT);
@@ -518,7 +519,7 @@ void testControls() {
     ui.rebuild({plug(0, "Ctl"), plug(1, "Other"), plug(2, "Quiet")});
     CHECK(H(0) != nullptr && H(1) != nullptr && H(2) != nullptr);
     if (H(0) == nullptr || H(1) == nullptr || H(2) == nullptr) { return; }
-    ui.api().publish(facts());
+    testfacts::publish(ui.api(), facts());
     const CascadeHostApi* h = H(0);
     void* c = C(0);
 
@@ -611,15 +612,15 @@ void testControls() {
     ReceiverFacts nodev = facts();
     nodev.deviceOpen = false;
     nodev.gainCount = 0;
-    ui.api().publish(nodev);
+    testfacts::publish(ui.api(), nodev);
     CHECK(h->set_sample_rate(c, 2.4e6) == CASCADE_API_NO_DEVICE);
     CHECK(h->set_gain(c, "LNA", 10.0) == CASCADE_API_NO_DEVICE);
     CHECK(h->set_device_agc(c, 1) == CASCADE_API_NO_DEVICE);
     ReceiverFacts noagc = facts();
     noagc.agcSupported = false;
-    ui.api().publish(noagc);
+    testfacts::publish(ui.api(), noagc);
     CHECK(h->set_device_agc(c, 1) == CASCADE_API_UNSUPPORTED);
-    ui.api().publish(facts());
+    testfacts::publish(ui.api(), facts());
 
     // BUSY WHEN THE QUEUE IS FULL, never growing: exactly kControlQueue fit.
     for (std::size_t i = 0; i < PluginApiCore::kControlQueue; ++i) {
@@ -696,7 +697,7 @@ void testThreads() {
     if (H(0) == nullptr) { return; }
     const CascadeHostApi* h = H(0);
     void* c = C(0);
-    ui.api().publish(facts());
+    testfacts::publish(ui.api(), facts());
     ui.setSettingsAllowed(keyOf("Thr"), true);
 
     // THE SETTINGS STORE REFUSES THE REAL-TIME THREAD - it allocates, which
@@ -752,7 +753,7 @@ void testThreads() {
         while (!stop.load()) {
             f.centreHz = 100.0e6 + n;
             f.vfoOffsetHz = n;
-            ui.api().publish(f);
+            testfacts::publish(ui.api(), f);
             n += 1.0;
         }
     });
@@ -1423,7 +1424,7 @@ void testStreamInfo() {
     g_probeHost = H(0);
     CHECK(g_probeHost != nullptr);
     if (g_probeHost == nullptr) { return; }
-    ui.api().publish(facts());
+    testfacts::publish(ui.api(), facts());
 
     PluginRunner runner;
     runner.setStreamClock(ui.api().streamClock());
@@ -1772,7 +1773,7 @@ void testPatchPage() {
     g_patchHost = H(0);
     CHECK(g_patchHost != nullptr);
     if (g_patchHost == nullptr) { return; }
-    ui.api().publish(facts());
+    testfacts::publish(ui.api(), facts());
 
     CascadeIqDecoderApi iq{};
     iq.structSize = sizeof(iq);
