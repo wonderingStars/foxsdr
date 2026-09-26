@@ -65,7 +65,7 @@ stage 4 moves the window (and stage 5 the transports) onto `read_state`.
 | AGC_SUPPORTED | `deviceAgcSupported_` | plugin AGC_SUPPORTED, request check (UNSUPPORTED); web `agcSupported` |
 | RECORDING_IQ / _AUDIO | `iqRecorder_.recording()` / `audioRecorder_.recording()` | web `iqRecording` / `audioRecording` |
 | SCANNER_ACTIVE | `scanner_.active()` | web `scannerActive` |
-| DECODER_ACTIVE | `running && pluginRunner_.activeCount() > 0` (the DEC lamp's own predicate) | none yet |
+| DECODER_ACTIVE | `running &&` the runner's fed-instance count `> 0` (the DEC lamp's own predicate; `PluginRunner::feedSnapshot`, one lock) | none yet |
 | TX_AVAILABLE | `transmitter_.haveSink()` | none yet |
 | TX_KEYED | `transmitter_.transmitting()` | web `transmitting` |
 | TX_LATCHED | `transmitter_.latched()` | none yet |
@@ -93,13 +93,13 @@ stage 4 moves the window (and stage 5 the transports) onto `read_state`.
 | `demodMode` | `gui::abiDemodForModeIndex(modeIndex_)` | plugin; web `mode` and CAT `m` by name (`net::kDemodNames`, static_asserted equal to `kModeNames`) |
 | `deemphasis` | `deemphIndex_` | web `deemphasisIndex` |
 | `gainCount` | `deviceGainRanges_.size()` with a radio, else 0 | none yet (plugins read `abiGainCount`, capped at 16) |
-| `decodersRunning` / `decodersFitted` | `running ? fedDecoderCount() : 0` / `loadedDecoderCount()` (the DECODERS card) | none yet |
+| `decodersRunning` / `decodersFitted` | the loaded decoder modules the runner feeds (0 when stopped) / the loaded decoder modules - `fedDecoderCount()` / `loadedDecoderCount()`'s answers, from one `feedSnapshot` (review L4) | none yet |
 | `txMode`, `txFrequencyHz`, `txPowerDb` | `transmitter_.mode()`, `.frequencyHz()`, `.powerDb()` | none yet |
 | `audioUnderruns` | `pipeline_.audio().underruns()` | web `audioUnderruns` |
 | `txHoldRemainingMs` | `transmitter_.remoteHoldRemainingMs()` | web `transmitRemoteHold` |
 | `txLatchRemainingMs` | 0, not filled (OPEN 3) | - |
 | `deviceName` | `activeSource().name()` through `formatUtf8` (64 bytes, as the plugin ABI's) | plugin `deviceName` |
-| `sinkName` | `pipeline_.audio().openedDeviceName()` (a try-lock read) | none yet |
+| `sinkName` | `pipeline_.audio().openedDeviceName()` (a try-lock read; its busy "" keeps the last good name, `keepLastGoodName`, review L6) | none yet |
 | `faultMessage` | `pipeline_.faultMessage()` (127 bytes) | none yet (the web's `faultMessage` is the untruncated one in the lists) |
 | `txUnkeyReason` | empty, not filled (OPEN 3) | - |
 
@@ -108,8 +108,8 @@ stage 4 moves the window (and stage 5 the transports) onto `read_state`.
 `RadioStatus`, untruncated: `faultMessage`, `sourceName`, `tunerDisplayStyle`,
 `rdsPs`, `rdsRadioText`, `sourceKind`, `soapyArgs`, `antenna`, `antennas`,
 `devices`, `gains`, `sourceError`, `audioMutedBy`, `audioSource`, `recordDir`,
-`recordError`, `recordNotice`, `bookmarks` (and the id row map
-`webBookmarkIds_`, filled in the same pass from stage 1's follow-up), `tracks`
+`recordError`, `recordNotice`, `bookmarks` (with the ids of those rows, which
+ride in the same block - `Full::bookmarkIds`, review L3), `tracks`
 (whose loop still drives the track-info lookups every frame), `images`,
 `basemap.attribution`, `plugins`, `catalogue`, `catalogueStatus`,
 `catalogueError`, `installReport`, `installError`, and `decoded`. Readers: the
@@ -159,11 +159,19 @@ snapshot, published once a frame. So nothing a reader is told became older:
   decoder timestamping its output needs it exact to the block; a once-a-frame
   copy would be up to 16.7 ms stale. It stays its own SeqlockBox. The API has
   no field for it (get_stream_info is a GAP).
-- **The web block may trail the lock-free state by one frame** when a web
-  reader held the swap lock at the instant of a publish (section 5). Measured
-  under a reader calling `readFull` in a tight loop: 29% of publishes deferred;
-  with the page's 4 polls a second, the chance per frame is the time a
-  refcount increment takes, 4 times a second. The block is always whole.
+- **The web block can trail the lock-free state only until the next
+  `readFull()`** when a web reader held the swap lock at the instant of a
+  publish (section 5): the block is handed over and the next reader installs
+  it. Only if a reader is inside that very hand-over too does it wait for the
+  writer's next pass (`retryInstall`, every frame). Measured under a reader
+  calling `readFull` in a tight loop: 29% of publishes could not install
+  directly (before the hand-over existed). The block is always whole.
+- **The browser's bookmark rows and the ids they are resolved by are one
+  block** (review L3): `applyControlRequest` resolves a web row through
+  `readFull()->bookmarkIds`, the ids of the rows /api/status is serving at
+  that moment. What remains is the browser's own lag - its rows are from its
+  last poll (up to 250 ms), and a row that moved since names what is on it
+  NOW - which is the web protocol's (rows, not ids), as before stage 2.
 - **CAT**, which reads only figures, takes the lock-free path; if a read keeps
   overlapping a publish (SeqlockBox::kMaxTries) it takes the installed block
   instead - at most a frame older - rather than answer nothing.
@@ -177,10 +185,24 @@ snapshot, published once a frame. So nothing a reader is told became older:
   real-time thread; the writer never waits for it.
 - **`readFull()`** copies a `shared_ptr` to an immutable block (the state AND
   the lists of one publish) under `fullMutex_`, held for a reference-count
-  increment. **The writer only try-locks it**: when a reader holds it, that
-  publish's block is not installed (counted in `deferredInstalls()`) and the
-  next frame's is. The GUI thread's worst case is one failed `try_lock`. The
-  previous block is released after the lock is dropped.
+  increment. **The writer only try-locks it.** When a reader holds it, the
+  writer HANDS THE BLOCK OVER under a second lock, `handoffMutex_`, which it
+  also only try-locks, and the next `readFull()` installs it (readers take
+  `fullMutex_` then `handoffMutex_`; a handed-over block older than the
+  installed one, by generation, is dropped). If that lock is busy too - a
+  reader is in that very install - the writer keeps the block and
+  `retryInstall()` lands it: `drawUi` calls it at the top of EVERY frame,
+  change or not, and in stage 3 the control thread must call it on every
+  pass. Why a hand-over and not just a retry (review M2): the Windows
+  move/resize loop runs no frames at all (FoxSDR draws nothing from a
+  refresh callback), and stage 3's control thread may publish only on
+  change, so "the next publish" may be a long way off. The GUI thread's
+  worst case is two failed `try_lock`s. Replaced blocks are released after
+  the locks are dropped. `std::atomic<std::shared_ptr>` was considered and
+  not taken: probed on MSVC 14.44 and GCC 15.2 it is provided but
+  `is_lock_free()` is false (a lock the writer would wait on), and the
+  Android NDK r27's libc++ 18 does not define it
+  (`__cpp_lib_atomic_shared_ptr` absent).
 - **The counters are derived, not set**: `publish()` compares each group's
   fields with the previous publish. Engine API: tune = centre, offset; mode =
   demod, bandwidth, squelch, de-emphasis, NR strength, notch Hz/Q and the
@@ -240,13 +262,40 @@ thread, and the question is settled there.
   Doubles are compared as bit patterns. Masked in capture and comparison alike:
   the audio sink's health (this machine's device), and after the receiver has
   run its measurements. Result: **0 of 878 lines differ.**
-- **`test_receiver_snapshot`** (new, 231 checks): torn-read races (SeqlockBox
+- **`test_receiver_snapshot`** (new, 409 checks): torn-read races (SeqlockBox
   with 64 identical words; the snapshot's `read` and `readFull`, the block's
-  lists paired with its state), the writer not waiting with the swap lock held,
-  every counter group (27 steps), `composeRadioStatus` field by field (86 rows)
-  with a scan of `net/web_server.hpp` that fails when `RadioStatus` gains a
-  member without a row, the plugin API reading the snapshot it was given, and
-  the cost.
+  lists paired with its state), the writer never waiting and no block
+  stranded (the hand-over lands with no further publish or retry; with both
+  locks held, `retryInstall` lands it with nothing changed; a newer block
+  replaces a held-back one), every counter group (27 steps),
+  `composeRadioStatus` field by field (86 rows) with a scan of
+  `net/web_server.hpp` that fails when `RadioStatus` gains a member without a
+  row, the plugin API reading the snapshot it was given, **walking one**
+  (review M1: each of the 32 flag bits alone composes exactly its own
+  RadioStatus boolean or none; each extension boolean alone likewise, the 25
+  booleans checked against the header; each of the 22 `RxFlagSources` alone
+  sets exactly its own flag; each flag alone gives exactly its level-1
+  plugin flag), a busy sink-name read moving no counter, the bookmark ids in
+  the block, and the cost.
+- **`test_snapshot_app`** (new, 112 checks): the real window with three
+  decoder plugins (tests/fixture_stage1_plugin.cpp built under three names -
+  the host runs one plugin per name): the publish cost with three fed, the
+  published decoder counts against the window's own; **walking one through
+  the window** - mute, stereo, NR, notch, auto notch, a radio opening, device
+  AGC, run, I/Q and audio recording, stopping every decoder, the scanner, a
+  transmitter opening, the Transmit page - each changing exactly its own
+  flag (SQUELCH_OPEN, STEREO_ACTIVE and SINK_OPEN follow the signal or the
+  audio device and are left out; FAULTED, TX_KEYED, TX_LATCHED and
+  WEB_LISTENING are not reachable without hardware or a fault and are
+  walked in the pure test); and the L3 case - with a newer block held back,
+  the page's row 0 tunes what the served block shows on it, and after
+  `retryInstall` the new row 0.
+- **The golden's two retunes now land** (review L5): on a radio a retune is
+  paced by the retune coalescer and landed by the frame's
+  `pollPendingRetune`; the drive now does the same (`settleRetune`), so
+  "Golden two" is added at 433.9 MHz and "running, retuned" is. The record
+  was re-recorded by the OLD code - a throwaway worktree at 79ca44b with the
+  same test patch, written twice, identical - not by stage 2.
 - `test_plugin_api` and `test_plugin_abi3_compat` publish through
   `tests/receiver_facts_helper.hpp` (the old `ReceiverFacts`, mapped onto a
   PublishedState the way the window maps its members).
@@ -267,8 +316,24 @@ changed hash, then restored with `git checkout`, rebuilt, green):
 | compose takes `bandwidthHz` from the rate | test_state_snapshot_golden | 67 of 878 lines differ |
 | `get_state`'s modeSeq from the engine API's counter | test_state_snapshot_golden | 11 of 878 lines differ |
 | the window fills `scanStepHz` in the wrong unit | test_state_snapshot_golden | 23 of 878 lines differ |
+| review round (logs: scratchpad `engine3-review/rg_*.log`): | | |
+| compose `transmitAvailable = flag(TX_KEYED)` (the reviewer's mutant) | test_receiver_snapshot | [7a] TX_KEYED -> [transmitting transmitAvailable], TX_REMOTE_ARMED -> []; 2 failed |
+| compose swaps `iqRecording` / `audioRecording` | test_receiver_snapshot | [7a] RECORDING_IQ -> [audioRecording] and back; 2 failed |
+| `receiverFlags` swaps the two recording sources' bits | test_receiver_snapshot | [7c] recordingIq -> 00002000 and back; 2 failed |
+| the window hands each recording condition the other recorder | test_snapshot_app | [2] record I/Q changed 00002000, record audio 00001000 (x2 each); 4 failed |
+| no hand-over (a deferred block waits for the writer) | test_receiver_snapshot | [2a] the next readFull: centre 1 (published 2); 6 failed |
+| nothing kept for the retry (the old "next publish" rule) | test_receiver_snapshot | [2b] after retryInstall: centre 2 (published 3); 3 failed |
+| the web row map from the latest fill, not the served block | test_snapshot_app | [3] row 0 (showing A, AM) tuned USB; 1 failed |
+| every fitted decoder counted as fed while running | test_snapshot_app | running, none fed: published 3, window 0; 3 failed |
+| a busy sink-name read publishes "" | test_receiver_snapshot | [8] counters moved [seq audio]; 2 failed |
 
 ## 8. OPEN
+
+(Review round: M1, M2, L3, L4, L5, L6 and the NIT are closed - sections 4,
+5 and 7. The window's publish with three fed decoders measured 4398 and
+4460 ns/frame before L4 and 4334 and 4465 after - the same within run
+noise on an uncontended lock; what L4 changes is 4 acquisitions of the
+runner lock the DSP thread takes per block down to 1.)
 
 1. **`listSeq` is not derived** (held at 1). Deriving it needs list
    generations (bookmarks, devices, plugins, catalogue, decoded lines,
