@@ -935,15 +935,22 @@ std::vector<std::string> codeLines(const std::string& text) {
     return out;
 }
 
-// The AppWindow member a line belongs to: the nearest preceding definition
-// that starts in column 0 and names AppWindow::<fn>(.
+// The AppWindow or Engine member a line belongs to: the nearest preceding
+// definition that starts in column 0 and names AppWindow::<fn>( or, since
+// engine stage 3a moved the receiver's machinery into src/engine verbatim,
+// Engine::<fn>(.
 std::string enclosingMember(const std::vector<std::string>& lines, std::size_t at) {
     for (std::size_t i = at + 1; i-- > 0;) {
         const std::string& l = lines[i];
         if (l.empty() || l[0] == ' ' || l[0] == '\t' || l[0] == '}' || l[0] == '#') { continue; }
-        const std::size_t p = l.find("AppWindow::");
+        std::size_t p = l.find("AppWindow::");
+        std::size_t len = std::strlen("AppWindow::");
+        if (p == std::string::npos) {
+            p = l.find("Engine::");
+            len = std::strlen("Engine::");
+        }
         if (p == std::string::npos) { continue; }
-        const std::size_t b = p + std::strlen("AppWindow::");
+        const std::size_t b = p + len;
         const std::size_t e = l.find('(', b);
         if (e == std::string::npos) { continue; }
         return l.substr(b, e - b);
@@ -952,9 +959,12 @@ std::string enclosingMember(const std::vector<std::string>& lines, std::size_t a
 }
 
 void everyStopUsesTheRoutine() {
-    const fs::path gui = fs::path(CASCADE_SOURCE_DIR) / "src" / "gui";
+    // The window and, since engine stage 3a, the engine it holds: the
+    // receiver's routines moved into src/engine verbatim.
+    std::vector<fs::path> dirs = {fs::path(CASCADE_SOURCE_DIR) / "src" / "gui",
+                                  fs::path(CASCADE_SOURCE_DIR) / "src" / "engine"};
     std::error_code ec;
-    CHECK(fs::is_directory(gui, ec));
+    for (const fs::path& d : dirs) { CHECK(fs::is_directory(d, ec)); }
 
     int inRoutine = 0;
     int inTeardown = 0;
@@ -967,7 +977,8 @@ void everyStopUsesTheRoutine() {
     std::vector<std::string> callers;  // members that call stopReceiver()
     std::vector<std::string> runSenders;  // members that send or apply FOXAPI_OP_RUN
     std::string routineBody;
-    for (const auto& e : fs::directory_iterator(gui, ec)) {
+    for (const fs::path& dir : dirs)
+    for (const auto& e : fs::directory_iterator(dir, ec)) {
         const std::string ext = e.path().extension().string();
         if (ext != ".cpp" && ext != ".hpp") { continue; }
         const std::vector<std::string> lines = codeLines(readFile(e.path()));
@@ -1008,7 +1019,7 @@ void everyStopUsesTheRoutine() {
                                 m.c_str(), e.path().filename().string().c_str(), i + 1);
                 }
             }
-            if (l.rfind("void AppWindow::startReceiver()", 0) == 0) {
+            if (l.rfind("void AppWindow::startReceiver()", 0) == 0 || l.rfind("void Engine::startReceiver()", 0) == 0) {
                 for (std::size_t k = i; k < lines.size(); ++k) {
                     startBody += lines[k] + "\n";
                     if (k > i && lines[k].rfind("}", 0) == 0) { break; }
@@ -1016,13 +1027,14 @@ void everyStopUsesTheRoutine() {
             }
             if (l.find("stopReceiver()") != std::string::npos &&
                 l.find("AppWindow::stopReceiver()") == std::string::npos &&
+                l.find("Engine::stopReceiver()") == std::string::npos &&
                 l.find("void stopReceiver()") == std::string::npos) {
                 callers.push_back(enclosingMember(lines, i));
             }
             if (l.find("FOXAPI_OP_RUN") != std::string::npos) {
                 runSenders.push_back(enclosingMember(lines, i));
             }
-            if (l.rfind("void AppWindow::stopReceiver()", 0) == 0) {
+            if (l.rfind("void AppWindow::stopReceiver()", 0) == 0 || l.rfind("void Engine::stopReceiver()", 0) == 0) {
                 for (std::size_t k = i; k < lines.size(); ++k) {
                     routineBody += lines[k] + "\n";
                     if (k > i && lines[k].rfind("}", 0) == 0) { break; }

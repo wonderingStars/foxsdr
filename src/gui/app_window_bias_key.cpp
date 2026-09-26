@@ -32,37 +32,12 @@ using cascade::i18n::trId;
 
 namespace {
 
-// The stand-in's identity: a serial-named radio, so the "not asked again"
-// half of the gate can be seen in a capture as well as the first question.
-constexpr const char* kStandInKind = "stand-in";
-constexpr const char* kStandInArgs = "serial=5A4E0001";
-
 }  // namespace
 
-bool AppWindow::biasTeeReachable() const {
-    // biasTeePanel_.present is written after each OPEN and by nothing else, so
-    // on its own it outlives the radio: a HackRF closed for the generator left
-    // it true (test_bias_key_app [5] caught the key still drawn over the
-    // generator). The Source panel's checkbox never showed that, because it is
-    // drawn inside the open device's own panel; the deck has no such frame. So
-    // the key asks the question live - a radio IS open, it is still answering,
-    // and withBiasTee still reaches a bias tee on it (an RSPdx answers per
-    // antenna).
-    //
-    // A RADIO THAT HAS STOPPED ANSWERING HAS NO KEY (repair round 1, F3). Its
-    // driver refuses every transfer from then on, so a key over it could only
-    // ever be pressed for nothing, and its lamp would be a readback the radio
-    // can no longer confirm; the FAIL lamp beside it and the Source panel are
-    // where a dead radio is reported, and the reopen that follows a driver
-    // fault puts the key back with the radio.
-    return engine_.biasTeePanel_.present && engine_.device_ != nullptr && !engine_.device_->deviceDead() &&
-           withBiasTee(engine_.device_, [](auto&) { return true; });
-}
-
 cascade::gui::BiasTeePanel AppWindow::biasKeyPanel() const {
-    if (!biasStandInActive()) {
+    if (!engine_.biasStandInActive()) {
         cascade::gui::BiasTeePanel p = engine_.biasTeePanel_;
-        p.present = biasTeeReachable();
+        p.present = engine_.biasTeeReachable();
         return p;
     }
     cascade::gui::BiasTeePanel p;
@@ -71,45 +46,12 @@ cascade::gui::BiasTeePanel AppWindow::biasKeyPanel() const {
     return p;
 }
 
-std::string AppWindow::biasKeyRadioNow() const {
-    if (biasStandInActive()) { return biasKeyRadio(kStandInKind, kStandInArgs); }
-    return biasKeyRadio(engine_.sourceKind_, engine_.deviceArgs_);
-}
-
-bool AppWindow::biasKeyMayRememberNow() const {
-    // The stand-in is a serial-named radio with an unbounded memory of one.
-    if (biasStandInActive()) { return biasKeyMayRemember(kStandInArgs); }
-    // A real radio: exactly when an "on" switched now will be kept and put
-    // back at its next open (review round 2, L2) - which is also when the
-    // session may skip the question next time (the gate's mayRemember).
-    return engine_.device_ != nullptr && biasTeeWillRestoreOn(engine_.biasTeePanel_, *engine_.device_, engine_.deviceArgs_);
-}
-
-void AppWindow::switchBiasTee(bool want) {
-    if (biasStandInActive()) {
-        // A stand-in driver: it takes the change, or refuses it and says so
-        // exactly where a real driver's refusal is shown.
-        if (engine_.biasStandIn_ == BiasStandIn::Accept) {
-            engine_.biasStandInOn_ = want;
-        } else {
-            engine_.sourceError_ = "stand-in bias tee (FOXSDR_FORCE_BIAS_KEY=refuse): switching the "
-                           "bias-T was refused";
-        }
-        return;
-    }
-    // The checkbox's own path, unchanged: request, then show the READBACK; a
-    // refusal leaves the box, the key and the memory where they were.
-    std::string err;
-    biasTeeTicked(engine_.biasTeePanel_, engine_.device_, engine_.deviceArgs_, want, &err);
-    if (!err.empty()) { engine_.sourceError_ = err; }
-}
-
 // THE KEY AND ITS QUESTION DECIDE; SET_BIAS_TEE SWITCHES. The gate (ask the
 // first time, never for off) is the key's own - a question put to the person
 // at the window - and what it decides to do is the command every other bias
 // tee control sends, applied at the top of the next frame.
 void AppWindow::biasKeyPressed() {
-    switch (biasKeyPress(biasKeyGate_, biasKeyPanel(), biasKeyRadioNow())) {
+    switch (biasKeyPress(biasKeyGate_, biasKeyPanel(), engine_.biasKeyRadioNow())) {
         case BiasKeyAction::Nothing: break;
         case BiasKeyAction::SwitchOff:
             submitCommand(cascade::core::cmd::makeInt(FOXAPI_OP_SET_BIAS_TEE, 0));
@@ -126,8 +68,8 @@ void AppWindow::biasKeyAnswered(bool turnOn) {
         biasKeyCancel(biasKeyGate_);
         return;
     }
-    if (biasKeyConfirm(biasKeyGate_, biasKeyPanel(), biasKeyRadioNow(),
-                       biasKeyMayRememberNow())) {
+    if (biasKeyConfirm(biasKeyGate_, biasKeyPanel(), engine_.biasKeyRadioNow(),
+                       engine_.biasKeyMayRememberNow())) {
         submitCommand(cascade::core::cmd::makeInt(FOXAPI_OP_SET_BIAS_TEE, 1));
     }
 }
@@ -153,7 +95,7 @@ void AppWindow::drawBiasKeyConfirm() {
     // THE QUESTION MUST STILL APPLY: the radio it asked about is still the
     // open one and still has a bias tee. A radio closed or switched while the
     // dialog was up leaves nothing to say yes to.
-    if (!biasKeyQuestionStands(biasKeyGate_, biasKeyPanel(), biasKeyRadioNow())) {
+    if (!biasKeyQuestionStands(biasKeyGate_, biasKeyPanel(), engine_.biasKeyRadioNow())) {
         biasKeyCancel(biasKeyGate_);
         ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
@@ -161,7 +103,7 @@ void AppWindow::drawBiasKeyConfirm() {
     }
     ImGui::PushTextWrapPos(ImGui::GetFontSize() * 30.0f);
     // Which radio: the driver's own name for it.
-    if (biasStandInActive()) {
+    if (engine_.biasStandInActive()) {
         ImGui::TextUnformatted("stand-in radio (FOXSDR_FORCE_BIAS_KEY)");
     } else if (engine_.device_ != nullptr) {
         ImGui::TextUnformatted(engine_.device_->name());
@@ -178,7 +120,7 @@ void AppWindow::drawBiasKeyConfirm() {
     // one, an RX888 opened through its bootloader, an RTL-SDR with no EEPROM,
     // a full memory - gets ONE sentence that is true of all of them, rather
     // than one per reason: FoxSDR will not be the thing that switches it on.
-    if (biasKeyMayRememberNow()) {
+    if (engine_.biasKeyMayRememberNow()) {
         ImGui::TextWrapped("%s", tr("FoxSDR will switch it on again whenever this radio is "
                                     "opened, until you turn it off."));
     } else {

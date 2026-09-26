@@ -276,7 +276,7 @@ struct AppWindowTestAccess {
         a.scanNative();
         a.engine_.soapyDevices_.clear();
         a.engine_.soapyDevices_.push_back({label, args});
-        a.selectSource(a.soapyRowBase());
+        a.selectSource(a.engine_.soapyRowBase());
         return waitOpen(a);
     }
     static void selectGenerator(AppWindow& a) { a.selectSource(0); }
@@ -305,7 +305,7 @@ struct AppWindowTestAccess {
     // What the dialog would do if it were drawn now: the question still stands.
     static void clearQueued(AppWindow& a) { a.biasKeyAskQueued_ = false; }
     // A tick or untick of the Source panel's checkbox.
-    static void tick(AppWindow& a, bool want) { a.switchBiasTee(want); }
+    static void tick(AppWindow& a, bool want) { a.engine_.switchBiasTee(want); }
     static const std::string& sourceError(AppWindow& a) { return a.engine_.sourceError_; }
     static const std::string& kind(AppWindow& a) { return a.engine_.sourceKind_; }
     static const std::string& args(AppWindow& a) { return a.engine_.deviceArgs_; }
@@ -332,7 +332,7 @@ struct AppWindowTestAccess {
     }
     // Whether the dialog, drawn now, would PROMISE that the radio comes back
     // on at its next open (the restore sentence) - the member it draws from.
-    static bool promisesRestore(AppWindow& a) { return a.biasKeyMayRememberNow(); }
+    static bool promisesRestore(AppWindow& a) { return a.engine_.biasKeyMayRememberNow(); }
     static std::size_t memorySize(AppWindow& a) { return a.engine_.biasTeePanel_.remembered.size(); }
 };
 

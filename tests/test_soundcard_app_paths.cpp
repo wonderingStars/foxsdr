@@ -275,13 +275,13 @@ struct AppWindowTestAccess {
         return true;
     }
     static bool listCards(AppWindow& a) {
-        a.scanSoundCards();
+        a.engine_.scanSoundCards();
         return settle(a);
     }
     // The Source section's Open with these settings on the Sound card row.
     static void startOpen(AppWindow& a, const SoundCardSettings& s) {
         a.engine_.sourceSel_ = AppWindow::kSoundCardRow;
-        a.soundCard_ = s;
+        a.engine_.soundCard_ = s;
         a.launchSoundCardOpen(false, s);
     }
     static bool open(AppWindow& a, const SoundCardSettings& s) {
@@ -290,8 +290,8 @@ struct AppWindowTestAccess {
     }
     static bool pending(AppWindow& a) { return a.engine_.soundCardOpenPending_; }
     // The Source section's controls, edited and not Opened.
-    static void setSection(AppWindow& a, const SoundCardSettings& s) { a.soundCard_ = s; }
-    static SoundCardSettings section(AppWindow& a) { return a.soundCard_; }
+    static void setSection(AppWindow& a, const SoundCardSettings& s) { a.engine_.soundCard_ = s; }
+    static SoundCardSettings section(AppWindow& a) { return a.engine_.soundCard_; }
     static SoundCardSettings liveCard(AppWindow& a) { return a.engine_.soundCardLive_; }
     static std::string err(AppWindow& a) { return a.engine_.sourceError_; }
     static std::string keepKind(AppWindow& a) { return a.engine_.restoreKeep_.kind; }
@@ -323,8 +323,8 @@ struct AppWindowTestAccess {
     static void setSoapy(AppWindow& a, std::vector<cascade::source::SoapyDeviceInfo> v) {
         a.engine_.soapyDevices_ = std::move(v);
     }
-    static int soapyRowBase(AppWindow& a) { return a.soapyRowBase(); }
-    static std::vector<SourceRowKey> rowKeys(AppWindow& a) { return a.sourceRowKeys(); }
+    static int soapyRowBase(AppWindow& a) { return a.engine_.soapyRowBase(); }
+    static std::vector<SourceRowKey> rowKeys(AppWindow& a) { return a.engine_.sourceRowKeys(); }
     static void scanNative(AppWindow& a) { a.scanNative(); }
     static void pick(AppWindow& a, int row) { a.selectSource(row); }
 
@@ -354,14 +354,14 @@ struct AppWindowTestAccess {
     }
     static void changeConverter(AppWindow& a, const ConverterSetting& s) { a.changeConverter(s); }
     static ConverterSetting live(AppWindow& a) { return a.engine_.pipeline_.converter(); }
-    static std::string keyNow(AppWindow& a) { return a.converterRadioKeyNow(); }
+    static std::string keyNow(AppWindow& a) { return a.engine_.converterRadioKeyNow(); }
     // The converter a patch radio with this key is given.
-    static ConverterSetting forKey(AppWindow& a, const std::string& key) { return a.converterForKey(key); }
+    static ConverterSetting forKey(AppWindow& a, const std::string& key) { return a.engine_.converterForKey(key); }
     static std::vector<ConverterMode> offered(AppWindow& a) { return a.converterModesOffered(); }
     static std::string unusableNote(AppWindow& a) { return a.converterUnusableNote(); }
     static double airCentre(AppWindow& a) { return a.engine_.pipeline_.activeSource().centerFrequencyHz(); }
     static double radioNow(AppWindow& a) { return a.engine_.pipeline_.rawSource().centerFrequencyHz(); }
-    static double counter(AppWindow& a) { return a.currentAbsoluteHz(); }
+    static double counter(AppWindow& a) { return a.engine_.currentAbsoluteHz(); }
     static void setVfo(AppWindow& a, double hz) { a.engine_.pipeline_.setVfoOffsetHz(hz); }
     static void setBandwidth(AppWindow& a, double hz) { a.engine_.vfoBandwidthHz_ = hz; }
     static std::string tuneNote(AppWindow& a) { return a.engine_.tuneMismatchNote_; }
@@ -370,7 +370,7 @@ struct AppWindowTestAccess {
     // The I/Q centre box, as drawSoundCardControls applies it to a running
     // I/Q card.
     static void typeIqCentre(AppWindow& a, double hz) {
-        a.soundCard_.iqCentreHz = hz;
+        a.engine_.soundCard_.iqCentreHz = hz;
         a.engine_.soundCardLive_.iqCentreHz = hz;
         a.applyRetuneNow(hz, false);
     }

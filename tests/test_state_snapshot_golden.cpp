@@ -266,7 +266,7 @@ struct AppWindowTestAccess {
         d.text = "a decoded line";
         a.engine_.decoderLog_.push_back(d);
     }
-    static void setTransmitPageOpen(AppWindow& a, bool on) { a.transmitOpen_ = on; }
+    static void setTransmitPageOpen(AppWindow& a, bool on) { a.engine_.transmitOpen_ = on; }
 
     // ===== THE PATH UNDER TEST ================================================
     // Stage 2: the one publish, and exactly what the web server's and CAT's

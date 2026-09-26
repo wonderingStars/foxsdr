@@ -1,59 +1,69 @@
-// test_command_path_guard.cpp - nothing but the command path changes the
-// receiver (engine extraction stage 1, docs/engine-stage1.md).
+// test_command_path_guard.cpp - only the Engine changes the receiver; the
+// window submits commands (engine extraction stages 1 and 3a,
+// docs/engine-stage1.md section 4 and docs/engine-stage3.md).
 //
 // THE RULE IT HOLDS. Since stage 1 every desktop control that changes the
-// receiver submits a FoxCommand, and AppWindow::applyCommand - with the engine
-// machinery it calls - is the only code that changes it. A control written
-// the old way would quietly reopen the second control path stage 1 closed,
-// and nothing would notice until the engine moves to its own thread (stage 3)
-// and the control races it. So the source is read, the way
-// tests/test_stop_ends_recordings reads it for pipeline_.stop():
+// receiver submits a FoxCommand, and applyCommand - with the engine machinery
+// it calls - is the only code that changes it. Since stage 3a that machinery
+// is the Engine's (src/engine), and the window (gui::AppWindow) holds the
+// Engine and asks it. A control written the old way would quietly reopen the
+// second control path stage 1 closed, and in stage 3b - when the engine runs
+// on its own control thread - it would race it. So the source is read, the
+// way tests/test_stop_ends_recordings reads it for pipeline_.stop():
 //
-// WHAT IS SCANNED. Every .cpp in src/gui (not only app_window*.cpp: an
-// AppWindow member can be defined in any file). The code is cut into
-// DEFINITIONS at every column-0 function head; an AppWindow member is a
-// definition named AppWindow::x, and a free function counts when its file
-// also defines AppWindow members (a helper written beside them). Members of
-// other classes are skipped - they cannot reach AppWindow's state, and a call
-// that hands them an engine object is caught at the call site (rule 4).
-// Comments and string literals are ignored.
+// WHAT IS SCANNED. Every .cpp in src/gui (an AppWindow member can be defined
+// in any file), cut into DEFINITIONS at every column-0 function head; an
+// AppWindow member is a definition named AppWindow::x, and a free function
+// counts when its file also defines AppWindow members. And the ENGINE's
+// surface, read from src/engine: every Engine::x it defines, which of those
+// its header declares `const` (a query), and every data member its header
+// declares. Comments and string literals are ignored. The window reaches the
+// engine through `engine_.`; the rules read "engine_." as if it were not
+// there, so `engine_.pipeline_.stop()` is judged as `pipeline_.stop()` was.
 //
-// THREE KINDS OF DEFINITION.
-//   ENGINE MEMBERS (kEngineMembers): applyCommand, the helpers it calls, the
-//     restore, the machinery that runs the receiver. Allowed to change state.
-//     Rule 5 keeps them free of ImGui input, so no control hides in one.
+// THREE KINDS OF WINDOW DEFINITION.
+//   WINDOW MACHINERY (kWindowMachinery): construction, teardown, the config
+//     restore, the web/CAT drain - the few window members that still drive
+//     the engine directly - and the EngineHost overrides (kHostHooks): the
+//     window's side of calls the ENGINE makes. Allowed to reach the engine;
+//     rule 5 keeps them free of ImGui input.
 //   LINE-ALLOWED MEMBERS (kLineAllowed): members that draw AND carry a few
-//     reviewed engine lines (drawUi's per-frame transmit key - OPEN 1; run's
-//     startup, teardown and verification seams; drawPatchPage's close -
-//     OPEN 2). Only the listed lines are exempt; any other line is judged as
-//     a control's.
+//     reviewed engine lines (drawUi's per-frame pump steps and transmit key;
+//     run's startup, teardown and verification seams; drawPatchPage's patch
+//     runtime steps). Only the listed lines are exempt.
 //   CONTROLS: everything else - every widget, key handler, gesture and new
 //     helper. In a control:
-//     1. no call to a state-changing helper (kHelpers);
+//     1. no call to a state-changing helper (kHelpers), a window-machinery
+//        member, or an Engine method that is not a const query - except the
+//        command path itself (kControlMayCall);
 //     2. no call on an engine object (kEngineObjects) except the reviewed
 //        read-only ones (kReadOnly); a bare accessor that hands out the
 //        object (pipeline_.activeSource()) only into a `const` binding;
-//     3. no write to a receiver field (kFields): plain and compound
+//     3. no write to the Engine's state: any receiver field (kFields) and
+//        every data member the Engine declares - plain and compound
 //        assignment, ++/--, taking its address, a subscripted write, or a
-//        mutating container call - with or without `this->`;
+//        mutating container call - with or without `this->`. The Engine
+//        fields the window still edits IN PLACE are listed (kWindowMayWrite),
+//        each an OPEN item for stage 3b in docs/engine-stage3.md;
 //     4. no engine object passed as an argument (a free helper taking
 //        Pipeline& would otherwise change state on a control's behalf).
-//   5. an engine member contains no ImGui input (Button, Checkbox, Slider,
-//      IsKeyPressed ...).
-//   6. every name on the two allow-lists exists in the tree, so a stale
-//      entry cannot quietly allow a future member of the same name.
+//   5. window machinery contains no ImGui input (Button, Checkbox, Slider,
+//      IsKeyPressed ...); src/engine contains no ImGui at all.
+//   6. every name on every allow-list exists in the tree (an AppWindow member
+//      in src/gui, or an Engine member in src/engine), so a stale entry
+//      cannot quietly allow a future member of the same name.
 //
-// A new helper that must change state goes on kEngineMembers, in review, with
-// a reason. The per-op test (test_apply_command) and review are the other two
-// nets; an indirection none of the lists names (a stored lambda called later,
-// a pointer to a receiver field kept in a member) is not seen here.
+// A new helper that must change state belongs in the Engine. The per-op test
+// (test_apply_command), the headless engine test (test_engine_headless) and
+// review are the other nets; an indirection none of the lists names (a
+// stored lambda called later, a pointer to an engine field kept in a window
+// member) is not seen here.
 //
-// Proven red (docs/engine-stage1.md): a setter in drawRadioSection; volume_
-// assigned in drawToolbar; a setter in a helper outside the list; and the
-// reviewer's probes - a widget calling a new helper that tunes, a Button in
-// drawUi that sets the squelch and tunes, compound/increment/address/
-// subscript/container writes to receiver fields, a free helper taking the
-// Pipeline, and the same code in a new src/gui file.
+// Proven red (docs/engine-stage1.md; docs/engine-stage3.md for stage 3a): a
+// setter in drawRadioSection; volume_ assigned in drawToolbar; a setter in a
+// helper outside the list; the stage-1 reviewer's probes; and, since 3a, a
+// window control calling a non-const Engine method, and a window control
+// writing an Engine field that is not a receiver field.
 //
 // argv[1], optional: a root to scan instead of the source tree (used to run
 // the probes against a copy).
@@ -168,57 +178,132 @@ const char* const kFields[] = {
     "userPresets_", "patchRunning_", "converters_", "device_", "sourceKind_",
 };
 
-// --- the allow-lists ---------------------------------------------------------------
-const char* const kEngineMembers[] = {
-    // Construction, teardown, restore.
-    "AppWindow", "~AppWindow", "applyConfig",
-    // THE command path and the helpers its ops call.
-    "applyCommand", "applyControlRequest", "applyWebControls", "applyPluginApi",
-    "startReceiver", "stopReceiver", "endTakes", "endTakesOnFault", "installSource", "followInputRate",
-    "setModeIndex", "setVfoToAbsoluteHz", "tuneAbsoluteHz", "retuneSourceHz", "applyRetuneNow",
-    "pollPendingRetune", "retuneFixedCentre", "tuneToBookmark", "addBookmarkHere", "importBookmarkFile",
-    "flushBookmarkSave", "startIqRecording", "stopIqRecording", "startAudioRecording",
-    "stopAudioRecording", "applyReceiverPosition", "loadBandPlan", "changeConverter",
-    "applyConverterForSource", "switchBiasTee", "selectSourceById", "selectSource", "openIqFile",
-    "openPlutoAt", "openPlutoFromBox", "launchSoundCardOpen", "requestAudioOpen", "openTransmitRadio",
-    "closeTransmitRadio", "followTransmitFrequency", "patchPressStart", "patchAllOff",
-    "applyUserPresetEdit",
-    // The local command queue itself.
+// --- the window's machinery ---------------------------------------------------------
+// The window members that still drive the engine directly: construction,
+// teardown, the config restore and the web/CAT drain - and, until the stage-3a commit that moves them into src/engine, the
+// engine machinery that has not moved yet (the second group below).
+const char* const kWindowMachinery[] = {
+    "AppWindow",
+    "~AppWindow",
+    "applyConfig",
+    "currentConfig",
+    "applyWebControls",
+    // not moved yet:
+    "applyCommand",
+    "applyControlRequest",
+    "applyPluginApi",
+    "startReceiver",
+    "followInputRate",
+    "tuneAbsoluteHz",
+    "retuneSourceHz",
+    "applyRetuneNow",
+    "pollPendingRetune",
+    "tuneToBookmark",
+    "changeConverter",
+    "selectSourceById",
+    "selectSource",
+    "openIqFile",
+    "openPlutoAt",
+    "openPlutoFromBox",
+    "launchSoundCardOpen",
     "drainLocalCommands",
-    // Devices: open completion, fault recovery, scans, the sound card, the mute.
-    "finishDeviceOpen", "adoptDeviceMirrors", "openDeviceSync", "pollSourceAsync",
-    "reopenAfterDriverFault", "pollSoapyRecovery", "scanNative", "scanSoapy", "pollSoundCard",
-    "updateAudioMute", "pollAudioHealth", "pollAudioOpen", "applyAudioOpenResult", "pollMicOpen",
-    "pollGpsReader", "scannerFrame",
-    // Plugins and the store.
-    "applyPluginPreset", "maybeAutoPreset", "maybeAutoPresetOnShow", "maybeAutoPresetOnStart",
-    "setPluginStopped", "recordPluginStopped", "setPluginMutes", "setPluginTuneAllowed",
-    "setPluginSettingsAllowed", "applyPluginTuneGrants", "applyPluginSettingsGrants",
-    "stopMutingPlugins", "rescanPlugins", "detachAndUnloadPlugins", "refreshPluginRunner",
-    "startCatalogFetch", "startInstall", "startUpdate", "startAddAll", "pumpAddAll",
-    "pollPluginAsync", "removeInstalledPlugin", "removeBlockedPlugin", "pumpDecoderOutput",
-    // The patch page's radio hand-over and run state.
-    "patchReconcile", "patchStopAll", "patchApplyRunning",
-    // What remote clients and plugins read: the one receiver snapshot (engine
-    // stage 2), filled from the receiver's members and published once a
-    // frame. They read the receiver and write only the snapshot (and the
-    // browser's row map), which is why they are machinery, not controls.
-    "publishReceiverState", "fillPublishedState", "fillStatusLists",
-    // The RSP / RX888 switch helpers (free functions beside the members).
-    "withRfNotch", "withDabNotch", "withHdrMode", "withAdcSwitches",
+    "finishDeviceOpen",
+    "pollSourceAsync",
+    "reopenAfterDriverFault",
+    "pollSoapyRecovery",
+    "scanNative",
+    "pollSoundCard",
+    "scannerFrame",
+    "applyPluginPreset",
+    "maybeAutoPreset",
+    "maybeAutoPresetOnShow",
+    "maybeAutoPresetOnStart",
+    "setPluginStopped",
+    "stopMutingPlugins",
+    "rescanPlugins",
+    "refreshPluginRunner",
+    "pollPluginAsync",
+    "removeInstalledPlugin",
+    "removeBlockedPlugin",
+    "patchReconcile",
+    "patchStopAll",
+    "patchApplyRunning",
+    "publishReceiverState",
+    "submitCommand",
 };
 
-// Calls a control MAY make to an engine member: the command path itself.
-// (Every other kEngineMembers name is a forbidden call in a control - rule 1 -
-// so a control cannot reach state by calling machinery, and a new helper that
-// calls machinery is itself judged a control until it is reviewed onto the
-// list.)
-const char* const kControlMayCall[] = {"applyCommand", "AppWindow", "~AppWindow"};
+// The EngineHost overrides (engine/engine_host.hpp): the window's half of a
+// call the ENGINE makes, on the engine's behalf - it redraws, re-seeds a
+// field, pauses the watchdog, answers a question about the view. Judged as
+// machinery: rule 5 applies, rules 1-4 do not (the one rule-1 helper they
+// use is spectrum_->setRange, in onDisplayRange: the engine's new range
+// applied to this window's spectrum).
+const char* const kHostHooks[] = {
+    "frameClockRunning",  "frameTimeS",          "wallTimeS",
+    "pauseWatchdog",      "resumeWatchdog",      "onDisplayRange",
+    "onBookmarksChanged", "openPluginWindowsFor", "onReceiverPositionApplied",
+    "onConverterChanged", "onPatchGraphChanged", "onPatchPicture",
+    "onGpsFixApplied",    "onCatalogueFetchStarting", "onCatalogueResult",
+    "onAddAllFinished",   "planAddAll",          "beforePluginRescan",
+    "onPluginsUnloading", "attachBasemap",       "attachTrackInfo",
+    "showDemonstrationInstrument", "drainTrackInfoText", "patchPageOpen",
+    "webListening",       "tunerDisplayStyle",   "basemapFacts",
+    "enrichWebTrack",     "fillWebImages",
+};
 
-// Read-only queries exempt from rule 4 alone: each hands the open radio to a
-// pure predicate (engine/bias_tee.hpp) to ask whether it has a bias tee / whether
-// an "on" would be remembered. Rules 1-3 still apply to them.
-const char* const kQueryMembers[] = {"biasTeeReachable", "biasKeyMayRememberNow"};
+// Calls a control MAY make to a state-changing name: the command path itself,
+// and the few non-const Engine methods that change no receiver state.
+const char* const kControlMayCall[] = {
+    "applyCommand", "submitCommand", "AppWindow", "~AppWindow",
+    // Usage telemetry: the window reports which panel was opened (a counter
+    // in the report, not receiver state).
+    "telemetryNotePanel",
+    // the config snapshot the save compares and writes (window machinery; it accrues the usage report)
+    "currentConfig",
+    // a query: the tuned frequency (not declared const: activeSource() is not)
+    "currentAbsoluteHz",
+    // a query: the air centre a switch would carry
+    "carriedAirCentre",
+    // a pure function of its argument (static)
+    "muteNameList",
+    // the crash handler's description of the receiver, refreshed for a diagnostics bundle
+    "refreshDiagContext",
+    // the sound card panel lists the cards (OPEN: a direct call, not a command)
+    "scanSoundCards",
+};
+
+// ENGINE FIELDS THE WINDOW STILL EDITS IN PLACE. Each is a form or a page
+// state the engine reads when it acts (docs/engine-stage3.md, OPEN: stage 3b
+// must turn each into a command or a form the command carries, because a
+// write from the GUI thread races the control thread). Rules 1-4 still
+// judge every other engine field.
+const char* const kWindowMayWrite[] = {
+    "scanStartMhz_",  // the scanner panel edits the scanner range in place (SCANNER_RUN carries it)
+    "scanStopMhz_",  // the same
+    "scanStepKhz_",  // the same
+    "scanDwellMs_",  // the scanner panel: the timing SCANNER_RUN reads when applied
+    "scanHoldMs_",  // the same
+    "scanResumeMs_",  // the same
+    "scanListenMs_",  // the same
+    "soundCard_",  // the sound card panel: what SELECT_SOURCE soundcard:open opens (stage 1 OPEN 3)
+    "plutoUri_",  // the Pluto address box: what open-pluto and the Pluto row read
+    "transmitArgs_",  // the transmit address box: what TX_OPEN opens
+    "transmitOpen_",  // the Transmit page open flag: the remote-transmit consent (stage 1 OPEN 2)
+    "patchGraph_",  // the patch canvas edits the document the patch runtime runs (stage 1 OPEN 10)
+    "sourceError_",  // a typed frequency clears the Source panel error line when submitted (stage 1 OPEN 8)
+    "soapyScanDeferredLogged_",  // the Source panel forgets the scan deferral it logged once the gate opens
+    "pluginCatalogueUrl_",  // the store URL box commits its text
+    "gpsRefusal_",  // the GPS row clears the refusal line when its port changes
+    "patchSinkLines_",  // a Text out face's Clear key
+    "mutePopupQueued_",  // the mute dialog consumes the queued opening
+    "muteKeptRunning_",  // the mute dialog's Keep it running answer
+    "mutePopup_",  // the mute dialog closes its subject
+    "decoderLog_",  // the Decoder output window's Clear key
+    "bookmarkImportNote_",  // the Bookmarks panel clears its last import note
+    "telemetryEnabled_",  // the usage reporting switch (API: TELEMETRY_ENABLE)
+    "telemetryInstallId_",  // the usage reporting switch mints or forgets the install id
+    "soundCardMissing_",  // the sound card panel forgets the missing-card line when a card is picked
+};
 
 struct LineAllow {
     const char* member;
@@ -283,6 +368,35 @@ const LineAllow kLineAllowed[] = {
     {"run", "pipeline_.stop();"},
     {"run", "patchStopAll(false);"},
     {"run", "detachAndUnloadPlugins();"},
+    // --- engine stage 3a: window lines that still drive the engine directly ---
+    // the census seam: a stand-in bias tee for a bounded run
+    {"run", "biasStandIn_ = cascade::gui::biasStandInFor("},
+    // the GPS test seam starts a read
+    {"run", "gpsRefusal_.clear();"},
+    // the catalogue test hook points the store at its catalogue
+    {"run", "pluginCatalogueUrl_ = pluginTestHook_;"},
+    // the teardown marks the clean exit
+    {"run", "telemetryCleanExit_ = true;"},
+    // the crash handler's context, once a second and at start
+    {"run", "refreshDiagContext();"},
+    // the patch runtime's per-frame steps (OPEN 2/10)
+    {"drawPatchPage", "rebuildPatchCatalogue();"},
+    // closing the page stops the patch (OPEN 2)
+    {"drawPatchPage", "patchWasOpen_ = false;"},
+    // the same
+    {"drawPatchPage", "patchWasRunning_ = false;"},
+    // the same
+    {"drawPatchPage", "patchDspSig_.clear();"},
+    // the same
+    {"drawPatchPage", "patchRefused_.clear();"},
+    // the one compile a frame
+    {"drawPatchPage", "patchPlan_ = cascade::core::patch::compile("},
+    // the same (a const pointer handed to compile)
+    {"drawPatchPage", "&patchCatalogue_);"},
+    // each radio publishes its set
+    {"drawPatchPage", "patchPublishSets();"},
+    // the page is open this frame
+    {"drawPatchPage", "patchWasOpen_ = true;"},
 };
 
 // --- rule 5: ImGui input ---------------------------------------------------------------
@@ -443,11 +557,11 @@ struct FieldPatterns {
     std::vector<std::regex> writes;
 };
 
-std::vector<FieldPatterns> fieldPatterns() {
+std::vector<FieldPatterns> fieldPatterns(const std::vector<std::string>& names) {
     std::vector<FieldPatterns> out;
     const std::string pre = "(^|[^A-Za-z0-9_.>]|this->)";
     const std::string assignOp = "\\s*([-+*/%&|^]|<<|>>)?=(?!=)";
-    for (const char* f : kFields) {
+    for (const std::string& f : names) {
         FieldPatterns p;
         p.name = f;
         p.writes.emplace_back(pre + f + assignOp);
@@ -459,18 +573,6 @@ std::vector<FieldPatterns> fieldPatterns() {
                               "\\s*(\\.|->)\\s*(assign|append|clear|push_back|emplace_back|emplace|"
                               "erase|insert|swap|resize|pop_back|replace|reset)\\s*\\(");
         out.push_back(std::move(p));
-    }
-    return out;
-}
-
-// Rule 1's tokens: the curated helpers and every engine member (as a call)
-// but the command path itself.
-std::vector<std::string> helperTokens() {
-    std::vector<std::string> out(std::begin(kHelpers), std::end(kHelpers));
-    for (const char* m : kEngineMembers) {
-        if (inList(m, kControlMayCall)) { continue; }
-        const std::string call = std::string(m) + "(";
-        if (std::find(out.begin(), out.end(), call) == out.end()) { out.push_back(call); }
     }
     return out;
 }
@@ -553,22 +655,147 @@ void judgeControlLine(const std::string& l, const std::vector<std::string>& help
     }
 }
 
+// --- THE ENGINE'S SURFACE, read from src/engine ------------------------------------------
+struct EngineSurface {
+    std::set<std::string> methods;       // every Engine::x defined, and every method the header declares
+    std::set<std::string> constMethods;  // the ones the header declares `const` - queries
+    std::set<std::string> fields;        // every data member the header declares
+    int imguiUses = 0;                   // "ImGui::" anywhere in src/engine (must be none)
+};
+
+std::string trimmed(const std::string& s) {
+    std::size_t b = 0;
+    while (b < s.size() && (s[b] == ' ' || s[b] == '\t')) { ++b; }
+    std::size_t e = s.size();
+    while (e > b && (s[e - 1] == ' ' || s[e - 1] == '\t')) { --e; }
+    return s.substr(b, e - b);
+}
+
+// The statements of `class Engine`'s body, one string each (a nested struct
+// or an inline body is part of the statement that opens it).
+std::vector<std::string> engineClassStatements(const std::vector<std::string>& lines) {
+    std::vector<std::string> out;
+    bool in = false;
+    int depth = 0;
+    std::string cur;
+    for (const std::string& l : lines) {
+        if (!in) {
+            if (l.rfind("class Engine {", 0) == 0) {
+                in = true;
+                depth = 1;
+            }
+            continue;
+        }
+        const int before = depth;
+        for (const char c : l) {
+            if (c == '{') { ++depth; }
+            if (c == '}') { --depth; }
+        }
+        if (depth <= 0) { break; }
+        const std::string t = trimmed(l);
+        if (before == 1 && cur.empty() && (t.empty() || t.back() == ':')) { continue; }
+        cur += " " + t;
+        if (depth == 1 && !t.empty() && (t.back() == ';' || t.back() == '}')) {
+            out.push_back(cur);
+            cur.clear();
+        }
+    }
+    return out;
+}
+
+EngineSurface readEngine(const fs::path& root) {
+    EngineSurface s;
+    const fs::path dir = root / "src" / "engine";
+    std::error_code ec;
+    CHECK(fs::is_directory(dir, ec));
+    for (const auto& e : fs::directory_iterator(dir, ec)) {
+        const std::string ext = e.path().extension().string();
+        if (ext != ".cpp" && ext != ".hpp") { continue; }
+        const std::vector<std::string> lines = codeLines(readFile(e.path()));
+        for (const std::string& l : lines) {
+            if (l.find("ImGui::") != std::string::npos) { ++s.imguiUses; }
+            const std::string d = definitionAt(l);
+            if (d.rfind("other:Engine::", 0) == 0) { s.methods.insert(d.substr(std::strlen("other:Engine::"))); }
+        }
+        if (e.path().filename() != "engine.hpp") { continue; }
+        static const std::regex fieldRx("([A-Za-z][A-Za-z0-9]*_)\\s*(=|\\{|;|\\[)");
+        for (const std::string& st0 : engineClassStatements(lines)) {
+            const std::string st = trimmed(st0);
+            if (st.rfind("friend ", 0) == 0 || st.rfind("using ", 0) == 0 || st.rfind("struct ", 0) == 0 ||
+                st.rfind("enum ", 0) == 0 || st.rfind("class ", 0) == 0) {
+                continue;
+            }
+            const std::size_t paren = st.find('(');
+            const std::size_t eq = st.find('=');
+            if (paren != std::string::npos && (eq == std::string::npos || paren < eq)) {
+                std::size_t e2 = paren;
+                while (e2 > 0 && st[e2 - 1] == ' ') { --e2; }
+                std::size_t b2 = e2;
+                while (b2 > 0 && (isIdent(st[b2 - 1]) || st[b2 - 1] == '~')) { --b2; }
+                const std::string name = st.substr(b2, e2 - b2);
+                if (name.empty() || name == "operator") { continue; }
+                s.methods.insert(name);
+                int depth = 0;
+                std::size_t close = std::string::npos;
+                for (std::size_t i = paren; i < st.size(); ++i) {
+                    if (st[i] == '(') { ++depth; }
+                    if (st[i] == ')' && --depth == 0) {
+                        close = i;
+                        break;
+                    }
+                }
+                if (close != std::string::npos) {
+                    const std::size_t stop = st.find_first_of(";{=", close);
+                    const std::string tail = st.substr(close, stop == std::string::npos ? std::string::npos : stop - close);
+                    if (tail.find("const") != std::string::npos) { s.constMethods.insert(name); }
+                }
+                continue;
+            }
+            std::smatch m;
+            std::string rest = st;
+            while (std::regex_search(rest, m, fieldRx)) {
+                s.fields.insert(m[1].str());
+                rest = m.suffix().str();
+            }
+        }
+    }
+    return s;
+}
+
 struct Report {
     int violations = 0;
     int controls = 0;
     int submitsInDraw = 0;
-    int engineLines = 0;
+    int machineryLines = 0;
     int allowedLinesUsed = 0;
     std::set<std::string> membersSeen;
     std::set<std::string> allowedLinesSeen;
 };
 
-void scan(const fs::path& root, Report& r) {
+void scan(const fs::path& root, const EngineSurface& eng, Report& r) {
     const fs::path gui = root / "src" / "gui";
     std::error_code ec;
     CHECK(fs::is_directory(gui, ec));
-    const std::vector<FieldPatterns> fields = fieldPatterns();
-    const std::vector<std::string> helpers = helperTokens();
+    // Rule 3's fields: the receiver's, and every field the Engine declares,
+    // but those the window still edits in place (each an OPEN item).
+    std::vector<std::string> fieldNames(std::begin(kFields), std::end(kFields));
+    for (const std::string& f : eng.fields) {
+        if (inList(f, kWindowMayWrite)) { continue; }
+        if (std::find(fieldNames.begin(), fieldNames.end(), f) == fieldNames.end()) { fieldNames.push_back(f); }
+    }
+    const std::vector<FieldPatterns> fields = fieldPatterns(fieldNames);
+    // Rule 1's tokens: the curated helpers, the window's own machinery, and
+    // every Engine method that is not a const query - but the command path.
+    std::vector<std::string> helpers(std::begin(kHelpers), std::end(kHelpers));
+    const auto addCall = [&helpers](const std::string& m) {
+        if (inList(m, kControlMayCall)) { return; }
+        const std::string call = m + "(";
+        if (std::find(helpers.begin(), helpers.end(), call) == helpers.end()) { helpers.push_back(call); }
+    };
+    for (const char* m : kWindowMachinery) { addCall(m); }
+    for (const std::string& m : eng.methods) {
+        if (eng.constMethods.count(m) == 0) { addCall(m); }
+    }
     std::set<std::string> controls;
     for (const auto& e : fs::directory_iterator(gui, ec)) {
         if (e.path().extension() != ".cpp") { continue; }
@@ -592,17 +819,17 @@ void scan(const fs::path& root, Report& r) {
                 continue;  // file scope, another class, or a file with no AppWindow code
             }
             r.membersSeen.insert(member);
-            if (inList(member, kEngineMembers)) {
-                // 5. no ImGui input in engine machinery.
+            if (inList(member, kWindowMachinery) || inList(member, kHostHooks)) {
+                // 5. no ImGui input in machinery.
                 for (const char* in : kImGuiInput) {
                     if (l.find(std::string("ImGui::") + in) != std::string::npos) {
                         ++r.violations;
-                        std::printf("FAIL: engine member AppWindow::%s takes ImGui input (%s) at %s:%zu"
+                        std::printf("FAIL: machinery AppWindow::%s takes ImGui input (%s) at %s:%zu"
                                     " - a control does not belong here\n",
                                     member.c_str(), in, file.c_str(), i + 1);
                     }
                 }
-                ++r.engineLines;
+                ++r.machineryLines;
                 continue;
             }
             bool allowedLine = false;
@@ -621,11 +848,11 @@ void scan(const fs::path& root, Report& r) {
                 ++r.submitsInDraw;
             }
             std::vector<std::string> found;
-            judgeControlLine(l, helpers, fields, inList(member, kQueryMembers), found);
+            judgeControlLine(l, helpers, fields, false, found);
             for (const std::string& f : found) {
                 ++r.violations;
                 std::printf("FAIL: AppWindow::%s changes the receiver outside the command path (%s) at "
-                            "%s:%zu\n      -> submit a command (docs/engine-stage1.md)\n",
+                            "%s:%zu\n      -> submit a command (docs/engine-stage1.md, docs/engine-stage3.md)\n",
                             member.c_str(), f.c_str(), file.c_str(), i + 1);
             }
         }
@@ -639,28 +866,46 @@ int main(int argc, char** argv) {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     const fs::path root = (argc > 1) ? fs::path(argv[1]) : fs::path(CASCADE_SOURCE_DIR);
     std::printf("scanning %s\n", root.string().c_str());
+    const EngineSurface eng = readEngine(root);
+    std::printf("  the engine: %zu methods (%zu const queries), %zu fields, %d ImGui uses\n",
+                eng.methods.size(), eng.constMethods.size(), eng.fields.size(), eng.imguiUses);
     Report r;
-    scan(root, r);
-    std::printf("  %d controls judged, %d submitCommand calls in draw members, %d engine-member lines, "
+    scan(root, eng, r);
+    std::printf("  %d controls judged, %d submitCommand calls in draw members, %d window-machinery lines, "
                 "%d allowed engine lines in drawing members, %d violations\n",
-                r.controls, r.submitsInDraw, r.engineLines, r.allowedLinesUsed, r.violations);
+                r.controls, r.submitsInDraw, r.machineryLines, r.allowedLinesUsed, r.violations);
     // The scan saw the real files.
     CHECK(r.controls >= 60);
     CHECK(r.submitsInDraw >= 40);
-    CHECK(r.engineLines >= 2000);
+    CHECK(eng.methods.size() >= 100);
+    CHECK(eng.fields.size() >= 200);
     CHECK(r.violations == 0);
+    // 5. The engine is built without ImGui (the configure-time check enforces
+    // the includes; this is the belt to that brace).
+    CHECK(eng.imguiUses == 0);
     // 6. Every allow-list entry names something that exists.
-    for (const char* m : kEngineMembers) {
+    for (const char* m : kWindowMachinery) {
         if (r.membersSeen.count(m) == 0) {
-            std::printf("FAIL: kEngineMembers names %s, which is not defined - remove it\n", m);
+            std::printf("FAIL: kWindowMachinery names %s, which the window does not define - remove it\n", m);
         }
         CHECK(r.membersSeen.count(m) != 0);
     }
-    for (const char* m : kQueryMembers) {
+    for (const char* m : kHostHooks) {
         if (r.membersSeen.count(m) == 0) {
-            std::printf("FAIL: kQueryMembers names %s, which is not defined - remove it\n", m);
+            std::printf("FAIL: kHostHooks names %s, which the window does not define - remove it\n", m);
         }
         CHECK(r.membersSeen.count(m) != 0);
+    }
+    for (const char* m : kControlMayCall) {
+        const bool ok = eng.methods.count(m) != 0 || r.membersSeen.count(m) != 0;
+        if (!ok) { std::printf("FAIL: kControlMayCall names %s, which nothing defines - remove it\n", m); }
+        CHECK(ok);
+    }
+    for (const char* f : kWindowMayWrite) {
+        if (eng.fields.count(f) == 0) {
+            std::printf("FAIL: kWindowMayWrite names %s, which the engine does not declare - remove it\n", f);
+        }
+        CHECK(eng.fields.count(f) != 0);
     }
     for (const LineAllow& a : kLineAllowed) {
         const std::string key = std::string(a.member) + "|" + a.code;

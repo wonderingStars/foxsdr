@@ -316,7 +316,7 @@ struct AppWindowTestAccess {
     // The receiver.
     static bool running(AppWindow& a) { return a.engine_.pipeline_.running(); }
     static double centre(AppWindow& a) { return a.engine_.pipeline_.activeSource().centerFrequencyHz(); }
-    static double tuned(AppWindow& a) { return a.currentAbsoluteHz(); }
+    static double tuned(AppWindow& a) { return a.engine_.currentAbsoluteHz(); }
     static double vfo(AppWindow& a) { return a.engine_.pipeline_.vfoOffsetHz(); }
     static float vfoKhz(AppWindow& a) { return a.engine_.vfoOffsetKhz_; }
     static double inputRate(AppWindow& a) { return a.engine_.pipeline_.inputRateHz(); }
@@ -413,15 +413,15 @@ struct AppWindowTestAccess {
     static bool biasOn(AppWindow& a) { return a.engine_.biasStandInOn_; }
     static cascade::core::ConverterSetting converter(AppWindow& a) { return a.engine_.pipeline_.converter(); }
     static void setSoundCardForm(AppWindow& a) {
-        a.soundCard_ = cascade::source::SoundCardSettings{};
-        a.soundCard_.device = "Fake Card";
-        a.soundCard_.hostApi = "Fake API";
-        a.soundCard_.cardRateHz = 48000.0;
+        a.engine_.soundCard_ = cascade::source::SoundCardSettings{};
+        a.engine_.soundCard_.device = "Fake Card";
+        a.engine_.soundCard_.hostApi = "Fake API";
+        a.engine_.soundCard_.cardRateHz = 48000.0;
     }
     static void setSoundCardFormIq(AppWindow& a) {
         setSoundCardForm(a);
-        a.soundCard_.format = cascade::source::SoundCardFormat::IqStereo;
-        a.soundCard_.iqCentreHz = 7.0e6;
+        a.engine_.soundCard_.format = cascade::source::SoundCardFormat::IqStereo;
+        a.engine_.soundCard_.iqCentreHz = 7.0e6;
     }
     static double liveIqCentre(AppWindow& a) { return a.engine_.soundCardLive_.iqCentreHz; }
 
@@ -455,11 +455,11 @@ struct AppWindowTestAccess {
     }
     static void webRequest(AppWindow& a, const cascade::net::ControlRequest& r) { a.applyControlRequest(r); }
     static bool scanning(AppWindow& a) { return a.engine_.scanner_.active(); }
-    static double scanStartMhz(AppWindow& a) { return a.scanStartMhz_; }
-    static double scanStopMhz(AppWindow& a) { return a.scanStopMhz_; }
-    static double scanStepKhz(AppWindow& a) { return a.scanStepKhz_; }
-    static double scanDwell(AppWindow& a) { return a.scanDwellMs_; }
-    static double scanListen(AppWindow& a) { return a.scanListenMs_; }
+    static double scanStartMhz(AppWindow& a) { return a.engine_.scanStartMhz_; }
+    static double scanStopMhz(AppWindow& a) { return a.engine_.scanStopMhz_; }
+    static double scanStepKhz(AppWindow& a) { return a.engine_.scanStepKhz_; }
+    static double scanDwell(AppWindow& a) { return a.engine_.scanDwellMs_; }
+    static double scanListen(AppWindow& a) { return a.engine_.scanListenMs_; }
 
     // Plugins and the store.
     static const cascade::core::LoadedPlugin* fixture(AppWindow& a) {
@@ -472,10 +472,10 @@ struct AppWindowTestAccess {
         const cascade::core::LoadedPlugin* p = fixture(a);
         return p != nullptr ? cascade::core::pluginKey(*p) : std::string();
     }
-    static bool stopped(AppWindow& a, const std::string& key) { return a.pluginIsStopped(key); }
+    static bool stopped(AppWindow& a, const std::string& key) { return a.engine_.pluginIsStopped(key); }
     static bool mutes(AppWindow& a) {
         const cascade::core::LoadedPlugin* p = fixture(a);
-        return p != nullptr && a.pluginMutes(*p);
+        return p != nullptr && a.engine_.pluginMutes(*p);
     }
     static bool tuneGranted(AppWindow& a, const std::string& key) {
         for (const std::string& k : a.engine_.pluginTuneAllowed_) {
@@ -526,7 +526,7 @@ struct AppWindowTestAccess {
 
     // The patch page, the transmitter, audio, position, GPS.
     static bool patchRunning(AppWindow& a) { return a.engine_.patchRunning_; }
-    static void setTransmitOpen(AppWindow& a, bool on) { a.transmitOpen_ = on; }
+    static void setTransmitOpen(AppWindow& a, bool on) { a.engine_.transmitOpen_ = on; }
     static bool haveTx(AppWindow& a) { return a.engine_.transmitter_.haveSink(); }
     static std::int64_t remoteHoldMs(AppWindow& a) { return a.engine_.transmitter_.remoteHoldRemainingMs(); }
     static int txMode(AppWindow& a) { return a.engine_.transmitModeIndex_; }
@@ -536,7 +536,7 @@ struct AppWindowTestAccess {
     static int txInput(AppWindow& a) { return a.engine_.transmitInputIndex_; }
     static double txTone(AppWindow& a) { return a.engine_.transmitToneHz_; }
     static bool txMonitor(AppWindow& a) { return a.engine_.transmitMonitor_; }
-    static const std::string& txArgs(AppWindow& a) { return a.transmitArgs_; }
+    static const std::string& txArgs(AppWindow& a) { return a.engine_.transmitArgs_; }
     static double txFrequency(AppWindow& a) { return a.engine_.transmitter_.frequencyHz(); }
     static void addAudioDevice(AppWindow& a, int paIndex, const char* name) {
         a.engine_.devices_.push_back({paIndex, name, false});

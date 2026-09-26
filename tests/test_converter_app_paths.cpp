@@ -293,7 +293,7 @@ struct AppWindowTestAccess {
     static bool selectSoapy(AppWindow& a, const std::string& args, const std::string& label) {
         a.engine_.soapyDevices_.clear();
         a.engine_.soapyDevices_.push_back({label, args});
-        a.selectSource(a.soapyRowBase());
+        a.selectSource(a.engine_.soapyRowBase());
         return waitOpen(a);
     }
 
@@ -302,7 +302,7 @@ struct AppWindowTestAccess {
     static void tune(AppWindow& a, double airCentreHz) { a.applyRetuneNow(airCentreHz); }
 
     static double airCentre(AppWindow& a) { return a.engine_.pipeline_.activeSource().centerFrequencyHz(); }
-    static double counter(AppWindow& a) { return a.currentAbsoluteHz(); }
+    static double counter(AppWindow& a) { return a.engine_.currentAbsoluteHz(); }
     static void setVfo(AppWindow& a, double hz) { a.engine_.pipeline_.setVfoOffsetHz(hz); }
     static double vfo(AppWindow& a) { return a.engine_.pipeline_.vfoOffsetHz(); }
     static ConverterSetting live(AppWindow& a) { return a.engine_.pipeline_.converter(); }
@@ -334,7 +334,7 @@ struct AppWindowTestAccess {
         return a.engine_.sourceSel_ == row;
     }
     static bool openPluto(AppWindow& a, const std::string& uri) {
-        std::snprintf(a.plutoUri_, sizeof(a.plutoUri_), "%s", uri.c_str());
+        std::snprintf(a.engine_.plutoUri_, sizeof(a.engine_.plutoUri_), "%s", uri.c_str());
         a.openPlutoFromBox();
         return waitOpen(a);
     }

@@ -126,6 +126,17 @@ const Allowed kAllowed[] = {
      "testRspPreTuneGoesThroughItsConverter)"},
 };
 
+// ENGINE STAGE 3a moved the window's receiver machinery, verbatim, into
+// src/engine: engine.cpp holds what was app_window.cpp's, engine_converter.cpp
+// what was app_window_converter.cpp's, and so on. A site keeps its verdict
+// wherever it now lives, so the lists above name the file the code CAME from
+// and this maps the file it is in back to it.
+std::string originOf(const std::string& name) {
+    if (name == "engine.cpp") { return "app_window.cpp"; }
+    if (name.rfind("engine_", 0) == 0) { return "app_window_" + name.substr(7); }
+    return name;
+}
+
 // Files that ARE the translation layer, or never speak to the receiving radio.
 bool exempt(const fs::path& p) {
     const std::string s = p.generic_string();
@@ -227,7 +238,7 @@ int main(int argc, char** argv) {
                     // lines may print it. Counted once, on the rawSource hit.
                     if (std::string(needle) != "rawSource(") { continue; }
                     ++raw;
-                    if (name == "app_window_converter.cpp") {
+                    if (originOf(name) == "app_window_converter.cpp") {
                         verdict = "RADIO FIGURE (the converter's own file: status lines, carriedAirCentre)";
                         ++allowed;
                     }
@@ -247,7 +258,7 @@ int main(int argc, char** argv) {
                     ++converted;
                 } else {
                     for (const Allowed& a : kAllowed) {
-                        if (name == a.file && stmt.find(a.snippet) != std::string::npos) {
+                        if (originOf(name) == a.file && stmt.find(a.snippet) != std::string::npos) {
                             verdict = a.why;
                             ++allowed;
                             break;

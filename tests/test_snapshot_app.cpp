@@ -210,7 +210,7 @@ struct AppWindowTestAccess {
         return a.engine_.soapyScanPending_ || a.engine_.deviceOpenPending_;
     }
     static void setRecordDir(AppWindow& a, const std::string& d) { a.engine_.recordDir_ = d; }
-    static void setTransmitPageOpen(AppWindow& a, bool on) { a.transmitOpen_ = on; }
+    static void setTransmitPageOpen(AppWindow& a, bool on) { a.engine_.transmitOpen_ = on; }
     static bool haveTx(AppWindow& a) { return a.engine_.transmitter_.haveSink(); }
     static std::uint64_t addBookmark(AppWindow& a, const std::string& name, double hz, const char* mode) {
         cascade::core::Bookmark b;
@@ -226,8 +226,8 @@ struct AppWindowTestAccess {
     static void webRequest(AppWindow& a, const cascade::net::ControlRequest& r) { a.applyControlRequest(r); }
     static cascade::core::ReceiverSnapshot& snapshot(AppWindow& a) { return *a.engine_.receiverSnapshot_; }
     static void publish(AppWindow& a) { a.publishReceiverState(); }
-    static std::size_t loadedDecoders(AppWindow& a) { return a.loadedDecoderCount(); }
-    static std::size_t fedDecoders(AppWindow& a) { return a.fedDecoderCount(); }
+    static std::size_t loadedDecoders(AppWindow& a) { return a.engine_.loadedDecoderCount(); }
+    static std::size_t fedDecoders(AppWindow& a) { return a.engine_.fedDecoderCount(); }
     static std::size_t runnerActive(AppWindow& a) { return a.engine_.pluginRunner_.activeCount(); }
     static bool running(AppWindow& a) { return a.engine_.pipeline_.running(); }
     static cascade::core::PublishedState state(AppWindow& a) {

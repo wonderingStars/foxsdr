@@ -416,8 +416,10 @@ const KnownWait kKnownWaits[] = {
     {"src/core/gps_reader.hpp", "kOpenAbandonWait", 1,
      "GpsReader::stop() at the top of the teardown - the wait for a worker parked inside the "
      "port driver's open, after which the worker is abandoned rather than joined"},
-    {"src/gui/app_window.cpp", "kQuitGrace", 0,
-     "~AppWindow's future reaps: runs after watchdog_.stop(), outside the budgeted stretch"},
+    {"src/engine/engine.cpp", "kQuitGrace", 0,
+     "the Engine's future reaps (reapPendingDeviceOpen, reapPendingSoapyScan - moved verbatim "
+     "from app_window.cpp in engine stage 3a), called from ~AppWindow: runs after "
+     "watchdog_.stop(), outside the budgeted stretch"},
     {"src/gui/app_window.cpp", "kNoWait", 0,
      "zero by construction - a ready-poll on a std::future, not a wait"},
     // THE AUDIO DEVICE OPEN (0.96.5), and why both of its waits are zero here.
