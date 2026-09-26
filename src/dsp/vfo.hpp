@@ -48,6 +48,11 @@ public:
 
     double channelRateHz() const;
 
+    // What the channel filter costs: real-by-complex multiply-adds per INPUT
+    // sample, summed over every filter stage. A figure the design fixes, not a
+    // timing, so a test can hold it without depending on the machine.
+    double macsPerInputSample() const;
+
     // Mix down by the offset, filter, decimate. Streaming: filter history,
     // NCO phase, and the decimation grid all persist across calls, so any
     // block segmentation of the input yields identical output samples.
@@ -64,20 +69,34 @@ public:
     // freshly constructed Vfo with the same settings.
     void reset();
 
+    // At and above this input rate the channel filter is built in STAGES
+    // (see designStages in vfo.cpp); below it, the single windowed sinc this
+    // class has always used, unchanged tap for tap.
+    static constexpr double kStagedMinInputRateHz = 4.0e6;
+
+    // How many filter stages the channel filter has (1 below
+    // kStagedMinInputRateHz, or when the decimation is prime).
+    std::size_t stageCount() const noexcept { return stages_.size(); }
+
 private:
     double clampBandwidth(double bw) const;
-    std::vector<float> designTaps(double bw) const;
+    std::vector<FirDecimator> designStages(double bw) const;
 
     double inputRate_;
     unsigned decimFactor_;
     double bandwidth_;  // after clamping
     double offset_ = 0.0;
     Nco nco_;
-    FirDecimator decimator_;
+    // The channel filter, first stage first. One entry is the classic single
+    // windowed sinc at the input rate; several are a cascade whose decimations
+    // multiply to decimFactor_ and whose LAST stage is the channel filter
+    // proper (passband bw/2, stopband at the channel Nyquist).
+    std::vector<FirDecimator> stages_;
     // Scratch buffers, members so steady-state process() calls don't
-    // allocate; sized to the internal chunk, not to the caller's n.
+    // allocate; sized to the internal chunk, not to the caller's n. One
+    // intermediate buffer per stage boundary.
     std::vector<std::complex<float>> mixBuf_;
-    std::vector<std::complex<float>> chanBuf_;
+    std::vector<std::vector<std::complex<float>>> stageBufs_;
 };
 
 }  // namespace cascade::dsp

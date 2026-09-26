@@ -107,6 +107,7 @@
 // copied string literal is deliberate: the catalogue origin is a security
 // -relevant constant, and two copies of it that can drift is exactly how a
 // build ends up quietly pointing at the wrong host.
+#include "core/airspy_settings.hpp"
 #include "core/freq_converter.hpp"
 #include "core/plugin_repo.hpp"
 #include "core/user_presets.hpp"
@@ -192,6 +193,15 @@ struct AppConfig {
     // that entry off, entries with no radio are dropped and the list is capped
     // at core::kMaxConverterRadios (core::sanitiseConverters).
     std::map<std::string, ConverterSetting> converters;
+    // EACH AIRSPY R2 / MINI's GAIN MODE, GAINS AND DECIMATION (0.99.40),
+    // remembered per radio under the bias tee's key ("airspy|serial=<serial>")
+    // - see core/airspy_settings.hpp. Stored as the object "airspy", each
+    // value {"mode": "linear"|"sensitive"|"free", "linearity", "sensitivity",
+    // "lna", "mixer", "vga", "lnaAgc", "mixerAgc", "decimation"}. EMPTY BY
+    // DEFAULT, so an Airspy opens as its driver opens it (Free mode, 8/8/8,
+    // no decimation) until the user changes something on it; every value is
+    // clamped on load (core::sanitiseAirspySettings).
+    std::map<std::string, AirspySetting> airspy;
     // WHERE THE PLUTO IS, and it is a field of its own because it is the one
     // radio FoxSDR cannot find by looking.
     //

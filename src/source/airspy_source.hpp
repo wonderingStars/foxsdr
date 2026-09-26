@@ -39,10 +39,15 @@
 //     own set; this driver does not know which in advance and does not need to.
 //  3. THE SAMPLES ARRIVE PACKED. Three bytes per two samples, so 12 bits of
 //     ADC cost 12 bits of USB rather than 16. Enabled at open.
-//  4. THERE ARE FIVE GAINS, three of them registers (LNA, MIXER, VGA) and two
-//     of them libairspy's curated walks up all three at once (LINEARITY,
-//     SENSITIVITY). And unlike the HackRF there IS an AGC - two of them, one
-//     per stage - so autoGainSupported() is true here.
+//  4. THERE ARE THREE GAIN MODES (0.99.40), one at a time as the reference
+//     application offers them: two of libairspy's curated walks up all three
+//     registers at once (LINEARITY, SENSITIVITY) and Free - the three
+//     registers (LNA, MIXER, VGA) by hand. gains() lists only the chosen
+//     mode's. And unlike the HackRF there IS an AGC - two of them, one per
+//     stage, switched separately in Free mode.
+//  5. SOFTWARE DECIMATION (0.99.40, airspy_decimator.hpp) divides the
+//     delivered rate by 1..64 on the reader thread, and every rate this
+//     source reports is the DELIVERED one.
 //
 // WHAT IS NOT HERE. The SPI flash, the Si5351C, direct R820T register access,
 // the GPIO direction registers, the Microsoft OS descriptor request: a
@@ -67,6 +72,7 @@
 #include <vector>
 
 #include "dsp/spsc_ring.hpp"
+#include "source/airspy_decimator.hpp"
 #include "source/airspy_protocol.hpp"
 #include "source/device_source.hpp"
 #include "usb/usb_device.hpp"
@@ -221,32 +227,105 @@ public:
 
     bool isOpen() const override { return openMirror_.load(std::memory_order_relaxed); }
 
-    // FIVE GAINS, AND THE UNITS ARE THE HARDWARE'S OWN STEPS, NOT DECIBELS.
-    // libairspy takes an index for every one of them (airspy.h:182-206) and
-    // publishes no mapping to dB; GainInfo's fields are named minDb/maxDb
-    // because the first radio behind them had a dB control, and putting an
-    // invented decibel scale here so the field name reads true would be a
-    // number on screen that nothing in the world produced.
+    // THREE GAIN MODES, ONE AT A TIME - the way Airspy's own application
+    // offers them ("Gain: Sensitive/Linear/Free", SDRsharp - The Guide v2.1,
+    // Airspy R2/Mini panel). Up to 0.99.39 this driver listed all five gains
+    // below at once, the Source section drew five sliders, and moving one of
+    // the two table sliders silently rewrote the other three while the other
+    // table slider kept showing a number that no longer described the radio -
+    // "the Sensitive, Linear and Free options cannot be selected, they are
+    // sort of mixed together" (an R2 owner, 2026-09-26).
     //
-    //   LNA          0..14   R820T low-noise amplifier    (airspy.c:1691)
-    //   MIXER        0..15   R820T mixer                  (airspy.c:1721)
-    //   VGA          0..15   R820T IF amplifier           (airspy.c:1751)
-    //   LINEARITY    0..21   all three at once, headroom  (airspy.c:1829)
-    //   SENSITIVITY  0..21   all three at once, weak signals (airspy.c:1863)
+    //   Linearity    LINEARITY   0..21   libairspy's linearity table (airspy.c:1829)
+    //   Sensitivity  SENSITIVITY 0..21   libairspy's sensitivity table (airspy.c:1863)
+    //   Free         LNA 0..14, MIXER 0..15, VGA 0..15, each by hand
+    //                (airspy.c:1691, :1721, :1751), with the LNA's and the
+    //                mixer's own AGC switchable separately (:1775, :1802)
     //
-    // The last two are libairspy's own tables and each of them REWRITES the
-    // first three, so gainDb("LNA") after a LINEARITY change reports what the
-    // table actually programmed rather than what was there before.
+    // gains() lists ONLY THE CHOSEN MODE'S gains, so every consumer that walks
+    // the list - the Source section, the RECEIVER card, the deck's knob, the
+    // browser, the plugin API - shows only controls that are live. Each mode
+    // keeps its own values while another is in use (a linearity 14 is still
+    // 14 when the user comes back to it), and switching mode programs the
+    // radio with that mode's values.
+    //
+    // THE UNITS ARE THE HARDWARE'S OWN STEPS, NOT DECIBELS: libairspy takes an
+    // index for every one of them (airspy.h:182-206) and publishes no mapping
+    // to dB, and an invented decibel scale would be a number on screen that
+    // nothing in the world produced.
+    //
+    // setGainDb accepts all five names whatever the mode, and a name from
+    // another mode SWITCHES to it (the browser and saved sessions name gains
+    // they last saw): LINEARITY -> Linearity, SENSITIVITY -> Sensitivity,
+    // LNA / MIXER / VGA -> Free. gainDb reports each mode's own stored value.
+    enum class GainMode { Linearity, Sensitivity, Free };
+    bool setGainMode(GainMode mode);
+    GainMode gainMode() const {
+        return static_cast<GainMode>(gainMode_.load(std::memory_order_relaxed));
+    }
+
+    // EVERYTHING ABOVE AT ONCE, for putting a remembered radio back: every
+    // mode's values and both AGC switches stored (clamped), then the chosen
+    // mode programmed ONCE - not the three modes in turn, which is what a
+    // restore through setGainDb would send.
+    struct GainState {
+        GainMode mode = GainMode::Free;
+        int linearity = 10;
+        int sensitivity = 10;
+        int lna = 8;
+        int mixer = 8;
+        int vga = 8;
+        bool lnaAgc = false;
+        bool mixerAgc = false;
+    };
+    bool setGainState(const GainState& state);
+    GainState gainState() const;
+
     std::vector<GainInfo> gains() const override;
     bool setGainDb(const std::string& name, double db) override;
     double gainDb(const std::string& name) const override;
 
-    // Unlike the HackRF, the Airspy HAS automatic gain control - two of them,
-    // SET_LNA_AGC and SET_MIXER_AGC (airspy.c:1775, :1802). setAutoGain drives
-    // both, because half an AGC is a configuration nobody asked for.
+    // The two AGCs of Free mode, one each (SET_LNA_AGC, SET_MIXER_AGC -
+    // airspy.c:1775, :1802). A stage whose AGC is on keeps its manual value
+    // for when the AGC is switched off again, and that value is not sent to
+    // the radio while the AGC drives the stage. Setting one switches to Free:
+    // neither table mode has an AGC (both switch them off first, airspy.c:1840).
+    bool setLnaAgc(bool on);
+    bool setMixerAgc(bool on);
+    bool lnaAgc() const { return lnaAgc_.load(std::memory_order_relaxed); }
+    bool mixerAgc() const { return mixerAgc_.load(std::memory_order_relaxed); }
+
+    // The DeviceSource "auto gain" is Free mode with BOTH AGCs on - half an
+    // AGC is a configuration the generic switch cannot describe. Off switches
+    // both AGCs off and leaves the mode alone.
     bool autoGainSupported() const override { return true; }
     bool setAutoGain(bool on) override;
-    bool autoGain() const override { return autoGain_.load(std::memory_order_relaxed); }
+    bool autoGain() const override {
+        return gainMode() == GainMode::Free && lnaAgc() && mixerAgc();
+    }
+
+    // --- DECIMATION (0.99.40) ----------------------------------------------
+    //
+    // The reference application's software decimation (see
+    // airspy_decimator.hpp): the converter's complex stream divided by 1, 2,
+    // 4 ... 64 on the reader thread, before the ring. It is a divider on the
+    // OUTPUT, so sampleRateHz() and supportedSampleRatesHz() report
+    // decimated rates - the rate the pipeline, the spectrum's span, a
+    // recording's header and every decoder must use - and
+    // hardwareSampleRateHz() the one the radio runs at.
+    //
+    // Only factors that leave EVERY rate the board lists a whole number of
+    // hertz are offered (decimationChoices()): the receiver's resampler needs
+    // an exact integer rate, and an R2's 2.5 MS/s / 64 is 39062.5. So an R2
+    // offers up to 32 and a Mini (6 and 3 MS/s) up to 64. setDecimation
+    // refuses anything else with a reason. On a running stream the change is
+    // made with the radio quiet, exactly as a rate change is.
+    bool setDecimation(unsigned factor);
+    unsigned decimation() const { return decimation_.load(std::memory_order_relaxed); }
+    std::vector<unsigned> decimationChoices() const;
+    double hardwareSampleRateHz() const {
+        return hardwareRateHz_.load(std::memory_order_relaxed);
+    }
 
     // One RX port. The bias tee is NOT an antenna: it is power on the same
     // connector, and putting it in this list would make it selectable by
@@ -433,6 +512,10 @@ private:
 
         cascade::dsp::SpscRing<std::complex<float>> ring;
 
+        // The decimation the reader applies after the converter; read when
+        // the reader starts, and only changed while it is stopped.
+        std::atomic<unsigned> decimation{1};
+
         // read() parks here when the ring is empty; the reader signals after
         // every transfer it writes. `exited` is the reader's LAST act and the
         // thing the bounded join waits for: a thread that has not set it has
@@ -493,6 +576,13 @@ private:
     bool programLnaAgcLocked(bool on);
     bool programMixerAgcLocked(bool on);
     bool programCombinedLocked(int index, bool linearity);
+    // Free mode on the radio: both AGCs as stored, then VGA, then MIXER and
+    // LNA - each of those two only while its AGC is off.
+    bool programFreeLocked();
+    // Program `mode` with its stored values and make it the current mode.
+    bool applyGainModeLocked(GainMode mode);
+    // The decimation factors every listed rate divides into whole hertz.
+    std::vector<unsigned> decimationChoicesLocked() const;
     bool programBiasTLocked(bool on);
 
     // Receiver off, clear the halt, RX, queue the bulk ring, spawn the reader
@@ -551,12 +641,25 @@ private:
     std::atomic<bool> running_{false};
     std::atomic<double> sampleRateHz_{0.0};
     std::atomic<double> centerFrequencyHz_{0.0};
+    // Each mode's OWN values, kept while another mode is in use. LNA / MIXER
+    // / VGA are Free mode's manual settings; the table modes program the
+    // registers from their tables without touching these. The two table
+    // indices start at the middle of their 0..21 range - libairspy has no
+    // default for either, so one had to be chosen, and it only applies to a
+    // radio the user has never set a table gain on.
+    static constexpr int kDefaultTableIndex = 10;
+    std::atomic<int> gainMode_{static_cast<int>(GainMode::Free)};
     std::atomic<int> lnaIndex_{0};
     std::atomic<int> mixerIndex_{0};
     std::atomic<int> vgaIndex_{0};
-    std::atomic<int> linearityIndex_{-1};    // -1: never set through the table
-    std::atomic<int> sensitivityIndex_{-1};
-    std::atomic<bool> autoGain_{false};
+    std::atomic<int> linearityIndex_{kDefaultTableIndex};
+    std::atomic<int> sensitivityIndex_{kDefaultTableIndex};
+    std::atomic<bool> lnaAgc_{false};
+    std::atomic<bool> mixerAgc_{false};
+    // Decimation, and the rate the radio itself runs at (sampleRateHz_ is
+    // that divided by the decimation).
+    std::atomic<unsigned> decimation_{1};
+    std::atomic<double> hardwareRateHz_{0.0};
     std::atomic<bool> biasT_{false};
     std::atomic<bool> packing_{false};
 

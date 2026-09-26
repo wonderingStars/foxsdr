@@ -136,6 +136,7 @@ struct GLFWwindow;
 #include "source/sdrplay_source.hpp"
 #include "usb/usb_device.hpp"
 // The bias tee checkbox's state and rules (no ImGui in it).
+#include "gui/airspy_panel.hpp"
 #include "gui/bias_tee.hpp"
 
 namespace cascade::gui {
@@ -1909,6 +1910,12 @@ private:
     // converter state, and keepCenterHz is an AIR frequency. No value: no
     // pre-tune (nothing to carry, not an RSP, or not deliverable).
     std::optional<double> preTuneRadioHz;
+    // AN AIRSPY's REMEMBERED GAIN MODE, GAINS AND DECIMATION (0.99.40), copied
+    // from airspyMemory_ on the GUI thread by launchDeviceOpen so the worker
+    // can put them on the radio straight after open() and BEFORE it asks for
+    // the rate: the saved rate is a decimated one, and asked for first it is
+    // matched against undecimated rates and "coerced" to the wrong one.
+    std::optional<cascade::core::AirspySetting> airspyAtOpen;
     // THE NATIVE RADIO THIS OPEN FELL BACK FROM (converter key), when the
     // worker opened the dongle through SoapySDR because the native driver
     // refused its tuner; empty otherwise. finishDeviceOpen uses it so the
@@ -2154,6 +2161,33 @@ private:
     cascade::source::GainUnit firstGainUnit() const { return gainUnitAt(0); }
     bool deviceAgcSupported_ = false;
     bool deviceAgc_ = false;
+
+    // THE AIRSPY R2 / MINI's OWN CONTROLS (0.99.40, gui/app_window_airspy.cpp):
+    // one gain mode at a time - Sensitive, Linear or Free, the reference
+    // Airspy application's three - with only that mode's sliders, Free mode's
+    // two AGC switches, and the software decimation. Draws them and answers
+    // true when the open radio is an Airspy, in which case the generic Auto
+    // gain switch and gain sliders are not drawn; false and draws nothing for
+    // every other radio.
+    bool drawAirspyControls();
+    // Re-reads the gain list, values and AGC state from device_: an Airspy's
+    // list changes with its mode, and a gain set by name from the browser can
+    // change the mode.
+    void refreshDeviceGainMirrors();
+    // The open radio's Airspy state into airspyMemory_ (a no-op for any other
+    // radio), after every change the user makes to it.
+    void airspyRememberOpen();
+    // What the panel's controls DO, as members so tests/test_airspy_app.cpp
+    // drives the same code the buttons do: the decimation (the radio, then
+    // the Rate combo's delivered rates, then the whole chain follows the new
+    // rate), the gain mode, and Free mode's two AGCs - each re-reading the
+    // radio and remembering it. False, with sourceError_ set, on a refusal.
+    bool chooseAirspyDecimation(unsigned factor);
+    bool chooseAirspyGainMode(cascade::source::AirspySource::GainMode mode);
+    bool chooseAirspyAgc(bool lna, bool on);
+    // Each Airspy's gain mode, gains and decimation - AppConfig::airspy, per
+    // radio (core/airspy_settings.hpp); put back by adoptDeviceMirrors.
+    std::map<std::string, cascade::core::AirspySetting> airspyMemory_;
 
     // THE BIAS TEE. Present only when the OPEN device is one of the native
     // drivers that has one and can say so (see withBiasTee in
