@@ -120,6 +120,25 @@ double processCpuSeconds() {
 #endif
 }
 
+// Process CPU in CYCLES (every thread, user and kernel), or -1 when it cannot
+// be read. WHY, on Windows: GetProcessTimes charges a thread only for the
+// clock ticks it happens to be running at, and on the development desktop
+// (Hyper-V on) that under-read by up to 5x - a 5 s pure spin was charged
+// 0.91-1.31 s, and a 60 Hz 1.3 ms/frame load 0.30-0.53 s of a true 4.68 s,
+// a 79 % spread between identical runs (engine step 1a review, round 3).
+// QueryProcessCycleTime counts the cycles each thread actually ran. Elsewhere
+// there is no such call; the CPU time there comes from the scheduler's own
+// accounting (getrusage) and this returns -1.
+double processCycles() {
+#if defined(_WIN32)
+    ULONG64 cycles = 0;
+    if (!::QueryProcessCycleTime(::GetCurrentProcess(), &cycles)) { return -1.0; }
+    return static_cast<double>(cycles);
+#else
+    return -1.0;
+#endif
+}
+
 // Working set and its peak, bytes.
 void workingSet(std::uint64_t& now, std::uint64_t& peak) {
     now = 0;
@@ -270,6 +289,7 @@ bool EngineMeasure::tickRun(Pipeline& p, const MeasureHooks& h) {
     }
     if (phase_ == 1 && t >= warmup_) {
         cpu0_ = processCpuSeconds();
+        cyc0_ = processCycles();
         drop0_ = p.ringDroppedSamples();
         audio0_ = p.audioSamplesProduced();
         std::size_t active = 0;
@@ -287,6 +307,7 @@ bool EngineMeasure::tickRun(Pipeline& p, const MeasureHooks& h) {
     }
     if (phase_ == 2 && t >= seconds_) {
         cpu1_ = processCpuSeconds();
+        cyc1_ = processCycles();
         drop1_ = p.ringDroppedSamples();
         audio1_ = p.audioSamplesProduced();
         runWindow_ = t - phaseAt_;
@@ -294,6 +315,9 @@ bool EngineMeasure::tickRun(Pipeline& p, const MeasureHooks& h) {
         // A reading that failed is an error in the result, not a figure:
         // 0 CPU seconds or 0 bytes would otherwise pass as a cheap build.
         if (cpu0_ < 0.0 || cpu1_ < 0.0) { error_ = "process CPU time could not be read"; }
+#if defined(_WIN32)
+        if (cyc0_ < 0.0 || cyc1_ < 0.0) { error_ = "process cycle count could not be read"; }
+#endif
         if (workingSet_ == 0) { error_ = "working set could not be read"; }
         readDecoders(p, decodersActive_, decAudio1_, decIq1_, &decoderStatusJson_);
         finish(p);
@@ -503,6 +527,9 @@ void EngineMeasure::finish(Pipeline& p) {
         std::fprintf(f, "  \"rateHz\": %.0f,\n  \"inputRateHz\": %.0f,\n", rateHz_, p.inputRateHz());
         std::fprintf(f, "  \"warmupS\": %.3f,\n  \"windowS\": %.3f,\n", warmup_, runWindow_);
         std::fprintf(f, "  \"cpuS\": %.6f,\n", cpu1_ - cpu0_);
+        // Cycles across the window; -1 where the platform has no count.
+        std::fprintf(f, "  \"cpuCycles\": %.0f,\n",
+                     (cyc0_ >= 0.0 && cyc1_ >= 0.0) ? cyc1_ - cyc0_ : -1.0);
         std::fprintf(f, "  \"ringDropped\": %llu,\n",
                      static_cast<unsigned long long>(drop1_ - drop0_));
         std::fprintf(f, "  \"audioSamples\": %llu,\n",
