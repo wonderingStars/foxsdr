@@ -239,6 +239,15 @@ struct AppWindowTestAccess {
         });
     }
     static bool running(AppWindow& a) { return a.pipeline_.running(); }
+    // A RADIO'S RETUNE IS PACED (the retune coalescer): the command queues it
+    // and the frame loop lands it with pollPendingRetune, every frame. The
+    // drive has no frame loop, so it does the same until the centre is there.
+    static bool settleRetune(AppWindow& a, double hz) {
+        return waitFor([&a, hz] {
+            a.pollPendingRetune();
+            return a.pipeline_.activeSource().centerFrequencyHz() == hz;
+        });
+    }
     static cascade::core::PluginApiCore& api(AppWindow& a) { return a.pluginUi_.api(); }
 
     // State no command sets: the strings a reader passes through verbatim.
@@ -543,6 +552,7 @@ void drive(AppWindow& a) {
 
     CHECK(ok(A::apply(a, text(FOXAPI_OP_BOOKMARK_ADD, "Golden one"))));
     CHECK(ok(A::apply(a, num(FOXAPI_OP_SET_CENTRE, 433.9e6))));
+    CHECK(A::settleRetune(a, 433.9e6));  // "Golden two" is added AT 433.9 MHz
     CHECK(ok(A::apply(a, text(FOXAPI_OP_BOOKMARK_ADD, "Golden two"))));
     {
         FoxCommand c = cmd::make(FOXAPP_OP_SCANNER_RANGE);
@@ -559,6 +569,7 @@ void drive(AppWindow& a) {
     g_measured = true;
     record(a, "running");
     CHECK(ok(A::apply(a, num(FOXAPI_OP_SET_CENTRE, 145.0e6))));
+    CHECK(A::settleRetune(a, 145.0e6));  // the retune lands while running
     record(a, "running, retuned");
     CHECK(ok(A::apply(a, ints(FOXAPI_OP_RUN, 0))));
     record(a, "stopped");
