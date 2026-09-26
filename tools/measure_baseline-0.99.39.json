@@ -1,8 +1,9 @@
 {
-  "format": "foxsdr-measure-summary/1",
-  "what": "The engine-extraction performance baseline for FoxSDR 0.99.39: the BASELINE half of the interleaved A/B session that gated engine step 1 (tools/measure_engine.ps1). The build is master 1de7221 plus the measurement switches only (engine/step1 commit 253da81, cascade.exe sha256 below); no engine code has moved in it. Hold a later stage against it with -CompareBaseline this-file -CompareCandidate <session>/summary.json - but section 3.1 prefers re-measuring this build interleaved with the candidate, and the environment record must match either way.",
-  "commit": "253da81",
-  "measuredAt": "2026-09-25T20:49:47.8625524-07:00",
+  "format": "foxsdr-measure-summary/2",
+  "what": "The engine-extraction performance baseline for FoxSDR 0.99.39, re-taken with the validating tool (engine step 1a repair): the BASELINE half of the interleaved A/B session that gated engine step 1. The build is master 1de7221 plus the measurement switches (253da81) plus the measurement REPORT of ba7ab89 cherry-picked (commit 54d57458ee55, detached, worktree .claude/worktrees/engine1-base2) - no engine code has moved in it; the cherry-pick only makes the app say what each run did, which the tool now requires. Every figure below is from a run the tool validated. Hold a later stage against it with -CompareBaseline this-file -CompareCandidate <session>/summary.json - but section 3.1 prefers re-measuring this build interleaved with the candidate, and the environment record must match either way. What is NOT measured is in 'gaps'.",
+  "commit": "54d57458ee55",
+  "measuredAt": "2026-09-25T23:47:55.2147133-07:00",
+  "finishedAt": "2026-09-26T02:06:08.6248098-07:00",
   "environment": {
     "os": "Windows 23H2 build 22631.6199",
     "gpu": "NVIDIA GeForce RTX 4090 driver 32.0.16.1062 5120x1440@119",
@@ -13,177 +14,678 @@
     "machine": "MACBOOKPRO"
   },
   "envStable": true,
+  "otherProcessesSeen": 0,
   "runs": 5,
+  "soakRuns": 2,
   "warmupSeconds": 5,
+  "soakSeconds": 600,
   "measures": [
     "frames",
     "cpu",
+    "cpubusy",
     "latency",
-    "rates"
+    "rates",
+    "soak"
   ],
   "rateLadder": "14336000,16384000,18432000,20480000,22528000,24576000,28672000",
   "frameCapHz": 60,
+  "retunes": 50,
+  "minValidRetunes": 45,
   "plugins": [
+    "aprs-decoder-1.0.1-abi3-win-x64.dll",
     "cw-decoder-1.0.0-abi3-win-x64.dll",
-    "eas-decoder-1.0.0-abi3-win-x64.dll",
-    "aprs-decoder-1.0.1-abi3-win-x64.dll"
+    "eas-decoder-1.0.0-abi3-win-x64.dll"
   ],
+  "expectedDecoders": 3,
+  "busy": {
+    "grabX": 219,
+    "y": 590,
+    "minX": 45,
+    "maxX": 255,
+    "script": "C:\\Users\\steve\\AppData\\Local\\Temp\\claude\\C--Users-steve-OneDrive-Documents-FoxSDR\\1c4e68fe-8730-4440-b6aa-85558b8fcce3\\scratchpad\\engine1-fix1\\ab2\\busy-drag.txt"
+  },
   "windowSize": "1600x1000",
+  "gaps": [
+    "raspberry-pi: section 3 records every measure on the Raspberry Pi as well; this script runs only on the Windows desktop and no Pi figures were taken.",
+    "real-radio: every figure is taken off the built-in signal generator, not the B200 or RTL-SDR section 3 names; the USB transport and the vendor drivers' threads are outside every figure.",
+    "release: section 3 names 0.99.35 as the release to record; the baseline measured is 0.99.39 (master 1de7221 plus the measurement switches).",
+    "decoders-open: \"three decoders open\" is measured as decoder instances created and fed, from the app's own report; their output window is not opened.",
+    "busy-viewport: CPU with the interface busy runs single-viewport (FOXSDR_SINGLE_VIEWPORT=1, the DEMOD SCOPE drawn inside the main window) so the scripted drag's coordinates are the window's own; it is comparable baseline-to-candidate, not to the idle CPU run.",
+    "rate-resolution: the maximum sustained rate is the highest rung of a fixed ladder with zero drops, not a continuous search between rungs.",
+    "longest-frame: the soak's longest frame is reported, not gated - one frame is one sample and swings by tens of ms between runs of one binary; \"no new stalls\" is gated as the count of frames over 100 ms."
+  ],
   "builds": {
     "baseline": {
-      "sha256": "8c12e1d39f390ea98b462e1c5622facaf840933f688979353354bdfa92bea55d",
-      "runs": {
-        "frameMeanMs": [
-          0.822468009374742,
-          0.7674599994884146,
-          0.8159999020954394,
-          0.7452745783551477,
-          0.7872591963372011
-        ],
-        "frameP99Ms": [
-          1.0994,
-          1.1389,
-          1.0764,
-          0.9812,
-          1.0455
-        ],
-        "frameMaxMs": [
-          22.1285,
-          6.2073,
-          2.5048,
-          2.0411,
-          2.0852
-        ],
-        "workMeanMs": [
-          0.8215911844521853,
-          0.766666845719983,
-          0.8150400456887958,
-          0.7445021212648131,
-          0.7865194920368437
-        ],
-        "workP99Ms": [
-          1.0979,
-          1.138,
-          1.0752,
-          0.9804,
-          1.0446
-        ],
-        "intervals": [
-          72962,
-          78189,
-          73541,
-          80518,
-          76226
-        ],
-        "ringDropped": [
-          0,
-          0,
-          0,
-          0,
-          0,
-          0,
-          0,
-          0,
-          0,
-          0
-        ],
-        "cpuPct": [
-          5.755208333333333,
-          7.2117387319836705,
-          4.453050782486959,
-          5.521477505708999,
-          7.394724124714626
-        ],
-        "workingSetMB": [
-          115.3125,
-          115.87109375,
-          115.1640625,
-          115.31640625,
-          116.25
-        ],
-        "latencyMedianMs": [
-          16,
-          16,
-          16,
-          16,
-          16
-        ],
-        "latencyP90Ms": [
-          16,
-          16,
-          16,
-          16,
-          16
-        ],
-        "retunesValid": [
-          50,
-          50,
-          50,
-          50,
-          50
-        ],
-        "retunesTotal": [
-          50,
-          50,
-          50,
-          50,
-          50
-        ],
-        "awayRatioMax": [
-          0,
-          0,
-          0,
-          0,
-          0
-        ],
-        "toneAudioHz": [
-          1000,
-          1000,
-          1000,
-          1000,
-          1000
-        ],
-        "maxRateHz": [
-          22528000,
-          22528000,
-          22528000,
-          22528000,
-          22528000
-        ],
-        "firstDropHz": [
-          24576000,
-          24576000,
-          24576000,
-          24576000,
-          24576000
-        ],
-        "ceilingReached": [
-          true,
-          true,
-          true,
-          true,
-          true
-        ]
-      },
-      "median": {
-        "frameMeanMs": 0.7872591963372011,
-        "frameP99Ms": 1.0764,
-        "frameMaxMs": 2.5048,
-        "workMeanMs": 0.7865194920368437,
-        "workP99Ms": 1.0752,
-        "intervals": 76226,
-        "ringDropped": 0,
-        "cpuPct": 5.755208333333333,
-        "workingSetMB": 115.31640625,
-        "latencyMedianMs": 16,
-        "latencyP90Ms": 16,
-        "retunesValid": 50,
-        "retunesTotal": 50,
-        "awayRatioMax": 0,
-        "toneAudioHz": 1000,
-        "maxRateHz": 22528000,
-        "firstDropHz": 24576000
+      "sha256": "40e1b9a35f7d3b8d873c3bfb7aa37a14d3a810049f4855ff2b8699f7fe81327a",
+      "commit": "54d57458ee55",
+      "measures": {
+        "frames": {
+          "runsExpected": 5,
+          "runsValid": 5,
+          "values": {
+            "cpuPct": [
+              46.145833333333336,
+              62.083333333333336,
+              27.578125,
+              49.036458333333336,
+              22.786458333333332
+            ],
+            "workingSetMB": [
+              132.1171875,
+              131.1015625,
+              133.48046875,
+              132.8359375,
+              134.33984375
+            ],
+            "ringDropped": [
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "decodersActive": [
+              3,
+              3,
+              3,
+              3,
+              3
+            ],
+            "frameMeanMs": [
+              0.9527317139001334,
+              1.1576368928667882,
+              0.8420957760314417,
+              0.7953909907879873,
+              0.798235528538569
+            ],
+            "frameP99Ms": [
+              1.9242,
+              2.0881,
+              1.7298,
+              1.8981,
+              1.0845
+            ],
+            "frameMaxMs": [
+              8.6395,
+              14.0703,
+              9.556,
+              33.4551,
+              2.1057
+            ],
+            "workMeanMs": [
+              0.9515253838215463,
+              1.1560010146213446,
+              0.8411057016559164,
+              0.7944675936112436,
+              0.7974335665544977
+            ],
+            "workP99Ms": [
+              1.9213,
+              2.0852,
+              1.7281,
+              1.8956,
+              1.0828
+            ],
+            "intervals": [
+              62985,
+              51842,
+              71260,
+              75445,
+              75179
+            ],
+            "stallsOver100Ms": [
+              0,
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "median": {
+            "cpuPct": 46.145833333333336,
+            "workingSetMB": 132.8359375,
+            "ringDropped": 0,
+            "decodersActive": 3,
+            "frameMeanMs": 0.8420957760314417,
+            "frameP99Ms": 1.8981,
+            "frameMaxMs": 9.556,
+            "workMeanMs": 0.8411057016559164,
+            "workP99Ms": 1.8956,
+            "intervals": 71260,
+            "stallsOver100Ms": 0
+          },
+          "invalidRuns": []
+        },
+        "cpu": {
+          "runsExpected": 5,
+          "runsValid": 5,
+          "values": {
+            "cpuPct": [
+              7.65765390321559,
+              9.426297808515956,
+              8.802963629696302,
+              4.687578126302105,
+              3.3859245553499693
+            ],
+            "workingSetMB": [
+              116.69921875,
+              116.3359375,
+              115.28125,
+              115.765625,
+              116.35546875
+            ],
+            "ringDropped": [
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "decodersActive": [
+              3,
+              3,
+              3,
+              3,
+              3
+            ]
+          },
+          "median": {
+            "cpuPct": 7.65765390321559,
+            "workingSetMB": 116.3359375,
+            "ringDropped": 0,
+            "decodersActive": 3
+          },
+          "invalidRuns": []
+        },
+        "cpubusy": {
+          "runsExpected": 5,
+          "runsValid": 5,
+          "values": {
+            "cpuPct": [
+              5.675853565060904,
+              7.525038328222903,
+              12.002807771778977,
+              8.411738724624154,
+              4.843184961754462
+            ],
+            "workingSetMB": [
+              117.58984375,
+              116.828125,
+              116.421875,
+              117.4453125,
+              115.4375
+            ],
+            "ringDropped": [
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "decodersActive": [
+              3,
+              3,
+              3,
+              3,
+              3
+            ],
+            "vfoChangeFraction": [
+              1,
+              1,
+              1,
+              1,
+              1
+            ]
+          },
+          "median": {
+            "cpuPct": 7.525038328222903,
+            "workingSetMB": 116.828125,
+            "ringDropped": 0,
+            "decodersActive": 3,
+            "vfoChangeFraction": 1
+          },
+          "invalidRuns": []
+        },
+        "latency": {
+          "runsExpected": 5,
+          "runsValid": 5,
+          "values": {
+            "latencyMedianMs": [
+              16,
+              16,
+              16,
+              16,
+              16
+            ],
+            "latencyP90Ms": [
+              16,
+              16,
+              16,
+              16,
+              16
+            ],
+            "retunesValid": [
+              50,
+              50,
+              50,
+              50,
+              50
+            ],
+            "awayRatioMax": [
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "ringDropped": [
+              0,
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "median": {
+            "latencyMedianMs": 16,
+            "latencyP90Ms": 16,
+            "retunesValid": 50,
+            "awayRatioMax": 0,
+            "ringDropped": 0
+          },
+          "invalidRuns": []
+        },
+        "rates": {
+          "runsExpected": 5,
+          "runsValid": 5,
+          "values": {
+            "maxRateHz": [
+              22528000,
+              14336000,
+              18432000,
+              22528000,
+              22528000
+            ],
+            "firstDropHz": [
+              24576000,
+              16384000,
+              20480000,
+              24576000,
+              24576000
+            ]
+          },
+          "median": {
+            "maxRateHz": 22528000,
+            "firstDropHz": 24576000
+          },
+          "invalidRuns": []
+        },
+        "soak": {
+          "runsExpected": 2,
+          "runsValid": 2,
+          "values": {
+            "cpuPct": [
+              9.48178663631106,
+              7.192864178723873
+            ],
+            "workingSetMB": [
+              133.19921875,
+              133.24609375
+            ],
+            "ringDropped": [
+              0,
+              0
+            ],
+            "decodersActive": [
+              3,
+              3
+            ],
+            "frameMeanMs": [
+              16.984621627130213,
+              16.98187370581073
+            ],
+            "frameP99Ms": [
+              17.2127,
+              17.2238
+            ],
+            "frameMaxMs": [
+              25.7258,
+              174.7134
+            ],
+            "workMeanMs": [
+              1.1033214997452354,
+              1.1603279867538538
+            ],
+            "workP99Ms": [
+              1.8307,
+              2.0154
+            ],
+            "intervals": [
+              35326,
+              35331
+            ],
+            "stallsOver100Ms": [
+              0,
+              3
+            ],
+            "hangReports": [
+              0,
+              0
+            ],
+            "worstGapMs": [
+              33,
+              174.7
+            ]
+          },
+          "median": {
+            "cpuPct": 8.337325407517467,
+            "workingSetMB": 133.22265625,
+            "ringDropped": 0,
+            "decodersActive": 3,
+            "frameMeanMs": 16.983247666470472,
+            "frameP99Ms": 17.21825,
+            "frameMaxMs": 100.2196,
+            "workMeanMs": 1.1318247432495445,
+            "workP99Ms": 1.92305,
+            "intervals": 35328.5,
+            "stallsOver100Ms": 1.5,
+            "hangReports": 0,
+            "worstGapMs": 103.85
+          },
+          "invalidRuns": []
+        }
       }
     }
-  }
+  },
+  "sessionCandidate": {
+    "commit": "37af9e8ed459",
+    "sha256": "483c1c19263943a0600c9f1b7cade204c094930a58aa01514bae6bc3082c2996"
+  },
+  "sessionGates": [
+    {
+      "gate": "frame p99 (ms)",
+      "verdict": "NOISY (baseline spread exceeds the gate) - not judged",
+      "baselineMedian": 1.8981,
+      "baselineRange": [
+        1.0845,
+        2.0881
+      ],
+      "baselineRuns": [
+        1.9242,
+        2.0881,
+        1.7298,
+        1.8981,
+        1.0845
+      ],
+      "candidateMedian": 1.2877,
+      "candidateRange": [
+        0.9617,
+        1.9967
+      ],
+      "candidateRuns": [
+        1.9967,
+        1.2877,
+        1.4013,
+        1.0673,
+        0.9617
+      ]
+    },
+    {
+      "gate": "frame mean (ms)",
+      "verdict": "NOISY (baseline spread exceeds the gate) - not judged",
+      "baselineMedian": 0.8420957760314417,
+      "baselineRange": [
+        0.7953909907879873,
+        1.1576368928667882
+      ],
+      "baselineRuns": [
+        0.9527317139001334,
+        1.1576368928667882,
+        0.8420957760314417,
+        0.7953909907879873,
+        0.798235528538569
+      ],
+      "candidateMedian": 0.807541286736997,
+      "candidateRange": [
+        0.7423803186817257,
+        0.9894989118427755
+      ],
+      "candidateRuns": [
+        0.9894989118427755,
+        0.807541286736997,
+        0.8484070757050941,
+        0.7714779903322107,
+        0.7423803186817257
+      ]
+    },
+    {
+      "gate": "CPU idle (% of a core)",
+      "verdict": "NOISY (baseline spread exceeds the gate) - not judged",
+      "baselineMedian": 7.65765390321559,
+      "baselineRange": [
+        3.3859245553499693,
+        9.426297808515956
+      ],
+      "baselineRuns": [
+        7.65765390321559,
+        9.426297808515956,
+        8.802963629696302,
+        4.687578126302105,
+        3.3859245553499693
+      ],
+      "candidateMedian": 8.22971531435429,
+      "candidateRange": [
+        2.421875,
+        11.693682806900576
+      ],
+      "candidateRuns": [
+        9.40166844456297,
+        11.693682806900576,
+        8.22971531435429,
+        6.977654841451019,
+        2.421875
+      ]
+    },
+    {
+      "gate": "CPU busy (% of a core)",
+      "verdict": "NOISY (baseline spread exceeds the gate) - not judged",
+      "baselineMedian": 7.525038328222903,
+      "baselineRange": [
+        4.843184961754462,
+        12.002807771778977
+      ],
+      "baselineRuns": [
+        5.675853565060904,
+        7.525038328222903,
+        12.002807771778977,
+        8.411738724624154,
+        4.843184961754462
+      ],
+      "candidateMedian": 5.962349196827301,
+      "candidateRange": [
+        3.619550363309113,
+        9.115494882821615
+      ],
+      "candidateRuns": [
+        4.9736267582161195,
+        8.881244478522493,
+        9.115494882821615,
+        5.962349196827301,
+        3.619550363309113
+      ]
+    },
+    {
+      "gate": "working set 60 s (MB)",
+      "verdict": "PASS",
+      "baselineMedian": 116.3359375,
+      "baselineRange": [
+        115.28125,
+        116.69921875
+      ],
+      "baselineRuns": [
+        116.69921875,
+        116.3359375,
+        115.28125,
+        115.765625,
+        116.35546875
+      ],
+      "candidateMedian": 115.29296875,
+      "candidateRange": [
+        115.10546875,
+        115.62109375
+      ],
+      "candidateRuns": [
+        115.21484375,
+        115.29296875,
+        115.5625,
+        115.10546875,
+        115.62109375
+      ]
+    },
+    {
+      "gate": "tune-to-audio median (ms)",
+      "verdict": "PASS",
+      "baselineMedian": 16,
+      "baselineRange": [
+        16,
+        16
+      ],
+      "baselineRuns": [
+        16,
+        16,
+        16,
+        16,
+        16
+      ],
+      "candidateMedian": 16,
+      "candidateRange": [
+        16,
+        16
+      ],
+      "candidateRuns": [
+        16,
+        16,
+        16,
+        16,
+        16
+      ]
+    },
+    {
+      "gate": "max sustained rate (Hz)",
+      "verdict": "PASS",
+      "baselineMedian": 22528000,
+      "baselineRange": [
+        14336000,
+        22528000
+      ],
+      "baselineRuns": [
+        22528000,
+        14336000,
+        18432000,
+        22528000,
+        22528000
+      ],
+      "candidateMedian": 22528000,
+      "candidateRange": [
+        18432000,
+        22528000
+      ],
+      "candidateRuns": [
+        22528000,
+        20480000,
+        18432000,
+        22528000,
+        22528000
+      ]
+    },
+    {
+      "gate": "soak hang reports",
+      "verdict": "PASS",
+      "baselineMedian": 0,
+      "baselineRange": [
+        0,
+        0
+      ],
+      "baselineRuns": [
+        0,
+        0
+      ],
+      "candidateMedian": 0,
+      "candidateRange": [
+        0,
+        0
+      ],
+      "candidateRuns": [
+        0,
+        0
+      ]
+    },
+    {
+      "gate": "soak frames > 100 ms",
+      "verdict": "PASS",
+      "baselineMedian": 1.5,
+      "baselineRange": [
+        0,
+        3
+      ],
+      "baselineRuns": [
+        0,
+        3
+      ],
+      "candidateMedian": 0.5,
+      "candidateRange": [
+        0,
+        1
+      ],
+      "candidateRuns": [
+        0,
+        1
+      ]
+    },
+    {
+      "gate": "soak working set 10 min (MB)",
+      "verdict": "PASS",
+      "baselineMedian": 133.22265625,
+      "baselineRange": [
+        133.19921875,
+        133.24609375
+      ],
+      "baselineRuns": [
+        133.19921875,
+        133.24609375
+      ],
+      "candidateMedian": 131.783203125,
+      "candidateRange": [
+        131.734375,
+        131.83203125
+      ],
+      "candidateRuns": [
+        131.734375,
+        131.83203125
+      ]
+    },
+    {
+      "gate": "soak longest frame (ms)",
+      "verdict": "INFO (reported, not a gate)",
+      "baselineMedian": 100.2196,
+      "baselineRange": [
+        25.7258,
+        174.7134
+      ],
+      "baselineRuns": [
+        25.7258,
+        174.7134
+      ],
+      "candidateMedian": 108.6894,
+      "candidateRange": [
+        87.9189,
+        129.4599
+      ],
+      "candidateRuns": [
+        87.9189,
+        129.4599
+      ]
+    }
+  ],
+  "sessionExitCode": 4
 }

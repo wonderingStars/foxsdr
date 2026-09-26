@@ -14,6 +14,7 @@
 #include <utility>
 
 #include "core/pipeline.hpp"
+#include "core/plugin_runner.hpp"
 #include "core/version.hpp"
 #include "source/siggen_source.hpp"
 
@@ -270,9 +271,18 @@ bool EngineMeasure::tickRun(Pipeline& p, const MeasureHooks& h) {
         cpu0_ = processCpuSeconds();
         drop0_ = p.ringDroppedSamples();
         audio0_ = p.audioSamplesProduced();
+        std::size_t active = 0;
+        readDecoders(p, active, decAudio0_, decIq0_, nullptr);
+        lastVfoHz_ = p.vfoOffsetHz();
         phaseAt_ = t;
         phase_ = 2;
         return true;
+    }
+    if (phase_ == 2) {
+        ++ticks_;
+        const double vfo = p.vfoOffsetHz();
+        if (vfo != lastVfoHz_) { ++vfoChanges_; }
+        lastVfoHz_ = vfo;
     }
     if (phase_ == 2 && t >= seconds_) {
         cpu1_ = processCpuSeconds();
@@ -280,10 +290,50 @@ bool EngineMeasure::tickRun(Pipeline& p, const MeasureHooks& h) {
         audio1_ = p.audioSamplesProduced();
         runWindow_ = t - phaseAt_;
         workingSet(workingSet_, peakWorkingSet_);
+        readDecoders(p, decodersActive_, decAudio1_, decIq1_, &decoderStatusJson_);
         finish(p);
         return false;
     }
     return true;
+}
+
+void EngineMeasure::readDecoders(Pipeline& p, std::size_t& active, std::uint64_t& audioFed,
+                                 std::uint64_t& iqFed, std::string* statusJson) const {
+    active = 0;
+    audioFed = 0;
+    iqFed = 0;
+    if (statusJson != nullptr) { statusJson->assign("[]"); }
+    const PluginRunner* r = p.pluginRunner();
+    if (r == nullptr) { return; }
+    active = r->activeCount();
+    audioFed = static_cast<std::uint64_t>(r->audioFramesFed());
+    iqFed = static_cast<std::uint64_t>(r->iqFramesFed());
+    if (statusJson == nullptr) { return; }
+    std::string js = "[";
+    bool first = true;
+    for (const DecoderStatus& s : r->status()) {
+        // A display name is the plugin author's text: escape what JSON
+        // requires and drop the other control characters.
+        std::string name;
+        for (const char c : s.plugin) {
+            if (c == '"' || c == '\\') {
+                name += '\\';
+                name += c;
+            } else if (static_cast<unsigned char>(c) >= 0x20) {
+                name += c;
+            }
+        }
+        char row[64];
+        std::snprintf(row, sizeof(row), "\", \"reason\": %d, \"running\": %s}",
+                      static_cast<int>(s.reason),
+                      s.reason == DecoderIdleReason::Running ? "true" : "false");
+        js += first ? "{\"plugin\": \"" : ", {\"plugin\": \"";
+        js += name;
+        js += row;
+        first = false;
+    }
+    js += "]";
+    *statusJson = js;
 }
 
 bool EngineMeasure::tickRates(Pipeline& p, const MeasureHooks& h) {
@@ -361,6 +411,8 @@ bool EngineMeasure::tickLatency(Pipeline& p, const MeasureHooks& h) {
             }
             std::fprintf(stderr, "cascade: measure latency: tone at %.0f Hz audio, steady %.3g\n",
                          toneHz_, steady_);
+            latDrop0_ = p.ringDroppedSamples();
+            latDropArmed_ = true;
             phase_ = 2;
             return true;
         }
@@ -433,7 +485,10 @@ void EngineMeasure::finish(Pipeline& p) {
         return;
     }
     const char* modeName = mode_ == Mode::Run ? "run" : (mode_ == Mode::Rates ? "rates" : "latency");
-    std::fprintf(f, "{\n  \"format\": \"foxsdr-measure/1\",\n");
+    // /2 (engine step 1a repair): run results carry the decoders fed and the
+    // VFO changes, latency results the input rate and the ring drops, so
+    // tools/measure_engine.ps1 can refuse a run that did less than it says.
+    std::fprintf(f, "{\n  \"format\": \"foxsdr-measure/2\",\n");
     std::fprintf(f, "  \"version\": \"%s\",\n  \"commit\": \"%s\",\n", cascade::versionString(),
                  cascade::gitCommit());
     std::fprintf(f, "  \"mode\": \"%s\",\n", modeName);
@@ -447,9 +502,21 @@ void EngineMeasure::finish(Pipeline& p) {
                      static_cast<unsigned long long>(drop1_ - drop0_));
         std::fprintf(f, "  \"audioSamples\": %llu,\n",
                      static_cast<unsigned long long>(audio1_ - audio0_));
-        std::fprintf(f, "  \"workingSetBytes\": %llu,\n  \"peakWorkingSetBytes\": %llu\n",
+        std::fprintf(f, "  \"workingSetBytes\": %llu,\n  \"peakWorkingSetBytes\": %llu,\n",
                      static_cast<unsigned long long>(workingSet_),
                      static_cast<unsigned long long>(peakWorkingSet_));
+        // Fed across the window. A rebuild inside it (none is expected: the
+        // source is swapped before the warm-up) restarts the runner's count,
+        // and then only the part after it is known.
+        const auto across = [](std::uint64_t a, std::uint64_t b) { return b >= a ? b - a : b; };
+        std::fprintf(f, "  \"decodersActive\": %zu,\n", decodersActive_);
+        std::fprintf(f, "  \"decoderAudioFramesFed\": %llu,\n  \"decoderIqFramesFed\": %llu,\n",
+                     static_cast<unsigned long long>(across(decAudio0_, decAudio1_)),
+                     static_cast<unsigned long long>(across(decIq0_, decIq1_)));
+        std::fprintf(f, "  \"decoders\": %s,\n", decoderStatusJson_.c_str());
+        std::fprintf(f, "  \"ticks\": %llu,\n  \"vfoChanges\": %llu\n",
+                     static_cast<unsigned long long>(ticks_),
+                     static_cast<unsigned long long>(vfoChanges_));
     } else if (mode_ == Mode::Rates) {
         std::fprintf(f, "  \"warmupS\": %.3f,\n  \"windowS\": %.3f,\n  \"steps\": [", warmup_,
                      window_);
@@ -464,8 +531,12 @@ void EngineMeasure::finish(Pipeline& p) {
         }
         std::fprintf(f, "\n  ]\n");
     } else {
-        std::fprintf(f, "  \"rateHz\": %.0f,\n  \"toneAudioHz\": %.1f,\n  \"steadyPower\": %.6g,\n",
-                     rateHz_, toneHz_, steady_);
+        std::fprintf(f, "  \"rateHz\": %.0f,\n  \"inputRateHz\": %.0f,\n", rateHz_,
+                     p.inputRateHz());
+        std::fprintf(f, "  \"ringDropped\": %llu,\n",
+                     static_cast<unsigned long long>(
+                         latDropArmed_ ? p.ringDroppedSamples() - latDrop0_ : 0u));
+        std::fprintf(f, "  \"toneAudioHz\": %.1f,\n  \"steadyPower\": %.6g,\n", toneHz_, steady_);
         std::fprintf(f, "  \"blockSamples\": %zu,\n  \"retunes\": [", kBlock);
         for (std::size_t i = 0; i < results_.size(); ++i) {
             const Retune& r = results_[i];
