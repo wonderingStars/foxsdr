@@ -12,14 +12,15 @@
 // their licence permits: Noto reserves no name. Licences travel with them in
 // third_party/fonts/OFL-*.txt and are listed in third_party/THIRD_PARTY.md.
 //
-// INCLUDE THIS FROM EXACTLY ONE TRANSLATION UNIT (gui/fonts.cpp). It is about
-// three megabytes of initialiser and there is no reason to compile it twice.
+// INCLUDE THIS FROM EXACTLY ONE TRANSLATION UNIT (core/font_blobs.cpp). It is
+// about three megabytes of initialiser and there is no reason to compile it
+// twice; everything else reaches the bytes through core/font_blobs.hpp.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-#ifndef CASCADE_GUI_FONT_ASSETS_HPP
-#define CASCADE_GUI_FONT_ASSETS_HPP
+#ifndef CASCADE_CORE_FONT_ASSETS_HPP
+#define CASCADE_CORE_FONT_ASSETS_HPP
 
-namespace cascade::gui::fontdata {
+namespace cascade::core::fontdata {
 
 // SairaCondensed-Medium.ttf, 96240 bytes
 inline constexpr unsigned char kFontUiTtf[] = {
@@ -30761,6 +30762,6 @@ inline constexpr unsigned char kFontFallbackLegendTtf[] = {
 };
 inline constexpr unsigned int kFontFallbackLegendTtfLen = 121216;
 
-}  // namespace cascade::gui::fontdata
+}  // namespace cascade::core::fontdata
 
-#endif  // CASCADE_GUI_FONT_ASSETS_HPP
+#endif  // CASCADE_CORE_FONT_ASSETS_HPP

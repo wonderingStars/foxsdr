@@ -1,6 +1,6 @@
 /*
  * The three typefaces the interface is lettered in are VENDORED under
- * third_party/fonts and COMPILED IN from src/gui/font_assets.hpp, which
+ * third_party/fonts and COMPILED IN from src/core/font_assets.hpp, which
  * tools/embed-fonts.py generates. This test proves the compiled-in bytes are
  * still the vendored files, byte for byte.
  *
@@ -29,7 +29,7 @@
 #include <fstream>
 #include <string>
 
-#include "gui/font_assets.hpp"
+#include "core/font_assets.hpp"
 #include "test_check.hpp"
 
 namespace {
@@ -75,20 +75,20 @@ void checkOne(const std::string& root, const char* name, const unsigned char* by
 
 void testEmbeddedMatchesVendored(const std::string& root) {
     std::printf("  the compiled-in typefaces are the ones in third_party/fonts\n");
-    checkOne(root, "SairaCondensed-Medium.ttf", cascade::gui::fontdata::kFontUiTtf,
-             cascade::gui::fontdata::kFontUiTtfLen);
-    checkOne(root, "SairaCondensed-SemiBold.ttf", cascade::gui::fontdata::kFontLegendTtf,
-             cascade::gui::fontdata::kFontLegendTtfLen);
-    checkOne(root, "NovaMono.ttf", cascade::gui::fontdata::kFontReadingTtf,
-             cascade::gui::fontdata::kFontReadingTtfLen);
+    checkOne(root, "SairaCondensed-Medium.ttf", cascade::core::fontdata::kFontUiTtf,
+             cascade::core::fontdata::kFontUiTtfLen);
+    checkOne(root, "SairaCondensed-SemiBold.ttf", cascade::core::fontdata::kFontLegendTtf,
+             cascade::core::fontdata::kFontLegendTtfLen);
+    checkOne(root, "NovaMono.ttf", cascade::core::fontdata::kFontReadingTtf,
+             cascade::core::fontdata::kFontReadingTtfLen);
     // The fallback faces are a SUBSET (tools/subset-noto.py), so "the file in
     // third_party/fonts" is the subset, not the upstream download.
     checkOne(root, "NotoSansCondensed-Medium-subset.ttf",
-             cascade::gui::fontdata::kFontFallbackUiTtf,
-             cascade::gui::fontdata::kFontFallbackUiTtfLen);
+             cascade::core::fontdata::kFontFallbackUiTtf,
+             cascade::core::fontdata::kFontFallbackUiTtfLen);
     checkOne(root, "NotoSansCondensed-SemiBold-subset.ttf",
-             cascade::gui::fontdata::kFontFallbackLegendTtf,
-             cascade::gui::fontdata::kFontFallbackLegendTtfLen);
+             cascade::core::fontdata::kFontFallbackLegendTtf,
+             cascade::core::fontdata::kFontFallbackLegendTtfLen);
 }
 
 // A file that is not a TrueType font at all would still satisfy the comparison
@@ -104,15 +104,15 @@ void testTheyAreActuallyFonts() {
         unsigned int len;
     };
     const Face faces[] = {
-        {"ui", cascade::gui::fontdata::kFontUiTtf, cascade::gui::fontdata::kFontUiTtfLen},
-        {"legend", cascade::gui::fontdata::kFontLegendTtf,
-         cascade::gui::fontdata::kFontLegendTtfLen},
-        {"reading", cascade::gui::fontdata::kFontReadingTtf,
-         cascade::gui::fontdata::kFontReadingTtfLen},
-        {"fallback ui", cascade::gui::fontdata::kFontFallbackUiTtf,
-         cascade::gui::fontdata::kFontFallbackUiTtfLen},
-        {"fallback legend", cascade::gui::fontdata::kFontFallbackLegendTtf,
-         cascade::gui::fontdata::kFontFallbackLegendTtfLen},
+        {"ui", cascade::core::fontdata::kFontUiTtf, cascade::core::fontdata::kFontUiTtfLen},
+        {"legend", cascade::core::fontdata::kFontLegendTtf,
+         cascade::core::fontdata::kFontLegendTtfLen},
+        {"reading", cascade::core::fontdata::kFontReadingTtf,
+         cascade::core::fontdata::kFontReadingTtfLen},
+        {"fallback ui", cascade::core::fontdata::kFontFallbackUiTtf,
+         cascade::core::fontdata::kFontFallbackUiTtfLen},
+        {"fallback legend", cascade::core::fontdata::kFontFallbackLegendTtf,
+         cascade::core::fontdata::kFontFallbackLegendTtfLen},
     };
     for (const Face& f : faces) {
         // 0x00010000 is the sfnt version of a TrueType outline font; "OTTO"
@@ -136,11 +136,11 @@ void testTheyAreActuallyFonts() {
 // they still parse.
 void testReservedNamesArePresent() {
     std::printf("  the reserved font names are intact, so these are still the upstream faces\n");
-    const std::string ui(reinterpret_cast<const char*>(cascade::gui::fontdata::kFontUiTtf),
-                         cascade::gui::fontdata::kFontUiTtfLen);
+    const std::string ui(reinterpret_cast<const char*>(cascade::core::fontdata::kFontUiTtf),
+                         cascade::core::fontdata::kFontUiTtfLen);
     const std::string reading(
-        reinterpret_cast<const char*>(cascade::gui::fontdata::kFontReadingTtf),
-        cascade::gui::fontdata::kFontReadingTtfLen);
+        reinterpret_cast<const char*>(cascade::core::fontdata::kFontReadingTtf),
+        cascade::core::fontdata::kFontReadingTtfLen);
     // Name records are UTF-16BE in the Windows platform encoding, so the ASCII
     // appears with a null between every character.
     const std::string kSaira("S\0a\0i\0r\0a\0", 10);

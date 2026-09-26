@@ -52,9 +52,24 @@
 #include <string>
 #include <vector>
 
+#include "core/font_blobs.hpp"
 #include "imgui.h"
 
 namespace cascade::gui::fonts {
+
+// The embedded faces' raw bytes (uiTtf() ... fallbackLegendTtfLen()). They
+// are engine side, in core/font_blobs.hpp, because the web server serves them
+// too; the names are brought back here unchanged for the window's callers.
+using cascade::core::fonts::uiTtf;
+using cascade::core::fonts::uiTtfLen;
+using cascade::core::fonts::legendTtf;
+using cascade::core::fonts::legendTtfLen;
+using cascade::core::fonts::readingTtf;
+using cascade::core::fonts::readingTtfLen;
+using cascade::core::fonts::fallbackUiTtf;
+using cascade::core::fonts::fallbackUiTtfLen;
+using cascade::core::fonts::fallbackLegendTtf;
+using cascade::core::fonts::fallbackLegendTtfLen;
 
 // --- the sizes, by role ------------------------------------------------------
 // Measured against the design handoff and then checked at 100% Windows scaling

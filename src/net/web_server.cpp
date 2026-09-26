@@ -35,7 +35,7 @@
 #endif
 #endif
 #include <httplib.h>
-#include "gui/font_blobs.hpp"
+#include "core/font_blobs.hpp"
 
 namespace cascade::net {
 namespace {
@@ -3143,13 +3143,13 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
         res.set_content(reinterpret_cast<const char*>(data), len, "font/ttf");
     };
     svr.Get("/font/ui.ttf", [serveFont](const httplib::Request&, httplib::Response& res) {
-        serveFont(cascade::gui::fonts::uiTtf(), cascade::gui::fonts::uiTtfLen(), res);
+        serveFont(cascade::core::fonts::uiTtf(), cascade::core::fonts::uiTtfLen(), res);
     });
     svr.Get("/font/legend.ttf", [serveFont](const httplib::Request&, httplib::Response& res) {
-        serveFont(cascade::gui::fonts::legendTtf(), cascade::gui::fonts::legendTtfLen(), res);
+        serveFont(cascade::core::fonts::legendTtf(), cascade::core::fonts::legendTtfLen(), res);
     });
     svr.Get("/font/reading.ttf", [serveFont](const httplib::Request&, httplib::Response& res) {
-        serveFont(cascade::gui::fonts::readingTtf(), cascade::gui::fonts::readingTtfLen(), res);
+        serveFont(cascade::core::fonts::readingTtf(), cascade::core::fonts::readingTtfLen(), res);
     });
 
     svr.Get("/app.js", [](const httplib::Request&, httplib::Response& res) {

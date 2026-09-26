@@ -46,7 +46,7 @@
 #include "core/i18n.hpp"
 #include "core/scripts.hpp"
 #include "core/utf8_text.hpp"
-#include "gui/font_blobs.hpp"
+#include "core/font_blobs.hpp"
 #include "gui/font_probe.hpp"
 #include "gui/fonts.hpp"
 #include "test_check.hpp"
