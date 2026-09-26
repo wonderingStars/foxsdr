@@ -315,6 +315,10 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     getBool(j, "autoNotch", out.autoNotch);
     getBool(j, "bandPlanOverlay", out.bandPlanOverlay);
     getString(j, "patch", out.patch);
+    // The main view: one of the two faces the window has, or the patch view
+    // (the default) for anything else - never a name nothing draws.
+    getString(j, "mainView", out.mainView);
+    if (out.mainView != "patch" && out.mainView != "receiver") { out.mainView = "patch"; }
     getString(j, "bandPlanSelection", out.bandPlanSelection);
     // Carried as written, like bandPlanSelection: which codes are real is a
     // question for the catalogue and country tables of THIS build, answered
@@ -849,6 +853,7 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
     j["autoNotch"] = cfg.autoNotch;
     j["bandPlanOverlay"] = cfg.bandPlanOverlay;
     j["patch"] = cfg.patch;
+    j["mainView"] = cfg.mainView;
     j["bandPlanSelection"] = cfg.bandPlanSelection;
     j["language"] = cfg.language;
     j["country"] = cfg.country;
@@ -1060,7 +1065,8 @@ bool ConfigStore::save(const std::string& path, const AppConfig& cfg, std::strin
 }
 
 AppConfig startupState(AppConfig cfg) {
-    // WHETHER goes; WHERE stays. See the declaration for why.
+    // WHETHER goes; WHERE stays. See the declaration for why - and for why
+    // mainView, the one face-of-the-window setting, is not touched here.
     cfg.scopeMode = false;
     cfg.demodScopeOpen = false;
     cfg.transmitOpen = false;

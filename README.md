@@ -61,7 +61,7 @@ Internal project/binary name: `cascade`.
 
 ## Where it is now
 
-The current release is **0.99.39** (September 2026), in open beta and free for
+The current release is **0.99.40** (September 2026), in open beta and free for
 noncommercial use, with its decoders and instruments delivered as plugins from
 a catalogue. These are screenshots of an earlier shipping build.
 
@@ -1337,18 +1337,24 @@ row to tune it.
   costs the display nothing; the browser page is sent the favourites and the
   few hundred nearest the tuned frequency, not the whole list.
 
-## The patch page
+## The patch view
 
-**SIGNAL PATH → Patch** opens a canvas where a receiver is built by hand: press
-a part in the bin at the top and it appears at the top-left of the canvas you
-are looking at (pressing again steps each new one down and across), then wire
-them port to port. Each part is the instrument itself, operated on its own face.
-The page resizes from the ridged grip in its bottom-right corner, as every page
-does.
+The patch is FoxSDR's main view (0.99.40): a canvas where a receiver is built
+by hand, filling the window where the spectrum and waterfall are otherwise
+drawn and resizing with it. FoxSDR opens on it. The **RECEIVER** and **PATCH**
+keys under the bank keys at the top of the rail switch between it and the
+receiver's spectrum, waterfall and status (so does **SIGNAL PATH → Patch**),
+and the view last chosen is the one FoxSDR opens on next time. Showing the
+patch starts nothing, and opening on it does not search for radios - the
+device lists are read when a Radio's device list is opened or **Look for
+radios** is pressed. Press a part in the bin at the top and it appears at the
+top-left of the canvas you are looking at (pressing again steps each new one
+down and across), then wire them port to port. Each part is the instrument
+itself, operated on its own face.
 
 | Part | What it does |
 |---|---|
-| **Radio** | One device of its own - up to five in a patch, all running at once. Choose the device and its sample rate in the panel on the right and type its centre on the node. A device can be on one Radio only; the list greys out a device another Radio already has. Its **ON/OFF** switch, first on its face, closes that radio alone while the rest of the patch keeps running. |
+| **Radio** | One device of its own - up to five in a patch, all running at once. Choose the device and its sample rate in the panel on the right and type its centre on the node. A device can be on one Radio only; the list greys out a device another Radio already has. Its **ON/OFF** switch, first on its face, closes that radio alone while the rest of the patch keeps running. A Radio can also play an **I/Q recording**: every 2-channel WAV (16-bit PCM or 32-bit float) in the recordings folder is in its device list, played on a loop in real time. The recording sets the rate; the Radio's centre is the frequency the recording was made at, so type the frequency it was tuned to. Several Radios can play different recordings at once; one recording can be on one Radio only. |
 | **Channel** | One frequency out of that capture, tuned, filtered and decimated. Its frequency is typed on its face; its live level is shown above. |
 | **Demod** | AM or FM demodulation of a channel, with a **squelch**: on by default at -50 dB, its threshold on a slider and the channel's live level beside it, so a speaker or a recording hears signals rather than the noise between them. Decoders behind it still get every sample. |
 | **Speaker** | Where the demodulated channel wired to it goes: a **WAV file** (the default), an **MP3 file**, **the speakers**, or any other sound output - chosen in the panel on the right. Files go in the recordings folder, one per speaker, named after it. |
@@ -1372,8 +1378,9 @@ every radio that is switched on (all of them, if none is) and hands the
 receiver's own radio to the patch - the receiver switches to the signal
 generator, its decoders stand down and the Source list greys its radios out.
 STOP, the large red **ALL OFF** (which also switches every radio off), or
-closing the page stops every patch radio, finishes every file and gives the
-receiver its radio and decoders back. Opening the page starts nothing. MP3
+switching to the receiver view stops every patch radio, finishes every file and
+gives the receiver its radio and decoders back. Showing the patch view starts
+nothing. MP3
 uses Windows' own encoder; on Linux the MP3 choice is unavailable and WAV is
 written instead. A decoder module that can decode straight from the radio's I/Q
 is offered only that way - its audio variant, which needs a demodulator in

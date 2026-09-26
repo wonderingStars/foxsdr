@@ -275,6 +275,18 @@ struct AppConfig {
     // exist because of a real hang report and neither of which is worth
     // reimplementing for a second document.
     std::string patch;
+    // WHICH FACE THE MAIN WINDOW SHOWS (0.99.40, the owner: "display the patch
+    // panel as the main"): "patch" - the patch canvas fills the area the
+    // spectrum and waterfall use - or "receiver", the spectrum and waterfall.
+    // "patch" is the default, so a fresh install opens on the patch view.
+    //
+    // RESTORED, and it is the one exception to startupState() below: the
+    // owner asked for the patch as the main view, and the main view is not a
+    // window that opens itself - it is which of the window's two faces is
+    // showing, and the last one chosen comes back. Showing it starts nothing:
+    // a patch still only runs from its own START key. The loader keeps only
+    // the two names; anything else opens on "patch".
+    std::string mainView = "patch";
     std::string bandPlanSelection = "world";
 
     // Ribbon size and segment-colour palette for the overlay above (issue #1:
@@ -986,6 +998,13 @@ struct AppConfig {
 // config with every "open" cleared and the scope off. Everything that says
 // WHERE a window sits survives - a page opened by hand comes back to the
 // place it was left - and everything that says WHETHER it was open does not.
+//
+// ONE EXCEPTION, by the owner's later word (0.99.40: "display the patch panel
+// as the main"): mainView is kept. It is not a window - it is which of the
+// main window's two faces shows, the patch canvas or the spectrum - and a
+// fresh install opens on the patch face, with the last one chosen coming back
+// after that. Every other page still opens only from its own key, and showing
+// the patch face starts nothing: the patch runs only from its own START key.
 //
 // A pure function over the config, rather than a rule buried in the window,
 // so a test can hand it a config with everything open and check that nothing

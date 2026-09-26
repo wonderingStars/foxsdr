@@ -27,6 +27,8 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
+#include <filesystem>
 #include <set>
 #include <thread>
 
@@ -82,10 +84,30 @@ const char* destKind(const pc::AudioDest* dest) {
     return "an output device";
 }
 
-std::string openedAs(const pc::Node& n) {
-    char buf[48];
-    std::snprintf(buf, sizeof(buf), "@%.17g", radioRate(n));
-    return n.device + buf;
+// What the radio was opened AS: its device and, for a radio, its rate. A
+// recording's rate is the file's, so it is left out (pc::radioOpenIdentity) -
+// the node taking the file's rate must not reopen it.
+std::string openedAs(const pc::Node& n) { return pc::radioOpenIdentity(n.device, radioRate(n)); }
+
+// "2.000 MS/s", "48.000 kS/s": a recording's rate as its list row says it.
+std::string recordingRateText(double hz) {
+    char buf[32];
+    if (hz >= 1.0e6) {
+        std::snprintf(buf, sizeof(buf), "%.3f MS/s", hz / 1.0e6);
+    } else {
+        std::snprintf(buf, sizeof(buf), "%.3f kS/s", hz / 1.0e3);
+    }
+    return buf;
+}
+
+// The file name of a recording key, for its label - as UTF-8 for the screen.
+std::string recordingFileName(const std::string& key) {
+    try {
+        const auto s = std::filesystem::path(pc::iqFilePath(key)).filename().u8string();
+        return std::string(s.begin(), s.end());
+    } catch (...) {
+        return pc::iqFilePath(key);
+    }
 }
 
 // Whether an EARLIER radio in the graph already has this node's device - the
@@ -116,6 +138,13 @@ std::unique_ptr<cascade::source::SigGenSource> makePatchGenerator(double rateHz,
 std::vector<AppWindow::PatchDeviceChoice> AppWindow::patchDeviceChoices() const {
     std::vector<PatchDeviceChoice> out;
     out.push_back({pc::kGeneratorKey, tr("Signal generator")});
+    // THE RECORDINGS, beside the generator: like it, they are not hardware,
+    // and a patch can be built and decoded on them with no radio on the desk.
+    for (const pc::RecordingInfo& r : patchRecordings_) {
+        std::string label;
+        cascade::core::formatUtf8(label, tr("Recording: %s"), r.fileName.c_str());
+        out.push_back({r.key, label + " (" + recordingRateText(r.rateHz) + ")"});
+    }
     for (const cascade::source::NativeDeviceInfo& d : nativeDevices_) {
         // A Pluto needs its address typed in the Source panel; the patch has
         // no field for it, so it is not offered here rather than failing.
@@ -150,10 +179,28 @@ std::vector<AppWindow::PatchDeviceChoice> AppWindow::patchDeviceChoices() const 
     return out;
 }
 
+void AppWindow::patchListRecordings() {
+    std::vector<std::string> dirs{recordDir_};
+    // A second folder for verification and for anyone who keeps recordings
+    // elsewhere - read from the environment, never guessed.
+    if (const char* s = std::getenv("FOXSDR_PATCH_SAMPLES"); s != nullptr && *s != '\0') {
+        dirs.emplace_back(s);
+    }
+    patchRecordings_ = pc::listIqRecordings(dirs);
+    cascade::core::diagLogf("patch: %zu I/Q recording(s) listed", patchRecordings_.size());
+}
+
 std::string AppWindow::patchDeviceLabel(const std::string& key) const {
     if (key.empty()) { return tr("No device chosen"); }
     for (const PatchDeviceChoice& c : patchDeviceChoices()) {
         if (c.key == key) { return c.label; }
+    }
+    // A RECORDING IS NAMED BY ITS FILE whether or not the list has been read:
+    // the key carries the path, and the list is only read when asked for.
+    if (pc::isIqFileKey(key)) {
+        std::string buf;
+        cascade::core::formatUtf8(buf, tr("Recording: %s"), recordingFileName(key).c_str());
+        return buf;
     }
     // NOT LISTED IS NOT "NOT CONNECTED": a SoapySDR radio is listed only after
     // a scan. Its args carry its own label, which is what the list would say.
@@ -220,7 +267,9 @@ std::string AppWindow::patchDefaultDeviceKey() const {
         candidates.push_back(pc::makeDeviceKey(sourceKind_, deviceArgs_));
     }
     for (const PatchDeviceChoice& c : patchDeviceChoices()) {
-        if (!pc::isGeneratorKey(c.key)) { candidates.push_back(c.key); }
+        // Radios only: a new Radio is never started on a recording nobody
+        // chose - the generator is the stand-in when no radio is free.
+        if (!pc::isGeneratorKey(c.key) && !pc::isIqFileKey(c.key)) { candidates.push_back(c.key); }
     }
     for (const std::string& k : candidates) {
         if (!taken(k)) { return k; }
@@ -260,10 +309,16 @@ void AppWindow::patchReconcile() {
     // opening (a session restoring its source), when the plan must defer - and
     // a scan asked for only on the first frame then never happened. So the
     // wish is kept and the scan runs on the first frame the plan allows.
-    if (!patchWasOpen_) {
-        scanNative();
-        patchScanWanted_ = true;
-    }
+    //
+    // NOT ON SHOWING THE VIEW ANY MORE (0.99.40). The patch is now the view
+    // the application opens on and is switched to and fro all day, and a
+    // SoapySDR scan asked for here would run the vendor probe - which opens
+    // and resets USB radios - at every launch and every switch, the very
+    // thing the constructor refuses to do. So the view's first frame reads
+    // the native list (it opens nothing), and the SoapySDR scan waits for the
+    // user to ask for a list: a Radio's device list opened (it asks once, as
+    // the Source section's does) or "Look for radios".
+    if (!patchWasOpen_) { scanNative(); }
 
     // --- the receiver's radio goes to the patch ------------------------------
     // ONLY WHILE THE PATCH RUNS (0.99.18): an open page with the patch stopped
@@ -445,6 +500,55 @@ void AppWindow::patchReconcile() {
         // The node's frequency is AIR; the device is told it through the
         // converter remembered for it (off unless the user set one there).
         const cascade::core::ConverterSetting conv = converterForKey(n->device);
+        // AN I/Q RECORDING (0.99.40), opened here on the GUI thread as the
+        // Source section opens one: a header read, bounded, and no USB walk
+        // to wait for. Its RATE is the file's, and the node takes it - which
+        // does not reopen it (openedAs leaves a recording's rate out). Its
+        // CENTRE is the node's frequency: the air frequency the recording is
+        // baseband around, told to the file as the receiver's file is told
+        // one (through the "file" converter, off unless the user set it).
+        if (pc::isIqFileKey(n->device)) {
+            const double radioHz =
+                (pc::radioCentreSet(*n) && cascade::core::airReachable(conv, centre))
+                    ? cascade::core::radioFromAir(conv, centre)
+                    : 0.0;
+            std::string err;
+            std::unique_ptr<cascade::source::IqFileSource> file =
+                pc::openIqRecording(n->device, radioHz, err);
+            if (!file) {
+                patchRadioError_[id] = err;
+                patchRadioFailedAs_[id] = as;
+                // The NODE, never the file's name: a path is the user's data.
+                cascade::core::diagWarnf("patch: radio node %u: its I/Q recording would not open",
+                                         static_cast<unsigned>(id));
+                continue;
+            }
+            if (std::fabs(n->rateHz - file->sampleRateHz()) > 0.5) {
+                n->rateHz = file->sampleRateHz();
+                patchUi_.dirty = true;
+            }
+            auto radio = std::make_unique<pc::PatchRadio>(id, std::move(file), "I/Q recording");
+            radio->setConverter(conv);
+            std::string serr;
+            if (!radio->start(serr)) {
+                patchRadioError_[id] = serr;
+                patchRadioFailedAs_[id] = as;
+                continue;
+            }
+            if (!pc::radioCentreSet(*n)) {
+                n->freqHz = radio->centreHz();
+                n->centreChosen = true;
+                patchUi_.dirty = true;
+            }
+            cascade::core::diagLogf("patch: radio node %u playing an I/Q recording at %.0f S/s",
+                                    static_cast<unsigned>(id), radio->rateHz());
+            patchRadioError_.erase(id);
+            patchRadioFailedAs_.erase(id);
+            patchRadioOpenedAs_[id] = openedAs(*n);
+            patchRadios_[id] = std::move(radio);
+            patchRadioSig_.erase(id);
+            continue;
+        }
         if (pc::isGeneratorKey(n->device)) {
             auto radio = std::make_unique<pc::PatchRadio>(
                 id,
@@ -682,6 +786,16 @@ void AppWindow::patchPublishSets() {
 }
 
 void AppWindow::patchStopAll(bool restoreMain) {
+    if (!patchRadios_.empty()) {
+        // Worded apart, so a log says which: a patch stopped (STOP, ALL OFF,
+        // the receiver view chosen) or the application closing.
+        if (restoreMain) {
+            cascade::core::diagLogf("patch: %zu patch radio(s) closing", patchRadios_.size());
+        } else {
+            cascade::core::diagLogf("patch: shutting down - %zu patch radio(s) closing",
+                                    patchRadios_.size());
+        }
+    }
     for (auto& [id, radio] : patchRadios_) {
         (void)id;
         radio->stop();
@@ -1064,6 +1178,18 @@ void AppWindow::drawPatchRadioInspector(pc::Node& n) {
     ImGui::SetNextItemWidth(-FLT_MIN);
     const std::vector<PatchDeviceChoice> choices = patchDeviceChoices();
     if (ImGui::BeginCombo("##patchdevice", patchDeviceLabel(n.device).c_str())) {
+        // OPENING THE LIST IS ASKING FOR IT (0.99.40), as the Source section's
+        // first open is: the view shown at start-up asked for nothing, so the
+        // SoapySDR scan and the sound card listing are started here, once.
+        if (!patchListsWanted_) {
+            patchListsWanted_ = true;
+            if (!soapyScanned_ || soapyScanPartial_) { patchScanWanted_ = true; }
+        }
+        // The recordings are read afresh each time the list opens - a file
+        // saved a moment ago is in it - and on no other frame. The rows drawn
+        // this frame are the ones read last time; the new list is there on
+        // the next frame, which is the one the eye reaches it on.
+        if (ImGui::IsWindowAppearing()) { patchListRecordings(); }
         for (std::size_t i = 0; i < choices.size(); ++i) {
             const PatchDeviceChoice& c = choices[i];
             // ONE DEVICE, ONE RADIO: a device another Radio already has is
@@ -1097,6 +1223,11 @@ void AppWindow::drawPatchRadioInspector(pc::Node& n) {
             // above rather than by its label text.
             if (ImGui::Selectable(text.c_str(), c.key == n.device)) {
                 n.device = c.key;
+                // A recording's rate is its own: the node takes it now, so
+                // the patch is planned at the rate it will run at.
+                for (const pc::RecordingInfo& r : patchRecordings_) {
+                    if (r.key == c.key) { n.rateHz = r.rateHz; }
+                }
                 patchUi_.dirty = true;
             }
             ImGui::EndDisabled();
@@ -1109,8 +1240,10 @@ void AppWindow::drawPatchRadioInspector(pc::Node& n) {
     // radio had to leave out, is one press away (2026-09-23).
     ImGui::BeginDisabled(soapyScanPending_);
     if (ImGui::SmallButton(trId("Look for radios"))) {
+        patchListsWanted_ = true;   // the sound cards too
         scanNative();
         scanSoapy();
+        patchListRecordings();
     }
     ImGui::EndDisabled();
     if (soapyScanPending_) {
@@ -1135,7 +1268,16 @@ void AppWindow::drawPatchRadioInspector(pc::Node& n) {
     char rateText[32];
     std::snprintf(rateText, sizeof(rateText), "%.3f MS/s", radioRate(n) / 1e6);
     ImGui::SetNextItemWidth(-FLT_MIN);
-    if (ImGui::BeginCombo("##patchrate", rateText)) {
+    if (pc::deviceSetsItsOwnRate(n.device)) {
+        // A RECORDING'S RATE IS NOT A SETTING: it is the rate it was made at,
+        // and IqFileSource refuses any other. Shown, and said, not offered.
+        ImGui::PushStyleColor(ImGuiCol_Text, amber);
+        ImGui::TextUnformatted(recordingRateText(radioRate(n)).c_str());
+        ImGui::PopStyleColor();
+        ImGui::PushStyleColor(ImGuiCol_Text, muted);
+        ImGui::TextWrapped("%s", tr("The recording sets the rate."));
+        ImGui::PopStyleColor();
+    } else if (ImGui::BeginCombo("##patchrate", rateText)) {
         for (const double r : kPatchRatesHz) {
             char t[32];
             std::snprintf(t, sizeof(t), "%.3f MS/s", r / 1e6);

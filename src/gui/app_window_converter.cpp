@@ -84,7 +84,10 @@ cc::ConverterSetting AppWindow::converterForKey(const std::string& radioKey) con
     // A patch radio names its card by the full name; the card's converter is
     // kept under its identity (gui::soundCardConverterKey - on Linux without
     // the ALSA card number), so the key is brought to that form first.
-    const std::string key = cascade::gui::soundCardCanonicalKey(resolveConverterKey(radioKey));
+    // A patch radio playing an I/Q recording (0.99.40) uses the receiver's
+    // converter for I/Q files (core::patch::converterKeyForDevice).
+    const std::string key = cascade::gui::soundCardCanonicalKey(
+        resolveConverterKey(cascade::core::patch::converterKeyForDevice(radioKey)));
     const cc::ConverterSetting stored = cc::converterFor(converters_, key);
     // What a sound card can have in front of it depends on its format
     // (gui::soundCardConverter): nothing for I/Q, a down-converter for real.
