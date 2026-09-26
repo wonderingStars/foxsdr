@@ -102,7 +102,7 @@ are still moving. What is in the current build:
   Antenna, sample-rate and per-stage gain selection on all of them,
   with each gain slider spanning what that stage will actually accept and
   lettered in the unit that stage is really measured in — decibels on every
-  radio but the Airspy R2/Mini, whose five stages are the hardware's own
+  radio but the Airspy R2/Mini, whose gains are the hardware's own
   register steps and are shown as bare step numbers rather than invented
   decibels — and a bias-tee switch on the radios that have one. Developed against an Ettus B200
   and an RTL2838 (R820T); the built-in signal generator and IQ-file playback
@@ -284,16 +284,36 @@ signal. The conversion uses libairspy's own half-band kernel, so the spectrum ag
 every other Airspy application about where a signal is, and the mirror image that a
 real-to-complex conversion has to suppress is measured 61 dB down.
 
-Five gains are exposed. **LNA**, **MIXER** and **VGA** drive the R820T's three stages
-directly, and the numbers are the hardware's own steps rather than decibels — libairspy
-publishes no decibel mapping for them and FoxSDR does not invent one. Everywhere a gain
-is shown — the Source sliders, the RECEIVER card, the scope deck's GAIN knob and the
-browser interface — these five are lettered as bare step numbers with no unit, because
-the honest thing to put after a register position is nothing. **LINEARITY** and
-**SENSITIVITY** are libairspy's two curated walks up all three at once: linearity trades
-sensitivity for headroom against a strong neighbouring signal, sensitivity does the
-opposite. Unlike the HackRF the Airspy has automatic gain control, on the LNA and the
-mixer, and FoxSDR's auto-gain switch drives both. The bias tee is a separate control —
+**Three gain modes, one at a time** (0.99.40), as Airspy's own software offers them:
+**Sensitive**, **Linear** and **Free**. Sensitive and Linear are one **Gain** slider each,
+0 to 21, over libairspy's two curated walks up all three of the R820T's stages at once —
+linearity trades sensitivity for headroom against a strong neighbouring signal,
+sensitivity does the opposite. **Free** is the three stages by hand — **LNA**, **MIXER**
+and **VGA** — with the LNA's and the mixer's own automatic gain control each switched on
+or off (**LNA AGC**, **Mixer AGC**); a stage its AGC is driving is greyed, and goes back
+to its own number when the AGC is switched off. Only the chosen mode's controls are shown,
+and each mode keeps its own values while another is in use. The numbers are the
+hardware's own steps rather than decibels — libairspy publishes no decibel mapping for
+them and FoxSDR does not invent one — so everywhere a gain is shown (the Source sliders,
+the RECEIVER card, the scope deck's GAIN knob, the browser interface) it is a bare step
+number. The browser and the plugin API see only the chosen mode's gains too; naming a
+gain from another mode switches to it. FoxSDR's generic auto-gain switch is Free mode with
+both AGCs on.
+
+**Decimation** (0.99.40): none, 2, 4, 8, 16 or 32 on an R2 and up to 64 on a Mini, as in
+Airspy's own software. It divides what the radio delivers by that factor before anything
+else sees it — half-band filters, flat and alias-free over the inner 80% of the new band
+and more than 90 dB down on everything that would fold into it — so the span narrows, the
+whole receiver does proportionally less work, and each halving leaves about 3 dB less
+noise per sample. The Rate list then shows the delivered rates (an R2 at 10 MS/s under 8
+is 1.25 MS/s, and the line under the Decimation box says so), and the spectrum, the
+channel, recordings and every decoder run at that rate. An R2 stops at 32 because its
+2.5 MS/s divided by 64 is not a whole number of samples a second, which the receiver's
+resampler needs. Radios on the patch page run undecimated, at the rate the patch asks for.
+
+The gain mode, every mode's values, the two AGC switches and the decimation are
+remembered **per radio** (by its serial) and put back when that radio opens, before its
+sample rate is set. The bias tee is a separate control —
 a **Bias tee** checkbox below the gain sliders — and it is switched off every time FoxSDR
 opens or closes the radio, so a previous application cannot leave 4.5 V on your antenna
 port without anything on screen saying so. FoxSDR remembers the setting across restarts
