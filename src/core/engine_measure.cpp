@@ -101,11 +101,12 @@ std::int64_t steadyNs() {
         .count();
 }
 
-// Process CPU (user + kernel), seconds.
+// Process CPU (user + kernel), seconds; NEGATIVE when it could not be read,
+// never a silent 0 that would read as a perfectly idle process.
 double processCpuSeconds() {
 #if defined(_WIN32)
     FILETIME c{}, e{}, k{}, u{};
-    if (!::GetProcessTimes(::GetCurrentProcess(), &c, &e, &k, &u)) { return 0.0; }
+    if (!::GetProcessTimes(::GetCurrentProcess(), &c, &e, &k, &u)) { return -1.0; }
     const auto toS = [](const FILETIME& ft) {
         const ULONGLONG v = (static_cast<ULONGLONG>(ft.dwHighDateTime) << 32) | ft.dwLowDateTime;
         return static_cast<double>(v) * 1e-7;
@@ -113,7 +114,7 @@ double processCpuSeconds() {
     return toS(k) + toS(u);
 #else
     rusage ru{};
-    if (::getrusage(RUSAGE_SELF, &ru) != 0) { return 0.0; }
+    if (::getrusage(RUSAGE_SELF, &ru) != 0) { return -1.0; }
     return static_cast<double>(ru.ru_utime.tv_sec + ru.ru_stime.tv_sec) +
            static_cast<double>(ru.ru_utime.tv_usec + ru.ru_stime.tv_usec) * 1e-6;
 #endif
@@ -290,6 +291,10 @@ bool EngineMeasure::tickRun(Pipeline& p, const MeasureHooks& h) {
         audio1_ = p.audioSamplesProduced();
         runWindow_ = t - phaseAt_;
         workingSet(workingSet_, peakWorkingSet_);
+        // A reading that failed is an error in the result, not a figure:
+        // 0 CPU seconds or 0 bytes would otherwise pass as a cheap build.
+        if (cpu0_ < 0.0 || cpu1_ < 0.0) { error_ = "process CPU time could not be read"; }
+        if (workingSet_ == 0) { error_ = "working set could not be read"; }
         readDecoders(p, decodersActive_, decAudio1_, decIq1_, &decoderStatusJson_);
         finish(p);
         return false;
