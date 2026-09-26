@@ -490,6 +490,41 @@ function(_cascade_check_engine_links)
                 endforeach()
             endif()
         endforeach()
+        # Compile definitions and options that name a window header or
+        # library (a forced include, IMGUI_USER_CONFIG="gui/..."), with this
+        # tree's own paths taken out first so a checkout under a directory
+        # called "gui" is not refused for its location.
+        foreach(_prop COMPILE_DEFINITIONS INTERFACE_COMPILE_DEFINITIONS
+                      COMPILE_OPTIONS INTERFACE_COMPILE_OPTIONS)
+            get_target_property(_v "${_t}" ${_prop})
+            if(_v)
+                string(REPLACE "\\" "/" _lv "${_v}")
+                string(TOLOWER "${_lv}" _lv)
+                string(TOLOWER "${CMAKE_SOURCE_DIR}" _sd)
+                string(TOLOWER "${CMAKE_BINARY_DIR}" _bd)
+                string(REPLACE "${_sd}" "" _lv "${_lv}")
+                string(REPLACE "${_bd}" "" _lv "${_lv}")
+                if(_lv MATCHES "gui/|imgui|glfw|opengl")
+                    list(APPEND _bad "${_t} ${_prop} ${_v}")
+                endif()
+            endif()
+        endforeach()
+        # The engine's own include directories: none that is src/gui or a
+        # window library's.
+        if(_t STREQUAL "cascade_engine")
+            get_target_property(_v "${_t}" INCLUDE_DIRECTORIES)
+            foreach(_d IN LISTS _v)
+                string(REPLACE "\\" "/" _ld "${_d}")
+                string(TOLOWER "${_ld}" _ld)
+                string(FIND "${_ld}" "${_root}" _at)
+                if(_at EQUAL 0)
+                    string(SUBSTRING "${_ld}" ${_rootlen} -1 _ld)
+                endif()
+                if(_ld MATCHES "(^|/)(gui|imgui[^/]*|glfw[^/]*|backends)(/|$)")
+                    list(APPEND _bad "${_t} includes ${_d}")
+                endif()
+            endforeach()
+        endif()
         # Raw linker options naming the libraries.
         foreach(_prop LINK_OPTIONS INTERFACE_LINK_OPTIONS)
             get_target_property(_v "${_t}" ${_prop})
@@ -538,34 +573,40 @@ function(_cascade_check_engine_links)
 endfunction()
 cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL _cascade_check_engine_links)
 
-# 2. No engine file includes a window header. Every source AND header under
-#    the engine's directories, subdirectories included, scanned line by line
-#    for an #include that names src/gui, Dear ImGui (imgui*.h, the backends),
-#    GLFW or OpenGL ANYWHERE IN ITS PATH and in either bracket: "gui/x.hpp",
+# 2. No engine file names a window header. EVERY file under the engine's
+#    directories, subdirectories and every extension included, scanned for a
+#    quoted or bracketed path that names src/gui, Dear ImGui (imgui*, the
+#    backends), GLFW or OpenGL (gl/) ANYWHERE in it - "gui/x.hpp",
 #    "../gui/x.hpp", "src/gui/x.hpp", <imgui.h>, "third_party/imgui/imgui.h",
-#    <GLFW/glfw3.h>, <GL/gl.h>. The review of 5bdcdab got "../gui/" and
-#    "src/gui/" past a pattern anchored at the opening quote. Compared in
-#    lower case with backslashes turned round, because MSVC opens
-#    "..\GUI\x.hpp" as readily as "../gui/x.hpp". A comment that merely
-#    mentions gui/ is fine; an include is not.
+#    <GLFW/glfw3.h>, <GL/gl.h> - on ANY line that is not a comment. Not only
+#    #include lines: the review of 5bdcdab got "../gui/" and "src/gui/" past a
+#    pattern anchored at the opening quote, round 2 `#define H "gui/x.hpp"` /
+#    `#include H`, and round 3 an #include continued onto the next line with a
+#    backslash; an engine file has no business naming a window header on any
+#    line. Case-insensitive, either slash, because MSVC opens "..\GUI\x.hpp"
+#    as readily as "../gui/x.hpp". A comment that mentions one is fine. Also
+#    refused: a `#pragma comment(lib, ...)` naming OpenGL, GLFW or imgui.
 file(GLOB_RECURSE _cascade_engine_files
-    src/core/*.cpp src/core/*.hpp src/core/*.h
-    src/dsp/*.cpp src/dsp/*.hpp src/dsp/*.h
-    src/source/*.cpp src/source/*.hpp src/source/*.h
-    src/sink/*.cpp src/sink/*.hpp src/sink/*.h
-    src/net/*.cpp src/net/*.hpp src/net/*.h
-    src/usb/*.cpp src/usb/*.hpp src/usb/*.h)
+    src/core/* src/dsp/* src/source/* src/sink/* src/net/* src/usb/*)
+set(_cascade_hdr_re "[<\"]([^\"<>]*[/\\\\])?([gG][uU][iI][/\\\\]|[iI][mM][gG][uU][iI]|[gG][lL][fF][wW]|[gG][lL][/\\\\]|[bB][aA][cC][kK][eE][nN][dD][sS][/\\\\][iI][mM][gG][uU][iI])")
 set(_cascade_engine_bad "")
+set(_cascade_pragma_re "#[ \t]*pragma[ \t]+comment[ \t]*\\([ \t]*lib")
 foreach(_f IN LISTS _cascade_engine_files)
-    # #define lines too: `#define H "gui/x.hpp"` then `#include H` is the
-    # same include with the path moved one line up (review round 2, N1).
-    file(STRINGS "${_f}" _incs REGEX "^[ \t]*#[ \t]*(include|define)")
-    foreach(_inc IN LISTS _incs)
-        string(TOLOWER "${_inc}" _l)
-        string(REPLACE "\\" "/" _l "${_l}")
-        if(_l MATCHES "(include|define[ \t]+[a-z0-9_]+)[ \t]*[<\"]([^\">]*/)?(gui/|imgui|glfw|gl/|backends/imgui)")
-            string(APPEND _cascade_engine_bad "\n  ${_f}: ${_inc}")
+    # One pass over each file (the embedded language table alone is 24 MB).
+    file(STRINGS "${_f}" _hits REGEX "${_cascade_hdr_re}|${_cascade_pragma_re}")
+    foreach(_hit IN LISTS _hits)
+        string(STRIP "${_hit}" _h)
+        if(_h MATCHES "${_cascade_pragma_re}")
+            string(TOLOWER "${_h}" _l)
+            if(_l MATCHES "opengl|glfw|imgui")
+                string(APPEND _cascade_engine_bad "\n  ${_f}: ${_hit}")
+            endif()
+            continue()
         endif()
+        if(_h MATCHES "^(//|/\\*|\\*)")
+            continue()
+        endif()
+        string(APPEND _cascade_engine_bad "\n  ${_f}: ${_hit}")
     endforeach()
 endforeach()
 if(_cascade_engine_bad)
