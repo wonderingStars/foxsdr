@@ -1,0 +1,189 @@
+{
+  "format": "foxsdr-measure-summary/1",
+  "what": "The engine-extraction performance baseline for FoxSDR 0.99.39: the BASELINE half of the interleaved A/B session that gated engine step 1 (tools/measure_engine.ps1). The build is master 1de7221 plus the measurement switches only (engine/step1 commit 253da81, cascade.exe sha256 below); no engine code has moved in it. Hold a later stage against it with -CompareBaseline this-file -CompareCandidate <session>/summary.json - but section 3.1 prefers re-measuring this build interleaved with the candidate, and the environment record must match either way.",
+  "commit": "253da81",
+  "measuredAt": "2026-09-25T20:49:47.8625524-07:00",
+  "environment": {
+    "os": "Windows 23H2 build 22631.6199",
+    "gpu": "NVIDIA GeForce RTX 4090 driver 32.0.16.1062 5120x1440@119",
+    "powerPlan": "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c  (High performance)",
+    "battery": "none",
+    "cpu": "Intel(R) Core(TM) i9-14900K, 32 logical",
+    "windowSize": "1600x1000",
+    "machine": "MACBOOKPRO"
+  },
+  "envStable": true,
+  "runs": 5,
+  "warmupSeconds": 5,
+  "measures": [
+    "frames",
+    "cpu",
+    "latency",
+    "rates"
+  ],
+  "rateLadder": "14336000,16384000,18432000,20480000,22528000,24576000,28672000",
+  "frameCapHz": 60,
+  "plugins": [
+    "cw-decoder-1.0.0-abi3-win-x64.dll",
+    "eas-decoder-1.0.0-abi3-win-x64.dll",
+    "aprs-decoder-1.0.1-abi3-win-x64.dll"
+  ],
+  "windowSize": "1600x1000",
+  "builds": {
+    "baseline": {
+      "sha256": "8c12e1d39f390ea98b462e1c5622facaf840933f688979353354bdfa92bea55d",
+      "runs": {
+        "frameMeanMs": [
+          0.822468009374742,
+          0.7674599994884146,
+          0.8159999020954394,
+          0.7452745783551477,
+          0.7872591963372011
+        ],
+        "frameP99Ms": [
+          1.0994,
+          1.1389,
+          1.0764,
+          0.9812,
+          1.0455
+        ],
+        "frameMaxMs": [
+          22.1285,
+          6.2073,
+          2.5048,
+          2.0411,
+          2.0852
+        ],
+        "workMeanMs": [
+          0.8215911844521853,
+          0.766666845719983,
+          0.8150400456887958,
+          0.7445021212648131,
+          0.7865194920368437
+        ],
+        "workP99Ms": [
+          1.0979,
+          1.138,
+          1.0752,
+          0.9804,
+          1.0446
+        ],
+        "intervals": [
+          72962,
+          78189,
+          73541,
+          80518,
+          76226
+        ],
+        "ringDropped": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "cpuPct": [
+          5.755208333333333,
+          7.2117387319836705,
+          4.453050782486959,
+          5.521477505708999,
+          7.394724124714626
+        ],
+        "workingSetMB": [
+          115.3125,
+          115.87109375,
+          115.1640625,
+          115.31640625,
+          116.25
+        ],
+        "latencyMedianMs": [
+          16,
+          16,
+          16,
+          16,
+          16
+        ],
+        "latencyP90Ms": [
+          16,
+          16,
+          16,
+          16,
+          16
+        ],
+        "retunesValid": [
+          50,
+          50,
+          50,
+          50,
+          50
+        ],
+        "retunesTotal": [
+          50,
+          50,
+          50,
+          50,
+          50
+        ],
+        "awayRatioMax": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "toneAudioHz": [
+          1000,
+          1000,
+          1000,
+          1000,
+          1000
+        ],
+        "maxRateHz": [
+          22528000,
+          22528000,
+          22528000,
+          22528000,
+          22528000
+        ],
+        "firstDropHz": [
+          24576000,
+          24576000,
+          24576000,
+          24576000,
+          24576000
+        ],
+        "ceilingReached": [
+          true,
+          true,
+          true,
+          true,
+          true
+        ]
+      },
+      "median": {
+        "frameMeanMs": 0.7872591963372011,
+        "frameP99Ms": 1.0764,
+        "frameMaxMs": 2.5048,
+        "workMeanMs": 0.7865194920368437,
+        "workP99Ms": 1.0752,
+        "intervals": 76226,
+        "ringDropped": 0,
+        "cpuPct": 5.755208333333333,
+        "workingSetMB": 115.31640625,
+        "latencyMedianMs": 16,
+        "latencyP90Ms": 16,
+        "retunesValid": 50,
+        "retunesTotal": 50,
+        "awayRatioMax": 0,
+        "toneAudioHz": 1000,
+        "maxRateHz": 22528000,
+        "firstDropHz": 24576000
+      }
+    }
+  }
+}
