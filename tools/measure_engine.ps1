@@ -55,8 +55,11 @@
     or fewer retunes were attempted; the frame log is missing or overflowed;
     the busy run's drag did not land; the soak's watchdog had nowhere to
     write; the executable launched was not byte-identical (sha256) to the
-    build staged, or reported a different commit; or another cascade.exe or
-    ctest.exe was running at the start or during the run. A gate needs ALL of
+    build staged, or reported a different commit; or OTHER WORK was running
+    at the start or during the run: another cascade.exe, ctest.exe, a
+    compiler or build driver (cl, link, MSBuild, ninja, cmake, ...), or a
+    compiler inside a running WSL distribution (cc1plus, ld, ...). A gate
+    needs ALL of
     both builds' runs of its measure valid; otherwise its verdict is INVALID.
 
     Runs are INTERLEAVED - baseline, candidate, baseline, candidate - measure
@@ -78,7 +81,7 @@
       2  at least one gate INVALID or NO DATA, none FAILED (runs refused, or
          a measure missing)
       3  REFUSED: the comparison cannot be made at all (the environment
-         changed, the environments differ, another cascade.exe/ctest.exe ran
+         changed, the environments differ, other work (cascade/ctest/build tools) ran
          during the measurements, a summary of an older format, or a staged
          build that is not the commit it was named as)
       4  UNDECIDED: some gate is NOISY (not judged) or RE-MEASURE, nothing
@@ -96,8 +99,10 @@
     unroutable black hole, every other FOXSDR_*/CASCADE_* variable of this
     shell removed for the child, and USERPROFILE left alone. Only the PID this
     script started is ever addressed; a run that overstays is sent WM_CLOSE
-    and only killed if that fails. A launch waits while any other cascade.exe
-    or ctest.exe is running (up to -WaitForOthersMinutes).
+    and only killed if that fails. A launch waits while any of that other
+    work is running (up to -WaitForOthersMinutes); Windows is polled every
+    5 s during a run, WSL every 30 s and only if a distribution is already
+    running (asking a stopped WSL would boot its VM).
 
     GAPS. What section 3 asks for that this script does not measure is
     listed in every session and summary ("gaps") and printed with the table.
@@ -355,15 +360,55 @@ function Test-SameEnv($a, $b) {
 # ---------------------------------------------------------------------------
 $BlackHole = 'http://127.0.0.1:9/'
 
-# cascade.exe and ctest.exe processes other than the one this script is
-# waiting on: another session's app, or a test suite that launches the app,
-# would share the machine with the run being measured.
-function Get-OtherCount([int]$exceptId) {
-    $n = 0
-    foreach ($pr in @(Get-Process -Name cascade, ctest -ErrorAction SilentlyContinue)) {
-        if ($pr.Id -ne $exceptId) { ++$n }
+# WHAT ELSE IS USING THE MACHINE. Another cascade.exe (another session's
+# app), a test suite (ctest launches the app), and - since the first
+# re-taken baseline came out NOISY with a stage-1 builder compiling in
+# another worktree - any compiler or build driver, on Windows or inside WSL
+# (a WSL build runs in the VM, where Get-Process cannot see it). Any of them
+# shares the CPU with the run being measured, so a launch waits for them
+# and a run that saw one is refused, exactly as for a second cascade.exe.
+# NOT vctip or mspdbsrv: both outlive a build and sit idle (a VCTIP.EXE on
+# this desktop had been alive four hours with 2 s of CPU), so counting them
+# would hold every launch to the wait limit for nothing. MSBuild's reused
+# worker nodes do count, and exit on their own ~15 minutes after the build.
+$WinBusyNames = @('cl', 'link', 'msbuild', 'ninja', 'cmake', 'cc1plus', 'cc1', 'ld')
+$WslBusyNames = @('cc1plus', 'cc1', 'ld', 'ld.bfd', 'ld.gold', 'collect2', 'as', 'ninja', 'cmake', 'ctest', 'make', 'cascade')
+
+# The pure half, which the self-test pins: of these Windows processes (Name,
+# Id) and these WSL command names, which count, other than $exceptId.
+function Select-OtherNames($procs, [int]$exceptId, [string[]]$wslComms) {
+    $hit = New-Object System.Collections.Generic.List[string]
+    foreach ($pr in @($procs)) {
+        if ([int]$pr.Id -eq $exceptId) { continue }
+        $nm = ([string]$pr.Name).ToLowerInvariant()
+        if ($nm -eq 'cascade' -or $nm -eq 'ctest') { $hit.Add($nm) }  # CHECK:others-app
+        if ($WinBusyNames -contains $nm) { $hit.Add($nm) }  # CHECK:others-buildtools
     }
-    return $n
+    foreach ($cm in @($wslComms)) { if ($WslBusyNames -contains ([string]$cm).Trim()) { $hit.Add('wsl:' + ([string]$cm).Trim()) } }  # CHECK:others-wsl
+    return , $hit.ToArray()
+}
+
+# WSL's processes, ONLY when a distribution is already running: asking a
+# stopped WSL anything boots its VM (3.6 s and a VM's worth of load on this
+# desktop), which is the disturbance being guarded against.
+function Get-WslComms {
+    $names = @()
+    try {
+        $running = @(& wsl.exe -l --running -q 2>$null | ForEach-Object { ([string]$_) -replace "`0", '' } | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' })
+        foreach ($dist in $running) {
+            $names += @(& wsl.exe -d $dist -e ps -eo comm= 2>$null | ForEach-Object { ([string]$_).Trim() })
+        }
+    } catch {
+        $names = @()
+    }
+    return , $names
+}
+
+function Get-OtherNames([int]$exceptId, [bool]$askWsl = $true) {
+    $wslNames = @()
+    if ($askWsl) { $wslNames = Get-WslComms }
+    $procs = @(Get-Process -ErrorAction SilentlyContinue | Select-Object Name, Id)
+    return , (Select-OtherNames $procs $exceptId $wslNames)
 }
 
 function Invoke-Launch {
@@ -421,17 +466,20 @@ function Invoke-Launch {
     # Wait out anything else that would share the machine with this run.
     $waited = 0
     $deadline = (Get-Date).AddMinutes($Setup.WaitForOthersMinutes)
-    while ((Get-OtherCount -1) -gt 0 -and (Get-Date) -lt $deadline) {
-        if ($waited -eq 0) { Write-Host "    waiting: another cascade.exe or ctest.exe is running" }
+    $atStart = Get-OtherNames -1
+    while ($atStart.Count -gt 0 -and (Get-Date) -lt $deadline) {
+        if ($waited -eq 0) { Write-Host "    waiting: other work on the machine ($(($atStart | Sort-Object -Unique) -join ', '))" }
         Start-Sleep -Seconds 10
         $waited += 10
+        $atStart = Get-OtherNames -1
     }
-    $others = Get-OtherCount -1
+    $others = $atStart.Count
     $exeHash = (Get-FileHash -Algorithm SHA256 $Exe).Hash.ToLower()
     $info = [ordered]@{ measure = $Measure; exe = $Exe; exeSha256 = $exeHash; waitedS = $waited
-                        otherCascadeAtStart = $others; otherProcessesDuring = 0 }
+                        otherCascadeAtStart = $others; otherProcessesDuring = 0
+                        otherNamesAtStart = @($atStart | Sort-Object -Unique); otherNamesDuring = @() }
     if ($others -gt 0) {
-        $info.ended = 'not started (other cascade.exe/ctest.exe still running)'
+        $info.ended = 'not started (other cascade.exe/ctest.exe/build tools still running)'
         $info.exitCode = $null
         Write-Json $info (Join-Path $Dir 'launch.json')
         Write-Warning "$Measure run in $Dir not started: other processes still running after $($Setup.WaitForOthersMinutes) min"
@@ -459,15 +507,21 @@ function Invoke-Launch {
     $null = $proc.Handle  # held now, so ExitCode is readable after the exit
     $how = 'exited'
     $during = 0
+    $duringNames = New-Object System.Collections.Generic.HashSet[string]
     $until = (Get-Date).AddSeconds($timeout)
     $done = $false
+    $polls = 0
     while (-not $done -and (Get-Date) -lt $until) {
         $done = $proc.WaitForExit(5000)
         if (-not $done) {
-            $o = Get-OtherCount $myId
-            if ($o -gt $during) { $during = $o }
+            # Windows every 5 s; WSL every 30 s (each ask is a wsl.exe spawn).
+            $seen = Get-OtherNames $myId (($polls % 6) -eq 0)
+            ++$polls
+            if ($seen.Count -gt $during) { $during = $seen.Count }
+            foreach ($seenName in $seen) { [void]$duringNames.Add($seenName) }
         }
     }
+    $info.otherNamesDuring = @($duringNames | Sort-Object)
     if (-not $done) {
         $how = 'wm_close'
         [void][FoxMeasure2]::CloseWindowsOf($myId)
@@ -496,7 +550,7 @@ function Invoke-Launch {
 function Test-Run([string]$Dir, [string]$Measure, $want, $knobs) {
     $reasons = New-Object System.Collections.Generic.List[string]
     $fig = [ordered]@{}
-    $rec = [ordered]@{ dir = $Dir; valid = $false; reasons = $reasons; figures = $fig; commit = ''; others = 0 }
+    $rec = [ordered]@{ dir = $Dir; valid = $false; reasons = $reasons; figures = $fig; commit = ''; others = 0; otherNames = @() }
     $launchPath = Join-Path $Dir 'launch.json'
     $launch = $null
     if (Test-Path $launchPath) { $launch = Read-Json $launchPath }
@@ -511,7 +565,8 @@ function Test-Run([string]$Dir, [string]$Measure, $want, $knobs) {
         $oa = Get-P $launch 'otherCascadeAtStart' $null
         $od = Get-P $launch 'otherProcessesDuring' $null
         if ($null -ne $oa -and $null -ne $od) { $rec.others = [int]$oa + [int]$od }
-        if ($null -eq $oa -or $null -eq $od -or [int]$oa -ne 0 -or [int]$od -ne 0) { $reasons.Add("others: another cascade.exe/ctest.exe ran (at start '$oa', during '$od')") }  # CHECK:others
+        $rec.otherNames = @(@(Get-P $launch 'otherNamesAtStart' @()) + @(Get-P $launch 'otherNamesDuring' @()) | Where-Object { $_ } | Sort-Object -Unique)
+        if ($null -eq $oa -or $null -eq $od -or [int]$oa -ne 0 -or [int]$od -ne 0) { $reasons.Add("others: other work ran on the machine (at start '$oa', during '$od': $($rec.otherNames -join ', '))") }  # CHECK:others
     }
     $resPath = Join-Path $Dir 'result.json'
     if (-not (Test-Path $resPath)) {
@@ -725,6 +780,7 @@ function Get-Summary([string]$Root, [bool]$noisyOk) {
     }
     $buildBlocks = [ordered]@{}
     $othersSeen = 0
+    $otherNameSet = New-Object System.Collections.Generic.HashSet[string]
     $buildsMeta = Get-P $meta 'builds' $null
     foreach ($label in @($buildsMeta.PSObject.Properties.Name)) {
         $bm = Get-P $buildsMeta $label $null
@@ -739,6 +795,7 @@ function Get-Summary([string]$Root, [bool]$noisyOk) {
             for ($r = 1; $r -le $n; ++$r) {
                 $rec = Test-Run (Join-Path $Root "runs\$label-$m-r$r") $m $want $knobs
                 if ($rec.others -gt $othersSeen) { $othersSeen = $rec.others }
+                foreach ($on in $rec.otherNames) { [void]$otherNameSet.Add([string]$on) }
                 $recs.Add([ordered]@{ run = $r; valid = $rec.valid; reasons = @($rec.reasons); commit = $rec.commit; figures = $rec.figures })
                 if ($rec.valid) {
                     ++$k
@@ -781,6 +838,8 @@ function Get-Summary([string]$Root, [bool]$noisyOk) {
         environment   = Get-P $meta 'environment' $null
         envStable     = $envStable
         otherProcessesSeen = $othersSeen
+        otherProcessNames = @($otherNameSet | Sort-Object)
+        otherAtSessionStart = @(Get-P $meta 'otherAtSessionStart' @())
         runs          = Get-P $meta 'runs' 5
         soakRuns      = Get-P $meta 'soakRuns' 2
         warmupSeconds = $knobs.warmupSeconds
@@ -832,7 +891,7 @@ function Write-GateTable($summary) {
     Write-Host 'Not measured (gaps):'
     foreach ($gp in $summary.gaps) { Write-Host "  - $gp" }
     if (-not $summary.envStable) { Write-Host 'REFUSED: the environment changed during the session.' }
-    if ($summary.otherProcessesSeen -gt 0) { Write-Host "REFUSED: another cascade.exe/ctest.exe ran during the session ($($summary.otherProcessesSeen))." }
+    if ($summary.otherProcessesSeen -gt 0) { Write-Host "REFUSED: other work ran on the machine during the session ($($summary.otherProcessesSeen): $($summary.otherProcessNames -join ', '))." }
     if ($summary.acceptNoisy) { Write-Host 'NOTE: -AcceptNoisy was given: NOISY gates do not hold the exit code.' }
     Write-Host ("exit {0}: {1}" -f $summary.exitCode, $ExitMeaning[[int]$summary.exitCode])
 }
@@ -905,6 +964,19 @@ if ($SelfTest) {
     Check ((Get-Verdict $gHang @(0, 0) @(0, 1)) -eq 'FAIL') 'a new hang report fails'
     Check ((Get-Verdict $gStall @(1, 0) @(0, 1)) -eq 'PASS') 'stalls no higher passes'
     Check ((Get-Verdict $gStall @(0, 0) @(2, 3)) -eq 'FAIL') 'stalls higher in every run fails'
+    # What counts as other work on the machine: a second app, a test suite,
+    # a compiler or build driver on Windows, a compiler inside WSL - never
+    # the run's own pid and never an unrelated program.
+    $fakeProcs = @([pscustomobject]@{ Name = 'cl'; Id = 5 }, [pscustomobject]@{ Name = 'notepad'; Id = 6 },
+                   [pscustomobject]@{ Name = 'cascade'; Id = 7 }, [pscustomobject]@{ Name = 'ctest'; Id = 8 },
+                   [pscustomobject]@{ Name = 'MSBuild'; Id = 9 })
+    $busy = Select-OtherNames $fakeProcs 7 @('bash', 'cc1plus', 'systemd')
+    Check ($busy -contains 'cl') "a Windows compiler counts as other work ($($busy -join ','))"
+    Check ($busy -contains 'msbuild') "MSBuild counts as other work ($($busy -join ','))"
+    Check ($busy -contains 'ctest') "ctest counts as other work ($($busy -join ','))"
+    Check ($busy -contains 'wsl:cc1plus') "a compiler inside WSL counts as other work ($($busy -join ','))"
+    Check ($busy.Count -eq 4) "only those four count - not notepad, bash, systemd or the run's own cascade ($($busy -join ','))"
+    Check ((Select-OtherNames $fakeProcs 1 @()) -contains 'cascade') 'another cascade.exe counts as other work'
     $e1 = [pscustomobject]@{ os = 'a'; gpu = 'g'; powerPlan = 'p'; battery = 'none'; cpu = 'c'; windowSize = '1600x1000'; machine = 'm' }
     $e2 = [pscustomobject]@{ os = 'a'; gpu = 'g2'; powerPlan = 'p'; battery = 'none'; cpu = 'c'; windowSize = '1600x1000'; machine = 'm' }
     Check ((Test-SameEnv $e1 $e1).Count -eq 0) 'same environment accepted'
@@ -1037,6 +1109,9 @@ if ($SelfTest) {
         [void](Test-Scenario 'v_exe_hash' 'cpu' { param($sd, $m, $r) New-FakeRun $sd 'candidate' $m $r (Get-RunResult 3.0) @{ exeSha256 = ('3' * 64) } } 'exe-hash' 'INVALID*' 2)
         [void](Test-Scenario 'v_commit' 'cpu' { param($sd, $m, $r) New-FakeRun $sd 'candidate' $m $r (Get-RunResult 3.0 @{ commit = 'cccccccccccc' }) } 'commit' 'INVALID*' 2)
         [void](Test-Scenario 'v_others' 'cpu' { param($sd, $m, $r) New-FakeRun $sd 'candidate' $m $r (Get-RunResult 3.0) @{ otherProcessesDuring = 1 } } 'others' 'INVALID*' 2)
+        $sumBuild = Test-Scenario 'v_others_buildtool' 'cpu' { param($sd, $m, $r) New-FakeRun $sd 'candidate' $m $r (Get-RunResult 3.0) @{ otherProcessesDuring = 1; otherNamesDuring = @('cl') } } 'others' 'INVALID*' 2
+        Check ($sumBuild.otherProcessNames -contains 'cl') "the summary names the build tool that ran ($($sumBuild.otherProcessNames -join ','))"
+        Check ($sumBuild.otherProcessesSeen -gt 0) 'a build tool during a run marks the session (CompareFiles then refuses it)'
         [void](Test-Scenario 'v_format' 'cpu' { param($sd, $m, $r) New-FakeRun $sd 'candidate' $m $r (Get-RunResult 3.0 @{ format = 'foxsdr-measure/1' }) } 'format' 'INVALID*' 2)
         [void](Test-Scenario 'v_no_launch' 'cpu' { param($sd, $m, $r) New-FakeRun $sd 'candidate' $m $r (Get-RunResult 3.0); Remove-Item (Join-Path $sd "runs\candidate-$m-r$r\launch.json") } 'launch' 'INVALID*' 2)
         [void](Test-Scenario 'v_cpu_rate' 'cpu' { param($sd, $m, $r) New-FakeRun $sd 'candidate' $m $r (Get-RunResult 3.0 @{ inputRateHz = 1024000 }) } 'rate-mismatch' 'INVALID*' 2)
@@ -1165,7 +1240,7 @@ if ($PSCmdlet.ParameterSetName -eq 'CompareFiles') {
         if ($fmt -ne 'foxsdr-measure-summary/2') { $why += "$($pair[0]) is format '$fmt', not foxsdr-measure-summary/2 (its runs were never validated)" }  # CHECK:cmp-format
         if ((Get-P $pair[1] 'envStable' $false) -ne $true) { $why += "$($pair[0]): the environment changed during that session" }  # CHECK:cmp-env-stable
         $oth = Get-P $pair[1] 'otherProcessesSeen' $null
-        if ($null -eq $oth -or [int]$oth -ne 0) { $why += "$($pair[0]): another cascade.exe/ctest.exe ran during that session ('$oth')" }  # CHECK:cmp-others
+        if ($null -eq $oth -or [int]$oth -ne 0) { $why += "$($pair[0]): other work (cascade/ctest/build tools) ran during that session ('$oth')" }  # CHECK:cmp-others
     }
     $diffs = Test-SameEnv (Get-P $sa 'environment' $null) (Get-P $sb2 'environment' $null)
     if ($diffs.Count -gt 0) { $why += 'the two sessions were measured in different environments: ' + ($diffs -join '; ') }  # CHECK:cmp-env-same
@@ -1224,6 +1299,10 @@ $meta = [ordered]@{
     format        = 'foxsdr-measure-session/2'
     started       = (Get-Date).ToString('o')
     environment   = Get-EnvRecord $WindowSize
+    # What else was running when the session began (cascade, ctest, build
+    # tools, WSL builds). Informational: every run records its own, and a
+    # run that saw any is refused.
+    otherAtSessionStart = @(Get-OtherNames -1 | Sort-Object -Unique)
     envStable     = $true
     runs          = $Runs
     soakRuns      = $SoakRuns
