@@ -272,10 +272,12 @@ endif()
 # split is only about which side of the line each file compiles on.
 #
 # THE LINE IS ENFORCED, not remembered:
-#   * cascade_engine links no imgui, glfw or OpenGL (checked below, at
-#     configure time, against the target's own link list);
-#   * no engine source or header may include a gui/ header, imgui, GLFW or
-#     an ImGui backend (every file scanned below, at configure time);
+#   * cascade_engine links no imgui, glfw, OpenGL or cascade_gui (checked at
+#     the END of the configure, through every target it reaches and inside
+#     generator expressions);
+#   * no engine source or header may include a gui/ header, imgui, GLFW,
+#     OpenGL or an ImGui backend, by any path spelling (every file scanned
+#     below, at configure time);
 #   * cascade_engine_link_check links EVERY engine object (whole archive)
 #     into an executable with nothing of the window, so an engine file that
 #     calls into src/gui without including it fails the build rather than
@@ -387,19 +389,82 @@ target_link_libraries(cascade_gui PUBLIC
 
 # --- the line between them, enforced -----------------------------------------
 
-# 1. The engine links nothing of the window.
-get_target_property(_cascade_engine_links cascade_engine LINK_LIBRARIES)
-foreach(_lib IN ITEMS imgui glfw OpenGL::GL cascade_gui)
-    if(_lib IN_LIST _cascade_engine_links)
-        message(FATAL_ERROR "cascade_engine links ${_lib}: the engine must not depend on the window")
+# 1. The engine links nothing of the window - checked at the END of the
+#    configure, not here. A check made at this line sees only what has been
+#    linked by this line: a `target_link_libraries(cascade_engine PRIVATE
+#    imgui)` appended further down this file, or in a subdirectory, passed it
+#    (engine step 1a review, 2026-09-25), and so did one spelled
+#    `$<BUILD_INTERFACE:imgui>`, because a generator expression is not a list
+#    item equal to "imgui". So the check is DEFERRED to the end of the top
+#    directory - after every add_subdirectory has run - and it walks
+#    LINK_LIBRARIES and INTERFACE_LINK_LIBRARIES of the engine and of every
+#    target those reach, taking every generator expression apart into its
+#    words. Any word naming imgui, GLFW, OpenGL or cascade_gui fails the
+#    configure.
+function(_cascade_engine_link_words item out)
+    # "$<BUILD_INTERFACE:imgui>" -> BUILD_INTERFACE;imgui
+    string(REGEX REPLACE "[$<>:,;]+" ";" _w "${item}")
+    set(${out} ${_w} PARENT_SCOPE)
+endfunction()
+function(_cascade_check_engine_links)
+    set(_todo cascade_engine)
+    set(_seen "")
+    set(_bad "")
+    while(_todo)
+        list(POP_FRONT _todo _t)
+        if(_t IN_LIST _seen)
+            continue()
+        endif()
+        list(APPEND _seen "${_t}")
+        set(_items "")
+        foreach(_prop LINK_LIBRARIES INTERFACE_LINK_LIBRARIES)
+            get_target_property(_v "${_t}" ${_prop})
+            if(_v)
+                list(APPEND _items ${_v})
+            endif()
+        endforeach()
+        foreach(_item IN LISTS _items)
+            # A whole item first ("OpenGL::GL", "glfw"), then its words, so a
+            # namespaced target survives the split for the TARGET test below.
+            _cascade_engine_link_words("${_item}" _words)
+            foreach(_w IN ITEMS "${_item}" ${_words})
+                string(TOLOWER "${_w}" _lw)
+                if(_lw MATCHES "imgui|glfw|opengl|^gl$|^cascade_gui$")
+                    list(APPEND _bad "${_t} -> ${_item}")
+                    break()
+                endif()
+                if(TARGET "${_w}")
+                    get_target_property(_aliased "${_w}" ALIASED_TARGET)
+                    if(_aliased)
+                        list(APPEND _todo "${_aliased}")
+                    else()
+                        list(APPEND _todo "${_w}")
+                    endif()
+                endif()
+            endforeach()
+        endforeach()
+    endwhile()
+    if(_bad)
+        list(REMOVE_DUPLICATES _bad)
+        string(REPLACE ";" "\n  " _bad "${_bad}")
+        message(FATAL_ERROR
+            "cascade_engine links the window (the engine must not depend on imgui, GLFW, "
+            "OpenGL or cascade_gui):\n  ${_bad}")
     endif()
-endforeach()
+endfunction()
+cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL _cascade_check_engine_links)
 
 # 2. No engine file includes a window header. Every source AND header under
-#    the engine's directories, scanned line by line for an #include of gui/,
-#    Dear ImGui (imgui*.h, the backends) or GLFW. A comment that merely
+#    the engine's directories, subdirectories included, scanned line by line
+#    for an #include that names src/gui, Dear ImGui (imgui*.h, the backends),
+#    GLFW or OpenGL ANYWHERE IN ITS PATH and in either bracket: "gui/x.hpp",
+#    "../gui/x.hpp", "src/gui/x.hpp", <imgui.h>, "third_party/imgui/imgui.h",
+#    <GLFW/glfw3.h>, <GL/gl.h>. The review of 5bdcdab got "../gui/" and
+#    "src/gui/" past a pattern anchored at the opening quote. Compared in
+#    lower case with backslashes turned round, because MSVC opens
+#    "..\GUI\x.hpp" as readily as "../gui/x.hpp". A comment that merely
 #    mentions gui/ is fine; an include is not.
-file(GLOB _cascade_engine_files
+file(GLOB_RECURSE _cascade_engine_files
     src/core/*.cpp src/core/*.hpp src/core/*.h
     src/dsp/*.cpp src/dsp/*.hpp src/dsp/*.h
     src/source/*.cpp src/source/*.hpp src/source/*.h
@@ -408,16 +473,19 @@ file(GLOB _cascade_engine_files
     src/usb/*.cpp src/usb/*.hpp src/usb/*.h)
 set(_cascade_engine_bad "")
 foreach(_f IN LISTS _cascade_engine_files)
-    file(STRINGS "${_f}" _hits REGEX
-         "^[ \t]*#[ \t]*include[ \t]*[<\"](gui/|imgui|GLFW/|backends/imgui)")
-    if(_hits)
-        string(APPEND _cascade_engine_bad "\n  ${_f}: ${_hits}")
-    endif()
+    file(STRINGS "${_f}" _incs REGEX "^[ \t]*#[ \t]*include")
+    foreach(_inc IN LISTS _incs)
+        string(TOLOWER "${_inc}" _l)
+        string(REPLACE "\\" "/" _l "${_l}")
+        if(_l MATCHES "include[ \t]*[<\"]([^\">]*/)?(gui/|imgui|glfw|gl/|backends/imgui)")
+            string(APPEND _cascade_engine_bad "\n  ${_f}: ${_inc}")
+        endif()
+    endforeach()
 endforeach()
 if(_cascade_engine_bad)
     message(FATAL_ERROR
         "Engine files include window headers (the engine may not depend on src/gui, "
-        "imgui or GLFW - move the code or invert the dependency):${_cascade_engine_bad}")
+        "imgui, GLFW or OpenGL - move the code or invert the dependency):${_cascade_engine_bad}")
 endif()
 
 # 3. Every engine object links on its own. WHOLE ARCHIVE, because an ordinary
