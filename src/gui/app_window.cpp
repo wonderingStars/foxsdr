@@ -1239,7 +1239,10 @@ int AppWindow::run(int frames) {
     // shown the right icon.
     applyWindowIcon(window);
     glfwMakeContextCurrent(window);
-    glfwSwapInterval(1);  // vsync: the GUI thread paces itself off the display
+    // vsync: the GUI thread paces itself off the display. FOXSDR_VSYNC_OFF is
+    // the measurement switch (gui/frame_log.hpp): an unsynchronised swap, so
+    // a frame-time run measures the work rather than the refresh period.
+    glfwSwapInterval(cascade::gui::FrameLog::vsyncOffRequested() ? 0 : 1);
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -1431,7 +1434,13 @@ int AppWindow::run(int frames) {
         // byte-identical-stdout contract of a plain --frames run is untouched.
         const char* status = std::getenv("CASCADE_PLUGIN_STATUS");
         pluginStatusHook_ = (status != nullptr && *status != '\0');
+        // The engine measurement (core/engine_measure.hpp, driven by
+        // tools/measure_engine.ps1). Bounded runs only, like the hooks above.
+        measure_ = cascade::core::EngineMeasure::fromEnvironment();
     }
+    // The frame log (gui/frame_log.hpp): allocated here, before the first
+    // frame, and written once after the loop.
+    frameLog_ = cascade::gui::FrameLog::fromEnvironment();
 
     // THE GPS READ AT START-UP, when FOXSDR_GPS_PORT names a device (and
     // FOXSDR_GPS_BAUD a rate; 9600 otherwise). The same start the rail's key
@@ -1547,6 +1556,9 @@ int AppWindow::run(int frames) {
         // Exact-count contract: check before rendering so --frames N produces
         // N frames, and --frames 0 produces none.
         if (frames >= 0 && rendered >= frames) { break; }
+
+        // The start of the frame, before the events are polled.
+        if (frameLog_) { frameLog_->frameStart(); }
 
         // The heartbeat. One relaxed store; the whole hang-detection scheme is
         // "did this line run recently", so it must stay cheap enough that
@@ -2015,7 +2027,31 @@ int AppWindow::run(int frames) {
         }
 
         glfwSwapBuffers(window);
+        if (frameLog_) { frameLog_->frameEnd(); }
         ++rendered;
+
+        // The engine measurement's one step a frame, through the same calls
+        // the START key, the mode buttons and a click on the spectrum make.
+        if (measure_) {
+            cascade::core::MeasureHooks hooks;
+            hooks.startReceiver = [this] { startReceiver(); };
+            hooks.setMode = [this](const char* mode) {
+                for (int i = 0; i < 8; ++i) {
+                    if (std::strcmp(kModeNames[i], mode) == 0) { setModeIndex(i); }
+                }
+            };
+            hooks.tuneVfoHz = [this](double offsetHz) {
+                setVfoToAbsoluteHz(pipeline_.activeSource().centerFrequencyHz() + offsetHz, false);
+            };
+            hooks.installSource = [this](std::unique_ptr<cascade::source::IqSource> src) {
+                pipeline_.setSource(std::move(src));
+                followInputRate();
+            };
+            if (!measure_->tick(pipeline_, hooks)) {
+                measure_.reset();
+                closeRequested_ = true;
+            }
+        }
 
         // The context follows the session rather than being frozen at
         // start-up: a report filed after the user switched to the B200 must
@@ -2048,6 +2084,19 @@ int AppWindow::run(int frames) {
             std::this_thread::sleep_for(std::chrono::milliseconds(ms));
             diagSkipNextGap_ = true;
         }
+    }
+
+    // The frame log's only write, now the frames are over and before the
+    // teardown, which is not a frame.
+    if (frameLog_) {
+        if (frameLog_->write()) {
+            std::fprintf(stderr, "cascade: frame log: %zu frames to %s\n", frameLog_->frames(),
+                         frameLog_->path().c_str());
+        } else {
+            std::fprintf(stderr, "cascade: frame log %s could not be written\n",
+                         frameLog_->path().c_str());
+        }
+        frameLog_.reset();
     }
 
     // THE TEARDOWN GETS ITS OWN BUDGET, AND STAYS WATCHED.

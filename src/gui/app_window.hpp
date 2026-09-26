@@ -46,6 +46,8 @@ struct GLFWwindow;
 #include "core/utf8_text.hpp"
 #include "core/recorder.hpp"
 #include "core/retune_coalescer.hpp"
+#include "core/engine_measure.hpp"
+#include "gui/frame_log.hpp"
 #include "core/scanner.hpp"
 #include "core/transmitter.hpp"
 #include "gui/basemap_cache.hpp"
@@ -3912,6 +3914,12 @@ private:
     std::vector<cascade::core::PluginCatalogEntry> catalog_;
     std::string catalogError_;   // red: fetch/parse failure, verbatim
     std::string catalogStatus_;  // neutral: "N plugins in the catalogue"
+    // --- measurement (tools/measure_engine.ps1) ------------------------------
+    // Both null in every ordinary run: FOXSDR_FRAME_LOG and FOXSDR_MEASURE
+    // (bounded runs only) are the debug switches that create them. See
+    // gui/frame_log.hpp and core/engine_measure.hpp.
+    std::unique_ptr<FrameLog> frameLog_;
+    std::unique_ptr<cascade::core::EngineMeasure> measure_;
     // --- update check --------------------------------------------------------
     bool closeRequested_ = false;     // set by the updater; the run loop honours it
     bool updateCheckEnabled_ = true;
