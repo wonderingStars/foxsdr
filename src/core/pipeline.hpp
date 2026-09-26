@@ -173,6 +173,11 @@ public:
     void setPluginRunner(PluginRunner* runner) {
         pluginRunner_.store(runner, std::memory_order_release);
     }
+    // The runner attached now, or null. For READING its status from the
+    // thread that owns the pipeline (core/engine_measure.cpp asks whether the
+    // decoders it is meant to be measuring beside are actually being fed); the
+    // same detach-before-destroy rule as above keeps the pointer valid there.
+    PluginRunner* pluginRunner() const { return pluginRunner_.load(std::memory_order_acquire); }
     ~Pipeline();                                  // stops if running
 
     // Non-copyable: owns threads and a live ring.
