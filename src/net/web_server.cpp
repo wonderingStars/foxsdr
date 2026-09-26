@@ -2865,6 +2865,227 @@ std::vector<std::string> localInterfaceAddresses() {
 // Impl
 // ---------------------------------------------------------------------------
 
+// THE /api/status BODY, as bytes. Split out of the route (engine stage 2) so
+// the one renderer is also what the golden test renders: the status is
+// assembled from the published receiver snapshot elsewhere, and this turns
+// it into JSON exactly as the route always did. `havePicture` answers the
+// route's own question about the served image set (hasPicture below).
+std::string statusJson(const RadioStatus& s,
+                       const std::function<bool(std::size_t)>& havePicture) {
+    nlohmann::json j;
+    j["running"] = s.running;
+    j["faulted"] = s.faulted;
+    j["faultMessage"] = s.faultMessage;
+    j["centerHz"] = s.centerHz;
+    j["sampleRateHz"] = s.sampleRateHz;
+    j["vfoOffsetHz"] = s.vfoOffsetHz;
+    j["bandwidthHz"] = s.bandwidthHz;
+    j["mode"] = s.mode;
+    j["sourceName"] = s.sourceName;
+    j["signalDb"] = s.signalDb;
+    j["stereoActive"] = s.stereoActive;
+    // The transmitter, as three separate facts: whether it is on the air,
+    // whether the remote key may be closed at all, and how much of the
+    // current hold is left. The page needs all three - a disabled key
+    // with "no transmitter" beside it and a lit key with a hold counting
+    // down are different readings, and one boolean cannot give both.
+    j["transmitting"] = s.transmitting;
+    j["transmitAvailable"] = s.transmitAvailable;
+    j["transmitRemoteHold"] = s.transmitRemoteHoldMs;
+    j["squelchDb"] = s.squelchDb;
+    j["volume"] = s.volume;
+    j["dbMin"] = s.dbMin;
+    j["dbMax"] = s.dbMax;
+    j["tunerDisplayStyle"] = s.tunerDisplayStyle;
+    j["deemphasisIndex"] = s.deemphasisIndex;
+    j["nrEnabled"] = s.nrEnabled;
+    j["nrStrength"] = s.nrStrength;
+    j["notchEnabled"] = s.notchEnabled;
+    j["notchFreqHz"] = s.notchFreqHz;
+    j["notchQ"] = s.notchQ;
+    j["autoNotch"] = s.autoNotch;
+    j["autoNotchEngaged"] = s.autoNotchEngaged;
+    j["autoNotchFreqHz"] = s.autoNotchFreqHz;
+    j["stereoEnabled"] = s.stereoEnabled;
+    j["pilotLocked"] = s.pilotLocked;
+    j["rdsSynced"] = s.rdsSynced;
+    j["rdsPiValid"] = s.rdsPiValid;
+    j["rdsPi"] = s.rdsPi;
+    j["rdsPsValid"] = s.rdsPsValid;
+    j["rdsPs"] = s.rdsPs;
+    j["rdsRadioText"] = s.rdsRadioText;
+    j["rdsPty"] = s.rdsPty;
+    j["rdsTp"] = s.rdsTp;
+    j["rdsTa"] = s.rdsTa;
+    j["rdsGroups"] = s.rdsGroups;
+    j["rdsErrors"] = s.rdsErrors;
+    j["sourceKind"] = s.sourceKind;
+    j["soapyArgs"] = s.soapyArgs;
+    j["antenna"] = s.antenna;
+    j["antennas"] = s.antennas;
+    j["agcSupported"] = s.agcSupported;
+    j["agc"] = s.agc;
+    j["sourceBusy"] = s.sourceBusy;
+    j["sourceError"] = s.sourceError;
+    {
+        nlohmann::json devices = nlohmann::json::array();
+        for (const RadioStatus::SoapyDevice& d : s.devices) {
+            devices.push_back({{"label", d.label}, {"args", d.args}, {"kind", d.kind}});
+        }
+        j["devices"] = std::move(devices);
+        nlohmann::json gains = nlohmann::json::array();
+        for (const RadioStatus::GainStage& g : s.gains) {
+            gains.push_back({{"name", g.name}, {"db", g.db}, {"unit", g.unit}});
+        }
+        j["gains"] = std::move(gains);
+
+        nlohmann::json marks = nlohmann::json::array();
+        for (const RadioStatus::Bookmark& b : s.bookmarks) {
+            marks.push_back({{"name", b.name},
+                             {"freqHz", b.freqHz},
+                             {"mode", b.mode},
+                             {"bandwidthHz", b.bandwidthHz}});
+        }
+        j["bookmarks"] = std::move(marks);
+
+        nlohmann::json lines = nlohmann::json::array();
+        for (const RadioStatus::DecodedLine& d : s.decoded) {
+            lines.push_back({{"plugin", d.plugin}, {"text", d.text}});
+        }
+        j["decoded"] = std::move(lines);
+
+        // NaN is not representable in JSON, and nlohmann writes it as
+        // null. That is exactly the wanted meaning here — "not reported" —
+        // but it must be DELIBERATE rather than incidental, so it is done
+        // explicitly: a number would claim an altitude, course or speed the
+        // decoder never heard.
+        const auto orNull = [](double v) {
+            return std::isfinite(v) ? nlohmann::json(v) : nlohmann::json(nullptr);
+        };
+        nlohmann::json tracks = nlohmann::json::array();
+        for (const RadioStatus::Track& t : s.tracks) {
+            tracks.push_back({{"id", t.id},
+                              {"label", t.label},
+                              {"plugin", t.plugin},
+                              {"latDeg", t.latDeg},
+                              {"lonDeg", t.lonDeg},
+                              {"altM", orNull(t.altM)},
+                              {"courseDeg", orNull(t.courseDeg)},
+                              {"speedMps", orNull(t.speedMps)},
+                              {"ageMs", t.ageMs},
+                              {"kind", t.kind},
+                              {"flags", t.flags},
+                              {"infoState", t.infoState},
+                              {"reg", t.registration},
+                              {"acType", t.acType},
+                              {"acOperator", t.acOperator},
+                              {"acCountry", t.acCountry}});
+        }
+        j["tracks"] = std::move(tracks);
+        j["rxPositionSet"] = s.rxPositionSet;
+        j["rxLatDeg"] = s.rxPositionSet ? nlohmann::json(s.rxLatDeg) : nlohmann::json(nullptr);
+        j["rxLonDeg"] = s.rxPositionSet ? nlohmann::json(s.rxLonDeg) : nlohmann::json(nullptr);
+
+        // What the browser's map needs to fetch and CREDIT the imagery —
+        // the attribution requirement travels with the tiles or the tiles
+        // do not travel.
+        j["basemap"] = {{"active", s.basemap.active},
+                        {"attribution", s.basemap.attribution},
+                        {"minZoom", s.basemap.minZoom},
+                        {"maxZoom", s.basemap.maxZoom},
+                        {"tileSize", s.basemap.tileSize}};
+
+        nlohmann::json plugins = nlohmann::json::array();
+        for (const RadioStatus::Plugin& p : s.plugins) {
+            plugins.push_back({{"name", p.name},
+                               {"version", p.version},
+                               {"licence", p.licence},
+                               {"fileName", p.fileName},
+                               {"loaded", p.loaded},
+                               {"stopped", p.stopped},
+                               {"error", p.error},
+                               {"idleReason", p.idleReason},
+                               {"canRequestTune", p.canRequestTune},
+                               {"tuneAllowed", p.tuneAllowed},
+                               {"presets", [&p]() {
+                                    nlohmann::json a = nlohmann::json::array();
+                                    for (const auto& ps : p.presets) {
+                                        a.push_back({{"label", ps.label},
+                                                     {"frequencyHz", ps.frequencyHz},
+                                                     {"bandwidthHz", ps.bandwidthHz},
+                                                     {"sampleRateHz", ps.sampleRateHz}});
+                                    }
+                                    return a;
+                                }()}});
+        }
+        j["plugins"] = std::move(plugins);
+
+        nlohmann::json cat = nlohmann::json::array();
+        for (const RadioStatus::CatalogEntry& e : s.catalogue) {
+            cat.push_back({{"id", e.id},
+                           {"name", e.name},
+                           {"version", e.version},
+                           {"licence", e.licence},
+                           {"summary", e.summary},
+                           {"legalNotice", e.legalNotice},
+                           {"installed", e.installed},
+                           {"blockedReason", e.blockedReason}});
+        }
+        j["catalogue"] = std::move(cat);
+    }
+    j["catalogueStatus"] = s.catalogueStatus;
+    j["catalogueError"] = s.catalogueError;
+    j["catalogueBusy"] = s.catalogueBusy;
+    j["installReport"] = s.installReport;
+    j["installError"] = s.installError;
+    {
+
+        nlohmann::json images = nlohmann::json::array();
+        for (std::size_t i = 0; i < s.images.size(); ++i) {
+            const RadioStatus::Image& im = s.images[i];
+            // hasPicture, and NOT width/height, is what says whether there
+            // is anything at /api/image/<i>. Every image-decoder instance
+            // is published as a slot the moment it is fitted, so the list
+            // routinely carries slots with no bitmap behind them at all;
+            // the page used to hang an <img> on one of those and get a
+            // broken icon. This asks the served set directly, which also
+            // covers the frame in which a new slot has been announced in
+            // the status before its picture has been encoded.
+            images.push_back({{"plugin", im.plugin},
+                              {"width", im.width},
+                              {"height", im.height},
+                              {"complete", im.complete},
+                              {"revision", im.revision},
+                              {"hasPicture", havePicture(i)}});
+        }
+        j["images"] = std::move(images);
+    }
+    j["iqRecording"] = s.iqRecording;
+    j["audioMutedBy"] = s.audioMutedBy;
+    j["audioUnderruns"] = s.audioUnderruns;
+    j["audioPrimingCallbacks"] = s.audioPrimingCallbacks;
+    j["audioRingMs"] = s.audioRingMs;
+    j["audioRingCapacityMs"] = s.audioRingCapacityMs;
+    // Always published, empty and zero included: a page that reads the
+    // field only when it is present would have to treat "absent" as "the
+    // receiver's own audio", and absent is also what an older build sends.
+    j["audioSource"] = s.audioSource;
+    j["audioPluginGaps"] = s.audioPluginGaps;
+    j["audioPluginGapFrames"] = s.audioPluginGapFrames;
+    j["audioRecording"] = s.audioRecording;
+    j["iqBytes"] = s.iqBytes;
+    j["audioBytes"] = s.audioBytes;
+    j["recordDir"] = s.recordDir;
+    j["recordError"] = s.recordError;
+    j["recordNotice"] = s.recordNotice;
+    j["scannerActive"] = s.scannerActive;
+    j["scannerState"] = s.scannerState;
+    j["scanStartHz"] = s.scanStartHz;
+    j["scanStopHz"] = s.scanStopHz;
+    j["scanStepHz"] = s.scanStepHz;
+    return j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+}
+
 class WebServer::Impl {
 public:
     Impl() : clock_([]() { return static_cast<std::int64_t>(std::time(nullptr)); }) {}
@@ -3265,218 +3486,8 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
         if (status_) {
             s = status_();
         }
-        nlohmann::json j;
-        j["running"] = s.running;
-        j["faulted"] = s.faulted;
-        j["faultMessage"] = s.faultMessage;
-        j["centerHz"] = s.centerHz;
-        j["sampleRateHz"] = s.sampleRateHz;
-        j["vfoOffsetHz"] = s.vfoOffsetHz;
-        j["bandwidthHz"] = s.bandwidthHz;
-        j["mode"] = s.mode;
-        j["sourceName"] = s.sourceName;
-        j["signalDb"] = s.signalDb;
-        j["stereoActive"] = s.stereoActive;
-        // The transmitter, as three separate facts: whether it is on the air,
-        // whether the remote key may be closed at all, and how much of the
-        // current hold is left. The page needs all three - a disabled key
-        // with "no transmitter" beside it and a lit key with a hold counting
-        // down are different readings, and one boolean cannot give both.
-        j["transmitting"] = s.transmitting;
-        j["transmitAvailable"] = s.transmitAvailable;
-        j["transmitRemoteHold"] = s.transmitRemoteHoldMs;
-        j["squelchDb"] = s.squelchDb;
-        j["volume"] = s.volume;
-        j["dbMin"] = s.dbMin;
-        j["dbMax"] = s.dbMax;
-        j["tunerDisplayStyle"] = s.tunerDisplayStyle;
-        j["deemphasisIndex"] = s.deemphasisIndex;
-        j["nrEnabled"] = s.nrEnabled;
-        j["nrStrength"] = s.nrStrength;
-        j["notchEnabled"] = s.notchEnabled;
-        j["notchFreqHz"] = s.notchFreqHz;
-        j["notchQ"] = s.notchQ;
-        j["autoNotch"] = s.autoNotch;
-        j["autoNotchEngaged"] = s.autoNotchEngaged;
-        j["autoNotchFreqHz"] = s.autoNotchFreqHz;
-        j["stereoEnabled"] = s.stereoEnabled;
-        j["pilotLocked"] = s.pilotLocked;
-        j["rdsSynced"] = s.rdsSynced;
-        j["rdsPiValid"] = s.rdsPiValid;
-        j["rdsPi"] = s.rdsPi;
-        j["rdsPsValid"] = s.rdsPsValid;
-        j["rdsPs"] = s.rdsPs;
-        j["rdsRadioText"] = s.rdsRadioText;
-        j["rdsPty"] = s.rdsPty;
-        j["rdsTp"] = s.rdsTp;
-        j["rdsTa"] = s.rdsTa;
-        j["rdsGroups"] = s.rdsGroups;
-        j["rdsErrors"] = s.rdsErrors;
-        j["sourceKind"] = s.sourceKind;
-        j["soapyArgs"] = s.soapyArgs;
-        j["antenna"] = s.antenna;
-        j["antennas"] = s.antennas;
-        j["agcSupported"] = s.agcSupported;
-        j["agc"] = s.agc;
-        j["sourceBusy"] = s.sourceBusy;
-        j["sourceError"] = s.sourceError;
-        {
-            nlohmann::json devices = nlohmann::json::array();
-            for (const RadioStatus::SoapyDevice& d : s.devices) {
-                devices.push_back({{"label", d.label}, {"args", d.args}, {"kind", d.kind}});
-            }
-            j["devices"] = std::move(devices);
-            nlohmann::json gains = nlohmann::json::array();
-            for (const RadioStatus::GainStage& g : s.gains) {
-                gains.push_back({{"name", g.name}, {"db", g.db}, {"unit", g.unit}});
-            }
-            j["gains"] = std::move(gains);
-
-            nlohmann::json marks = nlohmann::json::array();
-            for (const RadioStatus::Bookmark& b : s.bookmarks) {
-                marks.push_back({{"name", b.name},
-                                 {"freqHz", b.freqHz},
-                                 {"mode", b.mode},
-                                 {"bandwidthHz", b.bandwidthHz}});
-            }
-            j["bookmarks"] = std::move(marks);
-
-            nlohmann::json lines = nlohmann::json::array();
-            for (const RadioStatus::DecodedLine& d : s.decoded) {
-                lines.push_back({{"plugin", d.plugin}, {"text", d.text}});
-            }
-            j["decoded"] = std::move(lines);
-
-            // NaN is not representable in JSON, and nlohmann writes it as
-            // null. That is exactly the wanted meaning here — "not reported" —
-            // but it must be DELIBERATE rather than incidental, so it is done
-            // explicitly: a number would claim an altitude, course or speed the
-            // decoder never heard.
-            const auto orNull = [](double v) {
-                return std::isfinite(v) ? nlohmann::json(v) : nlohmann::json(nullptr);
-            };
-            nlohmann::json tracks = nlohmann::json::array();
-            for (const RadioStatus::Track& t : s.tracks) {
-                tracks.push_back({{"id", t.id},
-                                  {"label", t.label},
-                                  {"plugin", t.plugin},
-                                  {"latDeg", t.latDeg},
-                                  {"lonDeg", t.lonDeg},
-                                  {"altM", orNull(t.altM)},
-                                  {"courseDeg", orNull(t.courseDeg)},
-                                  {"speedMps", orNull(t.speedMps)},
-                                  {"ageMs", t.ageMs},
-                                  {"kind", t.kind},
-                                  {"flags", t.flags},
-                                  {"infoState", t.infoState},
-                                  {"reg", t.registration},
-                                  {"acType", t.acType},
-                                  {"acOperator", t.acOperator},
-                                  {"acCountry", t.acCountry}});
-            }
-            j["tracks"] = std::move(tracks);
-            j["rxPositionSet"] = s.rxPositionSet;
-            j["rxLatDeg"] = s.rxPositionSet ? nlohmann::json(s.rxLatDeg) : nlohmann::json(nullptr);
-            j["rxLonDeg"] = s.rxPositionSet ? nlohmann::json(s.rxLonDeg) : nlohmann::json(nullptr);
-
-            // What the browser's map needs to fetch and CREDIT the imagery —
-            // the attribution requirement travels with the tiles or the tiles
-            // do not travel.
-            j["basemap"] = {{"active", s.basemap.active},
-                            {"attribution", s.basemap.attribution},
-                            {"minZoom", s.basemap.minZoom},
-                            {"maxZoom", s.basemap.maxZoom},
-                            {"tileSize", s.basemap.tileSize}};
-
-            nlohmann::json plugins = nlohmann::json::array();
-            for (const RadioStatus::Plugin& p : s.plugins) {
-                plugins.push_back({{"name", p.name},
-                                   {"version", p.version},
-                                   {"licence", p.licence},
-                                   {"fileName", p.fileName},
-                                   {"loaded", p.loaded},
-                                   {"stopped", p.stopped},
-                                   {"error", p.error},
-                                   {"idleReason", p.idleReason},
-                                   {"canRequestTune", p.canRequestTune},
-                                   {"tuneAllowed", p.tuneAllowed},
-                                   {"presets", [&p]() {
-                                        nlohmann::json a = nlohmann::json::array();
-                                        for (const auto& ps : p.presets) {
-                                            a.push_back({{"label", ps.label},
-                                                         {"frequencyHz", ps.frequencyHz},
-                                                         {"bandwidthHz", ps.bandwidthHz},
-                                                         {"sampleRateHz", ps.sampleRateHz}});
-                                        }
-                                        return a;
-                                    }()}});
-            }
-            j["plugins"] = std::move(plugins);
-
-            nlohmann::json cat = nlohmann::json::array();
-            for (const RadioStatus::CatalogEntry& e : s.catalogue) {
-                cat.push_back({{"id", e.id},
-                               {"name", e.name},
-                               {"version", e.version},
-                               {"licence", e.licence},
-                               {"summary", e.summary},
-                               {"legalNotice", e.legalNotice},
-                               {"installed", e.installed},
-                               {"blockedReason", e.blockedReason}});
-            }
-            j["catalogue"] = std::move(cat);
-        }
-        j["catalogueStatus"] = s.catalogueStatus;
-        j["catalogueError"] = s.catalogueError;
-        j["catalogueBusy"] = s.catalogueBusy;
-        j["installReport"] = s.installReport;
-        j["installError"] = s.installError;
-        {
-
-            nlohmann::json images = nlohmann::json::array();
-            for (std::size_t i = 0; i < s.images.size(); ++i) {
-                const RadioStatus::Image& im = s.images[i];
-                // hasPicture, and NOT width/height, is what says whether there
-                // is anything at /api/image/<i>. Every image-decoder instance
-                // is published as a slot the moment it is fitted, so the list
-                // routinely carries slots with no bitmap behind them at all;
-                // the page used to hang an <img> on one of those and get a
-                // broken icon. This asks the served set directly, which also
-                // covers the frame in which a new slot has been announced in
-                // the status before its picture has been encoded.
-                images.push_back({{"plugin", im.plugin},
-                                  {"width", im.width},
-                                  {"height", im.height},
-                                  {"complete", im.complete},
-                                  {"revision", im.revision},
-                                  {"hasPicture", haveImage(i)}});
-            }
-            j["images"] = std::move(images);
-        }
-        j["iqRecording"] = s.iqRecording;
-        j["audioMutedBy"] = s.audioMutedBy;
-        j["audioUnderruns"] = s.audioUnderruns;
-        j["audioPrimingCallbacks"] = s.audioPrimingCallbacks;
-        j["audioRingMs"] = s.audioRingMs;
-        j["audioRingCapacityMs"] = s.audioRingCapacityMs;
-        // Always published, empty and zero included: a page that reads the
-        // field only when it is present would have to treat "absent" as "the
-        // receiver's own audio", and absent is also what an older build sends.
-        j["audioSource"] = s.audioSource;
-        j["audioPluginGaps"] = s.audioPluginGaps;
-        j["audioPluginGapFrames"] = s.audioPluginGapFrames;
-        j["audioRecording"] = s.audioRecording;
-        j["iqBytes"] = s.iqBytes;
-        j["audioBytes"] = s.audioBytes;
-        j["recordDir"] = s.recordDir;
-        j["recordError"] = s.recordError;
-        j["recordNotice"] = s.recordNotice;
-        j["scannerActive"] = s.scannerActive;
-        j["scannerState"] = s.scannerState;
-        j["scanStartHz"] = s.scanStartHz;
-        j["scanStopHz"] = s.scanStopHz;
-        j["scanStepHz"] = s.scanStepHz;
-        res.set_content(j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace), "application/json");
+        res.set_content(statusJson(s, [this](std::size_t i) { return haveImage(i); }),
+                        "application/json");
     });
 
     // Live audio as an endless chunked response of 16-bit little-endian PCM.

@@ -405,6 +405,13 @@ struct RadioStatus {
     std::vector<Image> images;
 };
 
+// The body GET /api/status answers for `s`, byte for byte: every field, in
+// nlohmann's key order, dumped with error_handler_t::replace. `havePicture(i)`
+// says whether the server holds a picture for images[i] (the route asks its
+// own served set). A free function so the golden test renders what the route
+// renders (docs/engine-stage2.md).
+std::string statusJson(const RadioStatus& s, const std::function<bool(std::size_t)>& havePicture);
+
 // One decoded picture, already encoded as a 24-bit BMP, ready to serve.
 struct WebImage {
     std::string plugin;

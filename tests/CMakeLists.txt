@@ -78,6 +78,12 @@ add_dependencies(test_apply_command fixture_stage1_plugin)
 target_compile_definitions(test_apply_command PRIVATE
     FIXTURE_STAGE1_PLUGIN="$<TARGET_FILE:fixture_stage1_plugin>")
 
+# THE STAGE-2 GOLDEN RECORD (docs/engine-stage2.md): what every reader of the
+# receiver's state was told before stage 2, written by that code, compared by
+# this one. The test reads it from the source tree.
+target_compile_definitions(test_state_snapshot_golden PRIVATE
+    GOLDEN_FILE="${CMAKE_CURRENT_SOURCE_DIR}/golden/state_snapshot.golden")
+
 # The engine, whole archive, linked with nothing of the window (top-level
 # CMakeLists.txt, "the line between them"). The build is the real check; this
 # confirms the binary it produced runs.

@@ -1,0 +1,878 @@
+== never published
+web {"agc":false,"agcSupported":false,"antenna":"","antennas":[],"audioBytes":0,"audioMutedBy":"","audioPluginGapFrames":0,"audioPluginGaps":0,"audioPrimingCallbacks":0,"audioRecording":false,"audioRingCapacityMs":0.0,"audioRingMs":0.0,"audioSource":"","audioUnderruns":0,"autoNotch":false,"autoNotchEngaged":false,"autoNotchFreqHz":0.0,"bandwidthHz":0.0,"basemap":{"active":false,"attribution":"","maxZoom":19,"minZoom":0,"tileSize":256},"bookmarks":[],"catalogue":[],"catalogueBusy":false,"catalogueError":"","catalogueStatus":"","centerHz":0.0,"dbMax":0.0,"dbMin":-110.0,"decoded":[],"deemphasisIndex":0,"devices":[],"faultMessage":"","faulted":false,"gains":[],"images":[],"installError":"","installReport":"","iqBytes":0,"iqRecording":false,"mode":"","notchEnabled":false,"notchFreqHz":1000.0,"notchQ":30.0,"nrEnabled":false,"nrStrength":0.5,"pilotLocked":false,"plugins":[],"rdsErrors":0,"rdsGroups":0,"rdsPi":0,"rdsPiValid":false,"rdsPs":"","rdsPsValid":false,"rdsPty":0,"rdsRadioText":"","rdsSynced":false,"rdsTa":false,"rdsTp":false,"recordDir":"","recordError":"","recordNotice":"","running":false,"rxLatDeg":null,"rxLonDeg":null,"rxPositionSet":false,"sampleRateHz":0.0,"scanStartHz":0.0,"scanStepHz":0.0,"scanStopHz":0.0,"scannerActive":false,"scannerState":"","signalDb":-200.0,"soapyArgs":"","sourceBusy":false,"sourceError":"","sourceKind":"siggen","sourceName":"","squelchDb":0.0,"stereoActive":false,"stereoEnabled":true,"tracks":[],"transmitAvailable":false,"transmitRemoteHold":0,"transmitting":false,"tunerDisplayStyle":"nixie","vfoOffsetHz":0.0,"volume":0.0}
+cat [f] reply=0\n quit=0 control=0
+cat [m] reply=RPRT -1\n quit=0 control=0
+cat [v] reply=VFOA\n quit=0 control=0
+cat [s] reply=0\nVFOA\n quit=0 control=0
+cat [t] reply=0\n quit=0 control=0
+cat [\get_freq] reply=0\n quit=0 control=0
+cat [\get_mode] reply=RPRT -1\n quit=0 control=0
+cat [\get_vfo] reply=VFOA\n quit=0 control=0
+cat [\chk_vfo] reply=CHKVFO 0\n quit=0 control=0
+cat [\get_powerstat] reply=0\n quit=0 control=0
+cat [\dump_state] reply=1\n1\n2\n0.000000 4000000000.000000 0x2ef -1 -1 0x1 0x1\n0 0 0 0 0 0 0\n0 0 0 0 0 0 0\n0x2ef 1\n0 0\n0x82 500\n0x0c 2400\n0x01 6000\n0x40 15000\n0x20 230000\n0 0\n0\n0\n0\n0\n\n\n0x0\n0x0\n0x0\n0x0\n0x0\n0x0\n quit=0 control=0
+cat [F 145012500] reply=RPRT 0\n quit=0 control=1 centre=41a1496e28000000 vfo=0000000000000000
+cat [F 433920000] reply=RPRT 0\n quit=0 control=1 centre=41b9dd1800000000 vfo=0000000000000000
+cat [F 100000000] reply=RPRT 0\n quit=0 control=1 centre=4197d78400000000 vfo=0000000000000000
+cat [M USB 2400] reply=RPRT 0\n quit=0 control=1 mode=4 bw=40a2c00000000000
+cat [M WFM 0] reply=RPRT 0\n quit=0 control=1 mode=1
+cat [M CW 500] reply=RPRT 0\n quit=0 control=1 mode=6 bw=407f400000000000
+cat [M FM -1] reply=RPRT -1\n quit=0 control=0
+cat [V VFOA] reply=RPRT 0\n quit=0 control=0
+cat [T 1] reply=RPRT -11\n quit=0 control=0
+cat [S 0 VFOA] reply=RPRT 0\n quit=0 control=0
+cat [q] reply= quit=1 control=0
+plugin state rc=0 size=192 flags=00000300 seq=0 tune=0 mode=0 device=0 audio=0 centre=0000000000000000 vfo=0000000000000000 tuned=0000000000000000 rate=0000000000000000 bw=0000000000000000 sq=0000000000000000 vol=0000000000000000 sig=c069000000000000 meter=0000000000000000 demod=1 gains=0 name=[]
+plugin gain 0 rc=-9 size=72 unit=0 name=[] min=0000000000000000 max=0000000000000000 step=0000000000000000 cur=0000000000000000
+plugin gain 1 rc=-9 size=72 unit=0 name=[] min=0000000000000000 max=0000000000000000 step=0000000000000000 cur=0000000000000000
+plugin rates n=0
+plugin rates-count-only n=0
+plugin ask rate rc=-3
+plugin ask gain-lna rc=-3
+plugin ask gain-high rc=-3
+plugin ask gain-nope rc=-3
+plugin ask agc rc=-3
+plugin ask volume rc=0
+plugin ask frequency rc=0
+== start
+web {"agc":false,"agcSupported":false,"antenna":"","antennas":[],"audioBytes":0,"audioMutedBy":"","audioPluginGapFrames":0,"audioPluginGaps":0,"audioPrimingCallbacks":0,"audioRecording":false,"audioRingCapacityMs":0.0,"audioRingMs":0.0,"audioSource":"","audioUnderruns":0,"autoNotch":false,"autoNotchEngaged":false,"autoNotchFreqHz":0.0,"bandwidthHz":150000.0,"basemap":{"active":false,"attribution":"","maxZoom":19,"minZoom":0,"tileSize":256},"bookmarks":[],"catalogue":[],"catalogueBusy":false,"catalogueError":"","catalogueStatus":"","centerHz":100000000.0,"dbMax":0.0,"dbMin":-110.0,"decoded":[],"deemphasisIndex":0,"devices":[],"faultMessage":"","faulted":false,"gains":[],"images":[],"installError":"","installReport":"","iqBytes":0,"iqRecording":false,"mode":"WFM","notchEnabled":false,"notchFreqHz":1000.0,"notchQ":30.0,"nrEnabled":false,"nrStrength":0.5,"pilotLocked":false,"plugins":[],"rdsErrors":0,"rdsGroups":0,"rdsPi":0,"rdsPiValid":false,"rdsPs":"","rdsPsValid":false,"rdsPty":0,"rdsRadioText":"","rdsSynced":false,"rdsTa":false,"rdsTp":false,"recordDir":"/golden/recordings","recordError":"","recordNotice":"","running":false,"rxLatDeg":null,"rxLonDeg":null,"rxPositionSet":false,"sampleRateHz":2000000.0,"scanStartHz":88000000.0,"scanStepHz":100000.0,"scanStopHz":108000000.0,"scannerActive":false,"scannerState":"idle","signalDb":-200.0,"soapyArgs":"","sourceBusy":false,"sourceError":"","sourceKind":"siggen","sourceName":"Signal generator","squelchDb":-50.0,"stereoActive":false,"stereoEnabled":true,"tracks":[],"transmitAvailable":false,"transmitRemoteHold":0,"transmitting":false,"tunerDisplayStyle":"nixie","vfoOffsetHz":300000.0,"volume":0.5}
+cat [f] reply=100300000\n quit=0 control=0
+cat [m] reply=WFM\n150000\n quit=0 control=0
+cat [v] reply=VFOA\n quit=0 control=0
+cat [s] reply=0\nVFOA\n quit=0 control=0
+cat [t] reply=0\n quit=0 control=0
+cat [\get_freq] reply=100300000\n quit=0 control=0
+cat [\get_mode] reply=WFM\n150000\n quit=0 control=0
+cat [\get_vfo] reply=VFOA\n quit=0 control=0
+cat [\chk_vfo] reply=CHKVFO 0\n quit=0 control=0
+cat [\get_powerstat] reply=0\n quit=0 control=0
+cat [\dump_state] reply=1\n1\n2\n0.000000 4000000000.000000 0x2ef -1 -1 0x1 0x1\n0 0 0 0 0 0 0\n0 0 0 0 0 0 0\n0x2ef 1\n0 0\n0x82 500\n0x0c 2400\n0x01 6000\n0x40 15000\n0x20 230000\n0 0\n0\n0\n0\n0\n\n\n0x0\n0x0\n0x0\n0x0\n0x0\n0x0\n quit=0 control=0
+cat [F 145012500] reply=RPRT 0\n quit=0 control=1 centre=41a1496e28000000 vfo=0000000000000000
+cat [F 433920000] reply=RPRT 0\n quit=0 control=1 centre=41b9dd1800000000 vfo=0000000000000000
+cat [F 100000000] reply=RPRT 0\n quit=0 control=1 vfo=0000000000000000
+cat [M USB 2400] reply=RPRT 0\n quit=0 control=1 mode=4 bw=40a2c00000000000
+cat [M WFM 0] reply=RPRT 0\n quit=0 control=1 mode=1
+cat [M CW 500] reply=RPRT 0\n quit=0 control=1 mode=6 bw=407f400000000000
+cat [M FM -1] reply=RPRT -1\n quit=0 control=0
+cat [V VFOA] reply=RPRT 0\n quit=0 control=0
+cat [T 1] reply=RPRT -11\n quit=0 control=0
+cat [S 0 VFOA] reply=RPRT 0\n quit=0 control=0
+cat [q] reply= quit=1 control=0
+plugin state rc=0 size=192 flags=00000300 seq=1 tune=1 mode=1 device=1 audio=1 centre=4197d78400000000 vfo=41124f8000000000 tuned=4197e9d380000000 rate=413e848000000000 bw=41024f8000000000 sq=c049000000000000 vol=3fe0000000000000 sig=c069000000000000 meter=0000000000000000 demod=2 gains=0 name=[Signal generator]
+plugin gain 0 rc=-9 size=72 unit=0 name=[] min=0000000000000000 max=0000000000000000 step=0000000000000000 cur=0000000000000000
+plugin gain 1 rc=-9 size=72 unit=0 name=[] min=0000000000000000 max=0000000000000000 step=0000000000000000 cur=0000000000000000
+plugin rates n=0
+plugin rates-count-only n=0
+plugin ask rate rc=-3
+plugin ask gain-lna rc=-3
+plugin ask gain-high rc=-3
+plugin ask gain-nope rc=-3
+plugin ask agc rc=-3
+plugin ask volume rc=0
+plugin ask frequency rc=0
+== tuned
+web {"agc":false,"agcSupported":false,"antenna":"","antennas":[],"audioBytes":0,"audioMutedBy":"","audioPluginGapFrames":0,"audioPluginGaps":0,"audioPrimingCallbacks":0,"audioRecording":false,"audioRingCapacityMs":0.0,"audioRingMs":0.0,"audioSource":"","audioUnderruns":0,"autoNotch":false,"autoNotchEngaged":false,"autoNotchFreqHz":0.0,"bandwidthHz":150000.0,"basemap":{"active":false,"attribution":"","maxZoom":19,"minZoom":0,"tileSize":256},"bookmarks":[],"catalogue":[],"catalogueBusy":false,"catalogueError":"","catalogueStatus":"","centerHz":145000000.0,"dbMax":0.0,"dbMin":-110.0,"decoded":[],"deemphasisIndex":0,"devices":[],"faultMessage":"","faulted":false,"gains":[],"images":[],"installError":"","installReport":"","iqBytes":0,"iqRecording":false,"mode":"WFM","notchEnabled":false,"notchFreqHz":1000.0,"notchQ":30.0,"nrEnabled":false,"nrStrength":0.5,"pilotLocked":false,"plugins":[],"rdsErrors":0,"rdsGroups":0,"rdsPi":0,"rdsPiValid":false,"rdsPs":"","rdsPsValid":false,"rdsPty":0,"rdsRadioText":"","rdsSynced":false,"rdsTa":false,"rdsTp":false,"recordDir":"/golden/recordings","recordError":"","recordNotice":"","running":false,"rxLatDeg":null,"rxLonDeg":null,"rxPositionSet":false,"sampleRateHz":2000000.0,"scanStartHz":88000000.0,"scanStepHz":100000.0,"scanStopHz":108000000.0,"scannerActive":false,"scannerState":"idle","signalDb":-200.0,"soapyArgs":"","sourceBusy":false,"sourceError":"","sourceKind":"siggen","sourceName":"Signal generator","squelchDb":-50.0,"stereoActive":false,"stereoEnabled":true,"tracks":[],"transmitAvailable":false,"transmitRemoteHold":0,"transmitting":false,"tunerDisplayStyle":"nixie","vfoOffsetHz":12500.0,"volume":0.5}
+cat [f] reply=145012500\n quit=0 control=0
+cat [m] reply=WFM\n150000\n quit=0 control=0
+cat [v] reply=VFOA\n quit=0 control=0
+cat [s] reply=0\nVFOA\n quit=0 control=0
+cat [t] reply=0\n quit=0 control=0
+cat [\get_freq] reply=145012500\n quit=0 control=0
+cat [\get_mode] reply=WFM\n150000\n quit=0 control=0
+cat [\get_vfo] reply=VFOA\n quit=0 control=0
+cat [\chk_vfo] reply=CHKVFO 0\n quit=0 control=0
+cat [\get_powerstat] reply=0\n quit=0 control=0
+cat [\dump_state] reply=1\n1\n2\n0.000000 4000000000.000000 0x2ef -1 -1 0x1 0x1\n0 0 0 0 0 0 0\n0 0 0 0 0 0 0\n0x2ef 1\n0 0\n0x82 500\n0x0c 2400\n0x01 6000\n0x40 15000\n0x20 230000\n0 0\n0\n0\n0\n0\n\n\n0x0\n0x0\n0x0\n0x0\n0x0\n0x0\n quit=0 control=0
+cat [F 145012500] reply=RPRT 0\n quit=0 control=1 vfo=40c86a0000000000
+cat [F 433920000] reply=RPRT 0\n quit=0 control=1 centre=41b9dd1800000000 vfo=0000000000000000
+cat [F 100000000] reply=RPRT 0\n quit=0 control=1 centre=4197d78400000000 vfo=0000000000000000
+cat [M USB 2400] reply=RPRT 0\n quit=0 control=1 mode=4 bw=40a2c00000000000
+cat [M WFM 0] reply=RPRT 0\n quit=0 control=1 mode=1
+cat [M CW 500] reply=RPRT 0\n quit=0 control=1 mode=6 bw=407f400000000000
+cat [M FM -1] reply=RPRT -1\n quit=0 control=0
+cat [V VFOA] reply=RPRT 0\n quit=0 control=0
+cat [T 1] reply=RPRT -11\n quit=0 control=0
+cat [S 0 VFOA] reply=RPRT 0\n quit=0 control=0
+cat [q] reply= quit=1 control=0
+plugin state rc=0 size=192 flags=00000300 seq=2 tune=2 mode=1 device=1 audio=1 centre=41a1490c80000000 vfo=40c86a0000000000 tuned=41a1496e28000000 rate=413e848000000000 bw=41024f8000000000 sq=c049000000000000 vol=3fe0000000000000 sig=c069000000000000 meter=0000000000000000 demod=2 gains=0 name=[Signal generator]
+plugin gain 0 rc=-9 size=72 unit=0 name=[] min=0000000000000000 max=0000000000000000 step=0000000000000000 cur=0000000000000000
+plugin gain 1 rc=-9 size=72 unit=0 name=[] min=0000000000000000 max=0000000000000000 step=0000000000000000 cur=0000000000000000
+plugin rates n=0
+plugin rates-count-only n=0
+plugin ask rate rc=-3
+plugin ask gain-lna rc=-3
+plugin ask gain-high rc=-3
+plugin ask gain-nope rc=-3
+plugin ask agc rc=-3
+plugin ask volume rc=0
+plugin ask frequency rc=0
+== mode 1
+web {"agc":false,"agcSupported":false,"antenna":"","antennas":[],"audioBytes":0,"audioMutedBy":"","audioPluginGapFrames":0,"audioPluginGaps":0,"audioPrimingCallbacks":0,"audioRecording":false,"audioRingCapacityMs":0.0,"audioRingMs":0.0,"audioSource":"","audioUnderruns":0,"autoNotch":false,"autoNotchEngaged":false,"autoNotchFreqHz":0.0,"bandwidthHz":12500.0,"basemap":{"active":false,"attribution":"","maxZoom":19,"minZoom":0,"tileSize":256},"bookmarks":[],"catalogue":[],"catalogueBusy":false,"catalogueError":"","catalogueStatus":"","centerHz":145000000.0,"dbMax":0.0,"dbMin":-110.0,"decoded":[],"deemphasisIndex":0,"devices":[],"faultMessage":"","faulted":false,"gains":[],"images":[],"installError":"","installReport":"","iqBytes":0,"iqRecording":false,"mode":"NFM","notchEnabled":false,"notchFreqHz":1000.0,"notchQ":30.0,"nrEnabled":false,"nrStrength":0.5,"pilotLocked":false,"plugins":[],"rdsErrors":0,"rdsGroups":0,"rdsPi":0,"rdsPiValid":false,"rdsPs":"","rdsPsValid":false,"rdsPty":0,"rdsRadioText":"","rdsSynced":false,"rdsTa":false,"rdsTp":false,"recordDir":"/golden/recordings","recordError":"","recordNotice":"","running":false,"rxLatDeg":null,"rxLonDeg":null,"rxPositionSet":false,"sampleRateHz":2000000.0,"scanStartHz":88000000.0,"scanStepHz":100000.0,"scanStopHz":108000000.0,"scannerActive":false,"scannerState":"idle","signalDb":-200.0,"soapyArgs":"","sourceBusy":false,"sourceError":"","sourceKind":"siggen","sourceName":"Signal generator","squelchDb":-50.0,"stereoActive":false,"stereoEnabled":true,"tracks":[],"transmitAvailable":false,"transmitRemoteHold":0,"transmitting":false,"tunerDisplayStyle":"nixie","vfoOffsetHz":12500.0,"volume":0.5}
+cat [f] reply=145012500\n quit=0 control=0
+cat [m] reply=FM\n12500\n quit=0 control=0
+cat [v] reply=VFOA\n quit=0 control=0
+cat [s] reply=0\nVFOA\n quit=0 control=0
+cat [t] reply=0\n quit=0 control=0
+cat [\get_freq] reply=145012500\n quit=0 control=0
+cat [\get_mode] reply=FM\n12500\n quit=0 control=0
+cat [\get_vfo] reply=VFOA\n quit=0 control=0
+cat [\chk_vfo] reply=CHKVFO 0\n quit=0 control=0
+cat [\get_powerstat] reply=0\n quit=0 control=0
+cat [\dump_state] reply=1\n1\n2\n0.000000 4000000000.000000 0x2ef -1 -1 0x1 0x1\n0 0 0 0 0 0 0\n0 0 0 0 0 0 0\n0x2ef 1\n0 0\n0x82 500\n0x0c 2400\n0x01 6000\n0x40 15000\n0x20 230000\n0 0\n0\n0\n0\n0\n\n\n0x0\n0x0\n0x0\n0x0\n0x0\n0x0\n quit=0 control=0
+cat [F 145012500] reply=RPRT 0\n quit=0 control=1 vfo=40c86a0000000000
+cat [F 433920000] reply=RPRT 0\n quit=0 control=1 centre=41b9dd1800000000 vfo=0000000000000000
+cat [F 100000000] reply=RPRT 0\n quit=0 control=1 centre=4197d78400000000 vfo=0000000000000000
+cat [M USB 2400] reply=RPRT 0\n quit=0 control=1 mode=4 bw=40a2c00000000000
+cat [M WFM 0] reply=RPRT 0\n quit=0 control=1 mode=1
+cat [M CW 500] reply=RPRT 0\n quit=0 control=1 mode=6 bw=407f400000000000
+cat [M FM -1] reply=RPRT -1\n quit=0 control=0
+cat [V VFOA] reply=RPRT 0\n quit=0 control=0
+cat [T 1] reply=RPRT -11\n quit=0 control=0
+cat [S 0 VFOA] reply=RPRT 0\n quit=0 control=0
+cat [q] reply= quit=1 control=0
+plugin state rc=0 size=192 flags=00000300 seq=3 tune=2 mode=2 device=1 audio=1 centre=41a1490c80000000 vfo=40c86a0000000000 tuned=41a1496e28000000 rate=413e848000000000 bw=40c86a0000000000 sq=c049000000000000 vol=3fe0000000000000 sig=c069000000000000 meter=0000000000000000 demod=1 gains=0 name=[Signal generator]
+plugin gain 0 rc=-9 size=72 unit=0 name=[] min=0000000000000000 max=0000000000000000 step=0000000000000000 cur=0000000000000000
+plugin gain 1 rc=-9 size=72 unit=0 name=[] min=0000000000000000 max=0000000000000000 step=0000000000000000 cur=0000000000000000
+plugin rates n=0
+plugin rates-count-only n=0
+plugin ask rate rc=-3
+plugin ask gain-lna rc=-3
+plugin ask gain-high rc=-3
+plugin ask gain-nope rc=-3
+plugin ask agc rc=-3
+plugin ask volume rc=0
+plugin ask frequency rc=0
+== mode 2
+web {"agc":false,"agcSupported":false,"antenna":"","antennas":[],"audioBytes":0,"audioMutedBy":"","audioPluginGapFrames":0,"audioPluginGaps":0,"audioPrimingCallbacks":0,"audioRecording":false,"audioRingCapacityMs":0.0,"audioRingMs":0.0,"audioSource":"","audioUnderruns":0,"autoNotch":false,"autoNotchEngaged":false,"autoNotchFreqHz":0.0,"bandwidthHz":150000.0,"basemap":{"active":false,"attribution":"","maxZoom":19,"minZoom":0,"tileSize":256},"bookmarks":[],"catalogue":[],"catalogueBusy":false,"catalogueError":"","catalogueStatus":"","centerHz":145000000.0,"dbMax":0.0,"dbMin":-110.0,"decoded":[],"deemphasisIndex":0,"devices":[],"faultMessage":"","faulted":false,"gains":[],"images":[],"installError":"","installReport":"","iqBytes":0,"iqRecording":false,"mode":"WFM","notchEnabled":false,"notchFreqHz":1000.0,"notchQ":30.0,"nrEnabled":false,"nrStrength":0.5,"pilotLocked":false,"plugins":[],"rdsErrors":0,"rdsGroups":0,"rdsPi":0,"rdsPiValid":false,"rdsPs":"","rdsPsValid":false,"rdsPty":0,"rdsRadioText":"","rdsSynced":false,"rdsTa":false,"rdsTp":false,"recordDir":"/golden/recordings","recordError":"","recordNotice":"","running":false,"rxLatDeg":null,"rxLonDeg":null,"rxPositionSet":false,"sampleRateHz":2000000.0,"scanStartHz":88000000.0,"scanStepHz":100000.0,"scanStopHz":108000000.0,"scannerActive":false,"scannerState":"idle","signalDb":-200.0,"soapyArgs":"","sourceBusy":false,"sourceError":"","sourceKind":"siggen","sourceName":"Signal generator","squelchDb":-50.0,"stereoActive":false,"stereoEnabled":true,"tracks":[],"transmitAvailable":false,"transmitRemoteHold":0,"transmitting":false,"tunerDisplayStyle":"nixie","vfoOffsetHz":12500.0,"volume":0.5}
+cat [f] reply=145012500\n quit=0 control=0
+cat [m] reply=WFM\n150000\n quit=0 control=0
+cat [v] reply=VFOA\n quit=0 control=0
+cat [s] reply=0\nVFOA\n quit=0 control=0
+cat [t] reply=0\n quit=0 control=0
+cat [\get_freq] reply=145012500\n quit=0 control=0
+cat [\get_mode] reply=WFM\n150000\n quit=0 control=0
+cat [\get_vfo] reply=VFOA\n quit=0 control=0
+cat [\chk_vfo] reply=CHKVFO 0\n quit=0 control=0
+cat [\get_powerstat] reply=0\n quit=0 control=0
+cat [\dump_state] reply=1\n1\n2\n0.000000 4000000000.000000 0x2ef -1 -1 0x1 0x1\n0 0 0 0 0 0 0\n0 0 0 0 0 0 0\n0x2ef 1\n0 0\n0x82 500\n0x0c 2400\n0x01 6000\n0x40 15000\n0x20 230000\n0 0\n0\n0\n0\n0\n\n\n0x0\n0x0\n0x0\n0x0\n0x0\n0x0\n quit=0 control=0
+cat [F 145012500] reply=RPRT 0\n quit=0 control=1 vfo=40c86a0000000000
+cat [F 433920000] reply=RPRT 0\n quit=0 control=1 centre=41b9dd1800000000 vfo=0000000000000000
+cat [F 100000000] reply=RPRT 0\n quit=0 control=1 centre=4197d78400000000 vfo=0000000000000000
+cat [M USB 2400] reply=RPRT 0\n quit=0 control=1 mode=4 bw=40a2c00000000000
+cat [M WFM 0] reply=RPRT 0\n quit=0 control=1 mode=1
+cat [M CW 500] reply=RPRT 0\n quit=0 control=1 mode=6 bw=407f400000000000
+cat [M FM -1] reply=RPRT -1\n quit=0 control=0
+cat [V VFOA] reply=RPRT 0\n quit=0 control=0
+cat [T 1] reply=RPRT -11\n quit=0 control=0
+cat [S 0 VFOA] reply=RPRT 0\n quit=0 control=0
+cat [q] reply= quit=1 control=0
+plugin state rc=0 size=192 flags=00000300 seq=4 tune=2 mode=3 device=1 audio=1 centre=41a1490c80000000 vfo=40c86a0000000000 tuned=41a1496e28000000 rate=413e848000000000 bw=41024f8000000000 sq=c049000000000000 vol=3fe0000000000000 sig=c069000000000000 meter=0000000000000000 demod=2 gains=0 name=[Signal generator]
+plugin gain 0 rc=-9 size=72 unit=0 name=[] min=0000000000000000 max=0000000000000000 step=0000000000000000 cur=0000000000000000
+plugin gain 1 rc=-9 size=72 unit=0 name=[] min=0000000000000000 max=0000000000000000 step=0000000000000000 cur=0000000000000000
+plugin rates n=0
+plugin rates-count-only n=0
+plugin ask rate rc=-3
+plugin ask gain-lna rc=-3
+plugin ask gain-high rc=-3
+plugin ask gain-nope rc=-3
+plugin ask agc rc=-3
+plugin ask volume rc=0
+plugin ask frequency rc=0
+== mode 3
+web {"agc":false,"agcSupported":false,"antenna":"","antennas":[],"audioBytes":0,"audioMutedBy":"","audioPluginGapFrames":0,"audioPluginGaps":0,"audioPrimingCallbacks":0,"audioRecording":false,"audioRingCapacityMs":0.0,"audioRingMs":0.0,"audioSource":"","audioUnderruns":0,"autoNotch":false,"autoNotchEngaged":false,"autoNotchFreqHz":0.0,"bandwidthHz":10000.0,"basemap":{"active":false,"attribution":"","maxZoom":19,"minZoom":0,"tileSize":256},"bookmarks":[],"catalogue":[],"catalogueBusy":false,"catalogueError":"","catalogueStatus":"","centerHz":145000000.0,"dbMax":0.0,"dbMin":-110.0,"decoded":[],"deemphasisIndex":0,"devices":[],"faultMessage":"","faulted":false,"gains":[],"images":[],"installError":"","installReport":"","iqBytes":0,"iqRecording":false,"mode":"AM","notchEnabled":false,"notchFreqHz":1000.0,"notchQ":30.0,"nrEnabled":false,"nrStrength":0.5,"pilotLocked":false,"plugins":[],"rdsErrors":0,"rdsGroups":0,"rdsPi":0,"rdsPiValid":false,"rdsPs":"","rdsPsValid":false,"rdsPty":0,"rdsRadioText":"","rdsSynced":false,"rdsTa":false,"rdsTp":false,"recordDir":"/golden/recordings","recordError":"","recordNotice":"","running":false,"rxLatDeg":null,"rxLonDeg":null,"rxPositionSet":false,"sampleRateHz":2000000.0,"scanStartHz":88000000.0,"scanStepHz":100000.0,"scanStopHz":108000000.0,"scannerActive":false,"scannerState":"idle","signalDb":-200.0,"soapyArgs":"","sourceBusy":false,"sourceError":"","sourceKind":"siggen","sourceName":"Signal generator","squelchDb":-50.0,"stereoActive":false,"stereoEnabled":true,"tracks":[],"transmitAvailable":false,"transmitRemoteHold":0,"transmitting":false,"tunerDisplayStyle":"nixie","vfoOffsetHz":12500.0,"volume":0.5}
+cat [f] reply=145012500\n quit=0 control=0
+cat [m] reply=AM\n10000\n quit=0 control=0
+cat [v] reply=VFOA\n quit=0 control=0
+cat [s] reply=0\nVFOA\n quit=0 control=0
+cat [t] reply=0\n quit=0 control=0
+cat [\get_freq] reply=145012500\n quit=0 control=0
+cat [\get_mode] reply=AM\n10000\n quit=0 control=0
+cat [\get_vfo] reply=VFOA\n quit=0 control=0
+cat [\chk_vfo] reply=CHKVFO 0\n quit=0 control=0
+cat [\get_powerstat] reply=0\n quit=0 control=0
+cat [\dump_state] reply=1\n1\n2\n0.000000 4000000000.000000 0x2ef -1 -1 0x1 0x1\n0 0 0 0 0 0 0\n0 0 0 0 0 0 0\n0x2ef 1\n0 0\n0x82 500\n0x0c 2400\n0x01 6000\n0x40 15000\n0x20 230000\n0 0\n0\n0\n0\n0\n\n\n0x0\n0x0\n0x0\n0x0\n0x0\n0x0\n quit=0 control=0
+cat [F 145012500] reply=RPRT 0\n quit=0 control=1 vfo=40c86a0000000000
+cat [F 433920000] reply=RPRT 0\n quit=0 control=1 centre=41b9dd1800000000 vfo=0000000000000000
+cat [F 100000000] reply=RPRT 0\n quit=0 control=1 centre=4197d78400000000 vfo=0000000000000000
+cat [M USB 2400] reply=RPRT 0\n quit=0 control=1 mode=4 bw=40a2c00000000000
+cat [M WFM 0] reply=RPRT 0\n quit=0 control=1 mode=1
+cat [M CW 500] reply=RPRT 0\n quit=0 control=1 mode=6 bw=407f400000000000
+cat [M FM -1] reply=RPRT -1\n quit=0 control=0
+cat [V VFOA] reply=RPRT 0\n quit=0 control=0
+cat [T 1] reply=RPRT -11\n quit=0 control=0
+cat [S 0 VFOA] reply=RPRT 0\n quit=0 control=0
+cat [q] reply= quit=1 control=0
+plugin state rc=0 size=192 flags=00000300 seq=5 tune=2 mode=4 device=1 audio=1 centre=41a1490c80000000 vfo=40c86a0000000000 tuned=41a1496e28000000 rate=413e848000000000 bw=40c3880000000000 sq=c049000000000000 vol=3fe0000000000000 sig=c069000000000000 meter=0000000000000000 demod=3 gains=0 name=[Signal generator]
+plugin gain 0 rc=-9 size=72 unit=0 name=[] min=0000000000000000 max=0000000000000000 step=0000000000000000 cur=0000000000000000
+plugin gain 1 rc=-9 size=72 unit=0 name=[] min=0000000000000000 max=0000000000000000 step=0000000000000000 cur=0000000000000000
+plugin rates n=0
+plugin rates-count-only n=0
+plugin ask rate rc=-3
+plugin ask gain-lna rc=-3
+plugin ask gain-high rc=-3
+plugin ask gain-nope rc=-3
+plugin ask agc rc=-3
+plugin ask volume rc=0
+plugin ask frequency rc=0
+== mode 4
+web {"agc":false,"agcSupported":false,"antenna":"","antennas":[],"audioBytes":0,"audioMutedBy":"","audioPluginGapFrames":0,"audioPluginGaps":0,"audioPrimingCallbacks":0,"audioRecording":false,"audioRingCapacityMs":0.0,"audioRingMs":0.0,"audioSource":"","audioUnderruns":0,"autoNotch":false,"autoNotchEngaged":false,"autoNotchFreqHz":0.0,"bandwidthHz":10000.0,"basemap":{"active":false,"attribution":"","maxZoom":19,"minZoom":0,"tileSize":256},"bookmarks":[],"catalogue":[],"catalogueBusy":false,"catalogueError":"","catalogueStatus":"","centerHz":145000000.0,"dbMax":0.0,"dbMin":-110.0,"decoded":[],"deemphasisIndex":0,"devices":[],"faultMessage":"","faulted":false,"gains":[],"images":[],"installError":"","installReport":"","iqBytes":0,"iqRecording":false,"mode":"DSB","notchEnabled":false,"notchFreqHz":1000.0,"notchQ":30.0,"nrEnabled":false,"nrStrength":0.5,"pilotLocked":false,"plugins":[],"rdsErrors":0,"rdsGroups":0,"rdsPi":0,"rdsPiValid":false,"rdsPs":"","rdsPsValid":false,"rdsPty":0,"rdsRadioText":"","rdsSynced":false,"rdsTa":false,"rdsTp":false,"recordDir":"/golden/recordings","recordError":"","recordNotice":"","running":false,"rxLatDeg":null,"rxLonDeg":null,"rxPositionSet":false,"sampleRateHz":2000000.0,"scanStartHz":88000000.0,"scanStepHz":100000.0,"scanStopHz":108000000.0,"scannerActive":false,"scannerState":"idle","signalDb":-200.0,"soapyArgs":"","sourceBusy":false,"sourceError":"","sourceKind":"siggen","sourceName":"Signal generator","squelchDb":-50.0,"stereoActive":false,"stereoEnabled":true,"tracks":[],"transmitAvailable":false,"transmitRemoteHold":0,"transmitting":false,"tunerDisplayStyle":"nixie","vfoOffsetHz":12500.0,"volume":0.5}
+cat [f] reply=145012500\n quit=0 control=0
+cat [m] reply=DSB\n10000\n quit=0 control=0
+cat [v] reply=VFOA\n quit=0 control=0
+cat [s] reply=0\nVFOA\n quit=0 control=0
+cat [t] reply=0\n quit=0 control=0
+cat [\get_freq] reply=145012500\n quit=0 control=0
+cat [\get_mode] reply=DSB\n10000\n quit=0 control=0
+cat [\get_vfo] reply=VFOA\n quit=0 control=0
+cat [\chk_vfo] reply=CHKVFO 0\n quit=0 control=0
+cat [\get_powerstat] reply=0\n quit=0 control=0
+cat [\dump_state] reply=1\n1\n2\n0.000000 4000000000.000000 0x2ef -1 -1 0x1 0x1\n0 0 0 0 0 0 0\n0 0 0 0 0 0 0\n0x2ef 1\n0 0\n0x82 500\n0x0c 2400\n0x01 6000\n0x40 15000\n0x20 230000\n0 0\n0\n0\n0\n0\n\n\n0x0\n0x0\n0x0\n0x0\n0x0\n0x0\n quit=0 control=0
+cat [F 145012500] reply=RPRT 0\n quit=0 control=1 vfo=40c86a0000000000
+cat [F 433920000] reply=RPRT 0\n quit=0 control=1 centre=41b9dd1800000000 vfo=0000000000000000
+cat [F 100000000] reply=RPRT 0\n quit=0 control=1 centre=4197d78400000000 vfo=0000000000000000
+cat [M USB 2400] reply=RPRT 0\n quit=0 control=1 mode=4 bw=40a2c00000000000
+cat [M WFM 0] reply=RPRT 0\n quit=0 control=1 mode=1
+cat [M CW 500] reply=RPRT 0\n quit=0 control=1 mode=6 bw=407f400000000000
+cat [M FM -1] reply=RPRT -1\n quit=0 control=0
+cat [V VFOA] reply=RPRT 0\n quit=0 control=0
+cat [T 1] reply=RPRT -11\n quit=0 control=0
+cat [S 0 VFOA] reply=RPRT 0\n quit=0 control=0
+cat [q] reply= quit=1 control=0
+plugin state rc=0 size=192 flags=00000300 seq=6 tune=2 mode=5 device=1 audio=1 centre=41a1490c80000000 vfo=40c86a0000000000 tuned=41a1496e28000000 rate=413e848000000000 bw=40c3880000000000 sq=c049000000000000 vol=3fe0000000000000 sig=c069000000000000 meter=0000000000000000 demod=4 gains=0 name=[Signal generator]
+plugin gain 0 rc=-9 size=72 unit=0 name=[] min=0000000000000000 max=0000000000000000 step=0000000000000000 cur=0000000000000000
+plugin gain 1 rc=-9 size=72 unit=0 name=[] min=0000000000000000 max=0000000000000000 step=0000000000000000 cur=0000000000000000
+plugin rates n=0
+plugin rates-count-only n=0
+plugin ask rate rc=-3
+plugin ask gain-lna rc=-3
+plugin ask gain-high rc=-3
+plugin ask gain-nope rc=-3
+plugin ask agc rc=-3
+plugin ask volume rc=0
+plugin ask frequency rc=0
+== mode 5
+web {"agc":false,"agcSupported":false,"antenna":"","antennas":[],"audioBytes":0,"audioMutedBy":"","audioPluginGapFrames":0,"audioPluginGaps":0,"audioPrimingCallbacks":0,"audioRecording":false,"audioRingCapacityMs":0.0,"audioRingMs":0.0,"audioSource":"","audioUnderruns":0,"autoNotch":false,"autoNotchEngaged":false,"autoNotchFreqHz":0.0,"bandwidthHz":3000.0,"basemap":{"active":false,"attribution":"","maxZoom":19,"minZoom":0,"tileSize":256},"bookmarks":[],"catalogue":[],"catalogueBusy":false,"catalogueError":"","catalogueStatus":"","centerHz":145000000.0,"dbMax":0.0,"dbMin":-110.0,"decoded":[],"deemphasisIndex":0,"devices":[],"faultMessage":"","faulted":false,"gains":[],"images":[],"installError":"","installReport":"","iqBytes":0,"iqRecording":false,"mode":"USB","notchEnabled":false,"notchFreqHz":1000.0,"notchQ":30.0,"nrEnabled":false,"nrStrength":0.5,"pilotLocked":false,"plugins":[],"rdsErrors":0,"rdsGroups":0,"rdsPi":0,"rdsPiValid":false,"rdsPs":"","rdsPsValid":false,"rdsPty":0,"rdsRadioText":"","rdsSynced":false,"rdsTa":false,"rdsTp":false,"recordDir":"/golden/recordings","recordError":"","recordNotice":"","running":false,"rxLatDeg":null,"rxLonDeg":null,"rxPositionSet":false,"sampleRateHz":2000000.0,"scanStartHz":88000000.0,"scanStepHz":100000.0,"scanStopHz":108000000.0,"scannerActive":false,"scannerState":"idle","signalDb":-200.0,"soapyArgs":"","sourceBusy":false,"sourceError":"","sourceKind":"siggen","sourceName":"Signal generator","squelchDb":-50.0,"stereoActive":false,"stereoEnabled":true,"tracks":[],"transmitAvailable":false,"transmitRemoteHold":0,"transmitting":false,"tunerDisplayStyle":"nixie","vfoOffsetHz":12500.0,"volume":0.5}
+cat [f] reply=145012500\n quit=0 control=0
+cat [m] reply=USB\n3000\n quit=0 control=0
+cat [v] reply=VFOA\n quit=0 control=0
+cat [s] reply=0\nVFOA\n quit=0 control=0
+cat [t] reply=0\n quit=0 control=0
+cat [\get_freq] reply=145012500\n quit=0 control=0
+cat [\get_mode] reply=USB\n3000\n quit=0 control=0
+cat [\get_vfo] reply=VFOA\n quit=0 control=0
+cat [\chk_vfo] reply=CHKVFO 0\n quit=0 control=0
+cat [\get_powerstat] reply=0\n quit=0 control=0
+cat [\dump_state] reply=1\n1\n2\n0.000000 4000000000.000000 0x2ef -1 -1 0x1 0x1\n0 0 0 0 0 0 0\n0 0 0 0 0 0 0\n0x2ef 1\n0 0\n0x82 500\n0x0c 2400\n0x01 6000\n0x40 15000\n0x20 230000\n0 0\n0\n0\n0\n0\n\n\n0x0\n0x0\n0x0\n0x0\n0x0\n0x0\n quit=0 control=0
+cat [F 145012500] reply=RPRT 0\n quit=0 control=1 vfo=40c86a0000000000
+cat [F 433920000] reply=RPRT 0\n quit=0 control=1 centre=41b9dd1800000000 vfo=0000000000000000
+cat [F 100000000] reply=RPRT 0\n quit=0 control=1 centre=4197d78400000000 vfo=0000000000000000
+cat [M USB 2400] reply=RPRT 0\n quit=0 control=1 mode=4 bw=40a2c00000000000
+cat [M WFM 0] reply=RPRT 0\n quit=0 control=1 mode=1
+cat [M CW 500] reply=RPRT 0\n quit=0 control=1 mode=6 bw=407f400000000000
+cat [M FM -1] reply=RPRT -1\n quit=0 control=0
+cat [V VFOA] reply=RPRT 0\n quit=0 control=0
+cat [T 1] reply=RPRT -11\n quit=0 control=0
+cat [S 0 VFOA] reply=RPRT 0\n quit=0 control=0
+cat [q] reply= quit=1 control=0
+plugin state rc=0 size=192 flags=00000300 seq=7 tune=2 mode=6 device=1 audio=1 centre=41a1490c80000000 vfo=40c86a0000000000 tuned=41a1496e28000000 rate=413e848000000000 bw=40a7700000000000 sq=c049000000000000 vol=3fe0000000000000 sig=c069000000000000 meter=0000000000000000 demod=5 gains=0 name=[Signal generator]
+plugin gain 0 rc=-9 size=72 unit=0 name=[] min=0000000000000000 max=0000000000000000 step=0000000000000000 cur=0000000000000000
+plugin gain 1 rc=-9 size=72 unit=0 name=[] min=0000000000000000 max=0000000000000000 step=0000000000000000 cur=0000000000000000
+plugin rates n=0
+plugin rates-count-only n=0
+plugin ask rate rc=-3
+plugin ask gain-lna rc=-3
+plugin ask gain-high rc=-3
+plugin ask gain-nope rc=-3
+plugin ask agc rc=-3
+plugin ask volume rc=0
+plugin ask frequency rc=0
+== mode 6
+web {"agc":false,"agcSupported":false,"antenna":"","antennas":[],"audioBytes":0,"audioMutedBy":"","audioPluginGapFrames":0,"audioPluginGaps":0,"audioPrimingCallbacks":0,"audioRecording":false,"audioRingCapacityMs":0.0,"audioRingMs":0.0,"audioSource":"","audioUnderruns":0,"autoNotch":false,"autoNotchEngaged":false,"autoNotchFreqHz":0.0,"bandwidthHz":3000.0,"basemap":{"active":false,"attribution":"","maxZoom":19,"minZoom":0,"tileSize":256},"bookmarks":[],"catalogue":[],"catalogueBusy":false,"catalogueError":"","catalogueStatus":"","centerHz":145000000.0,"dbMax":0.0,"dbMin":-110.0,"decoded":[],"deemphasisIndex":0,"devices":[],"faultMessage":"","faulted":false,"gains":[],"images":[],"installError":"","installReport":"","iqBytes":0,"iqRecording":false,"mode":"CW","notchEnabled":false,"notchFreqHz":1000.0,"notchQ":30.0,"nrEnabled":false,"nrStrength":0.5,"pilotLocked":false,"plugins":[],"rdsErrors":0,"rdsGroups":0,"rdsPi":0,"rdsPiValid":false,"rdsPs":"","rdsPsValid":false,"rdsPty":0,"rdsRadioText":"","rdsSynced":false,"rdsTa":false,"rdsTp":false,"recordDir":"/golden/recordings","recordError":"","recordNotice":"","running":false,"rxLatDeg":null,"rxLonDeg":null,"rxPositionSet":false,"sampleRateHz":2000000.0,"scanStartHz":88000000.0,"scanStepHz":100000.0,"scanStopHz":108000000.0,"scannerActive":false,"scannerState":"idle","signalDb":-200.0,"soapyArgs":"","sourceBusy":false,"sourceError":"","sourceKind":"siggen","sourceName":"Signal generator","squelchDb":-50.0,"stereoActive":false,"stereoEnabled":true,"tracks":[],"transmitAvailable":false,"transmitRemoteHold":0,"transmitting":false,"tunerDisplayStyle":"nixie","vfoOffsetHz":12500.0,"volume":0.5}
+cat [f] reply=145012500\n quit=0 control=0
+cat [m] reply=CW\n3000\n quit=0 control=0
+cat [v] reply=VFOA\n quit=0 control=0
+cat [s] reply=0\nVFOA\n quit=0 control=0
+cat [t] reply=0\n quit=0 control=0
+cat [\get_freq] reply=145012500\n quit=0 control=0
+cat [\get_mode] reply=CW\n3000\n quit=0 control=0
+cat [\get_vfo] reply=VFOA\n quit=0 control=0
+cat [\chk_vfo] reply=CHKVFO 0\n quit=0 control=0
+cat [\get_powerstat] reply=0\n quit=0 control=0
+cat [\dump_state] reply=1\n1\n2\n0.000000 4000000000.000000 0x2ef -1 -1 0x1 0x1\n0 0 0 0 0 0 0\n0 0 0 0 0 0 0\n0x2ef 1\n0 0\n0x82 500\n0x0c 2400\n0x01 6000\n0x40 15000\n0x20 230000\n0 0\n0\n0\n0\n0\n\n\n0x0\n0x0\n0x0\n0x0\n0x0\n0x0\n quit=0 control=0
+cat [F 145012500] reply=RPRT 0\n quit=0 control=1 vfo=40c86a0000000000
+cat [F 433920000] reply=RPRT 0\n quit=0 control=1 centre=41b9dd1800000000 vfo=0000000000000000
+cat [F 100000000] reply=RPRT 0\n quit=0 control=1 centre=4197d78400000000 vfo=0000000000000000
+cat [M USB 2400] reply=RPRT 0\n quit=0 control=1 mode=4 bw=40a2c00000000000
+cat [M WFM 0] reply=RPRT 0\n quit=0 control=1 mode=1
+cat [M CW 500] reply=RPRT 0\n quit=0 control=1 mode=6 bw=407f400000000000
+cat [M FM -1] reply=RPRT -1\n quit=0 control=0
+cat [V VFOA] reply=RPRT 0\n quit=0 control=0
+cat [T 1] reply=RPRT -11\n quit=0 control=0
+cat [S 0 VFOA] reply=RPRT 0\n quit=0 control=0
+cat [q] reply= quit=1 control=0
+plugin state rc=0 size=192 flags=00000300 seq=8 tune=2 mode=7 device=1 audio=1 centre=41a1490c80000000 vfo=40c86a0000000000 tuned=41a1496e28000000 rate=413e848000000000 bw=40a7700000000000 sq=c049000000000000 vol=3fe0000000000000 sig=c069000000000000 meter=0000000000000000 demod=6 gains=0 name=[Signal generator]
+plugin gain 0 rc=-9 size=72 unit=0 name=[] min=0000000000000000 max=0000000000000000 step=0000000000000000 cur=0000000000000000
+plugin gain 1 rc=-9 size=72 unit=0 name=[] min=0000000000000000 max=0000000000000000 step=0000000000000000 cur=0000000000000000
+plugin rates n=0
+plugin rates-count-only n=0
+plugin ask rate rc=-3
+plugin ask gain-lna rc=-3
+plugin ask gain-high rc=-3
+plugin ask gain-nope rc=-3
+plugin ask agc rc=-3
+plugin ask volume rc=0
+plugin ask frequency rc=0
+== mode 7
+web {"agc":false,"agcSupported":false,"antenna":"","antennas":[],"audioBytes":0,"audioMutedBy":"","audioPluginGapFrames":0,"audioPluginGaps":0,"audioPrimingCallbacks":0,"audioRecording":false,"audioRingCapacityMs":0.0,"audioRingMs":0.0,"audioSource":"","audioUnderruns":0,"autoNotch":false,"autoNotchEngaged":false,"autoNotchFreqHz":0.0,"bandwidthHz":3000.0,"basemap":{"active":false,"attribution":"","maxZoom":19,"minZoom":0,"tileSize":256},"bookmarks":[],"catalogue":[],"catalogueBusy":false,"catalogueError":"","catalogueStatus":"","centerHz":145000000.0,"dbMax":0.0,"dbMin":-110.0,"decoded":[],"deemphasisIndex":0,"devices":[],"faultMessage":"","faulted":false,"gains":[],"images":[],"installError":"","installReport":"","iqBytes":0,"iqRecording":false,"mode":"LSB","notchEnabled":false,"notchFreqHz":1000.0,"notchQ":30.0,"nrEnabled":false,"nrStrength":0.5,"pilotLocked":false,"plugins":[],"rdsErrors":0,"rdsGroups":0,"rdsPi":0,"rdsPiValid":false,"rdsPs":"","rdsPsValid":false,"rdsPty":0,"rdsRadioText":"","rdsSynced":false,"rdsTa":false,"rdsTp":false,"recordDir":"/golden/recordings","recordError":"","recordNotice":"","running":false,"rxLatDeg":null,"rxLonDeg":null,"rxPositionSet":false,"sampleRateHz":2000000.0,"scanStartHz":88000000.0,"scanStepHz":100000.0,"scanStopHz":108000000.0,"scannerActive":false,"scannerState":"idle","signalDb":-200.0,"soapyArgs":"","sourceBusy":false,"sourceError":"","sourceKind":"siggen","sourceName":"Signal generator","squelchDb":-50.0,"stereoActive":false,"stereoEnabled":true,"tracks":[],"transmitAvailable":false,"transmitRemoteHold":0,"transmitting":false,"tunerDisplayStyle":"nixie","vfoOffsetHz":12500.0,"volume":0.5}
+cat [f] reply=145012500\n quit=0 control=0
+cat [m] reply=LSB\n3000\n quit=0 control=0
+cat [v] reply=VFOA\n quit=0 control=0
+cat [s] reply=0\nVFOA\n quit=0 control=0
+cat [t] reply=0\n quit=0 control=0
+cat [\get_freq] reply=145012500\n quit=0 control=0
+cat [\get_mode] reply=LSB\n3000\n quit=0 control=0
+cat [\get_vfo] reply=VFOA\n quit=0 control=0
+cat [\chk_vfo] reply=CHKVFO 0\n quit=0 control=0
+cat [\get_powerstat] reply=0\n quit=0 control=0
+cat [\dump_state] reply=1\n1\n2\n0.000000 4000000000.000000 0x2ef -1 -1 0x1 0x1\n0 0 0 0 0 0 0\n0 0 0 0 0 0 0\n0x2ef 1\n0 0\n0x82 500\n0x0c 2400\n0x01 6000\n0x40 15000\n0x20 230000\n0 0\n0\n0\n0\n0\n\n\n0x0\n0x0\n0x0\n0x0\n0x0\n0x0\n quit=0 control=0
+cat [F 145012500] reply=RPRT 0\n quit=0 control=1 vfo=40c86a0000000000
+cat [F 433920000] reply=RPRT 0\n quit=0 control=1 centre=41b9dd1800000000 vfo=0000000000000000
+cat [F 100000000] reply=RPRT 0\n quit=0 control=1 centre=4197d78400000000 vfo=0000000000000000
+cat [M USB 2400] reply=RPRT 0\n quit=0 control=1 mode=4 bw=40a2c00000000000
+cat [M WFM 0] reply=RPRT 0\n quit=0 control=1 mode=1
+cat [M CW 500] reply=RPRT 0\n quit=0 control=1 mode=6 bw=407f400000000000
+cat [M FM -1] reply=RPRT -1\n quit=0 control=0
+cat [V VFOA] reply=RPRT 0\n quit=0 control=0
+cat [T 1] reply=RPRT -11\n quit=0 control=0
+cat [S 0 VFOA] reply=RPRT 0\n quit=0 control=0
+cat [q] reply= quit=1 control=0
+plugin state rc=0 size=192 flags=00000300 seq=9 tune=2 mode=8 device=1 audio=1 centre=41a1490c80000000 vfo=40c86a0000000000 tuned=41a1496e28000000 rate=413e848000000000 bw=40a7700000000000 sq=c049000000000000 vol=3fe0000000000000 sig=c069000000000000 meter=0000000000000000 demod=7 gains=0 name=[Signal generator]
+plugin gain 0 rc=-9 size=72 unit=0 name=[] min=0000000000000000 max=0000000000000000 step=0000000000000000 cur=0000000000000000
+plugin gain 1 rc=-9 size=72 unit=0 name=[] min=0000000000000000 max=0000000000000000 step=0000000000000000 cur=0000000000000000
+plugin rates n=0
+plugin rates-count-only n=0
+plugin ask rate rc=-3
+plugin ask gain-lna rc=-3
+plugin ask gain-high rc=-3
+plugin ask gain-nope rc=-3
+plugin ask agc rc=-3
+plugin ask volume rc=0
+plugin ask frequency rc=0
+== mode 8
+web {"agc":false,"agcSupported":false,"antenna":"","antennas":[],"audioBytes":0,"audioMutedBy":"","audioPluginGapFrames":0,"audioPluginGaps":0,"audioPrimingCallbacks":0,"audioRecording":false,"audioRingCapacityMs":0.0,"audioRingMs":0.0,"audioSource":"","audioUnderruns":0,"autoNotch":false,"autoNotchEngaged":false,"autoNotchFreqHz":0.0,"bandwidthHz":200000.0,"basemap":{"active":false,"attribution":"","maxZoom":19,"minZoom":0,"tileSize":256},"bookmarks":[],"catalogue":[],"catalogueBusy":false,"catalogueError":"","catalogueStatus":"","centerHz":145000000.0,"dbMax":0.0,"dbMin":-110.0,"decoded":[],"deemphasisIndex":0,"devices":[],"faultMessage":"","faulted":false,"gains":[],"images":[],"installError":"","installReport":"","iqBytes":0,"iqRecording":false,"mode":"RAW","notchEnabled":false,"notchFreqHz":1000.0,"notchQ":30.0,"nrEnabled":false,"nrStrength":0.5,"pilotLocked":false,"plugins":[],"rdsErrors":0,"rdsGroups":0,"rdsPi":0,"rdsPiValid":false,"rdsPs":"","rdsPsValid":false,"rdsPty":0,"rdsRadioText":"","rdsSynced":false,"rdsTa":false,"rdsTp":false,"recordDir":"/golden/recordings","recordError":"","recordNotice":"","running":false,"rxLatDeg":null,"rxLonDeg":null,"rxPositionSet":false,"sampleRateHz":2000000.0,"scanStartHz":88000000.0,"scanStepHz":100000.0,"scanStopHz":108000000.0,"scannerActive":false,"scannerState":"idle","signalDb":-200.0,"soapyArgs":"","sourceBusy":false,"sourceError":"","sourceKind":"siggen","sourceName":"Signal generator","squelchDb":-50.0,"stereoActive":false,"stereoEnabled":true,"tracks":[],"transmitAvailable":false,"transmitRemoteHold":0,"transmitting":false,"tunerDisplayStyle":"nixie","vfoOffsetHz":12500.0,"volume":0.5}
+cat [f] reply=145012500\n quit=0 control=0
+cat [m] reply=RPRT -11\n quit=0 control=0
+cat [v] reply=VFOA\n quit=0 control=0
+cat [s] reply=0\nVFOA\n quit=0 control=0
+cat [t] reply=0\n quit=0 control=0
+cat [\get_freq] reply=145012500\n quit=0 control=0
+cat [\get_mode] reply=RPRT -11\n quit=0 control=0
+cat [\get_vfo] reply=VFOA\n quit=0 control=0
+cat [\chk_vfo] reply=CHKVFO 0\n quit=0 control=0
+cat [\get_powerstat] reply=0\n quit=0 control=0
+cat [\dump_state] reply=1\n1\n2\n0.000000 4000000000.000000 0x2ef -1 -1 0x1 0x1\n0 0 0 0 0 0 0\n0 0 0 0 0 0 0\n0x2ef 1\n0 0\n0x82 500\n0x0c 2400\n0x01 6000\n0x40 15000\n0x20 230000\n0 0\n0\n0\n0\n0\n\n\n0x0\n0x0\n0x0\n0x0\n0x0\n0x0\n quit=0 control=0
+cat [F 145012500] reply=RPRT 0\n quit=0 control=1 vfo=40c86a0000000000
+cat [F 433920000] reply=RPRT 0\n quit=0 control=1 centre=41b9dd1800000000 vfo=0000000000000000
+cat [F 100000000] reply=RPRT 0\n quit=0 control=1 centre=4197d78400000000 vfo=0000000000000000
+cat [M USB 2400] reply=RPRT 0\n quit=0 control=1 mode=4 bw=40a2c00000000000
+cat [M WFM 0] reply=RPRT 0\n quit=0 control=1 mode=1
+cat [M CW 500] reply=RPRT 0\n quit=0 control=1 mode=6 bw=407f400000000000
+cat [M FM -1] reply=RPRT -1\n quit=0 control=0
+cat [V VFOA] reply=RPRT 0\n quit=0 control=0
+cat [T 1] reply=RPRT -11\n quit=0 control=0
+cat [S 0 VFOA] reply=RPRT 0\n quit=0 control=0
+cat [q] reply= quit=1 control=0
+plugin state rc=0 size=192 flags=00000300 seq=10 tune=2 mode=9 device=1 audio=1 centre=41a1490c80000000 vfo=40c86a0000000000 tuned=41a1496e28000000 rate=413e848000000000 bw=41086a0000000000 sq=c049000000000000 vol=3fe0000000000000 sig=c069000000000000 meter=0000000000000000 demod=8 gains=0 name=[Signal generator]
+plugin gain 0 rc=-9 size=72 unit=0 name=[] min=0000000000000000 max=0000000000000000 step=0000000000000000 cur=0000000000000000
+plugin gain 1 rc=-9 size=72 unit=0 name=[] min=0000000000000000 max=0000000000000000 step=0000000000000000 cur=0000000000000000
+plugin rates n=0
+plugin rates-count-only n=0
+plugin ask rate rc=-3
+plugin ask gain-lna rc=-3
+plugin ask gain-high rc=-3
+plugin ask gain-nope rc=-3
+plugin ask agc rc=-3
+plugin ask volume rc=0
+plugin ask frequency rc=0
+== channel
+web {"agc":false,"agcSupported":false,"antenna":"","antennas":[],"audioBytes":0,"audioMutedBy":"","audioPluginGapFrames":0,"audioPluginGaps":0,"audioPrimingCallbacks":0,"audioRecording":false,"audioRingCapacityMs":0.0,"audioRingMs":0.0,"audioSource":"","audioUnderruns":0,"autoNotch":false,"autoNotchEngaged":false,"autoNotchFreqHz":0.0,"bandwidthHz":9000.0,"basemap":{"active":false,"attribution":"","maxZoom":19,"minZoom":0,"tileSize":256},"bookmarks":[],"catalogue":[],"catalogueBusy":false,"catalogueError":"","catalogueStatus":"","centerHz":145000000.0,"dbMax":0.0,"dbMin":-110.0,"decoded":[],"deemphasisIndex":0,"devices":[],"faultMessage":"","faulted":false,"gains":[],"images":[],"installError":"","installReport":"","iqBytes":0,"iqRecording":false,"mode":"NFM","notchEnabled":false,"notchFreqHz":1000.0,"notchQ":30.0,"nrEnabled":false,"nrStrength":0.5,"pilotLocked":false,"plugins":[],"rdsErrors":0,"rdsGroups":0,"rdsPi":0,"rdsPiValid":false,"rdsPs":"","rdsPsValid":false,"rdsPty":0,"rdsRadioText":"","rdsSynced":false,"rdsTa":false,"rdsTp":false,"recordDir":"/golden/recordings","recordError":"","recordNotice":"","running":false,"rxLatDeg":null,"rxLonDeg":null,"rxPositionSet":false,"sampleRateHz":2000000.0,"scanStartHz":88000000.0,"scanStepHz":100000.0,"scanStopHz":108000000.0,"scannerActive":false,"scannerState":"idle","signalDb":-200.0,"soapyArgs":"","sourceBusy":false,"sourceError":"","sourceKind":"siggen","sourceName":"Signal generator","squelchDb":-63.5,"stereoActive":false,"stereoEnabled":true,"tracks":[],"transmitAvailable":false,"transmitRemoteHold":0,"transmitting":false,"tunerDisplayStyle":"nixie","vfoOffsetHz":12500.0,"volume":0.3700000047683716}
+cat [f] reply=145012500\n quit=0 control=0
+cat [m] reply=FM\n9000\n quit=0 control=0
+cat [v] reply=VFOA\n quit=0 control=0
+cat [s] reply=0\nVFOA\n quit=0 control=0
+cat [t] reply=0\n quit=0 control=0
+cat [\get_freq] reply=145012500\n quit=0 control=0
+cat [\get_mode] reply=FM\n9000\n quit=0 control=0
+cat [\get_vfo] reply=VFOA\n quit=0 control=0
+cat [\chk_vfo] reply=CHKVFO 0\n quit=0 control=0
+cat [\get_powerstat] reply=0\n quit=0 control=0
+cat [\dump_state] reply=1\n1\n2\n0.000000 4000000000.000000 0x2ef -1 -1 0x1 0x1\n0 0 0 0 0 0 0\n0 0 0 0 0 0 0\n0x2ef 1\n0 0\n0x82 500\n0x0c 2400\n0x01 6000\n0x40 15000\n0x20 230000\n0 0\n0\n0\n0\n0\n\n\n0x0\n0x0\n0x0\n0x0\n0x0\n0x0\n quit=0 control=0
+cat [F 145012500] reply=RPRT 0\n quit=0 control=1 vfo=40c86a0000000000
+cat [F 433920000] reply=RPRT 0\n quit=0 control=1 centre=41b9dd1800000000 vfo=0000000000000000
+cat [F 100000000] reply=RPRT 0\n quit=0 control=1 centre=4197d78400000000 vfo=0000000000000000
+cat [M USB 2400] reply=RPRT 0\n quit=0 control=1 mode=4 bw=40a2c00000000000
+cat [M WFM 0] reply=RPRT 0\n quit=0 control=1 mode=1
+cat [M CW 500] reply=RPRT 0\n quit=0 control=1 mode=6 bw=407f400000000000
+cat [M FM -1] reply=RPRT -1\n quit=0 control=0
+cat [V VFOA] reply=RPRT 0\n quit=0 control=0
+cat [T 1] reply=RPRT -11\n quit=0 control=0
+cat [S 0 VFOA] reply=RPRT 0\n quit=0 control=0
+cat [q] reply= quit=1 control=0
+plugin state rc=0 size=192 flags=00000300 seq=11 tune=2 mode=10 device=1 audio=2 centre=41a1490c80000000 vfo=40c86a0000000000 tuned=41a1496e28000000 rate=413e848000000000 bw=40c1940000000000 sq=c04fc00000000000 vol=3fd7ae1480000000 sig=c069000000000000 meter=0000000000000000 demod=1 gains=0 name=[Signal generator]
+plugin gain 0 rc=-9 size=72 unit=0 name=[] min=0000000000000000 max=0000000000000000 step=0000000000000000 cur=0000000000000000
+plugin gain 1 rc=-9 size=72 unit=0 name=[] min=0000000000000000 max=0000000000000000 step=0000000000000000 cur=0000000000000000
+plugin rates n=0
+plugin rates-count-only n=0
+plugin ask rate rc=-3
+plugin ask gain-lna rc=-3
+plugin ask gain-high rc=-3
+plugin ask gain-nope rc=-3
+plugin ask agc rc=-3
+plugin ask volume rc=0
+plugin ask frequency rc=0
+== muted
+web {"agc":false,"agcSupported":false,"antenna":"","antennas":[],"audioBytes":0,"audioMutedBy":"","audioPluginGapFrames":0,"audioPluginGaps":0,"audioPrimingCallbacks":0,"audioRecording":false,"audioRingCapacityMs":0.0,"audioRingMs":0.0,"audioSource":"","audioUnderruns":0,"autoNotch":false,"autoNotchEngaged":false,"autoNotchFreqHz":0.0,"bandwidthHz":9000.0,"basemap":{"active":false,"attribution":"","maxZoom":19,"minZoom":0,"tileSize":256},"bookmarks":[],"catalogue":[],"catalogueBusy":false,"catalogueError":"","catalogueStatus":"","centerHz":145000000.0,"dbMax":0.0,"dbMin":-110.0,"decoded":[],"deemphasisIndex":0,"devices":[],"faultMessage":"","faulted":false,"gains":[],"images":[],"installError":"","installReport":"","iqBytes":0,"iqRecording":false,"mode":"NFM","notchEnabled":false,"notchFreqHz":1000.0,"notchQ":30.0,"nrEnabled":false,"nrStrength":0.5,"pilotLocked":false,"plugins":[],"rdsErrors":0,"rdsGroups":0,"rdsPi":0,"rdsPiValid":false,"rdsPs":"","rdsPsValid":false,"rdsPty":0,"rdsRadioText":"","rdsSynced":false,"rdsTa":false,"rdsTp":false,"recordDir":"/golden/recordings","recordError":"","recordNotice":"","running":false,"rxLatDeg":null,"rxLonDeg":null,"rxPositionSet":false,"sampleRateHz":2000000.0,"scanStartHz":88000000.0,"scanStepHz":100000.0,"scanStopHz":108000000.0,"scannerActive":false,"scannerState":"idle","signalDb":-200.0,"soapyArgs":"","sourceBusy":false,"sourceError":"","sourceKind":"siggen","sourceName":"Signal generator","squelchDb":-63.5,"stereoActive":false,"stereoEnabled":true,"tracks":[],"transmitAvailable":false,"transmitRemoteHold":0,"transmitting":false,"tunerDisplayStyle":"nixie","vfoOffsetHz":12500.0,"volume":0.3700000047683716}
+cat [f] reply=145012500\n quit=0 control=0
+cat [m] reply=FM\n9000\n quit=0 control=0
+cat [v] reply=VFOA\n quit=0 control=0
+cat [s] reply=0\nVFOA\n quit=0 control=0
+cat [t] reply=0\n quit=0 control=0
+cat [\get_freq] reply=145012500\n quit=0 control=0
+cat [\get_mode] reply=FM\n9000\n quit=0 control=0
+cat [\get_vfo] reply=VFOA\n quit=0 control=0
+cat [\chk_vfo] reply=CHKVFO 0\n quit=0 control=0
+cat [\get_powerstat] reply=0\n quit=0 control=0
+cat [\dump_state] reply=1\n1\n2\n0.000000 4000000000.000000 0x2ef -1 -1 0x1 0x1\n0 0 0 0 0 0 0\n0 0 0 0 0 0 0\n0x2ef 1\n0 0\n0x82 500\n0x0c 2400\n0x01 6000\n0x40 15000\n0x20 230000\n0 0\n0\n0\n0\n0\n\n\n0x0\n0x0\n0x0\n0x0\n0x0\n0x0\n quit=0 control=0
+cat [F 145012500] reply=RPRT 0\n quit=0 control=1 vfo=40c86a0000000000
+cat [F 433920000] reply=RPRT 0\n quit=0 control=1 centre=41b9dd1800000000 vfo=0000000000000000
+cat [F 100000000] reply=RPRT 0\n quit=0 control=1 centre=4197d78400000000 vfo=0000000000000000
+cat [M USB 2400] reply=RPRT 0\n quit=0 control=1 mode=4 bw=40a2c00000000000
+cat [M WFM 0] reply=RPRT 0\n quit=0 control=1 mode=1
+cat [M CW 500] reply=RPRT 0\n quit=0 control=1 mode=6 bw=407f400000000000
+cat [M FM -1] reply=RPRT -1\n quit=0 control=0
+cat [V VFOA] reply=RPRT 0\n quit=0 control=0
+cat [T 1] reply=RPRT -11\n quit=0 control=0
+cat [S 0 VFOA] reply=RPRT 0\n quit=0 control=0
+cat [q] reply= quit=1 control=0
+plugin state rc=0 size=192 flags=00000304 seq=12 tune=2 mode=10 device=1 audio=3 centre=41a1490c80000000 vfo=40c86a0000000000 tuned=41a1496e28000000 rate=413e848000000000 bw=40c1940000000000 sq=c04fc00000000000 vol=3fd7ae1480000000 sig=c069000000000000 meter=0000000000000000 demod=1 gains=0 name=[Signal generator]
+plugin gain 0 rc=-9 size=72 unit=0 name=[] min=0000000000000000 max=0000000000000000 step=0000000000000000 cur=0000000000000000
+plugin gain 1 rc=-9 size=72 unit=0 name=[] min=0000000000000000 max=0000000000000000 step=0000000000000000 cur=0000000000000000
+plugin rates n=0
+plugin rates-count-only n=0
+plugin ask rate rc=-3
+plugin ask gain-lna rc=-3
+plugin ask gain-high rc=-3
+plugin ask gain-nope rc=-3
+plugin ask agc rc=-3
+plugin ask volume rc=0
+plugin ask frequency rc=0
+== audio dsp
+web {"agc":false,"agcSupported":false,"antenna":"","antennas":[],"audioBytes":0,"audioMutedBy":"","audioPluginGapFrames":0,"audioPluginGaps":0,"audioPrimingCallbacks":0,"audioRecording":false,"audioRingCapacityMs":0.0,"audioRingMs":0.0,"audioSource":"","audioUnderruns":0,"autoNotch":true,"autoNotchEngaged":false,"autoNotchFreqHz":0.0,"bandwidthHz":9000.0,"basemap":{"active":false,"attribution":"","maxZoom":19,"minZoom":0,"tileSize":256},"bookmarks":[],"catalogue":[],"catalogueBusy":false,"catalogueError":"","catalogueStatus":"","centerHz":145000000.0,"dbMax":0.0,"dbMin":-110.0,"decoded":[],"deemphasisIndex":1,"devices":[],"faultMessage":"","faulted":false,"gains":[],"images":[],"installError":"","installReport":"","iqBytes":0,"iqRecording":false,"mode":"NFM","notchEnabled":true,"notchFreqHz":1234.0,"notchQ":17.0,"nrEnabled":true,"nrStrength":0.699999988079071,"pilotLocked":false,"plugins":[],"rdsErrors":0,"rdsGroups":0,"rdsPi":0,"rdsPiValid":false,"rdsPs":"","rdsPsValid":false,"rdsPty":0,"rdsRadioText":"","rdsSynced":false,"rdsTa":false,"rdsTp":false,"recordDir":"/golden/recordings","recordError":"","recordNotice":"","running":false,"rxLatDeg":null,"rxLonDeg":null,"rxPositionSet":false,"sampleRateHz":2000000.0,"scanStartHz":88000000.0,"scanStepHz":100000.0,"scanStopHz":108000000.0,"scannerActive":false,"scannerState":"idle","signalDb":-200.0,"soapyArgs":"","sourceBusy":false,"sourceError":"","sourceKind":"siggen","sourceName":"Signal generator","squelchDb":-63.5,"stereoActive":false,"stereoEnabled":false,"tracks":[],"transmitAvailable":false,"transmitRemoteHold":0,"transmitting":false,"tunerDisplayStyle":"nixie","vfoOffsetHz":12500.0,"volume":0.3700000047683716}
+cat [f] reply=145012500\n quit=0 control=0
+cat [m] reply=FM\n9000\n quit=0 control=0
+cat [v] reply=VFOA\n quit=0 control=0
+cat [s] reply=0\nVFOA\n quit=0 control=0
+cat [t] reply=0\n quit=0 control=0
+cat [\get_freq] reply=145012500\n quit=0 control=0
+cat [\get_mode] reply=FM\n9000\n quit=0 control=0
+cat [\get_vfo] reply=VFOA\n quit=0 control=0
+cat [\chk_vfo] reply=CHKVFO 0\n quit=0 control=0
+cat [\get_powerstat] reply=0\n quit=0 control=0
+cat [\dump_state] reply=1\n1\n2\n0.000000 4000000000.000000 0x2ef -1 -1 0x1 0x1\n0 0 0 0 0 0 0\n0 0 0 0 0 0 0\n0x2ef 1\n0 0\n0x82 500\n0x0c 2400\n0x01 6000\n0x40 15000\n0x20 230000\n0 0\n0\n0\n0\n0\n\n\n0x0\n0x0\n0x0\n0x0\n0x0\n0x0\n quit=0 control=0
+cat [F 145012500] reply=RPRT 0\n quit=0 control=1 vfo=40c86a0000000000
+cat [F 433920000] reply=RPRT 0\n quit=0 control=1 centre=41b9dd1800000000 vfo=0000000000000000
+cat [F 100000000] reply=RPRT 0\n quit=0 control=1 centre=4197d78400000000 vfo=0000000000000000
+cat [M USB 2400] reply=RPRT 0\n quit=0 control=1 mode=4 bw=40a2c00000000000
+cat [M WFM 0] reply=RPRT 0\n quit=0 control=1 mode=1
+cat [M CW 500] reply=RPRT 0\n quit=0 control=1 mode=6 bw=407f400000000000
+cat [M FM -1] reply=RPRT -1\n quit=0 control=0
+cat [V VFOA] reply=RPRT 0\n quit=0 control=0
+cat [T 1] reply=RPRT -11\n quit=0 control=0
+cat [S 0 VFOA] reply=RPRT 0\n quit=0 control=0
+cat [q] reply= quit=1 control=0
+plugin state rc=0 size=192 flags=00000300 seq=13 tune=2 mode=10 device=1 audio=4 centre=41a1490c80000000 vfo=40c86a0000000000 tuned=41a1496e28000000 rate=413e848000000000 bw=40c1940000000000 sq=c04fc00000000000 vol=3fd7ae1480000000 sig=c069000000000000 meter=0000000000000000 demod=1 gains=0 name=[Signal generator]
+plugin gain 0 rc=-9 size=72 unit=0 name=[] min=0000000000000000 max=0000000000000000 step=0000000000000000 cur=0000000000000000
+plugin gain 1 rc=-9 size=72 unit=0 name=[] min=0000000000000000 max=0000000000000000 step=0000000000000000 cur=0000000000000000
+plugin rates n=0
+plugin rates-count-only n=0
+plugin ask rate rc=-3
+plugin ask gain-lna rc=-3
+plugin ask gain-high rc=-3
+plugin ask gain-nope rc=-3
+plugin ask agc rc=-3
+plugin ask volume rc=0
+plugin ask frequency rc=0
+== display, position, strings
+web {"agc":false,"agcSupported":false,"antenna":"","antennas":[],"audioBytes":0,"audioMutedBy":"","audioPluginGapFrames":0,"audioPluginGaps":0,"audioPrimingCallbacks":0,"audioRecording":false,"audioRingCapacityMs":0.0,"audioRingMs":0.0,"audioSource":"","audioUnderruns":0,"autoNotch":true,"autoNotchEngaged":false,"autoNotchFreqHz":0.0,"bandwidthHz":9000.0,"basemap":{"active":false,"attribution":"","maxZoom":19,"minZoom":0,"tileSize":256},"bookmarks":[],"catalogue":[],"catalogueBusy":false,"catalogueError":"golden: catalogue error","catalogueStatus":"golden: 3 plugins","centerHz":145000000.0,"dbMax":-11.0,"dbMin":-121.0,"decoded":[{"plugin":"Golden decoder","text":"a decoded line"}],"deemphasisIndex":1,"devices":[],"faultMessage":"","faulted":false,"gains":[],"images":[],"installError":"golden: install failed","installReport":"golden: installed","iqBytes":0,"iqRecording":false,"mode":"NFM","notchEnabled":true,"notchFreqHz":1234.0,"notchQ":17.0,"nrEnabled":true,"nrStrength":0.699999988079071,"pilotLocked":false,"plugins":[],"rdsErrors":0,"rdsGroups":0,"rdsPi":0,"rdsPiValid":false,"rdsPs":"","rdsPsValid":false,"rdsPty":0,"rdsRadioText":"","rdsSynced":false,"rdsTa":false,"rdsTp":false,"recordDir":"/golden/recordings","recordError":"golden: the disk is full","recordNotice":"golden: the take ended on purpose","running":false,"rxLatDeg":53.8,"rxLonDeg":-1.55,"rxPositionSet":true,"sampleRateHz":2000000.0,"scanStartHz":88000000.0,"scanStepHz":100000.0,"scanStopHz":108000000.0,"scannerActive":false,"scannerState":"idle","signalDb":-200.0,"soapyArgs":"","sourceBusy":false,"sourceError":"golden: the source said no","sourceKind":"siggen","sourceName":"Signal generator","squelchDb":-63.5,"stereoActive":false,"stereoEnabled":false,"tracks":[],"transmitAvailable":false,"transmitRemoteHold":0,"transmitting":false,"tunerDisplayStyle":"neon","vfoOffsetHz":12500.0,"volume":0.3700000047683716}
+cat [f] reply=145012500\n quit=0 control=0
+cat [m] reply=FM\n9000\n quit=0 control=0
+cat [v] reply=VFOA\n quit=0 control=0
+cat [s] reply=0\nVFOA\n quit=0 control=0
+cat [t] reply=0\n quit=0 control=0
+cat [\get_freq] reply=145012500\n quit=0 control=0
+cat [\get_mode] reply=FM\n9000\n quit=0 control=0
+cat [\get_vfo] reply=VFOA\n quit=0 control=0
+cat [\chk_vfo] reply=CHKVFO 0\n quit=0 control=0
+cat [\get_powerstat] reply=0\n quit=0 control=0
+cat [\dump_state] reply=1\n1\n2\n0.000000 4000000000.000000 0x2ef -1 -1 0x1 0x1\n0 0 0 0 0 0 0\n0 0 0 0 0 0 0\n0x2ef 1\n0 0\n0x82 500\n0x0c 2400\n0x01 6000\n0x40 15000\n0x20 230000\n0 0\n0\n0\n0\n0\n\n\n0x0\n0x0\n0x0\n0x0\n0x0\n0x0\n quit=0 control=0
+cat [F 145012500] reply=RPRT 0\n quit=0 control=1 vfo=40c86a0000000000
+cat [F 433920000] reply=RPRT 0\n quit=0 control=1 centre=41b9dd1800000000 vfo=0000000000000000
+cat [F 100000000] reply=RPRT 0\n quit=0 control=1 centre=4197d78400000000 vfo=0000000000000000
+cat [M USB 2400] reply=RPRT 0\n quit=0 control=1 mode=4 bw=40a2c00000000000
+cat [M WFM 0] reply=RPRT 0\n quit=0 control=1 mode=1
+cat [M CW 500] reply=RPRT 0\n quit=0 control=1 mode=6 bw=407f400000000000
+cat [M FM -1] reply=RPRT -1\n quit=0 control=0
+cat [V VFOA] reply=RPRT 0\n quit=0 control=0
+cat [T 1] reply=RPRT -11\n quit=0 control=0
+cat [S 0 VFOA] reply=RPRT 0\n quit=0 control=0
+cat [q] reply= quit=1 control=0
+plugin state rc=0 size=192 flags=00000300 seq=13 tune=2 mode=10 device=1 audio=4 centre=41a1490c80000000 vfo=40c86a0000000000 tuned=41a1496e28000000 rate=413e848000000000 bw=40c1940000000000 sq=c04fc00000000000 vol=3fd7ae1480000000 sig=c069000000000000 meter=0000000000000000 demod=1 gains=0 name=[Signal generator]
+plugin gain 0 rc=-9 size=72 unit=0 name=[] min=0000000000000000 max=0000000000000000 step=0000000000000000 cur=0000000000000000
+plugin gain 1 rc=-9 size=72 unit=0 name=[] min=0000000000000000 max=0000000000000000 step=0000000000000000 cur=0000000000000000
+plugin rates n=0
+plugin rates-count-only n=0
+plugin ask rate rc=-3
+plugin ask gain-lna rc=-3
+plugin ask gain-high rc=-3
+plugin ask gain-nope rc=-3
+plugin ask agc rc=-3
+plugin ask volume rc=0
+plugin ask frequency rc=0
+== scanned
+web {"agc":false,"agcSupported":false,"antenna":"","antennas":[],"audioBytes":0,"audioMutedBy":"","audioPluginGapFrames":0,"audioPluginGaps":0,"audioPrimingCallbacks":0,"audioRecording":false,"audioRingCapacityMs":0.0,"audioRingMs":0.0,"audioSource":"","audioUnderruns":0,"autoNotch":true,"autoNotchEngaged":false,"autoNotchFreqHz":0.0,"bandwidthHz":9000.0,"basemap":{"active":false,"attribution":"","maxZoom":19,"minZoom":0,"tileSize":256},"bookmarks":[],"catalogue":[],"catalogueBusy":false,"catalogueError":"golden: catalogue error","catalogueStatus":"golden: 3 plugins","centerHz":145000000.0,"dbMax":-11.0,"dbMin":-121.0,"decoded":[{"plugin":"Golden decoder","text":"a decoded line"}],"deemphasisIndex":1,"devices":[{"args":"serial=0001","kind":"rtlsdr","label":"Fake RTL"},{"args":"driver=fake,serial=9","kind":"soapy","label":"Fake Soapy"}],"faultMessage":"","faulted":false,"gains":[],"images":[],"installError":"golden: install failed","installReport":"golden: installed","iqBytes":0,"iqRecording":false,"mode":"NFM","notchEnabled":true,"notchFreqHz":1234.0,"notchQ":17.0,"nrEnabled":true,"nrStrength":0.699999988079071,"pilotLocked":false,"plugins":[],"rdsErrors":0,"rdsGroups":0,"rdsPi":0,"rdsPiValid":false,"rdsPs":"","rdsPsValid":false,"rdsPty":0,"rdsRadioText":"","rdsSynced":false,"rdsTa":false,"rdsTp":false,"recordDir":"/golden/recordings","recordError":"golden: the disk is full","recordNotice":"golden: the take ended on purpose","running":false,"rxLatDeg":53.8,"rxLonDeg":-1.55,"rxPositionSet":true,"sampleRateHz":2000000.0,"scanStartHz":88000000.0,"scanStepHz":100000.0,"scanStopHz":108000000.0,"scannerActive":false,"scannerState":"idle","signalDb":-200.0,"soapyArgs":"","sourceBusy":false,"sourceError":"golden: the source said no","sourceKind":"siggen","sourceName":"Signal generator","squelchDb":-63.5,"stereoActive":false,"stereoEnabled":false,"tracks":[],"transmitAvailable":false,"transmitRemoteHold":0,"transmitting":false,"tunerDisplayStyle":"neon","vfoOffsetHz":12500.0,"volume":0.3700000047683716}
+cat [f] reply=145012500\n quit=0 control=0
+cat [m] reply=FM\n9000\n quit=0 control=0
+cat [v] reply=VFOA\n quit=0 control=0
+cat [s] reply=0\nVFOA\n quit=0 control=0
+cat [t] reply=0\n quit=0 control=0
+cat [\get_freq] reply=145012500\n quit=0 control=0
+cat [\get_mode] reply=FM\n9000\n quit=0 control=0
+cat [\get_vfo] reply=VFOA\n quit=0 control=0
+cat [\chk_vfo] reply=CHKVFO 0\n quit=0 control=0
+cat [\get_powerstat] reply=0\n quit=0 control=0
+cat [\dump_state] reply=1\n1\n2\n0.000000 4000000000.000000 0x2ef -1 -1 0x1 0x1\n0 0 0 0 0 0 0\n0 0 0 0 0 0 0\n0x2ef 1\n0 0\n0x82 500\n0x0c 2400\n0x01 6000\n0x40 15000\n0x20 230000\n0 0\n0\n0\n0\n0\n\n\n0x0\n0x0\n0x0\n0x0\n0x0\n0x0\n quit=0 control=0
+cat [F 145012500] reply=RPRT 0\n quit=0 control=1 vfo=40c86a0000000000
+cat [F 433920000] reply=RPRT 0\n quit=0 control=1 centre=41b9dd1800000000 vfo=0000000000000000
+cat [F 100000000] reply=RPRT 0\n quit=0 control=1 centre=4197d78400000000 vfo=0000000000000000
+cat [M USB 2400] reply=RPRT 0\n quit=0 control=1 mode=4 bw=40a2c00000000000
+cat [M WFM 0] reply=RPRT 0\n quit=0 control=1 mode=1
+cat [M CW 500] reply=RPRT 0\n quit=0 control=1 mode=6 bw=407f400000000000
+cat [M FM -1] reply=RPRT -1\n quit=0 control=0
+cat [V VFOA] reply=RPRT 0\n quit=0 control=0
+cat [T 1] reply=RPRT -11\n quit=0 control=0
+cat [S 0 VFOA] reply=RPRT 0\n quit=0 control=0
+cat [q] reply= quit=1 control=0
+plugin state rc=0 size=192 flags=00000300 seq=13 tune=2 mode=10 device=1 audio=4 centre=41a1490c80000000 vfo=40c86a0000000000 tuned=41a1496e28000000 rate=413e848000000000 bw=40c1940000000000 sq=c04fc00000000000 vol=3fd7ae1480000000 sig=c069000000000000 meter=0000000000000000 demod=1 gains=0 name=[Signal generator]
+plugin gain 0 rc=-9 size=72 unit=0 name=[] min=0000000000000000 max=0000000000000000 step=0000000000000000 cur=0000000000000000
+plugin gain 1 rc=-9 size=72 unit=0 name=[] min=0000000000000000 max=0000000000000000 step=0000000000000000 cur=0000000000000000
+plugin rates n=0
+plugin rates-count-only n=0
+plugin ask rate rc=-3
+plugin ask gain-lna rc=-3
+plugin ask gain-high rc=-3
+plugin ask gain-nope rc=-3
+plugin ask agc rc=-3
+plugin ask volume rc=0
+plugin ask frequency rc=0
+== radio open
+web {"agc":false,"agcSupported":true,"antenna":"A","antennas":["A","B"],"audioBytes":0,"audioMutedBy":"","audioPluginGapFrames":0,"audioPluginGaps":0,"audioPrimingCallbacks":0,"audioRecording":false,"audioRingCapacityMs":0.0,"audioRingMs":0.0,"audioSource":"","audioUnderruns":0,"autoNotch":true,"autoNotchEngaged":false,"autoNotchFreqHz":0.0,"bandwidthHz":9000.0,"basemap":{"active":false,"attribution":"","maxZoom":19,"minZoom":0,"tileSize":256},"bookmarks":[],"catalogue":[],"catalogueBusy":false,"catalogueError":"golden: catalogue error","catalogueStatus":"golden: 3 plugins","centerHz":145000000.0,"dbMax":-11.0,"dbMin":-121.0,"decoded":[{"plugin":"Golden decoder","text":"a decoded line"}],"deemphasisIndex":1,"devices":[{"args":"serial=0001","kind":"rtlsdr","label":"Fake RTL"},{"args":"driver=fake,serial=9","kind":"soapy","label":"Fake Soapy"}],"faultMessage":"","faulted":false,"gains":[{"db":20.0,"name":"LNA","unit":"dB"},{"db":10.0,"name":"VGA","unit":"dB"}],"images":[],"installError":"golden: install failed","installReport":"golden: installed","iqBytes":0,"iqRecording":false,"mode":"NFM","notchEnabled":true,"notchFreqHz":1234.0,"notchQ":17.0,"nrEnabled":true,"nrStrength":0.699999988079071,"pilotLocked":false,"plugins":[],"rdsErrors":0,"rdsGroups":0,"rdsPi":0,"rdsPiValid":false,"rdsPs":"","rdsPsValid":false,"rdsPty":0,"rdsRadioText":"","rdsSynced":false,"rdsTa":false,"rdsTp":false,"recordDir":"/golden/recordings","recordError":"golden: the disk is full","recordNotice":"golden: the take ended on purpose","running":false,"rxLatDeg":53.8,"rxLonDeg":-1.55,"rxPositionSet":true,"sampleRateHz":2000000.0,"scanStartHz":88000000.0,"scanStepHz":100000.0,"scanStopHz":108000000.0,"scannerActive":false,"scannerState":"idle","signalDb":-200.0,"soapyArgs":"serial=0001","sourceBusy":false,"sourceError":"","sourceKind":"rtlsdr","sourceName":"Fake radio","squelchDb":-63.5,"stereoActive":false,"stereoEnabled":false,"tracks":[],"transmitAvailable":false,"transmitRemoteHold":0,"transmitting":false,"tunerDisplayStyle":"neon","vfoOffsetHz":12500.0,"volume":0.3700000047683716}
+cat [f] reply=145012500\n quit=0 control=0
+cat [m] reply=FM\n9000\n quit=0 control=0
+cat [v] reply=VFOA\n quit=0 control=0
+cat [s] reply=0\nVFOA\n quit=0 control=0
+cat [t] reply=0\n quit=0 control=0
+cat [\get_freq] reply=145012500\n quit=0 control=0
+cat [\get_mode] reply=FM\n9000\n quit=0 control=0
+cat [\get_vfo] reply=VFOA\n quit=0 control=0
+cat [\chk_vfo] reply=CHKVFO 0\n quit=0 control=0
+cat [\get_powerstat] reply=0\n quit=0 control=0
+cat [\dump_state] reply=1\n1\n2\n0.000000 4000000000.000000 0x2ef -1 -1 0x1 0x1\n0 0 0 0 0 0 0\n0 0 0 0 0 0 0\n0x2ef 1\n0 0\n0x82 500\n0x0c 2400\n0x01 6000\n0x40 15000\n0x20 230000\n0 0\n0\n0\n0\n0\n\n\n0x0\n0x0\n0x0\n0x0\n0x0\n0x0\n quit=0 control=0
+cat [F 145012500] reply=RPRT 0\n quit=0 control=1 vfo=40c86a0000000000
+cat [F 433920000] reply=RPRT 0\n quit=0 control=1 centre=41b9dd1800000000 vfo=0000000000000000
+cat [F 100000000] reply=RPRT 0\n quit=0 control=1 centre=4197d78400000000 vfo=0000000000000000
+cat [M USB 2400] reply=RPRT 0\n quit=0 control=1 mode=4 bw=40a2c00000000000
+cat [M WFM 0] reply=RPRT 0\n quit=0 control=1 mode=1
+cat [M CW 500] reply=RPRT 0\n quit=0 control=1 mode=6 bw=407f400000000000
+cat [M FM -1] reply=RPRT -1\n quit=0 control=0
+cat [V VFOA] reply=RPRT 0\n quit=0 control=0
+cat [T 1] reply=RPRT -11\n quit=0 control=0
+cat [S 0 VFOA] reply=RPRT 0\n quit=0 control=0
+cat [q] reply= quit=1 control=0
+plugin state rc=0 size=192 flags=00000312 seq=14 tune=2 mode=10 device=2 audio=4 centre=41a1490c80000000 vfo=40c86a0000000000 tuned=41a1496e28000000 rate=413e848000000000 bw=40c1940000000000 sq=c04fc00000000000 vol=3fd7ae1480000000 sig=c069000000000000 meter=0000000000000000 demod=1 gains=2 name=[Fake radio]
+plugin gain 0 rc=0 size=72 unit=0 name=[LNA] min=0000000000000000 max=4044000000000000 step=3ff0000000000000 cur=4034000000000000
+plugin gain 1 rc=0 size=72 unit=0 name=[VGA] min=0000000000000000 max=402e000000000000 step=3ff0000000000000 cur=4024000000000000
+plugin gain 2 rc=-9 size=72 unit=0 name=[] min=0000000000000000 max=0000000000000000 step=0000000000000000 cur=0000000000000000
+plugin gain 3 rc=-9 size=72 unit=0 name=[] min=0000000000000000 max=0000000000000000 step=0000000000000000 cur=0000000000000000
+plugin rates n=3 412f400000000000 413f400000000000 41424f8000000000
+plugin rates-count-only n=3
+plugin ask rate rc=0
+plugin ask gain-lna rc=0
+plugin ask gain-high rc=-2
+plugin ask gain-nope rc=-6
+plugin ask agc rc=0
+plugin ask volume rc=0
+plugin ask frequency rc=0
+== radio set
+web {"agc":false,"agcSupported":true,"antenna":"B","antennas":["A","B"],"audioBytes":0,"audioMutedBy":"","audioPluginGapFrames":0,"audioPluginGaps":0,"audioPrimingCallbacks":0,"audioRecording":false,"audioRingCapacityMs":0.0,"audioRingMs":0.0,"audioSource":"","audioUnderruns":0,"autoNotch":true,"autoNotchEngaged":false,"autoNotchFreqHz":0.0,"bandwidthHz":9000.0,"basemap":{"active":false,"attribution":"","maxZoom":19,"minZoom":0,"tileSize":256},"bookmarks":[],"catalogue":[],"catalogueBusy":false,"catalogueError":"golden: catalogue error","catalogueStatus":"golden: 3 plugins","centerHz":145000000.0,"dbMax":-11.0,"dbMin":-121.0,"decoded":[{"plugin":"Golden decoder","text":"a decoded line"}],"deemphasisIndex":1,"devices":[{"args":"serial=0001","kind":"rtlsdr","label":"Fake RTL"},{"args":"driver=fake,serial=9","kind":"soapy","label":"Fake Soapy"}],"faultMessage":"","faulted":false,"gains":[{"db":27.0,"name":"LNA","unit":"dB"},{"db":4.0,"name":"VGA","unit":"dB"}],"images":[],"installError":"golden: install failed","installReport":"golden: installed","iqBytes":0,"iqRecording":false,"mode":"NFM","notchEnabled":true,"notchFreqHz":1234.0,"notchQ":17.0,"nrEnabled":true,"nrStrength":0.699999988079071,"pilotLocked":false,"plugins":[],"rdsErrors":0,"rdsGroups":0,"rdsPi":0,"rdsPiValid":false,"rdsPs":"","rdsPsValid":false,"rdsPty":0,"rdsRadioText":"","rdsSynced":false,"rdsTa":false,"rdsTp":false,"recordDir":"/golden/recordings","recordError":"golden: the disk is full","recordNotice":"golden: the take ended on purpose","running":false,"rxLatDeg":53.8,"rxLonDeg":-1.55,"rxPositionSet":true,"sampleRateHz":1024000.0,"scanStartHz":88000000.0,"scanStepHz":100000.0,"scanStopHz":108000000.0,"scannerActive":false,"scannerState":"idle","signalDb":-200.0,"soapyArgs":"serial=0001","sourceBusy":false,"sourceError":"","sourceKind":"rtlsdr","sourceName":"Fake radio","squelchDb":-63.5,"stereoActive":false,"stereoEnabled":false,"tracks":[],"transmitAvailable":false,"transmitRemoteHold":0,"transmitting":false,"tunerDisplayStyle":"neon","vfoOffsetHz":12500.0,"volume":0.3700000047683716}
+cat [f] reply=145012500\n quit=0 control=0
+cat [m] reply=FM\n9000\n quit=0 control=0
+cat [v] reply=VFOA\n quit=0 control=0
+cat [s] reply=0\nVFOA\n quit=0 control=0
+cat [t] reply=0\n quit=0 control=0
+cat [\get_freq] reply=145012500\n quit=0 control=0
+cat [\get_mode] reply=FM\n9000\n quit=0 control=0
+cat [\get_vfo] reply=VFOA\n quit=0 control=0
+cat [\chk_vfo] reply=CHKVFO 0\n quit=0 control=0
+cat [\get_powerstat] reply=0\n quit=0 control=0
+cat [\dump_state] reply=1\n1\n2\n0.000000 4000000000.000000 0x2ef -1 -1 0x1 0x1\n0 0 0 0 0 0 0\n0 0 0 0 0 0 0\n0x2ef 1\n0 0\n0x82 500\n0x0c 2400\n0x01 6000\n0x40 15000\n0x20 230000\n0 0\n0\n0\n0\n0\n\n\n0x0\n0x0\n0x0\n0x0\n0x0\n0x0\n quit=0 control=0
+cat [F 145012500] reply=RPRT 0\n quit=0 control=1 vfo=40c86a0000000000
+cat [F 433920000] reply=RPRT 0\n quit=0 control=1 centre=41b9dd1800000000 vfo=0000000000000000
+cat [F 100000000] reply=RPRT 0\n quit=0 control=1 centre=4197d78400000000 vfo=0000000000000000
+cat [M USB 2400] reply=RPRT 0\n quit=0 control=1 mode=4 bw=40a2c00000000000
+cat [M WFM 0] reply=RPRT 0\n quit=0 control=1 mode=1
+cat [M CW 500] reply=RPRT 0\n quit=0 control=1 mode=6 bw=407f400000000000
+cat [M FM -1] reply=RPRT -1\n quit=0 control=0
+cat [V VFOA] reply=RPRT 0\n quit=0 control=0
+cat [T 1] reply=RPRT -11\n quit=0 control=0
+cat [S 0 VFOA] reply=RPRT 0\n quit=0 control=0
+cat [q] reply= quit=1 control=0
+plugin state rc=0 size=192 flags=00000312 seq=15 tune=2 mode=10 device=3 audio=4 centre=41a1490c80000000 vfo=40c86a0000000000 tuned=41a1496e28000000 rate=412f400000000000 bw=40c1940000000000 sq=c04fc00000000000 vol=3fd7ae1480000000 sig=c069000000000000 meter=0000000000000000 demod=1 gains=2 name=[Fake radio]
+plugin gain 0 rc=0 size=72 unit=0 name=[LNA] min=0000000000000000 max=4044000000000000 step=3ff0000000000000 cur=403b000000000000
+plugin gain 1 rc=0 size=72 unit=0 name=[VGA] min=0000000000000000 max=402e000000000000 step=3ff0000000000000 cur=4010000000000000
+plugin gain 2 rc=-9 size=72 unit=0 name=[] min=0000000000000000 max=0000000000000000 step=0000000000000000 cur=0000000000000000
+plugin gain 3 rc=-9 size=72 unit=0 name=[] min=0000000000000000 max=0000000000000000 step=0000000000000000 cur=0000000000000000
+plugin rates n=3 412f400000000000 413f400000000000 41424f8000000000
+plugin rates-count-only n=3
+plugin ask rate rc=0
+plugin ask gain-lna rc=0
+plugin ask gain-high rc=-2
+plugin ask gain-nope rc=-6
+plugin ask agc rc=0
+plugin ask volume rc=0
+plugin ask frequency rc=0
+== radio agc
+web {"agc":true,"agcSupported":true,"antenna":"B","antennas":["A","B"],"audioBytes":0,"audioMutedBy":"","audioPluginGapFrames":0,"audioPluginGaps":0,"audioPrimingCallbacks":0,"audioRecording":false,"audioRingCapacityMs":0.0,"audioRingMs":0.0,"audioSource":"","audioUnderruns":0,"autoNotch":true,"autoNotchEngaged":false,"autoNotchFreqHz":0.0,"bandwidthHz":9000.0,"basemap":{"active":false,"attribution":"","maxZoom":19,"minZoom":0,"tileSize":256},"bookmarks":[],"catalogue":[],"catalogueBusy":false,"catalogueError":"golden: catalogue error","catalogueStatus":"golden: 3 plugins","centerHz":145000000.0,"dbMax":-11.0,"dbMin":-121.0,"decoded":[{"plugin":"Golden decoder","text":"a decoded line"}],"deemphasisIndex":1,"devices":[{"args":"serial=0001","kind":"rtlsdr","label":"Fake RTL"},{"args":"driver=fake,serial=9","kind":"soapy","label":"Fake Soapy"}],"faultMessage":"","faulted":false,"gains":[{"db":27.0,"name":"LNA","unit":"dB"},{"db":4.0,"name":"VGA","unit":"dB"}],"images":[],"installError":"golden: install failed","installReport":"golden: installed","iqBytes":0,"iqRecording":false,"mode":"NFM","notchEnabled":true,"notchFreqHz":1234.0,"notchQ":17.0,"nrEnabled":true,"nrStrength":0.699999988079071,"pilotLocked":false,"plugins":[],"rdsErrors":0,"rdsGroups":0,"rdsPi":0,"rdsPiValid":false,"rdsPs":"","rdsPsValid":false,"rdsPty":0,"rdsRadioText":"","rdsSynced":false,"rdsTa":false,"rdsTp":false,"recordDir":"/golden/recordings","recordError":"golden: the disk is full","recordNotice":"golden: the take ended on purpose","running":false,"rxLatDeg":53.8,"rxLonDeg":-1.55,"rxPositionSet":true,"sampleRateHz":1024000.0,"scanStartHz":88000000.0,"scanStepHz":100000.0,"scanStopHz":108000000.0,"scannerActive":false,"scannerState":"idle","signalDb":-200.0,"soapyArgs":"serial=0001","sourceBusy":false,"sourceError":"","sourceKind":"rtlsdr","sourceName":"Fake radio","squelchDb":-63.5,"stereoActive":false,"stereoEnabled":false,"tracks":[],"transmitAvailable":false,"transmitRemoteHold":0,"transmitting":false,"tunerDisplayStyle":"neon","vfoOffsetHz":12500.0,"volume":0.3700000047683716}
+cat [f] reply=145012500\n quit=0 control=0
+cat [m] reply=FM\n9000\n quit=0 control=0
+cat [v] reply=VFOA\n quit=0 control=0
+cat [s] reply=0\nVFOA\n quit=0 control=0
+cat [t] reply=0\n quit=0 control=0
+cat [\get_freq] reply=145012500\n quit=0 control=0
+cat [\get_mode] reply=FM\n9000\n quit=0 control=0
+cat [\get_vfo] reply=VFOA\n quit=0 control=0
+cat [\chk_vfo] reply=CHKVFO 0\n quit=0 control=0
+cat [\get_powerstat] reply=0\n quit=0 control=0
+cat [\dump_state] reply=1\n1\n2\n0.000000 4000000000.000000 0x2ef -1 -1 0x1 0x1\n0 0 0 0 0 0 0\n0 0 0 0 0 0 0\n0x2ef 1\n0 0\n0x82 500\n0x0c 2400\n0x01 6000\n0x40 15000\n0x20 230000\n0 0\n0\n0\n0\n0\n\n\n0x0\n0x0\n0x0\n0x0\n0x0\n0x0\n quit=0 control=0
+cat [F 145012500] reply=RPRT 0\n quit=0 control=1 vfo=40c86a0000000000
+cat [F 433920000] reply=RPRT 0\n quit=0 control=1 centre=41b9dd1800000000 vfo=0000000000000000
+cat [F 100000000] reply=RPRT 0\n quit=0 control=1 centre=4197d78400000000 vfo=0000000000000000
+cat [M USB 2400] reply=RPRT 0\n quit=0 control=1 mode=4 bw=40a2c00000000000
+cat [M WFM 0] reply=RPRT 0\n quit=0 control=1 mode=1
+cat [M CW 500] reply=RPRT 0\n quit=0 control=1 mode=6 bw=407f400000000000
+cat [M FM -1] reply=RPRT -1\n quit=0 control=0
+cat [V VFOA] reply=RPRT 0\n quit=0 control=0
+cat [T 1] reply=RPRT -11\n quit=0 control=0
+cat [S 0 VFOA] reply=RPRT 0\n quit=0 control=0
+cat [q] reply= quit=1 control=0
+plugin state rc=0 size=192 flags=0000031a seq=16 tune=2 mode=10 device=4 audio=4 centre=41a1490c80000000 vfo=40c86a0000000000 tuned=41a1496e28000000 rate=412f400000000000 bw=40c1940000000000 sq=c04fc00000000000 vol=3fd7ae1480000000 sig=c069000000000000 meter=0000000000000000 demod=1 gains=2 name=[Fake radio]
+plugin gain 0 rc=0 size=72 unit=0 name=[LNA] min=0000000000000000 max=4044000000000000 step=3ff0000000000000 cur=403b000000000000
+plugin gain 1 rc=0 size=72 unit=0 name=[VGA] min=0000000000000000 max=402e000000000000 step=3ff0000000000000 cur=4010000000000000
+plugin gain 2 rc=-9 size=72 unit=0 name=[] min=0000000000000000 max=0000000000000000 step=0000000000000000 cur=0000000000000000
+plugin gain 3 rc=-9 size=72 unit=0 name=[] min=0000000000000000 max=0000000000000000 step=0000000000000000 cur=0000000000000000
+plugin rates n=3 412f400000000000 413f400000000000 41424f8000000000
+plugin rates-count-only n=3
+plugin ask rate rc=0
+plugin ask gain-lna rc=0
+plugin ask gain-high rc=-2
+plugin ask gain-nope rc=-6
+plugin ask agc rc=0
+plugin ask volume rc=0
+plugin ask frequency rc=0
+== bookmarks, scanner range
+web {"agc":true,"agcSupported":true,"antenna":"B","antennas":["A","B"],"audioBytes":0,"audioMutedBy":"","audioPluginGapFrames":0,"audioPluginGaps":0,"audioPrimingCallbacks":0,"audioRecording":false,"audioRingCapacityMs":0.0,"audioRingMs":0.0,"audioSource":"","audioUnderruns":0,"autoNotch":true,"autoNotchEngaged":false,"autoNotchFreqHz":0.0,"bandwidthHz":9000.0,"basemap":{"active":false,"attribution":"","maxZoom":19,"minZoom":0,"tileSize":256},"bookmarks":[{"bandwidthHz":9000.0,"freqHz":145012500.0,"mode":"NFM","name":"Golden one"},{"bandwidthHz":9000.0,"freqHz":145012500.0,"mode":"NFM","name":"Golden two"}],"catalogue":[],"catalogueBusy":false,"catalogueError":"golden: catalogue error","catalogueStatus":"golden: 3 plugins","centerHz":145000000.0,"dbMax":-11.0,"dbMin":-121.0,"decoded":[{"plugin":"Golden decoder","text":"a decoded line"}],"deemphasisIndex":1,"devices":[{"args":"serial=0001","kind":"rtlsdr","label":"Fake RTL"},{"args":"driver=fake,serial=9","kind":"soapy","label":"Fake Soapy"}],"faultMessage":"","faulted":false,"gains":[{"db":27.0,"name":"LNA","unit":"dB"},{"db":4.0,"name":"VGA","unit":"dB"}],"images":[],"installError":"golden: install failed","installReport":"golden: installed","iqBytes":0,"iqRecording":false,"mode":"NFM","notchEnabled":true,"notchFreqHz":1234.0,"notchQ":17.0,"nrEnabled":true,"nrStrength":0.699999988079071,"pilotLocked":false,"plugins":[],"rdsErrors":0,"rdsGroups":0,"rdsPi":0,"rdsPiValid":false,"rdsPs":"","rdsPsValid":false,"rdsPty":0,"rdsRadioText":"","rdsSynced":false,"rdsTa":false,"rdsTp":false,"recordDir":"/golden/recordings","recordError":"golden: the disk is full","recordNotice":"golden: the take ended on purpose","running":false,"rxLatDeg":53.8,"rxLonDeg":-1.55,"rxPositionSet":true,"sampleRateHz":1024000.0,"scanStartHz":150000000.0,"scanStepHz":25000.0,"scanStopHz":151000000.0,"scannerActive":false,"scannerState":"idle","signalDb":-200.0,"soapyArgs":"serial=0001","sourceBusy":false,"sourceError":"","sourceKind":"rtlsdr","sourceName":"Fake radio","squelchDb":-63.5,"stereoActive":false,"stereoEnabled":false,"tracks":[],"transmitAvailable":false,"transmitRemoteHold":0,"transmitting":false,"tunerDisplayStyle":"neon","vfoOffsetHz":12500.0,"volume":0.3700000047683716}
+cat [f] reply=145012500\n quit=0 control=0
+cat [m] reply=FM\n9000\n quit=0 control=0
+cat [v] reply=VFOA\n quit=0 control=0
+cat [s] reply=0\nVFOA\n quit=0 control=0
+cat [t] reply=0\n quit=0 control=0
+cat [\get_freq] reply=145012500\n quit=0 control=0
+cat [\get_mode] reply=FM\n9000\n quit=0 control=0
+cat [\get_vfo] reply=VFOA\n quit=0 control=0
+cat [\chk_vfo] reply=CHKVFO 0\n quit=0 control=0
+cat [\get_powerstat] reply=0\n quit=0 control=0
+cat [\dump_state] reply=1\n1\n2\n0.000000 4000000000.000000 0x2ef -1 -1 0x1 0x1\n0 0 0 0 0 0 0\n0 0 0 0 0 0 0\n0x2ef 1\n0 0\n0x82 500\n0x0c 2400\n0x01 6000\n0x40 15000\n0x20 230000\n0 0\n0\n0\n0\n0\n\n\n0x0\n0x0\n0x0\n0x0\n0x0\n0x0\n quit=0 control=0
+cat [F 145012500] reply=RPRT 0\n quit=0 control=1 vfo=40c86a0000000000
+cat [F 433920000] reply=RPRT 0\n quit=0 control=1 centre=41b9dd1800000000 vfo=0000000000000000
+cat [F 100000000] reply=RPRT 0\n quit=0 control=1 centre=4197d78400000000 vfo=0000000000000000
+cat [M USB 2400] reply=RPRT 0\n quit=0 control=1 mode=4 bw=40a2c00000000000
+cat [M WFM 0] reply=RPRT 0\n quit=0 control=1 mode=1
+cat [M CW 500] reply=RPRT 0\n quit=0 control=1 mode=6 bw=407f400000000000
+cat [M FM -1] reply=RPRT -1\n quit=0 control=0
+cat [V VFOA] reply=RPRT 0\n quit=0 control=0
+cat [T 1] reply=RPRT -11\n quit=0 control=0
+cat [S 0 VFOA] reply=RPRT 0\n quit=0 control=0
+cat [q] reply= quit=1 control=0
+plugin state rc=0 size=192 flags=0000031a seq=16 tune=2 mode=10 device=4 audio=4 centre=41a1490c80000000 vfo=40c86a0000000000 tuned=41a1496e28000000 rate=412f400000000000 bw=40c1940000000000 sq=c04fc00000000000 vol=3fd7ae1480000000 sig=c069000000000000 meter=0000000000000000 demod=1 gains=2 name=[Fake radio]
+plugin gain 0 rc=0 size=72 unit=0 name=[LNA] min=0000000000000000 max=4044000000000000 step=3ff0000000000000 cur=403b000000000000
+plugin gain 1 rc=0 size=72 unit=0 name=[VGA] min=0000000000000000 max=402e000000000000 step=3ff0000000000000 cur=4010000000000000
+plugin gain 2 rc=-9 size=72 unit=0 name=[] min=0000000000000000 max=0000000000000000 step=0000000000000000 cur=0000000000000000
+plugin gain 3 rc=-9 size=72 unit=0 name=[] min=0000000000000000 max=0000000000000000 step=0000000000000000 cur=0000000000000000
+plugin rates n=3 412f400000000000 413f400000000000 41424f8000000000
+plugin rates-count-only n=3
+plugin ask rate rc=0
+plugin ask gain-lna rc=0
+plugin ask gain-high rc=-2
+plugin ask gain-nope rc=-6
+plugin ask agc rc=0
+plugin ask volume rc=0
+plugin ask frequency rc=0
+== running
+web {"agc":true,"agcSupported":true,"antenna":"B","antennas":["A","B"],"audioBytes":0,"audioMutedBy":"","audioPluginGapFrames":0,"audioPluginGaps":0,"audioPrimingCallbacks":0,"audioRecording":false,"audioRingCapacityMs":0.0,"audioRingMs":0.0,"audioSource":"","audioUnderruns":0,"autoNotch":true,"autoNotchEngaged":false,"autoNotchFreqHz":0.0,"bandwidthHz":9000.0,"basemap":{"active":false,"attribution":"","maxZoom":19,"minZoom":0,"tileSize":256},"bookmarks":[{"bandwidthHz":9000.0,"freqHz":145012500.0,"mode":"NFM","name":"Golden one"},{"bandwidthHz":9000.0,"freqHz":145012500.0,"mode":"NFM","name":"Golden two"}],"catalogue":[],"catalogueBusy":false,"catalogueError":"golden: catalogue error","catalogueStatus":"golden: 3 plugins","centerHz":145000000.0,"dbMax":-11.0,"dbMin":-121.0,"decoded":[{"plugin":"Golden decoder","text":"a decoded line"}],"deemphasisIndex":1,"devices":[{"args":"serial=0001","kind":"rtlsdr","label":"Fake RTL"},{"args":"driver=fake,serial=9","kind":"soapy","label":"Fake Soapy"}],"faultMessage":"","faulted":false,"gains":[{"db":27.0,"name":"LNA","unit":"dB"},{"db":4.0,"name":"VGA","unit":"dB"}],"images":[],"installError":"golden: install failed","installReport":"golden: installed","iqBytes":0,"iqRecording":false,"mode":"NFM","notchEnabled":true,"notchFreqHz":1234.0,"notchQ":17.0,"nrEnabled":true,"nrStrength":0.699999988079071,"pilotLocked":false,"plugins":[],"rdsErrors":0,"rdsGroups":0,"rdsPi":0,"rdsPiValid":false,"rdsPs":"","rdsPsValid":false,"rdsPty":0,"rdsRadioText":"","rdsSynced":false,"rdsTa":false,"rdsTp":false,"recordDir":"/golden/recordings","recordError":"golden: the disk is full","recordNotice":"golden: the take ended on purpose","running":true,"rxLatDeg":53.8,"rxLonDeg":-1.55,"rxPositionSet":true,"sampleRateHz":1024000.0,"scanStartHz":150000000.0,"scanStepHz":25000.0,"scanStopHz":151000000.0,"scannerActive":false,"scannerState":"idle","signalDb":-1.0,"soapyArgs":"serial=0001","sourceBusy":false,"sourceError":"","sourceKind":"rtlsdr","sourceName":"Fake radio","squelchDb":-63.5,"stereoActive":false,"stereoEnabled":false,"tracks":[],"transmitAvailable":false,"transmitRemoteHold":0,"transmitting":false,"tunerDisplayStyle":"neon","vfoOffsetHz":12500.0,"volume":0.3700000047683716}
+cat [f] reply=145012500\n quit=0 control=0
+cat [m] reply=FM\n9000\n quit=0 control=0
+cat [v] reply=VFOA\n quit=0 control=0
+cat [s] reply=0\nVFOA\n quit=0 control=0
+cat [t] reply=0\n quit=0 control=0
+cat [\get_freq] reply=145012500\n quit=0 control=0
+cat [\get_mode] reply=FM\n9000\n quit=0 control=0
+cat [\get_vfo] reply=VFOA\n quit=0 control=0
+cat [\chk_vfo] reply=CHKVFO 0\n quit=0 control=0
+cat [\get_powerstat] reply=1\n quit=0 control=0
+cat [\dump_state] reply=1\n1\n2\n0.000000 4000000000.000000 0x2ef -1 -1 0x1 0x1\n0 0 0 0 0 0 0\n0 0 0 0 0 0 0\n0x2ef 1\n0 0\n0x82 500\n0x0c 2400\n0x01 6000\n0x40 15000\n0x20 230000\n0 0\n0\n0\n0\n0\n\n\n0x0\n0x0\n0x0\n0x0\n0x0\n0x0\n quit=0 control=0
+cat [F 145012500] reply=RPRT 0\n quit=0 control=1 vfo=40c86a0000000000
+cat [F 433920000] reply=RPRT 0\n quit=0 control=1 centre=41b9dd1800000000 vfo=0000000000000000
+cat [F 100000000] reply=RPRT 0\n quit=0 control=1 centre=4197d78400000000 vfo=0000000000000000
+cat [M USB 2400] reply=RPRT 0\n quit=0 control=1 mode=4 bw=40a2c00000000000
+cat [M WFM 0] reply=RPRT 0\n quit=0 control=1 mode=1
+cat [M CW 500] reply=RPRT 0\n quit=0 control=1 mode=6 bw=407f400000000000
+cat [M FM -1] reply=RPRT -1\n quit=0 control=0
+cat [V VFOA] reply=RPRT 0\n quit=0 control=0
+cat [T 1] reply=RPRT -11\n quit=0 control=0
+cat [S 0 VFOA] reply=RPRT 0\n quit=0 control=0
+cat [q] reply= quit=1 control=0
+plugin state rc=0 size=192 flags=0000031b seq=17 tune=2 mode=10 device=5 audio=4 centre=41a1490c80000000 vfo=40c86a0000000000 tuned=41a1496e28000000 rate=412f400000000000 bw=40c1940000000000 sq=c04fc00000000000 vol=3fd7ae1480000000 sig=bff0000000000000 meter=bff0000000000000 demod=1 gains=2 name=[Fake radio]
+plugin gain 0 rc=0 size=72 unit=0 name=[LNA] min=0000000000000000 max=4044000000000000 step=3ff0000000000000 cur=403b000000000000
+plugin gain 1 rc=0 size=72 unit=0 name=[VGA] min=0000000000000000 max=402e000000000000 step=3ff0000000000000 cur=4010000000000000
+plugin gain 2 rc=-9 size=72 unit=0 name=[] min=0000000000000000 max=0000000000000000 step=0000000000000000 cur=0000000000000000
+plugin gain 3 rc=-9 size=72 unit=0 name=[] min=0000000000000000 max=0000000000000000 step=0000000000000000 cur=0000000000000000
+plugin rates n=3 412f400000000000 413f400000000000 41424f8000000000
+plugin rates-count-only n=3
+plugin ask rate rc=0
+plugin ask gain-lna rc=0
+plugin ask gain-high rc=-2
+plugin ask gain-nope rc=-6
+plugin ask agc rc=0
+plugin ask volume rc=0
+plugin ask frequency rc=0
+== running, retuned
+web {"agc":true,"agcSupported":true,"antenna":"B","antennas":["A","B"],"audioBytes":0,"audioMutedBy":"","audioPluginGapFrames":0,"audioPluginGaps":0,"audioPrimingCallbacks":0,"audioRecording":false,"audioRingCapacityMs":0.0,"audioRingMs":0.0,"audioSource":"","audioUnderruns":0,"autoNotch":true,"autoNotchEngaged":false,"autoNotchFreqHz":0.0,"bandwidthHz":9000.0,"basemap":{"active":false,"attribution":"","maxZoom":19,"minZoom":0,"tileSize":256},"bookmarks":[{"bandwidthHz":9000.0,"freqHz":145012500.0,"mode":"NFM","name":"Golden one"},{"bandwidthHz":9000.0,"freqHz":145012500.0,"mode":"NFM","name":"Golden two"}],"catalogue":[],"catalogueBusy":false,"catalogueError":"golden: catalogue error","catalogueStatus":"golden: 3 plugins","centerHz":145000000.0,"dbMax":-11.0,"dbMin":-121.0,"decoded":[{"plugin":"Golden decoder","text":"a decoded line"}],"deemphasisIndex":1,"devices":[{"args":"serial=0001","kind":"rtlsdr","label":"Fake RTL"},{"args":"driver=fake,serial=9","kind":"soapy","label":"Fake Soapy"}],"faultMessage":"","faulted":false,"gains":[{"db":27.0,"name":"LNA","unit":"dB"},{"db":4.0,"name":"VGA","unit":"dB"}],"images":[],"installError":"golden: install failed","installReport":"golden: installed","iqBytes":0,"iqRecording":false,"mode":"NFM","notchEnabled":true,"notchFreqHz":1234.0,"notchQ":17.0,"nrEnabled":true,"nrStrength":0.699999988079071,"pilotLocked":false,"plugins":[],"rdsErrors":0,"rdsGroups":0,"rdsPi":0,"rdsPiValid":false,"rdsPs":"","rdsPsValid":false,"rdsPty":0,"rdsRadioText":"","rdsSynced":false,"rdsTa":false,"rdsTp":false,"recordDir":"/golden/recordings","recordError":"golden: the disk is full","recordNotice":"golden: the take ended on purpose","running":true,"rxLatDeg":53.8,"rxLonDeg":-1.55,"rxPositionSet":true,"sampleRateHz":1024000.0,"scanStartHz":150000000.0,"scanStepHz":25000.0,"scanStopHz":151000000.0,"scannerActive":false,"scannerState":"idle","signalDb":-1.0,"soapyArgs":"serial=0001","sourceBusy":false,"sourceError":"","sourceKind":"rtlsdr","sourceName":"Fake radio","squelchDb":-63.5,"stereoActive":false,"stereoEnabled":false,"tracks":[],"transmitAvailable":false,"transmitRemoteHold":0,"transmitting":false,"tunerDisplayStyle":"neon","vfoOffsetHz":12500.0,"volume":0.3700000047683716}
+cat [f] reply=145012500\n quit=0 control=0
+cat [m] reply=FM\n9000\n quit=0 control=0
+cat [v] reply=VFOA\n quit=0 control=0
+cat [s] reply=0\nVFOA\n quit=0 control=0
+cat [t] reply=0\n quit=0 control=0
+cat [\get_freq] reply=145012500\n quit=0 control=0
+cat [\get_mode] reply=FM\n9000\n quit=0 control=0
+cat [\get_vfo] reply=VFOA\n quit=0 control=0
+cat [\chk_vfo] reply=CHKVFO 0\n quit=0 control=0
+cat [\get_powerstat] reply=1\n quit=0 control=0
+cat [\dump_state] reply=1\n1\n2\n0.000000 4000000000.000000 0x2ef -1 -1 0x1 0x1\n0 0 0 0 0 0 0\n0 0 0 0 0 0 0\n0x2ef 1\n0 0\n0x82 500\n0x0c 2400\n0x01 6000\n0x40 15000\n0x20 230000\n0 0\n0\n0\n0\n0\n\n\n0x0\n0x0\n0x0\n0x0\n0x0\n0x0\n quit=0 control=0
+cat [F 145012500] reply=RPRT 0\n quit=0 control=1 vfo=40c86a0000000000
+cat [F 433920000] reply=RPRT 0\n quit=0 control=1 centre=41b9dd1800000000 vfo=0000000000000000
+cat [F 100000000] reply=RPRT 0\n quit=0 control=1 centre=4197d78400000000 vfo=0000000000000000
+cat [M USB 2400] reply=RPRT 0\n quit=0 control=1 mode=4 bw=40a2c00000000000
+cat [M WFM 0] reply=RPRT 0\n quit=0 control=1 mode=1
+cat [M CW 500] reply=RPRT 0\n quit=0 control=1 mode=6 bw=407f400000000000
+cat [M FM -1] reply=RPRT -1\n quit=0 control=0
+cat [V VFOA] reply=RPRT 0\n quit=0 control=0
+cat [T 1] reply=RPRT -11\n quit=0 control=0
+cat [S 0 VFOA] reply=RPRT 0\n quit=0 control=0
+cat [q] reply= quit=1 control=0
+plugin state rc=0 size=192 flags=0000031b seq=17 tune=2 mode=10 device=5 audio=4 centre=41a1490c80000000 vfo=40c86a0000000000 tuned=41a1496e28000000 rate=412f400000000000 bw=40c1940000000000 sq=c04fc00000000000 vol=3fd7ae1480000000 sig=bff0000000000000 meter=bff0000000000000 demod=1 gains=2 name=[Fake radio]
+plugin gain 0 rc=0 size=72 unit=0 name=[LNA] min=0000000000000000 max=4044000000000000 step=3ff0000000000000 cur=403b000000000000
+plugin gain 1 rc=0 size=72 unit=0 name=[VGA] min=0000000000000000 max=402e000000000000 step=3ff0000000000000 cur=4010000000000000
+plugin gain 2 rc=-9 size=72 unit=0 name=[] min=0000000000000000 max=0000000000000000 step=0000000000000000 cur=0000000000000000
+plugin gain 3 rc=-9 size=72 unit=0 name=[] min=0000000000000000 max=0000000000000000 step=0000000000000000 cur=0000000000000000
+plugin rates n=3 412f400000000000 413f400000000000 41424f8000000000
+plugin rates-count-only n=3
+plugin ask rate rc=0
+plugin ask gain-lna rc=0
+plugin ask gain-high rc=-2
+plugin ask gain-nope rc=-6
+plugin ask agc rc=0
+plugin ask volume rc=0
+plugin ask frequency rc=0
+== stopped
+web {"agc":true,"agcSupported":true,"antenna":"B","antennas":["A","B"],"audioBytes":0,"audioMutedBy":"","audioPluginGapFrames":0,"audioPluginGaps":0,"audioPrimingCallbacks":0,"audioRecording":false,"audioRingCapacityMs":0.0,"audioRingMs":0.0,"audioSource":"","audioUnderruns":0,"autoNotch":true,"autoNotchEngaged":false,"autoNotchFreqHz":0.0,"bandwidthHz":9000.0,"basemap":{"active":false,"attribution":"","maxZoom":19,"minZoom":0,"tileSize":256},"bookmarks":[{"bandwidthHz":9000.0,"freqHz":145012500.0,"mode":"NFM","name":"Golden one"},{"bandwidthHz":9000.0,"freqHz":145012500.0,"mode":"NFM","name":"Golden two"}],"catalogue":[],"catalogueBusy":false,"catalogueError":"golden: catalogue error","catalogueStatus":"golden: 3 plugins","centerHz":145000000.0,"dbMax":-11.0,"dbMin":-121.0,"decoded":[{"plugin":"Golden decoder","text":"a decoded line"}],"deemphasisIndex":1,"devices":[{"args":"serial=0001","kind":"rtlsdr","label":"Fake RTL"},{"args":"driver=fake,serial=9","kind":"soapy","label":"Fake Soapy"}],"faultMessage":"","faulted":false,"gains":[{"db":27.0,"name":"LNA","unit":"dB"},{"db":4.0,"name":"VGA","unit":"dB"}],"images":[],"installError":"golden: install failed","installReport":"golden: installed","iqBytes":0,"iqRecording":false,"mode":"NFM","notchEnabled":true,"notchFreqHz":1234.0,"notchQ":17.0,"nrEnabled":true,"nrStrength":0.699999988079071,"pilotLocked":false,"plugins":[],"rdsErrors":0,"rdsGroups":0,"rdsPi":0,"rdsPiValid":false,"rdsPs":"","rdsPsValid":false,"rdsPty":0,"rdsRadioText":"","rdsSynced":false,"rdsTa":false,"rdsTp":false,"recordDir":"/golden/recordings","recordError":"golden: the disk is full","recordNotice":"golden: the take ended on purpose","running":false,"rxLatDeg":53.8,"rxLonDeg":-1.55,"rxPositionSet":true,"sampleRateHz":1024000.0,"scanStartHz":150000000.0,"scanStepHz":25000.0,"scanStopHz":151000000.0,"scannerActive":false,"scannerState":"idle","signalDb":-1.0,"soapyArgs":"serial=0001","sourceBusy":false,"sourceError":"","sourceKind":"rtlsdr","sourceName":"Fake radio","squelchDb":-63.5,"stereoActive":false,"stereoEnabled":false,"tracks":[],"transmitAvailable":false,"transmitRemoteHold":0,"transmitting":false,"tunerDisplayStyle":"neon","vfoOffsetHz":12500.0,"volume":0.3700000047683716}
+cat [f] reply=145012500\n quit=0 control=0
+cat [m] reply=FM\n9000\n quit=0 control=0
+cat [v] reply=VFOA\n quit=0 control=0
+cat [s] reply=0\nVFOA\n quit=0 control=0
+cat [t] reply=0\n quit=0 control=0
+cat [\get_freq] reply=145012500\n quit=0 control=0
+cat [\get_mode] reply=FM\n9000\n quit=0 control=0
+cat [\get_vfo] reply=VFOA\n quit=0 control=0
+cat [\chk_vfo] reply=CHKVFO 0\n quit=0 control=0
+cat [\get_powerstat] reply=0\n quit=0 control=0
+cat [\dump_state] reply=1\n1\n2\n0.000000 4000000000.000000 0x2ef -1 -1 0x1 0x1\n0 0 0 0 0 0 0\n0 0 0 0 0 0 0\n0x2ef 1\n0 0\n0x82 500\n0x0c 2400\n0x01 6000\n0x40 15000\n0x20 230000\n0 0\n0\n0\n0\n0\n\n\n0x0\n0x0\n0x0\n0x0\n0x0\n0x0\n quit=0 control=0
+cat [F 145012500] reply=RPRT 0\n quit=0 control=1 vfo=40c86a0000000000
+cat [F 433920000] reply=RPRT 0\n quit=0 control=1 centre=41b9dd1800000000 vfo=0000000000000000
+cat [F 100000000] reply=RPRT 0\n quit=0 control=1 centre=4197d78400000000 vfo=0000000000000000
+cat [M USB 2400] reply=RPRT 0\n quit=0 control=1 mode=4 bw=40a2c00000000000
+cat [M WFM 0] reply=RPRT 0\n quit=0 control=1 mode=1
+cat [M CW 500] reply=RPRT 0\n quit=0 control=1 mode=6 bw=407f400000000000
+cat [M FM -1] reply=RPRT -1\n quit=0 control=0
+cat [V VFOA] reply=RPRT 0\n quit=0 control=0
+cat [T 1] reply=RPRT -11\n quit=0 control=0
+cat [S 0 VFOA] reply=RPRT 0\n quit=0 control=0
+cat [q] reply= quit=1 control=0
+plugin state rc=0 size=192 flags=0000031a seq=18 tune=2 mode=10 device=6 audio=4 centre=41a1490c80000000 vfo=40c86a0000000000 tuned=41a1496e28000000 rate=412f400000000000 bw=40c1940000000000 sq=c04fc00000000000 vol=3fd7ae1480000000 sig=bff0000000000000 meter=bff0000000000000 demod=1 gains=2 name=[Fake radio]
+plugin gain 0 rc=0 size=72 unit=0 name=[LNA] min=0000000000000000 max=4044000000000000 step=3ff0000000000000 cur=403b000000000000
+plugin gain 1 rc=0 size=72 unit=0 name=[VGA] min=0000000000000000 max=402e000000000000 step=3ff0000000000000 cur=4010000000000000
+plugin gain 2 rc=-9 size=72 unit=0 name=[] min=0000000000000000 max=0000000000000000 step=0000000000000000 cur=0000000000000000
+plugin gain 3 rc=-9 size=72 unit=0 name=[] min=0000000000000000 max=0000000000000000 step=0000000000000000 cur=0000000000000000
+plugin rates n=3 412f400000000000 413f400000000000 41424f8000000000
+plugin rates-count-only n=3
+plugin ask rate rc=0
+plugin ask gain-lna rc=0
+plugin ask gain-high rc=-2
+plugin ask gain-nope rc=-6
+plugin ask agc rc=0
+plugin ask volume rc=0
+plugin ask frequency rc=0
+== back to the generator
+web {"agc":true,"agcSupported":true,"antenna":"B","antennas":["A","B"],"audioBytes":0,"audioMutedBy":"","audioPluginGapFrames":0,"audioPluginGaps":0,"audioPrimingCallbacks":0,"audioRecording":false,"audioRingCapacityMs":0.0,"audioRingMs":0.0,"audioSource":"","audioUnderruns":0,"autoNotch":true,"autoNotchEngaged":false,"autoNotchFreqHz":0.0,"bandwidthHz":9000.0,"basemap":{"active":false,"attribution":"","maxZoom":19,"minZoom":0,"tileSize":256},"bookmarks":[{"bandwidthHz":9000.0,"freqHz":145012500.0,"mode":"NFM","name":"Golden one"},{"bandwidthHz":9000.0,"freqHz":145012500.0,"mode":"NFM","name":"Golden two"}],"catalogue":[],"catalogueBusy":false,"catalogueError":"golden: catalogue error","catalogueStatus":"golden: 3 plugins","centerHz":145000000.0,"dbMax":-11.0,"dbMin":-121.0,"decoded":[{"plugin":"Golden decoder","text":"a decoded line"}],"deemphasisIndex":1,"devices":[{"args":"serial=0001","kind":"rtlsdr","label":"Fake RTL"},{"args":"driver=fake,serial=9","kind":"soapy","label":"Fake Soapy"}],"faultMessage":"","faulted":false,"gains":[{"db":27.0,"name":"LNA","unit":"dB"},{"db":4.0,"name":"VGA","unit":"dB"}],"images":[],"installError":"golden: install failed","installReport":"golden: installed","iqBytes":0,"iqRecording":false,"mode":"NFM","notchEnabled":true,"notchFreqHz":1234.0,"notchQ":17.0,"nrEnabled":true,"nrStrength":0.699999988079071,"pilotLocked":false,"plugins":[],"rdsErrors":0,"rdsGroups":0,"rdsPi":0,"rdsPiValid":false,"rdsPs":"","rdsPsValid":false,"rdsPty":0,"rdsRadioText":"","rdsSynced":false,"rdsTa":false,"rdsTp":false,"recordDir":"/golden/recordings","recordError":"golden: the disk is full","recordNotice":"golden: the take ended on purpose","running":false,"rxLatDeg":53.8,"rxLonDeg":-1.55,"rxPositionSet":true,"sampleRateHz":2000000.0,"scanStartHz":150000000.0,"scanStepHz":25000.0,"scanStopHz":151000000.0,"scannerActive":false,"scannerState":"idle","signalDb":-1.0,"soapyArgs":"","sourceBusy":false,"sourceError":"","sourceKind":"siggen","sourceName":"Signal generator","squelchDb":-63.5,"stereoActive":false,"stereoEnabled":false,"tracks":[],"transmitAvailable":false,"transmitRemoteHold":0,"transmitting":false,"tunerDisplayStyle":"neon","vfoOffsetHz":12500.0,"volume":0.3700000047683716}
+cat [f] reply=145012500\n quit=0 control=0
+cat [m] reply=FM\n9000\n quit=0 control=0
+cat [v] reply=VFOA\n quit=0 control=0
+cat [s] reply=0\nVFOA\n quit=0 control=0
+cat [t] reply=0\n quit=0 control=0
+cat [\get_freq] reply=145012500\n quit=0 control=0
+cat [\get_mode] reply=FM\n9000\n quit=0 control=0
+cat [\get_vfo] reply=VFOA\n quit=0 control=0
+cat [\chk_vfo] reply=CHKVFO 0\n quit=0 control=0
+cat [\get_powerstat] reply=0\n quit=0 control=0
+cat [\dump_state] reply=1\n1\n2\n0.000000 4000000000.000000 0x2ef -1 -1 0x1 0x1\n0 0 0 0 0 0 0\n0 0 0 0 0 0 0\n0x2ef 1\n0 0\n0x82 500\n0x0c 2400\n0x01 6000\n0x40 15000\n0x20 230000\n0 0\n0\n0\n0\n0\n\n\n0x0\n0x0\n0x0\n0x0\n0x0\n0x0\n quit=0 control=0
+cat [F 145012500] reply=RPRT 0\n quit=0 control=1 vfo=40c86a0000000000
+cat [F 433920000] reply=RPRT 0\n quit=0 control=1 centre=41b9dd1800000000 vfo=0000000000000000
+cat [F 100000000] reply=RPRT 0\n quit=0 control=1 centre=4197d78400000000 vfo=0000000000000000
+cat [M USB 2400] reply=RPRT 0\n quit=0 control=1 mode=4 bw=40a2c00000000000
+cat [M WFM 0] reply=RPRT 0\n quit=0 control=1 mode=1
+cat [M CW 500] reply=RPRT 0\n quit=0 control=1 mode=6 bw=407f400000000000
+cat [M FM -1] reply=RPRT -1\n quit=0 control=0
+cat [V VFOA] reply=RPRT 0\n quit=0 control=0
+cat [T 1] reply=RPRT -11\n quit=0 control=0
+cat [S 0 VFOA] reply=RPRT 0\n quit=0 control=0
+cat [q] reply= quit=1 control=0
+plugin state rc=0 size=192 flags=00000318 seq=19 tune=2 mode=10 device=7 audio=4 centre=41a1490c80000000 vfo=40c86a0000000000 tuned=41a1496e28000000 rate=413e848000000000 bw=40c1940000000000 sq=c04fc00000000000 vol=3fd7ae1480000000 sig=bff0000000000000 meter=bff0000000000000 demod=1 gains=0 name=[Signal generator]
+plugin gain 0 rc=-9 size=72 unit=0 name=[] min=0000000000000000 max=0000000000000000 step=0000000000000000 cur=0000000000000000
+plugin gain 1 rc=-9 size=72 unit=0 name=[] min=0000000000000000 max=0000000000000000 step=0000000000000000 cur=0000000000000000
+plugin rates n=0
+plugin rates-count-only n=0
+plugin ask rate rc=-3
+plugin ask gain-lna rc=-3
+plugin ask gain-high rc=-3
+plugin ask gain-nope rc=-3
+plugin ask agc rc=-3
+plugin ask volume rc=0
+plugin ask frequency rc=0
