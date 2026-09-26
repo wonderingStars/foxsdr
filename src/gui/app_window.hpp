@@ -1083,7 +1083,18 @@ private:
     void submitCommand(const FoxCommand& c);
     void submitCommand(cascade::core::cmd::QueuedCommand q);
     void drainLocalCommands();
-    std::vector<cascade::core::cmd::QueuedCommand> localCommands_;
+    // Each queued command carries the sourceGen_ it was asked under. A
+    // command addressed to THE RADIO (rate, gain, AGC, antenna, bias tee,
+    // device switch) whose radio has since been closed or replaced is
+    // dropped at the drain rather than landing on whatever is open now:
+    // every assignment of device_ bumps sourceGen_, so an unchanged
+    // generation means the very device the widget was drawn for
+    // (docs/engine-stage1.md, "queued device commands").
+    struct LocalCommand {
+        cascade::core::cmd::QueuedCommand q;
+        std::uint64_t sourceGen = 0;
+    };
+    std::vector<LocalCommand> localCommands_;
 
     // Helpers the commands call, each one the body a widget or a branch of
     // applyControlRequest used to hold inline (so both paths now share it).
@@ -2556,8 +2567,9 @@ private:
     // capture of that plugin at work.
     bool pressPresetByEnvDone_ = false;
     // The browser gets at most a few hundred bookmarks (favourites and the
-    // ones nearest the tuned frequency); this maps its row numbers back.
-    std::vector<std::size_t> webBookmarkIndex_;
+    // ones nearest the tuned frequency); this maps its row numbers to their
+    // Bookmark::ids as published (never to list indices, which move).
+    std::vector<std::uint64_t> webBookmarkIds_;
 
     // --- Scanner state (P6) -----------------------------------------------------
     // The Scanner itself is a pure state machine (core/scanner.hpp); these
