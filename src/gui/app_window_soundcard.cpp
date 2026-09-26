@@ -477,11 +477,12 @@ void AppWindow::drawSoundCardControls() {
             // centre at once: it is only a record of where the external
             // receiver is tuned, and the whole receiver follows it. A card
             // running in real mode keeps it for the next Open (see
-            // soundCardCentreAppliesLive).
+            // soundCardCentreAppliesLive) - APP_SOUNDCARD_IQ_CENTRE decides,
+            // when it is applied.
             if (cascade::gui::soundCardCentreAppliesLive(sourceKind_ == "soundcard", soundCardOpenPending_,
                                                          soundCardLive_.format)) {
-                soundCardLive_.iqCentreHz = soundCard_.iqCentreHz;
-                applyRetuneNow(soundCard_.iqCentreHz, false);
+                submitCommand(cascade::core::cmd::makeNum(FOXAPP_OP_SOUNDCARD_IQ_CENTRE,
+                                                          soundCard_.iqCentreHz));
             }
         }
     }
@@ -514,8 +515,9 @@ void AppWindow::drawSoundCardControls() {
     const bool canOpen = !soundCard_.device.empty() || at >= 0;
     ImGui::BeginDisabled(!canOpen);
     if (ImGui::Button(trId("Open##soundcard_open"))) {
-        sourceError_.clear();
-        launchSoundCardOpen(false, soundCard_);
+        // SELECT_SOURCE "soundcard:open": opens the card THIS FORM describes
+        // (its settings are not in the id yet - docs/engine-stage1.md, OPEN).
+        submitCommand(cascade::core::cmd::makeText(FOXAPI_OP_SELECT_SOURCE, "soundcard:open"));
     }
     ImGui::EndDisabled();
     ImGui::EndDisabled();

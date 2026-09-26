@@ -835,7 +835,9 @@ void AppWindow::drawPatchTransport() {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImVec2 at = ImGui::GetCursorScreenPos();
     const ImVec2 centre(at.x + kR * 1.1f, at.y + kR * 1.1f);
-    if (drawBenchStopButton(dl, centre, kR, patchRunning_)) { patchPressStart(); }
+    if (drawBenchStopButton(dl, centre, kR, patchRunning_)) {
+        submitCommand(cascade::core::cmd::makeInt(FOXAPI_OP_PATCH_RUN, patchRunning_ ? 0 : 1));
+    }
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip(
             "%s", patchRunning_
@@ -857,7 +859,7 @@ void AppWindow::drawPatchTransport() {
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, th::toneHex(0xE07A4E, 255, th::ink::StopBgTop));
     ImGui::PushStyleColor(ImGuiCol_Text, th::toneHex(0xEFE7D2, 255, th::ink::StopText));
     if (ImGui::Button(trId("ALL OFF###patchalloff"), ImVec2(150.0f, kR * 1.7f))) {
-        patchAllOff();
+        submitCommand(cascade::core::cmd::make(FOXAPI_OP_PATCH_ALL_OFF));
     }
     ImGui::PopStyleColor(4);
     if (ImGui::IsItemHovered()) {
@@ -1109,8 +1111,7 @@ void AppWindow::drawPatchRadioInspector(pc::Node& n) {
     // radio had to leave out, is one press away (2026-09-23).
     ImGui::BeginDisabled(soapyScanPending_);
     if (ImGui::SmallButton(trId("Look for radios"))) {
-        scanNative();
-        scanSoapy();
+        submitCommand(cascade::core::cmd::make(FOXAPI_OP_SCAN_DEVICES));
     }
     ImGui::EndDisabled();
     if (soapyScanPending_) {

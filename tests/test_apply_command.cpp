@@ -416,6 +416,12 @@ struct AppWindowTestAccess {
         a.soundCard_.hostApi = "Fake API";
         a.soundCard_.cardRateHz = 48000.0;
     }
+    static void setSoundCardFormIq(AppWindow& a) {
+        setSoundCardForm(a);
+        a.soundCard_.format = cascade::source::SoundCardFormat::IqStereo;
+        a.soundCard_.iqCentreHz = 7.0e6;
+    }
+    static double liveIqCentre(AppWindow& a) { return a.soundCardLive_.iqCentreHz; }
 
     // Bookmarks and scanner.
     static const std::vector<cascade::core::Bookmark>& bookmarks(AppWindow& a) { return a.freqMgr_.list(); }
@@ -982,6 +988,18 @@ void sourceOps(AppWindow& a) {
         CHECK(ok(A::apply(a, text(FOXAPI_OP_SELECT_SOURCE, "soundcard:open"))));
         CHECK(A::waitCard(a));
         CHECK(A::kind(a) == "soundcard");
+
+        covering(FOXAPP_OP_SOUNDCARD_IQ_CENTRE);
+        // A card running in REAL mode keeps a new centre for the next Open.
+        CHECK(refused(A::apply(a, num(FOXAPP_OP_SOUNDCARD_IQ_CENTRE, 7.1e6)), FOXAPI_NO_CHANGE));
+        // One running in I/Q mode takes it at once, and the receiver follows.
+        A::setSoundCardFormIq(a);
+        CHECK(ok(A::apply(a, text(FOXAPI_OP_SELECT_SOURCE, "soundcard:open"))));
+        CHECK(A::waitCard(a));
+        CHECK(A::kind(a) == "soundcard");
+        CHECK(ok(A::apply(a, num(FOXAPP_OP_SOUNDCARD_IQ_CENTRE, 7.1e6))));
+        CHECK(A::liveIqCentre(a) == 7.1e6);
+        CHECK(A::centre(a) == 7.1e6);
         // Back to a radio for the device ops below.
         CHECK(ok(A::apply(a, text(FOXAPI_OP_SELECT_SOURCE, "rtlsdr:serial=0001"))));
         CHECK(A::waitOpen(a));

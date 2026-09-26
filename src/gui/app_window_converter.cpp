@@ -382,6 +382,14 @@ void AppWindow::drawConverterControls() {
         mine.mode = cc::ConverterMode::Off;
     }
     const cc::ConverterSetting live = pipeline_.converter();
+    // Every change below is APP_SET_CONVERTER, applied at the top of the next
+    // frame by changeConverter (the air frequency stays, the radio follows).
+    const auto submitConverter = [this](const cc::ConverterSetting& s) {
+        FoxCommand c = cascade::core::cmd::makeInt(FOXAPP_OP_SET_CONVERTER, static_cast<std::int64_t>(s.mode),
+                                                   s.inverted ? 1 : 0);
+        c.num[0] = s.loHz;
+        submitCommand(c);
+    };
 
     ImGui::SeparatorText(tr("Converter"));
     // Not while a radio is being opened: the setting would land on whichever
@@ -404,7 +412,7 @@ void AppWindow::drawConverterControls() {
         if (next.mode != cc::ConverterMode::Off && !cc::converterLoValid(next.loHz)) {
             next.loHz = kDefaultLoHz;
         }
-        changeConverter(next);
+        submitConverter(next);
     }
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("%s",
@@ -454,7 +462,7 @@ void AppWindow::drawConverterControls() {
                 if (lo != mine.loHz) {
                     cc::ConverterSetting next = mine;
                     next.loHz = lo;
-                    changeConverter(next);
+                    submitConverter(next);
                 } else {
                     converterLoSeededFor_.clear();  // tidy the text back to its canonical form
                 }
@@ -474,7 +482,7 @@ void AppWindow::drawConverterControls() {
             if (ImGui::SmallButton(label.c_str()) && !on) {
                 cc::ConverterSetting next = mine;
                 next.loHz = kQuickLoHz[i];
-                changeConverter(next);
+                submitConverter(next);
             }
             if (on) { ImGui::PopStyleColor(); }
         }
@@ -484,7 +492,7 @@ void AppWindow::drawConverterControls() {
         if (ImGui::Checkbox(trId("Inverts the spectrum (LO above the signal)"), &inv)) {
             cc::ConverterSetting next = mine;
             next.inverted = inv;
-            changeConverter(next);
+            submitConverter(next);
         }
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip(

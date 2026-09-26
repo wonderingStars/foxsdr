@@ -104,11 +104,19 @@ void AppWindow::switchBiasTee(bool want) {
     if (!err.empty()) { sourceError_ = err; }
 }
 
+// THE KEY AND ITS QUESTION DECIDE; SET_BIAS_TEE SWITCHES. The gate (ask the
+// first time, never for off) is the key's own - a question put to the person
+// at the window - and what it decides to do is the command every other bias
+// tee control sends, applied at the top of the next frame.
 void AppWindow::biasKeyPressed() {
     switch (biasKeyPress(biasKeyGate_, biasKeyPanel(), biasKeyRadioNow())) {
         case BiasKeyAction::Nothing: break;
-        case BiasKeyAction::SwitchOff: switchBiasTee(false); break;
-        case BiasKeyAction::SwitchOn: switchBiasTee(true); break;
+        case BiasKeyAction::SwitchOff:
+            submitCommand(cascade::core::cmd::makeInt(FOXAPI_OP_SET_BIAS_TEE, 0));
+            break;
+        case BiasKeyAction::SwitchOn:
+            submitCommand(cascade::core::cmd::makeInt(FOXAPI_OP_SET_BIAS_TEE, 1));
+            break;
         case BiasKeyAction::Ask: biasKeyAskQueued_ = true; break;
     }
 }
@@ -120,7 +128,7 @@ void AppWindow::biasKeyAnswered(bool turnOn) {
     }
     if (biasKeyConfirm(biasKeyGate_, biasKeyPanel(), biasKeyRadioNow(),
                        biasKeyMayRememberNow())) {
-        switchBiasTee(true);
+        submitCommand(cascade::core::cmd::makeInt(FOXAPI_OP_SET_BIAS_TEE, 1));
     }
 }
 

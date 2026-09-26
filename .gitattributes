@@ -18,4 +18,9 @@
 # fail that check while the Linux build passed it.
 resources/lang/*.json text eol=lf
 
+# THE VENDORED ENGINE API HEADER IS BYTE-FOR-BYTE THE UPSTREAM FILE: its
+# SHA-256 is recorded in third_party/THIRD_PARTY.md and third_party/
+# foxsdr_api/README.md, and a CRLF checkout would make that record false.
+third_party/foxsdr_api/foxsdr_api.h text eol=lf
+
 # Everything else in the tree keeps git's default handling.

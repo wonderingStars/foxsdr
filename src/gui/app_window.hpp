@@ -1095,6 +1095,9 @@ private:
     void addBookmarkHere(const std::string& name);
     cascade::core::Scanner::Params scannerParams() const;
     bool selectSourceById(const std::string& id);
+    // The SELECT_SOURCE id of a row of the Source list (the inverse of
+    // selectSourceById for every row a click can name).
+    std::string sourceIdForRow(int row) const;
     // The plugins' spectrum and waterfall marks, over the panel at (x0, y0).
     void drawPluginMarkers(float x0, float y0, float width, float height, bool waterfall);
     // HOW MANY LOADED MODULES ARE DECODERS AT ALL - the denominator under the

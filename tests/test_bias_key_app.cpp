@@ -290,8 +290,16 @@ struct AppWindowTestAccess {
     static bool boxTicked(AppWindow& a) { return a.biasTeePanel_.shown; }
     // A press of the key, and the two answers - the members the deck and the
     // dialog call.
-    static void press(AppWindow& a) { a.biasKeyPressed(); }
-    static void answer(AppWindow& a, bool turnOn) { a.biasKeyAnswered(turnOn); }
+    // A press and an answer SUBMIT a command since engine stage 1; the frame
+    // drains it at the top of the next frame, and so does this.
+    static void press(AppWindow& a) {
+        a.biasKeyPressed();
+        a.drainLocalCommands();
+    }
+    static void answer(AppWindow& a, bool turnOn) {
+        a.biasKeyAnswered(turnOn);
+        a.drainLocalCommands();
+    }
     // The dialog is asked for (queued for the top level to open).
     static bool asking(AppWindow& a) { return a.biasKeyAskQueued_ && a.biasKeyGate_.asking; }
     // What the dialog would do if it were drawn now: the question still stands.

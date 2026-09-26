@@ -310,12 +310,11 @@ void AppWindow::drawLanguageSection() {
     } else if (pickedCountry != cascade::gui::kNoPick) {
         chosen = &all[pickedCountry];
         countrySetting_ = chosen->code;
-        // The same two lines the Region picker in Display runs, and after
-        // EndCombo for the same reason (list_pick.hpp): loadBandPlan()
-        // rebuilds bandPlanChoices_.
+        // The same command the Region picker in Display submits
+        // (SET_BAND_PLAN, applied at the top of the next frame): loadBandPlan()
+        // rebuilds bandPlanChoices_, so it must never run under a walk of it.
         if (bandPlanSelection_ != chosen->bandPlan) {
-            bandPlanSelection_ = chosen->bandPlan;
-            loadBandPlan();
+            submitCommand(cascade::core::cmd::makeText(FOXAPI_OP_SET_BAND_PLAN, chosen->bandPlan));
         }
     }
 
@@ -328,7 +327,10 @@ void AppWindow::drawLanguageSection() {
         std::string line;
         cascade::core::formatUtf8(line, tr("Band plan: %s"), planName.c_str());
         wrappedHint(line.c_str());
-        if (bandPlanSelection_ != chosen->bandPlan) {
+        // Not on the frame the country was picked: its plan is applied at the
+        // top of the next frame, and "set to a different band plan" would be
+        // a one-frame falsehood about the plan it has just asked for.
+        if (bandPlanSelection_ != chosen->bandPlan && pickedCountry == cascade::gui::kNoPick) {
             wrappedHint(tr("Display has since been set to a different band plan."));
         }
 
