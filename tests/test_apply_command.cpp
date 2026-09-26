@@ -1454,10 +1454,17 @@ void storeOps(AppWindow& a) {
 
     covering(FOXAPP_OP_STORE_REMOVE_BLOCKED);
     {
-        const std::filesystem::path aside = g_plugins / "blocked_stage1.dll.disabled";
+        // A module name in THIS platform's form: the sanitiser refuses any
+        // other ending (".dll" here is not a plugin on Linux).
+#if defined(_WIN32)
+        const std::string blocked = "blocked_stage1.dll";
+#else
+        const std::string blocked = "blocked_stage1.so";
+#endif
+        const std::filesystem::path aside = g_plugins / (blocked + ".disabled");
         { std::ofstream(aside, std::ios::binary) << "not a module"; }
         CHECK(std::filesystem::exists(aside));
-        CHECK(ok(A::apply(a, text(FOXAPP_OP_STORE_REMOVE_BLOCKED, "blocked_stage1.dll"))));
+        CHECK(ok(A::apply(a, text(FOXAPP_OP_STORE_REMOVE_BLOCKED, blocked))));
         CHECK(!std::filesystem::exists(aside));
     }
 
