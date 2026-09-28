@@ -1041,21 +1041,37 @@ int main() {
 
         // COERCED TO THE NEAREST, never refused: the hardware has a menu, so
         // there is no such thing as an unsupported-but-close rate to fail on,
-        // and the readback says what was actually programmed.
+        // and the readback says what was actually programmed. The nearest
+        // candidate is searched over every (native rate, decimation) pair,
+        // not just decimation 1 - so 4 MS/s lands on 5 MS/s (10 MS/s native
+        // under decimation 2, gap 1 MHz) rather than the 2.5 MS/s native rate
+        // (gap 1.5 MHz), because decimation 2 is itself a whole-hertz choice
+        // this radio offers and 5 MS/s is genuinely the closer, AT-OR-ABOVE
+        // candidate. This wire transfer still programs the 10 MS/s NATIVE
+        // rate (index 0) - decimation is this end's arithmetic and sends
+        // nothing to the radio.
         fake->clearControls();
         CHECK(src.setSampleRateHz(4.0e6));
-        CHECK_NEAR(src.sampleRateHz(), 2.5e6, 0.5);
+        CHECK_NEAR(src.sampleRateHz(), 5.0e6, 0.5);
+        CHECK(src.decimation() == 2);
         {
             const std::vector<AirspyControlRecord> c = fake->controls();
             CHECK(c.size() == 1);
-            CHECK(isControl("4 MS/s coerced to 2.5", at(c, 0), true, 12, 0, 1));
+            CHECK(isControl("4 MS/s -> 10 MS/s native /2", at(c, 0), true, 12, 0, 0));
         }
+        CHECK(src.setDecimation(1));  // back to no decimation for the rest of this test
         fake->clearControls();
         CHECK(src.setSampleRateHz(40.0e6));
         CHECK_NEAR(src.sampleRateHz(), 10.0e6, 0.5);
         fake->clearControls();
+        // Nothing this radio offers, at any decimation, reaches 1 kHz, so no
+        // AT-OR-ABOVE candidate exists and the nearest BELOW wins: the
+        // smallest deliverable rate, 2.5 MS/s native under decimation 32
+        // (78125 Hz) - closer to 1 kHz than the undecimated 2.5 MS/s is.
         CHECK(src.setSampleRateHz(1.0e3));
-        CHECK_NEAR(src.sampleRateHz(), 2.5e6, 0.5);
+        CHECK_NEAR(src.sampleRateHz(), 78125.0, 0.5);
+        CHECK(src.decimation() == 32);
+        CHECK(src.setDecimation(1));  // back to no decimation for the rest of this test
         // A nonsense rate is refused without a transfer.
         fake->clearControls();
         CHECK(!src.setSampleRateHz(0.0));
@@ -2284,6 +2300,47 @@ int main() {
             src.stop();
             src.closeDevice();
         }
+    }
+
+    // =====================================================================
+    // 9. A RAISED DECIMATION MUST NOT TRAP A LATER RATE REQUEST BELOW WHAT
+    //    THE RADIO CAN ACTUALLY DELIVER (a beta report: ADS-B decodes
+    //    nothing on an Airspy once decimation has been raised). setSampleRateHz
+    //    used to search only {nativeRate / the CURRENT decimation} for the
+    //    nearest match, so raising decimation to 8 on an R2 and then asking
+    //    for the ADS-B preset's 2.4 MS/s landed on 1.25 MS/s (10 MS/s / 8) -
+    //    below the decoder's 2 MS/s floor - because 2.5 MS/s (only reachable
+    //    at decimation 1) was never a candidate. The fix searches every
+    //    (native rate, decimation) pair for the nearest one, preferring one
+    //    AT OR ABOVE the request when such a pair exists, and adjusts the
+    //    remembered/published decimation to match.
+    // =====================================================================
+    {
+        AirspySource r2;
+        attachFake(r2);  // the fake answers an R2's 10 and 2.5 MS/s
+        CHECK(r2.open(""));
+        CHECK(r2.setDecimation(8));
+        CHECK(r2.decimation() == 8);
+        CHECK_NEAR(r2.sampleRateHz(), 1.25e6, 0.5);  // 10 MS/s / 8, decimation's own doing
+
+        CHECK(r2.setSampleRateHz(2.4e6));
+        CHECK_NEAR(r2.sampleRateHz(), 2.5e6, 0.5);
+        CHECK(r2.decimation() == 1);
+        r2.closeDevice();
+    }
+    {
+        AirspySource mini;
+        FakeAirspyUsb* fake = attachFake(mini);
+        fake->sampleRates = {6000000u, 3000000u};
+        CHECK(mini.open(""));
+        CHECK(mini.setDecimation(8));
+        CHECK(mini.decimation() == 8);
+        CHECK_NEAR(mini.sampleRateHz(), 750000.0, 0.5);  // 6 MS/s / 8
+
+        CHECK(mini.setSampleRateHz(2.4e6));
+        CHECK_NEAR(mini.sampleRateHz(), 3.0e6, 0.5);
+        CHECK(mini.decimation() == 1);
+        mini.closeDevice();
     }
 
     return testSummary("test_airspy_source");

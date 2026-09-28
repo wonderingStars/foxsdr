@@ -262,7 +262,9 @@ int main() {
             CHECK(Access::chainRate(app) == 1.25e6);
             CHECK(Access::sourceError(app).empty());
         }
-        // The worker path: the list pick asks for the rate the chain runs at.
+        // The worker path: the list pick asks for the rate the chain runs at
+        // (the generic 2 MS/s every device open asks for - app_window.cpp's
+        // kSoapyRateHz[kSoapyRateDefaultIndex]).
         Access::selectGenerator(app);
         CHECK(Access::selectAirspy(app));
         a = Access::radio(app);
@@ -271,14 +273,22 @@ int main() {
             std::printf("  list pick: radio %.0f /%u, chain %.0f, error \"%s\"\n",
                         a->hardwareSampleRateHz(), a->decimation(), Access::chainRate(app),
                         Access::sourceError(app).c_str());
-            CHECK(a->decimation() == 8);
+            // 0.99.44: setSampleRateHz no longer stays trapped inside whatever
+            // decimation the radio was remembered at - it searches every
+            // (native rate, decimation) pair for the nearest one (the fix for
+            // ADS-B decoding nothing on an Airspy once decimation had been
+            // raised, source/airspy_source.cpp). /8's own ceiling here is
+            // 1.25 MS/s, a long way below the 2 MS/s asked; 2.5 MS/s at
+            // decimation 1 is closer, so decimation drops to 1 to reach it -
+            // exactly the escape this radio's own ADS-B preset needs, reached
+            // here through the generic default-rate-on-open path instead of a
+            // plugin preset. Before 0.99.44 this landed on the undecimated
+            // 1.25 MS/s and stayed on /8; the SAVED memory (asserted above,
+            // still /8) is untouched by this - only the live radio adjusts.
+            CHECK(a->decimation() == 1);
             CHECK(Access::chainRate(app) == a->sampleRateHz());
-            // The pick asks for the generator's 2 MS/s, which no Airspy rate
-            // is, so a coercion line is right - but it must name a DECIMATED
-            // rate (1.25), proving /8 was on the radio before the request.
-            // Before the fix it named the undecimated 2.5.
-            CHECK(Access::sourceError(app).find("2.5 MS/s") == std::string::npos);
-            CHECK(Access::sourceError(app).find("1.25 MS/s") != std::string::npos);
+            CHECK(Access::sourceError(app).find("2.5 MS/s") != std::string::npos);
+            CHECK(Access::sourceError(app).find("1.25 MS/s") == std::string::npos);
         }
     }
 
