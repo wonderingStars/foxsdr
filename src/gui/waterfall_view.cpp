@@ -480,7 +480,7 @@ float drawTimeStrip(ImDrawList* dl, const ImVec2& tl, float w, float h, double n
     // one. It was the literal 48, and 48 is exactly four lines of the 12 px
     // this strip was laid out at; written this way it travels with the type
     // instead of quietly becoming three lines the next time the type grows.
-    if (stripH < fonts::kTinySize * 4.0f) {
+    if (stripH < fonts::tinyPx() * 4.0f) {
         return 0.0f;
     }
     // How many labels the strip has ROOM for, not a fixed number: the panel
@@ -489,7 +489,7 @@ float drawTimeStrip(ImDrawList* dl, const ImVec2& tl, float w, float h, double n
     // (the literal was 38 px, which is that rule at 12 px lettering); a fixed
     // count either crowds the short panel or leaves the tall one with two
     // lonely figures.
-    const float perLabel = fonts::kTinySize * 3.0f + 2.0f;
+    const float perLabel = fonts::tinyPx() * 3.0f + 2.0f;
     const int maxLabels = std::max(2, std::min(8, static_cast<int>(stripH / perLabel)));
     const double step = WaterfallView::timeLabelStep(ages.span, maxLabels);
     const TimeTicks ticks = timeTicks(ages.newest, ages.oldest, step);
@@ -499,7 +499,7 @@ float drawTimeStrip(ImDrawList* dl, const ImVec2& tl, float w, float h, double n
 
     ImFont* lf = fonts::ui();
     ImFont* cf = fonts::legend();
-    const float px = fonts::kTinySize;
+    const float px = fonts::tinyPx();
     // THE FIGURES TAKE THE FULL PHOSPHOR, the heading keeps the dim one.
     // theme.hpp's rule, applied to this gutter: "AGO" is a caption at rest and
     // may be engraved into its plate, but "2m30" is a reading, and every one
@@ -672,7 +672,7 @@ float drawStrengthKey(ImDrawList* dl, const ImVec2& tl, float w, float h, float 
     ImFont* uf = fonts::ui();
     ImFont* cf = fonts::legend();
     ImFont* nf = fonts::reading();
-    const float px = fonts::kTinySize;
+    const float px = fonts::tinyPx();
 
     const char* title = tr("STRENGTH KEY - dB");
     const char* pairCap = tr("FLOOR / CEILING");
@@ -828,7 +828,7 @@ float drawStrengthKey(ImDrawList* dl, const ImVec2& tl, float w, float h, float 
 // part of that axis.
 void drawRangeBoundary(ImDrawList* dl, float x0, float x1, float y) {
     ImFont* cf = fonts::legend();
-    const float px = fonts::kTinySize;
+    const float px = fonts::tinyPx();
     const char* cap = tr("RANGE CHANGED");
     const float tw = textWidth(cf, px, cap);
     addBenchRail(dl, x0, x1, y);
@@ -897,8 +897,8 @@ void drawFootLines(ImDrawList* dl, const ImVec2& tl, float w, float h, float lef
     }
 
     ImFont* sf = fonts::ui();
-    const float spx = fonts::kTinySize;
-    const float dpx = fonts::kLegendSize;
+    const float spx = fonts::tinyPx();
+    const float dpx = fonts::legendPx();
     const float sw = textWidth(sf, spx, scrollText.c_str());
     const float dw = haveDecode ? textWidth(sf, dpx, decoding) : 0.0f;
 

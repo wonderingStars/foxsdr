@@ -1078,7 +1078,7 @@ float moduleKindTagWidth() {
         FOX_TR_NOOP("MAP"),       FOX_TR_NOOP("PANEL"),        FOX_TR_NOOP("CONTROL"),
         FOX_TR_NOOP("MODULE")};
     ImFont* f = fonts::ui();
-    const float px = fonts::kTinySize;
+    const float px = fonts::tinyPx();
     float w = 0.0f;
     for (const char* t : kTags) { w = std::max(w, textW(f, px, tr(t))); }
     // The floor is the width the store's card used before this was measured,
@@ -1230,7 +1230,7 @@ const char* storeSortLabel(int index) {
 // the raise cannot move the rail, the spectrum axis or a meter face - the
 // exact sweep raising kUiSize cost in 0.79.0 and gave back in 0.84.0. Nothing
 // here invents a figure.
-float storeProsePx() { return fonts::kPanelSize; }
+float storeProsePx() { return fonts::panelPx(); }
 
 // See the header. The six SHOW labels, the widest measured at `labelPx`, and
 // the switch, the plate's padding and a three-figure count around it -
@@ -2404,7 +2404,7 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
                 {
                     const ImVec2 tTL(cTL.x + kCardPad, cTL.y + kCardPad);
                     const ImVec2 tBR(tTL.x + kTagW,
-                                     tTL.y + faceH(uf, fonts::kTinySize) + 6.0f);
+                                     tTL.y + faceH(uf, fonts::tinyPx()) + 6.0f);
                     cdl->AddRectFilled(tTL, tBR, theme::kBrassBright, 1.0f);
                     addBenchBevel(cdl, tTL, tBR, 1.0f, true);
                     const char* tag = moduleKindTag(p);
@@ -2413,9 +2413,9 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
                     // window: one chip drawn two sizes in two windows is exactly
                     // the inconsistency that function was written to end. It is
                     // a category label on metal, not a sentence.
-                    cdl->AddText(uf, fonts::kTinySize,
+                    cdl->AddText(uf, fonts::tinyPx(),
                                  ImVec2((tTL.x + tBR.x) * 0.5f -
-                                            textW(uf, fonts::kTinySize, tag) * 0.5f,
+                                            textW(uf, fonts::tinyPx(), tag) * 0.5f,
                                         tTL.y + 3.0f),
                                  theme::kEnamel, tag);
                 }

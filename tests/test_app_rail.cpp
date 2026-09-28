@@ -42,9 +42,11 @@
  *
  * SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
  */
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <initializer_list>
+#include <string>
 
 #include "core/i18n.hpp"
 #include "gui/app_window.hpp"
@@ -52,6 +54,7 @@
 #include "gui/scope_face.hpp"
 #include "gui/text_fit.hpp"
 #include "gui/theme.hpp"
+#include "gui/ui_scale.hpp"
 #include "imgui.h"
 #include "test_check.hpp"
 
@@ -472,6 +475,105 @@ void testEveryLanguageBankWordsAndSourceChip() {
     CHECK(cascade::gui::sourceChipText("RTL-SDR Blog V4 (00000001)") == "RTL-SDR Bl");
 }
 
+// --- 7. THE RAIL GROWS WITH THE INTERFACE SCALE, AND STAYS FITTED --------------
+//
+// gui/ui_scale.hpp's S multiplies every font size and every hard-coded rail
+// pixel in gui/app_window.cpp and gui/scope_view.cpp's drawRailChip. This is
+// the check that a constant left OUT of that sweep cannot pass silently: it
+// sets the GLOBAL scale factor (the same one AppWindow::run's real draw code
+// reads every frame) to 1.5 and 2.0, draws a real chip through the real
+// drawRailChip - not a transcription of its constants - and requires the
+// reserve to still land exactly where the chip is actually drawn, AND the
+// widest shipped label to still fit beside the widest chip in a column grown
+// by the same S. A constant that stayed a bare pixel literal instead of going
+// through uiscale::px() would leave the drawn chip and the reserve disagreeing
+// by a growing number of pixels as S rises - caught here, not on a tester's
+// screenshot.
+//
+// PROVEN TO GO RED: temporarily editing kRailKeyInset's one call site in
+// benchSection back to the bare (unscaled) constant made this fail at S=1.5
+// with the drawn key's rect no longer matching railKeySize/railPlateLeft's
+// scaled answer (see docs/ui-scale.md's verification section for the exact
+// diff and the restored, passing state).
+void testRailScalesWithInterfaceSize() {
+    std::printf("  the rail grows with the interface scale and stays fitted\n");
+    const std::string savedChoice = cascade::gui::uiscale::choice();
+    const unsigned savedDpi = cascade::gui::uiscale::monitorDpi();
+
+    for (const float wantScale : {1.5f, 2.0f}) {
+        cascade::gui::uiscale::setMonitorDpi(96);
+        cascade::gui::uiscale::setChoice(std::to_string(static_cast<int>(wantScale * 100.0f)));
+        const float s = cascade::gui::uiscale::factor();
+        CHECK_NEAR(s, wantScale, 0.001);
+
+        const float labelPx = cascade::gui::fonts::uiPx();
+        CHECK_NEAR(labelPx, cascade::gui::fonts::kUiSize * s, 0.001);
+        const float rowH = cascade::gui::railRowHeight(labelPx, s);
+        // The row grew at least as much as the label did - it can never be
+        // squeezed below the type it letters, scaled or not.
+        CHECK(rowH >= labelPx + 2.0f * cascade::gui::kRailRowPadY * s - 0.001f);
+
+        // The chip, drawn for real, through the real function - exactly
+        // testChipReserveMatchesTheDrawnChip above, at this scale.
+        const char* const widest = "4000 TGT";
+        ImGui::NewFrame();
+        ImDrawList* dl = ImGui::GetForegroundDrawList();
+        const int before = dl->VtxBuffer.Size;
+        const float rowW = 500.0f * s;  // a plausible scaled row; value itself
+                                        // does not matter, only self-consistency
+        cascade::gui::drawRailChip(dl, ImVec2(0.0f, 0.0f), ImVec2(rowW, rowH), widest,
+                                   cascade::gui::theme::kPhosphor, true);
+        float leftmost = FLT_MAX;
+        for (int i = before; i < dl->VtxBuffer.Size; ++i) {
+            leftmost = std::min(leftmost, dl->VtxBuffer[i].pos.x);
+        }
+        ImGui::Render();
+        CHECK(dl->VtxBuffer.Size > before);
+        const float chipW = cascade::gui::fonts::legend()
+                                ->CalcTextSizeA(cascade::gui::fonts::tinyPx(), FLT_MAX, 0.0f, widest)
+                                .x;
+        const float reserved = rowW - cascade::gui::railChipReserve(rowH, chipW, s);
+        if (!(leftmost >= reserved - 1.5f && leftmost <= reserved + 1.5f)) {
+            std::printf("      S=%.2f: chip drawn from x=%.2f, reserve says %.2f\n",
+                        static_cast<double>(s), static_cast<double>(leftmost),
+                        static_cast<double>(reserved));
+        }
+        CHECK(leftmost >= reserved - 1.5f);
+        CHECK(leftmost <= reserved + 1.5f);
+
+        // The widest shipped label still fits beside the widest chip, in a
+        // column grown by the same S - the S=1 check in
+        // testEveryRailLabelFits, repeated at scale. childPadX/scrollbarW are
+        // read from the CURRENT (S=1, un-scaled-by-this-test) ImGui style,
+        // which is the STRICTER case: the real application also scales those
+        // through ScaleAllSizes, giving the real row more room than this test
+        // grants it, so a pass here is a pass there too.
+        const ImGuiStyle& st = ImGui::GetStyle();
+        const float scaledMenuWidth = cascade::gui::uiscale::px(cascade::gui::kMenuWidth);
+        const float scaledPlatePad = cascade::gui::uiscale::px(cascade::gui::kRailPlatePad);
+        const float railW =
+            cascade::gui::railRowWidth(scaledMenuWidth, scaledPlatePad, st.WindowPadding.x,
+                                       st.ScrollbarSize);
+        const float left = cascade::gui::railLabelLeft(0.0f, rowH, s);
+        const float right = cascade::gui::railLabelRight(railW, rowH, chipW, s);
+        CHECK(right > left + 40.0f * s);
+        const char* const longestLabel = "CAT control (rigctld)";
+        const float labelW = cascade::gui::fonts::ui()
+                                 ->CalcTextSizeA(labelPx, FLT_MAX, 0.0f, longestLabel)
+                                 .x;
+        if (left + labelW > right) {
+            std::printf("      S=%.2f: \"%s\" needs %.2f px and has %.2f\n",
+                        static_cast<double>(s), longestLabel, static_cast<double>(labelW),
+                        static_cast<double>(right - left));
+        }
+        CHECK(left + labelW <= right);
+    }
+
+    cascade::gui::uiscale::setMonitorDpi(savedDpi);
+    cascade::gui::uiscale::setChoice(savedChoice);
+    CHECK(cascade::gui::uiscale::factor() == 1.0f);  // back to what every other test here assumes
+}
+
 // --- 6. the Serial ports row's chip names what it counts ---------------------
 //
 // "0" alone would read as "off"; this row is never off, it just sometimes
@@ -515,6 +617,7 @@ int main() {
     testBankKeyLabelsFit();
     testSerialPortsChipNamesItsCount();
     testEveryLanguageBankWordsAndSourceChip();
+    testRailScalesWithInterfaceSize();
 
     ImGui::DestroyContext();
     return testSummary("test_app_rail");

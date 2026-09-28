@@ -16,6 +16,7 @@
 #include "gui/basemap_cache.hpp"
 #include "gui/coastline_data.hpp"
 #include "gui/fonts.hpp"
+#include "gui/ui_scale.hpp"
 #include "gui/text_fit.hpp"
 #include "gui/theme.hpp"
 #include "gui/track_info_cache.hpp"
@@ -1848,12 +1849,18 @@ void drawRailChip(ImDrawList* dl, const ImVec2& headerMin, const ImVec2& headerM
     if (dl == nullptr) { return; }
     const float h = headerMax.y - headerMin.y;
     const float cy = (headerMin.y + headerMax.y) * 0.5f;
+    // `h` already carries the interface-scale factor (a real call site's
+    // header height comes from railRowHeight(labelPx, scale)), so the share
+    // of it below scales for free; the FIXED pixels beside it - the floor on
+    // the radius, and the two edge gaps - are routed through px() so they do
+    // not stay a few fixed pixels beside increasingly large plates.
+    const float s = cascade::gui::uiscale::factor();
 
     // The lamp sits hard against the right edge of the plate, and the chip
     // just inboard of it - so a glance down the rail reads as a column of
     // states rather than as a list of names.
-    const float lampR = std::max(3.0f, h * 0.20f);
-    const ImVec2 lampC(headerMax.x - lampR - 6.0f, cy);
+    const float lampR = std::max(cascade::gui::uiscale::px(3.0f), h * 0.20f);
+    const ImVec2 lampC(headerMax.x - lampR - cascade::gui::uiscale::px(6.0f), cy);
     drawBenchLamp(dl, lampC, lampR, lampColour, lampLit, nullptr);
 
     if (chipText != nullptr && chipText[0] != '\0') {
@@ -1861,19 +1868,23 @@ void drawRailChip(ImDrawList* dl, const ImVec2& headerMin, const ImVec2& headerM
         // the semibold engraving face, not the monospaced one. MUTED in Nova
         // Mono at this size renders its M as a solid block; see fonts.hpp.
         ImFont* cf = cascade::gui::fonts::legend();
-        const float cpx = cascade::gui::fonts::kTinySize;
+        const float cpx = cascade::gui::fonts::tinyPx();
         const ImVec2 ts = cf->CalcTextSizeA(cpx, FLT_MAX, 0.0f, chipText);
-        const float padX = 5.0f;
-        const ImVec2 cBR(lampC.x - lampR - 7.0f, cy + ts.y * 0.5f + 2.0f);
-        const ImVec2 cTL(cBR.x - ts.x - padX * 2.0f, cy - ts.y * 0.5f - 2.0f);
+        const float padX = cascade::gui::uiscale::px(5.0f);
+        const ImVec2 cBR(lampC.x - lampR - cascade::gui::uiscale::px(7.0f), cy + ts.y * 0.5f + 2.0f * s);
+        const ImVec2 cTL(cBR.x - ts.x - padX * 2.0f, cy - ts.y * 0.5f - 2.0f * s);
         // ROOM LEFT FOR THE ROW'S OWN NAME, which the caller letters along the
         // same plate in the face it has bound. The 60 px this was written as
         // was measured against a sixteen-pixel UI face; held as a literal it
         // would let the chip creep back over the name every time the type went
         // up, and a chip painted over the word SIGNAL PATH is worse than a
-        // section with no chip. Expressed against the bound face it keeps the
-        // proportion it was drawn at whatever that face becomes.
-        const float nameRoom = ImGui::GetFontSize() * 3.75f;
+        // section with no chip. Measured against fonts::uiPx() rather than
+        // ImGui::GetFontSize() - drawRailChip runs after the row's own
+        // PushFont/PopFont pair, so the CURRENT font by the time this runs is
+        // whatever the caller left bound, not necessarily the row's label
+        // face at its scaled size - and the ratio is what keeps the proportion
+        // at whatever size that face is drawn at, base or scaled alike.
+        const float nameRoom = cascade::gui::fonts::uiPx() * 3.75f;
         if (cTL.x > headerMin.x + nameRoom) {
             // A chip is a READING about that section, so it goes on glass in
             // amber rather than being engraved into the plate. In foxsdr-ui/1

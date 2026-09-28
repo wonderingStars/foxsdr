@@ -103,7 +103,17 @@ public:
     //
     // Null pointers, cap <= 0, non-positive/non-finite widthPx, or an inert
     // scale return 0.
-    int ticks(double widthPx, double* tickHz, char (*labels)[16], int cap) const;
+    //
+    // `labelScale` is the interface-scale factor (gui/ui_scale.hpp), defaulted
+    // to 1.0 so every existing caller - including every test that pins this
+    // against the type sizes fonts.hpp currently declares - is unchanged. A
+    // real call site (app_window.cpp's drawChrome) passes the LIVE factor: the
+    // axis label is drawn at fonts::tinyPx(), which grows with the same
+    // number, and the tick pitch has to grow with it or a scaled-up axis
+    // starts overprinting its own labels (see kMinTickSpacingPx's own history
+    // of chasing three earlier font-size raises in freq_scale.cpp).
+    int ticks(double widthPx, double* tickHz, char (*labels)[16], int cap,
+             double labelScale = 1.0) const;
 
 private:
     double fullLow_ = 0.0;   // center - rate/2

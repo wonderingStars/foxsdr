@@ -111,6 +111,28 @@ inline constexpr float kTinySize = 14.0f;     // the smallest engraving that
 // five releases - so it is a proven size on Georgia rather than a guess.
 inline constexpr float kPanelSize = 21.0f;
 
+// --- scaled sizes, for the interface-scale factor (gui/ui_scale.hpp) --------
+//
+// THE FOUR CONSTANTS ABOVE, AND kPanelSize, ARE THE BASE (S=1) SIZES and stay
+// exactly as they are — every test that pins a rail, an axis or a card
+// against them keeps proving what it always proved. These five functions are
+// what a REAL draw call site asks for instead: the base size times the live
+// interface-scale factor, which is bit-exact 1.0f on a 96 dpi monitor with no
+// user override, so a call site that switches from fonts::kUiSize to
+// fonts::uiPx() changes nothing at S=1 and grows crisply (a genuine
+// re-rasterisation, not a blur — ImGui 1.92 draws a loaded face at any
+// requested size for no atlas cost) at any other S.
+//
+// A test file measuring the PRODUCT's fixed layout keeps using the k*Size
+// constants directly, deliberately: it is pinning the S=1 case, or building
+// its own explicit S for a scale-parameterised variant (tests/test_app_rail.cpp,
+// tests/test_spectrum_waterfall_type.cpp).
+float uiPx();
+float legendPx();
+float readingPx();
+float tinyPx();
+float panelPx();
+
 // --- the faces ---------------------------------------------------------------
 //
 // NONE OF THESE EVER RETURNS NULL. Before load() has run, or after it failed,

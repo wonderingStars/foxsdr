@@ -22,6 +22,7 @@
 #include "core/i18n.hpp"
 #include "core/utf8_text.hpp"
 #include "gui/theme.hpp"
+#include "gui/ui_scale.hpp"
 
 namespace cascade::gui::patch {
 using cascade::i18n::tr;
@@ -243,8 +244,13 @@ void drawPatchCanvas(Graph& g, Interaction& ui, const core::patch::Plan& plan,
                         2.0f * ui.view.zoom);
         }
 
-        // The caption, engraved into the brass.
-        const float cap = 11.0f * v.zoom;
+        // The caption, engraved into the brass. The 11.0f base grows with the
+        // interface-scale factor (gui/ui_scale.hpp) the same way every other
+        // caption in the application does; v.zoom is this CANVAS's own,
+        // separate, mouse-wheel zoom, and the two multiply together rather
+        // than one replacing the other - a user can have a small interface
+        // and a zoomed-in patch, or the reverse.
+        const float cap = 11.0f * cascade::gui::uiscale::factor() * v.zoom;
         if (cap >= 5.0f) {
             char title[96];
             cascade::core::formatUtf8(title, sizeof(title), "%s  %s", kindCaption(n.kind), n.name.c_str());
@@ -299,7 +305,7 @@ void drawPatchCanvas(Graph& g, Interaction& ui, const core::patch::Plan& plan,
             // that a caption may be engraved and a live figure may not.
             for (const NodeReading& r : readings) {
                 if (r.node != n.id) { continue; }
-                const float fs = 13.0f * v.zoom;
+                const float fs = 13.0f * cascade::gui::uiscale::factor() * v.zoom;
                 if (fs < 6.0f) { break; }
                 const ImVec2 at{wa.x + 5.0f * v.zoom, wa.y + 3.0f * v.zoom};
                 if (r.hasDb) {

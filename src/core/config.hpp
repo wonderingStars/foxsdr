@@ -341,6 +341,17 @@ struct AppConfig {
     bool counterSwitches = true;
     float readingsScale = 1.0f;
 
+    // --- the interface SIZE (2026-09-28, gui/ui_scale.hpp) -------------------
+    // "auto" (the default: follows the monitor's own Windows/X11/Wayland
+    // display scaling, continuously) or one of "100"/"125"/"150"/"175"/"200"/
+    // "250" - a fixed percent, chosen in Display or by Ctrl+=/Ctrl+-/Ctrl+0,
+    // that overrides what the monitor reports. A tester on a 4K panel: "the
+    // fonts are too small, I tried other settings in the View tab but
+    // couldn't make it bigger" - this is that setting. Unknown text (an older
+    // build's value, a hand edit) loads as "auto" on the tunerDisplayStyle
+    // rule, never as a refusal to start.
+    std::string interfaceScale = "auto";
+
     // --- Language and country (core/i18n.hpp, core/countries.hpp) -----------
     // The interface language as the user chose it: "auto" follows the
     // operating system's language when the build carries a catalogue for it,

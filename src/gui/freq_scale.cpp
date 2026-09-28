@@ -164,14 +164,17 @@ void FreqScale::visibleBinRange(int fftSize, double& firstBin, double& lastBin) 
     lastBin = (viewHigh_ - fullLow_) * binsPerHz;
 }
 
-int FreqScale::ticks(double widthPx, double* tickHz, char (*labels)[16], int cap) const {
+int FreqScale::ticks(double widthPx, double* tickHz, char (*labels)[16], int cap,
+                     double labelScale) const {
     if (tickHz == nullptr || labels == nullptr || cap <= 0) { return 0; }
     if (!std::isfinite(widthPx) || !(widthPx > 0.0)) { return 0; }
     const double span = viewHigh_ - viewLow_;
     if (!(span > 0.0)) { return 0; }
+    if (!std::isfinite(labelScale) || !(labelScale > 0.0)) { labelScale = 1.0; }
 
     int stepExp = 0;
-    const double step = niceStepAtLeast(span * kMinTickSpacingPx / widthPx, stepExp);
+    const double step =
+        niceStepAtLeast(span * kMinTickSpacingPx * labelScale / widthPx, stepExp);
 
     // First/last step multiples inside the view. ceil/floor decide from a
     // rounded quotient, so re-check against the actual products — a tick one

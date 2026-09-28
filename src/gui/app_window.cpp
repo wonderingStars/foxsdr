@@ -68,6 +68,7 @@
 #include "gui/demod_scope_face.hpp"
 #include "dsp/window.hpp"
 #include "gui/fonts.hpp"
+#include "gui/ui_scale.hpp"
 #include "gui/text_fit.hpp"
 #include "gui/theme.hpp"
 #include "gui/ui_census.hpp"
@@ -636,6 +637,9 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            // itself, so the debounce must see them.
            a.uiTheme == b.uiTheme && a.counterScale == b.counterScale &&
            a.counterSwitches == b.counterSwitches && a.readingsScale == b.readingsScale &&
+           // The interface size: changed by the Display combo or Ctrl+=/-/0,
+           // neither of which saves anything itself either.
+           a.interfaceScale == b.interfaceScale &&
            a.mapTrails == b.mapTrails &&
            a.mapTrailAltitudeColours == b.mapTrailAltitudeColours &&
            a.mapTrailStyle == b.mapTrailStyle &&
@@ -1208,9 +1212,36 @@ int AppWindow::run(int frames) {
         glfwTerminate();
         return 1;
     }
+    // THE INTERFACE SCALE'S "auto": the monitor this window is about to open
+    // on, read BEFORE anything below is sized against it - GLFW already
+    // knows a hidden window's target monitor content scale. FOXSDR_UI_SCALE
+    // (a capture/test seam, like FOXSDR_WINDOW_SIZE below) overrides the SAVED
+    // "Interface size" setting for this run only, so a screenshot sweep can
+    // ask for 100/150/200 without touching the Display section. The live
+    // value then follows the window between monitors via the content-scale
+    // callback (gui/ui_scale.hpp; a 96 dpi monitor is exactly S=1, unchanged
+    // from every release before this one).
+    {
+        float xscale = 1.0f, yscale = 1.0f;
+        glfwGetWindowContentScale(window, &xscale, &yscale);
+        cascade::gui::uiscale::setMonitorDpi(
+            static_cast<unsigned>(std::lround(96.0 * static_cast<double>(xscale))));
+        if (const char* envScale = std::getenv("FOXSDR_UI_SCALE");
+            envScale != nullptr && envScale[0] != '\0') {
+            cascade::gui::uiscale::setChoice(envScale);
+        } else {
+            cascade::gui::uiscale::setChoice(interfaceScale_);
+        }
+        glfwSetWindowContentScaleCallback(window, [](GLFWwindow*, float xs, float) {
+            cascade::gui::uiscale::setMonitorDpi(
+                static_cast<unsigned>(std::lround(96.0 * static_cast<double>(xs))));
+        });
+    }
     // A FLOOR ON THE WIDTH, because the top bar has one and could not keep it
     // alone: narrower than this and the volume dial is drawn outside the bar's
-    // own child and clipped away, leaving no volume control at all.
+    // own child and clipped away, leaving no volume control at all. Scaled by
+    // the interface factor just resolved above, so a bigger bench still fits
+    // its own minimum window (docs/ui-scale.md, "Window minimum sizes").
     //
     // BOTH MINIMA HAVE TO BE GIVEN OR NEITHER IS APPLIED. GLFW's Win32 backend
     // fills ptMinTrackSize only when minwidth AND minheight are both set
@@ -1220,14 +1251,17 @@ int AppWindow::run(int frames) {
     // height chosen is the modest one that keeps the bar and the head of the
     // rail on screen together; nothing on this face disappears below it, it
     // only gets less room to scroll in.
-    glfwSetWindowSizeLimits(window, kMinWindowW, kMinWindowH, GLFW_DONT_CARE,
-                            GLFW_DONT_CARE);
+    const int scaledMinW =
+        static_cast<int>(cascade::gui::uiscale::px(static_cast<float>(kMinWindowW)));
+    const int scaledMinH =
+        static_cast<int>(cascade::gui::uiscale::px(static_cast<float>(kMinWindowH)));
+    glfwSetWindowSizeLimits(window, scaledMinW, scaledMinH, GLFW_DONT_CARE, GLFW_DONT_CARE);
     // FOXSDR_WINDOW_SIZE="1920x1080" (captures): the window at an exact size,
     // so a picture taken for the Store or the website is the size they need
     // rather than a small one scaled up.
     if (const char* ws = std::getenv("FOXSDR_WINDOW_SIZE"); ws != nullptr && *ws != '\0') {
         int w = 0, h = 0;
-        if (std::sscanf(ws, "%dx%d", &w, &h) == 2 && w >= kMinWindowW && h >= kMinWindowH) {
+        if (std::sscanf(ws, "%dx%d", &w, &h) == 2 && w >= scaledMinW && h >= scaledMinH) {
             glfwSetWindowSize(window, w, h);
         }
     }
@@ -1595,15 +1629,23 @@ int AppWindow::run(int frames) {
             presentGrace.update(glfwGetTime(), displayChanged, hidden);
         }
 
-        // BETWEEN FRAMES: the one place the interface theme and language may
-        // change. The theme first, so a typeface pair it asks for is built by
-        // the same applyPending the language ends with.
+        // BETWEEN FRAMES: the one place the interface theme, language and
+        // scale may change. The theme first, so a typeface pair it asks for
+        // is built by the same applyPending the language ends with; the scale
+        // costs one float comparison when nothing moved, so it runs every
+        // frame rather than behind its own pending flag.
         applyPendingTheme();
         applyPendingLanguage();
+        applyPendingUiScale();
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
         if (inputScriptActive_) { applyInputScript(rendered); }
         ImGui::NewFrame();
+        // Ctrl+=/Ctrl+-/Ctrl+0: read inside the frame (ImGui owns the
+        // keyboard state here), applied on the NEXT pass through
+        // applyPendingUiScale above - one frame later, same as every other
+        // key-driven setting in this application.
+        handleInterfaceScaleKeys();
 
         frameCounter_ = rendered;
         // The GPS fix, if one landed since the last frame: applied here, on
@@ -2606,16 +2648,17 @@ void railPlateLabel(ImDrawList* dl, const ImVec2& rowTL, const ImVec2& rowBR,
                     const char* chipText, ImU32 ink) {
     if (dl == nullptr || shown == nullptr || shown[0] == '\0') { return; }
     ImFont* f = cascade::gui::fonts::ui();
+    const float s = cascade::gui::uiscale::factor();
     float chipW = -1.0f;
     if (chipText != nullptr && chipText[0] != '\0') {
         chipW = cascade::gui::fonts::legend()
-                    ->CalcTextSizeA(cascade::gui::fonts::kTinySize, FLT_MAX, 0.0f,
+                    ->CalcTextSizeA(cascade::gui::fonts::tinyPx(), FLT_MAX, 0.0f,
                                     chipText)
                     .x;
     }
     const float right =
-        cascade::gui::railLabelRight(rowBR.x, rowBR.y - rowTL.y, chipW);
-    const float left = plateLeft + cascade::gui::kRailLabelPadX;
+        cascade::gui::railLabelRight(rowBR.x, rowBR.y - rowTL.y, chipW, s);
+    const float left = plateLeft + cascade::gui::uiscale::px(cascade::gui::kRailLabelPadX);
     if (right <= left + 1.0f) { return; }
     // SMALLER BEFORE CUT (gui/text_fit.hpp). A translated section name is
     // often a third longer than the English the rail was laid out for; drawn
@@ -2754,8 +2797,9 @@ bool benchSection(const char* label, bool defaultOpen, const char* chipText = nu
     // railRowHeight in app_window.hpp. At the sizes fonts.hpp is set to now it
     // still works out to exactly 28; raised again, the row grows rather than
     // the label being squeezed into a deck that was measured for smaller type.
-    const float labelPx = cascade::gui::fonts::kUiSize;
-    const float kRowH = cascade::gui::railRowHeight(labelPx);
+    const float labelPx = cascade::gui::fonts::uiPx();
+    const float railScale = cascade::gui::uiscale::factor();
+    const float kRowH = cascade::gui::railRowHeight(labelPx, railScale);
 
     // THE KEY'S PRESS, CARRIED ONE FRAME. The key is submitted after the
     // header, so a press cannot change the state the header has already
@@ -2816,8 +2860,9 @@ bool benchSection(const char* label, bool defaultOpen, const char* chipText = nu
     ImDrawList* dl = ImGui::GetWindowDrawList();
     if (dl == nullptr || h < 6.0f) { return open; }
 
-    const float keySize = cascade::gui::railKeySize(h);
-    const ImVec2 kTL(tl.x + cascade::gui::kRailKeyInset, tl.y + (h - keySize) * 0.5f);
+    const float keySize = cascade::gui::railKeySize(h, railScale);
+    const ImVec2 kTL(tl.x + cascade::gui::uiscale::px(cascade::gui::kRailKeyInset),
+                     tl.y + (h - keySize) * 0.5f);
     const ImVec2 kBR(kTL.x + keySize, kTL.y + keySize);
 
     // The label plate: a shade lighter than the ground it is screwed to, which
@@ -2825,7 +2870,7 @@ bool benchSection(const char* label, bool defaultOpen, const char* chipText = nu
     // a panel. It runs out to the header's right edge on purpose - railChip()
     // lands its chip and lamp on that end afterwards, and they have to sit ON
     // the plate rather than beside it.
-    const ImVec2 pTL(kBR.x + cascade::gui::kRailKeyGap, tl.y + 1.0f);
+    const ImVec2 pTL(kBR.x + cascade::gui::uiscale::px(cascade::gui::kRailKeyGap), tl.y + 1.0f);
     const ImVec2 pBR(br.x, br.y - 1.0f);
     if (pBR.x > pTL.x + 24.0f) {
         // The plate is a control ("ctrl"), a step toward the lit key under the
@@ -2959,8 +3004,9 @@ bool benchSwitchRow(const char* label, bool on, const char* chipText,
     // The same deck height benchSection's header works out to, from the same
     // function, so a switch and a section can never sit at two heights on one
     // rail. See railRowHeight in app_window.hpp for why it is no longer 28.
-    const float labelPx = cascade::gui::fonts::kUiSize;
-    const float kRowH = cascade::gui::railRowHeight(labelPx);
+    const float labelPx = cascade::gui::fonts::uiPx();
+    const float railScale = cascade::gui::uiscale::factor();
+    const float kRowH = cascade::gui::railRowHeight(labelPx, railScale);
     const float w = ImGui::GetContentRegionAvail().x;
     if (w < 40.0f) { return false; }
 
@@ -2986,11 +3032,12 @@ bool benchSwitchRow(const char* label, bool on, const char* chipText,
         return false;
     }
 
-    const float keySize = cascade::gui::railKeySize(kRowH);
-    const ImVec2 kTL(tl.x + cascade::gui::kRailKeyInset, tl.y + (kRowH - keySize) * 0.5f);
+    const float keySize = cascade::gui::railKeySize(kRowH, railScale);
+    const ImVec2 kTL(tl.x + cascade::gui::uiscale::px(cascade::gui::kRailKeyInset),
+                     tl.y + (kRowH - keySize) * 0.5f);
     const ImVec2 kBR(kTL.x + keySize, kTL.y + keySize);
 
-    const ImVec2 pTL(kBR.x + cascade::gui::kRailKeyGap, tl.y + 1.0f);
+    const ImVec2 pTL(kBR.x + cascade::gui::uiscale::px(cascade::gui::kRailKeyGap), tl.y + 1.0f);
     const ImVec2 pBR(br.x, br.y - 1.0f);
     if (pBR.x > pTL.x + 24.0f) {
         // A BLOCKED ROW IS DARK METAL, not greyed lettering on live brass: the
@@ -3308,7 +3355,8 @@ void AppWindow::drawUi() {
         }
         drawScopeMode();
     } else {
-        ImGui::BeginChild("##menu_column", ImVec2(kMenuWidth, 0.0f), ImGuiChildFlags_None);
+        ImGui::BeginChild("##menu_column", ImVec2(cascade::gui::uiscale::px(kMenuWidth), 0.0f),
+                         ImGuiChildFlags_None);
         drawMenuColumn();
         ImGui::EndChild();
 
@@ -6527,6 +6575,66 @@ void AppWindow::applyPendingTheme() {
     cascade::core::diagLogf("theme: %s", uiThemeKey_.c_str());
 }
 
+// --- THE INTERFACE SIZE (gui/ui_scale.hpp) -----------------------------------
+//
+// EVERY FONT SIZE IS LIVE ALREADY: fonts::uiPx() and its three siblings read
+// uiscale::factor() on every call, so the moment factor() changes, the very
+// next PushFont/CalcTextSizeA at any of those call sites draws at the new
+// size - no atlas rebuild, because Dear ImGui 1.92 rasterises a loaded face
+// at whatever size it is asked for. What is NOT automatically live is the
+// ImGuiStyle's own SIZES (WindowPadding, ItemSpacing, FramePadding,
+// ScrollbarSize and the rest): those are ordinary numbers this application
+// never customises past ImGui's own defaults, and the one supported way to
+// scale a whole style is ScaleAllSizes(S) applied ONCE, from an UN-SCALED
+// snapshot - calling it every frame, or twice from the same starting style,
+// would compound the scale each time and the window would visibly grow on
+// every change. The snapshot is taken lazily, on this function's first call
+// in the frame loop - after every one-time style setup this application does
+// (applyTheme's colours, above) and before anything has ever been scaled.
+void AppWindow::applyPendingUiScale() {
+    static ImGuiStyle baseStyle;
+    static bool baseCaptured = false;
+    if (!baseCaptured) {
+        baseStyle = ImGui::GetStyle();
+        baseCaptured = true;
+    }
+    if (!cascade::gui::uiscale::consumeChanged()) { return; }
+    ImGuiStyle scaled = baseStyle;
+    scaled.ScaleAllSizes(cascade::gui::uiscale::factor());
+    ImGui::GetStyle() = scaled;
+    cascade::core::diagLogf("interface size: %s -> %.0f%% (monitor reports %u dpi)",
+                            cascade::gui::uiscale::choice().c_str(),
+                            static_cast<double>(cascade::gui::uiscale::factor()) * 100.0,
+                            cascade::gui::uiscale::monitorDpi());
+}
+
+void AppWindow::handleInterfaceScaleKeys() {
+    ImGuiIO& io = ImGui::GetIO();
+    if (io.WantTextInput || !(io.KeyCtrl)) { return; }
+    // Repeat suppressed the way every other key-driven setting in this
+    // application is: one step per press, held or not.
+    if (ImGui::IsKeyPressed(ImGuiKey_0, false)) {
+        interfaceScale_ = "auto";
+    } else if (ImGui::IsKeyPressed(ImGuiKey_Equal, false)) {
+        const int now = cascade::gui::uiscale::dpiToPercent(
+            static_cast<unsigned>(std::lround(96.0 * static_cast<double>(cascade::gui::uiscale::factor()))));
+        int i = 0;
+        while (i < cascade::gui::uiscale::kStepCount && cascade::gui::uiscale::kSteps[i] <= now) { ++i; }
+        if (i < cascade::gui::uiscale::kStepCount) {
+            interfaceScale_ = std::to_string(cascade::gui::uiscale::kSteps[i]);
+        }
+    } else if (ImGui::IsKeyPressed(ImGuiKey_Minus, false)) {
+        const int now = cascade::gui::uiscale::dpiToPercent(
+            static_cast<unsigned>(std::lround(96.0 * static_cast<double>(cascade::gui::uiscale::factor()))));
+        int i = cascade::gui::uiscale::kStepCount - 1;
+        while (i >= 0 && cascade::gui::uiscale::kSteps[i] >= now) { --i; }
+        if (i >= 0) { interfaceScale_ = std::to_string(cascade::gui::uiscale::kSteps[i]); }
+    } else {
+        return;
+    }
+    cascade::gui::uiscale::setChoice(interfaceScale_);
+}
+
 void AppWindow::pickTheme(const std::string& key) {
     const cascade::gui::theme::ThemeId id = cascade::gui::theme::themeFromKey(key);
     const cascade::gui::theme::Preset& p = cascade::gui::theme::preset(id);
@@ -6589,6 +6697,54 @@ void AppWindow::drawDisplaySection() {
                              !bandPlan_.entries().empty();
     if (benchSection(trId("Display"), true, bandPlanOverlay_ ? tr("PLAN") : tr("PLAIN"),
                      cascade::gui::theme::kPhosphor, planDrawing)) {
+        // THE INTERFACE SIZE (2026-09-28). A tester on a 4K monitor: "the
+        // fonts are too small, I tried other settings in the View tab but
+        // couldn't make it bigger" - this row is that setting, in the tab
+        // they actually opened. First, ahead of even the theme, because a
+        // reader who cannot see the rail cannot find anything else here
+        // either. "Auto" (the default) follows the monitor's own Windows/
+        // X11/Wayland scale, wherever the window is; a fixed percent
+        // overrides it everywhere. Applied live, between frames
+        // (applyPendingUiScale) - no restart, and no atlas rebuild, because
+        // every font size this application draws is already read fresh every
+        // frame (fonts::uiPx() and its siblings).
+        {
+            const std::string now = cascade::gui::uiscale::choice();
+            const bool isAuto = now == cascade::gui::uiscale::kAuto;
+            int scaleIndex = 0;  // 0 = Auto, 1..kStepCount = the fixed steps
+            if (!isAuto) {
+                for (int k = 0; k < cascade::gui::uiscale::kStepCount; ++k) {
+                    if (now == std::to_string(cascade::gui::uiscale::kSteps[k])) {
+                        scaleIndex = k + 1;
+                        break;
+                    }
+                }
+            }
+            std::vector<std::string> scaleLabels;
+            scaleLabels.push_back(cascade::core::formatText(
+                tr("Auto (follows Windows, %d%% here)"),
+                cascade::gui::uiscale::dpiToPercent(cascade::gui::uiscale::monitorDpi())));
+            for (int k = 0; k < cascade::gui::uiscale::kStepCount; ++k) {
+                scaleLabels.push_back(std::to_string(cascade::gui::uiscale::kSteps[k]) + "%");
+            }
+            std::vector<const char*> scaleItems;
+            scaleItems.reserve(scaleLabels.size());
+            for (const std::string& s : scaleLabels) { scaleItems.push_back(s.c_str()); }
+            if (ImGui::Combo(cascade::gui::labelAboveIfNeeded(trId("Interface size")), &scaleIndex,
+                             scaleItems.data(), static_cast<int>(scaleItems.size()))) {
+                interfaceScale_ = scaleIndex == 0
+                                      ? std::string(cascade::gui::uiscale::kAuto)
+                                      : std::to_string(cascade::gui::uiscale::kSteps[scaleIndex - 1]);
+                cascade::gui::uiscale::setChoice(interfaceScale_);
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip(
+                    "%s", tr("Makes the whole bench bigger, fonts and controls together. "
+                            "Auto follows this monitor's own Windows display scaling; a "
+                            "fixed percentage overrides it. Ctrl+= / Ctrl+- step through "
+                            "the list, Ctrl+0 returns to Auto."));
+            }
+        }
         // THE THEME (2026-09-25): the six looks, by the names the owner
         // approved them under. First in the section because it is the widest
         // change a user can make to what they see. Applied between frames
@@ -6923,27 +7079,28 @@ static bool benchBankKey(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     // bench, and "JÄRJESTELMÄ" (fi) and "РАСШИРЕНИЯ" (ru) were cut at seven
     // tenths (app_window.hpp, kBankKeyWordFloorPx).
     ImFont* lf = cascade::gui::fonts::legend();
+    const float scaledFloor = cascade::gui::uiscale::px(cascade::gui::kBankKeyWordFloorPx);
     const float padX = cascade::gui::bankKeyWordPadX(
-        lf->CalcTextSizeA(cascade::gui::kBankKeyWordFloorPx, FLT_MAX, 0.0f, label).x,
-        br.x - tl.x);
-    cascade::gui::addFittedCentred(dl, lf, cascade::gui::fonts::kTinySize, tl, br,
+        lf->CalcTextSizeA(scaledFloor, FLT_MAX, 0.0f, label).x, br.x - tl.x,
+        cascade::gui::uiscale::factor());
+    cascade::gui::addFittedCentred(dl, lf, cascade::gui::fonts::tinyPx(), tl, br,
                                    on ? theme::toneHex(0xEFE7D2, 255, theme::ink::ActiveText)
                                       : theme::toneHex(0x2A251C, 255, theme::ink::CtrlText),
-                                   label, padX, down ? 1.0f : 0.0f,
-                                   cascade::gui::kBankKeyWordFloorPx);
+                                   label, padX, down ? 1.0f : 0.0f, scaledFloor);
     return pressed;
 }
 
 float AppWindow::drawRailBankKeys(float colX, float colY, float colW, float bodyTop) {
     (void)colY;
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    constexpr float kPad = cascade::gui::kBankKeyInset;  // the plate's own inset
-    constexpr float kGap = cascade::gui::kBankKeyGap;
-    constexpr float kStrip = 7.0f;  // the lamp strip and its gap, below the key
-    const float keyH = std::max(22.0f, cascade::gui::fonts::kTinySize + 9.0f);
+    const float s = cascade::gui::uiscale::factor();
+    const float kPad = cascade::gui::uiscale::px(cascade::gui::kBankKeyInset);  // the plate's own inset
+    const float kGap = cascade::gui::uiscale::px(cascade::gui::kBankKeyGap);
+    const float kStrip = cascade::gui::uiscale::px(7.0f);  // the lamp strip and its gap, below the key
+    const float keyH = std::max(cascade::gui::uiscale::px(22.0f), cascade::gui::fonts::tinyPx() + 9.0f * s);
     const float x0 = colX + kPad;
-    const float keyW = cascade::gui::bankKeyWidth(colW, cascade::gui::kRailBankCount);
-    if (keyW < 24.0f || dl == nullptr) { return bodyTop; }
+    const float keyW = cascade::gui::bankKeyWidth(colW, cascade::gui::kRailBankCount, s);
+    if (keyW < 24.0f * s || dl == nullptr) { return bodyTop; }
 
     // THE KEYBOARD'S ROW OF FUNCTION KEYS IS THE SAME ROW, F1 to F5 left to
     // right - but it is no longer read here. Every shortcut the application
@@ -6965,7 +7122,7 @@ float AppWindow::drawRailBankKeys(float colX, float colY, float colW, float body
     if (selected >= 0) { setRailBank(selected); }
     // The cursor is left where the sections start, and the caller lays them
     // from the y handed back.
-    const float below = bodyTop + keyH + kStrip + 6.0f;
+    const float below = bodyTop + keyH + kStrip + 6.0f * s;
     ImGui::SetCursorScreenPos(ImVec2(x0, below));
     return below;
 }
@@ -9625,8 +9782,8 @@ void AppWindow::drawCenterPanels() {
     // a gridline and the number under it cannot disagree.
     double tickHz[kMaxTicks];
     char tickLabels[kMaxTicks][16];
-    const int tickCount = scale_.ticks(static_cast<double>(width), tickHz,
-                                       tickLabels, kMaxTicks);
+    const int tickCount = scale_.ticks(static_cast<double>(width), tickHz, tickLabels, kMaxTicks,
+                                       static_cast<double>(cascade::gui::uiscale::factor()));
     SpectrumView::AxisTick axisTicks[kMaxTicks];
     for (int i = 0; i < tickCount; ++i) {
         axisTicks[i].xFrac = static_cast<float>(scale_.hzToX(tickHz[i]));
@@ -13329,10 +13486,11 @@ float AppWindow::drawViewKeys(float colX, float colW, float top) {
     // rather than in either view so that the way to the other view is in the
     // same place whichever one is showing.
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    const float keyH = std::max(22.0f, cascade::gui::fonts::kTinySize + 9.0f);
-    const float x0 = colX + cascade::gui::kBankKeyInset;
-    const float keyW = cascade::gui::bankKeyWidth(colW, 2);
-    if (keyW < 24.0f || dl == nullptr) { return top; }
+    const float s = cascade::gui::uiscale::factor();
+    const float keyH = std::max(cascade::gui::uiscale::px(22.0f), cascade::gui::fonts::tinyPx() + 9.0f * s);
+    const float x0 = colX + cascade::gui::uiscale::px(cascade::gui::kBankKeyInset);
+    const float keyW = cascade::gui::bankKeyWidth(colW, 2, s);
+    if (keyW < 24.0f * s || dl == nullptr) { return top; }
     const char* const labels[2] = {tr("RECEIVER"), tr("PATCH")};
     const char* const tips[2] = {
         tr("Shows the receiver: the spectrum, the waterfall and its status.\n"
@@ -13346,8 +13504,9 @@ float AppWindow::drawViewKeys(float colX, float colW, float top) {
     // Their own id scope: benchBankKey keys an item on its index, and the
     // bank keys drawn just above use 0 and 1 too.
     ImGui::PushID("##viewkeys");
+    const float keyGap = cascade::gui::uiscale::px(cascade::gui::kBankKeyGap);
     for (int i = 0; i < 2; ++i) {
-        const ImVec2 tl(x0 + static_cast<float>(i) * (keyW + cascade::gui::kBankKeyGap), top);
+        const ImVec2 tl(x0 + static_cast<float>(i) * (keyW + keyGap), top);
         const ImVec2 br(tl.x + keyW, top + keyH);
         const bool in = (i == 1) == patchOpen_;
         if (benchBankKey(dl, tl, br, labels[i], in, tips[i], i, "viewkey:", false)) {
@@ -13357,7 +13516,7 @@ float AppWindow::drawViewKeys(float colX, float colW, float top) {
     ImGui::PopID();
     if (pressed >= 0) { setMainViewPatch(pressed == 1); }
     // Below the lamp strip, with the bank keys' own spacing.
-    const float below = top + keyH + 7.0f + 6.0f;
+    const float below = top + keyH + (7.0f + 6.0f) * s;
     ImGui::SetCursorScreenPos(ImVec2(x0, below));
     return below;
 }
@@ -13459,9 +13618,10 @@ void AppWindow::drawPatchView() {
     // window floating over it - and the body laid in a well below the rule.
     const float bodyTop =
         cascade::gui::addBenchPlate(ImGui::GetWindowDrawList(), viewTL, viewBR, tr("PATCH"));
-    const ImVec2 wellSize(viewSize.x - kRailPlatePad * 2.0f, viewBR.y - bodyTop - kRailPlatePad);
+    const float platePad = cascade::gui::uiscale::px(kRailPlatePad);
+    const ImVec2 wellSize(viewSize.x - platePad * 2.0f, viewBR.y - bodyTop - platePad);
     if (wellSize.x < 8.0f || wellSize.y < 8.0f) { return; }
-    ImGui::SetCursorScreenPos(ImVec2(viewTL.x + kRailPlatePad, bodyTop));
+    ImGui::SetCursorScreenPos(ImVec2(viewTL.x + platePad, bodyTop));
     ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
     const bool wellOpen =
         ImGui::BeginChild("##patchwell", wellSize, ImGuiChildFlags_None,
@@ -23894,6 +24054,12 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     counterScale_ = std::clamp(cfg.counterScale, 1, 2);
     counterSwitches_ = cfg.counterSwitches;
     readingsScale_ = std::clamp(cfg.readingsScale, 1.0f, 3.0f);
+    // The interface size (gui/ui_scale.hpp). Already sanitized by the loader
+    // (core/config.cpp); applied to the live factor here AND at window
+    // creation (FOXSDR_UI_SCALE can override the very first application only,
+    // the same rule FOXSDR_LANGUAGE follows for the language setting).
+    interfaceScale_ = cfg.interfaceScale;
+    cascade::gui::uiscale::setChoice(interfaceScale_);
     // The trail switches. Not pushed into any MapView here: a page may not
     // exist yet (they are created as track-capable plugins appear), and the
     // page loop hands both to every view it draws anyway - which is also what
@@ -24607,6 +24773,7 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.counterScale = counterScale_;
     cfg.counterSwitches = counterSwitches_;
     cfg.readingsScale = readingsScale_;
+    cfg.interfaceScale = interfaceScale_;
     cfg.mapTrails = mapTrails_;
     cfg.mapTrailAltitudeColours = mapTrailAltColours_;
     cfg.mapTrailStyle = mapTrailStyle_;
