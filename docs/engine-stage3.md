@@ -1146,11 +1146,14 @@ they were with the facts; and what 3b has to settle first.
      waits on a view that stopped drawing. Each is a no-op when nothing
      changed. `syncPatchDraft()` - at the top of `drawPatchView` and again
      right after `patchReconcile` - copies the engine's graph whenever it
-     differs from the one the draft was last in step with (compared as
-     `graphCommandText`, so no engine mutation site has to remember to
+     differs from the one the draft was last in step with (compared with
+     `core::patch::graphsEqual` - every field the command's text carries,
+     nothing written out - so no engine mutation site has to remember to
      bump anything): a config load, START/ALL OFF's switches, a device or
      centre the patch runtime set. Never mid-drag, resize or wire
-     (`patchInteracting()`). The draft is never a default: until it has
+     (`patchInteracting()`, true only while the left button is held). A new
+     document (another epoch) drops the page's drag, resize, wire and
+     selection, however it arrived. The draft is never a default: until it has
      been copied from the engine (`patchDraftInStep_`) nothing is ever
      committed from it.
    - **The config's patch and `FOXSDR_PATCH_FILE`** go to the engine
@@ -1221,6 +1224,9 @@ they were with the facts; and what 3b has to settle first.
    (`(void)engine_.patchGraph_.mutableNode(1);` and
    `engine_.patchGraph_ = Graph{};`): 2 violations; with the new pattern
    removed, 1 (only the assignment); probe removed, 0 violations, 107/107.
+   Review round 2 closed the rest (see below): `patchGraph_` may be bound
+   only to a const reference and passed only to a whitelisted helper that
+   takes `const Graph&`.
 
    *Tests.* `tests/test_patch_graph_draft_input.cpp` (new) drives the
    real `drawPatchView` through ImGui's input queue and reads the ENGINE's
@@ -1239,15 +1245,8 @@ they were with the facts; and what 3b has to settle first.
    rebase, re-seed instead of rebase, no re-seed, dropped lines accepted,
    float-precision frequencies, six-digit positions, ids remapped, rebase
    ignoring the engine, duplicate ids, no next-id, no chosen centre, no
-   resize ceiling. Two did NOT fail on their own, and why is worth
-   stating: (1) removing the mid-drag gate on `syncPatchDraft` - every
-   sync runs before the canvas, when the draft holds no uncommitted edit,
-   so a re-seed there copies an engine graph that already has the dragged
-   position; the gate is kept as the rule, but it is defence in depth
-   today; (2) removing the `patchDraftInStep_` guard on the commit - a
-   never-copied draft is rebased against an empty base, which sends the
-   engine's own graph back unchanged. With the rebase ALSO removed (the
-   round-3 class of bug: a default draft sent as it is) scenario I fails.
+   resize ceiling. Two did NOT fail on their own in that round; the review
+   (round 2, below) made one a real test and explained the other.
 
    *Still open.*
    - **Design B, unchanged**: `patchReconcile`/`patchPublishSets`, the
@@ -1261,20 +1260,70 @@ they were with the facts; and what 3b has to settle first.
    - **The window still READS `engine_.patchGraph_`** as a friend (the
      rail chip, the compile, the config save, the draft's own sync) - OPEN
      item 3's general "reads engine members directly", not a write.
-   - **The guard sees writes, not mutable references**: a
-     `seedDefaultPatch(engine_.patchGraph_, ...)` or `drawPatchCanvas(
-     engine_.patchGraph_, ...)` - a free function handed the engine's graph
-     by non-const reference - would not be flagged by any pattern; review
-     and `test_patch_graph_draft_input` catch it today, the guard would not.
+   - **The guard's whole-object check is for `patchGraph_` only**
+     (`kWholeObjectFields`). Any other struct-typed engine field could still
+     be handed to a non-const helper unseen; none is written by the window
+     today, and widening it to every field would flag every by-value use.
    - **No other sender exists yet.** Nothing but the window sends
      `FOXAPP_OP_PATCH_SET_GRAPH` (no transport carries app ops). A future
      API sender replacing the graph mid-drag without the document flag
      would be rebased onto field by field, id for id - correct for an edit
      of the same graph, not for an unrelated one; such a sender should set
      `FOXAPP_PATCH_GRAPH_DOCUMENT`.
-   - **Not run on Windows**, and the canvas has not been driven by a
-     person on a desktop: the input test and the full Linux suite (Xvfb)
-     are the evidence.
+   - **Windows**: the reviewer ran the round-1 commits under MSVC (225/225
+     with a temporary fix for `near`); the round-2 commits have been run on
+     Linux only. The canvas has still not been driven by a person on a
+     desktop: the input test and the full suites are the evidence.
+
+   **REVIEW ROUND 2 (branch claude/engine-patchgraph, on top of e29c1a7),
+   for the Windows/MSVC review that rejected e19909a/e29c1a7 on one
+   blocking finding.** Each item test-first, then broken on purpose:
+   1. *(blocking)* `test_patch_graph_draft_input` declared `near()`, which
+      windows.h defines as a macro (MSVC C2062/C2143). Renamed `nearly()`.
+      Checked on Linux with the macros emulated (`-Dnear= -Dfar=
+      -Dsmall=char -Dinterface=struct`): red before at that line, 0 errors
+      after.
+   2. *An abandoned wire drag stopped the page following the engine.* The
+      canvas ends a wire only on the release edge, which it sees only while
+      drawn. `patchInteracting()` is now true only while the button is
+      held, and clears drag, resize and wire when the button is neither
+      held nor being released this frame (not on the release frame itself:
+      the sync runs before the canvas, which must still connect the wire).
+      Test K: red (engine on=0, page on=1), green; clearing on the release
+      frame breaks C, and no clearing leaves a phantom wire for K's
+      second half to catch.
+   3. *A new document mid-drag.* J0 (a DOCUMENT op) and J1
+      (`loadPatchDocument`, which adopted the new graph without touching
+      `patchUi_`) put a Map under the dragged node's id: J1 dragged it to
+      200,80. `adoptPatchGraph()` now drops drag, resize, wire and
+      selection whenever it adopts a new epoch. M4b on the reviewed code
+      fails J0; with this fix in, M4b alone survives again - the reset
+      covers it too - and the gate stays as a second line of defence.
+   4. Test I's comment corrected (the rebase also stood between an empty
+      draft and the graph); I2 (the engine's node store not replaced by
+      the first flush) failed under M5. Since item 7, M5 is caught by I's
+      "the draft starts from the engine's graph" instead: an empty draft
+      now equals an empty base, so I2 can no longer tell the two apart.
+   5. *The op repaired values.* `graphFromCommandText` now requires the
+      text to be exactly what `graphCommandText` writes for the graph it
+      reads as, so every repair the loader makes (squelch outside -120..0
+      dB, rate outside 0..1e10 Hz, a size above 4000 or of 0 and below,
+      and any line it would skip) is a refusal naming the node. The squelch
+      slider is `ImGuiSliderFlags_AlwaysClamp`, so -200 typed after
+      Ctrl+click is -120 held, as it was before this work (test S, through
+      the input queue).
+   6. *The guard.* `kWholeObjectFields` (`patchGraph_`): a control may
+      bind it only to a const reference and pass it only to
+      `kConstGraphHelpers` (each checked to take `const Graph&` in
+      src/core). The reviewer's four probes - a non-const reference, then
+      `seedDefaultPatch`, `std::swap` and `drawPatchCanvas` - were 0
+      violations and are now 4; a call split over two lines is seen; the
+      probes were removed and the tree is back to 0 violations.
+   7. *Cost.* `core::patch::graphsEqual` replaces the text comparisons:
+      an idle frame, page open or not drawn, serialised 5 and 1 times and
+      now serialises none; a drag frame writes 3 (the command, the
+      engine's canonical check, the page's document text), down from 7.
+      Test P counts them (`core::patch::serialiseCount()`).
 7. **The TX dead-man's handle is tied to the frame loop** (core/transmitter.hpp:
    "A FROZEN WINDOW CANNOT LEAVE IT KEYED" - the TX thread unkeys if
    `tick()` stops for `kKeyAliveWait` = 1000 ms). In 3a `tick()` runs in
