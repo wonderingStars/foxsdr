@@ -154,7 +154,11 @@ void Engine::pollSoundCard() {
     // The patch page offers every listed card to its radios, so the list is
     // asked for the first time the page is open, as it is the first time the
     // Source section's row is.
-    if (host_.patchPageOpen() && !soundCardListed_ && !soundCardScanPending_ && !soundCardOpenPending_) {
+    // Only once the user has asked for a device list (patchListsWanted_,
+    // 0.99.40): the patch is the view the application opens on and is
+    // switched to and fro, and showing it asks for nothing.
+    if (host_.patchPageOpen() && patchListsWanted_ && !soundCardListed_ && !soundCardScanPending_ &&
+        !soundCardOpenPending_) {
         scanSoundCards();
     }
     if (soundCardScanPending_ && soundCardScanFuture_.valid() &&

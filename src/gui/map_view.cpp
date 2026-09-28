@@ -530,6 +530,35 @@ const std::vector<LandShape>& landShapes() {
 
 }  // namespace
 
+// See map_view.hpp. The caption halo above is half strength in four
+// directions ON PURPOSE - it keeps the counters of "10 km" open. A target's
+// name is a different thing to read: it sits wherever the target is, over any
+// tile at all, and over OpenStreetMap's London (0.99.40 captures) an amber
+// callsign inside that thin halo merged with the map's own place names. So
+// here the outline is whole: all eight neighbours, at three quarters of the
+// ink's alpha (190/255 - where two passes overlap it is near opaque, which is
+// the point). The same rule for its colour as the caption halo: the preset's
+// shadow behind a light ink, the map's well behind a dark one - theme tokens,
+// so every theme keeps its own pairing.
+void addMapTargetLabel(ImDrawList* dl, float x, float y, unsigned int col, const char* text) {
+    if (dl == nullptr || text == nullptr || text[0] == '\0') { return; }
+    const ImU32 ink = static_cast<ImU32>(col);
+    const unsigned int a = (ink >> IM_COL32_A_SHIFT) & 0xFFu;
+    const int haloA = static_cast<int>((a * 190u) / 255u);
+    const float inkLuma = 0.299f * static_cast<float>((ink >> IM_COL32_R_SHIFT) & 0xFFu) +
+                          0.587f * static_cast<float>((ink >> IM_COL32_G_SHIFT) & 0xFFu) +
+                          0.114f * static_cast<float>((ink >> IM_COL32_B_SHIFT) & 0xFFu);
+    const ImU32 halo = inkLuma >= 110.0f ? theme::shadowOf(0, 0, 0, haloA)
+                                         : theme::tone(0, 0, 0, haloA, theme::ink::Well);
+    for (int dy = -1; dy <= 1; ++dy) {
+        for (int dx = -1; dx <= 1; ++dx) {
+            if (dx == 0 && dy == 0) { continue; }
+            dl->AddText(ImVec2(x + static_cast<float>(dx), y + static_cast<float>(dy)), halo, text);
+        }
+    }
+    dl->AddText(ImVec2(x, y), ink, text);
+}
+
 // See map_view.hpp. Guarded against a zero height because it divides by one:
 // draw() will not call it with a viewport that small, and a figure that can
 // only be produced by a caller that does not exist is still a figure this must
@@ -1693,7 +1722,7 @@ void MapView::draw(float width, float height,
         // CENTRED ON THE MARK IT NAMES, which is half a line height up. The
         // six pixels that stood here centred no face this application has
         // shipped; at 18 px the label rode three below the target's own dot.
-        addMapLabel(dl, ImVec2(lblX, s.y - mapLineH * 0.5f), col, lbl);
+        addMapTargetLabel(dl, lblX, s.y - mapLineH * 0.5f, col, lbl);
 
         if (hovered && !overZoomIn && !overZoomOut) {
             const float dx = mouse.x - s.x;

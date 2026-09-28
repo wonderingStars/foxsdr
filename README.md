@@ -61,7 +61,7 @@ Internal project/binary name: `cascade`.
 
 ## Where it is now
 
-The current release is **0.99.39** (September 2026), in open beta and free for
+The current release is **0.99.42** (September 2026), in open beta and free for
 noncommercial use, with its decoders and instruments delivered as plugins from
 a catalogue. These are screenshots of an earlier shipping build.
 
@@ -102,7 +102,7 @@ are still moving. What is in the current build:
   Antenna, sample-rate and per-stage gain selection on all of them,
   with each gain slider spanning what that stage will actually accept and
   lettered in the unit that stage is really measured in — decibels on every
-  radio but the Airspy R2/Mini, whose five stages are the hardware's own
+  radio but the Airspy R2/Mini, whose gains are the hardware's own
   register steps and are shown as bare step numbers rather than invented
   decibels — and a bias-tee switch on the radios that have one. Developed against an Ettus B200
   and an RTL2838 (R820T); the built-in signal generator and IQ-file playback
@@ -168,7 +168,9 @@ are still moving. What is in the current build:
   mediumwave and the FM broadcast edges all differ — so there is no single plan
   that is correct globally. Informational only; not a licensing reference.
 - **Map and decoders.** Aircraft, vessels and stations plotted together,
-  coloured by altitude band, with optional map imagery from a basemap plugin.
+  coloured by altitude band, with optional map imagery from a basemap plugin;
+  wherever its tiles are drawn - the map pages, the patch Map part and the
+  radar scope - the plugin's attribution is lettered beneath them.
   A target's **trail is coloured along its length** by the same bands, so a
   climb-out and a cruise read differently at a glance — from the altitudes the
   host watched the aircraft report as it flew the line, not from anything
@@ -284,16 +286,38 @@ signal. The conversion uses libairspy's own half-band kernel, so the spectrum ag
 every other Airspy application about where a signal is, and the mirror image that a
 real-to-complex conversion has to suppress is measured 61 dB down.
 
-Five gains are exposed. **LNA**, **MIXER** and **VGA** drive the R820T's three stages
-directly, and the numbers are the hardware's own steps rather than decibels — libairspy
-publishes no decibel mapping for them and FoxSDR does not invent one. Everywhere a gain
-is shown — the Source sliders, the RECEIVER card, the scope deck's GAIN knob and the
-browser interface — these five are lettered as bare step numbers with no unit, because
-the honest thing to put after a register position is nothing. **LINEARITY** and
-**SENSITIVITY** are libairspy's two curated walks up all three at once: linearity trades
-sensitivity for headroom against a strong neighbouring signal, sensitivity does the
-opposite. Unlike the HackRF the Airspy has automatic gain control, on the LNA and the
-mixer, and FoxSDR's auto-gain switch drives both. The bias tee is a separate control —
+**Three gain modes, one at a time** (0.99.41), as Airspy's own software offers them:
+**Sensitive**, **Linear** and **Free**. Sensitive and Linear are one **Gain** slider each,
+0 to 21, over libairspy's two curated walks up all three of the R820T's stages at once —
+linearity trades sensitivity for headroom against a strong neighbouring signal,
+sensitivity does the opposite. **Free** is the three stages by hand — **LNA**, **MIXER**
+and **VGA** — with the LNA's and the mixer's own automatic gain control each switched on
+or off (**LNA AGC**, **Mixer AGC**); a stage its AGC is driving is greyed, and goes back
+to its own number when the AGC is switched off. Only the chosen mode's controls are shown,
+and each mode keeps its own values while another is in use. The numbers are the
+hardware's own steps rather than decibels — libairspy publishes no decibel mapping for
+them and FoxSDR does not invent one — so everywhere a gain is shown (the Source sliders,
+the RECEIVER card, the scope deck's GAIN knob, the browser interface) it is a bare step
+number. The browser and the plugin API see only the chosen mode's gains too; naming a
+gain from another mode switches to it in the browser, but the plugin API refuses any
+gain name outside the current mode's published list (CASCADE_API_UNSUPPORTED) rather
+than switching modes on a plugin's behalf. FoxSDR's generic auto-gain switch is Free
+mode with both AGCs on.
+
+**Decimation** (0.99.41): none, 2, 4, 8, 16 or 32 on an R2 and up to 64 on a Mini, as in
+Airspy's own software. It divides what the radio delivers by that factor before anything
+else sees it — half-band filters, flat and alias-free over the inner 80% of the new band
+and more than 90 dB down on everything that would fold into it — so the span narrows, the
+whole receiver does proportionally less work, and each halving leaves about 3 dB less
+noise per sample. The Rate list then shows the delivered rates (an R2 at 10 MS/s under 8
+is 1.25 MS/s, and the line under the Decimation box says so), and the spectrum, the
+channel, recordings and every decoder run at that rate. An R2 stops at 32 because its
+2.5 MS/s divided by 64 is not a whole number of samples a second, which the receiver's
+resampler needs. Radios on the patch page run undecimated, at the rate the patch asks for.
+
+The gain mode, every mode's values, the two AGC switches and the decimation are
+remembered **per radio** (by its serial) and put back when that radio opens, before its
+sample rate is set. The bias tee is a separate control —
 a **Bias tee** checkbox below the gain sliders — and it is switched off every time FoxSDR
 opens or closes the radio, so a previous application cannot leave 4.5 V on your antenna
 port without anything on screen saying so. FoxSDR remembers the setting across restarts
@@ -1337,24 +1361,30 @@ row to tune it.
   costs the display nothing; the browser page is sent the favourites and the
   few hundred nearest the tuned frequency, not the whole list.
 
-## The patch page
+## The patch view
 
-**SIGNAL PATH → Patch** opens a canvas where a receiver is built by hand: press
-a part in the bin at the top and it appears at the top-left of the canvas you
-are looking at (pressing again steps each new one down and across), then wire
-them port to port. Each part is the instrument itself, operated on its own face.
-The page resizes from the ridged grip in its bottom-right corner, as every page
-does.
+The patch is FoxSDR's main view (0.99.40): a canvas where a receiver is built
+by hand, filling the window where the spectrum and waterfall are otherwise
+drawn and resizing with it. FoxSDR opens on it. The **RECEIVER** and **PATCH**
+keys under the bank keys at the top of the rail switch between it and the
+receiver's spectrum, waterfall and status (so does **SIGNAL PATH → Patch**),
+and the view last chosen is the one FoxSDR opens on next time. Showing the
+patch starts nothing, and opening on it does not search for radios - the
+device lists are read when a Radio's device list is opened, **Look for
+radios** is pressed or a Radio part is added. Press a part in the bin at the top and it appears at the
+top-left of the canvas you are looking at (pressing again steps each new one
+down and across), then wire them port to port. Each part is the instrument
+itself, operated on its own face.
 
 | Part | What it does |
 |---|---|
-| **Radio** | One device of its own - up to five in a patch, all running at once. Choose the device and its sample rate in the panel on the right and type its centre on the node. A device can be on one Radio only; the list greys out a device another Radio already has. Its **ON/OFF** switch, first on its face, closes that radio alone while the rest of the patch keeps running. |
+| **Radio** | One device of its own - up to five in a patch, all running at once. Choose the device and its sample rate in the panel on the right and type its centre on the node. A device can be on one Radio only; the list greys out a device another Radio already has. Its **ON/OFF** switch, first on its face, closes that radio alone while the rest of the patch keeps running. A Radio can also play an **I/Q recording**: every 2-channel WAV (16-bit PCM or 32-bit float) in the recordings folder is in its device list (the patch's own speaker recordings are left out), played on a loop in real time. The recording sets the rate; the Radio's centre is the frequency the recording was made at, so type the frequency it was tuned to. Several Radios can play different recordings at once; one recording can be on one Radio only. |
 | **Channel** | One frequency out of that capture, tuned, filtered and decimated. Its frequency is typed on its face; its live level is shown above. |
 | **Demod** | AM or FM demodulation of a channel, with a **squelch**: on by default at -50 dB, its threshold on a slider and the channel's live level beside it, so a speaker or a recording hears signals rather than the noise between them. Decoders behind it still get every sample. |
 | **Speaker** | Where the demodulated channel wired to it goes: a **WAV file** (the default), an **MP3 file**, **the speakers**, or any other sound output - chosen in the panel on the right. Files go in the recordings folder, one per speaker, named after it. |
 | **Spectrum** | A live trace and waterfall: of the whole capture (every channel marked and named) when wired to the Radio, of one channel when wired to that channel. |
 | **Text out** | A log of the lines from every decoder wired to it. |
-| **Map** | Aircraft, ships and stations from up to five decoders on one live map - each decoder's map output wired to one of its five inputs, so ADS-B from one radio and AIS from another share it. The same map, basemap and target details as the map pages. |
+| **Map** | Aircraft, ships and stations from up to five decoders on one live map - each decoder's map output wired to one of its five inputs, so ADS-B from one radio and AIS from another share it. The same map, basemap and target details as the map pages; with a map imagery plugin fitted, its attribution is lettered under the chart, as on the map pages. |
 | **Decoders** | One part per installed decoder plugin, by name. An I/Q decoder wired to a Channel is fed *that channel*, tuned, so several decoders on several frequencies run off one radio at once; wired to the Radio it gets the whole capture. An audio decoder goes behind a Demod. Picture decoders (APT, WEFAX, SSTV) are parts too and show their picture on the node. |
 
 A connection that cannot carry what a port produces is refused while it is
@@ -1372,8 +1402,9 @@ every radio that is switched on (all of them, if none is) and hands the
 receiver's own radio to the patch - the receiver switches to the signal
 generator, its decoders stand down and the Source list greys its radios out.
 STOP, the large red **ALL OFF** (which also switches every radio off), or
-closing the page stops every patch radio, finishes every file and gives the
-receiver its radio and decoders back. Opening the page starts nothing. MP3
+switching to the receiver view stops every patch radio, finishes every file and
+gives the receiver its radio and decoders back. Showing the patch view starts
+nothing. MP3
 uses Windows' own encoder; on Linux the MP3 choice is unavailable and WAV is
 written instead. A decoder module that can decode straight from the radio's I/Q
 is offered only that way - its audio variant, which needs a demodulator in

@@ -39,6 +39,7 @@ struct GLFWwindow;
 #include "core/patch_graph.hpp"
 #include "core/patch_plan.hpp"
 #include "core/patch_radio.hpp"
+#include "core/patch_recordings.hpp"
 #include "core/patch_runner.hpp"
 #include "gui/patch_view_math.hpp"
 #include "gui/patch_scope_math.hpp"
@@ -984,8 +985,23 @@ private:
     void drawTransmitPage();
 
     // --- the patch page ------------------------------------------------------
-    // The canvas: radios, channels, decoders and displays wired together.
+    // Every frame, shown or not: retires the receiver's patch sets, and when
+    // the patch view has just been left does what closing the page always
+    // did - stops the patch and gives the receiver its radio back. Draws
+    // nothing since 0.99.40; the canvas is drawPatchView.
     void drawPatchPage();
+    // THE PATCH VIEW (0.99.40): the canvas, its transport, parts bin and
+    // inspector, drawn as the main window's face in place of the spectrum,
+    // the waterfall and the status column - into the child it is called in,
+    // so it is exactly as large as the window leaves it.
+    void drawPatchView();
+    // Which face the main window shows: the patch (true) or the receiver.
+    // Only that - it asks for no device list (see patchListsWanted_).
+    void setMainViewPatch(bool patch);
+    // The two view keys, RECEIVER and PATCH, under the rail's bank keys:
+    // at the column's left colX and width colW, laid from `top`. Returns the
+    // y below them.
+    float drawViewKeys(float colX, float colW, float top);
     // The starter patch (one Radio node on the receiver's radio, at its air
     // centre) when the page opens with none; a no-op once seeded.
     void seedPatchIfNeeded();
@@ -1258,6 +1274,17 @@ private:
     std::string soundCardReceivesText() const;
 
     char iqPath_[512] = "";     // InputText buffer for the IQ file path
+    // THE AIRSPY R2 / MINI's OWN CONTROLS (0.99.41, app_window_airspy.cpp):
+    // one gain mode at a time - Sensitive, Linear or Free, the reference
+    // Airspy application's three - with only that mode's sliders, Free mode's
+    // two AGC switches, and the software decimation. Draws them and answers
+    // true when the open radio is an Airspy, in which case the generic Auto
+    // gain switch and gain sliders are not drawn; false and draws nothing for
+    // every other radio. The state it reads (deviceGainNames_ etc.) and the
+    // choosing (chooseAirspyDecimation/GainMode/Agc) are Engine's - receiver
+    // state like every other gain/AGC/rate mirror - called directly as a
+    // reviewed exception (kControlMayCall), the same pattern as scanSoundCards.
+    bool drawAirspyControls();
 
     // --- THE DECK'S BIAS TEE KEY (2026-09-25, app_window_bias_key.cpp) --------
     //
@@ -1280,6 +1307,9 @@ private:
     // The confirmation dialog, drawn every frame from drawUi beside the mute
     // popup; it closes itself when its question stops applying.
     void drawBiasKeyConfirm();
+    // FOXSDR_FORCE_BASEMAP in a bounded run (gui/basemap_stand_in.hpp): the
+    // stand-in basemap is attached whenever no plugin supplies one.
+    bool basemapStandIn_ = false;
 
     // --- THE CONVERTER IN FRONT OF THE RADIO (0.99.36, app_window_converter.cpp)
     //
@@ -1573,6 +1603,7 @@ private:
     bool featureRequestOpenedByEnv_ = false;
     // The same one-shot latch for FOXSDR_OPEN_DEMOD_SCOPE - see its use.
     bool demodScopeOpenedByEnv_ = false;
+    bool radarScopeOpenedByEnv_ = false;   // FOXSDR_OPEN_RADAR_SCOPE, bounded runs
     // ...and for FOXSDR_OPEN_MAP.
     bool mapOpenedByEnv_ = false;
     // The typed text and the typed contact line - IN MEMORY ONLY, per
@@ -1831,7 +1862,13 @@ private:
     // The patch, and where the user has scrolled it to. The GRAPH outlives the
     // page - it is the document, and the page is closed far more often than
     // the radios are - so it is owned here rather than by the canvas.
-    bool patchOpen_ = false;
+    //
+    // patchOpen_ IS "THE PATCH VIEW IS SHOWING" since 0.99.40, when the page
+    // became the main window's face (the owner: "display the patch panel as
+    // the main"). TRUE until the config says otherwise, so a fresh install -
+    // and every hermetic --frames run - opens on it; applyConfig sets it from
+    // AppConfig::mainView and currentConfig writes it back.
+    bool patchOpen_ = true;
     cascade::gui::patch::Interaction patchUi_;
     bool patchSeeded_ = false;
     bool patchOpenedByEnv_ = false;

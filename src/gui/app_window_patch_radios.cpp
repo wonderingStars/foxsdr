@@ -27,6 +27,8 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
+#include <filesystem>
 #include <set>
 #include <thread>
 
@@ -110,7 +112,9 @@ std::string AppWindow::patchDefaultDeviceKey() const {
         candidates.push_back(pc::makeDeviceKey(engine_.sourceKind_, engine_.deviceArgs_));
     }
     for (const PatchDeviceChoice& c : engine_.patchDeviceChoices()) {
-        if (!pc::isGeneratorKey(c.key)) { candidates.push_back(c.key); }
+        // Radios only: a new Radio is never started on a recording nobody
+        // chose - the generator is the stand-in when no radio is free.
+        if (!pc::isGeneratorKey(c.key) && !pc::isIqFileKey(c.key)) { candidates.push_back(c.key); }
     }
     for (const std::string& k : candidates) {
         if (!taken(k)) { return k; }
@@ -337,6 +341,24 @@ void AppWindow::drawPatchRadioInspector(pc::Node& n) {
     ImGui::SetNextItemWidth(-FLT_MIN);
     const std::vector<PatchDeviceChoice> choices = engine_.patchDeviceChoices();
     if (ImGui::BeginCombo("##patchdevice", engine_.patchDeviceLabel(n.device).c_str())) {
+        // OPENING THE LIST IS ASKING FOR IT (0.99.40), as the Source section's
+        // first open is: the view shown at start-up asked for nothing, so the
+        // SoapySDR scan and the sound card listing are started here.
+        engine_.patchListsWanted_ = true;
+        // The native radios and the recordings are read afresh each time the
+        // list opens - a dongle plugged in or a file saved a moment ago is in
+        // it - and on no other frame, as the Source section's list is. The
+        // rows drawn this frame are the ones read last time; the new list is
+        // there on the next frame, which is the one the eye reaches it on.
+        // FOXAPP_OP_SCAN_DEVICES_ON_OPEN is the same lazy-first-scan command
+        // the Source section's own list uses (scanNative always; scanSoapy
+        // only while unscanned or a partial scan is owed), so the vendor
+        // probe still runs at most once unless a scan beside an open radio
+        // left it partial.
+        if (ImGui::IsWindowAppearing()) {
+            engine_.submitCommand(cascade::core::cmd::make(FOXAPP_OP_SCAN_DEVICES_ON_OPEN));
+            engine_.patchListRecordings();
+        }
         for (std::size_t i = 0; i < choices.size(); ++i) {
             const PatchDeviceChoice& c = choices[i];
             // ONE DEVICE, ONE RADIO: a device another Radio already has is
@@ -370,6 +392,11 @@ void AppWindow::drawPatchRadioInspector(pc::Node& n) {
             // above rather than by its label text.
             if (ImGui::Selectable(text.c_str(), c.key == n.device)) {
                 n.device = c.key;
+                // A recording's rate is its own: the node takes it now, so
+                // the patch is planned at the rate it will run at.
+                for (const pc::RecordingInfo& r : patchRecordings_) {
+                    if (r.key == c.key) { n.rateHz = r.rateHz; }
+                }
                 patchUi_.dirty = true;
             }
             ImGui::EndDisabled();
@@ -382,7 +409,9 @@ void AppWindow::drawPatchRadioInspector(pc::Node& n) {
     // radio had to leave out, is one press away (2026-09-23).
     ImGui::BeginDisabled(engine_.soapyScanPending_);
     if (ImGui::SmallButton(trId("Look for radios"))) {
+        engine_.patchListsWanted_ = true;   // the sound cards too
         engine_.submitCommand(cascade::core::cmd::make(FOXAPI_OP_SCAN_DEVICES));
+        engine_.patchListRecordings();
     }
     ImGui::EndDisabled();
     if (engine_.soapyScanPending_) {
@@ -407,7 +436,16 @@ void AppWindow::drawPatchRadioInspector(pc::Node& n) {
     char rateText[32];
     std::snprintf(rateText, sizeof(rateText), "%.3f MS/s", radioRate(n) / 1e6);
     ImGui::SetNextItemWidth(-FLT_MIN);
-    if (ImGui::BeginCombo("##patchrate", rateText)) {
+    if (pc::deviceSetsItsOwnRate(n.device)) {
+        // A RECORDING'S RATE IS NOT A SETTING: it is the rate it was made at,
+        // and IqFileSource refuses any other. Shown, and said, not offered.
+        ImGui::PushStyleColor(ImGuiCol_Text, amber);
+        ImGui::TextUnformatted(recordingRateText(radioRate(n)).c_str());
+        ImGui::PopStyleColor();
+        ImGui::PushStyleColor(ImGuiCol_Text, muted);
+        ImGui::TextWrapped("%s", tr("The recording sets the rate."));
+        ImGui::PopStyleColor();
+    } else if (ImGui::BeginCombo("##patchrate", rateText)) {
         for (const double r : kPatchRatesHz) {
             char t[32];
             std::snprintf(t, sizeof(t), "%.3f MS/s", r / 1e6);

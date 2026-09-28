@@ -21,6 +21,7 @@
 #include "gui/track_info_cache.hpp"
 #include "gui/aircraft_icons.hpp"
 #include "gui/track_silhouette.hpp"
+#include "gui/ui_census.hpp"
 #include "imgui.h"
 
 namespace cascade::gui {
@@ -2067,6 +2068,33 @@ void ScopeView::draw(float width, float height,
     // shared with the map, and has side effects (every map page's home moves,
     // the coverage accumulator resets) that a renderer must not reach into.
     if (!hasRx_) { return; }
+    const ImVec2 areaTL = ImGui::GetCursorScreenPos();
+    // The area this scope was given, for the census (tests/test_patch_map_credit).
+    census::note("scope:area");
+    census::rect("scope:area", areaTL.x, areaTL.y, areaTL.x + width, areaTL.y + height);
+
+    // THE BASEMAP'S ATTRIBUTION (0.99.42). The scope draws the basemap's tiles
+    // under its face - OpenStreetMap's, with the imagery plugin fitted - and
+    // credited them nowhere, which the map pages and the patch Map part both
+    // do. Lettered under the whole instrument, wrapped to its width, and its
+    // line TAKEN FROM THE HEIGHT FIRST so the tube is sized around it: a
+    // credit drawn into the space the tube fills would sit on the glass or be
+    // cut off at the bottom of the area.
+    const bool credit = tiles != nullptr && tiles->active() && !tiles->attribution().empty();
+    ImVec2 creditSize(0.0f, 0.0f);
+    if (credit) {
+        creditSize = ImGui::CalcTextSize(tiles->attribution().c_str(), nullptr, false, width);
+        const float creditH = creditSize.y + 4.0f;
+        if (height - creditH >= 64.0f) {
+            height -= creditH;
+            const ImVec2 at(areaTL.x, areaTL.y + height + 4.0f);
+            ImGui::GetWindowDrawList()->AddText(ImGui::GetFont(), ImGui::GetFontSize(), at,
+                                                ImGui::GetColorU32(ImGuiCol_TextDisabled),
+                                                tiles->attribution().c_str(), nullptr, width);
+            census::note("scope:credit:", tiles->attribution());
+            census::rect("scope:credit", at.x, at.y, at.x + creditSize.x, at.y + creditSize.y);
+        }
+    }
 
     // --- layout -----------------------------------------------------------
     // The scope is a SQUARE as large as the window allows, and the panel takes
@@ -2122,6 +2150,7 @@ void ScopeView::draw(float width, float height,
     if (side < 64.0f) { return; }
 
     const ImVec2 origin = ImGui::GetCursorScreenPos();
+    census::rect("scope:canvas", origin.x, origin.y, origin.x + scopeW, origin.y + height);
     ImGui::InvisibleButton("##scopecanvas", ImVec2(scopeW, height));
     const bool hovered = ImGui::IsItemHovered();
     const bool clicked = ImGui::IsItemClicked(ImGuiMouseButton_Left);

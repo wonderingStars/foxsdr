@@ -368,7 +368,6 @@ bool AirspySource::programLnaLocked(int index) {
                          kAckBytes, "setting the LNA gain")) {
         return false;
     }
-    lnaIndex_.store(v, std::memory_order_relaxed);
     return true;
 }
 
@@ -380,7 +379,6 @@ bool AirspySource::programMixerLocked(int index) {
                          &ack, kAckBytes, "setting the mixer gain")) {
         return false;
     }
-    mixerIndex_.store(v, std::memory_order_relaxed);
     return true;
 }
 
@@ -392,7 +390,6 @@ bool AirspySource::programVgaLocked(int index) {
                          kAckBytes, "setting the VGA gain")) {
         return false;
     }
-    vgaIndex_.store(v, std::memory_order_relaxed);
     return true;
 }
 
@@ -418,22 +415,46 @@ bool AirspySource::programCombinedLocked(int index, bool linearity) {
     // then MIXER, then LNA.
     const airspy::CombinedGain g = airspy::combinedGainFor(index, linearity);
     if (!programMixerAgcLocked(false) || !programLnaAgcLocked(false)) { return false; }
-    autoGain_.store(false, std::memory_order_relaxed);
     if (!programVgaLocked(g.vga) || !programMixerLocked(g.mixer) || !programLnaLocked(g.lna)) {
         return false;
     }
+    // THE MODE'S OWN VALUE, and the mode. The table rewrote all three
+    // registers, but Free mode's manual LNA / MIXER / VGA are NOT touched:
+    // they are what the user set in Free mode and what Free mode puts back.
+    // The AGC flags are Free mode's too, and are left as the user set them
+    // for the same reason - the radio's AGCs are off now whatever they say.
     const int clamped = std::clamp(index, 0, airspy::kCombinedMaxIndex);
-    // Only one of the two curves describes the radio at a time: setting
-    // linearity makes the last sensitivity reading meaningless, and a panel
-    // showing both would be showing one number that is no longer true.
-    if (linearity) {
-        linearityIndex_.store(clamped, std::memory_order_relaxed);
-        sensitivityIndex_.store(-1, std::memory_order_relaxed);
-    } else {
-        sensitivityIndex_.store(clamped, std::memory_order_relaxed);
-        linearityIndex_.store(-1, std::memory_order_relaxed);
-    }
+    (linearity ? linearityIndex_ : sensitivityIndex_).store(clamped, std::memory_order_relaxed);
+    gainMode_.store(static_cast<int>(linearity ? GainMode::Linearity : GainMode::Sensitivity),
+                    std::memory_order_relaxed);
     return true;
+}
+
+bool AirspySource::programFreeLocked() {
+    // The reference's order everywhere in this file: mixer AGC, LNA AGC, then
+    // VGA, MIXER, LNA (airspy.c:1840-1858). A stage its AGC is driving is not
+    // written: the AGC owns that register, and the manual value is kept for
+    // the moment the AGC is switched off.
+    const bool mAgc = mixerAgc_.load(std::memory_order_relaxed);
+    const bool lAgc = lnaAgc_.load(std::memory_order_relaxed);
+    if (!programMixerAgcLocked(mAgc) || !programLnaAgcLocked(lAgc)) { return false; }
+    if (!programVgaLocked(vgaIndex_.load(std::memory_order_relaxed))) { return false; }
+    if (!mAgc && !programMixerLocked(mixerIndex_.load(std::memory_order_relaxed))) { return false; }
+    if (!lAgc && !programLnaLocked(lnaIndex_.load(std::memory_order_relaxed))) { return false; }
+    gainMode_.store(static_cast<int>(GainMode::Free), std::memory_order_relaxed);
+    return true;
+}
+
+bool AirspySource::applyGainModeLocked(GainMode mode) {
+    switch (mode) {
+        case GainMode::Linearity:
+            return programCombinedLocked(linearityIndex_.load(std::memory_order_relaxed), true);
+        case GainMode::Sensitivity:
+            return programCombinedLocked(sensitivityIndex_.load(std::memory_order_relaxed), false);
+        case GainMode::Free:
+        default:
+            return programFreeLocked();
+    }
 }
 
 bool AirspySource::programBiasTLocked(bool on) {
@@ -625,9 +646,23 @@ bool AirspySource::open(const std::string& args) {
         programLnaLocked(kDefaultGainIndex) && programMixerLocked(kDefaultGainIndex) &&
         programVgaLocked(kDefaultGainIndex) && programBiasTLocked(false);
     if (!configured) { return giveUp(); }
+    // FREE MODE, both AGCs off, 8/8/8 - what the transfers above just put on
+    // the radio. The table modes keep their defaults until chosen, and the
+    // decimation starts at none: a remembered choice is the application's to
+    // put back, after the open.
+    gainMode_.store(static_cast<int>(GainMode::Free), std::memory_order_relaxed);
+    lnaIndex_.store(kDefaultGainIndex, std::memory_order_relaxed);
+    mixerIndex_.store(kDefaultGainIndex, std::memory_order_relaxed);
+    vgaIndex_.store(kDefaultGainIndex, std::memory_order_relaxed);
+    lnaAgc_.store(false, std::memory_order_relaxed);
+    mixerAgc_.store(false, std::memory_order_relaxed);
+    linearityIndex_.store(kDefaultTableIndex, std::memory_order_relaxed);
+    sensitivityIndex_.store(kDefaultTableIndex, std::memory_order_relaxed);
+    decimation_.store(1, std::memory_order_relaxed);
+    link_->decimation.store(1, std::memory_order_relaxed);
+    hardwareRateHz_.store(rates_[startRate], std::memory_order_relaxed);
     sampleRateHz_.store(rates_[startRate], std::memory_order_relaxed);
     centerFrequencyHz_.store(100.0e6, std::memory_order_relaxed);
-    autoGain_.store(false, std::memory_order_relaxed);
 
     std::string label = model_;
     if (!info.serial.empty()) { label += " (serial " + info.serial + ")"; }
@@ -676,6 +711,7 @@ void AirspySource::closeDevice() {
     openMirror_.store(false, std::memory_order_relaxed);
     running_.store(false, std::memory_order_relaxed);
     sampleRateHz_.store(0.0, std::memory_order_relaxed);
+    hardwareRateHz_.store(0.0, std::memory_order_relaxed);
     centerFrequencyHz_.store(0.0, std::memory_order_relaxed);
     packing_.store(false, std::memory_order_relaxed);
     setName("Airspy: (no device)");
@@ -905,6 +941,12 @@ void AirspySource::readerThreadBody(std::shared_ptr<ReaderLink> link) {
     // outside this thread can touch the filter state.
     airspy::IqConverter cnv;
 
+    // THE DECIMATOR, the reader's own for the same reason as the converter:
+    // its filter history belongs to this stream. Configured once, here - the
+    // factor only changes while the reader is stopped (setDecimation).
+    airspy::PowerOfTwoDecimator decim;
+    decim.configure(link->decimation.load(std::memory_order_relaxed));
+
     const unsigned timeoutMs = static_cast<unsigned>(kBulkReadWait.count());
 
     // The re-arm budget (kMaxStreamRearms) and when it was last spent.
@@ -951,6 +993,7 @@ void AirspySource::readerThreadBody(std::shared_ptr<ReaderLink> link) {
             // makes at every airspy_start_rx (airspy.c:1196). The filter
             // history belongs to the samples before the break.
             cnv.reset();
+            decim.reset();
             continue;
         }
         if (got > 0 && rearms > 0 &&
@@ -967,6 +1010,7 @@ void AirspySource::readerThreadBody(std::shared_ptr<ReaderLink> link) {
                 reals[i] = airspy::sampleToFloat(codes[i]);
             }
             samples = cnv.process(reals.data(), realCount, conv.data());
+            if (decim.factor() > 1) { samples = decim.process(conv.data(), samples, conv.data()); }
             if (samples > 0) {
                 const std::size_t written = link->ring.write(conv.data(), samples);
                 if (written != samples) {
@@ -1125,7 +1169,66 @@ std::size_t AirspySource::read(std::complex<float>* dst, std::size_t n) {
 
 std::vector<double> AirspySource::supportedSampleRatesHz() const {
     std::lock_guard<std::mutex> lk(devMutex_);
-    return rates_;
+    // THE RATES THIS SOURCE DELIVERS, which with decimation on are the
+    // board's own divided by the factor - the only numbers sampleRateHz() can
+    // ever read back, and the ones the Rate combo must offer. Whole hertz by
+    // construction (decimationChoicesLocked).
+    const double d = static_cast<double>(decimation_.load(std::memory_order_relaxed));
+    std::vector<double> out;
+    out.reserve(rates_.size());
+    for (const double r : rates_) { out.push_back(r / d); }
+    return out;
+}
+
+std::vector<unsigned> AirspySource::decimationChoicesLocked() const {
+    std::vector<unsigned> out;
+    for (const unsigned d : airspy::kDecimations) {
+        bool whole = !rates_.empty();
+        for (const double r : rates_) {
+            const double q = r / static_cast<double>(d);
+            if (q != std::floor(q)) { whole = false; }
+        }
+        if (whole || d == 1) { out.push_back(d); }
+    }
+    return out;
+}
+
+std::vector<unsigned> AirspySource::decimationChoices() const {
+    std::lock_guard<std::mutex> lk(devMutex_);
+    return decimationChoicesLocked();
+}
+
+bool AirspySource::setDecimation(unsigned factor) {
+    std::lock_guard<std::mutex> lk(devMutex_);
+    if (dev_ == nullptr) {
+        setError("setDecimation() called with no Airspy open");
+        return false;
+    }
+    if (deviceDead()) { return false; }
+    const std::vector<unsigned> choices = decimationChoicesLocked();
+    if (std::find(choices.begin(), choices.end(), factor) == choices.end()) {
+        char buf[160];
+        std::snprintf(buf, sizeof(buf),
+                      "the Airspy cannot decimate by %u here: it takes 1, 2, 4 ... up to %u, where "
+                      "every sample rate it lists stays a whole number of hertz",
+                      factor, choices.empty() ? 1u : choices.back());
+        setError(buf);
+        return false;
+    }
+    if (factor == decimation_.load(std::memory_order_relaxed)) { return true; }
+    // A QUIET RADIO for the change, exactly as a rate change: the reader owns
+    // the decimator and builds it when it starts, so it is stopped, the factor
+    // changed, and started again. Nothing is sent to the radio - decimation is
+    // this end's arithmetic - but a reader running across the change would
+    // hand the ring samples at two rates.
+    const bool wasRunning = running_.load(std::memory_order_relaxed);
+    if (wasRunning) { stopStreamingLocked(); }
+    decimation_.store(factor, std::memory_order_relaxed);
+    link_->decimation.store(factor, std::memory_order_relaxed);
+    sampleRateHz_.store(hardwareRateHz_.load(std::memory_order_relaxed) / factor,
+                        std::memory_order_relaxed);
+    if (wasRunning) { return startStreamingLocked(); }
+    return true;
 }
 
 bool AirspySource::setSampleRateHz(double hz) {
@@ -1149,10 +1252,14 @@ bool AirspySource::setSampleRateHz(double hz) {
     // other, so "the closest thing I have" is the only answer that is ever
     // useful. A tie goes to the lower rate, which is the one that asks less of
     // the USB bus.
+    //
+    // Compared at the DELIVERED rate: with decimation on, a request is for a
+    // rate after the divider (the Rate combo lists those).
+    const double d = static_cast<double>(decimation_.load(std::memory_order_relaxed));
     std::size_t best = 0;
     double bestGap = -1.0;
     for (std::size_t i = 0; i < rates_.size(); ++i) {
-        const double gap = std::abs(rates_[i] - hz);
+        const double gap = std::abs(rates_[i] / d - hz);
         if (bestGap < 0.0 || gap < bestGap) {
             bestGap = gap;
             best = i;
@@ -1170,7 +1277,8 @@ bool AirspySource::setSampleRateHz(double hz) {
         if (wasRunning && !deviceDead()) { startStreamingLocked(); }
         return false;
     }
-    sampleRateHz_.store(rates_[best], std::memory_order_relaxed);
+    hardwareRateHz_.store(rates_[best], std::memory_order_relaxed);
+    sampleRateHz_.store(rates_[best] / d, std::memory_order_relaxed);
     if (wasRunning) { return startStreamingLocked(); }
     return true;
 }
@@ -1207,15 +1315,69 @@ std::vector<GainInfo> AirspySource::gains() const {
     // GainUnit::Steps on every one of them so the panel, the deck and the
     // browser print "LNA 7" rather than "LNA 7.0 dB": the figure is a
     // register position, and nothing in the world measured it in decibels.
-    return {
-        GainInfo{"LNA", 0.0, static_cast<double>(airspy::kLnaMaxIndex), 1.0, GainUnit::Steps},
-        GainInfo{"MIXER", 0.0, static_cast<double>(airspy::kMixerMaxIndex), 1.0, GainUnit::Steps},
-        GainInfo{"VGA", 0.0, static_cast<double>(airspy::kVgaMaxIndex), 1.0, GainUnit::Steps},
-        GainInfo{"LINEARITY", 0.0, static_cast<double>(airspy::kCombinedMaxIndex), 1.0,
-                 GainUnit::Steps},
-        GainInfo{"SENSITIVITY", 0.0, static_cast<double>(airspy::kCombinedMaxIndex), 1.0,
-                 GainUnit::Steps},
-    };
+    //
+    // ONLY THE CHOSEN MODE'S (see the header): a slider for a mode that is
+    // not in use is a control whose number describes nothing on the radio.
+    switch (gainMode()) {
+        case GainMode::Linearity:
+            return {GainInfo{"LINEARITY", 0.0, static_cast<double>(airspy::kCombinedMaxIndex), 1.0,
+                             GainUnit::Steps}};
+        case GainMode::Sensitivity:
+            return {GainInfo{"SENSITIVITY", 0.0, static_cast<double>(airspy::kCombinedMaxIndex),
+                             1.0, GainUnit::Steps}};
+        case GainMode::Free:
+        default:
+            return {
+                GainInfo{"LNA", 0.0, static_cast<double>(airspy::kLnaMaxIndex), 1.0,
+                         GainUnit::Steps},
+                GainInfo{"MIXER", 0.0, static_cast<double>(airspy::kMixerMaxIndex), 1.0,
+                         GainUnit::Steps},
+                GainInfo{"VGA", 0.0, static_cast<double>(airspy::kVgaMaxIndex), 1.0,
+                         GainUnit::Steps},
+            };
+    }
+}
+
+bool AirspySource::setGainState(const GainState& st) {
+    std::lock_guard<std::mutex> lk(devMutex_);
+    if (dev_ == nullptr) {
+        setError("setGainState() called with no Airspy open");
+        return false;
+    }
+    if (deviceDead()) { return false; }
+    linearityIndex_.store(std::clamp(st.linearity, 0, airspy::kCombinedMaxIndex),
+                          std::memory_order_relaxed);
+    sensitivityIndex_.store(std::clamp(st.sensitivity, 0, airspy::kCombinedMaxIndex),
+                            std::memory_order_relaxed);
+    lnaIndex_.store(std::clamp(st.lna, 0, airspy::kLnaMaxIndex), std::memory_order_relaxed);
+    mixerIndex_.store(std::clamp(st.mixer, 0, airspy::kMixerMaxIndex), std::memory_order_relaxed);
+    vgaIndex_.store(std::clamp(st.vga, 0, airspy::kVgaMaxIndex), std::memory_order_relaxed);
+    lnaAgc_.store(st.lnaAgc, std::memory_order_relaxed);
+    mixerAgc_.store(st.mixerAgc, std::memory_order_relaxed);
+    return applyGainModeLocked(st.mode);
+}
+
+AirspySource::GainState AirspySource::gainState() const {
+    GainState st;
+    st.mode = gainMode();
+    st.linearity = linearityIndex_.load(std::memory_order_relaxed);
+    st.sensitivity = sensitivityIndex_.load(std::memory_order_relaxed);
+    st.lna = lnaIndex_.load(std::memory_order_relaxed);
+    st.mixer = mixerIndex_.load(std::memory_order_relaxed);
+    st.vga = vgaIndex_.load(std::memory_order_relaxed);
+    st.lnaAgc = lnaAgc();
+    st.mixerAgc = mixerAgc();
+    return st;
+}
+
+bool AirspySource::setGainMode(GainMode mode) {
+    std::lock_guard<std::mutex> lk(devMutex_);
+    if (dev_ == nullptr) {
+        setError("setGainMode() called with no Airspy open");
+        return false;
+    }
+    if (deviceDead()) { return false; }
+    return applyGainModeLocked(mode);
 }
 
 bool AirspySource::setGainDb(const std::string& gainName, double db) {
@@ -1228,24 +1390,41 @@ bool AirspySource::setGainDb(const std::string& gainName, double db) {
     // Rounded to nearest rather than truncated: a slider that reports 7.6 and
     // programs 7 is a control that lies by a whole step at every position.
     const int index = static_cast<int>(std::lround(db));
-    if (gainName == "LNA") { return programLnaLocked(index); }
-    if (gainName == "MIXER") { return programMixerLocked(index); }
-    if (gainName == "VGA") { return programVgaLocked(index); }
     if (gainName == "LINEARITY") { return programCombinedLocked(index, true); }
     if (gainName == "SENSITIVITY") { return programCombinedLocked(index, false); }
+
+    // A FREE-MODE STAGE. Stored (clamped at both ends, device_source.hpp's
+    // contract), then either the whole of Free mode is put on the radio -
+    // when this is what switches to it - or just this stage, unless its own
+    // AGC is driving it, in which case the value waits for the AGC to go off.
+    const bool fromOtherMode = gainMode() != GainMode::Free;
+    if (gainName == "LNA") {
+        lnaIndex_.store(std::clamp(index, 0, airspy::kLnaMaxIndex), std::memory_order_relaxed);
+        if (fromOtherMode) { return programFreeLocked(); }
+        return lnaAgc() || programLnaLocked(lnaIndex_.load(std::memory_order_relaxed));
+    }
+    if (gainName == "MIXER") {
+        mixerIndex_.store(std::clamp(index, 0, airspy::kMixerMaxIndex), std::memory_order_relaxed);
+        if (fromOtherMode) { return programFreeLocked(); }
+        return mixerAgc() || programMixerLocked(mixerIndex_.load(std::memory_order_relaxed));
+    }
+    if (gainName == "VGA") {
+        vgaIndex_.store(std::clamp(index, 0, airspy::kVgaMaxIndex), std::memory_order_relaxed);
+        if (fromOtherMode) { return programFreeLocked(); }
+        return programVgaLocked(vgaIndex_.load(std::memory_order_relaxed));
+    }
     setError("the Airspy has no gain called \"" + gainName + "\"");
     return false;
 }
 
 double AirspySource::gainDb(const std::string& gainName) const {
+    // Each mode's OWN value, whichever mode is in use: LNA / MIXER / VGA are
+    // Free mode's manual settings, never what a table last wrote.
     if (gainName == "LNA") { return static_cast<double>(lnaIndex_.load(std::memory_order_relaxed)); }
     if (gainName == "MIXER") {
         return static_cast<double>(mixerIndex_.load(std::memory_order_relaxed));
     }
     if (gainName == "VGA") { return static_cast<double>(vgaIndex_.load(std::memory_order_relaxed)); }
-    // The combined curves report -1 until one of them has been used and 0
-    // again once the OTHER one has, because after a sensitivity change the
-    // last linearity number describes a radio that no longer exists.
     if (gainName == "LINEARITY") {
         return static_cast<double>(linearityIndex_.load(std::memory_order_relaxed));
     }
@@ -1253,6 +1432,34 @@ double AirspySource::gainDb(const std::string& gainName) const {
         return static_cast<double>(sensitivityIndex_.load(std::memory_order_relaxed));
     }
     return 0.0;
+}
+
+bool AirspySource::setLnaAgc(bool on) {
+    std::lock_guard<std::mutex> lk(devMutex_);
+    if (dev_ == nullptr) {
+        setError("setLnaAgc() called with no Airspy open");
+        return false;
+    }
+    if (deviceDead()) { return false; }
+    lnaAgc_.store(on, std::memory_order_relaxed);
+    if (gainMode() != GainMode::Free) { return programFreeLocked(); }
+    // Off hands the stage back to its manual value, which was not sent while
+    // the AGC had it.
+    return programLnaAgcLocked(on) &&
+           (on || programLnaLocked(lnaIndex_.load(std::memory_order_relaxed)));
+}
+
+bool AirspySource::setMixerAgc(bool on) {
+    std::lock_guard<std::mutex> lk(devMutex_);
+    if (dev_ == nullptr) {
+        setError("setMixerAgc() called with no Airspy open");
+        return false;
+    }
+    if (deviceDead()) { return false; }
+    mixerAgc_.store(on, std::memory_order_relaxed);
+    if (gainMode() != GainMode::Free) { return programFreeLocked(); }
+    return programMixerAgcLocked(on) &&
+           (on || programMixerLocked(mixerIndex_.load(std::memory_order_relaxed)));
 }
 
 bool AirspySource::setAutoGain(bool on) {
@@ -1263,10 +1470,18 @@ bool AirspySource::setAutoGain(bool on) {
     }
     if (deviceDead()) { return false; }
     // BOTH AGCs, in the reference's own order (mixer then LNA, airspy.c:1840
-    // and :1844). Half an AGC is a configuration nobody asked for and nothing
-    // on screen could explain.
+    // and :1844). Half an AGC is a configuration the generic switch cannot
+    // describe. ON is Free mode - neither table has an AGC - so from a table
+    // mode the whole of Free mode goes on the radio; OFF leaves the mode as
+    // it is and, in Free mode, hands both stages back to their manual values.
+    mixerAgc_.store(on, std::memory_order_relaxed);
+    lnaAgc_.store(on, std::memory_order_relaxed);
+    if (gainMode() != GainMode::Free) { return on ? programFreeLocked() : true; }
     if (!programMixerAgcLocked(on) || !programLnaAgcLocked(on)) { return false; }
-    autoGain_.store(on, std::memory_order_relaxed);
+    if (!on) {
+        return programMixerLocked(mixerIndex_.load(std::memory_order_relaxed)) &&
+               programLnaLocked(lnaIndex_.load(std::memory_order_relaxed));
+    }
     return true;
 }
 

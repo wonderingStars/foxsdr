@@ -57,6 +57,7 @@
 // startup update check runs at all, and what the Settings > Updates row says.
 #include "core/package_identity.hpp"
 #include "gui/band_plan_style.hpp"
+#include "gui/basemap_stand_in.hpp"
 #include "gui/plugin_markers.hpp"
 #include "engine/rate_follow_status.hpp"
 #include "engine/soundcard_panel.hpp"
@@ -466,6 +467,9 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            // The per-radio converters: set in the Source section, which calls
            // no save of its own.
            a.converters == b.converters &&
+           // Each Airspy's gain mode, gains and decimation: set in the Source
+           // section, which calls no save of its own.
+           a.airspy == b.airspy &&
            a.plutoUri == b.plutoUri && a.soapyAntenna == b.soapyAntenna &&
            a.iqFilePath == b.iqFilePath && a.centerHz == b.centerHz &&
            a.mode == b.mode && a.bandwidthHz == b.bandwidthHz &&
@@ -480,6 +484,8 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            a.notchQ == b.notchQ && a.autoNotch == b.autoNotch &&
            a.bandPlanOverlay == b.bandPlanOverlay &&
            a.patch == b.patch &&
+           // The main view (0.99.40): switched by a key that saves nothing.
+           a.mainView == b.mainView &&
            a.bandPlanSelection == b.bandPlanSelection &&
            // Language and country: chosen in a combo on the SYSTEM bank.
            a.language == b.language && a.country == b.country &&
@@ -1044,6 +1050,13 @@ int AppWindow::run(int frames) {
         // The deck's bias tee stand-in (engine/bias_tee.hpp, biasStandInFor):
         // bounded runs only, for the same reason as the script below.
         engine_.biasStandIn_ = cascade::gui::biasStandInFor(std::getenv("FOXSDR_FORCE_BIAS_KEY"), true);
+        // The stand-in basemap (gui/basemap_stand_in.hpp), the same way: a
+        // map's tiles and their attribution, with no plugin and no network.
+        basemapStandIn_ =
+            cascade::gui::standInBasemapWanted(std::getenv("FOXSDR_FORCE_BASEMAP"), true);
+        if (basemapStandIn_ && !basemap_.active()) {
+            basemap_.attach(cascade::gui::standInBasemap());
+        }
         // The scripted pointer (gui/input_script.hpp). Bounded runs only, so
         // an interactive session can never be driven by a stray variable.
         if (const char* script = std::getenv("FOXSDR_INPUT_SCRIPT");
@@ -1296,15 +1309,28 @@ int AppWindow::run(int frames) {
             demodScopeOpenedByEnv_ = true;
             demodScopeOpen_ = true;
         }
+        // THE RADAR SCOPE, the same way but BOUNDED RUNS ONLY (0.99.42): its
+        // tiles and their credit can only be judged with it on screen
+        // (tests/test_patch_map_credit), and scopeMode is cleared at start-up.
+        if (frames >= 0 && !radarScopeOpenedByEnv_ &&
+            std::getenv("FOXSDR_OPEN_RADAR_SCOPE") != nullptr &&
+            std::getenv("FOXSDR_OPEN_RADAR_SCOPE")[0] != '\0') {
+            radarScopeOpenedByEnv_ = true;
+            scopeMode_ = true;
+        }
 
         // AND THE PATCH CANVAS, for exactly the reason the two above have
         // one: a canvas can only be judged by looking at it, nothing in a
         // config file opens a page since 0.79.1, and the alternative is
         // driving the mouse - which lands on whatever happens to be under
         // the cursor and has cost hours before now.
+        //
+        // SINCE 0.99.40 THE PATCH IS THE MAIN VIEW and a fresh start already
+        // shows it; this now stands for the PATCH view key, for a config that
+        // opens on the receiver.
         if (!patchOpenedByEnv_ && std::getenv("FOXSDR_OPEN_PATCH") != nullptr) {
             patchOpenedByEnv_ = true;
-            patchOpen_ = true;
+            setMainViewPatch(true);
         }
 
         // THE RECEIVER'S RADIO, AND THE PATCH PAGE OPENED AND CLOSED ON A
@@ -1389,7 +1415,7 @@ int AppWindow::run(int frames) {
                 at != nullptr && *at != '\0') {
                 const std::string list = std::string(",") + at + ",";
                 if (list.find("," + std::to_string(rendered) + ",") != std::string::npos) {
-                    patchOpen_ = !patchOpen_;
+                    setMainViewPatch(!patchOpen_);
                 }
             }
             // THE PATCH'S START KEY (0.99.18): FOXSDR_PATCH_START presses it once
@@ -1413,6 +1439,20 @@ int AppWindow::run(int frames) {
                 const std::string list = std::string(",") + at + ",";
                 if (list.find("," + std::to_string(rendered) + ",") != std::string::npos) {
                     engine_.submitCommand(cascade::core::cmd::make(FOXAPI_OP_PATCH_ALL_OFF));
+                }
+            }
+            // FOXSDR_PATCH_MAP_FIT_AT (0.99.40): frames at which every Map
+            // part's "Fit to targets" key is pressed. A map fits itself once,
+            // to whatever arrives FIRST - aircraft, say - and a capture of
+            // several sources on one map needs the fit after all of them.
+            if (const char* at = std::getenv("FOXSDR_PATCH_MAP_FIT_AT");
+                at != nullptr && *at != '\0') {
+                const std::string list = std::string(",") + at + ",";
+                if (list.find("," + std::to_string(rendered) + ",") != std::string::npos) {
+                    for (auto& [id, view] : patchMapViews_) {
+                        (void)id;
+                        if (view) { view->requestFitToTracks(); }
+                    }
                 }
             }
         }
@@ -2961,30 +3001,61 @@ void AppWindow::drawUi() {
 
         ImGui::SameLine();
 
-        // THE STATUS COLUMN IS OPTIONAL AND SIZED FIRST, so the centre takes
-        // what is left rather than the column taking what the centre spared.
-        // It is dropped entirely on a narrow window: the spectrum is what this
-        // application is for, and squeezing it to keep a status card visible
-        // has the priority backwards.
-        constexpr float kStatusWidth = 230.0f;
-        const bool showStatus =
-            ImGui::GetContentRegionAvail().x > kStatusWidth + 520.0f;
-        const float centreW = showStatus ? -(kStatusWidth + ImGui::GetStyle().ItemSpacing.x)
-                                         : 0.0f;
-
-        // The center area owns its scrolling (none): the spectrum/waterfall
-        // pair always fills whatever space the splitter hands it.
-        ImGui::BeginChild("##center", ImVec2(centreW, 0.0f), ImGuiChildFlags_None,
-                          ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-        drawCenterPanels();
-        ImGui::EndChild();
-
-        if (showStatus) {
-            ImGui::SameLine();
-            ImGui::BeginChild("##status_column", ImVec2(kStatusWidth, 0.0f),
-                              ImGuiChildFlags_None);
-            drawStatusColumn();
+        if (patchOpen_) {
+            // THE PATCH VIEW (0.99.40, the owner: "display the patch panel as
+            // the main"). It takes the whole area right of the rail - the
+            // spectrum's, the waterfall's and the status column's - because a
+            // canvas beside a fixed-width inspector is what needs the width,
+            // and every card in the status column is about the receiver it
+            // replaces. The rail stays: its view keys are the way back.
+            //
+            // THE SPECTRUM IS STILL CONSUMED, for the reason scope mode gives
+            // above: the web interface's snapshot copies lastFrame_ only when
+            // its sequence moves, and the waterfall would come back with a
+            // hole in its history.
+            if (pipeline_.getLatestFrame(lastFrame_)) {
+                waterfall_->addLine(lastFrame_.dbBins.data(),
+                                    static_cast<int>(lastFrame_.dbBins.size()), dbMin_, dbMax_);
+                ++waterfallLines_;
+                lastFrameSeenS_ = ImGui::GetTime();
+            }
+            ImGui::BeginChild("##patchview", ImVec2(0.0f, 0.0f), ImGuiChildFlags_None,
+                              ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+            drawPatchView();
             ImGui::EndChild();
+        } else {
+            // THE STATUS COLUMN IS OPTIONAL AND SIZED FIRST, so the centre takes
+            // what is left rather than the column taking what the centre spared.
+            // It is dropped entirely on a narrow window: the spectrum is what this
+            // application is for, and squeezing it to keep a status card visible
+            // has the priority backwards.
+            constexpr float kStatusWidth = 230.0f;
+            const bool showStatus =
+                ImGui::GetContentRegionAvail().x > kStatusWidth + 520.0f;
+            const float centreW = showStatus ? -(kStatusWidth + ImGui::GetStyle().ItemSpacing.x)
+                                             : 0.0f;
+
+            // The center area owns its scrolling (none): the spectrum/waterfall
+            // pair always fills whatever space the splitter hands it.
+            ImGui::BeginChild("##center", ImVec2(centreW, 0.0f), ImGuiChildFlags_None,
+                              ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+            {
+                // The RECEIVER view, as the census knows it (tests/test_main_view).
+                const ImVec2 at = ImGui::GetWindowPos();
+                const ImVec2 sz = ImGui::GetWindowSize();
+                cascade::gui::census::note("view:receiver");
+                cascade::gui::census::rect("view:receiver", at.x, at.y, at.x + sz.x, at.y + sz.y);
+            }
+            drawCenterPanels();
+            ImGui::EndChild();
+
+            if (showStatus) {
+                ImGui::SameLine();
+                ImGui::BeginChild("##status_column", ImVec2(kStatusWidth, 0.0f),
+                                  ImGuiChildFlags_None);
+                drawStatusColumn();
+                ImGui::EndChild();
+            }
         }
     }
 
@@ -3016,7 +3087,11 @@ void AppWindow::drawUi() {
     // scope's whole tile set on every frame and re-uploading it on the next.
     // Skipped entirely when nothing asked, so an eviction pass with no map and
     // no scope open cannot age the tile set for nothing.
-    if (basemapUsedThisFrame_) { basemap_.endFrame(); }
+    if (basemapUsedThisFrame_) {
+        // Said to the census when there are tiles to keep (tests/test_patch_map_credit).
+        if (basemap_.active()) { cascade::gui::census::note("basemap:endframe"); }
+        basemap_.endFrame();
+    }
     basemapUsedThisFrame_ = false;
 
     // (The scanner's frame driver ran near the top, after the command drain:
@@ -5562,6 +5637,8 @@ void AppWindow::drawMenuColumn() {
     // function selector a 1960s bench actually has: a row of pushbuttons, one
     // lit. See gui/rail_banks.hpp for why the rail stopped being one list.
     bodyTop = drawRailBankKeys(colTL.x, colTL.y, colSize.x, bodyTop);
+    // ...and under them the main view's two keys, RECEIVER and PATCH.
+    bodyTop = drawViewKeys(colTL.x, colSize.x, bodyTop);
 
     // The sections scroll inside an inner child sized to leave room for the
     // status footer, so the footer stays pinned to the bottom of the column
@@ -6283,18 +6360,28 @@ void AppWindow::drawDecodeBank() {
 // A real ImGui item, so the keys take part in the same input arbitration as
 // every other control and can be reached with Tab; the F-keys are handled by
 // the caller, once for the row, because they are not a property of a key.
+// `census` names the key in the interface census ("bank:" and its index), and
+// `fkeyHint` adds the F-key a bank key answers to its tooltip - the view keys
+// (drawViewKeys, 0.99.40) are the same part with no F-key of their own.
 static bool benchBankKey(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
-                         const char* label, bool on, const char* tooltip, int index) {
+                         const char* label, bool on, const char* tooltip, int index,
+                         const char* census = "bank:", bool fkeyHint = true) {
     if (dl == nullptr || br.x - tl.x < 12.0f || br.y - tl.y < 8.0f) { return false; }
-    cascade::gui::census::note("bank:", index);
-    cascade::gui::census::rect("bank:", index, tl.x, tl.y, br.x, br.y);
+    cascade::gui::census::note(census, index);
+    cascade::gui::census::rect(census, index, tl.x, tl.y, br.x, br.y);
     ImGui::PushID(index);
     ImGui::SetCursorScreenPos(tl);
     const bool pressed = ImGui::InvisibleButton("##bankkey", ImVec2(br.x - tl.x, br.y - tl.y));
     const bool hovered = ImGui::IsItemHovered();
     const bool held = ImGui::IsItemActive();
     const bool focused = ImGui::IsItemFocused();
-    if (hovered && tooltip != nullptr) { ImGui::SetTooltip("%s  (F%d)", tooltip, index + 1); }
+    if (hovered && tooltip != nullptr) {
+        if (fkeyHint) {
+            ImGui::SetTooltip("%s  (F%d)", tooltip, index + 1);
+        } else {
+            ImGui::SetTooltip("%s", tooltip);
+        }
+    }
     ImGui::PopID();
 
     const float r = cascade::gui::theme::kKeyRounding;
@@ -7211,10 +7298,17 @@ void AppWindow::drawSourceSection() {
             ImGui::Text(tr("Antenna: %s"), engine_.deviceAntenna_.c_str());
         }
 
+        // AN AIRSPY DRAWS ITS OWN (app_window_airspy.cpp): one gain mode at a
+        // time with only that mode's sliders, Free mode's two AGCs, and the
+        // decimation. The generic switch and sliders below are for every
+        // other radio.
+        const bool airspyPanel = drawAirspyControls();
         // A COPY of the switch; SET_DEVICE_AGC changes the radio's mode and
         // the panel's figure only when the device accepts it.
         bool agc = engine_.deviceAgc_;
-        if (engine_.deviceAgcSupported_) {
+        if (airspyPanel) {
+            // drawn above
+        } else if (engine_.deviceAgcSupported_) {
             if (ImGui::Checkbox(trId("Auto gain"), &agc)) {
                 engine_.submitCommand(cascade::core::cmd::makeInt(FOXAPI_OP_SET_DEVICE_AGC, agc ? 1 : 0));
             }
@@ -7233,7 +7327,7 @@ void AppWindow::drawSourceSection() {
         // from this panel and nothing ever said so. kSoapyGainMinDb/MaxDb
         // remain the fallback for a driver that reports no range at all.
         ImGui::BeginDisabled(agc);
-        for (std::size_t i = 0; i < engine_.deviceGainNames_.size(); ++i) {
+        for (std::size_t i = 0; !airspyPanel && i < engine_.deviceGainNames_.size(); ++i) {
             float loDb = kSoapyGainMinDb;
             float hiDb = kSoapyGainMaxDb;
             if (i < engine_.deviceGainRanges_.size() &&
@@ -10081,14 +10175,59 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
                     view->requestFitToTracks();
                 }
                 const float mapW = faceW;
-                const float mapH = s1.y - ImGui::GetCursorScreenPos().y - 4.0f * zoom;
+                // THE BASEMAP'S ATTRIBUTION, AS EVERY MAP PAGE LETTERS IT
+                // (0.99.42). Until now this part drew the same tiles through
+                // the same MapView and credited nothing - OpenStreetMap tiles
+                // uncredited on every patch page with the imagery plugin
+                // fitted. The line is RESERVED BEFORE the chart is sized, for
+                // the reason the map pages give: the map fills what it is
+                // given, so a credit drawn afterwards lands outside the face.
+                // Under the chart, so the zoom keys and the legend (both
+                // inside it) can never cover it; wrapped to the face's width.
+                const bool credit = basemap_.active() && !basemap_.attribution().empty();
+                float creditH = 0.0f;
+                if (credit) {
+                    creditH = ImGui::CalcTextSize(basemap_.attribution().c_str(), nullptr, false,
+                                                  mapW)
+                                  .y +
+                              ImGui::GetStyle().ItemSpacing.y;
+                }
+                const float mapH =
+                    s1.y - ImGui::GetCursorScreenPos().y - 4.0f * zoom - creditH;
                 if (mapW > 40.0f && mapH > 40.0f) {
                     view->setTrailOptions(mapTrails_, mapTrailAltColours_);
                     view->setTrailStyle(mapTrailStyle_);
                     view->setAircraftIconPx(aircraftIconPx_);
                     view->setTrailWidthPx(mapTrailWidthPx_);
+                    const ImVec2 chartTL = ImGui::GetCursorScreenPos();
+                    cascade::gui::census::rect("patchmap:face", s0.x, s0.y, s1.x, s1.y);
+                    cascade::gui::census::rect("patchmap:chart", chartTL.x, chartTL.y,
+                                               chartTL.x + mapW, chartTL.y + mapH);
+                    cascade::gui::census::note("patchmap:chart");
                     view->draw(mapW, mapH, patchMapTracks_, patchMapPaths_, &basemap_,
                                &trackInfo_);
+                    if (credit) {
+                        ImGui::SetCursorScreenPos(ImVec2(chartTL.x, chartTL.y + mapH +
+                                                                        ImGui::GetStyle().ItemSpacing.y));
+                        const ImVec2 at = ImGui::GetCursorScreenPos();
+                        // WINDOW-LOCAL, as ImGui's wrap position is (it adds
+                        // the window's own position back): a screen x put the
+                        // wrap a window's offset to the right, and a narrow
+                        // part's credit ran on past its chart (0.99.42).
+                        ImGui::PushTextWrapPos(at.x + mapW - ImGui::GetWindowPos().x +
+                                               ImGui::GetScrollX());
+                        ImGui::TextDisabled("%s", basemap_.attribution().c_str());
+                        ImGui::PopTextWrapPos();
+                        const ImVec2 r0 = ImGui::GetItemRectMin();
+                        const ImVec2 r1 = ImGui::GetItemRectMax();
+                        cascade::gui::census::note("patchmap:credit:", basemap_.attribution());
+                        cascade::gui::census::rect("patchmap:credit", r0.x, r0.y, r1.x, r1.y);
+                    }
+                    // ...AND THE TILE CACHE IS TOLD IT WAS USED, as the map
+                    // pages tell it: the one endFrame() at the end of drawUi
+                    // is what evicts unwanted tiles and re-asks a missing one,
+                    // and with only this part on screen it never ran.
+                    basemapUsedThisFrame_ = true;
                 }
                 break;
             }
@@ -10173,8 +10312,61 @@ void AppWindow::drawPatchSection() {
                           "displays wired together by hand. Drag from a port to wire it.\n"
                           "A connection that cannot carry what the port produces is\n"
                           "refused, and says why."))) {
-        patchOpen_ = !patchOpen_;
+        // The same switch as the rail's view keys (0.99.40): the patch is the
+        // main window's other face now, not a page of its own.
+        setMainViewPatch(!patchOpen_);
     }
+}
+
+void AppWindow::setMainViewPatch(bool patch) {
+    // WHICH FACE, AND NOTHING ELSE. Opening the old page by hand asked for a
+    // SoapySDR scan; the view is now switched to and fro all day, and every
+    // switch would run the vendor probe - which opens and resets USB radios -
+    // again. The device lists are asked for by the Radio's own device list
+    // and "Look for radios" (patchListsWanted_), the way the Source section's
+    // list asks on its first open.
+    patchOpen_ = patch;
+}
+
+float AppWindow::drawViewKeys(float colX, float colW, float top) {
+    // THE MAIN VIEW'S TWO KEYS (0.99.40): RECEIVER and PATCH, directly under
+    // the bank keys and in their exact form - a latched pushbutton with its
+    // lamp strip lit under the one that is in - because they are the same
+    // kind of control: a selector, one position always in. Here on the rail
+    // rather than in either view so that the way to the other view is in the
+    // same place whichever one is showing.
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const float keyH = std::max(22.0f, cascade::gui::fonts::kTinySize + 9.0f);
+    const float x0 = colX + cascade::gui::kBankKeyInset;
+    const float keyW = cascade::gui::bankKeyWidth(colW, 2);
+    if (keyW < 24.0f || dl == nullptr) { return top; }
+    const char* const labels[2] = {tr("RECEIVER"), tr("PATCH")};
+    const char* const tips[2] = {
+        tr("Shows the receiver: the spectrum, the waterfall and its status.\n"
+           "Leaving the patch view stops a running patch and gives the\n"
+           "receiver its radio back."),
+        tr("Opens the patch canvas: radios, channels, decoders and\n"
+           "displays wired together by hand. Drag from a port to wire it.\n"
+           "A connection that cannot carry what the port produces is\n"
+           "refused, and says why.")};
+    int pressed = -1;
+    // Their own id scope: benchBankKey keys an item on its index, and the
+    // bank keys drawn just above use 0 and 1 too.
+    ImGui::PushID("##viewkeys");
+    for (int i = 0; i < 2; ++i) {
+        const ImVec2 tl(x0 + static_cast<float>(i) * (keyW + cascade::gui::kBankKeyGap), top);
+        const ImVec2 br(tl.x + keyW, top + keyH);
+        const bool in = (i == 1) == patchOpen_;
+        if (benchBankKey(dl, tl, br, labels[i], in, tips[i], i, "viewkey:", false)) {
+            pressed = i;
+        }
+    }
+    ImGui::PopID();
+    if (pressed >= 0) { setMainViewPatch(pressed == 1); }
+    // Below the lamp strip, with the bank keys' own spacing.
+    const float below = top + keyH + 7.0f + 6.0f;
+    ImGui::SetCursorScreenPos(ImVec2(x0, below));
+    return below;
 }
 
 void AppWindow::seedPatchIfNeeded() {
@@ -10223,7 +10415,16 @@ void AppWindow::drawPatchPage() {
         // when it opened, so handing them back when it closes is the only
         // symmetric answer - and a patch still playing from a window you
         // have closed is a receiver whose controls you cannot find.
+        //
+        // SINCE 0.99.40 "CLOSED" IS "THE RECEIVER VIEW WAS CHOSEN": the page
+        // is the main window's patch face, and leaving it does exactly what
+        // closing the page did - nothing more, nothing less.
         if (engine_.patchWasOpen_) {
+            cascade::core::diagLogf(
+                "patch: view closed%s",
+                engine_.patchRunning_ ? " while running - every patch radio closes and the receiver "
+                                "gets its radio back"
+                              : "");
             engine_.patchWasOpen_ = false;
             engine_.patchRunning_ = false;
             engine_.patchWasRunning_ = false;
@@ -10239,24 +10440,42 @@ void AppWindow::drawPatchPage() {
         }
         return;
     }
+    // SHOWING: drawn as the main window's face by drawPatchView, from inside
+    // the root window, where it takes the spectrum's place.
+}
 
-    seedPatchIfNeeded();
+void AppWindow::drawPatchView() {
+    // THE WHOLE CHILD IS THE VIEW - the area right of the rail, as tall as the
+    // body under the deck - so it resizes with the main window by construction.
+    const ImVec2 viewTL = ImGui::GetWindowPos();
+    const ImVec2 viewSize = ImGui::GetWindowSize();
+    const ImVec2 viewBR(viewTL.x + viewSize.x, viewTL.y + viewSize.y);
+    cascade::gui::census::note("view:patch");
+    cascade::gui::census::rect("view:patch", viewTL.x, viewTL.y, viewBR.x, viewBR.y);
 
-    // Square-ish and large: a patch is read across, and a canvas that starts
-    // small teaches the user to pan before it teaches them anything else.
-    constexpr float kPatchW = 900.0f;
-    constexpr float kPatchH = 620.0f;
-    // THE OPENING RECTANGLE IS THE CALL SITE'S JOB - beginPage's defaults are
-    // what "Reset window sizes" re-applies, not the first placement. Centred
-    // in the main window rather than tucked into a corner, because this page
-    // is worked IN rather than watched beside the spectrum.
-    const ImGuiViewport* mv = ImGui::GetMainViewport();
-    const float px = mv->Pos.x + std::max(0.0f, (mv->Size.x - kPatchW) * 0.5f);
-    const float py = mv->Pos.y + std::max(0.0f, (mv->Size.y - kPatchH) * 0.5f);
-    ImGui::SetNextWindowPos(ImVec2(px, py), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(kPatchW, kPatchH), ImGuiCond_FirstUseEver);
+    // THE STARTER RADIO WAITS FOR THE RECEIVER'S (0.99.40). It is named after
+    // the receiver's own radio, and the view is now up on the very first
+    // frame - while a session's radio is still opening on its worker. Seeded
+    // then it would be the generator for good; seeded once the open has
+    // answered, it is the radio the user was listening to, as it was when
+    // the page was only ever opened by hand.
+    if (!deviceOpenPending_ && !soundCardOpenPending_) { seedPatchIfNeeded(); }
 
-    if (beginPage("Patch###patchwindow", tr("PATCH"), &patchOpen_, 0, kPatchW, kPatchH)) {
+    // THE PLATE, the rail's own: ground, bevel, the engraved name and the rule
+    // under it - so the view reads as a panel of the bench rather than a
+    // window floating over it - and the body laid in a well below the rule.
+    const float bodyTop =
+        cascade::gui::addBenchPlate(ImGui::GetWindowDrawList(), viewTL, viewBR, tr("PATCH"));
+    const ImVec2 wellSize(viewSize.x - kRailPlatePad * 2.0f, viewBR.y - bodyTop - kRailPlatePad);
+    if (wellSize.x < 8.0f || wellSize.y < 8.0f) { return; }
+    ImGui::SetCursorScreenPos(ImVec2(viewTL.x + kRailPlatePad, bodyTop));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
+    const bool wellOpen =
+        ImGui::BeginChild("##patchwell", wellSize, ImGuiChildFlags_None,
+                          ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    ImGui::PopStyleColor();
+
+    if (wellOpen) {
         // The installed decoder plugins, fresh each frame: a plugin installed
         // from the store a moment ago is a part now, and one the user just
         // stopped is not.
@@ -10317,6 +10536,12 @@ void AppWindow::drawPatchPage() {
                                   cascade::core::patch::kMaxRadios;
             ImGui::BeginDisabled(full);
             if (ImGui::Button(trId(kParts[i].label))) { pressedPart = i; }
+            {
+                // Where each key is, for a scripted press (tests/test_main_view).
+                const ImVec2 k0 = ImGui::GetItemRectMin();
+                const ImVec2 k1 = ImGui::GetItemRectMax();
+                cascade::gui::census::rect("patchpart:", i, k0.x, k0.y, k1.x, k1.y);
+            }
             ImGui::EndDisabled();
             if (full && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
                 ImGui::SetTooltip(tr("A patch has at most %zu radios."),
@@ -10425,6 +10650,9 @@ void AppWindow::drawPatchPage() {
                 const Part& p = kParts[pressedPart];
                 // A new radio starts on a device nothing else is using - the
                 // receiver's own radio first - so it runs the moment it lands.
+                // The native list is read for it here (0.99.40): showing the
+                // view no longer reads it, and adding a radio is asking for one.
+                if (p.kind == cascade::core::patch::NodeKind::Radio) { scanNative(); }
                 const std::string dev = p.kind == cascade::core::patch::NodeKind::Radio
                                             ? patchDefaultDeviceKey()
                                             : std::string{};
@@ -10761,7 +10989,7 @@ void AppWindow::drawPatchPage() {
                 engine_.patchGraph_, patchUi_.view.pan.x, patchUi_.view.pan.y, patchUi_.view.zoom);
         }
     }
-    endPage();
+    ImGui::EndChild();
 }
 
 void AppWindow::drawDemodScopeSection() {
@@ -18484,6 +18712,12 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
             }
         }
     }
+    // THE MAIN VIEW (0.99.40): the face the window was showing when it last
+    // closed - the patch unless that was the receiver. The one thing
+    // startupState() keeps of what was showing (see core/config.hpp). Only
+    // WHICH FACE: the device lists stay unasked (patchListsWanted_) and the
+    // patch stays stopped - showing it starts nothing.
+    patchOpen_ = cfg.mainView != "receiver";
     bandPlanSizeIndex_ = bandPlanSizeIndexFromKey(cfg.bandPlanSize);
     bandPlanPaletteIndex_ = bandPlanPaletteIndexFromKey(cfg.bandPlanPalette);
     // Language and country: the language is applied before the next frame
@@ -18666,6 +18900,8 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     // order of the halves is immaterial.
     engine_.fillConfig(cfg);
     cfg.patch = patchText_;
+    // WHICH FACE (0.99.40): the patch view or the receiver's.
+    cfg.mainView = patchOpen_ ? "patch" : "receiver";
     cfg.splitRatio = splitRatio_;
     cfg.bandPlanOverlay = bandPlanOverlay_;
     cfg.language = languageSetting_;  // as chosen: never FOXSDR_LANGUAGE
@@ -18870,7 +19106,14 @@ void AppWindow::onPluginsUnloading() {
     trackInfo_.detach();
 }
 
-void AppWindow::attachBasemap(const CascadeBasemapApi* api) { basemap_.attach(api); }
+void AppWindow::attachBasemap(const CascadeBasemapApi* api) {
+    // A bounded run's stand-in (FOXSDR_FORCE_BASEMAP), only where no plugin
+    // supplies one: refreshPluginRunner hands this the plugin's basemap or
+    // null, and the window is where the stand-in itself lives (it is not
+    // engine-linkable - see gui/basemap_stand_in.hpp).
+    if (api == nullptr && basemapStandIn_) { api = cascade::gui::standInBasemap(); }
+    basemap_.attach(api);
+}
 
 void AppWindow::attachTrackInfo(const CascadeTrackInfoApi* api) { trackInfo_.attach(api); }
 

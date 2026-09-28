@@ -204,6 +204,9 @@ AppConfig junkConfig() {
     c.transmitArgs = "uri=ip:10.0.0.9";
     // The rail's bank, off its default of 0 for the same reason.
     c.railBank = 3;
+    // The main view (0.99.40), not one of the two names the loader accepts,
+    // so a load path that forgets it leaves junk rather than the default.
+    c.mainView = "garbage";
     // Map geometry, away from the "nothing saved" default and out of range, so
     // a load path that forgets to assign it is caught.
     c.mapWindowWidth = -5;
@@ -282,11 +285,13 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     // A patch is a multi-line document carried as one string; it has to
     // be compared here or the round-trip test would not cover it at all.
     CHECK(a.patch == b.patch);
+    CHECK(a.mainView == b.mainView);
     CHECK(a.sourceKind == b.sourceKind);
     CHECK(a.soapyArgs == b.soapyArgs);
     CHECK(a.nativeArgs == b.nativeArgs);
     CHECK(a.biasTee == b.biasTee);
     CHECK(a.converters == b.converters);
+    CHECK(a.airspy == b.airspy);
     CHECK(a.plutoUri == b.plutoUri);
     CHECK(a.iqFilePath == b.iqFilePath);
     CHECK(a.centerHz == b.centerHz);
@@ -422,6 +427,11 @@ int main() {
         in.transmitPowerDb = -12.5;
         in.transmitSplit = true;
         in.railBank = 2;
+        // THE ONE VIEW THAT IS RESTORED (0.99.40, the owner: "display the
+        // patch panel as the main"). The main view is not a window that opens
+        // itself - it is which of the two faces the main window shows, and
+        // the owner asked for the last one chosen to come back.
+        in.mainView = "receiver";
         in.pluginBrowserOpen = true;
         in.fittedModulesOpen = true;
         in.fittedModulesX = 40;
@@ -461,6 +471,7 @@ int main() {
         // Everything that says WHERE, and everything else, untouched.
         CHECK(out.scopeRangeNm == 400);
         CHECK(out.railBank == 2);
+        CHECK(out.mainView == "receiver");
         CHECK(out.fittedModulesX == 40);
         CHECK(out.fittedModulesY == 50);
         CHECK(out.fittedModulesWidth == 900);
@@ -484,6 +495,49 @@ int main() {
         // Idempotent, and a default config is already in its start-up state.
         checkEqual(cascade::core::startupState(out), out);
         checkEqual(cascade::core::startupState(AppConfig{}), AppConfig{});
+    }
+
+    // --- mainView: the patch is the main view, and the last choice returns ---
+    //
+    // The owner (0.99.40): "display the patch panel as the main". A fresh
+    // install opens on the PATCH view; a user who switched to the receiver
+    // view and closed the application gets the receiver view back. Only the
+    // two names the window knows are kept - anything else a hand edit or a
+    // later build wrote opens the default rather than a view nothing draws.
+    {
+        CHECK(AppConfig{}.mainView == "patch");
+        CHECK(cascade::core::startupState(AppConfig{}).mainView == "patch");
+        AppConfig in;
+        in.mainView = "receiver";
+        CHECK(cascade::core::startupState(in).mainView == "receiver");
+        const std::string path = p("main_view.json");
+        std::string err;
+        CHECK(ConfigStore::save(path, in, err));
+        AppConfig out = junkConfig();
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.mainView == "receiver");
+        CHECK(readAll(path).find("\"mainView\": \"receiver\"") != std::string::npos);
+        in.mainView = "patch";
+        CHECK(ConfigStore::save(path, in, err));
+        out = junkConfig();
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.mainView == "patch");
+        // Not a view: the default, not the junk and not the text.
+        CHECK(writeText(path, "{\"mainView\": \"sideways\"}\n"));
+        out = junkConfig();
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.mainView == "patch");
+        // The wrong type: the default.
+        CHECK(writeText(path, "{\"mainView\": 5}\n"));
+        out = junkConfig();
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.mainView == "patch");
+        // A file from before 0.99.40 says nothing about it: the patch view,
+        // which is what the owner asked every launch to open on.
+        CHECK(writeText(path, "{\"volume\": 0.5}\n"));
+        out = junkConfig();
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.mainView == "patch");
     }
 
     // --- roundtrip every field through a path needing new directories -------
@@ -517,6 +571,31 @@ int main() {
                                               false};
         in.converters["rx888|serial=lnb"] = {cascade::core::ConverterMode::Down, 10489123457.0,
                                              true};
+        // THE AIRSPYS (0.99.41): one in each gain mode, every field off its
+        // default, and a decimation on each.
+        {
+            cascade::core::AirspySetting lin;
+            lin.mode = "linear";
+            lin.linearity = 17;
+            lin.sensitivity = 3;
+            lin.decimation = 8;
+            in.airspy["airspy|serial=26a464dc28593e93"] = lin;
+            cascade::core::AirspySetting fr;
+            fr.mode = "free";
+            fr.lna = 14;
+            fr.mixer = 0;
+            fr.vga = 11;
+            fr.lnaAgc = true;
+            fr.mixerAgc = false;
+            fr.decimation = 64;
+            in.airspy["airspy|serial=mini"] = fr;
+            cascade::core::AirspySetting sen;
+            sen.mode = "sensitive";
+            sen.sensitivity = 21;
+            sen.mixerAgc = true;
+            sen.decimation = 2;
+            in.airspy["airspy|index=0"] = sen;
+        }
         in.plutoUri = "ip:pluto.local";
         in.iqFilePath = "C:/iq/capture_2msps.wav";
         in.centerHz = 433920000.0;
@@ -795,6 +874,47 @@ int main() {
         AppConfig out2 = junkConfig();
         CHECK(!ConfigStore::load(path2, out2, err));
         checkEqual(out2, AppConfig{});
+    }
+
+    // --- the Airspy memory, as a hand-edited file might have it (0.99.41) -----
+    // Out-of-range gains clamp, an unknown mode is Free, a decimation that is
+    // not a power of two up to 64 is none, a wrong-typed field keeps its
+    // default, a non-object entry and a key that does not name an Airspy are
+    // dropped - and an Airspy HF+ key is not an Airspy key.
+    {
+        const std::string path = p("airspy_junk.json");
+        CHECK(writeText(path,
+                        "{\"airspy\":{"
+                        "\"airspy|serial=a\":{\"mode\":\"loud\",\"linearity\":99,\"sensitivity\":-4,"
+                        "\"lna\":30,\"mixer\":-1,\"vga\":16,\"decimation\":48},"
+                        "\"airspy|serial=b\":{\"mode\":\"sensitive\",\"lna\":\"high\","
+                        "\"decimation\":128,\"lnaAgc\":1},"
+                        "\"airspy|serial=c\":7,"
+                        "\"airspyhf|serial=d\":{\"mode\":\"linear\"},"
+                        "\"rtlsdr|serial=e\":{\"mode\":\"linear\"}}}\n"));
+        AppConfig out;
+        std::string err;
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.airspy.size() == 2);
+        const auto a = out.airspy.find("airspy|serial=a");
+        CHECK(a != out.airspy.end());
+        if (a != out.airspy.end()) {
+            CHECK(a->second.mode == "free");
+            CHECK(a->second.linearity == 21);
+            CHECK(a->second.sensitivity == 0);
+            CHECK(a->second.lna == 14);
+            CHECK(a->second.mixer == 0);
+            CHECK(a->second.vga == 15);
+            CHECK(a->second.decimation == 1);
+        }
+        const auto b = out.airspy.find("airspy|serial=b");
+        CHECK(b != out.airspy.end());
+        if (b != out.airspy.end()) {
+            CHECK(b->second.mode == "sensitive");
+            CHECK(b->second.lna == 8);        // "high" is not a number: default kept
+            CHECK(!b->second.lnaAgc);         // 1 is not a bool: default kept
+            CHECK(b->second.decimation == 1);
+        }
     }
 
     // --- clamps (documented in config.hpp) -----------------------------------
@@ -1497,6 +1617,9 @@ int main() {
                 {"transmitMonitor", [](AppConfig& c) { c.transmitMonitor = true; }},
                 {"transmitArgs", [](AppConfig& c) { c.transmitArgs = "driver=plutosdr"; }},
                 {"railBank", [](AppConfig& c) { c.railBank = 4; }},
+                // The main view (0.99.40): switched by a key that saves
+                // nothing itself.
+                {"mainView", [](AppConfig& c) { c.mainView = "receiver"; }},
                 {"keyBindings", [](AppConfig& c) { c.keyBindings = {"mute=Ctrl+Shift+M"}; }},
                 {"updateCheckEnabled", [](AppConfig& c) { c.updateCheckEnabled = false; }},
                 // Look for network USRPs (2026-09-25): a Source-section tick

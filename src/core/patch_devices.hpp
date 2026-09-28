@@ -7,6 +7,17 @@
 //   "<driver>|<args>"  a real radio: the driver key makeDeviceSource() knows
 //                      ("rtlsdr", "hackrf", ..., "soapy") and the open args
 //                      the device list gave for it
+//   "iqfile|path=<p>"  an I/Q RECORDING (0.99.40): a 2-channel WAV that
+//                      source/iq_file_source.hpp plays on a loop, paced to
+//                      real time by the patch radio's reader. EVERYTHING after
+//                      "path=" is the path, byte for byte - it is never read
+//                      through argField's "a=1,b=2" grammar, because a Windows
+//                      file name may hold a comma, and even "serial=".
+//                      Its rate is the file's (deviceSetsItsOwnRate); its
+//                      centre is the node's frequency, which names the air
+//                      frequency the recording is baseband around - nothing
+//                      is tuned. The same file on two Radios is the SAME
+//                      device, by the rule below, exactly as for hardware.
 //
 // ONE RADIO, ONE NODE (owner, 2026-09-23: "only allow one device to be used in
 // one panel at a time"). A USB radio can be opened by one reader; a second open
@@ -33,6 +44,7 @@
 #define CASCADE_CORE_PATCH_DEVICES_HPP
 
 #include <cctype>
+#include <cstdio>
 #include <string>
 
 namespace cascade::core::patch {
@@ -40,6 +52,63 @@ namespace cascade::core::patch {
 inline constexpr const char* kGeneratorKey = "siggen";
 
 inline bool isGeneratorKey(const std::string& key) { return key == kGeneratorKey; }
+
+// --- an I/Q recording (0.99.40) ----------------------------------------------
+
+inline constexpr const char* kIqFileDriver = "iqfile";
+inline constexpr const char* kIqFilePrefix = "iqfile|path=";
+
+// Whether `key` names a recording - and a file: "iqfile|path=" alone does not.
+inline bool isIqFileKey(const std::string& key) {
+    const std::string prefix(kIqFilePrefix);
+    return key.size() > prefix.size() && key.compare(0, prefix.size(), prefix) == 0;
+}
+
+inline std::string makeIqFileKey(const std::string& path) { return kIqFilePrefix + path; }
+
+// The path a recording key names, whole; "" for any other key.
+inline std::string iqFilePath(const std::string& key) {
+    return isIqFileKey(key) ? key.substr(std::string(kIqFilePrefix).size()) : std::string{};
+}
+
+// A path as the file system tells files apart: on Windows the case and the
+// direction of the slashes do not matter, so "C:\Rec\A.wav" and "c:/rec/a.WAV"
+// are one file. Elsewhere a path is exactly itself.
+inline std::string iqFileIdentity(const std::string& path) {
+#if defined(_WIN32)
+    std::string out = path;
+    for (char& c : out) {
+        if (c == '/') { c = '\\'; }
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+    return out;
+#else
+    return path;
+#endif
+}
+
+// WHOSE RATE A RADIO RUNS AT. A radio's rate is a setting it is asked for; a
+// recording's is a property of the file (IqFileSource refuses a new one), so
+// the node's rate follows the file and never the other way round.
+inline bool deviceSetsItsOwnRate(const std::string& key) { return isIqFileKey(key); }
+
+// What makes a patch radio a different thing to OPEN: its device and, for a
+// radio, the rate it is asked for - changing either reopens it. A recording's
+// rate is its own, so it is left out: the node taking the file's rate after
+// opening must not reopen the file, and then again, for ever.
+inline std::string radioOpenIdentity(const std::string& device, double rateHz) {
+    if (deviceSetsItsOwnRate(device)) { return device; }
+    char buf[48];
+    std::snprintf(buf, sizeof(buf), "@%.17g", rateHz);
+    return device + buf;
+}
+
+// The key a radio's up- or down-converter is remembered under
+// (core/freq_converter.hpp): a recording shares the receiver's one for I/Q
+// files ("file", converterRadioKey's), every other radio is its own key.
+inline std::string converterKeyForDevice(const std::string& key) {
+    return isIqFileKey(key) ? std::string("file") : key;
+}
 
 // The driver half of a hardware key ("rtlsdr" of "rtlsdr|serial=..."), or ""
 // for the generator or anything that is not a hardware key.
@@ -141,6 +210,13 @@ inline bool sameFamilyAcrossStacks(const std::string& a, const std::string& b) {
 // of that family.
 inline bool sameDevice(const std::string& a, const std::string& b) {
     if (a.empty() || b.empty() || isGeneratorKey(a) || isGeneratorKey(b)) { return false; }
+    // A RECORDING IS DECIDED BY ITS FILE (0.99.40), and first: a recording is
+    // never a radio, and its path is not argument text - a file named
+    // "x,serial=1.wav" must not match a dongle with serial 1 below.
+    if (isIqFileKey(a) || isIqFileKey(b)) {
+        return isIqFileKey(a) && isIqFileKey(b) &&
+               iqFileIdentity(iqFilePath(a)) == iqFileIdentity(iqFilePath(b));
+    }
     if (a == b) { return true; }
     const std::string sa = argField(deviceArgs(a), "serial");
     const std::string sb = argField(deviceArgs(b), "serial");

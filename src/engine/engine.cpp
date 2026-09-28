@@ -56,6 +56,7 @@
 
 #include "engine/audio_open.hpp"
 #include "engine/bias_tee.hpp"
+#include "gui/airspy_panel.hpp"
 #include "engine/plugin_store_reasons.hpp"
 #include "engine/receiver_tables.hpp"
 #include "engine/source_fallback.hpp"
@@ -599,7 +600,11 @@ cascade::gui::SoapyScanPlan Engine::soapyScanPlan() const {
             open.push_back({"unknown", std::string()});
             continue;
         }
-        if (cascade::core::patch::isGeneratorKey(n->device)) { continue; }
+        // Neither the generator nor a recording (0.99.40) is on any bus.
+        if (cascade::core::patch::isGeneratorKey(n->device) ||
+            cascade::core::patch::isIqFileKey(n->device)) {
+            continue;
+        }
         const std::string kind = cascade::core::patch::deviceDriver(n->device);
         // A sound card is not on the bus a SoapySDR probe walks, so it has
         // nothing to protect from one (gui::scanMayProbe says the same).
@@ -707,6 +712,9 @@ void Engine::scanSoapy() {
     }
     soapyScanned_ = true;  // claimed now so the combo does not re-request
     soapyScanPending_ = true;
+    // SAID, so a log shows when the vendor probe ran and a test can show when
+    // it did not (tests/test_main_view: never for the view opening itself).
+    cascade::core::diagLogf("soapy: device scan started%s", whole ? "" : " beside open radios");
     soapyScanSkip_ = skip;
     soapyScanPartial_ = !whole;
     // UHD IS ASKED ONLY WHEN A USRP COULD BE HERE (F204602B5329B268, 0.99.35:
@@ -1144,6 +1152,12 @@ void Engine::launchDeviceOpen(DeviceOpenResult r, const std::string& busyLabel) 
             if (radioHz > 0.0) { r.preTuneRadioHz = radioHz; }
         }
     }
+    // An Airspy's own memory travels with the request (see airspyAtOpen).
+    r.airspyAtOpen.reset();
+    if (r.kind == "airspy") {
+        const auto mem = airspyMemory_.find(cascade::core::airspyRadioKey(r.args));
+        if (mem != airspyMemory_.end()) { r.airspyAtOpen = mem->second; }
+    }
     // The open runs on a worker: Device::make() is the multi-second, USB-bus
     // -walking call that used to freeze the GUI here. The request travels
     // into the worker and comes back as the answer, with the device (or the
@@ -1191,6 +1205,13 @@ void Engine::launchDeviceOpen(DeviceOpenResult r, const std::string& busyLabel) 
                 }
             } else {
                 return std::move(r);  // r.dev stays null: the GUI thread reports it
+            }
+        }
+        // AN AIRSPY's REMEMBERED STATE FIRST (0.99.41): its decimation decides
+        // which rates the request below is matched against.
+        if (r.airspyAtOpen.has_value()) {
+            if (cascade::source::AirspySource* air = cascade::gui::asAirspy(dev.get())) {
+                cascade::gui::airspyApplySetting(*r.airspyAtOpen, *air);
             }
         }
         // A rate refusal is not fatal (the panel shows the actual readback
@@ -1582,6 +1603,9 @@ std::unique_ptr<cascade::source::DeviceSource> Engine::makeDeviceSource(
 }
 
 void Engine::scanNative() {
+    // SAID, once per walk, so a log shows when the native radios were listed -
+    // and tests/test_main_view that showing the patch view lists none.
+    cascade::core::diagLogf("source: listing native radios");
     // NO GATE, and that is the whole point of having our own transport. All
     // six USB enumerations read SetupAPI device properties and
     // never open a device, never send a transfer, never reset anything -
@@ -1850,17 +1874,33 @@ void Engine::adoptDeviceMirrors(cascade::source::DeviceSource& dev, const std::s
     // MS/s table for every radio on every driver - which an RTL-SDR cannot
     // actually do two of (it has no 4 MS/s and no 8) and which stops 2.4 MS/s,
     // the rate ADS-B needs, from ever appearing.
+    // (An Airspy's own memory - decimation, gain mode, gains - is already on
+    // the radio by now: both open paths put it there straight after open()
+    // and before the rate, because it decides which rates the request is
+    // matched against. See DeviceOpenResult::airspyAtOpen.)
     deviceRatesHz_ = dev.supportedSampleRatesHz();
     deviceRateLabels_.clear();
-    for (const double r : deviceRatesHz_) { deviceRateLabels_.push_back(rateLabel(r)); }
+    const bool airspyRates = cascade::gui::asAirspy(&dev) != nullptr;
+    for (const double r : deviceRatesHz_) {
+        deviceRateLabels_.push_back(airspyRates ? cascade::gui::airspyRateLabel(r) : rateLabel(r));
+    }
     const double actualHz = dev.sampleRateHz();
     deviceRateIndex_ = nearestIndex(deviceRatesHz_, actualHz > 0.0 ? actualHz : requestRateHz);
 
     // AGC probe doubling as initialization: explicitly select manual gain
     // mode (matching the unchecked box). A device that says it has no gain
     // mode gets the documented "grey the checkbox" answer, not an error.
-    deviceAgcSupported_ = dev.autoGainSupported() && dev.setAutoGain(false);
-    deviceAgc_ = false;
+    //
+    // NOT FOR AN AIRSPY: its two AGC switches belong to its gain mode, which
+    // was put back just above, and switching them off here would undo a
+    // remembered Free mode with its AGCs on. The mirror reads what it is.
+    if (cascade::gui::asAirspy(&dev) != nullptr) {
+        deviceAgcSupported_ = true;
+        deviceAgc_ = dev.autoGain();
+    } else {
+        deviceAgcSupported_ = dev.autoGainSupported() && dev.setAutoGain(false);
+        deviceAgc_ = false;
+    }
 
     // THE GAINS, AND THEIR REAL RANGES. The sliders were 0..60 dB for every
     // stage of every radio; they are now what the driver says it will accept.
@@ -1956,6 +1996,11 @@ std::unique_ptr<cascade::source::DeviceSource> Engine::openDeviceSync(
     if (!dev->open(args)) {
         sourceError_ = dev->lastError();
         return nullptr;
+    }
+    // AN AIRSPY's REMEMBERED STATE before the rate, as the worker open does
+    // (see DeviceOpenResult::airspyAtOpen for why the order matters).
+    if (cascade::source::AirspySource* air = cascade::gui::asAirspy(dev.get())) {
+        cascade::gui::airspyApplyRemembered(airspyMemory_, args, *air);
     }
     // A rate refusal is not fatal (the panel shows the actual readback
     // either way) but is surfaced - and so is a rate the driver coerced on a
@@ -5170,6 +5215,13 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
                     res.applied[0] = deviceGainsDb_[i];
                 }
             }
+            // AN AIRSPY's gain list is its MODE's, and a name from another
+            // mode switches to it - so the list itself may have changed, and
+            // the memory with it.
+            if (cascade::gui::asAirspy(device_) != nullptr) {
+                refreshDeviceGainMirrors();
+                airspyRememberOpen();
+            }
             return res;
         }
         case FOXAPP_OP_SET_GAIN_NO_READBACK: {
@@ -5181,6 +5233,8 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
                 deviceGainsDb_[i] = static_cast<float>(c.num[0]);
                 if (!device_->setGainDb(text, static_cast<double>(deviceGainsDb_[i]))) {
                     sourceError_ = device_->lastError();
+                } else {
+                    airspyRememberOpen();  // a no-op for any radio but an Airspy
                 }
                 res.applied[0] = deviceGainsDb_[i];
                 return res;
@@ -5195,6 +5249,10 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
                 return refuse(FOXAPI_FAILED, "the radio refused");
             }
             deviceAgc_ = on;
+            if (cascade::gui::asAirspy(device_) != nullptr) {
+                refreshDeviceGainMirrors();
+                airspyRememberOpen();
+            }
             return res;
         case FOXAPI_OP_SET_ANTENNA:
             if (device_ == nullptr) { return refuse(FOXAPI_NO_DEVICE, "no radio is open"); }
@@ -5926,6 +5984,9 @@ void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
     // identity key) is moved to the key it is looked up by now
     // (gui::soundCardConverterKey); nothing else is touched.
     converters_ = cascade::gui::migrateSoundCardConverterKeys(cascade::core::sanitiseConverters(cfg.converters));
+    // Each Airspy's gain mode, gains and decimation, put back by
+    // adoptDeviceMirrors on that radio's own open, like the bias tee.
+    airspyMemory_ = cfg.airspy;
 
     // Source restore. The generator is always safe (it is already active);
     // a file is restored only if the path still opens; a Soapy device only
@@ -6233,6 +6294,8 @@ void Engine::fillConfig(cascade::core::AppConfig& cfg) {
     // Every radio's converter, including those not open now: a converter is
     // part of how that radio is cabled, and must survive a session without it.
     cfg.converters = converters_;
+    // Every Airspy's gain mode, gains and decimation, open now or not.
+    cfg.airspy = airspyMemory_;
     // WHAT IS IN THE BOX, not what opened. A Pluto that is on the bench has
     // its address in nativeArgs as well; this field is the typing, and it has
     // to survive a launch in which the board never answered so it can be

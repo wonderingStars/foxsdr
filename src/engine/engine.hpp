@@ -40,6 +40,7 @@
 #include <string>
 #include <vector>
 
+#include "core/airspy_settings.hpp"
 #include "core/app_commands.hpp"
 #include "core/band_plan.hpp"
 #include "core/config.hpp"
@@ -48,6 +49,7 @@
 #include "core/patch_graph.hpp"
 #include "core/patch_plan.hpp"
 #include "core/patch_radio.hpp"
+#include "core/patch_recordings.hpp"
 #include "core/patch_runner.hpp"
 #include "core/pipeline.hpp"
 #include "core/plugin_host.hpp"
@@ -771,7 +773,19 @@ private:
     bool soapyScanPartial_ = false;
     // The patch page asked for a SoapySDR scan when it opened and has not had
     // one yet (the plan was deferring - a radio still opening). See patchReconcile.
+    // Only ever set once patchListsWanted_ allows it (0.99.40).
     bool patchScanWanted_ = false;
+    // THE DEVICE LISTS A PATCH RADIO IS CHOSEN FROM MAY BE ASKED FOR: the
+    // SoapySDR scan (whose vendor probe opens and resets USB radios, and loads
+    // modules that have faulted in-process - see the constructor) and the sound
+    // card listing. Asked for when the user opens a Radio's device list or
+    // presses "Look for radios" - never by showing the patch view, which the
+    // application opens on and which is switched to and fro all day: that
+    // would run the probe at every launch and every switch. Once asked, for
+    // the session. The native list needs no permission: it opens nothing.
+    // Written in place by the window (kWindowMayWrite) when the user opens a
+    // Radio's device list or presses "Look for radios".
+    bool patchListsWanted_ = false;
 
     // --- Reopening after an absorbed driver fault (0.90.1) -----------------
     // When the automatic reopen was last attempted, in ImGui::GetTime()
@@ -827,6 +841,12 @@ private:
     // converter state, and keepCenterHz is an AIR frequency. No value: no
     // pre-tune (nothing to carry, not an RSP, or not deliverable).
     std::optional<double> preTuneRadioHz;
+    // AN AIRSPY's REMEMBERED GAIN MODE, GAINS AND DECIMATION (0.99.41), copied
+    // from airspyMemory_ on the GUI thread by launchDeviceOpen so the worker
+    // can put them on the radio straight after open() and BEFORE it asks for
+    // the rate: the saved rate is a decimated one, and asked for first it is
+    // matched against undecimated rates and "coerced" to the wrong one.
+    std::optional<cascade::core::AirspySetting> airspyAtOpen;
     // THE NATIVE RADIO THIS OPEN FELL BACK FROM (converter key), when the
     // worker opened the dongle through SoapySDR because the native driver
     // refused its tuner; empty otherwise. finishDeviceOpen uses it so the
@@ -1062,6 +1082,35 @@ private:
     cascade::source::GainUnit firstGainUnit() const { return gainUnitAt(0); }
     bool deviceAgcSupported_ = false;
     bool deviceAgc_ = false;
+
+    // THE AIRSPY R2 / MINI's OWN CONTROLS (0.99.41, engine/engine_airspy.cpp):
+    // one gain mode at a time - Sensitive, Linear or Free, the reference
+    // Airspy application's three - with only that mode's sliders, Free mode's
+    // two AGC switches, and the software decimation. The window's
+    // drawAirspyControls draws them and answers true when the open radio is
+    // an Airspy, in which case the generic Auto gain switch and gain sliders
+    // are not drawn; false and draws nothing for every other radio.
+    //
+    // Re-reads the gain list, values and AGC state from device_: an Airspy's
+    // list changes with its mode, and a gain set by name from the browser can
+    // change the mode.
+    void refreshDeviceGainMirrors();
+    // The open radio's Airspy state into airspyMemory_ (a no-op for any other
+    // radio), after every change the user makes to it.
+    void airspyRememberOpen();
+    // What the panel's controls DO, called by the window's drawAirspyControls
+    // (kControlMayCall - the same reviewed pattern as scanSoundCards) so
+    // tests/test_airspy_app.cpp drives the same code the buttons do: the
+    // decimation (the radio, then the Rate combo's delivered rates, then the
+    // whole chain follows the new rate), the gain mode, and Free mode's two
+    // AGCs - each re-reading the radio and remembering it. False, with
+    // sourceError_ set, on a refusal.
+    bool chooseAirspyDecimation(unsigned factor);
+    bool chooseAirspyGainMode(cascade::source::AirspySource::GainMode mode);
+    bool chooseAirspyAgc(bool lna, bool on);
+    // Each Airspy's gain mode, gains and decimation - AppConfig::airspy, per
+    // radio (core/airspy_settings.hpp); put back by adoptDeviceMirrors.
+    std::map<std::string, cascade::core::AirspySetting> airspyMemory_;
 
     // THE BIAS TEE. Present only when the OPEN device is one of the native
     // drivers that has one and can say so (see withBiasTee in
@@ -1551,6 +1600,15 @@ private:
         std::string label;
     };
     std::vector<PatchDeviceChoice> patchDeviceChoices() const;
+    // THE I/Q RECORDINGS a Radio can play (0.99.40): every playable WAV in the
+    // recordings folder and in FOXSDR_PATCH_SAMPLES's, read by
+    // core::patch::listIqRecordings when a Radio's device list is opened or
+    // "Look for radios" is pressed - never at launch, and never per frame.
+    std::vector<cascade::core::patch::RecordingInfo> patchRecordings_;
+    // What each file's header said, so reopening the list reads only files
+    // that are new or changed (core::patch::RecordingProbeCache).
+    cascade::core::patch::RecordingProbeCache patchRecordingCache_;
+    void patchListRecordings();
     std::string patchDeviceLabel(const std::string& key) const;
     // Per frame while the page is open: take the receiver's radio, open and
     // close radios to match the nodes, make and drop speaker outputs, and

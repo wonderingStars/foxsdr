@@ -51,6 +51,8 @@
 #include "gui/aircraft_icons.hpp"
 #include "gui/track_metrics.hpp"
 
+struct ImDrawList;   // Dear ImGui's; addMapTargetLabel draws into one
+
 namespace cascade::gui {
 
 class BasemapCache;
@@ -211,6 +213,16 @@ struct MapZoomKeys {
 };
 MapZoomKeys mapZoomKeys(float originX, float originY, float widthPx, float heightPx,
                         float keyPx, float floorPx);
+
+// A TARGET'S NAME ON THE MAP (0.99.42): the callsign, ship name or station id
+// beside its mark, in `col` (its altitude colour or kind colour - a
+// measurement, never repainted), with a STRONG outline: every one of the eight
+// directions one pixel out, dark behind a light ink (light behind a dark one,
+// as every map caption's halo is), at no less than 150 of 255 alpha. Over
+// OpenStreetMap tiles the half-strength halo the map's own captions use let
+// an amber callsign over London read as one more place name. Drawn into `dl`
+// at the top-left `(x, y)`.
+void addMapTargetLabel(ImDrawList* dl, float x, float y, unsigned int col, const char* text);
 
 // The span after one press, clamped to [kMapMinSpanDeg, zoomOutLimitDeg]. A
 // press that cannot move the view (already at the limit) returns the span it

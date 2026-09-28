@@ -283,6 +283,32 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
             out.converters = std::move(conv);
         }
     }
+    // The Airspys, element-wise tolerant: an entry that is not an object is
+    // skipped, a field of the wrong type keeps its default, and the ranges,
+    // the modes and the cap are sanitiseAirspySettings', below.
+    {
+        const auto it = j.find("airspy");
+        if (it != j.end() && it->is_object()) {
+            std::map<std::string, AirspySetting> as;
+            for (auto e = it->begin(); e != it->end(); ++e) {
+                if (!e.value().is_object()) { continue; }
+                AirspySetting s;
+                getString(e.value(), "mode", s.mode);
+                getInt(e.value(), "linearity", s.linearity);
+                getInt(e.value(), "sensitivity", s.sensitivity);
+                getInt(e.value(), "lna", s.lna);
+                getInt(e.value(), "mixer", s.mixer);
+                getInt(e.value(), "vga", s.vga);
+                getBool(e.value(), "lnaAgc", s.lnaAgc);
+                getBool(e.value(), "mixerAgc", s.mixerAgc);
+                int decim = static_cast<int>(s.decimation);
+                getInt(e.value(), "decimation", decim);
+                s.decimation = decim > 0 ? static_cast<unsigned>(decim) : 0u;
+                as[e.key()] = s;
+            }
+            out.airspy = std::move(as);
+        }
+    }
     getString(j, "plutoUri", out.plutoUri);
     getString(j, "soapyAntenna", out.soapyAntenna);
     getString(j, "iqFilePath", out.iqFilePath);
@@ -315,6 +341,10 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     getBool(j, "autoNotch", out.autoNotch);
     getBool(j, "bandPlanOverlay", out.bandPlanOverlay);
     getString(j, "patch", out.patch);
+    // The main view: one of the two faces the window has, or the patch view
+    // (the default) for anything else - never a name nothing draws.
+    getString(j, "mainView", out.mainView);
+    if (out.mainView != "patch" && out.mainView != "receiver") { out.mainView = "patch"; }
     getString(j, "bandPlanSelection", out.bandPlanSelection);
     // Carried as written, like bandPlanSelection: which codes are real is a
     // question for the catalogue and country tables of THIS build, answered
@@ -790,6 +820,7 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     out.pluginSettings = sanitisePluginSettings(out.pluginSettings);
     out.userPresets = sanitiseUserPresets(out.userPresets);
     out.converters = sanitiseConverters(out.converters);
+    out.airspy = sanitiseAirspySettings(out.airspy);
     // And the rebound keys, from the same function for the fourth time. An
     // empty line could name no action, and a line repeated verbatim is one
     // rebind stated twice - both are noise a hand-edit leaves behind, and the
@@ -822,6 +853,17 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
         }
         j["converters"] = std::move(conv);
     }
+    {
+        json as = json::object();
+        for (const auto& [radio, s] : cfg.airspy) {
+            as[radio] = {{"mode", s.mode},         {"linearity", s.linearity},
+                         {"sensitivity", s.sensitivity}, {"lna", s.lna},
+                         {"mixer", s.mixer},       {"vga", s.vga},
+                         {"lnaAgc", s.lnaAgc},     {"mixerAgc", s.mixerAgc},
+                         {"decimation", s.decimation}};
+        }
+        j["airspy"] = std::move(as);
+    }
     j["plutoUri"] = cfg.plutoUri;
     j["soapyAntenna"] = cfg.soapyAntenna;
     j["iqFilePath"] = cfg.iqFilePath;
@@ -849,6 +891,7 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
     j["autoNotch"] = cfg.autoNotch;
     j["bandPlanOverlay"] = cfg.bandPlanOverlay;
     j["patch"] = cfg.patch;
+    j["mainView"] = cfg.mainView;
     j["bandPlanSelection"] = cfg.bandPlanSelection;
     j["language"] = cfg.language;
     j["country"] = cfg.country;
@@ -1060,7 +1103,8 @@ bool ConfigStore::save(const std::string& path, const AppConfig& cfg, std::strin
 }
 
 AppConfig startupState(AppConfig cfg) {
-    // WHETHER goes; WHERE stays. See the declaration for why.
+    // WHETHER goes; WHERE stays. See the declaration for why - and for why
+    // mainView, the one face-of-the-window setting, is not touched here.
     cfg.scopeMode = false;
     cfg.demodScopeOpen = false;
     cfg.transmitOpen = false;

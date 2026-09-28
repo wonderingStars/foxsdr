@@ -580,6 +580,138 @@ void testZoomKeysDriveTheView() {
 
 }  // namespace
 
+// --- target labels over map tiles (0.99.42) -----------------------------------
+//
+// OVER OPENSTREETMAP TILES THE LABELS DISAPPEARED. A callsign in its altitude
+// colour - amber, green - over London's roads and place names read as one more
+// piece of the map: the half-strength, four-direction halo every map caption
+// has is right for "RX" and the ring distances and far too weak for a target's
+// name. A target label now has a STRONG outline: dark, in all eight directions
+// one pixel out, at no less than 150 of 255 alpha. Its ink stays the altitude
+// colour, which is a measurement.
+
+// A vertex that is part of TEXT (a glyph, not a shape) - glyphs sample the
+// font atlas, shapes sample its white pixel.
+bool isGlyphVertex(const ImDrawVert& v) {
+    const ImVec2 w = ImGui::GetFontTexUvWhitePixel();
+    return v.uv.x != w.x || v.uv.y != w.y;
+}
+
+float luma(ImU32 c) {
+    return 0.299f * static_cast<float>((c >> IM_COL32_R_SHIFT) & 0xFFu) +
+           0.587f * static_cast<float>((c >> IM_COL32_G_SHIFT) & 0xFFu) +
+           0.114f * static_cast<float>((c >> IM_COL32_B_SHIFT) & 0xFFu);
+}
+
+// A dark glyph vertex strong enough to separate a label from any tile.
+bool isStrongDarkGlyph(const ImDrawVert& v) {
+    const unsigned a = (v.col >> IM_COL32_A_SHIFT) & 0xFFu;
+    return isGlyphVertex(v) && a >= 150u && luma(v.col) < 60.0f;
+}
+
+void testTargetLabelHelper() {
+    // One letter on an empty window, as ImGui would draw it.
+    const ImU32 ink = IM_COL32(255, 196, 0, 255);   // a light altitude colour
+    ImGui::NewFrame();
+    ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f));
+    ImGui::SetNextWindowSize(ImVec2(400.0f, 200.0f));
+    ImGui::Begin("label", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoBackground);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const int from = dl->VtxBuffer.Size;
+    cascade::gui::addMapTargetLabel(dl, 100.0f, 100.0f, ink, "H");
+    std::vector<ImVec2> inkCorners;
+    std::vector<ImVec2> haloCorners;
+    unsigned haloAlpha = 0;
+    for (int i = from; i < dl->VtxBuffer.Size; ++i) {
+        const ImDrawVert& v = dl->VtxBuffer[i];
+        if (!isGlyphVertex(v)) { continue; }
+        if (v.col == ink) {
+            inkCorners.push_back(v.pos);
+        } else if (luma(v.col) < 60.0f) {
+            haloCorners.push_back(v.pos);
+            haloAlpha = std::max(haloAlpha, (v.col >> IM_COL32_A_SHIFT) & 0xFFu);
+        }
+    }
+    ImGui::End();
+    ImGui::Render();
+    CHECK(!inkCorners.empty());
+    std::printf("  target label: %zu ink corners, %zu halo corners, halo alpha %u\n",
+                inkCorners.size(), haloCorners.size(), haloAlpha);
+    // Strong enough: at least 150 of 255.
+    CHECK(haloAlpha >= 150u);
+    // All eight directions, one pixel out, for the glyph's first corner.
+    if (!inkCorners.empty()) {
+        const ImVec2 c = inkCorners.front();
+        for (int dy = -1; dy <= 1; ++dy) {
+            for (int dx = -1; dx <= 1; ++dx) {
+                if (dx == 0 && dy == 0) { continue; }
+                const bool found = std::any_of(haloCorners.begin(), haloCorners.end(),
+                                               [&](const ImVec2& h) {
+                                                   return std::fabs(h.x - (c.x + dx)) < 0.01f &&
+                                                          std::fabs(h.y - (c.y + dy)) < 0.01f;
+                                               });
+                if (!found) { std::printf("  no halo at (%+d, %+d)\n", dx, dy); }
+                CHECK(found);
+            }
+        }
+    }
+    // Drawn beneath the ink: every halo vertex comes before the first ink one.
+    // (Checked through the counts: 8 passes then 1.)
+    CHECK(haloCorners.size() == 8u * inkCorners.size());
+}
+
+// ...AND EVERY MAP DRAWS ITS TARGETS' LABELS THAT WAY. One vessel, drawn twice:
+// labelled "MMMMMMMM", then "M". Nothing else differs, so the difference in
+// strong dark glyph vertices is the label's outline and nothing else - seven
+// more glyphs, eight passes each, four corners each.
+int strongDarkGlyphVerts(cascade::gui::MapView& view, const char* label) {
+    cascade::core::HostTrack ht;
+    std::snprintf(ht.t.id, sizeof ht.t.id, "%s", "235098761");
+    std::snprintf(ht.t.label, sizeof ht.t.label, "%s", label);
+    ht.t.latDeg = 50.85;
+    ht.t.lonDeg = -1.35;
+    ht.t.altM = std::nan("");
+    ht.t.courseDeg = 90.0;
+    ht.t.speedMps = 4.6;
+    ht.t.ageMs = 1000;
+    ht.t.kind = CASCADE_TRACK_VESSEL;
+    ht.t.flags = 0;
+    ht.plugin = "AIS";
+    const std::vector<cascade::core::HostTrack> tracks{ht};
+    const std::vector<cascade::core::HostPath> paths;
+    ImGui::NewFrame();
+    ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f));
+    ImGui::SetNextWindowSize(ImVec2(900.0f, 700.0f));
+    ImGui::Begin("labelmap", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize);
+    ImGui::SetCursorScreenPos(ImVec2(0.0f, 0.0f));
+    view.draw(800.0f, 600.0f, tracks, paths);
+    ImGui::End();
+    ImGui::Render();
+    int n = 0;
+    ImDrawData* dd = ImGui::GetDrawData();
+    for (int l = 0; dd != nullptr && l < dd->CmdListsCount; ++l) {
+        const ImDrawList* cl = dd->CmdLists[l];
+        for (int i = 0; i < cl->VtxBuffer.Size; ++i) {
+            if (isStrongDarkGlyph(cl->VtxBuffer[i])) { ++n; }
+        }
+    }
+    return n;
+}
+
+void testMapTargetLabelsHaveTheOutline() {
+    cascade::gui::MapView view;
+    view.setProjection(cascade::gui::MapProjection::Equirectangular);
+    view.goTo(50.85, -1.35, 2.0);
+    // A few frames each so the view has settled on the same picture.
+    int eight = 0;
+    int one = 0;
+    for (int f = 0; f < 3; ++f) { eight = strongDarkGlyphVerts(view, "MMMMMMMM"); }
+    for (int f = 0; f < 3; ++f) { one = strongDarkGlyphVerts(view, "M"); }
+    std::printf("  map label outline: %d strong dark glyph vertices for 8 letters, %d for 1\n",
+                eight, one);
+    CHECK(eight - one == 7 * 8 * 4);
+}
+
 int main() {
     testWholeWorldSpan();
     testCoordApertures();
@@ -599,6 +731,8 @@ int main() {
     testPanelDrawsWithNoReceiverPosition();
     testMapDrawsWithNoReceiverPosition();
     testZoomKeysDriveTheView();
+    testTargetLabelHelper();
+    testMapTargetLabelsHaveTheOutline();
 
     ImGui::DestroyContext();
     return testSummary("test_map_view");
