@@ -242,12 +242,18 @@ std::vector<std::string> scrubUploadLog(const std::vector<std::string>& lines);
 // 5). `inventory` is the report's own plugin list, "name version" per entry,
 // exactly as its context block prints it unscrubbed ("plugin: 406 MHz
 // Beacons 1.0.0"). Each entry, and its name without the version, is left
-// intact wherever it appears in a line, and does not by itself make the line
-// one that "mentions a frequency" - so "plugin: loaded 406 MHz Beacons 1.0.0"
-// is no longer turned into "plugin: loaded # MHz Beacons #". Every OTHER
-// number on the line is judged exactly as before: a frequency beside a
-// plugin's name is still masked. An entry with no letter in it, or shorter
-// than three characters, is never kept - a bare number is not a name.
+// intact wherever it appears in a line - protected by a token before the
+// masking rule runs, so it survives whether or not the line is judged to
+// mention a frequency - so "plugin: loaded 406 MHz Beacons 1.0.0" is no
+// longer turned into "plugin: loaded # MHz Beacons #". WHETHER THE LINE
+// MENTIONS A FREQUENCY is judged from the line AS WRITTEN, kept name and all
+// (0.99.44 repair): a name that itself reads like one ("406 MHz Beacons")
+// still marks its line as frequency-bearing for every OTHER number on it, so
+// a plugin's own name can never smuggle a genuine, unlabelled frequency past
+// the mask just by sharing a line with it. Every other number on the line is
+// judged exactly as before: a frequency beside a plugin's name is still
+// masked. An entry with no letter in it, or shorter than three characters, is
+// never kept - a bare number is not a name.
 std::vector<std::string> scrubUploadLog(const std::vector<std::string>& lines,
                                         const std::vector<std::string>& inventory);
 

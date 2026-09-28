@@ -660,6 +660,26 @@ void pluginNamesSurviveTheScrub() {
     // And a list that names nothing changes nothing: rule 6 as it was.
     CHECK(cascade::core::scrubUploadLog({loaded}).front() ==
           "15:41:13.441 info plugin: loaded # MHz Beacons #");
+
+    // 0.99.44 REPAIR: the kept name is the ONLY thing on the line that reads
+    // like a frequency ("406 MHz"), and there is a genuine, unrelated bare
+    // number elsewhere on the same line with no OTHER frequency word beside
+    // it. Before the fix, tokenising the name away before judging whether the
+    // line "mentions a frequency" made this line look like it mentioned none
+    // at all, so the bare number escaped masking entirely - the exact
+    // opposite of what the scrubber exists to do. The name must still come
+    // back unmasked; the unrelated number must not.
+    {
+        const std::string bareNumberBesideKeptName =
+            "15:41:23.000 info plugin: 406 MHz Beacons 1.0.0 - decoded a burst, count 144800000";
+        const std::string got =
+            cascade::core::scrubUploadLog({bareNumberBesideKeptName}, plugins).front();
+        std::printf("bare number beside a kept name: %s\n", got.c_str());
+        CHECK(got.find("406 MHz Beacons 1.0.0") != std::string::npos);
+        CHECK(got.find("144800000") == std::string::npos);
+        CHECK(got ==
+              "15:41:23.000 info plugin: 406 MHz Beacons 1.0.0 - decoded a burst, count #");
+    }
 }
 
 }  // namespace

@@ -889,6 +889,17 @@ std::string keepToken(std::size_t index) {
 std::string scrubLineKeeping(const std::string& line, const std::vector<std::string>& keep) {
     const std::size_t stamp = stampLength(line);
     std::string body = line.substr(stamp);
+    // THE FREQUENCY JUDGEMENT READS THIS, UNTOUCHED BY THE KEEP SUBSTITUTION
+    // BELOW (0.99.44 repair). A kept name can itself carry one of
+    // mentionsFrequency's words - "406 MHz Beacons" reads exactly like a tuned
+    // frequency - and once that name is swapped for its token the word is
+    // gone from `body`, so a line whose ONLY frequency word was inside the
+    // kept name looked like it never mentioned one at all, and a genuine bare
+    // frequency elsewhere on the same line ("... 406 MHz Beacons 1.0.0 ...
+    // 144800000 ...") escaped masking entirely. Judging the ORIGINAL text
+    // means the kept name still marks its line as frequency-bearing even
+    // after its own token has taken its place.
+    const std::string originalBody = body;
     // Only where the name stands on its own: "406 MHz Beacons" inside
     // "X406 MHz Beacons2" is somebody else's text.
     std::vector<std::pair<std::string, std::string>> held;
@@ -918,7 +929,7 @@ std::string scrubLineKeeping(const std::string& line, const std::vector<std::str
     // in the part that was lost ("... at 2048000 S/s, 127.825" with the
     // " MHz" gone), so it is treated as naming a frequency.
     const bool cut = line.size() >= static_cast<std::size_t>(DiagLog::kLineBytes) - 1u;
-    if (cut || mentionsFrequency(lowerAscii(body))) { maskNumbers(body); }
+    if (cut || mentionsFrequency(lowerAscii(originalBody))) { maskNumbers(body); }
     collapseMasks(body);
     // The kept names back, each where its token still stands. A token some
     // rule consumed (a name inside quotes becomes '<name>') stays consumed,
