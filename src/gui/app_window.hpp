@@ -1925,8 +1925,8 @@ private:
     // THE THREE RULES the round-3 review's scanner findings make for any
     // draft (docs/review-harness/engine-round3-review.md):
     //   - it FOLLOWS THE ENGINE. syncPatchDraft() copies the engine's graph
-    //     whenever it differs from patchDraftBaseText_ - the graph this draft
-    //     was last in step with - so a config load, START/ALL OFF or a centre
+    //     whenever it differs from patchDraftBase_ - the graph this draft was
+    //     last in step with (core::patch::graphsEqual, no text written) - so a config load, START/ALL OFF or a centre
     //     the running radio reported shows at once; never mid-drag, resize or
     //     wire (patchInteracting()), when the drag's own node would jump;
     //   - an edit made while the engine moved on is put ON TOP of the
@@ -1938,7 +1938,6 @@ private:
     // by a view that stopped drawing.
     cascade::core::patch::Graph patchDraft_;
     cascade::core::patch::Graph patchDraftBase_;
-    std::string patchDraftBaseText_;
     std::uint64_t patchDraftEpoch_ = 0;
     bool patchDraftInStep_ = false;
     // True while the button is held on a drag, a resize or a wire; a state

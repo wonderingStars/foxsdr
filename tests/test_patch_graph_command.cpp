@@ -316,5 +316,50 @@ int main() {
         CHECK(g.nextId() == 20u + pc::kMaxRadios);
     }
 
+    // --- 5. graphsEqual: the page's cheap "same graph?" --------------------------
+    //     It stands in for comparing graphCommandText, so it must see every
+    //     change that text would show - or an edit of that one field would
+    //     never be sent.
+    {
+        pc::NodeId radio = 0, chan = 0, demod = 0, sink = 0;
+        const pc::Graph g = buildPatch(radio, chan, demod, sink);
+        CHECK(pc::graphsEqual(g, g));
+        pc::Graph copy = g;
+        CHECK(pc::graphsEqual(g, copy));
+        struct Change {
+            const char* what;
+            void (*apply)(pc::Graph&, pc::NodeId);
+        };
+        const Change changes[] = {
+            {"name", [](pc::Graph& x, pc::NodeId id) { x.mutableNode(id)->name += "!"; }},
+            {"x", [](pc::Graph& x, pc::NodeId id) { x.mutableNode(id)->x += 0.5f; }},
+            {"y", [](pc::Graph& x, pc::NodeId id) { x.mutableNode(id)->y += 0.5f; }},
+            {"w", [](pc::Graph& x, pc::NodeId id) { x.mutableNode(id)->w += 1.0f; }},
+            {"h", [](pc::Graph& x, pc::NodeId id) { x.mutableNode(id)->h += 1.0f; }},
+            {"freqHz", [](pc::Graph& x, pc::NodeId id) { x.mutableNode(id)->freqHz += 0.25; }},
+            {"mode", [](pc::Graph& x, pc::NodeId id) { x.mutableNode(id)->mode += 1; }},
+            {"plugin", [](pc::Graph& x, pc::NodeId id) { x.mutableNode(id)->plugin = "p.dll"; }},
+            {"device", [](pc::Graph& x, pc::NodeId id) { x.mutableNode(id)->device = "wav"; }},
+            {"rateHz", [](pc::Graph& x, pc::NodeId id) { x.mutableNode(id)->rateHz += 1.0; }},
+            {"squelch", [](pc::Graph& x, pc::NodeId id) { x.mutableNode(id)->squelch = !x.find(id)->squelch; }},
+            {"squelchDb", [](pc::Graph& x, pc::NodeId id) { x.mutableNode(id)->squelchDb -= 1.0f; }},
+            {"on", [](pc::Graph& x, pc::NodeId id) { x.mutableNode(id)->on = !x.find(id)->on; }},
+            {"centreChosen", [](pc::Graph& x, pc::NodeId id) { x.mutableNode(id)->centreChosen = !x.find(id)->centreChosen; }},
+            {"a node removed", [](pc::Graph& x, pc::NodeId id) { (void)x.removeNode(id); }},
+            {"a node added", [](pc::Graph& x, pc::NodeId) { (void)x.addNode(pc::NodeKind::Map, "M"); }},
+            {"a wire cut", [](pc::Graph& x, pc::NodeId) { (void)x.disconnect(x.wires().front()); }},
+            {"the next id", [](pc::Graph& x, pc::NodeId) { x.reserveIds(x.nextId() + 1u); }},
+        };
+        for (const Change& ch : changes) {
+            pc::Graph other = g;
+            ch.apply(other, demod);
+            const bool textDiffers = pc::graphCommandText(other) != pc::graphCommandText(g);
+            const bool seen = !pc::graphsEqual(g, other);
+            if (!seen) { std::printf("FAIL: graphsEqual misses a change of %s\n", ch.what); }
+            CHECK(textDiffers);   // the change is one the command's text carries...
+            CHECK(seen);          // ...so the cheap comparison must see it
+        }
+    }
+
     return testSummary("test_patch_graph_command");
 }

@@ -176,6 +176,33 @@ inline bool hasWire(const Graph& g, const Wire& w) {
 
 }  // namespace detail
 
+// THE SAME GRAPH, asked cheaply: true when graphCommandText would write the
+// two identically - every node (id, kind, ports, name, position, size, and
+// every setting, centreChosen included), in order, the same wires in the same
+// order, and the same next id. The page asks this of its draft and of the
+// engine's graph on every frame; writing both out as text to ask it was five
+// serialisations an idle frame (review of the OPEN 6 graph round), and the
+// text is now written only for what is actually sent.
+inline bool graphsEqual(const Graph& a, const Graph& b) {
+    if (a.nextId() != b.nextId() || a.nodes().size() != b.nodes().size() || a.wires() != b.wires()) {
+        return false;
+    }
+    for (std::size_t i = 0; i < a.nodes().size(); ++i) {
+        const Node& x = a.nodes()[i];
+        const Node& y = b.nodes()[i];
+        if (x.id != y.id || x.kind != y.kind || x.inputs != y.inputs || x.outputs != y.outputs ||
+            x.name != y.name || !detail::sameValue(x.x, y.x) || !detail::sameValue(x.y, y.y) ||
+            !detail::sameValue(x.w, y.w) || !detail::sameValue(x.h, y.h) ||
+            !detail::sameValue(x.freqHz, y.freqHz) || x.mode != y.mode || x.plugin != y.plugin ||
+            x.device != y.device || !detail::sameValue(x.rateHz, y.rateHz) || x.squelch != y.squelch ||
+            !detail::sameValue(x.squelchDb, y.squelchDb) || x.on != y.on ||
+            x.centreChosen != y.centreChosen) {
+            return false;
+        }
+    }
+    return true;
+}
+
 // The window's edit, put on top of the engine's graph as it is NOW.
 //
 // `base` is the engine's graph as the draft was copied from it, `draft` is the

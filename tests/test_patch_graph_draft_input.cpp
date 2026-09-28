@@ -34,6 +34,7 @@
 //      store is untouched)
 //   S  a squelch typed (Ctrl+click) past the slider's -120..0 dB is held
 //      at the edge, not repaired to -50 dB by the engine's copy
+//   P  an idle frame, page open or not drawn, serialises nothing
 //   K  a wire drag left in the air by the view going away (the button
 //      released while it was hidden) does not stop the page following the
 //      engine
@@ -655,6 +656,48 @@ int main() {
             CHECK(e != nullptr && e->squelchDb == pc::kSquelchMinDb);
             CHECK(inStep(*a));
         }
+        delete a;
+    }
+
+    // --- P: what a frame costs ---------------------------------------------------
+    //     The page compares its draft with the engine's graph on every frame.
+    //     Written out as text each time, that was five serialisations an idle
+    //     frame (review: 0.6-0.8 ms with 5 radios and 20 parts, and one even
+    //     with the page closed). An idle frame - page open or not drawn - now
+    //     writes NONE; a frame of a drag writes what it sends.
+    {
+        std::printf("P: serialisations on idle frames, open and not drawn, and on a drag frame\n");
+        Starter s;
+        AppWindow* a = makeApp(s);
+        frames(*a, 3);
+        auto& count = pc::serialiseCount();
+        std::uint64_t c0 = count.load();
+        frames(*a, 10);
+        const std::uint64_t open = count.load() - c0;
+        g_viewShown = false;
+        frames(*a, 2);
+        c0 = count.load();
+        frames(*a, 10);
+        const std::uint64_t hidden = count.load() - c0;
+        g_viewShown = true;
+        frames(*a, 2);
+        const ImVec2 at = header(*a, s.radio);
+        mouseTo(*a, at.x, at.y);
+        press(*a);
+        mouseTo(*a, at.x + 10.0f, at.y);
+        c0 = count.load();
+        mouseTo(*a, at.x + 20.0f, at.y);
+        const std::uint64_t drag = count.load() - c0;
+        release(*a);
+        std::printf("   10 idle frames open: %llu, 10 not drawn: %llu, one drag frame: %llu\n",
+                    static_cast<unsigned long long>(open), static_cast<unsigned long long>(hidden),
+                    static_cast<unsigned long long>(drag));
+        CHECK(open == 0u);
+        CHECK(hidden == 0u);
+        // The drag frame: the command's text, the engine's canonical check of
+        // it, and the page's own document text (patchText_, rebuilt when the
+        // canvas marks it dirty, as it always was).
+        CHECK(drag <= 3u);
         delete a;
     }
 

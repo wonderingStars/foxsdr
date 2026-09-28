@@ -62,6 +62,7 @@
 #define CASCADE_CORE_PATCH_IO_HPP
 
 #include <algorithm>
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <iomanip>
@@ -162,7 +163,17 @@ inline bool decodePluginKey(const std::string& token, std::string& key) {
     return true;
 }
 
+// How many documents serialise() has written in this process. Read by
+// tests/test_patch_graph_draft_input, which holds an idle Patch page - and one
+// not drawn at all - to none a frame (the review of the OPEN 6 graph round
+// measured five on every idle frame, growing with the patch).
+inline std::atomic<std::uint64_t>& serialiseCount() {
+    static std::atomic<std::uint64_t> n{0};
+    return n;
+}
+
 inline std::string serialise(const Graph& g, float panX, float panY, float zoom) {
+    serialiseCount().fetch_add(1, std::memory_order_relaxed);
     // ROUND-TRIP PRECISION, for every number. A stream's default is six
     // significant digits, which wrote 446.00625 MHz as 4.46006e+08 - a
     // channel 250 Hz off after a save and a load, and one that decodes

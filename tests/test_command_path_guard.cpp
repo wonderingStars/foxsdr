@@ -620,7 +620,7 @@ std::vector<FieldPatterns> scopedFieldPatterns(const std::vector<std::string>& n
 // is a read, and fine.
 const char* const kWholeObjectFields[] = {"patchGraph_"};
 const char* const kConstGraphHelpers[] = {
-    "graphCommandText", "rebaseDraft", "serialise", "compile", "mapSources", "channelFeeding", "radioOf",
+    "graphCommandText", "graphsEqual", "rebaseDraft", "serialise", "compile", "mapSources", "channelFeeding", "radioOf",
 };
 
 // The findings for one control line `l`, whose two lines before are `before`

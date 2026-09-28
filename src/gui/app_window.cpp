@@ -10443,7 +10443,6 @@ void AppWindow::adoptPatchGraph() {
     }
     patchDraft_ = engine_.patchGraph_;
     patchDraftBase_ = engine_.patchGraph_;
-    patchDraftBaseText_ = cascade::core::patch::graphCommandText(engine_.patchGraph_);
     patchDraftEpoch_ = engine_.patchGraphEpoch_;
     patchDraftInStep_ = true;
 }
@@ -10459,16 +10458,17 @@ void AppWindow::syncPatchDraft() {
     // An engine change that lands meanwhile is merged when the drag's own
     // frame is committed (commitPatchDraft).
     if (patchInteracting()) { return; }
-    if (pc::graphCommandText(engine_.patchGraph_) == patchDraftBaseText_) { return; }
+    // Compared as graphs, not as text (core::patch::graphsEqual): the same
+    // answer, with nothing written out on a frame where nothing changed.
+    if (pc::graphsEqual(engine_.patchGraph_, patchDraftBase_)) { return; }
     // The engine's graph changed, and not by this draft: a loaded patch, START
     // or ALL OFF, a device or centre the patch runtime set. An edit not yet
     // committed (there is none once a frame has drawn - every edit is
     // committed in its own frame) would be kept, on top.
-    const bool pending = pc::graphCommandText(patchDraft_) != patchDraftBaseText_;
+    const bool pending = !pc::graphsEqual(patchDraft_, patchDraftBase_);
     if (pending && patchDraftEpoch_ == engine_.patchGraphEpoch_) {
         patchDraft_ = pc::rebaseDraft(patchDraftBase_, patchDraft_, engine_.patchGraph_);
         patchDraftBase_ = engine_.patchGraph_;
-        patchDraftBaseText_ = pc::graphCommandText(engine_.patchGraph_);
         return;
     }
     adoptPatchGraph();
@@ -10482,8 +10482,8 @@ void AppWindow::commitPatchDraft() {
         adoptPatchGraph();
         return;
     }
-    const std::string draft = pc::graphCommandText(patchDraft_);
-    if (draft == patchDraftBaseText_) { return; }
+    // Nothing edited: no text written (an idle frame, page open or not).
+    if (pc::graphsEqual(patchDraft_, patchDraftBase_)) { return; }
     if (patchDraftEpoch_ != engine_.patchGraphEpoch_) {
         // A NEW PATCH was loaded under this edit: the edit was of the old one,
         // and belongs to nothing in the new one. It goes, and adopting the new
@@ -10497,8 +10497,8 @@ void AppWindow::commitPatchDraft() {
     // edit goes on top of the engine's graph as it is now, never the page's
     // stale copy of the rest of it back over it.
     const std::string text =
-        pc::graphCommandText(engine_.patchGraph_) == patchDraftBaseText_
-            ? draft
+        pc::graphsEqual(engine_.patchGraph_, patchDraftBase_)
+            ? pc::graphCommandText(patchDraft_)
             : pc::graphCommandText(pc::rebaseDraft(patchDraftBase_, patchDraft_, engine_.patchGraph_));
     const cascade::core::cmd::QueuedCommand q =
         cascade::core::cmd::makeText(FOXAPP_OP_PATCH_SET_GRAPH, text);
