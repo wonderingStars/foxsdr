@@ -2944,10 +2944,29 @@ private:
     // second to notice it.
     double testerLinkPollLast_ = -1.0e9;
 
+    // A token claimed from the link-request file while a confirm-by-name
+    // lookup was already in flight or a prompt was already awaiting the
+    // tester's decision - claimLinkRequestFile() has already deleted the
+    // file by the time this is known, so a request that could not be started
+    // immediately used to simply vanish. Held here instead and started the
+    // moment the sender/prompt frees up; a second arrival while one is
+    // already queued overwrites it - LATEST WINS, since only the most recent
+    // link click is what the tester actually meant.
+    std::string testerLinkQueuedToken_;
+
     // --link-tester (main.cpp): reveals the paste box with no app token held,
     // for this session only - never written to config (see main.cpp's own
     // comment on why a bare flag, never --link-tester=<token>).
     bool testerLinkReveal_ = false;
+
+    // The app token a migration exchange (job E) resolved to, THIS SESSION,
+    // for whatever portal token it was tried against - kept even after
+    // testerLinkPoll() has already acted on it (set testerAppToken_ and
+    // cleared testerToken_), so a LATER manual link confirmation over a
+    // still-held legacy portal token (the migration attempt failed with
+    // NetworkError, or was never tried) can ask "is this the same tester the
+    // migration already found?" - see TesterLinkPending::keepsLegacyQueue.
+    std::optional<std::string> testerMigrationResolvedAppToken_;
 
     // Awaiting the tester's own Link/Not now decision - populated once
     // testerLinkNameSender_ resolves a token's name, drained by
@@ -2956,8 +2975,30 @@ private:
     struct TesterLinkPending {
         std::string token;
         std::string name;
-        bool replacing = false;  // an app token was already held
+        bool replacing = false;  // an app token OR a legacy portal token was already held
+        // Which identity `replacing` refers to - governs the prompt's
+        // wording (drawTesterLinkPrompt): an app-token replace names the old
+        // tester by their confirmed name, a legacy-token replace has no name
+        // to offer for the thing being replaced (a portal token is never
+        // resolved to a name on its own).
+        bool replacingLegacyPortalToken = false;
+        // Only meaningful when replacingLegacyPortalToken: true when this
+        // session's own migration exchange (testerMigrationResolvedAppToken_)
+        // already proved the legacy token and this new link resolve to the
+        // SAME tester, so the reports queued under the legacy token are kept
+        // (rewritten onto the new identity) rather than dropped. False,
+        // including "we simply do not know", is the safe default and is said
+        // plainly rather than assumed.
+        bool keepsLegacyQueue = false;
     };
+    // Pulled out of testerLinkPoll() as its own pure function, callable with
+    // synthetic inputs, so the replacing/replacingLegacyPortalToken/
+    // keepsLegacyQueue decision is testable directly (tests/test_tester_link_app.cpp)
+    // rather than only reachable through a real confirm-by-name network
+    // round trip.
+    static TesterLinkPending computeLinkPending(
+        const std::string& token, const std::string& name, bool appTokenHeld,
+        bool portalTokenHeld, const std::optional<std::string>& migrationResolvedAppToken);
     std::optional<TesterLinkPending> testerLinkPending_;
     std::string testerLinkError_;  // "that link is not valid", shown once
 
@@ -2978,8 +3019,9 @@ private:
     // one (PORTAL-LINK-VERDICT.md §8).
     void clearTesterAppToken();
     // True iff SYSTEM > Beta tester should be drawn at all: a confirmed app
-    // token is held, a migration exchange is in flight, or --link-tester was
-    // given this session.
+    // token OR a legacy portal token is held (activeTesterToken()), a
+    // migration exchange is in flight, or --link-tester was given this
+    // session.
     bool testerSectionVisible() const;
     // Called once a frame: 1 Hz link-request file poll, migration sender
     // drain, and confirm-by-name sender drain.

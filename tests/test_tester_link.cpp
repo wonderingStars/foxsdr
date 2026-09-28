@@ -108,6 +108,55 @@ void testParseBetaLinkUrlExactShapeOnly() {
 // validAppToken / extractAppToken
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// sanitizeTesterName - the tester's own free-text sign-up name (finding 6):
+// control characters/newlines stripped, length capped, and (at the app_window
+// layer, tests/test_tester_link_app.cpp) an empty result shown distinctly.
+// ---------------------------------------------------------------------------
+
+void testSanitizeTesterNameStripsControlCharactersAndNewlines() {
+    CHECK(cascade::core::sanitizeTesterName("Ada Lovelace") == "Ada Lovelace");
+    // A newline is exactly how a free-text name could inject a fake second
+    // line into a single-line prompt ("Link this FoxSDR to beta tester ...").
+    CHECK(cascade::core::sanitizeTesterName("Ada\nLovelace") == "AdaLovelace");
+    CHECK(cascade::core::sanitizeTesterName("Ada\r\nLovelace\t!") == "AdaLovelace!");
+    // Every C0 control byte and DEL, not only the common ones.
+    std::string withControls = "A";
+    for (unsigned char c = 0; c < 0x20; ++c) { withControls.push_back(static_cast<char>(c)); }
+    withControls.push_back(static_cast<char>(0x7f));
+    withControls += "B";
+    CHECK(cascade::core::sanitizeTesterName(withControls) == "AB");
+}
+
+void testSanitizeTesterNameCapsLengthWithoutSplittingUtf8() {
+    const std::string exact(cascade::core::kMaxTesterNameBytes, 'x');
+    CHECK(cascade::core::sanitizeTesterName(exact) == exact);
+    const std::string over(cascade::core::kMaxTesterNameBytes + 10, 'y');
+    const std::string cut = cascade::core::sanitizeTesterName(over);
+    CHECK(cut.size() <= cascade::core::kMaxTesterNameBytes);
+    CHECK(cut == std::string(cascade::core::kMaxTesterNameBytes, 'y'));
+    // A cut that would split a multi-byte UTF-8 character drops the whole
+    // character rather than emitting a malformed tail byte: the 2-byte
+    // character straddling byte 64 (its lead byte at 63, its continuation
+    // byte at 64) must come off entirely, leaving 63 bytes, not 64 ending in
+    // a bare continuation byte.
+    std::string utf8Over(cascade::core::kMaxTesterNameBytes - 1, 'z');
+    utf8Over += "\xC3\xA9";  // e-acute, straddling the cut point
+    const std::string utf8Cut = cascade::core::sanitizeTesterName(utf8Over);
+    CHECK(utf8Cut.size() == cascade::core::kMaxTesterNameBytes - 1);
+    CHECK(utf8Cut == std::string(cascade::core::kMaxTesterNameBytes - 1, 'z'));
+}
+
+void testSanitizeTesterNameEmptyOrAllControlIsEmpty() {
+    // The distinct "no name set" display (drawTesterLinkPrompt,
+    // drawTesterUsageSection) is keyed on exactly this: an empty result,
+    // whether from an empty sign-up name or one that was nothing but control
+    // bytes.
+    CHECK(cascade::core::sanitizeTesterName("").empty());
+    CHECK(cascade::core::sanitizeTesterName("\n\r\t").empty());
+    CHECK(cascade::core::sanitizeTesterName("   ").empty());  // trimmed trailing spaces, nothing left
+}
+
 void testValidAppTokenIsFortyHexNeverThirtyTwo() {
     CHECK(cascade::core::validAppToken(std::string(40, 'a')));
     CHECK(cascade::core::validAppToken("0123456789abcdef0123456789abcdef01234567"));
@@ -301,6 +350,99 @@ void testBetaApiBaseUrlOverride() {
 #endif
     CHECK(cascade::core::betaApiBaseUrl() == "https://foxsdr.com");
 }
+
+// ---------------------------------------------------------------------------
+// THE REAL MAIN PATH: a link clicked with FoxSDR closed, through the actual
+// argv/main.cpp handling - not core::parseBetaLinkUrl in isolation.
+//
+// THE BUG this exists for: argv[1] was consumed as a link (the file written,
+// diagLogf'd by length only), but the flag-parsing loop a few lines later
+// started at argv[1] again - so on a fresh launch (no other instance running,
+// which is exactly claimPrimaryInstance()'s "continue as normal launch" path)
+// argv[1] reached the unknown-argument branch, which printed the WHOLE
+// "foxsdr://beta?t=<token>" URL - the credential itself - to stderr and
+// returned 1. A tester clicking their own portal link with FoxSDR not already
+// open got an instant crash-looking exit instead of the start-up prompt
+// PRIVACY.md promises.
+// ---------------------------------------------------------------------------
+
+#if defined(_WIN32)
+
+void testLinkActivationWithNoInstanceRunningLaunchesNormallyAndNeverLeaksTheToken() {
+    const fs::path dir = uniqueDir("mainpath");
+    std::error_code ec;
+    fs::create_directories(dir, ec);
+    // APPDATA drives core::ConfigStore::defaultPath(), which is what
+    // main.cpp's link handling ITSELF uses (never CASCADE_CONFIG_TEST) to
+    // decide the link-request file's directory - see main.cpp's own comment
+    // on claimPrimaryInstance(). CASCADE_CONFIG_TEST is set to the SAME
+    // resolved config.json path so AppWindow's own configPath_ (and so
+    // testerLinkPoll's ~1 Hz file poll) looks in the identical directory,
+    // rather than staying hermetic the way a bare --frames run otherwise
+    // would (main.cpp: bounded runs are hermetic unless this hook is set).
+    const fs::path foxsdrDir = dir / "foxsdr";
+    const fs::path cfgPath = foxsdrDir / "config.json";
+    const std::string tok = std::string(40, 'b');
+    const std::string url = "foxsdr://beta?t=" + tok;
+
+    ::SetEnvironmentVariableA("APPDATA", dir.string().c_str());
+    ::SetEnvironmentVariableA("LOCALAPPDATA", dir.string().c_str());
+    ::SetEnvironmentVariableA("CASCADE_CONFIG_TEST", cfgPath.string().c_str());
+    // Every network-facing endpoint this run could reach, pointed at a port
+    // nothing listens on - this test proves argv handling and the file, not
+    // any network exchange, and a fresh isolated profile must never reach
+    // foxsdr.com for real.
+    for (const char* v : {"FOXSDR_BETA_API_URL", "FOXSDR_TESTER_USAGE_URL", "FOXSDR_TELEMETRY_URL",
+                          "FOXSDR_UPDATE_URL", "FOXSDR_CRASH_URL", "FOXSDR_FEATURE_URL",
+                          "FOXSDR_PROBLEM_URL", "FOXSDR_REPORTS_URL"}) {
+        ::SetEnvironmentVariableA(v, "http://127.0.0.1:9");
+    }
+
+    CHECK(!fs::exists(foxsdrDir));  // nothing pre-exists to seed a false pass
+
+    const std::string exe = std::string(CASCADE_APP_BINDIR) + "/cascade.exe";
+    const std::string cmd = "\"\"" + exe + "\" \"" + url + "\" --frames 20 2>&1\"";
+    std::string out;
+    FILE* p = _popen(cmd.c_str(), "r");
+    CHECK(p != nullptr);
+    char buf[512];
+    while (p != nullptr && std::fgets(buf, sizeof(buf), p) != nullptr) { out += buf; }
+    const int exitCode = (p != nullptr) ? _pclose(p) : -1;
+
+    for (const char* v : {"APPDATA", "LOCALAPPDATA", "CASCADE_CONFIG_TEST", "FOXSDR_BETA_API_URL",
+                          "FOXSDR_TESTER_USAGE_URL", "FOXSDR_TELEMETRY_URL", "FOXSDR_UPDATE_URL",
+                          "FOXSDR_CRASH_URL", "FOXSDR_FEATURE_URL", "FOXSDR_PROBLEM_URL",
+                          "FOXSDR_REPORTS_URL"}) {
+        ::SetEnvironmentVariableA(v, nullptr);
+    }
+
+    std::printf("link activation (no instance running) exit=%d, output:\n%s\n", exitCode,
+               out.c_str());
+
+    // THE HEADLINE FIX: a normal launch, not the "unknown argument" exit 1.
+    CHECK(exitCode == 0);
+    CHECK(out.find("rendered 20 frames") != std::string::npos);
+    CHECK(out.find("unknown argument") == std::string::npos);
+
+    // NEVER THE TOKEN, and never the raw URL that carries it, anywhere in
+    // stdout or stderr - the whole point of diagLogf'ing only its length.
+    CHECK(out.find(tok) == std::string::npos);
+    CHECK(out.find("foxsdr://beta") == std::string::npos);
+
+    // THE FILE WAS ACTUALLY CONSUMED: main.cpp wrote it, and this run's own
+    // AppWindow (configPath_ pointed at the same directory) claimed it on its
+    // very first poll - testerLinkPollLast_ starts far enough in the past
+    // that frame 1 already checks. Gone means claimed, whatever the (network-
+    // isolated, doomed-to-fail) confirm-by-name lookup went on to do with it.
+    CHECK(!fs::exists(cascade::core::linkRequestPath(foxsdrDir.string())));
+    // And the directory itself must exist - writeLinkRequestFile creates it,
+    // so its absence would mean the write path was never reached at all.
+    CHECK(fs::exists(foxsdrDir));
+
+    if (g_checksFailed == 0) { fs::remove_all(dir, ec); }
+}
+
+#endif  // _WIN32
 
 // ---------------------------------------------------------------------------
 // The real transport against a local server - confirm-by-name and migration
@@ -745,6 +887,9 @@ int main(int argc, char** argv) {
     const std::string givenRoot = argc > 1 ? argv[1] : std::string();
 
     testParseBetaLinkUrlExactShapeOnly();
+    testSanitizeTesterNameStripsControlCharactersAndNewlines();
+    testSanitizeTesterNameCapsLengthWithoutSplittingUtf8();
+    testSanitizeTesterNameEmptyOrAllControlIsEmpty();
     testValidAppTokenIsFortyHexNeverThirtyTwo();
     testExtractAppTokenTrimsAndValidatesOnly();
     testRewriteTokenRelabelsEveryItem();
@@ -757,6 +902,9 @@ int main(int argc, char** argv) {
     testClaimPrimaryInstanceFirstWinsSecondDoesNot();
     testClaimPrimaryInstanceDifferentIdentitiesAreIndependent();
     testBetaApiBaseUrlOverride();
+#if defined(_WIN32)
+    testLinkActivationWithNoInstanceRunningLaunchesNormallyAndNeverLeaksTheToken();
+#endif
     testResolveAppTokenNameOk();
     testResolveAppTokenNameInvalidOn404();
     testResolveAppTokenNameNetworkErrorOnRefusal();

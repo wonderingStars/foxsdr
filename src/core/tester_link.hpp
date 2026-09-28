@@ -107,7 +107,13 @@ std::string claimLinkRequestFile(const std::string& configDir, std::time_t now =
 // True the first time this is called for a given `identity` within this
 // logon session (Windows: identity is a mutex name, created under `Local\`
 // so it cannot be squatted cross-session/cross-user; Linux: identity is a
-// lock file path, held with flock(LOCK_EX|LOCK_NB)). The handle/fd is
+// lock file path, held with flock(LOCK_EX|LOCK_NB)). FAILS OPEN: if the
+// primitive itself cannot be created (CreateMutexA returning null; open()
+// refusing the lock file), this returns true - "assume primary, continue as
+// a normal launch" - rather than false, because false on the beta-link
+// activation path (main.cpp) means "write the request file and exit,
+// trusting another instance to poll for it", and when the check itself
+// failed there is no way to know one exists to do that. The handle/fd is
 // deliberately leaked for the life of the process - the OS reclaims it on
 // exit, the same "for the life of this process" shape as every other
 // leaked-on-purpose resource in this codebase. FoxSDR's multi-instance
@@ -130,6 +136,19 @@ std::string betaApiBaseUrl();
 // ---------------------------------------------------------------------------
 // Confirm-by-name (job D) - GET .../api/beta/app-token/me
 // ---------------------------------------------------------------------------
+
+// The tester's own sign-up name, shown verbatim in an in-window prompt and on
+// SYSTEM > Beta tester ("Linked to NAME") - free text from the site, so it is
+// treated exactly like every other free-text label this codebase displays
+// (see core::user_presets.hpp's cleanLabel): control characters and DEL
+// removed (a name is one line on a prompt, never a way to inject a fake
+// second line or a terminal escape), cut to kMaxTesterNameBytes without
+// splitting a UTF-8 sequence, and trailing spaces the cut can leave trimmed.
+// The empty result (no name entered on the site, or a name that was nothing
+// but control bytes) is returned as "" - the caller decides how to say that
+// distinctly rather than formatting a prompt around a blank.
+inline constexpr std::size_t kMaxTesterNameBytes = 64;
+std::string sanitizeTesterName(const std::string& raw);
 
 enum class BetaLinkOutcome {
     Ok,           // 200 {"name":"..."} - safe to show the confirmation prompt

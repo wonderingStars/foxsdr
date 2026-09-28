@@ -24054,6 +24054,18 @@ void AppWindow::drawUsageReportingSection() {
     }
 }
 
+namespace {
+// A tester's sign-up name is free text on the site (sanitized on arrival -
+// core::sanitizeTesterName - but never REQUIRED to be non-empty there), and
+// every place this application shows one formats it into a name-shaped slot
+// ("Linked to %s", "Link this FoxSDR to beta tester %s?"). An empty name
+// substituted in there reads as a sentence missing a word ("Linked to ."); a
+// placeholder that reads like a name slot itself does not.
+std::string testerNameOrPlaceholder(const std::string& name) {
+    return name.empty() ? tr("(no name set)") : name;
+}
+}  // namespace
+
 // --- "Beta tester": a TESTER's own opt-in, tied to their own entry on the -----
 // foxsdr.com beta portal - see core/tester_usage.hpp for the design and
 // PRIVACY.md for the payload field by field.
@@ -24106,7 +24118,8 @@ void AppWindow::drawTesterUsageSection() {
         // for the older portal-token flow and for a fresh --link-tester
         // paste, neither of which applies once a link has been confirmed by
         // name.
-        ImGui::TextDisabled(tr("Linked to %s"), testerAppTokenName_.c_str());
+        ImGui::TextDisabled(tr("Linked to %s"),
+                           testerNameOrPlaceholder(testerAppTokenName_).c_str());
         if (ImGui::SmallButton(trId("Unlink"))) { clearTesterAppToken(); }
     } else if (!testerToken_.empty()) {
         ImGui::TextDisabled(tr("Code: %s"), cascade::core::maskTesterToken(testerToken_).c_str());
@@ -25606,7 +25619,15 @@ void AppWindow::clearTesterAppToken() {
 }
 
 bool AppWindow::testerSectionVisible() const {
-    return !testerAppToken_.empty() || testerMigrationSender_.busy() || testerLinkReveal_;
+    // A HELD LEGACY PORTAL TOKEN COUNTS TOO. testerToken_ keeps reporting
+    // under activeTesterToken() (buildTesterUsageReport, testerUsageJournal)
+    // whether or not the migration exchange ever succeeds - a NetworkError
+    // leaves testerMigrationSender_ no longer busy() and testerAppToken_
+    // still empty, and the section used to vanish right there even though
+    // the tester's own code was still active and still sending. Checking
+    // testerAppToken_ alone was the bug; activeTesterToken() covers both
+    // identities the same way buildTesterUsageReport already does.
+    return !activeTesterToken().empty() || testerMigrationSender_.busy() || testerLinkReveal_;
 }
 
 void AppWindow::testerUsageStartup(const cascade::core::AppConfig& cfg) {
@@ -25678,6 +25699,21 @@ void AppWindow::testerUsagePoll() {
     testerUsageSender_.send(cascade::core::testerUsageEndpoint(), testerUsageQueue_.front());
 }
 
+AppWindow::TesterLinkPending AppWindow::computeLinkPending(
+    const std::string& token, const std::string& name, bool appTokenHeld, bool portalTokenHeld,
+    const std::optional<std::string>& migrationResolvedAppToken) {
+    TesterLinkPending pending;
+    pending.token = token;
+    pending.name = name;
+    const bool replacingApp = appTokenHeld;
+    const bool replacingLegacy = !replacingApp && portalTokenHeld;
+    pending.replacing = replacingApp || replacingLegacy;
+    pending.replacingLegacyPortalToken = replacingLegacy;
+    pending.keepsLegacyQueue = replacingLegacy && migrationResolvedAppToken.has_value() &&
+                               *migrationResolvedAppToken == pending.token;
+    return pending;
+}
+
 void AppWindow::testerLinkPoll() {
     // --- migration exchange result --------------------------------------
     if (const std::optional<cascade::core::BetaMigrationResult> result =
@@ -25689,6 +25725,10 @@ void AppWindow::testerLinkPoll() {
             // (PORTAL-LINK-VERDICT.md finding 6b - see
             // TesterUsageQueue::rewriteToken's own comment).
             testerUsageQueue_.rewriteToken(result->appToken);
+            // Cached for a LATER manual link confirmation to compare against
+            // (TesterLinkPending::keepsLegacyQueue) - kept even though
+            // testerAppToken_/testerToken_ below already act on it.
+            testerMigrationResolvedAppToken_ = result->appToken;
             testerAppToken_ = result->appToken;
             testerAppTokenName_ = result->name;
             testerToken_.clear();
@@ -25719,11 +25759,9 @@ void AppWindow::testerLinkPoll() {
             testerLinkNameSender_.takeResult()) {
         using cascade::core::BetaLinkOutcome;
         if (resolved->outcome == BetaLinkOutcome::Ok) {
-            TesterLinkPending pending;
-            pending.token = testerLinkResolvingToken_;
-            pending.name = resolved->name;
-            pending.replacing = !testerAppToken_.empty();
-            testerLinkPending_ = pending;
+            testerLinkPending_ = computeLinkPending(
+                testerLinkResolvingToken_, resolved->name, !testerAppToken_.empty(),
+                !testerToken_.empty(), testerMigrationResolvedAppToken_);
             testerLinkError_.clear();
         } else if (resolved->outcome == BetaLinkOutcome::Invalid) {
             testerLinkError_ = tr("that link is not valid");
@@ -25745,9 +25783,20 @@ void AppWindow::testerLinkPoll() {
     const std::string configDir =
         std::filesystem::path(configPath_).parent_path().string();
     const std::string token = cascade::core::claimLinkRequestFile(configDir);
-    if (!token.empty() && !testerLinkNameSender_.busy() && !testerLinkPending_) {
-        testerLinkResolvingToken_ = token;
-        testerLinkNameSender_.send(cascade::core::betaApiBaseUrl(), token);
+    if (!token.empty()) {
+        // claimLinkRequestFile() has already deleted the file - if a lookup
+        // or a confirm/replace prompt is already occupying this flow, this
+        // token must be held rather than dropped, or a link clicked while
+        // one was already in progress would simply be lost. LATEST WINS: a
+        // second arrival before the first is even acted on overwrites
+        // whatever was queued, since only the most recent click is the one
+        // the tester actually meant.
+        testerLinkQueuedToken_ = token;
+    }
+    if (!testerLinkQueuedToken_.empty() && !testerLinkNameSender_.busy() && !testerLinkPending_) {
+        testerLinkResolvingToken_ = testerLinkQueuedToken_;
+        testerLinkNameSender_.send(cascade::core::betaApiBaseUrl(), testerLinkQueuedToken_);
+        testerLinkQueuedToken_.clear();
     }
 }
 
@@ -25758,15 +25807,44 @@ void AppWindow::drawTesterLinkPrompt() {
     if (ImGui::Begin(trId("Link this FoxSDR?"), &open, ImGuiWindowFlags_AlwaysAutoResize)) {
         telemetryNotePanel("beta tester link prompt");
         if (testerLinkPending_) {
-            if (testerLinkPending_->replacing) {
+            const std::string shownName = testerNameOrPlaceholder(testerLinkPending_->name);
+            if (testerLinkPending_->replacingLegacyPortalToken) {
+                // A legacy PORTAL token has no confirmed name of its own to
+                // offer as "linked to OLDNAME" - it was never resolved by
+                // name (that is exactly what the app-token flow adds).
+                ImGui::TextWrapped(
+                    tr("This FoxSDR has a tester code set. Replace it with a confirmed link "
+                       "to %s?"),
+                    shownName.c_str());
+                ImGui::Spacing();
+                if (testerLinkPending_->keepsLegacyQueue) {
+                    ImGui::TextWrapped(
+                        "%s",
+                        tr("Reports already queued under the old code will be kept, linked "
+                           "to the new one."));
+                } else {
+                    ImGui::TextWrapped(
+                        "%s", tr("Reports already queued under the old code will be discarded."));
+                }
+            } else if (testerLinkPending_->replacing) {
                 ImGui::TextWrapped(tr("This FoxSDR is linked to %s. Replace with %s?"),
-                                   testerAppTokenName_.c_str(), testerLinkPending_->name.c_str());
+                                   testerNameOrPlaceholder(testerAppTokenName_).c_str(),
+                                   shownName.c_str());
             } else {
-                ImGui::TextWrapped(tr("Link this FoxSDR to beta tester %s?"),
-                                   testerLinkPending_->name.c_str());
+                ImGui::TextWrapped(tr("Link this FoxSDR to beta tester %s?"), shownName.c_str());
             }
             ImGui::Spacing();
             if (ImGui::Button(trId("Link"))) {
+                if (testerLinkPending_->replacingLegacyPortalToken &&
+                    testerLinkPending_->keepsLegacyQueue) {
+                    // SAME TESTER, proved by this session's own migration
+                    // exchange: rewrite the queue onto the new identity
+                    // BEFORE setTesterAppToken's dropOthers(token) runs, so
+                    // every item already carries the token it is about to be
+                    // kept under (PORTAL-LINK-VERDICT.md finding 6b's rule,
+                    // applied to this second path onto the same identity).
+                    testerUsageQueue_.rewriteToken(testerLinkPending_->token);
+                }
                 setTesterAppToken(testerLinkPending_->token, testerLinkPending_->name);
                 testerLinkPending_.reset();
             }

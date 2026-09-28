@@ -988,9 +988,19 @@ int main(int argc, char** argv) {
     // refuses a second instance the right to start.
     const bool primaryInstance = cascade::core::claimPrimaryInstance(
         std::filesystem::path(cascade::core::ConfigStore::defaultPath()).parent_path().string());
+    // Set below when argv[1] parsed as a real beta-link activation - the flag
+    // loop starting a few lines down must then skip index 1 rather than hand
+    // it to strcmp against every flag name, which is what used to happen: a
+    // link clicked with FoxSDR already closed fell through to "no instance
+    // was running" below, kept argv[1] as the URL, and the flag loop's
+    // unknown-argument branch (see the trailing else below) printed the whole
+    // URL - the token included - to stderr and exited 1. Neither half of that
+    // was acceptable for a credential.
+    bool argv1IsLinkActivation = false;
     if (argc >= 2) {
         const std::string linkToken = cascade::core::parseBetaLinkUrl(argv[1]);
         if (!linkToken.empty()) {
+            argv1IsLinkActivation = true;
             // NEVER THE TOKEN ITSELF, only its length - matching
             // core::extractTesterToken's own out-of-log discipline for the
             // older portal-token flow.
@@ -1008,7 +1018,9 @@ int main(int argc, char** argv) {
             }
             // No instance was running: fall through and continue as an
             // entirely normal launch, which consumes its own just-written
-            // file after ConfigStore::load, through the same poll.
+            // file after ConfigStore::load, through the same poll. argv[1]
+            // itself is skipped below (argv1IsLinkActivation) rather than
+            // parsed as a flag.
         }
     }
 
@@ -1022,7 +1034,12 @@ int main(int argc, char** argv) {
     bool toneCheck = false;
     bool linkTesterReveal = false;
     double rdsCheckMhz = 0.0;
-    for (int i = 1; i < argc; ++i) {
+    // argv[1] was already consumed above as a beta-link activation (written
+    // to the link-request file and logged by length only) - it is never a
+    // flag, and must never reach strcmp/the unknown-argument branch below,
+    // which would otherwise print the whole "foxsdr://beta?t=<token>" URL to
+    // stderr and exit 1 for a link clicked while no instance was running.
+    for (int i = argv1IsLinkActivation ? 2 : 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--frames") == 0) {
             if (i + 1 >= argc) {
                 std::fprintf(stderr, "cascade: --frames requires an integer argument\n");

@@ -75,6 +75,8 @@ bool writeLinkRequestFile(const std::string& configDir, const std::string& token
     const fs::path tmp =
         fs::path(configDir) / (".link-request." + std::to_string(pid) + "." +
                                std::to_string(stamp) + ".tmp");
+#if defined(_WIN32)
+    // Same-user-only by the OS's default ACL, as the header comment says.
     {
         std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
         if (!f) { return false; }
@@ -84,6 +86,25 @@ bool writeLinkRequestFile(const std::string& configDir, const std::string& token
             return false;
         }
     }
+#else
+    // EXPLICIT 0600, not a bare ofstream create (which lands at whatever the
+    // process umask leaves - 644 under the common 022 umask, world-readable).
+    // This is a one-shot credential file living beside config.json, which
+    // this codebase already treats as same-user-only; the mode is asked for
+    // directly rather than trusted to the umask of whatever process happens
+    // to launch the activation.
+    {
+        const int fd = ::open(tmp.c_str(), O_CREAT | O_WRONLY | O_TRUNC, 0600);
+        if (fd < 0) { return false; }
+        const ssize_t n = ::write(fd, token.data(), token.size());
+        const bool ok = n == static_cast<ssize_t>(token.size());
+        ::close(fd);
+        if (!ok) {
+            fs::remove(tmp, ec);
+            return false;
+        }
+    }
+#endif
     const fs::path dst(linkRequestPath(configDir));
     fs::rename(tmp, dst, ec);
     if (ec) {
@@ -154,7 +175,14 @@ bool claimPrimaryInstanceAt(const std::string& identity) {
     // so a different user on a shared box can never observe or squat it
     // (PORTAL-LINK-VERDICT.md finding 2's fix).
     const HANDLE h = ::CreateMutexA(nullptr, FALSE, identity.c_str());
-    if (h == nullptr) { return false; }  // could not even ask - assume not primary
+    // Could not even ask - fail OPEN, not closed. "Not primary" makes a link
+    // activation write its file and exit without ever starting a GUI to
+    // claim it (main.cpp: !primaryInstance means "assume another instance
+    // will poll for this"), which for a mutex failure is nobody - the link
+    // would be silently lost. Continuing as a normal launch is the answer
+    // that still works when the one thing this function exists to answer
+    // could not itself be answered.
+    if (h == nullptr) { return true; }
     return ::GetLastError() != ERROR_ALREADY_EXISTS;
 #else
     // Leaked on purpose, same reasoning. flock() is per-open-file-description,
@@ -197,6 +225,23 @@ std::string betaApiBaseUrl() {
     return std::string(kDefaultBetaApiBaseUrl);
 }
 
+std::string sanitizeTesterName(const std::string& raw) {
+    std::string out;
+    out.reserve(raw.size());
+    for (char c : raw) {
+        const auto u = static_cast<unsigned char>(c);
+        if (u < 0x20u || u == 0x7Fu) { continue; }
+        out.push_back(c);
+    }
+    if (out.size() > kMaxTesterNameBytes) {
+        std::size_t cut = kMaxTesterNameBytes;
+        while (cut > 0 && (static_cast<unsigned char>(out[cut]) & 0xC0u) == 0x80u) { --cut; }
+        out.resize(cut);
+    }
+    while (!out.empty() && out.back() == ' ') { out.pop_back(); }
+    return out;
+}
+
 BetaLinkResolved resolveAppTokenName(const std::string& baseUrl, const std::string& appToken,
                                      const std::shared_ptr<UploadCancel>& cancel) {
     BetaLinkResolved out;
@@ -214,7 +259,7 @@ BetaLinkResolved resolveAppTokenName(const std::string& baseUrl, const std::stri
     const auto it = j.find("name");
     if (it == j.end() || !it->is_string()) { return out; }
     out.outcome = BetaLinkOutcome::Ok;
-    out.name = it->get<std::string>();
+    out.name = sanitizeTesterName(it->get<std::string>());
     return out;
 }
 
@@ -288,7 +333,9 @@ BetaMigrationResult exchangePortalToken(const std::string& baseUrl, const std::s
     if (!validAppToken(appToken)) { return out; }  // the site owes us its own shape
     out.outcome = BetaMigrationOutcome::Ok;
     out.appToken = appToken;
-    if (nameIt != j.end() && nameIt->is_string()) { out.name = nameIt->get<std::string>(); }
+    if (nameIt != j.end() && nameIt->is_string()) {
+        out.name = sanitizeTesterName(nameIt->get<std::string>());
+    }
     return out;
 }
 
