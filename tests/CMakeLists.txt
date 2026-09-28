@@ -50,9 +50,10 @@ foreach(src ${CASCADE_TESTS})
         # repository root too. Run by hand without it, each walks up from its
         # working directory instead.
         add_test(NAME ${name} COMMAND ${name} "${CMAKE_SOURCE_DIR}")
-    elseif(name STREQUAL "test_tester_usage")
-        # Scans src/gui/app_window.cpp and src/core/tester_usage.cpp for the
-        # token-never-logged property, so it needs the repository root too.
+    elseif(name STREQUAL "test_tester_usage" OR name STREQUAL "test_tester_link")
+        # Scans src/gui/app_window.cpp, src/core/tester_usage.cpp,
+        # src/core/tester_link.cpp and src/main.cpp for the
+        # token-never-logged property, so both need the repository root too.
         add_test(NAME ${name} COMMAND ${name} "${CMAKE_SOURCE_DIR}")
     elseif(name STREQUAL "test_json_dump_policy")
         # The only test in this loop that takes an argument: it scans src/

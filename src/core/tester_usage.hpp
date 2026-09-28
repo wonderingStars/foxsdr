@@ -155,6 +155,23 @@ bool validTesterToken(const std::string& token);
 // and is not a credential this field accepts.
 std::string extractTesterToken(const std::string& input);
 
+// True when `token` is exactly 40 lowercase hex characters - the APP token's
+// own shape, and deliberately a DIFFERENT length from validTesterToken's 32:
+// the two credentials must never be confusable, either by a user pasting one
+// into the wrong box or by code that forgot which flow it was in. Minted by
+// the site as randomID(20) (see core/tester_link.hpp for how it is obtained
+// and used) rather than randomID(16), for exactly this reason - see
+// PORTAL-LINK-VERDICT.md finding 6(d).
+bool validAppToken(const std::string& token);
+
+// Trims `input` and returns it only if it is exactly a valid app token (see
+// validAppToken) - no URL-fragment parsing, because the portal shows the app
+// token as plain text with its own copy button (unlike the portal token,
+// which is also embedded in a manageLink). Returns "" for anything else,
+// including a valid 32-hex PORTAL token: this function is for the box that
+// accepts an APP token only.
+std::string extractAppToken(const std::string& input);
+
 // First 4 and last 4 characters, joined with "...", the same shape wherever
 // the token is shown at all - the "Code:" line and the "Show what is sent"
 // preview both call this rather than each inventing their own masking, so
@@ -278,6 +295,18 @@ public:
     // be shown to have the right token, so it is treated as having the
     // wrong one.
     void dropOthers(const std::string& token);
+
+    // Rewrites the "token" field of EVERY item to `newToken`, in place -
+    // unlike dropOthers, which discards a mismatched item, this is for the
+    // one case where an old report must be KEPT and relabelled: the portal-
+    // to-app-token migration exchange (core/tester_link.hpp), which must not
+    // throw away a session queued under the portal token just because the
+    // credential it will be sent under changed (PORTAL-LINK-VERDICT.md
+    // finding 6b). An item that fails to parse as a JSON object is left
+    // completely untouched rather than dropped: it already survived
+    // load-time filtering once, and silently losing it here would be worse
+    // than sending it under a now-stale token one more time.
+    void rewriteToken(const std::string& newToken);
 
 private:
     std::vector<std::string> items_;

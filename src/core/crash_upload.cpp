@@ -1033,6 +1033,139 @@ RawPostResult postBounded(const std::string& url, const std::string& json,
     return res;
 }
 
+AuthRequestResult authRequestBounded(const std::string& method, const std::string& url,
+                                     const std::string& bearer, const std::string& body,
+                                     const std::shared_ptr<UploadCancel>& cancel) {
+    AuthRequestResult res;
+    const bool isGet = (method == "GET");
+    const bool isPost = (method == "POST");
+    if (!isGet && !isPost) { return res; }  // exactly two methods accepted
+    if (url.empty() || !cancel) { return res; }
+
+#if defined(_WIN32)
+    URL_COMPONENTSW uc{};
+    uc.dwStructSize = sizeof(uc);
+    wchar_t host[256] = {0};
+    wchar_t path[1024] = {0};
+    uc.lpszHostName = host;
+    uc.dwHostNameLength = 255;
+    uc.lpszUrlPath = path;
+    uc.dwUrlPathLength = 1023;
+    const std::wstring wurl(url.begin(), url.end());
+    if (::WinHttpCrackUrl(wurl.c_str(), 0, 0, &uc) == 0) { return res; }
+
+    const bool secure = (uc.nScheme == INTERNET_SCHEME_HTTPS);
+    // Same loopback-only exception as postBounded: a shipped binary can never
+    // be talked into sending a bearer credential in clear over a network.
+    if (!secure && !isLoopbackHost(host)) { return res; }
+
+    HINTERNET ses = ::WinHttpOpen(L"FoxSDR-beta/1.0", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+                                  WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    if (ses == nullptr) { return res; }
+    ::WinHttpSetTimeouts(ses, 3000, 3000, 5000, 5000);
+
+    HINTERNET con = ::WinHttpConnect(ses, host, uc.nPort, 0);
+    if (con != nullptr) {
+        const wchar_t* wmethod = isGet ? L"GET" : L"POST";
+        HINTERNET req =
+            ::WinHttpOpenRequest(con, wmethod, path, nullptr, WINHTTP_NO_REFERER,
+                                 WINHTTP_DEFAULT_ACCEPT_TYPES, secure ? WINHTTP_FLAG_SECURE : 0);
+        if (req != nullptr) {
+            bool closed = false;
+            if (!cancel->publish(req)) {
+                res.cancelled = true;
+                closed = true;
+            } else {
+                res.attempted = true;
+                std::wstring headers = L"Authorization: Bearer " +
+                                       std::wstring(bearer.begin(), bearer.end()) + L"\r\n";
+                if (isPost) { headers += L"Content-Type: application/json\r\n"; }
+                const char* sendBody = isPost ? body.data() : nullptr;
+                const DWORD sendLen = isPost ? static_cast<DWORD>(body.size()) : 0;
+                BOOL ok = ::WinHttpSendRequest(req, headers.c_str(),
+                                               static_cast<DWORD>(-1),
+                                               const_cast<char*>(sendBody), sendLen, sendLen, 0);
+                if (ok != 0) { ok = ::WinHttpReceiveResponse(req, nullptr); }
+                if (ok != 0) {
+                    DWORD status = 0;
+                    DWORD len = sizeof(status);
+                    if (::WinHttpQueryHeaders(
+                            req, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                            WINHTTP_HEADER_NAME_BY_INDEX, &status, &len,
+                            WINHTTP_NO_HEADER_INDEX) != 0) {
+                        res.status = static_cast<int>(status);
+                    }
+                    // ALWAYS captured, bounded exactly like postBounded's own
+                    // captureBody=true path - both of this helper's callers
+                    // need the body to learn a name or a minted token.
+                    std::string readBody;
+                    for (;;) {
+                        DWORD avail = 0;
+                        if (::WinHttpQueryDataAvailable(req, &avail) == 0 || avail == 0) { break; }
+                        if (readBody.size() + avail > kMaxCapturedBodyBytes) {
+                            avail = static_cast<DWORD>(kMaxCapturedBodyBytes - readBody.size());
+                            if (avail == 0) { break; }
+                        }
+                        std::vector<char> buf(avail);
+                        DWORD got = 0;
+                        if (::WinHttpReadData(req, buf.data(), avail, &got) == 0 || got == 0) {
+                            break;
+                        }
+                        readBody.append(buf.data(), got);
+                        if (readBody.size() >= kMaxCapturedBodyBytes) { break; }
+                    }
+                    res.body = std::move(readBody);
+                } else if (::GetLastError() == ERROR_WINHTTP_OPERATION_CANCELLED) {
+                    res.cancelled = true;
+                }
+                void* mine = cancel->take();
+                if (mine != nullptr) { ::WinHttpCloseHandle(static_cast<HINTERNET>(mine)); }
+                closed = true;
+            }
+            if (!closed) { ::WinHttpCloseHandle(req); }
+        }
+        ::WinHttpCloseHandle(con);
+    }
+    ::WinHttpCloseHandle(ses);
+#else
+    UrlParts parts;
+    if (!splitUrl(url, parts)) { return res; }
+    const bool secure = (parts.scheme == "https");
+    if (!secure && (parts.scheme != "http" || !isLoopbackHost(parts.host))) { return res; }
+
+    const std::unique_ptr<httplib::ClientImpl> cli =
+        secure ? std::unique_ptr<httplib::ClientImpl>(
+                     new httplib::SSLClient(parts.host, parts.port))
+               : std::unique_ptr<httplib::ClientImpl>(
+                     new httplib::ClientImpl(parts.host, parts.port));
+    if (!cli->is_valid()) { return res; }
+    cli->enable_server_certificate_verification(true);
+    cli->set_follow_location(false);
+    cli->set_connection_timeout(3, 0);
+    cli->set_read_timeout(5, 0);
+    cli->set_write_timeout(5, 0);
+
+    if (!cancel->publish(cli.get())) {
+        res.cancelled = true;
+    } else {
+        res.attempted = true;
+        const httplib::Headers headers = {{"Authorization", "Bearer " + bearer}};
+        const httplib::Result r =
+            isGet ? cli->Get(parts.target, headers)
+                  : cli->Post(parts.target, headers, body, "application/json");
+        cancel->take();
+
+        if (r) {
+            res.status = r->status;
+            res.body = r->body.substr(0, kMaxCapturedBodyBytes);
+        } else if (cancel->cancelled()) {
+            res.cancelled = true;
+        }
+    }
+#endif
+    return res;
+}
+
 UploadResult postCrashReport(const std::string& url, const std::string& json,
                              const std::shared_ptr<UploadCancel>& cancel) {
     const RawPostResult raw = postBounded(url, json, cancel, /*captureBody=*/false);

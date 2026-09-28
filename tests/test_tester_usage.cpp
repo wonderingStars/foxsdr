@@ -608,6 +608,9 @@ void testTokenNeverAppearsNearALogCall(const std::string& givenRoot) {
             if (!logs) { continue; }
             const bool leaks = line.find("testerToken_") != std::string::npos ||
                                line.find("testerCodeBuf_") != std::string::npos ||
+                               line.find("testerAppToken_") != std::string::npos ||
+                               line.find("testerLinkPending_") != std::string::npos ||
+                               line.find("testerLinkResolvingToken_") != std::string::npos ||
                                line.find(".token") != std::string::npos;
             if (leaks) {
                 clean = false;
@@ -813,6 +816,84 @@ void testConfigDropsPendingReportsForAnotherTokenOnLoad() {
     CHECK(ConfigStore::load(tmp.string(), loaded2, error));
     CHECK(loaded2.testerUsagePending.empty());
 
+    std::error_code ec;
+    fs::remove(tmp, ec);
+}
+
+// The app token (core/tester_link.hpp): stored/loaded like testerToken, but
+// validated as 40 hex rather than 32, independently of it, and it is the one
+// that decides the ACTIVE identity a queued report is kept under.
+void testConfigValidatesAppTokenShapeIndependently() {
+    const fs::path tmp = fs::temp_directory_path() /
+                         ("cascade-tester-usage-apptoken-test-" +
+                          std::to_string(static_cast<long>(
+#if defined(_WIN32)
+                              ::GetCurrentProcessId()
+#else
+                              ::getpid()
+#endif
+                              )) +
+                          ".json");
+    std::string werr;
+    std::string error;
+
+    // Valid app token round-trips verbatim, alongside the display name.
+    AppConfig cfg;
+    cfg.testerAppToken = std::string(40, 'b');
+    cfg.testerAppTokenName = "Ada Lovelace";
+    CHECK(ConfigStore::writeFile(tmp.string(), ConfigStore::serialize(cfg), werr));
+    AppConfig loaded;
+    CHECK(ConfigStore::load(tmp.string(), loaded, error));
+    CHECK(loaded.testerAppToken == cfg.testerAppToken);
+    CHECK(loaded.testerAppTokenName == "Ada Lovelace");
+
+    // A 32-hex value (a PORTAL token's own shape) in the APP TOKEN field is
+    // refused - the two must never be confusable even by a hand-edit - and
+    // the name that went with it is cleared too, since a name with no token
+    // is meaningless.
+    AppConfig bad;
+    bad.testerAppToken = std::string(32, 'c');
+    bad.testerAppTokenName = "Should Vanish";
+    CHECK(ConfigStore::writeFile(tmp.string(), ConfigStore::serialize(bad), werr));
+    AppConfig loadedBad;
+    CHECK(ConfigStore::load(tmp.string(), loadedBad, error));
+    CHECK(loadedBad.testerAppToken.empty());
+    CHECK(loadedBad.testerAppTokenName.empty());
+
+    std::error_code ec;
+    fs::remove(tmp, ec);
+}
+
+// The app token, when present, is the ACTIVE identity a queued report is
+// kept under - independent of whatever the (older) portal token field still
+// says, exactly AppWindow::activeTesterToken()'s own rule, applied here to
+// the load-time queue filter in config.cpp.
+void testConfigKeepsQueueUnderTheAppTokenWhenOneIsHeld() {
+    const std::string portal(32, 'a');
+    const std::string appTok(40, 'e');
+    AppConfig cfg;
+    cfg.testerToken = portal;
+    cfg.testerAppToken = appTok;
+    cfg.testerUsagePending = {reportWithToken(portal), reportWithToken(appTok)};
+    const fs::path tmp = fs::temp_directory_path() /
+                         ("cascade-tester-usage-active-token-test-" +
+                          std::to_string(static_cast<long>(
+#if defined(_WIN32)
+                              ::GetCurrentProcessId()
+#else
+                              ::getpid()
+#endif
+                              )) +
+                          ".json");
+    std::string werr;
+    std::string error;
+    CHECK(ConfigStore::writeFile(tmp.string(), ConfigStore::serialize(cfg), werr));
+    AppConfig loaded;
+    CHECK(ConfigStore::load(tmp.string(), loaded, error));
+    CHECK(loaded.testerUsagePending.size() == 1);
+    if (loaded.testerUsagePending.size() == 1) {
+        CHECK(tokenOfReport(loaded.testerUsagePending[0]) == appTok);
+    }
     std::error_code ec;
     fs::remove(tmp, ec);
 }
@@ -1214,6 +1295,8 @@ int main(int argc, char** argv) {
     testDiagnosticsBundleNeverContainsTheToken(givenRoot);
     testTokenIsStoredInConfigVerbatim();
     testConfigDropsPendingReportsForAnotherTokenOnLoad();
+    testConfigValidatesAppTokenShapeIndependently();
+    testConfigKeepsQueueUnderTheAppTokenWhenOneIsHeld();
 #if defined(_WIN32)
     testRealServerReceivesEveryResponseCodeWindows();
     testShutdownNeverWaitsOnTheNetwork();

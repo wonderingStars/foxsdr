@@ -3584,6 +3584,8 @@ void AppWindow::drawUi() {
     // top-level thing belongs at the top level, not nested in the borderless
     // root window's ID stack.
     drawDiagnosticsOffer();
+    // The beta-tester link confirmation prompt, same top-level reasoning.
+    drawTesterLinkPrompt();
 
     // ONE basemap eviction pass, AFTER every surface that wanted tiles has
     // asked for them. Two things ask now - the map pages, which draw inside
@@ -3643,6 +3645,9 @@ void AppWindow::drawUi() {
     // Beta tester usage reporting (SYSTEM > Beta tester), off unless a tester
     // pastes their code; a no-op poll otherwise. See tester_usage.hpp.
     testerUsagePoll();
+    // The portal-link flow: migration exchange, confirm-by-name, and the 1 Hz
+    // link-request file poll. See tester_link.hpp.
+    testerLinkPoll();
 }
 
 void AppWindow::pollAudioHealth() {
@@ -6485,7 +6490,7 @@ void AppWindow::drawMenuColumn() {
             drawKeyBindingsSection();
             drawDiagnosticsSection();
             drawUsageReportingSection();
-            drawTesterUsageSection();
+            if (testerSectionVisible()) { drawTesterUsageSection(); }
             break;
     }
     // The last section's drawer, if it is mid-motion, is closed here rather
@@ -24079,9 +24084,8 @@ void AppWindow::drawTesterUsageSection() {
         testerPreviewOpenedByEnv_ = true;
         testerShowPreview_ = true;
     }
-    const bool active = !testerToken_.empty();
-    const char* chip =
-        testerToken_.empty() ? tr("OFF") : (testerTokenInvalid_ ? tr("INVALID") : tr("ON"));
+    const bool active = !testerToken_.empty() || !testerAppToken_.empty();
+    const char* chip = active ? (testerTokenInvalid_ ? tr("INVALID") : tr("ON")) : tr("OFF");
     const ImU32 lamp = testerTokenInvalid_
                            ? ImGui::ColorConvertFloat4ToU32(cascade::gui::theme::bad())
                            : cascade::gui::theme::kPhosphor;
@@ -24097,7 +24101,14 @@ void AppWindow::drawTesterUsageSection() {
            "collected or sent."));
     ImGui::Spacing();
 
-    if (!testerToken_.empty()) {
+    if (!testerAppToken_.empty()) {
+        // A CONFIRMED LINK (core/tester_link.hpp) - the paste box below is
+        // for the older portal-token flow and for a fresh --link-tester
+        // paste, neither of which applies once a link has been confirmed by
+        // name.
+        ImGui::TextDisabled(tr("Linked to %s"), testerAppTokenName_.c_str());
+        if (ImGui::SmallButton(trId("Unlink"))) { clearTesterAppToken(); }
+    } else if (!testerToken_.empty()) {
         ImGui::TextDisabled(tr("Code: %s"), cascade::core::maskTesterToken(testerToken_).c_str());
         if (ImGui::SmallButton(trId("Remove code"))) {
             setTesterToken(std::string(), /*startFreshSession=*/false);
@@ -24113,7 +24124,7 @@ void AppWindow::drawTesterUsageSection() {
             ImGui::PopStyleColor();
         }
     }
-    if (testerToken_.empty() || testerTokenInvalid_) {
+    if (testerAppToken_.empty() && (testerToken_.empty() || testerTokenInvalid_)) {
         // MASKED WHILE TYPING, like the web server's own password field: this
         // is the same credential the Code line above shows only four-and-four,
         // and a field showing it in full while it is entered would be the one
@@ -24121,13 +24132,25 @@ void AppWindow::drawTesterUsageSection() {
         ImGui::InputText(cascade::gui::labelAboveIfNeeded(trId("Tester code")), testerCodeBuf_,
                          sizeof(testerCodeBuf_), ImGuiInputTextFlags_Password);
         if (ImGui::Button(trId("Use this code"))) {
+            // AN APP TOKEN (40 hex, from the portal's "Link FoxSDR" button,
+            // typed here via --link-tester) is never stored directly - it
+            // goes through confirm-by-name first, exactly like the protocol
+            // activation path (PORTAL-LINK-VERDICT.md finding 1). A PORTAL
+            // token (32 hex, or the whole manage link) keeps the existing
+            // immediate opt-in this box has always had.
+            const std::string extractedApp = cascade::core::extractAppToken(testerCodeBuf_);
             const std::string extracted = cascade::core::extractTesterToken(testerCodeBuf_);
-            if (extracted.empty()) {
-                testerCodeError_ = tr("that does not look like a tester code or link");
-            } else {
+            if (!extractedApp.empty()) {
+                testerCodeError_.clear();
+                testerLinkResolvingToken_ = extractedApp;
+                testerLinkNameSender_.send(cascade::core::betaApiBaseUrl(), extractedApp);
+                std::memset(testerCodeBuf_, 0, sizeof(testerCodeBuf_));
+            } else if (!extracted.empty()) {
                 testerCodeError_.clear();
                 setTesterToken(extracted, /*startFreshSession=*/testerToken_.empty());
                 std::memset(testerCodeBuf_, 0, sizeof(testerCodeBuf_));
+            } else {
+                testerCodeError_ = tr("that does not look like a tester code or link");
             }
         }
         if (!testerCodeError_.empty()) {
@@ -24153,7 +24176,7 @@ void AppWindow::drawTesterUsageSection() {
     if (testerShowPreview_) {
         telemetryNotePanel("beta tester preview");
         ImGui::Indent();
-        if (testerToken_.empty()) {
+        if (activeTesterToken().empty()) {
             ImGui::TextDisabled("%s", tr("Nothing - no code is set."));
         } else {
             const double now = glfwGetTime();
@@ -25481,7 +25504,10 @@ void AppWindow::testerUsageAccrue() {
 
 cascade::core::TesterUsageReport AppWindow::buildTesterUsageReport(double sessionSeconds) const {
     cascade::core::TesterUsageReport r;
-    r.token = testerToken_;
+    // THE APP TOKEN WINS when held - the site accepts either during the
+    // migration transition (PORTAL-LINK-VERDICT.md §7), but once a link has
+    // been confirmed by name it is the identity that should be credited.
+    r.token = activeTesterToken();
     r.version = cascade::versionString();
     r.platform = cascade::core::testerUsagePlatform();
     r.arch = cascade::core::archDescription();
@@ -25503,9 +25529,11 @@ cascade::core::TesterUsageReport AppWindow::buildTesterUsageReport(double sessio
 void AppWindow::testerUsageJournal(cascade::core::AppConfig& cfg) {
     cfg.testerToken = testerToken_;
     cfg.testerTokenInvalid = testerTokenInvalid_;
+    cfg.testerAppToken = testerAppToken_;
+    cfg.testerAppTokenName = testerAppTokenName_;
     cfg.testerUsagePending = testerUsageQueue_.items();
     cfg.testerUsageCurrent.clear();
-    if (testerToken_.empty()) {
+    if (activeTesterToken().empty()) {
         // Opted out: nothing here is collected, so there is nothing to write
         // beyond the token fields above (which record the removal itself).
         return;
@@ -25516,10 +25544,21 @@ void AppWindow::testerUsageJournal(cascade::core::AppConfig& cfg) {
     cfg.testerUsageCurrent = buildTesterUsageReport(sessionSeconds).toJson();
 }
 
+std::string AppWindow::activeTesterToken() const {
+    return !testerAppToken_.empty() ? testerAppToken_ : testerToken_;
+}
+
 void AppWindow::setTesterToken(const std::string& token, bool startFreshSession) {
     testerToken_ = token;
     testerTokenInvalid_ = false;
     testerUsageQueueTriedThisSession_ = false;
+    // A portal-token paste, replace or removal is a full identity reset - any
+    // APP TOKEN linked earlier is superseded or removed with it
+    // (PORTAL-LINK-VERDICT.md finding 7: "Remove code" must clear the app
+    // token too, and there is no reason a fresh portal-token paste should
+    // leave a stale link-confirmed identity behind it either).
+    testerAppToken_.clear();
+    testerAppTokenName_.clear();
     // NEVER CARRY A REPORT QUEUED UNDER A DIFFERENT CODE. Pasting a new code,
     // replacing an invalid one, or removing the code altogether (token == "")
     // must not leave an old session's report waiting to be sent under an
@@ -25537,11 +25576,47 @@ void AppWindow::setTesterToken(const std::string& token, bool startFreshSession)
     testerUsage_.setArmed(!testerToken_.empty());
 }
 
+void AppWindow::setTesterAppToken(const std::string& token, const std::string& name) {
+    testerAppToken_ = token;
+    testerAppTokenName_ = name;
+    // The portal-token identity is superseded, not kept alongside the new
+    // one - PORTAL-LINK-VERDICT.md finding 7's rule applied in the other
+    // direction.
+    testerToken_.clear();
+    testerTokenInvalid_ = false;
+    testerUsageQueueTriedThisSession_ = false;
+    testerUsageQueue_.dropOthers(token);
+    testerUsage_.reset();
+    testerSessionStart_ = glfwGetTime();
+    testerSessionStartWall_ = std::time(nullptr);
+    testerUsageAccrual_.reset(testerSessionStart_);
+    testerUsage_.setArmed(true);
+}
+
+void AppWindow::clearTesterAppToken() {
+    testerAppToken_.clear();
+    testerAppTokenName_.clear();
+    testerUsageQueueTriedThisSession_ = false;
+    // Whatever was queued under the app token is this identity's alone -
+    // dropOthers against whatever remains active (ordinarily nothing, since
+    // the portal token is cleared the moment an app token is confirmed) drops
+    // it rather than leaving it to be sent under nobody's credential.
+    testerUsageQueue_.dropOthers(activeTesterToken());
+    testerUsage_.setArmed(!activeTesterToken().empty());
+}
+
+bool AppWindow::testerSectionVisible() const {
+    return !testerAppToken_.empty() || testerMigrationSender_.busy() || testerLinkReveal_;
+}
+
 void AppWindow::testerUsageStartup(const cascade::core::AppConfig& cfg) {
     testerToken_ = cfg.testerToken;
     testerTokenInvalid_ = cfg.testerTokenInvalid;
+    testerAppToken_ = cfg.testerAppToken;
+    testerAppTokenName_ = cfg.testerAppTokenName;
+    testerMigrationTried_ = false;
     testerUsage_.reset();
-    testerUsage_.setArmed(!testerToken_.empty());
+    testerUsage_.setArmed(!activeTesterToken().empty());
     testerSessionStart_ = glfwGetTime();
     testerSessionStartWall_ = std::time(nullptr);
     testerUsageAccrual_.reset(testerSessionStart_);
@@ -25554,14 +25629,16 @@ void AppWindow::testerUsageStartup(const cascade::core::AppConfig& cfg) {
     std::vector<std::string> items = cfg.testerUsagePending;
     if (!cfg.testerUsageCurrent.empty()) { items.push_back(cfg.testerUsageCurrent); }
     testerUsageQueue_.setItems(items);
-    // AND DROPPED IF IT DOES NOT MATCH THE CODE ON FILE - config.cpp already
-    // filters testerUsagePending by token on load, but testerUsageCurrent is
-    // folded in fresh here, so the same rule is re-applied to the combined
-    // queue rather than trusted to have already held for both halves.
-    testerUsageQueue_.dropOthers(testerToken_);
+    // AND DROPPED IF IT DOES NOT MATCH THE ACTIVE IDENTITY - config.cpp
+    // already filters testerUsagePending by that same rule on load, but
+    // testerUsageCurrent is folded in fresh here, so it is re-applied to the
+    // combined queue rather than trusted to have already held for both
+    // halves.
+    testerUsageQueue_.dropOthers(activeTesterToken());
     // The actual send is driven from testerUsagePoll() (called once a frame),
     // never blocking start-up - the same reason telemetry's own send happens
-    // off the constructor.
+    // off the constructor. The migration exchange (if a portal token needs
+    // one) is likewise started from testerLinkPoll(), not here.
 }
 
 void AppWindow::testerUsagePoll() {
@@ -25579,15 +25656,135 @@ void AppWindow::testerUsagePoll() {
         // rather than logic inlined here.
         const cascade::core::TesterUsageOutcomeEffect effect =
             cascade::core::applyTesterUsageOutcome(*outcome, testerUsageQueue_);
-        if (effect.nowInvalid) { testerTokenInvalid_ = true; }
+        if (effect.nowInvalid) {
+            if (!testerAppToken_.empty()) {
+                // A revoked APP TOKEN is cleared outright, unlike a revoked
+                // portal token - there is nothing to fix in place, only a
+                // fresh portal link produces a new one
+                // (PORTAL-LINK-VERDICT.md §8).
+                clearTesterAppToken();
+            } else {
+                testerTokenInvalid_ = true;
+            }
+        }
         if (effect.stop) { testerUsageQueueTriedThisSession_ = true; }
         // Sent/Rejected fall through with neither flag set, which is what
         // lets the loop below try the NEXT queued report immediately rather
         // than waiting for the next launch.
     }
     if (testerUsageSender_.busy() || testerUsageQueueTriedThisSession_) { return; }
-    if (testerToken_.empty() || testerTokenInvalid_ || testerUsageQueue_.empty()) { return; }
+    const std::string token = activeTesterToken();
+    if (token.empty() || testerTokenInvalid_ || testerUsageQueue_.empty()) { return; }
     testerUsageSender_.send(cascade::core::testerUsageEndpoint(), testerUsageQueue_.front());
+}
+
+void AppWindow::testerLinkPoll() {
+    // --- migration exchange result --------------------------------------
+    if (const std::optional<cascade::core::BetaMigrationResult> result =
+            testerMigrationSender_.takeResult()) {
+        using cascade::core::BetaMigrationOutcome;
+        if (result->outcome == BetaMigrationOutcome::Ok) {
+            // REWRITE, NEVER DROP: the reports queued under the portal token
+            // are this same tester's session data, not a different tester's
+            // (PORTAL-LINK-VERDICT.md finding 6b - see
+            // TesterUsageQueue::rewriteToken's own comment).
+            testerUsageQueue_.rewriteToken(result->appToken);
+            testerAppToken_ = result->appToken;
+            testerAppTokenName_ = result->name;
+            testerToken_.clear();
+            testerTokenInvalid_ = false;
+            testerUsage_.setArmed(true);
+        } else if (result->outcome == BetaMigrationOutcome::Invalid) {
+            // 404/401: the portal token is dead. Clear it and stop - retrying
+            // forever would show "linking..." to someone no longer a tester
+            // (PORTAL-LINK-VERDICT.md finding 6c).
+            testerToken_.clear();
+            testerTokenInvalid_ = false;
+            testerUsageQueue_.dropOthers(activeTesterToken());
+            testerUsage_.setArmed(!activeTesterToken().empty());
+        }
+        // NetworkError: testerToken_ is untouched - testerMigrationTried_
+        // stays true for the rest of THIS session (a black-holed endpoint
+        // must not become a per-frame retry loop), and the exchange is tried
+        // again at the NEXT launch via testerUsageStartup resetting the flag.
+    }
+    if (!testerMigrationTried_ && !testerMigrationSender_.busy() && testerAppToken_.empty() &&
+        !testerToken_.empty() && cascade::core::validTesterToken(testerToken_)) {
+        testerMigrationTried_ = true;
+        testerMigrationSender_.send(cascade::core::betaApiBaseUrl(), testerToken_);
+    }
+
+    // --- confirm-by-name result ------------------------------------------
+    if (const std::optional<cascade::core::BetaLinkResolved> resolved =
+            testerLinkNameSender_.takeResult()) {
+        using cascade::core::BetaLinkOutcome;
+        if (resolved->outcome == BetaLinkOutcome::Ok) {
+            TesterLinkPending pending;
+            pending.token = testerLinkResolvingToken_;
+            pending.name = resolved->name;
+            pending.replacing = !testerAppToken_.empty();
+            testerLinkPending_ = pending;
+            testerLinkError_.clear();
+        } else if (resolved->outcome == BetaLinkOutcome::Invalid) {
+            testerLinkError_ = tr("that link is not valid");
+        } else {
+            testerLinkError_ = tr("could not check that link - try again");
+        }
+        testerLinkResolvingToken_.clear();
+    }
+
+    // --- the one-shot link-request file, ~1 Hz -----------------------------
+    // A stat() is cheap, but there is no reason to pay it every frame for a
+    // file that, in the overwhelming majority of frames, does not exist.
+    // Hermetic runs (empty configPath_) never touch the disk, same rule as
+    // maybeSaveConfig.
+    if (configPath_.empty()) { return; }
+    const double now = glfwGetTime();
+    if (now - testerLinkPollLast_ < 1.0) { return; }
+    testerLinkPollLast_ = now;
+    const std::string configDir =
+        std::filesystem::path(configPath_).parent_path().string();
+    const std::string token = cascade::core::claimLinkRequestFile(configDir);
+    if (!token.empty() && !testerLinkNameSender_.busy() && !testerLinkPending_) {
+        testerLinkResolvingToken_ = token;
+        testerLinkNameSender_.send(cascade::core::betaApiBaseUrl(), token);
+    }
+}
+
+void AppWindow::drawTesterLinkPrompt() {
+    if (!testerLinkPending_ && testerLinkError_.empty()) { return; }
+    bool open = true;
+    ImGui::SetNextWindowSize(ImVec2(460.0f, 0.0f), ImGuiCond_Appearing);
+    if (ImGui::Begin(trId("Link this FoxSDR?"), &open, ImGuiWindowFlags_AlwaysAutoResize)) {
+        telemetryNotePanel("beta tester link prompt");
+        if (testerLinkPending_) {
+            if (testerLinkPending_->replacing) {
+                ImGui::TextWrapped(tr("This FoxSDR is linked to %s. Replace with %s?"),
+                                   testerAppTokenName_.c_str(), testerLinkPending_->name.c_str());
+            } else {
+                ImGui::TextWrapped(tr("Link this FoxSDR to beta tester %s?"),
+                                   testerLinkPending_->name.c_str());
+            }
+            ImGui::Spacing();
+            if (ImGui::Button(trId("Link"))) {
+                setTesterAppToken(testerLinkPending_->token, testerLinkPending_->name);
+                testerLinkPending_.reset();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button(trId("Not now"))) { testerLinkPending_.reset(); }
+        } else if (!testerLinkError_.empty()) {
+            ImGui::PushStyleColor(ImGuiCol_Text, kErrorRed);
+            ImGui::TextWrapped("%s", testerLinkError_.c_str());
+            ImGui::PopStyleColor();
+            ImGui::Spacing();
+            if (ImGui::Button(trId("Not now"))) { testerLinkError_.clear(); }
+        }
+    }
+    ImGui::End();
+    if (!open) {
+        testerLinkPending_.reset();
+        testerLinkError_.clear();
+    }
 }
 
 cascade::core::AppConfig AppWindow::currentConfig() {

@@ -988,6 +988,26 @@ struct AppConfig {
     // site still hearing about.
     std::vector<std::string> testerUsagePending;
 
+    // --- Beta tester APP TOKEN / portal link (see core/tester_link.hpp) -----
+    //
+    // A SECOND, DISTINCT credential from testerToken above: 40 lowercase hex
+    // characters (core::validAppToken), never 32, so the two can never be
+    // confused. Minted for this ONE install via the portal's "Link FoxSDR"
+    // button (foxsdr://beta?t=<token>) or the hidden --link-tester paste box,
+    // and stored here ONLY after the tester has seen their own name and
+    // pressed Link (gui/app_window.cpp's drawTesterLinkPrompt) - never
+    // written silently. Non-empty is what makes SYSTEM > Beta tester visible
+    // at all when testerToken above is empty (see AppWindow::
+    // testerSectionVisible), and is preferred over testerToken wherever both
+    // are somehow present (AppWindow::activeTesterToken).
+    std::string testerAppToken;
+
+    // The tester's own display name, as the site's /api/beta/app-token/me
+    // (or the migration exchange's own response) last returned it - shown in
+    // "Linked to NAME" and in a replace-confirmation prompt. Never sent
+    // anywhere; purely a label this app was told once.
+    std::string testerAppTokenName;
+
     // --- Local fault capture (see PRIVACY.md and docs/DIAGNOSTICS.md) -------
     //
     // ON by default, and that needs no consent argument the usage report does:

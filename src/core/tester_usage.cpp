@@ -176,6 +176,20 @@ std::string extractTesterToken(const std::string& input) {
     return std::string();
 }
 
+bool validAppToken(const std::string& token) {
+    if (token.size() != 40) { return false; }
+    for (char c : token) {
+        const bool hex = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
+        if (!hex) { return false; }
+    }
+    return true;
+}
+
+std::string extractAppToken(const std::string& input) {
+    const std::string t = trim(input);
+    return validAppToken(t) ? t : std::string();
+}
+
 std::string maskTesterToken(const std::string& token) {
     if (token.size() <= 8) { return std::string(token.size(), '*'); }
     return token.substr(0, 4) + "..." + token.substr(token.size() - 4);
@@ -366,6 +380,15 @@ void TesterUsageQueue::dropOthers(const std::string& token) {
         if (tokenOfReport(item) == token) { kept.push_back(item); }
     }
     items_ = std::move(kept);
+}
+
+void TesterUsageQueue::rewriteToken(const std::string& newToken) {
+    for (std::string& item : items_) {
+        nlohmann::json j = nlohmann::json::parse(item, nullptr, /*allow_exceptions=*/false);
+        if (j.is_discarded() || !j.is_object()) { continue; }
+        j["token"] = newToken;
+        item = j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+    }
 }
 
 TesterUsageOutcomeEffect applyTesterUsageOutcome(TesterUsageOutcome outcome,

@@ -611,6 +611,8 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     getString(j, "telemetryPending", out.telemetryPending);
     getString(j, "testerToken", out.testerToken);
     getBool(j, "testerTokenInvalid", out.testerTokenInvalid);
+    getString(j, "testerAppToken", out.testerAppToken);
+    getString(j, "testerAppTokenName", out.testerAppTokenName);
     getString(j, "testerUsageCurrent", out.testerUsageCurrent);
     getStringArray(j, "testerUsagePending", out.testerUsagePending);
     getBool(j, "diagnosticsEnabled", out.diagnosticsEnabled);
@@ -663,14 +665,34 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
         out.testerUsageCurrent.clear();
         out.testerUsagePending.clear();
     }
+    // THE APP TOKEN, VALIDATED THE SAME WAY AND INDEPENDENTLY OF testerToken
+    // above - a hand-edited value that is not exactly 40 lowercase hex
+    // characters (core::validAppToken) is refused rather than sent, and
+    // there being no separate "linked" flag here is deliberate: the app
+    // token's own presence, confirmed by name before it was ever stored
+    // (gui/app_window.cpp's drawTesterLinkPrompt), IS the link.
+    if (!out.testerAppToken.empty() && !cascade::core::validAppToken(out.testerAppToken)) {
+        out.testerAppToken.clear();
+        out.testerAppTokenName.clear();
+    }
+    if (out.testerAppToken.empty()) {
+        // A name with no token to go with it is meaningless and must not
+        // survive to be shown as though it still named a link.
+        out.testerAppTokenName.clear();
+    }
     if (out.testerUsageCurrent.size() > AppConfig::kMaxPendingReportBytes) {
         out.testerUsageCurrent.clear();
     }
-    // WITH NO CODE, THERE IS NOTHING TO RETRY. A file that carries a queue
-    // but an empty token is either a hand-edit or a code that was removed
-    // after the last save landed mid-write; either way, nothing here is this
-    // session's to send under a code the tester no longer has entered.
-    if (out.testerToken.empty()) {
+    // THE ACTIVE IDENTITY - the app token when there is one, exactly
+    // AppWindow::activeTesterToken()'s own rule, applied here too so the
+    // pending-queue filter below and the "nothing to retry" rule agree with
+    // what testerUsageStartup will use at the next launch.
+    const std::string active = !out.testerAppToken.empty() ? out.testerAppToken : out.testerToken;
+    // WITH NO ACTIVE IDENTITY, THERE IS NOTHING TO RETRY. A file that carries
+    // a queue but no token at all is either a hand-edit or a code that was
+    // removed after the last save landed mid-write; either way, nothing here
+    // is this session's to send under an identity the tester no longer has.
+    if (active.empty()) {
         out.testerUsagePending.clear();
     }
     // Element-wise tolerant, like the plugin-name lists: an oversized entry
@@ -683,13 +705,16 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     // report be sent under the new one - it would land on the wrong
     // tester's entry on the site. tests/test_tester_usage.cpp drives this
     // through core::TesterUsageQueue::dropOthers directly; this is the same
-    // rule applied at load, for a queue that was written under a code this
-    // file no longer names.
+    // rule applied at load, for a queue that was written under an identity
+    // this file no longer names. (A migration exchange REWRITES the queue's
+    // token before this ever runs again - core::TesterUsageQueue::
+    // rewriteToken - so this filter never has to reconcile a portal-token
+    // queue against an app-token identity itself.)
     {
         std::vector<std::string> kept;
         for (std::string& s : out.testerUsagePending) {
             if (s.empty() || s.size() > AppConfig::kMaxPendingReportBytes) { continue; }
-            if (cascade::core::tokenOfReport(s) != out.testerToken) { continue; }
+            if (cascade::core::tokenOfReport(s) != active) { continue; }
             kept.push_back(std::move(s));
             if (kept.size() >= cascade::core::TesterUsageQueue::kMax) { break; }
         }
@@ -1091,6 +1116,8 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
     // about, and this line is not that.
     j["testerToken"] = cfg.testerToken;
     j["testerTokenInvalid"] = cfg.testerTokenInvalid;
+    j["testerAppToken"] = cfg.testerAppToken;
+    j["testerAppTokenName"] = cfg.testerAppTokenName;
     j["testerUsageCurrent"] = cfg.testerUsageCurrent;
     j["testerUsagePending"] = cfg.testerUsagePending;
     j["diagnosticsEnabled"] = cfg.diagnosticsEnabled;

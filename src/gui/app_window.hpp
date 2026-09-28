@@ -106,6 +106,7 @@ struct GLFWwindow;
 #include "gui/map_view.hpp"
 #include "core/telemetry.hpp"
 #include "core/tester_usage.hpp"
+#include "core/tester_link.hpp"
 #include "core/crash_upload.hpp"
 #include "core/feature_request.hpp"
 #include "core/problem_report.hpp"
@@ -659,6 +660,10 @@ public:
     // must leave nothing on the machine it ran on.
     void setDiagnosticsDir(std::string crashDir);
     void setDiagStallMs(int ms);
+    // --link-tester (main.cpp): reveals SYSTEM > Beta tester's paste box for
+    // this session even with no app token held yet. See the private
+    // testerLinkReveal_ field's own comment.
+    void setLinkTesterReveal(bool reveal) { testerLinkReveal_ = reveal; }
     // --diag-toggle on|off: +1, -1, or 0 for "leave it alone". Flips the
     // Settings > Diagnostics switch on frame 30, through the same function the
     // checkbox calls, so the mid-session behaviour of that switch can be
@@ -2905,6 +2910,84 @@ private:
     // of the queue, or leaves it for next time) - called once a frame.
     void testerUsagePoll();
     void drawTesterUsageSection();
+
+    // --- Beta tester APP TOKEN / portal link (core/tester_link.hpp) --------
+    //
+    // A SECOND, DISTINCT identity from testerToken_ above (32 hex): the
+    // 40-hex credential minted for this ONE install via the portal's "Link
+    // FoxSDR" button or --link-tester, confirmed by the tester pressing Link
+    // after seeing their own name (PORTAL-LINK-VERDICT.md finding 1 - never
+    // stored silently). Non-empty means SYSTEM > Beta tester is visible even
+    // with no portal token at all - see testerSectionVisible().
+    std::string testerAppToken_;
+    std::string testerAppTokenName_;
+
+    // Confirm-by-name (job D): resolves a token's owner off the GUI thread
+    // before anything is stored.
+    cascade::core::BetaLinkNameSender testerLinkNameSender_;
+    // The app token currently being resolved by testerLinkNameSender_, if
+    // any - send() only takes the token, so this is what lets the result
+    // (name only) be turned back into a full TesterLinkPending once it
+    // arrives.
+    std::string testerLinkResolvingToken_;
+    // Migration (job E): exchanges an existing portal token for an app token
+    // once, in the background, at start-up.
+    cascade::core::BetaMigrationSender testerMigrationSender_;
+    bool testerMigrationTried_ = false;
+
+    // The link-request file (core/tester_link.hpp) is polled at ~1 Hz, not
+    // every frame - a stat() call is cheap but there is no reason to pay it
+    // 60 times a second for a file that, in the overwhelming majority of
+    // frames, does not exist. Starts far in the past so the VERY FIRST frame
+    // always polls once - a fresh launch that just wrote its own
+    // link-request file (main.cpp's primary-instance path) must not wait a
+    // second to notice it.
+    double testerLinkPollLast_ = -1.0e9;
+
+    // --link-tester (main.cpp): reveals the paste box with no app token held,
+    // for this session only - never written to config (see main.cpp's own
+    // comment on why a bare flag, never --link-tester=<token>).
+    bool testerLinkReveal_ = false;
+
+    // Awaiting the tester's own Link/Not now decision - populated once
+    // testerLinkNameSender_ resolves a token's name, drained by
+    // drawTesterLinkPrompt(). Nothing is written to testerAppToken_ until
+    // the tester presses Link.
+    struct TesterLinkPending {
+        std::string token;
+        std::string name;
+        bool replacing = false;  // an app token was already held
+    };
+    std::optional<TesterLinkPending> testerLinkPending_;
+    std::string testerLinkError_;  // "that link is not valid", shown once
+
+    // testerAppToken_ when held, else testerToken_ - the identity a usage
+    // report is actually sent under (core/tester_usage.hpp's contract
+    // accepts either during the migration transition).
+    std::string activeTesterToken() const;
+    // Stores a CONFIRMED app token (the tester has already pressed Link),
+    // clears the portal token and its queue (finding 7: the old identity
+    // must not survive beside the new one), arms the recorder, and starts a
+    // fresh session record exactly like a fresh portal-token opt-in does.
+    void setTesterAppToken(const std::string& token, const std::string& name);
+    // Clears the app token and its queued reports - used on revocation (a
+    // 404 while sending under it) and by "Unlink". Unlike an invalid PORTAL
+    // token, which is kept on screen for the tester to fix
+    // (testerTokenInvalid_), a revoked app token is cleared outright: there
+    // is nothing to fix in place, only a fresh portal link produces a new
+    // one (PORTAL-LINK-VERDICT.md §8).
+    void clearTesterAppToken();
+    // True iff SYSTEM > Beta tester should be drawn at all: a confirmed app
+    // token is held, a migration exchange is in flight, or --link-tester was
+    // given this session.
+    bool testerSectionVisible() const;
+    // Called once a frame: 1 Hz link-request file poll, migration sender
+    // drain, and confirm-by-name sender drain.
+    void testerLinkPoll();
+    // The "Link this FoxSDR to beta tester NAME?" prompt, top-level like
+    // drawDiagnosticsOffer - see that function's own comment for why a
+    // confirmation belongs outside the borderless root window's ID stack.
+    void drawTesterLinkPrompt();
 
     // -----------------------------------------------------------------------
     // Diagnostics (see core/crash_handler.hpp, core/hang_watchdog.hpp)

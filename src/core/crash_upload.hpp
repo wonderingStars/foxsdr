@@ -337,6 +337,38 @@ struct RawPostResult {
 RawPostResult postBounded(const std::string& url, const std::string& json,
                           const std::shared_ptr<UploadCancel>& cancel, bool captureBody);
 
+// ---------------------------------------------------------------------------
+// Authenticated request, WITH a response body (2026-09-28, tester-link)
+// ---------------------------------------------------------------------------
+//
+// postBounded() above is POST-only and never sends a custom header: fine for
+// the crash and usage reporters, which carry their credential IN the JSON
+// body, but core/tester_link.hpp's two calls - "who does this app token
+// belong to" and "exchange this portal token for an app token" - both
+// authenticate with a bearer header instead (`Authorization: Bearer <token>`,
+// matching the site's own beta-portal contract) and both need the response
+// BODY read back, not just the status. Rather than a third hand-rolled
+// WinHTTP/httplib client, this is the same transport discipline as
+// postBounded (https except on loopback, abortable via `cancel`, same
+// connect/send/receive timeouts, response capped at the same
+// kMaxCapturedBodyBytes) with the method and the header made parameters.
+//
+// `method` is "GET" or "POST" exactly (nothing else is accepted - returns
+// res.attempted == false); `body` is sent as application/json for POST and
+// ignored for GET. `bearer` is never logged by this function and must not be
+// logged by any caller either - see core/tester_link.hpp's own token-secrecy
+// note.
+struct AuthRequestResult {
+    bool attempted = false;
+    int status = 0;       // 0 when the request never got an answer
+    bool cancelled = false;
+    std::string body;     // always captured, capped at kMaxCapturedBodyBytes
+};
+
+AuthRequestResult authRequestBounded(const std::string& method, const std::string& url,
+                                     const std::string& bearer, const std::string& body,
+                                     const std::shared_ptr<UploadCancel>& cancel);
+
 // WHERE REPORTS GO. https://foxsdr.com/api/crash, overridable by
 // FOXSDR_CRASH_URL, which is how the tests point at a local stub with no
 // network. Plain http is refused EXCEPT for a loopback host, so a test can use

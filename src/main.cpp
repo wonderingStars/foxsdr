@@ -39,6 +39,7 @@
 #include "core/crash_handler.hpp"
 #include "core/diag_log.hpp"
 #include "core/diag_report.hpp"
+#include "core/tester_link.hpp"
 
 // ---------------------------------------------------------------------------
 // Fatal-fault capture.
@@ -966,6 +967,51 @@ int main(int argc, char** argv) {
     cascade::core::diagLogf("FoxSDR %s (%s) starting", cascade::versionString(),
                             cascade::gitCommit());
 
+    // --- beta-tester portal link activation (core/tester_link.hpp) ---------
+    //
+    // Checked here, before config is ever read and before the flag loop
+    // below - a URL handed to us by the OS's protocol handler (or, on
+    // Windows, an unpackaged install's registered shell\open\command) is not
+    // a user-facing mode, it is an ACTIVATION, and PORTAL-LINK-VERDICT.md
+    // finding 3 is specific about the ordering: the instance mutex must be
+    // claimed as the first statement of a run, before config is read,
+    // because config is loaded seconds before a listener-based design could
+    // ever exist - claiming here means there is no such window at all.
+    //
+    // THE MUTEX IS CLAIMED UNCONDITIONALLY, for every launch that reaches
+    // this point (every headless tool mode - --version, --selftest,
+    // --soapy-check, --frames CI runs and the rest - returns within this
+    // function well before a real session would ever be mistaken for
+    // "already running", and each releases it at exit like any other
+    // process-lifetime resource). FoxSDR's multi-instance design is
+    // unaffected: this only ANSWERS "is one already running", it never
+    // refuses a second instance the right to start.
+    const bool primaryInstance = cascade::core::claimPrimaryInstance(
+        std::filesystem::path(cascade::core::ConfigStore::defaultPath()).parent_path().string());
+    if (argc >= 2) {
+        const std::string linkToken = cascade::core::parseBetaLinkUrl(argv[1]);
+        if (!linkToken.empty()) {
+            // NEVER THE TOKEN ITSELF, only its length - matching
+            // core::extractTesterToken's own out-of-log discipline for the
+            // older portal-token flow.
+            cascade::core::diagLogf("tester link received (len=%zu)", linkToken.size());
+            const std::string configDir =
+                std::filesystem::path(cascade::core::ConfigStore::defaultPath())
+                    .parent_path()
+                    .string();
+            cascade::core::writeLinkRequestFile(configDir, linkToken);
+            if (!primaryInstance) {
+                // A GUI instance is already running: it claims this file on
+                // its own ~1 Hz poll (AppWindow::testerLinkPoll). Nothing
+                // else here - no window, no device scan, no crash sweep.
+                return 0;
+            }
+            // No instance was running: fall through and continue as an
+            // entirely normal launch, which consumes its own just-written
+            // file after ConfigStore::load, through the same poll.
+        }
+    }
+
     int frames = -1;  // negative: run until the window is closed
     int diagStallMs = 0;
     int diagToggle = 0;
@@ -974,6 +1020,7 @@ int main(int argc, char** argv) {
     bool rtlsdrCheck = false;
     bool recordCheck = false;
     bool toneCheck = false;
+    bool linkTesterReveal = false;
     double rdsCheckMhz = 0.0;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--frames") == 0) {
@@ -1122,6 +1169,16 @@ int main(int argc, char** argv) {
             // Hidden bench diagnostic (see runToneCheck): plays audible sound,
             // so it is a human-in-the-loop tool, never a ctest entry.
             toneCheck = true;
+        } else if (std::strcmp(argv[i], "--link-tester") == 0) {
+            // Hidden, session-only reveal of SYSTEM > Beta tester's paste box
+            // when no link has been confirmed yet (core/tester_link.hpp,
+            // PORTAL-LINK-VERDICT.md §6/finding 8) - for a tester whose
+            // browser cannot or will not hand the app a foxsdr:// URL
+            // (Linux, or a blocked/dismissed protocol prompt). DELIBERATELY
+            // a bare flag, never --link-tester=<token>: a value here would
+            // sit in shell history indefinitely, unlike a protocol
+            // activation's argv[1], which is OS-delivered and transient.
+            linkTesterReveal = true;
         } else {
             std::fprintf(stderr,
                          "cascade: unknown argument '%s' (usage: cascade [--frames N] "
@@ -1183,5 +1240,6 @@ int main(int argc, char** argv) {
     app.setDiagnosticsDir(mayWrite ? cascade::core::diagCrashDir() : std::string());
     app.setDiagStallMs(diagStallMs);
     app.setDiagToggle(diagToggle);
+    app.setLinkTesterReveal(linkTesterReveal);
     return app.run(frames);
 }
