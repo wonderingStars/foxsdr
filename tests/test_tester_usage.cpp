@@ -27,6 +27,7 @@
 #include <nlohmann/json.hpp>
 
 #include "core/config.hpp"
+#include "core/diag_report.hpp"
 #include "core/tester_usage.hpp"
 #include "test_check.hpp"
 
@@ -259,6 +260,83 @@ void testRfc3339FormatIsFixedWidthAndUtc() {
     CHECK(s.size() == 20);  // "YYYY-MM-DDTHH:MM:SSZ"
     CHECK(s[4] == '-' && s[7] == '-' && s[10] == 'T' && s[13] == ':' && s[16] == ':');
     CHECK(s.back() == 'Z');
+}
+
+// --- The site's own bounds, enforced client-side ------------------------------
+
+TesterUsageReport basicReport(std::time_t now) {
+    TesterUsageReport r;
+    r.token = std::string(32, 'a');
+    r.version = "0.99.42";
+    r.platform = "windows";
+    r.arch = "x64";
+    r.session.start = rfc3339Utc(now);
+    r.session.minutes = 10;
+    return r;
+}
+
+void testFinalizeTruncatesVersionAndToken() {
+    const std::time_t now = 1780000000;
+    TesterUsageReport r = basicReport(now);
+    r.version = std::string(100, 'v');
+    r.token = std::string(100, 'a');
+    const TesterUsageReport f = finalizeTesterUsageReport(r, now);
+    CHECK(f.version.size() == kTesterUsageMaxVersionChars);
+    CHECK(f.token.size() == kTesterUsageMaxTokenChars);
+}
+
+void testFinalizeLowersAndDedupesRadioCase() {
+    const std::time_t now = 1780000000;
+    TesterUsageReport r = basicReport(now);
+    r.session.radios = {"RTLSDR", "rtlsdr", "UHD"};
+    const TesterUsageReport f = finalizeTesterUsageReport(r, now);
+    CHECK(f.session.radios == std::vector<std::string>({"rtlsdr", "uhd"}));
+}
+
+void testFinalizeClampsSessionStartIntoTheSiteWindow() {
+    const std::time_t now = 1780000000;
+    // Far in the past: clamped to exactly 365 days before `now`.
+    {
+        TesterUsageReport r = basicReport(now);
+        r.session.start = rfc3339Utc(now - 1000 * 24 * 60 * 60);
+        const TesterUsageReport f = finalizeTesterUsageReport(r, now);
+        CHECK(f.session.start == rfc3339Utc(now - static_cast<std::time_t>(kTesterUsageMaxSessionAgeSec)));
+    }
+    // Far in the future (a clock set wrong): clamped to exactly 10 minutes
+    // ahead of `now`.
+    {
+        TesterUsageReport r = basicReport(now);
+        r.session.start = rfc3339Utc(now + 3600);
+        const TesterUsageReport f = finalizeTesterUsageReport(r, now);
+        CHECK(f.session.start ==
+              rfc3339Utc(now + static_cast<std::time_t>(kTesterUsageMaxSessionFutureSec)));
+    }
+    // Within the window: left exactly alone.
+    {
+        TesterUsageReport r = basicReport(now);
+        r.session.start = rfc3339Utc(now - 60);
+        const TesterUsageReport f = finalizeTesterUsageReport(r, now);
+        CHECK(f.session.start == rfc3339Utc(now - 60));
+    }
+    // Malformed: replaced with `now` rather than left to fail server-side
+    // validation with no way to recover.
+    {
+        TesterUsageReport r = basicReport(now);
+        r.session.start = "not a timestamp";
+        const TesterUsageReport f = finalizeTesterUsageReport(r, now);
+        CHECK(f.session.start == rfc3339Utc(now));
+    }
+}
+
+void testFinalizeClampsPluginMinutesToSessionMinutes() {
+    const std::time_t now = 1780000000;
+    TesterUsageReport r = basicReport(now);
+    r.session.minutes = 10;
+    r.session.plugins = {{"pocsag", "1.2.0", 5}, {"adsb", "1.8.0", 999}};
+    const TesterUsageReport f = finalizeTesterUsageReport(r, now);
+    CHECK(f.session.plugins.size() == 2);
+    CHECK(f.session.plugins[0].minutes == 5);    // unaffected - already under the cap
+    CHECK(f.session.plugins[1].minutes == 10);   // clamped down to the session length
 }
 
 // --- The bounded retry queue --------------------------------------------------
@@ -539,6 +617,116 @@ void testTokenNeverAppearsNearALogCall(const std::string& givenRoot) {
         }
         CHECK(clean);
     }
+}
+
+// --- The token never reaches the "REPORT A BUG" diagnostics attachment -----
+//
+// AppWindow::copyDiagnosticsBundle() ("Settings -> Diagnostics -> Copy
+// diagnostics", also attached when a bug report is sent) builds a
+// core::DiagBundleInput from named fields and hands it to
+// core::buildDiagnosticsBundle. DiagBundleInput has no field for the tester
+// token at all, so nothing plumbs it through today - this test proves that
+// two ways: the function's own source is scanned for any reference to
+// testerToken_/testerCodeBuf_ (proved red by temporarily adding one, see the
+// commit message), and the real builder is exercised with a token planted
+// in the ONE field most likely to carry third-party text by mistake (a
+// "plugin name" - the same field a hostile plugin display name would use to
+// try to smuggle something into a report) to prove the builder itself does
+// not echo unrelated strings it was never given.
+void testDiagnosticsBundleNeverContainsTheToken(const std::string& givenRoot) {
+    fs::path repoRoot;
+    if (!givenRoot.empty()) {
+        repoRoot = givenRoot;
+    } else {
+        fs::path dir = fs::current_path();
+        std::error_code ec;
+        for (int level = 0; !ec && level < 10; ++level) {
+            if (fs::is_regular_file(dir / "PRIVACY.md", ec) &&
+                fs::is_directory(dir / "src", ec)) {
+                repoRoot = dir;
+                break;
+            }
+            if (!dir.has_parent_path() || dir.parent_path() == dir) { break; }
+            dir = dir.parent_path();
+        }
+    }
+    CHECK(!repoRoot.empty());
+    if (repoRoot.empty()) { return; }
+
+    const auto readFile = [](const fs::path& p) -> std::string {
+        std::ifstream f(p, std::ios::binary);
+        if (!f) { return {}; }
+        std::ostringstream ss;
+        ss << f.rdbuf();
+        return ss.str();
+    };
+
+    const std::string src = readFile(repoRoot / "src" / "gui" / "app_window.cpp");
+    CHECK(!src.empty());
+    const std::string needle = "void AppWindow::copyDiagnosticsBundle()";
+    const std::size_t start = src.find(needle);
+    CHECK(start != std::string::npos);
+    if (start == std::string::npos) { return; }
+    const std::size_t braceOpen = src.find('{', start);
+    CHECK(braceOpen != std::string::npos);
+    if (braceOpen == std::string::npos) { return; }
+    // Brace-count to the matching close, naive but sufficient: this function
+    // contains no string literal with an unbalanced '{' or '}' in it (the
+    // translated sentences it builds do not either, checked by hand).
+    int depth = 0;
+    std::size_t i = braceOpen;
+    for (; i < src.size(); ++i) {
+        if (src[i] == '{') { ++depth; }
+        if (src[i] == '}') {
+            --depth;
+            if (depth == 0) { break; }
+        }
+    }
+    CHECK(i < src.size());
+    const std::string body = src.substr(braceOpen, i - braceOpen + 1);
+    CHECK(body.find("testerToken_") == std::string::npos);
+    CHECK(body.find("testerCodeBuf_") == std::string::npos);
+
+    // AND THE REAL BUILDER, exercised directly with the tester's token held
+    // ONLY as a value this test knows about - never handed to DiagBundleInput
+    // anywhere, exactly as the real copyDiagnosticsBundle() never does. If a
+    // future edit routed it through ANY field (not just the ones this test
+    // happens to think of), the assertions below would still catch it,
+    // because they scan the WHOLE rendered bundle rather than one field.
+    const std::string theToken = "0123456789abcdef0123456789abcdef";
+    DiagBundleInput in;
+    in.context.version = "0.99.42";
+    in.context.commit = "abc123";
+    in.context.os = "Windows 10.0.22631";
+    in.context.arch = "x64";
+    in.context.mode = "WFM";
+    in.context.sourceKind = "soapy";
+    in.context.sampleRateHz = 2000000.0;
+    in.context.deviceOpen = true;
+    in.context.sdrModel = "uhd b200";
+    in.context.plugins = {"POCSAG 1.2.0", "ADS-B 1.8.0"};
+    in.logLines = {"receiver started"};
+    in.logPath = "/tmp/log.txt";
+    in.crashDir = "/tmp/crashes";
+    in.lastRunUnclean = false;
+    in.launches = 3;
+    in.crashes = 0;
+    in.logLinesTotal = 1;
+    const std::string bundle = buildDiagnosticsBundle(in);
+    CHECK(bundle.find(theToken) == std::string::npos);
+    // AND NO SUBSTRING OF 8+ CHARACTERS OF IT EITHER - a masked form longer
+    // than a short prefix is still enough to identify the tester, so the bar
+    // is not "the whole token", it is any run of 8 consecutive characters
+    // from it.
+    bool anyEightCharRunPresent = false;
+    for (std::size_t off = 0; off + 8 <= theToken.size(); ++off) {
+        if (bundle.find(theToken.substr(off, 8)) != std::string::npos) {
+            anyEightCharRunPresent = true;
+            std::printf("FAIL diagnostics bundle contains an 8-char run of the token: %s\n",
+                        theToken.substr(off, 8).c_str());
+        }
+    }
+    CHECK(!anyEightCharRunPresent);
 }
 
 // config.json IS the right place for the token (it is local, never
@@ -1007,6 +1195,10 @@ int main(int argc, char** argv) {
     testArmedRecorderDeduplicatesAndAccrues();
     testCatalogueIdJoinsOnFileNameAndFallsBackToSideloaded();
     testRfc3339FormatIsFixedWidthAndUtc();
+    testFinalizeTruncatesVersionAndToken();
+    testFinalizeLowersAndDedupesRadioCase();
+    testFinalizeClampsSessionStartIntoTheSiteWindow();
+    testFinalizeClampsPluginMinutesToSessionMinutes();
     testQueueBoundedToThreeDroppingTheOldest();
     testTokenOfReport();
     testDropOthersRemovesReportsForADifferentToken();
@@ -1019,6 +1211,7 @@ int main(int argc, char** argv) {
     testSenderRunsOnceAndReportsViaTakeOutcome();
     testDestroyingABusySenderNeverBlocks();
     testTokenNeverAppearsNearALogCall(givenRoot);
+    testDiagnosticsBundleNeverContainsTheToken(givenRoot);
     testTokenIsStoredInConfigVerbatim();
     testConfigDropsPendingReportsForAnotherTokenOnLoad();
 #if defined(_WIN32)

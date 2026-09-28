@@ -105,6 +105,40 @@ struct TesterUsageReport {
 // was.
 std::string rfc3339Utc(std::time_t t);
 
+// The site's own bounds on the fields it will accept, applied here so a
+// report the app builds is one the site can actually store rather than
+// something it has to be trusted to reject cleanly:
+//   - version and token are length-capped (48 and 64 characters) rather than
+//     rejected outright - a truncated version string is still informative,
+//     and the token is always exactly 32 characters when it is valid at all
+//     (validTesterToken), so this cap is a backstop, not a real limit.
+//   - radio kinds are lower-cased (the site's own vocabulary is lower-case;
+//     AppConfig::sourceKind's is too, so this should be a no-op in practice)
+//     and re-deduplicated afterwards, since two different-case spellings of
+//     one kind must not count as two.
+//   - session.start is clamped into [now-365d, now+10min] - the site's own
+//     window for "plausibly this session, not a clock gone wrong or a report
+//     that sat in the retry queue for a year." `now` is the wall clock AT
+//     THE TIME THIS FUNCTION RUNS, which is every debounced save while the
+//     session is live and once more at the point it is queued - not the
+//     time it is eventually SENT, which this function has no way to know.
+//   - each plugin's minutes are clamped to session.minutes: a plugin cannot
+//     plausibly have run longer than the session that fed it, and rounding
+//     each independently (SecondAccrual's own carried-remainder scheme) can
+//     otherwise put a plugin one minute over by coincidence. Plugins are
+//     already folded by id alone (TesterUsageRecorder::accruePlugin) rather
+//     than by id+version - the map holds one Accrual per id, so
+//     "duplicates folded by id+version" already holds a fortiori.
+// Returns a new report; `r` is not modified.
+TesterUsageReport finalizeTesterUsageReport(TesterUsageReport r, std::time_t now);
+
+// The bounds finalizeTesterUsageReport enforces, named so a test can assert
+// against the same numbers rather than repeating them as magic constants.
+inline constexpr std::size_t kTesterUsageMaxVersionChars = 48;
+inline constexpr std::size_t kTesterUsageMaxTokenChars = 64;
+inline constexpr std::int64_t kTesterUsageMaxSessionAgeSec = 365LL * 24 * 60 * 60;
+inline constexpr std::int64_t kTesterUsageMaxSessionFutureSec = 10LL * 60;
+
 // True when `token` is exactly 32 lowercase hex characters - the same shape
 // core::validInstallId checks, because the site mints both with
 // randomID(16)/hex.EncodeToString (beta.go, useragent.go). A hand-edited

@@ -24769,7 +24769,11 @@ cascade::core::TesterUsageReport AppWindow::buildTesterUsageReport(double sessio
     r.session.features = testerUsage_.features();
     r.session.plugins = testerUsage_.plugins();
     r.session.radios = testerUsage_.radios();
-    return r;
+    // THE SITE'S OWN BOUNDS, applied before this ever reaches toJson() -
+    // see finalizeTesterUsageReport's own comment for what each one is and
+    // why the app enforces them itself rather than trusting the site to
+    // reject cleanly.
+    return cascade::core::finalizeTesterUsageReport(std::move(r), std::time(nullptr));
 }
 
 void AppWindow::testerUsageJournal(cascade::core::AppConfig& cfg) {

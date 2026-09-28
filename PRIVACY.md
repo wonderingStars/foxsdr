@@ -145,7 +145,7 @@ into it, the same way a password field does:
 | Application version | `0.99.x` | Which build the session ran. |
 | Platform | `windows` | Which platform the session ran on. |
 | Architecture | `x64` | As above. |
-| Session start | `2026-09-28T12:34:56Z` | When the session began. |
+| Session start | `2026-09-28T12:34:56Z` | When the session began - the site stores this as when your tester entry was last used, so it is the one field here that updates something about your entry rather than only being logged. |
 | Session length | `42` minutes | How long the session ran. |
 | Features used | `spectrum, modes, bookmarks` | Which of the named beta areas you actually exercised this session, from a fixed list the site defines. |
 | Plugins used | `pocsag 1.2.0, 6 minutes` | Which installed decoders ran, their version, and how long each was actually fed samples — never merely installed. A decoder this build cannot match to the published catalogue (a side-loaded or hand-built plugin) is reported under the fixed id `sideloaded` with no version, rather than under a name invented for it. |

@@ -42,6 +42,91 @@ std::string rfc3339Utc(std::time_t t) {
     return std::string(buf);
 }
 
+namespace {
+
+// The inverse of rfc3339Utc(), for finalizeTesterUsageReport()'s clamp below.
+// Returns false (and leaves `out` untouched) for anything not in exactly
+// that shape - a malformed value is left for the caller to replace outright
+// rather than guessed at.
+bool parseRfc3339Utc(const std::string& s, std::time_t& out) {
+    std::tm tmv{};
+    int year = 0, month = 0, day = 0, hour = 0, min = 0, sec = 0;
+    if (s.size() != 20 ||
+        std::sscanf(s.c_str(), "%4d-%2d-%2dT%2d:%2d:%2dZ", &year, &month, &day, &hour, &min,
+                    &sec) != 6) {
+        return false;
+    }
+    tmv.tm_year = year - 1900;
+    tmv.tm_mon = month - 1;
+    tmv.tm_mday = day;
+    tmv.tm_hour = hour;
+    tmv.tm_min = min;
+    tmv.tm_sec = sec;
+    tmv.tm_isdst = 0;
+#if defined(_WIN32)
+    const std::time_t t = ::_mkgmtime(&tmv);
+#else
+    const std::time_t t = ::timegm(&tmv);
+#endif
+    if (t == static_cast<std::time_t>(-1)) { return false; }
+    out = t;
+    return true;
+}
+
+}  // namespace
+
+TesterUsageReport finalizeTesterUsageReport(TesterUsageReport r, std::time_t now) {
+    if (r.version.size() > kTesterUsageMaxVersionChars) {
+        r.version.resize(kTesterUsageMaxVersionChars);
+    }
+    if (r.token.size() > kTesterUsageMaxTokenChars) { r.token.resize(kTesterUsageMaxTokenChars); }
+
+    // LOWER-CASED, THEN RE-DEDUPLICATED - two spellings of one kind must not
+    // survive as two entries once case is no longer what tells them apart.
+    {
+        std::vector<std::string> lowered;
+        lowered.reserve(r.session.radios.size());
+        for (std::string kind : r.session.radios) {
+            for (char& c : kind) {
+                if (c >= 'A' && c <= 'Z') { c = static_cast<char>(c - 'A' + 'a'); }
+            }
+            if (!kind.empty() &&
+                std::find(lowered.begin(), lowered.end(), kind) == lowered.end()) {
+                lowered.push_back(std::move(kind));
+            }
+        }
+        r.session.radios = std::move(lowered);
+    }
+
+    // SESSION START, CLAMPED TO THE SITE'S OWN WINDOW. A malformed stamp (it
+    // should never be, since rfc3339Utc() is the only writer, but this file
+    // does not trust its own callers any more than a hand-edited config) is
+    // replaced with `now` outright rather than left to fail the site's own
+    // validation with no chance to recover.
+    std::time_t startT = now;
+    if (!parseRfc3339Utc(r.session.start, startT)) {
+        startT = now;
+    } else {
+        const std::int64_t ageSec = static_cast<std::int64_t>(now) - static_cast<std::int64_t>(startT);
+        if (ageSec > kTesterUsageMaxSessionAgeSec) {
+            startT = now - static_cast<std::time_t>(kTesterUsageMaxSessionAgeSec);
+        } else if (ageSec < -kTesterUsageMaxSessionFutureSec) {
+            startT = now + static_cast<std::time_t>(kTesterUsageMaxSessionFutureSec);
+        }
+    }
+    r.session.start = rfc3339Utc(startT);
+
+    // EACH PLUGIN'S MINUTES, CLAMPED TO THE SESSION'S OWN LENGTH - a plugin
+    // cannot plausibly have run longer than the session that fed it, and
+    // rounding each independently can otherwise put one a minute over by
+    // coincidence rather than by anything meaningful having happened.
+    for (TesterUsagePlugin& p : r.session.plugins) {
+        if (p.minutes > r.session.minutes) { p.minutes = r.session.minutes; }
+    }
+
+    return r;
+}
+
 bool validTesterToken(const std::string& token) {
     if (token.size() != 32) { return false; }
     for (char c : token) {
