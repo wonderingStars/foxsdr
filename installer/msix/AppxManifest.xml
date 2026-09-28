@@ -20,11 +20,12 @@
 <Package
   xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
   xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3"
   xmlns:uap5="http://schemas.microsoft.com/appx/manifest/uap/windows10/5"
   xmlns:uap10="http://schemas.microsoft.com/appx/manifest/uap/windows10/10"
   xmlns:desktop4="http://schemas.microsoft.com/appx/manifest/desktop/windows10/4"
   xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
-  IgnorableNamespaces="uap uap5 uap10 desktop4 rescap">
+  IgnorableNamespaces="uap uap3 uap5 uap10 desktop4 rescap">
 
   <!--
     ===================================================================
@@ -202,19 +203,48 @@
 
       <Extensions>
         <!--
-          NO FILE TYPE ASSOCIATION AND NO PROTOCOL, because the application
-          registers neither. Checked rather than assumed: installer/cascade.iss
-          has no [Registry] section at all, and nothing in src/ writes an
-          HKCR/HKCU\Software\Classes key or calls RegisterApplicationRestart,
-          IApplicationAssociationRegistration or ShellExecute on a scheme of
-          its own. FoxSDR opens .wav/.iq recordings and .json band plans
-          through its own file dialogs, and reaches the network as a client.
-          Declaring an association the unpackaged product does not have would
-          make the Store copy behave differently from every other copy, and
-          would be a claim on file extensions this project has not earned.
+          NO FILE TYPE ASSOCIATION, because the application registers none:
+          FoxSDR opens .wav/.iq recordings and .json band plans through its
+          own file dialogs, and reaches the network as a client. Declaring an
+          association the unpackaged product does not have would make the
+          Store copy behave differently from every other copy, and would be a
+          claim on file extensions this project has not earned.
 
-          THE ONE EXTENSION DECLARED - an execution alias, so the application's
-          command line survives packaging.
+          A PROTOCOL IS DECLARED, as of the beta-tester portal link
+          (2026-09-28): the portal's "Link FoxSDR" button opens
+          foxsdr://beta?t=<token>, and installer/cascade.iss now registers the
+          same scheme for the unpackaged build (Root: HKA
+          Software\Classes\foxsdr). A packaged, full-trust app needs its
+          activation argument spelled out explicitly - uap3:Protocol's
+          Parameters attribute - because the general activation route
+          (AppInstance.GetActivatedEventArgs) does not hand a full-trust app
+          its arguments through argv the way an unpackaged launch does;
+          Parameters="&quot;%1&quot;" is what makes the packaged copy receive
+          the URL as argv[1], the same shape main.cpp's parseBetaLinkUrl
+          already parses.
+
+          Schema: uap3:Protocol, per
+          learn.microsoft.com/windows/apps/desktop/modernize/desktop-to-uwp-extensions
+          (ms.date 2026-09-10, "Start your application by using a protocol")
+          and learn.microsoft.com/uwp/schemas/appxpackage/uapmanifestschema/element-uap3-protocol
+          (ms.date 2026-06-05) - both verified before writing this, per
+          PORTAL-LINK-VERDICT.md finding 4's instruction not to guess at an
+          activation contract.
+
+          UNVERIFIED ON A PACKAGED RUN: finding 4 also asks for proof that a
+          locally packaged build actually receives the URL in argv[1] (this
+          declaration alone is not sufficient if packaged activation instead
+          delivers it only through AppInstance.GetActivatedEventArgs, which
+          main.cpp does not call) - that proof needs a local MSIX install and
+          is explicitly out of scope for this change; do not submit to the
+          Store on the strength of this comment alone.
+        -->
+        <uap3:Extension Category="windows.protocol">
+          <uap3:Protocol Name="foxsdr" Parameters="&quot;%1&quot;" />
+        </uap3:Extension>
+        <!--
+          THE EXECUTION ALIAS - so the application's command line survives
+          packaging.
 
           A packaged app is normally launched through the shell
           (shell:AppsFolder\<family>!<Id>), which is how the Start menu entry

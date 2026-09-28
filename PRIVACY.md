@@ -138,6 +138,42 @@ that one tester's own entry so the owner can tell which features they said
 they would cover they actually used. **With no code entered, nothing on this
 page is collected or sent, ever.**
 
+**The link, and the confirmation prompt.** The tester portal's "Link FoxSDR"
+button opens `foxsdr://beta?t=<app token>` in your browser, which Windows
+hands to FoxSDR (an unpackaged install registers the `foxsdr:` scheme for
+your own Windows account only — `installer/cascade.iss`'s `[Registry]`
+section — and a Store install declares the same activation in its
+manifest). **Nothing is stored the moment the link is opened.** FoxSDR asks
+the site who the token belongs to and shows an in-window prompt naming that
+tester — *"Link this FoxSDR to beta tester NAME?"*, or, if one is already
+linked, *"This FoxSDR is linked to OLDNAME. Replace with NAME?"* — with
+**Link** and **Not now** buttons. Only pressing **Link** writes anything to
+your configuration file; a token the site does not recognise shows an error
+and stores nothing. This two-step design exists because a link opened by
+*any* web page (not only the real portal) could otherwise bind your copy to
+someone else's tester entry with no warning — showing the name first, and
+requiring your own click, is what a silent bind would be missing. If FoxSDR
+is not already running, the same file it would otherwise hand to a running
+copy is read back and the prompt appears at start-up instead — nothing about
+the flow reaches the network before you see the prompt.
+
+Testers who set up sharing by pasting the older 32-character code keep
+working exactly as before: on the next launch, FoxSDR quietly exchanges that
+code for the newer 40-character kind behind the scenes (the site recognises
+it as the same tester every time this runs, so nothing changes if it happens
+more than once), and the old code is then forgotten. Nothing about what is
+collected or sent changes because of this exchange; it only changes the
+shape of the one credential involved. If the exchange cannot reach the site,
+your existing code keeps working and the exchange is retried at the next
+launch; if the site says the code is no longer valid, it is cleared.
+
+The hidden `--link-tester` command-line switch reveals the same paste box
+this section always had, for a tester whose browser cannot hand FoxSDR a
+`foxsdr://` link (Linux, today, or a blocked/dismissed browser prompt) — it
+takes the code the portal's "Link FoxSDR" button displays and goes through
+the exact same confirm-by-name prompt above. It does nothing on its own: run
+with no code to paste, it shows an empty box and nothing more.
+
 One report per session, saved when the session ends and **sent at the next
 launch** — the same timing usage reporting's own launch report uses, and for
 the same reason: a network call on the way out can hang the application while
@@ -148,7 +184,7 @@ into it, the same way a password field does:
 
 | Field | Example | Why |
 |---|---|---|
-| Tester code | `4f9c…c2a1` (shown masked; sent in full) | Your own tester-portal credential, so the report can be linked to your entry. Never logged, never included in a diagnostics bundle or a crash report, and shown on screen only masked. |
+| Tester code | `4f9c…c2a1` (shown masked; sent in full) | Your own tester-portal credential — either shape, the pasted 32-character code or the 40-character one a confirmed link produces — so the report can be linked to your entry. Never logged, never included in a diagnostics bundle or a crash report, and shown on screen only masked. |
 | Application version | `0.99.x` | Which build the session ran. |
 | Platform | `windows` | Which platform the session ran on. |
 | Architecture | `x64` | As above. |
@@ -174,9 +210,14 @@ queued under a code that is later replaced or removed is discarded rather
 than sent under the new one (or under none) — it would otherwise land on the
 wrong tester's entry, or on nobody's.
 
-Removing the code deletes it from your configuration file, discards anything
-still queued to send, and stops everything above immediately — nothing
-further is collected from that point.
+Removing the code, or pressing **Unlink** once a link has been confirmed,
+deletes it from your configuration file, discards anything still queued to
+send, and stops everything above immediately — nothing further is collected
+from that point, and the SYSTEM > Beta tester section disappears again
+unless `--link-tester` was used to reveal it. Unlike an invalid pasted code
+(kept on screen so you can fix it), a link the site later says is no longer
+valid is cleared outright — nothing is left to fix in place, and a fresh
+link from the portal is what produces a new one.
 
 ## Crash and freeze reports — what they contain
 
@@ -589,7 +630,15 @@ does with it.
 
 Beta tester usage goes to `https://foxsdr.com/api/tester-usage` instead, on
 the site itself rather than the anonymous-counters Worker, because it is
-linked to your tester entry there rather than aggregated anonymously.
+linked to your tester entry there rather than aggregated anonymously. Opening
+a tester link or using `--link-tester` additionally reaches
+`https://foxsdr.com/api/beta/app-token/me` (to look up the name shown in the
+confirmation prompt) and, once, `https://foxsdr.com/api/beta/app-token` (to
+exchange an older pasted code for the newer kind) — both carry the token
+being asked about and nothing else. The one-shot file a tester link writes to
+hand the token to an already-running FoxSDR (`link-request`, beside
+`config.json`) never leaves your machine and is deleted the moment it is
+read.
 
 ## Data protection
 
