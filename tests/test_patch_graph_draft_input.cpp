@@ -269,7 +269,8 @@ std::vector<float> partKeys(AppWindow& a, float& rowY) {
     return xs;
 }
 
-bool near(float a, float b) { return std::fabs(a - b) < 1e-3f; }
+// Not "near": windows.h defines near (and far, small, interface) as macros.
+bool nearly(float a, float b) { return std::fabs(a - b) < 1e-3f; }
 
 }  // namespace
 
@@ -339,7 +340,7 @@ int main() {
             if (e == nullptr || d == nullptr) { break; }
             const float wantX = start.x + 30.0f * static_cast<float>(k) / zoom;
             const float wantY = start.y + 12.0f * static_cast<float>(k) / zoom;
-            CHECK(near(e->x, wantX) && near(e->y, wantY));
+            CHECK(nearly(e->x, wantX) && nearly(e->y, wantY));
             CHECK(e->x == d->x && e->y == d->y);
             // THE SAME FRAME: the sets were built from where it was dragged TO.
             CHECK(g_published);
@@ -354,7 +355,7 @@ int main() {
         frames(*a, 2);
         CHECK(A::dragging(*a) == pc::kNoNode);
         const pc::Node* e = A::engine(*a).find(s.radio);
-        CHECK(e != nullptr && near(e->x, start.x + 150.0f / zoom) && near(e->y, start.y + 60.0f / zoom));
+        CHECK(e != nullptr && nearly(e->x, start.x + 150.0f / zoom) && nearly(e->y, start.y + 60.0f / zoom));
         CHECK(inStep(*a));
         g_watch = pc::kNoNode;
         delete a;
@@ -456,8 +457,8 @@ int main() {
             CHECK(d != nullptr && e != nullptr);
             if (d == nullptr || e == nullptr) { break; }
             // The drag is where the pointer put it - never thrown back...
-            CHECK(near(d->x, start.x + 40.0f * static_cast<float>(k) / zoom));
-            CHECK(near(e->x, d->x) && e->y == d->y);
+            CHECK(nearly(d->x, start.x + 40.0f * static_cast<float>(k) / zoom));
+            CHECK(nearly(e->x, d->x) && e->y == d->y);
             // ...and the engine's changes are kept, not overwritten.
             CHECK(!e->on);
             CHECK(e->rateHz == 1.024e6);
@@ -466,7 +467,7 @@ int main() {
         release(*a);
         frames(*a, 2);
         const pc::Node* e = A::engine(*a).find(s.radio);
-        CHECK(e != nullptr && near(e->x, start.x + 160.0f / zoom) && !e->on && e->rateHz == 1.024e6);
+        CHECK(e != nullptr && nearly(e->x, start.x + 160.0f / zoom) && !e->on && e->rateHz == 1.024e6);
         CHECK(A::engine(*a).find(s.chan) != nullptr &&
               A::engine(*a).find(s.chan)->freqHz == 144800000.25);
         CHECK(inStep(*a));
