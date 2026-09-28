@@ -80,6 +80,22 @@ FeatureRequestState waitForTerminal(ProblemReportSender& sender, std::uint64_t n
     }
 }
 
+// Same as above, for the fallback-aware flow: poll() is what performs the
+// one retry, so this must call it exactly as the GUI's per-frame poll does,
+// never the bare sender's.
+FeatureRequestState waitForFlowTerminal(cascade::core::ProblemReportSendFlow& flow,
+                                        std::uint64_t nowEpoch, int timeoutMs = 8000) {
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+    for (;;) {
+        flow.poll(nowEpoch);
+        const FeatureRequestState st = flow.state();
+        if (st != FeatureRequestState::Sending) { return st; }
+        if (std::chrono::steady_clock::now() >= deadline) { return st; }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+}
+
 void setEnv(const char* name, const char* value) {
 #if defined(_WIN32)
     ::SetEnvironmentVariableA(name, value);
@@ -154,27 +170,356 @@ int main() {
         CHECK(j.value("version", std::string()) == "0.99.20-test");
         CHECK(j.value("platform", std::string()) == "windows");
         CHECK(j.value("arch", std::string()) == "x64");
+        // No diagnostics attached in this sample - the eighth field is
+        // ABSENT, not an empty string.
+        CHECK(!j.contains("diagnostics"));
 
         std::set<std::string> actual;
         for (auto it = j.begin(); it != j.end(); ++it) { actual.insert(it.key()); }
-        const std::set<std::string> declared(problemReportFieldNames().begin(),
-                                             problemReportFieldNames().end());
-        CHECK(declared.size() == 7);
-        CHECK(actual == declared);
+        const std::set<std::string> mandatory(problemReportFieldNames().begin(),
+                                              problemReportFieldNames().end());
+        CHECK(mandatory.size() == 7);
+        CHECK(actual == mandatory);
 
-        // ...and PRIVACY.md's table names exactly the same seven.
+        // The full inventory PRIVACY.md's table names - the seven mandatory
+        // fields plus the one optional `diagnostics` - whether or not THIS
+        // particular payload attached it.
+        std::set<std::string> everyField = mandatory;
+        for (const std::string& f : problemReportOptionalFieldNames()) { everyField.insert(f); }
+        CHECK(everyField.size() == 8);
         const std::set<std::string> documented = documentedProblemReportFields();
         CHECK(!documented.empty());
-        CHECK(documented == declared);
+        CHECK(documented == everyField);
 
         // THE RELATIONSHIP THE PRIVACY TEXT STATES: a feature request's six
-        // fields plus `kind`, nothing else. A field added to one payload and
-        // not the other fails here rather than making "the same as a feature
-        // request plus the kind" quietly untrue.
+        // fields plus `kind`, nothing else MANDATORY. A field added to one
+        // payload and not the other fails here rather than making "the same
+        // as a feature request plus the kind" quietly untrue.
         std::set<std::string> featurePlusKind(featureRequestFieldNames().begin(),
                                               featureRequestFieldNames().end());
         featurePlusKind.insert("kind");
-        CHECK(declared == featurePlusKind);
+        CHECK(mandatory == featurePlusKind);
+    }
+
+    // --- THE OPTIONAL EIGHTH FIELD: present only when attached --------------
+    {
+        ProblemReportPayload p = samplePayload("bug");
+        CHECK(p.diagnostics.empty());
+        const nlohmann::json j0 = parseOrEmpty(problemReportJson(p));
+        CHECK(!j0.contains("diagnostics"));
+
+        p.diagnostics =
+            "FoxSDR diagnostics bundle\ngenerated: 2026-09-28 00:00:00\n--- log ---\nline one\n";
+        const nlohmann::json j1 = parseOrEmpty(problemReportJson(p));
+        CHECK(j1.contains("diagnostics"));
+        CHECK(j1.value("diagnostics", std::string()) == p.diagnostics);
+        std::set<std::string> actual;
+        for (auto it = j1.begin(); it != j1.end(); ++it) { actual.insert(it.key()); }
+        std::set<std::string> full(problemReportFieldNames().begin(), problemReportFieldNames().end());
+        for (const std::string& f : problemReportOptionalFieldNames()) { full.insert(f); }
+        CHECK(actual == full);
+    }
+
+    // --- THE CHECKBOX'S OWN DEFAULT: ticked for a bug, not for a dislike ----
+    {
+        CHECK(problemReportDefaultAttachDiagnostics(kProblemKindBug));
+        CHECK(!problemReportDefaultAttachDiagnostics(kProblemKindDislike));
+        // No kind chosen yet (the page opens this way) defaults to unticked,
+        // like a dislike - nothing is attached until a kind says this is a
+        // bug.
+        CHECK(!problemReportDefaultAttachDiagnostics(""));
+        CHECK(!problemReportDefaultAttachDiagnostics("other"));
+    }
+
+    // --- THE ATTACHMENT CACHE'S OWN RULE: rebuild on growth or once a
+    //     second, never just because a frame went by (2026-09-28 review, N2) -
+    {
+        // No cache yet: always stale, whatever the clocks say.
+        CHECK(problemReportDiagCacheStale(false, 0, 0, 0, 0));
+        CHECK(problemReportDiagCacheStale(false, 5, 5, 100, 100));
+        // A valid cache, nothing changed: NOT stale - this is the case that
+        // matters, because it is the one a naive "rebuild every frame"
+        // implementation gets wrong.
+        CHECK(!problemReportDiagCacheStale(true, 5, 5, 100, 100));
+        // The log grew, same second: stale.
+        CHECK(problemReportDiagCacheStale(true, 5, 6, 100, 100));
+        // A second passed, log unchanged: stale (the "at most once a second"
+        // half of the rule, not the "only when the log grows" half).
+        CHECK(problemReportDiagCacheStale(true, 5, 5, 100, 101));
+        // Both changed: still just stale, not double-counted or anything odd.
+        CHECK(problemReportDiagCacheStale(true, 5, 6, 100, 101));
+    }
+
+    // --- SCRUBBING THE ATTACHED LOG: every path in it loses the account
+    //     name, structurally - never by knowing the name in advance ---------
+    {
+        // A Windows path with a realistic username, backslashes.
+        {
+            const std::string in =
+                "log-path: C:\\Users\\johnsmith\\AppData\\Local\\FoxSDR\\logs\\foxsdr.log\n";
+            const std::string out = scrubDiagnosticsForReport(in);
+            CHECK(out.find("johnsmith") == std::string::npos);
+            CHECK(out.find("<user>") != std::string::npos);
+        }
+        // The same, forward slashes.
+        {
+            const std::string in =
+                "log-path: C:/Users/johnsmith/AppData/Local/FoxSDR/logs/foxsdr.log\n";
+            const std::string out = scrubDiagnosticsForReport(in);
+            CHECK(out.find("johnsmith") == std::string::npos);
+            CHECK(out.find("<user>") != std::string::npos);
+        }
+        // Mixed case in the "Users" keyword itself.
+        {
+            const std::string in = "crash-dir: c:\\USERS\\JohnSmith\\AppData\\Local\\FoxSDR\\crashes\n";
+            const std::string out = scrubDiagnosticsForReport(in);
+            CHECK(out.find("JohnSmith") == std::string::npos);
+            CHECK(out.find("<user>") != std::string::npos);
+        }
+        // A Linux /home path.
+        {
+            const std::string in = "log-path: /home/johnsmith/.local/state/foxsdr/logs/foxsdr.log\n";
+            const std::string out = scrubDiagnosticsForReport(in);
+            CHECK(out.find("johnsmith") == std::string::npos);
+            CHECK(out.find("<user>") != std::string::npos);
+        }
+        // The SAME name appearing again elsewhere in a path segment that is
+        // NOT a profile directory is left alone: this function recognises a
+        // profile path structurally (the segment right after \Users\,
+        // /users/ or /home/), never by knowing the person's name in advance
+        // and stripping it wherever it appears.
+        {
+            const std::string in =
+                "log-path: C:\\Users\\johnsmith\\AppData\\Local\\FoxSDR\\logs\\foxsdr.log\n"
+                "10:00:00.000 info bookmark import: D:\\Data\\johnsmith\\dump.txt\n";
+            const std::string out = scrubDiagnosticsForReport(in);
+            CHECK(out.find("<user>") != std::string::npos);
+            CHECK(out.find("D:\\Data\\johnsmith\\dump.txt") != std::string::npos);
+        }
+        // The profile root's OWN VALUE (%USERPROFILE% / $HOME), for a
+        // redirected profile with no "\Users\" or "/home/" segment in it at
+        // all for the structural rule above to find.
+        {
+#if defined(_WIN32)
+            char saved[512] = {0};
+            const DWORD savedLen = ::GetEnvironmentVariableA("USERPROFILE", saved, sizeof(saved));
+            setEnv("USERPROFILE", "D:\\FoxProfiles\\johnsmith");
+            const std::string in =
+                "crash-dir: d:\\FOXPROFILES\\JohnSmith\\FoxSDR\\crashes\n";
+            const std::string out = scrubDiagnosticsForReport(in);
+            if (savedLen > 0 && savedLen < sizeof(saved)) {
+                setEnv("USERPROFILE", std::string(saved, savedLen).c_str());
+            }
+#else
+            const char* savedHome = std::getenv("HOME");
+            const std::string savedHomeStr = savedHome != nullptr ? savedHome : std::string();
+            setEnv("HOME", "/opt/foxprofiles/johnsmith");
+            const std::string in = "crash-dir: /OPT/FOXPROFILES/JohnSmith/FoxSDR/crashes\n";
+            const std::string out = scrubDiagnosticsForReport(in);
+            if (savedHome != nullptr) {
+                setEnv("HOME", savedHomeStr.c_str());
+            } else {
+                setEnv("HOME", nullptr);
+            }
+#endif
+            CHECK(out.find("johnsmith") == std::string::npos);
+            CHECK(out.find("JohnSmith") == std::string::npos);
+            CHECK(out.find("<user>") != std::string::npos);
+        }
+        // Scrubbing already-scrubbed text is a no-op: idempotent.
+        {
+            const std::string in = "log-path: C:\\Users\\johnsmith\\logs\\foxsdr.log\n";
+            const std::string once = scrubDiagnosticsForReport(in);
+            const std::string twice = scrubDiagnosticsForReport(once);
+            CHECK(once == twice);
+        }
+    }
+
+    // --- TRUNCATION: the header and the NEWEST lines survive, oldest first
+    //     to go, and the cut says so -----------------------------------------
+    {
+        const std::string header =
+            "FoxSDR diagnostics bundle\ngenerated: 2026-09-28 00:00:00\nversion: 0.99.42\n"
+            "log-lines-total: 3\n\n--- log ---\n";
+        std::string logBody;
+        for (int i = 0; i < 400; ++i) {
+            logBody += "00:00:00.000 info OLDEST_LINE_" + std::to_string(i) +
+                       " padding padding padding padding\n";
+        }
+        logBody += "00:00:01.000 info NEWEST_LINE_MARKER padding padding padding\n";
+        const std::string full = header + logBody;
+
+        // Comfortably under the cap: unchanged, byte for byte.
+        CHECK(truncateDiagnosticsForReport(full, full.size() + 100) == full);
+
+        // Forced small: the header and the newest line survive, the oldest do
+        // not, the total stays under the cap, and the cut is announced.
+        const std::size_t cap = header.size() + 300;
+        const std::string cut = truncateDiagnosticsForReport(full, cap);
+        CHECK(cut.size() <= cap);
+        CHECK(cut.rfind(header, 0) == 0);
+        CHECK(cut.find("(earlier lines dropped)") != std::string::npos);
+        CHECK(cut.find("NEWEST_LINE_MARKER") != std::string::npos);
+        CHECK(cut.find("OLDEST_LINE_0 ") == std::string::npos);
+
+        // Text with no "--- log ---" marker at all: the cap simply cuts the
+        // end rather than guessing at a shape that is not there.
+        const std::string noMarker(500, 'x');
+        const std::string cutNoMarker = truncateDiagnosticsForReport(noMarker, 100);
+        CHECK(cutNoMarker.size() == 100);
+        CHECK(cutNoMarker == noMarker.substr(0, 100));
+
+        // ...and that cut lands on a whole UTF-8 character, never part way
+        // through one's bytes (2026-09-28 review, N6). 97 ASCII bytes then a
+        // four-byte emoji (U+1F4E1): a cap of 100 lands one byte short of the
+        // emoji's fourth byte, splitting it, unless the cut is floored back
+        // to where the character starts.
+        {
+            std::string withEmoji(97, 'x');
+            withEmoji += "\xF0\x9F\x93\xA1";  // U+1F4E1, a satellite antenna
+            withEmoji += std::string(50, 'y');
+            const std::string cutEmoji = truncateDiagnosticsForReport(withEmoji, 100);
+            CHECK(cutEmoji.size() == 97);  // the whole partial emoji dropped, not 3 of its 4 bytes
+            CHECK(cutEmoji == withEmoji.substr(0, 97));
+            // The byte that would have been kept alone is a continuation
+            // byte (0x80-0xBF) - proof this is genuinely the failure mode
+            // being guarded against, not a cap that happened to land clean.
+            CHECK((static_cast<unsigned char>(withEmoji[99]) & 0xC0) == 0x80);
+        }
+
+        // prepareDiagnosticsForReport is scrub-then-cap in one call, and its
+        // result is what the page both shows and sends - proved here by
+        // comparing it against doing the two steps by hand.
+        const std::string withPath = header + "log-path: C:\\Users\\johnsmith\\x\\y\n" + logBody;
+        CHECK(prepareDiagnosticsForReport(withPath) ==
+              truncateDiagnosticsForReport(scrubDiagnosticsForReport(withPath)));
+    }
+
+    // --- THE OLDER-SITE FALLBACK: a 400 caused by the unknown field is
+    //     retried once, without it, and said so - a real 400 for anything
+    //     else is not ---------------------------------------------------------
+    {
+        CHECK(problemReportShouldRetryWithoutDiagnostics(true, 400));
+        CHECK(!problemReportShouldRetryWithoutDiagnostics(false, 400));
+        CHECK(!problemReportShouldRetryWithoutDiagnostics(true, 429));
+        CHECK(!problemReportShouldRetryWithoutDiagnostics(true, 200));
+    }
+    {
+        // A server that behaves exactly like problems.go's
+        // DisallowUnknownFields decoder against the CURRENT contract: it does
+        // not know `diagnostics` yet, so a body carrying it fails the whole
+        // decode - 400, "that did not arrive as valid JSON" - and anything
+        // else is accepted.
+        StubServer srv("/api/problem-report");
+        CHECK(srv.start(StubServer::Mode::RejectUnknownField));
+        cascade::core::ProblemReportSendFlow flow;
+        ProblemReportPayload p = samplePayload("bug");
+        p.diagnostics = "FoxSDR diagnostics bundle\ngenerated: x\n--- log ---\nline\n";
+        const std::uint64_t t0 = 4000;
+        CHECK(flow.send(srv.url(), p, t0));
+        CHECK(waitForFlowTerminal(flow, t0) == FeatureRequestState::Sent);
+        CHECK(flow.lastStatus() == 200);
+        CHECK(flow.diagnosticsDropped());
+        // Exactly two requests reached the server: the one that carried
+        // diagnostics (refused) and the retry that did not (accepted) -
+        // never a third.
+        CHECK(srv.connections() == 2);
+        const std::vector<std::string> bodies = srv.bodies();
+        CHECK(bodies.size() == 2);
+        CHECK(at(bodies, 0).find("\"diagnostics\"") != std::string::npos);
+        CHECK(at(bodies, 1).find("\"diagnostics\"") == std::string::npos);
+        srv.stop();
+    }
+    {
+        // THE SAME FALLBACK, but polled ONE STEP AT A TIME and checked after
+        // every single step - the shape drawProblemReportPage() actually
+        // polls in (poll() once, then read state()/lastStatus() for that
+        // frame) - to prove the primary attempt's 400 is never the value an
+        // observer sees once a retry is going to happen (2026-09-28 review,
+        // N1). ProblemReportSendFlow::poll() creates and starts the retry
+        // within the SAME call that observes the primary's failure
+        // (FeatureRequestSender::sendJson sets its state to Sending
+        // synchronously, before returning), so the state a caller reads
+        // immediately after any given poll() is either still Sending or the
+        // retry's own outcome - never "Failed, 400" for a request that
+        // carried the log.
+        StubServer srv("/api/problem-report");
+        CHECK(srv.start(StubServer::Mode::RejectUnknownField));
+        cascade::core::ProblemReportSendFlow flow;
+        ProblemReportPayload p = samplePayload("bug");
+        p.diagnostics = "FoxSDR diagnostics bundle\ngenerated: x\n--- log ---\nline\n";
+        const std::uint64_t t0 = 4100;
+        CHECK(flow.send(srv.url(), p, t0));
+        int falseFailureFrames = 0;
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(8000);
+        FeatureRequestState st = FeatureRequestState::Sending;
+        while (st == FeatureRequestState::Sending &&
+              std::chrono::steady_clock::now() < deadline) {
+            flow.poll(t0);
+            st = flow.state();
+            // The one combination that must never be observed: Failed at
+            // 400 while this flow ever carried diagnostics and has not yet
+            // (or ever) retried without it. Once retried_ is true the retry
+            // OWNS state()/lastStatus(), so a genuine 400 from the RETRY
+            // itself (a real validation failure) is not this bug and is
+            // covered by the "retry also fails" test instead.
+            if (st == FeatureRequestState::Failed && flow.lastStatus() == 400 &&
+                !flow.diagnosticsDropped()) {
+                ++falseFailureFrames;
+            }
+            if (st == FeatureRequestState::Sending) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            }
+        }
+        CHECK(st == FeatureRequestState::Sent);
+        CHECK(falseFailureFrames == 0);
+        srv.stop();
+    }
+    {
+        // A report with NOTHING attached that happens to fail with 400 (a
+        // real validation sentence) is never retried: there is nothing the
+        // fallback could drop, and problemReportShouldRetryWithoutDiagnostics
+        // says so above.
+        StubServer srv("/api/problem-report");
+        CHECK(srv.start(StubServer::Mode::BadRequest400));
+        cascade::core::ProblemReportSendFlow flow;
+        const ProblemReportPayload p = samplePayload("bug");
+        CHECK(p.diagnostics.empty());
+        const std::uint64_t t0 = 4500;
+        CHECK(flow.send(srv.url(), p, t0));
+        CHECK(waitForFlowTerminal(flow, t0) == FeatureRequestState::Failed);
+        CHECK(!flow.diagnosticsDropped());
+        CHECK(srv.connections() == 1);
+        srv.stop();
+    }
+    {
+        // A report WITH diagnostics attached against a server that refuses
+        // EVERYTHING with a real validation 400: the first attempt's failure
+        // still looks exactly like "the site does not know this field" (any
+        // 400 while diagnostics was sent triggers the fallback), so the
+        // retry fires - and then fails the SAME way, because the real
+        // problem was never the log. diagnosticsDropped() is still true (the
+        // retry genuinely happened), but the message the page would show is
+        // the server's own real sentence, not a diagnostics-specific one -
+        // the GUI's own gating on this (drawProblemReportPage: the "could not
+        // be sent" note is shown only when the overall state is Sent) is what
+        // stops the two from being said in the same breath (2026-09-28
+        // review, N4).
+        StubServer srv("/api/problem-report");
+        CHECK(srv.start(StubServer::Mode::BadRequest400));
+        cascade::core::ProblemReportSendFlow flow;
+        ProblemReportPayload p = samplePayload("bug");
+        p.diagnostics = "FoxSDR diagnostics bundle\ngenerated: x\n--- log ---\nline\n";
+        const std::uint64_t t0 = 4600;
+        CHECK(flow.send(srv.url(), p, t0));
+        CHECK(waitForFlowTerminal(flow, t0) == FeatureRequestState::Failed);
+        CHECK(flow.diagnosticsDropped());
+        CHECK(flow.lastStatus() == 400);
+        CHECK(flow.failureMessage() == "text must be between 10 and 2000 characters");
+        // Both attempts reached the server: the fallback really did retry,
+        // it just could not rescue a report that was going to fail anyway.
+        CHECK(srv.connections() == 2);
+        srv.stop();
     }
 
     // --- THE TRIM AGREES WITH THE FEATURE REQUEST'S -------------------------
@@ -362,6 +707,15 @@ int main() {
                 CHECK(limited == 1);
             }
         }
+    }
+
+    // --- THE NO-EMAIL WARNING'S OWN SIGNAL, same rule as the feature-request
+    //     page's, named for this page's tests -------------------------------
+    {
+        CHECK(!problemReportContactHasEmailAddress(""));
+        CHECK(!problemReportContactHasEmailAddress("G4XYZ"));
+        CHECK(problemReportContactHasEmailAddress("g4xyz@example.com"));
+        CHECK(problemReportContactHasEmailAddress("  g4xyz@example.com  "));
     }
 
     return testSummary("test_problem_report");

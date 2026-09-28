@@ -44,6 +44,67 @@ using namespace cascade::core;
 
 namespace {
 
+// PRIVACY.md, parsed - the "A report contains these fields and no others"
+// table under "Crash and freeze reports — what they contain", the same
+// bundle buildDiagnosticsBundle() writes and the report page's "Attach the
+// diagnostics log" checkbox attaches. Unlike the flat single-field-per-row
+// tables test_problem_report.cpp and test_feature_request.cpp read, two rows
+// here name MORE THAN ONE field at once ("`log-path`, `crash-dir`",
+// "`launches`, `crashes`"), and every field name in this table has a hyphen
+// in it (`sample-rate`, `device-open`...) - backtickedIdents-style helpers
+// elsewhere in this suite reject anything but plain alphanumerics, so this
+// one accepts '-' too.
+std::vector<std::string> backtickedFieldNames(const std::string& cell) {
+    std::vector<std::string> out;
+    std::size_t pos = 0;
+    while (true) {
+        const std::size_t a = cell.find('`', pos);
+        if (a == std::string::npos) { break; }
+        const std::size_t b = cell.find('`', a + 1);
+        if (b == std::string::npos) { break; }
+        const std::string tok = cell.substr(a + 1, b - a - 1);
+        bool ident = !tok.empty();
+        for (char c : tok) {
+            if (!std::isalnum(static_cast<unsigned char>(c)) && c != '-') { ident = false; }
+        }
+        if (ident) { out.push_back(tok); }
+        pos = b + 1;
+    }
+    return out;
+}
+
+std::set<std::string> documentedDiagnosticsBundleFields() {
+    std::set<std::string> fields;
+    std::ifstream in(fs::path(CASCADE_SOURCE_DIR) / "PRIVACY.md", std::ios::binary);
+    const std::string doc((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    const std::size_t start = doc.find("A report contains these fields and no others");
+    if (start == std::string::npos) { return fields; }
+    // Bounded at the prose that follows the table, not the next "## "
+    // heading: the SAME section also holds the crash- and hang-report header
+    // tables ("A crash report:", "A hang or freeze report:"), a different
+    // inventory (crashReportFieldNames()/hangReportFieldNames()) that would
+    // otherwise be swept in here too.
+    const std::size_t end =
+        doc.find("A crash or freeze report written by the application itself", start);
+    if (end == std::string::npos) { return fields; }
+    const std::string section = doc.substr(start, end - start);
+
+    std::size_t pos = 0;
+    while (pos < section.size()) {
+        const std::size_t nl = section.find('\n', pos);
+        const std::string line =
+            section.substr(pos, (nl == std::string::npos) ? std::string::npos : nl - pos);
+        pos = (nl == std::string::npos) ? section.size() : nl + 1;
+        if (line.rfind("| `", 0) != 0) { continue; }
+        const std::size_t bar = line.find('|', 1);
+        if (bar == std::string::npos) { continue; }
+        for (const std::string& n : backtickedFieldNames(line.substr(1, bar - 1))) {
+            fields.insert(n);
+        }
+    }
+    return fields;
+}
+
 // A private directory per run. The pid keeps two concurrent test executables
 // (ctest runs them in parallel) from colliding on the same fixture, which is
 // a failure mode this project has hit before.
@@ -1082,6 +1143,13 @@ int main() {
         }
         emitted.erase("(header)");
         CHECK(emitted == declared);
+
+        // ...and PRIVACY.md's "A report contains these fields and no others"
+        // table names exactly the same set - the documentation-level half of
+        // the inventory the code-level check above does not touch.
+        const std::set<std::string> documented = documentedDiagnosticsBundleFields();
+        CHECK(!documented.empty());
+        CHECK(documented == declared);
 
         // The negative half of the privacy promise: a bundle is a support
         // artefact, not a listening record.

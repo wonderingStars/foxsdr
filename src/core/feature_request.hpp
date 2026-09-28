@@ -156,6 +156,14 @@ std::size_t featureRequestContactCharCount(const std::string& contact);
 std::string validateFeatureRequestText(const std::string& text);
 std::string validateFeatureRequestContact(const std::string& contact);
 
+// True when `contact`, after trimming, contains an '@' - the minimal signal
+// that it might be an email address rather than a callsign alone. Governs
+// nothing about validity or whether SEND is allowed (the field stays
+// entirely optional); it exists only so the REQUEST A FEATURE and REPORT A
+// BUG / DISLIKE pages can warn, truthfully, that a callsign alone cannot be
+// written back to.
+bool featureRequestContactHasEmailAddress(const std::string& contact);
+
 // The contract's vocabulary for the running build - lowercase, and distinct
 // from PluginRepo::hostOs()/hostArch() (plugin_repo.hpp), which speak a
 // different vocabulary ("macos", "x86") for a different audience, the

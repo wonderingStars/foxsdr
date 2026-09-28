@@ -547,5 +547,22 @@ int main() {
         }
     }
 
+    // --- THE NO-EMAIL WARNING'S OWN SIGNAL: '@' after trimming, nothing
+    //     more - never blocks SEND, never judges validity ---------------------
+    {
+        CHECK(!featureRequestContactHasEmailAddress(""));
+        CHECK(!featureRequestContactHasEmailAddress("   "));
+        // A callsign alone: no '@', so no address to reply to.
+        CHECK(!featureRequestContactHasEmailAddress("G4XYZ"));
+        CHECK(!featureRequestContactHasEmailAddress("  G4XYZ  "));
+        CHECK(featureRequestContactHasEmailAddress("g4xyz@example.com"));
+        CHECK(featureRequestContactHasEmailAddress("  g4xyz@example.com  "));
+        // Still true even for a contact validation would refuse (too long) -
+        // this signal is deliberately independent of validateFeatureRequestContact.
+        const std::string tooLong(kFeatureRequestMaxContactChars + 10, 'x');
+        CHECK(!featureRequestContactHasEmailAddress(tooLong));
+        CHECK(featureRequestContactHasEmailAddress(tooLong + "@example.com"));
+    }
+
     return testSummary("test_feature_request");
 }

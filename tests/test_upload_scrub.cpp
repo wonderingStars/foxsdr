@@ -435,6 +435,20 @@ void unitRules() {
     expectScrub("patch: radio 'Bob's rig' switched on", "patch: radio '<name>' switched on");
     expectScrub("patch: radio 'Loft Air", "patch: radio '<name>");
 
+    // A DEVICE LABEL THE OPERATING SYSTEM HANDED BACK, in parentheses, not
+    // quotes - a Bluetooth headset or a paired phone used as a microphone,
+    // where the make and model that follow the possessive are the useful
+    // part of the line and the person's name is not (2026-09-28 review; the
+    // first is the exact PortAudio label the review's leak probe used).
+    expectScrub("source: opened the sound card Headset (Alice's AirPods Pro) (wasapi) at 48000 Hz, stereo",
+                "source: opened the sound card Headset (<name>'s AirPods Pro) (wasapi) at # Hz, stereo");
+    expectScrub("source: found input device Microphone (Bob's iPhone)",
+                "source: found input device Microphone (<name>'s iPhone)");
+    // A possessive OUTSIDE parentheses is prose, not a device label, and is
+    // left alone - the existing "the tuner's PLL" case above already proves
+    // this for a non-possessive apostrophe; this is the possessive case.
+    expectScrub("note: it's connected", "note: it's connected");
+
     // USB INSTANCE IDS: the three real lines, one at a time, keep the kind of
     // device and lose the instance segment...
     expectScrub("vendor: libusb: info [get_guid] no DeviceInterfaceGUID registered for "

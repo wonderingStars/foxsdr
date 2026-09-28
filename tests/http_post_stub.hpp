@@ -53,7 +53,15 @@ namespace {
 
 class StubServer {
 public:
-    enum class Mode { Accept200, BadRequest400, RateLimit429, Hang, Refuse };
+    // RejectUnknownField emulates an older site's json.Decoder with
+    // DisallowUnknownFields: a request body containing "diagnostics" (the
+    // one field this older site does not know) is refused with exactly the
+    // generic decode failure problems.go gives an unrecognised key - HTTP
+    // 400, "that did not arrive as valid JSON" - and anything else is
+    // accepted with 200, so a test can drive the real fallback
+    // (ProblemReportSendFlow) against something that behaves like the
+    // pre-diagnostics contract rather than hand-waving the server side.
+    enum class Mode { Accept200, BadRequest400, RateLimit429, Hang, Refuse, RejectUnknownField };
 
     // The route this stub answers on. The Windows variant accepts any path
     // and only uses this to build url(); the POSIX variant registers it.
@@ -149,10 +157,12 @@ private:
                     break;
                 }
             }
+            std::string bodyReceived;
             if (headerEnd != std::string::npos) {
+                bodyReceived = req.substr(headerEnd + 4);
                 std::lock_guard<std::mutex> lk(mu_);
                 requests_.push_back(req.substr(0, headerEnd));
-                bodies_.push_back(req.substr(headerEnd + 4));
+                bodies_.push_back(bodyReceived);
             }
             if (mode_ == Mode::Hang) {
                 held_.push_back(c);
@@ -167,6 +177,12 @@ private:
             } else if (mode_ == Mode::BadRequest400) {
                 const std::string body =
                     "{\"ok\":false,\"error\":\"text must be between 10 and 2000 characters\"}";
+                resp = "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\n"
+                       "Content-Length: " +
+                       std::to_string(body.size()) + "\r\n\r\n" + body;
+            } else if (mode_ == Mode::RejectUnknownField &&
+                       bodyReceived.find("\"diagnostics\"") != std::string::npos) {
+                const std::string body = "{\"ok\":false,\"error\":\"that did not arrive as valid JSON\"}";
                 resp = "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\n"
                        "Content-Length: " +
                        std::to_string(body.size()) + "\r\n\r\n" + body;
@@ -207,7 +223,10 @@ private:
 
 class StubServer {
 public:
-    enum class Mode { Accept200, BadRequest400, RateLimit429, Hang, Refuse };
+    // See the Windows variant's identical enum for what RejectUnknownField
+    // emulates: problems.go's DisallowUnknownFields decoder against a body
+    // carrying a field this (older) contract does not know.
+    enum class Mode { Accept200, BadRequest400, RateLimit429, Hang, Refuse, RejectUnknownField };
 
     // The route this stub answers on. The Windows variant accepts any path
     // and only uses this to build url(); the POSIX variant registers it.
@@ -251,6 +270,12 @@ public:
                              res.set_content(
                                  "{\"ok\":false,\"error\":\"text must be between 10 and "
                                  "2000 characters\"}",
+                                 "application/json");
+                         } else if (mode_ == Mode::RejectUnknownField &&
+                                    req.body.find("\"diagnostics\"") != std::string::npos) {
+                             res.status = 400;
+                             res.set_content(
+                                 "{\"ok\":false,\"error\":\"that did not arrive as valid JSON\"}",
                                  "application/json");
                          } else {
                              res.status = 200;

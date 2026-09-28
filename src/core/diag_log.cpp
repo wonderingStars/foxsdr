@@ -549,9 +549,18 @@ bool isUsbInventoryLine(const std::string& line) {
 // space does not end it).
 void maskUserDirs(std::string& s) {
     static constexpr char kUser[] = "<user>";
+    // Lowercased ONCE, then kept in step with `s` by applying every edit to
+    // BOTH: `kUser` is already lowercase, so writing it into `low` at the
+    // same span costs nothing further and needs no re-scan of bytes already
+    // passed. Recomputing lowerAscii(s) on every match - the original shape
+    // of this loop - is O(line length) per match, and on the whole-bundle
+    // pass problem_report.cpp added for the report-attachment preview
+    // (rather than one ~192-byte ring line at a time) that is no longer a
+    // rounding error: a bundle with dozens of path-bearing lines measured
+    // multiple milliseconds in it alone (2026-09-28 review).
+    std::string low = lowerAscii(s);
     std::size_t from = 0;
     for (;;) {
-        const std::string low = lowerAscii(s);
         std::size_t at = std::string::npos;
         std::size_t keyLen = 0;
         for (const char* k : {"\\users\\", "/users/", "/home/"}) {
@@ -568,7 +577,10 @@ void maskUserDirs(std::string& s) {
                s[e] != ')' && s[e] != ']' && s[e] != ',' && s[e] != ';') {
             ++e;
         }
-        if (e > p) { s.replace(p, e - p, kUser); }
+        if (e > p) {
+            s.replace(p, e - p, kUser);
+            low.replace(p, e - p, kUser);
+        }
         from = p + (sizeof(kUser) - 1);
     }
 }
@@ -611,6 +623,52 @@ void maskQuotedNames(std::string& s) {
         }
         s.replace(i + 1, close - (i + 1), kName);
         i = i + 1 + kName.size() + 1;
+    }
+}
+
+// A POSSESSIVE NAME inside a PARENTHESISED label a vendor API handed back
+// verbatim - "Headset (Alice's AirPods Pro)", "Microphone (Bob's iPhone)".
+// Windows hands FoxSDR the OS's own device-friendly-name text unchanged, and
+// that name is very often someone's Bluetooth or paired-phone label, not
+// anything this application chose. Only the word immediately before an "'s"
+// is masked - "AirPods Pro" and "iPhone" stay, because the make and model are
+// what a report is actually diagnosing; the person's name never is. Scoped to
+// text inside parentheses (not the whole line) so an ordinary contraction in
+// prose elsewhere is never touched - this project's log lines do not use any
+// today, but nothing should depend on that staying true forever.
+void maskPossessiveWordsInPlace(std::string& span) {
+    static const std::string kName = "<name>";
+    std::size_t i = 0;
+    while (i < span.size()) {
+        if (span[i] != '\'' || i == 0 || !isAlnumChar(span[i - 1])) {
+            ++i;
+            continue;
+        }
+        if (i + 1 >= span.size() || (span[i + 1] != 's' && span[i + 1] != 'S')) {
+            ++i;
+            continue;
+        }
+        std::size_t wordStart = i;
+        while (wordStart > 0 && isAlnumChar(span[wordStart - 1])) { --wordStart; }
+        const std::size_t wordLen = i - wordStart;
+        span.replace(wordStart, wordLen, kName);
+        i = wordStart + kName.size() + 2;  // past "<name>" + "'s"
+    }
+}
+
+void maskPossessiveNamesInParens(std::string& s) {
+    std::size_t i = 0;
+    while (i < s.size()) {
+        if (s[i] != '(') {
+            ++i;
+            continue;
+        }
+        const std::size_t close = s.find(')', i + 1);
+        if (close == std::string::npos) { break; }
+        std::string inner = s.substr(i + 1, close - (i + 1));
+        maskPossessiveWordsInPlace(inner);
+        s.replace(i + 1, close - (i + 1), inner);
+        i = i + 1 + inner.size() + 1;
     }
 }
 
@@ -797,6 +855,7 @@ std::string scrubUploadLine(const std::string& line) {
     maskSoapyLabelSerials(body);
     maskUserDirs(body);
     maskQuotedNames(body);
+    maskPossessiveNamesInParens(body);
     // A line at the ring's width was CUT: whatever named its numbers may be
     // in the part that was lost ("... at 2048000 S/s, 127.825" with the
     // " MHz" gone), so it is treated as naming a frequency.
@@ -839,6 +898,12 @@ std::string scrubUploadPath(const std::string& path) {
     // 2. Whatever is left (a FOXSDR_DIAG_DIR override, say) is still shown,
     //    because where the files ARE is the point of the field - with the
     //    account name masked by the same rule a log line gets.
+    maskUserDirs(out);
+    return out;
+}
+
+std::string maskAccountNames(const std::string& text) {
+    std::string out = text;
     maskUserDirs(out);
     return out;
 }

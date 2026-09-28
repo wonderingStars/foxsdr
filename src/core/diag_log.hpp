@@ -212,7 +212,12 @@ std::string scrubVendorLine(const std::string& line);
 //   4. anything in single quotes - the names users type for patch nodes,
 //      speakers, presets - becomes '<name>' (a quoted USB hardware id is
 //      kept, its instance segment already stripped);
-//   5. on a line that mentions hertz, a frequency, tuning, a centre, the VFO,
+//   5. inside parentheses, a possessive word ("Alice's" in "Headset (Alice's
+//      AirPods Pro)") becomes <name>'s - the make and model that follow are
+//      kept, because a device-friendly-name string handed back by the
+//      operating system is frequently a Bluetooth or paired-phone label a
+//      person chose, never something this application generated;
+//   6. on a line that mentions hertz, a frequency, tuning, a centre, the VFO,
 //      a range, an offset, a carrier, a preset, transmitting or keying, or
 //      "asked for"/"answered" - and on a line cut off at the ring's width -
 //      EVERY free-standing number becomes '#', except a number with a sample
@@ -221,7 +226,7 @@ std::string scrubVendorLine(const std::string& line);
 //      after "firmware", "version", "id", "tuner", "error", "code"...; a
 //      number with a hertz unit is masked whatever else is true of it, and
 //      a number glued to a word (B200, R820T, v1.0.0) is part of a name;
-//   6. any run of '#' becomes a single '#', so a masked frequency does not
+//   7. any run of '#' becomes a single '#', so a masked frequency does not
 //      say how many digits it had.
 // A line with none of these in it is returned byte for byte.
 std::string scrubUploadLine(const std::string& line);
@@ -241,6 +246,21 @@ std::vector<std::string> scrubUploadLog(const std::vector<std::string>& lines);
 // \Users\, /home/ or /Users/ masked as <user>. A real bundle pasted into a bug
 // report in 0.99.32 read "C:\Users\Utente\AppData\Local\FoxSDR\logs/...".
 std::string scrubUploadPath(const std::string& path);
+
+// THE ACCOUNT-NAME MASK ALONE, exposed for core/problem_report.cpp's
+// belt-and-braces pass over a WHOLE bundle of text (the "REPORT A BUG /
+// DISLIKE" page's attached diagnostics log) rather than one line or one path
+// at a time. This is exactly step 3 of scrubUploadLine() and the second half
+// of scrubUploadPath() - \Users\, /users/ and /home/ segments (case-
+// insensitive, either slash) become <user> - run once over text that has
+// already been through both of those, which is harmless (the rule cannot
+// un-mask an already-masked path) and catches anything a future context
+// field might ever add that neither of those two call sites sees. Does NOT
+// touch any other occurrence of the same name elsewhere in a path: only the
+// segment immediately after one of those three keys is a profile directory,
+// and a name appearing again later (a build path, a project folder) is not
+// masked, because this function has no way to know it is the same person.
+std::string maskAccountNames(const std::string& text);
 
 // STDERR CAPTURE (Windows only; elsewhere returns false and changes nothing).
 //

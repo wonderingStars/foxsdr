@@ -1231,6 +1231,16 @@ int AppWindow::run(int frames) {
             glfwSetWindowSize(window, w, h);
         }
     }
+    // FOXSDR_WINDOW_POS="X,Y" (captures): places the window at an exact
+    // screen position. The window manager on this desk places a fresh GLFW
+    // window a little differently run to run with nothing else different
+    // (observed drifting between at least two positions in a row of bounded
+    // captures), which would otherwise mean recomputing a scripted capture's
+    // click coordinates for every run.
+    if (const char* wp = std::getenv("FOXSDR_WINDOW_POS"); wp != nullptr && *wp != '\0') {
+        int px = 0, py = 0;
+        if (std::sscanf(wp, "%d,%d", &px, &py) == 2) { glfwSetWindowPos(window, px, py); }
+    }
     // A FREQUENCY LIST DROPPED ON THE WINDOW is imported (0.99.19): an SDR#
     // frequencies.xml or a CSV, which is quicker than typing a path. The
     // callback only records the path; the import runs in the frame loop.
@@ -8960,8 +8970,8 @@ void AppWindow::selectSource(int idx, std::optional<double> carryAirHz) {
         // sentence instead (gui::soundCardDeadReopenNeedsRestart).
         sourceSel_ = kSoundCardRow;
         if (installedCardDead) {
-            cascade::core::diagLogf("source: reopening the sound card %s (%s), which had stopped",
-                                    soundCardLive_.device.c_str(), soundCardLive_.hostApi.c_str());
+            cascade::core::diagLogf("source: reopening the sound card (%s), which had stopped",
+                                    cascade::source::loggableSoundCardDescription(soundCardLive_).c_str());
             soundCard_ = soundCardLive_;
             launchSoundCardOpen(false, soundCardLive_);
             return;
@@ -19364,7 +19374,9 @@ void AppWindow::drawTransmitPage() {
 void AppWindow::drawFeatureRequestPage() {
     if (!featureRequestOpen_) { return; }
     constexpr float kW = 480.0f;
-    constexpr float kH = 420.0f;
+    // 420 -> 460 (2026-09-28): the no-email warning line under the contact
+    // field is a new row above the box-gives-way boundary.
+    constexpr float kH = 460.0f;
     float px = 0.0f;
     float py = 0.0f;
     float pw = kW;
@@ -19436,6 +19448,14 @@ void AppWindow::drawFeatureRequestPage() {
             featureRequestContact_ = buf;
         }
         ImGui::EndDisabled();
+    }
+    // A callsign alone cannot be written back to - said plainly, but never
+    // blocking SEND: the field stays entirely optional.
+    if (!cascade::core::featureRequestContactHasEmailAddress(featureRequestContact_)) {
+        ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kAmber));
+        ImGui::TextWrapped(
+            "%s", tr("Without an email address we cannot reply or tell you when this is added."));
+        ImGui::PopStyleColor();
     }
 
     ImGui::Separator();
@@ -19614,7 +19634,12 @@ void AppWindow::drawProblemReportPage() {
     // wrapped reason line under SEND. At 470 (rendered check, 2026-09-23) the
     // SEND key was cut by the page's foot and the reason it was disabled sat
     // below the fold, so the page opened looking like a key that did nothing.
-    constexpr float kH = 540.0f;
+    // 540 -> 660 (2026-09-28): the no-email warning line, the "Attach the
+    // diagnostics log" checkbox and its "Show what will be sent" toggle are
+    // all new rows above the box-gives-way boundary; the text box already
+    // shrinks to make room (gui::boxGivingWay), but a page that opens without
+    // ever needing to shrink is the page it always was.
+    constexpr float kH = 660.0f;
     float px = 0.0f;
     float py = 0.0f;
     float pw = kW;
@@ -19642,6 +19667,12 @@ void AppWindow::drawProblemReportPage() {
     if (ImGui::RadioButton(trId("Something is broken (bug)"),
                            problemReportKind_ == cascade::core::kProblemKindBug)) {
         problemReportKind_ = cascade::core::kProblemKindBug;
+        // The checkbox follows the kind's own default every time it is
+        // (re)chosen - ticked for a bug - but the person can still change it
+        // afterwards; this only decides what it shows the moment the kind
+        // changes.
+        problemReportAttachDiag_ =
+            cascade::core::problemReportDefaultAttachDiagnostics(problemReportKind_);
     }
     // Beside the first choice when both fit the page, under it when a
     // translation makes the pair too wide (gui/text_fit.hpp).
@@ -19649,6 +19680,8 @@ void AppWindow::drawProblemReportPage() {
     if (ImGui::RadioButton(trId("Something I dislike"),
                            problemReportKind_ == cascade::core::kProblemKindDislike)) {
         problemReportKind_ = cascade::core::kProblemKindDislike;
+        problemReportAttachDiag_ =
+            cascade::core::problemReportDefaultAttachDiagnostics(problemReportKind_);
     }
     ImGui::EndDisabled();
 
@@ -19691,25 +19724,91 @@ void AppWindow::drawProblemReportPage() {
         }
         ImGui::EndDisabled();
     }
+    // As on the feature-request page: said plainly, never blocking SEND.
+    if (!cascade::core::problemReportContactHasEmailAddress(problemReportContact_)) {
+        ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kAmber));
+        ImGui::TextWrapped(
+            "%s", tr("Without an email address we cannot reply or tell you when this is fixed "
+                     "or ready."));
+        ImGui::PopStyleColor();
+    }
+
+    // --- "Attach the diagnostics log" and its preview -----------------------
+    //
+    // Ticked by default for a bug, unticked for a dislike (set where the kind
+    // is chosen, above) - the owner asked for this because users believed a
+    // report already carried their log, and it never did. Now it can, but
+    // only when this box is left ticked at the moment SEND is pressed: the
+    // page's sentence below says so truthfully either way, and "Show what
+    // will be sent" lets a person read the exact text before deciding.
+    std::string preparedDiag;
+    ImGui::BeginDisabled(sending);
+    ImGui::Checkbox(trId("Attach the diagnostics log"), &problemReportAttachDiag_);
+    ImGui::EndDisabled();
+    if (problemReportAttachDiag_) {
+        // Rebuilt only when the log has grown or a second has passed - see
+        // the cache members' own comment - never on every frame this box is
+        // left ticked.
+        const std::uint64_t linesNow = cascade::core::DiagLog::instance().linesWritten();
+        if (cascade::core::problemReportDiagCacheStale(problemReportDiagCacheValid_,
+                                                        problemReportDiagCacheLines_, linesNow,
+                                                        problemReportDiagCacheEpoch_, nowEpoch)) {
+            problemReportDiagCache_ =
+                cascade::core::prepareDiagnosticsForReport(currentDiagnosticsBundle());
+            problemReportDiagCacheLines_ = linesNow;
+            problemReportDiagCacheEpoch_ = nowEpoch;
+            problemReportDiagCacheValid_ = true;
+        }
+        preparedDiag = problemReportDiagCache_;
+        ImGui::BeginDisabled(sending);
+        ImGui::Checkbox(trId("Show what will be sent"), &problemReportShowDiag_);
+        ImGui::EndDisabled();
+        if (problemReportShowDiag_) {
+            ImGui::InputTextMultiline("##problemreportdiagpreview", &preparedDiag,
+                                      ImVec2(-1.0f, 140.0f), ImGuiInputTextFlags_ReadOnly);
+        }
+    } else {
+        problemReportShowDiag_ = false;
+    }
 
     ImGui::Separator();
 
     // --- THE SENTENCE, exactly what leaves the machine ---------------------
     {
-        // Two whole sentences, as on the feature-request page.
+        // Four whole sentences: with or without the contact line, as on the
+        // feature-request page, crossed with whether the log is attached.
         const bool haveContact =
             cascade::core::validateProblemReportContact(problemReportContact_).empty() &&
             cascade::core::featureRequestContactCharCount(problemReportContact_) > 0;
-        const char* sentence =
-            haveContact
-                ? tr("Sends whether this is a bug or a dislike, your message above, the contact "
-                     "line below it, the FoxSDR version, and whether this is running on "
-                     "Windows, Linux or Android, x64 or arm64. Nothing else - no identifier, no "
-                     "log, no crash report, no settings, no frequency.")
-                : tr("Sends whether this is a bug or a dislike, your message above, the FoxSDR "
-                     "version, and whether this is running on Windows, Linux or Android, x64 "
-                     "or arm64. Nothing else - no identifier, no log, no crash report, no "
-                     "settings, no frequency.");
+        const bool attach = problemReportAttachDiag_;
+        const char* sentence = nullptr;
+        if (attach && haveContact) {
+            sentence =
+                tr("Sends whether this is a bug or a dislike, your message above, the contact "
+                   "line below it, the FoxSDR version, whether this is running on Windows, "
+                   "Linux or Android, x64 or arm64, and the diagnostics log attached above - "
+                   "untick \"Attach the diagnostics log\" to leave it out, or use \"Show what "
+                   "will be sent\" to read it first. No identifier, no crash report.");
+        } else if (attach) {
+            sentence =
+                tr("Sends whether this is a bug or a dislike, your message above, the FoxSDR "
+                   "version, whether this is running on Windows, Linux or Android, x64 or "
+                   "arm64, and the diagnostics log attached above - untick \"Attach the "
+                   "diagnostics log\" to leave it out, or use \"Show what will be sent\" to "
+                   "read it first. No identifier, no crash report.");
+        } else if (haveContact) {
+            sentence =
+                tr("Sends whether this is a bug or a dislike, your message above, the contact "
+                   "line below it, the FoxSDR version, and whether this is running on "
+                   "Windows, Linux or Android, x64 or arm64. Nothing else - no identifier, no "
+                   "log, no crash report, no settings, no frequency.");
+        } else {
+            sentence =
+                tr("Sends whether this is a bug or a dislike, your message above, the FoxSDR "
+                   "version, and whether this is running on Windows, Linux or Android, x64 "
+                   "or arm64. Nothing else - no identifier, no log, no crash report, no "
+                   "settings, no frequency.");
+        }
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kInkMuted));
         ImGui::TextWrapped("%s", sentence);
         ImGui::PopStyleColor();
@@ -19760,10 +19859,15 @@ void AppWindow::drawProblemReportPage() {
         payload.version = cascade::versionString();
         payload.platform = cascade::core::featureRequestPlatform();
         payload.arch = cascade::core::featureRequestArch();
+        if (problemReportAttachDiag_) {
+            // `preparedDiag` was already built earlier this same frame (the
+            // "Attach the diagnostics log" section above) - the exact text
+            // "Show what will be sent" would have shown, sent byte for byte.
+            payload.diagnostics = preparedDiag;
+        }
         problemReportSentChars_ = cascade::core::featureRequestTextCharCount(problemReportText_);
         problemReportSentKind_ = problemReportKind_;
-        problemReportSender_.sendJson(cascade::core::problemReportEndpoint(),
-                                      cascade::core::problemReportJson(payload), nowEpoch);
+        problemReportSender_.send(cascade::core::problemReportEndpoint(), payload, nowEpoch);
     }
 
     // --- the status line -------------------------------------------------
@@ -19795,6 +19899,22 @@ void AppWindow::drawProblemReportPage() {
             ImGui::PopStyleColor();
             break;
         }
+    }
+    // THE OLDER-SITE FALLBACK, said plainly - but only when it is the reason
+    // anything is missing. This site did not accept the diagnostics field,
+    // so it was dropped and the same report retried once without it
+    // (ProblemReportSendFlow); shown beside the "sent" line above, never in
+    // place of it. If that RETRY also fails, the log was never the problem -
+    // the retry carried the same text and contact the first attempt did, so
+    // whatever it failed on this time is a real reason, and the status line
+    // above already names it. Saying "the log could not be sent" on top of
+    // that would point at the one thing that was already given up on.
+    if (state == cascade::core::FeatureRequestState::Sent &&
+        problemReportSender_.diagnosticsDropped()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kAmber));
+        ImGui::TextWrapped(
+            "%s", tr("The diagnostics log could not be sent with this report."));
+        ImGui::PopStyleColor();
     }
     problemReportBelowBoxH_ =
         ImGui::GetCursorScreenPos().y - ImGui::GetStyle().ItemSpacing.y - belowTop;
@@ -23807,7 +23927,7 @@ void AppWindow::drawDiagnosticsOffer() {
     ImGui::End();
 }
 
-void AppWindow::copyDiagnosticsBundle() {
+std::string AppWindow::currentDiagnosticsBundle() {
     // EVERY FIELD HERE ALREADY EXISTS somewhere in this window. A bundle that
     // re-derived the version, the plugin list or the radio model would be a
     // second source of truth for exactly the facts a support conversation
@@ -23837,7 +23957,13 @@ void AppWindow::copyDiagnosticsBundle() {
     in.launches = telemetryLaunches_;
     in.crashes = telemetryCrashes_;
 
-    const std::string bundle = cascade::core::buildDiagnosticsBundle(in);
+    return cascade::core::buildDiagnosticsBundle(in);
+}
+
+void AppWindow::copyDiagnosticsBundle() {
+    cascade::core::DiagBundleInput in;
+    in.crashDir = cascade::core::diagCrashDir();
+    const std::string bundle = currentDiagnosticsBundle();
     ImGui::SetClipboardText(bundle.c_str());
 
     // ...and on disk as well as on the clipboard, because a clipboard does not
@@ -24178,8 +24304,8 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
         restoreKeepLabel_.clear();
         sourceSel_ = kSoundCardRow;
         launchSoundCardOpen(/*restore=*/true, soundCard_);
-        cascade::core::diagLogf("source: restoring the sound card %s (%s)", soundCard_.device.c_str(),
-                                soundCard_.hostApi.c_str());
+        cascade::core::diagLogf("source: restoring the sound card (%s)",
+                                cascade::source::loggableSoundCardDescription(soundCard_).c_str());
     } else if (cfg.sourceKind == "file") {
         auto file = std::make_unique<cascade::source::IqFileSource>();
         if (file->open(cfg.iqFilePath)) {

@@ -2907,7 +2907,31 @@ private:
     std::string problemReportKind_;
     std::string problemReportText_;
     std::string problemReportContact_;
-    cascade::core::ProblemReportSender problemReportSender_;
+    // "Attach the diagnostics log": true by default for a bug, false for a
+    // dislike (cascade::core::problemReportDefaultAttachDiagnostics), reset
+    // to that default each time the person (re)chooses a kind, but otherwise
+    // theirs to tick or untick. Never persisted, like everything else on
+    // this page.
+    bool problemReportAttachDiag_ = false;
+    // "Show what will be sent": a read-only preview of the exact scrubbed,
+    // capped text that would be attached - drawn only while this is true and
+    // the checkbox above it is ticked.
+    bool problemReportShowDiag_ = false;
+    // THE ATTACHMENT'S CACHE. Rebuilding it means a ring snapshot under a
+    // mutex, refreshDiagContext()'s plugin-list walk, and the whole-bundle
+    // scrub pass - real work that this page (unlike Copy diagnostics, a
+    // one-off button press) would otherwise repeat every single frame the
+    // checkbox is left ticked. Rebuilt only when the log has actually grown
+    // (problemReportDiagCacheLines_ disagrees with DiagLog's own count) or at
+    // most once per second (problemReportDiagCacheEpoch_ disagrees with the
+    // page's own nowEpoch, itself whole seconds) - never invalidated just for
+    // being unticked, since a checkbox toggled off and back on inside the
+    // same second should not force a rebuild either (2026-09-28 review, N2).
+    std::string problemReportDiagCache_;
+    std::uint64_t problemReportDiagCacheLines_ = 0;
+    std::uint64_t problemReportDiagCacheEpoch_ = 0;
+    bool problemReportDiagCacheValid_ = false;
+    cascade::core::ProblemReportSendFlow problemReportSender_;
     cascade::core::FeatureRequestState problemReportLastLoggedState_ =
         cascade::core::FeatureRequestState::Idle;
     std::size_t problemReportSentChars_ = 0;
@@ -2916,6 +2940,11 @@ private:
     // As featureRequestBelowBoxH_, for this page's box.
     float problemReportBelowBoxH_ = 0.0f;
     void drawProblemReportPage();
+    // The same bytes "Copy diagnostics" (SYSTEM > Diagnostics) copies -
+    // shared by copyDiagnosticsBundle() and the problem-report page's
+    // attachment/preview, so there is one place that assembles a
+    // DiagBundleInput from the window's own state.
+    std::string currentDiagnosticsBundle();
     // "Serial ports" settings section: the machine's ports as a table, and
     // the GPS row (drawGpsPositionControl) that used to be findable only
     // under the rail's Radar section. Drawn before Diagnostics, on the SYSTEM

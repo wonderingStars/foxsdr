@@ -367,16 +367,38 @@ Directly under REQUEST A FEATURE is a **REPORT A BUG / DISLIKE** key, the
 same size, on the same terms. Its page asks first what you are reporting -
 **Something is broken (bug)** or **Something I dislike** - with neither
 chosen until you choose one, then has the same text box, the same optional
-"Email or callsign" line and the same SEND key. Nothing is sent until you
-press SEND, nothing is queued or retried, and the typed text and contact line
-live in memory only: never in `config.json`, never in the diagnostics log,
-which records only which kind was sent, how many characters it carried and
-what the server answered (`problem report (bug): sent, 42 characters, HTTP
-200`, or the failure in the same shape).
+"Email or callsign" line, an **"Attach the diagnostics log"** box, and the
+same SEND key. Nothing is sent until you press SEND, and the typed text and
+contact line live in memory only: never in `config.json`. Nothing you typed
+is ever queued, kept across a restart, or retried on its own - the ONE
+exception, and it never touches your words, is described further down: if
+you attached the log and the site refuses it, FoxSDR resends the same report
+without it, once, immediately. The diagnostics log line records only which
+kind was sent, how many characters the message carried and what the server
+answered (`problem report (bug): sent, 42 characters, HTTP 200`, or the
+failure in the same shape) - it never records the words you typed, whether
+or not you attached the log itself.
 
-It is **not** a crash or freeze report. A report typed here carries no stack,
-no log, no loaded-plugin list and no identifier; if FoxSDR crashed, the crash
-report described above is a separate thing with its own switch.
+Earlier versions of this page said the report carried no log - it never did,
+but people kept believing it did, and telling us so made bugs harder to fix,
+not easier. Since 2026-09-28 you can choose to attach it: **ticked by default
+when you report a bug, unticked for a dislike**, and yours to change either
+way. A **"Show what will be sent"** toggle shows the exact text - the same
+words the SYSTEM > Diagnostics **Copy diagnostics** button copies - before you
+press SEND, so nothing about it is a surprise. That text is the bundle
+described in full under *Crash and freeze reports — what they contain*
+above (the `log-path`/`crash-dir` row there is what says exactly how your
+account name is handled in it), and is additionally capped here at 65536
+bytes - a log longer than that keeps its header and its newest lines, and
+says plainly that older lines were dropped.
+
+It is **not** a crash or freeze report. A report typed here carries no stack
+and no crash report; if FoxSDR crashed, the crash report described above is a
+separate thing with its own switch. The diagnostics log, when you choose to
+attach it, is the same context a crash report carries (version, commit,
+operating system, mode, the loaded plugins, whether a device was open) plus
+your recent log lines - never a frequency, never a hardware serial, never the
+install identifier telemetry uses.
 
 ### What is sent when you report a bug or a dislike
 
@@ -389,17 +411,26 @@ SEND:
 | `kind` | `bug` or `dislike` | Which of the two you chose at the top of the page: something that does not work, or something that works as designed and that you would rather it did not. |
 | `text` | `The waterfall freezes when I change the sample rate` | What you typed, trimmed of leading and trailing blank space. Between 10 and 100000 characters. |
 | `contact` | `g4xyz@example.com`, or empty | An email address or callsign, ENTIRELY OPTIONAL, so we can ask a follow-up question. Up to 120 characters. Kept on screen after a successful send. |
-| `version` | `0.99.20` | Which release, so a bug already fixed is not chased again. |
+| `version` | `0.99.42` | Which release, so a bug already fixed is not chased again. |
 | `platform` | `windows`, `linux` or `android` | Which build sent it. |
 | `arch` | `x64` or `arm64` | As above. |
+| `diagnostics` | the same text **Copy diagnostics** produces, or ABSENT | OPTIONAL. Present only when you left "Attach the diagnostics log" ticked when you pressed SEND - absent, not an empty string, otherwise. It is exactly the bundle above (*Crash and freeze reports*), with the same `<user>` handling that table's `log-path`/`crash-dir` row describes, additionally capped here at 65536 bytes (the newest lines kept, the oldest dropped, and said so). Never anything the diagnostics bundle does not already contain: no install identifier, no plugin list beyond what that bundle lists. |
 
-That is the complete list: a feature request's six fields plus `kind`. No
-install identifier, no hardware, no log, no config, no frequency, no
-location, no plugin list. It is asserted **in both directions** by
+That is the complete list: a feature request's six fields plus `kind`, plus
+the one optional `diagnostics` field above. No install identifier, no
+hardware serial, no config beyond what the diagnostics log already lists when
+attached, no frequency, no location. It is asserted **in both directions** by
 `tests/test_problem_report.cpp`, which also reads this table and requires the
 two lists to match. The server answers, rate-limits and waits exactly as it
-does for a feature request (above), and keeps the same record plus the kind:
-never your IP address.
+does for a feature request (above), and keeps the same record plus the kind
+and, when you attached it, the log: never your IP address.
+
+**If the site does not yet know the `diagnostics` field** (an older release,
+or a moment before this contract's own change reaches it), it refuses the
+whole request rather than silently ignoring the field. FoxSDR notices that
+exact refusal and tries again, once, immediately, with the log left out - and
+says so plainly on the page - rather than leaving your bug report unsent over
+a field the site does not yet accept.
 
 ## What is never sent
 

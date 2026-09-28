@@ -154,6 +154,15 @@ std::string validateFeatureRequestContact(const std::string& contact) {
     return std::string();
 }
 
+bool featureRequestContactHasEmailAddress(const std::string& contact) {
+    // The minimal signal, not a real address parser: a callsign alone
+    // ("G4XYZ") never has one, and this exists purely to decide whether a
+    // page warns that nobody can be replied to - never to judge whether the
+    // field is valid, which validateFeatureRequestContact() already does on
+    // length alone.
+    return trimFeatureWhitespace(contact).find('@') != std::string::npos;
+}
+
 std::string featureRequestPlatform() {
 #if defined(_WIN32)
     return "windows";

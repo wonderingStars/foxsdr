@@ -119,8 +119,8 @@ void AppWindow::launchSoundCardOpen(bool restore, const SoundCardSettings& setti
     const bool same = release && cascade::gui::soundCardSameSettings(settings, soundCardLive_);
     if (release) {
         previous = soundCardLive_;
-        cascade::core::diagLogf("source: releasing the sound card %s (%s) to open it with new settings",
-                                previous.device.c_str(), previous.hostApi.c_str());
+        cascade::core::diagLogf("source: releasing the sound card (%s) to open it with new settings",
+                                cascade::source::loggableSoundCardDescription(previous).c_str());
         device_ = nullptr;
         soapyView_ = nullptr;
         ++sourceGen_;
@@ -308,9 +308,12 @@ void AppWindow::pollSoundCard() {
         pipeline_.setVfoOffsetHz(inside);
         vfoOffsetKhz_ = static_cast<float>(inside / 1000.0);
     }
-    cascade::core::diagLogf("source: opened the sound card %s (%s) at %.0f Hz, %s%s", soundCard_.device.c_str(),
-                            soundCard_.hostApi.c_str(), soundCard_.cardRateHz,
-                            soundCard_.format == SoundCardFormat::IqStereo ? "I/Q" : "real",
+    // NEVER the card's own name here - see loggableSoundCardDescription's
+    // comment: an OS-assigned label like "Headset (Alice's AirPods Pro)" is
+    // often a person's name, and this line also feeds the diagnostics bundle
+    // a person can choose to attach to a bug report.
+    cascade::core::diagLogf("source: opened the sound card (%s)%s",
+                            cascade::source::loggableSoundCardDescription(soundCard_).c_str(),
                             r.restoredPrevious ? " - as it was; the new settings were refused" : "");
 }
 

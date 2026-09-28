@@ -165,6 +165,16 @@ bool parseSoundCardArgs(const std::string& args, SoundCardSettings& out);
 // encoding).
 std::string soundCardDeviceArgs(const std::string& device, const std::string& hostApi);
 
+// WHAT THE LOG SAYS ABOUT A CARD, WITHOUT SAYING WHICH ONE IT IS. `device` is
+// a name the OPERATING SYSTEM handed back, not this application - on Windows
+// it is very often a Bluetooth or paired-phone label someone else chose
+// ("Headset (Alice's AirPods Pro)", "Microphone (Bob's iPhone)"), so it never
+// belongs in a log line or a diagnostics bundle a person might paste into a
+// public bug report. The host API, the channel layout and the rate are
+// enough to diagnose a card problem - "which card" is not a question the log
+// needs to answer, only "what kind of card, doing what".
+std::string loggableSoundCardDescription(const SoundCardSettings& s);
+
 // One rate a card accepts. `exclusive`: accepted only when the stream is
 // opened in WASAPI EXCLUSIVE mode - which is how a Windows card reaches the
 // rates its own hardware runs at rather than the one the Windows mixer is set

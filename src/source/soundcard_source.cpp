@@ -118,6 +118,12 @@ std::string soundCardDeviceArgs(const std::string& device, const std::string& ho
     return "device=" + encodeField(device) + ",api=" + encodeField(hostApi);
 }
 
+std::string loggableSoundCardDescription(const SoundCardSettings& s) {
+    char rate[32];
+    std::snprintf(rate, sizeof(rate), "%.0f Hz", s.cardRateHz);
+    return s.hostApi + ", " + (s.format == SoundCardFormat::IqStereo ? "I/Q" : "mono") + ", " + rate;
+}
+
 bool parseSoundCardArgs(const std::string& args, SoundCardSettings& out) {
     SoundCardSettings s = out;
     std::string v;
