@@ -427,6 +427,16 @@ int main() {
         CHECK(floor > 60.0f);
         CHECK(many.h == floor);
         CHECK(inputPortPos(many, 7).y < many.y + nodeHeight(many));
+
+        // ...and a CEILING, the loader's (kMaxLoadedNodeSize): the engine's
+        // copy of the graph is read back through that loader on every commit
+        // (docs/engine-stage3.md OPEN 6), so a node dragged past it would be
+        // one size on the canvas and another in the engine.
+        const NodeId big = g.addNode(NodeKind::Display, "D", PortType::Iq, 10.0f, 20.0f);
+        cascade::core::patch::Node& b = *g.mutableNode(big);
+        resizeNodeTo(b, V(10.0f + 9000.0f, 20.0f + 7000.0f));
+        CHECK(b.w == cascade::core::patch::kMaxLoadedNodeSize);
+        CHECK(b.h == cascade::core::patch::kMaxLoadedNodeSize);
     }
 
     // [S4] The grip is the bottom-right corner and nowhere else - in

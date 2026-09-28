@@ -54,6 +54,7 @@
 #endif
 
 #include "core/app_commands.hpp"
+#include "core/patch_draft.hpp"
 #include "core/config.hpp"
 #include "engine/soundcard_panel.hpp"
 #include "gui/app_window.hpp"
@@ -590,6 +591,9 @@ struct AppWindowTestAccess {
         return a.engine_.patchSinkLines_.count(id) != 0;
     }
     static void prunePatchSinkLines(AppWindow& a) { a.engine_.prunePatchSinkLines(); }
+    // FOXAPP_OP_PATCH_SET_GRAPH (docs/engine-stage3.md OPEN 6).
+    static const cascade::core::patch::Graph& patchGraph(AppWindow& a) { return a.engine_.patchGraph_; }
+    static std::uint64_t patchGraphEpoch(AppWindow& a) { return a.engine_.patchGraphEpoch_; }
     static double txFrequency(AppWindow& a) { return a.engine_.transmitter_.frequencyHz(); }
     static void addAudioDevice(AppWindow& a, int paIndex, const char* name) {
         a.engine_.devices_.push_back({paIndex, name, false});
@@ -1797,6 +1801,74 @@ void patchOps(AppWindow& a) {
         A::removePatchNode(a, keep);
         A::prunePatchSinkLines(a);
         CHECK(!A::hasPatchSinkLines(a, keep));
+    }
+
+    // FOXAPP_OP_PATCH_SET_GRAPH (OPEN 6, Design A): the whole graph, as the
+    // Patch page's draft sends it - ids, the next id and a session-only
+    // chosen centre kept, not remapped as a loaded document's are - and
+    // refused WHOLE, the engine's graph untouched, when any of it cannot be
+    // honoured.
+    covering(FOXAPP_OP_PATCH_SET_GRAPH);
+    {
+        namespace pc = cascade::core::patch;
+        pc::Graph g;
+        const pc::NodeId radio = g.addNode(pc::NodeKind::Radio, "Radio", pc::PortType::Iq, 60.0f, 80.0f);
+        const pc::NodeId gap = g.addNode(pc::NodeKind::Demod, "gone", pc::PortType::Iq, 0.0f, 0.0f);
+        const pc::NodeId chan = g.addNode(pc::NodeKind::Channel, "2 m", pc::PortType::Iq, 333.25f, -41.5f);
+        (void)g.removeNode(gap);  // ids 1 and 3: a gap parse's own numbering would close
+        if (pc::Node* n = g.mutableNode(radio)) {
+            n->device = pc::kGeneratorKey;
+            n->freqHz = 0.0;
+            n->centreChosen = true;  // 0 Hz on the air, chosen - never saved in a document
+            n->rateHz = 2.4e6;
+        }
+        if (pc::Node* n = g.mutableNode(chan)) {
+            n->freqHz = 144800000.25;
+            n->name = "2 m calling, " + std::string(240, '.');  // past FoxCommand::text
+        }
+        CHECK(g.connect(radio, 0, chan, 0) == pc::Connect::Ok);
+        const std::string sent = pc::graphCommandText(g);
+        CHECK(sent.size() > FOXAPI_TEXT_CHARS - 1);  // it travels as long text
+        const std::uint64_t epoch = A::patchGraphEpoch(a);
+        CHECK(ok(A::apply(a, text(FOXAPP_OP_PATCH_SET_GRAPH, sent))));
+        const pc::Graph& got = A::patchGraph(a);
+        CHECK(pc::graphCommandText(got) == sent);
+        CHECK(got.find(chan) != nullptr && got.find(chan)->freqHz == 144800000.25);
+        CHECK(got.find(chan) != nullptr && got.find(chan)->x == 333.25f && got.find(chan)->y == -41.5f);
+        CHECK(got.find(radio) != nullptr && got.find(radio)->centreChosen);
+        CHECK(got.find(gap) == nullptr);
+        CHECK(got.nextId() == 4u);  // the gap's id is not handed out again
+        CHECK(got.wires().size() == 1u);
+        CHECK(A::patchGraphEpoch(a) == epoch);  // an edit, not a new document
+
+        // A new document counts, so a window mid-edit of the old one knows.
+        CHECK(ok(A::apply(a, text(FOXAPP_OP_PATCH_SET_GRAPH, sent, FOXAPP_PATCH_GRAPH_DOCUMENT))));
+        CHECK(A::patchGraphEpoch(a) == epoch + 1u);
+
+        // Refused, each of them, with a sentence - and the graph as it was.
+        const char* const bad[] = {
+            "",                                                         // nothing
+            "not a patch\n",                                           // no header
+            "foxsdr-patch 6\nnode 1 0 0 x y\n",                       // a node that cannot be read
+            "foxsdr-patch 6\nnode 1 0 0 0 0 232 128 0 0 - - 0 1 -50 1 R\n"
+            "node 1 1 0 0 0 232 104 0 0 - - 0 1 -50 1 C\n",            // the same id twice
+            "foxsdr-patch 6\nnode 1 5 1 0 0 216 116 0 0 - - 0 1 -50 1 S\n"
+            "node 2 0 0 0 0 232 128 0 0 - - 0 1 -50 1 R\nwire 2 0 1 0\n",  // Iq into an Audio port
+            "foxsdr-patch 6\nnode 1 0 0 0 0 232 128 0 0 - - 0 1 -50 1 R\ncentre-chosen 9\n",
+            "foxsdr-patch 6\nnode 1 0 0 0 0 232 128 0 0 - - 0 1 -50 1 R\nnext-id x\n",
+        };
+        for (const char* t : bad) {
+            const FoxCommandResult r = A::apply(a, text(FOXAPP_OP_PATCH_SET_GRAPH, t));
+            if (!refused(r, FOXAPI_BAD_ARGUMENT)) { std::printf("FAIL: SET_GRAPH took [%s]\n", t); }
+            CHECK(refused(r, FOXAPI_BAD_ARGUMENT));
+            CHECK(std::strlen(r.message) > 0);
+            CHECK(pc::graphCommandText(A::patchGraph(a)) == sent);
+        }
+        CHECK(A::patchGraphEpoch(a) == epoch + 1u);  // a refused document is no document
+
+        // Leave the patch empty for whatever runs next.
+        CHECK(ok(A::apply(a, text(FOXAPP_OP_PATCH_SET_GRAPH, pc::graphCommandText(pc::Graph{})))));
+        CHECK(A::patchGraph(a).nodes().empty());
     }
 }
 

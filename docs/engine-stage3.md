@@ -52,7 +52,7 @@ and `Engine& engine_`, and implements `engine::EngineHost` (section 3).
 | transmitter `transmitter_`, `micOpen_`, the transmit settings | Engine | the key is applied by `Engine::pumpTransmitter` |
 | audio output gate `audioOpen_`, `devices_`, `deviceIndex_` | Engine | |
 | plugin host `pluginHost_`, runner `pluginRunner_`, `pluginUi_` (the host API), `pluginRepo_`, catalogue/install futures, inventory, presets, mutes, stops, grants, settings | Engine | the plugin WINDOWS, the basemap and track-info attachments stay in the window (host hooks) |
-| patch runtime: `patchGraph_`, `patchPlan_`, `patchRadios_`, `patchCatalogue_`, `patchRunning_`, the main-radio loan | Engine | the canvas UI, its view and the document text stay in the window (OPEN 6) |
+| patch runtime: `patchGraph_`, `patchPlan_`, `patchRadios_`, `patchCatalogue_`, `patchRunning_`, the main-radio loan | Engine | the canvas UI, its view and the document text stay in the window; the page edits a draft of the graph and sends it as `FOXAPP_OP_PATCH_SET_GRAPH` (OPEN 6) |
 | scanner `scanner_` and its form | Engine | the form is edited in place (OPEN 1) |
 | bookmarks `freqMgr_`, `bookmarkPath_`, save debounce | Engine | the list VIEW is the window's (`onBookmarksChanged`) |
 | band plan `bandPlan_`, selection | Engine | drawing it stays in the window |
@@ -223,7 +223,8 @@ these reviewed exceptions:
   currentAbsoluteHz, carriedAirCentre, muteNameList, refreshDiagContext,
   scanSoundCards.
 - **engine fields a control still edits in place** (`kWindowMayWrite`, OPEN 1):
-  25 fields.
+  25 fields at 3a; NONE since engine/stage3b-pre's OPEN 6 graph round -
+  `kWindowMayWriteScoped` and `kWindowMayWriteUnscoped` are both empty.
 
 ## 6. The snapshot's hand-over (review L-a, L-b, L-c, the nit)
 
@@ -653,9 +654,10 @@ comments, the same mention/contract split, only the numbers moved.)
 Things 3a could not move without changing threading or behaviour, left where
 they were with the facts; and what 3b has to settle first.
 
-1. **Engine fields the window still edits in place** (`kWindowMayWrite`, now 1
-   - only `patchGraph_`, in `kWindowMayWriteUnscoped`; `kWindowMayWriteScoped`
-   is EMPTY. See the CLOSED/SCOPED notes below). Each was a form or a status
+1. **Engine fields the window still edits in place** (`kWindowMayWrite`, now
+   NONE - `kWindowMayWriteScoped` and `kWindowMayWriteUnscoped` are both
+   EMPTY; the last entry, `patchGraph_`, closed with OPEN 6's graph half,
+   below. See the CLOSED/SCOPED notes below). Each was a form or a status
    line the engine reads when it acts; in 3b each becomes a command (or a form
    a command carries), or the status line moves to the window.
    **CLOSED, engine/stage3b-pre fields-to-commands round 2 (2026-09-28):**
@@ -1116,6 +1118,163 @@ they were with the facts; and what 3b has to settle first.
    shallow attempt: converting 27 call sites without the same build/test
    verification the rest of this round got would not meet the bar this
    document holds everything else to.
+   **GRAPH HALF CLOSED, engine/stage3b-pre patch-graph round (branch
+   claude/engine-patchgraph, 2026-09-28): Design A, as above, with three
+   additions the design did not foresee.** Design B (the runtime driven
+   from pump) is NOT done and stays open - see the end of this entry.
+
+   *What was done.*
+   - **The op.** `FOXAPP_OP_PATCH_SET_GRAPH` (`core/app_commands.hpp`,
+     0x841B): the whole graph as long text; the Engine replaces
+     `patchGraph_` with it or refuses it (`FOXAPI_BAD_ARGUMENT`, a sentence
+     in the result's message, a diag warning) and keeps the graph it had.
+     Refused WHOLE if the text is not a patch or ANY line of it cannot be
+     honoured (`LoadResult::dropped != 0`) - the config load repairs a
+     damaged document, the command does not repair a draft. The text is
+     `core::patch::serialise`'s own document read by the same
+     `core::patch::parse` (no new format), written and read by
+     `core::patch::graphCommandText`/`graphFromCommandText`
+     (`core/patch_draft.hpp`, new, header-only).
+   - **The draft.** `AppWindow::patchDraft_`: the canvas
+     (`drawPatchCanvas`), the faces, the inspector, the parts bin,
+     `patchAddRadioPart` and `seedPatchIfNeeded` all edit it; nothing in
+     `src/gui` writes `engine_.patchGraph_` any more. `commitPatchDraft()`
+     sends it when it differs from the graph it was copied from - after the
+     parts bin (before the compile, as the part always was), after the
+     canvas and the faces, after the inspector (before
+     `patchPublishSets`), and once a frame from `drawUi` so an edit never
+     waits on a view that stopped drawing. Each is a no-op when nothing
+     changed. `syncPatchDraft()` - at the top of `drawPatchView` and again
+     right after `patchReconcile` - copies the engine's graph whenever it
+     differs from the one the draft was last in step with (compared as
+     `graphCommandText`, so no engine mutation site has to remember to
+     bump anything): a config load, START/ALL OFF's switches, a device or
+     centre the patch runtime set. Never mid-drag, resize or wire
+     (`patchInteracting()`). The draft is never a default: until it has
+     been copied from the engine (`patchDraftInStep_`) nothing is ever
+     committed from it.
+   - **The config's patch and `FOXSDR_PATCH_FILE`** go to the engine
+     through the same op flagged `FOXAPP_PATCH_GRAPH_DOCUMENT`
+     (`AppWindow::loadPatchDocument`), and the draft starts again from what
+     the engine then holds. The document text (`patchText_`) and the view
+     (pan/zoom) stay the window's; the op always carries "view 0 0 1".
+   - **The timing is kept.** `patchReconcile()` still runs before the
+     canvas and `patchPublishSets()` after it, in the same frame, and the
+     canvas's edit is committed between the two - so a node dragged THIS
+     frame is in `patchGraph_` when the sets are built.
+     `test_patch_graph_draft_input` B proves it through a test hook
+     (`Engine::testHooks_.patchPublishing`, called at the top of
+     `patchPublishSets`). The one-frame lag Design B's naive move would
+     cause is now MEASURED, not argued: with `patchPublishSets()` moved
+     above the canvas, every frame of the drag published the previous
+     frame's position (40,40 while the node was at 70,52; 70,52 at
+     100,64; ...).
+
+   *The three additions, each because the round trip would otherwise
+   change something.*
+   - **Ids are kept** (`parse(text, Ids::Keep)`, `Graph::addNodeAs`). A
+     document's ids are renumbered 1..N on load, which is right for a file
+     and wrong here: the running radios (`patchRadios_`), the plan, the
+     canvas's selection and every per-node map on either side are keyed by
+     id, so deleting a middle node would have handed its id to the next
+     one. Same format - only which id the parser gives a node changes. A
+     duplicate or zero id is a dropped line, so refused.
+   - **Two lines the document parser already skips** ("a line from the
+     future", `patch_io.hpp`): `next-id <n>`, so an id is never handed out
+     twice (the Engine also keeps the larger of its own and the draft's),
+     and `centre-chosen <id>`, `Node::centreChosen` - session-only and
+     never SAVED, but the command is not a save, and without it a Radio's
+     typed 0 Hz centre (through a converter) would be forgotten by the
+     next unrelated edit. Neither is written to config.json.
+   - **The engine moves on while a node is dragged** (the take-over names
+     a device and centre, a running radio reports its centre, a recording
+     its rate, START/ALL OFF throw the switches). Sending the draft as it
+     stood would put the page's stale copy of those back - the round-3
+     review's finding 1 in another place. So the commit puts the page's
+     edit ON TOP of the engine's graph as it is now
+     (`core::patch::rebaseDraft`: what differs between the draft and the
+     graph it was copied from wins, field group by field group - position,
+     size, centre with `centreChosen`, and so on - everything else is the
+     engine's; deletes, adds and wires likewise). With nothing raced it is
+     the draft, byte for byte. A NEW DOCUMENT (`patchGraphEpoch_`, bumped
+     by the flag) is never rebased onto: an edit of the old patch is
+     dropped with the drag, and the page shows the new one.
+
+   *One small behaviour change, deliberate.* A node can no longer be
+   resized past `kMaxLoadedNodeSize` (4000 world units) on the canvas
+   (`gui::patch::resizeNodeTo`). The loader has always clamped a saved
+   size there, so such a node already came back smaller after a restart;
+   now that every commit goes through that loader, a larger live size
+   would have been one size on the canvas and another in the engine.
+   Likewise a frequency that is not a finite number (reachable, if at all,
+   only by typing one - not checked whether ImGui's number box lets one
+   through) is now refused - the edit is dropped and the page shows the
+   engine's graph - where the direct write would have stored it.
+
+   *The guard.* `patchGraph_` left `kWindowMayWriteUnscoped`, which is
+   now empty (a `std::vector`, as `kWindowMayWriteScoped` already was).
+   Rule 3's mutating-call pattern gained the graph's own mutators
+   (`addNode`, `addNodeAs`, `removeNode`, `mutableNode`, `connect`,
+   `disconnect`, `reserveIds`) - none is a container call, so without
+   this a direct `engine_.patchGraph_.addNode(...)` would still have
+   passed. Proven with a probe in `drawToolbar`
+   (`(void)engine_.patchGraph_.mutableNode(1);` and
+   `engine_.patchGraph_ = Graph{};`): 2 violations; with the new pattern
+   removed, 1 (only the assignment); probe removed, 0 violations, 107/107.
+
+   *Tests.* `tests/test_patch_graph_draft_input.cpp` (new) drives the
+   real `drawPatchView` through ImGui's input queue and reads the ENGINE's
+   graph: the parts bin, a drag, a wire made and cut, a node deleted (the
+   middle one - the others keep their ids), ALL OFF and a new document
+   followed by the page, a drag during two engine changes, a draft the
+   engine refuses, and a never-copied draft that must not be sent.
+   `tests/test_patch_graph_command.cpp` (new): the document round trip
+   exact (144 800 000.25 Hz and awkward floats, the first node included),
+   the command's round trip (ids, next id, chosen centre), the rebase's
+   cases, `addNodeAs`. `test_apply_command` covers the op (long text,
+   ids, epoch, seven refused texts, graph unchanged after each);
+   `test_patch_view_math` the resize ceiling. Every one was broken and
+   seen red before being restored; mutants run: no command applied, no
+   cut on Delete, publish before the canvas, no in-view commits, no
+   rebase, re-seed instead of rebase, no re-seed, dropped lines accepted,
+   float-precision frequencies, six-digit positions, ids remapped, rebase
+   ignoring the engine, duplicate ids, no next-id, no chosen centre, no
+   resize ceiling. Two did NOT fail on their own, and why is worth
+   stating: (1) removing the mid-drag gate on `syncPatchDraft` - every
+   sync runs before the canvas, when the draft holds no uncommitted edit,
+   so a re-seed there copies an engine graph that already has the dragged
+   position; the gate is kept as the rule, but it is defence in depth
+   today; (2) removing the `patchDraftInStep_` guard on the commit - a
+   never-copied draft is rebased against an empty base, which sends the
+   engine's own graph back unchanged. With the rebase ALSO removed (the
+   round-3 class of bug: a default draft sent as it is) scenario I fails.
+
+   *Still open.*
+   - **Design B, unchanged**: `patchReconcile`/`patchPublishSets`, the
+     compile (`engine_.patchPlan_ = compile(...)`), `rebuildPatchCatalogue`
+     and `patchApplyRunning` are still called from `drawPatchView`, and the
+     "page closed stops everything" sequence is still `drawPatchPage`'s -
+     all `kLineAllowed`. The patch still runs only while the page draws.
+     Moving `patchPublishSets` into a pump phase needs its own answer to
+     the lag measured above (a publish after the pump's own graph change,
+     or accepting the frame).
+   - **The window still READS `engine_.patchGraph_`** as a friend (the
+     rail chip, the compile, the config save, the draft's own sync) - OPEN
+     item 3's general "reads engine members directly", not a write.
+   - **The guard sees writes, not mutable references**: a
+     `seedDefaultPatch(engine_.patchGraph_, ...)` or `drawPatchCanvas(
+     engine_.patchGraph_, ...)` - a free function handed the engine's graph
+     by non-const reference - would not be flagged by any pattern; review
+     and `test_patch_graph_draft_input` catch it today, the guard would not.
+   - **No other sender exists yet.** Nothing but the window sends
+     `FOXAPP_OP_PATCH_SET_GRAPH` (no transport carries app ops). A future
+     API sender replacing the graph mid-drag without the document flag
+     would be rebased onto field by field, id for id - correct for an edit
+     of the same graph, not for an unrelated one; such a sender should set
+     `FOXAPP_PATCH_GRAPH_DOCUMENT`.
+   - **Not run on Windows**, and the canvas has not been driven by a
+     person on a desktop: the input test and the full Linux suite (Xvfb)
+     are the evidence.
 7. **The TX dead-man's handle is tied to the frame loop** (core/transmitter.hpp:
    "A FROZEN WINDOW CANNOT LEAVE IT KEYED" - the TX thread unkeys if
    `tick()` stops for `kKeyAliveWait` = 1000 ms). In 3a `tick()` runs in

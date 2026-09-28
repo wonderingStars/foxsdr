@@ -1914,6 +1914,41 @@ private:
     // AppConfig::mainView and currentConfig writes it back.
     bool patchOpen_ = true;
     cascade::gui::patch::Interaction patchUi_;
+    // THE PAGE'S DRAFT OF THE GRAPH (engine/stage3b-pre, docs/engine-stage3.md
+    // OPEN 6, Design A). The graph is the Engine's (patchGraph_); the canvas,
+    // the faces and the inspector draw from and edit this copy, and
+    // commitPatchDraft() hands the whole of it to the Engine as one
+    // FOXAPP_OP_PATCH_SET_GRAPH - after the parts bin, after the canvas and
+    // faces, and after the inspector, so every edit reaches the engine in the
+    // frame it was made, before patchPublishSets builds from it.
+    //
+    // THE THREE RULES the round-3 review's scanner findings make for any
+    // draft (docs/review-harness/engine-round3-review.md):
+    //   - it FOLLOWS THE ENGINE. syncPatchDraft() copies the engine's graph
+    //     whenever it differs from patchDraftBaseText_ - the graph this draft
+    //     was last in step with - so a config load, START/ALL OFF or a centre
+    //     the running radio reported shows at once; never mid-drag, resize or
+    //     wire (patchInteracting()), when the drag's own node would jump;
+    //   - an edit made while the engine moved on is put ON TOP of the
+    //     engine's graph (core::patch::rebaseDraft), never the stale copy
+    //     sent back over it;
+    //   - it is NEVER A DEFAULT: until it has been copied from the engine
+    //     (patchDraftInStep_) nothing is ever committed from it.
+    // drawUi commits once a frame as well, so an edit is never left behind
+    // by a view that stopped drawing.
+    cascade::core::patch::Graph patchDraft_;
+    cascade::core::patch::Graph patchDraftBase_;
+    std::string patchDraftBaseText_;
+    std::uint64_t patchDraftEpoch_ = 0;
+    bool patchDraftInStep_ = false;
+    bool patchInteracting() const;
+    void syncPatchDraft();
+    void adoptPatchGraph();
+    void commitPatchDraft();
+    // A NEW DOCUMENT for the engine (the config's patch, a patch file): sent
+    // flagged FOXAPP_PATCH_GRAPH_DOCUMENT, and the draft starts again from
+    // what the engine then holds.
+    bool loadPatchDocument(const cascade::core::patch::Graph& g);
     bool patchSeeded_ = false;
     bool patchOpenedByEnv_ = false;
     bool patchStartedByEnv_ = false;

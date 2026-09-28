@@ -29,6 +29,7 @@
 #include <string>
 
 #include "core/patch_graph.hpp"
+#include "core/patch_io.hpp"
 
 namespace cascade::gui::patch {
 
@@ -169,10 +170,16 @@ inline Rect faceRect(const Node& n) {
 // The size a node takes when its grip is dragged to `corner` (world units).
 // Held to the same floors nodeSize() applies, and written back into the node
 // as the size it now IS, so the saved patch and the drawn one never disagree.
+// ...and to the same CEILING the loader holds a saved size to
+// (kMaxLoadedNodeSize): the engine's copy of the graph is read by that loader
+// every time the page commits it (docs/engine-stage3.md OPEN 6), so a node
+// dragged larger would be one size here and another there.
 inline void resizeNodeTo(Node& n, Vec2 corner) {
     const float ports = nodeHeight(n.inputs.size(), n.outputs.size());
-    n.w = std::max(corner.x - n.x, cascade::core::patch::kMinNodeW);
-    n.h = std::max({corner.y - n.y, cascade::core::patch::kMinNodeH, ports});
+    n.w = std::min(std::max(corner.x - n.x, cascade::core::patch::kMinNodeW),
+                   cascade::core::patch::kMaxLoadedNodeSize);
+    n.h = std::min(std::max({corner.y - n.y, cascade::core::patch::kMinNodeH, ports}),
+                   cascade::core::patch::kMaxLoadedNodeSize);
 }
 
 // --- the view -----------------------------------------------------------------

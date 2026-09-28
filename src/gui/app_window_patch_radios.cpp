@@ -100,7 +100,7 @@ void AppWindow::drawPatchCentreNote(const pc::Node& n) {
 
 std::string AppWindow::patchDefaultDeviceKey() const {
     const auto taken = [this](const std::string& key) {
-        for (const pc::Node& n : engine_.patchGraph_.nodes()) {
+        for (const pc::Node& n : patchDraft_.nodes()) {
             if (n.kind == pc::NodeKind::Radio && pc::sameDevice(n.device, key)) { return true; }
         }
         return false;
@@ -137,9 +137,13 @@ pc::NodeId AppWindow::patchAddRadioPart(const std::string& label, pc::PortType f
     // for exactly this reason; applyCommand is its equivalent once the
     // native walk moved behind the command path.
     engine_.applyCommand(cascade::core::cmd::make(FOXAPP_OP_SCAN_NATIVE_ONLY));
+    // On the page's draft, and to the engine at once - the same "applied at
+    // once" as the scan above (docs/engine-stage3.md OPEN 6).
+    syncPatchDraft();
     const std::string dev = patchDefaultDeviceKey();
-    const pc::NodeId made = engine_.patchGraph_.addNode(pc::NodeKind::Radio, label, feed, x, y);
-    if (pc::Node* n = engine_.patchGraph_.mutableNode(made)) { n->device = dev; }
+    const pc::NodeId made = patchDraft_.addNode(pc::NodeKind::Radio, label, feed, x, y);
+    if (pc::Node* n = patchDraft_.mutableNode(made)) { n->device = dev; }
+    commitPatchDraft();
     return made;
 }
 
@@ -186,7 +190,7 @@ void AppWindow::drawPatchTransport() {
 
     // What is running, in words.
     std::size_t radios = 0, on = 0;
-    for (const pc::Node& n : engine_.patchGraph_.nodes()) {
+    for (const pc::Node& n : patchDraft_.nodes()) {
         if (n.kind != pc::NodeKind::Radio) { continue; }
         ++radios;
         if (n.on) { ++on; }
@@ -256,7 +260,7 @@ void AppWindow::patchCollectMapTargets(pc::NodeId map) {
     // which already applies the host's staleness rule - the same list the map
     // pages draw, so a patch map and a map page never disagree about what is
     // there.
-    const std::vector<std::string> sources = pc::mapSources(engine_.patchGraph_, map, engine_.patchCatalogue_);
+    const std::vector<std::string> sources = pc::mapSources(patchDraft_, map, engine_.patchCatalogue_);
     if (sources.empty()) { return; }
     const auto wanted = [&sources](const std::string& plugin) {
         return std::find(sources.begin(), sources.end(), plugin) != sources.end();
@@ -274,12 +278,12 @@ void AppWindow::drawPatchMapInspector(pc::Node& n) {
     const auto amber = cascade::gui::theme::vec(cascade::gui::theme::kAmber);
     ImGui::Spacing();
     std::size_t wired = 0;
-    for (const pc::Wire& w : engine_.patchGraph_.wires()) {
+    for (const pc::Wire& w : patchDraft_.wires()) {
         if (w.to == n.id) { ++wired; }
     }
     ImGui::Text(tr("%zu of %zu inputs wired"), wired, pc::kMapInputs);
     patchCollectMapTargets(n.id);
-    for (const std::string& src : pc::mapSources(engine_.patchGraph_, n.id, engine_.patchCatalogue_)) {
+    for (const std::string& src : pc::mapSources(patchDraft_, n.id, engine_.patchCatalogue_)) {
         std::size_t count = 0;
         for (const cascade::core::HostTrack& t : patchMapTracks_) {
             if (t.plugin == src) { ++count; }
@@ -330,8 +334,8 @@ void AppWindow::drawPatchSquelch(pc::Node& n, float width) {
         }
     }
     // WHERE TO SET IT: the level the gate is judging, and whether it is open.
-    const pc::NodeId chan = demodChannel(engine_.patchGraph_, n.id);
-    const auto r = engine_.patchRadios_.find(pc::radioOf(engine_.patchGraph_, chan));
+    const pc::NodeId chan = demodChannel(patchDraft_, n.id);
+    const auto r = engine_.patchRadios_.find(pc::radioOf(patchDraft_, chan));
     float level = 0.0f;
     bool open = false;
     if (chan != pc::kNoNode && r != engine_.patchRadios_.end() &&
@@ -387,7 +391,7 @@ void AppWindow::drawPatchRadioInspector(pc::Node& n) {
             // shown, greyed, with who has it - not hidden, so the user can see
             // why it is not offered.
             const pc::Node* holder = nullptr;
-            for (const pc::Node& other : engine_.patchGraph_.nodes()) {
+            for (const pc::Node& other : patchDraft_.nodes()) {
                 if (other.id != n.id && other.kind == pc::NodeKind::Radio &&
                     pc::sameDevice(other.device, c.key)) {
                     holder = &other;

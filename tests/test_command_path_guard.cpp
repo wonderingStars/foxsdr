@@ -47,8 +47,11 @@
 //        (kWindowMayWriteScoped, each paired with the ONE member allowed to
 //        write it - a write from any other member is rule 3's violation
 //        exactly as if the field were not listed at all; kWindowMayWriteUnscoped
-//        for the one field, patchGraph_, not yet scoped), each an OPEN item
-//        for stage 3b in docs/engine-stage3.md;
+//        for a field written from many members), each an OPEN item for stage
+//        3b in docs/engine-stage3.md. BOTH LISTS ARE EMPTY since OPEN 6's
+//        graph half closed: the last entry, patchGraph_, is now written only
+//        through FOXAPP_OP_PATCH_SET_GRAPH. A mutating call includes the
+//        patch graph's own (addNode, mutableNode, removeNode, connect ...);
 //     4. no engine object passed as an argument (a free helper taking
 //        Pipeline& would otherwise change state on a control's behalf).
 //   5. window machinery contains no ImGui input (Button, Checkbox, Slider,
@@ -282,19 +285,19 @@ const std::vector<ScopedWrite> kWindowMayWriteScoped = {
     // together - one user decision, not two independent clears).
     //
     // EMPTY NOW - every field that was ever on this list has a command or a
-    // reviewed direct call. Only patchGraph_ remains, below, still unscoped
-    // (OPEN item 6). A std::vector, not a C array, so an empty list compiles
+    // reviewed direct call; so is kWindowMayWriteUnscoped below (OPEN item
+    // 6's graph half closed). A std::vector, not a C array, so an empty list compiles
     // (an empty-initialised array's bound cannot be deduced) - the moment
     // this is non-empty again, `= {...}` list-initialises it exactly the
     // same way.
 };
-// UNSCOPED: written from many controls across the patch canvas and inspector
-// (drawPatchView, drawPatchCanvas's caller, drawPatchRadioInspector and
-// others), all part of OPEN item 6's still-open "patch runtime tied to the
-// page" design - scoping it to "any of about a dozen members" would be the
-// old flat list with extra steps, so it stays flat until 6 is settled.
-const char* const kWindowMayWriteUnscoped[] = {
-    "patchGraph_",  // the patch canvas edits the document the patch runtime runs (stage 1 OPEN 10)
+// UNSCOPED: a field written from many controls, not paired with one owner.
+// EMPTY NOW. Its last entry was patchGraph_, written from a dozen-odd members
+// of the patch canvas, faces and inspector until OPEN item 6's graph half
+// closed (engine/stage3b-pre, Design A): the page edits a draft of its own
+// (AppWindow::patchDraft_) and the Engine takes the whole graph through
+// FOXAPP_OP_PATCH_SET_GRAPH. A std::vector for the same reason as above.
+const std::vector<const char*> kWindowMayWriteUnscoped = {
 };
 
 struct LineAllow {
@@ -402,6 +405,13 @@ const char* const kImGuiInput[] = {
 
 template <std::size_t N>
 bool inList(const std::string& s, const char* const (&list)[N]) {
+    for (const char* e : list) {
+        if (s == e) { return true; }
+    }
+    return false;
+}
+
+bool inList(const std::string& s, const std::vector<const char*>& list) {
     for (const char* e : list) {
         if (s == e) { return true; }
     }
@@ -564,6 +574,12 @@ std::vector<FieldPatterns> fieldPatterns(const std::vector<std::string>& names) 
         p.writes.emplace_back(pre + f +
                               "\\s*(\\.|->)\\s*(assign|append|clear|push_back|emplace_back|emplace|"
                               "erase|insert|swap|resize|pop_back|replace|reset)\\s*\\(");
+        // The patch graph's own mutators (core::patch::Graph): patchGraph_
+        // left kWindowMayWriteUnscoped with OPEN 6, and none of these is a
+        // container call the line above would see.
+        p.writes.emplace_back(pre + f +
+                              "\\s*(\\.|->)\\s*(addNode|addNodeAs|removeNode|mutableNode|connect|"
+                              "disconnect|reserveIds)\\s*\\(");
         out.push_back(std::move(p));
     }
     return out;

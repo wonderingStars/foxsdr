@@ -6,6 +6,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "engine/engine.hpp"
 
+#include "core/patch_draft.hpp"
 #include "core/patch_io.hpp"
 #include "core/patch_levels.hpp"
 #include "core/patch_plan.hpp"
@@ -5255,6 +5256,27 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             }
             scanNative();
             return res;
+        case FOXAPP_OP_PATCH_SET_GRAPH: {
+            // THE PATCH PAGE'S EDIT, the whole graph at once (engine/stage3b-pre,
+            // docs/engine-stage3.md OPEN 6, Design A). Read with the same
+            // parse the config load trusts, ids kept; refused whole if any of
+            // it cannot be honoured, so the graph the patch runs is always the
+            // one the page drew or the one it had - never a repaired half.
+            cascade::core::patch::Graph g;
+            std::string why;
+            if (!cascade::core::patch::graphFromCommandText(text, g, why)) {
+                cascade::core::diagWarnf("patch: %s", why.c_str());
+                return refuse(FOXAPI_BAD_ARGUMENT, why.c_str());
+            }
+            // Ids are never handed out twice, across replacements too.
+            g.reserveIds(patchGraph_.nextId());
+            if ((c.ival[0] & FOXAPP_PATCH_GRAPH_DOCUMENT) != 0) { ++patchGraphEpoch_; }
+            // No onPatchGraphChanged(): that tells the window the ENGINE
+            // changed its graph. This graph came from the window, which keeps
+            // its own document text for it (an edit marks it, a load sets it).
+            patchGraph_ = std::move(g);
+            return res;
+        }
         case FOXAPP_OP_PATCH_LOOK_FOR_RADIOS:
             // "Look for radios" pressed (0.99.40, engine/stage3b-pre
             // fields-to-commands round 2): unconditional, unlike the combo-open

@@ -598,6 +598,7 @@ void Engine::patchReconcile() {
 }
 
 void Engine::patchPublishSets() {
+    if (testHooks_.patchPublishing != nullptr) { testHooks_.patchPublishing(patchGraph_); }
     // --- each speaker's output --------------------------------------------------
     std::set<pc::NodeId> live;
     for (const pc::AudioSinkPlan& sp : patchPlan_.sinks) {

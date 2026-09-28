@@ -140,6 +140,19 @@
 // silently. An extension op is never sent across a transport (see the top of
 // this file), so this one is reachable only from the desktop's checkbox.
 #define FOXAPP_OP_TELEMETRY_CONSENT      0x841Au /* ival[0]: 0/1. On mints an install id only if reporting was off; off forgets it */
+// THE PATCH GRAPH AS ONE COMMAND (engine/stage3b-pre, docs/engine-stage3.md
+// OPEN 6, Design A). The Patch page edits a draft and sends the whole of it;
+// the Engine replaces patchGraph_ with it, or refuses it and keeps the graph
+// it had. The text is core::patch::graphCommandText's (core/patch_draft.hpp):
+// the config's own patch document, ids kept, plus next-id and centre-chosen
+// lines the document parser already skips. Always long text in practice.
+#define FOXAPP_OP_PATCH_SET_GRAPH        0x841Bu /* text (long text): the graph; ival[0]: FOXAPP_PATCH_GRAPH_* flags */
+// FOXAPP_OP_PATCH_SET_GRAPH's ival[0]: set when the graph is a NEW DOCUMENT
+// (the config's patch, a patch file) rather than an edit of the graph the
+// engine already has. The Engine counts these (Engine::patchGraphEpoch_), so a
+// window part-way through an edit of the old document knows not to put that
+// edit on top of the new one.
+#define FOXAPP_PATCH_GRAPH_DOCUMENT      1
 
 #define FOXAPP_OP_FIRST 0x8000u
 #define FOXAPP_OP_LAST  0x8FFFu

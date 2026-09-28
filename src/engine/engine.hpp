@@ -145,6 +145,10 @@ private:
         // device-scan commands are applied in tests without a vendor probe
         // ever touching the desk's radios (it opens and resets what it finds).
         std::vector<cascade::source::SoapyDeviceInfo> (*soapyScan)();
+        // Called at the top of patchPublishSets when set, with the graph the
+        // sets are about to be built from: tests/test_patch_graph_draft_input
+        // checks that a node dragged THIS frame is already there.
+        void (*patchPublishing)(const cascade::core::patch::Graph& graph);
     };
     // Set by the test before any AppWindow exists and never changed while one
     // does, so the worker threads that read makeDevice race with nothing.
@@ -1493,7 +1497,17 @@ private:
     // does happen is visible.
     cascade::core::GpsReader gpsReader_;
     std::string gpsRefusal_;
+    // THE PATCH GRAPH the patch runtime runs. Replaced whole by
+    // FOXAPP_OP_PATCH_SET_GRAPH (the Patch page's draft, a loaded document)
+    // and edited in place only by the Engine's own patch runtime (a device
+    // and centre named at the take-over, a centre or rate learnt from a
+    // radio, START's and ALL OFF's switches). The window never writes it
+    // (docs/engine-stage3.md OPEN 6).
     cascade::core::patch::Graph patchGraph_;
+    // How many times patchGraph_ has been replaced by a NEW DOCUMENT
+    // (FOXAPP_PATCH_GRAPH_DOCUMENT) - read by the window, whose draft edit of
+    // the old document must not be put on top of the new one.
+    std::uint64_t patchGraphEpoch_ = 0;
     // THE PATCH'S OWN TRANSPORT (0.99.18). Opening the page no longer starts
     // anything: START on the page opens the radios that are switched on and
     // takes the receiver's radio; STOP or ALL OFF closes them and gives it
