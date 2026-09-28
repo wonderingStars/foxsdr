@@ -56,7 +56,7 @@
 
 #include "engine/audio_open.hpp"
 #include "engine/bias_tee.hpp"
-#include "gui/airspy_panel.hpp"
+#include "engine/airspy_panel.hpp"
 #include "engine/plugin_store_reasons.hpp"
 #include "engine/receiver_tables.hpp"
 #include "engine/source_fallback.hpp"

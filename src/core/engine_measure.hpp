@@ -157,6 +157,7 @@ private:
     double phaseAt_ = 0.0;
     // run
     double cpu0_ = 0.0, cpu1_ = 0.0, runWindow_ = 0.0;
+    double cyc0_ = -1.0, cyc1_ = -1.0;  // processCycles(); -1 = none
     std::uint64_t drop0_ = 0, drop1_ = 0, audio0_ = 0, audio1_ = 0;
     std::uint64_t workingSet_ = 0, peakWorkingSet_ = 0;
     // THE DECODERS THE FIGURE WAS TAKEN BESIDE. Section 3 measures frame time

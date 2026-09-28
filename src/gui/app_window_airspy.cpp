@@ -4,7 +4,7 @@
 // Airspy application offers them ("Gain: Sensitive/Linear/Free" and
 // "Decimation: none, 2, 4, 8, 16, 32 and 64", SDRsharp - The Guide v2.1).
 //
-// The rules are gui/airspy_panel.hpp's and the driver's; this file only
+// The rules are engine/airspy_panel.hpp's and the driver's; this file only
 // DRAWS. The choosing (chooseAirspyDecimation/GainMode/Agc) and the state it
 // reads (deviceGainNames_ etc.) moved to the Engine in the engine extraction
 // merge (2026-09-28, docs/engine-merge-0.99.42.md) - they are receiver state,
@@ -25,7 +25,7 @@
 
 #include "core/i18n.hpp"
 #include "core/utf8_text.hpp"
-#include "gui/airspy_panel.hpp"
+#include "engine/airspy_panel.hpp"
 #include "gui/text_fit.hpp"
 #include "gui/tune_control.hpp"
 

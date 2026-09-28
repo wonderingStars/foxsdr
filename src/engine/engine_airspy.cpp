@@ -11,7 +11,7 @@
 
 #include <cmath>
 
-#include "gui/airspy_panel.hpp"
+#include "engine/airspy_panel.hpp"
 
 namespace cascade::engine {
 

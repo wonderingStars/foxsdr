@@ -15,7 +15,11 @@
                the mean and the nearest-rank 99th percentile.
       cpu      FOXSDR_MEASURE=run at a display's frame rate, interface idle:
                process CPU over the window after the warm-up, as % of one
-               core, and the working set at the end. The rate is imposed by
+               core, and the working set at the end. The CPU is the process's
+               CYCLE count (QueryProcessCycleTime) over the session's measured
+               cycle rate: GetProcessTimes under-read by up to 5x on the
+               development desktop (Hyper-V), and is kept only as
+               cpuPctTimes, never gated. The rate is imposed by
                the clock (FOXSDR_FRAME_CAP_HZ, -FrameCapHz 60) because on the
                development desktop the swap interval of 1 is not honoured
                (~1300 frames a second either way). latency, rates, cpubusy
@@ -74,8 +78,26 @@
     ladder's top; a readable result.json. A gate needs ALL of
     both builds' runs of its measure valid; otherwise its verdict is INVALID.
     A session that never finished, whose end environment differs from its
-    start, whose format is older, or in which other work or background load
-    was seen is REFUSED as a whole.
+    start, whose format is older, in which other work or background load
+    was seen, that recorded no cycle rate, whose two builds are one
+    executable, or that ran with background limits other than the tool's is
+    REFUSED as a whole.
+    Round 3 of the review added: CPU from cycles (above); decoders fed at
+    least 0.99 of the audio and every staged decoder reporting running; on
+    every rung of the rate ladder the audio's share of 48 kHz x the window
+    plus the dropped share of the input equal to one within 0.005; the two
+    builds' tone detectors on the same tone (5 Hz) and steady level (a factor
+    of two); a launch record consistent with itself; and RETAKES: a run
+    refused for other work or background load is taken again in its own slot
+    (-RetakeRefusedRuns, 3), recorded in session.json, so one Defender scan
+    does not throw away a 95-minute session.
+    WHICH BUILDS: an A/B needs -BaselineCommit and -CandidateCommit; each
+    staged build must report its commit (a prefix of 7 or more; "-dirty" only
+    when named so); the two executables must differ.
+    KNOWN LIMITS: every check reads files the application and this script
+    wrote. A result or frame log forged wholesale to be self-consistent (the
+    review's d5, a frame log of identical 0.700 ms intervals) is not detected;
+    the files are evidence of a run, not proof against their own editor.
 
     Runs are INTERLEAVED - baseline, candidate, baseline, candidate - measure
     by measure. A build's value is the median of its runs. The gate rules are
@@ -197,20 +219,34 @@ param(
     # launch in it (not per launch): exhausted, the session stops with exit 3
     # naming what blocked it.
     [Parameter(ParameterSetName = 'Measure')] [int]$WaitForOthersMinutes = 180,
-    # BACKGROUND LOAD, whatever its name: CPU used by every process except the
-    # measured cascade.exe, this script, and the two the app itself drives
-    # (dwm, audiodg), from the kernel's own per-process totals at the start
-    # and end of each run. Measured on this desktop 2026-09-26 with only the
-    # owner's resident apps: the largest single process was the Claude app at
-    # 0.027 cores, Chrome 0.005, the VPN 0.001; the Radar Sweep B200 capture
-    # that contaminated the 6342655 baseline added rsw_logger at 0.059 cores
-    # (the review measured 5-14 % of a core) and a 0.27-core python beside it.
-    # So: more than 0.05 cores in any one foreign process (twice the largest
-    # resident) or more than 0.25 cores in all of them together (a quarter of
-    # a core - on the i9-14900K the boost clock falls as more cores wake) and
-    # the run is refused as "background-load".
-    [Parameter(ParameterSetName = 'Measure')] [double]$MaxBackgroundCores = 0.25,
-    [Parameter(ParameterSetName = 'Measure')] [double]$MaxBackgroundProcessCores = 0.05,
+    # BACKGROUND LOAD, whatever its name: the CYCLES used by every process
+    # except the measured cascade.exe, this script, their children and the two
+    # the app itself drives (dwm, audiodg), from the kernel's per-process
+    # counts at the start and end of each run, in cores at the session's
+    # measured cycle rate. IN CYCLES since round 3: the kernel's time
+    # accounting charged a 5 s pure spin 0.98-3.09 s on this desktop.
+    # CALIBRATION (2026-09-26 04:00-04:15, 15 min, 5 s samples, 166 windows of
+    # 70 s; bg_analyse_cycles.out): per resident process, cycles read 1.6-12.6x
+    # the time-based figure, 2.58x over all processes. The round-2 limits
+    # (0.25 cores total, 0.05 in one process, set from time-based readings of
+    # the owner's resident apps) scale to 0.65 / 0.13; the idle Claude app
+    # alone reads 0.136 cores in cycles, so the one-process limit is 0.15 and
+    # the total 0.75 (2.3 % of the 32 logical CPUs). NOT a quiet-desktop
+    # calibration: the capture ran beside other agents' builds, and Defender
+    # scanning their output (MsMpEng, mean 0.28 cores, worst window 0.84) would
+    # have refused 62 % of those windows even with the agents' own processes
+    # set aside. The acceptance run on a quiet desktop is what settles them;
+    # -RetakeRefusedRuns absorbs a transient spike, and a session run with
+    # other limits is REFUSED by -Summarize and -CompareFiles (the gate is
+    # only as good as the quiet it is measured in).
+    [Parameter(ParameterSetName = 'Measure')] [double]$MaxBackgroundCores = 0.75,
+    [Parameter(ParameterSetName = 'Measure')] [double]$MaxBackgroundProcessCores = 0.15,
+    # A run refused for other work or background load is taken again IN ITS
+    # OWN SLOT (the interleaving A B A B is kept), after the quiet wait, up to
+    # this many times; the session is refused only if a slot runs out of
+    # retakes. Every retake is recorded in session.json ("retakes") with the
+    # reason, and the refused attempt's directory is kept beside the slot.
+    [Parameter(ParameterSetName = 'Measure')] [int]$RetakeRefusedRuns = 3,
     [Parameter(ParameterSetName = 'Summarize', Mandatory = $true)] [string]$Summarize,
     [Parameter(ParameterSetName = 'CompareFiles', Mandatory = $true)] [string]$CompareBaseline,
     [Parameter(ParameterSetName = 'CompareFiles', Mandatory = $true)] [string]$CompareCandidate,
@@ -235,7 +271,10 @@ trap {
 
 # The limits a run is judged against, recorded in the session so a later
 # -Summarize judges it by the same ones.
-$script:Limits = @{ maxBackgroundCores = 0.25; maxBackgroundProcessCores = 0.05 }
+# The limits the tool ships with (see the parameters' note for the
+# calibration). A session run with any other is REFUSED when compared.
+$DefaultLimits = @{ maxBackgroundCores = 0.75; maxBackgroundProcessCores = 0.15 }
+$script:Limits = @{ maxBackgroundCores = $DefaultLimits.maxBackgroundCores; maxBackgroundProcessCores = $DefaultLimits.maxBackgroundProcessCores }
 if ($PSCmdlet.ParameterSetName -eq 'Measure') {
     $script:Limits.maxBackgroundCores = $MaxBackgroundCores
     $script:Limits.maxBackgroundProcessCores = $MaxBackgroundProcessCores
@@ -256,7 +295,7 @@ $AudioRateHz = 48000.0
 # The arithmetic, compiled: 100k-line frame logs are too slow to parse in 5.1
 # script, and one implementation is what the self-test pins.
 # ---------------------------------------------------------------------------
-if (-not ('FoxMeasure3' -as [type])) {
+if (-not ('FoxMeasure4' -as [type])) {
     Add-Type -TypeDefinition @'
 using System;
 using System.Collections.Generic;
@@ -265,7 +304,7 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
 
-public static class FoxMeasure3 {
+public static class FoxMeasure4 {
     // Frame intervals (ms) between consecutive frame starts whose start lies
     // at least warmupS after the FIRST frame's start; the work times (ms) of
     // the same frames beside them.
@@ -350,11 +389,11 @@ public static class FoxMeasure3 {
     // cheap enough to take around every run without being load itself.
     [DllImport("ntdll.dll")] static extern int NtQuerySystemInformation(int cls, IntPtr buf, int len, out int ret);
     public static void ProcSnapshot(out long[] ids, out string[] names, out double[] cpuS, out long[] created,
-                                    out long[] parents) {
+                                    out long[] parents, out double[] cycles) {
         int len = 1 << 20;
         IntPtr buf = IntPtr.Zero;
         List<long> i1 = new List<long>(); List<string> n1 = new List<string>();
-        List<double> c1 = new List<double>(); List<long> t1 = new List<long>(); List<long> p1 = new List<long>();
+        List<double> c1 = new List<double>(); List<long> t1 = new List<long>(); List<long> p1 = new List<long>(); List<double> y1 = new List<double>();
         try {
             while (true) {
                 buf = Marshal.AllocHGlobal(len);
@@ -368,6 +407,7 @@ public static class FoxMeasure3 {
             while (true) {
                 IntPtr p = new IntPtr(buf.ToInt64() + off);
                 int next = Marshal.ReadInt32(p, 0);
+                ulong cyc = (ulong)Marshal.ReadInt64(p, 24);
                 long create = Marshal.ReadInt64(p, 32);
                 long user = Marshal.ReadInt64(p, 40);
                 long kern = Marshal.ReadInt64(p, 48);
@@ -376,14 +416,34 @@ public static class FoxMeasure3 {
                 long pid = Marshal.ReadIntPtr(p, 80).ToInt64();
                 long parent = Marshal.ReadIntPtr(p, 88).ToInt64();
                 string nm = (nbuf == IntPtr.Zero) ? "Idle" : Marshal.PtrToStringUni(nbuf, nlen / 2);
-                i1.Add(pid); n1.Add(nm); c1.Add((user + kern) / 1e7); t1.Add(create); p1.Add(parent);
+                i1.Add(pid); n1.Add(nm); c1.Add((user + kern) / 1e7); t1.Add(create); p1.Add(parent); y1.Add((double)cyc);
                 if (next == 0) break;
                 off += next;
             }
         } finally {
             if (buf != IntPtr.Zero) Marshal.FreeHGlobal(buf);
         }
-        ids = i1.ToArray(); names = n1.ToArray(); cpuS = c1.ToArray(); created = t1.ToArray(); parents = p1.ToArray();
+        ids = i1.ToArray(); names = n1.ToArray(); cpuS = c1.ToArray(); created = t1.ToArray(); parents = p1.ToArray(); cycles = y1.ToArray();
+    }
+
+    // --- the cycle rate: cycles a thread is charged per second of a pure
+    // spin, the best of `tries` spins of `seconds` (a spin that was preempted
+    // reads low, never high) ---
+    [DllImport("kernel32.dll")] static extern IntPtr GetCurrentThread();
+    [DllImport("kernel32.dll")] static extern bool QueryThreadCycleTime(IntPtr h, out ulong cycles);
+    public static double CycleRateHz(double seconds, int tries) {
+        double best = 0;
+        for (int t = 0; t < tries; ++t) {
+            ulong c0, c1;
+            QueryThreadCycleTime(GetCurrentThread(), out c0);
+            System.Diagnostics.Stopwatch sw = System.Diagnostics.Stopwatch.StartNew();
+            long end = (long)(seconds * System.Diagnostics.Stopwatch.Frequency); long x = 0;
+            while (sw.ElapsedTicks < end) { x++; }
+            QueryThreadCycleTime(GetCurrentThread(), out c1);
+            double r = (c1 - c0) / (sw.ElapsedTicks / (double)System.Diagnostics.Stopwatch.Frequency);
+            if (r > best) best = r;
+        }
+        return best;
     }
 
     // --- polite close of a process WE started, by its pid only ---
@@ -405,7 +465,7 @@ public static class FoxMeasure3 {
 '@
 }
 
-function Get-Median([double[]]$v) { return [FoxMeasure3]::Median($v) }
+function Get-Median([double[]]$v) { return [FoxMeasure4]::Median($v) }
 
 # A property of a parsed JSON object or a dictionary, or a default when it is
 # absent (StrictMode makes a missing property an exception, and a missing
@@ -547,10 +607,12 @@ function Get-OtherNames([int]$exceptId, [bool]$askWsl = $true) {
 # A snapshot: pid -> name, CPU seconds so far, creation time; and when it was
 # taken.
 function Get-ProcSnapshot {
-    $ids = $null; $names = $null; $cpuSec = $null; $made = $null; $parents = $null
-    [FoxMeasure3]::ProcSnapshot([ref]$ids, [ref]$names, [ref]$cpuSec, [ref]$made, [ref]$parents)
+    $ids = $null; $names = $null; $cpuSec = $null; $made = $null; $parents = $null; $cyc = $null
+    [FoxMeasure4]::ProcSnapshot([ref]$ids, [ref]$names, [ref]$cpuSec, [ref]$made, [ref]$parents, [ref]$cyc)
     $map = @{}
-    for ($q = 0; $q -lt $ids.Length; ++$q) { $map[[long]$ids[$q]] = @($names[$q], $cpuSec[$q], $made[$q], $parents[$q]) }
+    # name, CPU seconds (the kernel's time accounting - kept for reference),
+    # creation time, parent, CYCLES (what background load is judged by).
+    for ($q = 0; $q -lt $ids.Length; ++$q) { $map[[long]$ids[$q]] = @($names[$q], $cpuSec[$q], $made[$q], $parents[$q], $cyc[$q]) }
     return @{ at = [DateTime]::UtcNow.ToFileTimeUtc(); procs = $map }
 }
 
@@ -561,7 +623,11 @@ function Get-ProcSnapshot {
 # difference; one born in between counts everything it used. Processes that
 # were born and died in between are not seen - compilers are, by name.
 $AppDrivenNames = @('idle', 'dwm.exe', 'audiodg.exe')
-function Measure-Background($snapA, $snapB, [double]$wallS, [long[]]$exceptIds) {
+# IN CYCLES (round 3 of the review): the kernel's time accounting charged a
+# 5 s pure spin only 0.9-3.1 s on this Hyper-V desktop; cycles over the
+# session's measured cycle rate are the CPU a process actually used, in
+# cores (1.0 = one logical CPU busy for the whole window).
+function Measure-Background($snapA, $snapB, [double]$wallS, [long[]]$exceptIds, [double]$rateHz) {
     $per = @{}
     foreach ($id in $snapB.procs.Keys) {
         if ($exceptIds -contains [long]$id -or [long]$id -eq 0) { continue }  # CHECK:bg-except
@@ -571,14 +637,38 @@ function Measure-Background($snapA, $snapB, [double]$wallS, [long[]]$exceptIds) 
         if ($exceptIds -contains [long]$b[3]) { continue }  # CHECK:bg-children
         if ($AppDrivenNames -contains ([string]$b[0]).ToLowerInvariant()) { continue }  # CHECK:bg-app-driven
         $used = 0.0
-        if ($snapA.procs.ContainsKey($id) -and $snapA.procs[$id][2] -eq $b[2]) { $used = [double]$b[1] - [double]$snapA.procs[$id][1] }
-        elseif ([long]$b[2] -ge [long]$snapA.at) { $used = [double]$b[1] }  # CHECK:bg-newborn
-        if ($used -gt 0) { $per["$($b[0]) $id"] = $used / $wallS }
+        if ($snapA.procs.ContainsKey($id) -and $snapA.procs[$id][2] -eq $b[2]) { $used = [double]$b[4] - [double]$snapA.procs[$id][4] }
+        elseif ([long]$b[2] -ge [long]$snapA.at) { $used = [double]$b[4] }  # CHECK:bg-newborn
+        if ($used -gt 0) { $per["$($b[0]) $id"] = $used / $rateHz / $wallS }
     }
     $total = 0.0; $max = 0.0
     foreach ($v in $per.Values) { $total += $v; if ($v -gt $max) { $max = $v } }
     $top = @($per.GetEnumerator() | Sort-Object Value -Descending | Select-Object -First 5 | ForEach-Object { '{0} {1:F3}' -f $_.Key, $_.Value })
     return [ordered]@{ cores = $total; maxProcessCores = $max; top = $top }
+}
+
+# The cycle rate the session converts cycles to cores with: the best of
+# three 1 s pure spins of this script's own thread, measured once and
+# recorded (3.132-3.137 GHz on the development desktop, 2026-09-26, against
+# a nominal 3187 MHz).
+$script:CycleRateHz = 0.0
+# Until the session has measured it on a quiet machine, a PROVISIONAL rate:
+# the registry's nominal clock x 0.983, what the quiet measurements read.
+$script:NominalHz = 0.0
+try { $script:NominalHz = 1e6 * [double](Get-ItemProperty 'HKLM:\HARDWARE\DESCRIPTION\System\CentralProcessor\0').'~MHz' } catch { $script:NominalHz = 0.0 }
+function Get-CycleRate {
+    if ($script:CycleRateHz -gt 0) { return $script:CycleRateHz }
+    if ($script:NominalHz -gt 0) { return 0.983 * $script:NominalHz }
+    $script:CycleRateHz = [FoxMeasure4]::CycleRateHz(1.0, 3)
+    return $script:CycleRateHz
+}
+# A measured rate the session can use: at least 95 % of the nominal clock
+# when the nominal is known (quiet: 98.2-98.8 %). Below it the spin was
+# preempted (measured under load) or the clock is throttled.
+function Test-CycleRate([double]$rateHz, [double]$nominalHz) {
+    if ($rateHz -le 0) { return 'no cycle rate was measured' }
+    if ($nominalHz -gt 0 -and $rateHz -lt 0.95 * $nominalHz) { return ('the cycle rate measured {0:F0} Hz, under 95 % of the nominal {1:F0} Hz: measured under load, or the clock is throttled' -f $rateHz, $nominalHz) }  # CHECK:cycle-rate-low
+    return ''
 }
 
 function Test-BackgroundOver($bg, $lim) {
@@ -593,7 +683,7 @@ function Get-Blocker([int]$exceptId) {
     $a = Get-ProcSnapshot
     Start-Sleep -Seconds 3
     $b = Get-ProcSnapshot
-    $bg = Measure-Background $a $b (([long]$b.at - [long]$a.at) / 1e7) @([long]$PID, [long]$exceptId)
+    $bg = Measure-Background $a $b (([long]$b.at - [long]$a.at) / 1e7) @([long]$PID, [long]$exceptId) (Get-CycleRate)
     if (Test-BackgroundOver $bg $script:Limits) {
         return ('background load {0:F2} cores (limit {1}; one process at most {2}): {3}' -f $bg.cores, $script:Limits.maxBackgroundCores, $script:Limits.maxBackgroundProcessCores, ($bg.top -join ', '))
     }
@@ -725,7 +815,7 @@ function Invoke-Launch {
     $info.otherNamesDuring = @($duringNames | Sort-Object)
     if (-not $done) {
         $how = 'wm_close'
-        [void][FoxMeasure3]::CloseWindowsOf($myId)
+        [void][FoxMeasure4]::CloseWindowsOf($myId)
         if (-not $proc.WaitForExit(30000)) {
             $how = 'killed'
             Stop-Process -Id $myId -Force
@@ -733,7 +823,7 @@ function Invoke-Launch {
         }
     }
     $snapEnd = Get-ProcSnapshot
-    $bg = Measure-Background $snapStart $snapEnd (([long]$snapEnd.at - [long]$snapStart.at) / 1e7) @([long]$PID, [long]$myId)
+    $bg = Measure-Background $snapStart $snapEnd (([long]$snapEnd.at - [long]$snapStart.at) / 1e7) @([long]$PID, [long]$myId) (Get-CycleRate)
     $info.backgroundCores = $bg.cores
     $info.backgroundMaxProcessCores = $bg.maxProcessCores
     $info.backgroundTop = $bg.top
@@ -778,6 +868,13 @@ function Test-Run([string]$Dir, [string]$Measure, $want, $knobs) {
         $bgc = Get-P $launch 'backgroundCores' $null
         $bgm = Get-P $launch 'backgroundMaxProcessCores' $null
         $bgTop = @(Get-P $launch 'backgroundTop' @())
+        # The launch record must agree with itself (review d4): names of other
+        # work with counts of none, or top consumers that add up to more than
+        # the total or exceed the largest, is a record that was edited.
+        $topSum = 0.0; $topMax = 0.0
+        foreach ($tp in $bgTop) { $tv = 0.0; if ([double]::TryParse((([string]$tp) -split ' ')[-1], [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$tv)) { $topSum += $tv; if ($tv -gt $topMax) { $topMax = $tv } } }
+        $inconsistent = ($rec.otherNames.Count -gt 0 -and $rec.others -eq 0) -or ($null -ne $bgc -and $topSum -gt [double]$bgc + 0.002) -or ($null -ne $bgm -and $topMax -gt [double]$bgm + 0.002)
+        if ($inconsistent) { $reasons.Add("launch-inconsistent: other work named ($($rec.otherNames -join ', ')) with counts '$oa'/'$od', or top consumers ($($bgTop -join ', ')) beyond the recorded $bgc / $bgm cores") }  # CHECK:launch-inconsistent
         if ($null -eq $bgc -or $null -eq $bgm) { $reasons.Add('background: the run recorded no background load') }  # CHECK:background-missing
         elseif (Test-BackgroundOver @{ cores = $bgc; maxProcessCores = $bgm } $knobs.limits) {  # CHECK:background-load
             $rec.background = $true
@@ -811,20 +908,35 @@ function Test-Run([string]$Dir, [string]$Measure, $want, $knobs) {
             if ($null -eq $drop -or [double]$drop -ne 0) { $reasons.Add("dropped: the ring dropped '$drop' samples") }  # CHECK:dropped-run
             $active = [int](Get-P $j 'decodersActive' -1)
             if ($active -lt [int]$knobs.expectedDecoders) { $reasons.Add("decoders: $active decoder instances fed, $($knobs.expectedDecoders) staged") }  # CHECK:decoders
+            # FED ALL THE AUDIO, not some (round 3): the runner hands every
+            # audio decoder the whole block, so its count equals the audio
+            # produced - exactly 1.00000 in every real run. A decoder starved
+            # to 1 % of it read as a cheaper build.
             $fed = [double](Get-P $j 'decoderAudioFramesFed' 0) + [double](Get-P $j 'decoderIqFramesFed' 0)
-            if ([int]$knobs.expectedDecoders -gt 0 -and $fed -le 0) { $reasons.Add('decoders-fed: the decoders were handed no samples in the window') }  # CHECK:decoders-fed
+            $audFed = [double](Get-P $j 'audioSamples' 0)
+            if ([int]$knobs.expectedDecoders -gt 0 -and ($fed -le 0 -or $fed -lt 0.99 * $audFed)) { $reasons.Add("decoders-fed: the decoders were handed $fed frames of $audFed audio samples in the window") }  # CHECK:decoders-fed
+            # And every staged decoder says it is running.
+            $decList = @(Get-P $j 'decoders' @())
+            $runningDec = @($decList | Where-Object { (Get-P $_ 'running' $false) -eq $true }).Count
+            if ([int]$knobs.expectedDecoders -gt 0 -and ($runningDec -lt [int]$knobs.expectedDecoders -or $runningDec -ne $decList.Count)) { $reasons.Add("decoders-running: $runningDec of $($decList.Count) decoders report running, $($knobs.expectedDecoders) staged") }  # CHECK:decoders-running
             # The window the figures cover, against the one asked for.
             $expWin = [double]$knobs.runWindowS
             if ($Measure -eq 'soak') { $expWin = [double]$knobs.soakSeconds }
             $win = [double](Get-P $j 'windowS' 0)
             if ($win -le 0 -or [Math]::Abs($win - $expWin) -gt 0.1 * $expWin) { $reasons.Add("window: the measured window was $win s, $expWin s asked") }  # CHECK:window
-            # CPU: present, above zero (a failed read used to be 0.0), and no
-            # more than the machine has.
-            $cpuSec = Get-P $j 'cpuS' $null
+            # CPU, FROM CYCLES (round 3): the process's cycle count over the
+            # session's measured cycle rate. GetProcessTimes under-read by up
+            # to 5x on this desktop (a 5 s spin charged 0.91-1.31 s; a 60 Hz
+            # load 0.30-0.53 s of a true 4.68 s, 79 % spread); its figure is
+            # kept beside as cpuPctTimes, never gated. Present, above zero,
+            # and no more than the machine has.
+            $cyc = Get-P $j 'cpuCycles' $null
             $pct = -1.0
-            if ($null -ne $cpuSec -and $win -gt 0) { $pct = 100.0 * [double]$cpuSec / $win }
-            if ($pct -le 0 -or $pct -gt 100.0 * [double]$knobs.logicalCpus) { $reasons.Add("cpu: '$cpuSec' CPU seconds over $win s is not a reading") }  # CHECK:cpu-implausible
+            if ($null -ne $cyc -and $win -gt 0 -and [double]$knobs.cycleRateHz -gt 0) { $pct = 100.0 * [double]$cyc / [double]$knobs.cycleRateHz / $win }
+            if ($pct -le 0 -or $pct -gt 100.0 * [double]$knobs.logicalCpus) { $reasons.Add("cpu: '$cyc' cycles over $win s at $($knobs.cycleRateHz) Hz is not a reading") }  # CHECK:cpu-implausible
             if ($pct -gt 0) { $fig.cpuPct = $pct }
+            $cpuSec = Get-P $j 'cpuS' $null
+            if ($null -ne $cpuSec -and $win -gt 0) { $fig.cpuPctTimes = 100.0 * [double]$cpuSec / $win }
             # Working set: present and between 16 MB and 16 GB.
             $wsb = Get-P $j 'workingSetBytes' $null
             if ($null -eq $wsb -or [double]$wsb -lt 16MB -or [double]$wsb -gt 16GB) { $reasons.Add("working-set: '$wsb' bytes is not a reading") }  # CHECK:working-set
@@ -839,19 +951,19 @@ function Test-Run([string]$Dir, [string]$Measure, $want, $knobs) {
                 if (-not (Test-Path $logPath)) { $reasons.Add('frame-log: no frames.log') }  # CHECK:frame-log
                 if (Test-Path $logPath) {
                     $w = $null; $n = 0L; $ov = 0L; $hdr = 0L; $bad = 0L
-                    $iv = [FoxMeasure3]::FrameIntervalsMs($logPath, [double]$knobs.warmupSeconds, [ref]$w, [ref]$n, [ref]$ov, [ref]$hdr, [ref]$bad)
+                    $iv = [FoxMeasure4]::FrameIntervalsMs($logPath, [double]$knobs.warmupSeconds, [ref]$w, [ref]$n, [ref]$ov, [ref]$hdr, [ref]$bad)
                     if ($ov -gt 0 -or $iv.Length -eq 0) { $reasons.Add("frame-log: overflowed by $ov frames or empty ($($iv.Length) intervals)") }  # CHECK:frame-log-overflow
                     if ($hdr -ne $n) { $reasons.Add("frame-log-count: the header says $hdr frames, $n were read - the file was cut") }  # CHECK:frame-log-count
                     if ($bad -gt 0) { $reasons.Add("frame-log-malformed: $bad lines are not frame records") }  # CHECK:frame-log-malformed
                     if ($iv.Length -lt $MinIntervals) { $reasons.Add("frame-log-short: $($iv.Length) intervals after the warm-up, $MinIntervals needed for a p99") }  # CHECK:frame-log-short
                     if ($iv.Length -gt 0) {
-                        $fig.frameMeanMs = [FoxMeasure3]::Mean($iv)
-                        $fig.frameP99Ms = [FoxMeasure3]::NearestRank($iv, 99)
-                        $fig.frameMaxMs = [FoxMeasure3]::Max($iv)
-                        $fig.workMeanMs = [FoxMeasure3]::Mean($w)
-                        $fig.workP99Ms = [FoxMeasure3]::NearestRank($w, 99)
+                        $fig.frameMeanMs = [FoxMeasure4]::Mean($iv)
+                        $fig.frameP99Ms = [FoxMeasure4]::NearestRank($iv, 99)
+                        $fig.frameMaxMs = [FoxMeasure4]::Max($iv)
+                        $fig.workMeanMs = [FoxMeasure4]::Mean($w)
+                        $fig.workP99Ms = [FoxMeasure4]::NearestRank($w, 99)
                         $fig.intervals = [double]$iv.Length
-                        $fig.stallsOver100Ms = [double][FoxMeasure3]::CountOver($iv, 100.0)
+                        $fig.stallsOver100Ms = [double][FoxMeasure4]::CountOver($iv, 100.0)
                     }
                 }
             }
@@ -901,14 +1013,19 @@ function Test-Run([string]$Dir, [string]$Measure, $want, $knobs) {
             $odd = @($ok | Where-Object { $_ -le $blockMs -or $_ -gt 1500.0 })
             if ($odd.Count -gt 0) { $reasons.Add("latency-implausible: $($odd.Count) retunes read one block ($blockMs ms) or less, or over 1.5 s (e.g. $($odd[0]) ms)") }  # CHECK:latency-implausible
             $awayMax = 1.0
-            if ($all.Count -gt 0) { $awayMax = [FoxMeasure3]::Max([double[]]@($all | ForEach-Object { [double](Get-P $_ 'awayRatio' 1.0) })) }
+            if ($all.Count -gt 0) { $awayMax = [FoxMeasure4]::Max([double[]]@($all | ForEach-Object { [double](Get-P $_ 'awayRatio' 1.0) })) }
             if ($awayMax -ge $MaxAwayRatio) { $reasons.Add("away: the tone was still at $awayMax of steady after the VFO moved off it (limit $MaxAwayRatio) - the retune did not take it away") }  # CHECK:away
             if ($ok.Count -gt 0) {
-                $fig.latencyMedianMs = [FoxMeasure3]::Median([double[]]$ok)
-                $fig.latencyP90Ms = [FoxMeasure3]::NearestRank([double[]]$ok, 90)
+                $fig.latencyMedianMs = [FoxMeasure4]::Median([double[]]$ok)
+                $fig.latencyP90Ms = [FoxMeasure4]::NearestRank([double[]]$ok, 90)
             }
             $fig.retunesValid = [double]$ok.Count
             $fig.awayRatioMax = $awayMax
+            # The detector's own terms, for holding the builds' detectors to
+            # each other (Get-Summary): a different tone or a steady level ten
+            # times off is a different measurement.
+            $fig.toneAudioHz = $tone
+            $fig.steadyPower = $steady
             $fig.ringDropped = [double](Get-P $j 'ringDropped' 0)
         }
         'rates' {
@@ -919,12 +1036,24 @@ function Test-Run([string]$Dir, [string]$Measure, $want, $knobs) {
             }
             # Each rung held for the window asked, with audio flowing all
             # through it: half a second with no audio "sustains" anything.
+            # AUDIO AND DROPS MUST ACCOUNT FOR EACH OTHER (round 3): what the
+            # ring dropped never reaches the audio, so on every rung the
+            # audio's share of 48 kHz x the window plus the dropped share of
+            # the input equals one. In the 2026-09-25/26 A/B that sum was
+            # 1 +- 0.0003 on every one of 52 rungs, the drop rungs (7.2-8.1 %
+            # short) included; a rung 4.5 % short with nothing dropped is a
+            # drop counter that is not counting.
             $rw = [double]$knobs.rateWindow
             foreach ($s in $steps) {
                 $sec = [double](Get-P $s 'seconds' 0)
                 if ([Math]::Abs($sec - $rw) -gt 0.1 * $rw) { $reasons.Add("rate-window: rung $($s.requestedHz) Hz ran $sec s, $rw s asked") }  # CHECK:rate-window
                 $aud = [double](Get-P $s 'audioSamples' -1)
-                if ($sec -le 0 -or [Math]::Abs($aud - $AudioRateHz * $sec) -gt 0.05 * $AudioRateHz * $sec) { $reasons.Add("rate-audio: rung $($s.requestedHz) Hz produced $aud audio samples in $sec s") }  # CHECK:rate-audio
+                $inHz = [double](Get-P $s 'inputRateHz' 0)
+                $dropShare = 1.0
+                if ($inHz -gt 0 -and $sec -gt 0) { $dropShare = [double](Get-P $s 'dropped' 0) / ($inHz * $sec) }
+                $audShare = -1.0
+                if ($sec -gt 0) { $audShare = $aud / ($AudioRateHz * $sec) }
+                if ($sec -le 0 -or [Math]::Abs($audShare + $dropShare - 1.0) -gt 0.005) { $reasons.Add(("rate-audio: rung {0} Hz: audio {1:F4} of 48 kHz x {2} s plus dropped {3:F4} of the input is {4:F4}, not 1 (+-0.005)" -f $s.requestedHz, $audShare, $sec, $dropShare, ($audShare + $dropShare))) }  # CHECK:rate-audio
             }
             # The rungs are the ladder asked for, in order, and the run ends
             # at a drop or at the top of the ladder.
@@ -970,8 +1099,8 @@ $GateList = @(
 function Get-Verdict($gate, [double[]]$base, [double[]]$cand) {
     if ($base.Count -eq 0 -or $cand.Count -eq 0) { return 'NO DATA' }
     $bMed = Get-Median $base; $cMed = Get-Median $cand
-    $bMin = [FoxMeasure3]::Min($base); $bMax = [FoxMeasure3]::Max($base)
-    $cMin = [FoxMeasure3]::Min($cand); $cMax = [FoxMeasure3]::Max($cand)
+    $bMin = [FoxMeasure4]::Min($base); $bMax = [FoxMeasure4]::Max($base)
+    $cMin = [FoxMeasure4]::Min($cand); $cMax = [FoxMeasure4]::Max($cand)
     # THE FAIL TEST COMES FIRST, noise or no noise. A candidate worse than the
     # baseline by more than the allowance AND worse in every run than every
     # baseline run is a regression however wide the baseline spread: the
@@ -1007,7 +1136,7 @@ function Get-Verdict($gate, [double[]]$base, [double[]]$cand) {
             return 'RE-MEASURE (10 a side)'
         }
         'none' {
-            if ([FoxMeasure3]::Sum($cand) -le [FoxMeasure3]::Sum($base)) { return 'PASS' }
+            if ([FoxMeasure4]::Sum($cand) -le [FoxMeasure4]::Sum($base)) { return 'PASS' }
             return 'FAIL'
         }
         'info' { return 'INFO (reported, not a gate)' }
@@ -1027,8 +1156,8 @@ function Get-GateRow($gate, $bBlock, $cBlock) {
     $cn = [int](Get-P $cBlock 'runsExpected' 0); $ck = [int](Get-P $cBlock 'runsValid' 0)
     $b = @(@(Get-P (Get-P $bBlock 'values' $null) $gate.field @()) | ForEach-Object { [double]$_ })
     $c = @(@(Get-P (Get-P $cBlock 'values' $null) $gate.field @()) | ForEach-Object { [double]$_ })
-    if ($b.Count -gt 0) { $row.baselineMedian = Get-Median ([double[]]$b); $row.baselineRange = @([FoxMeasure3]::Min([double[]]$b), [FoxMeasure3]::Max([double[]]$b)); $row.baselineRuns = $b }
-    if ($c.Count -gt 0) { $row.candidateMedian = Get-Median ([double[]]$c); $row.candidateRange = @([FoxMeasure3]::Min([double[]]$c), [FoxMeasure3]::Max([double[]]$c)); $row.candidateRuns = $c }
+    if ($b.Count -gt 0) { $row.baselineMedian = Get-Median ([double[]]$b); $row.baselineRange = @([FoxMeasure4]::Min([double[]]$b), [FoxMeasure4]::Max([double[]]$b)); $row.baselineRuns = $b }
+    if ($c.Count -gt 0) { $row.candidateMedian = Get-Median ([double[]]$c); $row.candidateRange = @([FoxMeasure4]::Min([double[]]$c), [FoxMeasure4]::Max([double[]]$c)); $row.candidateRuns = $c }
     # EVERY run of both builds valid, or no verdict: a median over the
     # survivors of a crashing build is a figure about luck.
     if ($bn -le 0 -or $cn -le 0 -or $bk -lt $bn -or $ck -lt $cn) {  # CHECK:gate-all-runs
@@ -1082,8 +1211,9 @@ function Get-Summary([string]$Root, [bool]$noisyOk) {
         rateWindow       = [double](Get-P $meta 'rateWindow' 60)
         ladder           = $ladder
         logicalCpus      = $logical
-        limits           = @{ maxBackgroundCores = [double](Get-P $limRec 'maxBackgroundCores' 0.25)
-                              maxBackgroundProcessCores = [double](Get-P $limRec 'maxBackgroundProcessCores' 0.05) }
+        cycleRateHz      = [double](Get-P $meta 'cycleRateHz' 0)
+        limits           = @{ maxBackgroundCores = [double](Get-P $limRec 'maxBackgroundCores' -1)
+                              maxBackgroundProcessCores = [double](Get-P $limRec 'maxBackgroundProcessCores' -1) }
     }
     $buildBlocks = [ordered]@{}
     $othersSeen = 0
@@ -1133,6 +1263,17 @@ function Get-Summary([string]$Root, [bool]$noisyOk) {
     if ($null -ne $envEnd -and (Test-SameEnv $envRec $envEnd).Count -gt 0) { $refusals.Add('the environment at the end differs from the start: ' + ((Test-SameEnv $envRec $envEnd) -join '; ')) }  # CHECK:env-at-end
     if ($othersSeen -gt 0) { $refusals.Add("other work ran on the machine during the measurements ($($otherNameSet -join ', '))") }  # CHECK:session-others
     if ($backgroundRuns -gt 0) { $refusals.Add("$backgroundRuns run(s) had background load over the limit") }  # CHECK:session-background
+    # Judged by the limits the tool ships with, or not at all: a session run
+    # with them relaxed (review d8: 5 cores beside 1.32 cores of load) is not
+    # a quiet session whatever its runs say.
+    if ([double]$knobs.limits.maxBackgroundCores -ne [double]$DefaultLimits.maxBackgroundCores -or [double]$knobs.limits.maxBackgroundProcessCores -ne [double]$DefaultLimits.maxBackgroundProcessCores) { $refusals.Add("the session ran with background limits $($knobs.limits.maxBackgroundCores) / $($knobs.limits.maxBackgroundProcessCores) cores, not the tool's $($DefaultLimits.maxBackgroundCores) / $($DefaultLimits.maxBackgroundProcessCores)") }  # CHECK:session-limits
+    # CPU is cycles over the session's cycle rate: a session that did not
+    # measure one cannot say what any CPU figure means.
+    if ([double]$knobs.cycleRateHz -le 0) { $refusals.Add('the session recorded no cycle rate (cycleRateHz), so no CPU figure can be read') }  # CHECK:session-cycle-rate
+    $rateSays = Test-CycleRate ([double]$knobs.cycleRateHz) (1e6 * [double](Get-P $meta 'registryMhz' 0))
+    if ([double]$knobs.cycleRateHz -gt 0 -and $rateSays -ne '') { $refusals.Add($rateSays) }
+    # Two builds, or one measured twice (review d6).
+    if ($buildBlocks.Contains('baseline') -and $buildBlocks.Contains('candidate') -and [string]$buildBlocks.baseline.sha256 -eq [string]$buildBlocks.candidate.sha256) { $refusals.Add('the baseline and the candidate are the same executable (one sha256)') }  # CHECK:session-same-exe
     $gateRows = @()
     if ($buildBlocks.Contains('baseline') -and $buildBlocks.Contains('candidate')) {
         foreach ($g in $GateList) {
@@ -1140,6 +1281,18 @@ function Get-Summary([string]$Root, [bool]$noisyOk) {
             if ($buildBlocks.baseline.measures.Contains($g.measure)) { $baseBlk = $buildBlocks.baseline.measures[$g.measure] }
             if ($buildBlocks.candidate.measures.Contains($g.measure)) { $candBlk = $buildBlocks.candidate.measures[$g.measure] }
             $row = Get-GateRow $g $baseBlk $candBlk
+            # The tune-to-audio gate holds the two detectors to each other
+            # (review d3): a different tone, or a steady level more than a
+            # factor of two apart, is a different measurement.
+            if ($g.measure -eq 'latency' -and $row.verdict -notlike 'INVALID*' -and $null -ne $baseBlk -and $null -ne $candBlk) {
+                $bt = @(Get-P $baseBlk.values 'toneAudioHz' @()); $ct = @(Get-P $candBlk.values 'toneAudioHz' @())
+                $bs = @(Get-P $baseBlk.values 'steadyPower' @()); $cs2 = @(Get-P $candBlk.values 'steadyPower' @())
+                if ($bt.Count -gt 0 -and $ct.Count -gt 0 -and $bs.Count -gt 0 -and $cs2.Count -gt 0) {
+                    $btm = Get-Median ([double[]]$bt); $ctm = Get-Median ([double[]]$ct)
+                    $bsm = Get-Median ([double[]]$bs); $csm = Get-Median ([double[]]$cs2)
+                    if ([Math]::Abs($ctm - $btm) -gt 5.0 -or $bsm -le 0 -or $csm / $bsm -gt 2.0 -or $csm / $bsm -lt 0.5) { $row.verdict = "INVALID (the detectors differ: tone $ctm Hz vs $btm Hz, steady $csm vs $bsm)" }  # CHECK:latency-detector
+                }
+            }
             if ($refusals.Count -gt 0) { $row.verdict = 'REFUSED (' + ($refusals -join '; ') + ')' }
             $gateRows += $row
         }
@@ -1162,6 +1315,8 @@ function Get-Summary([string]$Root, [bool]$noisyOk) {
         backgroundRuns = $backgroundRuns
         otherAtSessionStart = @(Get-P $meta 'otherAtSessionStart' @())
         limits        = $knobs.limits
+        cycleRateHz   = $knobs.cycleRateHz
+        retakes       = @(Get-P $meta 'retakes' @())
         runs          = Get-P $meta 'runs' 5
         soakRuns      = Get-P $meta 'soakRuns' 2
         warmupSeconds = $knobs.warmupSeconds
@@ -1219,6 +1374,59 @@ function Write-GateTable($summary) {
     Write-Host ("exit {0}: {1}" -f $summary.exitCode, $ExitMeaning[[int]$summary.exitCode])
 }
 
+# --- WHICH BUILDS (review round 3, B5) ------------------------------------
+# An A/B names both its commits, always: a candidate measured without one
+# could be anything, including the baseline again.
+function Test-CommitArgs([bool]$haveCandidate, [string]$baseCommit, [string]$candCommit) {
+    if ($haveCandidate -and ($baseCommit.Length -lt 7 -or $candCommit.Length -lt 7)) { return 'an A/B needs -BaselineCommit and -CandidateCommit (at least 7 characters each)' }  # CHECK:commit-args
+    return ''
+}
+# The commit a staged build reports must be the one it was named as: a
+# prefix of at least 7 characters, and a build from a modified tree
+# ("-dirty") only when the name given says so.
+function Test-IdentityMatch([string]$reported, [string]$expect) {
+    if ($expect.Length -lt 7 -or -not $reported.StartsWith($expect)) { return "reports commit '$reported', not '$expect'" }  # CHECK:identity-commit
+    if ($reported -like '*-dirty' -and $expect -notlike '*-dirty') { return "was built from a modified tree ('$reported'): its commit does not name its source (name it with -dirty to measure it anyway)" }  # CHECK:identity-dirty
+    return ''
+}
+
+# --- RETAKES (review round 3, B3) ------------------------------------------
+# Why a finished launch must be taken again, or '' when it need not: other
+# work by name, or background load over the limits, beside the run.
+function Get-LaunchRefusal($li, $lim) {
+    $names = @(@(Get-P $li 'otherNamesAtStart' @()) + @(Get-P $li 'otherNamesDuring' @()) | Where-Object { $_ } | Sort-Object -Unique)
+    $oa = [int](Get-P $li 'otherCascadeAtStart' 0); $od = [int](Get-P $li 'otherProcessesDuring' 0)
+    if ($oa + $od -gt 0) { return 'other work: ' + ($names -join ', ') }  # CHECK:retake-others
+    $bgc = Get-P $li 'backgroundCores' $null; $bgm = Get-P $li 'backgroundMaxProcessCores' $null
+    if ($null -ne $bgc -and $null -ne $bgm -and (Test-BackgroundOver @{ cores = $bgc; maxProcessCores = $bgm } $lim)) {  # CHECK:retake-background
+        return ('background load {0:F3} cores, one process {1:F3}: {2}' -f [double]$bgc, [double]$bgm, (@(Get-P $li 'backgroundTop' @()) -join ', '))
+    }
+    return ''
+}
+# One slot of the interleaving: launch, and while the launch was refused for
+# other work or background load and retakes remain, set the refused attempt
+# aside (its directory renamed *.refused-N, kept) and launch again in the
+# SAME slot. $launcher is called with the run directory and returns the
+# launch record. Returns the last record and the retakes made.
+function Invoke-Slot([scriptblock]$launcher, [string]$runDir, [int]$maxRetakes, [string]$slot, $lim) {
+    $made = New-Object System.Collections.Generic.List[object]
+    $attempt = 0
+    while ($true) {
+        $li = & $launcher $runDir
+        if ([string](Get-P $li 'ended' '') -like 'not started*') { break }
+        $why = Get-LaunchRefusal $li $lim
+        if ($why -eq '') { break }
+        if ($attempt -ge $maxRetakes) { break }  # CHECK:retake-limit
+        ++$attempt
+        $kept = "$runDir.refused-$attempt"
+        if (Test-Path $kept) { Remove-Item -Recurse -Force $kept }
+        Move-Item -Path $runDir -Destination $kept
+        $made.Add([ordered]@{ slot = $slot; attempt = $attempt; reason = $why; keptAt = $kept; at = (Get-Date).ToString('o') })
+        Write-Host "    refused ($why) - retake $attempt of $maxRetakes in the same slot"
+    }
+    return @{ info = $li; retakes = $made }
+}
+
 # The busy run's script: the pointer to the VFO slider's grab, the button
 # down, then the pointer swept between the slider's ends a couple of pixels a
 # frame for the whole run, the button up at the end.
@@ -1248,13 +1456,13 @@ if ($SelfTest) {
     function Check($cond, $what) { if (-not $cond) { Write-Host "FAIL $what"; $script:fail++ } }
     # Nearest rank: of 1..100, the 99th percentile is 99; of 1..10 it is 10
     # (ceil(9.9) = 10); of a single value it is that value.
-    Check ([FoxMeasure3]::NearestRank([double[]](1..100), 99) -eq 99) 'p99 of 1..100'
-    Check ([FoxMeasure3]::NearestRank([double[]](1..10), 99) -eq 10) 'p99 of 1..10'
-    Check ([FoxMeasure3]::NearestRank([double[]]@(7), 99) -eq 7) 'p99 of one value'
-    Check ([FoxMeasure3]::NearestRank([double[]]@(5, 1, 4, 2, 3), 50) -eq 3) 'p50 unsorted'
-    Check ([FoxMeasure3]::Median([double[]]@(3, 1, 2)) -eq 2) 'median odd'
-    Check ([FoxMeasure3]::Median([double[]]@(4, 1, 2, 3)) -eq 2.5) 'median even'
-    Check ([FoxMeasure3]::CountOver([double[]]@(99, 100, 100.5, 250), 100) -eq 2) 'frames over 100 ms'
+    Check ([FoxMeasure4]::NearestRank([double[]](1..100), 99) -eq 99) 'p99 of 1..100'
+    Check ([FoxMeasure4]::NearestRank([double[]](1..10), 99) -eq 10) 'p99 of 1..10'
+    Check ([FoxMeasure4]::NearestRank([double[]]@(7), 99) -eq 7) 'p99 of one value'
+    Check ([FoxMeasure4]::NearestRank([double[]]@(5, 1, 4, 2, 3), 50) -eq 3) 'p50 unsorted'
+    Check ([FoxMeasure4]::Median([double[]]@(3, 1, 2)) -eq 2) 'median odd'
+    Check ([FoxMeasure4]::Median([double[]]@(4, 1, 2, 3)) -eq 2.5) 'median even'
+    Check ([FoxMeasure4]::CountOver([double[]]@(99, 100, 100.5, 250), 100) -eq 2) 'frames over 100 ms'
     # The frame log: warm-up cut against the FIRST start, intervals between
     # consecutive starts, work beside them.
     $tmpLog = [IO.Path]::GetTempFileName()
@@ -1266,7 +1474,7 @@ if ($SelfTest) {
     $lines += '6030000000 4000000'      # +20 ms
     [IO.File]::WriteAllLines($tmpLog, $lines)
     $w = $null; $n = 0L; $ov = 0L; $hdr = 0L; $bad = 0L
-    $iv = [FoxMeasure3]::FrameIntervalsMs($tmpLog, 5.0, [ref]$w, [ref]$n, [ref]$ov, [ref]$hdr, [ref]$bad)
+    $iv = [FoxMeasure4]::FrameIntervalsMs($tmpLog, 5.0, [ref]$w, [ref]$n, [ref]$ov, [ref]$hdr, [ref]$bad)
     Remove-Item $tmpLog
     Check ($n -eq 5 -and $hdr -eq 5 -and $bad -eq 0) 'frames counted, header read, nothing malformed'
     Check ($iv.Length -eq 2) "intervals after warm-up ($($iv.Length))"
@@ -1309,16 +1517,18 @@ if ($SelfTest) {
     # wall 10 s; python used 3 s (0.3 cores); a process born in between used
     # 0.5 s (0.05); dwm (app-driven), the measured app (99), its child (12)
     # and this script are not background.
+    # In CYCLES at a rate of 1e9 a second (the time column is 0 throughout,
+    # so a figure can only have come from the cycles).
     $snapA = @{ at = 1000; procs = @{
-            [long]10 = @('python.exe', 1.0, 5, 1); [long]11 = @('dwm.exe', 1.0, 5, 1); [long]12 = @('helper.exe', 0.0, 900, 99)
-            [long]99 = @('cascade.exe', 0.0, 900, 1); [long]0 = @('Idle', 100.0, 0, 0) } }
+            [long]10 = @('python.exe', 0.0, 5, 1, 1e9); [long]11 = @('dwm.exe', 0.0, 5, 1, 1e9); [long]12 = @('helper.exe', 0.0, 900, 99, 0.0)
+            [long]99 = @('cascade.exe', 0.0, 900, 1, 0.0); [long]0 = @('Idle', 0.0, 0, 0, 100e9) } }
     $snapB = @{ at = 101000; procs = @{
-            [long]10 = @('python.exe', 4.0, 5, 1); [long]11 = @('dwm.exe', 9.0, 5, 1); [long]12 = @('helper.exe', 2.0, 900, 99)
-            [long]13 = @('newborn.exe', 0.5, 2000, 1); [long]14 = @('reused.exe', 7.0, 500, 1)
-            [long]99 = @('cascade.exe', 8.0, 900, 1); [long]0 = @('Idle', 400.0, 0, 0) } }
+            [long]10 = @('python.exe', 0.0, 5, 1, 4e9); [long]11 = @('dwm.exe', 0.0, 5, 1, 9e9); [long]12 = @('helper.exe', 0.0, 900, 99, 2e9)
+            [long]13 = @('newborn.exe', 0.0, 2000, 1, 0.5e9); [long]14 = @('reused.exe', 0.0, 500, 1, 7e9)
+            [long]99 = @('cascade.exe', 0.0, 900, 1, 8e9); [long]0 = @('Idle', 0.0, 0, 0, 400e9) } }
     # pid 14 was not in A and was created BEFORE A (a pid reused, or a
     # snapshot race): its lifetime CPU is not this run's and is not counted.
-    $bgT = Measure-Background $snapA $snapB 10.0 @([long]99)
+    $bgT = Measure-Background $snapA $snapB 10.0 @([long]99) 1e9
     Check ([Math]::Abs($bgT.cores - 0.35) -lt 1e-9) "background: python 0.3 + newborn 0.05 = 0.35 cores ($($bgT.cores))"
     Check ([Math]::Abs($bgT.maxProcessCores - 0.3) -lt 1e-9) "background: the largest one process is python's 0.3 ($($bgT.maxProcessCores))"
     Check (($bgT.top -join ',') -like 'python.exe 10 0.300*') "background: the top consumer is named ($($bgT.top -join ','))"
@@ -1328,6 +1538,9 @@ if ($SelfTest) {
     # The live snapshot works on this machine and sees this very process.
     $live = Get-ProcSnapshot
     Check ($live.procs.Count -gt 20 -and $live.procs.ContainsKey([long]$PID)) "live process snapshot ($($live.procs.Count) processes, this one included)"
+    Check ([double]$live.procs[[long]$PID][4] -gt 0) "live snapshot carries this process's cycle count ($($live.procs[[long]$PID][4]))"
+    $rateNow = [FoxMeasure4]::CycleRateHz(0.2, 2)
+    Check ($rateNow -gt 5e8 -and $rateNow -lt 1e10) "the cycle rate is a clock rate ($rateNow Hz)"
 
     # --- the session's ONE wait budget ---
     $script:probeCalls = 0
@@ -1356,7 +1569,8 @@ if ($SelfTest) {
             seconds = 65; warmupSeconds = 5; soakSeconds = 600; measures = $ms; rateLadder = $fakeLadder; rateWindow = 60
             frameCapHz = 60; retunes = 50; minValidRetunes = 45
             plugins = @('a.dll', 'b.dll', 'c.dll'); expectedDecoders = 3; gaps = @('fabricated')
-            limits = @{ maxBackgroundCores = 0.25; maxBackgroundProcessCores = 0.05 }
+            limits = @{ maxBackgroundCores = $DefaultLimits.maxBackgroundCores; maxBackgroundProcessCores = $DefaultLimits.maxBackgroundProcessCores }
+            cycleRateHz = 1e9
             finished = '2026-09-26T00:00:00'
             builds = [ordered]@{ baseline = [ordered]@{ exe = 'a'; sha256 = $shaBase; commit = 'aaaaaaaaaaaa' }
                                  candidate = [ordered]@{ exe = 'b'; sha256 = $shaCand; commit = 'bbbbbbbbbbbb' } }
@@ -1404,9 +1618,12 @@ if ($SelfTest) {
     }
     # A value of $null in $over REMOVES the field.
     function Get-RunResult([double]$cpuSeconds, $over = @{}, [double]$win = 60) {
+        # cpuS is the kernel's time (a fifth of the truth on this desktop);
+        # cpuCycles at the fixtures' 1e9 a second is the figure gated.
         $o = [ordered]@{ format = 'foxsdr-measure/2'; error = ''; faulted = $false; rateHz = 2048000; inputRateHz = 2048000
-                         cpuS = $cpuSeconds; windowS = $win; workingSetBytes = 115 * 1048576; ringDropped = 0; audioSamples = [long](48000 * $win)
-                         decodersActive = 3; decoderAudioFramesFed = [long](48000 * $win); decoderIqFramesFed = 0; ticks = 3600; vfoChanges = 3600 }
+                         cpuS = $cpuSeconds / 5; cpuCycles = $cpuSeconds * 1e9; windowS = $win; workingSetBytes = 115 * 1048576; ringDropped = 0; audioSamples = [long](48000 * $win)
+                         decodersActive = 3; decoderAudioFramesFed = [long](48000 * $win); decoderIqFramesFed = 0; ticks = 3600; vfoChanges = 3600
+                         decoders = @([ordered]@{ plugin = 'APRS'; reason = 0; running = $true }, [ordered]@{ plugin = 'Morse (CW)'; reason = 0; running = $true }, [ordered]@{ plugin = 'EAS / SAME'; reason = 0; running = $true }) }
         foreach ($k in $over.Keys) { if ($null -eq $over[$k]) { $o.Remove($k) } else { $o[$k] = $over[$k] } }
         return $o
     }
@@ -1427,14 +1644,17 @@ if ($SelfTest) {
         $st = @()
         foreach ($s in $stepList) {
             $sec = 60.0; if ($s.Count -gt 3) { $sec = [double]$s[3] }
-            $aud = [long](48000 * $sec); if ($s.Count -gt 4) { $aud = [long]$s[4] }
+            # What the ring dropped never reaches the audio: short by the
+            # dropped share of the input, exactly as the real runs were.
+            $aud = [long](48000 * $sec * (1.0 - [double]$s[2] / ([double]$s[1] * $sec))); if ($s.Count -gt 4) { $aud = [long]$s[4] }
             $st += [ordered]@{ requestedHz = $s[0]; inputRateHz = $s[1]; dropped = $s[2]; audioSamples = $aud; seconds = $sec }
         }
         return [ordered]@{ format = 'foxsdr-measure/2'; error = ''; faulted = $false; steps = $st }
     }
     $gateMeasure = @{}
     foreach ($gg in $GateList) { $gateMeasure[$gg.name] = $gg.measure }
-    $goodSteps = @(@(20480000, 20480000, 0), @(22528000, 22528000, 0), @(24576000, 24576000, 5))
+    # 108667904 dropped at 24.576 MS/s over 60 s: 7.4 %, as ab2 baseline r1.
+    $goodSteps = @(@(20480000, 20480000, 0), @(22528000, 22528000, 0), @(24576000, 24576000, 108667904))
     $cpus = @(3.0, 3.1, 3.05, 3.02, 3.08)
     # One scenario: a good baseline, a candidate made by $candFn, and what
     # must come out.
@@ -1562,10 +1782,93 @@ if ($SelfTest) {
         [void](Test-Scenario 'v_session_format' 'cpu' { param($sd, $m, $r) New-FakeRun $sd 'candidate' $m $r (Get-RunResult $cpus[$r - 1]) } '' 'REFUSED*' 3 $true { param($sd) $mt = Read-Json (Join-Path $sd 'session.json'); $mt.format = 'foxsdr-measure-session/1'; Write-Json $mt (Join-Path $sd 'session.json') })
         # Background load: over the limit in a run - the run refused and the
         # session REFUSED; not recorded at all - the run refused.
-        $sumBg = Test-Scenario 'v_background_load' 'cpu' { param($sd, $m, $r) $lo = @{}; if ($r -eq 2) { $lo = @{ backgroundCores = 0.4; backgroundMaxProcessCores = 0.3; backgroundTop = @('python.exe 106668 0.300') } }; New-FakeRun $sd 'candidate' $m $r (Get-RunResult $cpus[$r - 1]) $lo } 'background-load' 'REFUSED*' 3
+        $sumBg = Test-Scenario 'v_background_load' 'cpu' { param($sd, $m, $r) $lo = @{}; if ($r -eq 2) { $lo = @{ backgroundCores = 0.9; backgroundMaxProcessCores = 0.1; backgroundTop = @('python.exe 106668 0.100') } }; New-FakeRun $sd 'candidate' $m $r (Get-RunResult $cpus[$r - 1]) $lo } 'background-load' 'REFUSED*' 3
         Check (($sumBg.refusals -join ' ') -like '*background load*') "the session names the background load ($($sumBg.refusals -join ' | '))"
-        [void](Test-Scenario 'v_background_one_process' 'cpu' { param($sd, $m, $r) New-FakeRun $sd 'candidate' $m $r (Get-RunResult $cpus[$r - 1]) @{ backgroundCores = 0.1; backgroundMaxProcessCores = 0.07; backgroundTop = @('rsw_logger_20260926.exe 88552 0.070') } } 'background-load' 'REFUSED*' 3)
+        # The Radar Sweep logger alone, in cycles: 0.159 cores (2026-09-26).
+        [void](Test-Scenario 'v_background_one_process' 'cpu' { param($sd, $m, $r) New-FakeRun $sd 'candidate' $m $r (Get-RunResult $cpus[$r - 1]) @{ backgroundCores = 0.2; backgroundMaxProcessCores = 0.159; backgroundTop = @('rsw_logger_20260926.exe 88552 0.159') } } 'background-load' 'REFUSED*' 3)
         [void](Test-Scenario 'v_background_missing' 'cpu' { param($sd, $m, $r) New-FakeRun $sd 'candidate' $m $r (Get-RunResult $cpus[$r - 1]) @{ backgroundCores = $null } } 'background' 'INVALID*' 2)
+
+        # --- review round 3 ---
+        # B1: the real A/B's rates runs, every rung as measured (their drop
+        # rungs 7.2-8.1 % short of audio, exactly the dropped share) - valid.
+        $ab2Rates = @'
+{"baseline-rates-r1":[[14336000,14336000,0,2880230,60.003],[16384000,16384000,0,2879614,60.005],[18432000,18432000,0,2881112,60.012],[20480000,20480000,0,2880372,60.003],[22528000,22528000,0,2880255,60.002],[24576000,24576000,108667904,2668508,60.014]],"baseline-rates-r2":[[14336000,14336000,0,2879704,60.003],[16384000,16384000,548864,2879124,60.005]],"baseline-rates-r3":[[14336000,14336000,0,2880707,60.011],[16384000,16384000,0,2880012,60.017],[18432000,18432000,0,2879925,60.004],[20480000,20480000,387072,2879403,60.001]],"baseline-rates-r4":[[14336000,14336000,0,2880572,60.011],[16384000,16384000,0,2879433,60.003],[18432000,18432000,0,2880320,60.014],[20480000,20480000,0,2880480,60.01],[22528000,22528000,0,2880126,60.004],[24576000,24576000,105760768,2673892,60.012]],"baseline-rates-r5":[[14336000,14336000,0,2880812,60.007],[16384000,16384000,0,2880540,60.013],[18432000,18432000,0,2880251,60.008],[20480000,20480000,0,2880043,60.003],[22528000,22528000,0,2880893,60.012],[24576000,24576000,106818560,2671754,60.007]],"candidate-rates-r1":[[14336000,14336000,0,2880154,60.011],[16384000,16384000,0,2880244,60.014],[18432000,18432000,0,2880694,60.012],[20480000,20480000,0,2880360,60.01],[22528000,22528000,0,2880295,60.005],[24576000,24576000,119681024,2646146,60.002]],"candidate-rates-r2":[[14336000,14336000,0,2880960,60.011],[16384000,16384000,0,2881062,60.01],[18432000,18432000,0,2880947,60.016],[20480000,20480000,0,2880480,60.017],[22528000,22528000,1932288,2875878,60.003]],"candidate-rates-r3":[[14336000,14336000,0,2880922,60.016],[16384000,16384000,0,2880870,60.016],[18432000,18432000,0,2880701,60.006],[20480000,20480000,226304,2879776,60.002]],"candidate-rates-r4":[[14336000,14336000,0,2880189,60.006],[16384000,16384000,0,2880905,60.006],[18432000,18432000,0,2880120,60.007],[20480000,20480000,0,2881272,60.014],[22528000,22528000,0,2880297,60.012],[24576000,24576000,106215424,2672560,60.003]],"candidate-rates-r5":[[14336000,14336000,0,2880247,60.009],[16384000,16384000,0,2880903,60.007],[18432000,18432000,0,2880549,60.014],[20480000,20480000,0,2880199,60.004],[22528000,22528000,0,2879767,60.006],[24576000,24576000,105212928,2674378,60.001]]}
+'@ | ConvertFrom-Json
+        $sdR = New-FakeSession 'ab2_real_rates' @('rates') $true 5
+        $mtR = Read-Json (Join-Path $sdR 'session.json'); $mtR.rateLadder = '14336000,16384000,18432000,20480000,22528000,24576000,28672000'; Write-Json $mtR (Join-Path $sdR 'session.json')
+        foreach ($rk in $ab2Rates.PSObject.Properties.Name) {
+            $lab = ($rk -split '-')[0]; $rn = [int]$rk.Substring($rk.LastIndexOf('-r') + 2)
+            New-FakeRun $sdR $lab 'rates' $rn (Get-RatesResult @($ab2Rates.$rk | ForEach-Object { , @($_[0], $_[1], $_[2], $_[4], $_[3]) }))
+        }
+        $sR = Get-Summary $sdR $false
+        $rateReasons = @($sR.builds.baseline.measures.rates.runs + $sR.builds.candidate.measures.rates.runs | ForEach-Object { $_.reasons })
+        Check ($sR.builds.baseline.measures.rates.runsValid -eq 5 -and $sR.builds.candidate.measures.rates.runsValid -eq 5) "the real A/B's rates runs are all valid (baseline $($sR.builds.baseline.measures.rates.runsValid), candidate $($sR.builds.candidate.measures.rates.runsValid) of 5): $($rateReasons -join ' | ')"
+        # d7b/d7c: a drop counter stuck at 0 with the audio short.
+        [void](Test-Scenario 'd7b_drop_counter_stuck' 'rates' { param($sd, $m, $r) New-FakeRun $sd 'candidate' $m $r (Get-RatesResult @(@(20480000, 20480000, 0), @(22528000, 22528000, 0, 60, [long](48000 * 60 * 0.955)), @(24576000, 24576000, 0, 60, [long](48000 * 60 * 0.955)), @(28672000, 28672000, 0, 60, [long](48000 * 60 * 0.955)))) } 'rate-audio' 'INVALID*' 2)
+        [void](Test-Scenario 'd7c_short_every_rung' 'rates' { param($sd, $m, $r) New-FakeRun $sd 'candidate' $m $r (Get-RatesResult @(@(20480000, 20480000, 0, 60, [long](48000 * 60 * 0.951)), @(22528000, 22528000, 0, 60, [long](48000 * 60 * 0.951)), @(24576000, 24576000, 0, 60, [long](48000 * 60 * 0.951)), @(28672000, 28672000, 0, 60, [long](48000 * 60 * 0.951)))) } 'rate-audio' 'INVALID*' 2)
+        # The first round's fixture error: full audio on the rung that dropped.
+        [void](Test-Scenario 'v_rates_drop_full_audio' 'rates' { param($sd, $m, $r) New-FakeRun $sd 'candidate' $m $r (Get-RatesResult @(@(20480000, 20480000, 0), @(22528000, 22528000, 0), @(24576000, 24576000, 108667904, 60, 2880000))) } 'rate-audio' 'INVALID*' 2)
+        # B2: CPU is the cycle count. Missing cycles, or no cycle rate for the
+        # session, is not a reading; the kernel's time is not what is gated.
+        [void](Test-Scenario 'v_cycles_missing' 'cpu' { param($sd, $m, $r) New-FakeRun $sd 'candidate' $m $r (Get-RunResult $cpus[$r - 1] @{ cpuCycles = $null }) } 'cpu' 'INVALID*' 2)
+        [void](Test-Scenario 'v_cycle_rate_missing' 'cpu' { param($sd, $m, $r) New-FakeRun $sd 'candidate' $m $r (Get-RunResult $cpus[$r - 1]) } '' 'REFUSED*' 3 $true { param($sd) $mt = Read-Json (Join-Path $sd 'session.json'); $mt.PSObject.Properties.Remove('cycleRateHz'); Write-Json $mt (Join-Path $sd 'session.json') })
+        $sCyc = Test-Scenario 'v_cycles_not_times' 'cpu' { param($sd, $m, $r) New-FakeRun $sd 'candidate' $m $r (Get-RunResult $cpus[$r - 1] @{ cpuS = 0.001 }) } '' 'PASS' 0
+        Check ([Math]::Abs($sCyc.builds.candidate.measures.cpu.median.cpuPct - 5.08333) -lt 0.001) "the CPU figure is the cycles' (5.083 % of a core), not the kernel time's ($($sCyc.builds.candidate.measures.cpu.median.cpuPct))"
+        # The cycle rate itself: measured under load, it is refused.
+        Check ((Test-CycleRate 3.13e9 3.187e9) -eq '') 'a quiet cycle rate (98 % of nominal) is accepted'
+        Check ((Test-CycleRate 2.57e9 3.187e9) -ne '') 'a cycle rate measured under load (81 % of nominal) is refused'
+        Check ((Test-CycleRate 3.13e9 0) -eq '') 'with no nominal clock known, any measured rate is taken'
+        [void](Test-Scenario 'v_cycle_rate_under_load' 'cpu' { param($sd, $m, $r) New-FakeRun $sd 'candidate' $m $r (Get-RunResult $cpus[$r - 1]) } '' 'REFUSED*' 3 $true { param($sd) $mt = Read-Json (Join-Path $sd 'session.json'); $mt | Add-Member -NotePropertyName registryMhz -NotePropertyValue 1250; Write-Json $mt (Join-Path $sd 'session.json') })
+        [void](Test-Scenario 'v_cycle_rate_quiet' 'cpu' { param($sd, $m, $r) New-FakeRun $sd 'candidate' $m $r (Get-RunResult $cpus[$r - 1]) } '' 'PASS' 0 $true { param($sd) $mt = Read-Json (Join-Path $sd 'session.json'); $mt | Add-Member -NotePropertyName registryMhz -NotePropertyValue 1017; Write-Json $mt (Join-Path $sd 'session.json') })
+        # B4: decoders starved of audio; decoders not running.
+        [void](Test-Scenario 'd1_decoders_starved' 'cpu' { param($sd, $m, $r) New-FakeRun $sd 'candidate' $m $r (Get-RunResult ($cpus[$r - 1] * 0.8) @{ decoderAudioFramesFed = 28800 }) } 'decoders-fed' 'INVALID*' 2)
+        [void](Test-Scenario 'd2_decoders_not_running' 'cpu' { param($sd, $m, $r) New-FakeRun $sd 'candidate' $m $r (Get-RunResult ($cpus[$r - 1] * 0.7) @{ decoders = @([ordered]@{ plugin = 'APRS'; reason = 0; running = $true }, [ordered]@{ plugin = 'Morse (CW)'; reason = 3; running = $false }, [ordered]@{ plugin = 'EAS / SAME'; reason = 3; running = $false }) }) } 'decoders-running' 'INVALID*' 2)
+        # d3: the candidate's detector on another tone, steady ten times down.
+        [void](Test-Scenario 'd3_latency_wrong_tone' 'latency' { param($sd, $m, $r) New-FakeRun $sd 'candidate' $m $r (Get-LatencyResult 16.0 0.0 50 50 @{ toneAudioHz = 3400; steadyPower = 0.001 }) } '' 'INVALID*' 2)
+        # d4: a launch record edited to look quiet.
+        [void](Test-Scenario 'd4_background_forged' 'cpu' { param($sd, $m, $r) New-FakeRun $sd 'candidate' $m $r (Get-RunResult $cpus[$r - 1]) @{ backgroundCores = 0.01; backgroundMaxProcessCores = 0.01; backgroundTop = @('cl.exe 4242 0.900'); otherNamesDuring = @('cl') } } 'launch-inconsistent' 'INVALID*' 2)
+        # d6: one executable on both sides.
+        [void](Test-Scenario 'd6_same_exe' 'cpu' { param($sd, $m, $r) New-FakeRun $sd 'candidate' $m $r (Get-RunResult $cpus[$r - 1]) @{ exeSha256 = $shaBase } } '' 'REFUSED*' 3 $true { param($sd) $mt = Read-Json (Join-Path $sd 'session.json'); $mt.builds.candidate.sha256 = $shaBase; Write-Json $mt (Join-Path $sd 'session.json') })
+        # d8: limits relaxed for the session.
+        [void](Test-Scenario 'd8_limits_relaxed' 'cpu' { param($sd, $m, $r) New-FakeRun $sd 'candidate' $m $r (Get-RunResult $cpus[$r - 1]) } '' 'REFUSED*' 3 $true { param($sd) $mt = Read-Json (Join-Path $sd 'session.json'); $mt.limits = @{ maxBackgroundCores = 5; maxBackgroundProcessCores = 5 }; Write-Json $mt (Join-Path $sd 'session.json') })
+        # B5: both commits named for an A/B, and the identity exact.
+        Check ((Test-CommitArgs $true '' '') -ne '') 'an A/B with no commits named is refused'
+        Check ((Test-CommitArgs $true '54d5745' '') -ne '') 'an A/B with no candidate commit is refused'
+        Check ((Test-CommitArgs $true '54d5745' '37af9e8') -eq '') 'an A/B with both commits named goes ahead'
+        Check ((Test-CommitArgs $false '' '') -eq '') 'a single-build session needs no commit'
+        Check ((Test-IdentityMatch '37af9e8ed459' '37af9e8') -eq '') 'the commit named, by prefix, is accepted'
+        Check ((Test-IdentityMatch '54d57458ee55' '37af9e8') -ne '') 'another commit is refused'
+        Check ((Test-IdentityMatch '37af9e8ed459' '37a') -ne '') 'a prefix under 7 characters is refused'
+        Check ((Test-IdentityMatch '37af9e8ed459-dirty' '37af9e8') -ne '') 'a build of a modified tree is refused unless named -dirty'
+        Check ((Test-IdentityMatch '37af9e8ed459-dirty' '37af9e8ed459-dirty') -eq '') 'a build of a modified tree named as such is accepted'
+        # B3: retakes in the same slot.
+        Check ((Get-LaunchRefusal @{ otherCascadeAtStart = 0; otherProcessesDuring = 1; otherNamesDuring = @('cl') } $DefaultLimits) -like 'other work*') 'a run beside a compiler is retaken'
+        Check ((Get-LaunchRefusal @{ otherCascadeAtStart = 0; otherProcessesDuring = 0; backgroundCores = 0.9; backgroundMaxProcessCores = 0.1 } $DefaultLimits) -like 'background load*') 'a run beside background load is retaken'
+        Check ((Get-LaunchRefusal @{ otherCascadeAtStart = 0; otherProcessesDuring = 0; backgroundCores = 0.1; backgroundMaxProcessCores = 0.05 } $DefaultLimits) -eq '') 'a quiet run is kept'
+        $slotRoot = Join-Path $fakeRoot 'slots'
+        New-Item -ItemType Directory -Force -Path $slotRoot | Out-Null
+        $script:slotCalls = 0
+        # A launcher refused (a compiler beside it) for its first $script:refuseFor calls.
+        $fakeLauncher = {
+            param($dirArg)
+            $script:slotCalls++
+            New-Item -ItemType Directory -Force -Path $dirArg | Out-Null
+            $rec = [ordered]@{ ended = 'exited'; exitCode = 0; otherCascadeAtStart = 0; otherProcessesDuring = 0; otherNamesAtStart = @(); otherNamesDuring = @(); backgroundCores = 0.05; backgroundMaxProcessCores = 0.02; backgroundTop = @(); call = $script:slotCalls }
+            if ($script:slotCalls -le $script:refuseFor) { $rec.otherProcessesDuring = 1; $rec.otherNamesDuring = @('MsMpEng spike') }
+            Write-Json $rec (Join-Path $dirArg 'launch.json')
+            return $rec
+        }
+        $script:refuseFor = 2
+        $slotA = Invoke-Slot $fakeLauncher (Join-Path $slotRoot 'candidate-cpu-r1') 3 'candidate-cpu-r1' $DefaultLimits
+        Check ($slotA.retakes.Count -eq 2 -and $slotA.info.call -eq 3 -and (Get-LaunchRefusal $slotA.info $DefaultLimits) -eq '') "two refused attempts then a quiet one: 2 retakes, the third launch kept ($($slotA.retakes.Count) retakes, launch $($slotA.info.call))"
+        Check ((Test-Path (Join-Path $slotRoot 'candidate-cpu-r1.refused-1')) -and (Test-Path (Join-Path $slotRoot 'candidate-cpu-r1.refused-2')) -and ([int](Read-Json (Join-Path $slotRoot 'candidate-cpu-r1\launch.json')).call -eq 3)) 'the refused attempts are kept beside the slot, the slot holds the kept run'
+        Check (@($slotA.retakes | Where-Object { $_.reason -like 'other work*' -and $_.slot -eq 'candidate-cpu-r1' }).Count -eq 2) 'every retake is recorded with its slot and reason'
+        $script:slotCalls = 0; $script:refuseFor = 5
+        $slotB = Invoke-Slot $fakeLauncher (Join-Path $slotRoot 'baseline-cpu-r2') 3 'baseline-cpu-r2' $DefaultLimits
+        Check ($slotB.retakes.Count -eq 3 -and $slotB.info.call -eq 4 -and (Get-LaunchRefusal $slotB.info $DefaultLimits) -ne '') "a slot refused past its retakes stops after 3 retakes with the refused run in place ($($slotB.retakes.Count) retakes, launch $($slotB.info.call))"
+        $script:slotCalls = 0; $script:refuseFor = 1
+        $slotC = Invoke-Slot $fakeLauncher (Join-Path $slotRoot 'baseline-cpu-r3') 0 'baseline-cpu-r3' $DefaultLimits
+        Check ($slotC.retakes.Count -eq 0 -and $slotC.info.call -eq 1) '-RetakeRefusedRuns 0 retakes nothing'
 
         # --- verdicts: FAIL before NOISY, and noise rules for every kind ---
         # a1 (review round 2): every gate NOISY and the candidate worse than
@@ -1637,6 +1940,10 @@ if ($SelfTest) {
         $sCont.contaminated = $true
         $sCont.contamination = 'measured beside a B200 capture'
         Write-Json $sCont (Join-Path $cmpDir 'contaminated.json')
+        $sLim = Get-Summary (Join-Path $fakeRoot 'c0_equal') $false
+        $sLim.limits = @{ maxBackgroundCores = 5; maxBackgroundProcessCores = 5 }
+        $sLim.refusals = @()
+        Write-Json $sLim (Join-Path $cmpDir 'limits.json')
         $sRef = Get-Summary (Join-Path $fakeRoot 'c0_equal') $false
         $sRef.refusals = @('the session never finished')
         Write-Json $sRef (Join-Path $cmpDir 'refused.json')
@@ -1676,7 +1983,8 @@ if ($SelfTest) {
             @('good.json', 'env.json', 3, 'CompareFiles different environment: REFUSED'),
             @('good.json', 'invalid.json', 2, 'CompareFiles candidate runs invalid: exit 2'),
             @('contaminated.json', 'good.json', 3, 'CompareFiles contaminated baseline: REFUSED'),
-            @('good.json', 'refused.json', 3, 'CompareFiles a summary that was itself refused: REFUSED')
+            @('good.json', 'refused.json', 3, 'CompareFiles a summary that was itself refused: REFUSED'),
+            @('good.json', 'limits.json', 3, 'CompareFiles a summary measured with relaxed background limits: REFUSED')
         )
         foreach ($cs in $cases) {
             $got = (Invoke-Self @('-CompareBaseline', (Join-Path $cmpDir $cs[0]), '-CompareCandidate', (Join-Path $cmpDir $cs[1]))).code
@@ -1775,6 +2083,8 @@ if ($PSCmdlet.ParameterSetName -eq 'CompareFiles') {
         # A summary known to have been measured beside other work, marked so
         # by hand after the fact (the 6342655 baseline): never a reference.
         if ((Get-P $pair[1] 'contaminated' $false) -ne $false) { $why += "$($pair[0]) is marked contaminated: $(Get-P $pair[1] 'contamination' '')" }  # CHECK:cmp-contaminated
+        $lr = Get-P $pair[1] 'limits' $null
+        if ([double](Get-P $lr 'maxBackgroundCores' -1) -ne [double]$DefaultLimits.maxBackgroundCores -or [double](Get-P $lr 'maxBackgroundProcessCores' -1) -ne [double]$DefaultLimits.maxBackgroundProcessCores) { $why += "$($pair[0]) was measured with background limits $(Get-P $lr 'maxBackgroundCores' '?') / $(Get-P $lr 'maxBackgroundProcessCores' '?'), not the tool's $($DefaultLimits.maxBackgroundCores) / $($DefaultLimits.maxBackgroundProcessCores)" }  # CHECK:cmp-limits
         $rfs = @(Get-P $pair[1] 'refusals' @())
         if ($rfs.Count -gt 0) { $why += "$($pair[0]) was refused when summarised: $($rfs -join '; ')" }  # CHECK:cmp-refusals
     }
@@ -1824,7 +2134,10 @@ function Copy-Stage([string]$exePath, [string]$dest) {
     foreach ($pl in $Plugins) { Copy-Item -Force $pl $pd }
     return (Join-Path $dest 'cascade.exe')
 }
+$argProblem = Test-CommitArgs ([bool]$Candidate) $BaselineCommit $CandidateCommit
+if ($argProblem -ne '') { Write-Host "REFUSED: $argProblem"; exit 3 }
 New-Item -ItemType Directory -Force -Path $Out | Out-Null
+# The cycle rate the session converts cycles to cores with (Get-CycleRate).
 $knobSet = @{
     Seconds = $Seconds; WarmupSeconds = $WarmupSeconds; SoakSeconds = $SoakSeconds; RateLadder = $RateLadder
     RateWindow = $RateWindow; Retunes = $Retunes; FrameCapHz = $FrameCapHz; WindowSize = $WindowSize
@@ -1837,6 +2150,19 @@ if ($startBlocker -ne '') {
     Write-Host "BLOCKED at session start: $startBlocker"
     Write-Host "    Waiting for it to clear, up to $WaitForOthersMinutes min for the WHOLE session (-WaitForOthersMinutes); if it does not, the session stops with exit 3."
 }
+# The cycle rate, measured once the machine is quiet (the first launch's own
+# wait comes first), and refused if it was plainly measured under load.
+$firstQuiet = Wait-ForQuiet { Get-Blocker -1 } 10
+if (-not $firstQuiet.quiet) {
+    Write-Host "REFUSED: the session stopped before measuring anything - the machine never became quiet within the $WaitForOthersMinutes min budget (blocked: $($firstQuiet.blocker))"
+    exit 3
+}
+$sessionCycleRate = [FoxMeasure4]::CycleRateHz(1.0, 3)
+$rateProblem = Test-CycleRate $sessionCycleRate $script:NominalHz
+if ($rateProblem -ne '') { Write-Host "REFUSED: $rateProblem"; exit 3 }
+$script:CycleRateHz = $sessionCycleRate
+$registryMhz = [int]($script:NominalHz / 1e6)
+Write-Host ("cycle rate: {0:F0} Hz (registry: {1} MHz)" -f $sessionCycleRate, $registryMhz)
 $stagedExe = [ordered]@{ baseline = (Copy-Stage (Resolve-Path $Baseline).Path (Join-Path $Out 'stage\baseline')) }
 if ($Candidate) { $stagedExe.candidate = (Copy-Stage (Resolve-Path $Candidate).Path (Join-Path $Out 'stage\candidate')) }
 $meta = [ordered]@{
@@ -1849,6 +2175,10 @@ $meta = [ordered]@{
     otherAtSessionStart = @(Get-OtherNames -1 | Sort-Object -Unique)
     blockedAtStart = $startBlocker
     limits        = $script:Limits
+    cycleRateHz   = $sessionCycleRate
+    registryMhz   = $registryMhz
+    retakeRefusedRuns = $RetakeRefusedRuns
+    retakes       = @()
     rateWindow    = $RateWindow
     waitForOthersMinutes = $WaitForOthersMinutes
     envStable     = $true
@@ -1888,13 +2218,18 @@ foreach ($k in $stagedExe.Keys) {
         Write-Host "REFUSED: the staged $k build did not identify itself (see $idDir)"
         exit 3
     }
-    if ($expect -ne '' -and -not $reported.StartsWith($expect)) {
-        Write-Host "REFUSED: the staged $k build reports commit '$reported', not '$expect'"
+    $idProblem = ''
+    if ($expect -ne '') { $idProblem = Test-IdentityMatch $reported $expect }
+    if ($idProblem -ne '') {
+        Write-Host "REFUSED: the staged $k build $idProblem"
         exit 3
     }
-    if ($reported -like '*-dirty') { Write-Warning "$k was built from a modified tree ($reported): its commit does not name its source" }
     $meta.builds[$k] = [ordered]@{ exe = $stagedExe[$k]; source = (Resolve-Path $srcExe).Path; sha256 = (Get-FileHash -Algorithm SHA256 $stagedExe[$k]).Hash.ToLower(); commit = $reported }
     Write-Host ("{0}: commit {1}, sha256 {2}" -f $k, $reported, $meta.builds[$k].sha256)
+}
+if ($meta.builds.Contains('candidate') -and $meta.builds.baseline.sha256 -eq $meta.builds.candidate.sha256) {
+    Write-Host "REFUSED: the baseline and the candidate are the same executable (sha256 $($meta.builds.baseline.sha256))"
+    exit 3
 }
 Write-Json $meta (Join-Path $Out 'session.json')
 if ($Measures -contains 'cpubusy') {
@@ -1908,7 +2243,13 @@ foreach ($m in $Measures) {
         foreach ($label in $stagedExe.Keys) {
             $runDir = Join-Path $Out "runs\$label-$m-r$r"
             Write-Host ("[{0}] {1} {2} run {3}/{4}" -f (Get-Date).ToString('HH:mm:ss'), $label, $m, $r, $nr)
-            $li = Invoke-Launch -Exe $stagedExe[$label] -Dir $runDir -Measure $m -Setup $knobSet
+            $exeNow = $stagedExe[$label]
+            $slotRun = Invoke-Slot { param($dirArg) Invoke-Launch -Exe $exeNow -Dir $dirArg -Measure $m -Setup $knobSet } $runDir $RetakeRefusedRuns "$label-$m-r$r" $script:Limits
+            $li = $slotRun.info
+            if ($slotRun.retakes.Count -gt 0) {
+                $meta.retakes = @($meta.retakes) + @($slotRun.retakes)
+                Write-Json $meta (Join-Path $Out 'session.json')
+            }
             if ([string]$li.ended -like 'not started*') {
                 # The session's wait budget is spent: stop here, say why, and
                 # leave the session marked unfinished (a -Summarize of it is

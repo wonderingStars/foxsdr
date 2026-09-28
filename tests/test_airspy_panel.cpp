@@ -14,7 +14,7 @@
 #include "airspy_fake_usb.hpp"
 #include "core/airspy_settings.hpp"
 #include "core/pipeline.hpp"
-#include "gui/airspy_panel.hpp"
+#include "engine/airspy_panel.hpp"
 #include "source/airspy_source.hpp"
 #include "test_check.hpp"
 
