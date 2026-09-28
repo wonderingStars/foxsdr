@@ -43,8 +43,12 @@
 //        every data member the Engine declares - plain and compound
 //        assignment, ++/--, taking its address, a subscripted write, or a
 //        mutating container call - with or without `this->`. The Engine
-//        fields the window still edits IN PLACE are listed (kWindowMayWrite),
-//        each an OPEN item for stage 3b in docs/engine-stage3.md;
+//        fields the window still edits IN PLACE are listed
+//        (kWindowMayWriteScoped, each paired with the ONE member allowed to
+//        write it - a write from any other member is rule 3's violation
+//        exactly as if the field were not listed at all; kWindowMayWriteUnscoped
+//        for the one field, patchGraph_, not yet scoped), each an OPEN item
+//        for stage 3b in docs/engine-stage3.md;
 //     4. no engine object passed as an argument (a free helper taking
 //        Pipeline& would otherwise change state on a control's behalf).
 //   5. window machinery contains no ImGui input (Button, Checkbox, Slider,
@@ -242,34 +246,45 @@ const char* const kControlMayCall[] = {
 // must turn each into a command or a form the command carries, because a
 // write from the GUI thread races the control thread). Rules 1-4 still
 // judge every other engine field.
-const char* const kWindowMayWrite[] = {
-    "scanStartMhz_",  // the scanner panel edits the scanner range in place (SCANNER_RUN carries it)
-    "scanStopMhz_",  // the same
-    "scanStepKhz_",  // the same
-    "scanDwellMs_",  // the scanner panel: the timing SCANNER_RUN reads when applied
-    "scanHoldMs_",  // the same
-    "scanResumeMs_",  // the same
-    "scanListenMs_",  // the same
-    "soundCard_",  // the sound card panel: what SELECT_SOURCE soundcard:open opens (stage 1 OPEN 3)
-    "plutoUri_",  // the Pluto address box: what open-pluto and the Pluto row read
-    "transmitArgs_",  // the transmit address box: what TX_OPEN opens
-    // transmitOpen_ CLOSED engine/stage3b-pre 2b: the toolbar switch and the
-    // page's own close (a local mirror bool, never &engine_.transmitOpen_)
-    // both go through FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN now, which also
-    // releases a remote key in the same step (docs/engine-stage3.md OPEN 10).
+//
+// SCOPED (engine/stage3b-pre 2d, docs/engine-stage3.md OPEN item 1): each
+// entry names the ONE AppWindow member allowed to write it - not "any
+// control", which is what a flat list (the form this used to be) actually
+// allowed. A control OTHER than the named owner writing a listed field is a
+// rule-3 violation exactly like writing a field not on this list at all.
+// Found this way, before it was fixed: a probe writing transmitOpen_ AND
+// soundCard_ from drawToolbar (neither of which drawToolbar owns) passed the
+// old flat-list guard silently.
+struct ScopedWrite {
+    const char* field;
+    const char* member;
+};
+const ScopedWrite kWindowMayWriteScoped[] = {
+    {"scanStartMhz_", "drawScannerSection"},  // the scanner range form (SCANNER_RUN carries it)
+    {"scanStopMhz_", "drawScannerSection"},
+    {"scanStepKhz_", "drawScannerSection"},
+    {"scanDwellMs_", "drawScannerSection"},  // the timing SCANNER_RUN reads when applied
+    {"scanHoldMs_", "drawScannerSection"},
+    {"scanResumeMs_", "drawScannerSection"},
+    {"scanListenMs_", "drawScannerSection"},
+    {"soundCard_", "drawSoundCardControls"},  // what SELECT_SOURCE soundcard:open opens (stage 1 OPEN 3)
+    {"plutoUri_", "drawSourceSection"},  // the Pluto address box: what open-pluto reads
+    {"transmitArgs_", "drawTransmitPage"},  // the transmit address box: what TX_OPEN opens
+    {"patchSinkLines_", "drawPatchFaces"},  // pruning a gone node's cached lines (tied to OPEN 6 - not converted)
+    {"muteKeptRunning_", "drawMutePopup"},  // the mute dialog's "Keep it running" answer
+    {"mutePopup_", "drawMutePopup"},  // the mute dialog closes its subject, in the same answer
+    {"pluginCatalogueUrl_", "drawPluginStoreSection"},  // the store URL box commits its text
+    {"telemetryEnabled_", "drawUsageReportingSection"},  // the usage reporting switch (API: TELEMETRY_ENABLE)
+    {"telemetryInstallId_", "drawUsageReportingSection"},  // mints or forgets the install id
+    {"patchListsWanted_", "drawPatchRadioInspector"},  // "Look for radios" pressed (0.99.40)
+};
+// UNSCOPED: written from many controls across the patch canvas and inspector
+// (drawPatchView, drawPatchCanvas's caller, drawPatchRadioInspector and
+// others), all part of OPEN item 6's still-open "patch runtime tied to the
+// page" design - scoping it to "any of about a dozen members" would be the
+// old flat list with extra steps, so it stays flat until 6 is settled.
+const char* const kWindowMayWriteUnscoped[] = {
     "patchGraph_",  // the patch canvas edits the document the patch runtime runs (stage 1 OPEN 10)
-    // sourceError_, soapyScanDeferredLogged_, gpsRefusal_, decoderLog_,
-    // bookmarkImportNote_ and soundCardMissing_ CLOSED engine/stage3b-pre 2c:
-    // FOXAPP_OP_SET_SOURCE_ERROR, FOXAPP_OP_SET_BOOKMARK_NOTE and
-    // FOXAPP_OP_CLEAR_STATUS (docs/engine-stage3.md OPEN item 1's note).
-    "pluginCatalogueUrl_",  // the store URL box commits its text
-    "patchSinkLines_",  // a Text out face's Clear key (tied to OPEN 6, the patch runtime - not attempted this round)
-    // mutePopupQueued_ CLOSED engine/stage3b-pre 2c (FOXAPP_OP_CLEAR_STATUS).
-    "muteKeptRunning_",  // the mute dialog's Keep it running answer
-    "mutePopup_",  // the mute dialog closes its subject
-    "telemetryEnabled_",  // the usage reporting switch (API: TELEMETRY_ENABLE)
-    "telemetryInstallId_",  // the usage reporting switch mints or forgets the install id
-    "patchListsWanted_",  // a Radio's device list opened or "Look for radios" pressed (0.99.40)
 };
 
 struct LineAllow {
@@ -544,6 +559,27 @@ std::vector<FieldPatterns> fieldPatterns(const std::vector<std::string>& names) 
     return out;
 }
 
+// SUB-FIELD assignment through a struct-typed field (soundCard_.cardRateHz =
+// ..., one or more member accesses deep) - used ONLY for kWindowMayWriteScoped
+// (rule 3's general check has never needed this, because every kFields entry
+// is a scalar; a struct-typed field newly added to kFields would want it
+// too, but none is today). Found needing this: a probe writing
+// soundCard_.cardRateHz from drawToolbar passed the plain fieldPatterns()
+// check above silently (it only matches a write to the WHOLE field or a
+// mutating container call on it, neither of which a sub-field assignment is).
+std::vector<FieldPatterns> scopedFieldPatterns(const std::vector<std::string>& names) {
+    std::vector<FieldPatterns> out = fieldPatterns(names);
+    const std::string pre = "(^|[^A-Za-z0-9_.>]|this->)";
+    const std::string assignOp = "\\s*([-+*/%&|^]|<<|>>)?=(?!=)";
+    for (FieldPatterns& p : out) {
+        p.writes.emplace_back(pre + p.name + "(\\.[A-Za-z_][A-Za-z0-9_]*)+" + assignOp);
+        p.writes.emplace_back(pre + p.name +
+                              "(\\.[A-Za-z_][A-Za-z0-9_]*)*\\s*(\\.|->)\\s*(assign|append|clear|push_back|"
+                              "emplace_back|emplace|erase|insert|swap|resize|pop_back|replace|reset)\\s*\\(");
+    }
+    return out;
+}
+
 // Rules 1-4 on one line of a control. Appends "rule: token" for each finding.
 void judgeControlLine(const std::string& l, const std::vector<std::string>& helpers,
                       const std::vector<FieldPatterns>& fields, bool query,
@@ -744,13 +780,21 @@ void scan(const fs::path& root, const EngineSurface& eng, Report& r) {
     std::error_code ec;
     CHECK(fs::is_directory(gui, ec));
     // Rule 3's fields: the receiver's, and every field the Engine declares,
-    // but those the window still edits in place (each an OPEN item).
+    // but those the window still edits in place (each an OPEN item) - the
+    // SCOPED ones are judged separately, below, against their one owner.
     std::vector<std::string> fieldNames(std::begin(kFields), std::end(kFields));
+    std::vector<std::string> scopedFieldNames;
+    for (const ScopedWrite& sw : kWindowMayWriteScoped) { scopedFieldNames.push_back(sw.field); }
+    const auto exemptFromRule3 = [&](const std::string& f) {
+        return inList(f, kWindowMayWriteUnscoped) ||
+               std::find(scopedFieldNames.begin(), scopedFieldNames.end(), f) != scopedFieldNames.end();
+    };
     for (const std::string& f : eng.fields) {
-        if (inList(f, kWindowMayWrite)) { continue; }
+        if (exemptFromRule3(f)) { continue; }
         if (std::find(fieldNames.begin(), fieldNames.end(), f) == fieldNames.end()) { fieldNames.push_back(f); }
     }
     const std::vector<FieldPatterns> fields = fieldPatterns(fieldNames);
+    const std::vector<FieldPatterns> scopedFields = scopedFieldPatterns(scopedFieldNames);
     // Rule 1's tokens: the curated helpers, the window's own machinery, and
     // every Engine method that is not a const query - but the command path.
     std::vector<std::string> helpers(std::begin(kHelpers), std::end(kHelpers));
@@ -822,6 +866,36 @@ void scan(const fs::path& root, const EngineSurface& eng, Report& r) {
                             "%s:%zu\n      -> submit a command (docs/engine-stage1.md, docs/engine-stage3.md)\n",
                             member.c_str(), f.c_str(), file.c_str(), i + 1);
             }
+            // SCOPED FIELDS (engine/stage3b-pre 2d): a write to one of these
+            // is fine from its ONE named owner and a violation from anything
+            // else - a control not on this list at all is already caught
+            // above by judgeControlLine (these fields were excluded from
+            // `fields` precisely so they land here instead).
+            for (const FieldPatterns& f : scopedFields) {
+                if (l.find(f.name) == std::string::npos) { continue; }
+                bool written = false;
+                for (const std::regex& re : f.writes) {
+                    if (std::regex_search(l, re)) {
+                        written = true;
+                        break;
+                    }
+                }
+                if (!written) { continue; }
+                const char* owner = nullptr;
+                for (const ScopedWrite& sw : kWindowMayWriteScoped) {
+                    if (f.name == sw.field) {
+                        owner = sw.member;
+                        break;
+                    }
+                }
+                if (owner != nullptr && member != owner) {
+                    ++r.violations;
+                    std::printf("FAIL: AppWindow::%s writes %s, which only AppWindow::%s may write, at "
+                                "%s:%zu\n      -> submit a command, or move the write to its owner "
+                                "(docs/engine-stage3.md OPEN item 1)\n",
+                                member.c_str(), f.name.c_str(), owner, file.c_str(), i + 1);
+                }
+            }
         }
     }
     r.controls = static_cast<int>(controls.size());
@@ -868,9 +942,21 @@ int main(int argc, char** argv) {
         if (!ok) { std::printf("FAIL: kControlMayCall names %s, which nothing defines - remove it\n", m); }
         CHECK(ok);
     }
-    for (const char* f : kWindowMayWrite) {
+    for (const ScopedWrite& sw : kWindowMayWriteScoped) {
+        if (eng.fields.count(sw.field) == 0) {
+            std::printf("FAIL: kWindowMayWriteScoped names %s, which the engine does not declare - remove it\n",
+                        sw.field);
+        }
+        CHECK(eng.fields.count(sw.field) != 0);
+        if (r.membersSeen.count(sw.member) == 0) {
+            std::printf("FAIL: kWindowMayWriteScoped names %s as %s's owner, but the window does not define "
+                        "%s - fix or remove it\n", sw.field, sw.member, sw.member);
+        }
+        CHECK(r.membersSeen.count(sw.member) != 0);
+    }
+    for (const char* f : kWindowMayWriteUnscoped) {
         if (eng.fields.count(f) == 0) {
-            std::printf("FAIL: kWindowMayWrite names %s, which the engine does not declare - remove it\n", f);
+            std::printf("FAIL: kWindowMayWriteUnscoped names %s, which the engine does not declare - remove it\n", f);
         }
         CHECK(eng.fields.count(f) != 0);
     }

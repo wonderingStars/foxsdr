@@ -756,6 +756,40 @@ they were with the facts; and what 3b has to settle first.
    sites is a command already; the other, "Look for radios", was not
    converted, for the same reason 2b below gives - not attempted without the
    same build/test verification the rest of this merge got).
+   **SCOPED, engine/stage3b-pre 2d (2026-09-28):** `kWindowMayWrite` was a
+   FLAT list - any control could write any listed field, which is not what
+   "the window still edits it in place" meant (each was written from exactly
+   one place). It is now `kWindowMayWriteScoped` (`tests/test_command_path_guard.cpp`),
+   pairing every remaining field with the ONE `AppWindow` member allowed to
+   write it (`drawScannerSection` for the 7 scanner fields,
+   `drawSoundCardControls` for `soundCard_`, `drawSourceSection` for
+   `plutoUri_`, `drawTransmitPage` for `transmitArgs_`, `drawPatchFaces` for
+   `patchSinkLines_`, `drawMutePopup` for `muteKeptRunning_`/`mutePopup_`,
+   `drawPluginStoreSection` for `pluginCatalogueUrl_`,
+   `drawUsageReportingSection` for `telemetryEnabled_`/`telemetryInstallId_`,
+   `drawPatchRadioInspector` for `patchListsWanted_`) - a write from any OTHER
+   member is now rule 3's violation, exactly as if the field were not listed
+   at all. `patchGraph_` stays in a separate, still-flat
+   `kWindowMayWriteUnscoped` (written from a dozen-odd patch canvas/inspector
+   members, all tied to OPEN item 6's still-open design; scoping it to "any
+   of a dozen" would be the flat list with extra steps). The existing
+   sub-field write detection (`fieldPatterns()`'s regexes) only matched a
+   write to a field's WHOLE value or a mutating container call on it - a
+   struct-typed field's sub-field assignment (`soundCard_.cardRateHz = ...`)
+   passed silently, which is exactly the shape the brief's own probe named
+   ("a probe writing transmitOpen_ or soundCard_ from drawToolbar must be
+   flagged"). A new `scopedFieldPatterns()` adds a sub-field assignment regex
+   (and a sub-field mutating-container-call regex) used only for the scoped
+   list, since every `kFields` entry (the always-checked receiver fields) is
+   a scalar and does not need it today. **Proven red**: a probe inserted at
+   the top of `drawToolbar` (`engine_.soundCard_.cardRateHz = 1.0;` -
+   `soundCard_` is `drawSoundCardControls`'s alone;
+   `engine_.transmitOpen_ = true;` - no longer listed at all since 2b closed
+   it) - both flagged (`writes soundCard_, which only
+   AppWindow::drawSoundCardControls may write`; the pre-existing general
+   `field write transmitOpen_`), 2 violations; probe removed (confirmed by
+   `git status`/`git diff` showing no residual change to `app_window.cpp`)
+   and reverified 0 violations, 145/145 checks.
 2. **Non-command calls a control still makes** (`kControlMayCall`):
    `telemetryNotePanel` (a usage counter), `currentConfig` (the save's
    snapshot - now `engine_.fillConfig` inside it), `currentAbsoluteHz` and
@@ -777,6 +811,23 @@ they were with the facts; and what 3b has to settle first.
    decimation surface through `FoxCommand`, which is exactly the class of
    change 2b below declines for the same reason: not attempted without the
    same level of verification the rest of the merge got.
+   **Scoping `kControlMayCall` (engine/stage3b-pre 2d) was considered and
+   NOT applied**, unlike `kWindowMayWrite`'s fields (which each had exactly
+   one real owner - see item 1's 2d note). Checked every entry's call sites:
+   `telemetryNotePanel` is called from ~20 different panel-open controls by
+   design (every panel notes itself), `currentAbsoluteHz` from several
+   unrelated controls, `refreshDiagContext` from both a control and `run()`
+   (machinery) - none of these has a single owner to scope to, so a
+   `kWindowMayWrite`-shaped fix does not fit. Only the Airspy group
+   (`asAirspyDevice`, `chooseAirspyDecimation`, `chooseAirspyGainMode`,
+   `chooseAirspyAgc`, `airspyRememberOpen` - all `app_window_airspy.cpp`'s
+   `drawAirspyControls` alone), `scanSoundCards`
+   (`app_window_soundcard.cpp`'s sound-card panel alone) and
+   `patchListRecordings` (`app_window_patch_radios.cpp`'s patch radio
+   inspector alone) are genuinely single-owner and would scope cleanly the
+   same way - left undone this round for the same reason the calls
+   themselves were not converted to commands (not attempted without the same
+   verification), not because it is a different kind of problem.
 3. **The window reads engine members directly** as a friend (every panel
    draws from `engine_.x_`, `engine_.pipeline_.y()`): allowed by the guard as
    reads, and safe only because both run on one thread. 3b needs every such
