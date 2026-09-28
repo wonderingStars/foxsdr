@@ -227,6 +227,14 @@ const char* const kControlMayCall[] = {
     "refreshDiagContext",
     // the sound card panel lists the cards (OPEN: a direct call, not a command)
     "scanSoundCards",
+    // the Airspy panel's controls (0.99.41): the same reviewed direct-call
+    // pattern as scanSoundCards, so tests/test_airspy_app.cpp drives the
+    // buttons' own code.
+    "asAirspyDevice", "chooseAirspyDecimation", "chooseAirspyGainMode", "chooseAirspyAgc",
+    "airspyRememberOpen",
+    // the patch Radio inspector lists local I/Q recordings (0.99.40), the
+    // same reviewed direct-call pattern.
+    "patchListRecordings",
 };
 
 // ENGINE FIELDS THE WINDOW STILL EDITS IN PLACE. Each is a form or a page
@@ -260,6 +268,7 @@ const char* const kWindowMayWrite[] = {
     "telemetryEnabled_",  // the usage reporting switch (API: TELEMETRY_ENABLE)
     "telemetryInstallId_",  // the usage reporting switch mints or forgets the install id
     "soundCardMissing_",  // the sound card panel forgets the missing-card line when a card is picked
+    "patchListsWanted_",  // a Radio's device list opened or "Look for radios" pressed (0.99.40)
 };
 
 struct LineAllow {
@@ -281,8 +290,8 @@ const LineAllow kLineAllowed[] = {
     {"drawPatchPage", "pipeline_.patchRunner().clear();"},
     {"drawPatchPage", "patchStopAll(true);"},
     {"drawPatchPage", "refreshPluginRunner();"},
-    {"drawPatchPage", "patchReconcile();"},
-    {"drawPatchPage", "patchApplyRunning();"},
+    {"drawPatchView", "patchReconcile();"},
+    {"drawPatchView", "patchApplyRunning();"},
     // drawTransmitPage: a transmitter follows the receiver's dial, per frame.
     {"drawTransmitPage", "followTransmitFrequency();"},
     // run: interactive start, the GPS test seam, the catalogue test hook, the
@@ -317,8 +326,11 @@ const LineAllow kLineAllowed[] = {
     {"run", "telemetryCleanExit_ = true;"},
     // the crash handler's context, once a second and at start
     {"run", "refreshDiagContext();"},
-    // the patch runtime's per-frame steps (OPEN 2/10)
-    {"drawPatchPage", "rebuildPatchCatalogue();"},
+    // the patch runtime's per-frame steps (OPEN 2/10). Since 0.99.40 the
+    // patch is the main window's other face (drawPatchView), not a page of
+    // its own; drawPatchPage is left with only the per-frame retire and the
+    // close-stops-the-patch rule below.
+    {"drawPatchView", "rebuildPatchCatalogue();"},
     // closing the page stops the patch (OPEN 2)
     {"drawPatchPage", "patchWasOpen_ = false;"},
     // the same
@@ -328,13 +340,13 @@ const LineAllow kLineAllowed[] = {
     // the same
     {"drawPatchPage", "patchRefused_.clear();"},
     // the one compile a frame
-    {"drawPatchPage", "patchPlan_ = cascade::core::patch::compile("},
+    {"drawPatchView", "patchPlan_ = cascade::core::patch::compile("},
     // the same (a const pointer handed to compile)
-    {"drawPatchPage", "&patchCatalogue_);"},
+    {"drawPatchView", "&patchCatalogue_);"},
     // each radio publishes its set
-    {"drawPatchPage", "patchPublishSets();"},
+    {"drawPatchView", "patchPublishSets();"},
     // the page is open this frame
-    {"drawPatchPage", "patchWasOpen_ = true;"},
+    {"drawPatchView", "patchWasOpen_ = true;"},
     // the engine's frame begins: the snapshot's retry, then the first drain
     {"drawUi", "pumpFrameBegin();"},
     // endTakesOnFault, then pumpDecoderOutput

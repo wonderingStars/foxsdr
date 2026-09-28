@@ -25,9 +25,8 @@
 
 #include "core/i18n.hpp"
 #include "core/utf8_text.hpp"
-#include "engine/airspy_panel.hpp"
+#include "engine/tune_control.hpp"
 #include "gui/text_fit.hpp"
-#include "gui/tune_control.hpp"
 
 namespace cascade::gui {
 using cascade::i18n::tr;
@@ -43,7 +42,7 @@ void tooltipIfHovered(const char* text) {
 }  // namespace
 
 bool AppWindow::drawAirspyControls() {
-    cascade::source::AirspySource* a = asAirspy(engine_.device_);
+    cascade::source::AirspySource* a = engine_.asAirspyDevice();
     if (a == nullptr) { return false; }
 
     // --- DECIMATION ------------------------------------------------------
@@ -105,20 +104,25 @@ bool AppWindow::drawAirspyControls() {
     }
 
     // --- THAT MODE'S CONTROLS --------------------------------------------
+    // A COPY is edited here (the same rule the generic sliders follow, see
+    // drawSourceSection): the figure shown is always the radio's readback,
+    // never left holding a request the driver quantised away from. The write
+    // goes through the command path (FOXAPP_OP_SET_GAIN_NO_READBACK, applied
+    // at once - the same "a gesture whose own drawing reads what it sets, in
+    // the same frame" rule as the knob) rather than into deviceGainsDb_
+    // directly, which is what a control may never do.
     const auto slider = [&](std::size_t i, const char* label) {
         if (i >= engine_.deviceGainNames_.size() || i >= engine_.deviceGainsDb_.size()) { return; }
         const float hi = i < engine_.deviceGainRanges_.size()
                              ? static_cast<float>(engine_.deviceGainRanges_[i].maxDb)
                              : 15.0f;
+        float db = engine_.deviceGainsDb_[i];
         ImGui::PushID(static_cast<int>(i));
-        if (ImGui::SliderFloat(labelAboveIfNeeded(label), &engine_.deviceGainsDb_[i], 0.0f, hi,
+        if (ImGui::SliderFloat(labelAboveIfNeeded(label), &db, 0.0f, hi,
                                gainSliderFormat(cascade::source::GainUnit::Steps))) {
-            if (a->setGainDb(engine_.deviceGainNames_[i], static_cast<double>(engine_.deviceGainsDb_[i]))) {
-                engine_.deviceGainsDb_[i] = static_cast<float>(a->gainDb(engine_.deviceGainNames_[i]));
-                engine_.airspyRememberOpen();
-            } else {
-                engine_.sourceError_ = a->lastError();
-            }
+            engine_.submitCommand(cascade::core::cmd::makeText(FOXAPP_OP_SET_GAIN_NO_READBACK,
+                                                       engine_.deviceGainNames_[i], 0, 0,
+                                                       static_cast<double>(db)));
         }
         ImGui::PopID();
     };

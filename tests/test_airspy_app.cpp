@@ -23,6 +23,7 @@
 
 #include "airspy_fake_usb.hpp"
 #include "core/config.hpp"
+#include "engine/airspy_panel.hpp"
 #include "engine/engine.hpp"
 #include "gui/app_window.hpp"
 #include "net/web_control.hpp"

@@ -73,17 +73,6 @@ const char* destKind(const pc::AudioDest* dest) {
 // the node taking the file's rate must not reopen it.
 std::string openedAs(const pc::Node& n) { return pc::radioOpenIdentity(n.device, radioRate(n)); }
 
-// "2.000 MS/s", "48.000 kS/s": a recording's rate as its list row says it.
-std::string recordingRateText(double hz) {
-    char buf[32];
-    if (hz >= 1.0e6) {
-        std::snprintf(buf, sizeof(buf), "%.3f MS/s", hz / 1.0e6);
-    } else {
-        std::snprintf(buf, sizeof(buf), "%.3f kS/s", hz / 1.0e3);
-    }
-    return buf;
-}
-
 // The file name of a recording key, for its label - as UTF-8 for the screen.
 std::string recordingFileName(const std::string& key) {
     try {

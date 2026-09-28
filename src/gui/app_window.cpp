@@ -3013,9 +3013,9 @@ void AppWindow::drawUi() {
             // above: the web interface's snapshot copies lastFrame_ only when
             // its sequence moves, and the waterfall would come back with a
             // hole in its history.
-            if (pipeline_.getLatestFrame(lastFrame_)) {
+            if (engine_.pipeline_.getLatestFrame(lastFrame_)) {
                 waterfall_->addLine(lastFrame_.dbBins.data(),
-                                    static_cast<int>(lastFrame_.dbBins.size()), dbMin_, dbMax_);
+                                    static_cast<int>(lastFrame_.dbBins.size()), engine_.dbMin_, engine_.dbMax_);
                 ++waterfallLines_;
                 lastFrameSeenS_ = ImGui::GetTime();
             }
@@ -10459,7 +10459,7 @@ void AppWindow::drawPatchView() {
     // then it would be the generator for good; seeded once the open has
     // answered, it is the radio the user was listening to, as it was when
     // the page was only ever opened by hand.
-    if (!deviceOpenPending_ && !soundCardOpenPending_) { seedPatchIfNeeded(); }
+    if (!engine_.deviceOpenPending_ && !engine_.soundCardOpenPending_) { seedPatchIfNeeded(); }
 
     // THE PLATE, the rail's own: ground, bevel, the engraved name and the rule
     // under it - so the view reads as a panel of the bench rather than a
@@ -10652,7 +10652,9 @@ void AppWindow::drawPatchView() {
                 // receiver's own radio first - so it runs the moment it lands.
                 // The native list is read for it here (0.99.40): showing the
                 // view no longer reads it, and adding a radio is asking for one.
-                if (p.kind == cascade::core::patch::NodeKind::Radio) { scanNative(); }
+                if (p.kind == cascade::core::patch::NodeKind::Radio) {
+                    engine_.submitCommand(cascade::core::cmd::make(FOXAPP_OP_SCAN_NATIVE_ONLY));
+                }
                 const std::string dev = p.kind == cascade::core::patch::NodeKind::Radio
                                             ? patchDefaultDeviceKey()
                                             : std::string{};

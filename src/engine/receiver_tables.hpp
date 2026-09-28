@@ -219,6 +219,20 @@ constexpr double kPatchDefaultRateHz = 2.0e6;
 
 inline double radioRate(const pc::Node& n) { return n.rateHz > 0.0 ? n.rateHz : kPatchDefaultRateHz; }
 
+// "2.000 MS/s", "48.000 kS/s": a recording's rate as its list row says it.
+// Shared the same way radioRate is: the Engine's patchDeviceChoices needs it
+// for the recordings list, and the window's drawPatchRadioInspector needs it
+// for a recording node's fixed rate line.
+inline std::string recordingRateText(double hz) {
+    char buf[32];
+    if (hz >= 1.0e6) {
+        std::snprintf(buf, sizeof(buf), "%.3f MS/s", hz / 1.0e6);
+    } else {
+        std::snprintf(buf, sizeof(buf), "%.3f kS/s", hz / 1.0e3);
+    }
+    return buf;
+}
+
 // The Channel a Demod node is fed from, or kNoNode.
 inline pc::NodeId demodChannel(const pc::Graph& g, pc::NodeId demod) {
     for (const pc::Wire& w : g.wires()) {

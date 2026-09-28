@@ -5177,6 +5177,13 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             scanNative();
             if (!soapyScanned_ || (soapyScanPartial_ && !soapyScanGated())) { scanSoapy(); }
             return res;
+        case FOXAPP_OP_SCAN_NATIVE_ONLY:
+            // A Radio part added to the patch (0.99.40): it starts on a free
+            // radio, so it needs the native list - which opens nothing - and
+            // never the SoapySDR vendor probe (that is a Radio's own device
+            // list opened, or "Look for radios").
+            scanNative();
+            return res;
         case FOXAPP_OP_SET_NETWORK_USRP_SCAN:
             lookForNetworkUsrps_ = on;
             if (lookForNetworkUsrps_) { scanSoapy(); }

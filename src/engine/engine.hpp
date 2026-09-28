@@ -1091,6 +1091,9 @@ private:
     // an Airspy, in which case the generic Auto gain switch and gain sliders
     // are not drawn; false and draws nothing for every other radio.
     //
+    // The open radio AS an Airspy, or null for any other radio (or none
+    // open) - a query, like currentAbsoluteHz/carriedAirCentre.
+    cascade::source::AirspySource* asAirspyDevice() const;
     // Re-reads the gain list, values and AGC state from device_: an Airspy's
     // list changes with its mode, and a gain set by name from the browser can
     // change the mode.

@@ -394,7 +394,7 @@ void AppWindow::drawPatchRadioInspector(pc::Node& n) {
                 n.device = c.key;
                 // A recording's rate is its own: the node takes it now, so
                 // the patch is planned at the rate it will run at.
-                for (const pc::RecordingInfo& r : patchRecordings_) {
+                for (const pc::RecordingInfo& r : engine_.patchRecordings_) {
                     if (r.key == c.key) { n.rateHz = r.rateHz; }
                 }
                 patchUi_.dirty = true;

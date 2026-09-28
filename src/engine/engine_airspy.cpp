@@ -17,6 +17,14 @@ namespace cascade::engine {
 
 using AirspyMode = cascade::source::AirspySource::GainMode;
 
+// The open radio AS an Airspy, or null for any other radio (or none open).
+// A query, like currentAbsoluteHz/carriedAirCentre (kControlMayCall): the
+// window's drawAirspyControls reads it once a frame to decide whether to
+// draw its own panel in place of the generic one.
+cascade::source::AirspySource* Engine::asAirspyDevice() const {
+    return cascade::gui::asAirspy(device_);
+}
+
 void Engine::refreshDeviceGainMirrors() {
     if (device_ == nullptr) { return; }
     deviceGainRanges_ = device_->gains();
