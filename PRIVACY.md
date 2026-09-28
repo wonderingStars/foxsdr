@@ -411,7 +411,7 @@ SEND:
 | `kind` | `bug` or `dislike` | Which of the two you chose at the top of the page: something that does not work, or something that works as designed and that you would rather it did not. |
 | `text` | `The waterfall freezes when I change the sample rate` | What you typed, trimmed of leading and trailing blank space. Between 10 and 100000 characters. |
 | `contact` | `g4xyz@example.com`, or empty | An email address or callsign, ENTIRELY OPTIONAL, so we can ask a follow-up question. Up to 120 characters. Kept on screen after a successful send. |
-| `version` | `0.99.42` | Which release, so a bug already fixed is not chased again. |
+| `version` | `0.99.43` | Which release, so a bug already fixed is not chased again. |
 | `platform` | `windows`, `linux` or `android` | Which build sent it. |
 | `arch` | `x64` or `arm64` | As above. |
 | `diagnostics` | the same text **Copy diagnostics** produces, or ABSENT | OPTIONAL. Present only when you left "Attach the diagnostics log" ticked when you pressed SEND - absent, not an empty string, otherwise. It is exactly the bundle above (*Crash and freeze reports*), with the same `<user>` handling that table's `log-path`/`crash-dir` row describes, additionally capped here at 65536 bytes (the newest lines kept, the oldest dropped, and said so). Never anything the diagnostics bundle does not already contain: no install identifier, no plugin list beyond what that bundle lists. |
