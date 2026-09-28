@@ -2764,6 +2764,10 @@ void AppWindow::drawUi() {
     // applies it at once - which is what keeps "the same frame".
     dispatchKeyBindings();
     engine_.drainLocalCommands();
+    // A scanner field edited while a scan runs, left mid-edit by a collapsed
+    // section or a switched bank: committed here, since the section that
+    // would have seen it deactivate is no longer drawn.
+    flushScannerDraft();
     // THE KEY REQUEST IS REBUILT FROM NOTHING EVERY FRAME, and this is where
     // it is cleared. Whatever is holding the PTT down - the mouse on the big
     // key, or the spacebar while the page has focus - sets it again while
@@ -7218,11 +7222,20 @@ void AppWindow::drawSourceSection() {
             // would strand the first one's device for a stale-drop teardown.
             ImGui::BeginDisabled(engine_.deviceOpenPending_);
             ImGui::SetNextItemWidth(-60.0f);
-            // A LOCAL DRAFT (engine/stage3b-pre fields-to-commands round 2),
-            // seeded from plutoUri_ once in applyConfig - typing here never
-            // writes the engine field; Open sends the draft's text, and
-            // Engine::openPlutoAt persists it from the same text it opens.
-            ImGui::InputText("##pluto_uri", plutoUriDraft_, sizeof(plutoUriDraft_));
+            // A LOCAL DRAFT (engine/stage3b-pre fields-to-commands rounds
+            // 2-3): typing here never writes the engine field in place. Each
+            // edit is committed as typed (FOXAPP_OP_SET_PLUTO_URI), so an
+            // address typed and never opened is still the one config.json
+            // keeps; while the box is not being typed in it re-seeds from
+            // plutoUri_, so an open-pluto from elsewhere shows here too.
+            if (ImGui::GetActiveID() != ImGui::GetID("##pluto_uri")) {
+                cascade::core::formatUtf8(plutoUriDraft_, sizeof(plutoUriDraft_), "%s", engine_.plutoUri_);
+            }
+            if (ImGui::InputText("##pluto_uri", plutoUriDraft_, sizeof(plutoUriDraft_))) {
+                const cascade::core::cmd::QueuedCommand q =
+                    cascade::core::cmd::makeText(FOXAPP_OP_SET_PLUTO_URI, plutoUriDraft_);
+                engine_.applyCommand(q.c, q.longText);
+            }
             ImGui::SameLine();
             const bool openPluto = ImGui::Button(trId("Open"));
             ImGui::EndDisabled();
@@ -15013,14 +15026,7 @@ void AppWindow::drawTransmitSection() {
 }
 
 void AppWindow::drawTransmitPage() {
-    if (!engine_.transmitOpen_) {
-        // The next open reseeds the draft fresh (engine/stage3b-pre
-        // fields-to-commands round 2) - engine_.transmitArgs_ may have
-        // changed while the page was shut (a successful TX_OPEN elsewhere,
-        // a config reload), and the draft must not go on showing stale text.
-        transmitArgsDraftLive_ = false;
-        return;
-    }
+    if (!engine_.transmitOpen_) { return; }
     constexpr float kTxW = 560.0f;
     constexpr float kTxH = 520.0f;
     // The opening rectangle is the call site's job - see drawDemodScopePage
@@ -15059,16 +15065,6 @@ void AppWindow::drawTransmitPage() {
     const bool have = sink != nullptr;
     const bool onAir = engine_.transmitter_.transmitting();
 
-    // THE DRAFT IS SEEDED FOR THE EYE, once per open (engine/stage3b-pre
-    // fields-to-commands round 2): FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN's handler
-    // already fills transmitArgs_ if it was empty when the page opened, so
-    // the draft always starts from a real address, never blank.
-    if (!transmitArgsDraftLive_) {
-        cascade::core::formatUtf8(transmitArgsDraft_, sizeof(transmitArgsDraft_), "%s",
-                                  engine_.transmitArgs_.c_str());
-        transmitArgsDraftLive_ = true;
-    }
-
     // --- the radio -----------------------------------------------------------
     ImGui::TextUnformatted(tr("RADIO"));
     ImGui::SameLine();
@@ -15077,9 +15073,24 @@ void AppWindow::drawTransmitPage() {
         // field would then describe something other than what is connected -
         // and on this page "what is connected" is the thing that is about to
         // radiate.
+        //
+        // A LOCAL DRAFT (engine/stage3b-pre fields-to-commands rounds 2-3),
+        // the Pluto box's shape: re-seeded from transmitArgs_ whenever it is
+        // not being typed in - FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN's handler
+        // fills that on open if it was empty, so the page opens on a real
+        // address, never blank - and each edit committed as typed
+        // (FOXAPP_OP_SET_TRANSMIT_ARGS), so config.json keeps what was typed.
         ImGui::BeginDisabled(have);
         ImGui::SetNextItemWidth(260.0f);
-        ImGui::InputText("##txargs", transmitArgsDraft_, sizeof(transmitArgsDraft_));
+        if (ImGui::GetActiveID() != ImGui::GetID("##txargs")) {
+            cascade::core::formatUtf8(transmitArgsDraft_, sizeof(transmitArgsDraft_), "%s",
+                                      engine_.transmitArgs_.c_str());
+        }
+        if (ImGui::InputText("##txargs", transmitArgsDraft_, sizeof(transmitArgsDraft_))) {
+            const cascade::core::cmd::QueuedCommand q =
+                cascade::core::cmd::makeText(FOXAPP_OP_SET_TRANSMIT_ARGS, transmitArgsDraft_);
+            engine_.applyCommand(q.c, q.longText);
+        }
         ImGui::EndDisabled();
     }
     ImGui::SameLine();
@@ -15088,14 +15099,21 @@ void AppWindow::drawTransmitPage() {
     // LATCH stay on the per-frame rebuild in drawUi (txPageKey), which is the
     // dead-man's handle - see docs/engine-stage1.md, OPEN.
     namespace cmd = cascade::core::cmd;
+    // AN EMPTY BOX OPENS NOTHING (round 3 fix): TX_OPEN refuses empty text,
+    // and the key is greyed with the reason beside it, rather than opening
+    // a board the box does not show.
+    const bool noAddress = std::string(transmitArgsDraft_).find_first_not_of(" \t") == std::string::npos;
     if (!have) {
+        ImGui::BeginDisabled(noAddress);
         if (ImGui::Button(trId("Open##txopen"))) {
             engine_.submitCommand(cmd::makeText(FOXAPI_OP_TX_OPEN, transmitArgsDraft_));
         }
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("%s", tr("Connects to the board's iiod daemon and leaves it QUIET:\n"
-                                       "maximum attenuation, transmit oscillator down. Nothing goes\n"
-                                       "out until the key below is held."));
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+            ImGui::SetTooltip("%s", noAddress ? tr("Type the board's address first.")
+                                              : tr("Connects to the board's iiod daemon and leaves it QUIET:\n"
+                                                   "maximum attenuation, transmit oscillator down. Nothing goes\n"
+                                                   "out until the key below is held."));
         }
     } else {
         // CLOSING IS REFUSED WHILE THE KEY IS DOWN rather than silently
@@ -17398,81 +17416,82 @@ void AppWindow::drawScannerSection() {
     // applied; Scanner::configure sanitizes (swap, step floor, negative
     // times), so the raw edit values can be handed over as-is.
     //
-    // Commit on deactivate-after-edit (not per keystroke): while the scan is
-    // ACTIVE a commit reconfigures it, which per the Scanner contract resets
-    // to the new startHz — correct for new parameters, but far too jumpy to
-    // fire on every typed digit.
+    // While the scan is ACTIVE a commit reconfigures it, which per the
+    // Scanner contract resets to the new startHz — correct for new
+    // parameters, but far too jumpy to fire on every typed digit; see "WHEN
+    // AN EDIT REACHES THE ENGINE" below.
     // A LOCAL DRAFT, NOT THE ENGINE FIELDS DIRECTLY (engine/stage3b-pre
     // fields-to-commands round 2): InputDouble writes its bound variable on
     // every keystroke, so binding it to engine_.scanStartMhz_ etc. wrote the
-    // receiver's state keystroke by keystroke. The draft absorbs that; the
-    // commit below still fires only on deactivate-after-edit, exactly where
-    // it always did.
-    bool edited = false;
-    ImGui::SetNextItemWidth(110.0f);
-    ImGui::InputDouble(cascade::gui::labelAboveIfNeeded(trId("Start MHz")),
-                       &scanStartMhzDraft_, 0.0, 0.0, "%.4f");
-    edited |= ImGui::IsItemDeactivatedAfterEdit();
-    ImGui::SetNextItemWidth(110.0f);
-    ImGui::InputDouble(cascade::gui::labelAboveIfNeeded(trId("Stop MHz")),
-                       &scanStopMhzDraft_, 0.0, 0.0, "%.4f");
-    edited |= ImGui::IsItemDeactivatedAfterEdit();
-    ImGui::SetNextItemWidth(110.0f);
-    ImGui::InputDouble(cascade::gui::labelAboveIfNeeded(trId("Step kHz")),
-                       &scanStepKhzDraft_, 0.0, 0.0, "%.2f");
-    edited |= ImGui::IsItemDeactivatedAfterEdit();
-    ImGui::SetNextItemWidth(110.0f);
-    ImGui::InputDouble(cascade::gui::labelAboveIfNeeded(trId("Dwell ms")),
-                       &scanDwellMsDraft_, 0.0, 0.0, "%.0f");
-    edited |= ImGui::IsItemDeactivatedAfterEdit();
-    ImGui::SetNextItemWidth(110.0f);
-    ImGui::InputDouble(cascade::gui::labelAboveIfNeeded(trId("Hold ms")),
-                       &scanHoldMsDraft_, 0.0, 0.0, "%.0f");
-    edited |= ImGui::IsItemDeactivatedAfterEdit();
-    ImGui::SetNextItemWidth(110.0f);
-    ImGui::InputDouble(cascade::gui::labelAboveIfNeeded(trId("Resume ms")),
-                       &scanResumeMsDraft_, 0.0, 0.0, "%.0f");
-    edited |= ImGui::IsItemDeactivatedAfterEdit();
-    // THE LONGEST STAY ON ONE SIGNAL. A scan across the broadcast band found
-    // its first station and stayed there, because the station never went
-    // quiet and "hold until quiet" was the only way on. 0 keeps that rule.
-    ImGui::SetNextItemWidth(110.0f);
-    ImGui::InputDouble(cascade::gui::labelAboveIfNeeded(trId("Listen ms")),
-                       &scanListenMsDraft_, 0.0, 0.0, "%.0f");
-    edited |= ImGui::IsItemDeactivatedAfterEdit();
-    if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("%s", tr("Longest stay on one signal before the scan moves on.\n"
-                                   "0 = stay until it goes quiet."));
+    // receiver's state keystroke by keystroke. The draft absorbs that.
+    //
+    // THE DRAFT FOLLOWS THE ENGINE (round 3 fix): a field that is not being
+    // typed in, and holds no edit still waiting for a running scan, is
+    // re-seeded from its engine field on every frame. Seeding once, in
+    // applyConfig, let the web remote's FOXAPP_OP_SCANNER_RANGE go unseen -
+    // the panel kept showing 88-108 while Start scanned 144-146, and the
+    // next desk edit wrote 88-108 back over it - and left every field at 0
+    // when the config never loaded.
+    //
+    // WHEN AN EDIT REACHES THE ENGINE. With the scanner IDLE, as it is typed:
+    // the stored fields only say what the next Start will scan, so nothing
+    // runs on a half-typed value, and an edit can never be lost to the
+    // section being collapsed or its bank switched away before the field
+    // deactivates. With a scan RUNNING, on deactivate-after-edit (or
+    // flushScannerDraft, if the section stopped being drawn first): a
+    // running scan reconfigures from the committed values and never sees a
+    // half-typed one. Only the fields actually edited are committed.
+    const double engineValue[7] = {
+        engine_.scanStartMhz_, engine_.scanStopMhz_, engine_.scanStepKhz_, engine_.scanDwellMs_,
+        engine_.scanHoldMs_,   engine_.scanResumeMs_, engine_.scanListenMs_,
+    };
+    struct ScanField {
+        const char* label;
+        const char* format;
+    };
+    const ScanField fields[7] = {
+        {trId("Start MHz"), "%.4f"}, {trId("Stop MHz"), "%.4f"},  {trId("Step kHz"), "%.2f"},
+        {trId("Dwell ms"), "%.0f"},  {trId("Hold ms"), "%.0f"},   {trId("Resume ms"), "%.0f"},
+        {trId("Listen ms"), "%.0f"},
+    };
+    const bool running = engine_.scanner_.active();
+    unsigned typed = 0;      // changed this frame, scanner idle: store now
+    unsigned finished = 0;   // deactivated after an edit this frame
+    for (int i = 0; i < 7; ++i) {
+        const unsigned bit = 1u << i;
+        if ((scanDraftPending_ & bit) == 0 &&
+            (scanDraftIds_[i] == 0 || ImGui::GetActiveID() != scanDraftIds_[i])) {
+            scanDraft_[i] = engineValue[i];
+        }
+        ImGui::SetNextItemWidth(110.0f);
+        const bool changed = ImGui::InputDouble(cascade::gui::labelAboveIfNeeded(fields[i].label),
+                                                &scanDraft_[i], 0.0, 0.0, fields[i].format);
+        scanDraftIds_[i] = ImGui::GetItemID();
+        if (changed) {
+            if (running) {
+                scanDraftPending_ |= bit;
+            } else {
+                typed |= bit;
+            }
+        }
+        if (ImGui::IsItemDeactivatedAfterEdit()) { finished |= bit; }
+        // THE LONGEST STAY ON ONE SIGNAL. A scan across the broadcast band
+        // found its first station and stayed there, because the station
+        // never went quiet and "hold until quiet" was the only way on. 0
+        // keeps that rule.
+        if (i == 6 && ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("%s", tr("Longest stay on one signal before the scan moves on.\n"
+                                       "0 = stay until it goes quiet."));
+        }
+    }
+    if (typed != 0) { commitScannerDraft(typed, false); }
+    if (finished != 0) {
+        // Any edit still pending goes with it: one reconfigure, not several.
+        commitScannerDraft(finished | scanDraftPending_, true);
+        scanDraftPending_ = 0;
     }
 
     namespace cmd = cascade::core::cmd;
-    if (edited) {
-        // THE TIMING HALF FIRST, through the EXISTING FOXAPI_OP_SCANNER_CONFIG
-        // (no new op needed - it already sets all four and reconfigures a
-        // running scan on its own). SCANNER_RANGE's own reconfigure bit
-        // (below) then re-reads scannerParams() with the fresh RANGE too, so
-        // a running scan's second reconfigure - a few microseconds later, in
-        // the same command batch, before any scan tick can run - is the
-        // authoritative one; the first is harmless, not merely idempotent.
-        FoxCommand timing = cmd::make(FOXAPI_OP_SCANNER_CONFIG);
-        timing.num[0] = scanDwellMsDraft_;
-        timing.num[1] = scanHoldMsDraft_;
-        timing.num[2] = scanResumeMsDraft_;
-        timing.num[3] = scanListenMsDraft_;
-        engine_.applyCommand(timing);
-        // THE RANGE, always all three together (idempotent for whichever of
-        // the three did not just change) - and, running, the SAME reconfigure
-        // bit this site always submitted, now folded into one call. The
-        // reconfigure re-emits a first tune on the next tick; the user-tune
-        // baseline re-arms from that retune's readback.
-        FoxCommand range = cmd::make(FOXAPP_OP_SCANNER_RANGE);
-        range.ival[0] = 1 | 2 | 4 | (engine_.scanner_.active() ? 8 : 0);
-        range.num[0] = scanStartMhzDraft_ * 1.0e6;
-        range.num[1] = scanStopMhzDraft_ * 1.0e6;
-        range.num[2] = scanStepKhzDraft_ * 1.0e3;
-        engine_.applyCommand(range);
-    }
-
     if (!engine_.scanner_.active()) {
         if (ImGui::Button(trId("Start scan"), ImVec2(-FLT_MIN, 0.0f))) {
             const cascade::core::Scanner::Params p = engine_.scannerParams();
@@ -17501,6 +17520,56 @@ void AppWindow::drawScannerSection() {
     // frequency after a stop (Scanner contract), which reads naturally here.
     ImGui::Text("%s | %.4f MHz", scannerStateName(engine_.scanner_.state()),
                 engine_.scanner_.currentHz() / 1.0e6);
+}
+
+void AppWindow::commitScannerDraft(unsigned bits, bool reconfigure) {
+    namespace cmd = cascade::core::cmd;
+    const bool running = engine_.scanner_.active();
+    if ((bits & 0x78u) != 0) {
+        // THE TIMING HALF FIRST, through the EXISTING FOXAPI_OP_SCANNER_CONFIG
+        // (it sets all four and reconfigures a running scan on its own). The
+        // four it carries are the draft's for the edited fields and the
+        // engine's own for the rest, so a field nobody touched keeps whatever
+        // the engine holds. SCANNER_RANGE's reconfigure bit (below) then
+        // re-reads scannerParams() with the fresh range too, in the same
+        // step, before any scan tick can run.
+        FoxCommand timing = cmd::make(FOXAPI_OP_SCANNER_CONFIG);
+        timing.num[0] = (bits & 0x08u) != 0 ? scanDraft_[3] : engine_.scanDwellMs_;
+        timing.num[1] = (bits & 0x10u) != 0 ? scanDraft_[4] : engine_.scanHoldMs_;
+        timing.num[2] = (bits & 0x20u) != 0 ? scanDraft_[5] : engine_.scanResumeMs_;
+        timing.num[3] = (bits & 0x40u) != 0 ? scanDraft_[6] : engine_.scanListenMs_;
+        engine_.applyCommand(timing);
+    }
+    // THE RANGE: only the edited fields' bits, and - running, finished
+    // editing - the reconfigure bit this site always submitted. The
+    // reconfigure re-emits a first tune on the next tick; the user-tune
+    // baseline re-arms from that retune's readback.
+    const std::int64_t rangeBits = static_cast<std::int64_t>(bits & 0x07u);
+    const bool reconfigureRange = reconfigure && running;
+    if (rangeBits != 0 || (reconfigureRange && (bits & 0x78u) == 0)) {
+        FoxCommand range = cmd::make(FOXAPP_OP_SCANNER_RANGE);
+        range.ival[0] = rangeBits | (reconfigureRange ? 8 : 0);
+        range.num[0] = scanDraft_[0] * 1.0e6;
+        range.num[1] = scanDraft_[1] * 1.0e6;
+        range.num[2] = scanDraft_[2] * 1.0e3;
+        engine_.applyCommand(range);
+    }
+}
+
+void AppWindow::flushScannerDraft() {
+    if (scanDraftPending_ == 0) { return; }
+    // Still being typed in: drawScannerSection's deactivate commit will take
+    // it. ImGui clears the active id at NewFrame once the field was not drawn
+    // in the frame before, so a collapsed section or a switched bank is seen
+    // here one frame later.
+    for (int i = 0; i < 7; ++i) {
+        if ((scanDraftPending_ & (1u << i)) != 0 && scanDraftIds_[i] != 0 &&
+            ImGui::GetActiveID() == scanDraftIds_[i]) {
+            return;
+        }
+    }
+    commitScannerDraft(scanDraftPending_, true);
+    scanDraftPending_ = 0;
 }
 
 // --- Config persistence (P5) -------------------------------------------------
@@ -18151,10 +18220,12 @@ void AppWindow::drawUsageReportingSection() {
     if (ImGui::Checkbox(trId("Send anonymous usage reports"), &on)) {
         // A COMMAND (engine/stage3b-pre, the fields-to-commands round): the
         // id-minting, the id-forgetting and the heartbeat reconfigure all
-        // move into FOXAPI_OP_TELEMETRY_ENABLE's handler, applied at once so
+        // move into FOXAPP_OP_TELEMETRY_CONSENT's handler, applied at once so
         // the switch's label and the install-id line below still update on
-        // THIS frame, exactly as the direct writes did.
-        engine_.applyCommand(cascade::core::cmd::makeInt(FOXAPI_OP_TELEMETRY_ENABLE, on ? 1 : 0));
+        // THIS frame, exactly as the direct writes did. The desktop's own
+        // op, not the API's FOXAPI_OP_TELEMETRY_ENABLE, which is refused
+        // from everyone (round 3 fix: consent is given here, never remotely).
+        engine_.applyCommand(cascade::core::cmd::makeInt(FOXAPP_OP_TELEMETRY_CONSENT, on ? 1 : 0));
     }
 
     if (engine_.telemetryEnabled_) {
@@ -18738,20 +18809,11 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     // (docs/engine-stage3.md lists the one reorder that is visible from
     // outside: the web and CAT listeners now start after the VFO restore).
     engine_.applyConfig(cfg);
-    // THE PLUTO ADDRESS BOX (this window's edit buffer, engine/stage3b-pre
-    // fields-to-commands round 2): seeded from the just-restored engine field
-    // once, here - the same pattern iqPath_ below already uses, so typing in
-    // the box never writes plutoUri_ in place (it is committed by
-    // FOXAPP_OP_SET_PLUTO_URI only when "Open" is pressed).
-    cascade::core::formatUtf8(plutoUriDraft_, sizeof(plutoUriDraft_), "%s", engine_.plutoUri_);
-    // THE SCANNER FORM'S DRAFT, same reason, same moment.
-    scanStartMhzDraft_ = engine_.scanStartMhz_;
-    scanStopMhzDraft_ = engine_.scanStopMhz_;
-    scanStepKhzDraft_ = engine_.scanStepKhz_;
-    scanDwellMsDraft_ = engine_.scanDwellMs_;
-    scanHoldMsDraft_ = engine_.scanHoldMs_;
-    scanResumeMsDraft_ = engine_.scanResumeMs_;
-    scanListenMsDraft_ = engine_.scanListenMs_;
+    // THE PLUTO ADDRESS BOX, THE TRANSMIT ADDRESS BOX AND THE SCANNER FORM
+    // (window-side drafts, engine/stage3b-pre fields-to-commands rounds 2-3)
+    // need no seeding here: each re-seeds itself from its engine field on
+    // every frame it is not being typed in, so the values just restored show
+    // on the first frame drawn - and so does anything that changes them later.
     // THE I/Q PATH BOX (this window's edit buffer) shows the saved file
     // whenever the saved source was a file, opened or not - both branches of
     // the engine's file restore wrote exactly this into it when the restore

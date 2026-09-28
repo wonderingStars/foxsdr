@@ -1322,6 +1322,7 @@
   "Type a frequency": "Bir frekans yazın",
   "Type a frequency and press Enter.": "Bir frekans yazıp Enter'a basın.",
   "Type it in Hz, kHz or MHz - 125 MHz, 125000 kHz and 125000000 Hz are the same. A number with no unit is MHz.": "Hz, kHz veya MHz olarak yazın - 125 MHz, 125000 kHz ve 125000000 Hz aynıdır. Birimsiz bir sayı MHz'dir.",
+  "Type the board's address first.": "Önce kartın adresini yazın.",
   "Type the receiver's position first: 0,0 is a point in the\nGulf of Guinea, not a receiver.": "Önce alıcının konumunu yazın: 0,0 Gine Körfezi'nde bir\nnoktadır, alıcı değil.",
   "Type to narrow the list": "Listeyi daraltmak için yazın",
   "Türkiye": "Türkiye",

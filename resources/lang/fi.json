@@ -1322,6 +1322,7 @@
   "Type a frequency": "Kirjoita taajuus",
   "Type a frequency and press Enter.": "Kirjoita taajuus ja paina Enter.",
   "Type it in Hz, kHz or MHz - 125 MHz, 125000 kHz and 125000000 Hz are the same. A number with no unit is MHz.": "Kirjoita se hertseinä, kilohertseinä tai megahertseinä (Hz, kHz, MHz) - 125 MHz, 125000 kHz ja 125000000 Hz ovat sama asia. Luku ilman yksikköä on MHz.",
+  "Type the board's address first.": "Kirjoita ensin laitteen osoite.",
   "Type the receiver's position first: 0,0 is a point in the\nGulf of Guinea, not a receiver.": "Kirjoita ensin vastaanottimen sijainti: 0,0 on piste\nGuineanlahdella, ei vastaanotin.",
   "Type to narrow the list": "Rajaa luetteloa kirjoittamalla",
   "Türkiye": "Turkki",

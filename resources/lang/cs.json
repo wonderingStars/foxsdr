@@ -1322,6 +1322,7 @@
   "Type a frequency": "Zadejte frekvenci",
   "Type a frequency and press Enter.": "Zadejte frekvenci a stiskněte Enter.",
   "Type it in Hz, kHz or MHz - 125 MHz, 125000 kHz and 125000000 Hz are the same. A number with no unit is MHz.": "Zadejte ho v Hz, kHz nebo MHz - 125 MHz, 125000 kHz a 125000000 Hz je totéž. Číslo bez jednotky je v MHz.",
+  "Type the board's address first.": "Nejprve zadejte adresu desky.",
   "Type the receiver's position first: 0,0 is a point in the\nGulf of Guinea, not a receiver.": "Nejdřív zadejte polohu přijímače: 0,0 je bod v\nGuinejském zálivu, ne přijímač.",
   "Type to narrow the list": "Psaním zúžíte seznam",
   "Türkiye": "Turecko",

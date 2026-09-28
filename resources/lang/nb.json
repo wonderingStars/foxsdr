@@ -1322,6 +1322,7 @@
   "Type a frequency": "Skriv inn en frekvens",
   "Type a frequency and press Enter.": "Skriv inn en frekvens og trykk Enter.",
   "Type it in Hz, kHz or MHz - 125 MHz, 125000 kHz and 125000000 Hz are the same. A number with no unit is MHz.": "Skriv den i Hz, kHz eller MHz - 125 MHz, 125000 kHz og 125000000 Hz er det samme. Et tall uten enhet er MHz.",
+  "Type the board's address first.": "Skriv inn kortets adresse først.",
   "Type the receiver's position first: 0,0 is a point in the\nGulf of Guinea, not a receiver.": "Skriv inn mottakerens posisjon først: 0,0 er et punkt i\nGuineabukta, ikke en mottaker.",
   "Type to narrow the list": "Skriv for å avgrense listen",
   "Türkiye": "Tyrkia",

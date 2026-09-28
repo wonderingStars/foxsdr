@@ -1322,6 +1322,7 @@
   "Type a frequency": "주파수 입력",
   "Type a frequency and press Enter.": "주파수를 입력하고 Enter를 누르세요.",
   "Type it in Hz, kHz or MHz - 125 MHz, 125000 kHz and 125000000 Hz are the same. A number with no unit is MHz.": "Hz, kHz 또는 MHz로 입력하세요 - 125 MHz, 125000 kHz, 125000000 Hz는 같습니다. 단위가 없는 숫자는 MHz입니다.",
+  "Type the board's address first.": "먼저 보드 주소를 입력하세요.",
   "Type the receiver's position first: 0,0 is a point in the\nGulf of Guinea, not a receiver.": "먼저 수신기 위치를 입력하세요: 0,0은 기니만의 한 지점이지\n수신기가 아닙니다.",
   "Type to narrow the list": "입력하여 목록 좁히기",
   "Türkiye": "튀르키예",

@@ -1279,23 +1279,45 @@ private:
     // applyConfig - typing here never writes the engine field (Open commits
     // it, through Engine::openPlutoAt).
     char plutoUriDraft_[192] = "ip:192.168.2.1";
-    // The Transmit page's address box: same shape, but seeded on each
-    // open-transition (transmitArgsDraftLive_ tracks "already seeded for this
-    // open") since the page can close and reopen within one session, unlike
-    // the Pluto row which is seeded once at startup.
+    // The Transmit page's address box: same shape. Both boxes are re-seeded
+    // from the engine field on every frame the box is NOT being typed in (so
+    // a change made elsewhere - the web remote's open-pluto, a TX_OPEN from
+    // another client, a config reload - shows at once), and every edit is
+    // committed as it is typed (FOXAPP_OP_SET_PLUTO_URI /
+    // FOXAPP_OP_SET_TRANSMIT_ARGS), so an address typed but never opened is
+    // still what config.json keeps, as it was before the drafts existed.
     char transmitArgsDraft_[128] = {0};
-    bool transmitArgsDraftLive_ = false;
     // The scanner form's own draft (engine/stage3b-pre fields-to-commands
-    // round 2): seeded from the engine fields once, in applyConfig, then
-    // edited freely - committed by FOXAPP_OP_SCANNER_RANGE/FOXAPP_OP_SCANNER_TIMING
-    // on deactivate-after-edit, exactly where the direct writes used to apply.
-    double scanStartMhzDraft_ = 0.0;
-    double scanStopMhzDraft_ = 0.0;
-    double scanStepKhzDraft_ = 0.0;
-    double scanDwellMsDraft_ = 0.0;
-    double scanHoldMsDraft_ = 0.0;
-    double scanResumeMsDraft_ = 0.0;
-    double scanListenMsDraft_ = 0.0;
+    // round 2, fixed in round 3): one per field, in drawScannerSection's
+    // order - start MHz, stop MHz, step kHz, dwell, hold, resume, listen ms.
+    // Defaults are Scanner::Params{}, the engine fields' own, so a launch
+    // whose config never loaded shows (and commits) real values, never 0.
+    // Re-seeded from the engine field whenever that field is neither being
+    // typed in nor holding an edit not yet committed (scanDraftPending_), so
+    // the form always shows what Start would scan - see drawScannerSection.
+    double scanDraft_[7] = {
+        cascade::core::Scanner::Params{}.startHz / 1.0e6, cascade::core::Scanner::Params{}.stopHz / 1.0e6,
+        cascade::core::Scanner::Params{}.stepHz / 1.0e3,  cascade::core::Scanner::Params{}.dwellMs,
+        cascade::core::Scanner::Params{}.holdMs,          cascade::core::Scanner::Params{}.resumeMs,
+        cascade::core::Scanner::Params{}.listenMs,
+    };
+    // Bit i: scanDraft_[i] was edited while a scan was RUNNING and is not
+    // committed yet (a running scan takes a field only once it is finished
+    // with - never a half-typed value). flushScannerDraft commits it if the
+    // field stops being edited without the section seeing it deactivate.
+    unsigned scanDraftPending_ = 0;
+    // The ImGui id each scanner field had when last drawn (0 = never drawn),
+    // so flushScannerDraft can tell "still being typed in" without drawing.
+    std::uint32_t scanDraftIds_[7] = {};  // ImGuiID, without imgui.h here
+    // Commits the fields in `bits` from scanDraft_: the timing half through
+    // FOXAPI_OP_SCANNER_CONFIG, then the range half through
+    // FOXAPP_OP_SCANNER_RANGE (only the edited range fields' bits, plus the
+    // reconfigure bit when `reconfigure` and a scan is running).
+    void commitScannerDraft(unsigned bits, bool reconfigure);
+    // Once a frame from drawUi, whether or not the Scanner section is drawn:
+    // commits a pending running-scan edit whose field is no longer active
+    // (the section was collapsed or its bank switched away mid-edit).
+    void flushScannerDraft();
     // THE AIRSPY R2 / MINI's OWN CONTROLS (0.99.41, app_window_airspy.cpp):
     // one gain mode at a time - Sensitive, Linear or Free, the reference
     // Airspy application's three - with only that mode's sliders, Free mode's

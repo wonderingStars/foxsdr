@@ -738,6 +738,53 @@ they were with the facts; and what 3b has to settle first.
    `test_command_path_guard`: 112/112, 0 violations - `kWindowMayWriteScoped`
    is now empty (a `std::vector`, not a C array, so the empty list still
    compiles: an array's bound cannot be deduced from an empty initialiser).
+   **ROUND 3 FIX (branch claude/engine-round3-fix, 2026-09-28)**, for the
+   review of 1497f79/41e3853 (`docs/review-harness/engine-round3-review.md`,
+   REJECT). Four of the round-2 designs above changed:
+   - **The scanner form** is no longer "seeded once in `applyConfig`". Each
+     draft (`scanDraft_[7]`, defaulting to `Scanner::Params{}`, never 0) is
+     re-seeded from its engine field on every frame that field is neither
+     active nor holding an uncommitted edit, so a web-remote range shows at
+     once and a later desk edit no longer writes the old range back.
+     Scanner IDLE: each edit is committed as typed (the stored fields only
+     say what Start will scan), so a collapsed section or a switched bank
+     cannot lose it. Scanner RUNNING: an edit waits for
+     deactivate-after-edit - a running scan never reconfigures from a
+     half-typed value - or, if the section stops being drawn first, for
+     `flushScannerDraft()`, called once a frame from `drawUi`. Only the
+     edited fields are committed (the range's bits for the range fields; the
+     engine's own values for timings nobody touched).
+   - **`plutoUri_`/`transmitArgs_`** each gained an op after all -
+     `FOXAPP_OP_SET_PLUTO_URI`/`FOXAPP_OP_SET_TRANSMIT_ARGS`, committed as
+     typed - so an address typed and never opened is again what
+     `config.json` keeps, as it was before the drafts. Both boxes re-seed
+     from the engine when not being typed in. `SET_TRANSMIT_ARGS` is
+     refused while a board is open (the box is disabled then anyway).
+   - **`FOXAPI_OP_TX_OPEN` refuses an empty or blank address**
+     (`FOXAPI_BAD_ARGUMENT`) instead of opening whatever `transmitArgs_`
+     held - a board the cleared box no longer showed. The page greys Open
+     with "Type the board's address first." while the box is empty.
+   - **Usage reporting**: the desktop's checkbox now sends
+     `FOXAPP_OP_TELEMETRY_CONSENT`, an extension op no transport carries,
+     and `FOXAPI_OP_TELEMETRY_ENABLE` is implemented only as a refusal
+     (`FOXAPI_DENIED`) from every origin, so no plugin, browser or future
+     API session can switch reporting on or off. ON while already on is
+     `FOXAPI_NO_CHANGE` and keeps the install id.
+
+   The sound card form's encode and decode moved together into
+   `engine/soundcard_panel.hpp` (`soundCardFormCommand`/
+   `soundCardFormFromCommand`). Tests: `tests/test_scanner_draft_input.cpp`
+   drives the Scanner section through ImGui's input queue (the reviewer's
+   five harness scenarios plus three for a running scan). The harness itself
+   passes 16/16, unmodified. `test_apply_command` gained a 16-case sound-card
+   round trip, the empty-`TX_OPEN` refusal, both new address ops, the
+   telemetry refusal and keep-the-id checks, and a `prunePatchSinkLines`
+   check. `test_airspy_app` reads back the published decimation choices.
+   Each of the review's four surviving mutants, and eight more against the
+   new code (no re-seed, no flush, idle edits not committed, running edits
+   committed per keystroke, `TELEMETRY_ENABLE` accepted, ON re-minting the
+   id, empty `TX_OPEN` opening the old board, choice count zero), now fails
+   at least one test.
    **CLOSED, engine/stage3b-pre 2c (2026-09-28): `sourceError_`,
    `soapyScanDeferredLogged_`, `gpsRefusal_`, `decoderLog_`,
    `bookmarkImportNote_`, `soundCardMissing_`, `mutePopupQueued_`** (7 of

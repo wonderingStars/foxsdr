@@ -55,6 +55,7 @@
 
 #include "core/app_commands.hpp"
 #include "core/config.hpp"
+#include "engine/soundcard_panel.hpp"
 #include "gui/app_window.hpp"
 #include "iiod_fake_server.hpp"
 #include "imgui.h"
@@ -573,6 +574,22 @@ struct AppWindowTestAccess {
     static double txTone(AppWindow& a) { return a.engine_.transmitToneHz_; }
     static bool txMonitor(AppWindow& a) { return a.engine_.transmitMonitor_; }
     static const std::string& txArgs(AppWindow& a) { return a.engine_.transmitArgs_; }
+    static std::string plutoUri(AppWindow& a) { return a.engine_.plutoUri_; }
+    // The patch canvas's cached decoder text, and the graph it is pruned
+    // against (round 3: prunePatchSinkLines must actually prune).
+    static cascade::core::patch::NodeId addPatchNode(AppWindow& a) {
+        return a.engine_.patchGraph_.addNode(cascade::core::patch::NodeKind::Decoder, "prune probe");
+    }
+    static void removePatchNode(AppWindow& a, cascade::core::patch::NodeId id) {
+        (void)a.engine_.patchGraph_.removeNode(id);
+    }
+    static void setPatchSinkLine(AppWindow& a, cascade::core::patch::NodeId id, const std::string& line) {
+        a.engine_.patchSinkLines_[id].push_back(line);
+    }
+    static bool hasPatchSinkLines(AppWindow& a, cascade::core::patch::NodeId id) {
+        return a.engine_.patchSinkLines_.count(id) != 0;
+    }
+    static void prunePatchSinkLines(AppWindow& a) { a.engine_.prunePatchSinkLines(); }
     static double txFrequency(AppWindow& a) { return a.engine_.transmitter_.frequencyHz(); }
     static void addAudioDevice(AppWindow& a, int paIndex, const char* name) {
         a.engine_.devices_.push_back({paIndex, name, false});
@@ -1025,6 +1042,17 @@ void sourceOps(AppWindow& a) {
         CHECK(!A::soapyPending(a));  // unticking does not
     }
 
+    covering(FOXAPP_OP_SET_PLUTO_URI);
+    {
+        // The Pluto address box, committed as typed (round 3 fix): an
+        // address typed and never opened is still what config.json keeps.
+        const std::string before = A::plutoUri(a);
+        CHECK(ok(A::apply(a, text(FOXAPP_OP_SET_PLUTO_URI, "ip:pluto.local"))));
+        CHECK(A::plutoUri(a) == "ip:pluto.local");
+        CHECK(ok(A::apply(a, text(FOXAPP_OP_SET_PLUTO_URI, before))));
+        CHECK(A::plutoUri(a) == before);
+    }
+
     covering(FOXAPI_OP_SELECT_SOURCE);
     {
         CHECK(ok(A::apply(a, text(FOXAPI_OP_SELECT_SOURCE, "rtlsdr:serial=0001"))));
@@ -1124,6 +1152,34 @@ void sourceOps(AppWindow& a) {
             CHECK(form2.channel == 0);
             CHECK(!form2.swapIq);
             CHECK(!form2.pickedFromList);
+
+            // THE PANEL'S OWN ENCODE, ROUND-TRIPPED (round 3 fix): every
+            // form drawSoundCardControls can send, built by the same
+            // soundCardFormCommand its widgets use and applied through the
+            // Engine, comes back field for field - each bit alone, so a bit
+            // dropped or crossed on either side fails here.
+            for (int bits = 0; bits < 16; ++bits) {
+                cascade::source::SoundCardSettings want;
+                want.device = "Card " + std::to_string(bits);
+                want.hostApi = (bits % 3 == 0) ? std::string() : "API " + std::to_string(bits);
+                want.format = (bits & 1) ? cascade::source::SoundCardFormat::IqStereo
+                                         : cascade::source::SoundCardFormat::RealMono;
+                want.channel = (bits & 2) ? 1 : 0;
+                want.swapIq = (bits & 4) != 0;
+                want.pickedFromList = (bits & 8) != 0;
+                want.cardRateHz = 44100.0 + bits;
+                want.iqCentreHz = 1.0e6 * bits;
+                CHECK(ok(A::apply(a, cascade::gui::soundCardFormCommand(want))));
+                const cascade::source::SoundCardSettings got = A::soundCardForm(a);
+                CHECK(got.device == want.device);
+                CHECK(got.hostApi == want.hostApi);
+                CHECK(got.format == want.format);
+                CHECK(got.channel == want.channel);
+                CHECK(got.swapIq == want.swapIq);
+                CHECK(got.pickedFromList == want.pickedFromList);
+                CHECK(got.cardRateHz == want.cardRateHz);
+                CHECK(got.iqCentreHz == want.iqCentreHz);
+            }
         }
 
         // Back to a radio for the device ops below.
@@ -1726,6 +1782,22 @@ void patchOps(AppWindow& a) {
     CHECK(ok(A::apply(a, ints(FOXAPI_OP_PATCH_RUN, 1))));
     CHECK(ok(A::apply(a, cmd::make(FOXAPI_OP_PATCH_ALL_OFF))));
     CHECK(!A::patchRunning(a));
+
+    // prunePatchSinkLines (a reviewed direct call from drawPatchFaces, round
+    // 2): a gone node's cached decoder text goes, a live node's stays.
+    {
+        const cascade::core::patch::NodeId keep = A::addPatchNode(a);
+        const cascade::core::patch::NodeId gone = A::addPatchNode(a);
+        A::setPatchSinkLine(a, keep, "kept");
+        A::setPatchSinkLine(a, gone, "pruned");
+        A::removePatchNode(a, gone);
+        A::prunePatchSinkLines(a);
+        CHECK(A::hasPatchSinkLines(a, keep));
+        CHECK(!A::hasPatchSinkLines(a, gone));
+        A::removePatchNode(a, keep);
+        A::prunePatchSinkLines(a);
+        CHECK(!A::hasPatchSinkLines(a, keep));
+    }
 }
 
 void transmitterOps(AppWindow& a) {
@@ -1735,9 +1807,32 @@ void transmitterOps(AppWindow& a) {
     cascade::test::stockTxBoard(d);
     const std::string args = "uri=ip:127.0.0.1:" + std::to_string(static_cast<unsigned>(d.port()));
 
+    covering(FOXAPP_OP_SET_TRANSMIT_ARGS);
+    {
+        // The Transmit address box, committed as typed (round 3 fix): what
+        // config.json keeps even when the board is never opened.
+        CHECK(ok(A::apply(a, text(FOXAPP_OP_SET_TRANSMIT_ARGS, "uri=ip:10.0.0.9"))));
+        CHECK(A::txArgs(a) == "uri=ip:10.0.0.9");
+        CHECK(ok(A::apply(a, cmd::make(FOXAPP_OP_SET_TRANSMIT_ARGS))));  // a cleared box
+        CHECK(A::txArgs(a).empty());
+        CHECK(ok(A::apply(a, text(FOXAPP_OP_SET_TRANSMIT_ARGS, "uri=ip:10.0.0.9"))));
+    }
+
     covering(FOXAPI_OP_TX_OPEN);
+    {
+        // AN EMPTY ADDRESS OPENS NOTHING (round 3 fix): it used to keep the
+        // previous transmitArgs_ and open that board - one the cleared box
+        // no longer showed. Refused, and nothing changes.
+        CHECK(refused(A::apply(a, cmd::make(FOXAPI_OP_TX_OPEN)), FOXAPI_BAD_ARGUMENT));
+        CHECK(refused(A::apply(a, text(FOXAPI_OP_TX_OPEN, "  ")), FOXAPI_BAD_ARGUMENT));
+        CHECK(!A::haveTx(a));
+        CHECK(A::txArgs(a) == "uri=ip:10.0.0.9");
+    }
     CHECK(ok(A::apply(a, text(FOXAPI_OP_TX_OPEN, args))));
     CHECK(A::haveTx(a));
+    CHECK(A::txArgs(a) == args);
+    // An open board keeps the address it was opened with.
+    CHECK(refused(A::apply(a, text(FOXAPP_OP_SET_TRANSMIT_ARGS, "uri=ip:10.0.0.1")), FOXAPI_FAILED));
     CHECK(A::txArgs(a) == args);
 
     covering(FOXAPI_OP_TX_SET_MODE);
@@ -1847,23 +1942,46 @@ void otherOps(AppWindow& a) {
     CHECK(refused(A::apply(a, num(FOXAPI_OP_SET_POSITION, 0.0, 0.0)), FOXAPI_OUT_OF_RANGE));
     CHECK(A::positionSet(a, 53.8, -1.55));
 
-    covering(FOXAPI_OP_TELEMETRY_ENABLE);
+    covering(FOXAPP_OP_TELEMETRY_CONSENT);
     {
         // engine/stage3b-pre fields-to-commands round 2: was two direct field
         // writes plus a direct telemetryHeartbeat_.configure(...) call from
         // the Checkbox handler. ON mints an id; OFF forgets it - so a later
         // opt-in cannot be tied to the old one.
         CHECK(A::telemetryInstallId(a).empty());
-        CHECK(ok(A::apply(a, ints(FOXAPI_OP_TELEMETRY_ENABLE, 1))));
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_TELEMETRY_CONSENT, 1))));
         CHECK(A::telemetryEnabled(a));
         CHECK(!A::telemetryInstallId(a).empty());
         const std::string firstId = A::telemetryInstallId(a);
-        CHECK(ok(A::apply(a, ints(FOXAPI_OP_TELEMETRY_ENABLE, 0))));
+        // Round 3 fix: ON WHILE ALREADY ON keeps the id (the checkbox's own
+        // `on && !enabled`), rather than minting a new one.
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_TELEMETRY_CONSENT, 1)), FOXAPI_NO_CHANGE));
+        CHECK(A::telemetryEnabled(a));
+        CHECK(A::telemetryInstallId(a) == firstId);
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_TELEMETRY_CONSENT, 0))));
         CHECK(!A::telemetryEnabled(a));
         CHECK(A::telemetryInstallId(a).empty());
-        CHECK(ok(A::apply(a, ints(FOXAPI_OP_TELEMETRY_ENABLE, 1))));
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_TELEMETRY_CONSENT, 1))));
         CHECK(A::telemetryEnabled(a));
         CHECK(A::telemetryInstallId(a) != firstId);  // a fresh id, not the old one
+        const std::string secondId = A::telemetryInstallId(a);
+
+        // THE API'S OP IS REFUSED FROM EVERY ORIGIN (round 3 fix, privacy):
+        // applyCommand is where the web remote, CAT, a plugin and a future
+        // API session all end, and none may switch reporting either way.
+        covering(FOXAPI_OP_TELEMETRY_ENABLE);
+        CHECK(refused(A::apply(a, ints(FOXAPI_OP_TELEMETRY_ENABLE, 0)), FOXAPI_DENIED));
+        CHECK(A::telemetryEnabled(a));
+        CHECK(A::telemetryInstallId(a) == secondId);
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_TELEMETRY_CONSENT, 0))));
+        CHECK(refused(A::apply(a, ints(FOXAPI_OP_TELEMETRY_ENABLE, 1)), FOXAPI_DENIED));
+        CHECK(!A::telemetryEnabled(a));
+        CHECK(A::telemetryInstallId(a).empty());
+        // The same through the queue a browser's or a key's command takes.
+        A::submit(a, ints(FOXAPI_OP_TELEMETRY_ENABLE, 1));
+        A::drain(a);
+        CHECK(!A::telemetryEnabled(a));
+        CHECK(A::telemetryInstallId(a).empty());
     }
 
     covering(FOXAPI_OP_GPS);

@@ -97,10 +97,13 @@
 // operator is done editing - never the engine field itself, keystroke by
 // keystroke.
 #define FOXAPP_OP_SET_CATALOGUE_URL      0x840Du /* text: pluginCatalogueUrl_, committed on deactivate-after-edit */
-// plutoUri_ and transmitArgs_ need NO new op: the window edits a LOCAL draft
-// buffer (never the engine field) and, on "Open", sends the draft's text as
-// FOXAPI_OP_SELECT_SOURCE "open-pluto:uri=..." / FOXAPI_OP_TX_OPEN - both of
-// whose handlers already persist the field from that same text.
+// plutoUri_ and transmitArgs_: the window edits a LOCAL draft buffer (never
+// the engine field) and, on "Open", sends the draft's text as
+// FOXAPI_OP_SELECT_SOURCE "open-pluto:uri=..." / FOXAPI_OP_TX_OPEN, whose
+// handlers persist the field from that same text. Round 3 added the two ops
+// below so each edit is ALSO committed as it is typed: before the drafts, an
+// address typed and never opened was still what config.json kept, and it is
+// again.
 // The scanner form needs NO new op at all: scanStartMhz_/scanStopMhz_/
 // scanStepKhz_ commit through the EXISTING FOXAPP_OP_SCANNER_RANGE (bits
 // 1/2/4, num[0..2] in Hz - the same op the web remote already uses; bit 8
@@ -109,7 +112,7 @@
 // EXISTING FOXAPI_OP_SCANNER_CONFIG (num[0..3], which already
 // reconfigures-if-running on its own - found only after a from-scratch
 // FOXAPP_OP_SCANNER_TIMING briefly duplicated it byte for byte).
-#define FOXAPP_OP_SOUND_CARD_FORM        0x8412u /* text: device; longText carries the rest as a compact encoded string (see cmd::encodeSoundCardForm) */
+#define FOXAPP_OP_SOUND_CARD_FORM        0x8412u /* text: device '\x1F' hostApi; ival[0]: 1 IqStereo | 2 channel right | 4 swapIq | 8 pickedFromList; num[0]: cardRateHz; num[1]: iqCentreHz (gui::soundCardFormCommand / soundCardFormFromCommand, engine/soundcard_panel.hpp) */
 #define FOXAPP_OP_PATCH_LOOK_FOR_RADIOS  0x8413u /* no args: "Look for radios" pressed in the patch radio inspector */
 // "Stop and resume sound" needs no new op: FOXAPP_OP_DECODER_STOP_LIST
 // already covers it, unchanged - the mute lifts on its own once the engine's
@@ -127,6 +130,16 @@
 #define FOXAPP_OP_AIRSPY_DECIMATION      0x8415u /* ival[0]: the decimation factor (1/2/4/8/16/32/64) */
 #define FOXAPP_OP_AIRSPY_GAIN_MODE       0x8416u /* ival[0]: cascade::source::AirspySource::GainMode */
 #define FOXAPP_OP_AIRSPY_AGC             0x8417u /* ival[0]: 0 LNA, 1 Mixer; ival[1]: 0/1 on */
+// Engine round 3 fix (docs/review-harness/engine-round3-review.md, 4 and 7).
+#define FOXAPP_OP_SET_PLUTO_URI          0x8418u /* text: the Pluto address box, committed as typed (plutoUri_) */
+#define FOXAPP_OP_SET_TRANSMIT_ARGS      0x8419u /* text: the Transmit address box, committed as typed (transmitArgs_); refused while a board is open */
+// THE DESKTOP'S OWN USAGE-REPORTING SWITCH. FOXAPI_OP_TELEMETRY_ENABLE is the
+// API's slot for the same thing, and applyCommand REFUSES it (FOXAPI_DENIED)
+// whoever sends it: reporting is consent given at this machine, and a plugin,
+// a browser or a future API session must never be able to switch it on
+// silently. An extension op is never sent across a transport (see the top of
+// this file), so this one is reachable only from the desktop's checkbox.
+#define FOXAPP_OP_TELEMETRY_CONSENT      0x841Au /* ival[0]: 0/1. On mints an install id only if reporting was off; off forgets it */
 
 #define FOXAPP_OP_FIRST 0x8000u
 #define FOXAPP_OP_LAST  0x8FFFu

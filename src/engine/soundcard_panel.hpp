@@ -11,6 +11,7 @@
 #include <string>
 #include <vector>
 
+#include "core/app_commands.hpp"
 #include "core/config.hpp"
 #include "core/freq_converter.hpp"
 #include "source/soundcard_source.hpp"
@@ -231,6 +232,43 @@ inline FixedCentreTune tuneWithFixedCentre(double requestedCentreHz, double vfoO
     t.inside = !t.tooWide && std::isfinite(t.wantAbsHz) && t.wantAbsHz >= t.loHz &&
                t.wantAbsHz <= t.hiHz;
     return t;
+}
+
+// THE SOUND CARD PANEL'S WHOLE FORM AS ONE COMMAND (FOXAPP_OP_SOUND_CARD_FORM,
+// engine/stage3b-pre fields-to-commands round 2) - both halves here, so the
+// panel's encode and the Engine's decode cannot drift apart unseen and a test
+// can round-trip one through the other. text "device<0x1F>hostApi"; ival[0]
+// a bitmask (1 IqStereo, 2 channel right, 4 swapIq, 8 pickedFromList);
+// num[0] cardRateHz, num[1] iqCentreHz.
+inline cascade::core::cmd::QueuedCommand soundCardFormCommand(const cascade::source::SoundCardSettings& s) {
+    std::int64_t mask = 0;
+    if (s.format == cascade::source::SoundCardFormat::IqStereo) { mask |= 1; }
+    if (s.channel == 1) { mask |= 2; }
+    if (s.swapIq) { mask |= 4; }
+    if (s.pickedFromList) { mask |= 8; }
+    cascade::core::cmd::QueuedCommand q =
+        cascade::core::cmd::makeText(FOXAPP_OP_SOUND_CARD_FORM, s.device + '\x1F' + s.hostApi, mask);
+    q.c.num[0] = s.cardRateHz;
+    q.c.num[1] = s.iqCentreHz;
+    return q;
+}
+
+// The decode: the form a FOXAPP_OP_SOUND_CARD_FORM command carries, whose
+// op-text is `text` (cmd::textOf). A text with no separator is a device with
+// no host API half.
+inline cascade::source::SoundCardSettings soundCardFormFromCommand(const FoxCommand& c, const std::string& text) {
+    cascade::source::SoundCardSettings s;
+    const std::size_t sep = text.find('\x1F');
+    s.device = (sep == std::string::npos) ? text : text.substr(0, sep);
+    s.hostApi = (sep == std::string::npos) ? std::string() : text.substr(sep + 1);
+    s.format = (c.ival[0] & 1) ? cascade::source::SoundCardFormat::IqStereo
+                               : cascade::source::SoundCardFormat::RealMono;
+    s.channel = (c.ival[0] & 2) ? 1 : 0;
+    s.swapIq = (c.ival[0] & 4) != 0;
+    s.pickedFromList = (c.ival[0] & 8) != 0;
+    s.cardRateHz = c.num[0];
+    s.iqCentreHz = c.num[1];
+    return s;
 }
 
 // THE CENTRE BOX takes effect at once only when the card RUNNING is in I/Q

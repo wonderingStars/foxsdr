@@ -1322,6 +1322,7 @@
   "Type a frequency": "Gõ một tần số",
   "Type a frequency and press Enter.": "Gõ một tần số và nhấn Enter.",
   "Type it in Hz, kHz or MHz - 125 MHz, 125000 kHz and 125000000 Hz are the same. A number with no unit is MHz.": "Nhập theo Hz, kHz hoặc MHz - 125 MHz, 125000 kHz và 125000000 Hz là như nhau. Số không có đơn vị là MHz.",
+  "Type the board's address first.": "Hãy nhập địa chỉ của bo mạch trước.",
   "Type the receiver's position first: 0,0 is a point in the\nGulf of Guinea, not a receiver.": "Hãy gõ vị trí của máy thu trước: 0,0 là một điểm trong\nvịnh Guinea, không phải máy thu.",
   "Type to narrow the list": "Gõ để thu hẹp danh sách",
   "Türkiye": "Thổ Nhĩ Kỳ",

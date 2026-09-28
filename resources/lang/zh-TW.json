@@ -1322,6 +1322,7 @@
   "Type a frequency": "輸入頻率",
   "Type a frequency and press Enter.": "輸入頻率後按 Enter。",
   "Type it in Hz, kHz or MHz - 125 MHz, 125000 kHz and 125000000 Hz are the same. A number with no unit is MHz.": "以Hz、kHz或MHz輸入 - 125 MHz、125000 kHz和125000000 Hz相同。不帶單位的數字為MHz。",
+  "Type the board's address first.": "請先輸入板卡的位址。",
   "Type the receiver's position first: 0,0 is a point in the\nGulf of Guinea, not a receiver.": "請先輸入接收機位置：0,0 是位於\n幾內亞灣的一個點，而不是接收機。",
   "Type to narrow the list": "輸入文字以篩選清單",
   "Türkiye": "土耳其",

@@ -113,3 +113,35 @@ each surviving mutant:
   VM may differ.
 - On Windows, `test_bias_key_run` flaked once (10 of 11 solo runs passed).
   It is suspected harness flakiness, unproven.
+
+## Resolution (branch claude/engine-round3-fix)
+
+1. Fixed. Each scanner draft re-seeds from its engine field whenever that
+   field is not active and has no pending edit. The desk commits only the
+   fields it edited.
+2. Fixed. The drafts default to `Scanner::Params{}`, and the re-seed covers
+   a config that never loaded.
+3. Fixed. With the scanner idle, an edit is committed as typed. With a scan
+   running, it is committed on deactivate, or by `flushScannerDraft()` from
+   `drawUi` once the field is no longer active. A running scan never takes a
+   half-typed value.
+4. Fixed. `TX_OPEN` refuses an empty or blank address, and the page greys
+   Open with a reason. Both address boxes commit as typed again
+   (`FOXAPP_OP_SET_PLUTO_URI` / `FOXAPP_OP_SET_TRANSMIT_ARGS`), so a typed
+   but unopened address is kept in config.json as it was before this round.
+5. Covered by `tests/test_scanner_draft_input.cpp` (this harness's
+   scenarios plus three for a running scan), a sound-card encode/decode
+   round trip, an Airspy decimation-choices read-back and a
+   `prunePatchSinkLines` check. Each surviving mutant in the table above now
+   fails at least one test. The harness in this folder passes 16/16
+   unmodified.
+6. Fixed. All four comments were corrected.
+7. Fixed. `FOXAPI_OP_TELEMETRY_ENABLE` is refused (`FOXAPI_DENIED`) from
+   every origin. The desktop uses `FOXAPP_OP_TELEMETRY_CONSENT`, which no
+   transport carries. "On while on" returns `FOXAPI_NO_CHANGE` and keeps the
+   id. Both behaviours are tested.
+
+Linux (Ubuntu 24.04 container, Xvfb): 222 of 225 ctest entries pass. The
+three failures (`test_apply_command`'s audio-device check, `test_audio_out`
+and `test_report_reader`) fail identically on the unmodified e6d6d00 in the
+same container, which has no sound card. Not run on Windows.

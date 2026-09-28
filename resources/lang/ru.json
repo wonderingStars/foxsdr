@@ -1322,6 +1322,7 @@
   "Type a frequency": "Введите частоту",
   "Type a frequency and press Enter.": "Введите частоту и нажмите Enter.",
   "Type it in Hz, kHz or MHz - 125 MHz, 125000 kHz and 125000000 Hz are the same. A number with no unit is MHz.": "Введите в Hz, kHz или MHz - 125 MHz, 125000 kHz и 125000000 Hz - одно и то же. Число без единицы - это MHz.",
+  "Type the board's address first.": "Сначала введите адрес платы.",
   "Type the receiver's position first: 0,0 is a point in the\nGulf of Guinea, not a receiver.": "Сначала введите местоположение приёмника: 0,0 - это точка\nв Гвинейском заливе, а не приёмник.",
   "Type to narrow the list": "Введите текст для фильтра списка",
   "Türkiye": "Турция",

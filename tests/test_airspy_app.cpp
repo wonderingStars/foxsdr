@@ -315,6 +315,18 @@ int main() {
         CHECK(e.airspyOpen);
         CHECK(e.airspyDecimation == Access::radio(app)->decimation());
         CHECK(e.airspyDecimation == 2u);
+        // THE CHOICES THE COMBO LISTS (round 3 fix): drawAirspyControls reads
+        // only these, so a publish that dropped them would leave an empty
+        // Decimation list. Every one the radio offers, in its order.
+        {
+            const std::vector<unsigned> offered = Access::radio(app)->decimationChoices();
+            CHECK(!offered.empty());
+            CHECK(e.airspyDecimationChoiceCount == offered.size());
+            for (std::size_t i = 0; i < offered.size() && i < e.airspyDecimationChoiceCount; ++i) {
+                CHECK(e.airspyDecimationChoices[i] == offered[i]);
+            }
+            CHECK(e.airspyHardwareSampleRateHz == Access::radio(app)->hardwareSampleRateHz());
+        }
         // An out-of-range refusal changes neither the radio nor the publish.
         CHECK(refused(Access::apply(app, cmd::makeInt(FOXAPP_OP_AIRSPY_DECIMATION, 64)), FOXAPI_FAILED));
         e = Access::publishedAirspy(app);

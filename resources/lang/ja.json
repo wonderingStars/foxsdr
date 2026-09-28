@@ -1322,6 +1322,7 @@
   "Type a frequency": "周波数を入力",
   "Type a frequency and press Enter.": "周波数を入力して Enter を押してください。",
   "Type it in Hz, kHz or MHz - 125 MHz, 125000 kHz and 125000000 Hz are the same. A number with no unit is MHz.": "Hz、kHz、MHzで入力します。125 MHz、125000 kHz、125000000 Hzは同じです。単位のない数値はMHzです。",
+  "Type the board's address first.": "先にボードのアドレスを入力してください。",
   "Type the receiver's position first: 0,0 is a point in the\nGulf of Guinea, not a receiver.": "先に受信機の位置を入力してください。0,0 はギニア湾上の\n地点で、受信機の位置ではありません。",
   "Type to narrow the list": "入力して一覧を絞り込む",
   "Türkiye": "トルコ",

@@ -1322,6 +1322,7 @@
   "Type a frequency": "Escribe una frecuencia",
   "Type a frequency and press Enter.": "Escribe una frecuencia y pulsa Enter.",
   "Type it in Hz, kHz or MHz - 125 MHz, 125000 kHz and 125000000 Hz are the same. A number with no unit is MHz.": "Escríbelo en Hz, kHz o MHz - 125 MHz, 125000 kHz y 125000000 Hz son lo mismo. Un número sin unidad es MHz.",
+  "Type the board's address first.": "Escriba primero la dirección de la placa.",
   "Type the receiver's position first: 0,0 is a point in the\nGulf of Guinea, not a receiver.": "Escribe primero la posición del receptor: 0,0 es un punto del\ngolfo de Guinea, no un receptor.",
   "Type to narrow the list": "Escribe para filtrar la lista",
   "Türkiye": "Turquía",

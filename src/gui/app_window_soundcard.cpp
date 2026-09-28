@@ -44,15 +44,7 @@ namespace {
 // frame (the rate list, the "Receives..." preview, all of which still read
 // engine_.soundCard_ directly) ever sees a stale value.
 void submitSoundCardForm(cascade::engine::Engine& engine, const SoundCardSettings& s) {
-    std::int64_t mask = 0;
-    if (s.format == SoundCardFormat::IqStereo) { mask |= 1; }
-    if (s.channel == 1) { mask |= 2; }
-    if (s.swapIq) { mask |= 4; }
-    if (s.pickedFromList) { mask |= 8; }
-    cascade::core::cmd::QueuedCommand q =
-        cascade::core::cmd::makeText(FOXAPP_OP_SOUND_CARD_FORM, s.device + '\x1F' + s.hostApi, mask);
-    q.c.num[0] = s.cardRateHz;
-    q.c.num[1] = s.iqCentreHz;
+    const cascade::core::cmd::QueuedCommand q = cascade::gui::soundCardFormCommand(s);
     engine.applyCommand(q.c, q.longText);
 }
 

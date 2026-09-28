@@ -1322,6 +1322,7 @@
   "Type a frequency": "Sisesta sagedus",
   "Type a frequency and press Enter.": "Sisesta sagedus ja vajuta Enter.",
   "Type it in Hz, kHz or MHz - 125 MHz, 125000 kHz and 125000000 Hz are the same. A number with no unit is MHz.": "Sisesta see Hz, kHz või MHz ühikutes - 125 MHz, 125000 kHz ja 125000000 Hz on sama. Ühikuta arv on MHz.",
+  "Type the board's address first.": "Sisestage esmalt plaadi aadress.",
   "Type the receiver's position first: 0,0 is a point in the\nGulf of Guinea, not a receiver.": "Sisesta esmalt vastuvõtja asukoht: 0,0 on punkt\nGuinea lahes, mitte vastuvõtja.",
   "Type to narrow the list": "Loendi kitsendamiseks kirjuta",
   "Türkiye": "Türgi",

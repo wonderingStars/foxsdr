@@ -266,14 +266,16 @@ struct ScopedWrite {
     const char* member;
 };
 const std::vector<ScopedWrite> kWindowMayWriteScoped = {
-    // CLOSED, engine/stage3b-pre fields-to-commands round 2: the 7
-    // scanner-form fields (FOXAPP_OP_SCANNER_TIMING + the existing
-    // FOXAPP_OP_SCANNER_RANGE), soundCard_ (FOXAPP_OP_SOUND_CARD_FORM),
-    // plutoUri_/transmitArgs_ (a window-local draft, never the engine field -
-    // FOXAPI_OP_SELECT_SOURCE/FOXAPI_OP_TX_OPEN's handlers already persist
-    // them), pluginCatalogueUrl_ (FOXAPP_OP_SET_CATALOGUE_URL),
-    // telemetryEnabled_/telemetryInstallId_ (FOXAPI_OP_TELEMETRY_ENABLE, a
-    // real API op, now implemented), patchListsWanted_
+    // CLOSED, engine/stage3b-pre fields-to-commands rounds 2-3: the 7
+    // scanner-form fields (the existing FOXAPI_OP_SCANNER_CONFIG for the four
+    // timings + the existing FOXAPP_OP_SCANNER_RANGE for the range),
+    // soundCard_ (FOXAPP_OP_SOUND_CARD_FORM), plutoUri_/transmitArgs_ (a
+    // window-local draft, never the engine field - FOXAPP_OP_SET_PLUTO_URI/
+    // FOXAPP_OP_SET_TRANSMIT_ARGS as typed, FOXAPI_OP_SELECT_SOURCE/
+    // FOXAPI_OP_TX_OPEN on Open), pluginCatalogueUrl_
+    // (FOXAPP_OP_SET_CATALOGUE_URL), telemetryEnabled_/telemetryInstallId_
+    // (FOXAPP_OP_TELEMETRY_CONSENT, the desktop's own op; the API's
+    // FOXAPI_OP_TELEMETRY_ENABLE is refused from everyone), patchListsWanted_
     // (FOXAPP_OP_PATCH_LOOK_FOR_RADIOS) and patchSinkLines_
     // (Engine::prunePatchSinkLines(), kControlMayCall below), and
     // muteKeptRunning_/mutePopup_ (FOXAPP_OP_MUTE_KEEP_RUNNING, both fields

@@ -1322,6 +1322,7 @@
   "Type a frequency": "Введіть частоту",
   "Type a frequency and press Enter.": "Введіть частоту й натисніть Enter.",
   "Type it in Hz, kHz or MHz - 125 MHz, 125000 kHz and 125000000 Hz are the same. A number with no unit is MHz.": "Введіть у Hz, kHz або MHz - 125 MHz, 125000 kHz і 125000000 Hz - одне й те саме. Число без одиниці - це MHz.",
+  "Type the board's address first.": "Спочатку введіть адресу плати.",
   "Type the receiver's position first: 0,0 is a point in the\nGulf of Guinea, not a receiver.": "Спершу введіть позицію приймача: 0,0 - це точка в\nГвінейській затоці, а не приймач.",
   "Type to narrow the list": "Введіть текст, щоб звузити список",
   "Türkiye": "Туреччина",

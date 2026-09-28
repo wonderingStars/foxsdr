@@ -5433,17 +5433,9 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             // panel (the rate list, the "Receives..." preview) reads a stale
             // value later in the same draw pass. ival[0] is a bitmask
             // (1 = IqStereo, 2 = channel right, 4 = swapIq, 8 = pickedFromList);
-            // num[0] cardRateHz, num[1] iqCentreHz; text "device<0x1F>hostApi".
-            const std::size_t sep = text.find('\x1F');
-            soundCard_.device = (sep == std::string::npos) ? text : text.substr(0, sep);
-            soundCard_.hostApi = (sep == std::string::npos) ? std::string() : text.substr(sep + 1);
-            soundCard_.format =
-                (c.ival[0] & 1) ? cascade::source::SoundCardFormat::IqStereo : cascade::source::SoundCardFormat::RealMono;
-            soundCard_.channel = (c.ival[0] & 2) ? 1 : 0;
-            soundCard_.swapIq = (c.ival[0] & 4) != 0;
-            soundCard_.pickedFromList = (c.ival[0] & 8) != 0;
-            soundCard_.cardRateHz = c.num[0];
-            soundCard_.iqCentreHz = c.num[1];
+            // num[0] cardRateHz, num[1] iqCentreHz; text "device<0x1F>hostApi" -
+            // decoded by the same header that encodes it (soundcard_panel.hpp).
+            soundCard_ = cascade::gui::soundCardFormFromCommand(c, text);
             return res;
         }
 
@@ -5705,7 +5697,15 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
 
         // --- the transmitter (the local key is not a command in stage 1) --------------
         case FOXAPI_OP_TX_OPEN:
-            if (!text.empty()) { transmitArgs_ = text; }
+            // AN ADDRESS OR NOTHING (round 3 fix): an empty id used to keep
+            // whatever transmitArgs_ held and open THAT, so clearing the
+            // Transmit box and pressing Open opened the previous board - one
+            // the box no longer showed, on the page whose whole point is
+            // knowing what is about to radiate.
+            if (text.find_first_not_of(" \t") == std::string::npos) {
+                return refuse(FOXAPI_BAD_ARGUMENT, "no transmitter address given");
+            }
+            transmitArgs_ = text;
             openTransmitRadio();
             if (!transmitter_.haveSink()) { return refuse(FOXAPI_FAILED, "the transmitter did not open"); }
             return res;
@@ -5842,13 +5842,24 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             }
             return res;
         case FOXAPI_OP_TELEMETRY_ENABLE:
+            // REFUSED, FROM EVERY ORIGIN (round 3 fix, privacy). Usage
+            // reporting is consent given at this machine; the desktop's own
+            // checkbox sends FOXAPP_OP_TELEMETRY_CONSENT, which no transport
+            // carries. Implemented only as this refusal, so that once an API
+            // session forwards FOXAPI ops no client can switch reporting on
+            // silently - on or off, the answer is the same.
+            return refuse(FOXAPI_DENIED, "usage reporting is switched only at the desktop");
+        case FOXAPP_OP_TELEMETRY_CONSENT:
             // engine/stage3b-pre "next round" item 1: was two direct field
             // writes plus a direct call to telemetryHeartbeat_.configure(...)
             // from AppWindow::drawUsageReportingSection's Checkbox. THE ID IS
             // MINTED AT THE MOMENT OF CONSENT, NEVER BEFORE - a machine that
             // never opts in has no identifier at all - and OFF DELETES IT, so
-            // a later opt-in cannot be tied to the old one.
+            // a later opt-in cannot be tied to the old one. ON WHILE ALREADY
+            // ON changes nothing (the checkbox's own `on && !enabled`): the
+            // id a machine reports under must not change behind its back.
             if (on) {
+                if (telemetryEnabled_) { return refuse(FOXAPI_NO_CHANGE, "usage reporting is already on"); }
                 telemetryInstallId_ = cascade::core::newInstallId();
                 telemetryEnabled_ = !telemetryInstallId_.empty();
             } else {
@@ -5871,6 +5882,20 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             return res;
         case FOXAPP_OP_SET_BOOKMARK_NOTE:
             bookmarkImportNote_ = text;
+            return res;
+        case FOXAPP_OP_SET_PLUTO_URI:
+            // The Source section's Pluto address box, committed as it is
+            // typed (round 3 fix) so an address typed and never opened is
+            // still saved - as it was when the box wrote the field in place.
+            // openPlutoAt stores the address it opens as well.
+            cascade::core::formatUtf8(plutoUri_, sizeof(plutoUri_), "%s", text.c_str());
+            return res;
+        case FOXAPP_OP_SET_TRANSMIT_ARGS:
+            // The Transmit page's address box, the same way. Stored only:
+            // nothing opens until TX_OPEN, and a board already open keeps
+            // the address it was opened with (the box is disabled then).
+            if (transmitter_.haveSink()) { return refuse(FOXAPI_FAILED, "the transmitter is open"); }
+            transmitArgs_ = text;
             return res;
         case FOXAPP_OP_SET_CATALOGUE_URL:
             // Committed on deactivate-after-edit (the window's pluginUrlBuf_,

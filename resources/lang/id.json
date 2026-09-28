@@ -1322,6 +1322,7 @@
   "Type a frequency": "Ketik frekuensi",
   "Type a frequency and press Enter.": "Ketik frekuensi lalu tekan Enter.",
   "Type it in Hz, kHz or MHz - 125 MHz, 125000 kHz and 125000000 Hz are the same. A number with no unit is MHz.": "Ketikkan dalam Hz, kHz, atau MHz - 125 MHz, 125000 kHz, dan 125000000 Hz sama saja. Angka tanpa satuan berarti MHz.",
+  "Type the board's address first.": "Ketik alamat papan terlebih dahulu.",
   "Type the receiver's position first: 0,0 is a point in the\nGulf of Guinea, not a receiver.": "Ketik posisi penerima terlebih dahulu: 0,0 adalah sebuah titik di\nTeluk Guinea, bukan penerima.",
   "Type to narrow the list": "Ketik untuk mempersempit daftar",
   "Türkiye": "Turki",

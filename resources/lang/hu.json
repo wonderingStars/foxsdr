@@ -1322,6 +1322,7 @@
   "Type a frequency": "Írjon be egy frekvenciát",
   "Type a frequency and press Enter.": "Írjon be egy frekvenciát, és nyomja meg az Entert.",
   "Type it in Hz, kHz or MHz - 125 MHz, 125000 kHz and 125000000 Hz are the same. A number with no unit is MHz.": "Adja meg Hz, kHz vagy MHz egységben - 125 MHz, 125000 kHz és 125000000 Hz ugyanaz. Az egység nélküli szám MHz.",
+  "Type the board's address first.": "Először írja be a panel címét.",
   "Type the receiver's position first: 0,0 is a point in the\nGulf of Guinea, not a receiver.": "Előbb írja be a vevő helyét: a 0,0 egy pont a Guineai-öbölben,\nnem egy vevő.",
   "Type to narrow the list": "Gépeljen a lista szűkítéséhez",
   "Türkiye": "Törökország",
