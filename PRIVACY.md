@@ -215,7 +215,10 @@ could not be sent (a network failure, or the site asking to try later) are
 kept and retried at the next launch; older ones are dropped first. A report
 queued under a code that is later replaced or removed is discarded rather
 than sent under the new one (or under none) — it would otherwise land on the
-wrong tester's entry, or on nobody's.
+wrong tester's entry, or on nobody's. The one exception is an older pasted
+code replaced by a link that FoxSDR has itself confirmed, earlier in the same
+session, belongs to the same tester: those reports are kept under the link,
+and the prompt says in advance which of the two will happen.
 
 Removing the code, or pressing **Unlink** once a link has been confirmed,
 deletes it from your configuration file, discards anything still queued to

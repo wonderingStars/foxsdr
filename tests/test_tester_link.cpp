@@ -442,6 +442,57 @@ void testLinkActivationWithNoInstanceRunningLaunchesNormallyAndNeverLeaksTheToke
     if (g_checksFailed == 0) { fs::remove_all(dir, ec); }
 }
 
+// A foxsdr: link in ANY other shape - a browser adding a trailing slash,
+// upper-casing the scheme, appending a parameter - is not a link FoxSDR
+// accepts, but it still carries the token. It used to fall through to the
+// flag loop's unknown-argument branch, which printed the whole URL, token
+// included, to stderr and exited 1. It must instead be dropped unechoed and
+// the launch carry on; nothing is written, since it is not a link we trust.
+void testMalformedLinkIsDroppedWithoutEchoingTheToken() {
+    const std::string tok = std::string(40, 'c');
+    for (const std::string url : {"FOXSDR://beta?t=" + tok, "foxsdr://beta/?t=" + tok,
+                                  "foxsdr://beta?t=" + tok + "&x=1", "foxsdr:" + tok}) {
+        const fs::path dir = uniqueDir("malformed");
+        std::error_code ec;
+        fs::create_directories(dir, ec);
+        const fs::path foxsdrDir = dir / "foxsdr";
+        const fs::path cfgPath = foxsdrDir / "config.json";
+        ::SetEnvironmentVariableA("APPDATA", dir.string().c_str());
+        ::SetEnvironmentVariableA("LOCALAPPDATA", dir.string().c_str());
+        ::SetEnvironmentVariableA("CASCADE_CONFIG_TEST", cfgPath.string().c_str());
+        for (const char* v : {"FOXSDR_BETA_API_URL", "FOXSDR_TESTER_USAGE_URL", "FOXSDR_TELEMETRY_URL",
+                              "FOXSDR_UPDATE_URL", "FOXSDR_CRASH_URL", "FOXSDR_FEATURE_URL",
+                              "FOXSDR_PROBLEM_URL", "FOXSDR_REPORTS_URL"}) {
+            ::SetEnvironmentVariableA(v, "http://127.0.0.1:9");
+        }
+
+        const std::string exe = std::string(CASCADE_APP_BINDIR) + "/cascade.exe";
+        const std::string cmd = "\"\"" + exe + "\" \"" + url + "\" --frames 20 2>&1\"";
+        std::string out;
+        FILE* p = _popen(cmd.c_str(), "r");
+        CHECK(p != nullptr);
+        char buf[512];
+        while (p != nullptr && std::fgets(buf, sizeof(buf), p) != nullptr) { out += buf; }
+        const int exitCode = (p != nullptr) ? _pclose(p) : -1;
+
+        for (const char* v : {"APPDATA", "LOCALAPPDATA", "CASCADE_CONFIG_TEST", "FOXSDR_BETA_API_URL",
+                              "FOXSDR_TESTER_USAGE_URL", "FOXSDR_TELEMETRY_URL", "FOXSDR_UPDATE_URL",
+                              "FOXSDR_CRASH_URL", "FOXSDR_FEATURE_URL", "FOXSDR_PROBLEM_URL",
+                              "FOXSDR_REPORTS_URL"}) {
+            ::SetEnvironmentVariableA(v, nullptr);
+        }
+
+        std::printf("malformed link, exit=%d\n", exitCode);
+        CHECK(exitCode == 0);
+        CHECK(out.find("rendered 20 frames") != std::string::npos);
+        CHECK(out.find("unknown argument") == std::string::npos);
+        CHECK(out.find(tok) == std::string::npos);
+        CHECK(!fs::exists(cascade::core::linkRequestPath(foxsdrDir.string())));
+
+        if (g_checksFailed == 0) { fs::remove_all(dir, ec); }
+    }
+}
+
 #endif  // _WIN32
 
 // ---------------------------------------------------------------------------
@@ -904,6 +955,7 @@ int main(int argc, char** argv) {
     testBetaApiBaseUrlOverride();
 #if defined(_WIN32)
     testLinkActivationWithNoInstanceRunningLaunchesNormallyAndNeverLeaksTheToken();
+    testMalformedLinkIsDroppedWithoutEchoingTheToken();
 #endif
     testResolveAppTokenNameOk();
     testResolveAppTokenNameInvalidOn404();

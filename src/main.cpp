@@ -1021,6 +1021,24 @@ int main(int argc, char** argv) {
             // file after ConfigStore::load, through the same poll. argv[1]
             // itself is skipped below (argv1IsLinkActivation) rather than
             // parsed as a flag.
+        } else if ([&] {
+                       const char* want = "foxsdr:";
+                       for (int k = 0; want[k] != '\0'; ++k) {
+                           const char c = argv[1][k];
+                           if (c == '\0') { return false; }
+                           if (c != want[k] && c != want[k] - ('a' - 'A')) { return false; }
+                       }
+                       return true;
+                   }()) {
+            // A foxsdr: link in any shape parseBetaLinkUrl does not accept - a
+            // browser's trailing slash, an upper-cased scheme, an extra
+            // parameter. It is not a link we trust, so nothing is written,
+            // but it may still carry a token: it must never reach the
+            // unknown-argument branch, which would echo it to stderr and exit.
+            // Dropped, logged without its text, and the launch carries on.
+            argv1IsLinkActivation = true;
+            cascade::core::diagLogf("unrecognised foxsdr: link ignored (len=%zu)",
+                                    std::strlen(argv[1]));
         }
     }
 
