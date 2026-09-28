@@ -8,7 +8,17 @@
 //   Vfo (decimate to a ~200 kHz channel; see setInputRateHz for the policy)
 //   -> Demodulator -> [WFM: RdsDecoder tap, StereoFm matrix] -> Agc
 //   -> Squelch -> RationalResampler x2 (channel rate -> 48 kHz)
-//   -> Notch -> AutoNotch -> NoiseReduction -> AudioOut (mono or stereo).
+//   -> Notch -> AutoNotch -> NoiseReduction -> peak Limiter (dsp/limiter.hpp)
+//   -> AudioOut (mono or stereo) and Recorder.
+//
+// THE LIMITER, immediately below the hard mute / patch / plugin takeover and
+// immediately above the mono downmix (pipeline.cpp), is the identity for
+// anything the Agc already keeps near its target and only engages for the
+// sliver of amplitude that would otherwise reach the int16 quantizer or the
+// sound device's own hard clip — see the comment at the call site and
+// tests/test_audio_clip.cpp for why the Agc alone cannot guarantee that on
+// its own for a high-crest-factor signal (wideband noise let in by a widened
+// channel filter is exactly that shape).
 //
 // WFM DE-EMPHASIS OWNERSHIP (the one non-obvious wiring decision here).
 // Both the stereo decoder and RDS need the composite (MPX) WITHOUT

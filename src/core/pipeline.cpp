@@ -23,6 +23,7 @@
 
 #include "core/diag_log.hpp"
 #include "core/plugin_runner.hpp"
+#include "dsp/limiter.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -1939,6 +1940,39 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
     if (audioMuted_.load(std::memory_order_relaxed)) {
         std::fill(outL_.begin(), outL_.begin() + static_cast<std::ptrdiff_t>(k), 0.0f);
         std::fill(outR_.begin(), outR_.begin() + static_cast<std::ptrdiff_t>(k), 0.0f);
+    }
+
+    // --- OUTPUT PEAK LIMITER, the last stage before anything quantizes -------
+    //
+    // WHY THIS EXISTS (a beta report on 0.99.43): "widen the filter bandwidth
+    // and the audio starts to crackle". Widening the channel filter (the VFO
+    // bandwidth control on the spectrum view) admits more of whatever sits
+    // either side of the tuned signal — for AM/SSB that is more noise power,
+    // which raises the demodulated audio's CREST FACTOR even where the Agc
+    // above holds its near-target level steady (Agc measures the OUTPUT and
+    // corrects sample by sample, but only converges without overshoot for a
+    // CONSTANT-amplitude input — see agc.hpp). A high-crest-factor burst can
+    // ride well above 1.0 for many samples in a row while the feedback loop
+    // catches up, and every one of those samples used to reach the int16
+    // quantizer (core/recorder.cpp writeAudio) and the sound device's own
+    // hard clip (sink/audio_out.cpp, paNoFlag) with nothing in between to
+    // round the peaks off — a run of samples truncated flat at full scale,
+    // which is what a listener hears as crackle rather than one clipped peak.
+    //
+    // HERE, and not earlier: below the mute, the patch audio and the plugin
+    // takeover, so — like them — the recorder, the sink and every tap agree
+    // about what "the audio" actually is; above the mono downmix, so both the
+    // stereo sink and the mono recorder are covered by one call.
+    //
+    // softLimit is the identity below kLimiterKnee (0.97), so ordinary
+    // listening — anywhere near the Agc's 0.5 target — is bit-for-bit
+    // unaffected; only the sliver of amplitude that would otherwise clip is
+    // smoothly compressed onto (kLimiterKnee, kLimiterCeiling), which is
+    // mathematically bounded strictly inside [-1, 1] for ANY input, unlike
+    // the Agc's convergence guarantee. See tests/test_audio_clip.cpp.
+    for (std::size_t i = 0; i < k; ++i) {
+        outL_[i] = cascade::dsp::softLimit(outL_[i]);
+        outR_[i] = cascade::dsp::softLimit(outR_[i]);
     }
 
     // Mono downmix for the test tap's readers and the recorder, which stays
