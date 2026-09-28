@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/diag_log.hpp"
 
+#include <algorithm>
 #include <cctype>
 #include <cstdarg>
 #include <cstdlib>
@@ -845,11 +846,68 @@ std::size_t stampLength(const std::string& s) {
     return 12;
 }
 
-}  // namespace
+// THE NAMES A REPORT ALREADY LISTS, as scrubUploadLog(lines, inventory) keeps
+// them: each "name version" entry and the name without its version, longest
+// first so the whole entry wins over its own name. Only entries with a letter
+// in them and at least three characters: a bare number is exactly what the
+// rule below exists to mask, whoever claims it as a name.
+std::vector<std::string> namesToKeep(const std::vector<std::string>& inventory) {
+    std::vector<std::string> out;
+    auto add = [&out](const std::string& s) {
+        if (s.size() < 3) { return; }
+        bool letter = false;
+        for (const char c : s) { letter = letter || isAlphaChar(c); }
+        if (!letter) { return; }
+        if (std::find(out.begin(), out.end(), s) == out.end()) { out.push_back(s); }
+    };
+    for (const std::string& e : inventory) {
+        add(e);
+        const std::size_t sp = e.find_last_of(' ');
+        if (sp != std::string::npos && sp > 0) { add(e.substr(0, sp)); }
+    }
+    std::stable_sort(out.begin(), out.end(),
+                     [](const std::string& a, const std::string& b) { return a.size() > b.size(); });
+    return out;
+}
 
-std::string scrubUploadLine(const std::string& line) {
+// A kept name is swapped for a token while the rules run and put back after.
+// The token is \x01, letters from {Q,W,X,J} (the index in base 4) and \x02:
+// no digit for the number rule to mask, and no letter run that could spell
+// any of mentionsFrequency's words, so a token neither is masked nor makes
+// its line look like one that names a frequency.
+std::string keepToken(std::size_t index) {
+    static const char kDigits[4] = {'Q', 'W', 'X', 'J'};
+    std::string t(1, '\x01');
+    do {
+        t += kDigits[index % 4u];
+        index /= 4u;
+    } while (index != 0);
+    t += '\x02';
+    return t;
+}
+
+std::string scrubLineKeeping(const std::string& line, const std::vector<std::string>& keep) {
     const std::size_t stamp = stampLength(line);
     std::string body = line.substr(stamp);
+    // Only where the name stands on its own: "406 MHz Beacons" inside
+    // "X406 MHz Beacons2" is somebody else's text.
+    std::vector<std::pair<std::string, std::string>> held;
+    for (const std::string& name : keep) {
+        std::size_t at = 0;
+        while ((at = body.find(name, at)) != std::string::npos) {
+            const std::size_t end = at + name.size();
+            const bool freeStart = at == 0 || !isAlnumChar(body[at - 1]);
+            const bool freeEnd = end >= body.size() || !isAlnumChar(body[end]);
+            if (!freeStart || !freeEnd) {
+                ++at;
+                continue;
+            }
+            const std::string token = keepToken(held.size());
+            held.emplace_back(token, name);
+            body.replace(at, name.size(), token);
+            at += token.size();
+        }
+    }
     stripSerials(body);
     maskUsbInstanceIds(body);
     maskSoapyLabelSerials(body);
@@ -862,7 +920,20 @@ std::string scrubUploadLine(const std::string& line) {
     const bool cut = line.size() >= static_cast<std::size_t>(DiagLog::kLineBytes) - 1u;
     if (cut || mentionsFrequency(lowerAscii(body))) { maskNumbers(body); }
     collapseMasks(body);
+    // The kept names back, each where its token still stands. A token some
+    // rule consumed (a name inside quotes becomes '<name>') stays consumed,
+    // which errs the safe way.
+    for (const auto& [token, name] : held) {
+        const std::size_t at = body.find(token);
+        if (at != std::string::npos) { body.replace(at, token.size(), name); }
+    }
     return line.substr(0, stamp) + body;
+}
+
+}  // namespace
+
+std::string scrubUploadLine(const std::string& line) {
+    return scrubLineKeeping(line, std::vector<std::string>());
 }
 
 std::string scrubUploadPath(const std::string& path) {
@@ -909,12 +980,18 @@ std::string maskAccountNames(const std::string& text) {
 }
 
 std::vector<std::string> scrubUploadLog(const std::vector<std::string>& lines) {
+    return scrubUploadLog(lines, std::vector<std::string>());
+}
+
+std::vector<std::string> scrubUploadLog(const std::vector<std::string>& lines,
+                                        const std::vector<std::string>& inventory) {
+    const std::vector<std::string> keep = namesToKeep(inventory);
     std::vector<std::string> out;
     out.reserve(lines.size());
     std::size_t i = 0;
     while (i < lines.size()) {
         if (!isUsbInventoryLine(lines[i])) {
-            out.push_back(scrubUploadLine(lines[i]));
+            out.push_back(scrubLineKeeping(lines[i], keep));
             ++i;
             continue;
         }

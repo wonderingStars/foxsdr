@@ -601,11 +601,73 @@ void bundleHeaderPaths() {
     setEnv(var, saved != nullptr ? keep.c_str() : nullptr);
 }
 
+// A PLUGIN'S NAME IS NOT A FREQUENCY (GitHub issue 5's bundle, 0.99.43). The
+// header of that bundle read "plugin: 406 MHz Beacons 1.0.0" and every log
+// line naming the same plugin read "plugin: loaded # MHz Beacons #": the name
+// carries "MHz", so rule 6 masked every number on the line, the version with
+// it. The header is the same inventory, unscrubbed, a few lines up - masking
+// it in the log protected nothing and cost the report its plugin versions.
+// The names the report itself lists are kept wherever they appear; every
+// other number on such a line is still masked.
+void pluginNamesSurviveTheScrub() {
+    const std::string loaded = "15:41:13.441 info plugin: loaded 406 MHz Beacons 1.0.0";
+    const std::string other = "15:41:13.441 info plugin: loaded GOES HRIT / LRIT 0.2.0";
+    // A real frequency on a line that also names the plugin: still masked.
+    const std::string tuned = "15:41:20.000 info plugin: 406 MHz Beacons 1.0.0 - receiver asked "
+                              "for 406.028000 MHz";
+    const std::string plainTune = "15:41:21.000 info source: asked for 406.028000 MHz";
+    const std::vector<std::string> plugins = {"406 MHz Beacons 1.0.0", "GOES HRIT / LRIT 0.2.0"};
+
+    // Path 3, the diagnostics bundle, exactly as the report page builds it.
+    {
+        cascade::core::DiagBundleInput in;
+        in.context.version = "0.99.44";
+        in.context.plugins = plugins;
+        in.logLines = {loaded, other, tuned, plainTune};
+        const std::string bundle = cascade::core::buildDiagnosticsBundle(in);
+        const std::string log = bundle.substr(bundle.find("--- log ---\n"));
+        std::printf("bundle log section:\n%s", log.c_str());
+        CHECK(log.find(loaded + "\n") != std::string::npos);
+        CHECK(log.find(other + "\n") != std::string::npos);
+        CHECK(log.find("# MHz Beacons #") == std::string::npos);
+        CHECK(log.find("406.028") == std::string::npos);
+        CHECK(log.find("15:41:20.000 info plugin: 406 MHz Beacons 1.0.0 - receiver asked for # MHz") !=
+              std::string::npos);
+        CHECK(log.find("15:41:21.000 info source: asked for # MHz") != std::string::npos);
+    }
+    // Paths 1 and 2, the crash and freeze uploads: the report's own
+    // "plugin:" context lines are the inventory.
+    {
+        std::string header = crashHeader();
+        const std::string adsb = "plugin: ADS-B 1.8.0\n";
+        header.replace(header.find(adsb), adsb.size(),
+                       "plugin: 406 MHz Beacons 1.0.0\nplugin: GOES HRIT / LRIT 0.2.0\n");
+        const std::string text = header + "--- log (last 4 of 4 lines) ---\n" + loaded + "\n" +
+                                 other + "\n" + tuned + "\n" + plainTune + "\n";
+        bool parsed = false;
+        const std::vector<std::string> up = uploadedLog(text, parsed);
+        CHECK(parsed);
+        const std::string joined = [&] {
+            std::string s;
+            for (const std::string& l : up) { s += l + "\n"; }
+            return s;
+        }();
+        std::printf("crash upload log:\n%s", joined.c_str());
+        CHECK(joined.find(loaded + "\n") != std::string::npos);
+        CHECK(joined.find(other + "\n") != std::string::npos);
+        CHECK(joined.find("406.028") == std::string::npos);
+    }
+    // And a list that names nothing changes nothing: rule 6 as it was.
+    CHECK(cascade::core::scrubUploadLog({loaded}).front() ==
+          "15:41:13.441 info plugin: loaded # MHz Beacons #");
+}
+
 }  // namespace
 
 int main() {
     unitRules();
     bundleHeaderPaths();
+    pluginNamesSurviveTheScrub();
 
     writeTheRealLines();
 
