@@ -2819,6 +2819,7 @@ private:
     // async result in this file follows (e.g. DeviceOpenResult).
     std::atomic<int> testerUsageLastOutcome_{-1};  // -1 = none pending
     bool testerShowPreview_ = false;
+    bool testerPreviewOpenedByEnv_ = false;
     std::string testerCodeError_;
     // The SYSTEM bank's text field. A separate buffer from testerToken_,
     // sized for a whole pasted portal link, so a half-typed paste never

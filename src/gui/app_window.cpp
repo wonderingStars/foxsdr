@@ -23348,6 +23348,16 @@ void AppWindow::drawTesterUsageSection() {
     if (std::getenv("FOXSDR_OPEN_BETA_TESTER") != nullptr) {
         ImGui::SetNextItemOpen(true, ImGuiCond_Once);
     }
+    // THE PREVIEW'S OWN SEAM, same rule: its open/closed state is a plain
+    // bool with no config field to seed instead, so a bounded self-capture
+    // needs a way to see it without scripting a click. Once, on the first
+    // frame that sees the variable - a real session toggling the button
+    // afterwards is not fought.
+    if (!testerPreviewOpenedByEnv_ &&
+        std::getenv("FOXSDR_OPEN_BETA_TESTER_PREVIEW") != nullptr) {
+        testerPreviewOpenedByEnv_ = true;
+        testerShowPreview_ = true;
+    }
     const bool active = !testerToken_.empty();
     const char* chip =
         testerToken_.empty() ? tr("OFF") : (testerTokenInvalid_ ? tr("INVALID") : tr("ON"));
