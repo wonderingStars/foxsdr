@@ -95,14 +95,46 @@ std::vector<cascade::usb::UsbId> usbIds();
 
 // --- the control endpoint -------------------------------------------------
 
-// THE REQUEST TYPE IS 0x42, NOT THE 0x40 EVERY OTHER DRIVER HERE USES, and
-// that is deliberate rather than a typo: bits 6:5 say vendor, but the
-// recipient field is 2 (endpoint) instead of 0 (device). The MSi2500 answers
-// its register writes addressed that way and this driver has no hardware to
-// discover a second acceptable spelling on, so it sends exactly what the
-// silicon is known to take. usb_device.hpp's kRequestTypeVendorOut is 0x40 and
-// is deliberately NOT used here.
-constexpr std::uint8_t kRequestTypeVendorOutEndpoint = 0x42;
+// CHANGED FROM 0x42 TO 0x40 (2026-09-28, review round 3 - see
+// scratchpad/bugs0928/sdrplay/mirics-windex.md for the full research pass,
+// NOT YET TRIED ON HARDWARE, no RSP or Mirics device on this desk).
+//
+// The 0x42 this constant held before was copied from the reference userspace
+// library (f4exb/libmirisdr-4, reg.c mirisdr_write_reg) on the belief that
+// "the MSi2500 answers its register writes addressed that way" - a claim
+// this codebase had no hardware to check and, it turns out, did not hold up:
+// 0x42 sets bmRequestType's recipient bits to 2 (ENDPOINT), which requires
+// the low byte of wIndex to name a real, existing endpoint - but
+// encodeRegWrite puts arbitrary register-VALUE bits there (see below), so
+// most register writes name an "endpoint" that does not exist on this
+// device. WinUsb_ControlTransfer's own documentation states the endpoint-
+// recipient contract explicitly; Windows' USB stack is expected to enforce
+// it (this is exactly the field-reported "transfer failed while initialising
+// the ADC", Windows error 87, for the first write whose wIndex low byte is
+// not 0x00). It went unnoticed on Linux only because usbfs's own
+// check_ctrlrecip skips this validation for any vendor-type request
+// (drivers/usb/core/devio.c) - it is not that 0x42 is correct and Windows is
+// stricter than it should be; the request is malformed by the recipient
+// field's own documented meaning, and Linux simply never checks.
+//
+// 0x40 (vendor, recipient DEVICE, still "NOT the 0x40 usb_device.hpp's own
+// kRequestTypeVendorOut spells" only in that this is a second constant equal
+// to it, not a shared one - see below) needs no endpoint to exist at all,
+// and is what BOTH independent references that actually target Windows use
+// for the identical wValue/wIndex bytes: the Linux KERNEL's own in-tree
+// msi2500.c driver (drivers/media/usb/msi2500/msi2500.c,
+// msi2500_ctrl_msg: `requesttype = USB_DIR_OUT | USB_TYPE_VENDOR` = 0x40),
+// and DanielKami's community port of libmirisdr "corrected for Windows...
+// through WinUSB" (CTRL_OUT = LIBUSB_REQUEST_TYPE_VENDOR |
+// LIBUSB_ENDPOINT_OUT = 0x40, no recipient bits set). Both are independent
+// of each other and of this codebase, and both chose 0x40 for the exact
+// platform (Windows / WinUSB) this codebase's own field reports are on.
+//
+// A SEPARATE CONSTANT FROM usb_device.hpp's kRequestTypeVendorOut, even
+// though the VALUE is now the same, because this file's registers are this
+// driver's own protocol knowledge and should not silently start meaning
+// something different if some other driver's constant is ever repurposed.
+constexpr std::uint8_t kRequestTypeVendorOutDevice = 0x40;
 
 // The vendor requests. Only three of them are ever sent by this driver - a
 // request we cannot name is a request we cannot send - but the numbers around

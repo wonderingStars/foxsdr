@@ -75,34 +75,46 @@ const MiriControlRecord& at(const std::vector<MiriControlRecord>& v, std::size_t
 // One register write, whole. Compared as a unit rather than as five separate
 // CHECKs so a failure names the transfer that is wrong instead of leaving five
 // lines to be reassembled by hand.
+//
+// requestType is checked against msi2500::kRequestTypeVendorOutDevice, NOT a
+// literal, so this helper cannot silently drift from the constant it is
+// meant to verify (round 3 of the 2026-09-28 review: changing that constant
+// from 0x42 to 0x40 reddened every call site of this helper and isCommand
+// below at once - 35 failures - which is exactly the coverage the review
+// asked for: "the fake must now assert bmRequestType". It already did; the
+// constant just had to actually change).
 bool isRegWrite(const char* label, const MiriControlRecord& r, int reg, std::uint32_t val) {
-    const bool ok = !r.in && r.requestType == 0x42 && r.request == 0x41 &&
-                    r.reg() == static_cast<std::uint8_t>(reg) && r.regValue() == val &&
-                    r.payloadBytes == 0;
+    const bool ok = !r.in && r.requestType == msi2500::kRequestTypeVendorOutDevice &&
+                    r.request == 0x41 && r.reg() == static_cast<std::uint8_t>(reg) &&
+                    r.regValue() == val && r.payloadBytes == 0;
     if (!ok) {
         std::printf(
             "     %s: got %s type 0x%02x request 0x%02x reg 0x%02x value 0x%06x (wValue 0x%04x "
-            "wIndex 0x%04x, %u payload bytes); want OUT type 0x42 request 0x41 reg 0x%02x value "
-            "0x%06x\n",
+            "wIndex 0x%04x, %u payload bytes); want OUT type 0x%02x request 0x41 reg 0x%02x "
+            "value 0x%06x\n",
             label, r.in ? "IN" : "OUT", static_cast<unsigned>(r.requestType),
             static_cast<unsigned>(r.request), static_cast<unsigned>(r.reg()), r.regValue(),
             static_cast<unsigned>(r.value), static_cast<unsigned>(r.index),
-            static_cast<unsigned>(r.payloadBytes), static_cast<unsigned>(reg), val);
+            static_cast<unsigned>(r.payloadBytes),
+            static_cast<unsigned>(msi2500::kRequestTypeVendorOutDevice),
+            static_cast<unsigned>(reg), val);
     }
     return ok;
 }
 
 bool isCommand(const char* label, const MiriControlRecord& r, int request) {
-    const bool ok = !r.in && r.requestType == 0x42 &&
+    const bool ok = !r.in && r.requestType == msi2500::kRequestTypeVendorOutDevice &&
                     r.request == static_cast<std::uint8_t>(request) && r.value == 0 &&
                     r.index == 0 && r.payloadBytes == 0;
     if (!ok) {
         std::printf(
-            "     %s: got %s type 0x%02x request 0x%02x value 0x%04x index 0x%04x; want OUT type "
-            "0x42 request 0x%02x value 0 index 0\n",
+            "     %s: got %s type 0x%02x request 0x%02x value 0x%04x index 0x%04x; want OUT "
+            "type 0x%02x request 0x%02x value 0 index 0\n",
             label, r.in ? "IN" : "OUT", static_cast<unsigned>(r.requestType),
             static_cast<unsigned>(r.request), static_cast<unsigned>(r.value),
-            static_cast<unsigned>(r.index), static_cast<unsigned>(request));
+            static_cast<unsigned>(r.index),
+            static_cast<unsigned>(msi2500::kRequestTypeVendorOutDevice),
+            static_cast<unsigned>(request));
     }
     return ok;
 }
@@ -293,9 +305,14 @@ int main() {
             CHECK(w.index == c.index);
         }
 
-        // The request numbers and the request TYPE, which is the one this
-        // family does differently: recipient endpoint, not device.
-        CHECK(msi2500::kRequestTypeVendorOutEndpoint == 0x42);
+        // The request numbers and the request TYPE - recipient DEVICE
+        // (2026-09-28, review round 3: changed from 0x42/recipient ENDPOINT,
+        // which WinUSB's documented contract requires a real endpoint
+        // address in wIndex's low byte for, and most register writes here do
+        // not carry one - see msi2500.hpp's own comment and
+        // scratchpad/bugs0928/sdrplay/mirics-windex.md. Not yet tried on
+        // real hardware).
+        CHECK(msi2500::kRequestTypeVendorOutDevice == 0x40);
         CHECK(msi2500::requestByte(msi2500::VendorRequest::WriteRegister) == 0x41);
         CHECK(msi2500::requestByte(msi2500::VendorRequest::StartStreaming) == 0x43);
         CHECK(msi2500::requestByte(msi2500::VendorRequest::StopStreaming) == 0x45);

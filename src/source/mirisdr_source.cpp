@@ -196,7 +196,7 @@ bool MiriSdrSource::writeRegisterLocked(std::uint8_t reg, std::uint32_t val, con
     // NO DATA STAGE: the whole register rides in the setup packet, which is
     // why the length is zero and a return of zero is the success case here
     // rather than a short transfer.
-    const int ret = dev_->controlOut(msi2500::kRequestTypeVendorOutEndpoint,
+    const int ret = dev_->controlOut(msi2500::kRequestTypeVendorOutDevice,
                                      msi2500::requestByte(msi2500::VendorRequest::WriteRegister),
                                      w.value, w.index, nullptr, 0, msi2500::kControlTimeoutMs);
     if (ret < 0) {
@@ -213,7 +213,7 @@ bool MiriSdrSource::commandLocked(msi2500::VendorRequest r, const char* what,
         return false;
     }
     if (deviceDead()) { return false; }
-    const int ret = dev_->controlOut(msi2500::kRequestTypeVendorOutEndpoint,
+    const int ret = dev_->controlOut(msi2500::kRequestTypeVendorOutDevice,
                                      msi2500::requestByte(r), 0, 0, nullptr, 0, timeoutMs);
     if (ret < 0) {
         noteTransportFault(what, dev_->lastError());
@@ -368,27 +368,28 @@ bool MiriSdrSource::open(const std::string& args) {
     // adcInitSequence() that comes back Windows error 87
     // (ERROR_INVALID_PARAMETER).
     //
-    // LIKELY UNRELATED TO THE SDRPLAY API AT ALL - see
-    // scratchpad/bugs0928/sdrplay/mirics-windex.md, a research pass against
-    // the public reference sources (not hardware; none is on this desk).
-    // kRequestTypeVendorOutEndpoint (0x42) sets bmRequestType's recipient
-    // bits to ENDPOINT, and encodeRegWrite puts arbitrary register-value
-    // bits in wIndex - for this exact write (register 8, value 0x006080)
-    // wIndex's low byte comes out 0x60, which names no real endpoint on this
-    // device. WinUsb_ControlTransfer's own documentation states plainly that
-    // an endpoint-recipient request's Index low byte must be a real endpoint
-    // address; the two writes that DO succeed above both happen to encode
-    // wIndex's low byte as 0x00 (endpoint 0), which is real. The reference
-    // library (f4exb/libmirisdr-4) uses this SAME 0x42, and works on Linux
-    // only because Linux's usbfs skips this validation entirely for any
-    // vendor-type request (drivers/usb/core/devio.c, check_ctrlrecip) - the
-    // Linux KERNEL's own in-tree msi2500 driver, unlike the userspace
-    // library, uses 0x40 (recipient DEVICE) for the identical wValue/wIndex
-    // bytes, which needs no endpoint to exist at all. NOT fixed in this
-    // commit (see the follow-up commit that changes
-    // kRequestTypeVendorOutEndpoint itself) - this guard is correct
-    // regardless of the transport mechanism: with the SDRplay API installed,
-    // native access is never the supported path on Windows (see
+    // LIKELY UNRELATED TO THE SDRPLAY API AT ALL, AND NOW FIXED SEPARATELY -
+    // see scratchpad/bugs0928/sdrplay/mirics-windex.md for the research pass
+    // (public reference sources; no hardware on this desk) and
+    // msi2500.hpp's kRequestTypeVendorOutDevice for the fix itself (0x42,
+    // recipient ENDPOINT, changed to 0x40, recipient DEVICE - a SEPARATE
+    // commit from this guard, per the owner's instruction, and NOT YET
+    // TRIED ON HARDWARE). In short: encodeRegWrite puts arbitrary register-
+    // value bits in wIndex, and 0x42 required wIndex's low byte to name a
+    // real endpoint - for the field report's exact failing write (register
+    // 8, value 0x006080) it came out 0x60, which names none, while the two
+    // writes that DID succeed both happened to encode 0x00 (endpoint 0,
+    // real). WinUsb_ControlTransfer's documentation states that contract
+    // for endpoint-recipient requests explicitly; the reference library
+    // (f4exb/libmirisdr-4) used the same 0x42 and worked on Linux only
+    // because usbfs skips this validation for vendor requests entirely
+    // (drivers/usb/core/devio.c, check_ctrlrecip) - the Linux KERNEL's own
+    // in-tree msi2500 driver, and a community port of libmirisdr
+    // specifically "corrected for Windows... through WinUSB"
+    // (DanielKami/SDRplay), both independently use 0x40 for the identical
+    // wValue/wIndex bytes. This guard is correct regardless of whether that
+    // fix turns out to hold on real hardware: with the SDRplay API
+    // installed, native access is never the supported path on Windows (see
     // rsp_rows.hpp), so refusing here costs nothing real either way.
     if (kNativeMiricsOpenUnsafeWithApi && isSdrPlayFlavour(info) && sdrPlayApiPresent()) {
         setError(cascade::source::sdrPlayHiddenRowAdvice());
