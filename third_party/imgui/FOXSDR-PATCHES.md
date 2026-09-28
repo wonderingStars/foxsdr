@@ -122,11 +122,13 @@ are never touched.
 
 ## mouse-passthrough-cache - skip the per-frame GLFW_MOUSE_PASSTHROUGH syscall when it has not changed
 
-**Files:** `backends/imgui_impl_glfw.cpp` (a small cache and
-`ImGui_ImplGlfw_ShouldSetMousePassthrough`, both just above
+**Files:** `backends/imgui_impl_glfw.cpp` (a small cache,
+`ImGui_ImplGlfw_ShouldSetMousePassthrough` and
+`ImGui_ImplGlfw_ClearMousePassthroughCache`, all just above
 `ImGui_ImplGlfw_UpdateMouseData`; one `if` at the call site inside that
-function; a reset call at the end of `ImGui_ImplGlfw_Shutdown`),
-`backends/imgui_impl_glfw.h` (two test-only declarations).
+function; a reset call at the end of `ImGui_ImplGlfw_Shutdown`; a clear call in
+`ImGui_ImplGlfw_DestroyWindow`), `backends/imgui_impl_glfw.h` (four test-only
+declarations).
 
 **Why.** Upstream calls `glfwSetWindowAttrib(window, GLFW_MOUSE_PASSTHROUGH,
 window_no_input)` for every platform viewport on every single frame,
@@ -151,14 +153,28 @@ the call - when a record exists and already matches; otherwise it records the
 new value and returns true, so the call still fires the first time a window is
 seen and every time the wanted value actually changes. The table is plain data
 with no destructor, cleared wholesale in `ImGui_ImplGlfw_Shutdown` (a fresh
-backend life gets a fresh cache) rather than per-window on destroy - a window
-pointer being reused by the allocator can only make the cache skip a call that
-would have set the SAME value the new window already starts with (GLFW resets
-`GLFW_MOUSE_PASSTHROUGH` to false on every new window), so no per-destroy
-bookkeeping is needed for correctness. If the table's 32 slots are ever all in
-use, a further window simply gets the call every frame, exactly as upstream
-always has for every window - the cache never skips a call it has not
-recorded a matching prior value for.
+backend life gets a fresh cache), AND `ImGui_ImplGlfw_ClearMousePassthroughCache`
+drops one window's own slot, called from `ImGui_ImplGlfw_DestroyWindow` right
+before `glfwDestroyWindow` (0.99.44 repair - see below for what this replaced).
+If the table's 32 slots are ever all in use, a further window simply gets the
+call every frame, exactly as upstream always has for every window - the cache
+never skips a call it has not recorded a matching prior value for.
+
+**0.99.44 repair - the per-destroy clear was missing, and the reasoning for
+leaving it out was wrong.** This patch originally cleared the table only
+wholesale, in `Shutdown`, reasoning that a window pointer reused by the
+allocator "can only make the cache skip a call that would have set the SAME
+value the new window already starts with (GLFW resets `GLFW_MOUSE_PASSTHROUGH`
+to false on every new window)". That reasoning only covers a destroyed window
+whose last recorded value was already false. A window destroyed while its
+cached value was TRUE leaves that record in the table; a later window created
+at the SAME address (ordinary heap reuse - `GLFWwindow*` on this backend is a
+plain allocation) inherits it, and the very next frame that wants passthrough
+TRUE on the new window sees a "match" and skips the call - on a window whose
+real Win32 style has never had that bit set at all, because it is brand new.
+`ImGui_ImplGlfw_ClearMousePassthroughCache` removes the slot the moment the
+window it describes stops existing, so a reused address always starts from "no
+record" like any other new window.
 
 **What it does not change.** The value passed to `glfwSetWindowAttrib` is
 unchanged, and it is still called at least once per window and on every frame
@@ -169,14 +185,18 @@ redundant repeats, which upstream never checked for, are removed.
 **Re-applying on an ImGui upgrade.**
 1. Vendor the new upstream unmodified first (`THIRD_PARTY.md`).
 2. `grep -n "FOXSDR PATCH.*mouse-passthrough-cache"` in the previous copy
-   finds all four places (three in the .cpp, one pair of declarations in the
-   .h). Put the cache struct and `ImGui_ImplGlfw_ShouldSetMousePassthrough`
-   just above `ImGui_ImplGlfw_UpdateMouseData`; wrap the
-   `glfwSetWindowAttrib(window, GLFW_MOUSE_PASSTHROUGH, window_no_input)` call
-   inside `ImGui_ImplGlfw_UpdateMouseData` in the `if`; add the reset call at
-   the end of `ImGui_ImplGlfw_Shutdown`; the two test-only declarations at the
-   end of the public block in the header.
+   finds all five places (four in the .cpp, one block of declarations in the
+   .h). Put the cache struct, `ImGui_ImplGlfw_ShouldSetMousePassthrough` and
+   `ImGui_ImplGlfw_ClearMousePassthroughCache` just above
+   `ImGui_ImplGlfw_UpdateMouseData`; wrap the `glfwSetWindowAttrib(window,
+   GLFW_MOUSE_PASSTHROUGH, window_no_input)` call inside
+   `ImGui_ImplGlfw_UpdateMouseData` in the `if`; add the reset call at the end
+   of `ImGui_ImplGlfw_Shutdown`; add the clear call in
+   `ImGui_ImplGlfw_DestroyWindow` right before `glfwDestroyWindow`; the four
+   test-only declarations at the end of the public block in the header.
    If upstream starts caching this itself, drop the patch.
 3. Run `test_mouse_passthrough_cache`: a steady frame loop with nothing asking
-   for pass-through must show exactly 1 call, and a value that changes every
-   frame must show one call per change.
+   for pass-through must show exactly 1 call, a value that changes every frame
+   must show one call per change, and a window destroyed then "recreated" at
+   the identical key (a fabricated pointer stands in for a reused address)
+   must not inherit its predecessor's last value.

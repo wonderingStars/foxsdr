@@ -996,6 +996,28 @@ bool ImGui_ImplGlfw_ShouldSetMousePassthrough(GLFWwindow* window, bool wanted)
     }
     return true;
 }
+
+// Drops `window`'s slot, if it has one. Called from ImGui_ImplGlfw_DestroyWindow
+// (0.99.44 repair) so a stale record never outlives the window it describes: a
+// GLFWwindow* is heap memory the platform allocator is free to hand to the
+// VERY NEXT CreateWindow, and without this, a fresh window created at that
+// same address would inherit whatever value the destroyed window last
+// recorded - ShouldSetMousePassthrough would then see its own wanted value
+// "already matching" and skip the Win32 call on a window that has never had
+// that style applied at all. Also what keeps a long session's churn of
+// torn-off viewport windows from silently filling every slot in the table
+// with windows that no longer exist.
+void ImGui_ImplGlfw_ClearMousePassthroughCache(GLFWwindow* window)
+{
+    FoxMousePassthroughCache& c = g_FoxMousePassthroughCache;
+    for (int i = 0; i < kFoxMousePassthroughCacheCap; i++)
+        if (c.Valid[i] && c.Window[i] == window)
+        {
+            c.Valid[i] = false;
+            c.Window[i] = nullptr;
+            return;
+        }
+}
 }  // namespace
 
 int ImGui_ImplGlfw_MousePassthroughSyscallCountForTest()
@@ -1009,6 +1031,22 @@ void ImGui_ImplGlfw_ResetMousePassthroughForTest()
     for (int i = 0; i < kFoxMousePassthroughCacheCap; i++)
         c.Valid[i] = false;
     c.SyscallCount = 0;
+}
+
+// TESTS ONLY: exercise ShouldSetMousePassthrough / the DestroyWindow-time
+// clear directly, with a synthetic window key. Neither ever dereferences the
+// pointer - it is purely a table key - so any distinct value stands in for a
+// real GLFWwindow*, which is exactly what makes an address REUSE
+// reproducible on demand instead of depending on the allocator actually
+// handing back the same address (0.99.44 repair: see
+// ImGui_ImplGlfw_ClearMousePassthroughCache's own comment for the bug).
+bool ImGui_ImplGlfw_ShouldSetMousePassthroughForTest(GLFWwindow* window, bool wanted)
+{
+    return ImGui_ImplGlfw_ShouldSetMousePassthrough(window, wanted);
+}
+void ImGui_ImplGlfw_ClearMousePassthroughCacheForTest(GLFWwindow* window)
+{
+    ImGui_ImplGlfw_ClearMousePassthroughCache(window);
 }
 // FOXSDR PATCH END (mouse-passthrough-cache)
 
@@ -1590,6 +1628,10 @@ static void ImGui_ImplGlfw_DestroyWindow(ImGuiViewport* viewport)
                     ImGui_ImplGlfw_KeyCallback(vd->Window, i, 0, GLFW_RELEASE, 0); // Later params are only used for main viewport, on which this function is never called.
 
             ImGui_ImplGlfw_ContextMap_Remove(vd->Window);
+            // FOXSDR PATCH (mouse-passthrough-cache, 0.99.44 repair): drop
+            // this window's cache slot before the address can be reused - see
+            // ImGui_ImplGlfw_ClearMousePassthroughCache's own comment.
+            ImGui_ImplGlfw_ClearMousePassthroughCache(vd->Window);
             glfwDestroyWindow(vd->Window);
         }
         vd->Window = nullptr;

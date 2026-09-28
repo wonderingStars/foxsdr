@@ -102,6 +102,35 @@ void testAChangingValueIsStillAppliedEveryTime() {
     }
 }
 
+// 0.99.44 REPAIR: a destroyed viewport window's cache slot must not survive
+// it. GLFWwindow* is heap memory the platform allocator is free to hand back
+// to the very next window created, and before this fix nothing cleared the
+// slot on destroy - a fresh window at that same address would find its own
+// wanted value "already matching" whatever the destroyed window last
+// recorded, and skip the Win32 call on a window that has never had that style
+// applied at all. Fabricated pointer values stand in for real ones: the cache
+// never dereferences its key, which is what makes a REUSED address
+// reproducible here instead of left to the allocator.
+void testDestroyedWindowSlotDoesNotLeakIntoAReusedAddress() {
+    ImGui_ImplGlfw_ResetMousePassthroughForTest();
+
+    GLFWwindow* const reused = reinterpret_cast<GLFWwindow*>(0x1234);
+
+    // The "old" window is recorded wanting true - the very value that would
+    // wrongly be inherited if its slot survived.
+    CHECK(ImGui_ImplGlfw_ShouldSetMousePassthroughForTest(reused, true));   // no prior record: must call
+    CHECK(!ImGui_ImplGlfw_ShouldSetMousePassthroughForTest(reused, true));  // unchanged: must skip
+
+    // The window is destroyed - this is what ImGui_ImplGlfw_DestroyWindow now
+    // does before glfwDestroyWindow.
+    ImGui_ImplGlfw_ClearMousePassthroughCacheForTest(reused);
+
+    // A NEW window is created at the identical key, also wanting true. With no
+    // clear on destroy this would find the old "true" record and skip the
+    // call - the new window's actual style has never been touched at all.
+    CHECK(ImGui_ImplGlfw_ShouldSetMousePassthroughForTest(reused, true));
+}
+
 }  // namespace
 
 int main() {
@@ -128,6 +157,7 @@ int main() {
 
         testSteadyStateFrameLoopMakesTheCallOnceNotEveryFrame();
         testAChangingValueIsStillAppliedEveryTime();
+        testDestroyedWindowSlotDoesNotLeakIntoAReusedAddress();
 
         ImGui_ImplGlfw_Shutdown();
         ImGui::DestroyContext();

@@ -100,6 +100,16 @@ IMGUI_IMPL_API void     ImGui_ImplGlfw_FailNextViewportWindowForTest();
 IMGUI_IMPL_API int      ImGui_ImplGlfw_MousePassthroughSyscallCountForTest();
 IMGUI_IMPL_API void     ImGui_ImplGlfw_ResetMousePassthroughForTest();
 
+// TESTS ONLY (0.99.44 repair): the cache's own decision, and the clear
+// ImGui_ImplGlfw_DestroyWindow makes when a viewport window is torn down, both
+// reachable directly with a synthetic window key - neither ever dereferences
+// the pointer, so this reproduces a window ADDRESS REUSE deterministically
+// (destroy, clear, then a new "window" at the identical key must not inherit
+// the destroyed one's last value) instead of depending on the allocator
+// actually handing the same address back.
+IMGUI_IMPL_API bool    ImGui_ImplGlfw_ShouldSetMousePassthroughForTest(GLFWwindow* window, bool wanted);
+IMGUI_IMPL_API void    ImGui_ImplGlfw_ClearMousePassthroughCacheForTest(GLFWwindow* window);
+
 // GLFW helpers
 IMGUI_IMPL_API void     ImGui_ImplGlfw_Sleep(int milliseconds);
 IMGUI_IMPL_API float    ImGui_ImplGlfw_GetContentScaleForWindow(GLFWwindow* window);
