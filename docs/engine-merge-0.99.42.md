@@ -356,6 +356,18 @@ environment - any CMake 3.20+/Ninja pair works.)
     files>` is empty) - this is a real-hardware/real-desktop artifact of
     running here, the same class of thing the "verified state" lessons
     describe repeatedly, not a regression.
+    **CORRECTION (engine/stage3b-pre repair round, 2026-09-28): this claim
+    does not hold on a re-run.** Both tests PASS on this same desktop, same
+    USB bus, both the branch build and a master control build (see the
+    repair round's own ctest output for the exact counts and command). The
+    original `spawn-failed` was real for that run, but "this desktop's
+    actual USB bus" was the wrong diagnosis for its CAUSE - a transient
+    condition (most likely a helper process or port momentarily busy from
+    the SAME session's earlier device-open tests, not a structural fact
+    about the hardware attached here) rather than something the tests
+    cannot pass around. Left in place above rather than rewritten, per the
+    standing rule against silently rewriting a claim once it has been
+    pushed; this note is the correction.
   - `test_diagnostics` failed once, transiently, purely because the binary
     under test was built before the LAST commit and so reported a stale
     (but real) prior commit hash as `-dirty` against a since-advanced git

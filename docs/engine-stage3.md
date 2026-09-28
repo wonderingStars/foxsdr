@@ -513,10 +513,15 @@ corrections in section 6 are the only thread comments changed).
 
 #### src/source (54 lines, 4 stated as a contract)
 
-- [ ] `src/source/airspy_source.cpp:797` (mention) back from - and waiting for it on the GUI thread would be the hang
-- [ ] `src/source/airspy_source.cpp:868` (**contract**) helpers want devMutex_, which the GUI thread may be holding while it
+(`src/source/airspy_source.cpp`/`.hpp`'s four line references regenerated
+2026-09-28, engine/stage3b-pre: 0.99.41's Airspy R2/Mini gain modes,
+decimation and channel filter shifted the file by ~130 lines; the same four
+comments, the same mention/contract split, only the numbers moved.)
+
+- [ ] `src/source/airspy_source.cpp:833` (mention) back from - and waiting for it on the GUI thread would be the hang
+- [ ] `src/source/airspy_source.cpp:904` (**contract**) helpers want devMutex_, which the GUI thread may be holding while it
 - [ ] `src/source/airspy_source.hpp:22` (mention) rather than waited for, because a hang on the GUI thread is worse than a
-- [ ] `src/source/airspy_source.hpp:507` (**contract**) on the reader thread and WITHOUT devMutex_ (the GUI thread may hold it
+- [ ] `src/source/airspy_source.hpp:597` (**contract**) on the reader thread and WITHOUT devMutex_ (the GUI thread may hold it
 - [ ] `src/source/airspyhf_source.cpp:883` (mention) back from - and waiting for it on the GUI thread would be the hang
 - [ ] `src/source/airspyhf_source.hpp:25` (mention) GUI thread is worse than a leak. An abandoned reader must still have
 - [ ] `src/source/airspyhf_source.hpp:41` (mention) WHICH IS WHY THE RETUNE PATH LOOKS ODD. The GUI thread computes a tune and
@@ -662,6 +667,14 @@ they were with the facts; and what 3b has to settle first.
    it acts; in 3b each becomes a command (or a form a command carries), or the
    status line moves to the window. The guard lists them one by one with the
    reason.
+   **engine/stage3b-pre (2026-09-28) added one more of the same shape:**
+   `patchListsWanted_` (0.99.40's patch-page device-list wish: set in place
+   by `drawPatchRadioInspector`'s "Look for radios" button, and until B2's
+   fix also by the combo-open site, now folded into
+   `FOXAPP_OP_PATCH_RADIO_LIST_OPENED`'s handler - one of the two write
+   sites is a command already; the other, "Look for radios", was not
+   converted, for the same reason 2b below gives - not attempted without the
+   same build/test verification the rest of this merge got).
 2. **Non-command calls a control still makes** (`kControlMayCall`):
    `telemetryNotePanel` (a usage counter), `currentConfig` (the save's
    snapshot - now `engine_.fillConfig` inside it), `currentAbsoluteHz` and
@@ -670,11 +683,35 @@ they were with the facts; and what 3b has to settle first.
    `refreshDiagContext` (the diagnostics bundle), `scanSoundCards` (the sound
    card panel lists the cards). In 3b each is either a read of the snapshot or
    a command.
+   **engine/stage3b-pre (2026-09-28) added five more, all 0.99.41's Airspy
+   controls, all direct calls a control makes on `engine_` that mutate
+   state outside the command path:** `chooseAirspyDecimation`,
+   `chooseAirspyGainMode`, `chooseAirspyAgc` (the mode buttons, the AGC
+   switches and the decimation combo in `drawAirspyControls` call these
+   directly - each changes what the radio streams), `airspyRememberOpen`
+   (writes `airspyMemory_`, called after each of the three above and after a
+   web/CAT gain-by-name or AGC change) and `patchListRecordings` (the patch
+   device combo's own list). None was converted to a command in this
+   session - it would mean carrying the Airspy panel's whole mode/AGC/
+   decimation surface through `FoxCommand`, which is exactly the class of
+   change 2b below declines for the same reason: not attempted without the
+   same level of verification the rest of the merge got.
 3. **The window reads engine members directly** as a friend (every panel
    draws from `engine_.x_`, `engine_.pipeline_.y()`): allowed by the guard as
    reads, and safe only because both run on one thread. 3b needs every such
    read to come from the snapshot (or a window-side copy the engine hands
    over), which is stage 4's read API arriving early for the window.
+   **engine/stage3b-pre (2026-09-28) found a sharper instance of the same
+   problem:** `Engine::asAirspyDevice()` (0.99.41) hands `drawAirspyControls`
+   a raw `cascade::source::AirspySource*` into the open device, read (and, in
+   the mode-button/AGC/decimation handlers above, driven) EVERY FRAME the
+   panel is open - not a copy, not a snapshot field, the live pointer the
+   Engine's own worker thread will one day be reopening behind in 3b. Every
+   other query this stage added (`currentAbsoluteHz`, `carriedAirCentre`)
+   returns a value; this one is the one exception that returns a pointer
+   into engine-owned, mutable object state. 3b's read API (item 3's own
+   fix) has to cover this case explicitly, or the window keeps a dangling
+   pointer across the frame in which a control thread reopens the radio.
 4. **The EngineHost hooks are synchronous calls into the window** (section 3).
    Most become events the window drains. Three are not events:
    `onPluginsUnloading`/`beforePluginRescan` must finish before modules are

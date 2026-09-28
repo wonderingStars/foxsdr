@@ -124,6 +124,12 @@ list, because they involved judgement rather than mechanical porting:
   `test_converter_call_sites`, which is 5/5 green run with an explicit root
   argument (it only fails from this session's out-of-tree scratch build
   directory) and is not counted against the 216.
+  **CORRECTION (engine/stage3b-pre repair round, 2026-09-28): the "this
+  desktop's real USB bus" diagnosis for `test_soapy_enum_proc`/
+  `test_soapy_source` does not hold - both pass on a re-run, on this same
+  desktop, on both the branch and a master control build. See the
+  correction note in docs/engine-merge-0.99.42.md for the detail; left in
+  place above rather than rewritten.**
 - **Linux**: not run. See "Environment note" above.
 
 ## 3b-pre round (task step 2)
