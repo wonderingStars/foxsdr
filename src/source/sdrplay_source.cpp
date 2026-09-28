@@ -1826,11 +1826,14 @@ void SdrPlaySource::stopStreamingLocked() {
         initialised_ = false;
         running_.store(false, std::memory_order_relaxed);
         std::string abandonedLine;
+        std::string abandonedRateWarning;
         {
             std::lock_guard<std::mutex> hl(link_->healthMutex);
-            abandonedLine = healthLineLocked(*link_);
+            abandonedLine = healthLineLocked(*link_, &abandonedRateWarning);
         }
         if (!abandonedLine.empty()) { core::diagLogf("%s", abandonedLine.c_str()); }
+        if (!abandonedRateWarning.empty()) { core::diagWarnf("%s", abandonedRateWarning.c_str()); }
+        link_->setRateHz.store(0.0, std::memory_order_relaxed);
         return;
     }
     stopWorker.join();
