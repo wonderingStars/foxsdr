@@ -21,7 +21,10 @@
 //                            not free its id for the next one added;
 //       centre-chosen <id>   a node whose Node::centreChosen is set.
 // The view line is always "0 0 1": pan and zoom are the window's, not the
-// engine's, and are not carried.
+// engine's, and are not carried. And the command's text is only ever this
+// writer's: graphFromCommandText refuses any text that is not exactly what
+// graphCommandText writes for the graph it reads, which is how "nothing
+// repaired" is enforced (the document loader repairs; the command must not).
 //
 // THE REBASE. The engine changes the graph on its own while the page is open:
 // the patch take-over names a device and a centre, a running radio reports its
@@ -74,8 +77,10 @@ inline std::string graphCommandText(const Graph& g) {
 
 // The inverse. False, with `why` a sentence for the user, when the text is not
 // a patch or ANY of it could not be honoured: a graph the engine runs is the
-// whole draft or nothing, never a quietly repaired part of it. `out` is left
-// alone on a refusal.
+// whole draft or nothing, never a quietly repaired part of it. A line that
+// cannot be read, a value the document loader would repair, a line it would
+// skip - each is a refusal, not a quietly different graph (see the end of
+// this function). `out` is left alone on a refusal.
 inline bool graphFromCommandText(const std::string& text, Graph& out, std::string& why) {
     LoadResult r = parse(text, Ids::Keep);
     if (!r.ok) {
@@ -112,6 +117,37 @@ inline bool graphFromCommandText(const std::string& text, Graph& out, std::strin
             }
             n->centreChosen = true;
         }
+    }
+    // NOTHING REPAIRED. parse() is a document loader, and quietly repairs a
+    // value it cannot keep - a squelch outside -120..0 dB becomes -50, a rate
+    // past 10 GHz or below 0 becomes 0, a size past kMaxLoadedNodeSize is
+    // clamped and one of 0 or below becomes the kind's default - and skips a
+    // line it does not know. Right for a damaged config; wrong here, where
+    // the engine would then run a graph the page never drew. So the text must
+    // be EXACTLY what graphCommandText writes for the graph it was read as:
+    // every repair, today's and any added to the loader later, makes the two
+    // differ. The page's own text always passes (it is that writer's output
+    // for a graph the page holds).
+    const std::string canonical = graphCommandText(r.graph);
+    if (canonical != text) {
+        std::istringstream a(text);
+        std::istringstream b(canonical);
+        std::string la;
+        std::string lb;
+        while (std::getline(a, la)) {
+            if (!std::getline(b, lb)) { lb.clear(); }
+            if (la != lb) { break; }
+        }
+        std::istringstream first(la);
+        std::string what;
+        unsigned long id = 0;
+        if ((first >> what) && what == "node" && (first >> id)) {
+            why = "the patch graph was refused: node " + std::to_string(id) +
+                  " holds a value a patch cannot keep (a squelch, rate or size out of range)";
+        } else {
+            why = "the patch graph was refused: it is not written as the patch graph writes itself";
+        }
+        return false;
     }
     out = std::move(r.graph);
     return true;

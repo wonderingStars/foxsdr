@@ -153,6 +153,49 @@ int main() {
             CHECK(!w.empty());
             CHECK(pc::graphCommandText(kept) == before);
         }
+
+        // NOT REPAIRED EITHER. The document loader quietly repairs a value it
+        // cannot keep (a squelch outside -120..0 dB becomes -50, a rate past
+        // 10 GHz becomes 0, a size past 4000 is clamped, one of 0 or below
+        // becomes the kind's default) - right for a damaged config, wrong for
+        // a command: the engine would run a graph the page never drew. Each
+        // is a graph the Graph type itself allows, written by the command's
+        // own writer, and each is refused whole.
+        struct Bad {
+            const char* what;
+            void (*set)(pc::Node&);
+        };
+        const Bad values[] = {
+            {"squelch -200 dB", [](pc::Node& n) { n.squelchDb = -200.0f; }},
+            {"squelch +3 dB", [](pc::Node& n) { n.squelchDb = 3.0f; }},
+            {"rate 2e10 Hz", [](pc::Node& n) { n.rateHz = 2.0e10; }},
+            {"rate -1 Hz", [](pc::Node& n) { n.rateHz = -1.0; }},
+            {"width 5000", [](pc::Node& n) { n.w = 5000.0f; }},
+            {"height 0", [](pc::Node& n) { n.h = 0.0f; }},
+        };
+        for (const Bad& v : values) {
+            pc::Graph odd = back;
+            if (pc::Node* n = odd.mutableNode(demod)) { v.set(*n); }
+            std::string w;
+            const bool took = pc::graphFromCommandText(pc::graphCommandText(odd), kept, w);
+            if (took) { std::printf("FAIL: the command took %s\n", v.what); }
+            CHECK(!took);
+            CHECK(!w.empty());
+            CHECK(pc::graphCommandText(kept) == before);
+        }
+        // ...while the edges themselves are values, and are taken.
+        {
+            pc::Graph edge = back;
+            if (pc::Node* n = edge.mutableNode(demod)) {
+                n->squelchDb = pc::kSquelchMinDb;
+                n->w = pc::kMaxLoadedNodeSize;
+            }
+            if (pc::Node* n = edge.mutableNode(radio)) { n->rateHz = 1.0e10; }
+            pc::Graph got;
+            std::string w;
+            CHECK(pc::graphFromCommandText(pc::graphCommandText(edge), got, w));
+            CHECK(sameGraph(edge, got));
+        }
     }
 
     // --- 3. the rebase -------------------------------------------------------

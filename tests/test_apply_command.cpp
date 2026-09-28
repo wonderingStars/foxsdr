@@ -1866,6 +1866,24 @@ void patchOps(AppWindow& a) {
         }
         CHECK(A::patchGraphEpoch(a) == epoch + 1u);  // a refused document is no document
 
+        // Values the document loader would quietly REPAIR are refused too
+        // (the review of e29c1a7 found -200 dB stored as -50, 2e10 Hz as 0
+        // and a width of 5000 as 4000): the engine runs the page's graph or
+        // its own, never a third one.
+        for (int k = 0; k < 3; ++k) {
+            pc::Graph odd = g;
+            if (pc::Node* n = odd.mutableNode(chan)) {
+                if (k == 0) { n->squelchDb = -200.0f; }
+                if (k == 1) { n->rateHz = 2.0e10; }
+                if (k == 2) { n->w = 5000.0f; }
+            }
+            const FoxCommandResult r = A::apply(a, text(FOXAPP_OP_PATCH_SET_GRAPH, pc::graphCommandText(odd)));
+            if (!refused(r, FOXAPI_BAD_ARGUMENT)) { std::printf("FAIL: SET_GRAPH repaired value %d\n", k); }
+            CHECK(refused(r, FOXAPI_BAD_ARGUMENT));
+            CHECK(std::strlen(r.message) > 0);
+            CHECK(pc::graphCommandText(A::patchGraph(a)) == sent);
+        }
+
         // Leave the patch empty for whatever runs next.
         CHECK(ok(A::apply(a, text(FOXAPP_OP_PATCH_SET_GRAPH, pc::graphCommandText(pc::Graph{})))));
         CHECK(A::patchGraph(a).nodes().empty());

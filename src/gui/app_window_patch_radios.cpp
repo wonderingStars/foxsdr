@@ -328,7 +328,12 @@ void AppWindow::drawPatchSquelch(pc::Node& n, float width) {
     if (n.squelch) {
         float db = n.squelchDb;
         ImGui::SetNextItemWidth(width);
-        if (ImGui::SliderFloat("##sqdb", &db, pc::kSquelchMinDb, pc::kSquelchMaxDb, "%.0f dB")) {
+        // ALWAYS CLAMPED: -120..0 dB is not just the slider's travel, it is
+        // every squelch the graph can hold (the loader and the engine's
+        // FOXAPP_OP_PATCH_SET_GRAPH refuse anything else), and ImGui leaves
+        // a value typed after Ctrl+click unclamped unless told otherwise.
+        if (ImGui::SliderFloat("##sqdb", &db, pc::kSquelchMinDb, pc::kSquelchMaxDb, "%.0f dB",
+                               ImGuiSliderFlags_AlwaysClamp)) {
             n.squelchDb = db;
             patchUi_.dirty = true;
         }

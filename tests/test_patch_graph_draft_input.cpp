@@ -32,6 +32,8 @@
 //      the selection are dropped, the Map stays where the document put it
 //   I2 ...and that first flush sends no command at all (the engine's node
 //      store is untouched)
+//   S  a squelch typed (Ctrl+click) past the slider's -120..0 dB is held
+//      at the edge, not repaired to -50 dB by the engine's copy
 //   K  a wire drag left in the air by the view going away (the button
 //      released while it was hidden) does not stop the page following the
 //      engine
@@ -589,6 +591,70 @@ int main() {
         const pc::Node* before = A::engine(*a).find(one);
         A::flush(*a);
         CHECK(before != nullptr && A::engine(*a).find(one) == before);
+        delete a;
+    }
+
+    // --- S: a squelch typed past the slider's range -----------------------------
+    //     Ctrl+click turns a slider into a number box, and ImGui does not
+    //     clamp what is typed there unless told to. -120..0 dB is the range
+    //     the graph can hold (the loader and the command refuse anything
+    //     else), so the slider must clamp: -200 typed is -120 held.
+    {
+        std::printf("S: Ctrl+click the demodulator's squelch slider, type -200\n");
+        Starter s;
+        AppWindow* a = makeApp(s);
+        const pc::Node demod = *A::engine(*a).find(s.demod);
+        CHECK(demod.squelch && demod.squelchDb == -50.0f);
+        // The face's widgets, top to bottom: the mode, the squelch switch,
+        // the squelch slider. Found by walking the pointer down the face and
+        // keeping each item hovered that is not the canvas itself.
+        const ImVec2 blank = screen(*a, pg::Vec2{demod.x - 60.0f, demod.y + 60.0f});
+        mouseTo(*a, blank.x, blank.y);
+        frame(*a);
+        const ImGuiID canvas = GImGui->HoveredId;
+        const ImVec2 top = screen(*a, pg::Vec2{demod.x + 40.0f, demod.y + pg::kHeaderHeight});
+        const ImVec2 bottom = screen(*a, pg::Vec2{demod.x + 40.0f, demod.y + demod.h});
+        std::vector<std::pair<ImGuiID, float>> items;
+        for (float y = top.y; y < bottom.y; y += 2.0f) {
+            mouseTo(*a, top.x, y);
+            frame(*a);
+            const ImGuiID h = GImGui->HoveredId;
+            if (h == 0 || h == canvas) { continue; }
+            bool seen = false;
+            for (const auto& it : items) { seen = seen || it.first == h; }
+            if (!seen) { items.push_back({h, y}); }
+        }
+        std::printf("   %zu controls on the face\n", items.size());
+        CHECK(items.size() >= 3);
+        if (items.size() >= 3) {
+            const float y = items[2].second + 3.0f;
+            ImGuiIO& kio = ImGui::GetIO();
+            mouseTo(*a, top.x, y);
+            kio.AddKeyEvent(ImGuiMod_Ctrl, true);
+            frame(*a);
+            press(*a);
+            release(*a);
+            kio.AddKeyEvent(ImGuiMod_Ctrl, false);
+            frame(*a);
+            kio.AddKeyEvent(ImGuiMod_Ctrl, true);
+            kio.AddKeyEvent(ImGuiKey_A, true);
+            frame(*a);
+            kio.AddKeyEvent(ImGuiKey_A, false);
+            kio.AddKeyEvent(ImGuiMod_Ctrl, false);
+            frame(*a);
+            kio.AddInputCharactersUTF8("-200");
+            frame(*a);
+            kio.AddKeyEvent(ImGuiKey_Enter, true);
+            frame(*a);
+            kio.AddKeyEvent(ImGuiKey_Enter, false);
+            frames(*a, 3);
+            const pc::Node* e = A::engine(*a).find(s.demod);
+            const pc::Node* d = A::draft(*a).find(s.demod);
+            std::printf("   engine %.1f dB, page %.1f dB\n", e != nullptr ? static_cast<double>(e->squelchDb) : 0.0,
+                        d != nullptr ? static_cast<double>(d->squelchDb) : 0.0);
+            CHECK(e != nullptr && e->squelchDb == pc::kSquelchMinDb);
+            CHECK(inStep(*a));
+        }
         delete a;
     }
 
