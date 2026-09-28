@@ -140,22 +140,29 @@ page is collected or sent, ever.**
 
 **The link, and the confirmation prompt.** The tester portal's "Link FoxSDR"
 button opens `foxsdr://beta?t=<app token>` in your browser, which Windows
-hands to FoxSDR (an unpackaged install registers the `foxsdr:` scheme for
-your own Windows account only — `installer/cascade.iss`'s `[Registry]`
-section — and a Store install declares the same activation in its
-manifest). **Nothing is stored the moment the link is opened.** FoxSDR asks
-the site who the token belongs to and shows an in-window prompt naming that
-tester — *"Link this FoxSDR to beta tester NAME?"*, or, if one is already
-linked, *"This FoxSDR is linked to OLDNAME. Replace with NAME?"* — with
-**Link** and **Not now** buttons. Only pressing **Link** writes anything to
-your configuration file; a token the site does not recognise shows an error
-and stores nothing. This two-step design exists because a link opened by
-*any* web page (not only the real portal) could otherwise bind your copy to
-someone else's tester entry with no warning — showing the name first, and
+hands to FoxSDR. The `foxsdr:` scheme is registered by the installer, not by
+the application itself — for the ordinary, machine-wide install (the default;
+it asks for administrator approval) it is registered **for the machine**,
+so it works no matter which Windows account opens the link; only a
+`/CURRENTUSER` install registers it for your own account alone
+(`installer/cascade.iss`'s `[Registry]` section, `Root: HKA`). A Store install
+declares the same activation in its manifest. **Nothing is stored the moment
+the link is opened.** FoxSDR first asks the site who the token belongs to —
+one network request, `GET /api/beta/app-token/me`, naming nothing but the
+token itself — and only once that answers does it show an in-window prompt
+naming that tester — *"Link this FoxSDR to beta tester NAME?"*, or, if one is
+already linked, *"This FoxSDR is linked to OLDNAME. Replace with NAME?"* —
+with **Link** and **Not now** buttons. Only pressing **Link** writes anything
+to your configuration file; a token the site does not recognise shows an
+error and stores nothing. This two-step design exists because a link opened
+by *any* web page (not only the real portal) could otherwise bind your copy
+to someone else's tester entry with no warning — showing the name first, and
 requiring your own click, is what a silent bind would be missing. If FoxSDR
 is not already running, the same file it would otherwise hand to a running
-copy is read back and the prompt appears at start-up instead — nothing about
-the flow reaches the network before you see the prompt.
+copy is read back and the same network request and the same prompt happen at
+start-up instead — nothing is stored, and nothing is bound, before you see
+the prompt and press Link, but the one lookup request happens first, not
+after.
 
 Testers who set up sharing by pasting the older 32-character code keep
 working exactly as before: on the next launch, FoxSDR quietly exchanges that
