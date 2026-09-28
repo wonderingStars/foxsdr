@@ -456,6 +456,12 @@ public:
     // throttling to be deterministic. Must be set before start().
     bool setClock(Clock fn);
 
+    // Fired once per request served, on whatever thread served it - see
+    // core::TesterUsageRecorder, which is what the GUI hands this for. Must
+    // be set before start(); the callback must be safe to call from any
+    // thread and must never block.
+    bool setUsageCallback(std::function<void()> fn);
+
     // Evaluates the bind policy and, if it allows, binds and starts serving.
     //
     // Returns false with `error` set when the policy refuses (error is the

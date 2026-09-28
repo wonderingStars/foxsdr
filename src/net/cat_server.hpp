@@ -66,6 +66,12 @@ public:
     // hands out a snapshot taken under the pipeline's lock).
     void setStatusProvider(StatusProvider fn);
 
+    // Fired once per accepted client, from the acceptor thread - see
+    // core::TesterUsageRecorder, which is what the GUI hands this for. Must
+    // be set before start(); must be safe to call from any thread and must
+    // never block (it runs ahead of the client's own thread being spawned).
+    void setUsageCallback(std::function<void()> fn);
+
     // `bindAll` false binds 127.0.0.1, true binds 0.0.0.0. Returns false and
     // fills `error` if the socket could not be created or bound — including
     // the common case of the port already being held by a real rigctld.
@@ -100,6 +106,7 @@ private:
     void serveClient(std::intptr_t sock);
 
     StatusProvider status_;
+    std::function<void()> usageCallback_;
     std::thread acceptor_;
     std::atomic<bool> running_{false};
     std::atomic<bool> stopping_{false};

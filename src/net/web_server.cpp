@@ -2895,6 +2895,18 @@ public:
         return true;
     }
 
+    // Fired once per request served, from the post-routing handler
+    // (installRoutes) - the one point every request passes through whatever
+    // route it hit. Called on whichever worker thread httplib served the
+    // request on; the callback the GUI supplies (TesterUsageRecorder::
+    // noteFeature) is mutex-guarded for exactly this reason. Set only while
+    // not running, the same rule every other provider here follows.
+    bool setUsageCallback(std::function<void()> fn) {
+        if (running()) { return false; }
+        usageCallback_ = std::move(fn);
+        return true;
+    }
+
     bool start(const WebServerConfig& cfg, std::string& error);
     void stop();
 
@@ -3000,6 +3012,7 @@ private:
     StatusProvider status_;
     SpectrumProvider spectrum_;
     Clock clock_;
+    std::function<void()> usageCallback_;
 
     mutable std::mutex mutex_;
     WebServerConfig cfg_;
@@ -3103,11 +3116,16 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
     // caller-influenced JSON, and no-store because nothing here is worth a
     // cache entry and a cached /api/status is a stale readout.
     svr.set_post_routing_handler(
-        [](const httplib::Request&, httplib::Response& res) {
+        [this](const httplib::Request&, httplib::Response& res) {
             res.set_header("X-Content-Type-Options", "nosniff");
             res.set_header("Cache-Control", "no-store");
             res.set_header("Referrer-Policy", "no-referrer");
             res.set_header("X-Frame-Options", "DENY");
+            // TESTER USAGE: "browser access" was used - every request that
+            // reaches ANY route runs the post-routing handler, which is what
+            // makes this the one hook covering the whole surface rather than
+            // one route among many.
+            if (usageCallback_) { usageCallback_(); }
         });
 
     svr.Get("/", [](const httplib::Request&, httplib::Response& res) {
@@ -3846,6 +3864,10 @@ WebServer::~WebServer() = default;
 
 bool WebServer::setStatusProvider(StatusProvider fn) {
     return impl_->setStatusProvider(std::move(fn));
+}
+
+bool WebServer::setUsageCallback(std::function<void()> fn) {
+    return impl_->setUsageCallback(std::move(fn));
 }
 bool WebServer::setSpectrumProvider(SpectrumProvider fn) {
     return impl_->setSpectrumProvider(std::move(fn));

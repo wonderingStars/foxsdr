@@ -721,6 +721,16 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            a.telemetryInstallId == b.telemetryInstallId &&
            a.telemetryLaunches == b.telemetryLaunches &&
            a.telemetryCrashes == b.telemetryCrashes &&
+           // Tester usage: only the token, on telemetryInstallId's own rule -
+           // it changes on a click (pasting or removing a code) and nothing
+           // else makes this field's row of the file stale. testerUsageCurrent
+           // rewrites itself every save like telemetryPending does,
+           // testerTokenInvalid flips on a network answer rather than a
+           // click, and testerUsagePending is the retry queue - none of the
+           // three would ever settle if compared here, so all three ride
+           // along on whatever save the token (or another field) triggers,
+           // and on the two unconditional exit saves.
+           a.testerToken == b.testerToken &&
            // Diagnostics: both are user switches that change only on a click,
            // so they belong here - without them, turning capture off would
            // not survive a restart unless something else happened to trigger
@@ -984,12 +994,16 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
         std::lock_guard<std::mutex> lock(webMutex_);
         return webStatus_;
     });
+    // TESTER USAGE: fired once per request, from whichever worker thread
+    // served it - testerUsage_ is mutex-guarded internally for exactly this.
+    webServer_.setUsageCallback([this]() { testerUsage_.noteFeature("browser"); });
     // The CAT server reads the SAME published snapshot, so a frequency read
     // over CAT and one read in the browser can never disagree.
     catServer_.setStatusProvider([this]() {
         std::lock_guard<std::mutex> lock(webMutex_);
         return webStatus_;
     });
+    catServer_.setUsageCallback([this]() { testerUsage_.noteFeature("cat"); });
     webServer_.setSpectrumProvider([this](cascade::net::SpectrumSnapshot& inOut) {
         std::lock_guard<std::mutex> lock(webMutex_);
         // Same contract as Pipeline::getLatestFrame: nothing newer than the
@@ -1047,6 +1061,7 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
             diagnosticsEnabled_ = cfg.diagnosticsEnabled;
             diagnosticsMinidump_ = cfg.diagnosticsMinidump;
             telemetryStartup(cfg);
+            testerUsageStartup(cfg);
             updateCheckEnabled_ = cfg.updateCheckEnabled;
         } else {
             std::fprintf(stderr, "cascade: %s\n", err.c_str());
@@ -2196,6 +2211,11 @@ int AppWindow::run(int frames) {
     featureRequestSender_.cancel();
     problemReportSender_.cancel();
     if (!configPath_.empty()) { saveConfigNow(); }
+    // THE ONE NETWORK CALL THIS SHUTDOWN PATH MAKES, bounded to well under a
+    // second (see the function's own comment) - everything is still fully
+    // alive here, which is what telemetry's OWN header explains is not true
+    // a few lines further down.
+    testerUsageExitAttempt();
     flushBookmarkSave(true);
     cascade::core::diagLogf("frame loop ended after %d frames; shutting down", rendered);
 
@@ -3357,6 +3377,7 @@ void AppWindow::drawUi() {
                 const ImVec2 at = ImGui::GetWindowPos();
                 const ImVec2 sz = ImGui::GetWindowSize();
                 cascade::gui::census::note("view:receiver");
+                testerUsage_.noteFeature("spectrum");
                 cascade::gui::census::rect("view:receiver", at.x, at.y, at.x + sz.x, at.y + sz.y);
             }
             drawCenterPanels();
@@ -3441,6 +3462,7 @@ void AppWindow::drawUi() {
     // "Still running" beat, five-minute cadence. A no-op when reporting is
     // off, and never blocks - see HeartbeatSender::poll.
     telemetryHeartbeat_.poll(ImGui::GetTime());
+    testerUsagePoll();
 }
 
 void AppWindow::pollAudioHealth() {
@@ -6224,6 +6246,7 @@ void AppWindow::drawMenuColumn() {
             drawKeyBindingsSection();
             drawDiagnosticsSection();
             drawUsageReportingSection();
+            drawTesterUsageSection();
             break;
     }
     // The last section's drawer, if it is mid-motion, is closed here rather
@@ -8551,6 +8574,19 @@ void AppWindow::finishDeviceOpen(DeviceOpenResult r) {
     ++sourceGen_;  // this install is itself a source change
     installSource(std::move(r.dev));
     sourceKind_ = r.kind;
+    // TESTER USAGE: which radio kind, and whether it went through this
+    // product's OWN native drivers - the one place every successful device
+    // open funnels through, radio or otherwise, which is what makes it the
+    // single hook for both. "file" is not a radio and earns no feature id;
+    // AppConfig::sourceKind's vocabulary is the source of the kind strings.
+    if (r.kind == "siggen") {
+        testerUsage_.noteFeature("siggen");
+    } else if (r.kind != "file") {
+        testerUsage_.noteRadio(r.kind);
+        if (r.kind != "soapy" && r.kind != "soundcard") {
+            testerUsage_.noteFeature("native-drivers");
+        }
+    }
     // A dongle the native driver refused, opened through SoapySDR instead, is
     // still the radio the user chose: its converter comes with it.
     if (!r.fellBackFromKey.empty()) {
@@ -10011,6 +10047,7 @@ void AppWindow::drawStereoRdsControls() {
         ImGui::TextDisabled(rds.synced ? tr("RDS: syncing...") : tr("RDS: no data"));
         return;
     }
+    testerUsage_.noteFeature("fm-rds");
     if (rds.state.psValid) {
         ImGui::Text("PS  %s", rds.state.ps.c_str());
     } else {
@@ -10061,6 +10098,7 @@ void AppWindow::drawAudioFilterSection() {
 
     if (ImGui::Checkbox(trId("Noise reduction"), &nrEnabled_)) {
         pipeline_.setNoiseReductionEnabled(nrEnabled_);
+        if (nrEnabled_) { testerUsage_.noteFeature("cleanup"); }
     }
     ImGui::BeginDisabled(!nrEnabled_);
     if (ImGui::SliderFloat(cascade::gui::labelAboveIfNeeded(trId("Strength")), &nrStrength_,
@@ -10072,6 +10110,7 @@ void AppWindow::drawAudioFilterSection() {
     ImGui::Separator();
     if (ImGui::Checkbox(trId("Notch"), &notchEnabled_)) {
         pipeline_.setNotchEnabled(notchEnabled_);
+        if (notchEnabled_) { testerUsage_.noteFeature("cleanup"); }
     }
     ImGui::BeginDisabled(!notchEnabled_);
     // Logarithmic: a linear 10 Hz..20 kHz slider spends 90% of its travel
@@ -14006,6 +14045,7 @@ void AppWindow::drawDemodScopeSection() {
                           "two traces and as a vector display. The time base, the\n"
                           "attenuator and the input selector are on the page itself."))) {
         demodScopeOpen_ = !demodScopeOpen_;
+        if (demodScopeOpen_) { testerUsage_.noteFeature("scope"); }
     }
 }
 
@@ -14938,6 +14978,7 @@ void AppWindow::drawPluginStoreWindow() {
     }
     if (!pluginBrowseOpen_) { return; }
     telemetryNotePanel("plugin store");
+    testerUsage_.noteFeature("plugins");
     // THE FIRST OPEN READS THE CATALOGUE (0.99.16, gui/store_first_open.hpp):
     // once per session, never at startup, never retried on its own.
     if (cascade::gui::storeShouldCheckOnOpen(storeFirstOpen_, true, !catalog_.empty(),
@@ -15525,6 +15566,7 @@ void AppWindow::drawPluginWindows() {
         // page: its rail row carries it, and that row is the invitation.
         if (!page.open) { continue; }
         telemetryNotePanel("map");
+        testerUsage_.noteFeature("map");
         // PLACED SO IT DOES NOT FIT INSIDE THE APPLICATION WINDOW, which is
         // what makes ImGui give it a real operating system window rather than
         // merging it into the main one. There is no "always be a separate
@@ -20523,6 +20565,7 @@ void AppWindow::drawRecorderSection() {
                 recordNotice_.clear();
                 iqRecordRateHz_ = rate;
                 iqRecordStartS_ = ImGui::GetTime();
+                testerUsage_.noteFeature("rec-iq");
                 // Install AFTER start(): the tap must never feed a recorder
                 // that is not accepting (Pipeline::setIqRecorder contract).
                 pipeline_.setIqRecorder(&iqRecorder_);
@@ -20718,6 +20761,7 @@ bool AppWindow::startAudioRecording() {
     recordError_.clear();
     recordNotice_.clear();
     audioRecordStartS_ = ImGui::GetTime();
+    testerUsage_.noteFeature("rec-audio");
     // Install AFTER start(): the tap must never feed a recorder that is not
     // accepting (Pipeline::setAudioRecorder contract).
     pipeline_.setAudioRecorder(&audioRecorder_);
@@ -20734,6 +20778,7 @@ void AppWindow::setModeIndex(int index) {
     // The MODE and its bandwidth - a demodulator change, not a tuning change.
     // No frequency reaches the log, here or anywhere else.
     cascade::core::diagLogf("mode: %s, bandwidth %.0f", kModeNames[index], vfoBandwidthHz_);
+    testerUsage_.noteFeature("modes");
 }
 
 // --- The keyboard ------------------------------------------------------------
@@ -20865,6 +20910,7 @@ void AppWindow::dispatchKeyBindings() {
                              action == cascade::gui::KeyAction::TuneStepUp ||
                              action == cascade::gui::KeyAction::TuneStepDown;
         if (!ImGui::IsKeyPressed(want.key, repeats)) { continue; }
+        testerUsage_.noteFeature("keys");
         applyKeyAction(action);
         // ONE ACTION PER FRAME, even with a table that has a conflict in it:
         // two actions on one chord would otherwise both fire, and "it does two
@@ -20927,6 +20973,7 @@ void AppWindow::applyKeyAction(cascade::gui::KeyAction action) {
             const float step = (action == KeyAction::SquelchUp) ? 2.0f : -2.0f;
             squelchDb_ = std::clamp(squelchDb_ + step, -120.0f, 0.0f);
             pipeline_.setSquelchDb(squelchDb_);
+            testerUsage_.noteFeature("cleanup");
             break;
         }
         // kModeNames order: NFM WFM AM DSB USB CW LSB RAW. Indices rather than
@@ -21352,6 +21399,7 @@ void AppWindow::drawBookmarksSection() {
                     // unknown mode name - a newer build's file, kept verbatim by
                     // FreqManager on purpose - leaves the current mode untouched.
                     tuneAbsoluteHz(b.freqHz);
+                    testerUsage_.noteFeature("bookmarks");
                     for (int m = 0; m < 8; ++m) {
                         if (b.mode == kModeNames[m]) {
                             modeIndex_ = m;
@@ -21769,6 +21817,7 @@ void AppWindow::drawScannerSection() {
         if (ImGui::Button(trId("Start scan"), ImVec2(-FLT_MIN, 0.0f))) {
             scanner_.configure(paramsFromMirrors());
             scanner_.start(ImGui::GetTime() * 1000.0);
+            testerUsage_.noteFeature("scanner");
             scannerHasExpected_ = false;
         }
     } else {
@@ -22539,6 +22588,7 @@ void AppWindow::applyControlRequest(const cascade::net::ControlRequest& r) {
                                   recordDir_, rate, err)) {
                 iqRecordRateHz_ = rate;
                 iqRecordStartS_ = ImGui::GetTime();
+                testerUsage_.noteFeature("rec-iq");
                 pipeline_.setIqRecorder(&iqRecorder_);
                 recordError_.clear();
                 recordNotice_.clear();
@@ -22555,6 +22605,7 @@ void AppWindow::applyControlRequest(const cascade::net::ControlRequest& r) {
             if (audioRecorder_.start(cascade::core::RecordKind::Audio, recordDir_,
                                      cascade::core::Pipeline::kAudioRateHz, err)) {
                 audioRecordStartS_ = ImGui::GetTime();
+                testerUsage_.noteFeature("rec-audio");
                 pipeline_.setAudioRecorder(&audioRecorder_);
                 recordError_.clear();
                 recordNotice_.clear();
@@ -22598,6 +22649,7 @@ void AppWindow::applyControlRequest(const cascade::net::ControlRequest& r) {
             // -1 for a bookmark whose bandwidth is none of the steps.
             bandwidthIndex_ = bandwidthStepIndex(vfoBandwidthHz_);
             tuneAbsoluteHz(b.freqHz);
+            testerUsage_.noteFeature("bookmarks");
         }
     }
     if (r.bookmarkRemove.has_value()) {
@@ -22684,6 +22736,7 @@ void AppWindow::applyControlRequest(const cascade::net::ControlRequest& r) {
             // panel's do.
             scanner_.configure(p);
             scanner_.start(ImGui::GetTime() * 1000.0);
+            testerUsage_.noteFeature("scanner");
             scannerHasExpected_ = false;
         } else {
             scanner_.stop();
@@ -23271,6 +23324,141 @@ void AppWindow::drawUsageReportingSection() {
                "marker."));
         ImGui::TextWrapped("%s", tr("See PRIVACY.md for the complete list and what is excluded."));
         ImGui::PopStyleColor();
+        ImGui::Unindent();
+    }
+}
+
+// --- "Beta tester": a TESTER's own opt-in, tied to their own entry on the -----
+// foxsdr.com beta portal - see core/tester_usage.hpp for the design and
+// PRIVACY.md for the payload field by field.
+//
+// INDEPENDENT OF THE SWITCH ABOVE. Anonymous usage reporting counts an
+// install and never identifies anyone; this counts a TESTER, by the
+// credential their own portal link carries, because the owner cannot
+// otherwise tell which of the features a tester said they would cover they
+// actually ran. PASTING A CODE IS THE OPT-IN - with none, nothing below this
+// point collects or sends anything, ever (testerUsage_.armed() is exactly
+// that condition, checked at every hook rather than here).
+void AppWindow::drawTesterUsageSection() {
+    // VERIFICATION ONLY, the same house rule as FOXSDR_OPEN_SERIAL_PORTS and
+    // FOXSDR_OPEN_KEY_BINDINGS above: this row's open/closed state is ImGui's
+    // own in-memory storage, not AppConfig, so nothing a bounded self-capture
+    // supplies would put it on screen otherwise. ImGuiCond_Once, so a real
+    // session that closes the row again is not fought every frame.
+    if (std::getenv("FOXSDR_OPEN_BETA_TESTER") != nullptr) {
+        ImGui::SetNextItemOpen(true, ImGuiCond_Once);
+    }
+    const bool active = !testerToken_.empty();
+    const char* chip =
+        testerToken_.empty() ? tr("OFF") : (testerTokenInvalid_ ? tr("INVALID") : tr("ON"));
+    const ImU32 lamp = testerTokenInvalid_
+                           ? ImGui::ColorConvertFloat4ToU32(cascade::gui::theme::bad())
+                           : cascade::gui::theme::kPhosphor;
+    if (!benchSection(trId("Beta tester"), false, chip, lamp, active)) { return; }
+    telemetryNotePanel("beta tester");
+
+    ImGui::TextWrapped(
+        "%s",
+        tr("Paste the code from your tester link (or the whole link) to report, "
+           "per session, which features, plugins and radios you actually used - "
+           "linked to your own entry on the tester list so it can be marked as "
+           "tested. Pasting a code IS the opt-in; with none, nothing here is "
+           "collected or sent."));
+    ImGui::Spacing();
+
+    // First four and last four characters only - enough to recognise which
+    // code is set without showing the whole credential on screen.
+    const auto maskToken = [](const std::string& t) -> std::string {
+        if (t.size() <= 8) { return std::string(t.size(), '*'); }
+        return t.substr(0, 4) + "..." + t.substr(t.size() - 4);
+    };
+
+    if (!testerToken_.empty()) {
+        ImGui::TextDisabled(tr("Code: %s"), maskToken(testerToken_).c_str());
+        if (ImGui::SmallButton(trId("Remove code"))) {
+            testerToken_.clear();
+            testerTokenInvalid_ = false;
+            testerUsage_.reset();
+            testerUsage_.setArmed(false);
+            testerUsageQueue_.setItems({});
+            std::memset(testerCodeBuf_, 0, sizeof(testerCodeBuf_));
+            testerCodeError_.clear();
+        }
+        if (testerTokenInvalid_) {
+            ImGui::PushStyleColor(ImGuiCol_Text, kErrorRed);
+            ImGui::TextWrapped(
+                "%s",
+                tr("This code is no longer valid, so sending has stopped. The code "
+                   "above is kept so you can fix it - paste a current one below."));
+            ImGui::PopStyleColor();
+        }
+    }
+    if (testerToken_.empty() || testerTokenInvalid_) {
+        ImGui::InputText(cascade::gui::labelAboveIfNeeded(trId("Tester code")), testerCodeBuf_,
+                         sizeof(testerCodeBuf_));
+        if (ImGui::Button(trId("Use this code"))) {
+            const std::string extracted = cascade::core::extractTesterToken(testerCodeBuf_);
+            if (extracted.empty()) {
+                testerCodeError_ = tr("that does not look like a tester code or link");
+            } else {
+                testerCodeError_.clear();
+                const bool wasEmpty = testerToken_.empty();
+                testerToken_ = extracted;
+                testerTokenInvalid_ = false;
+                testerUsageQueueTriedThisSession_ = false;
+                if (wasEmpty) {
+                    // A fresh opt-in starts a fresh session record - nothing
+                    // from before the code existed is this tester's to report.
+                    testerUsage_.reset();
+                    testerSessionStart_ = glfwGetTime();
+                    testerSessionStartWall_ = std::time(nullptr);
+                    testerUsageAccrual_.reset(testerSessionStart_);
+                }
+                testerUsage_.setArmed(true);
+                std::memset(testerCodeBuf_, 0, sizeof(testerCodeBuf_));
+            }
+        }
+        if (!testerCodeError_.empty()) {
+            ImGui::PushStyleColor(ImGuiCol_Text, kErrorRed);
+            ImGui::TextWrapped("%s", testerCodeError_.c_str());
+            ImGui::PopStyleColor();
+        }
+    }
+
+    ImGui::Spacing();
+    ImGui::TextWrapped(
+        "%s",
+        tr("What is sent: the app version, platform and architecture, when a "
+           "session started and how long it ran, which of the features above "
+           "were used, which plugins ran and for how long, and which radio "
+           "kinds were opened. Never a frequency, never anything decoded, "
+           "never your location, and no IP address is recorded."));
+
+    if (ImGui::SmallButton(testerShowPreview_ ? trId("Hide what is sent")
+                                              : trId("Show what is sent"))) {
+        testerShowPreview_ = !testerShowPreview_;
+    }
+    if (testerShowPreview_) {
+        telemetryNotePanel("beta tester preview");
+        ImGui::Indent();
+        if (testerToken_.empty()) {
+            ImGui::TextDisabled("%s", tr("Nothing - no code is set."));
+        } else {
+            const double now = glfwGetTime();
+            const double sessionSeconds =
+                now > testerSessionStart_ ? now - testerSessionStart_ : 0.0;
+            const std::string json = buildTesterUsageReport(sessionSeconds).toJson();
+            ImGui::PushStyleColor(ImGuiCol_Text,
+                                  ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+            ImGui::PushTextWrapPos(0.0f);
+            ImGui::TextUnformatted(json.c_str());
+            ImGui::PopTextWrapPos();
+            ImGui::PopStyleColor();
+            if (!testerUsageQueue_.empty()) {
+                ImGui::TextDisabled(tr("%d report(s) queued to retry"),
+                                    static_cast<int>(testerUsageQueue_.size()));
+            }
+        }
         ImGui::Unindent();
     }
 }
@@ -24499,6 +24687,174 @@ void AppWindow::telemetryJournal(cascade::core::AppConfig& cfg) {
     cfg.telemetryPending = r.toJson();
 }
 
+// --- Beta tester usage --------------------------------------------------------
+
+void AppWindow::testerUsageAccrue() {
+    // Same shape as telemetryAccrueMode: seconds banked since the last call
+    // are credited to whatever is running NOW, which is the same
+    // approximation that function's own comment accepts - crediting a whole
+    // span to its end state rather than tracking every plugin's exact
+    // start/stop is what keeps this a once-a-save accrual instead of a
+    // per-frame one.
+    const std::uint64_t secs = testerUsageAccrual_.advance(glfwGetTime());
+    if (secs == 0 || !testerUsage_.armed()) { return; }
+    for (const cascade::core::DecoderStatus& s : pluginRunner_.status()) {
+        if (!pluginRunner_.isFeeding(s.key)) { continue; }
+        std::string version;
+        for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
+            if (p.loaded && cascade::core::pluginKey(p) == s.key) {
+                version = p.version;
+                break;
+            }
+        }
+        const std::string id =
+            cascade::core::catalogueIdForPlugin(s.key, s.plugin, pluginInventory_.plugins);
+        testerUsage_.accruePlugin(id, version, static_cast<double>(secs));
+    }
+}
+
+cascade::core::TesterUsageReport AppWindow::buildTesterUsageReport(double sessionSeconds) const {
+    cascade::core::TesterUsageReport r;
+    r.token = testerToken_;
+    r.version = cascade::versionString();
+    r.platform = cascade::core::testerUsagePlatform();
+    r.arch = cascade::core::archDescription();
+    r.session.start = cascade::core::rfc3339Utc(testerSessionStartWall_);
+    const long long mins =
+        std::llround(sessionSeconds > 0.0 ? sessionSeconds / 60.0 : 0.0);
+    r.session.minutes =
+        static_cast<std::uint64_t>(std::clamp<long long>(mins, 0, 1440));
+    r.session.features = testerUsage_.features();
+    r.session.plugins = testerUsage_.plugins();
+    r.session.radios = testerUsage_.radios();
+    return r;
+}
+
+void AppWindow::testerUsageJournal(cascade::core::AppConfig& cfg) {
+    cfg.testerToken = testerToken_;
+    cfg.testerTokenInvalid = testerTokenInvalid_;
+    cfg.testerUsagePending = testerUsageQueue_.items();
+    cfg.testerUsageCurrent.clear();
+    if (testerToken_.empty()) {
+        // Opted out: nothing here is collected, so there is nothing to write
+        // beyond the token fields above (which record the removal itself).
+        return;
+    }
+    testerUsageAccrue();
+    const double now = glfwGetTime();
+    const double sessionSeconds = now > testerSessionStart_ ? now - testerSessionStart_ : 0.0;
+    cfg.testerUsageCurrent = buildTesterUsageReport(sessionSeconds).toJson();
+}
+
+void AppWindow::testerUsageStartup(const cascade::core::AppConfig& cfg) {
+    testerToken_ = cfg.testerToken;
+    testerTokenInvalid_ = cfg.testerTokenInvalid;
+    testerUsage_.reset();
+    testerUsage_.setArmed(!testerToken_.empty());
+    testerSessionStart_ = glfwGetTime();
+    testerSessionStartWall_ = std::time(nullptr);
+    testerUsageAccrual_.reset(testerSessionStart_);
+    testerUsageQueueTriedThisSession_ = false;
+
+    // FOLD THE PREVIOUS SESSION'S REPORT INTO THE RETRY QUEUE. testerUsageCurrent
+    // is the previous run's "session so far" snapshot, rewritten on every save
+    // exactly like telemetryPending - by the time this runs the process has
+    // restarted, so whatever is there is that session's FINISHED report.
+    std::vector<std::string> items = cfg.testerUsagePending;
+    if (!cfg.testerUsageCurrent.empty()) { items.push_back(cfg.testerUsageCurrent); }
+    testerUsageQueue_.setItems(items);
+    // The actual send is driven from testerUsagePoll() (called once a frame),
+    // never blocking start-up - the same reason telemetry's own send happens
+    // off the constructor.
+}
+
+void AppWindow::testerUsagePoll() {
+    if (testerUsageSender_.finished()) {
+        const int raw = testerUsageLastOutcome_.exchange(-1);
+        testerUsageSender_.reap();
+        using Outcome = cascade::core::TesterUsageOutcome;
+        const Outcome outcome = static_cast<Outcome>(raw);
+        if (outcome == Outcome::Sent || outcome == Outcome::Rejected) {
+            // Sent: the site has it. Rejected (400/413): it never will
+            // succeed by being retried, so it is logged and dropped exactly
+            // like a Sent one - the contract's own words for this response.
+            if (outcome == Outcome::Rejected) {
+                cascade::core::diagWarnf(
+                    "tester usage: report rejected (malformed or oversized) - dropped");
+            }
+            testerUsageQueue_.removeFront();
+            // Keep going: try the next queued report immediately rather than
+            // waiting for the next launch.
+        } else if (outcome == Outcome::Invalid) {
+            testerTokenInvalid_ = true;
+            cascade::core::diagWarnf("tester usage: code no longer valid - sending stopped");
+            testerUsageQueueTriedThisSession_ = true;
+        } else if (outcome == Outcome::Retry) {
+            // 429 or a transport failure: leave it queued and stop trying
+            // for the rest of THIS session - a black-holed endpoint must not
+            // become a poll-rate retry loop.
+            testerUsageQueueTriedThisSession_ = true;
+        }
+    }
+    if (testerUsageSender_.busy() || testerUsageQueueTriedThisSession_) { return; }
+    if (testerToken_.empty() || testerTokenInvalid_ || testerUsageQueue_.empty()) { return; }
+    const std::string url = cascade::core::testerUsageEndpoint();
+    const std::string json = testerUsageQueue_.front();
+    testerUsageLastOutcome_.store(-1);
+    std::atomic<int>* out = &testerUsageLastOutcome_;
+    testerUsageSender_.send(url, json, kTesterUsageConnectMs, kTesterUsageRwMs,
+                            [out](cascade::core::TesterUsageOutcome o) {
+                                out->store(static_cast<int>(o));
+                            });
+}
+
+// A BOUNDED ATTEMPT AT THE CURRENT SESSION'S OWN REPORT, on the way out.
+// Called once, right after the main shutdown save (which is what wrote
+// lastRequestedConfig_.testerUsageCurrent), and before the pipeline join
+// below it - so this runs while everything is still alive, exactly where
+// telemetry's own shutdown-adjacent work happens. Short timeouts, not the
+// regular sender's: the contract asks for "never delays exit more than
+// ~1 s", so the socket itself is given less time than that rather than
+// leaving a generous timeout and hoping the poll loop below wins the race.
+void AppWindow::testerUsageExitAttempt() {
+    if (testerToken_.empty() || testerTokenInvalid_) { return; }
+    const std::string json = lastRequestedConfig_.testerUsageCurrent;
+    if (json.empty()) { return; }
+    const std::string url = cascade::core::testerUsageEndpoint();
+    testerUsageLastOutcome_.store(-1);
+    std::atomic<int>* out = &testerUsageLastOutcome_;
+    testerUsageExitSender_.send(url, json, kTesterUsageExitConnectMs, kTesterUsageExitRwMs,
+                                [out](cascade::core::TesterUsageOutcome o) {
+                                    out->store(static_cast<int>(o));
+                                });
+    const auto t0 = std::chrono::steady_clock::now();
+    while (!testerUsageExitSender_.finished()) {
+        if (std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() >
+            kTesterUsageExitBudgetS) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    if (!testerUsageExitSender_.finished()) {
+        // Out of time - the report stays in testerUsageCurrent on disk and
+        // the next launch's queue flush carries it, same as any other Retry.
+        return;
+    }
+    const int raw = testerUsageLastOutcome_.exchange(-1);
+    testerUsageExitSender_.reap();
+    using Outcome = cascade::core::TesterUsageOutcome;
+    const Outcome outcome = static_cast<Outcome>(raw);
+    if (outcome == Outcome::Sent || outcome == Outcome::Rejected) {
+        lastRequestedConfig_.testerUsageCurrent.clear();
+        requestConfigSave(lastRequestedConfig_);
+    } else if (outcome == Outcome::Invalid) {
+        testerTokenInvalid_ = true;
+        lastRequestedConfig_.testerTokenInvalid = true;
+        requestConfigSave(lastRequestedConfig_);
+    }
+    // Retry: leave everything exactly as the main shutdown save wrote it.
+}
+
 cascade::core::AppConfig AppWindow::currentConfig() {
     cascade::core::AppConfig cfg;
     // WHICH SOURCE THE FILE NAMES, which is not always the one that is
@@ -24680,6 +25036,7 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.webUsername = webCfg_.username;
     cfg.webPasswordRecord = webCfg_.passwordRecord;
     telemetryJournal(cfg);
+    testerUsageJournal(cfg);
     // FALSE while running, so a start-up that reads it back knows the previous
     // session never got as far as writing true. Set only on the clean exit
     // path, which is what makes an absent marker mean "crashed".

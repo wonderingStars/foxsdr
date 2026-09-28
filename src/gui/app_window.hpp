@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
+#include <ctime>
 #include <deque>
 #include <future>
 #include <limits>
@@ -103,6 +104,7 @@ struct GLFWwindow;
 // tests never see a graphics header still holds.
 #include "gui/map_view.hpp"
 #include "core/telemetry.hpp"
+#include "core/tester_usage.hpp"
 #include "core/crash_upload.hpp"
 #include "core/feature_request.hpp"
 #include "core/problem_report.hpp"
@@ -2777,6 +2779,67 @@ private:
     // "Usage reporting" settings section: the opt-in switch and what it sends.
     void drawUsageReportingSection();
     bool privacyNoticeOpen_ = false;
+
+    // --- Beta tester usage (opt-in by pasting a code; see PRIVACY.md, -------
+    // core/tester_usage.hpp) --------------------------------------------------
+    // INDEPENDENT of telemetryEnabled_ above: a different switch, a different
+    // credential, a different purpose. Nothing here collects or sends while
+    // testerToken_ is empty - testerUsage_.armed() is exactly that condition.
+    cascade::core::TesterUsageRecorder testerUsage_;
+    std::string testerToken_;
+    bool testerTokenInvalid_ = false;
+    // The retry queue carried from config, plus whatever this session's own
+    // finished report adds to it - see testerUsageStartup/testerUsageJournal.
+    cascade::core::TesterUsageQueue testerUsageQueue_;
+    // The regular (multi-second timeout) sender the startup flush and the
+    // periodic in-session retry use, and the SEPARATE fast, short-timeout
+    // sender the clean-exit attempt uses - two objects so an exit-time send
+    // can never be blocked behind a startup one still running (see the
+    // header's note on TesterUsageSender never being detached).
+    cascade::core::TesterUsageSender testerUsageSender_;
+    cascade::core::TesterUsageSender testerUsageExitSender_;
+    double testerSessionStart_ = 0.0;  // glfwGetTime at start, for the duration
+    std::time_t testerSessionStartWall_ = 0;  // wall clock, for the RFC3339 stamp
+    cascade::core::SecondAccrual testerUsageAccrual_;
+    // Set once a launch's queue flush hits Invalid or Retry, so a black-holed
+    // endpoint or a bad code cannot turn testerUsagePoll() into a per-frame
+    // retry loop against it for the rest of the session.
+    bool testerUsageQueueTriedThisSession_ = false;
+    // Regular-sender timeouts (startup/in-session queue flush) and the
+    // shorter exit-only pair - see testerUsageExitAttempt's comment for why
+    // they differ.
+    static constexpr int kTesterUsageConnectMs = 4000;
+    static constexpr int kTesterUsageRwMs = 6000;
+    static constexpr int kTesterUsageExitConnectMs = 300;
+    static constexpr int kTesterUsageExitRwMs = 400;
+    static constexpr double kTesterUsageExitBudgetS = 0.9;
+    // Set by a completed send's onDone callback (which runs on the worker
+    // thread) and drained on the GUI thread the next frame - the same
+    // "network thread writes, GUI thread reads and acts" split every other
+    // async result in this file follows (e.g. DeviceOpenResult).
+    std::atomic<int> testerUsageLastOutcome_{-1};  // -1 = none pending
+    bool testerShowPreview_ = false;
+    std::string testerCodeError_;
+    // The SYSTEM bank's text field. A separate buffer from testerToken_,
+    // sized for a whole pasted portal link, so a half-typed paste never
+    // becomes "the token" until the Use button commits it
+    // (drawTesterUsageSection), and so the masked display can show something
+    // different from what is being typed.
+    char testerCodeBuf_[256] = "";
+    void testerUsageStartup(const cascade::core::AppConfig& cfg);
+    void testerUsageJournal(cascade::core::AppConfig& cfg);
+    // Called from within testerUsageJournal, the same cadence
+    // telemetryAccrueMode runs at: banks running time against whichever
+    // plugins are currently being fed.
+    void testerUsageAccrue();
+    cascade::core::TesterUsageReport buildTesterUsageReport(double sessionSeconds) const;
+    // Drains a finished send's outcome on the GUI thread and acts on it
+    // (marks the token invalid, drops the head of the queue, or leaves it for
+    // next time) - called once a frame.
+    void testerUsagePoll();
+    // The bounded ~1s attempt at clean exit - see its own comment.
+    void testerUsageExitAttempt();
+    void drawTesterUsageSection();
 
     // -----------------------------------------------------------------------
     // Diagnostics (see core/crash_handler.hpp, core/hang_watchdog.hpp)
