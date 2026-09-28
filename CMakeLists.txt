@@ -598,13 +598,7 @@ cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL _cascade_check_engine_
 #    as readily as "../gui/x.hpp". A comment that mentions one is fine. Also
 #    refused: a `#pragma comment(lib, ...)` naming OpenGL, GLFW or imgui.
 file(GLOB_RECURSE _cascade_engine_files
-    src/core/*.cpp src/core/*.hpp src/core/*.h
-    src/dsp/*.cpp src/dsp/*.hpp src/dsp/*.h
-    src/source/*.cpp src/source/*.hpp src/source/*.h
-    src/sink/*.cpp src/sink/*.hpp src/sink/*.h
-    src/net/*.cpp src/net/*.hpp src/net/*.h
-    src/usb/*.cpp src/usb/*.hpp src/usb/*.h
-    src/engine/*.cpp src/engine/*.hpp src/engine/*.h)
+    src/core/* src/dsp/* src/source/* src/sink/* src/net/* src/usb/* src/engine/*)
 set(_cascade_hdr_re "[<\"]([^\"<>]*[/\\\\])?([gG][uU][iI][/\\\\]|[iI][mM][gG][uU][iI]|[gG][lL][fF][wW]|[gG][lL][/\\\\]|[bB][aA][cC][kK][eE][nN][dD][sS][/\\\\][iI][mM][gG][uU][iI])")
 set(_cascade_engine_bad "")
 set(_cascade_pragma_re "#[ \t]*pragma[ \t]+comment[ \t]*\\([ \t]*lib")
