@@ -1577,6 +1577,7 @@
   "that plugin needs a faster sample rate than its source produces": "ta vtičnik potrebuje večjo hitrost vzorčenja, kot jo daje njegov vir",
   "that plugin takes a different input from the one wired here": "ta vtičnik sprejema drugačen vhod od tistega, ki je povezan sem",
   "that would make a loop": "tako bi nastala zanka",
+  "the SDRplay API is installed but did not list this radio - restart the SDRplay API service (Windows Services, \"SDRplay API Service\"), then pick the SDRplay row": "SDRplay API je nameščen, vendar ni prikazal tega radia - znova zaženite storitev SDRplay API (Storitve Windows, \"SDRplay API Service\") in nato izberite vrstico SDRplay",
   "the catalogue entry declares no licence": "vnos v katalogu ne navaja licence",
   "the catalogue was read and it lists no modules at all": "katalog je bil prebran in ne navaja prav nobenega modula",
   "the device would not open": "naprave ni bilo mogoče odpreti",

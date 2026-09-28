@@ -1577,6 +1577,7 @@
   "that plugin needs a faster sample rate than its source produces": "ennek a pluginnak nagyobb mintavételi frekvencia kell, mint amit a forrása ad",
   "that plugin takes a different input from the one wired here": "ez a plugin más bemenetet vár, mint ami ide be van kötve",
   "that would make a loop": "ez hurkot hozna létre",
+  "the SDRplay API is installed but did not list this radio - restart the SDRplay API service (Windows Services, \"SDRplay API Service\"), then pick the SDRplay row": "a SDRplay API telepítve van, de nem sorolta fel ezt a rádiót - indítsd újra a SDRplay API szolgáltatást (Windows szolgáltatások, \"SDRplay API Service\"), majd válaszd ki a SDRplay sort",
   "the catalogue entry declares no licence": "a katalógusbejegyzés nem ad meg licencet",
   "the catalogue was read and it lists no modules at all": "a katalógus beolvasva, és egyáltalán nem sorol fel modult",
   "the device would not open": "az eszköz nem nyílt meg",

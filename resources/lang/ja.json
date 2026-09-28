@@ -1577,6 +1577,7 @@
   "that plugin needs a faster sample rate than its source produces": "そのプラグインには、ソースの出力より高いサンプルレートが必要です",
   "that plugin takes a different input from the one wired here": "そのプラグインは、ここに配線された入力とは別の入力を受け取ります",
   "that would make a loop": "ループになります",
+  "the SDRplay API is installed but did not list this radio - restart the SDRplay API service (Windows Services, \"SDRplay API Service\"), then pick the SDRplay row": "SDRplay APIはインストールされていますが、この受信機を認識していません - SDRplay APIサービスを再起動し（Windowsのサービス、「SDRplay API Service」）、その後 SDRplay の行を選択してください",
   "the catalogue entry declares no licence": "カタログ項目にライセンスの記載がありません",
   "the catalogue was read and it lists no modules at all": "カタログは読み込まれましたが、モジュールが 1 つも掲載されていません",
   "the device would not open": "デバイスを開けませんでした",

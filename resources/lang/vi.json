@@ -1577,6 +1577,7 @@
   "that plugin needs a faster sample rate than its source produces": "plugin đó cần tốc độ lấy mẫu cao hơn mức nguồn của nó tạo ra",
   "that plugin takes a different input from the one wired here": "plugin đó nhận loại đầu vào khác với loại được nối ở đây",
   "that would make a loop": "như vậy sẽ tạo thành vòng lặp",
+  "the SDRplay API is installed but did not list this radio - restart the SDRplay API service (Windows Services, \"SDRplay API Service\"), then pick the SDRplay row": "SDRplay API đã được cài đặt nhưng không liệt kê radio này - hãy khởi động lại dịch vụ SDRplay API (Dịch vụ Windows, \"SDRplay API Service\"), sau đó chọn hàng SDRplay",
   "the catalogue entry declares no licence": "mục danh mục không khai báo giấy phép",
   "the catalogue was read and it lists no modules at all": "danh mục đã được đọc và nó không liệt kê mô-đun nào cả",
   "the device would not open": "không mở được thiết bị",

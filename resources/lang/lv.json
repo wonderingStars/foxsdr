@@ -1577,6 +1577,7 @@
   "that plugin needs a faster sample rate than its source produces": "šim spraudnim vajag augstāku diskretizācijas frekvenci, nekā dod tā avots",
   "that plugin takes a different input from the one wired here": "šis spraudnis sagaida citu ieeju, nevis šeit pievienoto",
   "that would make a loop": "tā veidotos cilpa",
+  "the SDRplay API is installed but did not list this radio - restart the SDRplay API service (Windows Services, \"SDRplay API Service\"), then pick the SDRplay row": "SDRplay API ir instalēts, bet nenorādīja šo radio - restartējiet SDRplay API pakalpojumu (Windows pakalpojumi, \"SDRplay API Service\") un pēc tam izvēlieties SDRplay rindu",
   "the catalogue entry declares no licence": "kataloga ierakstā nav norādīta licence",
   "the catalogue was read and it lists no modules at all": "katalogs tika nolasīts, un tajā nav neviena moduļa",
   "the device would not open": "ierīci neizdevās atvērt",

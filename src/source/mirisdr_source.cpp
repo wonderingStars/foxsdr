@@ -6,6 +6,8 @@
 #include "source/mirisdr_source.hpp"
 
 #include "core/diag_log.hpp"
+#include "source/rsp_rows.hpp"
+#include "source/sdrplay_source.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -42,6 +44,14 @@ constexpr const char* kGainAmBuffer = "AM BUFFER";
 constexpr double kOpenSampleRateHz = 2.0e6;
 constexpr double kOpenFrequencyHz = 100.0e6;
 constexpr int kOpenBasebandReduction = 29;  // 30 dB of 59
+
+// Is this the silicon inside an SDRplay RSP, as opposed to a television
+// stick sharing the same MSi2500 + MSi001 pair? See msi2500.hpp's
+// resolveModel - the band plan follows the same flag.
+bool isSdrPlayFlavour(const cascade::usb::UsbDeviceInfo& info) {
+    const msi2500::DeviceModel* model = msi2500::modelFor(info.vid, info.pid);
+    return model != nullptr && msi2500::resolveModel(*model, info.description).sdrPlayFlavour;
+}
 
 }  // namespace
 
@@ -329,6 +339,66 @@ bool MiriSdrSource::open(const std::string& args) {
         return false;
     }
 
+    // NEVER TOUCH AN RSP'S BUS WHILE THE SDRPLAY API IS INSTALLED, ON WINDOWS
+    // (0.99.42 field reports - an RSP1A, two site submissions from the same
+    // user, "works briefly [through the API], then falls back [to this
+    // driver] and lands on the generator"). rsp_rows.hpp hides every native
+    // row this driver believes is an SDRplay unit whenever the API is
+    // installed, unconditionally, ON WINDOWS ONLY - see that header for the
+    // 2026-09-28 revisions (first "only when the API is not currently
+    // listing anything" turned out to be the wrong boundary; then, in the
+    // same review's next round, "unconditionally on every platform" turned
+    // out to be too broad too - Linux's usbfs does not enforce the rule
+    // that makes native access unsafe on Windows, so a Linux user's native
+    // row may genuinely work while the daemon is stopped). This guard
+    // follows the exact same platform switch (kNativeMiricsOpenUnsafeWithApi)
+    // as the row-hiding rule, for the paths that can still reach an open()
+    // call without going through the row at all: a saved config recorded
+    // before the API was installed, or a patch-page radio opened by its
+    // remembered native args.
+    //
+    // WHAT THE TWO FIELD REPORTS ACTUALLY SHOW, precisely, because an earlier
+    // version of this comment overstated it: `resolveDevice` above already
+    // found this device through enumerateWinUsb - it IS WinUSB-bound, so this
+    // is not two driver stacks fighting over the interface. The reported log
+    // line is specifically "transfer failed while initialising the ADC",
+    // which is the THIRD stage of this function (see below): the
+    // StopStreaming command and the ADC-sleep register write immediately
+    // above both went out fine, and it is the FIRST write inside
+    // adcInitSequence() that comes back Windows error 87
+    // (ERROR_INVALID_PARAMETER).
+    //
+    // LIKELY UNRELATED TO THE SDRPLAY API AT ALL - see
+    // scratchpad/bugs0928/sdrplay/mirics-windex.md, a research pass against
+    // the public reference sources (not hardware; none is on this desk).
+    // kRequestTypeVendorOutEndpoint (0x42) sets bmRequestType's recipient
+    // bits to ENDPOINT, and encodeRegWrite puts arbitrary register-value
+    // bits in wIndex - for this exact write (register 8, value 0x006080)
+    // wIndex's low byte comes out 0x60, which names no real endpoint on this
+    // device. WinUsb_ControlTransfer's own documentation states plainly that
+    // an endpoint-recipient request's Index low byte must be a real endpoint
+    // address; the two writes that DO succeed above both happen to encode
+    // wIndex's low byte as 0x00 (endpoint 0), which is real. The reference
+    // library (f4exb/libmirisdr-4) uses this SAME 0x42, and works on Linux
+    // only because Linux's usbfs skips this validation entirely for any
+    // vendor-type request (drivers/usb/core/devio.c, check_ctrlrecip) - the
+    // Linux KERNEL's own in-tree msi2500 driver, unlike the userspace
+    // library, uses 0x40 (recipient DEVICE) for the identical wValue/wIndex
+    // bytes, which needs no endpoint to exist at all. NOT fixed in this
+    // commit (see the follow-up commit that changes
+    // kRequestTypeVendorOutEndpoint itself) - this guard is correct
+    // regardless of the transport mechanism: with the SDRplay API installed,
+    // native access is never the supported path on Windows (see
+    // rsp_rows.hpp), so refusing here costs nothing real either way.
+    if (kNativeMiricsOpenUnsafeWithApi && isSdrPlayFlavour(info) && sdrPlayApiPresent()) {
+        setError(cascade::source::sdrPlayHiddenRowAdvice());
+        core::diagWarnf(
+            "mirisdr: refused to open %s natively - the SDRplay API is installed and is the "
+            "supported route for this radio",
+            info.description.c_str());
+        return false;
+    }
+
     std::unique_ptr<cascade::usb::UsbDevice> dev;
     if (useFakeTransport_) {
         dev = fakeOpener_(info.path, error);
@@ -346,9 +416,11 @@ bool MiriSdrSource::open(const std::string& args) {
     const msi2500::DeviceModel* model = msi2500::modelFor(info.vid, info.pid);
     // ...and it decides the BAND PLAN too, which is the half that matters: an
     // RSP1 given the television plan tunes with the wrong filter in circuit
-    // and says nothing about it.
-    const bool sdrPlay =
-        model != nullptr && msi2500::resolveModel(*model, info.description).sdrPlayFlavour;
+    // and says nothing about it. Same flag the guard above already computed
+    // (and refused on, had the SDRplay API been installed) - recomputed
+    // rather than threaded through as a parameter, because `info` is right
+    // here and a second call is one enum lookup, not a device round trip.
+    const bool sdrPlay = isSdrPlayFlavour(info);
     plan_ = sdrPlay ? msi001::Plan::SdrPlay : msi001::Plan::Default;
 
     // --- QUIETEN IT FIRST ------------------------------------------------

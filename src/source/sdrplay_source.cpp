@@ -283,6 +283,33 @@ const sdrplay_abi::Api& processSdrPlayApi() {
     return api;
 }
 
+namespace {
+// The test override for sdrPlayApiPresent() - a mutex rather than an atomic
+// because std::optional<bool> is not trivially atomic, and this is read/
+// written far too rarely (once per test, once per real open) to matter.
+std::mutex& apiPresentOverrideMutex() {
+    static std::mutex m;
+    return m;
+}
+std::optional<bool>& apiPresentOverrideSlot() {
+    static std::optional<bool> v;
+    return v;
+}
+}  // namespace
+
+bool sdrPlayApiPresent() {
+    {
+        std::lock_guard<std::mutex> lk(apiPresentOverrideMutex());
+        if (apiPresentOverrideSlot().has_value()) { return *apiPresentOverrideSlot(); }
+    }
+    return processSdrPlayApi().resolved;
+}
+
+void setSdrPlayApiPresentForTest(std::optional<bool> present) {
+    std::lock_guard<std::mutex> lk(apiPresentOverrideMutex());
+    apiPresentOverrideSlot() = present;
+}
+
 // USER COPY, in the user's language: it is drawn under the Source row and
 // given as the reason a device would not open. With English in force tr()
 // answers the English these sentences always were.
@@ -1188,8 +1215,32 @@ void SdrPlaySource::eventCallback(abi::EventT eventId, abi::TunerSelectT tuner,
             // THE ACKNOWLEDGEMENT IS NOT OPTIONAL. The service keeps
             // re-reporting an overload until it is acknowledged, so an
             // application that only logs the event gets a log full of it and
-            // a service that never moves on. Every other argument comes out of
-            // the Link, so this is safe even on a stranded one.
+            // a service that never moves on.
+            //
+            // NOT SENT FROM HERE (the repair-round review, 2026-09-28). This
+            // callback runs on the SERVICE'S OWN THREAD, and calling
+            // sdrplay_api_Update straight from it - as this code, and the
+            // vendor's own sdrplay_api_example.c, both do - is a second entry
+            // into the same vendor call that every GUI-thread control goes
+            // through updateLocked's single bounded worker for, from a
+            // thread we neither own nor can bound. DEFENSIVE, not a
+            // confirmed-bug fix: SDRplay API Specification v3.15 says
+            // nothing about calling Update from inside an event callback
+            // (it is simply silent on cross-thread use), and there is no
+            // evidence this exact race explains the field reports'
+            // sdrplay_api_Fail - see
+            // scratchpad/bugs0928/sdrplay/mirics-windex.md for what the
+            // field reports' own failure point actually points to instead.
+            // What justifies moving it anyway is internal consistency: this
+            // codebase's whole SDRplay driver assumes nothing of ours enters
+            // that DLL except through one bounded, mutex-serialised path,
+            // and the event callback was the one place that did not follow
+            // its own rule. So only the TUNER is latched here;
+            // drainPendingOverloadAcks(), called from read() on the
+            // pipeline's source thread, issues the actual Update through
+            // ackOverloadLocked() - bounded, and serialised against every
+            // other control by devMutex_ (TRIED, never waited for, so
+            // read() cannot be held up behind a control already in flight).
             //
             // ADDRESSED TO THE TUNER THE SERVICE NAMED, which is the tuner the
             // overload is about. link.tuner is the one active at Init, and an
@@ -1198,11 +1249,14 @@ void SdrPlaySource::eventCallback(abi::EventT eventId, abi::TunerSelectT tuner,
             // 0.99.34 an overload on Tuner 2 after such a swap was acknowledged
             // for Tuner 1, so the real one was never cleared. link.tuner is
             // only the fallback for a service that names neither tuner.
-            const abi::TunerSelectT ackTuner =
-                (tuner == abi::Tuner_A || tuner == abi::Tuner_B) ? tuner : link.tuner;
-            if (link.api != nullptr && link.api->Update != nullptr && link.dev != nullptr) {
-                link.api->Update(link.dev, ackTuner, abi::Update_Ctrl_OverloadMsgAck,
-                                 abi::Update_Ext1_None);
+            {
+                const abi::TunerSelectT ackTuner =
+                    (tuner == abi::Tuner_A || tuner == abi::Tuner_B) ? tuner : link.tuner;
+                if (ackTuner == abi::Tuner_B) {
+                    link.pendingOverloadAckB.store(true, std::memory_order_release);
+                } else {
+                    link.pendingOverloadAckA.store(true, std::memory_order_release);
+                }
             }
             break;
         }
@@ -1565,6 +1619,15 @@ bool SdrPlaySource::startStreamingLocked() {
     link_->streamStartNs.store(0, std::memory_order_relaxed);
     link_->emptySinceNs.store(0, std::memory_order_relaxed);
     link_->lastEmptyReadNs.store(0, std::memory_order_relaxed);
+    // A STALE ACK MUST NOT SURVIVE INTO A NEW SESSION (round 3, measured): an
+    // overload that fired and was never drained (no read() between it and
+    // stop()) left these flags set, and the very first read() of the NEXT
+    // start() sent an acknowledgement for an overload that never happened
+    // this time. Harmless to the service (an extra OverloadMsgAck with
+    // nothing overloaded is a no-op there), but a spurious vendor call this
+    // driver's whole design tries to avoid making without a reason.
+    link_->pendingOverloadAckA.store(false, std::memory_order_relaxed);
+    link_->pendingOverloadAckB.store(false, std::memory_order_relaxed);
 
     abi::CallbackFnsT cbs{};
     cbs.StreamACbFn = &SdrPlaySource::streamCallbackA;
@@ -1773,6 +1836,16 @@ std::size_t SdrPlaySource::read(std::complex<float>* dst, std::size_t n) {
     // here, on the pipeline's source thread, whose lateness the ring absorbs.
     drainEventLogs(*link_);
     maybeWriteHealth(*link_);
+    // ...AND THE OVERLOAD ACKNOWLEDGEMENT ITSELF (2026-09-28): also not the
+    // service thread's to send - see eventCallback's PowerOverloadChange
+    // case. This takes devMutex_ (the common case, no ack pending, is two
+    // relaxed atomic loads and nothing else), so it runs after the lock-free
+    // ring read below would rather than before, except that an ack must not
+    // wait behind a slow ring read either - ordering here does not matter to
+    // correctness (the flags persist until drained), so it goes first,
+    // beside the other two things the service's callbacks left for this
+    // thread to finish.
+    drainPendingOverloadAcks();
     std::size_t got = link_->ring.read(dst, n);
     if (got > 0) {
         link_->emptySinceNs.store(0, std::memory_order_relaxed);  // the empty run is over
@@ -1918,6 +1991,87 @@ bool SdrPlaySource::updateLocked(abi::ReasonForUpdateT reason, abi::ReasonForUpd
     core::diagWarnf("source: SDRplay %s - no acknowledgement within %lld ms", what,
                     static_cast<long long>(kUpdateWait.count()));
     return true;
+}
+
+// THE OVERLOAD ACKNOWLEDGEMENT'S OWN BOUNDED CALL (the repair-round review,
+// 2026-09-28). Structurally the same worker-and-timeout shape as
+// updateLocked immediately above - a thread of ours must never sit inside
+// sdrplay_api_Update unbounded, whichever caller sent it there - but kept
+// separate rather than folded into updateLocked because it takes an
+// EXPLICIT tuner (an RSPduo's overload names its own tuner, independent of
+// device_.tuner - the 0.99.34 fix) and there is no acknowledgement flag to
+// wait for afterwards: OverloadMsgAck sets none of grChanged/rfChanged/
+// fsChanged, so updateLocked's tail would just spin until kUpdateWait for
+// nothing. Silent on the ordinary refusal paths (not initialised, already
+// abandoned, already stalled) rather than calling setError: this runs off
+// the service's own event, not a user action, and overwriting whatever
+// error the panel is already showing with "overload acknowledgement
+// refused" would only be noise on a device already known to be in trouble.
+void SdrPlaySource::ackOverloadLocked(abi::TunerSelectT tuner) {
+    if (!initialised_) { return; }
+    if (controlAbandoned_ || streamStalled_.load(std::memory_order_acquire)) { return; }
+
+    const abi::Api& a = api();
+    auto result = std::make_shared<std::promise<abi::ErrT>>();
+    std::future<abi::ErrT> done = result->get_future();
+    const abi::Api* const table = &a;
+    void* const dev = device_.dev;
+    std::thread worker([table, result, dev, tuner]() {
+        result->set_value(
+            table->Update(dev, tuner, abi::Update_Ctrl_OverloadMsgAck, abi::Update_Ext1_None));
+    });
+
+    if (done.wait_for(kControlWait) != std::future_status::ready) {
+        // ABANDONED, exactly as updateLocked: the thread is inside the
+        // vendor DLL for good, so the whole session is done for, not just
+        // this one acknowledgement.
+        worker.detach();
+        controlAbandoned_ = true;
+        markSessionLost(a, "a control was abandoned inside sdrplay_api_Update "
+                           "(overload acknowledgement)");
+        noteFaultOn(*link_, "overload acknowledgement", sdrPlayControlHungSentence());
+        core::diagWarnf(
+            "source: SDRplay overload acknowledgement abandoned - the service did not answer "
+            "within %lld ms; the radio is released",
+            static_cast<long long>(kControlWait.count()));
+        return;
+    }
+
+    worker.join();
+    const abi::ErrT err = done.get();
+    if (err != abi::Success) {
+        core::diagWarnf("source: SDRplay overload acknowledgement failed - %s",
+                        errText(a, err).c_str());
+        noteIfServiceDead(err, "overload acknowledgement");
+    }
+}
+
+void SdrPlaySource::drainPendingOverloadAcks() {
+    // Read without the lock first - the common case (no overload pending) is
+    // then two relaxed loads and nothing else, off the pipeline's source
+    // thread on every single read() call.
+    const bool wantA = link_->pendingOverloadAckA.load(std::memory_order_acquire);
+    const bool wantB = link_->pendingOverloadAckB.load(std::memory_order_acquire);
+    if (!wantA && !wantB) { return; }
+    // TRY, NEVER WAIT (round 3 of the same review - measured: a blocking
+    // lock here made read() take 2453 ms behind a single slow GUI-thread
+    // control, because devMutex_ is held for that control's WHOLE bounded
+    // wait, not just the vendor call itself). read() is the pipeline's
+    // source thread - the driver's own rule everywhere else in this file is
+    // that nothing on that thread waits on a GUI-thread control in flight
+    // (see checkForStallFromRead's comment), and an acknowledgement is no
+    // exception. If devMutex_ is busy, the flags are left set exactly as
+    // they were and retried on the NEXT read() - a few milliseconds later,
+    // not a correctness issue, since the service keeps re-reporting an
+    // un-acknowledged overload until it succeeds.
+    std::unique_lock<std::mutex> lk(devMutex_, std::try_to_lock);
+    if (!lk.owns_lock()) { return; }
+    if (wantA && link_->pendingOverloadAckA.exchange(false, std::memory_order_acq_rel)) {
+        ackOverloadLocked(abi::Tuner_A);
+    }
+    if (wantB && link_->pendingOverloadAckB.exchange(false, std::memory_order_acq_rel)) {
+        ackOverloadLocked(abi::Tuner_B);
+    }
 }
 
 // --- frequency ------------------------------------------------------------

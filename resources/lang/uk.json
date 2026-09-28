@@ -1577,6 +1577,7 @@
   "that plugin needs a faster sample rate than its source produces": "цей плагін потребує вищої частоти дискретизації, ніж дає його джерело",
   "that plugin takes a different input from the one wired here": "цей плагін приймає інший вхід, ніж під'єднано тут",
   "that would make a loop": "це утворило б петлю",
+  "the SDRplay API is installed but did not list this radio - restart the SDRplay API service (Windows Services, \"SDRplay API Service\"), then pick the SDRplay row": "SDRplay API встановлено, але не показало це радіо - перезапустіть службу SDRplay API (Служби Windows, «SDRplay API Service»), а потім виберіть рядок SDRplay",
   "the catalogue entry declares no licence": "запис каталогу не заявляє ліцензії",
   "the catalogue was read and it lists no modules at all": "каталог прочитано, і в ньому немає жодного модуля",
   "the device would not open": "пристрій не вдалося відкрити",

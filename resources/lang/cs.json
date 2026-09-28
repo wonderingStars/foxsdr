@@ -1577,6 +1577,7 @@
   "that plugin needs a faster sample rate than its source produces": "tento plugin potřebuje vyšší vzorkovací frekvenci, než jeho zdroj dává",
   "that plugin takes a different input from the one wired here": "tento plugin přijímá jiný vstup než ten, který je sem připojen",
   "that would make a loop": "tím by vznikla smyčka",
+  "the SDRplay API is installed but did not list this radio - restart the SDRplay API service (Windows Services, \"SDRplay API Service\"), then pick the SDRplay row": "SDRplay API je nainstalováno, ale tuto rádiostanici neuvedlo - restartujte službu SDRplay API (Služby Windows, \"SDRplay API Service\") a poté vyberte řádek SDRplay",
   "the catalogue entry declares no licence": "položka katalogu neuvádí licenci",
   "the catalogue was read and it lists no modules at all": "katalog byl načten a neuvádí vůbec žádné moduly",
   "the device would not open": "zařízení nešlo otevřít",

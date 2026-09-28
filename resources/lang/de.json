@@ -1577,6 +1577,7 @@
   "that plugin needs a faster sample rate than its source produces": "dieses Plugin braucht eine höhere Abtastrate, als seine Quelle liefert",
   "that plugin takes a different input from the one wired here": "dieses Plugin erwartet einen anderen Eingang als den hier verkabelten",
   "that would make a loop": "das ergäbe eine Schleife",
+  "the SDRplay API is installed but did not list this radio - restart the SDRplay API service (Windows Services, \"SDRplay API Service\"), then pick the SDRplay row": "die SDRplay-API ist installiert, hat dieses Radio aber nicht aufgelistet - starten Sie den SDRplay-API-Dienst neu (Windows-Dienste, \"SDRplay API Service\") und wählen Sie dann die SDRplay-Zeile",
   "the catalogue entry declares no licence": "der Katalogeintrag gibt keine Lizenz an",
   "the catalogue was read and it lists no modules at all": "der Katalog wurde gelesen und führt überhaupt keine Module",
   "the device would not open": "das Gerät ließ sich nicht öffnen",

@@ -1577,6 +1577,7 @@
   "that plugin needs a faster sample rate than its source produces": "該外掛程式需要比其來源更高的取樣率",
   "that plugin takes a different input from the one wired here": "該外掛程式需要的輸入與此處接的不同",
   "that would make a loop": "這樣會形成迴圈",
+  "the SDRplay API is installed but did not list this radio - restart the SDRplay API service (Windows Services, \"SDRplay API Service\"), then pick the SDRplay row": "已安裝 SDRplay API，但未列出此裝置 - 請重新啟動 SDRplay API 服務（Windows 服務，「SDRplay API Service」），然後選擇 SDRplay 那一列",
   "the catalogue entry declares no licence": "目錄項目未宣告授權",
   "the catalogue was read and it lists no modules at all": "已讀取目錄，但其中完全沒有列出任何模組",
   "the device would not open": "無法開啟該裝置",

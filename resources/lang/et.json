@@ -1577,6 +1577,7 @@
   "that plugin needs a faster sample rate than its source produces": "see lisandmoodul vajab suuremat diskreetimissagedust, kui selle allikas toodab",
   "that plugin takes a different input from the one wired here": "see lisandmoodul võtab teistsuguse sisendi kui siia ühendatud",
   "that would make a loop": "see tekitaks silmuse",
+  "the SDRplay API is installed but did not list this radio - restart the SDRplay API service (Windows Services, \"SDRplay API Service\"), then pick the SDRplay row": "SDRplay API on installitud, kuid ei loetlenud seda raadiot - taaskäivita SDRplay API teenus (Windowsi teenused, \"SDRplay API Service\") ja vali seejärel SDRplay rida",
   "the catalogue entry declares no licence": "kataloogikirje ei deklareeri litsentsi",
   "the catalogue was read and it lists no modules at all": "kataloog loeti ja selles pole ühtegi moodulit",
   "the device would not open": "seadet ei õnnestunud avada",

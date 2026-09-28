@@ -1577,6 +1577,7 @@
   "that plugin needs a faster sample rate than its source produces": "αυτό το πρόσθετο χρειάζεται μεγαλύτερο ρυθμό δειγματοληψίας από αυτόν που παράγει η πηγή του",
   "that plugin takes a different input from the one wired here": "αυτό το πρόσθετο δέχεται διαφορετική είσοδο από αυτή που είναι συνδεδεμένη εδώ",
   "that would make a loop": "αυτό θα δημιουργούσε βρόχο",
+  "the SDRplay API is installed but did not list this radio - restart the SDRplay API service (Windows Services, \"SDRplay API Service\"), then pick the SDRplay row": "το SDRplay API είναι εγκατεστημένο αλλά δεν καταχώρισε αυτόν τον δέκτη - επανεκκινήστε την υπηρεσία SDRplay API (Υπηρεσίες Windows, «SDRplay API Service») και μετά επιλέξτε τη γραμμή SDRplay",
   "the catalogue entry declares no licence": "η εγγραφή του καταλόγου δεν δηλώνει άδεια χρήσης",
   "the catalogue was read and it lists no modules at all": "ο κατάλογος διαβάστηκε και δεν περιέχει καμία μονάδα",
   "the device would not open": "η συσκευή δεν άνοιξε",

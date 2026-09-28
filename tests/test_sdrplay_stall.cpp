@@ -341,11 +341,16 @@ void testAStartAfterTheServiceStoppedAnsweringNeverEntersInit() {
     fake.stopService();
 }
 
-// --- 4. the EVENT callback leaves its log lines for read() --------------------
+// --- 4. the EVENT callback leaves its log lines - AND ITS ACKNOWLEDGEMENT -
+//        for read() -----------------------------------------------------------
 //
 // The same rule on the service's other callback. An overload event used to be
-// logged from inside it; now it is counted, acknowledged (that Update is the
-// vendor's own documented pattern and stays) and left for the next read().
+// logged AND acknowledged from inside it; both are now left for the next
+// read() (2026-09-28: the acknowledgement itself moved too, not only the log
+// line - see sdrplay_source.hpp's Link::pendingOverloadAckA/B. The vendor
+// call sdrplay_api_Update is still the documented pattern; what changed is
+// which thread is allowed to make it - never the service's own callback
+// thread, unserialised against a GUI-thread control's bounded worker).
 void testTheEventCallbackNeverWaitsOnTheDiagnosticLog() {
     cascade::core::DiagLog::instance().resetForTest();
     FakeSdrPlayApi fake;
@@ -371,13 +376,17 @@ void testTheEventCallbackNeverWaitsOnTheDiagnosticLog() {
     std::printf("overload event returned in %lld ms with the log held for 300 ms\n", firedMs);
     CHECK(firedMs >= 0 && firedMs < 100);
     CHECK(src.overloadEvents() == 1);
-    CHECK(fake.called(FakeSdrPlayApi::updateCall(abi::Update_Ctrl_OverloadMsgAck,
+    // NEITHER the acknowledgement NOR the log line has happened yet - both
+    // wait for read(), which is what proves the event callback itself did
+    // nothing but latch a flag.
+    CHECK(!fake.called(FakeSdrPlayApi::updateCall(abi::Update_Ctrl_OverloadMsgAck,
                                                   abi::Update_Ext1_None)));
-    // Not logged by the service's thread...
     CHECK(!ringHas("ADC OVERLOAD"));
-    // ...but by the next read(), which is the pipeline's.
+    // ...both delivered by the next read(), which is the pipeline's.
     std::complex<float> buf[16];
     (void) src.read(buf, 16);
+    CHECK(fake.called(FakeSdrPlayApi::updateCall(abi::Update_Ctrl_OverloadMsgAck,
+                                                 abi::Update_Ext1_None)));
     CHECK(ringHas("source: SDRplay ADC OVERLOAD - reduce the gain or add attenuation"));
 
     src.stop();

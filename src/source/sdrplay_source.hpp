@@ -113,6 +113,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -135,6 +136,21 @@ namespace cascade::source {
 // stray sdrplay_api.dll beside some other application cannot pre-empt the real
 // install.
 const sdrplay_abi::Api& processSdrPlayApi();
+
+// WHETHER THE SDRPLAY API IS INSTALLED ON THIS MACHINE - the DLL was found and
+// every entry point resolved. Free-standing rather than a one-line caller of
+// processSdrPlayApi().resolved because the native Mirics driver (0.99.42's
+// RSP1A/RSPdx field reports) needs the same answer without taking on a
+// dependency on the whole SdrPlaySource type: an RSP's silicon is reachable
+// both ways, and mirisdr_source.cpp asks this ONE question before ever
+// touching the bus. Cheap after the first call - processSdrPlayApi() resolves
+// the DLL once per process and every rsp_rows/enumerateSdrPlay caller has
+// almost always already paid that cost by the time a device is opened.
+bool sdrPlayApiPresent();
+
+// Overrides the answer above for a test - no LoadLibrary, no real DLL needed.
+// std::nullopt restores the real answer (processSdrPlayApi().resolved).
+void setSdrPlayApiPresentForTest(std::optional<bool> present);
 
 // The documented 64-bit install path, exposed so the log and the tests can
 // both name the same string.
@@ -751,6 +767,49 @@ private:
         // (0.99.32, the same rule): one bit per kind of line, see kEventLog*.
         std::atomic<unsigned int> pendingEventLogs{0};
 
+        // THE OVERLOAD ACKNOWLEDGEMENT, THE SAME RULE ONE LEVEL FURTHER
+        // (the repair-round review, 2026-09-28): the event callback runs on
+        // the SERVICE'S OWN THREAD, and it used to call sdrplay_api_Update
+        // directly from there to acknowledge an overload - a second entry
+        // into the same vendor call every OTHER control on this object goes
+        // through updateLocked's single bounded worker for, from a thread we
+        // do not own and cannot bound.
+        //
+        // THIS IS A DEFENSIVE CHOICE, NOT A SPEC VIOLATION BEING FIXED - the
+        // vendor's SDRplay API Specification v3.15 says nothing about
+        // calling sdrplay_api_Update from inside an event callback, and the
+        // vendor's OWN example (sdrplay_api_example.c) does exactly that:
+        // its EventCallback's PowerOverloadChange case calls
+        // sdrplay_api_Update(..., Update_Ctrl_OverloadMsgAck, ...) directly,
+        // concurrently with whatever Tuner_Gr updates the rest of the
+        // example issues elsewhere. So the vendor's own reference code takes
+        // the same risk this file used to. What changed here is not "the
+        // spec requires serialisation" - it does not say either way - but
+        // that THIS codebase's whole SDRplay driver is already built on the
+        // rule that nothing of ours enters that DLL except through one
+        // bounded, mutex-serialised path, and the event callback was the one
+        // exception to a rule everything else here follows. Bringing it into
+        // line is defensive hardening against an unproven risk (this file's
+        // own bounded-wait philosophy applied consistently), not a fix for a
+        // confirmed defect - there is no evidence, from the field reports or
+        // otherwise, that this exact race caused anything.
+        //
+        // So the callback only LATCHES which tuner needs acknowledging;
+        // drainPendingOverloadAcks() (called from read(), the same thread
+        // drainEventLogs already runs on, never the callback's) issues the
+        // actual Update through ackOverloadLocked(), which TRIES devMutex_
+        // (never waits for it - read() must not queue behind a GUI-thread
+        // control in flight; a busy mutex leaves these flags set for the
+        // next read() to retry) and is bounded exactly like every other
+        // control once it has the lock.
+        //
+        // CLEARED IN startStreamingLocked() (round 3, measured): a stop()
+        // between an overload firing and the next read() left the flag set,
+        // and the NEXT session's first read() sent an acknowledgement for an
+        // overload that never happened this time.
+        std::atomic<bool> pendingOverloadAckA{false};
+        std::atomic<bool> pendingOverloadAckB{false};
+
         mutable std::mutex healthMutex;
         StreamHealth health;
         bool healthEverWritten = false;
@@ -802,6 +861,14 @@ private:
     // warning, not a failure.
     bool updateLocked(sdrplay_abi::ReasonForUpdateT reason,
                       sdrplay_abi::ReasonForUpdateExt1T ext1, const char* what);
+    // The overload acknowledgement, bounded exactly like updateLocked (a
+    // worker, kControlWait, abandon on timeout) but for an EXPLICIT tuner
+    // rather than device_.tuner - an RSPduo's overload can be on either
+    // tuner independently of which one Init selected (the 0.99.34 fix this
+    // preserves). No acknowledgement flag to wait for afterwards: unlike a
+    // retune or a rate change, OverloadMsgAck sets none of grChanged/
+    // rfChanged/fsChanged.
+    void ackOverloadLocked(sdrplay_abi::TunerSelectT tuner);
     bool startStreamingLocked();
     void stopStreamingLocked();
     // Release and re-select the same device on the other tuner, restoring the
@@ -872,6 +939,15 @@ private:
     // out and writes its line, and logs what the event callback left.
     static void maybeWriteHealth(Link& link);
     static void drainEventLogs(Link& link);
+    // The pipeline's source thread (read()): issues any overload
+    // acknowledgement the event callback latched (Link::pendingOverloadAckA/
+    // B), through ackOverloadLocked - the one bounded, serialised path every
+    // other control uses. TRIES devMutex_ and never waits for it (round 3 of
+    // the same review - measured a blocking lock here costing read() 2453 ms
+    // behind one slow GUI-thread control): read() must never queue behind a
+    // control in flight, the same rule checkForStallFromRead already follows.
+    // A busy mutex leaves the flags set for the next read() to retry.
+    void drainPendingOverloadAcks();
 
     // The bits of Link::pendingEventLogs.
     static constexpr unsigned int kEventLogOverload = 1u;

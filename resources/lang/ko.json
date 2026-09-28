@@ -1577,6 +1577,7 @@
   "that plugin needs a faster sample rate than its source produces": "그 플러그인에는 소스가 내보내는 것보다 높은 샘플레이트가 필요합니다",
   "that plugin takes a different input from the one wired here": "그 플러그인은 여기에 연결된 것과 다른 입력을 받습니다",
   "that would make a loop": "그렇게 하면 루프가 생깁니다",
+  "the SDRplay API is installed but did not list this radio - restart the SDRplay API service (Windows Services, \"SDRplay API Service\"), then pick the SDRplay row": "SDRplay API가 설치되어 있지만 이 라디오를 나열하지 않았습니다 - SDRplay API 서비스를 다시 시작한 다음(Windows 서비스, \"SDRplay API Service\") SDRplay 행을 선택하세요",
   "the catalogue entry declares no licence": "카탈로그 항목에 선언된 라이선스가 없습니다",
   "the catalogue was read and it lists no modules at all": "카탈로그를 읽었지만 모듈이 하나도 없습니다",
   "the device would not open": "장치를 열 수 없었습니다",

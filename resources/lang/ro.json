@@ -1577,6 +1577,7 @@
   "that plugin needs a faster sample rate than its source produces": "acel plugin necesită o rată de eșantionare mai mare decât produce sursa lui",
   "that plugin takes a different input from the one wired here": "acel plugin primește o altă intrare decât cea conectată aici",
   "that would make a loop": "asta ar crea o buclă",
+  "the SDRplay API is installed but did not list this radio - restart the SDRplay API service (Windows Services, \"SDRplay API Service\"), then pick the SDRplay row": "API-ul SDRplay este instalat, dar nu a afișat acest radio - reporniți serviciul SDRplay API (Servicii Windows, \"SDRplay API Service\"), apoi alegeți rândul SDRplay",
   "the catalogue entry declares no licence": "intrarea din catalog nu declară nicio licență",
   "the catalogue was read and it lists no modules at all": "catalogul a fost citit și nu listează niciun modul",
   "the device would not open": "dispozitivul nu s-a deschis",

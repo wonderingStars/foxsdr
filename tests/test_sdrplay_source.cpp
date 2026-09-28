@@ -1489,18 +1489,29 @@ void testOverloadIsCountedAndAcknowledged() {
     // THE ACKNOWLEDGEMENT IS NOT OPTIONAL: the service keeps re-reporting an
     // overload until it is acknowledged, so a host that only logs the event
     // gets a log full of it and a service that never moves on.
+    //
+    // NOT SENT FROM fireOverload() ITSELF ANY MORE (2026-09-28): the event
+    // callback only latches which tuner needs acknowledging now (it runs on
+    // what stands in for the service's own thread here), and read() is what
+    // actually issues the Update, through the same bounded, serialised path
+    // every other control uses - see sdrplay_source.hpp's Link::
+    // pendingOverloadAckA/B and ackOverloadLocked. One read() call drains it.
+    std::complex<float> buf[4];
+    (void) src.read(buf, 4);
     CHECK((fake.calls == std::vector<std::string>{FakeSdrPlayApi::updateCall(
                             abi::Update_Ctrl_OverloadMsgAck, 0)}));
 
     fake.calls.clear();
     fake.fireOverload(false);
     CHECK(src.overloadEvents() == 1);  // corrected is not a second overload
+    (void) src.read(buf, 4);
     CHECK((fake.calls == std::vector<std::string>{FakeSdrPlayApi::updateCall(
                             abi::Update_Ctrl_OverloadMsgAck, 0)}));
 
     // An overload does NOT fault the source: it is the radio telling us the
     // gain is too high, not the radio going away.
     CHECK(!src.faulted());
+    src.stop();
 }
 
 // THE ACKNOWLEDGEMENT GOES TO THE TUNER THE EVENT IS ABOUT. An RSPduo's
@@ -1518,8 +1529,13 @@ void testOverloadAckFollowsALiveTunerSwap() {
     CHECK(src.start());
 
     // Before any swap the service reports, and is answered on, Tuner A.
+    // (2026-09-28: the acknowledgement is now deferred to read() - see
+    // testOverloadIsCountedAndAcknowledged - so one read() call drains it
+    // before each check below.)
+    std::complex<float> buf[4];
     fake.calls.clear();
     fake.fireOverload(true, abi::Tuner_A);
+    (void) src.read(buf, 4);
     CHECK((fake.calls == std::vector<std::string>{FakeSdrPlayApi::updateCall(
                             abi::Update_Ctrl_OverloadMsgAck, 0)}));
     CHECK(fake.lastUpdateTuner == abi::Tuner_A);
@@ -1532,6 +1548,7 @@ void testOverloadAckFollowsALiveTunerSwap() {
     fake.lastUpdateTuner = abi::Tuner_Neither;
     fake.fireOverload(true, abi::Tuner_B);
     CHECK(src.overloadEvents() == 2);
+    (void) src.read(buf, 4);
     CHECK((fake.calls == std::vector<std::string>{FakeSdrPlayApi::updateCall(
                             abi::Update_Ctrl_OverloadMsgAck, 0)}));
     CHECK(fake.lastUpdateTuner == abi::Tuner_B);
@@ -1539,7 +1556,143 @@ void testOverloadAckFollowsALiveTunerSwap() {
     // ...and the "corrected" that follows is answered on the same tuner.
     fake.lastUpdateTuner = abi::Tuner_Neither;
     fake.fireOverload(false, abi::Tuner_B);
+    (void) src.read(buf, 4);
     CHECK(fake.lastUpdateTuner == abi::Tuner_B);
+    src.stop();
+}
+
+// THE OVERLAP THE 2026-09-28 CODE REVIEW FOUND: the event callback used to
+// call sdrplay_api_Update straight from what stands in here for the
+// service's own thread, completely unserialised against a GUI-thread
+// control's own bounded worker. That is a genuine, unguarded race into a
+// vendor DLL this whole driver is otherwise built around never entering
+// except through one bounded, mutex-serialised path - and a plausible
+// account of the field reports' sdrplay_api_Fail, though not a confirmed
+// one (see scratchpad/bugs0928/sdrplay/mirics-windex.md).
+//
+// Proven with the fake's overlap detector: a retune's Update call is held
+// open (updateDelayMs) comfortably inside kControlWait, and an overload is
+// fired and drained while it is still open. maxConcurrentInUpdate answers
+// whether a second thread ever landed inside the vendor call while the
+// first was still there - 1 is correct, 2 is the bug this fixes.
+void testOverloadDuringRetuneNeverOverlapsTheVendorCall() {
+    FakeSdrPlayApi fake;
+    fake.addDevice("1811003EFB", abi::kRsp1A);
+    SdrPlaySource src;
+    CHECK(openOn(src, fake));
+    CHECK(src.start());
+    fake.calls.clear();
+    fake.updateDelayMs.store(80);  // comfortably inside kControlWait (1000 ms)
+
+    std::thread retuneThread([&]() { (void) src.setCenterFrequencyHz(101.0e6); });
+    // Wait until the retune's worker is ACTUALLY inside the fake's Update -
+    // the race this test drives is "does the overload's ack land while the
+    // retune's call is still open", not "does it merely land after the
+    // retune was requested".
+    while (fake.concurrentInUpdate.load(std::memory_order_acquire) == 0) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+
+    fake.fireOverload(true);
+    std::complex<float> buf[4];
+    (void) src.read(buf, 4);  // drains the ack - through devMutex_, if the fix holds
+    retuneThread.join();
+
+    CHECK(fake.maxConcurrentInUpdate.load() == 1);
+    src.stop();
+}
+
+// M2 of the round-3 review: drainPendingOverloadAcks must TRY devMutex_, not
+// wait for it - measured, with the pre-fix (blocking lock_guard) code,
+// read() taking 2453 ms behind a single slow GUI-thread control. Same setup
+// as the overlap test above, but this time the retune's own Update is slow
+// AND eventually answers (updateDelayMs, autoAck left off so the retune
+// itself does not need to succeed for this - only that its worker holds
+// devMutex_ for the whole delay), and what is measured is read()'s own
+// wall-clock time, not just whether calls overlapped.
+void testOverloadAckNeverBlocksReadBehindABusyDevMutex() {
+    FakeSdrPlayApi fake;
+    fake.addDevice("1811003EFB", abi::kRsp1A);
+    SdrPlaySource src;
+    CHECK(openOn(src, fake));
+    CHECK(src.start());
+    fake.calls.clear();
+    fake.updateDelayMs.store(300);  // comfortably inside kControlWait (1000 ms)
+
+    std::thread retuneThread([&]() { (void) src.setCenterFrequencyHz(101.0e6); });
+    while (fake.concurrentInUpdate.load(std::memory_order_acquire) == 0) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+
+    fake.fireOverload(true);
+    std::complex<float> buf[4];
+    const auto t0 = std::chrono::steady_clock::now();
+    (void) src.read(buf, 4);
+    const long long readMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                 std::chrono::steady_clock::now() - t0)
+                                 .count();
+    std::printf("read() behind a busy devMutex_ took %lld ms (control delay 300 ms)\n", readMs);
+    // Generous bound (kReadWait is 20 ms; this allows for scheduler noise
+    // under a loaded CI box) - the point is "nowhere near 300 ms", which the
+    // pre-fix code would be.
+    CHECK(readMs < 100);
+    // The ack was NOT sent yet - the try_lock failed while the retune's
+    // worker was still inside thunkUpdate, so the flag was left set rather
+    // than blocked on.
+    CHECK(!fake.called(FakeSdrPlayApi::updateCall(abi::Update_Ctrl_OverloadMsgAck, 0)));
+
+    retuneThread.join();  // the retune's own (slow) call finishes, releasing devMutex_
+
+    // A LATER read() drains the still-pending ack.
+    (void) src.read(buf, 4);
+    CHECK(fake.called(FakeSdrPlayApi::updateCall(abi::Update_Ctrl_OverloadMsgAck, 0)));
+    src.stop();
+}
+
+// L4 of the round-3 review: a stale pendingOverloadAck must not survive a
+// stop()/start() cycle. Fires an overload and stops BEFORE any read() drains
+// it (deliberately - this is the exact gap: nothing ever cleared the flag on
+// that path before startStreamingLocked() was made to), then starts again
+// and checks the brand new session's first read() sends no acknowledgement.
+void testStaleOverloadAckDoesNotSurviveRestart() {
+    FakeSdrPlayApi fake;
+    fake.addDevice("1811003EFB", abi::kRsp1A);
+    SdrPlaySource src;
+    CHECK(openOn(src, fake));
+    CHECK(src.start());
+    fake.fireOverload(true);
+    src.stop();  // no read() in between - the flag is still set
+
+    CHECK(src.start());
+    fake.calls.clear();
+    std::complex<float> buf[4];
+    (void) src.read(buf, 4);
+    CHECK(!fake.called(FakeSdrPlayApi::updateCall(abi::Update_Ctrl_OverloadMsgAck, 0)));
+    src.stop();
+}
+
+// L5 of the round-3 review, pinned rather than merely measured: an overload
+// naming Tuner_Neither (what a single-tuner RSP1A's service reports) is
+// acknowledged on link.tuner, which for this model is Tuner_A - NOT
+// device_.tuner, which an ordinary control (like the retune here) uses and
+// which, for a single-tuner model, is Tuner_Neither. The two are legitimately
+// different values for the same physical radio; this test exists so a future
+// change cannot make them silently agree or disagree without a test noticing.
+void testOverloadNamingNeitherTunerAcksOnLinkTuner() {
+    FakeSdrPlayApi fake;
+    fake.addDevice("1811003EFB", abi::kRsp1A);
+    SdrPlaySource src;
+    CHECK(openOn(src, fake));
+    CHECK(src.start());
+    CHECK(src.setCenterFrequencyHz(102.0e6));
+    const abi::TunerSelectT controlTuner = fake.lastUpdateTuner;
+
+    fake.fireOverload(true, abi::Tuner_Neither);
+    std::complex<float> buf[4];
+    (void) src.read(buf, 4);
+
+    CHECK(controlTuner == abi::Tuner_Neither);
+    CHECK(fake.lastUpdateTuner == abi::Tuner_A);
     src.stop();
 }
 
@@ -2662,6 +2815,10 @@ int main() {
     testDeviceFailureAndMasterLossAlsoFault();
     testOverloadIsCountedAndAcknowledged();
     testOverloadAckFollowsALiveTunerSwap();
+    testOverloadDuringRetuneNeverOverlapsTheVendorCall();
+    testOverloadAckNeverBlocksReadBehindABusyDevMutex();
+    testStaleOverloadAckDoesNotSurviveRestart();
+    testOverloadNamingNeitherTunerAcksOnLinkTuner();
     testBiasTeeAndNotchesPerModel();
     testStopAndCloseAreBoundedAndIdempotent();
     testCloseWithoutOpenIsSafe();

@@ -1577,6 +1577,7 @@
   "that plugin needs a faster sample rate than its source produces": "taj dodatak treba veću brzinu uzorkovanja nego što njegov izvor daje",
   "that plugin takes a different input from the one wired here": "taj dodatak prima drugačiji ulaz od onoga koji je ovdje spojen",
   "that would make a loop": "time bi nastala petlja",
+  "the SDRplay API is installed but did not list this radio - restart the SDRplay API service (Windows Services, \"SDRplay API Service\"), then pick the SDRplay row": "SDRplay API je instaliran, ali nije naveo ovaj radio - ponovno pokrenite uslugu SDRplay API (Windows usluge, \"SDRplay API Service\"), a zatim odaberite redak SDRplay",
   "the catalogue entry declares no licence": "unos u katalogu ne navodi licencu",
   "the catalogue was read and it lists no modules at all": "katalog je pročitan i ne navodi baš nijedan modul",
   "the device would not open": "uređaj se nije dao otvoriti",

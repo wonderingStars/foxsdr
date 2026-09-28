@@ -47,6 +47,8 @@
 #include "mirisdr_fake_usb.hpp"
 #include "source/mirisdr_source.hpp"
 #include "source/msi2500.hpp"
+#include "source/rsp_rows.hpp"
+#include "source/sdrplay_source.hpp"
 #include "source/tuner_msi001.hpp"
 #include "test_check.hpp"
 
@@ -1458,6 +1460,86 @@ int main() {
         CHECK(!src.start());
         CHECK(!src.running());
         CHECK(fake->endBulkCalls() >= 1);
+        src.closeDevice();
+    }
+
+    // =====================================================================
+    // 18. AN RSP MUST NEVER BE OPENED NATIVELY WHILE THE SDRPLAY API IS
+    //     INSTALLED - ON WINDOWS (the 0.99.42 field reports: an RSP1A,
+    //     WinUSB-bound and opened through the SDRplay API, "works briefly,
+    //     then falls back" to this driver, whose ADC-init sequence fails
+    //     with a raw Windows error 87 - see the open() comment for exactly
+    //     what is and is not established about why). rsp_rows.hpp hides this
+    //     row from the Windows Source list whenever the API is installed,
+    //     unconditionally, but a hidden row is not an unreachable open(): a
+    //     config saved before the API was installed, or a patch radio opened
+    //     by its remembered args, can still call here directly. This is the
+    //     open()-time backstop: refuse before a single byte reaches the bus,
+    //     with the exact same sentence rsp_rows.hpp's sdrPlayHiddenRowAdvice()
+    //     gives for the hidden row, so the two paths never disagree.
+    //
+    //     ON LINUX, this guard does not fire at all
+    //     (kNativeMiricsOpenUnsafeWithApi is false there) - usbfs does not
+    //     enforce the endpoint-recipient rule that makes this unsafe on
+    //     Windows, so a Linux user's native row may genuinely work while the
+    //     SDRplay daemon is stopped, and taking it away is not justified by
+    //     two Windows-only field reports. Both platform's behaviours are
+    //     exercised here rather than compiled apart, because
+    //     kNativeMiricsOpenUnsafeWithApi is itself compiled per-platform -
+    //     the #if below picks which one this build is expected to show.
+    // =====================================================================
+#if defined(_WIN32)
+    {
+        MiriSdrSource src;
+        FakeMiriSdrUsb* fake = attachFake(src, oneFakeDevice("", 0x1DF7, 0x3000));  // RSP1A
+        cascade::source::setSdrPlayApiPresentForTest(true);
+        CHECK(!src.open(""));
+        CHECK(!src.isOpen());
+        CHECK(std::string(src.lastError()) == cascade::source::sdrPlayHiddenRowAdvice());
+        // NOT ONE TRANSFER: the guard fires before the transport is even
+        // opened - a device the API is mid-fault with must never be poked.
+        CHECK(fake->controls().empty());
+        cascade::source::setSdrPlayApiPresentForTest(std::nullopt);
+        src.closeDevice();
+    }
+#else
+    {
+        // LINUX: the same scenario the Windows guard refuses instead opens
+        // normally - the platform switch, not a coincidence of this fake.
+        MiriSdrSource src;
+        attachFake(src, oneFakeDevice("", 0x1DF7, 0x3000));  // RSP1A
+        cascade::source::setSdrPlayApiPresentForTest(true);
+        CHECK(src.open(""));
+        CHECK(src.isOpen());
+        cascade::source::setSdrPlayApiPresentForTest(std::nullopt);
+        src.closeDevice();
+    }
+#endif
+    {
+        // The API being installed says nothing about a plain television
+        // stick sharing the same silicon (oneFakeDevice()'s default:
+        // 1df7:2500, described as "MSi2500" - not SDRplay-badged). It opens
+        // exactly as it always has, on every platform.
+        MiriSdrSource src;
+        attachFake(src);
+        cascade::source::setSdrPlayApiPresentForTest(true);
+        CHECK(src.open(""));
+        CHECK(src.isOpen());
+        cascade::source::setSdrPlayApiPresentForTest(std::nullopt);
+        src.closeDevice();
+    }
+    {
+        // And without the API installed, the RSP1A opens over the native
+        // driver exactly as every release before this guard did, on every
+        // platform - the guard is scoped to "the API is installed", never to
+        // "an RSP is present".
+        MiriSdrSource src;
+        attachFake(src, oneFakeDevice("", 0x1DF7, 0x3000));
+        cascade::source::setSdrPlayApiPresentForTest(false);
+        CHECK(src.open(""));
+        CHECK(src.isOpen());
+        CHECK(std::string(src.name()) == "Mirics: SDRplay RSP1A");
+        cascade::source::setSdrPlayApiPresentForTest(std::nullopt);
         src.closeDevice();
     }
 

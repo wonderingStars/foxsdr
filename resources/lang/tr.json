@@ -1577,6 +1577,7 @@
   "that plugin needs a faster sample rate than its source produces": "o eklenti, kaynağının ürettiğinden daha yüksek bir örnekleme hızı gerektiriyor",
   "that plugin takes a different input from the one wired here": "o eklenti buraya bağlanandan farklı bir giriş alıyor",
   "that would make a loop": "bu bir döngü oluşturur",
+  "the SDRplay API is installed but did not list this radio - restart the SDRplay API service (Windows Services, \"SDRplay API Service\"), then pick the SDRplay row": "SDRplay API kurulu ama bu radyoyu listelemedi - SDRplay API hizmetini yeniden başlatın (Windows Hizmetleri, \"SDRplay API Service\"), ardından SDRplay satırını seçin",
   "the catalogue entry declares no licence": "katalog kaydı lisans beyan etmiyor",
   "the catalogue was read and it lists no modules at all": "katalog okundu ve hiç modül listelemiyor",
   "the device would not open": "cihaz açılmadı",

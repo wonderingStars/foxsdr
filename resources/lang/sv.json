@@ -1577,6 +1577,7 @@
   "that plugin needs a faster sample rate than its source produces": "det tillägget kräver en högre samplingstakt än dess källa producerar",
   "that plugin takes a different input from the one wired here": "det tillägget tar en annan ingång än den som är kopplad här",
   "that would make a loop": "det skulle bli en slinga",
+  "the SDRplay API is installed but did not list this radio - restart the SDRplay API service (Windows Services, \"SDRplay API Service\"), then pick the SDRplay row": "SDRplay API är installerat men listade inte den här radion - starta om SDRplay API-tjänsten (Windows-tjänster, \"SDRplay API Service\") och välj sedan SDRplay-raden",
   "the catalogue entry declares no licence": "katalogposten deklarerar ingen licens",
   "the catalogue was read and it lists no modules at all": "katalogen lästes och den listar inga moduler alls",
   "the device would not open": "enheten gick inte att öppna",

@@ -165,6 +165,24 @@ public:
     std::atomic<bool> insideUpdate{false};
     std::atomic<bool> leftUpdate{false};
 
+    // WHETHER TWO THREADS WERE EVER INSIDE thunkUpdate AT ONCE (the repair-
+    // round review, 2026-09-28: the event callback used to call
+    // sdrplay_api_Update straight from what stands in here for the
+    // service's own thread, unserialised against a GUI-thread control's own
+    // worker). concurrentInUpdate counts entries currently inside; a test
+    // sets updateDelayMs to hold each call open long enough to give a second,
+    // wrongly-unserialised caller a real window to land in, and
+    // maxConcurrentInUpdate is the highest that counter was ever seen at -
+    // 1 is correct (the API's own single-device-lock model), 2 is the bug.
+    // A real overlap would also be a data race on `calls` itself
+    // (push_back from two threads with no lock), which is exactly the kind
+    // of undefined behaviour a raced sdrplay_api_Fail could plausibly be,
+    // so this counter is deliberately a SEPARATE, safe observation of the
+    // same event rather than relying on that race to crash reliably.
+    std::atomic<int> concurrentInUpdate{0};
+    std::atomic<int> maxConcurrentInUpdate{0};
+    std::atomic<int> updateDelayMs{0};
+
     // ...AND THE WEDGE HOLDS THE WHOLE DEVICE, NOT JUST THE ONE CALL.
     //
     // This is what the 0.96.4 hang report added to the two above, and it is
@@ -435,7 +453,17 @@ private:
         return p;
     }
 
-    void note(std::string s) { calls.push_back(std::move(s)); }
+    // MUTEX-GUARDED, not because the driver is expected to call this
+    // concurrently (it must not - that is exactly what the 2026-09-28
+    // overlap test checks) but because the HARNESS must never turn a real
+    // regression into a crash instead of a clean, named assertion failure:
+    // an unsynchronised std::vector::push_back from two threads is
+    // undefined behaviour, and a test's own UB is not evidence of anything.
+    void note(std::string s) {
+        std::lock_guard<std::mutex> lk(callsMutex_);
+        calls.push_back(std::move(s));
+    }
+    std::mutex callsMutex_;
 
     // A call that has to queue behind a worker parked inside Update, because
     // the vendor DLL lets one call at a time near a device. `entered` records
@@ -667,6 +695,26 @@ private:
         (void) dev;
         f->lastUpdateTuner = tuner;
         f->note(updateCall(static_cast<unsigned int>(reason), static_cast<unsigned int>(ext1)));
+
+        // THE OVERLAP DETECTOR (2026-09-28) - see concurrentInUpdate's own
+        // comment. Counts this call in for its whole duration, including the
+        // optional delay below, so a second call arriving while this one is
+        // still "inside" is caught regardless of which branch below it takes.
+        struct InUpdateGuard {
+            FakeSdrPlayApi* f;
+            explicit InUpdateGuard(FakeSdrPlayApi* fake) : f(fake) {
+                const int now = f->concurrentInUpdate.fetch_add(1, std::memory_order_acq_rel) + 1;
+                int prevMax = f->maxConcurrentInUpdate.load(std::memory_order_relaxed);
+                while (now > prevMax &&
+                      !f->maxConcurrentInUpdate.compare_exchange_weak(
+                          prevMax, now, std::memory_order_acq_rel)) {
+                }
+            }
+            ~InUpdateGuard() { f->concurrentInUpdate.fetch_sub(1, std::memory_order_acq_rel); }
+        } inUpdateGuard(f);
+        const int delayMs = f->updateDelayMs.load(std::memory_order_relaxed);
+        if (delayMs > 0) { std::this_thread::sleep_for(std::chrono::milliseconds(delayMs)); }
+
         // A SERVICE THAT NEVER ANSWERS A CONTROL. See hangInUpdate: noted
         // first, so the call is on the record before it disappears, and
         // returned without an acknowledgement once released.

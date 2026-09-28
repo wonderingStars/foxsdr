@@ -1577,6 +1577,7 @@
   "that plugin needs a faster sample rate than its source produces": "plugin itu memerlukan sample rate yang lebih cepat daripada yang dihasilkan sumbernya",
   "that plugin takes a different input from the one wired here": "plugin itu menerima input yang berbeda dari yang disambungkan di sini",
   "that would make a loop": "itu akan membuat loop",
+  "the SDRplay API is installed but did not list this radio - restart the SDRplay API service (Windows Services, \"SDRplay API Service\"), then pick the SDRplay row": "SDRplay API sudah terpasang tetapi tidak mencantumkan radio ini - mulai ulang layanan SDRplay API (Layanan Windows, \"SDRplay API Service\"), lalu pilih baris SDRplay",
   "the catalogue entry declares no licence": "entri katalog tidak menyatakan lisensi",
   "the catalogue was read and it lists no modules at all": "katalog sudah dibaca dan sama sekali tidak mencantumkan modul",
   "the device would not open": "perangkat tidak mau terbuka",

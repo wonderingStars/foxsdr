@@ -7573,13 +7573,19 @@ void AppWindow::drawSourceSection() {
     // unseeable - the same "my radio is simply not in the list" the
     // unbound-device sentence above exists to stop, one layer further down.
     //
-    // Shown when there is no RSP row AND the driver has something to say. The
-    // wording is the driver's own pure sdrPlayPanelAdvice(), not a paraphrase:
-    // it is pinned by a test because it is the only instruction the user
-    // gets, and one that drops "3.x" or "sdrplay.com" sends them nowhere.
-    // Both cases arrive here - no API at all, and an API too old to drive an
-    // RSP - and the second of them could not reach this line until 0.94.1.
-    if (!sdrPlayRowsFound_ && !sdrPlayAdvice_.empty()) {
+    // Shown whenever sdrPlayAdvice_ has something to say - which is now THREE
+    // cases (scanNative sets it, in priority order): a native RSP row was
+    // hidden this scan with no SDRplay row standing in for it (the API is
+    // installed but did not list that radio - restart it, then pick the
+    // SDRplay row); no RSP row of any kind and the API is missing; or the API
+    // is installed but too old to drive an RSP. The wording for the last two
+    // is the driver's own pure sdrPlayPanelAdvice(), not a paraphrase: it is
+    // pinned by a test because it is the only instruction the user gets, and
+    // one that drops "3.x" or "sdrplay.com" sends them nowhere. Not gated on
+    // sdrPlayRowsFound_ any more: the first case can be true even while some
+    // OTHER RSP the API can see is listed fine - two radios, one of them
+    // silently gone, is exactly the confusion this sentence exists to stop.
+    if (!sdrPlayAdvice_.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
         ImGui::TextWrapped("%s", sdrPlayAdvice_.c_str());
         ImGui::PopStyleColor();
@@ -9206,33 +9212,52 @@ void AppWindow::scanNative() {
     }
     sdrPlayRowsFound_ = nativeDevices_.size() > beforeSdrPlay;
 
-    // ONE RADIO, ONE ROW (0.99.9, at the owner's word). An RSP reachable both
-    // natively and through the SDRplay API was offered TWICE, under two names,
-    // with nothing saying which to pick - and picking the native one gets the
-    // less capable of the two, because the API drives front-end hardware this
-    // application cannot. source/rsp_rows.hpp holds the rule and says why the
-    // hiding is as narrow as it is: a row hidden in error is a radio the user
-    // cannot select at all.
+    // ONE RADIO, ONE ROW (0.99.9, at the owner's word; revised 2026-09-28
+    // twice). An RSP reachable both natively and through the SDRplay API was
+    // offered TWICE, under two names, with nothing saying which to pick - and
+    // picking the native one gets the less capable of the two at best, and
+    // (the two RSP1A field reports on 0.99.42) a guaranteed-failing open at
+    // worst, once the API is installed - ON WINDOWS. source/rsp_rows.hpp
+    // holds the rule and the platform switch (kNativeMiricsOpenUnsafeWithApi):
+    // on Windows, hidden whenever the API is present on this machine, full
+    // stop, regardless of whether THIS scan's enumeration listed anything -
+    // a service that is merely slow to answer looks identical to one that is
+    // down, and the row must not flicker back into a state that can only
+    // fail. On Linux, the original narrower rule (hidden only when the API
+    // actually lists the same radio) still applies - usbfs does not enforce
+    // the Windows-specific reason native access is unsafe there, so a Linux
+    // user's native row may genuinely work while the daemon is stopped.
+    const bool sdrPlayApiInstalled = cascade::source::sdrPlayApiPresent();
+    const bool sdrPlayOrphaned = cascade::source::anyRspOrphanedByHiding(
+        nativeDevices_, sdrPlayApiInstalled, cascade::source::kNativeMiricsOpenUnsafeWithApi);
     {
         const std::size_t before = nativeDevices_.size();
-        nativeDevices_ = cascade::source::withoutDuplicateRsps(nativeDevices_);
+        nativeDevices_ = cascade::source::withoutDuplicateRsps(
+            nativeDevices_, sdrPlayApiInstalled, cascade::source::kNativeMiricsOpenUnsafeWithApi);
         const std::size_t hidden = before - nativeDevices_.size();
         if (hidden > 0) {
             // LOGGED, because a row that vanishes without explanation is the
             // fault report this is trying to prevent, arriving from the other
             // direction.
             cascade::core::diagLogf(
-                "source: %zu native SDRplay row(s) hidden - the SDRplay API already lists "
-                "that radio, and it is the fuller driver of the two",
-                hidden);
+                "source: %zu native SDRplay row(s) hidden - the SDRplay API is installed%s",
+                hidden,
+                sdrPlayOrphaned ? " but did not list at least one of them this scan" : "");
         }
     }
-    // ...AND WHAT TO SAY WHEN THERE IS NO RSP ROW BECAUSE THERE IS NO API.
-    // Composed here rather than in the draw, because the draw runs sixty
-    // times a second and this reads the process's load result. The sentence
-    // itself comes from the driver (sdrPlayPanelAdvice), which is pure and
-    // pinned by a test: it is the only instruction an RSP owner gets, and a
-    // rewording that drops "3.x" or "sdrplay.com" sends them nowhere.
+    // ...AND WHAT TO SAY WHERE A HIDDEN ROW WOULD HAVE BEEN, OR WHEN THERE IS
+    // NO RSP ROW BECAUSE THERE IS NO API. Composed here rather than in the
+    // draw, because the draw runs sixty times a second and this reads the
+    // process's load result.
+    //
+    // THE PRIORITY ORDER IS sdrPlaySourceAdvice()'s, not repeated here
+    // (round 3 of the same review: the first version let the orphan sentence
+    // win outright, so a lost session or a held-off enumeration - each with
+    // their own MORE SPECIFIC sentence, "restart FoxSDR" or "wait" - was
+    // silently replaced by the generic "did not list this radio"). In short:
+    // a lost session, a held-off enumeration, or an API too old always wins;
+    // "did not list this radio" only wins when the API answered cleanly and
+    // simply does not have this exact radio.
     //
     // THROUGH THE ENUMERATION'S OWN REASON, because the two fields below
     // cannot describe an API THAT IS INSTALLED BUT TOO OLD. `version` is
@@ -9240,16 +9265,18 @@ void AppWindow::scanNative() {
     // gate, so a 3.05 install leaves it at zero, and asking the load result
     // alone gave an RSP owner an empty Source section while the log carried
     // the sentence telling them to update. The enumeration a few lines up has
-    // just recorded it; sdrPlayPanelAdvice prefers that and falls back to the
-    // load result, which is what this used to do on its own.
+    // just recorded it; sdrPlaySourceAdvice (through sdrPlayPanelAdvice)
+    // prefers that and falls back to the load result, which is what this
+    // used to do on its own.
     const cascade::source::sdrplay_abi::Api& sdrApi = cascade::source::processSdrPlayApi();
     float sdrVersion = 0.0f;
     {
         std::lock_guard<std::mutex> lk(sdrApi.sessionMutex);
         sdrVersion = sdrApi.version;
     }
-    sdrPlayAdvice_ = cascade::source::sdrPlayPanelAdvice(
-        sdrApi.resolved, sdrVersion, cascade::source::sdrPlayLastEnumerationSkip());
+    sdrPlayAdvice_ = cascade::source::sdrPlaySourceAdvice(
+        sdrPlayOrphaned, sdrPlayRowsFound_, sdrApi.resolved, sdrVersion,
+        cascade::source::sdrPlayLastEnumerationSkip());
     sdrPlayApiDetail_ = sdrApi.loadDetail;
 
     // THE PLUTO, WHICH IS NOT A DISCOVERY AT ALL. A network cannot be walked,
