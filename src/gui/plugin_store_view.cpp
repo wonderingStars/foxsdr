@@ -290,9 +290,18 @@ bool drawSegment(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, const char*
     }
     ImFont* f = fonts::ui();
     const float px = prose();
-    dl->AddText(f, px,
-                ImVec2((tl.x + br.x) * 0.5f - textW(f, px, label) * 0.5f,
-                       (tl.y + br.y) * 0.5f - faceH(f, px) * 0.5f + (selected ? 1.0f : 0.0f)),
+    // FITTED TO THE SEGMENT (gui/text_fit.hpp), not drawn raw at one size
+    // regardless of room: three equal-width segments (segW = wellInner / 3)
+    // give MAKER and VERSION less room than NAME needs at the interface
+    // size's larger fonts, and an unfitted AddText simply ran the word
+    // through the segment beside it (an Opus review's M3 - "MAKER" over
+    // "VERSION"). A label that already fits is drawn exactly as it always
+    // was, at `px`.
+    const float room = (br.x - tl.x) - 8.0f;
+    const float fitted = fitTextPx(f, px, label, room, fitFloorFor(px));
+    dl->AddText(f, fitted,
+                ImVec2((tl.x + br.x) * 0.5f - textW(f, fitted, label) * 0.5f,
+                       (tl.y + br.y) * 0.5f - faceH(f, fitted) * 0.5f + (selected ? 1.0f : 0.0f)),
                 selected ? theme::kCream : theme::kEnamel, label);
     return pressed;
 }
@@ -1939,7 +1948,14 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
     const ImGuiStyle& style = ImGui::GetStyle();
     const float fieldH = uiPx + style.FramePadding.y * 2.0f + 6.0f;
     const char* searchLegend = tr("Searches name, maker and description.");
-    const float deckAH = kPad + legH + 8.0f + fieldH + 9.0f + tinyH + 4.0f +
+    // WRAPPED, NOT ONE LINE: the legend is drawn with a wrap width below
+    // (wellInner), and at the interface size's larger fonts - or a well
+    // narrowed by a translation - it can take two lines. Reserving only
+    // `tinyH` here (an Opus review's M3) let the count line ("0 OF 0 MODULES
+    // KNOWN") start where the legend's SECOND line still was, drawing one
+    // over the other.
+    const float searchLegendH = wrapH(uf, tiny, wellInner, searchLegend);
+    const float deckAH = kPad + legH + 8.0f + fieldH + 9.0f + searchLegendH + 4.0f +
                          countLineHeight() + kPad;
 
     const char* showNote =
@@ -2031,7 +2047,7 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
         y += fieldH + 9.0f;
         dl->AddText(uf, tiny, ImVec2(tl.x + kPad, y), theme::kInkMuted, searchLegend,
                     nullptr, wellInner);
-        y += tinyH + 4.0f;
+        y += searchLegendH + 4.0f;
         // WHAT IS ON SCREEN AND WHAT EXISTS, both. "3 shown" alone cannot tell
         // a short catalogue from a filter that is hiding most of it.
         drawCountLine(dl, ImVec2(tl.x + kPad, y), static_cast<int>(visible.size()),

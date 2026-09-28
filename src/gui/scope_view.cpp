@@ -1475,7 +1475,11 @@ void addBenchGroupCaption(ImDrawList* dl, const ImVec2& at, float width,
     // the end of the column, and this face's tracking is the widest on the
     // panel - a quarter of the size between every pair of letters.
     constexpr float kCapTrack = 0.24f;
-    const float px = fitTrackedPx(f, cascade::gui::fonts::kTinySize, caption, kCapTrack,
+    // fonts::tinyPx(), not the bare kTinySize (an Opus review's minor): the
+    // bare constant caps this caption at its S=1 size forever, since
+    // fitTrackedPx only ever shrinks its input, never grows it - one of the
+    // few font sites the round 1/2 sweeps missed.
+    const float px = fitTrackedPx(f, cascade::gui::fonts::tinyPx(), caption, kCapTrack,
                                   width - 8.0f);
     const float track = px * kCapTrack;
     const float tw = trackedWidth(f, px, caption, track);

@@ -69,6 +69,7 @@
 #include "dsp/window.hpp"
 #include "gui/fonts.hpp"
 #include "gui/ui_scale.hpp"
+#include "gui/ui_style_compose.hpp"
 #include "gui/text_fit.hpp"
 #include "gui/theme.hpp"
 #include "gui/ui_census.hpp"
@@ -1186,6 +1187,38 @@ AppWindow::~AppWindow() {
     stopAudioRecording();
 }
 
+namespace {
+// THE WORK AREA OF THE MONITOR A (POSSIBLY STILL HIDDEN) WINDOW IS ON. GLFW
+// has no direct "which monitor is this windowed, non-fullscreen window on"
+// query - only glfwGetWindowContentScale, which answers the DPI question but
+// not the work-area one. Found the same way GLFW's own Win32 backend would:
+// by which monitor's rect contains the window's position. Falls back to the
+// primary monitor if none matches (should not happen - every window is on
+// some monitor - but a monitor unplugged between enumeration and this call
+// is not worth crashing over). Used both at startup (M5: sizing the very
+// first window) and every time the interface scale changes afterwards (so
+// the MINIMUM size this scale demands never exceeds the screen it has to
+// fit on).
+void monitorWorkareaForWindow(GLFWwindow* window, int& areaX, int& areaY, int& areaW,
+                              int& areaH) {
+    int wx = 0, wy = 0;
+    glfwGetWindowPos(window, &wx, &wy);
+    GLFWmonitor* target = glfwGetPrimaryMonitor();
+    int monCount = 0;
+    GLFWmonitor** mons = glfwGetMonitors(&monCount);
+    for (int m = 0; m < monCount; ++m) {
+        int mx = 0, my = 0, mw = 0, mh = 0;
+        glfwGetMonitorWorkarea(mons[m], &mx, &my, &mw, &mh);
+        if (wx >= mx && wx < mx + mw && wy >= my && wy < my + mh) {
+            target = mons[m];
+            break;
+        }
+    }
+    areaX = areaY = areaW = areaH = 0;
+    if (target != nullptr) { glfwGetMonitorWorkarea(target, &areaX, &areaY, &areaW, &areaH); }
+}
+}  // namespace
+
 int AppWindow::run(int frames) {
     glfwSetErrorCallback(&glfwErrorCallback);
     if (!glfwInit()) {
@@ -1256,6 +1289,32 @@ int AppWindow::run(int frames) {
     const int scaledMinH =
         static_cast<int>(cascade::gui::uiscale::px(static_cast<float>(kMinWindowH)));
     glfwSetWindowSizeLimits(window, scaledMinW, scaledMinH, GLFW_DONT_CARE, GLFW_DONT_CARE);
+    // FIRST-LAUNCH WINDOW SIZE, SCALED (an Opus review, M5): nothing above
+    // persists a window size - there is no saved width/height in AppConfig -
+    // so EVERY launch, not only the very first, opened at the same fixed
+    // 1280x720 REAL pixels regardless of the interface size. At S=2 that is
+    // a 640x360 window in the LOGICAL units everything else on this bench is
+    // laid out in: cramped past useless. Scaled to 1280*S x 720*S and
+    // clamped to the WORK AREA of the monitor the still-hidden window
+    // actually landed on (found the same way GLFW itself would for content
+    // scale - by which monitor's rect contains the window's position, since
+    // a windowed, non-fullscreen window has no direct "which monitor" query)
+    // so a saved 200% from a 4K desk does not ask a 1366x768 laptop for a
+    // window bigger than its own screen. S=1: exactly 1280x720, unchanged -
+    // the clamp is a no-op on any monitor with at least that much work area,
+    // which is every supported monitor.
+    if (cascade::gui::uiscale::factor() != 1.0f) {
+        int areaX = 0, areaY = 0, areaW = 0, areaH = 0;
+        monitorWorkareaForWindow(window, areaX, areaY, areaW, areaH);
+        const double s = static_cast<double>(cascade::gui::uiscale::factor());
+        int wantW = static_cast<int>(std::lround(1280.0 * s));
+        int wantH = static_cast<int>(std::lround(720.0 * s));
+        if (areaW > 0) { wantW = std::min(wantW, areaW); }
+        if (areaH > 0) { wantH = std::min(wantH, areaH); }
+        wantW = std::max(wantW, scaledMinW);
+        wantH = std::max(wantH, scaledMinH);
+        glfwSetWindowSize(window, wantW, wantH);
+    }
     // FOXSDR_WINDOW_SIZE="1920x1080" (captures): the window at an exact size,
     // so a picture taken for the Store or the website is the size they need
     // rather than a small one scaled up.
@@ -3125,7 +3184,11 @@ bool benchSwitchRow(const char* label, bool on, const char* chipText,
 void benchGroup(const char* caption) {
     benchRailFlush();
     ImGui::Spacing();
-    const float px = cascade::gui::fonts::kTinySize;
+    // fonts::tinyPx(): addBenchGroupCaption now fits its word up to this
+    // scaled size (an Opus review's minor, fixed in scope_view.cpp), so the
+    // row reserved for it must be at least as tall or the row below draws
+    // over it at S>1.
+    const float px = cascade::gui::fonts::tinyPx();
     const float w = ImGui::GetContentRegionAvail().x;
     const ImVec2 at = ImGui::GetCursorScreenPos();
     cascade::gui::addBenchGroupCaption(ImGui::GetWindowDrawList(),
@@ -6639,6 +6702,47 @@ void AppWindow::drawTrailWidthControl(const char* label) {
     }
 }
 
+namespace {
+// THE UN-SCALED STYLE BASELINE, shared by the theme and the interface-size
+// mechanisms below (both live in this file; app_window.hpp must not need
+// imgui.h, so this cannot be a class member - see the note beside
+// interfaceScale_ there). "Un-scaled" means: whatever theme::applyTheme()
+// last wrote, before ScaleAllSizes/FontScaleMain touch it. Round 3 kept this
+// as a function-local static inside applyPendingUiScale, captured ONCE ever,
+// on that function's first call - which is exactly the bug an Opus review
+// caught (B1): theme::applyTheme() (theme.cpp) writes UNSCALED sizes and the
+// NEW theme's colours straight into the live ImGuiStyle on every theme
+// change, and the stale baseline never learned about either, so the next
+// scale change reverted the colours to whichever theme was live the first
+// time this ran, and a theme change at S != 1 reset the padding to 100% (it
+// overwrote the live style with applyTheme's unscaled numbers and nothing
+// afterwards ever rescaled them). Refreshing this baseline, and immediately
+// rescaling from it, right after EVERY theme apply - not only on this file's
+// first frame - is what makes theme-then-scale and scale-then-theme compose
+// to the same style either way.
+ImGuiStyle g_uiStyleBase;
+bool g_uiStyleBaseCaptured = false;
+
+void refreshUiStyleBase() {
+    g_uiStyleBase = ImGui::GetStyle();
+    g_uiStyleBaseCaptured = true;
+}
+
+// Rebuilds the live style from the un-scaled baseline at the CURRENT
+// interface factor, through the one shared, independently-tested function
+// (gui/ui_style_compose.hpp) both a theme apply and a scale change funnel
+// through - see tests/test_ui_scale.cpp's
+// testThemeAndScaleComposeRegardlessOfOrder for the order-independence
+// property this buys. Called both when the factor itself changes and right
+// after a theme applies (which needs the factor re-imposed on its own fresh,
+// unscaled numbers) - idempotent either way, so calling it from both paths
+// on the same frame (a theme picked while a scale change is also pending)
+// costs nothing beyond computing the same answer twice.
+void applyUiScaleFromBase() {
+    ImGui::GetStyle() = cascade::gui::uiscale::composeStyle(g_uiStyleBase, cascade::gui::uiscale::factor());
+}
+}  // namespace
+
 // --- THE INTERFACE THEME ----------------------------------------------------
 //
 // BETWEEN FRAMES, like the language: the palette, ImGui's style and the
@@ -6652,6 +6756,14 @@ void AppWindow::applyPendingTheme() {
     cascade::gui::theme::setTheme(id);
     cascade::gui::theme::applyTheme();
     cascade::gui::fonts::setPreferredPair(cascade::gui::theme::preferredFontPair(id));
+    // applyTheme() just wrote UNSCALED sizes (WindowPadding, FramePadding,
+    // ...) and THIS theme's colours straight into the live style - it has no
+    // idea the interface can be scaled. Re-baseline on that, then re-impose
+    // whatever interface scale is already in effect, so a theme change never
+    // resets the padding to 100% while S != 1 (B1, see the note above
+    // applyUiScaleFromBase).
+    refreshUiStyleBase();
+    applyUiScaleFromBase();
     // The waterfall follows on its next draw or line, whichever comes first
     // (a stopped receiver still draws): WaterfallView::followTheme sees the
     // generation move and repaints the rows already on screen in the new
@@ -6673,35 +6785,34 @@ void AppWindow::applyPendingTheme() {
 // scale a whole style is ScaleAllSizes(S) applied ONCE, from an UN-SCALED
 // snapshot - calling it every frame, or twice from the same starting style,
 // would compound the scale each time and the window would visibly grow on
-// every change. The snapshot is taken lazily, on this function's first call
-// in the frame loop - after every one-time style setup this application does
-// (applyTheme's colours, above) and before anything has ever been scaled.
+// every change. The snapshot (g_uiStyleBase, above) is captured lazily here
+// on this function's first call in the frame loop, but from then on is kept
+// FRESH by applyPendingTheme() as well (every theme change re-baselines it),
+// so a scale change afterwards rescales the CURRENT theme's numbers rather
+// than whichever theme happened to be live the first time this ran.
 void AppWindow::applyPendingUiScale() {
-    static ImGuiStyle baseStyle;
-    static bool baseCaptured = false;
-    if (!baseCaptured) {
-        baseStyle = ImGui::GetStyle();
-        baseCaptured = true;
-    }
+    if (!g_uiStyleBaseCaptured) { refreshUiStyleBase(); }
     if (!cascade::gui::uiscale::consumeChanged()) { return; }
-    ImGuiStyle scaled = baseStyle;
-    scaled.ScaleAllSizes(cascade::gui::uiscale::factor());
-    // THE MISSING HALF: ScaleAllSizes touches padding/spacing/rounding and
-    // nothing font-related (imgui.cpp's own list of fields it assigns has no
-    // font entry). Every ORDINARY widget - a Button, a Combo, a Checkbox
-    // label, a plain Text call - draws in whatever font is currently bound
-    // at style.FontSizeBase, and Dear ImGui 1.92 multiplies that base by
-    // style.FontScaleMain for EVERY draw, including every ImGui::PushFont
-    // call in this codebase that passes an unscaled base size (imgui.h:
-    // "global scale factors are applied OVER the provided size"). Setting it
-    // here is what makes "Signal generator", "Refresh", "Look for network
-    // USRPs" and every other default-font control grow with S - without it,
-    // only the custom-drawn rail/chip/axis/patch text this change touched
-    // directly would have grown, and everything else would have stayed at
-    // 100% beside it, which is exactly the inconsistent result a first
-    // screenshot pass caught.
-    scaled.FontScaleMain = cascade::gui::uiscale::factor();
-    ImGui::GetStyle() = scaled;
+    applyUiScaleFromBase();
+    // THE MINIMUM WINDOW SIZE MOVES WITH S TOO (an Opus review, minor): set
+    // once at startup (kMinWindowW/H * the STARTING factor) and never again,
+    // a later Ctrl+=/Display-combo pick, or a drag to a higher-DPI monitor,
+    // left the OS enforcing a minimum sized for whatever S the window opened
+    // at - stale in either direction. Recomputed here every real change, and
+    // clamped to the CURRENT monitor's work area so a 200% saved on a 4K
+    // desk does not demand a 1248x800 minimum on a 1366x768 laptop the next
+    // time this profile opens there - the work area answer already governs
+    // what the FIRST window's size can be (above); a minimum past it would
+    // make the window impossible to shrink to fit its own screen.
+    if (mainWindow_ != nullptr) {
+        int areaW = 0, areaH = 0, unusedX = 0, unusedY = 0;
+        monitorWorkareaForWindow(mainWindow_, unusedX, unusedY, areaW, areaH);
+        int minW = static_cast<int>(cascade::gui::uiscale::px(static_cast<float>(kMinWindowW)));
+        int minH = static_cast<int>(cascade::gui::uiscale::px(static_cast<float>(kMinWindowH)));
+        if (areaW > 0) { minW = std::min(minW, areaW); }
+        if (areaH > 0) { minH = std::min(minH, areaH); }
+        glfwSetWindowSizeLimits(mainWindow_, minW, minH, GLFW_DONT_CARE, GLFW_DONT_CARE);
+    }
     cascade::core::diagLogf("interface size: %s -> %.0f%% (monitor reports %u dpi)",
                             cascade::gui::uiscale::choice().c_str(),
                             static_cast<double>(cascade::gui::uiscale::factor()) * 100.0,
@@ -6830,6 +6941,20 @@ void AppWindow::drawDisplaySection() {
             std::vector<const char*> scaleItems;
             scaleItems.reserve(scaleLabels.size());
             for (const std::string& s : scaleLabels) { scaleItems.push_back(s.c_str()); }
+            // WIDE ENOUGH FOR ITS OWN LONGEST ITEM (an Opus review's minor):
+            // the default item width clipped "Auto (follows Windows, 100%
+            // here)" in the closed combo's preview ("...100% h..."), the one
+            // item in this section whose text is longer than the ambient
+            // width was ever measured against. Measured from the actual
+            // strings, not a literal, so a translation longer than the
+            // English still fits.
+            {
+                float widest = 0.0f;
+                for (const char* item : scaleItems) {
+                    widest = std::max(widest, ImGui::CalcTextSize(item).x);
+                }
+                ImGui::SetNextItemWidth(widest + ImGui::GetFrameHeight() + 24.0f);
+            }
             if (ImGui::Combo(cascade::gui::labelAboveIfNeeded(trId("Interface size")), &scaleIndex,
                              scaleItems.data(), static_cast<int>(scaleItems.size()))) {
                 interfaceScale_ = scaleIndex == 0
@@ -12960,6 +13085,15 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
     namespace pg = cascade::gui::patch;
     namespace pc = cascade::core::patch;
     const float zoom = patchUi_.view.zoom;
+    // DRAW-TIME ONLY, like patch_view.cpp's `dv` (see its own note beside
+    // the View this composes into): `zoom` above stays the RAW, persisted
+    // value untouched - nothing in this function writes it back - and
+    // `drawZoom` is what every SCREEN-SPACE size and position below uses
+    // instead, so a node's plate grows with the interface size exactly as
+    // much as its face controls' TEXT already did (FontScaleMain, the
+    // PushFont two lines below - which must keep using the RAW `zoom`, not
+    // this, or the font would be scaled by S twice).
+    const float drawZoom = zoom * cascade::gui::uiscale::factor();
     // Below this the controls are too small to operate and are left off; the
     // readings the canvas draws itself stay, so a zoomed-out patch is still a
     // patch you can read.
@@ -12990,14 +13124,14 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
         }
     }
 
-    const pg::View v{pg::Vec2{originX + patchUi_.view.pan.x, originY + patchUi_.view.pan.y}, zoom};
+    const pg::View v{pg::Vec2{originX + patchUi_.view.pan.x, originY + patchUi_.view.pan.y}, drawZoom};
     const ImVec2 c0{originX, originY};
     const ImVec2 c1{originX + width, originY + height};
 
     // Scaled with the canvas, crisply: 1.92's PushFont takes a size.
     ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * zoom * 0.92f);
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(4.0f * zoom, 2.0f * zoom));
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.0f * zoom, 3.0f * zoom));
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(4.0f * drawZoom, 2.0f * drawZoom));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.0f * drawZoom, 3.0f * drawZoom));
     ImGui::PushClipRect(c0, c1, true);
     // What the faces' widgets push the window's layout extent out to is put
     // back afterwards: a face that overhangs the canvas must not give the page
@@ -13028,7 +13162,7 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
         // control cannot take a click past the edge; the layout extent the
         // widgets push out is restored at the end, so no scrollbar appears.
         if (s1.x <= c0.x || s0.x >= c1.x || s1.y <= c0.y || s0.y >= c1.y) { continue; }
-        const float faceW = s1.x - s0.x - 10.0f * zoom;
+        const float faceW = s1.x - s0.x - 10.0f * drawZoom;
         if (faceW < 40.0f) { continue; }
         // A FACE UNDER ANOTHER NODE IS CUT AWAY FROM IT. The canvas draws every
         // node's plate first and these contents afterwards, so without this a
@@ -13085,7 +13219,7 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
         // (a level, or a decoder's count), or at the top for kinds that have
         // no reading.
         const bool hasReadingLine = n.kind == pc::NodeKind::Channel;
-        const float top = s0.y + (hasReadingLine ? 22.0f : 4.0f) * zoom;
+        const float top = s0.y + (hasReadingLine ? 22.0f : 4.0f) * drawZoom;
         ImGui::PushID(static_cast<int>(n.id));
         // EACH FACE IS ITS OWN LITTLE PANEL: clipped to the face, wrapping at
         // its right edge, and grouped so every new line starts at the face's
@@ -13093,8 +13227,8 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
         // page's left margin - the first rendered check put a speaker's
         // channel name outside any node, on the bare canvas.
         ImGui::PushClipRect(ImVec2(v0.x, v0.y), ImVec2(v1.x, v1.y), true);
-        ImGui::PushTextWrapPos(s1.x - 4.0f * zoom - ImGui::GetWindowPos().x);
-        ImGui::SetCursorScreenPos(ImVec2(s0.x + 5.0f * zoom, top));
+        ImGui::PushTextWrapPos(s1.x - 4.0f * drawZoom - ImGui::GetWindowPos().x);
+        ImGui::SetCursorScreenPos(ImVec2(s0.x + 5.0f * drawZoom, top));
         ImGui::BeginGroup();
 
         switch (n.kind) {
@@ -13204,7 +13338,7 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
                         // A level bar: the newest block's peak, on the face's width.
                         const ImVec2 at = ImGui::GetCursorScreenPos();
                         const float barW = faceW;
-                        const float barH = 5.0f * zoom;
+                        const float barH = 5.0f * drawZoom;
                         const float pk = std::clamp(dest->peak(), 0.0f, 1.0f);
                         ImDrawList* dl = ImGui::GetWindowDrawList();
                         dl->AddRectFilled(at, ImVec2(at.x + barW, at.y + barH),
@@ -13308,10 +13442,10 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
                 const std::uint64_t specSeq = rspec->second.seq;
 
                 ImDrawList* dl = ImGui::GetWindowDrawList();
-                const float x0 = s0.x + 3.0f * zoom;
-                const float x1 = s1.x - 3.0f * zoom;
-                const float y0 = s0.y + 3.0f * zoom;
-                const float y1 = s1.y - 3.0f * zoom;
+                const float x0 = s0.x + 3.0f * drawZoom;
+                const float x1 = s1.x - 3.0f * drawZoom;
+                const float y0 = s0.y + 3.0f * drawZoom;
+                const float y1 = s1.y - 3.0f * drawZoom;
                 if (x1 - x0 < 20.0f || y1 - y0 < 20.0f) { break; }
                 const float traceH = (y1 - y0) * 0.38f;
                 // Two pixels a column and a row at most, and a hard cap, so a
@@ -13341,14 +13475,14 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
                 for (int c = 0; c < cols; ++c) {
                     const float t = pg::normalise(colsDb[static_cast<std::size_t>(c)], range);
                     pts.emplace_back(x0 + (static_cast<float>(c) + 0.5f) * colW,
-                                     y0 + traceH - t * (traceH - 2.0f * zoom));
+                                     y0 + traceH - t * (traceH - 2.0f * drawZoom));
                 }
                 dl->AddPolyline(pts.data(), static_cast<int>(pts.size()),
-                                cascade::gui::theme::kPhosphor, 0, 1.2f * zoom);
+                                cascade::gui::theme::kPhosphor, 0, 1.2f * drawZoom);
 
                 // The waterfall, newest at the top, in the main waterfall's
                 // own colour map.
-                const float wy0 = y0 + traceH + 2.0f * zoom;
+                const float wy0 = y0 + traceH + 2.0f * drawZoom;
                 const float cellH = (y1 - wy0) / static_cast<float>(rows);
                 for (int age = 0; age < hist.filled(); ++age) {
                     const float* row = hist.row(age);
@@ -13370,7 +13504,7 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
                     dl->AddLine(ImVec2(x0 + mx, y0), ImVec2(x0 + mx, y1),
                                 (cascade::gui::theme::kCream & 0x00FFFFFFu) | 0x90000000u, 1.0f);
                     if (label != nullptr) {
-                        dl->AddText(ImVec2(x0 + mx + 3.0f * zoom, y0 + 1.0f * zoom),
+                        dl->AddText(ImVec2(x0 + mx + 3.0f * drawZoom, y0 + 1.0f * drawZoom),
                                     cascade::gui::theme::kCream, label);
                     }
                 };
@@ -13452,7 +13586,7 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
                               ImGui::GetStyle().ItemSpacing.y;
                 }
                 const float mapH =
-                    s1.y - ImGui::GetCursorScreenPos().y - 4.0f * zoom - creditH;
+                    s1.y - ImGui::GetCursorScreenPos().y - 4.0f * drawZoom - creditH;
                 if (mapW > 40.0f && mapH > 40.0f) {
                     view->setTrailOptions(mapTrails_, mapTrailAltColours_);
                     view->setTrailStyle(mapTrailStyle_);
@@ -13516,10 +13650,10 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
                                  pic.img.pixels.data());
                     pic.texRev = pic.img.revision;
                 }
-                const float ax0 = s0.x + 4.0f * zoom;
-                const float ay0 = s0.y + 20.0f * zoom;
-                const float ax1 = s1.x - 4.0f * zoom;
-                const float ay1 = s1.y - 4.0f * zoom;
+                const float ax0 = s0.x + 4.0f * drawZoom;
+                const float ay0 = s0.y + 20.0f * drawZoom;
+                const float ax1 = s1.x - 4.0f * drawZoom;
+                const float ay1 = s1.y - 4.0f * drawZoom;
                 if (ax1 - ax0 < 8.0f || ay1 - ay0 < 8.0f) { break; }
                 const float sx = (ax1 - ax0) / static_cast<float>(pic.img.width);
                 const float sy = (ay1 - ay0) / static_cast<float>(pic.img.height);
@@ -13898,9 +14032,13 @@ void AppWindow::drawPatchView() {
         const ImVec2 origin = ImGui::GetCursorScreenPos();
 
         // The canvas takes what is left after the inspector, which is a fixed
-        // width: a panel that grew with the window would put the frequency box
-        // somewhere different on every machine.
-        constexpr float kInspectorW = 236.0f;
+        // width: a panel that grew with the WINDOW would put the frequency box
+        // somewhere different on every machine. Scaled by the interface size
+        // (an Opus review's M4) so its own heading and prose grow with
+        // everything else instead of being the one column in the patch view
+        // that stays pinned at 100% while its text does not - "This patch
+        // can[not] run" ran off the edge of the unscaled 236 px at S=2.
+        const float kInspectorW = cascade::gui::uiscale::px(236.0f);
         constexpr float kGap = 8.0f;
         const float canvasW = std::max(160.0f, avail.x - kInspectorW - kGap);
 
@@ -14019,10 +14157,15 @@ void AppWindow::drawPatchView() {
             // numbers.
             if (patchPlan_.runnable) {
                 ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::good());
-                ImGui::TextUnformatted(tr("This patch can run."));
+                // Wrapped, not TextUnformatted (an Opus review's M4): a plain
+                // TextUnformatted never wraps, so a translation a third
+                // longer than the English - or this same English at the
+                // interface size's larger fonts - ran the heading off the
+                // inspector's own edge instead of onto a second line.
+                ImGui::TextWrapped("%s", tr("This patch can run."));
             } else {
                 ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::bad());
-                ImGui::TextUnformatted(tr("This patch cannot run yet."));
+                ImGui::TextWrapped("%s", tr("This patch cannot run yet."));
             }
             ImGui::PopStyleColor();
             {
@@ -16547,7 +16690,11 @@ void AppWindow::drawSatelliteMapBody(MapPage& page) {
             x += kWorldW + 12.0f;
 
             ImFont* sf = cascade::gui::fonts::ui();
-            const float spx = cascade::gui::fonts::kTinySize;
+            // fonts::tinyPx(), not the bare constant (an Opus review's
+            // minor): both raw AddText calls below take this literally, with
+            // no FontScaleMain to rescue an unscaled size the way a PushFont
+            // call would.
+            const float spx = cascade::gui::fonts::tinyPx();
             const std::string followed = page.view->followedId();
             if (!followed.empty()) {
                 // THE KEY IS OFFERED WHEREVER IT FITS, AND THE INDICATOR IS
@@ -16578,8 +16725,7 @@ void AppWindow::drawSatelliteMapBody(MapPage& page) {
                             (textRight > x) ? (textRight - x) : 1.0f);
             } else {
                 dl->AddText(sf, spx,
-                            ImVec2(x, stripY + (kStripKeyH - cascade::gui::fonts::kTinySize) *
-                                                  0.5f),
+                            ImVec2(x, stripY + (kStripKeyH - spx) * 0.5f),
                             cascade::gui::theme::kInkFaint,
                             tr("The map moves on its own only while a target is followed."),
                             nullptr, pBR.x - kStripPad - x);
@@ -20277,9 +20423,13 @@ void AppWindow::drawDemodScopePage() {
                                       cascade::gui::theme::vec(cascade::gui::theme::legible(
                                           cascade::gui::theme::kPhosphor, cascade::gui::theme::kBrassDark)));
             }
-            // 84 px keys: a longer word is drawn smaller, not cut.
+            // 84 px keys (scaled by S): a longer word is drawn smaller, not
+            // cut - and the KEY ITSELF has to grow with the interface size or
+            // fittedButton has less and less room to fit even a short word
+            // into as S rises, cramming it small beside text everywhere else
+            // that did grow (an Opus review's B2 finding).
             if (cascade::gui::fittedButton(trId(cascade::gui::scopeSignalKey(s)),
-                                           ImVec2(84.0f, 0.0f))) {
+                                           ImVec2(cascade::gui::uiscale::px(84.0f), 0.0f))) {
                 demodScope_.signal = i;
             }
             if (on) { ImGui::PopStyleColor(2); }
@@ -20359,7 +20509,7 @@ void AppWindow::drawDemodScopePage() {
                                           cascade::gui::theme::kPhosphor, cascade::gui::theme::kBrassDark)));
             }
             if (cascade::gui::fittedButton(trId(cascade::gui::scopeDisplayKey(d)),
-                                           ImVec2(84.0f, 0.0f))) {
+                                           ImVec2(cascade::gui::uiscale::px(84.0f), 0.0f))) {
                 demodScope_.display = i;
             }
             if (on) { ImGui::PopStyleColor(2); }
@@ -23722,8 +23872,11 @@ void AppWindow::drawKeyBindingsSection() {
     // them can say - the capture prompt, which is longer than any chord - so a
     // column of keys is a column and not a ragged edge. Measured every frame
     // rather than typed as a number, because a font change would otherwise
-    // clip the widest word without anything failing.
-    const float px = cascade::gui::fonts::kTinySize;
+    // clip the widest word without anything failing. fonts::tinyPx(), not the
+    // bare constant (an Opus review's minor): every cap below is drawn with
+    // raw AddText at this literal size, so an unscaled `px` pinned the whole
+    // page's key caps to S=1 regardless of the interface size.
+    const float px = cascade::gui::fonts::tinyPx();
     ImFont* f = cascade::gui::fonts::ui();
     // Translated once, here, so the width measured and the word drawn are
     // the same string.

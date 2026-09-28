@@ -166,25 +166,42 @@ void drawPatchCanvas(Graph& g, Interaction& ui, const core::patch::Plan& plan,
         ui.dirty = true;
     }
 
+    // THE INTERFACE SIZE COMPOSES WITH THE PATCH'S OWN ZOOM AT DRAW TIME
+    // ONLY: `v` above is the canvas's raw pan/zoom state - the value
+    // persisted, and the value zoomAbout reads and writes above - and must
+    // stay exactly that, or the interface scale would get silently baked
+    // into a saved patch the first time the user scroll-wheel-zooms it (the
+    // risk round 2 flagged and the reason this was deferred then). `dv` is a
+    // SEPARATE view for drawing and hit-testing, recomputed every frame from
+    // the CURRENT interface factor and stored nowhere: a node's plate, its
+    // ports, its wires and its face controls (app_window.cpp's
+    // drawPatchFaces, which composes the same factor onto the same
+    // patchUi_.view.zoom) all grow together, closing the gap an Opus review
+    // found (M4): the face's TEXT already grew via FontScaleMain while the
+    // PLATE stayed at `zoom` alone, so "RADIO  Radio" ran half off its own
+    // header and "Signal generator" wrapped inside a box that never grew to
+    // fit it.
+    const View dv{v.pan, v.zoom * cascade::gui::uiscale::factor()};
+
     // --- the grid -------------------------------------------------------------
     // Drawn in world units so it scrolls and scales with the patch. A grid
     // fixed to the screen instead makes a canvas feel like the nodes are
     // sliding over wallpaper rather than being somewhere.
     {
-        const float step = kGridWorld * v.zoom;
+        const float step = kGridWorld * dv.zoom;
         if (step >= 6.0f) {  // below this it is just a wash of lines
-            const float x0 = origin.x - std::fmod(origin.x - v.pan.x, step);
+            const float x0 = origin.x - std::fmod(origin.x - dv.pan.x, step);
             for (float x = x0; x < br.x; x += step) {
                 dl->AddLine(ImVec2{x, origin.y}, ImVec2{x, br.y}, theme::kEnamelDark);
             }
-            const float y0 = origin.y - std::fmod(origin.y - v.pan.y, step);
+            const float y0 = origin.y - std::fmod(origin.y - dv.pan.y, step);
             for (float y = y0; y < br.y; y += step) {
                 dl->AddLine(ImVec2{origin.x, y}, ImVec2{br.x, y}, theme::kEnamelDark);
             }
         }
     }
 
-    const Vec2 mouseWorld = screenToWorld(v, vv(io.MousePos));
+    const Vec2 mouseWorld = screenToWorld(dv, vv(io.MousePos));
 
     // --- the wires ------------------------------------------------------------
     // Under the nodes, always. A wire crossing a node's face would read as
@@ -197,9 +214,9 @@ void drawPatchCanvas(Graph& g, Interaction& ui, const core::patch::Plan& plan,
         const Node* src = g.find(w.from);
         const ImU32 col = portColour(src->outputs[w.fromPort]);
         const bool sel = ui.wireSelected && ui.selectedWire == w;
-        dl->AddBezierCubic(iv(worldToScreen(v, e.from)), iv(worldToScreen(v, c1)),
-                           iv(worldToScreen(v, c2)), iv(worldToScreen(v, e.to)),
-                           sel ? theme::kIvory : col, (sel ? 3.0f : 1.8f) * v.zoom, 0);
+        dl->AddBezierCubic(iv(worldToScreen(dv, e.from)), iv(worldToScreen(dv, c1)),
+                           iv(worldToScreen(dv, c2)), iv(worldToScreen(dv, e.to)),
+                           sel ? theme::kIvory : col, (sel ? 3.0f : 1.8f) * dv.zoom, 0);
     }
 
     // The wire being dragged, following the pointer.
@@ -214,16 +231,16 @@ void drawPatchCanvas(Graph& g, Interaction& ui, const core::patch::Plan& plan,
             // the moment of release.
             if (ui.wireFrom.input) {
                 wireCurve(mouseWorld, a, c1, c2);
-                dl->AddBezierCubic(iv(worldToScreen(v, mouseWorld)),
-                                   iv(worldToScreen(v, c1)), iv(worldToScreen(v, c2)),
-                                   iv(worldToScreen(v, a)), theme::kInkMuted,
-                                   1.6f * v.zoom, 0);
+                dl->AddBezierCubic(iv(worldToScreen(dv, mouseWorld)),
+                                   iv(worldToScreen(dv, c1)), iv(worldToScreen(dv, c2)),
+                                   iv(worldToScreen(dv, a)), theme::kInkMuted,
+                                   1.6f * dv.zoom, 0);
             } else {
                 wireCurve(a, mouseWorld, c1, c2);
-                dl->AddBezierCubic(iv(worldToScreen(v, a)), iv(worldToScreen(v, c1)),
-                                   iv(worldToScreen(v, c2)),
-                                   iv(worldToScreen(v, mouseWorld)), theme::kInkMuted,
-                                   1.6f * v.zoom, 0);
+                dl->AddBezierCubic(iv(worldToScreen(dv, a)), iv(worldToScreen(dv, c1)),
+                                   iv(worldToScreen(dv, c2)),
+                                   iv(worldToScreen(dv, mouseWorld)), theme::kInkMuted,
+                                   1.6f * dv.zoom, 0);
             }
         }
     }
@@ -233,8 +250,8 @@ void drawPatchCanvas(Graph& g, Interaction& ui, const core::patch::Plan& plan,
     for (const Node& n : g.nodes()) {
         const Vec2 tl{n.x, n.y};
         const Vec2 size2 = nodeSize(n);
-        const ImVec2 a = iv(worldToScreen(v, tl));
-        const ImVec2 b = iv(worldToScreen(v, Vec2{tl.x + size2.x, tl.y + size2.y}));
+        const ImVec2 a = iv(worldToScreen(dv, tl));
+        const ImVec2 b = iv(worldToScreen(dv, Vec2{tl.x + size2.x, tl.y + size2.y}));
         drawNodePlate(dl, a, b, ui.selected == n.id);
         if (core::patch::hasBlockingProblem(plan, n.id)) {
             // The EDGE, not the plate. The plate is brass because the node
@@ -246,20 +263,20 @@ void drawPatchCanvas(Graph& g, Interaction& ui, const core::patch::Plan& plan,
 
         // The caption, engraved into the brass. The 11.0f base grows with the
         // interface-scale factor (gui/ui_scale.hpp) the same way every other
-        // caption in the application does; v.zoom is this CANVAS's own,
+        // caption in the application does; dv.zoom is this CANVAS's own,
         // separate, mouse-wheel zoom, and the two multiply together rather
         // than one replacing the other - a user can have a small interface
         // and a zoomed-in patch, or the reverse.
-        const float cap = 11.0f * cascade::gui::uiscale::factor() * v.zoom;
+        const float cap = 11.0f * dv.zoom;
         if (cap >= 5.0f) {
             char title[96];
             cascade::core::formatUtf8(title, sizeof(title), "%s  %s", kindCaption(n.kind), n.name.c_str());
             // Clipped short of the close key, so a long name never runs
             // under it.
             const Rect ck = closeKeyRect(n);
-            const ImVec2 ck0 = iv(worldToScreen(v, Vec2{ck.x0, ck.y0}));
+            const ImVec2 ck0 = iv(worldToScreen(dv, Vec2{ck.x0, ck.y0}));
             dl->PushClipRect(a, ImVec2{ck0.x - 2.0f, b.y}, true);
-            dl->AddText(font, cap, ImVec2{a.x + 7.0f * v.zoom, a.y + 5.0f * v.zoom},
+            dl->AddText(font, cap, ImVec2{a.x + 7.0f * dv.zoom, a.y + 5.0f * dv.zoom},
                         theme::kEngraved, title);
             dl->PopClipRect();
         }
@@ -267,34 +284,34 @@ void drawPatchCanvas(Graph& g, Interaction& ui, const core::patch::Plan& plan,
         // THE CLOSE KEY, engraved like the caption and ivory under the
         // pointer - the bench's "this is live" cue, not a warning colour,
         // because closing a node is an ordinary act, not a fault.
-        if (v.zoom >= 0.5f) {
+        if (dv.zoom >= 0.5f) {
             const Rect ck = closeKeyRect(n);
-            const ImVec2 c0 = iv(worldToScreen(v, Vec2{ck.x0, ck.y0}));
-            const ImVec2 c1 = iv(worldToScreen(v, Vec2{ck.x1, ck.y1}));
-            const bool over = pointInCloseKey(n, screenToWorld(v, vv(io.MousePos)));
+            const ImVec2 c0 = iv(worldToScreen(dv, Vec2{ck.x0, ck.y0}));
+            const ImVec2 c1 = iv(worldToScreen(dv, Vec2{ck.x1, ck.y1}));
+            const bool over = pointInCloseKey(n, screenToWorld(dv, vv(io.MousePos)));
             const ImU32 col = over ? theme::kIvory : theme::kEngraved;
-            const float in = 3.5f * v.zoom;
+            const float in = 3.5f * dv.zoom;
             dl->AddLine(ImVec2{c0.x + in, c0.y + in}, ImVec2{c1.x - in, c1.y - in}, col,
-                        1.4f * v.zoom);
+                        1.4f * dv.zoom);
             dl->AddLine(ImVec2{c1.x - in, c0.y + in}, ImVec2{c0.x + in, c1.y - in}, col,
-                        1.4f * v.zoom);
+                        1.4f * dv.zoom);
         }
 
         // THE GRIP: three short diagonals in the bottom-right corner, where
         // pointInResizeGrip() looks for it.
-        if (v.zoom >= 0.5f) {
+        if (dv.zoom >= 0.5f) {
             for (int k = 1; k <= 3; ++k) {
-                const float d = 3.5f * static_cast<float>(k) * v.zoom;
-                dl->AddLine(ImVec2{b.x - d - 2.0f * v.zoom, b.y - 2.0f * v.zoom},
-                            ImVec2{b.x - 2.0f * v.zoom, b.y - d - 2.0f * v.zoom},
+                const float d = 3.5f * static_cast<float>(k) * dv.zoom;
+                dl->AddLine(ImVec2{b.x - d - 2.0f * dv.zoom, b.y - 2.0f * dv.zoom},
+                            ImVec2{b.x - 2.0f * dv.zoom, b.y - d - 2.0f * dv.zoom},
                             theme::kBrassTint, 1.0f);
             }
         }
 
         // The well under it: the node's live face. Empty when nothing has been
         // measured or decoded - a figure nobody computed is worse than none.
-        const ImVec2 wa{a.x + 6.0f * v.zoom, a.y + (kHeaderHeight - 2.0f) * v.zoom};
-        const ImVec2 wb{b.x - 6.0f * v.zoom, b.y - 6.0f * v.zoom};
+        const ImVec2 wa{a.x + 6.0f * dv.zoom, a.y + (kHeaderHeight - 2.0f) * dv.zoom};
+        const ImVec2 wb{b.x - 6.0f * dv.zoom, b.y - 6.0f * dv.zoom};
         if (wb.x > wa.x && wb.y > wa.y) {
             dl->AddRectFilled(wa, wb, theme::kWell, theme::kKeyRounding);
 
@@ -305,9 +322,9 @@ void drawPatchCanvas(Graph& g, Interaction& ui, const core::patch::Plan& plan,
             // that a caption may be engraved and a live figure may not.
             for (const NodeReading& r : readings) {
                 if (r.node != n.id) { continue; }
-                const float fs = 13.0f * cascade::gui::uiscale::factor() * v.zoom;
+                const float fs = 13.0f * dv.zoom;
                 if (fs < 6.0f) { break; }
-                const ImVec2 at{wa.x + 5.0f * v.zoom, wa.y + 3.0f * v.zoom};
+                const ImVec2 at{wa.x + 5.0f * dv.zoom, wa.y + 3.0f * dv.zoom};
                 if (r.hasDb) {
                     char txt[24];
                     std::snprintf(txt, sizeof(txt), "%.0f dB", static_cast<double>(r.db));
@@ -324,7 +341,7 @@ void drawPatchCanvas(Graph& g, Interaction& ui, const core::patch::Plan& plan,
                         dl->PushClipRect(wa, wb, true);
                         dl->AddText(font, fs * 0.92f,
                                     ImVec2{at.x, at.y + fs * 1.35f}, theme::kPhosphor,
-                                    r.text.c_str(), nullptr, (wb.x - at.x) - 4.0f * v.zoom);
+                                    r.text.c_str(), nullptr, (wb.x - at.x) - 4.0f * dv.zoom);
                         dl->PopClipRect();
                     }
                 }
@@ -333,14 +350,14 @@ void drawPatchCanvas(Graph& g, Interaction& ui, const core::patch::Plan& plan,
         }
 
         // The ports, on the edges where the hit test looks for them.
-        const float r = 4.0f * v.zoom;
+        const float r = 4.0f * dv.zoom;
         for (PortIndex i = 0; i < static_cast<PortIndex>(n.inputs.size()); ++i) {
-            const ImVec2 p = iv(worldToScreen(v, inputPortPos(n, i)));
+            const ImVec2 p = iv(worldToScreen(dv, inputPortPos(n, i)));
             dl->AddCircleFilled(p, r, portColour(n.inputs[i]), 12);
             dl->AddCircle(p, r, theme::kEnamelDark, 12, 1.0f);
         }
         for (PortIndex i = 0; i < static_cast<PortIndex>(n.outputs.size()); ++i) {
-            const ImVec2 p = iv(worldToScreen(v, outputPortPos(n, i)));
+            const ImVec2 p = iv(worldToScreen(dv, outputPortPos(n, i)));
             dl->AddCircleFilled(p, r, portColour(n.outputs[i]), 12);
             dl->AddCircle(p, r, theme::kEnamelDark, 12, 1.0f);
         }
@@ -384,7 +401,7 @@ void drawPatchCanvas(Graph& g, Interaction& ui, const core::patch::Plan& plan,
                 for (const Wire& w : g.wires()) {
                     const WireEnds e = wireEnds(g, w);
                     if (!e.found) { continue; }
-                    if (distanceToWire(e.from, e.to, mouseWorld) * v.zoom <= kWireGrabPx) {
+                    if (distanceToWire(e.from, e.to, mouseWorld) * dv.zoom <= kWireGrabPx) {
                         ui.selectedWire = w;
                         ui.wireSelected = true;
                         break;
@@ -465,7 +482,7 @@ void drawPatchCanvas(Graph& g, Interaction& ui, const core::patch::Plan& plan,
 
     // --- the refusal ----------------------------------------------------------
     if (ui.refusal != Connect::Ok && ImGui::GetTime() - ui.refusedAt < kRefusalHoldSec) {
-        const ImVec2 at = iv(worldToScreen(v, ui.refusedNear));
+        const ImVec2 at = iv(worldToScreen(dv, ui.refusedNear));
         const char* msg = refusalText(ui.refusal);
         const ImVec2 sz = ImGui::CalcTextSize(msg);
         const ImVec2 pad{6.0f, 3.0f};

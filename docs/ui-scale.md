@@ -298,6 +298,178 @@ strictly between the two measured cases (ratios 1.286/1.571 broken vs.
 1.5/2.0 fixed) and were checked against both by hand before being committed
 - see the test's own comment for the numbers.
 
+## Round 4: an Opus review - theme/scale composition, a squared font, and five
+more surfaces
+
+Rounds 1-3 were reviewed end to end (identity, hit-testing, persistence, the
+patch's own zoom, and the full suites all separately confirmed passing) and
+still came back REJECTED: two blocking bugs and five surfaces still wrong at
+non-trivial window sizes.
+
+**B1 - theme and interface size fought each other.** `applyPendingUiScale`
+kept its "unscaled style" baseline as a snapshot captured ONCE, ever, on its
+first call. `theme::applyTheme()` (theme.cpp) writes UNSCALED sizes
+(`WindowPadding`, `FramePadding`, ...) and the NEW theme's colours straight
+into the live `ImGuiStyle` on every theme change, with no idea the interface
+can be scaled - and the stale baseline never learned about either. Pick
+Daylight Lab, then 150%: the scale change rebuilt the style from the STALE
+baseline (whichever theme was live the first time the function ever ran,
+always "Today" in practice), so Daylight Lab's colours vanished. Pick a theme
+while already at 150%: `applyTheme()`'s own unscaled numbers overwrote the
+live style and nothing afterwards ever rescaled them, so the padding reset to
+100%. Fixed by extracting the compose step into a pure, independently-tested
+function, `cascade::gui::uiscale::composeStyle(unscaledBase, factor)`
+(`gui/ui_style_compose.hpp`): `AppWindow::applyPendingTheme` now
+re-baselines on whatever `applyTheme()` just wrote and immediately re-composes
+at the CURRENT factor, and `applyPendingUiScale` composes from that same,
+continuously-refreshed baseline. Either order now converges on the same
+style - this theme's colours, sizes at the current S.
+`tests/test_ui_scale.cpp::testThemeAndScaleComposeRegardlessOfOrder` drives
+the REAL `theme::applyTheme()` through both orders and checks both the
+colours and the sizes land the same either way, and separately reproduces
+round 3's stale-baseline design to show it fails exactly what the fix passes
+(mismatched colours one way, unscaled padding the other).
+
+**B2 - `fittedButton`/`sameLineFittedText` scaled text by S twice.** Both
+measured against `ImGui::GetFontSize()` - Dear ImGui 1.92's CURRENT rendered
+size, already `FontSizeBase * FontScaleMain * ...` - fitted a smaller size
+against that, and then pushed the fitted result straight into `PushFont`,
+whose own size argument is documented as the PRE-FontScaleMain base. ImGui
+reapplies `FontScaleMain` to whatever is pushed, so an S-scaled fit became an
+S^2 one: at 200% a button captioned "AUDIO" rendered so oversized only "AUI"
+fit inside its own frame ("SPE" for SPECTRUM, "VEC" for VECTOR, "AV" for
+AVERAGE, "PER" for PERSIST - the demod scope's own signal/display keys).
+Fixed with one shared function both callers route through,
+`pushSizeForRenderedFit(fittedPx)` (`text_fit.hpp`), which divides the
+already-fitted size back out by `uiscale::factor()` before it reaches
+`PushFont` - at S=1 this is `fittedPx / 1.0f`, bit-exact. Audited every other
+`GetFontSize()`-then-`PushFont` pattern in the codebase (`grep -rn
+"GetFontSize()"` across `gui/`): every other site feeds a raw
+`ImDrawList::AddText`/`ImFont::CalcTextSizeA` call, which takes its size
+literally and needed no change - only these two functions had the bug.
+Also fixed in the same pass: the demod scope's own signal/display keys were
+84 px wide, unscaled (`ImVec2(84.0f, 0.0f)`) - now `uiscale::px(84.0f)`, so
+the key itself grows enough to give `fittedButton` more than a sliver of room
+as S rises. `tests/test_text_fit.cpp::
+testFittedSizeDoesNotDoubleScaleWithInterfaceSize` proves the ImGui contract
+directly (`PushFont`/`GetFontSize`/`PopFont`, real font, real style) at S =
+1.0/1.5/2.0, and proves it goes RED by pushing the undivided size and showing
+ImGui renders it wrong at S>1 (checked with a tolerance of one rounded pixel,
+`IM_ROUND` in `imgui.cpp`'s `UpdateCurrentFontSize` - Dear ImGui rounds every
+computed font size to the nearest whole pixel, which is not the bug and
+would fail a tighter check for the wrong reason).
+
+**M3 - the plugin store's SORT row and its search legend.** `drawSegment`
+(the NAME/MAKER/VERSION segmented control) drew its label centred at one
+fixed size with no fit and no clip - at the interface size's larger fonts
+"MAKER" ran into "VERSION". Fixed by fitting through `text_fit.hpp`, the
+same as every other bench control. The "Searches name, maker and
+description." legend was measured for `tinyH` (one line) when it draws
+WRAPPED to `wellInner` - at a large enough font it wraps to two lines, and
+the reserved height for one line let "0 OF 0 MODULES KNOWN" start where the
+second line still was. Fixed by reserving `wrapH(uf, tiny, wellInner,
+searchLegend)` (the actual wrapped height) instead of a flat one-line
+constant, in both the deck's own height budget and the advance after drawing
+it.
+
+**M4 - patch node PLATES did not grow with S while their FACE CONTROLS did.**
+The node face's controls (`AppWindow::drawPatchFaces`) are bound through
+`PushFont(nullptr, FontSizeBase * zoom * 0.92f)` - `FontSizeBase` is the
+PRE-scale base, so `FontScaleMain` correctly adds S on top, and the controls
+grow with the interface size exactly as everything else does. The PLATE
+around them (drawn by `patch_view.cpp`'s `drawPatchCanvas`, from the same
+`zoom` with no `S` at all - deliberately, round 2, to avoid ever baking S
+into the user's PERSISTED patch zoom) never grew to match: "RADIO  Radio" ran
+half off its own header, "Signal generator" wrapped inside a box that never
+grew to fit it, and "Ready - press START." vanished. Fixed by composing S
+onto zoom AT DRAW TIME ONLY, in a value that is never written back:
+`patch_view.cpp` keeps its real `View v` (the one `zoomAbout` reads and
+writes, untouched) and adds `const View dv{v.pan, v.zoom *
+uiscale::factor()}` right after the pan/zoom block, then every drawing and
+hit-testing call in the rest of the function - the node box, ports, wires,
+captions - was renamed onto `dv`; the two font-size sites that had their own
+explicit `* uiscale::factor()` (now redundant, since `dv.zoom` carries it)
+had that removed. `app_window.cpp`'s `drawPatchFaces` gets the same
+treatment: `const float drawZoom = zoom * uiscale::factor();`, used for
+every SCREEN-SPACE size and position except the font `PushFont` two lines
+below, which must keep the RAW `zoom` (FontScaleMain already adds S there;
+adding it twice would be B2 again in a new place). Verified by reproducing
+the review's own repro config (`patch200drag`'s saved `config.json`, copied
+verbatim) at 200%: "RADIO  Radio", "ON  Signal generator", "0.000000 MHz"
+and "Ready - press START." all now sit inside a plate sized to hold them,
+each on one line. The side panel's own heading ("This patch can[not] run")
+is drawn as `TextWrapped` now rather than `TextUnformatted` (which never
+wraps), and the panel's own width (`kInspectorW`, previously a bare 236.0f)
+is `uiscale::px(236.0f)` - both were part of the same M4 finding, the
+heading running off the panel's edge at S=2.
+
+**M5 - first launch at 200% opened a 640x360-logical-pixel window.** Nothing
+in `AppConfig` persists a window size, so EVERY launch - not only the very
+first - created the GLFW window at a fixed 1280x720 REAL pixels regardless of
+the interface size. At S=2 that is a 640x360 window in the logical units
+everything else is laid out in: cramped past useless. Fixed right after the
+window's initial content-scale detection (still hidden, so no visible jump):
+the window is resized to `1280*S x 720*S`, clamped to the WORK AREA of the
+monitor it actually landed on (`monitorWorkareaForWindow`, a new shared
+helper - GLFW has no direct "which monitor is a windowed, non-fullscreen
+window on" query, so it is found the same way GLFW's own DPI logic would,
+by which monitor's rect contains the window's position), so a 200% saved on
+a 4K desk does not ask a 1366x768 laptop for a bigger window than its own
+screen. At S=1 this is exactly 1280x720, unchanged - verified by screenshot
+(1282x745, the established S=1 baseline dimensions) - and at S=2 on this
+desktop's monitor it opened at 2562x1417 (2560x1440 minus the taskbar).
+Window-size PERSISTENCE itself (the review's own "if cheap") was left undone
+- there is no saved width/height field in `AppConfig` today, and adding one
+is a feature addition beyond this round's scope, not a one-line fix.
+
+**Minors addressed**: `glfwSetWindowSizeLimits` is now re-applied inside
+`applyPendingUiScale` itself (not only once at startup), through the same
+`monitorWorkareaForWindow` helper, so a LATER scale change - Ctrl+=/-, the
+Display combo, or a drag to a different-DPI monitor - never leaves the OS
+enforcing a minimum sized for whatever S the window happened to open at, and
+never demands a minimum larger than the monitor the window is now on has to
+give. Three more unscaled-text sites the round 1/2 sweeps missed: the rail's
+own group-caption fit basis (`addBenchGroupCaption`, `scope_view.cpp`) and
+its reserved row height (`benchGroup`, `app_window.cpp`) both read
+`fonts::kTinySize` instead of `fonts::tinyPx()`, capping every "SIGNAL PATH"/
+"DECODE"-style rail caption at S=1 forever (`fitTextPx` only ever shrinks its
+input, never grows it); the satellite tracking page's "FOLLOWING %s" /
+"The map moves on its own only while a target is followed." strip text, and
+the key-binding help page's own cap-width measurement, both raw `AddText`
+calls reading the bare constant with no `FontScaleMain` to rescue them. The
+Display section's "Auto (follows Windows, 100% here)" combo item, clipped in
+the closed preview at 100% ("...100% h..."), is now measured and the combo
+widened to its own longest item (`ImGui::CalcTextSize` over every item,
+`SetNextItemWidth` before the `Combo` call) rather than shortening the
+English (which would have needed retranslating in all 33 catalogs for a
+combo-width problem, not a translation-length one). The demod scope's own
+readout row (`demod_scope_face.cpp`'s `addReadouts`) had the same shape of
+bug as M3's SORT row: the left-aligned signal caption was drawn at one fixed
+size with no fit and no idea the centre-aligned time/span reading existed,
+and overprinted it on a small enough face at S=2 ("DEMODULATED AUDIO"
+running into "10 ms/DIV") - fixed by settling the centre reading's bounds
+FIRST, then fitting the caption (and the display-mode word beside it) to the
+room left before it.
+
+**Not resolved this round, noted rather than hidden**: the waterfall's own
+foot line (`waterfall_view.cpp::drawFootLines`, the "100.3000 MHz WFM -
+STOPPED" plate) was found genuinely clipped by the window's own bottom edge
+in a short, wide window at 200% (1920x1040) - reproduced and confirmed by
+zooming into the captured pixels (the plate's border and the descenders of
+"STOPPED" are cut, not merely tight). The function's own height budget
+(`waterfallHeight`, computed from `ImGui::GetContentRegionAvail()` at the
+top of the receiver view's draw call) and its existing "no room; better
+nothing than a clipped half-sentence" bail-out both look internally
+consistent against the `h` they are given; the discrepancy is between that
+`h` and the TRUE remaining space in the window, which points at the split
+between the spectrum and waterfall panels (or something drawn after the
+point `avail.y` is read) rather than at `drawFootLines` itself. Given the
+review's own bundling of this with two explicitly-optional items (numpad
++/- for the interface-scale shortcuts, listing them in the key-binding help)
+and the time this round already ran to, it was investigated and reproduced
+but not chased into the layout-budget code with any confidence of a correct
+fix, rather than shipping a guess.
+
 ## What is fully routed through `S`
 
 - The whole font/ImGui-style mechanism above (every ordinary ImGui widget -

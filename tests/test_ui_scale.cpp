@@ -16,7 +16,9 @@
 #include <cmath>
 #include <cstdio>
 
+#include "gui/theme.hpp"
 #include "gui/ui_scale.hpp"
+#include "gui/ui_style_compose.hpp"
 #include "test_check.hpp"
 
 using namespace cascade::gui::uiscale;
@@ -171,6 +173,130 @@ void testLiveStateChangeTracking() {
     CHECK(!consumeChanged());
 }
 
+// --- 7. THEME AND SCALE COMPOSE, IN EITHER ORDER (an Opus review, round 4,
+// "B1"). gui/app_window.cpp's applyPendingTheme and applyPendingUiScale both
+// funnel through gui::uiscale::composeStyle(baseline, factor) - see
+// gui/ui_style_compose.hpp for the full story - re-baselining on whatever
+// theme::applyTheme() just wrote every time either one runs. This is that
+// composition, checked against the REAL theme module (not a stand-in), for
+// both orders: picking a theme then changing the scale, and changing the
+// scale then picking a theme. Before the fix, composeStyle() itself did not
+// exist - applyPendingUiScale kept a function-local static baseline captured
+// ONCE, ever, so "theme then scale" lost the theme's colours (reverted to
+// whichever theme was live the very first time the function ran) and "scale
+// then theme" reset the padding to 100% (applyTheme's own unscaled numbers
+// overwrote the live style with nothing downstream ever rescaling them).
+void testThemeAndScaleComposeRegardlessOfOrder() {
+    std::printf("  theme-then-scale and scale-then-theme converge on the same "
+               "style: this theme's colours, sizes at the CURRENT S\n");
+    namespace th = cascade::gui::theme;
+
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO();
+    io.DisplaySize = ImVec2(800.0f, 600.0f);
+    io.DeltaTime = 1.0f / 60.0f;
+    io.IniFilename = nullptr;
+    io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures;
+    io.Fonts->AddFontDefault();
+
+    // Ground truth: Daylight Lab's own colours and this application's own
+    // unscaled sizes, straight from the real theme module with nothing else
+    // in play (S is not a concept theme.cpp knows about).
+    th::setTheme(th::ThemeId::Daylight);
+    th::applyTheme();
+    const ImGuiStyle daylightUnscaled = ImGui::GetStyle();
+    const ImVec4 daylightWindowBg = daylightUnscaled.Colors[ImGuiCol_WindowBg];
+    const ImVec4 daylightText = daylightUnscaled.Colors[ImGuiCol_Text];
+    // The premise: Daylight Lab is a genuinely different palette from Today's
+    // (the default this process would otherwise still be in), or this test
+    // would pass even with B1 present.
+    th::setTheme(th::ThemeId::Today);
+    th::applyTheme();
+    const ImVec4 todayWindowBg = ImGui::GetStyle().Colors[ImGuiCol_WindowBg];
+    CHECK(daylightWindowBg.x != todayWindowBg.x || daylightWindowBg.y != todayWindowBg.y ||
+         daylightWindowBg.z != todayWindowBg.z);
+
+    const float s = 1.5f;
+
+    // ORDER A: theme, then scale. This is applyPendingTheme's own sequence
+    // (theme::applyTheme(), then re-baseline, then compose) followed by
+    // applyPendingUiScale's (compose again from the SAME baseline, S changed).
+    th::setTheme(th::ThemeId::Daylight);
+    th::applyTheme();
+    ImGuiStyle baseA = ImGui::GetStyle();  // "refreshUiStyleBase()"
+    ImGui::GetStyle() = composeStyle(baseA, 1.0f);   // applyPendingTheme's own re-compose, S unchanged
+    ImGui::GetStyle() = composeStyle(baseA, s);      // applyPendingUiScale, S -> 1.5
+    const ImGuiStyle themeThenScale = ImGui::GetStyle();
+
+    // ORDER B: scale, then theme. Start back at Today so the scale change has
+    // something concrete to compose against first.
+    th::setTheme(th::ThemeId::Today);
+    th::applyTheme();
+    ImGuiStyle baseToday = ImGui::GetStyle();
+    ImGui::GetStyle() = composeStyle(baseToday, s);  // applyPendingUiScale, S -> 1.5, Today's colours
+    // Now the theme changes WHILE S is already 1.5 - applyPendingTheme's real
+    // sequence: theme::applyTheme() overwrites the live style (colours AND
+    // unscaled sizes) regardless of what was live a moment ago, then
+    // re-baseline on THAT, then re-compose at the CURRENT (unchanged) factor.
+    th::setTheme(th::ThemeId::Daylight);
+    th::applyTheme();
+    ImGuiStyle baseB = ImGui::GetStyle();
+    ImGui::GetStyle() = composeStyle(baseB, s);
+    const ImGuiStyle scaleThenTheme = ImGui::GetStyle();
+
+    // BOTH ORDERS must land on Daylight Lab's colours...
+    const auto sameColour = [](const ImVec4& a, const ImVec4& b) {
+        return std::fabs(a.x - b.x) < 1e-6f && std::fabs(a.y - b.y) < 1e-6f &&
+              std::fabs(a.z - b.z) < 1e-6f && std::fabs(a.w - b.w) < 1e-6f;
+    };
+    CHECK(sameColour(themeThenScale.Colors[ImGuiCol_WindowBg], daylightWindowBg));
+    CHECK(sameColour(scaleThenTheme.Colors[ImGuiCol_WindowBg], daylightWindowBg));
+    CHECK(sameColour(themeThenScale.Colors[ImGuiCol_Text], daylightText));
+    CHECK(sameColour(scaleThenTheme.Colors[ImGuiCol_Text], daylightText));
+    // ...and sizes scaled by 1.5, not left at 100% - both padding fields
+    // ScaleAllSizes touches, and FontScaleMain, which is the field a theme
+    // apply used to reset to whatever theme.cpp left it (never touched at
+    // all, i.e. stuck at the CreateContext default of 1.0).
+    CHECK_NEAR(themeThenScale.WindowPadding.x, daylightUnscaled.WindowPadding.x * s, 0.01f);
+    CHECK_NEAR(themeThenScale.FramePadding.x, daylightUnscaled.FramePadding.x * s, 0.01f);
+    CHECK_NEAR(themeThenScale.FontScaleMain, s, 0.001f);
+    CHECK_NEAR(scaleThenTheme.WindowPadding.x, daylightUnscaled.WindowPadding.x * s, 0.01f);
+    CHECK_NEAR(scaleThenTheme.FramePadding.x, daylightUnscaled.FramePadding.x * s, 0.01f);
+    CHECK_NEAR(scaleThenTheme.FontScaleMain, s, 0.001f);
+
+    // PROVEN TO GO RED against the pre-fix design: reproduce round 3's
+    // function-local-static baseline (captured once, from Today, and never
+    // refreshed by a theme change) and show it fails exactly what the fix
+    // above passes.
+    {
+        const ImGuiStyle staleBase = baseToday;  // "captured once, at Today"
+        // "theme then scale" under the OLD code: theme::applyTheme() runs
+        // (Daylight's colours land in the live style token this line), but
+        // the STALE (Today) baseline is what the scale change composes from -
+        // so the colours it produces come from staleBase, i.e. Today's, not
+        // Daylight's.
+        th::setTheme(th::ThemeId::Daylight);
+        th::applyTheme();
+        const ImGuiStyle staleComposed = composeStyle(staleBase, s);
+        CHECK(!sameColour(staleComposed.Colors[ImGuiCol_WindowBg], daylightWindowBg));
+        CHECK(sameColour(staleComposed.Colors[ImGuiCol_WindowBg], todayWindowBg));
+        // "scale then theme" under the OLD code: applyPendingTheme had no
+        // re-baseline/re-compose step at all, so a theme pick left the style
+        // exactly as theme::applyTheme() wrote it - unscaled padding, even
+        // though FontScaleMain (a field applyTheme() never touches) is still
+        // sitting at `s` from the line before - the inconsistent, half-scaled
+        // result an Opus review's B1 actually described.
+        ImGui::GetStyle() = composeStyle(staleBase, s);  // scale applied once, correctly
+        th::setTheme(th::ThemeId::Daylight);
+        th::applyTheme();  // OLD CODE: nothing composes afterwards
+        CHECK(std::fabs(ImGui::GetStyle().WindowPadding.x - daylightUnscaled.WindowPadding.x * s) > 0.5f);
+        CHECK_NEAR(ImGui::GetStyle().WindowPadding.x, daylightUnscaled.WindowPadding.x, 0.01f);
+    }
+
+    ImGui::DestroyContext();
+}
+
 }  // namespace
 
 int main() {
@@ -181,6 +307,7 @@ int main() {
     testNearestStep();
     testDpiToPercent();
     testLiveStateChangeTracking();
+    testThemeAndScaleComposeRegardlessOfOrder();
     // Leave the global state at its default for any test binary that link-
     // shares this translation unit's statics with another (it does not here -
     // one executable per test_*.cpp - but the habit costs nothing).
