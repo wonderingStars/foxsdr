@@ -26,6 +26,7 @@
 #include <thread>
 #include <vector>
 
+#include "core/diag_log.hpp"
 #include "core/hang_watchdog.hpp"
 #include "sdrplay_fake_api.hpp"
 #include "source/sdrplay_source.hpp"
@@ -219,11 +220,12 @@ void testOpenSelectInitOrderAndParameters() {
     // THE STATE THE RADIO IS ACTUALLY STARTED IN, snapshotted by the fake at
     // the moment of Init rather than read afterwards.
     CHECK(fake.atInit.taken);
-    // 2 MS/s is produced from the 6 MHz front end at the 1.62 MHz IF, not from
-    // a 2 MHz ADC rate - the reference's own arrangement, and getting it wrong
-    // puts the receiver 1.62 MHz off frequency.
-    CHECK_NEAR(fake.atInit.fsHz, 6000000.0, 1.0);
-    CHECK(fake.atInit.ifType == abi::IF_1_620);
+    // 2 MS/s is the API's own default ADC rate at zero IF, nothing decimated
+    // (0.99.44). Until then it was the reference's 6 MHz front end at the
+    // 1.62 MHz IF, which two RSP2 field logs show delivering 6 MS/s - see
+    // testEveryRatePlanDeliversTheRateItClaims.
+    CHECK_NEAR(fake.atInit.fsHz, 2000000.0, 1.0);
+    CHECK(fake.atInit.ifType == abi::IF_Zero);
     CHECK(fake.atInit.decEnable == 0);
     CHECK(fake.atInit.decFactor == 1);
     CHECK_NEAR(fake.atInit.rfHz, 100000000.0, 1.0);
@@ -828,6 +830,82 @@ void testALostSessionRefusesTheOtherRadiosSettingsToo() {
     b.closeDevice();
 }
 
+// THE TEARDOWN OF THE OTHER RADIO, the half the test above left out (GitHub
+// issue 5, the 0.99.43 RSP2 report, 2026-09-28). A lost session means "no
+// further SDRplay API calls are made until FoxSDR is restarted" - the log says
+// exactly that - but only start(), open(), the scan and the setters asked the
+// table. stop() and closeDevice() asked this object's own flags, so a second
+// radio still streaming when the first one lost the session went into
+// sdrplay_api_Uninit, ReleaseDevice and Close on the dead service: three more
+// unbounded calls, each of which the 0.99.43 log shows taking five seconds to
+// answer ServiceNotResponding on the GUI thread (15:40:19.9 to 15:40:24.9).
+void testALostSessionKeepsTheOtherRadiosTeardownOffTheVendorDll() {
+    FakeSdrPlayApi fake;
+    fake.addDevice("2305000AAA", abi::kRsp2);
+    fake.addDevice("2305000BBB", abi::kRsp2);
+    SdrPlaySource a;
+    SdrPlaySource b;
+    CHECK(openOn(a, fake, "index=0"));
+    CHECK(a.start());
+    CHECK(openOn(b, fake, "index=1"));
+    CHECK(b.start());
+
+    // A's stop answers ServiceNotResponding, as the report's did: A is dead
+    // and the process's session is lost.
+    fake.uninitResult = abi::ServiceNotResponding;
+    a.stop();
+    CHECK(a.deviceDead());
+    fake.uninitResult = abi::Success;  // anything B sends from here would be taken
+
+    const int uninitBefore = fake.countStarting("Uninit");
+    const int releaseBefore = fake.countStarting("ReleaseDevice");
+    const int closeBefore = fake.closeCount;
+    b.stop();
+    b.closeDevice();
+    const int uninits = fake.countStarting("Uninit") - uninitBefore;
+    const int releases = fake.countStarting("ReleaseDevice") - releaseBefore;
+    std::printf("B's teardown after A lost the session: %d Uninit, %d ReleaseDevice, %d Close\n",
+                uninits, releases, fake.closeCount - closeBefore);
+    CHECK(uninits == 0);
+    CHECK(releases == 0);
+    CHECK(fake.closeCount == closeBefore);
+    CHECK(!b.running());
+    CHECK(!b.isOpen());
+    a.closeDevice();
+}
+
+// AND THE LINE THE LOG KEEPS OF A REFUSED OPEN MUST STILL SAY WHAT TO DO. The
+// 0.99.43 report's 15:42:47.168 line ends "...until it is restarted - restart "
+// because the session sentence, prefixed with "source: SDRplay open failed - ",
+// is longer than a log line (DiagLog::kLineBytes). The panel had the whole
+// sentence; the log - which is what reaches us - lost the instruction.
+void testARefusedOpenAfterALossLogsTheWholeInstruction() {
+    FakeSdrPlayApi fake;
+    fake.addDevice("2305000CCC", abi::kRsp2);
+    {
+        SdrPlaySource a;
+        CHECK(openOn(a, fake));
+        CHECK(a.start());
+        fake.uninitResult = abi::ServiceNotResponding;
+        a.stop();
+        a.closeDevice();
+    }
+    SdrPlaySource other;
+    CHECK(!openOn(other, fake));
+    std::string line;
+    for (const std::string& l : cascade::core::DiagLog::instance().ringSnapshot()) {
+        if (l.find("SDRplay open") != std::string::npos) { line = l; }
+    }
+    std::printf("the refused open's log line: %s\n", line.c_str());
+    CHECK(!line.empty());
+    CHECK(line.size() < static_cast<std::size_t>(cascade::core::DiagLog::kLineBytes) - 1u);
+    CHECK(line.find("restart the SDRplay API service, then") != std::string::npos);
+    CHECK(line.find("FoxSDR") != std::string::npos);
+    // ...and what the panel shows is still the whole sentence.
+    CHECK(std::string(other.lastError()) ==
+          std::string(cascade::source::sdrPlaySessionLostSentence()));
+}
+
 void testTheSameRadioReopenedAfterALossTakesSettingsAgain() {
     for (int way = 0; way < 2; ++way) {
         const bool stall = (way == 1);
@@ -1209,31 +1287,125 @@ void testAntennasPerModel() {
 
 // --- 8. rates and decimation ----------------------------------------------
 
+// EVERY PLAN DELIVERS THE RATE IT IS FILED UNDER, by the only arithmetic the
+// SDRplay API specification gives (v3.15, sdrplay_api_Init: the processing
+// chain is ReadUSBdata, DCoffsetCorrection, Agc, DownConvert, Decimate,
+// IQimbalanceCorrection - and of those only Decimate is said to change the
+// rate). That makes the output fsHz / decimationFactor in ZERO-IF, and
+// nothing in the specification says what it is in LOW-IF.
+//
+// WHY THIS IS A TEST (GitHub issue 5, the 0.99.43 RSP2 report). Until 0.99.44
+// 2 MS/s was produced as SoapySDRPlay3 does it - a 6 MHz ADC at the 1.62 MHz
+// low IF - on the reference's assumption that the service then hands over
+// 2 MS/s. Two RSP2 field logs say it handed over the ADC rate instead: the
+// 0.99.27 log's first minute is 359978976 samples in 178561 blocks of 2016
+// (6.0 MS/s), and the 0.99.43 log is 168956928 samples in 83808 blocks of
+// 2016 in the 28.2 s before the stream stopped (6.0 MS/s) - while FoxSDR
+// called the radio 2 MS/s and built its whole chain for that. A plan whose
+// output rate is fsHz / decM leaves no room for that disagreement.
+void testEveryRatePlanDeliversTheRateItClaims() {
+    for (const double r : cascade::source::sdrPlaySupportedRatesHz()) {
+        SdrPlayRatePlan p;
+        CHECK(cascade::source::sdrPlayRatePlan(r, p));
+        const double delivered = p.fsHz / static_cast<double>(p.decEnable != 0 ? p.decM : 1u);
+        const bool zeroIf = p.ifType == abi::IF_Zero;
+        if (!zeroIf || std::fabs(delivered - r) > 0.5) {
+            std::printf("     %.0f S/s: fsHz %.0f, IF %d, decimation %u (%s) delivers %.0f S/s\n", r,
+                        p.fsHz, static_cast<int>(p.ifType), p.decM,
+                        p.decEnable != 0 ? "on" : "off", delivered);
+        }
+        CHECK(zeroIf);
+        CHECK_NEAR(delivered, r, 0.5);
+        // The API's own default ADC rate is its floor here (spec: fsHz
+        // "default: 2000000.0"), and decimation is on exactly when it divides.
+        CHECK(p.fsHz >= 2000000.0 - 0.5);
+        CHECK((p.decEnable != 0) == (p.decM > 1));
+        CHECK(p.decM == 1 || p.decM == 2 || p.decM == 4 || p.decM == 8 || p.decM == 16 ||
+              p.decM == 32);
+    }
+}
+
+// THE DISAGREEMENT IS SAID IN THE LOG WHEN IT HAPPENS ANYWAY. Whatever the
+// plan, the service is the authority on what it delivers; if the samples that
+// arrive run at a rate far from the one FoxSDR set, the next report must say
+// so in words rather than leave it to be worked out from the health line's
+// arithmetic, as issue 5's was.
+void testADeliveredRateFarFromTheSetOneIsSaid() {
+    for (int way = 0; way < 2; ++way) {
+        const bool triple = (way == 0);
+        FakeSdrPlayApi fake;
+        fake.addDevice("2305000DDD", abi::kRsp2);
+        SdrPlaySource src;
+        CHECK(openOn(src, fake));
+        CHECK_NEAR(src.sampleRateHz(), 2000000.0, 1.0);
+        CHECK(src.start());
+        // Just over a second of blocks of 2016, at three times the set rate
+        // (the report) or at the set rate (the control), paced against the
+        // clock so the measured span is real.
+        const unsigned int kBlockN = 2016;
+        std::vector<short> xi(kBlockN, 100);
+        std::vector<short> xq(kBlockN, -100);
+        std::vector<std::complex<float>> buf(1u << 16);
+        const double rate = triple ? 6000000.0 : 2000000.0;
+        const auto t0 = std::chrono::steady_clock::now();
+        double sent = 0.0;
+        for (;;) {
+            const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+            if (elapsed > 1.25) { break; }
+            while (sent < elapsed * rate) {
+                fake.pushSamples(xi.data(), xq.data(), kBlockN);
+                sent += kBlockN;
+                while (src.read(buf.data(), buf.size()) == buf.size()) {}
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        while (src.read(buf.data(), buf.size()) > 0) {}
+        cascade::core::DiagLog::instance().resetForTest();
+        src.stop();
+        std::string said;
+        for (const std::string& l : cascade::core::DiagLog::instance().ringSnapshot()) {
+            if (l.find("delivered") != std::string::npos) { said = l; }
+        }
+        std::printf("%s: %s\n", triple ? "three times the set rate" : "the set rate",
+                    said.empty() ? "(nothing said)" : said.c_str());
+        if (triple) {
+            CHECK(!said.empty());
+            CHECK(said.find("2000000 S/s") != std::string::npos);
+        } else {
+            CHECK(said.empty());
+        }
+        src.closeDevice();
+    }
+}
+
 void testRatePlans() {
-    // THE TABLE THE REFERENCE USES, and the distinction that matters: the
-    // binary fractions of 2 MS/s come from the 6 MHz LOW-IF front end, and the
-    // audio rates from a ZERO-IF front end run fast and decimated. Mixing them
-    // up puts the receiver 1.62 MHz off frequency.
+    // THE TABLE, all of it zero-IF since 0.99.44: the binary fractions of
+    // 2 MS/s are the 2 MS/s ADC decimated by powers of two, and the audio
+    // rates a 3.072 MS/s ADC decimated. Until 0.99.44 the binary fractions
+    // came from the reference's 6 MHz LOW-IF front end, which this test used
+    // to pin; the RSP2 field logs in testEveryRatePlanDeliversTheRateItClaims
+    // are why it no longer does.
     SdrPlayRatePlan p;
 
     CHECK(cascade::source::sdrPlayRatePlan(2000000.0, p));
-    CHECK_NEAR(p.fsHz, 6000000.0, 1.0);
-    CHECK(p.ifType == abi::IF_1_620);
+    CHECK_NEAR(p.fsHz, 2000000.0, 1.0);
+    CHECK(p.ifType == abi::IF_Zero);
     CHECK(p.decEnable == 0);
     CHECK(p.decM == 1);
     CHECK(p.bwType == abi::BW_1_536);
 
     CHECK(cascade::source::sdrPlayRatePlan(62500.0, p));
-    CHECK_NEAR(p.fsHz, 6000000.0, 1.0);
-    CHECK(p.ifType == abi::IF_1_620);
+    CHECK_NEAR(p.fsHz, 2000000.0, 1.0);
+    CHECK(p.ifType == abi::IF_Zero);
     CHECK(p.decEnable == 1);
     CHECK(p.decM == 32);
+    CHECK(p.wideBandSignal == 1);
     CHECK(p.bwType == abi::BW_0_200);
 
     CHECK(cascade::source::sdrPlayRatePlan(500000.0, p));
     CHECK(p.decM == 4);
-    CHECK(p.ifType == abi::IF_1_620);
-    CHECK_NEAR(p.fsHz, 6000000.0, 1.0);
+    CHECK(p.ifType == abi::IF_Zero);
+    CHECK_NEAR(p.fsHz, 2000000.0, 1.0);
 
     CHECK(cascade::source::sdrPlayRatePlan(384000.0, p));
     CHECK(p.ifType == abi::IF_Zero);
@@ -1295,12 +1467,13 @@ void testSetSampleRateWritesThePlanInOneUpdate() {
     CHECK(fake.chA.tunerParams.ifType == abi::IF_Zero);
     CHECK(fake.chA.tunerParams.bwType == abi::BW_8_000);
     CHECK(fake.chA.ctrlParams.decimation.enable == 0);
-    // ONE Update carrying every reason that changed. Three separate ones would
-    // be three disturbances to a live stream for what the API does at once.
+    // ONE Update carrying every reason that changed - and ONLY those: the
+    // radio starts at zero IF since 0.99.44, so the IF type is not among them
+    // (it was, from the old 1.62 MHz low-IF start).
     CHECK(fake.calls.size() == 1);
     CHECK((fake.calls ==
           std::vector<std::string>{FakeSdrPlayApi::updateCall(
-              abi::Update_Dev_Fs | abi::Update_Tuner_IfType | abi::Update_Tuner_BwType, 0)}));
+              abi::Update_Dev_Fs | abi::Update_Tuner_BwType, 0)}));
 
     fake.calls.clear();
     CHECK(src.setSampleRateHz(384000.0));
@@ -2808,6 +2981,8 @@ int main() {
     testAgc();
     testAntennasPerModel();
     testRatePlans();
+    testEveryRatePlanDeliversTheRateItClaims();
+    testADeliveredRateFarFromTheSetOneIsSaid();
     testSetSampleRateWritesThePlanInOneUpdate();
     testStreamingDeliversEverySampleInOrder();
     testStreamHealthLine();
@@ -2837,6 +3012,8 @@ int main() {
     testALostSessionIsNeverEnteredAgainByAScanOrAnOpen();
     testALostRadioTakesNoSettingAtAll();
     testALostSessionRefusesTheOtherRadiosSettingsToo();
+    testALostSessionKeepsTheOtherRadiosTeardownOffTheVendorDll();
+    testARefusedOpenAfterALossLogsTheWholeInstruction();
     testTheSameRadioReopenedAfterALossTakesSettingsAgain();
     testAUserStopIsNotAStall();
     // LAST, and deliberately: it abandons a worker inside its own fake and
