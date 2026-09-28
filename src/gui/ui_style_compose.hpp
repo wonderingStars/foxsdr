@@ -56,6 +56,42 @@ inline ImGuiStyle composeStyle(const ImGuiStyle& unscaledBase, float factor) {
     return scaled;
 }
 
+// Runs a theme pick's full effect on the live style and its baseline, and is
+// the ONE thing both AppWindow::applyPendingTheme and this file's own test
+// call - not a hand-copied reimplementation of it (an Opus review, round 5,
+// finding 2: the previous test drove a copy of the sequence, so deleting the
+// re-baseline/compose calls from the real applyPendingTheme left it green).
+//
+// THE BUG THIS CLOSES (round 5, finding 1). theme::applyTheme() writes only
+// the ~20 size fields it explicitly assigns (WindowPadding, FramePadding,
+// the rounding/border fields, ...) - the other ~25 ScaleAllSizes() also
+// scales (IndentSpacing, WindowMinSize, CellPadding, TabMinWidthBase,
+// ScrollbarPadding, SeparatorTextPadding, DisplayWindowPadding,
+// WindowBorderHoverPadding, MouseCursorScale, ...) are left exactly as the
+// LIVE style already had them. Round 4's fix re-baselined on whatever
+// applyTheme() had just written WITHOUT first restoring the live style to
+// the last known-UNSCALED baseline - so on a second theme pick at S != 1,
+// those ~25 untouched fields were still sitting at the PREVIOUS pick's
+// SCALED values, got captured into the "unscaled" baseline as if they were
+// unscaled, and were scaled again on top: at S=200%, three theme picks in a
+// row walked IndentSpacing 21 -> 42 -> 84 -> 168, and dropping back to 100%
+// afterwards left it at 84, not the pristine 21.
+//
+// THE FIX: restore the live style to `base` FIRST, whenever a baseline has
+// ever been captured, so `writeTheme` (theme::setTheme + theme::applyTheme,
+// passed in by the caller) always starts from genuinely unscaled numbers -
+// the fields it does not touch are then still correct when they are
+// recaptured as the new baseline a moment later.
+template <typename WriteThemeFn>
+inline void applyThemeComposed(WriteThemeFn&& writeTheme, ImGuiStyle& base, bool& baseCaptured,
+                                float factor) {
+    if (baseCaptured) { ImGui::GetStyle() = base; }
+    writeTheme();
+    base = ImGui::GetStyle();
+    baseCaptured = true;
+    ImGui::GetStyle() = composeStyle(base, factor);
+}
+
 }  // namespace cascade::gui::uiscale
 
 #endif  // CASCADE_GUI_UI_STYLE_COMPOSE_HPP

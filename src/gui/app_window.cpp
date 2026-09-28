@@ -1303,17 +1303,27 @@ int AppWindow::run(int frames) {
     // window bigger than its own screen. S=1: exactly 1280x720, unchanged -
     // the clamp is a no-op on any monitor with at least that much work area,
     // which is every supported monitor.
+    //
+    // THE WORK AREA WINS EVEN OVER THE SCALED MINIMUM (an Opus review, round
+    // 5, finding 5): round 4 clamped to the work area and THEN floored at
+    // scaledMinW/H, which could put the floor itself back over a small
+    // monitor's work area (200% on a 1366x768 laptop: a 1248x800 minimum
+    // against a work area of roughly 1366x728) - and did so silently, by
+    // resizing the window without ever moving it. firstLaunchWindowGeometry
+    // (gui/ui_scale.hpp) re-clamps to the work area AFTER the floor and
+    // keeps the window's whole rectangle on screen.
     if (cascade::gui::uiscale::factor() != 1.0f) {
         int areaX = 0, areaY = 0, areaW = 0, areaH = 0;
         monitorWorkareaForWindow(window, areaX, areaY, areaW, areaH);
         const double s = static_cast<double>(cascade::gui::uiscale::factor());
-        int wantW = static_cast<int>(std::lround(1280.0 * s));
-        int wantH = static_cast<int>(std::lround(720.0 * s));
-        if (areaW > 0) { wantW = std::min(wantW, areaW); }
-        if (areaH > 0) { wantH = std::min(wantH, areaH); }
-        wantW = std::max(wantW, scaledMinW);
-        wantH = std::max(wantH, scaledMinH);
-        glfwSetWindowSize(window, wantW, wantH);
+        const int desiredW = static_cast<int>(std::lround(1280.0 * s));
+        const int desiredH = static_cast<int>(std::lround(720.0 * s));
+        int curX = 0, curY = 0;
+        glfwGetWindowPos(window, &curX, &curY);
+        const cascade::gui::uiscale::WindowGeometry geom = cascade::gui::uiscale::firstLaunchWindowGeometry(
+            curX, curY, areaX, areaY, areaW, areaH, desiredW, desiredH, scaledMinW, scaledMinH);
+        glfwSetWindowSize(window, geom.w, geom.h);
+        glfwSetWindowPos(window, geom.x, geom.y);
     }
     // FOXSDR_WINDOW_SIZE="1920x1080" (captures): the window at an exact size,
     // so a picture taken for the Store or the website is the size they need
@@ -6753,17 +6763,24 @@ void AppWindow::applyPendingTheme() {
     if (!themeApplyPending_) { return; }
     themeApplyPending_ = false;
     const cascade::gui::theme::ThemeId id = cascade::gui::theme::themeFromKey(uiThemeKey_);
-    cascade::gui::theme::setTheme(id);
-    cascade::gui::theme::applyTheme();
-    cascade::gui::fonts::setPreferredPair(cascade::gui::theme::preferredFontPair(id));
-    // applyTheme() just wrote UNSCALED sizes (WindowPadding, FramePadding,
-    // ...) and THIS theme's colours straight into the live style - it has no
-    // idea the interface can be scaled. Re-baseline on that, then re-impose
-    // whatever interface scale is already in effect, so a theme change never
-    // resets the padding to 100% while S != 1 (B1, see the note above
-    // applyUiScaleFromBase).
-    refreshUiStyleBase();
-    applyUiScaleFromBase();
+    // Everything AROUND theme::applyTheme() - restoring the live style to
+    // the last unscaled baseline FIRST, then re-baselining on what
+    // applyTheme() just wrote, then re-composing at the current interface
+    // factor - is gui::uiscale::applyThemeComposed (ui_style_compose.hpp),
+    // the SAME function tests/test_ui_scale.cpp drives against the real
+    // theme::applyTheme(). Fixed an Opus review, round 5, finding 1: without
+    // the restore-first step, a theme's own ~20 unscaled size fields were
+    // fine, but the ~25 OTHER fields ScaleAllSizes() also scales
+    // (IndentSpacing, WindowMinSize, CellPadding, TabMinWidthBase, ...) were
+    // left at whatever the PREVIOUS pick had already scaled them to, got
+    // captured as if unscaled, and compounded once per pick.
+    cascade::gui::uiscale::applyThemeComposed(
+        [&]() {
+            cascade::gui::theme::setTheme(id);
+            cascade::gui::theme::applyTheme();
+            cascade::gui::fonts::setPreferredPair(cascade::gui::theme::preferredFontPair(id));
+        },
+        g_uiStyleBase, g_uiStyleBaseCaptured, cascade::gui::uiscale::factor());
     // The waterfall follows on its next draw or line, whichever comes first
     // (a stopped receiver still draws): WaterfallView::followTheme sees the
     // generation move and repaints the rows already on screen in the new
@@ -13020,14 +13037,22 @@ void AppWindow::applyInputScript(long frame) {
     while (inputScriptPos_ < inputScript_.size() && inputScript_[inputScriptPos_].frame <= frame) {
         const cascade::gui::ScriptStep& st = inputScript_[inputScriptPos_];
         switch (st.verb) {
-            case cascade::gui::ScriptStep::Verb::World:
-                // Last frame's canvas placement and this frame's view: the
-                // same transform the canvas will draw with.
-                scriptMouseX_ = patchCanvasOriginX_ + patchUi_.view.pan.x + st.x * patchUi_.view.zoom;
-                scriptMouseY_ = patchCanvasOriginY_ + patchUi_.view.pan.y + st.y * patchUi_.view.zoom;
+            case cascade::gui::ScriptStep::Verb::World: {
+                // Last frame's canvas placement and this frame's view, through
+                // the SAME transform the canvas actually draws with - zoom
+                // composed with the interface-size factor, never the raw
+                // patch zoom alone (an Opus review, round 5, finding 4; see
+                // gui::patch::drawView's own note for why a hand-composed
+                // zoom*factor here could drift from the drawing again).
+                const cascade::gui::patch::Vec2 screenPt = cascade::gui::patch::worldToScreen(
+                    cascade::gui::patch::drawView(patchUi_.view, cascade::gui::uiscale::factor()),
+                    cascade::gui::patch::Vec2{st.x, st.y});
+                scriptMouseX_ = patchCanvasOriginX_ + screenPt.x;
+                scriptMouseY_ = patchCanvasOriginY_ + screenPt.y;
                 scriptMouseSet_ = true;
                 io.AddMousePosEvent(scriptMouseX_, scriptMouseY_);
                 break;
+            }
             case cascade::gui::ScriptStep::Verb::Screen:
                 scriptMouseX_ = st.x;
                 scriptMouseY_ = st.y;
@@ -14043,9 +14068,17 @@ void AppWindow::drawPatchView() {
         const float canvasW = std::max(160.0f, avail.x - kInspectorW - kGap);
 
         // THE PRESS FROM THE PARTS BIN, placed now that the canvas has a size.
+        // newPartPosition must be given the SAME transform the canvas is
+        // actually drawn with - zoom composed with the interface-size factor
+        // (gui::patch::drawView) - not the raw patch zoom: at S != 1 the
+        // canvas paints at zoom*S while a raw-zoom placement computes as if
+        // it were unscaled, landing the new node off-canvas exactly the way
+        // 0.99.16's desktop/canvas mix-up did (an Opus review, round 5,
+        // finding 3).
         if (pressedPart >= 0 || pressedDecoder >= 0) {
             const cascade::gui::patch::Vec2 at = cascade::gui::patch::newPartPosition(
-                patchUi_.view, canvasW, avail.y, nodesPlaced_);
+                cascade::gui::patch::drawView(patchUi_.view, cascade::gui::uiscale::factor()), canvasW,
+                avail.y, nodesPlaced_);
             if (pressedPart >= 0) {
                 const Part& p = kParts[pressedPart];
                 // A new radio starts on a device nothing else is using - the

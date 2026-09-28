@@ -190,6 +190,27 @@ inline Vec2 screenToWorld(const View& v, Vec2 s) {
     return Vec2{(s.x - v.pan.x) / v.zoom, (s.y - v.pan.y) / v.zoom};
 }
 
+// THE ONE TRANSFORM DRAWING AND PLACEMENT BOTH GO THROUGH (an Opus review,
+// round 5, findings 3-4). `v` is the patch's own PERSISTED view - pan and
+// zoom exactly as zoomAbout reads and writes them, and exactly as they are
+// serialised into a saved patch, deliberately never touched by the interface
+// size (round 2: baking S into a saved zoom would make a patch re-open at a
+// different apparent zoom on a different monitor). `uiFactor` is that
+// interface-size S, composed onto the zoom AT DRAW TIME ONLY - the result is
+// never written back into `v`. gui/app_window.cpp's drawPatchFaces has kept
+// this composition correct since round 4 (its own local `drawZoom`); rounds
+// 3-16-era bugs happened at the OTHER call sites that convert between world
+// and screen space without it - a part dropped from the parts bin
+// (newPartPosition, fed the raw view while the canvas was PAINTED at
+// zoom*S - a node placed as if the canvas were unscaled then rendered
+// through the scaled transform, landing off-canvas exactly the way 0.99.16
+// did with the desktop/canvas confusion) and the input-script `World` verb
+// (mapped world->screen with the raw zoom, so a scripted click and the pixel
+// it actually lands on disagreed at S != 1). Both must build their View
+// through this function rather than composing zoom*uiFactor by hand, so a
+// third call site can never drift from the two that already agree.
+inline View drawView(const View& v, float uiFactor) { return View{v.pan, v.zoom * uiFactor}; }
+
 // Zoom about a fixed SCREEN point, so the thing under the pointer stays under
 // the pointer. Zooming about the origin instead is the version that makes a
 // canvas feel like it is fighting you.

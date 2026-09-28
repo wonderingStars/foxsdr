@@ -297,6 +297,195 @@ void testThemeAndScaleComposeRegardlessOfOrder() {
     ImGui::DestroyContext();
 }
 
+// --- 8. A THEME PICK MUST NOT COMPOUND THE FIELDS IT NEVER TOUCHES (an Opus
+// review, round 5, finding 1). theme::applyTheme() writes only the ~20 size
+// fields it explicitly assigns (WindowPadding, FramePadding, the
+// rounding/border fields, ...); the other ~25 ScaleAllSizes() also scales
+// (IndentSpacing, WindowMinSize, CellPadding, TabMinWidthBase, ...) are left
+// exactly as the live style already had them. This drives
+// gui::uiscale::applyThemeComposed (ui_style_compose.hpp) - the SAME
+// function AppWindow::applyPendingTheme calls, not a hand-copied
+// reimplementation of its sequence (finding 2: the previous version of this
+// test copied the sequence, so deleting the fix from the real
+// applyPendingTheme left it green) - against the REAL theme::applyTheme(),
+// through three theme picks at 200% and back to 100%, in both possible
+// orders relative to the first scale change.
+void testThemePickDoesNotCompoundUntouchedFields() {
+    std::printf("  three theme picks at 200%% do not compound IndentSpacing/"
+               "WindowMinSize/CellPadding/TabMinWidthBase; 100%% restores the "
+               "pristine ImGui defaults\n");
+    namespace th = cascade::gui::theme;
+
+    const auto freshContext = []() {
+        IMGUI_CHECKVERSION();
+        ImGui::CreateContext();
+        ImGuiIO& io = ImGui::GetIO();
+        io.DisplaySize = ImVec2(800.0f, 600.0f);
+        io.DeltaTime = 1.0f / 60.0f;
+        io.IniFilename = nullptr;
+        io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures;
+        io.Fonts->AddFontDefault();
+    };
+
+    // ImGui's own compiled-in defaults (imgui.cpp's ImGuiStyle constructor) -
+    // theme::applyTheme() never touches these four, so at S=1, after any
+    // number of theme picks and scale changes, they must be EXACTLY these,
+    // not merely close.
+    constexpr float kDefaultIndent = 21.0f;
+    constexpr float kDefaultWindowMinSize = 32.0f;
+    constexpr float kDefaultCellPadding = 4.0f;
+    constexpr float kDefaultTabMinWidthBase = 1.0f;
+    // theme.cpp's own literals - touched by applyTheme, so at S=1 they must
+    // come back to exactly these (the assignment is unconditional and
+    // identical for every ThemeId).
+    constexpr float kThemeWindowPaddingX = 10.0f;
+    constexpr float kThemeFramePaddingX = 8.0f;
+
+    const float s = 2.0f;
+
+    // --- ORDER A: the interface size is ALREADY 200% before the first theme
+    // ever applies (a saved config loaded before the user picks a theme) -
+    // exactly applyPendingUiScale's own scale-only sequence, composeStyle
+    // straight from whatever the live style already is.
+    {
+        freshContext();
+        ImGuiStyle base = ImGui::GetStyle();
+        bool baseCaptured = true;
+        ImGui::GetStyle() = composeStyle(base, s);
+
+        for (int i = 0; i < 3; ++i) {
+            const th::ThemeId id = (i % 2 == 0) ? th::ThemeId::Daylight : th::ThemeId::Today;
+            cascade::gui::uiscale::applyThemeComposed(
+                [&]() { th::setTheme(id); th::applyTheme(); }, base, baseCaptured, s);
+            CHECK_NEAR(ImGui::GetStyle().IndentSpacing, kDefaultIndent * s, 0.01f);
+            CHECK_NEAR(ImGui::GetStyle().WindowMinSize.x, kDefaultWindowMinSize * s, 0.01f);
+            CHECK_NEAR(ImGui::GetStyle().CellPadding.x, kDefaultCellPadding * s, 0.01f);
+            CHECK_NEAR(ImGui::GetStyle().TabMinWidthBase, kDefaultTabMinWidthBase * s, 0.01f);
+        }
+        ImGui::GetStyle() = composeStyle(base, 1.0f);  // back to 100%
+        CHECK_NEAR(ImGui::GetStyle().IndentSpacing, kDefaultIndent, 0.01f);
+        CHECK_NEAR(ImGui::GetStyle().WindowMinSize.x, kDefaultWindowMinSize, 0.01f);
+        CHECK_NEAR(ImGui::GetStyle().WindowMinSize.y, kDefaultWindowMinSize, 0.01f);
+        CHECK_NEAR(ImGui::GetStyle().CellPadding.x, kDefaultCellPadding, 0.01f);
+        CHECK_NEAR(ImGui::GetStyle().TabMinWidthBase, kDefaultTabMinWidthBase, 0.01f);
+        CHECK_NEAR(ImGui::GetStyle().WindowPadding.x, kThemeWindowPaddingX, 0.01f);
+        CHECK_NEAR(ImGui::GetStyle().FramePadding.x, kThemeFramePaddingX, 0.01f);
+        ImGui::DestroyContext();
+    }
+
+    // --- ORDER B: a theme is picked once at S=1 (a normal startup), THEN the
+    // interface size jumps to 200%, THEN the user browses two more themes -
+    // the sequence an actual session produces.
+    {
+        freshContext();
+        ImGuiStyle base{};
+        bool baseCaptured = false;
+        cascade::gui::uiscale::applyThemeComposed(
+            [&]() { th::setTheme(th::ThemeId::Today); th::applyTheme(); }, base, baseCaptured, 1.0f);
+        ImGui::GetStyle() = composeStyle(base, s);  // the scale-only path, S -> 2.0
+        for (int i = 0; i < 2; ++i) {
+            const th::ThemeId id = (i == 0) ? th::ThemeId::Daylight : th::ThemeId::Today;
+            cascade::gui::uiscale::applyThemeComposed(
+                [&]() { th::setTheme(id); th::applyTheme(); }, base, baseCaptured, s);
+        }
+        CHECK_NEAR(ImGui::GetStyle().IndentSpacing, kDefaultIndent * s, 0.01f);
+        CHECK_NEAR(ImGui::GetStyle().WindowMinSize.x, kDefaultWindowMinSize * s, 0.01f);
+        CHECK_NEAR(ImGui::GetStyle().CellPadding.x, kDefaultCellPadding * s, 0.01f);
+        CHECK_NEAR(ImGui::GetStyle().TabMinWidthBase, kDefaultTabMinWidthBase * s, 0.01f);
+        ImGui::GetStyle() = composeStyle(base, 1.0f);
+        CHECK_NEAR(ImGui::GetStyle().IndentSpacing, kDefaultIndent, 0.01f);
+        CHECK_NEAR(ImGui::GetStyle().WindowMinSize.x, kDefaultWindowMinSize, 0.01f);
+        CHECK_NEAR(ImGui::GetStyle().CellPadding.x, kDefaultCellPadding, 0.01f);
+        CHECK_NEAR(ImGui::GetStyle().TabMinWidthBase, kDefaultTabMinWidthBase, 0.01f);
+        ImGui::DestroyContext();
+    }
+
+    // --- PROVEN TO GO RED against round 4 (c7082d5): the same three-pick
+    // sequence at 200%, but with round 4's OWN sequence inlined - re-baseline
+    // and compose AFTER applyTheme(), with nothing restoring the live style
+    // to the unscaled baseline FIRST. Not called through applyThemeComposed,
+    // because that omission is exactly what round 4 shipped.
+    {
+        freshContext();
+        // base starts as the fresh, UN-composed default (21/32/...) - the
+        // live style has not been scaled at all yet, matching the review's
+        // own "Indent 21 -> 42 -> ..." starting point exactly.
+        ImGuiStyle base = ImGui::GetStyle();
+        for (int i = 0; i < 3; ++i) {
+            const th::ThemeId id = (i % 2 == 0) ? th::ThemeId::Daylight : th::ThemeId::Today;
+            th::setTheme(id);
+            th::applyTheme();  // round 4: nothing restores the baseline first
+            base = ImGui::GetStyle();
+            ImGui::GetStyle() = composeStyle(base, s);
+        }
+        // The review's own numbers: 21 -> 42 -> 84 -> 168 for IndentSpacing,
+        // 32 -> 64 -> 128 -> 256 for WindowMinSize.
+        CHECK_NEAR(ImGui::GetStyle().IndentSpacing, 168.0f, 0.01f);
+        CHECK_NEAR(ImGui::GetStyle().WindowMinSize.x, 256.0f, 0.01f);
+        ImGui::GetStyle() = composeStyle(base, 1.0f);
+        // Round 4 leaves 84 here, not the pristine 21.
+        CHECK_NEAR(ImGui::GetStyle().IndentSpacing, 84.0f, 0.01f);
+        CHECK_NEAR(ImGui::GetStyle().WindowMinSize.x, 128.0f, 0.01f);
+        ImGui::DestroyContext();
+    }
+}
+
+// --- 9. STARTUP WINDOW GEOMETRY: THE WORK AREA WINS, EVEN OVER THE MINIMUM
+// (an Opus review, round 5, finding 5). See firstLaunchWindowGeometry's own
+// comment (gui/ui_scale.hpp) for the full mechanism; this pins the review's
+// own repro numbers.
+void testFirstLaunchWindowGeometryWorkAreaWins() {
+    std::printf("  the startup window never exceeds its monitor's work area, "
+               "even at a scaled minimum bigger than a small laptop screen\n");
+    // 200% on a 1366x768 laptop: kMinWindowW (624) and kMinWindowH (400)
+    // doubled to 1248x800; work area roughly 1366x728 with the taskbar taken
+    // out. Desired size is 1280x720 doubled, 2560x1440.
+    constexpr int areaX = 0, areaY = 0, areaW = 1366, areaH = 728;
+    constexpr int desiredW = 2560, desiredH = 1440;
+    constexpr int minW = 1248, minH = 800;
+
+    const WindowGeometry geom =
+        firstLaunchWindowGeometry(100, 50, areaX, areaY, areaW, areaH, desiredW, desiredH, minW, minH);
+    CHECK(geom.w <= areaW);
+    CHECK(geom.h <= areaH);
+    CHECK(geom.h == areaH);  // the work area wins outright: 728, not 800
+    CHECK(geom.x >= areaX && geom.x + geom.w <= areaX + areaW);
+    CHECK(geom.y >= areaY && geom.y + geom.h <= areaY + areaH);
+
+    // PROVEN TO GO RED against round 4's own order (clamp to the area, THEN
+    // apply the floor, never re-clamped): the height that sequence produces.
+    {
+        int w = desiredW, h = desiredH;
+        w = std::min(w, areaW);
+        h = std::min(h, areaH);
+        w = std::max(w, minW);
+        h = std::max(h, minH);
+        CHECK(h == 800);   // round 4's own number: past the work area
+        CHECK(h > areaH);  // ...and this is exactly the bug finding 5 names
+    }
+
+    // A big desktop with no minimum conflict is untouched either way - the
+    // fix must not shrink a window that already fits.
+    const WindowGeometry roomy =
+        firstLaunchWindowGeometry(200, 100, 0, 0, 2560, 1440, 2560, 1440, 1248, 800);
+    CHECK(roomy.w == 2560);
+    CHECK(roomy.h == 1440);
+
+    // A window GLFW placed near the right/bottom edge of its monitor is
+    // pulled fully back inside it, not merely resized in place.
+    const WindowGeometry edge =
+        firstLaunchWindowGeometry(1300, 700, areaX, areaY, areaW, areaH, desiredW, desiredH, minW, minH);
+    CHECK(edge.x + edge.w <= areaX + areaW);
+    CHECK(edge.y + edge.h <= areaY + areaH);
+    CHECK(edge.x >= areaX && edge.y >= areaY);
+
+    // An area of 0 (not yet known) disables that axis's clamp, matching
+    // every existing monitorWorkareaForWindow caller's convention.
+    const WindowGeometry noArea = firstLaunchWindowGeometry(0, 0, 0, 0, 0, 0, desiredW, desiredH, minW, minH);
+    CHECK(noArea.w == desiredW);
+    CHECK(noArea.h == desiredH);
+}
+
 }  // namespace
 
 int main() {
@@ -308,6 +497,8 @@ int main() {
     testDpiToPercent();
     testLiveStateChangeTracking();
     testThemeAndScaleComposeRegardlessOfOrder();
+    testThemePickDoesNotCompoundUntouchedFields();
+    testFirstLaunchWindowGeometryWorkAreaWins();
     // Leave the global state at its default for any test binary that link-
     // shares this translation unit's statics with another (it does not here -
     // one executable per test_*.cpp - but the habit costs nothing).

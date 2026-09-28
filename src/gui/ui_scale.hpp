@@ -61,6 +61,7 @@
 #ifndef CASCADE_GUI_UI_SCALE_HPP
 #define CASCADE_GUI_UI_SCALE_HPP
 
+#include <algorithm>
 #include <string>
 
 namespace cascade::gui::uiscale {
@@ -134,6 +135,56 @@ bool consumeChanged();
 // bit-exact, for every finite v — the S=1 guarantee extends to every call
 // site that uses this rather than its own arithmetic.
 float px(float v);
+
+// --- the first-launch window (AppWindow::run) --------------------------------
+//
+// The window's size and position at startup, before anything is shown. Wants
+// `desiredW`x`desiredH` (1280*S x 720*S — see the caller), never smaller than
+// `minW`x`minH` (the same floor glfwSetWindowSizeLimits enforces), and never
+// LARGER than the monitor's own work area (`areaW`x`areaH` at `areaX`,
+// `areaY`) — the work area is the one number here that is not a preference:
+// a window bigger than its own screen cannot be dragged smaller to fit it
+// (there is nothing past its edges to grab), while one narrower than its
+// stated minimum is merely cramped. THE WORK AREA THEREFORE WINS, even over
+// the minimum — checked again AFTER the minimum is applied (an Opus review,
+// round 5, finding 5). Applying the minimum and stopping there, as round 4
+// did, could put the minimum itself back over the area: 200% on a 1366x768
+// laptop wants a 1248x800 minimum against a work area of roughly 1366x728
+// with the taskbar taken out of it — the old order clamped 1440 down to
+// 728, then raised it straight back to 800, twelve pixels past what the
+// desktop actually has to give, and nothing ever moved the window to
+// compensate (glfwSetWindowSize with no glfwSetWindowPos). An area of 0 (not
+// yet known) disables that axis's clamp entirely, matching every existing
+// caller's convention. `curX`/`curY` is wherever the window already is (GLFW
+// places it before this runs); the result keeps the window's WHOLE rectangle
+// inside the work area rather than only resizing it in place.
+struct WindowGeometry {
+    int x = 0;
+    int y = 0;
+    int w = 0;
+    int h = 0;
+};
+
+inline WindowGeometry firstLaunchWindowGeometry(int curX, int curY, int areaX, int areaY,
+                                                int areaW, int areaH, int desiredW, int desiredH,
+                                                int minW, int minH) {
+    int w = desiredW;
+    int h = desiredH;
+    if (areaW > 0) { w = std::min(w, areaW); }
+    if (areaH > 0) { h = std::min(h, areaH); }
+    w = std::max(w, minW);
+    h = std::max(h, minH);
+    // The work area wins even over the minimum just applied - see the note
+    // above for why a window that cannot fit both must give up the minimum,
+    // not the screen.
+    if (areaW > 0) { w = std::min(w, areaW); }
+    if (areaH > 0) { h = std::min(h, areaH); }
+    int x = curX;
+    int y = curY;
+    if (areaW > 0) { x = std::clamp(x, areaX, areaX + areaW - w); }
+    if (areaH > 0) { y = std::clamp(y, areaY, areaY + areaH - h); }
+    return WindowGeometry{x, y, w, h};
+}
 
 }  // namespace cascade::gui::uiscale
 
