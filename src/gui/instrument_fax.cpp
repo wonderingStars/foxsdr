@@ -72,6 +72,7 @@
 
 #include "core/i18n.hpp"
 #include "gui/fonts.hpp"
+#include "gui/ui_scale.hpp"
 #include "gui/instrument_fax_math.hpp"
 #include "gui/scope_face.hpp"
 #include "gui/theme.hpp"
@@ -142,7 +143,7 @@ void drawSelectorCell(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
 // Returns the x it ended at, so the next group can be laid beside it.
 float drawSelector(ImDrawList* dl, const ImVec2& tl, float cellW, float cellH,
                    const char* caption, const fx::Selector& sel) {
-    const float capPx = fonts::kTinySize * 0.82f;
+    const float capPx = fonts::tinyPx() * 0.82f;
     engrave(dl, tl, caption, capPx);
     const float y = tl.y + capPx + 4.0f;
     float x = tl.x;
@@ -162,7 +163,7 @@ float drawSelector(ImDrawList* dl, const ImVec2& tl, float cellW, float cellH,
 // would make them look identical.
 void drawLineCounter(ImDrawList* dl, const ImVec2& tl, float cellW, float cellH,
                      int digits, bool have, double lines) {
-    const float capPx = fonts::kTinySize * 0.82f;
+    const float capPx = fonts::tinyPx() * 0.82f;
     engrave(dl, tl, tr("LINES"), capPx);
     const float y = tl.y + capPx + 4.0f;
     // THE DRUMS ARE BUTTED, THE SELECTORS ARE SPACED, and that is the whole
@@ -207,7 +208,7 @@ void drawTuningMeter(ImDrawList* dl, const ImVec2& tl, float width, float height
     if (width < 56.0f || height < 46.0f) { return; }
     ImFont* cf = fonts::legend();
     ImFont* vf = fonts::ui();
-    const float tiny = fonts::kTinySize;
+    const float tiny = fonts::tinyPx();
     const char* cap = tr("TUNING");
     const char* val = (valueLine != nullptr) ? valueLine : "";
     const float cpx = fitPx(cf, tiny, cap, width - 4.0f);
@@ -471,7 +472,7 @@ float drawFaxFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
 
     if (L.groupCaption && leftW > 60.0f) {
         addBenchGroupCaption(dl, ImVec2(ix0, iy), leftW, tr("RECEPTION"));
-        iy += fonts::kTinySize + 6.0f;
+        iy += fonts::tinyPx() + 6.0f;
     }
 
     // The phase ladder. Exactly one lamp lights, and only for a word this
@@ -485,14 +486,14 @@ float drawFaxFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         const int cols = fx::kPhaseCount + statusCols;
         const float pitch = leftW / static_cast<float>(cols);
         const float lampR = std::min(7.0f, pitch * 0.16f);
-        float capPx = std::max(9.0f, std::min(fonts::kTinySize, pitch * 0.30f));
+        float capPx = std::max(9.0f, std::min(fonts::tinyPx(), pitch * 0.30f));
         // THE WIDEST WORD MUST FIT ITS PITCH. pitch * 0.30 was a proportion
         // fitted to a condensed face; in Georgia (0.84.0) PHASING at that
         // size ran into PICTURE on either side. Measure the longest phase
         // name at the chosen size and take the size down, never below the
         // nine-pixel floor, until it sits inside the pitch with clear metal.
         {
-            ImGui::PushFont(fonts::ui(), capPx);
+            ImGui::PushFont(fonts::ui(), capPx / cascade::gui::uiscale::factor());  // capPx already carries S; style.FontScaleMain would double it
             float widest = 0.0f;
             for (int i = 0; i < fx::kPhaseCount; ++i) {
                 widest = std::max(widest, ImGui::CalcTextSize(tr(fx::phaseName(i))).x);
@@ -505,7 +506,7 @@ float drawFaxFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
             }
         }
         const float rowH = lampR * 2.0f + capPx * 1.40f + 4.0f;
-        ImGui::PushFont(fonts::ui(), capPx);
+        ImGui::PushFont(fonts::ui(), capPx / cascade::gui::uiscale::factor());  // capPx already carries S; style.FontScaleMain would double it
         for (int i = 0; i < fx::kPhaseCount; ++i) {
             const ImVec2 c(ix0 + pitch * (static_cast<float>(i) + 0.5f), iy + lampR + 2.0f);
             // PICTURE is the phosphor one: it is the only position on the
@@ -546,8 +547,8 @@ float drawFaxFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         }
         if (statusCols > 0) {
             const float lampR = 6.0f;
-            const float capPx = fonts::kTinySize * 0.82f;
-            ImGui::PushFont(fonts::ui(), capPx);
+            const float capPx = fonts::tinyPx() * 0.82f;
+            ImGui::PushFont(fonts::ui(), capPx / cascade::gui::uiscale::factor());  // capPx already carries S; style.FontScaleMain would double it
             drawBenchLamp(dl, ImVec2(wBR.x + 32.0f, iy + lampR + 2.0f), lampR,
                           theme::kGold, cue.unread, tr("NEW"));
             drawBenchLamp(dl, ImVec2(wBR.x + 88.0f, iy + lampR + 2.0f), lampR,
@@ -560,7 +561,7 @@ float drawFaxFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     // The selectors and the counter, along the bottom of the deck.
     const float rowH = iyEnd - iy;
     if (rowH >= 26.0f && leftW > 60.0f) {
-        const float capPx = fonts::kTinySize * 0.82f;
+        const float capPx = fonts::tinyPx() * 0.82f;
         const float cellH = std::min(24.0f, rowH - capPx - 4.0f);
         if (cellH >= 12.0f) {
             const fx::Selector iocSel = fx::iocSelector(ioc, have);

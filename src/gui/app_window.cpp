@@ -2492,7 +2492,18 @@ float drawCabinet(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, float minM
     const float w = br.x - tl.x;
     const float h = br.y - tl.y;
     if (dl == nullptr || w < 80.0f || h < 80.0f) { return 0.0f; }
-    const float m = std::clamp(std::min(w, h) * 0.022f, std::max(10.0f, minMargin), 24.0f);
+    // BOTH ends of the clamp scale with S together, or a caller that passes a
+    // minMargin already scaled past the old fixed 24 px ceiling (kRailMinMargin
+    // does not - see below - but a future caller could) would hand std::clamp
+    // a lower bound above its upper one, which is undefined. The proportional
+    // rule (min(w,h) * 0.022) already answers to the window's own size and
+    // needed no change; only the two LITERAL pixel figures either side of it
+    // did. minMargin itself is not multiplied here - callers that want the
+    // scaled floor pass an already-scaled value (drawPatchView and the main
+    // window both do, via uiscale::px(kRailMinMargin) below).
+    const float m = std::clamp(std::min(w, h) * 0.022f,
+                               std::max(cascade::gui::uiscale::px(10.0f), minMargin),
+                               cascade::gui::uiscale::px(24.0f));
     const float round = std::max(4.0f, m * 0.45f);
 
     // The brass, lit from above like every other surface on this face.
@@ -2843,7 +2854,13 @@ bool benchSection(const char* label, bool defaultOpen, const char* chipText = nu
     ImGui::PushStyleColor(ImGuiCol_HeaderHovered, clear);
     ImGui::PushStyleColor(ImGuiCol_HeaderActive, clear);
     ImGui::PushStyleColor(ImGuiCol_Text, clear);
-    ImGui::PushFont(cascade::gui::fonts::ui(), labelPx);
+    // UNSCALED base size, not labelPx: PushFont's size argument is the
+    // pre-global-scale base (imgui.h's PushFont doc, "global scale factors
+    // are applied OVER the provided size") - style.FontScaleMain (set to the
+    // live interface-scale factor in applyPendingUiScale) multiplies it on
+    // top automatically. Passing the already-scaled labelPx here would scale
+    // this one header's text by S twice.
+    ImGui::PushFont(cascade::gui::fonts::ui(), cascade::gui::fonts::kUiSize);
     const bool open = ImGui::CollapsingHeader(
         label, ImGuiTreeNodeFlags_AllowOverlap |
                    (defaultOpen ? ImGuiTreeNodeFlags_DefaultOpen : ImGuiTreeNodeFlags_None));
@@ -3246,9 +3263,9 @@ void AppWindow::drawUi() {
     // must clear it.
     const ImVec2 rootTL = ImGui::GetWindowPos();
     const ImVec2 rootSize = ImGui::GetWindowSize();
-    const float cabinetM =
-        drawCabinet(ImGui::GetWindowDrawList(), rootTL,
-                    ImVec2(rootTL.x + rootSize.x, rootTL.y + rootSize.y), kRailMinMargin);
+    const float cabinetM = drawCabinet(
+        ImGui::GetWindowDrawList(), rootTL, ImVec2(rootTL.x + rootSize.x, rootTL.y + rootSize.y),
+        cascade::gui::uiscale::px(kRailMinMargin));
     // THE RAIL STANDS IN FOR THE TITLE BAR: the name engraved at its left, the
     // three keys at its right, and the rest of it the handle the window is
     // dragged by (0.78.0 - "put the minimise, maximise and close on the
@@ -4714,7 +4731,20 @@ void AppWindow::drawToolbar() {
     // 2x plate with its switches makes the bar taller (deckBarH).
     const cascade::gui::CounterLayout layout{counterScale_, counterSwitches_};
     const float coreW = cascade::gui::deckCoreW(layout);
-    const float scale = cascade::gui::deckScale(availW, layout, kBarMinScale);
+    // THE INTERFACE-SCALE FACTOR COMPOSES WITH THE DECK'S OWN NARROW-WINDOW
+    // SHRINK, rather than replacing it. deckScale's job is "how much of the
+    // cluster's OWN desired width fits availW"; at S > 1 the cluster's desired
+    // width is coreW * S, so it is asked the same question against availW / S
+    // and the answer is then scaled back up by S - which is an identity at
+    // S = 1 (availW / 1 == availW, result * 1 == result) and, at any other S,
+    // shrinks in exactly the same ABSOLUTE pixels the un-scaled rule always
+    // did once the S-scaled cluster stops fitting. kBarMinScale (the floor)
+    // scales with it too: a user who has asked for a bigger bench is never
+    // handed a smaller one than 1x just because their window is narrow.
+    const float uiScaleFactor = cascade::gui::uiscale::factor();
+    const float deckScaleOnly =
+        cascade::gui::deckScale(availW / uiScaleFactor, layout, kBarMinScale);
+    const float scale = deckScaleOnly * uiScaleFactor;
     const float barH = cascade::gui::deckBarH(layout) * scale;
 
     // DRAWN IN A CHILD, so the bar clips itself. Explicit geometry means an
@@ -4750,6 +4780,16 @@ void AppWindow::drawToolbar() {
     // The engraving never goes below nine pixels: a caption too small to read
     // is not a smaller caption, it is dirt on the panel.
     const float capPx = std::max(9.0f, cascade::gui::fonts::kTinySize * scale);
+    // The SAME caption size, in the units ImGui::PushFont wants: its size
+    // argument is the PRE-FontScaleMain base (imgui.h - "global scale factors
+    // are applied OVER the provided size"), and style.FontScaleMain is set to
+    // uiScaleFactor in applyPendingUiScale, so pushing capPxBase here and
+    // reading capPx (which already carries uiScaleFactor) for barEngrave's
+    // RAW dl->AddText calls below land on the same rendered size by two
+    // different routes - never push capPx itself, or the one path that goes
+    // through ImGui's context (the master lamp words, just below) would be
+    // scaled by uiScaleFactor twice.
+    const float capPxBase = std::max(9.0f, cascade::gui::fonts::kTinySize * deckScaleOnly);
 
     // The brass the deck is machined from, lit from above like every other
     // surface on this face.
@@ -4849,8 +4889,14 @@ void AppWindow::drawToolbar() {
         // change cannot silently bring the collision back.
         const float roomL = X(150.0f);
         const float roomR = X(kMasterDividerX - 6.0f);
-        ImGui::PushFont(cascade::gui::fonts::legend(), capPx);
-        float lampCapPx = capPx;
+        // capPxBase, not capPx: PushFont's argument is the PRE-FontScaleMain
+        // base (see the note beside capPxBase's definition) - ImGui::
+        // CalcTextSize below already reads back the fully S-scaled width via
+        // FontScaleMain, so the fit-shrink arithmetic that follows compares
+        // and produces fully-scaled pixel quantities throughout, exactly as
+        // it did before this feature existed at whatever S resolves to.
+        ImGui::PushFont(cascade::gui::fonts::legend(), capPxBase);
+        float lampCapPxBase = capPxBase;
         float widestWord = 0.0f;
         for (const MasterLamp& l : lamps) {
             widestWord = std::max(widestWord, ImGui::CalcTextSize(l.word).x);
@@ -4859,9 +4905,9 @@ void AppWindow::drawToolbar() {
             const float need = 4.0f * widestWord + 3.0f * S(6.0f);
             const float room = roomR - roomL;
             if (need > room && need > 0.0f) {
-                lampCapPx = std::max(9.0f, capPx * room / need);
+                lampCapPxBase = std::max(9.0f, capPxBase * room / need);
                 ImGui::PopFont();
-                ImGui::PushFont(cascade::gui::fonts::legend(), lampCapPx);
+                ImGui::PushFont(cascade::gui::fonts::legend(), lampCapPxBase);
                 widestWord = 0.0f;
                 for (const MasterLamp& l : lamps) {
                     widestWord = std::max(widestWord, ImGui::CalcTextSize(l.word).x);
@@ -4881,7 +4927,8 @@ void AppWindow::drawToolbar() {
                 cascade::gui::census::note("deck:lamp", i);
                 cascade::gui::census::rect("deck:lamp", i, lx - widestWord * 0.5f,
                                            Y(86.0f) - S(7.0f), lx + widestWord * 0.5f,
-                                           Y(86.0f) + S(7.0f) + 4.0f + lampCapPx);
+                                           Y(86.0f) + S(7.0f) + 4.0f +
+                                               lampCapPxBase * uiScaleFactor);
             }
             cascade::gui::drawBenchLamp(
                 dl, ImVec2(firstX + lampPitch * static_cast<float>(i), Y(86.0f)), S(7.0f),
@@ -5011,22 +5058,33 @@ void AppWindow::drawToolbar() {
     // watchdog - so a meter under that caption would have to be fed by
     // something invented, which is the artboard's own fault repeated in our
     // code. It keeps the name of the thing it actually measures.
+    // THE TWO METERS SCALE WITH THE SAME `scale` AS THE REST OF THE DECK - the
+    // reference's own comment used to read "in bar pixels: they are pinned to
+    // the bar's right edge and do not scale", which was true while `scale`
+    // only ever meant "this window is narrower than the cluster wants"; now
+    // that it also carries the interface-scale factor (S), a 4K user asking
+    // for a bigger bench gets bigger meters with it, at exactly S = 1 the same
+    // pixels as before (scale == deckScaleOnly * 1.0f there).
     const float lineH = ImGui::GetTextLineHeight();
-    using cascade::gui::kMeterW;
-    constexpr float kMeterFaceH = 66.0f;
+    const float meterW = cascade::gui::kMeterW * scale;
+    const float meterFaceH = 66.0f * scale;
+    const float meterGap = cascade::gui::kMeterGap * scale;
+    const float meterRightMargin = cascade::gui::kMeterRightMargin * scale;
     // drawBenchMeter spends one text line above the face on the caption and
     // one below it on the value, so the height asked for is the face the
-    // reference measures plus both of them.
-    const float meterH = kMeterFaceH + lineH * 2.0f + 8.0f;
-    const float meter2X = barTL.x + cascade::gui::meter2XOnBar(barW);
-    const float meter1X = barTL.x + cascade::gui::meter1XOnBar(barW);
+    // reference measures plus both of them. lineH is already S-scaled (it
+    // comes from ImGui::GetTextLineHeight(), which reads the ambient,
+    // already-FontScaleMain'd font size).
+    const float meterH = meterFaceH + lineH * 2.0f + 8.0f * scale;
+    const float meter2X = barTL.x + barW - meterRightMargin - meterW;
+    const float meter1X = meter2X - meterGap - meterW;
     // DROPPED ENTIRELY ON A NARROW WINDOW rather than allowed to slide left
     // into the volume dial - the rule, and why it is as tight as it is, are
     // metersFitOnBar's in gui/tune_control.hpp, where a test holds it to the
     // bar a fresh install opens with.
     const bool showMeters = cascade::gui::deckMetersFit(barW, layout, scale);
     if (showMeters) {
-        const float my = barTL.y + 28.0f;
+        const float my = barTL.y + 28.0f * scale;
 
         // SAMPLE RATE: full scale 10 MS/s, which covers every device this
         // application has been run against without compressing the common
@@ -5037,8 +5095,8 @@ void AppWindow::drawToolbar() {
         std::snprintf(rateTxt, sizeof(rateTxt), haveRate ? "%.3f MS/s" : "--",
                       rate / 1.0e6);
         cascade::gui::census::note("deck:meter.rate");
-        cascade::gui::census::rect("deck:meter.rate", meter1X, my, meter1X + kMeterW, my + meterH);
-        cascade::gui::drawBenchMeter(dl, ImVec2(meter1X, my), kMeterW, meterH,
+        cascade::gui::census::rect("deck:meter.rate", meter1X, my, meter1X + meterW, my + meterH);
+        cascade::gui::drawBenchMeter(dl, ImVec2(meter1X, my), meterW, meterH,
                                      tr("SAMPLE RATE"), static_cast<float>(rate / 10.0e6),
                                      haveRate, rateTxt, "MS/s");
 
@@ -5078,9 +5136,9 @@ void AppWindow::drawToolbar() {
         char volTxt[32];
         cascade::gui::formatVolumeText(volTxt, sizeof(volTxt), audible, haveAudio);
         cascade::gui::census::note("deck:meter.volume");
-        cascade::gui::census::rect("deck:meter.volume", meter2X, my, meter2X + kMeterW,
+        cascade::gui::census::rect("deck:meter.volume", meter2X, my, meter2X + meterW,
                                    my + meterH);
-        cascade::gui::drawBenchMeter(dl, ImVec2(meter2X, my), kMeterW, meterH,
+        cascade::gui::drawBenchMeter(dl, ImVec2(meter2X, my), meterW, meterH,
                                      tr("VOLUME"), volumeNeedle_, haveAudio, volTxt,
                                      "dB");
     }
@@ -5116,7 +5174,13 @@ void AppWindow::drawToolbar() {
                                                     cascade::gui::kMuteBannerMaxSizes);
         cascade::gui::MuteBannerSize sizes[cascade::gui::kMuteBannerMaxSizes];
         const auto measure = [&](int i) {
-            if (i > 0) { ImGui::PushFont(nullptr, px[i]); }
+            // px[i] is derived from ImGui::GetFontSize(), which is already
+            // POST-FontScaleMain (fully S-scaled); PushFont's argument is
+            // always the PRE-scale base, so it is divided back out here or
+            // the ladder's smaller steps would be scaled by S twice.
+            if (i > 0) {
+                ImGui::PushFont(nullptr, px[i] / cascade::gui::uiscale::factor());
+            }
             sizes[i].px = px[i];
             sizes[i].wordsW = ImGui::CalcTextSize(words.c_str()).x;
             sizes[i].keyLabelW = ImGui::CalcTextSize(keyLabel, nullptr, true).x;
@@ -6121,8 +6185,14 @@ void AppWindow::drawFrequencyReadout(float plateX, float plateY, float scale) {
         const cascade::gui::FreqRect t0 = cascade::gui::tubeRectForCell(ptl.x, ptl.y, 0, s, layout);
         const cascade::gui::FreqRect t9 =
             cascade::gui::tubeRectForCell(ptl.x, ptl.y, kFreqCells - 1, s, layout);
+        // Divided back out by the live interface factor before the push: `s`
+        // here already carries it (drawToolbar's combined deck scale), and
+        // style.FontScaleMain (applyPendingUiScale) would otherwise apply it
+        // a second time - PushFont's argument is always the PRE-FontScaleMain
+        // base (imgui.h).
         ImGui::PushFont(cascade::gui::fonts::ui(),
-                        std::max(14.0f, cascade::gui::counterTubeH(layout) * s * 0.60f));
+                        std::max(14.0f, cascade::gui::counterTubeH(layout) * s * 0.60f) /
+                            cascade::gui::uiscale::factor());
         const float inputH = ImGui::GetFrameHeight();
         ImGui::SetCursorScreenPos(ImVec2(t0.x0, t0.y0 + (t0.y1 - t0.y0 - inputH) * 0.5f));
         ImGui::SetNextItemWidth(t9.x1 - t0.x0);
@@ -6601,6 +6671,21 @@ void AppWindow::applyPendingUiScale() {
     if (!cascade::gui::uiscale::consumeChanged()) { return; }
     ImGuiStyle scaled = baseStyle;
     scaled.ScaleAllSizes(cascade::gui::uiscale::factor());
+    // THE MISSING HALF: ScaleAllSizes touches padding/spacing/rounding and
+    // nothing font-related (imgui.cpp's own list of fields it assigns has no
+    // font entry). Every ORDINARY widget - a Button, a Combo, a Checkbox
+    // label, a plain Text call - draws in whatever font is currently bound
+    // at style.FontSizeBase, and Dear ImGui 1.92 multiplies that base by
+    // style.FontScaleMain for EVERY draw, including every ImGui::PushFont
+    // call in this codebase that passes an unscaled base size (imgui.h:
+    // "global scale factors are applied OVER the provided size"). Setting it
+    // here is what makes "Signal generator", "Refresh", "Look for network
+    // USRPs" and every other default-font control grow with S - without it,
+    // only the custom-drawn rail/chip/axis/patch text this change touched
+    // directly would have grown, and everything else would have stayed at
+    // 100% beside it, which is exactly the inconsistent result a first
+    // screenshot pass caught.
+    scaled.FontScaleMain = cascade::gui::uiscale::factor();
     ImGui::GetStyle() = scaled;
     cascade::core::diagLogf("interface size: %s -> %.0f%% (monitor reports %u dpi)",
                             cascade::gui::uiscale::choice().c_str(),
@@ -11958,7 +12043,7 @@ bool AppWindow::beginPage(const char* id, const char* title, bool* open, int fla
         cascade::gui::addBenchBevel(dl, tl, br, 3.0f, true);
         m = std::min(kStripH, size.y);
     } else {
-        m = drawCabinet(dl, tl, br, kRailMinMargin);
+        m = drawCabinet(dl, tl, br, cascade::gui::uiscale::px(kRailMinMargin));
     }
     ImGuiWindow* self = ImGui::GetCurrentWindow();
     const bool ownWindow = self != nullptr && self->ViewportOwned;
@@ -18534,7 +18619,12 @@ void AppWindow::drawMuteBanner(const cascade::gui::MuteBannerLayout& mb, const I
     if (mb.wordsDrawnW > 0.0f) {
         // The words at their own size (the key's, or smaller to be whole).
         const bool smaller = mb.wordsPx > 0.0f && mb.wordsPx < barPx - 1.0e-3f;
-        if (smaller) { ImGui::PushFont(nullptr, mb.wordsPx); }
+        // mb.wordsPx, like barPx, was measured through ImGui::GetFontSize()
+        // (POST-FontScaleMain); divided back to the PRE-scale base PushFont
+        // wants, or the words would be scaled by S twice.
+        if (smaller) {
+            ImGui::PushFont(nullptr, mb.wordsPx / cascade::gui::uiscale::factor());
+        }
         const float lineH = ImGui::GetFontSize();
         const ImVec2 wp(barTL.x + mb.wordsX, barTL.y + mb.wordsY);
         ImGui::SetCursorScreenPos(wp);
@@ -18557,7 +18647,9 @@ void AppWindow::drawMuteBanner(const cascade::gui::MuteBannerLayout& mb, const I
     }
     // The key at the largest size the layout found for it.
     const bool keySmaller = mb.px > 0.0f && mb.px < barPx - 1.0e-3f;
-    if (keySmaller) { ImGui::PushFont(nullptr, mb.px); }
+    if (keySmaller) {
+        ImGui::PushFont(nullptr, mb.px / cascade::gui::uiscale::factor());
+    }
     ImGui::SetCursorScreenPos(ImVec2(barTL.x + mb.keyX, barTL.y + mb.keyY));
     if (ImGui::SmallButton(trId("Stop plugin##mute_banner"))) {
         stopMutingPlugins(mutedByKeys_);

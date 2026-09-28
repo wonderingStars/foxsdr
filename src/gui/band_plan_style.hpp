@@ -27,7 +27,7 @@ namespace cascade::gui {
 
 // The three ribbon sizes. Small reproduces the overlay's original, fixed
 // figures (kBandRibbonPx == 6.0f and kBandLabelMinPx == 46.0f in
-// app_window.cpp, and the label's implicit font size, fonts::kUiSize) —
+// app_window.cpp, and the label's implicit font size, fonts::uiPx()) —
 // byte-identical — so an existing install's screenshot does not move a
 // single pixel until the user opens the picker.
 enum class BandPlanSizeTier { Small, Medium, Large };

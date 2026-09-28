@@ -507,13 +507,13 @@ float drawWeatherConsoleFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         // being drawn and clipped.
         ImFont* lf = fonts::legend();
         const char* cap = tr("READINGS");
-        const float capW = lf->CalcTextSizeA(fonts::kTinySize, FLT_MAX, 0.0f, cap).x;
+        const float capW = lf->CalcTextSizeA(fonts::tinyPx(), FLT_MAX, 0.0f, cap).x;
         const float wy0 = stripTop + 5.0f;
         const float wy1 = wy0 + 24.0f;
         const float capX = hx0 + caseInset;
-        dl->AddText(lf, fonts::kTinySize, ImVec2(capX + 1.0f, wy0 + 5.0f),
+        dl->AddText(lf, fonts::tinyPx(), ImVec2(capX + 1.0f, wy0 + 5.0f),
                     theme::withAlpha(theme::kVoid, 0.55f), cap);
-        dl->AddText(lf, fonts::kTinySize, ImVec2(capX, wy0 + 4.0f), theme::kInkMuted, cap);
+        dl->AddText(lf, fonts::tinyPx(), ImVec2(capX, wy0 + 4.0f), theme::kInkMuted, cap);
         const float wx0 = capX + capW + 8.0f;
         const float wx1 = wx0 + std::min(72.0f, (hx1 - hx0) * 0.22f);
         drawFreqDrumWell(dl, ImVec2(wx0, wy0), ImVec2(wx1, wy1));
@@ -526,8 +526,8 @@ float drawWeatherConsoleFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
             std::snprintf(count, sizeof count, "---");
         }
         ImFont* rf = fonts::reading();
-        const ImVec2 csz = rf->CalcTextSizeA(fonts::kReadingSize, FLT_MAX, 0.0f, count);
-        dl->AddText(rf, fonts::kReadingSize,
+        const ImVec2 csz = rf->CalcTextSizeA(fonts::readingPx(), FLT_MAX, 0.0f, count);
+        dl->AddText(rf, fonts::readingPx(),
                     ImVec2(wx1 - csz.x - 8.0f, (wy0 + wy1) * 0.5f - csz.y * 0.5f),
                     in.have ? theme::kAmber : theme::kAmberDim, count);
 
@@ -542,7 +542,7 @@ float drawWeatherConsoleFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         // them and the bottom right screw sits where BATT's T would be.
         float lx = hx1 - caseInset - lampR - 12.0f;
         const float ly = stripTop + 8.0f;
-        ImGui::PushFont(fonts::legend(), fonts::kTinySize);
+        ImGui::PushFont(fonts::legend(), fonts::kTinySize);  // base: style.FontScaleMain applies S
         drawBenchLamp(dl, ImVec2(lx, ly), lampR, theme::kAmber, lowBatt, tr("BATT"));
         lx -= 64.0f;
         drawBenchLamp(dl, ImVec2(lx, ly), lampR, theme::kGold, cue.unread, tr("NEW"));
@@ -585,7 +585,7 @@ float drawWeatherConsoleFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     // and is the honest form of a signal indicator.
     const float insideH = iy1 - iy0;
     if (insideH >= 96.0f) {
-        const float px = fonts::kTinySize;
+        const float px = fonts::tinyPx();
         bool colonOn = true;
         const char* clock = consoleClock(cue.nowSec, &colonOn);
         char shown[8];
@@ -622,7 +622,7 @@ float drawWeatherConsoleFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     // the math header where a test sweeps it over every size a window can be.
     const PanelBox first = panelBox(ix0, ix1, 0, 3, panelGap);
     const float panelW = first.valid ? (first.x1 - first.x0) : 0.0f;
-    const PanelStyle st = panelStyle(panelW, panelH, fonts::kTinySize);
+    const PanelStyle st = panelStyle(panelW, panelH, fonts::tinyPx());
 
     for (int i = 0; i < 3; ++i) {
         const PanelBox b = panelBox(ix0, ix1, i, 3, panelGap);
@@ -643,7 +643,7 @@ float drawWeatherConsoleFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     if (!in.have && st.headerPx > 0.0f) {
         ImFont* f = fonts::ui();
         const char* msg = tr("NO SENSOR HEARD YET");
-        const float px = fonts::kTinySize;
+        const float px = fonts::tinyPx();
         const float mw = f->CalcTextSizeA(px, FLT_MAX, 0.0f, msg).x;
         if (mw < ix1 - ix0) {
             glassText(dl, (ix0 + ix1) * 0.5f - mw * 0.5f, iy1 - px - 1.0f, msg, px, 0.8f, ix1);

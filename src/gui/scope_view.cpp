@@ -1699,7 +1699,14 @@ void drawBenchMeter(ImDrawList* dl, const ImVec2& tl, float width, float height,
     // bound, which is the property that survives the next change to fonts.hpp.
     ImFont* cf = cascade::gui::fonts::legend();
     ImFont* vf = cascade::gui::fonts::ui();
-    const float tiny = cascade::gui::fonts::kTinySize;
+    // fonts::tinyPx(), not the base kTinySize: `width` arrives already scaled
+    // by the interface factor (drawToolbar passes the deck's own scaled meter
+    // width), and fitTextPx only ever shrinks its starting size to fit - never
+    // grows it - so an unscaled starting size here would leave the caption and
+    // reading looking small on an otherwise bigger meter face. Both scaling by
+    // the same factor keeps the SHRINK decision (and therefore the meter's
+    // proportions) exactly what it was at S = 1.
+    const float tiny = cascade::gui::fonts::tinyPx();
     // Fitted to the meter's own width: both lines are centred on it, so
     // anything wider is drawn over the meter standing next to it rather than
     // clipped. "22 % - 3.6 ms" under a 126 px face is the tight one.

@@ -349,7 +349,7 @@ bool drawDeckKey(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, const char*
     // words are the last ones that should be hard to read. kInkMuted is about
     // 6:1 there and stays a clear step below a live key's cream.
     ImFont* f = cascade::gui::fonts::ui();
-    const float px = cascade::gui::fonts::kTinySize;
+    const float px = cascade::gui::fonts::tinyPx();
     const ImU32 ink = enabled ? theme::kEnamel : theme::kInkMuted;
     dl->AddText(f, px,
                 ImVec2((tl.x + br.x) * 0.5f - textW(f, px, label) * 0.5f,
@@ -385,7 +385,7 @@ bool drawFilterKey(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, const cha
     }
 
     ImFont* f = cascade::gui::fonts::ui();
-    const float px = cascade::gui::fonts::kTinySize;
+    const float px = cascade::gui::fonts::tinyPx();
     const float lampR = 3.5f;
     const float lx = tl.x + 9.0f;
     drawBenchLamp(dl, ImVec2(lx, (tl.y + br.y) * 0.5f), lampR, lamp, on, nullptr);
@@ -401,7 +401,7 @@ bool drawFilterKey(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, const cha
 
 float noteHeight(float width, const char* text) {
     ImFont* f = cascade::gui::fonts::ui();
-    const float px = cascade::gui::fonts::kTinySize;
+    const float px = cascade::gui::fonts::tinyPx();
     const float wrap = width - 12.0f;
     if (wrap < 20.0f) { return faceH(f, px) + 8.0f; }
     return f->CalcTextSizeA(px, FLT_MAX, wrap, text).y + 8.0f;
@@ -411,7 +411,7 @@ void drawNote(ImDrawList* dl, const ImVec2& tl, float width, ImU32 accent,
               const char* text) {
     if (dl == nullptr || width < 30.0f) { return; }
     ImFont* f = cascade::gui::fonts::ui();
-    const float px = cascade::gui::fonts::kTinySize;
+    const float px = cascade::gui::fonts::tinyPx();
     const float h = noteHeight(width, text);
     dl->AddRectFilled(tl, ImVec2(tl.x + width, tl.y + h), theme::withAlpha(accent, 0.10f));
     dl->AddRectFilled(tl, ImVec2(tl.x + 2.0f, tl.y + h), accent);
@@ -461,18 +461,18 @@ bool stateLampLit(FittedState s) { return s == FittedState::Fed || s == FittedSt
 // to agree or the floor stopped being a floor.
 float oneLineKeyH() {
     return std::max(24.0f, faceH(cascade::gui::fonts::ui(),
-                                 cascade::gui::fonts::kTinySize) + 10.0f);
+                                 cascade::gui::fonts::tinyPx()) + 10.0f);
 }
 
 // One row's height, measured from the text that will actually be in it. A row
 // sized from a different string to the one drawn is a row that clips itself.
 float rowHeight(const std::string& body, float bodyWidth) {
     ImFont* uf = cascade::gui::fonts::ui();
-    const float titleH = faceH(uf, cascade::gui::fonts::kUiSize);
-    const float tinyH = faceH(uf, cascade::gui::fonts::kTinySize);
+    const float titleH = faceH(uf, cascade::gui::fonts::uiPx());
+    const float tinyH = faceH(uf, cascade::gui::fonts::tinyPx());
     const float wrap = std::max(40.0f, bodyWidth);
     const float bodyH =
-        uf->CalcTextSizeA(cascade::gui::fonts::kTinySize, FLT_MAX, wrap, body.c_str()).y;
+        uf->CalcTextSizeA(cascade::gui::fonts::tinyPx(), FLT_MAX, wrap, body.c_str()).y;
     // The floor is what the right-hand column needs: the state word on the
     // title line and the START/STOP key beneath it - and the key's own height
     // is asked for rather than repeated, so the row cannot come to be a
@@ -511,7 +511,7 @@ namespace {
 float drawOperatingWell(ImDrawList* dl, float x, float y, float width,
                         const FittedModule& m, bool receiverRunning) {
     ImFont* uf = cascade::gui::fonts::ui();
-    const float tiny = cascade::gui::fonts::kTinySize;
+    const float tiny = cascade::gui::fonts::tinyPx();
     // MEASURED IN THE FACE IT IS DRAWN IN. addBenchGroupCaption letters in the
     // LEGEND face; advancing by the ui face's height would leave the caption
     // and what follows it a pixel out at every size.
@@ -571,9 +571,9 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck,
     }
 
     ImFont* uf = cascade::gui::fonts::ui();
-    const float tiny = cascade::gui::fonts::kTinySize;
-    const float uiPx = cascade::gui::fonts::kUiSize;
-    const float readPx = cascade::gui::fonts::kReadingSize;
+    const float tiny = cascade::gui::fonts::tinyPx();
+    const float uiPx = cascade::gui::fonts::uiPx();
+    const float readPx = cascade::gui::fonts::readingPx();
     const float tinyH = faceH(uf, tiny);
     // The engraved captions letter in the LEGEND face, so their line advance
     // is measured in that face and not in the ui one.
@@ -591,7 +591,7 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck,
     // short and the rail is drawn outside the plate it belongs to.
     const float titlePlateH =
         std::max(40.0f, faceH(cascade::gui::fonts::legend(),
-                              cascade::gui::fonts::kLegendSize) + 24.0f);
+                              cascade::gui::fonts::legendPx()) + 24.0f);
     addBenchPlate(dl, origin, ImVec2(origin.x + avail.x, origin.y + titlePlateH),
                   tr("FITTED MODULES"));
     float y = origin.y + titlePlateH + 10.0f;

@@ -2110,7 +2110,7 @@ bool drawDeckKey(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, const char*
     // and still visibly dimmer than the cream of a live key, so the state is
     // carried by the tone gap rather than by making the words unreadable.
     ImFont* f = cascade::gui::fonts::ui();
-    const float px = cascade::gui::fonts::kTinySize;
+    const float px = cascade::gui::fonts::tinyPx();
     const ImU32 ink = enabled ? theme::kEnamel : theme::kInkMuted;
     const float lh = faceH(f, px);
     const int lines = (line2 != nullptr && line2[0] != '\0') ? 2 : 1;
@@ -2164,7 +2164,7 @@ bool drawRockerRow(ImDrawList* dl, const ImVec2& tl, float width, float rowH,
     // The label plate: lit brass with ink lettering when on, an engraved
     // outline when off. Same object either way, so the eye compares one thing.
     ImFont* f = cascade::gui::fonts::ui();
-    const float px = cascade::gui::fonts::kTinySize;
+    const float px = cascade::gui::fonts::tinyPx();
     const float lw = textW(f, px, label);
     const float lh = faceH(f, px);
     const ImVec2 lTL(tl.x + rw + 8.0f, tl.y + (rowH - lh - 6.0f) * 0.5f);
@@ -2198,7 +2198,7 @@ bool drawRockerRow(ImDrawList* dl, const ImVec2& tl, float width, float rowH,
 
     if (hint != nullptr && hint[0] != '\0') {
         ImFont* hf = cascade::gui::fonts::legend();
-        const float hpx = cascade::gui::fonts::kTinySize;
+        const float hpx = cascade::gui::fonts::tinyPx();
         const float hw = textW(hf, hpx, hint);
         const float hx = tl.x + width - lampR * 2.0f - 8.0f - hw;
         if (hx > lBR.x + 8.0f) {
@@ -2251,7 +2251,7 @@ bool drawSegment(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, const char*
                     theme::kBrassBright, r + 1.0f, 0, theme::kHairline);
     }
     ImFont* f = cascade::gui::fonts::ui();
-    const float px = cascade::gui::fonts::kTinySize;
+    const float px = cascade::gui::fonts::tinyPx();
     dl->AddText(f, px,
                 ImVec2((tl.x + br.x) * 0.5f - textW(f, px, label) * 0.5f,
                        (tl.y + br.y) * 0.5f - faceH(f, px) * 0.5f + (selected ? 1.0f : 0.0f)),
@@ -2279,7 +2279,7 @@ void addHatch(ImDrawList* dl, const ImVec2& tl, const ImVec2& br) {
 // gold for something the user can fix, rust for something refused.
 float noteHeight(float width, const char* text) {
     ImFont* f = cascade::gui::fonts::ui();
-    const float px = cascade::gui::fonts::kTinySize;
+    const float px = cascade::gui::fonts::tinyPx();
     const float wrap = width - 10.0f;
     if (wrap < 20.0f) { return faceH(f, px) + 8.0f; }
     return f->CalcTextSizeA(px, FLT_MAX, wrap, text).y + 8.0f;
@@ -2289,7 +2289,7 @@ void drawNote(ImDrawList* dl, const ImVec2& tl, float width, ImU32 accent,
               const char* text) {
     if (dl == nullptr || width < 30.0f) { return; }
     ImFont* f = cascade::gui::fonts::ui();
-    const float px = cascade::gui::fonts::kTinySize;
+    const float px = cascade::gui::fonts::tinyPx();
     const float h = noteHeight(width, text);
     dl->AddRectFilled(tl, ImVec2(tl.x + width, tl.y + h), theme::withAlpha(accent, 0.10f));
     dl->AddRectFilled(tl, ImVec2(tl.x + 2.0f, tl.y + h), accent);
@@ -2348,7 +2348,7 @@ void drawCoordCells(ImDrawList* dl, const ImVec2& tl, const char* text, bool kno
     // Never below 9 px: a drum digit smaller than that is a smudge, and at
     // that point the window is too narrow for this control however it is laid
     // out. The clip on the well is what keeps the overflow tidy.
-    const float px = std::max(9.0f, cascade::gui::fonts::kReadingSize * scale);
+    const float px = std::max(9.0f, cascade::gui::fonts::readingPx() * scale);
     for (const char* p = text; *p != '\0'; ++p) {
         const float w = cascade::gui::coordCellWidth(*p) * scale;
         drawFreqDrumCell(dl, ImVec2(x, tl.y),
@@ -2415,7 +2415,7 @@ const char* satelliteSortKeyLabel(int index) {
 // shrink the counter below the proportions the design drew it at.
 float coordCellWidth(char shape) {
     ImFont* f = cascade::gui::fonts::reading();
-    const float px = cascade::gui::fonts::kReadingSize;
+    const float px = cascade::gui::fonts::readingPx();
     const char s[2] = {shape, '\0'};
     const float glyph = f->CalcTextSizeA(px, FLT_MAX, 0.0f, s).x;
     // A sign and a decimal point are not figures and do not need a figure's
@@ -2424,7 +2424,7 @@ float coordCellWidth(char shape) {
                              : std::max(13.0f, glyph + 4.0f);
 }
 
-float coordCellHeight() { return std::max(26.0f, cascade::gui::fonts::kReadingSize + 9.0f); }
+float coordCellHeight() { return std::max(26.0f, cascade::gui::fonts::readingPx() + 9.0f); }
 
 // See map_view.hpp. A figure becomes a dash, a sign becomes nothing, and
 // everything else - the decimal point - is left where it is so the counter
@@ -2471,9 +2471,9 @@ void MapView::drawSatellitePanel(SatelliteDeck& deck,
 
     ImFont* uiF = cascade::gui::fonts::ui();
     ImFont* lgF = cascade::gui::fonts::legend();
-    const float tinyPx = cascade::gui::fonts::kTinySize;
-    const float uiPx = cascade::gui::fonts::kUiSize;
-    const float legPx = cascade::gui::fonts::kLegendSize;
+    const float tinyPx = cascade::gui::fonts::tinyPx();
+    const float uiPx = cascade::gui::fonts::uiPx();
+    const float legPx = cascade::gui::fonts::legendPx();
     const float tinyH = faceH(lgF, tinyPx);
     const float smallH = faceH(uiF, tinyPx);
     const float uiH = faceH(uiF, uiPx);

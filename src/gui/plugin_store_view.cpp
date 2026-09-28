@@ -31,6 +31,7 @@
 #include "core/plugin_abi.h"
 #include "core/plugin_repo.hpp"
 #include "gui/fonts.hpp"
+#include "gui/ui_scale.hpp"
 #include "gui/scope_face.hpp"
 #include "gui/text_fit.hpp"
 #include "gui/theme.hpp"
@@ -1714,7 +1715,10 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
             // everywhere else in this application.
             ImGui::SetCursorScreenPos(ImVec2(kTL.x + 2.0f, kTL.y + addKeyH + 6.0f));
             ImGui::PushStyleColor(ImGuiCol_Text, theme::vec(theme::kCream));
-            ImGui::PushFont(uf, tiny);
+            // /uiscale::factor(): see the note beside the PushFont(uf, uiPx
+            // / ...) calls in this file - `tiny` (prose()) already carries
+            // the live scale.
+            ImGui::PushFont(uf, tiny / cascade::gui::uiscale::factor());
             if (ackWrapH <= 0.0f) {
                 ImGui::Checkbox(ack.c_str(), &deck.addAllAck);
             } else {
@@ -2008,7 +2012,10 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
         // The field's PLACEHOLDER, which is the only instruction the search
         // gives before anything is typed - muted rather than faint for that.
         ImGui::PushStyleColor(ImGuiCol_TextDisabled, theme::vec(theme::kInkMuted));
-        ImGui::PushFont(uf, uiPx);
+        // /uiscale::factor(): PushFont's argument is the PRE-FontScaleMain
+        // base; uiPx (prose(), fonts::panelPx()) already carries the live
+        // scale, and style.FontScaleMain would otherwise apply it twice.
+        ImGui::PushFont(uf, uiPx / cascade::gui::uiscale::factor());
         // Fitted to the field (text_fit.hpp): the translated hint ran past the
         // field's end and was cut mid-word ("...susiaurintumėte katalog", lt).
         inputTextWithFittedHint("##search", tr("type to narrow the catalogue"), deck.search,
@@ -2587,7 +2594,9 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
                 // --- the acknowledgement gate, then the key -----------------
                 if (!sm.plate.legalNotice.empty() && !sm.plate.fitted) {
                     ImGui::PushStyleColor(ImGuiCol_Text, theme::vec(theme::kCream));
-                    ImGui::PushFont(uf, uiPx);
+                    // See the note beside the other PushFont(uf, uiPx / ...)
+                    // call in this file: uiPx already carries the live scale.
+                    ImGui::PushFont(uf, uiPx / cascade::gui::uiscale::factor());
                     ImGui::Checkbox(
                         trId("I have read the notice above and accept responsibility"),
                         &deck.legalAck);

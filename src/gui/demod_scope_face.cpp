@@ -183,7 +183,7 @@ void addReadouts(ImDrawList* dl, const ImVec2& a, const ImVec2& b,
                  ScopeSignal signal) {
     ImFont* legend = fonts::legend();
     ImFont* reading = fonts::reading();
-    const float px = fonts::kTinySize;
+    const float px = fonts::tinyPx();
     const float y = b.y - px - 5.0f;
 
     // scopeSignalCaption() is pure prose, safe to translate here where it is
@@ -253,7 +253,7 @@ void addReadouts(ImDrawList* dl, const ImVec2& a, const ImVec2& b,
 // flat trace at zero: that claims a measurement that was not made.
 void addNoSignal(ImDrawList* dl, const ImVec2& a, const ImVec2& b, const char* why) {
     ImFont* f = fonts::legend();
-    const float px = fonts::kLegendSize;
+    const float px = fonts::legendPx();
     const float w = textWidth(f, px, why);
     glassText(dl, f, px,
               ImVec2((a.x + b.x) * 0.5f - w * 0.5f, (a.y + b.y) * 0.5f - px * 0.5f),
@@ -305,7 +305,7 @@ void drawMpxLabels(ImDrawList* dl, const ImVec2& a, const ImVec2& b,
     if (!(w > 0.0f)) { return; }
 
     ImFont* reading = fonts::reading();
-    const float px = fonts::kTinySize;
+    const float px = fonts::tinyPx();
     // The bracket sits under the top rule; band names hang under the bracket
     // and tone names one line lower, so "Pilot" cannot land on top of the sum
     // channel's name where the two nearly touch.
@@ -552,11 +552,11 @@ void drawDemodScopeFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
                 // back with a Q and no I, and a two-trace display that names
                 // one of its traces is worse than one that names neither.
                 ImFont* lf = fonts::legend();
-                glassText(dl, lf, fonts::kTinySize,
-                          ImVec2(a.x + 5.0f, iCentre - divPx - fonts::kTinySize),
+                glassText(dl, lf, fonts::tinyPx(),
+                          ImVec2(a.x + 5.0f, iCentre - divPx - fonts::tinyPx()),
                           theme::kPhosphor, "I");
-                glassText(dl, lf, fonts::kTinySize,
-                          ImVec2(a.x + 5.0f, qCentre - divPx - fonts::kTinySize),
+                glassText(dl, lf, fonts::tinyPx(),
+                          ImVec2(a.x + 5.0f, qCentre - divPx - fonts::tinyPx()),
                           theme::kPhosphorDim, "Q");
                 break;
             }

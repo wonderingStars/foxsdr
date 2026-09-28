@@ -113,13 +113,132 @@ One factor, `S`, in the new module `src/gui/ui_scale.{hpp,cpp}`
   a change is seen. Nothing in this application currently *cannot* apply a
   scale change live.
 
+## Round 2: `style.FontScaleMain`, the half the first pass missed
+
+The first pass shipped `ScaleAllSizes` (padding/spacing) and the custom-drawn
+rail/axis/patch text, and screenshotted it as done. A second look at
+`receiver_s200.png` found the result inconsistent: **ordinary ImGui widgets -
+the "Signal generator" combo, "Refresh", "Look for network USRPs", every
+status-column line - were not growing at all**, and **the whole top deck
+(START dome, MASTER lamps, the nixie counter, the VOLUME dial, the two
+meters) was not growing either**, which is exactly the control cluster a 4K
+user needs biggest.
+
+The missing piece was `style.FontScaleMain` (ImGui 1.92's actual "scale every
+font" knob; `imgui.h` - *"recap: ImGui::GetFontSize() == FontSizeBase *
+(FontScaleMain * FontScaleDpi * other_scaling_factors)"*). `ScaleAllSizes`
+never touches anything font-related - grep its body in `imgui.cpp` and there
+is no font field in the list - so nothing using the DEFAULT bound font (every
+plain `ImGui::Text`/`Button`/`Combo`/`Checkbox`, and every
+`ImGui::PushFont(font, someBaseSize)` call anywhere in the codebase) had ever
+been scaled. `applyPendingUiScale` now sets `scaled.FontScaleMain =
+uiscale::factor()` on the same style object `ScaleAllSizes` already rebuilds.
+
+**This changes the rule for `ImGui::PushFont`, and it is the opposite of the
+rule for raw `ImDrawList::AddText`/`ImFont::CalcTextSizeA`.** PushFont's size
+argument is documented as the PRE-FontScaleMain base - passing an
+ALREADY-scaled size (`fonts::uiPx()`, `capPx` computed from it, anything
+carrying `uiscale::factor()`) into PushFont scales it a SECOND time. Every
+real `ImGui::PushFont` call site in the codebase was audited for this
+(`grep -rn "ImGui::PushFont(" src/gui/*.cpp`, 20 hits) and fixed where it
+mattered: `benchSection`'s header font (`app_window.cpp`), the master lamp
+words and the bias-tee caption and the frequency-edit field on the deck, the
+mute banner's font-size ladder, and three PushFont calls in
+`plugin_store_view.cpp` that had started from `storeProsePx()` (already
+scaled) - each now divides back out by `uiscale::factor()`, or (where the
+value was a bare base constant already, as in every instrument face) is left
+alone, because those get scaled automatically and correctly by
+`FontScaleMain` with no code change at all.
+
+**The top-bar deck now scales.** `drawToolbar` already drew everything
+through one local `scale` and three `X()`/`Y()`/`S()` reference-unit lambdas
+(`app_window.cpp`) - a pre-existing "shrink to fit a narrow window, never
+grow past 100%" mechanism (`gui::deckScale`, `tune_control.hpp`). The fix
+composes rather than replaces it:
+`deckScaleOnly = deckScale(availW / S, layout, kBarMinScale)`, then
+`scale = deckScaleOnly * S`. At S=1 this is `deckScale(availW, ...) * 1.0f` -
+identical to before. At S>1 the deck asks "does availW hold my S-scaled
+size", shrinking in the same absolute pixels the narrow-window rule always
+used once it does not, and growing up to S otherwise - so the whole cluster
+(dome, lamps, counter, dial) scales together, screenshotted at
+`deck_s150.png`/`deck_s200.png`. `capPxBase` (a second, NOT-S-scaled variant
+of the deck's caption size) exists purely to satisfy the PushFont rule above
+for the master lamp words.
+**The two meters (SAMPLE RATE, VOLUME) now scale too** - their reference
+header called them "pinned to the bar's right edge, they do not scale",
+which was true when "scale" only ever meant *narrower*; `kMeterW`,
+`kMeterGap`, `kMeterRightMargin` and the face height are now multiplied by
+the same combined `scale` in `drawToolbar`, and `deckMetersFit`
+(`tune_control.hpp`) was unified onto `deckCoreW(c) * scale` for BOTH counter
+sizes - the 1x-counter branch used to compare against the literal unscaled
+`kDeckCoreW` regardless of `scale`, which was harmless while `scale` could
+only shrink but would have let the meters overlap a cluster that had grown
+past them. Screenshotted wide (`deck_wide_s150.png`, `deck_wide_s200.png`,
+2200x900 and 2600x1000) to show the meters actually drawn, since the default
+1280-wide window does not hold them at high `S` any more than it held them
+at 1x on a narrow one - dropped, not overlapped, which is the existing
+design's own answer to "not enough room".
+
+**The rest of "what remains unscaled" from the first pass is now scaled for
+its text, via the SAME sweep** (`fonts::kXSize` -> `fonts::xPx()` plus the
+PushFont audit above): `instrument_beacon/face/fax/meter/nav_bearing/pager/
+teleprinter/tone_alert/weather_console.cpp`, `demod_scope_face.cpp`,
+`map_view.cpp`, `plugins_view.cpp`, `band_plan_style.{cpp,hpp}`. None of
+these had a PushFont call using an already-scaled size except
+`instrument_fax.cpp` (3 sites) and `instrument_meter.cpp` (1 site), both
+fixed the same way. `band_plan_style.cpp`'s `bandRibbonGeometry` had a
+`constexpr float kSmallLabelPx = fonts::uiPx();` - `fonts::uiPx()` reads
+live process state and cannot be `constexpr`; changed to `const`, the only
+compile fix this sweep needed. **What is NOT scaled in these files**: any
+hard pixel constant that is not a font size - gauge dimensions, marker
+sizes, padding unrelated to text - was out of scope for this pass; only the
+lettering was swept.
+
+**The cabinet margin clamp is fixed.** `drawCabinet`'s
+`std::clamp(..., std::max(10.0f, minMargin), 24.0f)` had a LITERAL upper
+bound that the first pass correctly identified as a hazard (scaling only the
+floor could invert the clamp) and left alone. Both ends now scale
+(`uiscale::px(10.0f)`, `uiscale::px(24.0f)`), and the two real call sites
+(the main window's own cabinet, and every page's via `beginPage`) now pass
+`uiscale::px(kRailMinMargin)` instead of the bare constant - fixing the
+plugin store's own margin too, since it shares the same `drawCabinet`.
+
+**Dropped in this round, on the coordinator's instruction**: clipping
+`spectrum_view.cpp`'s header caption to its own panel. That fix is the
+owner's own separate session (`task_dd24393d`). The font-size scaling this
+change already carries there (`legendPx`/`tinyPx` in `drawChrome`, committed
+in round 1) is untouched; nothing else in `spectrum_view.cpp` changed in
+round 2.
+
+**Patch node plate geometry remains unscaled, and was deliberately left
+that way again.** The only clean way found to scale it uniformly - folding
+`S` into the patch canvas's own `View::zoom` at construction - would also
+feed back into `ui.view.zoom`, the value the mouse-wheel handler reads AND
+WRITES every frame (`zoomAbout` in `patch_view_math.hpp` sets
+`ui.view.zoom = v.zoom` after a scroll), which is itself part of the
+persisted patch state. Composing S there risks the interface-scale factor
+getting silently baked into a user's saved zoom the first time they
+scroll-wheel-zoom a patch, compounding on every subsequent load. That is a
+correctness risk to persisted user data, not merely a visual gap, and was
+judged not safe to take under this task's time budget; only the caption/
+reading TEXT sizes in `patch_view.cpp` (round 1) scale.
+
 ## What is fully routed through `S`
 
 - The whole font/ImGui-style mechanism above (every ordinary ImGui widget -
-  buttons, checkboxes, combos, menu items, plain text - grows for free the
-  moment the atlas... no atlas rebuild needed; grows because `ScaleAllSizes`
-  covers padding/spacing and every explicit `PushFont`/`CalcTextSizeA` call
-  this change touched now asks for `fonts::*Px()`).
+  buttons, checkboxes, combos, menu items, plain text - grows for free via
+  `style.FontScaleMain`, and `ScaleAllSizes` covers padding/spacing) plus
+  every explicit `PushFont`/`CalcTextSizeA`/`AddText` call this change
+  touched, each using the rule that matches how it reaches the screen (see
+  "Round 2" above for exactly which rule applies where).
+- **The top-bar deck** (`app_window.cpp`'s `drawToolbar`): the dome, the
+  MASTER lamps, the bias-tee key, the frequency counter, the VOLUME dial and
+  the SAMPLE RATE / VOLUME meters, composed with the deck's own existing
+  narrow-window shrink rather than replacing it (Round 2, above).
+- Every instrument face, the demod scope, map chrome, the Plugins section
+  and the band-plan ribbon (their TEXT only - Round 2, above).
+- The cabinet margin, both ends of its clamp, on the main window and on
+  every page (Round 2, above).
 - **The rail** (`app_window.cpp`'s `benchSection`, `benchSwitchRow`,
   `railPlateLabel`, `drawRailBankKeys`, `benchBankKey`, `drawViewKeys`) and
   its chip/lamp (`scope_view.cpp`'s `drawRailChip`): every row height, key
@@ -162,51 +281,27 @@ One factor, `S`, in the new module `src/gui/ui_scale.{hpp,cpp}`
 
 ## What remains unscaled (deliberately, and listed rather than hidden)
 
-Per-instrument gauge faces and a few whole panels were **not** touched in
-this pass, and render at their base (S=1) pixel size regardless of `S`. None
-of these clip or overlap at any `S` - they simply do not grow - because
-nothing about their layout changed:
+After round 2, two things remain, both for stated reasons rather than by
+omission:
 
-- `instrument_beacon.cpp`, `instrument_face.cpp`, `instrument_fax.cpp`,
-  `instrument_meter.cpp`, `instrument_nav_bearing.cpp`,
-  `instrument_pager.cpp`, `instrument_teleprinter.cpp`,
-  `instrument_tone_alert.cpp`, `instrument_weather_console.cpp` - the bench's
-  individual instrument gauges (13-14 font-size call sites each in the
-  busiest cases).
-- `demod_scope_face.cpp`, `map_view.cpp`, `plugins_view.cpp`,
-  `band_plan_style.{cpp,hpp}` - the demod scope, the map chrome (labels,
-  legends - the map TILES themselves are raster images and are unaffected
-  either way), the Plugins section's own drawing, and the band-plan ribbon.
-- `patch_view.cpp`'s node PLATE geometry, grid, wires, ports and resize grip
-  (`kGridWorld`, `kWireGrabPx`, `nodeSize()` and the plate's own pixel
-  offsets in `patch_view_math.hpp`) - only the caption and reading TEXT sizes
-  were scaled (see above); the geometry they sit in still follows the
-  canvas's own independent zoom only.
-- `app_window.cpp`'s cabinet margin (`drawCabinet`, `kRailMinMargin`) was
-  deliberately left alone: it already derives its margin from the WINDOW's
-  own size (`min(w,h) * 0.022`, clamped `[max(10, minMargin), 24]`) rather
-  than from a font size, and its upper clamp bound is a bare `24.0f` inside
-  the same expression as the lower one - scaling only the lower bound risks
-  `clamp(x, lo > hi)` once `S` exceeds about 1.1. Properly scaling this needs
-  the upper bound threaded through too, which is a self-contained follow-up
-  rather than a one-line change, and is not required for the "does not clip"
-  bar: the cabinet margin's job (room for the corner screws and the rail's
-  keys) is already met at every `S`, it just does not grow past 24 px of its
-  own accord.
-- `tune_control.hpp`'s top-bar deck (transport, master lamps, the frequency
-  counter's chrome, the volume dial) - a large, separately load-bearing
-  system with its own `kDeckMinWindowW` static assertion against the bar's
-  geometry. `kMinWindowW`/`kMinWindowH` (the OS-enforced minimum window size)
-  now scale with `S`, but the bar's own internal layout does not yet, so at a
-  high `S` the deck keeps its base size while the window around it is
-  required to be larger - there is room to spare, never a clip, but the two
-  are not yet visually consistent.
+- **`patch_view.cpp`'s node PLATE geometry**: the grid, wires, ports, resize
+  grip and the plate's own pixel offsets (`kGridWorld`, `kWireGrabPx`,
+  `nodeSize()` in `patch_view_math.hpp`) still follow the canvas's own
+  independent zoom only - only the caption/reading TEXT sizes scale. See
+  "Round 2" above for why: the clean fix (folding `S` into `View::zoom`)
+  risks corrupting a user's PERSISTED patch zoom the first time they
+  scroll-wheel-zoom, which was judged too risky to take under this task's
+  time budget.
+- **Non-font hard-coded pixels inside the instrument faces, the demod scope,
+  map chrome, the Plugins section and the band-plan ribbon** - gauge
+  dimensions, marker sizes, padding that is not a font size. Round 2 swept
+  every FONT SIZE in these files (they now grow with `S`, either via
+  `fonts::xPx()` in a raw draw or automatically via `style.FontScaleMain` in
+  a `PushFont`), but did not attempt every other pixel constant they contain.
 
-None of the above was reached by the surfaces this task's verification list
-asks for (main/patch view, receiver spectrum/waterfall, the rail with
-drawers, a plugin window, the patch canvas outer frame, Display settings),
-and all render pixel-identically to before this change at `S=1` because
-nothing in them changed.
+Both are listed here rather than silently left as they were. Neither clips
+or overlaps at any `S` - they simply do not grow to the same degree the rest
+of the interface now does.
 
 ## Verification
 
