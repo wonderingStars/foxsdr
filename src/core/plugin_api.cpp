@@ -6,8 +6,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstring>
 
+#include "core/maidenhead.hpp"
 #include "core/utf8_text.hpp"
 // The web API's own bounds, reused rather than restated: a value a browser is
 // refused is refused to a plugin too, for the same stated reason, and the two
@@ -169,7 +171,8 @@ PluginSettingsMap sanitisePluginSettings(const PluginSettingsMap& in) {
 
 PluginApiCore::PluginApiCore() : clock_(std::make_shared<StreamClock>()) {}
 
-PluginApiClient& PluginApiCore::client(const std::string& key, const std::string& name) {
+PluginApiClient& PluginApiCore::client(const std::string& key, const std::string& name,
+                                       std::uint32_t capabilities) {
     std::lock_guard<std::mutex> lk(mutex_);
     for (const std::unique_ptr<PluginApiClient>& c : clients_) {
         if (c->key == key) {
@@ -178,14 +181,17 @@ PluginApiClient& PluginApiCore::client(const std::string& key, const std::string
             // plugin thread reads `name` without a lock (the settings store is
             // keyed on it), so it has to be immutable once published. A build
             // that renames itself under an unchanged file name keeps its old
-            // settings bucket until the next launch, which is harmless.
+            // settings bucket until the next launch, which is harmless. Same
+            // rule for `capabilities`.
             (void)name;
+            (void)capabilities;
             return *c;
         }
     }
     auto c = std::make_unique<PluginApiClient>();
     c->key = key;
     c->name = name;
+    c->capabilities = capabilities;
     c->index = clients_.size();
     ClientState st;
     st.markers.reserve(CASCADE_MAX_MARKERS_PER_PLUGIN);
@@ -312,9 +318,14 @@ void PluginApiCore::publish(const ReceiverFacts& f) {
                         std::strncmp(f.deviceName, o.deviceName, CASCADE_DEVICE_NAME_CHARS) != 0 ||
                         gainsMoved;
     const bool audio = first || f.volume != o.volume || f.muted != o.muted;
-    // The stereo flag is state too, though it belongs to no group of its
-    // own: it moves the overall counter only.
-    const bool other = first || f.stereo != o.stereo;
+    // The stereo flag and the receiver's position are state too, though
+    // neither belongs to tune/mode/device/audio - they move the overall
+    // counter only. The position (rxPositionSet/rxLatDeg/rxLonDeg) is what
+    // receiverLocator is computed from in getState(), so a "Set RX here" or a
+    // GPS fix has to advance `seq` or a plugin re-reading only on seq moving
+    // would never see its grid square appear or change.
+    const bool other = first || f.stereo != o.stereo || f.rxPositionSet != o.rxPositionSet ||
+                       f.rxLatDeg != o.rxLatDeg || f.rxLonDeg != o.rxLonDeg;
     if (tune) { ++w.tuneSeq; }
     if (mode) { ++w.modeSeq; }
     if (device) { ++w.deviceSeq; }
@@ -466,7 +477,29 @@ std::int32_t PluginApiCore::getState(const PluginApiClient& c,
                                      CascadeReceiverState* out) const {
     const std::int32_t g = gate(c);
     if (g != CASCADE_API_OK) { return g; }
-    if (out == nullptr || out->structSize < sizeof(CascadeReceiverState)) {
+    // BACKWARD-COMPATIBILITY FLOOR, not "must equal our own sizeof": the
+    // header's struct-growth rule (see the comment above CascadeReceiverState
+    // in plugin_abi.h) is that the host writes min(its own sizeof,
+    // out->structSize) bytes, so a plugin built against an OLDER, SMALLER
+    // CascadeReceiverState (before receiverLocator was appended in 0.99.43)
+    // must still get CASCADE_API_OK and a correctly truncated copy - it is
+    // never entitled to fields past the end of the struct it allocated, but
+    // it must not be refused outright just because this host's struct grew.
+    //
+    // THE FLOOR IS THE OLD STRUCT'S OWN SIZE, NOT sizeof(uint32_t). Every
+    // pre-0.99.43 plugin's CascadeReceiverState is EXACTLY
+    // offsetof(CascadeReceiverState, receiverLocator) bytes (192 on every
+    // target this ships to) - that is the whole, real, level-1 struct such a
+    // plugin actually allocates, and it is what "old plugin, not garbage"
+    // means. A structSize below that was never a valid struct any real
+    // plugin - old or new - ever had; accepting it as if it were a genuine
+    // truncated read would turn a caller's bug (an uninitialised or corrupt
+    // structSize) into a silent short read instead of the refusal that names
+    // it. The floor is checked structurally with offsetof rather than a
+    // literal 192 so it tracks the struct if a field before receiverLocator
+    // is ever reordered.
+    if (out == nullptr ||
+        out->structSize < offsetof(CascadeReceiverState, receiverLocator)) {
         return CASCADE_API_BAD_ARGUMENT;
     }
     Published p;
@@ -502,6 +535,26 @@ std::int32_t PluginApiCore::getState(const PluginApiClient& c,
     s.gainCount = std::min<std::uint32_t>(f.gainCount, kMaxPublishedGains);
     std::memcpy(s.deviceName, f.deviceName, sizeof(s.deviceName));
     s.deviceName[CASCADE_DEVICE_NAME_CHARS - 1] = '\0';
+    // receiverLocator: appended field, see the header's struct-growth note.
+    // Computed here rather than stored pre-formatted, because it is O(1)
+    // arithmetic and this keeps exactly one place (maidenheadGrid6) that
+    // knows the Maidenhead rules.
+    //
+    // GATED ON CASCADE_CAP_RECEIVER_LOCATOR, per client - not on whether a
+    // position happens to be set. A plugin that never declared the bit reads
+    // an empty locator and an unset flag whatever the receiver's position is,
+    // exactly as if there were none: the field exists to answer a plugin that
+    // asked for it, not to broadcast the user's location to every module that
+    // merely attached (see the header's note on CASCADE_CAP_RECEIVER_LOCATOR).
+    s.receiverLocator[0] = '\0';
+    if (f.rxPositionSet && (c.capabilities & CASCADE_CAP_RECEIVER_LOCATOR) != 0u) {
+        char grid[7];
+        if (cascade::core::maidenheadGrid6(f.rxLatDeg, f.rxLonDeg, grid)) {
+            std::memcpy(s.receiverLocator, grid, sizeof(grid));
+            flags |= CASCADE_STATE_LOCATOR_KNOWN;
+            s.flags = flags;
+        }
+    }
     // Only as many bytes as BOTH sides know about - see the header's note on
     // in/out structs. Today they are equal; the min is for the day they are
     // not.
@@ -834,6 +887,60 @@ std::int32_t PluginApiCore::settingsSet(const PluginApiClient& c, const char* ke
     kv[key] = std::move(v);
     ++settingsGeneration_;
     return CASCADE_API_OK;
+}
+
+std::int32_t PluginApiCore::settingsUiSet(const std::string& pluginName, const char* key,
+                                          const char* value) {
+    if (!validSettingKey(key)) { return CASCADE_API_BAD_ARGUMENT; }
+    std::string v;
+    if (value != nullptr) {
+        const std::size_t n = boundedLen(value, CASCADE_SETTING_VALUE_BYTES);
+        if (n >= CASCADE_SETTING_VALUE_BYTES) { return CASCADE_API_OUT_OF_RANGE; }
+        if (!validUtf8(value, n)) { return CASCADE_API_BAD_ARGUMENT; }
+        v.assign(value, n);
+    }
+    std::lock_guard<std::mutex> lk(settingsMutex_);
+    if (value == nullptr) {
+        const auto pit = settings_.find(pluginName);
+        if (pit == settings_.end() || pit->second.erase(key) == 0u) {
+            return CASCADE_API_NOT_FOUND;
+        }
+        if (pit->second.empty()) { settings_.erase(pit); }
+        ++settingsGeneration_;
+        std::uint64_t& s = settingsUiSeq_[pluginName];
+        s = (s == 0u ? 2u : s + 1u);
+        return CASCADE_API_OK;
+    }
+    std::map<std::string, std::string>& kv = settings_[pluginName];
+    const auto it = kv.find(key);
+    if (it == kv.end() && kv.size() >= CASCADE_MAX_SETTINGS_PER_PLUGIN) {
+        return CASCADE_API_LIMIT;
+    }
+    if (it != kv.end() && it->second == v) { return CASCADE_API_OK; }  // no change, no bump
+    kv[key] = std::move(v);
+    ++settingsGeneration_;
+    std::uint64_t& s = settingsUiSeq_[pluginName];
+    s = (s == 0u ? 2u : s + 1u);
+    return CASCADE_API_OK;
+}
+
+std::int32_t PluginApiCore::settingsUiGet(const std::string& pluginName, const char* key,
+                                          std::string& out) const {
+    out.clear();
+    if (!validSettingKey(key)) { return CASCADE_API_BAD_ARGUMENT; }
+    std::lock_guard<std::mutex> lk(settingsMutex_);
+    const auto pit = settings_.find(pluginName);
+    if (pit == settings_.end()) { return CASCADE_API_NOT_FOUND; }
+    const auto kit = pit->second.find(key);
+    if (kit == pit->second.end()) { return CASCADE_API_NOT_FOUND; }
+    out = kit->second;
+    return CASCADE_API_OK;
+}
+
+std::uint64_t PluginApiCore::settingsUiSeq(const std::string& pluginName) const {
+    std::lock_guard<std::mutex> lk(settingsMutex_);
+    const auto it = settingsUiSeq_.find(pluginName);
+    return it == settingsUiSeq_.end() ? 1u : it->second;
 }
 
 std::int32_t PluginApiCore::log(const PluginApiClient& c, std::uint32_t level,

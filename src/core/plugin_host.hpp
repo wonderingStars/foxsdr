@@ -140,6 +140,10 @@ enum class PluginRejection {
     AudioProcessorStructSizeMismatch,
     MissingAudioProcessorFunction,  // create/process/destroy NULL, or no title
     AudioProcessorReservedNotZero,  // flags is reserved and must be 0
+    // --- CASCADE_CAP_SETTINGS_UI (0.99.43) ---------------------------------
+    MissingSettingsUiApi,
+    SettingsUiStructSizeMismatch,
+    SettingsUiBadTable,  // specs NULL, or count 0 or above CASCADE_MAX_SETTING_SPECS
 };
 
 // The whole compatibility decision, as a pure function of the descriptor, so
@@ -188,6 +192,10 @@ struct LoadedPlugin {
     const CascadeInstrumentApi* instrument = nullptr;      // CASCADE_CAP_INSTRUMENT
     const CascadeHostClientApi* hostClient = nullptr;      // CASCADE_CAP_HOST_CLIENT
     const CascadePresetApi* preset = nullptr;              // CASCADE_CAP_PRESET
+    // CASCADE_CAP_SETTINGS_UI (0.99.43): the form the host draws for the user.
+    // A static table, like `preset`; core/plugin_settings_ui.hpp turns it
+    // into fields.
+    const CascadeSettingsUiApi* settingsUi = nullptr;
     const CascadeBasemapApi* basemap = nullptr;            // CASCADE_CAP_BASEMAP
     const CascadeTrackInfoApi* trackInfo = nullptr;        // CASCADE_CAP_TRACK_INFO
     // CASCADE_CAP_AUDIO_OUT. Carries no create/destroy of its own: it rides on

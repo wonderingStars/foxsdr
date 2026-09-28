@@ -86,6 +86,7 @@ const CascadePresetApi kPresetApi{};
 const CascadeTrackInfoApi kTrackInfoApi{};
 const CascadeAudioOutApi kAudioOutApi{};
 const CascadeAudioProcessorApi kAudioProcessorApi{};  // host API level 1
+const CascadeSettingsUiApi kSettingsUiApi{};          // 0.99.43
 
 // A module the host LOADED. Tables are attached by the caller.
 LoadedPlugin loadedRecord(const char* path, const char* name, std::uint32_t caps) {
@@ -214,6 +215,7 @@ int main() {
         all.trackInfo = &kTrackInfoApi;
         all.audioOut = &kAudioOutApi;
         all.audioProcessor = &kAudioProcessorApi;
+        all.settingsUi = &kSettingsUiApi;
         for (std::uint32_t bit = 1u; bit != 0u; bit <<= 1) {
             if ((static_cast<std::uint32_t>(CASCADE_CAP_ALL_KNOWN) & bit) == 0u) { continue; }
             if (!moduleProvides(all, bit)) {

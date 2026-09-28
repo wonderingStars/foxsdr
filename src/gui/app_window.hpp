@@ -54,6 +54,7 @@ struct GLFWwindow;
 // that puts an already-wrong one back. ImGui-free for the same reason as the
 // headers below it - the tests include it without a graphics context.
 #include "gui/page_geometry.hpp"
+#include "gui/plugin_settings_form.hpp"
 #include "gui/store_first_open.hpp"
 #include "gui/rail_banks.hpp"
 #include "gui/bench_rail.hpp"
@@ -1160,6 +1161,21 @@ private:
     // for a plugin the user just switched off would be confusing, and the
     // rail's own "Start"/preset buttons are already the way back in.
     void drawDecoderPresetBars();
+    // --- Settings forms: fields a plugin asks the user to fill in (0.99.43) ---
+    //
+    // CASCADE_CAP_SETTINGS_UI: one editable field per CascadeSettingSpec,
+    // drawn wherever the plugin's other controls already appear - its row
+    // under "Turn on and off plugins" (scope "rail"), its own window (scope
+    // "window", a folded "Plugin settings" header under the preset bar) and
+    // its node's inspector on the patch page (scope "patch"). Every surface
+    // reads and writes the ONE settings store (PluginApiCore::settingsUiGet /
+    // settingsUiSet), so a callsign typed on the patch page is the callsign
+    // the receiver's copy of the plugin reads too. Draws nothing, and costs
+    // no space, for a plugin that declares no form.
+    void drawPluginSettingsFields(const cascade::core::LoadedPlugin& p, const char* scope);
+    // The own-window form, looked up by the window's plugin display name (the
+    // same identity drawPluginPresetBar takes).
+    void drawPluginSettingsSection(const std::string& displayName);
     // THE SAFE POINT: called once a frame, from drawUi, AFTER drawPluginWindows
     // has finished every one of its loops — never from inside one. Consumes
     // pendingPresetRequest_ (at most one; see its own comment) and, if there
@@ -3725,6 +3741,8 @@ private:
     // is the only reader, called once a frame from drawUi AFTER
     // drawPluginWindows returns — never from inside it.
     cascade::gui::PendingPresetRequest pendingPresetRequest_;
+    // The text being typed in each drawn settings field (drawPluginSettingsFields).
+    cascade::gui::PluginSettingsFormState pluginSettingsForms_;
 
     // --- The user's own presets (0.99.4) ---------------------------------------
     // AppConfig::userPresets, for every plugin (see core/user_presets.hpp for

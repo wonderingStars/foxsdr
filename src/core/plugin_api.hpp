@@ -183,6 +183,15 @@ struct ReceiverFacts {
     double rates[kMaxPublishedRates] = {};
     double outputRateHz = 0.0;
     std::uint64_t outputFrames = 0;  // measurement: never bumps a counter
+
+    // The receiver's position, exactly as AppConfig::rxPositionSet/rxLatDeg/
+    // rxLonDeg holds it - GPS, "Set RX here", or typed, whichever the user
+    // last set. getState() turns this into a Maidenhead grid for
+    // CascadeReceiverState::receiverLocator; unset stays unset, never a
+    // guessed 0,0.
+    bool rxPositionSet = false;
+    double rxLatDeg = 0.0;
+    double rxLonDeg = 0.0;
 };
 
 // The stream clock the plugin runner keeps (see CascadeStreamInfo). Written
@@ -221,6 +230,12 @@ struct PluginApiClient {
     std::string key;    // module file name: grants, stop, markers, commands
     std::string name;   // descriptor name: the settings store
     std::size_t index = 0;
+    // LoadedPlugin::capabilities as the descriptor declared it, set once at
+    // construction and never rewritten (same rule as `name` above) - plain,
+    // not atomic, for the same reason: the object is only ever reachable
+    // after it is fully built. getState() reads this to decide whether THIS
+    // client's plugin may see receiverLocator (CASCADE_CAP_RECEIVER_LOCATOR).
+    std::uint32_t capabilities = 0;
 
     // False until the host attaches the plugin and again once it is stopped,
     // removed or the host is shutting down. Every call through a client that
@@ -305,8 +320,12 @@ public:
 
     // ===== Host side (the GUI / control thread) ==============================
 
-    // Find-or-create the client for a module. GUI thread.
-    PluginApiClient& client(const std::string& key, const std::string& name);
+    // Find-or-create the client for a module. GUI thread. `capabilities` is
+    // the descriptor's declared bits (LoadedPlugin::capabilities); stored only
+    // on FIRST creation, exactly like `name` - a client that already exists
+    // for this key keeps whatever it was first created with.
+    PluginApiClient& client(const std::string& key, const std::string& name,
+                           std::uint32_t capabilities = 0);
     std::size_t clientCount() const;
 
     // The set of modules attached by the latest rebuild: those become live,
@@ -390,6 +409,30 @@ public:
                              std::size_t cap) const;
     std::int32_t settingsSet(const PluginApiClient& c, const char* key, const char* value);
 
+    // CASCADE_CAP_SETTINGS_UI (0.99.43): the value the HOST's own drawn field
+    // wrote, on the user's behalf - same store as settingsSet (validated the
+    // same way), but this ALSO advances the per-plugin counter settings_seq
+    // reads, whereas the plugin's own settingsSet deliberately does not. GUI
+    // thread (the field is edited on it). `pluginName` is c.name, i.e. the
+    // descriptor name settingsGet/settingsSet already key on.
+    std::int32_t settingsUiSet(const std::string& pluginName, const char* key,
+                               const char* value);
+    // The counter itself. Any thread; starts at 1 ("never edited by the host
+    // UI yet"), like every other seq counter in this ABI reserving 0 for
+    // "never read". Unknown plugin name reads as 1 too - nothing has changed
+    // for a plugin the host has never drawn a field for.
+    std::uint64_t settingsUiSeq(const std::string& pluginName) const;
+    // What the host's drawn field SHOWS: the stored value for `key` under
+    // `pluginName`, copied into `out`. CASCADE_API_OK when stored,
+    // CASCADE_API_NOT_FOUND when never set (the caller then shows the spec's
+    // defaultValue - the same rule the header gives the plugin), and
+    // CASCADE_API_BAD_ARGUMENT for a key the store could never hold. Host
+    // side: no client and no gate, because the field is drawn whether or not
+    // the plugin is attached. Any thread; one lock and one copy. `out` is
+    // cleared on every non-OK answer.
+    std::int32_t settingsUiGet(const std::string& pluginName, const char* key,
+                               std::string& out) const;
+
     std::int32_t log(const PluginApiClient& c, std::uint32_t level, const char* text);
 
     std::int32_t addCommand(const PluginApiClient& c, std::uint32_t id, const char* label);
@@ -459,6 +502,9 @@ private:
     mutable std::mutex settingsMutex_;
     PluginSettingsMap settings_;
     std::uint64_t settingsGeneration_ = 0;
+    // Per-plugin: CASCADE_CAP_SETTINGS_UI's settings_seq. Guarded by
+    // settingsMutex_, same as settings_ itself.
+    mutable std::map<std::string, std::uint64_t> settingsUiSeq_;
 };
 
 }  // namespace cascade::core

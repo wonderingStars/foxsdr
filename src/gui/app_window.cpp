@@ -3072,6 +3072,12 @@ void benchGroup(const char* caption) {
 }  // namespace
 
 void AppWindow::drawUi() {
+    // Clears last frame's touched marks on every settings-form field, so
+    // flushUntouchedSettingsEdits() at the end of this frame can tell a field
+    // some surface reaches this frame from one nobody reaches any more (see
+    // its own comment). Before anything is drawn, for the same reason as
+    // dispatchKeyBindings below.
+    cascade::gui::beginSettingsFormFrame(pluginSettingsForms_);
     // "Enlarge every reading", handed to the drawing sites for this frame.
     cascade::gui::theme::setReadingsScale(readingsScale_);
     // THE KEYBOARD, FIRST. ImGui has just finished NewFrame, so WantTextInput
@@ -3441,6 +3447,11 @@ void AppWindow::drawUi() {
     // "Still running" beat, five-minute cadence. A no-op when reporting is
     // off, and never blocks - see HeartbeatSender::poll.
     telemetryHeartbeat_.poll(ImGui::GetTime());
+    // THE SAFE POINT for a settings-form edit whose surface disappeared
+    // mid-edit (a window closing, a plugin row going away, the patch page
+    // selecting a different node) - every place a form could have been drawn
+    // this frame, including drawPluginWindows above, has now had its turn.
+    cascade::gui::flushUntouchedSettingsEdits(pluginUi_.api(), pluginSettingsForms_);
 }
 
 void AppWindow::pollAudioHealth() {
@@ -10545,7 +10556,12 @@ void AppWindow::drawDecodersSection() {
         const bool hasPresets = p.preset != nullptr && p.preset->count() > 0u;
         const bool isDecoder =
             p.decoder != nullptr || p.iqDecoder != nullptr || p.imageDecoder != nullptr;
-        if (!hasPresets && !isDecoder) { continue; }
+        // A plugin with a settings form gets a row even when it is neither a
+        // decoder nor a preset publisher: the form is the one place the user
+        // can reach what it asks for.
+        const bool hasSettings = p.settingsUi != nullptr &&
+                                 !cascade::core::settingFieldsFrom(p.settingsUi).empty();
+        if (!hasPresets && !isDecoder && !hasSettings) { continue; }
         anyRow = true;
         ImGui::PushID(static_cast<int>(i));
         ImGui::SeparatorText(p.name.c_str());
@@ -10594,6 +10610,10 @@ void AppWindow::drawDecodersSection() {
                                   "silences nothing. The volume setting is not touched."));
             }
         }
+        // THE PLUGIN'S OWN FORM (CASCADE_CAP_SETTINGS_UI), under its keys.
+        // Safe inside this loop: an edit writes only the settings store,
+        // which nothing here iterates, and rebuilds no instance.
+        if (hasSettings) { drawPluginSettingsFields(p, "rail"); }
         ImGui::PopID();
     }
     if (toggleMuteIdx >= 0 && static_cast<std::size_t>(toggleMuteIdx) < list.size()) {
@@ -13925,6 +13945,33 @@ void AppWindow::drawPatchView() {
                                 "in the Decoder output window."));
                             ImGui::PopStyleColor();
                         }
+                        // THE PLUGIN'S SETTINGS FORM, on the node that runs
+                        // it. The node's key is the module's file key (with
+                        // the picture suffix for an image part); the form and
+                        // its store belong to the module, so the same values
+                        // reach the patch's copy and the receiver's copy.
+                        {
+                            std::string modKey = sel->plugin;
+                            const std::string suffix = cascade::core::patch::kImageKeySuffix;
+                            if (modKey.size() > suffix.size() &&
+                                modKey.compare(modKey.size() - suffix.size(), suffix.size(),
+                                               suffix) == 0) {
+                                modKey.resize(modKey.size() - suffix.size());
+                            }
+                            for (const cascade::core::LoadedPlugin& lp : pluginHost_.plugins()) {
+                                if (!lp.loaded || lp.settingsUi == nullptr ||
+                                    cascade::core::pluginKey(lp) != modKey) {
+                                    continue;
+                                }
+                                if (cascade::core::settingFieldsFrom(lp.settingsUi).empty()) {
+                                    break;
+                                }
+                                ImGui::Spacing();
+                                ImGui::SeparatorText(tr("Plugin settings"));
+                                drawPluginSettingsFields(lp, "patch");
+                                break;
+                            }
+                        }
                         break;
                     }
                     default:
@@ -15677,6 +15724,7 @@ void AppWindow::drawPluginWindows() {
             // watching satellites" is the same gesture this whole feature
             // exists for. Draws nothing when the plugin has none.
             drawPluginPresetBar(page.plugin);
+            drawPluginSettingsSection(page.plugin);
             // TWO KINDS OF MAP PAGE, AND THE SATELLITE ONE IS A WHOLE
             // INSTRUMENT. Every control below - fit, the receiver position,
             // the coverage and trail switches, the target list - exists on the
@@ -15970,6 +16018,7 @@ void AppWindow::drawPluginWindows() {
         if (beginPage(id.c_str(), railName.c_str(), &imageOpen, 0, kSeparatePageW,
                       kSeparatePageH)) {
             drawPluginPresetBar(im.plugin);
+            drawPluginSettingsSection(im.plugin);
             if (im.width == 0 || im.height == 0) {
                 ImGui::TextDisabled("%s", tr("Waiting for the first image..."));
             } else {
@@ -16098,6 +16147,7 @@ void AppWindow::drawPluginWindows() {
         const std::string railName = cascade::core::upperLegend(p.title);
         if (beginPage(id.c_str(), railName.c_str(), &panelOpen, 0, kPanelW, kPanelH)) {
             drawPluginPresetBar(p.plugin);
+            drawPluginSettingsSection(p.plugin);
             drawRowTable(p.headings, p.rows);
         }
         endPage();
@@ -16127,6 +16177,7 @@ void AppWindow::drawPluginWindows() {
         const std::string railName = cascade::core::upperLegend(in.title);
         if (beginPage(id.c_str(), railName.c_str(), &open, 0, kInstrumentW, kInstrumentH)) {
             drawPluginPresetBar(in.plugin);
+            drawPluginSettingsSection(in.plugin);
             const double now = ImGui::GetTime();
             InstrumentSeen& seen = instrumentSeen_[id];
             if (in.have && in.state.seq != seen.seq) {
@@ -17568,6 +17619,9 @@ void AppWindow::publishPluginApiState() {
     }
     f.outputRateHz = cascade::core::Pipeline::kAudioRateHz;
     f.outputFrames = pipeline_.audioSamplesProduced();
+    f.rxPositionSet = rxSet_;
+    f.rxLatDeg = rxLat_;
+    f.rxLonDeg = rxLon_;
     pluginUi_.api().publish(f);
 }
 
@@ -18020,6 +18074,40 @@ void AppWindow::drawDecoderPresetBars() {
         drawPresetKeys(m->key, m->name, m->presets);
     }
     if (any) { ImGui::Separator(); }
+}
+
+// --- Settings forms (CASCADE_CAP_SETTINGS_UI, 0.99.43) -----------------------
+
+void AppWindow::drawPluginSettingsFields(const cascade::core::LoadedPlugin& p, const char* scope) {
+    if (!p.loaded || p.settingsUi == nullptr) { return; }
+    // Read from the plugin's STATIC table - memory, not a call into its code,
+    // so reading it on the frame path puts no third-party code there (the
+    // rule rebuildMuteStates keeps for presets, whose table is functions).
+    const std::vector<cascade::core::SettingField> fields =
+        cascade::core::settingFieldsFrom(p.settingsUi);
+    if (fields.empty()) { return; }
+    // The store is keyed by the descriptor name - the same identity the
+    // plugin's own settings_get/settings_set use (PluginApiClient::name).
+    cascade::gui::drawPluginSettingsForm(pluginUi_.api(), p.name, fields, pluginSettingsForms_,
+                                         scope);
+}
+
+void AppWindow::drawPluginSettingsSection(const std::string& displayName) {
+    if (displayName.empty()) { return; }
+    for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
+        if (p.name != displayName || !p.loaded) { continue; }
+        if (p.settingsUi == nullptr || cascade::core::settingFieldsFrom(p.settingsUi).empty()) {
+            return;  // no form, no header: a window without one must not read as missing it
+        }
+        // FOLDED BY DEFAULT: a map or a picture is what the window is for, and
+        // a callsign is typed once. One line says the form is there.
+        if (ImGui::TreeNodeEx(trId("Plugin settings##pluginsettings"), 0)) {
+            drawPluginSettingsFields(p, "window");
+            ImGui::TreePop();
+        }
+        ImGui::Separator();
+        return;
+    }
 }
 
 void AppWindow::consumePendingPresetRequest() {

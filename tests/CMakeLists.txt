@@ -3,6 +3,18 @@
 # exception is a test that needs a command-line argument, handled below by
 # name for test_json_dump_policy.
 file(GLOB CASCADE_TESTS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/test_*.cpp")
+
+# A REAL plugin module for test_plugin_settings_ui (CASCADE_CAP_SETTINGS_UI):
+# built as a MODULE exactly as a third-party plugin is - plugin_abi.h only,
+# never linked against cascade_lib - into a directory of its own, so the test
+# can hand that directory to PluginHost::scan and nothing else is found there.
+add_library(settings_ui_fixture MODULE "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/settings_ui_plugin.cpp")
+target_include_directories(settings_ui_fixture PRIVATE "${CMAKE_SOURCE_DIR}/src/core")
+set_target_properties(settings_ui_fixture PROPERTIES
+    PREFIX ""
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_plugins/$<CONFIG>"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_plugins/$<CONFIG>")
+
 foreach(src ${CASCADE_TESTS})
     get_filename_component(name "${src}" NAME_WE)
     add_executable(${name} "${src}")
@@ -48,6 +60,11 @@ foreach(src ${CASCADE_TESTS})
         # so adding this cannot register any test's NAME twice (CMake treats
         # that as a hard configure error, not a warning).
         add_test(NAME ${name} COMMAND ${name} "${CMAKE_SOURCE_DIR}/src")
+    elseif(name STREQUAL "test_plugin_settings_ui")
+        # Loads the fixture module above through the real loader, so it takes
+        # the module's directory; built first.
+        add_dependencies(${name} settings_ui_fixture)
+        add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE_DIR:settings_ui_fixture>")
     else()
         add_test(NAME ${name} COMMAND ${name})
     endif()

@@ -471,6 +471,13 @@ void testState() {
 
     // [V] Malformed arguments: refused, nothing written.
     CHECK(H(0)->get_state(C(0), nullptr) == CASCADE_API_BAD_ARGUMENT);
+    // Shorter than level 1's struct: refused. The floor is the OLD struct's
+    // OWN size - offsetof(CascadeReceiverState, receiverLocator), 192 bytes -
+    // not just "big enough to hold structSize". 8 was never a valid
+    // CascadeReceiverState any real plugin, old or new, ever allocated, so it
+    // is refused rather than accepted as a truncated read (test_plugin_settings_ui.cpp's
+    // [O] section proves the GENUINE old-plugin case - a real 192-byte struct
+    // - gets CASCADE_API_OK with a correct truncated copy).
     CascadeReceiverState small{};
     small.structSize = 8;  // shorter than level 1's struct
     CHECK(H(0)->get_state(C(0), &small) == CASCADE_API_BAD_ARGUMENT);

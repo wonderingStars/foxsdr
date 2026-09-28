@@ -619,6 +619,19 @@ std::vector<ReachRow> collectReach(const ModulePlate& m) {
         }
         r.push_back({tr("Can ask to move the receiver"), d, true});
     }
+    if ((c & CASCADE_CAP_RECEIVER_LOCATOR) != 0u) {
+        // UNCONDITIONAL, unlike the two grants above: there is no key to
+        // refuse it with - see the header's note on CASCADE_CAP_RECEIVER_
+        // LOCATOR. A module either declared the bit or it did not, and this
+        // row is the one place that says so before anything is fitted.
+        r.push_back({tr("Can read your receiver's locator"),
+                     tr("Sees a 6-character Maidenhead grid square for wherever the "
+                        "receiver's position is set (GPS, \"Set RX here\", or typed) - a "
+                        "few kilometres' precision, not an exact point. What it does with "
+                        "that is up to the module; some report it onward, such as an "
+                        "optional PSK Reporter upload."),
+                     true});
+    }
     if ((c & CASCADE_CAP_BASEMAP) != 0u) {
         // NOT "a server you point it at", which is what this row used to say.
         // CascadeBasemapApi carries no server field and there is no setting in

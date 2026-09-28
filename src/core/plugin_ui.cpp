@@ -527,6 +527,20 @@ std::int32_t l1PollCommand(void* ctx, std::uint32_t* id) {
     return level1(ctx, [&](PluginApiCore& a, PluginApiClient& c) { return a.pollCommand(c, id); });
 }
 
+std::uint64_t l1SettingsSeq(void* ctx) {
+    // No CASCADE_API_* channel on this signature (see the header): an
+    // unattached or unknown ctx simply reads as "nothing has changed", which
+    // is true from that plugin's point of view. Same recovery as level1()
+    // above, but returning the counter directly rather than a status code.
+    try {
+        auto* c = static_cast<HostCtx*>(ctx);
+        if (c == nullptr || !c->core || c->client == nullptr) { return 1u; }
+        return c->core->settingsUiSeq(c->client->name);
+    } catch (...) {
+        return 1u;
+    }
+}
+
 void fillLevel1(HostCtx& c) {
     CascadeHostApi& t = c.api;
     t.apiLevel = CASCADE_HOST_API_LEVEL;
@@ -557,6 +571,7 @@ void fillLevel1(HostCtx& c) {
     t.add_command = &l1AddCommand;
     t.remove_command = &l1RemoveCommand;
     t.poll_command = &l1PollCommand;
+    t.settings_seq = &l1SettingsSeq;
 }
 
 }  // namespace
@@ -588,7 +603,7 @@ void PluginUi::rebuild(const std::vector<LoadedPlugin>& plugins) {
             if (lp.hostClient == nullptr || lp.hostClient->attach == nullptr) { continue; }
             const std::string key = tuneKey(lp);
             if (key.empty()) { continue; }
-            api_->client(key, lp.name);
+            api_->client(key, lp.name, lp.capabilities);
             live.push_back(key);
         }
         api_->setLiveSet(live);
@@ -634,7 +649,9 @@ void PluginUi::rebuild(const std::vector<LoadedPlugin>& plugins) {
                 // built before level 1 reads only the four members above at
                 // the offsets they have always had (plugin_abi.h, VERSIONING).
                 owned->core = api_;
-                if (!key.empty()) { owned->client = &api_->client(key, lp.name); }
+                if (!key.empty()) {
+                    owned->client = &api_->client(key, lp.name, lp.capabilities);
+                }
                 fillLevel1(*owned);
                 bridge = owned.get();
                 ctxStore().push_back(std::move(owned));

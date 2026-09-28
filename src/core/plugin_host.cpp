@@ -287,6 +287,10 @@ LoadedPlugin loadOne(const fs::path& p) {
                      ? static_cast<const CascadePresetApi*>(
                            findCapabilityTable(desc, CASCADE_CAP_PRESET))
                      : nullptr;
+    rec.settingsUi = (desc->capabilities & CASCADE_CAP_SETTINGS_UI) != 0u
+                         ? static_cast<const CascadeSettingsUiApi*>(
+                               findCapabilityTable(desc, CASCADE_CAP_SETTINGS_UI))
+                         : nullptr;
     rec.basemap = (desc->capabilities & CASCADE_CAP_BASEMAP) != 0u
                       ? static_cast<const CascadeBasemapApi*>(
                             findCapabilityTable(desc, CASCADE_CAP_BASEMAP))
@@ -619,6 +623,27 @@ PluginRejection validatePluginDesc(const CascadePluginDesc* desc) {
         // A plugin offering only presets would load and look like a decoder.
     }
 
+    if ((desc->capabilities & CASCADE_CAP_SETTINGS_UI) != 0u) {
+        const void* raw = findCapabilityTable(desc, CASCADE_CAP_SETTINGS_UI);
+        if (raw == nullptr) {
+            return PluginRejection::MissingSettingsUiApi;
+        }
+        const auto* s = static_cast<const CascadeSettingsUiApi*>(raw);
+        if (s->structSize != static_cast<uint32_t>(sizeof(CascadeSettingsUiApi))) {
+            return PluginRejection::SettingsUiStructSizeMismatch;
+        }
+        // The TABLE must be usable; its ENTRIES are forgiven one by one when
+        // the form is drawn (core/plugin_settings_ui.hpp) - an entry of a
+        // later host's size or kind is skipped there, not refused here, so a
+        // plugin built for a newer host still loads and shows what this host
+        // can draw.
+        if (s->specs == nullptr || s->count == 0u || s->count > CASCADE_MAX_SETTING_SPECS) {
+            return PluginRejection::SettingsUiBadTable;
+        }
+        // NOT counted toward `usable`: a form for settings is not, on its
+        // own, doing anything for the user - the same reason as presets.
+    }
+
     if ((desc->capabilities & CASCADE_CAP_BASEMAP) != 0u) {
         const void* raw = findCapabilityTable(desc, CASCADE_CAP_BASEMAP);
         if (raw == nullptr) {
@@ -754,6 +779,12 @@ const char* pluginRejectionMessage(PluginRejection r) {
             return "host-client table size does not match this host's";
         case PluginRejection::MissingHostClientFunction:
             return "host-client table has a null attach pointer";
+        case PluginRejection::MissingSettingsUiApi:
+            return "declares CASCADE_CAP_SETTINGS_UI but supplies no table";
+        case PluginRejection::SettingsUiStructSizeMismatch:
+            return "settings form table size does not match this host's";
+        case PluginRejection::SettingsUiBadTable:
+            return "settings form table has no entries, too many, or a null entry list";
         case PluginRejection::MissingPresetApi:
             return "declares CASCADE_CAP_PRESET but supplies no table";
         case PluginRejection::PresetStructSizeMismatch:
@@ -993,6 +1024,7 @@ std::size_t resolveDuplicatePlugins(std::vector<LoadedPlugin>& records) {
         r.instrument = nullptr;
         r.hostClient = nullptr;
         r.preset = nullptr;
+        r.settingsUi = nullptr;
         r.basemap = nullptr;
         r.trackInfo = nullptr;
         r.audioOut = nullptr;

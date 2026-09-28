@@ -18,6 +18,16 @@ bool moduleProvides(const LoadedPlugin& p, std::uint32_t capMask) {
     // caller wants the capability WORD for those, and censusModules reads it.
     if (!p.loaded) { return false; }
 
+    // CASCADE_CAP_RECEIVER_LOCATOR (0.99.43) is a PURE PERMISSION BIT - no
+    // table, no create/destroy, nothing borrowed from the plugin's image - so
+    // it cannot go in the {bit, table} list below at all; it is read straight
+    // off the capability word instead, the one thing every loaded record
+    // carries whether or not it has a table for anything.
+    if ((capMask & CASCADE_CAP_RECEIVER_LOCATOR) != 0u &&
+        (p.capabilities & CASCADE_CAP_RECEIVER_LOCATOR) != 0u) {
+        return true;
+    }
+
     // ONE ENTRY PER BIT THIS ABI DEFINES, so the mapping is total over
     // CASCADE_CAP_ALL_KNOWN and a bit cannot be silently answered "no". A new
     // capability added to plugin_abi.h without a line here would be a module
@@ -47,6 +57,8 @@ bool moduleProvides(const LoadedPlugin& p, std::uint32_t capMask) {
         {CASCADE_CAP_AUDIO_OUT, p.audioOut},
         // Host API level 1: transforms the demodulated audio in place.
         {CASCADE_CAP_AUDIO_PROCESSOR, p.audioProcessor},
+        // Fields the host draws for the user (0.99.43).
+        {CASCADE_CAP_SETTINGS_UI, p.settingsUi},
     };
     for (const Entry& e : table) {
         if ((capMask & e.bit) != 0u && e.table != nullptr) { return true; }

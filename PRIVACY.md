@@ -53,7 +53,11 @@ exactly as many.
   is never sent, under any setting**, and switching Diagnostics off stops the
   sending as completely as it stops the writing.
 - **Nothing about what you listen to is ever collected** — no frequencies, no
-  positions, no decoded messages. Not when reporting is on, not ever.
+  positions, no decoded messages. Not when reporting is on, not ever. This is
+  about FoxSDR's *own* reporting (usage, crash, feature and bug reports); a
+  fitted plugin is separate code with its own network access and its own
+  choices, and **Plugins and your receiver's position** below covers what one
+  can read and do with it.
 - **The update check is ON by default, and you can turn it off.** Once per
   launch the application asks foxsdr.com whether a newer version exists. It
   sends **the version you are running and nothing else** — no identifier, no
@@ -67,6 +71,9 @@ exactly as many.
   element sets from CelesTrak about every twelve hours, falling back to a
   copy at foxsdr.com/tle/all.tle when CelesTrak does not answer. The request
   carries no identifier.
+- **A plugin can read your receiver's approximate position only if it says so
+  when fitted**, and the Fitted modules / Plugin store windows show which ones
+  do. See **Plugins and your receiver's position** below.
 - **A feature request is sent only when you press SEND on the REQUEST A
   FEATURE page.** It carries the text you typed, an optional contact line, and
   which build you are running - never an identifier, never a frequency, never
@@ -431,6 +438,46 @@ These are design constraints, not current policy:
 - **Hardware serial numbers.** The SDR model is useful; the serial identifies
   your individual radio, and is removed.
 - Your name, your machine's name, your user account, or any file path.
+
+## Plugins and your receiver's position
+
+Everything above is about what FoxSDR itself sends. A fitted plugin is
+separate, third-party code that runs inside the application with every
+privilege the application has (see the plugin ABI's own licence notice and
+the Plugin store's "Declared by the maker, not enforced" notice) - it is not
+sandboxed, and this section is about what one CAN reach, not a guarantee of
+what any particular one DOES with it.
+
+- **Only a plugin that declares it can read your receiver's position, and
+  only that one gets to.** The plugin interface added a separate permission
+  bit for this (`CASCADE_CAP_RECEIVER_LOCATOR`, FoxSDR 0.99.43) precisely so
+  that a plugin which only wants to decode a signal, or only wants to move the
+  tuning dial, is never handed it - it has to ask, in its own published
+  description, before the host will ever give it one. Which fitted plugins
+  ask is shown as **"Can read your receiver's locator"** on that plugin's own
+  card in the Fitted modules window and the Plugin store, wherever its other
+  permissions (such as moving the receiver) are shown.
+- **What it gets is a 6-character Maidenhead grid square, not a point.** That
+  is a rectangle roughly 5 minutes of longitude by 2.5 minutes of latitude -
+  a few kilometres across at temperate latitudes, not an address and not a
+  precise fix. It reflects wherever the receiver's position was last set -
+  a GPS fix, "Set RX here" on the map, or a position you typed in - and is
+  empty whenever none has been set.
+- **What a plugin does with it is up to the plugin**, exactly like anything
+  else it decodes or computes: some may keep it entirely on your machine,
+  and some report it onward. The plugin this permission was added for is a
+  PSK Reporter-style FT8 reporting plugin, whose whole purpose is to publish
+  your callsign, grid square and what you decoded to a public spotting
+  service (pskreporter.info) - which is exactly how that kind of reporting
+  works, and exactly why the permission is visible rather than silent.
+  **Nothing is sent anywhere by it until you both fill in a callsign and turn
+  reporting on** - a plugin field left at its default never becomes a network
+  request, per the plugin ABI's own rule for exactly this shape of setting.
+- **FoxSDR's own reporting (above) never carries it.** The usage, crash,
+  feature and bug reports have no field for it and never will; this section
+  is only about what a plugin's OWN code may read and do, through the
+  interface every plugin uses, separate from anything this application
+  reports about itself.
 
 ## Turning it off
 
