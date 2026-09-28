@@ -131,35 +131,45 @@ that one tester's own entry so the owner can tell which features they said
 they would cover they actually used. **With no code entered, nothing on this
 page is collected or sent, ever.**
 
-One report per session, sent once at the next launch and, if it can complete
-within about a second, again when the application closes cleanly:
+One report per session, saved when the session ends and **sent at the next
+launch** — the same timing usage reporting's own launch report uses, and for
+the same reason: a network call on the way out can hang the application while
+you are trying to close it, so nothing here ever tries to send on the way out.
+The code itself is shown on screen only masked (the first four and last four
+characters, e.g. `4f9c…c2a1`) and the field that enters it hides what is typed
+into it, the same way a password field does:
 
 | Field | Example | Why |
 |---|---|---|
-| Tester code | `4f9c…` | Your own tester-portal credential, so the report can be linked to your entry. Never logged, never included in a diagnostics bundle or a crash report, and shown on screen only masked. |
+| Tester code | `4f9c…c2a1` (shown masked; sent in full) | Your own tester-portal credential, so the report can be linked to your entry. Never logged, never included in a diagnostics bundle or a crash report, and shown on screen only masked. |
 | Application version | `0.99.x` | Which build the session ran. |
 | Platform | `windows` | Which platform the session ran on. |
 | Architecture | `x64` | As above. |
 | Session start | `2026-09-28T12:34:56Z` | When the session began. |
 | Session length | `42` minutes | How long the session ran. |
 | Features used | `spectrum, modes, bookmarks` | Which of the named beta areas you actually exercised this session, from a fixed list the site defines. |
-| Plugins used | `pocsag 1.2.0, 6 minutes` | Which installed decoders ran, their version, and how long each was actually fed samples — never merely installed. |
+| Plugins used | `pocsag 1.2.0, 6 minutes` | Which installed decoders ran, their version, and how long each was actually fed samples — never merely installed. A decoder this build cannot match to the published catalogue (a side-loaded or hand-built plugin) is reported under the fixed id `sideloaded` with no version, rather than under a name invented for it. |
 | Radio kinds used | `rtlsdr` | Which radio hardware kinds were opened this session — never a serial number, never args. |
 
 Exactly the same exclusions as usage reporting above apply here: **no
-frequency, no decoded content, no position, no IP address.** The payload is
-asserted field-by-field by an automated test (`tests/test_tester_usage.cpp`),
-so a new field cannot be added without that test failing and this document
-being updated with it.
+frequency, no decoded content, no position.** Your IP address is used only to
+limit how often reports are accepted from one address and is not stored
+alongside anything a report contains. The payload is asserted field-by-field
+by an automated test (`tests/test_tester_usage.cpp`), so a new field cannot be
+added without that test failing and this document being updated with it.
 
 If the site answers that the code is no longer valid, sending stops
 immediately and the app says so on screen; the code itself is kept so it can
 be corrected rather than being silently cleared. Up to three reports that
 could not be sent (a network failure, or the site asking to try later) are
-kept and retried at the next launch; older ones are dropped first.
+kept and retried at the next launch; older ones are dropped first. A report
+queued under a code that is later replaced or removed is discarded rather
+than sent under the new one (or under none) — it would otherwise land on the
+wrong tester's entry, or on nobody's.
 
-Removing the code deletes it from your configuration file and stops
-everything above immediately — nothing further is collected from that point.
+Removing the code deletes it from your configuration file, discards anything
+still queued to send, and stops everything above immediately — nothing
+further is collected from that point.
 
 ## Crash and freeze reports — what they contain
 

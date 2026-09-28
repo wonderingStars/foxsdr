@@ -2210,12 +2210,17 @@ int AppWindow::run(int frames) {
     // and nothing to retry (see core/feature_request.hpp).
     featureRequestSender_.cancel();
     problemReportSender_.cancel();
+    // TESTER USAGE MAKES NO NETWORK CALL HERE, deliberately: the finished
+    // session's report is already in testerUsageCurrent by the time
+    // saveConfigNow() below writes it (testerUsageJournal, called from
+    // currentConfig()), and it is sent at the NEXT launch - exactly
+    // telemetry's own rule, for exactly telemetry's own reason (a network
+    // call on the shutdown path can hang the application while the user is
+    // trying to close it). An earlier version tried a bounded attempt here
+    // and measured it adding real, non-trivial time to shutdown against an
+    // unresponsive server; see core/tester_usage.hpp's TesterUsageSender for
+    // where that attempt lived and why it was removed rather than tuned.
     if (!configPath_.empty()) { saveConfigNow(); }
-    // THE ONE NETWORK CALL THIS SHUTDOWN PATH MAKES, bounded to well under a
-    // second (see the function's own comment) - everything is still fully
-    // alive here, which is what telemetry's OWN header explains is not true
-    // a few lines further down.
-    testerUsageExitAttempt();
     flushBookmarkSave(true);
     cascade::core::diagLogf("frame loop ended after %d frames; shutting down", rendered);
 
@@ -3190,6 +3195,11 @@ void AppWindow::drawUi() {
             transmitPageLive_, transmitter_.latched(), transmitLatchPressed_, transmitPttHeld_);
         transmitter_.setLatched(key.latched);
         transmitter_.setPttHeld(key.pttHeld);
+        // TESTER USAGE: "transmit" means the radio was actually keyed, not
+        // merely that the page was open - noteFeature dedups on its own, so
+        // calling it every frame the key is down costs nothing beyond that
+        // first call.
+        if (key.latched || key.pttHeld) { testerUsage_.noteFeature("transmit"); }
     }
     transmitter_.tick();
 
@@ -8955,6 +8965,7 @@ void AppWindow::selectSource(int idx, std::optional<double> carryAirHz) {
         ++sourceGen_;  // a device open still in flight is now stale
         installSource(nullptr);
         sourceKind_ = "siggen";
+        testerUsage_.noteFeature("siggen");
         applyConverterForSource();
         sourceSel_ = 0;
         followInputRate();  // back to the generator's fixed 2 MS/s
@@ -22766,6 +22777,7 @@ void AppWindow::applyControlRequest(const cascade::net::ControlRequest& r) {
         if (*r.transmitPtt) {
             if (transmitOpen_ && transmitter_.haveSink()) {
                 transmitter_.keyRemote();
+                testerUsage_.noteFeature("transmit");
             } else {
                 transmitter_.releaseRemote("there is no transmitter open");
             }
@@ -23376,21 +23388,10 @@ void AppWindow::drawTesterUsageSection() {
            "collected or sent."));
     ImGui::Spacing();
 
-    // First four and last four characters only - enough to recognise which
-    // code is set without showing the whole credential on screen.
-    const auto maskToken = [](const std::string& t) -> std::string {
-        if (t.size() <= 8) { return std::string(t.size(), '*'); }
-        return t.substr(0, 4) + "..." + t.substr(t.size() - 4);
-    };
-
     if (!testerToken_.empty()) {
-        ImGui::TextDisabled(tr("Code: %s"), maskToken(testerToken_).c_str());
+        ImGui::TextDisabled(tr("Code: %s"), cascade::core::maskTesterToken(testerToken_).c_str());
         if (ImGui::SmallButton(trId("Remove code"))) {
-            testerToken_.clear();
-            testerTokenInvalid_ = false;
-            testerUsage_.reset();
-            testerUsage_.setArmed(false);
-            testerUsageQueue_.setItems({});
+            setTesterToken(std::string(), /*startFreshSession=*/false);
             std::memset(testerCodeBuf_, 0, sizeof(testerCodeBuf_));
             testerCodeError_.clear();
         }
@@ -23404,27 +23405,19 @@ void AppWindow::drawTesterUsageSection() {
         }
     }
     if (testerToken_.empty() || testerTokenInvalid_) {
+        // MASKED WHILE TYPING, like the web server's own password field: this
+        // is the same credential the Code line above shows only four-and-four,
+        // and a field showing it in full while it is entered would be the one
+        // place on this screen that still could.
         ImGui::InputText(cascade::gui::labelAboveIfNeeded(trId("Tester code")), testerCodeBuf_,
-                         sizeof(testerCodeBuf_));
+                         sizeof(testerCodeBuf_), ImGuiInputTextFlags_Password);
         if (ImGui::Button(trId("Use this code"))) {
             const std::string extracted = cascade::core::extractTesterToken(testerCodeBuf_);
             if (extracted.empty()) {
                 testerCodeError_ = tr("that does not look like a tester code or link");
             } else {
                 testerCodeError_.clear();
-                const bool wasEmpty = testerToken_.empty();
-                testerToken_ = extracted;
-                testerTokenInvalid_ = false;
-                testerUsageQueueTriedThisSession_ = false;
-                if (wasEmpty) {
-                    // A fresh opt-in starts a fresh session record - nothing
-                    // from before the code existed is this tester's to report.
-                    testerUsage_.reset();
-                    testerSessionStart_ = glfwGetTime();
-                    testerSessionStartWall_ = std::time(nullptr);
-                    testerUsageAccrual_.reset(testerSessionStart_);
-                }
-                testerUsage_.setArmed(true);
+                setTesterToken(extracted, /*startFreshSession=*/testerToken_.empty());
                 std::memset(testerCodeBuf_, 0, sizeof(testerCodeBuf_));
             }
         }
@@ -23457,7 +23450,11 @@ void AppWindow::drawTesterUsageSection() {
             const double now = glfwGetTime();
             const double sessionSeconds =
                 now > testerSessionStart_ ? now - testerSessionStart_ : 0.0;
-            const std::string json = buildTesterUsageReport(sessionSeconds).toJson();
+            // MASKED, like every other on-screen appearance of the token -
+            // this is what "show what is sent" means, not a second place the
+            // full credential can be read off the screen.
+            const std::string json =
+                cascade::core::maskedPreviewJson(buildTesterUsageReport(sessionSeconds));
             ImGui::PushStyleColor(ImGuiCol_Text,
                                   ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
             ImGui::PushTextWrapPos(0.0f);
@@ -24708,6 +24705,7 @@ void AppWindow::testerUsageAccrue() {
     // per-frame one.
     const std::uint64_t secs = testerUsageAccrual_.advance(glfwGetTime());
     if (secs == 0 || !testerUsage_.armed()) { return; }
+    const double secsD = static_cast<double>(secs);
     for (const cascade::core::DecoderStatus& s : pluginRunner_.status()) {
         if (!pluginRunner_.isFeeding(s.key)) { continue; }
         std::string version;
@@ -24717,9 +24715,43 @@ void AppWindow::testerUsageAccrue() {
                 break;
             }
         }
-        const std::string id =
-            cascade::core::catalogueIdForPlugin(s.key, s.plugin, pluginInventory_.plugins);
-        testerUsage_.accruePlugin(id, version, static_cast<double>(secs));
+        const std::string id = cascade::core::catalogueIdForPlugin(s.key, pluginInventory_.plugins);
+        // SIDELOADED PLUGINS SHARE ONE BUCKET WITH NO VERSION: an id this
+        // build could not join to a manifest record must not be reported
+        // alongside a version number either - a version means something only
+        // paired with a real catalogue id (see kSideloadedPluginId's own
+        // comment).
+        const std::string ver =
+            (id == cascade::core::kSideloadedPluginId) ? std::string() : version;
+        testerUsage_.accruePlugin(id, ver, secsD);
+    }
+    // THE PATCH'S OWN DECODER NODES, separately - a patch decoder is not
+    // driven by pluginRunner_ at all (see patchRadios_' own PatchRadio/Runner
+    // pair), so it needs its own walk here. An enabled Decoder node with a
+    // plugin chosen, while the patch is actually running, is the patch's
+    // equivalent of "isFeeding" - there is no per-sample feed counter to ask
+    // instead, so a node that is on and wired counts as running for as long
+    // as the patch itself does, on the same approximation the rest of this
+    // function already accepts.
+    if (patchRunning_) {
+        for (const cascade::core::patch::Node& n : patchGraph_.nodes()) {
+            if (n.kind != cascade::core::patch::NodeKind::Decoder || !n.on || n.plugin.empty()) {
+                continue;
+            }
+            std::string version;
+            for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
+                if (p.loaded && cascade::core::pluginKey(p) == n.plugin) {
+                    version = p.version;
+                    break;
+                }
+            }
+            const std::string id =
+                cascade::core::catalogueIdForPlugin(n.plugin, pluginInventory_.plugins);
+            const std::string ver =
+                (id == cascade::core::kSideloadedPluginId) ? std::string() : version;
+            testerUsage_.accruePlugin(id, ver, secsD);
+            testerUsage_.noteFeature("plugins");
+        }
     }
 }
 
@@ -24756,6 +24788,27 @@ void AppWindow::testerUsageJournal(cascade::core::AppConfig& cfg) {
     cfg.testerUsageCurrent = buildTesterUsageReport(sessionSeconds).toJson();
 }
 
+void AppWindow::setTesterToken(const std::string& token, bool startFreshSession) {
+    testerToken_ = token;
+    testerTokenInvalid_ = false;
+    testerUsageQueueTriedThisSession_ = false;
+    // NEVER CARRY A REPORT QUEUED UNDER A DIFFERENT CODE. Pasting a new code,
+    // replacing an invalid one, or removing the code altogether (token == "")
+    // must not leave an old session's report waiting to be sent under an
+    // identity it was not recorded for - it would land on the wrong tester's
+    // entry, or on nobody's once there is no entry at all.
+    testerUsageQueue_.dropOthers(testerToken_);
+    if (startFreshSession) {
+        // A fresh opt-in starts a fresh session record - nothing from before
+        // the code existed is this tester's to report.
+        testerUsage_.reset();
+        testerSessionStart_ = glfwGetTime();
+        testerSessionStartWall_ = std::time(nullptr);
+        testerUsageAccrual_.reset(testerSessionStart_);
+    }
+    testerUsage_.setArmed(!testerToken_.empty());
+}
+
 void AppWindow::testerUsageStartup(const cascade::core::AppConfig& cfg) {
     testerToken_ = cfg.testerToken;
     testerTokenInvalid_ = cfg.testerTokenInvalid;
@@ -24773,96 +24826,40 @@ void AppWindow::testerUsageStartup(const cascade::core::AppConfig& cfg) {
     std::vector<std::string> items = cfg.testerUsagePending;
     if (!cfg.testerUsageCurrent.empty()) { items.push_back(cfg.testerUsageCurrent); }
     testerUsageQueue_.setItems(items);
+    // AND DROPPED IF IT DOES NOT MATCH THE CODE ON FILE - config.cpp already
+    // filters testerUsagePending by token on load, but testerUsageCurrent is
+    // folded in fresh here, so the same rule is re-applied to the combined
+    // queue rather than trusted to have already held for both halves.
+    testerUsageQueue_.dropOthers(testerToken_);
     // The actual send is driven from testerUsagePoll() (called once a frame),
     // never blocking start-up - the same reason telemetry's own send happens
     // off the constructor.
 }
 
 void AppWindow::testerUsagePoll() {
-    if (testerUsageSender_.finished()) {
-        const int raw = testerUsageLastOutcome_.exchange(-1);
-        testerUsageSender_.reap();
-        using Outcome = cascade::core::TesterUsageOutcome;
-        const Outcome outcome = static_cast<Outcome>(raw);
-        if (outcome == Outcome::Sent || outcome == Outcome::Rejected) {
-            // Sent: the site has it. Rejected (400/413): it never will
-            // succeed by being retried, so it is logged and dropped exactly
-            // like a Sent one - the contract's own words for this response.
-            if (outcome == Outcome::Rejected) {
-                cascade::core::diagWarnf(
-                    "tester usage: report rejected (malformed or oversized) - dropped");
-            }
-            testerUsageQueue_.removeFront();
-            // Keep going: try the next queued report immediately rather than
-            // waiting for the next launch.
-        } else if (outcome == Outcome::Invalid) {
-            testerTokenInvalid_ = true;
+    if (const std::optional<cascade::core::TesterUsageOutcome> outcome =
+            testerUsageSender_.takeOutcome()) {
+        using cascade::core::TesterUsageOutcome;
+        if (*outcome == TesterUsageOutcome::Rejected) {
+            cascade::core::diagWarnf(
+                "tester usage: report rejected (malformed or oversized) - dropped");
+        } else if (*outcome == TesterUsageOutcome::Invalid) {
             cascade::core::diagWarnf("tester usage: code no longer valid - sending stopped");
-            testerUsageQueueTriedThisSession_ = true;
-        } else if (outcome == Outcome::Retry) {
-            // 429 or a transport failure: leave it queued and stop trying
-            // for the rest of THIS session - a black-holed endpoint must not
-            // become a poll-rate retry loop.
-            testerUsageQueueTriedThisSession_ = true;
         }
+        // THE ACTUAL DECISION IS core::applyTesterUsageOutcome'S, not this
+        // function's - see its own comment for why it is a free function
+        // rather than logic inlined here.
+        const cascade::core::TesterUsageOutcomeEffect effect =
+            cascade::core::applyTesterUsageOutcome(*outcome, testerUsageQueue_);
+        if (effect.nowInvalid) { testerTokenInvalid_ = true; }
+        if (effect.stop) { testerUsageQueueTriedThisSession_ = true; }
+        // Sent/Rejected fall through with neither flag set, which is what
+        // lets the loop below try the NEXT queued report immediately rather
+        // than waiting for the next launch.
     }
     if (testerUsageSender_.busy() || testerUsageQueueTriedThisSession_) { return; }
     if (testerToken_.empty() || testerTokenInvalid_ || testerUsageQueue_.empty()) { return; }
-    const std::string url = cascade::core::testerUsageEndpoint();
-    const std::string json = testerUsageQueue_.front();
-    testerUsageLastOutcome_.store(-1);
-    std::atomic<int>* out = &testerUsageLastOutcome_;
-    testerUsageSender_.send(url, json, kTesterUsageConnectMs, kTesterUsageRwMs,
-                            [out](cascade::core::TesterUsageOutcome o) {
-                                out->store(static_cast<int>(o));
-                            });
-}
-
-// A BOUNDED ATTEMPT AT THE CURRENT SESSION'S OWN REPORT, on the way out.
-// Called once, right after the main shutdown save (which is what wrote
-// lastRequestedConfig_.testerUsageCurrent), and before the pipeline join
-// below it - so this runs while everything is still alive, exactly where
-// telemetry's own shutdown-adjacent work happens. Short timeouts, not the
-// regular sender's: the contract asks for "never delays exit more than
-// ~1 s", so the socket itself is given less time than that rather than
-// leaving a generous timeout and hoping the poll loop below wins the race.
-void AppWindow::testerUsageExitAttempt() {
-    if (testerToken_.empty() || testerTokenInvalid_) { return; }
-    const std::string json = lastRequestedConfig_.testerUsageCurrent;
-    if (json.empty()) { return; }
-    const std::string url = cascade::core::testerUsageEndpoint();
-    testerUsageLastOutcome_.store(-1);
-    std::atomic<int>* out = &testerUsageLastOutcome_;
-    testerUsageExitSender_.send(url, json, kTesterUsageExitConnectMs, kTesterUsageExitRwMs,
-                                [out](cascade::core::TesterUsageOutcome o) {
-                                    out->store(static_cast<int>(o));
-                                });
-    const auto t0 = std::chrono::steady_clock::now();
-    while (!testerUsageExitSender_.finished()) {
-        if (std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() >
-            kTesterUsageExitBudgetS) {
-            break;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
-    if (!testerUsageExitSender_.finished()) {
-        // Out of time - the report stays in testerUsageCurrent on disk and
-        // the next launch's queue flush carries it, same as any other Retry.
-        return;
-    }
-    const int raw = testerUsageLastOutcome_.exchange(-1);
-    testerUsageExitSender_.reap();
-    using Outcome = cascade::core::TesterUsageOutcome;
-    const Outcome outcome = static_cast<Outcome>(raw);
-    if (outcome == Outcome::Sent || outcome == Outcome::Rejected) {
-        lastRequestedConfig_.testerUsageCurrent.clear();
-        requestConfigSave(lastRequestedConfig_);
-    } else if (outcome == Outcome::Invalid) {
-        testerTokenInvalid_ = true;
-        lastRequestedConfig_.testerTokenInvalid = true;
-        requestConfigSave(lastRequestedConfig_);
-    }
-    // Retry: leave everything exactly as the main shutdown save wrote it.
+    testerUsageSender_.send(cascade::core::testerUsageEndpoint(), testerUsageQueue_.front());
 }
 
 cascade::core::AppConfig AppWindow::currentConfig() {

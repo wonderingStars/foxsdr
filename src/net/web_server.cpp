@@ -3124,8 +3124,13 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
             // TESTER USAGE: "browser access" was used - every request that
             // reaches ANY route runs the post-routing handler, which is what
             // makes this the one hook covering the whole surface rather than
-            // one route among many.
-            if (usageCallback_) { usageCallback_(); }
+            // one route among many. GATED ON A REAL ANSWER, though: httplib
+            // leaves res.status at its default 404 for a path nothing
+            // matched, and this route also answers 401 for a wrong or
+            // missing login - neither is a browser being USED, both are
+            // scanners and failed logins, and counting them would say
+            // "browser" was exercised by a tester who never opened the page.
+            if (usageCallback_ && res.status != 404 && res.status != 401) { usageCallback_(); }
         });
 
     svr.Get("/", [](const httplib::Request&, httplib::Response& res) {

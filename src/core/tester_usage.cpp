@@ -12,13 +12,6 @@
 
 #if defined(_WIN32)
 #include <windows.h>
-#include <winhttp.h>
-#pragma comment(lib, "winhttp.lib")
-#else
-#ifndef CPPHTTPLIB_OPENSSL_SUPPORT
-#define CPPHTTPLIB_OPENSSL_SUPPORT
-#endif
-#include <httplib.h>
 #endif
 
 namespace fs = std::filesystem;
@@ -98,6 +91,11 @@ std::string extractTesterToken(const std::string& input) {
     return std::string();
 }
 
+std::string maskTesterToken(const std::string& token) {
+    if (token.size() <= 8) { return std::string(token.size(), '*'); }
+    return token.substr(0, 4) + "..." + token.substr(token.size() - 4);
+}
+
 std::string testerUsagePlatform() {
 #if defined(_WIN32)
     return "windows";
@@ -153,119 +151,40 @@ std::string TesterUsageReport::toJson() const {
     return j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
 }
 
-// ---------------------------------------------------------------------------
-// Transport
-// ---------------------------------------------------------------------------
-
-#if defined(_WIN32)
-namespace {
-
-TesterUsageOutcome postJsonStatus(const std::string& url, const std::string& json,
-                                   int connectTimeoutMs, int rwTimeoutMs) {
-    URL_COMPONENTSW uc{};
-    uc.dwStructSize = sizeof(uc);
-    wchar_t host[256] = {0}, path[1024] = {0};
-    uc.lpszHostName = host;
-    uc.dwHostNameLength = 255;
-    uc.lpszUrlPath = path;
-    uc.dwUrlPathLength = 1023;
-    const std::wstring wurl(url.begin(), url.end());
-    if (!::WinHttpCrackUrl(wurl.c_str(), 0, 0, &uc)) { return TesterUsageOutcome::Retry; }
-    // https only, for the reason the header states: a tester's token is a
-    // credential, not an anonymous counter.
-    if (uc.nScheme != INTERNET_SCHEME_HTTPS) { return TesterUsageOutcome::Retry; }
-
-    HINTERNET ses = ::WinHttpOpen(L"FoxSDR-tester-usage/1.0", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
-                                  WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
-    if (ses == nullptr) { return TesterUsageOutcome::Retry; }
-    ::WinHttpSetTimeouts(ses, connectTimeoutMs, connectTimeoutMs, rwTimeoutMs, rwTimeoutMs);
-    HINTERNET con = ::WinHttpConnect(ses, host, uc.nPort, 0);
-    TesterUsageOutcome outcome = TesterUsageOutcome::Retry;
-    if (con != nullptr) {
-        HINTERNET req = ::WinHttpOpenRequest(con, L"POST", path, nullptr, WINHTTP_NO_REFERER,
-                                             WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
-        if (req != nullptr) {
-            const wchar_t* kType = L"Content-Type: application/json\r\n";
-            const BOOL sent =
-                ::WinHttpSendRequest(req, kType, static_cast<DWORD>(-1),
-                                     const_cast<char*>(json.data()),
-                                     static_cast<DWORD>(json.size()),
-                                     static_cast<DWORD>(json.size()), 0);
-            if (sent && ::WinHttpReceiveResponse(req, nullptr)) {
-                DWORD status = 0;
-                DWORD size = sizeof(status);
-                if (::WinHttpQueryHeaders(
-                        req, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
-                        WINHTTP_HEADER_NAME_BY_INDEX, &status, &size, WINHTTP_NO_HEADER_INDEX)) {
-                    if (status >= 200 && status < 300) {
-                        outcome = TesterUsageOutcome::Sent;
-                    } else if (status == 401) {
-                        outcome = TesterUsageOutcome::Invalid;
-                    } else if (status == 400 || status == 413) {
-                        outcome = TesterUsageOutcome::Rejected;
-                    } else {
-                        // 429 and anything else this contract has no name
-                        // for: keep it, never treat an unrecognised code as
-                        // permission to discard a report the site may yet
-                        // accept.
-                        outcome = TesterUsageOutcome::Retry;
-                    }
-                }
-            }
-            ::WinHttpCloseHandle(req);
-        }
-        ::WinHttpCloseHandle(con);
-    }
-    ::WinHttpCloseHandle(ses);
-    return outcome;
+std::string maskedPreviewJson(const TesterUsageReport& report) {
+    // BUILD FROM A COPY WITH THE TOKEN ALREADY MASKED, rather than
+    // string-replacing the real token out of a finished document: a
+    // string-replace approach breaks the moment the masked form and the
+    // literal token happen to overlap another field's text, and it still
+    // requires the real token to have been serialised at least once. This
+    // way the full token is never written to a std::string that outlives
+    // this call.
+    TesterUsageReport masked = report;
+    masked.token = maskTesterToken(report.token);
+    return masked.toJson();
 }
 
-}  // namespace
-#else
-namespace {
-
-TesterUsageOutcome postJsonStatus(const std::string& url, const std::string& json,
-                                   int connectTimeoutMs, int rwTimeoutMs) {
-    const std::size_t schemeEnd = url.find("://");
-    if (schemeEnd == std::string::npos) { return TesterUsageOutcome::Retry; }
-    const std::string scheme = url.substr(0, schemeEnd);
-    if (scheme != "https") { return TesterUsageOutcome::Retry; }
-
-    const std::string rest = url.substr(schemeEnd + 3);
-    const std::size_t slash = rest.find('/');
-    const std::string authority = (slash == std::string::npos) ? rest : rest.substr(0, slash);
-    const std::string target = (slash == std::string::npos) ? std::string("/") : rest.substr(slash);
-    if (authority.empty()) { return TesterUsageOutcome::Retry; }
-
-    httplib::Client cli(std::string("https://") + authority);
-    if (!cli.is_valid()) { return TesterUsageOutcome::Retry; }
-    cli.enable_server_certificate_verification(true);
-    cli.set_follow_location(false);
-    const int connSec = connectTimeoutMs / 1000;
-    const int connUsec = (connectTimeoutMs % 1000) * 1000;
-    const int rwSec = rwTimeoutMs / 1000;
-    const int rwUsec = (rwTimeoutMs % 1000) * 1000;
-    cli.set_connection_timeout(connSec, connUsec);
-    cli.set_read_timeout(rwSec, rwUsec);
-    cli.set_write_timeout(rwSec, rwUsec);
-
-    const httplib::Result res = cli.Post(target, json, "application/json");
-    if (!res) { return TesterUsageOutcome::Retry; }
-    const int status = res->status;
-    if (status >= 200 && status < 300) { return TesterUsageOutcome::Sent; }
-    if (status == 401) { return TesterUsageOutcome::Invalid; }
-    if (status == 400 || status == 413) { return TesterUsageOutcome::Rejected; }
-    return TesterUsageOutcome::Retry;
-}
-
-}  // namespace
-#endif
+// ---------------------------------------------------------------------------
+// Transport - a thin wrapper around core/crash_upload.hpp's shared, tested
+// client (postBounded), not a second hand-rolled WinHTTP/httplib one. Both
+// reporters need exactly the same thing: https except on loopback (so a test
+// can use a plain socket without a certificate), abortable mid-flight, and
+// nothing from the response but the status code.
+// ---------------------------------------------------------------------------
 
 TesterUsageOutcome postTesterUsage(const std::string& url, const std::string& json,
-                                    int connectTimeoutMs, int rwTimeoutMs) {
-    if (url.empty() || json.empty()) { return TesterUsageOutcome::Retry; }
+                                    const std::shared_ptr<UploadCancel>& cancel) {
+    if (url.empty() || json.empty() || !cancel) { return TesterUsageOutcome::Retry; }
     try {
-        return postJsonStatus(url, json, connectTimeoutMs, rwTimeoutMs);
+        const RawPostResult r = postBounded(url, json, cancel, /*captureBody=*/false);
+        if (!r.attempted || r.cancelled) { return TesterUsageOutcome::Retry; }
+        if (r.status >= 200 && r.status < 300) { return TesterUsageOutcome::Sent; }
+        if (r.status == 401) { return TesterUsageOutcome::Invalid; }
+        if (r.status == 400 || r.status == 413) { return TesterUsageOutcome::Rejected; }
+        // 429 and anything else this contract has no name for: keep it,
+        // never treat an unrecognised code as permission to discard a
+        // report the site may yet accept.
+        return TesterUsageOutcome::Retry;
     } catch (...) {
         // Silent by design, same rule as telemetry's transport: a usage
         // report that interrupted anything to complain would be worse than
@@ -274,35 +193,56 @@ TesterUsageOutcome postTesterUsage(const std::string& url, const std::string& js
     }
 }
 
+// ---------------------------------------------------------------------------
+// The sender - detached, never joined (see the header for why that is safe)
+// ---------------------------------------------------------------------------
+
 TesterUsageSender::~TesterUsageSender() {
-    if (thread_.joinable()) { thread_.join(); }
+    // Best-effort only: closes the transport's handle so an in-flight worker
+    // unblocks promptly instead of sitting out its own timeout with nobody
+    // left to hear about it. Nothing here waits for that to happen - see the
+    // header's note on why detaching is safe without it.
+    if (cancel_) { cancel_->cancel(); }
 }
 
-bool TesterUsageSender::busy() const { return thread_.joinable() && !done_.load(); }
-bool TesterUsageSender::finished() const { return thread_.joinable() && done_.load(); }
+bool TesterUsageSender::busy() const { return inFlight_ && inFlight_->load(); }
 
-void TesterUsageSender::reap() {
-    if (thread_.joinable() && done_.load()) { thread_.join(); }
-}
-
-void TesterUsageSender::send(const std::string& url, const std::string& json,
-                              int connectTimeoutMs, int rwTimeoutMs,
-                              std::function<void(TesterUsageOutcome)> onDone) {
+void TesterUsageSender::send(const std::string& url, const std::string& json) {
     if (url.empty() || json.empty()) { return; }
-    if (thread_.joinable() && !done_.load()) { return; }  // already sending
-    reap();
-    done_.store(false);
-    std::atomic<bool>* done = &done_;
-    thread_ = std::thread([url, json, connectTimeoutMs, rwTimeoutMs, onDone, done]() {
+    if (busy()) { return; }
+    cancel_ = std::make_shared<UploadCancel>();
+    inFlight_ = std::make_shared<std::atomic<bool>>(true);
+    outcomeSlot_ = std::make_shared<std::atomic<int>>(-1);
+    auto cancel = cancel_;
+    auto inFlight = inFlight_;
+    auto slot = outcomeSlot_;
+    // DETACHED, DELIBERATELY. Every capture below is a shared_ptr the thread
+    // owns a reference to, never `this` and never a reference to anything
+    // AppWindow owns - see the header's "SAFE TO DETACH" note for why that
+    // is what makes never joining safe rather than merely convenient.
+    std::thread([url, json, cancel, inFlight, slot]() {
         TesterUsageOutcome outcome = TesterUsageOutcome::Retry;
         try {
-            outcome = postTesterUsage(url, json, connectTimeoutMs, rwTimeoutMs);
+            outcome = postTesterUsage(url, json, cancel);
         } catch (...) {
             // Silent by design; outcome stays Retry.
         }
-        if (onDone) { onDone(outcome); }
-        done->store(true);
-    });
+        // Skip publishing a result once cancellation has started: the owner
+        // is on its way out, and the only thing left to do is not touch
+        // anything it might already have released. slot/inFlight are our
+        // own heap allocations either way, so writing them is never unsafe
+        // by itself - this is about not reporting a stale-by-then outcome
+        // nobody will read, not about memory safety.
+        if (!cancel->cancelled()) { slot->store(static_cast<int>(outcome)); }
+        inFlight->store(false);
+    }).detach();
+}
+
+std::optional<TesterUsageOutcome> TesterUsageSender::takeOutcome() {
+    if (!outcomeSlot_) { return std::nullopt; }
+    const int v = outcomeSlot_->exchange(-1);
+    if (v < 0) { return std::nullopt; }
+    return static_cast<TesterUsageOutcome>(v);
 }
 
 // ---------------------------------------------------------------------------
@@ -324,6 +264,48 @@ void TesterUsageQueue::setItems(std::vector<std::string> items) {
         items.erase(items.begin(), items.begin() + static_cast<std::ptrdiff_t>(items.size() - kMax));
     }
     items_ = std::move(items);
+}
+
+std::string tokenOfReport(const std::string& reportJson) {
+    const nlohmann::json j = nlohmann::json::parse(reportJson, nullptr, /*allow_exceptions=*/false);
+    if (j.is_discarded() || !j.is_object()) { return std::string(); }
+    const auto it = j.find("token");
+    if (it == j.end() || !it->is_string()) { return std::string(); }
+    return it->get<std::string>();
+}
+
+void TesterUsageQueue::dropOthers(const std::string& token) {
+    std::vector<std::string> kept;
+    kept.reserve(items_.size());
+    for (const std::string& item : items_) {
+        if (tokenOfReport(item) == token) { kept.push_back(item); }
+    }
+    items_ = std::move(kept);
+}
+
+TesterUsageOutcomeEffect applyTesterUsageOutcome(TesterUsageOutcome outcome,
+                                                  TesterUsageQueue& queue) {
+    TesterUsageOutcomeEffect e;
+    switch (outcome) {
+        case TesterUsageOutcome::Sent:
+        case TesterUsageOutcome::Rejected:
+            // Sent: the site has it. Rejected (400/413): it never will
+            // succeed by being retried - the contract's own words for this
+            // response are to log it and drop it, exactly like a Sent one.
+            queue.removeFront();
+            break;
+        case TesterUsageOutcome::Invalid:
+            e.nowInvalid = true;
+            e.stop = true;
+            break;
+        case TesterUsageOutcome::Retry:
+            // 429 or a transport failure: leave it queued and stop trying
+            // for the rest of THIS session - a black-holed endpoint must not
+            // become a poll-rate retry loop.
+            e.stop = true;
+            break;
+    }
+    return e;
 }
 
 // ---------------------------------------------------------------------------
@@ -398,29 +380,15 @@ void TesterUsageRecorder::reset() {
 // Catalogue id lookup
 // ---------------------------------------------------------------------------
 
-std::string catalogueIdForPlugin(const std::string& fileName, const std::string& displayName,
+std::string catalogueIdForPlugin(const std::string& fileName,
                                   const std::vector<InstalledPlugin>& installed) {
     const std::string bare = fs::path(fileName).filename().string();
     for (const InstalledPlugin& ip : installed) {
         if (!bare.empty() && ip.file == bare) { return ip.id; }
     }
-    // FALLBACK: a slug of the display name, for a plugin with no manifest
-    // record (a side-loaded .dll/.so, or a manifest that failed to parse).
-    // Best-effort rather than nothing - see the header.
-    std::string slug;
-    slug.reserve(displayName.size());
-    bool lastDash = false;
-    for (unsigned char c : displayName) {
-        if (std::isalnum(c) != 0) {
-            slug += static_cast<char>(std::tolower(c));
-            lastDash = false;
-        } else if (!lastDash && !slug.empty()) {
-            slug += '-';
-            lastDash = true;
-        }
-    }
-    while (!slug.empty() && slug.back() == '-') { slug.pop_back(); }
-    return slug;
+    // NO MANIFEST RECORD: reported under the fixed shared bucket rather than
+    // a name made up from the display name - see kSideloadedPluginId.
+    return kSideloadedPluginId;
 }
 
 }  // namespace cascade::core

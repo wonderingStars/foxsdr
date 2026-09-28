@@ -2790,14 +2790,22 @@ private:
     bool testerTokenInvalid_ = false;
     // The retry queue carried from config, plus whatever this session's own
     // finished report adds to it - see testerUsageStartup/testerUsageJournal.
+    // Kept free of any report not carrying THIS token - see
+    // core::TesterUsageQueue::dropOthers, called wherever testerToken_
+    // changes.
     cascade::core::TesterUsageQueue testerUsageQueue_;
-    // The regular (multi-second timeout) sender the startup flush and the
-    // periodic in-session retry use, and the SEPARATE fast, short-timeout
-    // sender the clean-exit attempt uses - two objects so an exit-time send
-    // can never be blocked behind a startup one still running (see the
-    // header's note on TesterUsageSender never being detached).
+    // ONE sender: the startup flush and the periodic in-session retry share
+    // it (never more than one send in flight at a time - busy() refuses a
+    // second). There is deliberately no exit-time sender any more: an
+    // earlier version tried a bounded attempt at clean exit and measured up
+    // to ~3.9s of added shutdown time against an unresponsive server (WinHTTP's
+    // own floor), which is not what "never delays exit" can mean. The
+    // finished session's report is saved to disk at exit exactly like
+    // telemetry's own, and sent at the NEXT launch - see testerUsageJournal
+    // and testerUsageStartup. TesterUsageSender's destructor never blocks
+    // (see its header comment), so a send still in flight when the window
+    // closes costs nothing at all.
     cascade::core::TesterUsageSender testerUsageSender_;
-    cascade::core::TesterUsageSender testerUsageExitSender_;
     double testerSessionStart_ = 0.0;  // glfwGetTime at start, for the duration
     std::time_t testerSessionStartWall_ = 0;  // wall clock, for the RFC3339 stamp
     cascade::core::SecondAccrual testerUsageAccrual_;
@@ -2805,19 +2813,6 @@ private:
     // endpoint or a bad code cannot turn testerUsagePoll() into a per-frame
     // retry loop against it for the rest of the session.
     bool testerUsageQueueTriedThisSession_ = false;
-    // Regular-sender timeouts (startup/in-session queue flush) and the
-    // shorter exit-only pair - see testerUsageExitAttempt's comment for why
-    // they differ.
-    static constexpr int kTesterUsageConnectMs = 4000;
-    static constexpr int kTesterUsageRwMs = 6000;
-    static constexpr int kTesterUsageExitConnectMs = 300;
-    static constexpr int kTesterUsageExitRwMs = 400;
-    static constexpr double kTesterUsageExitBudgetS = 0.9;
-    // Set by a completed send's onDone callback (which runs on the worker
-    // thread) and drained on the GUI thread the next frame - the same
-    // "network thread writes, GUI thread reads and acts" split every other
-    // async result in this file follows (e.g. DeviceOpenResult).
-    std::atomic<int> testerUsageLastOutcome_{-1};  // -1 = none pending
     bool testerShowPreview_ = false;
     bool testerPreviewOpenedByEnv_ = false;
     std::string testerCodeError_;
@@ -2825,8 +2820,19 @@ private:
     // sized for a whole pasted portal link, so a half-typed paste never
     // becomes "the token" until the Use button commits it
     // (drawTesterUsageSection), and so the masked display can show something
-    // different from what is being typed.
+    // different from what is being typed. Rendered with
+    // ImGuiInputTextFlags_Password like the web server's own password field,
+    // so the credential is not shown in full while it is being typed either.
     char testerCodeBuf_[256] = "";
+    // Sets testerToken_ to `token`, arms/disarms the recorder to match, and
+    // drops every queued report that does not carry this token (a fresh
+    // opt-in, a replaced code, and a removal all funnel through here) - the
+    // one place that decision is made, so paste and replace cannot disagree
+    // with it. `startFreshSession` is true only for a brand-new opt-in (the
+    // token was empty before): a session already being recorded under an
+    // old, now-replaced code keeps what it has, but one starting from
+    // nothing gets a clean slate.
+    void setTesterToken(const std::string& token, bool startFreshSession);
     void testerUsageStartup(const cascade::core::AppConfig& cfg);
     void testerUsageJournal(cascade::core::AppConfig& cfg);
     // Called from within testerUsageJournal, the same cadence
@@ -2834,12 +2840,10 @@ private:
     // plugins are currently being fed.
     void testerUsageAccrue();
     cascade::core::TesterUsageReport buildTesterUsageReport(double sessionSeconds) const;
-    // Drains a finished send's outcome on the GUI thread and acts on it
-    // (marks the token invalid, drops the head of the queue, or leaves it for
-    // next time) - called once a frame.
+    // Drains a finished send's outcome on the GUI thread and acts on it via
+    // core::applyTesterUsageOutcome (marks the token invalid, drops the head
+    // of the queue, or leaves it for next time) - called once a frame.
     void testerUsagePoll();
-    // The bounded ~1s attempt at clean exit - see its own comment.
-    void testerUsageExitAttempt();
     void drawTesterUsageSection();
 
     // -----------------------------------------------------------------------

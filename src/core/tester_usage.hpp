@@ -23,7 +23,10 @@
 // one that opens https://foxsdr.com/#t=<token>. It is stored in the config
 // file because the tester typed it once and should not have to again; it is
 // NEVER written to a log line, a diagnostics bundle or a crash report (see
-// tests/test_tester_usage.cpp), and it is masked everywhere it is displayed.
+// tests/test_tester_usage.cpp), and it is masked everywhere it is displayed
+// - including the input field itself (ImGuiInputTextFlags_Password) and the
+// "Show what is sent" preview, which shows the payload the server actually
+// receives with the token masked the same way the Code line is.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #ifndef CASCADE_CORE_TESTER_USAGE_HPP
@@ -32,13 +35,14 @@
 #include <atomic>
 #include <cstdint>
 #include <ctime>
-#include <functional>
 #include <map>
+#include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
-#include <thread>
 #include <vector>
 
+#include "core/crash_upload.hpp"
 #include "core/plugin_repo.hpp"
 
 namespace cascade::core {
@@ -49,11 +53,25 @@ namespace cascade::core {
 // joins on the catalogue id the way everything else about a plugin does),
 // the version that ran, and how many whole minutes it was actually fed
 // samples (never merely loaded).
+//
+// A plugin with NO install-manifest record - a side-loaded .dll/.so, or one
+// whose manifest entry failed to parse - is never given a made-up id: it is
+// reported under the fixed id kSideloadedPluginId with an empty version, so
+// a tester who genuinely ran an unreleased or hand-built decoder still
+// counts as having exercised "plugins" without inventing an identity for a
+// binary the catalogue has never seen. See catalogueIdForPlugin below.
 struct TesterUsagePlugin {
     std::string id;
     std::string version;
     std::uint64_t minutes = 0;
 };
+
+// The bucket every plugin with no install-manifest record is reported under.
+// One shared id rather than a per-file slug: a slug would look like an
+// identity the catalogue never assigned, and multiple side-loaded plugins
+// are meant to fold into one signal ("something unreleased was used") rather
+// than multiply into several invented ones.
+inline constexpr char kSideloadedPluginId[] = "sideloaded";
 
 // One session's worth of counters - built once, at the point a session ends,
 // from whatever TesterUsageRecorder accumulated during it.
@@ -103,6 +121,23 @@ bool validTesterToken(const std::string& token);
 // and is not a credential this field accepts.
 std::string extractTesterToken(const std::string& input);
 
+// First 4 and last 4 characters, joined with "...", the same shape wherever
+// the token is shown at all - the "Code:" line and the "Show what is sent"
+// preview both call this rather than each inventing their own masking, so
+// there is exactly one place that decides how much of a credential a screen
+// may show. A token 8 characters or shorter (never a real one - see
+// validTesterToken) is masked in full rather than partially, so a
+// hand-edited short value cannot leak more of itself than a real token
+// would.
+std::string maskTesterToken(const std::string& token);
+
+// The exact bytes TesterUsageReport::toJson() would produce for `report`,
+// EXCEPT the token field, which is masked exactly like maskTesterToken()
+// masks it on screen. This is what "Show what is sent" actually displays -
+// never the real toJson() output - so the preview cannot become a second
+// place the token leaks in full.
+std::string maskedPreviewJson(const TesterUsageReport& report);
+
 // "windows" | "linux" | "android" - the platform value the contract wants,
 // read from the same compile-time targets telemetry.hpp's osDescription()
 // switches on, so the two can never name the platform two different ways.
@@ -123,25 +158,35 @@ std::string testerUsageEndpoint();
 //             launch, bounded (see TesterUsageQueue below)
 enum class TesterUsageOutcome { Sent, Invalid, Rejected, Retry };
 
-// One blocking POST. Callers choose their own thread and timeout (see
-// TesterUsageSender) - this function never spawns one itself, so a test can
-// call it directly against a local server with no thread to synchronise
-// with. https only, exactly like telemetry's transport and for the same
-// reason: a tester's token is a credential, and sending it in clear would put
-// it on the wire for any network in between to collect. A non-https url, or
-// one that fails to parse, returns Retry without opening a socket - the same
-// "nothing sent, no throw" contract every seam like this one keeps.
+// One blocking POST, on TOP OF core/crash_upload.hpp's shared transport
+// (postBounded) rather than a second hand-rolled WinHTTP/httplib client:
+// the two reporters have identical requirements (https except on loopback,
+// so a test can use a plain socket; abortable mid-flight; a status code read
+// back, nothing else). `cancel` is crash_upload.hpp's own UploadCancel -
+// see TesterUsageSender below for why a SHARED cancel token, rather than a
+// per-call one, is what makes a fire-and-forget sender safe to abandon
+// without joining it.
 TesterUsageOutcome postTesterUsage(const std::string& url, const std::string& json,
-                                    int connectTimeoutMs, int rwTimeoutMs);
+                                    const std::shared_ptr<UploadCancel>& cancel);
 
-// Fire-and-forget, one report at a time, mirroring core::TelemetryReporter:
-// NOT detached. The destructor joins, because a detached thread still writing
-// into a WinHTTP/socket handle while the process tears down is exactly the
-// hazard telemetry.hpp's header documents, and it applies here identically.
+// Fire-and-forget, one report at a time. UNLIKE core::TelemetryReporter, the
+// worker thread is DETACHED, not joined - see the header's own "never delays
+// exit" requirement and AppWindow's shutdown sequence, which must never wait
+// on a network call at all (0.99.42's exit-time attempt measured ~0.9-3.9s
+// of added shutdown time against an unresponsive server and was removed
+// entirely: this object no longer tries to be clever about a bounded exit
+// send, it just never blocks).
 //
-// `onDone` runs ON THE WORKER THREAD once the POST returns or times out -
-// callers must marshal anything that touches GUI state back to their own
-// thread rather than acting on it directly (see AppWindow::testerUsagePoll).
+// SAFE TO DETACH because nothing the worker touches after send() returns is
+// owned by this object or its caller: `cancel_`, the in-flight flag and the
+// outcome slot are each a separate heap allocation shared by shared_ptr, so
+// the worker holds its own reference and keeps them alive for exactly as
+// long as it needs them, whether or not this object - or the AppWindow that
+// owns it - still exists. The destructor cancels an in-flight send (closing
+// the transport's handle unblocks the worker promptly, the same mechanism
+// core::CrashUploader uses) purely so an abandoned socket does not linger
+// longer than it has to; it does not need to, and does not, wait for the
+// worker to actually finish.
 class TesterUsageSender {
 public:
     TesterUsageSender() = default;
@@ -149,21 +194,25 @@ public:
     TesterUsageSender(const TesterUsageSender&) = delete;
     TesterUsageSender& operator=(const TesterUsageSender&) = delete;
 
-    // No-op when `url` or `json` is empty, or a send is already running.
-    void send(const std::string& url, const std::string& json, int connectTimeoutMs,
-              int rwTimeoutMs, std::function<void(TesterUsageOutcome)> onDone);
+    // No-op when `url` or `json` is empty, or a send is already running
+    // (busy()). Detaches its worker thread immediately - there is nothing
+    // to join.
+    void send(const std::string& url, const std::string& json);
 
+    // True from send() until the worker has produced an outcome (whether or
+    // not takeOutcome() has been called yet).
     bool busy() const;
-    // True once the outstanding send (if any) has finished running onDone -
-    // the caller reaps it with reap() before starting another.
-    bool finished() const;
-    // Joins a finished thread so busy() clears and a new send() can start.
-    // Safe to call when nothing is running.
-    void reap();
+
+    // Non-blocking. Returns the finished send's outcome and clears it, or
+    // nullopt if nothing has finished since the last call (or nothing was
+    // ever sent). Once this returns a value, busy() is false and a new
+    // send() may start.
+    std::optional<TesterUsageOutcome> takeOutcome();
 
 private:
-    std::thread thread_;
-    std::atomic<bool> done_{true};
+    std::shared_ptr<std::atomic<bool>> inFlight_;
+    std::shared_ptr<std::atomic<int>> outcomeSlot_;  // -1 = none yet
+    std::shared_ptr<UploadCancel> cancel_;
 };
 
 // The bounded queue of finished-session reports still waiting to be sent -
@@ -183,9 +232,41 @@ public:
     const std::vector<std::string>& items() const { return items_; }
     void setItems(std::vector<std::string> items);
 
+    // Removes every entry whose own "token" field is not exactly `token` -
+    // the fix for replacing a revoked or mistyped code: a report queued
+    // under the OLD code must never be sent under the new one (it would
+    // reach the wrong tester's entry on the site), and a report queued
+    // before the code was removed must not survive into a later opt-in
+    // under a different one. Called whenever the token changes (paste,
+    // replace, remove) and once at start-up after folding in whatever the
+    // config carried - see AppWindow::testerUsageStartup and
+    // drawTesterUsageSection. An unparsable entry is dropped too: it cannot
+    // be shown to have the right token, so it is treated as having the
+    // wrong one.
+    void dropOthers(const std::string& token);
+
 private:
     std::vector<std::string> items_;
 };
+
+// The token embedded in a report's own JSON ("" if the text does not parse
+// or has no such field) - what dropOthers() above compares against, and
+// exposed on its own so a test can assert the comparison directly.
+std::string tokenOfReport(const std::string& reportJson);
+
+// The state change one finished send's outcome causes - pulled out of
+// AppWindow::testerUsagePoll into a pure function so the decision itself
+// (drop the front on Sent/Rejected, stop and mark the code invalid on
+// Invalid, stop but keep it on Retry) is asserted directly by
+// tests/test_tester_usage.cpp rather than only indirectly through the GUI
+// class that calls it. Mutates `queue` (removeFront on Sent/Rejected only);
+// never touches the token or the config - those are the caller's.
+struct TesterUsageOutcomeEffect {
+    bool nowInvalid = false;  // caller should set testerTokenInvalid = true
+    bool stop = false;        // caller should stop trying more sends THIS session
+};
+TesterUsageOutcomeEffect applyTesterUsageOutcome(TesterUsageOutcome outcome,
+                                                  TesterUsageQueue& queue);
 
 // Records what a session actually used, from wherever the real event
 // happens - a mode change, a device finishing its open, a decoder that just
@@ -216,12 +297,14 @@ public:
     void noteRadio(const std::string& kind);
 
     // Adds `seconds` of running time to one plugin, identified by its
-    // CATALOGUE id and the version that was running. Called once per
-    // accrual tick for every plugin currently being fed (see
-    // AppWindow::testerUsageAccrue) - fractional seconds accumulate in a
-    // double and are only rounded to whole minutes when the session's report
-    // is built, on the same "do not truncate every tiny delta to zero" rule
-    // telemetry's SecondAccrual documents.
+    // CATALOGUE id (or kSideloadedPluginId) and the version that was
+    // running - callers pass an empty version for the sideloaded bucket,
+    // since it may cover several different unreleased binaries at once.
+    // Called once per accrual tick for every plugin currently being fed
+    // (see AppWindow::testerUsageAccrue) - fractional seconds accumulate in
+    // a double and are only rounded to whole minutes when the session's
+    // report is built, on the same "do not truncate every tiny delta to
+    // zero" rule telemetry's SecondAccrual documents.
     void accruePlugin(const std::string& id, const std::string& version, double seconds);
 
     std::vector<std::string> features() const;
@@ -249,12 +332,12 @@ private:
 
 // Joins a loaded plugin (identified by its module FILE NAME, as
 // std::filesystem::path(loadedPluginPath).filename() gives it) to the
-// catalogue id its install record carries. Falls back to a lower-cased,
-// hyphenated slug of the display name for a side-loaded plugin with no
-// manifest entry - a best-effort id rather than nothing, made from the same
-// name the catalogue itself would have used had this plugin ever been
-// listed in one.
-std::string catalogueIdForPlugin(const std::string& fileName, const std::string& displayName,
+// catalogue id its install record carries. Returns kSideloadedPluginId for
+// a plugin with no manifest entry (a side-loaded .dll/.so, or a manifest
+// that failed to parse) - never a name made up from the display name, which
+// would look like an identity the catalogue assigned when it did not (see
+// kSideloadedPluginId's own comment).
+std::string catalogueIdForPlugin(const std::string& fileName,
                                   const std::vector<InstalledPlugin>& installed);
 
 }  // namespace cascade::core

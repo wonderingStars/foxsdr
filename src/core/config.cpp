@@ -652,14 +652,30 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     if (out.testerUsageCurrent.size() > AppConfig::kMaxPendingReportBytes) {
         out.testerUsageCurrent.clear();
     }
+    // WITH NO CODE, THERE IS NOTHING TO RETRY. A file that carries a queue
+    // but an empty token is either a hand-edit or a code that was removed
+    // after the last save landed mid-write; either way, nothing here is this
+    // session's to send under a code the tester no longer has entered.
+    if (out.testerToken.empty()) {
+        out.testerUsagePending.clear();
+    }
     // Element-wise tolerant, like the plugin-name lists: an oversized entry
     // (a corrupt or hand-edited file) is dropped on its own, and the queue is
     // capped at TesterUsageQueue::kMax - a hand-edited file claiming more
     // must not become an unbounded send loop at the next launch.
+    //
+    // A REPORT QUEUED UNDER A DIFFERENT TOKEN IS DROPPED, NOT CARRIED OVER:
+    // replacing a revoked or mistyped code must never let an old session's
+    // report be sent under the new one - it would land on the wrong
+    // tester's entry on the site. tests/test_tester_usage.cpp drives this
+    // through core::TesterUsageQueue::dropOthers directly; this is the same
+    // rule applied at load, for a queue that was written under a code this
+    // file no longer names.
     {
         std::vector<std::string> kept;
         for (std::string& s : out.testerUsagePending) {
             if (s.empty() || s.size() > AppConfig::kMaxPendingReportBytes) { continue; }
+            if (cascade::core::tokenOfReport(s) != out.testerToken) { continue; }
             kept.push_back(std::move(s));
             if (kept.size() >= cascade::core::TesterUsageQueue::kMax) { break; }
         }

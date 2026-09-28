@@ -421,6 +421,19 @@ void AppWindow::patchReconcile() {
         patchRadioOpenedAs_[id] = as;
         patchRadios_[id] = std::move(radio);
         patchRadioSig_.erase(id);
+        // TESTER USAGE: the patch opens its own radios independently of the
+        // receiver's Source section (finishDeviceOpen), so it needs the same
+        // hook here - on the same "actually started", not "was asked for",
+        // rule the receiver's own site follows.
+        {
+            const std::string patchDriver = pc::deviceDriver(n->device);
+            if (patchDriver != "file") {
+                testerUsage_.noteRadio(patchDriver);
+                if (patchDriver != "soapy" && patchDriver != "soundcard") {
+                    testerUsage_.noteFeature("native-drivers");
+                }
+            }
+        }
     }
 
     // --- which radios should run ------------------------------------------------
@@ -570,6 +583,7 @@ void AppWindow::patchReconcile() {
             patchRadioOpenedAs_[id] = as;
             patchRadios_[id] = std::move(radio);
             patchRadioSig_.erase(id);
+            testerUsage_.noteFeature("siggen");
             continue;
         }
         const std::string driver = pc::deviceDriver(n->device);
