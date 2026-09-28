@@ -8212,9 +8212,10 @@ void AppWindow::drawSourceSection() {
                     // lastError() (an RX888 in VHF mode, a Pluto above its
                     // maximum); applySourceRate puts that reason on the line,
                     // and the combo points at the READBACK - through 0.99.34 it
-                    // pointed at the entry asked for.
-                    const cascade::gui::RateSetOutcome set =
-                        cascade::gui::applySourceRate(*device_, deviceRatesHz_[i], sourceError_);
+                    // pointed at the entry asked for. explicitRequest=true: the
+                    // user picked this entry by hand.
+                    const cascade::gui::RateSetOutcome set = cascade::gui::applySourceRate(
+                        *device_, deviceRatesHz_[i], sourceError_, /*explicitRequest=*/true);
                     sourceError_ = set.sourceError;
                     if (set.ok) {
                         deviceRateIndex_ = nearestIndex(deviceRatesHz_, set.landedHz);
@@ -9183,7 +9184,12 @@ void AppWindow::launchDeviceOpen(DeviceOpenResult r, const std::string& busyLabe
         }
         // A rate refusal is not fatal (the panel shows the actual readback
         // either way) but is surfaced - and so is a rate the driver coerced
-        // on a call that succeeded.
+        // on a call that succeeded. explicitRequest left at its default
+        // (false): this is the generic rate every open asks for (a Source-
+        // list pick's kSoapyRateHz default, or a fault-recovery reopen at the
+        // previous rate) - not a caller asking for this specific rate on
+        // purpose, so an Airspy must not search across decimations here (see
+        // iq_source.hpp's setSampleRateHzExplicit).
         r.error = cascade::gui::applySourceRate(*dev, r.requestRateHz, r.error).sourceError;
         // AN RSP IS TUNED BEFORE ITS STREAM STARTS (0.99.36). The carry-across
         // tune below in finishDeviceOpen runs after setSource has started the
@@ -9992,7 +9998,10 @@ std::unique_ptr<cascade::source::DeviceSource> AppWindow::openDeviceSync(
     }
     // A rate refusal is not fatal (the panel shows the actual readback
     // either way) but is surfaced - and so is a rate the driver coerced on a
-    // call that succeeded.
+    // call that succeeded. explicitRequest left at its default (false): this
+    // is a saved config being restored, not a rate picked on purpose - an
+    // Airspy's remembered decimation (just applied above) must be what this
+    // rate is matched against, not searched away from.
     sourceError_ = cascade::gui::applySourceRate(*dev, requestRateHz, sourceError_).sourceError;
     adoptDeviceMirrors(*dev, kind, args, requestRateHz);
     return dev;
@@ -17950,10 +17959,12 @@ void AppWindow::applyPluginPreset(const cascade::core::LoadedPlugin& p,
     // The device rate, before the tune, because changing it re-plans the whole
     // chain. Advisory: a source that refuses simply keeps the rate it had, and
     // the decoder will say so itself rather than the host guessing.
+    // explicitRequest=true: the preset asked for this rate deliberately (the
+    // ADS-B floor an Airspy's raised decimation must not trap it below).
     if (ps.sampleRateHz > 0.0 && device_ != nullptr &&
         pipeline_.activeSource().sampleRateHz() != ps.sampleRateHz) {
-        const cascade::gui::RateSetOutcome set =
-            cascade::gui::applySourceRate(*device_, ps.sampleRateHz, sourceError_);
+        const cascade::gui::RateSetOutcome set = cascade::gui::applySourceRate(
+            *device_, ps.sampleRateHz, sourceError_, /*explicitRequest=*/true);
         if (set.ok) {
             // A rate the driver COERCED is said (the refusal stays advisory,
             // as above).
@@ -23226,8 +23237,10 @@ void AppWindow::applyControlRequest(const cascade::net::ControlRequest& r) {
         }
         if (r.sampleRateHz.has_value()) {
             // The refusal's reason, or a coercion's, lands on the line.
-            const cascade::gui::RateSetOutcome set =
-                cascade::gui::applySourceRate(*device_, *r.sampleRateHz, sourceError_);
+            // explicitRequest=true: a browser/API caller asked for this rate
+            // by hand, same as a Rate-combo pick.
+            const cascade::gui::RateSetOutcome set = cascade::gui::applySourceRate(
+                *device_, *r.sampleRateHz, sourceError_, /*explicitRequest=*/true);
             sourceError_ = set.sourceError;
             if (set.ok) {
                 // THE DESKTOP'S RATE COMBO FOLLOWS, and it did not until

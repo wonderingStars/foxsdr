@@ -99,11 +99,19 @@ struct RateSetOutcome {
     std::string sourceError;
 };
 
+// `explicitRequest` (0.99.44 repair): true for a caller asking for this rate
+// DELIBERATELY - a plugin preset, or one the user (or a browser/API request)
+// picked by hand - false for a generic default an open asks for or a
+// remembered setting being restored. It reaches IqSource::setSampleRateHzExplicit
+// instead of the plain setSampleRateHz; every source but AirspySource treats
+// the two identically (see iq_source.hpp).
 inline RateSetOutcome applySourceRate(cascade::source::IqSource& src, double requestedHz,
-                                      const std::string& currentError) {
+                                      const std::string& currentError,
+                                      bool explicitRequest = false) {
     const std::string errBefore = src.lastError();
     RateSetOutcome out;
-    out.ok = src.setSampleRateHz(requestedHz);
+    out.ok = explicitRequest ? src.setSampleRateHzExplicit(requestedHz)
+                             : src.setSampleRateHz(requestedHz);
     const std::string errAfter = src.lastError();
     out.landedHz = src.sampleRateHz();
     out.sourceError = out.ok ? sourceErrorAfterRateSet(currentError, requestedHz, out.landedHz,

@@ -1041,17 +1041,50 @@ int main() {
 
         // COERCED TO THE NEAREST, never refused: the hardware has a menu, so
         // there is no such thing as an unsupported-but-close rate to fail on,
-        // and the readback says what was actually programmed. The nearest
-        // candidate is searched over every (native rate, decimation) pair,
-        // not just decimation 1 - so 4 MS/s lands on 5 MS/s (10 MS/s native
-        // under decimation 2, gap 1 MHz) rather than the 2.5 MS/s native rate
-        // (gap 1.5 MHz), because decimation 2 is itself a whole-hertz choice
-        // this radio offers and 5 MS/s is genuinely the closer, AT-OR-ABOVE
+        // and the readback says what was actually programmed. setSampleRateHz
+        // (the plain, non-explicit method) stays WITHIN THE CURRENT
+        // DECIMATION (0.99.44 repair) - decimation here is still 1, so this
+        // is a plain nearest-of-two-native-rates search.
+        fake->clearControls();
+        CHECK(src.setSampleRateHz(4.0e6));
+        CHECK_NEAR(src.sampleRateHz(), 2.5e6, 0.5);
+        {
+            const std::vector<AirspyControlRecord> c = fake->controls();
+            CHECK(c.size() == 1);
+            CHECK(isControl("4 MS/s coerced to 2.5", at(c, 0), true, 12, 0, 1));
+        }
+        fake->clearControls();
+        CHECK(src.setSampleRateHz(40.0e6));
+        CHECK_NEAR(src.sampleRateHz(), 10.0e6, 0.5);
+        fake->clearControls();
+        CHECK(src.setSampleRateHz(1.0e3));
+        CHECK_NEAR(src.sampleRateHz(), 2.5e6, 0.5);
+        // A nonsense rate is refused without a transfer.
+        fake->clearControls();
+        CHECK(!src.setSampleRateHz(0.0));
+        CHECK(!src.setSampleRateHz(-1.0));
+        CHECK(fake->controlCount() == 0);
+        CHECK(!src.faulted());
+        CHECK(src.setSampleRateHz(10.0e6));
+
+        // =================================================================
+        // setSampleRateHzExplicit (0.99.44): a caller asking for a rate on
+        // purpose (a plugin preset, a user's own pick) is allowed to search
+        // every (native rate, decimation) pair, not just the current one -
+        // where the plain method above never touches decimation, this one
+        // programs it as part of the search. Same fixture, decimation reset
+        // to 1 first since the block above left it there already.
+        // =================================================================
+        fake->clearControls();
+        // The nearest candidate is searched over every (native rate,
+        // decimation) pair - so 4 MS/s lands on 5 MS/s (10 MS/s native under
+        // decimation 2, gap 1 MHz) rather than the 2.5 MS/s native rate (gap
+        // 1.5 MHz), because decimation 2 is itself a whole-hertz choice this
+        // radio offers and 5 MS/s is genuinely the closer, AT-OR-ABOVE
         // candidate. This wire transfer still programs the 10 MS/s NATIVE
         // rate (index 0) - decimation is this end's arithmetic and sends
         // nothing to the radio.
-        fake->clearControls();
-        CHECK(src.setSampleRateHz(4.0e6));
+        CHECK(src.setSampleRateHzExplicit(4.0e6));
         CHECK_NEAR(src.sampleRateHz(), 5.0e6, 0.5);
         CHECK(src.decimation() == 2);
         {
@@ -1061,24 +1094,16 @@ int main() {
         }
         CHECK(src.setDecimation(1));  // back to no decimation for the rest of this test
         fake->clearControls();
-        CHECK(src.setSampleRateHz(40.0e6));
-        CHECK_NEAR(src.sampleRateHz(), 10.0e6, 0.5);
-        fake->clearControls();
         // Nothing this radio offers, at any decimation, reaches 1 kHz, so no
         // AT-OR-ABOVE candidate exists and the nearest BELOW wins: the
         // smallest deliverable rate, 2.5 MS/s native under decimation 32
         // (78125 Hz) - closer to 1 kHz than the undecimated 2.5 MS/s is.
-        CHECK(src.setSampleRateHz(1.0e3));
+        CHECK(src.setSampleRateHzExplicit(1.0e3));
         CHECK_NEAR(src.sampleRateHz(), 78125.0, 0.5);
         CHECK(src.decimation() == 32);
         CHECK(src.setDecimation(1));  // back to no decimation for the rest of this test
-        // A nonsense rate is refused without a transfer.
         fake->clearControls();
-        CHECK(!src.setSampleRateHz(0.0));
-        CHECK(!src.setSampleRateHz(-1.0));
-        CHECK(fake->controlCount() == 0);
-        CHECK(!src.faulted());
-        CHECK(src.setSampleRateHz(10.0e6));
+        CHECK(src.setSampleRateHzExplicit(10.0e6));
 
         // Every rate change reset the pipe first (airspy.c:1147).
         const int resetsBefore = fake->resetPipeCalls();
@@ -2303,17 +2328,16 @@ int main() {
     }
 
     // =====================================================================
-    // 9. A RAISED DECIMATION MUST NOT TRAP A LATER RATE REQUEST BELOW WHAT
-    //    THE RADIO CAN ACTUALLY DELIVER (a beta report: ADS-B decodes
-    //    nothing on an Airspy once decimation has been raised). setSampleRateHz
-    //    used to search only {nativeRate / the CURRENT decimation} for the
-    //    nearest match, so raising decimation to 8 on an R2 and then asking
-    //    for the ADS-B preset's 2.4 MS/s landed on 1.25 MS/s (10 MS/s / 8) -
-    //    below the decoder's 2 MS/s floor - because 2.5 MS/s (only reachable
-    //    at decimation 1) was never a candidate. The fix searches every
-    //    (native rate, decimation) pair for the nearest one, preferring one
-    //    AT OR ABOVE the request when such a pair exists, and adjusts the
-    //    remembered/published decimation to match.
+    // 9. A RAISED DECIMATION MUST NOT TRAP AN EXPLICIT RATE REQUEST (a
+    //    plugin preset, e.g. the ADS-B decoder's) BELOW WHAT THE RADIO CAN
+    //    ACTUALLY DELIVER (a beta report: ADS-B decodes nothing on an Airspy
+    //    once decimation has been raised). setSampleRateHzExplicit searches
+    //    every (native rate, decimation) pair for the nearest one, preferring
+    //    one AT OR ABOVE the request when such a pair exists, and adjusts the
+    //    remembered/published decimation to match. THE PLAIN setSampleRateHz
+    //    does NOT do this (0.99.44 repair, see its own comment) - a generic
+    //    default-rate-on-open must not silently walk a remembered decimation
+    //    away from what the user set it to.
     // =====================================================================
     {
         AirspySource r2;
@@ -2323,7 +2347,7 @@ int main() {
         CHECK(r2.decimation() == 8);
         CHECK_NEAR(r2.sampleRateHz(), 1.25e6, 0.5);  // 10 MS/s / 8, decimation's own doing
 
-        CHECK(r2.setSampleRateHz(2.4e6));
+        CHECK(r2.setSampleRateHzExplicit(2.4e6));
         CHECK_NEAR(r2.sampleRateHz(), 2.5e6, 0.5);
         CHECK(r2.decimation() == 1);
         r2.closeDevice();
@@ -2337,10 +2361,27 @@ int main() {
         CHECK(mini.decimation() == 8);
         CHECK_NEAR(mini.sampleRateHz(), 750000.0, 0.5);  // 6 MS/s / 8
 
-        CHECK(mini.setSampleRateHz(2.4e6));
+        CHECK(mini.setSampleRateHzExplicit(2.4e6));
         CHECK_NEAR(mini.sampleRateHz(), 3.0e6, 0.5);
         CHECK(mini.decimation() == 1);
         mini.closeDevice();
+    }
+    // AND THE PLAIN METHOD MUST NOT DO THE SAME THING (this is the red case
+    // on the unfixed 0.99.44 code: 8ba18c4 made the plain setSampleRateHz do
+    // exactly this cross-decimation search too, which is what let a generic
+    // list-pick default silently walk a remembered /8 to /1 - see
+    // test_airspy_app.cpp's "list pick" case for that path end to end).
+    {
+        AirspySource r2;
+        attachFake(r2);
+        CHECK(r2.open(""));
+        CHECK(r2.setDecimation(8));
+        CHECK_NEAR(r2.sampleRateHz(), 1.25e6, 0.5);
+
+        CHECK(r2.setSampleRateHz(2.4e6));
+        CHECK_NEAR(r2.sampleRateHz(), 1.25e6, 0.5);  // unchanged: still within /8
+        CHECK(r2.decimation() == 8);
+        r2.closeDevice();
     }
 
     return testSummary("test_airspy_source");

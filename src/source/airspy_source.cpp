@@ -1233,6 +1233,15 @@ bool AirspySource::setDecimation(unsigned factor) {
 
 bool AirspySource::setSampleRateHz(double hz) {
     std::lock_guard<std::mutex> lk(devMutex_);
+    return setSampleRateHzLocked(hz, /*crossDecimation=*/false);
+}
+
+bool AirspySource::setSampleRateHzExplicit(double hz) {
+    std::lock_guard<std::mutex> lk(devMutex_);
+    return setSampleRateHzLocked(hz, /*crossDecimation=*/true);
+}
+
+bool AirspySource::setSampleRateHzLocked(double hz, bool crossDecimation) {
     if (dev_ == nullptr) {
         setError("setSampleRateHz() called with no Airspy open");
         return false;
@@ -1250,81 +1259,101 @@ bool AirspySource::setSampleRateHz(double hz) {
     // NEAREST, not refused: the hardware has a menu of two or three native
     // rates and every one of them is a long way from every other, so "the
     // closest thing I have" is the only answer that is ever useful.
-    //
-    // NEAREST OVER EVERY (NATIVE RATE, DECIMATION) PAIR, not just the CURRENT
-    // decimation - a beta report found ADS-B decoding nothing on an Airspy
-    // once decimation had been raised for something else: at decimation 8 an
-    // R2's only two candidates were 10 MS/s/8 = 1.25 MS/s and 2.5 MS/s/8 =
-    // 312.5 kS/s, and the plugin's 2.4 MS/s preset landed on 1.25 MS/s -
-    // below its own 2 MS/s floor - because 2.5 MS/s at decimation 1 was never
-    // considered. Every whole-hertz decimation (decimationChoicesLocked) of
-    // every native rate is a candidate here, and setDecimation() itself is
-    // untouched - a caller who wants a specific decimation still gets exactly
-    // that by calling it directly.
-    //
-    // AT OR ABOVE WINS A TIE WITH BELOW: among candidates equally near the
-    // request, one that delivers at least what was asked for is preferred
-    // over one that delivers less - a decoder given LESS than it asked for
-    // may refuse to run at all (see the 2 MS/s floor above), where one given
-    // MORE just decodes a wider slice. Only when nothing reaches the request
-    // does the nearest-below candidate answer.
-    //
-    // A TIE IN DELIVERED RATE GOES TO THE CURRENT DECIMATION FIRST, then to
-    // the lower one. The same delivered rate is often reachable two ways (a
-    // 10 MS/s radio at /4 delivers the same 2.5 MS/s its 2.5 MS/s native rate
-    // does at /1), and picking whichever a caller's own decimation already
-    // matches is what makes restoring a remembered radio land exactly back
-    // where it was (a saved decimation is set on the radio, via
-    // setDecimation(), before the saved rate is asked for - see
-    // gui/airspy_panel.hpp's airspyApplySetting) instead of an equally-valid
-    // but different pair that would silently change the remembered
-    // decimation on every restart. Failing that tie, the lower decimation is
-    // the one that asks least of the USB bus and keeps the most bandwidth in
-    // reserve.
     const unsigned currentDecimation = decimation_.load(std::memory_order_relaxed);
-    const std::vector<unsigned> decimations = decimationChoicesLocked();
-    // True if (gapA, decA) should win over (gapB, decB).
-    const auto better = [currentDecimation](double gapA, unsigned decA, double gapB,
-                                            unsigned decB) {
-        if (gapA != gapB) { return gapA < gapB; }
-        if ((decA == currentDecimation) != (decB == currentDecimation)) {
-            return decA == currentDecimation;
-        }
-        return decA < decB;
-    };
     std::size_t bestRate = 0;
-    unsigned bestDecimation = 1;
-    double bestAboveGap = -1.0;
-    std::size_t bestAboveRate = 0;
-    unsigned bestAboveDecimation = 1;
-    double bestBelowGap = -1.0;
-    std::size_t bestBelowRate = 0;
-    unsigned bestBelowDecimation = 1;
-    for (std::size_t i = 0; i < rates_.size(); ++i) {
-        for (const unsigned dec : decimations) {
-            const double delivered = rates_[i] / static_cast<double>(dec);
-            const double gap = std::abs(delivered - hz);
-            if (delivered >= hz) {
-                if (bestAboveGap < 0.0 || better(gap, dec, bestAboveGap, bestAboveDecimation)) {
-                    bestAboveGap = gap;
-                    bestAboveRate = i;
-                    bestAboveDecimation = dec;
-                }
-            } else {
-                if (bestBelowGap < 0.0 || better(gap, dec, bestBelowGap, bestBelowDecimation)) {
-                    bestBelowGap = gap;
-                    bestBelowRate = i;
-                    bestBelowDecimation = dec;
+    unsigned bestDecimation = currentDecimation;
+
+    if (!crossDecimation) {
+        // WITHIN THE CURRENT DECIMATION ONLY (0.99.44 repair) - this is the
+        // generic path every IqSource shares (see the header: a Source-list
+        // pick's fixed default, a fault-recovery reopen, a config restore),
+        // and none of those is a caller asking for a specific rate on
+        // purpose. A tie goes to the lower rate, which is the one that asks
+        // less of the USB bus. Compared at the DELIVERED rate: with
+        // decimation on, a request is for a rate after the divider (the Rate
+        // combo lists those).
+        const double d = static_cast<double>(currentDecimation);
+        double bestGap = -1.0;
+        for (std::size_t i = 0; i < rates_.size(); ++i) {
+            const double gap = std::abs(rates_[i] / d - hz);
+            if (bestGap < 0.0 || gap < bestGap) {
+                bestGap = gap;
+                bestRate = i;
+            }
+        }
+        bestDecimation = currentDecimation;
+    } else {
+        // NEAREST OVER EVERY (NATIVE RATE, DECIMATION) PAIR, not just the
+        // CURRENT decimation - a beta report found ADS-B decoding nothing on
+        // an Airspy once decimation had been raised for something else: at
+        // decimation 8 an R2's only two candidates were 10 MS/s/8 = 1.25 MS/s
+        // and 2.5 MS/s/8 = 312.5 kS/s, and the plugin's 2.4 MS/s preset
+        // landed on 1.25 MS/s - below its own 2 MS/s floor - because 2.5 MS/s
+        // at decimation 1 was never considered. Every whole-hertz decimation
+        // (decimationChoicesLocked) of every native rate is a candidate here,
+        // and setDecimation() itself is untouched - a caller who wants a
+        // specific decimation still gets exactly that by calling it directly.
+        //
+        // AT OR ABOVE WINS A TIE WITH BELOW: among candidates equally near
+        // the request, one that delivers at least what was asked for is
+        // preferred over one that delivers less - a decoder given LESS than
+        // it asked for may refuse to run at all (see the 2 MS/s floor
+        // above), where one given MORE just decodes a wider slice. Only when
+        // nothing reaches the request does the nearest-below candidate
+        // answer.
+        //
+        // A TIE IN DELIVERED RATE GOES TO THE CURRENT DECIMATION FIRST, then
+        // to the lower one. The same delivered rate is often reachable two
+        // ways (a 10 MS/s radio at /4 delivers the same 2.5 MS/s its 2.5
+        // MS/s native rate does at /1), and picking whichever a caller's own
+        // decimation already matches is what keeps a request that happens to
+        // land exactly on the radio's current setting from silently changing
+        // it. Failing that tie, the lower decimation is the one that asks
+        // least of the USB bus and keeps the most bandwidth in reserve.
+        const std::vector<unsigned> decimations = decimationChoicesLocked();
+        // True if (gapA, decA) should win over (gapB, decB).
+        const auto better = [currentDecimation](double gapA, unsigned decA, double gapB,
+                                                unsigned decB) {
+            if (gapA != gapB) { return gapA < gapB; }
+            if ((decA == currentDecimation) != (decB == currentDecimation)) {
+                return decA == currentDecimation;
+            }
+            return decA < decB;
+        };
+        double bestAboveGap = -1.0;
+        std::size_t bestAboveRate = 0;
+        unsigned bestAboveDecimation = 1;
+        double bestBelowGap = -1.0;
+        std::size_t bestBelowRate = 0;
+        unsigned bestBelowDecimation = 1;
+        for (std::size_t i = 0; i < rates_.size(); ++i) {
+            for (const unsigned dec : decimations) {
+                const double delivered = rates_[i] / static_cast<double>(dec);
+                const double gap = std::abs(delivered - hz);
+                if (delivered >= hz) {
+                    if (bestAboveGap < 0.0 ||
+                        better(gap, dec, bestAboveGap, bestAboveDecimation)) {
+                        bestAboveGap = gap;
+                        bestAboveRate = i;
+                        bestAboveDecimation = dec;
+                    }
+                } else {
+                    if (bestBelowGap < 0.0 ||
+                        better(gap, dec, bestBelowGap, bestBelowDecimation)) {
+                        bestBelowGap = gap;
+                        bestBelowRate = i;
+                        bestBelowDecimation = dec;
+                    }
                 }
             }
         }
-    }
-    if (bestAboveGap >= 0.0) {
-        bestRate = bestAboveRate;
-        bestDecimation = bestAboveDecimation;
-    } else {
-        bestRate = bestBelowRate;
-        bestDecimation = bestBelowDecimation;
+        if (bestAboveGap >= 0.0) {
+            bestRate = bestAboveRate;
+            bestDecimation = bestAboveDecimation;
+        } else {
+            bestRate = bestBelowRate;
+            bestDecimation = bestBelowDecimation;
+        }
     }
 
     const bool wasRunning = running_.load(std::memory_order_relaxed);

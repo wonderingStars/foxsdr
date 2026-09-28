@@ -383,6 +383,18 @@ public:
     // then reports what was actually programmed, which is the DeviceSource
     // contract and what stops a panel showing 8 MS/s a radio never had.
     //
+    // SEARCHES ONLY THE CURRENT DECIMATION (0.99.44 repair). This is the
+    // generic path every IqSource shares - a Source-list pick's fixed default
+    // rate, a fault-recovery reopen at the previous rate, a saved config being
+    // restored - and none of those is a caller asking for a SPECIFIC rate on
+    // purpose. Searching every decimation here (0.99.43's attempt) fired on
+    // exactly those generic asks too: a radio remembered at decimation 8 that
+    // a plain open's 2 MS/s default nudged to decimation 1, so the very next
+    // gain or mode change (which remembers the radio's CURRENT decimation,
+    // gui/airspy_panel.hpp's airspyRemember) silently overwrote the saved /8.
+    // A caller that wants a rate no matter the decimation calls
+    // setSampleRateHzExplicit instead - see its own comment.
+    //
     // ON A RUNNING STREAM the change is made with the radio QUIET: receiver
     // off, reader stopped, bulk ring torn down, the pipe reset (libairspy
     // clears the halt itself at airspy.c:1147 before every SET_SAMPLERATE),
@@ -392,6 +404,18 @@ public:
     // process on the driver's own reader thread; there is no reason to learn
     // it twice.
     bool setSampleRateHz(double hz) override;
+
+    // AS ABOVE, but the caller is asking for THIS rate deliberately - a
+    // plugin preset (the ADS-B decoder's 2.4 MS/s floor) or a rate the user
+    // picked by hand (the Rate combo, a browser/API request) - so it is
+    // allowed to search every (native rate, decimation) pair this radio can
+    // produce (decimationChoicesLocked), not just the current one. A beta
+    // report found ADS-B decoding nothing on an R2/Mini once decimation had
+    // been raised for something else: at decimation 8 an R2's own ceiling is
+    // 1.25 MS/s, a long way under the plugin's 2 MS/s floor, and 2.5 MS/s
+    // (only reachable at decimation 1) was never a candidate under the plain
+    // method above. See the .cpp for the full at-or-above / tie-break rule.
+    bool setSampleRateHzExplicit(double hz) override;
 
     double centerFrequencyHz() const override {
         return centerFrequencyHz_.load(std::memory_order_relaxed);
@@ -583,6 +607,11 @@ private:
     bool applyGainModeLocked(GainMode mode);
     // The decimation factors every listed rate divides into whole hertz.
     std::vector<unsigned> decimationChoicesLocked() const;
+    // Shared by setSampleRateHz and setSampleRateHzExplicit - assumes
+    // devMutex_ held. `crossDecimation` false restricts the search to the
+    // CURRENT decimation (the plain method's contract); true searches every
+    // (native rate, decimation) pair (the explicit method's).
+    bool setSampleRateHzLocked(double hz, bool crossDecimation);
     bool programBiasTLocked(bool on);
 
     // Receiver off, clear the halt, RX, queue the bulk ring, spawn the reader
