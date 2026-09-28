@@ -182,6 +182,33 @@ private:
     std::thread thread_;
 };
 
+// SENDS ONE REPORT ONCE, across every process and every launch.
+//
+// The pending report lives in config.json and is only replaced when a later
+// save writes the new session's report - so every launch that dies before
+// that first save, and every copy started while another is still coming up
+// (there is no single-instance guard), used to send the SAME report again.
+// Measured 2026-09-28: one install's 9 h 22 m report arrived fifteen times in
+// one second, and 86 duplicate rows in a month made total running time on the
+// usage dashboard read 19% high.
+//
+// Clearing the report after sending cannot fix the second case: copies that
+// start together all read it before any of them writes. So the right to send
+// is CLAIMED by creating a marker file named after the report's content, with
+// an exclusive create that exactly one process can win. The winner deletes the
+// markers of older reports; a marker that already exists means this exact
+// report was already handed to a sender.
+//
+// `dir` is the UTF-8 directory config.json lives in. Returns false only when
+// the marker for this report already exists. Any other failure - no directory,
+// a read-only disk - returns true: the old behaviour, a possible duplicate,
+// is better than silently never reporting again.
+bool claimReportSend(const std::string& dir, const std::string& json);
+
+// The marker's file name for a report: "telemetry-sent-" plus a 64-bit FNV-1a
+// of the payload in hex. Exposed for the test, which has to find it.
+std::string reportSendMarkerName(const std::string& json);
+
 // "Still running" heartbeats - the one question the startup report cannot
 // answer. A report arrives when the app STARTS, describing the session that
 // already ended, so the dataset knows who launched and never who still has

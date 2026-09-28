@@ -25320,9 +25320,23 @@ void AppWindow::telemetryStartup(const cascade::core::AppConfig& cfg) {
     telemetryModeAccrual_.reset(telemetrySessionStart_);
     // Last session's report goes now, on a thread, while the window is coming
     // up. Nothing waits for it and nothing reports if it fails.
+    //
+    // ONCE. The report stays in config.json until the first save of this
+    // session replaces it, so a launch that dies before that save - or a
+    // second copy started while this one is still coming up - would send it
+    // again; one install sent the same report fifteen times in one second.
+    // claimReportSend lets exactly one process send each report (telemetry.hpp).
+    // A hermetic run (no config path) has no directory to claim in and keeps
+    // the old behaviour.
     if (telemetryEnabled_ && !telemetryInstallId_.empty() &&
         !cfg.telemetryPending.empty()) {
-        telemetryReporter_.send(cascade::core::telemetryEndpoint(), cfg.telemetryPending);
+        std::string configDir;
+        const std::size_t cut = configPath_.find_last_of("/\\");
+        if (cut != std::string::npos) { configDir = configPath_.substr(0, cut); }
+        if (configDir.empty() ||
+            cascade::core::claimReportSend(configDir, cfg.telemetryPending)) {
+            telemetryReporter_.send(cascade::core::telemetryEndpoint(), cfg.telemetryPending);
+        }
     }
     // Heartbeats are NOT armed here: this runs for bounded --frames runs too,
     // and arming them for those put ctest's throwaway install ids on the live

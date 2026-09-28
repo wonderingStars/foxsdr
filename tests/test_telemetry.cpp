@@ -7,6 +7,7 @@
 // rather than left to inspection.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#include <atomic>
 #include <cctype>
 #include <chrono>
 #include <cstdint>
@@ -461,6 +462,111 @@ void testCertificateVerificationIsOnPosix() {
 }
 #endif  // !_WIN32
 
+// A private scratch folder per run: the PID keeps two concurrent ctest runs
+// (parallel worktrees) from claiming each other's markers.
+std::filesystem::path claimScratch(const char* tag) {
+#if defined(_WIN32)
+    const unsigned long pid = ::GetCurrentProcessId();
+#else
+    const unsigned long pid = static_cast<unsigned long>(::getpid());
+#endif
+    const std::filesystem::path d = std::filesystem::temp_directory_path() /
+                                    ("foxsdr_claim_" + std::string(tag) + "_" + std::to_string(pid));
+    std::error_code ec;
+    std::filesystem::remove_all(d, ec);
+    std::filesystem::create_directories(d);
+    return d;
+}
+
+std::string u8(const std::filesystem::path& p) {
+    const std::u8string s = p.u8string();
+    return std::string(s.begin(), s.end());
+}
+
+// THE BUG THIS GUARDS: the same pending report sent on every launch until a
+// save replaced it - one install's report arrived fifteen times.
+void testReportIsSentOncePerReport() {
+    const std::filesystem::path d = claimScratch("once");
+    const std::string a = "{\"id\":\"a\",\"sessionSec\":33693}";
+    const std::string b = "{\"id\":\"a\",\"sessionSec\":3012}";
+
+    CHECK(claimReportSend(u8(d), a));    // first launch: sends
+    CHECK(!claimReportSend(u8(d), a));   // relaunch with the same report: does not
+    CHECK(!claimReportSend(u8(d), a));   // nor the one after
+    CHECK(std::filesystem::exists(d / reportSendMarkerName(a)));
+
+    // A NEW report is its own claim, and it clears the old marker so the
+    // folder never collects one file per session.
+    CHECK(claimReportSend(u8(d), b));
+    CHECK(std::filesystem::exists(d / reportSendMarkerName(b)));
+    CHECK(!std::filesystem::exists(d / reportSendMarkerName(a)));
+    CHECK(!claimReportSend(u8(d), b));
+
+    // The name depends on the content, not merely its length.
+    CHECK(reportSendMarkerName(a) != reportSendMarkerName(b));
+    CHECK(reportSendMarkerName(a) == reportSendMarkerName(a));
+    CHECK(reportSendMarkerName(a).rfind("telemetry-sent-", 0) == 0);
+
+    std::error_code ec;
+    std::filesystem::remove_all(d, ec);
+}
+
+// Copies started together all read the report before any of them writes, so
+// clearing it would not help; the claim must let EXACTLY one of them win.
+void testConcurrentClaimsLetExactlyOneSend() {
+    const std::filesystem::path d = claimScratch("race");
+    const std::string dir = u8(d);
+    const std::string report = "{\"id\":\"race\",\"sessionSec\":42}";
+    constexpr int kCopies = 16;
+    std::atomic<int> ready{0};
+    std::atomic<bool> go{false};
+    std::atomic<int> winners{0};
+    std::vector<std::thread> copies;
+    for (int i = 0; i < kCopies; ++i) {
+        copies.emplace_back([&]() {
+            ++ready;
+            while (!go.load()) { std::this_thread::yield(); }
+            if (claimReportSend(dir, report)) { ++winners; }
+        });
+    }
+    while (ready.load() < kCopies) { std::this_thread::yield(); }
+    go.store(true);
+    for (std::thread& t : copies) { t.join(); }
+    CHECK(winners.load() == 1);
+
+    std::error_code ec;
+    std::filesystem::remove_all(d, ec);
+}
+
+// Anything that stops the claim from working at all must fall back to SENDING:
+// a duplicate is recoverable on the dashboard, silence forever is not.
+void testClaimFailsOpen() {
+    const std::filesystem::path d = claimScratch("open");
+    const std::filesystem::path missing = d / "no-such-folder";
+    CHECK(claimReportSend(u8(missing), "{\"x\":1}"));
+    CHECK(claimReportSend(u8(missing), "{\"x\":1}"));   // still no marker, still sends
+    CHECK(!std::filesystem::exists(missing));
+    CHECK(claimReportSend("", "{\"x\":1}"));
+
+    std::error_code ec;
+    std::filesystem::remove_all(d, ec);
+}
+
+// The config folder is under the user's profile, which is not ASCII for
+// everybody: the path goes in as UTF-8 and must land in the right folder.
+void testClaimHonoursANonAsciiFolder() {
+    const std::filesystem::path d = claimScratch("utf8");
+    const std::filesystem::path uni = d / std::filesystem::path(u8"Jørgen-été");
+    std::filesystem::create_directories(uni);
+    const std::string report = "{\"id\":\"utf8\"}";
+    CHECK(claimReportSend(u8(uni), report));
+    CHECK(std::filesystem::exists(uni / reportSendMarkerName(report)));
+    CHECK(!claimReportSend(u8(uni), report));
+
+    std::error_code ec;
+    std::filesystem::remove_all(d, ec);
+}
+
 }  // namespace
 
 int main() {
@@ -475,6 +581,10 @@ int main() {
     testBeatPayloadContainsOnlyTheAgreedFields();
     testBeatScheduleFiresImmediatelyThenAtInterval();
     testBeatRefusesToArmWithoutARealId();
+    testReportIsSentOncePerReport();
+    testConcurrentClaimsLetExactlyOneSend();
+    testClaimFailsOpen();
+    testClaimHonoursANonAsciiFolder();
 #if !defined(_WIN32)
     testTelemetryEndpointOverridePosix();
     testTelemetryHttpUrlNeverConnects();
