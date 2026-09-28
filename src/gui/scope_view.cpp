@@ -1423,7 +1423,8 @@ float addBenchPlate(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, const ch
     dl->AddRect(tl, br, theme::kBrassDark, round, 0, theme::kHairline);
     addBenchBevel(dl, tl, br, round, true);
 
-    float y = tl.y + 7.0f;
+    const float s = cascade::gui::uiscale::factor();
+    float y = tl.y + 7.0f * s;
     if (title != nullptr && title[0] != '\0') {
         // IVORY, NOT ENGRAVED. The design's own rule is that a caption may be
         // cut into brass - about 2.3:1 - but this plate's ground is dark
@@ -1437,9 +1438,16 @@ float addBenchPlate(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, const ch
         // pair of capitals a fifteen-character title is the widest thing this
         // file draws. The rail's own 8 px inset is left clear at both ends so
         // the title never touches the bevel it sits inside.
+        //
+        // fonts::legendPx(), not the base kLegendSize: this one function
+        // titles the rail's own plate, the status column, the patch view and
+        // every other bench panel that calls addBenchPlate, so it is one of
+        // the highest-leverage fixes in the interface-scale sweep - fitTrackedPx
+        // still shrinks it to fit whatever room `w` is on a narrow/unscaled
+        // plate, exactly as before.
         constexpr float kTitleTrack = 0.20f;
-        const float px = fitTrackedPx(f, cascade::gui::fonts::kLegendSize, title,
-                                      kTitleTrack, w - 16.0f);
+        const float px = fitTrackedPx(f, cascade::gui::fonts::legendPx(), title,
+                                      kTitleTrack, w - 16.0f * s);
         const float track = px * kTitleTrack;
         const float tw = trackedWidth(f, px, title, track);
         // Centred, unless centring would start it left of the plate - which is
@@ -1447,16 +1455,16 @@ float addBenchPlate(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, const ch
         // from the inset and cut off at the far one, so what is lost is the end
         // of the word rather than the panel next door.
         float x = (tl.x + br.x) * 0.5f - tw * 0.5f;
-        if (x < tl.x + 8.0f) { x = tl.x + 8.0f; }
-        const float titleMaxX = br.x - 8.0f;
+        if (x < tl.x + 8.0f * s) { x = tl.x + 8.0f * s; }
+        const float titleMaxX = br.x - 8.0f * s;
         addTrackedText(dl, f, px, ImVec2(x + 1.0f, y + 1.0f),
                        voidShadow(0.60f), title, track, titleMaxX);
         addTrackedText(dl, f, px, ImVec2(x, y), theme::kIvory, title, track, titleMaxX);
-        y += f->CalcTextSizeA(px, FLT_MAX, 0.0f, title).y + 5.0f;
+        y += f->CalcTextSizeA(px, FLT_MAX, 0.0f, title).y + 5.0f * s;
     }
-    addBenchRail(dl, tl.x + 8.0f, br.x - 8.0f, y);
+    addBenchRail(dl, tl.x + 8.0f * s, br.x - 8.0f * s, y);
     // The measurement, handed back rather than left for the caller to guess at.
-    return y + 8.0f;
+    return y + 8.0f * s;
 }
 
 void addBenchGroupCaption(ImDrawList* dl, const ImVec2& at, float width,

@@ -2627,11 +2627,11 @@ bool benchWordKey(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, const char
     // word, and "REPORT A BUG / DISLIKE" in any other language is longer - it
     // is drawn smaller rather than hung out over the key's edges.
     cascade::gui::addFittedCentred(
-        dl, cascade::gui::fonts::ui(), cascade::gui::fonts::kTinySize, tl, br,
+        dl, cascade::gui::fonts::ui(), cascade::gui::fonts::tinyPx(), tl, br,
         enabled ? theme::toneHex(0x2A251C, 255, held ? theme::ink::ActiveText
                                                      : theme::ink::CtrlText)
                 : cascade::gui::theme::kInkFaint,
-        label, kKeyWordPadX, held ? 1.0f : 0.0f);
+        label, cascade::gui::uiscale::px(kKeyWordPadX), held ? 1.0f : 0.0f);
     return pressed;
 }
 
@@ -3407,7 +3407,16 @@ void AppWindow::drawUi() {
             // It is dropped entirely on a narrow window: the spectrum is what this
             // application is for, and squeezing it to keep a status card visible
             // has the priority backwards.
-            constexpr float kStatusWidth = 230.0f;
+            constexpr float kStatusWidthBase = 230.0f;
+            const float kStatusWidth = cascade::gui::uiscale::px(kStatusWidthBase);
+            // The centre's own floor (520) stays UNSCALED on purpose: it is a
+            // floor on raw spectrum/waterfall pixels, not a font or a layout
+            // pixel, and scaling it (tried once) raised the bar so far that a
+            // full 1920x1080 window at S=2 dropped the column entirely - the
+            // exact regression this column exists to avoid, and the reverse
+            // of the coordinator's own reference screenshot at that size.
+            // kStatusWidth's own growth above already raises the total ask
+            // by exactly the amount the column itself grew.
             const bool showStatus =
                 ImGui::GetContentRegionAvail().x > kStatusWidth + 520.0f;
             const float centreW = showStatus ? -(kStatusWidth + ImGui::GetStyle().ItemSpacing.x)
@@ -3784,9 +3793,9 @@ void statusTrackedText(ImDrawList* dl, ImFont* f, float px, ImVec2 at, ImU32 col
 // is drawn smaller (gui/text_fit.hpp) before the card's clip would cut it.
 void statusCaption(ImDrawList* dl, ImVec2 at, const char* text, float room) {
     ImFont* f = cascade::gui::fonts::legend();
-    const float px = cascade::gui::fitTrackedPx(f, cascade::gui::fonts::kTinySize, text, 0.22f,
+    const float px = cascade::gui::fitTrackedPx(f, cascade::gui::fonts::tinyPx(), text, 0.22f,
                                                 room,
-                                                cascade::gui::fitFloorFor(cascade::gui::fonts::kTinySize));
+                                                cascade::gui::fitFloorFor(cascade::gui::fonts::tinyPx()));
     const float track = px * 0.22f;
     statusTrackedText(dl, f, px, ImVec2(at.x + 1.0f, at.y + 1.0f),
                       cascade::gui::theme::withAlpha(cascade::gui::theme::kVoid, 0.6f),
@@ -3871,7 +3880,10 @@ void AppWindow::drawStatusColumn() {
     // and the rule under it, and hands back the y beneath that rule - so the
     // cards start from a measurement rather than from a guess at how tall a
     // title is.
-    constexpr float kPad = 8.0f;
+    // Scaled with the interface factor, like every other layout pixel in this
+    // column - see the note beside kStatusWidth in drawCenterPanels's caller.
+    const float s = cascade::gui::uiscale::factor();
+    const float kPad = cascade::gui::uiscale::px(8.0f);
     // How long the decoder-line rate is averaged over. Two seconds: long enough
     // that a burst decoder (ADS-B is silent between aircraft) does not flick
     // between 0 and 40, short enough that the figure still tracks a receiver
@@ -3887,17 +3899,19 @@ void AppWindow::drawStatusColumn() {
 
     ImFont* legendF = cascade::gui::fonts::legend();
     ImFont* uiF = cascade::gui::fonts::ui();
-    const float tinyPx = cascade::gui::fonts::kTinySize;
-    const float valuePx = cascade::gui::fonts::kUiSize * cascade::gui::theme::readingsScale();
+    const float tinyPx = cascade::gui::fonts::tinyPx();
+    const float valuePx = cascade::gui::fonts::uiPx() * cascade::gui::theme::readingsScale();
     const float tinyH = legendF->CalcTextSizeA(tinyPx, FLT_MAX, 0.0f, "X").y;
     const float valueH = uiF->CalcTextSizeA(valuePx, FLT_MAX, 0.0f, "X").y;
-    const float baseValuePx = cascade::gui::fonts::kUiSize;
+    // "base" here means "not enlarged by the Enlarge-every-reading setting",
+    // never "not scaled by S" - fonts::uiPx() already carries S.
+    const float baseValuePx = cascade::gui::fonts::uiPx();
     const float baseValueH = uiF->CalcTextSizeA(baseValuePx, FLT_MAX, 0.0f, "X").y;
 
     // THE MAKER'S PLATE IS MEASURED FIRST AND DRAWN LAST, so the cards know
     // where they have to stop. A card laid over it would be dark lettering on
     // brass, and the plate is the one fixed thing in this column.
-    const float plateH = tinyH * 2.0f + 13.0f;
+    const float plateH = tinyH * 2.0f + 13.0f * s;
     const ImVec2 plateTL(colTL.x + kPad, colBR.y - kPad - plateH);
     const ImVec2 plateBR(colBR.x - kPad, colBR.y - kPad);
 
@@ -3928,11 +3942,11 @@ void AppWindow::drawStatusColumn() {
     // column's FULL height (the keys on its floor), and the plate is drawn only
     // if, once they are in, it still fits between the last card and the keys.
     // When it does not, the plate stands aside and the keys sit on the floor.
-    const float featureKeyH = tinyH + 8.0f;
-    const float keysH = featureKeyH * 2.0f + 5.0f;
+    const float featureKeyH = tinyH + 8.0f * s;
+    const float keysH = featureKeyH * 2.0f + 5.0f * s;
     const float floorY = colBR.y - kPad;
-    const float cardsBottomWithPlate = plateTL.y - 5.0f - keysH - 5.0f;
-    const float cardsBottom = floorY - keysH - 5.0f;
+    const float cardsBottomWithPlate = plateTL.y - 5.0f * s - keysH - 5.0f * s;
+    const float cardsBottom = floorY - keysH - 5.0f * s;
 
     const float cardL = colTL.x + kPad;
     const float cardR = colBR.x - kPad;
@@ -3961,7 +3975,7 @@ void AppWindow::drawStatusColumn() {
         // fitLine), and the card grows by the lines it takes. It used to be
         // cut at the well's edge in the middle of a word - "...χωρίς δεδομ"
         // (el) - which reads as broken; the column has room below.
-        const float room = (cardR - 1.0f) - (cardL + 8.0f) - 2.0f;
+        const float room = (cardR - s) - (cardL + 8.0f * s) - 2.0f * s;
         constexpr int kMaxLines = 4;
         cascade::gui::LineFit fits[kMaxLines];
         float linesH = 0.0f;
@@ -3973,7 +3987,7 @@ void AppWindow::drawStatusColumn() {
             }
             const float lh =
                 cascade::gui::fittedLineHeight(legendF, tinyPx, lines[i].text, room, fits[i]);
-            linesH += 1.0f + std::max(tinyH, lh);
+            linesH += 1.0f * s + std::max(tinyH, lh);
         }
         // "ENLARGE EVERY READING" NEVER COSTS A CARD. The column's cards are
         // drawn at the enlarged size only while all of them fit at it: the
@@ -3985,12 +3999,12 @@ void AppWindow::drawStatusColumn() {
         // 1280 x 720 before this existed.)
         float cardValuePx = enlargeCards ? valuePx : baseValuePx;
         float cardValueH = enlargeCards ? valueH : baseValueH;
-        float h = 6.0f + tinyH + 2.0f + cardValueH + linesH + 6.0f;
+        float h = 6.0f * s + tinyH + 2.0f * s + cardValueH + linesH + 6.0f * s;
         if (y + h > cardsBottom && cardValuePx > baseValuePx) {
             statusEnlargeFailedRoom_ = cardsBottom - bodyTop;
             cardValuePx = baseValuePx;
             cardValueH = baseValueH;
-            h = 6.0f + tinyH + 2.0f + cardValueH + linesH + 6.0f;
+            h = 6.0f * s + tinyH + 2.0f * s + cardValueH + linesH + 6.0f * s;
         }
         if (y + h > cardsBottom) { return; }
         cascade::gui::census::note("status:", caption);
@@ -4015,26 +4029,27 @@ void AppWindow::drawStatusColumn() {
         // than the English the column was laid out for), down to seven tenths
         // of its size; only what is still too long meets the clip above. Text
         // that fits is drawn exactly as before - same size, same place.
-        float ty = tl.y + 6.0f;
-        statusCaption(dl, ImVec2(tl.x + 8.0f, ty), caption, room);
-        ty += tinyH + 2.0f;
+        float ty = tl.y + 6.0f * s;
+        const float leftX = tl.x + 8.0f * s;
+        statusCaption(dl, ImVec2(leftX, ty), caption, room);
+        ty += tinyH + 2.0f * s;
         ImFont* valueF = statusValueFace(value);
         dl->AddText(valueF,
                     cascade::gui::fitTextPx(valueF, cardValuePx, value, room,
                                             cascade::gui::fitFloorFor(cardValuePx)),
-                    ImVec2(tl.x + 8.0f, ty), valueCol, value);
+                    ImVec2(leftX, ty), valueCol, value);
         ty += cardValueH;
         for (int i = 0; i < lineCount && i < kMaxLines; ++i) {
-            ty += 1.0f;
+            ty += 1.0f * s;
             float lh = tinyH;
             if (lines[i].text != nullptr && lines[i].text[0] != '\0') {
                 // Drawn at the top of its line, as before, when it is not
                 // wrapped: the fitted size is only ever smaller.
                 if (fits[i].wrap) {
-                    dl->AddText(legendF, fits[i].px, ImVec2(tl.x + 8.0f, ty), lines[i].colour,
+                    dl->AddText(legendF, fits[i].px, ImVec2(leftX, ty), lines[i].colour,
                                 lines[i].text, nullptr, room);
                 } else {
-                    dl->AddText(legendF, fits[i].px, ImVec2(tl.x + 8.0f, ty), lines[i].colour,
+                    dl->AddText(legendF, fits[i].px, ImVec2(leftX, ty), lines[i].colour,
                                 lines[i].text);
                 }
                 lh = std::max(tinyH, cascade::gui::fittedLineHeight(legendF, tinyPx,
@@ -4043,7 +4058,7 @@ void AppWindow::drawStatusColumn() {
             ty += lh;
         }
         dl->PopClipRect();
-        y = br.y + 6.0f;
+        y = br.y + 6.0f * s;
     };
 
     std::string v;
@@ -4454,11 +4469,11 @@ void AppWindow::drawStatusColumn() {
     // Now the cards are in, place the keys: on the plate if the plate still
     // fits under the last card, on the column's floor if it does not (see the
     // note where cardsBottom is measured). y is 6 px past the last card drawn.
-    const bool plateShown = (y - 6.0f) <= cardsBottomWithPlate;
-    const float keysFloor = plateShown ? plateTL.y - 5.0f : floorY;
+    const bool plateShown = (y - 6.0f * s) <= cardsBottomWithPlate;
+    const float keysFloor = plateShown ? plateTL.y - 5.0f * s : floorY;
     const ImVec2 problemKeyBR(colBR.x - kPad, keysFloor);
     const ImVec2 problemKeyTL(colTL.x + kPad, problemKeyBR.y - featureKeyH);
-    const ImVec2 featureKeyBR(colBR.x - kPad, problemKeyTL.y - 5.0f);
+    const ImVec2 featureKeyBR(colBR.x - kPad, problemKeyTL.y - 5.0f * s);
     const ImVec2 featureKeyTL(colTL.x + kPad, featureKeyBR.y - featureKeyH);
 
     // --- REQUEST A FEATURE -----------------------------------------------------
@@ -4513,8 +4528,8 @@ void AppWindow::drawStatusColumn() {
         }
         cascade::gui::addBenchBevel(dl, plateTL, plateBR, round, true);
         const float midX = (plateTL.x + plateBR.x) * 0.5f;
-        statusEngrave(dl, midX, plateTL.y + 5.0f, tinyPx, "FOX & SCHIRMYVER");
-        statusEngrave(dl, midX, plateTL.y + 5.0f + tinyH + 1.0f, tinyPx,
+        statusEngrave(dl, midX, plateTL.y + 5.0f * s, tinyPx, "FOX & SCHIRMYVER");
+        statusEngrave(dl, midX, plateTL.y + 5.0f * s + tinyH + 1.0f * s, tinyPx,
                       "TYPE 71 - MK II");
     }
 }
@@ -11745,7 +11760,16 @@ RailPress drawRailChrome(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, flo
     // every caption on this bench is lettered.
     if (title != nullptr && title[0] != '\0') {
         ImFont* f = cascade::gui::fonts::legend();
-        const float px = std::clamp(m * 0.62f, 10.0f, cascade::gui::fonts::kLegendSize);
+        // fonts::legendPx(), not the base kLegendSize: `m` (the cabinet
+        // margin, already scaled - drawCabinet's clamp both ends scale with
+        // the interface factor) grows with S, but the OLD ceiling here was
+        // the unscaled base size, so the window's own title ("FoxSDR
+        // 0.99.42") could never grow past it however big the margin got -
+        // exactly the surface the round-3 review caught still sitting at
+        // 100%. std::clamp still holds the same shape: a small margin still
+        // floors at 10 px, a huge one still tops out at the legend face's
+        // own (now scaled) size.
+        const float px = std::clamp(m * 0.62f, 10.0f, cascade::gui::fonts::legendPx());
         const float x = tl.x + m * 1.15f;
         const float y = tl.y + (m - px) * 0.5f;
         const float maxX = (k.fits ? k.left : br.x - m) - 8.0f;

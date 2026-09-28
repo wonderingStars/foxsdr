@@ -574,6 +574,71 @@ void testRailScalesWithInterfaceSize() {
     CHECK(cascade::gui::uiscale::factor() == 1.0f);  // back to what every other test here assumes
 }
 
+// --- 5c. EVERY BENCH PLATE'S TITLE SCALES WITH THE INTERFACE SIZE -------------
+//
+// gui/scope_view.cpp's addBenchPlate titles the rail's own plate, the STATUS
+// column and the patch view - one function, so this one test stands in for
+// all three surfaces. It is the fix a round-3 review asked for after
+// "FoxSDR 0.99.42" (drawn by the sibling function drawRailChrome, off the
+// SAME cabinet margin) and the STATUS column stayed 100%-sized at S=2 while
+// everything around them had grown: addBenchPlate's title font size used to
+// be clamped at the UNSCALED fonts::kLegendSize no matter how big the plate
+// itself was drawn.
+//
+// PROVEN TO GO RED: reverting fonts::legendPx() back to fonts::kLegendSize
+// in addBenchPlate's title sizing (scope_view.cpp) makes this fail - the
+// returned bodyTop stops growing with S because the title line no longer
+// does. Restored before this commit; see docs/ui-scale.md's verification
+// section for the exact before/after.
+void testBenchPlateTitleScalesWithInterfaceSize() {
+    std::printf("  every bench plate's title (rail, status column, patch view) scales with S\n");
+    const std::string savedChoice = cascade::gui::uiscale::choice();
+    const unsigned savedDpi = cascade::gui::uiscale::monitorDpi();
+    cascade::gui::uiscale::setMonitorDpi(96);
+
+    float bodyTopAt[3] = {0.0f, 0.0f, 0.0f};
+    const float scales[3] = {1.0f, 1.5f, 2.0f};
+    const char* const title = "STATUS";
+    // A generous, fixed plate so the title is never the thing limiting the
+    // fit at any of the three scales - what is measured is whether the title
+    // ITSELF grows, not whether a small plate clips it.
+    const ImVec2 plateTL(0.0f, 0.0f);
+    const ImVec2 plateBR(600.0f, 400.0f);
+
+    for (int i = 0; i < 3; ++i) {
+        cascade::gui::uiscale::setChoice(scales[i] == 1.0f ? "auto" : std::to_string(static_cast<int>(scales[i] * 100.0f)));
+        CHECK_NEAR(cascade::gui::uiscale::factor(), scales[i], 0.001);
+
+        ImGui::NewFrame();
+        ImDrawList* dl = ImGui::GetForegroundDrawList();
+        const int before = dl->VtxBuffer.Size;
+        bodyTopAt[i] = cascade::gui::addBenchPlate(dl, plateTL, plateBR, title);
+        ImGui::Render();
+        CHECK(dl->VtxBuffer.Size > before);
+    }
+
+    std::printf("      bodyTop: %.2f (S=1.0) -> %.2f (S=1.5) -> %.2f (S=2.0)\n",
+               static_cast<double>(bodyTopAt[0]), static_cast<double>(bodyTopAt[1]),
+               static_cast<double>(bodyTopAt[2]));
+    // bodyTop is (title font height) + (a handful of gaps that already scale
+    // with S independently of the title). At the CORRECT fix the whole sum
+    // scales together: 35.00 -> 52.50 -> 70.00, exactly 1.5x and 2.0x. With
+    // the title clamped at the unscaled base size (the bug this test is
+    // built to catch - fonts::kLegendSize instead of fonts::legendPx() in
+    // scope_view.cpp's addBenchPlate) only the gaps around a FROZEN title
+    // move: 35.00 -> 45.00 -> 55.00, ratios of 1.286 and 1.571 - short of
+    // proportional, but not by nothing, which is why a loose "grew at all"
+    // check would have passed both. 1.4 and 1.8 sit strictly between the two
+    // measured cases and were checked against both directly (see
+    // docs/ui-scale.md's verification section for the exact numbers).
+    CHECK(bodyTopAt[1] > bodyTopAt[0] * 1.4f);
+    CHECK(bodyTopAt[2] > bodyTopAt[0] * 1.8f);
+
+    cascade::gui::uiscale::setMonitorDpi(savedDpi);
+    cascade::gui::uiscale::setChoice(savedChoice);
+    CHECK(cascade::gui::uiscale::factor() == 1.0f);
+}
+
 // --- 6. the Serial ports row's chip names what it counts ---------------------
 //
 // "0" alone would read as "off"; this row is never off, it just sometimes
@@ -618,6 +683,7 @@ int main() {
     testSerialPortsChipNamesItsCount();
     testEveryLanguageBankWordsAndSourceChip();
     testRailScalesWithInterfaceSize();
+    testBenchPlateTitleScalesWithInterfaceSize();
 
     ImGui::DestroyContext();
     return testSummary("test_app_rail");

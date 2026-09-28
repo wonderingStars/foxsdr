@@ -223,6 +223,81 @@ correctness risk to persisted user data, not merely a visual gap, and was
 judged not safe to take under this task's time budget; only the caption/
 reading TEXT sizes in `patch_view.cpp` (round 1) scale.
 
+## Round 3: the STATUS column and the window caption
+
+Round 2's own screenshot (`deck_wide_s200.png`, a 1920x1080 window at S=2)
+still had two surfaces frozen at 100%: the whole right-hand STATUS column
+(its plate title, every card - AUDIO - UNDERRUNS, DECODER OUTPUT, DECODERS,
+SINK, RECORDER, WEB ACCESS, RECEIVER - and the REQUEST A FEATURE / REPORT A
+BUG - DISLIKE keys at its foot), and the frameless window's own caption text
+("FoxSDR 0.99.42" at the top-left; the caption buttons already scaled).
+
+**`AppWindow::drawStatusColumn()`** (`app_window.cpp`) is now scaled
+literal-by-literal: every padding, gap, card-height term and footer-key
+offset multiplies by a local `const float s = uiscale::factor();`, and the
+two font-size locals it draws with (`tinyPx`, `valuePx`/`baseValuePx`) read
+`fonts::tinyPx()`/`fonts::uiPx()` instead of the bare base constants. The
+card lambda's `room` (how much width a card's value/caption text is fitted
+and then clipped to) is derived from the now-scaled card bounds, so the
+existing "fit smaller, then clip" behaviour - the SINK card's long
+device-name truncation among it - is unchanged in logic and simply operates
+at the scaled size. `statusCaption`'s own internal size
+(`fonts::kTinySize` -> `fonts::tinyPx()`) and `benchWordKey` (the function
+that draws REQUEST A FEATURE / REPORT A BUG - DISLIKE, and every other bench
+word key such as the map's follow key) needed the same fix.
+
+**Two bugs turned out to be shared by more than the column that exposed
+them**, which is why finding them here fixed other surfaces at the same
+time:
+
+- `scope_view.cpp`'s `addBenchPlate` - the plate-title-plus-rule primitive
+  used by the rail's own plate, the STATUS column's "STATUS" title, AND
+  `drawPatchView`'s "PATCH" title - clamped its title font to the UNSCALED
+  `fonts::kLegendSize` instead of `fonts::legendPx()`. Fixed once, in the
+  one shared function, rather than three times.
+- `app_window.cpp`'s `drawRailChrome` - shared by the main window's own
+  title bar ("##mainrail") and every page's title bar ("##pagerail") -
+  clamped the window-title text the same way (`fonts::kLegendSize` ->
+  `fonts::legendPx()`). This is the caption fix: "FoxSDR 0.99.42" now grows
+  with `S` because the ceiling it was hitting no longer sits still.
+
+**A regression this round introduced and then reverted, worth recording
+because a "shipped" build would have made the exact bug report this task
+started from worse, not better.** The center panel's rule for hiding the
+STATUS column on a narrow window (`drawUi`, just above `drawStatusColumn`'s
+call site) is `ImGui::GetContentRegionAvail().x > kStatusWidth + 520.0f` -
+`kStatusWidth` is the column's own width, and `520.0f` is a floor on how
+much raw spectrum/waterfall width has to remain before the column is worth
+keeping. The first attempt at this round scaled BOTH terms
+(`kStatusWidth + uiscale::px(520.0f)`), on the reasoning that "a bigger
+column should ask proportionally more room first." Building and
+re-capturing `deck_wide_s200.png` (1920x1080, S=2 - literally the
+coordinator's own reference screenshot) with that change showed the STATUS
+column had vanished entirely: the scaled floor asked for 1500px of content
+region on a window that only had about 1040px to give after the (correctly
+scaled) menu column and cabinet margins, versus roughly 980px asked for by
+the original, unscaled floor. `520.0f` is a floor on absolute usable
+spectrum pixels, not a font or a padding value, so it stays unscaled;
+`kStatusWidth`'s own growth already raises the total ask by exactly the
+amount the column itself grew. Caught by re-capturing and comparing against
+the specific screenshot the bug was reported against, before this was ever
+handed back - see "Verification" below for the same check made permanent
+across S=1.0/1.5/2.0/wide-window.
+
+**`tests/test_app_rail.cpp::testBenchPlateTitleScalesWithInterfaceSize`**
+(new) draws a bench plate through the real `addBenchPlate` at S = 1.0, 1.5
+and 2.0 and checks the returned body-top offset (title height plus a few
+independently-scaled gaps) grows in step: measured 35.00 -> 52.50 -> 70.00
+px, exactly 1.5x and 2.0x. **Proven to go red**: with the `addBenchPlate`
+fix reverted (title clamped back to the unscaled base size), the same
+measurement gives 35.00 -> 45.00 -> 55.00 - the gaps around a frozen title
+still grow a little on their own, which is why a loose "did it grow at all"
+check would have passed the broken case too. The thresholds
+(`bodyTop[1] > bodyTop[0] * 1.4`, `bodyTop[2] > bodyTop[0] * 1.8`) sit
+strictly between the two measured cases (ratios 1.286/1.571 broken vs.
+1.5/2.0 fixed) and were checked against both by hand before being committed
+- see the test's own comment for the numbers.
+
 ## What is fully routed through `S`
 
 - The whole font/ImGui-style mechanism above (every ordinary ImGui widget -
@@ -333,6 +408,11 @@ of the interface now does.
   built to catch). Restoring the `uiscale::px(...)` call made it pass again.
   This is the concrete demonstration that leaving a constant out of the
   sweep is caught, not merely asserted to be caught.
+- `tests/test_app_rail.cpp::testBenchPlateTitleScalesWithInterfaceSize`
+  (round 3, new): see "Round 3" above - proven to go RED against the
+  reverted `addBenchPlate` fix (35.00 -> 45.00 -> 55.00, short of the
+  required 1.4x/1.8x ratios) and GREEN against the real fix (35.00 -> 52.50
+  -> 70.00, exactly 1.5x/2.0x).
 - **Self-capture screenshots** at S = 1.0, 1.5 and 2.0 (`FOXSDR_UI_SCALE`
   env var, a run-only override of the saved setting - the same pattern
   `FOXSDR_LANGUAGE` uses) of: the patch view (default main view since
@@ -340,6 +420,16 @@ of the interface now does.
   plugin window (the plugin store), the patch canvas, and Display settings.
   See the release/verification notes for paths and the S=1 pixel-diff
   result.
+- **S=1 re-checked in round 3** against a fresh build of `81691f2`
+  (`git archive` into a scratch directory, built independently): the
+  receiver, patch and plugin-store captures at S=1 differ from the baseline
+  by at most 1 LSB on a handful of pixels (188/129/63 out of roughly
+  950,000) with `extrema=(0,1)`, and the same magnitude and pixel count
+  reappears between two S=1 captures of the SAME new binary run back to
+  back - proving it is pre-existing per-run rendering jitter (almost
+  certainly a live-updating element such as the simulated noise floor),
+  not something round 3 introduced. The deck close-up, which has no such
+  live content in frame, is byte-identical to the baseline.
 
 ## Window minimum sizes
 
