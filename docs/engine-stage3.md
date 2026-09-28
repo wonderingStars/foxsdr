@@ -705,6 +705,23 @@ they were with the facts; and what 3b has to settle first.
    PTT held) must carry the window's own liveness - e.g. a GUI-frame stamp the
    control thread checks before honouring a held key - and this must be
    settled before the pump moves (ENGINE-EXTRACTION.md stage 3's TX item).
+   **3b-pre (2026-09-28, docs/engine-merge-0.99.42.md):** the DESIGN problem
+   above is unchanged and still 3b's to settle - nothing here moves the pump
+   or adds a liveness stamp. What is new is a red/green BEHAVIOURAL check for
+   the property 3b's redesign must preserve:
+   tests/test_transmit_dead_man.cpp drives a headless `Engine` (a fake
+   `IqSink` behind `transmitter_`, no window) through `pumpTransmitter` and
+   asserts the key is released WITHIN ONE PUMP of `pageLive` going false -
+   for a latch and for a held PTT - rather than only eventually, at
+   `kKeyAliveWait`. The gap this closes: the existing net,
+   test_transmit_page.cpp, proves WHERE `transmitter_.tick()` is called by
+   scanning source text for the three lines, so `if (pageLive)
+   transmitter_.tick();` still passes it (the text is still there, just
+   wrongly gated) while silently changing "the page closed" from an
+   immediate release to "wait for the frozen-window bound" - exactly the
+   kind of regression a 3b rewrite of this function could introduce without
+   any existing test noticing. Proven red against that exact mutant (5/15
+   checks failed) while test_transmit_page.cpp stayed green against it.
 8. **The hang watchdog is the GUI frame's.** The engine pauses it (through the
    host) around its bounded waits (audio/mic open, plugin rescan, device
    open). On a control thread those waits no longer block the frame; they
