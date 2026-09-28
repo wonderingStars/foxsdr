@@ -533,6 +533,7 @@ struct AppWindowTestAccess {
     // The patch page, the transmitter, audio, position, GPS.
     static bool patchRunning(AppWindow& a) { return a.engine_.patchRunning_; }
     static void setTransmitOpen(AppWindow& a, bool on) { a.engine_.transmitOpen_ = on; }
+    static bool transmitOpen(AppWindow& a) { return a.engine_.transmitOpen_; }
     static bool haveTx(AppWindow& a) { return a.engine_.transmitter_.haveSink(); }
     static std::int64_t remoteHoldMs(AppWindow& a) { return a.engine_.transmitter_.remoteHoldRemainingMs(); }
     static int txMode(AppWindow& a) { return a.engine_.transmitModeIndex_; }
@@ -1704,6 +1705,25 @@ void transmitterOps(AppWindow& a) {
         CHECK(ok(A::apply(a, ints(FOXAPI_OP_TX_PTT, 0))));
         CHECK(A::remoteHoldMs(a) == 0);
         A::setTransmitOpen(a, false);
+    }
+
+    covering(FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN);
+    {
+        // Opening and closing move transmitOpen_ exactly as the direct write
+        // used to.
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN, 1))));
+        CHECK(A::transmitOpen(a));
+        // THE SAFETY PROPERTY (docs/engine-stage3.md OPEN 10): closing the
+        // page while a remote key is held releases it IN THE SAME COMMAND -
+        // no second frame, no applyWebControls poll needed.
+        CHECK(ok(A::apply(a, ints(FOXAPI_OP_TX_PTT, 1))));
+        CHECK(A::remoteHoldMs(a) > 0);
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN, 0))));
+        CHECK(!A::transmitOpen(a));
+        CHECK(A::remoteHoldMs(a) == 0);
+        // Closing again (already closed) is a harmless no-op, not a refusal.
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN, 0))));
+        CHECK(!A::transmitOpen(a));
     }
 
     covering(FOXAPI_OP_TX_CLOSE);

@@ -14984,7 +14984,13 @@ void AppWindow::drawTransmitSection() {
                        tr("Opens the transmitter: frequency, mode, power, input and the key.\n"
                           "Nothing here transmits until the key is held or latched, and the\n"
                           "page is the only place the key exists."))) {
-        engine_.transmitOpen_ = !engine_.transmitOpen_;
+        // A COMMAND, not a direct write (engine/stage3b-pre 2b): applied at
+        // once (applyCommand, not submitCommand) so the page still opens or
+        // closes on THIS frame, exactly as the direct write did - the engine
+        // side also releases a remote key held, in the same step, when this
+        // closes it (FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN's own comment).
+        engine_.applyCommand(cascade::core::cmd::makeInt(FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN,
+                                                         engine_.transmitOpen_ ? 0 : 1));
     }
 }
 
@@ -14999,9 +15005,25 @@ void AppWindow::drawTransmitPage() {
     const float py = mv->Pos.y + 64.0f;
     ImGui::SetNextWindowPos(ImVec2(px, py), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(kTxW, kTxH), ImGuiCond_FirstUseEver);
-    if (!beginPage("Transmit###transmitwindow", tr("TRANSMIT"), &engine_.transmitOpen_, 0, kTxW, kTxH)) {
+    // A LOCAL MIRROR, NOT &engine_.transmitOpen_ (engine/stage3b-pre 2b):
+    // beginPage writes *open directly (ImGui::Begin's own close box, and its
+    // own custom chrome's close press), and the engine field may not be
+    // written in place any more. The guard above already reads true, so the
+    // mirror starts true; if beginPage clears it (the operator closed the
+    // page), the command below applies the close AND releases a remote key
+    // in the same step - exactly what the direct write plus next frame's
+    // applyWebControls poll used to do, one frame sooner. Checked on BOTH
+    // exits (rolled-up and drawn) because beginPage can clear it either way.
+    bool txPageOpen = true;
+    if (!beginPage("Transmit###transmitwindow", tr("TRANSMIT"), &txPageOpen, 0, kTxW, kTxH)) {
+        if (!txPageOpen) {
+            engine_.applyCommand(cascade::core::cmd::makeInt(FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN, 0));
+        }
         endPage();
         return;
+    }
+    if (!txPageOpen) {
+        engine_.applyCommand(cascade::core::cmd::makeInt(FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN, 0));
     }
     // THE KEY'S CONTROLS ARE ON SCREEN THIS FRAME - set only past beginPage,
     // which returns false for a page that is rolled up. The frame loop

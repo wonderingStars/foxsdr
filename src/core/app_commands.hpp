@@ -68,6 +68,14 @@
 #define FOXAPP_OP_DECODER_STOP_LIST      0x8704u /* text (or long text): plugin keys, one per line; ival[0]: 1 = and end the mute they caused */
 #define FOXAPP_OP_STORE_UPDATE           0x8705u /* text: catalogue id of an installed plugin to update */
 #define FOXAPP_OP_STORE_REMOVE_BLOCKED   0x8706u /* text: file name of a plugin the catalogue policy blocked */
+// The Transmit page's open flag (engine/stage3b-pre 2b, docs/engine-stage3.md
+// OPEN 1/10, SAFETY): ival[0] 0/1. Closing it (0) releases a remote transmit
+// key already held, in the SAME step - the window's own per-frame poll in
+// applyWebControls still does the same check as a second line of defence for
+// anything that still sets transmitOpen_ directly (a test's friend accessor,
+// today), but this is the immediate, zero-frame-latency release for the
+// normal UI path (the Transmit toolbar switch, the page's own close button).
+#define FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN 0x8408u /* ival[0]: 0/1 - closing releases a remote key held, at once */
 
 #define FOXAPP_OP_FIRST 0x8000u
 #define FOXAPP_OP_LAST  0x8FFFu

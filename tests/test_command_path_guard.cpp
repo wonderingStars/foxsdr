@@ -253,7 +253,10 @@ const char* const kWindowMayWrite[] = {
     "soundCard_",  // the sound card panel: what SELECT_SOURCE soundcard:open opens (stage 1 OPEN 3)
     "plutoUri_",  // the Pluto address box: what open-pluto and the Pluto row read
     "transmitArgs_",  // the transmit address box: what TX_OPEN opens
-    "transmitOpen_",  // the Transmit page open flag: the remote-transmit consent (stage 1 OPEN 2)
+    // transmitOpen_ CLOSED engine/stage3b-pre 2b: the toolbar switch and the
+    // page's own close (a local mirror bool, never &engine_.transmitOpen_)
+    // both go through FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN now, which also
+    // releases a remote key in the same step (docs/engine-stage3.md OPEN 10).
     "patchGraph_",  // the patch canvas edits the document the patch runtime runs (stage 1 OPEN 10)
     "sourceError_",  // a typed frequency clears the Source panel error line when submitted (stage 1 OPEN 8)
     "soapyScanDeferredLogged_",  // the Source panel forgets the scan deferral it logged once the gate opens

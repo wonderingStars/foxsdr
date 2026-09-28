@@ -5653,6 +5653,20 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
         case FOXAPI_OP_TX_CLOSE:
             closeTransmitRadio();
             return res;
+        case FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN:
+            // THE PAGE OPEN FLAG (engine/stage3b-pre 2b, docs/engine-stage3.md
+            // OPEN 1/10, SAFETY): the window used to write transmitOpen_ in
+            // place from two ImGui sites (the toolbar switch, and ImGui's own
+            // close affordance through &engine_.transmitOpen_) and rely on
+            // applyWebControls's per-frame poll to notice a close and release
+            // a remote key already held - up to one frame late. Closing
+            // through THIS command releases it in the SAME step, at once: a
+            // remote key exists only while the operator has the page open
+            // (FOXAPI_OP_TX_PTT's own refusal above), so the moment that stops
+            // being true is the moment nothing may still be keyed.
+            transmitOpen_ = on;
+            if (!on) { transmitter_.releaseRemote("the transmit page was closed"); }
+            return res;
         case FOXAPI_OP_TX_PTT:
             // THE REMOTE KEY (0.95.1): an assertion with a deadline, not a
             // switch - keyRemote() buys kRemotePttHoldMs and the browser has to

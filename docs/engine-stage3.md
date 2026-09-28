@@ -653,13 +653,13 @@ comments, the same mention/contract split, only the numbers moved.)
 Things 3a could not move without changing threading or behaviour, left where
 they were with the facts; and what 3b has to settle first.
 
-1. **Engine fields the window still edits in place** (`kWindowMayWrite`, 25):
-   the scanner form (`scanStartMhz_`, `scanStopMhz_`, `scanStepKhz_`,
-   `scanDwellMs_`, `scanHoldMs_`, `scanResumeMs_`, `scanListenMs_`), the
-   sound card form `soundCard_`, the Pluto address `plutoUri_`, the transmit
-   address `transmitArgs_` and page flag `transmitOpen_` (stage 1 OPEN 2),
-   the patch document `patchGraph_` (stage 1 OPEN 10), `sourceError_` (a
-   typed frequency clears it, stage 1 OPEN 8), `soapyScanDeferredLogged_`,
+1. **Engine fields the window still edits in place** (`kWindowMayWrite`, 24 -
+   see the CLOSED note below): the scanner form (`scanStartMhz_`,
+   `scanStopMhz_`, `scanStepKhz_`, `scanDwellMs_`, `scanHoldMs_`,
+   `scanResumeMs_`, `scanListenMs_`), the sound card form `soundCard_`, the
+   Pluto address `plutoUri_`, the transmit address `transmitArgs_`, the patch
+   document `patchGraph_` (stage 1 OPEN 10), `sourceError_` (a typed
+   frequency clears it, stage 1 OPEN 8), `soapyScanDeferredLogged_`,
    `pluginCatalogueUrl_`, `gpsRefusal_`, `patchSinkLines_`,
    `mutePopupQueued_`, `muteKeptRunning_`, `mutePopup_`, `decoderLog_`,
    `bookmarkImportNote_`, `telemetryEnabled_`, `telemetryInstallId_`,
@@ -667,6 +667,42 @@ they were with the facts; and what 3b has to settle first.
    it acts; in 3b each becomes a command (or a form a command carries), or the
    status line moves to the window. The guard lists them one by one with the
    reason.
+   **CLOSED, engine/stage3b-pre 2b (2026-09-28): `transmitOpen_`** (stage 1
+   OPEN 2), the one entry on this list flagged SAFETY. The toolbar switch and
+   the page's own close (ImGui's close box and its custom chrome's close
+   press) both wrote `engine_.transmitOpen_` directly, including through
+   `&engine_.transmitOpen_` handed to `beginPage`. Now: a new extension op,
+   `FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN` (`core/app_commands.hpp`, ival[0] 0/1),
+   applied AT ONCE (`applyCommand`, not `submitCommand`, so the page still
+   opens/closes on the same frame the direct write did); `drawTransmitPage`
+   passes `beginPage` a local mirror bool, never the engine field's address,
+   and submits the command when the mirror goes false on either exit path.
+   The handler sets `transmitOpen_` and, closing, calls
+   `transmitter_.releaseRemote(...)` IN THE SAME STEP - closing OPEN item
+   10's "page closed" half (the "web server stopped/disabled" half stays in
+   the window's `applyWebControls`, unchanged, since the web server itself is
+   the window's until stage 5). The window's own per-frame poll in
+   `applyWebControls` (`if (!engine_.transmitOpen_) { ...releaseRemote... }`)
+   is INTENTIONALLY left in place as a second line of defence for anything
+   that still sets `transmitOpen_` directly (today: test-only friend
+   accessors) - both firing is harmless (`releaseRemote` on an unheld key is
+   a no-op, exactly as the "a server stopped between two frames releases
+   twice" comment already documented for the other condition). Tests:
+   `tests/test_apply_command.cpp` covers the op directly (open, close
+   releasing a held key, closing-when-already-closed is not a refusal);
+   `tests/test_remote_key_release.cpp` gained scenario D, proving the release
+   happens through the command alone, with `applyWebControls` never called -
+   distinguishing it from scenario A's window-poll mechanism. Proven red
+   against the named mutant (drop the `releaseRemote` call from the new
+   command's handler): `test_apply_command` 1/734 failed
+   (`A::remoteHoldMs(a) == 0`), `test_remote_key_release` 1/20 failed
+   (scenario D's own assertion); source restored byte-identical and
+   reverified green. `test_command_path_guard`: 135/135 (one fewer than the
+   pre-existing 136, `transmitOpen_` removed from `kWindowMayWrite`; still
+   0 violations). `test_transmit_page` (a source-text scan) needed no change
+   - `drawTransmitPage`'s edit kept the literal `if (!beginPage("Transmit###
+   transmitwindow"` text the scan matches, adding the mirror-bool check
+   around both of that `if`'s exits rather than restructuring it.
    **engine/stage3b-pre (2026-09-28) added one more of the same shape:**
    `patchListsWanted_` (0.99.40's patch-page device-list wish: set in place
    by `drawPatchRadioInspector`'s "Look for radios" button, and until B2's
@@ -772,10 +808,16 @@ they were with the facts; and what 3b has to settle first.
    against the control thread's join.
 10. **`applyWebControls` stays in the window** (the web and CAT servers are
     the window's until stage 5): it drains them and calls
-    `engine_.applyControlRequest`, and releases a remote transmit key directly
-    (`engine_.transmitter_.releaseRemote`) when the Transmit page is closed or
-    the web server stops. That release belongs in the engine (a command, or
-    the engine's own rule on `transmitOpen_`/`webListening`).
+    `engine_.applyControlRequest`. **HALF CLOSED, engine/stage3b-pre 2b
+    (2026-09-28):** the "Transmit page closed" release now happens inside the
+    engine itself, in the same step as `FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN`'s
+    own handler (section 1's CLOSED note above) - `applyWebControls`'s
+    matching check is kept as a harmless second line of defence, not removed.
+    The "web server stopped/disabled" release is UNCHANGED and still lives
+    here, calling `engine_.transmitter_.releaseRemote` directly: it cannot
+    move into the engine until the web server itself does (stage 5), since
+    the engine has no way to observe "the server was just disabled in the
+    settings panel" on its own.
 11. **Moved helpers keep namespace `cascade::gui`** (the src/engine headers
     and plugin_store_reasons, receiver_tables' shared locals), so the moved
     code reads exactly as it did; engine .cpp files say `using namespace

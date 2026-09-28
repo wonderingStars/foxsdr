@@ -209,6 +209,23 @@ int main() {
                     static_cast<long long>(Access::remoteHoldMs(app)));
     }
 
+    // === D (engine/stage3b-pre 2b): closing the page THROUGH THE COMMAND
+    //     releases a key held IN THE SAME STEP - never calling
+    //     applyWebControls at all, so this cannot be the window's per-frame
+    //     poll (A above) doing the work. The command is
+    //     FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN, which is what the toolbar switch
+    //     and the page's own close now submit instead of writing
+    //     transmitOpen_ directly. =============================================
+    {
+        CHECK(ok(Access::apply(app, cmd::makeInt(FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN, 1))));
+        CHECK(ok(Access::apply(app, cmd::makeInt(FOXAPI_OP_TX_PTT, 1))));
+        CHECK(Access::remoteHoldMs(app) > 0);
+        CHECK(ok(Access::apply(app, cmd::makeInt(FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN, 0))));
+        CHECK(Access::remoteHoldMs(app) == 0);
+        std::printf("  D: FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN(0) alone -> remote hold %lld ms\n",
+                    static_cast<long long>(Access::remoteHoldMs(app)));
+    }
+
     const int rc = testSummary("test_remote_key_release");
     if (rc == 0) {
         std::error_code ec;
