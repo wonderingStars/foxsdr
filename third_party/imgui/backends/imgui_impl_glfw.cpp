@@ -917,7 +917,100 @@ void ImGui_ImplGlfw_Shutdown()
     platform_io.ClearPlatformHandlers();
     ImGui_ImplGlfw_ContextMap_Remove(bd->Window);
     IM_DELETE(bd);
+    // FOXSDR PATCH (mouse-passthrough-cache): a fresh backend life starts with a
+    // fresh cache, so a later Init in the same process (a test suite, or the
+    // rescan-plugins-style teardown/rebuild this backend does not itself do)
+    // never judges a new window against a stale value left by the old one.
+    ImGui_ImplGlfw_ResetMousePassthroughForTest();
 }
+
+// FOXSDR PATCH BEGIN (mouse-passthrough-cache) - see third_party/imgui/FOXSDR-PATCHES.md.
+//
+// Upstream calls glfwSetWindowAttrib(GLFW_MOUSE_PASSTHROUGH) unconditionally for
+// EVERY platform viewport on EVERY frame (the call is below, in
+// ImGui_ImplGlfw_UpdateMouseData). On Windows that is a real Win32 syscall pair
+// every time - GetWindowLongW, then SetWindowLongW(GWL_EXSTYLE) and, when
+// enabling, SetLayeredWindowAttributes - run through win32u.dll, regardless of
+// whether the wanted value has changed since the last frame. It practically
+// never has: window_no_input is only ever true for a viewport mid-drag under
+// multi-viewport docking, so on every ordinary frame this call sets the exact
+// style bits the window already has.
+//
+// Field report "hang win32u.dll @ _glfwSetWindowMousePassthroughWin32" (0.99.26,
+// nine reports from one session): the GUI thread was captured with its top
+// frame inside this call, blocked past the watchdog's 5 s threshold, while
+// several other threads in the SAME capture were sitting inside dwmapi.dll and
+// the Intel display driver (ig9icd64.dll) - the desktop compositor and GPU
+// driver were themselves congested at that moment, and this per-frame call,
+// with nothing to justify running it that frame at all, is what the GUI thread
+// happened to be inside when the congestion made ANY win32u syscall slow.
+//
+// Skipping the call whenever the wanted value already matches what was last
+// set for that window removes it from the steady-state path entirely, without
+// changing what gets set on the one frame in a thousand where it actually
+// needs to change.
+//
+// A small fixed-capacity table rather than a std::map keyed by window: the
+// live window count here is always small (the main window plus however many
+// pages have been torn off under multi-viewport docking), and the table is
+// plain old data so it costs nothing to reset wholesale in the one place that
+// already resets everything else, ImGui_ImplGlfw_Shutdown above. If the table
+// ever does fill up, a window past the last slot simply gets the call every
+// frame, exactly as upstream always has for every window - it never skips a
+// call it has not actually recorded a matching prior value for.
+namespace {
+constexpr int kFoxMousePassthroughCacheCap = 32;
+struct FoxMousePassthroughCache {
+    GLFWwindow* Window[kFoxMousePassthroughCacheCap];
+    bool        Value[kFoxMousePassthroughCacheCap];
+    bool        Valid[kFoxMousePassthroughCacheCap];
+    int         SyscallCount;
+};
+FoxMousePassthroughCache g_FoxMousePassthroughCache;
+
+// True when the call actually needs to be made: no prior record for this
+// window, or the wanted value differs from the one last recorded for it.
+// Records the new value either way, so the next call with the same wanted
+// value is skipped exactly once this one has run.
+bool ImGui_ImplGlfw_ShouldSetMousePassthrough(GLFWwindow* window, bool wanted)
+{
+    FoxMousePassthroughCache& c = g_FoxMousePassthroughCache;
+    int freeSlot = -1;
+    for (int i = 0; i < kFoxMousePassthroughCacheCap; i++)
+    {
+        if (c.Valid[i] && c.Window[i] == window)
+        {
+            if (c.Value[i] == wanted)
+                return false;
+            c.Value[i] = wanted;
+            return true;
+        }
+        if (freeSlot < 0 && !c.Valid[i])
+            freeSlot = i;
+    }
+    if (freeSlot >= 0)
+    {
+        c.Window[freeSlot] = window;
+        c.Value[freeSlot] = wanted;
+        c.Valid[freeSlot] = true;
+    }
+    return true;
+}
+}  // namespace
+
+int ImGui_ImplGlfw_MousePassthroughSyscallCountForTest()
+{
+    return g_FoxMousePassthroughCache.SyscallCount;
+}
+
+void ImGui_ImplGlfw_ResetMousePassthroughForTest()
+{
+    FoxMousePassthroughCache& c = g_FoxMousePassthroughCache;
+    for (int i = 0; i < kFoxMousePassthroughCacheCap; i++)
+        c.Valid[i] = false;
+    c.SyscallCount = 0;
+}
+// FOXSDR PATCH END (mouse-passthrough-cache)
 
 static void ImGui_ImplGlfw_UpdateMouseData()
 {
@@ -983,7 +1076,14 @@ static void ImGui_ImplGlfw_UpdateMouseData()
         // See https://github.com/glfw/glfw/issues/1236 if you want to help in making this a GLFW feature.
 #if GLFW_HAS_MOUSE_PASSTHROUGH
         const bool window_no_input = (viewport->Flags & ImGuiViewportFlags_NoInputs) != 0;
-        glfwSetWindowAttrib(window, GLFW_MOUSE_PASSTHROUGH, window_no_input);
+        // FOXSDR PATCH (mouse-passthrough-cache): only make the Win32 call when
+        // the wanted value has actually changed for this window - see the patch
+        // block above ImGui_ImplGlfw_UpdateMouseData for why.
+        if (ImGui_ImplGlfw_ShouldSetMousePassthrough(window, window_no_input))
+        {
+            glfwSetWindowAttrib(window, GLFW_MOUSE_PASSTHROUGH, window_no_input);
+            g_FoxMousePassthroughCache.SyscallCount++;
+        }
 #endif
 #if GLFW_HAS_MOUSE_PASSTHROUGH || GLFW_HAS_WINDOW_HOVERED
         if (glfwGetWindowAttrib(window, GLFW_HOVERED))
