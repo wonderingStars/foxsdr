@@ -546,25 +546,52 @@ abi::BwMHzT sdrPlayBwForRate(double r) {
 }
 
 bool sdrPlayRatePlan(double outputRateHz, SdrPlayRatePlan& out) {
-    // THE FRONT END DOES NOT RUN BELOW 2 MS/s, so every rate below that is a
-    // decimation of something faster, and WHICH something depends on the rate.
-    // The reference's own table (SoapySDRPlay3
-    // getInputSampleRateAndDecimation): the binary fractions of 2 MS/s come
-    // from a 6 MHz LOW-IF front end decimated by powers of two, and the audio
-    // rates (96k, 192k, 384k, 768k) come from a ZERO-IF front end running at
-    // the rate times the decimation. Mixing the two up is how a receiver ends
-    // up 1.62 MHz off frequency.
+    // EVERY PLAN IS ZERO-IF, AND ITS OUTPUT RATE IS fsHz / decM - the only
+    // arithmetic the SDRplay API specification gives (v3.15, sdrplay_api_Init:
+    // of the processing chain's stages only Decimate is said to change the
+    // rate). The ADC is never run below 2 MS/s, the API's own default fsHz.
+    //
+    // WHY NOT THE 6 MHz LOW-IF FRONT END ANY MORE (0.99.44, GitHub issue 5).
+    // Through 0.99.43 the binary fractions of 2 MS/s were taken, as
+    // SoapySDRPlay3's getInputSampleRateAndDecimation takes them, from a
+    // 6 MHz ADC at the 1.62 MHz low IF, on the reference's assumption that
+    // the service down-converts AND divides by three. Two RSP2 field logs say
+    // it delivered the ADC rate: 359978976 samples in 178561 blocks of 2016
+    // in a minute (0.99.27) and 168956928 samples in 83808 blocks of 2016 in
+    // the 28.2 s before the stream stopped (0.99.43) - 6.0 MS/s each time,
+    // while FoxSDR called the radio 2 MS/s and built its chain for that. The
+    // specification says nothing about what low-IF delivers, and no RSP here
+    // can say it either; zero-IF leaves no room for the disagreement. What it
+    // costs is the low-IF mode's freedom from a centre spike, which the API's
+    // DC correction (on, see applyKnownStateLocked) exists to remove.
+    // tests/test_sdrplay_source.cpp holds every plan to fsHz / decM.
     const long long r = static_cast<long long>(std::llround(outputRateHz));
     out = SdrPlayRatePlan{};
     out.bwType = sdrPlayBwForRate(static_cast<double>(r));
 
     switch (r) {
-        case 62500: out.ifType = abi::IF_1_620; out.decM = 32; out.decEnable = 1; out.fsHz = 6000000.0; return true;
-        case 125000: out.ifType = abi::IF_1_620; out.decM = 16; out.decEnable = 1; out.fsHz = 6000000.0; return true;
-        case 250000: out.ifType = abi::IF_1_620; out.decM = 8; out.decEnable = 1; out.fsHz = 6000000.0; return true;
-        case 500000: out.ifType = abi::IF_1_620; out.decM = 4; out.decEnable = 1; out.fsHz = 6000000.0; return true;
-        case 1000000: out.ifType = abi::IF_1_620; out.decM = 2; out.decEnable = 1; out.fsHz = 6000000.0; return true;
-        case 2000000: out.ifType = abi::IF_1_620; out.decM = 1; out.decEnable = 0; out.fsHz = 6000000.0; return true;
+        case 62500:
+        case 125000:
+        case 250000:
+        case 500000:
+        case 1000000: {
+            // A 2 MS/s zero-IF front end decimated by a power of two, with
+            // the wide-band decimation filter the reference pairs with every
+            // zero-IF decimation (the audio rates below).
+            out.ifType = abi::IF_Zero;
+            out.decM = static_cast<unsigned int>(2000000 / r);  // 32, 16, 8, 4, 2
+            out.decEnable = 1;
+            out.wideBandSignal = 1;
+            out.fsHz = 2000000.0;
+            return true;
+        }
+        case 2000000:
+            // The API's own default: 2 MHz zero-IF, nothing decimated.
+            out.ifType = abi::IF_Zero;
+            out.decM = 1;
+            out.decEnable = 0;
+            out.fsHz = 2000000.0;
+            return true;
         case 96000:
         case 192000:
         case 384000:
@@ -890,6 +917,14 @@ bool SdrPlaySource::noteIfServiceDead(abi::ErrT err, const char* what) {
     return true;
 }
 
+bool SdrPlaySource::teardownMustSkipVendorLocked() const {
+    if (vendorUnreachableLocked()) { return true; }
+    // Only for an OPEN radio, as refuseIfVendorUnreachableLocked asks it: a
+    // never-opened source has nothing to tear down and must not load the
+    // vendor DLL just to find that out.
+    return openMirror_.load(std::memory_order_relaxed) && sessionIsLost(api());
+}
+
 bool SdrPlaySource::refuseIfVendorUnreachableLocked(const char* what) {
     // THE SESSION TOO, not only this object's own flags (the third review of
     // fix/rsp-fallback): with radio B streaming and radio A answered
@@ -1004,7 +1039,8 @@ void SdrPlaySource::noteBlock(Link& link, std::size_t samples, bool dropped) {
     if (dropped) { link.cbOverflows.fetch_add(1, std::memory_order_relaxed); }
 }
 
-std::string SdrPlaySource::healthLineLocked(Link& link) {
+std::string SdrPlaySource::healthLineLocked(Link& link, std::string* rateWarning) {
+    if (rateWarning != nullptr) { rateWarning->clear(); }
     // CLOSED FIRST, then emptied: a block the callback lands in between opens
     // the next window and is counted in one of the two, never lost and never
     // counted twice.
@@ -1019,6 +1055,30 @@ std::string SdrPlaySource::healthLineLocked(Link& link) {
     const StreamHealth mine = h;
     h = StreamHealth{};
     if (start == 0 || reads == 0) { return std::string(); }
+
+    // WHAT THE SERVICE DELIVERED AGAINST WHAT THE RADIO WAS SET FOR (0.99.44).
+    // Measured from the window's first block to its last one carrying
+    // samples, so a stall at the end of the window (the 0.99.43 report's five
+    // seconds before its Uninit) does not dilute it. At least a second of it,
+    // and a quarter off before it is said: a healthy radio's blocks land
+    // within milliseconds of their schedule, and the disagreement this exists
+    // for was a factor of three.
+    const double setRate = link.setRateHz.load(std::memory_order_relaxed);
+    const bool rateChanged = link.rateChangedInWindow.exchange(false, std::memory_order_relaxed);
+    if (rateWarning != nullptr && setRate > 0.0 && !rateChanged && last > start) {
+        const double spanS = static_cast<double>(last - start) / 1e9;
+        if (spanS >= 1.0) {
+            const double delivered = static_cast<double>(samples) / spanS;
+            if (std::fabs(delivered / setRate - 1.0) > 0.25) {
+                char wbuf[160];
+                std::snprintf(wbuf, sizeof(wbuf),
+                              "source: SDRplay delivered %.0f S/s over %.1f s, but FoxSDR set it "
+                              "for %.0f S/s",
+                              delivered, spanS, setRate);
+                *rateWarning = wbuf;
+            }
+        }
+    }
 
     const std::int64_t now = steadyNowNs();
     if (last != 0 && now > last) {
@@ -1052,6 +1112,7 @@ void SdrPlaySource::maybeWriteHealth(Link& link) {
     const std::int64_t start = link.cbWindowStartNs.load(std::memory_order_acquire);
     if (start == 0) { return; }
     std::string line;
+    std::string rateWarning;
     bool warn = false;
     {
         std::lock_guard<std::mutex> lk(link.healthMutex);
@@ -1060,7 +1121,11 @@ void SdrPlaySource::maybeWriteHealth(Link& link) {
         if (steadyNowNs() - start < windowNs) { return; }
         warn = link.cbOverflows.load(std::memory_order_relaxed) > 0 || link.health.errors > 0;
         const bool first = !link.healthEverWritten;
-        line = healthLineLocked(link);
+        line = healthLineLocked(link, &rateWarning);
+        // A wrong rate is said whether or not the window is otherwise worth
+        // a line: it is the one thing in it that invalidates everything the
+        // chain built.
+        if (!rateWarning.empty()) { core::diagWarnf("%s", rateWarning.c_str()); }
         if (line.empty()) { return; }
         // A line ALWAYS for the first window after a start, so a healthy radio
         // leaves one proving it; after that only for a window with something
@@ -1510,7 +1575,17 @@ bool SdrPlaySource::open(const std::string& args) {
     std::string error;
     if (!acquireSessionLocked(error)) {
         setError(error);
-        core::diagWarnf("source: SDRplay open failed - %s", error.c_str());
+        if (error == sdrPlaySessionLostSentence()) {
+            // SHORTER THAN THE SENTENCE, as start()'s refusal is (0.99.44,
+            // GitHub issue 5): prefixed, the sentence is wider than a log line
+            // (DiagLog::kLineBytes), and the 0.99.43 report's copy of it ended
+            // "...until it is restarted - restart " - the instruction cut off.
+            // The panel still gets the whole sentence through lastError().
+            core::diagWarnf("source: SDRplay open refused - the SDRplay session was lost earlier; "
+                            "restart the SDRplay API service, then FoxSDR");
+        } else {
+            core::diagWarnf("source: SDRplay open failed - %s", error.c_str());
+        }
         return false;
     }
 
@@ -1558,7 +1633,9 @@ void SdrPlaySource::closeDevice() {
     // sdrplay_api_ReleaseDevice and sdrplay_api_Close are two more calls into
     // a DLL that is holding a thread of ours, and the 0.96.4 stack is what one
     // such call looks like from the outside.
-    const bool unreachable = vendorUnreachableLocked();
+    // The wider question (0.99.44): a session another radio lost is as
+    // finished for this one's ReleaseDevice and Close as its own would be.
+    const bool unreachable = teardownMustSkipVendorLocked();
     if (selected_) {
         const abi::Api& a = api();
         if (unreachable) {
@@ -1647,6 +1724,10 @@ bool SdrPlaySource::startStreamingLocked() {
     }
     // A service that never delivers a first block is caught from here.
     link_->streamStartNs.store(steadyNowNs(), std::memory_order_relaxed);
+    // What the health window will hold the delivered rate to (0.99.44).
+    link_->rateChangedInWindow.store(false, std::memory_order_relaxed);
+    link_->setRateHz.store(sampleRateHz_.load(std::memory_order_relaxed),
+                           std::memory_order_relaxed);
     initialised_ = true;
     running_.store(true, std::memory_order_relaxed);
     return true;
@@ -1681,31 +1762,82 @@ void SdrPlaySource::stopStreamingLocked() {
     // a callback that arrives drops its block, the Link is STRANDED, the
     // device handle stays in it for the thread that may still be inside, and
     // this returns. See the file header for what that costs.
-    if (vendorUnreachableLocked()) {
+    // ...AND NOR DOES ONE WHOSE SESSION ANOTHER RADIO HAS LOST (0.99.44): see
+    // teardownMustSkipVendorLocked.
+    if (teardownMustSkipVendorLocked()) {
         initialised_ = false;
         running_.store(false, std::memory_order_relaxed);
+        // The tail is kept short enough for the longest reason to fit a log
+        // line (DiagLog::kLineBytes): "...left to the worker still inside the
+        // API; this process cannot use it again" cut the abandoned-control
+        // variant off by four bytes.
         core::diagWarnf(
-            "source: SDRplay stopped without Uninit - %s, so the radio is left to the worker "
-            "still inside the API; this process cannot use it again",
+            "source: SDRplay stopped without Uninit - %s; this process cannot use the radio "
+            "again",
             controlAbandoned_ ? "a control was abandoned inside the vendor DLL"
             : streamStalled_.load(std::memory_order_acquire)
                 ? "the stream stopped delivering samples"
-                : "the service stopped answering");
+            : serviceGone_ ? "the service stopped answering"
+                           : "the SDRplay session was lost by another radio");
         strandLink(link_);
         std::string line;
+        std::string rateWarning;
         {
             std::lock_guard<std::mutex> hl(link_->healthMutex);
-            line = healthLineLocked(*link_);
+            line = healthLineLocked(*link_, &rateWarning);
         }
         if (!line.empty()) { core::diagLogf("%s", line.c_str()); }
+        if (!rateWarning.empty()) { core::diagWarnf("%s", rateWarning.c_str()); }
+        link_->setRateHz.store(0.0, std::memory_order_relaxed);
         return;
     }
 
-    // UNBOUNDED BY CONSTRUCTION. sdrplay_api_Uninit takes no timeout and
-    // offers no cancellation; the API's contract is that it returns with the
-    // callbacks stopped. There is no argument we can pass to shorten it and no
-    // handle we can close to interrupt it.
-    const abi::ErrT err = a.Uninit(device_.dev);
+    // BOUNDED THE SAME WAY EVERY OTHER LIVE CALL INTO THIS VENDOR DLL IS
+    // (updateLocked, ackOverloadLocked): sdrplay_api_Uninit takes no timeout
+    // and offers no cancellation of its own, so ours is on the WAIT, not the
+    // call - run on a worker and abandoned at kControlWait, exactly like
+    // sdrplay_api_Update. The 2026-09-28 RSP2 report is this call blocking
+    // the GUI thread for about ten seconds before answering
+    // sdrplay_api_ServiceNotResponding: every other vendor call this driver
+    // makes was already held to kControlWait, and this was the one still made
+    // directly.
+    auto stopResult = std::make_shared<std::promise<abi::ErrT>>();
+    std::future<abi::ErrT> stopDone = stopResult->get_future();
+    const abi::Api* const stopTable = &a;
+    void* const stopDev = device_.dev;
+    std::thread stopWorker(
+        [stopTable, stopResult, stopDev]() { stopResult->set_value(stopTable->Uninit(stopDev)); });
+
+    if (stopDone.wait_for(kControlWait) != std::future_status::ready) {
+        // ABANDONED, exactly as updateLocked: a thread of ours is inside the
+        // vendor DLL for good, so treat the whole session as gone rather than
+        // wait on it further. There is no handle we can close to bring it
+        // back, and the Link is stranded for whatever is still inside -
+        // nothing has told the service to stop calling our callbacks.
+        stopWorker.detach();
+        controlAbandoned_ = true;
+        markSessionLost(a, "a worker was abandoned inside sdrplay_api_Uninit");
+        core::diagWarnf(
+            "source: SDRplay stop abandoned - the service did not answer within %lld ms; the "
+            "radio is released",
+            static_cast<long long>(kControlWait.count()));
+        link_->accepting.store(false, std::memory_order_relaxed);
+        strandLink(link_);
+        initialised_ = false;
+        running_.store(false, std::memory_order_relaxed);
+        std::string abandonedLine;
+        std::string abandonedRateWarning;
+        {
+            std::lock_guard<std::mutex> hl(link_->healthMutex);
+            abandonedLine = healthLineLocked(*link_, &abandonedRateWarning);
+        }
+        if (!abandonedLine.empty()) { core::diagLogf("%s", abandonedLine.c_str()); }
+        if (!abandonedRateWarning.empty()) { core::diagWarnf("%s", abandonedRateWarning.c_str()); }
+        link_->setRateHz.store(0.0, std::memory_order_relaxed);
+        return;
+    }
+    stopWorker.join();
+    const abi::ErrT err = stopDone.get();
     if (err != abi::Success && err != abi::NotInitialised) {
         core::diagWarnf("source: SDRplay Uninit failed - %s", errText(a, err).c_str());
         // THE SAME RULE updateLocked ALREADY FOLLOWS FOR ITS OWN FAILURES
@@ -1747,11 +1879,16 @@ void SdrPlaySource::stopStreamingLocked() {
         initialised_ = false;
         running_.store(false, std::memory_order_relaxed);
         std::string refusedLine;
+        std::string rateWarning;
         {
             std::lock_guard<std::mutex> hl(link_->healthMutex);
-            refusedLine = healthLineLocked(*link_);
+            refusedLine = healthLineLocked(*link_, &rateWarning);
         }
         if (!refusedLine.empty()) { core::diagLogf("%s", refusedLine.c_str()); }
+        // The 0.99.43 report's own window would have said it here: 168956928
+        // samples in the 28.2 s before the stall, against 2 MS/s set.
+        if (!rateWarning.empty()) { core::diagWarnf("%s", rateWarning.c_str()); }
+        link_->setRateHz.store(0.0, std::memory_order_relaxed);
         return;
     }
     initialised_ = false;
@@ -1781,11 +1918,14 @@ void SdrPlaySource::stopStreamingLocked() {
     // The stream-health line for whatever the window holds, so a session that
     // was too short to trip the window still leaves its numbers.
     std::string line;
+    std::string rateWarning;
     {
         std::lock_guard<std::mutex> hl(link_->healthMutex);
-        line = healthLineLocked(*link_);
+        line = healthLineLocked(*link_, &rateWarning);
     }
     if (!line.empty()) { core::diagLogf("%s", line.c_str()); }
+    if (!rateWarning.empty()) { core::diagWarnf("%s", rateWarning.c_str()); }
+    link_->setRateHz.store(0.0, std::memory_order_relaxed);
 }
 
 bool SdrPlaySource::start() {
@@ -2010,6 +2150,9 @@ bool SdrPlaySource::updateLocked(abi::ReasonForUpdateT reason, abi::ReasonForUpd
 void SdrPlaySource::ackOverloadLocked(abi::TunerSelectT tuner) {
     if (!initialised_) { return; }
     if (controlAbandoned_ || streamStalled_.load(std::memory_order_acquire)) { return; }
+    // Nor into a service that has answered (14), this radio's or another's
+    // (0.99.44): an acknowledgement is a vendor call like any other.
+    if (teardownMustSkipVendorLocked()) { return; }
 
     const abi::Api& a = api();
     auto result = std::make_shared<std::promise<abi::ErrT>>();
@@ -2201,6 +2344,10 @@ bool SdrPlaySource::setSampleRateHz(double hz) {
         return false;
     }
     sampleRateHz_.store(best, std::memory_order_relaxed);
+    if (initialised_) {
+        link_->rateChangedInWindow.store(true, std::memory_order_relaxed);
+        link_->setRateHz.store(best, std::memory_order_relaxed);
+    }
     return true;
 }
 

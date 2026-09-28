@@ -458,7 +458,10 @@ nlohmann::json buildPayload(const ParsedReport& r, const std::string& installId,
         // tests/test_upload_scrub.cpp for the lines that used to leak.
         // Scrubbed BEFORE the tail is taken, so device-listing lines that are
         // left out do not use up the lines the report can carry.
-        const std::vector<std::string> kept = scrubUploadLog(r.log);
+        // With the report's own plugin inventory, which this payload also
+        // carries verbatim under "plugins" - see scrubUploadLog(lines,
+        // inventory) for why a plugin named "406 MHz Beacons" keeps its name.
+        const std::vector<std::string> kept = scrubUploadLog(r.log, r.plugins);
         const std::size_t start = (kept.size() > maxLog) ? kept.size() - maxLog : 0;
         for (std::size_t i = start; i < kept.size(); ++i) { log.push_back(kept[i]); }
     }

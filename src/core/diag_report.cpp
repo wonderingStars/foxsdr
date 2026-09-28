@@ -568,7 +568,10 @@ std::string buildDiagnosticsBundle(const DiagBundleInput& in) {
     out += "\n--- log ---\n";
     // Scrubbed exactly as an uploaded report's log is (core::scrubUploadLog):
     // a bundle is made to be pasted into an email or a public issue.
-    for (const std::string& line : scrubUploadLog(in.logLines)) {
+    // The plugin inventory the header above has just printed is passed in,
+    // so a plugin whose NAME says "MHz" keeps its name and version in the
+    // log too (0.99.44, GitHub issue 5: "plugin: loaded # MHz Beacons #").
+    for (const std::string& line : scrubUploadLog(in.logLines, in.context.plugins)) {
         out += line;
         out += "\n";
     }

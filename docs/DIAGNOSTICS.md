@@ -292,7 +292,11 @@ the panel:
   name `<user>`, single-quoted names `'<name>'`, and on a line that mentions
   a frequency every number becomes `#` unless a unit, a word or its shape
   says otherwise (S/s, ms, dB, `firmware 2.1`, `(-5)`, `0x...`, `R820T`).
-  libusb info/debug lines that list the machine's USB devices are left out,
+  Since 0.99.44 the report's own plugin inventory is passed in too, and a
+  listed plugin's name and version survive wherever they appear (0.99.43
+  turned `plugin: loaded 406 MHz Beacons 1.0.0` into `plugin: loaded # MHz
+  Beacons #`, GitHub issue 5); every other number on the line is judged as
+  before. libusb info/debug lines that list the machine's USB devices are left out,
   one line counting them. diag_log.hpp has the rule in full and
   tests/test_upload_scrub.cpp holds each part against every upload path.
 

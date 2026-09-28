@@ -238,6 +238,19 @@ std::string scrubUploadLine(const std::string& line);
 // run of them becomes one line saying how many were left out.
 std::vector<std::string> scrubUploadLog(const std::vector<std::string>& lines);
 
+// THE SAME, KEEPING THE NAMES THE REPORT ALREADY LISTS (0.99.44, GitHub issue
+// 5). `inventory` is the report's own plugin list, "name version" per entry,
+// exactly as its context block prints it unscrubbed ("plugin: 406 MHz
+// Beacons 1.0.0"). Each entry, and its name without the version, is left
+// intact wherever it appears in a line, and does not by itself make the line
+// one that "mentions a frequency" - so "plugin: loaded 406 MHz Beacons 1.0.0"
+// is no longer turned into "plugin: loaded # MHz Beacons #". Every OTHER
+// number on the line is judged exactly as before: a frequency beside a
+// plugin's name is still masked. An entry with no letter in it, or shorter
+// than three characters, is never kept - a bare number is not a name.
+std::vector<std::string> scrubUploadLog(const std::vector<std::string>& lines,
+                                        const std::vector<std::string>& inventory);
+
 // A PATH made safe to show outside the machine - the bundle's `log-path` and
 // `crash-dir`. The base directory is written as the variable it came from
 // ("%LOCALAPPDATA%\FoxSDR\logs/foxsdr.log", "$HOME/.local/state/foxsdr/..."),

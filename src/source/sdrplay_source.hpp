@@ -320,10 +320,12 @@ std::vector<std::string> sdrPlayAntennas(unsigned char hwVer, sdrplay_abi::RspDu
 // setGainDb clamps to this and reports what it programmed.
 int sdrPlayLnaStateCount(unsigned char hwVer);
 
-// The output rates this driver offers, ascending. Everything at or below
-// 2 MS/s is reached by decimating a 6 MHz low-IF or a higher zero-IF rate -
-// the RSP's own front end does not run below 2 MS/s - and everything above is
-// the ADC rate itself.
+// The output rates this driver offers, ascending. Everything below 2 MS/s is
+// reached by decimating a zero-IF ADC rate of at least 2 MS/s (2 MS/s itself
+// for the binary fractions, 3.072 MS/s for the audio rates), 2 MS/s is the
+// API's own default ADC rate undecimated, and everything above is the ADC rate
+// itself. No plan uses the low-IF front end since 0.99.44 - see
+// sdrPlayRatePlan in the .cpp for the field logs that retired it.
 std::vector<double> sdrPlaySupportedRatesHz();
 
 // How one output rate is actually produced: the rate to program into
@@ -470,9 +472,10 @@ public:
     // A successful open has connected to the service, checked the API
     // version, taken the device lock, read the device list, SELECTED the
     // device (which is what makes it ours and takes it away from SDRuno), got
-    // the parameter block, and put the radio in a KNOWN STATE: 2 MS/s out of
-    // the 6 MHz front end at the 1.62 MHz IF (which is how the API's own
-    // reference produces 2 MS/s - the RSP's ADC does not run there), 100 MHz,
+    // the parameter block, and put the radio in a KNOWN STATE: 2 MS/s zero-IF
+    // with nothing decimated (the API's own default ADC rate; until 0.99.44
+    // this was the 6 MHz front end at the 1.62 MHz IF, which two RSP2 field
+    // logs show delivering 6 MS/s), 100 MHz,
     // 1.536 MHz channel filter, IF gain reduction 40 dB, LNA state 0, AGC off,
     // DC and IQ correction on, bias tee off, notches off. Nothing streams
     // until start().
@@ -810,6 +813,18 @@ private:
         std::atomic<bool> pendingOverloadAckA{false};
         std::atomic<bool> pendingOverloadAckB{false};
 
+        // THE RATE THE RADIO WAS SET FOR, as sampleRateHz() reports it,
+        // copied here by startStreamingLocked and by an accepted rate change
+        // (0.99.44, GitHub issue 5). The health window compares what the
+        // service actually delivered against it and says so when the two are
+        // far apart: the 0.99.27 and 0.99.43 RSP2 logs each show 6.0 MS/s
+        // arriving at a radio FoxSDR called 2 MS/s, and neither said it in
+        // words. 0 means "not streaming".
+        std::atomic<double> setRateHz{0.0};
+        // Raised by a live rate change: the window it lands in holds samples
+        // at two rates, so that one window is not judged.
+        std::atomic<bool> rateChangedInWindow{false};
+
         mutable std::mutex healthMutex;
         StreamHealth health;
         bool healthEverWritten = false;
@@ -899,6 +914,17 @@ private:
         return controlAbandoned_ || serviceGone_ || streamStalled_.load(std::memory_order_acquire);
     }
 
+    // ...AND THE TEARDOWN'S QUESTION, which is wider: this device's own flags
+    // OR THE PROCESS'S SESSION, lost by any radio (0.99.44, GitHub issue 5).
+    // stop(), closeDevice() and the overload acknowledgement ask this one.
+    // Until 0.99.44 they asked vendorUnreachableLocked() alone, so a second
+    // radio still streaming when the first lost the session went into
+    // Uninit, ReleaseDevice and Close on the dead service - each of which the
+    // 0.99.43 report shows taking five seconds on the GUI thread to answer
+    // ServiceNotResponding. start(), open(), the scan and every setter
+    // already asked the session. devMutex_ held.
+    bool teardownMustSkipVendorLocked() const;
+
     // THE FIRST LINE OF EVERY SETTER (the review of 6e308c3). True - with
     // lastError "<what> refused: <the sentence for why>" - when the vendor DLL
     // is unreachable, and then the setter returns false having touched
@@ -932,7 +958,10 @@ private:
     void clearError();
 
     void setName(std::string n);
-    static std::string healthLineLocked(Link& link);   // link.healthMutex held
+    // link.healthMutex held. `rateWarning`, when given, receives the line
+    // that says the window's samples arrived at a rate far from the one the
+    // radio was set for (empty when they did not) - see Link::setRateHz.
+    static std::string healthLineLocked(Link& link, std::string* rateWarning = nullptr);
     // Service thread: atomics only. Never a lock, never the log.
     static void noteBlock(Link& link, std::size_t samples, bool dropped);
     // The pipeline's source thread (read()): closes a window that has run
