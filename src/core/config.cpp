@@ -5,6 +5,7 @@
 
 #include "core/plugin_api.hpp"
 #include "core/telemetry.hpp"
+#include "core/tester_usage.hpp"
 // clampScopeRangeNm(): the radar scope's ladder of range steps.
 //
 // THE ONE PLACE core/ REACHES INTO gui/, and it is a considered exception
@@ -608,6 +609,10 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     getUint64(j, "telemetryCrashes", out.telemetryCrashes);
     getBool(j, "telemetryCleanExit", out.telemetryCleanExit);
     getString(j, "telemetryPending", out.telemetryPending);
+    getString(j, "testerToken", out.testerToken);
+    getBool(j, "testerTokenInvalid", out.testerTokenInvalid);
+    getString(j, "testerUsageCurrent", out.testerUsageCurrent);
+    getStringArray(j, "testerUsagePending", out.testerUsagePending);
     getBool(j, "diagnosticsEnabled", out.diagnosticsEnabled);
     getBool(j, "diagnosticsMinidump", out.diagnosticsMinidump);
     getStringArray(j, "crashUploadRecent", out.crashUploadRecent);
@@ -642,6 +647,53 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     // user trying to intervene, and is respected.
     if (out.telemetryPending.size() > AppConfig::kMaxPendingReportBytes) {
         out.telemetryPending.clear();
+    }
+
+    // THE TESTER TOKEN, VALIDATED, NOT TRUSTED - exactly telemetryInstallId's
+    // rule and for the same reason: it is the one tester-usage field that
+    // leaves the machine as free text, so a hand-edited value that is not
+    // exactly the site's own shape (32 lowercase hex characters) must not be
+    // sent anywhere. Unlike telemetryInstallId a bad value does not disable
+    // anything by itself - there is no separate "enabled" flag here, the
+    // token's presence IS the opt-in - so clearing it is the whole repair,
+    // and whatever the tester had queued to send is queued for nobody now.
+    if (!out.testerToken.empty() && !validTesterToken(out.testerToken)) {
+        out.testerToken.clear();
+        out.testerTokenInvalid = false;
+        out.testerUsageCurrent.clear();
+        out.testerUsagePending.clear();
+    }
+    if (out.testerUsageCurrent.size() > AppConfig::kMaxPendingReportBytes) {
+        out.testerUsageCurrent.clear();
+    }
+    // WITH NO CODE, THERE IS NOTHING TO RETRY. A file that carries a queue
+    // but an empty token is either a hand-edit or a code that was removed
+    // after the last save landed mid-write; either way, nothing here is this
+    // session's to send under a code the tester no longer has entered.
+    if (out.testerToken.empty()) {
+        out.testerUsagePending.clear();
+    }
+    // Element-wise tolerant, like the plugin-name lists: an oversized entry
+    // (a corrupt or hand-edited file) is dropped on its own, and the queue is
+    // capped at TesterUsageQueue::kMax - a hand-edited file claiming more
+    // must not become an unbounded send loop at the next launch.
+    //
+    // A REPORT QUEUED UNDER A DIFFERENT TOKEN IS DROPPED, NOT CARRIED OVER:
+    // replacing a revoked or mistyped code must never let an old session's
+    // report be sent under the new one - it would land on the wrong
+    // tester's entry on the site. tests/test_tester_usage.cpp drives this
+    // through core::TesterUsageQueue::dropOthers directly; this is the same
+    // rule applied at load, for a queue that was written under a code this
+    // file no longer names.
+    {
+        std::vector<std::string> kept;
+        for (std::string& s : out.testerUsagePending) {
+            if (s.empty() || s.size() > AppConfig::kMaxPendingReportBytes) { continue; }
+            if (cascade::core::tokenOfReport(s) != out.testerToken) { continue; }
+            kept.push_back(std::move(s));
+            if (kept.size() >= cascade::core::TesterUsageQueue::kMax) { break; }
+        }
+        out.testerUsagePending = std::move(kept);
     }
 
     // Range sanitization — each rule and its WHY is documented in the header.
@@ -1032,6 +1084,15 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
     j["telemetryCrashes"] = cfg.telemetryCrashes;
     j["telemetryCleanExit"] = cfg.telemetryCleanExit;
     j["telemetryPending"] = cfg.telemetryPending;
+    // The tester's own credential - see the field's comment in config.hpp for
+    // why it is never logged and always masked on screen. It is written here
+    // exactly like any other field because config.json is local to the
+    // machine; it is what LEAVES the machine that this file's rules are
+    // about, and this line is not that.
+    j["testerToken"] = cfg.testerToken;
+    j["testerTokenInvalid"] = cfg.testerTokenInvalid;
+    j["testerUsageCurrent"] = cfg.testerUsageCurrent;
+    j["testerUsagePending"] = cfg.testerUsagePending;
     j["diagnosticsEnabled"] = cfg.diagnosticsEnabled;
     j["diagnosticsMinidump"] = cfg.diagnosticsMinidump;
     j["crashUploadRecent"] = cfg.crashUploadRecent;

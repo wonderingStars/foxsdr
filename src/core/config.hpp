@@ -952,6 +952,42 @@ struct AppConfig {
     // trying to close it. Cleared once sent.
     std::string telemetryPending;
 
+    // --- Beta tester usage (see PRIVACY.md, core/tester_usage.hpp) ----------
+    //
+    // OFF until a tester pastes their own tester-portal code. Independent of
+    // telemetryEnabled above - a tester who never opts into the anonymous
+    // report can still opt into this one, and the two switches control
+    // completely different transmissions to completely different purposes.
+    //
+    // The token is the tester's own management credential (the site mints it
+    // with the same shape core::validInstallId checks, 32 lowercase hex
+    // characters) - validated the same way telemetryInstallId is: a
+    // hand-edited value that is not exactly that shape is discarded on load
+    // rather than sent anywhere.
+    std::string testerToken;
+
+    // Set when the site last answered a report with 401 - the code is no
+    // longer valid. Sending stops, but the code itself is KEPT so the tester
+    // can see what they typed and fix it; entering ANY new text into the
+    // field clears this (gui/app_window.cpp's drawTesterUsageSection).
+    bool testerTokenInvalid = false;
+
+    // THE CURRENT SESSION'S REPORT, overwritten on every save exactly like
+    // telemetryPending above - it always reflects the session as it stands
+    // right now, so whatever is on disk when the process ends (cleanly or
+    // not) is the best available account of it. Read at the NEXT start-up as
+    // "the previous session's finished report" and folded into
+    // testerUsagePending below.
+    std::string testerUsageCurrent;
+
+    // FINISHED-SESSION REPORTS THAT FAILED TO SEND, oldest first, JSON text
+    // exactly as TesterUsageReport::toJson() produced it - the retry queue a
+    // 429 or a network error leaves behind. Bounded to
+    // core::TesterUsageQueue::kMax (3): a report added past the cap drops the
+    // OLDEST, because the most recent sessions are the ones most worth the
+    // site still hearing about.
+    std::vector<std::string> testerUsagePending;
+
     // --- Local fault capture (see PRIVACY.md and docs/DIAGNOSTICS.md) -------
     //
     // ON by default, and that needs no consent argument the usage report does:

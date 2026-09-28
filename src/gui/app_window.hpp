@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
+#include <ctime>
 #include <deque>
 #include <future>
 #include <limits>
@@ -104,6 +105,7 @@ struct GLFWwindow;
 // tests never see a graphics header still holds.
 #include "gui/map_view.hpp"
 #include "core/telemetry.hpp"
+#include "core/tester_usage.hpp"
 #include "core/crash_upload.hpp"
 #include "core/feature_request.hpp"
 #include "core/problem_report.hpp"
@@ -2837,6 +2839,72 @@ private:
     // "Usage reporting" settings section: the opt-in switch and what it sends.
     void drawUsageReportingSection();
     bool privacyNoticeOpen_ = false;
+
+    // --- Beta tester usage (opt-in by pasting a code; see PRIVACY.md, -------
+    // core/tester_usage.hpp) --------------------------------------------------
+    // INDEPENDENT of telemetryEnabled_ above: a different switch, a different
+    // credential, a different purpose. Nothing here collects or sends while
+    // testerToken_ is empty - testerUsage_.armed() is exactly that condition.
+    cascade::core::TesterUsageRecorder testerUsage_;
+    std::string testerToken_;
+    bool testerTokenInvalid_ = false;
+    // The retry queue carried from config, plus whatever this session's own
+    // finished report adds to it - see testerUsageStartup/testerUsageJournal.
+    // Kept free of any report not carrying THIS token - see
+    // core::TesterUsageQueue::dropOthers, called wherever testerToken_
+    // changes.
+    cascade::core::TesterUsageQueue testerUsageQueue_;
+    // ONE sender: the startup flush and the periodic in-session retry share
+    // it (never more than one send in flight at a time - busy() refuses a
+    // second). There is deliberately no exit-time sender any more: an
+    // earlier version tried a bounded attempt at clean exit and measured up
+    // to ~3.9s of added shutdown time against an unresponsive server (WinHTTP's
+    // own floor), which is not what "never delays exit" can mean. The
+    // finished session's report is saved to disk at exit exactly like
+    // telemetry's own, and sent at the NEXT launch - see testerUsageJournal
+    // and testerUsageStartup. TesterUsageSender's destructor never blocks
+    // (see its header comment), so a send still in flight when the window
+    // closes costs nothing at all.
+    cascade::core::TesterUsageSender testerUsageSender_;
+    double testerSessionStart_ = 0.0;  // glfwGetTime at start, for the duration
+    std::time_t testerSessionStartWall_ = 0;  // wall clock, for the RFC3339 stamp
+    cascade::core::SecondAccrual testerUsageAccrual_;
+    // Set once a launch's queue flush hits Invalid or Retry, so a black-holed
+    // endpoint or a bad code cannot turn testerUsagePoll() into a per-frame
+    // retry loop against it for the rest of the session.
+    bool testerUsageQueueTriedThisSession_ = false;
+    bool testerShowPreview_ = false;
+    bool testerPreviewOpenedByEnv_ = false;
+    std::string testerCodeError_;
+    // The SYSTEM bank's text field. A separate buffer from testerToken_,
+    // sized for a whole pasted portal link, so a half-typed paste never
+    // becomes "the token" until the Use button commits it
+    // (drawTesterUsageSection), and so the masked display can show something
+    // different from what is being typed. Rendered with
+    // ImGuiInputTextFlags_Password like the web server's own password field,
+    // so the credential is not shown in full while it is being typed either.
+    char testerCodeBuf_[256] = "";
+    // Sets testerToken_ to `token`, arms/disarms the recorder to match, and
+    // drops every queued report that does not carry this token (a fresh
+    // opt-in, a replaced code, and a removal all funnel through here) - the
+    // one place that decision is made, so paste and replace cannot disagree
+    // with it. `startFreshSession` is true only for a brand-new opt-in (the
+    // token was empty before): a session already being recorded under an
+    // old, now-replaced code keeps what it has, but one starting from
+    // nothing gets a clean slate.
+    void setTesterToken(const std::string& token, bool startFreshSession);
+    void testerUsageStartup(const cascade::core::AppConfig& cfg);
+    void testerUsageJournal(cascade::core::AppConfig& cfg);
+    // Called from within testerUsageJournal, the same cadence
+    // telemetryAccrueMode runs at: banks running time against whichever
+    // plugins are currently being fed.
+    void testerUsageAccrue();
+    cascade::core::TesterUsageReport buildTesterUsageReport(double sessionSeconds) const;
+    // Drains a finished send's outcome on the GUI thread and acts on it via
+    // core::applyTesterUsageOutcome (marks the token invalid, drops the head
+    // of the queue, or leaves it for next time) - called once a frame.
+    void testerUsagePoll();
+    void drawTesterUsageSection();
 
     // -----------------------------------------------------------------------
     // Diagnostics (see core/crash_handler.hpp, core/hang_watchdog.hpp)

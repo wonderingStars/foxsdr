@@ -127,6 +127,57 @@ apart from the session reports, so none of the usage figures change meaning.
 This payload is held to exactly these three fields by the same automated test
 as the launch report, and the same switch stops it: reporting off, no beats.
 
+## Beta tester usage — what is sent when a tester code is set
+
+This is a **separate, independent** switch from usage reporting above — a
+different credential, a different purpose, and turning one on or off has no
+effect on the other. It exists only for people who have joined the tester
+list on foxsdr.com and been given a tester code or a tester link: pasting
+that code into Beta tester (System) is what turns this on, and it is tied to
+that one tester's own entry so the owner can tell which features they said
+they would cover they actually used. **With no code entered, nothing on this
+page is collected or sent, ever.**
+
+One report per session, saved when the session ends and **sent at the next
+launch** — the same timing usage reporting's own launch report uses, and for
+the same reason: a network call on the way out can hang the application while
+you are trying to close it, so nothing here ever tries to send on the way out.
+The code itself is shown on screen only masked (the first four and last four
+characters, e.g. `4f9c…c2a1`) and the field that enters it hides what is typed
+into it, the same way a password field does:
+
+| Field | Example | Why |
+|---|---|---|
+| Tester code | `4f9c…c2a1` (shown masked; sent in full) | Your own tester-portal credential, so the report can be linked to your entry. Never logged, never included in a diagnostics bundle or a crash report, and shown on screen only masked. |
+| Application version | `0.99.x` | Which build the session ran. |
+| Platform | `windows` | Which platform the session ran on. |
+| Architecture | `x64` | As above. |
+| Session start | `2026-09-28T12:34:56Z` | When the session began - the site stores this as when your tester entry was last used, so it is the one field here that updates something about your entry rather than only being logged. |
+| Session length | `42` minutes | How long the session ran. |
+| Features used | `spectrum, modes, bookmarks` | Which of the named beta areas you actually exercised this session, from a fixed list the site defines. |
+| Plugins used | `pocsag 1.2.0, 6 minutes` | Which installed decoders ran, their version, and how long each was actually fed samples — never merely installed. A decoder this build cannot match to the published catalogue (a side-loaded or hand-built plugin) is reported under the fixed id `sideloaded` with no version, rather than under a name invented for it. |
+| Radio kinds used | `rtlsdr` | Which radio hardware kinds were opened this session — never a serial number, never args. |
+
+Exactly the same exclusions as usage reporting above apply here: **no
+frequency, no decoded content, no position.** Your IP address is used only to
+limit how often reports are accepted from one address and is not stored
+alongside anything a report contains. The payload is asserted field-by-field
+by an automated test (`tests/test_tester_usage.cpp`), so a new field cannot be
+added without that test failing and this document being updated with it.
+
+If the site answers that the code is no longer valid, sending stops
+immediately and the app says so on screen; the code itself is kept so it can
+be corrected rather than being silently cleared. Up to three reports that
+could not be sent (a network failure, or the site asking to try later) are
+kept and retried at the next launch; older ones are dropped first. A report
+queued under a code that is later replaced or removed is discarded rather
+than sent under the new one (or under none) — it would otherwise land on the
+wrong tester's entry, or on nobody's.
+
+Removing the code deletes it from your configuration file, discards anything
+still queued to send, and stops everything above immediately — nothing
+further is collected from that point.
+
 ## Crash and freeze reports — what they contain
 
 If FoxSDR crashes or freezes it writes a file on your machine. With Diagnostics
@@ -518,9 +569,13 @@ identifier, so if you ever turn it back on you get a new one that cannot be
 linked to the old one. It also stops the five-minute "still running" beat,
 which is armed only while the identifier exists.
 
-The other two transmissions have their own switches, described in their own
-sections above: **Settings → Diagnostics** for crash and freeze reports, and
-**Settings → Updates** for the version check.
+The other transmissions have their own switches, described in their own
+sections above: **Settings → Diagnostics** for crash and freeze reports,
+**Settings → Updates** for the version check, and **Settings → Beta tester**
+for the tester usage report — remove the code there and nothing further is
+collected. Unlike usage reporting, beta tester usage starts OFF and stays off
+until a code is entered; there is nothing to turn off on a machine where one
+never was.
 
 Nothing else in the application is affected: no feature depends on any of
 them being on, and nothing nags you about having turned one off.
@@ -532,10 +587,21 @@ project, which aggregates the counters above. The source is in
 `telemetry-worker/` in this repository so you can read what the receiving end
 does with it.
 
+Beta tester usage goes to `https://foxsdr.com/api/tester-usage` instead, on
+the site itself rather than the anonymous-counters Worker, because it is
+linked to your tester entry there rather than aggregated anonymously.
+
 ## Data protection
 
-The reports contain no personal data, so there is nothing to request access
-to, correct or erase — there is no record anywhere that can be connected to
-you. If you would like the install identifier removed from future reports,
-turn usage reporting off; if you would like it removed from past ones, contact
-us with the identifier and it will be deleted.
+The usage and crash reports contain no personal data, so there is nothing to
+request access to, correct or erase — there is no record anywhere that can be
+connected to you. If you would like the install identifier removed from
+future reports, turn usage reporting off; if you would like it removed from
+past ones, contact us with the identifier and it will be deleted.
+
+Beta tester usage is **not** anonymous — it is linked, by the code you
+pasted, to your own entry on the tester list, and foxsdr.com's own privacy
+notice for that list covers what is kept and for how long. Removing the code
+from Beta tester stops any further report; to have past ones associated with
+your entry removed, ask through the tester portal the same way you would ask
+to be removed from the list itself.
