@@ -157,7 +157,7 @@ void Engine::pollSoundCard() {
     // Only once the user has asked for a device list (patchListsWanted_,
     // 0.99.40): the patch is the view the application opens on and is
     // switched to and fro, and showing it asks for nothing.
-    if (host_.patchPageOpen() && patchListsWanted_ && !soundCardListed_ && !soundCardScanPending_ &&
+    if (host_->patchPageOpen() && patchListsWanted_ && !soundCardListed_ && !soundCardScanPending_ &&
         !soundCardOpenPending_) {
         scanSoundCards();
     }

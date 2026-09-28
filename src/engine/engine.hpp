@@ -111,7 +111,14 @@ private:
     // WHO THIS ENGINE ASKS (engine_host.hpp). Declared first, so it is there
     // before anything that could ask it is built.
     EngineHost ownHost_;
-    EngineHost& host_;
+    // A POINTER, NOT A REFERENCE, on purpose (engine/stage3b-pre, the Low
+    // fallback-teardown item): ~Engine's fallback path (below) must be able
+    // to REDIRECT every remaining host_ call to ownHost_ before it runs, and
+    // a reference cannot be reseated. Everywhere else this reads exactly as
+    // the reference did (host_->x instead of host_.x); the pointer is never
+    // null after construction (the constructor takes it from a reference
+    // parameter) and is only ever repointed at ownHost_, never cleared.
+    EngineHost* host_;
 
     // NO DEFAULT MEMBER INITIALISERS, on purpose: GCC refuses them on a
     // nested struct used by an inline static member of the enclosing class

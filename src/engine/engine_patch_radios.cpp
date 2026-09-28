@@ -283,7 +283,7 @@ void Engine::patchReconcile() {
                     n->centreChosen = true;
                 }
                 if (n->rateHz <= 0.0) { n->rateHz = keep.rateHz; }
-                host_.onPatchGraphChanged();
+                host_->onPatchGraphChanged();
             }
             break;   // one radio only: the device cannot be on two
         }
@@ -395,7 +395,7 @@ void Engine::patchReconcile() {
             if (!pc::radioCentreSet(*n)) {
                 n->freqHz = r.centreHz();
                 n->centreChosen = true;
-                host_.onPatchGraphChanged();
+                host_->onPatchGraphChanged();
             } else if (std::fabs(r.centreHz() - n->freqHz) > 0.5) {
                 if (!r.setCentreHz(n->freqHz)) {
                     patchRadioError_[id] = "the device refused that frequency";
@@ -437,7 +437,7 @@ void Engine::patchReconcile() {
             }
             if (std::fabs(n->rateHz - file->sampleRateHz()) > 0.5) {
                 n->rateHz = file->sampleRateHz();
-                host_.onPatchGraphChanged();
+                host_->onPatchGraphChanged();
             }
             auto radio = std::make_unique<pc::PatchRadio>(id, std::move(file), "I/Q recording");
             radio->setConverter(conv);
@@ -450,7 +450,7 @@ void Engine::patchReconcile() {
             if (!pc::radioCentreSet(*n)) {
                 n->freqHz = radio->centreHz();
                 n->centreChosen = true;
-                host_.onPatchGraphChanged();
+                host_->onPatchGraphChanged();
             }
             cascade::core::diagLogf("patch: radio node %u playing an I/Q recording at %.0f S/s",
                                     static_cast<unsigned>(id), radio->rateHz());
@@ -477,7 +477,7 @@ void Engine::patchReconcile() {
             if (!pc::radioCentreSet(*n)) {
                 n->freqHz = radio->centreHz();
                 n->centreChosen = true;
-                host_.onPatchGraphChanged();
+                host_->onPatchGraphChanged();
             }
             patchRadioError_.erase(id);
             patchRadioFailedAs_.erase(id);
@@ -825,14 +825,14 @@ void Engine::patchPressStart() {
     }
     // START WITH EVERY RADIO SWITCHED OFF SWITCHES THEM ALL ON (see
     // switchOnForStart for why).
-    if (pc::switchOnForStart(patchGraph_)) { host_.onPatchGraphChanged(); }
+    if (pc::switchOnForStart(patchGraph_)) { host_->onPatchGraphChanged(); }
     patchRunning_ = true;
 }
 
 void Engine::patchAllOff() {
     // EVERY RADIO OFF, and the patch stopped: the receiver gets its radio back
     // when patchApplyRunning sees the change.
-    if (pc::switchAllRadiosOff(patchGraph_)) { host_.onPatchGraphChanged(); }
+    if (pc::switchAllRadiosOff(patchGraph_)) { host_->onPatchGraphChanged(); }
     patchRunning_ = false;
 }
 

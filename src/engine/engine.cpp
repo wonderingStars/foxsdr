@@ -81,14 +81,37 @@ using cascade::gui::formatBandwidth;
 Engine::Engine() : Engine(ownHost_) {}
 
 Engine::Engine(EngineHost& host)
-    : host_(host),
+    : host_(&host),
       pipeline_(cascade::core::Pipeline::Config{kSampleRateHz, kFftSize, kAveragingAlpha,
                                                 /*audioEnabled=*/true}) {}
 
 // A front end that did not take the engine down itself (a headless one, a
 // test) gets the same teardown, in the same order, here.
+//
+// SAFETY (engine/stage3b-pre, the Low item docs/engine-stage3.md OPEN
+// (fallback teardown)): a WELL-BEHAVED external front end (gui::AppWindow)
+// ALWAYS calls teardown() itself before engineHolder_ is destroyed
+// (AppWindow::~AppWindow), which sets tornDown_ and makes this whole block
+// dead code for it. The one way this block runs with an EXTERNAL host_ is
+// the front end's OWN CONSTRUCTOR throwing before it ever reaches that
+// point: engineHolder_ is declared FIRST in AppWindow (so destroyed LAST),
+// which means by the time this destructor body runs, every AppWindow member
+// declared AFTER engineHolder_ may already be gone - even though AppWindow's
+// own destructor never runs at all (construction failed, so the object was
+// never "born"). AppWindow's vtable is still AppWindow's throughout that
+// unwind (its own destructor never started), so calling any EngineHost hook
+// here would dispatch, through that still-valid vtable, straight into
+// AppWindow's override - which then reads AppWindow's OWN data members,
+// some of which the unwind has already destroyed. So: BEFORE running any
+// teardown here, repoint host_ at the engine's OWN host. A headless engine
+// already has host_ == &ownHost_ (this is then a no-op); a real AppWindow
+// that reaches here is, by construction, one whose teardown() the front end
+// never got to call - so it has never told the engine anything host_
+// specific needs doing, and detaching is the only safe choice. Proven with
+// tests/test_engine_fallback_teardown.cpp (a throwing constructor seam).
 Engine::~Engine() {
     if (!tornDown_) {
+        host_ = &ownHost_;
         stopTransfers();
         teardown();
     }
@@ -395,7 +418,7 @@ void Engine::pollAudioHealth() {
     const std::size_t ringFrames = out.ringFrames();
     if (ringFrames < audioRingLowWaterFrames_) { audioRingLowWaterFrames_ = ringFrames; }
 
-    const double now = host_.frameTimeS();
+    const double now = host_->frameTimeS();
 
     // Once-a-minute starvation digest. Silent unless something actually
     // starved in the window just closed — same "quiet unless it has news"
@@ -1254,7 +1277,7 @@ void Engine::pollSoapyRecovery() {
     if (soapyView_ == nullptr || !soapyView_->deviceDead()) { return; }
     using DeadReason = cascade::source::SoapySource::DeadReason;
     const DeadReason reason = soapyView_->deadReason();
-    const double now = host_.frameTimeS();
+    const double now = host_->frameTimeS();
     if (!cascade::gui::autoReopenDue(reason == DeadReason::VendorFault,
                                      reason == DeadReason::Abandoned, deviceOpenPending_,
                                      soapyScanPending_, now, soapyReopenAttemptSec_)) {
@@ -2177,7 +2200,7 @@ void Engine::detachAndUnloadPlugins() {
     pluginUi_.clear();
     // And the basemap, for exactly the same reason - its handle and its tile
     // borrows live in a module about to be unmapped.
-    host_.onPluginsUnloading();
+    host_->onPluginsUnloading();
 
     pluginHost_.unloadAll();
 }
@@ -2193,7 +2216,7 @@ void Engine::rescanPlugins() {
     // loader (see the phase-1 note in hang_watchdog.cpp).
     //
     // Scope guard, because there is a `return` in the middle of this function.
-    HostWatchdogPause holdWatchdog(host_);
+    HostWatchdogPause holdWatchdog(*host_);
 
     // The plugin windows the user has OPEN ride through the rescan: their
     // identities are the plugin's name and its window's title, so a plugin
@@ -2212,7 +2235,7 @@ void Engine::rescanPlugins() {
     // objects and their views all ride through the rescan untouched. A
     // plugin that reappears finds its page exactly
     // where it was.
-    host_.beforePluginRescan();
+    host_->beforePluginRescan();
 
     // A missing plugins directory is the normal case and yields an empty list
     // without an error — the host's documented behaviour, and the reason
@@ -2417,7 +2440,7 @@ void Engine::startCatalogFetch() {
     // module - so it is cleared here, at the moment the ground moves, rather
     // than left to a rule that is about a different event. The ADD ALL tick
     // goes too: it was given against the notices the old catalogue listed.
-    host_.onCatalogueFetchStarting();
+    host_->onCatalogueFetchStarting();
     catalogError_.clear();
     catalogStatus_.clear();
     installError_.clear();
@@ -2538,7 +2561,7 @@ void Engine::pollPluginAsync() {
             catalog_.clear();
             catalogError_ = r.error;
         }
-        host_.onCatalogueResult();
+        host_->onCatalogueResult();
     }
 
     if (installPending_ && installFuture_.valid() &&
@@ -2602,7 +2625,7 @@ void Engine::startAddAll(bool noticesAcknowledged) {
     // THE PLAN IS THE STORE WINDOW'S (gui::planAddAll over the model it
     // builds, which reads its deck): asked for through the host, by catalogue
     // id - which is how the queue below has always named a module.
-    const EngineHost::AddAllChoice plan = host_.planAddAll(noticesAcknowledged);
+    const EngineHost::AddAllChoice plan = host_->planAddAll(noticesAcknowledged);
     if (!plan.blockedReason.empty()) {
         installError_ = plan.blockedReason;
         return;
@@ -2726,7 +2749,7 @@ void Engine::pumpAddAll() {
     addAllRun_.currentName.clear();
     // THE TICK WAS FOR THIS RUN. It named the notices this run would take, and
     // the run has taken them; the next press is a new decision.
-    host_.onAddAllFinished();
+    host_->onAddAllFinished();
 }
 
 void Engine::removeInstalledPlugin(const std::string& fileName) {
@@ -2866,7 +2889,7 @@ void Engine::refreshPluginRunner() {
     // second step would be a switch for nothing.
     for (const cascade::core::HostInstrument& in : pluginUi_.instruments()) {
         if (in.plugin == "Demonstration") {
-            host_.showDemonstrationInstrument(in);
+            host_->showDemonstrationInstrument(in);
         }
     }
 
@@ -2889,7 +2912,7 @@ void Engine::refreshPluginRunner() {
             break;
         }
     }
-    host_.attachBasemap(wantBasemap);
+    host_->attachBasemap(wantBasemap);
     // Track enrichment, by the same first-wins rule and for the same reason.
     const CascadeTrackInfoApi* wantTrackInfo = nullptr;
     for (const cascade::core::LoadedPlugin& lp : pluginHost_.plugins()) {
@@ -2899,7 +2922,7 @@ void Engine::refreshPluginRunner() {
             break;
         }
     }
-    host_.attachTrackInfo(wantTrackInfo);
+    host_->attachTrackInfo(wantTrackInfo);
     // Grants LAST, and every time. rescanPlugins() calls PluginUi::clear(),
     // which drops the permission set along with the instances, so without this
     // a rescan would silently revoke every permission the user had given — and
@@ -2922,7 +2945,7 @@ bool Engine::applyReceiverPosition(double latDeg, double lonDeg) {
     rxSet_ = true;
     // The typed fields, every map page's home, the scope and the coverage map
     // follow - the window's half (AppWindow::onReceiverPositionApplied).
-    host_.onReceiverPositionApplied(latDeg, lonDeg);
+    host_->onReceiverPositionApplied(latDeg, lonDeg);
     return true;
 }
 
@@ -2942,7 +2965,7 @@ void Engine::pollGpsReader() {
         // rxSet_ just flipped and the row the user was watching (on the
         // rail's no-position block) is about to be replaced by that fold:
         // the Fixed status line has to be seen somewhere.
-        host_.onGpsFixApplied();
+        host_->onGpsFixApplied();
         cascade::core::diagLogf("gps: fix applied as the receiver position");
     } else {
         gpsRefusal_ = tr("The GPS fix was refused by the position rule (off the globe, or 0,0).");
@@ -3222,7 +3245,7 @@ void Engine::applyPluginPreset(const cascade::core::LoadedPlugin& p,
     // yet. A decoder that has produced no picture still gets its window, which
     // says it is waiting - the truth, and what was asked to be seen. Each id
     // is the one drawPluginWindows draws by, built from the same display name.
-    host_.openPluginWindowsFor(p);
+    host_->openPluginWindowsFor(p);
 
     std::string note;
     cascade::core::formatUtf8(note, tr("Tuned to %.4f MHz for %s"), ps.frequencyHz / 1.0e6,
@@ -3329,7 +3352,7 @@ void Engine::fillPublishedState(cascade::core::PublishedState& ps, const std::st
     // page on screen (what /api/status has always called transmitAvailable).
     fs.txRemoteArmed = transmitOpen_ && transmitter_.haveSink();
     fs.sinkOpen = sink.running();
-    fs.webListening = host_.webListening();
+    fs.webListening = host_->webListening();
 
     r.centreHz = src.centerFrequencyHz();
     r.vfoOffsetHz = pipeline_.vfoOffsetHz();
@@ -3440,7 +3463,7 @@ void Engine::fillPublishedState(cascade::core::PublishedState& ps, const std::st
     e.scanStopHz = scanStopMhz_ * 1.0e6;
     e.scanStepHz = scanStepKhz_ * 1.0e3;
     e.catalogueBusy = catalogPending_ || installPending_;
-    const EngineHost::BasemapFacts basemap = host_.basemapFacts();
+    const EngineHost::BasemapFacts basemap = host_->basemapFacts();
     e.basemapActive = basemap.active;
     e.basemapMinZoom = basemap.minZoom;
     e.basemapMaxZoom = basemap.maxZoom;
@@ -3893,7 +3916,7 @@ void Engine::pumpDecoderOutput() {
     }
     // The track-info plugin's status ("cannot reach the registry") lands in
     // the same log: it is the only place a user looks when a plugin is quiet.
-    for (std::string& s : host_.drainTrackInfoText()) {
+    for (std::string& s : host_->drainTrackInfoText()) {
         cascade::core::DecodedLine l;
         l.plugin = "Aircraft info";
         l.text = std::move(s);
@@ -3915,7 +3938,7 @@ void Engine::pumpDecoderOutput() {
     }
     std::vector<cascade::core::patch::PatchLine> patchLines;
     for (cascade::core::patch::Runner* pr : patchRunners) {
-        for (auto& [node, img] : pr->drainImages()) { host_.onPatchPicture(node, std::move(img)); }
+        for (auto& [node, img] : pr->drainImages()) { host_->onPatchPicture(node, std::move(img)); }
         for (cascade::core::patch::PatchLine& pl : pr->drainText()) {
             patchLines.push_back(std::move(pl));
         }
@@ -4172,7 +4195,7 @@ bool Engine::startAudioRecording() {
     }
     recordError_.clear();
     recordNotice_.clear();
-    audioRecordStartS_ = host_.frameTimeS();
+    audioRecordStartS_ = host_->frameTimeS();
     // Install AFTER start(): the tap must never feed a recorder that is not
     // accepting (Pipeline::setAudioRecorder contract).
     pipeline_.setAudioRecorder(&audioRecorder_);
@@ -4193,7 +4216,7 @@ bool Engine::startIqRecording() {
     recordError_.clear();
     recordNotice_.clear();
     iqRecordRateHz_ = rate;
-    iqRecordStartS_ = host_.frameTimeS();
+    iqRecordStartS_ = host_->frameTimeS();
     // Install AFTER start(): the tap must never feed a recorder that is not
     // accepting (Pipeline::setIqRecorder contract).
     pipeline_.setIqRecorder(&iqRecorder_);
@@ -4429,12 +4452,12 @@ void Engine::importBookmarkFile(const std::string& path) {
 void Engine::saveBookmarks() {
     if (bookmarkPath_.empty()) { return; }  // hermetic run: never touch disk
     bookmarkSaveDirty_ = true;
-    bookmarkSaveDueS_ = host_.frameTimeS() + 1.0;
+    bookmarkSaveDueS_ = host_->frameTimeS() + 1.0;
 }
 
 void Engine::flushBookmarkSave(bool force) {
     if (!bookmarkSaveDirty_ || bookmarkPath_.empty()) { return; }
-    if (!force && host_.frameClockRunning() && host_.frameTimeS() < bookmarkSaveDueS_) { return; }
+    if (!force && host_->frameClockRunning() && host_->frameTimeS() < bookmarkSaveDueS_) { return; }
     bookmarkSaveDirty_ = false;
     std::string err;
     if (freqMgr_.save(bookmarkPath_, err)) {
@@ -4668,7 +4691,7 @@ void Engine::scannerFrame() {
     // GUI thread.
     const bool squelchOpen = pipeline_.signalPowerDb() > squelchDb_;
     const std::optional<double> retune =
-        scanner_.tick(host_.frameTimeS() * 1000.0, squelchOpen);
+        scanner_.tick(host_->frameTimeS() * 1000.0, squelchOpen);
     if (retune.has_value()) {
         tuneAbsoluteHz(*retune);
         // Baseline from READBACK, not the request: a device that coerces
@@ -4710,7 +4733,7 @@ void Engine::fillStatusLists(cascade::net::RadioStatus& s, const std::string& fa
     s.sourceName = src.name();  // copied into a std::string here, deliberately
     // The frequency readout's face, as the NAME the page and the config file
     // both speak - see RadioStatus::tunerDisplayStyle.
-    s.tunerDisplayStyle = host_.tunerDisplayStyle();
+    s.tunerDisplayStyle = host_->tunerDisplayStyle();
     s.sourceKind = sourceKind_;
     // THE TRANSMITTER, AS THE BROWSER SEES IT (0.95.1): transmitting,
     // transmitAvailable and the hold are figures (fillPublishedState:
@@ -4821,13 +4844,13 @@ void Engine::fillStatusLists(cascade::net::RadioStatus& s, const std::string& fa
         // Enrichment from the track-info plugin. Running every frame for
         // every live target, this loop is ALSO what drives the lookups: the
         // ask is non-blocking, PENDING costs nothing, and answers are cached.
-        host_.enrichWebTrack(w);
+        host_->enrichWebTrack(w);
         s.tracks.push_back(std::move(w));
     }
 
-    host_.fillWebImages(s);
+    host_->fillWebImages(s);
 
-    s.basemap.attribution = host_.basemapFacts().attribution;
+    s.basemap.attribution = host_->basemapFacts().attribution;
 
     for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
         cascade::net::RadioStatus::Plugin w;
@@ -5152,7 +5175,7 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             }
             dbMin_ = lo;
             dbMax_ = hi;
-            host_.onDisplayRange(dbMin_, dbMax_);
+            host_->onDisplayRange(dbMin_, dbMax_);
             res.applied[0] = dbMin_;
             res.applied[1] = dbMax_;
             return res;
@@ -5412,7 +5435,7 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             const std::size_t n = freqMgr_.removeGroup(text);
             bookmarkImportNote_ = cascade::core::formatText(tr("Removed %zu from \"%s\""), n, text.c_str());
             saveBookmarks();
-            host_.onBookmarksChanged();
+            host_->onBookmarksChanged();
             res.applied[0] = static_cast<double>(n);
             return res;
         }
@@ -5431,7 +5454,7 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
                 scanStopMhz_ = c.num[1] / 1.0e6;
                 scanStepKhz_ = c.num[2] / 1.0e3;
                 scanner_.configure(scannerParams());
-                scanner_.start(host_.frameTimeS() * 1000.0);
+                scanner_.start(host_->frameTimeS() * 1000.0);
                 scannerHasExpected_ = false;
             } else {
                 scanner_.stop();
@@ -5775,7 +5798,7 @@ void Engine::telemetryAccrueMode() {
     // The accrual carries the sub-second remainder between calls. It has to:
     // a frame is ~17 ms, so every individual delta truncates to zero seconds
     // and nothing would ever be banked.
-    const std::uint64_t secs = telemetryModeAccrual_.advance(host_.wallTimeS());
+    const std::uint64_t secs = telemetryModeAccrual_.advance(host_->wallTimeS());
     if (secs > 0) { telemetryModeSeconds_[kModeNames[modeIndex_]] += secs; }
 }
 
@@ -5809,7 +5832,7 @@ void Engine::telemetryStartup(const cascade::core::AppConfig& cfg) {
     // (The same marker is also the window's trigger to offer a crash report,
     // and the crash-loop limiter's memory is read beside it: both are the
     // window's diagnostics, AppWindow::diagnosticsStartup.)
-    telemetrySessionStart_ = host_.wallTimeS();
+    telemetrySessionStart_ = host_->wallTimeS();
     telemetryModeAccrual_.reset(telemetrySessionStart_);
     // Last session's report goes now, on a thread, while the window is coming
     // up. Nothing waits for it and nothing reports if it fails.
@@ -5843,7 +5866,7 @@ void Engine::telemetryJournal(cascade::core::AppConfig& cfg) {
     r.arch = cascade::core::archDescription();
     r.launches = telemetryLaunches_;
     r.crashes = telemetryCrashes_;
-    const double now = host_.wallTimeS();
+    const double now = host_->wallTimeS();
     r.session.seconds = static_cast<std::uint64_t>(
         now > telemetrySessionStart_ ? now - telemetrySessionStart_ : 0.0);
     r.session.modeSeconds = telemetryModeSeconds_;
@@ -5876,7 +5899,7 @@ void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
     pipeline_.audio().setVolume(volume_);
     dbMin_ = cfg.dbMin;
     dbMax_ = cfg.dbMax;
-    host_.onDisplayRange(dbMin_, dbMax_);
+    host_->onDisplayRange(dbMin_, dbMax_);
     squelchDb_ = cfg.squelchDb;
     pipeline_.setSquelchDb(squelchDb_);
     // THE BIAS TEE IS SEEDED HERE, not inside the device branch below, so
@@ -6417,7 +6440,7 @@ void Engine::initialise() {
     gen.setTone(0, 300000.0, -30.0f);
     gen.setTone(1, -500000.0, -45.0f);
     gen.setNoiseFloorDb(-90.0f);
-    host_.onDisplayRange(dbMin_, dbMax_);
+    host_->onDisplayRange(dbMin_, dbMax_);
 
     // Park the VFO on demo tone 0 so the receiver is tuned to something from
     // the first Play: WFM (the default mode) renders an unmodulated carrier
@@ -6457,12 +6480,12 @@ void Engine::initialise() {
     // opener is Pipeline's, packaged so it can outlive this window, and the
     // hooks are the watchdog's for the bounded wait the requesting frame
     // spends. Bound here, before anything can ask for a device.
-    audioOpen_.bind(pipeline_.audioOpener(), [this] { host_.pauseWatchdog(); },
-                    [this] { host_.resumeWatchdog(); });
+    audioOpen_.bind(pipeline_.audioOpener(), [this] { host_->pauseWatchdog(); },
+                    [this] { host_->resumeWatchdog(); });
     // And the microphone, for the same reason: waveInOpen has no timeout
     // either. The opener is the Transmitter's and owns the microphone.
-    micOpen_.bind(transmitter_.microphoneOpener(), [this] { host_.pauseWatchdog(); },
-                  [this] { host_.resumeWatchdog(); });
+    micOpen_.bind(transmitter_.microphoneOpener(), [this] { host_->pauseWatchdog(); },
+                  [this] { host_->resumeWatchdog(); });
 
     devices_ = pipeline_.audio().listOutputDevices();
     for (int i = 0; i < static_cast<int>(devices_.size()); ++i) {
@@ -6628,7 +6651,7 @@ void Engine::pumpAudio() {
     pollMicOpen();
     // "Still running" beat, five-minute cadence. A no-op when reporting is
     // off, and never blocks - see HeartbeatSender::poll.
-    telemetryHeartbeat_.poll(host_.frameTimeS());
+    telemetryHeartbeat_.poll(host_->frameTimeS());
 }
 
 // EVERY STEP, IN THE FRAME'S ORDER, for a front end with no frame: the GPS
