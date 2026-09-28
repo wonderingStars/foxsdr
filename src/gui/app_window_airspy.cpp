@@ -107,10 +107,16 @@ bool AppWindow::drawAirspyControls() {
     // A COPY is edited here (the same rule the generic sliders follow, see
     // drawSourceSection): the figure shown is always the radio's readback,
     // never left holding a request the driver quantised away from. The write
-    // goes through the command path (FOXAPP_OP_SET_GAIN_NO_READBACK, applied
-    // at once - the same "a gesture whose own drawing reads what it sets, in
-    // the same frame" rule as the knob) rather than into deviceGainsDb_
-    // directly, which is what a control may never do.
+    // goes through the command path - FOXAPI_OP_SET_GAIN, the SAME op the
+    // generic sliders submit, NOT FOXAPP_OP_SET_GAIN_NO_READBACK (that op is
+    // the radar scope's GAIN knob, which keeps its own request on purpose -
+    // engine/stage3b-pre M2, 2026-09-28: this slider used the knob's op by
+    // mistake, so a request the R820T's discrete steps quantised away from
+    // stuck on the slider instead of being corrected, and the Airspy gain
+    // mirror/memory refresh FOXAPI_OP_SET_GAIN's handler does for an open
+    // Airspy never ran) - queued, not applied at once: the figure is read
+    // back on the NEXT frame the readback lands on, the same as every other
+    // gain slider in the Source section.
     const auto slider = [&](std::size_t i, const char* label) {
         if (i >= engine_.deviceGainNames_.size() || i >= engine_.deviceGainsDb_.size()) { return; }
         const float hi = i < engine_.deviceGainRanges_.size()
@@ -120,7 +126,7 @@ bool AppWindow::drawAirspyControls() {
         ImGui::PushID(static_cast<int>(i));
         if (ImGui::SliderFloat(labelAboveIfNeeded(label), &db, 0.0f, hi,
                                gainSliderFormat(cascade::source::GainUnit::Steps))) {
-            engine_.submitCommand(cascade::core::cmd::makeText(FOXAPP_OP_SET_GAIN_NO_READBACK,
+            engine_.submitCommand(cascade::core::cmd::makeText(FOXAPI_OP_SET_GAIN,
                                                        engine_.deviceGainNames_[i], 0, 0,
                                                        static_cast<double>(db)));
         }

@@ -22,6 +22,7 @@
 #endif
 
 #include "airspy_fake_usb.hpp"
+#include "core/app_commands.hpp"
 #include "core/config.hpp"
 #include "engine/airspy_panel.hpp"
 #include "engine/engine.hpp"
@@ -143,6 +144,23 @@ struct AppWindowTestAccess {
     }
     static cascade::core::AppConfig config(AppWindow& a) { return a.currentConfig(); }
     static void restore(AppWindow& a, const cascade::core::AppConfig& c) { a.applyConfig(c); }
+    // The Source panel's Airspy gain slider's own call (engine/stage3b-pre
+    // M2, 2026-09-28): queued, exactly as ImGui::SliderFloat's edit does in
+    // drawAirspyControls, then drained by the same pollSourceAsync poll a
+    // real frame would run.
+    static void sliderSetGain(AppWindow& a, const std::string& name, double db) {
+        a.engine_.submitCommand(
+            cascade::core::cmd::makeText(FOXAPI_OP_SET_GAIN, name, 0, 0, db));
+        a.engine_.drainLocalCommands();
+    }
+    // The op the branch used by mistake (FOXAPP_OP_SET_GAIN_NO_READBACK, the
+    // radar scope's knob): kept here only so this test can show what it
+    // would have done, for contrast with the fix.
+    static void sliderSetGainNoReadback(AppWindow& a, const std::string& name, double db) {
+        a.engine_.submitCommand(
+            cascade::core::cmd::makeText(FOXAPP_OP_SET_GAIN_NO_READBACK, name, 0, 0, db));
+        a.engine_.drainLocalCommands();
+    }
 };
 
 }  // namespace cascade::gui
@@ -186,6 +204,33 @@ int main() {
         CHECK(Access::gainValues(app).size() == 3 && Access::gainValues(app)[0] == 5.0f);
         CHECK(memOf(Access::config(app)).lna == 5);
         CHECK(memOf(Access::config(app)).mode == "free");
+
+        // --- the Source panel's own Airspy slider: SET_GAIN, not
+        //     NO_READBACK (engine/stage3b-pre M2). setGainDb rounds to the
+        //     nearest whole step (airspy_source.cpp), so a request of 7.6
+        //     is NOT what the radio ends up at - 8 is - and the mirror must
+        //     read the radio back, not keep the raw drag value. -----------
+        std::printf("  [RED, named] the op the branch used (NO_READBACK) keeps the raw request:\n");
+        Access::sliderSetGainNoReadback(app, "LNA", 7.6);
+        CHECK(Access::radio(app)->gainDb("LNA") == 8.0);      // the radio itself is correct
+        CHECK(Access::gainValues(app)[0] == 7.6f);            // but the panel lies - the bug
+        std::printf("      radio=%.1f, panel(NO_READBACK)=%.1f\n", Access::radio(app)->gainDb("LNA"),
+                    Access::gainValues(app)[0]);
+
+        std::printf("  [GREEN] SET_GAIN corrects it to the readback:\n");
+        Access::sliderSetGain(app, "LNA", 7.6);
+        CHECK(Access::radio(app)->gainDb("LNA") == 8.0);
+        CHECK(Access::gainValues(app)[0] == 8.0f);            // the readback, not 7.6
+        std::printf("      radio=%.1f, panel(SET_GAIN)=%.1f\n", Access::radio(app)->gainDb("LNA"),
+                    Access::gainValues(app)[0]);
+
+        // Put LNA back at the exact 5 dB the web-remote check above set and
+        // the rest of this test (the save/relaunch checks further down)
+        // depend on - an exact integer needs no rounding, so this is not
+        // itself testing SET_GAIN, only restoring state for what follows.
+        Access::sliderSetGain(app, "LNA", 5.0);
+        CHECK(Access::gainValues(app)[0] == 5.0f);
+        CHECK(memOf(Access::config(app)).lna == 5);
 
         // --- one AGC: the auto-gain mirror reads both-on only ------------------
         CHECK(Access::agc(app, false, true));
