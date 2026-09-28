@@ -238,10 +238,17 @@ void testCatalogueIdJoinsOnFileNameAndFallsBackToSideloaded() {
     ip.file = "pocsag-decoder.dll";
     installed.push_back(ip);
 
-    CHECK(catalogueIdForPlugin("C:\\plugins\\pocsag-decoder.dll", installed) == "pocsag");
+    // Built with fs::path, not a hand-typed Windows path: a literal
+    // "C:\\plugins\\..." backslash path is not portable - POSIX filesystem
+    // implementations do not treat '\' as a separator at all, so .filename()
+    // on it returns the whole string unchanged and the join below it is
+    // testing would silently fail on Linux/WSL.
+    const std::string knownPath = (fs::path("plugins") / "pocsag-decoder.dll").string();
+    const std::string unknownPath = (fs::path("plugins") / "mystery.dll").string();
+    CHECK(catalogueIdForPlugin(knownPath, installed) == "pocsag");
     // A side-loaded plugin with no manifest entry is reported under the fixed
     // shared bucket, never a name invented from its display name.
-    CHECK(catalogueIdForPlugin("C:\\plugins\\mystery.dll", installed) == kSideloadedPluginId);
+    CHECK(catalogueIdForPlugin(unknownPath, installed) == kSideloadedPluginId);
     CHECK(std::string(kSideloadedPluginId) == "sideloaded");
 }
 
