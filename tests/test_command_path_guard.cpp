@@ -606,6 +606,96 @@ std::vector<FieldPatterns> scopedFieldPatterns(const std::vector<std::string>& n
     return out;
 }
 
+// WHOLE-OBJECT FIELDS (review of the OPEN 6 graph round, finding 6). Rule 3's
+// patterns see a write THROUGH the field's own name - an assignment, a
+// mutating call on it, its address taken. A struct-typed field can also be
+// written WITHOUT its name at the write: bound to a non-const reference
+// (`Graph& g = engine_.patchGraph_;` then `g.removeNode(1);`) or handed to a
+// function that takes it by non-const reference (`seedDefaultPatch`,
+// `drawPatchCanvas` - the canvas's old write path - or `std::swap`). So for
+// these fields a control may bind them only to a CONST reference, and pass
+// them only to the reviewed helpers below, each of which takes
+// `const core::patch::Graph&` (checked when listed: core/patch_draft.hpp,
+// patch_io.hpp, patch_plan.hpp). A copy (`patchDraft_ = engine_.patchGraph_;`)
+// is a read, and fine.
+const char* const kWholeObjectFields[] = {"patchGraph_"};
+const char* const kConstGraphHelpers[] = {
+    "graphCommandText", "rebaseDraft", "serialise", "compile", "mapSources", "channelFeeding", "radioOf",
+};
+
+// The findings for one control line `l`, whose two lines before are `before`
+// (a call's argument list may start on an earlier line).
+void judgeWholeObjectUses(const std::string& before, const std::string& l, std::vector<std::string>& found) {
+    const std::string c = before + "\n" + l;
+    const std::size_t lineStart = before.size() + 1;
+    for (const char* f : kWholeObjectFields) {
+        const std::string name = f;
+        for (std::size_t at = c.find(name, lineStart); at != std::string::npos; at = c.find(name, at + 1)) {
+            if (at > 0 && isIdent(c[at - 1])) { continue; }
+            if (at + name.size() < c.size() && isIdent(c[at + name.size()])) { continue; }
+            // Step back over the object it is reached through: engine_. / this->
+            std::size_t head = at;
+            for (const char* via : {"engine_.", "this->", "engine_->"}) {
+                const std::size_t n = std::strlen(via);
+                if (head >= n && c.compare(head - n, n, via) == 0) { head -= n; }
+            }
+            if (head > 0 && isIdent(c[head - 1])) { continue; }   // x.patchGraph_: another object's
+            std::size_t after = skipSpace(c, at + name.size());
+            if (after < c.size() && (c[after] == '.' || c[after] == '[' || c[after] == '-')) { continue; }
+            if (after < c.size() && c[after] == '=' && (after + 1 >= c.size() || c[after + 1] != '=')) {
+                continue;   // an assignment TO it: rule 3's own pattern
+            }
+            std::size_t b = head;
+            while (b > 0 && (c[b - 1] == ' ' || c[b - 1] == '\t' || c[b - 1] == '\n')) { --b; }
+            const char prev = b > 0 ? c[b - 1] : '\0';
+            if (prev == '&' && !(b > 1 && c[b - 2] == '&')) { continue; }   // its address: rule 3's own
+            if (prev == '=' && !(b > 1 && std::strchr("=!<>", c[b - 2]) != nullptr)) {
+                // Initialising or assigning something FROM it. A reference
+                // declared here must be const; a copy is a read.
+                std::size_t s0 = b - 1;
+                while (s0 > 0 && std::strchr(";{}", c[s0 - 1]) == nullptr) { --s0; }
+                const std::string decl = c.substr(s0, (b - 1) - s0);
+                if (decl.find('&') != std::string::npos && decl.find("const") == std::string::npos) {
+                    found.push_back("binds " + name + " to a non-const reference");
+                }
+                continue;
+            }
+            if (prev == '(' || prev == ',') {
+                // An argument: whose? Back to the '(' that opens this list.
+                int depth = 0;
+                std::size_t k = b - 1;
+                bool opened = false;
+                while (true) {
+                    const char ch = c[k];
+                    if (ch == ')' || ch == ']' || ch == '}') { ++depth; }
+                    if (ch == '(' || ch == '[' || ch == '{') {
+                        if (depth == 0) {
+                            opened = ch == '(';
+                            break;
+                        }
+                        --depth;
+                    }
+                    if (k == 0) { break; }
+                    --k;
+                }
+                std::string callee;
+                if (opened) {
+                    std::size_t e = k;
+                    while (e > 0 && (c[e - 1] == ' ' || c[e - 1] == '\t' || c[e - 1] == '\n')) { --e; }
+                    std::size_t s1 = e;
+                    while (s1 > 0 && isIdent(c[s1 - 1])) { --s1; }
+                    callee = c.substr(s1, e - s1);
+                }
+                if (callee.empty() || !inList(callee, kConstGraphHelpers)) {
+                    found.push_back("passes " + name + " to " + (callee.empty() ? std::string("?") : callee) +
+                                    ", not a reviewed const helper (kConstGraphHelpers)");
+                }
+                continue;
+            }
+        }
+    }
+}
+
 // Rules 1-4 on one line of a control. Appends "rule: token" for each finding.
 void judgeControlLine(const std::string& l, const std::vector<std::string>& helpers,
                       const std::vector<FieldPatterns>& fields, bool query,
@@ -886,6 +976,11 @@ void scan(const fs::path& root, const EngineSurface& eng, Report& r) {
             }
             std::vector<std::string> found;
             judgeControlLine(l, helpers, fields, false, found);
+            {
+                std::string before;
+                for (std::size_t j = (i >= 2 ? i - 2 : 0); j < i; ++j) { before += lines[j] + "\n"; }
+                judgeWholeObjectUses(before, l, found);
+            }
             for (const std::string& f : found) {
                 ++r.violations;
                 std::printf("FAIL: AppWindow::%s changes the receiver outside the command path (%s) at "
@@ -951,6 +1046,24 @@ int main(int argc, char** argv) {
     // the includes; this is the belt to that brace).
     CHECK(eng.imguiUses == 0);
     // 6. Every allow-list entry names something that exists.
+    // ...and every whole-object helper really takes the graph by CONST
+    // reference: its first parameter, as declared in src/core.
+    {
+        std::string core;
+        std::error_code ec;
+        for (const auto& e : fs::directory_iterator(root / "src" / "core", ec)) {
+            if (e.path().extension() == ".hpp") { core += readFile(e.path()); }
+        }
+        for (const char* h : kConstGraphHelpers) {
+            const std::regex decl(std::string("\\b") + h + "\\(\\s*const\\s+Graph\\s*&");
+            const bool ok = std::regex_search(core, decl);
+            if (!ok) {
+                std::printf("FAIL: kConstGraphHelpers names %s, which src/core does not declare taking "
+                            "const Graph& - remove it\n", h);
+            }
+            CHECK(ok);
+        }
+    }
     for (const char* m : kWindowMachinery) {
         if (r.membersSeen.count(m) == 0) {
             std::printf("FAIL: kWindowMachinery names %s, which the window does not define - remove it\n", m);
