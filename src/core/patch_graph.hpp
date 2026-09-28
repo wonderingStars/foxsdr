@@ -288,9 +288,22 @@ public:
     // and anything written later all meet the same limit.
     NodeId addNode(NodeKind kind, const std::string& name, PortType feed = PortType::Iq,
                    float x = 0.0f, float y = 0.0f) {
+        return addNodeAs(nextId_, kind, name, feed, x, y);
+    }
+
+    // THE SAME, UNDER AN ID THE CALLER ALREADY HAS (engine/stage3b-pre, OPEN
+    // 6): the window's draft of the patch hands out ids, and the engine's copy
+    // of that draft must keep them - a running radio, a decoder's face and the
+    // canvas's selection are all keyed by id. Refused (kNoNode) for kNoNode,
+    // for an id already in this graph, and for a sixth Radio. The graph's own
+    // next id moves past it, so addNode never hands the same id out again.
+    NodeId addNodeAs(NodeId id, NodeKind kind, const std::string& name,
+                     PortType feed = PortType::Iq, float x = 0.0f, float y = 0.0f) {
+        if (id == kNoNode || find(id) != nullptr) { return kNoNode; }
         if (kind == NodeKind::Radio && count(NodeKind::Radio) >= kMaxRadios) { return kNoNode; }
+        if (id >= nextId_) { nextId_ = id + 1u; }
         Node n;
-        n.id = nextId_++;
+        n.id = id;
         n.kind = kind;
         n.name = name;
         n.x = x;
@@ -383,6 +396,12 @@ public:
         }
         return nullptr;
     }
+
+    // The id the next addNode will hand out. Ids are never reused, so a copy
+    // of this graph made elsewhere (the engine's, from the window's draft)
+    // carries it too - otherwise a node deleted last would free its id again.
+    NodeId nextId() const { return nextId_; }
+    void reserveIds(NodeId next) { nextId_ = std::max(nextId_, next); }
 
     std::size_t count(NodeKind kind) const {
         std::size_t n = 0;

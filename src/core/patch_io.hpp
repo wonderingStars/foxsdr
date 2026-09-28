@@ -49,6 +49,14 @@
 // graph hands out its own and reusing a file's would collide with whatever is
 // already there.
 //
+// ...EXCEPT WHEN THE TEXT IS A COPY OF A LIVE GRAPH (Ids::Keep, engine/
+// stage3b-pre OPEN 6): FOXAPP_OP_PATCH_SET_GRAPH carries the window's draft
+// to the engine in this same format, and there the ids ARE the identity -
+// the engine's running radios, the window's selection and every per-node map
+// on either side are keyed by them. Kept ids are otherwise read exactly as
+// above; a duplicate or zero id is a node that cannot be honoured, dropped
+// and counted like any other.
+//
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #ifndef CASCADE_CORE_PATCH_IO_HPP
 #define CASCADE_CORE_PATCH_IO_HPP
@@ -192,7 +200,11 @@ inline std::string serialise(const Graph& g, float panX, float panY, float zoom)
     return o.str();
 }
 
-inline LoadResult parse(const std::string& text) {
+// How parse() treats the ids in the text: a document's own (Remap, the
+// default - config load, a patch file) or a live graph's (Keep).
+enum class Ids : std::uint8_t { Remap, Keep };
+
+inline LoadResult parse(const std::string& text, Ids ids = Ids::Remap) {
     LoadResult r;
     std::istringstream in(text);
     std::string line;
@@ -237,7 +249,8 @@ inline LoadResult parse(const std::string& text) {
                 continue;
             }
             if (kind > static_cast<unsigned>(NodeKind::Map) ||
-                feed > static_cast<unsigned>(PortType::Track)) {
+                feed > static_cast<unsigned>(PortType::Track) ||
+                (ids == Ids::Keep && fileId > std::numeric_limits<NodeId>::max())) {
                 ++r.dropped;
                 continue;
             }
@@ -306,8 +319,12 @@ inline LoadResult parse(const std::string& text) {
             std::getline(s, name);
             if (!name.empty() && name.front() == ' ') { name.erase(0, 1); }
 
-            const NodeId made = r.graph.addNode(static_cast<NodeKind>(kind), name,
-                                                static_cast<PortType>(feed), x, y);
+            const NodeId made =
+                ids == Ids::Keep
+                    ? r.graph.addNodeAs(static_cast<NodeId>(fileId), static_cast<NodeKind>(kind),
+                                        name, static_cast<PortType>(feed), x, y)
+                    : r.graph.addNode(static_cast<NodeKind>(kind), name,
+                                      static_cast<PortType>(feed), x, y);
             // A radio past the fifth is refused by the graph itself; the file
             // loses that node and anything wired to it, and says so.
             if (made == kNoNode) {
