@@ -224,6 +224,21 @@ public:
     std::atomic<bool> insideReleaseDevice{false};
     std::atomic<bool> leftReleaseDevice{false};
 
+    // AN UNINIT THAT NEVER ANSWERS AT ALL, no earlier abandoned control
+    // needed to reach it - the 2026-09-28 RSP2 report: nothing had touched
+    // the vendor since open(), so stop()'s own Uninit was the FIRST call in,
+    // and it blocked the GUI thread for about ten seconds before answering
+    // sdrplay_api_ServiceNotResponding. Neither hangInUpdate (a live control)
+    // nor wedgedDeviceBlocksTeardown (a teardown queued behind an already-
+    // abandoned control) models that: both need something to have gone wrong
+    // BEFORE this call. Modelled the same way as the other two: polled, so a
+    // caller released later can still leave, and observed through flags so a
+    // test can say WHO went in.
+    std::atomic<bool> hangInUninit{false};
+    std::atomic<bool> releaseUninitHang{false};
+    std::atomic<bool> insideUninit{false};
+    std::atomic<bool> leftUninit{false};
+
     // THE SERVICE'S OWN THREAD, AND A SERVICE THAT WEDGES WHEN IT IS KEPT
     // WAITING (0.99.32).
     //
@@ -662,6 +677,18 @@ private:
         FakeSdrPlayApi* f = instance();
         if (f == nullptr) { return abi::Fail; }
         f->note("Uninit");
+        // A SERVICE THAT NEVER ANSWERS UNINIT AT ALL, with no earlier
+        // abandoned control - see hangInUninit's own comment. Checked before
+        // queueBehindWedgedDevice, which models a different precondition
+        // (an EARLIER call already wedged inside this device).
+        if (f->hangInUninit.load()) {
+            f->insideUninit.store(true);
+            while (!f->releaseUninitHang.load()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            }
+            f->leftUninit.store(true);
+            return abi::ServiceNotResponding;
+        }
         // Noted first, then queued behind a wedged device - so the call is on
         // the record even when it never comes back out. See updateHangDepth.
         queueBehindWedgedDevice(f, f->uninitEnteredWhileWedged);

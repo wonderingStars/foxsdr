@@ -1701,11 +1701,49 @@ void SdrPlaySource::stopStreamingLocked() {
         return;
     }
 
-    // UNBOUNDED BY CONSTRUCTION. sdrplay_api_Uninit takes no timeout and
-    // offers no cancellation; the API's contract is that it returns with the
-    // callbacks stopped. There is no argument we can pass to shorten it and no
-    // handle we can close to interrupt it.
-    const abi::ErrT err = a.Uninit(device_.dev);
+    // BOUNDED THE SAME WAY EVERY OTHER LIVE CALL INTO THIS VENDOR DLL IS
+    // (updateLocked, ackOverloadLocked): sdrplay_api_Uninit takes no timeout
+    // and offers no cancellation of its own, so ours is on the WAIT, not the
+    // call - run on a worker and abandoned at kControlWait, exactly like
+    // sdrplay_api_Update. The 2026-09-28 RSP2 report is this call blocking
+    // the GUI thread for about ten seconds before answering
+    // sdrplay_api_ServiceNotResponding: every other vendor call this driver
+    // makes was already held to kControlWait, and this was the one still made
+    // directly.
+    auto stopResult = std::make_shared<std::promise<abi::ErrT>>();
+    std::future<abi::ErrT> stopDone = stopResult->get_future();
+    const abi::Api* const stopTable = &a;
+    void* const stopDev = device_.dev;
+    std::thread stopWorker(
+        [stopTable, stopResult, stopDev]() { stopResult->set_value(stopTable->Uninit(stopDev)); });
+
+    if (stopDone.wait_for(kControlWait) != std::future_status::ready) {
+        // ABANDONED, exactly as updateLocked: a thread of ours is inside the
+        // vendor DLL for good, so treat the whole session as gone rather than
+        // wait on it further. There is no handle we can close to bring it
+        // back, and the Link is stranded for whatever is still inside -
+        // nothing has told the service to stop calling our callbacks.
+        stopWorker.detach();
+        controlAbandoned_ = true;
+        markSessionLost(a, "a worker was abandoned inside sdrplay_api_Uninit");
+        core::diagWarnf(
+            "source: SDRplay stop abandoned - the service did not answer within %lld ms; the "
+            "radio is released",
+            static_cast<long long>(kControlWait.count()));
+        link_->accepting.store(false, std::memory_order_relaxed);
+        strandLink(link_);
+        initialised_ = false;
+        running_.store(false, std::memory_order_relaxed);
+        std::string abandonedLine;
+        {
+            std::lock_guard<std::mutex> hl(link_->healthMutex);
+            abandonedLine = healthLineLocked(*link_);
+        }
+        if (!abandonedLine.empty()) { core::diagLogf("%s", abandonedLine.c_str()); }
+        return;
+    }
+    stopWorker.join();
+    const abi::ErrT err = stopDone.get();
     if (err != abi::Success && err != abi::NotInitialised) {
         core::diagWarnf("source: SDRplay Uninit failed - %s", errText(a, err).c_str());
         // THE SAME RULE updateLocked ALREADY FOLLOWS FOR ITS OWN FAILURES

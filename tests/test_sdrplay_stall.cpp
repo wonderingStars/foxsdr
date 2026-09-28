@@ -634,6 +634,78 @@ void testAStallIsStillNamedWhenTheReaderIsSlow() {
     CHECK(fake.countStarting("Uninit") == 0);
 }
 
+// --- 9. stop()'s OWN Uninit is bounded, even as the FIRST vendor call -------
+//
+// THE 0.99.43 RSP2 REPORT (2026-09-28): the patch view was closed, then
+// nothing touched the vendor at all for ten seconds until
+//
+//   warn source: SDRplay Uninit failed - sdrplay_api_ServiceNotResponding (14)
+//
+// followed by "gui thread recovered after a stall". Every OTHER call this
+// driver makes into the vendor DLL already runs on a worker bounded by
+// kControlWait (updateLocked, ackOverloadLocked) - stopStreamingLocked's own
+// sdrplay_api_Uninit was the one still made directly, so a service that took
+// ten seconds to answer 14 held the GUI thread for all ten. This is that call
+// with nothing having gone wrong before it (no abandoned control, no wedged-
+// teardown queue) - only Uninit itself refusing to come back - which is
+// exactly what the report's log shows and what testATeardownAfterAnAbandoned
+// ControlNeverEntersTheVendorDll (test_sdrplay_source.cpp) does not cover.
+void testStopsOwnUninitIsBoundedAsTheFirstCall() {
+    cascade::core::DiagLog::instance().resetForTest();
+    FakeSdrPlayApi* fake = new FakeSdrPlayApi();
+    fake->addDevice("1706012347", abi::kRsp2);
+    SdrPlaySource* src = new SdrPlaySource();
+    src->setApiForTest(&fake->table);
+    CHECK(src->open(""));
+    CHECK(src->start());
+    CHECK(!src->faulted());
+
+    const unsigned long long strandedBefore = SdrPlaySource::linksStranded();
+    fake->hangInUninit.store(true);
+
+    // stop() RUNS ON ITS OWN THREAD so this test can report rather than hang
+    // when the bound is missing - it stands in for the GUI thread exactly as
+    // the sibling abandoned-control tests do.
+    std::atomic<bool> returned{false};
+    std::atomic<long long> elapsedMs{-1};
+    std::thread caller([&]() {
+        const auto t0 = Clock::now();
+        src->stop();
+        elapsedMs.store(
+            std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - t0).count());
+        returned.store(true);
+    });
+
+    // Generous, and deliberately shorter than the field's ten seconds: what is
+    // being ruled out is a call that does not come back at all.
+    for (int i = 0; i < 400 && !returned.load(); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    // THE DEFECT, IN ONE LINE: before the bound this fails, because stop() is
+    // still inside sdrplay_api_Uninit and will be until the fake releases it.
+    CHECK(returned.load());
+    CHECK(fake->insideUninit.load());
+
+    if (returned.load()) {
+        const long long ms = elapsedMs.load();
+        CHECK(ms >= 900);   // it really waited the bound, not returned early
+        CHECK(ms < 3000);   // ...and came back well inside it
+        CHECK(!src->running());
+        CHECK(ringHas("SDRplay stop abandoned"));
+        CHECK(SdrPlaySource::linksStranded() == strandedBefore + 1);
+    } else {
+        std::printf("     stop() never returned - the checks that depend on it were not run\n");
+    }
+
+    // Let the abandoned worker leave before this process does.
+    fake->releaseUninitHang.store(true);
+    for (int i = 0; i < 500 && !fake->leftUninit.load(); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    CHECK(fake->leftUninit.load());
+    if (caller.joinable()) { caller.join(); }
+}
+
 }  // namespace
 
 int main() {
@@ -646,5 +718,6 @@ int main() {
     testAProcessFreezeIsNotAStall();
     testTheStallClockStartsAfterInit();
     testAStallIsStillNamedWhenTheReaderIsSlow();
+    testStopsOwnUninitIsBoundedAsTheFirstCall();
     return testSummary("test_sdrplay_stall");
 }
