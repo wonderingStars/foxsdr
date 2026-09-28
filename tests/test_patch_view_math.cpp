@@ -47,6 +47,7 @@ using cascade::gui::patch::pointInHeader;
 using cascade::gui::patch::pointInNode;
 using cascade::gui::patch::portAt;
 using cascade::gui::patch::PortHit;
+using cascade::gui::patch::drawView;
 using cascade::gui::patch::screenToWorld;
 using cascade::gui::patch::Vec2;
 using cascade::gui::patch::View;
@@ -536,6 +537,83 @@ int main() {
         CHECK(!keyWraps(100.0f, 8.0f, 80.0f, 188.0f));   // ends exactly at the edge
         CHECK(keyWraps(100.0f, 8.0f, 81.0f, 188.0f));    // one pixel over
         CHECK(!keyWraps(0.0f, 8.0f, 50.0f, 1000.0f));
+    }
+
+    // [S7] A NEW PART LANDS INSIDE THE CANVAS AS ACTUALLY DRAWN, AT ANY
+    // INTERFACE SIZE (an Opus review, round 5, finding 3). drawPatchFaces
+    // paints the canvas through drawView(view, S) - zoom composed with the
+    // interface-size factor - not the patch's own raw zoom. Feeding
+    // newPartPosition the RAW view (round 4, app_window.cpp ~14047-14048)
+    // computes a placement as if the canvas were unscaled, then that world
+    // point gets rendered through the SCALED transform: at S=2 on a
+    // 1400x800 canvas panned to (-2000,-1000), the node draws at
+    // (2056, 1056) - off the canvas altogether, the same failure shape as
+    // 0.99.16's desktop/canvas mix-up.
+    {
+        constexpr float canvasW = 1400.0f, canvasH = 800.0f;
+        constexpr float rawZoom = 1.0f;
+        const Vec2 pans[] = {V(0.0f, 0.0f), V(-2000.0f, -1000.0f), V(400.0f, 300.0f)};
+        const float factors[] = {1.0f, 1.5f, 2.0f};
+
+        int cases = 0;
+        int inViewFixed = 0;
+        int inViewBuggy = 0;
+        for (const float sFactor : factors) {
+            for (const Vec2& pan : pans) {
+                ++cases;
+                const View rawView{pan, rawZoom};
+                // THE ACTUAL DRAWN TRANSFORM - what the canvas is painted
+                // with, whatever placement code is fed.
+                const View drawn = drawView(rawView, sFactor);
+
+                // THE FIX: newPartPosition is given the SAME drawn transform.
+                const Vec2 atFixed = newPartPosition(drawn, canvasW, canvasH, 0);
+                const Vec2 screenFixed = worldToScreen(drawn, atFixed);
+                const Vec2 titleFixed =
+                    worldToScreen(drawn, V(atFixed.x + 10.0f, atFixed.y + kHeaderHeight * 0.5f));
+                if (screenFixed.x >= 0.0f && screenFixed.y >= 0.0f && titleFixed.x < canvasW &&
+                    titleFixed.y < canvasH) {
+                    ++inViewFixed;
+                }
+
+                // THE BUG: newPartPosition given the RAW view (no S), then
+                // rendered through the transform the canvas actually uses.
+                const Vec2 atBuggy = newPartPosition(rawView, canvasW, canvasH, 0);
+                const Vec2 screenBuggy = worldToScreen(drawn, atBuggy);
+                const Vec2 titleBuggy =
+                    worldToScreen(drawn, V(atBuggy.x + 10.0f, atBuggy.y + kHeaderHeight * 0.5f));
+                if (screenBuggy.x >= 0.0f && screenBuggy.y >= 0.0f && titleBuggy.x < canvasW &&
+                    titleBuggy.y < canvasH) {
+                    ++inViewBuggy;
+                }
+            }
+        }
+        CHECK(cases == 9);
+        CHECK(inViewFixed == cases);  // the fix: always inside the drawn canvas
+        CHECK(inViewBuggy < cases);   // the bug: not always - proves red
+
+        // Pin the review's own repro exactly: S=2, pan (-2000,-1000), a fresh
+        // 1400x800 canvas - the buggy placement draws at (2056, 1056).
+        {
+            const View rawView{V(-2000.0f, -1000.0f), 1.0f};
+            const View drawn = drawView(rawView, 2.0f);
+            const Vec2 atBuggy = newPartPosition(rawView, 1400.0f, 800.0f, 0);
+            const Vec2 screenBuggy = worldToScreen(drawn, atBuggy);
+            CHECK_NEAR(screenBuggy.x, 2056.0f, 0.5f);
+            CHECK_NEAR(screenBuggy.y, 1056.0f, 0.5f);
+        }
+
+        // drawView never mutates the persisted view - S composes only into
+        // the RETURNED zoom, so a saved patch's own pan/zoom never learns
+        // about the interface size (round 2's guarantee).
+        {
+            const View original{V(12.0f, -34.0f), 1.7f};
+            const View d = drawView(original, 2.0f);
+            CHECK(original.pan == V(12.0f, -34.0f));
+            CHECK(original.zoom == 1.7f);
+            CHECK(d.pan == original.pan);
+            CHECK_NEAR(d.zoom, 3.4f, 1e-4f);
+        }
     }
 
     return testSummary("test_patch_view_math");

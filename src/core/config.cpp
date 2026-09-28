@@ -405,6 +405,20 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     getFloat(j, "readingsScale", out.readingsScale);
     if (!(out.readingsScale >= 1.0f)) { out.readingsScale = 1.0f; }
     if (out.readingsScale > 3.0f) { out.readingsScale = 3.0f; }
+    // THE INTERFACE SIZE. Not core/config.cpp's job to know gui/ui_scale.hpp's
+    // step table (core does not depend on gui) - the valid spellings are
+    // listed here explicitly, the same way uiTheme's five names are just
+    // above, and gui/ui_scale.hpp::normalizeChoice repeats the same list on
+    // its own side of the boundary. Anything else, including an empty string
+    // or a step a future build offers that this one does not, loads as
+    // "auto" - the tunerDisplayStyle rule.
+    getString(j, "interfaceScale", out.interfaceScale);
+    if (out.interfaceScale != "auto" && out.interfaceScale != "100" &&
+        out.interfaceScale != "125" && out.interfaceScale != "150" &&
+        out.interfaceScale != "175" && out.interfaceScale != "200" &&
+        out.interfaceScale != "250") {
+        out.interfaceScale = "auto";
+    }
     // Both default true, so an older config that has never heard of them
     // arrives with trails drawn and coloured - see AppConfig for why the two
     // are separate switches. Neither has a range to clamp: a bool read by
@@ -902,6 +916,7 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
     j["counterScale"] = cfg.counterScale;
     j["counterSwitches"] = cfg.counterSwitches;
     j["readingsScale"] = cfg.readingsScale;
+    j["interfaceScale"] = cfg.interfaceScale;
     j["mapTrails"] = cfg.mapTrails;
     j["mapTrailAltitudeColours"] = cfg.mapTrailAltitudeColours;
     j["mapTrailStyle"] = cfg.mapTrailStyle;

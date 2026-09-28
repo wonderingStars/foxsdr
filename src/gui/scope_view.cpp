@@ -16,6 +16,7 @@
 #include "gui/basemap_cache.hpp"
 #include "gui/coastline_data.hpp"
 #include "gui/fonts.hpp"
+#include "gui/ui_scale.hpp"
 #include "gui/text_fit.hpp"
 #include "gui/theme.hpp"
 #include "gui/track_info_cache.hpp"
@@ -1422,7 +1423,8 @@ float addBenchPlate(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, const ch
     dl->AddRect(tl, br, theme::kBrassDark, round, 0, theme::kHairline);
     addBenchBevel(dl, tl, br, round, true);
 
-    float y = tl.y + 7.0f;
+    const float s = cascade::gui::uiscale::factor();
+    float y = tl.y + 7.0f * s;
     if (title != nullptr && title[0] != '\0') {
         // IVORY, NOT ENGRAVED. The design's own rule is that a caption may be
         // cut into brass - about 2.3:1 - but this plate's ground is dark
@@ -1436,9 +1438,16 @@ float addBenchPlate(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, const ch
         // pair of capitals a fifteen-character title is the widest thing this
         // file draws. The rail's own 8 px inset is left clear at both ends so
         // the title never touches the bevel it sits inside.
+        //
+        // fonts::legendPx(), not the base kLegendSize: this one function
+        // titles the rail's own plate, the status column, the patch view and
+        // every other bench panel that calls addBenchPlate, so it is one of
+        // the highest-leverage fixes in the interface-scale sweep - fitTrackedPx
+        // still shrinks it to fit whatever room `w` is on a narrow/unscaled
+        // plate, exactly as before.
         constexpr float kTitleTrack = 0.20f;
-        const float px = fitTrackedPx(f, cascade::gui::fonts::kLegendSize, title,
-                                      kTitleTrack, w - 16.0f);
+        const float px = fitTrackedPx(f, cascade::gui::fonts::legendPx(), title,
+                                      kTitleTrack, w - 16.0f * s);
         const float track = px * kTitleTrack;
         const float tw = trackedWidth(f, px, title, track);
         // Centred, unless centring would start it left of the plate - which is
@@ -1446,16 +1455,16 @@ float addBenchPlate(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, const ch
         // from the inset and cut off at the far one, so what is lost is the end
         // of the word rather than the panel next door.
         float x = (tl.x + br.x) * 0.5f - tw * 0.5f;
-        if (x < tl.x + 8.0f) { x = tl.x + 8.0f; }
-        const float titleMaxX = br.x - 8.0f;
+        if (x < tl.x + 8.0f * s) { x = tl.x + 8.0f * s; }
+        const float titleMaxX = br.x - 8.0f * s;
         addTrackedText(dl, f, px, ImVec2(x + 1.0f, y + 1.0f),
                        voidShadow(0.60f), title, track, titleMaxX);
         addTrackedText(dl, f, px, ImVec2(x, y), theme::kIvory, title, track, titleMaxX);
-        y += f->CalcTextSizeA(px, FLT_MAX, 0.0f, title).y + 5.0f;
+        y += f->CalcTextSizeA(px, FLT_MAX, 0.0f, title).y + 5.0f * s;
     }
-    addBenchRail(dl, tl.x + 8.0f, br.x - 8.0f, y);
+    addBenchRail(dl, tl.x + 8.0f * s, br.x - 8.0f * s, y);
     // The measurement, handed back rather than left for the caller to guess at.
-    return y + 8.0f;
+    return y + 8.0f * s;
 }
 
 void addBenchGroupCaption(ImDrawList* dl, const ImVec2& at, float width,
@@ -1466,7 +1475,11 @@ void addBenchGroupCaption(ImDrawList* dl, const ImVec2& at, float width,
     // the end of the column, and this face's tracking is the widest on the
     // panel - a quarter of the size between every pair of letters.
     constexpr float kCapTrack = 0.24f;
-    const float px = fitTrackedPx(f, cascade::gui::fonts::kTinySize, caption, kCapTrack,
+    // fonts::tinyPx(), not the bare kTinySize (an Opus review's minor): the
+    // bare constant caps this caption at its S=1 size forever, since
+    // fitTrackedPx only ever shrinks its input, never grows it - one of the
+    // few font sites the round 1/2 sweeps missed.
+    const float px = fitTrackedPx(f, cascade::gui::fonts::tinyPx(), caption, kCapTrack,
                                   width - 8.0f);
     const float track = px * kCapTrack;
     const float tw = trackedWidth(f, px, caption, track);
@@ -1698,7 +1711,14 @@ void drawBenchMeter(ImDrawList* dl, const ImVec2& tl, float width, float height,
     // bound, which is the property that survives the next change to fonts.hpp.
     ImFont* cf = cascade::gui::fonts::legend();
     ImFont* vf = cascade::gui::fonts::ui();
-    const float tiny = cascade::gui::fonts::kTinySize;
+    // fonts::tinyPx(), not the base kTinySize: `width` arrives already scaled
+    // by the interface factor (drawToolbar passes the deck's own scaled meter
+    // width), and fitTextPx only ever shrinks its starting size to fit - never
+    // grows it - so an unscaled starting size here would leave the caption and
+    // reading looking small on an otherwise bigger meter face. Both scaling by
+    // the same factor keeps the SHRINK decision (and therefore the meter's
+    // proportions) exactly what it was at S = 1.
+    const float tiny = cascade::gui::fonts::tinyPx();
     // Fitted to the meter's own width: both lines are centred on it, so
     // anything wider is drawn over the meter standing next to it rather than
     // clipped. "22 % - 3.6 ms" under a 126 px face is the tight one.
@@ -1848,12 +1868,18 @@ void drawRailChip(ImDrawList* dl, const ImVec2& headerMin, const ImVec2& headerM
     if (dl == nullptr) { return; }
     const float h = headerMax.y - headerMin.y;
     const float cy = (headerMin.y + headerMax.y) * 0.5f;
+    // `h` already carries the interface-scale factor (a real call site's
+    // header height comes from railRowHeight(labelPx, scale)), so the share
+    // of it below scales for free; the FIXED pixels beside it - the floor on
+    // the radius, and the two edge gaps - are routed through px() so they do
+    // not stay a few fixed pixels beside increasingly large plates.
+    const float s = cascade::gui::uiscale::factor();
 
     // The lamp sits hard against the right edge of the plate, and the chip
     // just inboard of it - so a glance down the rail reads as a column of
     // states rather than as a list of names.
-    const float lampR = std::max(3.0f, h * 0.20f);
-    const ImVec2 lampC(headerMax.x - lampR - 6.0f, cy);
+    const float lampR = std::max(cascade::gui::uiscale::px(3.0f), h * 0.20f);
+    const ImVec2 lampC(headerMax.x - lampR - cascade::gui::uiscale::px(6.0f), cy);
     drawBenchLamp(dl, lampC, lampR, lampColour, lampLit, nullptr);
 
     if (chipText != nullptr && chipText[0] != '\0') {
@@ -1861,19 +1887,23 @@ void drawRailChip(ImDrawList* dl, const ImVec2& headerMin, const ImVec2& headerM
         // the semibold engraving face, not the monospaced one. MUTED in Nova
         // Mono at this size renders its M as a solid block; see fonts.hpp.
         ImFont* cf = cascade::gui::fonts::legend();
-        const float cpx = cascade::gui::fonts::kTinySize;
+        const float cpx = cascade::gui::fonts::tinyPx();
         const ImVec2 ts = cf->CalcTextSizeA(cpx, FLT_MAX, 0.0f, chipText);
-        const float padX = 5.0f;
-        const ImVec2 cBR(lampC.x - lampR - 7.0f, cy + ts.y * 0.5f + 2.0f);
-        const ImVec2 cTL(cBR.x - ts.x - padX * 2.0f, cy - ts.y * 0.5f - 2.0f);
+        const float padX = cascade::gui::uiscale::px(5.0f);
+        const ImVec2 cBR(lampC.x - lampR - cascade::gui::uiscale::px(7.0f), cy + ts.y * 0.5f + 2.0f * s);
+        const ImVec2 cTL(cBR.x - ts.x - padX * 2.0f, cy - ts.y * 0.5f - 2.0f * s);
         // ROOM LEFT FOR THE ROW'S OWN NAME, which the caller letters along the
         // same plate in the face it has bound. The 60 px this was written as
         // was measured against a sixteen-pixel UI face; held as a literal it
         // would let the chip creep back over the name every time the type went
         // up, and a chip painted over the word SIGNAL PATH is worse than a
-        // section with no chip. Expressed against the bound face it keeps the
-        // proportion it was drawn at whatever that face becomes.
-        const float nameRoom = ImGui::GetFontSize() * 3.75f;
+        // section with no chip. Measured against fonts::uiPx() rather than
+        // ImGui::GetFontSize() - drawRailChip runs after the row's own
+        // PushFont/PopFont pair, so the CURRENT font by the time this runs is
+        // whatever the caller left bound, not necessarily the row's label
+        // face at its scaled size - and the ratio is what keeps the proportion
+        // at whatever size that face is drawn at, base or scaled alike.
+        const float nameRoom = cascade::gui::fonts::uiPx() * 3.75f;
         if (cTL.x > headerMin.x + nameRoom) {
             // A chip is a READING about that section, so it goes on glass in
             // amber rather than being engraved into the plate. In foxsdr-ui/1

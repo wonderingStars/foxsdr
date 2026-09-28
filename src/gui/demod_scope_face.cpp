@@ -34,6 +34,7 @@
 #include "core/utf8_text.hpp"
 #include "gui/fonts.hpp"
 #include "gui/scope_face.hpp"
+#include "gui/text_fit.hpp"
 #include "gui/theme.hpp"
 
 namespace cascade::gui {
@@ -183,25 +184,14 @@ void addReadouts(ImDrawList* dl, const ImVec2& a, const ImVec2& b,
                  ScopeSignal signal) {
     ImFont* legend = fonts::legend();
     ImFont* reading = fonts::reading();
-    const float px = fonts::kTinySize;
+    const float px = fonts::tinyPx();
     const float y = b.y - px - 5.0f;
 
-    // scopeSignalCaption() is pure prose, safe to translate here where it is
-    // drawn. scopeDisplayKey() is pinned by test_scope_memory.cpp against
-    // exact English ("AVG", "PERSIST"), so it stays untranslated at its
-    // definition and is translated here instead, at the point it is drawn.
-    const char* sigCaption = tr(scopeSignalCaption(signal));
-    glassText(dl, legend, px, ImVec2(a.x + 7.0f, y), theme::kIvory, sigCaption);
-    // THE DISPLAY MODE ON THE GLASS, beside the caption, whenever it is not
-    // the live trace - a screenshot of an averaged spectrum that did not say
-    // so would be read as the signal itself.
-    const ScopeDisplay disp = scopeDisplayFromIndex(state.display);
-    if (disp != ScopeDisplay::Normal) {
-        const float capW = textWidth(legend, px, sigCaption);
-        glassText(dl, legend, px, ImVec2(a.x + 7.0f + capW + 10.0f, y), theme::kAmber,
-                  tr(scopeDisplayKey(disp)));
-    }
-
+    // THE CENTRE READING'S ROOM IS SETTLED FIRST, so the caption to its left
+    // (below) knows how much space it actually has - an Opus review found
+    // them overprinting on a small scope face at the interface size's larger
+    // fonts, because the caption used to be drawn at its full size with no
+    // idea the centre reading existed.
     const bool spectral = (signal == ScopeSignal::Spectrum || signal == ScopeSignal::Mpx);
 
     char buf[32];
@@ -225,8 +215,34 @@ void addReadouts(ImDrawList* dl, const ImVec2& a, const ImVec2& b,
         }
     }
     const float midW = textWidth(reading, px, buf);
-    glassText(dl, reading, px, ImVec2((a.x + b.x) * 0.5f - midW * 0.5f, y), theme::kAmber,
-              buf);
+    const float midX0 = (a.x + b.x) * 0.5f - midW * 0.5f;
+
+    // scopeSignalCaption() is pure prose, safe to translate here where it is
+    // drawn. scopeDisplayKey() is pinned by test_scope_memory.cpp against
+    // exact English ("AVG", "PERSIST"), so it stays untranslated at its
+    // definition and is translated here instead, at the point it is drawn.
+    // FITTED to the room before the centre reading, not drawn raw at `px`
+    // regardless: on a small face at S=2 the unfitted caption ran into "10
+    // ms/DIV" (the review's own evidence). A caption that already fits is
+    // drawn exactly as it always was.
+    const char* sigCaption = tr(scopeSignalCaption(signal));
+    const float capRoom = midX0 - 10.0f - (a.x + 7.0f);
+    const float capPx = fitTextPx(legend, px, sigCaption, capRoom, fitFloorFor(px));
+    glassText(dl, legend, capPx, ImVec2(a.x + 7.0f, y), theme::kIvory, sigCaption);
+    // THE DISPLAY MODE ON THE GLASS, beside the caption, whenever it is not
+    // the live trace - a screenshot of an averaged spectrum that did not say
+    // so would be read as the signal itself.
+    const ScopeDisplay disp = scopeDisplayFromIndex(state.display);
+    if (disp != ScopeDisplay::Normal) {
+        const float capW = textWidth(legend, capPx, sigCaption);
+        const float dispRoom = midX0 - 10.0f - (a.x + 7.0f + capW + 10.0f);
+        const float dispPx = fitTextPx(legend, px, tr(scopeDisplayKey(disp)), dispRoom,
+                                       fitFloorFor(px));
+        glassText(dl, legend, dispPx, ImVec2(a.x + 7.0f + capW + 10.0f, y), theme::kAmber,
+                  tr(scopeDisplayKey(disp)));
+    }
+
+    glassText(dl, reading, px, ImVec2(midX0, y), theme::kAmber, buf);
 
     char gain[32];
     if (spectral) {
@@ -253,7 +269,7 @@ void addReadouts(ImDrawList* dl, const ImVec2& a, const ImVec2& b,
 // flat trace at zero: that claims a measurement that was not made.
 void addNoSignal(ImDrawList* dl, const ImVec2& a, const ImVec2& b, const char* why) {
     ImFont* f = fonts::legend();
-    const float px = fonts::kLegendSize;
+    const float px = fonts::legendPx();
     const float w = textWidth(f, px, why);
     glassText(dl, f, px,
               ImVec2((a.x + b.x) * 0.5f - w * 0.5f, (a.y + b.y) * 0.5f - px * 0.5f),
@@ -305,7 +321,7 @@ void drawMpxLabels(ImDrawList* dl, const ImVec2& a, const ImVec2& b,
     if (!(w > 0.0f)) { return; }
 
     ImFont* reading = fonts::reading();
-    const float px = fonts::kTinySize;
+    const float px = fonts::tinyPx();
     // The bracket sits under the top rule; band names hang under the bracket
     // and tone names one line lower, so "Pilot" cannot land on top of the sum
     // channel's name where the two nearly touch.
@@ -552,11 +568,11 @@ void drawDemodScopeFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
                 // back with a Q and no I, and a two-trace display that names
                 // one of its traces is worse than one that names neither.
                 ImFont* lf = fonts::legend();
-                glassText(dl, lf, fonts::kTinySize,
-                          ImVec2(a.x + 5.0f, iCentre - divPx - fonts::kTinySize),
+                glassText(dl, lf, fonts::tinyPx(),
+                          ImVec2(a.x + 5.0f, iCentre - divPx - fonts::tinyPx()),
                           theme::kPhosphor, "I");
-                glassText(dl, lf, fonts::kTinySize,
-                          ImVec2(a.x + 5.0f, qCentre - divPx - fonts::kTinySize),
+                glassText(dl, lf, fonts::tinyPx(),
+                          ImVec2(a.x + 5.0f, qCentre - divPx - fonts::tinyPx()),
                           theme::kPhosphorDim, "Q");
                 break;
             }

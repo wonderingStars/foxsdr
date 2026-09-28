@@ -82,17 +82,23 @@ constexpr float kChromePad = 8.0f;
 // — a judgement that a well narrower than about fifteen lines of the smallest
 // engraving cannot carry lettering at all — expressed so it travels with the
 // type instead of having to be re-measured.
-float chromeMinWidth() { return 15.0f * fonts::kTinySize; }
+// fonts::tinyPx()/legendPx() (gui/ui_scale.hpp): the same base sizes
+// fonts.hpp declares, times the live interface-scale factor - 1.0f on a
+// 96 dpi monitor with no override, so this is bit-identical to the pre-scale
+// figures until a user actually asks for a bigger bench. The handful of small
+// FIXED pixel offsets between them (line gaps, clearances) are not yet routed
+// through the same factor - see docs/ui-scale.md's "what remains" list.
+float chromeMinWidth() { return 15.0f * fonts::tinyPx(); }
 
 float chromeMinHeight() {
-    const float header = kChromePad * 0.75f    // the header's top margin
-                         + fonts::kLegendSize  // line 1: title, bins, EMA
-                         + 1.0f                // line gap
-                         + fonts::kTinySize    // line 2: the averaging caveat
-                         + 3.0f;               // headerBottom's own clearance
-    const float axis = 8.0f                    // gap the axis demands below it
-                       + fonts::kTinySize + 10.0f;  // the frequency-axis band
-    return header + axis + 24.0f;              // and a usable strip of trace
+    const float header = kChromePad * 0.75f     // the header's top margin
+                         + fonts::legendPx()   // line 1: title, bins, EMA
+                         + 1.0f                 // line gap
+                         + fonts::tinyPx()      // line 2: the averaging caveat
+                         + 3.0f;                // headerBottom's own clearance
+    const float axis = 8.0f                     // gap the axis demands below it
+                       + fonts::tinyPx() + 10.0f;  // the frequency-axis band
+    return header + axis + 24.0f;               // and a usable strip of trace
 }
 
 // Clear air between one dB figure and the next, and between two frequency
@@ -338,8 +344,8 @@ void drawChrome(ImDrawList* dl, const ImVec2& p0, const ImVec2& p1, const float*
     ImFont* uiFont = fonts::ui();
     ImFont* legendFont = fonts::legend();
     ImFont* readFont = fonts::reading();
-    const float tinyPx = fonts::kTinySize;
-    const float legendPx = fonts::kLegendSize;
+    const float tinyPx = fonts::tinyPx();
+    const float legendPx = fonts::legendPx();
     // "Enlarge every reading" (theme.hpp, readingsScale): the peak figure.
     const float readPx = fonts::kReadingSize * theme::readingsScale();
     const float tinyH = lineHeight(uiFont, tinyPx);
@@ -680,7 +686,7 @@ void SpectrumView::drawBinRange(const float* dbBins, int n, double firstBin,
     // one stays inside the panel instead of being clipped away, and a label
     // that would land under the header or in the frequency axis is dropped
     // rather than overprinted.
-    const float dbLabelH = lineHeight(fonts::reading(), fonts::kTinySize);
+    const float dbLabelH = lineHeight(fonts::reading(), fonts::tinyPx());
     // How many lines to step between FIGURES. The lines themselves stay every
     // 10 dB - the graticule is what the eye measures against and it costs
     // nothing - but a short well or a wide dB range puts those lines closer
@@ -704,7 +710,7 @@ void SpectrumView::drawBinRange(const float* dbBins, int n, double firstBin,
         std::snprintf(label, sizeof(label), "%.0f", static_cast<double>(gridDb[i]));
         // Figures, so the monospaced face: a dB ladder whose digits are all
         // the same width reads as a scale rather than as a column of words.
-        drawList->AddText(fonts::reading(), fonts::kTinySize,
+        drawList->AddText(fonts::reading(), fonts::tinyPx(),
                           ImVec2(p0.x + kChromePad, y), axisInk(), label);
     }
 

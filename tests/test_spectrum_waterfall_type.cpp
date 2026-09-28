@@ -44,6 +44,7 @@
 
 #include "gui/fonts.hpp"
 #include "gui/freq_scale.hpp"
+#include "gui/ui_scale.hpp"
 #include "test_check.hpp"
 
 using cascade::gui::FreqScale;
@@ -160,6 +161,82 @@ void testFrequencyAxisIsComplete() {
     CHECK(g_widestFreqLabel > 0.0f);
 }
 
+// 2b. THE SAME AXIS, AT THE INTERFACE SCALE (gui/ui_scale.hpp). At a real
+// scale S, drawChrome letters the axis at fonts::tinyPx() (base size times S)
+// and asks FreqScale::ticks() for its pitch with `labelScale = S` - the call
+// site app_window.cpp actually makes. This walks the identical case table at
+// S = 1.5 and 2.0, measuring labels at the SCALED size, and requires the same
+// zero-dropped-labels result: a pitch that forgot to multiply by S would
+// start dropping labels the moment the type grew, exactly as the un-scaled
+// 80 px pitch did for 0.79.0's font raise.
+int freqAxisLabelsDroppedAtScale(double centerHz, double rateHz, double zoom, float panelW,
+                                 float scaleFactor) {
+    FreqScale scale;
+    scale.setSpan(centerHz, rateHz);
+    if (zoom > 1.0) { scale.zoomAt(0.5, zoom); }
+
+    constexpr int kCap = 32;
+    double tickHz[kCap];
+    char labels[kCap][16];
+    const int n = scale.ticks(static_cast<double>(panelW), tickHz, labels, kCap,
+                              static_cast<double>(scaleFactor));
+
+    ImFont* uiFont = fonts::ui();
+    const float px = fonts::kTinySize * scaleFactor;
+    const float p0 = 0.0f;
+    const float p1 = panelW;
+    float lastRight = -FLT_MAX;
+    int dropped = 0;
+    for (int i = 0; i < n; ++i) {
+        const float xFrac = static_cast<float>(scale.hzToX(tickHz[i]));
+        if (!(xFrac >= 0.0f) || !(xFrac <= 1.0f)) { continue; }
+        const float x = p0 + xFrac * panelW;
+        const float lw = widthOf(uiFont, px, labels[i]);
+        float lx = x - lw * 0.5f;
+        if (lx < p0 + 3.0f) { lx = p0 + 3.0f; }
+        if (lx + lw > p1 - 3.0f) { lx = p1 - 3.0f - lw; }
+        if (lx < lastRight + 3.0f) {
+            ++dropped;
+            continue;
+        }
+        lastRight = lx + lw;
+    }
+    return dropped;
+}
+
+void testFrequencyAxisIsCompleteAtScale(float scaleFactor) {
+    // The same table testFrequencyAxisIsComplete walks, at a real panel width
+    // range too - a scaled-up interface is drawn on a scaled-up (or at least
+    // unchanged) monitor, never a narrower one, but the pitch has to hold at
+    // every width regardless.
+    const double centers[5] = {1.0e5, 1.0e6, 100.0e6, 1090.0e6, 2.4e9};
+    const double rates[4] = {250.0e3, 2.048e6, 10.0e6, 61.44e6};
+    const double zooms[4] = {1.0, 8.0, 64.0, 512.0};
+    int cases = 0;
+    int totalDropped = 0;
+    for (float w = 200.0f; w <= 3200.0f; w += 89.0f) {  // coarser step: this runs 2x more
+        for (const double c : centers) {
+            for (const double r : rates) {
+                for (const double z : zooms) {
+                    const int dropped = freqAxisLabelsDroppedAtScale(c, r, z, w, scaleFactor);
+                    if (dropped > 0 && totalDropped == 0) {
+                        std::printf("  S=%.2f: frequency axis dropped %d label(s): "
+                                    "centre %.0f Hz, rate %.0f Hz, zoom x%.0f, panel %.0f px\n",
+                                    static_cast<double>(scaleFactor), dropped, c, r, z,
+                                    static_cast<double>(w));
+                    }
+                    totalDropped += dropped;
+                    ++cases;
+                }
+            }
+        }
+    }
+    CHECK(cases > 1000);
+    CHECK(totalDropped == 0);
+    std::printf("  frequency axis at S=%.2f: %d cases, %d dropped\n",
+               static_cast<double>(scaleFactor), cases, totalDropped);
+}
+
 // 3. THE ELAPSED-TIME GUTTER. Its width is the widest label plus two pads
 // (waterfall_view.cpp's drawTimeStrip), and the strip is abandoned entirely
 // when that exceeds a quarter of the picture. "99h59" is the longest string
@@ -214,6 +291,8 @@ int main() {
     ImGui::NewFrame();
     testLineHeightIsTheFontSize();
     testFrequencyAxisIsComplete();
+    testFrequencyAxisIsCompleteAtScale(1.5f);
+    testFrequencyAxisIsCompleteAtScale(2.0f);
     testTimeStripGutterFits();
     ImGui::EndFrame();
 

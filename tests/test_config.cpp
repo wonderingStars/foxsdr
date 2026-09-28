@@ -159,6 +159,10 @@ AppConfig junkConfig() {
     c.counterScale = 99;
     c.counterSwitches = false;
     c.readingsScale = -5.0f;
+    // Not "auto" and not one of the six offered steps: a load path that
+    // forgets to sanitize this leaves junk behind, the same rule as uiTheme
+    // and tunerDisplayStyle above.
+    c.interfaceScale = "bogus";
     // Language and country: away from "auto" and "" (not chosen), and not
     // the round-trip fixture's values either, so a load path that forgot
     // either field leaves this junk behind and fails.
@@ -320,6 +324,7 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     CHECK(a.counterScale == b.counterScale);
     CHECK(a.counterSwitches == b.counterSwitches);
     CHECK(a.readingsScale == b.readingsScale);
+    CHECK(a.interfaceScale == b.interfaceScale);
     CHECK(a.language == b.language);
     CHECK(a.country == b.country);
     CHECK(a.mapTrails == b.mapTrails);
@@ -638,6 +643,8 @@ int main() {
         in.counterScale = 2;
         in.counterSwitches = false;
         in.readingsScale = 1.5f;
+        // A real step, neither the default ("auto") nor junkConfig()'s value.
+        in.interfaceScale = "150";
         // Neither default ("auto", "") nor junkConfig()'s value, so the
         // roundtrip proves the file is what came back.
         in.language = "pt-BR";
@@ -1748,6 +1755,21 @@ int main() {
         CHECK(writeText(path, "{\"counterSwitches\":false}\n"));
         CHECK(ConfigStore::load(path, out, err));
         CHECK(!out.counterSwitches);
+
+        // THE INTERFACE SIZE: "auto" or one of the six offered steps survives
+        // the file; anything else - a step this build does not offer, a
+        // stray type, empty text - is "auto", never a refusal.
+        CHECK(d.interfaceScale == "auto");
+        for (const char* step : {"auto", "100", "125", "150", "175", "200", "250"}) {
+            CHECK(writeText(path, std::string("{\"interfaceScale\":\"") + step + "\"}\n"));
+            CHECK(ConfigStore::load(path, out, err));
+            CHECK(out.interfaceScale == step);
+        }
+        for (const char* bad : {"\"\"", "\"110\"", "\"Auto\"", "\"100%\"", "7", "null"}) {
+            CHECK(writeText(path, std::string("{\"interfaceScale\":") + bad + "}\n"));
+            CHECK(ConfigStore::load(path, out, err));
+            CHECK(out.interfaceScale == "auto");
+        }
 
         // THE SAVE DEBOUNCE HAS TO SEE ALL FOUR: each is changed by a click
         // (the Display picker, or the counter's own right-click menu) that

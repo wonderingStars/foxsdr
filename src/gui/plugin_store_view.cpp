@@ -31,6 +31,7 @@
 #include "core/plugin_abi.h"
 #include "core/plugin_repo.hpp"
 #include "gui/fonts.hpp"
+#include "gui/ui_scale.hpp"
 #include "gui/scope_face.hpp"
 #include "gui/text_fit.hpp"
 #include "gui/theme.hpp"
@@ -289,9 +290,18 @@ bool drawSegment(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, const char*
     }
     ImFont* f = fonts::ui();
     const float px = prose();
-    dl->AddText(f, px,
-                ImVec2((tl.x + br.x) * 0.5f - textW(f, px, label) * 0.5f,
-                       (tl.y + br.y) * 0.5f - faceH(f, px) * 0.5f + (selected ? 1.0f : 0.0f)),
+    // FITTED TO THE SEGMENT (gui/text_fit.hpp), not drawn raw at one size
+    // regardless of room: three equal-width segments (segW = wellInner / 3)
+    // give MAKER and VERSION less room than NAME needs at the interface
+    // size's larger fonts, and an unfitted AddText simply ran the word
+    // through the segment beside it (an Opus review's M3 - "MAKER" over
+    // "VERSION"). A label that already fits is drawn exactly as it always
+    // was, at `px`.
+    const float room = (br.x - tl.x) - 8.0f;
+    const float fitted = fitTextPx(f, px, label, room, fitFloorFor(px));
+    dl->AddText(f, fitted,
+                ImVec2((tl.x + br.x) * 0.5f - textW(f, fitted, label) * 0.5f,
+                       (tl.y + br.y) * 0.5f - faceH(f, fitted) * 0.5f + (selected ? 1.0f : 0.0f)),
                 selected ? theme::kCream : theme::kEnamel, label);
     return pressed;
 }
@@ -1091,7 +1101,7 @@ float moduleKindTagWidth() {
         FOX_TR_NOOP("MAP"),       FOX_TR_NOOP("PANEL"),        FOX_TR_NOOP("CONTROL"),
         FOX_TR_NOOP("MODULE")};
     ImFont* f = fonts::ui();
-    const float px = fonts::kTinySize;
+    const float px = fonts::tinyPx();
     float w = 0.0f;
     for (const char* t : kTags) { w = std::max(w, textW(f, px, tr(t))); }
     // The floor is the width the store's card used before this was measured,
@@ -1243,7 +1253,7 @@ const char* storeSortLabel(int index) {
 // the raise cannot move the rail, the spectrum axis or a meter face - the
 // exact sweep raising kUiSize cost in 0.79.0 and gave back in 0.84.0. Nothing
 // here invents a figure.
-float storeProsePx() { return fonts::kPanelSize; }
+float storeProsePx() { return fonts::panelPx(); }
 
 // See the header. The six SHOW labels, the widest measured at `labelPx`, and
 // the switch, the plate's padding and a three-figure count around it -
@@ -1727,7 +1737,10 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
             // everywhere else in this application.
             ImGui::SetCursorScreenPos(ImVec2(kTL.x + 2.0f, kTL.y + addKeyH + 6.0f));
             ImGui::PushStyleColor(ImGuiCol_Text, theme::vec(theme::kCream));
-            ImGui::PushFont(uf, tiny);
+            // /uiscale::factor(): see the note beside the PushFont(uf, uiPx
+            // / ...) calls in this file - `tiny` (prose()) already carries
+            // the live scale.
+            ImGui::PushFont(uf, tiny / cascade::gui::uiscale::factor());
             if (ackWrapH <= 0.0f) {
                 ImGui::Checkbox(ack.c_str(), &deck.addAllAck);
             } else {
@@ -1948,7 +1961,14 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
     const ImGuiStyle& style = ImGui::GetStyle();
     const float fieldH = uiPx + style.FramePadding.y * 2.0f + 6.0f;
     const char* searchLegend = tr("Searches name, maker and description.");
-    const float deckAH = kPad + legH + 8.0f + fieldH + 9.0f + tinyH + 4.0f +
+    // WRAPPED, NOT ONE LINE: the legend is drawn with a wrap width below
+    // (wellInner), and at the interface size's larger fonts - or a well
+    // narrowed by a translation - it can take two lines. Reserving only
+    // `tinyH` here (an Opus review's M3) let the count line ("0 OF 0 MODULES
+    // KNOWN") start where the legend's SECOND line still was, drawing one
+    // over the other.
+    const float searchLegendH = wrapH(uf, tiny, wellInner, searchLegend);
+    const float deckAH = kPad + legH + 8.0f + fieldH + 9.0f + searchLegendH + 4.0f +
                          countLineHeight() + kPad;
 
     const char* showNote =
@@ -2021,7 +2041,10 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
         // The field's PLACEHOLDER, which is the only instruction the search
         // gives before anything is typed - muted rather than faint for that.
         ImGui::PushStyleColor(ImGuiCol_TextDisabled, theme::vec(theme::kInkMuted));
-        ImGui::PushFont(uf, uiPx);
+        // /uiscale::factor(): PushFont's argument is the PRE-FontScaleMain
+        // base; uiPx (prose(), fonts::panelPx()) already carries the live
+        // scale, and style.FontScaleMain would otherwise apply it twice.
+        ImGui::PushFont(uf, uiPx / cascade::gui::uiscale::factor());
         // Fitted to the field (text_fit.hpp): the translated hint ran past the
         // field's end and was cut mid-word ("...susiaurintumėte katalog", lt).
         inputTextWithFittedHint("##search", tr("type to narrow the catalogue"), deck.search,
@@ -2037,7 +2060,7 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
         y += fieldH + 9.0f;
         dl->AddText(uf, tiny, ImVec2(tl.x + kPad, y), theme::kInkMuted, searchLegend,
                     nullptr, wellInner);
-        y += tinyH + 4.0f;
+        y += searchLegendH + 4.0f;
         // WHAT IS ON SCREEN AND WHAT EXISTS, both. "3 shown" alone cannot tell
         // a short catalogue from a filter that is hiding most of it.
         drawCountLine(dl, ImVec2(tl.x + kPad, y), static_cast<int>(visible.size()),
@@ -2417,7 +2440,7 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
                 {
                     const ImVec2 tTL(cTL.x + kCardPad, cTL.y + kCardPad);
                     const ImVec2 tBR(tTL.x + kTagW,
-                                     tTL.y + faceH(uf, fonts::kTinySize) + 6.0f);
+                                     tTL.y + faceH(uf, fonts::tinyPx()) + 6.0f);
                     cdl->AddRectFilled(tTL, tBR, theme::kBrassBright, 1.0f);
                     addBenchBevel(cdl, tTL, tBR, 1.0f, true);
                     const char* tag = moduleKindTag(p);
@@ -2426,9 +2449,9 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
                     // window: one chip drawn two sizes in two windows is exactly
                     // the inconsistency that function was written to end. It is
                     // a category label on metal, not a sentence.
-                    cdl->AddText(uf, fonts::kTinySize,
+                    cdl->AddText(uf, fonts::tinyPx(),
                                  ImVec2((tTL.x + tBR.x) * 0.5f -
-                                            textW(uf, fonts::kTinySize, tag) * 0.5f,
+                                            textW(uf, fonts::tinyPx(), tag) * 0.5f,
                                         tTL.y + 3.0f),
                                  theme::kEnamel, tag);
                 }
@@ -2600,7 +2623,9 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
                 // --- the acknowledgement gate, then the key -----------------
                 if (!sm.plate.legalNotice.empty() && !sm.plate.fitted) {
                     ImGui::PushStyleColor(ImGuiCol_Text, theme::vec(theme::kCream));
-                    ImGui::PushFont(uf, uiPx);
+                    // See the note beside the other PushFont(uf, uiPx / ...)
+                    // call in this file: uiPx already carries the live scale.
+                    ImGui::PushFont(uf, uiPx / cascade::gui::uiscale::factor());
                     ImGui::Checkbox(
                         trId("I have read the notice above and accept responsibility"),
                         &deck.legalAck);

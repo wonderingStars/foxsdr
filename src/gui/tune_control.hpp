@@ -984,10 +984,18 @@ inline float deckScale(float availW, const CounterLayout& c, float minScale) {
     if (tall > kDeckBarH) { s = std::min(s, kDeckBarH / tall); }
     return s;
 }
-// Whether the meters are drawn: today's rule for the 1x counter; for the 2x one
-// the cluster is measured at the scale it is drawn at.
+// Whether the meters are drawn: the cluster is always measured at the scale
+// it is actually drawn at - both the reference (deckCoreW(c) == kDeckCoreW
+// for the 1x counter, so this is an identity there at scale == 1, exactly
+// today's rule) and the interface-scale factor folded into `scale` by
+// drawToolbar. UNIFIED FROM TWO BRANCHES (2026-09-28): the 1x-counter branch
+// used to compare against the UNSCALED kDeckCoreW regardless of `scale`,
+// which was harmless while `scale` only ever meant "this narrow a window"
+// (deckScale never exceeds 1) but would have let the meters overlap the
+// cluster the moment `scale` could also mean "this large an interface"
+// (uiscale::factor() can exceed 1) - meaning meters shown while the cluster
+// itself had already grown into their space.
 inline bool deckMetersFit(float barW, const CounterLayout& c, float scale) {
-    if (c.scale < 2) { return metersFitOnBar(barW, kDeckCoreW); }
     return meter1XOnBar(barW) >= deckCoreW(c) * scale + kMeterCoreClearance - 1.0e-3f;
 }
 
