@@ -653,17 +653,19 @@ comments, the same mention/contract split, only the numbers moved.)
 Things 3a could not move without changing threading or behaviour, left where
 they were with the facts; and what 3b has to settle first.
 
-1. **Engine fields the window still edits in place** (`kWindowMayWrite`, 17 -
-   see the two CLOSED notes below): the scanner form (`scanStartMhz_`,
-   `scanStopMhz_`, `scanStepKhz_`, `scanDwellMs_`, `scanHoldMs_`,
-   `scanResumeMs_`, `scanListenMs_`), the sound card form `soundCard_`, the
-   Pluto address `plutoUri_`, the transmit address `transmitArgs_`, the patch
-   document `patchGraph_` (stage 1 OPEN 10), `patchSinkLines_`,
-   `mutePopupQueued_` → CLOSED below, `muteKeptRunning_`, `mutePopup_`,
-   `pluginCatalogueUrl_`, `telemetryEnabled_`, `telemetryInstallId_`. Each is
-   a form or a status line the engine reads when it acts; in 3b each becomes
-   a command (or a form a command carries), or the status line moves to the
-   window. The guard lists them one by one with the reason.
+1. **Engine fields the window still edits in place** (`kWindowMayWrite`, 18 -
+   17 in `kWindowMayWriteScoped` + 1 (`patchGraph_`) in
+   `kWindowMayWriteUnscoped`; see the three CLOSED/SCOPED notes below): the
+   scanner form (`scanStartMhz_`, `scanStopMhz_`, `scanStepKhz_`,
+   `scanDwellMs_`, `scanHoldMs_`, `scanResumeMs_`, `scanListenMs_`), the
+   sound card form `soundCard_`, the Pluto address `plutoUri_`, the transmit
+   address `transmitArgs_`, the patch document `patchGraph_` (stage 1 OPEN
+   10), `patchSinkLines_`, `muteKeptRunning_`, `mutePopup_`,
+   `pluginCatalogueUrl_`, `telemetryEnabled_`, `telemetryInstallId_`,
+   `patchListsWanted_`. Each is a form or a status line the engine reads when
+   it acts; in 3b each becomes a command (or a form a command carries), or the
+   status line moves to the window. The guard lists them one by one with the
+   reason.
    **CLOSED, engine/stage3b-pre 2c (2026-09-28): `sourceError_`,
    `soapyScanDeferredLogged_`, `gpsRefusal_`, `decoderLog_`,
    `bookmarkImportNote_`, `soundCardMissing_`, `mutePopupQueued_`** (7 of
