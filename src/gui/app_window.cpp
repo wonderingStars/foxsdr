@@ -10407,9 +10407,26 @@ float AppWindow::drawViewKeys(float colX, float colW, float top) {
     return below;
 }
 
-bool AppWindow::patchInteracting() const {
-    return patchUi_.dragNode != cascade::core::patch::kNoNode ||
-           patchUi_.resizeNode != cascade::core::patch::kNoNode || patchUi_.wiring;
+bool AppWindow::patchInteracting() {
+    // A drag, a resize or a wire in the air lasts while the button is held,
+    // and ends with it - whether or not the canvas was drawn to see the
+    // release. The canvas ends a wire on the RELEASE EDGE, which it only sees
+    // while it is drawn, so a wire started and the view then left (the
+    // receiver chosen) with the button let go meanwhile would stay "in the
+    // air" for good - and every sync below would be skipped for good with it.
+    // Cleared only when the button is neither held nor being released THIS
+    // frame: on the release frame the canvas, drawn after the sync, must
+    // still see the wire it is about to connect.
+    const bool live = ImGui::GetCurrentContext() != nullptr;
+    const bool held = live && ImGui::IsMouseDown(ImGuiMouseButton_Left);
+    const bool releasing = live && ImGui::IsMouseReleased(ImGuiMouseButton_Left);
+    if (!held && !releasing) {
+        patchUi_.dragNode = cascade::core::patch::kNoNode;
+        patchUi_.resizeNode = cascade::core::patch::kNoNode;
+        patchUi_.wiring = false;
+    }
+    return held && (patchUi_.dragNode != cascade::core::patch::kNoNode ||
+                    patchUi_.resizeNode != cascade::core::patch::kNoNode || patchUi_.wiring);
 }
 
 void AppWindow::adoptPatchGraph() {

@@ -1941,7 +1941,9 @@ private:
     std::string patchDraftBaseText_;
     std::uint64_t patchDraftEpoch_ = 0;
     bool patchDraftInStep_ = false;
-    bool patchInteracting() const;
+    // True while the button is held on a drag, a resize or a wire; a state
+    // left behind by a release the canvas never saw is cleared here.
+    bool patchInteracting();
     void syncPatchDraft();
     void adoptPatchGraph();
     void commitPatchDraft();

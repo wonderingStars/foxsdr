@@ -27,6 +27,9 @@
 //      another: the drag is never thrown back, and neither change is lost
 //   H  a draft the engine cannot take (a frequency that is not a number) is
 //      refused, the engine's graph unchanged, and the page shows the engine's
+//   K  a wire drag left in the air by the view going away (the button
+//      released while it was hidden) does not stop the page following the
+//      engine
 //   I  a draft that was never copied from the engine is never sent: the
 //      once-a-frame commit before any frame is drawn leaves a loaded patch
 //      alone
@@ -134,6 +137,10 @@ void setEnv(const char* n, const std::string& v) {
 #endif
 }
 
+// False while the Patch view is not drawn (the receiver view was chosen):
+// drawUi still runs its once-a-frame commit, the view does not.
+bool g_viewShown = true;
+
 // One frame, in drawUi's order for what this test touches: the once-a-frame
 // commit near the top, then the view, then the next drain.
 void frame(AppWindow& a) {
@@ -147,7 +154,7 @@ void frame(AppWindow& a) {
     ImGui::Begin("patch", nullptr,
                  ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoTitleBar |
                      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-    A::draw(a);
+    if (g_viewShown) { A::draw(a); }
     ImGui::End();
     ImGui::Render();
     A::drain(a);
@@ -510,6 +517,47 @@ int main() {
         A::flush(*a);
         CHECK(A::engine(*a).nodes().size() == 2u);
         CHECK(A::draft(*a).nodes().size() == 2u);  // it starts FROM the engine's graph
+        delete a;
+    }
+
+    // --- K: a wire drag abandoned by the view going away ----------------------
+    //     The canvas ends a wire drag on the mouse's RELEASE edge, which it
+    //     sees only while it is drawn. Released while the view is hidden, the
+    //     drag must not outlive the button - or the page would stop
+    //     following the engine for good (every sync is skipped mid-drag).
+    {
+        std::printf("K: start a wire, hide the view, release; ALL OFF; show the view\n");
+        Starter s;
+        AppWindow* a = makeApp(s);
+        const pc::Node radio = *A::engine(*a).find(s.radio);
+        const ImVec2 from = screen(*a, pg::outputPortPos(radio, 0));
+        mouseTo(*a, from.x, from.y);
+        press(*a);
+        mouseTo(*a, from.x + 60.0f, from.y + 40.0f);
+        g_viewShown = false;
+        frame(*a);
+        release(*a);
+        frames(*a, 2);
+        CHECK(A::apply(*a, cascade::core::cmd::make(FOXAPI_OP_PATCH_ALL_OFF)).status == FOXAPI_OK);
+        g_viewShown = true;
+        frames(*a, 3);
+        const pc::Node* e = A::engine(*a).find(s.radio);
+        const pc::Node* d = A::draft(*a).find(s.radio);
+        std::printf("   engine on=%d, page on=%d\n", e != nullptr && e->on ? 1 : 0, d != nullptr && d->on ? 1 : 0);
+        CHECK(e != nullptr && !e->on);
+        CHECK(d != nullptr && !d->on);
+        CHECK(inStep(*a));
+        // ...and the abandoned wire is GONE, not waiting: a drag from bare
+        // canvas onto the channel's input must not connect the radio port
+        // touched long before.
+        const pc::Node chan = *A::engine(*a).find(s.chan);
+        const ImVec2 port = screen(*a, pg::inputPortPos(chan, 0));
+        mouseTo(*a, port.x - 60.0f, port.y + 30.0f);
+        press(*a);
+        mouseTo(*a, port.x, port.y);
+        release(*a);
+        frames(*a, 2);
+        CHECK(!hasWire(A::engine(*a), pc::Wire{s.radio, 0, s.chan, 0}));
         delete a;
     }
 
