@@ -1274,6 +1274,28 @@ private:
     std::string soundCardReceivesText() const;
 
     char iqPath_[512] = "";     // InputText buffer for the IQ file path
+    // A LOCAL DRAFT (engine/stage3b-pre fields-to-commands round 2): the
+    // Pluto address box's edit buffer, seeded from engine_.plutoUri_ once in
+    // applyConfig - typing here never writes the engine field (Open commits
+    // it, through Engine::openPlutoAt).
+    char plutoUriDraft_[192] = "ip:192.168.2.1";
+    // The Transmit page's address box: same shape, but seeded on each
+    // open-transition (transmitArgsDraftLive_ tracks "already seeded for this
+    // open") since the page can close and reopen within one session, unlike
+    // the Pluto row which is seeded once at startup.
+    char transmitArgsDraft_[128] = {0};
+    bool transmitArgsDraftLive_ = false;
+    // The scanner form's own draft (engine/stage3b-pre fields-to-commands
+    // round 2): seeded from the engine fields once, in applyConfig, then
+    // edited freely - committed by FOXAPP_OP_SCANNER_RANGE/FOXAPP_OP_SCANNER_TIMING
+    // on deactivate-after-edit, exactly where the direct writes used to apply.
+    double scanStartMhzDraft_ = 0.0;
+    double scanStopMhzDraft_ = 0.0;
+    double scanStepKhzDraft_ = 0.0;
+    double scanDwellMsDraft_ = 0.0;
+    double scanHoldMsDraft_ = 0.0;
+    double scanResumeMsDraft_ = 0.0;
+    double scanListenMsDraft_ = 0.0;
     // THE AIRSPY R2 / MINI's OWN CONTROLS (0.99.41, app_window_airspy.cpp):
     // one gain mode at a time - Sensitive, Linear or Free, the reference
     // Airspy application's three - with only that mode's sliders, Free mode's

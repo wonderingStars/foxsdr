@@ -92,6 +92,41 @@
 // never widens it, which is why one enum-selected op can cover all of them
 // safely). See cascade::core::cmd::FoxAppStatus below for the ival[0] values.
 #define FOXAPP_OP_CLEAR_STATUS           0x840Cu /* ival[0]: FoxAppStatus - which line/flag to reset to its default */
+// Fields-to-commands round 2 (engine/stage3b-pre, docs/engine-stage3.md OPEN
+// item 1): a window-side DRAFT buffer, committed by a command when the
+// operator is done editing - never the engine field itself, keystroke by
+// keystroke.
+#define FOXAPP_OP_SET_CATALOGUE_URL      0x840Du /* text: pluginCatalogueUrl_, committed on deactivate-after-edit */
+// plutoUri_ and transmitArgs_ need NO new op: the window edits a LOCAL draft
+// buffer (never the engine field) and, on "Open", sends the draft's text as
+// FOXAPI_OP_SELECT_SOURCE "open-pluto:uri=..." / FOXAPI_OP_TX_OPEN - both of
+// whose handlers already persist the field from that same text.
+// The scanner form needs NO new op at all: scanStartMhz_/scanStopMhz_/
+// scanStepKhz_ commit through the EXISTING FOXAPP_OP_SCANNER_RANGE (bits
+// 1/2/4, num[0..2] in Hz - the same op the web remote already uses; bit 8
+// folds in the panel's own reconfigure-if-running check), and
+// scanDwellMs_/scanHoldMs_/scanResumeMs_/scanListenMs_ commit through the
+// EXISTING FOXAPI_OP_SCANNER_CONFIG (num[0..3], which already
+// reconfigures-if-running on its own - found only after a from-scratch
+// FOXAPP_OP_SCANNER_TIMING briefly duplicated it byte for byte).
+#define FOXAPP_OP_SOUND_CARD_FORM        0x8412u /* text: device; longText carries the rest as a compact encoded string (see cmd::encodeSoundCardForm) */
+#define FOXAPP_OP_PATCH_LOOK_FOR_RADIOS  0x8413u /* no args: "Look for radios" pressed in the patch radio inspector */
+// "Stop and resume sound" needs no new op: FOXAPP_OP_DECODER_STOP_LIST
+// already covers it, unchanged - the mute lifts on its own once the engine's
+// own mute state machine (advanceMutePopup) sees the decoder actually stop.
+#define FOXAPP_OP_MUTE_KEEP_RUNNING      0x8414u /* no args: "Keep it running" pressed - sets muteKeptRunning_ and closes the subject together, one decision */
+// The Airspy R2/Mini panel (0.99.41, engine/stage3b-pre Airspy round, OPEN
+// 2/3): drawAirspyControls used to call Engine::chooseAirspyDecimation/
+// GainMode/Agc directly (kControlMayCall) and read the open device through
+// Engine::asAirspyDevice()'s raw pointer, every frame. Now: commands, queued
+// like every other gain control in the Source section (the figure is read
+// back from the published state on the next frame the readback lands on -
+// see drawSourceSection's own gain sliders), and the panel reads its display
+// state from PublishedState::app's airspy* fields (receiver_snapshot.hpp)
+// instead of the pointer.
+#define FOXAPP_OP_AIRSPY_DECIMATION      0x8415u /* ival[0]: the decimation factor (1/2/4/8/16/32/64) */
+#define FOXAPP_OP_AIRSPY_GAIN_MODE       0x8416u /* ival[0]: cascade::source::AirspySource::GainMode */
+#define FOXAPP_OP_AIRSPY_AGC             0x8417u /* ival[0]: 0 LNA, 1 Mixer; ival[1]: 0/1 on */
 
 #define FOXAPP_OP_FIRST 0x8000u
 #define FOXAPP_OP_LAST  0x8FFFu

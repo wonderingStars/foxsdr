@@ -653,19 +653,91 @@ comments, the same mention/contract split, only the numbers moved.)
 Things 3a could not move without changing threading or behaviour, left where
 they were with the facts; and what 3b has to settle first.
 
-1. **Engine fields the window still edits in place** (`kWindowMayWrite`, 18 -
-   17 in `kWindowMayWriteScoped` + 1 (`patchGraph_`) in
-   `kWindowMayWriteUnscoped`; see the three CLOSED/SCOPED notes below): the
-   scanner form (`scanStartMhz_`, `scanStopMhz_`, `scanStepKhz_`,
-   `scanDwellMs_`, `scanHoldMs_`, `scanResumeMs_`, `scanListenMs_`), the
-   sound card form `soundCard_`, the Pluto address `plutoUri_`, the transmit
-   address `transmitArgs_`, the patch document `patchGraph_` (stage 1 OPEN
-   10), `patchSinkLines_`, `muteKeptRunning_`, `mutePopup_`,
-   `pluginCatalogueUrl_`, `telemetryEnabled_`, `telemetryInstallId_`,
-   `patchListsWanted_`. Each is a form or a status line the engine reads when
-   it acts; in 3b each becomes a command (or a form a command carries), or the
-   status line moves to the window. The guard lists them one by one with the
-   reason.
+1. **Engine fields the window still edits in place** (`kWindowMayWrite`, now 1
+   - only `patchGraph_`, in `kWindowMayWriteUnscoped`; `kWindowMayWriteScoped`
+   is EMPTY. See the CLOSED/SCOPED notes below). Each was a form or a status
+   line the engine reads when it acts; in 3b each becomes a command (or a form
+   a command carries), or the status line moves to the window.
+   **CLOSED, engine/stage3b-pre fields-to-commands round 2 (2026-09-28):**
+   the 7 scanner-form fields, `soundCard_`, `plutoUri_`, `transmitArgs_`,
+   `pluginCatalogueUrl_`, `telemetryEnabled_`/`telemetryInstallId_`,
+   `patchListsWanted_`, `patchSinkLines_` and `muteKeptRunning_`/`mutePopup_` -
+   every remaining `kWindowMayWrite` entry except `patchGraph_` (OPEN 6/item
+   3, see below). Design per field:
+   - **The scanner form** (7 fields): a window-side draft (7 doubles, seeded
+     once in `applyConfig`), committed on deactivate-after-edit through TWO
+     EXISTING ops rather than a new one - `FOXAPI_OP_SCANNER_CONFIG`
+     (dwell/hold/resume/listen, which already reconfigures a running scan on
+     its own) then `FOXAPP_OP_SCANNER_RANGE` (start/stop/step, bit 8 added
+     when the scanner is active). A from-scratch `FOXAPP_OP_SCANNER_TIMING`
+     was written first and found, only once built, to duplicate
+     `FOXAPI_OP_SCANNER_CONFIG` byte for byte - removed before commit; the
+     lesson (check for an existing op before adding one) is worth a line
+     because it very nearly shipped as a real op.
+   - **`soundCard_`**: one new op, `FOXAPP_OP_SOUND_CARD_FORM` - the whole
+     struct in one command (`ival[0]` a bitmask: format/channel/swapIq/
+     pickedFromList; `num[0..1]` cardRateHz/iqCentreHz; `text`
+     `"device<0x1F>hostApi"`), applied AT ONCE from every widget in
+     `drawSoundCardControls` so nothing drawn later in the same frame (the
+     rate list, the "Receives..." preview - both still reading
+     `engine_.soundCard_` directly) ever sees a stale value.
+   - **`plutoUri_`/`transmitArgs_`**: NO new op for either. Each box now
+     edits a window-local draft (`plutoUriDraft_`/`transmitArgsDraft_`,
+     never the engine field), and "Open" sends the draft's text through the
+     command each already used
+     (`FOXAPI_OP_SELECT_SOURCE "open-pluto:uri=..."` /
+     `FOXAPI_OP_TX_OPEN`) - both of whose handlers already persist the
+     field from that text (`TX_OPEN`'s did already; `openPlutoAt` gained one
+     line to do the same). `transmitArgs_`'s "seed a default if empty" logic
+     moved into `FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN`'s handler (closed 2b),
+     so the draft is never seeded blank.
+   - **`pluginCatalogueUrl_`**: one new op, `FOXAPP_OP_SET_CATALOGUE_URL`
+     (text, empty clears) - the window already had a draft buffer
+     (`pluginUrlBuf_`) and committed on deactivate-after-edit; only the
+     commit's direct write needed converting.
+   - **`telemetryEnabled_`/`telemetryInstallId_`**: NO new op - the real API
+     already had a slot for this, `FOXAPI_OP_TELEMETRY_ENABLE`
+     (`third_party/foxsdr_api/foxsdr_api.h`, ival[0] 0/1), simply never
+     implemented (`app_commands.cpp` had it marked `false`). Implemented
+     now: on mints an id, off forgets it (so a later opt-in cannot be tied
+     to the old one) and reconfigures `telemetryHeartbeat_` in the same
+     step, moved verbatim from the Checkbox handler.
+   - **`patchListsWanted_`**: one new op, `FOXAPP_OP_PATCH_LOOK_FOR_RADIOS` -
+     unconditional (unlike the existing `FOXAPP_OP_PATCH_RADIO_LIST_OPENED`'s
+     one-time wish), matching what "Look for radios" always did.
+   - **`patchSinkLines_`**: NO command at all - a new reviewed direct call,
+     `Engine::prunePatchSinkLines()` (the same pattern as `scanSoundCards`/
+     `patchListRecordings`, added to `kControlMayCall`), since the window's
+     one write site was housekeeping (pruning a gone node's cached lines)
+     inside the SAME per-frame pass that already prunes the window's own
+     `patchScopes_`/`patchScopeSeq_` maps for the identical reason - moving
+     the mutation into the Engine needed no new vocabulary, just a home.
+   - **`muteKeptRunning_`/`mutePopup_`**: one new op,
+     `FOXAPP_OP_MUTE_KEEP_RUNNING` (no args) - both fields move together, as
+     the ONE user decision "Keep it running" always was, never two
+     independent clears. ("Stop and resume sound" needed no change: it
+     already went through `FOXAPP_OP_DECODER_STOP_LIST`, and the mute lifts
+     on its own once the engine's own `advanceMutePopup` state machine sees
+     the decoder actually stop.)
+
+   Every write site converted to `engine_.applyCommand(...)`/
+   `engine_.submitCommand(...)` (matching whichever the site already used),
+   applied at the same point in the frame as the direct write - no
+   user-visible behaviour change. Tests: `tests/test_apply_command.cpp`
+   gained or extended coverage for every op above (`FOXAPP_OP_SOUND_CARD_FORM`
+   with both a fully-set and an all-clear command; `FOXAPI_OP_TELEMETRY_ENABLE`
+   proving a second ON mints a DIFFERENT id than the first; `FOXAPP_OP_MUTE_KEEP_RUNNING`
+   checking both fields move together; the existing `FOXAPI_OP_SCANNER_CONFIG`
+   coverage extended from 2 to all 4 fields since it is now also the panel's
+   own commit path; `FOXAPP_OP_PATCH_LOOK_FOR_RADIOS` unconditional versus
+   `FOXAPP_OP_PATCH_RADIO_LIST_OPENED`'s one-time wish). Proven red against a
+   combined mutant (drop `soundCard_.channel`'s bit, skip clearing
+   `telemetryInstallId_` on OFF, skip resetting `mutePopup_` in
+   `MUTE_KEEP_RUNNING`): 3/811 failed exactly at the three affected
+   assertions; source restored byte-identical and reverified green.
+   `test_command_path_guard`: 112/112, 0 violations - `kWindowMayWriteScoped`
+   is now empty (a `std::vector`, not a C array, so the empty list still
+   compiles: an array's bound cannot be deduced from an empty initialiser).
    **CLOSED, engine/stage3b-pre 2c (2026-09-28): `sourceError_`,
    `soapyScanDeferredLogged_`, `gpsRefusal_`, `decoderLog_`,
    `bookmarkImportNote_`, `soundCardMissing_`, `mutePopupQueued_`** (7 of
@@ -830,6 +902,21 @@ they were with the facts; and what 3b has to settle first.
    same way - left undone this round for the same reason the calls
    themselves were not converted to commands (not attempted without the same
    verification), not because it is a different kind of problem.
+   **CLOSED, engine/stage3b-pre Airspy round (2026-09-28):**
+   `chooseAirspyDecimation`/`chooseAirspyGainMode`/`chooseAirspyAgc` and
+   `asAirspyDevice` (item 3's own entry, closed together since the fix is one
+   change). Three new commands (`FOXAPP_OP_AIRSPY_DECIMATION`/`GAIN_MODE`/
+   `AGC`, `core/app_commands.hpp`) - queued (`submitCommand`), like every
+   other gain control in the Source section, each a thin dispatch onto the
+   SAME Engine methods (unchanged, still called internally, still what
+   `tests/test_airspy_app.cpp` drives directly to prove the underlying
+   logic) - out-of-range gain modes/AGC stages refuse
+   (`FOXAPI_OUT_OF_RANGE`), a refused decimation/mode/AGC change refuses
+   (`FOXAPI_FAILED`, `sourceError_` set, exactly as the direct call already
+   did). `airspyRememberOpen` and `patchListRecordings` were NOT converted
+   this round (see the 2d note above - genuinely single-owner, but not
+   reached). `drawAirspyControls` no longer calls `asAirspyDevice()` at all -
+   removed from `kControlMayCall`.
 3. **The window reads engine members directly** as a friend (every panel
    draws from `engine_.x_`, `engine_.pipeline_.y()`): allowed by the guard as
    reads, and safe only because both run on one thread. 3b needs every such
@@ -846,6 +933,29 @@ they were with the facts; and what 3b has to settle first.
    into engine-owned, mutable object state. 3b's read API (item 3's own
    fix) has to cover this case explicitly, or the window keeps a dangling
    pointer across the frame in which a control thread reopens the radio.
+   **CLOSED, engine/stage3b-pre Airspy round (2026-09-28):** a new block in
+   `PublishedState::app` (`core/receiver_snapshot.hpp`'s `AppStateExt`:
+   `airspyOpen`, `airspyDecimation`, `airspyHardwareSampleRateHz`,
+   `airspyGainMode`, `airspyLnaAgc`, `airspyMixerAgc`, and a fixed
+   `airspyDecimationChoices`/`airspyDecimationChoiceCount` pair - a real
+   `std::vector` has no place in a struct a real-time plugin thread may read
+   lock-free, matching `gains`/`rates`' own fixed-array shape above), filled
+   in `fillPublishedState` from `asAirspyDevice()` - the ONE place that call
+   still happens, now on the Engine's own thread, never crossing to a
+   control. `drawAirspyControls` reads `engine_.receiverSnapshot_->read(...)`
+   once per call (the same lock-free path `catStatusNow()` already used) and
+   answers every question it used to ask the raw pointer from that block
+   instead - `deviceGainNames_`/`deviceGainsDb_`/`deviceGainRanges_` (the
+   generic gain mirrors every OTHER Source-panel slider already reads the
+   same way) are unchanged, since they were never the pointer this item
+   named. One consequence, accepted rather than worked around: a change now
+   reads back on the frame AFTER the click (the publish that already ran
+   this frame is stale by definition) - the same one-frame bound every gain
+   slider in this section already has, not a new one. Proven red (a mutant
+   swapping `FOXAPP_OP_AIRSPY_AGC`'s LNA/Mixer selection):
+   `tests/test_airspy_app.cpp` failed 2/75 at the exact two assertions
+   checking which stage moved; source restored byte-identical and
+   reverified green, 75/75.
 4. **The EngineHost hooks are synchronous calls into the window** (section 3).
    Most become events the window drains. Three are not events:
    `onPluginsUnloading`/`beforePluginRescan` must finish before modules are

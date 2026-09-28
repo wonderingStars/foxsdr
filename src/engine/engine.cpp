@@ -1384,6 +1384,15 @@ void Engine::openPlutoAt(const std::string& args) {
     // that is not there spends its connect bound off the GUI thread and the
     // window keeps drawing.
     const std::string uri = (args.rfind("uri=", 0) == 0) ? args.substr(4) : args;
+    // REMEMBERED HERE (engine/stage3b-pre fields-to-commands round 2): the
+    // window used to write plutoUri_ in place, keystroke by keystroke; now it
+    // edits a draft of its own and this is where the attempted address
+    // becomes the persisted one - exactly what the direct write achieved,
+    // just moved to the one moment that matters (an attempt), not every
+    // keystroke. openPlutoFromBox() (the converter test's own call) already
+    // built `args` FROM plutoUri_, so this is a harmless self-assignment
+    // there.
+    cascade::core::formatUtf8(plutoUri_, sizeof(plutoUri_), "%s", uri.c_str());
     // The frequency to carry, read BEFORE the close below: after it the
     // generator is what answers.
     const std::optional<double> keepCenterHz = carriedAirCentre();
@@ -3468,6 +3477,25 @@ void Engine::fillPublishedState(cascade::core::PublishedState& ps, const std::st
     e.basemapMinZoom = basemap.minZoom;
     e.basemapMaxZoom = basemap.maxZoom;
     e.basemapTileSize = basemap.tileSize;
+
+    // THE AIRSPY PANEL'S STATE (engine/stage3b-pre Airspy round): the ONE
+    // place asAirspyDevice()'s raw pointer is still read every frame - here,
+    // where the read stays on the Engine's own thread and never crosses to a
+    // control. drawAirspyControls reads e.airspy* instead now.
+    if (cascade::source::AirspySource* a = asAirspyDevice()) {
+        e.airspyOpen = true;
+        e.airspyDecimation = a->decimation();
+        e.airspyHardwareSampleRateHz = a->hardwareSampleRateHz();
+        e.airspyGainMode = static_cast<std::uint32_t>(a->gainMode());
+        e.airspyLnaAgc = a->lnaAgc();
+        e.airspyMixerAgc = a->mixerAgc();
+        const std::vector<unsigned> choices = a->decimationChoices();
+        e.airspyDecimationChoiceCount = static_cast<std::uint32_t>(
+            std::min(choices.size(), cascade::core::AppStateExt::kMaxAirspyDecimationChoices));
+        for (std::uint32_t i = 0; i < e.airspyDecimationChoiceCount; ++i) {
+            e.airspyDecimationChoices[i] = choices[i];
+        }
+    }
 }
 
 void Engine::applyPluginApi() {
@@ -5227,6 +5255,14 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             }
             scanNative();
             return res;
+        case FOXAPP_OP_PATCH_LOOK_FOR_RADIOS:
+            // "Look for radios" pressed (0.99.40, engine/stage3b-pre
+            // fields-to-commands round 2): unconditional, unlike the combo-open
+            // case above - the operator asked outright, so the SoapySDR
+            // probe's own "asked once" gate is bypassed by the unconditional
+            // FOXAPI_OP_SCAN_DEVICES the window submits right after this.
+            patchListsWanted_ = true;
+            return res;
         case FOXAPP_OP_SET_NETWORK_USRP_SCAN:
             lookForNetworkUsrps_ = on;
             if (lookForNetworkUsrps_) { scanSoapy(); }
@@ -5387,6 +5423,29 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             soundCardLive_.iqCentreHz = c.num[0];
             applyRetuneNow(c.num[0], false);
             return res;
+        case FOXAPP_OP_SOUND_CARD_FORM: {
+            // THE SOUND CARD PANEL'S WHOLE FORM (engine/stage3b-pre fields-to-
+            // commands round 2, docs/engine-stage3.md OPEN item 1): every
+            // widget in drawSoundCardControls used to write soundCard_ in
+            // place; each now builds the CURRENT form (a local copy read from
+            // this same field) with its one changed value and applies the
+            // whole thing here, in the same frame - so nothing else in the
+            // panel (the rate list, the "Receives..." preview) reads a stale
+            // value later in the same draw pass. ival[0] is a bitmask
+            // (1 = IqStereo, 2 = channel right, 4 = swapIq, 8 = pickedFromList);
+            // num[0] cardRateHz, num[1] iqCentreHz; text "device<0x1F>hostApi".
+            const std::size_t sep = text.find('\x1F');
+            soundCard_.device = (sep == std::string::npos) ? text : text.substr(0, sep);
+            soundCard_.hostApi = (sep == std::string::npos) ? std::string() : text.substr(sep + 1);
+            soundCard_.format =
+                (c.ival[0] & 1) ? cascade::source::SoundCardFormat::IqStereo : cascade::source::SoundCardFormat::RealMono;
+            soundCard_.channel = (c.ival[0] & 2) ? 1 : 0;
+            soundCard_.swapIq = (c.ival[0] & 4) != 0;
+            soundCard_.pickedFromList = (c.ival[0] & 8) != 0;
+            soundCard_.cardRateHz = c.num[0];
+            soundCard_.iqCentreHz = c.num[1];
+            return res;
+        }
 
         // --- the recorder ----------------------------------------------------------
         case FOXAPI_OP_RECORD_IQ:
@@ -5665,7 +5724,18 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             // (FOXAPI_OP_TX_PTT's own refusal above), so the moment that stops
             // being true is the moment nothing may still be keyed.
             transmitOpen_ = on;
-            if (!on) { transmitter_.releaseRemote("the transmit page was closed"); }
+            if (!on) {
+                transmitter_.releaseRemote("the transmit page was closed");
+            } else if (transmitArgs_.empty()) {
+                // THE ADDRESS IS SEEDED FOR THE EYE (engine/stage3b-pre
+                // fields-to-commands round 2, moved from the window's own
+                // per-frame seed): doing it only inside the open left the
+                // field BLANK on the page, so the panel offered no answer at
+                // all to "which board would this be?" until after somebody
+                // had already pressed Open.
+                transmitArgs_ = (sourceKind_ == "pluto" && !deviceArgs_.empty()) ? deviceArgs_
+                                                                                 : std::string("uri=ip:192.168.2.1");
+            }
             return res;
         case FOXAPI_OP_TX_PTT:
             // THE REMOTE KEY (0.95.1): an assertion with a deadline, not a
@@ -5771,6 +5841,26 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
                 gpsReader_.stop();
             }
             return res;
+        case FOXAPI_OP_TELEMETRY_ENABLE:
+            // engine/stage3b-pre "next round" item 1: was two direct field
+            // writes plus a direct call to telemetryHeartbeat_.configure(...)
+            // from AppWindow::drawUsageReportingSection's Checkbox. THE ID IS
+            // MINTED AT THE MOMENT OF CONSENT, NEVER BEFORE - a machine that
+            // never opts in has no identifier at all - and OFF DELETES IT, so
+            // a later opt-in cannot be tied to the old one.
+            if (on) {
+                telemetryInstallId_ = cascade::core::newInstallId();
+                telemetryEnabled_ = !telemetryInstallId_.empty();
+            } else {
+                telemetryEnabled_ = false;
+                telemetryInstallId_.clear();
+            }
+            // THE HEARTBEAT FOLLOWS THE SWITCH IN THE SAME STEP: off disarms
+            // it (configure refuses the now-empty id), on arms it with the
+            // new id - exactly as the window's click handler always did.
+            telemetryHeartbeat_.configure(cascade::core::telemetryEndpoint(), telemetryInstallId_,
+                                          cascade::versionString());
+            return res;
 
         // --- status lines and flags a panel used to clear or consume in place
         // (engine/stage3b-pre 2c, docs/engine-stage3.md OPEN 1) --------------
@@ -5781,6 +5871,12 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             return res;
         case FOXAPP_OP_SET_BOOKMARK_NOTE:
             bookmarkImportNote_ = text;
+            return res;
+        case FOXAPP_OP_SET_CATALOGUE_URL:
+            // Committed on deactivate-after-edit (the window's pluginUrlBuf_,
+            // never per keystroke) - unchanged, just applied through the
+            // command path now.
+            pluginCatalogueUrl_ = text;
             return res;
         case FOXAPP_OP_CLEAR_STATUS:
             switch (c.ival[0]) {
@@ -5802,6 +5898,38 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
                 default:
                     return refuse(FOXAPI_OUT_OF_RANGE, "no such status line");
             }
+        case FOXAPP_OP_MUTE_KEEP_RUNNING:
+            // "Keep it running" (engine/stage3b-pre fields-to-commands round
+            // 2): KEEPS THE MUTE, deliberately - releasing the audio here
+            // would make "keep it running" mean "and also undo the muting",
+            // a different answer to a question nobody asked. Both fields move
+            // together, in the same command, exactly as the direct writes
+            // did: the question has been answered, so clearing the subject is
+            // what makes the NEXT one a fresh capture rather than a second
+            // showing of this one.
+            muteKeptRunning_ = true;
+            mutePopup_ = cascade::core::MutePopupSubject{};
+            return res;
+
+        // --- the Airspy R2/Mini panel (0.99.41, engine/stage3b-pre Airspy
+        // round, docs/engine-stage3.md OPEN 2/3) -----------------------------
+        case FOXAPP_OP_AIRSPY_DECIMATION:
+            if (!chooseAirspyDecimation(static_cast<unsigned>(c.ival[0]))) {
+                return refuse(FOXAPI_FAILED, "the radio refused that decimation");
+            }
+            return res;
+        case FOXAPP_OP_AIRSPY_GAIN_MODE:
+            if (c.ival[0] < 0 || c.ival[0] > 2) { return refuse(FOXAPI_OUT_OF_RANGE, "no such gain mode"); }
+            if (!chooseAirspyGainMode(static_cast<cascade::source::AirspySource::GainMode>(c.ival[0]))) {
+                return refuse(FOXAPI_FAILED, "the radio refused that gain mode");
+            }
+            return res;
+        case FOXAPP_OP_AIRSPY_AGC:
+            if (c.ival[0] != 0 && c.ival[0] != 1) { return refuse(FOXAPI_OUT_OF_RANGE, "no such AGC stage"); }
+            if (!chooseAirspyAgc(c.ival[0] == 0, c.ival[1] != 0)) {
+                return refuse(FOXAPI_FAILED, "the radio refused that AGC switch");
+            }
+            return res;
 
         default:
             break;

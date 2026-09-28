@@ -169,6 +169,12 @@ void Engine::patchListRecordings() {
                             patchRecordings_.size(), patchRecordingCache_.opens - opensBefore);
 }
 
+void Engine::prunePatchSinkLines() {
+    for (auto it = patchSinkLines_.begin(); it != patchSinkLines_.end();) {
+        it = (patchGraph_.find(it->first) == nullptr) ? patchSinkLines_.erase(it) : std::next(it);
+    }
+}
+
 std::string Engine::patchDeviceLabel(const std::string& key) const {
     if (key.empty()) { return tr("No device chosen"); }
     for (const PatchDeviceChoice& c : patchDeviceChoices()) {

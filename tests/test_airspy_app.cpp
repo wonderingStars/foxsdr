@@ -59,6 +59,14 @@ std::vector<cascade::source::NativeDeviceInfo> fakeScan() {
     return {{"airspy", "Airspy R2", kArgs}};
 }
 
+bool ok(const FoxCommandResult& r) {
+    return r.status == FOXAPI_OK && (r.flags & FOXAPI_RESULT_REFUSED) == 0u;
+}
+
+bool refused(const FoxCommandResult& r, std::int32_t status) {
+    return r.status == status && (r.flags & FOXAPI_RESULT_REFUSED) != 0u;
+}
+
 void setEnv(const char* name, const std::string& value) {
 #if defined(_WIN32)
     _putenv_s(name, value.c_str());
@@ -160,6 +168,17 @@ struct AppWindowTestAccess {
         a.engine_.submitCommand(
             cascade::core::cmd::makeText(FOXAPP_OP_SET_GAIN_NO_READBACK, name, 0, 0, db));
         a.engine_.drainLocalCommands();
+    }
+    // engine/stage3b-pre Airspy round (OPEN 2/3): the panel's commands, and
+    // the published state drawAirspyControls now reads instead of the raw
+    // device pointer above (`radio`, kept in this test ONLY for verification -
+    // the application itself no longer holds onto it).
+    static FoxCommandResult apply(AppWindow& a, const FoxCommand& c) { return a.engine_.applyCommand(c); }
+    static cascade::core::AppStateExt publishedAirspy(AppWindow& a) {
+        (void)a.engine_.publishReceiverState();
+        cascade::core::PublishedState s;
+        if (!a.engine_.receiverSnapshot_->read(s)) { s = a.engine_.receiverSnapshot_->readFull()->state; }
+        return s.app;
     }
 };
 
@@ -277,6 +296,49 @@ int main() {
                   Access::rateLabels(app)[0] == "625.000 kS/s");
         }
         CHECK(Access::gainNames(app) == std::vector<std::string>({"LNA", "MIXER", "VGA"}));
+    }
+
+    // --- engine/stage3b-pre Airspy round (OPEN 2/3): the COMMANDS
+    //     drawAirspyControls now submits, and the PUBLISHED STATE it now
+    //     reads instead of the raw device pointer. Its own fresh session -
+    //     everything above already proved the underlying
+    //     chooseAirspyDecimation/GainMode/Agc and the save/relaunch
+    //     round-trip; this proves the command wrapper and the publish agree
+    //     with the radio, without disturbing that round-trip's own state. ---
+    {
+        cascade::gui::AppWindow app;
+        CHECK(Access::selectAirspy(app));
+        namespace cmd = cascade::core::cmd;
+        CHECK(Access::radio(app)->setSampleRateHz(2.5e6));
+        CHECK(ok(Access::apply(app, cmd::makeInt(FOXAPP_OP_AIRSPY_DECIMATION, 2))));
+        cascade::core::AppStateExt e = Access::publishedAirspy(app);
+        CHECK(e.airspyOpen);
+        CHECK(e.airspyDecimation == Access::radio(app)->decimation());
+        CHECK(e.airspyDecimation == 2u);
+        // An out-of-range refusal changes neither the radio nor the publish.
+        CHECK(refused(Access::apply(app, cmd::makeInt(FOXAPP_OP_AIRSPY_DECIMATION, 64)), FOXAPI_FAILED));
+        e = Access::publishedAirspy(app);
+        CHECK(e.airspyDecimation == 2u);
+
+        CHECK(ok(Access::apply(app, cmd::makeInt(FOXAPP_OP_AIRSPY_GAIN_MODE,
+                                                 static_cast<std::int64_t>(Mode::Sensitivity)))));
+        e = Access::publishedAirspy(app);
+        CHECK(e.airspyGainMode == static_cast<std::uint32_t>(Mode::Sensitivity));
+        CHECK(Access::radio(app)->gainMode() == Mode::Sensitivity);
+        CHECK(refused(Access::apply(app, cmd::makeInt(FOXAPP_OP_AIRSPY_GAIN_MODE, 99)), FOXAPI_OUT_OF_RANGE));
+
+        CHECK(ok(Access::apply(app, cmd::makeInt(FOXAPP_OP_AIRSPY_GAIN_MODE,
+                                                 static_cast<std::int64_t>(Mode::Free)))));
+        CHECK(ok(Access::apply(app, cmd::makeInt(FOXAPP_OP_AIRSPY_AGC, 0, 1))));  // LNA on
+        e = Access::publishedAirspy(app);
+        CHECK(e.airspyLnaAgc);
+        CHECK(!e.airspyMixerAgc);
+        CHECK(Access::agcMirror(app) == (e.airspyLnaAgc && e.airspyMixerAgc));
+        CHECK(ok(Access::apply(app, cmd::makeInt(FOXAPP_OP_AIRSPY_AGC, 1, 1))));  // Mixer on too
+        e = Access::publishedAirspy(app);
+        CHECK(e.airspyLnaAgc);
+        CHECK(e.airspyMixerAgc);
+        CHECK(refused(Access::apply(app, cmd::makeInt(FOXAPP_OP_AIRSPY_AGC, 2, 1)), FOXAPI_OUT_OF_RANGE));
     }
 
     // --- A LAUNCH THAT RESTORES A DECIMATED RATE (the capture that found it):

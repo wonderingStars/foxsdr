@@ -7218,7 +7218,11 @@ void AppWindow::drawSourceSection() {
             // would strand the first one's device for a stale-drop teardown.
             ImGui::BeginDisabled(engine_.deviceOpenPending_);
             ImGui::SetNextItemWidth(-60.0f);
-            ImGui::InputText("##pluto_uri", engine_.plutoUri_, sizeof(engine_.plutoUri_));
+            // A LOCAL DRAFT (engine/stage3b-pre fields-to-commands round 2),
+            // seeded from plutoUri_ once in applyConfig - typing here never
+            // writes the engine field; Open sends the draft's text, and
+            // Engine::openPlutoAt persists it from the same text it opens.
+            ImGui::InputText("##pluto_uri", plutoUriDraft_, sizeof(plutoUriDraft_));
             ImGui::SameLine();
             const bool openPluto = ImGui::Button(trId("Open"));
             ImGui::EndDisabled();
@@ -7231,7 +7235,7 @@ void AppWindow::drawSourceSection() {
             // The typed address, as the open's args (openPlutoAt).
             if (openPluto) {
                 engine_.submitCommand(cascade::core::cmd::makeText(FOXAPI_OP_SELECT_SOURCE,
-                                                           std::string("open-pluto:uri=") + engine_.plutoUri_));
+                                                           std::string("open-pluto:uri=") + plutoUriDraft_));
             }
         }
     }
@@ -8159,7 +8163,11 @@ void AppWindow::drawPluginStoreSection() {
     ImGui::SetNextItemWidth(-FLT_MIN);
     cascade::gui::inputTextWithFittedHint("##catalogue_url", tr("catalogue index.json URL"),
                              pluginUrlBuf_, sizeof(pluginUrlBuf_));
-    if (ImGui::IsItemDeactivatedAfterEdit()) { engine_.pluginCatalogueUrl_ = pluginUrlBuf_; }
+    if (ImGui::IsItemDeactivatedAfterEdit()) {
+        const cascade::core::cmd::QueuedCommand q =
+            cascade::core::cmd::makeText(FOXAPP_OP_SET_CATALOGUE_URL, pluginUrlBuf_);
+        engine_.applyCommand(q.c, q.longText);
+    }
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip(tr("An https:// catalogue, or a path to a local index.json.\n"
                           "Read when you first open the plugin store in a session, or\n"
@@ -9726,9 +9734,9 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
     for (auto it = patchScopeSeq_.begin(); it != patchScopeSeq_.end();) {
         it = gone(it->first) ? patchScopeSeq_.erase(it) : std::next(it);
     }
-    for (auto it = engine_.patchSinkLines_.begin(); it != engine_.patchSinkLines_.end();) {
-        it = gone(it->first) ? engine_.patchSinkLines_.erase(it) : std::next(it);
-    }
+    // A reviewed direct call (engine/stage3b-pre fields-to-commands round 2),
+    // not a raw erase from here: patchSinkLines_ is the Engine's own field.
+    engine_.prunePatchSinkLines();
     for (auto it = patchMapViews_.begin(); it != patchMapViews_.end();) {
         it = gone(it->first) ? patchMapViews_.erase(it) : std::next(it);
     }
@@ -14572,16 +14580,11 @@ void AppWindow::drawMutePopup() {
     }
     ImGui::SameLine();
     if (ImGui::Button(trId("Keep it running"))) {
-        // KEEPS THE MUTE, deliberately, because that is the model the sentence
-        // above offered: sound resumes when the plugin stops. Releasing the
-        // audio here would make "keep it running" mean "and also undo the
-        // muting", which is a different answer to a question nobody asked.
-        // The banner is what stops that being a silent state.
-        engine_.muteKeptRunning_ = true;
-        // The question has been answered, so it is no longer pending: clearing
-        // the subject is what makes the NEXT one a fresh capture rather than a
-        // second showing of this one.
-        engine_.mutePopup_ = cascade::core::MutePopupSubject{};
+        // A COMMAND (engine/stage3b-pre fields-to-commands round 2): both
+        // fields move together in FOXAPP_OP_MUTE_KEEP_RUNNING's handler,
+        // applied at once. The banner is what stops the kept mute being a
+        // silent state.
+        engine_.applyCommand(cascade::core::cmd::make(FOXAPP_OP_MUTE_KEEP_RUNNING));
         ImGui::CloseCurrentPopup();
     }
     ImGui::EndPopup();
@@ -15010,7 +15013,14 @@ void AppWindow::drawTransmitSection() {
 }
 
 void AppWindow::drawTransmitPage() {
-    if (!engine_.transmitOpen_) { return; }
+    if (!engine_.transmitOpen_) {
+        // The next open reseeds the draft fresh (engine/stage3b-pre
+        // fields-to-commands round 2) - engine_.transmitArgs_ may have
+        // changed while the page was shut (a successful TX_OPEN elsewhere,
+        // a config reload), and the draft must not go on showing stale text.
+        transmitArgsDraftLive_ = false;
+        return;
+    }
     constexpr float kTxW = 560.0f;
     constexpr float kTxH = 520.0f;
     // The opening rectangle is the call site's job - see drawDemodScopePage
@@ -15049,15 +15059,14 @@ void AppWindow::drawTransmitPage() {
     const bool have = sink != nullptr;
     const bool onAir = engine_.transmitter_.transmitting();
 
-    // THE ADDRESS IS SEEDED FOR THE EYE, not only for openTransmitRadio.
-    // Doing it only inside the open left the field BLANK on the page, so the
-    // panel offered no answer at all to "which board would this be?" until
-    // after somebody had already pressed Open. Found on the first screenshot
-    // of this page.
-    if (engine_.transmitArgs_.empty()) {
-        engine_.transmitArgs_ = (engine_.sourceKind_ == "pluto" && !engine_.deviceArgs_.empty())
-                            ? engine_.deviceArgs_
-                            : std::string("uri=ip:192.168.2.1");
+    // THE DRAFT IS SEEDED FOR THE EYE, once per open (engine/stage3b-pre
+    // fields-to-commands round 2): FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN's handler
+    // already fills transmitArgs_ if it was empty when the page opened, so
+    // the draft always starts from a real address, never blank.
+    if (!transmitArgsDraftLive_) {
+        cascade::core::formatUtf8(transmitArgsDraft_, sizeof(transmitArgsDraft_), "%s",
+                                  engine_.transmitArgs_.c_str());
+        transmitArgsDraftLive_ = true;
     }
 
     // --- the radio -----------------------------------------------------------
@@ -15068,11 +15077,9 @@ void AppWindow::drawTransmitPage() {
         // field would then describe something other than what is connected -
         // and on this page "what is connected" is the thing that is about to
         // radiate.
-        char buf[128];
-        cascade::core::formatUtf8(buf, sizeof(buf), "%s", engine_.transmitArgs_.c_str());
         ImGui::BeginDisabled(have);
         ImGui::SetNextItemWidth(260.0f);
-        if (ImGui::InputText("##txargs", buf, sizeof(buf))) { engine_.transmitArgs_ = buf; }
+        ImGui::InputText("##txargs", transmitArgsDraft_, sizeof(transmitArgsDraft_));
         ImGui::EndDisabled();
     }
     ImGui::SameLine();
@@ -15083,7 +15090,7 @@ void AppWindow::drawTransmitPage() {
     namespace cmd = cascade::core::cmd;
     if (!have) {
         if (ImGui::Button(trId("Open##txopen"))) {
-            engine_.submitCommand(cmd::makeText(FOXAPI_OP_TX_OPEN, engine_.transmitArgs_));
+            engine_.submitCommand(cmd::makeText(FOXAPI_OP_TX_OPEN, transmitArgsDraft_));
         }
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip("%s", tr("Connects to the board's iiod daemon and leaves it QUIET:\n"
@@ -17395,37 +17402,43 @@ void AppWindow::drawScannerSection() {
     // ACTIVE a commit reconfigures it, which per the Scanner contract resets
     // to the new startHz — correct for new parameters, but far too jumpy to
     // fire on every typed digit.
+    // A LOCAL DRAFT, NOT THE ENGINE FIELDS DIRECTLY (engine/stage3b-pre
+    // fields-to-commands round 2): InputDouble writes its bound variable on
+    // every keystroke, so binding it to engine_.scanStartMhz_ etc. wrote the
+    // receiver's state keystroke by keystroke. The draft absorbs that; the
+    // commit below still fires only on deactivate-after-edit, exactly where
+    // it always did.
     bool edited = false;
     ImGui::SetNextItemWidth(110.0f);
     ImGui::InputDouble(cascade::gui::labelAboveIfNeeded(trId("Start MHz")),
-                       &engine_.scanStartMhz_, 0.0, 0.0, "%.4f");
+                       &scanStartMhzDraft_, 0.0, 0.0, "%.4f");
     edited |= ImGui::IsItemDeactivatedAfterEdit();
     ImGui::SetNextItemWidth(110.0f);
     ImGui::InputDouble(cascade::gui::labelAboveIfNeeded(trId("Stop MHz")),
-                       &engine_.scanStopMhz_, 0.0, 0.0, "%.4f");
+                       &scanStopMhzDraft_, 0.0, 0.0, "%.4f");
     edited |= ImGui::IsItemDeactivatedAfterEdit();
     ImGui::SetNextItemWidth(110.0f);
     ImGui::InputDouble(cascade::gui::labelAboveIfNeeded(trId("Step kHz")),
-                       &engine_.scanStepKhz_, 0.0, 0.0, "%.2f");
+                       &scanStepKhzDraft_, 0.0, 0.0, "%.2f");
     edited |= ImGui::IsItemDeactivatedAfterEdit();
     ImGui::SetNextItemWidth(110.0f);
     ImGui::InputDouble(cascade::gui::labelAboveIfNeeded(trId("Dwell ms")),
-                       &engine_.scanDwellMs_, 0.0, 0.0, "%.0f");
+                       &scanDwellMsDraft_, 0.0, 0.0, "%.0f");
     edited |= ImGui::IsItemDeactivatedAfterEdit();
     ImGui::SetNextItemWidth(110.0f);
     ImGui::InputDouble(cascade::gui::labelAboveIfNeeded(trId("Hold ms")),
-                       &engine_.scanHoldMs_, 0.0, 0.0, "%.0f");
+                       &scanHoldMsDraft_, 0.0, 0.0, "%.0f");
     edited |= ImGui::IsItemDeactivatedAfterEdit();
     ImGui::SetNextItemWidth(110.0f);
     ImGui::InputDouble(cascade::gui::labelAboveIfNeeded(trId("Resume ms")),
-                       &engine_.scanResumeMs_, 0.0, 0.0, "%.0f");
+                       &scanResumeMsDraft_, 0.0, 0.0, "%.0f");
     edited |= ImGui::IsItemDeactivatedAfterEdit();
     // THE LONGEST STAY ON ONE SIGNAL. A scan across the broadcast band found
     // its first station and stayed there, because the station never went
     // quiet and "hold until quiet" was the only way on. 0 keeps that rule.
     ImGui::SetNextItemWidth(110.0f);
     ImGui::InputDouble(cascade::gui::labelAboveIfNeeded(trId("Listen ms")),
-                       &engine_.scanListenMs_, 0.0, 0.0, "%.0f");
+                       &scanListenMsDraft_, 0.0, 0.0, "%.0f");
     edited |= ImGui::IsItemDeactivatedAfterEdit();
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("%s", tr("Longest stay on one signal before the scan moves on.\n"
@@ -17433,12 +17446,31 @@ void AppWindow::drawScannerSection() {
     }
 
     namespace cmd = cascade::core::cmd;
-    if (edited && engine_.scanner_.active()) {
-        // APP_SCANNER_RANGE with only the reconfigure bit: a running scan
-        // takes the stored parameters. The reconfigure re-emits a first tune
-        // on the next tick; the user-tune baseline re-arms from that
-        // retune's readback.
-        engine_.submitCommand(cmd::makeInt(FOXAPP_OP_SCANNER_RANGE, 8));
+    if (edited) {
+        // THE TIMING HALF FIRST, through the EXISTING FOXAPI_OP_SCANNER_CONFIG
+        // (no new op needed - it already sets all four and reconfigures a
+        // running scan on its own). SCANNER_RANGE's own reconfigure bit
+        // (below) then re-reads scannerParams() with the fresh RANGE too, so
+        // a running scan's second reconfigure - a few microseconds later, in
+        // the same command batch, before any scan tick can run - is the
+        // authoritative one; the first is harmless, not merely idempotent.
+        FoxCommand timing = cmd::make(FOXAPI_OP_SCANNER_CONFIG);
+        timing.num[0] = scanDwellMsDraft_;
+        timing.num[1] = scanHoldMsDraft_;
+        timing.num[2] = scanResumeMsDraft_;
+        timing.num[3] = scanListenMsDraft_;
+        engine_.applyCommand(timing);
+        // THE RANGE, always all three together (idempotent for whichever of
+        // the three did not just change) - and, running, the SAME reconfigure
+        // bit this site always submitted, now folded into one call. The
+        // reconfigure re-emits a first tune on the next tick; the user-tune
+        // baseline re-arms from that retune's readback.
+        FoxCommand range = cmd::make(FOXAPP_OP_SCANNER_RANGE);
+        range.ival[0] = 1 | 2 | 4 | (engine_.scanner_.active() ? 8 : 0);
+        range.num[0] = scanStartMhzDraft_ * 1.0e6;
+        range.num[1] = scanStopMhzDraft_ * 1.0e6;
+        range.num[2] = scanStepKhzDraft_ * 1.0e3;
+        engine_.applyCommand(range);
     }
 
     if (!engine_.scanner_.active()) {
@@ -18117,23 +18149,12 @@ void AppWindow::drawUsageReportingSection() {
 
     bool on = engine_.telemetryEnabled_;
     if (ImGui::Checkbox(trId("Send anonymous usage reports"), &on)) {
-        if (on && !engine_.telemetryEnabled_) {
-            // The id is created at the moment of consent, never before - so a
-            // machine that never opts in has no identifier at all, not even an
-            // unused one sitting in its config.
-            engine_.telemetryInstallId_ = cascade::core::newInstallId();
-            engine_.telemetryEnabled_ = !engine_.telemetryInstallId_.empty();
-        } else if (!on) {
-            // Off DELETES the identifier, so a later opt-in gets a new one
-            // that cannot be tied to the old. Any report still waiting to be
-            // sent goes with it.
-            engine_.telemetryEnabled_ = false;
-            engine_.telemetryInstallId_.clear();
-        }
-        // The heartbeat follows the switch in the same click: off disarms it
-        // (configure refuses the now-empty id), on arms it with the new id.
-        engine_.telemetryHeartbeat_.configure(cascade::core::telemetryEndpoint(),
-                                      engine_.telemetryInstallId_, cascade::versionString());
+        // A COMMAND (engine/stage3b-pre, the fields-to-commands round): the
+        // id-minting, the id-forgetting and the heartbeat reconfigure all
+        // move into FOXAPI_OP_TELEMETRY_ENABLE's handler, applied at once so
+        // the switch's label and the install-id line below still update on
+        // THIS frame, exactly as the direct writes did.
+        engine_.applyCommand(cascade::core::cmd::makeInt(FOXAPI_OP_TELEMETRY_ENABLE, on ? 1 : 0));
     }
 
     if (engine_.telemetryEnabled_) {
@@ -18717,6 +18738,20 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     // (docs/engine-stage3.md lists the one reorder that is visible from
     // outside: the web and CAT listeners now start after the VFO restore).
     engine_.applyConfig(cfg);
+    // THE PLUTO ADDRESS BOX (this window's edit buffer, engine/stage3b-pre
+    // fields-to-commands round 2): seeded from the just-restored engine field
+    // once, here - the same pattern iqPath_ below already uses, so typing in
+    // the box never writes plutoUri_ in place (it is committed by
+    // FOXAPP_OP_SET_PLUTO_URI only when "Open" is pressed).
+    cascade::core::formatUtf8(plutoUriDraft_, sizeof(plutoUriDraft_), "%s", engine_.plutoUri_);
+    // THE SCANNER FORM'S DRAFT, same reason, same moment.
+    scanStartMhzDraft_ = engine_.scanStartMhz_;
+    scanStopMhzDraft_ = engine_.scanStopMhz_;
+    scanStepKhzDraft_ = engine_.scanStepKhz_;
+    scanDwellMsDraft_ = engine_.scanDwellMs_;
+    scanHoldMsDraft_ = engine_.scanHoldMs_;
+    scanResumeMsDraft_ = engine_.scanResumeMs_;
+    scanListenMsDraft_ = engine_.scanListenMs_;
     // THE I/Q PATH BOX (this window's edit buffer) shows the saved file
     // whenever the saved source was a file, opened or not - both branches of
     // the engine's file restore wrote exactly this into it when the restore

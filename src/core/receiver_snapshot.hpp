@@ -155,6 +155,25 @@ struct AppStateExt {
     std::uint32_t basemapMinZoom = 0;
     std::uint32_t basemapMaxZoom = 0;
     std::uint32_t basemapTileSize = 0;
+
+    // --- the Airspy R2/Mini panel (0.99.41, engine/stage3b-pre Airspy round,
+    // docs/engine-stage3.md OPEN 2/3) -----------------------------------------
+    // Published so drawAirspyControls reads the open device's state from
+    // HERE, once a frame, instead of holding the live cascade::source::
+    // AirspySource* engine_.asAirspyDevice() hands out (a pointer into
+    // engine-owned, mutable object state - the one query of this shape the
+    // Engine ever returned - and the one the control thread will one day be
+    // reopening behind, in 3b). false/default when the open device is not an
+    // Airspy (or none is open); a control never needs to ask which.
+    bool airspyOpen = false;
+    unsigned airspyDecimation = 1;
+    double airspyHardwareSampleRateHz = 0.0;
+    std::uint32_t airspyGainMode = 0;  // cascade::source::AirspySource::GainMode
+    bool airspyLnaAgc = false;
+    bool airspyMixerAgc = false;
+    static constexpr std::size_t kMaxAirspyDecimationChoices = 8;  // airspy::kDecimations has 7
+    std::uint32_t airspyDecimationChoiceCount = 0;
+    unsigned airspyDecimationChoices[kMaxAirspyDecimationChoices] = {};
 };
 
 struct PublishedState {

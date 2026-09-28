@@ -1619,6 +1619,13 @@ private:
     // that are new or changed (core::patch::RecordingProbeCache).
     cascade::core::patch::RecordingProbeCache patchRecordingCache_;
     void patchListRecordings();
+    // Drops a gone node's cached decoder-text lines (engine/stage3b-pre
+    // fields-to-commands round 2, docs/engine-stage3.md OPEN item 1): the
+    // canvas used to erase straight out of patchSinkLines_ itself, in the
+    // same per-frame pass it prunes its OWN maps (patchScopes_,
+    // patchScopeSeq_) for the same reason - a closed node's memory goes with
+    // it. Same reviewed direct-call pattern as patchListRecordings above.
+    void prunePatchSinkLines();
     std::string patchDeviceLabel(const std::string& key) const;
     // Per frame while the page is open: take the receiver's radio, open and
     // close radios to match the nodes, make and drop speaker outputs, and

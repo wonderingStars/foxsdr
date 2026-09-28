@@ -374,6 +374,7 @@ struct AppWindowTestAccess {
     }
     // The patch page's device-list wish (engine/stage3b-pre B2).
     static bool patchListsWanted(AppWindow& a) { return a.engine_.patchListsWanted_; }
+    static void setPatchListsWanted(AppWindow& a, bool v) { a.engine_.patchListsWanted_ = v; }
     static bool patchScanWanted(AppWindow& a) { return a.engine_.patchScanWanted_; }
     static void setDeviceOpenPending(AppWindow& a, bool v) { a.engine_.deviceOpenPending_ = v; }
     static void patchReconcile(AppWindow& a) { a.engine_.patchReconcile(); }
@@ -459,6 +460,14 @@ struct AppWindowTestAccess {
     static bool soapyScanDeferredLogged(AppWindow& a) { return a.engine_.soapyScanDeferredLogged_; }
     static void setMutePopupQueued(AppWindow& a, bool v) { a.engine_.mutePopupQueued_ = v; }
     static bool mutePopupQueued(AppWindow& a) { return a.engine_.mutePopupQueued_; }
+    static bool muteKeptRunning(AppWindow& a) { return a.engine_.muteKeptRunning_; }
+    static void setMutePopupSubject(AppWindow& a, const std::string& name, const std::string& key) {
+        a.engine_.mutePopup_.open = true;
+        a.engine_.mutePopup_.names = {name};
+        a.engine_.mutePopup_.keys = {key};
+    }
+    static bool mutePopupOpen(AppWindow& a) { return a.engine_.mutePopup_.open; }
+    static std::size_t mutePopupKeyCount(AppWindow& a) { return a.engine_.mutePopup_.keys.size(); }
     // The web remote's side: the snapshot a browser reads (and the row map it
     // leaves), and a request applied as applyWebControls applies it.
     static void publishWeb(AppWindow& a) { a.engine_.publishReceiverState(); }
@@ -480,6 +489,8 @@ struct AppWindowTestAccess {
     static double scanStepKhz(AppWindow& a) { return a.engine_.scanStepKhz_; }
     static double scanDwell(AppWindow& a) { return a.engine_.scanDwellMs_; }
     static double scanListen(AppWindow& a) { return a.engine_.scanListenMs_; }
+    static double scanHold(AppWindow& a) { return a.engine_.scanHoldMs_; }
+    static double scanResume(AppWindow& a) { return a.engine_.scanResumeMs_; }
 
     // Plugins and the store.
     static const cascade::core::LoadedPlugin* fixture(AppWindow& a) {
@@ -512,6 +523,10 @@ struct AppWindowTestAccess {
     static std::size_t userPresetCount(AppWindow& a) { return a.engine_.userPresets_.size(); }
     static const std::string& presetNote(AppWindow& a) { return a.engine_.presetNote_; }
     static void setCatalogueUrl(AppWindow& a, const std::string& u) { a.engine_.pluginCatalogueUrl_ = u; }
+    static const std::string& catalogueUrl(AppWindow& a) { return a.engine_.pluginCatalogueUrl_; }
+    static bool telemetryEnabled(AppWindow& a) { return a.engine_.telemetryEnabled_; }
+    static const std::string& telemetryInstallId(AppWindow& a) { return a.engine_.telemetryInstallId_; }
+    static cascade::source::SoundCardSettings soundCardForm(AppWindow& a) { return a.engine_.soundCard_; }
     static bool storeBusy(AppWindow& a) { return a.engine_.catalogPending_ || a.engine_.installPending_; }
     static bool waitStore(AppWindow& a) {
         return waitFor([&a] {
@@ -985,6 +1000,18 @@ void sourceOps(AppWindow& a) {
         CHECK(!A::patchScanWanted(a));        // NOT re-armed: already opened once
     }
 
+    covering(FOXAPP_OP_PATCH_LOOK_FOR_RADIOS);
+    {
+        // "Look for radios" (engine/stage3b-pre fields-to-commands round 2):
+        // unconditional, unlike PATCH_RADIO_LIST_OPENED's one-time wish -
+        // true whether it was already true or false.
+        A::setPatchListsWanted(a, false);
+        CHECK(ok(A::apply(a, cmd::make(FOXAPP_OP_PATCH_LOOK_FOR_RADIOS))));
+        CHECK(A::patchListsWanted(a));
+        CHECK(ok(A::apply(a, cmd::make(FOXAPP_OP_PATCH_LOOK_FOR_RADIOS))));
+        CHECK(A::patchListsWanted(a));  // still true - a harmless repeat
+    }
+
     covering(FOXAPP_OP_SET_NETWORK_USRP_SCAN);
     {
         A::clearSoapy(a);
@@ -1063,6 +1090,42 @@ void sourceOps(AppWindow& a) {
         CHECK(ok(A::apply(a, num(FOXAPP_OP_SOUNDCARD_IQ_CENTRE, 7.1e6))));
         CHECK(A::liveIqCentre(a) == 7.1e6);
         CHECK(A::centre(a) == 7.1e6);
+        covering(FOXAPP_OP_SOUND_CARD_FORM);
+        {
+            // The whole panel form in one command (engine/stage3b-pre
+            // fields-to-commands round 2), replacing direct writes to
+            // soundCard_ from every widget in drawSoundCardControls.
+            FoxCommand c = cmd::make(FOXAPP_OP_SOUND_CARD_FORM);
+            const std::string encoded = std::string("Other Card") + '\x1F' + "Other API";
+            std::memcpy(c.text, encoded.c_str(), encoded.size() + 1);
+            c.ival[0] = 1 | 2 | 4 | 8;  // IqStereo, channel right, swapIq, pickedFromList
+            c.num[0] = 96000.0;
+            c.num[1] = 5.0e6;
+            CHECK(ok(A::apply(a, c)));
+            const cascade::source::SoundCardSettings form = A::soundCardForm(a);
+            CHECK(form.device == "Other Card");
+            CHECK(form.hostApi == "Other API");
+            CHECK(form.format == cascade::source::SoundCardFormat::IqStereo);
+            CHECK(form.channel == 1);
+            CHECK(form.swapIq);
+            CHECK(form.pickedFromList);
+            CHECK(form.cardRateHz == 96000.0);
+            CHECK(form.iqCentreHz == 5.0e6);
+            // The mask's OFF bits, and a device with no hostApi half.
+            c.ival[0] = 0;
+            const std::string bare = "Bare Card";
+            std::memset(c.text, 0, sizeof(c.text));
+            std::memcpy(c.text, bare.c_str(), bare.size() + 1);
+            CHECK(ok(A::apply(a, c)));
+            const cascade::source::SoundCardSettings form2 = A::soundCardForm(a);
+            CHECK(form2.device == "Bare Card");
+            CHECK(form2.hostApi.empty());
+            CHECK(form2.format == cascade::source::SoundCardFormat::RealMono);
+            CHECK(form2.channel == 0);
+            CHECK(!form2.swapIq);
+            CHECK(!form2.pickedFromList);
+        }
+
         // Back to a radio for the device ops below.
         CHECK(ok(A::apply(a, text(FOXAPI_OP_SELECT_SOURCE, "rtlsdr:serial=0001"))));
         CHECK(A::waitOpen(a));
@@ -1422,6 +1485,11 @@ void scannerOps(AppWindow& a) {
 
     covering(FOXAPI_OP_SCANNER_CONFIG);
     {
+        // engine/stage3b-pre fields-to-commands round 2: this is now also
+        // what drawScannerSection's timing InputDoubles commit through (a
+        // from-scratch FOXAPP_OP_SCANNER_TIMING briefly duplicated this op
+        // byte for byte before that was noticed) - hold/resume added to the
+        // check alongside the pre-existing dwell/listen for that reason.
         FoxCommand c = cmd::make(FOXAPI_OP_SCANNER_CONFIG);
         c.num[0] = 150.0;
         c.num[1] = 900.0;
@@ -1429,6 +1497,8 @@ void scannerOps(AppWindow& a) {
         c.num[3] = 4000.0;
         CHECK(ok(A::apply(a, c)));
         CHECK(A::scanDwell(a) == 150.0);
+        CHECK(A::scanHold(a) == 900.0);
+        CHECK(A::scanResume(a) == 1500.0);
         CHECK(A::scanListen(a) == 4000.0);
     }
 }
@@ -1629,6 +1699,17 @@ void storeOps(AppWindow& a) {
         CHECK(A::fixture(a) == nullptr);
         CHECK(!std::filesystem::exists(g_plugins / key));
     }
+
+    covering(FOXAPP_OP_SET_CATALOGUE_URL);
+    {
+        // Committed on deactivate-after-edit (the window's pluginUrlBuf_) -
+        // engine/stage3b-pre fields-to-commands round 2, replacing the direct
+        // write.
+        CHECK(ok(A::apply(a, text(FOXAPP_OP_SET_CATALOGUE_URL, "https://example.test/index.json"))));
+        CHECK(A::catalogueUrl(a) == "https://example.test/index.json");
+        CHECK(ok(A::apply(a, cmd::make(FOXAPP_OP_SET_CATALOGUE_URL))));  // empty clears it too
+        CHECK(A::catalogueUrl(a).empty());
+    }
 }
 
 // --- the patch page, the transmitter, audio, position, GPS -------------------------------------
@@ -1766,6 +1847,25 @@ void otherOps(AppWindow& a) {
     CHECK(refused(A::apply(a, num(FOXAPI_OP_SET_POSITION, 0.0, 0.0)), FOXAPI_OUT_OF_RANGE));
     CHECK(A::positionSet(a, 53.8, -1.55));
 
+    covering(FOXAPI_OP_TELEMETRY_ENABLE);
+    {
+        // engine/stage3b-pre fields-to-commands round 2: was two direct field
+        // writes plus a direct telemetryHeartbeat_.configure(...) call from
+        // the Checkbox handler. ON mints an id; OFF forgets it - so a later
+        // opt-in cannot be tied to the old one.
+        CHECK(A::telemetryInstallId(a).empty());
+        CHECK(ok(A::apply(a, ints(FOXAPI_OP_TELEMETRY_ENABLE, 1))));
+        CHECK(A::telemetryEnabled(a));
+        CHECK(!A::telemetryInstallId(a).empty());
+        const std::string firstId = A::telemetryInstallId(a);
+        CHECK(ok(A::apply(a, ints(FOXAPI_OP_TELEMETRY_ENABLE, 0))));
+        CHECK(!A::telemetryEnabled(a));
+        CHECK(A::telemetryInstallId(a).empty());
+        CHECK(ok(A::apply(a, ints(FOXAPI_OP_TELEMETRY_ENABLE, 1))));
+        CHECK(A::telemetryEnabled(a));
+        CHECK(A::telemetryInstallId(a) != firstId);  // a fresh id, not the old one
+    }
+
     covering(FOXAPI_OP_GPS);
     {
         CHECK(refused(A::apply(a, text(FOXAPI_OP_GPS, "", 1, 0, 9600.0)), FOXAPI_BAD_ARGUMENT));
@@ -1820,6 +1920,36 @@ void statusLineOps(AppWindow& a) {
         // An out-of-range selector is a refusal, not a silent no-op.
         CHECK(refused(A::apply(a, ints(FOXAPP_OP_CLEAR_STATUS, 999)), FOXAPI_OUT_OF_RANGE));
     }
+
+    covering(FOXAPP_OP_MUTE_KEEP_RUNNING);
+    {
+        // "Keep it running" (engine/stage3b-pre fields-to-commands round 2):
+        // both fields move together - the mute stays (muteKeptRunning_), and
+        // the subject closes so the NEXT one is a fresh capture.
+        A::setMutePopupSubject(a, "POCSAG", "pocsag");
+        CHECK(A::mutePopupOpen(a));
+        CHECK(A::mutePopupKeyCount(a) == 1u);
+        CHECK(!A::muteKeptRunning(a));
+        CHECK(ok(A::apply(a, cmd::make(FOXAPP_OP_MUTE_KEEP_RUNNING))));
+        CHECK(A::muteKeptRunning(a));
+        CHECK(!A::mutePopupOpen(a));
+        CHECK(A::mutePopupKeyCount(a) == 0u);
+    }
+
+    // engine/stage3b-pre Airspy round (OPEN 2/3): this suite's fake radio is
+    // never recognised as an Airspy (cascade::gui::asAirspy's own check), so
+    // only the REFUSAL half is provable here - the SUCCESS half, and the
+    // published-state readback, is tests/test_airspy_app.cpp's real fake
+    // Airspy device (that test gained its own coverage of these same
+    // commands alongside this round).
+    covering(FOXAPP_OP_AIRSPY_DECIMATION);
+    CHECK(refused(A::apply(a, ints(FOXAPP_OP_AIRSPY_DECIMATION, 2)), FOXAPI_FAILED));
+    covering(FOXAPP_OP_AIRSPY_GAIN_MODE);
+    CHECK(refused(A::apply(a, ints(FOXAPP_OP_AIRSPY_GAIN_MODE, 0)), FOXAPI_FAILED));
+    CHECK(refused(A::apply(a, ints(FOXAPP_OP_AIRSPY_GAIN_MODE, 99)), FOXAPI_OUT_OF_RANGE));
+    covering(FOXAPP_OP_AIRSPY_AGC);
+    CHECK(refused(A::apply(a, ints(FOXAPP_OP_AIRSPY_AGC, 0, 1)), FOXAPI_FAILED));
+    CHECK(refused(A::apply(a, ints(FOXAPP_OP_AIRSPY_AGC, 2, 1)), FOXAPI_OUT_OF_RANGE));
 }
 
 // --- the queue ------------------------------------------------------------------------------------

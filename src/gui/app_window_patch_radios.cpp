@@ -431,7 +431,10 @@ void AppWindow::drawPatchRadioInspector(pc::Node& n) {
     // radio had to leave out, is one press away (2026-09-23).
     ImGui::BeginDisabled(engine_.soapyScanPending_);
     if (ImGui::SmallButton(trId("Look for radios"))) {
-        engine_.patchListsWanted_ = true;   // the sound cards too
+        // A COMMAND, not a direct write (engine/stage3b-pre fields-to-commands
+        // round 2): applied at once, so pollSoundCard's gate (drawSourceSection)
+        // sees patchListsWanted_ true on this same frame, as the direct write did.
+        engine_.applyCommand(cascade::core::cmd::make(FOXAPP_OP_PATCH_LOOK_FOR_RADIOS));
         engine_.submitCommand(cascade::core::cmd::make(FOXAPI_OP_SCAN_DEVICES));
         engine_.patchListRecordings();
     }

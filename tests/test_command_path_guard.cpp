@@ -231,14 +231,20 @@ const char* const kControlMayCall[] = {
     "refreshDiagContext",
     // the sound card panel lists the cards (OPEN: a direct call, not a command)
     "scanSoundCards",
-    // the Airspy panel's controls (0.99.41): the same reviewed direct-call
-    // pattern as scanSoundCards, so tests/test_airspy_app.cpp drives the
-    // buttons' own code.
-    "asAirspyDevice", "chooseAirspyDecimation", "chooseAirspyGainMode", "chooseAirspyAgc",
+    // asAirspyDevice/chooseAirspyDecimation/GainMode/Agc CLOSED
+    // engine/stage3b-pre Airspy round (OPEN 2/3): FOXAPP_OP_AIRSPY_DECIMATION/
+    // GAIN_MODE/AGC, and the published state (PublishedState::app's airspy*
+    // fields) in place of the raw device pointer. tests/test_airspy_app.cpp
+    // is unaffected - it calls the Engine methods directly (a friend
+    // accessor), which still exist, unchanged, for the commands to call.
     "airspyRememberOpen",
     // the patch Radio inspector lists local I/Q recordings (0.99.40), the
     // same reviewed direct-call pattern.
     "patchListRecordings",
+    // drawPatchFaces prunes a gone node's cached decoder text (engine/stage3b-pre
+    // fields-to-commands round 2), the same reviewed direct-call pattern -
+    // patchSinkLines_ CLOSED off kWindowMayWriteScoped as a result.
+    "prunePatchSinkLines",
 };
 
 // ENGINE FIELDS THE WINDOW STILL EDITS IN PLACE. Each is a form or a page
@@ -259,24 +265,26 @@ struct ScopedWrite {
     const char* field;
     const char* member;
 };
-const ScopedWrite kWindowMayWriteScoped[] = {
-    {"scanStartMhz_", "drawScannerSection"},  // the scanner range form (SCANNER_RUN carries it)
-    {"scanStopMhz_", "drawScannerSection"},
-    {"scanStepKhz_", "drawScannerSection"},
-    {"scanDwellMs_", "drawScannerSection"},  // the timing SCANNER_RUN reads when applied
-    {"scanHoldMs_", "drawScannerSection"},
-    {"scanResumeMs_", "drawScannerSection"},
-    {"scanListenMs_", "drawScannerSection"},
-    {"soundCard_", "drawSoundCardControls"},  // what SELECT_SOURCE soundcard:open opens (stage 1 OPEN 3)
-    {"plutoUri_", "drawSourceSection"},  // the Pluto address box: what open-pluto reads
-    {"transmitArgs_", "drawTransmitPage"},  // the transmit address box: what TX_OPEN opens
-    {"patchSinkLines_", "drawPatchFaces"},  // pruning a gone node's cached lines (tied to OPEN 6 - not converted)
-    {"muteKeptRunning_", "drawMutePopup"},  // the mute dialog's "Keep it running" answer
-    {"mutePopup_", "drawMutePopup"},  // the mute dialog closes its subject, in the same answer
-    {"pluginCatalogueUrl_", "drawPluginStoreSection"},  // the store URL box commits its text
-    {"telemetryEnabled_", "drawUsageReportingSection"},  // the usage reporting switch (API: TELEMETRY_ENABLE)
-    {"telemetryInstallId_", "drawUsageReportingSection"},  // mints or forgets the install id
-    {"patchListsWanted_", "drawPatchRadioInspector"},  // "Look for radios" pressed (0.99.40)
+const std::vector<ScopedWrite> kWindowMayWriteScoped = {
+    // CLOSED, engine/stage3b-pre fields-to-commands round 2: the 7
+    // scanner-form fields (FOXAPP_OP_SCANNER_TIMING + the existing
+    // FOXAPP_OP_SCANNER_RANGE), soundCard_ (FOXAPP_OP_SOUND_CARD_FORM),
+    // plutoUri_/transmitArgs_ (a window-local draft, never the engine field -
+    // FOXAPI_OP_SELECT_SOURCE/FOXAPI_OP_TX_OPEN's handlers already persist
+    // them), pluginCatalogueUrl_ (FOXAPP_OP_SET_CATALOGUE_URL),
+    // telemetryEnabled_/telemetryInstallId_ (FOXAPI_OP_TELEMETRY_ENABLE, a
+    // real API op, now implemented), patchListsWanted_
+    // (FOXAPP_OP_PATCH_LOOK_FOR_RADIOS) and patchSinkLines_
+    // (Engine::prunePatchSinkLines(), kControlMayCall below), and
+    // muteKeptRunning_/mutePopup_ (FOXAPP_OP_MUTE_KEEP_RUNNING, both fields
+    // together - one user decision, not two independent clears).
+    //
+    // EMPTY NOW - every field that was ever on this list has a command or a
+    // reviewed direct call. Only patchGraph_ remains, below, still unscoped
+    // (OPEN item 6). A std::vector, not a C array, so an empty list compiles
+    // (an empty-initialised array's bound cannot be deduced) - the moment
+    // this is non-empty again, `= {...}` list-initialises it exactly the
+    // same way.
 };
 // UNSCOPED: written from many controls across the patch canvas and inspector
 // (drawPatchView, drawPatchCanvas's caller, drawPatchRadioInspector and
