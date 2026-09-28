@@ -5184,6 +5184,26 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             // list opened, or "Look for radios").
             scanNative();
             return res;
+        case FOXAPP_OP_PATCH_RADIO_LIST_OPENED:
+            // A Radio's device list opening (0.99.40). The native walk runs
+            // every time the list opens - it opens nothing, so nothing to
+            // defer for. The SoapySDR probe is different: asked for ONCE
+            // EVER (patchListsWanted_ guards it, exactly as
+            // drawPatchRadioInspector did before the engine extraction), and
+            // even then only as a WISH (patchScanWanted_) - patchReconcile
+            // runs it on the first frame the scan plan can vouch for every
+            // radio this process has open, never here, because a radio may
+            // still be opening under this very call. Engine/stage3b-pre B2:
+            // the branch used to reuse FOXAPP_OP_SCAN_DEVICES_ON_OPEN here,
+            // which ran the probe IMMEDIATELY on every first open and never
+            // retried a deferral - patchScanWanted_ was dead code as a
+            // result (nothing ever set it).
+            if (!patchListsWanted_) {
+                patchListsWanted_ = true;
+                if (!soapyScanned_ || soapyScanPartial_) { patchScanWanted_ = true; }
+            }
+            scanNative();
+            return res;
         case FOXAPP_OP_SET_NETWORK_USRP_SCAN:
             lookForNetworkUsrps_ = on;
             if (lookForNetworkUsrps_) { scanSoapy(); }

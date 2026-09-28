@@ -372,6 +372,12 @@ struct AppWindowTestAccess {
             return !a.engine_.soapyScanPending_;
         });
     }
+    // The patch page's device-list wish (engine/stage3b-pre B2).
+    static bool patchListsWanted(AppWindow& a) { return a.engine_.patchListsWanted_; }
+    static bool patchScanWanted(AppWindow& a) { return a.engine_.patchScanWanted_; }
+    static void setDeviceOpenPending(AppWindow& a, bool v) { a.engine_.deviceOpenPending_ = v; }
+    static void patchReconcile(AppWindow& a) { a.engine_.patchReconcile(); }
+    static void setPatchScanWanted(AppWindow& a, bool v) { a.engine_.patchScanWanted_ = v; }
     static bool networkUsrps(AppWindow& a) { return a.engine_.lookForNetworkUsrps_; }
     static bool waitOpen(AppWindow& a) {
         return waitFor([&a] {
@@ -937,6 +943,31 @@ void sourceOps(AppWindow& a) {
         CHECK(ok(A::apply(a, cmd::make(FOXAPP_OP_SCAN_DEVICES_ON_OPEN))));
         CHECK(A::waitSoapy(a));
         CHECK(A::soapyCount(a) == 1u);
+    }
+
+    covering(FOXAPP_OP_PATCH_RADIO_LIST_OPENED);
+    {
+        // engine/stage3b-pre B2: a Radio's device list opening. The native
+        // list is re-read EVERY time; the SoapySDR half is a WISH, set only
+        // the very first time ever (never immediately) - patchReconcile runs
+        // it once the scan plan allows, proven separately in
+        // test_patch_scan_wanted.cpp. Here: the wish and the one-time guard.
+        A::clearNative(a);
+        A::clearSoapy(a);
+        CHECK(!A::patchListsWanted(a));
+        CHECK(ok(A::apply(a, cmd::make(FOXAPP_OP_PATCH_RADIO_LIST_OPENED))));
+        CHECK(A::nativeCount(a) == 1u);       // scanNative ran at once
+        CHECK(!A::soapyPending(a));           // never scanSoapy() directly
+        CHECK(A::patchListsWanted(a));        // the wish is now on
+        CHECK(A::patchScanWanted(a));         // unscanned: SoapySDR is owed
+        // A second opening: the native list still refreshes, but the
+        // first-open guard means the wish is not re-armed once it has been
+        // consumed (simulated here by clearing it, as patchReconcile would).
+        A::clearNative(a);
+        A::setPatchScanWanted(a, false);      // as if patchReconcile ran it
+        CHECK(ok(A::apply(a, cmd::make(FOXAPP_OP_PATCH_RADIO_LIST_OPENED))));
+        CHECK(A::nativeCount(a) == 1u);       // native always re-reads
+        CHECK(!A::patchScanWanted(a));        // NOT re-armed: already opened once
     }
 
     covering(FOXAPP_OP_SET_NETWORK_USRP_SCAN);

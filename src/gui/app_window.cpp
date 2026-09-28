@@ -10648,20 +10648,14 @@ void AppWindow::drawPatchView() {
                 patchUi_.view, canvasW, avail.y, nodesPlaced_);
             if (pressedPart >= 0) {
                 const Part& p = kParts[pressedPart];
-                // A new radio starts on a device nothing else is using - the
-                // receiver's own radio first - so it runs the moment it lands.
-                // The native list is read for it here (0.99.40): showing the
-                // view no longer reads it, and adding a radio is asking for one.
+                // A Radio part is its own case (patchAddRadioPart): it starts
+                // on a free native radio, applied at once, not queued (see
+                // that method for why - engine/stage3b-pre B1). Everything
+                // else just lands on the canvas with no device.
                 if (p.kind == cascade::core::patch::NodeKind::Radio) {
-                    engine_.submitCommand(cascade::core::cmd::make(FOXAPP_OP_SCAN_NATIVE_ONLY));
-                }
-                const std::string dev = p.kind == cascade::core::patch::NodeKind::Radio
-                                            ? patchDefaultDeviceKey()
-                                            : std::string{};
-                const cascade::core::patch::NodeId made =
+                    patchAddRadioPart(p.label, p.feed, at.x, at.y);
+                } else {
                     engine_.patchGraph_.addNode(p.kind, p.label, p.feed, at.x, at.y);
-                if (cascade::core::patch::Node* n = engine_.patchGraph_.mutableNode(made)) {
-                    n->device = dev;
                 }
             } else {
                 const cascade::core::patch::DecoderInfo& info =

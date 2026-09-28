@@ -122,6 +122,27 @@ std::string AppWindow::patchDefaultDeviceKey() const {
     return pc::kGeneratorKey;
 }
 
+pc::NodeId AppWindow::patchAddRadioPart(const std::string& label, pc::PortType feed, float x,
+                                        float y) {
+    // A new radio starts on a device nothing else is using - the receiver's
+    // own radio first - so it runs the moment it lands. The native list is
+    // read for it here (0.99.40): showing the view no longer reads it, and
+    // adding a radio is asking for one.
+    //
+    // APPLIED AT ONCE through applyCommand, not queued (engine/stage3b-pre
+    // B1, 2026-09-28): patchDefaultDeviceKey() below reads the native list
+    // on the very next line, and a queued scan would not have run yet - the
+    // node would save the generator instead of the radio it is meant to
+    // start on. f7d1cfc (pre-extraction master) called scanNative() inline
+    // for exactly this reason; applyCommand is its equivalent once the
+    // native walk moved behind the command path.
+    engine_.applyCommand(cascade::core::cmd::make(FOXAPP_OP_SCAN_NATIVE_ONLY));
+    const std::string dev = patchDefaultDeviceKey();
+    const pc::NodeId made = engine_.patchGraph_.addNode(pc::NodeKind::Radio, label, feed, x, y);
+    if (pc::Node* n = engine_.patchGraph_.mutableNode(made)) { n->device = dev; }
+    return made;
+}
+
 void AppWindow::drawPatchTransport() {
     // THE SAME TRANSPORT AS THE MAIN PANEL (owner, 0.99.18: "a start button
     // like we have on the main panel so the user doesnt have to go between the
@@ -341,22 +362,23 @@ void AppWindow::drawPatchRadioInspector(pc::Node& n) {
     ImGui::SetNextItemWidth(-FLT_MIN);
     const std::vector<PatchDeviceChoice> choices = engine_.patchDeviceChoices();
     if (ImGui::BeginCombo("##patchdevice", engine_.patchDeviceLabel(n.device).c_str())) {
-        // OPENING THE LIST IS ASKING FOR IT (0.99.40), as the Source section's
-        // first open is: the view shown at start-up asked for nothing, so the
-        // SoapySDR scan and the sound card listing are started here.
-        engine_.patchListsWanted_ = true;
         // The native radios and the recordings are read afresh each time the
         // list opens - a dongle plugged in or a file saved a moment ago is in
         // it - and on no other frame, as the Source section's list is. The
         // rows drawn this frame are the ones read last time; the new list is
         // there on the next frame, which is the one the eye reaches it on.
-        // FOXAPP_OP_SCAN_DEVICES_ON_OPEN is the same lazy-first-scan command
-        // the Source section's own list uses (scanNative always; scanSoapy
-        // only while unscanned or a partial scan is owed), so the vendor
-        // probe still runs at most once unless a scan beside an open radio
-        // left it partial.
+        //
+        // OPENING THE LIST IS ASKING FOR IT (0.99.40), as the Source
+        // section's first open is - but the SoapySDR half is a WISH, set
+        // ONCE EVER by FOXAPP_OP_PATCH_RADIO_LIST_OPENED (patchListsWanted_
+        // guards it), and only run by patchReconcile once the scan plan can
+        // vouch for every radio this process has open - never here, since a
+        // radio may still be opening under this very call. Applied at once:
+        // the native list this same combo reads is built by it.
+        // (engine/stage3b-pre B2: FOXAPP_OP_SCAN_DEVICES_ON_OPEN used to run
+        // the probe here immediately and never retried a deferral.)
         if (ImGui::IsWindowAppearing()) {
-            engine_.submitCommand(cascade::core::cmd::make(FOXAPP_OP_SCAN_DEVICES_ON_OPEN));
+            engine_.applyCommand(cascade::core::cmd::make(FOXAPP_OP_PATCH_RADIO_LIST_OPENED));
             engine_.patchListRecordings();
         }
         for (std::size_t i = 0; i < choices.size(); ++i) {

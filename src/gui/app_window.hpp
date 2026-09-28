@@ -1929,6 +1929,14 @@ private:
     // no other Radio has it, else the first free device listed, else the
     // generator.
     std::string patchDefaultDeviceKey() const;
+    // A Radio PART dropped from the bin (engine/stage3b-pre B1, 2026-09-28):
+    // starts on a free native radio, so it needs the native list first, at
+    // once - the node is created and given a device on the same call, and a
+    // QUEUED scan would still be sitting in the command queue when
+    // patchDefaultDeviceKey() below reads it, saving the generator instead.
+    cascade::core::patch::NodeId patchAddRadioPart(const std::string& label,
+                                                    cascade::core::patch::PortType feed, float x,
+                                                    float y);
     // A centre typed on a Radio node (its face or the panel): taken when the
     // radio behind the node's converter would be told something above 0 Hz
     // (core::radioCentreTakeable), refused with a sentence otherwise
