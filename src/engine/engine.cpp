@@ -5772,6 +5772,37 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             }
             return res;
 
+        // --- status lines and flags a panel used to clear or consume in place
+        // (engine/stage3b-pre 2c, docs/engine-stage3.md OPEN 1) --------------
+        case FOXAPP_OP_SET_SOURCE_ERROR:
+            // The window's OWN validation (a typed frequency it could not
+            // parse) - text empty clears it, exactly as `.clear()` did.
+            sourceError_ = text;
+            return res;
+        case FOXAPP_OP_SET_BOOKMARK_NOTE:
+            bookmarkImportNote_ = text;
+            return res;
+        case FOXAPP_OP_CLEAR_STATUS:
+            switch (c.ival[0]) {
+                case cmd::FOXAPP_STATUS_GPS_REFUSAL:
+                    gpsRefusal_.clear();
+                    return res;
+                case cmd::FOXAPP_STATUS_SOUND_CARD_MISSING:
+                    soundCardMissing_.clear();
+                    return res;
+                case cmd::FOXAPP_STATUS_DECODER_LOG:
+                    decoderLog_.clear();
+                    return res;
+                case cmd::FOXAPP_STATUS_SOAPY_SCAN_DEFERRED_LOGGED:
+                    soapyScanDeferredLogged_ = false;
+                    return res;
+                case cmd::FOXAPP_STATUS_MUTE_POPUP_QUEUED:
+                    mutePopupQueued_ = false;
+                    return res;
+                default:
+                    return refuse(FOXAPI_OUT_OF_RANGE, "no such status line");
+            }
+
         default:
             break;
     }

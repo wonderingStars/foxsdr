@@ -258,19 +258,17 @@ const char* const kWindowMayWrite[] = {
     // both go through FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN now, which also
     // releases a remote key in the same step (docs/engine-stage3.md OPEN 10).
     "patchGraph_",  // the patch canvas edits the document the patch runtime runs (stage 1 OPEN 10)
-    "sourceError_",  // a typed frequency clears the Source panel error line when submitted (stage 1 OPEN 8)
-    "soapyScanDeferredLogged_",  // the Source panel forgets the scan deferral it logged once the gate opens
+    // sourceError_, soapyScanDeferredLogged_, gpsRefusal_, decoderLog_,
+    // bookmarkImportNote_ and soundCardMissing_ CLOSED engine/stage3b-pre 2c:
+    // FOXAPP_OP_SET_SOURCE_ERROR, FOXAPP_OP_SET_BOOKMARK_NOTE and
+    // FOXAPP_OP_CLEAR_STATUS (docs/engine-stage3.md OPEN item 1's note).
     "pluginCatalogueUrl_",  // the store URL box commits its text
-    "gpsRefusal_",  // the GPS row clears the refusal line when its port changes
-    "patchSinkLines_",  // a Text out face's Clear key
-    "mutePopupQueued_",  // the mute dialog consumes the queued opening
+    "patchSinkLines_",  // a Text out face's Clear key (tied to OPEN 6, the patch runtime - not attempted this round)
+    // mutePopupQueued_ CLOSED engine/stage3b-pre 2c (FOXAPP_OP_CLEAR_STATUS).
     "muteKeptRunning_",  // the mute dialog's Keep it running answer
     "mutePopup_",  // the mute dialog closes its subject
-    "decoderLog_",  // the Decoder output window's Clear key
-    "bookmarkImportNote_",  // the Bookmarks panel clears its last import note
     "telemetryEnabled_",  // the usage reporting switch (API: TELEMETRY_ENABLE)
     "telemetryInstallId_",  // the usage reporting switch mints or forgets the install id
-    "soundCardMissing_",  // the sound card panel forgets the missing-card line when a card is picked
     "patchListsWanted_",  // a Radio's device list opened or "Look for radios" pressed (0.99.40)
 };
 

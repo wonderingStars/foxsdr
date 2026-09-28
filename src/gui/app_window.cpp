@@ -5593,14 +5593,19 @@ void AppWindow::drawFrequencyReadout(float plateX, float plateY, float scale) {
             double typed = 0.0;
             if (parseFrequencyHz(freqEditBuf_, typed)) {
                 engine_.submitCommand(cascade::core::cmd::makeNum(FOXAPI_OP_SET_FREQUENCY, typed));
-                engine_.sourceError_.clear();
+                // A COMMAND, not a direct clear (engine/stage3b-pre 2c):
+                // applied at once so the line clears on THIS frame, as the
+                // direct write did.
+                engine_.applyCommand(cascade::core::cmd::make(FOXAPP_OP_SET_SOURCE_ERROR));
             } else {
                 // One sentence, one format string, so a translation can place
                 // the typed text where its own grammar wants it.
                 std::string msg;
                 cascade::core::formatUtf8(msg, tr("could not read frequency \"%s\""),
                               freqEditBuf_);
-                engine_.sourceError_ = msg;
+                const cascade::core::cmd::QueuedCommand q =
+                    cascade::core::cmd::makeText(FOXAPP_OP_SET_SOURCE_ERROR, msg);
+                engine_.applyCommand(q.c, q.longText);
             }
             freqEditing_ = false;
         } else if (ImGui::IsKeyPressed(ImGuiKey_Escape) || (freqEditWasActive_ && !active)) {
@@ -6946,7 +6951,10 @@ void AppWindow::drawSourceSection() {
     // (usb_device.hpp rule 1), so it can always run, and a user who has just
     // plugged a second dongle in must be able to make it appear.
     const bool scanGated = engine_.soapyScanGated();
-    if (!scanGated) { engine_.soapyScanDeferredLogged_ = false; }  // the next radio gets its own line
+    if (!scanGated) {  // the next radio gets its own line
+        engine_.applyCommand(cascade::core::cmd::makeInt(
+            FOXAPP_OP_CLEAR_STATUS, cascade::core::cmd::FOXAPP_STATUS_SOAPY_SCAN_DEFERRED_LOGGED));
+    }
     if (ImGui::Button(trId("Refresh"))) {
         // The SoapySDR half defers itself, and says so once, while a radio is
         // open.
@@ -9488,7 +9496,8 @@ void AppWindow::drawGpsPositionControl() {
         // rule, so what is saved is what the port layer will be asked for.
         // The field keeps what was typed until the user changes it.
         gpsPort_ = cascade::core::sanitiseSerialPortName(gpsPortInput_);
-        engine_.gpsRefusal_.clear();
+        engine_.applyCommand(cascade::core::cmd::makeInt(FOXAPP_OP_CLEAR_STATUS,
+                                                         cascade::core::cmd::FOXAPP_STATUS_GPS_REFUSAL));
         engine_.gpsReader_.clearResult();
     }
     if (ImGui::IsItemHovered()) {
@@ -9511,7 +9520,8 @@ void AppWindow::drawGpsPositionControl() {
             if (ImGui::Selectable(name.c_str(), name == gpsPort_)) {
                 gpsPort_ = name;
                 cascade::core::formatUtf8(gpsPortInput_, sizeof(gpsPortInput_), "%s", name.c_str());
-                engine_.gpsRefusal_.clear();
+                engine_.applyCommand(cascade::core::cmd::makeInt(FOXAPP_OP_CLEAR_STATUS,
+                                                                 cascade::core::cmd::FOXAPP_STATUS_GPS_REFUSAL));
                 engine_.gpsReader_.clearResult();
             }
         }
@@ -9529,7 +9539,8 @@ void AppWindow::drawGpsPositionControl() {
             std::snprintf(item, sizeof(item), "%d", baud);
             if (ImGui::Selectable(item, baud == gpsBaud_)) {
                 gpsBaud_ = baud;
-                engine_.gpsRefusal_.clear();
+                engine_.applyCommand(cascade::core::cmd::makeInt(FOXAPP_OP_CLEAR_STATUS,
+                                                                 cascade::core::cmd::FOXAPP_STATUS_GPS_REFUSAL));
                 engine_.gpsReader_.clearResult();
             }
         }
@@ -14511,7 +14522,8 @@ void AppWindow::drawMutePopup() {
     // this frame's windows exist.
     if (engine_.mutePopupQueued_) {
         ImGui::OpenPopup(trId("Sound is muted##mute_popup"));
-        engine_.mutePopupQueued_ = false;
+        engine_.applyCommand(cascade::core::cmd::makeInt(
+            FOXAPP_OP_CLEAR_STATUS, cascade::core::cmd::FOXAPP_STATUS_MUTE_POPUP_QUEUED));
     }
     // Centred on the main window, because it is asking about something the
     // user just did to the whole radio and a dialog in the corner of a
@@ -14891,7 +14903,10 @@ void AppWindow::drawDecoderWindow() {
                   kSeparatePageW, kSeparatePageH)) {
         ImGui::Checkbox(trId("Follow"), &decoderAutoScroll_);
         ImGui::SameLine();
-        if (ImGui::SmallButton(trId("Clear##declog"))) { engine_.decoderLog_.clear(); }
+        if (ImGui::SmallButton(trId("Clear##declog"))) {
+            engine_.applyCommand(cascade::core::cmd::makeInt(FOXAPP_OP_CLEAR_STATUS,
+                                                             cascade::core::cmd::FOXAPP_STATUS_DECODER_LOG));
+        }
         ImGui::SameLine();
         ImGui::TextDisabled(engine_.decoderLog_.size() == 1 ? tr("%d line") : tr("%d lines"),
                             static_cast<int>(engine_.decoderLog_.size()));
@@ -17200,7 +17215,9 @@ void AppWindow::drawBookmarksSection() {
             } else {
                 cascade::core::formatUtf8(said, tr("Could not write %s"), shown.c_str());
             }
-            engine_.bookmarkImportNote_ = said;
+            const cascade::core::cmd::QueuedCommand q =
+                cascade::core::cmd::makeText(FOXAPP_OP_SET_BOOKMARK_NOTE, said);
+            engine_.applyCommand(q.c, q.longText);
         }
     }
     if (bookmarkGroupSel_ > 0 && bookmarkGroupSel_ <= static_cast<int>(bookmarkGroups_.size())) {

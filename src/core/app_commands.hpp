@@ -76,11 +76,38 @@
 // today), but this is the immediate, zero-frame-latency release for the
 // normal UI path (the Transmit toolbar switch, the page's own close button).
 #define FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN 0x8408u /* ival[0]: 0/1 - closing releases a remote key held, at once */
+// A typed frequency the Source panel could not parse (engine/stage3b-pre 2c,
+// docs/engine-stage3.md OPEN 1): text, or empty to CLEAR the line - the
+// window's own validation, never a radio's answer (every radio-side error
+// already reaches sourceError_ from inside the Engine).
+#define FOXAPP_OP_SET_SOURCE_ERROR       0x840Au /* text: the red line under the Source controls; empty clears it */
+// The Bookmarks panel's own note (an export's result - an import's note is
+// set by the Engine itself, from FOXAPI_OP_BOOKMARK_IMPORT).
+#define FOXAPP_OP_SET_BOOKMARK_NOTE      0x840Bu /* text: replaces bookmarkImportNote_ */
+// A GROUP OF ONE-WAY "FORGET THIS" LINES (engine/stage3b-pre 2c): each
+// resets exactly one status line/flag the window used to clear or consume in
+// place once its purpose was served, back to its default - never anything a
+// radio, the GPS reader, a scan or a decoder might still need to report a
+// NEW instance of a moment later (this op only ever narrows what is shown,
+// never widens it, which is why one enum-selected op can cover all of them
+// safely). See cascade::core::cmd::FoxAppStatus below for the ival[0] values.
+#define FOXAPP_OP_CLEAR_STATUS           0x840Cu /* ival[0]: FoxAppStatus - which line/flag to reset to its default */
 
 #define FOXAPP_OP_FIRST 0x8000u
 #define FOXAPP_OP_LAST  0x8FFFu
 
 namespace cascade::core::cmd {
+
+// FOXAPP_OP_CLEAR_STATUS's ival[0]. Each resets exactly one field a status
+// panel used to clear or consume in place; see the field named in each
+// comment (engine.hpp) for what it means and who else writes it.
+enum FoxAppStatus : std::int64_t {
+    FOXAPP_STATUS_GPS_REFUSAL = 1,               // gpsRefusal_.clear()
+    FOXAPP_STATUS_SOUND_CARD_MISSING = 2,         // soundCardMissing_.clear()
+    FOXAPP_STATUS_DECODER_LOG = 3,                // decoderLog_.clear()
+    FOXAPP_STATUS_SOAPY_SCAN_DEFERRED_LOGGED = 4, // soapyScanDeferredLogged_ = false
+    FOXAPP_STATUS_MUTE_POPUP_QUEUED = 5,          // mutePopupQueued_ = false (consumed)
+};
 
 // A command and, when its text did not fit FoxCommand::text, the whole of it.
 struct QueuedCommand {

@@ -396,6 +396,7 @@ struct AppWindowTestAccess {
     static bool haveDevice(AppWindow& a) { return a.engine_.device_ != nullptr; }
     static const std::string& sourceError(AppWindow& a) { return a.engine_.sourceError_; }
     static void clearSourceError(AppWindow& a) { a.engine_.sourceError_.clear(); }
+    static void setSourceError(AppWindow& a, const std::string& s) { a.engine_.sourceError_ = s; }
     static float gain(AppWindow& a, const char* name) {
         for (std::size_t i = 0; i < a.engine_.deviceGainNames_.size() && i < a.engine_.deviceGainsDb_.size(); ++i) {
             if (a.engine_.deviceGainNames_[i] == name) { return a.engine_.deviceGainsDb_[i]; }
@@ -445,6 +446,19 @@ struct AppWindowTestAccess {
         return a.engine_.freqMgr_.list()[static_cast<std::size_t>(at)].id;
     }
     static const std::string& importNote(AppWindow& a) { return a.engine_.bookmarkImportNote_; }
+    // The engine/stage3b-pre 2c status-line commands.
+    static void setGpsRefusal(AppWindow& a, const std::string& s) { a.engine_.gpsRefusal_ = s; }
+    static const std::string& gpsRefusal(AppWindow& a) { return a.engine_.gpsRefusal_; }
+    static void setSoundCardMissing(AppWindow& a, const std::string& s) { a.engine_.soundCardMissing_ = s; }
+    static const std::string& soundCardMissing(AppWindow& a) { return a.engine_.soundCardMissing_; }
+    static void pushDecoderLogLine(AppWindow& a) {
+        a.engine_.decoderLog_.push_back(cascade::core::DecodedLine{"test", "line"});
+    }
+    static std::size_t decoderLogSize(AppWindow& a) { return a.engine_.decoderLog_.size(); }
+    static void setSoapyScanDeferredLogged(AppWindow& a, bool v) { a.engine_.soapyScanDeferredLogged_ = v; }
+    static bool soapyScanDeferredLogged(AppWindow& a) { return a.engine_.soapyScanDeferredLogged_; }
+    static void setMutePopupQueued(AppWindow& a, bool v) { a.engine_.mutePopupQueued_ = v; }
+    static bool mutePopupQueued(AppWindow& a) { return a.engine_.mutePopupQueued_; }
     // The web remote's side: the snapshot a browser reads (and the row map it
     // leaves), and a request applied as applyWebControls applies it.
     static void publishWeb(AppWindow& a) { a.engine_.publishReceiverState(); }
@@ -1761,6 +1775,53 @@ void otherOps(AppWindow& a) {
     }
 }
 
+// --- engine/stage3b-pre 2c: status lines/flags the window used to clear or
+// consume in place, now commands -----------------------------------------------
+
+void statusLineOps(AppWindow& a) {
+    covering(FOXAPP_OP_SET_SOURCE_ERROR);
+    {
+        A::setSourceError(a, "stale");
+        CHECK(ok(A::apply(a, text(FOXAPP_OP_SET_SOURCE_ERROR, "a new message"))));
+        CHECK(A::sourceError(a) == "a new message");
+        CHECK(ok(A::apply(a, cmd::make(FOXAPP_OP_SET_SOURCE_ERROR))));  // empty text: clears
+        CHECK(A::sourceError(a).empty());
+    }
+
+    covering(FOXAPP_OP_SET_BOOKMARK_NOTE);
+    {
+        CHECK(ok(A::apply(a, text(FOXAPP_OP_SET_BOOKMARK_NOTE, "Exported 3 to somewhere.xml"))));
+        CHECK(A::importNote(a) == "Exported 3 to somewhere.xml");
+    }
+
+    covering(FOXAPP_OP_CLEAR_STATUS);
+    {
+        A::setGpsRefusal(a, "refused");
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_CLEAR_STATUS, cmd::FOXAPP_STATUS_GPS_REFUSAL))));
+        CHECK(A::gpsRefusal(a).empty());
+
+        A::setSoundCardMissing(a, "missing");
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_CLEAR_STATUS, cmd::FOXAPP_STATUS_SOUND_CARD_MISSING))));
+        CHECK(A::soundCardMissing(a).empty());
+
+        A::pushDecoderLogLine(a);
+        CHECK(A::decoderLogSize(a) >= 1u);
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_CLEAR_STATUS, cmd::FOXAPP_STATUS_DECODER_LOG))));
+        CHECK(A::decoderLogSize(a) == 0u);
+
+        A::setSoapyScanDeferredLogged(a, true);
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_CLEAR_STATUS, cmd::FOXAPP_STATUS_SOAPY_SCAN_DEFERRED_LOGGED))));
+        CHECK(!A::soapyScanDeferredLogged(a));
+
+        A::setMutePopupQueued(a, true);
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_CLEAR_STATUS, cmd::FOXAPP_STATUS_MUTE_POPUP_QUEUED))));
+        CHECK(!A::mutePopupQueued(a));
+
+        // An out-of-range selector is a refusal, not a silent no-op.
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_CLEAR_STATUS, 999)), FOXAPI_OUT_OF_RANGE));
+    }
+}
+
 // --- the queue ------------------------------------------------------------------------------------
 
 void queueDrainsInOrder(AppWindow& a) {
@@ -1815,6 +1876,7 @@ int main() {
         patchOps(app);
         transmitterOps(app);
         otherOps(app);
+        statusLineOps(app);
         queueDrainsInOrder(app);
     }
     everyOpHasACase();

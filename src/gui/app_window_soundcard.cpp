@@ -100,7 +100,8 @@ void AppWindow::drawSoundCardControls() {
                 // Chosen from THIS list: it names exactly this entry, even
                 // when an identical card sits beside it (matchSoundCard).
                 engine_.soundCard_.pickedFromList = true;
-                engine_.soundCardMissing_.clear();
+                engine_.applyCommand(cascade::core::cmd::makeInt(
+                    FOXAPP_OP_CLEAR_STATUS, cascade::core::cmd::FOXAPP_STATUS_SOUND_CARD_MISSING));
                 // Keep the rate if the new card offers it; otherwise its own.
                 const auto rates = cascade::source::soundCardRatesFor(d, engine_.soundCard_.format);
                 const bool offered = std::any_of(rates.begin(), rates.end(), [&](const SoundCardRate& r) {

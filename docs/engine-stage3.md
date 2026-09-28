@@ -653,20 +653,65 @@ comments, the same mention/contract split, only the numbers moved.)
 Things 3a could not move without changing threading or behaviour, left where
 they were with the facts; and what 3b has to settle first.
 
-1. **Engine fields the window still edits in place** (`kWindowMayWrite`, 24 -
-   see the CLOSED note below): the scanner form (`scanStartMhz_`,
+1. **Engine fields the window still edits in place** (`kWindowMayWrite`, 17 -
+   see the two CLOSED notes below): the scanner form (`scanStartMhz_`,
    `scanStopMhz_`, `scanStepKhz_`, `scanDwellMs_`, `scanHoldMs_`,
    `scanResumeMs_`, `scanListenMs_`), the sound card form `soundCard_`, the
    Pluto address `plutoUri_`, the transmit address `transmitArgs_`, the patch
-   document `patchGraph_` (stage 1 OPEN 10), `sourceError_` (a typed
-   frequency clears it, stage 1 OPEN 8), `soapyScanDeferredLogged_`,
-   `pluginCatalogueUrl_`, `gpsRefusal_`, `patchSinkLines_`,
-   `mutePopupQueued_`, `muteKeptRunning_`, `mutePopup_`, `decoderLog_`,
-   `bookmarkImportNote_`, `telemetryEnabled_`, `telemetryInstallId_`,
-   `soundCardMissing_`. Each is a form or a status line the engine reads when
-   it acts; in 3b each becomes a command (or a form a command carries), or the
-   status line moves to the window. The guard lists them one by one with the
-   reason.
+   document `patchGraph_` (stage 1 OPEN 10), `patchSinkLines_`,
+   `mutePopupQueued_` → CLOSED below, `muteKeptRunning_`, `mutePopup_`,
+   `pluginCatalogueUrl_`, `telemetryEnabled_`, `telemetryInstallId_`. Each is
+   a form or a status line the engine reads when it acts; in 3b each becomes
+   a command (or a form a command carries), or the status line moves to the
+   window. The guard lists them one by one with the reason.
+   **CLOSED, engine/stage3b-pre 2c (2026-09-28): `sourceError_`,
+   `soapyScanDeferredLogged_`, `gpsRefusal_`, `decoderLog_`,
+   `bookmarkImportNote_`, `soundCardMissing_`, `mutePopupQueued_`** (7 of
+   the 8 remaining status-line entries after 2b; `patchSinkLines_`,
+   `muteKeptRunning_` and `mutePopup_` were NOT attempted - see below). Three
+   new extension ops (`core/app_commands.hpp`): `FOXAPP_OP_SET_SOURCE_ERROR`
+   (text, empty clears - the window's OWN validation of a typed frequency it
+   could not parse; every radio-side error still reaches `sourceError_` from
+   inside the Engine, unchanged), `FOXAPP_OP_SET_BOOKMARK_NOTE` (text - the
+   Bookmarks panel's export result; an import's note is still set by the
+   Engine itself from `FOXAPI_OP_BOOKMARK_IMPORT`), and `FOXAPP_OP_CLEAR_STATUS`
+   (`ival[0]`, a `cascade::core::cmd::FoxAppStatus` selector) covering the
+   other five - each purely a "forget this, back to default" reset the window
+   used to do in place once a status line's purpose was served (a port
+   changed, a card was picked, a Clear button pressed, a gate reopened, a
+   popup was shown), never anything a radio/GPS/scan/decoder might still need
+   to report a NEW instance of a moment later - which is why one op, selected
+   by an enum, safely covers all five rather than needing five. Every write
+   site converted to `engine_.applyCommand(...)`, applied AT ONCE (same-frame,
+   no behaviour change): the Source frequency editor (2 sites: clear on a
+   good parse, set the parse-failure message on a bad one), three GPS-form
+   sites (port typed, port picked from the list, baud picked - each pairs
+   with `gpsReader_.clearResult()`, which stays a direct call, already
+   `kReadOnly`), the sound-card device picker, the Decoder output window's
+   Clear button, the Source section's per-frame "the gate reopened" line
+   (`drawSourceSection`, still checked every frame - now submits the same
+   idempotent command every frame that condition holds, harmless, matching
+   what the direct write already did at the same frequency), the mute
+   popup's "shown" consumption, and the Bookmarks panel's export note.
+   `tests/test_apply_command.cpp` gained `statusLineOps` covering all three
+   ops (including the out-of-range `CLEAR_STATUS` selector refusing, not
+   silently no-op-ing). Proven red against two mutants in the same run (drop
+   `gpsRefusal_.clear()` from its case; drop the `default:` refusal): 2/758
+   failed, source restored byte-identical and reverified green.
+   `test_command_path_guard`: 128/128 (7 fewer than the post-2b 135), 0
+   violations.
+   **NOT ATTEMPTED this round: `patchSinkLines_`** - its one write site
+   (`app_window.cpp`, pruning a gone patch node's cached lines out of the map)
+   sits inside the same per-frame patch reconciliation loop OPEN item 6
+   describes, not a standalone status line; converting it without touching
+   that loop's own open design question was judged not worth doing in
+   isolation. **`muteKeptRunning_`/`mutePopup_`**: genuinely bidirectional
+   dialog state (the Engine opens the question, the window's answer sets
+   `muteKeptRunning_` and resets `mutePopup_` together, as one user decision,
+   not a status line either side merely clears) - a real design worth doing
+   for 3b, not attempted here for the same reason the previous round gave for
+   not attempting 2b/2c at all: not without the same build/test verification
+   the rest of this round got.
    **CLOSED, engine/stage3b-pre 2b (2026-09-28): `transmitOpen_`** (stage 1
    OPEN 2), the one entry on this list flagged SAFETY. The toolbar switch and
    the page's own close (ImGui's close box and its custom chrome's close
