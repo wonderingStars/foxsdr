@@ -44,6 +44,10 @@ exactly as many.
   every five minutes** — the install identifier, the version, and nothing
   else — so we can count how many copies are running at a given moment.
   It is governed by the same switch: reporting off means no beats, ever.
+- **Each usage report is sent once.** To remember that it has, FoxSDR leaves
+  an empty file named `telemetry-sent-` plus 16 hexadecimal characters beside
+  `config.json`. The characters are a checksum of the report already
+  described here; the file holds nothing, and the next report replaces it.
 - **No personal data is collected**, and no IP address or location is recorded.
 - **Crash and freeze reports are written to your machine, and — if you leave
   Diagnostics on — the report *text* is sent on the next start.** Not from

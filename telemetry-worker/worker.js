@@ -122,7 +122,7 @@ export default {
       ],
       doubles: [
         num(body.launches, 1e6),    // double1  launches since install
-        num(body.crashes, 1e6),     // double2  unclean exits since last report
+        num(body.crashes, 1e6),     // double2  unclean exits since install (lifetime, never reset)
         num(body.sessionSec, 86400 * 30),  // double3  last session length
         topSec,                     // double4  seconds in the top mode
       ],

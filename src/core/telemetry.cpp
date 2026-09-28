@@ -4,7 +4,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
+#include <filesystem>
+#include <system_error>
 
 #include <nlohmann/json.hpp>
 
@@ -15,7 +18,11 @@
 #pragma comment(lib, "bcrypt.lib")
 #pragma comment(lib, "winhttp.lib")
 #else
+#include <cerrno>
 #include <cstdlib>
+
+#include <fcntl.h>
+#include <unistd.h>
 
 #include <sys/utsname.h>
 
@@ -440,6 +447,55 @@ void HeartbeatSender::poll(double now) {
         done->store(true);
     });
 #endif
+}
+
+namespace {
+constexpr char kSentMarkerPrefix[] = "telemetry-sent-";
+}  // namespace
+
+std::string reportSendMarkerName(const std::string& json) {
+    std::uint64_t h = 14695981039346656037ull;  // FNV-1a 64
+    for (unsigned char c : json) {
+        h ^= c;
+        h *= 1099511628211ull;
+    }
+    char hex[17];
+    std::snprintf(hex, sizeof hex, "%016llx", static_cast<unsigned long long>(h));
+    return std::string(kSentMarkerPrefix) + hex;
+}
+
+bool claimReportSend(const std::string& dir, const std::string& json) {
+    if (dir.empty() || json.empty()) { return true; }
+    // UTF-8 in, whatever the platform wants out: a std::string path on Windows
+    // would be read in the ANSI code page and miss a non-ASCII user folder.
+    const std::filesystem::path folder(std::u8string(dir.begin(), dir.end()));
+    const std::string name = reportSendMarkerName(json);
+    const std::filesystem::path marker = folder / name;
+#if defined(_WIN32)
+    const HANDLE h = ::CreateFileW(marker.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW,
+                                   FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) {
+        const DWORD err = ::GetLastError();
+        return !(err == ERROR_FILE_EXISTS || err == ERROR_ALREADY_EXISTS);
+    }
+    ::CloseHandle(h);
+#else
+    const int fd = ::open(marker.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+    if (fd < 0) { return errno != EEXIST; }
+    ::close(fd);
+#endif
+    // Won. Older reports' markers are no longer needed: their reports can
+    // never be pending again, because the config now holds this one or newer.
+    std::error_code ec;
+    for (std::filesystem::directory_iterator it(folder, ec), end; !ec && it != end;
+         it.increment(ec)) {
+        const std::string other = it->path().filename().string();
+        if (other != name && other.rfind(kSentMarkerPrefix, 0) == 0) {
+            std::error_code rm;
+            std::filesystem::remove(it->path(), rm);
+        }
+    }
+    return true;
 }
 
 }  // namespace cascade::core
