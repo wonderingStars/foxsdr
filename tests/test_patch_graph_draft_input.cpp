@@ -30,6 +30,8 @@
 //   J  a new patch document arriving mid-drag (J0: a DOCUMENT op, J1:
 //      loadPatchDocument) whose Map has the dragged node's id: the drag and
 //      the selection are dropped, the Map stays where the document put it
+//   I2 ...and that first flush sends no command at all (the engine's node
+//      store is untouched)
 //   K  a wire drag left in the air by the view going away (the button
 //      released while it was hidden) does not stop the page following the
 //      engine
@@ -505,9 +507,12 @@ int main() {
     }
 
     // --- I: a draft never copied from the engine is never sent -----------------
-    //     Twice: as a new document (which the epoch alone would also catch)
-    //     and as a plain replacement, where nothing but the draft's own
-    //     "never copied" state stands between an empty draft and the graph.
+    //     Twice: as a new document and as a plain replacement. TWO things
+    //     stand between an empty never-copied draft and the engine's graph:
+    //     the draft's own "never copied" state (patchDraftInStep_), and - if
+    //     that were gone - the rebase, which merges an empty draft against an
+    //     empty base into the engine's own graph, so the node COUNT survives
+    //     either way. I2 below tells the two apart.
     for (const std::int64_t flags : {std::int64_t{FOXAPP_PATCH_GRAPH_DOCUMENT}, std::int64_t{0}}) {
         std::printf("I: a patch put in the engine (flags %lld), then the commit before any frame\n",
                     static_cast<long long>(flags));
@@ -565,6 +570,25 @@ int main() {
         CHECK(m != nullptr && m->x == 10.0f && m->y == 10.0f);
         CHECK(A::engine(*a).nodes().size() == 1u);
         CHECK(inStep(*a));
+        delete a;
+    }
+
+    // --- I2: ...and the flush sends NOTHING at all -----------------------------
+    //     Not "the same graph comes back": no command, so the engine's node
+    //     store is the very one it was. Any replacement - even with the same
+    //     nodes, as the rebase would send - moves it (patchGraph_ is assigned
+    //     a new Graph), so the address of a node tells whether one happened.
+    {
+        std::printf("I2: a graph set in the engine (flags 0), then the first flush sends nothing\n");
+        auto* a = new AppWindow();
+        pc::Graph g;
+        const pc::NodeId one = g.addNode(pc::NodeKind::Channel, "one", pc::PortType::Iq, 1.0f, 2.0f);
+        const cascade::core::cmd::QueuedCommand q =
+            cascade::core::cmd::makeText(FOXAPP_OP_PATCH_SET_GRAPH, pc::graphCommandText(g), 0);
+        CHECK(A::apply(*a, q).status == FOXAPI_OK);
+        const pc::Node* before = A::engine(*a).find(one);
+        A::flush(*a);
+        CHECK(before != nullptr && A::engine(*a).find(one) == before);
         delete a;
     }
 
