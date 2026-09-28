@@ -10430,6 +10430,17 @@ bool AppWindow::patchInteracting() {
 }
 
 void AppWindow::adoptPatchGraph() {
+    // A NEW PATCH (another epoch): whatever the page was doing - a drag, a
+    // resize, a wire in the air, a selection - was of a node in the OLD one,
+    // and its id may now name a different node altogether. All of it goes,
+    // however the new patch arrived (a document op, loadPatchDocument).
+    if (patchDraftInStep_ && patchDraftEpoch_ != engine_.patchGraphEpoch_) {
+        patchUi_.dragNode = cascade::core::patch::kNoNode;
+        patchUi_.resizeNode = cascade::core::patch::kNoNode;
+        patchUi_.wiring = false;
+        patchUi_.selected = cascade::core::patch::kNoNode;
+        patchUi_.wireSelected = false;
+    }
     patchDraft_ = engine_.patchGraph_;
     patchDraftBase_ = engine_.patchGraph_;
     patchDraftBaseText_ = cascade::core::patch::graphCommandText(engine_.patchGraph_);
@@ -10475,11 +10486,9 @@ void AppWindow::commitPatchDraft() {
     if (draft == patchDraftBaseText_) { return; }
     if (patchDraftEpoch_ != engine_.patchGraphEpoch_) {
         // A NEW PATCH was loaded under this edit: the edit was of the old one,
-        // and belongs to nothing in the new one. It goes, and so does the drag.
+        // and belongs to nothing in the new one. It goes, and adopting the new
+        // patch drops the drag with it.
         cascade::core::diagLogf("patch: an edit of the previous patch was dropped - a new patch was loaded");
-        patchUi_.dragNode = pc::kNoNode;
-        patchUi_.resizeNode = pc::kNoNode;
-        patchUi_.wiring = false;
         adoptPatchGraph();
         return;
     }

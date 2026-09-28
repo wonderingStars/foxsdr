@@ -27,6 +27,9 @@
 //      another: the drag is never thrown back, and neither change is lost
 //   H  a draft the engine cannot take (a frequency that is not a number) is
 //      refused, the engine's graph unchanged, and the page shows the engine's
+//   J  a new patch document arriving mid-drag (J0: a DOCUMENT op, J1:
+//      loadPatchDocument) whose Map has the dragged node's id: the drag and
+//      the selection are dropped, the Map stays where the document put it
 //   K  a wire drag left in the air by the view going away (the button
 //      released while it was hidden) does not stop the page following the
 //      engine
@@ -120,6 +123,7 @@ struct AppWindowTestAccess {
                         a.patchUi_.view.zoom};
     }
     static pc::NodeId dragging(AppWindow& a) { return a.patchUi_.dragNode; }
+    static pc::NodeId selected(AppWindow& a) { return a.patchUi_.selected; }
 };
 }  // namespace cascade::gui
 
@@ -517,6 +521,50 @@ int main() {
         A::flush(*a);
         CHECK(A::engine(*a).nodes().size() == 2u);
         CHECK(A::draft(*a).nodes().size() == 2u);  // it starts FROM the engine's graph
+        delete a;
+    }
+
+    // --- J0 and J1: a NEW PATCH arrives mid-drag -------------------------------
+    //     Its Map part has the id of the node being dragged (a new document
+    //     numbers its own nodes). The drag was of a node in the OLD patch: it
+    //     is dropped, and the Map stays where the new patch put it - through
+    //     the engine directly (J0, as any sender of a document would) and
+    //     through the page's own loadPatchDocument (J1, the config's path).
+    for (int via = 0; via < 2; ++via) {
+        std::printf("J%d: drag the radio; a new patch (%s) puts a Map under its id\n", via,
+                    via == 0 ? "a DOCUMENT op" : "loadPatchDocument");
+        Starter s;
+        AppWindow* a = makeApp(s);
+        const ImVec2 at = header(*a, s.radio);
+        mouseTo(*a, at.x, at.y);
+        press(*a);
+        mouseTo(*a, at.x + 40.0f, at.y + 10.0f);
+        CHECK(A::dragging(*a) == s.radio);
+        CHECK(A::selected(*a) == s.radio);
+        pc::Graph doc;
+        CHECK(doc.addNodeAs(s.radio, pc::NodeKind::Map, "Map", pc::PortType::Track, 10.0f, 10.0f) == s.radio);
+        if (via == 0) {
+            const cascade::core::cmd::QueuedCommand q = cascade::core::cmd::makeText(
+                FOXAPP_OP_PATCH_SET_GRAPH, pc::graphCommandText(doc), FOXAPP_PATCH_GRAPH_DOCUMENT);
+            CHECK(A::apply(*a, q).status == FOXAPI_OK);
+        } else {
+            A::load(*a, doc);
+        }
+        for (int k = 2; k <= 4; ++k) {
+            mouseTo(*a, at.x + 40.0f * static_cast<float>(k), at.y + 10.0f * static_cast<float>(k));
+        }
+        const pc::Node* m = A::engine(*a).find(s.radio);
+        std::printf("   Map at %.1f,%.1f\n", m != nullptr ? static_cast<double>(m->x) : -1.0,
+                    m != nullptr ? static_cast<double>(m->y) : -1.0);
+        CHECK(m != nullptr && m->kind == pc::NodeKind::Map && m->x == 10.0f && m->y == 10.0f);
+        CHECK(A::dragging(*a) == pc::kNoNode);   // the drag went with the old patch
+        CHECK(A::selected(*a) == pc::kNoNode);   // ...and so did what was selected in it
+        release(*a);
+        frames(*a, 2);
+        m = A::engine(*a).find(s.radio);
+        CHECK(m != nullptr && m->x == 10.0f && m->y == 10.0f);
+        CHECK(A::engine(*a).nodes().size() == 1u);
+        CHECK(inStep(*a));
         delete a;
     }
 
