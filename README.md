@@ -1,52 +1,49 @@
 # FoxSDR
 
-A from-scratch software-defined radio receiver for Windows: spectrum and
-waterfall, multi-mode demodulation (NFM/WFM/AM/DSB/USB/LSB/CW), stereo FM with
-RDS, recording, bookmarks, a scanner, band plans, native drivers for the
-RTL-SDR, the HackRF, the Airspy R2/Mini, the Airspy HF+, the SDRplay RSPs, the
-Mirics MSi2500, the RX888 mk2 and the ADALM-Pluto — which it also
-TRANSMITS through — and hardware support for any
+A from-scratch software-defined radio receiver for Windows and Linux:
+spectrum and waterfall, multi-mode demodulation (NFM/WFM/AM/DSB/USB/LSB/CW),
+stereo FM with RDS, recording, bookmarks, a scanner, band plans, native
+drivers for the RTL-SDR, the HackRF, the Airspy R2/Mini, the Airspy HF+, the
+SDRplay RSPs, the Mirics MSi2500, the RX888 mk2 and the ADALM-Pluto — which it
+also TRANSMITS through — and hardware support for any
 other radio SoapySDR can reach.
 
-> ### ⚠️ Linux is in development and not usable yet
+> ### Linux status
 >
-> **Windows is the only supported platform.** A Linux build exists and its test
-> suite passes, but it is unfinished work rather than a release, and it is not
-> expected to work properly for real use yet:
+> **Linux is actively supported.** Releases ship a Linux AppImage and a plain
+> tarball beside the Windows installer, and the same CI run that builds and
+> tests Windows on every push builds, tests and smoke-runs Linux; Linux bugs get fixed the same way Windows
+> ones do, and a Linux crash writes and can upload the same report a Windows
+> one does (`src/core/crash_handler_posix.cpp`, `src/core/crash_upload.cpp`).
+> What is genuinely still catching up to Windows:
 >
-> - **Never tested with a radio on Linux.** The port was verified against the
->   test suite, the built-in signal generator and IQ-file playback. No SDR has
->   been driven through it on a Linux machine, so the hardware path is unproven,
->   and that is the single biggest reason not to rely on it yet.
-> - **The native USB drivers now have a Linux transport, but no radio has been
->   through it.** Since 0.97.0 the RTL-SDR, HackRF, Airspy R2/Mini, Airspy HF+,
->   RX888 mk2 and Mirics drivers reach their radios on Linux through
->   `src/usb/usbfs_device.cpp`, the kernel's own usbfs interface, with no
->   libusb and no SoapySDR module; the udev rule in `installer/linux/` grants
->   a desktop user access to the device nodes. Every line of that transport
->   was written and unit-tested on a machine with no radio attached, so the
->   hardware path is unproven — see `installer/linux/README.md` for exactly
->   what is and is not verified. The SDRplay driver dlopens the real Linux API
->   library (`libsdrplay_api.so.3`, from SDRplay's own `.run` installer), also
->   unexercised against a real RSP. Any radio SoapySDR itself can reach
->   already works the same as on Windows.
-> - **The plugins are built and installable, but unproven on air here.**
->   Seventeen of the twenty-four catalogued plugins now ship for Linux and
->   install from the in-app catalogue, including the aircraft registry lookup
->   and the map basemap. The seven that are still Windows-only are the newest
->   instrument decoders — ACARS, FLEX, 406 MHz beacons, ERT utility meters,
->   433 MHz weather sensors and WEFAX — and the example plugin.
-> - **Never run on a real Linux desktop.** It has been exercised under WSL and
->   under a virtual display in CI — neither is a real graphical session with a
->   real sound card.
-> - **An AppImage exists**, built by `installer/linux/build-appimage.sh` and
->   published from CI alongside the plain tarball — see "Building (Linux)"
->   below. It is a packaging convenience, not a claim of readiness: it carries
->   the exact same unproven binary as the tarball.
+> - **The native USB drivers reach their radios on Linux through their own
+>   usbfs transport, not yet confirmed against real hardware.** Since 0.97.0
+>   the RTL-SDR, HackRF, Airspy R2/Mini, Airspy HF+, RX888 mk2 and Mirics
+>   drivers talk to their radios on Linux through `src/usb/usbfs_device.cpp`,
+>   the kernel's own usbfs interface — no libusb, no SoapySDR module; the udev
+>   rule in `installer/linux/` grants a desktop user access to the device
+>   nodes. That transport is written and unit-tested on a machine with no
+>   radio attached, so the hardware path is unproven — see
+>   `installer/linux/README.md` for exactly what is and is not verified. Any
+>   radio SoapySDR itself can reach already works the same as on Windows.
+> - **SDRplay on Linux is the same driver over a different transport, also
+>   not yet confirmed against real hardware.** It `dlopen()`s the vendor's own
+>   `libsdrplay_api.so.3` (from SDRplay's `.run` installer) instead of talking
+>   to a Windows service, and that path is likewise unexercised against a real
+>   RSP.
+> - **21 of the 28 catalogued plugins ship a Linux build today** and install
+>   from the in-app catalogue, including the aircraft registry lookup and the
+>   map basemap. The seven still Windows-only are the newest instrument
+>   decoders — ACARS, FLEX, 406 MHz beacons, ERT utility meters, 433 MHz
+>   weather sensors and WEFAX — and the example plugin.
+> - **Not yet run on a real Linux desktop with a real sound card** by anyone
+>   on the project — it has been exercised under WSL and under a virtual
+>   display in CI. If you run it for real, a report either way is useful.
 >
-> Treat it as something to build and experiment with, not something to rely on.
-> Reports of what breaks are welcome; it will be announced as supported when it
-> has been proven against real hardware and the plugins exist.
+> None of that is a reason to wait rather than install it: point a radio at
+> it and tell us what breaks. It will be announced as fully proven once the
+> hardware items above have a real report behind them.
 
 It also has a **map** for decoded targets — aircraft, ships, stations — and can
 serve its whole interface to a **browser** on your own network, so the receiver
@@ -255,9 +252,10 @@ rounded up to 2: the documented floor is 2 MS/s, and a caller that wanted
 narrowband behaviour being given twice the bandwidth is a lie nothing on screen
 would reveal. Above 20 MS/s the request is coerced down and says so.
 
-**Windows only for now.** The transport is WinUSB; on Linux the HackRF is still
-reached through SoapySDR, and native enumeration returns nothing and says why
-in the log. The protocol layer itself is plain C++20 and builds everywhere.
+**Native on Windows (WinUSB) and Linux (usbfs) alike**, through the same
+`src/usb/usb_device.hpp` transport contract — see "Linux status" at the top of
+this file for what is and is not yet confirmed against real Linux hardware.
+The protocol layer itself is plain C++20 and builds everywhere.
 
 **How it is verified.** There is no HackRF on the bench this was written on, so
 the proof is byte-exactness rather than a spectrum: `tests/test_hackrf_source.cpp`
@@ -356,9 +354,10 @@ folded across the centre of the span. This is also how the receiver reaches
 9 kHz: the local oscillator cannot go below 180 kHz, so it sits at its floor
 and the whole difference is rotated out in software.
 
-**Windows only for now**, like the other two and for the same reason: the
-transport is WinUSB, and native enumeration returns nothing and says why in the
-log on other platforms. The protocol and DSP layer is plain C++20 and builds
+**Native on Windows (WinUSB) and Linux (usbfs) alike**, like the other two,
+through the same `src/usb/usb_device.hpp` transport contract — see "Linux
+status" at the top of this file for what is and is not yet confirmed against
+real Linux hardware. The protocol and DSP layer is plain C++20 and builds
 everywhere.
 
 **How it is verified.** There is no Airspy HF+ on the bench this was written
@@ -422,8 +421,8 @@ Windows the SDRplay API runs as a background service this driver talks to
 through `sdrplay_api.dll`; on Linux there is no service, only
 `libsdrplay_api.so.3` from SDRplay's own `.run` installer, `dlopen()`d the
 same way. Either platform without the API installed gets an empty enumeration
-and a reason in the log, and the Linux path has not yet been run against a
-real RSP (see the notice at the top of this file).
+and a reason in the log, and the Linux path has not yet been confirmed against
+a real RSP (see "Linux status" at the top of this file).
 
 **When the service itself stops answering** (0.96.1). Everything above depends
 on a Windows service that FoxSDR neither owns nor can restart, and none of the
@@ -928,11 +927,13 @@ hears nothing at all below 24 MHz. On any other R82xx dongle, tuning below
 24 MHz switches the demodulator to direct sampling instead, which is what the
 common HF modification wires an antenna to.
 
-**Windows only for now**, like the HackRF driver and for the same reason: the
-transport is WinUSB. On Linux an RTL-SDR is still reached through SoapySDR, and
-native enumeration returns nothing and says why. **A dongle must be bound to
-WinUSB** (with Zadig) to be opened natively; one still running the DVB-T driver
-is not listed, because it cannot be opened.
+**Native on Windows (WinUSB) and Linux (usbfs) alike**, like the HackRF driver,
+through the same `src/usb/usb_device.hpp` transport contract — see "Linux
+status" at the top of this file for what is and is not yet confirmed against
+real Linux hardware. **On Windows a dongle must be bound to WinUSB** (with
+Zadig) to be opened natively; one still running the DVB-T driver is not
+listed, because it cannot be opened. **On Linux nothing needs unbinding** —
+`installer/linux/README.md` explains why.
 
 **How it is verified.** Both ways, because neither alone is enough.
 `tests/test_rtlsdr_source.cpp` drives the whole driver through a fake transport
@@ -984,13 +985,13 @@ state is not in the config a script can pre-write (only which BANK is showing
 is); `FOXSDR_OPEN_SERIAL_PORTS=1` opens SYSTEM's Serial ports section on the
 first frame it is drawn, for a shot that needs to show its contents.
 
-## Building (Linux — in development, see the notice at the top)
+## Building (Linux)
 
-**This is unfinished work.** It builds and the tests pass, and seventeen of the
-twenty-four catalogued plugins install from the in-app catalogue (see
-[Plugins](#plugins)), but it has never been driven with a radio on Linux and it
-has never run on a real desktop session. Build it to experiment or to help find
-what is broken, not to use as a receiver.
+**Actively supported, with the hardware path still unconfirmed.** It builds,
+the tests pass, and 21 of the 28 catalogued plugins install from the in-app
+catalogue (see [Plugins](#plugins)) — see "Linux status" at the top of this
+file for exactly what has and has not yet been run against real hardware and
+a real desktop session.
 
 The same vendored dependencies build from source here too. Three system
 packages are needed: OpenGL headers, SoapySDR, and OpenSSL — the last of these
@@ -1031,8 +1032,8 @@ does work on Linux as of this port: it `dlopen()`s `libsdrplay_api.so.3`, the
 SONAME SDRplay's own `.run` installer registers with `ldconfig` (get the API
 from [sdrplay.com](https://www.sdrplay.com), version 3.x), falling back to the
 bare `libsdrplay_api.so` for a dev machine with only the unversioned symlink —
-but like everything else in the notice at the top of this file, that path has
-not been exercised against a real RSP. The ADALM-Pluto's driver
+but like everything else under "Linux status" at the top of this file, that
+path has not been exercised against a real RSP. The ADALM-Pluto's driver
 (`src/source/iiod_client.*`) talks IIOD over a plain TCP socket rather than
 USB, so it already builds and runs identically on both platforms — it is
 likewise unverified against a real Pluto here. Any radio SoapySDR itself can
@@ -1071,10 +1072,10 @@ the tarball.
 **Plugins: one catalogue, both platforms.** The catalogue lists every build of
 a plugin and each installation picks the one matching its own os and
 architecture, so a Windows and a Linux machine read the identical file and
-install different binaries from it. Seventeen of the twenty-four plugins ship
-for both; the seven newest instrument decoders (ACARS, FLEX, 406 MHz beacons,
-ERT meters, 433 MHz weather sensors, WEFAX) are Windows-only so far, as is the
-example plugin, which is built from this repository rather than the plugin
+install different binaries from it. 21 of the 28 plugins ship for both; the
+seven newest instrument decoders (ACARS, FLEX, 406 MHz beacons, ERT meters,
+433 MHz weather sensors, WEFAX) are Windows-only so far, as is the example
+plugin, which is built from this repository rather than the plugin
 repository.
 
 ## CAT control
