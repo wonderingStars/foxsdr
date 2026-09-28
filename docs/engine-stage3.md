@@ -976,6 +976,99 @@ they were with the facts; and what 3b has to settle first.
    (text, pan, zoom) is restored and saved by the window. 3b: the compile and
    reconcile belong on the control thread, driven by a command carrying the
    graph; the "page closed" rule becomes an explicit command.
+   **DESIGN ONLY, engine/stage3b-pre "next round" item 3 (2026-09-28) - NOT
+   implemented.** Surveyed first, because the brief's own bar for
+   implementing ("add node, wire, delete, device change, save/load through
+   commands, with no user-visible change") turned out not to be reachable
+   this round without either leaving it half done or risking a real,
+   unverified behaviour change - both worse than stopping here and saying so.
+
+   **What is actually there.** `engine_.patchGraph_` is edited from the
+   window at 27 call sites across `app_window.cpp` and
+   `app_window_patch_radios.cpp` - `addNode` (the parts bin drop, the Radio
+   inspector's own add), `mutableNode` (dragged position, resize, every
+   inspector field: device, frequency, label, squelch...), `removeNode`
+   (Delete key / context menu), and the wire endpoints the canvas drags
+   between ports. None of these goes through a command; all are direct
+   mutations of a live, friend-accessible `core::patch::Graph`, which is
+   exactly stage 1/3a's "the window still edits it in place" (`patchGraph_`
+   is `kWindowMayWriteUnscoped`'s one remaining, deliberately-unscoped entry -
+   see item 1). `patchOpen_` (which face is showing) is a WINDOW field, not
+   an engine one - the engine only ever asks for it through the
+   `patchPageOpen()` host hook, which is already the correct stage-3a shape
+   and is NOT itself a guard violation; the actual problem is what it gates.
+
+   **Design A - the graph as one command (recommended).** The document is
+   small (a session's whole patch, typically under a dozen nodes) and the
+   application ALREADY HAS a complete, tested serialise/parse pair for it
+   (`core::patch::serialise`/`parse`, used for config save/load right now -
+   `AppWindow::applyConfig`/`currentConfig`, `patchUi_.dirty`'s own
+   reserialise at the bottom of `drawPatchView`). The cheapest correct design
+   reuses this AS-IS: a new op, `FOXAPP_OP_PATCH_SET_GRAPH` (`text`/`longText`
+   carrying `core::patch::serialise`'s own string - the document format
+   already round-trips pan/zoom too, though those belong to the window's
+   view, not the engine's graph, and would need to be split at the parse
+   boundary rather than carried through the command). The canvas keeps
+   mutating a LOCAL DRAFT `core::patch::Graph` (a plain copy, drawn from and
+   written to exactly as `engine_.patchGraph_` is today) for the DURATION of
+   an interactive edit - a drag in progress, a text field mid-edit - and
+   submits the whole draft as one `FOXAPP_OP_PATCH_SET_GRAPH` at the same
+   points the codebase already treats as "the edit is committed": mouse-up
+   after a drag (already tracked - `patchUi_.dirty`), Delete pressed,
+   deactivate-after-edit on an inspector field, a device chosen from a combo.
+   The Engine parses the incoming text with the SAME `core::patch::parse`
+   validation `applyConfig` already trusts (`pr.ok`) and refuses the command
+   if it fails, so a malformed graph can never reach `patchGraph_` - a
+   STRONGER guarantee than today's direct mutation has. An incremental
+   edit-op model (one op per node/wire operation) was considered and set
+   aside: it would need roughly one op per the 27 call sites above, each
+   with its own validation, for a graph small enough that shipping the
+   whole thing is not a bandwidth concern - more vocabulary for no real
+   benefit.
+
+   **Design B - the runtime driven from pump, not from drawing - A REAL
+   SUBTLETY FOUND, not just a relocation.** The instinct is: move
+   `patchReconcile()`/`patchPublishSets()` out of `drawPatchView` into a new
+   `Engine::pumpPatchRuntime()` phase, called unconditionally from `pump()`
+   like every other phase, gated internally on `host_->patchPageOpen()`
+   exactly as today. For `patchReconcile()` (which explicitly runs "before
+   anything is compiled or drawn this frame" per its own call-site comment)
+   this is a mechanical, safe move - a pump phase already runs before the
+   window's own drawing, so "before this frame's canvas" is preserved either
+   way. **`patchPublishSets()` is NOT equally free to move**: its call site
+   comment states it runs deliberately AFTER the canvas has drawn, so a
+   drag or resize that happened THIS frame is captured in THIS frame's
+   signature check and does not restart a decoder needlessly - moving it
+   into a pre-drawing pump phase would make it publish using LAST frame's
+   node positions/dirty flag instead, a one-frame lag in exactly the
+   "dragging must not restart every decoder" property that call site exists
+   to protect. Sixteen milliseconds is very likely imperceptible, but
+   "very likely imperceptible" is a claim about user perception, not a
+   verified fact about the code, and this document's own core doctrine is
+   that unverified claims do not get stated as settled - so this stays open
+   rather than being implemented on a guess. The "page closed stops
+   everything" half (`drawPatchPage`'s `!patchOpen_` branch) has NO such
+   ordering constraint - it does not run alongside canvas drawing at all -
+   and could move into the same pump phase safely today
+   (`if (!host_->patchPageOpen() && patchWasOpen_) { ...the existing stop
+   sequence... }`, idempotent exactly as the window's version already is);
+   it was not done in isolation this round because half-closing item 6 while
+   leaving Design A entirely undone would not itself close anything the
+   guard or a test can observe, so it was left with the rest for one
+   dedicated round to do together, verified together.
+
+   **Estimated shape of that round**: convert the 27 call sites to
+   draft-plus-`FOXAPP_OP_PATCH_SET_GRAPH` (Design A), add
+   `Engine::pumpPatchRuntime()` and move both calls into it (Design B, with
+   an explicit, measured answer to the one-frame-lag question above before
+   trusting it), and the red-first tests the brief itself named: add a node,
+   wire two ports, delete a node, change a Radio's device, save and reload -
+   each proving the SAME graph and the same running decoders survive the
+   command round-trip that the direct mutation produces today. Not attempted
+   this round for the same reason 2b/2c/2d's own report gave for declining a
+   shallow attempt: converting 27 call sites without the same build/test
+   verification the rest of this round got would not meet the bar this
+   document holds everything else to.
 7. **The TX dead-man's handle is tied to the frame loop** (core/transmitter.hpp:
    "A FROZEN WINDOW CANNOT LEAVE IT KEYED" - the TX thread unkeys if
    `tick()` stops for `kKeyAliveWait` = 1000 ms). In 3a `tick()` runs in
