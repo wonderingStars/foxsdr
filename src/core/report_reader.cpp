@@ -254,6 +254,16 @@ bool isElfBuildId(const std::string& buildId) {
 std::string SymbolArchive::elfSymbolPath(const std::string& moduleName,
                                          const std::string& buildId) const {
     if (buildId.empty() || !exists()) { return std::string(); }
+    // ec IS RE-USED across several unrelated fs:: calls below, so it is
+    // cleared before every one of them. Leaving a stale error in it broke
+    // the by-id scan on the arm64 CI runner (2026-09-29): checking the
+    // "module" path above (a plausible, deliberately non-existent path, when
+    // only the split-DWARF file exists) can leave a non-existent-intermediate-
+    // directory error in ec on that libstdc++, and the scan loop's own
+    // `if (ec) { break; }` then exits after zero iterations, exactly as if
+    // the archive were empty - the standard only guarantees ec is cleared for
+    // the checked path itself not existing, not for every implementation's
+    // handling of a missing INTERMEDIATE component.
     std::error_code ec;
     if (!moduleName.empty()) {
         // The split DWARF first - it is the file with the line tables. The
@@ -261,20 +271,27 @@ std::string SymbolArchive::elfSymbolPath(const std::string& moduleName,
         const fs::path debug =
             fs::path(root_) / (moduleName + ".debug") / buildId / (moduleName + ".debug");
         if (fs::is_regular_file(debug, ec)) { return debug.string(); }
+        ec.clear();
         const fs::path module = fs::path(root_) / moduleName / buildId / moduleName;
         if (fs::is_regular_file(module, ec)) { return module.string(); }
+        ec.clear();
     }
     // The by-id scan, as pdbPath does - the id directory is the actual key.
     // .debug entries win over plain modules for the same reason as above.
     std::string fallback;
     for (const fs::directory_entry& e : fs::directory_iterator(fs::path(root_), ec)) {
         if (ec) { break; }
-        if (!e.is_directory(ec)) { continue; }
+        ec.clear();
+        if (!e.is_directory(ec)) { ec.clear(); continue; }
+        ec.clear();
         const fs::path byId = e.path() / buildId;
-        if (!fs::is_directory(byId, ec)) { continue; }
+        if (!fs::is_directory(byId, ec)) { ec.clear(); continue; }
+        ec.clear();
         for (const fs::directory_entry& f : fs::directory_iterator(byId, ec)) {
             if (ec) { break; }
-            if (!f.is_regular_file(ec)) { continue; }
+            ec.clear();
+            if (!f.is_regular_file(ec)) { ec.clear(); continue; }
+            ec.clear();
             const std::string p = f.path().string();
             if (p.size() > 6 && p.compare(p.size() - 6, 6, ".debug") == 0) { return p; }
             if (fallback.empty()) { fallback = p; }

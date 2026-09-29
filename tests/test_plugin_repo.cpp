@@ -321,7 +321,8 @@ std::string goodIndex() {
       "platforms": [
         {
           "os": "windows",
-          "arch": "x64",
+          "arch": ")JSON" +
+           PluginRepo::hostArch() + R"JSON(",
           "file": "cascade_pocsag.dll",
           "url": "https://example.invalid/cascade_pocsag.dll",
           "sha256": ")JSON" +
@@ -331,7 +332,8 @@ std::string goodIndex() {
         },
         {
           "os": "linux",
-          "arch": "x64",
+          "arch": ")JSON" +
+           PluginRepo::hostArch() + R"JSON(",
           "file": "libcascade_pocsag.so",
           "url": "https://example.invalid/libcascade_pocsag.so",
           "sha256": ")JSON" +
@@ -522,7 +524,7 @@ int main() {
             CHECK(p != nullptr);
             if (p != nullptr) {
                 CHECK(p->os == PluginRepo::hostOs());
-                CHECK(p->arch == "x64");
+                CHECK(p->arch == PluginRepo::hostArch());
                 CHECK(p->file == (onWindows ? "cascade_pocsag.dll"
                                             : "libcascade_pocsag.so"));
                 CHECK(p->url == (onWindows

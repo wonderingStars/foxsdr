@@ -326,7 +326,18 @@ int captureFramesFromContext(unw_context_t* ctx, unsigned long* frames, int maxF
 
 int captureFramesCurrentThread(unsigned long* frames, int maxFrames) {
     unw_context_t ctx;
-    ::unw_getcontext(&ctx);
+    // NOT ::unw_getcontext - on aarch64 this is a macro (libunwind must
+    // capture the CALLER's registers, which cannot be done from inside a
+    // real function, so ports that cannot do it in a portable exported
+    // function expand it inline via a GNU statement-expression). A leading
+    // :: forces qualified-name lookup, which cannot see a macro and fails to
+    // parse the statement-expression it expands to - this compiled cleanly
+    // on x86_64, where libunwind's unw_getcontext happens to be a plain
+    // function-call macro, and broke the whole rest of this file's namespace
+    // lookups on the first arm64 CI run (2026-09-29) with errors that pointed
+    // everywhere except this line. unw_init_local/unw_get_reg/unw_step below
+    // are real exported functions on every arch, so :: is fine there.
+    unw_getcontext(&ctx);
     return captureFramesFromContext(&ctx, frames, maxFrames);
 }
 
