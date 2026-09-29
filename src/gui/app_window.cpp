@@ -14094,10 +14094,6 @@ bool AppWindow::replacePatch(const std::string& text, PatchReplace why, int* dro
     // has; a file or a preset is what the user asked for, empty or not.
     patchSeeded_ = why == PatchReplace::Restore ? !patchGraph_.nodes().empty() : true;
     patchText_ = text;
-    if (why == PatchReplace::Preset) {
-        cascade::core::diagLogf("patch: preset loaded - %zu node(s), %d dropped, stopped",
-                                patchGraph_.nodes().size(), pr.dropped);
-    }
     return true;
 }
 
@@ -14108,16 +14104,11 @@ std::string AppWindow::serialisePatchNow() const {
 
 cascade::core::PatchPresetStatus AppWindow::savePatchPreset(const std::string& name,
                                                             bool overwrite) {
-    const cascade::core::PatchPresetStatus st =
-        patchPresets_.save(name, serialisePatchNow(), overwrite);
-    if (st == cascade::core::PatchPresetStatus::Saved ||
-        st == cascade::core::PatchPresetStatus::Overwritten) {
-        cascade::core::diagLogf("patch: preset %s - %zu node(s), %zu preset(s) kept",
-                                st == cascade::core::PatchPresetStatus::Saved ? "saved"
-                                                                             : "overwritten",
-                                patchGraph_.nodes().size(), patchPresets_.list().size());
-    }
-    return st;
+    // NOT LOGGED, and neither is a load or a delete: the application log's
+    // tail rides in a crash report the user chooses to send, and PRIVACY.md
+    // promises that nothing about a preset leaves the machine. The transport
+    // still logs its own STOP when a load stops a running patch.
+    return patchPresets_.save(name, serialisePatchNow(), overwrite);
 }
 
 bool AppWindow::loadPatchPreset(std::string text) {

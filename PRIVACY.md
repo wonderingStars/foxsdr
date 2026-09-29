@@ -585,6 +585,9 @@ These are design constraints, not current policy:
 - **Hardware serial numbers.** The SDR model is useful; the serial identifies
   your individual radio, and is removed.
 - Your name, your machine's name, your user account, or any file path.
+- **Patch presets.** The patch page's named presets and its "(previous
+  patch)" slot — their names and the patches in them — are stored only in
+  `config.json` on your own machine, and nothing about them is sent anywhere.
 
 ## Plugins and your receiver's position
 

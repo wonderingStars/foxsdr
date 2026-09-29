@@ -25,7 +25,6 @@
 
 #include <imgui.h>
 
-#include "core/diag_log.hpp"
 #include "core/i18n.hpp"
 #include "core/patch_presets.hpp"
 #include "core/utf8_text.hpp"
@@ -301,10 +300,6 @@ void AppWindow::drawPatchPresetsBody() {
         if (ImGui::Button(trId("DELETE###presetdeletego"))) {
             const PatchPresetStatus st = patchPresets_.remove(patchPresetPending_);
             patchPresetNote_ = patchPresetSentence(st, patchPresetPending_);
-            if (st == PatchPresetStatus::Deleted) {
-                cascade::core::diagLogf("patch: preset deleted - %zu preset(s) kept",
-                                        patchPresets_.list().size());
-            }
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
