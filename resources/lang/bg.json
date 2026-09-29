@@ -883,6 +883,7 @@
   "Off": "Изключено",
   "Off. Nothing is transmitted.": "Изключено. Нищо не се предава.",
   "Off: the transmitter follows the receiver's dial, so a reply\ngoes out where the call came in.\nOn: the two are unlinked - what a repeater, a pile-up and a\nsatellite each need, and the state in which you are not\nlistening where you are transmitting.": "Изключено: предавателят следва скалата на приемника, така че отговорът\nсе излъчва там, откъдето е дошло повикването.\nВключено: двете са разделени - това, което е нужно за ретранслатор, pile-up и\nспътник, и състоянието, в което не слушате\nтам, където предавате.",
+  "Offered by foxsdr.com in some countries only.": "Предлага се от foxsdr.com само в някои държави.",
   "Oman": "Оман",
   "On the spectrum": "На спектъра",
   "One gain slider over Airspy's linearity table: gain held back early in the chain, for when strong signals are nearby.": "Един плъзгач за усилване по таблицата за линейност на Airspy: усилването се задържа в началото на веригата, когато наблизо има силни сигнали.",

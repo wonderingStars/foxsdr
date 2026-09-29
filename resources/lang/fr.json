@@ -883,6 +883,7 @@
   "Off": "Désactivé",
   "Off. Nothing is transmitted.": "Désactivé. Rien n'est émis.",
   "Off: the transmitter follows the receiver's dial, so a reply\ngoes out where the call came in.\nOn: the two are unlinked - what a repeater, a pile-up and a\nsatellite each need, and the state in which you are not\nlistening where you are transmitting.": "Désactivé : l'émetteur suit le cadran du récepteur, donc une réponse\npart là où l'appel est arrivé.\nActivé : les deux sont dissociés - ce dont un relais, un pile-up et un\nsatellite ont chacun besoin, et l'état dans lequel vous n'écoutez\npas là où vous émettez.",
+  "Offered by foxsdr.com in some countries only.": "Proposé par foxsdr.com dans certains pays seulement.",
   "Oman": "Oman",
   "On the spectrum": "Sur le spectre",
   "One gain slider over Airspy's linearity table: gain held back early in the chain, for when strong signals are nearby.": "Un seul curseur de gain sur la table de linéarité d'Airspy : gain retenu en début de chaîne, quand des signaux forts sont proches.",

@@ -883,6 +883,7 @@
   "Off": "끔",
   "Off. Nothing is transmitted.": "꺼짐. 아무것도 송신하지 않습니다.",
   "Off: the transmitter follows the receiver's dial, so a reply\ngoes out where the call came in.\nOn: the two are unlinked - what a repeater, a pile-up and a\nsatellite each need, and the state in which you are not\nlistening where you are transmitting.": "끔: 송신기가 수신기 다이얼을 따라가므로, 응답은 호출이\n들어온 곳으로 나갑니다.\n켬: 둘이 분리됩니다 - 중계기, 파일업, 위성에 각각 필요한\n방식이며, 송신하는 곳에서 수신하지 않는\n상태입니다.",
+  "Offered by foxsdr.com in some countries only.": "foxsdr.com에서 일부 국가에만 제공합니다.",
   "Oman": "오만",
   "On the spectrum": "스펙트럼 위에",
   "One gain slider over Airspy's linearity table: gain held back early in the chain, for when strong signals are nearby.": "Airspy 선형성 표를 따르는 게인 슬라이더 하나. 강한 신호가 가까이 있을 때를 위해 앞단 게인을 억제합니다.",

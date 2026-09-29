@@ -44,20 +44,34 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/plugin_repo.hpp"
 
+#include <atomic>
 #include <cctype>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <string>
+#include <thread>
 #include <vector>
 
 #ifdef _WIN32
+// winsock2.h must come before windows.h - the reverse order pulls in the
+// legacy winsock1 header first and the two conflict (same lesson as
+// test_crash_upload.cpp / test_tester_link.cpp's own black-hole stubs).
+#include <winsock2.h>
+
 #include <process.h>
 #include <windows.h>
+
+#include <ws2tcpip.h>
+#pragma comment(lib, "ws2_32.lib")
 #define TEST_GETPID _getpid
 #else
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
 #include <unistd.h>
 #define TEST_GETPID getpid
 #endif
@@ -116,6 +130,100 @@ std::string readAll(const fs::path& p) {
 bool contains(const std::string& haystack, const std::string& needle) {
     return haystack.find(needle) != std::string::npos;
 }
+
+#ifdef _WIN32
+using test_socket_t = SOCKET;
+constexpr test_socket_t kTestInvalidSocket = INVALID_SOCKET;
+void closeTestSocket(test_socket_t s) { ::closesocket(s); }
+#else
+using test_socket_t = int;
+constexpr test_socket_t kTestInvalidSocket = -1;
+void closeTestSocket(test_socket_t s) { ::close(s); }
+#endif
+
+// A real TCP listener on 127.0.0.1 that accepts every connection and then
+// deliberately never reads or writes a byte - "a socket that accepts but
+// never answers" (the shape test_crash_upload.cpp's and test_tester_link.cpp's
+// own StubServer::Mode::Hang use for plain HTTP; this one is scheme-agnostic,
+// which is what lets an https:// client's TLS handshake hang against it too:
+// the client's ClientHello simply never gets a ServerHello). Used for R14
+// (a broken cancel_ wiring must be the only way fetchRegionalIndex can take
+// more than an instant against this target) and for proving the regional
+// fetch's short timeouts actually bound a stall.
+class BlackHoleListener {
+public:
+    bool start() {
+#ifdef _WIN32
+        WSADATA wsa{};
+        ::WSAStartup(MAKEWORD(2, 2), &wsa);
+#endif
+        listen_ = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        if (listen_ == kTestInvalidSocket) { return false; }
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_addr.s_addr = ::htonl(INADDR_LOOPBACK);
+        addr.sin_port = 0;
+        if (::bind(listen_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
+            return false;
+        }
+#ifdef _WIN32
+        int len = sizeof(addr);
+#else
+        socklen_t len = sizeof(addr);
+#endif
+        ::getsockname(listen_, reinterpret_cast<sockaddr*>(&addr), &len);
+        port_ = ::ntohs(addr.sin_port);
+        if (::listen(listen_, 8) != 0) { return false; }
+        run_ = true;
+        thread_ = std::thread([this] { loop(); });
+        return true;
+    }
+
+    void stop() {
+        run_ = false;
+        if (listen_ != kTestInvalidSocket) {
+            closeTestSocket(listen_);
+            listen_ = kTestInvalidSocket;
+        }
+        if (thread_.joinable()) { thread_.join(); }
+        for (test_socket_t s : held_) { closeTestSocket(s); }
+        held_.clear();
+    }
+
+    ~BlackHoleListener() { stop(); }
+
+    int port() const { return port_; }
+    std::string url() const { return "https://127.0.0.1:" + std::to_string(port_) + "/"; }
+
+private:
+    void loop() {
+        while (run_) {
+            fd_set rd;
+            FD_ZERO(&rd);
+            if (listen_ == kTestInvalidSocket) { break; }
+            FD_SET(listen_, &rd);
+            timeval tv{0, 100 * 1000};
+#ifdef _WIN32
+            const int n = ::select(0, &rd, nullptr, nullptr, &tv);
+#else
+            const int n = ::select(static_cast<int>(listen_) + 1, &rd, nullptr, nullptr, &tv);
+#endif
+            if (n <= 0) { continue; }
+            test_socket_t c = ::accept(listen_, nullptr, nullptr);
+            if (c == kTestInvalidSocket) { continue; }
+            // Accepted, and DELIBERATELY never read or written to - held open
+            // until stop() closes it, so whatever handshake the client tries
+            // next just sits there until ITS OWN timeout fires.
+            held_.push_back(c);
+        }
+    }
+
+    test_socket_t listen_ = kTestInvalidSocket;
+    int port_ = 0;
+    std::atomic<bool> run_{false};
+    std::thread thread_;
+    std::vector<test_socket_t> held_;
+};
 
 int signOf(int v) { return v < 0 ? -1 : (v > 0 ? 1 : 0); }
 
@@ -300,6 +408,58 @@ void expectBadName(const std::string& name, const char* tag) {
     CHECK(!ok);
     CHECK(!err.empty());
     CHECK(out.empty());
+}
+
+// --- REGIONAL CATALOGUE fixtures (R1-R14) -----------------------------------
+
+// A two-platform regional entry (windows + linux), the shape radar-sweep
+// actually ships. `winUrl`/`linuxUrl` are handed in raw so a case can point
+// either one off the regional prefix without the helper hiding it.
+PluginCatalogEntry regionalEntry(const std::string& id, const std::string& winUrl,
+                                 const std::string& linuxUrl) {
+    PluginCatalogEntry e;
+    e.id = id;
+    e.name = id + " (regional)";
+    e.version = "1.0.0";
+    e.abiVersion = static_cast<std::uint32_t>(CASCADE_PLUGIN_ABI_VERSION);
+    e.compatible = true;
+    PluginPlatform win;
+    win.os = "windows";
+    win.arch = "x64";
+    win.file = "radar-sweep-1.0.0-abi3-win-x64.dll";
+    win.url = winUrl;
+    win.sha256 = kHashA;
+    PluginPlatform lin;
+    lin.os = "linux";
+    lin.arch = "x64";
+    lin.file = "radar-sweep-1.0.0-abi3-linux-x64.so";
+    lin.url = linuxUrl;
+    lin.sha256 = kHashB;
+    e.platforms = {win, lin};
+    return e;
+}
+
+// Sets/clears an env var through BOTH the CRT table and the OS block
+// (CLAUDE.md CRT-env lesson: a statically-linked test exe's own getenv()
+// reads the CRT copy, while the code under test - which uses
+// GetEnvironmentVariableA on Windows - reads the OS copy; setting only one
+// can leave the two disagreeing).
+void setEnv(const char* name, const std::string& value) {
+#if defined(_WIN32)
+    ::SetEnvironmentVariableA(name, value.c_str());
+    _putenv_s(name, value.c_str());
+#else
+    ::setenv(name, value.c_str(), 1);
+#endif
+}
+
+void unsetEnv(const char* name) {
+#if defined(_WIN32)
+    ::SetEnvironmentVariableA(name, nullptr);
+    _putenv_s(name, "");
+#else
+    ::unsetenv(name);
+#endif
 }
 
 }  // namespace
@@ -2176,6 +2336,344 @@ int main() {
 
         std::error_code ec;
         fs::remove_all(d, ec);
+    }
+
+    // ---------------------------------------------------------------------
+    // REGIONAL CATALOGUE (radar-sweep design, section 4.4): R1-R14
+    // ---------------------------------------------------------------------
+
+    // R1 / R2: isRegionalDownloadUrl - the exact prefix, and every forgery
+    // or malformed shape the design names refused.
+    {
+        const std::string prefix = PluginRepo::regionalDownloadPrefix();
+        CHECK(prefix == "https://foxsdr.com/plugins/regional/");
+
+        // R1: accept, both platform extensions - this check does not care
+        // which host is asking.
+        CHECK(PluginRepo::isRegionalDownloadUrl(
+            prefix + "us/radar-sweep-1.0.0-abi3-win-x64.dll", prefix));
+        CHECK(PluginRepo::isRegionalDownloadUrl(
+            prefix + "us/radar-sweep-1.0.0-abi3-linux-x64.so", prefix));
+
+        // R2: every forgery and malformed shape.
+        const std::vector<std::string> bad = {
+            "http://foxsdr.com/plugins/regional/us/x.dll",
+            "https://foxsdr.com.evil.example/plugins/regional/us/x.dll",
+            "https://evilfoxsdr.com/plugins/regional/us/x.dll",
+            "https://foxsdr.com:443/plugins/regional/us/x.dll",
+            "https://a@foxsdr.com/plugins/regional/us/x.dll",
+            "https://FOXSDR.COM/plugins/regional/us/x.dll",
+            prefix + "us/../x.dll",
+            prefix + "us/x.dll?y",
+            prefix + "us/x.dll#y",
+            prefix + "us/%2e%2e.dll",
+            prefix + "us/sub/x.dll",
+            prefix + "USA/x.dll",
+            prefix + "us/",
+            "https://raw.githubusercontent.com/wonderingStars/foxsdr-plugins/master/index.json",
+            std::string(),
+        };
+        for (const std::string& u : bad) {
+            const bool ok = PluginRepo::isRegionalDownloadUrl(u, prefix);
+            if (ok) {
+                std::printf("FAIL isRegionalDownloadUrl accepted a forgery/malformed url: %s\n",
+                            u.c_str());
+            }
+            CHECK(!ok);
+        }
+    }
+
+    // R3: distinct ids - public entries pass through unchanged, in order,
+    // and only the surviving regional entry gets regional == true.
+    {
+        const std::string prefix = PluginRepo::regionalDownloadPrefix();
+        const PluginCatalogEntry a = catEntry("aaa", "1.0.0");
+        const PluginCatalogEntry b = catEntry("bbb", "1.0.0");
+        const PluginCatalogEntry r =
+            regionalEntry("radar-sweep", prefix + "us/win.dll", prefix + "us/lin.so");
+
+        const std::vector<PluginCatalogEntry> pub = {a, b};
+        const std::vector<PluginCatalogEntry> reg = {r};
+        const PluginRepo::RegionalMergeResult res = PluginRepo::mergeRegional(pub, reg, prefix);
+        CHECK(res.merged.size() == 3u);
+        CHECK(res.added == 1);
+        CHECK(res.dropped.empty());
+        if (res.merged.size() == 3u) {
+            CHECK(res.merged[0].id == "aaa");
+            CHECK(!res.merged[0].regional);
+            CHECK(res.merged[0].version == a.version);
+            CHECK(res.merged[1].id == "bbb");
+            CHECK(!res.merged[1].regional);
+            CHECK(res.merged[2].id == "radar-sweep");
+            CHECK(res.merged[2].regional);
+        }
+    }
+
+    // R4: an id collision with the public catalogue drops the regional copy
+    // WHOLE - the public entry is untouched, and the drop is recorded.
+    {
+        const std::string prefix = PluginRepo::regionalDownloadPrefix();
+        const PluginCatalogEntry a = catEntry("shared", "1.0.0");
+        PluginCatalogEntry clash =
+            regionalEntry("shared", prefix + "us/win.dll", prefix + "us/lin.so");
+        clash.version = "9.9.9";  // different bytes under the same id
+
+        const std::vector<PluginCatalogEntry> pub = {a};
+        const std::vector<PluginCatalogEntry> reg = {clash};
+        const PluginRepo::RegionalMergeResult res = PluginRepo::mergeRegional(pub, reg, prefix);
+        CHECK(res.merged.size() == 1u);
+        CHECK(res.added == 0);
+        CHECK(res.dropped.size() == 1u);
+        if (res.merged.size() == 1u) {
+            CHECK(res.merged[0].version == "1.0.0");  // the public entry, unchanged
+            CHECK(!res.merged[0].regional);
+        }
+    }
+
+    // R5: one bad platform URL (the linux platform off-prefix) drops the
+    // WHOLE entry, including the good windows platform.
+    {
+        const std::string prefix = PluginRepo::regionalDownloadPrefix();
+        const PluginCatalogEntry bad =
+            regionalEntry("radar-sweep", prefix + "us/win.dll", "https://evil.example/lin.so");
+
+        const std::vector<PluginCatalogEntry> pub;
+        const std::vector<PluginCatalogEntry> reg = {bad};
+        const PluginRepo::RegionalMergeResult res = PluginRepo::mergeRegional(pub, reg, prefix);
+        CHECK(res.merged.empty());
+        CHECK(res.added == 0);
+        CHECK(res.dropped.size() == 1u);
+    }
+
+    // R6: duplicate regional ids - both copies are dropped, ambiguity is
+    // refused rather than resolved by picking either one.
+    {
+        const std::string prefix = PluginRepo::regionalDownloadPrefix();
+        const PluginCatalogEntry r1 =
+            regionalEntry("dup", prefix + "us/win1.dll", prefix + "us/lin1.so");
+        const PluginCatalogEntry r2 =
+            regionalEntry("dup", prefix + "us/win2.dll", prefix + "us/lin2.so");
+
+        const std::vector<PluginCatalogEntry> pub;
+        const std::vector<PluginCatalogEntry> reg = {r1, r2};
+        const PluginRepo::RegionalMergeResult res = PluginRepo::mergeRegional(pub, reg, prefix);
+        CHECK(res.merged.empty());
+        CHECK(res.added == 0);
+        CHECK(res.dropped.size() == 2u);
+    }
+
+    // R7: an empty regional list changes nothing.
+    {
+        const std::string prefix = PluginRepo::regionalDownloadPrefix();
+        const PluginCatalogEntry a = catEntry("aaa", "1.0.0");
+        const std::vector<PluginCatalogEntry> pub = {a};
+        const std::vector<PluginCatalogEntry> reg;
+        const PluginRepo::RegionalMergeResult res = PluginRepo::mergeRegional(pub, reg, prefix);
+        CHECK(res.merged.size() == 1u);
+        CHECK(res.added == 0);
+        CHECK(res.dropped.empty());
+        if (res.merged.size() == 1u) { CHECK(res.merged[0].id == "aaa"); }
+    }
+
+    // R8: parseIndex ignores a "regional" key wherever it appears - the flag
+    // is set ONLY by mergeRegional(), never read off the wire.
+    {
+        const std::string doc = std::string(R"JSON({
+  "schemaVersion": 1,
+  "plugins": [
+    {
+      "id": "sneaky",
+      "name": "Sneaky",
+      "version": "1.0.0",
+      "regional": true,
+      "abiVersion": )JSON") + abiText() +
+                                R"JSON(,
+      "platforms": []
+    }
+  ]
+}
+)JSON";
+        std::vector<PluginCatalogEntry> v;
+        std::string err;
+        CHECK(PluginRepo::parseIndex(doc, v, err));
+        CHECK(v.size() == 1u);
+        if (v.size() == 1u) { CHECK(!v[0].regional); }
+    }
+
+    // R9: install() refuses a regional=true entry whose url is off-prefix
+    // BEFORE any socket - a connection error would prove the opposite of
+    // what this test needs, so the target is a closed local port. The URL
+    // path deliberately avoids the substring "regional" (unlike an earlier
+    // version of this test, whose path was ".../not-regional/..." - a
+    // connection-failure message that happened to echo that URL back would
+    // ALSO contain "regional" and make a loose `contains(err, "regional")`
+    // check pass for the wrong reason). The assertion below matches the
+    // exact enforcement text install() produces, which no network-error path
+    // can produce, so this test cannot be fooled by a mutant that lets the
+    // entry fall through to a real connection attempt.
+    {
+        PluginRepo repo;
+        PluginCatalogEntry e = makeEntry(
+            mod("radarsweep"), "https://127.0.0.1:1/other-host/" + mod("radarsweep"), kHashA,
+            static_cast<std::uint32_t>(CASCADE_PLUGIN_ABI_VERSION));
+        e.id = "radar-sweep";
+        e.regional = true;
+        const fs::path d = tmpDir("regional_install");
+        std::string installedPath, err;
+        const bool ok = repo.install(e, d.string(), installedPath, err);
+        CHECK(!ok);
+        CHECK(!contains(err, "127.0.0.1"));
+        CHECK(contains(err, "is a regional catalogue entry and may only download from"));
+        CHECK(contains(err, PluginRepo::regionalDownloadPrefix()));
+        CHECK(installedPath.empty());
+        // Refused before fs::create_directories ran at all - not merely
+        // before the download.
+        std::error_code ec;
+        CHECK(!fs::exists(d, ec));
+        fs::remove_all(d, ec);
+    }
+
+    // R10: mergePolicies over the merged list caches the regional entry's
+    // floor exactly like a public one's, and a LATER mergePolicies over a
+    // public-only list (radar-sweep absent, as it always is publicly) must
+    // not lift it - the same fail-open-on-absence rule the header documents
+    // for every other id.
+    {
+        const PluginCatalogEntry pub1 = catEntry("aaa", "1.0.0");
+        PluginCatalogEntry regionalPlugin = catEntry("radar-sweep", "1.0.0");
+        regionalPlugin.minSupportedVersion = "0.9.0";
+        regionalPlugin.regional = true;
+
+        std::vector<CachedPolicy> cached;
+        const std::vector<PluginCatalogEntry> merged = {pub1, regionalPlugin};
+        PluginRepo::mergePolicies(cached, merged);
+        CHECK(PluginRepo::policyFor(cached, "radar-sweep").known);
+        CHECK(PluginRepo::policyFor(cached, "radar-sweep").minSupportedVersion == "0.9.0");
+
+        const std::vector<PluginCatalogEntry> publicOnly = {pub1};
+        PluginRepo::mergePolicies(cached, publicOnly);
+        CHECK(PluginRepo::policyFor(cached, "radar-sweep").known);
+        CHECK(PluginRepo::policyFor(cached, "radar-sweep").minSupportedVersion == "0.9.0");
+    }
+
+    // R11: planUpdates on the merged list plans a regional update exactly
+    // like a public one, and never a downgrade.
+    {
+        PluginCatalogEntry regionalPlugin = catEntry("radar-sweep", "1.0.1");
+        regionalPlugin.regional = true;
+        const std::vector<PluginCatalogEntry> merged = {regionalPlugin};
+
+        const std::vector<InstalledPlugin> installed = {installedRec("radar-sweep", "1.0.0")};
+        const std::vector<PluginUpdate> plans = PluginRepo::planUpdates(merged, installed);
+        CHECK(plans.size() == 1u);
+        if (plans.size() == 1u) {
+            CHECK(plans[0].id == "radar-sweep");
+            CHECK(plans[0].toVersion == "1.0.1");
+        }
+
+        const std::vector<InstalledPlugin> newer = {installedRec("radar-sweep", "2.0.0")};
+        CHECK(PluginRepo::planUpdates(merged, newer).empty());
+    }
+
+    // R12: regionalWanted - the default catalogue URL wants it, a custom
+    // https or local URL does not, and the test override always wins.
+    {
+        CHECK(PluginRepo::regionalWanted(PluginRepo::defaultIndexUrl(), false));
+        CHECK(!PluginRepo::regionalWanted("https://example.invalid/mine.json", false));
+        CHECK(!PluginRepo::regionalWanted("C:/some/local/index.json", false));
+        CHECK(PluginRepo::regionalWanted("https://example.invalid/mine.json", true));
+    }
+
+    // R13: regionalIndexUrl()/regionalOverrideSet() read the env override,
+    // set through BOTH env-setting APIs (CLAUDE.md CRT-env lesson), and fall
+    // back to the default once it is cleared.
+    {
+        unsetEnv("FOXSDR_REGIONAL_CATALOGUE_URL");  // in case a prior run leaked it
+        CHECK(!PluginRepo::regionalOverrideSet());
+        CHECK(PluginRepo::regionalIndexUrl() == "https://foxsdr.com/api/plugins/regional");
+
+        setEnv("FOXSDR_REGIONAL_CATALOGUE_URL", "https://example.invalid/regional.json");
+        CHECK(PluginRepo::regionalOverrideSet());
+        CHECK(PluginRepo::regionalIndexUrl() == "https://example.invalid/regional.json");
+
+        unsetEnv("FOXSDR_REGIONAL_CATALOGUE_URL");
+        CHECK(!PluginRepo::regionalOverrideSet());
+        CHECK(PluginRepo::regionalIndexUrl() == "https://foxsdr.com/api/plugins/regional");
+    }
+
+    // R14: fetchRegionalIndex refuses http:// before any socket, and
+    // returns promptly (not a WinHTTP/httplib connect/receive timeout) when
+    // cancel() was already set before the call.
+    //
+    // The cancelled target is a REAL listener that accepts and never
+    // answers, not a closed port. A closed port fails instantly for a
+    // connection-refused reason too, so a test built on one cannot tell
+    // "cancelled before any attempt" apart from "attempted and instantly
+    // refused" - that was exactly how a mutant that passes nullptr instead
+    // of &cancel_ into httpsGet (skipping every cancel check) survived this
+    // test before: the connection-refused failure was just as fast as the
+    // cancelled one. Against a black hole, the two paths diverge sharply -
+    // cancelled returns in well under a second (the very first check inside
+    // httpsGet, before a socket exists); with cancel_ wired to nullptr, the
+    // code proceeds to a real connect-and-hang, bounded only by
+    // fetchRegionalIndex's own short receive timeout (a few seconds), which
+    // this test's upper bound is set well below.
+    {
+        PluginRepo repo;
+        std::vector<PluginCatalogEntry> out;
+        std::string err = "stale";
+        const bool ok = repo.fetchRegionalIndex("http://foxsdr.com/api/plugins/regional", out, err);
+        CHECK(!ok);
+        CHECK(!err.empty());
+        CHECK(out.empty());
+
+        BlackHoleListener hole;
+        CHECK(hole.start());
+
+        PluginRepo repo2;
+        repo2.cancel();
+        std::vector<PluginCatalogEntry> out2;
+        std::string err2;
+        const auto t0 = std::chrono::steady_clock::now();
+        const bool ok2 = repo2.fetchRegionalIndex(hole.url(), out2, err2);
+        const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                   std::chrono::steady_clock::now() - t0)
+                                   .count();
+        hole.stop();
+        CHECK(!ok2);
+        // A cancel checked before any socket exists returns near-instantly.
+        // A missing/bypassed cancel would instead hang until the regional
+        // fetch's own short receive timeout (several seconds) - this bound
+        // sits well below that, so it fails (red) under exactly that mutant,
+        // while never risking the test itself running long.
+        CHECK(elapsedMs < 1000);
+    }
+
+    // R15: the regional fetch's own timeouts are SHORT, not the public
+    // catalogue's - the geo judge found that without this, a black-holed
+    // foxsdr.com could delay the whole plugin store list by up to the
+    // public fetch's own budget (tens of seconds), even though the public
+    // catalogue had already arrived. No cancel involved here: this measures
+    // the plain failure path against a real black hole.
+    {
+        BlackHoleListener hole;
+        CHECK(hole.start());
+        PluginRepo repo;
+        std::vector<PluginCatalogEntry> out;
+        std::string err;
+        const auto t0 = std::chrono::steady_clock::now();
+        const bool ok = repo.fetchRegionalIndex(hole.url(), out, err);
+        const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                   std::chrono::steady_clock::now() - t0)
+                                   .count();
+        hole.stop();
+        CHECK(!ok);
+        CHECK(out.empty());
+        // Generous above the ~8 s the short receive timeout should take, and
+        // far below the public catalogue's own ~30 s default - this is what
+        // catches a mutant that reverts fetchRegionalIndex to the default
+        // (long) HttpTimeouts.
+        CHECK(elapsedMs < 12000);
     }
 
     // ---------------------------------------------------------------------

@@ -134,6 +134,13 @@ struct ModulePlate {
     std::string legalNotice;  // shown verbatim; the acknowledgement gate is
                               // the store's, not the plate's
 
+    // ONE MUTED LINE for a plugin offered only to some connections — set
+    // from PluginCatalogEntry::regional (never read from the catalogue's own
+    // JSON; see plugin_repo.hpp's REGIONAL CATALOGUE block for why). EMPTY
+    // draws nothing, which is every module today and every non-regional row
+    // from here on.
+    std::string originNote;
+
     // Bare file name in the plugins directory. Empty when the module is not
     // installed here - which is the normal case for a catalogue row.
     std::string fileName;

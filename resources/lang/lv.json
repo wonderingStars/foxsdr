@@ -883,6 +883,7 @@
   "Off": "Izslēgts",
   "Off. Nothing is transmitted.": "Izslēgts. Nekas netiek raidīts.",
   "Off: the transmitter follows the receiver's dial, so a reply\ngoes out where the call came in.\nOn: the two are unlinked - what a repeater, a pile-up and a\nsatellite each need, and the state in which you are not\nlistening where you are transmitting.": "Izslēgts: raidītājs seko uztvērēja skalai, tāpēc atbilde\niet tur, kur ienāca izsaukums.\nIeslēgts: abi ir atsaistīti - to vajag retranslatoram, pile-up un\nsatelītam, un tādā stāvoklī jūs neklausāties\ntur, kur raidāt.",
+  "Offered by foxsdr.com in some countries only.": "foxsdr.com piedāvā tikai dažās valstīs.",
   "Oman": "Omāna",
   "On the spectrum": "Spektrā",
   "One gain slider over Airspy's linearity table: gain held back early in the chain, for when strong signals are nearby.": "Viens pastiprinājuma slīdnis pēc Airspy linearitātes tabulas: pastiprinājums ķēdes sākumā ierobežots, kad tuvumā ir spēcīgi signāli.",

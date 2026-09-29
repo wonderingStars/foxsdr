@@ -883,6 +883,7 @@
   "Off": "オフ",
   "Off. Nothing is transmitted.": "オフ。何も送信されません。",
   "Off: the transmitter follows the receiver's dial, so a reply\ngoes out where the call came in.\nOn: the two are unlinked - what a repeater, a pile-up and a\nsatellite each need, and the state in which you are not\nlistening where you are transmitting.": "オフ: 送信機は受信機のダイヤルに追従するため、応答は\n呼び出しを受けた周波数で送信されます。\nオン: 両者は連動しません。レピーター、パイルアップ、\n衛星ではそれぞれこれが必要ですが、送信している周波数を\n受信していない状態になります。",
+  "Offered by foxsdr.com in some countries only.": "foxsdr.com が一部の国でのみ提供しています。",
   "Oman": "オマーン",
   "On the spectrum": "スペクトラム上",
   "One gain slider over Airspy's linearity table: gain held back early in the chain, for when strong signals are nearby.": "Airspyのリニアリティ表を使うゲインスライダー1本。強い信号が近くにあるときのために、前段のゲインを抑えます。",

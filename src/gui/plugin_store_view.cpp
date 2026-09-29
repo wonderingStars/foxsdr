@@ -791,6 +791,8 @@ float layoutPlate(ImDrawList* dl, const ImVec2& tl, float width, const ModulePla
                   factRowH * static_cast<float>(factRows) + kBoxPad - 8.0f;
     const float homeH = m.homepage.empty() ? 0.0f : (tinyH + 6.0f);
     box1H += homeH;
+    const float originH = m.originNote.empty() ? 0.0f : (tinyH + 6.0f);
+    box1H += originH;
 
     // --- box 2: what this module reaches -------------------------------------
     const float markW = 18.0f;
@@ -888,6 +890,13 @@ float layoutPlate(ImDrawList* dl, const ImVec2& tl, float width, const ModulePla
             // is where a run of punctuation stops being readable first.
             dl->AddText(uf, tiny, ImVec2(x, y - 2.0f), theme::kInkMuted, m.homepage.c_str(),
                         nullptr, inner);
+        }
+        if (!m.originNote.empty()) {
+            // Stacks directly under the homepage line (offset by homeH,
+            // which is 0 when there is none) — the same muted ink, since
+            // this is a fact about the module, not a warning.
+            dl->AddText(uf, tiny, ImVec2(x, y - 2.0f + homeH), theme::kInkMuted,
+                        m.originNote.c_str(), nullptr, inner);
         }
         boxTop = bBR.y + kBoxGap;
     }

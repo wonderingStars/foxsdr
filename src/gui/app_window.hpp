@@ -4082,6 +4082,17 @@ private:
         // catalogue still loaded, but the policy the user just saw was not
         // remembered.
         std::string policyError;
+
+        // REGIONAL CATALOGUE outcome, for the CASCADE_PLUGIN_TEST hook only
+        // (reportPluginTestResult). "not-asked" - the default - covers both
+        // "the public fetch failed" and "regionalWanted() said no"; a
+        // regional fetch is attempted only in a fresh async lambda run, which
+        // sets this to "ok" or "failed". NEVER surfaced to the ordinary UI -
+        // see the header's REGIONAL CATALOGUE block on why a regional
+        // failure is swallowed rather than shown.
+        std::string regionalState = "not-asked";
+        int regionalAdded = 0;
+        int regionalDropped = 0;
     };
     struct PluginInstallResult {
         bool ok = false;
@@ -4277,6 +4288,12 @@ private:
     std::vector<cascade::core::PluginCatalogEntry> catalog_;
     std::string catalogError_;   // red: fetch/parse failure, verbatim
     std::string catalogStatus_;  // neutral: "N plugins in the catalogue"
+    // REGIONAL CATALOGUE, for reportPluginTestResult (CASCADE_PLUGIN_TEST)
+    // ONLY - see CatalogFetchResult::regionalState. Never drawn by the store
+    // window, never logged.
+    std::string regionalState_ = "not-asked";
+    int regionalAdded_ = 0;
+    int regionalDropped_ = 0;
     // --- update check --------------------------------------------------------
     bool closeRequested_ = false;     // set by the updater; the run loop honours it
     bool updateCheckEnabled_ = true;

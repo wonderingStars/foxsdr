@@ -883,6 +883,7 @@
   "Off": "Dezactivat",
   "Off. Nothing is transmitted.": "Dezactivat. Nu se emite nimic.",
   "Off: the transmitter follows the receiver's dial, so a reply\ngoes out where the call came in.\nOn: the two are unlinked - what a repeater, a pile-up and a\nsatellite each need, and the state in which you are not\nlistening where you are transmitting.": "Dezactivat: emițătorul urmează cadranul receptorului, deci un răspuns\npleacă acolo unde a venit apelul.\nActivat: cele două sunt decuplate - ce le trebuie unui repetor, unui pile-up și\nunui satelit, și starea în care nu ascultați\nacolo unde emiteți.",
+  "Offered by foxsdr.com in some countries only.": "Oferit de foxsdr.com doar în anumite țări.",
   "Oman": "Oman",
   "On the spectrum": "Pe spectru",
   "One gain slider over Airspy's linearity table: gain held back early in the chain, for when strong signals are nearby.": "Un singur cursor de câștig pe tabelul de liniaritate Airspy: câștig ținut în frâu la începutul lanțului, când sunt semnale puternice în apropiere.",

@@ -58,7 +58,7 @@ Internal project/binary name: `cascade`.
 
 ## Where it is now
 
-The current release is **0.99.46** (September 2026), in open beta and free for
+The current release is **0.99.47** (September 2026), in open beta and free for
 noncommercial use, with its decoders and instruments delivered as plugins from
 a catalogue. These are screenshots of an earlier shipping build.
 
@@ -1792,6 +1792,11 @@ each says what starts it:
   (the first time in a session, since 0.99.16) and whenever you press
   **CHECK NOW** in it. Nothing is fetched at startup — since 0.79.1 that
   window does not reopen by itself — and no plugin ever updates itself.
+  Since 0.99.47 the same moment also asks foxsdr.com for a short list of
+  plugins offered only to some countries; it answers from Cloudflare's
+  country code for your connection, stores nothing, logs nothing, and is not
+  asked for when you have pointed the store at a different catalogue. See
+  [PRIVACY.md](PRIVACY.md).
 - **A plugin download**, when you press **FIT MODULE** or **UPDATE MODULE** for
   one — always https, sha256-verified against the catalogue, size-capped and
   refused on a cross-host redirect.

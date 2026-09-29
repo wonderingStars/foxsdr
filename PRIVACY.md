@@ -67,10 +67,17 @@ exactly as many.
   sends **the version you are running and nothing else** — no identifier, no
   install id, no cookie kept — and it is not the usage report; the two share
   nothing. Nothing is downloaded or installed without you pressing a button.
-- The application makes one other network request, to fetch the plugin
-  catalogue from GitHub (raw.githubusercontent.com): the first time you
-  open the plugin store window in a session, and whenever you press
-  **CHECK NOW** in it. Nothing is fetched at startup.
+- The application makes two other network requests, both part of fetching the
+  plugin catalogue: to GitHub (raw.githubusercontent.com) for the public list,
+  the first time you open the plugin store window in a session and whenever
+  you press **CHECK NOW** in it — nothing is fetched at startup — and, since
+  FoxSDR 0.99.47, to foxsdr.com for a short regional list of plugins offered
+  only in some countries. A plugin on that list downloads from foxsdr.com
+  instead of GitHub. foxsdr.com decides what to answer from the two-letter
+  country code Cloudflare works out from your connection's address, and it
+  stores neither the code nor the address and records nothing about the
+  request. Neither request carries an identifier, and the foxsdr.com request
+  is not made when you have pointed the store at a different catalogue.
 - The Satellites plugin, when it is fitted and tracking, fetches orbital
   element sets from CelesTrak about every twelve hours, falling back to a
   copy at foxsdr.com/tle/all.tle when CelesTrak does not answer. The request

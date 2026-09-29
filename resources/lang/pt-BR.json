@@ -883,6 +883,7 @@
   "Off": "Desligado",
   "Off. Nothing is transmitted.": "Desligado. Nada é transmitido.",
   "Off: the transmitter follows the receiver's dial, so a reply\ngoes out where the call came in.\nOn: the two are unlinked - what a repeater, a pile-up and a\nsatellite each need, and the state in which you are not\nlistening where you are transmitting.": "Desligado: o transmissor acompanha o dial do receptor, então a resposta\nsai onde a chamada entrou.\nLigado: os dois ficam desvinculados - o que um repetidor, um pile-up e um\nsatélite precisam, e o estado em que você não está\nescutando onde está transmitindo.",
+  "Offered by foxsdr.com in some countries only.": "Oferecido pelo foxsdr.com apenas em alguns países.",
   "Oman": "Omã",
   "On the spectrum": "No espectro",
   "One gain slider over Airspy's linearity table: gain held back early in the chain, for when strong signals are nearby.": "Um único controle deslizante de ganho sobre a tabela de linearidade da Airspy: ganho contido no início da cadeia, para quando há sinais fortes por perto.",

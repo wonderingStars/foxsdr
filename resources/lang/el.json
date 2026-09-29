@@ -883,6 +883,7 @@
   "Off": "Ανενεργό",
   "Off. Nothing is transmitted.": "Ανενεργό. Δεν εκπέμπεται τίποτα.",
   "Off: the transmitter follows the receiver's dial, so a reply\ngoes out where the call came in.\nOn: the two are unlinked - what a repeater, a pile-up and a\nsatellite each need, and the state in which you are not\nlistening where you are transmitting.": "Ανενεργό: ο πομπός ακολουθεί την κλίμακα του δέκτη, οπότε μια απάντηση\nβγαίνει εκεί από όπου ήρθε η κλήση.\nΕνεργό: τα δύο είναι αποσυνδεδεμένα - αυτό που χρειάζονται ένας αναμεταδότης, ένα pile-up και ένας\nδορυφόρος, και η κατάσταση στην οποία δεν ακούτε\nεκεί που εκπέμπετε.",
+  "Offered by foxsdr.com in some countries only.": "Προσφέρεται από το foxsdr.com μόνο σε ορισμένες χώρες.",
   "Oman": "Ομάν",
   "On the spectrum": "Στο φάσμα",
   "One gain slider over Airspy's linearity table: gain held back early in the chain, for when strong signals are nearby.": "Ένας ρυθμιστής απολαβής πάνω στον πίνακα γραμμικότητας της Airspy: απολαβή συγκρατημένη νωρίς στην αλυσίδα, όταν υπάρχουν ισχυρά σήματα κοντά.",

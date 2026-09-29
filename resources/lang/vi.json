@@ -883,6 +883,7 @@
   "Off": "Tắt",
   "Off. Nothing is transmitted.": "Tắt. Không phát gì cả.",
   "Off: the transmitter follows the receiver's dial, so a reply\ngoes out where the call came in.\nOn: the two are unlinked - what a repeater, a pile-up and a\nsatellite each need, and the state in which you are not\nlistening where you are transmitting.": "Tắt: máy phát đi theo mặt số của máy thu, nên lời đáp\nphát ra đúng nơi cuộc gọi đến.\nBật: hai bên không liên kết - điều mà trạm lặp, pile-up và\nvệ tinh đều cần, và là trạng thái mà bạn không\nnghe ở nơi bạn đang phát.",
+  "Offered by foxsdr.com in some countries only.": "Chỉ được foxsdr.com cung cấp ở một số quốc gia.",
   "Oman": "Oman",
   "On the spectrum": "Trên phổ",
   "One gain slider over Airspy's linearity table: gain held back early in the chain, for when strong signals are nearby.": "Một thanh trượt độ lợi theo bảng tuyến tính của Airspy: độ lợi ở đầu chuỗi được giữ lại, khi có tín hiệu mạnh ở gần.",

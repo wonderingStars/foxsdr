@@ -883,6 +883,7 @@
   "Off": "Uit",
   "Off. Nothing is transmitted.": "Uit. Er wordt niets uitgezonden.",
   "Off: the transmitter follows the receiver's dial, so a reply\ngoes out where the call came in.\nOn: the two are unlinked - what a repeater, a pile-up and a\nsatellite each need, and the state in which you are not\nlistening where you are transmitting.": "Uit: de zender volgt de dial van de ontvanger, dus een antwoord\ngaat uit waar de oproep binnenkwam.\nAan: de twee zijn ontkoppeld - wat een repeater, een pile-up en een\nsatelliet elk nodig hebben, en de toestand waarin je niet\nluistert waar je zendt.",
+  "Offered by foxsdr.com in some countries only.": "Alleen in sommige landen aangeboden door foxsdr.com.",
   "Oman": "Oman",
   "On the spectrum": "Op het spectrum",
   "One gain slider over Airspy's linearity table: gain held back early in the chain, for when strong signals are nearby.": "Eén versterkingsschuif over Airspy's lineariteitstabel: versterking vroeg in de keten ingehouden, voor als er sterke signalen in de buurt zijn.",

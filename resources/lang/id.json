@@ -883,6 +883,7 @@
   "Off": "Mati",
   "Off. Nothing is transmitted.": "Mati. Tidak ada yang dipancarkan.",
   "Off: the transmitter follows the receiver's dial, so a reply\ngoes out where the call came in.\nOn: the two are unlinked - what a repeater, a pile-up and a\nsatellite each need, and the state in which you are not\nlistening where you are transmitting.": "Mati: pemancar mengikuti dial penerima, jadi balasan\ndipancarkan di tempat panggilan masuk.\nNyala: keduanya tidak terhubung - yang dibutuhkan repeater, pile-up, dan\nsatelit, dan keadaan ketika Anda tidak\nmendengarkan di tempat Anda memancar.",
+  "Offered by foxsdr.com in some countries only.": "Ditawarkan oleh foxsdr.com hanya di beberapa negara.",
   "Oman": "Oman",
   "On the spectrum": "Di spektrum",
   "One gain slider over Airspy's linearity table: gain held back early in the chain, for when strong signals are nearby.": "Satu slider gain di atas tabel linearitas Airspy: gain ditahan di awal rantai, saat ada sinyal kuat di dekat.",

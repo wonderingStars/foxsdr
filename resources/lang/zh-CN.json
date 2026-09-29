@@ -883,6 +883,7 @@
   "Off": "关",
   "Off. Nothing is transmitted.": "关。不发射任何信号。",
   "Off: the transmitter follows the receiver's dial, so a reply\ngoes out where the call came in.\nOn: the two are unlinked - what a repeater, a pile-up and a\nsatellite each need, and the state in which you are not\nlistening where you are transmitting.": "关: 发射机跟随接收机的频率刻度，因此回复\n从呼叫进来的频率发出。\n开: 两者脱钩——中继台、堆叫和\n卫星都需要这样，此时你收听的\n并不是你发射的频率。",
+  "Offered by foxsdr.com in some countries only.": "仅由 foxsdr.com 在部分国家/地区提供。",
   "Oman": "阿曼",
   "On the spectrum": "在频谱上",
   "One gain slider over Airspy's linearity table: gain held back early in the chain, for when strong signals are nearby.": "一个增益滑块,按Airspy的线性度表调节:附近有强信号时,抑制链路前端的增益。",

@@ -883,6 +883,7 @@
   "Off": "Išjungta",
   "Off. Nothing is transmitted.": "Išjungta. Niekas nesiunčiama.",
   "Off: the transmitter follows the receiver's dial, so a reply\ngoes out where the call came in.\nOn: the two are unlinked - what a repeater, a pile-up and a\nsatellite each need, and the state in which you are not\nlistening where you are transmitting.": "Išjungta: siųstuvas seka imtuvo skalę, todėl atsakymas\nišeina ten, kur atėjo kvietimas.\nĮjungta: jie atsieti - to reikia retransliatoriui, pile-up ir\npalydovui, ir tokioje būsenoje jūs nesiklausote\nten, kur siunčiate.",
+  "Offered by foxsdr.com in some countries only.": "foxsdr.com siūlo tik kai kuriose šalyse.",
   "Oman": "Omanas",
   "On the spectrum": "Spektre",
   "One gain slider over Airspy's linearity table: gain held back early in the chain, for when strong signals are nearby.": "Vienas stiprinimo slankiklis pagal Airspy tiesiškumo lentelę: stiprinimas grandinės pradžioje prilaikomas, kai netoli yra stiprių signalų.",

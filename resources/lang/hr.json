@@ -883,6 +883,7 @@
   "Off": "Isključeno",
   "Off. Nothing is transmitted.": "Isključeno. Ništa se ne odašilje.",
   "Off: the transmitter follows the receiver's dial, so a reply\ngoes out where the call came in.\nOn: the two are unlinked - what a repeater, a pile-up and a\nsatellite each need, and the state in which you are not\nlistening where you are transmitting.": "Isključeno: predajnik prati skalu prijamnika, pa odgovor\nodlazi ondje odakle je došao poziv.\nUključeno: to dvoje je razdvojeno - što trebaju repetitor, pile-up i\nsatelit, i stanje u kojem ne slušate\nondje gdje odašiljete.",
+  "Offered by foxsdr.com in some countries only.": "Nudi ga foxsdr.com samo u nekim zemljama.",
   "Oman": "Oman",
   "On the spectrum": "Na spektru",
   "One gain slider over Airspy's linearity table: gain held back early in the chain, for when strong signals are nearby.": "Jedan klizač pojačanja po Airspyjevoj tablici linearnosti: pojačanje je zadržano na početku lanca, kad su jaki signali u blizini.",

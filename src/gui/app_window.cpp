@@ -11453,12 +11453,53 @@ void AppWindow::startCatalogFetch() {
             if (r.ok) { r.entries = pluginRepo_.entries(); }
         }
         if (r.ok) {
+            // REGIONAL CATALOGUE (plugin_repo.hpp). Only after a SUCCESSFUL
+            // public fetch, and only when the store is on the default
+            // catalogue or the test override is set — a user pointed at a
+            // corporate share or a local file gets no foxsdr.com request at
+            // all. A regional failure of any kind — transport, HTTP status,
+            // parse, oversize — is swallowed completely: no error field is
+            // set here, nothing is shown, and NOTHING IS LOGGED, because the
+            // outcome itself would disclose which country answered the
+            // request. regionalState/regionalAdded/regionalDropped exist
+            // ONLY for the CASCADE_PLUGIN_TEST hook (reportPluginTestResult).
+            if (cascade::core::PluginRepo::regionalWanted(
+                    url, cascade::core::PluginRepo::regionalOverrideSet())) {
+                const std::string regionalUrl = cascade::core::PluginRepo::regionalIndexUrl();
+                std::vector<cascade::core::PluginCatalogEntry> regionalEntries;
+                std::string regionalError;
+                bool regionalOk = false;
+                if (regionalUrl.find("://") == std::string::npos) {
+                    // Same test seam as the public catalogue's local form.
+                    regionalOk = readLocalCatalogue(regionalUrl, regionalEntries, regionalError);
+                } else {
+                    regionalOk =
+                        pluginRepo_.fetchRegionalIndex(regionalUrl, regionalEntries, regionalError);
+                }
+                if (regionalOk) {
+                    const cascade::core::PluginRepo::RegionalMergeResult merge =
+                        cascade::core::PluginRepo::mergeRegional(
+                            r.entries, regionalEntries,
+                            cascade::core::PluginRepo::regionalDownloadPrefix());
+                    r.entries = merge.merged;
+                    r.regionalState = "ok";
+                    r.regionalAdded = merge.added;
+                    r.regionalDropped = static_cast<int>(merge.dropped.size());
+                } else {
+                    // SILENT. The store shows exactly the public catalogue,
+                    // as if this branch never ran.
+                    r.regionalState = "failed";
+                }
+            }
             // THE ONLY MOMENT A RETIREMENT FLOOR IS WRITTEN TO THIS MACHINE.
             // Enforcement reads the cache and never the network, so a floor
             // that is not cached here protects nobody — not the user who goes
             // offline for a year, and not the one who never opens this browser
             // again. It runs on the worker because it re-hashes every
-            // installed plugin.
+            // installed plugin. Runs on the MERGED list, so a regional
+            // plugin's floor is cached exactly like any public one (and a
+            // later fetch made outside the region cannot remove it — see
+            // mergePolicies' own fail-open rule).
             std::string policyError;
             if (!cascade::core::PluginRepo::cacheCataloguePolicies(dir, r.entries,
                                                                    policyError)) {
@@ -11529,6 +11570,10 @@ void AppWindow::pollPluginAsync() {
         catalogFuture_.wait_for(kNoWait) == std::future_status::ready) {
         CatalogFetchResult r = catalogFuture_.get();
         catalogPending_ = false;
+        // Held for reportPluginTestResult only — see the member comment.
+        regionalState_ = r.regionalState;
+        regionalAdded_ = r.regionalAdded;
+        regionalDropped_ = r.regionalDropped;
         if (r.ok) {
             catalog_ = std::move(r.entries);
             std::string statusBuf;
@@ -15439,6 +15484,12 @@ void AppWindow::buildPluginStoreModel(PluginStoreModel& model) {
         sm.plate.summary = e.summary;
         sm.plate.homepage = e.homepage;
         sm.plate.legalNotice = e.legalNotice;
+        // REGIONAL CATALOGUE: the one line the design calls for on a
+        // regional row, drawn muted beneath the homepage line. Empty for
+        // every other row — ModulePlate::originNote draws nothing then.
+        sm.plate.originNote =
+            e.regional ? std::string(tr("Offered by foxsdr.com in some countries only."))
+                       : std::string();
         // THE ABI IS KNOWN FOR A CATALOGUE ROW, and both halves of the
         // comparison are stated so the plate can letter the mismatch
         // rather than the verdict.
@@ -20957,10 +21008,18 @@ void AppWindow::reportPluginTestResult() {
     if (!catalogError_.empty()) {
         std::printf("plugin catalogue: FAILED frame=%d %s\n", frameCounter_,
                     catalogError_.c_str());
+        // REGIONAL CATALOGUE (plugin_repo.hpp): the regional fetch is never
+        // even attempted when the public one fails, so this is always
+        // "not-asked" here — printed anyway, for a machine-readable run that
+        // otherwise cannot tell "never asked" from "asked and swallowed".
+        std::printf("plugin regional: state=%s added=%d dropped=%d\n", regionalState_.c_str(),
+                    regionalAdded_, regionalDropped_);
         return;
     }
     std::printf("plugin catalogue: frame=%d entries=%d\n", frameCounter_,
                 static_cast<int>(catalog_.size()));
+    std::printf("plugin regional: state=%s added=%d dropped=%d\n", regionalState_.c_str(),
+                regionalAdded_, regionalDropped_);
     for (int i = 0; i < static_cast<int>(catalog_.size()); ++i) {
         const cascade::core::PluginCatalogEntry& e =
             catalog_[static_cast<std::size_t>(i)];
@@ -20972,11 +21031,11 @@ void AppWindow::reportPluginTestResult() {
         const std::string noAckText = noAck.empty() ? "ok" : ("blocked(" + noAck + ")");
         const std::string ackText = ack.empty() ? "ok" : ("blocked(" + ack + ")");
         std::printf("plugin entry: id=%s abi=%u compatible=%d installed=%d legal=%d "
-                    "licence=\"%s\" install=%s installAcked=%s\n",
+                    "licence=\"%s\" install=%s installAcked=%s regional=%d\n",
                     e.id.c_str(), static_cast<unsigned>(e.abiVersion),
                     e.compatible ? 1 : 0, catalogEntryInstalled(e) ? 1 : 0,
                     e.legalNotice.empty() ? 0 : 1, e.licence.c_str(),
-                    noAckText.c_str(), ackText.c_str());
+                    noAckText.c_str(), ackText.c_str(), e.regional ? 1 : 0);
     }
 }
 

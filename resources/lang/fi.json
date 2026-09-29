@@ -883,6 +883,7 @@
   "Off": "Pois",
   "Off. Nothing is transmitted.": "Pois. Mitään ei lähetetä.",
   "Off: the transmitter follows the receiver's dial, so a reply\ngoes out where the call came in.\nOn: the two are unlinked - what a repeater, a pile-up and a\nsatellite each need, and the state in which you are not\nlistening where you are transmitting.": "Pois: lähetin seuraa vastaanottimen viritystä, joten vastaus\nlähtee sinne, mistä kutsu tuli.\nPäällä: ne eivät ole kytköksissä - mitä toistin, pile-up ja\nsatelliitti kukin tarvitsevat, ja tila, jossa et kuuntele\nsiellä, missä lähetät.",
+  "Offered by foxsdr.com in some countries only.": "foxsdr.com tarjoaa tätä vain joissakin maissa.",
   "Oman": "Oman",
   "On the spectrum": "Spektrissä",
   "One gain slider over Airspy's linearity table: gain held back early in the chain, for when strong signals are nearby.": "Yksi vahvistuksen liukusäädin Airspyn lineaarisuustaulukon yli: vahvistusta pidätetään ketjun alussa, kun lähellä on voimakkaita signaaleja.",

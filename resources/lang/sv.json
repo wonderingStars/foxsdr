@@ -883,6 +883,7 @@
   "Off": "Av",
   "Off. Nothing is transmitted.": "Av. Ingenting sänds.",
   "Off: the transmitter follows the receiver's dial, so a reply\ngoes out where the call came in.\nOn: the two are unlinked - what a repeater, a pile-up and a\nsatellite each need, and the state in which you are not\nlistening where you are transmitting.": "Av: sändaren följer mottagarens frekvens, så ett svar\nsänds där anropet kom in.\nPå: de två är frikopplade - vad en repeater, en pile-up och en\nsatellit var för sig behöver, och det läge där du inte\nlyssnar där du sänder.",
+  "Offered by foxsdr.com in some countries only.": "Erbjuds av foxsdr.com bara i vissa länder.",
   "Oman": "Oman",
   "On the spectrum": "På spektrumet",
   "One gain slider over Airspy's linearity table: gain held back early in the chain, for when strong signals are nearby.": "Ett förstärkningsreglage över Airspys linjäritetstabell: förstärkningen hålls tillbaka tidigt i kedjan när starka signaler finns i närheten.",

@@ -883,6 +883,7 @@
   "Off": "Vypnuté",
   "Off. Nothing is transmitted.": "Vypnuté. Nič sa nevysiela.",
   "Off: the transmitter follows the receiver's dial, so a reply\ngoes out where the call came in.\nOn: the two are unlinked - what a repeater, a pile-up and a\nsatellite each need, and the state in which you are not\nlistening where you are transmitting.": "Vypnuté: vysielač sleduje stupnicu prijímača, takže odpoveď\nodíde tam, kde prišla výzva.\nZapnuté: oba sú oddelené - čo potrebuje prevádzač, pile-up aj\nsatelit, a stav, v ktorom nepočúvate\ntam, kde vysielate.",
+  "Offered by foxsdr.com in some countries only.": "Ponúka foxsdr.com len v niektorých krajinách.",
   "Oman": "Omán",
   "On the spectrum": "V spektre",
   "One gain slider over Airspy's linearity table: gain held back early in the chain, for when strong signals are nearby.": "Jeden posúvač zosilnenia podľa tabuľky linearity Airspy: zosilnenie na začiatku reťazca je pribrzdené, keď sú nablízku silné signály.",

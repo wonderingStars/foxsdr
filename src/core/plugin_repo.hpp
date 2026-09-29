@@ -117,6 +117,42 @@
 //     mismatch needs a rebuilt plugin that may not exist yet. Telling a user
 //     to "update" a plugin no update can fix is a support ticket.
 //
+// ---------------------------------------------------------------------------
+// REGIONAL CATALOGUE (offered in some countries only)
+// ---------------------------------------------------------------------------
+//
+// A second, SMALL catalogue may exist at foxsdr.com, for plugins the site
+// chooses to offer only to some connections (by IP-derived country, decided
+// entirely on the server; this client neither knows nor asks why). It is
+// fetched at EXACTLY THE SAME MOMENT as the public one, extending rule 7's
+// promise rather than opening a second timer: there is no independent
+// schedule for it, no background poll, and no fetch that the public one did
+// not also just make. If the public fetch fails, the regional one is never
+// even attempted (regionalWanted() is not consulted) - the browser shows
+// exactly what it showed before this feature existed.
+//
+// A regional failure - unreachable, wrong content, anything - is swallowed
+// completely: no error field is set, nothing is shown, and NOTHING IS
+// LOGGED. A log line that said "1 regional plugin offered" would itself be a
+// disclosure of which country the request was answered from, and a
+// diagnostics bundle travels further than the fact it would be encoding.
+//
+// PUBLIC ALWAYS WINS. mergeRegional() drops a regional entry whole - not
+// merely the clashing field - if its id collides with a public one, so a
+// compromised or stale regional list can never shadow a public plugin with
+// different bytes under the same name.
+//
+// isRegionalDownloadUrl() is the second enforcement of the same idea rule 3
+// already states for the public path: a plugin marked regional must download
+// from the one origin that offered it. It is checked twice on purpose - once
+// when the entry is merged in, and again inside install() itself - because
+// install() does not trust its caller to have gone through the merge.
+//
+// `regional` on PluginCatalogEntry is trusted from exactly one place:
+// mergeRegional(). parseIndex() never reads a "regional" key from either
+// document, so a hostile public OR regional index cannot grant itself the
+// download prefix's home-field advantage by simply saying so in JSON.
+//
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
@@ -124,6 +160,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "core/plugin_abi.h"
@@ -175,6 +212,17 @@ struct PluginCatalogEntry {
     // re-derives it from abiVersion rather than trusting this flag, because a
     // caller could have constructed the struct by hand.
     bool compatible = false;
+
+    // TRUE only for an entry that arrived from the REGIONAL list and survived
+    // mergeRegional() (see the REGIONAL CATALOGUE block above). Set in
+    // exactly one place - mergeRegional() - and NEVER by parseIndex(): a
+    // "regional": true key in either document's JSON is silently ignored, so
+    // neither a hostile public index nor a hostile regional one can grant an
+    // entry the download-prefix exemption merely by claiming the field.
+    // install() re-checks the prefix against this flag before any network
+    // activity, exactly as it re-derives `compatible` rather than trusting a
+    // hand-built struct.
+    bool regional = false;
 
     // The platform record matching the host we are running on, or nullptr if
     // the catalogue has no build for it. The pointer aliases `platforms`, so
@@ -292,6 +340,11 @@ public:
     static constexpr std::uint64_t kMaxPluginBytes = 64ull * 1024ull * 1024ull;
     static constexpr std::uint64_t kMaxIndexBytes = 4ull * 1024ull * 1024ull;
 
+    // The regional list is a handful of entries, so its cap is small on
+    // purpose: 256 KiB is generous for that and stingy for anything a hostile
+    // foxsdr.com-shaped host might try to hand back instead.
+    static constexpr std::uint64_t kMaxRegionalIndexBytes = 256ull * 1024ull;
+
     // Upper bound on a catalogue filename. Long enough for any sane plugin,
     // short enough that pluginsDir + name cannot approach a path limit.
     static constexpr std::size_t kMaxFileNameChars = 128;
@@ -307,6 +360,77 @@ public:
     // status and the UI shows an empty catalogue; that is a supported state,
     // not an error condition to shout about.
     static std::string defaultIndexUrl();
+
+    // ---- Regional catalogue (see the REGIONAL CATALOGUE block above) ------
+    //
+    // Where the regional list is asked for: FOXSDR_REGIONAL_CATALOGUE_URL if
+    // set (https URL, or a local path with no "://" - the same test seam
+    // readLocalCatalogue() gives the public catalogue), otherwise
+    // https://foxsdr.com/api/plugins/regional.
+    static std::string regionalIndexUrl();
+
+    // True iff FOXSDR_REGIONAL_CATALOGUE_URL is set to a non-empty value.
+    // Read fresh on every call - see regionalWanted()'s note on why a
+    // statically-linked test binary needs this read twice, once through each
+    // env-setting API.
+    static bool regionalOverrideSet();
+
+    // "https://foxsdr.com/plugins/regional/" - the exact, case-sensitive
+    // prefix every regional download URL must start with. A function rather
+    // than a constant so a test can pass a different one without touching
+    // the real host name.
+    static std::string regionalDownloadPrefix();
+
+    // True only if `url` starts with `prefix` byte-for-byte, and the
+    // remainder is exactly "<region>/<file>": `region` two lowercase ASCII
+    // letters, `file` starting with a letter or digit, made of
+    // [A-Za-z0-9._-], containing no "..", at most kMaxFileNameChars long, and
+    // with nothing else after it - no query, fragment, extra slash, port or
+    // userinfo, because those would already have had to appear before the
+    // prefix's own trailing "/plugins/regional/" and so are refused by the
+    // exact-prefix comparison, or inside `file`, where the character class
+    // excludes them outright. Deliberately independent of sanitiseFileName():
+    // this checks a URL PATH SEGMENT, not a destination file name for THIS
+    // host, so a Windows build correctly accepts a regional entry's ".so"
+    // platform URL too - install() re-sanitises the actual destination name
+    // on its own, separately, as it always has.
+    static bool isRegionalDownloadUrl(const std::string& url, const std::string& prefix);
+
+    // Should the regional list even be asked for, given the catalogue URL the
+    // user is currently pointed at and whether the test override is set?
+    // True when `catalogueUrl` equals defaultIndexUrl() (the ordinary case)
+    // OR `overrideSet` is true (the test seam always wins, so a test can
+    // exercise the regional path against a fixture without also using the
+    // default catalogue URL). A user who has pointed the store at a corporate
+    // share or a local file gets neither - no foxsdr.com request is made on
+    // their behalf.
+    static bool regionalWanted(const std::string& catalogueUrl, bool overrideSet);
+
+    // What mergeRegional() decided. `merged` is every public entry, unchanged
+    // and in the same order, followed by the regional entries that survived,
+    // each with `regional` set true. `added` is how many of those there are.
+    // `dropped` is one (id, reason) pair per regional entry that was refused
+    // wholesale - used by tests only; the running application never shows or
+    // logs it (see the REGIONAL CATALOGUE block: a regional outcome is never
+    // disclosed).
+    struct RegionalMergeResult {
+        std::vector<PluginCatalogEntry> merged;
+        int added = 0;
+        std::vector<std::pair<std::string, std::string>> dropped;
+    };
+
+    // Folds `regionalEntries` into `publicEntries`. PURE: no filesystem, no
+    // network. A regional entry is dropped WHOLE - never partially trusted -
+    // when any of these holds:
+    //   - its id equals any public entry's id (public always wins);
+    //   - its id appears more than once within regionalEntries itself
+    //     (ambiguity is refused, not resolved by picking either copy);
+    //   - ANY of its platform URLs fails isRegionalDownloadUrl(url,
+    //     downloadPrefix) - one bad platform condemns the whole entry,
+    //     including a platform whose own URL was fine.
+    static RegionalMergeResult mergeRegional(const std::vector<PluginCatalogEntry>& publicEntries,
+                                             const std::vector<PluginCatalogEntry>& regionalEntries,
+                                             const std::string& downloadPrefix);
 
     // Host identity used to pick a platform record. Exposed so tests and the
     // UI agree with the matcher instead of re-deriving it.
@@ -596,6 +720,23 @@ public:
     // this time must not keep offering installs from last time.
     bool fetchIndex(const std::string& url, std::string& error);
 
+    // The regional list's sibling of fetchIndex(), kept deliberately separate
+    // rather than a second call to fetchIndex(): it does NOT touch entries_
+    // or progress_ - the public catalogue this instance is holding is not
+    // this call's business either way - and it uses kMaxRegionalIndexBytes,
+    // not kMaxIndexBytes. It DOES share cancel_, passed to httpsGet exactly
+    // as fetchIndex() passes it, so the destructor's pluginRepo_.cancel()
+    // still aborts a stalled regional fetch; unlike fetchIndex() it does not
+    // RESET cancel_ on entry, because a caller runs this immediately after a
+    // successful public fetch and a cancel meant for that fetch must still
+    // be able to stop this one rather than being silently cleared first.
+    // Returns false with `error` set and `out` empty on any failure -
+    // transport, HTTP status, oversized or malformed document; the caller
+    // (AppWindow::startCatalogFetch) is the one place that decides a failure
+    // here is swallowed rather than shown.
+    bool fetchRegionalIndex(const std::string& url, std::vector<PluginCatalogEntry>& out,
+                            std::string& error);
+
     const std::vector<PluginCatalogEntry>& entries() const { return entries_; }
 
     // Downloads, verifies and installs one entry into `pluginsDir`, creating
@@ -609,7 +750,11 @@ public:
     // Refuses, in this order and all before any network activity: an entry
     // whose abiVersion is not this host's; an entry with no build for this
     // os/arch; a file name that fails sanitiseFileName(); a malformed sha256;
-    // a non-https url.
+    // a non-https url; a `regional` entry whose url is not under
+    // regionalDownloadPrefix() (the SECOND check of that rule - see the
+    // REGIONAL CATALOGUE block at the top of this file - because this
+    // function does not trust its caller to have gone through
+    // mergeRegional()).
     bool install(const PluginCatalogEntry& e, const std::string& pluginsDir,
                  std::string& installedPath, std::string& error);
 
