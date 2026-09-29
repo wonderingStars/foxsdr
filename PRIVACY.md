@@ -530,7 +530,7 @@ SEND:
 | `version` | `0.99.44` | Which release, so a bug already fixed is not chased again. |
 | `platform` | `windows`, `linux` or `android` | Which build sent it. |
 | `arch` | `x64` or `arm64` | As above. |
-| `diagnostics` | the same text **Copy diagnostics** produces, or ABSENT | OPTIONAL. Present only when you left "Attach the diagnostics log" ticked when you pressed SEND - absent, not an empty string, otherwise. It is exactly the bundle above (*Crash and freeze reports*), with the same `<user>` handling that table's `log-path`/`crash-dir` row describes, additionally capped here at 65536 bytes (the newest lines kept, the oldest dropped, and said so). Never anything the diagnostics bundle does not already contain: no install identifier, no plugin list beyond what that bundle lists. |
+| `diagnostics` | the same text **Copy diagnostics** produces, or ABSENT | OPTIONAL. Present only when you left "Attach the diagnostics log" ticked when you pressed SEND - absent, not an empty string, otherwise. It is exactly the bundle above (*Crash and freeze reports*), with the same `<user>` handling that table's `log-path`/`crash-dir` row describes, additionally capped here at 65536 bytes (the newest lines kept, the oldest dropped, and said so). Never anything the diagnostics bundle does not already contain: no install identifier, no plugin list beyond what that bundle lists - with ONE addition you choose separately: when you have run the SDRplay diagnostic and ticked "Attach the SDRplay diagnostic too", that file follows the bundle inside this same field (described under *The SDRplay diagnostic* below), within the same 65536 bytes. |
 
 That is the complete list: a feature request's six fields plus `kind`, plus
 the one optional `diagnostics` field above. No install identifier, no
@@ -547,6 +547,23 @@ whole request rather than silently ignoring the field. FoxSDR notices that
 exact refusal and tries again, once, immediately, with the log left out - and
 says so plainly on the page - rather than leaving your bug report unsent over
 a field the site does not yet accept.
+
+### The SDRplay diagnostic
+
+**SYSTEM > Diagnostics > Run SDRplay diagnostic** (or `cascade --sdrplay-probe
+<file>`) steps an SDRplay RSP through its sample rates, bands, LNA states,
+antennas and IF modes once, times every call to the SDRplay API, and writes
+one text file on YOUR machine, in the reports folder. Nothing is sent by
+running it. The file holds the FoxSDR version, the operating system, the API
+version, the radio's model and hardware number, **a hash of its serial number
+(never the serial itself)**, the settings the API reported, the timing and
+answer of every API call, how many samples arrived, and the service's own
+events (gain changes, overloads). No frequency you tuned to, nothing
+received, and paths go through the same `<user>` masking as the bundle. It
+leaves the machine only if you tick **"Attach the SDRplay diagnostic too"** on
+the report page, inside the `diagnostics` field above, and "Show what will be
+sent" shows it first. The bias tee is switched on during the test only if you
+tick it AND answer a second question that says it powers the antenna socket.
 
 ## What is never sent
 

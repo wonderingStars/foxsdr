@@ -192,6 +192,19 @@ std::string truncateDiagnosticsForReport(
 // the result for both - never two passes that could disagree.
 std::string prepareDiagnosticsForReport(const std::string& rawBundleText);
 
+// THE SDRPLAY DIAGNOSTIC, APPENDED (0.99.50, source/sdrplay_probe.hpp).
+// `prepared` is a prepareDiagnosticsForReport() result; the probe's file is
+// scrubbed the same way (scrubDiagnosticsForReport) and added after a
+// "--- SDRplay diagnostic ---" line. The whole stays within `maxBytes`: the
+// bundle's log gives up its OLDEST lines first (truncateDiagnosticsForReport),
+// because the probe's file is the reason the person ticked the box; only if
+// the probe alone is larger than the budget is its own tail cut, with a line
+// saying so. An empty probe text returns `prepared` unchanged.
+inline constexpr const char* kProbeAttachmentMarker = "\n--- SDRplay diagnostic ---\n";
+std::string appendProbeToDiagnosticsForReport(
+    const std::string& prepared, const std::string& probeText,
+    std::size_t maxBytes = kProblemReportDiagnosticsMaxBytes);
+
 // WHETHER A CACHED prepareDiagnosticsForReport() RESULT IS STALE. Building
 // the attachment is real work - a ring snapshot under a mutex, the plugin
 // list, a whole-bundle scrub pass - and drawProblemReportPage() would

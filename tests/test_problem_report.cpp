@@ -718,5 +718,52 @@ int main() {
         CHECK(problemReportContactHasEmailAddress("  g4xyz@example.com  "));
     }
 
+    // --- THE SDRPLAY DIAGNOSTIC RIDES IN THE SAME ATTACHMENT (0.99.50):
+    //     scrubbed like the bundle, after its own marker, and the whole held
+    //     to the 64 KB - the log's oldest lines go first --------------------
+    {
+        const std::string header =
+            "FoxSDR diagnostics bundle\ngenerated: 2026-09-29 00:00:00\n\n--- log ---\n";
+        std::string logBody;
+        for (int i = 0; i < 2000; ++i) {
+            logBody += "00:00:00.000 info OLD_LINE_" + std::to_string(i) +
+                       " padding padding padding padding\n";
+        }
+        logBody += "00:00:01.000 info NEWEST_LOG_LINE\n";
+        const std::string prepared = prepareDiagnosticsForReport(header + logBody);
+        const std::string probe =
+            "FoxSDR SDRplay diagnostic\nAPI library: C:\\Users\\carol\\x\\sdrplay_api.dll\n"
+            "SUMMARY\n  1 open and start ...... PASS\n";
+
+        // No probe: the attachment is exactly what it was.
+        CHECK(appendProbeToDiagnosticsForReport(prepared, "") == prepared);
+
+        const std::string both = appendProbeToDiagnosticsForReport(prepared, probe);
+        CHECK(both.size() <= kProblemReportDiagnosticsMaxBytes);
+        CHECK(both.find(kProbeAttachmentMarker) != std::string::npos);
+        CHECK(both.find("  1 open and start ...... PASS") != std::string::npos);
+        CHECK(both.find("carol") == std::string::npos);  // scrubbed like the bundle
+        CHECK(both.rfind(header, 0) == 0);              // the bundle's header survives
+        CHECK(both.find("NEWEST_LOG_LINE") != std::string::npos);
+        CHECK(both.find(kProbeAttachmentMarker) > both.find("NEWEST_LOG_LINE"));
+
+        // A tight budget: the log gives way, the probe does not.
+        const std::size_t cap = header.size() + 400 + probe.size();
+        const std::string tight = appendProbeToDiagnosticsForReport(prepared, probe, cap);
+        CHECK(tight.size() <= cap);
+        CHECK(tight.find("  1 open and start ...... PASS") != std::string::npos);
+        CHECK(tight.find("(earlier lines dropped)") != std::string::npos);
+        CHECK(tight.find("OLD_LINE_0 ") == std::string::npos);
+
+        // A probe larger than the whole budget: its own tail is cut, and said.
+        std::string huge = "FoxSDR SDRplay diagnostic\n";
+        for (int i = 0; i < 3000; ++i) { huge += "  +   1.000 rate line padding padding padding\n"; }
+        const std::string cutProbe = appendProbeToDiagnosticsForReport(prepared, huge);
+        CHECK(cutProbe.size() <= kProblemReportDiagnosticsMaxBytes);
+        CHECK(cutProbe.find("(the rest of the SDRplay diagnostic was cut to fit)") !=
+              std::string::npos);
+        CHECK(cutProbe.find("FoxSDR SDRplay diagnostic\n") != std::string::npos);
+    }
+
     return testSummary("test_problem_report");
 }

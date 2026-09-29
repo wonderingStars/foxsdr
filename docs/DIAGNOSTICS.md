@@ -928,6 +928,20 @@ never be re-derived from a later build.
   `telemetryCleanExit` marker the crash counter already uses), the next start
   offers the same thing in a dialog. A crash handler can write a report but it
   cannot ask anything — by the time it runs there is no user interface left.
+- **SDRplay diagnostic (0.99.50):** Settings → Diagnostics → **Run SDRplay
+  diagnostic**, or `cascade --sdrplay-probe <file>
+  [--sdrplay-probe-bias-tee]`. A child process drives the RSP straight
+  through the SDRplay API table (`src/source/sdrplay_probe.cpp`): open and
+  device list, every offered sample rate (3 s each, delivered against set),
+  frequency steps, every LNA state, the antennas and HDR, the bias tee (ON
+  only after a second confirmation), the six low-IF modes the specification
+  lists, then Uninit and close. Every `sdrplay_api_*` call is logged with its
+  UTC entry and exit time and waited for up to 30 s — SLOW over 1000 ms (the
+  receiver's own give-up point), HUNG at 30 s, after which no further call is
+  made. The file lands in `crashes\sdrplay-diagnostic-<date>-<time>.txt`,
+  carries a hash of the serial and never the serial, and can be attached on
+  the REPORT A BUG page inside the existing `diagnostics` field. The GUI never
+  waits for the child, in a frame or at shutdown.
 
 Nothing on that list is re-derived. The version, commit, plugin list with
 versions, source and device state all come from state the application already

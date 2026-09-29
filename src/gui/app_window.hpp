@@ -51,6 +51,7 @@ struct GLFWwindow;
 #include "core/retune_coalescer.hpp"
 #include "core/scanner.hpp"
 #include "core/transmitter.hpp"
+#include "source/sdrplay_probe.hpp"
 #include "gui/basemap_cache.hpp"
 // The floor a torn-off page cannot be dragged under, and the reset generation
 // that puts an already-wrong one back. ImGui-free for the same reason as the
@@ -3293,6 +3294,26 @@ private:
     std::string diagBundleStatus_;
     bool diagnosticsEnabled_ = true;
     bool diagnosticsMinidump_ = false;
+
+    // THE SDRPLAY DIAGNOSTIC (0.99.50, source/sdrplay_probe.hpp). A key in
+    // the Diagnostics section opens a confirmation window drawn at top level
+    // (drawSdrPlayProbeDialog, which also polls the child every frame); the
+    // probe runs as a child process, never on this thread, and nothing here
+    // waits for it - not a frame, not the shutdown. The file it writes can be
+    // attached on the REPORT A BUG page beside the diagnostics log.
+    void drawSdrPlayProbeDialog();
+    void startSdrPlayProbe();
+    bool sdrplayProbeConfirmOpen_ = false;
+    // THE BIAS TEE, TWO STEPS: ticking the box only ASKS (sdrplayProbeBiasAsk_);
+    // sdrplayProbeBiasOn_ becomes true only on "Yes, switch it on", and only
+    // that reaches the child's command line. Reset every time the window opens.
+    bool sdrplayProbeBiasAsk_ = false;
+    bool sdrplayProbeBiasOn_ = false;
+    std::unique_ptr<cascade::source::SdrPlayProbeChild> sdrplayProbeChild_;
+    std::string sdrplayProbePath_;    // the file being written, or last written
+    std::string sdrplayProbeReport_;  // its text once finished, for the bug page
+    std::string sdrplayProbeStatus_;  // the line under the key
+    bool problemReportAttachProbe_ = false;
 
     // Who each map target actually is, answered by a track-info plugin
     // (registration, type, operator). Inactive when none is installed.

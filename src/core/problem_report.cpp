@@ -207,6 +207,33 @@ std::string prepareDiagnosticsForReport(const std::string& rawBundleText) {
     return truncateDiagnosticsForReport(scrubDiagnosticsForReport(rawBundleText));
 }
 
+std::string appendProbeToDiagnosticsForReport(const std::string& prepared,
+                                              const std::string& probeText,
+                                              std::size_t maxBytes) {
+    if (probeText.empty()) { return prepared; }
+    std::string probe = scrubDiagnosticsForReport(probeText);
+    const std::string marker = kProbeAttachmentMarker;
+    // A probe that alone does not fit beside its marker loses its own tail,
+    // said in one line, and the bundle is left out entirely.
+    const std::string cutNote = "\n(the rest of the SDRplay diagnostic was cut to fit)\n";
+    if (marker.size() + probe.size() > maxBytes) {
+        const std::size_t keep =
+            maxBytes > marker.size() + cutNote.size() ? maxBytes - marker.size() - cutNote.size() : 0;
+        std::size_t cut = probe.rfind('\n', keep);
+        if (cut == std::string::npos) { cut = keep; }
+        probe = probe.substr(0, cut) + cutNote;
+        return marker + probe;
+    }
+    const std::size_t roomForBundle = maxBytes - marker.size() - probe.size();
+    std::string bundle = truncateDiagnosticsForReport(prepared, roomForBundle);
+    if (bundle.size() > roomForBundle) {
+        // A bundle without the "--- log ---" marker cannot be trimmed line by
+        // line; the probe is what was asked for, so the bundle goes.
+        bundle.clear();
+    }
+    return bundle + marker + probe;
+}
+
 bool problemReportShouldRetryWithoutDiagnostics(bool sentDiagnostics, int httpStatus) {
     return sentDiagnostics && httpStatus == 400;
 }

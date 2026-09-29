@@ -619,6 +619,21 @@ const KnownWait kKnownWaits[] = {
      "thread the teardown runs on, so the frame it belongs to has already finished. It composes "
      "with kUpdateWait below rather than replacing it: 1000 + 500 is the worst a single control "
      "can cost that thread, which is what has to stay under the watchdog's frame threshold"},
+    // THE SDRPLAY DIAGNOSTIC PROBE (0.99.50). All four are spent inside the
+    // probe's OWN process (`cascade --sdrplay-probe`), which the GUI starts
+    // and never waits for - not in a frame, not at shutdown (SdrPlayProbeChild
+    // never waits or kills). A GUI teardown therefore pays none of them.
+    {"src/source/sdrplay_probe.hpp", "kProbeCallLimit", 0,
+     "how long the probe's own thread waits on one SDRplay API call before recording it HUNG "
+     "and ending the run. Spent in the probe's child process, which the GUI never waits for"},
+    {"src/source/sdrplay_probe.hpp", "kProbeSlowCall", 0,
+     "not a wait at all - the threshold above which a probe call is reported SLOW"},
+    {"src/source/sdrplay_probe.hpp", "kProbeStreamPerRate", 0,
+     "how long the probe streams at each sample rate and IF mode, in its own child process; "
+     "the GUI never waits for it"},
+    {"src/source/sdrplay_probe.hpp", "kProbeStreamPerStep", 0,
+     "how long the probe streams after each frequency, LNA, antenna and bias-tee change, in "
+     "its own child process; the GUI never waits for it"},
     {"src/source/sdrplay_source.hpp", "kControlGrace", 0,
      "not a wait at all (0.99.50) - how long a control that was not answered within "
      "kControlWait is LISTENED FOR before the radio is given up. A deadline compared against a "
