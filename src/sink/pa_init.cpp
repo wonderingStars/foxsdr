@@ -65,27 +65,71 @@ std::timed_mutex& streamListMutex() {
 
 std::atomic<std::uint64_t> gStreamListWaitsAbandoned{0};
 
+// When the CURRENT holder took the lock (steady-clock milliseconds), 0 while
+// nobody holds it. What a waiter judges "has stopped" by.
+std::atomic<std::int64_t> gHeldSinceMs{0};
+
+std::int64_t steadyMs() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
+
+// How often a waiter looks at the holder's age between tries.
+constexpr std::chrono::milliseconds kStreamListSliceMs{10};
+
 }  // namespace
 
 PaStreamListGuard::PaStreamListGuard(Mode mode) {
     if (mode == NoWait) {
         held_ = streamListMutex().try_lock();
+        if (held_) { gHeldSinceMs.store(steadyMs() | 1, std::memory_order_relaxed); }
         return;
     }
-    held_ = streamListMutex().try_lock_for(kStreamListWaitMs);
-    if (!held_) {
-        // Whoever has it has had it for kStreamListWaitMs: a close inside a
-        // host API that has stopped answering, which is past its list work.
+    // THE HOLDER'S AGE, NOT THE WAITER'S WAIT. Going ahead without the lock is
+    // safe only past a holder that has kept it for kStreamListWaitMs - a close
+    // inside a host API that has stopped answering, which is past its list
+    // work. Until this measured the waiter's own wait (one try_lock_for), and
+    // a waiter behind several HEALTHY holders in turn gave up while one of
+    // them was still inside its list change: two unlocked writers on
+    // PortAudio's list (tests/test_pa_stream_list_guard.cpp; the eight-thread
+    // probe in test_soundcard_source failing under a parallel load on
+    // Windows). So a waiter tries in short slices and, between them, gives up
+    // only when whoever holds the lock now has held it that long - or when it
+    // has waited kStreamListStarveMs in all, so no queue keeps it for ever.
+    const std::int64_t startMs = steadyMs();
+    for (;;) {
+        if (streamListMutex().try_lock_for(kStreamListSliceMs)) {
+            held_ = true;
+            gHeldSinceMs.store(steadyMs() | 1, std::memory_order_relaxed);
+            return;
+        }
+        const std::int64_t now = steadyMs();
+        const std::int64_t since = gHeldSinceMs.load(std::memory_order_relaxed);
+        const bool holderStopped = since != 0 && now - since >= kStreamListWaitMs.count();
+        const bool starved = now - startMs >= kStreamListStarveMs.count();
+        if (!holderStopped && !starved) { continue; }
         gStreamListWaitsAbandoned.fetch_add(1, std::memory_order_relaxed);
-        cascade::core::diagWarnf(
-            "audio: PortAudio's stream list was held for more than %lld ms (a sound card close "
-            "that has stopped answering?); going ahead without it",
-            static_cast<long long>(kStreamListWaitMs.count()));
+        if (holderStopped) {
+            cascade::core::diagWarnf(
+                "audio: PortAudio's stream list was held for more than %lld ms (a sound card close "
+                "that has stopped answering?); going ahead without it",
+                static_cast<long long>(kStreamListWaitMs.count()));
+        } else {
+            cascade::core::diagWarnf(
+                "audio: waited %lld ms for PortAudio's stream list behind other opens and closes; "
+                "going ahead without it",
+                static_cast<long long>(kStreamListStarveMs.count()));
+        }
+        return;
     }
 }
 
 PaStreamListGuard::~PaStreamListGuard() {
-    if (held_) { streamListMutex().unlock(); }
+    if (held_) {
+        gHeldSinceMs.store(0, std::memory_order_relaxed);
+        streamListMutex().unlock();
+    }
 }
 
 std::uint64_t paStreamListWaitsAbandoned() {

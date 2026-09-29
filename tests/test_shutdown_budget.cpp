@@ -800,6 +800,14 @@ const KnownWait kKnownWaits[] = {
      "(on a worker) and its close (on the card's own closer thread, detached); the audio output "
      "and microphone take it NoWait for their opens and their closes alike, so no thread the "
      "teardown runs on ever waits for it"},
+    {"src/sink/pa_init.hpp", "kStreamListStarveMs", 0,
+     "the same lock's cap on one waiter's wait in all, behind holders that keep coming - the "
+     "same waiters as kStreamListWaitMs (a sound card's open on a worker, its close on its own "
+     "detached closer thread), so no thread the teardown runs on ever waits for it either"},
+    {"src/sink/pa_init.cpp", "kStreamListSliceMs", 0,
+     "not a wait of its own - the slice a PaStreamListGuard waiter tries the lock in between "
+     "looks at the holder's age; the waits it adds up to are kStreamListWaitMs and "
+     "kStreamListStarveMs above"},
 
     // THE TRANSMITTER (0.95.0), AND IT IS THE FIRST COLUMN THAT ADDS.
     //

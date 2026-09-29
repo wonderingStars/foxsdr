@@ -2610,6 +2610,7 @@ void testStreamListSerialised() {
 
     // (a) Opens and closes on eight threads at once.
     fakepa::listOverlaps = 0;
+    const std::uint64_t abandonedBeforeA = cascade::sink::paStreamListWaitsAbandoned();
     fakepa::listProbe = true;
     std::atomic<int> opened{0};
     std::vector<std::thread> ts;
@@ -2627,16 +2628,23 @@ void testStreamListSerialised() {
     }
     for (auto& t : ts) { t.join(); }
     fakepa::listProbe = false;
-    std::printf("stream list: %d opens and closes on 8 threads, %d found another inside the list\n",
-                opened.load(), fakepa::listOverlaps.load());
+    // An overlap can only come from a waiter that went ahead without the lock,
+    // so the count of those is printed beside it: a failure here says which.
+    std::printf("stream list: %d opens and closes on 8 threads, %d found another inside the list "
+                "(%llu waits went ahead without the lock)\n",
+                opened.load(), fakepa::listOverlaps.load(),
+                static_cast<unsigned long long>(cascade::sink::paStreamListWaitsAbandoned() - abandonedBeforeA));
     CHECK(opened.load() == 200);
     CHECK(fakepa::listOverlaps.load() == 0);
     CHECK(fakepa::streamsInUse() == 0);
 
     // (b) A close that hangs INSIDE Pa_CloseStream (after its list work)
-    // keeps the lock; an open on a worker waits kStreamListWaitMs for it and
-    // then goes ahead, and another card's close still finishes inside its
-    // own caller's wait.
+    // keeps the lock; an open on a worker goes ahead once that holder has had
+    // it for kStreamListWaitMs - here at once, since the close has already
+    // hung for the kCloseWaitMs its caller gave it (the waiter's side of the
+    // rule, a wait that starts with the hang, is test_pa_stream_list_guard's
+    // B) - and another card's close still finishes inside its own caller's
+    // wait.
     fakepa::armGate();
     SoundCardSettings s;
     s.device = mic.name;
@@ -2660,7 +2668,7 @@ void testStreamListSerialised() {
     std::printf("stream list: an open beside a close hung inside Pa_CloseStream took %.0f ms (%s)\n", openC.ms,
                 openC.finished ? "finished" : "STILL WAITING");
     CHECK(openC.finished);
-    CHECK(openC.ms >= static_cast<double>(cascade::sink::kStreamListWaitMs.count()) - 20.0);
+    CHECK(openC.ms < static_cast<double>(cascade::sink::kStreamListWaitMs.count()) + 100.0);
     CHECK(cascade::sink::paStreamListWaitsAbandoned() >= waitsBefore + 1);
     if (openC.finished && c) {
         const int inUse = fakepa::streamsInUse();

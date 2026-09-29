@@ -35,11 +35,15 @@
 // AND WHY IT CANNOT HANG ANYBODY. A close that has stopped answering holds the
 // guard for as long as it hangs - but by then it is inside the host API's own
 // close, which comes AFTER its list bookkeeping. So the guard is a TIMED one:
-// a sound card open or close waits for it at most kStreamListWaitMs and then
-// goes ahead without it (logged, and counted by paStreamListWaitsAbandoned). A
-// holder that has kept it that long is past the list, so going ahead is safe,
-// and nothing waits on a hung close for longer than that. Those waits are all
-// on workers and closer threads.
+// a sound card open or close goes ahead without it (logged, and counted by
+// paStreamListWaitsAbandoned) once the CURRENT HOLDER has kept it for
+// kStreamListWaitMs. A holder that has kept it that long is past the list, so
+// going ahead is safe, and nothing waits on a hung close for longer than that.
+// It is the holder's age that counts, not the waiter's wait: a waiter behind
+// several healthy holders in turn waits its turn, because each of them is
+// still inside its list change (tests/test_pa_stream_list_guard.cpp) - up to
+// kStreamListStarveMs in all, after which it goes ahead anyway. Those waits
+// are all on workers and closer threads.
 //
 // THE GUI THREAD NEVER WAITS FOR IT. The audio output's open is not always on
 // a worker - the patch page's speaker opens its device from the frame loop,
@@ -72,6 +76,12 @@ void paTerminateShared();
 // a sound card's kCloseWaitMs, so a healthy close still finishes inside the
 // wait its caller gives it even while another card's close is hung.
 constexpr std::chrono::milliseconds kStreamListWaitMs{250};
+
+// The most a waiter waits IN ALL, behind holders that keep coming (each of
+// them inside kStreamListWaitMs), before it goes ahead anyway - so a worker is
+// never kept waiting without end. Reached only by contention nothing in the
+// product produces; counted and logged like the other.
+constexpr std::chrono::milliseconds kStreamListStarveMs{2000};
 
 // Held for its lifetime around one Pa_OpenStream or one Pa_CloseStream. See
 // the file header.
