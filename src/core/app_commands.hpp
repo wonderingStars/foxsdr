@@ -161,6 +161,13 @@
 // before calling Engine::scanSoundCards directly. Sent every frame the row is
 // shown unlisted; idempotent.
 #define FOXAPP_OP_SOUND_CARDS_WANTED     0x841Du /* no args */
+// THE STORE WINDOW'S ADD ALL KEY (engine/stage3b-pre, docs/engine-stage3.md
+// OPEN 5): the ENGINE plans the run from its own catalogue and inventory; the
+// command carries only what the engine cannot know - ival[0], the ADD ALL
+// tick (every maker's notice acknowledged), and text, the catalogue id of
+// the ONE module whose own notice tick is on (the store's selected row), or
+// empty. FOXAPI_OP_STORE_UPDATE_ALL is the same with no per-module tick.
+#define FOXAPP_OP_STORE_ADD_ALL          0x841Eu /* ival[0]: 0/1 every notice acknowledged; text: the one module id acknowledged by its own tick */
 // FOXAPP_OP_PATCH_SET_GRAPH's ival[0]: set when the graph is a NEW DOCUMENT
 // (the config's patch, a patch file) rather than an edit of the graph the
 // engine already has. The Engine counts these (Engine::patchGraphEpoch_), so a

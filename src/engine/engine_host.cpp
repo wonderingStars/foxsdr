@@ -35,13 +35,6 @@ void EngineHost::onCatalogueFetchStarting() {}
 void EngineHost::onCatalogueResult() {}
 void EngineHost::onAddAllFinished() {}
 
-EngineHost::AddAllChoice EngineHost::planAddAll(bool) {
-    AddAllChoice c;
-    // FOX_TR_NOOP-free on purpose: this is the engine's own English, shown
-    // only by a front end that has no store window to plan with.
-    c.blockedReason = "ADD ALL is planned by the store window, and there is none";
-    return c;
-}
 
 void EngineHost::beforePluginRescan() {}
 void EngineHost::onPluginsUnloading() {}

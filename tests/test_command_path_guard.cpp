@@ -212,7 +212,7 @@ const char* const kHostHooks[] = {
     "onBookmarksChanged", "openPluginWindowsFor", "onReceiverPositionApplied",
     "onConverterChanged", "onPatchGraphChanged", "onPatchPicture",
     "onGpsFixApplied",    "onCatalogueFetchStarting", "onCatalogueResult",
-    "onAddAllFinished",   "planAddAll",          "beforePluginRescan",
+    "onAddAllFinished",   "beforePluginRescan", // planAddAll: the Engine's since OPEN 5
     "onPluginsUnloading", "attachBasemap",       "attachTrackInfo",
     "showDemonstrationInstrument", "drainTrackInfoText", "patchPageOpen",
     // webListening, tunerDisplayStyle, basemapFacts: no longer hooks

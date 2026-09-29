@@ -623,7 +623,6 @@ private:
     void onCatalogueFetchStarting() override;
     void onCatalogueResult() override;
     void onAddAllFinished() override;
-    AddAllChoice planAddAll(bool noticesAcknowledged) override;
     void beforePluginRescan() override;
     void onPluginsUnloading() override;
     void attachBasemap(const CascadeBasemapApi* api) override;

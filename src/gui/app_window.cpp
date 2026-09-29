@@ -12292,7 +12292,16 @@ void AppWindow::drawPluginStoreWindow() {
         // plan it was drawn against - see startAddAll. The acknowledgement is
         // the deck's own ADD ALL tick, which is not the per-module one.
         if (pluginStoreView_->addAllRequested()) {
-            engine_.submitCommand(cmd::makeInt(FOXAPI_OP_STORE_UPDATE_ALL, pluginStoreDeck_->addAllAck ? 1 : 0));
+            // The ENGINE plans the run (OPEN 5); this says only what it
+            // cannot know - the ADD ALL tick, and which one module's own
+            // notice tick is on (the selected row's, as the model asks it).
+            const int sel = pluginStoreDeck_->selected;
+            const std::string acknowledged =
+                (pluginStoreDeck_->legalAck && sel >= 0 && sel < static_cast<int>(model.modules.size()))
+                    ? model.modules[static_cast<std::size_t>(sel)].id
+                    : std::string();
+            engine_.submitCommand(
+                cmd::makeText(FOXAPP_OP_STORE_ADD_ALL, acknowledged, pluginStoreDeck_->addAllAck ? 1 : 0));
         }
         const int fitIdx = pluginStoreView_->fitRequested();
         if (fitIdx >= 0 && fitIdx < static_cast<int>(engine_.catalog_.size())) {
@@ -19403,21 +19412,6 @@ void AppWindow::onCatalogueResult() {
 
 void AppWindow::onAddAllFinished() {
     if (pluginStoreDeck_) { pluginStoreDeck_->addAllAck = false; }
-}
-
-cascade::engine::EngineHost::AddAllChoice AppWindow::planAddAll(bool noticesAcknowledged) {
-    // RE-PLANNED FROM LIVE STATE (Engine::startAddAll says why): the store's
-    // own model and plan, handed to the engine by catalogue id.
-    cascade::gui::PluginStoreModel model;
-    buildPluginStoreModel(model);
-    const cascade::gui::AddAllPlan plan =
-        cascade::gui::planAddAll(model, noticesAcknowledged);
-    AddAllChoice c;
-    c.blockedReason = plan.blockedReason;
-    for (int i : plan.install) { c.installIds.push_back(model.modules[static_cast<std::size_t>(i)].id); }
-    for (int i : plan.update) { c.updateIds.push_back(model.modules[static_cast<std::size_t>(i)].id); }
-    c.skipped = plan.skipped;
-    return c;
 }
 
 void AppWindow::beforePluginRescan() { syncMapPagesToSaved(); }

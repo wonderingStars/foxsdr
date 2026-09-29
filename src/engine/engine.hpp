@@ -2012,7 +2012,10 @@ private:
     AddAllRun addAllRun_;
     // Builds the queue from the store's own plan and starts it. Re-plans from
     // live state rather than trusting the plan the key was drawn from.
-    void startAddAll(bool noticesAcknowledged);
+    // ADD ALL, planned HERE (engine/add_all_plan.hpp, docs/engine-stage3.md
+    // OPEN 5) from the catalogue and inventory. `acknowledgedId` is the one
+    // module whose own notice tick is on in the store window (empty: none).
+    void startAddAll(bool noticesAcknowledged, const std::string& acknowledgedId = {});
     // Starts the next module in the queue when the slot is free, and writes
     // the summary when the queue empties. Called once per frame, after
     // pollPluginAsync has had its chance to clear installPending_.

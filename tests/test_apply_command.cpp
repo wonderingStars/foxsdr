@@ -1734,6 +1734,23 @@ void storeOps(AppWindow& a) {
         A::stopAddAll(a);
     }
 
+    // FOXAPP_OP_STORE_ADD_ALL (OPEN 5): the store window's key - the engine
+    // plans it; the command says which one module's own notice tick is on.
+    // The catalogue's only module carries a notice: without its tick the run
+    // is refused (nothing to add), with it the run starts.
+    covering(FOXAPP_OP_STORE_ADD_ALL);
+    {
+        A::injectCatalogue(a);
+        A::clearInstallError(a);
+        CHECK(ok(A::apply(a, text(FOXAPP_OP_STORE_ADD_ALL, "", 0))));
+        CHECK(!A::addAllActive(a));
+        CHECK(!A::installError(a).empty());
+        A::clearInstallError(a);
+        CHECK(ok(A::apply(a, text(FOXAPP_OP_STORE_ADD_ALL, "stage1-catalogue-only", 0))));
+        CHECK(A::addAllActive(a));
+        A::stopAddAll(a);
+    }
+
     covering(FOXAPP_OP_STORE_UPDATE);
     CHECK(refused(A::apply(a, text(FOXAPP_OP_STORE_UPDATE, "stage1-catalogue-only")), FOXAPI_NOT_FOUND));
 

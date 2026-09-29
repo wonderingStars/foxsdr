@@ -7,6 +7,7 @@
 #include "engine/engine.hpp"
 
 #include "core/patch_draft.hpp"
+#include "engine/add_all_plan.hpp"
 #include "core/patch_io.hpp"
 #include "core/patch_levels.hpp"
 #include "core/patch_plan.hpp"
@@ -2627,27 +2628,50 @@ void Engine::pollPluginAsync() {
     }
 }
 
-void Engine::startAddAll(bool noticesAcknowledged) {
+void Engine::startAddAll(bool noticesAcknowledged, const std::string& acknowledgedId) {
     if (addAllRun_.active || catalogPending_ || installPending_) { return; }
     // RE-PLANNED FROM LIVE STATE, not from the plan the key was drawn against.
     // The key was drawn one frame ago from a model built one frame ago, and
     // the whole point of this queue is that it acts over many frames.
-    // THE PLAN IS THE STORE WINDOW'S (gui::planAddAll over the model it
-    // builds, which reads its deck): asked for through the host, by catalogue
-    // id - which is how the queue below has always named a module.
-    const EngineHost::AddAllChoice plan = host_->planAddAll(noticesAcknowledged);
+    // PLANNED HERE (engine/stage3b-pre, docs/engine-stage3.md OPEN 5), from
+    // the catalogue and the inventory, by the SAME rule the store window
+    // letters its key from (engine/add_all_plan.hpp) - so a headless engine
+    // runs ADD ALL too. The one thing only the window knew, which module's
+    // own notice tick is on, comes in the command (acknowledgedId).
+    const std::vector<cascade::core::PluginUpdate> updates = plannedPluginUpdates();
+    std::vector<AddAllRow> rows;
+    rows.reserve(catalog_.size());
+    for (int i = 0; i < static_cast<int>(catalog_.size()); ++i) {
+        const cascade::core::PluginCatalogEntry& e = catalog_[static_cast<std::size_t>(i)];
+        AddAllRow r;
+        r.name = e.name;
+        r.fitted = catalogEntryInstalled(e);
+        for (const cascade::core::PluginUpdate& u : updates) {
+            if (u.id == e.id && !u.toVersion.empty()) { r.hasUpdate = true; }
+        }
+        r.hasNotice = !e.legalNotice.empty();
+        r.blockedReason = pluginInstallBlockedReason(i, !acknowledgedId.empty() && e.id == acknowledgedId);
+        r.blockedReasonIfAcknowledged = pluginInstallBlockedReason(i, true);
+        rows.push_back(std::move(r));
+    }
+    AddAllCatalogue cat;
+    cat.haveCatalogue = !catalog_.empty();
+    cat.listedNothing = !catalogStatus_.empty();
+    cat.lastCheckFailed = !catalogError_.empty();
+    cat.busy = catalogPending_ || installPending_;
+    const AddAllRule plan = planAddAllRows(rows, cat, noticesAcknowledged);
     if (!plan.blockedReason.empty()) {
         installError_ = plan.blockedReason;
         return;
     }
 
     addAllRun_ = AddAllRun{};
-    for (const std::string& id : plan.installIds) {
-        addAllRun_.ids.push_back(id);
+    for (const int i : plan.install) {
+        addAllRun_.ids.push_back(catalog_[static_cast<std::size_t>(i)].id);
         addAllRun_.isUpdate.push_back(false);
     }
-    for (const std::string& id : plan.updateIds) {
-        addAllRun_.ids.push_back(id);
+    for (const int i : plan.update) {
+        addAllRun_.ids.push_back(catalog_[static_cast<std::size_t>(i)].id);
         addAllRun_.isUpdate.push_back(true);
     }
     if (addAllRun_.ids.empty()) { return; }
@@ -2659,7 +2683,7 @@ void Engine::startAddAll(bool noticesAcknowledged) {
     installReport_.clear();
     cascade::core::diagLogf(
         "plugin store: add all starting - %zu to fetch, %zu to update, %zu passed over",
-        plan.installIds.size(), plan.updateIds.size(), plan.skipped.size());
+        plan.install.size(), plan.update.size(), plan.skipped.size());
     for (const std::string& s : plan.skipped) {
         cascade::core::diagLogf("plugin store: add all - passing over %s", s.c_str());
     }
@@ -5719,7 +5743,13 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             pluginRepo_.cancel();
             return res;
         case FOXAPI_OP_STORE_UPDATE_ALL:
+            // The API's form: no per-module tick to carry.
             startAddAll(on);
+            return res;
+        case FOXAPP_OP_STORE_ADD_ALL:
+            // The store window's key: the ADD ALL tick, and the one module
+            // whose own notice tick is on (OPEN 5).
+            startAddAll(on, text);
             return res;
 
         // --- the patch page ---------------------------------------------------------------------

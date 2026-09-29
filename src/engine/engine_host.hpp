@@ -87,16 +87,8 @@ public:
     virtual void onCatalogueFetchStarting();
     virtual void onCatalogueResult();
     virtual void onAddAllFinished();
-    // THE ADD ALL PLAN is the store window's (gui::planAddAll over the model
-    // the window builds, which reads the store deck's selection): the engine
-    // asks for it and runs it. `blockedReason` non-empty refuses the run.
-    struct AddAllChoice {
-        std::string blockedReason;
-        std::vector<std::string> installIds;
-        std::vector<std::string> updateIds;
-        std::vector<std::string> skipped;
-    };
-    virtual AddAllChoice planAddAll(bool noticesAcknowledged);
+    // (ADD ALL is planned by the Engine itself since engine/stage3b-pre -
+    // engine/add_all_plan.hpp, docs/engine-stage3.md OPEN 5.)
     // Plugins: before a rescan (the map pages' geometry is folded into the
     // saved list), before the modules are unmapped (the basemap and the
     // track-info cache let go of what they borrowed), the basemap and the

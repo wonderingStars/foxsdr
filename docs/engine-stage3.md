@@ -1136,6 +1136,34 @@ they were with the facts; and what 3b has to settle first.
    and its plan come from the window's store deck); a headless engine refuses
    ADD ALL. 3b/4: compute the plan from engine state (catalogue + inventory)
    or carry it in the command.
+   **CLOSED, stage-3b-pre-end round, item 5 (2026-09-29): the plan is the
+   engine's.** The rule (what ADD ALL picks, the words on the key, why it
+   may not be pressed) moved verbatim from gui/plugin_store_view.cpp into
+   engine/add_all_plan.hpp (`planAddAllRows`, over plain `AddAllRow`s -
+   name, fitted, update planned, notice, the install gate's two answers -
+   and the catalogue's state). The store window letters its key from it
+   (`gui::planAddAll` is now a wrapper over the model's rows) and
+   `Engine::startAddAll` runs from it over the engine's own catalogue and
+   inventory (`catalogEntryInstalled`, `plannedPluginUpdates`,
+   `pluginInstallBlockedReason`) - so the key's words and the run are one
+   answer, and a headless engine runs ADD ALL instead of refusing it. The
+   one thing only the window knew - which module's OWN notice tick is on
+   (the store's selected row) - travels in the window's new
+   `FOXAPP_OP_STORE_ADD_ALL` (0x841E: ival[0] the ADD ALL tick, text that
+   module's id); `FOXAPI_OP_STORE_UPDATE_ALL` is the same with none.
+   `EngineHost::planAddAll`/`AddAllChoice` are gone. Test:
+   tests/test_add_all_plan.cpp (new, an Engine and no window; a catalogue
+   of a plain module, a noticed one and one with no build here): A
+   UPDATE_ALL unacknowledged runs {plain}; B acknowledged {plain,
+   noticed}; C STORE_ADD_ALL with noticed's own tick {plain, noticed},
+   with another module's tick {plain}; D no catalogue refused with the
+   window's own sentence. Red before (5/6: "ADD ALL is planned by the
+   store window, and there is none"). Mutants: the per-module tick
+   ignored (1 + 1 in test_apply_command), the ADD ALL tick ignored (1 + 5
+   in test_plugin_store_view), the old refusal back (5). The guard's OPEN 3
+   ratchet caught the first draft of the window's key reading
+   `engine_.catalog_` for the selected id; it reads the model it just
+   built instead.
 6. **The patch runtime is still tied to the Patch page.** drawPatchPage
    compiles the plan, reconciles the radios, publishes each radio's set and
    stops the patch when the page closes, every frame, through reviewed engine
