@@ -26,6 +26,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -183,6 +184,33 @@ public:
     std::atomic<int> maxConcurrentInUpdate{0};
     std::atomic<int> updateDelayMs{0};
 
+    // ONE SLOW UPDATE (the SDRplay diagnostic probe, 0.99.50): the Update
+    // numbered slowUpdateNumber (0 is the first this fake is asked for) takes
+    // slowUpdateMs before it answers; every other Update is prompt.
+    // updateNumber counts every Update ever asked for.
+    std::atomic<int> updateNumber{0};
+    std::atomic<int> slowUpdateNumber{-1};
+    std::atomic<int> slowUpdateMs{0};
+
+    // A WITNESS FOR THE BIAS TEE (the probe, 0.99.50): set the moment any
+    // Update or Init finds a bias-tee field of ANY model switched on in the
+    // parameter block. The bias tee puts power on the antenna socket, and a
+    // test must be able to say it never went on, not just that it ended off.
+    std::atomic<bool> biasTeeEverOn{false};
+    void noteBiasTee() {
+        if (chA.rsp1aTunerParams.biasTEnable != 0 || chA.rsp2TunerParams.biasTEnable != 0 ||
+            chA.rspDuoTunerParams.biasTEnable != 0 || devParams.rspDxParams.biasTEnable != 0 ||
+            chB.rspDuoTunerParams.biasTEnable != 0) {
+            biasTeeEverOn.store(true);
+        }
+    }
+
+    // THE SERVICE THREAD DELIVERS AT THE RATE THE BLOCK IS SET FOR (the
+    // probe, 0.99.50): each period carries fsHz / decimation * period
+    // samples, up to startService's blockSamples. Off, every block is
+    // blockSamples whatever the block says, as before.
+    std::atomic<bool> serviceFollowsRate{false};
+
     // ...AND THE WEDGE HOLDS THE WHOLE DEVICE, NOT JUST THE ONE CALL.
     //
     // This is what the 0.96.4 hang report added to the two above, and it is
@@ -286,12 +314,23 @@ public:
                 if (serviceWedged.load()) { continue; }
                 std::lock_guard<std::mutex> lk(serviceMutex_);
                 if (streamA == nullptr) { continue; }
+                unsigned int n = blockSamples;
+                if (serviceFollowsRate.load()) {
+                    const double dec = (chA.ctrlParams.decimation.enable != 0 &&
+                                        chA.ctrlParams.decimation.decimationFactor > 0)
+                                           ? static_cast<double>(chA.ctrlParams.decimation.decimationFactor)
+                                           : 1.0;
+                    const double want = devParams.fsFreq.fsHz / dec *
+                                        std::chrono::duration<double>(period).count();
+                    n = static_cast<unsigned int>(
+                        std::min<double>(static_cast<double>(blockSamples), std::max(1.0, want)));
+                }
                 abi::StreamCbParamsT p{};
                 p.firstSampleNum = sampleNum;
-                p.numSamples = blockSamples;
-                sampleNum += blockSamples;
+                p.numSamples = n;
+                sampleNum += n;
                 const auto t0 = clock::now();
-                streamA(xi.data(), xq.data(), &p, blockSamples, 0, cbContext);
+                streamA(xi.data(), xq.data(), &p, n, 0, cbContext);
                 const auto us =
                     std::chrono::duration_cast<std::chrono::microseconds>(clock::now() - t0)
                         .count();
@@ -654,6 +693,7 @@ private:
             f->cbContext = ctx;
         }
         f->initialised = true;
+        f->noteBiasTee();
 
         InitSnapshot s;
         s.taken = true;
@@ -739,8 +779,13 @@ private:
             }
             ~InUpdateGuard() { f->concurrentInUpdate.fetch_sub(1, std::memory_order_acq_rel); }
         } inUpdateGuard(f);
+        f->noteBiasTee();
         const int delayMs = f->updateDelayMs.load(std::memory_order_relaxed);
         if (delayMs > 0) { std::this_thread::sleep_for(std::chrono::milliseconds(delayMs)); }
+        if (f->updateNumber.fetch_add(1) == f->slowUpdateNumber.load() &&
+            f->slowUpdateMs.load() > 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(f->slowUpdateMs.load()));
+        }
 
         // A SERVICE THAT NEVER ANSWERS A CONTROL. See hangInUpdate: noted
         // first, so the call is on the record before it disappears, and

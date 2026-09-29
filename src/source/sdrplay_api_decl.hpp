@@ -94,8 +94,12 @@ inline bool versionAtLeast(float have, float want) { return have > want - kVersi
 inline constexpr unsigned kMaxDevices = 16;
 inline constexpr std::size_t kMaxSerNoLen = 64;
 
-// Hardware ids, sdrplay_api.h. RSP1B and RSPdx-R2 appear only at 3.15; the
-// values are stable, and a device we do not know is shown by its number.
+// Hardware ids, sdrplay_api.h - SDRplay API Specification 3.15, section 2.1.2
+// (p6): SDRPLAY_RSP1B_ID (6) arrived with 3.14 and SDRPLAY_RSPdxR2_ID (7) with
+// 3.15. The values are stable, and a device we do not know is shown by its
+// number. The same specification (p4) says "for the RSPdxR2, use RSPdx update
+// and structure parameters" and "for the RSP1B, use RSP1A update and structure
+// parameters", which is exactly how the driver pairs them.
 inline constexpr unsigned char kRsp1 = 1;
 inline constexpr unsigned char kRsp2 = 2;
 inline constexpr unsigned char kRspDuo = 3;
@@ -705,6 +709,14 @@ struct Api {
     // and a scan returns without a vendor call: the 0.99.27 crash was a scan's
     // GetDevices through exactly such a session. Never cleared.
     mutable bool sessionLost = false;
+    // HOW MANY CONTROLS A WORKER OF OURS IS STILL INSIDE sdrplay_api_Update
+    // FOR, WAITING FOR A LATE ANSWER (SdrPlaySource::kControlGrace). While it
+    // is above zero a scan and an open are held - answered with
+    // sdrPlayControlPendingSentence() and no vendor call - rather than sent
+    // into a service that has not yet answered the last thing it was asked.
+    // Temporary, unlike sessionLost: it falls back to zero when the answer
+    // arrives or the grace runs out (and then sessionLost takes over).
+    mutable int controlsInFlight = 0;
 };
 
 }  // namespace cascade::source::sdrplay_abi

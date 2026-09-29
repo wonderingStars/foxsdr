@@ -102,6 +102,13 @@
 // sdrplay_api_ServiceNotResponding now reports it through noteIfServiceDead,
 // not only the one that first needed it.
 //
+// ...AND "NOT YET" IS NO LONGER "NEVER" (0.99.50, the RSPdx-R2 report). The
+// rule above still holds while a worker is inside the DLL, but a control that
+// misses kControlWait is now LISTENED FOR until kControlGrace before the radio
+// is given up, and a successful late answer gives it back. The specification
+// sets no time limit on sdrplay_api_Update and says it may stop and restart
+// the stream; see kControlGrace.
+//
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
@@ -111,6 +118,7 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -252,6 +260,12 @@ const char* sdrPlayServiceHungSentence();
 // inside the vendor DLL for good. See SdrPlaySource::kControlWait.
 const char* sdrPlayControlHungSentence();
 
+// WHAT A CONTROL, A SCAN AND AN OPEN SAY WHILE AN EARLIER CONTROL IS STILL
+// WAITING FOR THE SERVICE'S ANSWER (SdrPlaySource::kControlGrace, 0.99.50).
+// Not a failure sentence: nothing has been given up yet, so it names no
+// restart. One string, pinned by a test, like the ones above.
+const char* sdrPlayControlPendingSentence();
+
 // WHAT A SCAN AND AN OPEN SAY ONCE THE PROCESS'S SESSION IS LOST (0.99.28).
 // After a worker is abandoned inside the vendor DLL or the service answers
 // sdrplay_api_ServiceNotResponding, the device's session is orphaned and can
@@ -387,25 +401,67 @@ public:
     // graphics-looking report for a service fault.
     //
     // So this is the scan's treatment applied to every live control:
-    // updateLocked runs sdrplay_api_Update on a worker, waits this long, and
-    // on expiry ABANDONS it - detached, never joined, never spoken to again -
-    // marks the device dead and refuses every later control for it.
+    // updateLocked runs sdrplay_api_Update on a worker and waits this long
+    // for it ON THE CALLER'S THREAD. On expiry the caller is released and the
+    // worker is left to answer late - see kControlGrace for what happens then.
     //
-    // ONE SECOND. A healthy Update only QUEUES the request and returns - the
-    // service reports completion separately through the changed flags that
-    // kUpdateWait below waits for - so on a working install it is a
-    // milliseconds-scale call, and SoapySDRPlay3 makes it inline with no
-    // bound at all. A second therefore leaves better than an order of
-    // magnitude for a service that is slow but alive, while the worst a
-    // control can now cost the GUI thread is kControlWait + kUpdateWait =
-    // 1500 ms, comfortably inside HangWatchdog::kDefaultThresholdMs's 5000
-    // and well short of the five seconds that produced the report.
+    // ONE SECOND IS THE GUI'S BUDGET, NOT THE SERVICE'S. Until 0.99.50 this
+    // comment said "a healthy Update only QUEUES the request and returns",
+    // and the one second was justified by that. SDRplay API Specification
+    // 3.15 says no such thing: sdrplay_api_Update (section 3.17, p27) carries
+    // no time bound at all, and "if required it will stop the stream, change
+    // the values and then start the stream again, otherwise it will make the
+    // changes directly". The 0.99.46 RSPdx-R2 report is what that cost: an
+    // LNA change given up at one second while the service - on the report's
+    // own stream-health arithmetic - was still delivering, i.e. still working
+    // on it, 1.28 s after it was sent. What one second IS good for is the
+    // thread that waits: the worst a control can cost the GUI thread stays
+    // kControlWait + kUpdateWait = 1500 ms, comfortably inside
+    // HangWatchdog::kDefaultThresholdMs's 5000.
     //
     // The cost on the healthy path is one std::thread per live control, which
     // is tens of microseconds against a call that crosses into a Windows
     // service; and it is paid only while STREAMING, because updateLocked
     // sends nothing when the parameter block is not yet live.
     static constexpr std::chrono::milliseconds kControlWait{1000};
+
+    // Not a wait: HOW LONG A CONTROL THE SERVICE HAS NOT YET ANSWERED IS
+    // GIVEN TO ANSWER LATE, counted from when it was sent (0.99.50).
+    //
+    // WHY. Through 0.99.49 a control not answered within kControlWait was
+    // ABANDONED on the spot: the device dead, the process's session lost, and
+    // the user told to restart the service and FoxSDR - even if the call came
+    // back successfully a moment later, which nothing ever looked at. Now the
+    // worker is left in the DLL for up to this long, and NOTHING of ours
+    // enters the DLL meanwhile - no control (refused at once with
+    // sdrPlayControlPendingSentence()), no scan or open (Api::controlsInFlight),
+    // no overload acknowledgement, and no teardown: a stop() in the grace is
+    // treated exactly as a stop after an abandonment, the 0.96.4 hang report's
+    // rule. When the answer arrives (seen by the next read() on the
+    // pipeline's source thread, or by the next control):
+    //
+    //   - Success: the radio is given back, the readbacks follow the block;
+    //   - any other refusal: the call is over and the service alive, so the
+    //     block is put back (BlockRollback) and the radio kept;
+    //   - sdrplay_api_ServiceNotResponding: the service is gone, and said so.
+    //
+    // If it has not arrived when this runs out, the radio is given up exactly
+    // as it was at kControlWait before. Nothing WAITS on this - it is a
+    // deadline read by the reader and the next control - so the GUI's budget
+    // and the teardown's are unchanged.
+    //
+    // TEN SECONDS. The specification gives no bound. The longest a service in
+    // the field reports has taken to answer at all is the 0.96.2 report's
+    // five seconds (an answer of ServiceNotResponding, which this now names
+    // correctly instead of calling it a hang); twice that is the margin.
+    // While a control is waiting the stall rule (kStreamStallLimit) stands
+    // aside, because an Update that stops and restarts the stream is silent
+    // by design.
+    static constexpr std::chrono::milliseconds kControlGrace{10000};
+    // TESTS ONLY: a shorter grace. Zero (or anything up to kControlWait)
+    // gives the radio up at kControlWait, the pre-0.99.50 behaviour, for the
+    // tests that are about what happens once it has been given up.
+    void setControlGraceForTest(std::chrono::milliseconds g);
 
     // How long a live parameter change waits for the service to CONFIRM it.
     // sdrplay_api_Update returns as soon as the request is queued; the
@@ -876,6 +932,49 @@ private:
     // warning, not a failure.
     bool updateLocked(sdrplay_abi::ReasonForUpdateT reason,
                       sdrplay_abi::ReasonForUpdateExt1T ext1, const char* what);
+    // --- the late answer (kControlGrace, 0.99.50) -------------------------
+    //
+    // One control at most can be waiting: while it is, controlAbandoned_ is
+    // true, so every other vendor call is refused before it is made and no
+    // second worker can join the first. Defined in the .cpp.
+    struct LateControl;
+    std::shared_ptr<LateControl> lateControl_;  // devMutex_
+    // Mirrors lateControl_ != nullptr for the two readers that must not take
+    // devMutex_ to ask: read()'s drain and checkForStallFromRead.
+    std::atomic<bool> lateControlPending_{false};
+    std::atomic<long long> controlGraceMs_{kControlGrace.count()};
+    // Set by reapLateControlLocked just before a give-up for an expired grace,
+    // so the log says "did not answer within N ms" only when that is true
+    // (a stop or close inside the grace says so instead). devMutex_.
+    bool lateControlGraceRanOut_ = false;
+
+    // Called with the future of a worker that did not answer within
+    // kControlWait: records it and leaves it to answer. `table` is the one it
+    // was called through; `undo` is set later by undoRefusedLocked.
+    void beginLateControlLocked(std::shared_ptr<LateControl> late);
+    // THE ONE PLACE A LATE ANSWER IS LOOKED AT, at the head of every entry
+    // that takes devMutex_ (and from read() when the lock is free): acts on an
+    // answer that has arrived, gives the radio up when the grace has run out,
+    // and otherwise does nothing.
+    void reapLateControlLocked();
+    // Gives up on a control that has not answered, for good - the grace ran
+    // out, or the radio is being stopped or closed with the worker still in.
+    void giveUpLateControlLocked(const char* why);
+    // Forgets the late control and returns the process table's count.
+    void endLateControlLocked();
+    // After a late Success: the readback mirrors follow what the block now
+    // holds for the reasons that control carried, because the setter that
+    // sent it returned false before it could store them.
+    void syncMirrorsAfterLateSuccessLocked(sdrplay_abi::ReasonForUpdateT reason,
+                                           sdrplay_abi::ReasonForUpdateExt1T ext1);
+    // A setter's refused Update: put the block back - unless a worker of
+    // ours may still be reading it, in which case the undo is kept for the
+    // late answer to apply (a refusal) or discard (a success), or dropped
+    // after a give-up.
+    void undoRefusedLocked(std::function<void()> undo);
+    // read(): the late answer, TRIED under devMutex_ and never waited for.
+    void drainLateControl();
+
     // The overload acknowledgement, bounded exactly like updateLocked (a
     // worker, kControlWait, abandon on timeout) but for an EXPLICIT tuner
     // rather than device_.tuner - an RSPduo's overload can be on either

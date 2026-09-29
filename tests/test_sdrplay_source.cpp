@@ -637,6 +637,10 @@ void testALostRadioTakesNoSettingAtAll() {
         SdrPlaySource* src = new SdrPlaySource();
         CHECK(openOn(*src, *fake));
         CHECK(src->start());
+        // THIS TEST IS ABOUT THE RADIO ONCE IT HAS BEEN GIVEN UP FOR GOOD, so the
+        // grace for a late answer (kControlGrace) is taken away and the give-up
+        // comes at kControlWait, as it did before the grace existed.
+        src->setControlGraceForTest(std::chrono::milliseconds(0));
         fake->hangInUpdate.store(true);
         CHECK(src->setCenterFrequencyHz(101100000.0) == false);  // kControlWait, then abandoned
         CHECK(fake->insideUpdate.load());
@@ -1980,6 +1984,99 @@ void testBiasTeeAndNotchesPerModel() {
     }
 }
 
+// --- 11b. the RSPdx-R2, from the vendor's own specification ---------------
+//
+// THE 0.99.46 RSPdx-R2 REPORT (API 3.15, Windows 11): every control the user
+// touched - frequency, antenna, LNA - was abandoned at kControlWait. The first
+// thing to rule out was that the R2 falls into an unknown-model path and is
+// sent a reason or a parameter block the service never answers. Every number
+// below is taken from SDRplay API Specification 3.15 (Revision 3.15, 10 May
+// 2024, "Added RSPdxR2 Support"), not from memory or from another project:
+//
+//   p6   #define SDRPLAY_RSPdxR2_ID (7)
+//   p4   "Note: for the RSPdxR2, use RSPdx update and structure parameters."
+//   p7   sdrplay_api_Update_Tuner_Gr 0x00008000, _Tuner_Frf 0x00020000;
+//        sdrplay_api_Update_RspDx_HdrEnable 0x01, _BiasTControl 0x02,
+//        _AntennaControl 0x04, _RfNotchControl 0x08, _RfDabNotchControl 0x10,
+//        _HdrBw 0x20 (all in ReasonForUpdateExtension1T)
+//   p17  RspDx_ANTENNA_A/B/C = 0/1/2; RSPDX_NUM_LNA_STATES 28
+//   p27  Update_Tuner_Gr covers "gain->gRdB or gain->LNAstate"
+//   p28  the RspDx_* reasons name deviceParams->devParams->rspDxParams.*
+//
+// So the R2 must be driven exactly as an RSPdx: the switches through the
+// extension word with the first reason None, and the LNA and the frequency
+// through the ordinary tuner reasons with the extension word None.
+void testTheRspDxR2IsDrivenWithTheRspDxReasonsAndBlock() {
+    static_assert(abi::kRspDxR2 == 7, "SDRPLAY_RSPdxR2_ID, spec p6");
+    static_assert(abi::kRspDx == 4, "SDRPLAY_RSPdx_ID, spec p6");
+    static_assert(abi::Update_RspDx_HdrEnable == 0x00000001u, "spec p7");
+    static_assert(abi::Update_RspDx_BiasTControl == 0x00000002u, "spec p7");
+    static_assert(abi::Update_RspDx_AntennaControl == 0x00000004u, "spec p7");
+    static_assert(abi::Update_RspDx_RfNotchControl == 0x00000008u, "spec p7");
+    static_assert(abi::Update_RspDx_RfDabNotchControl == 0x00000010u, "spec p7");
+    static_assert(abi::Update_RspDx_HdrBw == 0x00000020u, "spec p7");
+    static_assert(abi::Update_Tuner_Gr == 0x00008000u, "spec p7");
+    static_assert(abi::Update_Tuner_Frf == 0x00020000u, "spec p7");
+    CHECK(cascade::source::sdrPlayLnaStateCount(abi::kRspDxR2) == 28);
+
+    FakeSdrPlayApi fake;
+    fake.addDevice("2406000R2X", abi::kRspDxR2);
+    SdrPlaySource src;
+    CHECK(openOn(src, fake));
+    CHECK(src.hardwareVersion() == abi::kRspDxR2);
+    CHECK(std::string(src.name()).find("RSPdx-R2") != std::string::npos);
+    CHECK((src.antennas() == std::vector<std::string>{"Antenna A", "Antenna B", "Antenna C"}));
+    CHECK(src.biasTeeSupported());
+    CHECK(src.rfNotchSupported());
+    CHECK(src.dabNotchSupported());
+    CHECK(src.hdrModeSupported());
+    CHECK(src.start());
+
+    // The three controls the report names, in its order.
+    fake.calls.clear();
+    CHECK(src.setCenterFrequencyHz(145500000.0));
+    CHECK(fake.chA.tunerParams.rfFreq.rfHz == 145500000.0);
+    CHECK((fake.calls == std::vector<std::string>{
+                             FakeSdrPlayApi::updateCall(abi::Update_Tuner_Frf, abi::Update_Ext1_None)}));
+
+    fake.calls.clear();
+    CHECK(src.setAntenna("Antenna B"));
+    CHECK(fake.devParams.rspDxParams.antennaSel == abi::RspDx_ANTENNA_B);
+    CHECK((fake.calls == std::vector<std::string>{FakeSdrPlayApi::updateCall(
+                             abi::Update_None, abi::Update_RspDx_AntennaControl)}));
+    CHECK(src.antenna() == "Antenna B");
+
+    fake.calls.clear();
+    CHECK(src.setGainDb("LNA", 27.0));  // the top of RSPDX_NUM_LNA_STATES
+    CHECK(fake.chA.tunerParams.gain.LNAstate == 27);
+    CHECK((fake.calls == std::vector<std::string>{
+                             FakeSdrPlayApi::updateCall(abi::Update_Tuner_Gr, abi::Update_Ext1_None)}));
+
+    // And every RSPdx switch, through the extension word only.
+    fake.calls.clear();
+    CHECK(src.setBiasT(true));
+    CHECK(fake.devParams.rspDxParams.biasTEnable == 1);
+    CHECK(src.setRfNotch(true));
+    CHECK(fake.devParams.rspDxParams.rfNotchEnable == 1);
+    CHECK(src.setDabNotch(true));
+    CHECK(fake.devParams.rspDxParams.rfDabNotchEnable == 1);
+    CHECK(src.setHdrMode(true));
+    CHECK(fake.devParams.rspDxParams.hdrEnable == 1);
+    CHECK((fake.calls ==
+           std::vector<std::string>{
+               FakeSdrPlayApi::updateCall(abi::Update_None, abi::Update_RspDx_BiasTControl),
+               FakeSdrPlayApi::updateCall(abi::Update_None, abi::Update_RspDx_RfNotchControl),
+               FakeSdrPlayApi::updateCall(abi::Update_None, abi::Update_RspDx_RfDabNotchControl),
+               FakeSdrPlayApi::updateCall(abi::Update_None, abi::Update_RspDx_HdrEnable),
+               FakeSdrPlayApi::updateCall(abi::Update_None, abi::Update_RspDx_HdrBw)}));
+    // None of the other models' fields was touched on the way.
+    CHECK(fake.chA.rsp1aTunerParams.biasTEnable == 0);
+    CHECK(fake.chA.rsp2TunerParams.biasTEnable == 0);
+    CHECK(fake.chA.rspDuoTunerParams.biasTEnable == 0);
+    CHECK(fake.devParams.rsp1aParams.rfNotchEnable == 0);
+    src.stop();
+}
+
 // --- 12. teardown ---------------------------------------------------------
 
 void testStopAndCloseAreBoundedAndIdempotent() {
@@ -2227,6 +2324,263 @@ void testServiceNotRespondingMakesTheDeviceDead() {
 // The service is wedged either way; what changes is that the window does not
 // go with it.
 
+// --- 12c. a control the service answers LATE -------------------------------
+//
+// THE 0.99.46 RSPdx-R2 REPORT (API 3.15). An LNA change was abandoned at
+// kControlWait and the radio refused for the whole process on the spot:
+//
+//   13:02:03.648 SDRplay API session lost - a control was abandoned inside
+//                sdrplay_api_Update; ...
+//   13:02:03.648 SDRplay LNA state change abandoned - the service did not
+//                answer within 1000 ms; the radio is released
+//
+// SDRplay API Specification 3.15 gives sdrplay_api_Update NO time bound, and
+// says of it (3.17, p27): "If required it will stop the stream, change the
+// values and then start the stream again, otherwise it will make the changes
+// directly." The one second was this driver's own number, justified by a
+// comment that said a healthy Update "only QUEUES the request" - which the
+// specification does not say. And the report's own stream-health line shows
+// the service still delivering 1.28 s after that Update was issued, i.e. still
+// working on it when FoxSDR had already given the radio up.
+//
+// So the wait on the caller's thread stays one second (the GUI's budget), and
+// what changes is what happens next: the worker is left to answer for up to
+// kControlGrace, nothing of ours enters the DLL meanwhile, and a SUCCESSFUL
+// late answer gives the radio back.
+
+namespace {
+
+bool logHas(const std::string& needle) {
+    for (const std::string& l : cascade::core::DiagLog::instance().ringSnapshot()) {
+        if (l.find(needle) != std::string::npos) { return true; }
+    }
+    return false;
+}
+
+// Waits for every call the fake is inside to come out - the late worker's
+// Update returning, which is what the driver is waiting to hear about.
+bool waitUntilOutOfUpdate(FakeSdrPlayApi& fake, int ms) {
+    for (int i = 0; i < ms / 5 && fake.concurrentInUpdate.load() > 0; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    return fake.concurrentInUpdate.load() == 0;
+}
+
+long long msSince(std::chrono::steady_clock::time_point t0) {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() -
+                                                                 t0)
+        .count();
+}
+
+}  // namespace
+
+void testALateAnswerGivesTheRadioBack() {
+    // On the heap and never destroyed, like every test that leaves a worker
+    // inside its fake past the setter's return.
+    FakeSdrPlayApi* fake = new FakeSdrPlayApi();
+    fake->addDevice("2406000R2X", abi::kRspDxR2);
+    SdrPlaySource* src = new SdrPlaySource();
+    CHECK(openOn(*src, *fake));
+    CHECK(src->start());
+    cascade::core::DiagLog::instance().resetForTest();
+
+    // The service takes one and a half seconds over the LNA change, then
+    // takes it.
+    fake->updateDelayMs.store(1500);
+    const auto t0 = std::chrono::steady_clock::now();
+    CHECK(src->setGainDb("LNA", 5.0) == false);
+    const long long waited = msSince(t0);
+    // The caller's wait is still kControlWait - the GUI's budget is unchanged.
+    CHECK(waited >= 900);
+    CHECK(waited < 1450);
+
+    // NOT GIVEN UP. The receiver is not declared dead while the service may
+    // still answer...
+    CHECK(!src->faulted());
+    CHECK(!src->deviceDead());
+    CHECK(std::string(src->lastError()).find(cascade::source::sdrPlayControlPendingSentence()) !=
+          std::string::npos);
+    // ...the block keeps the request the worker is carrying...
+    CHECK(fake->chA.tunerParams.gain.LNAstate == 5);
+    // ...and nothing else of ours enters the DLL meanwhile: a second control
+    // is held, not sent, and costs the caller nothing.
+    const std::size_t callsBefore = fake->calls.size();
+    const auto t1 = std::chrono::steady_clock::now();
+    CHECK(src->setCenterFrequencyHz(101100000.0) == false);
+    CHECK(msSince(t1) < 250);
+    CHECK(fake->calls.size() == callsBefore);
+    CHECK(std::string(src->lastError()).find(cascade::source::sdrPlayControlPendingSentence()) !=
+          std::string::npos);
+    // A scan is held too, without a single vendor call.
+    CHECK(cascade::source::enumerateSdrPlayWith(fake->table).empty());
+    CHECK(cascade::source::sdrPlayLastEnumerationSkip() ==
+          cascade::source::sdrPlayControlPendingSentence());
+    CHECK(fake->calls.size() == callsBefore);
+
+    // The service answers.
+    CHECK(waitUntilOutOfUpdate(*fake, 3000));
+    // The READER notices, with no control needed to prompt it.
+    std::complex<float> buf[64];
+    (void) src->read(buf, 64);
+    CHECK(!src->faulted());
+    CHECK(!src->deviceDead());
+    // The readback is where the radio now is.
+    CHECK(src->gainDb("LNA") == 5.0);
+    CHECK(logHas("SDRplay LNA state change answered after"));
+    CHECK(!logHas("SDRplay API session lost"));
+
+    // THE RADIO IS USABLE AGAIN: a new control is sent and taken...
+    fake->updateDelayMs.store(0);
+    fake->calls.clear();
+    CHECK(src->setCenterFrequencyHz(101100000.0));
+    CHECK((fake->calls == std::vector<std::string>{
+                              FakeSdrPlayApi::updateCall(abi::Update_Tuner_Frf, abi::Update_Ext1_None)}));
+    // ...a scan goes to the service again...
+    CHECK(cascade::source::enumerateSdrPlayWith(fake->table).size() == 1);
+    // ...and a stop is a real stop, with the Uninit that lets the next open
+    // find the radio free.
+    fake->calls.clear();
+    src->stop();
+    CHECK(fake->called("Uninit"));
+    src->closeDevice();
+    CHECK(fake->called("ReleaseDevice"));
+}
+
+void testALateRefusalPutsTheBlockBackAndALateDeadServiceIsDead() {
+    {   // A LATE REFUSAL: the service is alive and said no. The radio stays
+        // usable and the block goes back to where the radio is.
+        FakeSdrPlayApi* fake = new FakeSdrPlayApi();
+        fake->addDevice("2406000R2X", abi::kRspDxR2);
+        SdrPlaySource* src = new SdrPlaySource();
+        CHECK(openOn(*src, *fake));
+        CHECK(src->start());
+        fake->updateDelayMs.store(1500);
+        fake->updateResult = abi::GainUpdateError;
+        CHECK(src->setGainDb("LNA", 5.0) == false);
+        CHECK(!src->faulted());
+        CHECK(waitUntilOutOfUpdate(*fake, 3000));
+        fake->updateResult = abi::Success;
+        fake->updateDelayMs.store(0);
+        std::complex<float> buf[16];
+        (void) src->read(buf, 16);
+        CHECK(!src->faulted());
+        CHECK(fake->chA.tunerParams.gain.LNAstate == 0);
+        CHECK(src->gainDb("LNA") == 0.0);
+        CHECK(std::string(src->lastError()).find("LNA state change failed") != std::string::npos);
+        fake->calls.clear();
+        CHECK(src->setGainDb("LNA", 3.0));
+        CHECK((fake->calls == std::vector<std::string>{FakeSdrPlayApi::updateCall(
+                                  abi::Update_Tuner_Gr, abi::Update_Ext1_None)}));
+        src->stop();
+        src->closeDevice();
+    }
+    {   // A LATE sdrplay_api_ServiceNotResponding: the service took its time
+        // to say it is gone, and gone it is - named as such, not as a hang.
+        FakeSdrPlayApi* fake = new FakeSdrPlayApi();
+        fake->addDevice("2406000R2Y", abi::kRspDxR2);
+        SdrPlaySource* src = new SdrPlaySource();
+        CHECK(openOn(*src, *fake));
+        CHECK(src->start());
+        fake->updateDelayMs.store(1500);
+        fake->updateResult = abi::ServiceNotResponding;
+        CHECK(src->setAntenna("Antenna B") == false);
+        CHECK(!src->faulted());
+        CHECK(waitUntilOutOfUpdate(*fake, 3000));
+        std::complex<float> buf[16];
+        (void) src->read(buf, 16);
+        CHECK(src->faulted());
+        CHECK(src->deviceDead());
+        CHECK(std::string(src->lastError()).find("stopped answering") != std::string::npos);
+        CHECK(cascade::source::enumerateSdrPlayWith(fake->table).empty());
+        CHECK(cascade::source::sdrPlayLastEnumerationSkip() ==
+              cascade::source::sdrPlaySessionLostSentence());
+        fake->calls.clear();
+        src->stop();
+        CHECK(!fake->called("Uninit"));
+    }
+}
+
+void testAControlThatNeverAnswersIsGivenUpAfterTheGrace() {
+    FakeSdrPlayApi* fake = new FakeSdrPlayApi();
+    fake->addDevice("2406000R2Z", abi::kRspDxR2);
+    SdrPlaySource* src = new SdrPlaySource();
+    CHECK(openOn(*src, *fake));
+    // Short, so the test does not take ten seconds; the rule is the same.
+    src->setControlGraceForTest(std::chrono::milliseconds(1500));
+    // Shorter still, to prove the stall rule stands aside while a control is
+    // waiting - the specification says an Update may stop and restart the
+    // stream, so silence then is not evidence of a dead service.
+    src->setStreamStallLimitForTest(std::chrono::milliseconds(200));
+    CHECK(src->start());
+
+    fake->hangInUpdate.store(true);
+    const auto t0 = std::chrono::steady_clock::now();
+    CHECK(src->setAntenna("Antenna C") == false);
+    CHECK(msSince(t0) < 1450);
+    CHECK(!src->faulted());
+
+    // Inside the grace, with the stream silent: still not given up.
+    std::complex<float> buf[16];
+    while (msSince(t0) < 1300) { (void) src->read(buf, 16); }
+    CHECK(!src->faulted());
+
+    // Past it: given up for good, through the reader, with the hang sentence.
+    while (msSince(t0) < 1700) { (void) src->read(buf, 16); }
+    CHECK(src->faulted());
+    CHECK(src->deviceDead());
+    CHECK(src->faultedWhile() == "antenna change");
+    CHECK(std::string(src->lastError()).find(cascade::source::sdrPlayControlHungSentence()) !=
+          std::string::npos);
+    CHECK(cascade::source::enumerateSdrPlayWith(fake->table).empty());
+    CHECK(cascade::source::sdrPlayLastEnumerationSkip() ==
+          cascade::source::sdrPlaySessionLostSentence());
+    fake->calls.clear();
+    src->stop();
+    CHECK(!fake->called("Uninit"));
+
+    fake->releaseUpdateHang.store(true);
+    for (int i = 0; i < 500 && !fake->leftUpdate.load(); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    CHECK(fake->leftUpdate.load());
+    // An answer after the give-up changes nothing: the radio stays given up.
+    (void) src->read(buf, 16);
+    CHECK(src->deviceDead());
+}
+
+void testAStopWhileAControlIsWaitingNeverEntersTheVendorDll() {
+    FakeSdrPlayApi* fake = new FakeSdrPlayApi();
+    fake->addDevice("2406000R2W", abi::kRspDxR2);
+    SdrPlaySource* src = new SdrPlaySource();
+    CHECK(openOn(*src, *fake));
+    CHECK(src->start());
+    fake->hangInUpdate.store(true);
+    CHECK(src->setGainDb("LNA", 7.0) == false);
+    CHECK(!src->faulted());
+
+    // The user presses STOP inside the grace. The worker is still in the DLL,
+    // so the Uninit that would queue behind it is not made (the 0.96.4 hang
+    // report) and the radio is given up for the process.
+    const unsigned long long strandedBefore = SdrPlaySource::linksStranded();
+    fake->calls.clear();
+    const auto t0 = std::chrono::steady_clock::now();
+    src->stop();
+    CHECK(msSince(t0) < 250);
+    CHECK(!fake->called("Uninit"));
+    CHECK(SdrPlaySource::linksStranded() == strandedBefore + 1);
+    CHECK(cascade::source::enumerateSdrPlayWith(fake->table).empty());
+    CHECK(cascade::source::sdrPlayLastEnumerationSkip() ==
+          cascade::source::sdrPlaySessionLostSentence());
+    src->closeDevice();
+    CHECK(!fake->called("ReleaseDevice"));
+
+    fake->releaseUpdateHang.store(true);
+    for (int i = 0; i < 500 && !fake->leftUpdate.load(); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    CHECK(fake->leftUpdate.load());
+}
+
 void testAWedgedControlIsAbandonedAndTheDeviceIsDead() {
     // THE FAKE AND THE SOURCE ARE ON THE HEAP AND NEITHER IS DESTROYED, for
     // the reason the enumeration test below gives: a worker is abandoned
@@ -2242,6 +2596,10 @@ void testAWedgedControlIsAbandonedAndTheDeviceIsDead() {
 
     // The service wedges with the radio open and streaming. The user's next
     // click is a retune - the call the report names.
+    // THIS TEST IS ABOUT THE RADIO ONCE IT HAS BEEN GIVEN UP FOR GOOD, so the
+    // grace for a late answer (kControlGrace) is taken away and the give-up
+    // comes at kControlWait, as it did before the grace existed.
+    src->setControlGraceForTest(std::chrono::milliseconds(0));
     fake->hangInUpdate.store(true);
 
     // THE RETUNE RUNS ON ITS OWN THREAD so that this test can still report
@@ -2375,6 +2733,10 @@ void testATeardownAfterAnAbandonedControlNeverEntersTheVendorDll() {
 
     // The service wedges and the user's retune is abandoned inside it: the
     // exact state the report's last two log lines describe.
+    // THIS TEST IS ABOUT THE RADIO ONCE IT HAS BEEN GIVEN UP FOR GOOD, so the
+    // grace for a late answer (kControlGrace) is taken away and the give-up
+    // comes at kControlWait, as it did before the grace existed.
+    src->setControlGraceForTest(std::chrono::milliseconds(0));
     fake->hangInUpdate.store(true);
     std::atomic<bool> retuneReturned{false};
     std::thread caller([&]() {
@@ -2715,6 +3077,10 @@ void testALostSessionIsNeverEnteredAgainByAScanOrAnOpen() {
     CHECK(src->start());
 
     // 15:12:35 - the retune is abandoned inside a wedged service.
+    // THIS TEST IS ABOUT THE RADIO ONCE IT HAS BEEN GIVEN UP FOR GOOD, so the
+    // grace for a late answer (kControlGrace) is taken away and the give-up
+    // comes at kControlWait, as it did before the grace existed.
+    src->setControlGraceForTest(std::chrono::milliseconds(0));
     fake->hangInUpdate.store(true);
     std::atomic<bool> retuneReturned{false};
     std::thread caller([&]() {
@@ -2995,6 +3361,7 @@ int main() {
     testStaleOverloadAckDoesNotSurviveRestart();
     testOverloadNamingNeitherTunerAcksOnLinkTuner();
     testBiasTeeAndNotchesPerModel();
+    testTheRspDxR2IsDrivenWithTheRspDxReasonsAndBlock();
     testStopAndCloseAreBoundedAndIdempotent();
     testCloseWithoutOpenIsSafe();
     testFailuresOnTheOpeningPathUnwind();
@@ -3016,6 +3383,10 @@ int main() {
     testARefusedOpenAfterALossLogsTheWholeInstruction();
     testTheSameRadioReopenedAfterALossTakesSettingsAgain();
     testAUserStopIsNotAStall();
+    testALateAnswerGivesTheRadioBack();
+    testALateRefusalPutsTheBlockBackAndALateDeadServiceIsDead();
+    testAControlThatNeverAnswersIsGivenUpAfterTheGrace();
+    testAStopWhileAControlIsWaitingNeverEntersTheVendorDll();
     // LAST, and deliberately: it abandons a worker inside its own fake and
     // releases it again, and nothing that follows should have to reason about
     // a thread this one left running.

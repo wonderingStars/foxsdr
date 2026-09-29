@@ -33,6 +33,7 @@
 #include "core/recorder.hpp"
 #include "gui/app_window.hpp"
 #include "source/iq_file_source.hpp"
+#include "source/sdrplay_probe.hpp"
 #include "source/soapy_enum_proc.hpp"
 #include "source/soapy_source.hpp"
 
@@ -907,6 +908,35 @@ int main(int argc, char** argv) {
     // The accepted forms are enumerated exhaustively, and argv[1] must be the
     // flag itself, so no combination of arguments to a real session can turn
     // it into a helper.
+    // THE SDRPLAY DIAGNOSTIC PROBE (0.99.50, source/sdrplay_probe.hpp):
+    //
+    //     cascade --sdrplay-probe <outfile> [--sdrplay-probe-bias-tee]
+    //
+    // Returns here for the same reasons the enumeration helper below does -
+    // no config, no window, no telemetry marker - and because SYSTEM >
+    // Diagnostics runs it as a child process while the GUI is open. The bias
+    // tee is switched on during the run ONLY with the second switch: that is
+    // the command line's form of the GUI's separate confirmation, since the
+    // bias tee puts power on the antenna socket.
+    if (argc >= 2 && std::strcmp(argv[1], "--sdrplay-probe") == 0) {
+        if (argc < 3 || argv[2][0] == '\0' || argv[2][0] == '-') {
+            std::fprintf(stderr, "cascade: --sdrplay-probe requires an output file\n");
+            return 2;
+        }
+        bool biasTee = false;
+        for (int i = 3; i < argc; ++i) {
+            if (std::strcmp(argv[i], "--sdrplay-probe-bias-tee") == 0) {
+                biasTee = true;
+            } else {
+                std::fprintf(stderr,
+                             "cascade: --sdrplay-probe takes only an output file and "
+                             "--sdrplay-probe-bias-tee\n");
+                return 2;
+            }
+        }
+        return cascade::source::runSdrPlayProbeToFile(argv[2], biasTee);
+    }
+
     constexpr const char* kCrashDirFlag = "--crash-dir=";
     constexpr const char* kDriverFlag = "--driver=";
     constexpr const char* kListDriversFlag = "--list-drivers";

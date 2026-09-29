@@ -3645,6 +3645,8 @@ void AppWindow::drawUi() {
     // top-level thing belongs at the top level, not nested in the borderless
     // root window's ID stack.
     drawDiagnosticsOffer();
+    // The SDRplay diagnostic's confirmation, and its child's poll (0.99.50).
+    drawSdrPlayProbeDialog();
     // The beta-tester link confirmation prompt, same top-level reasoning.
     drawTesterLinkPrompt();
 
@@ -20976,6 +20978,19 @@ void AppWindow::drawProblemReportPage() {
             problemReportDiagCacheValid_ = true;
         }
         preparedDiag = problemReportDiagCache_;
+        // THE SDRPLAY DIAGNOSTIC, WHEN ONE HAS BEEN RUN THIS SESSION (0.99.50):
+        // appended to the same attachment, so it travels in the one optional
+        // field the site already accepts, is shown by the same preview, and is
+        // held to the same 64 KB - the log gives up its oldest lines first.
+        if (!sdrplayProbeReport_.empty()) {
+            ImGui::BeginDisabled(sending);
+            ImGui::Checkbox(trId("Attach the SDRplay diagnostic too"), &problemReportAttachProbe_);
+            ImGui::EndDisabled();
+            if (problemReportAttachProbe_) {
+                preparedDiag = cascade::core::appendProbeToDiagnosticsForReport(
+                    preparedDiag, sdrplayProbeReport_);
+            }
+        }
         ImGui::BeginDisabled(sending);
         ImGui::Checkbox(trId("Show what will be sent"), &problemReportShowDiag_);
         ImGui::EndDisabled();
@@ -25267,6 +25282,36 @@ void AppWindow::drawDiagnosticsSection() {
     }
     if (!diagBundleStatus_.empty()) { ImGui::TextDisabled("%s", diagBundleStatus_.c_str()); }
 
+    // THE SDRPLAY DIAGNOSTIC (0.99.50). Disabled while FoxSDR itself holds an
+    // RSP: the service gives a radio to one owner, and the probe must be it.
+    {
+        ImGui::Spacing();
+        ImGui::TextWrapped(
+            "%s",
+            tr("For SDRplay owners: steps the RSP through every sample rate, band, LNA state "
+               "and antenna once, times every call to the SDRplay API, and writes one text "
+               "file you can attach to a bug report. It contains no serial number and no file "
+               "names."));
+        const bool probeRunning = sdrplayProbeChild_ != nullptr;
+        const bool sdrplayOpen =
+            device_ != nullptr && std::strcmp(device_->driverKey(), "sdrplay") == 0;
+        ImGui::BeginDisabled(probeRunning || sdrplayOpen);
+        if (ImGui::Button(trId("Run SDRplay diagnostic"))) {
+            sdrplayProbeConfirmOpen_ = true;
+            sdrplayProbeBiasAsk_ = false;
+            sdrplayProbeBiasOn_ = false;
+        }
+        ImGui::EndDisabled();
+        if (sdrplayOpen && !probeRunning) {
+            ImGui::TextDisabled("%s",
+                                tr("FoxSDR has the SDRplay radio open - choose another source "
+                                   "first."));
+        }
+        if (!sdrplayProbeStatus_.empty()) {
+            ImGui::TextDisabled("%s", sdrplayProbeStatus_.c_str());
+        }
+    }
+
     if (ImGui::SmallButton(trId("What exactly is in a report?"))) {
         privacyNoticeOpen_ = !privacyNoticeOpen_;
     }
@@ -25282,6 +25327,121 @@ void AppWindow::drawDiagnosticsSection() {
                "See PRIVACY.md for the complete list and what is excluded."));
         ImGui::Unindent();
     }
+}
+
+void AppWindow::startSdrPlayProbe() {
+    std::string dir = cascade::core::diagCrashDir();
+    if (dir.empty()) { dir = cascade::core::diagLogDir(); }
+    if (dir.empty()) {
+        std::error_code tec;
+        dir = std::filesystem::temp_directory_path(tec).string();
+    }
+    std::error_code ec;
+    std::filesystem::create_directories(std::filesystem::path(dir), ec);
+    const std::time_t t = std::time(nullptr);
+    std::tm tm{};
+#if defined(_WIN32)
+    localtime_s(&tm, &t);
+#else
+    localtime_r(&t, &tm);
+#endif
+    char name[64];
+    std::snprintf(name, sizeof(name), "sdrplay-diagnostic-%04d%02d%02d-%02d%02d%02d.txt",
+                  tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
+#if defined(_WIN32)
+    sdrplayProbePath_ = dir + "\\" + name;
+#else
+    sdrplayProbePath_ = dir + "/" + name;
+#endif
+    auto child = std::make_unique<cascade::source::SdrPlayProbeChild>();
+    std::string error;
+    // THE ONLY WAY THE BIAS TEE REACHES THE PROBE: sdrplayProbeBiasOn_, which
+    // only the separate confirmation sets.
+    if (!child->start(sdrplayProbePath_, sdrplayProbeBiasOn_, error)) {
+        cascade::core::formatUtf8(sdrplayProbeStatus_, tr("SDRplay diagnostic could not start: %s"),
+                                  error.c_str());
+        cascade::core::diagWarnf("SDRplay diagnostic could not start - %s", error.c_str());
+        return;
+    }
+    sdrplayProbeChild_ = std::move(child);
+    sdrplayProbeReport_.clear();
+    problemReportAttachProbe_ = false;
+    sdrplayProbeStatus_ = tr("SDRplay diagnostic running - this takes a minute or two...");
+    cascade::core::diagLogf("SDRplay diagnostic started (bias tee test %s)",
+                            sdrplayProbeBiasOn_ ? "confirmed" : "off");
+}
+
+void AppWindow::drawSdrPlayProbeDialog() {
+    // THE CHILD IS POLLED EVERY FRAME, whether or not any window is showing:
+    // a non-blocking look, never a wait.
+    if (sdrplayProbeChild_ != nullptr && !sdrplayProbeChild_->running()) {
+        const int code = sdrplayProbeChild_->exitCode();
+        sdrplayProbeChild_.reset();
+        std::string text;
+        {
+            std::ifstream f(sdrplayProbePath_, std::ios::binary);
+            if (f) {
+                text.assign((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+            }
+        }
+        if (!text.empty()) {
+            sdrplayProbeReport_ = text;
+            cascade::core::formatUtf8(sdrplayProbeStatus_, tr("SDRplay diagnostic finished: %s"),
+                                      sdrplayProbePath_.c_str());
+            cascade::core::diagLogf("SDRplay diagnostic finished - exit %d, %zu bytes", code,
+                                    text.size());
+        } else {
+            const std::string why = "no file was written (exit " + std::to_string(code) + ")";
+            cascade::core::formatUtf8(sdrplayProbeStatus_,
+                                      tr("SDRplay diagnostic could not start: %s"), why.c_str());
+            cascade::core::diagWarnf("SDRplay diagnostic wrote no file - exit %d", code);
+        }
+    }
+
+    if (!sdrplayProbeConfirmOpen_) { return; }
+    ImGui::SetNextWindowSize(ImVec2(520.0f, 0.0f), ImGuiCond_Appearing);
+    if (ImGui::Begin(trId("SDRplay diagnostic"), &sdrplayProbeConfirmOpen_,
+                     ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextWrapped("%s", tr("This takes the SDRplay radio for a minute or two. Close "
+                                    "SDRuno or any other program that is using it first."));
+        ImGui::Spacing();
+        if (sdrplayProbeBiasAsk_) {
+            // THE SEPARATE CONFIRMATION. The bias tee puts DC power on the
+            // antenna socket; nothing switches it on until this is answered.
+            ImGui::TextWrapped(
+                "%s",
+                tr("The bias tee puts DC power on the antenna socket. Only switch it on if what "
+                   "is connected is meant to be powered that way, such as an active antenna. "
+                   "Switch it on for a moment during the test?"));
+            if (ImGui::Button(trId("Yes, switch it on"))) {
+                sdrplayProbeBiasOn_ = true;
+                sdrplayProbeBiasAsk_ = false;
+            }
+            ImGui::SameLine();
+            if (ImGui::Button(trId("Cancel"))) {
+                sdrplayProbeBiasOn_ = false;
+                sdrplayProbeBiasAsk_ = false;
+            }
+        } else {
+            // Ticking only ASKS; the box shows ticked once the question was
+            // answered yes.
+            bool want = sdrplayProbeBiasOn_;
+            if (ImGui::Checkbox(trId("Also test the bias tee"), &want)) {
+                if (want) {
+                    sdrplayProbeBiasAsk_ = true;
+                } else {
+                    sdrplayProbeBiasOn_ = false;
+                }
+            }
+            if (ImGui::Button(trId("Run the diagnostic"))) {
+                sdrplayProbeConfirmOpen_ = false;
+                startSdrPlayProbe();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button(trId("Cancel"))) { sdrplayProbeConfirmOpen_ = false; }
+        }
+    }
+    ImGui::End();
 }
 
 void AppWindow::drawDiagnosticsOffer() {
