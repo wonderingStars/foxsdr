@@ -364,7 +364,18 @@ private:
         cascade::core::cmd::QueuedCommand q;
         std::uint64_t sourceGen = 0;
     };
+    // THE THREAD BOUNDARY (stage 3b, docs/engine-stage3.md section 10): a
+    // front end submits from its own thread while the control side drains,
+    // so the queue is behind its own lock - held for a push or a swap, never
+    // while a command is applied.
+    std::mutex localCommandsMutex_;
     std::vector<LocalCommand> localCommands_;
+    // Every command a drain has taken, ever (tests; a diagnostic).
+    std::atomic<std::uint64_t> localCommandsTaken_{0};
+    std::size_t localCommandsQueuedForTest() {
+        std::lock_guard<std::mutex> lk(localCommandsMutex_);
+        return localCommands_.size();
+    }
 
     // Helpers the commands call, each one the body a widget or a branch of
     // applyControlRequest used to hold inline (so both paths now share it).
@@ -947,7 +958,9 @@ private:
     // deviceOpenReqGen_ records the value an in-flight open was requested at;
     // asyncOpenStillWanted() compares the two when it resolves. See the
     // predicate's comment above for why a counter and not a flag.
-    std::uint64_t sourceGen_ = 0;
+    // Atomic since stage 3b: the control side moves it, and a submit on the
+    // front end's thread stamps each queued command with it.
+    std::atomic<std::uint64_t> sourceGen_{0};
     std::uint64_t deviceOpenReqGen_ = 0;
 
     // Drains a pending device open OFF the GUI thread at shutdown. See the

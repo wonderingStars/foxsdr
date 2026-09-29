@@ -1765,3 +1765,34 @@ they were with the facts; and what 3b has to settle first.
     full runs of the base were clean. Its output was lost (section 7). Before
     3b, run it with --output-on-failure under -j 8 until it fails again and
     read what it says; treat it as unexplained until then.
+17. **test_soundcard_source's stream-list probe (Windows, 2 of 12 under a
+    parallel ctest load)**: CLOSED, 3b-pre-end review round (2026-09-29).
+    Every list change in the probe is made under `PaStreamListGuard`, so an
+    overlap can only come from a waiter that went ahead without the lock;
+    the guard let one do that after 250 ms of its OWN wait, not after a
+    holder had held it that long - the rule its header states. The guard
+    now judges the current holder's age (and caps a waiter's whole wait at
+    `kStreamListStarveMs`); tests/test_pa_stream_list_guard.cpp shows the
+    old behaviour deterministically on Linux (a waiter went ahead beside a
+    healthy holder in 4-8 of 40 rounds) and the new one never does.
+
+## 10. Stage 3b: the control thread
+
+3b moves the Engine's calls onto a thread of its own. It is done in steps,
+each tested with threads before the next; the window keeps pumping the
+engine on the GUI thread (3a) until the step that moves it, because its
+remaining direct reads of engine fields (OPEN 3's ratchet) are races the
+moment another thread writes them.
+
+1. **The command queue is the thread boundary.** `submitCommand` may be
+   called from any thread while `drainLocalCommands` runs on another: the
+   queue is behind `localCommandsMutex_`, held for a push or a swap and
+   never while a command is applied; `sourceGen_`, which a submit stamps
+   each command with and the control side moves, is atomic. Nothing on the
+   sample path is touched; the per-frame cost is one uncontended lock per
+   drain (two drains a frame) and one per submitted command.
+   tests/test_command_queue_threads.cpp (new): four threads x 5000 submits
+   with nothing draining (all 20000 queued) and against a drain that never
+   stops (all 20000 taken once and applied). Red before: the heap was
+   corrupted ("double free or corruption", 3 of 3 runs); red again - a
+   crash, 3 of 3 - with the submit's lock removed and with the drain's.

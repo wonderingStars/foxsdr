@@ -4999,16 +4999,23 @@ void Engine::submitCommand(const FoxCommand& c) {
 void Engine::submitCommand(cascade::core::cmd::QueuedCommand q) {
     LocalCommand lc;
     lc.q = std::move(q);
-    lc.sourceGen = sourceGen_;
+    lc.sourceGen = sourceGen_.load();
+    std::lock_guard<std::mutex> lk(localCommandsMutex_);
     localCommands_.push_back(std::move(lc));
 }
 
 void Engine::drainLocalCommands() {
-    if (localCommands_.empty()) { return; }
     // TAKEN, THEN APPLIED: a command's own effects may queue more (none does
-    // today); those wait for the next drain rather than extend this one.
+    // today); those wait for the next drain rather than extend this one. The
+    // lock covers the swap only - a submit never waits for a command to be
+    // applied.
     std::vector<LocalCommand> batch;
-    batch.swap(localCommands_);
+    {
+        std::lock_guard<std::mutex> lk(localCommandsMutex_);
+        if (localCommands_.empty()) { return; }
+        batch.swap(localCommands_);
+    }
+    localCommandsTaken_ += batch.size();
     for (const LocalCommand& lc : batch) {
         // A radio command asked of a radio that has gone since (closed, or
         // replaced by one that opened in between - sourceGen_ moves with
