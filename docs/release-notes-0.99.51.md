@@ -4,6 +4,10 @@
 
 ---
 
+**Verification note.** Windows: 234/235 tests passed (100% on Linux, 237/237). The one Windows failure, test_tester_link, could not be run clean because the machine's own installed copy of FoxSDR was open throughout - the test needs to be the only running copy, by design, and a real second copy correctly makes it take the "another instance is already running" path with no further output. This was confirmed by reproducing the exact scenario directly against the built binary (not assumed): the failure is the single-instance mutex (`Local\FoxSDR-instance`, shared by every copy of FoxSDR on the machine) doing exactly what it is for, not a defect in this release. `git diff` against the previous release's Windows-verified commit shows the only change to main.cpp's argument handling is the unrelated `--sdrplay-probe` flag, which this code path never reaches. Verified by diagnosis rather than by a clean run.
+
+---
+
 **SHA-256 of `foxsdr-setup-0.99.51.exe`:**
 `TBD`
 
