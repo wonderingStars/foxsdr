@@ -133,17 +133,18 @@ std::string defaultRecordDir() {
     return std::string(home) + "/Documents/SDR-recordings";
 }
 
-// The WatchdogPause the window's plugin rescan held (core/hang_watchdog.hpp),
-// through the host: paused now, resumed on every way out of the scope.
-class HostWatchdogPause {
+// The WatchdogPause the window's plugin rescan held (core/hang_watchdog.hpp):
+// paused now, resumed on every way out of the scope - the watchdog of the
+// thread the wait is on (Engine::pauseWaitWatchdog; OPEN 8).
+class WaitWatchdogPause {
 public:
-    explicit HostWatchdogPause(EngineHost& h) : h_(h) { h_.pauseWatchdog(); }
-    ~HostWatchdogPause() { h_.resumeWatchdog(); }
-    HostWatchdogPause(const HostWatchdogPause&) = delete;
-    HostWatchdogPause& operator=(const HostWatchdogPause&) = delete;
+    explicit WaitWatchdogPause(Engine& e) : e_(e) { e_.pauseWaitWatchdog(); }
+    ~WaitWatchdogPause() { e_.resumeWaitWatchdog(); }
+    WaitWatchdogPause(const WaitWatchdogPause&) = delete;
+    WaitWatchdogPause& operator=(const WaitWatchdogPause&) = delete;
 
 private:
-    EngineHost& h_;
+    Engine& e_;
 };
 
 }  // namespace
@@ -2227,7 +2228,7 @@ void Engine::rescanPlugins() {
     // loader (see the phase-1 note in hang_watchdog.cpp).
     //
     // Scope guard, because there is a `return` in the middle of this function.
-    HostWatchdogPause holdWatchdog(*host_);
+    WaitWatchdogPause holdWatchdog(*this);
 
     // The plugin windows the user has OPEN ride through the rescan: their
     // identities are the plugin's name and its window's title, so a plugin
@@ -6757,12 +6758,12 @@ void Engine::initialise() {
     // opener is Pipeline's, packaged so it can outlive this window, and the
     // hooks are the watchdog's for the bounded wait the requesting frame
     // spends. Bound here, before anything can ask for a device.
-    audioOpen_.bind(pipeline_.audioOpener(), [this] { host_->pauseWatchdog(); },
-                    [this] { host_->resumeWatchdog(); });
+    audioOpen_.bind(pipeline_.audioOpener(), [this] { pauseWaitWatchdog(); },
+                    [this] { resumeWaitWatchdog(); });
     // And the microphone, for the same reason: waveInOpen has no timeout
     // either. The opener is the Transmitter's and owns the microphone.
-    micOpen_.bind(transmitter_.microphoneOpener(), [this] { host_->pauseWatchdog(); },
-                  [this] { host_->resumeWatchdog(); });
+    micOpen_.bind(transmitter_.microphoneOpener(), [this] { pauseWaitWatchdog(); },
+                  [this] { resumeWaitWatchdog(); });
 
     devices_ = pipeline_.audio().listOutputDevices();
     for (int i = 0; i < static_cast<int>(devices_.size()); ++i) {
@@ -6800,6 +6801,8 @@ void Engine::stopTransfers() {
 // ~Engine runs stopTransfers and this itself for a front end that did not.
 void Engine::teardown() {
     tornDown_ = true;
+    // The control thread first (stage 3b): nothing below may run beside it.
+    stopControlThread();
     // Same problem, no cancel to reach for: a device open may still be inside
     // SoapySDR::Device::make(). See reapPendingDeviceOpen for the semantics.
     reapPendingDeviceOpen();
@@ -6973,6 +6976,12 @@ void Engine::pumpTransmitter() {
 // reasons that went with each line.
 
 void Engine::shutdownQuiesce() {
+    // STAGE 3b: the control thread is stopped first - it lets go of every key
+    // at once, from this thread, and then joins (stopControlThread); every
+    // step below runs on the engine's state with nothing beside it. A no-op
+    // with no control thread (the window, today).
+    stopControlThread();
+
     // THE TRANSMITTER BEFORE ANYTHING ELSE, AND IT IS NOT A STYLE CHOICE.
     // Everything else in this teardown can take its time; a radio that is
     // still keyed cannot. This is also the moment the dead-man's handle in
@@ -7134,6 +7143,96 @@ cascade::core::AppConfig Engine::configSnapshot() const {
 // One drain, not two: the window's second drain is for its keyboard. No
 // transmit page, so no key: pumpTransmitter(false, ...) releases it, which
 // is what a page that is not drawn asks for.
+// --- THE CONTROL THREAD (stage 3b; engine.hpp) -------------------------------
+
+void Engine::startControlThread() { startControlThread(ControlThreadOptions{}); }
+
+void Engine::startControlThread(const ControlThreadOptions& options) {
+    if (controlThread_.joinable()) { return; }
+    controlWatchdog_.start(options.watchdogReportDir, options.watchdogThresholdMs);
+    controlRun_.store(true);
+    controlThread_ = std::thread(&Engine::controlLoop, this, options.period);
+}
+
+void Engine::stopControlThread() {
+    if (!controlThread_.joinable()) { return; }
+    // EVERY KEY UP FIRST, from this thread, before the join - whatever the
+    // control thread is doing, and however long its current pass takes. The
+    // front end's own key-up stores, under the slot's lock and into the slot
+    // (so the control side cannot write a key-down over them), and the
+    // remote's release: with nothing asserting the key the TX thread plays it
+    // down by itself within a block (core/transmitter.hpp).
+    {
+        std::lock_guard<std::mutex> lk(txPageMutex_);
+        transmitter_.setLatched(false);
+        transmitter_.setPttHeld(false);
+        txPageRequest_.pageLive = false;
+        txPageRequest_.pttHeld = false;
+        ++txPageRequest_.frameSeq;
+    }
+    transmitter_.releaseRemote("the engine's control thread is stopping");
+    controlRun_.store(false);
+    controlParkForTest_.store(false);
+    controlThread_.join();
+    controlThreadId_.store(std::thread::id{});
+    controlWatchdog_.stop();
+}
+
+// pump()'s phases, in pump()'s order - with the transmitter's CONTROL half
+// only: on this thread nothing stands for the front end, which submits the
+// page's key itself (submitTransmitPageKey).
+void Engine::controlPass() {
+    pollGpsReader();
+    pumpFrameBegin();
+    pumpInputs();
+    pumpPlugins();
+    (void)pumpPublish();
+    pumpAudioMute();
+    pumpTransmitter();
+    pumpWorkers();
+    pumpAudio();
+}
+
+void Engine::controlLoop(std::chrono::milliseconds period) {
+    controlThreadId_.store(std::this_thread::get_id());
+    while (controlRun_.load()) {
+        const auto passStart = std::chrono::steady_clock::now();
+        controlWatchdog_.heartbeat();
+        while (controlParkForTest_.load() && controlRun_.load()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        if (!controlRun_.load()) { break; }
+        if (const int stallMs = controlStallForTestMs_.exchange(0); stallMs > 0) {
+            controlInStallForTest_.store(true);
+            std::this_thread::sleep_for(std::chrono::milliseconds(stallMs));
+            controlInStallForTest_.store(false);
+        }
+        controlPass();
+        controlPasses_.fetch_add(1);
+        std::this_thread::sleep_until(passStart + period);
+    }
+    // THE LAST ACT, by the thread that ticks the transmitter: stop() never
+    // runs beside a tick(). The key is already up (stopControlThread let go
+    // of it before asking this loop to end); this ends the TX thread.
+    transmitter_.stop();
+}
+
+void Engine::pauseWaitWatchdog() {
+    if (onControlThread()) {
+        controlWatchdog_.pause();
+    } else {
+        host_->pauseWatchdog();
+    }
+}
+
+void Engine::resumeWaitWatchdog() {
+    if (onControlThread()) {
+        controlWatchdog_.resume();
+    } else {
+        host_->resumeWatchdog();
+    }
+}
+
 void Engine::pump() {
     pollGpsReader();
     pumpFrameBegin();

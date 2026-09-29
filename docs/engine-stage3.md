@@ -1814,3 +1814,57 @@ moment another thread writes them.
    red again (6 checks); every ended thread treated as released, red in
    test_transmit_key_race D (a frozen window's PTT re-keyed), in
    test_transmit_liveness A/B and in test_transmitter's fault cases.
+3. **The engine's control thread, for a headless front end; OPEN 8.**
+   `Engine::startControlThread(ControlThreadOptions)` runs `controlPass()`
+   once a period on a thread of its own: `pump()`'s phases in `pump()`'s
+   order, with the transmitter's CONTROL half only (`pumpTransmitter()`: the
+   newest key request, then `tick()`); the front end, on its own thread,
+   submits the page's key (`submitTransmitPageKey`), commands
+   (`submitCommand`) and reads the snapshot, `statusText` and
+   `configSnapshot` - never `applyCommand`, a phase or a field while the
+   thread runs. Command application is therefore on the control thread, and
+   so is every setter a command reaches (the source setters included);
+   blocking opens stay on their workers.
+   - **The transmit path is whole on both sides**: the TX thread's control
+     stamp is the control thread's `tick()` (1 s, an unconditional break),
+     its front-end stamp the front end's submits. Tested with the control
+     thread parked through a test-only hook with the key down and the front
+     end alive: unkeyed 1003-1009 ms after the park (bound 1000 + a block).
+   - **OPEN 8, CLOSED for the control thread**: it has its own
+     `core::HangWatchdog` (`controlWatchdog_`, beaten once a pass, started
+     and stopped with the thread), and the engine's bounded waits - the
+     plugin rescan, the audio and microphone opens - pause the watchdog of
+     the thread they run on (`pauseWaitWatchdog`): the control thread's
+     own there, the host's (the GUI's) anywhere else, so the GUI watchdog is
+     never paused by a wait that is not blocking its frame.
+   - **Stopping** (`stopControlThread`, called by `shutdownQuiesce` first
+     and by `teardown`): every key up at once from the calling thread (the
+     front end's key-up stores under the slot's lock, and the remote's
+     release), then the join; the loop's last act is `transmitter_.stop()`,
+     by the thread that ticks it, so `stop()` never runs beside a `tick()`.
+     A control thread stuck in a wait costs the join time, never air time:
+     the radio is quiet within a block of the stop being asked for.
+   - **The window does not start it yet.** Its remaining direct reads of
+     engine fields (OPEN 3's ratchet: 163 fields, 793 reads) and its
+     at-once `applyCommand` calls would all race a control thread; the
+     window moves when those are gone (stage 4's table is the end state:
+     the window reads only through it). Until then the product runs exactly
+     as in 3a.
+   *Measurement.* Nothing on the sample path changes. For the window (3a)
+   the only per-frame cost added by steps 1-3 is the queue's lock (two
+   uncontended locks a frame, one per submit) and a thread-id compare in a
+   wait's pause; no allocation per frame, no lock on the DSP thread.
+   *Tests.* tests/test_engine_control_thread.cpp (new): A a command
+   submitted by the front end applied by the control thread; B PTT keyed by
+   the control thread (~10 ms), let go and quiet (<12 ms), and a frozen
+   front end released at 1000-1001 ms while 99 passes ran; C the park
+   above, the control watchdog seeing the ~1.2 s gap; D a plugin rescan on
+   the control thread pausing its watchdog and not the host's, and on the
+   front end's thread (3a) the host's; E stopped with the key down (quiet
+   at return, ~10 ms, no pass after); E2 stopped while the thread is inside
+   a 700 ms wait - quiet after 2-11 ms, the join still running; F torn
+   down with the thread running; G `shutdownQuiesce` stops it. Red first
+   against stub bodies (11 of 24). Mutants: waits always pausing the host
+   (3 checks), no heartbeat (1), no key-up before the join (2), no last
+   `stop()` (1), `shutdownQuiesce` not stopping the thread (1), `teardown`
+   not stopping it (a crash).

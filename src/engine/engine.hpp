@@ -27,6 +27,7 @@
 #define CASCADE_ENGINE_ENGINE_HPP
 
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -38,6 +39,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "core/airspy_settings.hpp"
@@ -46,6 +48,7 @@
 #include "core/config.hpp"
 #include "core/freq_manager.hpp"
 #include "core/gps_reader.hpp"
+#include "core/hang_watchdog.hpp"
 #include "core/patch_graph.hpp"
 #include "core/patch_plan.hpp"
 #include "core/patch_radio.hpp"
@@ -99,6 +102,18 @@ namespace cascade::engine {
 // basemap plugin's figures - handed to the engine once a frame
 // (Engine::setFrontEndFacts) instead of the engine calling the window for
 // them while it publishes.
+// How the engine's control thread runs (Engine::startControlThread; stage
+// 3b, docs/engine-stage3.md section 10).
+struct ControlThreadOptions {
+    // One pass of the control loop per period (the GUI's frame, by default).
+    std::chrono::milliseconds period{16};
+    // The control thread's own hang watchdog (OPEN 8): where a report goes
+    // (empty: logged to the ring, no file) and after how long a pass that has
+    // not come back is a hang.
+    std::string watchdogReportDir;
+    unsigned watchdogThresholdMs = cascade::core::HangWatchdog::kDefaultThresholdMs;
+};
+
 struct FrontEndFacts {
     bool webListening = false;
     // A front end that has handed nothing over (the headless engine) shows
@@ -1738,6 +1753,21 @@ private:
     // Null in the product.
     void (*txKeyInterleaveForTest_)(void*) = nullptr;
     void* txKeyInterleaveArgForTest_ = nullptr;
+    // The control thread (startControlThread).
+    void controlLoop(std::chrono::milliseconds period);
+    std::thread controlThread_;
+    std::atomic<bool> controlRun_{false};
+    std::atomic<std::thread::id> controlThreadId_{};
+    cascade::core::HangWatchdog controlWatchdog_;
+    std::atomic<std::uint64_t> controlPasses_{0};
+    // TESTS ONLY: while true the control thread is parked at the top of its
+    // loop - no pass, no tick, no heartbeat (tests/test_engine_control_thread).
+    std::atomic<bool> controlParkForTest_{false};
+    // TESTS ONLY: the next pass first sleeps this long, uninterruptibly (a
+    // bounded wait the thread cannot leave early), with controlInStallForTest_
+    // set meanwhile.
+    std::atomic<int> controlStallForTestMs_{0};
+    std::atomic<bool> controlInStallForTest_{false};
     bool transmitSplit_ = false;
     double transmitSplitHz_ = 145.5e6;
     int transmitModeIndex_ = 0;    // dsp::TxMode
@@ -2222,6 +2252,38 @@ public:
     void pumpWorkers();
     void pumpAudio();
     void pump();
+
+    // --- THE CONTROL THREAD (stage 3b, docs/engine-stage3.md section 10) -----
+    // The engine pumping itself, on a thread of its own: one controlPass()
+    // per period - pump()'s phases in pump()'s order, with the transmitter's
+    // CONTROL half only (the front end, on its own thread, submits the page's
+    // key: submitTransmitPageKey) - and a heartbeat of the thread's own hang
+    // watchdog. While it runs, a front end talks to the engine ONLY through
+    // the thread-safe surface: submitCommand, submitTransmitPageKey, the
+    // snapshot, statusText, configSnapshot, setFrontEndFacts - never
+    // applyCommand, the pump phases or a field. The window does not start it
+    // yet (section 10 says why); a headless front end may.
+    //
+    // stopControlThread() lets go of every key FIRST, from the calling thread
+    // (the front end's key-up stores, under the request slot's lock, and the
+    // remote's release), asks the loop to end, and joins; the loop's own last
+    // act is transmitter_.stop(), made by the thread that ticks it - so stop()
+    // never runs beside a tick(). A control thread stuck inside a wait is
+    // still no danger to the air: with no tick, the TX thread releases the key
+    // itself within kKeyAliveWait. Idempotent; teardown and ~Engine call it.
+    void startControlThread();
+    void startControlThread(const ControlThreadOptions& options);
+    void stopControlThread();
+    bool controlThreadRunning() const { return controlRun_.load(); }
+    bool onControlThread() const { return controlThreadId_.load() == std::this_thread::get_id(); }
+    // One pass of the control loop (the thread calls it; tests may).
+    void controlPass();
+    // The engine's bounded waits (a plugin rescan, the audio and microphone
+    // opens) bracket themselves with these: on the control thread they pause
+    // the control thread's own watchdog, anywhere else the host's (the GUI's,
+    // whose frame the wait then really is blocking) - OPEN 8.
+    void pauseWaitWatchdog();
+    void resumeWaitWatchdog();
 
     // What the receiver published last: the one receiver snapshot (read()
     // and readFull() are the reader side; core/receiver_snapshot.hpp).
