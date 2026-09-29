@@ -1811,6 +1811,21 @@ int32_t FOXAPI_CALL apiLogout(FoxEngine* e, const char* token) {
     return guarded([&] { return H(e)->logout(token); });
 }
 
+// API 0.3's three table members (docs/api-0.3-additions.md): in the table,
+// not served yet - their capability bits are clear and they answer
+// UNSUPPORTED, as API.md 3 says an engine without a thing does.
+int32_t FOXAPI_CALL apiReadScope(FoxSession* s, uint32_t, FoxScopeInfo*, float*, uint32_t) {
+    return onSession(s, [&](ApiSession*) { return FOXAPI_UNSUPPORTED; });
+}
+
+int32_t FOXAPI_CALL apiReadNodeSpectrum(FoxSession* s, uint64_t, uint64_t, FoxSpectrumInfo*, float*, uint32_t) {
+    return onSession(s, [&](ApiSession*) { return FOXAPI_UNSUPPORTED; });
+}
+
+int32_t FOXAPI_CALL apiSubmitText(FoxSession* s, const FoxCommand*, const char*, uint32_t, FoxSubmitResult*) {
+    return onSession(s, [&](ApiSession*) { return FOXAPI_UNSUPPORTED; });
+}
+
 const FoxEngineApi kApi = {
     sizeof(FoxEngineApi),
     FOXAPI_VERSION_MAJOR,
@@ -1843,6 +1858,9 @@ const FoxEngineApi kApi = {
     apiReadImage,
     apiLogin,
     apiLogout,
+    apiReadScope,
+    apiReadNodeSpectrum,
+    apiSubmitText,
 };
 
 }  // namespace

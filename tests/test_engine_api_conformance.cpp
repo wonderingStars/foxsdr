@@ -53,10 +53,14 @@ const FoxEngineApi* api() { return cascade::engine::engineApi(FOXAPI_VERSION_MAJ
 void testVersionGate() {
     // During 0.x only the SAME minor is served: 0.2 changed what submit
     // answers, so a 0.1 interface must not be handed a 0.2 engine.
-    CHECK(cascade::engine::engineApi(0, 2) != nullptr);
+    // PORT: this engine serves API 0.3 (the owner's decision 4: the
+    // additions in docs/api-0.3-additions.md), so 0.3 is served and 0.2 is
+    // not - the same rule, one minor on.
+    CHECK(cascade::engine::engineApi(0, 3) != nullptr);
+    CHECK(cascade::engine::engineApi(0, 2) == nullptr);
     CHECK(cascade::engine::engineApi(0, 1) == nullptr);
     CHECK(cascade::engine::engineApi(0, 0) == nullptr);
-    CHECK(cascade::engine::engineApi(0, 3) == nullptr);
+    CHECK(cascade::engine::engineApi(0, 4) == nullptr);
     CHECK(cascade::engine::engineApi(1, 0) == nullptr);   // a different major always is
     const FoxEngineApi* a = api();
     CHECK_EQ(a->structSize, static_cast<uint32_t>(sizeof(FoxEngineApi)));

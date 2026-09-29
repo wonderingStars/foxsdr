@@ -2,7 +2,7 @@
 // (engine extraction, stage 1; docs/engine-stage1.md).
 //
 // WHAT THIS IS. The FoxSDR engine API (third_party/foxsdr_api/foxsdr_api.h,
-// API 0.2, vendored unmodified) describes a change to the receiver as a
+// API 0.3: 0.2 as vendored, extended by docs/api-0.3-additions.md) describes a change to the receiver as a
 // FoxCommand: an op and a few typed slots. Stage 1 makes that literally the
 // only way the application changes its receiver: a desktop widget, a key
 // binding, a browser (web /api/control), CAT and a plugin (host API level 1)

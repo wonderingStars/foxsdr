@@ -1,5 +1,5 @@
 /*
- * foxsdr_api.h - the FoxSDR engine API, in-process C ABI (API 0.2, draft).
+ * foxsdr_api.h - the FoxSDR engine API, in-process C ABI (API 0.3, draft).
  *
  * SPDX-License-Identifier: MIT
  *
@@ -90,7 +90,7 @@
  *     FOXAPI_HAS(api, fn) is the only correct test for a function. EVERY
  *     struct has a FOXAPI_MIN_* size, by ONE rule: its whole layout in the
  *     oldest API version this header's engines accept (during 0.x an engine
- *     serves only its own minor, so today: the whole 0.2 layout). A struct
+ *     serves only its own minor, so today: the whole 0.3 layout). A struct
  *     smaller than that cannot come from any build allowed to call, and is
  *     FOXAPI_BAD_ARGUMENT. Nothing ever compares a caller's structSize with
  *     its OWN sizeof, which grows. (The same rules as CascadeHostApi in the
@@ -130,7 +130,7 @@ extern "C" {
  * foxsdr_engine_query). 0.2 changed what submit() answers (rule 2), which is
  * exactly why a 0.1 interface must not be handed a 0.2 engine. */
 #define FOXAPI_VERSION_MAJOR 0u
-#define FOXAPI_VERSION_MINOR 2u
+#define FOXAPI_VERSION_MINOR 3u
 
 #if defined(_WIN32)
 #define FOXAPI_EXPORT __declspec(dllexport)
@@ -199,6 +199,10 @@ extern "C" {
 #define FOXAPI_CAP_SCOPE         (1ull << 23) /* demod-scope taps (reduced) */
 #define FOXAPI_CAP_POSITION      (1ull << 24) /* receiver position, GPS port */
 #define FOXAPI_CAP_IMAGES        (1ull << 25) /* read_image: decoded pictures */
+/* 0.3 */
+#define FOXAPI_CAP_FACTS         (1ull << 26) /* read-only "fact.*" keys through get_setting */
+#define FOXAPI_CAP_LONG_TEXT     (1ull << 27) /* submit_text: one command with a text longer than text[] */
+#define FOXAPI_CAP_NODE_SPECTRUM (1ull << 28) /* read_node_spectrum: a patch radio's own spectrum */
 
 /* ---------------------------------------------------------------------------
  * Session grants. Asked for in FoxSessionParams::grants; the engine grants
@@ -266,6 +270,10 @@ extern "C" {
  * released since (see THE KEY). Per session, like TX_KEY_MINE; it may trail
  * the rest of the snapshot by one control pass. Show it on the latch key. */
 #define FOXAPI_RX_TX_LATCH_RELEASE_FIRST 0x00800000u
+/* 0.3 */
+#define FOXAPI_RX_BIAS_TEE_PRESENT 0x01000000u /* the open radio has a bias tee this engine can switch */
+#define FOXAPI_RX_BIAS_TEE_ON      0x02000000u /* ...and it is on (the radio's readback) */
+#define FOXAPI_RX_PATCH_RUNNING    0x04000000u /* the patch page's graph is running */
 
 #define FOXAPI_NAME_CHARS 64
 #define FOXAPI_MESSAGE_CHARS 128
@@ -481,6 +489,7 @@ typedef struct FoxCommand {
 #define FOXAPI_OP_AUDIO_DEVICE      0x0E01u /* text: output device id (grant: SETTINGS) */
 #define FOXAPI_OP_SET_POSITION      0x0F01u /* num[0]: lat, num[1]: lon (grant: SETTINGS) */
 #define FOXAPI_OP_GPS               0x0F02u /* ival[0]: 0/1; text: serial port; num[0]: baud (grant: SETTINGS) */
+#define FOXAPI_OP_SCAN_SERIAL_PORTS 0x0F03u /* 0.3; LOCAL sessions only; result arrives as FOXAPI_LIST_SERIAL_PORTS changing */
 #define FOXAPI_OP_SERVER_CONFIG     0x1001u /* text: JSON (web + CAT listeners); LOCAL sessions only */
 #define FOXAPI_OP_UPDATE_CHECK      0x1101u /* ival[0]: 1 = check now, 2 = enable at start, 3 = disable */
 
@@ -611,6 +620,7 @@ typedef struct FoxCommandResult {
 #define FOXAPI_EVENT_LIST_CHANGED 7u  /* target: FOXAPI_LIST_* */
 #define FOXAPI_EVENT_SESSION      8u  /* text: e.g. "keep-alive late" */
 #define FOXAPI_EVENT_OVERFLOW     9u  /* value[0]: events dropped */
+#define FOXAPI_EVENT_PATCH        10u /* 0.3; value[0]: graph epoch; value[1]: 1 running */
 #define FOXAPI_EVENT_MASK(kind) (1ull << (kind))
 
 typedef struct FoxEvent {
@@ -653,9 +663,32 @@ typedef struct FoxEvent {
 #define FOXAPI_LIST_SERIAL_PORTS  19u
 #define FOXAPI_LIST_USER_PRESETS  20u
 #define FOXAPI_LIST_BOOKMARK_GROUPS 21u /* name: group; value[0]: bookmarks in it */
+/* 0.3 (docs/api-0.3-additions.md) */
+#define FOXAPI_LIST_STATUS_LINES  22u /* name: key; detail: text (whole: "fact.status.<key>"); value[0]: level 1 info 2 warn 3 error */
+#define FOXAPI_LIST_CONVERTERS    23u /* detail: radio key; value[0]: 0 off 1 up 2 down, [1]: LO Hz, [2]: 1 inverted; ACTIVE: the open radio's */
+#define FOXAPI_LIST_GAIN_MODES    24u /* name; value[0]: mode code (the op that takes it names it); ACTIVE */
+#define FOXAPI_LIST_DECIMATIONS   25u /* value[0]: factor, value[1]: resulting rate Hz; ACTIVE */
+#define FOXAPI_LIST_PATCH_NODES   26u /* id: node; name; detail: kind; value[0..1]: x, y; [2]: Hz; [3]: rate Hz; ACTIVE on, REFUSED, FAULT */
+#define FOXAPI_LIST_PATCH_WIRES   27u /* value[0]: from node, [1]: its port, [2]: to node, [3]: its port */
+#define FOXAPI_LIST_PATCH_PROBLEMS 28u /* id: node; name: problem; detail: what the page says */
+#define FOXAPI_LIST_PATCH_PARTS   29u /* the parts a graph may use: name; detail: key; value[0]: feed port type, [1]: rate Hz it needs */
+#define FOXAPI_LIST_RECORDINGS    30u /* name: file; detail: path (LOCAL only); value[0]: 1 I/Q 2 audio 3 patch, [1]: bytes, [2]: rate Hz; ACTIVE, STALLED, FULL */
+#define FOXAPI_LIST_DECODER_LINES 31u /* the decoder-output backlog, oldest first: id: line number; name: plugin; detail: text */
+#define FOXAPI_LIST_STORE_BLOCKED 32u /* name: file; detail: why it was refused */
+#define FOXAPI_LIST_STORE_UPDATES 33u /* name: catalogue id; detail: "from -> to" */
+#define FOXAPI_LIST_BAND_PLANS    34u /* the plans SET_BAND_PLAN takes: name; detail: id; ACTIVE */
+#define FOXAPI_LIST_PATCH_RADIOS  35u /* id: node; name: device; detail: error; value[0]: rate Hz; ACTIVE open, FAULT */
 
 #define FOXAPI_ITEM_ACTIVE    0x00000001u /* the selected / running / current entry */
 #define FOXAPI_ITEM_FAVOURITE 0x00000002u /* a bookmark marked as a favourite */
+/* 0.3 */
+#define FOXAPI_ITEM_REFUSED    0x00000004u /* a patch node the engine refused to run */
+#define FOXAPI_ITEM_FAULT      0x00000008u /* ...or whose radio faulted */
+#define FOXAPI_ITEM_STALLED    0x00000010u /* a recording whose writes are failing */
+#define FOXAPI_ITEM_FULL       0x00000020u /* a recording that reached its size limit */
+#define FOXAPI_ITEM_FED        0x00000040u /* a decoder being fed signal now */
+#define FOXAPI_ITEM_INSTALLED  0x00000080u /* a catalogue entry installed here */
+#define FOXAPI_ITEM_COMPATIBLE 0x00000100u /* a catalogue entry this build can load */
 
 typedef struct FoxListItem {
     uint32_t structSize;
@@ -696,6 +729,31 @@ typedef struct FoxImageInfo {
 } FoxImageInfo;
 
 #define FOXAPI_MIN_IMAGE_INFO (offsetof(FoxImageInfo, caption) + FOXAPI_NAME_CHARS)
+
+/* ---------------------------------------------------------------------------
+ * 0.3: SCOPE TAPS (FOXAPI_CAP_SCOPE). The newest samples of a demod-scope tap,
+ * oldest first: a SNAPSHOT, not a stream - an interface draws the last N and
+ * asks again next frame. Never more than FOXAPI_SCOPE_REMOTE_FRAMES to a
+ * REMOTE session ("reduced").
+ * ------------------------------------------------------------------------- */
+#define FOXAPI_SCOPE_AUDIO 1u   /* the finished audio, mono float */
+#define FOXAPI_SCOPE_IQ    2u   /* the channel's I/Q, interleaved complex pairs */
+#define FOXAPI_SCOPE_MPX   3u   /* the WFM multiplex (only while WFM runs) */
+#define FOXAPI_SCOPE_REMOTE_FRAMES 4096u
+
+typedef struct FoxScopeInfo {
+    uint32_t structSize;
+    uint32_t tap;               /* FOXAPI_SCOPE_* */
+    uint32_t channels;          /* 1, or 2 for I/Q */
+    uint32_t reserved0;
+    double rateHz;              /* the tap's sample rate */
+    uint64_t written;           /* frames the tap has taken in total: one that stops moving is stalled */
+} FoxScopeInfo;
+
+#define FOXAPI_MIN_SCOPE_INFO (offsetof(FoxScopeInfo, written) + sizeof(uint64_t))
+
+/* 0.3: the most text submit_text carries with one command. */
+#define FOXAPI_MAX_LONG_TEXT (1u << 20)
 
 /* ---------------------------------------------------------------------------
  * Opening an engine and a session.
@@ -808,7 +866,11 @@ typedef struct FoxEngineApi {
                                      FoxListItem *out);
 
     /* Returns the value's length (>= 0) and copies what fits, always
-     * NUL-terminated when cap > 0. NOT_FOUND for an unknown key. */
+     * NUL-terminated when cap > 0. NOT_FOUND for an unknown key. 0.3: keys
+     * beginning "fact." are READ-ONLY facts the engine publishes
+     * (FOXAPI_CAP_FACTS; the list is docs/api-0.3-additions.md) - no
+     * SETTING_SET ever takes one - and the channel for texts longer than a
+     * list item's detail[]. */
     int32_t (FOXAPI_CALL *get_setting)(FoxSession *session, const char *key, char *buf, size_t cap);
 
     /* A decoded picture by the id a FOXAPI_EVENT_DECODER_IMAGE carried.
@@ -835,6 +897,26 @@ typedef struct FoxEngineApi {
      * CONFIGURED token, which is configuration, not a login: logout cannot
      * revoke it and detaches nothing (changing the configuration does). */
     int32_t (FOXAPI_CALL *logout)(FoxEngine *engine, const char *token);
+
+    /* ---- 0.3 (docs/api-0.3-additions.md) ---------------------------------- */
+
+    /* A scope tap's newest frames (FOXAPI_CAP_SCOPE): up to capFrames frames,
+     * oldest first, `channels` floats each. Returns frames copied (>= 0);
+     * UNSUPPORTED for an unknown tap; `info` may be NULL. */
+    int32_t (FOXAPI_CALL *read_scope)(FoxSession *session, uint32_t tap, FoxScopeInfo *info, float *out,
+                                      uint32_t capFrames);
+    /* A patch radio's own spectrum (FOXAPI_CAP_NODE_SPECTRUM), exactly as
+     * read_spectrum reads the main one: the node id from
+     * FOXAPI_LIST_PATCH_RADIOS; NOT_FOUND for a node with no radio running. */
+    int32_t (FOXAPI_CALL *read_node_spectrum)(FoxSession *session, uint64_t nodeId, uint64_t sinceSeq,
+                                              FoxSpectrumInfo *info, float *bins, uint32_t cap);
+    /* ONE command whose text is `text` (len bytes, UTF-8, no NUL needed;
+     * FOXAPI_CAP_LONG_TEXT) instead of its text[] slot: a patch document, a
+     * bookmark file, a report longer than 255 bytes. Otherwise exactly
+     * submit() with a count of 1, and the same answer. LIMIT when len >
+     * FOXAPI_MAX_LONG_TEXT. */
+    int32_t (FOXAPI_CALL *submit_text)(FoxSession *session, const FoxCommand *command, const char *text,
+                                       uint32_t len, FoxSubmitResult *result);
 } FoxEngineApi;
 
 /* True when the table covers member `m`: the engine was built with it. */
@@ -845,7 +927,7 @@ typedef struct FoxEngineApi {
 #define FOXAPI_HAS(api, fn) (FOXAPI_COVERS(api, fn) && (api)->fn != NULL)
 
 /* The oldest accepted table, whole (rule 4). */
-#define FOXAPI_MIN_ENGINE_API (offsetof(FoxEngineApi, logout) + sizeof(void (*)(void)))
+#define FOXAPI_MIN_ENGINE_API (offsetof(FoxEngineApi, submit_text) + sizeof(void (*)(void)))
 
 /*
  * The engine module's entry point. Returns the table, or NULL when the engine
