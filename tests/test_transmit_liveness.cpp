@@ -25,6 +25,9 @@
 //   D  front end alive, control stops, PTT held -> released within
 //      kKeyAliveWait (the control stamp still rules)
 //   E  both alive, PTT held for 1.5 s -> never released (no false alarm)
+//   F  a remote assertion gone stale with NOTHING transmitting (no TX thread
+//      to drop it): the next tick() must not start the radio for it - it
+//      drops the stale key instead (the 3b-pre-end review, LOW)
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <atomic>
@@ -49,6 +52,7 @@ namespace {
 class RecordingSink : public cascade::source::IqSink {
 public:
     bool start() override {
+        ++starts;
         running_ = true;
         return true;
     }
@@ -80,6 +84,8 @@ public:
     bool faulted() const override { return false; }
     const char* name() const override { return "test radio"; }
     const char* lastError() const override { return ""; }
+
+    std::atomic<int> starts{0};
 
 private:
     std::atomic<bool> running_{false};
@@ -200,6 +206,27 @@ int main() {
         CHECK(at < 0.0);
         CHECK(r.tx.transmitting());
         r.tx.setPttHeld(false);
+        r.tx.tick();
+    }
+
+    // --- F: a stale remote key, and nothing transmitting to drop it --------------
+    {
+        Rig r;
+        r.tx.keyRemote();   // asserted once, and no tick follows for the whole hold
+        std::this_thread::sleep_for(Transmitter::kRemotePttHoldMs + std::chrono::milliseconds(100));
+        r.tx.frontEndAlive();
+        r.tx.tick();
+        std::printf("F: remote asserted %.0f ms ago, first tick since: radio started %d time(s), "
+                    "remote keyed=%d\n",
+                    kHold + 100.0, r.raw->starts.load(), r.tx.remoteKeyed() ? 1 : 0);
+        CHECK(r.raw->starts.load() == 0);
+        CHECK(!r.tx.transmitting());
+        CHECK(!r.tx.remoteKeyed());
+        // ...while a fresh assertion still keys at once.
+        r.tx.keyRemote();
+        r.tx.tick();
+        CHECK(r.tx.transmitting());
+        r.tx.releaseRemote("test over");
         r.tx.tick();
     }
 

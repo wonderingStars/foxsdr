@@ -353,9 +353,25 @@ void Transmitter::tick() {
         }
     }
 
-    // THE REMOTE KEY'S OWN DEADLINE is NOT enforced here any more (engine/
-    // stage3b-pre, docs/engine-stage3.md OPEN 7): the TX thread enforces it
-    // itself (threadBody), so it holds whether or not anything is ticking.
+    // THE REMOTE KEY'S OWN DEADLINE is enforced by the TX thread (engine/
+    // stage3b-pre, docs/engine-stage3.md OPEN 7: threadBody), so it holds
+    // whether or not anything is ticking. But the TX thread only runs while
+    // the radio is keyed: an assertion that went stale with NOTHING
+    // transmitting (asserted, and no tick for the whole hold) has no thread
+    // to drop it, and must not key the radio now for a browser that stopped
+    // asking - so it is dropped here, before `want` is read. (With the radio
+    // keyed this can also win the race with the TX thread's own check; either
+    // way the release is the same one, said the same way.)
+    if (remoteKeyed_.load(std::memory_order_relaxed)) {
+        const std::int64_t held = nowMs() - remoteKeyedAtMs_.load(std::memory_order_relaxed);
+        if (held >= kRemotePttHoldMs.count() && remoteKeyed_.exchange(false, std::memory_order_relaxed)) {
+            {
+                std::lock_guard<std::mutex> lk(errorMutex_);
+                autoUnkeyReason_ = "the web remote stopped asking, so the key was released";
+            }
+            diagLogf("tx: remote key released (the hold expired after %lld ms)", static_cast<long long>(held));
+        }
+    }
 
     const bool want = pttHeld_.load(std::memory_order_relaxed) ||
                       latched_.load(std::memory_order_relaxed) ||

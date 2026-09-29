@@ -1605,6 +1605,18 @@ they were with the facts; and what 3b has to settle first.
    lock released before the write (A 8, B 8, C 1244 - 5 checks), the front
    end's key-up outside the lock (A 8, B 8, C 1397 - 5), a repeat written
    again (D - 3). After: 0 in all four, 5/5 runs.
+   **REVIEW FIX, 3b-pre-end review (LOW): `tick()` drops a stale remote
+   key before it keys for it.** With the hold moved to the TX thread,
+   `tick()` read `remoteKeyed_` into `want` unchecked; an assertion gone
+   stale with nothing transmitting (so no TX thread to drop it) keyed the
+   radio at the next tick, for a browser that had stopped asking, until
+   the TX thread's first block dropped it. `tick()` now drops an assertion
+   older than `kRemotePttHoldMs` before reading `want`, with the TX
+   thread's reason text (the two may race when keyed; the release is the
+   same one either way). test_transmit_liveness F (new): asserted, 2.1 s
+   with no tick, then one tick - red before (the radio started once, still
+   keyed: 3 checks); green; red again with the check disabled (3) and with
+   it moved after `want` (2).
 8. **The hang watchdog is the GUI frame's.** The engine pauses it (through the
    host) around its bounded waits (audio/mic open, plugin rescan, device
    open). On a control thread those waits no longer block the frame; they
