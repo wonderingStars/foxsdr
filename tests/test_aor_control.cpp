@@ -42,10 +42,15 @@ public:
     bool echo = false;                           // echo each command line back first
     std::string written;                         // every byte ever written
     bool failWrites = false;
+    // If set, every write also mirrors `written` here under this link's port
+    // name - a map the TEST owns, so an assertion made after pairControlPort
+    // has destroyed this FakeLink still has somewhere safe to read from.
+    std::map<std::string, std::string>* mirror = nullptr;
 
     int write(const char* data, std::size_t len) override {
         if (failWrites) { return -1; }
         written.append(data, len);
+        if (mirror != nullptr) { (*mirror)[name_] = written; }
         line_.append(data, len);
         std::size_t cr;
         while ((cr = line_.find('\r')) != std::string::npos) {
@@ -216,7 +221,12 @@ int main() {
 
     // --- pairing by what each port answers --------------------------------------
     {
-        std::vector<FakeLink*> opened;
+        // pairControlPort owns each link only for its own loop iteration and
+        // destroys it before returning - so `opened` and `writtenByPort` hold
+        // what the test needs to inspect AFTERWARDS (port names, and each
+        // FakeLink's mirrored `written` string), never a FakeLink itself.
+        std::vector<std::string> opened;
+        std::map<std::string, std::string> writtenByPort;
         const auto opener = [&](const std::string& port, std::string& error)
             -> std::unique_ptr<aor::ControlLink> {
             if (port == "COM9") {
@@ -227,7 +237,8 @@ int main() {
             if (port == "COM3") { l->answers["VR"] = "$GPRMC,1\r"; }   // a GPS on an FTDI cable
             if (port == "COM6") { l->answers["VR"] = kAr5700Reply; }  // the receiver
             if (port == "COM8") { l->answers["VR"] = kAr5700Reply; }  // a second receiver
-            opened.push_back(l.get());
+            l->mirror = &writtenByPort;
+            opened.push_back(port);
             return l;
         };
         // One receiver among a GPS, a silent port and a busy one.
@@ -239,7 +250,7 @@ int main() {
         for (const std::string& t : p.tried) { std::printf("  tried %s\n", t.c_str()); }
         // Only EX and VR ever went to the ports that are not the receiver.
         CHECK(opened.size() == 3);
-        for (FakeLink* l : opened) { CHECK(l->written == "EX\rVR\r"); }
+        for (const std::string& port : opened) { CHECK(writtenByPort[port] == "EX\rVR\r"); }
 
         // Two receivers: refused, not guessed.
         p = aor::pairControlPort({"COM6", "COM8"}, "", opener);
