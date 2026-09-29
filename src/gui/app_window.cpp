@@ -765,6 +765,10 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
         // Baseline for the debounce: what the file holds (or would hold). The
         // engine hands its half over first - no frame has run yet (OPEN 2).
         engine_.publishConfig();
+        // ...and the status lines, so the first frame letters what the
+        // restore said (OPEN 3).
+        engine_.publishStatusText();
+        statusLines_ = engine_.statusText();
         savedCfg_ = currentConfig();
         pendingCfg_ = savedCfg_;
 
@@ -1130,7 +1134,8 @@ int AppWindow::run(int frames) {
             }
             cascade::core::diagLogf("gps: startup read requested by FOXSDR_GPS_PORT on %s at %d",
                                     cascade::core::loggableSerialPortName(hookPort).c_str(), baud);
-            engine_.gpsRefusal_.clear();
+            (void)engine_.applyCommand(cascade::core::cmd::makeInt(
+                FOXAPP_OP_CLEAR_STATUS, cascade::core::cmd::FOXAPP_STATUS_GPS_REFUSAL));
             engine_.gpsReader_.start({hookPort, baud, cascade::core::GpsReader::kDefaultTimeoutS});
         }
     }
@@ -2827,6 +2832,10 @@ void AppWindow::drawUi() {
     // has been drawn yet. The plugin host API, the web server and CAT all
     // answer from what this publishes.
     publishWebSpectrum(engine_.pumpPublish());  // Engine: flushBookmarkSave(false), then the publish
+    // THE STATUS LINES this frame's panels letter, as the engine just handed
+    // them over (engine/stage3b-pre, docs/engine-stage3.md OPEN 3): one copy
+    // a frame, never the engine's own fields.
+    statusLines_ = engine_.statusText();
     publishWebAudio();
     publishWebImages();
     pumpWebTiles();
@@ -6124,7 +6133,7 @@ void AppWindow::drawDisplaySection() {
     // The lamp is the overlay ACTUALLY DRAWING - asked for, no load error, and
     // a plan with bands in it - so "PLAN" with the lamp out is the honest
     // reading of "you switched it on and there is nothing installed".
-    const bool planDrawing = bandPlanOverlay_ && engine_.bandPlanError_.empty() &&
+    const bool planDrawing = bandPlanOverlay_ && statusLines_.bandPlanError.empty() &&
                              !engine_.bandPlan_.entries().empty();
     if (benchSection(trId("Display"), true, bandPlanOverlay_ ? tr("PLAN") : tr("PLAIN"),
                      cascade::gui::theme::kPhosphor, planDrawing)) {
@@ -6318,9 +6327,9 @@ void AppWindow::drawDisplaySection() {
                     }
                 }
             }
-            if (!engine_.bandPlanError_.empty()) {
+            if (!statusLines_.bandPlanError.empty()) {
                 ImGui::PushStyleColor(ImGuiCol_Text, kErrorRed);
-                ImGui::TextWrapped("%s", engine_.bandPlanError_.c_str());
+                ImGui::TextWrapped("%s", statusLines_.bandPlanError.c_str());
                 ImGui::PopStyleColor();
             } else if (engine_.bandPlan_.entries().empty()) {
                 ImGui::TextDisabled(tr("no band plan installed"));
@@ -6901,7 +6910,7 @@ void AppWindow::drawSourceSection() {
     // brought back, and "(saved, not open)" would be the lamp's false alarm
     // in words (gui::radioNotOpenLamp).
     const bool keepPreview = engine_.restoreKeep_.valid() && engine_.device_ == nullptr &&
-                             engine_.sourceKind_ == "siggen" && !engine_.restoreKeepLabel_.empty() &&
+                             engine_.sourceKind_ == "siggen" && !statusLines_.restoreKeepLabel.empty() &&
                              !engine_.soundCardOpenPending_;
     // "(not open)" in the preview itself, because the combo is the one place
     // a user looks to find out what the receiver is on, and the name alone
@@ -6910,7 +6919,7 @@ void AppWindow::drawSourceSection() {
     if (keepPreview) {
         std::string keepBuf;
         cascade::core::formatUtf8(keepBuf, tr("%s (saved, not open)"),
-                      engine_.restoreKeepLabel_.c_str());
+                      statusLines_.restoreKeepLabel.c_str());
         keepPreviewLabel = keepBuf;
     }
     const bool comboOpen = ImGui::BeginCombo(
@@ -7117,17 +7126,17 @@ void AppWindow::drawSourceSection() {
     // gets, and one that drops "3.x" or "sdrplay.com" sends them nowhere.
     // Both cases arrive here - no API at all, and an API too old to drive an
     // RSP - and the second of them could not reach this line until 0.94.1.
-    if (!engine_.sdrPlayRowsFound_ && !engine_.sdrPlayAdvice_.empty()) {
+    if (!engine_.sdrPlayRowsFound_ && !statusLines_.sdrPlayAdvice.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
-        ImGui::TextWrapped("%s", engine_.sdrPlayAdvice_.c_str());
+        ImGui::TextWrapped("%s", statusLines_.sdrPlayAdvice.c_str());
         ImGui::PopStyleColor();
         // WHERE IT LOOKED, dimmed. A user does not need it; whoever is
         // helping them does, and "which path did it try" is the first
         // question worth asking - the same reasoning as the "Where FoxSDR
         // looked" tree further down.
-        if (!engine_.sdrPlayApiDetail_.empty()) {
+        if (!statusLines_.sdrPlayApiDetail.empty()) {
             ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-            ImGui::TextWrapped(tr("SDRplay API: %s"), engine_.sdrPlayApiDetail_.c_str());
+            ImGui::TextWrapped(tr("SDRplay API: %s"), statusLines_.sdrPlayApiDetail.c_str());
             ImGui::PopStyleColor();
         }
     }
@@ -7513,9 +7522,9 @@ void AppWindow::drawSourceSection() {
     // (app_window_converter.cpp), remembered per radio.
     drawConverterControls();
 
-    if (!engine_.sourceError_.empty()) {
+    if (!statusLines_.sourceError.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, kErrorRed);
-        ImGui::TextWrapped("%s", engine_.sourceError_.c_str());
+        ImGui::TextWrapped("%s", statusLines_.sourceError.c_str());
         ImGui::PopStyleColor();
     }
 
@@ -7546,7 +7555,7 @@ void AppWindow::drawSourceSection() {
                 : tr("%s is still the saved radio. The signal generator is running in its place "
                      "for this session only - FoxSDR will try the radio again next time it "
                      "starts. Choosing another source here replaces it."),
-            engine_.restoreKeepLabel_.c_str());
+            statusLines_.restoreKeepLabel.c_str());
         ImGui::PopStyleColor();
     }
 
@@ -7556,9 +7565,9 @@ void AppWindow::drawSourceSection() {
     // refusing the band outright, which used to retune silently and leave the
     // counter looking wrong with no explanation anywhere. See
     // AppWindow::noteTuneMismatch.
-    if (!engine_.tuneMismatchNote_.empty()) {
+    if (!statusLines_.tuneMismatchNote.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
-        ImGui::TextWrapped("%s", engine_.tuneMismatchNote_.c_str());
+        ImGui::TextWrapped("%s", statusLines_.tuneMismatchNote.c_str());
         ImGui::PopStyleColor();
     }
 }
@@ -8393,9 +8402,9 @@ void AppWindow::drawDecodersSection() {
         ImGui::TextDisabled("%s", tr("No fitted module publishes a preset or is fed a signal."));
         ImGui::PopTextWrapPos();
     }
-    if (!engine_.presetNote_.empty()) {
+    if (!statusLines_.presetNote.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::good());
-        ImGui::TextWrapped("%s", engine_.presetNote_.c_str());
+        ImGui::TextWrapped("%s", statusLines_.presetNote.c_str());
         ImGui::PopStyleColor();
     }
 
@@ -8483,9 +8492,9 @@ void AppWindow::drawBlockedPluginRows() {
     // An enforcement failure outranks everything else on this panel: it is the
     // one state where a retired plugin might otherwise have been loaded, and
     // the answer taken (load nothing) is drastic enough that it must be said.
-    if (!engine_.pluginEnforceError_.empty()) {
+    if (!statusLines_.pluginEnforceError.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, kErrorRed);
-        ImGui::TextWrapped("%s", engine_.pluginEnforceError_.c_str());
+        ImGui::TextWrapped("%s", statusLines_.pluginEnforceError.c_str());
         ImGui::PopStyleColor();
     }
     if (engine_.pluginBlocked_.empty()) { return; }
@@ -9642,9 +9651,9 @@ void AppWindow::drawGpsPositionControl() {
         ImGui::TextWrapped("%s", line.c_str());
         ImGui::PopStyleColor();
     }
-    if (!engine_.gpsRefusal_.empty()) {
+    if (!statusLines_.gpsRefusal.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
-        ImGui::TextWrapped("%s", engine_.gpsRefusal_.c_str());
+        ImGui::TextWrapped("%s", statusLines_.gpsRefusal.c_str());
         ImGui::PopStyleColor();
     }
 }
@@ -11982,7 +11991,7 @@ void AppWindow::buildPluginStoreModel(PluginStoreModel& model) {
     // instead of printing a clean zero.
     model.haveCatalogue = !engine_.catalog_.empty();
     model.sourceStatus = engine_.catalogStatus_;
-    model.sourceError = engine_.catalogError_;
+    model.sourceError = statusLines_.catalogError;
     model.busy = engine_.catalogPending_ || engine_.installPending_;
     model.progress = engine_.pluginRepo_.progress();
     if (engine_.installPending_) {
@@ -15281,12 +15290,12 @@ void AppWindow::drawTransmitPage() {
     }
     if (have) {
         ImGui::TextUnformatted(sink->name());
-    } else if (!engine_.transmitError_.empty()) {
+    } else if (!statusLines_.transmitError.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kAlarmHot));
         // tr() at the point of drawing: the one sentence this page writes into
         // transmitError_ is marked below; a driver's own error falls through
         // in English.
-        ImGui::TextWrapped("%s", tr(engine_.transmitError_.c_str()));
+        ImGui::TextWrapped("%s", tr(statusLines_.transmitError.c_str()));
         ImGui::PopStyleColor();
     } else {
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kInkFaint));
@@ -16471,9 +16480,9 @@ void AppWindow::reportPluginTestResult() {
     // Bounded-run diagnostic only (CASCADE_PLUGIN_TEST). Machine-readable on
     // purpose: the install gate is a UI decision, and this is the only way a
     // headless run can prove which way it went.
-    if (!engine_.catalogError_.empty()) {
+    if (!engine_.statusText().catalogError.empty()) {
         std::printf("plugin catalogue: FAILED frame=%d %s\n", frameCounter_,
-                    engine_.catalogError_.c_str());
+                    engine_.statusText().catalogError.c_str());
         return;
     }
     std::printf("plugin catalogue: frame=%d entries=%d\n", frameCounter_,
@@ -16511,8 +16520,8 @@ void AppWindow::reportPluginStatus() {
                 static_cast<int>(engine_.pluginHost_.loadedCount()), static_cast<int>(blocked),
                 static_cast<int>(engine_.pluginInventory_.plugins.size()),
                 static_cast<int>(engine_.pluginInventory_.unmanaged.size()));
-    if (!engine_.pluginEnforceError_.empty()) {
-        std::printf("plugin enforce: %s\n", engine_.pluginEnforceError_.c_str());
+    if (!engine_.statusText().pluginEnforceError.empty()) {
+        std::printf("plugin enforce: %s\n", engine_.statusText().pluginEnforceError.c_str());
     }
     for (const std::string& note : engine_.pluginInventory_.notes) {
         std::printf("plugin inventory: %s\n", note.c_str());
@@ -16540,7 +16549,7 @@ void AppWindow::reportPluginStatus() {
                 engine_.pipeline_.activeSource().sampleRateHz(), engine_.pipeline_.inputRateHz(),
                 engine_.pipeline_.activeSource().centerFrequencyHz(),
                 engine_.pipeline_.running() ? 1 : 0,
-                engine_.sourceError_.empty() ? "-" : engine_.sourceError_.c_str());
+                engine_.statusText().sourceError.empty() ? "-" : engine_.statusText().sourceError.c_str());
 
     // The RUNNER, reported separately from the host, because "loaded" and
     // "being fed real audio" are different claims and the whole point of this
@@ -16849,15 +16858,15 @@ void AppWindow::drawRecorderSection() {
         ImGui::TextDisabled("%s", tr("(press Play to feed the recorders)"));
     }
 
-    if (!engine_.recordError_.empty()) {
+    if (!statusLines_.recordError.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, kErrorRed);
-        ImGui::TextWrapped("%s", engine_.recordError_.c_str());
+        ImGui::TextWrapped("%s", statusLines_.recordError.c_str());
         ImGui::PopStyleColor();
     }
     // A notice, not an error: in the ordinary muted text, never the red.
-    if (!engine_.recordNotice_.empty()) {
+    if (!statusLines_.recordNotice.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-        ImGui::TextWrapped("%s", engine_.recordNotice_.c_str());
+        ImGui::TextWrapped("%s", statusLines_.recordNotice.c_str());
         ImGui::PopStyleColor();
     }
 }

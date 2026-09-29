@@ -93,6 +93,24 @@ struct AppWindowTestAccess;
 
 namespace cascade::engine {
 
+// Engine::StatusText - see Engine::publishStatusText.
+struct EngineStatusText {
+    std::string sourceError;
+    std::string gpsRefusal;
+    std::string catalogError;
+    std::string bandPlanError;
+    std::string tuneMismatchNote;
+    std::string transmitError;
+    std::string soundCardMissing;
+    std::string sdrPlayApiDetail;
+    std::string sdrPlayAdvice;
+    std::string recordNotice;
+    std::string recordError;
+    std::string presetNote;
+    std::string pluginEnforceError;
+    std::string restoreKeepLabel;
+};
+
 class Engine {
 public:
     // A HEADLESS ENGINE: its host is its own EngineHost, whose answers are
@@ -1677,6 +1695,8 @@ private:
     bool transmitOpen_ = false;    // is the PAGE open
     // The Transmit page's newest key request (see submitTransmitPageKey), and
     // what the control side last acted on of it.
+    mutable std::mutex statusTextMutex_;
+    EngineStatusText statusText_;
     mutable std::mutex configSnapMutex_;
     cascade::core::AppConfig configSnap_;
     std::mutex txPageMutex_;
@@ -2110,6 +2130,17 @@ public:
     // is read across threads once the engine has one of its own.
     void publishConfig();
     cascade::core::AppConfig configSnapshot() const;
+    // THE STATUS LINES, HANDED OVER (engine/stage3b-pre, docs/engine-stage3.md
+    // OPEN 3, strings first): every sentence the engine writes for a panel to
+    // letter - an error under the Source controls, a GPS refusal, the
+    // catalogue's failure, and so on - as ONE copy behind a mutex. Published
+    // with the frame's snapshot (pumpPublish, before anything is drawn) and
+    // at the end of the frame (pumpAudio, after the workers' answers); the
+    // window reads its own copy of it, refreshed once a frame, and never these
+    // fields themselves (tests/test_command_path_guard.cpp, kPublishedOnly).
+    using StatusText = EngineStatusText;
+    void publishStatusText();
+    StatusText statusText() const;
 
     // The per-frame pump (engine.cpp says what each phase runs, in order).
     void pumpFrameBegin();

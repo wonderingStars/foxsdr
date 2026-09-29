@@ -6841,6 +6841,9 @@ void Engine::pumpPlugins() {
 
 double Engine::pumpPublish() {
     flushBookmarkSave(false);
+    // The status lines as this frame's commands left them, before any panel
+    // draws (OPEN 3).
+    publishStatusText();
     return publishReceiverState();
 }
 
@@ -6939,6 +6942,34 @@ void Engine::pumpAudio() {
     // THE CONFIG'S RECEIVER HALF, handed to the window once a frame (OPEN 2):
     // last, so it carries everything this frame's phases changed.
     publishConfig();
+    // ...and the status lines, with the workers' answers of this frame
+    // (OPEN 3) - drawn on the next.
+    publishStatusText();
+}
+
+void Engine::publishStatusText() {
+    StatusText t;
+    t.sourceError = sourceError_;
+    t.gpsRefusal = gpsRefusal_;
+    t.catalogError = catalogError_;
+    t.bandPlanError = bandPlanError_;
+    t.tuneMismatchNote = tuneMismatchNote_;
+    t.transmitError = transmitError_;
+    t.soundCardMissing = soundCardMissing_;
+    t.sdrPlayApiDetail = sdrPlayApiDetail_;
+    t.sdrPlayAdvice = sdrPlayAdvice_;
+    t.recordNotice = recordNotice_;
+    t.recordError = recordError_;
+    t.presetNote = presetNote_;
+    t.pluginEnforceError = pluginEnforceError_;
+    t.restoreKeepLabel = restoreKeepLabel_;
+    std::lock_guard<std::mutex> lk(statusTextMutex_);
+    statusText_ = std::move(t);
+}
+
+Engine::StatusText Engine::statusText() const {
+    std::lock_guard<std::mutex> lk(statusTextMutex_);
+    return statusText_;
 }
 
 void Engine::publishConfig() {

@@ -1913,6 +1913,10 @@ private:
     // and every hermetic --frames run - opens on it; applyConfig sets it from
     // AppConfig::mainView and currentConfig writes it back.
     bool patchOpen_ = true;
+    // The engine's status lines as it last handed them over (Engine::
+    // statusText, OPEN 3): refreshed once a frame, after the frame's publish;
+    // every panel letters from this, never from the engine's fields.
+    cascade::engine::Engine::StatusText statusLines_;
     cascade::gui::patch::Interaction patchUi_;
     // THE PAGE'S DRAFT OF THE GRAPH (engine/stage3b-pre, docs/engine-stage3.md
     // OPEN 6, Design A). The graph is the Engine's (patchGraph_); the canvas,

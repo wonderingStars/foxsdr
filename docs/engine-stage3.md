@@ -1044,6 +1044,47 @@ they were with the facts; and what 3b has to settle first.
    `tests/test_airspy_app.cpp` failed 2/75 at the exact two assertions
    checking which stage moved; source restored byte-identical and
    reverified green, 75/75.
+   **PARTLY CLOSED, stage-3b-pre-end round, item 3 (2026-09-29): strings
+   first, and a ratchet on the rest.** The window read 177 engine fields
+   directly, 829 times (counted by the guard below, at 41c67ab). Converting
+   all of them in one round, verified to the same standard, is not
+   possible; this round moves the first group and stops the rest growing.
+   - **The status lines are a handed copy**: `Engine::StatusText` - the
+     fourteen sentences the engine writes for a panel to letter
+     (`sourceError_`, `gpsRefusal_`, `catalogError_`, `bandPlanError_`,
+     `tuneMismatchNote_`, `transmitError_`, `soundCardMissing_`,
+     `sdrPlayApiDetail_`, `sdrPlayAdvice_`, `recordNotice_`, `recordError_`,
+     `presetNote_`, `pluginEnforceError_`, `restoreKeepLabel_`) - published
+     behind a mutex by `Engine::publishStatusText` with the frame's
+     snapshot (`pumpPublish`, before anything is drawn) and at the end of
+     the frame (`pumpAudio`, after the workers' answers), and in the
+     constructor. The window keeps one copy a frame (`statusLines_`,
+     refreshed right after `pumpPublish`) and every panel letters from it;
+     the report functions run after the last frame read a fresh copy. The
+     one `run()` seam that WROTE one of them (`gpsRefusal_.clear()` before
+     a hook-port GPS read) is now `FOXAPP_OP_CLEAR_STATUS`. Consequence,
+     accepted as the Airspy readback's was: a line set by an at-once command
+     DURING drawing shows on the next frame (lines set by workers already
+     did).
+   - **The guard (tests/test_command_path_guard.cpp)**: `kPublishedOnly` -
+     any `engine_.<one of the fourteen>` in AppWindow code, machinery
+     included, is a violation; and the RATCHET - the window's remaining
+     direct reads of engine fields are counted (`codeLines(..., true)`, the
+     text with `engine_.` kept) and may not exceed
+     `kWindowFieldsReadBudget`/`kWindowFieldReadsBudget` (163 fields, 793
+     reads now); each round that moves a group lowers them.
+   *Tests.* A probe reading `engine_.sourceError_` and
+   `engine_.catalogError_` in drawToolbar passed the old guard (0
+   violations); the same guard over 41c67ab's window reports the 36 live
+   reads this round removed. tests/test_config_snapshot_app.cpp E: all
+   fourteen reach `statusText()` only on a publish, at both points.
+   Mutants: no publish with the snapshot (2 checks), one line left out (3),
+   no end-of-frame publish (1).
+   **Still open**: 163 fields (containers first next: the device and gain
+   lists - `deviceGainNames_`/`deviceGainsDb_`/`deviceGainRanges_`,
+   `nativeDevices_`, `soapyDevices_`, `soundCardDevices_`, `devices_` - the
+   plugin catalogue `catalog_`, `patchCatalogue_`, `decoderLog_`, and the
+   patch runtime's maps), then the scalars.
 4. **The EngineHost hooks are synchronous calls into the window** (section 3).
    Most become events the window drains. Three are not events:
    `onPluginsUnloading`/`beforePluginRescan` must finish before modules are

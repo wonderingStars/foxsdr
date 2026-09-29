@@ -354,7 +354,6 @@ const LineAllow kLineAllowed[] = {
     // the census seam: a stand-in bias tee for a bounded run
     {"run", "biasStandIn_ = cascade::gui::biasStandInFor("},
     // the GPS test seam starts a read
-    {"run", "gpsRefusal_.clear();"},
     // the catalogue test hook points the store at its catalogue
     {"run", "pluginCatalogueUrl_ = pluginTestHook_;"},
     // the teardown marks the clean exit
@@ -433,7 +432,9 @@ std::string readFile(const fs::path& p) {
 }
 
 // The code of each line: comments and string literals blanked, CR dropped.
-std::vector<std::string> codeLines(const std::string& text) {
+// keepEngine: leave "engine_." in place (OPEN 3's read count needs to know a
+// name was reached THROUGH the engine; every other rule wants it stripped).
+std::vector<std::string> codeLines(const std::string& text, bool keepEngine = false) {
     std::vector<std::string> out;
     bool inBlock = false;
     std::istringstream lines(text);
@@ -479,7 +480,8 @@ std::vector<std::string> codeLines(const std::string& text) {
         // `engine_.pipeline_.stop()`. The rules below read "engine_." as if it
         // were not there, so a control reaching the engine's state through
         // the window's reference is judged exactly as it was before the move.
-        for (std::size_t at = code.find("engine_."); at != std::string::npos; at = code.find("engine_.", at)) {
+        for (std::size_t at = keepEngine ? std::string::npos : code.find("engine_."); at != std::string::npos;
+             at = code.find("engine_.", at)) {
             const unsigned char p = at > 0 ? static_cast<unsigned char>(code[at - 1]) : ' ';
             if (at > 0 && (std::isalnum(p) != 0 || p == '_' || p == '.')) {
                 at += 8;
@@ -888,8 +890,29 @@ EngineSurface readEngine(const fs::path& root) {
     return s;
 }
 
+// PUBLISHED-ONLY FIELDS (engine/stage3b-pre, docs/engine-stage3.md OPEN 3):
+// the engine hands these to the window as a copy (Engine::statusText, once a
+// frame), and the window may not read them any other way - not from a
+// control, not from machinery. A read of the live field is the cross-thread
+// read OPEN 3 exists to remove.
+const char* const kPublishedOnly[] = {
+    "sourceError_", "gpsRefusal_", "catalogError_", "bandPlanError_", "tuneMismatchNote_",
+    "transmitError_", "soundCardMissing_", "sdrPlayApiDetail_", "sdrPlayAdvice_", "recordNotice_",
+    "recordError_", "presetNote_", "pluginEnforceError_", "restoreKeepLabel_",
+};
+
+// THE RATCHET ON EVERY OTHER DIRECT READ (OPEN 3). The window still reads the
+// rest of the engine's fields directly as a friend - safe only while both run
+// on one thread. Each round that moves a group behind a handed copy lowers
+// these; nothing may raise them. Counted over every AppWindow member, as
+// `engine_.<field>` for any field the Engine declares.
+constexpr int kWindowFieldsReadBudget = 163;
+constexpr int kWindowFieldReadsBudget = 793;
+
 struct Report {
     int violations = 0;
+    int fieldReads = 0;
+    std::set<std::string> fieldsRead;
     int controls = 0;
     int submitsInDraw = 0;
     int machineryLines = 0;
@@ -935,6 +958,7 @@ void scan(const fs::path& root, const EngineSurface& eng, Report& r) {
         if (e.path().extension() != ".cpp") { continue; }
         const std::string file = e.path().filename().string();
         const std::vector<std::string> lines = codeLines(readFile(e.path()));
+        const std::vector<std::string> rawLines = codeLines(readFile(e.path()), true);
         bool definesAppWindow = false;
         for (const std::string& l : lines) {
             if (definitionAt(l).rfind("AppWindow::", 0) == 0) { definesAppWindow = true; }
@@ -953,6 +977,25 @@ void scan(const fs::path& root, const EngineSurface& eng, Report& r) {
                 continue;  // file scope, another class, or a file with no AppWindow code
             }
             r.membersSeen.insert(member);
+            // OPEN 3: published-only fields, and the ratchet's count - over
+            // every AppWindow member, machinery included.
+            const std::string& raw = i < rawLines.size() ? rawLines[i] : l;
+            for (std::size_t at = raw.find("engine_."); at != std::string::npos; at = raw.find("engine_.", at + 1)) {
+                if (at > 0 && (isIdent(raw[at - 1]) || raw[at - 1] == '.')) { continue; }
+                std::size_t e = at + std::strlen("engine_.");
+                const std::size_t b = e;
+                while (e < raw.size() && isIdent(raw[e])) { ++e; }
+                const std::string field = raw.substr(b, e - b);
+                if (eng.fields.count(field) == 0) { continue; }
+                ++r.fieldReads;
+                r.fieldsRead.insert(field);
+                if (inList(field, kPublishedOnly)) {
+                    ++r.violations;
+                    std::printf("FAIL: AppWindow::%s reads engine_.%s at %s:%zu\n      -> read it from the "
+                                "copy the engine hands over (Engine::statusText, docs/engine-stage3.md OPEN 3)\n",
+                                member.c_str(), field.c_str(), file.c_str(), i + 1);
+                }
+            }
             if (inList(member, kWindowMachinery) || inList(member, kHostHooks)) {
                 // 5. no ImGui input in machinery.
                 for (const char* in : kImGuiInput) {
@@ -1049,6 +1092,15 @@ int main(int argc, char** argv) {
     CHECK(eng.methods.size() >= 100);
     CHECK(eng.fields.size() >= 200);
     CHECK(r.violations == 0);
+    // OPEN 3's ratchet.
+    std::printf("  the window reads %zu engine fields directly, %d times (budget %d fields, %d reads)\n",
+                r.fieldsRead.size(), r.fieldReads, kWindowFieldsReadBudget, kWindowFieldReadsBudget);
+    if (static_cast<int>(r.fieldsRead.size()) > kWindowFieldsReadBudget || r.fieldReads > kWindowFieldReadsBudget) {
+        std::printf("FAIL: more direct reads of the engine than the budget - read the new ones from a copy "
+                    "the engine hands over (docs/engine-stage3.md OPEN 3)\n");
+    }
+    CHECK(static_cast<int>(r.fieldsRead.size()) <= kWindowFieldsReadBudget);
+    CHECK(r.fieldReads <= kWindowFieldReadsBudget);
     // 5. The engine is built without ImGui (the configure-time check enforces
     // the includes; this is the belt to that brace).
     CHECK(eng.imguiUses == 0);

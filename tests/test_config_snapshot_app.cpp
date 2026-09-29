@@ -13,6 +13,10 @@
 //   B  one pump (Engine::pump - the frame's phases) publishes it
 //   C  the save made at shutdown (saveConfigNow) carries the newest value,
 //      not the last frame's
+//   E  the STATUS LINES are handed over the same way (OPEN 3): every one of
+//      the fourteen reaches Engine::statusText(), and only once the engine
+//      publishes - with the frame's snapshot (pumpPublish) and at the end of
+//      its frame (pumpAudio)
 //   D  the window's first snapshot (constructor) is a real one: with a saved
 //      volume of 0.3 in the config file, the config the window remembers as
 //      saved says 0.3 - not the 0.5 of a snapshot nobody filled
@@ -44,6 +48,27 @@ struct AppWindowTestAccess {
     static void saveNow(AppWindow& a) { a.saveConfigNow(); }
     static void publish(AppWindow& a) { a.engine_.publishConfig(); }
     static void pump(AppWindow& a) { a.engine_.pump(); }
+    static cascade::engine::EngineStatusText status(AppWindow& a) { return a.engine_.statusText(); }
+    static void pumpPublish(AppWindow& a) { (void)a.engine_.pumpPublish(); }
+    static void pumpAudio(AppWindow& a) { a.engine_.pumpAudio(); }
+    // Every status line, set as the engine's own code sets it.
+    static void setAllStatus(AppWindow& a, const std::string& p) {
+        cascade::engine::Engine& e = a.engine_;
+        e.sourceError_ = p + "1";
+        e.gpsRefusal_ = p + "2";
+        e.catalogError_ = p + "3";
+        e.bandPlanError_ = p + "4";
+        e.tuneMismatchNote_ = p + "5";
+        e.transmitError_ = p + "6";
+        e.soundCardMissing_ = p + "7";
+        e.sdrPlayApiDetail_ = p + "8";
+        e.sdrPlayAdvice_ = p + "9";
+        e.recordNotice_ = p + "10";
+        e.recordError_ = p + "11";
+        e.presetNote_ = p + "12";
+        e.pluginEnforceError_ = p + "13";
+        e.restoreKeepLabel_ = p + "14";
+    }
     static FoxCommandResult volume(AppWindow& a, double v) {
         return a.engine_.applyCommand(cascade::core::cmd::makeNum(FOXAPI_OP_SET_VOLUME, v));
     }
@@ -120,6 +145,26 @@ int main() {
         A::saveNow(app);
         std::printf("C: saved at shutdown: %.2f\n", static_cast<double>(A::lastRequested(app).volume));
         CHECK(A::lastRequested(app).volume == 0.75f);
+
+        // E: the status lines.
+        auto allAre = [](const cascade::engine::EngineStatusText& t, const std::string& p) {
+            return t.sourceError == p + "1" && t.gpsRefusal == p + "2" && t.catalogError == p + "3" &&
+                   t.bandPlanError == p + "4" && t.tuneMismatchNote == p + "5" && t.transmitError == p + "6" &&
+                   t.soundCardMissing == p + "7" && t.sdrPlayApiDetail == p + "8" && t.sdrPlayAdvice == p + "9" &&
+                   t.recordNotice == p + "10" && t.recordError == p + "11" && t.presetNote == p + "12" &&
+                   t.pluginEnforceError == p + "13" && t.restoreKeepLabel == p + "14";
+        };
+        A::setAllStatus(app, "first");
+        CHECK(A::status(app).sourceError != "first1");   // not handed over yet
+        A::pumpPublish(app);
+        std::printf("E: after the frame's publish, all fourteen handed over: %s\n",
+                    allAre(A::status(app), "first") ? "yes" : "NO");
+        CHECK(allAre(A::status(app), "first"));
+        A::setAllStatus(app, "later");
+        CHECK(allAre(A::status(app), "first"));
+        A::pumpAudio(app);
+        std::printf("   after the end of the frame: %s\n", allAre(A::status(app), "later") ? "yes" : "NO");
+        CHECK(allAre(A::status(app), "later"));
     }
 
     ImGui::DestroyContext();

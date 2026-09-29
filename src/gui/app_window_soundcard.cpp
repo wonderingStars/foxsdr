@@ -238,9 +238,9 @@ void AppWindow::drawSoundCardControls() {
         // card really takes.
         ImGui::PopStyleColor();
     }
-    if (!engine_.soundCardMissing_.empty()) {
+    if (!statusLines_.soundCardMissing.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
-        ImGui::TextWrapped("%s", engine_.soundCardMissing_.c_str());
+        ImGui::TextWrapped("%s", statusLines_.soundCardMissing.c_str());
         ImGui::PopStyleColor();
     }
 }
