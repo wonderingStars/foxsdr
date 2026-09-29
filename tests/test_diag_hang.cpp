@@ -782,7 +782,17 @@ int main() {
         CHECK(!text.empty());
 
         const std::size_t marker = text.find("telemetryCleanExit_ = true;");
-        const std::size_t join = text.find("pipeline_.stop();");
+        // The join is the ENGINE's (Engine::shutdownStop, engine/stage3b-pre
+        // OPEN 9): run() calls it here, and the engine's phase holds the
+        // pipeline_.stop() itself - both halves are checked.
+        const std::size_t join = text.find("engine_.shutdownStop();");
+        {
+            const std::string etext = readFile(fs::path(CASCADE_SOURCE_DIR) / "src" / "engine" / "engine.cpp");
+            const std::size_t phase = etext.find("void Engine::shutdownStop() {");
+            const std::size_t phaseEnd = phase == std::string::npos ? std::string::npos : etext.find("\n}", phase);
+            const std::size_t stopAt = phase == std::string::npos ? std::string::npos : etext.find("pipeline_.stop();", phase);
+            CHECK(phase != std::string::npos && stopAt != std::string::npos && stopAt < phaseEnd);
+        }
         // The GL teardown, which must come AFTER the marker write: a save
         // performed past glfwTerminate() re-derives the pending usage report
         // with glfwGetTime() == 0.0 and reports a zero-second session.

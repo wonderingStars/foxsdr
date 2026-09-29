@@ -1850,40 +1850,14 @@ int AppWindow::run(int frames) {
     // "CLOSING").
     cascade::source::SoundCardSource::setCloseWaitEnabled(false);
 
-    // THE TRANSMITTER BEFORE ANYTHING ELSE, AND IT IS NOT A STYLE CHOICE.
-    // Everything else in this teardown can take its time; a radio that is
-    // still keyed cannot. This is also the moment the dead-man's handle in
-    // core/transmitter.hpp stops being hypothetical - from here on nothing
-    // calls tick() again, so a transmitter that somehow survived this call
-    // would be released by its own thread within kKeyAliveWait rather than
-    // transmitting for the rest of the process's life.
-    //
-    // ITS COST IS CHARGED IN tests/test_shutdown_budget.cpp, as the only
-    // column that ADDS to the source teardown rather than replacing it: a
-    // Pluto transmitting while a SoapySDR receiver runs is two devices across
-    // one teardown, which is the case the composition note there says makes
-    // the sum the right arithmetic.
-    engine_.transmitter_.stop();
-
-    // THE GPS READER FIRST: its stop is bounded - one port read (200 ms)
-    // while the worker is reading, GpsReader::kOpenAbandonWait (1 s, counted
-    // in the shutdown budget) while it is still inside the port driver's
-    // open, after which the worker is abandoned rather than joined - and it
-    // has to precede the GL teardown, which is why it is not left to the
-    // member destructor. Then one more poll, because a fix that arrived
-    // during the last frame - or that a stop() just now let through, since a
-    // fix that landed before the stop is kept - has not yet been applied, and
-    // the save below is the one that persists it. This is what makes the
-    // app-level test deterministic at a small frame count: the position is
-    // on disk if the reader had it, whichever frame it arrived on.
-    engine_.gpsReader_.stop();
-    engine_.pollGpsReader();
-
-    // Closing the window mid-take finalizes both recordings cleanly (same
-    // contract as the toolbar Stop): taps out, then headers patched — before
-    // the pipeline teardown below ends the sample flow they were taping.
-    engine_.stopIqRecording();
-    engine_.stopAudioRecording();
+    // THE ENGINE'S FIRST TEARDOWN PHASE (engine/stage3b-pre, docs/
+    // engine-stage3.md OPEN 9): the TRANSMITTER FIRST - a keyed radio cannot
+    // wait - then the GPS reader and its last poll, then both recordings
+    // finalised; everything the final save below must see settled, in that
+    // order, spelled out with its reasons in Engine::shutdownQuiesce. (Stage
+    // 3b joins the control thread after this phase, so the transmitter is
+    // always stopped before that join - OPEN 7 (d).)
+    engine_.shutdownQuiesce();
 
     // The enforcement diagnostic, printed at the END so it reports the state
     // the run actually finished in — including any retirement that a catalogue
@@ -1915,7 +1889,6 @@ int AppWindow::run(int frames) {
     featureRequestSender_.cancel();
     problemReportSender_.cancel();
     if (!configPath_.empty()) { saveConfigNow(); }
-    engine_.flushBookmarkSave(true);
     cascade::core::diagLogf("frame loop ended after %d frames; shutting down", rendered);
 
     // The deliberate shutdown wedge, in the place the real one lives: the
@@ -1930,13 +1903,10 @@ int AppWindow::run(int frames) {
         std::this_thread::sleep_for(std::chrono::milliseconds(shutdownStallMs));
     }
 
-    // Closing the window while receiving must not leave DSP threads pacing a
-    // dead display; stop before teardown so the join happens while the object
-    // graph is still fully alive. Not stopReceiver(): the takes were already
-    // ended further up this teardown ("Closing the window mid-take"), and
-    // this is the one pipeline_.stop() tests/test_stop_ends_recordings allows
-    // outside it.
-    engine_.pipeline_.stop();
+    // THE ENGINE'S SECOND PHASE (OPEN 9): the bookmark list flushed, then the
+    // pipeline stopped and joined - the stretch where the bounded driver waits
+    // are spent and the 120 s CAT freeze happened (Engine::shutdownStop).
+    engine_.shutdownStop();
 
     // THE CLEAN-EXIT MARKER, after the pipeline join. The join above — DSP
     // threads, the CAT server, the USB device stack — is where the worst
@@ -2008,12 +1978,9 @@ int AppWindow::run(int frames) {
     // it is here rather than in the destructor: glDeleteTextures needs this
     // context current, and by ~AppWindow it is gone.
     //
-    // THE PATCH'S RADIOS STOP FIRST (0.99.17): each has a reader thread that
-    // may be inside a plugin decoder, and each speaker's file is finalised
-    // when its radio's sets go. The receiver's radio is not reopened on the
-    // way out - the config already remembers it (patchMainKeep_).
-    engine_.patchStopAll(false);
-    engine_.detachAndUnloadPlugins();
+    // THE ENGINE'S LAST PHASE (OPEN 9): the patch's radios, then the plugins
+    // unloaded (Engine::shutdownRelease).
+    engine_.shutdownRelease();
 
     // The waterfall owns a GL texture whose deletion requires the creating
     // context to be current. AppWindow outlives that context (main() destroys

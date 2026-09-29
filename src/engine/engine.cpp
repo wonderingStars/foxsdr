@@ -6932,6 +6932,73 @@ void Engine::pumpTransmitter() {
     transmitter_.tick();
 }
 
+// --- THE TEARDOWN (engine/stage3b-pre, docs/engine-stage3.md OPEN 9) ---------
+// Moved from AppWindow::run(), line for line and in the same order, with the
+// reasons that went with each line.
+
+void Engine::shutdownQuiesce() {
+    // THE TRANSMITTER BEFORE ANYTHING ELSE, AND IT IS NOT A STYLE CHOICE.
+    // Everything else in this teardown can take its time; a radio that is
+    // still keyed cannot. This is also the moment the dead-man's handle in
+    // core/transmitter.hpp stops being hypothetical - from here on nothing
+    // calls tick() again, so a transmitter that somehow survived this call
+    // would be released by its own thread within kKeyAliveWait rather than
+    // transmitting for the rest of the process's life.
+    //
+    // ITS COST IS CHARGED IN tests/test_shutdown_budget.cpp, as the only
+    // column that ADDS to the source teardown rather than replacing it: a
+    // Pluto transmitting while a SoapySDR receiver runs is two devices across
+    // one teardown, which is the case the composition note there says makes
+    // the sum the right arithmetic.
+    transmitter_.stop();
+
+    // THE GPS READER FIRST: its stop is bounded - one port read (200 ms)
+    // while the worker is reading, GpsReader::kOpenAbandonWait (1 s, counted
+    // in the shutdown budget) while it is still inside the port driver's
+    // open, after which the worker is abandoned rather than joined - and it
+    // has to precede the GL teardown, which is why it is not left to the
+    // member destructor. Then one more poll, because a fix that arrived
+    // during the last frame - or that a stop() just now let through, since a
+    // fix that landed before the stop is kept - has not yet been applied, and
+    // the save below is the one that persists it. This is what makes the
+    // app-level test deterministic at a small frame count: the position is
+    // on disk if the reader had it, whichever frame it arrived on.
+    gpsReader_.stop();
+    pollGpsReader();
+
+    // Closing the window mid-take finalizes both recordings cleanly (same
+    // contract as the toolbar Stop): taps out, then headers patched — before
+    // the pipeline teardown below ends the sample flow they were taping.
+    stopIqRecording();
+    stopAudioRecording();
+}
+
+void Engine::shutdownStop() {
+    flushBookmarkSave(true);
+    // Closing the window while receiving must not leave DSP threads pacing a
+    // dead display; stop before teardown so the join happens while the object
+    // graph is still fully alive. Not stopReceiver(): the takes were already
+    // ended further up this teardown ("Closing the window mid-take"), and
+    // this is the one pipeline_.stop() tests/test_stop_ends_recordings allows
+    // outside it.
+    pipeline_.stop();
+}
+
+void Engine::shutdownRelease() {
+    // THE PATCH'S RADIOS STOP FIRST (0.99.17): each has a reader thread that
+    // may be inside a plugin decoder, and each speaker's file is finalised
+    // when its radio's sets go. The receiver's radio is not reopened on the
+    // way out - the config already remembers it (patchMainKeep_).
+    patchStopAll(false);
+    detachAndUnloadPlugins();
+}
+
+void Engine::shutdown() {
+    shutdownQuiesce();
+    shutdownStop();
+    shutdownRelease();
+}
+
 void Engine::pumpTransmitter(bool pageLive, bool latchPressed, bool pttHeld) {
     cascade::gui::TxPageRequest r;
     {

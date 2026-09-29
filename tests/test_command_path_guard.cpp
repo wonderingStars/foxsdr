@@ -347,14 +347,13 @@ const LineAllow kLineAllowed[] = {
     {"run", "followInputRate();"},
     {"run", "if (!measure_->tick(pipeline_, hooks)) {"},
     {"run", "pollGpsReader();"},
-    {"run", "transmitter_.stop();"},
-    {"run", "gpsReader_.stop();"},
-    {"run", "flushBookmarkSave(true);"},
-    {"run", "stopIqRecording();"},
-    {"run", "stopAudioRecording();"},
-    {"run", "pipeline_.stop();"},
-    {"run", "patchStopAll(false);"},
-    {"run", "detachAndUnloadPlugins();"},
+    // the engine's teardown, in its three ordered phases between the
+    // window's own steps (engine/stage3b-pre OPEN 9 - they were eight lines
+    // here: the transmitter, the GPS reader, the recordings, the bookmark
+    // flush, the pipeline, the patch radios, the plugins)
+    {"run", "shutdownQuiesce();"},
+    {"run", "shutdownStop();"},
+    {"run", "shutdownRelease();"},
     // --- engine stage 3a: window lines that still drive the engine directly ---
     // the census seam: a stand-in bias tee for a bounded run
     {"run", "biasStandIn_ = cascade::gui::biasStandInFor("},

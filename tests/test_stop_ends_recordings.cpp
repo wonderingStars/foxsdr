@@ -988,7 +988,10 @@ void everyStopUsesTheRoutine() {
                 const std::string m = enclosingMember(lines, i);
                 if (m == "stopReceiver") {
                     ++inRoutine;
-                } else if (m == "run") {
+                } else if (m == "shutdownStop") {
+                    // The teardown's own stop: AppWindow::run()'s until
+                    // engine/stage3b-pre OPEN 9 moved the engine's teardown
+                    // into Engine::shutdownStop, which run() calls.
                     ++inTeardown;
                 } else {
                     ++elsewhere;
@@ -1042,7 +1045,7 @@ void everyStopUsesTheRoutine() {
             }
         }
     }
-    std::printf("  pipeline_.stop(): %d in stopReceiver, %d in run() teardown, %d elsewhere\n",
+    std::printf("  pipeline_.stop(): %d in stopReceiver, %d in the teardown (Engine::shutdownStop), %d elsewhere\n",
                 inRoutine, inTeardown, elsewhere);
     CHECK(inRoutine == 1);
     CHECK(inTeardown == 1);

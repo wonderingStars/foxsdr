@@ -2180,6 +2180,22 @@ public:
     // key the closed page no longer allows, and ticks.
     void submitTransmitPageKey(const cascade::gui::TxPageRequest& r);
     void pumpTransmitter();
+    // THE ENGINE'S TEARDOWN (engine/stage3b-pre, docs/engine-stage3.md OPEN
+    // 9), in three ordered phases a front end calls between its own steps -
+    // the window has a final config save that must read live state before
+    // the pipeline stops, and a clean-exit marker that must wait for the join:
+    //   shutdownQuiesce  the transmitter FIRST, the GPS reader and its last
+    //                    poll, both recordings finalised. Stage 3b joins the
+    //                    control thread AFTER this, so the transmitter is
+    //                    always stopped before that join (OPEN 7 (d)).
+    //   shutdownStop     the bookmark flush, the pipeline stopped and joined.
+    //   shutdownRelease  the patch's radios, then the plugins unloaded.
+    // shutdown() runs all three, for a front end with nothing in between.
+    // Every step is idempotent, so a phase called twice costs nothing.
+    void shutdownQuiesce();
+    void shutdownStop();
+    void shutdownRelease();
+    void shutdown();
     // Both halves as one frame, for a front end with no page of its own
     // (Engine::pump) and for tests: the request is the previous one with this
     // frame's levels, and one LATCH press more when latchPressed.

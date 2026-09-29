@@ -1369,8 +1369,38 @@ int main() {
         CHECK(haveAnchors && heartbeat < begin);
         CHECK(haveAnchors && begin < stop);
 
+        // The pipeline's stop is the engine's since engine/stage3b-pre OPEN 9
+        // (Engine::shutdownStop); run() calls that phase here, and the phase
+        // must hold the stop - checked below against engine.cpp.
         const std::size_t pipelineStop =
-            haveAnchors ? text.find("pipeline_.stop();", begin) : std::string::npos;
+            haveAnchors ? text.find("engine_.shutdownStop();", begin) : std::string::npos;
+        const std::string etext =
+            readFile(fs::path(CASCADE_SOURCE_DIR) / "src" / "engine" / "engine.cpp");
+        const auto phaseHolds = [&etext](const char* phase, const char* step) {
+            const std::size_t at = etext.find(phase);
+            const std::size_t end = at == std::string::npos ? std::string::npos : etext.find("\n}", at);
+            const std::size_t s = at == std::string::npos ? std::string::npos : etext.find(step, at);
+            return at != std::string::npos && s != std::string::npos && s < end;
+        };
+        CHECK(phaseHolds("void Engine::shutdownStop() {", "pipeline_.stop();"));
+        CHECK(phaseHolds("void Engine::shutdownRelease() {", "patchStopAll(false);"));
+        CHECK(phaseHolds("void Engine::shutdownQuiesce() {", "transmitter_.stop();"));
+        // ...and run() calls the three phases, in their order, the first of
+        // them before the final save (which must read the settled state) and
+        // all of them inside the budgeted stretch.
+        const std::size_t quiesce =
+            haveAnchors ? text.find("engine_.shutdownQuiesce();", begin) : std::string::npos;
+        const std::size_t release =
+            haveAnchors ? text.find("engine_.shutdownRelease();", begin) : std::string::npos;
+        const std::size_t finalSave =
+            haveAnchors ? text.find("saveConfigNow(); }", begin) : std::string::npos;
+        std::printf("teardown phases: quiesce@%zu final save@%zu stop@%zu release@%zu\n", quiesce, finalSave,
+                    pipelineStop, release);
+        CHECK(quiesce != std::string::npos && isLiveCode(text, quiesce));
+        CHECK(quiesce != std::string::npos && finalSave != std::string::npos && quiesce < finalSave);
+        CHECK(quiesce != std::string::npos && pipelineStop != std::string::npos && quiesce < pipelineStop);
+        CHECK(pipelineStop != std::string::npos && release != std::string::npos && pipelineStop < release);
+        CHECK(release != std::string::npos && release < stop);
         const std::size_t glfwTerm =
             haveAnchors ? text.find("glfwTerminate();", begin) : std::string::npos;
         std::printf("teardown wiring: beginShutdown@%zu pipeline_.stop@%zu glfwTerminate@%zu "
@@ -1403,7 +1433,7 @@ int main() {
         const std::string closeWaitOff = "SoundCardSource::setCloseWaitEnabled(false);";
         const std::size_t off = haveAnchors ? text.find(closeWaitOff, begin) : std::string::npos;
         const std::size_t patchStop =
-            haveAnchors ? text.find("patchStopAll(false);", begin) : std::string::npos;
+            haveAnchors ? text.find("engine_.shutdownRelease();", begin) : std::string::npos;
         std::printf("teardown wiring: sound card close wait off@%zu patchStopAll(false)@%zu\n", off,
                     patchStop);
         CHECK(off != std::string::npos && isLiveCode(text, off));

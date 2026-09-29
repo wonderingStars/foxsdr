@@ -203,8 +203,9 @@ stopped, plugins detached and unloaded, recordings stopped - the old order
 exactly. `~Engine` runs both if the front end did not (`tornDown_`), which is
 what the headless test's first engine exercises. `run()`'s own teardown
 sequence (transmitter stop, GPS, recordings, bookmark save, pipeline stop,
-patch, plugins, clean-exit mark) is unchanged and still spelled out in
-`run()` between the window's own steps (OPEN 9).
+patch, plugins) is the engine's since the stage-3b-pre-end round: three
+phases, `shutdownQuiesce` / `shutdownStop` / `shutdownRelease`, that `run()`
+calls between the window's own steps (OPEN 9, CLOSED).
 
 ## 5. What the window may still do to the engine
 
@@ -1544,8 +1545,8 @@ they were with the facts; and what 3b has to settle first.
      running; the window no longer touches `transmitter_` for either.
    - **(d) Shutdown order**: there is no control thread in 3a, so
      "transmitter stop before the control thread's join" holds trivially
-     today; the rule is written into `Engine::shutdown()` with OPEN 9
-     (see item 9).
+     today; the rule is written into `Engine::shutdownQuiesce()` with OPEN
+     9 (see item 9, CLOSED).
    *Tests, each red first or against a mutant.* The reviewed mutant
    (`if (pageLive) transmitter_.tick();`) was ALREADY caught by
    tests/test_transmit_dead_man.cpp (3b-pre; re-verified 5/15 red before
@@ -1576,12 +1577,76 @@ they were with the facts; and what 3b has to settle first.
    open). On a control thread those waits no longer block the frame; they
    need a watchdog of the control thread's own, and the GUI watchdog must stop
    being paused by them.
+   **LEFT FOR 3b ITSELF, stage-3b-pre-end round, item 6 (2026-09-29): this
+   one IS the threading change, so it was not forced.** In 3a the engine's
+   bounded waits run ON the GUI thread, inside the frame: they do block the
+   frame, and pausing the GUI watchdog around them (host.pauseWatchdog /
+   resumeWatchdog) is exactly right today. A control-thread watchdog now
+   would have no control thread to watch - its heartbeat would be the same
+   frame the GUI watchdog already beats - and moving the pause off the GUI
+   watchdog now would turn every sound-card open, plugin rescan and device
+   open into a false hang report. Nothing a test could hold red before the
+   thread exists. The design for 3b, in the order to do it:
+   - a second `core::HangWatchdog` owned by the ENGINE (not the window),
+     beaten once per control-thread pump, with its own report label
+     ("control thread") so a report says which side hung;
+   - the engine's bounded waits pause THAT watchdog (a private
+     `WatchdogPause` on the engine's own instance), and the two EngineHost
+     hooks `pauseWatchdog` / `resumeWatchdog` are deleted - the GUI watchdog
+     is then never paused by engine work, because engine work no longer
+     runs in its frame;
+   - the shutdown budget (tests/test_shutdown_budget.cpp) applies to both:
+     `beginShutdown()` on the engine's watchdog in `shutdownQuiesce`, its
+     `stop()` after the control thread's join;
+   - tests: a control pump wedged past the bound reports "control thread"
+     while the GUI frame keeps beating and reports nothing; a sound-card
+     open on the control thread no longer pauses the GUI watchdog (a GUI
+     frame wedged during it is still reported).
 9. **`run()`'s teardown is still spelled out in the window**: transmitter
    stop, GPS stop and last poll, recordings stopped, bookmark flush, pipeline
    stop, the clean-exit mark, patch stop and plugin unload, between the
    window's own steps (config save, crash upload, update reap). Reviewed
    lines in the guard. 3b: one `Engine::shutdown()` the window calls, ordered
    against the control thread's join.
+   **CLOSED, stage-3b-pre-end round, item 6 (2026-09-29): the engine owns
+   its teardown, in three ordered phases, and `Engine::shutdown()` runs all
+   three.** The lines moved from `run()` verbatim, in the same order, with
+   the comments that gave their reasons:
+   - `Engine::shutdownQuiesce()` - the TRANSMITTER FIRST, then the GPS
+     reader and its last poll, then both recordings finalised: everything
+     the window's final config save must see settled.
+   - `Engine::shutdownStop()` - the bookmark flush, then `pipeline_.stop()`
+     (the join where the bounded driver waits are spent).
+   - `Engine::shutdownRelease()` - `patchStopAll(false)`, then the plugins
+     detached and unloaded.
+   - `Engine::shutdown()` - the three in order, for a front end with nothing
+     of its own to do between them; safe to call twice.
+   The window cannot call one `shutdown()`: its final save must read live
+   state before the pipeline stops, its clean-exit marker must wait for the
+   join, and its crash-upload/update reap sit between. So `run()` calls the
+   three phases between its own steps. One order change: the
+   `--diag-shutdown-stall` hook, which sat between the bookmark flush and
+   `pipeline_.stop()`, now sits just before `shutdownStop()`, i.e. before
+   the flush - still inside the budgeted stretch and still before the join,
+   which is what tests/test_diag_hang measures. **OPEN 7 (d) is written in
+   here:** 3b joins the control thread after `shutdownQuiesce()` (and before
+   `shutdownStop()`), so the transmitter is always stopped before that
+   join; the comment on the phase says so.
+   *Tests.* tests/test_engine_shutdown.cpp (new): A a keyed transmitter and
+   a running receiver - after `shutdownQuiesce()` the radio is quiet and the
+   key open while the pipeline is STILL RUNNING; B after `shutdownStop()`
+   the pipeline has stopped; C `Engine::shutdown()` on a second engine does
+   all of it, twice. Red 7/12 against stub phases, 12/12 green. Mutants:
+   no `transmitter_.stop()` in the first phase (5 fail), the stop moved
+   after the pipeline's (3), no `pipeline_.stop()` (2, plus 1 each in
+   test_shutdown_budget and test_diag_hang), `shutdown()` skipping the
+   first phase (2). The source scans that anchored on `run()`'s own lines
+   (test_stop_ends_recordings, test_diag_hang, test_shutdown_budget) now
+   anchor on the phase calls in `run()` and check the phase bodies in
+   engine.cpp; test_shutdown_budget also pins the calls' order - the first
+   phase before the final save (mutant: moved after it, 1 fails), before
+   the pipeline's, all three inside the budget (mutant: the call deleted, 3
+   fail).
 10. **`applyWebControls` stays in the window** (the web and CAT servers are
     the window's until stage 5): it drains them and calls
     `engine_.applyControlRequest`. **HALF CLOSED, engine/stage3b-pre 2b
@@ -1594,6 +1659,16 @@ they were with the facts; and what 3b has to settle first.
     move into the engine until the web server itself does (stage 5), since
     the engine has no way to observe "the server was just disabled in the
     settings panel" on its own.
+    **CLOSED by item 1 (c) of the stage-3b-pre-end round (2026-09-29).**
+    The paragraph above is out of date: the engine does not need to observe
+    the server, the window TELLS it - `FOXAPP_OP_WEB_CONTROL_STOPPED`
+    (0x841C), in the same step `applyWebSettings` stops the server and once
+    a frame while it is not running - and the release happens inside the
+    engine's handler. The window's `transmitOpen_` poll is gone too (the
+    engine's `pumpTransmitter()` holds that standing condition). Nothing in
+    the window calls `transmitter_` any more. What remains here is only
+    what stage 5 was always going to move: `applyWebControls` draining the
+    web and CAT servers the window still owns.
 11. **Moved helpers keep namespace `cascade::gui`** (the src/engine headers
     and plugin_store_reasons, receiver_tables' shared locals), so the moved
     code reads exactly as it did; engine .cpp files say `using namespace
