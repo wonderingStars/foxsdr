@@ -388,6 +388,20 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
         out.tunerDisplayStyle != "plain") {
         out.tunerDisplayStyle = "nixie";
     }
+    // EACH BENCH METER'S OWN STYLE, on the same rule as tunerDisplayStyle just
+    // above, and for the same reason: the names are MIRRORED from
+    // gui/meter_styles_math.hpp's meterStyleFromName (core must not depend on
+    // gui) and tests/test_config.cpp holds the two lists together.
+    getString(j, "meterStyleVolume", out.meterStyleVolume);
+    if (out.meterStyleVolume != "classic" && out.meterStyleVolume != "needle" &&
+        out.meterStyleVolume != "led" && out.meterStyleVolume != "peak") {
+        out.meterStyleVolume = "classic";
+    }
+    getString(j, "meterStyleRate", out.meterStyleRate);
+    if (out.meterStyleRate != "classic" && out.meterStyleRate != "needle" &&
+        out.meterStyleRate != "led" && out.meterStyleRate != "peak") {
+        out.meterStyleRate = "classic";
+    }
     // THE INTERFACE THEME, on the same rule: one of the six foxsdr-ui/1 preset
     // names, anything else today's bench. The names are MIRRORED from
     // gui/theme.cpp's preset table (core must not depend on gui);
@@ -1001,6 +1015,8 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
     j["bandPlanSize"] = cfg.bandPlanSize;
     j["bandPlanPalette"] = cfg.bandPlanPalette;
     j["tunerDisplayStyle"] = cfg.tunerDisplayStyle;
+    j["meterStyleVolume"] = cfg.meterStyleVolume;
+    j["meterStyleRate"] = cfg.meterStyleRate;
     j["uiTheme"] = cfg.uiTheme;
     j["counterScale"] = cfg.counterScale;
     j["counterSwitches"] = cfg.counterSwitches;

@@ -152,6 +152,11 @@ AppConfig junkConfig() {
     // Not a style name the painter knows, so a load path that forgets the
     // assignment leaves this junk in place instead of the default face.
     c.tunerDisplayStyle = "bogus";
+    // Each bench meter's own style: neither a name the painter knows, so a
+    // load path that forgets either assignment leaves this junk in place
+    // instead of the default face - the tunerDisplayStyle rule, twice.
+    c.meterStyleVolume = "bogus";
+    c.meterStyleRate = "bogus";
     // The theme and the counter's own settings: a name no preset has, a scale
     // and a readings size out of range, and the switches away from their
     // default - so a load path that forgets any of them leaves junk behind.
@@ -320,6 +325,8 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     CHECK(a.bandPlanSize == b.bandPlanSize);
     CHECK(a.bandPlanPalette == b.bandPlanPalette);
     CHECK(a.tunerDisplayStyle == b.tunerDisplayStyle);
+    CHECK(a.meterStyleVolume == b.meterStyleVolume);
+    CHECK(a.meterStyleRate == b.meterStyleRate);
     CHECK(a.uiTheme == b.uiTheme);
     CHECK(a.counterScale == b.counterScale);
     CHECK(a.counterSwitches == b.counterSwitches);
@@ -636,6 +643,12 @@ int main() {
         // what came back rather than either end's fallback - and proves the
         // unknown-name guard did not "correct" a style the user actually chose.
         in.tunerDisplayStyle = "neon";
+        // Each bench meter's own style: real names, neither the default
+        // ("classic") nor junkConfig()'s ("bogus") nor each other, so the
+        // roundtrip proves the FILE is what came back and that the two
+        // fields did not get swapped or merged into one key.
+        in.meterStyleVolume = "led";
+        in.meterStyleRate = "peak";
         // A real theme that is neither the default nor junk, the counter at
         // 2x with its switches away, and a dyadic readings size (exact through
         // float -> text -> float) inside the range and off its default.
@@ -1479,6 +1492,9 @@ int main() {
         CHECK(d.bandPlanPalette == "classic");
         // The frequency counter opens on the face it has always had.
         CHECK(d.tunerDisplayStyle == "nixie");
+        // Both bench meters open on the face they have always had too.
+        CHECK(d.meterStyleVolume == "classic");
+        CHECK(d.meterStyleRate == "classic");
     }
 
     // --- bandPlanSize / bandPlanPalette: a closed three-way choice each,
@@ -1640,6 +1656,10 @@ int main() {
                      c.converters["rtlsdr|serial=1"] = {cascade::core::ConverterMode::Up, 125.0e6,
                                                         false};
                  }},
+                // Each bench meter's own style (2026-09-29): picked by
+                // right-clicking the meter, which saves nothing itself.
+                {"meterStyleVolume", [](AppConfig& c) { c.meterStyleVolume = "led"; }},
+                {"meterStyleRate", [](AppConfig& c) { c.meterStyleRate = "peak"; }},
             };
             for (const Change& ch : changes) {
                 AppConfig other = base;
@@ -1669,6 +1689,80 @@ int main() {
                     CHECK(!cascade::gui::configsEqual(*o, withConv));
                 }
             }
+        }
+    }
+
+    // --- each bench meter's own style (an Italian user on 0.99.42: "is it
+    // possible to customise the VU meter, choosing between 3 or 4 different
+    // VU meters?") -------------------------------------------------------------
+    //
+    // Four faces, stored by name, ONE FIELD PER METER: the DEFAULT is the
+    // arc-and-needle face every meter has always drawn, so nobody's deck
+    // changes under them on upgrade, and the SAMPLE RATE meter's choice can
+    // never leak into the VOLUME meter's or back.
+    {
+        const std::string path = p("meter_style.json");
+        AppConfig out;
+        std::string err;
+
+        // ABSENT: an upgraded install that has never heard of either key
+        // keeps the face both meters had.
+        CHECK(writeText(path, "{}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.meterStyleVolume == "classic");
+        CHECK(out.meterStyleRate == "classic");
+
+        // EACH REAL NAME SURVIVES THE FILE, for EACH field independently -
+        // the roundtrip only ever carries one combination, and a loader that
+        // mixed the two keys up (or read one for the other) would pass it.
+        for (const char* name : {"classic", "needle", "led", "peak"}) {
+            CHECK(writeText(path, std::string("{\"meterStyleVolume\":\"") + name + "\"}\n"));
+            CHECK(ConfigStore::load(path, out, err));
+            CHECK(out.meterStyleVolume == name);
+            CHECK(out.meterStyleRate == "classic");  // untouched key: default
+            // And the painter agrees the stored name names a style: a value
+            // the file accepts but the painter reads as the default would be
+            // a setting that saves and then does nothing.
+            CHECK(std::string(cascade::gui::meterStyleName(
+                      cascade::gui::meterStyleFromName(out.meterStyleVolume))) == name);
+        }
+        for (const char* name : {"classic", "needle", "led", "peak"}) {
+            CHECK(writeText(path, std::string("{\"meterStyleRate\":\"") + name + "\"}\n"));
+            CHECK(ConfigStore::load(path, out, err));
+            CHECK(out.meterStyleRate == name);
+            CHECK(out.meterStyleVolume == "classic");  // untouched key: default
+            CHECK(std::string(cascade::gui::meterStyleName(
+                      cascade::gui::meterStyleFromName(out.meterStyleRate))) == name);
+        }
+
+        // AN UNKNOWN NAME IS THE DEFAULT, NOT A REFUSAL AND NOT A GAP - the
+        // tunerDisplayStyle rule, for both fields. Wrong TYPE too - getString
+        // leaves the default for a non-string, and the clamp must not turn
+        // that into something else.
+        for (const char* bad : {"\"\"", "\"Needle\"", "\"LED\"", "\"peak \"", "7", "null",
+                                "[\"peak\"]"}) {
+            CHECK(writeText(path, std::string("{\"meterStyleVolume\":") + bad +
+                                      ",\"meterStyleRate\":" + bad + "}\n"));
+            CHECK(ConfigStore::load(path, out, err));
+            CHECK(out.meterStyleVolume == "classic");
+            CHECK(out.meterStyleRate == "classic");
+        }
+
+        // BOTH FIELDS ARE INDEPENDENTLY SAVED. A save that wrote one key
+        // twice, or the wrong field into each, would be indistinguishable
+        // from a correct one if the two were ever given the SAME value -
+        // this round trip gives them different real names precisely so a mix-
+        // up fails here rather than passing by coincidence.
+        {
+            AppConfig in;
+            in.meterStyleVolume = "peak";
+            in.meterStyleRate = "led";
+            std::string werr;
+            CHECK(ConfigStore::save(path, in, werr));
+            AppConfig back;
+            CHECK(ConfigStore::load(path, back, err));
+            CHECK(back.meterStyleVolume == "peak");
+            CHECK(back.meterStyleRate == "led");
         }
     }
 

@@ -324,6 +324,20 @@ struct AppConfig {
     // where the cells are painted.
     std::string tunerDisplayStyle = "nixie";
 
+    // WHICH FACE EACH BENCH METER WEARS, picked by right-clicking the meter
+    // itself (an Italian user on 0.99.42: "is it possible to customise the
+    // VU meter, choosing between 3 or 4 different VU meters?"): "classic"
+    // (the arc-and-needle face drawn since 0.87.0), "needle" (a moving-coil
+    // VU with a filled red zone), "led" (a segmented bar) or "peak" (a
+    // PPM-style bar). The two meters - SAMPLE RATE and VOLUME - keep
+    // separate settings, on the tunerDisplayStyle rule above: DEFAULTS TO
+    // THE EXISTING FACE, and an unknown value loads as that default rather
+    // than as nothing, because the file is user-editable and a typo must
+    // leave the deck looking like itself. The vocabulary lives with the
+    // painter, in gui/meter_styles_math.hpp (meterStyleFromName).
+    std::string meterStyleVolume = "classic";
+    std::string meterStyleRate = "classic";
+
     // --- the interface theme (2026-09-25) ------------------------------------
     // WHICH OF THE SIX LOOKS the application wears: "today" (the bench as it
     // has been), "classic-xl", "night", "glass", "daylight" or "field" - the
