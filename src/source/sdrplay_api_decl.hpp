@@ -94,8 +94,12 @@ inline bool versionAtLeast(float have, float want) { return have > want - kVersi
 inline constexpr unsigned kMaxDevices = 16;
 inline constexpr std::size_t kMaxSerNoLen = 64;
 
-// Hardware ids, sdrplay_api.h. RSP1B and RSPdx-R2 appear only at 3.15; the
-// values are stable, and a device we do not know is shown by its number.
+// Hardware ids, sdrplay_api.h - SDRplay API Specification 3.15, section 2.1.2
+// (p6): SDRPLAY_RSP1B_ID (6) arrived with 3.14 and SDRPLAY_RSPdxR2_ID (7) with
+// 3.15. The values are stable, and a device we do not know is shown by its
+// number. The same specification (p4) says "for the RSPdxR2, use RSPdx update
+// and structure parameters" and "for the RSP1B, use RSP1A update and structure
+// parameters", which is exactly how the driver pairs them.
 inline constexpr unsigned char kRsp1 = 1;
 inline constexpr unsigned char kRsp2 = 2;
 inline constexpr unsigned char kRspDuo = 3;

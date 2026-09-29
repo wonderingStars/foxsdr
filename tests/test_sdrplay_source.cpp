@@ -1980,6 +1980,99 @@ void testBiasTeeAndNotchesPerModel() {
     }
 }
 
+// --- 11b. the RSPdx-R2, from the vendor's own specification ---------------
+//
+// THE 0.99.46 RSPdx-R2 REPORT (API 3.15, Windows 11): every control the user
+// touched - frequency, antenna, LNA - was abandoned at kControlWait. The first
+// thing to rule out was that the R2 falls into an unknown-model path and is
+// sent a reason or a parameter block the service never answers. Every number
+// below is taken from SDRplay API Specification 3.15 (Revision 3.15, 10 May
+// 2024, "Added RSPdxR2 Support"), not from memory or from another project:
+//
+//   p6   #define SDRPLAY_RSPdxR2_ID (7)
+//   p4   "Note: for the RSPdxR2, use RSPdx update and structure parameters."
+//   p7   sdrplay_api_Update_Tuner_Gr 0x00008000, _Tuner_Frf 0x00020000;
+//        sdrplay_api_Update_RspDx_HdrEnable 0x01, _BiasTControl 0x02,
+//        _AntennaControl 0x04, _RfNotchControl 0x08, _RfDabNotchControl 0x10,
+//        _HdrBw 0x20 (all in ReasonForUpdateExtension1T)
+//   p17  RspDx_ANTENNA_A/B/C = 0/1/2; RSPDX_NUM_LNA_STATES 28
+//   p27  Update_Tuner_Gr covers "gain->gRdB or gain->LNAstate"
+//   p28  the RspDx_* reasons name deviceParams->devParams->rspDxParams.*
+//
+// So the R2 must be driven exactly as an RSPdx: the switches through the
+// extension word with the first reason None, and the LNA and the frequency
+// through the ordinary tuner reasons with the extension word None.
+void testTheRspDxR2IsDrivenWithTheRspDxReasonsAndBlock() {
+    CHECK(abi::kRspDxR2 == 7);  // SDRPLAY_RSPdxR2_ID, spec p6
+    CHECK(abi::kRspDx == 4);    // SDRPLAY_RSPdx_ID, spec p6
+    CHECK(abi::Update_RspDx_HdrEnable == 0x00000001u);
+    CHECK(abi::Update_RspDx_BiasTControl == 0x00000002u);
+    CHECK(abi::Update_RspDx_AntennaControl == 0x00000004u);
+    CHECK(abi::Update_RspDx_RfNotchControl == 0x00000008u);
+    CHECK(abi::Update_RspDx_RfDabNotchControl == 0x00000010u);
+    CHECK(abi::Update_RspDx_HdrBw == 0x00000020u);
+    CHECK(abi::Update_Tuner_Gr == 0x00008000u);
+    CHECK(abi::Update_Tuner_Frf == 0x00020000u);
+    CHECK(cascade::source::sdrPlayLnaStateCount(abi::kRspDxR2) == 28);
+
+    FakeSdrPlayApi fake;
+    fake.addDevice("2406000R2X", abi::kRspDxR2);
+    SdrPlaySource src;
+    CHECK(openOn(src, fake));
+    CHECK(src.hardwareVersion() == abi::kRspDxR2);
+    CHECK(std::string(src.name()).find("RSPdx-R2") != std::string::npos);
+    CHECK((src.antennas() == std::vector<std::string>{"Antenna A", "Antenna B", "Antenna C"}));
+    CHECK(src.biasTeeSupported());
+    CHECK(src.rfNotchSupported());
+    CHECK(src.dabNotchSupported());
+    CHECK(src.hdrModeSupported());
+    CHECK(src.start());
+
+    // The three controls the report names, in its order.
+    fake.calls.clear();
+    CHECK(src.setCenterFrequencyHz(145500000.0));
+    CHECK(fake.chA.tunerParams.rfFreq.rfHz == 145500000.0);
+    CHECK((fake.calls == std::vector<std::string>{
+                             FakeSdrPlayApi::updateCall(abi::Update_Tuner_Frf, abi::Update_Ext1_None)}));
+
+    fake.calls.clear();
+    CHECK(src.setAntenna("Antenna B"));
+    CHECK(fake.devParams.rspDxParams.antennaSel == abi::RspDx_ANTENNA_B);
+    CHECK((fake.calls == std::vector<std::string>{FakeSdrPlayApi::updateCall(
+                             abi::Update_None, abi::Update_RspDx_AntennaControl)}));
+    CHECK(src.antenna() == "Antenna B");
+
+    fake.calls.clear();
+    CHECK(src.setGainDb("LNA", 27.0));  // the top of RSPDX_NUM_LNA_STATES
+    CHECK(fake.chA.tunerParams.gain.LNAstate == 27);
+    CHECK((fake.calls == std::vector<std::string>{
+                             FakeSdrPlayApi::updateCall(abi::Update_Tuner_Gr, abi::Update_Ext1_None)}));
+
+    // And every RSPdx switch, through the extension word only.
+    fake.calls.clear();
+    CHECK(src.setBiasT(true));
+    CHECK(fake.devParams.rspDxParams.biasTEnable == 1);
+    CHECK(src.setRfNotch(true));
+    CHECK(fake.devParams.rspDxParams.rfNotchEnable == 1);
+    CHECK(src.setDabNotch(true));
+    CHECK(fake.devParams.rspDxParams.rfDabNotchEnable == 1);
+    CHECK(src.setHdrMode(true));
+    CHECK(fake.devParams.rspDxParams.hdrEnable == 1);
+    CHECK((fake.calls ==
+           std::vector<std::string>{
+               FakeSdrPlayApi::updateCall(abi::Update_None, abi::Update_RspDx_BiasTControl),
+               FakeSdrPlayApi::updateCall(abi::Update_None, abi::Update_RspDx_RfNotchControl),
+               FakeSdrPlayApi::updateCall(abi::Update_None, abi::Update_RspDx_RfDabNotchControl),
+               FakeSdrPlayApi::updateCall(abi::Update_None, abi::Update_RspDx_HdrEnable),
+               FakeSdrPlayApi::updateCall(abi::Update_None, abi::Update_RspDx_HdrBw)}));
+    // None of the other models' fields was touched on the way.
+    CHECK(fake.chA.rsp1aTunerParams.biasTEnable == 0);
+    CHECK(fake.chA.rsp2TunerParams.biasTEnable == 0);
+    CHECK(fake.chA.rspDuoTunerParams.biasTEnable == 0);
+    CHECK(fake.devParams.rsp1aParams.rfNotchEnable == 0);
+    src.stop();
+}
+
 // --- 12. teardown ---------------------------------------------------------
 
 void testStopAndCloseAreBoundedAndIdempotent() {
@@ -2995,6 +3088,7 @@ int main() {
     testStaleOverloadAckDoesNotSurviveRestart();
     testOverloadNamingNeitherTunerAcksOnLinkTuner();
     testBiasTeeAndNotchesPerModel();
+    testTheRspDxR2IsDrivenWithTheRspDxReasonsAndBlock();
     testStopAndCloseAreBoundedAndIdempotent();
     testCloseWithoutOpenIsSafe();
     testFailuresOnTheOpeningPathUnwind();
