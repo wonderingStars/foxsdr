@@ -1873,3 +1873,28 @@ moment another thread writes them.
    (3 checks), no heartbeat (1), no key-up before the join (2), no last
    `stop()` (1), `shutdownQuiesce` not stopping the thread (1), `teardown`
    not stopping it (a crash).
+4. **Where 3b stops, and why (2026-09-29).** The engine can run on its own
+   control thread (step 3) and a headless front end can drive it through
+   the thread-safe surface. The WINDOW still pumps it on the GUI thread
+   (3a), for two reasons that are not engineering but decisions:
+   - **Same-frame application.** Today a key press is dispatched and
+     applied in the frame it is pressed (`dispatchKeyBindings`, then the
+     second drain), a drag or a wheel is applied at once (`applyCommand`,
+     33 call sites), and everything below it draws the new state. With the
+     pump on the control thread every control lands one pass later - the
+     one-frame lag engine-stage2.md section 6 declined to introduce
+     piecemeal and deferred to stage 4 ("the question is settled there").
+     Making it identical would need the GUI to wait for a control pass
+     inside its frame (lock-step), which buys nothing a table does not.
+   - **The window's reads.** It still reads 163 engine fields (790 reads)
+     and calls 82 engine methods (325 calls) directly - `pipeline_` (93),
+     `pluginUi_` (40, the plugin windows, which run plugin code), the patch
+     runtime, the recorders, the device and gain lists. Every one of them
+     races a control thread. The table (stage 4) is what replaces them, so
+     moving the window's pump belongs WITH the window's move onto the table,
+     not before it: doing it first would need a lock-step engine lock
+     around the whole frame as a throw-away step.
+   Recommended: stage 3's remainder (the window's pump on the control
+   thread, the per-frame dead-man as a per-session keep-alive) is done as
+   part of stage 4's window port. docs/engine-stage4.md has the design and
+   what it needs first.
