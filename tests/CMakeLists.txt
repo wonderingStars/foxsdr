@@ -78,6 +78,13 @@ foreach(src ${CASCADE_TESTS})
     set_tests_properties(${name} PROPERTIES TIMEOUT 120)
 endforeach()
 
+# test_tester_link spawns the real cascade.exe with a foxsdr: link and
+# expects it to be the ONLY copy running: with any other cascade.exe up (an
+# app_* smoke test under ctest -j), the link is handed to that copy through
+# the single-instance path and the spawned process exits without rendering,
+# which reads as a failure of the link handling. Run it alone.
+set_tests_properties(test_tester_link PROPERTIES RUN_SERIAL TRUE)
+
 # The app doubles as a smoke test. The PASS_REGULAR_EXPRESSION makes the
 # exact-count half of the --frames contract observable: rendering N+1 frames
 # (or none) fails even though the exit code would still be 0.
