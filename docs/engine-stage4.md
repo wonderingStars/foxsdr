@@ -122,3 +122,115 @@ pass period sets the added latency), GUI-thread stalls (the window no longer
 runs engine waits in its frame - should improve), CPU at a fixed rate (one
 control thread's passes added, the window's engine work removed), memory
 (per-session rings and result queues). Nothing here touches the sample path.
+
+## 6. Record: what was built, in order
+
+The owner's decisions (2026-09-29): 1 ADOPT API 0.2's key model; 2 ACCEPT
+the one-pass lag, keep the pass short and say what it is; 3 API.md, the
+reference engine and its tests are the specification, and its conformance
+suite must pass against this engine; 4 EXTEND the draft for what the table
+has no read for, in a new vendored header version (section 3, item 3).
+
+### 6.1 Closed first (patch 1)
+
+- A page close ends every LATCH press made before it (the Opus review of
+  47e991e: a press, a close and a reopen inside one pump latched on the
+  reopen) - tests/test_transmit_key_race.cpp F, red 3/3 then green. Since
+  step 2 the slot it was in is gone; F is held again on the session path.
+- hang_watchdog (Linux): one signalled capture at a time, each tagged, so
+  two watchdogs capturing at once never read each other's stacks -
+  tests/test_hang_capture_concurrent.cpp, red 12,319 of 12,349 wrong.
+- Engine::stopControlThread waits at most kControlJoinWait (3 s) for the
+  control thread's last pass before its join, and says so in the diagnostics
+  when it had to.
+
+### 6.2 Step 1: the engine exports the table
+
+engine/fox_engine_api.{hpp,cpp} (the host: sessions, grants, tickets, BUSY,
+the safer-command merge, results after the publish in ticket order, events,
+logins), engine/engine_api_lists.cpp (the list block, rebuilt only when its
+fingerprint moves). `beginPass()` runs in Engine::pumpFrameBegin after the
+local drain; `endPass()` in pumpPublish after the snapshot. The C table is
+`foxsdr_engine_query` / `engineApi()`; the host's own Engine hands out
+`apiHandle()` for the window's session.
+
+The reference's suites, ported (tests/test_engine_api_conformance.cpp,
+test_engine_api_transmit.cpp, test_engine_api_merge.cpp; the reference's
+comments kept). Every difference is marked PORT in the file; they are:
+
+| where | reference | this engine, and why |
+|---|---|---|
+| test hooks | `mock.*` settings | `test.*`, only with `testHooks=1` in the options - never set by the product |
+| DECODER_START of one not installed | OK | NOT_FOUND: the real engine hosts decoders; nothing changed, so a refusal |
+| SCAN_DEVICES, SELECT_SOURCE | synchronous | on a worker (an open has taken 57 s in the field): OK means started; `listSeq` / DEVICE_OPEN say when it landed |
+| SET_SAMPLE_RATE off the list | OUT_OF_RANGE | OK + CLAMPED with the rate that landed: the radio coerces, as real drivers do |
+| audio stream, settings store, decoders | served | capability bits clear, calls UNSUPPORTED - not served through the table yet |
+| the merge sweep | a fresh engine per case | one engine per worker, reset between cases (`test.resetKey`); 5450 cases by default (all of length <= 3, 1000 random of 4), `FOXSDR_MERGE_FULL=1` runs all 70450 - run once: 0 differ, 584 s |
+
+Red first: 72 conformance failures before the host existed; 14 session
+mutants each red.
+
+One regression of this step, found by the stage boundary's full run and
+fixed on its own (4e0679a): SET_GAIN's new NOT_FOUND for an unlisted stage
+refused an Airspy's stage of ANOTHER gain mode, which is how the web remote
+switches it from Linearity to Free (tests/test_airspy_app, 10 checks red).
+
+### 6.3 Step 2: THE KEY (decision 1)
+
+- core/tx_key_rules.{hpp,cpp}: the rules on their own, clock injected
+  (tests/test_tx_key_rules.cpp, 120 checks; a stub red 65/120; 20 per-rule
+  mutants, each red).
+- The host applies TX_PTT / TX_LATCH / TX_REMOTE_ARM through the rules and
+  drives core::Transmitter from them once a pass (ApiHostImpl::txPass): the
+  latch and a local PTT's hold as levels, a remote hold bought when applied.
+  The Transmitter's TX thread stays the backstop underneath, with its own two
+  stamps: the FRONT END is now the key holder's heartbeat (not a frame's
+  request), the CONTROL side is the pass.
+- The window is a LOCAL session: its heartbeat opens each frame, the
+  Transmit page is drawn from its read_state, and gui::txKeyCommands turns
+  the page into commands (PTT re-asserted while held, PTT 0 once; the latch
+  edge-triggered, LATCH 0 + LATCH 1 in one batch; a page that goes away lets
+  go of its PTT, its latch or a press not yet landed, and its consent).
+- The engine's page-key slot (engine/tx_page_key.hpp, submitTransmitPageKey,
+  pumpTransmitter) is deleted.
+- The web remote is an engine-internal REMOTE session (principal "web"): its
+  keep-alive is the page's status poll (2 s), its PTT a 2 s hold, and it keys
+  only with a LOCAL session's consent. A server that is not running ends its
+  key in the same step.
+- core/transmitter.hpp's header rewritten to the rules.
+
+What the operator sees change:
+
+- **"Allow remote transmit"**, a new switch on the Transmit page (all 33
+  catalogues). The web remote's PTT does nothing without it; unticking it,
+  closing the page or the window stopping releases a remote key at once.
+  The web page's "not available" text says so.
+- The Transmit page's open flag no longer gates any key by itself.
+- After ANY latch ends, no latch closes again for 1 s (a press inside that
+  second is refused and the key shows why).
+- A key press lands one engine pass after the frame that made it (decision
+  2): while the engine is pumped from the window's frame (until step 4) that
+  is the next frame, ~16.7 ms at 60 Hz; on the control thread (16 ms period,
+  woken at once by a submit) it is at most one pass.
+
+Tests held again on the new path: test_transmit_dead_man (8 scenarios, end
+to end through a real Engine and a ledger radio), test_transmit_key_race
+(A-F), test_remote_key_release (consent, server stopped, page closed),
+test_transmit_page (the command wiring), test_engine_control_thread,
+test_engine_shutdown, test_apply_command's TX coverage, and the reference's
+safety suite (test_engine_api_transmit, 658 checks, about 95 s at the real
+timers). The integration was proven by mutants of txPass, the heartbeat
+stamp, the engine's key ends (RUN 0, TX_OPEN, TX_CLOSE, fault), the web
+server's release and txKeyCommands' close path - each red. Two survived the
+first round and each got the scenario it lacked: the heartbeat's stamp on
+the TX thread (dead-man 8: a latch held 2.5 s with everything alive must not
+drop), and the rules being told when the web server stops (remote-key B now
+reads the rules in the same step, not after a pass). The two ported suites
+run alone (RUN_SERIAL): on a 4-core runner beside each other a probe's
+heartbeat starved past its 1 s keep-alive and the rules rightly ended the
+key.
+
+What could move a measured number: one pass of `txPass` (the rules' tick, a
+few stores; it allocates only when a TX_UNKEYED event is raised), and the
+window's `read_state` (one sequence-locked copy of FoxReceiverState a
+frame). Nothing on the sample path changed.
