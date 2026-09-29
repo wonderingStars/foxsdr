@@ -561,6 +561,53 @@ inline WireEnds wireEnds(const Graph& g, const cascade::core::patch::Wire& w) {
     return WireEnds{outputPortPos(*a, w.fromPort), inputPortPos(*b, w.toPort), true};
 }
 
+// --- the patch page's layout (0.99.49 beta feedback) --------------------------
+//
+// THE INFORMATION PANEL TOOK A FULL-HEIGHT COLUMN FROM THE CANVAS. On a small
+// laptop the patch page's right-hand inspector - "This patch can run", "Nothing
+// selected", the help text - was a 236 px column the whole height of the page,
+// beside a canvas that was already the narrowest thing on the screen, while the
+// top right of the page, beside the parts bin, sat empty. So:
+//
+//   - the INFORMATION PANE moves up there: the top band's right-hand part,
+//     beside the transport, parts and decoder rows, at a fixed height with its
+//     own scroll (patchInfoPaneWidth);
+//   - the CANVAS takes the whole width below it whenever nothing is selected;
+//   - a selected node's EDITING CONTROLS do not fit a band three rows tall, so
+//     they stay in a column at the canvas's right - the inspector drawer -
+//     shown only while a node is selected, and foldable to a strip
+//     (patchInspectorWidth), so they are always one press away.
+inline constexpr float kPatchInfoShare = 0.42f;   // of the page's width
+inline constexpr float kPatchInfoMinW = 300.0f;   // logical px, times S
+inline constexpr float kPatchInfoMaxW = 560.0f;
+inline constexpr float kPatchInfoMinH = 96.0f;
+inline constexpr float kPatchInspectorW = 236.0f;       // the old column's width
+inline constexpr float kPatchInspectorFoldedW = 30.0f;  // the strip it folds to
+inline constexpr float kPatchPaneGap = 8.0f;
+inline constexpr float kPatchCanvasMinW = 160.0f;
+
+// The information pane's width on a page `pageW` wide at interface size `s`:
+// a share of the page, held between its floor and ceiling, and never more than
+// half the page, so the rows beside it keep the other half.
+inline float patchInfoPaneWidth(float pageW, float s) {
+    if (pageW <= 0.0f) { return 0.0f; }
+    const float want = std::clamp(pageW * kPatchInfoShare, kPatchInfoMinW * s, kPatchInfoMaxW * s);
+    return std::min(want, pageW * 0.5f);
+}
+
+// The inspector drawer's width: none while nothing is selected, the strip
+// while folded, the full column otherwise.
+inline float patchInspectorWidth(bool nodeSelected, bool folded, float s) {
+    if (!nodeSelected) { return 0.0f; }
+    return (folded ? kPatchInspectorFoldedW : kPatchInspectorW) * s;
+}
+
+// What the canvas keeps of `pageW` beside a drawer `inspectorW` wide.
+inline float patchCanvasWidth(float pageW, float inspectorW) {
+    const float beside = inspectorW > 0.0f ? inspectorW + kPatchPaneGap : 0.0f;
+    return std::max(kPatchCanvasMinW, pageW - beside);
+}
+
 // --- what a press landed on (0.99.49; see "moving round the canvas") -------
 
 // WHAT A LEFT PRESS LANDED ON, in the order the canvas answers it: a port

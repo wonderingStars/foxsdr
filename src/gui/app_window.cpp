@@ -13409,6 +13409,122 @@ void AppWindow::applyInputScript(long frame) {
     }
 }
 
+void AppWindow::drawPatchInfoPane(float x, float y, float w, float h) {
+    // THE PATCH PAGE'S INFORMATION PANE (0.99.49 beta feedback): what the
+    // patch as a whole is doing, the selected node's problems, and the help -
+    // everything the old full-height column said, in the top band's right-hand
+    // part at a fixed height with its own scroll, so the canvas below has the
+    // page's whole width.
+    ImGui::SetCursorScreenPos(ImVec2(x, y));
+    cascade::gui::census::note("patch:info");
+    cascade::gui::census::rect("patch:info", x, y, x + w, y + h);
+    if (ImGui::BeginChild("##patchinfo", ImVec2(w, h), ImGuiChildFlags_Borders)) {
+        // WHAT THE PATCH AS A WHOLE IS DOING, first, because it is the
+        // question someone opening this page is actually asking. Phosphor for
+        // working, rust for not - and never amber, which belongs to numbers.
+        if (patchPlan_.runnable) {
+            ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::good());
+            // Wrapped, not TextUnformatted (an Opus review's M4): a
+            // translation a third longer than the English - or this same
+            // English at the interface size's larger fonts - must go onto a
+            // second line rather than off the pane's edge.
+            ImGui::TextWrapped("%s", tr("This patch can run."));
+        } else {
+            ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::bad());
+            ImGui::TextWrapped("%s", tr("This patch cannot run yet."));
+        }
+        ImGui::PopStyleColor();
+        // The selected channel's own level, spelled out. The node face has
+        // room for a number; this has room to say what it is a number OF.
+        for (const auto& r : patchReadings_) {
+            if (r.node != patchUi_.selected) { continue; }
+            ImGui::PushStyleColor(ImGuiCol_Text,
+                                  cascade::gui::theme::vec(cascade::gui::theme::kAmber));
+            ImGui::Text(tr("%.1f dB on this channel"), static_cast<double>(r.db));
+            ImGui::PopStyleColor();
+            break;
+        }
+        if (!patchPlan_.channels.empty()) {
+            ImGui::PushStyleColor(ImGuiCol_Text,
+                                  cascade::gui::theme::vec(cascade::gui::theme::kInkMuted));
+            ImGui::Text(tr("%zu channel(s), decimate by %u"), patchPlan_.channels.size(),
+                        patchPlan_.channels[0].decimation);
+            ImGui::PopStyleColor();
+        }
+        ImGui::Separator();
+        const cascade::core::patch::Node* sel = patchGraph_.find(patchUi_.selected);
+        ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kInkMuted));
+        if (sel == nullptr) {
+            ImGui::TextWrapped("%s", tr("Nothing selected."));
+            ImGui::Spacing();
+            ImGui::TextWrapped("%s", tr(
+                "Click a node to set what it does. Drag from one port to "
+                "another to wire them; drag a node by its title bar to move "
+                "it. Delete removes whatever is selected."));
+            ImGui::Spacing();
+            // HOW TO MOVE ROUND IT (0.99.49): the wheel pans now, and a
+            // touchpad user has no middle button - say what does work.
+            ImGui::TextWrapped("%s", tr(
+                "Drag empty canvas or scroll to move round the patch. Ctrl+scroll or "
+                "the + and - keys zoom; Fit shows every node."));
+        } else {
+            // The node, by kind and name; its settings are in the drawer.
+            ImGui::TextWrapped("%s  %s", tr(cascade::gui::patch::kindCaption(sel->kind)),
+                               sel->name.c_str());
+            if (patchInspectorFolded_) {
+                ImGui::TextWrapped("%s", tr("Its settings are folded away at the right of the "
+                                            "canvas - press << to open them."));
+            }
+        }
+        ImGui::PopStyleColor();
+        if (sel != nullptr) {
+            // THE NODE'S PROBLEMS, here where they are read rather than under
+            // its controls: an advisory is worth saying and not worth alarming
+            // about, so it is muted rather than rust.
+            for (const cascade::core::patch::Problem pr :
+                 cascade::core::patch::problemsFor(patchPlan_, sel->id)) {
+                ImGui::PushStyleColor(ImGuiCol_Text,
+                                      cascade::core::patch::isAdvisory(pr)
+                                          ? cascade::gui::theme::vec(cascade::gui::theme::kInkMuted)
+                                          : cascade::gui::theme::bad());
+                ImGui::TextWrapped("%s", tr(cascade::core::patch::problemText(pr)));
+                ImGui::PopStyleColor();
+            }
+        }
+    }
+    ImGui::EndChild();
+}
+
+void AppWindow::drawPatchInspectorFoldKey() {
+    // The bench's lettered key, at the drawer's top right: ">>" folds the
+    // drawer to a strip and gives the canvas its width, "<<" on the strip
+    // opens it again. The canvas keeps its selection either way.
+    const float keyW = cascade::gui::uiscale::px(24.0f);
+    const float keyH = cascade::gui::uiscale::px(20.0f);
+    const ImVec2 cur = ImGui::GetCursorScreenPos();
+    const float right = ImGui::GetWindowPos().x + ImGui::GetWindowWidth() -
+                        ImGui::GetStyle().WindowPadding.x;
+    // Centred on the folded strip; at the right of the open drawer.
+    const ImVec2 tl(patchInspectorFolded_
+                        ? ImGui::GetWindowPos().x + (ImGui::GetWindowWidth() - keyW) * 0.5f
+                        : std::max(cur.x, right - keyW),
+                    cur.y);
+    const ImVec2 br(tl.x + keyW, tl.y + keyH);
+    const bool pressed = benchWordKey(ImGui::GetWindowDrawList(), tl, br,
+                                      patchInspectorFolded_ ? "<<" : ">>", true, "patchinspfold");
+    cascade::gui::census::rect("patchinspfold", tl.x, tl.y, br.x, br.y);
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("%s", patchInspectorFolded_
+                                    ? tr("Open the inspector: the selected node's settings")
+                                    : tr("Fold the inspector away to give the canvas its width"));
+    }
+    if (pressed) { patchInspectorFolded_ = !patchInspectorFolded_; }
+    // An item under the key, so the cursor moved past it is one ImGui has
+    // been told about (it refuses a cursor that extends a window by itself).
+    ImGui::SetCursorScreenPos(ImVec2(cur.x, br.y));
+    ImGui::Dummy(ImVec2(0.0f, 0.0f));
+}
+
 void AppWindow::drawPatchViewKeys(float originX, float originY, float width, float height) {
     // Three lettered keys in the canvas's bottom-right corner, the bench's own
     // benchWordKey: zoom in, zoom out (about the canvas centre), and Fit -
@@ -14357,6 +14473,18 @@ void AppWindow::drawPatchView() {
         // the nodes, before anything is compiled or drawn this frame.
         patchReconcile();
 
+        // --- THE TOP BAND (0.99.49 beta feedback) ------------------------------
+        // The transport, the parts bin and the decoder row on the left; the
+        // INFORMATION PANE beside them at the right, as tall as they are and
+        // scrolling on its own, where a full-height column used to take the
+        // canvas's width (gui::patch::patchInfoPaneWidth). The rows wrap short
+        // of it rather than run under it.
+        const ImVec2 bandTL = ImGui::GetCursorScreenPos();
+        const float pageW = ImGui::GetContentRegionAvail().x;
+        const float uiS = cascade::gui::uiscale::factor();
+        const float infoW = cascade::gui::patch::patchInfoPaneWidth(pageW, uiS);
+        patchBandRight_ = bandTL.x + pageW - infoW - cascade::gui::patch::kPatchPaneGap;
+
         drawPatchTransport();
 
         // --- the parts bin ----------------------------------------------------
@@ -14397,7 +14525,16 @@ void AppWindow::drawPatchView() {
         int pressedPart = -1;
         int pressedDecoder = -1;
         for (int i = 0; i < IM_ARRAYSIZE(kParts); ++i) {
-            if (i != 0) { ImGui::SameLine(); }
+            // WRAPPED SHORT OF THE INFORMATION PANE, like the decoder row
+            // below: a translation or a larger interface size makes the row
+            // longer than the room beside the pane.
+            const float partW = ImGui::CalcTextSize(trId(kParts[i].label), nullptr, true).x +
+                                ImGui::GetStyle().FramePadding.x * 2.0f;
+            if (i != 0 && !cascade::gui::patch::keyWraps(ImGui::GetItemRectMax().x,
+                                                          ImGui::GetStyle().ItemSpacing.x, partW,
+                                                          patchBandRight_)) {
+                ImGui::SameLine();
+            }
             // AT MOST FIVE RADIOS: the key goes grey at five and says why.
             const bool full = kParts[i].kind == cascade::core::patch::NodeKind::Radio &&
                               patchGraph_.count(cascade::core::patch::NodeKind::Radio) >=
@@ -14428,14 +14565,17 @@ void AppWindow::drawPatchView() {
                                   cascade::gui::theme::vec(cascade::gui::theme::kInkMuted));
             // Where to get one, named by the rail bank it lives in - checked
             // against drawDecodeBank(), which draws the plugin store first.
-            ImGui::TextUnformatted(
+            // Wrapped short of the information pane beside the band.
+            ImGui::PushTextWrapPos(patchBandRight_ - ImGui::GetWindowPos().x);
+            ImGui::TextWrapped("%s",
                 tr("- none installed. Add decoder plugins from the plugin store in DECODE."));
+            ImGui::PopTextWrapPos();
             ImGui::PopStyleColor();
         }
         // THE ROW WRAPS. It grows by a key for every plugin installed, and on
         // 0.99.15 every key past the page's right edge was simply not there to
         // press.
-        const float rowRight = ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x;
+        const float rowRight = patchBandRight_;
         const float keySpacing = ImGui::GetStyle().ItemSpacing.x;
         for (std::size_t i = 0; i < patchCatalogue_.size(); ++i) {
             const cascade::core::patch::DecoderInfo& info = patchCatalogue_[i];
@@ -14498,21 +14638,28 @@ void AppWindow::drawPatchView() {
             }
         }
 
+        // THE BAND IS AS TALL AS ITS ROWS, and the pane beside them exactly
+        // that tall - never under its floor, so a page with no decoder row
+        // still has a pane that reads as one.
+        const float rowsBottom = ImGui::GetCursorScreenPos().y - ImGui::GetStyle().ItemSpacing.y;
+        const float infoH = std::max(rowsBottom - bandTL.y,
+                                     cascade::gui::uiscale::px(cascade::gui::patch::kPatchInfoMinH));
+        const ImVec2 infoTL(bandTL.x + pageW - infoW, bandTL.y);
+        ImGui::SetCursorScreenPos(ImVec2(bandTL.x, bandTL.y + infoH + ImGui::GetStyle().ItemSpacing.y));
         ImGui::Separator();
 
         const ImVec2 avail = ImGui::GetContentRegionAvail();
         const ImVec2 origin = ImGui::GetCursorScreenPos();
 
-        // The canvas takes what is left after the inspector, which is a fixed
-        // width: a panel that grew with the WINDOW would put the frequency box
-        // somewhere different on every machine. Scaled by the interface size
-        // (an Opus review's M4) so its own heading and prose grow with
-        // everything else instead of being the one column in the patch view
-        // that stays pinned at 100% while its text does not - "This patch
-        // can[not] run" ran off the edge of the unscaled 236 px at S=2.
-        const float kInspectorW = cascade::gui::uiscale::px(236.0f);
-        constexpr float kGap = 8.0f;
-        const float canvasW = std::max(160.0f, avail.x - kInspectorW - kGap);
+        // THE CANVAS HAS THE WHOLE WIDTH unless a node is selected; then the
+        // inspector drawer holds that node's controls at its right, the width
+        // the old column was (a panel that grew with the WINDOW would put the
+        // frequency box somewhere different on every machine), scaled by the
+        // interface size (an Opus review's M4), and foldable to a strip.
+        const float inspectorW = cascade::gui::patch::patchInspectorWidth(
+            patchGraph_.find(patchUi_.selected) != nullptr, patchInspectorFolded_, uiS);
+        constexpr float kGap = cascade::gui::patch::kPatchPaneGap;
+        const float canvasW = cascade::gui::patch::patchCanvasWidth(avail.x, inspectorW);
 
         // THE PRESS FROM THE PARTS BIN, placed now that the canvas has a size.
         // newPartPosition must be given the SAME transform the canvas is
@@ -14619,6 +14766,11 @@ void AppWindow::drawPatchView() {
             patchReadings_.push_back(std::move(r));
         }
 
+        // The information pane, now that this frame's plan and readings exist.
+        drawPatchInfoPane(infoTL.x, infoTL.y, infoW, infoH);
+        ImGui::SetCursorScreenPos(origin);
+        ImGui::Dummy(ImVec2(0.0f, 0.0f));
+
         // Where the canvas is, for a scripted press (tests/test_patch_canvas_nav).
         cascade::gui::census::rect("patch:canvas", origin.x, origin.y, origin.x + canvasW,
                                    origin.y + avail.y);
@@ -14632,66 +14784,36 @@ void AppWindow::drawPatchView() {
             drawPatchViewKeys(origin.x, origin.y, canvasW, avail.y);
         }
 
-        // --- the inspector ----------------------------------------------------
-        ImGui::SetCursorScreenPos(ImVec2(origin.x + canvasW + kGap, origin.y));
-        if (ImGui::BeginChild("##patchinspector", ImVec2(kInspectorW, avail.y), true)) {
-            // WHAT THE PATCH AS A WHOLE IS DOING, first, because it is the
-            // question someone opening this page is actually asking. Phosphor
-            // for working, rust for not - and never amber, which belongs to
-            // numbers.
-            if (patchPlan_.runnable) {
-                ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::good());
-                // Wrapped, not TextUnformatted (an Opus review's M4): a plain
-                // TextUnformatted never wraps, so a translation a third
-                // longer than the English - or this same English at the
-                // interface size's larger fonts - ran the heading off the
-                // inspector's own edge instead of onto a second line.
-                ImGui::TextWrapped("%s", tr("This patch can run."));
-            } else {
-                ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::bad());
-                ImGui::TextWrapped("%s", tr("This patch cannot run yet."));
-            }
-            ImGui::PopStyleColor();
+        // --- the inspector drawer ---------------------------------------------
+        // The selected node's controls. What the patch as a whole is doing,
+        // the node's problems and the help text are in the information pane
+        // above; this is only what is SET on the node, which needs a column.
+        const bool inspectorShown = inspectorW > 0.0f;
+        if (inspectorShown) { ImGui::SetCursorScreenPos(ImVec2(origin.x + canvasW + kGap, origin.y)); }
+        // Folded, the strip is narrower than a child's usual padding allows
+        // a key, so it is padded to fit the one key it holds.
+        const bool stripPadding = inspectorShown && patchInspectorFolded_;
+        if (stripPadding) {
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
+                                ImVec2(2.0f, ImGui::GetStyle().WindowPadding.y));
+        }
+        const bool inspectorOpen =
+            inspectorShown &&
+            ImGui::BeginChild("##patchinspector", ImVec2(inspectorW, avail.y), true);
+        if (stripPadding) { ImGui::PopStyleVar(); }
+        if (inspectorOpen) {
             {
-                // The selected channel's own level, spelled out. The node
-                // face has room for a number; this has room to say what it
-                // is a number OF.
-                for (const auto& r : patchReadings_) {
-                    if (r.node != patchUi_.selected) { continue; }
-                    ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(
-                                                             cascade::gui::theme::kAmber));
-                    ImGui::Text(tr("%.1f dB on this channel"), static_cast<double>(r.db));
-                    ImGui::PopStyleColor();
-                    break;
-                }
+                const ImVec2 w0 = ImGui::GetWindowPos();
+                cascade::gui::census::note("patch:inspector");
+                cascade::gui::census::rect("patch:inspector", w0.x, w0.y, w0.x + inspectorW,
+                                           w0.y + avail.y);
             }
-            if (!patchPlan_.channels.empty()) {
-                ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(
-                                                         cascade::gui::theme::kInkMuted));
-                ImGui::Text(tr("%zu channel(s), decimate by %u"),
-                            patchPlan_.channels.size(), patchPlan_.channels[0].decimation);
-                ImGui::PopStyleColor();
-            }
-            ImGui::Separator();
+            // THE FOLD KEY, top right: ">>" puts the drawer away to a strip and
+            // gives the canvas its width; "<<" on the strip brings it back.
+            drawPatchInspectorFoldKey();
             cascade::core::patch::Node* sel =
-                patchGraph_.mutableNode(patchUi_.selected);
-            if (sel == nullptr) {
-                ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(
-                                                         cascade::gui::theme::kInkMuted));
-                ImGui::TextWrapped("%s", tr("Nothing selected."));
-                ImGui::Spacing();
-                ImGui::TextWrapped("%s", tr(
-                    "Click a node to set what it does. Drag from one port to "
-                    "another to wire them; drag a node by its title bar to move "
-                    "it. Delete removes whatever is selected."));
-                ImGui::Spacing();
-                // HOW TO MOVE ROUND IT (0.99.49): the wheel pans now, and a
-                // touchpad user has no middle button - say what does work.
-                ImGui::TextWrapped("%s", tr(
-                    "Drag empty canvas or scroll to move round the patch. Ctrl+scroll or "
-                    "the + and - keys zoom; Fit shows every node."));
-                ImGui::PopStyleColor();
-            } else {
+                patchInspectorFolded_ ? nullptr : patchGraph_.mutableNode(patchUi_.selected);
+            if (sel != nullptr) {
                 ImGui::TextUnformatted(tr(cascade::gui::patch::kindCaption(sel->kind)));
                 ImGui::Separator();
 
@@ -14865,24 +14987,6 @@ void AppWindow::drawPatchView() {
                         break;
                 }
 
-                const std::vector<cascade::core::patch::Problem> probs =
-                    cascade::core::patch::problemsFor(patchPlan_, sel->id);
-                if (!probs.empty()) {
-                    ImGui::Spacing();
-                    ImGui::Separator();
-                    for (const cascade::core::patch::Problem pr : probs) {
-                        // An advisory is worth saying and not worth
-                        // alarming about, so it is muted rather than rust.
-                        ImGui::PushStyleColor(
-                            ImGuiCol_Text,
-                            cascade::core::patch::isAdvisory(pr)
-                                ? cascade::gui::theme::vec(cascade::gui::theme::kInkMuted)
-                                : cascade::gui::theme::bad());
-                        ImGui::TextWrapped("%s", tr(cascade::core::patch::problemText(pr)));
-                        ImGui::PopStyleColor();
-                    }
-                }
-
                 ImGui::Spacing();
                 ImGui::Separator();
                 if (ImGui::Button(trId("Remove this node"), ImVec2(-FLT_MIN, 0.0f))) {
@@ -14892,7 +14996,7 @@ void AppWindow::drawPatchView() {
                 }
             }
         }
-        ImGui::EndChild();
+        if (inspectorShown) { ImGui::EndChild(); }
         // THE SET GOES TO THE DSP THREAD, built here because building it
         // is allocation - a filter per channel, a resampler, a second of ring
         // - and, since 0.99.15, create() on every plugin decoder in it. So it

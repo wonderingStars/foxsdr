@@ -44,6 +44,7 @@
 #include "gui/scope_face.hpp"
 #include "gui/soundcard_panel.hpp"
 #include "gui/theme.hpp"
+#include "gui/ui_scale.hpp"
 #include "source/siggen_source.hpp"
 #include "source/soapy_source.hpp"
 
@@ -1018,8 +1019,7 @@ void AppWindow::drawPatchTransport() {
         if (n.on) { ++on; }
     }
     ImGui::SameLine();
-    ImGui::SetCursorScreenPos(
-        ImVec2(ImGui::GetCursorScreenPos().x + 8.0f, at.y + kR * 1.1f - ImGui::GetTextLineHeight() * 0.5f));
+    const float besideX = ImGui::GetCursorScreenPos().x + 8.0f;
     std::string line;
     if (patchRunning_) {
         // Singular and plural as whole keys: an English "s" handed in by %s
@@ -1036,11 +1036,33 @@ void AppWindow::drawPatchTransport() {
                       on, radios);
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kInkMuted));
     }
-    ImGui::TextUnformatted(line.c_str());
+    // SHORT OF THE INFORMATION PANE beside the band (0.99.49). Beside the
+    // keys when it fits there, on two lines when that is enough, and on a line
+    // of its own under the dome when the room beside the keys is too narrow
+    // to hold a word - a large interface size on a small laptop - rather than
+    // being wrapped a letter at a time.
+    const float bandRight = patchBandRight_ > 0.0f
+                                ? patchBandRight_
+                                : ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x;
+    const float room = bandRight - besideX;
+    const float textW = ImGui::CalcTextSize(line.c_str()).x;
+    const bool below = textW > room && room < cascade::gui::uiscale::px(160.0f);
+    float after = at.y + kR * 2.3f;
+    if (below) {
+        ImGui::SetCursorScreenPos(ImVec2(at.x, after));
+    } else {
+        ImGui::SetCursorScreenPos(
+            ImVec2(besideX, at.y + kR * 1.1f - ImGui::GetTextLineHeight() * (textW > room ? 1.0f : 0.5f)));
+    }
+    ImGui::PushTextWrapPos(bandRight - ImGui::GetWindowPos().x);
+    ImGui::TextWrapped("%s", line.c_str());
+    ImGui::PopTextWrapPos();
     ImGui::PopStyleColor();
+    if (below) { after = ImGui::GetItemRectMax().y + ImGui::GetStyle().ItemSpacing.y; }
 
-    // Below the dome, for whatever comes next on the page.
-    ImGui::SetCursorScreenPos(ImVec2(at.x, at.y + kR * 2.3f));
+    // Below the dome (and the line under it, when there is one), for whatever
+    // comes next on the page.
+    ImGui::SetCursorScreenPos(ImVec2(at.x, after));
     ImGui::Dummy(ImVec2(0.0f, 0.0f));
 }
 

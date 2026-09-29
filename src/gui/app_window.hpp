@@ -3627,6 +3627,16 @@ private:
     // laptop touchpad has no middle button to pan with, and nothing on the
     // page said how to zoom). Bottom-right of the canvas, over it.
     void drawPatchViewKeys(float originX, float originY, float width, float height);
+    // THE PATCH PAGE'S LAYOUT (0.99.49 beta feedback; gui::patch::
+    // patchInfoPaneWidth and friends). The information pane - the patch's
+    // state, the selection's problems, the help - sits in the top band's
+    // right-hand part at a fixed height with its own scroll; the selected
+    // node's controls are in a drawer at the canvas's right that folds to a
+    // strip. patchBandRight_ is the screen x the band's rows keep short of.
+    void drawPatchInfoPane(float x, float y, float w, float h);
+    void drawPatchInspectorFoldKey();
+    float patchBandRight_ = 0.0f;
+    bool patchInspectorFolded_ = false;
     // GUI thread: rebuilds the two lists above from pluginHost_.
     void rebuildPatchCatalogue();
     // True when the node's Text output reaches a Text sink - the only way
