@@ -154,7 +154,9 @@ are still moving. What is in the current build:
   half steps the digit up, the lower half down, holding either repeats, and
   the lever stays pointing the way it was last flicked. The SAMPLE RATE and
   FRAME TIME meters at the deck's right are on the bar at the window size the
-  application first opens with, not only once it is widened.
+  application first opens with, not only once it is widened. Right-click
+  either meter to pick its own face - Classic, Analogue needle, LED ladder or
+  Peak meter - without changing what it reads.
 - **Band plans for the whole world.** Labelled service allocations drawn behind
   the spectrum, colour-coded by service on a colour-blind-safe palette, with a
   "what am I tuned to" readout that names the *narrowest* match — 145.800 MHz
