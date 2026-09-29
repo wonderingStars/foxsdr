@@ -314,6 +314,22 @@ public:
     // to call whether or not the watchdog is running.
     void beginShutdown(unsigned thresholdMs = kShutdownThresholdMs);
 
+    // THE START-UP BUDGET, the mirror of the teardown's. The 5 s threshold was
+    // justified against the worst start-up gap measured on the DEVELOPMENT
+    // desktop (about 11 ms). Two field reports (0.99.42 and 0.99.43, one
+    // Windows 10 laptop on an older Intel GPU, an RTL-SDR open) froze for more
+    // than 5 s in the first frames - one inside the Intel GL driver - on a
+    // machine whose start-up before the first frame already took 8-10 s. So
+    // the first kStartupFrames frames are judged against kStartupThresholdMs,
+    // after which the threshold drops to what start() was given. A start-up
+    // that wedges for longer is still reported, with threshold-ms saying which
+    // budget was in force. Call once, right after start(); the drop is a
+    // compare-and-swap, so a beginShutdown() inside those frames wins.
+    static constexpr unsigned kStartupThresholdMs = 30000;
+    static constexpr unsigned kStartupFrames = 30;
+    void beginStartup(unsigned thresholdMs = kStartupThresholdMs,
+                      unsigned frames = kStartupFrames);
+
     // Stops the watchdog thread and joins it. The poll wait is interruptible,
     // so this returns in about as long as an in-flight capture takes rather
     // than in the rest of a poll interval.
@@ -482,6 +498,13 @@ private:
     // would be the false positive it exists to prevent, wearing a different
     // hat.
     std::atomic<unsigned> thresholdMs_{kDefaultThresholdMs};
+
+    // beginStartup(): frames still to be judged against the start-up budget,
+    // and the two thresholds the drop swaps between. Only the GUI thread
+    // writes them; the watchdog thread only ever reads thresholdMs_.
+    std::atomic<unsigned> startupFramesLeft_{0};
+    unsigned startupThresholdMs_ = 0;
+    unsigned steadyThresholdMs_ = kDefaultThresholdMs;
 
     // THE POLL WAIT, MADE INTERRUPTIBLE. stop() used to set a flag that was
     // only read at the top of the loop while the loop slept in a plain

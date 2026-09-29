@@ -1643,6 +1643,7 @@ int AppWindow::run(int frames) {
     applyDiagnosticsEnabled(diagnosticsEnabled_);
     refreshDiagContext();
     watchdog_.start(diagnosticsEnabled_ ? diagCrashDir_ : std::string());
+    watchdog_.beginStartup();  // the first frames get their own budget (hang_watchdog.hpp)
     // ...and, on the same healthy path, anything the LAST run left on disk.
     // Started here rather than in telemetryStartup because it needs the answer
     // to "may this run touch the disk at all", which is diagCrashDir_ and is

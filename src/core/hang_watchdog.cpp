@@ -295,6 +295,7 @@ void HangWatchdog::start(const std::string& reportDir, unsigned thresholdMs) {
     paused_.store(0, std::memory_order_relaxed);
     reported_.store(false, std::memory_order_relaxed);
     reports_.store(0, std::memory_order_relaxed);
+    startupFramesLeft_.store(0, std::memory_order_relaxed);
     skipGap_.store(true, std::memory_order_relaxed);
     stop_.store(false, std::memory_order_relaxed);
     {
@@ -311,6 +312,7 @@ void HangWatchdog::beginShutdown(unsigned thresholdMs) {
     // against the new threshold and not the old one. The reverse order leaves
     // a one-poll window in which the teardown is measured against the frame
     // threshold - which is the whole defect.
+    startupFramesLeft_.store(0, std::memory_order_relaxed);
     thresholdMs_.store((thresholdMs > 0) ? thresholdMs : kShutdownThresholdMs,
                        std::memory_order_relaxed);
     lastBeatMs_.store(nowMs(), std::memory_order_relaxed);
@@ -319,6 +321,17 @@ void HangWatchdog::beginShutdown(unsigned thresholdMs) {
     // measured", which is the number the 5 s threshold is justified against.
     skipGap_.store(true, std::memory_order_relaxed);
     diagLogf("watchdog: shutdown budget %u ms", thresholdMs_.load(std::memory_order_relaxed));
+}
+
+void HangWatchdog::beginStartup(unsigned thresholdMs, unsigned frames) {
+    // Raised before any frame runs; heartbeat() counts the frames down and
+    // drops back to what start() was given (see the header).
+    steadyThresholdMs_ = thresholdMs_.load(std::memory_order_relaxed);
+    startupThresholdMs_ = (thresholdMs > 0) ? thresholdMs : kStartupThresholdMs;
+    if (frames == 0 || startupThresholdMs_ <= steadyThresholdMs_) { return; }
+    thresholdMs_.store(startupThresholdMs_, std::memory_order_relaxed);
+    startupFramesLeft_.store(frames, std::memory_order_relaxed);
+    diagLogf("watchdog: start-up budget %u ms for %u frames", startupThresholdMs_, frames);
 }
 
 unsigned HangWatchdog::thresholdMs() const {
@@ -363,6 +376,17 @@ void HangWatchdog::heartbeat(bool recordGap) {
     // open, or the modal dialog, that the pause was taken out for. Folding it
     // into the worst-gap measurement would destroy the very number the
     // threshold is justified against.
+    // The start-up budget ends after its frames - unless beginShutdown() has
+    // replaced it meanwhile, which the compare-and-swap leaves alone.
+    const unsigned left = startupFramesLeft_.load(std::memory_order_relaxed);
+    if (left > 0) {
+        startupFramesLeft_.store(left - 1, std::memory_order_relaxed);
+        if (left == 1) {
+            unsigned expect = startupThresholdMs_;
+            thresholdMs_.compare_exchange_strong(expect, steadyThresholdMs_,
+                                                 std::memory_order_relaxed);
+        }
+    }
     const bool skip = skipGap_.exchange(false, std::memory_order_relaxed);
     if (!recordGap || skip || prev <= 0.0) { return; }
     const double gap = now - prev;
