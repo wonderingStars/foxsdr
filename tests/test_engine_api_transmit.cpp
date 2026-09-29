@@ -1207,10 +1207,25 @@ AfterSafer afterSafer(uint32_t op, int times, bool merged) {
     l.run(cmd(FOXAPI_OP_TX_LATCH, 0, 1));
     if (merged) {
         stall(admin, 200);
+        uint64_t ticket = 0;
         for (int i = 0; i < times; ++i) {
-            submitOne(o, cmd(op, 0, 0));
+            ticket = submitOne(o, cmd(op, 0, 0)).ticket;
         }
-        drainAll(o, 400);
+        // PORT: the reference drained for 400 ms of quiet. The real engine's
+        // RUN 0 stops a real pipeline (its DSP thread joined) after the rest
+        // of the stall, which can take longer than that - so this waits for
+        // the merged ticket's own result (at most 3 s), then drains.
+        const auto end = std::chrono::steady_clock::now() + std::chrono::milliseconds(3000);
+        bool answered = false;
+        while (!answered && std::chrono::steady_clock::now() < end) {
+            FoxCommandResult r[16];
+            for (auto& x : r) x.structSize = sizeof(x);
+            const int32_t n = api()->poll_results(o.raw(), r, 16);
+            for (int32_t i = 0; i < n; ++i) { answered = answered || r[i].ticket == ticket; }
+            if (n <= 0) { std::this_thread::sleep_for(std::chrono::milliseconds(5)); }
+        }
+        CHECK(answered);
+        drainAll(o, 100);
     } else {
         for (int i = 0; i < times; ++i) {
             o.run(cmd(op, 0, 0));
