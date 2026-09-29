@@ -1572,6 +1572,39 @@ they were with the facts; and what 3b has to settle first.
    sides (a 3a frame is both); test_transmit_page's source scan now pins
    the two halves (key-down written once, in pumpTransmitter, before the
    tick; every other engine write a key-UP `false`).
+   **REVIEW FIX, 3b-pre-end review (HIGH), 2026-09-29: a key-up can never
+   be undone by the control side.** `pumpTransmitter` read the slot under
+   `txPageMutex_`, let go of the lock, and then wrote `setLatched` /
+   `setPttHeld` from what it had read; a front-end key-up landing in
+   between was written over - the PTT held again, or the latch closed
+   again with its failsafe restarted - until the next pump, or for
+   `kKeyAliveWait` with the control thread stalled after that write. Now:
+   - the control side holds `txPageMutex_` from reading the request to
+     writing its key, and `submitTransmitPageKey` makes its key-up stores
+     under the same lock (a few atomic stores and `setLatched`'s short
+     `stateMutex_`; nothing waits while it is held), so a key-up lands
+     either before the read, in the request read, or after the write;
+   - a request is acted on ONCE: a repeat (same `frameSeq`, no new LATCH
+     press) writes nothing. Found by the same test: with the front end
+     frozen with the PTT held, the TX thread released the key at
+     `kKeyAliveWait` and every later pump re-asserted the frozen request's
+     PTT - the radio's sink was started again every other pump (30 starts
+     in 60 pumps), each start released again at the TX thread's first
+     block. A key-up made by the transmitter itself is now not undone
+     either; the front end's next frame, if it comes back with the PTT
+     still held, keys it again.
+   tests/test_transmit_key_race.cpp (new) runs the pump on its own thread.
+   A test hook in the engine (`txKeyInterleaveForTest_`, null in the
+   product), called with the key-down read and computed but not yet
+   written, lets the front-end thread's key-up in at exactly that point
+   (bounded: 200 ms, after which a key-up held off by the lock lands after
+   the write). A PTT let go, B the page closed with the LATCH on - 8 rounds
+   each; C a free-running control thread against 3000 key-down/key-up
+   cycles; D the frozen front end. Before the fix: A 8/8 undone, B 8/8, C
+   2474/3000, D 30 re-keys (8 of 30 checks). Mutants: the control side's
+   lock released before the write (A 8, B 8, C 1244 - 5 checks), the front
+   end's key-up outside the lock (A 8, B 8, C 1397 - 5), a repeat written
+   again (D - 3). After: 0 in all four, 5/5 runs.
 8. **The hang watchdog is the GUI frame's.** The engine pauses it (through the
    host) around its bounded waits (audio/mic open, plugin rescan, device
    open). On a control thread those waits no longer block the frame; they

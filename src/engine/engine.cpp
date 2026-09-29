@@ -6891,37 +6891,60 @@ void Engine::pumpAudioMute() { updateAudioMute(); }
 //     PTT let go lets go of the PTT - two atomic stores, and the TX thread
 //     plays the ramp down on its own the moment no key is asserted;
 //   - the request, into the latest-value slot the control side reads.
+// The key-up stores are made UNDER txPageMutex_, the lock the control side
+// holds from reading the slot to writing the key (pumpTransmitter says why).
+// It is held there for a few stores, never across a wait, so this does not
+// make key-up wait for the control side in any way that matters.
 void Engine::submitTransmitPageKey(const cascade::gui::TxPageRequest& r) {
     transmitter_.frontEndAlive();
+    std::lock_guard<std::mutex> lk(txPageMutex_);
     if (!r.pageLive) {
         transmitter_.setLatched(false);
         transmitter_.setPttHeld(false);
     } else if (!r.pttHeld) {
         transmitter_.setPttHeld(false);
     }
-    std::lock_guard<std::mutex> lk(txPageMutex_);
     txPageRequest_ = r;
 }
 
 // THE CONTROL SIDE'S HALF: key-down from the newest request, the standing
 // condition on the remote key, then the tick the TX thread's dead-man's
 // handle watches.
+//
+// A KEY-UP CAN NEVER BE UNDONE HERE (the 3b-pre-end review's HIGH finding;
+// tests/test_transmit_key_race.cpp):
+//   - txPageMutex_ is held from reading the request to writing the key, and
+//     the front end makes its key-up stores under the same lock. A key-up
+//     therefore lands either before the read - and the request read is the
+//     one that carries it - or after the write, over it. Until this was
+//     fixed the lock covered only the read, so a key-up landing between read
+//     and write was overwritten from the older request: the PTT held again,
+//     or the latch closed again (restarting its failsafe), until the next
+//     pump - or for kKeyAliveWait with the control thread stalled after it.
+//   - A request already acted on is not written again. The front end makes
+//     a new one every frame (frameSeq); a repeat means the front end has not
+//     spoken since, so re-asserting it would only undo a key-up made since
+//     by the transmitter itself - the TX thread's own release of a frozen
+//     window's PTT, re-keyed pump after pump from the frozen window's last
+//     request.
 void Engine::pumpTransmitter() {
-    cascade::gui::TxPageRequest r;
     {
         std::lock_guard<std::mutex> lk(txPageMutex_);
-        r = txPageRequest_;
-    }
-    // Every LATCH press since the last read, however many frames that spans:
-    // an odd number toggles, an even number does not (TxPageRequest).
-    const std::uint32_t presses = r.latchPressCount - txLatchPressesSeen_;
-    txLatchPressesSeen_ = r.latchPressCount;
-    txFrameSeen_ = r.frameSeq;
-    {
-        const cascade::gui::TxPageKey key = cascade::gui::txPageKey(
-            r.pageLive, transmitter_.latched(), (presses & 1u) != 0u, r.pttHeld);
-        transmitter_.setLatched(key.latched);
-        transmitter_.setPttHeld(key.pttHeld);
+        const cascade::gui::TxPageRequest& r = txPageRequest_;
+        // Every LATCH press since the last read, however many frames that
+        // spans: an odd number toggles, an even number does not
+        // (TxPageRequest).
+        const std::uint32_t presses = r.latchPressCount - txLatchPressesSeen_;
+        const bool fresh = r.frameSeq != txFrameSeen_ || presses != 0u;
+        txLatchPressesSeen_ = r.latchPressCount;
+        txFrameSeen_ = r.frameSeq;
+        if (fresh) {
+            const cascade::gui::TxPageKey key = cascade::gui::txPageKey(
+                r.pageLive, transmitter_.latched(), (presses & 1u) != 0u, r.pttHeld);
+            if (txKeyInterleaveForTest_ != nullptr) { txKeyInterleaveForTest_(txKeyInterleaveArgForTest_); }
+            transmitter_.setLatched(key.latched);
+            transmitter_.setPttHeld(key.pttHeld);
+        }
     }
     // THE REMOTE KEY'S STANDING CONDITION, inside the engine (it was the
     // window's per-frame poll in applyWebControls): a remote key exists only

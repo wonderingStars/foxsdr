@@ -1719,6 +1719,12 @@ private:
     cascade::gui::TxPageRequest txPageRequest_;
     std::uint32_t txLatchPressesSeen_ = 0;
     std::uint64_t txFrameSeen_ = 0;
+    // TESTS ONLY (tests/test_transmit_key_race.cpp): called by
+    // pumpTransmitter() between reading the request and writing the key, the
+    // one point where a front-end key-up racing the control side matters.
+    // Null in the product.
+    void (*txKeyInterleaveForTest_)(void*) = nullptr;
+    void* txKeyInterleaveArgForTest_ = nullptr;
     bool transmitSplit_ = false;
     double transmitSplitHz_ = 145.5e6;
     int transmitModeIndex_ = 0;    // dsp::TxMode

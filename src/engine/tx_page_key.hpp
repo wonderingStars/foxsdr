@@ -64,7 +64,10 @@ inline TxPageKey txPageKey(bool pageLive, bool transmitterLatched, bool latchPre
 //     request from a repeat.
 // KEY-UP DOES NOT WAIT FOR THE PUMP: the page closing, or the PTT let go, is
 // applied by submitTransmitPageKey on the front end's own thread, at once.
-// Only key-DOWN (a PTT pressed, a LATCH press) goes through the control side.
+// Only key-DOWN (a PTT pressed, a LATCH press) goes through the control side,
+// which holds the slot's lock from reading a request to writing its key, and
+// writes a request's key once - so a key-up is never written over, by an
+// older request or by the same one again (Engine::pumpTransmitter).
 struct TxPageRequest {
     bool pageLive = false;
     bool pttHeld = false;
