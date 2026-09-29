@@ -1266,7 +1266,7 @@ they were with the facts; and what 3b has to settle first.
    verification the rest of this round got would not meet the bar this
    document holds everything else to.
    **GRAPH HALF CLOSED, engine/stage3b-pre patch-graph round (branch
-   claude/engine-patchgraph, 2026-09-28): Design A, as above, with three
+   engine/patchgraph, 2026-09-28): Design A, as above, with three
    additions the design did not foresee.** Design B (the runtime driven
    from pump) is NOT done and stays open - see the end of this entry.
 
@@ -1422,7 +1422,7 @@ they were with the facts; and what 3b has to settle first.
      Linux only. The canvas has still not been driven by a person on a
      desktop: the input test and the full suites are the evidence.
 
-   **REVIEW ROUND 2 (branch claude/engine-patchgraph, on top of e29c1a7),
+   **REVIEW ROUND 2 (branch engine/patchgraph, on top of e29c1a7),
    for the Windows/MSVC review that rejected e19909a/e29c1a7 on one
    blocking finding.** Each item test-first, then broken on purpose:
    1. *(blocking)* `test_patch_graph_draft_input` declared `near()`, which
@@ -1499,7 +1499,7 @@ they were with the facts; and what 3b has to settle first.
    any existing test noticing. Proven red against that exact mutant (5/15
    checks failed) while test_transmit_page.cpp stayed green against it.
    **CLOSED, engine/stage3b-pre stage-3b-pre-end round, item 1 (branch
-   claude/engine-patchgraph, 2026-09-29): the design problem above is
+   engine/patchgraph, 2026-09-29): the design problem above is
    settled BEFORE the pump moves.** (The note just above - "nothing here
    adds a liveness stamp" - described the previous round.)
    - **(a) Two liveness stamps, checked by the TX thread itself**
