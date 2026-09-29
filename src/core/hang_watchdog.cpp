@@ -19,6 +19,7 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <mutex>
 #include <vector>
 
 #if defined(_WIN32)
@@ -134,6 +135,24 @@ int hangCaptureSignal() {
     return sig;
 }
 
+// ONE CAPTURE IN FLIGHT PER PROCESS, BY CONSTRUCTION - not by assumption.
+// Since stage 3b a process has two watchdogs (the GUI's and the engine control
+// thread's, docs/engine-stage3.md OPEN 8), and both can be capturing at once;
+// with one buffer and one semaphore between them, one's wait was answered by
+// the thread the other had signalled (tests/test_hang_capture_concurrent.cpp:
+// 12,319 of 12,349 concurrent captures came back with the other target's
+// stack). So:
+//   - g_hangCaptureMutex SERIALISES every signalled capture, whichever
+//     watchdog asks; it is held for one thread's capture at a time (at most
+//     the 200 ms wait below), never across a whole report, so two reports
+//     being written at once interleave thread by thread;
+//   - every request carries a TAG (the signal's si_value), and a handler
+//     hands its frames over only if it can CLAIM the tag the requester is
+//     waiting for right now. A handler that runs late - for a request that
+//     already timed out, or a signal from anywhere else - claims nothing,
+//     writes nothing and posts nothing, so it cannot satisfy a later wait
+//     with a stale stack. The claim is a compare-and-swap on a lock-free
+//     atomic, which is async-signal-safe.
 struct LinuxHangCapture {
     std::uintptr_t frames[kMaxHangFrames] = {};
     int count = 0;
@@ -141,14 +160,26 @@ struct LinuxHangCapture {
 LinuxHangCapture g_hangCapture;
 sem_t g_hangCaptureSem;
 std::atomic<bool> g_hangSignalReady{false};
+std::mutex g_hangCaptureMutex;
+std::once_flag g_hangSignalOnce;
+// The tag the requester is waiting for (0 = nobody is waiting); a handler that
+// claims it swaps in kHangTagClaimed, fills g_hangCapture and then publishes
+// the tag it filled for in g_hangFilledTag before posting.
+constexpr std::uint64_t kHangTagClaimed = ~std::uint64_t{0};
+std::atomic<std::uint64_t> g_hangWantedTag{0};
+std::atomic<std::uint64_t> g_hangFilledTag{0};
+std::uint64_t g_hangNextTag = 0;  // g_hangCaptureMutex
+static_assert(std::atomic<std::uint64_t>::is_always_lock_free,
+              "the handler's claim must be a lock-free (async-signal-safe) atomic");
 
 // Runs ON THE SIGNALLED THREAD. unw_getcontext captures exactly this thread's
 // live registers (there is no ucontext to borrow the way a fault handler
 // would use the one the kernel hands a SIGSEGV handler - a realtime signal
-// delivered by tgkill carries no such context), then a normal local unwind
-// walks it. sem_post is on the POSIX async-signal-safe list; storing into
-// g_hangCapture first is safe because the watchdog thread only ever has ONE
-// capture in flight; see the mutual-exclusion note at the call site.
+// delivered by rt_tgsigqueueinfo carries no such context), then a normal local
+// unwind walks it. sem_post is on the POSIX async-signal-safe list; storing
+// into g_hangCapture first is safe because only the handler that claimed the
+// tag being waited for writes it, and only one capture is ever in flight
+// (g_hangCaptureMutex, above).
 //
 // THE CAPTURE'S OWN FRAMES ARE DROPPED. The walk starts HERE, so its first two
 // frames are this handler and the kernel's signal trampoline (__restore_rt),
@@ -160,7 +191,13 @@ std::atomic<bool> g_hangSignalReady{false};
 // trampoline is found by libunwind's own signal-frame test rather than by
 // counting, and if it is never found the whole walk is kept: a report with
 // two extra frames beats one with none.
-void hangCaptureSignalHandler(int) {
+void hangCaptureSignalHandler(int, siginfo_t* info, void*) {
+    // The request this signal belongs to (captureOneLinuxThread's tag). A
+    // signal that carries none - not one of ours - is answered by nothing.
+    const std::uint64_t tag =
+        (info != nullptr && info->si_code == SI_QUEUE)
+            ? static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(info->si_value.sival_ptr))
+            : 0;
     unw_context_t ctx;
     unw_getcontext(&ctx);
     unw_cursor_t cursor;
@@ -175,21 +212,28 @@ void hangCaptureSignalHandler(int) {
         if (firstReal == 0 && unw_is_signal_frame(&cursor) > 0) { firstReal = n; }
     } while (n < kMaxHangFrames && unw_step(&cursor) > 0);
     if (firstReal >= n) { firstReal = 0; }
+    // Only the request being waited for NOW may be answered: claim its tag,
+    // or hand nothing over (a late answer to a request that timed out).
+    std::uint64_t expect = tag;
+    if (tag == 0 || !g_hangWantedTag.compare_exchange_strong(expect, kHangTagClaimed)) { return; }
     int out = 0;
     for (int i = firstReal; i < n; ++i) { g_hangCapture.frames[out++] = walk[i]; }
     g_hangCapture.count = out;
+    g_hangFilledTag.store(tag, std::memory_order_release);
     sem_post(&g_hangCaptureSem);
 }
 
 // Installed once, lazily, from the watchdog thread - a healthy-path call, not
 // the fault path, so there is no restriction on what it may do.
+// ONCE PER PROCESS, whichever watchdog gets here first: two watchdogs
+// starting their first capture together used to both run sem_init.
 void ensureHangCaptureSignalInstalled() {
-    if (g_hangSignalReady.load(std::memory_order_acquire)) { return; }
+    std::call_once(g_hangSignalOnce, [] {
     sem_init(&g_hangCaptureSem, 0, 0);
     struct sigaction sa {};
-    sa.sa_handler = &hangCaptureSignalHandler;
+    sa.sa_sigaction = &hangCaptureSignalHandler;
     sigemptyset(&sa.sa_mask);
-    sa.sa_flags = 0;
+    sa.sa_flags = SA_SIGINFO;
     ::sigaction(hangCaptureSignal(), &sa, nullptr);
     // Pays for libunwind's one-time setup (see the header comment above)
     // before any thread is ever signalled for a real stall.
@@ -199,6 +243,7 @@ void ensureHangCaptureSignalInstalled() {
     unw_init_local(&cursor, &ctx);
     unw_step(&cursor);
     g_hangSignalReady.store(true, std::memory_order_release);
+    });
 }
 
 // SYS_gettid rather than glibc's gettid() wrapper (only glibc >= 2.30):
@@ -222,7 +267,9 @@ std::vector<pid_t> listLinuxThreadIds() {
 }
 
 // One thread's stack, captured either directly (the calling thread) or by
-// signalling it and waiting up to 200 ms. Never suspends anything: the target
+// signalling it and waiting up to 200 ms (and one more 200 ms only when the
+// thread claimed the request just as the first ran out, so its answer is
+// taken here rather than left behind). Never suspends anything: the target
 // keeps running until the instant it takes the signal, and resumes the
 // instant the handler returns.
 ThreadStack captureOneLinuxThread(pid_t tid, pid_t self) {
@@ -243,12 +290,28 @@ ThreadStack captureOneLinuxThread(pid_t tid, pid_t self) {
         return ts;
     }
 
-    // Drain a stale post from an earlier, timed-out capture first: without
-    // this, a thread that answered late for a PREVIOUS victim could satisfy
-    // this wait immediately with yesterday's frames.
+    // ONE AT A TIME, process-wide (see g_hangCaptureMutex).
+    std::lock_guard<std::mutex> one(g_hangCaptureMutex);
+    // Drain a stale post first. A handler only ever posts for a tag it
+    // claimed, so this is belt and braces; the tag check below is the rule.
     while (::sem_trywait(&g_hangCaptureSem) == 0) {}
     g_hangCapture.count = 0;
-    if (::syscall(SYS_tgkill, ::getpid(), tid, hangCaptureSignal()) != 0) { return ts; }
+    std::uint64_t tag = ++g_hangNextTag;
+    if (tag == kHangTagClaimed) { tag = g_hangNextTag = 1; }
+    g_hangFilledTag.store(0, std::memory_order_relaxed);
+    g_hangWantedTag.store(tag, std::memory_order_release);
+    // tgkill carries no value; rt_tgsigqueueinfo carries the tag in si_value,
+    // with si_code SI_QUEUE (allowed for a signal a process sends itself).
+    siginfo_t si{};
+    si.si_signo = hangCaptureSignal();
+    si.si_code = SI_QUEUE;
+    si.si_pid = ::getpid();
+    si.si_uid = ::getuid();
+    si.si_value.sival_ptr = reinterpret_cast<void*>(static_cast<std::uintptr_t>(tag));
+    if (::syscall(SYS_rt_tgsigqueueinfo, ::getpid(), tid, hangCaptureSignal(), &si) != 0) {
+        g_hangWantedTag.store(0, std::memory_order_release);
+        return ts;
+    }
 
     struct timespec deadline{};
     ::clock_gettime(CLOCK_REALTIME, &deadline);
@@ -257,7 +320,36 @@ ThreadStack captureOneLinuxThread(pid_t tid, pid_t self) {
         deadline.tv_sec += 1;
         deadline.tv_nsec -= 1000000000L;
     }
-    if (::sem_timedwait(&g_hangCaptureSem, &deadline) == 0) {
+    bool answered = false;
+    while (::sem_timedwait(&g_hangCaptureSem, &deadline) == 0) {
+        if (g_hangFilledTag.load(std::memory_order_acquire) == tag) {
+            answered = true;
+            break;
+        }
+    }
+    if (!answered) {
+        // Timed out: withdraw the request. If a handler claimed it in the
+        // meantime it is past its unwind and about to post - wait one more
+        // bound for that, so its frames are taken here and not left to be
+        // mistaken for a later request's.
+        std::uint64_t expect = tag;
+        if (!g_hangWantedTag.compare_exchange_strong(expect, 0)) {
+            ::clock_gettime(CLOCK_REALTIME, &deadline);
+            deadline.tv_nsec += 200 * 1000000L;
+            if (deadline.tv_nsec >= 1000000000L) {
+                deadline.tv_sec += 1;
+                deadline.tv_nsec -= 1000000000L;
+            }
+            while (::sem_timedwait(&g_hangCaptureSem, &deadline) == 0) {
+                if (g_hangFilledTag.load(std::memory_order_acquire) == tag) {
+                    answered = true;
+                    break;
+                }
+            }
+        }
+    }
+    g_hangWantedTag.store(0, std::memory_order_release);
+    if (answered) {
         ts.count = g_hangCapture.count;
         for (int i = 0; i < ts.count && i < kMaxHangFrames; ++i) { ts.frames[i] = g_hangCapture.frames[i]; }
     }
@@ -271,6 +363,39 @@ ThreadStack captureOneLinuxThread(pid_t tid, pid_t self) {
 }  // namespace
 
 HangWatchdog::~HangWatchdog() { stop(); }
+
+int HangWatchdog::captureThreadStackForTest(unsigned long tid, std::uintptr_t* out, int max) {
+#if defined(__linux__)
+    ensureHangCaptureSignalInstalled();
+    const ThreadStack ts = captureOneLinuxThread(static_cast<pid_t>(tid), linuxGetTid());
+    int n = 0;
+    for (; n < ts.count && n < max && n < kMaxHangFrames; ++n) { out[n] = ts.frames[n]; }
+    return n;
+#else
+    (void)tid;
+    (void)out;
+    (void)max;
+    return 0;
+#endif
+}
+
+int HangWatchdog::captureSignalForTest() {
+#if defined(__linux__)
+    return hangCaptureSignal();
+#else
+    return 0;
+#endif
+}
+
+unsigned long HangWatchdog::currentThreadIdForTest() {
+#if defined(_WIN32)
+    return static_cast<unsigned long>(::GetCurrentThreadId());
+#elif defined(__linux__)
+    return static_cast<unsigned long>(linuxGetTid());
+#else
+    return 0;
+#endif
+}
 
 void HangWatchdog::start(const std::string& reportDir, unsigned thresholdMs) {
     if (running_.load(std::memory_order_acquire)) { return; }

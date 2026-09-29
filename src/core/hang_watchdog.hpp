@@ -440,6 +440,21 @@ public:
     // observation instead of to a sentence in a header.
     unsigned pausesTaken() const;
 
+    // TESTS ONLY (tests/test_hang_capture_concurrent.cpp): one thread's stack,
+    // taken exactly as captureAllThreads takes each thread's - on Linux by
+    // signalling the thread and waiting (bounded) for its answer. Returns the
+    // number of frames written to `out` (at most `max`); 0 when the thread
+    // did not answer in time, or on a platform without this path. Static,
+    // because the capture machinery it exercises is the process's, shared by
+    // every watchdog: two watchdogs capturing at once (the GUI's and the
+    // engine control thread's) are exactly the case it is there to test.
+    static int captureThreadStackForTest(unsigned long tid, std::uintptr_t* out, int max);
+    // The calling thread's kernel id, as captureThreadStackForTest takes it.
+    static unsigned long currentThreadIdForTest();
+    // The signal a Linux capture is asked with (0 elsewhere), so a test can
+    // block it on a thread and make that thread answer late.
+    static int captureSignalForTest();
+
 private:
     void threadMain();
     void captureAllThreads(const std::string& path, double stalledMs);
