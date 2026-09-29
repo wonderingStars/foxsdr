@@ -60,6 +60,7 @@
 #include "gui/plugin_markers.hpp"
 #include "gui/rate_follow_status.hpp"
 #include "gui/soundcard_panel.hpp"
+#include "gui/source_row_status.hpp"
 #include "gui/scope_face.hpp"
 // The demod scope's tube, and the window function its spectrum position needs.
 // The ARITHMETIC half (gui/demod_scope.hpp) arrives through app_window.hpp;
@@ -7765,14 +7766,104 @@ void AppWindow::drawUpdateBanner() {
     ImGui::Separator();
 }
 
-void AppWindow::drawSourceSection() {
+bool AppWindow::noRadioHardwareShown() const {
+    // EITHER LIST (0.99.49 beta feedback). This was the SoapySDR list alone,
+    // so a dongle the native driver had found - listed in the combo right
+    // above the warning - still read "No radio hardware found" whenever no
+    // SoapySDR module claimed it. See gui/source_row_status.hpp.
+    const bool soapyBusy = soapyScanPending_ || deviceOpenPending_;
+    return cascade::gui::noRadioHardwareFound(
+        soapyScanned_, soapyScanPartial_, soapyBusy, soapyDevices_.size(),
+        cascade::gui::nativeRadiosFound(nativeDevices_, kPlutoDriverKey));
+}
+
+std::vector<std::string> AppWindow::patchHeldRadioNames() const {
+    // What each running patch radio was opened AS ("<device key>@<rate>", or
+    // the bare key for a recording) says whether it is hardware; its label is
+    // the name it opened under.
+    std::vector<cascade::gui::PatchHeldRadio> held;
+    for (const auto& [id, radio] : patchRadios_) {
+        if (radio == nullptr) { continue; }
+        const auto as = patchRadioOpenedAs_.find(id);
+        if (as == patchRadioOpenedAs_.end()) { continue; }
+        std::string key = as->second;
+        if (!cascade::core::patch::isIqFileKey(key)) {
+            if (const std::size_t at = key.rfind('@'); at != std::string::npos) { key.resize(at); }
+        }
+        held.push_back({key, radio->label()});
+    }
+    return cascade::gui::patchHardwareNames(patchRunning_, held);
+}
+
+std::string AppWindow::sourceRowChip() {
     // The device in use, shortened to what fits: "SoapySDR: B200" is the
     // full name and "B200" is the part that identifies it.
     // Translated when it is the built-in generator, and shortened by
     // CHARACTERS: a byte cut would split an accented letter in half.
     // The built-in generator's chip is its own short key, never cut
     // (app_window.hpp, sourceChipText).
-    const std::string sourceChip = cascade::gui::sourceChipText(pipeline_.activeSource().name());
+    // ...and while the patch has the radio, the chip says so rather than
+    // naming only the generator the receiver was moved to.
+    return cascade::gui::sourceChipWithPatch(
+        cascade::gui::sourceChipText(pipeline_.activeSource().name()), patchHeldRadioNames());
+}
+
+const char* AppWindow::sourceRowLabel(int idx) {
+    // Row label for a combo index; -1 (active device dropped by a Refresh)
+    // falls back to the live source name so the preview is never a lie.
+    //
+    // NATIVE ROWS COME FIRST, immediately under the generator and the IQ
+    // file, and Soapy's rows follow them. Not a cosmetic ordering: with both
+    // present the native driver is the one this product can be held
+    // responsible for, and the list is read top-down.
+    if (idx == 0) { return tr("Signal generator"); }
+    if (idx == 1) { return tr("IQ file"); }
+    if (idx == kSoundCardRow) { return tr("Sound card"); }
+    const int n = idx - kNativeRowBase;
+    if (n >= 0 && n < static_cast<int>(nativeRowLabels_.size())) {
+        return nativeRowLabels_[static_cast<std::size_t>(n)].c_str();
+    }
+    const int d = idx - soapyRowBase();
+    if (d >= 0 && d < static_cast<int>(soapyDevices_.size())) {
+        return soapyDevices_[static_cast<std::size_t>(d)].label.c_str();
+    }
+    return tr(pipeline_.activeSourceName());
+}
+
+bool AppWindow::sourceKeepPreview() const {
+    return restoreKeep_.valid() && device_ == nullptr && sourceKind_ == "siggen" &&
+           !restoreKeepLabel_.empty() && !soundCardOpenPending_;
+}
+
+std::string AppWindow::sourceComboPreview() {
+    // THE SAVED SOURCE IS WHAT THE COMBO SAYS WHILE IT IS STILL THE SAVED ONE.
+    // A restore that could not open it leaves the generator running and the
+    // radio - or the I/Q file - remembered for the config (see
+    // gui::sourceToSave); showing "Signal generator" here would say the user
+    // had chosen that, and would disagree with the file this session is going
+    // to write. No row is ticked in the list below, because none of them is
+    // what is installed.
+    // Not while a sound card is opening either: the card is the one being
+    // brought back, and "(saved, not open)" would be the lamp's false alarm
+    // in words (gui::radioNotOpenLamp).
+    const bool keepPreview = sourceKeepPreview();
+    // "(not open)" in the preview itself, because the combo is the one place
+    // a user looks to find out what the receiver is on, and the name alone
+    // there would claim the radio was running.
+    if (keepPreview) {
+        std::string keepBuf;
+        cascade::core::formatUtf8(keepBuf, tr("%s (saved, not open)"),
+                      restoreKeepLabel_.c_str());
+        return keepBuf;
+    }
+    // THE PATCH HAS THE RADIO, said where the user looks for it: the
+    // receiver was moved to the generator when the patch started, and
+    // "Signal generator" alone read as "there is no radio".
+    return cascade::gui::sourceRowText(sourceRowLabel(sourceSel_), patchHeldRadioNames());
+}
+
+void AppWindow::drawSourceSection() {
+    const std::string sourceChip = sourceRowChip();
     // Rust and lit while the pipeline is faulted, phosphor and lit while it
     // runs: the colour says which state and the lamp says there is one, which
     // is the rule the whole rail keeps.
@@ -7789,27 +7880,7 @@ void AppWindow::drawSourceSection() {
                      sourceFaulted || radioNotOpen || pipeline_.running());
     if (!sourceOpen) { return; }
 
-    // Row label for a combo index; -1 (active device dropped by a Refresh)
-    // falls back to the live source name so the preview is never a lie.
-    //
-    // NATIVE ROWS COME FIRST, immediately under the generator and the IQ
-    // file, and Soapy's rows follow them. Not a cosmetic ordering: with both
-    // present the native driver is the one this product can be held
-    // responsible for, and the list is read top-down.
-    const auto rowLabel = [this](int idx) -> const char* {
-        if (idx == 0) { return tr("Signal generator"); }
-        if (idx == 1) { return tr("IQ file"); }
-        if (idx == kSoundCardRow) { return tr("Sound card"); }
-        const int n = idx - kNativeRowBase;
-        if (n >= 0 && n < static_cast<int>(nativeRowLabels_.size())) {
-            return nativeRowLabels_[static_cast<std::size_t>(n)].c_str();
-        }
-        const int d = idx - soapyRowBase();
-        if (d >= 0 && d < static_cast<int>(soapyDevices_.size())) {
-            return soapyDevices_[static_cast<std::size_t>(d)].label.c_str();
-        }
-        return tr(pipeline_.activeSourceName());
-    };
+    const auto rowLabel = [this](int idx) -> const char* { return sourceRowLabel(idx); };
 
     // While discovery or an open is in flight the controls are disabled and
     // the state is spelled out: the work is on a worker thread, so the window
@@ -7861,31 +7932,10 @@ void AppWindow::drawSourceSection() {
     }
     ImGui::BeginDisabled(soapyBusy);
     ImGui::SetNextItemWidth(-FLT_MIN);
-    // THE SAVED SOURCE IS WHAT THE COMBO SAYS WHILE IT IS STILL THE SAVED ONE.
-    // A restore that could not open it leaves the generator running and the
-    // radio - or the I/Q file - remembered for the config (see
-    // gui::sourceToSave); showing "Signal generator" here would say the user
-    // had chosen that, and would disagree with the file this session is going
-    // to write. No row is ticked in the list below, because none of them is
-    // what is installed.
-    // Not while a sound card is opening either: the card is the one being
-    // brought back, and "(saved, not open)" would be the lamp's false alarm
-    // in words (gui::radioNotOpenLamp).
-    const bool keepPreview = restoreKeep_.valid() && device_ == nullptr &&
-                             sourceKind_ == "siggen" && !restoreKeepLabel_.empty() &&
-                             !soundCardOpenPending_;
-    // "(not open)" in the preview itself, because the combo is the one place
-    // a user looks to find out what the receiver is on, and the name alone
-    // there would claim the radio was running.
-    std::string keepPreviewLabel;
-    if (keepPreview) {
-        std::string keepBuf;
-        cascade::core::formatUtf8(keepBuf, tr("%s (saved, not open)"),
-                      restoreKeepLabel_.c_str());
-        keepPreviewLabel = keepBuf;
-    }
-    const bool comboOpen = ImGui::BeginCombo(
-        "##source_select", keepPreview ? keepPreviewLabel.c_str() : rowLabel(sourceSel_));
+    // What the combo shows closed: see sourceComboPreview.
+    const bool keepPreview = sourceKeepPreview();
+    const std::string preview = sourceComboPreview();
+    const bool comboOpen = ImGui::BeginCombo("##source_select", preview.c_str());
     if (comboOpen) {
         // ON THE FRAME IT OPENS, not on every frame it stays open: opening
         // the dropdown IS the user asking to see devices, and the combo asks
@@ -8115,7 +8165,7 @@ void AppWindow::drawSourceSection() {
     //
     // Shown only after a scan has actually completed and found nothing, so it
     // never flashes up during the first enumeration.
-    if (soapyScanned_ && !soapyScanPartial_ && !soapyBusy && soapyDevices_.empty()) {
+    if (noRadioHardwareShown()) {
         ImGui::Separator();
         ImGui::TextColored(cascade::gui::theme::warning(), tr("No radio hardware found"));
         ImGui::TextWrapped(

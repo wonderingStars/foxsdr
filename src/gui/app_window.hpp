@@ -776,6 +776,19 @@ private:
     bool shellOpen(const std::string& target);
 
     void drawSourceSection();
+    // WHAT THE SOURCE ROW SAYS ABOUT RADIOS (0.99.49 beta feedback; the rules
+    // are gui/source_row_status.hpp's). Whether "No radio hardware found" is
+    // shown; the hardware radios the running patch holds, by name; and the
+    // combo's preview and the folded row's chip, which say so.
+    bool noRadioHardwareShown() const;
+    std::vector<std::string> patchHeldRadioNames() const;
+    std::string sourceComboPreview();
+    std::string sourceRowChip();
+    // The Source combo's row label for an index; -1 (the active device
+    // dropped by a Refresh) is the live source's name.
+    const char* sourceRowLabel(int idx);
+    // The restore's saved source is what the combo names (sourceComboPreview).
+    bool sourceKeepPreview() const;
     // The three sections that used to be written inline in drawMenuColumn,
     // and the DECODE bank's list. See gui/rail_banks.hpp for why the rail is
     // five banks and drawMenuColumn for the dispatch.

@@ -52,6 +52,7 @@
 #include "gui/app_window.hpp"
 #include "gui/fonts.hpp"
 #include "gui/scope_face.hpp"
+#include "gui/source_row_status.hpp"
 #include "gui/text_fit.hpp"
 #include "gui/theme.hpp"
 #include "gui/ui_scale.hpp"
@@ -126,7 +127,9 @@ const char* const kChips[] = {
     // produces a chip wider than these two.
     "1 PORT", "12 PORTS",
     // Diagnostics, with the memory dump switched on.
-    "ON+DMP"};
+    "ON+DMP",
+    // Source, while a running patch has the radio (gui::sourceChipWithPatch).
+    "ON PATCH"};
 
 // EVERY LABEL THE MAIN WINDOW'S RAIL LETTERS. The first group is fixed text in
 // app_window.cpp; the last three are built at run time from a PLUGIN'S OWN
@@ -461,6 +464,16 @@ void testEveryLanguageBankWordsAndSourceChip() {
             std::printf("      %s: Source chip \"%s\"%s; label \"%s\" needs %.1f of %.1f px\n",
                         l.code.c_str(), chip.c_str(), whole ? "" : " is not the short form",
                         label, labelAtFloor, right - left);
+            ++badChips;
+        }
+        // ...and the chip the same row wears while a running patch has the
+        // radio (gui::sourceChipWithPatch): a translated word, whole, beside
+        // the row's label at its floor.
+        const std::string patchChip = cascade::gui::sourceChipWithPatch(chip, {"NESDR SMArt v5"});
+        const float patchRight = cascade::gui::railLabelRight(rowW, rowH, chipWidth(patchChip.c_str()));
+        if (patchChip != cascade::i18n::tr("ON PATCH") || left + labelAtFloor > patchRight) {
+            std::printf("      %s: Source chip \"%s\" leaves label \"%s\" %.1f of %.1f px\n",
+                        l.code.c_str(), patchChip.c_str(), label, patchRight - left, labelAtFloor);
             ++badChips;
         }
     }
