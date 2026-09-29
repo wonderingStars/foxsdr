@@ -379,6 +379,8 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     // The main view: one of the two faces the window has, or the patch view
     // (the default) for anything else - never a name nothing draws.
     getString(j, "mainView", out.mainView);
+    // Absent in a config from before 0.99.49: the rail opens (the default).
+    getBool(j, "railCollapsed", out.railCollapsed);
     if (out.mainView != "patch" && out.mainView != "receiver") { out.mainView = "patch"; }
     getString(j, "bandPlanSelection", out.bandPlanSelection);
     // Carried as written, like bandPlanSelection: which codes are real is a
@@ -1057,6 +1059,7 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
     }
     j["patchPresetPrevious"] = cfg.patchPresetPrevious;
     j["mainView"] = cfg.mainView;
+    j["railCollapsed"] = cfg.railCollapsed;
     j["bandPlanSelection"] = cfg.bandPlanSelection;
     j["language"] = cfg.language;
     j["country"] = cfg.country;

@@ -630,6 +630,8 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            a.patchPresetPrevious == b.patchPresetPrevious &&
            // The main view (0.99.40): switched by a key that saves nothing.
            a.mainView == b.mainView &&
+           // The rail folded to its strip (0.99.49): the key calls no save.
+           a.railCollapsed == b.railCollapsed &&
            a.bandPlanSelection == b.bandPlanSelection &&
            // Language and country: chosen in a combo on the SYSTEM bank.
            a.language == b.language && a.country == b.country &&
@@ -1569,6 +1571,14 @@ int AppWindow::run(int frames) {
                 inputScript_ = sp.steps;
                 inputScriptPos_ = 0;
                 inputScriptActive_ = !inputScript_.empty();
+                // THE SCRIPT'S POINTER IGNORES THE DESKTOP'S FOCUS. On losing
+                // the OS focus ImGui releases every mouse button and forgets
+                // the pointer; with no window manager (a test's Xvfb) focus
+                // follows the pointer, so another application's window
+                // opening on the same display between a scripted "down" and
+                // its "up" swallowed the click - the intermittent failure of
+                // the scripted tests under ctest -j (2026-09-29).
+                if (inputScriptActive_) { ImGui::GetIO().ConfigDebugIgnoreFocusLoss = true; }
                 std::fprintf(stderr, "cascade: input script %s: %zu steps, %d bad lines\n",
                              script, inputScript_.size(), sp.bad);
             } else {
@@ -2747,6 +2757,33 @@ bool benchWordKey(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, const char
     return pressed;
 }
 
+// --- A FOLD KEY'S CHEVRONS (0.99.49) -----------------------------------------
+//
+// "<<" and ">>" cut at the size a key's word is lettered are two specks, so a
+// fold key (the rail's, the patch inspector's) is drawn by benchWordKey with
+// no word and struck with two chevrons instead, in the same ink and with the
+// same one-pixel drop while held. `pointLeft` is "<<".
+void engraveFoldChevrons(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, bool pointLeft,
+                         bool held) {
+    if (dl == nullptr) { return; }
+    const ImU32 ink = cascade::gui::theme::toneHex(
+        0x2A251C, 255, held ? cascade::gui::theme::ink::ActiveText : cascade::gui::theme::ink::CtrlText);
+    const float h = br.y - tl.y;
+    const float cx = (tl.x + br.x) * 0.5f;
+    const float cy = (tl.y + br.y) * 0.5f + (held ? 1.0f : 0.0f);
+    const float arm = h * 0.22f;             // half the chevron's height
+    const float depth = arm * 0.9f;          // how far its point stands out
+    const float step = arm * 0.95f;          // between the two chevrons
+    const float th = std::max(1.5f, cascade::gui::uiscale::px(1.6f));
+    const float dir = pointLeft ? -1.0f : 1.0f;
+    for (int k = 0; k < 2; ++k) {
+        const float tipX = cx + dir * (depth * 0.5f + step * (k == 0 ? 0.5f : -0.5f));
+        const float backX = tipX - dir * depth;
+        const ImVec2 pts[3] = {ImVec2(backX, cy - arm), ImVec2(tipX, cy), ImVec2(backX, cy + arm)};
+        dl->AddPolyline(pts, 3, ink, ImDrawFlags_None, th);
+    }
+}
+
 // --- THE WORD ON A RAIL ROW'S PLATE, CLIPPED TO THE ROOM IT ACTUALLY HAS ------
 //
 // Both rail rows draw the same label the same way, so they draw it through one
@@ -3499,9 +3536,23 @@ void AppWindow::drawUi() {
         }
         drawScopeMode();
     } else {
-        ImGui::BeginChild("##menu_column", ImVec2(cascade::gui::uiscale::px(kMenuWidth), 0.0f),
-                         ImGuiChildFlags_None);
-        drawMenuColumn();
+        // FOLDED TO A STRIP when the user has put the rail away (0.99.49): the
+        // view beside it - the patch page or the receiver - takes the width.
+        ImGui::BeginChild("##menu_column",
+                          ImVec2(cascade::gui::uiscale::px(cascade::gui::railColumnWidth(railCollapsed_)),
+                                 0.0f),
+                          ImGuiChildFlags_None);
+        {
+            const ImVec2 c0 = ImGui::GetWindowPos();
+            const ImVec2 cs = ImGui::GetWindowSize();
+            cascade::gui::census::note(railCollapsed_ ? "rail:folded" : "rail:open");
+            cascade::gui::census::rect("rail:column", c0.x, c0.y, c0.x + cs.x, c0.y + cs.y);
+        }
+        if (railCollapsed_) {
+            drawRailStrip();
+        } else {
+            drawMenuColumn();
+        }
         ImGui::EndChild();
 
         ImGui::SameLine();
@@ -6407,6 +6458,43 @@ void AppWindow::drawFrequencyReadout(float plateX, float plateY, float scale) {
     }
 }
 
+void AppWindow::drawRailFoldKey(float colX, float colY, float colW) {
+    // The bench's lettered key (benchWordKey), in the plate's title row on
+    // the open rail and at the top of the strip when it is folded. Pressing it
+    // is the whole of folding: the next frame lays the column out at its new
+    // width, and currentConfig carries the choice to the debounced save.
+    const cascade::gui::RailFoldKeyRect r = cascade::gui::railFoldKeyRect(
+        colX, colY, colW, railCollapsed_, cascade::gui::uiscale::factor());
+    const ImVec2 tl(r.x0, r.y0);
+    const ImVec2 br(r.x1, r.y1);
+    const bool pressed = benchWordKey(ImGui::GetWindowDrawList(), tl, br, "", true,
+                                      railCollapsed_ ? "railunfold" : "railfold");
+    engraveFoldChevrons(ImGui::GetWindowDrawList(), tl, br, !railCollapsed_, ImGui::IsItemActive());
+    cascade::gui::census::rect(railCollapsed_ ? "railkey:unfold" : "railkey:fold", tl.x, tl.y,
+                               br.x, br.y);
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("%s", railCollapsed_
+                                    ? tr("Show the Function Select panel")
+                                    : tr("Fold the Function Select panel away to give the main "
+                                         "view its width"));
+    }
+    if (pressed) {
+        railCollapsed_ = !railCollapsed_;
+        cascade::core::diagLogf("rail: %s", railCollapsed_ ? "folded" : "opened");
+    }
+}
+
+void AppWindow::drawRailStrip() {
+    // THE FOLDED RAIL: the plate's ground and bevel, the width of a key, and
+    // the one key that opens it. Nothing else fits a strip, and nothing else
+    // is wanted there - the point of folding it is the width.
+    const ImVec2 tl = ImGui::GetWindowPos();
+    const ImVec2 size = ImGui::GetWindowSize();
+    cascade::gui::addBenchPlate(ImGui::GetWindowDrawList(), tl,
+                                ImVec2(tl.x + size.x, tl.y + size.y), nullptr);
+    drawRailFoldKey(tl.x, tl.y, size.x);
+}
+
 void AppWindow::drawMenuColumn() {
     // THE RAIL IS A PLATE, not a column of headers. addBenchPlate lays the
     // ground, the bevel, the engraved title and the rule under it, and hands
@@ -6418,6 +6506,8 @@ void AppWindow::drawMenuColumn() {
     const ImVec2 colSize = ImGui::GetWindowSize();
     float bodyTop = cascade::gui::addBenchPlate(
         colDl, colTL, ImVec2(colTL.x + colSize.x, colTL.y + colSize.y), tr("FUNCTION SELECT"));
+    // THE FOLD KEY, "<<", at the right end of the title row (0.99.49).
+    drawRailFoldKey(colTL.x, colTL.y, colSize.x);
     // THE FIVE BANK KEYS, under the title and above the sections - the
     // function selector a 1960s bench actually has: a row of pushbuttons, one
     // lit. See gui/rail_banks.hpp for why the rail stopped being one list.
@@ -13510,8 +13600,9 @@ void AppWindow::drawPatchInspectorFoldKey() {
                         : std::max(cur.x, right - keyW),
                     cur.y);
     const ImVec2 br(tl.x + keyW, tl.y + keyH);
-    const bool pressed = benchWordKey(ImGui::GetWindowDrawList(), tl, br,
-                                      patchInspectorFolded_ ? "<<" : ">>", true, "patchinspfold");
+    const bool pressed = benchWordKey(ImGui::GetWindowDrawList(), tl, br, "", true, "patchinspfold");
+    engraveFoldChevrons(ImGui::GetWindowDrawList(), tl, br, patchInspectorFolded_,
+                        ImGui::IsItemActive());
     cascade::gui::census::rect("patchinspfold", tl.x, tl.y, br.x, br.y);
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("%s", patchInspectorFolded_
@@ -25266,6 +25357,7 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     // WHICH FACE: the device lists stay unasked (patchListsWanted_) and the
     // patch stays stopped - showing it starts nothing.
     patchOpen_ = cfg.mainView != "receiver";
+    railCollapsed_ = cfg.railCollapsed;
     bandPlanSizeIndex_ = bandPlanSizeIndexFromKey(cfg.bandPlanSize);
     bandPlanPaletteIndex_ = bandPlanPaletteIndexFromKey(cfg.bandPlanPalette);
     // applyConfig runs AFTER the startup loadBandPlan(), so a restored
@@ -26364,6 +26456,7 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.patchPresets = patchPresets_.list();
     cfg.patchPresetPrevious = patchPresets_.previous();
     cfg.mainView = patchOpen_ ? "patch" : "receiver";
+    cfg.railCollapsed = railCollapsed_;
     // WHILE THE PATCH PAGE HOLDS THE RECEIVER'S RADIO (0.99.17) the receiver
     // runs on the generator only because the page borrowed its radio, so the
     // radio is what is saved - the same rule as a restore that could not

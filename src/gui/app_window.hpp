@@ -411,6 +411,38 @@ inline float railLabelRight(float rowRight, float rowH, float chipTextWidth, flo
 inline constexpr float kMenuWidth = 384.0f;   // left column
 inline constexpr float kRailPlatePad = 8.0f;  // plate inset inside that column
 
+// --- THE RAIL FOLDS AWAY (0.99.49 beta feedback) -----------------------------
+//
+// On a small laptop the FUNCTION SELECT column is 384 of 1366 pixels, and
+// the patch page and the spectrum beside it are what the user is working in.
+// A "<<" key at the right of the plate's title row folds the whole column to
+// a strip holding a ">>" key that opens it again; the main area - the patch
+// page or the receiver's spectrum - takes the width that frees. Remembered in
+// the config (AppConfig::railCollapsed). Every size here is logical pixels,
+// scaled by the caller with the interface size, like kMenuWidth itself.
+inline constexpr float kRailFoldedW = 34.0f;   // the strip the column folds to
+inline constexpr float kRailFoldKeyW = 26.0f;
+inline constexpr float kRailFoldKeyH = 20.0f;
+inline constexpr float kRailFoldKeyTop = 6.0f;  // from the plate's top edge
+
+// The left column's width, open or folded.
+inline float railColumnWidth(bool collapsed) { return collapsed ? kRailFoldedW : kMenuWidth; }
+
+// Where the fold key sits, in screen pixels, for a column at colX, colY
+// colW wide at interface size s: open, at the right end of the title row,
+// inside the plate's inset and above the rule under the title; folded,
+// centred on the strip at the same height.
+struct RailFoldKeyRect {
+    float x0 = 0.0f, y0 = 0.0f, x1 = 0.0f, y1 = 0.0f;
+};
+inline RailFoldKeyRect railFoldKeyRect(float colX, float colY, float colW, bool collapsed, float s) {
+    const float w = kRailFoldKeyW * s;
+    const float h = kRailFoldKeyH * s;
+    const float y0 = colY + kRailFoldKeyTop * s;
+    const float x0 = collapsed ? colX + (colW - w) * 0.5f : colX + colW - kRailPlatePad * s - w;
+    return RailFoldKeyRect{x0, y0, x0 + w, y0 + h};
+}
+
 // THE FIVE BANK KEYS (drawRailBankKeys): the column's width shared five ways
 // after an 8 px inset each side and 4 px between keys, the word lettered at
 // fonts::kTinySize with 3 px of brass kept clear each side, and drawn smaller
@@ -721,6 +753,13 @@ private:
     // above.
     void drawFrequencyReadout(float wellX, float wellY, float scale);
     void drawMenuColumn();
+    // The folded rail: a plate the width of kRailFoldedW with the ">>" key
+    // that opens it, and nothing else (0.99.49).
+    void drawRailStrip();
+    // The "<<" / ">>" key (railFoldKeyRect), for the open rail and the strip.
+    void drawRailFoldKey(float colX, float colY, float colW);
+    // The rail is folded to its strip (AppConfig::railCollapsed).
+    bool railCollapsed_ = false;
     // The update banner, and the work behind it. Drawn at the top of the menu
     // column because a build that cannot see the user's radio is the most
     // useful thing this application can say to them, and it is worth more than

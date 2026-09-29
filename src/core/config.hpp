@@ -308,6 +308,11 @@ struct AppConfig {
     // a patch still only runs from its own START key. The loader keeps only
     // the two names; anything else opens on "patch".
     std::string mainView = "patch";
+    // THE FUNCTION SELECT RAIL FOLDED TO A STRIP (0.99.49 beta feedback, a
+    // small laptop): the "<<" key in the rail's title row folds it, ">>" on
+    // the strip opens it. A layout preference, not a window, so startupState
+    // keeps it like mainView.
+    bool railCollapsed = false;
     std::string bandPlanSelection = "world";
 
     // Ribbon size and segment-colour palette for the overlay above (issue #1:

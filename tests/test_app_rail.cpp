@@ -652,6 +652,55 @@ void testBenchPlateTitleScalesWithInterfaceSize() {
     CHECK(cascade::gui::uiscale::factor() == 1.0f);
 }
 
+// --- 5c. THE FOLD KEY LEAVES THE TITLE WHOLE (0.99.49) ---------------------------
+//
+// The rail's "<<" key sits at the right end of the FUNCTION SELECT plate's
+// title row (gui::railFoldKeyRect). The title is centred on the plate and
+// fitted to the plate's whole width by addBenchPlate, so a long translation
+// could run under the key. Measured here the way addBenchPlate lays it out -
+// the same face, size, tracking and fit - in every language the build
+// carries, at the interface sizes the rail is drawn at.
+void testFoldKeyClearsTheTitle() {
+    std::printf("  every language: the FUNCTION SELECT title stays clear of the fold key\n");
+    const std::string savedChoice = cascade::gui::uiscale::choice();
+    const unsigned savedDpi = cascade::gui::uiscale::monitorDpi();
+    cascade::gui::uiscale::setMonitorDpi(96);
+    int clashes = 0;
+    int checked = 0;
+    for (const char* choice : {"auto", "150", "200"}) {
+        cascade::gui::uiscale::setChoice(choice);
+        const float s = cascade::gui::uiscale::factor();
+        const float colW = cascade::gui::kMenuWidth * s;
+        const cascade::gui::RailFoldKeyRect key =
+            cascade::gui::railFoldKeyRect(0.0f, 0.0f, colW, false, s);
+        // Inside the plate, and a key rather than a speck.
+        CHECK(key.x0 > colW * 0.5f && key.x1 <= colW - cascade::gui::kRailPlatePad * s + 0.01f);
+        for (const cascade::i18n::Language& l : cascade::i18n::languages()) {
+            if (!useLanguage(l.code)) { continue; }
+            ImFont* f = cascade::gui::fonts::legend();
+            const char* title = cascade::i18n::tr("FUNCTION SELECT");
+            constexpr float kTitleTrack = 0.20f;  // addBenchPlate's
+            const float px = cascade::gui::fitTrackedPx(f, cascade::gui::fonts::legendPx(), title,
+                                                        kTitleTrack, colW - 16.0f * s);
+            const float tw = cascade::gui::trackedWidth(f, px, title, px * kTitleTrack);
+            const float x0 = std::max(colW * 0.5f - tw * 0.5f, 8.0f * s);
+            ++checked;
+            if (x0 + tw > key.x0 - 2.0f * s) {
+                std::printf("      %s at S=%.1f: \"%s\" ends at %.1f, the key starts at %.1f\n",
+                            l.code.c_str(), static_cast<double>(s), title,
+                            static_cast<double>(x0 + tw), static_cast<double>(key.x0));
+                ++clashes;
+            }
+        }
+    }
+    useLanguage("en");
+    cascade::gui::uiscale::setMonitorDpi(savedDpi);
+    cascade::gui::uiscale::setChoice(savedChoice);
+    std::printf("    %d titles measured, %d under the key\n", checked, clashes);
+    CHECK(checked > 30);
+    CHECK(clashes == 0);
+}
+
 // --- 6. the Serial ports row's chip names what it counts ---------------------
 //
 // "0" alone would read as "off"; this row is never off, it just sometimes
@@ -697,6 +746,7 @@ int main() {
     testEveryLanguageBankWordsAndSourceChip();
     testRailScalesWithInterfaceSize();
     testBenchPlateTitleScalesWithInterfaceSize();
+    testFoldKeyClearsTheTitle();
 
     ImGui::DestroyContext();
     return testSummary("test_app_rail");
