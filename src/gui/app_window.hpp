@@ -1354,8 +1354,38 @@ private:
     // slot swaps it with the canvas. False, and nothing changed, when the
     // text is not a patch.
     cascade::core::PatchPresetStatus savePatchPreset(const std::string& name, bool overwrite);
-    bool loadPatchPreset(const std::string& text);
+    bool loadPatchPreset(std::string text);
     std::string serialisePatchNow() const;
+    // THE PRESETS PANEL: a page of its own, opened by the PRESETS key in the
+    // patch page's control row (drawPatchTransport) and drawn only while the
+    // patch face is showing. The list (click to select, double-click or LOAD
+    // to load), SAVE AS... with a name field, RENAME and DELETE; an overwrite
+    // and a delete each ask first. app_window_patch_presets.cpp.
+    void drawPatchPresetsPage();
+    void drawPatchPresetsBody();
+    // The sentence the panel shows for what a save, rename, delete or load
+    // answered; `name` fills the sentences that name the preset.
+    std::string patchPresetSentence(cascade::core::PatchPresetStatus st,
+                                    const std::string& name) const;
+    // Loads the selected row - a preset or the previous-patch slot - and
+    // says what happened.
+    void loadSelectedPatchPreset();
+    bool patchPresetsOpen_ = false;
+    // The selected row: a preset by its name, or the previous-patch slot.
+    std::string patchPresetSel_;
+    bool patchPresetSelPrevious_ = false;
+    // The name field SAVE AS... and RENAME open, and which of them it is for.
+    enum class PatchPresetEdit { None, SaveAs, Rename };
+    PatchPresetEdit patchPresetEdit_ = PatchPresetEdit::None;
+    char patchPresetName_[cascade::core::kMaxPatchPresetNameBytes + 1] = {};
+    bool patchPresetFocusName_ = false;
+    // A question waiting for its answer: replace the preset named
+    // patchPresetPending_, or delete it.
+    bool patchPresetAskOverwrite_ = false;
+    bool patchPresetAskDelete_ = false;
+    std::string patchPresetPending_;
+    // What the last action did, in a sentence under the list.
+    std::string patchPresetNote_;
     // The key that opens it, FIRST in the SIGNAL PATH bank. It goes there
     // rather than in VIEW by the same test that put the recorder and the
     // transmitter in that bank: a patch is not a way of LOOKING at the signal

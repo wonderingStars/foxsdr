@@ -991,6 +991,25 @@ void AppWindow::drawPatchTransport() {
                                    "them all on again."));
     }
 
+    // PRESETS: beside ALL OFF, the same height, an ordinary key rather than a
+    // red one - it stops nothing by being pressed. Lit while its panel is
+    // open (drawPatchPresetsPage, app_window_patch_presets.cpp), the way a
+    // radio's switch is lit while it runs.
+    ImGui::SameLine();
+    const bool presetsLit = patchPresetsOpen_;
+    if (presetsLit) {
+        ImGui::PushStyleColor(ImGuiCol_Button,
+                              cascade::gui::theme::withAlpha(cascade::gui::theme::kPhosphor, 0.35f));
+    }
+    if (ImGui::Button(trId("PRESETS###patchpresets"), ImVec2(0.0f, kR * 1.7f))) {
+        patchPresetsOpen_ = !patchPresetsOpen_;
+    }
+    if (presetsLit) { ImGui::PopStyleColor(); }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("%s", tr("Save the patch on the canvas under a name, or load one you saved.\n"
+                                   "Loading stops a running patch; the one loaded waits for START."));
+    }
+
     // What is running, in words.
     std::size_t radios = 0, on = 0;
     for (const pc::Node& n : patchGraph_.nodes()) {

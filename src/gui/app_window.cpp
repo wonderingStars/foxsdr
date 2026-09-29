@@ -14120,7 +14120,7 @@ cascade::core::PatchPresetStatus AppWindow::savePatchPreset(const std::string& n
     return st;
 }
 
-bool AppWindow::loadPatchPreset(const std::string& text) {
+bool AppWindow::loadPatchPreset(std::string text) {
     // What is on the canvas NOW, taken before it goes: the slot's whole point.
     const std::string outgoing = serialisePatchNow();
     if (!replacePatch(text, PatchReplace::Preset)) { return false; }
@@ -16863,6 +16863,7 @@ void AppWindow::drawPluginWindows() {
     // is a real window like every one of them: movable, resizable, and able to
     // sit on a second monitor beside the spectrum it is explaining.
     drawPatchPage();
+    drawPatchPresetsPage();
     drawDemodScopePage();
     drawFeatureRequestPage();
     drawProblemReportPage();
