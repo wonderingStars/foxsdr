@@ -33,6 +33,14 @@
 #include <ws2tcpip.h>
 #pragma comment(lib, "ws2_32.lib")
 #else
+// Must match every other TU that includes httplib.h on non-Windows (see
+// test_telemetry.cpp's own comment on this exact requirement): without it
+// this file's httplib::ClientImpl has a different layout from crash_upload.cpp's,
+// and the first real request died with std::bad_alloc inside
+// create_client_socket.
+#ifndef CPPHTTPLIB_OPENSSL_SUPPORT
+#define CPPHTTPLIB_OPENSSL_SUPPORT
+#endif
 #include <httplib.h>
 #include <unistd.h>
 #endif
