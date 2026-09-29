@@ -2128,6 +2128,25 @@ private:
     void closeUiSession();
     void refreshUiState();
     void pumpTransmitKey();
+    // THE WINDOW'S COMMANDS ON ITS SESSION (the engine-stage4 window port):
+    // one command, submitted for the engine's next pass - its long text, when
+    // it has one, through submit_text (API 0.3). The answers are drained once
+    // a frame with the key's (pumpTransmitKey).
+    void uiSubmit(const cascade::core::cmd::QueuedCommand& q);
+    void uiSubmit(const FoxCommand& c) { uiSubmit(cascade::core::cmd::QueuedCommand{c, {}}); }
+    // A FACT (API 0.3, get_setting("fact.<key>")), cached until the lists'
+    // publish moves listSeq - read on the first ask after that, so a page
+    // drawn every frame costs nothing between changes. "" when the engine
+    // has none.
+    const std::string& uiFact(const char* key);
+    std::map<std::string, std::string> uiFacts_;
+    std::uint64_t uiFactsListSeq_ = 0;
+    // THE TRANSMIT PAGE IS OPEN - the window's own page, so the window's own
+    // flag: restored from the config it hands the engine (applyConfig), moved
+    // by its own clicks, each told to the engine
+    // (FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN) for the web status and the save.
+    bool transmitPageOpen_ = false;
+    void setTransmitPageOpen(bool open);
     // The microphone's peak, decayed towards zero so the meter falls rather
     // than flickering - a bar redrawn from one 10 ms peak a frame is unreadable.
     float transmitPeak_ = 0.0f;

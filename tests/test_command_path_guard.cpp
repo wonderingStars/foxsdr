@@ -336,8 +336,8 @@ const LineAllow kLineAllowed[] = {
     {"drawPatchPage", "refreshPluginRunner();"},
     {"drawPatchView", "patchReconcile();"},
     {"drawPatchView", "patchApplyRunning();"},
-    // drawTransmitPage: a transmitter follows the receiver's dial, per frame.
-    {"drawTransmitPage", "followTransmitFrequency();"},
+    // drawTransmitPage's followTransmitFrequency CLOSED (engine stage 4 window
+    // port): the engine's own pass follows the dial (Engine::pumpPublish).
     // run: interactive start, the GPS test seam, the catalogue test hook, the
     // device seam's scan, the preset seam for a plugin with none (OPEN 5),
     // FOXSDR_PATCH_START (OPEN 5), the measurement hook, and the teardown.
@@ -915,8 +915,19 @@ const char* const kPublishedOnly[] = {
 // on one thread. Each round that moves a group behind a handed copy lowers
 // these; nothing may raise them. Counted over every AppWindow member, as
 // `engine_.<field>` for any field the Engine declares.
-constexpr int kWindowFieldsReadBudget = 163;
-constexpr int kWindowFieldReadsBudget = 793;
+// THE WINDOW'S PORT (engine-stage4.md plan step 4), group by group: a member
+// listed here draws from its engine API session ONLY - its state read, its
+// lists and facts, its submits - and may not name `engine_.` at all, field
+// or call. The list only grows; step 5's fence makes it the whole window.
+const char* const kPortedMembers[] = {
+    // the Transmit page and its rail key
+    "drawTransmitPage", "drawTransmitSection", "setTransmitPageOpen",
+    // the session's own helpers
+    "uiSubmit", "uiFact", "refreshUiState", "pumpTransmitKey",
+};
+
+constexpr int kWindowFieldsReadBudget = 152;
+constexpr int kWindowFieldReadsBudget = 761;
 
 struct Report {
     int violations = 0;
@@ -986,6 +997,16 @@ void scan(const fs::path& root, const EngineSurface& eng, Report& r) {
                 continue;  // file scope, another class, or a file with no AppWindow code
             }
             r.membersSeen.insert(member);
+            if (inList(member, kPortedMembers)) {
+                const std::string& rawP = i < rawLines.size() ? rawLines[i] : l;
+                const std::size_t at = rawP.find("engine_.");
+                if (at != std::string::npos && (at == 0 || (!isIdent(rawP[at - 1]) && rawP[at - 1] != '.'))) {
+                    ++r.violations;
+                    std::printf("FAIL: AppWindow::%s is PORTED (draws from its engine API session only) but "
+                                "reaches the engine directly at %s:%zu\n",
+                                member.c_str(), file.c_str(), i + 1);
+                }
+            }
             // OPEN 3: published-only fields, and the ratchet's count - over
             // every AppWindow member, machinery included.
             const std::string& raw = i < rawLines.size() ? rawLines[i] : l;
@@ -1101,6 +1122,11 @@ int main(int argc, char** argv) {
     CHECK(eng.methods.size() >= 100);
     CHECK(eng.fields.size() >= 200);
     CHECK(r.violations == 0);
+    // Every PORTED member exists (a stale name cannot quietly exempt nothing).
+    for (const char* m : kPortedMembers) {
+        if (r.membersSeen.count(m) == 0) { std::printf("FAIL: kPortedMembers names %s, which is no member\n", m); }
+        CHECK(r.membersSeen.count(m) != 0);
+    }
     // OPEN 3's ratchet.
     std::printf("  the window reads %zu engine fields directly, %d times (budget %d fields, %d reads)\n",
                 r.fieldsRead.size(), r.fieldReads, kWindowFieldsReadBudget, kWindowFieldReadsBudget);

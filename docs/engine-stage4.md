@@ -312,3 +312,41 @@ bytes hashed a pass more - the store's ids, fourteen status lines, the
 graph's nodes); a block rebuild now copies more (the band plan's entries,
 the store) - but only when something in it changed. Nothing on the sample
 path changed; the DSP thread's locks are taken no more often.
+
+### 6.5 Step 4: the window's port, group by group
+
+THE PATTERN, set by the first group (the Transmit page and its rail key):
+the member draws from the window's session only - `uiState_` (read once a
+frame, after the publish), lists, and FACTS through a cache that is dropped
+when `listSeq` moves (`AppWindow::uiFact`) - and changes things only by
+`AppWindow::uiSubmit` (one command on the session, its long text through
+`submit_text`; the answers drained once a frame with the key's). What the
+table had no read for is added to API 0.3 under decision 4, documented in
+docs/api-0.3-additions.md, served by the engine and held by
+tests/test_engine_api_03.cpp; engine work the window used to call from its
+frame moves into the engine's pass. tests/test_command_path_guard.cpp lists
+every ported member (`kPortedMembers`): one that names `engine_.` at all
+fails, and the OPEN 3 ratchet is lowered to the new count.
+
+GROUP 1, the Transmit page (drawTransmitPage, drawTransmitSection): API 0.3
+section 8.1 (the transmitter as a page draws it: split, input, tone,
+monitor, the board's power range, the microphone opening and its peak, the
+device, a fault, the last error; `txFrequencyHz` is where it would transmit,
+`txPowerDb` the setting when no board is open). The frequency-follow the
+page called every frame is the engine's pass's now (Engine::pumpPublish).
+The page's open flag is the window's own (it is the window's page), told to
+the engine by FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN for the web status and the
+save. Ratchet: 163 fields / 788 reads -> 152 / 761. What the operator sees:
+nothing new; a setting lands one pass after the click (decision 2), as the
+key already does.
+
+A flake the full run found on the way, in the port of the reference's
+safety suite, not the product: "three RUN 0 merged into one pass" read the
+state 400 ms after the last result - enough for the mock's instant stop, not
+always for a real pipeline's (a DSP-thread join after the rest of a 200 ms
+stall). The port now waits for the merged ticket's own result (PORT, noted
+in the file). A second, older flake, not stage 4's: test_main_view clicks
+the real application at fixed frame numbers and misses under several
+software-rendered GUI tests at once - patch 1's tree fails the same way under
+the same mix (2 of 3 runs; this tree 1 of 3), and it passes alone and under
+plain CPU load (5 of 5 each).

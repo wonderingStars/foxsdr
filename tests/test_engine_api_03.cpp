@@ -20,6 +20,9 @@
 //   D   the decoder-output backlog
 //   K   the store: an entry's long texts as facts
 //   B   the bias tee: flags and facts on a radio without one
+//   X   the transmitter as its page draws it (state, 8.1): split, input,
+//       tone, monitor, the board's power range, the device, where it would
+//       transmit, the power setting with no board open
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <algorithm>
@@ -427,6 +430,63 @@ void testBiasTee() {
     CHECK((st.flags & FOXAPI_RX_PATCH_RUNNING) == 0u);
 }
 
+void testTransmitterState() {
+    testing::Engine e(api(), kHooks);
+    testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    // No transmitter: nothing open, but a power setting is still the setting
+    // (never the 0 dB - full power - a closed board's readback would say),
+    // and it would transmit on the receiver's dial.
+    CHECK_EQ(s.run(cmd(FOXAPI_OP_TX_SET_POWER, -40.0)).result.status, FOXAPI_OK);
+    FoxReceiverState st = s.state();
+    CHECK((st.flags & FOXAPI_RX_TX_AVAILABLE) == 0u);
+    CHECK_EQ(std::string(st.txDeviceName), std::string());
+    CHECK_EQ(st.txPowerDb, -40.0);
+    CHECK_EQ(st.txFrequencyHz, st.tunedHz);
+    CHECK((st.txFlags & FOXAPI_TX_POWER_RANGE) == 0u);
+    // The dummy load (testHooks only) as the transmitter.
+    CHECK_EQ(s.run(cmd(FOXAPI_OP_TX_OPEN, 0, 0, "test:tx:dummy")).result.status, FOXAPI_OK);
+    st = s.state();
+    CHECK((st.flags & FOXAPI_RX_TX_AVAILABLE) != 0u);
+    CHECK_EQ(std::string(st.txDeviceName), std::string("Test transmitter (dummy load, no RF)"));
+    CHECK((st.txFlags & FOXAPI_TX_POWER_RANGE) != 0u);
+    CHECK_EQ(st.txPowerMinDb, -89.75);
+    CHECK_EQ(st.txPowerMaxDb, 0.0);
+    CHECK((st.txFlags & FOXAPI_TX_FAULTED) == 0u);
+    CHECK_EQ(std::string(st.txError), std::string());
+    // Settings, each read back in the state and each moving txSeq.
+    uint64_t seq = st.txSeq;
+    // The tone (the default: choosing the microphone would open this
+    // machine's input device, which no test here does).
+    CHECK_EQ(s.run(cmd(FOXAPI_OP_TX_SET_INPUT, 0, 1)).result.status, FOXAPI_OK);
+    st = s.state();
+    CHECK_EQ(st.txInput, 1u);
+    CHECK_EQ(s.run(cmd(FOXAPI_OP_TX_SET_TONE, 1750.0)).result.status, FOXAPI_OK);
+    st = s.state();
+    CHECK_EQ(st.txToneHz, 1750.0);
+    CHECK(st.txSeq > seq);
+    seq = st.txSeq;
+    CHECK_EQ(s.run(cmd(FOXAPI_OP_TX_SET_MONITOR, 0, 1)).result.status, FOXAPI_OK);
+    st = s.state();
+    CHECK((st.txFlags & FOXAPI_TX_MONITOR) != 0u);
+    CHECK(st.txSeq > seq);
+    // SPLIT: the transmitter leaves the receiver's dial.
+    FoxCommand split = cmd(FOXAPI_OP_TX_SET_SPLIT, 435.0e6, 1);
+    CHECK_EQ(s.run(split).result.status, FOXAPI_OK);
+    st = s.state();
+    CHECK((st.txFlags & FOXAPI_TX_SPLIT) != 0u);
+    CHECK_EQ(st.txSplitHz, 435.0e6);
+    CHECK_EQ(st.txFrequencyHz, 435.0e6);
+    // ...and back: it follows the receiver again, retuned in the pass.
+    CHECK_EQ(s.run(cmd(FOXAPI_OP_TX_SET_SPLIT, 0.0, 0)).result.status, FOXAPI_OK);
+    CHECK_EQ(s.run(cmd(FOXAPI_OP_SET_FREQUENCY, 145.5e6)).result.status, FOXAPI_OK);
+    st = s.state();
+    CHECK((st.txFlags & FOXAPI_TX_SPLIT) == 0u);
+    CHECK_EQ(st.txFrequencyHz, st.tunedHz);
+    // The input peak is a MEASUREMENT: it never moves txSeq by itself.
+    CHECK(st.txInputPeak >= 0.0 && st.txInputPeak <= 1.0);
+    CHECK_EQ(s.run(cmd(FOXAPI_OP_TX_CLOSE)).result.status, FOXAPI_OK);
+}
+
 }  // namespace
 
 int main() {
@@ -445,5 +505,6 @@ int main() {
     testDecoderLines();
     testStore();
     testBiasTee();
+    testTransmitterState();
     return check::finish("test_engine_api_03");
 }

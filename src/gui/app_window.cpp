@@ -15151,10 +15151,11 @@ void AppWindow::drawTransmitSection() {
     // and the LAMP is lit only while it is actually on the air. A rail with
     // "ON AIR" showing and a lamp burning is the one thing on this panel that
     // has to be readable from across the room.
-    const cascade::gui::TxLamp lamp = cascade::gui::txLampState(
-        engine_.transmitter_.haveSink(),
-        engine_.transmitter_.sink() != nullptr && engine_.transmitter_.sink()->faulted(),
-        engine_.transmitter_.transmitting());
+    // From the window's session (engine stage 4): what the last pass published.
+    const bool txHave = (uiState_.flags & FOXAPI_RX_TX_AVAILABLE) != 0u;
+    const bool txOnAir = (uiState_.flags & FOXAPI_RX_TX_KEYED) != 0u;
+    const cascade::gui::TxLamp lamp =
+        cascade::gui::txLampState(txHave, txHave && (uiState_.txFlags & FOXAPI_TX_FAULTED) != 0u, txOnAir);
     ImU32 colour = cascade::gui::theme::kInkFaint;
     switch (lamp) {
         case cascade::gui::TxLamp::NoRadio: colour = cascade::gui::theme::kInkFaint; break;
@@ -15162,20 +15163,57 @@ void AppWindow::drawTransmitSection() {
         case cascade::gui::TxLamp::Transmitting: colour = cascade::gui::theme::kAlarmHot; break;
         case cascade::gui::TxLamp::Fault: colour = cascade::gui::theme::kAlarm; break;
     }
-    if (benchSwitchRow(trId("Transmit###transmit"), engine_.transmitOpen_,
+    if (benchSwitchRow(trId("Transmit###transmit"), transmitPageOpen_,
                        tr(cascade::gui::txLampText(lamp)),
-                       colour, engine_.transmitter_.transmitting(), true,
+                       colour, txOnAir, true,
                        tr("Opens the transmitter: frequency, mode, power, input and the key.\n"
                           "Nothing here transmits until the key is held or latched, and the\n"
                           "page is the only place the key exists."))) {
-        // A COMMAND, not a direct write (engine/stage3b-pre 2b): applied at
-        // once (applyCommand, not submitCommand) so the page still opens or
-        // closes on THIS frame, exactly as the direct write did - the engine
-        // side also releases a remote key held, in the same step, when this
-        // closes it (FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN's own comment).
-        engine_.applyCommand(cascade::core::cmd::makeInt(FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN,
-                                                         engine_.transmitOpen_ ? 0 : 1));
+        // The page is the window's: it opens or closes on THIS frame, and the
+        // engine is told (for the web status and the save) in its next pass.
+        setTransmitPageOpen(!transmitPageOpen_);
     }
+}
+
+void AppWindow::setTransmitPageOpen(bool open) {
+    transmitPageOpen_ = open;
+    uiSubmit(cascade::core::cmd::makeInt(FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN, open ? 1 : 0));
+}
+
+void AppWindow::uiSubmit(const cascade::core::cmd::QueuedCommand& q) {
+    if (uiSession_ == nullptr) {
+        cascade::core::diagWarnf("ui: no engine API session - %s was not sent",
+                                 cascade::core::cmd::opName(q.c.op));
+        return;
+    }
+    if (q.longText.empty()) {
+        (void)engineApi_->submit(uiSession_, &q.c, 1, nullptr);
+    } else {
+        (void)engineApi_->submit_text(uiSession_, &q.c, q.longText.data(),
+                                      static_cast<uint32_t>(q.longText.size()), nullptr);
+    }
+}
+
+const std::string& AppWindow::uiFact(const char* key) {
+    static const std::string kNone;
+    if (uiSession_ == nullptr) { return kNone; }
+    if (uiState_.listSeq != uiFactsListSeq_) {
+        uiFacts_.clear();
+        uiFactsListSeq_ = uiState_.listSeq;
+    }
+    const auto it = uiFacts_.find(key);
+    if (it != uiFacts_.end()) { return it->second; }
+    std::string v;
+    char buf[512];
+    int32_t n = engineApi_->get_setting(uiSession_, key, buf, sizeof(buf));
+    if (n >= static_cast<int32_t>(sizeof(buf))) {
+        v.resize(static_cast<std::size_t>(n) + 1u);
+        n = engineApi_->get_setting(uiSession_, key, v.data(), v.size());
+        v.resize(n >= 0 ? std::min(static_cast<std::size_t>(n), v.size() - 1u) : 0u);
+    } else if (n >= 0) {
+        v.assign(buf, static_cast<std::size_t>(n));
+    }
+    return uiFacts_.emplace(key, std::move(v)).first->second;
 }
 
 // --- THE WINDOW'S ENGINE API SESSION (engine stage 4) --------------------------
@@ -15246,7 +15284,7 @@ void AppWindow::pumpTransmitKey() {
 }
 
 void AppWindow::drawTransmitPage() {
-    if (!engine_.transmitOpen_) { return; }
+    if (!transmitPageOpen_) { return; }
     constexpr float kTxW = 560.0f;
     constexpr float kTxH = 520.0f;
     // The opening rectangle is the call site's job - see drawDemodScopePage
@@ -15256,12 +15294,10 @@ void AppWindow::drawTransmitPage() {
     const float py = mv->Pos.y + 64.0f;
     ImGui::SetNextWindowPos(ImVec2(px, py), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(kTxW, kTxH), ImGuiCond_FirstUseEver);
-    // A LOCAL MIRROR, NOT &engine_.transmitOpen_ (engine/stage3b-pre 2b):
-    // beginPage writes *open directly (ImGui::Begin's own close box, and its
-    // own custom chrome's close press), and the engine field may not be
-    // written in place any more. The guard above already reads true, so the
-    // mirror starts true; if beginPage clears it (the operator closed the
-    // page), the command below applies the close. The key is not its
+    // A LOCAL COPY for beginPage, which writes *open directly (ImGui::Begin's
+    // own close box, and its own custom chrome's close press). The guard
+    // above already reads true, so the copy starts true; if beginPage clears
+    // it (the operator closed the page), the page closes. The key is not its
     // business since stage 4: from the first frame the page is not live, the
     // frame loop's pumpTransmitKey lets go of this window's PTT, latch and consent
     // to remote transmit, which releases a remote key in the engine's next
@@ -15269,23 +15305,21 @@ void AppWindow::drawTransmitPage() {
     // can clear it either way.
     bool txPageOpen = true;
     if (!beginPage("Transmit###transmitwindow", tr("TRANSMIT"), &txPageOpen, 0, kTxW, kTxH)) {
-        if (!txPageOpen) {
-            engine_.applyCommand(cascade::core::cmd::makeInt(FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN, 0));
-        }
+        if (!txPageOpen) { setTransmitPageOpen(false); }
         endPage();
         return;
     }
-    if (!txPageOpen) {
-        engine_.applyCommand(cascade::core::cmd::makeInt(FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN, 0));
-    }
+    if (!txPageOpen) { setTransmitPageOpen(false); }
     // THE KEY'S CONTROLS ARE ON SCREEN THIS FRAME - set only past beginPage,
     // which returns false for a page that is rolled up. The frame loop
     // releases the latch and the PTT on any frame this is not set.
     transmitPageLive_ = true;
 
-    cascade::source::IqSink* sink = engine_.transmitter_.sink();
-    const bool have = sink != nullptr;
-    const bool onAir = engine_.transmitter_.transmitting();
+    // EVERYTHING BELOW IS DRAWN FROM THE WINDOW'S SESSION (engine stage 4):
+    // the state the engine's last pass published, and its facts.
+    const FoxReceiverState& st = uiState_;
+    const bool have = (st.flags & FOXAPI_RX_TX_AVAILABLE) != 0u;
+    const bool onAir = (st.flags & FOXAPI_RX_TX_KEYED) != 0u;
 
     // --- the radio -----------------------------------------------------------
     ImGui::TextUnformatted(tr("RADIO"));
@@ -15297,21 +15331,19 @@ void AppWindow::drawTransmitPage() {
         // radiate.
         //
         // A LOCAL DRAFT (engine/stage3b-pre fields-to-commands rounds 2-3),
-        // the Pluto box's shape: re-seeded from transmitArgs_ whenever it is
-        // not being typed in - FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN's handler
-        // fills that on open if it was empty, so the page opens on a real
-        // address, never blank - and each edit committed as typed
+        // the Pluto box's shape: re-seeded from the engine's address (the
+        // fact "transmit.args": the one typed, else the seed the engine uses,
+        // so the page opens on a real address, never blank) whenever it is
+        // not being typed in - and each edit committed as typed
         // (FOXAPP_OP_SET_TRANSMIT_ARGS), so config.json keeps what was typed.
         ImGui::BeginDisabled(have);
         ImGui::SetNextItemWidth(260.0f);
         if (ImGui::GetActiveID() != ImGui::GetID("##txargs")) {
             cascade::core::formatUtf8(transmitArgsDraft_, sizeof(transmitArgsDraft_), "%s",
-                                      engine_.transmitArgs_.c_str());
+                                      uiFact("fact.transmit.args").c_str());
         }
         if (ImGui::InputText("##txargs", transmitArgsDraft_, sizeof(transmitArgsDraft_))) {
-            const cascade::core::cmd::QueuedCommand q =
-                cascade::core::cmd::makeText(FOXAPP_OP_SET_TRANSMIT_ARGS, transmitArgsDraft_);
-            engine_.applyCommand(q.c, q.longText);
+            uiSubmit(cascade::core::cmd::makeText(FOXAPP_OP_SET_TRANSMIT_ARGS, transmitArgsDraft_));
         }
         ImGui::EndDisabled();
     }
@@ -15328,7 +15360,7 @@ void AppWindow::drawTransmitPage() {
     if (!have) {
         ImGui::BeginDisabled(noAddress);
         if (ImGui::Button(trId("Open##txopen"))) {
-            engine_.submitCommand(cmd::makeText(FOXAPI_OP_TX_OPEN, transmitArgsDraft_));
+            uiSubmit(cmd::makeText(FOXAPI_OP_TX_OPEN, transmitArgsDraft_));
         }
         ImGui::EndDisabled();
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
@@ -15343,11 +15375,11 @@ void AppWindow::drawTransmitPage() {
         // transmitting" - would be one whose effect depends on state the
         // operator has to remember.
         ImGui::BeginDisabled(onAir);
-        if (ImGui::Button(trId("Close##txclose"))) { engine_.submitCommand(cmd::make(FOXAPI_OP_TX_CLOSE)); }
+        if (ImGui::Button(trId("Close##txclose"))) { uiSubmit(cmd::make(FOXAPI_OP_TX_CLOSE)); }
         ImGui::EndDisabled();
     }
     if (have) {
-        ImGui::TextUnformatted(sink->name());
+        ImGui::TextUnformatted(st.txDeviceName);
     } else if (!statusLines_.transmitError.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kAlarmHot));
         // tr() at the point of drawing: the one sentence this page writes into
@@ -15369,13 +15401,14 @@ void AppWindow::drawTransmitPage() {
     // draft read the sink, so with no radio open the page lettered 0.000000
     // MHz under a control that was about to follow the receiver - a number
     // that was true about nothing.
-    double mhz = cascade::gui::txFrequencyHz(engine_.transmitSplit_, engine_.transmitSplitHz_,
-                                             std::max(0.0, engine_.currentAbsoluteHz())) /
-                 1e6;
+    // The engine publishes exactly that: txFrequencyHz is where it would
+    // transmit (API 0.3), the receiver's dial with SPLIT off.
+    const bool split = (st.txFlags & FOXAPI_TX_SPLIT) != 0u;
+    double mhz = st.txFrequencyHz / 1e6;
     ImGui::SetNextItemWidth(180.0f);
-    ImGui::BeginDisabled(!engine_.transmitSplit_);
+    ImGui::BeginDisabled(!split);
     if (ImGui::InputDouble("MHz##txfreq", &mhz, 0.001, 0.1, "%.6f")) {
-        engine_.submitCommand(cmd::makeNum(FOXAPI_OP_TX_SET_FREQUENCY, mhz * 1e6));
+        uiSubmit(cmd::makeNum(FOXAPI_OP_TX_SET_FREQUENCY, mhz * 1e6));
     }
     ImGui::EndDisabled();
     ImGui::SameLine();
@@ -15383,7 +15416,7 @@ void AppWindow::drawTransmitPage() {
     // LISTENING, so the key stays lit while it is on rather than being a tick
     // in a box that is easy to leave set.
     {
-        const bool on = engine_.transmitSplit_;
+        const bool on = split;
         if (on) {
             ImGui::PushStyleColor(ImGuiCol_Button,
                                   cascade::gui::theme::vec(cascade::gui::theme::kAlarm));
@@ -15396,8 +15429,7 @@ void AppWindow::drawTransmitPage() {
             // immediately; going INTO it starts from wherever the receiver
             // is (the dial, carried in the command), so the first thing that
             // happens is never a jump.
-            engine_.submitCommand(cmd::makeNumInt(FOXAPI_OP_TX_SET_SPLIT, std::max(0.0, engine_.currentAbsoluteHz()),
-                                          engine_.transmitSplit_ ? 0 : 1));
+            uiSubmit(cmd::makeNumInt(FOXAPI_OP_TX_SET_SPLIT, std::max(0.0, st.tunedHz), split ? 0 : 1));
         }
         if (on) { ImGui::PopStyleColor(2); }
     }
@@ -15408,7 +15440,7 @@ void AppWindow::drawTransmitPage() {
                                    "satellite each need, and the state in which you are not\n"
                                    "listening where you are transmitting."));
     }
-    if (!engine_.transmitSplit_) {
+    if (!split) {
         ImGui::SameLine();
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kInkFaint));
         ImGui::TextUnformatted(tr("following the receiver"));
@@ -15418,7 +15450,7 @@ void AppWindow::drawTransmitPage() {
     // --- the mode ------------------------------------------------------------
     for (int i = 0; i < cascade::dsp::kTxModeCount; ++i) {
         if (i > 0) { ImGui::SameLine(); }
-        const bool on = (engine_.transmitModeIndex_ == i);
+        const bool on = (static_cast<int>(st.txMode) == i);  // FOXAPI_TX_MODE_* order
         const cascade::dsp::TxMode m = cascade::dsp::txModeFromIndex(i);
         if (on) {
             ImGui::PushStyleColor(ImGuiCol_Button,
@@ -15428,18 +15460,20 @@ void AppWindow::drawTransmitPage() {
                                       cascade::gui::theme::kPhosphor, cascade::gui::theme::kBrassDark)));
         }
         if (ImGui::Button(cascade::dsp::txModeName(m), ImVec2(64.0f, 0.0f))) {
-            engine_.submitCommand(cmd::makeInt(FOXAPI_OP_TX_SET_MODE, i));  // FOXAPI_TX_MODE_* order
+            uiSubmit(cmd::makeInt(FOXAPI_OP_TX_SET_MODE, i));  // FOXAPI_TX_MODE_* order
         }
         if (on) { ImGui::PopStyleColor(2); }
         if (ImGui::IsItemHovered()) { ImGui::SetTooltip("%s", tr(cascade::dsp::txModeCaption(m))); }
     }
 
     // --- the power -----------------------------------------------------------
-    double quiet = -89.75;
-    double loud = 0.0;
-    const bool haveRange = have && sink->gainRangeDb(quiet, loud);
+    // The board's own span, as the engine read it (-89.75..0 when it
+    // published none, as before).
+    const double quiet = st.txPowerMinDb;
+    const double loud = st.txPowerMaxDb;
+    const bool haveRange = have && (st.txFlags & FOXAPI_TX_POWER_RANGE) != 0u;
     char power[32];
-    cascade::gui::formatTxPower(power, sizeof(power), engine_.transmitPowerDb_, quiet);
+    cascade::gui::formatTxPower(power, sizeof(power), st.txPowerDb, quiet);
     // "TX POWER", not "POWER": the receiver's lamp on the scope bench is
     // "POWER" too, and the two are different words in most languages - the
     // lamp switches the receiver on, this sets how loud the transmitter is.
@@ -15452,12 +15486,11 @@ void AppWindow::drawTransmitPage() {
         // number is an ATTENUATION and 0 dB is full output. That inversion is
         // the whole reason gui/transmit_page.hpp exists: it happens once, in
         // one place, with a test on it.
-        float t = cascade::gui::txPowerFraction(engine_.transmitPowerDb_, quiet, loud);
+        float t = cascade::gui::txPowerFraction(st.txPowerDb, quiet, loud);
         ImGui::SetNextItemWidth(240.0f);
         if (ImGui::SliderFloat("##txpower", &t, 0.0f, 1.0f, "")) {
             // TX_SET_POWER reads the board's own figure back.
-            engine_.submitCommand(cmd::makeNum(FOXAPI_OP_TX_SET_POWER,
-                                       cascade::gui::txPowerFromFraction(t, quiet, loud)));
+            uiSubmit(cmd::makeNum(FOXAPI_OP_TX_SET_POWER, cascade::gui::txPowerFromFraction(t, quiet, loud)));
         }
     }
     ImGui::SameLine();
@@ -15473,11 +15506,11 @@ void AppWindow::drawTransmitPage() {
     ImGui::TextUnformatted(tr("INPUT"));
     // WHILE THE MICROPHONE IS STILL OPENING the keys are dead: the worker owns
     // the microphone, and a second press could only queue a second open.
-    const bool micOpening = engine_.micOpen_.inFlight();
+    const bool micOpening = (st.txFlags & FOXAPI_TX_INPUT_OPENING) != 0u;
     ImGui::BeginDisabled(micOpening);
     for (int i = 0; i < cascade::core::kTxInputCount; ++i) {
         ImGui::SameLine();
-        const bool on = (engine_.transmitInputIndex_ == i);
+        const bool on = (static_cast<int>(st.txInput) == i);
         const cascade::core::TxInput in = cascade::core::txInputFromIndex(i);
         if (on) {
             ImGui::PushStyleColor(ImGuiCol_Button,
@@ -15492,23 +15525,25 @@ void AppWindow::drawTransmitPage() {
             // room nobody asked it to), and NOT ON THE GUI THREAD's own
             // stack - micOpen_ runs waveInOpen on a worker and the apply
             // waits at most AudioOpen::kOpenBound under a watchdog pause.
-            engine_.submitCommand(cmd::makeInt(FOXAPI_OP_TX_SET_INPUT, i));
+            uiSubmit(cmd::makeInt(FOXAPI_OP_TX_SET_INPUT, i));
         }
         if (on) { ImGui::PopStyleColor(2); }
     }
     ImGui::EndDisabled();
-    if (engine_.transmitInputIndex_ == static_cast<int>(cascade::core::TxInput::Tone)) {
+    if (static_cast<int>(st.txInput) == static_cast<int>(cascade::core::TxInput::Tone)) {
         ImGui::SameLine();
-        double tone = engine_.transmitToneHz_;
+        double tone = st.txToneHz;
         ImGui::SetNextItemWidth(110.0f);
         if (ImGui::InputDouble("Hz##txtone", &tone, 50.0, 500.0, "%.0f")) {
-            engine_.submitCommand(cmd::makeNum(FOXAPI_OP_TX_SET_TONE, tone));  // read back when applied
+            uiSubmit(cmd::makeNum(FOXAPI_OP_TX_SET_TONE, tone));  // read back when applied
         }
     }
 
     // --- the audio meter -----------------------------------------------------
     {
-        const float peak = engine_.transmitter_.takeInputPeak();
+        // The peak since the engine's last publish (a measurement it takes
+        // once a pass).
+        const float peak = static_cast<float>(st.txInputPeak);
         // DECAYED, NOT REPLACED. A bar redrawn from one 10 ms peak a frame is
         // unreadable at any frame rate; a fast rise and a slow fall is what a
         // meter with a needle in it does.
@@ -15524,7 +15559,7 @@ void AppWindow::drawTransmitPage() {
     // --- THE KEY -------------------------------------------------------------
     {
         const cascade::gui::TxLamp lamp =
-            cascade::gui::txLampState(have, have && sink->faulted(), onAir);
+            cascade::gui::txLampState(have, have && (st.txFlags & FOXAPI_TX_FAULTED) != 0u, onAir);
         ImU32 lampColour = cascade::gui::theme::kInkFaint;
         switch (lamp) {
             case cascade::gui::TxLamp::NoRadio: lampColour = cascade::gui::theme::kInkFaint; break;
@@ -15623,9 +15658,9 @@ void AppWindow::drawTransmitPage() {
                                        "the moment you untick this, close this page or the window stops."));
         }
 
-        bool monitor = engine_.transmitMonitor_;
+        bool monitor = (st.txFlags & FOXAPI_TX_MONITOR) != 0u;
         if (ImGui::Checkbox(trId("Listen while transmitting"), &monitor)) {
-            engine_.submitCommand(cmd::makeInt(FOXAPI_OP_TX_SET_MONITOR, monitor ? 1 : 0));
+            uiSubmit(cmd::makeInt(FOXAPI_OP_TX_SET_MONITOR, monitor ? 1 : 0));
         }
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip("%s", tr("The Pluto is full duplex, so the receiver keeps running while\n"
@@ -15649,7 +15684,7 @@ void AppWindow::drawTransmitPage() {
         ImGui::TextWrapped("%s", autoReason.c_str());
         ImGui::PopStyleColor();
     }
-    const std::string txError = engine_.transmitter_.lastError();
+    const std::string txError = st.txError;
     if (!txError.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kAlarmHot));
         ImGui::TextWrapped("%s", txError.c_str());
@@ -15669,10 +15704,8 @@ void AppWindow::drawTransmitPage() {
     ImGui::PopStyleColor();
 
     endPage();
-
-    // Applied AFTER the page is drawn, so the frequency the operator just
-    // typed is the one that goes to the radio this frame rather than next.
-    engine_.followTransmitFrequency();
+    // The transmitter follows the receiver's dial in the engine's own pass
+    // since stage 4 (Engine::pumpPublish), not from here.
 }
 
 // --- REQUEST A FEATURE (see core/feature_request.hpp) -----------------------
@@ -19056,6 +19089,9 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     // (docs/engine-stage3.md lists the one reorder that is visible from
     // outside: the web and CAT listeners now start after the VFO restore).
     engine_.applyConfig(cfg);
+    // The Transmit page is the window's own (restored closed on a launch:
+    // startupState clears it, as it clears every page).
+    transmitPageOpen_ = cfg.transmitOpen;
     // THE PLUTO ADDRESS BOX, THE TRANSMIT ADDRESS BOX AND THE SCANNER FORM
     // (window-side drafts, engine/stage3b-pre fields-to-commands rounds 2-3)
     // need no seeding here: each re-seeds itself from its engine field on

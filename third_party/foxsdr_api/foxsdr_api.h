@@ -322,12 +322,31 @@ typedef struct FoxReceiverState {
     char sinkName[FOXAPI_NAME_CHARS];     /* the audio output device */
     char faultMessage[FOXAPI_MESSAGE_CHARS];
     char txUnkeyReason[FOXAPI_MESSAGE_CHARS]; /* why the key last opened ON ITS OWN */
+    /* ---- 0.3 (docs/api-0.3-additions.md 8.1): the transmitter as a page
+     * draws it. All move txSeq but txInputPeak, a measurement. ---- */
+    uint32_t txFlags;           /* FOXAPI_TX_* */
+    uint32_t txInput;           /* TX_SET_INPUT's value: 0 microphone, 1 tone */
+    double txSplitHz;           /* where a SPLIT transmitter goes (TX_SET_SPLIT, TX_SET_FREQUENCY) */
+    double txToneHz;            /* the test tone (TX_SET_TONE) */
+    double txPowerMinDb;        /* the board's range for TX_SET_POWER, valid with FOXAPI_TX_POWER_RANGE */
+    double txPowerMaxDb;
+    double txInputPeak;         /* the input's peak since the last publish, 0..1 - measured */
+    char txDeviceName[FOXAPI_NAME_CHARS];     /* the open transmitter; "" with none */
+    char txError[FOXAPI_MESSAGE_CHARS];       /* the transmitter's last error; "" none */
 } FoxReceiverState;
+
+
+/* FoxReceiverState::txFlags (0.3) */
+#define FOXAPI_TX_SPLIT         0x00000001u /* TX_SET_SPLIT on: not following the receiver */
+#define FOXAPI_TX_MONITOR       0x00000002u /* TX_SET_MONITOR on: the receiver is heard while transmitting */
+#define FOXAPI_TX_FAULTED       0x00000004u /* the open transmitter has faulted */
+#define FOXAPI_TX_INPUT_OPENING 0x00000008u /* the microphone chosen is still opening */
+#define FOXAPI_TX_POWER_RANGE   0x00000010u /* the board published a power range (txPowerMin/MaxDb) */
 
 /* Every FOXAPI_MIN_* is the whole layout of the oldest accepted version
  * (rule 4), written as the end of its last member so it never moves when
  * members are appended. */
-#define FOXAPI_MIN_RECEIVER_STATE (offsetof(FoxReceiverState, txUnkeyReason) + FOXAPI_MESSAGE_CHARS)
+#define FOXAPI_MIN_RECEIVER_STATE (offsetof(FoxReceiverState, txError) + FOXAPI_MESSAGE_CHARS)
 
 /* ---------------------------------------------------------------------------
  * The spectrum stream. The waterfall is NOT a separate stream: it is the

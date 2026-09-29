@@ -22,9 +22,10 @@ implements none of it.
 list, flag, op or event of 0.2 moved or changed meaning. During 0.x an engine
 serves only its own minor, so a 0.3 engine answers `foxsdr_engine_query(0, 2)`
 with NULL, exactly as a 0.2 engine answered `(0, 1)`. `FOXAPI_MIN_ENGINE_API`
-is the whole 0.3 table (the minimum rule, "during 0.x: the current layout").
-No other struct changed; `FoxScopeInfo` is new, with its own
-`FOXAPI_MIN_SCOPE_INFO`.
+is the whole 0.3 table (the minimum rule, "during 0.x: the current layout"),
+and `FOXAPI_MIN_RECEIVER_STATE` the whole 0.3 `FoxReceiverState`, which grew
+at its end (section 8.1). `FoxScopeInfo` is new, with its own
+`FOXAPI_MIN_SCOPE_INFO`. No other struct changed.
 
 ## 2. Capabilities
 
@@ -153,6 +154,32 @@ dropped when it goes).
 | `FOXAPI_RX_BIAS_TEE_PRESENT` | device | the open radio has a bias tee this engine can switch |
 | `FOXAPI_RX_BIAS_TEE_ON` | device | ...and it is on (the radio's readback) |
 | `FOXAPI_RX_PATCH_RUNNING` | (seq only) | the patch page's graph is running |
+
+### 8.1 The transmitter as a page draws it (appended to FoxReceiverState)
+
+0.2's state said whether a transmitter was open and keyed, its mode,
+frequency and power; a page that SETS split, input, tone and monitor could
+not read them back. Appended (all in the tx group - `txSeq` - except
+`txInputPeak`, a measurement):
+
+| Member | |
+|---|---|
+| `txFlags` | `FOXAPI_TX_SPLIT` (not following the receiver), `FOXAPI_TX_MONITOR` (the receiver heard while transmitting), `FOXAPI_TX_FAULTED` (the open board faulted), `FOXAPI_TX_INPUT_OPENING` (the microphone chosen is still opening: `TX_SET_INPUT` is BUSY meanwhile), `FOXAPI_TX_POWER_RANGE` (the board published a power range) |
+| `txInput` | `TX_SET_INPUT`'s value: 0 microphone, 1 tone |
+| `txSplitHz` | where a SPLIT transmitter goes |
+| `txToneHz` | the test tone, as the transmitter took it |
+| `txPowerMinDb`, `txPowerMaxDb` | the board's range for `TX_SET_POWER` (with `FOXAPI_TX_POWER_RANGE`; otherwise -89.75 and 0, the Pluto's) |
+| `txInputPeak` | the input's peak since the engine's last publish, 0..1 - measured |
+| `txDeviceName` | the open transmitter; "" with none |
+| `txError` | the transmitter's last error; "" with none |
+
+Two 0.2 members are made exact: `txFrequencyHz` is WHERE IT WOULD TRANSMIT -
+`txSplitHz` with SPLIT on, the receiver's `tunedHz` with it off, whether a
+board is open or not (the engine keeps an open board there once a pass) - and
+`txPowerDb` is the setting, which is the board's readback once one is open,
+never the 0 dB a closed board would read as.
+
+`FOXAPI_MIN_RECEIVER_STATE` is the whole 0.3 layout.
 
 ## 9. Events and ops
 

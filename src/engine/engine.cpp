@@ -3467,8 +3467,34 @@ void Engine::fillPublishedState(cascade::core::PublishedState& ps, const std::st
     r.decodersFitted = fittedModules;
     r.txMode = static_cast<std::uint32_t>(transmitter_.mode());
     r.audioUnderruns = sink.underruns();
-    r.txFrequencyHz = transmitter_.frequencyHz();
-    r.txPowerDb = transmitter_.powerDb();
+    // WHERE IT WOULD TRANSMIT (0.3): with SPLIT off that is the receiver's
+    // dial, radio open or not - the pass follows it there (pumpPublish) - so
+    // a page with no radio open still letters a frequency that is true.
+    r.txFrequencyHz = cascade::gui::txFrequencyHz(transmitSplit_, transmitSplitHz_, std::max(0.0, currentAbsoluteHz()));
+    // THE SETTING, which is the board's readback once one is open
+    // (TX_SET_POWER reads it back) - never the 0 dB (full power) a closed
+    // transmitter's sink-less powerDb() answers.
+    r.txPowerDb = transmitter_.sink() != nullptr ? transmitter_.powerDb() : transmitPowerDb_;
+    // THE TRANSMITTER AS ITS PAGE DRAWS IT (API 0.3, docs/api-0.3-additions.md 8.1).
+    {
+        const cascade::source::IqSink* txSink = transmitter_.sink();
+        r.txFlags = 0;
+        if (transmitSplit_) { r.txFlags |= FOXAPI_TX_SPLIT; }
+        if (transmitMonitor_) { r.txFlags |= FOXAPI_TX_MONITOR; }
+        if (txSink != nullptr && txSink->faulted()) { r.txFlags |= FOXAPI_TX_FAULTED; }
+        if (micOpen_.inFlight()) { r.txFlags |= FOXAPI_TX_INPUT_OPENING; }
+        double quiet = -89.75, loud = 0.0;
+        if (txSink != nullptr && txSink->gainRangeDb(quiet, loud)) { r.txFlags |= FOXAPI_TX_POWER_RANGE; }
+        r.txPowerMinDb = quiet;
+        r.txPowerMaxDb = loud;
+        r.txInput = static_cast<std::uint32_t>(transmitInputIndex_);
+        r.txSplitHz = transmitSplitHz_;
+        r.txToneHz = transmitToneHz_;
+        r.txInputPeak = static_cast<double>(transmitter_.takeInputPeak());
+        cascade::core::formatUtf8(r.txDeviceName, sizeof(r.txDeviceName), "%s",
+                                  txSink != nullptr && txSink->name() != nullptr ? txSink->name() : "");
+        cascade::core::formatUtf8(r.txError, sizeof(r.txError), "%s", transmitter_.lastError().c_str());
+    }
     r.txHoldRemainingMs = key.holdRemainingMs;
     r.txLatchRemainingMs = key.latchRemainingMs;
     e.txKeyOwner = key.owner;
@@ -6986,6 +7012,12 @@ void Engine::pumpPlugins() {
 
 double Engine::pumpPublish() {
     flushBookmarkSave(false);
+    // THE TRANSMITTER FOLLOWS THE RECEIVER'S DIAL (SPLIT off), once a pass,
+    // after the pass's commands - the engine's own work since stage 4 (the
+    // window called it after drawing its page; that is an interface reaching
+    // into the engine). A no-op with no radio open, and a write only when
+    // the frequency moved.
+    followTransmitFrequency();
     // The status lines as this frame's commands left them, before any panel
     // draws (OPEN 3).
     publishStatusText();

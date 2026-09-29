@@ -130,7 +130,13 @@ void ReceiverSnapshot::publish(const PublishedState& facts,
     const bool tx = first || changed(f.flags, o.flags, kTxFlags) || f.txMode != o.txMode ||
                     e.txKeyOwner != oe.txKeyOwner ||
                     f.txFrequencyHz != o.txFrequencyHz || f.txPowerDb != o.txPowerDb ||
-                    !sameText(f.txUnkeyReason, o.txUnkeyReason, FOXAPI_MESSAGE_CHARS);
+                    !sameText(f.txUnkeyReason, o.txUnkeyReason, FOXAPI_MESSAGE_CHARS) ||
+                    // 0.3: the page's figures (not txInputPeak, a measurement)
+                    f.txFlags != o.txFlags || f.txInput != o.txInput || f.txSplitHz != o.txSplitHz ||
+                    f.txToneHz != o.txToneHz || f.txPowerMinDb != o.txPowerMinDb ||
+                    f.txPowerMaxDb != o.txPowerMaxDb ||
+                    !sameText(f.txDeviceName, o.txDeviceName, FOXAPI_NAME_CHARS) ||
+                    !sameText(f.txError, o.txError, FOXAPI_MESSAGE_CHARS);
     // Every other flag (recording, scanner, decoder lamp, web listener, the
     // squelch and stereo lamps) and the decoder counts: the overall counter.
     const bool other = first || f.flags != o.flags || f.decodersRunning != o.decodersRunning ||
