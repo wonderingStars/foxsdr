@@ -206,15 +206,28 @@ int main() {
         const double quiet = waitFor([&] { return !raw->running(); }, 1000);
         std::printf("   PTT let go: quiet after %.0f ms\n", quiet);
         CHECK(quiet >= 0.0 && quiet < 100.0);
+        // ...and the front end freezes, PTT held, after this one last frame.
+        // THE CLOCK STARTS BEFORE THE FRAME, not after the key comes up: the
+        // TX thread counts kKeyAliveWait from the stamp this frame makes
+        // (frontEndAlive, inside submitTransmitPageKey), and the key takes one
+        // or two scheduler ticks to come up - 15-31 ms on Windows, whose tick
+        // is 15.625 ms. Started after that wait, the measurement lost those
+        // milliseconds and a correct release read as early as 975 ms (3 of 25
+        // runs failed the old kAlive - 20 floor; timed from the frame the same
+        // runs read 1005.7-1029.6 ms). Started before the frame it is no later
+        // than the stamp, and the release can then be held to kAlive exactly:
+        // the thread lets go only once the stamp's age in whole steady-clock
+        // milliseconds EXCEEDS kKeyAliveWait, which is more than kAlive real
+        // milliseconds after the stamp.
+        const auto lastFrame = Clock::now();
         frame(true);
         CHECK(waitFor([&] { return raw->running(); }, 500) >= 0.0);
-        const auto lastFrame = Clock::now();   // ...and the front end freezes, PTT held
         const std::uint64_t passesAtFreeze = A::passes(e);
         const double released = waitFor([&] { return !raw->running(); }, 3000) >= 0.0 ? msSince(lastFrame) : -1.0;
         std::printf("   front end frozen, PTT held: released %.0f ms after its last frame (bound %.0f + %.0f); "
                     "%llu control passes meanwhile\n",
                     released, kAlive, kSlackMs, static_cast<unsigned long long>(A::passes(e) - passesAtFreeze));
-        CHECK(released >= kAlive - 20.0 && released <= kAlive + kSlackMs);
+        CHECK(released >= kAlive && released <= kAlive + kSlackMs);
         CHECK(A::passes(e) - passesAtFreeze > 50u);
         frame(false);
 
