@@ -44,6 +44,7 @@ struct GLFWwindow;
 #include "gui/patch_scope_math.hpp"
 #include "gui/input_script.hpp"
 #include "core/plugin_ui.hpp"
+#include "core/plugin_cleanup.hpp"
 #include "core/plugin_repo.hpp"
 #include "core/updater.hpp"
 #include "core/utf8_text.hpp"
@@ -731,6 +732,10 @@ private:
         // (tests/test_soundcard_app_paths.cpp), so no test lists or opens
         // the desk's audio inputs.
         std::shared_ptr<cascade::source::SoundCardBackend> (*soundCardBackend)();
+        // Replaces the deletion of an old plugin copy when set
+        // (core::PluginFileRemover), so a test can play a file Windows will
+        // not let go of (tests/test_plugin_cleanup_app.cpp).
+        bool (*pluginRemove)(const std::string& dir, const std::string& file, std::string& error);
     };
     // Set by the test before any AppWindow exists and never changed while one
     // does, so the worker threads that read makeDevice race with nothing.
@@ -1559,6 +1564,20 @@ private:
     // installs) — both silently absent when their directory does not exist.
     void loadBandPlan();
     void rescanPlugins();
+    // THE OLD COPIES UPDATES LEAVE BEHIND (0.99.49 beta feedback;
+    // core/plugin_cleanup.hpp). pluginOldCopies_ is every copy the rules allow
+    // to go, rebuilt at each rescan; the store's CLEAN UP OLD VERSIONS key
+    // removes all of them, an update removes the ones it replaced, and the
+    // first scan of a session removes what an earlier one could not.
+    std::vector<cascade::core::SupersededPlugin> pluginOldCopies_;
+    cascade::core::PluginCleanupResult cleanUpOldPluginVersions(
+        const std::vector<cascade::core::SupersededPlugin>& which);
+    std::string cleanUpAfterUpdate(const std::string& installedPath);
+    // The store's CLEAN UP OLD VERSIONS key, once its confirmation is accepted.
+    void cleanUpOldVersionsConfirmed();
+    // What the last clean-up did, for the store's banner (pluginCleanupReport).
+    std::string pluginCleanupReport_;
+    void processPendingPluginRemovals();
     // Every tune that moves the SOURCE centre has to tell the pipeline, which
     // cannot see it: the RDS/stereo decoders must forget the old station.
     //

@@ -993,6 +993,8 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
     // a build tree — and every bounded --frames CI run takes this path.
     loadBandPlan();
     rescanPlugins();
+    // Old plugin copies an earlier session could not delete (in use then).
+    processPendingPluginRemovals();
     // The catalogue URL starts at the published default and is overwritten by
     // a config restore if the user (or an enterprise deployment) changed it.
     // Setting it here is NOT a fetch: nothing contacts the origin until CHECK
@@ -11044,6 +11046,9 @@ void AppWindow::rescanPlugins() {
     pluginBlocked_ = cascade::core::PluginRepo::blockedPlugins(pluginInventory_.plugins,
                                                                pluginInventory_.policies);
 
+    // Judged afresh by this scan below; nothing is superseded by a scan that
+    // does not happen.
+    pluginOldCopies_.clear();
     std::string quarantineError;
     if (!quarantineBlockedPlugins(quarantineError)) {
         // FAIL CLOSED. Scanning now would map the retired plugin along with
@@ -11076,10 +11081,86 @@ void AppWindow::rescanPlugins() {
     // inside it would otherwise resolve to "?" with a bare address.
     cascade::core::refreshModuleTable();
 
+    // The old copies this scan found superseded - what the store's clean-up
+    // key offers, judged against this scan and no older one.
+    pluginOldCopies_ = cascade::core::supersededPlugins(pluginHost_.plugins(),
+                                                        pluginInventory_.plugins);
+
     // Instances are created only after the scan has settled, and the pipeline
     // is only pointed at the runner once they exist — so the DSP thread never
     // sees a half-built set.
     refreshPluginRunner();
+}
+
+namespace {
+
+cascade::core::PluginFileRemover pluginRemoverFor(
+    bool (*hook)(const std::string&, const std::string&, std::string&)) {
+    if (hook != nullptr) { return hook; }
+    return cascade::core::defaultPluginFileRemover();
+}
+
+}  // namespace
+
+cascade::core::PluginCleanupResult AppWindow::cleanUpOldPluginVersions(
+    const std::vector<cascade::core::SupersededPlugin>& which) {
+    if (which.empty()) { return {}; }
+    // NOTHING TO UNLOAD FIRST: a copy the scan turned off was unmapped by the
+    // scan itself (PluginHost::scan), so in this process it is only a file.
+    // Another process can still hold it - a second FoxSDR - and that is the
+    // file that is queued for the next start.
+    const cascade::core::PluginCleanupResult res = cascade::core::removeSupersededPlugins(
+        pluginDir_, which, pluginRemoverFor(testHooks_.pluginRemove));
+    for (const std::string& f : res.removed) {
+        cascade::core::diagLogf("plugin: removed old copy %s", f.c_str());
+    }
+    for (const std::string& f : res.queued) {
+        cascade::core::diagLogf("plugin: old copy %s is in use - queued for the next start",
+                                f.c_str());
+    }
+    for (const std::string& f : res.failed) {
+        cascade::core::diagWarnf("plugin: old copy not removed: %s", f.c_str());
+    }
+    // The host still lists the records of what was deleted; the rescan drops
+    // them and rebuilds pluginOldCopies_.
+    if (!res.removed.empty()) { rescanPlugins(); }
+    return res;
+}
+
+void AppWindow::cleanUpOldVersionsConfirmed() {
+    // Not under a transfer: an update in flight is about to change which
+    // copy is the newest.
+    if (installPending_) { return; }
+    installError_.clear();
+    pluginCleanupReport_ =
+        cascade::gui::pluginCleanupReport(cleanUpOldPluginVersions(pluginOldCopies_));
+}
+
+std::string AppWindow::cleanUpAfterUpdate(const std::string& installedPath) {
+    // ONLY THE PLUGIN THAT WAS UPDATED: the copies the new file superseded,
+    // found by the scan that has just loaded it. Anything else superseded is
+    // the clean-up key's to offer, not this update's to take.
+    const std::string file = std::filesystem::path(installedPath).filename().string();
+    pluginCleanupReport_ = cascade::gui::pluginCleanupReport(
+        cleanUpOldPluginVersions(cascade::core::supersededBy(pluginOldCopies_, file)));
+    return pluginCleanupReport_;
+}
+
+void AppWindow::processPendingPluginRemovals() {
+    const cascade::core::PluginCleanupResult res = cascade::core::processPendingRemovals(
+        pluginDir_, pluginHost_.plugins(), pluginInventory_.plugins,
+        pluginRemoverFor(testHooks_.pluginRemove));
+    for (const std::string& f : res.removed) {
+        cascade::core::diagLogf("plugin: removed old copy %s (queued by an earlier session)",
+                                f.c_str());
+    }
+    for (const std::string& f : res.dropped) {
+        cascade::core::diagLogf("plugin: %s is no longer an old copy - left alone", f.c_str());
+    }
+    for (const std::string& f : res.queued) {
+        cascade::core::diagLogf("plugin: old copy %s is still in use - queued again", f.c_str());
+    }
+    if (!res.removed.empty()) { rescanPlugins(); }
 }
 
 std::vector<cascade::core::PluginUpdate> AppWindow::plannedPluginUpdates() const {
@@ -11836,6 +11917,15 @@ void AppWindow::pollPluginAsync() {
                           r.isUpdate ? tr("Updated %s to %s") : tr("Installed %s to %s"),
                           r.name.c_str(), r.installedPath.c_str());
             installReport_ = reportBuf;
+            // THE COPY IT REPLACED GOES NOW (0.99.49 beta feedback), once the
+            // rescan above has loaded the new one and turned the old one off -
+            // or, still in use, at the next start. Said on the same line.
+            // An UPDATE only: a plain install beside a side-loaded older copy
+            // leaves that copy for the clean-up key, which asks first.
+            if (r.isUpdate) {
+                const std::string cleaned = cleanUpAfterUpdate(r.installedPath);
+                if (!cleaned.empty()) { installReport_ += " " + cleaned; }
+            }
             if (!r.recordError.empty()) {
                 // Honest partial state: verified bytes are installed, but the
                 // plugin is unmanaged until a later install or catalogue fetch
@@ -15916,6 +16006,13 @@ void AppWindow::buildPluginStoreModel(PluginStoreModel& model) {
     // StoreModule, so the key and the rows cannot disagree about what is
     // fitted and what is blocked.
     model.sourceUrl = pluginCatalogueUrl_;
+    // Every old copy an update left behind (core/plugin_cleanup.hpp), and
+    // what the last clean-up did about them.
+    model.cleanupReport = pluginCleanupReport_;
+    model.oldCopies.clear();
+    for (const cascade::core::SupersededPlugin& o : pluginOldCopies_) {
+        model.oldCopies.push_back({o.name, o.version, o.file, o.keptVersion});
+    }
     // NOT "the catalogue is empty". Nothing here contacts the origin until
     // the user asks, so before that every count would be a claim about
     // something nobody has looked at; the window's banner says IDLE
@@ -16215,6 +16312,9 @@ void AppWindow::drawPluginStoreWindow() {
         }
         if (pluginStoreView_->checkNowRequested()) { startCatalogFetch(); }
         if (pluginStoreView_->cancelRequested()) { pluginRepo_.cancel(); }
+        // CLEAN UP OLD VERSIONS, confirmed once for all of them. What goes is
+        // what the last scan calls superseded now, not the frame's model.
+        if (pluginStoreView_->cleanupRequested()) { cleanUpOldVersionsConfirmed(); }
         // THE BULK KEY, and it re-plans from live state rather than from the
         // plan it was drawn against - see startAddAll. The acknowledgement is
         // the deck's own ADD ALL tick, which is not the per-module one.

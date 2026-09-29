@@ -59,6 +59,7 @@
 #include <string>
 #include <vector>
 
+#include "core/plugin_cleanup.hpp"
 #include "gui/text_fit.hpp"
 #include "imgui.h"
 
@@ -369,8 +370,27 @@ struct StoreModule {
 };
 
 // Everything the store draws that it cannot work out for itself.
+// ONE OLD COPY AN UPDATE LEFT BEHIND (0.99.49 beta feedback), as the store
+// shows it: core::supersededPlugins decided it may go, and this is what the
+// user is told about it before it does.
+struct StoreOldCopy {
+    std::string name;         // the plugin, as it declares itself
+    std::string version;      // the old copy's
+    std::string file;         // the old copy's module file - the one that goes
+    std::string keptVersion;  // the copy that stays and is running
+};
+
 struct PluginStoreModel {
     std::vector<StoreModule> modules;
+
+    // THE OLD COPIES UPDATES LEFT ON DISK, every one of which may be removed
+    // (core/plugin_cleanup.hpp). Non-empty draws the "CLEAN UP OLD VERSIONS
+    // (N)" key, which removes all of them after ONE confirmation that lists
+    // them - instead of a Remove key and a confirmation per file.
+    std::vector<StoreOldCopy> oldCopies;
+    // What the last clean-up did (pluginCleanupReport), shown where the row
+    // was: the key's own outcome, whether or not a module is selected.
+    std::string cleanupReport;
 
     // AppWindow::pluginCatalogueUrl_ - where the catalogue was read from. An
     // https:// index, or a path to a local index.json.
@@ -620,6 +640,21 @@ struct AddAllPlan {
 // for every module that carries no notice.
 AddAllPlan planAddAll(const PluginStoreModel& model, bool noticesAcknowledged);
 
+// ===========================================================================
+// OLD VERSIONS - the words, pure, so they can be checked without a frame
+// ===========================================================================
+//
+// The key: "CLEAN UP OLD VERSIONS (3)".
+std::string storeCleanupKeyLabel(std::size_t count);
+// One line of the confirmation: "ADS-B 1.0.0 - adsb-1.0.0.dll (1.1.0 stays)".
+std::string storeOldCopyLine(const StoreOldCopy& c);
+// The confirmation's own key: "Remove 1 file" / "Remove 3 files".
+std::string storeCleanupConfirmLabel(std::size_t count);
+// WHAT A CLEAN-UP DID, in one or more sentences for the panel: how many were
+// removed, which are in use and will go at the next start, which could not be
+// removed and why. Empty when it did nothing.
+std::string pluginCleanupReport(const cascade::core::PluginCleanupResult& r);
+
 inline constexpr int kStoreSortCount = 3;
 
 // The engraved word over sort key `index`. An index outside the range answers
@@ -665,7 +700,13 @@ public:
     // applied over a run of transfers is exactly the thing that goes stale.
     bool addAllRequested() const { return addAll_; }
 
+    // "CLEAN UP OLD VERSIONS" was pressed AND its one confirmation accepted:
+    // remove every copy in model.oldCopies. The caller re-derives the list
+    // from its own state rather than trusting the frame's model.
+    bool cleanupRequested() const { return cleanup_; }
+
 private:
+    bool cleanup_ = false;
     bool checkNow_ = false;
     bool cancel_ = false;
     bool addAll_ = false;

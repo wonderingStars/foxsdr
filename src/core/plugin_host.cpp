@@ -1013,6 +1013,7 @@ std::size_t resolveDuplicatePlugins(std::vector<LoadedPlugin>& records) {
                   kept.version + " in " + pluginKey(kept) + " is loaded; this file is " +
                   r.version + " and is not running. It can be deleted with Remove.";
         r.loaded = false;
+        r.supersededBy = pluginKey(kept);
         // Every borrowed pointer goes: they point into an image the caller is
         // about to unmap. nativeHandle is deliberately LEFT SET - it is how
         // the caller knows there is a module here to unmap.

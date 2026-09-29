@@ -177,6 +177,12 @@ struct LoadedPlugin {
 
     bool loaded = false;   // true iff the module is mapped and validated
     std::string error;     // empty iff loaded; the reason otherwise
+    // The module file (pluginKey) of the copy that is running INSTEAD of
+    // this one, when resolveDuplicatePlugins turned this one off as another
+    // copy of the same plugin; empty otherwise. What core/plugin_cleanup.hpp
+    // reads to find the old copies an update left behind, rather than
+    // parsing `error`, which is words for a person.
+    std::string supersededBy;
 
     // Valid only while `loaded` and only until unloadAll()/scan()/destruction
     // - they point into the plugin's own image. Each is null unless the
@@ -249,9 +255,11 @@ struct LoadedPlugin {
 //
 // DELETES NOTHING. It does not unlink, rename, move or truncate any file, and
 // it does not close a module either - it only marks records, leaving
-// nativeHandle set so its caller can unmap what it turned off. The stale file
-// stays on disk, inert, until the user removes it with the Remove button the
-// Plugins section already offers.
+// nativeHandle set so its caller can unmap what it turned off, and naming the
+// copy kept instead in LoadedPlugin::supersededBy. The stale file stays on
+// disk, inert, until something removes it: since 0.99.49 an update removes the
+// copies it superseded, and the plugin store's CLEAN UP OLD VERSIONS key the
+// rest (core/plugin_cleanup.hpp) - or the Remove key, one file at a time.
 //
 // Records that did not load are ignored entirely: their descriptor was never
 // read, so they have no id, and two unrelated broken files must stay two

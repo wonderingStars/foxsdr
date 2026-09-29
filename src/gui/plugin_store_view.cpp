@@ -35,6 +35,7 @@
 #include "gui/scope_face.hpp"
 #include "gui/text_fit.hpp"
 #include "gui/theme.hpp"
+#include "gui/ui_census.hpp"
 #include "imgui.h"
 
 namespace cascade::gui {
@@ -1367,6 +1368,52 @@ void forgetCatalogueConsent(PluginStoreDeck& deck) {
 }
 
 // ===========================================================================
+// OLD VERSIONS - the words
+// ===========================================================================
+
+std::string storeCleanupKeyLabel(std::size_t count) {
+    return cascade::core::formatText(tr("CLEAN UP OLD VERSIONS (%zu)"), count);
+}
+
+std::string storeOldCopyLine(const StoreOldCopy& c) {
+    // One format string, so a translation can order the four parts.
+    return cascade::core::formatText(tr("%s %s - %s (%s stays)"), c.name.c_str(),
+                                     c.version.c_str(), c.file.c_str(), c.keptVersion.c_str());
+}
+
+std::string storeCleanupConfirmLabel(std::size_t count) {
+    return count == 1 ? std::string(tr("Remove 1 file"))
+                      : cascade::core::formatText(tr("Remove %zu files"), count);
+}
+
+std::string pluginCleanupReport(const cascade::core::PluginCleanupResult& r) {
+    std::string out;
+    const auto join = [](const std::vector<std::string>& v) {
+        std::string s;
+        for (const std::string& e : v) { s += (s.empty() ? "" : ", ") + e; }
+        return s;
+    };
+    if (!r.removed.empty()) {
+        out = r.removed.size() == 1
+                  ? cascade::core::formatText(tr("Removed the old version %s."), r.removed[0].c_str())
+                  : cascade::core::formatText(tr("Removed %zu old versions: %s."), r.removed.size(),
+                                              join(r.removed).c_str());
+    }
+    if (!r.queued.empty()) {
+        // SAID, because the file is still on disk and the user can see it.
+        const std::string q = cascade::core::formatText(
+            tr("In use, so removed the next time FoxSDR starts: %s."), join(r.queued).c_str());
+        out += (out.empty() ? "" : " ") + q;
+    }
+    if (!r.failed.empty()) {
+        const std::string f =
+            cascade::core::formatText(tr("Could not remove: %s."), join(r.failed).c_str());
+        out += (out.empty() ? "" : " ") + f;
+    }
+    return out;
+}
+
+// ===========================================================================
 // ADD ALL - what it picks, and what the key says
 // ===========================================================================
 
@@ -1473,6 +1520,7 @@ AddAllPlan planAddAll(const PluginStoreModel& model, bool noticesAcknowledged) {
 void PluginStoreView::draw(float width, float height, const PluginStoreModel& model,
                            PluginStoreDeck& deck) {
     // Cleared first, so a request is answered once or not at all.
+    cleanup_ = false;
     checkNow_ = false;
     cancel_ = false;
     addAll_ = false;
@@ -1886,8 +1934,30 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
         updRowH[k] = std::max(kKeyH + 6.0f, textH) + 14.0f;
         updBlockH += updRowH[k] + 6.0f;
     }
+    // THE OLD VERSIONS ROW (0.99.49), under the updates: every copy an update
+    // left on disk, and ONE key that removes them all after one confirmation.
+    const std::size_t oldCount = model.oldCopies.size();
+    const std::string cleanupLabel = storeCleanupKeyLabel(oldCount);
+    const float cleanKeyW = std::max(kUpdKeyW, textW(uf, tiny, cleanupLabel.c_str()) + 22.0f);
+    const float oldNoteW = width - kPad * 2.0f - cleanKeyW - 32.0f;
+    std::string oldNote;
+    for (std::size_t k = 0; k < oldCount && k < 3; ++k) {
+        oldNote += (k == 0 ? "" : "\n") + storeOldCopyLine(model.oldCopies[k]);
+    }
+    if (oldCount > 3) {
+        oldNote += "\n" + cascade::core::formatText(tr("and %zu more"), oldCount - 3);
+    }
+    const float oldRowH =
+        oldCount == 0 ? 0.0f
+                      : std::max(kKeyH + 6.0f, faceH(uf, uiPx) + 3.0f +
+                                                   wrapH(uf, tiny, oldNoteW, oldNote.c_str())) +
+                            14.0f;
+    const float cleanNoteW = width - kPad * 2.0f;
+    const float cleanNoteH =
+        model.cleanupReport.empty() ? 0.0f : noteHeight(cleanNoteW, model.cleanupReport.c_str());
     const float bannerH = kPad + bannerHeadH + (updRows.empty() ? 0.0f : (8.0f + updBlockH)) +
-                          kPad;
+                          (oldCount == 0 ? 0.0f : (8.0f + oldRowH)) +
+                          (cleanNoteH > 0.0f ? 8.0f + cleanNoteH : 0.0f) + kPad;
 
     ImGui::Dummy(ImVec2(width, bannerH));
     {
@@ -1959,6 +2029,66 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
             }
             y += updRowH[k] + 6.0f;
         }
+        if (oldCount > 0) {
+            y += updRows.empty() ? 8.0f : 2.0f;
+            const ImVec2 rTL(tl.x + kPad, y);
+            const ImVec2 rBR(br.x - kPad, y + oldRowH);
+            addPlateBox(dl, rTL, rBR);
+            const float ry = rTL.y + 7.0f;
+            dl->AddText(uf, uiPx, ImVec2(rTL.x + 10.0f, ry), theme::kIvory,
+                        tr("Old versions left behind by updates"));
+            dl->AddText(uf, tiny, ImVec2(rTL.x + 10.0f, ry + faceH(uf, uiPx) + 3.0f),
+                        theme::kInkMuted, oldNote.c_str(), nullptr, oldNoteW);
+            const ImVec2 kTL(rBR.x - 10.0f - cleanKeyW, rTL.y + (oldRowH - kKeyH) * 0.5f);
+            const ImVec2 kBR(kTL.x + cleanKeyW, kTL.y + kKeyH);
+            if (drawDeckKey(dl, kTL, kBR, cleanupLabel.c_str(), nullptr, !model.busy,
+                            "cleanupold")) {
+                ImGui::OpenPopup("###cleanupconfirm");
+            }
+            census::rect("storekey:cleanup", kTL.x, kTL.y, kBR.x, kBR.y);
+            y += oldRowH;
+        }
+        if (cleanNoteH > 0.0f) {
+            y += 8.0f;
+            drawNote(dl, ImVec2(tl.x + kPad, y), cleanNoteW, theme::kPhosphor,
+                     model.cleanupReport.c_str());
+        }
+    }
+
+    // THE ONE CONFIRMATION, listing every file that will go. Accepting it is
+    // the whole of the request; the caller removes exactly the copies its own
+    // state still calls superseded.
+    ImGui::SetNextWindowSizeConstraints(ImVec2(360.0f, 0.0f),
+                                        ImVec2(std::max(360.0f, width * 0.8f), FLT_MAX));
+    if (ImGui::BeginPopupModal(trId("Remove old plugin versions###cleanupconfirm"), nullptr,
+                               ImGuiWindowFlags_AlwaysAutoResize)) {
+        if (oldCount == 0) {
+            ImGui::CloseCurrentPopup();
+        } else {
+            ImGui::PushTextWrapPos(std::max(320.0f, width * 0.5f));
+            ImGui::TextWrapped("%s", tr("Each of these is an older copy of a plugin whose newer "
+                                        "version is installed and running. Only these files are "
+                                        "deleted."));
+            ImGui::PopTextWrapPos();
+            ImGui::Spacing();
+            for (const StoreOldCopy& c : model.oldCopies) {
+                ImGui::BulletText("%s", storeOldCopyLine(c).c_str());
+            }
+            ImGui::Spacing();
+            const std::string yes = storeCleanupConfirmLabel(oldCount) + "###cleanupyes";
+            if (ImGui::Button(yes.c_str())) {
+                cleanup_ = true;
+                ImGui::CloseCurrentPopup();
+            }
+            {
+                const ImVec2 a = ImGui::GetItemRectMin();
+                const ImVec2 b = ImGui::GetItemRectMax();
+                census::rect("storekey:cleanupyes", a.x, a.y, b.x, b.y);
+            }
+            ImGui::SameLine();
+            if (ImGui::Button(trId("Keep them###cleanupno"))) { ImGui::CloseCurrentPopup(); }
+        }
+        ImGui::EndPopup();
     }
 
     // ======================= THE CONTROL DECK ===============================
