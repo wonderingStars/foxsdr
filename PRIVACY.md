@@ -100,6 +100,9 @@ One report per launch, describing the session that just finished:
 | Application version | `0.48.0` | Whether people update, and whether an auto-updater is needed. |
 | Operating system | `Windows 10.0.22631` | Which platforms are actually used, Windows or Linux, and which OS versions still matter. |
 | Architecture | `x64` | As above. |
+| How it was installed | `installer` | One of `store` (Microsoft Store), `installer` (the Windows installer), `appimage`, `tarball` (the two Linux downloads) or `android`. Read from the running program, not recorded at install time. It cannot tell foxsdr.com from GitHub, because they serve the same files. |
+| First run | `2026-09-29` | The day - never the time - your install identifier was created, in UTC. **Deleted with the identifier** when you turn reporting off. Tells new users from long-standing ones. Empty on copies whose identifier is older than FoxSDR 0.99.47. |
+| First version | `0.99.47` | The version that created the identifier - which download you started from. Deleted with it, like the first run. |
 | Launch count | `12` | Whether the software gets used more than once. |
 | Crash count | `1` | How often it fails. |
 | Session length | `3600` seconds | Whether sessions are minutes or hours. |

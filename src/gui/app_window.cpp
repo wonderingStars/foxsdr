@@ -724,6 +724,8 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            // in the first seconds would look like a clean exit.
            a.telemetryEnabled == b.telemetryEnabled &&
            a.telemetryInstallId == b.telemetryInstallId &&
+           a.telemetryFirstRun == b.telemetryFirstRun &&
+           a.telemetryFirstVersion == b.telemetryFirstVersion &&
            a.telemetryLaunches == b.telemetryLaunches &&
            a.telemetryCrashes == b.telemetryCrashes &&
            // Tester usage: only the token, on telemetryInstallId's own rule -
@@ -23978,12 +23980,19 @@ void AppWindow::drawUsageReportingSection() {
             // unused one sitting in its config.
             telemetryInstallId_ = cascade::core::newInstallId();
             telemetryEnabled_ = !telemetryInstallId_.empty();
+            // Born with the id: this is the first run THIS id describes.
+            telemetryFirstRun_ = telemetryEnabled_ ? cascade::core::utcDateToday() : std::string();
+            telemetryFirstVersion_ = telemetryEnabled_ ? cascade::versionString() : std::string();
         } else if (!on) {
             // Off DELETES the identifier, so a later opt-in gets a new one
             // that cannot be tied to the old. Any report still waiting to be
             // sent goes with it.
             telemetryEnabled_ = false;
             telemetryInstallId_.clear();
+            // Deleted with the id, for the same reason: a later opt-in must
+            // not be linkable to this one by its first-run date.
+            telemetryFirstRun_.clear();
+            telemetryFirstVersion_.clear();
         }
         // The heartbeat follows the switch in the same click: off disarms it
         // (configure refuses the now-empty id), on arms it with the new id.
@@ -25327,12 +25336,21 @@ void AppWindow::telemetryNotePanel(const char* name) {
 void AppWindow::telemetryStartup(const cascade::core::AppConfig& cfg) {
     telemetryEnabled_ = cfg.telemetryEnabled;
     telemetryInstallId_ = cfg.telemetryInstallId;
+    telemetryFirstRun_ = cfg.telemetryFirstRun;
+    telemetryFirstVersion_ = cfg.telemetryFirstVersion;
     // Reporting is on by default, so a first run arrives here enabled with no
     // identifier. Mint one now. If the CSPRNG fails there is no id, and
     // reporting stays off rather than falling back to anything guessable.
     if (telemetryEnabled_ && telemetryInstallId_.empty()) {
         telemetryInstallId_ = cascade::core::newInstallId();
         telemetryEnabled_ = !telemetryInstallId_.empty();
+        // The first run is NOW - and only now: an id that already existed
+        // before these fields did keeps them empty rather than claiming
+        // today as its first day.
+        if (telemetryEnabled_) {
+            telemetryFirstRun_ = cascade::core::utcDateToday();
+            telemetryFirstVersion_ = cascade::versionString();
+        }
     }
     telemetryLaunches_ = cfg.telemetryLaunches + 1;
     telemetryCrashes_ = cfg.telemetryCrashes;
@@ -25438,6 +25456,8 @@ void AppWindow::telemetryJournal(cascade::core::AppConfig& cfg) {
 
     cfg.telemetryEnabled = telemetryEnabled_;
     cfg.telemetryInstallId = telemetryInstallId_;
+    cfg.telemetryFirstRun = telemetryFirstRun_;
+    cfg.telemetryFirstVersion = telemetryFirstVersion_;
     cfg.telemetryLaunches = telemetryLaunches_;
     cfg.telemetryCrashes = telemetryCrashes_;
     cfg.telemetryPending.clear();
@@ -25451,6 +25471,9 @@ void AppWindow::telemetryJournal(cascade::core::AppConfig& cfg) {
     r.appVersion = cascade::versionString();
     r.os = cascade::core::osDescription();
     r.arch = cascade::core::archDescription();
+    r.channel = cascade::core::installChannel();
+    r.firstRun = telemetryFirstRun_;
+    r.firstVersion = telemetryFirstVersion_;
     r.launches = telemetryLaunches_;
     r.crashes = telemetryCrashes_;
     const double now = glfwGetTime();

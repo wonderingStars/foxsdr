@@ -2819,6 +2819,8 @@ private:
     cascade::core::HeartbeatSender telemetryHeartbeat_;
     bool telemetryEnabled_ = false;
     std::string telemetryInstallId_;
+    std::string telemetryFirstRun_;      // see AppConfig::telemetryFirstRun
+    std::string telemetryFirstVersion_;
     std::uint64_t telemetryLaunches_ = 0;
     std::uint64_t telemetryCrashes_ = 0;
     // The VOLUME meter's needle, carried between frames so it can fall

@@ -119,6 +119,11 @@ export default {
         topMode,                // blob5  most-used demodulator
         plugins,                // blob6  installed plugins
         panels,                 // blob7  panels opened
+        // 0.99.47: where the copy came from and when it first reported.
+        // Empty from older clients; readers must treat '' as "not reported".
+        clamp(body.ch, 12),     // blob8  install channel (store/installer/appimage/tarball/android)
+        clamp(body.first, 10),  // blob9  first-run day, UTC, YYYY-MM-DD
+        clamp(body.fv, 48),     // blob10 version that created the install id
       ],
       doubles: [
         num(body.launches, 1e6),    // double1  launches since install

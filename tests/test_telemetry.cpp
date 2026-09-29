@@ -21,6 +21,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include "core/config.hpp"
+#include "core/package_identity.hpp"
 #include "core/telemetry.hpp"
 #include "test_check.hpp"
 
@@ -115,6 +117,9 @@ void testPayloadContainsOnlyTheAgreedFields() {
     r.arch = archDescription();
     r.launches = 12;
     r.crashes = 1;
+    r.channel = "installer";
+    r.firstRun = "2026-09-29";
+    r.firstVersion = "0.99.46";
     r.session.seconds = 3600;
     r.session.modeSeconds["WFM"] = 3000;
     r.session.modeSeconds["RAW"] = 600;
@@ -128,7 +133,7 @@ void testPayloadContainsOnlyTheAgreedFields() {
     // and they have to come and change the privacy notice too - which is
     // exactly the conversation that should happen.
     const std::set<std::string> allowed = {
-        "id", "v", "os", "arch", "launches", "crashes",
+        "id", "v", "os", "arch", "launches", "crashes", "ch", "first", "fv",
         "sessionSec", "sdr", "modes", "panels", "plugins"};
     std::set<std::string> actual;
     for (auto it = j.begin(); it != j.end(); ++it) { actual.insert(it.key()); }
@@ -137,6 +142,9 @@ void testPayloadContainsOnlyTheAgreedFields() {
     CHECK(j["v"] == "0.48.0");
     CHECK(j["launches"] == 12);
     CHECK(j["crashes"] == 1);
+    CHECK(j["ch"] == "installer");
+    CHECK(j["first"] == "2026-09-29");
+    CHECK(j["fv"] == "0.99.46");
     CHECK(j["modes"]["WFM"] == 3000);
     CHECK(j["panels"].size() == 2);
 
@@ -567,6 +575,101 @@ void testClaimHonoursANonAsciiFolder() {
     std::filesystem::remove_all(d, ec);
 }
 
+// WHERE IT CAME FROM, read from the running program. On Windows the only two
+// downloads are the Store package and the installer; the Store case is the
+// package identity the rest of the app already uses.
+void testInstallChannelFollowsThePackage() {
+#if defined(__ANDROID__)
+    CHECK(installChannel() == "android");
+#elif defined(_WIN32)
+    clearPackageIdentityForTest();
+    CHECK(installChannel() == "installer");
+    PackageIdentity pkg;
+    pkg.packaged = true;
+    pkg.fullName = "FoxSDR_1.99.46.0_x64__8wekyb3d8bbwe";
+    setPackageIdentityForTest(pkg);
+    CHECK(installChannel() == "store");
+    clearPackageIdentityForTest();
+    CHECK(installChannel() == "installer");
+#else
+    ::unsetenv("APPIMAGE");
+    CHECK(installChannel() == "tarball");
+    ::setenv("APPIMAGE", "/home/x/FoxSDR.AppImage", 1);
+    CHECK(installChannel() == "appimage");
+    ::setenv("APPIMAGE", "", 1);
+    CHECK(installChannel() == "tarball");
+    ::unsetenv("APPIMAGE");
+#endif
+}
+
+// A day, never a time - and only exactly a day or a version string is ever
+// kept or sent.
+void testFirstRunFieldsHaveOneShape() {
+    const std::string today = utcDateToday();
+    CHECK(today.size() == 10);
+    CHECK(validFirstRunDate(today));
+    CHECK(validFirstRunDate("2026-09-29"));
+    CHECK(!validFirstRunDate(""));
+    CHECK(!validFirstRunDate("2026-09-29T10:05:00Z"));   // a time is refused
+    CHECK(!validFirstRunDate("2026-13-01"));
+    CHECK(!validFirstRunDate("2026-00-10"));
+    CHECK(!validFirstRunDate("2026-09-32"));
+    CHECK(!validFirstRunDate("2025-12-31"));             // before the field existed
+    CHECK(!validFirstRunDate("steve@x.com"));
+    CHECK(validFirstVersion("0.99.46"));
+    CHECK(validFirstVersion("0.98.1-android.4"));
+    CHECK(validFirstVersion("0.57.0-nightly.20260819.b97092e"));
+    CHECK(!validFirstVersion(""));
+    CHECK(!validFirstVersion("Steven Fox"));              // a space: not a version
+    CHECK(!validFirstVersion(std::string(49, '1')));
+}
+
+// The config keeps the fields across a save, and drops them when they are not
+// exactly the right shape, or when there is no install id for them to belong to.
+void testFirstRunFieldsSurviveASaveAndRefuseAnythingElse() {
+    namespace fs = std::filesystem;
+#if defined(_WIN32)
+    const unsigned long pid = ::GetCurrentProcessId();
+#else
+    const unsigned long pid = static_cast<unsigned long>(::getpid());
+#endif
+    const fs::path tmp = fs::temp_directory_path() / ("foxsdr_firstrun_" + std::to_string(pid) + ".json");
+    std::string werr, error;
+    std::error_code ec;
+
+    AppConfig good;
+    good.telemetryEnabled = true;
+    good.telemetryInstallId = std::string(32, 'a');
+    good.telemetryFirstRun = "2026-09-29";
+    good.telemetryFirstVersion = "0.99.46";
+    CHECK(ConfigStore::writeFile(tmp.string(), ConfigStore::serialize(good), werr));
+    AppConfig back;
+    CHECK(ConfigStore::load(tmp.string(), back, error));
+    CHECK(back.telemetryFirstRun == "2026-09-29");
+    CHECK(back.telemetryFirstVersion == "0.99.46");
+
+    AppConfig bad = good;
+    bad.telemetryFirstRun = "2026-09-29 10:05:33";
+    bad.telemetryFirstVersion = "my name is Steve";
+    CHECK(ConfigStore::writeFile(tmp.string(), ConfigStore::serialize(bad), werr));
+    AppConfig backBad;
+    CHECK(ConfigStore::load(tmp.string(), backBad, error));
+    CHECK(backBad.telemetryFirstRun.empty());
+    CHECK(backBad.telemetryFirstVersion.empty());
+    CHECK(backBad.telemetryInstallId == good.telemetryInstallId);   // the id itself is untouched
+
+    AppConfig orphan = good;
+    orphan.telemetryInstallId.clear();
+    orphan.telemetryEnabled = false;
+    CHECK(ConfigStore::writeFile(tmp.string(), ConfigStore::serialize(orphan), werr));
+    AppConfig backOrphan;
+    CHECK(ConfigStore::load(tmp.string(), backOrphan, error));
+    CHECK(backOrphan.telemetryFirstRun.empty());
+    CHECK(backOrphan.telemetryFirstVersion.empty());
+
+    fs::remove(tmp, ec);
+}
+
 }  // namespace
 
 int main() {
@@ -585,6 +688,9 @@ int main() {
     testConcurrentClaimsLetExactlyOneSend();
     testClaimFailsOpen();
     testClaimHonoursANonAsciiFolder();
+    testInstallChannelFollowsThePackage();
+    testFirstRunFieldsHaveOneShape();
+    testFirstRunFieldsSurviveASaveAndRefuseAnythingElse();
 #if !defined(_WIN32)
     testTelemetryEndpointOverridePosix();
     testTelemetryHttpUrlNeverConnects();

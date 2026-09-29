@@ -2,10 +2,13 @@
 
 #include "core/telemetry.hpp"
 
+#include "core/package_identity.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <ctime>
 #include <filesystem>
 #include <system_error>
 
@@ -203,6 +206,9 @@ std::string TelemetryReport::toJson() const {
     j["arch"] = arch;
     j["launches"] = launches;
     j["crashes"] = crashes;
+    j["ch"] = channel;
+    j["first"] = firstRun;
+    j["fv"] = firstVersion;
     j["sessionSec"] = session.seconds;
     j["sdr"] = session.sdrModel;
     nlohmann::json modes = nlohmann::json::object();
@@ -452,6 +458,54 @@ void HeartbeatSender::poll(double now) {
 namespace {
 constexpr char kSentMarkerPrefix[] = "telemetry-sent-";
 }  // namespace
+
+std::string installChannel() {
+#if defined(__ANDROID__)
+    return "android";
+#elif defined(_WIN32)
+    return runningInPackage() ? "store" : "installer";
+#else
+    const char* appimage = std::getenv("APPIMAGE");
+    return (appimage != nullptr && appimage[0] != '\0') ? "appimage" : "tarball";
+#endif
+}
+
+std::string utcDateToday() {
+    const std::time_t now = std::time(nullptr);
+    std::tm tmv{};
+#if defined(_WIN32)
+    if (::gmtime_s(&tmv, &now) != 0) { return std::string(); }
+#else
+    if (::gmtime_r(&now, &tmv) == nullptr) { return std::string(); }
+#endif
+    char buf[16];
+    std::snprintf(buf, sizeof buf, "%04d-%02d-%02d", tmv.tm_year + 1900, tmv.tm_mon + 1,
+                  tmv.tm_mday);
+    return std::string(buf);
+}
+
+bool validFirstRunDate(const std::string& s) {
+    if (s.size() != 10 || s[4] != '-' || s[7] != '-') { return false; }
+    for (std::size_t i = 0; i < s.size(); ++i) {
+        if (i == 4 || i == 7) { continue; }
+        if (s[i] < '0' || s[i] > '9') { return false; }
+    }
+    const int month = (s[5] - '0') * 10 + (s[6] - '0');
+    const int day = (s[8] - '0') * 10 + (s[9] - '0');
+    return s.compare(0, 4, "2026") >= 0 && month >= 1 && month <= 12 && day >= 1 && day <= 31;
+}
+
+bool validFirstVersion(const std::string& s) {
+    // A version string and nothing else: digits, letters, dots, dashes and
+    // plus, at most 48 characters - the Worker's own width for a version.
+    if (s.empty() || s.size() > 48) { return false; }
+    for (char c : s) {
+        const bool ok = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') ||
+                        (c >= 'A' && c <= 'Z') || c == '.' || c == '-' || c == '+';
+        if (!ok) { return false; }
+    }
+    return true;
+}
 
 std::string reportSendMarkerName(const std::string& json) {
     std::uint64_t h = 14695981039346656037ull;  // FNV-1a 64

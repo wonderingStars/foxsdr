@@ -940,6 +940,14 @@ struct AppConfig {
     std::uint64_t telemetryLaunches = 0;
     std::uint64_t telemetryCrashes = 0;
 
+    // When this install id was created (UTC day, "2026-09-29") and the
+    // version that created it. Written once, with the id, and deleted with
+    // it - so they mean "first run with reporting on". Empty on installs that
+    // predate the fields (0.99.47): never back-filled with a guess. Validated
+    // on load like the id itself (core::validFirstRunDate/validFirstVersion).
+    std::string telemetryFirstRun;
+    std::string telemetryFirstVersion;
+
     // False while the application is running, true once it has shut down
     // cleanly. A start-up that finds this ALREADY false knows the previous
     // session ended in a crash — which is the only way to count crashes

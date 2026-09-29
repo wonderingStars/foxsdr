@@ -607,6 +607,8 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     getString(j, "telemetryInstallId", out.telemetryInstallId);
     getUint64(j, "telemetryLaunches", out.telemetryLaunches);
     getUint64(j, "telemetryCrashes", out.telemetryCrashes);
+    getString(j, "telemetryFirstRun", out.telemetryFirstRun);
+    getString(j, "telemetryFirstVersion", out.telemetryFirstVersion);
     getBool(j, "telemetryCleanExit", out.telemetryCleanExit);
     getString(j, "telemetryPending", out.telemetryPending);
     getString(j, "testerToken", out.testerToken);
@@ -649,6 +651,16 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     // user trying to intervene, and is respected.
     if (out.telemetryPending.size() > AppConfig::kMaxPendingReportBytes) {
         out.telemetryPending.clear();
+    }
+    // The first-run fields travel in every report, so they get the install
+    // id's rule: anything that is not exactly the expected shape - a
+    // hand-edited name, a sentence - is dropped rather than transmitted. And
+    // without an id they mean nothing, so they go with it.
+    if (!validFirstRunDate(out.telemetryFirstRun) || out.telemetryInstallId.empty()) {
+        out.telemetryFirstRun.clear();
+    }
+    if (!validFirstVersion(out.telemetryFirstVersion) || out.telemetryInstallId.empty()) {
+        out.telemetryFirstVersion.clear();
     }
 
     // THE TESTER TOKEN, VALIDATED, NOT TRUSTED - exactly telemetryInstallId's
@@ -1107,6 +1119,8 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
     j["telemetryInstallId"] = cfg.telemetryInstallId;
     j["telemetryLaunches"] = cfg.telemetryLaunches;
     j["telemetryCrashes"] = cfg.telemetryCrashes;
+    j["telemetryFirstRun"] = cfg.telemetryFirstRun;
+    j["telemetryFirstVersion"] = cfg.telemetryFirstVersion;
     j["telemetryCleanExit"] = cfg.telemetryCleanExit;
     j["telemetryPending"] = cfg.telemetryPending;
     // The tester's own credential - see the field's comment in config.hpp for

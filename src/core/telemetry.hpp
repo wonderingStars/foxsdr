@@ -74,6 +74,13 @@ struct TelemetryReport {
     std::string arch;       // "x64"
     std::uint64_t launches = 0;
     std::uint64_t crashes = 0;
+    // WHERE THIS COPY CAME FROM and WHEN it first reported (0.99.47). The
+    // channel is read from the running copy (installChannel()); the first-run
+    // date and version are written once, when the install id is created, and
+    // deleted with it. Empty for installs older than that - never guessed.
+    std::string channel;       // "store", "installer", "appimage", "tarball", "android"
+    std::string firstRun;      // "2026-09-29", UTC day only
+    std::string firstVersion;  // "0.99.47"
     TelemetrySession session;
 
     // Compact JSON, exactly the fields above and nothing else.
@@ -181,6 +188,24 @@ public:
 private:
     std::thread thread_;
 };
+
+// How this copy was installed, read from the running program - nothing is
+// written at install time. Windows: "store" when running as a Microsoft Store
+// package (package_identity.hpp), otherwise "installer" (the only other
+// Windows download is the installer). Linux: "appimage" when the AppImage
+// runtime set APPIMAGE, otherwise "tarball". Android builds: "android".
+// foxsdr.com and GitHub serve the SAME files, so they cannot be told apart.
+std::string installChannel();
+
+// Today's date in UTC as "YYYY-MM-DD" - a day, never a time, so the
+// first-run field cannot single anybody out by the minute they installed.
+std::string utcDateToday();
+
+// The shapes the two first-run fields must have to be kept or sent. A
+// hand-edited config that put anything else there is discarded on load,
+// the same rule the install id follows.
+bool validFirstRunDate(const std::string& s);
+bool validFirstVersion(const std::string& s);
 
 // SENDS ONE REPORT ONCE, across every process and every launch.
 //
