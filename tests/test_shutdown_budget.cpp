@@ -829,6 +829,13 @@ const KnownWait kKnownWaits[] = {
     // Transmitter::stop()'s own sink_->stop() spends the 1500 instead.
     // Charging both is therefore conservative in the direction a budget
     // should be conservative in.
+    {"src/engine/engine.hpp", "kControlJoinWait", 0,
+     "Engine::stopControlThread() - the bound on the engine's control thread coming back "
+     "before it is joined (not abandoned: the thread runs on the Engine). NOT on the window's "
+     "shutdown path yet: the window does not start the control thread (engine-stage3.md "
+     "section 10), so its teardown's stopControlThread returns at once. The step that moves "
+     "the window's pump onto the control thread (engine-stage4.md, plan step 4) charges it "
+     "once and raises kShutdownBoundedWaitsMs with it"},
     {"src/core/transmitter.hpp", "kThreadJoinWait", 1,
      "Transmitter::stopThread() - the bound on the TX thread coming back, spent at the very "
      "top of the teardown. NOT followed by an abandonment: everything that thread can be "

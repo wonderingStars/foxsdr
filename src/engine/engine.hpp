@@ -28,6 +28,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -1756,6 +1757,11 @@ private:
     // The control thread (startControlThread).
     void controlLoop(std::chrono::milliseconds period);
     std::thread controlThread_;
+    // Set by the control loop as its last act (after transmitter_.stop()),
+    // so stopControlThread can bound its wait for the thread before joining.
+    std::mutex controlExitMutex_;
+    std::condition_variable controlExitCv_;
+    bool controlExited_ = false;
     std::atomic<bool> controlRun_{false};
     std::atomic<std::thread::id> controlThreadId_{};
     cascade::core::HangWatchdog controlWatchdog_;
@@ -2271,6 +2277,16 @@ public:
     // never runs beside a tick(). A control thread stuck inside a wait is
     // still no danger to the air: with no tick, the TX thread releases the key
     // itself within kKeyAliveWait. Idempotent; teardown and ~Engine call it.
+    // THE BOUND ON THE CONTROL THREAD COMING BACK (stopControlThread). The
+    // key is already up before this is spent (stopControlThread lets go of it
+    // first, from the calling thread), so what it waits out is the rest of
+    // one control pass. Everything a pass can wait on has its own bound (the
+    // audio and microphone opens' grace, the plugin rescan, a vendor call),
+    // the longest of which is the source's 3000 ms, so a thread not back by
+    // then is logged as late - and then JOINED, not abandoned, because the
+    // thread runs on this Engine and must not outlive it (the same trade as
+    // Transmitter::kThreadJoinWait; tests/test_shutdown_budget.cpp charges it).
+    static constexpr std::chrono::milliseconds kControlJoinWait{3000};
     void startControlThread();
     void startControlThread(const ControlThreadOptions& options);
     void stopControlThread();

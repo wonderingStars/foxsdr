@@ -22,6 +22,10 @@
 //      long before the join returns - the key-up does not wait for the join
 //   F  an engine destroyed with its control thread running stops it cleanly
 //   G  shutdownQuiesce() stops a running control thread before anything else
+//   H  THE JOIN'S BOUND (Engine::kControlJoinWait): a stop asked for while a
+//      pass is stalled past the bound logs that the thread is late, and still
+//      JOINS it (the thread runs on the Engine and is never abandoned); a stop
+//      inside the bound logs nothing
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <atomic>
@@ -41,6 +45,7 @@
 #endif
 
 #include "core/app_commands.hpp"
+#include "core/diag_log.hpp"
 #include "core/transmitter.hpp"
 #include "engine/engine.hpp"
 #include "engine/engine_host.hpp"
@@ -330,6 +335,45 @@ int main() {
         std::this_thread::sleep_for(std::chrono::milliseconds(30));
         e.shutdownQuiesce();
         std::printf("G: after shutdownQuiesce: control thread running=%d\n", e.controlThreadRunning() ? 1 : 0);
+        CHECK(!e.controlThreadRunning());
+        e.shutdown();
+    }
+
+    // H: the join's bound.
+    {
+        auto lateLines = [] {
+            int n = 0;
+            for (const std::string& line : cascade::core::DiagLog::instance().ringSnapshot()) {
+                if (line.find("control thread did not come back") != std::string::npos) { ++n; }
+            }
+            return n;
+        };
+        const long long boundMs = Engine::kControlJoinWait.count();
+        Engine e;
+        e.initialise();
+        // Inside the bound: nothing logged.
+        e.startControlThread(opts);
+        A::stall(e, 200);
+        CHECK(waitFor([&] { return A::inStall(e); }, 500) >= 0.0);
+        const int late0 = lateLines();
+        e.stopControlThread();
+        CHECK(lateLines() == late0);
+        // Past it: logged, and joined (the stop returns only once the stalled
+        // pass has ended - it is timed from the stop being asked for, which is
+        // the event the bound counts from; the stall began before that, so the
+        // stop takes at most the stall and at least the bound).
+        const int stallMs = static_cast<int>(boundMs) + 400;
+        e.startControlThread(opts);
+        A::stall(e, stallMs);
+        CHECK(waitFor([&] { return A::inStall(e); }, 500) >= 0.0);
+        const auto h0 = Clock::now();
+        e.stopControlThread();
+        const double tookMs = msSince(h0);
+        std::printf("H: stop during a %d ms stall: returned after %.0f ms, 'late' lines logged %d (bound %lld ms)\n",
+                    stallMs, tookMs, lateLines() - late0, boundMs);
+        CHECK(lateLines() == late0 + 1);
+        CHECK(tookMs >= static_cast<double>(boundMs));
+        CHECK(tookMs <= static_cast<double>(stallMs) + 250.0);   // a pass's tail and the TX stop, generously
         CHECK(!e.controlThreadRunning());
         e.shutdown();
     }

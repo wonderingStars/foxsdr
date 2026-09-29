@@ -7159,6 +7159,10 @@ void Engine::startControlThread() { startControlThread(ControlThreadOptions{}); 
 void Engine::startControlThread(const ControlThreadOptions& options) {
     if (controlThread_.joinable()) { return; }
     controlWatchdog_.start(options.watchdogReportDir, options.watchdogThresholdMs);
+    {
+        std::lock_guard<std::mutex> lk(controlExitMutex_);
+        controlExited_ = false;
+    }
     controlRun_.store(true);
     controlThread_ = std::thread(&Engine::controlLoop, this, options.period);
 }
@@ -7186,6 +7190,19 @@ void Engine::stopControlThread() {
     transmitter_.releaseRemote("the engine's control thread is stopping");
     controlRun_.store(false);
     controlParkForTest_.store(false);
+    // A BOUNDED WAIT, THEN THE JOIN (kControlJoinWait says why it is joined
+    // and not abandoned). The radio is already quiet: what is left is the
+    // rest of the pass the thread is in, and a pass still running after the
+    // bound becomes a line in the log rather than silence.
+    bool exited = false;
+    {
+        std::unique_lock<std::mutex> lk(controlExitMutex_);
+        exited = controlExitCv_.wait_for(lk, kControlJoinWait, [this] { return controlExited_; });
+    }
+    if (!exited) {
+        cascade::core::diagWarnf("engine: the control thread did not come back within %lld ms; waiting for its pass's own bounds",
+                  static_cast<long long>(kControlJoinWait.count()));
+    }
     controlThread_.join();
     controlThreadId_.store(std::thread::id{});
     controlWatchdog_.stop();
@@ -7228,6 +7245,11 @@ void Engine::controlLoop(std::chrono::milliseconds period) {
     // runs beside a tick(). The key is already up (stopControlThread let go
     // of it before asking this loop to end); this ends the TX thread.
     transmitter_.stop();
+    {
+        std::lock_guard<std::mutex> lk(controlExitMutex_);
+        controlExited_ = true;
+    }
+    controlExitCv_.notify_all();
 }
 
 void Engine::pauseWaitWatchdog() {
