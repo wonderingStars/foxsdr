@@ -116,3 +116,11 @@ SUBSYSTEM=="usb", ATTR{idVendor}=="0511", ATTR{idProduct}=="0037", TAG+="uaccess
 # (2026-09-15) when both drivers were routed through the usbfs transport.
 SUBSYSTEM=="usb", ATTR{idVendor}=="1d50", ATTR{idProduct}=="60a1", TAG+="uaccess", MODE="0660", GROUP="plugdev"
 SUBSYSTEM=="usb", ATTR{idVendor}=="03eb", ATTR{idProduct}=="800c", TAG+="uaccess", MODE="0660", GROUP="plugdev"
+
+# AOR digital-I/Q interface (AR5700D; AR2300/AR5001D/AR6000 with IQ5001),
+# src/source/aor_protocol.hpp - the Cypress FX2 at 08D0:A001, the same id
+# before and after its firmware is loaded. Its CONTROL port is an FTDI
+# serial adapter (0403:6001) and is deliberately NOT granted here: that id is
+# shared by countless unrelated devices, and a serial port is reached through
+# the ordinary dialout group like any other.
+SUBSYSTEM=="usb", ATTR{idVendor}=="08d0", ATTR{idProduct}=="a001", TAG+="uaccess", MODE="0660", GROUP="plugdev"

@@ -23,6 +23,15 @@
 //            and RF to tune (aor_control.hpp). Found by asking VR, never by
 //            VID/PID alone.
 //
+// ANDROID - WHERE IT WOULD PLUG IN, AND WHY IT IS NOT BUILT. The I/Q half
+// would need nothing new: usbfs is the same kernel interface on Android, so
+// src/usb/usbfs_device.cpp's iso and bulk code applies to a file descriptor
+// obtained through the platform's UsbManager rather than open(). The control
+// half is the gap: Android offers no /dev/ttyUSB node for an FTDI chip, so it
+// would need a userspace FTDI driver - a second aor::ControlLink
+// implementation that speaks FTDI's vendor requests and bulk endpoints over a
+// UsbDevice. That is a follow-up; nothing for Android is built here.
+//
 // THE THREAD is the same shape and the same obligation as every native
 // driver here (airspyhf_source.hpp states it in full): one reader pulls
 // completed iso transfers, aligns and decodes them into a ring; read()

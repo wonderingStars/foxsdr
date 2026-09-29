@@ -5,7 +5,8 @@ spectrum and waterfall, multi-mode demodulation (NFM/WFM/AM/DSB/USB/LSB/CW),
 stereo FM with RDS, recording, bookmarks, a scanner, band plans, native
 drivers for the RTL-SDR, the HackRF, the Airspy R2/Mini, the Airspy HF+, the
 SDRplay RSPs, the Mirics MSi2500, the RX888 mk2 and the ADALM-Pluto — which it
-also TRANSMITS through — and hardware support for any
+also TRANSMITS through — plus AOR digital-I/Q receivers (written from AOR's
+documentation, not yet tested on hardware), and hardware support for any
 other radio SoapySDR can reach.
 
 > ### Linux status
@@ -547,6 +548,61 @@ ceiling around 16 – 20 MS/s, so 32 MS/s is offered because the hardware has
 it, not because this application can keep up with it on every machine. If
 the diagnostic log's `stream health` line shows overflows climbing, drop a
 rate.
+
+## AOR digital-I/Q receivers (AR5700D; AR2300, AR5001D, AR6000 with IQ5001)
+
+**Read this first: this support is written from AOR's documentation and has
+not been tested on hardware.** Nobody on the project has an AOR receiver.
+Every part of the driver has been tested against fake USB and serial devices
+that behave the way AOR's document says the receiver does, and against
+nothing else. Please report what happens on a real receiver.
+
+The driver was written from AOR's *Digital I/Q USB Interface Developer
+Information* (Revision 1.1, September 2026). Thanks to AOR, Ltd. for
+publishing it. It is FoxSDR's own code, written without reading SoapyAOR or
+AOR-GQRX-RPi, and it does not use AOR's Windows driver. AOR's document
+describes the AR5700D as validated. The AR2300, AR5001D and AR6000 with the
+IQ5001 board belong to the same family but are **unverified**. FoxSDR guesses
+their VR replies by analogy with the AR5700D's and does not send them `@21`.
+
+The receiver uses two USB cables, and FoxSDR needs both:
+
+- **I/Q** (`08D0:A001`): samples at a fixed 1.125 MS/s. That is the only rate
+  offered.
+- **Control**: an FTDI serial port. FoxSDR tunes the receiver through it with
+  the `RF` command. FTDI chips are in many unrelated devices, so FoxSDR does
+  not pick the port by its USB ID. It asks each FTDI port `VR` and uses the
+  one that answers as an AOR receiver. If none answers, or more than one
+  does, the open is refused with a sentence saying why. Connect one AOR
+  receiver at a time.
+
+**On Windows the I/Q interface has to be bound to WinUSB.** AOR's own driver
+(AorAlpha) and WinUSB cannot both own it, so with AOR's driver installed
+FoxSDR cannot open the receiver. The Source section says so under the list.
+To switch it, run Zadig, tick Options → List All Devices, select the AOR I/Q
+interface (`08D0:A001`), choose WinUSB and click Replace Driver. AOR's own
+software will then need its driver back. The control port stays on FTDI's
+normal serial (VCP) driver. On Linux nothing needs rebinding: the udev rule
+in `installer/linux/` grants access to the I/Q interface. The control port is
+an ordinary `/dev/ttyUSB*` node, so your user must be in the `dialout` group.
+
+**The FX2 firmware is not included yet.** The I/Q interface forgets its
+firmware whenever it loses power. The firmware (`fx2fw.hex`) is AOR's, and
+AOR will supply it with a redistribution notice. Until then, FoxSDR looks for
+it at `resources/firmware/aor/fx2fw.hex` beside the executable. If the
+interface has no firmware running and that file is missing, FoxSDR says so in
+plain words and does not open the receiver. If other software has already
+loaded the firmware since power-on, the file is not needed.
+
+When the file is present, FoxSDR loads it only after checking that the
+interface is not already streaming. AOR's document does not say how to tell
+an unprogrammed interface from a running one, so FoxSDR asks it to stream
+first. This question has been put to AOR.
+
+Not supported yet: gain and antenna control (AOR's document does not
+describe them), and **Android**. usbfs would work there, but the FTDI control
+port needs a userspace FTDI driver on Android. That is a follow-up and has not
+been built.
 
 ## The native ADALM-Pluto driver
 

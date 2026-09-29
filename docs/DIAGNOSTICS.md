@@ -77,7 +77,7 @@ describe code this product can be held responsible for.
 - `source: opened RTL2838UHIDIR (rtlsdr) at 2400000 S/s` - written by the
   application when it installs the radio in the pipeline. The parenthesis is
   the DRIVER KIND (`soapy`, `rtlsdr`, `hackrf`, `airspy`, `airspyhf`,
-  `sdrplay`, `mirisdr`, `rx888`, `pluto`): two rows
+  `sdrplay`, `mirisdr`, `rx888`, `pluto`, `aor`): two rows
   in the Source dropdown can name one physical radio, and a report has to say
   which of them was taken. Every one is its own key and none is a family
   name - `airspy` and `airspyhf` are different USB ids, different hardware and
@@ -151,6 +151,25 @@ describe code this product can be held responsible for.
     Cypress bootloader and FoxSDR uploaded the image to it. An open that takes
     about five seconds and this line in the log is the NORMAL first open after
     a power cycle, not a fault.
+  - `aor: ...` lines come from the native AOR digital-I/Q driver (AR5700D;
+    AR2300, AR5001D and AR6000 with the IQ5001). It was written from AOR's
+    developer document and has NOT been tested on hardware, so a report from
+    a real receiver is new information, not a regression. The lines, in open
+    order: `aor: control port COMn: VR -> "..."` for every FTDI port asked,
+    with what it answered (the AOR is the one naming a model; the rest were
+    left alone after EX/VR); `aor: probe: armed yes/no, START
+    accepted/refused, N transfers / N bytes, aligned - firmware is running`
+    or `no alignment`, which is how the driver decides whether to load AOR's
+    FX2 firmware, because AOR's document does not say how to tell; `aor:
+    loaded N bytes of FX2 firmware` and `aor: after the firmware load the
+    interface re-enumerated` when it did load it; `aor: opened AOR AR5700D -
+    VR "...", control on COMn, I/Q at 1.125 MS/s`. `aor: open refused` or
+    `aor: open abandoned` carries the same sentence the user saw: not bound
+    to WinUSB (AOR's AorAlpha driver has the interface), firmware file not
+    installed, no or several AOR receivers answering, or no stream even after
+    the firmware load. `aor: stopped - N transfers, first 1 discarded, N
+    alignment losses` closes each stream. Alignment losses above zero on a
+    healthy USB link are worth reporting to the project.
   - The Pluto's open line names what the board reported about itself rather
     than a model from a table, including whether it is a stock AD9363 or one
     with the AD9364 unlock applied - the tuning range differs by a factor of
