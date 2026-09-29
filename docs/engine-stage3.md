@@ -1796,3 +1796,21 @@ moment another thread writes them.
    stops (all 20000 taken once and applied). Red before: the heap was
    corrupted ("double free or corruption", 3 of 3 runs); red again - a
    crash, 3 of 3 - with the submit's lock removed and with the drain's.
+2. **A press made after the TX thread played the key down itself is kept.**
+   Key-up needs no tick since OPEN 7 (b): the TX thread lowers the key and
+   ends by itself once nothing asserts it. The next `tick()` took any
+   ended thread for a fault - it wiped `pttHeld_`, `latched_` and the
+   remote - so a LATCH press made in between (the page reopened, LATCH
+   pressed before the control side ticked) was lost. In 3a the key-up and
+   the tick share a frame, so the window almost never lost one; with the
+   pump on its own thread the gap is a whole pass. The TX thread now says
+   how it ended (`endedReleased_`: it played the key down because nothing
+   asserted it); `tick()` tidies that up without wiping a key asked for
+   since, which keys on the next tick. A thread that broke off - a
+   dead-man's handle, a fault - still takes every key with it.
+   Who may key is unchanged: only a key the operator asked for after the
+   release. test_transmit_key_race E (new): a LATCH press on that tick,
+   five rounds - kept in 2 of 5 before, 5 of 5 after; the branch removed,
+   red again (6 checks); every ended thread treated as released, red in
+   test_transmit_key_race D (a frozen window's PTT re-keyed), in
+   test_transmit_liveness A/B and in test_transmitter's fault cases.

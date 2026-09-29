@@ -35,6 +35,11 @@
 //      window) while the control side pumps on. The TX thread releases the
 //      key at kKeyAliveWait; after that the control side must not key the
 //      radio again from the same old request, pump after pump.
+//   E  A PRESS AFTER A KEY-UP THE TX THREAD PLAYED DOWN BY ITSELF: key-up
+//      needs no pump, so the TX thread can end before the control side's next
+//      tick - and a LATCH press that reaches that tick must be kept, not wiped
+//      as if the thread had faulted. (One press; a window does not send it
+//      again.)
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <atomic>
@@ -331,6 +336,51 @@ int main() {
         CHECK(Access::transmitting(e));
         e.pumpTransmitter(/*pageLive=*/false, /*latchPressed=*/false, /*pttHeld=*/false);
         CHECK(waitQuiet(raw, 150));
+    }
+
+    // E: a press landing on the tick that tidies up a released key.
+    {
+        Engine e;
+        e.initialise();
+        RecordingSink* raw = Access::installSink(e);
+        int kept = 0;
+        constexpr int kRoundsE = 5;
+        cascade::gui::TxPageRequest r;
+        r.pageLive = true;
+        std::uint64_t seq = 0;
+        for (int round = 0; round < kRoundsE; ++round) {
+            ++r.latchPressCount;   // LATCH on
+            r.frameSeq = ++seq;
+            e.submitTransmitPageKey(r);
+            e.pumpTransmitter();
+            CHECK(Access::latched(e) && raw->running());
+            // The page closes - key-up on the front end, no pump - and the TX
+            // thread plays the key down and ends on its own.
+            cascade::gui::TxPageRequest up = r;
+            up.pageLive = false;
+            up.frameSeq = ++seq;
+            e.submitTransmitPageKey(up);
+            CHECK(waitQuiet(raw, 150));
+            // The page opens again and LATCH is pressed once, before the
+            // control side has ticked since.
+            ++r.latchPressCount;
+            r.frameSeq = ++seq;
+            e.submitTransmitPageKey(r);
+            e.pumpTransmitter();
+            e.pumpTransmitter();
+            if (Access::latched(e) && Access::transmitting(e) && raw->running()) { ++kept; }
+            // ...and off again, for the next round.
+            ++r.latchPressCount;
+            r.frameSeq = ++seq;
+            e.submitTransmitPageKey(r);
+            e.pumpTransmitter();
+            CHECK(waitQuiet(raw, 150));
+            e.pumpTransmitter();
+        }
+        std::printf("E: a LATCH press on the tick after a key-up the TX thread played down itself: kept and keyed "
+                    "in %d of %d rounds\n",
+                    kept, kRoundsE);
+        CHECK(kept == kRoundsE);
     }
 
     return testSummary("test_transmit_key_race");

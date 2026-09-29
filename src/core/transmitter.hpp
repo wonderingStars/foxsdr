@@ -331,11 +331,16 @@ public:
     // been seen.
     bool transmitting() const;
 
-    // ONCE A PUMP, FROM THE CONTROL SIDE (the GUI thread's frame in 3a).
-    // Applies the key request, enforces the latch timeout, and - the part
-    // that matters - stamps the control liveness the TX thread watches. A
-    // loop that stops running stops calling this, and the key opens. The
-    // remote key's hold is enforced by the TX thread, not here.
+    // ONCE A PUMP, FROM THE CONTROL SIDE (the GUI thread's frame in 3a, the
+    // engine's control thread in 3b). Applies the key request, enforces the
+    // latch timeout, and - the part that matters - stamps the control
+    // liveness the TX thread watches. A loop that stops running stops calling
+    // this, and the key opens. The remote key's hold is enforced by the TX
+    // thread; this only drops an assertion gone stale with nothing
+    // transmitting, before it could key for it. A TX thread that played the
+    // key down itself (the key let go) is tidied up without wiping a key
+    // asked for since; one that broke off (a fault, a dead-man's handle)
+    // takes every key with it.
     void tick();
 
     // ONCE A FRAME, FROM THE FRONT END (the GUI thread), and nothing else:
@@ -413,6 +418,11 @@ private:
 
     std::thread thread_;
     std::atomic<bool> run_{false};
+    // Set by the TX thread as it ends: true when it ended by playing the key
+    // down because nothing asserted it any more (a key let go - key-up needs
+    // no tick), false when it broke off (a dead-man's handle, a fault). tick()
+    // tidies up the first without wiping a key asked for since.
+    std::atomic<bool> endedReleased_{false};
     std::atomic<bool> transmitting_{false};
     std::atomic<bool> pttHeld_{false};
     std::atomic<bool> latched_{false};

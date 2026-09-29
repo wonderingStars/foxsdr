@@ -402,6 +402,20 @@ void Transmitter::tick() {
         keyUpLocked(nullptr);
         return;
     }
+    if (have && !run_.load(std::memory_order_relaxed) && endedReleased_.load(std::memory_order_relaxed)) {
+        // THE TX THREAD PLAYED THE KEY DOWN ITSELF, because nothing asserted
+        // it any more - a PTT let go, a LATCH opened, a page closed, a remote
+        // hold run out: key-up needs no tick (engine/stage3b), so the thread
+        // can end before this runs. Not a fault, and not a release to enforce:
+        // this is the bookkeeping only. A key asked for SINCE (a LATCH pressed
+        // again before this tick) is kept, and keys on the next tick - wiping
+        // it, as the branch below does, would drop a press the operator made
+        // after the key had gone up (tests/test_transmit_key_race.cpp E).
+        stopThread(false);
+        std::lock_guard<std::mutex> lk(stateMutex_);
+        keyUpLocked(nullptr);
+        return;
+    }
     if (have && !run_.load(std::memory_order_relaxed)) {
         // The TX thread let go on its own - a fault, or the dead-man's
         // handle. It has already silenced the radio; this is the bookkeeping
@@ -491,6 +505,7 @@ void Transmitter::startThread() {
         std::lock_guard<std::mutex> lk(waitMutex_);
         exited_ = false;
     }
+    endedReleased_.store(false, std::memory_order_relaxed);
     run_.store(true, std::memory_order_relaxed);
     thread_ = std::thread(&Transmitter::threadBody, this);
 }
@@ -724,6 +739,7 @@ void Transmitter::threadBody() {
     // like a transmitter that had never been keyed, so nothing would ever
     // join it and the panel would never say why the key opened.
 
+    endedReleased_.store(rampedDown, std::memory_order_relaxed);
     {
         std::lock_guard<std::mutex> lk(waitMutex_);
         run_.store(false, std::memory_order_relaxed);
