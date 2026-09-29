@@ -137,9 +137,9 @@ void ReceiverSnapshot::publish(const PublishedState& facts,
     f.audioSeq = o.audioSeq + (audio ? 1u : 0u);
     f.displaySeq = o.displaySeq + (display ? 1u : 0u);
     f.txSeq = o.txSeq + (tx ? 1u : 0u);
-    // No list is compared in stage 2 (docs/engine-stage2.md, OPEN): the
-    // counter is 1 from the first publish, as "published, never changed".
-    f.listSeq = first ? 1u : o.listSeq;
+    // The lists read_list serves move it (stage 4): the engine hands over a
+    // fingerprint of them, so no list has to be compared here.
+    f.listSeq = first ? 1u : o.listSeq + (e.listsFingerprint != oe.listsFingerprint ? 1u : 0u);
     f.grants = 0;  // per session; patched in on read once sessions exist
     f.structSize = static_cast<std::uint32_t>(sizeof(FoxReceiverState));
 

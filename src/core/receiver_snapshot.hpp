@@ -122,6 +122,11 @@ struct AppStateExt {
     double outputRateHz = 0.0;
     std::uint64_t outputFrames = 0;  // measurement
 
+    // --- the engine API's lists (engine stage 4) ------------------------------
+    // A fingerprint of everything read_list serves (engine/fox_engine_api.hpp,
+    // ApiListBlock); publish() advances FoxReceiverState::listSeq when it moves.
+    std::uint64_t listsFingerprint = 0;
+
     // --- /api/status figures API 0.2 has no field for ------------------------
     bool rxPositionSet = false;
     double rxLatDeg = 0.0;

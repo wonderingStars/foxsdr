@@ -125,6 +125,14 @@ constexpr const char* kPlutoDriverKey = "pluto";
 constexpr const char* kModeNames[8] = {"NFM", "WFM", "AM", "DSB",
                                        "USB", "CW",  "LSB", "RAW"};
 
+// Per-mode default bandwidth (index into kBwHz), applied when a mode button
+// is clicked; the combo still allows any override. Rationale: WFM broadcast
+// channel 150k; NFM two-way channel 12.5k; AM/DSB broadcast channel ~10k
+// (both sidebands); SSB/CW voice/keying fits in 3k; RAW passes the full
+// 200k channel for diagnostics. (Moved from engine.cpp at stage 4: the
+// engine API's LIST_MODES carries each mode's default too.)
+constexpr int kModeDefaultBw[8] = {2, 1, 3, 3, 5, 5, 5, 0};
+
 // The web and CAT readers name the mode from the published FOXAPI_DEMOD_*
 // (net::kDemodNames, indexed modeIndex_ + 1 - gui::abiDemodForModeIndex):
 // the two tables must be one list, word for word.

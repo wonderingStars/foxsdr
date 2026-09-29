@@ -19,6 +19,13 @@ foreach(src ${CASCADE_TESTS})
         target_link_libraries(${name} PRIVATE cascade_engine)
     endif()
     target_include_directories(${name} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+    # The engine-API conformance ports (engine-stage4.md) use the reference
+    # tests' own harness (check.hpp, engine_client.hpp), vendored beside the
+    # mock engine they were written against.
+    if(name MATCHES "^test_engine_api_")
+        target_include_directories(${name} PRIVATE
+            "${CMAKE_SOURCE_DIR}/third_party/foxsdr_api/reference/tests")
+    endif()
     # Put SoapySDR.dll beside the test binary EXPLICITLY.
     #
     # The application delay-loads it, so a missing runtime there is a readable

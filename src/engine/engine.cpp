@@ -12,6 +12,7 @@
 #include "core/patch_levels.hpp"
 #include "core/patch_plan.hpp"
 #include <algorithm>
+#include <charconv>
 #include <cctype>
 #include <cfloat>
 #include <chrono>
@@ -85,7 +86,21 @@ Engine::Engine() : Engine(ownHost_) {}
 Engine::Engine(EngineHost& host)
     : host_(&host),
       pipeline_(cascade::core::Pipeline::Config{kSampleRateHz, kFftSize, kAveragingAlpha,
-                                                /*audioEnabled=*/true}) {}
+                                                /*audioEnabled=*/true}),
+      api_(std::make_unique<ApiHost>(*this, std::string())) {}
+
+void Engine::configureApi(const std::string& options) {
+    api_ = std::make_unique<ApiHost>(*this, options);
+    apiLists_.reset();  // the new host is handed a block on the next publish
+}
+
+void Engine::wakeControl() {
+    {
+        std::lock_guard<std::mutex> lk(controlWakeMutex_);
+        controlWake_ = true;
+    }
+    controlWakeCv_.notify_one();
+}
 
 // A front end that did not take the engine down itself (a headless one, a
 // test) gets the same teardown, in the same order, here.
@@ -235,12 +250,6 @@ constexpr int kSoapyRateDefaultIndex = 1;  // 2 MS/s
 
 constexpr float kSoapyGainDefaultDb = 30.0f;
 
-// Per-mode default bandwidth (index into kBwHz), applied when a mode button
-// is clicked; the combo still allows any override. Rationale: WFM broadcast
-// channel 150k; NFM two-way channel 12.5k; AM/DSB broadcast channel ~10k
-// (both sidebands); SSB/CW voice/keying fits in 3k; RAW passes the full
-// 200k channel for diagnostics.
-constexpr int kModeDefaultBw[8] = {2, 1, 3, 3, 5, 5, 5, 0};
 
 // SoapyAudio advertises every sound card on the machine as a SoapySDR device.
 // They are not receivers: no tuner (centerFrequencyHz reads 0), no RF, and
@@ -366,6 +375,24 @@ bool isDeviceScoped(std::uint32_t op) {
         default:
             return false;
     }
+}
+
+}  // namespace
+
+bool isDeviceScopedOp(std::uint32_t op) { return isDeviceScoped(op); }
+
+namespace {
+
+// The shortest decimal that reads back as `f`, as a double: 0.4f -> 0.4.
+// No allocation (two stack buffers); used for the handful of float-kept
+// figures the publish carries.
+double floatAsDecimal(float f) {
+    if (!std::isfinite(f)) { return static_cast<double>(f); }
+    char buf[32];
+    const std::to_chars_result t = std::to_chars(buf, buf + sizeof(buf), f);
+    double d = static_cast<double>(f);
+    if (t.ec == std::errc()) { (void)std::from_chars(buf, t.ptr, d); }
+    return d;
 }
 
 }  // namespace
@@ -3403,8 +3430,13 @@ void Engine::fillPublishedState(cascade::core::PublishedState& ps, const std::st
     r.sampleRateHz = src.sampleRateHz();
     r.channelRateHz = pipeline_.channelRateHz();
     r.bandwidthHz = vfoBandwidthHz_;
-    r.squelchDb = static_cast<double>(squelchDb_);
-    r.volume = static_cast<double>(volume_);
+    // FIGURES KEPT AS float (the controls' own type) ARE PUBLISHED AS THE
+    // DECIMAL THEY WERE SET TO (engine stage 4): a volume set to 0.4 reads
+    // back 0.4, not 0.4000000059604645 - an interface comparing what it sent
+    // with what landed (the API's rule 2, the web page's slider) sees the
+    // same number.
+    r.squelchDb = floatAsDecimal(squelchDb_);
+    r.volume = floatAsDecimal(volume_);
     r.signalDb = static_cast<double>(pipeline_.signalPowerDb());
     // The host's own S-meter mapping (drawRadioSection): [-120, 0] dB.
     r.sMeter = std::clamp((r.signalDb + 120.0) / 120.0, 0.0, 1.0);
@@ -3415,11 +3447,11 @@ void Engine::fillPublishedState(cascade::core::PublishedState& ps, const std::st
     // its hysteresis, is not published by the pipeline).
     fs.squelchOpen = r.signalDb > r.squelchDb;
     r.flags = cascade::core::receiverFlags(fs);
-    r.dbMin = static_cast<double>(dbMin_);
-    r.dbMax = static_cast<double>(dbMax_);
-    r.nrStrength = static_cast<double>(nrStrength_);
-    r.notchHz = static_cast<double>(notchFreqHz_);
-    r.notchQ = static_cast<double>(notchQ_);
+    r.dbMin = floatAsDecimal(dbMin_);
+    r.dbMax = floatAsDecimal(dbMax_);
+    r.nrStrength = floatAsDecimal(nrStrength_);
+    r.notchHz = floatAsDecimal(notchFreqHz_);
+    r.notchQ = floatAsDecimal(notchQ_);
     r.pilotLevel = static_cast<double>(pipeline_.pilotLevel());
     r.demodMode = cascade::gui::abiDemodForModeIndex(modeIndex_);
     r.deemphasis = static_cast<std::uint32_t>(deemphIndex_);
@@ -4348,7 +4380,7 @@ void Engine::tuneToBookmark(const cascade::core::Bookmark& b) {
     bandwidthIndex_ = bandwidthStepIndex(vfoBandwidthHz_);
 }
 
-void Engine::addBookmarkHere(const std::string& name) {
+std::uint64_t Engine::addBookmarkHere(const std::string& name) {
     cascade::core::Bookmark b;
     b.name = name;
     if (b.name.empty()) {
@@ -4363,8 +4395,11 @@ void Engine::addBookmarkHere(const std::string& name) {
     b.freqHz = currentAbsoluteHz();
     b.mode = kModeNames[modeIndex_];
     b.bandwidthHz = vfoBandwidthHz_;
-    freqMgr_.add(std::move(b));
+    const int at = freqMgr_.add(std::move(b));
     saveBookmarks();
+    return at >= 0 && static_cast<std::size_t>(at) < freqMgr_.list().size()
+               ? freqMgr_.list()[static_cast<std::size_t>(at)].id
+               : 0;
 }
 
 cascade::core::Scanner::Params Engine::scannerParams() const {
@@ -4771,6 +4806,9 @@ double Engine::publishReceiverState() {
     const cascade::core::RdsSnapshot rds = pipeline_.rdsSnapshot();
     cascade::core::PublishedState ps{};
     fillPublishedState(ps, faultMessage, rds);
+    // The engine API's lists, handed over BEFORE the state whose listSeq
+    // says they changed.
+    ps.app.listsFingerprint = publishApiLists();
     std::shared_ptr<cascade::net::RadioStatus> lists = std::make_shared<cascade::net::RadioStatus>();
     std::vector<std::uint64_t> bookmarkIds;
     fillStatusLists(*lists, faultMessage, rds, bookmarkIds);
@@ -5359,10 +5397,18 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
                 nearestIndex(deviceRatesHz_, pipeline_.activeSource().sampleRateHz());
             followInputRate();
             res.applied[0] = pipeline_.activeSource().sampleRateHz();
+            // The radio coerces a rate it does not offer to one it does: what
+            // landed is the answer, and the API says it moved (stage 4).
+            if (res.applied[0] != c.num[0]) { res.flags |= FOXAPI_RESULT_CLAMPED; }
             return res;
         }
         case FOXAPI_OP_SET_GAIN: {
             if (device_ == nullptr) { return refuse(FOXAPI_NO_DEVICE, "no radio is open"); }
+            // A stage the radio does not list is NOT_FOUND (API.md 8), never
+            // handed to the driver.
+            if (std::find(deviceGainNames_.begin(), deviceGainNames_.end(), text) == deviceGainNames_.end()) {
+                return refuse(FOXAPI_NOT_FOUND, "no gain stage by that name");
+            }
             if (!device_->setGainDb(text, c.num[0])) {
                 sourceError_ = device_->lastError();
                 return refuse(FOXAPI_FAILED, "the radio refused the gain");
@@ -5372,9 +5418,10 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             for (std::size_t i = 0; i < deviceGainNames_.size(); ++i) {
                 if (deviceGainNames_[i] == text && i < deviceGainsDb_.size()) {
                     deviceGainsDb_[i] = static_cast<float>(device_->gainDb(text));
-                    res.applied[0] = deviceGainsDb_[i];
+                    res.applied[0] = floatAsDecimal(deviceGainsDb_[i]);
                 }
             }
+            if (res.applied[0] != c.num[0]) { res.flags |= FOXAPI_RESULT_CLAMPED; }
             // AN AIRSPY's gain list is its MODE's, and a name from another
             // mode switches to it - so the list itself may have changed, and
             // the memory with it.
@@ -5533,7 +5580,8 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
 
         // --- bookmarks ------------------------------------------------------------------
         case FOXAPI_OP_BOOKMARK_ADD:
-            addBookmarkHere(text);
+            // The new bookmark's id, as the API's result carries it (stage 4).
+            res.applied[0] = static_cast<double>(addBookmarkHere(text));
             return res;
         case FOXAPI_OP_BOOKMARK_TUNE:
         case FOXAPI_OP_BOOKMARK_REMOVE:
@@ -5557,6 +5605,10 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             return res;
         }
         case FOXAPI_OP_BOOKMARK_REMOVE_GROUP: {
+            // A group nothing is in is NOT_FOUND, and changes nothing (stage 4).
+            bool any = false;
+            for (const cascade::core::Bookmark& b : freqMgr_.list()) { any = any || b.group == text; }
+            if (!any) { return refuse(FOXAPI_NOT_FOUND, "no bookmark is in that group"); }
             const std::size_t n = freqMgr_.removeGroup(text);
             bookmarkImportNote_ = cascade::core::formatText(tr("Removed %zu from \"%s\""), n, text.c_str());
             saveBookmarks();
@@ -5616,10 +5668,23 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
 
         // --- decoders and plugins ------------------------------------------------------------
         case FOXAPI_OP_DECODER_START:
-        case FOXAPI_OP_DECODER_STOP:
+        case FOXAPI_OP_DECODER_STOP: {
             if (text.empty()) { return refuse(FOXAPI_BAD_ARGUMENT, "no plugin named"); }
+            // A name that is neither installed nor recorded as stopped is
+            // NOT_FOUND (API.md 9), not a stop recorded against a name
+            // nothing carries (engine stage 4). A START of a name recorded
+            // as stopped is kept: it is how a stop outlives its plugin's
+            // removal and is cleared again.
+            bool known = false;
+            for (const cascade::core::LoadedPlugin& lp : pluginHost_.plugins()) {
+                known = known || cascade::core::pluginKey(lp) == text;
+            }
+            if (!known && !(c.op == FOXAPI_OP_DECODER_START && pluginIsStopped(text))) {
+                return refuse(FOXAPI_NOT_FOUND, "no plugin with that name is installed");
+            }
             setPluginStopped(text, c.op == FOXAPI_OP_DECODER_STOP);
             return res;
+        }
         case FOXAPI_OP_DECODER_STOP_ALL:
             for (const std::string& key :
                  cascade::gui::stopAllKeys(runnableDecoders(), pipeline_.running())) {
@@ -6875,6 +6940,8 @@ void Engine::teardown() {
 void Engine::pumpFrameBegin() {
     (void)receiverSnapshot_->retryInstall();
     drainLocalCommands();
+    // The engine API's queue, after the local one (engine/fox_engine_api.hpp).
+    api_->beginPass();
 }
 
 void Engine::pumpInputs() {
@@ -6892,7 +6959,10 @@ double Engine::pumpPublish() {
     // The status lines as this frame's commands left them, before any panel
     // draws (OPEN 3).
     publishStatusText();
-    return publishReceiverState();
+    const double centre = publishReceiverState();
+    // The API's results, only now that the state they describe is published.
+    api_->endPass();
+    return centre;
 }
 
 void Engine::pumpAudioMute() { updateAudioMute(); }
@@ -7190,6 +7260,7 @@ void Engine::stopControlThread() {
     transmitter_.releaseRemote("the engine's control thread is stopping");
     controlRun_.store(false);
     controlParkForTest_.store(false);
+    wakeControl();
     // A BOUNDED WAIT, THEN THE JOIN (kControlJoinWait says why it is joined
     // and not abandoned). The radio is already quiet: what is left is the
     // rest of the pass the thread is in, and a pass still running after the
@@ -7239,7 +7310,13 @@ void Engine::controlLoop(std::chrono::milliseconds period) {
         }
         controlPass();
         controlPasses_.fetch_add(1);
-        std::this_thread::sleep_until(passStart + period);
+        // THE PASS PERIOD (engine-stage4.md decision 2): a pass every
+        // `period`, and at once when an interface submits or closes a session
+        // (wakeControl) - so a control lands within one pass's own time of
+        // its submit, not a period later.
+        std::unique_lock<std::mutex> lk(controlWakeMutex_);
+        controlWakeCv_.wait_until(lk, passStart + period, [this] { return controlWake_ || !controlRun_.load(); });
+        controlWake_ = false;
     }
     // THE LAST ACT, by the thread that ticks the transmitter: stop() never
     // runs beside a tick(). The key is already up (stopControlThread let go

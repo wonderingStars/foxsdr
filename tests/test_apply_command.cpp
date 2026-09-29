@@ -1211,8 +1211,11 @@ void sourceOps(AppWindow& a) {
         CHECK(A::gain(a, "LNA") == 21.0f);  // THE READBACK, not the request
         CHECK(r.applied[0] == 21.0);
         A::clearSourceError(a);
-        CHECK(refused(A::apply(a, text(FOXAPI_OP_SET_GAIN, "NOPE", 0, 0, 3.0)), FOXAPI_FAILED));
-        CHECK(!A::sourceError(a).empty());
+        // A stage the radio does not list is NOT_FOUND and never reaches the
+        // driver (engine stage 4, API.md 8: "stage must be listed"), so the
+        // driver's own refusal is not asked for and the line stays clear.
+        CHECK(refused(A::apply(a, text(FOXAPI_OP_SET_GAIN, "NOPE", 0, 0, 3.0)), FOXAPI_NOT_FOUND));
+        CHECK(A::sourceError(a).empty());
     }
 
     covering(FOXAPP_OP_SET_GAIN_NO_READBACK);

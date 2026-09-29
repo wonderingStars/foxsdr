@@ -1,0 +1,1552 @@
+// fox_engine_api.cpp - see fox_engine_api.hpp. The session machinery - sessions,
+// grants, logins and tokens, tickets, BUSY, the merge of the safer commands,
+// results in ticket order, events - follows the reference engine (third_party/
+// foxsdr_api/reference/mock_engine/mock_engine.cpp) rule for rule, and the
+// review round each rule answers is named where the reference names it. What
+// differs is what is behind it: the real receiver, applied through the one
+// control path every client shares (Engine::applyCommand).
+//
+// NO ALLOCATION PER PASS ON THE STEADY PATH: each session's results and
+// events live in fixed rings sized at open (FOXAPI_MAX_PENDING +
+// FOXAPI_SAFETY_RESERVE results, 256 events), the queue is two vectors that
+// swap, and the pass's scratch (outbox, live sessions) is reserved once.
+//
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#include "engine/fox_engine_api.hpp"
+
+#include <algorithm>
+#include <array>
+#include <atomic>
+#include <chrono>
+#include <cmath>
+#include <condition_variable>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <random>
+#include <set>
+#include <string>
+#include <thread>
+#include <vector>
+
+#include "core/app_commands.hpp"
+#include "core/receiver_snapshot.hpp"
+#include "core/seqlock_box.hpp"
+#include "core/utf8_text.hpp"
+#include "engine/engine.hpp"
+#include "engine/receiver_tables.hpp"
+#include "net/status_compose.hpp"
+#include "engine/tune_control.hpp"
+
+// The C handles are opaque to callers; inside the engine they are these.
+struct FoxEngine {};
+struct FoxSession {};
+
+namespace cascade::engine {
+
+namespace {
+
+using SteadyClock = std::chrono::steady_clock;
+
+std::int64_t steadyMs() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(SteadyClock::now().time_since_epoch()).count();
+}
+
+std::int64_t unixMs() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::system_clock::now().time_since_epoch())
+        .count();
+}
+
+template <std::size_t N>
+void copyText(char (&dst)[N], const char* src) {
+    cascade::core::formatUtf8(dst, N, "%s", src != nullptr ? src : "");
+}
+
+// Rule 4: the other side's structSize is read or written, never compared
+// with our own sizeof; `minSize` has been checked by the caller.
+template <class T>
+int32_t copyOut(const T& src, T* dst, std::size_t minSize) {
+    const std::size_t want = dst->structSize;
+    const std::size_t n = std::min(want, sizeof(T));
+    (void)minSize;
+    std::memcpy(dst, &src, n);
+    dst->structSize = static_cast<uint32_t>(n);
+    return FOXAPI_OK;
+}
+
+template <class T>
+T copyInAt(const T* base, std::size_t stride, std::size_t i) {
+    T v{};
+    const auto* p = reinterpret_cast<const unsigned char*>(base) + stride * i;
+    std::memcpy(&v, p, std::min(stride, sizeof(T)));
+    v.structSize = sizeof(T);
+    return v;
+}
+
+template <class T>
+void copyOutAt(const T& src, T* base, std::size_t stride, std::size_t i) {
+    auto* p = reinterpret_cast<unsigned char*>(base) + stride * i;
+    const std::size_t n = std::min(stride, sizeof(T));
+    std::memcpy(p, &src, n);
+    const uint32_t filled = static_cast<uint32_t>(n);
+    std::memcpy(p, &filled, sizeof(filled));  // structSize: the bytes filled
+}
+
+// ---------------------------------------------------------------------------
+// Options
+// ---------------------------------------------------------------------------
+
+struct Options {
+    int pttHoldMs = FOXAPI_PTT_HOLD_MS;
+    int latchTimeoutMs = FOXAPI_LATCH_TIMEOUT_MS;
+    int keepaliveMs = FOXAPI_KEEPALIVE_MS;
+    int remoteKeepaliveMs = FOXAPI_REMOTE_KEEPALIVE_MS;
+    std::string token;  // a configured token; empty = only login() tokens
+    std::string user;   // login() credential; both empty = login refused
+    std::string password;
+    int maxSessions = 64;
+    int maxRemoteSessions = 16;
+    int loginLockoutMs = 60000;
+    std::int64_t tokenTtlMs = std::int64_t{12} * 3600 * 1000;
+    bool testHooks = false;
+    bool running = true;  // create(): start the receiver (the reference engine's default)
+};
+
+Options parseOptions(const std::string& all) {
+    Options o;
+    std::size_t pos = 0;
+    while (pos <= all.size()) {
+        std::size_t end = all.find(';', pos);
+        if (end == std::string::npos) { end = all.size(); }
+        const std::string kv = all.substr(pos, end - pos);
+        const std::size_t eq = kv.find('=');
+        if (eq != std::string::npos) {
+            const std::string k = kv.substr(0, eq);
+            const std::string v = kv.substr(eq + 1);
+            const double d = std::atof(v.c_str());
+            // A test may SHORTEN a safety timer. Nothing may lengthen one.
+            if (k == "pttHoldMs") {
+                o.pttHoldMs = std::clamp(static_cast<int>(d), 10, FOXAPI_PTT_HOLD_MS);
+            } else if (k == "latchTimeoutMs") {
+                o.latchTimeoutMs = std::clamp(static_cast<int>(d), 10, FOXAPI_LATCH_TIMEOUT_MS);
+            } else if (k == "keepaliveMs") {
+                o.keepaliveMs = std::clamp(static_cast<int>(d), 10, FOXAPI_KEEPALIVE_MS);
+            } else if (k == "remoteKeepaliveMs") {
+                o.remoteKeepaliveMs = std::clamp(static_cast<int>(d), 10, FOXAPI_REMOTE_KEEPALIVE_MS);
+            } else if (k == "token") {
+                o.token = v;
+            } else if (k == "user") {
+                o.user = v;
+            } else if (k == "password") {
+                o.password = v;
+            } else if (k == "maxSessions") {
+                o.maxSessions = std::clamp(static_cast<int>(d), 1, 1024);
+            } else if (k == "maxRemoteSessions") {
+                o.maxRemoteSessions = std::clamp(static_cast<int>(d), 1, 1024);
+            } else if (k == "loginLockoutMs") {
+                o.loginLockoutMs = std::clamp(static_cast<int>(d), 10, 60000);
+            } else if (k == "tokenTtlMs") {
+                o.tokenTtlMs = std::clamp(static_cast<std::int64_t>(d), std::int64_t{10},
+                                          std::int64_t{12} * 3600 * 1000);
+            } else if (k == "testHooks") {
+                o.testHooks = d != 0.0;
+            } else if (k == "running") {
+                o.running = d != 0.0;
+            }
+        }
+        pos = end + 1;
+    }
+    return o;
+}
+
+constexpr std::size_t kMaxPendingPerSession = FOXAPI_MAX_PENDING;
+constexpr int kSaferKinds = 5;
+static_assert(kSaferKinds == static_cast<int>(FOXAPI_SAFETY_RESERVE),
+              "one outstanding safer command per kind is the whole reserve");
+constexpr int kLocalReservedPlaces = 4;
+constexpr std::size_t kMaxEventsPerSession = 256;
+constexpr int kLoginFailuresBeforeLockout = 5;
+constexpr std::uint32_t kMaxSpectrumBins = 16384;
+
+// A FIXED RING: a bounded FIFO allocated once, so a pass never allocates for
+// a result or an event (the reference engine's std::deque did, per push).
+template <class T>
+class FixedRing {
+public:
+    explicit FixedRing(std::size_t cap) : buf_(cap) {}
+    bool full() const { return count_ == buf_.size(); }
+    bool empty() const { return count_ == 0; }
+    std::size_t size() const { return count_; }
+    void push_back(const T& v) {
+        buf_[(head_ + count_) % buf_.size()] = v;
+        ++count_;
+    }
+    T& front() { return buf_[head_]; }
+    void pop_front() {
+        head_ = (head_ + 1) % buf_.size();
+        --count_;
+    }
+    T& at(std::size_t i) { return buf_[(head_ + i) % buf_.size()]; }
+    void release() {
+        std::vector<T>().swap(buf_);
+        head_ = count_ = 0;
+    }
+
+private:
+    std::vector<T> buf_;
+    std::size_t head_ = 0;
+    std::size_t count_ = 0;
+};
+
+// ---------------------------------------------------------------------------
+// The spectrum stream: a ring of slots written by the pumping thread (never
+// the DSP thread: it copies the pipeline's newest frame once a pass), read
+// lock-free by any interface - a reader overtaken mid-copy notices and
+// retries, and the writer never waits for anyone. (The reference engine's
+// SpectrumRing.)
+// ---------------------------------------------------------------------------
+
+class SpectrumRing {
+public:
+    static constexpr int kSlots = 4;
+
+    SpectrumRing() {
+        for (auto& s : slots_) {
+            s.data = std::make_unique<std::atomic<float>[]>(kMaxSpectrumBins);
+        }
+    }
+
+    void publish(const float* bins, std::size_t count, double centreHz, double spanHz, std::int64_t ums) {
+        const uint64_t seq = ++lastSeq_;
+        Slot& s = slots_[seq % kSlots];
+        s.seq.store(0, std::memory_order_relaxed);  // "being written"
+        std::atomic_thread_fence(std::memory_order_release);
+        // More bins than a slot holds (never, at the engine's FFT size): the
+        // MAXIMUM of each group, as a reduced read gives.
+        const std::uint32_t n = static_cast<std::uint32_t>(std::min<std::size_t>(count, kMaxSpectrumBins));
+        if (count <= kMaxSpectrumBins) {
+            for (std::uint32_t i = 0; i < n; ++i) { s.data[i].store(bins[i], std::memory_order_relaxed); }
+        } else {
+            for (std::uint32_t i = 0; i < n; ++i) {
+                const std::size_t a = static_cast<std::size_t>(std::uint64_t(i) * count / n);
+                std::size_t b = static_cast<std::size_t>(std::uint64_t(i + 1) * count / n);
+                b = std::max(b, a + 1);
+                float m = -1e30f;
+                for (std::size_t k = a; k < b; ++k) { m = std::max(m, bins[k]); }
+                s.data[i].store(m, std::memory_order_relaxed);
+            }
+        }
+        s.bins.store(n, std::memory_order_relaxed);
+        s.centreHz.store(centreHz, std::memory_order_relaxed);
+        s.spanHz.store(spanHz, std::memory_order_relaxed);
+        s.unixMs.store(ums, std::memory_order_relaxed);
+        s.seq.store(seq, std::memory_order_release);
+        latest_.store(seq, std::memory_order_release);
+    }
+
+    int32_t read(uint64_t since, FoxSpectrumInfo& info, float* out, uint32_t cap) const {
+        for (int attempt = 0; attempt < 64; ++attempt) {
+            const uint64_t seq = latest_.load(std::memory_order_acquire);
+            if (seq == 0 || seq <= since) { return FOXAPI_NO_CHANGE; }
+            const Slot& s = slots_[seq % kSlots];
+            if (s.seq.load(std::memory_order_acquire) != seq) { continue; }
+            const uint32_t n = s.bins.load(std::memory_order_relaxed);
+            info.binCount = n;
+            info.seq = seq;
+            info.centreHz = s.centreHz.load(std::memory_order_relaxed);
+            info.spanHz = s.spanHz.load(std::memory_order_relaxed);
+            info.unixMs = s.unixMs.load(std::memory_order_relaxed);
+            info.flags = 0;
+            const uint32_t outN = (out == nullptr) ? 0u : std::min(cap, n);
+            if (outN == n) {
+                for (uint32_t i = 0; i < n; ++i) { out[i] = s.data[i].load(std::memory_order_relaxed); }
+            } else if (outN > 0) {
+                // Fewer bins than the engine has: the MAXIMUM of each group,
+                // so a narrow carrier survives the reduction.
+                for (uint32_t i = 0; i < outN; ++i) {
+                    const uint32_t a = static_cast<uint32_t>(uint64_t(i) * n / outN);
+                    uint32_t b = static_cast<uint32_t>(uint64_t(i + 1) * n / outN);
+                    b = std::max(b, a + 1);
+                    float m = -1e30f;
+                    for (uint32_t k = a; k < b; ++k) { m = std::max(m, s.data[k].load(std::memory_order_relaxed)); }
+                    out[i] = m;
+                }
+            }
+            info.copied = outN;
+            std::atomic_thread_fence(std::memory_order_acquire);
+            if (s.seq.load(std::memory_order_relaxed) == seq) { return FOXAPI_OK; }
+        }
+        return FOXAPI_BUSY;
+    }
+
+private:
+    struct Slot {
+        std::atomic<uint64_t> seq{0};
+        std::atomic<uint32_t> bins{0};
+        std::atomic<double> centreHz{0.0};
+        std::atomic<double> spanHz{0.0};
+        std::atomic<std::int64_t> unixMs{0};
+        std::unique_ptr<std::atomic<float>[]> data;
+    };
+    std::array<Slot, kSlots> slots_;
+    std::atomic<uint64_t> latest_{0};
+    uint64_t lastSeq_ = 0;  // writer only
+};
+
+// The group bits of FOXAPI_EVENT_STATE's value[0] (the reference engine's).
+enum Group : uint32_t {
+    kTune = 1u << 0,
+    kMode = 1u << 1,
+    kDevice = 1u << 2,
+    kAudio = 1u << 3,
+    kDisplay = 1u << 4,
+    kTx = 1u << 5,
+    kList = 1u << 6,
+};
+
+}  // namespace
+
+// ---------------------------------------------------------------------------
+// Sessions
+// ---------------------------------------------------------------------------
+
+struct ApiSession : FoxSession {
+    ApiSession() : results(kMaxPendingPerSession + FOXAPI_SAFETY_RESERVE), events(kMaxEventsPerSession) {}
+
+    uint64_t id = 0;
+    uint32_t flags = 0;
+    uint64_t grants = 0;
+    std::string clientName;
+    ApiHostImpl* host = nullptr;
+    std::atomic<std::int64_t> lastBeatMs{0};
+    std::string token;
+    // WHO this session acts for: "local" for every LOCAL session, and
+    // "token:<token>" for a remote one. Latch marks belong to the principal.
+    std::string principal;
+    std::atomic<bool> detached{false};
+
+    std::mutex m;  // guards everything below, down to `safer`
+    FixedRing<FoxCommandResult> results;
+    FixedRing<FoxEvent> events;
+    uint64_t eventMask = 0;
+    uint64_t eventSeq = 0;
+    uint64_t eventsDropped = 0;
+    std::size_t pending = 0;
+    uint64_t lastTicket = 0;
+    struct SaferSlot {
+        uint64_t ticket = 0;
+        int copies = 0;
+        bool inResults = false;
+        bool read = false;
+    };
+    std::array<SaferSlot, kSaferKinds> safer{};
+
+    std::atomic<bool> releaseFirst{false};
+};
+
+struct Pending {
+    FoxCommand cmd;
+    uint64_t ticket;
+    uint64_t sessionId;
+    uint32_t sessionFlags;
+    int32_t refused;
+    int saferKind = -1;
+    bool merged = false;
+    std::uint64_t sourceGen = 0;  // Engine::sourceGen_ when submitted (device-scoped ops)
+};
+
+// ---------------------------------------------------------------------------
+// The host
+// ---------------------------------------------------------------------------
+
+class ApiHostImpl : public FoxEngine {
+public:
+    ApiHostImpl(Engine& engine, const std::string& options) : engine_(engine), opt_(parseOptions(options)) {
+        outbox_.reserve(1024);
+        live_.reserve(64);
+        queue_.reserve(256);
+        work_.reserve(256);
+    }
+
+    ~ApiHostImpl() = default;
+
+    Engine& engine() { return engine_; }
+    const Options& options() const { return opt_; }
+    Engine* owned = nullptr;  // create(): the Engine this handle owns (destroy deletes it)
+
+    // ---- sessions ----------------------------------------------------------
+
+    int32_t openSession(const FoxSessionParams* p, FoxSession** out) {
+        if (p == nullptr || out == nullptr || p->structSize < FOXAPI_MIN_SESSION_PARAMS) {
+            return FOXAPI_BAD_ARGUMENT;
+        }
+        const bool remote = (p->flags & FOXAPI_SESSION_REMOTE) != 0u;
+        const bool local = (p->flags & FOXAPI_SESSION_LOCAL) != 0u;
+        if (remote == local) { return FOXAPI_BAD_ARGUMENT; }
+        uint64_t grants = p->grants | FOXAPI_GRANT_VIEW;
+        std::string token;
+        if (remote) {
+            if (p->token == nullptr || !tokenValid(p->token)) { return FOXAPI_UNAUTHENTICATED; }
+            token = p->token;
+            grants &= ~FOXAPI_GRANT_ADMIN;  // administration is a local act
+        }
+        if (const int delay = openDelayMs_.load(std::memory_order_relaxed); delay > 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(delay));
+        }
+        auto s = std::make_shared<ApiSession>();
+        s->flags = p->flags;
+        s->grants = grants;
+        s->clientName = p->clientName ? p->clientName : "";
+        s->host = this;
+        s->token = token;
+        s->principal = remote ? "token:" + token : std::string("local");
+        if (!remote) { s->releaseFirst.store(localMarked_.load(std::memory_order_relaxed)); }
+        s->lastBeatMs.store(steadyMs());
+        {
+            std::lock_guard<std::mutex> lk(sessionsMutex_);
+            const int open = static_cast<int>(sessions_.size());
+            if (open >= opt_.maxSessions) { return FOXAPI_LIMIT; }
+            if (remote) {
+                if (open >= opt_.maxSessions - kLocalReservedPlaces) { return FOXAPI_LIMIT; }
+                int remotes = 0;
+                for (const auto& kv : sessions_) {
+                    remotes += ((kv.second->flags & FOXAPI_SESSION_REMOTE) != 0u && !kv.second->detached.load()) ? 1
+                                                                                                                 : 0;
+                }
+                if (remotes >= opt_.maxRemoteSessions) { return FOXAPI_LIMIT; }
+            }
+            s->id = ++nextSessionId_;
+            sessions_[s->id] = s;
+        }
+        if (remote && !tokenValid(token.c_str())) {
+            std::lock_guard<std::mutex> lk(sessionsMutex_);
+            sessions_.erase(s->id);
+            return FOXAPI_UNAUTHENTICATED;
+        }
+        *out = s.get();
+        return FOXAPI_OK;
+    }
+
+    void closeSession(ApiSession* s) {
+        std::shared_ptr<ApiSession> keep;
+        {
+            std::lock_guard<std::mutex> lk(sessionsMutex_);
+            auto it = sessions_.find(s->id);
+            if (it == sessions_.end()) {
+                reaped_.erase(s->id);
+                return;
+            }
+            keep = it->second;
+            sessions_.erase(it);
+        }
+        {
+            std::lock_guard<std::mutex> lk(queueMutex_);
+            closedSessions_.push_back(keep->id);
+        }
+        queueCv_.notify_all();
+        engine_.wakeControl();
+    }
+
+    // ---- login ---------------------------------------------------------------
+
+    int32_t login(const char* user, const char* password, char* out, std::size_t cap) {
+        if (user == nullptr || password == nullptr || out == nullptr || cap < 65) { return FOXAPI_BAD_ARGUMENT; }
+        const std::int64_t now = steadyMs();
+        std::lock_guard<std::mutex> lk(tokensMutex_);
+        if (lockedUntilMs_ > now) { return FOXAPI_LIMIT; }
+        if (opt_.user.empty() || opt_.password.empty() || opt_.user != user || opt_.password != password) {
+            if (++loginFailures_ >= kLoginFailuresBeforeLockout) {
+                loginFailures_ = 0;
+                lockedUntilMs_ = now + opt_.loginLockoutMs;
+            }
+            return FOXAPI_UNAUTHENTICATED;
+        }
+        loginFailures_ = 0;
+        std::random_device rd;
+        static const char* hex = "0123456789abcdef";
+        std::string t;
+        for (int i = 0; i < 8; ++i) {
+            uint32_t w = rd();
+            for (int k = 0; k < 8; ++k) {
+                t += hex[w & 0xF];
+                w >>= 4;
+            }
+        }
+        tokens_[t] = now + opt_.tokenTtlMs;
+        std::memcpy(out, t.c_str(), t.size() + 1);
+        return static_cast<int32_t>(t.size());
+    }
+
+    int32_t logout(const char* token) {
+        if (token == nullptr) { return FOXAPI_BAD_ARGUMENT; }
+        if (!opt_.token.empty() && opt_.token == token) { return FOXAPI_DENIED; }
+        bool live = false;
+        {
+            std::lock_guard<std::mutex> lk(tokensMutex_);
+            auto it = tokens_.find(token);
+            live = it != tokens_.end() && steadyMs() < it->second;
+        }
+        const bool erased = dropToken(token);
+        return (live && erased) ? FOXAPI_OK : FOXAPI_NOT_FOUND;
+    }
+
+    void detachToken(const std::string& token) {
+        std::vector<uint64_t> ids;
+        {
+            std::lock_guard<std::mutex> lk(sessionsMutex_);
+            for (auto& kv : sessions_) {
+                if (kv.second->token == token) {
+                    kv.second->detached.store(true);
+                    ids.push_back(kv.first);
+                }
+            }
+        }
+        if (ids.empty()) { return; }
+        {
+            std::lock_guard<std::mutex> lk(queueMutex_);
+            closedSessions_.insert(closedSessions_.end(), ids.begin(), ids.end());
+        }
+        queueCv_.notify_all();
+        engine_.wakeControl();
+    }
+
+    void expireTokens() {
+        std::vector<std::string> gone;
+        {
+            std::lock_guard<std::mutex> lk(tokensMutex_);
+            if (tokens_.empty()) { return; }
+            const std::int64_t now = steadyMs();
+            for (const auto& kv : tokens_) {
+                if (now >= kv.second) { gone.push_back(kv.first); }
+            }
+        }
+        for (const std::string& t : gone) { dropToken(t); }
+    }
+
+    bool tokenValid(const char* t) {
+        if (!opt_.token.empty() && opt_.token == t) { return true; }
+        bool expired = false;
+        {
+            std::lock_guard<std::mutex> lk(tokensMutex_);
+            auto it = tokens_.find(t);
+            if (it == tokens_.end()) { return false; }
+            if (steadyMs() < it->second) { return true; }
+            expired = true;
+        }
+        if (expired) { dropToken(t); }
+        return false;
+    }
+
+    bool dropToken(const std::string& token) {
+        bool erased = false;
+        {
+            std::lock_guard<std::mutex> lk(tokensMutex_);
+            erased = tokens_.erase(token) != 0;
+        }
+        detachToken(token);
+        return erased;
+    }
+
+    int32_t heartbeat(ApiSession* s) {
+        s->lastBeatMs.store(steadyMs(), std::memory_order_relaxed);
+        return FOXAPI_OK;
+    }
+
+    // ---- reads -------------------------------------------------------------
+
+    int32_t readState(ApiSession* s, FoxReceiverState* out) {
+        if (out == nullptr || out->structSize < FOXAPI_MIN_RECEIVER_STATE) { return FOXAPI_BAD_ARGUMENT; }
+        cascade::core::PublishedState p;
+        if (!engine_.receiverSnapshot_->read(p)) { return FOXAPI_BUSY; }
+        FoxReceiverState st = p.rx;
+        st.structSize = sizeof(st);
+        st.grants = s->grants;
+        if (s->releaseFirst.load(std::memory_order_relaxed)) { st.flags |= FOXAPI_RX_TX_LATCH_RELEASE_FIRST; }
+        return copyOut(st, out, FOXAPI_MIN_RECEIVER_STATE);
+    }
+
+    int32_t readSpectrum(uint64_t since, FoxSpectrumInfo* info, float* bins, uint32_t cap) {
+        if (info == nullptr || info->structSize < FOXAPI_MIN_SPECTRUM_INFO || (bins == nullptr && cap != 0)) {
+            return FOXAPI_BAD_ARGUMENT;
+        }
+        FoxSpectrumInfo local{};
+        local.structSize = sizeof(local);
+        const int32_t r = spectrum_.read(since, local, bins, cap);
+        if (r != FOXAPI_OK) { return r; }
+        copyOut(local, info, FOXAPI_MIN_SPECTRUM_INFO);
+        return FOXAPI_OK;
+    }
+
+    int32_t readList(uint32_t list, uint32_t index, FoxListItem* out);  // engine_api_lists.cpp
+
+    int32_t getSetting(const char* key, char* buf, std::size_t cap) {
+        if (key == nullptr || (buf == nullptr && cap != 0)) { return FOXAPI_BAD_ARGUMENT; }
+        std::string v;
+        if (opt_.testHooks && std::strcmp(key, "test.queueDepth") == 0) {
+            std::lock_guard<std::mutex> lk(queueMutex_);
+            v = std::to_string(queue_.size());
+        } else if (opt_.testHooks && std::strcmp(key, "test.keyState") == 0) {
+            std::lock_guard<std::mutex> lk(keyStateMutex_);
+            v = keyState_;
+        } else {
+            return FOXAPI_NOT_FOUND;
+        }
+        if (cap > 0) {
+            const std::size_t n = std::min(v.size(), cap - 1);
+            std::memcpy(buf, v.data(), n);
+            buf[n] = '\0';
+        }
+        return static_cast<int32_t>(v.size());
+    }
+
+    // ---- commands ----------------------------------------------------------
+
+    int32_t submit(ApiSession* s, const FoxCommand* cmds, uint32_t count, FoxSubmitResult* results) {
+        if (count == 0) { return 0; }
+        if (count > FOXAPI_MAX_BATCH) { return FOXAPI_LIMIT; }
+        if (cmds == nullptr || cmds[0].structSize < FOXAPI_MIN_COMMAND) { return FOXAPI_BAD_ARGUMENT; }
+        const std::size_t stride = cmds[0].structSize;
+        std::size_t rstride = 0;
+        if (results != nullptr) {
+            rstride = results[0].structSize;
+            if (rstride < FOXAPI_MIN_SUBMIT_RESULT) { return FOXAPI_BAD_ARGUMENT; }
+        }
+        if (!s->token.empty() && !tokenValid(s->token.c_str())) {
+            detachToken(s->token);
+            return FOXAPI_DETACHED;
+        }
+        cascade::core::PublishedState snap;
+        const bool haveSnap = engine_.receiverSnapshot_->read(snap);
+        const std::uint64_t gen = engine_.sourceGen_.load();
+        int32_t taken = 0;
+        std::lock_guard<std::mutex> lk(s->m);
+        std::lock_guard<std::mutex> lq(queueMutex_);
+        for (uint32_t i = 0; i < count; ++i) {
+            const FoxCommand c = copyInAt<FoxCommand>(cmds, stride, i);
+            FoxSubmitResult r{};
+            r.structSize = sizeof(r);
+            const int32_t refused = validate(*s, c, haveSnap ? &snap.rx : nullptr);
+            const int kind = refused == FOXAPI_OK ? saferKind(c) : -1;
+            if (kind < 0 && s->pending >= kMaxPendingPerSession) {
+                r.status = FOXAPI_BUSY;
+            } else {
+                Pending p{c, 0, s->id, s->flags, refused, kind, false, gen};
+                if (kind < 0) {
+                    r.status = FOXAPI_OK;
+                    r.ticket = ++s->lastTicket;
+                    ++s->pending;
+                    ++taken;
+                } else {
+                    ApiSession::SaferSlot& slot = s->safer[static_cast<std::size_t>(kind)];
+                    if (slot.ticket != 0 && !slot.read) {
+                        r.status = FOXAPI_NO_CHANGE;
+                        r.ticket = slot.ticket;
+                        p.merged = true;
+                    } else {
+                        slot = ApiSession::SaferSlot{};
+                        slot.ticket = ++s->lastTicket;
+                        r.status = FOXAPI_OK;
+                        r.ticket = slot.ticket;
+                        ++taken;
+                    }
+                }
+                p.ticket = r.ticket;
+                ++submitted_;
+                enqueueLocked(*s, p);
+            }
+            if (results != nullptr) { copyOutAt(r, results, rstride, i); }
+        }
+        queueCv_.notify_all();
+        engine_.wakeControl();
+        return taken;
+    }
+
+    int32_t pollResults(ApiSession* s, FoxCommandResult* out, uint32_t cap) {
+        if (cap == 0) { return 0; }
+        if (out == nullptr || out[0].structSize < FOXAPI_MIN_COMMAND_RESULT) { return FOXAPI_BAD_ARGUMENT; }
+        const std::size_t stride = out[0].structSize;
+        std::lock_guard<std::mutex> lk(s->m);
+        uint32_t n = 0;
+        while (n < cap && !s->results.empty()) {
+            const FoxCommandResult& r = s->results.front();
+            copyOutAt(r, out, stride, n);
+            bool safer = false;
+            for (ApiSession::SaferSlot& slot : s->safer) {
+                if (slot.ticket != 0 && slot.ticket == r.ticket && slot.inResults) {
+                    slot.inResults = false;
+                    if (slot.copies == 0) {
+                        slot = ApiSession::SaferSlot{};
+                    } else {
+                        slot.read = true;
+                    }
+                    safer = true;
+                    break;
+                }
+            }
+            if (!safer && s->pending > 0) { --s->pending; }
+            s->results.pop_front();
+            ++n;
+        }
+        return static_cast<int32_t>(n);
+    }
+
+    int32_t subscribe(ApiSession* s, uint64_t mask) {
+        std::lock_guard<std::mutex> lk(s->m);
+        s->eventMask = mask;
+        return FOXAPI_OK;
+    }
+
+    int32_t pollEvents(ApiSession* s, FoxEvent* out, uint32_t cap) {
+        if (cap == 0) { return 0; }
+        if (out == nullptr || out[0].structSize < FOXAPI_MIN_EVENT) { return FOXAPI_BAD_ARGUMENT; }
+        const std::size_t stride = out[0].structSize;
+        std::lock_guard<std::mutex> lk(s->m);
+        uint32_t n = 0;
+        if (s->eventsDropped > 0) {
+            FoxEvent e{};
+            e.structSize = sizeof(e);
+            e.kind = FOXAPI_EVENT_OVERFLOW;
+            e.seq = ++s->eventSeq;
+            e.unixMs = unixMs();
+            e.value[0] = static_cast<double>(s->eventsDropped);
+            copyOutAt(e, out, stride, n++);
+            s->eventsDropped = 0;
+        }
+        while (n < cap && !s->events.empty()) {
+            copyOutAt(s->events.front(), out, stride, n);
+            s->events.pop_front();
+            ++n;
+        }
+        return static_cast<int32_t>(n);
+    }
+
+    // ---- the pass (the pumping thread) -----------------------------------------
+
+    void beginPass();
+    void endPass();
+
+private:
+    friend class ApiHost;
+
+    static bool finite(const FoxCommand& c) {
+        for (double d : c.num) {
+            if (!std::isfinite(d)) { return false; }
+        }
+        return true;
+    }
+
+    // TX_PTT 0, TX_LATCH 0, RUN 0, TX_CLOSE, TX_REMOTE_ARM 0.
+    static int saferKind(const FoxCommand& c) {
+        switch (c.op) {
+            case FOXAPI_OP_TX_PTT: return c.ival[0] == 0 ? 0 : -1;
+            case FOXAPI_OP_TX_LATCH: return c.ival[0] == 0 ? 1 : -1;
+            case FOXAPI_OP_RUN: return c.ival[0] == 0 ? 2 : -1;
+            case FOXAPI_OP_TX_CLOSE: return 3;
+            case FOXAPI_OP_TX_REMOTE_ARM: return c.ival[0] == 0 ? 4 : -1;
+            default: return -1;
+        }
+    }
+
+    static bool onlyMakesSafer(const FoxCommand& c) { return saferKind(c) >= 0; }
+
+    // Every send keeps its own place; a merged send that cannot change
+    // anything is dropped (see the reference engine's enqueueLocked, and
+    // test_engine_api_merge for the proof).
+    void enqueueLocked(ApiSession& s, const Pending& p) {
+        if (p.saferKind < 0) {
+            queue_.push_back(p);
+            return;
+        }
+        if (p.merged) {
+            for (auto it = queue_.rbegin(); it != queue_.rend() && it->saferKind >= 0; ++it) {
+                if (it->sessionId == p.sessionId && it->saferKind == p.saferKind) { return; }
+            }
+        }
+        ++s.safer[static_cast<std::size_t>(p.saferKind)].copies;
+        queue_.push_back(p);
+    }
+
+    static bool textTerminated(const FoxCommand& c) { return std::memchr(c.text, '\0', sizeof(c.text)) != nullptr; }
+
+    // The grant each op needs (API.md section 5): TUNE for tuning, TRANSMIT
+    // for the transmitter, ADMIN for administration, VIEW for the reports,
+    // SETTINGS for the rest. The app's extension ops follow the same split.
+    static uint64_t grantFor(uint32_t op) {
+        switch (op) {
+            case FOXAPI_OP_SET_CENTRE: case FOXAPI_OP_SET_FREQUENCY: case FOXAPI_OP_SET_VFO_OFFSET:
+            case FOXAPI_OP_STEP_TUNE: case FOXAPI_OP_BOOKMARK_TUNE: case FOXAPI_OP_SCANNER_RUN:
+            case FOXAPI_OP_SCANNER_SKIP: case FOXAPI_OP_SCANNER_CONFIG:
+            case FOXAPP_OP_VFO_TO_ABSOLUTE: case FOXAPP_OP_SET_VFO_OFFSET_FREE: case FOXAPP_OP_SCANNER_RANGE:
+                return FOXAPI_GRANT_TUNE;
+            case FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN: case FOXAPP_OP_SET_TRANSMIT_ARGS:
+                return FOXAPI_GRANT_TRANSMIT;
+            case FOXAPI_OP_SETTING_SET: case FOXAPI_OP_TELEMETRY_ENABLE: case FOXAPI_OP_SERVER_CONFIG:
+            case FOXAPI_OP_UPDATE_CHECK: case FOXAPI_OP_STORE_FETCH: case FOXAPI_OP_STORE_INSTALL:
+            case FOXAPI_OP_STORE_REMOVE: case FOXAPI_OP_STORE_CANCEL: case FOXAPI_OP_STORE_UPDATE_ALL:
+            case FOXAPP_OP_STORE_UPDATE: case FOXAPP_OP_STORE_REMOVE_BLOCKED: case FOXAPP_OP_STORE_ADD_ALL:
+            case FOXAPP_OP_TELEMETRY_CONSENT: case FOXAPP_OP_SET_CATALOGUE_URL:
+                return FOXAPI_GRANT_ADMIN;
+            case FOXAPI_OP_PROBLEM_REPORT: case FOXAPI_OP_FEATURE_REQUEST:
+                return FOXAPI_GRANT_VIEW;
+            default:
+                if ((op & 0xFF00u) == 0x0A00u) { return FOXAPI_GRANT_TRANSMIT; }
+                return FOXAPI_GRANT_SETTINGS;
+        }
+    }
+
+    // Rule 2: validation and permission, answered at once on the caller's
+    // thread against the published snapshot, delivered as a result.
+    int32_t validate(const ApiSession& s, const FoxCommand& c, const FoxReceiverState* snap) const;
+
+    enum class SessionFate { kOpen, kDetached, kClosed };
+    SessionFate sessionFate(uint64_t id) {
+        std::lock_guard<std::mutex> lk(sessionsMutex_);
+        auto it = sessions_.find(id);
+        if (it == sessions_.end()) { return reaped_.count(id) != 0 ? SessionFate::kDetached : SessionFate::kClosed; }
+        return it->second->detached.load() ? SessionFate::kDetached : SessionFate::kOpen;
+    }
+
+    void reapDetached(const std::vector<uint64_t>& ids) {
+        for (uint64_t id : ids) {
+            std::shared_ptr<ApiSession> gone;
+            {
+                std::lock_guard<std::mutex> lk(sessionsMutex_);
+                auto it = sessions_.find(id);
+                if (it != sessions_.end() && it->second->detached.load()) {
+                    gone = it->second;
+                    reaped_[id] = it->second;
+                    sessions_.erase(it);
+                }
+            }
+            if (gone) {
+                std::lock_guard<std::mutex> lk(gone->m);
+                gone->results.release();
+                gone->events.release();
+            }
+        }
+    }
+
+    void refreshLive() {
+        live_.clear();
+        std::lock_guard<std::mutex> lk(sessionsMutex_);
+        for (auto& kv : sessions_) { live_.push_back(kv.second); }
+    }
+
+    void apply(const Pending& p);
+    void applyTestHook(const Pending& p, FoxCommandResult& r, const std::string& key, const std::string& val);
+    void deliverResult(uint64_t sessionId, int saferKind, const FoxCommandResult& r);
+    void broadcast(FoxEvent e);
+    static const char* refusalText(const Pending& p);
+
+    Engine& engine_;
+    Options opt_;
+
+    struct Outgoing {
+        uint64_t sessionId;
+        int saferKind;
+        std::size_t order;  // application order, so the sort is stable without a buffer
+        FoxCommandResult result;
+    };
+    std::vector<Outgoing> outbox_;                       // the pumping thread
+    std::vector<std::shared_ptr<ApiSession>> live_;      // the pumping thread's scratch
+    std::vector<Pending> work_;                          // the pumping thread's half of the queue
+    std::vector<uint64_t> closedWork_;
+
+    SpectrumRing spectrum_;
+    cascade::core::SpectrumFrame frame_;                 // the pumping thread's copy, reused
+
+    std::mutex sessionsMutex_;
+    std::map<uint64_t, std::shared_ptr<ApiSession>> sessions_;
+    std::map<uint64_t, std::shared_ptr<ApiSession>> reaped_;
+    uint64_t nextSessionId_ = 0;
+
+    std::mutex queueMutex_;
+    std::condition_variable queueCv_;
+    std::vector<Pending> queue_;
+    std::vector<uint64_t> closedSessions_;
+
+    std::mutex tokensMutex_;
+    std::map<std::string, std::int64_t> tokens_;
+    int loginFailures_ = 0;
+    std::int64_t lockedUntilMs_ = 0;
+
+    std::atomic<bool> localMarked_{false};
+    std::atomic<int> openDelayMs_{0};
+    int stallAfterPassMs_ = 0;
+    uint64_t submitted_ = 0;
+    uint64_t gather_ = 0;
+    uint64_t gatherFrom_ = 0;
+    std::mutex keyStateMutex_;
+    std::string keyState_;
+
+    std::mutex listsMutex_;
+    std::shared_ptr<const ApiListBlock> lists_;  // under listsMutex_
+
+public:
+    void setLists(std::shared_ptr<const ApiListBlock> l) {
+        std::lock_guard<std::mutex> lk(listsMutex_);
+        lists_ = std::move(l);
+    }
+
+private:
+
+    // What the last pass's snapshot carried, for FOXAPI_EVENT_STATE.
+    bool haveLastSeqs_ = false;
+    std::uint64_t lastSeqs_[7] = {};
+    bool lastFaulted_ = false;
+};
+
+int32_t ApiHostImpl::validate(const ApiSession& s, const FoxCommand& c, const FoxReceiverState* snap) const {
+    if (!finite(c) || !textTerminated(c)) { return FOXAPI_BAD_ARGUMENT; }
+    const bool remote = (s.flags & FOXAPI_SESSION_REMOTE) != 0u;
+    // The transmitter's ops are THE KEY's (engine-stage4.md decision 1):
+    // served once the key rules are wired to the Transmitter.
+    if ((c.op & 0xFF00u) == 0x0A00u || c.op == FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN ||
+        c.op == FOXAPP_OP_SET_TRANSMIT_ARGS) {
+        return FOXAPI_UNSUPPORTED;
+    }
+    if (c.op != FOXAPI_OP_SETTING_SET && !cascade::core::cmd::isKnownOp(c.op)) {
+        return FOXAPI_UNSUPPORTED;  // a newer interface's op, or one not implemented: it degrades
+    }
+    if ((s.grants & grantFor(c.op)) == 0u) { return FOXAPI_DENIED; }
+    if (c.op == FOXAPI_OP_SETTING_SET &&
+        (!opt_.testHooks || std::strncmp(c.text, "test.", 5) != 0)) {
+        // Only the test hooks, and only in an engine created with them; the
+        // settings store is not served through the table yet (CAP_SETTINGS
+        // is not set).
+        return FOXAPI_UNSUPPORTED;
+    }
+    // The app's own extension ops are the standard window's vocabulary, and
+    // some name paths on this machine: LOCAL sessions only.
+    if (remote && cascade::core::cmd::isAppOp(c.op)) { return FOXAPI_DENIED; }
+    const double v = c.num[0];
+    switch (c.op) {
+        case FOXAPI_OP_SET_CENTRE:
+        case FOXAPI_OP_SET_FREQUENCY:
+            return (v > 0.0 && v <= 6.0e9) ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
+        case FOXAPI_OP_SET_VFO_OFFSET:
+            return std::fabs(v) < 1.0e8 ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
+        case FOXAPI_OP_STEP_TUNE:
+            return (v > 0.0 && v <= 1.0e9 && c.ival[0] != 0 && std::llabs(c.ival[0]) <= 1000000) ? FOXAPI_OK
+                                                                                                   : FOXAPI_OUT_OF_RANGE;
+        case FOXAPI_OP_SET_MODE:
+            return (c.ival[0] >= FOXAPI_DEMOD_NFM && c.ival[0] <= FOXAPI_DEMOD_RAW) ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
+        case FOXAPI_OP_SET_BANDWIDTH:
+            return (v >= 100.0 && v <= 1.0e7) ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
+        case FOXAPI_OP_SET_SQUELCH:
+            return (v >= -200.0 && v <= 20.0) ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
+        case FOXAPI_OP_SET_VOLUME:
+            return (v >= 0.0 && v <= 1.0) ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
+        case FOXAPI_OP_SET_DEEMPHASIS:
+            return (c.ival[0] >= 0 && c.ival[0] <= 2) ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
+        case FOXAPI_OP_SET_NR:
+            return (c.ival[1] == 0 || (v >= 0.0 && v <= 1.0)) ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
+        case FOXAPI_OP_SET_NOTCH:
+            return (c.ival[1] == 0 || (v >= 10.0 && v <= 20000.0 && c.num[1] >= 0.1 && c.num[1] <= 1000.0))
+                       ? FOXAPI_OK
+                       : FOXAPI_OUT_OF_RANGE;
+        case FOXAPI_OP_SET_DISPLAY_RANGE:
+            return (v >= -200.0 && v <= 40.0 && c.num[1] >= -200.0 && c.num[1] <= 40.0) ? FOXAPI_OK
+                                                                                        : FOXAPI_OUT_OF_RANGE;
+        case FOXAPI_OP_SET_SAMPLE_RATE:
+            return (v >= 8000.0 && v <= 61.44e6) ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
+        case FOXAPI_OP_SET_GAIN:
+            return (c.text[0] != '\0' && v >= -50.0 && v <= 200.0) ? FOXAPI_OK : FOXAPI_BAD_ARGUMENT;
+        case FOXAPI_OP_BOOKMARK_ADD:
+        case FOXAPI_OP_BOOKMARK_REMOVE_GROUP:
+            return c.text[0] != '\0' ? FOXAPI_OK : FOXAPI_BAD_ARGUMENT;
+        case FOXAPI_OP_SELECT_SOURCE:
+            // No remote session names a path on this machine (API.md 5).
+            // "file:" and "pluto:" in API.md; the engine's own spellings of
+            // the same two ("open-pluto:") and the sound card's open, too.
+            if (remote && (std::strncmp(c.text, "file:", 5) == 0 || std::strncmp(c.text, "pluto:", 6) == 0 ||
+                           std::strncmp(c.text, "open-pluto:", 11) == 0 ||
+                           std::strncmp(c.text, "soundcard:", 10) == 0)) {
+                return FOXAPI_DENIED;
+            }
+            return FOXAPI_OK;
+        case FOXAPI_OP_SETTING_SET:
+            return std::strchr(c.text, '=') != nullptr ? FOXAPI_OK : FOXAPI_BAD_ARGUMENT;
+        default:
+            (void)snap;
+            return FOXAPI_OK;
+    }
+}
+
+const char* ApiHostImpl::refusalText(const Pending& p) {
+    const bool remote = (p.sessionFlags & FOXAPI_SESSION_REMOTE) != 0u;
+    switch (p.refused) {
+        case FOXAPI_DENIED:
+            if (remote && (p.cmd.op & 0xFF00u) == 0x0A00u) {
+                return p.cmd.op == FOXAPI_OP_TX_PTT ? "the local operator has not given consent to remote transmit"
+                                                    : "a remote session may only press and release the PTT";
+            }
+            if (remote && cascade::core::cmd::isAppOp(p.cmd.op)) {
+                return "the application's own commands are for sessions on this machine";
+            }
+            if (remote && p.cmd.op == FOXAPI_OP_SELECT_SOURCE) {
+                return "a remote session cannot name a file or an address on this machine";
+            }
+            return "this session does not hold the grant for that";
+        case FOXAPI_OUT_OF_RANGE: return "a value is outside what the engine accepts";
+        case FOXAPI_BAD_ARGUMENT: return "the command is malformed (NaN, unterminated or empty text)";
+        case FOXAPI_UNSUPPORTED: return "this engine does not implement that command";
+        case FOXAPI_NO_DEVICE: return "there is no transmitter open";
+        default: return "refused";
+    }
+}
+
+void ApiHostImpl::apply(const Pending& p) {
+    const FoxCommand& c = p.cmd;
+    FoxCommandResult r{};
+    r.structSize = sizeof(r);
+    r.ticket = p.ticket;
+    r.op = c.op;
+    r.status = FOXAPI_OK;
+    auto finish = [&] { outbox_.push_back({p.sessionId, p.saferKind, outbox_.size(), r}); };
+    if (p.refused != FOXAPI_OK) {
+        r.status = p.refused;
+        copyText(r.message, refusalText(p));
+        finish();
+        return;
+    }
+    const SessionFate fate = sessionFate(p.sessionId);
+    if (fate != SessionFate::kOpen && !onlyMakesSafer(c)) {
+        r.status = FOXAPI_DETACHED;
+        copyText(r.message, fate == SessionFate::kDetached ? "the session was detached before this command was applied"
+                                                           : "the session closed before this command was applied");
+        finish();
+        return;
+    }
+    // A radio command asked of a radio that has gone since it was submitted
+    // is not applied to the one there now (the local queue's rule,
+    // Engine::drainLocalCommands).
+    if (p.sourceGen != engine_.sourceGen_.load() && isDeviceScopedOp(c.op)) {
+        r.status = FOXAPI_NO_DEVICE;
+        copyText(r.message, "the radio this was sent for has closed since");
+        finish();
+        return;
+    }
+    if (c.op == FOXAPI_OP_SETTING_SET) {
+        const char* eq = std::strchr(c.text, '=');
+        applyTestHook(p, r, std::string(c.text, eq), std::string(eq + 1));
+        finish();
+        return;
+    }
+    const FoxCommandResult applied = engine_.applyCommand(c);
+    r.status = applied.status;
+    r.flags = applied.flags;
+    r.applied[0] = applied.applied[0];
+    r.applied[1] = applied.applied[1];
+    std::memcpy(r.message, applied.message, sizeof(r.message));
+    r.message[sizeof(r.message) - 1] = '\0';
+    finish();
+}
+
+void ApiHostImpl::applyTestHook(const Pending& p, FoxCommandResult& r, const std::string& key,
+                                const std::string& val) {
+    (void)p;
+    if (key == "test.stall") {
+        // The control pass is busy this long (at most a second), so a test
+        // can queue commands and change a session behind them first.
+        std::this_thread::sleep_for(std::chrono::milliseconds(std::clamp(std::atoi(val.c_str()), 0, 1000)));
+    } else if (key == "test.stallAfterPass") {
+        stallAfterPassMs_ = std::clamp(std::atoi(val.c_str()), 0, 1000);
+    } else if (key == "test.openDelay") {
+        openDelayMs_.store(std::clamp(std::atoi(val.c_str()), 0, 1000));
+    } else if (key == "test.gather") {
+        std::lock_guard<std::mutex> lk(queueMutex_);
+        gatherFrom_ = submitted_;
+        gather_ = static_cast<uint64_t>(std::clamp(std::atoi(val.c_str()), 1, 64));
+    } else if (key == "test.bookmark") {
+        // Stands in for an import: "name|hz|mode|bw|group", mode a
+        // FOXAPI_DEMOD_* - a grouped bookmark, as an imported list makes.
+        std::vector<std::string> f;
+        std::size_t a = 0;
+        while (true) {
+            const std::size_t bar = val.find('|', a);
+            f.push_back(val.substr(a, bar == std::string::npos ? std::string::npos : bar - a));
+            if (bar == std::string::npos) { break; }
+            a = bar + 1;
+        }
+        const int demod = f.size() == 5 ? std::atoi(f[2].c_str()) : 0;
+        if (f.size() != 5 || demod < 1 || demod > 8) {
+            r.status = FOXAPI_BAD_ARGUMENT;
+            copyText(r.message, "test.bookmark is name|hz|mode|bw|group");
+            return;
+        }
+        cascade::core::Bookmark b;
+        b.name = f[0];
+        b.freqHz = std::atof(f[1].c_str());
+        b.mode = cascade::net::kDemodNames[demod];
+        b.bandwidthHz = std::atof(f[3].c_str());
+        b.group = f[4];
+        engine_.freqMgr_.add(b);
+        engine_.saveBookmarks();
+    } else {
+        r.status = FOXAPI_NOT_FOUND;
+        copyText(r.message, "no such test hook");
+    }
+}
+
+void ApiHostImpl::deliverResult(uint64_t sessionId, int saferKind, const FoxCommandResult& r) {
+    std::shared_ptr<ApiSession> s;
+    {
+        std::lock_guard<std::mutex> lk(sessionsMutex_);
+        auto it = sessions_.find(sessionId);
+        if (it == sessions_.end()) { return; }  // closed meanwhile: nobody to tell
+        s = it->second;
+    }
+    FoxCommandResult out = r;
+    if (out.status != FOXAPI_OK) {
+        out.flags |= FOXAPI_RESULT_REFUSED;
+    } else {
+        out.flags &= ~FOXAPI_RESULT_REFUSED;
+    }
+    std::lock_guard<std::mutex> lk(s->m);
+    if (saferKind < 0) {
+        // Bounded by FOXAPI_MAX_PENDING: the command counts until polled.
+        if (!s->results.full()) { s->results.push_back(out); }
+        return;
+    }
+    ApiSession::SaferSlot& slot = s->safer[static_cast<std::size_t>(saferKind)];
+    if (slot.ticket != r.ticket) { return; }
+    if (slot.copies > 0) { --slot.copies; }
+    if (slot.read) {
+        if (slot.copies == 0) { slot = ApiSession::SaferSlot{}; }
+        return;
+    }
+    if (slot.inResults) {
+        for (std::size_t i = 0; i < s->results.size(); ++i) {
+            if (s->results.at(i).ticket == r.ticket) {
+                s->results.at(i) = out;
+                break;
+            }
+        }
+    } else {
+        if (!s->results.full()) { s->results.push_back(out); }
+        slot.inResults = true;
+    }
+}
+
+void ApiHostImpl::broadcast(FoxEvent e) {
+    e.structSize = sizeof(e);
+    e.unixMs = unixMs();
+    for (auto& s : live_) {
+        std::lock_guard<std::mutex> lk(s->m);
+        if ((s->eventMask & FOXAPI_EVENT_MASK(e.kind)) == 0u) { continue; }
+        if (s->events.full()) {
+            s->events.pop_front();
+            ++s->eventsDropped;
+        }
+        e.seq = ++s->eventSeq;
+        s->events.push_back(e);
+    }
+}
+
+void ApiHostImpl::beginPass() {
+    work_.clear();
+    closedWork_.clear();
+    {
+        std::unique_lock<std::mutex> lk(queueMutex_);
+        if (gather_ > 0) {
+            // Test seam (test.gather): this pass takes the queue only once
+            // `gather_` more commands have been submitted (at most 2 s).
+            const uint64_t want = gatherFrom_ + gather_;
+            queueCv_.wait_for(lk, std::chrono::seconds(2), [this, want] { return submitted_ >= want; });
+            gather_ = 0;
+        }
+        work_.swap(queue_);
+        closedWork_.swap(closedSessions_);
+    }
+    refreshLive();
+    // Sessions closed or detached since the last pass are dealt with FIRST,
+    // before any command is applied (the reference engine's round-3 rule):
+    // nothing they queued can act for them, and only the safer commands they
+    // left are applied.
+    for (const Pending& p : work_) { apply(p); }
+    reapDetached(closedWork_);
+    expireTokens();
+}
+
+void ApiHostImpl::endPass() {
+    // THE SPECTRUM, copied from the pipeline's newest frame into the ring
+    // interfaces read without a lock (one lock of the pipeline's frame slot a
+    // pass - the lock the window took once a frame before stage 4).
+    if (engine_.pipeline_.getLatestFrame(frame_) && !frame_.dbBins.empty()) {
+        cascade::source::IqSource& src = engine_.pipeline_.activeSource();
+        spectrum_.publish(frame_.dbBins.data(), frame_.dbBins.size(), src.centerFrequencyHz(), src.sampleRateHz(),
+                          unixMs());
+    }
+    // Results go out only now, AFTER the state they describe has been
+    // published, and in TICKET order per session (a merged safer command is
+    // applied in the place of its LAST send). std::sort on (session, ticket,
+    // order) is stable by construction and allocates nothing.
+    std::sort(outbox_.begin(), outbox_.end(), [](const Outgoing& x, const Outgoing& y) {
+        if (x.sessionId != y.sessionId) { return x.sessionId < y.sessionId; }
+        if (x.result.ticket != y.result.ticket) { return x.result.ticket < y.result.ticket; }
+        return x.order < y.order;
+    });
+    for (const Outgoing& o : outbox_) { deliverResult(o.sessionId, o.saferKind, o.result); }
+    outbox_.clear();
+    // Events: which groups the pass's publish moved, and a fault.
+    cascade::core::PublishedState ps;
+    if (engine_.receiverSnapshot_->read(ps)) {
+        const std::uint64_t seqs[7] = {ps.rx.tuneSeq, ps.rx.modeSeq, ps.rx.deviceSeq, ps.rx.audioSeq,
+                                       ps.rx.displaySeq, ps.rx.txSeq, ps.rx.listSeq};
+        if (haveLastSeqs_) {
+            uint32_t moved = 0;
+            for (int i = 0; i < 7; ++i) {
+                if (seqs[i] != lastSeqs_[i]) { moved |= 1u << i; }
+            }
+            if (moved != 0u) {
+                FoxEvent e{};
+                e.kind = FOXAPI_EVENT_STATE;
+                e.value[0] = moved;
+                broadcast(e);
+            }
+        }
+        std::copy(seqs, seqs + 7, lastSeqs_);
+        haveLastSeqs_ = true;
+        const bool faulted = (ps.rx.flags & FOXAPI_RX_FAULTED) != 0u;
+        if (faulted && !lastFaulted_) {
+            FoxEvent e{};
+            e.kind = FOXAPI_EVENT_FAULT;
+            copyText(e.text, ps.rx.faultMessage);
+            broadcast(e);
+        }
+        lastFaulted_ = faulted;
+    }
+    if (stallAfterPassMs_ > 0) {  // test seam: test.stallAfterPass
+        const int ms = stallAfterPassMs_;
+        stallAfterPassMs_ = 0;
+        std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+    }
+}
+
+int32_t ApiHostImpl::readList(uint32_t list, uint32_t index, FoxListItem* out) {
+    if (out != nullptr && out->structSize < FOXAPI_MIN_LIST_ITEM) { return FOXAPI_BAD_ARGUMENT; }
+    std::shared_ptr<const ApiListBlock> b;
+    {
+        std::lock_guard<std::mutex> lk(listsMutex_);
+        b = lists_;
+    }
+    if (b == nullptr) { b = std::make_shared<const ApiListBlock>(); }
+    FoxListItem it{};
+    it.structSize = sizeof(it);
+    it.list = list;
+    it.index = index;
+    int32_t count = 0;
+    const auto want = [&](std::size_t n) {
+        count = static_cast<int32_t>(n);
+        return static_cast<std::size_t>(index) < n;
+    };
+    switch (list) {
+        case FOXAPI_LIST_MODES:
+            // value[0]: FOXAPI_DEMOD_*; value[1]: the mode's default bandwidth.
+            if (want(8)) {
+                it.id = cascade::gui::abiDemodForModeIndex(static_cast<int>(index));
+                it.value[0] = static_cast<double>(it.id);
+                it.value[1] = cascade::gui::kBwHz[cascade::gui::kModeDefaultBw[index]];
+                copyText(it.name, cascade::gui::kModeNames[index]);
+                if (static_cast<uint32_t>(it.id) == b->mode) { it.flags |= FOXAPI_ITEM_ACTIVE; }
+            }
+            break;
+        case FOXAPI_LIST_BANDWIDTHS:
+            if (want(static_cast<std::size_t>(cascade::gui::kBwCount))) {
+                it.value[0] = cascade::gui::kBwHz[index];
+                char label[32];
+                cascade::gui::formatBandwidth(it.value[0], label, sizeof(label));
+                copyText(it.name, label);
+                if (it.value[0] == b->bandwidthHz) { it.flags |= FOXAPI_ITEM_ACTIVE; }
+            }
+            break;
+        case FOXAPI_LIST_DEVICES:
+            if (want(b->devices.size())) {
+                const auto& d = b->devices[index];
+                it.id = index + 1u;
+                copyText(it.name, d.label.c_str());
+                copyText(it.detail, d.id.c_str());
+                if (d.active) { it.flags |= FOXAPI_ITEM_ACTIVE; }
+            }
+            break;
+        case FOXAPI_LIST_SAMPLE_RATES:
+            if (want(b->rates.size())) {
+                it.value[0] = b->rates[index];
+                if (it.value[0] == b->rateHz) { it.flags |= FOXAPI_ITEM_ACTIVE; }
+            }
+            break;
+        case FOXAPI_LIST_GAINS:
+            if (want(b->gains.size())) {
+                const auto& g = b->gains[index];
+                copyText(it.name, g.name.c_str());
+                it.value[0] = g.minDb;
+                it.value[1] = g.maxDb;
+                it.value[2] = g.stepDb;
+                it.value[3] = g.currentDb;
+            }
+            break;
+        case FOXAPI_LIST_ANTENNAS:
+            if (want(b->antennas.size())) {
+                copyText(it.name, b->antennas[index].c_str());
+                if (b->antennas[index] == b->antenna) { it.flags |= FOXAPI_ITEM_ACTIVE; }
+            }
+            break;
+        case FOXAPI_LIST_BOOKMARKS: {
+            const auto& all = *b->bookmarks;
+            if (want(b->bookmarks ? all.size() : 0)) {
+                const cascade::core::Bookmark& bm = all[index];
+                it.id = bm.id;
+                copyText(it.name, bm.name.c_str());
+                copyText(it.detail, bm.group.c_str());
+                it.value[0] = bm.freqHz;
+                it.value[1] = static_cast<double>(cascade::core::cmd::foxDemodFromName(bm.mode.c_str()));
+                it.value[2] = bm.bandwidthHz;
+                if (bm.favourite) { it.flags |= FOXAPI_ITEM_FAVOURITE; }
+            }
+            break;
+        }
+        case FOXAPI_LIST_BOOKMARK_GROUPS: {
+            // Named groups, sorted by name, with their counts (the bookmarks
+            // are sorted by frequency, so the groups are gathered here).
+            std::map<std::string, int> groups;
+            if (b->bookmarks) {
+                for (const cascade::core::Bookmark& bm : *b->bookmarks) {
+                    if (!bm.group.empty()) { ++groups[bm.group]; }
+                }
+            }
+            if (want(groups.size())) {
+                auto g = std::next(groups.begin(), static_cast<std::ptrdiff_t>(index));
+                copyText(it.name, g->first.c_str());
+                it.value[0] = g->second;
+            }
+            break;
+        }
+        case FOXAPI_LIST_AUDIO_DEVICES:
+            if (want(b->audioDevices.size())) {
+                const auto& a = b->audioDevices[index];
+                it.id = index + 1u;
+                it.value[0] = static_cast<double>(a.index);
+                copyText(it.name, a.name.c_str());
+                copyText(it.detail, std::to_string(a.index).c_str());
+                if (a.active) { it.flags |= FOXAPI_ITEM_ACTIVE; }
+            }
+            break;
+        case FOXAPI_LIST_PLUGINS:
+            if (want(b->plugins.size())) {
+                const auto& p = b->plugins[index];
+                it.id = index + 1u;
+                copyText(it.name, p.name.empty() ? p.fileName.c_str() : p.name.c_str());
+                copyText(it.detail, p.fileName.c_str());
+                if (p.loaded) { it.flags |= FOXAPI_ITEM_ACTIVE; }
+            }
+            break;
+        default:
+            return FOXAPI_UNSUPPORTED;
+    }
+    if (out != nullptr && static_cast<int32_t>(index) < count) { copyOut(it, out, FOXAPI_MIN_LIST_ITEM); }
+    return count;
+}
+
+// ---------------------------------------------------------------------------
+// ApiHost
+// ---------------------------------------------------------------------------
+
+ApiHost::ApiHost(Engine& engine, const std::string& options)
+    : impl_(std::make_unique<ApiHostImpl>(engine, options)) {}
+
+ApiHost::~ApiHost() = default;
+
+FoxEngine* ApiHost::handle() { return impl_.get(); }
+
+void ApiHost::beginPass() { impl_->beginPass(); }
+void ApiHost::setLists(std::shared_ptr<const ApiListBlock> lists) { impl_->setLists(std::move(lists)); }
+void ApiHost::endPass() { impl_->endPass(); }
+
+// ---------------------------------------------------------------------------
+// The C table
+// ---------------------------------------------------------------------------
+
+namespace {
+
+ApiSession* S(FoxSession* s) { return static_cast<ApiSession*>(s); }
+ApiHostImpl* H(FoxEngine* e) { return static_cast<ApiHostImpl*>(e); }
+
+// NOTHING THROWS ACROSS THE C BOUNDARY.
+template <class F>
+int32_t guarded(F&& f) noexcept {
+    try {
+        return f();
+    } catch (...) {
+        return FOXAPI_FAILED;
+    }
+}
+
+template <class F>
+int32_t onSession(FoxSession* s, F&& f) noexcept {
+    if (s == nullptr) { return FOXAPI_BAD_ARGUMENT; }
+    if (S(s)->detached.load(std::memory_order_relaxed)) { return FOXAPI_DETACHED; }
+    return guarded([&] { return f(S(s)); });
+}
+
+int32_t FOXAPI_CALL apiCreate(const FoxEngineParams* p, FoxEngine** out) {
+    if (out == nullptr) { return FOXAPI_BAD_ARGUMENT; }
+    *out = nullptr;
+    const char* opts = nullptr;
+    if (p != nullptr) {
+        if (p->structSize < FOXAPI_MIN_ENGINE_PARAMS) { return FOXAPI_BAD_ARGUMENT; }
+        opts = p->options;
+    }
+    return guarded([&] {
+        const std::string options = opts != nullptr ? opts : "";
+        auto engine = std::make_unique<Engine>();
+        engine->configureApi(options);
+        engine->initialise();
+        ApiHostImpl& host = engine->api().impl();
+        if (host.options().running) { (void)engine->applyCommand(cascade::core::cmd::makeInt(FOXAPI_OP_RUN, 1)); }
+        // One pass before the control thread starts, so the first snapshot
+        // (and the lists) are published before create() returns: a session
+        // opened at once reads a real state, never the empty initial one.
+        engine->controlPass();
+        engine->startControlThread();
+        host.owned = engine.release();
+        *out = &host;
+        return FOXAPI_OK;
+    });
+}
+
+void FOXAPI_CALL apiDestroy(FoxEngine* e) {
+    try {
+        if (e == nullptr) { return; }
+        Engine* owned = H(e)->owned;
+        if (owned == nullptr) { return; }  // the host process's own engine: not the table's to destroy
+        owned->shutdown();
+        delete owned;
+    } catch (...) {
+    }
+}
+
+int32_t FOXAPI_CALL apiOpenSession(FoxEngine* e, const FoxSessionParams* p, FoxSession** out) {
+    if (e == nullptr) { return FOXAPI_BAD_ARGUMENT; }
+    return guarded([&] { return H(e)->openSession(p, out); });
+}
+
+void FOXAPI_CALL apiCloseSession(FoxSession* s) {
+    if (s == nullptr) { return; }
+    try {
+        S(s)->host->closeSession(S(s));
+    } catch (...) {
+    }
+}
+
+int32_t FOXAPI_CALL apiHeartbeat(FoxSession* s) {
+    return onSession(s, [&](ApiSession* x) { return x->host->heartbeat(x); });
+}
+
+int32_t FOXAPI_CALL apiReadState(FoxSession* s, FoxReceiverState* out) {
+    return onSession(s, [&](ApiSession* x) { return x->host->readState(x, out); });
+}
+
+int32_t FOXAPI_CALL apiReadSpectrum(FoxSession* s, uint64_t since, FoxSpectrumInfo* info, float* bins,
+                                    uint32_t cap) {
+    return onSession(s, [&](ApiSession* x) { return x->host->readSpectrum(since, info, bins, cap); });
+}
+
+int32_t FOXAPI_CALL apiSubmit(FoxSession* s, const FoxCommand* c, uint32_t n, FoxSubmitResult* r) {
+    return onSession(s, [&](ApiSession* x) { return x->host->submit(x, c, n, r); });
+}
+
+int32_t FOXAPI_CALL apiPollResults(FoxSession* s, FoxCommandResult* out, uint32_t cap) {
+    return onSession(s, [&](ApiSession* x) { return x->host->pollResults(x, out, cap); });
+}
+
+int32_t FOXAPI_CALL apiSubscribe(FoxSession* s, uint64_t mask) {
+    return onSession(s, [&](ApiSession* x) { return x->host->subscribe(x, mask); });
+}
+
+int32_t FOXAPI_CALL apiPollEvents(FoxSession* s, FoxEvent* out, uint32_t cap) {
+    return onSession(s, [&](ApiSession* x) { return x->host->pollEvents(x, out, cap); });
+}
+
+int32_t FOXAPI_CALL apiReadAudio(FoxSession* s, uint64_t*, float*, uint32_t, FoxStreamInfo*) {
+    return onSession(s, [&](ApiSession*) { return FOXAPI_UNSUPPORTED; });
+}
+
+int32_t FOXAPI_CALL apiReadIq(FoxSession* s, uint64_t*, float*, uint32_t, FoxStreamInfo*) {
+    return onSession(s, [&](ApiSession*) { return FOXAPI_UNSUPPORTED; });
+}
+
+int32_t FOXAPI_CALL apiReadList(FoxSession* s, uint32_t list, uint32_t index, FoxListItem* out) {
+    return onSession(s, [&](ApiSession* x) { return x->host->readList(list, index, out); });
+}
+
+int32_t FOXAPI_CALL apiGetSetting(FoxSession* s, const char* key, char* buf, size_t cap) {
+    return onSession(s, [&](ApiSession* x) { return x->host->getSetting(key, buf, cap); });
+}
+
+int32_t FOXAPI_CALL apiReadImage(FoxSession* s, uint64_t, FoxImageInfo*, uint8_t*, size_t) {
+    return onSession(s, [&](ApiSession*) { return FOXAPI_UNSUPPORTED; });
+}
+
+int32_t FOXAPI_CALL apiLogin(FoxEngine* e, const char* user, const char* password, char* token, size_t cap) {
+    if (e == nullptr) { return FOXAPI_BAD_ARGUMENT; }
+    return guarded([&] { return H(e)->login(user, password, token, cap); });
+}
+
+int32_t FOXAPI_CALL apiLogout(FoxEngine* e, const char* token) {
+    if (e == nullptr) { return FOXAPI_BAD_ARGUMENT; }
+    return guarded([&] { return H(e)->logout(token); });
+}
+
+const FoxEngineApi kApi = {
+    sizeof(FoxEngineApi),
+    FOXAPI_VERSION_MAJOR,
+    FOXAPI_VERSION_MINOR,
+    0,
+    // ONLY WHAT IS IMPLEMENTED (engine-stage4.md plan step 1): the receiver,
+    // the spectrum, the source and gain commands, the audio DSP, bookmarks
+    // and events. Lists, settings, the transmitter and the rest arrive with
+    // their steps and set their bits then.
+    FOXAPI_CAP_RECEIVER | FOXAPI_CAP_SPECTRUM | FOXAPI_CAP_AUDIO_LEVELS | FOXAPI_CAP_AUDIO_DSP |
+        FOXAPI_CAP_EVENTS,
+    "FoxSDR engine",
+    CASCADE_VERSION_STRING,
+    apiCreate,
+    apiDestroy,
+    apiOpenSession,
+    apiCloseSession,
+    apiHeartbeat,
+    apiReadState,
+    apiReadSpectrum,
+    apiSubmit,
+    apiPollResults,
+    apiSubscribe,
+    apiPollEvents,
+    apiReadAudio,
+    apiReadIq,
+    apiReadList,
+    apiGetSetting,
+    apiReadImage,
+    apiLogin,
+    apiLogout,
+};
+
+}  // namespace
+
+const FoxEngineApi* engineApi(std::uint32_t apiMajor, std::uint32_t apiMinor) {
+    if (apiMajor != FOXAPI_VERSION_MAJOR) { return nullptr; }
+    if (FOXAPI_VERSION_MAJOR == 0u && apiMinor != FOXAPI_VERSION_MINOR) { return nullptr; }
+    return &kApi;
+}
+
+}  // namespace cascade::engine
+
+// The engine module's one entry point (FOXAPI_ENGINE_QUERY_NAME): what a host
+// looks up in an engine module, and what the headless engine exports.
+extern "C" FOXAPI_EXPORT const FoxEngineApi* FOXAPI_CALL foxsdr_engine_query(uint32_t apiMajor, uint32_t apiMinor) {
+    return cascade::engine::engineApi(apiMajor, apiMinor);
+}

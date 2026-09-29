@@ -70,6 +70,7 @@
 #include "engine/bias_tee.hpp"
 #include "engine/device_scan_plan.hpp"
 #include "engine/engine_host.hpp"
+#include "engine/fox_engine_api.hpp"
 #include "engine/running_view.hpp"
 #include "engine/source_fallback.hpp"
 #include "engine/tune_control.hpp"
@@ -156,6 +157,10 @@ public:
 private:
     friend class cascade::gui::AppWindow;
     friend struct cascade::gui::AppWindowTestAccess;
+    // The engine API's host (engine/fox_engine_api.cpp) applies commands
+    // through applyCommand and reads the snapshot, the source generation and
+    // the pipeline's spectrum slot - nothing else of this class.
+    friend class ApiHostImpl;
 
     // WHO THIS ENGINE ASKS (engine_host.hpp). Declared first, so it is there
     // before anything that could ask it is built.
@@ -400,7 +405,7 @@ private:
     void openIqFile(const std::string& path);
     void openPlutoAt(const std::string& args);
     void tuneToBookmark(const cascade::core::Bookmark& b);
-    void addBookmarkHere(const std::string& name);
+    std::uint64_t addBookmarkHere(const std::string& name);  // the new bookmark's id
     cascade::core::Scanner::Params scannerParams() const;
     bool selectSourceById(const std::string& id);
     // HOW MANY LOADED MODULES ARE DECODERS AT ALL - the denominator under the
@@ -2301,6 +2306,24 @@ public:
     void pauseWaitWatchdog();
     void resumeWaitWatchdog();
 
+    // --- THE ENGINE API (stage 4, engine/fox_engine_api.hpp) -----------------
+    // The table's host for this engine: sessions, the command queue, results
+    // and events. Built with the engine; its two pass calls run in
+    // pumpFrameBegin and pumpPublish, on whichever thread pumps.
+    ApiHost& api() { return *api_; }
+    // The C handle an in-process interface opens its sessions on.
+    FoxEngine* apiHandle() { return api_->handle(); }
+    // Rebuilds the API host with engine options (FoxEngineParams::options) -
+    // only before any session is open (the table's create()).
+    void configureApi(const std::string& options);
+    // The lists read_list serves (engine_api_lists.cpp): the pumping thread
+    // builds a new block only when its fingerprint moves, and hands it to the
+    // API host before the publish that carries the fingerprint (listSeq).
+    std::uint64_t publishApiLists();
+    // Wakes the control thread for a pass now (a submit, a close): a command
+    // is applied within a pass's time of its submit, not a period's.
+    void wakeControl();
+
     // What the receiver published last: the one receiver snapshot (read()
     // and readFull() are the reader side; core/receiver_snapshot.hpp).
     std::shared_ptr<const cascade::core::ReceiverSnapshot> snapshot() const {
@@ -2309,7 +2332,24 @@ public:
 
 private:
     bool tornDown_ = false;  // teardown() ran (so ~Engine does not run it again)
+    // The wake a submit gives the control loop (wakeControl).
+    std::mutex controlWakeMutex_;
+    std::condition_variable controlWakeCv_;
+    bool controlWake_ = false;
+    std::uint64_t apiListsFingerprint();
+    std::shared_ptr<const ApiListBlock> buildApiLists(std::uint64_t fingerprint);
+    std::shared_ptr<const ApiListBlock> apiLists_;  // the pumping thread's newest
+    unsigned apiListsBookmarkVersion_ = 0;
+    // LAST, so it is destroyed FIRST: nothing of the engine it names is gone
+    // yet when it goes, and the control thread is stopped (teardown) before
+    // any member is destroyed.
+    std::unique_ptr<ApiHost> api_;
 };
+
+// The ops addressed to the open radio itself (the Source panel's device
+// controls, the radar scope's gain knob and the bias tee key): a queued one
+// is dropped when the radio it was asked of has gone since.
+bool isDeviceScopedOp(std::uint32_t op);
 
 }  // namespace cascade::engine
 
