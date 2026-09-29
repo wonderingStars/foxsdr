@@ -234,3 +234,81 @@ What could move a measured number: one pass of `txPass` (the rules' tick, a
 few stores; it allocates only when a TX_UNKEYED event is raised), and the
 window's `read_state` (one sequence-locked copy of FoxReceiverState a
 frame). Nothing on the sample path changed.
+
+### 6.4 Step 3: the lists, and API 0.3 (decision 4)
+
+The vendored header is now API 0.3 (third_party/foxsdr_api/README.md says
+how: the 0.2 copy, extended here, everything appended), and every addition is
+specified in `docs/api-0.3-additions.md` in API.md's style, to be merged
+upstream. In short: the 0.2 lists step 1 left out (DECODERS, CATALOGUE,
+TX_DEVICES, MARKERS, BAND_PLAN, PRESETS, USER_PRESETS, DEVICE_OPTIONS,
+SERIAL_PORTS) and fourteen new ones (status lines, converters, gain modes,
+decimations, the patch graph's nodes, wires, problems, parts and radios, the
+recordings, the decoder-output backlog, the store's refusals and updates, the
+band plans); read-only FACTS through `get_setting("fact.…")` for whole texts
+and single values (a status line, the patch graph as a document, the
+recorder's folder and files, a store entry's legal notice and blocked
+reason, the transmitter's address, the converter's name, the bias tee's key);
+`read_scope` (the demod scope's three taps, "reduced" for REMOTE),
+`read_node_spectrum` (a patch radio's own spectrum), `submit_text` (one
+command with a text over 255 bytes: a patch document); three state flags
+(bias tee present/on, patch running); FOXAPI_EVENT_PATCH;
+FOXAPI_OP_SCAN_SERIAL_PORTS. TRACKS stays a GAP.
+
+HOW IT IS SERVED, and why it costs the pass nothing new: everything but the
+live figures is in the list block (step 1's), rebuilt only when its
+fingerprint moves - the fingerprint now also hashes the store, the status
+lines, the graph (from its fields: no document is written for it), the
+recorders' state, an Airspy's choices; nothing in it allocates, and the
+plugins' keys are cached (they were being rebuilt every pass before - that
+per-pass allocation is gone). Which decoders are FED comes from the keys the
+publish already takes from the runner in ONE acquisition of its lock (the
+lock its DSP thread takes per block): step 3 takes that lock no more often. A
+recording's byte count and its STALLED/FULL state are read LIVE from the
+recorder's atomics at read time, so a growing file never rebuilds the block.
+The decoder-output backlog goes into a fixed ring in the host (500 lines,
+fixed-size text), so a busy decoder never allocates per line on the pumping
+thread. The scope taps are the pipeline's lock-free rings, snapshot from the
+reader's thread. Each patch radio's spectrum gets a ring like the main one,
+made when the radio first publishes.
+
+UNTIL STEP 4 some of what the patch lists show is decided by the WINDOW: it
+still compiles the patch plan (`patchPlan_`), marks refusals and drives
+`patchReconcile` from its frame (the survey behind step 4 found it writes
+`patchRunning_`, `patchPlan_` and `patchRefused_` itself). The lists read
+those members as they are; step 4 moves that work into the engine's pass,
+and the lists do not change.
+
+Tests: tests/test_engine_api_03.cpp (166 checks; red first against stubs,
+111 of 157 failing), one group per addition, through the C table only. Twelve
+mutants each red (the long text dropped, LOCAL-only facts and paths served
+to a REMOTE session, the byte count taken from the block, the scope not
+reduced for REMOTE, the patch event never raised, the serial scan allowed
+remotely, the decoder lines misnumbered, the empty status lines listed, the
+graph or the status lines left out of the fingerprint, the transmitter's
+seed not served) - four of them only after the test was tightened, each
+noted in the file. test_engine_api_conformance serves 0.3 now (PORT: the
+version gate one minor on); test_receiver_snapshot walks the three new
+flags; test_apply_command covers SCAN_SERIAL_PORTS.
+
+THE PLUGIN WINDOWS stay in the host process, and get no API. A plugin's
+panel, instrument, track list and the host-drawn plates around them are
+plugin code run through the plugin ABI (core::PluginUi, host API level 1),
+and a plugin that draws is an extension of the HOST, not an interface a
+user swaps. They are already fenced from the engine's state on one side:
+their reads of the receiver are the ONE published snapshot
+(core::PluginApiCore, stage 2), and their changes are commands
+(pluginControlToCommand, stage 1). The other side - the window reaching into
+`engine_.pluginUi_` to draw them (40 reads: tracks, panels, instruments,
+the tune/settings grants) - is fenced in step 5: the interface target will
+not see core/plugin_ui.hpp at all; the host process owns the plugin windows
+and hands the interface one opaque hook ("draw the plugin windows now", on
+the GUI thread inside the interface's frame, taking no engine type and
+returning only what was drawn), so no engine member can be read through it.
+The engine's pass never waits on it.
+
+What could move a measured number: the fingerprint is longer (a few hundred
+bytes hashed a pass more - the store's ids, fourteen status lines, the
+graph's nodes); a block rebuild now copies more (the band plan's entries,
+the store) - but only when something in it changed. Nothing on the sample
+path changed; the DSP thread's locks are taken no more often.
