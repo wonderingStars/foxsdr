@@ -264,6 +264,12 @@ int main() {
     }
 
     // --- FTDI candidates from a sysfs fixture ----------------------------------
+    // Linux-only: ftdiPortsFromSysfs is a stub on Windows (the real body is
+    // #ifdef'd out there), and building this fixture needs fs::create_symlink,
+    // which fails on Windows without SeCreateSymbolicLinkPrivilege - it
+    // crashed the whole test with an uncaught filesystem_error (ctest's
+    // generic fail-fast exit 0xC0000409) on an ordinary, non-elevated account.
+#ifndef _WIN32
     {
         const fs::path root = fs::temp_directory_path() / "foxsdr_test_aor_sysfs";
         fs::remove_all(root);
@@ -293,6 +299,7 @@ int main() {
         CHECK(aor::ftdiPortsFromSysfs((root / "nowhere").string(), "/dev").empty());
         fs::remove_all(root);
     }
+#endif
 
     return testSummary("test_aor_control");
 }
