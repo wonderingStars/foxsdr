@@ -14101,6 +14101,33 @@ bool AppWindow::replacePatch(const std::string& text, PatchReplace why, int* dro
     return true;
 }
 
+std::string AppWindow::serialisePatchNow() const {
+    return cascade::core::patch::serialise(patchGraph_, patchUi_.view.pan.x, patchUi_.view.pan.y,
+                                           patchUi_.view.zoom);
+}
+
+cascade::core::PatchPresetStatus AppWindow::savePatchPreset(const std::string& name,
+                                                            bool overwrite) {
+    const cascade::core::PatchPresetStatus st =
+        patchPresets_.save(name, serialisePatchNow(), overwrite);
+    if (st == cascade::core::PatchPresetStatus::Saved ||
+        st == cascade::core::PatchPresetStatus::Overwritten) {
+        cascade::core::diagLogf("patch: preset %s - %zu node(s), %zu preset(s) kept",
+                                st == cascade::core::PatchPresetStatus::Saved ? "saved"
+                                                                             : "overwritten",
+                                patchGraph_.nodes().size(), patchPresets_.list().size());
+    }
+    return st;
+}
+
+bool AppWindow::loadPatchPreset(const std::string& text) {
+    // What is on the canvas NOW, taken before it goes: the slot's whole point.
+    const std::string outgoing = serialisePatchNow();
+    if (!replacePatch(text, PatchReplace::Preset)) { return false; }
+    patchPresets_.keepPrevious(outgoing);
+    return true;
+}
+
 void AppWindow::drawPatchPage() {
     // FIRST, AND EVERY FRAME, open or not. The DSP thread never destroys a
     // patch it stops running; it hands it back, and this is where it dies -
@@ -25182,6 +25209,8 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     // The user's own presets, before the same rebuild: they are baked into
     // the preset snapshot (rebuildMuteStates) the bars and the mute read.
     userPresets_ = cfg.userPresets;
+    // Already cleaned entry by entry by the config loader.
+    patchPresets_.assign(cfg.patchPresets, cfg.patchPresetPrevious);
     refreshPluginRunner();
 
     for (int i = 0; i < 8; ++i) {
@@ -26076,6 +26105,8 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     // goes back into the file. Everything else - a clean restore, any
     // deliberate switch - is the live source, exactly as before.
     cfg.patch = patchText_;
+    cfg.patchPresets = patchPresets_.list();
+    cfg.patchPresetPrevious = patchPresets_.previous();
     cfg.mainView = patchOpen_ ? "patch" : "receiver";
     // WHILE THE PATCH PAGE HOLDS THE RECEIVER'S RADIO (0.99.17) the receiver
     // runs on the generator only because the page borrowed its radio, so the

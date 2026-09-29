@@ -36,6 +36,7 @@ struct GLFWwindow;
 #include "core/plugin_runner.hpp"
 #include "core/patch_graph.hpp"
 #include "core/patch_plan.hpp"
+#include "core/patch_presets.hpp"
 #include "core/patch_radio.hpp"
 #include "core/patch_recordings.hpp"
 #include "core/patch_runner.hpp"
@@ -1343,6 +1344,18 @@ private:
     enum class PatchReplace { Restore, File, Preset };
     // `dropped`, when given, receives what the parse had to leave out.
     bool replacePatch(const std::string& text, PatchReplace why, int* dropped = nullptr);
+    // THE PATCH PRESETS (core/patch_presets.hpp). Saving stores the patch on
+    // the canvas as patch_io writes it NOW - not patchText_, which catches up
+    // only at the end of the page's frame. Loading goes through replacePatch
+    // (PatchReplace::Preset: a running patch is stopped and the new one is
+    // left stopped) and, once the new patch is in, keeps the one it replaced
+    // in the "(previous patch)" slot, so a load is always one load away from
+    // being undone. `text` is a preset's text or the slot's own; loading the
+    // slot swaps it with the canvas. False, and nothing changed, when the
+    // text is not a patch.
+    cascade::core::PatchPresetStatus savePatchPreset(const std::string& name, bool overwrite);
+    bool loadPatchPreset(const std::string& text);
+    std::string serialisePatchNow() const;
     // The key that opens it, FIRST in the SIGNAL PATH bank. It goes there
     // rather than in VIEW by the same test that put the recorder and the
     // transmitter in that bank: a patch is not a way of LOOKING at the signal
@@ -3488,6 +3501,10 @@ private:
     // canvas says it changed. currentConfig() runs every frame and must
     // not serialise a document on each one.
     std::string patchText_;
+    // The named presets and the previous-patch slot: from AppConfig at
+    // applyConfig, back into it at currentConfig, changed only by the
+    // PRESETS panel (drawPatchPresetsPage).
+    cascade::core::PatchPresetStore patchPresets_;
     // This frame's compile() of the patch: what would be built, and every
     // reason it could not be. Recomputed while the page is open.
     cascade::core::patch::Plan patchPlan_;
