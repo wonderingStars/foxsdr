@@ -6917,6 +6917,15 @@ void Engine::submitTransmitPageKey(const cascade::gui::TxPageRequest& r) {
     if (!r.pageLive) {
         transmitter_.setLatched(false);
         transmitter_.setPttHeld(false);
+        // A PAGE CLOSE ENDS EVERY PRESS MADE BEFORE IT. The slot keeps only
+        // the newest request, so a LATCH press, then the close, then a reopen
+        // - inside one pump, or while the control thread stalls - would reach
+        // the control side as "page live, one press since" and latch the
+        // radio on the reopen with no press made on the reopened page (the
+        // Opus review of 47e991e; tests/test_transmit_key_race.cpp F). The
+        // presses are counted as seen here, under the lock the control side
+        // reads them under, so no press older than the close is ever acted on.
+        txLatchPressesSeen_ = r.latchPressCount;
     } else if (!r.pttHeld) {
         transmitter_.setPttHeld(false);
     }

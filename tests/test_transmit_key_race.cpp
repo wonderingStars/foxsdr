@@ -383,5 +383,69 @@ int main() {
         CHECK(kept == kRoundsE);
     }
 
+    // F: A PRESS, A CLOSE AND A REOPEN BETWEEN TWO READS OF THE SLOT (the Opus
+    // review of 47e991e: engine.cpp's slot kept only the newest request, so
+    // a LATCH press, then the page closing, then the page opening again - all
+    // inside one pump, or while the control thread stalled - reached the
+    // control side as "page live, one press since" and latched the radio on
+    // the reopen with no press made on the reopened page). A page close ends
+    // every press made before it: after the pump nothing is latched and the
+    // radio never starts. Three shapes: close and reopen once, twice, and a
+    // close whose reopen carries a second, older-looking press count.
+    {
+        Engine e;
+        e.initialise();
+        RecordingSink* raw = Access::installSink(e);
+        cascade::gui::TxPageRequest r;
+        r.pageLive = true;
+        std::uint64_t seq = 0;
+        r.frameSeq = ++seq;
+        e.submitTransmitPageKey(r);
+        e.pumpTransmitter();   // the control side has seen the page, unlatched
+        int latchedOnReopen = 0;
+        int started = 0;
+        constexpr int kRoundsF = 3;
+        for (int round = 0; round < kRoundsF; ++round) {
+            const int starts0 = raw->starts.load();
+            ++r.latchPressCount;   // LATCH pressed on the open page...
+            r.frameSeq = ++seq;
+            e.submitTransmitPageKey(r);
+            for (int closes = 0; closes <= round % 2; ++closes) {
+                cascade::gui::TxPageRequest closed = r;   // ...the page closes...
+                closed.pageLive = false;
+                closed.frameSeq = ++seq;
+                e.submitTransmitPageKey(closed);
+                r.frameSeq = ++seq;                        // ...and opens again,
+                e.submitTransmitPageKey(r);               // no press since
+            }
+            e.pumpTransmitter();   // the control side reads the slot only now
+            e.pumpTransmitter();
+            if (Access::latched(e)) { ++latchedOnReopen; }
+            std::this_thread::sleep_for(std::chrono::milliseconds(30));
+            if (raw->starts.load() != starts0) { ++started; }
+            // Leave nothing behind for the next round.
+            e.pumpTransmitter(/*pageLive=*/false, false, false);
+            ++seq;   // the helper numbered a frame of its own
+            CHECK(waitQuiet(raw, 150));
+            r.pageLive = true;
+            r.frameSeq = ++seq;
+            e.submitTransmitPageKey(r);
+            e.pumpTransmitter();
+        }
+        std::printf("F: LATCH press, page closed and reopened before the control side read the slot: latched "
+                    "on the reopen in %d of %d rounds, radio started in %d\n",
+                    latchedOnReopen, kRoundsF, started);
+        CHECK(latchedOnReopen == 0);
+        CHECK(started == 0);
+        // And a press made on the REOPENED page is still a press: it latches.
+        ++r.latchPressCount;
+        r.frameSeq = ++seq;
+        e.submitTransmitPageKey(r);
+        e.pumpTransmitter();
+        CHECK(Access::latched(e) && raw->running());
+        e.pumpTransmitter(/*pageLive=*/false, false, false);
+        CHECK(waitQuiet(raw, 150));
+    }
+
     return testSummary("test_transmit_key_race");
 }
