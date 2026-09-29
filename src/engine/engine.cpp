@@ -5405,8 +5405,16 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
         case FOXAPI_OP_SET_GAIN: {
             if (device_ == nullptr) { return refuse(FOXAPI_NO_DEVICE, "no radio is open"); }
             // A stage the radio does not list is NOT_FOUND (API.md 8), never
-            // handed to the driver.
-            if (std::find(deviceGainNames_.begin(), deviceGainNames_.end(), text) == deviceGainNames_.end()) {
+            // handed to the driver - but for an AIRSPY, whose list is its
+            // gain MODE's, a stage of another mode is a mode switch (the web
+            // remote naming "LNA" from Linearity mode), not an unknown name.
+            static const char* const kAirspyStages[] = {"LNA", "MIXER", "VGA", "LINEARITY", "SENSITIVITY"};
+            const bool airspyStage =
+                asAirspyDevice() != nullptr &&
+                std::any_of(std::begin(kAirspyStages), std::end(kAirspyStages),
+                            [&](const char* n) { return text == n; });
+            if (!airspyStage &&
+                std::find(deviceGainNames_.begin(), deviceGainNames_.end(), text) == deviceGainNames_.end()) {
                 return refuse(FOXAPI_NOT_FOUND, "no gain stage by that name");
             }
             if (!device_->setGainDb(text, c.num[0])) {
