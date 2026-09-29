@@ -2102,13 +2102,32 @@ private:
     std::string scopeAudioFrom_;
 
     bool transmitPttHeld_ = false; // this frame's key request, rebuilt each frame
-    // Every LATCH press ever made, COUNTED - never a per-frame flag, so the
-    // engine's control side neither loses nor doubles one however its pumps
-    // fall against these frames (gui::TxPageRequest) - and this window's frame
-    // number for the request it hands over.
-    std::uint32_t transmitLatchPresses_ = 0;
-    std::uint64_t transmitKeyFrame_ = 0;
     bool transmitPageLive_ = false;  // page drawn with its controls THIS frame (not rolled up)
+    // THE KEY THROUGH THE WINDOW'S OWN ENGINE API SESSION (engine stage 4,
+    // API 0.2's THE KEY - docs/engine-stage4.md decision 1). The page no
+    // longer hands the engine a per-frame request: it SUBMITS its key
+    // (pumpTransmitKey, once a frame) on a LOCAL session the window opened on
+    // the engine at start-up, and heartbeats that session once a frame -
+    // which is what keeps any key the window holds:
+    //   - PTT 1 every frame while held (a 2 s hold, re-asserted), PTT 0 once
+    //     when let go;
+    //   - the LATCH key is EDGE-triggered: a press on a key shown released
+    //     sends LATCH 0 then LATCH 1 in one batch, a press on a key shown
+    //     latched sends LATCH 0;
+    //   - "Allow remote transmit" sends TX_REMOTE_ARM 1/0 - the local
+    //     operator's consent the web remote's PTT now needs;
+    //   - the page going away (closed, rolled up) lets go of all three.
+    const FoxEngineApi* engineApi_ = nullptr;
+    FoxSession* uiSession_ = nullptr;
+    FoxReceiverState uiState_{};     // read once a frame, after the publish
+    bool transmitLatchPressed_ = false;  // this frame
+    int transmitArmRequest_ = -1;        // this frame: -1 none, 0 withdraw, 1 consent
+    cascade::gui::TxKeyMemory transmitKey_;  // between frames (gui/transmit_page.hpp)
+    std::string transmitKeyNote_;        // the last refusal of a key command, for the page
+    void openUiSession();
+    void closeUiSession();
+    void refreshUiState();
+    void pumpTransmitKey();
     // The microphone's peak, decayed towards zero so the meter falls rather
     // than flickering - a bar redrawn from one 10 ms peak a frame is unreadable.
     float transmitPeak_ = 0.0f;

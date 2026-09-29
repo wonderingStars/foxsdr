@@ -24,6 +24,8 @@
 #include <vector>
 
 #include "core/transmitter.hpp"
+#include "engine/engine.hpp"
+#include "engine/fox_engine_api.hpp"
 #include "gui/transmit_page.hpp"
 #include "test_check.hpp"
 
@@ -84,59 +86,130 @@ struct PageFrame {
     bool pttHeld = false;
 };
 
-using FrameFn = std::function<void(Transmitter&, const PageFrame&)>;
+// A PAGE: what one frame of it submits on the window's engine API session,
+// given what the page saw and the state the session read. Since engine stage
+// 4 the page keys the transmitter only through commands (API 0.2's THE KEY).
+using PageFn = std::function<std::uint32_t(const PageFrame&, const FoxReceiverState&, FoxCommand* out)>;
 
-// THE FRAME LOOP AS IT IS WIRED NOW: txPageKey, applied every frame whether or
-// not the page was drawn, then tick() - the order drawUi runs them in.
-void fixedFrame(Transmitter& tx, const PageFrame& f) {
-    const cascade::gui::TxPageKey k =
-        cascade::gui::txPageKey(f.pageLive, tx.latched(), f.latchPressed, f.pttHeld);
-    tx.setLatched(k.latched);
-    tx.setPttHeld(k.pttHeld);
-    // A stage-3a frame is both the window's (its liveness stamp) and the
-    // control side's (the tick) - see core/transmitter.hpp.
-    tx.frontEndAlive();
-    tx.tick();
+// THE PAGE AS IT IS WIRED NOW: gui::txKeyCommands, called once a frame by the
+// frame loop (AppWindow::pumpTransmitKey) whether or not the page was drawn.
+PageFn fixedPage() {
+    auto mem = std::make_shared<cascade::gui::TxKeyMemory>();
+    return [mem](const PageFrame& f, const FoxReceiverState& st, FoxCommand* out) {
+        cascade::gui::TxKeyFrame k;
+        k.pageLive = f.pageLive;
+        k.pttHeld = f.pttHeld;
+        k.latchPressed = f.latchPressed;
+        k.latchedShown = (st.flags & FOXAPI_RX_TX_LATCHED) != 0u;
+        k.latchMine = k.latchedShown && (st.flags & FOXAPI_RX_TX_KEY_MINE) != 0u;
+        return cascade::gui::txKeyCommands(k, *mem, out);
+    };
 }
 
-// THE FRAME LOOP AS IT WAS WIRED IN 0.99.34, copied from app_window.cpp so
-// the scenarios below can prove they SEE the defect: the page remembered its
-// own latch, wrote it and read it straight back, and did all of it only when
-// the page body was drawn. Kept as a control, not as behaviour anybody wants.
-struct PreFixPage {
-    bool latched = false;  // transmitLatched_
-    void frame(Transmitter& tx, const PageFrame& f) {
-        if (f.pageLive) {
-            if (f.latchPressed) { latched = !latched; }
-            tx.setLatched(latched);
-            latched = tx.latched();
-            tx.setPttHeld(f.pttHeld);
-        }
-        tx.frontEndAlive();
-        tx.tick();
-    }
-};
-
-void frames(Transmitter& tx, const FrameFn& fn, const PageFrame& f, int n) {
-    for (int i = 0; i < n; ++i) {
-        fn(tx, f);
-        std::this_thread::sleep_for(std::chrono::milliseconds(2));
-    }
+// THE CONTROL: the 0.99.34 page's shape, carried over to commands - a page
+// that REMEMBERS its latch and sends its key as a LEVEL every frame it is
+// drawn (LATCH of what it remembers, PTT of what is held), and nothing when
+// it is not drawn. Kept as a control, not as behaviour anybody wants: it
+// proves the scenarios below can see a page that does not let go.
+PageFn levelPage() {
+    auto latched = std::make_shared<bool>(false);
+    return [latched](const PageFrame& f, const FoxReceiverState&, FoxCommand* out) {
+        std::uint32_t n = 0;
+        if (!f.pageLive) { return n; }
+        if (f.latchPressed) { *latched = !*latched; }
+        auto add = [&](std::uint32_t op, long long v) {
+            FoxCommand c{};
+            c.structSize = sizeof(c);
+            c.op = op;
+            c.ival[0] = v;
+            out[n++] = c;
+        };
+        add(FOXAPI_OP_TX_LATCH, *latched ? 1 : 0);
+        add(FOXAPI_OP_TX_PTT, f.pttHeld ? 1 : 0);
+        return n;
+    };
 }
 
 struct KeyOutcome {
     bool latchClosedPageReleases = false;    // LATCH on, page closed
     bool latchRolledUpPageReleases = false;  // LATCH on, page rolled up (same input)
     bool pttClosedPageReleases = false;      // PTT down, page closed
-    bool latchFailsafeStays = false;         // the minute passes: no re-latch
+    bool latchFailsafeStays = false;         // the latch timed out: no re-latch
     bool frozenWindowStays = false;          // dead-man's handle: no re-key on thaw
     bool pressesWork = false;                // LATCH keys and unkeys; PTT keys
 };
 
-// Every scenario on its own transmitter, radio AND PAGE (makePage is called
-// afresh for each, because a page that remembers its latch must not carry one
-// scenario's into the next), driven only through that page's frame.
-KeyOutcome runKeyScenarios(const std::function<FrameFn()>& makePage) {
+}  // namespace
+
+// The engine's transmitter, for the rig below (Engine's test friend).
+namespace cascade::gui {
+struct AppWindowTestAccess {
+    static CountingSink* installSink(cascade::engine::Engine& e) {
+        auto sink = std::make_unique<CountingSink>();
+        CountingSink* raw = sink.get();
+        e.transmitter_.setSink(std::move(sink));
+        e.transmitter_.setInput(cascade::core::TxInput::Tone);
+        return raw;
+    }
+    static Transmitter& tx(cascade::engine::Engine& e) { return e.transmitter_; }
+};
+}  // namespace cascade::gui
+
+namespace {
+
+// ONE ENGINE, PUMPED AS THE WINDOW PUMPS IT (stage 3a: its frame IS the
+// engine's pass), a LOCAL session on it as the window opens one, and a radio
+// that counts its starts. frame(): the heartbeat, the pass (which applies the
+// batch the previous frame submitted, then ticks), the state read, and the
+// page's batch submitted - the frame loop's order.
+struct Rig {
+    explicit Rig(const std::string& options = std::string()) {
+        if (!options.empty()) { e.configureApi(options); }
+        e.initialise();
+        raw = cascade::gui::AppWindowTestAccess::installSink(e);
+        api = cascade::engine::engineApi(FOXAPI_VERSION_MAJOR, FOXAPI_VERSION_MINOR);
+        FoxSessionParams p{};
+        p.structSize = sizeof(p);
+        p.flags = FOXAPI_SESSION_LOCAL;
+        p.grants = FOXAPI_GRANT_VIEW | FOXAPI_GRANT_TRANSMIT;
+        p.clientName = "test page";
+        api->open_session(e.apiHandle(), &p, &s);
+    }
+    ~Rig() {
+        if (s != nullptr) { api->close_session(s); }
+    }
+    Transmitter& tx() { return cascade::gui::AppWindowTestAccess::tx(e); }
+    void frame(const PageFn& page, const PageFrame& f) {
+        api->heartbeat(s);
+        e.pump();
+        FoxReceiverState st{};
+        st.structSize = sizeof(st);
+        api->read_state(s, &st);
+        FoxCommand cmds[8];
+        const std::uint32_t n = page(f, st, cmds);
+        if (n > 0) { api->submit(s, cmds, n, nullptr); }
+        FoxCommandResult r[16];
+        for (auto& x : r) { x.structSize = sizeof(x); }
+        while (api->poll_results(s, r, 16) == 16) {}
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    void frames(const PageFn& page, const PageFrame& f, int n) {
+        for (int i = 0; i < n; ++i) { frame(page, f); }
+    }
+
+    cascade::engine::Engine e;
+    CountingSink* raw = nullptr;
+    const FoxEngineApi* api = nullptr;
+    FoxSession* s = nullptr;
+};
+
+// Every scenario on its own engine, radio AND PAGE (makePage is called afresh
+// for each, because a page that remembers its latch must not carry one
+// scenario's into the next), driven only through that page's frames. A
+// control lands ONE FRAME after it is submitted (engine-stage4.md decision 2:
+// the window's batch is applied by the next pass), so every "released" is
+// read two frames on.
+KeyOutcome runKeyScenarios(const std::function<PageFn()>& makePage) {
     KeyOutcome o;
     const PageFrame idleLive{true, false, false};
     const PageFrame pressLatch{true, true, false};
@@ -146,104 +219,92 @@ KeyOutcome runKeyScenarios(const std::function<FrameFn()>& makePage) {
     // Latched, then the page stops being drawn (closed, or rolled up - both
     // arrive here as a frame in which the page body did not run).
     for (int variant = 0; variant < 2; ++variant) {
-        Transmitter tx;
-        const FrameFn fn = makePage();
-        auto s = std::make_unique<CountingSink>();
-        tx.setSink(std::move(s));
-        tx.setInput(cascade::core::TxInput::Tone);
-        frames(tx, fn, pressLatch, 1);
-        const bool keyed = tx.transmitting();
-        frames(tx, fn, idleLive, 5);
-        frames(tx, fn, notDrawn, 1);
-        const bool released = keyed && !tx.transmitting() && !tx.latched();
-        frames(tx, fn, notDrawn, 20);
-        (variant == 0 ? o.latchClosedPageReleases : o.latchRolledUpPageReleases) =
-            released && !tx.transmitting();
+        Rig r;
+        const PageFn page = makePage();
+        r.frames(page, idleLive, 1);
+        r.frames(page, pressLatch, 1);
+        r.frames(page, idleLive, 5);
+        const bool keyed = r.tx().transmitting();
+        r.frames(page, notDrawn, 3);
+        const bool released = keyed && !r.tx().transmitting() && !r.tx().latched();
+        r.frames(page, notDrawn, 20);
+        (variant == 0 ? o.latchClosedPageReleases : o.latchRolledUpPageReleases) = released && !r.tx().transmitting();
     }
 
     // The PTT held down at the moment the page goes.
     {
-        Transmitter tx;
-        const FrameFn fn = makePage();
-        tx.setSink(std::make_unique<CountingSink>());
-        tx.setInput(cascade::core::TxInput::Tone);
-        frames(tx, fn, holdPtt, 5);
-        const bool keyed = tx.transmitting();
-        frames(tx, fn, notDrawn, 1);
-        const bool released = keyed && !tx.transmitting() && !tx.pttHeld();
-        frames(tx, fn, notDrawn, 20);
-        o.pttClosedPageReleases = released && !tx.transmitting();
+        Rig r;
+        const PageFn page = makePage();
+        r.frames(page, holdPtt, 5);
+        const bool keyed = r.tx().transmitting();
+        r.frames(page, notDrawn, 3);
+        const bool released = keyed && !r.tx().transmitting() && !r.tx().pttHeld();
+        r.frames(page, notDrawn, 20);
+        o.pttClosedPageReleases = released && !r.tx().transmitting();
     }
 
-    // The latch's own failsafe, with the page open and nobody touching it.
+    // The latch's own failsafe (the engine's key rules; 150 ms here), with the
+    // page open and nobody touching it.
     {
-        Transmitter tx;
-        const FrameFn fn = makePage();
-        auto s = std::make_unique<CountingSink>();
-        CountingSink* raw = s.get();
-        tx.setSink(std::move(s));
-        tx.setInput(cascade::core::TxInput::Tone);
-        tx.setLatchTimeoutForTest(std::chrono::milliseconds(150));
-        frames(tx, fn, pressLatch, 1);
-        const bool keyed = tx.transmitting();
-        // Well past the deadline, one frame at a time the way drawUi runs.
-        const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
-        while (std::chrono::steady_clock::now() < until) { frames(tx, fn, idleLive, 1); }
-        std::printf("  latch failsafe: keyed %d, starts %d, transmitting %d, latched %d\n",
-                    keyed ? 1 : 0, raw->starts.load(), tx.transmitting() ? 1 : 0,
-                    tx.latched() ? 1 : 0);
-        o.latchFailsafeStays =
-            keyed && raw->starts.load() == 1 && !tx.transmitting() && !tx.latched();
+        Rig r("latchTimeoutMs=150");
+        const PageFn page = makePage();
+        r.frames(page, idleLive, 1);
+        r.frames(page, pressLatch, 1);
+        r.frames(page, idleLive, 3);
+        const bool keyed = r.tx().transmitting();
+        const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(700);
+        while (std::chrono::steady_clock::now() < until) { r.frames(page, idleLive, 1); }
+        std::printf("  latch failsafe: keyed %d, starts %d, transmitting %d, latched %d\n", keyed ? 1 : 0,
+                    r.raw->starts.load(), r.tx().transmitting() ? 1 : 0, r.tx().latched() ? 1 : 0);
+        o.latchFailsafeStays = keyed && r.raw->starts.load() == 1 && !r.tx().transmitting() && !r.tx().latched();
     }
 
-    // The frozen window: nothing calls anything for longer than the handle,
-    // then the frames come back with the page open and nobody touching it.
+    // The frozen window: nothing calls anything - not the page, not the
+    // heartbeat, and (stage 3a) not the engine's pass either - for longer
+    // than the handle, then the frames come back with the page open and
+    // nobody touching it.
     {
-        Transmitter tx;
-        const FrameFn fn = makePage();
-        auto s = std::make_unique<CountingSink>();
-        CountingSink* raw = s.get();
-        tx.setSink(std::move(s));
-        tx.setInput(cascade::core::TxInput::Tone);
-        frames(tx, fn, pressLatch, 1);
-        const bool keyed = tx.transmitting();
+        Rig r;
+        const PageFn page = makePage();
+        r.frames(page, idleLive, 1);
+        r.frames(page, pressLatch, 1);
+        r.frames(page, idleLive, 3);
+        const bool keyed = r.tx().transmitting();
         std::this_thread::sleep_for(Transmitter::kKeyAliveWait + std::chrono::milliseconds(300));
-        frames(tx, fn, idleLive, 20);
-        std::printf("  frozen window: keyed %d, starts %d, transmitting %d, latched %d\n",
-                    keyed ? 1 : 0, raw->starts.load(), tx.transmitting() ? 1 : 0,
-                    tx.latched() ? 1 : 0);
-        o.frozenWindowStays =
-            keyed && raw->starts.load() == 1 && !tx.transmitting() && !tx.latched();
+        r.frames(page, idleLive, 20);
+        std::printf("  frozen window: keyed %d, starts %d, transmitting %d, latched %d\n", keyed ? 1 : 0,
+                    r.raw->starts.load(), r.tx().transmitting() ? 1 : 0, r.tx().latched() ? 1 : 0);
+        o.frozenWindowStays = keyed && r.raw->starts.load() == 1 && !r.tx().transmitting() && !r.tx().latched();
     }
 
-    // And the controls still do what they are for.
+    // And the controls still do what they are for (past the re-arm time
+    // between the two latch presses: API 0.2's 1 s).
     {
-        Transmitter tx;
-        const FrameFn fn = makePage();
-        tx.setSink(std::make_unique<CountingSink>());
-        tx.setInput(cascade::core::TxInput::Tone);
-        frames(tx, fn, idleLive, 3);
-        const bool quietAtRest = !tx.transmitting();
-        frames(tx, fn, pressLatch, 1);
-        frames(tx, fn, idleLive, 5);
-        const bool latchKeys = tx.transmitting() && tx.latched();
-        frames(tx, fn, pressLatch, 1);
-        const bool latchUnkeys = !tx.transmitting() && !tx.latched();
-        frames(tx, fn, holdPtt, 5);
-        const bool pttKeys = tx.transmitting();
-        frames(tx, fn, idleLive, 1);
-        const bool pttReleases = !tx.transmitting();
+        Rig r;
+        const PageFn page = makePage();
+        r.frames(page, idleLive, 3);
+        const bool quietAtRest = !r.tx().transmitting();
+        r.frames(page, pressLatch, 1);
+        r.frames(page, idleLive, 5);
+        const bool latchKeys = r.tx().transmitting() && r.tx().latched();
+        r.frames(page, pressLatch, 1);
+        r.frames(page, idleLive, 3);
+        const bool latchUnkeys = !r.tx().transmitting() && !r.tx().latched();
+        r.frames(page, holdPtt, 5);
+        const bool pttKeys = r.tx().transmitting();
+        r.frames(page, idleLive, 3);
+        const bool pttReleases = !r.tx().transmitting();
         o.pressesWork = quietAtRest && latchKeys && latchUnkeys && pttKeys && pttReleases;
     }
     return o;
 }
 
-void printOutcome(const char* who, const KeyOutcome& o) {
-    std::printf("%s: latch+closed releases %d, latch+rolled-up releases %d, ptt+closed "
-                "releases %d, failsafe stays %d, frozen window stays %d, presses work %d\n",
-                who, o.latchClosedPageReleases ? 1 : 0, o.latchRolledUpPageReleases ? 1 : 0,
-                o.pttClosedPageReleases ? 1 : 0, o.latchFailsafeStays ? 1 : 0,
-                o.frozenWindowStays ? 1 : 0, o.pressesWork ? 1 : 0);
+void printOutcome(const char* name, const KeyOutcome& o) {
+    std::printf("%s: latch/page closed %d, latch/rolled up %d, ptt/page closed %d, latch failsafe %d, "
+                "frozen window %d, presses %d\n",
+                name, o.latchClosedPageReleases ? 1 : 0, o.latchRolledUpPageReleases ? 1 : 0,
+                o.pttClosedPageReleases ? 1 : 0, o.latchFailsafeStays ? 1 : 0, o.frozenWindowStays ? 1 : 0,
+                o.pressesWork ? 1 : 0);
 }
 
 std::string readFile(const std::filesystem::path& p) {
@@ -446,34 +507,103 @@ int main() {
     }
 
     // =====================================================================
-    // 7. THE KEY: WHAT THE PAGE ASKS FOR, FRAME BY FRAME
+    // 7. THE KEY: WHAT THE PAGE SUBMITS, FRAME BY FRAME
     //
     //    Until 0.99.35 the page wrote its key to the transmitter from inside
     //    its own body, so a page that was closed or rolled up simply stopped
     //    writing: a LATCH stayed closed for up to a minute with no control on
-    //    screen, and a PTT held at that moment stayed held for good. And the
-    //    page wrote its REMEMBERED latch back every frame, so the latch's own
-    //    failsafe and the frozen-window handle each released the radio for
-    //    exactly one frame before the page re-latched it.
+    //    screen, and a PTT held at that moment stayed held for good. Since
+    //    engine stage 4 the page SUBMITS its key on the window's engine API
+    //    session, once a frame from the frame loop (gui::txKeyCommands, API
+    //    0.2's THE KEY): the PTT a 2 s hold re-asserted every frame it is held,
+    //    the LATCH edge-triggered, and a page that goes away lets go.
     // =====================================================================
     {
-        // The rule itself.
-        using cascade::gui::txPageKey;
-        // No page, no key - whatever the transmitter or the hand is doing.
-        CHECK(!txPageKey(false, true, false, true).latched);
-        CHECK(!txPageKey(false, true, false, true).pttHeld);
-        CHECK(!txPageKey(false, false, true, false).latched);
-        // The transmitter's latch is the truth; the page only sends presses.
-        CHECK(txPageKey(true, true, false, false).latched);
-        CHECK(!txPageKey(true, false, false, false).latched);
-        CHECK(txPageKey(true, false, true, false).latched);
-        CHECK(!txPageKey(true, true, true, false).latched);
-        CHECK(txPageKey(true, false, false, true).pttHeld);
-        CHECK(!txPageKey(true, false, false, false).pttHeld);
+        using cascade::gui::TxKeyFrame;
+        using cascade::gui::TxKeyMemory;
+        using cascade::gui::txKeyCommands;
+        FoxCommand c[cascade::gui::kTxKeyMaxCommands];
+        auto is = [&](std::uint32_t n, std::initializer_list<std::pair<std::uint32_t, long long>> want) {
+            if (n != want.size()) { return false; }
+            std::uint32_t i = 0;
+            for (const auto& w : want) {
+                if (c[i].op != w.first || c[i].ival[0] != w.second) { return false; }
+                ++i;
+            }
+            return true;
+        };
+        TxKeyMemory m;
+        TxKeyFrame f;
+        f.pageLive = true;
+        // Nothing asked for, nothing sent.
+        CHECK(is(txKeyCommands(f, m, c), {}));
+        // The PTT: re-asserted every frame it is held, released once.
+        f.pttHeld = true;
+        CHECK(is(txKeyCommands(f, m, c), {{FOXAPI_OP_TX_PTT, 1}}));
+        CHECK(is(txKeyCommands(f, m, c), {{FOXAPI_OP_TX_PTT, 1}}));
+        f.pttHeld = false;
+        CHECK(is(txKeyCommands(f, m, c), {{FOXAPI_OP_TX_PTT, 0}}));
+        CHECK(is(txKeyCommands(f, m, c), {}));
+        // THE LATCH KEY PROTOCOL: a press on a key shown released sends LATCH 0
+        // then LATCH 1 in one batch; on a key shown latched, LATCH 0.
+        f.latchPressed = true;
+        CHECK(is(txKeyCommands(f, m, c), {{FOXAPI_OP_TX_LATCH, 0}, {FOXAPI_OP_TX_LATCH, 1}}));
+        f.latchedShown = true;
+        CHECK(is(txKeyCommands(f, m, c), {{FOXAPI_OP_TX_LATCH, 0}}));
+        f.latchPressed = false;
+        // The remote-transmit switch.
+        f.armRequest = 1;
+        CHECK(is(txKeyCommands(f, m, c), {{FOXAPI_OP_TX_REMOTE_ARM, 1}}));
+        f.armRequest = -1;
+        // THE PAGE GOES AWAY holding the PTT, the latch (its own) and the
+        // consent: all three let go, in one batch, once.
+        f.pttHeld = true;
+        f.latchMine = true;
+        (void)txKeyCommands(f, m, c);
+        TxKeyFrame gone;
+        gone.latchedShown = true;
+        gone.latchMine = true;
+        CHECK(is(txKeyCommands(gone, m, c),
+                 {{FOXAPI_OP_TX_PTT, 0}, {FOXAPI_OP_TX_LATCH, 0}, {FOXAPI_OP_TX_REMOTE_ARM, 0}}));
+        CHECK(is(txKeyCommands(gone, m, c), {}));
+        // A PRESS NOT YET LANDED, THEN THE PAGE GOES (both before any pass
+        // has shown the latch): the close ends the pending press - LATCH 0
+        // after the LATCH 1, so the pass applies both and never keys.
+        {
+            TxKeyMemory mp;
+            TxKeyFrame press;
+            press.pageLive = true;
+            press.latchPressed = true;
+            CHECK(is(txKeyCommands(press, mp, c), {{FOXAPI_OP_TX_LATCH, 0}, {FOXAPI_OP_TX_LATCH, 1}}));
+            const TxKeyFrame closed;  // the state still shows nothing latched
+            CHECK(is(txKeyCommands(closed, mp, c), {{FOXAPI_OP_TX_LATCH, 0}}));
+            TxKeyFrame reopened;
+            reopened.pageLive = true;
+            CHECK(is(txKeyCommands(reopened, mp, c), {}));  // no press on the reopened page, nothing sent
+            // Once the state has shown the latch as this window's, the press
+            // is no longer pending: the close's release is the one for "mine".
+            TxKeyMemory ml;
+            (void)txKeyCommands(press, ml, c);
+            TxKeyFrame shown;
+            shown.pageLive = true;
+            shown.latchedShown = true;
+            shown.latchMine = true;
+            CHECK(is(txKeyCommands(shown, ml, c), {}));
+            CHECK(!ml.latchPending);
+        }
+        // A latch that is ANOTHER window's is not released by this page going.
+        TxKeyMemory m2;
+        f = TxKeyFrame{};
+        f.pageLive = true;
+        (void)txKeyCommands(f, m2, c);
+        TxKeyFrame goneOther;
+        goneOther.latchedShown = true;
+        goneOther.latchMine = false;
+        CHECK(is(txKeyCommands(goneOther, m2, c), {}));
 
-        // The same scenarios against a real transmitter, through the frame
-        // loop as it is wired now and as it was wired before.
-        const KeyOutcome fixed = runKeyScenarios([] { return FrameFn(fixedFrame); });
+        // The same scenarios against a REAL engine and transmitter, through a
+        // LOCAL session, pumped as the window pumps it.
+        const KeyOutcome fixed = runKeyScenarios([] { return fixedPage(); });
         printOutcome("frame loop now", fixed);
         CHECK(fixed.latchClosedPageReleases);
         CHECK(fixed.latchRolledUpPageReleases);
@@ -482,93 +612,77 @@ int main() {
         CHECK(fixed.frozenWindowStays);
         CHECK(fixed.pressesWork);
 
-        // THE CONTROL: the 0.99.34 wiring fails every one of the defect
-        // scenarios, which is what proves they can see the defect at all -
-        // and passes the ordinary one, so it is the same page being driven.
-        const KeyOutcome before = runKeyScenarios([] {
-            auto page = std::make_shared<PreFixPage>();
-            return FrameFn([page](Transmitter& tx, const PageFrame& f) { page->frame(tx, f); });
-        });
-        printOutcome("0.99.34 wiring", before);
+        // THE CONTROL: a page that sends its key as a level and only while it
+        // is drawn fails both page-going scenarios - which proves they can see
+        // a page that does not let go - and does the ordinary presses. The two
+        // it now PASSES are the engine's doing, not the page's: API 0.2's rules
+        // refuse the level page's LATCH 1 after a timeout or a frozen window
+        // (its operator is marked until it sends LATCH 0 itself), where in
+        // 0.99.34 the page re-latched the radio the frame after.
+        const KeyOutcome before = runKeyScenarios([] { return levelPage(); });
+        printOutcome("a level-triggered page", before);
         CHECK(!before.latchClosedPageReleases);
         CHECK(!before.pttClosedPageReleases);
-        CHECK(!before.latchFailsafeStays);
-        CHECK(!before.frozenWindowStays);
+        CHECK(before.latchFailsafeStays);
+        CHECK(before.frozenWindowStays);
         CHECK(before.pressesWork);
     }
 
     // =====================================================================
     // 8. ...AND THE APPLICATION IS WIRED THAT WAY
     //
-    //    The rule above is only true of the product if app_window.cpp applies
-    //    it once a frame, outside the page, between the page being drawn and
-    //    the transmitter being ticked - and says the page is live only once
-    //    beginPage has actually put its controls on screen (a rolled-up page
-    //    returns false there). Read from the source that ships, the device
-    //    tests/test_shutdown_budget.cpp uses for its teardown ordering.
-    //
-    //    Since engine stage 3a the key is applied by the ENGINE, in
-    //    Engine::pumpTransmitter (src/engine/engine.cpp), and the frame loop
-    //    calls that phase once, with the page's three flags, where it used
-    //    to apply the key itself - so the two halves are read from the two
-    //    files (the lines are the same lines, moved).
+    //    The rule above is only true of the product if app_window.cpp submits
+    //    the key once a frame, OUTSIDE the page, after the page has been drawn
+    //    - and says the page is live only once beginPage has actually put its
+    //    controls on screen (a rolled-up page returns false there) - and if
+    //    nothing but the engine API's pass writes the key to the transmitter.
+    //    Read from the source that ships.
     // =====================================================================
     {
         const std::filesystem::path src =
             std::filesystem::path(CASCADE_SOURCE_DIR) / "src" / "gui" / "app_window.cpp";
         const std::string text = readFile(src);
         CHECK(!text.empty());
-        const std::filesystem::path esrc =
-            std::filesystem::path(CASCADE_SOURCE_DIR) / "src" / "engine" / "engine.cpp";
-        const std::string etext = readFile(esrc);
-        CHECK(!etext.empty());
+        const std::string etext =
+            readFile(std::filesystem::path(CASCADE_SOURCE_DIR) / "src" / "engine" / "engine.cpp");
+        const std::string atext =
+            readFile(std::filesystem::path(CASCADE_SOURCE_DIR) / "src" / "engine" / "fox_engine_api.cpp");
+        CHECK(!etext.empty() && !atext.empty());
 
-        // SINCE engine/stage3b-pre (docs/engine-stage3.md OPEN 7) THE KEY HAS
-        // TWO HALVES. Key-DOWN is written in exactly one place - the control
-        // side's Engine::pumpTransmitter(), from txPageKey, before the tick -
-        // and key-UP may also be written by the front end's half,
-        // Engine::submitTransmitPageKey, which may only ever write `false`.
-        // The window writes the key nowhere.
-        const std::vector<std::size_t> latchSets = liveHits(etext, "transmitter_.setLatched(");
-        const std::vector<std::size_t> pttSets = liveHits(etext, "transmitter_.setPttHeld(");
-        const std::vector<std::size_t> downLatch = liveHits(etext, "transmitter_.setLatched(key.latched);");
-        const std::vector<std::size_t> downPtt = liveHits(etext, "transmitter_.setPttHeld(key.pttHeld);");
-        const std::vector<std::size_t> keyCalls = liveHits(etext, "cascade::gui::txPageKey(");
-        const std::vector<std::size_t> ticks = liveHits(etext, "transmitter_.tick();");
-        std::printf("wiring: setLatched x%zu (key-down x%zu), setPttHeld x%zu (key-down x%zu), "
-                    "txPageKey x%zu, tick x%zu\n",
-                    latchSets.size(), downLatch.size(), pttSets.size(), downPtt.size(), keyCalls.size(),
-                    ticks.size());
-        CHECK(downLatch.size() == 1u);
-        CHECK(downPtt.size() == 1u);
-        CHECK(keyCalls.size() == 1u);
-        CHECK(ticks.size() == 1u);
-        // Every OTHER write in the engine is a key-UP.
-        for (const std::size_t at : latchSets) {
-            const bool isDown = !downLatch.empty() && at == downLatch[0];
-            CHECK(isDown || etext.compare(at, std::strlen("transmitter_.setLatched(false)"),
-                                          "transmitter_.setLatched(false)") == 0);
+        // THE KEY IS WRITTEN IN ONE PLACE: the API host's pass (txPass), from
+        // the rules, before the one tick. The window writes nothing to the
+        // transmitter; the engine writes only key-UPs (the control thread's
+        // stop).
+        const std::vector<std::size_t> apiLatch = liveHits(atext, "tx.setLatched(rules_.latched());");
+        const std::vector<std::size_t> apiPtt = liveHits(atext, "tx.setPttHeld(");
+        const std::vector<std::size_t> apiTick = liveHits(atext, "tx.tick();");
+        std::printf("wiring: the pass writes the latch x%zu and the PTT x%zu, ticks x%zu\n", apiLatch.size(),
+                    apiPtt.size(), apiTick.size());
+        CHECK(apiLatch.size() == 1u);
+        CHECK(apiPtt.size() == 1u);
+        CHECK(apiTick.size() == 1u);
+        CHECK(!apiLatch.empty() && !apiTick.empty() && apiLatch[0] < apiTick[0]);
+        CHECK(!apiPtt.empty() && !apiTick.empty() && apiPtt[0] < apiTick[0]);
+        for (const std::size_t at : liveHits(etext, "transmitter_.setLatched(")) {
+            CHECK(etext.compare(at, std::strlen("transmitter_.setLatched(false)"), "transmitter_.setLatched(false)") == 0);
         }
-        for (const std::size_t at : pttSets) {
-            const bool isDown = !downPtt.empty() && at == downPtt[0];
-            CHECK(isDown || etext.compare(at, std::strlen("transmitter_.setPttHeld(false)"),
-                                          "transmitter_.setPttHeld(false)") == 0);
+        for (const std::size_t at : liveHits(etext, "transmitter_.setPttHeld(")) {
+            CHECK(etext.compare(at, std::strlen("transmitter_.setPttHeld(false)"), "transmitter_.setPttHeld(false)") ==
+                  0);
         }
+        CHECK(liveHits(etext, "transmitter_.tick();").empty());
         CHECK(liveHits(text, "transmitter_.setLatched(").empty());
         CHECK(liveHits(text, "transmitter_.setPttHeld(").empty());
-        CHECK(liveHits(text, "txPageKey(").empty());
+        CHECK(liveHits(text, "transmitter_.keyRemote(").empty());
         CHECK(liveHits(text, "transmitter_.tick();").empty());
-        // ...inside the control side's Engine::pumpTransmitter(), which the
-        // frame loop calls once, right after handing over the page's request.
-        const std::size_t phase = etext.find("void Engine::pumpTransmitter() {");
-        const std::size_t phaseEnd = phase == std::string::npos ? std::string::npos : etext.find("\n}", phase);
-        const std::vector<std::size_t> submitCalls = liveHits(text, "engine_.submitTransmitPageKey(keyRequest);");
-        const std::vector<std::size_t> pumpCalls = liveHits(text, "engine_.pumpTransmitter();");
-        CHECK(submitCalls.size() == 1u);
-        CHECK(pumpCalls.size() == 1u);
-        CHECK(!liveHits(text, "keyRequest.pageLive = transmitPageLive_;").empty());
-        CHECK(!liveHits(text, "keyRequest.pttHeld = transmitPttHeld_;").empty());
 
+        // THE WINDOW'S HALF: pumpTransmitKey, once, in drawUi after the pages
+        // are drawn (inside drawPluginWindows), never in the page body; and
+        // it is the only caller of txKeyCommands.
+        const std::vector<std::size_t> pumpCalls = liveHits(text, "    pumpTransmitKey();");
+        const std::vector<std::size_t> ruleCalls = liveHits(text, "cascade::gui::txKeyCommands(");
+        CHECK(pumpCalls.size() == 1u);
+        CHECK(ruleCalls.size() == 1u);
         const std::size_t drawUi = text.find("void AppWindow::drawUi()");
         const std::size_t drawUiEnd = drawUi == std::string::npos ? std::string::npos : text.find("\n}", drawUi);
         const std::size_t pluginWindows = liveHits(text, "    drawPluginWindows();").empty()
@@ -576,43 +690,26 @@ int main() {
                                               : liveHits(text, "    drawPluginWindows();")[0];
         const std::size_t pageBody = text.find("void AppWindow::drawTransmitPage()");
         const std::size_t pageEnd =
-            pageBody == std::string::npos ? std::string::npos
-                                          : text.find("\nvoid AppWindow::", pageBody + 1);
-        const bool anchors = downLatch.size() == 1u && downPtt.size() == 1u && keyCalls.size() == 1u &&
-                             ticks.size() == 1u && pumpCalls.size() == 1u && submitCalls.size() == 1u &&
-                             phase != std::string::npos && phaseEnd != std::string::npos &&
-                             drawUi != std::string::npos && drawUiEnd != std::string::npos &&
-                             pluginWindows != std::string::npos &&
-                             pageBody != std::string::npos && pageEnd != std::string::npos;
+            pageBody == std::string::npos ? std::string::npos : text.find("\nvoid AppWindow::", pageBody + 1);
+        const std::size_t heartbeat = text.find("if (uiSession_ != nullptr) { engineApi_->heartbeat(uiSession_); }");
+        const bool anchors = pumpCalls.size() == 1u && drawUi != std::string::npos && drawUiEnd != std::string::npos &&
+                             pluginWindows != std::string::npos && pageBody != std::string::npos &&
+                             pageEnd != std::string::npos && heartbeat != std::string::npos;
         CHECK(anchors);
         if (anchors) {
-            // ...in the frame loop, after the page has been drawn (it is drawn
-            // inside drawPluginWindows): the request handed over, then the
-            // control side's pump - and, inside the pump, the rule before both
-            // key-down writes and both before the tick that acts on them.
             CHECK(drawUi < pluginWindows);
-            CHECK(pluginWindows < submitCalls[0]);
-            CHECK(submitCalls[0] < pumpCalls[0]);
+            CHECK(pluginWindows < pumpCalls[0]);
             CHECK(pumpCalls[0] < drawUiEnd);
-            CHECK(phase < keyCalls[0] && ticks[0] < phaseEnd);
-            CHECK(keyCalls[0] < downLatch[0]);
-            CHECK(keyCalls[0] < downPtt[0]);
-            CHECK(downLatch[0] < ticks[0]);
-            CHECK(downPtt[0] < ticks[0]);
-            // NOT in the page body, which is the one place that stops running
-            // exactly when the key most needs releasing.
+            // The heartbeat is the frame's first act, inside drawUi.
+            CHECK(drawUi < heartbeat && heartbeat < pluginWindows);
             CHECK(!(pumpCalls[0] > pageBody && pumpCalls[0] < pageEnd));
-            CHECK(!(submitCalls[0] > pageBody && submitCalls[0] < pageEnd));
-
-            // The page is live only AFTER beginPage has said it is drawing -
-            // the live flag set before that would count a rolled-up page.
+            // The page is live only AFTER beginPage has said it is drawing.
             const std::string page = text.substr(pageBody, pageEnd - pageBody);
             const std::size_t begin = page.find("if (!beginPage(\"Transmit###transmitwindow\"");
             const std::size_t live = page.find("transmitPageLive_ = true;");
             CHECK(begin != std::string::npos);
             CHECK(live != std::string::npos);
             CHECK(begin != std::string::npos && live != std::string::npos && begin < live);
-            // And the flag starts every frame false, beside the PTT's own reset.
             CHECK(!liveHits(text, "transmitPageLive_ = false;").empty());
         }
     }

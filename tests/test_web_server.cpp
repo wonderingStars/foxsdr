@@ -2190,9 +2190,11 @@ void testThePageKeyIsHeldAndReleases() {
           std::string::npos);
     CHECK(js.find("window.addEventListener('blur', pttRelease)") != std::string::npos);
     CHECK(js.find("document.addEventListener('visibilitychange'") != std::string::npos);
-    // The disabled state says WHY, and the page lets go by itself when the
-    // transmitter goes away underneath a held key.
-    CHECK(js.find("'no transmitter'") != std::string::npos);
+    // The disabled state says WHY - since engine stage 4 either reason: no
+    // transmitter, or the desk has not allowed remote transmit - and the page
+    // lets go by itself when either goes away underneath a held key.
+    CHECK(js.find("'not available - no transmitter open, or remote transmit not allowed at the desk'") !=
+          std::string::npos);
     CHECK(js.find("if (!avail && pttDown) pttRelease();") != std::string::npos);
     // And the listeners are actually attached at load.
     CHECK(js.find("\npttSetup();") != std::string::npos);

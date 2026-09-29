@@ -64,6 +64,7 @@
 #include "source/device_source.hpp"
 #include "source/soundcard_source.hpp"
 #include "test_check.hpp"
+#include "tx_front_end.hpp"
 
 namespace {
 
@@ -565,6 +566,14 @@ struct AppWindowTestAccess {
     static bool patchRunning(AppWindow& a) { return a.engine_.patchRunning_; }
     static void setTransmitOpen(AppWindow& a, bool on) { a.engine_.transmitOpen_ = on; }
     static bool transmitOpen(AppWindow& a) { return a.engine_.transmitOpen_; }
+    static cascade::engine::Engine& engine(AppWindow& a) { return a.engine_; }
+    // The engine's pass as far as the key needs it - the queue applied, the
+    // state published - without the audio half, which reads the window's
+    // ImGui clock (no ImGui context in this test).
+    static void pass(AppWindow& a) {
+        a.engine_.pumpFrameBegin();
+        (void)a.engine_.pumpPublish();
+    }
     static bool haveTx(AppWindow& a) { return a.engine_.transmitter_.haveSink(); }
     static std::int64_t remoteHoldMs(AppWindow& a) { return a.engine_.transmitter_.remoteHoldRemainingMs(); }
     static int txMode(AppWindow& a) { return a.engine_.transmitModeIndex_; }
@@ -1995,18 +2004,26 @@ void transmitterOps(AppWindow& a) {
     CHECK(!A::txMonitor(a));
 
     covering(FOXAPI_OP_TX_PTT);
+    // The desk's consent to the web remote's key (API 0.2): a LOCAL session
+    // doing what the Transmit page's "Allow remote transmit" does.
+    tx_test::FrontEnd desk(A::engine(a), "the desk");
+    auto consent = [&](int on) {
+        desk.frame(true, false, false, true, on);
+        A::pass(a);
+    };
     {
-        // The REMOTE key: refused while the page is shut, a bounded hold
-        // while it is open, released by PTT 0.
-        A::setTransmitOpen(a, false);
-        CHECK(refused(A::apply(a, ints(FOXAPI_OP_TX_PTT, 1)), FOXAPI_NO_DEVICE));
-        CHECK(A::remoteHoldMs(a) == 0);
+        // The REMOTE key: refused without the desk's consent - whether or
+        // not the page is open - a bounded hold with it, released by PTT 0.
+        consent(0);
         A::setTransmitOpen(a, true);
+        CHECK(refused(A::apply(a, ints(FOXAPI_OP_TX_PTT, 1)), FOXAPI_DENIED));
+        CHECK(A::remoteHoldMs(a) == 0);
+        consent(1);
+        A::setTransmitOpen(a, false);  // the page flag gates no key any more
         CHECK(ok(A::apply(a, ints(FOXAPI_OP_TX_PTT, 1))));
         CHECK(A::remoteHoldMs(a) > 0);
         CHECK(ok(A::apply(a, ints(FOXAPI_OP_TX_PTT, 0))));
         CHECK(A::remoteHoldMs(a) == 0);
-        A::setTransmitOpen(a, false);
     }
 
     // FOXAPP_OP_WEB_CONTROL_STOPPED (OPEN 7 (c)): no server, no remote key -
@@ -2023,13 +2040,12 @@ void transmitterOps(AppWindow& a) {
 
     covering(FOXAPP_OP_WEB_CONTROL_STOPPED);
     {
-        A::setTransmitOpen(a, true);
         CHECK(ok(A::apply(a, ints(FOXAPI_OP_TX_PTT, 1))));
         CHECK(A::remoteHoldMs(a) > 0);
         CHECK(ok(A::apply(a, cmd::make(FOXAPP_OP_WEB_CONTROL_STOPPED))));
         CHECK(A::remoteHoldMs(a) == 0);
+        CHECK(A::engine(a).api().txFacts().owner == 0u);  // the rules let go, not only the radio
         CHECK(ok(A::apply(a, cmd::make(FOXAPP_OP_WEB_CONTROL_STOPPED))));
-        A::setTransmitOpen(a, false);
     }
 
     covering(FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN);
@@ -2038,18 +2054,17 @@ void transmitterOps(AppWindow& a) {
         // used to.
         CHECK(ok(A::apply(a, ints(FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN, 1))));
         CHECK(A::transmitOpen(a));
-        // THE SAFETY PROPERTY (docs/engine-stage3.md OPEN 10): closing the
-        // page while a remote key is held releases it IN THE SAME COMMAND -
-        // no second frame, no applyWebControls poll needed.
-        CHECK(ok(A::apply(a, ints(FOXAPI_OP_TX_PTT, 1))));
-        CHECK(A::remoteHoldMs(a) > 0);
         CHECK(ok(A::apply(a, ints(FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN, 0))));
         CHECK(!A::transmitOpen(a));
-        CHECK(A::remoteHoldMs(a) == 0);
         // Closing again (already closed) is a harmless no-op, not a refusal.
         CHECK(ok(A::apply(a, ints(FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN, 0))));
         CHECK(!A::transmitOpen(a));
+        // Since stage 4 the flag gates NO key: the window withdraws its
+        // consent when the page closes (gui::txKeyCommands), and that is
+        // what releases a remote key held (test_remote_key_release D).
     }
+    consent(0);
+    desk.close();
 
     covering(FOXAPI_OP_TX_CLOSE);
     CHECK(ok(A::apply(a, cmd::make(FOXAPI_OP_TX_CLOSE))));

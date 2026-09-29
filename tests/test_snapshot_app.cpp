@@ -47,6 +47,7 @@
 #include "net/web_control.hpp"
 #include "source/device_source.hpp"
 #include "test_check.hpp"
+#include "tx_front_end.hpp"
 
 namespace {
 
@@ -226,6 +227,13 @@ struct AppWindowTestAccess {
     static void webRequest(AppWindow& a, const cascade::net::ControlRequest& r) { a.engine_.applyControlRequest(r); }
     static cascade::core::ReceiverSnapshot& snapshot(AppWindow& a) { return *a.engine_.receiverSnapshot_; }
     static void publish(AppWindow& a) { a.engine_.publishReceiverState(); }
+    static cascade::engine::Engine& engine(AppWindow& a) { return a.engine_; }
+    // The engine's pass as far as the key needs it (the queue applied, the
+    // state published), without the audio half, which reads ImGui's clock.
+    static void pass(AppWindow& a) {
+        a.engine_.pumpFrameBegin();
+        (void)a.engine_.pumpPublish();
+    }
     static std::size_t loadedDecoders(AppWindow& a) { return a.engine_.loadedDecoderCount(); }
     static std::size_t fedDecoders(AppWindow& a) { return a.engine_.fedDecoderCount(); }
     static std::size_t runnerActive(AppWindow& a) { return a.engine_.pluginRunner_.activeCount(); }
@@ -407,10 +415,21 @@ void walkingOneWindow(AppWindow& a) {
     CHECK(ok(A::apply(a, textCmd(FOXAPI_OP_TX_OPEN, args))));
     CHECK(A::haveTx(a));
     step(a, f, "a transmitter opens", FOXAPI_RX_TX_AVAILABLE);
+    // The page's open flag is no consent since stage 4 (API 0.2): opening
+    // it moves no flag; the desk's "Allow remote transmit" (TX_REMOTE_ARM 1
+    // on a LOCAL session) is what shows as REMOTE_ARMED.
     A::setTransmitPageOpen(a, true);
-    step(a, f, "the Transmit page opens (consent)", FOXAPI_RX_TX_REMOTE_ARMED);
+    step(a, f, "the Transmit page opens (no consent)", 0u);
+    {
+        tx_test::FrontEnd desk(A::engine(a), "the desk");
+        desk.frame(true, false, false, true, 1);
+        A::pass(a);
+        step(a, f, "remote transmit allowed (consent)", FOXAPI_RX_TX_REMOTE_ARMED);
+        desk.frame(false, false, false);  // the page goes away: consent withdrawn
+        A::pass(a);
+        step(a, f, "the Transmit page closes", FOXAPI_RX_TX_REMOTE_ARMED);
+    }
     A::setTransmitPageOpen(a, false);
-    step(a, f, "the Transmit page closes", FOXAPI_RX_TX_REMOTE_ARMED);
     CHECK(ok(A::apply(a, cmd::make(FOXAPI_OP_TX_CLOSE))));
     step(a, f, "the transmitter closes", FOXAPI_RX_TX_AVAILABLE);
 }

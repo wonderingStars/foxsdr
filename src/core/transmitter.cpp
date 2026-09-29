@@ -316,6 +316,10 @@ std::string Transmitter::lastAutoUnkeyReason() const {
 
 void Transmitter::frontEndAlive() { frontEndAliveMs_.store(nowMs(), std::memory_order_relaxed); }
 
+void Transmitter::frontEndAliveAt(std::int64_t steadyMs) {
+    frontEndAliveMs_.store(steadyMs, std::memory_order_relaxed);
+}
+
 void Transmitter::tick() {
     // THE LIVENESS STAMP, and it is the first thing this function does. Every
     // other decision below can be skipped without a radio being left keyed;

@@ -224,6 +224,10 @@ const char* const kHostHooks[] = {
 // and the few non-const Engine methods that change no receiver state.
 const char* const kControlMayCall[] = {
     "applyCommand", "submitCommand", "AppWindow", "~AppWindow",
+    // The engine's API handle (engine stage 4): the window opens its LOCAL
+    // session on it (openUiSession), and what it changes through that
+    // session goes by the table's submit - the command path itself.
+    "apiHandle",
     // Usage telemetry: the window reports which panel was opened (a counter
     // in the report, not receiver state).
     "telemetryNotePanel",
@@ -397,9 +401,8 @@ const LineAllow kLineAllowed[] = {
     {"drawUi", "publishWebSpectrum(pumpPublish());"},
     // where the receiver is decides the mute, before anything draws
     {"drawUi", "pumpAudioMute();"},
-    // the transmit key rebuilt every frame, then the tick - the dead-man's handle (OPEN 1)
-    {"drawUi", "submitTransmitPageKey(keyRequest);"},
-    {"drawUi", "pumpTransmitter();"},
+    // the page's key submitted on the window's session, for the engine's next pass (stage 4)
+    {"drawUi", "pumpTransmitKey();"},
     // the device, sound card, recovery, retune and plugin workers collected
     {"drawUi", "pumpWorkers();"},
     // the audio and microphone gates, the sink health, the heartbeat

@@ -1,45 +1,34 @@
-// test_transmit_key_race.cpp - a key-up from the front end can never be undone
-// by the control side, with the pump on a thread of its own (the stage 3b
-// shape; docs/engine-stage3.md OPEN 7 (b), and the 3b-pre-end review's HIGH
-// finding).
+// test_transmit_key_race.cpp - a key-up can never be undone, and a press
+// made before a page went away never keys the radio after it - with the key
+// on the engine API (engine stage 4, API 0.2's THE KEY).
 //
-// THE RACE. Engine::pumpTransmitter (the control side) reads the Transmit
-// page's newest request out of the latest-value slot, then writes the key it
-// computed from it - setLatched, setPttHeld. Engine::submitTransmitPageKey
-// (the front end) applies a KEY-UP at once, with its own stores. If the front
-// end's key-up lands between the control side's read and its write, the write
-// puts back what the older request said: the PTT held again, or the latch
-// closed again (restarting its one-minute failsafe too) - and the TX thread
-// keeps transmitting until the next pump, or for kKeyAliveWait if the control
-// thread stalls right after that write.
+// Until stage 4 the Transmit page handed the engine a per-frame request
+// through a latest-value slot, and the hazards this file pinned were the
+// slot's: a key-up landing between the control side's read and its write
+// (A-C), a frozen window's old request re-keying the radio (D), a press
+// after the TX thread's own key-down being lost (E), and a press, a close and
+// a reopen inside one pump latching the radio on the reopen (F; the Opus
+// review of 47e991e). Since stage 4 there is no slot: the page SUBMITS its key
+// on the window's own LOCAL session (gui::txKeyCommands), in queue order, and
+// the engine's key rules decide. The same hazards, held again end to end -
+// a real Engine, its API host, the real core::Transmitter and its TX thread,
+// and a radio that is only a ledger:
 //
-// THE INTERLEAVING IS FORCED, not hoped for: the engine calls a test hook at
-// exactly that point (Engine::txKeyInterleaveForTest_) - with the key-down
-// read and computed, not yet written - and each round's key-down is one the
-// control side has not acted on yet, as in 3b, where the front end presses
-// and lets go between two pumps. The hook lets the
-// front-end thread submit its key-up and waits for it to finish - or, when the
-// key-up cannot get in while the control side is between read and write (which
-// is the fix), for a bounded 200 ms, after which the control side carries on
-// and the key-up lands after it.
-//   A  PTT held; the page, still live, lets go of the PTT in the window - after
-//      the pump and the key-up, the PTT is not held and the radio goes quiet.
-//      Every one of kRounds rounds.
-//   B  LATCHED; the page closes in the window - the latch is open and the radio
-//      goes quiet. Every round.
-//   C  THE HAMMER: the control side pumps on its own thread without pause (a
-//      yield at the interleave point, as a descheduled thread would take),
-//      while the front end keys down and up kHammer times; after every key-up
-//      the key must stay up across the control side's next two pumps.
-//   D  THE STALE REQUEST: the front end stops with the PTT held (a frozen
-//      window) while the control side pumps on. The TX thread releases the
-//      key at kKeyAliveWait; after that the control side must not key the
-//      radio again from the same old request, pump after pump.
-//   E  A PRESS AFTER A KEY-UP THE TX THREAD PLAYED DOWN BY ITSELF: key-up
-//      needs no pump, so the TX thread can end before the control side's next
-//      tick - and a LATCH press that reaches that tick must be kept, not wiped
-//      as if the thread had faulted. (One press; a window does not send it
-//      again.)
+//   A  PTT pressed and let go within one frame (both in the batches the next
+//      pass applies, in order): never keyed, every round.
+//   B  LATCH pressed, then the page closes, before a pass: never keyed.
+//   C  THE HAMMER: the control thread free-running while the front end keys
+//      down and up kHammer times; after every PTT 0 the key is up by the
+//      control side's second pass after it, and stays up.
+//   D  THE FROZEN WINDOW: the front end stops (no heartbeat, no PTT) with the
+//      PTT held: released at the keep-alive (1 s, from its last heartbeat),
+//      and never keyed again while the control thread runs on.
+//   E  A PRESS AFTER THE TX THREAD PLAYED THE KEY DOWN ITSELF: latched,
+//      released, the tail played; a new press (past the 1 s re-arm) latches
+//      and keys, every round.
+//   F  A PRESS, A CLOSE AND A REOPEN BEFORE THE CONTROL SIDE RUNS: nothing
+//      latched on the reopen and the radio never starts - a page close ends
+//      any pending press.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <atomic>
@@ -60,8 +49,10 @@
 
 #include "core/transmitter.hpp"
 #include "engine/engine.hpp"
-#include "engine/tx_page_key.hpp"
+#include "engine/fox_engine_api.hpp"
+#include "gui/transmit_page.hpp"
 #include "test_check.hpp"
+#include "tx_front_end.hpp"
 
 using cascade::core::Transmitter;
 using cascade::core::TxInput;
@@ -135,29 +126,6 @@ private:
     std::atomic<bool> running_{false};
 };
 
-// The hook's state: the control side, at the interleave point, lets the front
-// end go and waits (bounded) for it to be done.
-struct Gate {
-    std::atomic<bool> go{false};
-    std::atomic<bool> done{false};
-    std::atomic<int> waitedOut{0};
-};
-
-void gateHook(void* arg) {
-    Gate* g = static_cast<Gate*>(arg);
-    g->go.store(true);
-    const auto t0 = std::chrono::steady_clock::now();
-    while (!g->done.load()) {
-        if (std::chrono::steady_clock::now() - t0 > std::chrono::milliseconds(200)) {
-            ++g->waitedOut;   // the key-up could not get in: it lands after the write
-            return;
-        }
-        std::this_thread::sleep_for(std::chrono::microseconds(200));
-    }
-}
-
-void yieldHook(void*) { std::this_thread::yield(); }
-
 bool waitQuiet(const RecordingSink* s, int ms) {
     const auto t0 = std::chrono::steady_clock::now();
     while (s->running() && std::chrono::steady_clock::now() - t0 < std::chrono::milliseconds(ms)) {
@@ -177,17 +145,15 @@ struct AppWindowTestAccess {
         e.transmitter_.setInput(TxInput::Tone);
         return raw;
     }
-    static bool pttHeld(Engine& e) { return e.transmitter_.pttHeld(); }
     static bool latched(Engine& e) { return e.transmitter_.latched(); }
     static bool transmitting(Engine& e) { return e.transmitter_.transmitting(); }
-    static void hook(Engine& e, void (*fn)(void*), void* arg) {
-        e.txKeyInterleaveForTest_ = fn;
-        e.txKeyInterleaveArgForTest_ = arg;
-    }
+    static std::uint64_t passes(Engine& e) { return e.controlPasses_.load(); }
 };
 }  // namespace cascade::gui
 
 using Access = cascade::gui::AppWindowTestAccess;
+
+using tx_test::FrontEnd;
 
 int main() {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
@@ -195,255 +161,192 @@ int main() {
     isolate();
     constexpr int kRounds = 8;
 
-    // A and B: the forced interleaving, kRounds rounds each.
+    // A and B: a key-down and its key-up inside one pass, the engine pumped
+    // by hand (stage 3a's shape: nothing between the frames but the pass).
     for (int latch = 0; latch < 2; ++latch) {
         Engine e;
         e.initialise();
         RecordingSink* raw = Access::installSink(e);
-        cascade::gui::TxPageRequest r;
-        std::uint64_t seq = 0;
-        int undone = 0, keyedAfter = 0, waitedOut = 0;
-        std::atomic<int> hookMissed{0};
+        FrontEnd fe(e);
+        int keyed = 0;
         for (int round = 0; round < kRounds; ++round) {
-            // Key down, from the front end: into the slot, for the control
-            // side's next pump to act on...
-            r.pageLive = true;
-            r.pttHeld = latch == 0;
-            if (latch != 0) { ++r.latchPressCount; }
-            r.frameSeq = ++seq;
-            e.submitTransmitPageKey(r);
-
-            // ...and the key-up the front end makes WHILE that pump is between
-            // reading the key-down and writing it.
-            cascade::gui::TxPageRequest up = r;
+            fe.frame(true, false, false);
+            e.pump();
             if (latch == 0) {
-                up.pttHeld = false;    // A: PTT let go, page still live
+                fe.frame(true, true, false);   // PTT down...
+                fe.frame(true, false, false);  // ...and up, before the pass
             } else {
-                up.pageLive = false;   // B: the page closes with the LATCH on
+                fe.frame(true, false, true);   // LATCH pressed...
+                fe.frame(false, false, false); // ...and the page closes, before the pass
             }
-            up.frameSeq = ++seq;
-
-            Gate gate;
-            Access::hook(e, &gateHook, &gate);
-            std::thread frontEnd([&] {
-                const auto t0 = std::chrono::steady_clock::now();
-                while (!gate.go.load() && std::chrono::steady_clock::now() - t0 < std::chrono::seconds(2)) {
-                    std::this_thread::yield();
-                }
-                if (!gate.go.load()) { ++hookMissed; }
-                e.submitTransmitPageKey(up);
-                gate.done.store(true);
-            });
-            std::thread control([&] { e.pumpTransmitter(); });
-            control.join();
-            frontEnd.join();
-            Access::hook(e, nullptr, nullptr);
-            waitedOut += gate.waitedOut.load();
-
-            const bool stillAsked = latch == 0 ? Access::pttHeld(e) : Access::latched(e);
-            if (stillAsked) { ++undone; }
-            if (!waitQuiet(raw, 150)) { ++keyedAfter; }
-            e.pumpTransmitter();   // the control side catches up, as it would
-            CHECK(waitQuiet(raw, 150));
-            r = up;
-            r.pageLive = true;
+            e.pump();
+            if (!waitQuiet(raw, 50) || Access::transmitting(e) || Access::latched(e)) { ++keyed; }
+            e.pump();
+            std::this_thread::sleep_for(std::chrono::milliseconds(latch == 0 ? 5 : 1100));  // B: past the re-arm
         }
-        std::printf("%s: %d rounds, key-up undone in %d, radio still keyed 150 ms after the key-up in %d "
-                    "(key-up held off until the write in %d)\n",
-                    latch == 0 ? "A (PTT let go)" : "B (page closed, latched)", kRounds, undone, keyedAfter,
-                    waitedOut);
-        CHECK(hookMissed.load() == 0);   // every round really was interleaved
-        CHECK(undone == 0);
-        CHECK(keyedAfter == 0);
+        std::printf("%s: %d rounds, keyed after the pass in %d, radio started %d times\n",
+                    latch == 0 ? "A (PTT down and up in one frame)" : "B (LATCH pressed, page closed)", kRounds,
+                    keyed, raw->starts.load());
+        CHECK(keyed == 0);
+        CHECK(raw->starts.load() == 0);
     }
 
-    // C: the hammer.
+    // C: the hammer - the control thread free-running.
     {
         Engine e;
         e.initialise();
         RecordingSink* raw = Access::installSink(e);
-        Access::hook(e, &yieldHook, nullptr);
-        std::atomic<bool> stop{false};
-        std::atomic<std::uint64_t> pumps{0};
-        std::thread control([&] {
-            while (!stop.load()) {
-                e.pumpTransmitter();
-                ++pumps;
-            }
-        });
-        constexpr int kHammer = 3000;
-        cascade::gui::TxPageRequest r;
-        r.pageLive = true;
-        std::uint64_t seq = 0;
+        cascade::engine::ControlThreadOptions opts;
+        opts.period = std::chrono::milliseconds(1);
+        opts.watchdogThresholdMs = 5000;
+        e.startControlThread(opts);
+        FrontEnd fe(e);
+        constexpr int kHammer = 1000;
         int undone = 0;
         for (int i = 0; i < kHammer; ++i) {
-            r.pttHeld = true;
-            r.frameSeq = ++seq;
-            e.submitTransmitPageKey(r);
-            // Let the control side apply it (or not - either way the key-up
-            // below must stick).
-            const std::uint64_t p0 = pumps.load();
-            while (pumps.load() < p0 + 1) { std::this_thread::yield(); }
-            r.pttHeld = false;
-            r.frameSeq = ++seq;
-            e.submitTransmitPageKey(r);
-            const std::uint64_t p1 = pumps.load();
-            bool seen = false;
-            while (pumps.load() < p1 + 2) {
-                if (Access::pttHeld(e)) { seen = true; }
-                std::this_thread::yield();
-            }
-            if (seen || Access::pttHeld(e)) { ++undone; }
+            fe.frame(true, true, false);
+            const std::uint64_t p0 = Access::passes(e);
+            while (Access::passes(e) < p0 + 1) { std::this_thread::yield(); }
+            fe.frame(true, false, false);
+            const std::uint64_t p1 = Access::passes(e);
+            while (Access::passes(e) < p1 + 2) { std::this_thread::yield(); }
+            // Up by the second pass after the PTT 0, and it stays up.
+            if (Access::transmitting(e)) { ++undone; }
         }
-        stop.store(true);
-        control.join();
-        Access::hook(e, nullptr, nullptr);
-        e.pumpTransmitter();
-        std::printf("C: %d key-down/key-up cycles against a free-running control thread: key-up undone "
-                    "%d times\n",
+        e.stopControlThread();
+        std::printf("C: %d key-down/key-up cycles against a free-running control thread: still keyed two passes "
+                    "after the key-up %d times\n",
                     kHammer, undone);
         CHECK(undone == 0);
         CHECK(waitQuiet(raw, 150));
     }
 
-    // D: the stale request.
+    // D: the frozen window.
     {
         Engine e;
         e.initialise();
         RecordingSink* raw = Access::installSink(e);
-        e.pumpTransmitter(/*pageLive=*/true, /*latchPressed=*/false, /*pttHeld=*/true);
-        CHECK(raw->running());
-        const auto t0 = std::chrono::steady_clock::now();
-        while (raw->running() && std::chrono::steady_clock::now() - t0 < std::chrono::milliseconds(3000)) {
-            e.pumpTransmitter();
-            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        cascade::engine::ControlThreadOptions opts;
+        opts.period = std::chrono::milliseconds(5);
+        opts.watchdogThresholdMs = 5000;
+        e.startControlThread(opts);
+        FrontEnd fe(e);
+        // A key request is judged against the PUBLISHED state: until a pass
+        // has published the transmitter open, a PTT is refused NO_DEVICE.
+        {
+            const std::uint64_t p0 = Access::passes(e);
+            while (Access::passes(e) < p0 + 2) { std::this_thread::yield(); }
         }
-        CHECK(!raw->running());
+        fe.frame(true, true, false);
+        CHECK([&] {
+            const auto t0 = std::chrono::steady_clock::now();
+            while (!raw->running() && std::chrono::steady_clock::now() - t0 < std::chrono::milliseconds(500)) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            return raw->running();
+        }());
+        // The clock starts at the LAST HEARTBEAT, the event the keep-alive
+        // counts from; the frame that made it is the front end's last.
+        const auto lastBeat = std::chrono::steady_clock::now();
+        fe.frame(true, true, false);
+        const bool released = [&] {
+            const auto t0 = std::chrono::steady_clock::now();
+            while (raw->running() && std::chrono::steady_clock::now() - t0 < std::chrono::milliseconds(3000)) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            return !raw->running();
+        }();
+        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - lastBeat).count();
         const int startsAtRelease = raw->starts.load();
-        for (int i = 0; i < 60; ++i) {   // 300 ms more of the control side, alone
-            e.pumpTransmitter();
-            std::this_thread::sleep_for(std::chrono::milliseconds(5));
-        }
-        std::printf("D: front end frozen with the PTT held: released; radio started %d more times in the "
-                    "next 60 pumps\n",
-                    raw->starts.load() - startsAtRelease);
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));   // the control side runs on, alone
+        std::printf("D: front end frozen with the PTT held: released %.0f ms after its last heartbeat; radio started "
+                    "%d more times in the next 300 ms\n",
+                    ms, raw->starts.load() - startsAtRelease);
+        CHECK(released);
+        // The keep-alive is 1000 ms, judged once a pass (5 ms here) and by the
+        // TX thread once a 10 ms block; 150 ms covers both and a scheduler
+        // tick of Windows' 15.6 ms several times over.
+        CHECK(ms >= 1000.0 && ms <= 1150.0);
         CHECK(raw->starts.load() == startsAtRelease);
-        CHECK(!Access::transmitting(e));
-        // A new frame from the front end with the PTT still held keys it again:
-        // the window is back, and the hand on the PTT is a real one.
-        e.pumpTransmitter(/*pageLive=*/true, /*latchPressed=*/false, /*pttHeld=*/true);
-        std::printf("   the front end back, PTT held: transmitting=%d\n", Access::transmitting(e) ? 1 : 0);
-        CHECK(Access::transmitting(e));
-        e.pumpTransmitter(/*pageLive=*/false, /*latchPressed=*/false, /*pttHeld=*/false);
-        CHECK(waitQuiet(raw, 150));
+        e.stopControlThread();
     }
 
-    // E: a press landing on the tick that tidies up a released key.
+    // E: a press after a key-up the TX thread played down itself.
     {
         Engine e;
         e.initialise();
         RecordingSink* raw = Access::installSink(e);
+        FrontEnd fe(e);
+        // One pass first: a key request is judged against the PUBLISHED
+        // state, and until a pass has published it no transmitter is open.
+        fe.frame(true, false, false);
+        e.pump();
         int kept = 0;
-        constexpr int kRoundsE = 5;
-        cascade::gui::TxPageRequest r;
-        r.pageLive = true;
-        std::uint64_t seq = 0;
+        constexpr int kRoundsE = 3;
         for (int round = 0; round < kRoundsE; ++round) {
-            ++r.latchPressCount;   // LATCH on
-            r.frameSeq = ++seq;
-            e.submitTransmitPageKey(r);
-            e.pumpTransmitter();
+            fe.frame(true, false, true);  // LATCH on
+            e.pump();
+            fe.frame(true, false, false);
+            e.pump();
             CHECK(Access::latched(e) && raw->running());
-            // The page closes - key-up on the front end, no pump - and the TX
-            // thread plays the key down and ends on its own.
-            cascade::gui::TxPageRequest up = r;
-            up.pageLive = false;
-            up.frameSeq = ++seq;
-            e.submitTransmitPageKey(up);
-            CHECK(waitQuiet(raw, 150));
-            // The page opens again and LATCH is pressed once, before the
-            // control side has ticked since.
-            ++r.latchPressCount;
-            r.frameSeq = ++seq;
-            e.submitTransmitPageKey(r);
-            e.pumpTransmitter();
-            e.pumpTransmitter();
+            fe.frame(true, false, true);  // shown latched: this press releases
+            e.pump();
+            CHECK(waitQuiet(raw, 150));   // the TX thread plays the key down and ends
+            std::this_thread::sleep_for(std::chrono::milliseconds(FOXAPI_LATCH_REARM_MS + 50));
+            fe.frame(true, false, false);
+            e.pump();
+            fe.frame(true, false, true);  // pressed again: latches
+            e.pump();
+            fe.frame(true, false, false);
+            e.pump();
             if (Access::latched(e) && Access::transmitting(e) && raw->running()) { ++kept; }
-            // ...and off again, for the next round.
-            ++r.latchPressCount;
-            r.frameSeq = ++seq;
-            e.submitTransmitPageKey(r);
-            e.pumpTransmitter();
+            fe.frame(true, false, true);  // ...and off again, for the next round
+            e.pump();
             CHECK(waitQuiet(raw, 150));
-            e.pumpTransmitter();
+            std::this_thread::sleep_for(std::chrono::milliseconds(FOXAPI_LATCH_REARM_MS + 50));
+            fe.frame(true, false, false);
+            e.pump();
         }
-        std::printf("E: a LATCH press on the tick after a key-up the TX thread played down itself: kept and keyed "
-                    "in %d of %d rounds\n",
+        std::printf("E: a LATCH press after a key-up the TX thread played down itself: kept and keyed in %d of %d "
+                    "rounds\n",
                     kept, kRoundsE);
         CHECK(kept == kRoundsE);
     }
 
-    // F: A PRESS, A CLOSE AND A REOPEN BETWEEN TWO READS OF THE SLOT (the Opus
-    // review of 47e991e: engine.cpp's slot kept only the newest request, so
-    // a LATCH press, then the page closing, then the page opening again - all
-    // inside one pump, or while the control thread stalled - reached the
-    // control side as "page live, one press since" and latched the radio on
-    // the reopen with no press made on the reopened page). A page close ends
-    // every press made before it: after the pump nothing is latched and the
-    // radio never starts. Three shapes: close and reopen once, twice, and a
-    // close whose reopen carries a second, older-looking press count.
+    // F: a press, a close and a reopen before the control side runs.
     {
         Engine e;
         e.initialise();
         RecordingSink* raw = Access::installSink(e);
-        cascade::gui::TxPageRequest r;
-        r.pageLive = true;
-        std::uint64_t seq = 0;
-        r.frameSeq = ++seq;
-        e.submitTransmitPageKey(r);
-        e.pumpTransmitter();   // the control side has seen the page, unlatched
+        FrontEnd fe(e);
+        fe.frame(true, false, false);
+        e.pump();
         int latchedOnReopen = 0;
-        int started = 0;
         constexpr int kRoundsF = 3;
         for (int round = 0; round < kRoundsF; ++round) {
-            const int starts0 = raw->starts.load();
-            ++r.latchPressCount;   // LATCH pressed on the open page...
-            r.frameSeq = ++seq;
-            e.submitTransmitPageKey(r);
+            fe.frame(true, false, true);  // LATCH pressed on the open page...
             for (int closes = 0; closes <= round % 2; ++closes) {
-                cascade::gui::TxPageRequest closed = r;   // ...the page closes...
-                closed.pageLive = false;
-                closed.frameSeq = ++seq;
-                e.submitTransmitPageKey(closed);
-                r.frameSeq = ++seq;                        // ...and opens again,
-                e.submitTransmitPageKey(r);               // no press since
+                fe.frame(false, false, false);  // ...the page closes...
+                fe.frame(true, false, false);   // ...and opens again, no press since
             }
-            e.pumpTransmitter();   // the control side reads the slot only now
-            e.pumpTransmitter();
+            e.pump();  // the control side runs only now
+            e.pump();
             if (Access::latched(e)) { ++latchedOnReopen; }
-            std::this_thread::sleep_for(std::chrono::milliseconds(30));
-            if (raw->starts.load() != starts0) { ++started; }
-            // Leave nothing behind for the next round.
-            e.pumpTransmitter(/*pageLive=*/false, false, false);
-            ++seq;   // the helper numbered a frame of its own
-            CHECK(waitQuiet(raw, 150));
-            r.pageLive = true;
-            r.frameSeq = ++seq;
-            e.submitTransmitPageKey(r);
-            e.pumpTransmitter();
+            std::this_thread::sleep_for(std::chrono::milliseconds(FOXAPI_LATCH_REARM_MS + 50));
         }
-        std::printf("F: LATCH press, page closed and reopened before the control side read the slot: latched "
-                    "on the reopen in %d of %d rounds, radio started in %d\n",
-                    latchedOnReopen, kRoundsF, started);
+        std::printf("F: LATCH press, page closed and reopened before the control side ran: latched on the reopen "
+                    "in %d of %d rounds, radio started %d times\n",
+                    latchedOnReopen, kRoundsF, raw->starts.load());
         CHECK(latchedOnReopen == 0);
-        CHECK(started == 0);
+        CHECK(raw->starts.load() == 0);
         // And a press made on the REOPENED page is still a press: it latches.
-        ++r.latchPressCount;
-        r.frameSeq = ++seq;
-        e.submitTransmitPageKey(r);
-        e.pumpTransmitter();
+        fe.frame(true, false, true);
+        e.pump();
+        fe.frame(true, false, false);
+        e.pump();
         CHECK(Access::latched(e) && raw->running());
-        e.pumpTransmitter(/*pageLive=*/false, false, false);
+        fe.frame(false, false, false);
+        e.pump();
         CHECK(waitQuiet(raw, 150));
     }
 

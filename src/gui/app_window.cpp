@@ -690,6 +690,10 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
     // device list - Engine::initialise, in the order this constructor always
     // did them. The window's own start-up follows it.
     engine_.initialise();
+    // THE WINDOW'S ENGINE API SESSION (stage 4): a LOCAL session with every
+    // grant, on this process's own engine - the one the Transmit page keys
+    // through.
+    openUiSession();
     // The store's URL box starts at the engine's default (a config restore
     // below overwrites both).
     cascade::core::formatUtf8(pluginUrlBuf_, sizeof(pluginUrlBuf_), "%s", engine_.pluginCatalogueUrl_.c_str());
@@ -698,6 +702,9 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
     // the snapshot the GUI thread publishes each frame — see the note in
     // app_window.hpp for why they must not touch the pipeline directly.
     webServer_.setStatusProvider([this]() { return webStatusNow(); });
+    // The browser page's own poll is the web remote's keep-alive (API 0.2:
+    // only an interface's heartbeat counts) - never its PTT re-assertions.
+    webServer_.setStatusPollHook([this]() { engine_.api().webRemoteBeat(); });
     // The CAT server reads the SAME published snapshot - and the plugin host
     // API reads it too - so a frequency read over CAT, one read in the
     // browser and one a plugin reads come from the same publishes. They can
@@ -799,6 +806,10 @@ AppWindow::~AppWindow() {
     // Same reasoning for the CAT server: its provider captures `this` and
     // reads receiverSnapshot_ through it.
     catServer_.stop();
+    // The window's session: closing it releases any key it holds, at the
+    // start of the engine's next pass (the engine's teardown stops the
+    // transmitter in any case).
+    closeUiSession();
 
     // A catalogue fetch or a plugin download may still be in flight: the
     // engine cancels its own (Engine::stopTransfers says why), first, as
@@ -2736,7 +2747,11 @@ void AppWindow::drawUi() {
     // a thread other than this one gets is at most a frame old (OPEN 4).
     (void)frameClockRunning();
     (void)frameTimeS();
-    engine_.pumpFrameBegin();  // Engine: the snapshot retry, then this drain
+    // THE WINDOW'S HEARTBEAT, first thing in the frame: what keeps any key
+    // its session holds (a frame loop that stops, stops it - the engine's
+    // keep-alive and the TX thread's own dead-man both release the key).
+    if (uiSession_ != nullptr) { engineApi_->heartbeat(uiSession_); }
+    engine_.pumpFrameBegin();  // Engine: the snapshot retry, this drain, the API's queue
     // THE KEYBOARD, FIRST. ImGui has just finished NewFrame, so WantTextInput
     // and the popup stack are this frame's answers rather than last frame's,
     // and nothing has been submitted yet - so a key that starts the receiver,
@@ -2761,12 +2776,14 @@ void AppWindow::drawUi() {
     // drawTransmitPage runs; a page that is not drawn at all sets nothing, so
     // closing the window, switching banks or losing focus releases the key
     // rather than leaving it where it was. That is the shape the hard rule in
-    // core/transmitter.hpp needs from this end of it. The LATCH press and the
-    // page's own "my controls are on screen" flag are rebuilt the same way
-    // (a LATCH press is COUNTED instead - transmitLatchPresses_), and all
-    // three reach the engine together, as one request, just before its tick.
+    // core/transmitter.hpp needs from this end of it. The LATCH press, the
+    // remote-transmit switch and the page's own "my controls are on screen"
+    // flag are rebuilt the same way, and pumpTransmitKey turns all of them
+    // into ONE batch on the window's engine API session (gui::txKeyCommands).
     transmitPttHeld_ = false;
     transmitPageLive_ = false;
+    transmitLatchPressed_ = false;
+    transmitArmRequest_ = -1;
     // A fault ends the takes on the first frame that sees it, before any stop
     // or start a browser or plugin queued can run below (see the header).
     // Before anything is drawn: the decoders' output is bounded in the runner
@@ -2813,6 +2830,9 @@ void AppWindow::drawUi() {
     // them over (engine/stage3b-pre, docs/engine-stage3.md OPEN 3): one copy
     // a frame, never the engine's own fields.
     statusLines_ = engine_.statusText();
+    // THE STATE, ONCE A FRAME, through the session (the key's flags are
+    // per-session: TX_KEY_MINE, TX_LATCH_RELEASE_FIRST).
+    refreshUiState();
     publishWebAudio();
     publishWebImages();
     pumpWebTiles();
@@ -2847,31 +2867,14 @@ void AppWindow::drawUi() {
     // sixteen milliseconds of monitor audio, which is shorter than the
     // transmitter's own envelope ramp.
     //
-    // THE PAGE'S KEY IS APPLIED HERE, EVERY FRAME, and not inside the page
-    // (0.99.35). A page that is closed or rolled up is not drawn, so a write
-    // from its body simply stopped: a LATCH left the radio keyed for up to a
-    // minute with no control on screen, and a PTT held at that moment stayed
-    // held. Here a page that was not live asks for nothing, which releases
-    // both. And the latch is read from the TRANSMITTER, not remembered by the
-    // page - it clears the latch itself on its failsafe, a fault and the
-    // frozen-window handle, and the page writing its own copy back re-keyed
-    // the radio on the very next frame (gui/transmit_page.hpp, txPageKey).
-    //
-    // TWO CALLS, ONE PER SIDE (engine/stage3b-pre, docs/engine-stage3.md
-    // OPEN 7): the FRONT END's - this window's liveness stamp, any key-up at
-    // once, and the request left in the engine's latest-value slot - and the
-    // CONTROL side's pump, which applies key-down and ticks. In stage 3a both
-    // run here, in this order; in 3b the second moves to the control thread
-    // and the first stays, so a frozen window still opens a local key.
-    {
-        cascade::gui::TxPageRequest keyRequest;
-        keyRequest.pageLive = transmitPageLive_;
-        keyRequest.pttHeld = transmitPttHeld_;
-        keyRequest.latchPressCount = transmitLatchPresses_;
-        keyRequest.frameSeq = ++transmitKeyFrame_;
-        engine_.submitTransmitPageKey(keyRequest);
-    }
-    engine_.pumpTransmitter();
+    // THE PAGE'S KEY IS SUBMITTED HERE, EVERY FRAME, and not inside the page
+    // (0.99.35): a page that is closed or rolled up is not drawn, so a write
+    // from its body simply stopped. Here a page that stopped being live lets
+    // go of its PTT, its latch and its consent in the same batch. Since
+    // stage 4 it is a SUBMIT on the window's own engine API session
+    // (pumpTransmitKey), applied by the engine's next pass under API 0.2's
+    // rules - a control lands one pass later (engine-stage4.md decision 2).
+    pumpTransmitKey();
 
     // One borderless window pinned to the viewport: the app IS the layout, so
     // nothing is movable or collapsible at this level.
@@ -15175,6 +15178,73 @@ void AppWindow::drawTransmitSection() {
     }
 }
 
+// --- THE WINDOW'S ENGINE API SESSION (engine stage 4) --------------------------
+
+void AppWindow::openUiSession() {
+    engineApi_ = cascade::engine::engineApi(FOXAPI_VERSION_MAJOR, FOXAPI_VERSION_MINOR);
+    FoxSessionParams p{};
+    p.structSize = sizeof(p);
+    p.flags = FOXAPI_SESSION_LOCAL;
+    p.grants = FOXAPI_GRANT_VIEW | FOXAPI_GRANT_TUNE | FOXAPI_GRANT_SETTINGS | FOXAPI_GRANT_TRANSMIT |
+               FOXAPI_GRANT_ADMIN | FOXAPI_GRANT_AUDIO | FOXAPI_GRANT_IQ;
+    p.clientName = "FoxSDR standard interface";
+    p.clientVersion = cascade::versionString();
+    if (engineApi_ == nullptr || engineApi_->open_session(engine_.apiHandle(), &p, &uiSession_) != FOXAPI_OK) {
+        uiSession_ = nullptr;
+        cascade::core::diagWarnf("ui: no engine API session - the transmit key is unavailable");
+    }
+    uiState_.structSize = sizeof(uiState_);
+}
+
+void AppWindow::closeUiSession() {
+    if (uiSession_ != nullptr) {
+        engineApi_->close_session(uiSession_);
+        uiSession_ = nullptr;
+    }
+}
+
+void AppWindow::refreshUiState() {
+    if (uiSession_ == nullptr) { return; }
+    FoxReceiverState st{};
+    st.structSize = sizeof(st);
+    // A read that keeps overlapping a publish answers BUSY: the last good one stands.
+    if (engineApi_->read_state(uiSession_, &st) == FOXAPI_OK) { uiState_ = st; }
+}
+
+// THE KEY, ONCE A FRAME (see the members in app_window.hpp): this frame's
+// presses as commands on the window's session, in ONE submit, and the
+// answers drained. No allocation: a fixed batch, a fixed result buffer.
+void AppWindow::pumpTransmitKey() {
+    if (uiSession_ == nullptr) { return; }
+    cascade::gui::TxKeyFrame f;
+    f.pageLive = transmitPageLive_;
+    f.pttHeld = transmitPttHeld_;
+    f.latchPressed = transmitLatchPressed_;
+    f.armRequest = transmitArmRequest_;
+    f.latchedShown = (uiState_.flags & FOXAPI_RX_TX_LATCHED) != 0u;
+    f.latchMine = f.latchedShown && (uiState_.flags & FOXAPI_RX_TX_KEY_MINE) != 0u;
+    if (!f.pageLive && transmitKey_.pageWasLive) { transmitKeyNote_.clear(); }
+    FoxCommand batch[cascade::gui::kTxKeyMaxCommands];
+    const std::uint32_t n = cascade::gui::txKeyCommands(f, transmitKey_, batch);
+    if (n > 0) { (void)engineApi_->submit(uiSession_, batch, n, nullptr); }
+    // Every answer, every frame (a session that stops reading is answered
+    // BUSY): a refused LATCH 1 or remote-arm is lettered on the page.
+    FoxCommandResult r[16];
+    for (;;) {
+        for (auto& x : r) { x.structSize = sizeof(x); }
+        const int32_t got = engineApi_->poll_results(uiSession_, r, 16);
+        for (int32_t i = 0; i < got; ++i) {
+            const bool keyOp = r[i].op == FOXAPI_OP_TX_LATCH || r[i].op == FOXAPI_OP_TX_REMOTE_ARM;
+            if (keyOp && r[i].status != FOXAPI_OK && r[i].status != FOXAPI_NO_CHANGE) {
+                transmitKeyNote_ = r[i].message;
+            } else if (keyOp && r[i].status == FOXAPI_OK && r[i].op == FOXAPI_OP_TX_LATCH) {
+                transmitKeyNote_.clear();
+            }
+        }
+        if (got < 16) { break; }
+    }
+}
+
 void AppWindow::drawTransmitPage() {
     if (!engine_.transmitOpen_) { return; }
     constexpr float kTxW = 560.0f;
@@ -15191,10 +15261,12 @@ void AppWindow::drawTransmitPage() {
     // own custom chrome's close press), and the engine field may not be
     // written in place any more. The guard above already reads true, so the
     // mirror starts true; if beginPage clears it (the operator closed the
-    // page), the command below applies the close AND releases a remote key
-    // in the same step - exactly what the direct write plus next frame's
-    // applyWebControls poll used to do, one frame sooner. Checked on BOTH
-    // exits (rolled-up and drawn) because beginPage can clear it either way.
+    // page), the command below applies the close. The key is not its
+    // business since stage 4: from the first frame the page is not live, the
+    // frame loop's pumpTransmitKey lets go of this window's PTT, latch and consent
+    // to remote transmit, which releases a remote key in the engine's next
+    // pass. Checked on BOTH exits (rolled-up and drawn) because beginPage
+    // can clear it either way.
     bool txPageOpen = true;
     if (!beginPage("Transmit###transmitwindow", tr("TRANSMIT"), &txPageOpen, 0, kTxW, kTxH)) {
         if (!txPageOpen) {
@@ -15245,9 +15317,9 @@ void AppWindow::drawTransmitPage() {
     }
     ImGui::SameLine();
     // THE TRANSMITTER'S SETTINGS ARE COMMANDS (TX_OPEN ... TX_SET_MONITOR),
-    // applied at the top of the next frame. THE KEY IS NOT: the PTT and the
-    // LATCH stay on the per-frame rebuild in drawUi (txPageKey), which is the
-    // dead-man's handle - see docs/engine-stage1.md, OPEN.
+    // applied at the top of the next frame. So, since stage 4, is THE KEY -
+    // on the window's own engine API session, from the per-frame rebuild in
+    // drawUi (pumpTransmitKey, gui::txKeyCommands), under the engine's rules.
     namespace cmd = cascade::core::cmd;
     // AN EMPTY BOX OPENS NOTHING (round 3 fix): TX_OPEN refuses empty text,
     // and the key is greyed with the reason beside it, rather than opening
@@ -15502,11 +15574,13 @@ void AppWindow::drawTransmitPage() {
         // THE LATCH: the one control here that keeps a radio keyed with
         // nobody touching anything.
         ImGui::BeginDisabled(!have);
-        // THE TRANSMITTER OWNS THE LATCH, and it clears it itself on a fault,
-        // on its own failsafe and on the frozen-window handle - so the key is
-        // drawn from what the transmitter says, and a click is only a PRESS,
-        // applied by the frame loop beside the PTT (see drawUi, txPageKey).
-        const bool latchedNow = engine_.transmitter_.latched();
+        // THE ENGINE OWNS THE LATCH (its key rules end it on a timeout, a
+        // stop, a fault, a lost keep-alive or another window's release) - so
+        // the key is drawn from the state the window's session reads, and a
+        // click is only a PRESS, submitted by the frame loop by the latch
+        // protocol (pumpTransmitKey): released-then-pressed on a key shown
+        // released, released on a key shown latched.
+        const bool latchedNow = (uiState_.flags & FOXAPI_RX_TX_LATCHED) != 0u;
         if (latchedNow) {
             ImGui::PushStyleColor(ImGuiCol_Button,
                                   cascade::gui::theme::vec(cascade::gui::theme::kAlarm));
@@ -15515,7 +15589,7 @@ void AppWindow::drawTransmitPage() {
                                       cascade::gui::theme::kIvory, cascade::gui::theme::kAlarm)));
         }
         if (ImGui::Button(trId("LATCH##txlatch"), ImVec2(100.0f, 56.0f))) {
-            ++transmitLatchPresses_;
+            transmitLatchPressed_ = true;
         }
         if (latchedNow) { ImGui::PopStyleColor(2); }
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
@@ -15533,6 +15607,22 @@ void AppWindow::drawTransmitPage() {
         // the page at its default width and read "Listen while trans" - a
         // control that has clipped its own label looks like a design decision
         // rather than a fault.
+        // ALLOW REMOTE TRANSMIT (engine stage 4, API 0.2): the web remote's
+        // PTT - and any remote session's - keys only while an operator at
+        // this machine has consented here. Off whenever the page opens; the
+        // consent goes when the page closes or this window stops answering.
+        bool remoteArmed = (uiState_.flags & FOXAPI_RX_TX_REMOTE_ARMED) != 0u;
+        ImGui::BeginDisabled(!have);
+        if (ImGui::Checkbox(trId("Allow remote transmit"), &remoteArmed)) {
+            transmitArmRequest_ = remoteArmed ? 1 : 0;
+        }
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+            ImGui::SetTooltip("%s", tr("Lets the web remote's PTT key this transmitter while you are here.\n"
+                                       "It never latches, holds the key two seconds per press, and stops\n"
+                                       "the moment you untick this, close this page or the window stops."));
+        }
+
         bool monitor = engine_.transmitMonitor_;
         if (ImGui::Checkbox(trId("Listen while transmitting"), &monitor)) {
             engine_.submitCommand(cmd::makeInt(FOXAPI_OP_TX_SET_MONITOR, monitor ? 1 : 0));
@@ -15546,7 +15636,14 @@ void AppWindow::drawTransmitPage() {
     }
 
     // --- what happened -------------------------------------------------------
-    const std::string autoReason = engine_.transmitter_.lastAutoUnkeyReason();
+    // Why the key last opened on its own - the engine's key rules' sentence,
+    // as this window's session read it - and why a key press was refused.
+    const std::string autoReason = uiState_.txUnkeyReason;
+    if (!transmitKeyNote_.empty()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kAmber));
+        ImGui::TextWrapped("%s", transmitKeyNote_.c_str());
+        ImGui::PopStyleColor();
+    }
     if (!autoReason.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kAmber));
         ImGui::TextWrapped("%s", autoReason.c_str());
@@ -17926,8 +18023,9 @@ void AppWindow::applyWebControls() {
     // docs/engine-stage3.md OPEN 7 (c)) - the window no longer reaches into
     // transmitter_ for either:
     //
-    // THE PAGE is Engine::pumpTransmitter's own check (and closing it through
-    // FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN releases in the same step).
+    // THE CONSENT is the local operator's TX_REMOTE_ARM (the Transmit page's
+    // "Allow remote transmit"), which the window withdraws when the page goes
+    // away, and which lapses with its session (engine stage 4).
     // THE SERVER is this window's until stage 5, so it says when it is not
     // running - where it stops it (applyWebSettings) and here, once a frame,
     // for a server that never started or was disabled in the settings panel.

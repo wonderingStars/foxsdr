@@ -17,10 +17,11 @@
 #define CASCADE_GUI_TRANSMIT_PAGE_HPP
 
 #include <cstddef>
+#include <cstdint>
 
 #include "core/i18n.hpp"  // FOX_TR_NOOP: txLampText is drawn through tr()
 #include "engine/tx_frequency.hpp"
-#include "engine/tx_page_key.hpp"
+#include "foxsdr_api.h"
 
 namespace cascade::gui {
 
@@ -117,8 +118,95 @@ inline const char* txLampText(TxLamp l) {
 
 // --- the key -----------------------------------------------------------------
 //
-// TxPageKey and txPageKey are in engine/tx_page_key.hpp (included above): the
-// engine applies the key once a frame (Engine::pumpTransmitter).
+// THE PAGE'S KEY, AS COMMANDS ON THE WINDOW'S ENGINE API SESSION (engine
+// stage 4; API 0.2's THE KEY, docs/engine-stage4.md decision 1). The frame
+// loop (AppWindow::pumpTransmitKey) calls this once a frame, after the page
+// has been drawn - never the page itself, because a page that is closed or
+// rolled up is not drawn and so could not then let go of anything (0.99.35).
+// It submits what this returns as ONE batch; the engine applies it on its
+// next pass, under its rules, and the page draws the key from the state its
+// session reads.
+
+// What the page did this frame, and what the state it drew from showed.
+struct TxKeyFrame {
+    bool pageLive = false;      // drawn with its controls on screen (open, not rolled up)
+    bool pttHeld = false;       // the PTT key or the spacebar is down
+    bool latchPressed = false;  // the LATCH key was clicked
+    int armRequest = -1;        // "Allow remote transmit" clicked: -1 no, 0 off, 1 on
+    bool latchedShown = false;  // FOXAPI_RX_TX_LATCHED in the state drawn
+    bool latchMine = false;     // ...and FOXAPI_RX_TX_KEY_MINE with it
+};
+
+// What the frame loop remembers between frames.
+struct TxKeyMemory {
+    bool pttSent = false;      // a PTT 1 went out on the last frame
+    bool armedByUs = false;    // this window's consent to remote transmit stands
+    bool pageWasLive = false;  // the page was live on the last frame
+    // A LATCH 1 went out and the state has not yet shown this window's latch
+    // (it lands one pass later): a page that goes away first must still end
+    // it - A PAGE CLOSE ENDS ANY PENDING PRESS (the Opus review of 47e991e,
+    // carried over to the latch protocol).
+    bool latchPending = false;
+};
+
+inline constexpr std::uint32_t kTxKeyMaxCommands = 6;
+
+// Fills `out` (room for kTxKeyMaxCommands) and returns how many:
+//   - the PTT is a HOLD the interface re-asserts: TX_PTT 1 every frame it is
+//     held, TX_PTT 0 once, on the frame it is let go;
+//   - the LATCH key is EDGE-triggered: a press on a key shown released sends
+//     TX_LATCH 0 then TX_LATCH 1, a press on a key shown latched TX_LATCH 0 -
+//     so a deliberate press latches whatever ended the last latch, and the
+//     key is never sent level (two windows sending levels fight);
+//   - the remote-transmit switch sends TX_REMOTE_ARM of what was clicked;
+//   - a page that stops being live lets go of what this window holds: its
+//     PTT, the latch if it is this window's - or a press of its own that has
+//     not landed yet - and its consent.
+inline std::uint32_t txKeyCommands(const TxKeyFrame& f, TxKeyMemory& m, FoxCommand* out) {
+    std::uint32_t n = 0;
+    auto add = [&](std::uint32_t op, long long v) {
+        FoxCommand c{};
+        c.structSize = sizeof(c);
+        c.op = op;
+        c.ival[0] = v;
+        out[n++] = c;
+    };
+    if (f.latchedShown && f.latchMine) { m.latchPending = false; }  // it landed
+    if (f.pageLive) {
+        if (f.pttHeld) {
+            add(FOXAPI_OP_TX_PTT, 1);
+            m.pttSent = true;
+        } else if (m.pttSent) {
+            add(FOXAPI_OP_TX_PTT, 0);
+            m.pttSent = false;
+        }
+        if (f.latchPressed) {
+            add(FOXAPI_OP_TX_LATCH, 0);
+            if (!f.latchedShown) {
+                add(FOXAPI_OP_TX_LATCH, 1);
+                m.latchPending = true;
+            } else {
+                m.latchPending = false;
+            }
+        }
+        if (f.armRequest >= 0) {
+            add(FOXAPI_OP_TX_REMOTE_ARM, f.armRequest);
+            m.armedByUs = f.armRequest == 1;
+        }
+    } else if (m.pageWasLive) {
+        if (m.pttSent) { add(FOXAPI_OP_TX_PTT, 0); }
+        // This window's latch, or its press not yet landed - unless the state
+        // shows ANOTHER window's latch, which this page's release would end.
+        const bool othersLatch = f.latchedShown && !f.latchMine;
+        if (f.latchMine || (m.latchPending && !othersLatch)) { add(FOXAPI_OP_TX_LATCH, 0); }
+        if (m.armedByUs) { add(FOXAPI_OP_TX_REMOTE_ARM, 0); }
+        m.pttSent = false;
+        m.armedByUs = false;
+        m.latchPending = false;
+    }
+    m.pageWasLive = f.pageLive;
+    return n;
+}
 
 // --- the audio meter ---------------------------------------------------------
 

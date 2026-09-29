@@ -43,8 +43,9 @@ RadioStatus composeRadioStatus(const cascade::core::PublishedState& state, const
     o.signalDb = static_cast<float>(r.signalDb);
     o.stereoActive = flag(FOXAPI_RX_STEREO_ACTIVE);
     o.transmitting = flag(FOXAPI_RX_TX_KEYED);
-    // The app's remote key needs a transmitter open AND the Transmit page on
-    // screen: that pair IS its consent to remote PTT (docs/engine-stage2.md).
+    // The remote key needs a transmitter open AND the local operator's
+    // consent - TX_REMOTE_ARM from a LOCAL session, the Transmit page's
+    // "Allow remote transmit" (engine stage 4, API 0.2).
     o.transmitAvailable = flag(FOXAPI_RX_TX_REMOTE_ARMED);
     o.transmitRemoteHoldMs = r.txHoldRemainingMs;
     o.squelchDb = static_cast<float>(r.squelchDb);

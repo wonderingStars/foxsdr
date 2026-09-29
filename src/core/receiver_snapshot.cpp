@@ -124,6 +124,7 @@ void ReceiverSnapshot::publish(const PublishedState& facts,
                        !sameText(f.sinkName, o.sinkName, FOXAPI_NAME_CHARS);
     const bool display = first || f.dbMin != o.dbMin || f.dbMax != o.dbMax;
     const bool tx = first || changed(f.flags, o.flags, kTxFlags) || f.txMode != o.txMode ||
+                    e.txKeyOwner != oe.txKeyOwner ||
                     f.txFrequencyHz != o.txFrequencyHz || f.txPowerDb != o.txPowerDb ||
                     !sameText(f.txUnkeyReason, o.txUnkeyReason, FOXAPI_MESSAGE_CHARS);
     // Every other flag (recording, scanner, decoder lamp, web listener, the

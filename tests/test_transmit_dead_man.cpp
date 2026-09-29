@@ -1,37 +1,41 @@
-// test_transmit_dead_man.cpp - the Transmit page's dead-man's handle, through
-// the Engine's own pumpTransmitter (engine extraction stage 3a/3b-pre,
-// docs/engine-stage3.md OPEN 7).
+// test_transmit_dead_man.cpp - the Transmit page's dead-man's handles, end to
+// end through a real Engine (engine stage 4, API 0.2's THE KEY; before it,
+// stage 3a/3b-pre's pumpTransmitter, docs/engine-stage3.md OPEN 7).
 //
-// tests/test_transmit_page.cpp proves WHERE the key's application lives (a
-// source-text scan: transmitter_.setLatched/setPttHeld/tick() are lines
-// inside Engine::pumpTransmitter and nowhere in app_window.cpp). It cannot
-// tell a correct pumpTransmitter from one that still contains those three
-// lines but runs them wrong - `if (pageLive) transmitter_.tick();` still
-// matches its "tick() is a line in pumpTransmitter" check, because the text
-// is still there. THIS test drives a real Engine with a fake sink behind its
-// transmitter_ and reads what actually happened to the sink, which is what
-// tells the two apart: with the mutant, closing the Transmit page (pageLive
-// false) stops calling tick() forever, so the key that was set to "released"
-// by txPageKey is never carried out, and the radio stays keyed until the TX
-// thread's own kKeyAliveWait timeout eventually notices tick() stopped -
-// which is not IMMEDIATE (docs/engine-stage3.md OPEN 7's own words: "a
-// frozen WINDOW no longer stops tick()", though here it is a page closing
-// while the window runs fine).
+// tests/test_tx_key_rules.cpp proves the rules on their own, against an
+// injected clock; tests/test_engine_api_transmit.cpp proves them through the
+// table against the reference's own safety suite. THIS file drives what the
+// window does - a LOCAL session, its heartbeat, gui::txKeyCommands - into a
+// real Engine with a fake sink behind its transmitter_, and reads what
+// actually happened to the SINK, which is what tells "the rules decided to
+// release" from "the radio stopped":
 //
-// THE RULE THIS FILE HOLDS: closing the Transmit page - which is what
-// pageLive=false MEANS, the page not drawn this frame - releases the key
-// within the SAME pump that reports it closed, whether the key was a LATCH
-// or a held PTT. See core/transmitter.hpp for why "not at once" is not good
-// enough: every dead-man's handle in this product is a bound on how long a
-// stopped hand can keep a radio on the air, and the ordinary path (the page
-// really did close, the window is running fine) has no excuse to wait for
-// the emergency bound.
+//   1  LATCHED, then the page closes: released by the pass that applies the
+//      close - with its tail (finish()), a clean end, not a cut.
+//   2  PTT held, then the page closes: released by that pass.
+//   3  THE WEB REMOTE'S HOLD: a remote PTT buys FOXAPI_PTT_HOLD_MS and
+//      no more, however often the browser polls.
+//   4  KEY-UP: a PTT 0 is quiet within a block or two of the pass that
+//      applies it; and a control side that STOPS passing (late, or stuck)
+//      cannot hold the radio on - the TX thread lets go at kKeyAliveWait
+//      from the last pass, although the front end beats on.
+//   5  THE LATCH IS EDGE-TRIGGERED: one press latches once however many
+//      passes see it; a press on a key shown latched releases; a press
+//      inside the 1 s re-arm after an end latches nothing.
+//   6  THE FRONT END STOPS, the control side passes on: released at the 1 s
+//      keep-alive, counted from the front end's last heartbeat.
+//   7  THE REMOTE KEY'S STANDING CONDITION is the local operator's consent:
+//      withdrawn, or its session closed, or its session silent past the
+//      keep-alive - each releases a remote key held.
+//   8  AND THE OTHER WAY: front end beating, control side passing - a latch
+//      stays keyed well past every 1 s bound (the heartbeat is what tells
+//      the TX thread the front end is alive; a latch is never re-asserted).
 //
-// Also covers, as a regression net through the SAME Engine-owned
-// transmitter_ rather than a standalone one (tests/test_transmitter.cpp
-// covers the mechanism itself in full): the remote PTT's own hold - keyRemote()
-// buys kRemotePttHoldMs and no more, unaffected by pumpTransmitter never being
-// told about a remote key at all.
+// Timing: every clock starts at the event the product measures from (the
+// pass that applies a command, the last heartbeat, the last pass), taken
+// BEFORE that event, so a lower bound holds exactly; the upper bounds allow
+// 150 ms - a pass here is by hand every 5 ms and the TX thread judges once a
+// 10 ms block, and 150 ms is several of Windows' 15.6 ms scheduler ticks.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <atomic>
@@ -39,6 +43,7 @@
 #include <complex>
 #include <cstdio>
 #include <cstdlib>
+#include <functional>
 #include <memory>
 #include <string>
 #include <thread>
@@ -50,14 +55,17 @@
 #include <unistd.h>
 #endif
 
+#include "core/app_commands.hpp"
 #include "core/transmitter.hpp"
-#include "engine/tx_page_key.hpp"
 #include "engine/engine.hpp"
+#include "engine/fox_engine_api.hpp"
 #include "test_check.hpp"
+#include "tx_front_end.hpp"
 
 using cascade::core::Transmitter;
 using cascade::core::TxInput;
 using cascade::engine::Engine;
+using tx_test::FrontEnd;
 
 namespace {
 
@@ -150,12 +158,8 @@ private:
 
 namespace cascade::gui {
 
-// The friend the Engine names for its tests (engine.hpp). Only used here to
-// reach transmitter_ directly - installing the fake sink, reading
-// transmitting(), and driving keyRemote()/tick() for the remote-hold check,
-// which pumpTransmitter never touches (a remote key is not a page control).
-// Every other assertion goes through Engine's PUBLIC pumpTransmitter, which
-// is the surface the mutant lives in.
+// The friend the Engine names for its tests (engine.hpp): only to install
+// the fake sink and read the transmitter's own state.
 struct AppWindowTestAccess {
     static RecordingSink* installSink(Engine& e) {
         auto sink = std::make_unique<RecordingSink>();
@@ -166,223 +170,316 @@ struct AppWindowTestAccess {
     }
     static bool transmitting(Engine& e) { return e.transmitter_.transmitting(); }
     static bool latched(Engine& e) { return e.transmitter_.latched(); }
-    static void keyRemote(Engine& e) { e.transmitter_.keyRemote(); }
-    static void tick(Engine& e) { e.transmitter_.tick(); }
     static bool remoteKeyed(Engine& e) { return e.transmitter_.remoteKeyed(); }
-    static void setTransmitOpen(Engine& e, bool on) { e.transmitOpen_ = on; }
 };
 
 }  // namespace cascade::gui
 
 using Access = cascade::gui::AppWindowTestAccess;
 
+namespace {
+
+using Clock = std::chrono::steady_clock;
+
+double msSince(Clock::time_point t0) {
+    return std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
+}
+
+// Runs `step` every 5 ms until the radio stops or `limitMs` passes.
+bool untilQuiet(const RecordingSink* raw, int limitMs, const std::function<void()>& step) {
+    const auto t0 = Clock::now();
+    while (raw->running() && Clock::now() - t0 < std::chrono::milliseconds(limitMs)) {
+        step();
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    return !raw->running();
+}
+
+bool waitQuiet(const RecordingSink* raw, int limitMs) {
+    return untilQuiet(raw, limitMs, [] {});
+}
+
+// An Engine with its fake radio, one pass run so a transmitter is PUBLISHED
+// open (a key request is judged against the published state).
+struct Rig {
+    Rig() {
+        e.initialise();
+        raw = Access::installSink(e);
+        fe.frame(true, false, false);
+        e.pump();
+    }
+    Engine e;
+    RecordingSink* raw = nullptr;
+    FrontEnd fe{e};
+};
+
+bool ok(const FoxCommandResult& r) { return r.status == FOXAPI_OK && (r.flags & FOXAPI_RESULT_REFUSED) == 0u; }
+
+// The browser page's PTT, as the web server's control request reaches the
+// engine (Engine::applyCommand's FOXAPI_OP_TX_PTT).
+// The page polls its status (the web remote's keep-alive) before and while
+// it presses.
+FoxCommandResult webPtt(Engine& e, bool on) {
+    e.api().webRemoteBeat();
+    return e.applyCommand(cascade::core::cmd::makeInt(FOXAPI_OP_TX_PTT, on ? 1 : 0));
+}
+
+}  // namespace
+
 int main() {
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
     std::printf("test_transmit_dead_man\n");
     isolate();
 
     // =========================================================================
-    // 1. LATCHED, THEN THE PAGE CLOSES -> released within ONE pump.
+    // 1. LATCHED, THEN THE PAGE CLOSES -> released by ONE pass.
     // =========================================================================
     {
-        Engine e;
-        e.initialise();
-        RecordingSink* raw = Access::installSink(e);
-
-        // Page live, LATCH pressed once: latches on and keys.
-        e.pumpTransmitter(/*pageLive=*/true, /*latchPressed=*/true, /*pttHeld=*/false);
-        CHECK(Access::latched(e));
-        CHECK(Access::transmitting(e));
-        CHECK(raw->running());
-        std::printf("[1a] latched and keyed: transmitting=%d running=%d\n",
-                    Access::transmitting(e), raw->running());
-
-        // The page closes - ONE pump reporting pageLive=false, nothing else.
-        e.pumpTransmitter(/*pageLive=*/false, /*latchPressed=*/false, /*pttHeld=*/false);
-        std::printf("[1b] one pump after the page closed: transmitting=%d running=%d "
-                    "latched=%d\n",
-                    Access::transmitting(e), raw->running(), Access::latched(e));
-        CHECK(!Access::latched(e));
-        CHECK(!Access::transmitting(e));
-        CHECK(!raw->running());
-        // STOPPED AT ONCE, not the emergency path: a page closing in the
-        // ordinary way is not a fault, so this is finish() (a clean end),
-        // never the raw stop() a fault or the frozen-window handle uses.
-        CHECK(raw->finishes.load() >= 1);
+        Rig r;
+        r.fe.frame(true, false, true);  // LATCH pressed
+        r.e.pump();
+        CHECK(Access::latched(r.e));
+        CHECK(r.raw->running());
+        r.fe.frame(true, false, false);  // the state now shows it latched, mine
+        r.e.pump();
+        r.fe.frame(false, false, false);  // the page closes
+        r.e.pump();                       // ONE pass
+        std::printf("[1] latched, page closed, one pass: latched=%d transmitting=%d\n", Access::latched(r.e),
+                    Access::transmitting(r.e));
+        CHECK(!Access::latched(r.e));
+        CHECK(!Access::transmitting(r.e));
+        CHECK(waitQuiet(r.raw, 150));
+        // A page closing in the ordinary way is not a fault: finish() (a
+        // clean end, the tail played), never the raw stop() of a fault.
+        CHECK(r.raw->finishes.load() >= 1);
     }
 
     // =========================================================================
-    // 2. PTT HELD, THEN THE PAGE CLOSES -> released within ONE pump.
+    // 2. PTT HELD, THEN THE PAGE CLOSES -> released by ONE pass.
     // =========================================================================
     {
-        Engine e;
-        e.initialise();
-        RecordingSink* raw = Access::installSink(e);
-
-        e.pumpTransmitter(/*pageLive=*/true, /*latchPressed=*/false, /*pttHeld=*/true);
-        CHECK(Access::transmitting(e));
-        CHECK(raw->running());
-        std::printf("[2a] PTT held and keyed: transmitting=%d running=%d\n",
-                    Access::transmitting(e), raw->running());
-
-        e.pumpTransmitter(/*pageLive=*/false, /*latchPressed=*/false, /*pttHeld=*/false);
-        std::printf("[2b] one pump after the page closed: transmitting=%d running=%d\n",
-                    Access::transmitting(e), raw->running());
-        CHECK(!Access::transmitting(e));
-        CHECK(!raw->running());
+        Rig r;
+        r.fe.frame(true, true, false);
+        r.e.pump();
+        CHECK(Access::transmitting(r.e));
+        CHECK(r.raw->running());
+        r.fe.frame(false, false, false);
+        r.e.pump();
+        std::printf("[2] PTT held, page closed, one pass: transmitting=%d\n", Access::transmitting(r.e));
+        CHECK(!Access::transmitting(r.e));
+        CHECK(waitQuiet(r.raw, 150));
     }
 
     // =========================================================================
-    // 3. THE REMOTE KEY'S OWN HOLD, through the Engine-owned transmitter_:
-    //    keyRemote() buys kRemotePttHoldMs and no more. pumpTransmitter is
-    //    never told about a remote key (its three parameters are pageLive,
-    //    latchPressed, pttHeld - none of them "remote"), so this checks the
-    //    hold survives being owned by an Engine rather than a standalone
-    //    Transmitter (the mechanism itself is tests/test_transmitter.cpp's).
+    // 3. THE WEB REMOTE'S HOLD: a remote PTT buys FOXAPI_PTT_HOLD_MS and
+    //    no more - the browser keeps polling (its keep-alive), the local
+    //    operator keeps consenting, nothing re-asserts the PTT.
     // =========================================================================
     {
-        Engine e;
-        e.initialise();
-        RecordingSink* raw = Access::installSink(e);
-
-        Access::keyRemote(e);
-        Access::tick(e);
-        CHECK(Access::transmitting(e));
-        CHECK(raw->running());
-
-        // Nothing refreshes it. Past the hold, a tick lets it go - well
-        // before the frozen-window bound this is not (kRemotePttHoldMs is
-        // 2000 ms here; kKeyAliveWait, the frozen-window bound, is 1000 ms -
-        // the remote hold is the LONGER of the two on purpose, see
-        // transmitter.hpp: a remote hand has a network's latency to answer
-        // through, a local one does not).
-        std::this_thread::sleep_for(Transmitter::kRemotePttHoldMs + std::chrono::milliseconds(300));
-        Access::tick(e);
-        std::printf("[3] remote hold elapsed: transmitting=%d running=%d\n",
-                    Access::transmitting(e), raw->running());
-        CHECK(!Access::transmitting(e));
-        CHECK(!raw->running());
+        Rig r;
+        r.fe.frame(true, false, false, true, 1);  // "Allow remote transmit"
+        r.e.pump();
+        const auto t0 = Clock::now();  // before the apply: the hold counts from it
+        CHECK(ok(webPtt(r.e, true)));
+        r.e.pump();
+        CHECK(Access::remoteKeyed(r.e));
+        CHECK(r.raw->running());
+        const bool released = untilQuiet(r.raw, 3000, [&] {
+            r.e.api().webRemoteBeat();
+            r.fe.frame(true, false, false);
+            r.e.pump();
+        });
+        const double ms = msSince(t0);
+        std::printf("[3] remote PTT, not re-asserted: released %.0f ms after the press\n", ms);
+        CHECK(released);
+        CHECK(ms >= static_cast<double>(FOXAPI_PTT_HOLD_MS));
+        CHECK(ms <= static_cast<double>(FOXAPI_PTT_HOLD_MS) + 150.0);
     }
 
     // =========================================================================
-    // 4. KEY-UP DOES NOT WAIT FOR THE CONTROL SIDE (OPEN 7 (b)). The front end
-    //    hands over a request with the PTT let go - or the page closed - and
-    //    NO pump follows (a control thread that is late, or stuck): the
-    //    radio must still go quiet within a block or two, played down by the
-    //    TX thread itself, because nothing is asserting the key any more.
+    // 4a. KEY-UP IS QUIET within a block or two of the pass that applies it,
+    //     with its tail.
     // =========================================================================
-    for (int closePage = 0; closePage < 2; ++closePage) {
-        Engine e;
-        e.initialise();
-        RecordingSink* raw = Access::installSink(e);
-        e.pumpTransmitter(/*pageLive=*/true, /*latchPressed=*/closePage != 0, /*pttHeld=*/closePage == 0);
-        CHECK(Access::transmitting(e));
-        CHECK(raw->running());
-        cascade::gui::TxPageRequest up;
-        up.pageLive = closePage == 0;   // the page closes, or stays with the PTT let go
-        up.pttHeld = false;
-        up.latchPressCount = closePage != 0 ? 1u : 0u;
-        up.frameSeq = 100;
-        const auto t0 = std::chrono::steady_clock::now();
-        e.submitTransmitPageKey(up);   // ...and no pumpTransmitter() at all
-        while (raw->running() &&
-               std::chrono::steady_clock::now() - t0 < std::chrono::milliseconds(1500)) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(2));
-        }
-        const double ms =
-            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
-        std::printf("[4%c] %s, no pump: radio quiet after %.0f ms (running=%d)\n",
-                    closePage != 0 ? 'b' : 'a',
-                    closePage != 0 ? "LATCHED, then the page closed" : "PTT let go", ms, raw->running());
-        CHECK(!raw->running());
-        CHECK(ms < 150.0);                   // a block or two, never the 1000 ms bound
-        CHECK(raw->finishes.load() >= 1);    // WITH its tail: a clean end, not a cut
-        e.pumpTransmitter();                 // the control side catches up
-        CHECK(!Access::transmitting(e));
+    {
+        Rig r;
+        r.fe.frame(true, true, false);
+        r.e.pump();
+        CHECK(r.raw->running());
+        const int finishes = r.raw->finishes.load();
+        r.fe.frame(true, false, false);  // PTT let go
+        const auto t0 = Clock::now();
+        r.e.pump();
+        const bool quiet = waitQuiet(r.raw, 1500);
+        const double ms = msSince(t0);
+        std::printf("[4a] PTT let go: radio quiet %.0f ms after the pass\n", ms);
+        CHECK(quiet);
+        CHECK(ms < 150.0);  // a block or two, never the 1000 ms bound
+        CHECK(r.raw->finishes.load() > finishes);
     }
 
     // =========================================================================
-    // 5. THE LATCH PRESS IS A COUNT: no press lost, none doubled, however the
-    //    front end's frames and the control side's pumps interleave.
+    // 4b. THE CONTROL SIDE STOPS PASSING, the front end beats on with the PTT
+    //     held: the TX thread lets go at kKeyAliveWait from the LAST PASS.
     // =========================================================================
     {
-        Engine e;
-        e.initialise();
-        (void)Access::installSink(e);
-        cascade::gui::TxPageRequest r;
-        r.pageLive = true;
-        // Two frames, a press in each, then ONE pump: on and off again - a
-        // flag per frame would have seen one press, or none.
-        r.latchPressCount = 1;
-        r.frameSeq = 1;
-        e.submitTransmitPageKey(r);
-        r.latchPressCount = 2;
-        r.frameSeq = 2;
-        e.submitTransmitPageKey(r);
-        e.pumpTransmitter();
-        std::printf("[5a] two presses, one pump: latched=%d\n", Access::latched(e));
-        CHECK(!Access::latched(e));
-        CHECK(!Access::transmitting(e));
-        // One frame with a press, then TWO pumps: on once, not on-and-off.
-        r.latchPressCount = 3;
-        r.frameSeq = 3;
-        e.submitTransmitPageKey(r);
-        e.pumpTransmitter();
-        e.pumpTransmitter();
-        std::printf("[5b] one press, two pumps: latched=%d\n", Access::latched(e));
-        CHECK(Access::latched(e));
-        CHECK(Access::transmitting(e));
-        r.pageLive = false;
-        r.frameSeq = 4;
-        e.submitTransmitPageKey(r);
-        e.pumpTransmitter();
-        CHECK(!Access::transmitting(e));
-    }
-
-    // =========================================================================
-    // 6. THE CONTROL SIDE PUMPS ON, THE FRONT END STOPS (OPEN 7 (a), through
-    //    the Engine): a held PTT opens within kKeyAliveWait of the front end's
-    //    last request, although pumpTransmitter() never stops being called.
-    // =========================================================================
-    {
-        Engine e;
-        e.initialise();
-        RecordingSink* raw = Access::installSink(e);
-        e.pumpTransmitter(/*pageLive=*/true, /*latchPressed=*/false, /*pttHeld=*/true);
-        CHECK(raw->running());
-        const auto t0 = std::chrono::steady_clock::now();
-        while (raw->running() &&
-               std::chrono::steady_clock::now() - t0 < std::chrono::milliseconds(3000)) {
-            e.pumpTransmitter();   // the control side, alone
-            std::this_thread::sleep_for(std::chrono::milliseconds(5));
-        }
-        const double ms =
-            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
-        std::printf("[6] front end silent, control pumping: released after %.0f ms\n", ms);
-        CHECK(!raw->running());
-        CHECK(ms >= static_cast<double>(Transmitter::kKeyAliveWait.count()) - 20.0);
+        Rig r;
+        r.fe.frame(true, true, false);
+        r.e.pump();
+        CHECK(r.raw->running());
+        r.fe.frame(true, true, false);
+        const auto lastPass = Clock::now();  // before it: the stamp is taken inside
+        r.e.pump();
+        const bool released = untilQuiet(r.raw, 3000, [&] { r.fe.frame(true, true, false); });
+        const double ms = msSince(lastPass);
+        std::printf("[4b] no pass since, front end beating: released %.0f ms after the last pass\n", ms);
+        CHECK(released);
+        // Stamps are whole milliseconds, so the bound's own rounding is 1 ms.
+        CHECK(ms >= static_cast<double>(Transmitter::kKeyAliveWait.count()) - 1.0);
         CHECK(ms <= static_cast<double>(Transmitter::kKeyAliveWait.count()) + 150.0);
     }
 
     // =========================================================================
-    // 7. THE REMOTE KEY'S STANDING CONDITION IS THE ENGINE'S (OPEN 7 (c)): with
-    //    the page not open, the control side's own pump releases a remote key
-    //    - no window poll involved.
+    // 5. THE LATCH IS EDGE-TRIGGERED.
     // =========================================================================
     {
-        Engine e;
-        e.initialise();
-        (void)Access::installSink(e);
-        Access::setTransmitOpen(e, true);
-        Access::keyRemote(e);
-        e.pumpTransmitter();
-        CHECK(Access::remoteKeyed(e));
-        CHECK(Access::transmitting(e));
-        Access::setTransmitOpen(e, false);   // e.g. a test's, or a future path's, direct write
-        e.pumpTransmitter();
-        std::printf("[7] page not open, one pump: remote keyed=%d\n", Access::remoteKeyed(e));
-        CHECK(!Access::remoteKeyed(e));
-        e.pumpTransmitter();
-        CHECK(!Access::transmitting(e));
+        Rig r;
+        // One press, then several passes: on once, not on-and-off.
+        r.fe.frame(true, false, true);
+        r.e.pump();
+        r.e.pump();
+        r.e.pump();
+        std::printf("[5a] one press, three passes: latched=%d\n", Access::latched(r.e));
+        CHECK(Access::latched(r.e));
+        CHECK(r.raw->running());
+        // A press on the key shown latched releases it.
+        r.fe.frame(true, false, false);
+        r.fe.frame(true, false, true);
+        r.e.pump();
+        std::printf("[5b] press on a key shown latched: latched=%d\n", Access::latched(r.e));
+        CHECK(!Access::latched(r.e));
+        CHECK(waitQuiet(r.raw, 150));
+        // Inside the 1 s re-arm a press latches nothing...
+        const int starts = r.raw->starts.load();
+        r.fe.frame(true, false, false);
+        r.fe.frame(true, false, true);
+        r.e.pump();
+        std::printf("[5c] press inside the re-arm: latched=%d\n", Access::latched(r.e));
+        CHECK(!Access::latched(r.e));
+        CHECK(r.raw->starts.load() == starts);
+        // ...and past it, one does.
+        std::this_thread::sleep_for(std::chrono::milliseconds(FOXAPI_LATCH_REARM_MS + 50));
+        r.fe.frame(true, false, false);
+        r.e.pump();
+        r.fe.frame(true, false, true);
+        r.e.pump();
+        std::printf("[5d] press past the re-arm: latched=%d\n", Access::latched(r.e));
+        CHECK(Access::latched(r.e));
+        r.fe.frame(false, false, false);
+        r.e.pump();
+        CHECK(waitQuiet(r.raw, 150));
+    }
+
+    // =========================================================================
+    // 6. THE FRONT END STOPS, the control side passes on: a held PTT is
+    //    released at the keep-alive, counted from the LAST HEARTBEAT.
+    // =========================================================================
+    {
+        Rig r;
+        r.fe.frame(true, true, false);
+        r.e.pump();
+        CHECK(r.raw->running());
+        const auto lastBeat = Clock::now();  // before it
+        r.fe.frame(true, true, false);       // the front end's last frame
+        const bool released = untilQuiet(r.raw, 3000, [&] { r.e.pump(); });
+        const double ms = msSince(lastBeat);
+        std::printf("[6] front end silent, control passing: released %.0f ms after its last heartbeat\n", ms);
+        CHECK(released);
+        CHECK(ms >= static_cast<double>(FOXAPI_KEEPALIVE_MS) - 1.0);
+        CHECK(ms <= static_cast<double>(FOXAPI_KEEPALIVE_MS) + 150.0);
+    }
+
+    // =========================================================================
+    // 7. THE REMOTE KEY'S STANDING CONDITION: the local operator's consent.
+    // =========================================================================
+    {
+        // Without it, the browser's PTT is refused and nothing keys.
+        Rig r;
+        const FoxCommandResult refused = webPtt(r.e, true);
+        r.e.pump();
+        std::printf("[7a] no consent: status %d, remote keyed=%d\n", refused.status, Access::remoteKeyed(r.e));
+        CHECK(refused.status == FOXAPI_DENIED);
+        CHECK(!Access::remoteKeyed(r.e));
+        CHECK(r.raw->starts.load() == 0);
+    }
+    for (int how = 0; how < 3; ++how) {
+        static const char* const kHow[] = {"consent withdrawn", "consenting session closed",
+                                           "consenting session silent"};
+        Rig r;
+        r.fe.frame(true, false, false, true, 1);
+        r.e.pump();
+        CHECK(ok(webPtt(r.e, true)));
+        r.e.pump();
+        CHECK(Access::remoteKeyed(r.e));
+        CHECK(r.raw->running());
+        auto t0 = Clock::now();
+        bool released = false;
+        if (how == 0) {
+            r.fe.frame(true, false, false, true, 0);
+            r.e.pump();
+            released = !Access::remoteKeyed(r.e);
+        } else if (how == 1) {
+            r.fe.close();
+            r.e.pump();
+            released = !Access::remoteKeyed(r.e);
+        } else {
+            // The browser re-asserts and polls; the desk goes quiet. Its last
+            // heartbeat was the arming frame's - the clock starts before the
+            // one below, which is now its last.
+            t0 = Clock::now();
+            r.fe.beat();
+            released = untilQuiet(r.raw, 3000, [&] {
+                r.e.api().webRemoteBeat();
+                (void)webPtt(r.e, true);
+                r.e.pump();
+            });
+        }
+        const double ms = msSince(t0);
+        std::printf("[7%c] %s: remote keyed=%d after %.0f ms\n", 'b' + how, kHow[how], Access::remoteKeyed(r.e), ms);
+        CHECK(released);
+        CHECK(!Access::remoteKeyed(r.e));
+        CHECK(waitQuiet(r.raw, 150));
+        if (how == 2) {
+            CHECK(ms >= static_cast<double>(FOXAPI_KEEPALIVE_MS) - 1.0);
+            CHECK(ms <= static_cast<double>(FOXAPI_KEEPALIVE_MS) + 150.0);
+        }
+    }
+
+    // =========================================================================
+    // 8. BOTH ALIVE: a latch held for 2.5 s (past the keep-alive and the TX
+    //    thread's own kKeyAliveWait, twice) never lets go, and the radio
+    //    never restarts.
+    // =========================================================================
+    {
+        Rig r;
+        r.fe.frame(true, false, true);
+        r.e.pump();
+        CHECK(Access::latched(r.e));
+        const auto t0 = Clock::now();
+        bool dropped = false;
+        while (Clock::now() - t0 < std::chrono::milliseconds(2500)) {
+            r.fe.frame(true, false, false);
+            r.e.pump();
+            if (!r.raw->running()) { dropped = true; }
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        std::printf("[8] both alive for 2.5 s: latched=%d radio dropped=%d starts=%d\n", Access::latched(r.e),
+                    dropped ? 1 : 0, r.raw->starts.load());
+        CHECK(Access::latched(r.e));
+        CHECK(!dropped);
+        CHECK(r.raw->starts.load() == 1);
+        r.fe.frame(false, false, false);
+        r.e.pump();
+        CHECK(waitQuiet(r.raw, 150));
     }
 
     return testSummary("test_transmit_dead_man");

@@ -64,9 +64,9 @@ void testVersionGate() {
     CHECK(FOXAPI_HAS(a, login));
     CHECK(FOXAPI_HAS(a, logout));
     CHECK((a->capabilities & FOXAPI_CAP_RECEIVER) != 0u);
-    // PORT: the transmitter is served with the key model (engine-stage4.md
-    // decision 1), in the next step; the capability bit is set only then.
-    CHECK((a->capabilities & FOXAPI_CAP_TRANSMIT) == 0u);
+    // The transmitter is served, with API 0.2's key model (engine-stage4.md
+    // decision 1; tests/test_engine_api_transmit.cpp is its safety suite).
+    CHECK((a->capabilities & FOXAPI_CAP_TRANSMIT) != 0u);
     CHECK((a->capabilities & FOXAPI_CAP_DECODERS) == 0u);  // not served through the table yet, and says so
 }
 

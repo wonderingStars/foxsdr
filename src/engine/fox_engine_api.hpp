@@ -66,6 +66,34 @@ public:
     // whose listSeq says it changed).
     void setLists(std::shared_ptr<const ApiListBlock> lists);
 
+    // --- THE KEY (core/tx_key_rules.hpp), the pumping thread ---------------------
+    // An end the ENGINE makes, whoever asked for it (Engine::applyCommand's
+    // RUN 0, TX_OPEN and TX_CLOSE): opens the key and marks a latch.
+    void endKeyFromEngine(const char* why);
+    // The web remote's PTT (Engine::applyCommand's TX_PTT): a REMOTE key the
+    // engine holds for the browser page, under the same rules as any remote
+    // session - a 2 s hold, and only with a local session's consent.
+    FoxCommandResult webRemotePtt(bool on);
+    // ANY THREAD: the browser page polled its status - the web remote's
+    // keep-alive (its PTT re-assertions are not one).
+    void webRemoteBeat();
+    // The web server is not running (FOXAPP_OP_WEB_CONTROL_STOPPED): a key the
+    // web remote holds ends in the same step.
+    void webRemoteStopped(const char* why);
+    // The control loop's last act, before it stops the Transmitter.
+    void engineStopping();
+    // What the publish carries of the key (Engine::fillPublishedState).
+    struct TxFacts {
+        std::uint64_t owner = 0;
+        bool latched = false;
+        bool remoteArmed = false;
+        std::int64_t holdRemainingMs = 0;
+        std::int64_t latchRemainingMs = 0;
+        const char* unkeyReason = "";
+        std::uint64_t changes = 0;
+    };
+    TxFacts txFacts() const;
+
     // What the pass's publish needs from here (Engine::fillPublishedState),
     // and the per-session fields read_state patches in.
     ApiHostImpl& impl() { return *impl_; }

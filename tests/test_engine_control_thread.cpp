@@ -49,7 +49,7 @@
 #include "core/transmitter.hpp"
 #include "engine/engine.hpp"
 #include "engine/engine_host.hpp"
-#include "engine/tx_page_key.hpp"
+#include "engine/fox_engine_api.hpp"
 #include "test_check.hpp"
 
 using cascade::core::Transmitter;
@@ -189,14 +189,34 @@ int main() {
                     applied, static_cast<unsigned long long>(A::passes(e)));
         CHECK(applied >= 0.0);
 
-        // B: the transmit path.
-        cascade::gui::TxPageRequest r;
-        r.pageLive = true;
-        std::uint64_t seq = 0;
+        // B: the transmit path. Since engine stage 4 the front end keys
+        // through its own engine API session, as the window does (API 0.2's
+        // THE KEY): each frame a heartbeat and, while the PTT is held, TX_PTT 1
+        // (a 2 s hold, re-asserted); TX_PTT 0 once when it is let go.
+        const FoxEngineApi* api = cascade::engine::engineApi(FOXAPI_VERSION_MAJOR, FOXAPI_VERSION_MINOR);
+        FoxSession* ses = nullptr;
+        {
+            FoxSessionParams p{};
+            p.structSize = sizeof(p);
+            p.flags = FOXAPI_SESSION_LOCAL;
+            p.grants = FOXAPI_GRANT_VIEW | FOXAPI_GRANT_TRANSMIT;
+            p.clientName = "front end";
+            CHECK(api->open_session(e.apiHandle(), &p, &ses) == FOXAPI_OK);
+        }
+        bool pttSent = false;
         auto frame = [&](bool ptt) {
-            r.pttHeld = ptt;
-            r.frameSeq = ++seq;
-            e.submitTransmitPageKey(r);
+            api->heartbeat(ses);
+            FoxCommand c{};
+            c.structSize = sizeof(c);
+            c.op = FOXAPI_OP_TX_PTT;
+            if (ptt || pttSent) {
+                c.ival[0] = ptt ? 1 : 0;
+                api->submit(ses, &c, 1, nullptr);
+                pttSent = ptt;
+            }
+            FoxCommandResult rr[16];
+            for (auto& x : rr) { x.structSize = sizeof(x); }
+            while (api->poll_results(ses, rr, 16) == 16) {}
         };
         frame(true);
         const double keyed = waitFor([&] { return raw->running(); }, 500);
@@ -214,7 +234,9 @@ int main() {
         // ...and the front end freezes, PTT held, after this one last frame.
         // THE CLOCK STARTS BEFORE THE FRAME, not after the key comes up: the
         // TX thread counts kKeyAliveWait from the stamp this frame makes
-        // (frontEndAlive, inside submitTransmitPageKey), and the key takes one
+        // (frontEndAlive, which the key holder's heartbeat makes - and the
+        // engine's key rules count the same session keep-alive, 1 s, from the
+        // same heartbeat), and the key takes one
         // or two scheduler ticks to come up - 15-31 ms on Windows, whose tick
         // is 15.625 ms. Started after that wait, the measurement lost those
         // milliseconds and a correct release read as early as 975 ms (3 of 25
@@ -324,6 +346,7 @@ int main() {
         CHECK(stillJoining);
         CHECK(!A::transmitting(e));
 
+        api->close_session(ses);
         e.shutdown();
     }
 

@@ -132,6 +132,17 @@ set_tests_properties(engine_link_check PROPERTIES
 # window sizes), so it gets more than the loop's two minutes - most of all on a
 # software-rendered Linux runner.
 set_tests_properties(test_theme_census PROPERTIES TIMEOUT 600)
+# The reference's transmit safety suite, ported, runs its rules at the real
+# timers (holds of 2 s, keep-alives of 1-2 s, a re-arm of 1 s, over and over):
+# about 95 s here. The merge sweep is 5450 cases of one pass each (about 40 s;
+# FOXSDR_MERGE_FULL=1 runs all 70450, about 10 minutes, by hand). Both get
+# room for a slow or shared runner - and each runs ALONE (RUN_SERIAL): the
+# transmit suite holds real 1 s keep-alives on up to 15 threads at once and the
+# sweep keeps a worker per core busy, so beside each other (and two more
+# jobs) on a 4-core runner a probe's heartbeat can starve past its keep-alive
+# and the key ends "because the interface stopped answering" - the rule
+# working, on a machine too busy for the probe to hold up its end.
+set_tests_properties(test_engine_api_transmit test_engine_api_merge PROPERTIES TIMEOUT 600 RUN_SERIAL TRUE)
 
 add_test(NAME app_smoke COMMAND cascade --frames 3)
 set_tests_properties(app_smoke PROPERTIES

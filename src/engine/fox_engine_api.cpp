@@ -33,12 +33,14 @@
 #include <vector>
 
 #include "core/app_commands.hpp"
+#include "core/tx_key_rules.hpp"
 #include "core/receiver_snapshot.hpp"
 #include "core/seqlock_box.hpp"
 #include "core/utf8_text.hpp"
 #include "engine/engine.hpp"
 #include "engine/receiver_tables.hpp"
 #include "net/status_compose.hpp"
+#include "source/tx_sink.hpp"
 #include "engine/tune_control.hpp"
 
 // The C handles are opaque to callers; inside the engine they are these.
@@ -297,6 +299,58 @@ private:
     uint64_t lastSeq_ = 0;  // writer only
 };
 
+// THE TEST TRANSMITTER ("test:tx:dummy", an engine created with testHooks=1
+// only): a dummy load that takes every block and radiates nothing - the
+// reference engine's "mock:tx:dummy", so the key rules can be held to their
+// tests with the real core::Transmitter and its TX thread in the loop.
+class DummyLoad final : public cascade::source::IqSink {
+public:
+    bool start() override {
+        running_ = true;
+        return true;
+    }
+    void stop() override { running_ = false; }
+    bool running() const override { return running_.load(); }
+    double sampleRateHz() const override { return 2.5e6; }
+    bool setSampleRateHz(double) override { return true; }
+    double centerFrequencyHz() const override { return hz_.load(); }
+    bool setCenterFrequencyHz(double hz) override {
+        hz_.store(hz);
+        return true;
+    }
+    bool frequencyRangeHz(double& lo, double& hi) const override {
+        lo = 70.0e6;
+        hi = 6.0e9;
+        return true;
+    }
+    bool sampleRateRangeHz(double& lo, double& hi) const override {
+        lo = 2.083e6;
+        hi = 61.44e6;
+        return true;
+    }
+    bool gainRangeDb(double& lo, double& hi) const override {
+        lo = -89.75;
+        hi = 0.0;
+        return true;
+    }
+    double gainDb() const override { return gain_.load(); }
+    bool setGainDb(double db) override {
+        gain_.store(std::clamp(db, -89.75, 0.0));
+        return true;
+    }
+    std::size_t write(const std::complex<float>*, std::size_t n) override { return running_.load() ? n : 0; }
+    bool faulted() const override { return false; }
+    const char* name() const override { return "Test transmitter (dummy load, no RF)"; }
+    const char* lastError() const override { return ""; }
+
+private:
+    std::atomic<bool> running_{false};
+    std::atomic<double> hz_{145.5e6};
+    std::atomic<double> gain_{-89.75};
+};
+
+std::unique_ptr<cascade::source::IqSink> makeDummyLoad() { return std::make_unique<DummyLoad>(); }
+
 // The group bits of FOXAPI_EVENT_STATE's value[0] (the reference engine's).
 enum Group : uint32_t {
     kTune = 1u << 0,
@@ -357,6 +411,7 @@ struct Pending {
     int saferKind = -1;
     bool merged = false;
     std::uint64_t sourceGen = 0;  // Engine::sourceGen_ when submitted (device-scoped ops)
+    std::string principal;        // ApiSession::principal of the sender ("local" needs no allocation)
 };
 
 // ---------------------------------------------------------------------------
@@ -365,11 +420,18 @@ struct Pending {
 
 class ApiHostImpl : public FoxEngine {
 public:
-    ApiHostImpl(Engine& engine, const std::string& options) : engine_(engine), opt_(parseOptions(options)) {
+    ApiHostImpl(Engine& engine, const std::string& options)
+        : engine_(engine), opt_(parseOptions(options)), rules_(timersFrom(opt_)), sessionsView_(*this) {
         outbox_.reserve(1024);
         live_.reserve(64);
         queue_.reserve(256);
         work_.reserve(256);
+        // The web remote's key (engine-internal, REMOTE, never listed): the
+        // one session the app's browser page holds. Its heartbeat is the
+        // page's status poll (webRemoteBeat).
+        webSession_.id = kWebSessionId;
+        webSession_.principal = "web";
+        if (opt_.testHooks) { engine_.txSinkForTest_ = &makeDummyLoad; }
     }
 
     ~ApiHostImpl() = default;
@@ -553,7 +615,57 @@ public:
 
     int32_t heartbeat(ApiSession* s) {
         s->lastBeatMs.store(steadyMs(), std::memory_order_relaxed);
+        // THE TX THREAD'S OWN DEAD-MAN, pointed at the key holder: its
+        // heartbeat, and nobody else's, is the front-end stamp the thread
+        // watches (core/transmitter.hpp).
+        if (s->id == keyOwner_.load(std::memory_order_relaxed)) { engine_.transmitter_.frontEndAlive(); }
         return FOXAPI_OK;
+    }
+
+    // ---- THE KEY (core/tx_key_rules.hpp) ---------------------------------------
+    // Everything below runs on the pumping thread, except webRemoteBeat.
+
+    // An end the ENGINE makes (Engine::applyCommand's RUN 0, TX_OPEN,
+    // TX_CLOSE - whichever client sent them - and a fault).
+    void endKeyFromEngine(const char* why) { rules_.endKey(why, steadyMs()); }
+
+    // The web remote's PTT (Engine::applyCommand's TX_PTT: the browser's
+    // transmitPtt arrives there through applyControlRequest). A REMOTE key:
+    // a 2 s hold the page re-asserts, only with the local operator's consent.
+    cascade::core::TxKeyAnswer webRemotePtt(bool on) {
+        cascade::core::TxKeySender snd{kWebSessionId, true, webSession_.principal, true};
+        const cascade::core::TxKeyAnswer a = rules_.key(snd, false, on, engine_.transmitter_.haveSink(), steadyMs());
+        if (on && a.status == FOXAPI_OK) { engine_.transmitter_.keyRemote(); }
+        // PTT 0 RELEASES NOW (API 0.2): in this step, not at the next pass.
+        if (!on && rules_.keyOwner() != kWebSessionId) { engine_.transmitter_.releaseRemote("the remote let go"); }
+        return a;
+    }
+
+    // The web server is not running: no browser can ask again, so a key the
+    // web remote holds ends now rather than at its hold.
+    void webRemoteStopped(const char* why) {
+        if (rules_.keyOwner() == kWebSessionId) { rules_.endKey(why, steadyMs()); }
+        engine_.transmitter_.releaseRemote(why);
+    }
+
+    // Any thread: the browser page polled its status - the web remote's
+    // heartbeat (its PTT re-assertions are not one).
+    void webRemoteBeat() { webBeatMs_.store(steadyMs(), std::memory_order_relaxed); }
+
+    // The control loop's last act, before it stops the Transmitter.
+    void engineStopping() { rules_.endKey("the engine is shutting down", steadyMs()); }
+
+    ApiHost::TxFacts txFacts() const {
+        ApiHost::TxFacts f;
+        const std::int64_t now = steadyMs();
+        f.owner = rules_.keyOwner();
+        f.latched = rules_.latched();
+        f.remoteArmed = rules_.remoteArmedBy() != 0;
+        f.holdRemainingMs = rules_.holdRemainingMs(now);
+        f.latchRemainingMs = rules_.latchRemainingMs(now);
+        f.unkeyReason = rules_.unkeyReason().c_str();
+        f.changes = rules_.changes();
+        return f;
     }
 
     // ---- reads -------------------------------------------------------------
@@ -565,6 +677,7 @@ public:
         FoxReceiverState st = p.rx;
         st.structSize = sizeof(st);
         st.grants = s->grants;
+        if (p.app.txKeyOwner != 0 && p.app.txKeyOwner == s->id) { st.flags |= FOXAPI_RX_TX_KEY_MINE; }
         if (s->releaseFirst.load(std::memory_order_relaxed)) { st.flags |= FOXAPI_RX_TX_LATCH_RELEASE_FIRST; }
         return copyOut(st, out, FOXAPI_MIN_RECEIVER_STATE);
     }
@@ -583,10 +696,12 @@ public:
 
     int32_t readList(uint32_t list, uint32_t index, FoxListItem* out);  // engine_api_lists.cpp
 
-    int32_t getSetting(const char* key, char* buf, std::size_t cap) {
+    int32_t getSetting(ApiSession* s, const char* key, char* buf, std::size_t cap) {
         if (key == nullptr || (buf == nullptr && cap != 0)) { return FOXAPI_BAD_ARGUMENT; }
         std::string v;
-        if (opt_.testHooks && std::strcmp(key, "test.queueDepth") == 0) {
+        if (opt_.testHooks && std::strcmp(key, "test.sessionId") == 0) {
+            v = std::to_string(s->id);  // test seam: which id the key state names this session by
+        } else if (opt_.testHooks && std::strcmp(key, "test.queueDepth") == 0) {
             std::lock_guard<std::mutex> lk(queueMutex_);
             v = std::to_string(queue_.size());
         } else if (opt_.testHooks && std::strcmp(key, "test.keyState") == 0) {
@@ -634,7 +749,7 @@ public:
             if (kind < 0 && s->pending >= kMaxPendingPerSession) {
                 r.status = FOXAPI_BUSY;
             } else {
-                Pending p{c, 0, s->id, s->flags, refused, kind, false, gen};
+                Pending p{c, 0, s->id, s->flags, refused, kind, false, gen, s->principal};
                 if (kind < 0) {
                     r.status = FOXAPI_OK;
                     r.ticket = ++s->lastTicket;
@@ -842,8 +957,56 @@ private:
     void broadcast(FoxEvent e);
     static const char* refusalText(const Pending& p);
 
+    static cascade::core::TxKeyTimers timersFrom(const Options& o) {
+        cascade::core::TxKeyTimers t;
+        t.pttHoldMs = o.pttHoldMs;
+        t.latchTimeoutMs = o.latchTimeoutMs;
+        t.keepaliveMs = o.keepaliveMs;
+        t.remoteKeepaliveMs = o.remoteKeepaliveMs;
+        return t.shortened();
+    }
+
+    // The sessions as the key rules see them: open, local or remote, and
+    // when each last called heartbeat() (the web remote's internal one too).
+    class SessionsView final : public cascade::core::TxKeyRules::Sessions {
+    public:
+        explicit SessionsView(ApiHostImpl& h) : h_(h) {}
+        cascade::core::TxKeyRules::Liveness find(std::uint64_t id) const override {
+            cascade::core::TxKeyRules::Liveness l;
+            if (id == kWebSessionId) {
+                l.present = true;
+                l.remote = true;
+                l.lastBeatMs = h_.webBeatMs_.load(std::memory_order_relaxed);
+                return l;
+            }
+            std::lock_guard<std::mutex> lk(h_.sessionsMutex_);
+            auto it = h_.sessions_.find(id);
+            if (it == h_.sessions_.end() || it->second->detached.load()) { return l; }
+            l.present = true;
+            l.remote = (it->second->flags & FOXAPI_SESSION_REMOTE) != 0u;
+            l.lastBeatMs = it->second->lastBeatMs.load(std::memory_order_relaxed);
+            return l;
+        }
+
+    private:
+        ApiHostImpl& h_;
+    };
+
+    void txPass();
+    std::string keyStateText() const;
+
+    // The web remote's session id: never handed out by open_session (those
+    // count up from 1), so it can never collide with one.
+    static constexpr std::uint64_t kWebSessionId = ~std::uint64_t{0} - 1;
+
     Engine& engine_;
     Options opt_;
+    cascade::core::TxKeyRules rules_;        // the pumping thread
+    SessionsView sessionsView_;
+    ApiSession webSession_;                  // its id and principal only
+    std::atomic<std::int64_t> webBeatMs_{0};
+    std::atomic<std::uint64_t> keyOwner_{0};  // rules_.keyOwner(), for heartbeat()
+    bool lastPassFaulted_ = false;
 
     struct Outgoing {
         uint64_t sessionId;
@@ -903,13 +1066,8 @@ private:
 int32_t ApiHostImpl::validate(const ApiSession& s, const FoxCommand& c, const FoxReceiverState* snap) const {
     if (!finite(c) || !textTerminated(c)) { return FOXAPI_BAD_ARGUMENT; }
     const bool remote = (s.flags & FOXAPI_SESSION_REMOTE) != 0u;
-    // The transmitter's ops are THE KEY's (engine-stage4.md decision 1):
-    // served once the key rules are wired to the Transmitter.
-    if ((c.op & 0xFF00u) == 0x0A00u || c.op == FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN ||
-        c.op == FOXAPP_OP_SET_TRANSMIT_ARGS) {
-        return FOXAPI_UNSUPPORTED;
-    }
-    if (c.op != FOXAPI_OP_SETTING_SET && !cascade::core::cmd::isKnownOp(c.op)) {
+    const bool keyOp = c.op == FOXAPI_OP_TX_PTT || c.op == FOXAPI_OP_TX_LATCH || c.op == FOXAPI_OP_TX_REMOTE_ARM;
+    if (c.op != FOXAPI_OP_SETTING_SET && !keyOp && !cascade::core::cmd::isKnownOp(c.op)) {
         return FOXAPI_UNSUPPORTED;  // a newer interface's op, or one not implemented: it degrades
     }
     if ((s.grants & grantFor(c.op)) == 0u) { return FOXAPI_DENIED; }
@@ -923,6 +1081,10 @@ int32_t ApiHostImpl::validate(const ApiSession& s, const FoxCommand& c, const Fo
     // The app's own extension ops are the standard window's vocabulary, and
     // some name paths on this machine: LOCAL sessions only.
     if (remote && cascade::core::cmd::isAppOp(c.op)) { return FOXAPI_DENIED; }
+    // A REMOTE SESSION HAS THE WEB REMOTE'S POWER AND NO MORE: of the
+    // transmitter it may only press and release the PTT, and pressing needs
+    // the local operator's standing consent (TX_REMOTE_ARM, below).
+    if (remote && grantFor(c.op) == FOXAPI_GRANT_TRANSMIT && c.op != FOXAPI_OP_TX_PTT) { return FOXAPI_DENIED; }
     const double v = c.num[0];
     switch (c.op) {
         case FOXAPI_OP_SET_CENTRE:
@@ -971,8 +1133,32 @@ int32_t ApiHostImpl::validate(const ApiSession& s, const FoxCommand& c, const Fo
             return FOXAPI_OK;
         case FOXAPI_OP_SETTING_SET:
             return std::strchr(c.text, '=') != nullptr ? FOXAPI_OK : FOXAPI_BAD_ARGUMENT;
+        case FOXAPI_OP_TX_SET_MODE:
+            return (c.ival[0] >= 0 && c.ival[0] <= FOXAPI_TX_MODE_LSB) ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
+        case FOXAPI_OP_TX_SET_FREQUENCY:
+            return (v > 0.0 && v <= 6.0e9) ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
+        case FOXAPI_OP_TX_SET_POWER:
+            return (v <= 0.0 && v >= -89.75) ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
+        case FOXAPI_OP_TX_PTT:
+            // THE KEY IS NOT SIMPLY QUEUED: a key request with no transmitter
+            // behind it is refused now, so it cannot sit in the queue while
+            // somebody opens a radio underneath it.
+            if (c.ival[0] != 0 && (snap == nullptr || (snap->flags & FOXAPI_RX_TX_AVAILABLE) == 0u)) {
+                return FOXAPI_NO_DEVICE;
+            }
+            if (c.ival[0] != 0 && remote && (snap == nullptr || (snap->flags & FOXAPI_RX_TX_REMOTE_ARMED) == 0u)) {
+                return FOXAPI_DENIED;  // no local consent to remote transmit
+            }
+            return FOXAPI_OK;
+        case FOXAPI_OP_TX_LATCH:
+            if (c.ival[0] != 0) {
+                // A latch keeps a radio keyed with nobody touching anything;
+                // at the far end of a network that is the ordinary state.
+                if ((s.flags & FOXAPI_SESSION_LOCAL) == 0u) { return FOXAPI_DENIED; }
+                if (snap == nullptr || (snap->flags & FOXAPI_RX_TX_AVAILABLE) == 0u) { return FOXAPI_NO_DEVICE; }
+            }
+            return FOXAPI_OK;
         default:
-            (void)snap;
             return FOXAPI_OK;
     }
 }
@@ -987,6 +1173,9 @@ const char* ApiHostImpl::refusalText(const Pending& p) {
             }
             if (remote && cascade::core::cmd::isAppOp(p.cmd.op)) {
                 return "the application's own commands are for sessions on this machine";
+            }
+            if (remote && p.cmd.op == FOXAPI_OP_TX_LATCH) {
+                return "the latch is a hands-on control and cannot be closed remotely";
             }
             if (remote && p.cmd.op == FOXAPI_OP_SELECT_SOURCE) {
                 return "a remote session cannot name a file or an address on this machine";
@@ -1037,6 +1226,35 @@ void ApiHostImpl::apply(const Pending& p) {
         finish();
         return;
     }
+    if (c.op == FOXAPI_OP_TX_PTT || c.op == FOXAPI_OP_TX_LATCH || c.op == FOXAPI_OP_TX_REMOTE_ARM) {
+        // THE KEY: decided by the rules, for THIS session, in its place in
+        // the queue (core/tx_key_rules.hpp); the Transmitter follows at the
+        // end of the pass (txPass).
+        const bool remote = (p.sessionFlags & FOXAPI_SESSION_REMOTE) != 0u;
+        const cascade::core::TxKeySender snd{p.sessionId, remote, p.principal, fate == SessionFate::kOpen};
+        const bool on = c.ival[0] != 0;
+        const cascade::core::TxKeyAnswer a =
+            c.op == FOXAPI_OP_TX_REMOTE_ARM
+                ? rules_.arm(snd, on, steadyMs())
+                : rules_.key(snd, c.op == FOXAPI_OP_TX_LATCH, on, engine_.transmitter_.haveSink(), steadyMs());
+        r.status = a.status;
+        r.applied[0] = a.applied0;
+        copyText(r.message, a.message.c_str());
+        if (a.status == FOXAPI_OK && on && c.op != FOXAPI_OP_TX_REMOTE_ARM) {
+            // A key granted: the TX thread's front-end stamp is the holder's
+            // LAST HEARTBEAT (a grant, a PTT re-assertion included, is never
+            // a heartbeat of its own - API 0.2), and a remote PTT buys the
+            // Transmitter's own hold.
+            if (remote) {
+                engine_.transmitter_.keyRemote();
+            } else {
+                engine_.transmitter_.frontEndAliveAt(sessionsView_.find(p.sessionId).lastBeatMs);
+            }
+            keyOwner_.store(rules_.keyOwner(), std::memory_order_relaxed);
+        }
+        finish();
+        return;
+    }
     const FoxCommandResult applied = engine_.applyCommand(c);
     r.status = applied.status;
     r.flags = applied.flags;
@@ -1062,6 +1280,23 @@ void ApiHostImpl::applyTestHook(const Pending& p, FoxCommandResult& r, const std
         std::lock_guard<std::mutex> lk(queueMutex_);
         gatherFrom_ = submitted_;
         gather_ = static_cast<uint64_t>(std::clamp(std::atoi(val.c_str()), 1, 64));
+    } else if (key == "test.resetKey") {
+        // Test seam: the key rules as a fresh engine has them (no key, no
+        // latch, no mark, no consent), so one engine can run many cases that
+        // must each start clean (test_engine_api_merge).
+        rules_ = cascade::core::TxKeyRules(timersFrom(opt_));
+        keyOwner_.store(0);
+        lastPassFaulted_ = false;
+    } else if (key == "test.fault") {
+        // A worker "dies": the receiver stops and the key opens, exactly as a
+        // USB radio pulled mid-stream does (the fault latches until RUN 1).
+        engine_.testFault_ = val;
+        if (!val.empty()) {
+            rules_.endKey("a fault stopped the engine", steadyMs());
+            // The receiver stops by the one control path (RUN 0), as every
+            // stop does; the key already ended above, with the fault's reason.
+            (void)engine_.applyCommand(cascade::core::cmd::makeInt(FOXAPI_OP_RUN, 0));
+        }
     } else if (key == "test.bookmark") {
         // Stands in for an import: "name|hz|mode|bw|group", mode a
         // FOXAPI_DEMOD_* - a grouped bookmark, as an imported list makes.
@@ -1166,11 +1401,69 @@ void ApiHostImpl::beginPass() {
     refreshLive();
     // Sessions closed or detached since the last pass are dealt with FIRST,
     // before any command is applied (the reference engine's round-3 rule):
-    // nothing they queued can act for them, and only the safer commands they
-    // left are applied.
+    // any key or consent they held goes now, nothing they queued can act for
+    // them, and only the safer commands they left are applied.
+    for (uint64_t id : closedWork_) {
+        rules_.sessionGone(id, sessionFate(id) == SessionFate::kDetached, steadyMs());
+    }
     for (const Pending& p : work_) { apply(p); }
     reapDetached(closedWork_);
     expireTokens();
+    txPass();
+    if (opt_.testHooks) {
+        const std::string ks = keyStateText();
+        std::lock_guard<std::mutex> lk(keyStateMutex_);
+        keyState_ = ks;
+    }
+}
+
+// Once a pass, after the commands: the rules' clocks (the hold, the latch's
+// deadline, every key holder's and consenter's keep-alive), then the
+// Transmitter driven from what they decided and ticked - the control stamp
+// its TX thread watches - and, if the Transmitter let go by itself (a fault,
+// its own dead-man's handle, a radio that would not key), the rules told.
+void ApiHostImpl::txPass() {
+    const std::int64_t now = steadyMs();
+    cascade::core::Transmitter& tx = engine_.transmitter_;
+    const bool faulted = engine_.pipeline_.faulted() || !engine_.testFault_.empty();
+    if (faulted && !lastPassFaulted_) { rules_.endKey("a fault stopped the engine", now); }
+    lastPassFaulted_ = faulted;
+    rules_.tick(now, sessionsView_);
+    // Drive: the latch and a local PTT's hold are levels; a remote PTT's hold
+    // was bought when it was applied (keyRemote) and is dropped here the
+    // moment the rules end it.
+    const bool keyed = rules_.keyed();
+    const bool remoteOwner = keyed && rules_.ownerRemote();
+    tx.setLatched(rules_.latched());
+    tx.setPttHeld(keyed && !remoteOwner && rules_.holding());
+    if (!(remoteOwner && rules_.holding())) {
+        tx.releaseRemote(rules_.unkeyReason().empty() ? "the remote let go" : rules_.unkeyReason().c_str());
+    }
+    tx.tick();
+    if (rules_.keyed() && !tx.pttHeld() && !tx.latched() && !tx.remoteKeyed()) {
+        std::string why = tx.lastAutoUnkeyReason();
+        if (why.empty()) {
+            const std::string err = tx.lastError();
+            why = err.empty() ? std::string("the transmitter stopped on its own") : "the radio would not key: " + err;
+        }
+        rules_.endKey(why, now);
+    }
+    keyOwner_.store(rules_.keyOwner(), std::memory_order_relaxed);
+    for (const std::string& why : rules_.takeUnkeyEvents()) {
+        FoxEvent e{};
+        e.kind = FOXAPI_EVENT_TX_UNKEYED;
+        copyText(e.text, why.c_str());
+        broadcast(e);
+    }
+    // FOXAPI_RX_TX_LATCH_RELEASE_FIRST, per session (it may trail the
+    // snapshot by this pass).
+    for (const auto& s : live_) { s->releaseFirst.store(rules_.releaseFirst(s->principal, s->id)); }
+    localMarked_.store(rules_.marked("local"), std::memory_order_relaxed);
+}
+
+std::string ApiHostImpl::keyStateText() const {
+    return rules_.stateText() + " running=" + std::to_string(engine_.pipeline_.running() ? 1 : 0) +
+           " tx=" + std::to_string(engine_.transmitter_.haveSink() ? 1 : 0);
 }
 
 void ApiHostImpl::endPass() {
@@ -1364,6 +1657,22 @@ ApiHost::~ApiHost() = default;
 FoxEngine* ApiHost::handle() { return impl_.get(); }
 
 void ApiHost::beginPass() { impl_->beginPass(); }
+void ApiHost::endKeyFromEngine(const char* why) { impl_->endKeyFromEngine(why); }
+FoxCommandResult ApiHost::webRemotePtt(bool on) {
+    FoxCommandResult r{};
+    r.structSize = sizeof(r);
+    r.op = FOXAPI_OP_TX_PTT;
+    const cascade::core::TxKeyAnswer a = impl_->webRemotePtt(on);
+    r.status = a.status;
+    r.applied[0] = a.applied0;
+    if (a.status != FOXAPI_OK) { r.flags |= FOXAPI_RESULT_REFUSED; }
+    copyText(r.message, a.message.c_str());
+    return r;
+}
+void ApiHost::webRemoteBeat() { impl_->webRemoteBeat(); }
+void ApiHost::webRemoteStopped(const char* why) { impl_->webRemoteStopped(why); }
+void ApiHost::engineStopping() { impl_->engineStopping(); }
+ApiHost::TxFacts ApiHost::txFacts() const { return impl_->txFacts(); }
 void ApiHost::setLists(std::shared_ptr<const ApiListBlock> lists) { impl_->setLists(std::move(lists)); }
 void ApiHost::endPass() { impl_->endPass(); }
 
@@ -1485,7 +1794,7 @@ int32_t FOXAPI_CALL apiReadList(FoxSession* s, uint32_t list, uint32_t index, Fo
 }
 
 int32_t FOXAPI_CALL apiGetSetting(FoxSession* s, const char* key, char* buf, size_t cap) {
-    return onSession(s, [&](ApiSession* x) { return x->host->getSetting(key, buf, cap); });
+    return onSession(s, [&](ApiSession* x) { return x->host->getSetting(x, key, buf, cap); });
 }
 
 int32_t FOXAPI_CALL apiReadImage(FoxSession* s, uint64_t, FoxImageInfo*, uint8_t*, size_t) {
@@ -1508,11 +1817,12 @@ const FoxEngineApi kApi = {
     FOXAPI_VERSION_MINOR,
     0,
     // ONLY WHAT IS IMPLEMENTED (engine-stage4.md plan step 1): the receiver,
-    // the spectrum, the source and gain commands, the audio DSP, bookmarks
-    // and events. Lists, settings, the transmitter and the rest arrive with
-    // their steps and set their bits then.
+    // the spectrum, the source and gain commands, the audio DSP, bookmarks,
+    // events and the transmitter with its key (API 0.2's rules). Settings,
+    // the audio stream and the rest arrive with their steps and set their
+    // bits then.
     FOXAPI_CAP_RECEIVER | FOXAPI_CAP_SPECTRUM | FOXAPI_CAP_AUDIO_LEVELS | FOXAPI_CAP_AUDIO_DSP |
-        FOXAPI_CAP_EVENTS,
+        FOXAPI_CAP_EVENTS | FOXAPI_CAP_TRANSMIT,
     "FoxSDR engine",
     CASCADE_VERSION_STRING,
     apiCreate,

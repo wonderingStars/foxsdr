@@ -2407,7 +2407,7 @@ function reflectTransmit(s) {
   b.classList.toggle('on', pttDown || !!s.transmitting);
   const hold = s.transmitRemoteHold || 0;
   $('pttState').textContent =
-    !avail ? 'no transmitter'
+    !avail ? 'not available - no transmitter open, or remote transmit not allowed at the desk'
            : (s.transmitting
                 ? (hold > 0 ? 'ON AIR - held for another ' + hold + ' ms' : 'ON AIR')
                 : 'ready');
@@ -3100,6 +3100,14 @@ public:
         return true;
     }
 
+    bool setStatusPollHook(PollHook fn) {
+        if (running()) {
+            return false;
+        }
+        pollHook_ = std::move(fn);
+        return true;
+    }
+
     bool setSpectrumProvider(SpectrumProvider fn) {
         if (running()) {
             return false;
@@ -3219,6 +3227,7 @@ private:
     std::int64_t now() const { return clock_(); }
 
     StatusProvider status_;
+    PollHook pollHook_;
     SpectrumProvider spectrum_;
     Clock clock_;
 
@@ -3482,6 +3491,9 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
             deny(res, "sign in first");
             return;
         }
+        if (pollHook_) {
+            pollHook_();  // the page is alive: its keep-alive, and only this
+        }
         RadioStatus s;
         if (status_) {
             s = status_();
@@ -3651,8 +3663,12 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
                 s = status_();
             }
             if (!s.transmitAvailable) {
+                // Since engine stage 4 (API 0.2) transmitAvailable is the
+                // local operator's consent: a transmitter open AND "Allow
+                // remote transmit" ticked on the Transmit page at the desk.
                 deny(res,
-                     "there is no transmitter open, so the key cannot be closed from here",
+                     "the key cannot be closed from here: there is no transmitter open, or remote "
+                     "transmit is not allowed at the desk",
                      409);
                 return;
             }
@@ -3857,6 +3873,9 @@ WebServer::~WebServer() = default;
 
 bool WebServer::setStatusProvider(StatusProvider fn) {
     return impl_->setStatusProvider(std::move(fn));
+}
+bool WebServer::setStatusPollHook(PollHook fn) {
+    return impl_->setStatusPollHook(std::move(fn));
 }
 bool WebServer::setSpectrumProvider(SpectrumProvider fn) {
     return impl_->setSpectrumProvider(std::move(fn));

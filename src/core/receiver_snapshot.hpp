@@ -126,6 +126,10 @@ struct AppStateExt {
     // A fingerprint of everything read_list serves (engine/fox_engine_api.hpp,
     // ApiListBlock); publish() advances FoxReceiverState::listSeq when it moves.
     std::uint64_t listsFingerprint = 0;
+    // The engine API session holding the transmit key (0 = none): read_state
+    // sets FOXAPI_RX_TX_KEY_MINE from it for that session, from the SAME
+    // snapshot as TX_KEYED.
+    std::uint64_t txKeyOwner = 0;
 
     // --- /api/status figures API 0.2 has no field for ------------------------
     bool rxPositionSet = false;

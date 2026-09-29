@@ -1,23 +1,22 @@
 // test_remote_key_release.cpp - the standing conditions on the WEB REMOTE's
-// transmit key (engine/stage3b-pre remote-key coverage, 2026-09-28).
+// transmit key (engine/stage3b-pre remote-key coverage, 2026-09-28; the
+// consent rule since engine stage 4, API 0.2's THE KEY).
 //
-// THE RULE (engine.cpp FOXAPI_OP_TX_PTT, ~5629; app_window.cpp
-// applyWebControls, ~17628): a remote key exists only while (a) the operator
-// has the Transmit page open (engine_.transmitOpen_), so FOXAPI_OP_TX_PTT
-// itself refuses to key with it closed, and (b) the web server that carries
-// the browser's requests is actually running - closing the Transmit page or
-// stopping/disabling the server each release a key already held, in
-// applyWebControls's two "STANDING CONDITIONS" checks, because the hold's own
-// kRemotePttHoldMs expiry would otherwise leave the transmitter keyed for up
-// to two seconds with nobody able to ask again.
+// THE RULE: a remote key exists only while (a) a LOCAL session - the
+// window's, through the Transmit page's "Allow remote transmit" - has
+// consented (TX_REMOTE_ARM 1), so the browser's PTT itself is refused
+// without it, and withdrawing it releases a key held; and (b) the web server
+// that carries the browser's requests is actually running - a server that
+// never started, or that is switched off in the settings panel, releases a
+// key already held in the same step (FOXAPP_OP_WEB_CONTROL_STOPPED), because
+// the 2 s hold's own expiry would otherwise leave the transmitter keyed with
+// nobody able to ask again.
 //
-// test_apply_command.cpp's FOXAPI_OP_TX_PTT coverage already proves the
-// REFUSAL half (keying while transmitOpen_ is false is refused, never
-// remembered). THIS FILE proves the RELEASE half, which lived in the window
-// and had no test at all: a key already held is dropped the moment the page
-// closes, and separately the moment the web server is not running - each
-// checked in isolation, so a mutant deleting either "if" is caught by THAT
-// check specifically, not accidentally by the other one also being true.
+// test_transmit_dead_man.cpp holds (a)'s timing end to end on a bare Engine
+// (withdrawn, closed, silent); THIS FILE holds it through the window - the
+// window's own page-close path (gui::txKeyCommands withdraws the consent) -
+// and (b), each checked in isolation, so a mutant deleting either release is
+// caught by THAT check specifically.
 //
 // A real FakeTxIiod (the same fake TX board test_apply_command.cpp opens
 // FOXAPI_OP_TX_OPEN against) and a real WebServer bound to a free loopback
@@ -43,6 +42,7 @@
 #include "net/web_policy.hpp"
 #include "net/web_server.hpp"
 #include "test_check.hpp"
+#include "tx_front_end.hpp"
 
 namespace {
 
@@ -108,15 +108,19 @@ struct AppWindowTestAccess {
     static FoxCommandResult apply(AppWindow& a, const cascade::core::cmd::QueuedCommand& q) {
         return a.engine_.applyCommand(q.c, q.longText);
     }
-    static void setTransmitOpen(AppWindow& a, bool on) { a.engine_.transmitOpen_ = on; }
+    static cascade::engine::Engine& engine(AppWindow& a) { return a.engine_; }
+    // The engine's pass as far as the key needs it - the queue applied, the
+    // state published - without the audio half, which reads the window's
+    // ImGui clock (no ImGui context in this test).
+    static void pass(AppWindow& a) {
+        a.engine_.pumpFrameBegin();
+        (void)a.engine_.pumpPublish();
+    }
     static std::int64_t remoteHoldMs(AppWindow& a) {
         return a.engine_.transmitter_.remoteHoldRemainingMs();
     }
     static bool haveTx(AppWindow& a) { return a.engine_.transmitter_.haveSink(); }
     static void applyWebControls(AppWindow& a) { a.applyWebControls(); }
-    // The engine's control-side pump of the Transmit key, which now holds the
-    // page's standing condition on the remote key (OPEN 7 (c)).
-    static void pumpTransmitter(AppWindow& a) { a.engine_.pumpTransmitter(); }
     // The settings panel switching the web server off.
     static void disableWeb(AppWindow& a) {
         a.webCfg_.enabled = false;
@@ -144,6 +148,7 @@ int main() {
     isolate();
 
     cascade::gui::AppWindow app;
+    cascade::engine::Engine& engine = Access::engine(app);
 
     // --- open a transmitter, so there is a real sink to key ----------------
     cascade::test::FakeTxIiod board;
@@ -154,33 +159,59 @@ int main() {
     CHECK(ok(Access::apply(app, cmd::makeText(FOXAPI_OP_TX_OPEN, args))));
     CHECK(Access::haveTx(app));
 
+    // The desk: a LOCAL session doing what the window's Transmit page does.
+    tx_test::FrontEnd desk(engine, "the desk");
+    desk.frame(true, false, false);
+    Access::pass(app);  // a transmitter is now PUBLISHED open
+    auto consent = [&](int on) {
+        desk.frame(true, false, false, true, on);
+        Access::pass(app);
+    };
+    // The browser polls its status (the web remote's keep-alive) as it presses.
+    auto webKey = [&] {
+        engine.api().webRemoteBeat();
+        return Access::apply(app, cmd::makeInt(FOXAPI_OP_TX_PTT, 1)); };
+
     WebServer& webServer = Access::webServer(app);
+
+    // === 0: NO CONSENT, NO KEY - the browser's PTT is refused, never
+    //     remembered: consenting afterwards keys nothing by itself. ==========
+    {
+        const FoxCommandResult r = webKey();
+        CHECK(r.status == FOXAPI_DENIED);
+        CHECK(Access::remoteHoldMs(app) == 0);
+        consent(1);
+        CHECK(Access::remoteHoldMs(app) == 0);
+        consent(0);
+        std::printf("  0: no consent -> status %d, remote hold %lld ms\n", r.status,
+                    static_cast<long long>(Access::remoteHoldMs(app)));
+    }
 
     // === B: THE WEB SERVER NOT RUNNING releases a key already held =========
     // Run FIRST, before the server is ever started: WebServer::stop() itself
     // QUEUES a synthetic "transmitPtt=false" ControlRequest (web_server.cpp,
     // "A SERVER THAT HAS STOPPED RELEASES THE TRANSMIT KEY... by queueing the
-    // release"), which applyWebControls's FIRST loop (webServer_.
-    // takePendingControls()) would apply regardless of the standing-condition
-    // "if" this test means to isolate - stopping an already-started server
-    // would exercise THAT mechanism, not this one. A server that was NEVER
-    // started queues nothing (stop()'s early return, guarded by
-    // running_.exchange, never fires), so running()==false here is exactly
-    // the case the check's own comment names: "a server disabled in the
-    // settings panel, where there is no stop() to queue anything."
+    // release"), which applyWebControls's FIRST loop would apply regardless of
+    // the standing condition this test means to isolate. A server that was
+    // NEVER started queues nothing, so running()==false here is exactly the
+    // case the condition names: "a server that never started or was disabled
+    // in the settings panel".
     {
         CHECK(!webServer.running());
-        Access::setTransmitOpen(app, true);   // the page stays open throughout
-        CHECK(ok(Access::apply(app, cmd::makeInt(FOXAPI_OP_TX_PTT, 1))));
+        consent(1);
+        CHECK(ok(webKey()));
         CHECK(Access::remoteHoldMs(app) > 0);
         Access::applyWebControls(app);
         CHECK(Access::remoteHoldMs(app) == 0);
+        // The rules let go IN THE SAME STEP, not only the radio - not left
+        // for the next pass to notice.
+        CHECK((engine.api().txFacts().owner) == 0u);
         std::printf("  B: server never started -> remote hold %lld ms\n",
                     static_cast<long long>(Access::remoteHoldMs(app)));
     }
 
-    // --- NOW start the server, for A and the control below: both need
-    //     running()==true throughout, with only transmitOpen_ moving. ------
+    // --- NOW start the server, for A, D and the control below: all need
+    //     running()==true throughout, with only the consent moving. --------
     const int port = startOnFreePort(webServer, loopbackConfig(), err);
     if (port < 0) {
         std::printf("SKIP: could not bind a loopback port for the web server (%s)\n", err.c_str());
@@ -189,61 +220,51 @@ int main() {
     std::printf("  app's web server bound to 127.0.0.1:%d\n", port);
     CHECK(webServer.running());
 
-    // === A: THE PAGE CLOSING releases a key already held ====================
-    //     Since engine/stage3b-pre OPEN 7 (c) this is the ENGINE's standing
-    //     condition, checked by its own pumpTransmitter() - no longer the
-    //     window's applyWebControls poll, which touches transmitter_ no more.
+    // === A: THE CONSENT WITHDRAWN releases a key already held, in the pass
+    //     that applies it. ===================================================
     {
-        Access::setTransmitOpen(app, true);
-        CHECK(ok(Access::apply(app, cmd::makeInt(FOXAPI_OP_TX_PTT, 1))));
+        CHECK(ok(webKey()));
         CHECK(Access::remoteHoldMs(app) > 0);
-        // The web server keeps running throughout - only transmitOpen_ moves.
-        Access::setTransmitOpen(app, false);
-        Access::pumpTransmitter(app);
+        consent(0);
         CHECK(Access::remoteHoldMs(app) == 0);
-        std::printf("  A: page closed -> remote hold %lld ms\n",
+        std::printf("  A: consent withdrawn -> remote hold %lld ms\n",
                     static_cast<long long>(Access::remoteHoldMs(app)));
     }
 
-    // === control: with the page open AND the server running, a fresh key
-    //     survives one applyWebControls pass untouched (neither condition
-    //     should be firing when neither is true - a mutant that always
-    //     releases would still pass A and B above but fail here). ==========
+    // === control: consent standing AND the server running - a fresh key
+    //     survives applyWebControls and a pass untouched (a mutant that always
+    //     releases would pass A, B, D and E but fail here). ==================
     {
         CHECK(webServer.running());
-        Access::setTransmitOpen(app, true);
-        CHECK(ok(Access::apply(app, cmd::makeInt(FOXAPI_OP_TX_PTT, 1))));
+        consent(1);
+        CHECK(ok(webKey()));
         CHECK(Access::remoteHoldMs(app) > 0);
         Access::applyWebControls(app);
-        Access::pumpTransmitter(app);
-        CHECK(Access::remoteHoldMs(app) > 0);   // NEITHER condition applies - still held
-        std::printf("  control: page open + server running -> remote hold %lld ms (still held)\n",
+        desk.frame(true, false, false);
+        Access::pass(app);
+        CHECK(Access::remoteHoldMs(app) > 0);  // neither condition applies - still held
+        std::printf("  control: consent + server running -> remote hold %lld ms (still held)\n",
                     static_cast<long long>(Access::remoteHoldMs(app)));
     }
 
-    // === D (engine/stage3b-pre 2b): closing the page THROUGH THE COMMAND
-    //     releases a key held IN THE SAME STEP - never calling
-    //     applyWebControls at all, so this cannot be the window's per-frame
-    //     poll (A above) doing the work. The command is
-    //     FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN, which is what the toolbar switch
-    //     and the page's own close now submit instead of writing
-    //     transmitOpen_ directly. =============================================
+    // === D: THE PAGE CLOSING withdraws the consent (the window's own path,
+    //     gui::txKeyCommands) - and the key held goes in that pass. ==========
     {
-        CHECK(ok(Access::apply(app, cmd::makeInt(FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN, 1))));
-        CHECK(ok(Access::apply(app, cmd::makeInt(FOXAPI_OP_TX_PTT, 1))));
         CHECK(Access::remoteHoldMs(app) > 0);
-        CHECK(ok(Access::apply(app, cmd::makeInt(FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN, 0))));
+        desk.frame(false, false, false);  // the page closes
+        Access::pass(app);
         CHECK(Access::remoteHoldMs(app) == 0);
-        std::printf("  D: FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN(0) alone -> remote hold %lld ms\n",
-                    static_cast<long long>(Access::remoteHoldMs(app)));
+        CHECK((engine.api().txFacts().remoteArmed) == false);
+        std::printf("  D: page closed -> remote hold %lld ms\n", static_cast<long long>(Access::remoteHoldMs(app)));
     }
 
-    // === E (OPEN 7 (c)): switching the web server OFF in the settings panel
-    //     releases a key held IN THE SAME STEP - applyWebSettings alone, with
-    //     no frame, no applyWebControls and no pump after it. ================
+    // === E: switching the web server OFF in the settings panel releases a
+    //     key held IN THE SAME STEP - applyWebSettings alone, with no frame,
+    //     no applyWebControls and no pass after it. ==========================
     {
-        CHECK(ok(Access::apply(app, cmd::makeInt(FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN, 1))));
-        CHECK(ok(Access::apply(app, cmd::makeInt(FOXAPI_OP_TX_PTT, 1))));
+        desk.frame(true, false, false);
+        consent(1);
+        CHECK(ok(webKey()));
         CHECK(Access::remoteHoldMs(app) > 0);
         Access::disableWeb(app);
         CHECK(!webServer.running());
@@ -252,6 +273,7 @@ int main() {
                     static_cast<long long>(Access::remoteHoldMs(app)));
     }
 
+    desk.close();
     const int rc = testSummary("test_remote_key_release");
     if (rc == 0) {
         std::error_code ec;

@@ -44,6 +44,7 @@
 #include "engine/engine.hpp"
 #include "source/tx_sink.hpp"
 #include "test_check.hpp"
+#include "tx_front_end.hpp"
 
 using cascade::engine::Engine;
 
@@ -101,12 +102,18 @@ void setEnv(const char* n, const std::string& v) {
 
 namespace cascade::gui {
 struct AppWindowTestAccess {
-    static RecordingSink* keyTransmitter(Engine& e) {
+    // Latched as the window latches it: a LATCH press on its session, applied
+    // by a pass (a key is judged against the published state, so one pass
+    // publishes the transmitter open first).
+    static RecordingSink* keyTransmitter(Engine& e, tx_test::FrontEnd& fe) {
         auto sink = std::make_unique<RecordingSink>();
         RecordingSink* raw = sink.get();
         e.transmitter_.setSink(std::move(sink));
         e.transmitter_.setInput(cascade::core::TxInput::Tone);
-        e.pumpTransmitter(/*pageLive=*/true, /*latchPressed=*/true, /*pttHeld=*/false);
+        fe.frame(true, false, false);
+        e.pump();
+        fe.frame(true, false, true);
+        e.pump();
         return raw;
     }
     static bool transmitting(Engine& e) { return e.transmitter_.transmitting(); }
@@ -137,7 +144,8 @@ int main() {
         Engine e;
         e.initialise();
         A::startReceiver(e);
-        RecordingSink* radio = A::keyTransmitter(e);
+        tx_test::FrontEnd fe(e);
+        RecordingSink* radio = A::keyTransmitter(e, fe);
         CHECK(A::transmitting(e));
         CHECK(radio->running());
         CHECK(A::running(e));
@@ -165,7 +173,8 @@ int main() {
         Engine e;
         e.initialise();
         A::startReceiver(e);
-        RecordingSink* radio = A::keyTransmitter(e);
+        tx_test::FrontEnd fe(e);
+        RecordingSink* radio = A::keyTransmitter(e, fe);
         CHECK(radio->running());
         e.shutdown();
         e.shutdown();   // twice: every step is idempotent

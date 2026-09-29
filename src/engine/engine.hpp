@@ -74,7 +74,6 @@
 #include "engine/running_view.hpp"
 #include "engine/source_fallback.hpp"
 #include "engine/tune_control.hpp"
-#include "engine/tx_page_key.hpp"
 #include "source/airspy_source.hpp"
 #include "source/airspyhf_source.hpp"
 #include "source/hackrf_source.hpp"
@@ -1730,35 +1729,27 @@ private:
     // The TX thread, the modulator, the microphone and the radio all live
     // inside Transmitter; this is everything the PAGE needs and nothing more.
     //
-    // NOTHING HERE CAN KEY IT. transmitPttHeld_ is written from the page's
-    // own key and from the spacebar while the page has focus, and it is reset
-    // to false at the top of every frame - so a page that stops being drawn
-    // stops asking, which is the behaviour a window losing focus should have.
-    // The LATCH is a deliberate switch whose state lives in Transmitter (with
-    // its own failsafe); the page only records a PRESS. All three per-frame
-    // flags reach the transmitter together, in drawUi just before its tick,
-    // through gui::txPageKey - so a page that is not live releases the key.
-    // None is persisted; core/config.hpp says why at length.
+    // NOTHING HERE CAN KEY IT. The key is decided by the engine API's rules
+    // (core/tx_key_rules.hpp, API 0.2's THE KEY) for the session that asked
+    // - a PTT that is a 2 s hold its interface re-asserts, a latch only a
+    // LOCAL session may close, a remote PTT only with a local session's
+    // consent - and the API host drives the Transmitter from them once a
+    // pass (engine/fox_engine_api.cpp). None of it is persisted;
+    // core/config.hpp says why at length.
     cascade::core::Transmitter transmitter_;
     bool transmitOpen_ = false;    // is the PAGE open
-    // The Transmit page's newest key request (see submitTransmitPageKey), and
-    // what the control side last acted on of it.
     mutable std::mutex frontEndFactsMutex_;
     FrontEndFacts frontEndFacts_;
     mutable std::mutex statusTextMutex_;
     EngineStatusText statusText_;
     mutable std::mutex configSnapMutex_;
     cascade::core::AppConfig configSnap_;
-    std::mutex txPageMutex_;
-    cascade::gui::TxPageRequest txPageRequest_;
-    std::uint32_t txLatchPressesSeen_ = 0;
-    std::uint64_t txFrameSeen_ = 0;
-    // TESTS ONLY (tests/test_transmit_key_race.cpp): called by
-    // pumpTransmitter() between reading the request and writing the key, the
-    // one point where a front-end key-up racing the control side matters.
-    // Null in the product.
-    void (*txKeyInterleaveForTest_)(void*) = nullptr;
-    void* txKeyInterleaveArgForTest_ = nullptr;
+    // TESTS ONLY (an engine created through the table with testHooks=1): the
+    // fault test.fault stands in for (published as FAULTED until RUN 1), and
+    // the dummy load TX_OPEN "test:tx:dummy" installs. Empty / null in the
+    // product.
+    std::string testFault_;
+    std::unique_ptr<cascade::source::IqSink> (*txSinkForTest_)() = nullptr;
     // The control thread (startControlThread).
     void controlLoop(std::chrono::milliseconds period);
     std::thread controlThread_;
@@ -2231,15 +2222,11 @@ public:
     void pumpPlugins();
     double pumpPublish();  // returns the centre it published (publishReceiverState)
     void pumpAudioMute();
-    // THE TRANSMIT PAGE'S KEY, in two halves (docs/engine-stage3.md OPEN 7).
-    // submitTransmitPageKey: the FRONT END, once a frame - stamps the
-    // transmitter's front-end liveness, applies any key-UP at once (the page
-    // not live, the PTT let go), and leaves the request in the slot.
-    // pumpTransmitter(): the CONTROL side - reads the newest request, applies
-    // key-DOWN (and the LATCH presses since the last read), releases a remote
-    // key the closed page no longer allows, and ticks.
-    void submitTransmitPageKey(const cascade::gui::TxPageRequest& r);
-    void pumpTransmitter();
+    // THE KEY (engine stage 4): no longer a slot the window writes. Every
+    // interface - the standard window included - keys the transmitter through
+    // its own engine API session (TX_PTT, TX_LATCH, TX_REMOTE_ARM), under the
+    // rules in core/tx_key_rules.hpp, applied on the pass by the API host
+    // (engine/fox_engine_api.cpp), which also ticks the Transmitter.
     // THE ENGINE'S TEARDOWN (engine/stage3b-pre, docs/engine-stage3.md OPEN
     // 9), in three ordered phases a front end calls between its own steps -
     // the window has a final config save that must read live state before
@@ -2256,10 +2243,6 @@ public:
     void shutdownStop();
     void shutdownRelease();
     void shutdown();
-    // Both halves as one frame, for a front end with no page of its own
-    // (Engine::pump) and for tests: the request is the previous one with this
-    // frame's levels, and one LATCH press more when latchPressed.
-    void pumpTransmitter(bool pageLive, bool latchPressed, bool pttHeld);
     void pumpWorkers();
     void pumpAudio();
     void pump();
@@ -2268,9 +2251,9 @@ public:
     // The engine pumping itself, on a thread of its own: one controlPass()
     // per period - pump()'s phases in pump()'s order, with the transmitter's
     // CONTROL half only (the front end, on its own thread, submits the page's
-    // key: submitTransmitPageKey) - and a heartbeat of the thread's own hang
+    // key through its API session) - and a heartbeat of the thread's own hang
     // watchdog. While it runs, a front end talks to the engine ONLY through
-    // the thread-safe surface: submitCommand, submitTransmitPageKey, the
+    // the thread-safe surface: the engine API's table, submitCommand, the
     // snapshot, statusText, configSnapshot, setFrontEndFacts - never
     // applyCommand, the pump phases or a field. The window does not start it
     // yet (section 10 says why); a headless front end may.

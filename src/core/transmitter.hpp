@@ -5,50 +5,65 @@
 // THE HARD RULE
 // ============================================================================
 //
-// TRANSMISSION HAPPENS ONLY WHILE THE OPERATOR IS ASKING FOR IT. Not at
+// TRANSMISSION HAPPENS ONLY WHILE AN OPERATOR IS ASKING FOR IT. Not at
 // startup, not because a config file said the transmitter was on last time,
-// not because a window was left open, and not because a plugin asked. There
-// are exactly three things in this product that can key a radio - a PTT held
-// down, a LATCH switch deliberately closed, and (0.95.1) a PTT held down on
-// the web remote - and the first two are a hand on this machine while the
-// third is a hand on a browser that had to be let in. Everything else in this
-// header exists to make that true even when something goes wrong:
+// not because a window was left open, and not because a plugin asked.
+//
+// WHO MAY ASK, AND FOR HOW LONG, IS DECIDED BY THE ENGINE API'S RULES, not
+// here (engine extraction stage 4, the owner's decision of 2026-09-29: API
+// 0.2's "THE KEY", implemented in core/tx_key_rules.hpp and applied by the
+// engine's API host, engine/fox_engine_api.cpp, once a control pass). Every
+// interface - the standard window included - keys through its own SESSION:
+//
+//   - TX_PTT 1 IS A HOLD, NOT A SWITCH: it keys, or extends the key, for 2 s
+//     (FOXAPI_PTT_HOLD_MS) and no more; the interface re-asserts it while a
+//     hand is on the key, and silence opens it. TX_PTT 0 opens it now.
+//   - THE LATCH belongs to a PRINCIPAL (the operator at this machine, for
+//     every LOCAL session), is refused to any remote session, opens itself 60
+//     s after it closed, is never re-armed within 1 s of ANY latch ending,
+//     and after any end but its owner's own release it MARKS the operator: no
+//     session of theirs latches again until THAT session has sent LATCH 0.
+//     An interface's latch key is edge-triggered (a press on a released key
+//     sends LATCH 0 then LATCH 1 in one batch; on a latched key, LATCH 0).
+//   - A REMOTE PTT (the app's web remote, and any remote session) needs the
+//     local operator's standing consent - TX_REMOTE_ARM 1 from a LOCAL
+//     session, the Transmit page's "Allow remote transmit" switch - which
+//     lapses when that session withdraws it, closes, or stops answering.
+//   - EVERY SESSION HAS A KEEP-ALIVE (1 s local, 2 s remote) and only its
+//     heartbeat() counts; a session that stops answering, closes or is
+//     detached loses any key it holds. A stop, a fault, and a transmitter
+//     change or close each end any key.
+//
+// This class does what those rules decide - setPttHeld, setLatched and
+// keyRemote/releaseRemote are the rules' levels, driven by the API host -
+// and keeps, on its own thread, the protections that must hold even when
+// the rules' own thread has stopped:
 //
 //   - THE CONFIG CANNOT KEY IT. The mode, the power, the input and the split
-//     are saved; the PTT is not, and there is no code path that could restore
-//     it. core/config.hpp says the same thing from its side.
+//     are saved; the key is not, and there is no code path that could
+//     restore it. core/config.hpp says the same thing from its side.
 //
-//   - A FROZEN WINDOW CANNOT LEAVE IT KEYED. Two liveness stamps, both
-//     watched by the TX thread itself (kKeyAliveWait): tick(), stamped by the
-//     side that applies the key (the control side), and frontEndAlive(), one
-//     store a frame from the window. Any key opens if the control stamp goes
-//     stale; a LOCAL key (PTT, LATCH) opens if the window's does. A wedged
-//     loop is the one failure that would otherwise transmit for as long as
-//     the process lived, because the thing that would normally release the
-//     key is the thing that has stopped - and once tick() runs off the GUI
-//     thread (stage 3b), a frozen window no longer stops it, which is why the
-//     window has a stamp of its own (docs/engine-stage3.md OPEN 7).
+//   - TWO INDEPENDENT DEAD-MAN'S HANDLES, both watched by the TX thread itself
+//     (kKeyAliveWait): tick(), stamped once a control pass by the thread that
+//     applies the rules - ANY key opens if it goes stale, because the thing
+//     that would release the key is the thing that has stopped - and
+//     frontEndAlive(), stamped by the KEY HOLDER'S heartbeat (the API host
+//     calls it for that session's heartbeat, and when it grants a key) - a
+//     LOCAL key (PTT, LATCH) opens if it goes stale, however the control side
+//     is doing. So a frozen window, and a wedged control thread, each release
+//     the key within kKeyAliveWait on a thread neither of them can stop.
 //
-//   - A LATCH CANNOT BE FORGOTTEN. It releases itself after kLatchTimeout.
-//     Somebody who walks away from a latched transmitter with a live
-//     microphone is transmitting the room; a minute is long enough for the
-//     thing a latch is for (both hands on something else) and short enough
-//     that the failure is embarrassing rather than reportable.
+//   - A LATCH CANNOT BE FORGOTTEN. The rules end it after 60 s; this class
+//     keeps its own kLatchTimeout as a second, independent deadline.
 //
 //   - A FAULT UNKEYS IT. A sink that faults mid-transmission stops the key
-//     rather than being retried, because the next thing after "the board
-//     stopped answering" is not more modulation.
+//     rather than being retried; the API host sees the key go and tells the
+//     rules, which mark a latch's operator as for any other end.
 //
-//   - THE REMOTE KEY IS A DEAD-MAN'S HANDLE OF ITS OWN, and that is the whole
-//     of what makes it defensible. keyRemote() does not set a switch; it buys
-//     kRemotePttHoldMs and no more, so the key opens unless the browser keeps
-//     asking. A closed tab, a phone put in a pocket, a Wi-Fi link that drops
-//     mid-transmission and a laptop lid that shuts all look identical from
-//     here - the remote stops asking - and every one of them opens the key
-//     inside two seconds. THE REMOTE CANNOT LATCH: there is no remote latch
-//     state to set, because a latch is a control that keeps a radio keyed
-//     with nobody touching anything, and "nobody touching anything" is the
-//     ordinary state of a machine at the far end of a network.
+//   - THE REMOTE KEY IS A DEAD-MAN'S HANDLE OF ITS OWN. keyRemote() buys
+//     kRemotePttHoldMs and no more, enforced here as well as by the rules, so
+//     a closed tab, a phone put in a pocket or a Wi-Fi link that drops all
+//     open the key inside two seconds. THE REMOTE CANNOT LATCH.
 //
 // ============================================================================
 // THE RATE PROBLEM, AND WHY IT IS SOLVED IN TWO STAGES
@@ -284,23 +299,29 @@ public:
     long microphoneOwners() const { return audioIn_.use_count(); }
 
     // --- the key -------------------------------------------------------------
+    //
+    // DRIVEN BY THE ENGINE'S KEY RULES (core/tx_key_rules.hpp), once a control
+    // pass, by the engine API's host - never by an interface directly.
 
-    // The PTT, held. Called every frame by the frame loop in drawUi (through
-    // gui::txPageKey), with what the Transmit page's key is doing, or false when
-    // the page is closed or rolled up; false is the resting state. This object
-    // does no staleness detection of its own - the frame loop is what releases
-    // the key when the page goes away, and tests/test_transmit_page.cpp pins
-    // that wiring.
+    // A LOCAL session's PTT, held: true while the rules say a local session
+    // holds the key on a PTT whose hold has not run out; false is the resting
+    // state. The TX thread opens it if the holder's frontEndAlive() stamp goes
+    // stale.
     void setPttHeld(bool held);
     bool pttHeld() const;
 
-    // The LATCH switch. Releases itself after kLatchTimeout, and is cleared
-    // by every stop, every fault and every sink change - a latch that
-    // survived a radio being swapped would key the new one.
+    // The LATCH, as the rules hold it. Also releases itself after
+    // kLatchTimeout (a second deadline beside the rules' own), and is cleared
+    // by every stop, every fault and every sink change - a latch that survived
+    // a radio being swapped would key the new one.
     void setLatched(bool on);
     bool latched() const;
 
-    // --- THE WEB REMOTE'S KEY (0.95.1) ---------------------------------------
+    // --- A REMOTE SESSION'S KEY (the web remote's since 0.95.1) --------------
+    //
+    // Keyed only when the rules grant a REMOTE session's PTT - which needs the
+    // local operator's consent (TX_REMOTE_ARM) - and released the moment
+    // they end it.
     //
     // Deliberately NOT a setter taking a bool, which is what every other
     // control here is. A bool setter is a switch, and a switch left on by a
@@ -331,10 +352,11 @@ public:
     // been seen.
     bool transmitting() const;
 
-    // ONCE A PUMP, FROM THE CONTROL SIDE (the GUI thread's frame in 3a, the
-    // engine's control thread in 3b). Applies the key request, enforces the
-    // latch timeout, and - the part that matters - stamps the control
-    // liveness the TX thread watches. A loop that stops running stops calling
+    // ONCE A CONTROL PASS, FROM THE THREAD THAT APPLIES THE KEY RULES (the
+    // engine API's host, on the engine's control thread - or the window's
+    // frame while it still pumps the engine itself). Applies the key the
+    // rules left, enforces the latch timeout, and - the part that matters -
+    // stamps the control liveness the TX thread watches. A loop that stops running stops calling
     // this, and the key opens. The remote key's hold is enforced by the TX
     // thread; this only drops an assertion gone stale with nothing
     // transmitting, before it could key for it. A TX thread that played the
@@ -343,12 +365,16 @@ public:
     // takes every key with it.
     void tick();
 
-    // ONCE A FRAME, FROM THE FRONT END (the GUI thread), and nothing else:
-    // one atomic store saying "the window that owns the local key is alive".
-    // With a PTT or LATCH asserted, the TX thread opens the key when this
-    // has not been called for kKeyAliveWait - however the control side is
-    // doing.
+    // THE KEY HOLDER'S HEARTBEAT: one atomic store saying "the session that
+    // holds the local key is alive", made by the engine API's host for that
+    // session's heartbeat() (and when it grants the key). With a PTT or
+    // LATCH asserted, the TX thread opens the key when this has not been
+    // called for kKeyAliveWait - however the control side is doing.
     void frontEndAlive();
+    // The same stamp, at a given steady-clock millisecond count (the key
+    // holder's last heartbeat, when a key is granted): so a grant - a PTT
+    // re-assertion included - never counts as a heartbeat of its own.
+    void frontEndAliveAt(std::int64_t steadyMs);
 
     // Unkeys and stops everything, bounded (kThreadJoinWait plus whatever the
     // sink's own stop costs). Idempotent; safe before any sink is installed;

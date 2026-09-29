@@ -458,6 +458,13 @@ public:
     // returns false, because a handler could be reading the old one.
     bool setStatusProvider(StatusProvider fn);
     bool setSpectrumProvider(SpectrumProvider fn);
+    // THE PAGE'S KEEP-ALIVE (engine stage 4): called for every authorised
+    // GET /api/status - the page's own poll, four times a second - and for
+    // nothing else, so a PTT re-assertion is never mistaken for one (API 0.2:
+    // only the interface's own heartbeat counts). The application hands it to
+    // the engine as the web remote's heartbeat.
+    using PollHook = std::function<void()>;
+    bool setStatusPollHook(PollHook fn);
 
     // Overrides the wall clock, for tests that need session expiry and login
     // throttling to be deterministic. Must be set before start().

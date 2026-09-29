@@ -64,7 +64,6 @@
 #include "engine/receiver_tables.hpp"
 #include "engine/source_fallback.hpp"
 #include "engine/tx_frequency.hpp"
-#include "engine/tx_page_key.hpp"
 
 
 namespace cascade::engine {
@@ -3399,7 +3398,7 @@ void Engine::fillPublishedState(cascade::core::PublishedState& ps, const std::st
     cascade::core::RxFlagSources fs;
     fs.running = running;
     fs.deviceOpen = device_ != nullptr;
-    fs.faulted = pipeline_.faulted();
+    fs.faulted = pipeline_.faulted() || !testFault_.empty();
     fs.muted = userMuted_;
     fs.stereoEnabled = stereoEnabled_;
     fs.stereoActive = pipeline_.stereoActive();
@@ -3413,12 +3412,15 @@ void Engine::fillPublishedState(cascade::core::PublishedState& ps, const std::st
     fs.scannerActive = scanner_.active();
     // The DEC lamp's own predicate (drawToolbar's MASTER cluster).
     fs.decoderActive = running && runnerActive > 0;
+    // THE KEY, as the engine API's rules decided it this pass (stage 4).
+    const ApiHost::TxFacts key = api_->txFacts();
     fs.txAvailable = transmitter_.haveSink();
     fs.txKeyed = transmitter_.transmitting();
-    fs.txLatched = transmitter_.latched();
-    // The app's consent to a remote key: a transmitter open AND the Transmit
-    // page on screen (what /api/status has always called transmitAvailable).
-    fs.txRemoteArmed = transmitOpen_ && transmitter_.haveSink();
+    fs.txLatched = key.latched;
+    // The local operator's consent to a remote key: TX_REMOTE_ARM from a
+    // LOCAL session (the Transmit page's "Allow remote transmit"); what
+    // /api/status calls transmitAvailable, with a transmitter open.
+    fs.txRemoteArmed = key.remoteArmed && transmitter_.haveSink();
     fs.sinkOpen = sink.running();
     // Handed over by the front end (OPEN 4), not asked of it while publishing.
     const FrontEndFacts facts = frontEndFacts();
@@ -3462,8 +3464,9 @@ void Engine::fillPublishedState(cascade::core::PublishedState& ps, const std::st
     r.audioUnderruns = sink.underruns();
     r.txFrequencyHz = transmitter_.frequencyHz();
     r.txPowerDb = transmitter_.powerDb();
-    r.txHoldRemainingMs = transmitter_.remoteHoldRemainingMs();
-    r.txLatchRemainingMs = 0;  // OPEN: the Transmitter publishes no latch timer
+    r.txHoldRemainingMs = key.holdRemainingMs;
+    r.txLatchRemainingMs = key.latchRemainingMs;
+    e.txKeyOwner = key.owner;
     cascade::core::formatUtf8(r.deviceName, sizeof(r.deviceName), "%s",
                               src.name() != nullptr ? src.name() : "");
     // openedDeviceName() try-locks and answers "" while an open holds the
@@ -3472,8 +3475,11 @@ void Engine::fillPublishedState(cascade::core::PublishedState& ps, const std::st
     cascade::core::formatUtf8(
         r.sinkName, sizeof(r.sinkName), "%s",
         cascade::core::keepLastGoodName(sinkNameLastGood_, sink.openedDeviceName()).c_str());
-    cascade::core::formatUtf8(r.faultMessage, sizeof(r.faultMessage), "%s", faultMessage.c_str());
-    // r.txUnkeyReason: OPEN - the Transmitter keeps no sentence for it.
+    cascade::core::formatUtf8(r.faultMessage, sizeof(r.faultMessage), "%s",
+                              testFault_.empty() ? faultMessage.c_str() : testFault_.c_str());
+    // Why the key last opened ON ITS OWN - the rules' sentence ("" when the
+    // operator opened it).
+    cascade::core::formatUtf8(r.txUnkeyReason, sizeof(r.txUnkeyReason), "%s", key.unkeyReason);
 
     // --- the host API level 1's tables (plugin get_gain / get_sample_rates) ---
     if (device_ != nullptr) {
@@ -4082,6 +4088,13 @@ void Engine::openTransmitRadio() {
         transmitArgs_ = (sourceKind_ == "pluto" && !deviceArgs_.empty())
                             ? deviceArgs_
                             : std::string("uri=ip:192.168.2.1");
+    }
+    if (txSinkForTest_ != nullptr && transmitArgs_ == "test:tx:dummy") {
+        // TESTS ONLY: the table's dummy load (testHooks=1), no RF anywhere.
+        transmitter_.setSink(txSinkForTest_());
+        transmitter_.setMode(cascade::dsp::txModeFromIndex(transmitModeIndex_));
+        transmitter_.setInput(cascade::core::TxInput::Tone);
+        return;
     }
     auto tx = std::make_unique<cascade::source::PlutoTx>();
     if (!tx->open(transmitArgs_)) {
@@ -5092,8 +5105,13 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             // and a plugin all stop through stopReceiver - recordings first
             // (0.99.36) - and start through startReceiver.
             if (on) {
+                testFault_.clear();  // a fault latches until the next start (API.md 6.1)
                 startReceiver();
             } else {
+                // THE KEY NEVER SURVIVES A STOP (API 0.2): whoever asked -
+                // the dome, a key binding, a browser, a remote session - a
+                // stop opens any key and marks a latch's principal.
+                api_->endKeyFromEngine("the receiver was stopped");
                 stopReceiver();
             }
             res.applied[0] = pipeline_.running() ? 1.0 : 0.0;
@@ -5365,7 +5383,7 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             // No server, no browser, no remote key (OPEN 7 (c)): released
             // here, in the same step the window stops the server, rather than
             // by the window reaching into transmitter_ on its next frame.
-            transmitter_.releaseRemote("the web server is not running");
+            api_->webRemoteStopped("the web server is not running");
             return res;
         case FOXAPP_OP_PATCH_LOOK_FOR_RADIOS:
             // "Look for radios" pressed (0.99.40, engine/stage3b-pre
@@ -5858,28 +5876,25 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             if (text.find_first_not_of(" \t") == std::string::npos) {
                 return refuse(FOXAPI_BAD_ARGUMENT, "no transmitter address given");
             }
+            // A KEY NEVER SURVIVES A TRANSMITTER CHANGE (API 0.2).
+            api_->endKeyFromEngine("the transmitter was changed");
             transmitArgs_ = text;
             openTransmitRadio();
             if (!transmitter_.haveSink()) { return refuse(FOXAPI_FAILED, "the transmitter did not open"); }
             return res;
         case FOXAPI_OP_TX_CLOSE:
+            api_->endKeyFromEngine("the transmitter was closed");
             closeTransmitRadio();
             return res;
         case FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN:
-            // THE PAGE OPEN FLAG (engine/stage3b-pre 2b, docs/engine-stage3.md
-            // OPEN 1/10, SAFETY): the window used to write transmitOpen_ in
-            // place from two ImGui sites (the toolbar switch, and ImGui's own
-            // close affordance through &engine_.transmitOpen_) and rely on
-            // applyWebControls's per-frame poll to notice a close and release
-            // a remote key already held - up to one frame late. Closing
-            // through THIS command releases it in the SAME step, at once: a
-            // remote key exists only while the operator has the page open
-            // (FOXAPI_OP_TX_PTT's own refusal above), so the moment that stops
-            // being true is the moment nothing may still be keyed.
+            // THE PAGE OPEN FLAG (engine/stage3b-pre 2b): which page the
+            // window shows. Since stage 4 it gates NO key - the remote key
+            // needs the local operator's explicit consent (TX_REMOTE_ARM from
+            // the window's session, the page's "Allow remote transmit"
+            // switch), and the window withdraws it, and releases its own key,
+            // when the page closes.
             transmitOpen_ = on;
-            if (!on) {
-                transmitter_.releaseRemote("the transmit page was closed");
-            } else if (transmitArgs_.empty()) {
+            if (on && transmitArgs_.empty()) {
                 // THE ADDRESS IS SEEDED FOR THE EYE (engine/stage3b-pre
                 // fields-to-commands round 2, moved from the window's own
                 // per-frame seed): doing it only inside the open left the
@@ -5890,22 +5905,18 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
                                                                                  : std::string("uri=ip:192.168.2.1");
             }
             return res;
-        case FOXAPI_OP_TX_PTT:
-            // THE REMOTE KEY (0.95.1): an assertion with a deadline, not a
-            // switch - keyRemote() buys kRemotePttHoldMs and the browser has to
-            // keep asking. A request that arrives while the page is shut is
-            // dropped, never remembered.
-            if (on) {
-                if (transmitOpen_ && transmitter_.haveSink()) {
-                    transmitter_.keyRemote();
-                } else {
-                    transmitter_.releaseRemote("there is no transmitter open");
-                    return refuse(FOXAPI_NO_DEVICE, "there is no transmitter open");
-                }
-            } else {
-                transmitter_.releaseRemote("the remote let go");
-            }
+        case FOXAPI_OP_TX_PTT: {
+            // THE WEB REMOTE'S KEY (0.95.1; the browser's transmitPtt reaches
+            // here through applyControlRequest): since stage 4 an
+            // engine-internal REMOTE session under API 0.2's rules - a 2 s
+            // hold the page re-asserts, and only while a LOCAL session has
+            // consented (TX_REMOTE_ARM). An interface with a session of its
+            // own keys through the table, never through here.
+            const FoxCommandResult r = api_->webRemotePtt(on);
+            if (r.status != FOXAPI_OK) { return refuse(r.status, r.message); }
+            res.applied[0] = r.applied[0];
             return res;
+        }
         case FOXAPI_OP_TX_SET_MODE:
             if (c.ival[0] < 0 || c.ival[0] >= cascade::dsp::kTxModeCount) {
                 return refuse(FOXAPI_OUT_OF_RANGE, "no such transmit mode");
@@ -6750,8 +6761,8 @@ void Engine::fillConfig(cascade::core::AppConfig& cfg) {
     cfg.transmitToneHz = transmitToneHz_;
     cfg.transmitMonitor = transmitMonitor_;
     cfg.transmitArgs = transmitArgs_;
-    // AND NOTHING FOR THE KEY: transmitPttHeld_, transmitLatchPresses_ and
-    // the transmitter's latch are not written, because AppConfig has nowhere
+    // AND NOTHING FOR THE KEY: the key rules' state (who holds it, the
+    // latch, the marks, the consent) and the transmitter's latch are not written, because AppConfig has nowhere
     // to put them and must not grow one. A saved key is a radio that comes up transmitting.
     cfg.rxPositionSet = rxSet_;
     cfg.rxLatDeg = rxLat_;
@@ -6975,89 +6986,6 @@ double Engine::pumpPublish() {
 
 void Engine::pumpAudioMute() { updateAudioMute(); }
 
-// THE FRONT END'S HALF of the Transmit page's key (gui::AppWindow::drawUi
-// says why the key is applied from the frame loop and not in the page). Runs
-// on the front end's own thread and never waits for the control side:
-//   - the front end's liveness stamp, which the TX thread itself watches -
-//     with a PTT or LATCH held, a window that stops stamping opens the key
-//     (core/transmitter.hpp), however the control side is doing;
-//   - KEY-UP, at once: a page not live lets go of the PTT and the LATCH, and a
-//     PTT let go lets go of the PTT - two atomic stores, and the TX thread
-//     plays the ramp down on its own the moment no key is asserted;
-//   - the request, into the latest-value slot the control side reads.
-// The key-up stores are made UNDER txPageMutex_, the lock the control side
-// holds from reading the slot to writing the key (pumpTransmitter says why).
-// It is held there for a few stores, never across a wait, so this does not
-// make key-up wait for the control side in any way that matters.
-void Engine::submitTransmitPageKey(const cascade::gui::TxPageRequest& r) {
-    transmitter_.frontEndAlive();
-    std::lock_guard<std::mutex> lk(txPageMutex_);
-    if (!r.pageLive) {
-        transmitter_.setLatched(false);
-        transmitter_.setPttHeld(false);
-        // A PAGE CLOSE ENDS EVERY PRESS MADE BEFORE IT. The slot keeps only
-        // the newest request, so a LATCH press, then the close, then a reopen
-        // - inside one pump, or while the control thread stalls - would reach
-        // the control side as "page live, one press since" and latch the
-        // radio on the reopen with no press made on the reopened page (the
-        // Opus review of 47e991e; tests/test_transmit_key_race.cpp F). The
-        // presses are counted as seen here, under the lock the control side
-        // reads them under, so no press older than the close is ever acted on.
-        txLatchPressesSeen_ = r.latchPressCount;
-    } else if (!r.pttHeld) {
-        transmitter_.setPttHeld(false);
-    }
-    txPageRequest_ = r;
-}
-
-// THE CONTROL SIDE'S HALF: key-down from the newest request, the standing
-// condition on the remote key, then the tick the TX thread's dead-man's
-// handle watches.
-//
-// A KEY-UP CAN NEVER BE UNDONE HERE (the 3b-pre-end review's HIGH finding;
-// tests/test_transmit_key_race.cpp):
-//   - txPageMutex_ is held from reading the request to writing the key, and
-//     the front end makes its key-up stores under the same lock. A key-up
-//     therefore lands either before the read - and the request read is the
-//     one that carries it - or after the write, over it. Until this was
-//     fixed the lock covered only the read, so a key-up landing between read
-//     and write was overwritten from the older request: the PTT held again,
-//     or the latch closed again (restarting its failsafe), until the next
-//     pump - or for kKeyAliveWait with the control thread stalled after it.
-//   - A request already acted on is not written again. The front end makes
-//     a new one every frame (frameSeq); a repeat means the front end has not
-//     spoken since, so re-asserting it would only undo a key-up made since
-//     by the transmitter itself - the TX thread's own release of a frozen
-//     window's PTT, re-keyed pump after pump from the frozen window's last
-//     request.
-void Engine::pumpTransmitter() {
-    {
-        std::lock_guard<std::mutex> lk(txPageMutex_);
-        const cascade::gui::TxPageRequest& r = txPageRequest_;
-        // Every LATCH press since the last read, however many frames that
-        // spans: an odd number toggles, an even number does not
-        // (TxPageRequest).
-        const std::uint32_t presses = r.latchPressCount - txLatchPressesSeen_;
-        const bool fresh = r.frameSeq != txFrameSeen_ || presses != 0u;
-        txLatchPressesSeen_ = r.latchPressCount;
-        txFrameSeen_ = r.frameSeq;
-        if (fresh) {
-            const cascade::gui::TxPageKey key = cascade::gui::txPageKey(
-                r.pageLive, transmitter_.latched(), (presses & 1u) != 0u, r.pttHeld);
-            if (txKeyInterleaveForTest_ != nullptr) { txKeyInterleaveForTest_(txKeyInterleaveArgForTest_); }
-            transmitter_.setLatched(key.latched);
-            transmitter_.setPttHeld(key.pttHeld);
-        }
-    }
-    // THE REMOTE KEY'S STANDING CONDITION, inside the engine (it was the
-    // window's per-frame poll in applyWebControls): a remote key exists only
-    // while the Transmit page is open. FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN
-    // releases it in the same step as the close; this covers anything else
-    // that leaves transmitOpen_ false. A no-op while the key is open.
-    if (!transmitOpen_) { transmitter_.releaseRemote("the transmit page was closed"); }
-    transmitter_.tick();
-}
-
 // --- THE TEARDOWN (engine/stage3b-pre, docs/engine-stage3.md OPEN 9) ---------
 // Moved from AppWindow::run(), line for line and in the same order, with the
 // reasons that went with each line.
@@ -7129,20 +7057,6 @@ void Engine::shutdown() {
     shutdownQuiesce();
     shutdownStop();
     shutdownRelease();
-}
-
-void Engine::pumpTransmitter(bool pageLive, bool latchPressed, bool pttHeld) {
-    cascade::gui::TxPageRequest r;
-    {
-        std::lock_guard<std::mutex> lk(txPageMutex_);
-        r = txPageRequest_;
-    }
-    r.pageLive = pageLive;
-    r.pttHeld = pttHeld;
-    if (latchPressed) { ++r.latchPressCount; }
-    ++r.frameSeq;
-    submitTransmitPageKey(r);
-    pumpTransmitter();
 }
 
 void Engine::pumpWorkers() {
@@ -7227,9 +7141,8 @@ cascade::core::AppConfig Engine::configSnapshot() const {
 
 // EVERY STEP, IN THE FRAME'S ORDER, for a front end with no frame: the GPS
 // read the window takes before its frame (run()), then the phases above.
-// One drain, not two: the window's second drain is for its keyboard. No
-// transmit page, so no key: pumpTransmitter(false, ...) releases it, which
-// is what a page that is not drawn asks for.
+// One drain, not two: the window's second drain is for its keyboard. The
+// key is the engine API's: its pass (pumpFrameBegin) ticks the transmitter.
 // --- THE CONTROL THREAD (stage 3b; engine.hpp) -------------------------------
 
 void Engine::startControlThread() { startControlThread(ControlThreadOptions{}); }
@@ -7248,23 +7161,15 @@ void Engine::startControlThread(const ControlThreadOptions& options) {
 void Engine::stopControlThread() {
     if (!controlThread_.joinable()) { return; }
     // EVERY KEY UP FIRST, from this thread, before the join - whatever the
-    // control thread is doing, and however long its current pass takes. The
-    // front end's own key-up stores, under the slot's lock and into the slot
-    // (so the control side cannot write a key-down over them), and the
-    // remote's release: with nothing asserting the key the TX thread plays it
-    // down by itself within a block (core/transmitter.hpp).
-    {
-        std::lock_guard<std::mutex> lk(txPageMutex_);
-        transmitter_.setLatched(false);
-        transmitter_.setPttHeld(false);
-        txPageRequest_.pageLive = false;
-        txPageRequest_.pttHeld = false;
-        // NO frameSeq bump here. The frame number belongs to the front end
-        // (submitTransmitPageKey counts it); bumping it from here let the
-        // control thread's last pass consume a number the front end would use
-        // next, so its next key-down was dropped as a repeat. The key-up
-        // stores above are made directly under the lock and need no pass.
-    }
+    // control thread is doing, and however long its current pass takes: the
+    // Transmitter's own key-up stores, and the remote's release. With nothing
+    // asserting the key the TX thread plays it down by itself within a block
+    // (core/transmitter.hpp). The key RULES are the control thread's: its
+    // loop ends them as its last act (ApiHost::engineStopping), and a pass
+    // still running cannot re-key - the rules drive the Transmitter only
+    // from a session's key, and every session's key is ended there too.
+    transmitter_.setLatched(false);
+    transmitter_.setPttHeld(false);
     transmitter_.releaseRemote("the engine's control thread is stopping");
     controlRun_.store(false);
     controlParkForTest_.store(false);
@@ -7287,9 +7192,8 @@ void Engine::stopControlThread() {
     controlWatchdog_.stop();
 }
 
-// pump()'s phases, in pump()'s order - with the transmitter's CONTROL half
-// only: on this thread nothing stands for the front end, which submits the
-// page's key itself (submitTransmitPageKey).
+// pump()'s phases, in pump()'s order. The transmitter is ticked by the
+// engine API's pass (pumpFrameBegin), from the key rules.
 void Engine::controlPass() {
     pollGpsReader();
     pumpFrameBegin();
@@ -7297,7 +7201,6 @@ void Engine::controlPass() {
     pumpPlugins();
     (void)pumpPublish();
     pumpAudioMute();
-    pumpTransmitter();
     pumpWorkers();
     pumpAudio();
 }
@@ -7328,7 +7231,10 @@ void Engine::controlLoop(std::chrono::milliseconds period) {
     }
     // THE LAST ACT, by the thread that ticks the transmitter: stop() never
     // runs beside a tick(). The key is already up (stopControlThread let go
-    // of it before asking this loop to end); this ends the TX thread.
+    // of it before asking this loop to end); this ends the TX thread. The key
+    // rules first, on this thread (they are its), so nothing a pass decided
+    // outlives the loop.
+    api_->engineStopping();
     transmitter_.stop();
     {
         std::lock_guard<std::mutex> lk(controlExitMutex_);
@@ -7360,7 +7266,6 @@ void Engine::pump() {
     pumpPlugins();
     (void)pumpPublish();
     pumpAudioMute();
-    pumpTransmitter(false, false, false);
     pumpWorkers();
     pumpAudio();
 }
