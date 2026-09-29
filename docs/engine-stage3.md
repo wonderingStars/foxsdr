@@ -1081,6 +1081,19 @@ they were with the facts; and what 3b has to settle first.
    fourteen reach `statusText()` only on a publish, at both points.
    Mutants: no publish with the snapshot (2 checks), one line left out (3),
    no end-of-frame publish (1).
+   **REVIEW FIX, 3b-pre-end review (LOW): a host told of an engine event
+   must be told after the publish.** `pollPluginAsync` set `catalogError_`
+   and then called `host_->onCatalogueResult()`; the host read the copy
+   from before the fetch, so under CASCADE_PLUGIN_TEST the report printed
+   "plugin catalogue: frame=N entries=0" for a failed fetch instead of
+   "FAILED ... <reason>". It now publishes first. The rule for the other
+   hooks: any host callback that reads `statusText()` must follow a
+   publish (onCatalogueResult is the only one that does today).
+   tests/test_catalogue_error_report.cpp (new): A a failed fetch, B a
+   loaded fetch whose policy was not remembered - the host reads each
+   error when told; C the window's bounded-run report prints FAILED with
+   the reason. Red before (5 of 7 - C printed "entries=0"), green; red
+   again with the publish moved after the call (5).
    **Still open**: 163 fields (containers first next: the device and gain
    lists - `deviceGainNames_`/`deviceGainsDb_`/`deviceGainRanges_`,
    `nativeDevices_`, `soapyDevices_`, `soundCardDevices_`, `devices_` - the

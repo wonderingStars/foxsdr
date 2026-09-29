@@ -2572,6 +2572,12 @@ void Engine::pollPluginAsync() {
             catalog_.clear();
             catalogError_ = r.error;
         }
+        // PUBLISHED BEFORE THE HOST IS TOLD: the host reads the status lines
+        // through the copy (statusText, OPEN 3), and a host told first read
+        // the copy from before the fetch - a bounded run's report printed
+        // "entries=0" for a fetch that had failed
+        // (tests/test_catalogue_error_report.cpp).
+        publishStatusText();
         host_->onCatalogueResult();
     }
 
