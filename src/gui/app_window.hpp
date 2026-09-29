@@ -86,6 +86,7 @@ struct GLFWwindow;
 #include "gui/track_info_cache.hpp"
 // RememberedSource, held by value below: the pure source decisions, ImGui-free
 // like every other gui header included here.
+#include "gui/meter_styles_math.hpp"
 #include "gui/readout_hold.hpp"
 #include "gui/tune_control.hpp"
 #include "source/soundcard_source.hpp"
@@ -2663,6 +2664,18 @@ private:
     // deck has always had.
     cascade::gui::TunerStyle tunerStyle_ = cascade::gui::TunerStyle::Nixie;
 
+    // WHICH FACE EACH BENCH METER WEARS (an Italian user on 0.99.42: "is it
+    // possible to customise the VU meter, choosing between 3 or 4 different
+    // VU meters?"), picked by right-clicking the meter itself
+    // (drawMeterStyleMenu). Each meter keeps its OWN style - the two are
+    // never linked - and each carries its own peak-hold catch, which only
+    // the LED ladder and Peak styles read (gui/meter_styles_math.hpp).
+    // Defaults to the face every meter has always worn.
+    cascade::gui::MeterStyle meterStyleVolume_ = cascade::gui::MeterStyle::Classic;
+    cascade::gui::MeterStyle meterStyleRate_ = cascade::gui::MeterStyle::Classic;
+    cascade::gui::MeterPeakHold meterPeakHoldVolume_;
+    cascade::gui::MeterPeakHold meterPeakHoldRate_;
+
     // --- THE INTERFACE THEME (2026-09-25; gui/theme.hpp) ----------------------
     // The look chosen in Display, by its foxsdr-ui/1 key (AppConfig::uiTheme).
     // Applied only between frames, by applyPendingTheme() - the palette, the
@@ -2687,6 +2700,18 @@ private:
     // The counter's right-click menu: Enlarge figures / Normal size / Show
     // tuner switches / Counter face / Enlarge every reading.
     void drawCounterMenu();
+    // A bench meter's right-click menu: the four styles, ticking the one
+    // `style` currently holds. Shared by both meters - each calls it with
+    // its OWN style field, so the two menus can never write into each
+    // other's setting.
+    void drawMeterStyleMenu(cascade::gui::MeterStyle& style);
+    // The gesture that opens it, and the tooltip that says it exists: right-
+    // click anywhere in [tl, br) (the meter's own census rectangle) opens
+    // `popupId`, which draws drawMeterStyleMenu(style). One function so the
+    // rate meter and the volume meter cannot answer the same gesture two
+    // different ways.
+    void drawMeterContextMenu(const ImVec2& tl, const ImVec2& br, const char* popupId,
+                              cascade::gui::MeterStyle& style);
 
     // --- THE INTERFACE SIZE (2026-09-28; gui/ui_scale.hpp) --------------------
     // "auto" (the default, follows the monitor's own Windows scaling) or one
