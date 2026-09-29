@@ -109,6 +109,7 @@
 // build ends up quietly pointing at the wrong host.
 #include "core/airspy_settings.hpp"
 #include "core/freq_converter.hpp"
+#include "core/patch_presets.hpp"
 #include "core/plugin_repo.hpp"
 #include "core/user_presets.hpp"
 
@@ -285,6 +286,15 @@ struct AppConfig {
     // exist because of a real hang report and neither of which is worth
     // reimplementing for a second document.
     std::string patch;
+    // THE PATCH PAGE'S NAMED PRESETS: whole patches saved under a name, each
+    // text exactly what patch_io writes - see core/patch_presets.hpp for the
+    // rules. Sanitized on load by sanitisePatchPresets, entry by entry: a
+    // malformed entry, a bad name, an oversized text or one parse() does not
+    // read is dropped with a line in the log, and the rest survive.
+    // patchPresetPrevious is the reserved "(previous patch)" slot - the patch
+    // the last preset load replaced - under the same text rules.
+    std::vector<PatchPreset> patchPresets;
+    std::string patchPresetPrevious;
     // WHICH FACE THE MAIN WINDOW SHOWS (0.99.40, the owner: "display the patch
     // panel as the main"): "patch" - the patch canvas fills the area the
     // spectrum and waterfall use - or "receiver", the spectrum and waterfall.

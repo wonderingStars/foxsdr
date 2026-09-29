@@ -623,6 +623,10 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            a.notchQ == b.notchQ && a.autoNotch == b.autoNotch &&
            a.bandPlanOverlay == b.bandPlanOverlay &&
            a.patch == b.patch &&
+           // The patch presets: saved, renamed, deleted and loaded from the
+           // page's PRESETS panel, none of which saves on its own.
+           a.patchPresets == b.patchPresets &&
+           a.patchPresetPrevious == b.patchPresetPrevious &&
            // The main view (0.99.40): switched by a key that saves nothing.
            a.mainView == b.mainView &&
            a.bandPlanSelection == b.bandPlanSelection &&

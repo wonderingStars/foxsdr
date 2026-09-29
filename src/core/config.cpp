@@ -2,6 +2,8 @@
 #include "core/config.hpp"
 
 #include "core/bias_tee_memory.hpp"
+#include "core/diag_log.hpp"
+#include "core/patch_presets.hpp"
 
 #include "core/plugin_api.hpp"
 #include "core/telemetry.hpp"
@@ -342,6 +344,38 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     getBool(j, "autoNotch", out.autoNotch);
     getBool(j, "bandPlanOverlay", out.bandPlanOverlay);
     getString(j, "patch", out.patch);
+    // The patch presets. ELEMENT-WISE TOLERANT, like userPresets, and louder
+    // about it: an entry that is not an object with a string name and a
+    // string text is a hand-edit or a damaged file, and is dropped with one
+    // line in the log rather than taking the rest of the config - or the rest
+    // of the list - with it. Every other rule is sanitisePatchPresets', below.
+    std::vector<std::size_t> patchPresetPositions;
+    {
+        const auto it = j.find("patchPresets");
+        if (it != j.end() && !it->is_array()) {
+            diagLogf("config: patchPresets is not a list - ignored");
+        } else if (it != j.end()) {
+            std::vector<PatchPreset> presets;
+            std::size_t index = 0;
+            for (const auto& e : *it) {
+                const std::size_t at = index++;
+                if (!e.is_object()) {
+                    diagLogf("config: patch preset %zu dropped - not an object", at);
+                    continue;
+                }
+                const auto n = e.find("name");
+                const auto t = e.find("text");
+                if (n == e.end() || !n->is_string() || t == e.end() || !t->is_string()) {
+                    diagLogf("config: patch preset %zu dropped - no string name and text", at);
+                    continue;
+                }
+                presets.push_back(PatchPreset{n->get<std::string>(), t->get<std::string>()});
+                patchPresetPositions.push_back(at);
+            }
+            out.patchPresets = std::move(presets);
+        }
+    }
+    getString(j, "patchPresetPrevious", out.patchPresetPrevious);
     // The main view: one of the two faces the window has, or the patch view
     // (the default) for anything else - never a name nothing draws.
     getString(j, "mainView", out.mainView);
@@ -936,6 +970,8 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     // that the plugin could not have written itself.
     out.pluginSettings = sanitisePluginSettings(out.pluginSettings);
     out.userPresets = sanitiseUserPresets(out.userPresets);
+    out.patchPresets = sanitisePatchPresets(std::move(out.patchPresets), patchPresetPositions);
+    out.patchPresetPrevious = sanitisePatchPresetPrevious(std::move(out.patchPresetPrevious));
     out.converters = sanitiseConverters(out.converters);
     out.airspy = sanitiseAirspySettings(out.airspy);
     // And the rebound keys, from the same function for the fourth time. An
@@ -1008,6 +1044,17 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
     j["autoNotch"] = cfg.autoNotch;
     j["bandPlanOverlay"] = cfg.bandPlanOverlay;
     j["patch"] = cfg.patch;
+    {
+        json presets = json::array();
+        for (const PatchPreset& p : cfg.patchPresets) {
+            json e;
+            e["name"] = p.name;
+            e["text"] = p.text;
+            presets.push_back(std::move(e));
+        }
+        j["patchPresets"] = std::move(presets);
+    }
+    j["patchPresetPrevious"] = cfg.patchPresetPrevious;
     j["mainView"] = cfg.mainView;
     j["bandPlanSelection"] = cfg.bandPlanSelection;
     j["language"] = cfg.language;
