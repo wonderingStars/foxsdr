@@ -765,10 +765,6 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
         // Baseline for the debounce: what the file holds (or would hold). The
         // engine hands its half over first - no frame has run yet (OPEN 2).
         engine_.publishConfig();
-        // ...and the status lines, so the first frame letters what the
-        // restore said (OPEN 3).
-        engine_.publishStatusText();
-        statusLines_ = engine_.statusText();
         savedCfg_ = currentConfig();
         pendingCfg_ = savedCfg_;
 
@@ -781,6 +777,13 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
         // config-test diagnostic contract stays byte-identical.
         engine_.loadBookmarks();
     }
+    // WITH OR WITHOUT A CONFIG FILE (a hermetic run has none): the status
+    // lines, so the first frame letters what the restore said (OPEN 3), and
+    // the front end's facts for the engine's publish (OPEN 4) - before any
+    // frame has run.
+    engine_.publishStatusText();
+    statusLines_ = engine_.statusText();
+    handFrontEndFacts();
 }
 
 AppWindow::~AppWindow() {
@@ -2762,6 +2765,10 @@ void AppWindow::drawUi() {
     // the top, before anything is drawn and before any list is walked, so a
     // command that rebuilds the plugin set or the bookmark list can never do
     // it under a loop, and everything drawn below reads the state they left.
+    // The frame clock, read here on the GUI thread once a frame so the answer
+    // a thread other than this one gets is at most a frame old (OPEN 4).
+    (void)frameClockRunning();
+    (void)frameTimeS();
     engine_.pumpFrameBegin();  // Engine: the snapshot retry, then this drain
     // THE KEYBOARD, FIRST. ImGui has just finished NewFrame, so WantTextInput
     // and the popup stack are this frame's answers rather than last frame's,
@@ -2831,6 +2838,9 @@ void AppWindow::drawUi() {
     // has landed (the drains, web/CAT, plugins, the scanner, a drop), nothing
     // has been drawn yet. The plugin host API, the web server and CAT all
     // answer from what this publishes.
+    // What only this window knows, for the publish: handed over, not asked
+    // for while the engine publishes (engine/stage3b-pre, OPEN 4).
+    handFrontEndFacts();
     publishWebSpectrum(engine_.pumpPublish());  // Engine: flushBookmarkSave(false), then the publish
     // THE STATUS LINES this frame's panels letter, as the engine just handed
     // them over (engine/stage3b-pre, docs/engine-stage3.md OPEN 3): one copy
@@ -19323,9 +19333,19 @@ void AppWindow::pollConfigWriter() {
 // at the same moment and on the same (GUI) thread, and each body below is the
 // line (or lines) the moved code used to run here - moved, not rewritten.
 
-bool AppWindow::frameClockRunning() const { return ImGui::GetCurrentContext() != nullptr; }
+bool AppWindow::frameClockRunning() const {
+    if (std::this_thread::get_id() != guiThread_) { return frameClockCache_.load(std::memory_order_relaxed); }
+    const bool running = ImGui::GetCurrentContext() != nullptr;
+    frameClockCache_.store(running, std::memory_order_relaxed);
+    return running;
+}
 
-double AppWindow::frameTimeS() const { return ImGui::GetTime(); }
+double AppWindow::frameTimeS() const {
+    if (std::this_thread::get_id() != guiThread_) { return frameTimeCache_.load(std::memory_order_relaxed); }
+    const double t = ImGui::GetTime();
+    frameTimeCache_.store(t, std::memory_order_relaxed);
+    return t;
+}
 
 double AppWindow::wallTimeS() const { return glfwGetTime(); }
 
@@ -19427,6 +19447,14 @@ std::vector<std::string> AppWindow::drainTrackInfoText() { return trackInfo_.dra
 bool AppWindow::patchPageOpen() const { return patchOpen_; }
 
 bool AppWindow::webListening() const { return webServer_.running(); }
+
+void AppWindow::handFrontEndFacts() {
+    cascade::engine::FrontEndFacts f;
+    f.webListening = webListening();
+    f.tunerDisplayStyle = tunerDisplayStyle();
+    f.basemap = basemapFacts();
+    engine_.setFrontEndFacts(std::move(f));
+}
 
 std::string AppWindow::tunerDisplayStyle() const { return cascade::gui::tunerStyleName(tunerStyle_); }
 

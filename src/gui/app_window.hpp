@@ -4,6 +4,7 @@
 #pragma once
 
 #include <atomic>
+#include <thread>
 #include <cstddef>
 #include <cstdio>
 #include <cstdint>
@@ -599,8 +600,16 @@ private:
     // on the same (GUI) thread at the same moment; the definitions are at the
     // end of app_window.cpp. openPluginWindowsFor, declared further down, is
     // the one this window already had under the same name.
+    // THE FRAME CLOCK, THREAD-AWARE (engine/stage3b-pre, docs/engine-stage3.md
+    // OPEN 4): on the GUI thread both read ImGui as they always did and leave
+    // the answer in an atomic; from any other thread they return that answer
+    // and never touch ImGui's context. drawUi reads them once a frame, so the
+    // answer another thread gets is at most a frame old.
     bool frameClockRunning() const override;
     double frameTimeS() const override;
+    std::thread::id guiThread_ = std::this_thread::get_id();
+    mutable std::atomic<double> frameTimeCache_{0.0};
+    mutable std::atomic<bool> frameClockCache_{false};
     double wallTimeS() const override;
     void pauseWatchdog() override;
     void resumeWatchdog() override;
@@ -622,9 +631,13 @@ private:
     void showDemonstrationInstrument(const cascade::core::HostInstrument& in) override;
     std::vector<std::string> drainTrackInfoText() override;
     bool patchPageOpen() const override;
-    bool webListening() const override;
-    std::string tunerDisplayStyle() const override;
-    BasemapFacts basemapFacts() const override;
+    // The three publish-time facts (engine/stage3b-pre OPEN 4): no longer
+    // EngineHost hooks the engine calls while publishing, but this window's
+    // answers, HANDED OVER once a frame (handFrontEndFacts).
+    bool webListening() const;
+    std::string tunerDisplayStyle() const;
+    BasemapFacts basemapFacts() const;
+    void handFrontEndFacts();
     void enrichWebTrack(cascade::net::RadioStatus::Track& w) override;
     void fillWebImages(cascade::net::RadioStatus& s) override;
     // THE WINDOW'S HALVES OF THREE ENGINE FUNCTIONS THAT WERE ONE. The engine

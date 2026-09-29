@@ -3362,7 +3362,9 @@ void Engine::fillPublishedState(cascade::core::PublishedState& ps, const std::st
     // page on screen (what /api/status has always called transmitAvailable).
     fs.txRemoteArmed = transmitOpen_ && transmitter_.haveSink();
     fs.sinkOpen = sink.running();
-    fs.webListening = host_->webListening();
+    // Handed over by the front end (OPEN 4), not asked of it while publishing.
+    const FrontEndFacts facts = frontEndFacts();
+    fs.webListening = facts.webListening;
 
     r.centreHz = src.centerFrequencyHz();
     r.vfoOffsetHz = pipeline_.vfoOffsetHz();
@@ -3473,7 +3475,7 @@ void Engine::fillPublishedState(cascade::core::PublishedState& ps, const std::st
     e.scanStopHz = scanStopMhz_ * 1.0e6;
     e.scanStepHz = scanStepKhz_ * 1.0e3;
     e.catalogueBusy = catalogPending_ || installPending_;
-    const EngineHost::BasemapFacts basemap = host_->basemapFacts();
+    const EngineHost::BasemapFacts& basemap = facts.basemap;
     e.basemapActive = basemap.active;
     e.basemapMinZoom = basemap.minZoom;
     e.basemapMaxZoom = basemap.maxZoom;
@@ -4762,7 +4764,7 @@ void Engine::fillStatusLists(cascade::net::RadioStatus& s, const std::string& fa
     s.sourceName = src.name();  // copied into a std::string here, deliberately
     // The frequency readout's face, as the NAME the page and the config file
     // both speak - see RadioStatus::tunerDisplayStyle.
-    s.tunerDisplayStyle = host_->tunerDisplayStyle();
+    s.tunerDisplayStyle = frontEndFacts().tunerDisplayStyle;   // handed over (OPEN 4)
     s.sourceKind = sourceKind_;
     // THE TRANSMITTER, AS THE BROWSER SEES IT (0.95.1): transmitting,
     // transmitAvailable and the hold are figures (fillPublishedState:
@@ -4879,7 +4881,7 @@ void Engine::fillStatusLists(cascade::net::RadioStatus& s, const std::string& fa
 
     host_->fillWebImages(s);
 
-    s.basemap.attribution = host_->basemapFacts().attribution;
+    s.basemap.attribution = frontEndFacts().basemap.attribution;   // handed over (OPEN 4)
 
     for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
         cascade::net::RadioStatus::Plugin w;
@@ -6965,6 +6967,16 @@ void Engine::publishStatusText() {
     t.restoreKeepLabel = restoreKeepLabel_;
     std::lock_guard<std::mutex> lk(statusTextMutex_);
     statusText_ = std::move(t);
+}
+
+void Engine::setFrontEndFacts(FrontEndFacts f) {
+    std::lock_guard<std::mutex> lk(frontEndFactsMutex_);
+    frontEndFacts_ = std::move(f);
+}
+
+FrontEndFacts Engine::frontEndFacts() const {
+    std::lock_guard<std::mutex> lk(frontEndFactsMutex_);
+    return frontEndFacts_;
 }
 
 Engine::StatusText Engine::statusText() const {

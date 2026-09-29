@@ -194,6 +194,10 @@ const char* const kWindowMachinery[] = {
     "applyConfig",
     "currentConfig",
     "applyWebControls",
+    // hands the engine what only the window knows for the publish - its web
+    // listener, the counter's face, the basemap's figures (engine/stage3b-pre
+    // OPEN 4: these were EngineHost hooks the engine called while publishing)
+    "handFrontEndFacts",
 };
 
 // The EngineHost overrides (engine/engine_host.hpp): the window's half of a
@@ -211,7 +215,8 @@ const char* const kHostHooks[] = {
     "onAddAllFinished",   "planAddAll",          "beforePluginRescan",
     "onPluginsUnloading", "attachBasemap",       "attachTrackInfo",
     "showDemonstrationInstrument", "drainTrackInfoText", "patchPageOpen",
-    "webListening",       "tunerDisplayStyle",   "basemapFacts",
+    // webListening, tunerDisplayStyle, basemapFacts: no longer hooks
+    // (engine/stage3b-pre OPEN 4) - handed over by handFrontEndFacts.
     "enrichWebTrack",     "fillWebImages",
 };
 
@@ -388,6 +393,8 @@ const LineAllow kLineAllowed[] = {
     // applyPluginApi, then scannerFrame
     {"drawUi", "pumpPlugins();"},
     // the bookmark save and the one publish; the window copies the spectrum frame beside it
+    // the front end's facts for that publish, handed over first (OPEN 4)
+    {"drawUi", "handFrontEndFacts();"},
     {"drawUi", "publishWebSpectrum(pumpPublish());"},
     // where the receiver is decides the mute, before anything draws
     {"drawUi", "pumpAudioMute();"},

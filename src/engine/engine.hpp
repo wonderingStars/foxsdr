@@ -93,6 +93,20 @@ struct AppWindowTestAccess;
 
 namespace cascade::engine {
 
+// WHAT THE FRONT END HANDS OVER FOR THE PUBLISH (engine/stage3b-pre, docs/
+// engine-stage3.md OPEN 4): three facts only the window knows - its web
+// listener's state, the counter's face (the web page mirrors it) and the
+// basemap plugin's figures - handed to the engine once a frame
+// (Engine::setFrontEndFacts) instead of the engine calling the window for
+// them while it publishes.
+struct FrontEndFacts {
+    bool webListening = false;
+    // A front end that has handed nothing over (the headless engine) shows
+    // the product's default face, as EngineHost's own answer always was.
+    std::string tunerDisplayStyle = cascade::gui::tunerStyleName(cascade::gui::TunerStyle::Nixie);
+    EngineHost::BasemapFacts basemap;
+};
+
 // Engine::StatusText - see Engine::publishStatusText.
 struct EngineStatusText {
     std::string sourceError;
@@ -1695,6 +1709,8 @@ private:
     bool transmitOpen_ = false;    // is the PAGE open
     // The Transmit page's newest key request (see submitTransmitPageKey), and
     // what the control side last acted on of it.
+    mutable std::mutex frontEndFactsMutex_;
+    FrontEndFacts frontEndFacts_;
     mutable std::mutex statusTextMutex_;
     EngineStatusText statusText_;
     mutable std::mutex configSnapMutex_;
@@ -2141,6 +2157,10 @@ public:
     using StatusText = EngineStatusText;
     void publishStatusText();
     StatusText statusText() const;
+    // The front end's facts for the publish (FrontEndFacts above). Any
+    // thread; the publish reads the newest handed over.
+    void setFrontEndFacts(FrontEndFacts f);
+    FrontEndFacts frontEndFacts() const;
 
     // The per-frame pump (engine.cpp says what each phase runs, in order).
     void pumpFrameBegin();

@@ -274,7 +274,14 @@ struct AppWindowTestAccess {
     // publishes - publishPluginApiState and publishWebSnapshot - and a copy
     // of webStatus_ under webMutex_ for both providers.) The plugin reads
     // below need no switch: they go through PluginApiCore either way.
-    static void publish(AppWindow& a) { a.engine_.publishReceiverState(); }
+    // Since engine/stage3b-pre OPEN 4 the window HANDS the engine what only it
+    // knows (the counter's face, the web listener, the basemap) before the
+    // publish, as drawUi does every frame - so the publish under test is
+    // preceded by that hand-over, exactly as in the frame.
+    static void publish(AppWindow& a) {
+        a.handFrontEndFacts();
+        a.engine_.publishReceiverState();
+    }
     static cascade::net::RadioStatus webStatus(AppWindow& a) { return a.webStatusNow(); }
     static cascade::net::RadioStatus catStatus(AppWindow& a) { return a.catStatusNow(); }
     // Engine stage 2's cost, measured on the real window (report only).

@@ -51,11 +51,6 @@ void EngineHost::showDemonstrationInstrument(const cascade::core::HostInstrument
 std::vector<std::string> EngineHost::drainTrackInfoText() { return {}; }
 
 bool EngineHost::patchPageOpen() const { return false; }
-bool EngineHost::webListening() const { return false; }
-std::string EngineHost::tunerDisplayStyle() const {
-    return cascade::gui::tunerStyleName(cascade::gui::TunerStyle::Nixie);
-}
-EngineHost::BasemapFacts EngineHost::basemapFacts() const { return {}; }
 void EngineHost::enrichWebTrack(cascade::net::RadioStatus::Track&) {}
 void EngineHost::fillWebImages(cascade::net::RadioStatus&) {}
 

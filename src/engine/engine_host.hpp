@@ -113,11 +113,11 @@ public:
     // The Patch page is on screen (the patch runtime lists the sound cards
     // for its inspector only then).
     virtual bool patchPageOpen() const;
-    // For the one publish: the web listener's state, the counter's face
-    // (the web page mirrors it), the basemap plugin's figures, a track's
-    // enrichment from the track-info plugin, and the decoded pictures.
-    virtual bool webListening() const;
-    virtual std::string tunerDisplayStyle() const;
+    // For the one publish: a track's enrichment from the track-info plugin,
+    // and the decoded pictures. (The web listener's state, the counter's face
+    // and the basemap plugin's figures are HANDED OVER by the front end since
+    // engine/stage3b-pre - Engine::setFrontEndFacts, docs/engine-stage3.md
+    // OPEN 4 - rather than asked for here; BasemapFacts is their type.)
     struct BasemapFacts {
         bool active = false;
         std::uint32_t minZoom = 0;
@@ -125,7 +125,6 @@ public:
         std::uint32_t tileSize = 0;
         std::string attribution;
     };
-    virtual BasemapFacts basemapFacts() const;
     virtual void enrichWebTrack(cascade::net::RadioStatus::Track& w);
     virtual void fillWebImages(cascade::net::RadioStatus& s);
 

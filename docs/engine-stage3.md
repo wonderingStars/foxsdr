@@ -1094,6 +1094,44 @@ they were with the facts; and what 3b has to settle first.
    publish-time hooks (`tunerDisplayStyle`, `basemapFacts`, `enrichWebTrack`,
    `fillWebImages`, `webListening`) put window state into the web block; the
    control thread cannot call them. `frameTimeS` reads ImGui's context.
+   **PARTLY CLOSED, stage-3b-pre-end round, item 4 (2026-09-29).**
+   - **`frameTimeS`/`frameClockRunning` no longer read ImGui from another
+     thread.** On the GUI thread they read ImGui as before and leave the
+     answer in an atomic; from any other thread they return that answer
+     (`AppWindow::frameTimeS`, `guiThread_`), and `drawUi` reads them once a
+     frame so it is at most a frame old. Nothing changes in 3a (the engine
+     calls them on the GUI thread); a control thread gets a safe clock.
+     Not replaced by a handed-in time: tests drive the engine's clock
+     through ImGui's DeltaTime without drawing a frame (the scanner draft
+     tests), and a handed-in value would have frozen it.
+   - **`webListening`, `tunerDisplayStyle`, `basemapFacts` are handed
+     over**, not hooks: the window builds `FrontEndFacts` (`handFrontEndFacts`,
+     window machinery) in the constructor and in `drawUi` just before
+     `pumpPublish`, and the publish reads `Engine::frontEndFacts()`. The
+     three virtuals left `EngineHost`; the headless default face stays
+     "nixie". test_state_snapshot_golden's publish now hands the facts over
+     first, as the frame does - the golden record itself is unchanged
+     (0/878 lines differ).
+   *Tests.* tests/test_engine_host_threads.cpp (new): A - the GUI thread
+   reads 1.0 s, ImGui moves to 3.0 s unread, another thread gets 1.0 s (red
+   before: 3.0 s); B - with the context gone another thread still gets the
+   GUI thread's last answer (red before); C - handed-over facts (listening,
+   basemap 3..11) are what is published (red before: 0, 0..19). Mutants:
+   either off-thread branch removed (1 each), the publish ignoring the
+   handed basemap (2) or listener (1); drawUi's hand-over removed fails the
+   guard's kLineAllowed entry.
+   **Still open, and why - each needs the control thread to exist to be
+   designed properly, not only reworded:** `beforePluginRescan`/
+   `onPluginsUnloading` (the window must drop every plugin pointer BEFORE a
+   module is unmapped - on two threads that is a handshake: the control
+   thread asks, the GUI thread answers at a frame boundary, the unload
+   waits for the answer, bounded); `attachBasemap`/`attachTrackInfo` (they
+   hand plugin API pointers across; same handshake, in reverse);
+   `enrichWebTrack`/`fillWebImages` (the window fills parts of the web
+   block from plugin state it owns - they become the window's own post-pass
+   over the published block, or data it hands over, once the publish runs
+   elsewhere); and the event-shaped hooks (`onBookmarksChanged` and the
+   rest) become a queue the window drains. None of these is a race in 3a.
 5. **ADD ALL's plan is built by the window** (`planAddAll`: the store model
    and its plan come from the window's store deck); a headless engine refuses
    ADD ALL. 3b/4: compute the plan from engine state (catalogue + inventory)
