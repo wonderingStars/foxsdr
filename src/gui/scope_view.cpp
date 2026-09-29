@@ -1693,9 +1693,211 @@ void drawBenchLamp(ImDrawList* dl, const ImVec2& centre, float radius, ImU32 col
     }
 }
 
+// THE FOUR FACES A BENCH METER CAN WEAR (2026-09-29, an Italian user on
+// 0.99.42: "is it possible to customise the VU meter, choosing between 3 or
+// 4 different VU meters?"). Every one of them is handed the exact same
+// `frac01`/`haveReading` this function always took - see gui/scope_face.hpp's
+// own header for why that is non-negotiable - so nothing below is a second
+// measurement, only a second (or third, or fourth) way to draw the one this
+// function has always been given.
+//
+// CLASSIC IS THE ORIGINAL BODY, MOVED HERE UNCHANGED. Pulling it into its own
+// function is what makes "unchanged" checkable: a diff against the style that
+// used to be the whole of drawBenchMeter shows no arithmetic touched, only
+// the ticks and needle it always drew.
+void drawMeterFaceClassic(ImDrawList* dl, const ImVec2& pivot, float armR,
+                          float halfSweepDeg, float frac01, bool haveReading) {
+    // Nine ticks, the last two in the alarm colour: the top of any meter's
+    // travel is where it should be uncomfortable to sit.
+    for (int i = 0; i < 9; ++i) {
+        const float t = static_cast<float>(i) / 8.0f;
+        const float deg = -halfSweepDeg + 2.0f * halfSweepDeg * t;
+        const float a = deg * 3.14159265f / 180.0f;
+        const float sx = std::sin(a);
+        const float sy = -std::cos(a);
+        const ImU32 col = (i >= 7) ? theme::tone(0xB8, 0x55, 0x2F, 255, ink::MeterNeedle)
+                                   : theme::tone(0x3B, 0x35, 0x29, 255, ink::MeterInk);
+        dl->AddLine(ImVec2(pivot.x + sx * armR * 0.80f, pivot.y + sy * armR * 0.80f),
+                    ImVec2(pivot.x + sx * armR * 0.94f, pivot.y + sy * armR * 0.94f), col,
+                    (i % 4 == 0) ? 1.8f : 1.0f);
+    }
+
+    if (haveReading) {
+        float f = frac01;
+        if (!(f >= 0.0f)) { f = 0.0f; }
+        if (f > 1.0f) { f = 1.0f; }
+        const float deg = -halfSweepDeg + 2.0f * halfSweepDeg * f;
+        const float a = deg * 3.14159265f / 180.0f;
+        const float sx = std::sin(a);
+        const float sy = -std::cos(a);
+        dl->AddLine(pivot, ImVec2(pivot.x + sx * armR * 0.88f, pivot.y + sy * armR * 0.88f),
+                    theme::tone(0xB8, 0x55, 0x2F, 255, ink::MeterNeedle), 1.8f);
+        dl->AddCircleFilled(pivot, 3.4f, theme::tone(0x2A, 0x25, 0x1C, 255, ink::MeterInk), 12);
+    } else {
+        // NO NEEDLE AT ALL. See the header: a needle at rest would be a
+        // measurement of zero, and there is no measurement.
+        dl->AddCircleFilled(pivot, 3.4f,
+                            theme::tone(0x9C, 0x90, 0x78, 255, ink::MeterInk, ink::MeterFace), 12);
+    }
+}
+
+// A point on the arc both arc styles share, at radius `radius` and travel
+// fraction `t` (0..1 over the sweep) - Classic's own angle convention (0 =
+// straight up, positive = clockwise), pulled out so Needle's continuous
+// scale and filled zone cannot silently drift from where Classic's ticks
+// actually sit.
+ImVec2 meterArcPoint(const ImVec2& pivot, float radius, float halfSweepDeg, float t) {
+    const float deg = -halfSweepDeg + 2.0f * halfSweepDeg * t;
+    const float a = deg * 3.14159265f / 180.0f;
+    return ImVec2(pivot.x + std::sin(a) * radius, pivot.y - std::cos(a) * radius);
+}
+
+// ANALOGUE NEEDLE: the moving-coil VU the owner asked for beside Classic - a
+// continuous scale arc rather than nine ticks, a FILLED red zone rather than
+// two red ticks (a wedge reads at a glance; a pair of ticks does not), and a
+// bolder ivory needle so the two styles are never mistaken for each other in
+// a screenshot.
+void drawMeterFaceNeedle(ImDrawList* dl, const ImVec2& pivot, float armR,
+                         float halfSweepDeg, float frac01, bool haveReading) {
+    // The scale itself, as one continuous stroke.
+    dl->PathClear();
+    constexpr int kArcSegs = 24;
+    for (int i = 0; i <= kArcSegs; ++i) {
+        const float t = static_cast<float>(i) / static_cast<float>(kArcSegs);
+        dl->PathLineTo(meterArcPoint(pivot, armR * 0.94f, halfSweepDeg, t));
+    }
+    dl->PathStroke(theme::tone(0x3B, 0x35, 0x29, 255, ink::MeterInk), 0, 1.4f);
+
+    // THE RED ZONE IS A WEDGE, not ticks - the top 18% of the travel, the
+    // same span Classic marks with its last two (of nine) ticks.
+    constexpr float kZoneStart = 0.82f;
+    dl->PathClear();
+    for (int i = 0; i <= 8; ++i) {
+        const float t = kZoneStart + (1.0f - kZoneStart) * static_cast<float>(i) / 8.0f;
+        dl->PathLineTo(meterArcPoint(pivot, armR * 0.94f, halfSweepDeg, t));
+    }
+    for (int i = 8; i >= 0; --i) {
+        const float t = kZoneStart + (1.0f - kZoneStart) * static_cast<float>(i) / 8.0f;
+        dl->PathLineTo(meterArcPoint(pivot, armR * 0.55f, halfSweepDeg, t));
+    }
+    dl->PathFillConvex(theme::withAlpha(theme::tone(0xB8, 0x55, 0x2F, 255, ink::Bad), 0.55f));
+
+    if (haveReading) {
+        float f = frac01;
+        if (!(f >= 0.0f)) { f = 0.0f; }
+        if (f > 1.0f) { f = 1.0f; }
+        const ImVec2 tip = meterArcPoint(pivot, armR * 0.90f, halfSweepDeg, f);
+        dl->AddLine(pivot, tip, theme::tone(0xEF, 0xE7, 0xD2, 255, ink::KnobCap), 2.6f);
+        dl->AddCircleFilled(pivot, 4.0f, theme::tone(0x2A, 0x25, 0x1C, 255, ink::MeterInk), 12);
+    } else {
+        dl->AddCircleFilled(pivot, 4.0f,
+                            theme::tone(0x9C, 0x90, 0x78, 255, ink::MeterInk, ink::MeterFace), 12);
+    }
+}
+
+// LED LADDER: a segmented bar, green through the ordinary run, amber in
+// caution and red at the top - gui::meterLedZone's own rule, drawn rather
+// than merely computed - with a peak-hold segment outlined bright after the
+// live reading has fallen past it, the way a real bar-graph VU's peak catch
+// works.
+void drawMeterFaceLed(ImDrawList* dl, const ImVec2& fTL, const ImVec2& fBR, float frac01,
+                      bool haveReading, MeterPeakHold* peakHold) {
+    const float faceW = fBR.x - fTL.x;
+    const float faceH = fBR.y - fTL.y;
+    const float padX = std::max(2.0f, faceW * 0.03f);
+    const float padY = std::max(3.0f, faceH * 0.18f);
+    const float gap = std::max(1.0f, faceW * 0.01f);
+    const int n = kMeterLedSegments;
+    const float totalGap = gap * static_cast<float>(n - 1);
+    const float segW = (faceW - padX * 2.0f - totalGap) / static_cast<float>(n);
+    if (segW < 1.0f) { return; }
+    const float segTop = fTL.y + padY;
+    const float segBot = fBR.y - padY;
+
+    float f = frac01;
+    if (!haveReading || !(f >= 0.0f)) { f = 0.0f; }  // no reading reads as silence
+    if (f > 1.0f) { f = 1.0f; }
+    const int lit = meterLedLitCount(f);
+    if (peakHold != nullptr) { peakHold->update(f, ImGui::GetIO().DeltaTime); }
+    const int peakSeg = (peakHold != nullptr) ? meterLedLitCount(peakHold->peak) - 1 : -1;
+
+    for (int i = 0; i < n; ++i) {
+        const float x0 = fTL.x + padX + static_cast<float>(i) * (segW + gap);
+        const float x1 = x0 + segW;
+        const MeterLedZone zone = meterLedZone(i, n);
+        const ImU32 litCol = (zone == MeterLedZone::Red)
+                                  ? theme::tone(0xB8, 0x55, 0x2F, 255, ink::Bad)
+                                  : (zone == MeterLedZone::Amber)
+                                        ? theme::tone(0xF0, 0xA8, 0x40, 255, ink::MeterNeedle)
+                                        : theme::tone(0x8F, 0xD9, 0xA0, 255, ink::Ok);
+        const bool on = i < lit;
+        const ImU32 col = on ? litCol : theme::withAlpha(litCol, 0.18f);
+        dl->AddRectFilled(ImVec2(x0, segTop), ImVec2(x1, segBot), col, 1.0f);
+        if (i == peakSeg && !on) {
+            dl->AddRect(ImVec2(x0, segTop), ImVec2(x1, segBot),
+                       theme::tone(0xEF, 0xE7, 0xD2, 255, ink::KnobCap), 1.0f, 0, 1.6f);
+        }
+    }
+}
+
+// PEAK METER: a horizontal PPM-style bar, coloured the same green/amber/red
+// travel the LED ladder uses rather than a second, drifting scheme, with a
+// peak-hold tick that decays at the same kMeterPeakHoldFallPerS. The numeric
+// dB figure is NOT drawn here - it is the value line every style already
+// gets below the face, from the same reading, so this style adds no second
+// copy of it to disagree with.
+void drawMeterFacePeak(ImDrawList* dl, const ImVec2& fTL, const ImVec2& fBR, float frac01,
+                       bool haveReading, MeterPeakHold* peakHold) {
+    const float faceW = fBR.x - fTL.x;
+    const float faceH = fBR.y - fTL.y;
+    const float padX = std::max(3.0f, faceW * 0.04f);
+    const float barH = std::max(6.0f, faceH * 0.42f);
+    const float barTop = fTL.y + (faceH - barH) * 0.5f;
+    const float barBot = barTop + barH;
+    const float barL = fTL.x + padX;
+    const float barR = fBR.x - padX;
+    const float barW = barR - barL;
+
+    dl->AddRectFilled(ImVec2(barL, barTop), ImVec2(barR, barBot),
+                      theme::tone(0x3B, 0x35, 0x29, 255, ink::Off), 1.0f);
+
+    float f = frac01;
+    if (!haveReading || !(f >= 0.0f)) { f = 0.0f; }
+    if (f > 1.0f) { f = 1.0f; }
+    if (peakHold != nullptr) { peakHold->update(f, ImGui::GetIO().DeltaTime); }
+
+    if (f > 0.0f) {
+        constexpr float kAmberAt = 7.0f / 12.0f;
+        constexpr float kRedAt = 10.0f / 12.0f;
+        const ImU32 green = theme::tone(0x8F, 0xD9, 0xA0, 255, ink::Ok);
+        const ImU32 amber = theme::tone(0xF0, 0xA8, 0x40, 255, ink::MeterNeedle);
+        const ImU32 red = theme::tone(0xB8, 0x55, 0x2F, 255, ink::Bad);
+        const float greenEnd = std::min(f, kAmberAt);
+        dl->AddRectFilled(ImVec2(barL, barTop), ImVec2(barL + barW * greenEnd, barBot), green);
+        if (f > kAmberAt) {
+            const float amberEnd = std::min(f, kRedAt);
+            dl->AddRectFilled(ImVec2(barL + barW * kAmberAt, barTop),
+                              ImVec2(barL + barW * amberEnd, barBot), amber);
+        }
+        if (f > kRedAt) {
+            dl->AddRectFilled(ImVec2(barL + barW * kRedAt, barTop), ImVec2(barL + barW * f, barBot),
+                              red);
+        }
+    }
+    dl->AddRect(ImVec2(barL, barTop), ImVec2(barR, barBot),
+               theme::tone(0x8B, 0x80, 0x69, 255, ink::Border), 1.0f, 0, 1.5f);
+
+    if (peakHold != nullptr && peakHold->peak > 0.0f) {
+        const float px = barL + barW * peakHold->peak;
+        dl->AddLine(ImVec2(px, barTop - 1.5f), ImVec2(px, barBot + 1.5f),
+                   theme::tone(0xEF, 0xE7, 0xD2, 255, ink::KnobCap), 1.6f);
+    }
+}
+
 void drawBenchMeter(ImDrawList* dl, const ImVec2& tl, float width, float height,
                     const char* caption, float frac01, bool haveReading,
-                    const char* valueLine, const char* unitLabel) {
+                    const char* valueLine, const char* unitLabel, MeterStyle style,
+                    MeterPeakHold* peakHold) {
     if (dl == nullptr || width < 40.0f || height < 40.0f) { return; }
 
     // THE ROOM FOR THE TEXT IS MEASURED FROM THE TEXT, and this is the fault
@@ -1790,55 +1992,50 @@ void drawBenchMeter(ImDrawList* dl, const ImVec2& tl, float width, float height,
     const float armByWidth = (width * 0.5f - 3.0f) / std::max(0.01f, reach);
     const float armR = std::min(armByHeight, armByWidth);
 
-    // Nine ticks, the last two in the alarm colour: the top of any meter's
-    // travel is where it should be uncomfortable to sit.
-    for (int i = 0; i < 9; ++i) {
-        const float t = static_cast<float>(i) / 8.0f;
-        const float deg = -kHalfSweepDeg + 2.0f * kHalfSweepDeg * t;
-        const float a = deg * 3.14159265f / 180.0f;
-        const float sx = std::sin(a);
-        const float sy = -std::cos(a);
-        const ImU32 col = (i >= 7) ? theme::tone(0xB8, 0x55, 0x2F, 255, ink::MeterNeedle)
-                                   : theme::tone(0x3B, 0x35, 0x29, 255, ink::MeterInk);
-        dl->AddLine(ImVec2(pivot.x + sx * armR * 0.80f, pivot.y + sy * armR * 0.80f),
-                    ImVec2(pivot.x + sx * armR * 0.94f, pivot.y + sy * armR * 0.94f), col,
-                    (i % 4 == 0) ? 1.8f : 1.0f);
+    // THE FACE ITSELF: which of the four instruments is drawn inside the
+    // tombstone. Only this dispatch changes between styles - the tombstone
+    // above and the value line below are the same face every style shares,
+    // so a style choice can never make the reading disagree with itself.
+    const bool arcStyle = (style == MeterStyle::Classic || style == MeterStyle::Needle);
+    switch (style) {
+        case MeterStyle::Needle:
+            drawMeterFaceNeedle(dl, pivot, armR, kHalfSweepDeg, frac01, haveReading);
+            break;
+        case MeterStyle::LedLadder:
+            drawMeterFaceLed(dl, fTL, fBR, frac01, haveReading, peakHold);
+            break;
+        case MeterStyle::Peak:
+            drawMeterFacePeak(dl, fTL, fBR, frac01, haveReading, peakHold);
+            break;
+        case MeterStyle::Classic:
+        default:
+            drawMeterFaceClassic(dl, pivot, armR, kHalfSweepDeg, frac01, haveReading);
+            break;
     }
 
-    if (haveReading) {
-        float f = frac01;
-        if (!(f >= 0.0f)) { f = 0.0f; }
-        if (f > 1.0f) { f = 1.0f; }
-        const float deg = -kHalfSweepDeg + 2.0f * kHalfSweepDeg * f;
-        const float a = deg * 3.14159265f / 180.0f;
-        const float sx = std::sin(a);
-        const float sy = -std::cos(a);
-        dl->AddLine(pivot, ImVec2(pivot.x + sx * armR * 0.88f, pivot.y + sy * armR * 0.88f),
-                    theme::tone(0xB8, 0x55, 0x2F, 255, ink::MeterNeedle), 1.8f);
-        dl->AddCircleFilled(pivot, 3.4f, theme::tone(0x2A, 0x25, 0x1C, 255, ink::MeterInk), 12);
-    } else {
-        // NO NEEDLE AT ALL. See the header: a needle at rest would be a
-        // measurement of zero, and there is no measurement.
-        dl->AddCircleFilled(pivot, 3.4f,
-                            theme::tone(0x9C, 0x90, 0x78, 255, ink::MeterInk, ink::MeterFace), 12);
-    }
-
-    // THE UNIT, PRINTED ON THE FACE BESIDE THE PIVOT, the way a moving-coil
-    // meter names its own scale. Beside and not above: above is where the
-    // needle sweeps through mid-scale, and a legend the pointer crosses is a
-    // legend that cannot be read at the only moment it matters.
+    // THE UNIT. On the two arc styles it sits beside the pivot, the way a
+    // moving-coil meter names its own scale on its face - beside and not
+    // above, because above is where the needle sweeps through mid-scale and a
+    // legend the pointer crosses cannot be read at the only moment it
+    // matters. The LED ladder and the peak bar have no pivot to sit beside,
+    // so it takes the face's own top-right corner instead.
     //
-    // It is drawn ONLY when the caller supplied one. A unit is a claim about
-    // what the needle measures, so an absent one stays absent rather than
-    // being guessed at from the value line.
+    // It is drawn ONLY when the caller supplied one, on every style: a unit
+    // is a claim about what is measured, so an absent one stays absent rather
+    // than being guessed at from the value line.
     if (unitLabel != nullptr && unitLabel[0] != '\0') {
         // Words, so the UI face - Nova Mono's capitals close up at this size.
         ImFont* uf = cascade::gui::fonts::ui();
         const float upx = cascade::gui::fonts::kTinySize;
         const ImVec2 us = uf->CalcTextSizeA(upx, FLT_MAX, 0.0f, unitLabel);
-        const float ux = pivot.x + armR * 0.16f;
-        if (ux + us.x < fBR.x - 3.0f) {
-            dl->AddText(uf, upx, ImVec2(ux, pivot.y - us.y - 2.0f),
+        if (arcStyle) {
+            const float ux = pivot.x + armR * 0.16f;
+            if (ux + us.x < fBR.x - 3.0f) {
+                dl->AddText(uf, upx, ImVec2(ux, pivot.y - us.y - 2.0f),
+                            theme::tone(0x3B, 0x35, 0x29, 255, ink::MeterInk), unitLabel);
+            }
+        } else {
+            dl->AddText(uf, upx, ImVec2(fBR.x - us.x - 3.0f, fTL.y + 2.0f),
                         theme::tone(0x3B, 0x35, 0x29, 255, ink::MeterInk), unitLabel);
         }
     }
