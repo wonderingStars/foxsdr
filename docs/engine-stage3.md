@@ -1774,7 +1774,12 @@ they were with the facts; and what 3b has to settle first.
     now judges the current holder's age (and caps a waiter's whole wait at
     `kStreamListStarveMs`); tests/test_pa_stream_list_guard.cpp shows the
     old behaviour deterministically on Linux (a waiter went ahead beside a
-    healthy holder in 4-8 of 40 rounds) and the new one never does.
+    healthy holder in 4-8 of 40 rounds) and the new one never does. The
+    probe itself did NOT fail on Linux: the pre-fix binary (md5
+    87131019065c387bd2e306553b9217cd) ran 57 times beside 16 busy-looping
+    processes on 4 cores, 0 overlaps - Linux's sub-millisecond sleeps keep
+    each of the fake's holds short; Windows' coarser sleeps under load make
+    the eight-thread queue long enough to pass 250 ms.
 
 ## 10. Stage 3b: the control thread
 
