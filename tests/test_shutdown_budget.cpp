@@ -736,6 +736,12 @@ const KnownWait kKnownWaits[] = {
      "how often that wait looks at the transport's device list. Same path, same reason: open "
      "only, never teardown"},
 
+    // THE AOR DIGITAL-I/Q DRIVER'S RECEIVER-CONTROL LINK (a serial port).
+    {"src/source/aor_control.hpp", "kReplyWait", 0,
+     "how long the AOR control session waits for a reply line after EX or VR. Spent only while "
+     "OPENING (pairing the serial port and the start-up sequence, on the device-open worker); "
+     "tuning and teardown send commands without waiting for a reply"},
+
     // THE NATIVE ADALM-PLUTO DRIVER, WHICH IS REACHED OVER TCP RATHER THAN
     // USB - so none of the transport's bounds apply to it and its whole
     // column is one join. Same argument as the blocks above and the same

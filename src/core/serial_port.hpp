@@ -154,7 +154,12 @@ public:
     // device is a logged warning and still returns true (header comment).
     // A baud outside kSerialBaudRates is refused before the OS is asked.
     // Opening an already-open port closes it first.
-    bool open(const std::string& name, int baud, std::string& error);
+    //
+    // `readWrite` (added for AOR receiver control, which has to send
+    // commands) opens the Linux node O_RDWR instead of read-only; the GPS
+    // reader never asks for it, so its behaviour is unchanged. Windows has
+    // always opened GENERIC_READ | GENERIC_WRITE.
+    bool open(const std::string& name, int baud, std::string& error, bool readWrite = false);
 
     // Safe on a closed port. After close(), read() returns a negative value.
     void close();
@@ -164,6 +169,17 @@ public:
     // is gone. Must be called from ONE thread at a time (the reader's); it is
     // not made re-entrant because nothing needs it to be.
     int read(char* buf, std::size_t cap) override;
+
+    // The bound on one write(): what a whole command line may take to leave
+    // the host. A few dozen bytes at 115200 baud is a few milliseconds, so
+    // this expires only on a port that has stopped taking data.
+    static constexpr int kWriteTimeoutMs = 500;
+
+    // Writes all of `data`, bounded by kWriteTimeoutMs in total. Returns the
+    // bytes written (== len on success), or negative when the port is closed,
+    // was opened read-only on Linux, or failed. A partial count means the
+    // bound expired. Same one-thread rule as read().
+    int write(const char* data, std::size_t len);
 
     // The name given to open(), for status lines ("COM3", never the expanded
     // "\\.\COM3" - that is the OS's spelling, not the user's). Empty when
@@ -181,6 +197,9 @@ private:
     // Windows only: the manual-reset event the overlapped read signals.
     // Created with the port, destroyed with it.
     std::intptr_t readEvent_ = -1;
+    // Linux only: whether open() was asked for O_RDWR (write() refuses
+    // otherwise rather than failing with EBADF).
+    bool writable_ = false;
 };
 
 }  // namespace cascade::core

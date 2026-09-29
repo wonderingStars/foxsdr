@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -246,7 +247,7 @@ HANDLE asHandle(std::intptr_t h) { return reinterpret_cast<HANDLE>(h); }
 
 SerialPort::~SerialPort() { close(); }
 
-bool SerialPort::open(const std::string& name, int baud, std::string& error) {
+bool SerialPort::open(const std::string& name, int baud, std::string& error, bool readWrite) {
     close();
     error.clear();
     if (name.empty()) {
@@ -258,6 +259,7 @@ bool SerialPort::open(const std::string& name, int baud, std::string& error) {
         return false;
     }
 
+    (void)readWrite;  // always read-write on Windows
     const std::wstring path = toWide(windowsDevicePath(name));
     HANDLE h = ::CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr,
                              OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
@@ -398,6 +400,40 @@ int SerialPort::read(char* buf, std::size_t cap) {
     return -1;
 }
 
+int SerialPort::write(const char* data, std::size_t len) {
+    if (!isOpen() || (data == nullptr && len > 0)) { return -1; }
+    if (len == 0) { return 0; }
+    HANDLE h = asHandle(handle_);
+    // Its own event: read() owns readEvent_, and a write must never wake a
+    // read's wait or the other way round.
+    HANDLE ev = ::CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (ev == nullptr) { return -1; }
+    OVERLAPPED ov{};
+    ov.hEvent = ev;
+    DWORD n = 0;
+    int result = -1;
+    const DWORD want = static_cast<DWORD>(std::min<std::size_t>(len, 0x7FFFFFFF));
+    if (::WriteFile(h, data, want, &n, &ov)) {
+        result = static_cast<int>(n);
+    } else if (::GetLastError() == ERROR_IO_PENDING) {
+        const DWORD wait = ::WaitForSingleObject(ev, static_cast<DWORD>(kWriteTimeoutMs));
+        if (wait == WAIT_OBJECT_0) {
+            result = ::GetOverlappedResult(h, &ov, &n, FALSE) ? static_cast<int>(n) : -1;
+        } else {
+            // As read(): cancel, and WAIT for the cancel to land before the
+            // OVERLAPPED on this frame goes out of scope.
+            // Whatever did leave before the cancel is reported as a
+            // partial count, which the caller reads as the bound expiring.
+            ::CancelIoEx(h, &ov);
+            n = 0;
+            ::GetOverlappedResult(h, &ov, &n, TRUE);
+            result = static_cast<int>(n);
+        }
+    }
+    ::CloseHandle(ev);
+    return result;
+}
+
 std::vector<std::string> enumerateSerialPorts() {
     std::vector<std::string> names;
     HKEY key = nullptr;
@@ -479,7 +515,7 @@ std::string openFailureText(int e) {
 
 SerialPort::~SerialPort() { close(); }
 
-bool SerialPort::open(const std::string& name, int baud, std::string& error) {
+bool SerialPort::open(const std::string& name, int baud, std::string& error, bool readWrite) {
     close();
     error.clear();
     if (name.empty()) {
@@ -495,7 +531,8 @@ bool SerialPort::open(const std::string& name, int baud, std::string& error) {
     // controlling terminal; O_NONBLOCK so the open itself does not wait for
     // carrier, and so the read is bounded by poll() rather than by the
     // driver. Read-only: a position reader has nothing to say to a GPS.
-    const int fd = ::open(name.c_str(), O_RDONLY | O_NOCTTY | O_NONBLOCK | O_CLOEXEC);
+    const int fd = ::open(name.c_str(), (readWrite ? O_RDWR : O_RDONLY) | O_NOCTTY | O_NONBLOCK |
+                                            O_CLOEXEC);
     if (fd < 0) {
         error = name + ": " + openFailureText(errno);
         return false;
@@ -528,6 +565,7 @@ bool SerialPort::open(const std::string& name, int baud, std::string& error) {
     name_ = name;
     baud_ = baud;
     handle_ = fd;
+    writable_ = readWrite;
     return true;
 }
 
@@ -539,6 +577,7 @@ void SerialPort::close() {
     readEvent_ = -1;
     name_.clear();
     baud_ = 0;
+    writable_ = false;
 }
 
 bool SerialPort::isOpen() const { return handle_ != -1; }
@@ -562,6 +601,37 @@ int SerialPort::read(char* buf, std::size_t cap) {
     if (n == 0) { return -1; }  // EOF: unplugged, or the FIFO's writer closed
     if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) { return 0; }
     return -1;
+}
+
+int SerialPort::write(const char* data, std::size_t len) {
+    if (!isOpen() || !writable_ || (data == nullptr && len > 0)) { return -1; }
+    const int fd = static_cast<int>(handle_);
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(kWriteTimeoutMs);
+    std::size_t done = 0;
+    while (done < len) {
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= deadline) { break; }
+        const long left =
+            static_cast<long>(std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now).count());
+        pollfd p{};
+        p.fd = fd;
+        p.events = POLLOUT;
+        const int ready = ::poll(&p, 1, static_cast<int>(left));
+        if (ready < 0) {
+            if (errno == EINTR) { continue; }
+            return -1;
+        }
+        if (ready == 0) { break; }
+        if ((p.revents & (POLLERR | POLLNVAL | POLLHUP)) != 0) { return -1; }
+        const ssize_t n = ::write(fd, data + done, len - done);
+        if (n < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) { continue; }
+            return -1;
+        }
+        done += static_cast<std::size_t>(n);
+    }
+    return static_cast<int>(done);
 }
 
 std::vector<std::string> enumerateSerialPorts() {
