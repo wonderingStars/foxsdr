@@ -13394,8 +13394,85 @@ void AppWindow::applyInputScript(long frame) {
             case cascade::gui::ScriptStep::Verb::Wheel:
                 io.AddMouseWheelEvent(0.0f, st.y);
                 break;
+            case cascade::gui::ScriptStep::Verb::WheelH:
+                io.AddMouseWheelEvent(st.x, 0.0f);
+                break;
+            case cascade::gui::ScriptStep::Verb::CtrlWheel:
+                // In order in ImGui's queue, so the wheel is seen with Ctrl
+                // down and nothing after it is.
+                io.AddKeyEvent(ImGuiMod_Ctrl, true);
+                io.AddMouseWheelEvent(0.0f, st.y);
+                io.AddKeyEvent(ImGuiMod_Ctrl, false);
+                break;
         }
         ++inputScriptPos_;
+    }
+}
+
+void AppWindow::drawPatchViewKeys(float originX, float originY, float width, float height) {
+    // Three lettered keys in the canvas's bottom-right corner, the bench's own
+    // benchWordKey: zoom in, zoom out (about the canvas centre), and Fit -
+    // every node in view (gui::patch::fitView; an empty patch goes home). The
+    // wheel and a drag on empty canvas move the view too; these are the ways
+    // that need no wheel, no Ctrl and no middle button.
+    const float keyH = cascade::gui::uiscale::px(24.0f);
+    const float gap = cascade::gui::uiscale::px(4.0f);
+    const float inset = cascade::gui::uiscale::px(10.0f);
+    const float stepW = cascade::gui::uiscale::px(28.0f);
+    const char* fitWord = tr("Fit");
+    const float fitW = std::max(
+        cascade::gui::uiscale::px(44.0f),
+        cascade::gui::fonts::ui()->CalcTextSizeA(cascade::gui::fonts::tinyPx(), FLT_MAX, 0.0f, fitWord).x +
+            cascade::gui::uiscale::px(16.0f));
+    const float totalW = stepW * 2.0f + fitW + gap * 2.0f;
+    if (width < totalW + inset * 2.0f || height < keyH + inset * 2.0f) { return; }
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    struct ViewKey {
+        const char* word;
+        const char* id;
+        const char* tip;
+        float w;
+    };
+    // "+" AND "-" ARE ENGRAVED, NOT LETTERED: at the size a key's word is cut
+    // they are a dot and a dash, so they are struck as two bars the width of
+    // the key's own hairline scaled up - the way the node's close key is.
+    const ViewKey keys[3] = {
+        {"", "patchzoomout", tr("Zoom out (Ctrl+scroll also zooms)"), stepW},
+        {"", "patchzoomin", tr("Zoom in (Ctrl+scroll also zooms)"), stepW},
+        {fitWord, "patchfit", tr("Show every node on the canvas"), fitW},
+    };
+    float x = originX + width - inset - totalW;
+    const float y = originY + height - inset - keyH;
+    for (int i = 0; i < 3; ++i) {
+        const ImVec2 tl(x, y);
+        const ImVec2 br(x + keys[i].w, y + keyH);
+        const bool pressed = benchWordKey(dl, tl, br, keys[i].word, true, keys[i].id);
+        const bool held = ImGui::IsItemActive();
+        cascade::gui::census::rect("patchviewkey:", i, tl.x, tl.y, br.x, br.y);
+        if (i < 2) {
+            // The same ink benchWordKey cuts a word in, and the same one-pixel
+            // drop while the key is held.
+            const ImU32 ink = cascade::gui::theme::toneHex(
+                0x2A251C, 255,
+                held ? cascade::gui::theme::ink::ActiveText : cascade::gui::theme::ink::CtrlText);
+            const float cx = (tl.x + br.x) * 0.5f;
+            const float cy = (tl.y + br.y) * 0.5f + (held ? 1.0f : 0.0f);
+            const float arm = keyH * 0.22f;
+            const float th = std::max(1.5f, cascade::gui::uiscale::px(2.0f));
+            dl->AddLine(ImVec2(cx - arm, cy), ImVec2(cx + arm, cy), ink, th);
+            if (i == 1) { dl->AddLine(ImVec2(cx, cy - arm), ImVec2(cx, cy + arm), ink, th); }
+        }
+        if (ImGui::IsItemHovered()) { ImGui::SetTooltip("%s", keys[i].tip); }
+        if (pressed) {
+            if (i == 2) {
+                patchUi_.view = cascade::gui::patch::fitView(patchGraph_, width, height,
+                                                            cascade::gui::uiscale::factor());
+            } else {
+                patchUi_.view = cascade::gui::patch::zoomStepView(patchUi_.view, width, height, i == 1);
+            }
+            patchUi_.dirty = true;
+        }
+        x += keys[i].w + gap;
     }
 }
 
@@ -14542,6 +14619,9 @@ void AppWindow::drawPatchView() {
             patchReadings_.push_back(std::move(r));
         }
 
+        // Where the canvas is, for a scripted press (tests/test_patch_canvas_nav).
+        cascade::gui::census::rect("patch:canvas", origin.x, origin.y, origin.x + canvasW,
+                                   origin.y + avail.y);
         if (avail.x > 8.0f && avail.y > 8.0f) {
             cascade::gui::patch::drawPatchCanvas(patchGraph_, patchUi_, patchPlan_,
                                                  patchReadings_, origin,
@@ -14549,6 +14629,7 @@ void AppWindow::drawPatchView() {
             // AFTER the canvas, so these widgets sit on top of it and take
             // their own clicks (the canvas button allows overlap).
             drawPatchFaces(origin.x, origin.y, canvasW, avail.y);
+            drawPatchViewKeys(origin.x, origin.y, canvasW, avail.y);
         }
 
         // --- the inspector ----------------------------------------------------
@@ -14603,6 +14684,12 @@ void AppWindow::drawPatchView() {
                     "Click a node to set what it does. Drag from one port to "
                     "another to wire them; drag a node by its title bar to move "
                     "it. Delete removes whatever is selected."));
+                ImGui::Spacing();
+                // HOW TO MOVE ROUND IT (0.99.49): the wheel pans now, and a
+                // touchpad user has no middle button - say what does work.
+                ImGui::TextWrapped("%s", tr(
+                    "Drag empty canvas or scroll to move round the patch. Ctrl+scroll or "
+                    "the + and - keys zoom; Fit shows every node."));
                 ImGui::PopStyleColor();
             } else {
                 ImGui::TextUnformatted(tr(cascade::gui::patch::kindCaption(sel->kind)));

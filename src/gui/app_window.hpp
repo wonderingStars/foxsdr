@@ -3623,6 +3623,10 @@ private:
     // The controls on every node's face, drawn over the canvas after it:
     // the node IS the instrument, so what it is set to is set on it.
     void drawPatchFaces(float originX, float originY, float width, float height);
+    // THE CANVAS'S OWN "+", "-" AND "Fit" KEYS (0.99.49 beta feedback: a
+    // laptop touchpad has no middle button to pan with, and nothing on the
+    // page said how to zoom). Bottom-right of the canvas, over it.
+    void drawPatchViewKeys(float originX, float originY, float width, float height);
     // GUI thread: rebuilds the two lists above from pluginHost_.
     void rebuildPatchCatalogue();
     // True when the node's Text output reaches a Text sink - the only way

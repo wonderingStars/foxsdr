@@ -136,12 +136,22 @@ void drawPatchCanvas(Graph& g, Interaction& ui, const core::patch::Plan& plan,
     // Handled first so the grid, the wires and the nodes are all this frame's
     // answer. Doing it afterwards draws one frame of the old view on every
     // scroll, which reads as the canvas lagging the mouse.
-    if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Middle)) { ui.panning = true; }
+    //
+    // A PAN IS HELD BY THE BUTTON THAT STARTED IT: the middle button anywhere
+    // on the canvas, as it always was, or - since 0.99.49, for a touchpad with
+    // no middle button - the LEFT button pressed on empty canvas (the pointer
+    // section below starts that one, from pressTarget's answer).
+    if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Middle)) {
+        ui.panning = true;
+        ui.panButton = ImGuiMouseButton_Middle;
+    }
     if (ui.panning) {
-        if (ImGui::IsMouseDown(ImGuiMouseButton_Middle)) {
-            ui.view.pan.x += io.MouseDelta.x;
-            ui.view.pan.y += io.MouseDelta.y;
-            ui.dirty = true;
+        if (ImGui::IsMouseDown(ui.panButton)) {
+            if (io.MouseDelta.x != 0.0f || io.MouseDelta.y != 0.0f) {
+                ui.view = panBy(ui.view, Vec2{io.MouseDelta.x, io.MouseDelta.y});
+                ui.dirty = true;
+            }
+            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
         } else {
             ui.panning = false;
         }
@@ -159,8 +169,17 @@ void drawPatchCanvas(Graph& g, Interaction& ui, const core::patch::Plan& plan,
     // have made the patch jump whenever the page was moved or resized.
     View v{Vec2{origin.x + ui.view.pan.x, origin.y + ui.view.pan.y}, ui.view.zoom};
 
-    if (hovered && io.MouseWheel != 0.0f) {
-        v = zoomAbout(v, vv(io.MousePos), io.MouseWheel > 0.0f ? 1.12f : 1.0f / 1.12f);
+    // THE WHEEL PANS, AND CTRL+WHEEL ZOOMS (0.99.49; a plain wheel zoomed
+    // until then). A two-finger touchpad scroll arrives as the wheel, both
+    // axes of it, and on a laptop it is the natural way to move round a patch;
+    // a touchpad pinch arrives as Ctrl+wheel. See gui::patch::wheelView.
+    if (hovered && (io.MouseWheel != 0.0f || io.MouseWheelH != 0.0f)) {
+        WheelInput wheel;
+        wheel.x = io.MouseWheelH;
+        wheel.y = io.MouseWheel;
+        wheel.ctrl = io.KeyCtrl;
+        wheel.shift = io.KeyShift;
+        v = wheelView(v, vv(io.MousePos), wheel);
         ui.view.zoom = v.zoom;
         ui.view.pan = Vec2{v.pan.x - origin.x, v.pan.y - origin.y};
         ui.dirty = true;
@@ -364,38 +383,50 @@ void drawPatchCanvas(Graph& g, Interaction& ui, const core::patch::Plan& plan,
     }
 
     // --- the pointer ----------------------------------------------------------
+    // WHAT THE PRESS LANDED ON decides what the drag does, in one place
+    // (gui::patch::pressTarget) - so "a drag that starts on a node does not
+    // pan" is a property the tests can hold, not an accident of ordering here.
     if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-        const PortHit port = portAt(g, mouseWorld);
-        if (port.found) {
-            ui.wiring = true;
-            ui.wireFrom = port;
-        } else {
-            const NodeId hit = nodeAt(g, mouseWorld);
-            if (hit != kNoNode) {
-                const Node* n = g.find(hit);
-                if (pointInCloseKey(*n, mouseWorld)) {
-                    // Closing takes the node's wires with it (removeNode).
-                    g.removeNode(hit);
-                    if (ui.selected == hit) { ui.selected = kNoNode; }
-                    ui.wireSelected = false;
-                    ui.dirty = true;
-                } else {
+        const PressOn on = pressTarget(g, mouseWorld, dv.zoom, kWireGrabPx);
+        const NodeId hit = nodeAt(g, mouseWorld);
+        const Node* n = hit != kNoNode ? g.find(hit) : nullptr;
+        switch (on) {
+            case PressOn::Port:
+                ui.wiring = true;
+                ui.wireFrom = portAt(g, mouseWorld);
+                break;
+            case PressOn::CloseKey:
+                // Closing takes the node's wires with it (removeNode).
+                g.removeNode(hit);
+                if (ui.selected == hit) { ui.selected = kNoNode; }
+                ui.wireSelected = false;
+                ui.dirty = true;
+                break;
+            case PressOn::Grip:
+                if (n != nullptr) {
                     ui.selected = hit;
                     ui.wireSelected = false;
-                    if (pointInResizeGrip(*n, mouseWorld)) {
-                        // `grab` is the pointer's offset from the CORNER, so
-                        // the corner does not jump to the pointer.
-                        const Vec2 s = nodeSize(*n);
-                        ui.resizeNode = hit;
-                        ui.grab = Vec2{mouseWorld.x - (n->x + s.x), mouseWorld.y - (n->y + s.y)};
-                    } else if (pointInHeader(*n, mouseWorld)) {
-                        ui.dragNode = hit;
-                        ui.grab = Vec2{mouseWorld.x - n->x, mouseWorld.y - n->y};
-                    }
+                    // `grab` is the pointer's offset from the CORNER, so the
+                    // corner does not jump to the pointer.
+                    const Vec2 s = nodeSize(*n);
+                    ui.resizeNode = hit;
+                    ui.grab = Vec2{mouseWorld.x - (n->x + s.x), mouseWorld.y - (n->y + s.y)};
                 }
-            } else {
-                // Empty canvas: a click near a wire selects it, otherwise the
-                // selection clears.
+                break;
+            case PressOn::Header:
+                if (n != nullptr) {
+                    ui.selected = hit;
+                    ui.wireSelected = false;
+                    ui.dragNode = hit;
+                    ui.grab = Vec2{mouseWorld.x - n->x, mouseWorld.y - n->y};
+                }
+                break;
+            case PressOn::Body:
+                ui.selected = hit;
+                ui.wireSelected = false;
+                break;
+            case PressOn::Wire:
+                // Near a wire: selects it.
                 ui.selected = kNoNode;
                 ui.wireSelected = false;
                 for (const Wire& w : g.wires()) {
@@ -407,7 +438,17 @@ void drawPatchCanvas(Graph& g, Interaction& ui, const core::patch::Plan& plan,
                         break;
                     }
                 }
-            }
+                break;
+            case PressOn::Empty:
+                // Empty canvas: the selection clears, and holding the button
+                // down drags the view (pressPans).
+                ui.selected = kNoNode;
+                ui.wireSelected = false;
+                break;
+        }
+        if (pressPans(on)) {
+            ui.panning = true;
+            ui.panButton = ImGuiMouseButton_Left;
         }
     }
 

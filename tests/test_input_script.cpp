@@ -87,6 +87,19 @@ int main() {
         CHECK(p.steps.size() == 2u && p.steps[1].y == 1.5f);
     }
 
+    // [4b] A TOUCHPAD'S OTHER TWO GESTURES (0.99.49): a sideways two-finger
+    // scroll (the horizontal wheel) and a pinch, which arrives as Ctrl+wheel -
+    // what the patch canvas pans and zooms on. Zero is refused as above.
+    {
+        const ScriptParse p = parseInputScript("5 wheelh 2\n6 ctrlwheel -1.5\n7 wheelh 0\n8 ctrlwheel\n");
+        CHECK(p.bad == 2);
+        CHECK(p.steps.size() == 2u);
+        CHECK(p.steps.size() == 2u && p.steps[0].verb == ScriptStep::Verb::WheelH &&
+              p.steps[0].x == 2.0f);
+        CHECK(p.steps.size() == 2u && p.steps[1].verb == ScriptStep::Verb::CtrlWheel &&
+              p.steps[1].y == -1.5f);
+    }
+
     // [5] A TEXT STEP TYPES THE REST OF THE LINE VERBATIM, '#' included. The
     // comment strip used to run before the verb was read, so "Channel #12"
     // typed "Channel " and parsed as a perfectly good step - a wrong string

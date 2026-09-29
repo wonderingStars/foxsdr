@@ -20,6 +20,9 @@
 //   <frame> screen <x> <y>    pointer to ImGui screen coordinates
 //   <frame> down | up         left button
 //   <frame> rdown | rup       right button (the counter's menu, 2026-09-25)
+//   <frame> wheel <n>         the wheel, n notches (> 0 away from the user)
+//   <frame> wheelh <n>        the horizontal wheel (> 0 scrolls left)
+//   <frame> ctrlwheel <n>     the wheel with Ctrl held (a touchpad pinch)
 //   <frame> key <name>        tap a key: enter, delete, backspace, escape,
 //                             tab, ctrl+a
 //   <frame> text <chars...>   type the rest of the line
@@ -35,7 +38,7 @@
 namespace cascade::gui {
 
 struct ScriptStep {
-    enum class Verb { World, Screen, Down, Up, Key, Text, Wheel, RightDown, RightUp };
+    enum class Verb { World, Screen, Down, Up, Key, Text, Wheel, RightDown, RightUp, WheelH, CtrlWheel };
     long frame = 0;
     Verb verb = Verb::World;
     float x = 0.0f;
@@ -102,6 +105,16 @@ inline ScriptParse parseInputScript(const std::string& text) {
             // "wheel -3": three notches towards the user, as a mouse wheel
             // scrolling down a list gives (0.99.19).
             st.verb = ScriptStep::Verb::Wheel;
+            ok = static_cast<bool>(s >> st.y) && st.y != 0.0f;
+        } else if (verb == "wheelh") {
+            // "wheelh 2": the HORIZONTAL wheel - a sideways two-finger
+            // touchpad scroll (0.99.49); > 0 scrolls left, as ImGui has it.
+            st.verb = ScriptStep::Verb::WheelH;
+            ok = static_cast<bool>(s >> st.x) && st.x != 0.0f;
+        } else if (verb == "ctrlwheel") {
+            // "ctrlwheel 1": the wheel with Ctrl held - a touchpad pinch on
+            // Windows arrives as exactly this (0.99.49).
+            st.verb = ScriptStep::Verb::CtrlWheel;
             ok = static_cast<bool>(s >> st.y) && st.y != 0.0f;
         } else if (verb == "text") {
             // THE REST OF THE RAW LINE, not of the comment-stripped body: a
