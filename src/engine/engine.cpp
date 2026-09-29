@@ -7168,7 +7168,11 @@ void Engine::stopControlThread() {
         transmitter_.setPttHeld(false);
         txPageRequest_.pageLive = false;
         txPageRequest_.pttHeld = false;
-        ++txPageRequest_.frameSeq;
+        // NO frameSeq bump here. The frame number belongs to the front end
+        // (submitTransmitPageKey counts it); bumping it from here let the
+        // control thread's last pass consume a number the front end would use
+        // next, so its next key-down was dropped as a repeat. The key-up
+        // stores above are made directly under the lock and need no pass.
     }
     transmitter_.releaseRemote("the engine's control thread is stopping");
     controlRun_.store(false);
