@@ -38,17 +38,31 @@ std::string parseBetaLinkUrl(const std::string& arg) {
     for (unsigned char c : s) {
         if (c < 0x20 || c == 0x7f) { return std::string(); }
     }
+    // TWO SPELLINGS OF ONE URL. The portal navigates to foxsdr://beta?t=,
+    // but Windows' ShellExecute - and so every browser's hand-off there -
+    // normalises the empty path after the "beta" authority to "/" and starts
+    // the handler with foxsdr://beta/?t= (seen on a real 0.99.50 install,
+    // 2026-09-29: every Windows click was being dropped as unrecognised).
+    // Exactly that one slash and nothing else: any other path is still
+    // refused.
     static constexpr char kPrefix[] = "foxsdr://beta?t=";
-    static constexpr std::size_t kPrefixLen = sizeof(kPrefix) - 1;
+    static constexpr char kSlashPrefix[] = "foxsdr://beta/?t=";
     static constexpr std::size_t kTokenLen = 40;
     // EXACT LENGTH, EXACT PREFIX - this is what makes an extra query
     // parameter, a path segment, or trailing junk after a valid token all
     // fail here rather than needing their own separate checks: none of them
-    // can produce a string of exactly kPrefixLen + kTokenLen bytes that also
-    // starts with kPrefix and ends in 40 valid hex characters.
-    if (s.size() != kPrefixLen + kTokenLen) { return std::string(); }
-    if (s.compare(0, kPrefixLen, kPrefix) != 0) { return std::string(); }
-    const std::string token = s.substr(kPrefixLen);
+    // can produce a string of exactly prefix + kTokenLen bytes that also
+    // starts with that prefix and ends in 40 valid hex characters.
+    std::size_t prefixLen = 0;
+    for (const char* prefix : {kPrefix, kSlashPrefix}) {
+        const std::size_t len = std::char_traits<char>::length(prefix);
+        if (s.size() == len + kTokenLen && s.compare(0, len, prefix) == 0) {
+            prefixLen = len;
+            break;
+        }
+    }
+    if (prefixLen == 0) { return std::string(); }
+    const std::string token = s.substr(prefixLen);
     if (!validAppToken(token)) { return std::string(); }
     return token;
 }

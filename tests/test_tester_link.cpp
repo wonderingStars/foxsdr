@@ -12,6 +12,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <mutex>
 #include <optional>
 #include <sstream>
@@ -74,6 +75,22 @@ void testParseBetaLinkUrlExactShapeOnly() {
     // Wrong scheme.
     CHECK(cascade::core::parseBetaLinkUrl("http://beta?t=" + std::string(40, 'a')).empty());
     CHECK(cascade::core::parseBetaLinkUrl("foxsdr2://beta?t=" + std::string(40, 'a')).empty());
+
+    // THE SHAPE WINDOWS ACTUALLY DELIVERS. The portal navigates to
+    // foxsdr://beta?t=<code>, but ShellExecute - and so every browser's
+    // hand-off on Windows - normalises the empty path after the "beta"
+    // authority to "/" and starts the handler with foxsdr://beta/?t=<code>
+    // (seen on the owner's own 0.99.50 install, 2026-09-29: the link was
+    // dropped as "unrecognised" and no prompt ever appeared). Both spellings
+    // are the same URL and both must be accepted.
+    CHECK(cascade::core::parseBetaLinkUrl("foxsdr://beta/?t=" + std::string(40, 'a')) ==
+          std::string(40, 'a'));
+    CHECK(cascade::core::parseBetaLinkUrl("\"foxsdr://beta/?t=" + std::string(40, 'a') + "\"") ==
+          std::string(40, 'a'));
+    // ...and ONLY that one slash: anything else there is still a path.
+    CHECK(cascade::core::parseBetaLinkUrl("foxsdr://beta//?t=" + std::string(40, 'a')).empty());
+    CHECK(cascade::core::parseBetaLinkUrl("foxsdr://beta/?t=" + std::string(40, 'a') + "/")
+              .empty());
 
     // A path segment.
     CHECK(cascade::core::parseBetaLinkUrl("foxsdr://beta/x?t=" + std::string(40, 'a')).empty());
@@ -450,16 +467,18 @@ void testLinkActivationWithNoInstanceRunningLaunchesNormallyAndNeverLeaksTheToke
     if (g_checksFailed == 0) { fs::remove_all(dir, ec); }
 }
 
-// A foxsdr: link in ANY other shape - a browser adding a trailing slash,
-// upper-casing the scheme, appending a parameter - is not a link FoxSDR
-// accepts, but it still carries the token. It used to fall through to the
-// flag loop's unknown-argument branch, which printed the whole URL, token
-// included, to stderr and exited 1. It must instead be dropped unechoed and
-// the launch carry on; nothing is written, since it is not a link we trust.
+// A foxsdr: link in ANY other shape - upper-casing the scheme, appending a
+// parameter, no "//beta?t=" at all - is not a link FoxSDR accepts, but it
+// still carries the token. It used to fall through to the flag loop's
+// unknown-argument branch, which printed the whole URL, token included, to
+// stderr and exited 1. It must instead be dropped unechoed and the launch
+// carry on; nothing is written, since it is not a link we trust.
+// (foxsdr://beta/?t= used to be listed here. It is the shape Windows actually
+// delivers - see testLinkShapesWindowsDeliversReachTheRunningInstance.)
 void testMalformedLinkIsDroppedWithoutEchoingTheToken() {
     const std::string tok = std::string(40, 'c');
-    for (const std::string url : {"FOXSDR://beta?t=" + tok, "foxsdr://beta/?t=" + tok,
-                                  "foxsdr://beta?t=" + tok + "&x=1", "foxsdr:" + tok}) {
+    for (const std::string url : {"FOXSDR://beta?t=" + tok, "foxsdr://beta?t=" + tok + "&x=1",
+                                  "foxsdr:" + tok}) {
         const fs::path dir = uniqueDir("malformed");
         std::error_code ec;
         fs::create_directories(dir, ec);
@@ -499,6 +518,86 @@ void testMalformedLinkIsDroppedWithoutEchoingTheToken() {
 
         if (g_checksFailed == 0) { fs::remove_all(dir, ec); }
     }
+}
+
+// THE CLICK A TESTER ACTUALLY MAKES, with FoxSDR already open. The tests above
+// cannot tell an accepted link from a dropped one - both end with no link file,
+// one because the new instance claimed it, the other because none was written -
+// which is how a Windows-only shape went unnoticed from 0.99.45 to 0.99.51.
+// Holding the single-instance mutex here makes the spawned copy a SECOND
+// instance: an accepted link must then write the file for the running one and
+// return at once, leaving the file behind with the token in it, and a refused
+// shape must write nothing and carry on as a normal launch.
+void testLinkShapesWindowsDeliversReachTheRunningInstance() {
+    // Opened and CLOSED here, not claimPrimaryInstance()'s deliberate leak:
+    // the spawn tests after this one need to be the primary instance again.
+    const HANDLE running = ::CreateMutexA(nullptr, FALSE, "Local\\FoxSDR-instance");
+    CHECK(running != nullptr);
+
+    const std::string tok = std::string(40, 'd');
+    struct Shape {
+        std::string url;
+        bool accepted;
+    };
+    const Shape shapes[] = {
+        {"foxsdr://beta?t=" + tok, true},    // what the portal navigates to
+        {"foxsdr://beta/?t=" + tok, true},   // what Windows hands the handler
+        {"foxsdr://beta//?t=" + tok, false}, // any other path is still refused
+        {"foxsdr://beta/x?t=" + tok, false},
+    };
+    for (const Shape& shape : shapes) {
+        const fs::path dir = uniqueDir("running");
+        std::error_code ec;
+        fs::create_directories(dir, ec);
+        const fs::path foxsdrDir = dir / "foxsdr";
+        const fs::path cfgPath = foxsdrDir / "config.json";
+        ::SetEnvironmentVariableA("APPDATA", dir.string().c_str());
+        ::SetEnvironmentVariableA("LOCALAPPDATA", dir.string().c_str());
+        ::SetEnvironmentVariableA("CASCADE_CONFIG_TEST", cfgPath.string().c_str());
+        for (const char* v : {"FOXSDR_BETA_API_URL", "FOXSDR_TESTER_USAGE_URL", "FOXSDR_TELEMETRY_URL",
+                              "FOXSDR_UPDATE_URL", "FOXSDR_CRASH_URL", "FOXSDR_FEATURE_URL",
+                              "FOXSDR_PROBLEM_URL", "FOXSDR_REPORTS_URL"}) {
+            ::SetEnvironmentVariableA(v, "http://127.0.0.1:9");
+        }
+
+        const std::string exe = std::string(CASCADE_APP_BINDIR) + "/cascade.exe";
+        const std::string cmd = "\"\"" + exe + "\" \"" + shape.url + "\" --frames 20 2>&1\"";
+        std::string out;
+        FILE* p = _popen(cmd.c_str(), "r");
+        CHECK(p != nullptr);
+        char buf[512];
+        while (p != nullptr && std::fgets(buf, sizeof(buf), p) != nullptr) { out += buf; }
+        const int exitCode = (p != nullptr) ? _pclose(p) : -1;
+
+        for (const char* v : {"APPDATA", "LOCALAPPDATA", "CASCADE_CONFIG_TEST", "FOXSDR_BETA_API_URL",
+                              "FOXSDR_TESTER_USAGE_URL", "FOXSDR_TELEMETRY_URL", "FOXSDR_UPDATE_URL",
+                              "FOXSDR_CRASH_URL", "FOXSDR_FEATURE_URL", "FOXSDR_PROBLEM_URL",
+                              "FOXSDR_REPORTS_URL"}) {
+            ::SetEnvironmentVariableA(v, nullptr);
+        }
+
+        std::printf("link shape %s with an instance running, exit=%d\n",
+                    shape.accepted ? "accepted" : "refused", exitCode);
+        CHECK(exitCode == 0);
+        CHECK(out.find("unknown argument") == std::string::npos);
+        CHECK(out.find(tok) == std::string::npos);
+        const fs::path linkFile(cascade::core::linkRequestPath(foxsdrDir.string()));
+        if (shape.accepted) {
+            // Handed over and gone: no window, no frames of its own.
+            CHECK(out.find("rendered 20 frames") == std::string::npos);
+            CHECK(fs::exists(linkFile));
+            std::ifstream f(linkFile, std::ios::binary);
+            const std::string written((std::istreambuf_iterator<char>(f)),
+                                      std::istreambuf_iterator<char>());
+            CHECK(written == tok);
+        } else {
+            CHECK(out.find("rendered 20 frames") != std::string::npos);
+            CHECK(!fs::exists(linkFile));
+        }
+
+        if (g_checksFailed == 0) { fs::remove_all(dir, ec); }
+    }
+    if (running != nullptr) { ::CloseHandle(running); }
 }
 
 #endif  // _WIN32
@@ -964,6 +1063,7 @@ int main(int argc, char** argv) {
 #if defined(_WIN32)
     testLinkActivationWithNoInstanceRunningLaunchesNormallyAndNeverLeaksTheToken();
     testMalformedLinkIsDroppedWithoutEchoingTheToken();
+    testLinkShapesWindowsDeliversReachTheRunningInstance();
 #endif
     testResolveAppTokenNameOk();
     testResolveAppTokenNameInvalidOn404();
