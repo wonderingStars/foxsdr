@@ -51,6 +51,7 @@
 #endif
 
 #include "core/transmitter.hpp"
+#include "engine/tx_page_key.hpp"
 #include "engine/engine.hpp"
 #include "test_check.hpp"
 
@@ -167,6 +168,8 @@ struct AppWindowTestAccess {
     static bool latched(Engine& e) { return e.transmitter_.latched(); }
     static void keyRemote(Engine& e) { e.transmitter_.keyRemote(); }
     static void tick(Engine& e) { e.transmitter_.tick(); }
+    static bool remoteKeyed(Engine& e) { return e.transmitter_.remoteKeyed(); }
+    static void setTransmitOpen(Engine& e, bool on) { e.transmitOpen_ = on; }
 };
 
 }  // namespace cascade::gui
@@ -258,6 +261,128 @@ int main() {
                     Access::transmitting(e), raw->running());
         CHECK(!Access::transmitting(e));
         CHECK(!raw->running());
+    }
+
+    // =========================================================================
+    // 4. KEY-UP DOES NOT WAIT FOR THE CONTROL SIDE (OPEN 7 (b)). The front end
+    //    hands over a request with the PTT let go - or the page closed - and
+    //    NO pump follows (a control thread that is late, or stuck): the
+    //    radio must still go quiet within a block or two, played down by the
+    //    TX thread itself, because nothing is asserting the key any more.
+    // =========================================================================
+    for (int closePage = 0; closePage < 2; ++closePage) {
+        Engine e;
+        e.initialise();
+        RecordingSink* raw = Access::installSink(e);
+        e.pumpTransmitter(/*pageLive=*/true, /*latchPressed=*/closePage != 0, /*pttHeld=*/closePage == 0);
+        CHECK(Access::transmitting(e));
+        CHECK(raw->running());
+        cascade::gui::TxPageRequest up;
+        up.pageLive = closePage == 0;   // the page closes, or stays with the PTT let go
+        up.pttHeld = false;
+        up.latchPressCount = closePage != 0 ? 1u : 0u;
+        up.frameSeq = 100;
+        const auto t0 = std::chrono::steady_clock::now();
+        e.submitTransmitPageKey(up);   // ...and no pumpTransmitter() at all
+        while (raw->running() &&
+               std::chrono::steady_clock::now() - t0 < std::chrono::milliseconds(1500)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        const double ms =
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        std::printf("[4%c] %s, no pump: radio quiet after %.0f ms (running=%d)\n",
+                    closePage != 0 ? 'b' : 'a',
+                    closePage != 0 ? "LATCHED, then the page closed" : "PTT let go", ms, raw->running());
+        CHECK(!raw->running());
+        CHECK(ms < 150.0);                   // a block or two, never the 1000 ms bound
+        CHECK(raw->finishes.load() >= 1);    // WITH its tail: a clean end, not a cut
+        e.pumpTransmitter();                 // the control side catches up
+        CHECK(!Access::transmitting(e));
+    }
+
+    // =========================================================================
+    // 5. THE LATCH PRESS IS A COUNT: no press lost, none doubled, however the
+    //    front end's frames and the control side's pumps interleave.
+    // =========================================================================
+    {
+        Engine e;
+        e.initialise();
+        (void)Access::installSink(e);
+        cascade::gui::TxPageRequest r;
+        r.pageLive = true;
+        // Two frames, a press in each, then ONE pump: on and off again - a
+        // flag per frame would have seen one press, or none.
+        r.latchPressCount = 1;
+        r.frameSeq = 1;
+        e.submitTransmitPageKey(r);
+        r.latchPressCount = 2;
+        r.frameSeq = 2;
+        e.submitTransmitPageKey(r);
+        e.pumpTransmitter();
+        std::printf("[5a] two presses, one pump: latched=%d\n", Access::latched(e));
+        CHECK(!Access::latched(e));
+        CHECK(!Access::transmitting(e));
+        // One frame with a press, then TWO pumps: on once, not on-and-off.
+        r.latchPressCount = 3;
+        r.frameSeq = 3;
+        e.submitTransmitPageKey(r);
+        e.pumpTransmitter();
+        e.pumpTransmitter();
+        std::printf("[5b] one press, two pumps: latched=%d\n", Access::latched(e));
+        CHECK(Access::latched(e));
+        CHECK(Access::transmitting(e));
+        r.pageLive = false;
+        r.frameSeq = 4;
+        e.submitTransmitPageKey(r);
+        e.pumpTransmitter();
+        CHECK(!Access::transmitting(e));
+    }
+
+    // =========================================================================
+    // 6. THE CONTROL SIDE PUMPS ON, THE FRONT END STOPS (OPEN 7 (a), through
+    //    the Engine): a held PTT opens within kKeyAliveWait of the front end's
+    //    last request, although pumpTransmitter() never stops being called.
+    // =========================================================================
+    {
+        Engine e;
+        e.initialise();
+        RecordingSink* raw = Access::installSink(e);
+        e.pumpTransmitter(/*pageLive=*/true, /*latchPressed=*/false, /*pttHeld=*/true);
+        CHECK(raw->running());
+        const auto t0 = std::chrono::steady_clock::now();
+        while (raw->running() &&
+               std::chrono::steady_clock::now() - t0 < std::chrono::milliseconds(3000)) {
+            e.pumpTransmitter();   // the control side, alone
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        const double ms =
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        std::printf("[6] front end silent, control pumping: released after %.0f ms\n", ms);
+        CHECK(!raw->running());
+        CHECK(ms >= static_cast<double>(Transmitter::kKeyAliveWait.count()) - 20.0);
+        CHECK(ms <= static_cast<double>(Transmitter::kKeyAliveWait.count()) + 150.0);
+    }
+
+    // =========================================================================
+    // 7. THE REMOTE KEY'S STANDING CONDITION IS THE ENGINE'S (OPEN 7 (c)): with
+    //    the page not open, the control side's own pump releases a remote key
+    //    - no window poll involved.
+    // =========================================================================
+    {
+        Engine e;
+        e.initialise();
+        (void)Access::installSink(e);
+        Access::setTransmitOpen(e, true);
+        Access::keyRemote(e);
+        e.pumpTransmitter();
+        CHECK(Access::remoteKeyed(e));
+        CHECK(Access::transmitting(e));
+        Access::setTransmitOpen(e, false);   // e.g. a test's, or a future path's, direct write
+        e.pumpTransmitter();
+        std::printf("[7] page not open, one pump: remote keyed=%d\n", Access::remoteKeyed(e));
+        CHECK(!Access::remoteKeyed(e));
+        e.pumpTransmitter();
+        CHECK(!Access::transmitting(e));
     }
 
     return testSummary("test_transmit_dead_man");

@@ -1351,6 +1351,80 @@ they were with the facts; and what 3b has to settle first.
    kind of regression a 3b rewrite of this function could introduce without
    any existing test noticing. Proven red against that exact mutant (5/15
    checks failed) while test_transmit_page.cpp stayed green against it.
+   **CLOSED, engine/stage3b-pre stage-3b-pre-end round, item 1 (branch
+   claude/engine-patchgraph, 2026-09-29): the design problem above is
+   settled BEFORE the pump moves.** (The note just above - "nothing here
+   adds a liveness stamp" - described the previous round.)
+   - **(a) Two liveness stamps, checked by the TX thread itself**
+     (core/transmitter.cpp threadBody). `controlAliveMs_` (was
+     `lastTickMs_`) is stamped by `tick()`, the control side;
+     `frontEndAliveMs_` by `Transmitter::frontEndAlive()`, one atomic store
+     a frame from the window. The TX thread opens the key if the control
+     stamp is more than `kKeyAliveWait` (1000 ms) old, OR if a LOCAL key
+     (PTT, LATCH) is asserted and the front-end stamp is more than 1000 ms
+     old. A remote key does not depend on the window and is not dropped by
+     it. The remote hold (`kRemotePttHoldMs`) is enforced by the TX thread
+     too; `tick()` no longer does it. And whenever NO key is asserted any
+     more (PTT let go, LATCH opened, page closed, remote hold out), the TX
+     thread lowers the key itself, with its tail (the ramp plays, then the
+     sink's `finish()`), without waiting for `tick()`.
+   - **(b) The page's key request is a latest-value slot**
+     (`gui::TxPageRequest`, engine/tx_page_key.hpp: pageLive, pttHeld,
+     latchPressCount, frameSeq). The LATCH press is a COUNT: the control
+     side acts on the presses since the count it last saw - an odd number
+     toggles, an even number does not - so no press is lost or doubled
+     however frames and pumps interleave. Two halves:
+     `Engine::submitTransmitPageKey` (the front end: the liveness stamp,
+     KEY-UP applied at once - page not live clears PTT and LATCH, PTT let go
+     clears the PTT, direct atomic stores - and the request into the slot)
+     and `Engine::pumpTransmitter()` (the control side: key-DOWN from the
+     newest request via txPageKey, then the tick). drawUi calls both, in
+     that order, where it called the one pump before; in 3b the second
+     moves to the control thread and the first stays.
+     `pumpTransmitter(pageLive, latchPressed, pttHeld)` remains as both
+     halves in one call, for Engine::pump and tests. A LATCH press that
+     OPENS the latch is still applied by the control side: whether a press
+     means on or off is only known against the transmitter's own latch,
+     which the TX side releases on its own (failsafe, fault); deciding it on
+     the front end would race those. The releases that matter for safety -
+     the page going away and the PTT let go - do not wait.
+   - **(c) The remote key's standing conditions are the engine's.** Closing
+     the page through `FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN` already released it
+     in the same step (2b). The window's per-frame `transmitOpen_` poll in
+     applyWebControls is gone: `Engine::pumpTransmitter()` checks it. The
+     web server (the window's until stage 5) now says when it is not running
+     with a new op, `FOXAPP_OP_WEB_CONTROL_STOPPED` (0x841C), sent in the
+     same step `applyWebSettings` stops it and once a frame while it is not
+     running; the window no longer touches `transmitter_` for either.
+   - **(d) Shutdown order**: there is no control thread in 3a, so
+     "transmitter stop before the control thread's join" holds trivially
+     today; the rule is written into `Engine::shutdown()` with OPEN 9
+     (see item 9).
+   *Tests, each red first or against a mutant.* The reviewed mutant
+   (`if (pageLive) transmitter_.tick();`) was ALREADY caught by
+   tests/test_transmit_dead_man.cpp (3b-pre; re-verified 5/15 red before
+   this round, while test_transmit_page stayed green against it); its new
+   form (`if (r.pageLive) transmitter_.tick();`) fails 8/40 now.
+   tests/test_transmit_liveness.cpp (new): control ticking with the front
+   end stopped - PTT (A) and LATCH (B) released at ~1008 ms (bound 1000 +
+   one block), red before (never released); remote keyed with the front end
+   silent (C) - still keyed at 1.5 s, released at the 2 s hold; control
+   stopped (D) - ~1014 ms; both alive (E) - no false release. Mutants: no
+   front-end check (8 liveness + 2 dead-man checks fail); no remote-hold
+   check on the TX thread (4 + 8 in test_transmitter). test_transmit_dead_man
+   4-7 (new): key-up with NO pump quiet in ~2 ms with its tail (red before:
+   1011 ms, cut); two presses one pump / one press two pumps; front end
+   silent while the control pumps (~1014 ms); the engine pump releasing a
+   remote key with the page shut. Mutants: no play-down (4 fail), a press
+   read as a flag (4), presses not remembered (2), no front-end key-up (4),
+   no standing condition (2 + 1 in test_remote_key_release), the web op a
+   no-op (2 in test_remote_key_release, 1 in test_apply_command).
+   test_remote_key_release gained E (the settings panel switching the
+   server off releases in the same step) and its A now pumps the engine.
+   test_transmitter's and test_transmit_page's simulated frames stamp both
+   sides (a 3a frame is both); test_transmit_page's source scan now pins
+   the two halves (key-down written once, in pumpTransmitter, before the
+   tick; every other engine write a key-UP `false`).
 8. **The hang watchdog is the GUI frame's.** The engine pauses it (through the
    host) around its bounded waits (audio/mic open, plugin rescan, device
    open). On a control thread those waits no longer block the frame; they

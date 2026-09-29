@@ -1987,6 +1987,20 @@ void transmitterOps(AppWindow& a) {
         A::setTransmitOpen(a, false);
     }
 
+    // FOXAPP_OP_WEB_CONTROL_STOPPED (OPEN 7 (c)): no server, no remote key -
+    // a held key is released at once, and with none held it is a no-op, not
+    // a refusal (the window sends it once a frame while the server is off).
+    covering(FOXAPP_OP_WEB_CONTROL_STOPPED);
+    {
+        A::setTransmitOpen(a, true);
+        CHECK(ok(A::apply(a, ints(FOXAPI_OP_TX_PTT, 1))));
+        CHECK(A::remoteHoldMs(a) > 0);
+        CHECK(ok(A::apply(a, cmd::make(FOXAPP_OP_WEB_CONTROL_STOPPED))));
+        CHECK(A::remoteHoldMs(a) == 0);
+        CHECK(ok(A::apply(a, cmd::make(FOXAPP_OP_WEB_CONTROL_STOPPED))));
+        A::setTransmitOpen(a, false);
+    }
+
     covering(FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN);
     {
         // Opening and closing move transmitOpen_ exactly as the direct write

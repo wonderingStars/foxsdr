@@ -2781,10 +2781,10 @@ void AppWindow::drawUi() {
     // closing the window, switching banks or losing focus releases the key
     // rather than leaving it where it was. That is the shape the hard rule in
     // core/transmitter.hpp needs from this end of it. The LATCH press and the
-    // page's own "my controls are on screen" flag are rebuilt the same way,
-    // and all three reach the transmitter together just before its tick.
+    // page's own "my controls are on screen" flag are rebuilt the same way
+    // (a LATCH press is COUNTED instead - transmitLatchPresses_), and all
+    // three reach the engine together, as one request, just before its tick.
     transmitPttHeld_ = false;
-    transmitLatchPressed_ = false;
     transmitPageLive_ = false;
     // A fault ends the takes on the first frame that sees it, before any stop
     // or start a browser or plugin queued can run below (see the header).
@@ -2868,7 +2868,22 @@ void AppWindow::drawUi() {
     // page - it clears the latch itself on its failsafe, a fault and the
     // frozen-window handle, and the page writing its own copy back re-keyed
     // the radio on the very next frame (gui/transmit_page.hpp, txPageKey).
-    engine_.pumpTransmitter(transmitPageLive_, transmitLatchPressed_, transmitPttHeld_);
+    //
+    // TWO CALLS, ONE PER SIDE (engine/stage3b-pre, docs/engine-stage3.md
+    // OPEN 7): the FRONT END's - this window's liveness stamp, any key-up at
+    // once, and the request left in the engine's latest-value slot - and the
+    // CONTROL side's pump, which applies key-down and ticks. In stage 3a both
+    // run here, in this order; in 3b the second moves to the control thread
+    // and the first stays, so a frozen window still opens a local key.
+    {
+        cascade::gui::TxPageRequest keyRequest;
+        keyRequest.pageLive = transmitPageLive_;
+        keyRequest.pttHeld = transmitPttHeld_;
+        keyRequest.latchPressCount = transmitLatchPresses_;
+        keyRequest.frameSeq = ++transmitKeyFrame_;
+        engine_.submitTransmitPageKey(keyRequest);
+    }
+    engine_.pumpTransmitter();
 
     // One borderless window pinned to the viewport: the app IS the layout, so
     // nothing is movable or collapsible at this level.
@@ -15503,7 +15518,7 @@ void AppWindow::drawTransmitPage() {
                                       cascade::gui::theme::kIvory, cascade::gui::theme::kAlarm)));
         }
         if (ImGui::Button(trId("LATCH##txlatch"), ImVec2(100.0f, 56.0f))) {
-            transmitLatchPressed_ = true;
+            ++transmitLatchPresses_;
         }
         if (latchedNow) { ImGui::PopStyleColor(2); }
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
@@ -17909,23 +17924,20 @@ void AppWindow::applyWebControls() {
 
     // --- THE STANDING CONDITIONS ON THE REMOTE KEY ---------------------------
     //
-    // Both are cheap no-ops while the key is open, and both close a window
-    // that the hold's own expiry would otherwise leave open for two seconds.
+    // Both close a window that the hold's own expiry would otherwise leave
+    // open for two seconds, and both are the ENGINE's now (engine/stage3b-pre,
+    // docs/engine-stage3.md OPEN 7 (c)) - the window no longer reaches into
+    // transmitter_ for either:
     //
-    // THE PAGE. A remote key exists only while the operator has the transmit
-    // page in front of them; closing it releases the key exactly as it
-    // releases the local PTT, which falls out of the per-frame rebuild for the
-    // local one and has to be said here for this one.
-    if (!engine_.transmitOpen_) {
-        engine_.transmitter_.releaseRemote("the transmit page was closed");
-    }
-    // THE SERVER. A web server that has been stopped or has never run cannot
-    // be holding a key. WebServer::stop() also queues a release for the loop
-    // above, so a server stopped between two frames releases twice and neither
-    // costs anything; this is the one that covers a server disabled in the
-    // settings panel, where there is no stop to queue anything.
+    // THE PAGE is Engine::pumpTransmitter's own check (and closing it through
+    // FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN releases in the same step).
+    // THE SERVER is this window's until stage 5, so it says when it is not
+    // running - where it stops it (applyWebSettings) and here, once a frame,
+    // for a server that never started or was disabled in the settings panel.
+    // WebServer::stop() also queues a release for the loop above; releasing
+    // twice costs nothing.
     if (!webServer_.running()) {
-        engine_.transmitter_.releaseRemote("the web server is not running");
+        (void)engine_.applyCommand(cascade::core::cmd::make(FOXAPP_OP_WEB_CONTROL_STOPPED));
     }
 }
 
@@ -17967,6 +17979,8 @@ void AppWindow::applyWebSettings() {
 
     if (!webCfg_.enabled) {
         webServer_.stop();
+        // ...and the remote key goes WITH it, in this same step (OPEN 7 (c)).
+        (void)engine_.applyCommand(cascade::core::cmd::make(FOXAPP_OP_WEB_CONTROL_STOPPED));
         return;
     }
 

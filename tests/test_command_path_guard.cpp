@@ -387,7 +387,8 @@ const LineAllow kLineAllowed[] = {
     // where the receiver is decides the mute, before anything draws
     {"drawUi", "pumpAudioMute();"},
     // the transmit key rebuilt every frame, then the tick - the dead-man's handle (OPEN 1)
-    {"drawUi", "pumpTransmitter(transmitPageLive_, transmitLatchPressed_, transmitPttHeld_);"},
+    {"drawUi", "submitTransmitPageKey(keyRequest);"},
+    {"drawUi", "pumpTransmitter();"},
     // the device, sound card, recovery, retune and plugin workers collected
     {"drawUi", "pumpWorkers();"},
     // the audio and microphone gates, the sink health, the heartbeat

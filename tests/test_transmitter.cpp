@@ -164,25 +164,33 @@ double magAt(const std::vector<std::complex<float>>& x, double freqHz, double fs
     return std::abs(acc) / static_cast<double>(x.size());
 }
 
+// ONE FRAME of a stage-3a window: the control side's tick() and the front
+// end's own liveness stamp come from the same frame, so a frame here gives
+// both. (tests/test_transmit_liveness.cpp is where the two are pulled apart.)
+void frame(Transmitter& tx) {
+    tx.frontEndAlive();
+    tx.tick();
+}
+
 // Ticks a transmitter for a while, the way a frame loop does.
 void tickFor(Transmitter& tx, int ms) {
     const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
     while (std::chrono::steady_clock::now() < until) {
-        tx.tick();
+        frame(tx);
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
-    tx.tick();
+    frame(tx);
 }
 
 template <typename Fn>
 bool waitTicking(Transmitter& tx, Fn fn, std::chrono::milliseconds bound) {
     const auto deadline = std::chrono::steady_clock::now() + bound;
     while (std::chrono::steady_clock::now() < deadline) {
-        tx.tick();
+        frame(tx);
         if (fn()) { return true; }
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
-    tx.tick();
+    frame(tx);
     return fn();
 }
 
@@ -347,7 +355,7 @@ int main() {
         cascade::core::DiagLog::instance().resetForTest();
 
         tx.setPttHeld(true);
-        tx.tick();
+        frame(tx);
         CHECK(tx.transmitting());
         CHECK(raw->starts.load() == 1);
 
@@ -373,7 +381,7 @@ int main() {
         CHECK(tx.blocksSent() > 0);
 
         tx.setPttHeld(false);
-        tx.tick();
+        frame(tx);
         CHECK(!tx.transmitting());
         CHECK(raw->stops.load() >= 1);
         const std::size_t after = raw->samples();
@@ -423,7 +431,7 @@ int main() {
             } else {
                 tx.setLatched(true);
             }
-            tx.tick();
+            frame(tx);
             CHECK(tx.transmitting());
             CHECK(waitTicking(tx, [raw] { return raw->samples() > 48000; },
                               std::chrono::seconds(2)));
@@ -435,7 +443,7 @@ int main() {
             const std::size_t before = raw->samples();
             if (route == 0) {
                 tx.setPttHeld(false);
-                tx.tick();
+                frame(tx);
             } else {
                 tx.stop();
             }
@@ -481,7 +489,7 @@ int main() {
         tx.setLatchTimeoutForTest(std::chrono::milliseconds(300));
 
         tx.setLatched(true);
-        tx.tick();
+        frame(tx);
         CHECK(tx.transmitting());
         CHECK(tx.latched());
         // A latch holds the key with NO hand on the PTT - that is what it is
@@ -515,7 +523,7 @@ int main() {
         tx.setInput(TxInput::Tone);
 
         tx.setLatched(true);
-        tx.tick();
+        frame(tx);
         CHECK(tx.transmitting());
         CHECK(raw->running());
 
@@ -542,7 +550,7 @@ int main() {
                     waited, static_cast<long long>(Transmitter::kKeyAliveWait.count()));
 
         // And when the window comes back, the panel is told why.
-        tx.tick();
+        frame(tx);
         CHECK(!tx.transmitting());
         CHECK(!tx.latched());
         const std::string why = tx.lastAutoUnkeyReason();
@@ -562,7 +570,7 @@ int main() {
         tx.setInput(TxInput::Tone);
 
         tx.setLatched(true);
-        tx.tick();
+        frame(tx);
         CHECK(tx.transmitting());
         CHECK(waitTicking(tx, [&tx] { return !tx.transmitting(); }, std::chrono::seconds(3)));
         CHECK(!tx.latched());
@@ -590,7 +598,7 @@ int main() {
         tx.setSink(std::move(sink));
 
         tx.setLatched(true);
-        tx.tick();
+        frame(tx);
         CHECK(!tx.transmitting());
         CHECK(!tx.latched());
         CHECK(!tx.pttHeld());
@@ -599,7 +607,7 @@ int main() {
         // And with no radio at all it is a refusal, not a crash.
         Transmitter bare;
         bare.setPttHeld(true);
-        bare.tick();
+        frame(bare);
         CHECK(!bare.transmitting());
         CHECK(!bare.pttHeld());
     }
@@ -623,7 +631,7 @@ int main() {
         tx.setSink(std::move(first));
         tx.setInput(TxInput::Tone);
         tx.setLatched(true);
-        tx.tick();
+        frame(tx);
         CHECK(tx.transmitting());
 
         auto second = std::make_unique<RecordingSink>(480000.0);
@@ -705,11 +713,11 @@ int main() {
         (void)raw;
 
         tx.setPttHeld(true);
-        tx.tick();
+        frame(tx);
         CHECK(waitTicking(tx, [kp] { return kp->take().size() > 120000; },
                           std::chrono::seconds(3)));
         tx.setPttHeld(false);
-        tx.tick();
+        frame(tx);
 
         std::vector<std::complex<float>> got = kp->take();
         CHECK(got.size() > 120000);
@@ -750,7 +758,7 @@ int main() {
 
         const auto t0 = std::chrono::steady_clock::now();
         tx.keyRemote();
-        tx.tick();
+        frame(tx);
         CHECK(tx.transmitting());
         CHECK(tx.remoteKeyed());
         CHECK(raw->starts.load() == 1);
@@ -816,7 +824,7 @@ int main() {
         auto nextAssert = std::chrono::steady_clock::now();
         bool stayedUp = true;
         tx.keyRemote();
-        tx.tick();
+        frame(tx);
         CHECK(tx.transmitting());
         while (std::chrono::steady_clock::now() < deadline) {
             const auto now = std::chrono::steady_clock::now();
@@ -824,7 +832,7 @@ int main() {
                 tx.keyRemote();
                 nextAssert = now + std::chrono::milliseconds(500);
             }
-            tx.tick();
+            frame(tx);
             if (!tx.transmitting()) { stayedUp = false; break; }
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
@@ -851,13 +859,13 @@ int main() {
         tx.setInput(TxInput::Tone);
 
         tx.keyRemote();
-        tx.tick();
+        frame(tx);
         CHECK(tx.transmitting());
         // ONE TICK. Not "eventually", not "when the hold expires" - the page
         // said the finger came up and the key opens on the next frame, the
         // same as letting go of the local PTT.
         tx.releaseRemote("the remote let go");
-        tx.tick();
+        frame(tx);
         CHECK(!tx.transmitting());
         CHECK(!tx.remoteKeyed());
         CHECK(raw->stops.load() >= 1);
@@ -870,7 +878,7 @@ int main() {
         // happened to be opened inside that window.
         Transmitter bare;
         bare.keyRemote();
-        bare.tick();
+        frame(bare);
         CHECK(!bare.transmitting());
         CHECK(!bare.remoteKeyed());
         CHECK(bare.lastError().find("no transmitter") != std::string::npos);
@@ -882,7 +890,7 @@ int main() {
         swap.setSink(std::move(first));
         swap.setInput(TxInput::Tone);
         swap.keyRemote();
-        swap.tick();
+        frame(swap);
         CHECK(swap.transmitting());
         swap.setSink(nullptr);
         CHECK(!swap.transmitting());

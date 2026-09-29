@@ -314,11 +314,13 @@ std::string Transmitter::lastAutoUnkeyReason() const {
     return autoUnkeyReason_;
 }
 
+void Transmitter::frontEndAlive() { frontEndAliveMs_.store(nowMs(), std::memory_order_relaxed); }
+
 void Transmitter::tick() {
     // THE LIVENESS STAMP, and it is the first thing this function does. Every
     // other decision below can be skipped without a radio being left keyed;
     // this one cannot, because it is what the TX thread watches.
-    lastTickMs_.store(nowMs(), std::memory_order_relaxed);
+    controlAliveMs_.store(nowMs(), std::memory_order_relaxed);
 
     // THE LATCH'S OWN DEADLINE.
     if (latched_.load(std::memory_order_relaxed)) {
@@ -351,23 +353,9 @@ void Transmitter::tick() {
         }
     }
 
-    // THE REMOTE KEY'S OWN DEADLINE, and it is the same shape as the latch's
-    // above for the same reason: the thing holding this key is at the far end
-    // of a network and may simply stop existing. One assertion is worth
-    // kRemotePttHoldMs and no more.
-    if (remoteKeyed_.load(std::memory_order_relaxed)) {
-        const std::int64_t age =
-            nowMs() - remoteKeyedAtMs_.load(std::memory_order_relaxed);
-        if (age >= kRemotePttHoldMs.count()) {
-            remoteKeyed_.store(false, std::memory_order_relaxed);
-            {
-                std::lock_guard<std::mutex> lk(errorMutex_);
-                autoUnkeyReason_ = "the web remote stopped asking, so the key was released";
-            }
-            diagWarnf("tx: remote key released (the hold expired after %lld ms)",
-                      static_cast<long long>(age));
-        }
-    }
+    // THE REMOTE KEY'S OWN DEADLINE is NOT enforced here any more (engine/
+    // stage3b-pre, docs/engine-stage3.md OPEN 7): the TX thread enforces it
+    // itself (threadBody), so it holds whether or not anything is ticking.
 
     const bool want = pttHeld_.load(std::memory_order_relaxed) ||
                       latched_.load(std::memory_order_relaxed) ||
@@ -446,7 +434,7 @@ bool Transmitter::keyDownLocked() {
     modulator_.setKeyed(true);
     blocks_.store(0, std::memory_order_relaxed);
     shortBlocks_.store(0, std::memory_order_relaxed);
-    lastTickMs_.store(nowMs(), std::memory_order_relaxed);
+    controlAliveMs_.store(nowMs(), std::memory_order_relaxed);
 
     transmitting_.store(true, std::memory_order_relaxed);
     startThread();
@@ -584,25 +572,63 @@ void Transmitter::threadBody() {
     while (run_.load(std::memory_order_relaxed)) {
         next += blockPeriod;
 
-        // --- THE DEAD-MAN'S HANDLE ------------------------------------------
-        // The GUI thread stamps lastTickMs_ every frame. If it has stopped,
-        // the thing that would normally release the key has stopped too, so
-        // this thread releases it instead. See the hard rule in the header.
-        const std::int64_t age = nowMs() - lastTickMs_.load(std::memory_order_relaxed);
-        if (age > kKeyAliveWait.count()) {
+        // --- THE DEAD-MAN'S HANDLES -----------------------------------------
+        // Checked HERE, by the thread that is transmitting, and by nothing
+        // else - see the hard rule in the header. Two stamps and one hold:
+        const std::int64_t now = nowMs();
+        const bool localKey = pttHeld_.load(std::memory_order_relaxed) ||
+                              latched_.load(std::memory_order_relaxed);
+        // THE FRONT END. A PTT or LATCH is a hand on the window; a window
+        // that has stopped stamping cannot let go of it, so this thread does.
+        // Checked first: when both stamps have stopped (in stage 3a they are
+        // stamped from the same frame), the window is the cause worth naming.
+        const std::int64_t frontAge = now - frontEndAliveMs_.load(std::memory_order_relaxed);
+        if (localKey && frontAge > kKeyAliveWait.count()) {
             {
                 std::lock_guard<std::mutex> lk(errorMutex_);
                 autoUnkeyReason_ = "the window stopped responding, so the key was released";
             }
-            diagWarnf("tx: no frame in %lld ms - releasing the key", static_cast<long long>(age));
+            diagWarnf("tx: no frame from the window in %lld ms - releasing the key",
+                      static_cast<long long>(frontAge));
             break;
         }
+        // THE CONTROL SIDE (tick()). Whatever the key, if the thing that would
+        // apply a release has stopped, this thread releases it.
+        const std::int64_t age = now - controlAliveMs_.load(std::memory_order_relaxed);
+        if (age > kKeyAliveWait.count()) {
+            {
+                std::lock_guard<std::mutex> lk(errorMutex_);
+                autoUnkeyReason_ = "the transmit control stopped responding, so the key was released";
+            }
+            diagWarnf("tx: no tick in %lld ms - releasing the key", static_cast<long long>(age));
+            break;
+        }
+        // THE REMOTE KEY'S HOLD. One assertion is worth kRemotePttHoldMs and
+        // no more; enforced here so it holds whoever is ticking.
+        if (remoteKeyed_.load(std::memory_order_relaxed)) {
+            const std::int64_t held = now - remoteKeyedAtMs_.load(std::memory_order_relaxed);
+            if (held >= kRemotePttHoldMs.count() && remoteKeyed_.exchange(false, std::memory_order_relaxed)) {
+                {
+                    std::lock_guard<std::mutex> lk(errorMutex_);
+                    autoUnkeyReason_ = "the web remote stopped asking, so the key was released";
+                }
+                diagWarnf("tx: remote key released (the hold expired after %lld ms)",
+                          static_cast<long long>(held));
+            }
+        }
+        // NOTHING ASSERTS THE KEY ANY MORE - a PTT let go, a LATCH opened, the
+        // page closed (the front end clears them itself, at once), or the
+        // remote's hold just ran out: the key goes down HERE, WITH ITS TAIL
+        // (the ramp below plays, then the thread finishes), without waiting for
+        // tick() - key-up never waits behind the control side.
+        const bool anyKey = localKey || remoteKeyed_.load(std::memory_order_relaxed);
 
         bool tailDone = false;
         std::size_t made = 0;
         {
             std::lock_guard<std::mutex> lk(stateMutex_);
             if (sink_ == nullptr) { break; }
+            if (!anyKey) { modulator_.setKeyed(false); }
 
             // --- the audio --------------------------------------------------
             if (input_ == TxInput::Tone) {

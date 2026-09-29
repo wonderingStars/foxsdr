@@ -18,11 +18,16 @@
 //     are saved; the PTT is not, and there is no code path that could restore
 //     it. core/config.hpp says the same thing from its side.
 //
-//   - A FROZEN WINDOW CANNOT LEAVE IT KEYED. The GUI thread calls tick()
-//     every frame; the TX thread watches for that and unkeys if it stops
-//     (kKeyAliveWait). A wedged frame loop is the one failure that would
-//     otherwise transmit for as long as the process lived, because the thing
-//     that would normally release the key is the thing that has stopped.
+//   - A FROZEN WINDOW CANNOT LEAVE IT KEYED. Two liveness stamps, both
+//     watched by the TX thread itself (kKeyAliveWait): tick(), stamped by the
+//     side that applies the key (the control side), and frontEndAlive(), one
+//     store a frame from the window. Any key opens if the control stamp goes
+//     stale; a LOCAL key (PTT, LATCH) opens if the window's does. A wedged
+//     loop is the one failure that would otherwise transmit for as long as
+//     the process lived, because the thing that would normally release the
+//     key is the thing that has stopped - and once tick() runs off the GUI
+//     thread (stage 3b), a frozen window no longer stops it, which is why the
+//     window has a stamp of its own (docs/engine-stage3.md OPEN 7).
 //
 //   - A LATCH CANNOT BE FORGOTTEN. It releases itself after kLatchTimeout.
 //     Somebody who walks away from a latched transmitter with a live
@@ -189,9 +194,10 @@ public:
     // key has been released.
     static constexpr std::chrono::milliseconds kAudioPollWait{5};
 
-    // THE DEAD-MAN'S HANDLE. If the GUI thread has not called tick() within
-    // this long, the TX thread unkeys itself - see the hard rule at the top
-    // of this file. Not a wait: nothing sleeps or blocks on it, it is a
+    // THE DEAD-MAN'S HANDLE. If the control side has not called tick()
+    // within this long - or, with a local key held, the front end has not
+    // called frontEndAlive() - the TX thread unkeys itself - see the hard
+    // rule at the top of this file. Not a wait: nothing sleeps or blocks on it, it is a
     // staleness bound on a timestamp.
     static constexpr std::chrono::milliseconds kKeyAliveWait{1000};
 
@@ -325,11 +331,19 @@ public:
     // been seen.
     bool transmitting() const;
 
-    // ONCE A FRAME, FROM THE GUI THREAD. Applies the key request, enforces
-    // the latch timeout, and - the part that matters - stamps the liveness
-    // timestamp the TX thread watches. A frame loop that stops running stops
-    // calling this, and the key opens.
+    // ONCE A PUMP, FROM THE CONTROL SIDE (the GUI thread's frame in 3a).
+    // Applies the key request, enforces the latch timeout, and - the part
+    // that matters - stamps the control liveness the TX thread watches. A
+    // loop that stops running stops calling this, and the key opens. The
+    // remote key's hold is enforced by the TX thread, not here.
     void tick();
+
+    // ONCE A FRAME, FROM THE FRONT END (the GUI thread), and nothing else:
+    // one atomic store saying "the window that owns the local key is alive".
+    // With a PTT or LATCH asserted, the TX thread opens the key when this
+    // has not been called for kKeyAliveWait - however the control side is
+    // doing.
+    void frontEndAlive();
 
     // Unkeys and stops everything, bounded (kThreadJoinWait plus whatever the
     // sink's own stop costs). Idempotent; safe before any sink is installed;
@@ -403,7 +417,7 @@ private:
     std::atomic<bool> pttHeld_{false};
     std::atomic<bool> latched_{false};
     // The web remote's key, and when it was last asserted. Steady-clock
-    // milliseconds as a plain count, like lastTickMs_, so tick() can compare
+    // milliseconds as a plain count, like controlAliveMs_, so tick() can compare
     // it without taking anything.
     std::atomic<bool> remoteKeyed_{false};
     std::atomic<std::int64_t> remoteKeyedAtMs_{0};
@@ -411,8 +425,10 @@ private:
     std::atomic<std::uint64_t> shortBlocks_{0};
 
     // Steady-clock milliseconds, stored as a count so the TX thread can read
-    // it without a lock. Stamped by tick(); watched by the TX thread.
-    std::atomic<std::int64_t> lastTickMs_{0};
+    // it without a lock. Stamped by tick() (the control side) and by
+    // frontEndAlive() (the window); both watched by the TX thread.
+    std::atomic<std::int64_t> controlAliveMs_{0};
+    std::atomic<std::int64_t> frontEndAliveMs_{0};
     std::chrono::steady_clock::time_point latchedAt_{};
     std::chrono::milliseconds latchTimeout_ = kLatchTimeout;
 

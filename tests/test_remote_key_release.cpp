@@ -114,6 +114,14 @@ struct AppWindowTestAccess {
     }
     static bool haveTx(AppWindow& a) { return a.engine_.transmitter_.haveSink(); }
     static void applyWebControls(AppWindow& a) { a.applyWebControls(); }
+    // The engine's control-side pump of the Transmit key, which now holds the
+    // page's standing condition on the remote key (OPEN 7 (c)).
+    static void pumpTransmitter(AppWindow& a) { a.engine_.pumpTransmitter(); }
+    // The settings panel switching the web server off.
+    static void disableWeb(AppWindow& a) {
+        a.webCfg_.enabled = false;
+        a.applyWebSettings();
+    }
     static WebServer& webServer(AppWindow& a) { return a.webServer_; }
 };
 
@@ -182,13 +190,16 @@ int main() {
     CHECK(webServer.running());
 
     // === A: THE PAGE CLOSING releases a key already held ====================
+    //     Since engine/stage3b-pre OPEN 7 (c) this is the ENGINE's standing
+    //     condition, checked by its own pumpTransmitter() - no longer the
+    //     window's applyWebControls poll, which touches transmitter_ no more.
     {
         Access::setTransmitOpen(app, true);
         CHECK(ok(Access::apply(app, cmd::makeInt(FOXAPI_OP_TX_PTT, 1))));
         CHECK(Access::remoteHoldMs(app) > 0);
         // The web server keeps running throughout - only transmitOpen_ moves.
         Access::setTransmitOpen(app, false);
-        Access::applyWebControls(app);
+        Access::pumpTransmitter(app);
         CHECK(Access::remoteHoldMs(app) == 0);
         std::printf("  A: page closed -> remote hold %lld ms\n",
                     static_cast<long long>(Access::remoteHoldMs(app)));
@@ -204,6 +215,7 @@ int main() {
         CHECK(ok(Access::apply(app, cmd::makeInt(FOXAPI_OP_TX_PTT, 1))));
         CHECK(Access::remoteHoldMs(app) > 0);
         Access::applyWebControls(app);
+        Access::pumpTransmitter(app);
         CHECK(Access::remoteHoldMs(app) > 0);   // NEITHER condition applies - still held
         std::printf("  control: page open + server running -> remote hold %lld ms (still held)\n",
                     static_cast<long long>(Access::remoteHoldMs(app)));
@@ -223,6 +235,20 @@ int main() {
         CHECK(ok(Access::apply(app, cmd::makeInt(FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN, 0))));
         CHECK(Access::remoteHoldMs(app) == 0);
         std::printf("  D: FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN(0) alone -> remote hold %lld ms\n",
+                    static_cast<long long>(Access::remoteHoldMs(app)));
+    }
+
+    // === E (OPEN 7 (c)): switching the web server OFF in the settings panel
+    //     releases a key held IN THE SAME STEP - applyWebSettings alone, with
+    //     no frame, no applyWebControls and no pump after it. ================
+    {
+        CHECK(ok(Access::apply(app, cmd::makeInt(FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN, 1))));
+        CHECK(ok(Access::apply(app, cmd::makeInt(FOXAPI_OP_TX_PTT, 1))));
+        CHECK(Access::remoteHoldMs(app) > 0);
+        Access::disableWeb(app);
+        CHECK(!webServer.running());
+        CHECK(Access::remoteHoldMs(app) == 0);
+        std::printf("  E: web server switched off -> remote hold %lld ms\n",
                     static_cast<long long>(Access::remoteHoldMs(app)));
     }
 

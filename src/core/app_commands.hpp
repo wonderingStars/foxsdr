@@ -147,6 +147,13 @@
 // the config's own patch document, ids kept, plus next-id and centre-chosen
 // lines the document parser already skips. Always long text in practice.
 #define FOXAPP_OP_PATCH_SET_GRAPH        0x841Bu /* text (long text): the graph; ival[0]: FOXAPP_PATCH_GRAPH_* flags */
+// THE WEB CONTROL IS NOT RUNNING (engine/stage3b-pre, docs/engine-stage3.md
+// OPEN 7 (c)/10): the server that carries a browser's transmit key has been
+// stopped, disabled or never started, so no remote key can be held - the
+// Engine releases one in the same step. Sent by the window, which owns the
+// server until stage 5, where it stops it and once a frame while it is not
+// running (idempotent: a no-op with no remote key held).
+#define FOXAPP_OP_WEB_CONTROL_STOPPED    0x841Cu /* no args */
 // FOXAPP_OP_PATCH_SET_GRAPH's ival[0]: set when the graph is a NEW DOCUMENT
 // (the config's patch, a patch file) rather than an edit of the graph the
 // engine already has. The Engine counts these (Engine::patchGraphEpoch_), so a

@@ -69,6 +69,7 @@
 #include "engine/running_view.hpp"
 #include "engine/source_fallback.hpp"
 #include "engine/tune_control.hpp"
+#include "engine/tx_page_key.hpp"
 #include "source/airspy_source.hpp"
 #include "source/airspyhf_source.hpp"
 #include "source/hackrf_source.hpp"
@@ -1674,6 +1675,12 @@ private:
     // None is persisted; core/config.hpp says why at length.
     cascade::core::Transmitter transmitter_;
     bool transmitOpen_ = false;    // is the PAGE open
+    // The Transmit page's newest key request (see submitTransmitPageKey), and
+    // what the control side last acted on of it.
+    std::mutex txPageMutex_;
+    cascade::gui::TxPageRequest txPageRequest_;
+    std::uint32_t txLatchPressesSeen_ = 0;
+    std::uint64_t txFrameSeen_ = 0;
     bool transmitSplit_ = false;
     double transmitSplitHz_ = 145.5e6;
     int transmitModeIndex_ = 0;    // dsp::TxMode
@@ -2098,6 +2105,18 @@ public:
     void pumpPlugins();
     double pumpPublish();  // returns the centre it published (publishReceiverState)
     void pumpAudioMute();
+    // THE TRANSMIT PAGE'S KEY, in two halves (docs/engine-stage3.md OPEN 7).
+    // submitTransmitPageKey: the FRONT END, once a frame - stamps the
+    // transmitter's front-end liveness, applies any key-UP at once (the page
+    // not live, the PTT let go), and leaves the request in the slot.
+    // pumpTransmitter(): the CONTROL side - reads the newest request, applies
+    // key-DOWN (and the LATCH presses since the last read), releases a remote
+    // key the closed page no longer allows, and ticks.
+    void submitTransmitPageKey(const cascade::gui::TxPageRequest& r);
+    void pumpTransmitter();
+    // Both halves as one frame, for a front end with no page of its own
+    // (Engine::pump) and for tests: the request is the previous one with this
+    // frame's levels, and one LATCH press more when latchPressed.
     void pumpTransmitter(bool pageLive, bool latchPressed, bool pttHeld);
     void pumpWorkers();
     void pumpAudio();

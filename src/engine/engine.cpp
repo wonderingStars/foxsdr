@@ -5277,6 +5277,12 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             patchGraph_ = std::move(g);
             return res;
         }
+        case FOXAPP_OP_WEB_CONTROL_STOPPED:
+            // No server, no browser, no remote key (OPEN 7 (c)): released
+            // here, in the same step the window stops the server, rather than
+            // by the window reaching into transmitter_ on its next frame.
+            transmitter_.releaseRemote("the web server is not running");
+            return res;
         case FOXAPP_OP_PATCH_LOOK_FOR_RADIOS:
             // "Look for radios" pressed (0.99.40, engine/stage3b-pre
             // fields-to-commands round 2): unconditional, unlike the combo-open
@@ -6619,7 +6625,7 @@ void Engine::fillConfig(cascade::core::AppConfig& cfg) {
     cfg.transmitToneHz = transmitToneHz_;
     cfg.transmitMonitor = transmitMonitor_;
     cfg.transmitArgs = transmitArgs_;
-    // AND NOTHING FOR THE KEY: transmitPttHeld_, transmitLatchPressed_ and
+    // AND NOTHING FOR THE KEY: transmitPttHeld_, transmitLatchPresses_ and
     // the transmitter's latch are not written, because AppConfig has nowhere
     // to put them and must not grow one. A saved key is a radio that comes up transmitting.
     cfg.rxPositionSet = rxSet_;
@@ -6834,17 +6840,69 @@ double Engine::pumpPublish() {
 
 void Engine::pumpAudioMute() { updateAudioMute(); }
 
-// The Transmit page's key, rebuilt every frame by the front end (gui::
-// AppWindow::drawUi says why it is applied here and not in the page), then
-// the tick the TX thread's dead-man's handle watches.
-void Engine::pumpTransmitter(bool pageLive, bool latchPressed, bool pttHeld) {
+// THE FRONT END'S HALF of the Transmit page's key (gui::AppWindow::drawUi
+// says why the key is applied from the frame loop and not in the page). Runs
+// on the front end's own thread and never waits for the control side:
+//   - the front end's liveness stamp, which the TX thread itself watches -
+//     with a PTT or LATCH held, a window that stops stamping opens the key
+//     (core/transmitter.hpp), however the control side is doing;
+//   - KEY-UP, at once: a page not live lets go of the PTT and the LATCH, and a
+//     PTT let go lets go of the PTT - two atomic stores, and the TX thread
+//     plays the ramp down on its own the moment no key is asserted;
+//   - the request, into the latest-value slot the control side reads.
+void Engine::submitTransmitPageKey(const cascade::gui::TxPageRequest& r) {
+    transmitter_.frontEndAlive();
+    if (!r.pageLive) {
+        transmitter_.setLatched(false);
+        transmitter_.setPttHeld(false);
+    } else if (!r.pttHeld) {
+        transmitter_.setPttHeld(false);
+    }
+    std::lock_guard<std::mutex> lk(txPageMutex_);
+    txPageRequest_ = r;
+}
+
+// THE CONTROL SIDE'S HALF: key-down from the newest request, the standing
+// condition on the remote key, then the tick the TX thread's dead-man's
+// handle watches.
+void Engine::pumpTransmitter() {
+    cascade::gui::TxPageRequest r;
+    {
+        std::lock_guard<std::mutex> lk(txPageMutex_);
+        r = txPageRequest_;
+    }
+    // Every LATCH press since the last read, however many frames that spans:
+    // an odd number toggles, an even number does not (TxPageRequest).
+    const std::uint32_t presses = r.latchPressCount - txLatchPressesSeen_;
+    txLatchPressesSeen_ = r.latchPressCount;
+    txFrameSeen_ = r.frameSeq;
     {
         const cascade::gui::TxPageKey key = cascade::gui::txPageKey(
-            pageLive, transmitter_.latched(), latchPressed, pttHeld);
+            r.pageLive, transmitter_.latched(), (presses & 1u) != 0u, r.pttHeld);
         transmitter_.setLatched(key.latched);
         transmitter_.setPttHeld(key.pttHeld);
     }
+    // THE REMOTE KEY'S STANDING CONDITION, inside the engine (it was the
+    // window's per-frame poll in applyWebControls): a remote key exists only
+    // while the Transmit page is open. FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN
+    // releases it in the same step as the close; this covers anything else
+    // that leaves transmitOpen_ false. A no-op while the key is open.
+    if (!transmitOpen_) { transmitter_.releaseRemote("the transmit page was closed"); }
     transmitter_.tick();
+}
+
+void Engine::pumpTransmitter(bool pageLive, bool latchPressed, bool pttHeld) {
+    cascade::gui::TxPageRequest r;
+    {
+        std::lock_guard<std::mutex> lk(txPageMutex_);
+        r = txPageRequest_;
+    }
+    r.pageLive = pageLive;
+    r.pttHeld = pttHeld;
+    if (latchPressed) { ++r.latchPressCount; }
+    ++r.frameSeq;
+    submitTransmitPageKey(r);
+    pumpTransmitter();
 }
 
 void Engine::pumpWorkers() {

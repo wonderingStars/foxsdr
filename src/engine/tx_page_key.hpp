@@ -8,6 +8,8 @@
 #ifndef CASCADE_ENGINE_TX_PAGE_KEY_HPP
 #define CASCADE_ENGINE_TX_PAGE_KEY_HPP
 
+#include <cstdint>
+
 namespace cascade::gui {
 
 // --- the key -----------------------------------------------------------------
@@ -44,6 +46,31 @@ inline TxPageKey txPageKey(bool pageLive, bool transmitterLatched, bool latchPre
     k.pttHeld = pttHeld;
     return k;
 }
+
+// --- the request, as the front end hands it over ------------------------------
+//
+// A LATEST-VALUE SLOT (engine/stage3b-pre, docs/engine-stage3.md OPEN 7): the
+// front end writes it once a frame (Engine::submitTransmitPageKey), the control
+// side reads the newest one when it pumps (Engine::pumpTransmitter). Once the
+// pump runs on a thread of its own it may see two frames' requests as one, or
+// the same request twice - so nothing in here may be an EDGE that one reading
+// could lose or two could double:
+//   - pageLive and pttHeld are LEVELS - the newest wins, as it should;
+//   - the LATCH press is a COUNT of every press ever made, never "pressed this
+//     frame". The control side acts on the presses since the count it last saw
+//     (an odd number toggles the latch, an even number leaves it), so a press
+//     is neither lost between two reads nor applied twice by one;
+//   - frameSeq numbers the front end's frames, so a reader can tell a new
+//     request from a repeat.
+// KEY-UP DOES NOT WAIT FOR THE PUMP: the page closing, or the PTT let go, is
+// applied by submitTransmitPageKey on the front end's own thread, at once.
+// Only key-DOWN (a PTT pressed, a LATCH press) goes through the control side.
+struct TxPageRequest {
+    bool pageLive = false;
+    bool pttHeld = false;
+    std::uint32_t latchPressCount = 0;
+    std::uint64_t frameSeq = 0;
+};
 
 }  // namespace cascade::gui
 

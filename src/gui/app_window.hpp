@@ -2086,7 +2086,12 @@ private:
     std::string scopeAudioFrom_;
 
     bool transmitPttHeld_ = false; // this frame's key request, rebuilt each frame
-    bool transmitLatchPressed_ = false;  // LATCH clicked this frame, rebuilt each frame
+    // Every LATCH press ever made, COUNTED - never a per-frame flag, so the
+    // engine's control side neither loses nor doubles one however its pumps
+    // fall against these frames (gui::TxPageRequest) - and this window's frame
+    // number for the request it hands over.
+    std::uint32_t transmitLatchPresses_ = 0;
+    std::uint64_t transmitKeyFrame_ = 0;
     bool transmitPageLive_ = false;  // page drawn with its controls THIS frame (not rolled up)
     // The microphone's peak, decayed towards zero so the meter falls rather
     // than flickering - a bar redrawn from one 10 ms peak a frame is unreadable.
