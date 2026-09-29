@@ -88,6 +88,7 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <utility>
 #include <string>
 #include <thread>
@@ -287,6 +288,14 @@ struct UploadResult {
 // `request` is the live WinHTTP request handle, published by the worker before
 // it makes a blocking call and taken by whichever of the two gets there first,
 // so it is closed exactly once. Closing it is what aborts a blocked transfer.
+//
+// On POSIX the handle is the worker's own httplib::ClientImpl, which the
+// worker DESTROYS as soon as take() returns. cancel() used to exchange the
+// pointer out and call stop() on it with nothing stopping the worker's request
+// finishing, take() returning nullptr and the client being freed in between -
+// a use-after-free that crashed ~60% of Linux runs destroying an AppWindow
+// with a tester-link lookup in flight. mu_ now covers cancel()'s stop() and
+// take(), so once take() returns no stop() can still be running on the client.
 class UploadCancel {
 public:
     void cancel();
@@ -299,6 +308,7 @@ public:
 private:
     std::atomic<bool> cancelled_{false};
     std::atomic<void*> request_{nullptr};
+    std::mutex mu_;
 };
 
 // One POST. Synchronous, bounded, and abortable through `cancel`. Returns what

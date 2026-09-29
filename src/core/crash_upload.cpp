@@ -667,6 +667,9 @@ UploadPolicyState decodePolicyState(const std::vector<std::string>& recent,
 // Transport
 // ---------------------------------------------------------------------------
 void UploadCancel::cancel() {
+    // Held across the close/stop below: take() waits for it, so the worker
+    // cannot free its client while stop() is still using it (see the header).
+    std::lock_guard<std::mutex> lk(mu_);
     cancelled_.store(true, std::memory_order_release);
     void* h = request_.exchange(nullptr, std::memory_order_acq_rel);
 #if defined(_WIN32)
@@ -706,7 +709,10 @@ bool UploadCancel::publish(void* handle) {
     return true;
 }
 
-void* UploadCancel::take() { return request_.exchange(nullptr, std::memory_order_acq_rel); }
+void* UploadCancel::take() {
+    std::lock_guard<std::mutex> lk(mu_);
+    return request_.exchange(nullptr, std::memory_order_acq_rel);
+}
 
 std::string crashUploadEndpoint() {
     // The project's own domain rather than the worker behind it: this string
