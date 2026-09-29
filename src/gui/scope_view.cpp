@@ -1755,7 +1755,7 @@ ImVec2 meterArcPoint(const ImVec2& pivot, float radius, float halfSweepDeg, floa
 // ANALOGUE NEEDLE: the moving-coil VU the owner asked for beside Classic - a
 // continuous scale arc rather than nine ticks, a FILLED red zone rather than
 // two red ticks (a wedge reads at a glance; a pair of ticks does not), and a
-// bolder ivory needle so the two styles are never mistaken for each other in
+// bolder dark needle so the two styles are never mistaken for each other in
 // a screenshot.
 void drawMeterFaceNeedle(ImDrawList* dl, const ImVec2& pivot, float armR,
                          float halfSweepDeg, float frac01, bool haveReading) {
@@ -1770,24 +1770,28 @@ void drawMeterFaceNeedle(ImDrawList* dl, const ImVec2& pivot, float armR,
 
     // THE RED ZONE IS A WEDGE, not ticks - the top 18% of the travel, the
     // same span Classic marks with its last two (of nine) ticks.
+    // A curved band is NOT convex, so it is filled as one small quad per
+    // step along the arc - one PathFillConvex over the whole band drew it
+    // as a kite at meter size.
     constexpr float kZoneStart = 0.82f;
-    dl->PathClear();
-    for (int i = 0; i <= 8; ++i) {
-        const float t = kZoneStart + (1.0f - kZoneStart) * static_cast<float>(i) / 8.0f;
-        dl->PathLineTo(meterArcPoint(pivot, armR * 0.94f, halfSweepDeg, t));
+    constexpr int kZoneSteps = 8;
+    const ImU32 zoneCol = theme::withAlpha(theme::tone(0xB8, 0x55, 0x2F, 255, ink::Bad), 0.55f);
+    for (int i = 0; i < kZoneSteps; ++i) {
+        const float t0 = kZoneStart + (1.0f - kZoneStart) * static_cast<float>(i) / kZoneSteps;
+        const float t1 = kZoneStart + (1.0f - kZoneStart) * static_cast<float>(i + 1) / kZoneSteps;
+        dl->AddQuadFilled(meterArcPoint(pivot, armR * 0.94f, halfSweepDeg, t0),
+                          meterArcPoint(pivot, armR * 0.94f, halfSweepDeg, t1),
+                          meterArcPoint(pivot, armR * 0.78f, halfSweepDeg, t1),
+                          meterArcPoint(pivot, armR * 0.78f, halfSweepDeg, t0), zoneCol);
     }
-    for (int i = 8; i >= 0; --i) {
-        const float t = kZoneStart + (1.0f - kZoneStart) * static_cast<float>(i) / 8.0f;
-        dl->PathLineTo(meterArcPoint(pivot, armR * 0.55f, halfSweepDeg, t));
-    }
-    dl->PathFillConvex(theme::withAlpha(theme::tone(0xB8, 0x55, 0x2F, 255, ink::Bad), 0.55f));
 
     if (haveReading) {
         float f = frac01;
         if (!(f >= 0.0f)) { f = 0.0f; }
         if (f > 1.0f) { f = 1.0f; }
         const ImVec2 tip = meterArcPoint(pivot, armR * 0.90f, halfSweepDeg, f);
-        dl->AddLine(pivot, tip, theme::tone(0xEF, 0xE7, 0xD2, 255, ink::KnobCap), 2.6f);
+        // Dark ink on the cream face: an ivory needle all but vanished on it.
+        dl->AddLine(pivot, tip, theme::tone(0x2A, 0x25, 0x1C, 255, ink::MeterInk), 2.6f);
         dl->AddCircleFilled(pivot, 4.0f, theme::tone(0x2A, 0x25, 0x1C, 255, ink::MeterInk), 12);
     } else {
         dl->AddCircleFilled(pivot, 4.0f,
