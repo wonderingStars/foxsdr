@@ -966,6 +966,45 @@ they were with the facts; and what 3b has to settle first.
    this round (see the 2d note above - genuinely single-owner, but not
    reached). `drawAirspyControls` no longer calls `asAirspyDevice()` at all -
    removed from `kControlMayCall`.
+   **CLOSED, stage-3b-pre-end round, item 2 (2026-09-29): the two calls the
+   brief named.**
+   - **`scanSoundCards`**: the sound card row now sends
+     `FOXAPP_OP_SOUND_CARDS_WANTED` (0x841D, applied at once as the call
+     was); the engine lists the cards on its worker unless they are listed,
+     a list is being taken, or a card is opening - the test the panel used
+     to make itself. Removed from `kControlMayCall`. Test:
+     test_soundcard_app_paths `testSoundCardsWantedIsACommand` (fake
+     backend, counting lists: ask, ask while scanning, ask once listed ->
+     exactly one list). Red before (op unknown, 6 checks); mutants "scans
+     every time" (2) and "lists nothing" (3) red.
+   - **`currentConfig`/`fillConfig`**: the window no longer runs
+     `Engine::fillConfig`. The engine fills the receiver half into a copy
+     behind a mutex (`Engine::publishConfig`) as the last step of its
+     frame's `pumpAudio` (so `Engine::pump` too), and at the two points a
+     save must be current - the window's first snapshot (constructor) and
+     `saveConfigNow` (shutdown, a language switch); `currentConfig()` reads
+     only `Engine::configSnapshot()`. `publishConfig` joins
+     `kControlMayCall` (called from `saveConfigNow`: it refreshes the copy
+     and changes no receiver state; on a control thread it becomes a
+     request that thread answers). The one visible consequence: a change a
+     widget applies AFTER the frame's `pumpAudio` reaches the debounced
+     save one frame later - absorbed by the debounce; the shutdown save
+     publishes first. Test: tests/test_config_snapshot_app.cpp (A: a change
+     not yet published is not in `currentConfig()`, then is; B: one
+     `Engine::pump` publishes; C: `saveConfigNow` saves a change made after
+     the last pump; D: with volume 0.3 in the file, the constructor's
+     remembered config says 0.3). Red before (A, 2 checks). Mutants: the
+     live fill back (2), no publish in the frame (1), none in
+     `saveConfigNow` (1), none in the constructor (1). test_airspy_app,
+     test_bias_key_app and test_soundcard_app_paths now publish before
+     reading `currentConfig()`, as a frame does.
+   **Still open under this item**: `telemetryNotePanel`,
+   `currentAbsoluteHz`, `carriedAirCentre`, `muteNameList` (static),
+   `refreshDiagContext`, `airspyRememberOpen`, `patchListRecordings`,
+   `prunePatchSinkLines`. Each is a query or a local reviewed call rather
+   than a receiver change; converting the queries means reading them from
+   the published snapshot, which is item 3's work, and the rest is
+   bookkeeping with one owner each (see the 2d note above).
 3. **The window reads engine members directly** as a friend (every panel
    draws from `engine_.x_`, `engine_.pipeline_.y()`): allowed by the guard as
    reads, and safe only because both run on one thread. 3b needs every such

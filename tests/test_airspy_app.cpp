@@ -150,7 +150,10 @@ struct AppWindowTestAccess {
     static void control(AppWindow& a, const cascade::net::ControlRequest& r) {
         a.engine_.applyControlRequest(r);
     }
-    static cascade::core::AppConfig config(AppWindow& a) { return a.currentConfig(); }
+    static cascade::core::AppConfig config(AppWindow& a) {
+        a.engine_.publishConfig();   // the engine's frame hands its half over (OPEN 2)
+        return a.currentConfig();
+    }
     static void restore(AppWindow& a, const cascade::core::AppConfig& c) { a.applyConfig(c); }
     // The Source panel's Airspy gain slider's own call (engine/stage3b-pre
     // M2, 2026-09-28): queued, exactly as ImGui::SliderFloat's edit does in

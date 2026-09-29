@@ -232,8 +232,14 @@ const char* const kControlMayCall[] = {
     "muteNameList",
     // the crash handler's description of the receiver, refreshed for a diagnostics bundle
     "refreshDiagContext",
-    // the sound card panel lists the cards (OPEN: a direct call, not a command)
-    "scanSoundCards",
+    // scanSoundCards CLOSED engine/stage3b-pre OPEN 2: the panel sends
+    // FOXAPP_OP_SOUND_CARDS_WANTED.
+    // The config's receiver half, handed over NOW for a save that must be
+    // current (saveConfigNow: shutdown, a language switch) rather than as the
+    // last frame left it (engine/stage3b-pre OPEN 2). It changes no receiver
+    // state - it refreshes the copy currentConfig() reads; once the engine
+    // runs on its own thread this is a request answered by that thread.
+    "publishConfig",
     // asAirspyDevice/chooseAirspyDecimation/GainMode/Agc CLOSED
     // engine/stage3b-pre Airspy round (OPEN 2/3): FOXAPP_OP_AIRSPY_DECIMATION/
     // GAIN_MODE/AGC, and the published state (PublishedState::app's airspy*

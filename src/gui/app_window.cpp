@@ -762,7 +762,9 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
                 std::printf("config applied: defaults (%s)\n", err.c_str());
             }
         }
-        // Baseline for the debounce: what the file holds (or would hold).
+        // Baseline for the debounce: what the file holds (or would hold). The
+        // engine hands its half over first - no frame has run yet (OPEN 2).
+        engine_.publishConfig();
         savedCfg_ = currentConfig();
         pendingCfg_ = savedCfg_;
 
@@ -19179,12 +19181,13 @@ void AppWindow::crashUploadFinish() {
 }
 
 cascade::core::AppConfig AppWindow::currentConfig() {
-    cascade::core::AppConfig cfg;
     // THE RECEIVER'S HALF (engine stage 3a): the source to save, every radio,
     // DSP, plugin and transmitter setting, and the usage report's journal -
-    // Engine::fillConfig. Every field is written by exactly one half, so the
-    // order of the halves is immaterial.
-    engine_.fillConfig(cfg);
+    // filled by the ENGINE (Engine::fillConfig, from its own frame) and handed
+    // over as a copy (engine/stage3b-pre, docs/engine-stage3.md OPEN 2): this
+    // reads the copy and nothing of the engine's live state. Every field is
+    // written by exactly one half, so the order of the halves is immaterial.
+    cascade::core::AppConfig cfg = engine_.configSnapshot();
     cfg.patch = patchText_;
     // WHICH FACE (0.99.40): the patch view or the receiver's.
     cfg.mainView = patchOpen_ ? "patch" : "receiver";
@@ -19277,6 +19280,9 @@ void AppWindow::maybeSaveConfig(double nowS) {
 }
 
 void AppWindow::saveConfigNow() {
+    // A save that must be CURRENT (shutdown, a language switch): the engine
+    // hands over its half as it is now, not as the last frame left it.
+    engine_.publishConfig();
     requestConfigSave(currentConfig());
 }
 

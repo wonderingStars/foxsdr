@@ -48,6 +48,7 @@
 #endif
 
 #include "core/freq_converter.hpp"
+#include "core/app_commands.hpp"
 #include "gui/app_window.hpp"
 #include "engine/source_fallback.hpp"
 #include "source/soundcard_source.hpp"
@@ -82,6 +83,7 @@ struct CardWorld {
     std::atomic<double> refuseRate{0.0};  // open() refuses this card rate only
     std::atomic<int> openNow[4]{};     // streams open now, per device index (& 3)
     std::atomic<int> overlaps{0};      // an open while the same device was still open
+    std::atomic<int> lists{0};         // listDevices() asked, every backend
 };
 CardWorld g_cards;
 
@@ -90,6 +92,7 @@ public:
     ~FakeCard() override { close(); }
 
     std::vector<SoundCardDevice> listDevices() override {
+        ++g_cards.lists;
         std::lock_guard<std::mutex> lk(g_cards.m);
         return g_cards.devices;
     }
@@ -169,6 +172,7 @@ void resetCards() {
     g_cards.refuse = false;
     g_cards.refuseRate = 0.0;
     g_cards.overlaps = 0;
+    g_cards.lists = 0;
 }
 
 // A LINUX MACHINE, as PortAudio's ALSA backend names its inputs: the card
@@ -289,6 +293,13 @@ struct AppWindowTestAccess {
         return settle(a);
     }
     static bool pending(AppWindow& a) { return a.engine_.soundCardOpenPending_; }
+    // What the sound card panel sends while its row is shown and the cards
+    // are not listed (OPEN 2: a command, not a direct scanSoundCards call).
+    static FoxCommandResult wantCards(AppWindow& a) {
+        return a.engine_.applyCommand(cascade::core::cmd::make(FOXAPP_OP_SOUND_CARDS_WANTED));
+    }
+    static bool cardsListed(AppWindow& a) { return a.engine_.soundCardListed_; }
+    static bool cardScanPending(AppWindow& a) { return a.engine_.soundCardScanPending_; }
     // The Source section's controls, edited and not Opened.
     static void setSection(AppWindow& a, const SoundCardSettings& s) { a.engine_.soundCard_ = s; }
     static SoundCardSettings section(AppWindow& a) { return a.engine_.soundCard_; }
@@ -314,7 +325,10 @@ struct AppWindowTestAccess {
         return settle(a);
     }
     static void restore(AppWindow& a, const cascade::core::AppConfig& cfg) { a.applyConfig(cfg); }
-    static cascade::core::AppConfig saved(AppWindow& a) { return a.currentConfig(); }
+    static cascade::core::AppConfig saved(AppWindow& a) {
+        a.engine_.publishConfig();   // the engine's frame hands its half over (OPEN 2)
+        return a.currentConfig();
+    }
     static const std::string& kind(AppWindow& a) { return a.engine_.sourceKind_; }
 
     // The Source combo.
@@ -383,6 +397,28 @@ using Access = cascade::gui::AppWindowTestAccess;
 namespace {
 
 // --- B: the combo's rows -------------------------------------------------------------
+
+// --- OPEN 2: the panel asks for the list through a COMMAND --------------------
+//     FOXAPP_OP_SOUND_CARDS_WANTED: the first ask lists the cards (on the
+//     worker, as scanSoundCards always has); asking again while that scan runs,
+//     once they are listed, or while a card is opening lists nothing more - the
+//     condition the panel used to test itself before calling scanSoundCards.
+void testSoundCardsWantedIsACommand() {
+    std::printf("  the sound card list is asked for by a command, once\n");
+    resetCards();
+    cascade::gui::AppWindow app;
+    CHECK(!Access::cardsListed(app));
+    CHECK(Access::wantCards(app).status == FOXAPI_OK);
+    CHECK(Access::cardScanPending(app));
+    CHECK(Access::wantCards(app).status == FOXAPI_OK);   // while scanning: no second scan
+    CHECK(Access::settle(app));
+    CHECK(Access::cardsListed(app));
+    CHECK(Access::wantCards(app).status == FOXAPI_OK);   // listed: nothing more
+    CHECK(!Access::cardScanPending(app));
+    CHECK(Access::settle(app));
+    std::printf("    lists asked of the backend: %d\n", g_cards.lists.load());
+    CHECK(g_cards.lists.load() == 1);
+}
 
 void testRowKeysHaveTheSoundCardRow() {
     std::printf("  the row keys are index-aligned with the combo, sound card row included\n");
@@ -1137,6 +1173,8 @@ int main() {
     testFailedOtherCardKeepsTheSection();
     testConverterKeyFollowsTheRunningCard();
     testDeadRepickIgnoresSectionEdits();
+    // Engine stage 3b-pre, OPEN 2.
+    testSoundCardsWantedIsACommand();
 
     std::error_code ec;
     std::filesystem::remove_all(g_scratch, ec);

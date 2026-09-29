@@ -154,6 +154,13 @@
 // server until stage 5, where it stops it and once a frame while it is not
 // running (idempotent: a no-op with no remote key held).
 #define FOXAPP_OP_WEB_CONTROL_STOPPED    0x841Cu /* no args */
+// THE SOUND CARD LIST IS WANTED (engine/stage3b-pre, docs/engine-stage3.md
+// OPEN 2): the Source section's sound card row is showing. The Engine lists
+// the cards on its worker unless they are listed already, a list is already
+// being taken, or a card is opening - the test the panel used to make itself
+// before calling Engine::scanSoundCards directly. Sent every frame the row is
+// shown unlisted; idempotent.
+#define FOXAPP_OP_SOUND_CARDS_WANTED     0x841Du /* no args */
 // FOXAPP_OP_PATCH_SET_GRAPH's ival[0]: set when the graph is a NEW DOCUMENT
 // (the config's patch, a patch file) rather than an edit of the graph the
 // engine already has. The Engine counts these (Engine::patchGraphEpoch_), so a

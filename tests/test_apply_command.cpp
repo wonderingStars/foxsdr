@@ -594,6 +594,8 @@ struct AppWindowTestAccess {
     // FOXAPP_OP_PATCH_SET_GRAPH (docs/engine-stage3.md OPEN 6).
     static const cascade::core::patch::Graph& patchGraph(AppWindow& a) { return a.engine_.patchGraph_; }
     static std::uint64_t patchGraphEpoch(AppWindow& a) { return a.engine_.patchGraphEpoch_; }
+    static void setSoundCardsListed(AppWindow& a, bool on) { a.engine_.soundCardListed_ = on; }
+    static bool soundCardScanPending(AppWindow& a) { return a.engine_.soundCardScanPending_; }
     static double txFrequency(AppWindow& a) { return a.engine_.transmitter_.frequencyHz(); }
     static void addAudioDevice(AppWindow& a, int paIndex, const char* name) {
         a.engine_.devices_.push_back({paIndex, name, false});
@@ -1990,6 +1992,15 @@ void transmitterOps(AppWindow& a) {
     // FOXAPP_OP_WEB_CONTROL_STOPPED (OPEN 7 (c)): no server, no remote key -
     // a held key is released at once, and with none held it is a no-op, not
     // a refusal (the window sends it once a frame while the server is off).
+    // FOXAPP_OP_SOUND_CARDS_WANTED (OPEN 2): with the cards already listed it
+    // takes no list (the listing itself, with a fake backend, is
+    // test_soundcard_app_paths's testSoundCardsWantedIsACommand - this file
+    // never lets PortAudio list this machine's inputs).
+    covering(FOXAPP_OP_SOUND_CARDS_WANTED);
+    A::setSoundCardsListed(a, true);
+    CHECK(ok(A::apply(a, cmd::make(FOXAPP_OP_SOUND_CARDS_WANTED))));
+    CHECK(!A::soundCardScanPending(a));
+
     covering(FOXAPP_OP_WEB_CONTROL_STOPPED);
     {
         A::setTransmitOpen(a, true);

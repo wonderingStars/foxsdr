@@ -75,7 +75,12 @@ std::string AppWindow::soundCardReceivesText() const {
 void AppWindow::drawSoundCardControls() {
     // The list is asked for the first time the row is shown, never at
     // startup for a user who does not use a sound card.
-    if (!engine_.soundCardListed_ && !engine_.soundCardScanPending_ && !engine_.soundCardOpenPending_) { engine_.scanSoundCards(); }
+    // A COMMAND (engine/stage3b-pre, docs/engine-stage3.md OPEN 2), applied
+    // at once as the direct call was; the engine decides whether a list is
+    // actually taken (not listed, not listing, no card opening).
+    if (!engine_.soundCardListed_) {
+        (void)engine_.applyCommand(cascade::core::cmd::make(FOXAPP_OP_SOUND_CARDS_WANTED));
+    }
 
     const std::string label = engine_.soundCard_.device.empty()
                                   ? std::string()

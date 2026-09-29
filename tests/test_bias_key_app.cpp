@@ -325,7 +325,10 @@ struct AppWindowTestAccess {
         return a.engine_.device_ != nullptr ? std::string(a.engine_.device_->name()) : std::string("(none)");
     }
     // What the application would save now, and a restore from it.
-    static cascade::core::AppConfig config(AppWindow& a) { return a.currentConfig(); }
+    static cascade::core::AppConfig config(AppWindow& a) {
+        a.engine_.publishConfig();   // the engine's frame hands its half over (OPEN 2)
+        return a.currentConfig();
+    }
     static void restore(AppWindow& a, const cascade::core::AppConfig& cfg) { a.applyConfig(cfg); }
     static void seedMemory(AppWindow& a, const std::string& key, bool on) {
         a.engine_.biasTeePanel_.remembered[key] = on;

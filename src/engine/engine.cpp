@@ -5277,6 +5277,12 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             patchGraph_ = std::move(g);
             return res;
         }
+        case FOXAPP_OP_SOUND_CARDS_WANTED:
+            // The sound card row is showing (OPEN 2): list the cards once,
+            // on the worker - never again while a list is being taken or a
+            // card is opening, and not at all once they are listed.
+            if (!soundCardListed_ && !soundCardScanPending_ && !soundCardOpenPending_) { scanSoundCards(); }
+            return res;
         case FOXAPP_OP_WEB_CONTROL_STOPPED:
             // No server, no browser, no remote key (OPEN 7 (c)): released
             // here, in the same step the window stops the server, rather than
@@ -6930,6 +6936,21 @@ void Engine::pumpAudio() {
     // "Still running" beat, five-minute cadence. A no-op when reporting is
     // off, and never blocks - see HeartbeatSender::poll.
     telemetryHeartbeat_.poll(host_->frameTimeS());
+    // THE CONFIG'S RECEIVER HALF, handed to the window once a frame (OPEN 2):
+    // last, so it carries everything this frame's phases changed.
+    publishConfig();
+}
+
+void Engine::publishConfig() {
+    cascade::core::AppConfig c;
+    fillConfig(c);
+    std::lock_guard<std::mutex> lk(configSnapMutex_);
+    configSnap_ = std::move(c);
+}
+
+cascade::core::AppConfig Engine::configSnapshot() const {
+    std::lock_guard<std::mutex> lk(configSnapMutex_);
+    return configSnap_;
 }
 
 // EVERY STEP, IN THE FRAME'S ORDER, for a front end with no frame: the GPS

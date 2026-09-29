@@ -1677,6 +1677,8 @@ private:
     bool transmitOpen_ = false;    // is the PAGE open
     // The Transmit page's newest key request (see submitTransmitPageKey), and
     // what the control side last acted on of it.
+    mutable std::mutex configSnapMutex_;
+    cascade::core::AppConfig configSnap_;
     std::mutex txPageMutex_;
     cascade::gui::TxPageRequest txPageRequest_;
     std::uint32_t txLatchPressesSeen_ = 0;
@@ -2098,6 +2100,16 @@ public:
     // The front end owns the file and the view state beside it.
     void applyConfig(const cascade::core::AppConfig& cfg);
     void fillConfig(cascade::core::AppConfig& cfg);
+    // THE CONFIG'S RECEIVER HALF, HANDED OVER (engine/stage3b-pre, docs/
+    // engine-stage3.md OPEN 2). publishConfig: the ENGINE's side - fills the
+    // receiver half (fillConfig) into a copy behind a mutex; run by the
+    // engine's own frame (pumpAudio, and so Engine::pump) and at the two
+    // points a save must be current (the window's first snapshot and its save
+    // at shutdown). configSnapshot: ANY thread - that copy. The window's
+    // currentConfig() reads only this, never fillConfig, so no receiver field
+    // is read across threads once the engine has one of its own.
+    void publishConfig();
+    cascade::core::AppConfig configSnapshot() const;
 
     // The per-frame pump (engine.cpp says what each phase runs, in order).
     void pumpFrameBegin();
