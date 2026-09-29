@@ -13509,6 +13509,19 @@ void AppWindow::applyInputScript(long frame) {
     // steps: the platform backend may post the real cursor's position on a
     // frame with no step, and the script's pointer must not wander with it.
     if (scriptMouseSet_) { io.AddMousePosEvent(scriptMouseX_, scriptMouseY_); }
+    // A pending "ctrlwheel" continues regardless of whether this frame also
+    // has its own script steps: the wheel goes out one frame after Ctrl went
+    // down, and Ctrl comes back up one frame after that.
+    if (pendingCtrlWheelFrame_ >= 0) {
+        if (!pendingCtrlWheelSent_ && frame >= pendingCtrlWheelFrame_ + 1) {
+            io.AddMouseWheelEvent(0.0f, pendingCtrlWheelY_);
+            pendingCtrlWheelSent_ = true;
+        } else if (pendingCtrlWheelSent_ && frame >= pendingCtrlWheelFrame_ + 2) {
+            io.AddKeyEvent(ImGuiMod_Ctrl, false);
+            pendingCtrlWheelFrame_ = -1;
+            pendingCtrlWheelSent_ = false;
+        }
+    }
     while (inputScriptPos_ < inputScript_.size() && inputScript_[inputScriptPos_].frame <= frame) {
         const cascade::gui::ScriptStep& st = inputScript_[inputScriptPos_];
         switch (st.verb) {
@@ -13578,11 +13591,25 @@ void AppWindow::applyInputScript(long frame) {
                 io.AddMouseWheelEvent(st.x, 0.0f);
                 break;
             case cascade::gui::ScriptStep::Verb::CtrlWheel:
-                // In order in ImGui's queue, so the wheel is seen with Ctrl
-                // down and nothing after it is.
+                // Spans three frames (see the pendingCtrlWheel* fields and
+                // the block above the main loop) instead of queuing
+                // down/wheel/up together on this one. Queued together, they
+                // do not behave like a real held Ctrl key: with
+                // io.ConfigInputTrickleEventQueue on (the default), ImGui
+                // trickles queued input events out over several NewFrame()
+                // calls rather than applying a whole batch at once, and
+                // io.KeyCtrl is last-state-wins with no per-event link to
+                // io.MouseWheel - so a same-frame down+wheel+up could drain
+                // with Ctrl already back up by the frame the wheel value
+                // reaches the canvas, which read as a plain wheel instead of
+                // a pinch (measured: dispatched frame 24, wheel consumed
+                // frame 26, KeyCtrl already 0). A real touchpad pinch holds
+                // Ctrl down well before the wheel tick and releases it well
+                // after, spanning many real frames - this mirrors that.
                 io.AddKeyEvent(ImGuiMod_Ctrl, true);
-                io.AddMouseWheelEvent(0.0f, st.y);
-                io.AddKeyEvent(ImGuiMod_Ctrl, false);
+                pendingCtrlWheelFrame_ = frame;
+                pendingCtrlWheelY_ = st.y;
+                pendingCtrlWheelSent_ = false;
                 break;
         }
         ++inputScriptPos_;

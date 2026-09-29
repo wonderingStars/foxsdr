@@ -3674,6 +3674,12 @@ private:
     bool scriptMouseSet_ = false;
     float scriptMouseX_ = 0.0f;
     float scriptMouseY_ = 0.0f;
+    // A scripted "ctrlwheel" step spans the frame it was read on plus the two
+    // that follow, the way a real held Ctrl key does - see applyInputScript's
+    // CtrlWheel case. -1 means nothing is pending.
+    long pendingCtrlWheelFrame_ = -1;
+    float pendingCtrlWheelY_ = 0.0f;
+    bool pendingCtrlWheelSent_ = false;
     // Feeds this frame's steps into ImGui's input queue. Called between the
     // platform backend's NewFrame and ImGui::NewFrame, so the script's events
     // are the last word on the frame.
