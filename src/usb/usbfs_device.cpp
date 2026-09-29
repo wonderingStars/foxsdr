@@ -318,6 +318,7 @@ public:
 
     ~UsbfsDevice() override {
         endBulkStream();
+        endIsoStream();
         if (fd_ >= 0) {
             unsigned int iface = kSdrInterface;
             ::ioctl(fd_, USBDEVFS_RELEASEINTERFACE, &iface);
@@ -437,12 +438,7 @@ public:
                     setError(errnoText("reaping a bulk read", errno));
                     return -1;
                 }
-                for (auto& slot : ring_) {
-                    if (slot && &slot->urb == done) {
-                        slot->pending = false;
-                        break;
-                    }
-                }
+                markReaped(done);
             }
             if (!req.pending) { break; }
         }
@@ -489,9 +485,7 @@ public:
                 if (pr <= 0) { continue; }  // re-check the deadline; EINTR falls the same way
                 struct usbdevfs_urb* done = nullptr;
                 if (::ioctl(fd_, USBDEVFS_REAPURBNDELAY, &done) != 0) { continue; }
-                for (auto& s : ring_) {
-                    if (s && &s->urb == done) { s->pending = false; }
-                }
+                markReaped(done);
                 if (!slot->pending) { break; }
             }
             if (slot->pending) { break; }  // out of time; stop polling, go leak
@@ -530,6 +524,230 @@ public:
         return false;
     }
 
+    // --- bulk OUT -----------------------------------------------------------
+
+    int writeBulk(std::uint8_t endpoint, const std::uint8_t* data, std::size_t len,
+                  unsigned timeoutMs) override {
+        if (fd_ < 0) {
+            setError("bulk write on a closed device");
+            return -1;
+        }
+        if (len > 0x7FFFFFFFu) {
+            setError("bulk write too long");
+            return -1;
+        }
+        // USBDEVFS_BULK is synchronous and carries its own timeout in
+        // milliseconds, which the kernel enforces and cancels on (Linux usbfs
+        // documentation) - the bounded wait of rule 3 with no poll loop.
+        struct usbdevfs_bulktransfer bt{};
+        bt.ep = endpoint;
+        bt.len = static_cast<unsigned int>(len);
+        bt.timeout = timeoutMs;
+        bt.data = const_cast<std::uint8_t*>(data);
+        const int r = ::ioctl(fd_, USBDEVFS_BULK, &bt);
+        if (r < 0) {
+            const int err = errno;
+            if (err == ETIMEDOUT) {
+                setError("a bulk write did not complete within its timeout");
+            } else if (err == ENODEV) {
+                setError("the radio is no longer present");
+            } else {
+                setError(errnoText("a bulk write", err));
+            }
+            return -1;
+        }
+        return r;
+    }
+
+    // --- isochronous IN -----------------------------------------------------
+
+    bool beginIsoStream(std::uint8_t endpoint, std::size_t packetBytes,
+                        std::size_t packetsPerTransfer, std::size_t transferCount) override {
+        if (isoStreaming_) { return true; }
+        if (fd_ < 0) {
+            setError("beginIsoStream() on a closed device");
+            return false;
+        }
+        // usbfs refuses an isochronous URB of more than 128 packets
+        // (USBDEVFS_SUBMITURB answers EINVAL; Linux usbfs documentation).
+        if (packetsPerTransfer == 0 || packetsPerTransfer > kMaxIsoPackets) {
+            setError("beginIsoStream() needs between 1 and 128 packets per transfer");
+            return false;
+        }
+        if (transferCount == 0 || transferCount > kMaxRingSize) {
+            setError("beginIsoStream() needs between 1 and 32 transfers");
+            return false;
+        }
+        // THE SLOT SIZE COMES FROM THE DEVICE when it can: read() on a usbfs
+        // node returns the device descriptor followed by the configuration
+        // descriptors (Linux usbfs documentation), and the endpoint's own
+        // wMaxPacketSize says what one microframe may carry.
+        std::size_t slot = packetBytes;
+        std::uint8_t desc[4096];
+        const ssize_t got = ::pread(fd_, desc, sizeof(desc), 0);
+        if (got > 0) {
+            std::size_t fromDevice = 0;
+            if (!isoEndpointBytesPerInterval(desc, static_cast<std::size_t>(got), kSdrInterface,
+                                             endpoint, fromDevice)) {
+                char msg[160];
+                std::snprintf(msg, sizeof(msg),
+                              "endpoint 0x%02X is not an isochronous IN endpoint on interface %u, "
+                              "alternate setting 0",
+                              static_cast<unsigned>(endpoint), kSdrInterface);
+                setError(msg);
+                return false;
+            }
+            slot = fromDevice;
+        }
+        if (slot == 0) {
+            setError("beginIsoStream() needs a packet size");
+            return false;
+        }
+
+        isoEndpoint_ = endpoint;
+        isoSlotBytes_ = slot;
+        isoPackets_ = packetsPerTransfer;
+        isoRing_.clear();
+        isoRing_.resize(transferCount);
+        for (std::size_t i = 0; i < transferCount; ++i) {
+            auto r = std::make_unique<IsoRequest>();
+            r->buffer.assign(slot * packetsPerTransfer, 0);
+            // usbdevfs_urb ends in a flexible array of packet descriptors,
+            // so it is allocated with room for them; calloc's alignment is
+            // enough for the struct.
+            const std::size_t urbBytes = sizeof(struct usbdevfs_urb) +
+                                         packetsPerTransfer * sizeof(struct usbdevfs_iso_packet_desc);
+            r->urb = static_cast<struct usbdevfs_urb*>(std::calloc(1, urbBytes));
+            if (r->urb == nullptr) {
+                setError("out of memory allocating isochronous transfers");
+                isoRing_.clear();
+                return false;
+            }
+            r->urbBytes = urbBytes;
+            isoRing_[i] = std::move(r);
+        }
+        isoHead_ = 0;
+        isoStreaming_ = true;
+        for (auto& r : isoRing_) {
+            if (!queueIso(*r)) {
+                endIsoStream();
+                return false;
+            }
+        }
+        return true;
+    }
+
+    IsoRead readIso(std::uint8_t* dst, std::size_t cap, unsigned timeoutMs,
+                    IsoTransferStats& stats) override {
+        stats = IsoTransferStats{};
+        if (!isoStreaming_) {
+            setError("readIso() with no stream");
+            return IsoRead::Failed;
+        }
+        IsoRequest& req = *isoRing_[isoHead_];
+        if (!req.pending) {
+            if (!queueIso(req)) { return IsoRead::Failed; }
+        }
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+        while (req.pending) {
+            const auto now = std::chrono::steady_clock::now();
+            if (now >= deadline) { return IsoRead::Timeout; }
+            const long remainingMs =
+                std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now).count();
+            struct pollfd pfd{};
+            pfd.fd = fd_;
+            pfd.events = POLLOUT;  // usbfs: a completed URB is ready to reap
+            const int pr = ::poll(&pfd, 1, static_cast<int>(std::min<long>(remainingMs, 60000)));
+            if (pr < 0) {
+                if (errno == EINTR) { continue; }
+                setError(errnoText("polling an isochronous read", errno));
+                return IsoRead::Failed;
+            }
+            if (pr == 0) { continue; }
+            for (;;) {
+                struct usbdevfs_urb* done = nullptr;
+                if (::ioctl(fd_, USBDEVFS_REAPURBNDELAY, &done) != 0) {
+                    if (errno == EAGAIN) { break; }
+                    setError(errnoText("reaping an isochronous read", errno));
+                    return IsoRead::Failed;
+                }
+                markReaped(done);
+            }
+        }
+        // An isochronous URB completes with status 0, or -EXDEV when only
+        // some of its packets were transferred (Linux usbfs documentation) -
+        // the per-packet status says which, and that is not a failure of the
+        // pipe. Anything else (ENODEV unplugged, ESHUTDOWN, EPIPE) is.
+        if (req.urb->status != 0 && req.urb->status != -EXDEV) {
+            setError(errnoText("an isochronous read", -req.urb->status));
+            return IsoRead::Failed;
+        }
+        IsoPacket packets[kMaxIsoPackets];
+        std::size_t offset = 0;
+        const std::size_t n = std::min<std::size_t>(
+            static_cast<std::size_t>(req.urb->number_of_packets), kMaxIsoPackets);
+        for (std::size_t k = 0; k < n; ++k) {
+            const struct usbdevfs_iso_packet_desc& d = req.urb->iso_frame_desc[k];
+            packets[k].offset = offset;
+            packets[k].length = d.actual_length;
+            packets[k].status = static_cast<int>(d.status);
+            offset += d.length;  // slots are laid out at the REQUESTED lengths
+        }
+        concatIsoPackets(req.buffer.data(), req.buffer.size(), packets, n, isoSlotBytes_, dst, cap,
+                         stats);
+        isoHead_ = (isoHead_ + 1) % isoRing_.size();
+        if (!queueIso(req)) { return IsoRead::Failed; }
+        return IsoRead::Completed;
+    }
+
+    void endIsoStream() override {
+        if (!isoStreaming_ && isoRing_.empty()) { return; }
+        isoStreaming_ = false;
+        for (auto& r : isoRing_) {
+            if (r && r->pending) { ::ioctl(fd_, USBDEVFS_DISCARDURB, r->urb); }
+        }
+        // ONE deadline for the whole ring, as endBulkStream().
+        const auto deadline = std::chrono::steady_clock::now() + kAbortDrainWait;
+        bool allDrained = true;
+        for (;;) {
+            bool anyPending = false;
+            for (auto& r : isoRing_) { anyPending = anyPending || (r && r->pending); }
+            if (!anyPending) { break; }
+            const auto now = std::chrono::steady_clock::now();
+            if (now >= deadline) {
+                allDrained = false;
+                break;
+            }
+            const long remainingMs =
+                std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now).count();
+            struct pollfd pfd{};
+            pfd.fd = fd_;
+            pfd.events = POLLOUT;
+            if (::poll(&pfd, 1, static_cast<int>(std::max<long>(remainingMs, 0))) <= 0) { continue; }
+            struct usbdevfs_urb* done = nullptr;
+            while (::ioctl(fd_, USBDEVFS_REAPURBNDELAY, &done) == 0) { markReaped(done); }
+        }
+        if (allDrained) {
+            isoRing_.clear();
+        } else {
+            // THE LEAK, on purpose, exactly as endBulkStream(): a URB the
+            // kernel still holds may still write into its buffer and its
+            // descriptor table.
+            // Released, not moved into a member: a member would be freed with
+            // the device moments later.
+            for (auto& r : isoRing_) { (void)r.release(); }
+            isoRing_.clear();
+            setError("a discarded isochronous read did not complete within the drain bound; its "
+                     "buffer is deliberately leaked rather than freed under the device");
+        }
+        isoEndpoint_ = 0;
+        isoHead_ = 0;
+    }
+
+    bool isoStreaming() const override { return isoStreaming_; }
+    std::size_t isoPacketBytes() const override { return isoSlotBytes_; }
+    std::size_t isoTransferBytes() const override { return isoSlotBytes_ * isoPackets_; }
+
     const std::string& path() const override { return path_; }
     const std::string& lastError() const override { return lastError_; }
 
@@ -544,7 +762,61 @@ private:
         struct usbdevfs_urb urb{};
     };
 
+    // One isochronous transfer: its buffer and its URB, which is allocated
+    // with the packet-descriptor table on the end.
+    struct IsoRequest {
+        IsoRequest() = default;
+        ~IsoRequest() { std::free(urb); }  // never runs for a leaked one
+        IsoRequest(const IsoRequest&) = delete;
+        IsoRequest& operator=(const IsoRequest&) = delete;
+        std::vector<std::uint8_t> buffer;
+        struct usbdevfs_urb* urb = nullptr;
+        std::size_t urbBytes = 0;
+        bool pending = false;
+    };
+
+    // usbfs's own ceiling on packets in one isochronous URB.
+    static constexpr std::size_t kMaxIsoPackets = 128;
+
     void setError(std::string msg) { lastError_ = std::move(msg); }
+
+    // A reaped URB may belong to either ring: both are reaped from one fd.
+    void markReaped(struct usbdevfs_urb* done) {
+        for (auto& slot : ring_) {
+            if (slot && &slot->urb == done) {
+                slot->pending = false;
+                return;
+            }
+        }
+        for (auto& r : isoRing_) {
+            if (r && r->urb == done) {
+                r->pending = false;
+                return;
+            }
+        }
+    }
+
+    bool queueIso(IsoRequest& req) {
+        std::memset(req.urb, 0, req.urbBytes);
+        req.urb->type = USBDEVFS_URB_TYPE_ISO;
+        req.urb->endpoint = isoEndpoint_;
+        // ISO_ASAP: schedule in the next free frame rather than at a start
+        // frame we would have to compute (Linux usbfs documentation).
+        req.urb->flags = USBDEVFS_URB_ISO_ASAP;
+        req.urb->buffer = req.buffer.data();
+        req.urb->buffer_length = static_cast<int>(req.buffer.size());
+        req.urb->number_of_packets = static_cast<int>(isoPackets_);
+        for (std::size_t k = 0; k < isoPackets_; ++k) {
+            req.urb->iso_frame_desc[k].length = static_cast<unsigned int>(isoSlotBytes_);
+        }
+        if (::ioctl(fd_, USBDEVFS_SUBMITURB, req.urb) != 0) {
+            setError(errnoText("queueing an isochronous read", errno));
+            req.pending = false;
+            return false;
+        }
+        req.pending = true;
+        return true;
+    }
 
     bool queue(Request& req) {
         std::memset(&req.urb, 0, sizeof(req.urb));
@@ -615,6 +887,13 @@ private:
     std::size_t head_ = 0;
     std::vector<std::unique_ptr<Request>> ring_;
     std::vector<std::unique_ptr<Request>> leaked_;
+
+    std::uint8_t isoEndpoint_ = 0;
+    bool isoStreaming_ = false;
+    std::size_t isoSlotBytes_ = 0;
+    std::size_t isoPackets_ = 0;
+    std::size_t isoHead_ = 0;
+    std::vector<std::unique_ptr<IsoRequest>> isoRing_;
 };
 
 }  // namespace

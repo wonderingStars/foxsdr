@@ -44,6 +44,8 @@
 #include <string>
 #include <vector>
 
+#include "usb/usb_iso.hpp"
+
 namespace cascade::usb {
 
 // The words a driver uses for "the radio is present but this transport cannot
@@ -208,6 +210,75 @@ public:
     // Clears a halted pipe (WinUsb_ResetPipe). Some firmware stalls the bulk
     // endpoint after a mode change; the driver knows when.
     virtual bool resetPipe(std::uint8_t endpoint) = 0;
+
+    // --- bulk OUT and isochronous IN (added for the AOR digital-I/Q driver) --
+    //
+    // NOT PURE, deliberately: every existing driver and every test fake that
+    // implements this interface predates them and needs neither, so the
+    // defaults refuse (a negative count, a false, Failed) and a transport
+    // that can do better overrides them. A driver that gets a refusal with an
+    // empty lastError() is talking to a transport without the capability,
+    // and says so in its own words.
+
+    // One synchronous bulk OUT write of `len` bytes to `endpoint`, bounded by
+    // `timeoutMs` (rule 3). Returns the bytes the device accepted, or
+    // negative on failure. For short commands (the AOR START/STOP words are
+    // six bytes), not for streaming.
+    virtual int writeBulk(std::uint8_t endpoint, const std::uint8_t* data, std::size_t len,
+                          unsigned timeoutMs) {
+        (void)endpoint;
+        (void)data;
+        (void)len;
+        (void)timeoutMs;
+        return -1;
+    }
+
+    // Isochronous IN streaming, shaped like the bulk ring above and bound by
+    // the same three rules. beginIsoStream queues `transferCount` transfers
+    // of `packetsPerTransfer` packet slots each on `endpoint`. `packetBytes`
+    // is the slot size the caller would like; the transport reads the
+    // endpoint's own maximum bytes per interval from the device and uses
+    // THAT when it can (a slot smaller than what the device may send is an
+    // error on every full packet) - isoPacketBytes() says what was used, and
+    // isoTransferBytes() the most one transfer can deliver, which is the
+    // capacity readIso() needs.
+    //
+    // readIso waits at most timeoutMs for the next transfer in submission
+    // order to complete, concatenates the payloads of its packets into dst
+    // honouring each packet's ACTUAL length (usb_iso.hpp's
+    // concatIsoPackets - a short or empty packet is not lost data), fills
+    // `stats`, re-queues the transfer and answers Completed. Timeout means
+    // nothing completed in time; Failed means the pipe has failed and the
+    // driver must endIsoStream() and decide. A Completed transfer can carry
+    // zero bytes (every microframe idle) - that is still a completed
+    // transfer, which is why the answer is not a byte count.
+    //
+    // endIsoStream cancels every queued transfer, waits a bounded time for
+    // them to drain (kAbortDrainWait), frees the ring - or leaks it, as
+    // endBulkStream does, if the kernel still holds a transfer - and returns.
+    // Idempotent. THE SAME ORDERING OBLIGATION as endBulkStream: no thread may
+    // be inside readIso when it runs.
+    enum class IsoRead { Completed, Timeout, Failed };
+    virtual bool beginIsoStream(std::uint8_t endpoint, std::size_t packetBytes,
+                                std::size_t packetsPerTransfer, std::size_t transferCount) {
+        (void)endpoint;
+        (void)packetBytes;
+        (void)packetsPerTransfer;
+        (void)transferCount;
+        return false;
+    }
+    virtual IsoRead readIso(std::uint8_t* dst, std::size_t cap, unsigned timeoutMs,
+                            IsoTransferStats& stats) {
+        (void)dst;
+        (void)cap;
+        (void)timeoutMs;
+        stats = IsoTransferStats{};
+        return IsoRead::Failed;
+    }
+    virtual void endIsoStream() {}
+    virtual bool isoStreaming() const { return false; }
+    virtual std::size_t isoPacketBytes() const { return 0; }
+    virtual std::size_t isoTransferBytes() const { return 0; }
 
     virtual const std::string& path() const = 0;
     virtual const std::string& lastError() const = 0;

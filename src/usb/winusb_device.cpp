@@ -295,6 +295,30 @@ void abandonRequest(std::unique_ptr<Request> req) {
     store->push_back(std::move(req));
 }
 
+// One isochronous stream's memory: the single buffer registered with
+// WinUsb_RegisterIsochBuffer (every transfer is a region of it), and per
+// transfer an overlapped request and its packet-descriptor table - all of
+// which the kernel writes into until the transfer completes. Kept together
+// so the leak path below can hand the whole thing over at once.
+struct IsoRing {
+    std::vector<std::uint8_t> buffer;
+    WINUSB_ISOCH_BUFFER_HANDLE handle = nullptr;
+    std::size_t slotBytes = 0;
+    std::size_t packets = 0;
+    std::vector<std::unique_ptr<Request>> requests;
+    std::vector<std::vector<USBD_ISO_PACKET_DESCRIPTOR>> descriptors;
+};
+
+// The same process-lifetime store as abandonRequest(), for an iso ring whose
+// cancellation did not land within kAbortDrainWait.
+void abandonIsoRing(std::unique_ptr<IsoRing> ring) {
+    if (ring == nullptr) { return; }
+    static std::mutex* const mutex = new std::mutex;
+    static auto* const store = new std::vector<std::unique_ptr<IsoRing>>;
+    std::lock_guard<std::mutex> lk(*mutex);
+    store->push_back(std::move(ring));
+}
+
 class WinUsbDevice final : public UsbDevice {
 public:
     WinUsbDevice(const WinUsbApi& api, HANDLE file, WINUSB_INTERFACE_HANDLE winusb,
@@ -303,6 +327,7 @@ public:
 
     ~WinUsbDevice() override {
         endBulkStream();
+        endIsoStream();
         if (winusb_ != nullptr) { api_->winUsbFree(winusb_); }
         if (file_ != INVALID_HANDLE_VALUE) { api_->closeFile(file_); }
         // Requests the drain gave up on are not ours any more: endBulkStream()
@@ -511,6 +536,259 @@ public:
         return true;
     }
 
+    // --- bulk OUT -------------------------------------------------------------
+    //
+    // WinUsb_WritePipe, overlapped, on its own heap Request for exactly the
+    // reason control() uses one: a write whose cancellation does not land
+    // in time still belongs to the kernel after this returns.
+    int writeBulk(std::uint8_t endpoint, const std::uint8_t* data, std::size_t len,
+                  unsigned timeoutMs) override {
+        if (winusb_ == nullptr) {
+            setError("bulk write on a closed device");
+            return -1;
+        }
+        if (api_->writePipe == nullptr) {
+            setError("this WinUSB transport has no WinUsb_WritePipe");
+            return -1;
+        }
+        if (len > 0x7FFFFFFFu) {
+            setError("bulk write too long");
+            return -1;
+        }
+        std::lock_guard<std::mutex> lk(bulkOutMutex_);
+        if (bulkOut_ == nullptr) {
+            auto fresh = std::make_unique<Request>();
+            fresh->event = ::CreateEventW(nullptr, TRUE, FALSE, nullptr);
+            if (fresh->event == nullptr) {
+                setError(lastErrorText("CreateEvent for a bulk write", ::GetLastError()));
+                return -1;
+            }
+            bulkOut_ = std::move(fresh);
+        }
+        Request& req = *bulkOut_;
+        req.buffer.assign(data, data + len);
+        std::memset(&req.overlapped, 0, sizeof(req.overlapped));
+        ::ResetEvent(req.event);
+        req.overlapped.hEvent = req.event;
+        ULONG moved = 0;
+        if (api_->writePipe(winusb_, endpoint, req.buffer.data(), static_cast<ULONG>(len), &moved,
+                            &req.overlapped) != FALSE) {
+            return static_cast<int>(std::min<std::size_t>(moved, len));
+        }
+        const DWORD err = ::GetLastError();
+        if (err != ERROR_IO_PENDING) {
+            setError(lastErrorText("a bulk write", err));
+            return -1;
+        }
+        if (::WaitForSingleObject(req.event, timeoutMs) != WAIT_OBJECT_0) {
+            api_->abortPipe(winusb_, endpoint);
+            api_->cancelIoEx(file_, &req.overlapped);
+            if (::WaitForSingleObject(req.event, static_cast<DWORD>(kAbortDrainWait.count())) !=
+                WAIT_OBJECT_0) {
+                abandonRequest(std::move(bulkOut_));
+                setError("a bulk write did not complete within its timeout, and its cancellation "
+                         "did not complete within the drain bound; its buffer is deliberately "
+                         "leaked rather than freed under the device");
+                return -1;
+            }
+            setError("a bulk write did not complete within its timeout");
+            return -1;
+        }
+        if (api_->getOverlappedResult(winusb_, &req.overlapped, &moved, FALSE) == FALSE) {
+            setError(lastErrorText("a bulk write", ::GetLastError()));
+            return -1;
+        }
+        return static_cast<int>(std::min<std::size_t>(moved, len));
+    }
+
+    // --- isochronous IN (Windows 8.1 and later) -------------------------------
+    //
+    // Microsoft's documented shape (WinUSB isochronous transfers): register
+    // ONE buffer for the pipe with WinUsb_RegisterIsochBuffer, submit each
+    // transfer as a region of it with WinUsb_ReadIsochPipeAsap and an array
+    // of USBD_ISO_PACKET_DESCRIPTOR the call fills in on completion, collect
+    // it with WinUsb_GetOverlappedResult, and WinUsb_UnregisterIsochBuffer
+    // once nothing is outstanding. ContinueStream is FALSE for the first
+    // transfer and TRUE for every one after it, so the controller schedules
+    // them back to back.
+    //
+    // NOT COMPILED WITH MSVC AND NOT RUN, on any device: written against the
+    // documented signatures only. The packet descriptors' Offset is taken as
+    // relative to the start of the transfer's region, and bounds-checked by
+    // concatIsoPackets() whatever it turns out to be.
+    bool beginIsoStream(std::uint8_t endpoint, std::size_t packetBytes,
+                        std::size_t packetsPerTransfer, std::size_t transferCount) override {
+        if (iso_ != nullptr) { return true; }
+        if (winusb_ == nullptr) {
+            setError("beginIsoStream() on a closed device");
+            return false;
+        }
+        if (api_->registerIsochBuffer == nullptr || api_->readIsochPipeAsap == nullptr ||
+            api_->unregisterIsochBuffer == nullptr) {
+            setError("isochronous streaming through WinUSB needs Windows 8.1 or later");
+            return false;
+        }
+        if (packetsPerTransfer == 0 || packetsPerTransfer > 1024 || (packetsPerTransfer % 8) != 0) {
+            // High speed: a whole number of 125 us microframes per 1 ms frame.
+            setError("beginIsoStream() needs a multiple of 8 packets per transfer, at most 1024");
+            return false;
+        }
+        if (transferCount == 0 || transferCount > kMaxRingSize) {
+            setError("beginIsoStream() needs between 1 and 32 transfers");
+            return false;
+        }
+        // The slot size from the pipe itself (MaximumBytesPerInterval), found
+        // by walking alternate setting 0's pipes for this endpoint.
+        std::size_t slot = 0;
+        if (api_->queryInterfaceSettings != nullptr && api_->queryPipeEx != nullptr) {
+            USB_INTERFACE_DESCRIPTOR ifd{};
+            if (api_->queryInterfaceSettings(winusb_, 0, &ifd) != FALSE) {
+                for (UCHAR i = 0; i < ifd.bNumEndpoints; ++i) {
+                    WINUSB_PIPE_INFORMATION_EX info{};
+                    if (api_->queryPipeEx(winusb_, 0, i, &info) == FALSE) { continue; }
+                    if (info.PipeId == endpoint) {
+                        if (info.PipeType != UsbdPipeTypeIsochronous) {
+                            char msg[128];
+                            std::snprintf(msg, sizeof(msg),
+                                          "endpoint 0x%02X is not an isochronous endpoint",
+                                          static_cast<unsigned>(endpoint));
+                            setError(msg);
+                            return false;
+                        }
+                        slot = info.MaximumBytesPerInterval;
+                    }
+                }
+            }
+        }
+        if (slot == 0) { slot = packetBytes; }
+        if (slot == 0) {
+            setError("beginIsoStream() needs a packet size");
+            return false;
+        }
+        auto ring = std::make_unique<IsoRing>();
+        ring->slotBytes = slot;
+        ring->packets = packetsPerTransfer;
+        const std::size_t transferBytes = slot * packetsPerTransfer;
+        ring->buffer.assign(transferBytes * transferCount, 0);
+        if (api_->registerIsochBuffer(winusb_, endpoint, ring->buffer.data(),
+                                      static_cast<ULONG>(ring->buffer.size()),
+                                      &ring->handle) == FALSE) {
+            setError(lastErrorText("WinUsb_RegisterIsochBuffer", ::GetLastError()));
+            return false;
+        }
+        ring->requests.resize(transferCount);
+        ring->descriptors.resize(transferCount);
+        for (std::size_t i = 0; i < transferCount; ++i) {
+            ring->requests[i] = std::make_unique<Request>();
+            ring->requests[i]->event = ::CreateEventW(nullptr, TRUE, FALSE, nullptr);
+            ring->descriptors[i].assign(packetsPerTransfer, USBD_ISO_PACKET_DESCRIPTOR{});
+            if (ring->requests[i]->event == nullptr) {
+                setError(lastErrorText("CreateEvent for an isochronous transfer", ::GetLastError()));
+                api_->unregisterIsochBuffer(ring->handle);
+                return false;
+            }
+        }
+        iso_ = std::move(ring);
+        isoEndpoint_ = endpoint;
+        isoHead_ = 0;
+        isoContinue_ = false;
+        for (std::size_t i = 0; i < transferCount; ++i) {
+            if (!queueIso(i)) {
+                endIsoStream();
+                return false;
+            }
+        }
+        return true;
+    }
+
+    IsoRead readIso(std::uint8_t* dst, std::size_t cap, unsigned timeoutMs,
+                    IsoTransferStats& stats) override {
+        stats = IsoTransferStats{};
+        if (iso_ == nullptr) {
+            setError("readIso() with no stream");
+            return IsoRead::Failed;
+        }
+        Request& req = *iso_->requests[isoHead_];
+        if (!req.pending) {
+            if (!queueIso(isoHead_)) { return IsoRead::Failed; }
+        }
+        const DWORD waited = ::WaitForSingleObject(req.event, timeoutMs);
+        if (waited == WAIT_TIMEOUT) { return IsoRead::Timeout; }
+        if (waited != WAIT_OBJECT_0) {
+            setError(lastErrorText("waiting for an isochronous read", ::GetLastError()));
+            return IsoRead::Failed;
+        }
+        DWORD moved = 0;
+        req.pending = false;
+        if (api_->getOverlappedResult(winusb_, &req.overlapped, &moved, FALSE) == FALSE) {
+            setError(lastErrorText("an isochronous read", ::GetLastError()));
+            return IsoRead::Failed;
+        }
+        const std::size_t transferBytes = iso_->slotBytes * iso_->packets;
+        const std::uint8_t* region = iso_->buffer.data() + isoHead_ * transferBytes;
+        std::vector<IsoPacket> packets(iso_->packets);
+        for (std::size_t k = 0; k < iso_->packets; ++k) {
+            const USBD_ISO_PACKET_DESCRIPTOR& d = iso_->descriptors[isoHead_][k];
+            packets[k].offset = d.Offset;
+            packets[k].length = d.Length;
+            packets[k].status = USBD_SUCCESS(d.Status) ? 0 : 1;
+        }
+        concatIsoPackets(region, transferBytes, packets.data(), packets.size(), iso_->slotBytes,
+                         dst, cap, stats);
+        const std::size_t done = isoHead_;
+        isoHead_ = (isoHead_ + 1) % iso_->requests.size();
+        if (!queueIso(done)) { return IsoRead::Failed; }
+        return IsoRead::Completed;
+    }
+
+    void endIsoStream() override {
+        if (iso_ == nullptr) { return; }
+        if (winusb_ != nullptr && isoEndpoint_ != 0) { api_->abortPipe(winusb_, isoEndpoint_); }
+        for (auto& r : iso_->requests) {
+            if (r && r->pending && file_ != INVALID_HANDLE_VALUE) {
+                api_->cancelIoEx(file_, &r->overlapped);
+            }
+        }
+        const auto deadline = std::chrono::steady_clock::now() + kAbortDrainWait;
+        bool allDrained = true;
+        for (auto& r : iso_->requests) {
+            if (!r || !r->pending) { continue; }
+            const auto now = std::chrono::steady_clock::now();
+            DWORD budget = 0;
+            if (now < deadline) {
+                budget = static_cast<DWORD>(
+                    std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now).count());
+            }
+            if (::WaitForSingleObject(r->event, budget) == WAIT_OBJECT_0) {
+                DWORD moved = 0;
+                api_->getOverlappedResult(winusb_, &r->overlapped, &moved, FALSE);
+                r->pending = false;
+            } else {
+                allDrained = false;
+            }
+        }
+        if (allDrained) {
+            api_->unregisterIsochBuffer(iso_->handle);
+            iso_.reset();
+        } else {
+            // THE LEAK, as endBulkStream(): the registered buffer, the
+            // descriptors and the events go to a store that is never freed,
+            // and the buffer is deliberately left registered because a
+            // transfer still in the kernel's hands is using it.
+            abandonIsoRing(std::move(iso_));
+            setError("a cancelled isochronous read did not complete within the drain bound; its "
+                     "buffer is deliberately leaked rather than freed under the device");
+        }
+        isoEndpoint_ = 0;
+        isoHead_ = 0;
+    }
+
+    bool isoStreaming() const override { return iso_ != nullptr; }
+    std::size_t isoPacketBytes() const override { return iso_ ? iso_->slotBytes : 0; }
+    std::size_t isoTransferBytes() const override {
+        return iso_ ? iso_->slotBytes * iso_->packets : 0;
+    }
+
     const std::string& path() const override { return path_; }
     const std::string& lastError() const override { return lastError_; }
 
@@ -519,6 +797,31 @@ private:
     static constexpr std::size_t kMaxRingSize = 32;
 
     void setError(std::string msg) { lastError_ = std::move(msg); }
+
+    bool queueIso(std::size_t index) {
+        Request& req = *iso_->requests[index];
+        std::memset(&req.overlapped, 0, sizeof(req.overlapped));
+        ::ResetEvent(req.event);
+        req.overlapped.hEvent = req.event;
+        const std::size_t transferBytes = iso_->slotBytes * iso_->packets;
+        if (api_->readIsochPipeAsap(iso_->handle, static_cast<ULONG>(index * transferBytes),
+                                    static_cast<ULONG>(transferBytes), isoContinue_ ? TRUE : FALSE,
+                                    static_cast<ULONG>(iso_->packets),
+                                    iso_->descriptors[index].data(), &req.overlapped) != FALSE) {
+            req.pending = true;
+            isoContinue_ = true;
+            return true;
+        }
+        const DWORD err = ::GetLastError();
+        if (err == ERROR_IO_PENDING) {
+            req.pending = true;
+            isoContinue_ = true;
+            return true;
+        }
+        req.pending = false;
+        setError(lastErrorText("WinUsb_ReadIsochPipeAsap", err));
+        return false;
+    }
 
     bool queue(Request& req) {
         std::memset(&req.overlapped, 0, sizeof(req.overlapped));
@@ -654,6 +957,14 @@ private:
     bool streaming_ = false;
     std::size_t head_ = 0;
     std::vector<std::unique_ptr<Request>> ring_;
+
+    std::mutex bulkOutMutex_;
+    std::unique_ptr<Request> bulkOut_;  // created on first use; see writeBulk()
+
+    std::unique_ptr<IsoRing> iso_;
+    std::uint8_t isoEndpoint_ = 0;
+    std::size_t isoHead_ = 0;
+    bool isoContinue_ = false;
 };
 
 #endif  // _WIN32
@@ -964,12 +1275,33 @@ std::unique_ptr<UsbDevice> openWinUsb(const std::string& path, std::string& erro
 // --- the test seam (usb/winusb_device.hpp) ----------------------------------
 
 const WinUsbApi& realWinUsbApi() {
-    static const WinUsbApi api = {
-        &::WinUsb_ControlTransfer, &::WinUsb_ReadPipe,       &::WinUsb_GetOverlappedResult,
-        &::WinUsb_AbortPipe,       &::WinUsb_ResetPipe,      &::WinUsb_SetPipePolicy,
-        &::WinUsb_SetPowerPolicy,  &::WinUsb_Free,           &::CancelIoEx,
-        &::CloseHandle,
-    };
+    static const WinUsbApi api = []() {
+        WinUsbApi a = {
+            &::WinUsb_ControlTransfer, &::WinUsb_ReadPipe,       &::WinUsb_GetOverlappedResult,
+            &::WinUsb_AbortPipe,       &::WinUsb_ResetPipe,      &::WinUsb_SetPipePolicy,
+            &::WinUsb_SetPowerPolicy,  &::WinUsb_Free,           &::CancelIoEx,
+            &::CloseHandle,
+            nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+        };
+        a.writePipe = &::WinUsb_WritePipe;
+        a.queryInterfaceSettings = &::WinUsb_QueryInterfaceSettings;
+        // Windows 8.1 and later only: looked up, not imported (see the table
+        // in winusb_device.hpp). winusb.dll is already loaded - the static
+        // imports above put it there.
+        const HMODULE winusbDll = ::GetModuleHandleW(L"winusb.dll");
+        if (winusbDll != nullptr) {
+            a.queryPipeEx = reinterpret_cast<decltype(a.queryPipeEx)>(
+                reinterpret_cast<void*>(::GetProcAddress(winusbDll, "WinUsb_QueryPipeEx")));
+            a.registerIsochBuffer = reinterpret_cast<decltype(a.registerIsochBuffer)>(
+                reinterpret_cast<void*>(::GetProcAddress(winusbDll, "WinUsb_RegisterIsochBuffer")));
+            a.unregisterIsochBuffer = reinterpret_cast<decltype(a.unregisterIsochBuffer)>(
+                reinterpret_cast<void*>(
+                    ::GetProcAddress(winusbDll, "WinUsb_UnregisterIsochBuffer")));
+            a.readIsochPipeAsap = reinterpret_cast<decltype(a.readIsochPipeAsap)>(
+                reinterpret_cast<void*>(::GetProcAddress(winusbDll, "WinUsb_ReadIsochPipeAsap")));
+        }
+        return a;
+    }();
     return api;
 }
 

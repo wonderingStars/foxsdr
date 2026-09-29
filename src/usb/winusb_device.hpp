@@ -52,6 +52,27 @@ struct WinUsbApi {
     BOOL(__stdcall* winUsbFree)(WINUSB_INTERFACE_HANDLE);
     BOOL(__stdcall* cancelIoEx)(HANDLE, LPOVERLAPPED);
     BOOL(__stdcall* closeFile)(HANDLE);
+
+    // ADDED FOR THE AOR DIGITAL-I/Q DRIVER, at the END so every existing
+    // brace-initialised table (tests/test_winusb_abandon.cpp's) still
+    // compiles and simply leaves these null; WinUsbDevice checks each for
+    // null and refuses the operation in words rather than calling through
+    // it. Signatures are Microsoft's documented ones (winusb.h). The last
+    // four exist only on Windows 8.1 and later, so realWinUsbApi() resolves
+    // them with GetProcAddress instead of importing them - an import would
+    // stop the whole program loading on an older Windows for the sake of one
+    // radio.
+    BOOL(__stdcall* writePipe)(WINUSB_INTERFACE_HANDLE, UCHAR, PUCHAR, ULONG, PULONG,
+                               LPOVERLAPPED);
+    BOOL(__stdcall* queryInterfaceSettings)(WINUSB_INTERFACE_HANDLE, UCHAR,
+                                            PUSB_INTERFACE_DESCRIPTOR);
+    BOOL(__stdcall* queryPipeEx)(WINUSB_INTERFACE_HANDLE, UCHAR, UCHAR,
+                                 PWINUSB_PIPE_INFORMATION_EX);
+    BOOL(__stdcall* registerIsochBuffer)(WINUSB_INTERFACE_HANDLE, UCHAR, PUCHAR, ULONG,
+                                         PWINUSB_ISOCH_BUFFER_HANDLE);
+    BOOL(__stdcall* unregisterIsochBuffer)(WINUSB_ISOCH_BUFFER_HANDLE);
+    BOOL(__stdcall* readIsochPipeAsap)(WINUSB_ISOCH_BUFFER_HANDLE, ULONG, ULONG, BOOL, ULONG,
+                                       PUSBD_ISO_PACKET_DESCRIPTOR, LPOVERLAPPED);
 };
 
 // The table openWinUsb() uses: the real WinUsb_* functions, CancelIoEx and

@@ -22,6 +22,8 @@
 #include <deque>
 #include <functional>
 #include <map>
+#include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <tuple>
@@ -30,6 +32,14 @@
 #include "usb/usb_device.hpp"
 
 namespace cascade::usb {
+
+// One isochronous packet as the fake's "device" sends it: `payload` is what
+// arrives (its size is the packet's ACTUAL length - 0, short or full), and a
+// nonzero `status` is a packet the host controller reported as failed.
+struct FakeIsoPacket {
+    std::vector<std::uint8_t> payload;
+    int status = 0;
+};
 
 // One control transfer as the driver made it.
 struct FakeControl {
@@ -59,6 +69,23 @@ struct FakeControl {
 
 class FakeUsbDevice final : public UsbDevice {
 public:
+    // THE JOURNAL: one line per transport event, in the order the driver
+    // caused them - "control", "bulk-out 02 [5A A5 00 02 41 53]",
+    // "iso-begin 86", "iso-end", "closed" - so a test can assert ORDER across
+    // kinds of traffic (START only after the iso transfers are armed, STOP
+    // before they are cancelled, the interface released last). Shared, so it
+    // outlives the device and still holds "closed" after the driver has
+    // destroyed it. Null disables.
+    std::shared_ptr<std::vector<std::string>> journal;
+
+    ~FakeUsbDevice() override { note("closed"); }
+
+    void note(const std::string& line) {
+        if (!journal) { return; }
+        std::lock_guard<std::mutex> lk(journalMutex_);
+        journal->push_back(line);
+    }
+
     // --- what the driver did ------------------------------------------------
     std::vector<FakeControl> controls;
 
@@ -146,6 +173,7 @@ public:
         c.index = index;
         if (data != nullptr && len > 0) { c.data.assign(data, data + len); }
         controls.push_back(c);
+        note("control " + c.text());
         if (failControlAfter >= 0 && controlCalls > failControlAfter) {
             lastError_ = "fake: control transfer failed";
             return -1;
@@ -313,6 +341,156 @@ public:
 
     bool streaming() const override { return streaming_; }
 
+    // --- bulk OUT ------------------------------------------------------------
+
+    struct BulkWrite {
+        std::uint8_t endpoint = 0;
+        std::vector<std::uint8_t> data;
+    };
+    std::vector<BulkWrite> bulkWrites;
+    // Fails every bulk write from this call number on; -1 disables.
+    int failBulkWriteAfter = -1;
+    int bulkWriteCalls = 0;
+    // Called with each ACCEPTED bulk write, so a test can make the fake's
+    // "device" react to START (begin streaming) and STOP.
+    std::function<void(const BulkWrite&)> onBulkWrite;
+
+    int writeBulk(std::uint8_t endpoint, const std::uint8_t* data, std::size_t len,
+                  unsigned) override {
+        ++bulkWriteCalls;
+        BulkWrite w;
+        w.endpoint = endpoint;
+        if (data != nullptr && len > 0) { w.data.assign(data, data + len); }
+        char head[24];
+        std::snprintf(head, sizeof(head), "bulk-out %02X [", endpoint);
+        std::string line(head);
+        for (std::size_t i = 0; i < w.data.size(); ++i) {
+            char b[8];
+            std::snprintf(b, sizeof(b), "%s%02X", i ? " " : "", w.data[i]);
+            line += b;
+        }
+        line += "]";
+        if (failBulkWriteAfter >= 0 && bulkWriteCalls > failBulkWriteAfter) {
+            note(line + " FAILED");
+            lastError_ = "fake: bulk write failed";
+            return -1;
+        }
+        note(line);
+        bulkWrites.push_back(w);
+        if (onBulkWrite) { onBulkWrite(w); }
+        return static_cast<int>(len);
+    }
+
+    // --- isochronous IN ------------------------------------------------------
+    //
+    // Transfers the fake's "device" completes, one per readIso(), each a list
+    // of packets of chosen lengths. They are laid into a transfer buffer at
+    // one slot per packet exactly as usbfs lays them out and handed to the
+    // SAME concatIsoPackets() the real transports use, so what a driver gets
+    // from here is what it would get from them. An EMPTY transfer (no
+    // packets at all) is a readIso() that times out. Guarded by a mutex so a
+    // test can feed transfers while the driver's reader thread is reading.
+
+    // The slot size the fake reports as the endpoint's maximum bytes per
+    // interval - what a real transport reads from the device's descriptors.
+    // 0 means "use what the driver asked for".
+    std::size_t isoEndpointSlotBytes = 0;
+    // After this many beginIsoStream() calls, every later one fails. -1 disables.
+    // This is how "the endpoint is not there" (unprogrammed interface) is staged.
+    int failBeginIsoAfter = -1;
+    int beginIsoCalls = 0;
+    // After this many readIso() calls every later one fails. -1 disables.
+    int failIsoAfter = -1;
+    int isoReads = 0;
+    int isoStarts = 0;
+    int isoStops = 0;
+
+    void feedIso(std::vector<FakeIsoPacket> transfer) {
+        std::lock_guard<std::mutex> lk(isoMutex_);
+        isoQueue_.push_back(std::move(transfer));
+    }
+    std::size_t isoQueued() const {
+        std::lock_guard<std::mutex> lk(isoMutex_);
+        return isoQueue_.size();
+    }
+
+    bool beginIsoStream(std::uint8_t endpoint, std::size_t packetBytes,
+                        std::size_t packetsPerTransfer, std::size_t transferCount) override {
+        ++beginIsoCalls;
+        if (packetsPerTransfer == 0 || packetsPerTransfer > 128 || transferCount == 0) {
+            lastError_ = "fake: illegal isochronous ring";
+            return false;
+        }
+        if (failBeginIsoAfter >= 0 && beginIsoCalls > failBeginIsoAfter) {
+            note("iso-begin FAILED");
+            lastError_ = "fake: endpoint is not an isochronous IN endpoint";
+            return false;
+        }
+        isoEndpoint_ = endpoint;
+        isoSlot_ = isoEndpointSlotBytes != 0 ? isoEndpointSlotBytes : packetBytes;
+        isoPackets_ = packetsPerTransfer;
+        isoStreaming_ = true;
+        ++isoStarts;
+        char line[32];
+        std::snprintf(line, sizeof(line), "iso-begin %02X", endpoint);
+        note(line);
+        return true;
+    }
+
+    IsoRead readIso(std::uint8_t* dst, std::size_t cap, unsigned timeoutMs,
+                    IsoTransferStats& stats) override {
+        stats = IsoTransferStats{};
+        if (!isoStreaming_) { return IsoRead::Failed; }
+        ++isoReads;
+        if (failIsoAfter >= 0 && isoReads > failIsoAfter) {
+            lastError_ = "fake: the device is gone";
+            return IsoRead::Failed;
+        }
+        std::vector<FakeIsoPacket> t;
+        {
+            std::lock_guard<std::mutex> lk(isoMutex_);
+            if (!isoQueue_.empty()) {
+                t = std::move(isoQueue_.front());
+                isoQueue_.pop_front();
+            }
+        }
+        if (t.empty()) {
+            // As readBulk: a real empty wait costs time.
+            const unsigned nap = timeoutMs < 5u ? timeoutMs : 5u;
+            if (nap > 0) { std::this_thread::sleep_for(std::chrono::milliseconds(nap)); }
+            return IsoRead::Timeout;
+        }
+        // The kernel's layout: packet k's slot at k * slot. A payload longer
+        // than its slot is the device babbling; the fake reports the length
+        // it was given and lets concatIsoPackets refuse it, as a malformed
+        // descriptor would be refused from a real transport.
+        const std::size_t slot = isoSlot_;
+        std::vector<std::uint8_t> buffer(slot * t.size(), 0xEE);
+        std::vector<IsoPacket> packets(t.size());
+        for (std::size_t k = 0; k < t.size(); ++k) {
+            const std::size_t n = t[k].payload.size() < slot ? t[k].payload.size() : slot;
+            for (std::size_t b = 0; b < n; ++b) { buffer[k * slot + b] = t[k].payload[b]; }
+            packets[k].offset = k * slot;
+            packets[k].length = t[k].payload.size();
+            packets[k].status = t[k].status;
+        }
+        concatIsoPackets(buffer.data(), buffer.size(), packets.data(), packets.size(), slot, dst,
+                         cap, stats);
+        return IsoRead::Completed;
+    }
+
+    void endIsoStream() override {
+        if (isoStreaming_) {
+            ++isoStops;
+            note("iso-end");
+        }
+        isoStreaming_ = false;
+    }
+    bool isoStreaming() const override { return isoStreaming_; }
+    std::size_t isoPacketBytes() const override { return isoSlot_; }
+    std::size_t isoTransferBytes() const override { return isoSlot_ * isoPackets_; }
+    std::uint8_t isoEndpoint() const { return isoEndpoint_; }
+
     bool resetPipe(std::uint8_t) override {
         ++pipeResets;
         return true;
@@ -328,8 +506,17 @@ public:
     std::uint8_t endpoint() const { return endpoint_; }
     std::size_t bufferBytes() const { return bufferBytes_; }
 
+    void setPath(std::string p) { path_ = std::move(p); }
+
 private:
     std::string path_ = "fake://usb";
+    std::mutex journalMutex_;
+    mutable std::mutex isoMutex_;
+    std::deque<std::vector<FakeIsoPacket>> isoQueue_;
+    std::uint8_t isoEndpoint_ = 0;
+    std::size_t isoSlot_ = 0;
+    std::size_t isoPackets_ = 0;
+    bool isoStreaming_ = false;
     std::string lastError_;
     bool streaming_ = false;
     std::uint8_t endpoint_ = 0;
