@@ -1955,18 +1955,12 @@ int AppWindow::run(int frames) {
                 if (in) {
                     const std::string text((std::istreambuf_iterator<char>(in)),
                                            std::istreambuf_iterator<char>());
-                    cascade::core::patch::LoadResult pr =
-                        cascade::core::patch::parse(text);
-                    if (pr.ok) {
-                        patchGraph_ = std::move(pr.graph);
-                        patchUi_.view.pan = cascade::gui::patch::Vec2{pr.panX, pr.panY};
-                        patchUi_.view.zoom = pr.zoom;
-                        patchSeeded_ = true;
-                        patchText_ = text;
+                    int dropped = 0;
+                    if (replacePatch(text, PatchReplace::File, &dropped)) {
                         std::fprintf(stderr,
                                      "cascade: patch loaded from %s (%zu nodes, "
                                      "%d dropped)\n",
-                                     pf, patchGraph_.nodes().size(), pr.dropped);
+                                     pf, patchGraph_.nodes().size(), dropped);
                     } else {
                         std::fprintf(stderr, "cascade: %s is not a patch\n", pf);
                     }
@@ -14050,6 +14044,63 @@ void AppWindow::seedPatchIfNeeded() {
     patchUi_.dirty = true;
 }
 
+bool AppWindow::replacePatch(const std::string& text, PatchReplace why, int* dropped) {
+    // PARSED FIRST: a text that is not a patch must change nothing at all -
+    // not stop a running patch, not clear a face.
+    cascade::core::patch::LoadResult pr = cascade::core::patch::parse(text);
+    if (dropped != nullptr) { *dropped = pr.dropped; }
+    if (!pr.ok) { return false; }
+
+    // A PATCH THAT OWNS RADIOS IS STOPPED THROUGH ITS OWN STOP, before the
+    // nodes those radios belong to are gone: the transport's key, then what a
+    // change of running does (patchApplyRunning closes every patch radio,
+    // finalises every file and hands the receiver its radio back). A preset
+    // load always leaves the patch stopped, even one whose START was pressed
+    // this frame and not yet acted on. The start-up restore and a --frames
+    // patch file arrive before anything has opened, and keep a scripted
+    // FOXSDR_PATCH_START as it was.
+    const bool ownsRadios =
+        patchWasRunning_ || !patchRadios_.empty() || !patchRadioPending_.empty();
+    if (why == PatchReplace::Preset || ownsRadios) {
+        if (patchRunning_) { patchPressStart(); }  // the STOP key
+        patchApplyRunning();
+        // Belt and braces: a radio still open here would belong to no node.
+        if (!patchRadios_.empty() || !patchRadioPending_.empty()) { patchStopAll(true); }
+    }
+
+    patchGraph_ = std::move(pr.graph);
+    // A fresh graph numbers its nodes from 1 again, so anything remembered by
+    // node id would attach to whichever new node took the number. Dropped
+    // with the graph it described; each is rebuilt as its node is drawn.
+    patchUi_ = cascade::gui::patch::Interaction{};
+    patchUi_.view.pan = cascade::gui::patch::Vec2{pr.panX, pr.panY};
+    patchUi_.view.zoom = pr.zoom;
+    patchDspSig_.clear();
+    patchRefused_.clear();
+    patchRefusedBy_.clear();
+    patchFirstLineLogged_.clear();
+    patchDecoderFaces_.clear();
+    patchSinkLines_.clear();
+    patchScopes_.clear();
+    patchScopeSeq_.clear();
+    patchMapViews_.clear();
+    releasePatchPictureTextures();
+    patchRadioError_.clear();
+    patchRadioFailedAs_.clear();
+    patchCentreNote_.clear();
+    patchDestError_.clear();
+
+    // An EMPTY restored patch still gets the one-radio starter, as it always
+    // has; a file or a preset is what the user asked for, empty or not.
+    patchSeeded_ = why == PatchReplace::Restore ? !patchGraph_.nodes().empty() : true;
+    patchText_ = text;
+    if (why == PatchReplace::Preset) {
+        cascade::core::diagLogf("patch: preset loaded - %zu node(s), %d dropped, stopped",
+                                patchGraph_.nodes().size(), pr.dropped);
+    }
+    return true;
+}
+
 void AppWindow::drawPatchPage() {
     // FIRST, AND EVERY FRAME, open or not. The DSP thread never destroys a
     // patch it stops running; it hands it back, and this is where it dies -
@@ -24920,18 +24971,10 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     // empty or unreadable patch still gets the one-radio starter and a
     // real one is not overwritten by it.
     if (!cfg.patch.empty()) {
-        cascade::core::patch::LoadResult pr = cascade::core::patch::parse(cfg.patch);
-        if (pr.ok) {
-            patchGraph_ = std::move(pr.graph);
-            patchUi_.view.pan = cascade::gui::patch::Vec2{pr.panX, pr.panY};
-            patchUi_.view.zoom = pr.zoom;
-            patchSeeded_ = !patchGraph_.nodes().empty();
-            patchText_ = cfg.patch;
-            if (pr.dropped > 0) {
-                std::fprintf(stderr,
-                             "cascade: patch loaded with %d connection(s) dropped\n",
-                             pr.dropped);
-            }
+        int dropped = 0;
+        if (replacePatch(cfg.patch, PatchReplace::Restore, &dropped) && dropped > 0) {
+            std::fprintf(stderr, "cascade: patch loaded with %d connection(s) dropped\n",
+                         dropped);
         }
     }
     // THE MAIN VIEW (0.99.40): the face the window was showing when it last

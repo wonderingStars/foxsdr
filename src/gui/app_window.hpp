@@ -1323,6 +1323,26 @@ private:
     // The starter patch (one Radio node on the receiver's radio, at its air
     // centre) when the page opens with none; a no-op once seeded.
     void seedPatchIfNeeded();
+    // THE ONE PLACE THE WHOLE PATCH IS REPLACED. Every path that swaps the
+    // document on the canvas for another - the start-up restore from the
+    // config, a --frames run's FOXSDR_PATCH_FILE, and loading a preset - goes
+    // through here, so there is one function to move behind an engine
+    // command rather than one per caller.
+    //
+    // `text` is parsed with patch_io::parse (every wire offered to
+    // connect(), so a damaged document cannot build a forbidden graph); a
+    // text that is not a patch changes nothing and answers false.
+    //
+    // A patch that owns radios is stopped first, through the transport's own
+    // STOP (patchPressStart, then patchApplyRunning, which closes every
+    // patch radio and hands the receiver its radio back), so no radio stays
+    // open for a node the new patch does not have. PatchReplace::Preset
+    // always leaves the patch STOPPED - the user presses START. Node ids
+    // start again in the new graph, so every per-node memory (faces,
+    // waterfalls, maps, pictures, notes) is dropped with the old one.
+    enum class PatchReplace { Restore, File, Preset };
+    // `dropped`, when given, receives what the parse had to leave out.
+    bool replacePatch(const std::string& text, PatchReplace why, int* dropped = nullptr);
     // The key that opens it, FIRST in the SIGNAL PATH bank. It goes there
     // rather than in VIEW by the same test that put the recorder and the
     // transmitter in that bank: a patch is not a way of LOOKING at the signal
