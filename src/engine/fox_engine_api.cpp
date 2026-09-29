@@ -19,10 +19,12 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <complex>
 #include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -412,6 +414,7 @@ struct Pending {
     bool merged = false;
     std::uint64_t sourceGen = 0;  // Engine::sourceGen_ when submitted (device-scoped ops)
     std::string principal;        // ApiSession::principal of the sender ("local" needs no allocation)
+    std::string longText;         // submit_text's text (API 0.3); empty for every other command
 };
 
 // ---------------------------------------------------------------------------
@@ -694,7 +697,7 @@ public:
         return FOXAPI_OK;
     }
 
-    int32_t readList(uint32_t list, uint32_t index, FoxListItem* out);  // engine_api_lists.cpp
+    int32_t readList(const ApiSession* s, uint32_t list, uint32_t index, FoxListItem* out);
 
     int32_t getSetting(ApiSession* s, const char* key, char* buf, std::size_t cap) {
         if (key == nullptr || (buf == nullptr && cap != 0)) { return FOXAPI_BAD_ARGUMENT; }
@@ -707,6 +710,19 @@ public:
         } else if (opt_.testHooks && std::strcmp(key, "test.keyState") == 0) {
             std::lock_guard<std::mutex> lk(keyStateMutex_);
             v = keyState_;
+        } else if (std::strncmp(key, "fact.", 5) == 0) {
+            // API 0.3's read-only facts, from the list block the pumping
+            // thread built (docs/api-0.3-additions.md).
+            std::shared_ptr<const ApiListBlock> b;
+            {
+                std::lock_guard<std::mutex> lk(listsMutex_);
+                b = lists_;
+            }
+            if (b == nullptr) { return FOXAPI_NOT_FOUND; }
+            const auto it = b->facts.find(key + 5);
+            if (it == b->facts.end()) { return FOXAPI_NOT_FOUND; }
+            if (it->second.localOnly && (s->flags & FOXAPI_SESSION_LOCAL) == 0u) { return FOXAPI_DENIED; }
+            v = it->second.value;
         } else {
             return FOXAPI_NOT_FOUND;
         }
@@ -720,7 +736,8 @@ public:
 
     // ---- commands ----------------------------------------------------------
 
-    int32_t submit(ApiSession* s, const FoxCommand* cmds, uint32_t count, FoxSubmitResult* results) {
+    int32_t submit(ApiSession* s, const FoxCommand* cmds, uint32_t count, FoxSubmitResult* results,
+                   const std::string* longText = nullptr) {
         if (count == 0) { return 0; }
         if (count > FOXAPI_MAX_BATCH) { return FOXAPI_LIMIT; }
         if (cmds == nullptr || cmds[0].structSize < FOXAPI_MIN_COMMAND) { return FOXAPI_BAD_ARGUMENT; }
@@ -749,7 +766,8 @@ public:
             if (kind < 0 && s->pending >= kMaxPendingPerSession) {
                 r.status = FOXAPI_BUSY;
             } else {
-                Pending p{c, 0, s->id, s->flags, refused, kind, false, gen, s->principal};
+                Pending p{c, 0, s->id, s->flags, refused, kind, false, gen, s->principal, {}};
+                if (longText != nullptr && refused == FOXAPI_OK) { p.longText = *longText; }
                 if (kind < 0) {
                     r.status = FOXAPI_OK;
                     r.ticket = ++s->lastTicket;
@@ -778,6 +796,104 @@ public:
         queueCv_.notify_all();
         engine_.wakeControl();
         return taken;
+    }
+
+    // API 0.3: ONE command whose text is `text` rather than its text[]
+    // slot. Validated on the slot's first 255 bytes, as the long-text
+    // channel inside the app always has been (core/app_commands.hpp); applied
+    // with the whole text.
+    int32_t submitText(ApiSession* s, const FoxCommand* cmd, const char* text, uint32_t len, FoxSubmitResult* result) {
+        if (cmd == nullptr || cmd->structSize < FOXAPI_MIN_COMMAND || (text == nullptr && len != 0)) {
+            return FOXAPI_BAD_ARGUMENT;
+        }
+        if (len > FOXAPI_MAX_LONG_TEXT) { return FOXAPI_LIMIT; }
+        FoxCommand c = copyInAt<FoxCommand>(cmd, cmd->structSize, 0);
+        c.structSize = sizeof(c);
+        const std::string whole(text == nullptr ? "" : text, len);
+        const std::size_t n = std::min<std::size_t>(len, FOXAPI_TEXT_CHARS - 1);
+        std::memset(c.text, 0, sizeof(c.text));
+        std::memcpy(c.text, whole.data(), n);
+        const std::string empty;
+        return submit(s, &c, 1, result, len > n ? &whole : &empty);
+    }
+
+    // API 0.3: the newest frames of a scope tap (core/scope_tap.hpp - its
+    // snapshot is lock-free and any thread may take one).
+    int32_t readScope(ApiSession* s, uint32_t tap, FoxScopeInfo* info, float* out, uint32_t cap) {
+        if (info != nullptr && info->structSize < FOXAPI_MIN_SCOPE_INFO) { return FOXAPI_BAD_ARGUMENT; }
+        if (out == nullptr && cap != 0) { return FOXAPI_BAD_ARGUMENT; }
+        if ((s->flags & FOXAPI_SESSION_REMOTE) != 0u) { cap = std::min(cap, FOXAPI_SCOPE_REMOTE_FRAMES); }
+        cascade::core::PublishedState ps;
+        const bool have = engine_.receiverSnapshot_->read(ps);
+        FoxScopeInfo local{};
+        local.structSize = sizeof(local);
+        local.tap = tap;
+        std::size_t got = 0;
+        const cascade::core::Pipeline& pl = engine_.pipeline_;
+        switch (tap) {
+            case FOXAPI_SCOPE_AUDIO:
+                local.channels = 1;
+                local.rateHz = cascade::core::Pipeline::kAudioRateHz;
+                local.written = pl.scopeAudio().written();
+                got = cap == 0 ? 0 : pl.scopeAudio().snapshot(out, cap);
+                break;
+            case FOXAPI_SCOPE_MPX:
+                local.channels = 1;
+                local.rateHz = have ? ps.rx.channelRateHz : 0.0;
+                local.written = pl.scopeMpx().written();
+                got = cap == 0 ? 0 : pl.scopeMpx().snapshot(out, cap);
+                break;
+            case FOXAPI_SCOPE_IQ:
+                // std::complex<float> is two floats, laid out as an array of
+                // them (the standard's own guarantee): copied straight in.
+                local.channels = 2;
+                local.rateHz = have ? ps.rx.channelRateHz : 0.0;
+                local.written = pl.scopeIq().written();
+                got = cap == 0 ? 0 : pl.scopeIq().snapshot(reinterpret_cast<std::complex<float>*>(out), cap);
+                break;
+            default:
+                return FOXAPI_UNSUPPORTED;
+        }
+        if (info != nullptr) { copyOut(local, info, FOXAPI_MIN_SCOPE_INFO); }
+        return static_cast<int32_t>(got);
+    }
+
+    // API 0.3: a patch radio's own spectrum, published once a pass beside the
+    // main one (endPass), read exactly as read_spectrum reads that.
+    int32_t readNodeSpectrum(uint64_t node, uint64_t since, FoxSpectrumInfo* info, float* bins, uint32_t cap) {
+        if (info == nullptr || info->structSize < FOXAPI_MIN_SPECTRUM_INFO || (bins == nullptr && cap != 0)) {
+            return FOXAPI_BAD_ARGUMENT;
+        }
+        std::shared_ptr<SpectrumRing> ring;
+        {
+            std::lock_guard<std::mutex> lk(nodeSpectraMutex_);
+            const auto it = nodeSpectra_.find(node);
+            if (it == nodeSpectra_.end()) { return FOXAPI_NOT_FOUND; }
+            ring = it->second;
+        }
+        FoxSpectrumInfo local{};
+        local.structSize = sizeof(local);
+        const int32_t r = ring->read(since, local, bins, cap);
+        if (r != FOXAPI_OK) { return r; }
+        copyOut(local, info, FOXAPI_MIN_SPECTRUM_INFO);
+        return FOXAPI_OK;
+    }
+
+    // The pumping thread hands over the decoder-output backlog: the lines
+    // since the last pass go into a FIXED ring (no allocation, whatever the
+    // decoders say), cut to what a list item holds.
+    void takeDecoderLines(const std::deque<cascade::core::DecodedLine>& log, std::uint64_t total) {
+        if (total == decoderLinesSeen_) { return; }
+        const std::uint64_t fresh = std::min<std::uint64_t>(total - decoderLinesSeen_, log.size());
+        std::lock_guard<std::mutex> lk(decoderLinesMutex_);
+        for (std::size_t i = log.size() - static_cast<std::size_t>(fresh); i < log.size(); ++i) {
+            DecoderLine& d = decoderLines_[decoderLinesNext_ % kDecoderLines];
+            d.number = total - (log.size() - i) + 1;
+            copyText(d.plugin, log[i].plugin.c_str());
+            copyText(d.text, log[i].text.c_str());
+            ++decoderLinesNext_;
+        }
+        decoderLinesSeen_ = total;
     }
 
     int32_t pollResults(ApiSession* s, FoxCommandResult* out, uint32_t cap) {
@@ -993,6 +1109,7 @@ private:
     };
 
     void txPass();
+    void publishNodeSpectra();
     std::string keyStateText() const;
 
     // The web remote's session id: never handed out by open_session (those
@@ -1048,6 +1165,28 @@ private:
 
     std::mutex listsMutex_;
     std::shared_ptr<const ApiListBlock> lists_;  // under listsMutex_
+
+    // API 0.3: the patch radios' spectra, one ring per node with a radio
+    // (made when a node's radio first publishes, dropped when it goes).
+    std::mutex nodeSpectraMutex_;
+    std::map<uint64_t, std::shared_ptr<SpectrumRing>> nodeSpectra_;
+    std::map<uint64_t, uint64_t> nodeSpectraLast_;
+    // API 0.3: the decoder-output backlog, a fixed ring.
+    static constexpr std::size_t kDecoderLines = 500;
+    struct DecoderLine {
+        uint64_t number = 0;
+        char plugin[96] = {};
+        char text[160] = {};
+    };
+    std::mutex decoderLinesMutex_;
+    std::array<DecoderLine, kDecoderLines> decoderLines_{};
+    uint64_t decoderLinesNext_ = 0;          // under decoderLinesMutex_
+    uint64_t decoderLinesSeen_ = 0;          // the pumping thread's
+    // FOXAPI_EVENT_PATCH: the graph as the last pass saw it.
+    uint64_t lastPatchHash_ = 0;
+    uint64_t lastPatchEpoch_ = 0;
+    bool lastPatchRunning_ = false;
+    bool havePatch_ = false;
 
 public:
     void setLists(std::shared_ptr<const ApiListBlock> l) {
@@ -1133,6 +1272,9 @@ int32_t ApiHostImpl::validate(const ApiSession& s, const FoxCommand& c, const Fo
             return FOXAPI_OK;
         case FOXAPI_OP_SETTING_SET:
             return std::strchr(c.text, '=') != nullptr ? FOXAPI_OK : FOXAPI_BAD_ARGUMENT;
+        case FOXAPI_OP_SCAN_SERIAL_PORTS:
+            // The ports of THIS machine (API 0.3): LOCAL sessions only.
+            return remote ? FOXAPI_DENIED : FOXAPI_OK;
         case FOXAPI_OP_TX_SET_MODE:
             return (c.ival[0] >= 0 && c.ival[0] <= FOXAPI_TX_MODE_LSB) ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
         case FOXAPI_OP_TX_SET_FREQUENCY:
@@ -1221,8 +1363,9 @@ void ApiHostImpl::apply(const Pending& p) {
         return;
     }
     if (c.op == FOXAPI_OP_SETTING_SET) {
-        const char* eq = std::strchr(c.text, '=');
-        applyTestHook(p, r, std::string(c.text, eq), std::string(eq + 1));
+        const std::string kv = cascade::core::cmd::textOf(c, p.longText);
+        const std::size_t eq = kv.find('=');
+        applyTestHook(p, r, kv.substr(0, eq), kv.substr(eq + 1));
         finish();
         return;
     }
@@ -1255,7 +1398,7 @@ void ApiHostImpl::apply(const Pending& p) {
         finish();
         return;
     }
-    const FoxCommandResult applied = engine_.applyCommand(c);
+    const FoxCommandResult applied = engine_.applyCommand(c, p.longText);
     r.status = applied.status;
     r.flags = applied.flags;
     r.applied[0] = applied.applied[0];
@@ -1297,6 +1440,31 @@ void ApiHostImpl::applyTestHook(const Pending& p, FoxCommandResult& r, const std
             // stop does; the key already ended above, with the fault's reason.
             (void)engine_.applyCommand(cascade::core::cmd::makeInt(FOXAPI_OP_RUN, 0));
         }
+    } else if (key == "test.decoderLine") {
+        // Stands in for a decoder's output: "plugin|text", as
+        // pumpDecoderOutput appends it.
+        const std::size_t bar = val.find('|');
+        engine_.decoderLog_.push_back({val.substr(0, bar), bar == std::string::npos ? std::string() : val.substr(bar + 1)});
+        while (engine_.decoderLog_.size() > Engine::kDecoderLogMax) { engine_.decoderLog_.pop_front(); }
+        ++engine_.decoderLinesTotal_;
+    } else if (key == "test.statusLine") {
+        // Stands in for whatever writes a status line: "key|text".
+        const std::size_t bar = val.find('|');
+        const std::string k = val.substr(0, bar);
+        const std::string t = bar == std::string::npos ? std::string() : val.substr(bar + 1);
+        if (k == "presetNote") { engine_.presetNote_ = t; }
+        if (k == "recordNotice") { engine_.recordNotice_ = t; }
+        if (k == "transmitError") { engine_.transmitError_ = t; }
+    } else if (key == "test.catalogue") {
+        // Stands in for a fetched catalogue entry: "id|name|legal notice".
+        cascade::core::PluginCatalogEntry e;
+        const std::size_t a = val.find('|');
+        const std::size_t b = a == std::string::npos ? a : val.find('|', a + 1);
+        e.id = val.substr(0, a);
+        e.name = a == std::string::npos ? std::string() : val.substr(a + 1, b - a - 1);
+        e.legalNotice = b == std::string::npos ? std::string() : val.substr(b + 1);
+        e.version = "1.0.0";
+        engine_.catalog_.push_back(std::move(e));
     } else if (key == "test.bookmark") {
         // Stands in for an import: "name|hz|mode|bw|group", mode a
         // FOXAPI_DEMOD_* - a grouped bookmark, as an imported list makes.
@@ -1466,6 +1634,51 @@ std::string ApiHostImpl::keyStateText() const {
            " tx=" + std::to_string(engine_.transmitter_.haveSink() ? 1 : 0);
 }
 
+void ApiHostImpl::publishNodeSpectra() {
+    const auto& spectra = engine_.patchSpectra_;
+    bool changedSet = spectra.size() != nodeSpectraLast_.size();
+    if (!changedSet) {
+        for (const auto& e : spectra) {
+            if (nodeSpectraLast_.count(e.first) == 0) {
+                changedSet = true;
+                break;
+            }
+        }
+    }
+    if (changedSet) {
+        std::lock_guard<std::mutex> lk(nodeSpectraMutex_);
+        for (auto it = nodeSpectra_.begin(); it != nodeSpectra_.end();) {
+            it = spectra.count(it->first) == 0 ? nodeSpectra_.erase(it) : std::next(it);
+        }
+        for (auto it = nodeSpectraLast_.begin(); it != nodeSpectraLast_.end();) {
+            it = spectra.count(it->first) == 0 ? nodeSpectraLast_.erase(it) : std::next(it);
+        }
+        for (const auto& e : spectra) {
+            if (nodeSpectra_.count(e.first) == 0) {
+                nodeSpectra_[e.first] = std::make_shared<SpectrumRing>();
+                nodeSpectraLast_[e.first] = 0;
+            }
+        }
+    }
+    for (const auto& e : spectra) {
+        uint64_t& last = nodeSpectraLast_[e.first];
+        if (e.second.seq == last || e.second.db.empty()) { continue; }
+        last = e.second.seq;
+        std::shared_ptr<SpectrumRing> ring;
+        {
+            std::lock_guard<std::mutex> lk(nodeSpectraMutex_);
+            ring = nodeSpectra_[e.first];
+        }
+        double centre = 0.0, span = 0.0;
+        const auto r = engine_.patchRadios_.find(e.first);
+        if (r != engine_.patchRadios_.end()) {
+            centre = r->second->centreHz();
+            span = r->second->rateHz();
+        }
+        ring->publish(e.second.db.data(), e.second.db.size(), centre, span, unixMs());
+    }
+}
+
 void ApiHostImpl::endPass() {
     // THE SPECTRUM, copied from the pipeline's newest frame into the ring
     // interfaces read without a lock (one lock of the pipeline's frame slot a
@@ -1475,6 +1688,9 @@ void ApiHostImpl::endPass() {
         spectrum_.publish(frame_.dbBins.data(), frame_.dbBins.size(), src.centerFrequencyHz(), src.sampleRateHz(),
                           unixMs());
     }
+    // API 0.3: THE PATCH RADIOS' SPECTRA, each into its own ring (a ring is
+    // made only when a node's radio first appears, and dropped with it).
+    publishNodeSpectra();
     // Results go out only now, AFTER the state they describe has been
     // published, and in TICKET order per session (a merged safer command is
     // applied in the place of its LAST send). std::sort on (session, ticket,
@@ -1514,6 +1730,22 @@ void ApiHostImpl::endPass() {
         }
         lastFaulted_ = faulted;
     }
+    // API 0.3: FOXAPI_EVENT_PATCH - the graph, its epoch or whether it runs
+    // moved in this pass (from the list block the pass published).
+    if (const ApiListBlock* b = engine_.apiLists_.get()) {
+        if (havePatch_ && (b->patchGraphHash != lastPatchHash_ || b->patchEpoch != lastPatchEpoch_ ||
+                           b->patchRunning != lastPatchRunning_)) {
+            FoxEvent e{};
+            e.kind = FOXAPI_EVENT_PATCH;
+            e.value[0] = static_cast<double>(b->patchEpoch);
+            e.value[1] = b->patchRunning ? 1.0 : 0.0;
+            broadcast(e);
+        }
+        havePatch_ = true;
+        lastPatchHash_ = b->patchGraphHash;
+        lastPatchEpoch_ = b->patchEpoch;
+        lastPatchRunning_ = b->patchRunning;
+    }
     if (stallAfterPassMs_ > 0) {  // test seam: test.stallAfterPass
         const int ms = stallAfterPassMs_;
         stallAfterPassMs_ = 0;
@@ -1521,8 +1753,9 @@ void ApiHostImpl::endPass() {
     }
 }
 
-int32_t ApiHostImpl::readList(uint32_t list, uint32_t index, FoxListItem* out) {
+int32_t ApiHostImpl::readList(const ApiSession* s, uint32_t list, uint32_t index, FoxListItem* out) {
     if (out != nullptr && out->structSize < FOXAPI_MIN_LIST_ITEM) { return FOXAPI_BAD_ARGUMENT; }
+    const bool local = (s->flags & FOXAPI_SESSION_LOCAL) != 0u;
     std::shared_ptr<const ApiListBlock> b;
     {
         std::lock_guard<std::mutex> lk(listsMutex_);
@@ -1638,6 +1871,235 @@ int32_t ApiHostImpl::readList(uint32_t list, uint32_t index, FoxListItem* out) {
                 if (p.loaded) { it.flags |= FOXAPI_ITEM_ACTIVE; }
             }
             break;
+        // ---- the 0.2 lists step 1 left out ----------------------------------
+        case FOXAPI_LIST_DECODERS:
+            if (want(b->decoders.size())) {
+                const auto& d = b->decoders[index];
+                it.id = index + 1u;
+                copyText(it.name, d.name.c_str());
+                copyText(it.detail, d.status.c_str());
+                if (d.running) { it.flags |= FOXAPI_ITEM_ACTIVE; }
+                if (d.fed) { it.flags |= FOXAPI_ITEM_FED; }
+            }
+            break;
+        case FOXAPI_LIST_CATALOGUE:
+            if (want(b->store.size())) {
+                const auto& e = b->store[index];
+                it.id = index + 1u;
+                copyText(it.name, e.name.c_str());
+                copyText(it.detail, e.id.c_str());
+                if (e.installed) { it.flags |= FOXAPI_ITEM_INSTALLED; }
+                if (e.compatible) { it.flags |= FOXAPI_ITEM_COMPATIBLE; }
+            }
+            break;
+        case FOXAPI_LIST_TX_DEVICES:
+            // The transmitter this engine opens is a Pluto by address: ONE
+            // entry, the address TX_OPEN will be given.
+            if (want(1)) {
+                it.id = 1;
+                copyText(it.name, "ADALM-Pluto");
+                copyText(it.detail, b->txArgs.c_str());
+                if (b->txOpen) { it.flags |= FOXAPI_ITEM_ACTIVE; }
+            }
+            break;
+        case FOXAPI_LIST_MARKERS:
+            if (want(b->markers.size())) {
+                const auto& m = b->markers[index];
+                it.id = m.id;
+                copyText(it.name, m.label.c_str());
+                copyText(it.detail, m.plugin.c_str());
+                it.value[0] = m.freqHz;
+                it.value[1] = m.widthHz;
+                it.value[2] = m.colourRgba;
+            }
+            break;
+        case FOXAPI_LIST_BAND_PLAN:
+            if (want(b->bandPlan.size())) {
+                const auto& e = b->bandPlan[index];
+                copyText(it.name, e.name.c_str());
+                copyText(it.detail, e.service.c_str());
+                it.value[0] = e.startHz;
+                it.value[1] = e.endHz;
+                it.value[2] = e.colourRgba;
+            }
+            break;
+        case FOXAPI_LIST_PRESETS:
+            if (want(b->presets ? b->presets->size() : 0)) {
+                const auto& pr = (*b->presets)[index];
+                it.id = pr.index;
+                copyText(it.name, pr.label.c_str());
+                copyText(it.detail, pr.plugin.c_str());
+                it.value[0] = pr.freqHz;
+                it.value[1] = pr.demodMode;
+                it.value[2] = pr.bandwidthHz;
+            }
+            break;
+        case FOXAPI_LIST_USER_PRESETS:
+            if (want(b->userPresets.size())) {
+                const auto& pr = b->userPresets[index];
+                it.id = pr.index + 1u;
+                copyText(it.name, pr.label.c_str());
+                copyText(it.detail, pr.plugin.c_str());
+                it.value[0] = pr.freqHz;
+                it.value[1] = pr.demodMode;
+                it.value[2] = pr.bandwidthHz;
+            }
+            break;
+        case FOXAPI_LIST_DEVICE_OPTIONS:
+            if (want(b->deviceOptions.size())) {
+                copyText(it.name, b->deviceOptions[index].first.c_str());
+                if (b->deviceOptions[index].second) { it.flags |= FOXAPI_ITEM_ACTIVE; }
+            }
+            break;
+        case FOXAPI_LIST_SERIAL_PORTS:
+            if (want(b->serialPorts.size())) { copyText(it.name, b->serialPorts[index].c_str()); }
+            break;
+        // ---- API 0.3 (docs/api-0.3-additions.md) ------------------------------
+        case FOXAPI_LIST_STATUS_LINES: {
+            std::size_t n = 0;
+            for (const auto& l : b->statusLines) { n += l.text.empty() ? 0 : 1; }
+            if (want(n)) {
+                std::size_t k = 0;
+                for (const auto& l : b->statusLines) {
+                    if (l.text.empty()) { continue; }
+                    if (k++ == index) {
+                        copyText(it.name, l.key);
+                        copyText(it.detail, l.text.c_str());
+                        it.value[0] = l.level;
+                        break;
+                    }
+                }
+            }
+            break;
+        }
+        case FOXAPI_LIST_CONVERTERS:
+            if (want(b->converters.size())) {
+                const auto& c = b->converters[index];
+                // A radio key names a device on this machine: LOCAL only.
+                if (local) { copyText(it.detail, c.radioKey.c_str()); }
+                it.value[0] = c.mode;
+                it.value[1] = c.loHz;
+                it.value[2] = c.inverted ? 1.0 : 0.0;
+                if (c.active) { it.flags |= FOXAPI_ITEM_ACTIVE; }
+            }
+            break;
+        case FOXAPI_LIST_GAIN_MODES:
+        case FOXAPI_LIST_DECIMATIONS: {
+            const auto& v = list == FOXAPI_LIST_GAIN_MODES ? b->gainModes : b->decimations;
+            if (want(v.size())) {
+                copyText(it.name, v[index].name.c_str());
+                it.value[0] = v[index].value;
+                it.value[1] = v[index].value2;
+                if (v[index].active) { it.flags |= FOXAPI_ITEM_ACTIVE; }
+            }
+            break;
+        }
+        case FOXAPI_LIST_PATCH_NODES:
+            if (want(b->patchNodes.size())) {
+                const auto& n = b->patchNodes[index];
+                it.id = n.id;
+                copyText(it.name, n.name.c_str());
+                copyText(it.detail, n.kind);
+                it.value[0] = n.x;
+                it.value[1] = n.y;
+                it.value[2] = n.freqHz;
+                it.value[3] = n.rateHz;
+                if (n.on) { it.flags |= FOXAPI_ITEM_ACTIVE; }
+                if (n.refused) { it.flags |= FOXAPI_ITEM_REFUSED; }
+                if (n.fault) { it.flags |= FOXAPI_ITEM_FAULT; }
+            }
+            break;
+        case FOXAPI_LIST_PATCH_WIRES:
+            if (want(b->patchWires.size())) {
+                const auto& w = b->patchWires[index];
+                it.id = index + 1u;
+                it.value[0] = static_cast<double>(w.from);
+                it.value[1] = static_cast<double>(w.fromPort);
+                it.value[2] = static_cast<double>(w.to);
+                it.value[3] = static_cast<double>(w.toPort);
+            }
+            break;
+        case FOXAPI_LIST_PATCH_PROBLEMS:
+            if (want(b->patchProblems.size())) {
+                const auto& pr = b->patchProblems[index];
+                it.id = pr.node;
+                copyText(it.name, pr.problem.c_str());
+                copyText(it.detail, pr.text.c_str());
+            }
+            break;
+        case FOXAPI_LIST_PATCH_PARTS:
+            if (want(b->patchParts.size())) {
+                const auto& pp = b->patchParts[index];
+                it.id = index + 1u;
+                copyText(it.name, pp.name.c_str());
+                copyText(it.detail, pp.key.c_str());
+                it.value[0] = pp.feed;
+                it.value[1] = pp.rateHz;
+            }
+            break;
+        case FOXAPI_LIST_PATCH_RADIOS:
+            if (want(b->patchRadios.size())) {
+                const auto& r = b->patchRadios[index];
+                it.id = r.node;
+                copyText(it.name, r.device.c_str());
+                copyText(it.detail, r.error.c_str());
+                it.value[0] = r.rateHz;
+                if (r.open) { it.flags |= FOXAPI_ITEM_ACTIVE; }
+                if (r.fault) { it.flags |= FOXAPI_ITEM_FAULT; }
+            }
+            break;
+        case FOXAPI_LIST_RECORDINGS:
+            if (want(b->recordings.size())) {
+                const auto& r = b->recordings[index];
+                it.id = index + 1u;
+                copyText(it.name, r.name.c_str());
+                if (local) { copyText(it.detail, r.path.c_str()); }  // a path on this machine
+                it.value[0] = r.kind;
+                it.value[2] = r.rateHz;
+                if (const auto* rec = static_cast<const cascade::core::Recorder*>(r.recorder)) {
+                    // LIVE: the recorder's own atomics, no rebuild per block.
+                    it.value[1] = static_cast<double>(rec->bytesWritten());
+                    if (rec->recording()) { it.flags |= FOXAPI_ITEM_ACTIVE; }
+                    if (rec->sizeLimitReached()) {
+                        it.flags |= FOXAPI_ITEM_FULL;
+                    } else if (rec->writeFailed()) {
+                        it.flags |= FOXAPI_ITEM_STALLED;
+                    }
+                } else if (r.active) {
+                    it.flags |= FOXAPI_ITEM_ACTIVE;
+                }
+            }
+            break;
+        case FOXAPI_LIST_DECODER_LINES: {
+            std::lock_guard<std::mutex> lk(decoderLinesMutex_);
+            const std::size_t n = static_cast<std::size_t>(std::min<uint64_t>(decoderLinesNext_, kDecoderLines));
+            if (want(n)) {
+                const DecoderLine& d = decoderLines_[(decoderLinesNext_ - n + index) % kDecoderLines];
+                it.id = d.number;
+                copyText(it.name, d.plugin);
+                copyText(it.detail, d.text);
+            }
+            break;
+        }
+        case FOXAPI_LIST_STORE_BLOCKED:
+        case FOXAPI_LIST_STORE_UPDATES: {
+            const auto& v = list == FOXAPI_LIST_STORE_BLOCKED ? b->storeBlocked : b->storeUpdates;
+            if (want(v.size())) {
+                it.id = index + 1u;
+                copyText(it.name, v[index].first.c_str());
+                copyText(it.detail, v[index].second.c_str());
+            }
+            break;
+        }
+        case FOXAPI_LIST_BAND_PLANS:
+            if (want(b->bandPlans.size())) {
+                const auto& pl = b->bandPlans[index];
+                it.id = index + 1u;
+                copyText(it.name, pl.name.c_str());
+                copyText(it.detail, pl.id.c_str());
+                if (pl.active) { it.flags |= FOXAPI_ITEM_ACTIVE; }
+            }
+            break;
         default:
             return FOXAPI_UNSUPPORTED;
     }
@@ -1670,6 +2132,9 @@ FoxCommandResult ApiHost::webRemotePtt(bool on) {
     return r;
 }
 void ApiHost::webRemoteBeat() { impl_->webRemoteBeat(); }
+void ApiHost::takeDecoderLines(const std::deque<cascade::core::DecodedLine>& log, std::uint64_t total) {
+    impl_->takeDecoderLines(log, total);
+}
 void ApiHost::webRemoteStopped(const char* why) { impl_->webRemoteStopped(why); }
 void ApiHost::engineStopping() { impl_->engineStopping(); }
 ApiHost::TxFacts ApiHost::txFacts() const { return impl_->txFacts(); }
@@ -1790,7 +2255,7 @@ int32_t FOXAPI_CALL apiReadIq(FoxSession* s, uint64_t*, float*, uint32_t, FoxStr
 }
 
 int32_t FOXAPI_CALL apiReadList(FoxSession* s, uint32_t list, uint32_t index, FoxListItem* out) {
-    return onSession(s, [&](ApiSession* x) { return x->host->readList(list, index, out); });
+    return onSession(s, [&](ApiSession* x) { return x->host->readList(x, list, index, out); });
 }
 
 int32_t FOXAPI_CALL apiGetSetting(FoxSession* s, const char* key, char* buf, size_t cap) {
@@ -1811,19 +2276,18 @@ int32_t FOXAPI_CALL apiLogout(FoxEngine* e, const char* token) {
     return guarded([&] { return H(e)->logout(token); });
 }
 
-// API 0.3's three table members (docs/api-0.3-additions.md): in the table,
-// not served yet - their capability bits are clear and they answer
-// UNSUPPORTED, as API.md 3 says an engine without a thing does.
-int32_t FOXAPI_CALL apiReadScope(FoxSession* s, uint32_t, FoxScopeInfo*, float*, uint32_t) {
-    return onSession(s, [&](ApiSession*) { return FOXAPI_UNSUPPORTED; });
+int32_t FOXAPI_CALL apiReadScope(FoxSession* s, uint32_t tap, FoxScopeInfo* info, float* out, uint32_t cap) {
+    return onSession(s, [&](ApiSession* x) { return x->host->readScope(x, tap, info, out, cap); });
 }
 
-int32_t FOXAPI_CALL apiReadNodeSpectrum(FoxSession* s, uint64_t, uint64_t, FoxSpectrumInfo*, float*, uint32_t) {
-    return onSession(s, [&](ApiSession*) { return FOXAPI_UNSUPPORTED; });
+int32_t FOXAPI_CALL apiReadNodeSpectrum(FoxSession* s, uint64_t node, uint64_t since, FoxSpectrumInfo* info,
+                                        float* bins, uint32_t cap) {
+    return onSession(s, [&](ApiSession* x) { return x->host->readNodeSpectrum(node, since, info, bins, cap); });
 }
 
-int32_t FOXAPI_CALL apiSubmitText(FoxSession* s, const FoxCommand*, const char*, uint32_t, FoxSubmitResult*) {
-    return onSession(s, [&](ApiSession*) { return FOXAPI_UNSUPPORTED; });
+int32_t FOXAPI_CALL apiSubmitText(FoxSession* s, const FoxCommand* c, const char* text, uint32_t len,
+                                  FoxSubmitResult* r) {
+    return onSession(s, [&](ApiSession* x) { return x->host->submitText(x, c, text, len, r); });
 }
 
 const FoxEngineApi kApi = {
@@ -1837,7 +2301,9 @@ const FoxEngineApi kApi = {
     // the audio stream and the rest arrive with their steps and set their
     // bits then.
     FOXAPI_CAP_RECEIVER | FOXAPI_CAP_SPECTRUM | FOXAPI_CAP_AUDIO_LEVELS | FOXAPI_CAP_AUDIO_DSP |
-        FOXAPI_CAP_EVENTS | FOXAPI_CAP_TRANSMIT,
+        FOXAPI_CAP_EVENTS | FOXAPI_CAP_TRANSMIT |
+        // API 0.3 (docs/api-0.3-additions.md).
+        FOXAPI_CAP_FACTS | FOXAPI_CAP_LONG_TEXT | FOXAPI_CAP_SCOPE | FOXAPI_CAP_NODE_SPECTRUM,
     "FoxSDR engine",
     CASCADE_VERSION_STRING,
     apiCreate,

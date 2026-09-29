@@ -2321,8 +2321,18 @@ private:
     bool controlWake_ = false;
     std::uint64_t apiListsFingerprint();
     std::shared_ptr<const ApiListBlock> buildApiLists(std::uint64_t fingerprint);
+    void buildApiLists03(ApiListBlock& b);
+    std::string transmitArgsSeed() const;
     std::shared_ptr<const ApiListBlock> apiLists_;  // the pumping thread's newest
     unsigned apiListsBookmarkVersion_ = 0;
+    // The plugins' keys (core::pluginKey), kept so the per-pass fingerprint
+    // allocates nothing: rebuilt only when the plugins' paths change.
+    std::vector<std::string> apiPluginKeys_;
+    std::uint64_t apiPluginPathsHash_ = 0;
+    void refreshApiPluginKeys();
+    // FOXAPI_OP_SCAN_SERIAL_PORTS (API 0.3): the ports the last scan found.
+    std::vector<std::string> serialPorts_;
+    std::uint64_t serialPortsScans_ = 0;
     // LAST, so it is destroyed FIRST: nothing of the engine it names is gone
     // yet when it goes, and the control thread is stopped (teardown) before
     // any member is destroyed.

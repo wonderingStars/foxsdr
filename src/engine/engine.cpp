@@ -7,6 +7,7 @@
 #include "engine/engine.hpp"
 
 #include "core/patch_draft.hpp"
+#include "core/serial_port.hpp"
 #include "engine/add_all_plan.hpp"
 #include "core/patch_io.hpp"
 #include "core/patch_levels.hpp"
@@ -3422,6 +3423,10 @@ void Engine::fillPublishedState(cascade::core::PublishedState& ps, const std::st
     // /api/status calls transmitAvailable, with a transmitter open.
     fs.txRemoteArmed = key.remoteArmed && transmitter_.haveSink();
     fs.sinkOpen = sink.running();
+    // API 0.3: the bias tee's key (the radio's readback), and the patch.
+    fs.biasTeePresent = device_ != nullptr && biasTeePanel_.present;
+    fs.biasTeeOn = fs.biasTeePresent && biasTeePanel_.shown;
+    fs.patchRunning = patchRunning_;
     // Handed over by the front end (OPEN 4), not asked of it while publishing.
     const FrontEndFacts facts = frontEndFacts();
     fs.webListening = facts.webListening;
@@ -5901,8 +5906,7 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
                 // field BLANK on the page, so the panel offered no answer at
                 // all to "which board would this be?" until after somebody
                 // had already pressed Open.
-                transmitArgs_ = (sourceKind_ == "pluto" && !deviceArgs_.empty()) ? deviceArgs_
-                                                                                 : std::string("uri=ip:192.168.2.1");
+                transmitArgs_ = transmitArgsSeed();
             }
             return res;
         case FOXAPI_OP_TX_PTT: {
@@ -5994,6 +5998,13 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             if (!applyReceiverPosition(c.num[0], c.num[1])) {
                 return refuse(FOXAPI_OUT_OF_RANGE, "not a receiver position");
             }
+            return res;
+        case FOXAPI_OP_SCAN_SERIAL_PORTS:
+            // API 0.3: the ports of this machine, listed on the engine's
+            // thread when asked (the window's GPS drop-down, the Serial
+            // ports page) - FOXAPI_LIST_SERIAL_PORTS, listSeq moving.
+            serialPorts_ = cascade::core::enumerateSerialPorts();
+            ++serialPortsScans_;
             return res;
         case FOXAPI_OP_GPS:
             if (on) {
@@ -7090,6 +7101,12 @@ void Engine::pumpAudio() {
     // ...and the status lines, with the workers' answers of this frame
     // (OPEN 3) - drawn on the next.
     publishStatusText();
+}
+
+// The address the Transmit page opens on when nobody has typed one: the
+// receiver's own Pluto, else the Pluto's factory address.
+std::string Engine::transmitArgsSeed() const {
+    return (sourceKind_ == "pluto" && !deviceArgs_.empty()) ? deviceArgs_ : std::string("uri=ip:192.168.2.1");
 }
 
 void Engine::publishStatusText() {

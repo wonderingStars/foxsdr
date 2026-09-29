@@ -24,7 +24,8 @@ constexpr std::uint32_t kModeFlags =
     FOXAPI_RX_STEREO_ENABLED | FOXAPI_RX_NR | FOXAPI_RX_NOTCH | FOXAPI_RX_AUTO_NOTCH;
 constexpr std::uint32_t kDeviceFlags = FOXAPI_RX_RUNNING | FOXAPI_RX_DEVICE_OPEN |
                                        FOXAPI_RX_FAULTED | FOXAPI_RX_DEVICE_AGC |
-                                       FOXAPI_RX_AGC_SUPPORTED;
+                                       FOXAPI_RX_AGC_SUPPORTED | FOXAPI_RX_BIAS_TEE_PRESENT |
+                                       FOXAPI_RX_BIAS_TEE_ON;
 constexpr std::uint32_t kAudioFlags = FOXAPI_RX_MUTED | FOXAPI_RX_SINK_OPEN;
 constexpr std::uint32_t kTxFlags = FOXAPI_RX_TX_AVAILABLE | FOXAPI_RX_TX_KEYED |
                                    FOXAPI_RX_TX_LATCHED | FOXAPI_RX_TX_KEY_MINE |
@@ -78,6 +79,9 @@ std::uint32_t receiverFlags(const RxFlagSources& s) {
     set(s.txLatched, FOXAPI_RX_TX_LATCHED);
     set(s.txRemoteArmed, FOXAPI_RX_TX_REMOTE_ARMED);
     set(s.sinkOpen, FOXAPI_RX_SINK_OPEN);
+    set(s.biasTeePresent, FOXAPI_RX_BIAS_TEE_PRESENT);
+    set(s.biasTeeOn, FOXAPI_RX_BIAS_TEE_ON);
+    set(s.patchRunning, FOXAPI_RX_PATCH_RUNNING);
     set(s.webListening, FOXAPI_RX_WEB_LISTENING);
     return f;
 }

@@ -14,7 +14,7 @@ struct OpEntry {
     bool implemented;  // applyCommand has a case for it (else UNSUPPORTED)
 };
 
-// EVERY op in foxsdr_api.h 0.2 and every extension, in header order. The
+// EVERY op in foxsdr_api.h 0.3 and every extension, in header order. The
 // `implemented` column is what isKnownOp answers and what tests/
 // test_apply_command.cpp requires a case for: an op marked true here with no
 // test fails that test, and so does a test for an op marked false.
@@ -92,6 +92,7 @@ constexpr OpEntry kOps[] = {
     {FOXAPI_OP_AUDIO_DEVICE, "AUDIO_DEVICE", true},
     {FOXAPI_OP_SET_POSITION, "SET_POSITION", true},
     {FOXAPI_OP_GPS, "GPS", true},
+    {FOXAPI_OP_SCAN_SERIAL_PORTS, "SCAN_SERIAL_PORTS", true},
     {FOXAPI_OP_SERVER_CONFIG, "SERVER_CONFIG", false},
     {FOXAPI_OP_UPDATE_CHECK, "UPDATE_CHECK", false},
     // --- extensions ---

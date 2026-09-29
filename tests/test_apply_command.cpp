@@ -567,6 +567,7 @@ struct AppWindowTestAccess {
     static void setTransmitOpen(AppWindow& a, bool on) { a.engine_.transmitOpen_ = on; }
     static bool transmitOpen(AppWindow& a) { return a.engine_.transmitOpen_; }
     static cascade::engine::Engine& engine(AppWindow& a) { return a.engine_; }
+    static std::uint64_t serialPortsScans(AppWindow& a) { return a.engine_.serialPortsScans_; }
     // The engine's pass as far as the key needs it - the queue applied, the
     // state published - without the audio half, which reads the window's
     // ImGui clock (no ImGui context in this test).
@@ -2140,6 +2141,15 @@ void otherOps(AppWindow& a) {
         CHECK(ok(A::apply(a, text(FOXAPI_OP_GPS, "STAGE1-NO-SUCH-PORT", 1, 0, 9600.0))));
         CHECK(ok(A::apply(a, text(FOXAPI_OP_GPS, "", 0))));
         CHECK(!A::gpsListening(a));
+    }
+
+    covering(FOXAPI_OP_SCAN_SERIAL_PORTS);
+    {
+        // API 0.3: the machine's ports, listed on the engine's thread; each
+        // scan is counted (it moves listSeq), whatever it finds.
+        const std::uint64_t before = A::serialPortsScans(a);
+        CHECK(ok(A::apply(a, cmd::make(FOXAPI_OP_SCAN_SERIAL_PORTS))));
+        CHECK(A::serialPortsScans(a) == before + 1u);
     }
 }
 

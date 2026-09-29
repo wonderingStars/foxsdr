@@ -16,9 +16,14 @@
 #include <memory>
 #include <string>
 
+#include "core/patch_draft.hpp"
+#include "core/patch_plan.hpp"
 #include "core/plugin_host.hpp"
+#include "core/serial_port.hpp"
 #include "engine/engine.hpp"
+#include "engine/fox_engine_api.hpp"
 #include "engine/receiver_tables.hpp"
+#include "source/airspy_source.hpp"
 
 namespace cascade::engine {
 
@@ -47,7 +52,74 @@ struct Fingerprint {
 
 std::string deviceId(const std::string& kind, const std::string& args) { return kind + ":" + args; }
 
+const char* nodeKindWord(cascade::core::patch::NodeKind k) {
+    using K = cascade::core::patch::NodeKind;
+    switch (k) {
+        case K::Radio: return "radio";
+        case K::Channel: return "channel";
+        case K::Demod: return "demod";
+        case K::Decoder: return "decoder";
+        case K::Display: return "display";
+        case K::Sink: return "sink";
+        case K::Map: return "map";
+    }
+    return "";
+}
+
+const char* idleWord(cascade::core::DecoderIdleReason r) {
+    using R = cascade::core::DecoderIdleReason;
+    switch (r) {
+        case R::Running: return "";
+        case R::RateMismatch: return "rate mismatch";
+        case R::CreateFailed: return "create failed";
+        case R::NoAudioTable: return "no audio table";
+        case R::PollFailed: return "poll failed";
+    }
+    return "";
+}
+
+// The patch graph's own fingerprint, from its fields: no document text is
+// written for it (graphCommandText allocates; this is once a pass).
+std::uint64_t graphHash(const cascade::core::patch::Graph& g) {
+    Fingerprint f;
+    for (const cascade::core::patch::Node& n : g.nodes()) {
+        f.value(n.id);
+        f.value(n.kind);
+        f.text(n.name);
+        f.value(n.x);
+        f.value(n.y);
+        f.value(n.w);
+        f.value(n.h);
+        f.value(n.freqHz);
+        f.value(n.mode);
+        f.text(n.plugin);
+        f.text(n.device);
+        f.value(n.rateHz);
+        f.value(n.squelch);
+        f.value(n.squelchDb);
+        f.value(n.on);
+        f.value(n.centreChosen);
+    }
+    for (const cascade::core::patch::Wire& w : g.wires()) { f.value(w); }
+    f.value(g.nextId());
+    return f.h;
+}
+
 }  // namespace
+
+void Engine::refreshApiPluginKeys() {
+    Fingerprint f;
+    for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
+        f.text(p.path);
+        f.text(p.name);
+    }
+    if (f.h == apiPluginPathsHash_ && apiPluginKeys_.size() == pluginHost_.plugins().size()) { return; }
+    apiPluginPathsHash_ = f.h;
+    apiPluginKeys_.clear();
+    for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
+        apiPluginKeys_.push_back(cascade::core::pluginKey(p));
+    }
+}
 
 std::uint64_t Engine::apiListsFingerprint() {
     Fingerprint f;
@@ -87,11 +159,110 @@ std::uint64_t Engine::apiListsFingerprint() {
         f.value(a.index);
     }
     f.value(deviceIndex_);
-    for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
-        f.text(p.name);
-        f.text(p.path);
+    refreshApiPluginKeys();
+    f.value(apiPluginPathsHash_);
+    for (std::size_t i = 0; i < pluginHost_.plugins().size(); ++i) {
+        const cascade::core::LoadedPlugin& p = pluginHost_.plugins()[i];
         f.value(p.loaded);
-        f.value(pluginIsStopped(cascade::core::pluginKey(p)));
+        f.value(pluginIsStopped(apiPluginKeys_[i]));
+    }
+    // Which decoders are FED: the keys the pass's publish already took from
+    // the runner in ONE acquisition of its lock (the lock its DSP thread
+    // takes per block) - never asked again here.
+    const bool running = pipeline_.running();
+    f.value(running);
+    if (running) {
+        for (const std::string& k : feedingKeysScratch_) { f.text(k); }
+    }
+    // --- API 0.3's, and the 0.2 lists step 1 left out ----------------------
+    // The store.
+    f.value(catalog_.size());
+    for (const cascade::core::PluginCatalogEntry& e : catalog_) {
+        f.text(e.id);
+        f.text(e.version);
+        f.value(e.legalNotice.size());
+    }
+    f.value(pluginBlocked_.size());
+    for (const cascade::core::BlockedPlugin& b : pluginBlocked_) { f.text(b.installed.file); }
+    f.value(catalogPending_);
+    f.value(installPending_);
+    // The transmitter's address and whether it is open.
+    f.text(transmitArgs_);
+    f.text(sourceKind_);
+    f.text(deviceArgs_);
+    f.value(transmitter_.haveSink());
+    // Plugin marks, the band plan, the presets people saved.
+    f.value(pluginMarkersSeq_);
+    f.text(bandPlanSelection_);
+    f.text(bandPlan_.name());
+    f.value(bandPlan_.entries().size());
+    f.value(bandPlanChoices_.size());
+    for (const cascade::core::UserPreset& u : userPresets_) {
+        f.text(u.plugin);
+        f.text(u.label);
+        f.value(u.frequencyHz);
+        f.value(u.demodMode);
+        f.value(u.bandwidthHz);
+    }
+    // The radio's own switches, its bias tee, its converter.
+    f.value(deviceRfNotchPresent_);
+    f.value(deviceRfNotch_);
+    f.value(deviceDabNotchPresent_);
+    f.value(deviceDabNotch_);
+    f.value(deviceHdrPresent_);
+    f.value(deviceHdr_);
+    f.value(deviceAdcSwitchesPresent_);
+    f.value(deviceDither_);
+    f.value(deviceRandomiser_);
+    f.value(biasTeePanel_.present);
+    f.value(biasTeePanel_.shown);
+    for (const auto& c : converters_) {
+        f.text(c.first);
+        f.value(c.second.mode);
+        f.value(c.second.loHz);
+        f.value(c.second.inverted);
+    }
+    // The serial ports the last scan found.
+    f.value(serialPortsScans_);
+    // The status lines.
+    for (const std::string* t : {&sourceError_, &gpsRefusal_, &catalogError_, &bandPlanError_, &tuneMismatchNote_,
+                                 &transmitError_, &soundCardMissing_, &sdrPlayApiDetail_, &sdrPlayAdvice_,
+                                 &recordNotice_, &recordError_, &presetNote_, &pluginEnforceError_,
+                                 &restoreKeepLabel_}) {
+        f.text(*t);
+    }
+    // The patch page: its graph, what the plan said, its radios.
+    f.value(graphHash(patchGraph_));
+    f.value(patchGraphEpoch_);
+    f.value(patchRunning_);
+    for (const auto& pr : patchPlan_.problems) {
+        f.value(pr.node);
+        f.value(pr.problem);
+    }
+    for (cascade::core::patch::NodeId n : patchRefused_) { f.value(n); }
+    f.value(patchCatalogue_.size());
+    for (const auto& r : patchRadios_) {
+        f.value(r.first);
+        f.value(r.second->rateHz());
+        f.value(r.second->fault().empty());
+    }
+    for (const auto& e : patchRadioError_) {
+        f.value(e.first);
+        f.text(e.second);
+    }
+    f.value(patchRecordings_.size());
+    // The recorders: whether each is taking, and to which file (the bytes
+    // are read live, never fingerprinted).
+    f.value(iqRecorder_.recording());
+    f.value(audioRecorder_.recording());
+    f.value(iqRecordStartS_);
+    f.value(audioRecordStartS_);
+    f.text(recordDir_);
+    // An Airspy's own choices.
+    if (cascade::source::AirspySource* a = asAirspyDevice()) {
+        f.value(a->gainMode());
+        f.value(a->decimation());
+        f.value(a->hardwareSampleRateHz());
     }
     return f.h;
 }
@@ -145,7 +316,223 @@ std::shared_ptr<const ApiListBlock> Engine::buildApiLists(std::uint64_t fingerpr
         w.status = p.loaded ? std::string() : p.error;
         b->plugins.push_back(std::move(w));
     }
+    buildApiLists03(*b);
     return b;
+}
+
+// API 0.3's collections, and the 0.2 lists step 1 left out
+// (docs/api-0.3-additions.md). The pumping thread, only when the fingerprint
+// moved.
+void Engine::buildApiLists03(ApiListBlock& b) {
+    auto fact = [&b](const std::string& key, std::string value, bool localOnly = false) {
+        b.facts[key] = ApiListBlock::Fact{std::move(value), localOnly};
+    };
+    // DECODERS: every decoder plugin, running or not, and why not.
+    {
+        const std::vector<cascade::core::DecoderStatus> status = pluginRunner_.status();
+        for (const ApiListBlock::Plugin& p : b.plugins) {
+            if (!p.decoder) { continue; }
+            ApiListBlock::Decoder d;
+            d.name = p.name;
+            d.key = p.key;
+            d.running = p.running;
+            d.fed = pipeline_.running() && std::find(feedingKeysScratch_.begin(), feedingKeysScratch_.end(),
+                                                     p.key) != feedingKeysScratch_.end();
+            for (const cascade::core::DecoderStatus& st : status) {
+                if (st.key == p.key && st.reason != cascade::core::DecoderIdleReason::Running) {
+                    d.status = st.detail.empty() ? idleWord(st.reason) : st.detail;
+                }
+            }
+            if (!p.loaded) { d.status = p.status; }
+            b.decoders.push_back(std::move(d));
+        }
+    }
+    // THE STORE: the catalogue, what is refused, what would update - and the
+    // long texts an entry carries, as facts.
+    for (const cascade::core::PluginCatalogEntry& e : catalog_) {
+        b.store.push_back({e.id, e.name, catalogEntryInstalled(e), e.compatible});
+        const std::string k = "store." + e.id + ".";
+        fact(k + "legal", e.legalNotice);
+        fact(k + "summary", e.summary);
+        fact(k + "description", e.description);
+        fact(k + "homepage", e.homepage);
+        fact(k + "version", e.version);
+    }
+    for (int i = 0; i < static_cast<int>(catalog_.size()); ++i) {
+        fact("store." + catalog_[static_cast<std::size_t>(i)].id + ".blocked", pluginInstallBlockedReason(i, true));
+    }
+    for (const cascade::core::BlockedPlugin& x : pluginBlocked_) { b.storeBlocked.emplace_back(x.installed.file, x.message); }
+    for (const cascade::core::PluginUpdate& u : plannedPluginUpdates()) {
+        b.storeUpdates.emplace_back(u.id, u.fromVersion + " -> " + u.toVersion);
+    }
+    // THE TRANSMITTER's one "device": the address TX_OPEN is given.
+    // Until the page has seeded (or somebody typed) one, the seed it would use.
+    b.txArgs = transmitArgs_.empty() ? transmitArgsSeed() : transmitArgs_;
+    b.txOpen = transmitter_.haveSink();
+    fact("transmit.args", b.txArgs, true);
+    // PLUGIN MARKS on the spectrum.
+    for (const cascade::core::HostMarker& m : pluginMarkers_) {
+        b.markers.push_back({m.m.id, m.m.label, m.name, m.m.freqHz, m.m.widthHz, m.m.colourRgba});
+    }
+    // THE BAND PLAN in force, and the plans there are.
+    for (const cascade::core::BandEntry& e : bandPlan_.entries()) {
+        b.bandPlan.push_back({e.name, e.service, e.startHz, e.endHz, e.colorRgba});
+    }
+    for (const cascade::core::PlanInfo& pl : bandPlanChoices_) {
+        b.bandPlans.push_back({pl.id, pl.name, pl.id == bandPlanSelection_});
+    }
+    // PRESETS: a plugin's own (asked of its code only when the plugins
+    // changed - kept from the last block otherwise), and the ones saved here.
+    if (apiLists_ != nullptr && apiLists_->presets && apiLists_->presetsFingerprint == apiPluginPathsHash_) {
+        b.presets = apiLists_->presets;
+    } else {
+        auto v = std::make_shared<std::vector<ApiListBlock::Preset>>();
+        for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
+            if (!p.loaded) { continue; }
+            for (const cascade::gui::IndexedPreset& ip : validatedPresets(p)) {
+                v->push_back({ip.preset.label, p.name, ip.preset.frequencyHz, ip.preset.bandwidthHz,
+                              ip.preset.demodMode, ip.index});
+            }
+        }
+        b.presets = std::move(v);
+    }
+    b.presetsFingerprint = apiPluginPathsHash_;
+    for (std::size_t i = 0; i < userPresets_.size(); ++i) {
+        const cascade::core::UserPreset& u = userPresets_[i];
+        b.userPresets.push_back({u.label, u.plugin, u.frequencyHz, u.bandwidthHz, u.demodMode,
+                                 static_cast<std::uint32_t>(i)});
+    }
+    // THE RADIO'S OWN SWITCHES (SET_DEVICE_OPTION's names), where present.
+    if (device_ != nullptr) {
+        if (deviceRfNotchPresent_) { b.deviceOptions.emplace_back("rf_notch", deviceRfNotch_); }
+        if (deviceDabNotchPresent_) { b.deviceOptions.emplace_back("dab_notch", deviceDabNotch_); }
+        if (deviceHdrPresent_) { b.deviceOptions.emplace_back("hdr", deviceHdr_); }
+        if (deviceAdcSwitchesPresent_) {
+            b.deviceOptions.emplace_back("dither", deviceDither_);
+            b.deviceOptions.emplace_back("randomiser", deviceRandomiser_);
+        }
+    }
+    b.serialPorts = serialPorts_;
+    // THE STATUS LINES, every one (the list shows the ones with text).
+    {
+        struct Line {
+            const char* key;
+            const std::string* text;
+            int level;
+        };
+        const Line lines[] = {
+            {"sourceError", &sourceError_, 3},        {"gpsRefusal", &gpsRefusal_, 3},
+            {"catalogError", &catalogError_, 3},      {"bandPlanError", &bandPlanError_, 3},
+            {"tuneMismatchNote", &tuneMismatchNote_, 2}, {"transmitError", &transmitError_, 3},
+            {"soundCardMissing", &soundCardMissing_, 2}, {"sdrPlayApiDetail", &sdrPlayApiDetail_, 2},
+            {"sdrPlayAdvice", &sdrPlayAdvice_, 2},    {"recordNotice", &recordNotice_, 1},
+            {"recordError", &recordError_, 3},        {"presetNote", &presetNote_, 1},
+            {"pluginEnforceError", &pluginEnforceError_, 3}, {"restoreKeepLabel", &restoreKeepLabel_, 1},
+        };
+        for (const Line& l : lines) {
+            b.statusLines.push_back({l.key, *l.text, l.level});
+            fact(std::string("status.") + l.key, *l.text);
+        }
+    }
+    // CONVERTERS: every radio's remembered setting; ACTIVE is the open one's.
+    {
+        const std::string now = converterRadioKeyNow();
+        for (const auto& c : converters_) {
+            b.converters.push_back({c.first, static_cast<int>(c.second.mode), c.second.loHz, c.second.inverted,
+                                    c.first == now});
+        }
+        fact("converter.radioKey", now, true);
+        fact("converter.name", converterName(pipeline_.converter()));
+    }
+    // THE BIAS TEE's key: which radio it would be remembered for.
+    fact("biasTee.reachable", biasTeeReachable() ? "1" : "0");
+    fact("biasTee.mayRemember", biasKeyMayRememberNow() ? "1" : "0");
+    fact("biasTee.radioKey", biasKeyRadioNow(), true);
+    // AN AIRSPY's gain modes and decimation factors.
+    if (cascade::source::AirspySource* a = asAirspyDevice()) {
+        const int mode = static_cast<int>(a->gainMode());
+        const char* const names[] = {"Linearity", "Sensitivity", "Free"};
+        for (int i = 0; i < 3; ++i) { b.gainModes.push_back({names[i], static_cast<double>(i), 0.0, i == mode}); }
+        for (unsigned d : a->decimationChoices()) {
+            b.decimations.push_back({std::string(), static_cast<double>(d), a->hardwareSampleRateHz() / d,
+                                     d == a->decimation()});
+        }
+    }
+    // THE PATCH PAGE: the graph (and its document), what the plan said, the
+    // parts it may use, its radios.
+    for (const cascade::core::patch::Node& n : patchGraph_.nodes()) {
+        ApiListBlock::PatchNode pn;
+        pn.id = n.id;
+        pn.name = n.name;
+        pn.kind = nodeKindWord(n.kind);
+        pn.x = n.x;
+        pn.y = n.y;
+        pn.freqHz = n.freqHz;
+        pn.rateHz = n.rateHz;
+        pn.on = n.on;
+        pn.refused = std::find(patchRefused_.begin(), patchRefused_.end(), n.id) != patchRefused_.end();
+        const auto r = patchRadios_.find(n.id);
+        pn.fault = (r != patchRadios_.end() && !r->second->fault().empty()) || patchRadioError_.count(n.id) != 0;
+        b.patchNodes.push_back(std::move(pn));
+    }
+    for (const cascade::core::patch::Wire& w : patchGraph_.wires()) {
+        b.patchWires.push_back({w.from, w.fromPort, w.to, w.toPort});
+    }
+    for (const auto& pr : patchPlan_.problems) {
+        b.patchProblems.push_back({pr.node, std::to_string(static_cast<int>(pr.problem)),
+                                   cascade::core::patch::problemText(pr.problem)});
+    }
+    for (const cascade::core::patch::DecoderInfo& d : patchCatalogue_) {
+        b.patchParts.push_back({d.name, d.key, static_cast<double>(d.feed), d.requiredRateHz});
+    }
+    for (const auto& r : patchRadios_) {
+        ApiListBlock::PatchRadio pr;
+        pr.node = r.first;
+        pr.device = r.second->label();
+        pr.rateHz = r.second->rateHz();
+        pr.open = true;
+        pr.error = r.second->fault();
+        pr.fault = !pr.error.empty();
+        b.patchRadios.push_back(std::move(pr));
+    }
+    for (const auto& e : patchRadioError_) {
+        if (patchRadios_.count(e.first) != 0) { continue; }
+        ApiListBlock::PatchRadio pr;
+        pr.node = e.first;
+        pr.error = e.second;
+        pr.fault = true;
+        b.patchRadios.push_back(std::move(pr));
+    }
+    fact("patch.graph", cascade::core::patch::graphCommandText(patchGraph_), true);
+    b.patchEpoch = patchGraphEpoch_;
+    b.patchGraphHash = graphHash(patchGraph_);
+    b.patchRunning = patchRunning_;
+    // THE RECORDINGS: the two recorders' takes (current or last), then the
+    // patch's files.
+    fact("recorder.dir", recordDir_, true);
+    for (int k = 0; k < 2; ++k) {
+        const cascade::core::Recorder& rec = k == 0 ? iqRecorder_ : audioRecorder_;
+        const std::string path = rec.path();
+        fact(k == 0 ? "recorder.iq.path" : "recorder.audio.path", path, true);
+        if (path.empty()) { continue; }
+        ApiListBlock::Recording r;
+        const std::size_t slash = path.find_last_of("/\\");
+        r.name = slash == std::string::npos ? path : path.substr(slash + 1);
+        r.path = path;
+        r.kind = k + 1;
+        r.rateHz = k == 0 ? iqRecordRateHz_ : cascade::core::Pipeline::kAudioRateHz;
+        r.active = rec.recording();
+        r.recorder = &rec;
+        b.recordings.push_back(std::move(r));
+    }
+    for (const cascade::core::patch::RecordingInfo& ri : patchRecordings_) {
+        ApiListBlock::Recording r;
+        r.name = ri.fileName;
+        r.path = ri.path;
+        r.kind = 3;
+        r.rateHz = ri.rateHz;
+        b.recordings.push_back(std::move(r));
+    }
 }
 
 // Once a pass, on the pumping thread, before the state is published: a new
@@ -157,7 +544,10 @@ std::uint64_t Engine::publishApiLists() {
         apiLists_ = buildApiLists(fp);
         api_->setLists(apiLists_);
     }
-    return fp;
+    // The decoder-output backlog goes to the host's own fixed ring (no block
+    // rebuild per line); its count moves listSeq with the rest.
+    api_->takeDecoderLines(decoderLog_, decoderLinesTotal_);
+    return fp ^ (decoderLinesTotal_ * 0x9E3779B97F4A7C15ull);
 }
 
 }  // namespace cascade::engine

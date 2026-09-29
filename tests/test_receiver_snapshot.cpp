@@ -993,6 +993,10 @@ void walkingOneSources() {
         {"txRemoteArmed", &S::txRemoteArmed, FOXAPI_RX_TX_REMOTE_ARMED},
         {"sinkOpen", &S::sinkOpen, FOXAPI_RX_SINK_OPEN},
         {"webListening", &S::webListening, FOXAPI_RX_WEB_LISTENING},
+        // API 0.3
+        {"biasTeePresent", &S::biasTeePresent, FOXAPI_RX_BIAS_TEE_PRESENT},
+        {"biasTeeOn", &S::biasTeeOn, FOXAPI_RX_BIAS_TEE_ON},
+        {"patchRunning", &S::patchRunning, FOXAPI_RX_PATCH_RUNNING},
     };
     // Every member of RxFlagSources is a bool and is walked here: the struct
     // holds nothing else, so its size counts them.
@@ -1010,7 +1014,7 @@ void walkingOneSources() {
         seen |= w.want;
     }
     // Every flag but the two per-session ones has a source.
-    CHECK(seen == (0x00FFFFFFu & ~(FOXAPI_RX_TX_KEY_MINE | FOXAPI_RX_TX_LATCH_RELEASE_FIRST)));
+    CHECK(seen == (0x07FFFFFFu & ~(FOXAPI_RX_TX_KEY_MINE | FOXAPI_RX_TX_LATCH_RELEASE_FIRST)));  // 0.3: three more
     std::printf("      %zu sources, each to its own flag; flags covered %08x\n",
                 sizeof(srcs) / sizeof(srcs[0]), seen);
 }

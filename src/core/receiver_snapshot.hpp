@@ -228,6 +228,10 @@ struct RxFlagSources {
     bool txRemoteArmed = false;
     bool sinkOpen = false;
     bool webListening = false;
+    // API 0.3
+    bool biasTeePresent = false;
+    bool biasTeeOn = false;
+    bool patchRunning = false;
 };
 std::uint32_t receiverFlags(const RxFlagSources& s);
 
