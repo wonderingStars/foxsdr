@@ -423,6 +423,16 @@ add_custom_command(TARGET cascade POST_BUILD
             "${CMAKE_SOURCE_DIR}/resources/bandplans"
             "$<TARGET_FILE_DIR:cascade>/resources/bandplans")
 
+# Stage resources/firmware beside the executable for the same reason: the AOR
+# driver looks for AOR's FX2 firmware at <exe dir>/resources/firmware/aor/
+# fx2fw.hex (source/aor_source.cpp, aorFirmwarePath). Until AOR supplies the
+# file with its redistribution notice, only the NOTICE placeholder is there,
+# and the driver says so in words instead of opening the receiver.
+add_custom_command(TARGET cascade POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_SOURCE_DIR}/resources/firmware"
+            "$<TARGET_FILE_DIR:cascade>/resources/firmware")
+
 # ARCHIVE THE SYMBOLS, in the same action that produced the binary.
 #
 # This is deliberately a POST_BUILD step on the application rather than a line

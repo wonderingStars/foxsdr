@@ -249,7 +249,8 @@ bool parseControlRequest(const std::string& body, ControlRequest& out,
         *req.sourceKind != "rtlsdr" && *req.sourceKind != "hackrf" &&
         *req.sourceKind != "airspy" && *req.sourceKind != "airspyhf" &&
         *req.sourceKind != "sdrplay" && *req.sourceKind != "mirisdr" &&
-        *req.sourceKind != "rx888" && *req.sourceKind != "pluto") {
+        *req.sourceKind != "rx888" && *req.sourceKind != "pluto" &&
+        *req.sourceKind != "aor") {
         // "file" is refused ON PURPOSE — see the note in web_control.hpp. A
         // browser naming a path on the host is a file-read primitive, not a
         // source selector. The eight native driver keys are no wider a door
@@ -260,7 +261,8 @@ bool parseControlRequest(const std::string& body, ControlRequest& out,
         // is matched against the enumerated row like every other kind, so the
         // only address a browser can reach is the one already on this screen.
         error = "sourceKind must be \"siggen\", \"soapy\", \"rtlsdr\", \"hackrf\", "
-                "\"airspy\", \"airspyhf\", \"sdrplay\", \"mirisdr\", \"rx888\" or \"pluto\"";
+                "\"airspy\", \"airspyhf\", \"sdrplay\", \"mirisdr\", \"rx888\", \"pluto\" or "
+                "\"aor\"";
         return false;
     }
 

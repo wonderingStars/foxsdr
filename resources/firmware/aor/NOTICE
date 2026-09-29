@@ -1,0 +1,25 @@
+AOR FX2 FIRMWARE - PLACEHOLDER
+===============================
+
+This directory is where FoxSDR's native AOR digital-I/Q driver
+(src/source/aor_source.cpp) looks for AOR's Cypress FX2 firmware:
+
+    resources/firmware/aor/fx2fw.hex
+
+The file is NOT in this repository yet. fx2fw.hex is AOR, Ltd.'s copyrighted
+firmware. AOR has said it will supply the file together with its
+redistribution notice; when it arrives:
+
+  1. put fx2fw.hex here, byte for byte as AOR supplies it (unmodified), and
+  2. replace this NOTICE with AOR's copyright and firmware-licence notice,
+     verbatim, and keep it next to the file in every package that ships it
+     (installers, AppImage, MSIX, the CI zip).
+
+The firmware is AOR's and is separate from FoxSDR's own code and licence. Per
+AOR's developer documentation it may be redistributed unmodified for use with
+AOR receivers under AOR's notice, and it is provided AS IS.
+
+Until the file is present, opening an AOR receiver whose I/Q interface has no
+firmware running fails with a plain message naming this path, and the
+receiver is not opened. A receiver whose firmware is already running (loaded
+by other software since it was powered on) does not need the file.

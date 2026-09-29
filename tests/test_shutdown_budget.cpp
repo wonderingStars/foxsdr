@@ -736,6 +736,43 @@ const KnownWait kKnownWaits[] = {
      "how often that wait looks at the transport's device list. Same path, same reason: open "
      "only, never teardown"},
 
+    // THE NATIVE AOR DIGITAL-I/Q DRIVER. Same argument as every native row
+    // above and the same answer: its teardown column is the STOP bulk write
+    // (kCommandWriteWait 500, plus one usb kAbortDrainWait 250 on WinUSB if
+    // that write's cancellation has to be waited for) + kReaderJoinWait 1000
+    // + the iso ring's usb kAbortDrainWait 250 = 2000 ms, spent INSTEAD OF
+    // the Soapy pair's 3000 rather than as well as it. closeDevice() adds
+    // nothing: the control serial port is closed with a handle close, not a
+    // command.
+    {"src/source/aor_source.hpp", "kIsoReadWait", 0,
+     "how long the AOR reader thread blocks for one isochronous transfer. Spent on the "
+     "reader's OWN thread; it bounds how long that thread takes to notice it has been asked to "
+     "stop, not a wait the teardown performs"},
+    {"src/source/aor_source.hpp", "kReadWait", 0,
+     "AorSource::read()'s wait for samples, spent on the pipeline's source thread, which the "
+     "teardown already waits for through kSourceJoinWait - never on the GUI teardown thread"},
+    {"src/source/aor_source.hpp", "kReaderJoinWait", 0,
+     "the bounded join in AorSource::stopStreamingLocked(), the middle 1000 ms of the 2000 ms "
+     "AOR column. Zero because an AOR teardown REPLACES the Soapy one rather than adding to it"},
+    {"src/source/aor_source.hpp", "kCommandWriteWait", 0,
+     "the bound on the six-byte START/STOP bulk write. ONE is on the teardown path - STOP in "
+     "stopStreamingLocked() - and it is the first 500 ms of the 2000 ms AOR column, covered by "
+     "the 3000 ms Soapy column already charged"},
+    {"src/source/aor_source.hpp", "kStreamHealthWindow", 0,
+     "not a wait at all - the AOR reader's tally window before it writes its stream-health "
+     "line, matching SoapySource's; nothing sleeps or blocks on it"},
+    {"src/source/aor_source.hpp", "kProbeWindow", 0,
+     "how long open() listens for aligned samples after the probe's START, to decide whether "
+     "the FX2 firmware is running. OPEN path only, on the device-open worker; never teardown"},
+    {"src/source/aor_source.hpp", "kFirmwareSettle", 0,
+     "the least open() waits after releasing the FX2 CPU (AOR's own 'sleep 1'). OPEN path "
+     "only - firmware is never loaded during a shutdown"},
+    {"src/source/aor_source.hpp", "kFirmwareReenumerateBudget", 0,
+     "the most open() waits for the AOR I/Q interface to come back after its firmware load. "
+     "OPEN path only, never teardown"},
+    {"src/source/aor_source.hpp", "kFirmwarePollInterval", 0,
+     "how often that wait looks at the transport's device list. Open only, never teardown"},
+
     // THE AOR DIGITAL-I/Q DRIVER'S RECEIVER-CONTROL LINK (a serial port).
     {"src/source/aor_control.hpp", "kReplyWait", 0,
      "how long the AOR control session waits for a reply line after EX or VR. Spent only while "

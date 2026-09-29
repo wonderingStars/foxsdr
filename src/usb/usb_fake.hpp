@@ -409,6 +409,11 @@ public:
         std::lock_guard<std::mutex> lk(isoMutex_);
         isoQueue_.push_back(std::move(transfer));
     }
+    // What a device does on STOP: nothing further arrives.
+    void clearIso() {
+        std::lock_guard<std::mutex> lk(isoMutex_);
+        isoQueue_.clear();
+    }
     std::size_t isoQueued() const {
         std::lock_guard<std::mutex> lk(isoMutex_);
         return isoQueue_.size();

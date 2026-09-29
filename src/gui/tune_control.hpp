@@ -1557,7 +1557,8 @@ inline bool fallbackNamesTheSameDongle(const std::string& nativeKey,
 // WinUSB" is asking a different question and must not use this list.
 inline bool isNativeSourceKind(const std::string& kind) {
     return kind == "rtlsdr" || kind == "hackrf" || kind == "airspy" || kind == "airspyhf" ||
-           kind == "sdrplay" || kind == "mirisdr" || kind == "rx888" || kind == "pluto";
+           kind == "sdrplay" || kind == "mirisdr" || kind == "rx888" || kind == "pluto" ||
+           kind == "aor";
 }
 
 // WHAT TO CALL A RECORDING ON SCREEN: its own name, not the path it lives at.

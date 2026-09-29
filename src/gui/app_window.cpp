@@ -8027,8 +8027,17 @@ void AppWindow::drawSourceSection() {
         for (const cascade::usb::UsbId& id : cascade::source::rx888UsbIds()) {
             if (u.vid == id.vid && u.pid == id.pid) { isRx888 = true; }
         }
+        // ...AND AN AOR I/Q INTERFACE NEEDS A FOURTH, because what it is bound to
+        // instead is not "nothing" but AOR's own driver (AorAlpha.sys), and
+        // the owner has to be told that the two cannot both have it.
+        bool isAor = false;
+        for (const cascade::usb::UsbId& id : cascade::source::aorUsbIds()) {
+            if (u.vid == id.vid && u.pid == id.pid) { isAor = true; }
+        }
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
-        if (isRtl) {
+        if (isAor) {
+            ImGui::TextWrapped("%s", cascade::source::aorUnboundAdvice(what).c_str());
+        } else if (isRtl) {
             ImGui::TextWrapped(
                 tr("%s is plugged in but is not bound to WinUSB, so nothing can open it. Run "
                 "Zadig (zadig.akeo.ie), tick Options -> List All Devices, select \"Bulk-In, "
@@ -9624,6 +9633,7 @@ std::unique_ptr<cascade::source::DeviceSource> AppWindow::makeDeviceSource(
     if (kind == "sdrplay") { return std::make_unique<cascade::source::SdrPlaySource>(); }
     if (kind == "mirisdr") { return std::make_unique<cascade::source::MiriSdrSource>(); }
     if (kind == "rx888") { return std::make_unique<cascade::source::Rx888Source>(); }
+    if (kind == "aor") { return std::make_unique<cascade::source::AorSource>(); }
     if (kind == kPlutoDriverKey) { return std::make_unique<cascade::source::PlutoSource>(); }
     if (kind == "soapy") { return std::make_unique<cascade::source::SoapySource>(); }
     return nullptr;
@@ -9634,7 +9644,7 @@ void AppWindow::scanNative() {
     // and tests/test_main_view that showing the patch view lists none.
     cascade::core::diagLogf("source: listing native radios");
     // NO GATE, and that is the whole point of having our own transport. All
-    // six USB enumerations read SetupAPI device properties and
+    // seven USB enumerations read SetupAPI device properties and
     // never open a device, never send a transfer, never reset anything -
     // usb_device.hpp rule 1, which exists precisely because the SoapySDR
     // vendor probe breaks it and killed a running capture doing so (the
@@ -9682,6 +9692,14 @@ void AppWindow::scanNative() {
     // anywhere saying why - the same failure the unbound-device sentence
     // below exists to stop.
     for (cascade::source::NativeDeviceInfo& d : cascade::source::enumerateRx888()) {
+        nativeDevices_.push_back(std::move(d));
+    }
+    // AOR DIGITAL-I/Q INTERFACES (08D0:A001). Listed from the bus alone, like
+    // every row above: the control serial port is paired - by asking the
+    // receiver VR - only when the row is OPENED, never here (rule 1, and a
+    // scan that wrote to serial ports would be writing to whatever else is on
+    // an FTDI cable).
+    for (cascade::source::NativeDeviceInfo& d : cascade::source::enumerateAor()) {
         nativeDevices_.push_back(std::move(d));
     }
     // THE ONE ENUMERATION THAT IS NOT A USB WALK AND IS STILL SAFE HERE.
@@ -9861,6 +9879,11 @@ void AppWindow::scanNative() {
         ids.push_back(id);
     }
     for (const cascade::usb::UsbId& id : cascade::source::rx888UsbIds()) {
+        ids.push_back(id);
+    }
+    // An AOR I/Q interface on Windows arrives bound to AOR's own AorAlpha.sys,
+    // which is exactly "present and unreachable" - see the sentence below.
+    for (const cascade::usb::UsbId& id : cascade::source::aorUsbIds()) {
         ids.push_back(id);
     }
     nativeUnbound_ = cascade::usb::enumerateUnbound(ids);

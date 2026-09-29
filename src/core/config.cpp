@@ -800,7 +800,8 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
         out.sourceKind != "hackrf" && out.sourceKind != "airspy" &&
         out.sourceKind != "airspyhf" && out.sourceKind != "sdrplay" &&
         out.sourceKind != "mirisdr" && out.sourceKind != "rx888" &&
-        out.sourceKind != "pluto" && out.sourceKind != "soundcard") {
+        out.sourceKind != "pluto" && out.sourceKind != "soundcard" &&
+        out.sourceKind != "aor") {
         out.sourceKind = defaults.sourceKind;
     }
     // The sound card's settings, each back to its default on its own when
