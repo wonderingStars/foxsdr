@@ -619,6 +619,12 @@ const KnownWait kKnownWaits[] = {
      "thread the teardown runs on, so the frame it belongs to has already finished. It composes "
      "with kUpdateWait below rather than replacing it: 1000 + 500 is the worst a single control "
      "can cost that thread, which is what has to stay under the watchdog's frame threshold"},
+    {"src/source/sdrplay_source.hpp", "kControlGrace", 0,
+     "not a wait at all (0.99.50) - how long a control that was not answered within "
+     "kControlWait is LISTENED FOR before the radio is given up. A deadline compared against a "
+     "clock by read() and the next control; nothing sleeps or blocks on it. A stop() or "
+     "closeDevice() inside it gives the control up on the spot and makes no vendor call, the "
+     "same zero-cost teardown as after an abandonment"},
     {"src/source/sdrplay_source.hpp", "kUpdateWait", 0,
      "how long a live parameter change waits for the service to ACKNOWLEDGE it through the next "
      "stream callback's changed flags (SoapySDRPlay3's updateTimeout, same 500 ms). Spent on the "

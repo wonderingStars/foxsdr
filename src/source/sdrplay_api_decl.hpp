@@ -709,6 +709,14 @@ struct Api {
     // and a scan returns without a vendor call: the 0.99.27 crash was a scan's
     // GetDevices through exactly such a session. Never cleared.
     mutable bool sessionLost = false;
+    // HOW MANY CONTROLS A WORKER OF OURS IS STILL INSIDE sdrplay_api_Update
+    // FOR, WAITING FOR A LATE ANSWER (SdrPlaySource::kControlGrace). While it
+    // is above zero a scan and an open are held - answered with
+    // sdrPlayControlPendingSentence() and no vendor call - rather than sent
+    // into a service that has not yet answered the last thing it was asked.
+    // Temporary, unlike sessionLost: it falls back to zero when the answer
+    // arrives or the grace runs out (and then sessionLost takes over).
+    mutable int controlsInFlight = 0;
 };
 
 }  // namespace cascade::source::sdrplay_abi
