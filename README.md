@@ -120,6 +120,29 @@ are still moving. What is in the current build:
   probe opens and resets every dongle it finds, the streaming one included -
   but Refresh is live again, because the native enumeration reads SetupAPI
   properties and opens nothing.
+- **PPM frequency correction** (0.99.56). Every radio's crystal is a few parts
+  per million off, and the error grows with frequency - 5 ppm is 500 Hz at
+  100 MHz and 8.6 kHz at 1.7 GHz. **Settings > Frequency correction** (the
+  SYSTEM bank; the same controls sit in the Source section under the
+  converter) has one switch, off by default, and a value per radio from
+  -200 to +200 ppm in 0.1 steps - positive when stations show up below their
+  real frequency. The value belongs to the radio it was set on (its driver and
+  serial number, named beside the field) and is put back on every open of that
+  radio; a change takes effect at once, with no reopen. A radio that corrects
+  its own crystal is sent the value - the native RTL-SDR driver (whole ppm
+  only: the typed value is rounded to the nearest whole ppm, halves away from
+  zero, and the Source section says which number went in; its sample rate is
+  corrected too) and any SoapySDR radio whose driver reports a frequency
+  correction. Every other radio - HackRF, Airspy, RX888, Pluto, AOR, SDRplay
+  for now, and SoapySDR drivers without one - is corrected by retuning: it is
+  asked for the frequency that lands it on the one you chose, so the centre
+  frequency is right but the sample rate keeps its error. The Source section
+  says which of the two is in use. Everything you see - the counter, the
+  spectrum, bookmarks, decoders, the patch page - stays in the true
+  frequency, and the patch page's own radios take the same per-radio value.
+  The signal generator, a sound card and an I/Q file have no crystal to
+  correct and are left alone. While it is on, the status column's RECEIVER card
+  reads "PPM +1.5" and the diagnostics bundle carries a `ppm:` line.
 - **Working with signals.** Bookmarks, a band scanner with a Skip key and a
   listen limit so a station that never goes quiet cannot stop it, and
   recording of both audio and raw I/Q. The receiver's own position - what
@@ -965,7 +988,8 @@ from the measured step tables, plus the single aggregate "TUNER" ladder every
 other RTL-SDR application offers, so a setting means the same thing here as it
 does there; the tuner's automatic gain, with the demodulator's own digital AGC
 brought in step so the two cannot fight over one signal; the crystal trim in
-parts per million; and the bias tee as its own control. A rate change on a live
+parts per million (the **PPM frequency correction** switch since 0.99.56, in
+whole ppm); and the bias tee as its own control. A rate change on a live
 stream is made with the stream stopped and restarted, because the resampler is
 reset as part of the change and a stream running across that reset delivers
 half a buffer of each rate.

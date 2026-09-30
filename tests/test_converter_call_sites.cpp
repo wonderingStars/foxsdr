@@ -16,7 +16,9 @@
 // sites listed below with the reason it is right. A new direct call fails
 // here until somebody decides which it is. rawSource() - the radio's own
 // figure - is allowed only in app_window_converter.cpp: the status lines that
-// print it, and carriedAirCentre's "was this radio ever tuned" test.
+// print it, and carriedAirCentre's "was this radio ever tuned" test - and in
+// app_window_ppm.cpp (0.99.56), which asks the radio whether it corrects its
+// own crystal, sends it that correction, and checks a pre-install tune.
 //
 // The whole list of sites is printed, classified, on every run: it is the
 // call-site audit the converter was built from, kept current by the tree.
@@ -118,8 +120,13 @@ struct Allowed {
 const Allowed kAllowed[] = {
     {"app_window_patch_radios.cpp", "g->setCenterFrequencyHz(centreHz)",
      "makePatchGenerator: every caller passes radioFromAir(...) of the node's air frequency"},
-    {"app_window_patch_radios.cpp", "dev->setCenterFrequencyHz(*centre)",
-     "patch open worker: `centre` is the lambda's copy of radioCentre, converted on the GUI thread"},
+    {"app_window_patch_radios.cpp", "dev->setCenterFrequencyHz(told)",
+     "patch open worker: `told` is *centre - the lambda's copy of radioCentre, converted on the "
+     "GUI thread - or ppmRequestHz(*centre) for a radio corrected by retuning (0.99.56; "
+     "test_ppm_app testPatchRadios)"},
+    {"app_window.cpp", "ppmPreTellHz(kind, args, dev->hasFrequencyCorrection(), radioHz)",
+     "startup restore: radioHz is radioHzForSource(...), then the crystal correction for a radio "
+     "corrected by retuning (0.99.56; test_ppm_app testStartupRestore)"},
     {"app_window.cpp", "dev->setCenterFrequencyHz(*r.preTuneRadioHz)",
      "RSP pre-Init tune on the open worker: preTuneRadioHz is radioFromAir(...) of keepCenterHz, "
      "converted on the GUI thread in launchDeviceOpen (test_converter_app_paths "
@@ -229,6 +236,13 @@ int main(int argc, char** argv) {
                     ++raw;
                     if (name == "app_window_converter.cpp") {
                         verdict = "RADIO FIGURE (the converter's own file: status lines, carriedAirCentre)";
+                        ++allowed;
+                    } else if (name == "app_window_ppm.cpp") {
+                        // 0.99.56: whether the radio corrects its own crystal,
+                        // sending it that correction, and "is it still where
+                        // the pre-install tune put it" - never a tune.
+                        verdict = "RADIO FIGURE (the crystal correction's own file: the radio's own "
+                                  "correction, the pre-install tune check)";
                         ++allowed;
                     }
                 } else if (std::string(needle) == "rawSource(") {

@@ -406,6 +406,11 @@ void AppWindow::patchReconcile() {
         // core::converterRadioKey IS the patch device key), so the node's
         // frequency is an air frequency here too.
         radio->setConverter(converterForKey(n->device));
+        // THE SAME CRYSTAL CORRECTION the receiver uses for this device
+        // (0.99.56), as the worker applied it before its first tune: in the
+        // radio, or by retuning - then the view reads that tune back exactly.
+        radio->noteRadioPpm(r.radioPpm);
+        if (r.softwarePpm != 0.0) { radio->setSoftwarePpm(r.softwarePpm, r.ppmMemo); }
         std::string err;
         if (!radio->start(err)) {
             patchRadioError_[id] = err;
@@ -492,6 +497,19 @@ void AppWindow::patchReconcile() {
             // the node's AIR frequency is what it hears.
             const cascade::core::ConverterSetting conv = converterForKey(n->device);
             if (r.converter() != conv) { r.setConverter(conv); }
+            // So does a crystal correction switched or changed there (0.99.56):
+            // a radio that corrects itself is sent the new value; any other is
+            // retuned so the node's frequency is where it really sits.
+            const double ppm = ppmForPatchDevice(n->device);
+            if (r.radioCorrects()) {
+                if (r.radioPpm() != ppm && !r.setRadioPpm(ppm)) {
+                    r.noteRadioPpm(ppm);   // asked once; the reason is on the node
+                    patchRadioError_[id] = "the radio refused the frequency correction";
+                }
+            } else if (r.softwarePpm() != ppm) {
+                r.setSoftwarePpm(ppm);
+                if (pc::radioCentreSet(*n)) { r.setCentreHz(n->freqHz); }
+            }
             if (!pc::radioCentreSet(*n)) {
                 n->freqHz = r.centreHz();
                 n->centreChosen = true;
@@ -612,8 +630,11 @@ void AppWindow::patchReconcile() {
             (pc::radioCentreSet(*n) && cascade::core::airReachable(conv, centre))
                 ? std::optional<double>(cascade::core::radioFromAir(conv, centre))
                 : std::nullopt;
+        // This radio's crystal correction, read HERE for the same reason: the
+        // worker applies it before the first tune (0 = none, nothing sent).
+        const double ppm = ppmForPatchDevice(n->device);
         patchRadioPending_[id] = std::async(std::launch::async, [driver, args, label, rate,
-                                                                 centre = radioCentre]() {
+                                                                 centre = radioCentre, ppm]() {
             PatchRadioOpen r;
             r.label = label;
             // SoapySDR's modules are loaded by its enumeration, and the
@@ -662,7 +683,32 @@ void AppWindow::patchReconcile() {
             } else if (!set.sourceError.empty()) {
                 r.error = set.sourceError;
             }
-            if (centre.has_value()) { dev->setCenterFrequencyHz(*centre); }
+            // THE CRYSTAL CORRECTION, before the first tune (0.99.56): in the
+            // radio when it corrects its own crystal, otherwise by telling it
+            // the corrected frequency - with a memo of that tune, so the
+            // view the radio is handed to reads it back exactly.
+            double told = centre.value_or(0.0);
+            if (ppm != 0.0) {
+                if (dev->hasFrequencyCorrection()) {
+                    if (dev->setFrequencyCorrectionPpm(ppm)) {
+                        r.radioPpm = ppm;
+                    } else if (r.error.empty()) {
+                        r.error = "the radio refused the frequency correction";
+                    }
+                } else {
+                    r.softwarePpm = ppm;
+                    if (centre.has_value()) {
+                        told = cascade::core::ppmRequestHz(*centre, ppm);
+                        r.ppmMemo = cascade::core::PpmMemo{true, *centre, told};
+                    }
+                }
+                cascade::core::diagLogf("patch: %s frequency correction %s ppm %s", driver.c_str(),
+                                        cascade::core::ppmText(ppm).c_str(),
+                                        r.radioPpm != 0.0 ? "in the radio" : "by retuning");
+            }
+            if (centre.has_value() && !dev->setCenterFrequencyHz(told)) {
+                r.ppmMemo = cascade::core::PpmMemo{};
+            }
             // A patch radio has no gain slider of its own yet, so the radio's
             // own automatic gain is used where it has one - a dongle left at
             // its power-on gain hears very little.

@@ -11,6 +11,7 @@
 #include <utility>
 
 #include "core/diag_log.hpp"
+#include "core/ppm_correction.hpp"
 
 namespace cascade::source {
 
@@ -1138,6 +1139,10 @@ bool RtlSdrSource::setFreqCorrectionPpm(int ppm) {
         link_->tuner->setXtalHz(link_->rtl->correctedXtalHz());
     }
     return retuneLocked(centerFrequencyHz_.load(std::memory_order_relaxed));
+}
+
+bool RtlSdrSource::setFrequencyCorrectionPpm(double ppm) {
+    return setFreqCorrectionPpm(cascade::core::ppmWholeForRadio(ppm));
 }
 
 // --- stream health ----------------------------------------------------------

@@ -399,6 +399,16 @@ public:
     }
     bool setCenterFrequencyHz(double hz) override;
 
+    // THE DRIVER'S OWN CRYSTAL CORRECTION (0.99.56, IqSource). Whether the
+    // driver has one (hasFrequencyCorrection on channel 0) is asked ONCE at
+    // open() and cached, like the gain mode - the Source section asks every
+    // frame. setFrequencyCorrectionPpm sends setFrequencyCorrection and then
+    // retunes to the frequency already set, so the correction takes effect
+    // now on a driver that only applies it at its next tune; false with
+    // lastError() with no device, no correction, or a driver that threw.
+    bool hasFrequencyCorrection() const override;
+    bool setFrequencyCorrectionPpm(double ppm) override;
+
     // The device's tunable RX range (SoapySDR getFrequencyRange, overall
     // min/max across every sub-band the driver reports), queried once at
     // open() and cached — a retune must not pay for a vendor call it does
@@ -698,6 +708,7 @@ private:
     std::vector<double> rates_;
     bool autoGainSupported_ = false;
     bool autoGain_ = false;
+    bool freqCorrectionSupported_ = false;  // hasFrequencyCorrection, at open
     // Lower-cased driver key parsed out of the open args ("rtlsdr", "uhd");
     // "soapy" when the args named none. Under infoMutex_ like the rest, but
     // driverKey() has to return a const char*, so the string must outlive the

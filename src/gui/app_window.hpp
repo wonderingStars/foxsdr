@@ -32,6 +32,7 @@ struct GLFWwindow;
 #include "core/gps_reader.hpp"
 #include "core/i18n.hpp"
 #include "core/pipeline.hpp"
+#include "core/ppm_correction.hpp"
 #include "core/plugin_host.hpp"
 #include "core/plugin_runner.hpp"
 #include "core/patch_graph.hpp"
@@ -2528,6 +2529,64 @@ private:
     std::string converterLoSeededFor_;  // the radio key + LO the field was seeded from
     bool converterLoBad_ = false;
 
+    // --- THE CRYSTAL CORRECTION (0.99.56, app_window_ppm.cpp) ----------------
+    //
+    // "PPM frequency correction": one switch (AppConfig::ppmCorrection, off by
+    // default) and a value PER RADIO (AppConfig::ppm, keyed by
+    // core::ppmRadioKey). The arithmetic and the rules are
+    // core/ppm_correction.hpp's. applyConverterForSource() calls
+    // applyPpmForSource() after every install, so every open path - and there
+    // are many - applies the new radio's own value before its first tune:
+    // in the radio when it corrects its own crystal, in the pipeline's source
+    // view (Pipeline::setSoftwarePpm) otherwise. The patch page's radios take
+    // the same value by the same rule (app_window_patch_radios.cpp).
+    // The Source section's group (beside the converter) and the same controls
+    // as a section of their own under Settings (the SYSTEM bank), both drawing
+    // drawPpmBody().
+    void drawPpmControls();
+    void drawPpmSection();
+    void drawPpmBody();
+    void applyPpmForSource();
+    // The user switched the correction or changed this radio's value: remember
+    // it and apply it to the open radio now - in the radio, or by retuning so
+    // the station (the true centre) is kept.
+    void changePpm(bool on, double ppm);
+    std::string ppmRadioKeyNow() const;
+    // The correction in force for a radio key / a patch device key: its value
+    // while the switch is on, 0 otherwise.
+    double ppmForKey(const std::string& key) const;
+    double ppmForPatchDevice(const std::string& deviceKey) const;
+    cascade::core::PpmMethod ppmMethodNow();
+    // The RECEIVER card's "PPM +1.5" line while the switch is on and the
+    // radio takes a correction; "" otherwise.
+    std::string ppmCardLine();
+    // The diagnostics bundle's "ppm:" value ("off", "not applicable",
+    // "+1.5 in the radio", "+1.5 by retuning").
+    std::string ppmDiagText();
+    bool ppmCorrectionOn_ = false;
+    std::map<std::string, double> ppmValues_;
+    // What the open radio last ACCEPTED as its own correction (InRadio only),
+    // 0 after every install - a radio opens with none.
+    double ppmRadioApplied_ = 0.0;
+    // Why the open radio refused its own correction; "" when it did not.
+    std::string ppmError_;
+    // THE TWO TUNES MADE BEFORE A RADIO IS INSTALLED - the startup restore's
+    // and an RSP's pre-Init tune (launchDeviceOpen) - are told the corrected
+    // frequency here, and the memo of that tune is left for applyPpmForSource
+    // to hand to the view, so the install moves nothing: an RSP must find its
+    // later tune already there and send no Update (see launchDeviceOpen).
+    // Radio frequency in, the frequency to tell the radio out; the radio
+    // itself unchanged when it corrects its own crystal or has no correction.
+    double ppmPreTellHz(const std::string& kind, const std::string& args, bool radioCorrects,
+                        double radioHz);
+    struct PpmPending {
+        std::string key;
+        cascade::core::PpmMemo memo;
+    };
+    std::optional<PpmPending> ppmPending_;
+    double ppmEdit_ = 0.0;          // the field's value while it is edited
+    std::string ppmEditSeededFor_;  // the radio key + value the field was seeded from
+
     // THE SWITCHES THAT BELONG TO ONE RADIO EACH, and are NOT persisted.
     //
     // The bias tee above is saved because leaving it off silently costs a
@@ -3777,6 +3836,12 @@ private:
         std::unique_ptr<cascade::source::IqSource> src;
         std::string label;
         std::string error;
+        // The crystal correction the worker applied before the first tune
+        // (0.99.56): in the radio (radioPpm) or by retuning (softwarePpm, with
+        // the memo of that first tune so the view reads it back exactly).
+        double radioPpm = 0.0;
+        double softwarePpm = 0.0;
+        cascade::core::PpmMemo ppmMemo{};
     };
     std::map<cascade::core::patch::NodeId, std::future<PatchRadioOpen>> patchRadioPending_;
     std::map<cascade::core::patch::NodeId, std::string> patchRadioPendingAs_;

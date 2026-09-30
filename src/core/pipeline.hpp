@@ -304,6 +304,15 @@ public:
     void setConverter(const ConverterSetting& s);
     ConverterSetting converter();
 
+    // --- The crystal correction by retuning (0.99.56) ------------------------
+    // See core/ppm_correction.hpp. GUI/control thread. The same rules as the
+    // converter: setSource() puts it back to 0 on every swap, the caller
+    // applies the new radio's own value after the swap (and only for a radio
+    // that cannot correct its own crystal), and changing it does not retune.
+    // `memo`: a tune already made at this correction (ConverterView::setPpm).
+    void setSoftwarePpm(double ppm, const PpmMemo& memo = {});
+    double softwarePpm();
+
     // --- Audio chain control (P3) -------------------------------------------
     // All of these are callable from any thread while the pipeline runs: they
     // serialize against the DSP thread's per-block processing under one

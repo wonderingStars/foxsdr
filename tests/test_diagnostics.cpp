@@ -1094,6 +1094,7 @@ int main() {
         ctx.sampleRateHz = 2400000.0;
         ctx.deviceOpen = true;
         ctx.sdrModel = "uhd b200";
+        ctx.ppm = "+1.5 by retuning";
         ctx.plugins.push_back("ADS-B 1.1.0");
         ctx.plugins.push_back("AIS 1.0.0");
 
@@ -1123,6 +1124,7 @@ int main() {
         CHECK(bundle.find("plugin: ADS-B 1.1.0") != std::string::npos);
         CHECK(bundle.find("plugin: AIS 1.0.0") != std::string::npos);
         CHECK(bundle.find("sdr-model: uhd b200") != std::string::npos);
+        CHECK(bundle.find("ppm: +1.5 by retuning") != std::string::npos);
         CHECK(bundle.find("last-run-unclean: yes") != std::string::npos);
         CHECK(bundle.find("audio stream reopened") != std::string::npos);
         CHECK(bundle.find("log-lines-total: 4011") != std::string::npos);
@@ -1180,6 +1182,8 @@ int main() {
         CHECK(block.find("deadbeef") != std::string::npos);
         CHECK(block.find("NFM") != std::string::npos);
         CHECK(block.find("POCSAG 1.0.0") != std::string::npos);
+        // The crystal correction, off unless the application says otherwise.
+        CHECK(block.find("ppm: off") != std::string::npos);
     }
 
     return testSummary("test_diagnostics");

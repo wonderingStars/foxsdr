@@ -55,6 +55,20 @@ public:
     virtual double centerFrequencyHz() const = 0;
     virtual bool setCenterFrequencyHz(double hz) = 0;
 
+    // THE RADIO'S OWN CRYSTAL CORRECTION (0.99.56, core/ppm_correction.hpp),
+    // for a driver that can trim its own reference. hasFrequencyCorrection()
+    // is a cached answer - safe from a per-frame draw, never a driver call.
+    // setFrequencyCorrectionPpm() takes the correction in ppm (positive = the
+    // crystal runs fast) and must leave the radio ON the frequency it reports
+    // (the driver retunes as needed); false with lastError() when refused.
+    // Default: no correction of its own - the application then corrects the
+    // centre frequency by retuning (core::PpmMethod::Retune).
+    virtual bool hasFrequencyCorrection() const { return false; }
+    virtual bool setFrequencyCorrectionPpm(double ppm) {
+        (void)ppm;
+        return false;
+    }
+
     // Pull up to n samples into dst; returns the count delivered. 0 means
     // "nothing available yet" for self-paced sources (caller retries) and is
     // never returned by free-running sources.

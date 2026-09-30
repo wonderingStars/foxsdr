@@ -183,6 +183,15 @@ public:
     bool setFreqCorrectionPpm(int ppm);
     int freqCorrectionPpm() const { return ppm_.load(std::memory_order_relaxed); }
 
+    // The application's crystal correction (0.99.56, IqSource): this driver
+    // trims its own crystal, so the correction is applied IN THE RADIO -
+    // sample rate included - through setFreqCorrectionPpm. That register takes
+    // whole ppm, so the value is rounded to the nearest whole ppm, halves away
+    // from zero (core::ppmWholeForRadio); the Source section says which
+    // number went in.
+    bool hasFrequencyCorrection() const override { return true; }
+    bool setFrequencyCorrectionPpm(double ppm) override;
+
     // What the tuner is: "R820T", "R828D", "R828D (RTL-SDR Blog V4)".
     std::string tunerName() const;
 

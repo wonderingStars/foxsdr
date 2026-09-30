@@ -105,6 +105,10 @@ struct DiagContext {
     double sampleRateHz = 0.0;
     bool deviceOpen = false;
     std::string sdrModel;              // serial-stripped, see sanitiseDevice()
+    // The crystal correction (0.99.56): "off", "not applicable", or the value
+    // and how it is applied - "+1.5 in the radio", "+1.5 by retuning". A
+    // property of the radio's crystal, never a frequency.
+    std::string ppm = "off";
     std::vector<std::string> plugins;  // "name version", loaded plugins only
 };
 

@@ -289,6 +289,7 @@ A report contains these fields and no others:
 | `sample-rate` | `2400000` | Faults that only appear at high rates. **This is the sample rate, not a tuned frequency** — see below. |
 | `device-open` | `yes` | Whether a radio was in use. |
 | `sdr-model` | `uhd b200` | Which radio. **Serial numbers are stripped**, exactly as in the usage report. |
+| `ppm` | `+1.5 by retuning` | Whether the radio's crystal correction is switched on, its value in parts per million and how it is applied (`in the radio` or `by retuning`); `off` when it is not. A property of the radio's crystal, **not a frequency** - it says nothing about what you listen to. Since 0.99.56. |
 | `plugin` | `ADS-B 1.1.0` | Plugins are third-party code running inside the application, and which one was loaded has already been the answer to real faults. |
 | `log-path`, `crash-dir` | `%LOCALAPPDATA%\FoxSDR\logs/foxsdr.log` | So you know where the rest of it is. Since 0.99.33 the base directory is written as `%LOCALAPPDATA%` (`$HOME` or `$XDG_STATE_HOME` on Linux) rather than the real path, so your account name is not in it; a folder elsewhere is shown with the account name replaced by `<user>`. |
 | `last-run-unclean` | `yes` | Whether the previous session ended without shutting down. |

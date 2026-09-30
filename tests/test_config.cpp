@@ -117,6 +117,9 @@ AppConfig junkConfig() {
     c.biasTee["garbage|serial=1"] = true;
     // A converter the file never mentioned must not survive a load.
     c.converters["garbage"] = {cascade::core::ConverterMode::Up, 99.0e6, true};
+    // A crystal correction the file never mentioned must not survive a load.
+    c.ppmCorrection = true;
+    c.ppm["garbage|serial=1"] = 5.0;
     // Junk that is NOT empty, because empty is what the loader substitutes
     // its default for - a load that forgot this field entirely would leave
     // the caller's value here and pass a test that used "".
@@ -304,6 +307,8 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     CHECK(a.nativeArgs == b.nativeArgs);
     CHECK(a.biasTee == b.biasTee);
     CHECK(a.converters == b.converters);
+    CHECK(a.ppmCorrection == b.ppmCorrection);
+    CHECK(a.ppm == b.ppm);
     CHECK(a.airspy == b.airspy);
     CHECK(a.plutoUri == b.plutoUri);
     CHECK(a.iqFilePath == b.iqFilePath);
@@ -589,6 +594,11 @@ int main() {
                                               false};
         in.converters["rx888|serial=lnb"] = {cascade::core::ConverterMode::Down, 10489123457.0,
                                              true};
+        // THE CRYSTAL CORRECTION (0.99.56): the switch on, and a value for
+        // two radios, one each side of zero.
+        in.ppmCorrection = true;
+        in.ppm["rtlsdr|serial=00000001"] = 2.5;
+        in.ppm["hackrf|serial=abc"] = -12.3;
         // THE AIRSPYS (0.99.41): one in each gain mode, every field off its
         // default, and a decimation on each.
         {
@@ -1250,6 +1260,37 @@ int main() {
         CHECK(out.sourceKind == "soapy");
         CHECK(out.soapyArgs == "driver=rtlsdr");
         CHECK(out.nativeArgs.empty());
+
+        // THE CRYSTAL CORRECTION (0.99.56). A config written before it has
+        // neither field and loads OFF with no values - exactly the behaviour
+        // before it existed. (junkConfig set both, so a loader that forgot
+        // them would leave them set.)
+        out = junkConfig();
+        CHECK(writeText(path, "{\"schemaVersion\":1}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(!out.ppmCorrection);
+        CHECK(out.ppm.empty());
+        // Strict bool; per-radio values element-wise tolerant: a string is
+        // skipped, the range is clamped, the step rounded, a 0 and an empty
+        // key dropped.
+        out = junkConfig();
+        CHECK(writeText(path,
+                        "{\"schemaVersion\":1,\"ppmCorrection\":\"yes\",\"ppm\":{"
+                        "\"a|serial=1\":\"5\",\"b|serial=1\":999,\"c|serial=1\":1.26,"
+                        "\"d|serial=1\":0,\"\":3,\"e|serial=1\":-7}}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(!out.ppmCorrection);
+        CHECK(out.ppm.size() == 3u);
+        CHECK(out.ppm.count("a|serial=1") == 0);
+        CHECK(out.ppm.count("b|serial=1") == 1 && out.ppm.at("b|serial=1") == 200.0);
+        CHECK(out.ppm.count("c|serial=1") == 1 && out.ppm.at("c|serial=1") == 1.3);
+        CHECK(out.ppm.count("d|serial=1") == 0);
+        CHECK(out.ppm.count("e|serial=1") == 1 && out.ppm.at("e|serial=1") == -7.0);
+        out = junkConfig();
+        CHECK(writeText(path, "{\"schemaVersion\":1,\"ppmCorrection\":true,\"ppm\":[1,2]}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.ppmCorrection);
+        CHECK(out.ppm.empty());  // not an object: nothing remembered
     }
 
     // --- a config saved after a FAILED RESTORE still names the radio ---------
@@ -1662,6 +1703,10 @@ int main() {
                 // The converters (0.99.36): set in the Source section, which
                 // calls no save of its own - a new one, and a changed LO, a
                 // changed inversion and a switch-off of an existing one.
+                // The crystal correction (0.99.56): the switch and a value,
+                // both set in the Source section, which saves nothing itself.
+                {"ppmCorrection", [](AppConfig& c) { c.ppmCorrection = true; }},
+                {"ppm", [](AppConfig& c) { c.ppm["rtlsdr|serial=1"] = 2.5; }},
                 {"converters (new)",
                  [](AppConfig& c) {
                      c.converters["rtlsdr|serial=1"] = {cascade::core::ConverterMode::Up, 125.0e6,

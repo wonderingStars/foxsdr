@@ -803,6 +803,7 @@ bool SoapySource::open(const std::string& args) {
         std::string antenna;
         std::vector<double> rates;
         bool autoGainSupported = false;
+        bool freqCorrectionSupported = false;
     } o{this, &args};
 
     const bool completed = guardedVendorCall([&o]() noexcept {
@@ -882,6 +883,15 @@ bool SoapySource::open(const std::string& args) {
             } catch (...) {
                 o.autoGainSupported = false;
             }
+            // The crystal correction (0.99.56): asked here, once, for the
+            // same reason as the gain mode - the Source section asks every
+            // frame which way this radio's correction is applied.
+            try {
+                o.freqCorrectionSupported =
+                    s->link_->dev->hasFrequencyCorrection(SOAPY_SDR_RX, kChannel);
+            } catch (...) {
+                o.freqCorrectionSupported = false;
+            }
             try {
                 o.antennas = s->link_->dev->listAntennas(SOAPY_SDR_RX, kChannel);
                 o.antenna = s->link_->dev->getAntenna(SOAPY_SDR_RX, kChannel);
@@ -947,6 +957,7 @@ bool SoapySource::open(const std::string& args) {
                 if (rates_.empty()) { rates_ = {1.0e6, 2.0e6, 4.0e6, 8.0e6}; }
                 autoGainSupported_ = o.autoGainSupported;
                 autoGain_ = false;
+                freqCorrectionSupported_ = o.freqCorrectionSupported;
                 driverKey_ = driverKeyFromArgs(args);
             }
             {
@@ -1151,6 +1162,7 @@ void SoapySource::clearDeviceInfo() noexcept {
     rates_.clear();
     autoGainSupported_ = false;
     autoGain_ = false;
+    freqCorrectionSupported_ = false;
     driverKey_ = "soapy";
 }
 
@@ -2022,6 +2034,68 @@ bool SoapySource::setCenterFrequencyHz(double hz) {
         // faulted() puts "Device stopped: ..." on screen next to it - which is
         // what stops the readout being quietly wrong.
         noteVendorFault("retuning the device");
+        return false;
+    }
+    if (t.threw) {
+        setError(std::move(t.message));
+        return false;
+    }
+    centerFrequencyHz_.store(t.got, std::memory_order_relaxed);
+    return true;
+}
+
+bool SoapySource::hasFrequencyCorrection() const {
+    std::lock_guard<std::mutex> lk(infoMutex_);
+    return freqCorrectionSupported_;
+}
+
+bool SoapySource::setFrequencyCorrectionPpm(double ppm) {
+    // Bounded, soft-failure - see start() above.
+    std::unique_lock<std::timed_mutex> devLk(link_->mutex, kControlLockWait);
+    if (!devLk.owns_lock()) {
+        setError("the radio's driver is busy or not answering; try again");
+        return false;
+    }
+    if (link_->dev == nullptr) {
+        setError("setFrequencyCorrectionPpm() called with no device open");
+        return false;
+    }
+    if (deviceDead()) { return false; }
+    if (!hasFrequencyCorrection()) {
+        setError("this radio's driver has no frequency correction of its own");
+        return false;
+    }
+
+    struct Trim {
+        SoapySource* self;
+        double ppm;
+        double centre;
+        double got = 0.0;
+        bool threw = false;
+        std::string message;
+    } t{this, ppm, centerFrequencyHz_.load(std::memory_order_relaxed)};
+
+    const bool completed = guardedVendorCall([&t]() noexcept {
+        try {
+            t.self->link_->dev->setFrequencyCorrection(SOAPY_SDR_RX, kChannel, t.ppm);
+            // RETUNED TO WHERE IT ALREADY IS: SoapyRTLSDR applies a new
+            // correction at once, but a driver may only fold it in at its
+            // next setFrequency, and a correction that waits for the user's
+            // next tune is a live change that did not happen.
+            if (t.centre > 0.0) {
+                t.self->link_->dev->setFrequency(SOAPY_SDR_RX, kChannel, t.centre);
+            }
+            t.got = t.self->link_->dev->getFrequency(SOAPY_SDR_RX, kChannel);
+        } catch (const std::exception& e) {
+            t.threw = true;
+            t.message = describe(e, "setFrequencyCorrection failed");
+        } catch (...) {
+            t.threw = true;
+            t.message = "setFrequencyCorrection failed: non-standard exception";
+        }
+    });
+    if (!completed) {
+        noteVendorFault("setting the frequency correction");
         return false;
     }
     if (t.threw) {

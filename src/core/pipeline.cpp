@@ -551,6 +551,8 @@ void Pipeline::setSource(std::unique_ptr<cascade::source::IqSource> s) {
     // frequency 125 MHz away from where the counter says it is.
     airView_.bind(active_);
     airView_.setConverter(ConverterSetting{});
+    // Nor does one radio's crystal correction (AppWindow::applyPpmForSource).
+    airView_.setPpm(0.0);
     {
         // A new antenna is a new station: drop the decoded RDS content and
         // the pilot lock with the old source. controlMutex_ -> audioMutex_ is
@@ -645,6 +647,16 @@ void Pipeline::setConverter(const ConverterSetting& s) {
 ConverterSetting Pipeline::converter() {
     std::lock_guard<std::mutex> lk(controlMutex_);
     return airView_.converter();
+}
+
+void Pipeline::setSoftwarePpm(double ppm, const PpmMemo& memo) {
+    std::lock_guard<std::mutex> lk(controlMutex_);
+    airView_.setPpm(ppm, memo);
+}
+
+double Pipeline::softwarePpm() {
+    std::lock_guard<std::mutex> lk(controlMutex_);
+    return airView_.ppm();
 }
 
 const char* Pipeline::activeSourceName() {

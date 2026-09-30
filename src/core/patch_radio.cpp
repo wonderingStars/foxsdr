@@ -60,6 +60,20 @@ void PatchRadio::setConverter(const cascade::core::ConverterSetting& s) {
     sh_->mirror.store(view_.mirrors(), std::memory_order_relaxed);
 }
 
+bool PatchRadio::radioCorrects() const {
+    return sh_->src != nullptr && sh_->src->hasFrequencyCorrection();
+}
+
+bool PatchRadio::setRadioPpm(double ppm) {
+    if (!sh_->src || !sh_->src->setFrequencyCorrectionPpm(ppm)) { return false; }
+    radioPpm_ = ppm;
+    return true;
+}
+
+void PatchRadio::setSoftwarePpm(double ppm, const cascade::core::PpmMemo& memo) {
+    view_.setPpm(ppm, memo);
+}
+
 PatchRadio::~PatchRadio() { stop(); }
 
 bool PatchRadio::start(std::string& error) {

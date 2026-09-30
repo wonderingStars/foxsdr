@@ -195,6 +195,17 @@ struct AppConfig {
     // that entry off, entries with no radio are dropped and the list is capped
     // at core::kMaxConverterRadios (core::sanitiseConverters).
     std::map<std::string, ConverterSetting> converters;
+    // THE CRYSTAL CORRECTION (0.99.56, core/ppm_correction.hpp): ONE switch
+    // for the application ("ppmCorrection", default false - off is exactly the
+    // behaviour before it existed) and a value PER RADIO, because a crystal's
+    // error belongs to one radio: radio key (core::ppmRadioKey - "<driver>|
+    // serial=<serial>", or "<kind>|<args>" for a radio with no serial) -> ppm,
+    // positive when the crystal runs fast. Stored as the object "ppm". EMPTY BY
+    // DEFAULT; on load a value that is not a number is skipped, the rest are
+    // clamped to +/-200 and rounded to 0.1, a 0 is dropped (it is what a
+    // missing entry means) and the map is capped (core::sanitisePpmValues).
+    bool ppmCorrection = false;
+    std::map<std::string, double> ppm;
     // EACH AIRSPY R2 / MINI's GAIN MODE, GAINS AND DECIMATION (0.99.41),
     // remembered per radio under the bias tee's key ("airspy|serial=<serial>")
     // - see core/airspy_settings.hpp. Stored as the object "airspy", each

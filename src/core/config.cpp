@@ -4,6 +4,7 @@
 #include "core/bias_tee_memory.hpp"
 #include "core/diag_log.hpp"
 #include "core/patch_presets.hpp"
+#include "core/ppm_correction.hpp"
 
 #include "core/plugin_api.hpp"
 #include "core/telemetry.hpp"
@@ -284,6 +285,21 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
                 conv[radio] = s;
             }
             out.converters = std::move(conv);
+        }
+    }
+    // The crystal correction (0.99.56): the switch, strict bool like every
+    // other, and the per-radio values - an entry that is not a number is
+    // skipped, every other rule (range, step, zero, the cap) is
+    // sanitisePpmValues', below. A config written before it has neither and
+    // loads as OFF with no values: exactly the behaviour before it existed.
+    getBool(j, "ppmCorrection", out.ppmCorrection);
+    {
+        const auto it = j.find("ppm");
+        if (it != j.end() && it->is_object()) {
+            for (auto e = it->begin(); e != it->end(); ++e) {
+                if (!e.value().is_number()) { continue; }
+                out.ppm[e.key()] = e.value().get<double>();
+            }
         }
     }
     // The Airspys, element-wise tolerant: an entry that is not an object is
@@ -981,6 +997,7 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     out.patchPresets = sanitisePatchPresets(std::move(out.patchPresets), patchPresetPositions);
     out.patchPresetPrevious = sanitisePatchPresetPrevious(std::move(out.patchPresetPrevious));
     out.converters = sanitiseConverters(out.converters);
+    out.ppm = sanitisePpmValues(out.ppm);
     out.airspy = sanitiseAirspySettings(out.airspy);
     // And the rebound keys, from the same function for the fourth time. An
     // empty line could name no action, and a line repeated verbatim is one
@@ -1013,6 +1030,12 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
             conv.push_back(std::move(e));
         }
         j["converters"] = std::move(conv);
+    }
+    j["ppmCorrection"] = cfg.ppmCorrection;
+    {
+        json ppm = json::object();
+        for (const auto& [radio, v] : cfg.ppm) { ppm[radio] = v; }
+        j["ppm"] = std::move(ppm);
     }
     {
         json as = json::object();

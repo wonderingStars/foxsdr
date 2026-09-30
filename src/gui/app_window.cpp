@@ -608,6 +608,9 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            // The per-radio converters: set in the Source section, which calls
            // no save of its own.
            a.converters == b.converters &&
+           // The crystal correction's switch and per-radio values: set in the
+           // Source section, which calls no save of its own.
+           a.ppmCorrection == b.ppmCorrection && a.ppm == b.ppm &&
            // Each Airspy's gain mode, gains and decimation: set in the Source
            // section, which calls no save of its own.
            a.airspy == b.airspy &&
@@ -2582,6 +2585,8 @@ void AppWindow::refreshDiagContext() {
     // MODEL ONLY - sanitiseDevice strips the serial, exactly as the usage
     // report does. A report is a support artefact, not a hardware fingerprint.
     ctx.sdrModel = deviceModel_;
+    // The crystal correction and how it is applied - never a frequency.
+    ctx.ppm = ppmDiagText();
     std::size_t loaded = 0;
     for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
         if (!p.loaded) { continue; }
@@ -4200,7 +4205,9 @@ void AppWindow::drawStatusColumn() {
         // cut at the well's edge in the middle of a word - "...χωρίς δεδομ"
         // (el) - which reads as broken; the column has room below.
         const float room = (cardR - s) - (cardL + 8.0f * s) - 2.0f * s;
-        constexpr int kMaxLines = 4;
+        // Five: the RECEIVER card with its crystal correction on (0.99.56) -
+        // device, antenna, gain, PPM, rate. Every other card has fewer.
+        constexpr int kMaxLines = 5;
         cascade::gui::LineFit fits[kMaxLines];
         float linesH = 0.0f;
         for (int i = 0; i < lineCount && i < kMaxLines; ++i) {
@@ -4631,20 +4638,22 @@ void AppWindow::drawStatusColumn() {
     // --- RECEIVER, and it is the tall one ------------------------------------
     //
     // The reference card carries four lines: the device, the antenna port, the
-    // gain and a frequency correction. THE FOURTH DOES NOT EXIST HERE. Nothing
-    // in FoxSDR reads, sets or stores a PPM correction - not SoapySource, not
-    // the config store, nowhere - so this card has no "0.5 PPM" line, because
-    // the only way to draw one would be to make the number up.
+    // gain and a frequency correction. The correction exists since 0.99.56
+    // (app_window_ppm.cpp) and is drawn ONLY WHILE IT IS SWITCHED ON for a
+    // radio that takes one - "PPM +1.5", the value in force (a whole-ppm
+    // radio's rounded one). Off, or on over the generator, a sound card or a
+    // file, the card has no such line rather than a "PPM +0.0" nothing applied.
     //
-    // The three that do exist are lettered by what they ARE. The antenna is a
-    // readback (SoapySource::antenna(), taken after the open), the gain is what
-    // this application COMMANDED - the driver offers no per-element readback -
-    // and both are settings, so both are cream. The sample rate is the device's
-    // own readback of what it is delivering, so it is amber: the palette's rule
-    // is that amber belongs to a measurement and nothing else.
+    // They are lettered by what they ARE. The antenna is a readback
+    // (SoapySource::antenna(), taken after the open), the gain is what this
+    // application COMMANDED - the driver offers no per-element readback - and
+    // the correction is what the user set; all three are settings, so all
+    // three are cream. The sample rate is the device's own readback of what it
+    // is delivering, so it is amber: the palette's rule is that amber belongs
+    // to a measurement and nothing else.
     {
         const bool faulted = pipeline_.faulted();
-        StatusLine lines[4];
+        StatusLine lines[5];
         int n = 0;
         // Translated when it is the built-in generator; a driver's own device
         // name is in no catalogue and passes through tr() unchanged.
@@ -4679,6 +4688,8 @@ void AppWindow::drawStatusColumn() {
             }
             if (!l2.empty()) { lines[n++] = {l2.c_str(), cascade::gui::theme::kCream}; }
         }
+        const std::string ppmLine = ppmCardLine();
+        if (!ppmLine.empty()) { lines[n++] = {ppmLine.c_str(), cascade::gui::theme::kCream}; }
         const double rate = pipeline_.activeSource().sampleRateHz();
         if (std::isfinite(rate) && rate > 0.0) {
             cascade::core::formatUtf8(l3, "%.3f MS/s", rate / 1.0e6);
@@ -6623,6 +6634,9 @@ void AppWindow::drawMenuColumn() {
         case cascade::gui::RailBank::System:
             benchGroup(tr("SYSTEM"));
             drawLanguageSection();
+            // The crystal correction (0.99.56): the owner asked for it "in
+            // settings"; the Source section carries the same controls.
+            drawPpmSection();
             drawUpdatesSection();
             drawSerialPortsSection();
             drawKeyBindingsSection();
@@ -8832,6 +8846,8 @@ void AppWindow::drawSourceSection() {
     // The up- or down-converter in front of whatever source is installed
     // (app_window_converter.cpp), remembered per radio.
     drawConverterControls();
+    // The crystal correction (app_window_ppm.cpp): one switch, a value per radio.
+    drawPpmControls();
 
     if (!sourceError_.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, kErrorRed);
@@ -9500,7 +9516,13 @@ void AppWindow::launchDeviceOpen(DeviceOpenResult r, const std::string& busyLabe
             converterForKey(cascade::core::converterRadioKey(r.kind, r.args));
         if (cascade::core::airReachable(conv, *r.keepCenterHz)) {
             const double radioHz = cascade::core::radioFromAir(conv, *r.keepCenterHz);
-            if (radioHz > 0.0) { r.preTuneRadioHz = radioHz; }
+            // ...and through its crystal correction (0.99.56): an RSP corrects
+            // by retuning (SdrPlaySource drives no correction of its own), so
+            // it is told the corrected frequency here and the later tune finds
+            // it already there (ppmPreTellHz).
+            if (radioHz > 0.0) {
+                r.preTuneRadioHz = ppmPreTellHz(r.kind, r.args, false, radioHz);
+            }
         }
     }
     // The open runs on a worker: Device::make() is the multi-second, USB-bus
@@ -26227,6 +26249,10 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     // identity key) is moved to the key it is looked up by now
     // (gui::soundCardConverterKey); nothing else is touched.
     converters_ = cascade::gui::migrateSoundCardConverterKeys(cascade::core::sanitiseConverters(cfg.converters));
+    // The crystal correction (0.99.56), BEFORE the source restore below: the
+    // restored radio's install applies its own value (applyPpmForSource).
+    ppmCorrectionOn_ = cfg.ppmCorrection;
+    ppmValues_ = cascade::core::sanitisePpmValues(cfg.ppm);
 
     // Source restore. The generator is always safe (it is already active);
     // a file is restored only if the path still opens; a Soapy device only
@@ -26361,7 +26387,9 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
             const double radioHz = radioHzForSource(kind, args, cfg.centerHz);
             if (radioHz > 0.0 || !cascade::core::converterActive(converterForKey(
                                      cascade::core::converterRadioKey(kind, args)))) {
-                dev->setCenterFrequencyHz(radioHz);
+                // Through the radio's crystal correction too (0.99.56).
+                dev->setCenterFrequencyHz(
+                    ppmPreTellHz(kind, args, dev->hasFrequencyCorrection(), radioHz));
             }
             device_ = dev.get();
             soapyView_ = dynamic_cast<cascade::source::SoapySource*>(device_);
@@ -27150,6 +27178,10 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     // Every radio's converter, including those not open now: a converter is
     // part of how that radio is cabled, and must survive a session without it.
     cfg.converters = converters_;
+    // The crystal correction: the switch, and every radio's value, open now
+    // or not - a crystal's error does not go away with the radio unplugged.
+    cfg.ppmCorrection = ppmCorrectionOn_;
+    cfg.ppm = ppmValues_;
     // Every Airspy's gain mode, gains and decimation, open now or not.
     cfg.airspy = airspyMemory_;
     // WHAT IS IN THE BOX, not what opened. A Pluto that is on the bench has

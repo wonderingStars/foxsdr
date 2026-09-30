@@ -31,8 +31,20 @@ is the one that pays: `src/core/crash_handler.cpp` for a process that dies, and
 Both carry: exact version **and** git commit, the stack as `module+offset`, the
 loaded module list with each module's **build id**, the last 256 log lines from
 the in-memory ring, the application context (mode, source, sample rate, radio
-model with the serial stripped, loaded plugins with versions), and a **stable
-signature** for grouping.
+model with the serial stripped, the crystal correction, loaded plugins with
+versions), and a **stable signature** for grouping.
+
+Since 0.99.56 the context has a `ppm:` line: `off`, `not applicable` (switched
+on over the generator, a sound card or an I/Q file), or the value in force and
+how it is applied - `+2.6 in the radio` (the radio's own correction; a native
+RTL-SDR rounds it to whole ppm), `+2.6 in the radio (refused)`, or
+`+2.6 by retuning` (the centre frequency only). It is support's first question
+when a signal is "not where the band plan says", and it is a property of the
+radio's crystal, never a frequency. The log says the same once per open
+(`source: frequency correction +2.6 ppm applied in the radio (rtlsdr, whole
+ppm: +3)`, or `... by retuning (hackrf, centre frequency only)`), and once per
+change. The upload does not carry the line (crash_upload.cpp reads only the
+fields listed under *The reader*).
 
 Since 0.66.0 the upload also forwards the report's own `reason` and `code`
 lines verbatim (empty for a hang, whose writer has no such lines). The reason

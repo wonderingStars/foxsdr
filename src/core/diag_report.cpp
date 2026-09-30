@@ -431,6 +431,9 @@ void setDiagContext(const DiagContext& ctx) {
     block += std::string("sample-rate: ") + rate + "\n";
     block += std::string("device-open: ") + (ctx.deviceOpen ? "yes" : "no") + "\n";
     block += "sdr-model: " + (ctx.sdrModel.empty() ? std::string("(none)") : ctx.sdrModel) + "\n";
+    // How the radio's crystal is being corrected (0.99.56): support's first
+    // question when a signal is "not where the band plan says".
+    block += "ppm: " + (ctx.ppm.empty() ? std::string("off") : ctx.ppm) + "\n";
     if (ctx.plugins.empty()) {
         block += "plugin: (none)\n";
     } else {
@@ -489,7 +492,7 @@ const std::vector<std::string>& bundleFieldNames() {
     static const std::vector<std::string> names = {
         "generated", "version",   "commit",     "os",
         "arch",      "mode",      "source",     "sample-rate",
-        "device-open", "sdr-model", "plugin",   "log-path",
+        "device-open", "sdr-model", "ppm",      "plugin",   "log-path",
         "crash-dir", "last-run-unclean", "launches", "crashes",
         "log-lines-total", "sdrplay-service"};
     return names;

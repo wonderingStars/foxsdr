@@ -170,6 +170,10 @@ void AppWindow::applyConverterForSource() {
     // The LO field re-seeds from the radio now installed.
     converterLoSeededFor_.clear();
     converterLoBad_ = false;
+    // THIS radio's crystal correction too (0.99.56, app_window_ppm.cpp): every
+    // install site calls this, before any tune, which is exactly where the
+    // correction has to be in force.
+    applyPpmForSource();
 }
 
 double AppWindow::radioHzForSource(const std::string& kind, const std::string& args,
