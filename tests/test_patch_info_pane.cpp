@@ -148,7 +148,13 @@ Result once(const std::string& tag, const std::string& script, const std::string
     setEnv("FOXSDR_PATCH_FILE", pp.string());
     if (script.empty()) {
         setEnv("FOXSDR_INPUT_SCRIPT", "");
+        setEnv("FOXSDR_SCRIPT_TRACE", "");
     } else {
+        // A frame-by-frame record of what the scripted clicks did, kept with
+        // the rest of a failed run: a click here was lost once in a few
+        // hundred runs under ctest -j (2026-09-30), and the census, which only
+        // shows how the run ENDED, could not say why.
+        setEnv("FOXSDR_SCRIPT_TRACE", (g_dir / (tag + ".trace")).string());
         const fs::path sp = g_dir / (tag + ".script");
         std::ofstream f(sp);
         f << script;
@@ -303,6 +309,10 @@ int main() {
     atSize("1920x1080");
 
     const int rc = testSummary("test_patch_info_pane");
-    if (rc == 0) { fs::remove_all(g_dir, ec); }
+    if (rc == 0) {
+        fs::remove_all(g_dir, ec);
+    } else {
+        std::printf("  kept for inspection, with each scripted run's .trace: %s\n", g_dir.string().c_str());
+    }
     return rc;
 }

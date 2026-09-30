@@ -364,6 +364,12 @@ public:
     // a line renders as the flat floor colour, so there is no range to name.
     // dbFloor()/dbCeiling() are then meaningless and must not be printed.
     bool hasRange() const noexcept { return hasRange_; }
+
+    // Where the last framed draw put its foot plate (the SCROLL / decode
+    // lines), as x0, y0, x1, y1 in screen pixels; all zero when it drew none.
+    // Read by whatever the caller draws along the foot - the frequency
+    // markers' tabs - so that it can keep clear of the plate.
+    ImVec4 footPlate() const noexcept { return footPlate_; }
     float dbFloor() const noexcept { return dbMin_; }
     float dbCeiling() const noexcept { return dbMax_; }
 
@@ -396,6 +402,7 @@ private:
     float dbMax_ = 0.0f;
     bool hasRange_ = false;      // false until a line with a usable range
     int rangeRows_ = 0;          // newest rows sharing dbMin_/dbMax_; see rangeRows()
+    ImVec4 footPlate_{};         // the last framed draw's foot plate; see footPlate()
 };
 
 }  // namespace cascade::gui

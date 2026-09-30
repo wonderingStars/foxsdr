@@ -58,6 +58,8 @@
 #include "gui/band_plan_style.hpp"
 #include "gui/basemap_stand_in.hpp"
 #include "gui/bookmark_marker_geometry.hpp"
+#include "gui/freq_marker_layout.hpp"
+#include "gui/press_gesture.hpp"
 #include "gui/plugin_markers.hpp"
 #include "gui/rate_follow_status.hpp"
 #include "gui/soundcard_panel.hpp"
@@ -780,7 +782,10 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            // save of its own - without them here bookmarkMarkers_ reset to
            // on at every launch regardless of what the user last chose.
            a.bookmarkMarkers == b.bookmarkMarkers &&
-           a.bookmarkStackNames == b.bookmarkStackNames;
+           a.bookmarkStackNames == b.bookmarkStackNames &&
+           // The spectrum's trace mode, set from its right-click menu.
+           a.spectrumTraceMode == b.spectrumTraceMode &&
+           a.spectrumAverageMs == b.spectrumAverageMs;
 }
 
 namespace {
@@ -1125,6 +1130,13 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
         bookmarkPath_ = cascade::core::FreqManager::defaultPath();
         std::string bmErr;
         if (!freqMgr_.load(bookmarkPath_, bmErr)) { bookmarkError_ = bmErr; }
+
+        // The waterfall's markers, under the same gate and beside them. A
+        // damaged file is reported in the Markers window, never on stdout.
+        markerPath_ = cascade::core::FreqMarkers::defaultPath();
+        std::string mkErr;
+        if (!freqMarkers_.load(markerPath_, mkErr)) { markerError_ = mkErr; }
+        markerSavedVersion_ = freqMarkers_.version();
     }
 }
 
@@ -1596,6 +1608,10 @@ int AppWindow::run(int frames) {
                 // its "up" swallowed the click - the intermittent failure of
                 // the scripted tests under ctest -j (2026-09-29).
                 if (inputScriptActive_) { ImGui::GetIO().ConfigDebugIgnoreFocusLoss = true; }
+                if (const char* tp = std::getenv("FOXSDR_SCRIPT_TRACE");
+                    inputScriptActive_ && tp != nullptr && *tp != '\0') {
+                    scriptTracePath_ = tp;
+                }
                 std::fprintf(stderr, "cascade: input script %s: %zu steps, %d bad lines\n",
                              script, inputScript_.size(), sp.bad);
             } else {
@@ -2047,6 +2063,8 @@ int AppWindow::run(int frames) {
         // Hermetic runs (empty configPath_) never touch the disk.
         if (!configPath_.empty()) { maybeSaveConfig(glfwGetTime()); }
 
+        // After every widget, so the hovered and active items are this frame's.
+        if (!scriptTracePath_.empty()) { traceScriptFrame(static_cast<long>(rendered)); }
         ImGui::Render();
         int fbWidth = 0;
         int fbHeight = 0;
@@ -2390,6 +2408,7 @@ int AppWindow::run(int frames) {
     // where that attempt lived and why it was removed rather than tuned.
     if (!configPath_.empty()) { saveConfigNow(); }
     flushBookmarkSave(true);
+    flushMarkerSave(true);
     cascade::core::diagLogf("frame loop ended after %d frames; shutting down", rendered);
 
     // The deliberate shutdown wedge, in the place the real one lives: the
@@ -3371,6 +3390,7 @@ void AppWindow::drawUi() {
         importBookmarkFile(dropped);
     }
     flushBookmarkSave(false);
+    flushMarkerSave(false);
     publishWebSnapshot();
     publishWebAudio();
     publishWebImages();
@@ -3564,6 +3584,7 @@ void AppWindow::drawUi() {
             // averaging window rather than dividing this by the time the scope
             // was up - see the note there.
             ++waterfallLines_;
+            feedSpectrumHold();
         }
         drawScopeMode();
     } else {
@@ -3604,6 +3625,7 @@ void AppWindow::drawUi() {
                 waterfall_->addLine(lastFrame_.dbBins.data(),
                                     static_cast<int>(lastFrame_.dbBins.size()), dbMin_, dbMax_);
                 ++waterfallLines_;
+                feedSpectrumHold();
                 lastFrameSeenS_ = ImGui::GetTime();
             }
             ImGui::BeginChild("##patchview", ImVec2(0.0f, 0.0f), ImGuiChildFlags_None,
@@ -3678,6 +3700,12 @@ void AppWindow::drawUi() {
     drawSdrPlayProbeDialog();
     // The beta-tester link confirmation prompt, same top-level reasoning.
     drawTesterLinkPrompt();
+    // The waterfall markers' right-click menu and their list window: at the
+    // top level because the receiver and every patch Display part open the
+    // SAME menu, and a popup's id belongs to the ID stack it is opened in.
+    drawMarkerMenu();
+    drawMarkerWindow();
+    drawTraceModeMenu();
 
     // ONE basemap eviction pass, AFTER every surface that wanted tiles has
     // asked for them. Two things ask now - the map pages, which draw inside
@@ -10593,6 +10621,7 @@ void AppWindow::drawCenterPanels() {
         waterfall_->addLine(lastFrame_.dbBins.data(),
                             static_cast<int>(lastFrame_.dbBins.size()), dbMin_, dbMax_);
         ++waterfallLines_;
+        feedSpectrumHold();
         // WHEN THIS FIGURE WAS TAKEN, which is what the spectrum's "HEARD n s
         // AGO" line reports. SpectrumFrame carries a sequence number and no
         // timestamp, so the closest honest measurement available is the moment
@@ -10646,7 +10675,15 @@ void AppWindow::drawCenterPanels() {
     // NO TICK STRIP TO RESERVE ANY MORE: the frequency axis is lettered inside
     // the spectrum's own well (SpectrumView::Chrome::freqTicks), so the two
     // panels and the splitter own the whole region between them.
-    const float usable = avail.y - splitterThickness;
+    //
+    // LESS THE TWO GAPS ImGui PUTS BETWEEN THEM. Spectrum, splitter and
+    // waterfall are three layout items, so ItemSpacing.y lands twice between
+    // them; leaving it out laid the waterfall ~12 px past the bottom of this
+    // view (1600x900: view to y=900, waterfall to 911.8), and its last rows and
+    // the lower edge of its foot plate were drawn out of sight under the
+    // cabinet. tests/test_receiver_layout_app holds the waterfall to the
+    // view's bottom edge.
+    const float usable = avail.y - splitterThickness - 2.0f * ImGui::GetStyle().ItemSpacing.y;
     // A squeezed window can drive the region to zero; drawing into negative
     // sizes asserts inside ImGui, so just skip the panels that frame.
     if (usable < 40.0f || avail.x < 40.0f) { return; }
@@ -10795,6 +10832,8 @@ void AppWindow::drawCenterPanels() {
     spectrum_->drawBinRange(bins, static_cast<int>(lastFrame_.dbBins.size()),
                             firstBin, lastBin, width, spectrumHeight, &chrome);
     const bool specHovered = ImGui::IsItemHovered();
+    cascade::gui::census::rect("trc:spec:receiver", specPos.x, specPos.y, specPos.x + width,
+                               specPos.y + spectrumHeight);
 
     // Band plan behind the trace (see kBandFillAlphaScale for why "behind"
     // is achieved with a translucent fill painted after it). Before the
@@ -10809,6 +10848,18 @@ void AppWindow::drawCenterPanels() {
     // the gridlines and the VFO overlay, which stay the topmost furniture: a
     // plugin can annotate the spectrum, never cover the user's tuning.
     drawPluginMarkers(specPos.x, specPos.y, width, spectrumHeight, false);
+    // The user's waterfall markers, as faint lines through the trace too.
+    drawFreqMarkerLines(scale_.viewLowHz(), scale_.viewHighHz(), specPos.x, specPos.y, width,
+                        spectrumHeight, 1.0f);
+    // The held trace - peak or average - in bold over the live one, on the
+    // live trace's own axes (SpectrumView::drawOverlayTrace).
+    if (spectrumTraceMode_ != cascade::core::TraceMode::Normal && !spectrumHold_.trace().empty()) {
+        spectrum_->drawOverlayTrace(spectrumHold_.trace().data(),
+                                    static_cast<int>(spectrumHold_.trace().size()), firstBin, lastBin,
+                                    width, spectrumHeight, traceColour(), 2.5f);
+        cascade::gui::census::note("trc:overlay:receiver");
+    }
+    drawTraceModeLabel(specPos.x, spectrum_->headerBottom(), 1.0f);
 
     for (int i = 0; i < tickCount; ++i) {
         // ticks() only returns in-view frequencies, so x stays in-panel.
@@ -10843,8 +10894,10 @@ void AppWindow::drawCenterPanels() {
                        hit == SpectrumView::VfoHit::EdgeHigh) {
                 ImGui::SetTooltip(tr("Drag to widen or narrow the tuned band"));
             } else {
-                ImGui::SetTooltip(tr("Click to tune here | wheel: zoom about the pointer\n"
-                                  "double-click: unzoom | drag the shaded band to move it"));
+                ImGui::SetTooltip("%s\n%s",
+                                  tr("Click to tune here | wheel: zoom about the pointer\n"
+                                     "double-click: unzoom | drag the shaded band to move it"),
+                                  tr("Right-click: normal, peak hold or average trace"));
             }
         }
         if (ImGui::IsMouseClicked(0) && hit != SpectrumView::VfoHit::None) {
@@ -10862,12 +10915,19 @@ void AppWindow::drawCenterPanels() {
             scale_.resetView();  // double-click on empty spectrum: unzoom
         }
     }
+    // RIGHT-CLICK: the trace-mode menu. The right button does nothing else on
+    // this panel; every tuning gesture above is the left one.
+    if (specHovered && vfoDrag_ == VfoDrag::None && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+        traceMenuPending_ = true;
+    }
     spectrum_->drawVfoOverlay(band, width, spectrumHeight);
 
     // Splitter: an invisible button whose vertical drag re-balances the
     // spectrum/waterfall split. Ratio (not pixels) so a window resize keeps
     // the user's proportions.
     ImGui::InvisibleButton("##vsplitter", ImVec2(width, splitterThickness));
+    cascade::gui::census::rect("rx:splitter", ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y,
+                               ImGui::GetItemRectMax().x, ImGui::GetItemRectMax().y);
     if (ImGui::IsItemActive()) {
         splitRatio_ = std::clamp(splitRatio_ + ImGui::GetIO().MouseDelta.y / usable,
                                  0.1f, 0.9f);
@@ -10948,6 +11008,13 @@ void AppWindow::drawCenterPanels() {
     // the user's own marker stays on top. Draw calls only - no widget - so a
     // mark can never take a click meant for the waterfall.
     drawPluginMarkers(wfPos.x, wfPos.y, width, waterfallHeight, true);
+    // The user's own markers, dropped from the right-click menu below. Under
+    // the VFO line for the same reason the plugins' marks are.
+    const ImVec4 footPlate = waterfall_->footPlate();
+    drawFreqMarkers(scale_.viewLowHz(), scale_.viewHighHz(), wfPos.x, wfPos.y, width,
+                    waterfallHeight, 1.0f, &footPlate);
+    cascade::gui::census::rect("fmk:wf:receiver", wfPos.x, wfPos.y, wfPos.x + width,
+                               wfPos.y + waterfallHeight);
 
     // Thin VFO marker on the waterfall (the parity spec's "where am I tuned"
     // line), culled when the tuned frequency is scrolled out of view.
@@ -10971,7 +11038,13 @@ void AppWindow::drawCenterPanels() {
     if (wfPanning_) {
         if (!ImGui::IsMouseDown(0)) {
             wfPanning_ = false;
-            if (!wfMoved_) { setVfoToAbsoluteHz(scale_.xToHz(mouseFrac), !io.KeyShift); }
+            // A LONG PRESS IS NOT A CLICK (gui/press_gesture.hpp): on Android
+            // it is the right-click that opens the marker menu, and tuning on
+            // its left-button half would defeat noting a frequency without
+            // tuning to it.
+            if (cascade::gui::pressIsClick(ImGui::GetTime() - wfPressT_, wfMoved_)) {
+                setVfoToAbsoluteHz(scale_.xToHz(mouseFrac), !io.KeyShift);
+            }
         } else {
             if (!wfMoved_ && std::fabs(io.MousePos.x - wfPressX_) > kDragSlopPx) {
                 wfMoved_ = true;
@@ -10983,9 +11056,28 @@ void AppWindow::drawCenterPanels() {
     } else if (wfHovered && ImGui::IsMouseClicked(0)) {
         wfPanning_ = true;
         wfPressX_ = io.MousePos.x;
+        wfPressT_ = ImGui::GetTime();
         wfMoved_ = false;
     }
     if (wfHovered && ImGui::IsMouseDoubleClicked(0)) { scale_.resetView(); }
+    // The waterfall's gestures, said once the hand has rested - the spectrum
+    // above has had its own tooltip from the start, and the marker menu is
+    // found by nothing else. Not over a marker: its own tooltip wins there.
+    if (wfHovered && !wfPanning_ && !ImGui::IsAnyItemActive() && !ImGui::IsMouseDown(0) &&
+        !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId) &&
+        ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_NoSharedDelay) &&
+        freqMarkers_.nearest(scale_.xToHz(mouseFrac),
+                             4.0 * (scale_.viewHighHz() - scale_.viewLowHz()) / width) == 0) {
+        ImGui::SetTooltip("%s", tr("Click to tune here | drag to pan | wheel: zoom\n"
+                                   "Right-click: drop a marker here, list, copy or clear markers"));
+    }
+    // RIGHT-CLICK: the marker menu for the frequency under the pointer. The
+    // right button does nothing else on this panel, so it cannot collide with
+    // the click-to-tune and the pan above, both of which are left-button.
+    if (wfHovered && !wfPanning_ && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+        requestMarkerMenu(scale_.xToHz(mouseFrac),
+                          (scale_.viewHighHz() - scale_.viewLowHz()) / static_cast<double>(width));
+    }
 
     // Wheel over EITHER panel zooms about the cursor (1.3x per notch; the
     // zoom floor and full-span clamp live in FreqScale). Both panels share
@@ -13823,6 +13915,25 @@ void AppWindow::releasePatchPictureTextures() {
     patchPictures_.clear();
 }
 
+void AppWindow::traceScriptFrame(long frame) {
+    static bool started = false;  // the first line of this run replaces a stale file
+    FILE* f = std::fopen(scriptTracePath_.c_str(), started ? "a" : "w");
+    started = true;
+    if (f == nullptr) { return; }
+    const ImGuiContext& g = *ImGui::GetCurrentContext();
+    const ImGuiIO& io = ImGui::GetIO();
+    std::fprintf(f,
+                 "frame %ld t=%.3f display=%.0fx%.0f mouse=%.1f,%.1f left=%d right=%d os_focus=%d "
+                 "queued=%d hovered_window=%s hovered_id=%08X active_id=%08X\n",
+                 frame, ImGui::GetTime(), static_cast<double>(io.DisplaySize.x),
+                 static_cast<double>(io.DisplaySize.y), static_cast<double>(io.MousePos.x),
+                 static_cast<double>(io.MousePos.y), io.MouseDown[0] ? 1 : 0, io.MouseDown[1] ? 1 : 0,
+                 mainWindow_ != nullptr ? glfwGetWindowAttrib(mainWindow_, GLFW_FOCUSED) : -1,
+                 g.InputEventsQueue.Size, g.HoveredWindow != nullptr ? g.HoveredWindow->Name : "-",
+                 static_cast<unsigned>(g.HoveredId), static_cast<unsigned>(g.ActiveId));
+    std::fclose(f);
+}
+
 void AppWindow::applyInputScript(long frame) {
     ImGuiIO& io = ImGui::GetIO();
     // The scripted pointer is RE-ASSERTED every frame before this frame's
@@ -13930,6 +14041,11 @@ void AppWindow::applyInputScript(long frame) {
                 pendingCtrlWheelFrame_ = frame;
                 pendingCtrlWheelY_ = st.y;
                 pendingCtrlWheelSent_ = false;
+                break;
+            case cascade::gui::ScriptStep::Verb::Sleep:
+                // Real time, inside this frame: the next frame's ImGui clock
+                // and DeltaTime carry it, exactly as a finger held still does.
+                std::this_thread::sleep_for(std::chrono::milliseconds(static_cast<int>(st.x)));
                 break;
         }
         ++inputScriptPos_;
@@ -14148,6 +14264,9 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
     }
     for (auto it = patchScopeSeq_.begin(); it != patchScopeSeq_.end();) {
         it = gone(it->first) ? patchScopeSeq_.erase(it) : std::next(it);
+    }
+    for (auto it = patchHolds_.begin(); it != patchHolds_.end();) {
+        it = gone(it->first) ? patchHolds_.erase(it) : std::next(it);
     }
     for (auto it = patchSinkLines_.begin(); it != patchSinkLines_.end();) {
         it = gone(it->first) ? patchSinkLines_.erase(it) : std::next(it);
@@ -14500,7 +14619,24 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
                 pg::ScopeHistory& hist = patchScopes_[n.id];
                 hist.reshape(cols, rows, lo, hi);
                 std::uint64_t& seq = patchScopeSeq_[n.id];
+                // This part's held trace, over its columns, following the one
+                // trace-mode setting. Its axis is the columns, the slice of
+                // the band and the radio's centre: any of them changing
+                // starts it again.
+                cascade::core::TraceHold& hold = patchHolds_[n.id];
+                hold.setMode(spectrumTraceMode_);
+                if (hold.averageMs() != spectrumAverageMs_) { hold.setAverageMs(spectrumAverageMs_); }
+                const double holdCentre =
+                    rrun != patchRadios_.end() ? rrun->second->centreHz() : 0.0;
+                const auto bitsOf = [](double v) {
+                    std::uint64_t b = 0;
+                    std::memcpy(&b, &v, sizeof b);
+                    return b;
+                };
                 if (seq != specSeq) {
+                    hold.push(colsDb.data(), static_cast<int>(colsDb.size()), ImGui::GetTime(),
+                              cascade::gui::scopeMemoryKey(static_cast<std::uint64_t>(cols), bitsOf(lo),
+                                                           bitsOf(hi), bitsOf(holdCentre)));
                     seq = specSeq;
                     std::vector<float> norm(colsDb.size());
                     for (std::size_t i = 0; i < colsDb.size(); ++i) {
@@ -14520,6 +14656,30 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
                 }
                 dl->AddPolyline(pts.data(), static_cast<int>(pts.size()),
                                 cascade::gui::theme::kPhosphor, 0, 1.2f * drawZoom);
+                // The held trace, bold, on the same columns and the same range.
+                if (spectrumTraceMode_ != cascade::core::TraceMode::Normal &&
+                    hold.trace().size() == colsDb.size()) {
+                    std::vector<ImVec2> held;
+                    held.reserve(colsDb.size());
+                    for (int c = 0; c < cols; ++c) {
+                        const float t = pg::normalise(hold.trace()[static_cast<std::size_t>(c)], range);
+                        held.emplace_back(x0 + (static_cast<float>(c) + 0.5f) * colW,
+                                          y0 + traceH - t * (traceH - 2.0f * drawZoom));
+                    }
+                    dl->AddPolyline(held.data(), static_cast<int>(held.size()), traceColour(), 0,
+                                    2.5f * drawZoom);
+                    cascade::gui::census::note("trc:overlay:patch");
+                }
+                drawTraceModeLabel(x0, y0, drawZoom);
+                cascade::gui::census::rect("trc:patch:trace", x0, y0, x1, y0 + traceH);
+                // Right-click on the trace: the trace-mode menu (the picture
+                // below it has the marker menu). Hovered through the canvas's
+                // own active button, as the marker menu is - see there.
+                if (ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) &&
+                    ImGui::IsMouseHoveringRect(ImVec2(x0, y0), ImVec2(x1, y0 + traceH)) &&
+                    ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+                    traceMenuPending_ = true;
+                }
 
                 // The waterfall, newest at the top, in the main waterfall's
                 // own colour map.
@@ -14557,6 +14717,35 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
                     }
                 } else {
                     marker(0.5 * (lo + hi), nullptr);
+                }
+
+                // THE USER'S MARKERS, on this part's waterfall as on the
+                // receiver's: one list, drawn wherever its frequencies are in
+                // view. The part works in offsets from its own radio's centre,
+                // so the view is put back into absolute hertz first - a part
+                // whose radio is gone has no centre and draws none.
+                const double centre =
+                    rrun != patchRadios_.end() ? rrun->second->centreHz() : 0.0;
+                if (std::isfinite(centre) && centre > 0.0) {
+                    drawFreqMarkerLines(centre + lo, centre + hi, x0, y0, x1 - x0, wy0 - y0, drawZoom);
+                    drawFreqMarkers(centre + lo, centre + hi, x0, wy0, x1 - x0, y1 - wy0, drawZoom);
+                    cascade::gui::census::rect("fmk:wf:patch", x0, wy0, x1, y1);
+                    // Right-click on the picture: the same menu. The face's
+                    // clip rect is already cut to the canvas and to any node
+                    // on top of this one, so a covered waterfall cannot take
+                    // the click. AllowWhenBlockedByActiveItem because the
+                    // canvas's own button takes the right button too and is
+                    // already the ACTIVE item on the frame of the press -
+                    // without it the window never reads as hovered then, and
+                    // the first scripted click opened no menu at all.
+                    if (ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) &&
+                        ImGui::IsMouseHoveringRect(ImVec2(x0, wy0), ImVec2(x1, y1)) &&
+                        ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+                        const double frac = static_cast<double>(ImGui::GetIO().MousePos.x - x0) /
+                                            static_cast<double>(x1 - x0);
+                        requestMarkerMenu(centre + lo + frac * (hi - lo),
+                                          (hi - lo) / static_cast<double>(x1 - x0));
+                    }
                 }
                 break;
             }
@@ -23292,6 +23481,480 @@ void AppWindow::drawBookmarkMarkers(float x0, float y0, float width, float heigh
     dl->PopClipRect();
 }
 
+// --- Frequency markers on the waterfall ----------------------------------------
+
+void AppWindow::drawFreqMarkers(double loHz, double hiHz, float x0, float y0, float width,
+                                float height, float scale, const ImVec4* avoid) {
+    if (freqMarkers_.empty() || !(width > 0.0f) || !(height > 0.0f)) { return; }
+    namespace th = cascade::gui::theme;
+    struct Vis {
+        const cascade::core::FreqMarker* m;
+        float x;
+    };
+    std::vector<Vis> vis;
+    for (const cascade::core::FreqMarker& m : freqMarkers_.list()) {
+        float x = 0.0f;
+        if (cascade::gui::markerScreenX(m.freqHz, loHz, hiHz, x0, width, x)) { vis.push_back({&m, x}); }
+    }
+    if (vis.empty()) { return; }
+    std::sort(vis.begin(), vis.end(), [](const Vis& a, const Vis& b) { return a.x < b.x; });
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    // THE FOOT IS WHERE THE PICTURE CAN BE SEEN TO END, not where its layout
+    // says it does. The receiver's waterfall was once laid out 12 px past the
+    // bottom of its view (drawCenterPanels now subtracts the item spacing),
+    // and the first rendered check put every bottom-row tab under the
+    // cabinet's frame; a picture overhanging its clip must not do that again.
+    const float visibleBottom = std::min(y0 + height, dl->GetClipRectMax().y);
+    dl->PushClipRect(ImVec2(x0, y0), ImVec2(x0 + width, y0 + height), true);
+    // IVORY ON ENAMEL, a colour nothing else on the waterfall uses: the VFO
+    // line and the bookmarks are amber, the plugins' marks gold, and the
+    // colour map runs phosphor to cream - a marker has to read as the user's
+    // own pencil mark against any of them.
+    const ImU32 lineCol = th::withAlpha(th::kIvory, 0.60f);
+    const ImU32 plateCol = th::withAlpha(th::kEnamelDark, 0.90f);
+    const ImU32 rimCol = th::withAlpha(th::kIvory, 0.80f);
+    const ImU32 inkCol = th::kIvory;
+    ImFont* font = cascade::gui::fonts::ui();
+    // The font in force, so a patch part's tabs grow and shrink with its
+    // canvas exactly as its own lettering does.
+    const float fontPx = ImGui::GetFontSize() * 0.8f;
+    const auto textSize = [&](const char* s) {
+        return font != nullptr ? font->CalcTextSizeA(fontPx, FLT_MAX, 0.0f, s) : ImGui::CalcTextSize(s);
+    };
+    const float padX = 3.0f * scale;
+    const float padY = 1.0f * scale;
+    const float tabH = textSize("Hg").y + 2.0f * padY;
+    const float rowPitch = tabH + 2.0f * scale;
+    const float foot = visibleBottom - 2.0f * scale;
+    // Never more than half the picture in tabs: the markers annotate the
+    // waterfall, they must not become it.
+    const int rows = std::min(cascade::gui::kMarkerTabMaxRows,
+                              static_cast<int>((0.5f * (visibleBottom - y0)) / rowPitch));
+
+    std::vector<std::string> labels;
+    std::vector<cascade::gui::MarkerTabIn> tabsIn;
+    labels.reserve(vis.size());
+    tabsIn.reserve(vis.size());
+    for (const Vis& v : vis) {
+        labels.push_back("M" + std::to_string(v.m->number) + " " +
+                         cascade::core::markerMhzText(v.m->freqHz));
+        tabsIn.push_back({v.x, textSize(labels.back().c_str()).x + 2.0f * padX});
+    }
+    // Rows whose height the `avoid` plate reaches start with its extent taken.
+    std::vector<std::vector<std::pair<float, float>>> occupied(static_cast<std::size_t>(std::max(rows, 0)));
+    if (avoid != nullptr && avoid->z > avoid->x && avoid->w > avoid->y) {
+        for (int r = 0; r < rows; ++r) {
+            const float bottom = foot - static_cast<float>(r) * rowPitch;
+            if (bottom - tabH < avoid->w && bottom > avoid->y) {
+                occupied[static_cast<std::size_t>(r)].emplace_back(avoid->x, avoid->z);
+            }
+        }
+    }
+    const std::vector<cascade::gui::MarkerTabOut> tabs =
+        cascade::gui::layoutMarkerTabs(tabsIn, x0, x0 + width, rows, 3.0f, occupied);
+
+    // Dashed, so a marker never reads as the VFO's solid line or as a signal.
+    const float dash = 4.0f * scale;
+    const float gap = 3.0f * scale;
+    for (const Vis& v : vis) {
+        for (float y = y0; y < y0 + height; y += dash + gap) {
+            dl->AddLine(ImVec2(v.x, y), ImVec2(v.x, std::min(y + dash, y0 + height)), lineCol,
+                        std::max(1.0f, scale));
+        }
+    }
+
+    // The tooltip names the marker nearest the pointer - over its tab, or
+    // within a few pixels of its line.
+    const ImVec2 mouse = ImGui::GetIO().MousePos;
+    const bool pointerIn = ImGui::IsWindowHovered() && !ImGui::IsMouseDown(ImGuiMouseButton_Left) &&
+                           mouse.x >= x0 && mouse.x <= x0 + width && mouse.y >= y0 &&
+                           mouse.y <= y0 + height;
+    const cascade::core::FreqMarker* hovered = nullptr;
+    float hoveredD = 4.0f * scale;
+    for (std::size_t i = 0; i < vis.size(); ++i) {
+        const cascade::gui::MarkerTabOut& t = tabs[i];
+        if (t.row >= 0) {
+            const float bottom = foot - static_cast<float>(t.row) * rowPitch;
+            const float top = bottom - tabH;
+            dl->AddRectFilled(ImVec2(t.a, top), ImVec2(t.e, bottom), plateCol, 2.0f * scale);
+            dl->AddRect(ImVec2(t.a, top), ImVec2(t.e, bottom), rimCol, 2.0f * scale, 0, 1.0f);
+            dl->AddText(font, fontPx, ImVec2(t.a + padX, top + padY), inkCol, labels[i].c_str());
+            cascade::gui::census::note("fmk:tab:", vis[i].m->number);
+            cascade::gui::census::rect("fmk:tab:", vis[i].m->number, t.a, top, t.e, bottom);
+            if (pointerIn && mouse.x >= t.a && mouse.x <= t.e && mouse.y >= top && mouse.y <= bottom) {
+                hovered = vis[i].m;
+                hoveredD = -1.0f;  // a tab under the pointer beats any line
+            }
+        } else {
+            cascade::gui::census::note("fmk:line:", vis[i].m->number);
+        }
+        const float d = std::fabs(mouse.x - vis[i].x);
+        if (pointerIn && hoveredD >= 0.0f && d < hoveredD) {
+            hovered = vis[i].m;
+            hoveredD = d;
+        }
+    }
+    dl->PopClipRect();
+
+    if (hovered != nullptr) {
+        std::string tip = "M" + std::to_string(hovered->number) + "  " +
+                          cascade::core::markerMhzText(hovered->freqHz) + " MHz";
+        if (!hovered->note.empty()) { tip += "\n" + hovered->note; }
+        tip += "\n";
+        tip += tr("Right-click for the marker menu");
+        ImGui::SetTooltip("%s", tip.c_str());
+    }
+}
+
+void AppWindow::drawFreqMarkerLines(double loHz, double hiHz, float x0, float y0, float width,
+                                    float height, float scale) {
+    if (freqMarkers_.empty() || !(width > 0.0f) || !(height > 0.0f)) { return; }
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->PushClipRect(ImVec2(x0, y0), ImVec2(x0 + width, y0 + height), true);
+    // Fainter than on the waterfall: the trace is read by its shape, and a
+    // full-strength line through every peak would compete with it.
+    const ImU32 col = cascade::gui::theme::withAlpha(cascade::gui::theme::kIvory, 0.35f);
+    const float dash = 4.0f * scale;
+    const float gap = 3.0f * scale;
+    for (const cascade::core::FreqMarker& m : freqMarkers_.list()) {
+        float x = 0.0f;
+        if (!cascade::gui::markerScreenX(m.freqHz, loHz, hiHz, x0, width, x)) { continue; }
+        for (float y = y0; y < y0 + height; y += dash + gap) {
+            dl->AddLine(ImVec2(x, y), ImVec2(x, std::min(y + dash, y0 + height)), col,
+                        std::max(1.0f, scale));
+        }
+        cascade::gui::census::note("fmk:specline:", m.number);
+    }
+    dl->PopClipRect();
+}
+
+// --- The spectrum's trace mode -----------------------------------------------
+
+void AppWindow::setSpectrumTraceMode(cascade::core::TraceMode m) {
+    spectrumTraceMode_ = m;
+    spectrumHold_.setMode(m);
+    for (auto& [id, hold] : patchHolds_) {
+        (void)id;
+        hold.setMode(m);
+    }
+}
+
+void AppWindow::setSpectrumAverageMs(double ms) {
+    spectrumAverageMs_ = cascade::core::clampTraceAverageMs(ms);
+    spectrumHold_.setAverageMs(spectrumAverageMs_);
+    for (auto& [id, hold] : patchHolds_) {
+        (void)id;
+        hold.setAverageMs(spectrumAverageMs_);
+    }
+}
+
+void AppWindow::resetSpectrumTraces() {
+    spectrumHold_.reset();
+    for (auto& [id, hold] : patchHolds_) {
+        (void)id;
+        hold.reset();
+    }
+}
+
+void AppWindow::feedSpectrumHold() {
+    if (spectrumTraceMode_ == cascade::core::TraceMode::Normal || lastFrame_.dbBins.empty()) { return; }
+    // The axis: which frequency each bin is. A retune, a new sample rate or a
+    // new FFT size starts the held trace again (core/trace_hold.hpp).
+    const auto bitsOf = [](double v) {
+        std::uint64_t b = 0;
+        std::memcpy(&b, &v, sizeof b);
+        return b;
+    };
+    const std::uint64_t key = cascade::gui::scopeMemoryKey(
+        static_cast<std::uint64_t>(lastFrame_.dbBins.size()),
+        bitsOf(pipeline_.activeSource().centerFrequencyHz()), bitsOf(pipeline_.inputRateHz()));
+    spectrumHold_.push(lastFrame_.dbBins.data(), static_cast<int>(lastFrame_.dbBins.size()),
+                       ImGui::GetTime(), key);
+}
+
+unsigned int AppWindow::traceColour() const {
+    // Hot for a peak, ivory for an average: neither is the live trace's
+    // phosphor, and the two modes are told apart at a glance.
+    return spectrumTraceMode_ == cascade::core::TraceMode::Peak ? cascade::gui::theme::kAlarmHot
+                                                                : cascade::gui::theme::kIvory;
+}
+
+void AppWindow::drawTraceModeLabel(float x0, float y0, float scale) {
+    if (spectrumTraceMode_ == cascade::core::TraceMode::Normal) { return; }
+    std::string label;
+    if (spectrumTraceMode_ == cascade::core::TraceMode::Peak) {
+        label = tr("PEAK HOLD");
+    } else {
+        char len[32];
+        if (spectrumAverageMs_ < 1000.0) {
+            std::snprintf(len, sizeof len, "%.0f ms", spectrumAverageMs_);
+        } else {
+            std::snprintf(len, sizeof len, "%g s", spectrumAverageMs_ / 1000.0);
+        }
+        cascade::core::formatUtf8(label, tr("AVERAGE %s"), len);
+    }
+    ImFont* font = cascade::gui::fonts::ui();
+    const float px = ImGui::GetFontSize() * 0.8f;
+    // At the LEFT, straight under the header: the right-hand corner carries the
+    // three-line passband reading, and the first rendered check put this label
+    // across its last line. Nothing else is drawn in this row - the bookmark
+    // names start one line lower - and it ends well short of the centre.
+    const ImVec2 at(x0 + 6.0f * scale, y0 + 2.0f * scale);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddText(font, px, at, traceColour(), label.c_str());
+    cascade::gui::census::note("trc:label:", cascade::core::traceModeName(spectrumTraceMode_));
+}
+
+void AppWindow::drawTraceModeMenu() {
+    static constexpr const char* kMenuId = "##trace_mode_menu";
+    if (traceMenuPending_) {
+        traceMenuPending_ = false;
+        ImGui::OpenPopup(kMenuId);
+    }
+    if (!ImGui::BeginPopup(kMenuId)) { return; }
+    cascade::gui::census::note("trc:menu");
+    // Each item's rectangle, for tests/test_spectrum_trace_app to aim at.
+    const auto itemRect = [](const char* name) {
+        const ImVec2 a = ImGui::GetItemRectMin();
+        const ImVec2 b = ImGui::GetItemRectMax();
+        cascade::gui::census::rect(name, a.x, a.y, b.x, b.y);
+    };
+    using cascade::core::TraceMode;
+    if (ImGui::MenuItem(tr("Normal"), nullptr, spectrumTraceMode_ == TraceMode::Normal)) {
+        setSpectrumTraceMode(TraceMode::Normal);
+    }
+    itemRect("trc:menu:normal");
+    if (ImGui::MenuItem(tr("Peak hold"), nullptr, spectrumTraceMode_ == TraceMode::Peak)) {
+        setSpectrumTraceMode(TraceMode::Peak);
+    }
+    itemRect("trc:menu:peak");
+    if (ImGui::MenuItem(tr("Average"), nullptr, spectrumTraceMode_ == TraceMode::Average)) {
+        setSpectrumTraceMode(TraceMode::Average);
+    }
+    itemRect("trc:menu:average");
+    ImGui::Separator();
+    // Starts the peak or the average over, on every spectrum.
+    if (ImGui::MenuItem(tr("Reset trace"), nullptr, false, spectrumTraceMode_ != TraceMode::Normal)) {
+        resetSpectrumTraces();
+    }
+    itemRect("trc:menu:reset");
+    if (ImGui::BeginMenu(tr("Average length"))) {
+        static constexpr int kPresetsMs[] = {100, 250, 500, 1000, 2000, 5000, 10000};
+        for (int ms : kPresetsMs) {
+            char label[32];
+            if (ms < 1000) {
+                std::snprintf(label, sizeof label, "%d ms", ms);
+            } else {
+                std::snprintf(label, sizeof label, "%d s", ms / 1000);
+            }
+            if (ImGui::MenuItem(label, nullptr, std::fabs(spectrumAverageMs_ - ms) < 0.5)) {
+                setSpectrumAverageMs(static_cast<double>(ms));
+            }
+            cascade::gui::census::rect("trc:menu:len:", ms, ImGui::GetItemRectMin().x,
+                                       ImGui::GetItemRectMin().y, ImGui::GetItemRectMax().x,
+                                       ImGui::GetItemRectMax().y);
+        }
+        ImGui::Separator();
+        // Any length between, on a logarithmic slider.
+        int ms = static_cast<int>(std::lround(spectrumAverageMs_));
+        ImGui::SetNextItemWidth(cascade::gui::uiscale::px(180.0f));
+        if (ImGui::SliderInt("##trc_avg_ms", &ms, static_cast<int>(cascade::core::kTraceAverageMinMs),
+                             static_cast<int>(cascade::core::kTraceAverageMaxMs), "%d ms",
+                             ImGuiSliderFlags_Logarithmic)) {
+            setSpectrumAverageMs(static_cast<double>(ms));
+        }
+        ImGui::EndMenu();
+    }
+    itemRect("trc:menu:length");
+    ImGui::EndPopup();
+}
+
+void AppWindow::requestMarkerMenu(double hz, double hzPerPx) {
+    if (!std::isfinite(hz) || !std::isfinite(hzPerPx) || !(hzPerPx > 0.0)) { return; }
+    markerMenuStepHz_ = cascade::core::markerStepHz(hzPerPx);
+    markerMenuHz_ = cascade::core::roundMarkerHz(hz, hzPerPx);
+    // "Remove" offers the marker within a few pixels of the click, the same
+    // reach the tooltip has.
+    markerMenuNear_ = freqMarkers_.nearest(hz, 6.0 * hzPerPx);
+    markerMenuPending_ = true;
+}
+
+void AppWindow::drawMarkerMenu() {
+    static constexpr const char* kMenuId = "##freq_marker_menu";
+    if (markerMenuPending_) {
+        markerMenuPending_ = false;
+        ImGui::OpenPopup(kMenuId);
+    }
+    if (!ImGui::BeginPopup(kMenuId)) { return; }
+    const std::string here =
+        cascade::core::formatMarkerMhz(markerMenuHz_, markerMenuStepHz_) + " MHz";
+    // Each item's rectangle, for tests/test_freq_markers_app to aim at.
+    const auto itemRect = [](const char* name) {
+        const ImVec2 a = ImGui::GetItemRectMin();
+        const ImVec2 b = ImGui::GetItemRectMax();
+        cascade::gui::census::rect(name, a.x, a.y, b.x, b.y);
+    };
+    cascade::gui::census::note("fmk:menu:at:", here);
+    const bool full = freqMarkers_.size() >= cascade::core::FreqMarkers::kMaxMarkers;
+    if (ImGui::MenuItem(tr("Drop marker here"), here.c_str(), false, markerMenuHz_ > 0.0 && !full)) {
+        // Two of this view's pixels either side is "the same signal": a second
+        // right-click on it names the marker already there instead of
+        // stacking another on top.
+        freqMarkers_.add(markerMenuHz_, static_cast<std::int64_t>(std::time(nullptr)),
+                         2.0 * markerMenuStepHz_);
+    }
+    itemRect("fmk:menu:drop");
+    if (markerMenuNear_ != 0) {
+        std::string label;
+        cascade::core::formatUtf8(label, tr("Remove marker M%d"), markerMenuNear_);
+        if (ImGui::MenuItem(label.c_str())) { freqMarkers_.remove(markerMenuNear_); }
+        itemRect("fmk:menu:remove");
+    }
+    ImGui::Separator();
+    const std::string count = std::to_string(freqMarkers_.size());
+    if (ImGui::MenuItem(tr("List markers..."), count.c_str())) { markerWindowOpen_ = true; }
+    itemRect("fmk:menu:list");
+    if (ImGui::MenuItem(tr("Copy markers to clipboard"), nullptr, false, !freqMarkers_.empty())) {
+        ImGui::SetClipboardText(freqMarkers_.clipboardText().c_str());
+    }
+    // Clearing is the one thing here that cannot be taken back, so it asks
+    // once more, in a submenu the pointer has to travel into.
+    if (ImGui::BeginMenu(tr("Clear all markers"), !freqMarkers_.empty())) {
+        std::string yes;
+        cascade::core::formatUtf8(yes, tr("Yes, remove all %zu"), freqMarkers_.size());
+        if (ImGui::MenuItem(yes.c_str())) { freqMarkers_.clear(); }
+        ImGui::EndMenu();
+    }
+    ImGui::EndPopup();
+}
+
+void AppWindow::drawMarkerWindow() {
+    if (!markerWindowOpen_) { return; }
+    ImGui::SetNextWindowSize(ImVec2(cascade::gui::uiscale::px(620.0f), cascade::gui::uiscale::px(340.0f)),
+                             ImGuiCond_FirstUseEver);
+    if (ImGui::Begin(trId("Markers##freq_markers"), &markerWindowOpen_)) {
+        cascade::gui::census::note("fmk:window");
+        if (!markerError_.empty()) {
+            ImGui::PushStyleColor(ImGuiCol_Text, kErrorRed);
+            ImGui::TextWrapped("%s", markerError_.c_str());
+            ImGui::PopStyleColor();
+        }
+        const float footerH = ImGui::GetFrameHeightWithSpacing();
+        if (freqMarkers_.empty()) {
+            ImGui::TextWrapped("%s", tr("No markers yet. Right-click the waterfall and choose "
+                                        "Drop marker here."));
+        } else {
+            // In frequency order: the list is for working through the band.
+            std::vector<const cascade::core::FreqMarker*> rows;
+            rows.reserve(freqMarkers_.size());
+            for (const cascade::core::FreqMarker& m : freqMarkers_.list()) { rows.push_back(&m); }
+            std::stable_sort(rows.begin(), rows.end(),
+                             [](const cascade::core::FreqMarker* a, const cascade::core::FreqMarker* b) {
+                                 return a->freqHz < b->freqHz;
+                             });
+            int removeNo = 0;
+            const ImGuiTableFlags flags = ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH |
+                                          ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingFixedFit;
+            if (ImGui::BeginTable("##fmk_table", 5, flags, ImVec2(0.0f, -footerH))) {
+                ImGui::TableSetupScrollFreeze(0, 1);
+                ImGui::TableSetupColumn("#");
+                ImGui::TableSetupColumn(tr("Frequency"));
+                ImGui::TableSetupColumn(tr("Noted"));
+                ImGui::TableSetupColumn(tr("Note"), ImGuiTableColumnFlags_WidthStretch);
+                ImGui::TableSetupColumn("##actions");
+                ImGui::TableHeadersRow();
+                for (const cascade::core::FreqMarker* m : rows) {
+                    ImGui::PushID(m->number);
+                    cascade::gui::census::note("fmk:row:", m->number);
+                    ImGui::TableNextRow();
+                    ImGui::TableNextColumn();
+                    ImGui::Text("M%d", m->number);
+                    ImGui::TableNextColumn();
+                    ImGui::Text("%s MHz", cascade::core::markerMhzText(m->freqHz).c_str());
+                    ImGui::TableNextColumn();
+                    ImGui::TextUnformatted(cascade::core::formatMarkerTime(m->notedUnix).c_str());
+                    ImGui::TableNextColumn();
+                    std::string note = m->note;
+                    ImGui::SetNextItemWidth(-FLT_MIN);
+                    if (ImGui::InputTextWithHint("##note", tr("add a note"), &note)) {
+                        freqMarkers_.setNote(m->number, note);
+                    }
+                    ImGui::TableNextColumn();
+                    if (ImGui::SmallButton(tr("Tune"))) { tuneAbsoluteHz(m->freqHz); }
+                    if (ImGui::IsItemHovered()) { ImGui::SetTooltip("%s", tr("Tune the receiver here")); }
+                    ImGui::SameLine();
+                    if (ImGui::SmallButton(tr("Bookmark"))) {
+                        // The note names it when there is one; otherwise its
+                        // marker number, which FreqManager dedupes if taken.
+                        cascade::core::Bookmark b;
+                        b.name = !m->note.empty() ? m->note : "M" + std::to_string(m->number);
+                        b.freqHz = m->freqHz;
+                        b.mode = kModeNames[modeIndex_];
+                        b.bandwidthHz = vfoBandwidthHz_;
+                        freqMgr_.add(std::move(b));
+                        saveBookmarks();
+                    }
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip("%s", tr("Add it to the Bookmarks, in the current mode"));
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::SmallButton("x")) { removeNo = m->number; }
+                    if (ImGui::IsItemHovered()) { ImGui::SetTooltip("%s", tr("Remove this marker")); }
+                    ImGui::PopID();
+                }
+                ImGui::EndTable();
+            }
+            if (removeNo != 0) { freqMarkers_.remove(removeNo); }
+        }
+        ImGui::BeginDisabled(freqMarkers_.empty());
+        if (ImGui::Button(tr("Copy markers to clipboard"))) {
+            ImGui::SetClipboardText(freqMarkers_.clipboardText().c_str());
+        }
+        ImGui::SameLine();
+        if (ImGui::Button(tr("Clear all markers"))) { ImGui::OpenPopup("##fmk_clear"); }
+        ImGui::EndDisabled();
+        if (ImGui::BeginPopup("##fmk_clear")) {
+            std::string yes;
+            cascade::core::formatUtf8(yes, tr("Yes, remove all %zu"), freqMarkers_.size());
+            if (ImGui::MenuItem(yes.c_str())) { freqMarkers_.clear(); }
+            ImGui::EndPopup();
+        }
+    }
+    ImGui::End();
+}
+
+void AppWindow::flushMarkerSave(bool force) {
+    if (markerPath_.empty()) { return; }  // hermetic run: never touch disk
+    const unsigned v = freqMarkers_.version();
+    if (v == markerSavedVersion_) {
+        markerSaveDueS_ = -1.0;
+        return;
+    }
+    const bool haveClock = ImGui::GetCurrentContext() != nullptr;
+    const double now = haveClock ? ImGui::GetTime() : 0.0;
+    if (!force) {
+        // Half a second after a change is first seen: a note is typed a
+        // character at a time, and costs at most two writes a second rather
+        // than one a keystroke.
+        if (markerSaveDueS_ < 0.0) {
+            markerSaveDueS_ = now + 0.5;
+            return;
+        }
+        if (now < markerSaveDueS_) { return; }
+    }
+    std::string err;
+    if (freqMarkers_.save(markerPath_, err)) {
+        markerError_.clear();
+    } else {
+        markerError_ = err;
+    }
+    // Recorded either way: a save that failed is reported, not retried every
+    // frame; the next change tries again.
+    markerSavedVersion_ = v;
+    markerSaveDueS_ = -1.0;
+}
+
 // --- Shared absolute tuning (P6) -----------------------------------------------
 
 void AppWindow::tuneAbsoluteHz(double absHz, bool isPluginPreset) {
@@ -26079,6 +26742,8 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     // launch no matter what the user last chose - see drawBookmarksSection.
     bookmarkMarkers_ = cfg.bookmarkMarkers;
     bookmarkStackNames_ = cfg.bookmarkStackNames;
+    setSpectrumTraceMode(cascade::core::traceModeFromName(cfg.spectrumTraceMode));
+    setSpectrumAverageMs(static_cast<double>(cfg.spectrumAverageMs));
     aircraftIconPx_ = cascade::gui::clampAircraftIconPx(cfg.aircraftIconPx);
     mapTrailWidthPx_ = std::clamp(cfg.mapTrailWidthPx, 1, cascade::gui::kAircraftIconMaxPx);
 
@@ -27247,6 +27912,8 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.mapTrailStyle = mapTrailStyle_;
     cfg.bookmarkMarkers = bookmarkMarkers_;
     cfg.bookmarkStackNames = bookmarkStackNames_;
+    cfg.spectrumTraceMode = cascade::core::traceModeName(spectrumTraceMode_);
+    cfg.spectrumAverageMs = static_cast<int>(std::lround(spectrumAverageMs_));
     cfg.aircraftIconPx = aircraftIconPx_;
     cfg.mapTrailWidthPx = mapTrailWidthPx_;
     cfg.scopeMode = scopeMode_;

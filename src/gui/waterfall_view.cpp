@@ -865,7 +865,9 @@ void drawRangeBoundary(ImDrawList* dl, float x0, float x1, float y) {
 // rate clause, which is genuinely unmeasured, and keeps the span, which is
 // not.
 void drawFootLines(ImDrawList* dl, const ImVec2& tl, float w, float h, float leftInset,
-                   float linesPerSecond, double heldSeconds, const char* decoding) {
+                   float linesPerSecond, double heldSeconds, const char* decoding,
+                   ImVec4& plateOut) {
+    plateOut = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
     std::string rateText;
     if (linesPerSecond > 0.0f) {
         // A rate of 4.2 line/s is a real reading and rounds to "4"; below ten
@@ -916,6 +918,7 @@ void drawFootLines(ImDrawList* dl, const ImVec2& tl, float w, float h, float lef
     const ImVec2 fTL(x0, y1 - boxH);
     const ImVec2 fBR(x0 + boxW, y1);
     addGlassPlate(dl, fTL, fBR);
+    plateOut = ImVec4(fTL.x, fTL.y, fBR.x, fBR.y);
 
     float y = fTL.y + kChromePad;
     if (!scrollText.empty()) {
@@ -1337,6 +1340,7 @@ void WaterfallView::draw(float width, float height, double u0, double u1,
     // widget, and every annotation below is placed from the widget's own
     // top-left corner.
     const ImVec2 tl = ImGui::GetCursorScreenPos();
+    footPlate_ = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);  // until this draw says otherwise
     draw(width, height, u0, u1);
     if (width_ <= 0 || height_ <= 0 || width <= 0.0f || height <= 0.0f) {
         return;  // inert view: the plain draw reserved nothing, so neither do we
@@ -1380,7 +1384,7 @@ void WaterfallView::draw(float width, float height, double u0, double u1,
     // an average rate. Zero when fewer than two lines have arrived, which
     // drops the clause rather than reporting "0s VISIBLE" of a real picture.
     drawFootLines(dl, tl, width, height, stripW, chrome.linesPerSecond,
-                  age.valid ? age.span : 0.0, chrome.decoding);
+                  age.valid ? age.span : 0.0, chrome.decoding, footPlate_);
     dl->PopClipRect();
 
     // The frame last, over the outer edge of the picture and outside the clip

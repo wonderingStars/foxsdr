@@ -184,6 +184,8 @@ AppConfig junkConfig() {
     // default rule.
     c.bookmarkMarkers = false;
     c.bookmarkStackNames = false;
+    c.spectrumTraceMode = "peak";
+    c.spectrumAverageMs = 250;
     // Away from its default AND out of range, the same rule every other
     // clamped field here follows.
     c.mapTrailStyle = 99;
@@ -347,6 +349,8 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     CHECK(a.mapTrailAltitudeColours == b.mapTrailAltitudeColours);
     CHECK(a.bookmarkMarkers == b.bookmarkMarkers);
     CHECK(a.bookmarkStackNames == b.bookmarkStackNames);
+    CHECK(a.spectrumTraceMode == b.spectrumTraceMode);
+    CHECK(a.spectrumAverageMs == b.spectrumAverageMs);
     CHECK(a.mapTrailStyle == b.mapTrailStyle);
     CHECK(a.aircraftIconPx == b.aircraftIconPx);
     CHECK(a.mapTrailWidthPx == b.mapTrailWidthPx);
@@ -563,6 +567,30 @@ int main() {
         CHECK(out.mainView == "patch");
     }
 
+    // --- the spectrum's trace mode is normalised and clamped on load ----------
+    // (2026-09-30, core/trace_hold.hpp): the file is user-editable, and an
+    // unknown mode or a length outside 50..10000 ms must not reach the draw.
+    {
+        const std::string path = p("trace_mode.json");
+        std::string err;
+        AppConfig out = junkConfig();
+        CHECK(writeText(path, "{\"spectrumTraceMode\": \"sideways\", \"spectrumAverageMs\": 999999}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.spectrumTraceMode == "normal");
+        CHECK(out.spectrumAverageMs == 10000);
+        CHECK(writeText(path, "{\"spectrumTraceMode\": \"peak\", \"spectrumAverageMs\": 3}\n"));
+        out = junkConfig();
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.spectrumTraceMode == "peak");
+        CHECK(out.spectrumAverageMs == 50);
+        // A file from before them: normal, one second.
+        CHECK(writeText(path, "{\"volume\": 0.5}\n"));
+        out = junkConfig();
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.spectrumTraceMode == "normal");
+        CHECK(out.spectrumAverageMs == 1000);
+    }
+
     // --- roundtrip every field through a path needing new directories -------
     {
         AppConfig in;
@@ -698,6 +726,9 @@ int main() {
         // a save that wrote one key twice.
         in.bookmarkMarkers = false;
         in.bookmarkStackNames = true;
+        // Neither the default mode nor the default length.
+        in.spectrumTraceMode = "average";
+        in.spectrumAverageMs = 2500;
         // The radar scope. The range is a LEGAL ladder value that is neither
         // the default (200) nor what junkConfig() holds (12345, which snaps to
         // 400), so the roundtrip proves the FILE is what came back rather than

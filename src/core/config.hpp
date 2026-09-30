@@ -459,6 +459,15 @@ struct AppConfig {
     bool bookmarkMarkers = true;
     bool bookmarkStackNames = true;
 
+    // THE SPECTRUM'S TRACE MODE (a user's request, 2026-09-30; see
+    // core/trace_hold.hpp): "normal", "peak" or "average" - the bold held
+    // trace drawn over the live one - and the average's length in ms. One
+    // setting for every spectrum (the receiver's and each patch Spectrum
+    // part). An unknown mode loads as normal; the length is clamped to
+    // 50..10000 ms on load.
+    std::string spectrumTraceMode = "normal";
+    int spectrumAverageMs = 1000;
+
     // HOW a trail is drawn, not whether: 0 = line, 1 = ribbon. An integer with
     // named values rather than a bool, because a third style costs one entry
     // here instead of a second flag that can contradict the first - two bools

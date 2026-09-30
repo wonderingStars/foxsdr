@@ -100,6 +100,18 @@ int main() {
               p.steps[1].y == -1.5f);
     }
 
+    // [4c] SLEEP holds the loop for real time (a long press is a duration):
+    // 1..5000 ms; zero, past the bound, or missing is refused.
+    {
+        const ScriptParse p =
+            parseInputScript("5 sleep 500\n6 sleep 0\n7 sleep 6000\n8 sleep\n9 sleep 1\n");
+        CHECK(p.bad == 3);
+        CHECK(p.steps.size() == 2u);
+        CHECK(p.steps.size() == 2u && p.steps[0].verb == ScriptStep::Verb::Sleep &&
+              p.steps[0].x == 500.0f);
+        CHECK(p.steps.size() == 2u && p.steps[1].x == 1.0f);
+    }
+
     // [5] A TEXT STEP TYPES THE REST OF THE LINE VERBATIM, '#' included. The
     // comment strip used to run before the verb was read, so "Channel #12"
     // typed "Channel " and parsed as a perfectly good step - a wrong string

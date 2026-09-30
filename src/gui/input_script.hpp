@@ -26,6 +26,10 @@
 //   <frame> key <name>        tap a key: enter, delete, backspace, escape,
 //                             tab, ctrl+a
 //   <frame> text <chars...>   type the rest of the line
+//   <frame> sleep <ms>        hold the frame loop for 1..5000 ms of real time,
+//                             so a step after it is really that much later -
+//                             a long press is a duration, and a bounded run's
+//                             frames are not a clock (2026-09-30)
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #ifndef CASCADE_GUI_INPUT_SCRIPT_HPP
@@ -38,7 +42,7 @@
 namespace cascade::gui {
 
 struct ScriptStep {
-    enum class Verb { World, Screen, Down, Up, Key, Text, Wheel, RightDown, RightUp, WheelH, CtrlWheel };
+    enum class Verb { World, Screen, Down, Up, Key, Text, Wheel, RightDown, RightUp, WheelH, CtrlWheel, Sleep };
     long frame = 0;
     Verb verb = Verb::World;
     float x = 0.0f;
@@ -116,6 +120,10 @@ inline ScriptParse parseInputScript(const std::string& text) {
             // Windows arrives as exactly this (0.99.49).
             st.verb = ScriptStep::Verb::CtrlWheel;
             ok = static_cast<bool>(s >> st.y) && st.y != 0.0f;
+        } else if (verb == "sleep") {
+            // Milliseconds in x; bounded so a typo cannot hang a test run.
+            st.verb = ScriptStep::Verb::Sleep;
+            ok = static_cast<bool>(s >> st.x) && st.x >= 1.0f && st.x <= 5000.0f;
         } else if (verb == "text") {
             // THE REST OF THE RAW LINE, not of the comment-stripped body: a
             // '#' is something to type here ("Channel #12"), and cutting the

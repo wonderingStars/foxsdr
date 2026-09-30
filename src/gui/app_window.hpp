@@ -29,6 +29,8 @@ struct GLFWwindow;
 #include "core/band_plan.hpp"
 #include "core/config.hpp"
 #include "core/freq_manager.hpp"
+#include "core/freq_markers.hpp"
+#include "core/trace_hold.hpp"
 #include "core/gps_reader.hpp"
 #include "core/i18n.hpp"
 #include "core/pipeline.hpp"
@@ -1763,6 +1765,51 @@ private:
     // Bookmarks inside the visible span, as marks on the spectrum.
     void drawBookmarkMarkers(float x0, float y0, float width, float height);
 
+    // --- Frequency markers on the waterfall (a user's request, 2026-09-30) ----
+    // Right-click a waterfall - the receiver's or a patch Display part's - to
+    // drop a marker without tuning there, list them, copy them or clear them
+    // (core/freq_markers.hpp has the list and the rules).
+    //
+    // Draws the markers inside [loHz, hiHz] over a waterfall at x0, y0 of
+    // width x height: a dashed line down the picture and a tab along its
+    // foot, and the tooltip under the pointer. `scale` sizes the tabs with
+    // the patch canvas's zoom (1 on the receiver). `avoid` (x0, y0, x1, y1),
+    // when given, is something already drawn along the foot - the receiver
+    // waterfall's own SCROLL/decode plate - that a tab must not cover.
+    void drawFreqMarkers(double loHz, double hiHz, float x0, float y0, float width, float height,
+                         float scale, const ImVec4* avoid = nullptr);
+    // Only the dashed lines, for a spectrum trace above a waterfall: the same
+    // markers, so a noted signal's peak can be found in the trace too. No tabs
+    // (the waterfall's foot carries those) and no tooltip.
+    void drawFreqMarkerLines(double loHz, double hiHz, float x0, float y0, float width,
+                             float height, float scale);
+    // Asks for the marker menu at the pointer for frequency `hz` on a view of
+    // `hzPerPx` hertz a pixel. The menu itself is drawn by drawMarkerMenu, at
+    // the top level, so the receiver and the patch share one popup.
+    void requestMarkerMenu(double hz, double hzPerPx);
+    void drawMarkerMenu();
+    void drawMarkerWindow();
+    // Saves markers.json once the list has been still for half a second (a
+    // note is typed a character at a time), or now when `force`.
+    void flushMarkerSave(bool force);
+
+    // --- The spectrum's trace mode (a user's request, 2026-09-30) -------------
+    // Right-click a spectrum - the receiver's or a patch Spectrum part's trace -
+    // for Normal / Peak hold / Average, Reset trace and Average length; the held
+    // trace is drawn in bold over the live one (core/trace_hold.hpp). One
+    // setting for every spectrum, saved in the config.
+    void setSpectrumTraceMode(cascade::core::TraceMode m);
+    void setSpectrumAverageMs(double ms);
+    void resetSpectrumTraces();
+    // The receiver's newest frame into its hold; called beside every
+    // waterfall_->addLine, so a peak keeps collecting while another page is up.
+    void feedSpectrumHold();
+    void drawTraceModeMenu();
+    // "PEAK HOLD" / "AVERAGE 500 ms" at the top left of a spectrum, under its
+    // header, in the held trace's colour.
+    void drawTraceModeLabel(float x0, float y0, float scale);
+    unsigned int traceColour() const;
+
     // --- Config persistence (P5) ---------------------------------------------
     // Pushes every AppConfig field into the pipeline/panel mirrors; source
     // restore failures (file gone, device unplugged) fall back to the
@@ -1990,6 +2037,7 @@ private:
     // gestures share the left button, so they can only be told apart on
     // release.
     float wfPressX_ = 0.0f;
+    double wfPressT_ = 0.0;   // ImGui time of that press; a long one is not a click
     bool wfMoved_ = false;
 
     // Moves the VFO so the tuned frequency lands on wantAbsHz, snapping to the
@@ -2802,6 +2850,22 @@ private:
     // bookmarkPath_ empty and never read or write the user's bookmark file.
     cascade::core::FreqManager freqMgr_;
     std::string bookmarkPath_;   // empty = bookmark persistence disabled
+    // Markers ride the same persistence gate as the bookmarks: markerPath_
+    // stays empty on every hermetic run.
+    cascade::core::FreqMarkers freqMarkers_;
+    std::string markerPath_;
+    std::string markerError_;
+    unsigned markerSavedVersion_ = 0;
+    double markerSaveDueS_ = -1.0;   // < 0 = nothing waiting to be saved
+    bool markerWindowOpen_ = false;
+    cascade::core::TraceMode spectrumTraceMode_ = cascade::core::TraceMode::Normal;
+    double spectrumAverageMs_ = cascade::core::kTraceAverageDefaultMs;
+    cascade::core::TraceHold spectrumHold_;   // the receiver's
+    bool traceMenuPending_ = false;           // open the menu at the top level this frame
+    bool markerMenuPending_ = false;  // open the menu at the top level this frame
+    double markerMenuHz_ = 0.0;       // where the right-click landed, rounded
+    double markerMenuStepHz_ = 1.0;   // that view's pixel, as a 1-2-5 step
+    int markerMenuNear_ = 0;          // a marker under the pointer, or 0
     std::string bookmarkError_;  // red text in the Bookmarks section
     char bookmarkName_[128] = "";  // editable name for the next "Add current"
     // --- A large imported list (0.99.19) ----------------------------------------
@@ -3762,6 +3826,9 @@ private:
     // waterfall scrolls at the same pace as the main one.
     std::map<cascade::core::patch::NodeId, cascade::gui::patch::ScopeHistory> patchScopes_;
     std::map<cascade::core::patch::NodeId, std::uint64_t> patchScopeSeq_;
+    // Each Spectrum part's own held trace, over its columns (see
+    // setSpectrumTraceMode); gone with its node like patchScopes_.
+    std::map<cascade::core::patch::NodeId, cascade::core::TraceHold> patchHolds_;
     // Each picture decoder node's newest picture and its GL texture, uploaded
     // only when the picture's revision moves. Textures are deleted when the
     // node goes and at shutdown, while the GL context is current.
@@ -3781,6 +3848,14 @@ private:
     std::vector<cascade::gui::ScriptStep> inputScript_;
     std::size_t inputScriptPos_ = 0;
     bool inputScriptActive_ = false;
+    // FOXSDR_SCRIPT_TRACE=<path>: one line a frame while a script runs - the
+    // pointer, both buttons, the OS focus, and what ImGui made of them (the
+    // hovered window, the hovered and active item) - so a scripted click that
+    // did not take leaves its evidence behind. Added 2026-09-30 for
+    // test_patch_info_pane's once-in-a-few-hundred lost click, which the end
+    // of run census alone could not explain. Empty = off.
+    std::string scriptTracePath_;
+    void traceScriptFrame(long frame);
     bool scriptMouseSet_ = false;
     float scriptMouseX_ = 0.0f;
     float scriptMouseY_ = 0.0f;

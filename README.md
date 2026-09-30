@@ -1461,6 +1461,55 @@ row to tune it.
   costs the display nothing; the browser page is sent the favourites and the
   few hundred nearest the tuned frequency, not the whole list.
 
+## Markers on the waterfall
+
+A marker notes a frequency without tuning to it - something to come back to
+later. **Right-click the waterfall**, the receiver's or a patch Spectrum
+part's, for the marker menu - on a touch screen, press and hold for about
+half a second. Holding the left button still that long no longer tunes the
+receiver on release, so a long press only opens the menu:
+
+- **Drop marker here** puts a marker at the frequency under the pointer,
+  rounded to what one pixel of the waterfall can show (the menu names it). A
+  dashed line runs down the waterfall (and, fainter, through the spectrum
+  trace above it) and a tab along its foot reads, for
+  example, **M3 145.502**; tabs that would touch stack up to three rows high,
+  and past that a marker keeps its line. Right-clicking the same signal again
+  does not add a second one. Hover over a marker for its frequency and note.
+- **Remove marker M3** appears when the pointer is on a marker.
+- **List markers...** opens the Markers window: every marker in frequency
+  order with the time it was dropped, a note you can type, and **Tune**
+  (tunes the receiver there), **Bookmark** (adds it to the Bookmarks in the
+  current mode, named by its note) and **x** (removes it).
+- **Copy markers to clipboard** copies them one to a line - number, frequency
+  in MHz, time and note, separated by tabs, so they paste into a spreadsheet
+  as columns.
+- **Clear all markers** asks once more before it removes them.
+
+Markers are numbered M1, M2, ... in the order they are dropped, and a number
+is never reused until the list is cleared, so a note that says "M3" keeps
+meaning the same frequency. They are one list, drawn on every waterfall that
+shows their frequency, and kept in `markers.json` beside the bookmarks, so
+they are still there after a restart. Up to 200 can be kept.
+
+## Peak hold and average on the spectrum
+
+**Right-click the spectrum** (the trace above the waterfall, on the receiver
+or on a patch Spectrum part) to choose how it is drawn:
+
+- **Normal** - the live trace only, as always.
+- **Peak hold** - a bold orange trace of the highest level each frequency has
+  reached, held until you reset it, so a short burst stays on screen.
+- **Average** - a bold ivory trace of the average over the last
+  **Average length** (100 ms to 10 s from the submenu, or anything from 50 ms
+  to 10 s on its slider). It averages the power, not the decibels, so a
+  noise floor reads where it really is.
+
+The live trace keeps drawing underneath in both. **Reset trace** starts the
+peak or the average again; so does retuning, or changing the sample rate,
+because a held trace from another frequency would be wrong. The mode and the
+length apply to every spectrum and are remembered.
+
 ## The patch view
 
 The patch is FoxSDR's main view (0.99.40): a canvas where a receiver is built
@@ -1482,7 +1531,7 @@ itself, operated on its own face.
 | **Channel** | One frequency out of that capture, tuned, filtered and decimated. Its frequency is typed on its face; its live level is shown above. |
 | **Demod** | AM or FM demodulation of a channel, with a **squelch**: on by default at -50 dB, its threshold on a slider and the channel's live level beside it, so a speaker or a recording hears signals rather than the noise between them. Decoders behind it still get every sample. |
 | **Speaker** | Where the demodulated channel wired to it goes: a **WAV file** (the default), an **MP3 file**, **the speakers**, or any other sound output - chosen in the panel on the right. Files go in the recordings folder, one per speaker, named after it. |
-| **Spectrum** | A live trace and waterfall: of the whole capture (every channel marked and named) when wired to the Radio, of one channel when wired to that channel. |
+| **Spectrum** | A live trace and waterfall: of the whole capture (every channel marked and named) when wired to the Radio, of one channel when wired to that channel. Right-click its waterfall for the [marker menu](#markers-on-the-waterfall), its trace for [peak hold and average](#peak-hold-and-average-on-the-spectrum). |
 | **Text out** | A log of the lines from every decoder wired to it. |
 | **Map** | Aircraft, ships and stations from up to five decoders on one live map - each decoder's map output wired to one of its five inputs, so ADS-B from one radio and AIS from another share it. The same map, basemap and target details as the map pages; with a map imagery plugin fitted, its attribution is lettered under the chart, as on the map pages. |
 | **Decoders** | One part per installed decoder plugin, by name. An I/Q decoder wired to a Channel is fed *that channel*, tuned, so several decoders on several frequencies run off one radio at once; wired to the Radio it gets the whole capture. An audio decoder goes behind a Demod. Picture decoders (APT, WEFAX, SSTV) are parts too and show their picture on the node. |

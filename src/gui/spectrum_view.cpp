@@ -574,6 +574,38 @@ void SpectrumView::draw(const float* dbBins, int n, float width, float height,
     drawBinRange(dbBins, n, 0.0, lastBin, width, height, chrome);
 }
 
+namespace {
+
+// The trace's vertices for bins [visLo, visHi] of the window [firstBin,
+// lastBin], shared by the live trace and drawOverlayTrace so the two can never
+// disagree about where a bin is.
+void traceVertices(const float* dbBins, int n, double firstBin, double lastBin, double visLo,
+                   double visHi, float x0, float width, float yTop, float yBottom, float dbMin_,
+                   float dbMax_, std::vector<ImVec2>& points) {
+    using cascade::gui::SpectrumView;
+    points.clear();
+    points.reserve(static_cast<std::size_t>(visHi - visLo) + 3);
+    // Left cut vertex: interpolated exactly at the window edge.
+    points.push_back(ImVec2(x0 + SpectrumView::binToXFrac(visLo, firstBin, lastBin) * width,
+                            dbToY(binValueAt(dbBins, n, visLo), dbMin_, dbMax_, yTop, yBottom)));
+    // Whole bins strictly inside the cut points (the cuts already carry the
+    // boundary values, including exact whole-bin cuts).
+    int i = static_cast<int>(std::ceil(visLo));
+    if (static_cast<double>(i) <= visLo) { ++i; }
+    for (; static_cast<double>(i) < visHi; ++i) {
+        // dbToY clamps, so out-of-range bins ride the panel edges rather than
+        // drawing outside the clip rect.
+        const float y = dbToY(dbBins[i], dbMin_, dbMax_, yTop, yBottom);
+        points.push_back(
+            ImVec2(x0 + SpectrumView::binToXFrac(static_cast<double>(i), firstBin, lastBin) * width, y));
+    }
+    // Right cut vertex.
+    points.push_back(ImVec2(x0 + SpectrumView::binToXFrac(visHi, firstBin, lastBin) * width,
+                            dbToY(binValueAt(dbBins, n, visHi), dbMin_, dbMax_, yTop, yBottom)));
+}
+
+}  // namespace
+
 void SpectrumView::drawBinRange(const float* dbBins, int n, double firstBin,
                                 double lastBin, float width, float height,
                                 const Chrome* chrome) {
@@ -601,6 +633,7 @@ void SpectrumView::drawBinRange(const float* dbBins, int n, double firstBin,
     const float gridTopY =
         p0.y + ((chrome != nullptr) ? std::clamp(chrome->reservedTopPx, 0.0f, height - 1.0f)
                                      : 0.0f);
+    gridTopY_ = gridTopY;
 
     // The ground, twice: square in the void black so a rounded corner can
     // never show the window behind it, then the tube's near-black green with
@@ -643,26 +676,8 @@ void SpectrumView::drawBinRange(const float* dbBins, int n, double firstBin,
                 lastBin < static_cast<double>(n - 1) ? lastBin : static_cast<double>(n - 1);
             if (visHi > visLo) {
                 std::vector<ImVec2> points;
-                points.reserve(static_cast<std::size_t>(visHi - visLo) + 3);
-                // Left cut vertex: interpolated exactly at the window edge.
-                points.push_back(ImVec2(
-                    p0.x + binToXFrac(visLo, firstBin, lastBin) * width,
-                    dbToY(binValueAt(dbBins, n, visLo), dbMin_, dbMax_, gridTopY, p1.y)));
-                // Whole bins strictly inside the cut points (the cuts already
-                // carry the boundary values, including exact whole-bin cuts).
-                int i = static_cast<int>(std::ceil(visLo));
-                if (static_cast<double>(i) <= visLo) { ++i; }
-                for (; static_cast<double>(i) < visHi; ++i) {
-                    // dbToY clamps, so out-of-range bins ride the panel edges
-                    // rather than drawing outside the clip rect.
-                    const float y = dbToY(dbBins[i], dbMin_, dbMax_, gridTopY, p1.y);
-                    points.push_back(
-                        ImVec2(p0.x + binToXFrac(static_cast<double>(i), firstBin, lastBin) * width, y));
-                }
-                // Right cut vertex.
-                points.push_back(ImVec2(
-                    p0.x + binToXFrac(visHi, firstBin, lastBin) * width,
-                    dbToY(binValueAt(dbBins, n, visHi), dbMin_, dbMax_, gridTopY, p1.y)));
+                traceVertices(dbBins, n, firstBin, lastBin, visLo, visHi, p0.x, width, gridTopY, p1.y,
+                              dbMin_, dbMax_, points);
                 drawList->AddPolyline(points.data(), static_cast<int>(points.size()),
                                       kTrace, ImDrawFlags_None, 1.5f);
             }
@@ -728,6 +743,28 @@ void SpectrumView::drawBinRange(const float* dbBins, int n, double firstBin,
     // Advance the layout cursor so the widget occupies its rectangle like any
     // other ImGui item and the caller can stack panels below it.
     ImGui::Dummy(ImVec2(width, height));
+}
+
+
+void SpectrumView::drawOverlayTrace(const float* dbBins, int n, double firstBin, double lastBin,
+                                    float width, float height, unsigned int colour, float thickness) {
+    if (!panelValid_ || dbBins == nullptr || n <= 0 || !(lastBin > firstBin) || width < 1.0f ||
+        height < 1.0f) {
+        return;
+    }
+    const double visLo = firstBin > 0.0 ? firstBin : 0.0;
+    const double visHi = lastBin < static_cast<double>(n - 1) ? lastBin : static_cast<double>(n - 1);
+    if (!(visHi > visLo)) { return; }
+    const ImVec2 p0(panelX_, panelY_);
+    const ImVec2 p1(panelX_ + width, panelY_ + height);
+    std::vector<ImVec2> points;
+    traceVertices(dbBins, n, firstBin, lastBin, visLo, visHi, p0.x, width, gridTopY_, p1.y, dbMin_,
+                  dbMax_, points);
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    drawList->PushClipRect(p0, p1, true);
+    drawList->AddPolyline(points.data(), static_cast<int>(points.size()), colour, ImDrawFlags_None,
+                          thickness);
+    drawList->PopClipRect();
 }
 
 void SpectrumView::drawVfoOverlay(const VfoBand& band, float width, float height) {

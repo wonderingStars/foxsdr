@@ -5,6 +5,7 @@
 #include "core/diag_log.hpp"
 #include "core/patch_presets.hpp"
 #include "core/ppm_correction.hpp"
+#include "core/trace_hold.hpp"
 
 #include "core/plugin_api.hpp"
 #include "core/telemetry.hpp"
@@ -497,6 +498,13 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     // bookmarkStackNames's feature was the one asked for).
     getBool(j, "bookmarkMarkers", out.bookmarkMarkers);
     getBool(j, "bookmarkStackNames", out.bookmarkStackNames);
+    // The spectrum's trace mode: normalised and clamped, not trusted.
+    getString(j, "spectrumTraceMode", out.spectrumTraceMode);
+    out.spectrumTraceMode =
+        traceModeName(traceModeFromName(out.spectrumTraceMode));
+    getInt(j, "spectrumAverageMs", out.spectrumAverageMs);
+    out.spectrumAverageMs = static_cast<int>(
+        clampTraceAverageMs(static_cast<double>(out.spectrumAverageMs)));
     getInt(j, "mapTrailStyle", out.mapTrailStyle);
     // CLAMPED ON LOAD, not trusted. The file is user-editable and an unknown
     // style would otherwise reach the draw loop and select nothing at all.
@@ -1105,6 +1113,8 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
     j["mapTrailAltitudeColours"] = cfg.mapTrailAltitudeColours;
     j["bookmarkMarkers"] = cfg.bookmarkMarkers;
     j["bookmarkStackNames"] = cfg.bookmarkStackNames;
+    j["spectrumTraceMode"] = cfg.spectrumTraceMode;
+    j["spectrumAverageMs"] = cfg.spectrumAverageMs;
     j["mapTrailStyle"] = cfg.mapTrailStyle;
     j["aircraftIconPx"] = cfg.aircraftIconPx;
     j["mapTrailWidthPx"] = cfg.mapTrailWidthPx;

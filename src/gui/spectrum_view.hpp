@@ -187,6 +187,17 @@ public:
     // panel (or NaN) draws nothing.
     void drawVfoOverlay(const VfoBand& band, float width, float height);
 
+    // A SECOND TRACE over the one drawBinRange just drew - the peak-hold or
+    // average trace (core/trace_hold.hpp) - on exactly the same axes: the
+    // same bin window, dB range and reserved top strip, through the same
+    // vertex code, so a held peak sits on the live trace's peak and not a
+    // pixel beside it. Call after drawBinRange in the same frame (it reads the
+    // panel that call recorded); does nothing before one, or for no bins.
+    // `colour` is ImGui's packed 32-bit colour (an ImU32), spelled as the
+    // plain type it is so this header stays free of ImGui.
+    void drawOverlayTrace(const float* dbBins, int n, double firstBin, double lastBin, float width,
+                          float height, unsigned int colour, float thickness);
+
     enum class VfoHit { None, Center, EdgeLow, EdgeHigh };
 
     // Pure mouse classification for VFO dragging; static so tests can pin
@@ -347,6 +358,7 @@ private:
     float panelX_ = 0.0f;
     float panelY_ = 0.0f;
     bool panelValid_ = false;
+    float gridTopY_ = 0.0f;  // where the last drawBinRange's grid and trace began
     float headerBottom_ = 0.0f;
     float headerRight_ = 0.0f;
 };
