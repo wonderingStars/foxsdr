@@ -508,6 +508,19 @@ const KnownWait kKnownWaits[] = {
      "RtlSdrSource::read() polling its ring for samples. Spent on the PIPELINE's source "
      "thread, which the teardown already waits for through kSourceJoinWait's 3000 ms - never "
      "on the GUI teardown thread"},
+    {"src/source/rtlsdr_source.cpp", "kReaderStandAside", 0,
+     "the RTL-SDR reader's pause while a control call waits for the device lock, spent on "
+     "the reader's own thread and only while that call waits; it SHORTENS the teardown's "
+     "wait for the lock rather than adding to it, and the reader re-checks its run token "
+     "after every pause, so the join is unaffected"},
+    {"src/source/rtl2832u.cpp", "kI2cRetryWindow", 0,
+     "how long a refused tuner I2C transfer may keep being retried, spent inside a call that "
+     "already holds the RTL-SDR device lock (teardown's tuner standby among them) - covered "
+     "by kDeviceLockWait exactly as kControlTimeout is, and shorter than one control timeout "
+     "so a transfer that timed out is never retried"},
+    {"src/source/rtl2832u.cpp", "kI2cRetryGap", 0,
+     "the pause between two attempts at a refused tuner I2C transfer, inside kI2cRetryWindow "
+     "and so inside the same device-lock-held call"},
     {"src/source/rtlsdr_source.hpp", "kStreamHealthWindow", 0,
      "not a wait at all - the RTL-SDR reader's tally window before it writes its stream-health "
      "line, matching SoapySource's; nothing sleeps or blocks on it"},

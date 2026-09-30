@@ -47,6 +47,13 @@ constexpr std::chrono::milliseconds kReaderJoinWait{1000};
 // thread.
 constexpr std::chrono::milliseconds kReadPollBudget{20};
 
+// The reader thread standing aside while a control call waits for the device
+// lock (see controlLock). std::timed_mutex promises no fairness, and a reader
+// that takes the lock straight back after every bulk read starved retunes:
+// measured against the fake, ten in two hundred waited out kDeviceLockWait
+// and were refused as "busy" on a radio that was working.
+constexpr std::chrono::milliseconds kReaderStandAside{1};
+
 // ---------------------------------------------------------------------------
 
 // The bulk ring. 16 KB is 32 maximum-size packets, which at 2.4 MS/s is a
@@ -219,13 +226,30 @@ void noteFault(RtlSdrSource::Link& link, std::string msg, const char* what) {
     core::diagWarnf("source: the RTL-SDR failed while %s", what);
 }
 
+// A CONTROL CALL'S TURN AT THE DEVICE: the lock every entry point but the
+// reader takes, announced first so the reader stands aside (kReaderStandAside)
+// instead of winning every hand-off.
+std::unique_lock<std::timed_mutex> controlLock(RtlSdrSource::Link& link) {
+    link.controlWaiters.fetch_add(1, std::memory_order_relaxed);
+    std::unique_lock<std::timed_mutex> lk(link.mutex, kDeviceLockWait);
+    link.controlWaiters.fetch_sub(1, std::memory_order_relaxed);
+    return lk;
+}
+
 // THE READER THREAD. A free function taking the link by shared pointer, so an
 // abandoned thread reads memory that is still alive - see the header.
 void readerLoop(std::shared_ptr<RtlSdrSource::Link> link) {
     std::vector<std::uint8_t> raw(kBulkBufferBytes);
     std::vector<std::complex<float>> conv(kBulkBufferBytes / 2);
     while (link->readerRun.load(std::memory_order_relaxed)) {
+        if (link->controlWaiters.load(std::memory_order_relaxed) > 0) {
+            // A retune, a gain change, a stop: let it in. The transport's own
+            // queue of bulk transfers keeps filling meanwhile.
+            std::this_thread::sleep_for(kReaderStandAside);
+            continue;
+        }
         int got = 0;
+        std::uint64_t epoch = 0;
         {
             std::unique_lock<std::timed_mutex> lk(link->mutex, kDeviceLockWait);
             if (!lk.owns_lock()) {
@@ -235,6 +259,9 @@ void readerLoop(std::shared_ptr<RtlSdrSource::Link> link) {
             }
             if (!link->readerRun.load(std::memory_order_relaxed)) { break; }
             if (!link->transport || !link->transport->streaming()) { break; }
+            // Under the same lock a rate change bumps it under, so these
+            // bytes belong to exactly the generation noted here.
+            epoch = link->rateEpoch.load(std::memory_order_relaxed);
             got = link->transport->readBulk(raw.data(), raw.size(),
                                             static_cast<unsigned>(kBulkReadTimeout.count()));
         }
@@ -261,6 +288,10 @@ void readerLoop(std::shared_ptr<RtlSdrSource::Link> link) {
                                           kByteToFloat.v[raw[2 * i + 1]]);
         }
         if (link->ring) {
+            // A buffer read before a rate change is not delivered after it:
+            // it would be counted, demodulated and displayed at the new rate.
+            std::lock_guard<std::mutex> rlk(link->ringMutex);
+            if (link->rateEpoch.load(std::memory_order_relaxed) != epoch) { continue; }
             const std::size_t wrote = link->ring->write(conv.data(), pairs);
             if (wrote < pairs) {
                 // The consumer fell behind. Counted as an overflow, which is
@@ -423,7 +454,7 @@ bool RtlSdrSource::openWithTransport(std::unique_ptr<usb::UsbDevice> transport,
         setError("openWithTransport() needs a transport");
         return false;
     }
-    std::unique_lock<std::timed_mutex> lk(link_->mutex, kDeviceLockWait);
+    std::unique_lock<std::timed_mutex> lk = controlLock(*link_);
     if (!lk.owns_lock()) {
         setError("the radio is busy; try again");
         return false;
@@ -529,7 +560,8 @@ bool RtlSdrSource::bringUpLocked() {
 
     if (!tuner.init()) {
         rtl.setI2cRepeater(false);
-        setError("the tuner would not initialise: " + tuner.lastError());
+        setError("the tuner would not initialise: " + tuner.lastError() + " [" + rtl.lastError() +
+                 "]");
         return false;
     }
     rtl.setI2cRepeater(false);
@@ -629,7 +661,7 @@ void RtlSdrSource::teardownLocked() noexcept {
 
 void RtlSdrSource::closeDevice() {
     stop();
-    std::unique_lock<std::timed_mutex> lk(link_->mutex, kDeviceLockWait);
+    std::unique_lock<std::timed_mutex> lk = controlLock(*link_);
     if (!lk.owns_lock()) {
         // Once the reader thread is gone, the only thing that can hold this
         // lock is a control call on another thread, and every one of those is
@@ -670,7 +702,7 @@ void RtlSdrSource::stopStreamLocked() {
 bool RtlSdrSource::start() {
     if (running_.load(std::memory_order_relaxed)) { return true; }
     {
-        std::unique_lock<std::timed_mutex> lk(link_->mutex, kDeviceLockWait);
+        std::unique_lock<std::timed_mutex> lk = controlLock(*link_);
         if (!lk.owns_lock()) {
             setError("the radio is busy; try again");
             return false;
@@ -714,7 +746,7 @@ void RtlSdrSource::stop() {
     }
     if (!reader_.joinable()) {
         running_.store(false, std::memory_order_relaxed);
-        std::unique_lock<std::timed_mutex> lk(link_->mutex, kDeviceLockWait);
+        std::unique_lock<std::timed_mutex> lk = controlLock(*link_);
         if (lk.owns_lock()) { stopStreamLocked(); }
         return;
     }
@@ -751,7 +783,7 @@ void RtlSdrSource::stop() {
     }
     running_.store(false, std::memory_order_relaxed);
 
-    std::unique_lock<std::timed_mutex> lk(link_->mutex, kDeviceLockWait);
+    std::unique_lock<std::timed_mutex> lk = controlLock(*link_);
     if (lk.owns_lock()) { stopStreamLocked(); }
 }
 
@@ -763,7 +795,13 @@ std::size_t RtlSdrSource::read(std::complex<float>* dst, std::size_t n) {
     // contract's "0, retry" after kReadPollBudget rather than spinning.
     const auto deadline = std::chrono::steady_clock::now() + kReadPollBudget;
     for (;;) {
-        const std::size_t got = link_->ring->read(dst, n);
+        std::size_t got = 0;
+        {
+            // Shared only with a rate change emptying the ring (see
+            // Link::ringMutex), so uncontended on every other read.
+            std::lock_guard<std::mutex> rlk(link_->ringMutex);
+            got = link_->ring->read(dst, n);
+        }
         if (got > 0) { return got; }
         if (!running_.load(std::memory_order_relaxed)) { return 0; }
         if (std::chrono::steady_clock::now() >= deadline) { return 0; }
@@ -791,7 +829,7 @@ bool RtlSdrSource::setSampleRateHz(double hz) {
         if (std::fabs(r - hz) < std::fabs(best - hz)) { best = r; }
     }
 
-    std::unique_lock<std::timed_mutex> lk(link_->mutex, kDeviceLockWait);
+    std::unique_lock<std::timed_mutex> lk = controlLock(*link_);
     if (!lk.owns_lock()) {
         setError("the radio is busy; try again");
         return false;
@@ -816,6 +854,17 @@ bool RtlSdrSource::setSampleRateHz(double hz) {
     bool ok = link_->rtl->setSampleRate(static_cast<std::uint32_t>(best + 0.5), actual);
     if (ok) {
         sampleRateHz_.store(actual, std::memory_order_relaxed);
+        // Everything already read belongs to the old rate (see
+        // Link::rateEpoch): emptied, and the generation moved on, before the
+        // stream restarts, so nothing delivered from here on is old.
+        {
+            std::lock_guard<std::mutex> rlk(link_->ringMutex);
+            if (link_->ring) {
+                std::vector<std::complex<float>> scratch(8192);
+                while (link_->ring->read(scratch.data(), scratch.size()) > 0) {}
+            }
+            link_->rateEpoch.fetch_add(1, std::memory_order_relaxed);
+        }
         // The tuner's IF filter follows the rate, and the IF it settles on
         // has to be fed back to the demodulator's down-converter or the whole
         // spectrum sits at the wrong offset.
@@ -913,7 +962,7 @@ bool RtlSdrSource::retuneLocked(double hz) {
 }
 
 bool RtlSdrSource::setCenterFrequencyHz(double hz) {
-    std::unique_lock<std::timed_mutex> lk(link_->mutex, kDeviceLockWait);
+    std::unique_lock<std::timed_mutex> lk = controlLock(*link_);
     if (!lk.owns_lock()) {
         setError("the radio is busy; try again");
         return false;
@@ -937,7 +986,8 @@ bool RtlSdrSource::setCenterFrequencyHz(double hz) {
         return false;
     }
     if (!retuneLocked(hz)) {
-        setError("the radio would not tune there: " + link_->tuner->lastError());
+        setError("the radio would not tune there: " + link_->tuner->lastError() + " [" +
+                 link_->rtl->lastError() + "]");
         return false;
     }
     return true;
@@ -951,13 +1001,13 @@ bool RtlSdrSource::rangeLocked(double& loHz, double& hiHz) const {
 }
 
 bool RtlSdrSource::frequencyRangeHz(double& loHz, double& hiHz) const {
-    std::unique_lock<std::timed_mutex> lk(link_->mutex, kDeviceLockWait);
+    std::unique_lock<std::timed_mutex> lk = controlLock(*link_);
     if (!lk.owns_lock()) { return false; }
     return rangeLocked(loHz, hiHz);
 }
 
 std::string RtlSdrSource::tunerName() const {
-    std::unique_lock<std::timed_mutex> lk(link_->mutex, kDeviceLockWait);
+    std::unique_lock<std::timed_mutex> lk = controlLock(*link_);
     if (!lk.owns_lock() || !link_->tuner) { return std::string(); }
     return link_->tuner->name();
 }
@@ -981,7 +1031,7 @@ std::vector<GainInfo> RtlSdrSource::gains() const {
 }
 
 bool RtlSdrSource::setGainDb(const std::string& name, double db) {
-    std::unique_lock<std::timed_mutex> lk(link_->mutex, kDeviceLockWait);
+    std::unique_lock<std::timed_mutex> lk = controlLock(*link_);
     if (!lk.owns_lock()) {
         setError("the radio is busy; try again");
         return false;
@@ -1019,7 +1069,7 @@ bool RtlSdrSource::setGainDb(const std::string& name, double db) {
 }
 
 double RtlSdrSource::gainDb(const std::string& name) const {
-    std::unique_lock<std::timed_mutex> lk(link_->mutex, kDeviceLockWait);
+    std::unique_lock<std::timed_mutex> lk = controlLock(*link_);
     if (!lk.owns_lock() || !link_->tuner) { return 0.0; }
     const TunerR82xx& tuner = *link_->tuner;
     if (name == "TUNER") { return tuner.aggregateGainTenthDb() / 10.0; }
@@ -1042,7 +1092,7 @@ double RtlSdrSource::gainDb(const std::string& name) const {
 }
 
 bool RtlSdrSource::setAutoGain(bool on) {
-    std::unique_lock<std::timed_mutex> lk(link_->mutex, kDeviceLockWait);
+    std::unique_lock<std::timed_mutex> lk = controlLock(*link_);
     if (!lk.owns_lock()) {
         setError("the radio is busy; try again");
         return false;
@@ -1066,20 +1116,20 @@ bool RtlSdrSource::setAutoGain(bool on) {
 }
 
 bool RtlSdrSource::autoGain() const {
-    std::unique_lock<std::timed_mutex> lk(link_->mutex, kDeviceLockWait);
+    std::unique_lock<std::timed_mutex> lk = controlLock(*link_);
     return lk.owns_lock() && link_->tuner && link_->tuner->autoGain();
 }
 
 // --- antennas ---------------------------------------------------------------
 
 std::vector<std::string> RtlSdrSource::antennas() const {
-    std::unique_lock<std::timed_mutex> lk(link_->mutex, kDeviceLockWait);
+    std::unique_lock<std::timed_mutex> lk = controlLock(*link_);
     if (lk.owns_lock() && link_->tuner && link_->tuner->blogV4()) { return {"RX", "HF"}; }
     return {"RX"};
 }
 
 std::string RtlSdrSource::antenna() const {
-    std::unique_lock<std::timed_mutex> lk(link_->mutex, kDeviceLockWait);
+    std::unique_lock<std::timed_mutex> lk = controlLock(*link_);
     if (lk.owns_lock() && link_->tuner && link_->tuner->blogV4() &&
         centerFrequencyHz_.load(std::memory_order_relaxed) <= kBlogV4UpconvertHz) {
         return "HF";
@@ -1106,7 +1156,7 @@ bool RtlSdrSource::setAntenna(const std::string& name) {
 // --- extras -----------------------------------------------------------------
 
 bool RtlSdrSource::setBiasT(bool on) {
-    std::unique_lock<std::timed_mutex> lk(link_->mutex, kDeviceLockWait);
+    std::unique_lock<std::timed_mutex> lk = controlLock(*link_);
     if (!lk.owns_lock() || !link_->rtl) {
         setError("the radio is busy; try again");
         return false;
@@ -1120,7 +1170,7 @@ bool RtlSdrSource::setBiasT(bool on) {
 }
 
 bool RtlSdrSource::setFreqCorrectionPpm(int ppm) {
-    std::unique_lock<std::timed_mutex> lk(link_->mutex, kDeviceLockWait);
+    std::unique_lock<std::timed_mutex> lk = controlLock(*link_);
     if (!lk.owns_lock() || !link_->rtl || !link_->tuner) {
         setError("the radio is busy; try again");
         return false;

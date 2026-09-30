@@ -152,12 +152,27 @@ public:
     int failControlAfter = -1;
     int controlCalls = 0;
 
+    // A TRANSIENT REFUSAL: consulted for every OUT transfer after it is
+    // recorded, and true fails that one transfer (-1) as a STALL does, with
+    // the register model untouched. This is how an RTL2832U whose tuner did
+    // not acknowledge one I2C write is staged - measured on the bench R820T
+    // under full CPU load (2026-09-30): Windows error 31 on a single-byte
+    // tuner write, accepted again once the I2C repeater was switched back on.
+    std::function<bool(const FakeControl&)> refuseControlOut;
+
     // After this many beginBulkStream() calls, every later one fails and
     // leaves the pipe closed, as the WinUSB transport does when it cannot
     // queue its transfers. -1 disables. This is how "the stream would not
     // come back after a restart" is staged.
     int failBeginBulkAfter = -1;
     int beginBulkCalls = 0;
+
+    // Called at the end of every beginBulkStream() that succeeds. A driver
+    // (re)starts its stream inside its own device lock, while its reader
+    // thread is shut out of readBulk(), so this is the one moment a test may
+    // queue bulk payloads for a stream that is ALREADY running - data that
+    // arrives only after a restart - without racing that thread.
+    std::function<void(FakeUsbDevice&)> onBeginBulk;
 
     // --- UsbDevice ----------------------------------------------------------
 
@@ -176,6 +191,10 @@ public:
         note("control " + c.text());
         if (failControlAfter >= 0 && controlCalls > failControlAfter) {
             lastError_ = "fake: control transfer failed";
+            return -1;
+        }
+        if (refuseControlOut && refuseControlOut(c)) {
+            lastError_ = "fake: the device stalled this transfer";
             return -1;
         }
         // Only a transfer the device ACCEPTED reaches the register model: a
@@ -303,6 +322,7 @@ public:
         bufferBytes_ = bufferBytes;
         streaming_ = true;
         ++streamStarts;
+        if (onBeginBulk) { onBeginBulk(*this); }
         return true;
     }
 

@@ -28,6 +28,7 @@
 #include "core/diag_log.hpp"
 #include "source/rtlsdr_source.hpp"
 #include "test_check.hpp"
+#include "usb/usb_device.hpp"
 
 using cascade::source::NativeDeviceInfo;
 using cascade::source::RtlSdrSource;
@@ -89,11 +90,22 @@ StreamResult streamFor(RtlSdrSource& src, double seconds) {
 bool oneCycle(const std::string& args, int cycle) {
     RtlSdrSource src;
     if (!src.open(args)) {
-        std::printf("  cycle %d: the dongle would not open (%s).\n"
-                    "  The transport opens a radio EXCLUSIVELY, so this is what a second\n"
-                    "  program holding it looks like - contention on this bench, not a\n"
-                    "  defect in this driver. Re-run with nothing else using the dongle.\n",
-                    cycle, src.lastError());
+        // ONLY "IN USE" IS CONTENTION. Every other open failure is this
+        // driver failing on real silicon, which is what this file exists to
+        // catch - until 2026-09-30 it skipped on those too, and reported a
+        // tuner that would not initialise as "0 checks, 0 failed".
+        if (cascade::usb::errorSaysInUse(src.lastError())) {
+            std::printf("  cycle %d: the dongle would not open (%s).\n"
+                        "  The transport opens a radio EXCLUSIVELY, so this is another\n"
+                        "  program holding it - contention on this bench, not a defect in\n"
+                        "  this driver. Re-run with nothing else using the dongle.\n",
+                        cycle, src.lastError());
+        } else {
+            std::printf("  cycle %d: the dongle would not open, and not because it is in use: "
+                        "%s\n",
+                        cycle, src.lastError());
+            CHECK(false);
+        }
         return false;
     }
     std::printf("  cycle %d: opened %s, tuner %s\n", cycle, src.name(),
@@ -170,7 +182,10 @@ bool oneCycle(const std::string& args, int cycle) {
     CHECK(b.meanMag > 0.001);
 
     // A retune and the gain controls, live.
-    CHECK(src.setCenterFrequencyHz(1090000000.0));
+    if (!src.setCenterFrequencyHz(1090000000.0)) {
+        std::printf("  cycle %d: retune to 1090 MHz FAILED: %s\n", cycle, src.lastError());
+        CHECK(false);
+    }
     CHECK_NEAR(src.centerFrequencyHz(), 1090000000.0, 1.0);
     CHECK(src.setGainDb("LNA", 16.6));
     CHECK_NEAR(src.gainDb("LNA"), 16.6, 0.05);
@@ -231,12 +246,13 @@ int main() {
 
     // ...and the console check itself, run rather than assumed. It is what a
     // user with a silent radio will be asked to run, so it has to work on the
-    // day it is wired in. Skipped - and said - when the dongle was in use
-    // above, because an exit code from a run that could not open a radio says
-    // nothing about the check.
+    // day it is wired in. Skipped - and said - when the dongle did not open
+    // above (in use, which passes, or a failure, which has already failed),
+    // because an exit code from a run that could not open a radio says nothing
+    // about the check.
     if (!opened) {
-        std::printf("rtlsdrCheckMain NOT RUN: the dongle was in use by something else on this\n"
-                    "machine, so nothing above measured this driver either.\n");
+        std::printf("rtlsdrCheckMain NOT RUN: the dongle did not open above (the reason is\n"
+                    "printed there), so an exit code from it would say nothing.\n");
         return testSummary("test_rtlsdr_live");
     }
     std::printf("---- rtlsdrCheckMain ----\n");

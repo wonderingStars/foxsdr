@@ -60,6 +60,18 @@ constexpr const char* kBindHint = "bound to WinUSB";
 constexpr const char* kBindHint = "reachable through usbfs (see installer/linux/README.md)";
 #endif
 
+// The words both transports' open puts in `error` when the radio is refused
+// because another process holds it (WinUSB's exclusive CreateFileW answering
+// ERROR_ACCESS_DENIED or ERROR_SHARING_VIOLATION; usbfs answering EBUSY). One
+// definition, so a caller that must tell "someone else has it" from every
+// other failure - a live test that skips on contention, and only on
+// contention - matches the transports' own text rather than a copy of it.
+constexpr const char* kInUseError = "the radio is already in use by another program";
+
+inline bool errorSaysInUse(const std::string& error) {
+    return error.find(kInUseError) != std::string::npos;
+}
+
 // One device as SetupAPI reports it. `path` is the device interface path
 // openWinUsb() takes; `serial` is the last instance-id segment, which for
 // most SDR dongles is the USB serial string ("00000001" on a stock RTL-SDR).

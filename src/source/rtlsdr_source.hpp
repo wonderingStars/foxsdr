@@ -212,6 +212,9 @@ public:
         // Serialises every entry into the device. Timed, so no acquisition
         // can freeze a caller.
         std::timed_mutex mutex;
+        // Control calls waiting for `mutex`; while non-zero the reader stays
+        // out of it (see controlLock in rtlsdr_source.cpp).
+        std::atomic<int> controlWaiters{0};
 
         // Written and read ONLY under `mutex` - except by a reader thread
         // that has been abandoned, which is exactly the point after which
@@ -220,9 +223,21 @@ public:
         std::unique_ptr<Rtl2832u> rtl;
         std::unique_ptr<TunerR82xx> tuner;
 
-        // The ring the reader fills and read() drains. Single producer,
-        // single consumer, no lock.
+        // The ring the reader fills and read() drains. Single producer; the
+        // consumer side is read() and, once per rate change, the change
+        // itself emptying it - which is why both hold `ringMutex` (see
+        // rateEpoch).
         std::unique_ptr<dsp::SpscRing<std::complex<float>>> ring;
+
+        // THE RATE'S GENERATION, so samples made at an old rate are never
+        // delivered as the new one. A rate change, under `mutex` and on a
+        // stopped stream, empties the ring and bumps this together under
+        // `ringMutex`. The reader notes the generation under `mutex` with
+        // every bulk read, and under `ringMutex` drops a buffer whose
+        // generation has moved on instead of writing it. Uncontended except
+        // during a rate change.
+        std::atomic<std::uint64_t> rateEpoch{0};
+        std::mutex ringMutex;
 
         // THIS GENERATION's dead-man switch. Cleared by stop(); an abandoned
         // thread wakes into a token that reads false forever, so it cannot
