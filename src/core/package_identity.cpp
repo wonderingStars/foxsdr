@@ -8,7 +8,6 @@
 #include <optional>
 #include <string>
 
-#include "core/i18n.hpp"  // FOX_TR_NOOP: the stand-down sentence is drawn through tr()
 
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -157,17 +156,8 @@ void clearPackageIdentityForTest() {
 
 UpdateCheckDisposition updateCheckDisposition(bool packaged, bool userEnabled) {
     if (!userEnabled) { return UpdateCheckDisposition::OffByChoice; }
-    if (packaged) { return UpdateCheckDisposition::StorePackage; }
+    if (packaged) { return UpdateCheckDisposition::AskStore; }
     return UpdateCheckDisposition::Run;
-}
-
-const char* updateCheckStandDownLine() {
-    return "update check: running from a Store package - the Store delivers updates";
-}
-
-const char* updateCheckStandDownSentence() {
-    return FOX_TR_NOOP("this copy came from the Microsoft Store, which delivers its updates - so FoxSDR does "
-           "not check foxsdr.com and nothing is downloaded here");
 }
 
 }  // namespace cascade::core

@@ -28,6 +28,21 @@ run. A download that does not match is deleted.
 Turn it off under **Settings -> Updates**. With it off the application never
 contacts the update service, and never learns that a new version exists.
 
+**A copy installed from the Microsoft Store asks the Microsoft Store instead,
+never foxsdr.com** (since 0.99.53). Once per launch, when **Settings ->
+Updates -> Ask the Microsoft Store for updates at startup** is ticked, FoxSDR
+asks Windows' own Store service
+(`Windows.Services.Store.StoreContext.GetAppAndOptionalStorePackageUpdatesAsync`)
+whether it has a newer package for this copy. Nothing of FoxSDR's is sent in
+that request - no version string, no identifier, nothing: Windows identifies
+the app to Microsoft by the package identity it already holds, as it does for
+the Store's own background updates. The answer (whether an update exists, and
+whether it is marked mandatory) stays in the application. Nothing is
+downloaded or installed unless you press **Install from the Microsoft Store**
+*and* confirm the dialog Windows shows; the download and install are then
+Microsoft's, under Microsoft's privacy statement. Untick the box and the
+Store is not asked.
+
 Why it defaults to on: version 0.55.0 fixed a fault that stopped every earlier
 build from detecting any radio at all. Of the 49 people who had downloaded one
 of those builds, 46 never returned to the website, and there was no way to
@@ -67,6 +82,9 @@ exactly as many.
   sends **the version you are running and nothing else** — no identifier, no
   install id, no cookie kept — and it is not the usage report; the two share
   nothing. Nothing is downloaded or installed without you pressing a button.
+  A copy from the Microsoft Store asks the **Microsoft Store** instead, once
+  per launch when its box is ticked, and never foxsdr.com; nothing of ours is
+  sent (see **The update check** above).
 - The application makes two other network requests, both part of fetching the
   plugin catalogue: to GitHub (raw.githubusercontent.com) for the public list,
   the first time you open the plugin store window in a session and whenever

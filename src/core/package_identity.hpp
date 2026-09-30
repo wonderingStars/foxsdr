@@ -12,9 +12,10 @@
 //      the package directory is read-only, the installed identity belongs to
 //      the deployment stack, and running an Inno installer would leave a
 //      SECOND FoxSDR on the machine beside the packaged one. The Store is the
-//      update channel for a Store install, so the check stands down and says
-//      so - in the log and in the Settings row - rather than silently doing
-//      nothing.
+//      update channel for a Store install, so a packaged copy never asks
+//      foxsdr.com - since 0.99.53 it asks the MICROSOFT STORE instead
+//      (core/store_update.hpp), because the Store's own background updating
+//      was measured to leave copies a day or more behind without a word.
 //
 //   2. THE PLUGIN DIRECTORY. PluginHost::defaultPluginDir() normally decides
 //      between the exe-adjacent directory and the per-user one by WRITING A
@@ -39,7 +40,7 @@
 // WHAT IS PURE AND WHAT IS NOT. The MAPPING from the API's return code to a
 // decision is a pure function (identityFromApiResult) and is where the tests
 // live; the query itself is one call, cached. Every behavioural decision that
-// follows - stand the update check down, choose a plugin directory - is also a
+// follows - which update channel to ask, choose a plugin directory - is also a
 // pure function taking `packaged` as an argument, so the whole policy is
 // testable on a machine with no package in sight.
 //
@@ -100,11 +101,12 @@ bool runningInPackage();
 //                                    unpackaged answer.
 //
 // WHY AN ENVIRONMENT HOOK IS SAFE HERE, stated rather than assumed: both
-// behaviours it can reach are fail-safe. It can stand the update check down
-// (the user is not told about a new version - a loss, not a hazard) and it can
-// move the plugin directory to the per-user one (which the unpackaged build
-// already uses whenever it is installed to Program Files). It cannot grant
-// anything, load anything, or send anything. Contrast CASCADE_CONFIG_TEST,
+// behaviours it can reach are fail-safe. It can move the update check from
+// foxsdr.com to the Microsoft Store (which, for a copy the Store did not
+// install, answers with an error and offers nothing) and it can move the
+// plugin directory to the per-user one (which the unpackaged build already
+// uses whenever it is installed to Program Files). It cannot grant anything,
+// load anything, or send anything of ours anywhere. Contrast CASCADE_CONFIG_TEST,
 // which is honoured only under --frames precisely because redirecting a real
 // session's config file would be a hazard.
 void setPackageIdentityForTest(const PackageIdentity& id);
@@ -115,23 +117,16 @@ void clearPackageIdentityForTest();
 // What the startup update check should do.
 enum class UpdateCheckDisposition {
     Run,             // ordinary install, the user wants it: ask foxsdr.com
-    OffByChoice,     // the user unticked it
-    StorePackage,    // packaged: the Store is the update channel
+    OffByChoice,     // the user unticked it: ask nobody
+    AskStore,        // packaged, the user wants it: ask the Microsoft Store,
+                     // never foxsdr.com (core/store_update.hpp)
 };
 
-// Pure. The order matters and is deliberate: a packaged build stands down even
-// when the user has the tick ON, because there is nothing for the check to
-// usefully offer - and when the tick is OFF the reason shown should still be
-// the user's own choice, because that is the one they can change.
+// Pure. The user's tick comes FIRST, for both kinds of copy: unticked means
+// nobody is asked - not foxsdr.com, not the Store. Only then does the kind of
+// copy choose the channel. (Until 0.99.53 a packaged copy asked nobody even
+// with the tick on, and the Settings row had no tick to show.)
 UpdateCheckDisposition updateCheckDisposition(bool packaged, bool userEnabled);
-
-// The one line the log carries when the check stands down, so the reason a
-// packaged build never contacts foxsdr.com is in the diagnostics rather than
-// inferred from silence.
-const char* updateCheckStandDownLine();
-
-// The sentence the Settings > Updates row shows for the same state.
-const char* updateCheckStandDownSentence();
 
 }  // namespace cascade::core
 

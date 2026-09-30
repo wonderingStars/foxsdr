@@ -1158,6 +1158,11 @@ AppWindow::~AppWindow() {
     // its outcome by value and owns everything it touches, so a check still
     // running after a short grace is abandoned rather than waited for.
     updateCheck_.reap();
+    // The Microsoft Store's check and install request, on the same terms: the
+    // install worker in particular may be sitting inside Windows' own consent
+    // dialog, for as long as the user leaves it there.
+    storeCheck_.reap();
+    storeInstall_.reap();
 
     // Same problem, no cancel to reach for: a device open may still be inside
     // SoapySDR::Device::make(). See reapPendingDeviceOpen for the semantics.
@@ -1641,6 +1646,18 @@ int AppWindow::run(int frames) {
     // tests use, and a build that reached the network during them would make
     // the suite depend on a server being up and on what that server happened
     // to say. The same rule the catalogue and config hooks already follow.
+    //
+    // ONE EXCEPTION, for the tests: FOXSDR_FAKE_STORE_UPDATE set makes the
+    // Microsoft Store's answer a canned one (core/store_update.hpp), so a
+    // --frames run can watch the whole Store path without the Store. It is
+    // deliberately NOT limited to packaged copies: an unpackaged copy with the
+    // seam set still takes the foxsdr.com path (at whatever FOXSDR_UPDATE_URL
+    // the test points it at), which is what lets tests/test_store_update_app
+    // prove an unpackaged copy never asks the Store.
+    if (frames >= 0 &&
+        cascade::core::storeUpdateFake() != cascade::core::StoreUpdateFake::Off) {
+        startUpdateCheck();
+    }
     if (frames < 0) {
         startUpdateCheck();
         // Heartbeats are interactive-only for the same reason - and this is
@@ -7624,26 +7641,31 @@ void AppWindow::drawRailBankCurtain() {
 
 void AppWindow::startUpdateCheck() {
     if (updateStarted_ || updatePending_) { return; }
-    // THE PACKAGED BUILD STANDS DOWN, and says so once.
+    // WHICH CHANNEL, decided by one pure function (core/package_identity.hpp).
     //
-    // A Store install is updated by the Store. This check exists to download
-    // and run foxsdr-setup-<ver>.exe, which inside a package would install a
-    // SECOND, unpackaged FoxSDR beside the packaged one - two products, two
-    // data locations, two update paths. So the check never starts, the reason
-    // goes in the log rather than being inferred from the absence of a
-    // request, and the Settings row below says the same thing in words.
-    //
-    // updateStarted_ is set on the packaged path too, so the line is logged
-    // once per launch and not once per re-tick of the Settings checkbox. The
-    // OffByChoice path deliberately leaves it alone, exactly as the plain
-    // `!updateCheckEnabled_` guard it replaces did.
+    // Unticked asks nobody. An ordinary install asks foxsdr.com, below. A copy
+    // installed from the Microsoft Store must never run foxsdr-setup-<ver>.exe
+    // (that would put a SECOND, unpackaged FoxSDR beside the packaged one), and
+    // until 0.99.53 it therefore asked nobody at all - and the Store's own
+    // background updating left copies a day or more behind without a word. It
+    // now asks the Store, through Windows (core/store_update.hpp): Microsoft's
+    // service only, nothing of ours sent, nothing installed unless the user
+    // presses the key and confirms Windows' own dialog.
     const cascade::core::UpdateCheckDisposition disposition =
         cascade::core::updateCheckDisposition(cascade::core::runningInPackage(),
                                               updateCheckEnabled_);
     if (disposition == cascade::core::UpdateCheckDisposition::OffByChoice) { return; }
-    if (disposition == cascade::core::UpdateCheckDisposition::StorePackage) {
+    if (disposition == cascade::core::UpdateCheckDisposition::AskStore) {
         updateStarted_ = true;
-        cascade::core::diagLogf("%s", cascade::core::updateCheckStandDownLine());
+        updatePending_ = true;
+        updateError_.clear();
+        storeUpdate_ = cascade::core::StoreUpdateCheck{};
+        cascade::core::diagLogf("%s", cascade::core::storeUpdateAskLine());
+        // The main window is the owner Windows needs for a desktop app's Store
+        // calls (see store_update.cpp). A handle is a number, not a borrowed
+        // object: nothing of `this` crosses to the worker.
+        void* const owner = cascade::gui::frame::nativeHandle(mainWindow_);
+        storeCheck_.start([owner]() { return cascade::core::checkStoreForUpdates(owner); });
         return;
     }
     updateStarted_ = true;
@@ -7659,6 +7681,21 @@ void AppWindow::startUpdateCheck() {
         o.ok = cascade::core::checkForUpdate(endpoint, version, "", o.info, o.error);
         return o;
     });
+}
+
+void AppWindow::startStoreInstall() {
+    if (storeInstallPending_ || storeInstall_.running()) { return; }
+    storeInstallPending_ = true;
+    storeInstallDone_ = false;
+    storeInstallOutcome_ = cascade::core::StoreInstallOutcome{};
+    cascade::core::diagLogf("store update: install requested from the banner");
+    // ON A WORKER, NOT THE GUI THREAD: the request blocks until Windows' two
+    // dialogs have been answered and the package installed, and the frame
+    // loop has to keep drawing (and the hang watchdog keep seeing it draw)
+    // all that time. See store_update.cpp for what Microsoft documents about
+    // the thread and the owner window.
+    void* const owner = cascade::gui::frame::nativeHandle(mainWindow_);
+    storeInstall_.start([owner]() { return cascade::core::requestStoreUpdateInstall(owner); });
 }
 
 void AppWindow::startUpdateDownload() {
@@ -7692,6 +7729,25 @@ void AppWindow::pollUpdateAsync() {
             // server is worse than one that quietly tries again next launch.
             updateError_ = checked.error;
         }
+    }
+
+    // The Microsoft Store's answer, on exactly the same terms: a failure goes
+    // to updateError_, which only the Updates section shows, never a banner.
+    cascade::core::StoreUpdateCheck storeChecked;
+    if (storeCheck_.poll(storeChecked)) {
+        updatePending_ = false;
+        if (storeChecked.ok) {
+            storeUpdate_ = storeChecked;
+        } else {
+            storeUpdate_ = cascade::core::StoreUpdateCheck{};
+            updateError_ = storeChecked.error;
+        }
+    }
+    cascade::core::StoreInstallOutcome installed;
+    if (storeInstall_.poll(installed)) {
+        storeInstallPending_ = false;
+        storeInstallDone_ = true;
+        storeInstallOutcome_ = installed;
     }
 
     if (updatePending_ && updateDownloading_ && updateDownloadFuture_.valid() &&
@@ -7766,6 +7822,10 @@ bool AppWindow::launchInstaller(const std::string& path) {
 
 void AppWindow::drawUpdateBanner() {
     if (!updateCheckEnabled_ || updateDismissed_) { return; }
+    if (cascade::core::runningInPackage()) {
+        drawStoreUpdateBanner();
+        return;
+    }
     if (!update_.newer && updateError_.empty()) { return; }
     if (!update_.newer) { return; }
 
@@ -7857,6 +7917,95 @@ void AppWindow::drawUpdateBanner() {
         ImGui::TextWrapped("%s", updateError_.c_str());
         ImGui::PopStyleColor();
     }
+    ImGui::Separator();
+}
+
+void AppWindow::drawStoreUpdateBanner() {
+    // SHOWN ONLY WHEN THE STORE HAS SAID "yes, there is one" - or while an
+    // install request it started is with Windows, or has an outcome to report.
+    // A failed check is never a banner (the Updates section shows it), for the
+    // reason the foxsdr.com banner gives: the user did not ask.
+    const bool offered = storeUpdate_.ok && storeUpdate_.updates > 0;
+    if (!offered && !storeInstallPending_ && !storeInstallDone_) { return; }
+    cascade::gui::census::note("update:store-banner");
+
+    // Red for a package marked mandatory in Partner Center, amber otherwise -
+    // the same split as the foxsdr.com banner's critical flag. NO VERSION
+    // NUMBER: the Store does not say which version it is offering, and this
+    // banner does not guess.
+    const bool mandatory = storeUpdate_.mandatory;
+    if (mandatory) { cascade::gui::census::note("update:store-mandatory"); }
+    ImGui::PushStyleColor(ImGuiCol_Text, mandatory ? kErrorRed : cascade::gui::theme::warning());
+    if (mandatory) {
+        ImGui::TextWrapped("%s", tr("Important FoxSDR update available from the Microsoft Store"));
+    } else {
+        ImGui::TextWrapped("%s", tr("FoxSDR update available from the Microsoft Store"));
+    }
+    ImGui::PopStyleColor();
+    ImGui::TextDisabled(tr("you are running %s"), cascade::versionString());
+    ImGui::Spacing();
+
+    using cascade::core::StoreInstallResult;
+    bool offerKey = offered && !storeInstallPending_;
+    if (storeInstallPending_) {
+        cascade::gui::census::note("update:store-waiting");
+        ImGui::TextColored(cascade::gui::theme::warning(), "%s", tr("Waiting for Windows..."));
+        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyle().Colors[ImGuiCol_TextDisabled]);
+        ImGui::TextWrapped("%s", tr("Windows shows its own dialogs for the download and the "
+                                    "install - answer them to carry on."));
+        ImGui::PopStyleColor();
+    } else if (storeInstallDone_) {
+        switch (storeInstallOutcome_.result) {
+        case StoreInstallResult::Installed:
+            cascade::gui::census::note("update:store-outcome:installed");
+            ImGui::TextWrapped("%s", tr("Windows reports the update installed. If FoxSDR is still "
+                                        "open, close it and open it again to run the new version."));
+            offerKey = false;
+            break;
+        case StoreInstallResult::Cancelled:
+            cascade::gui::census::note("update:store-outcome:cancelled");
+            ImGui::TextWrapped("%s", tr("You cancelled the update, so nothing was changed."));
+            break;
+        case StoreInstallResult::NothingToInstall:
+            cascade::gui::census::note("update:store-outcome:nothing");
+            ImGui::TextWrapped("%s", tr("The Microsoft Store has no update to install now."));
+            offerKey = false;
+            break;
+        case StoreInstallResult::Failed: {
+            cascade::gui::census::note("update:store-outcome:failed");
+            std::string reason = storeInstallOutcome_.reasonKey != nullptr
+                                     ? std::string(tr(storeInstallOutcome_.reasonKey))
+                                     : std::string();
+            if (!storeInstallOutcome_.detail.empty()) {
+                reason += reason.empty() ? storeInstallOutcome_.detail
+                                         : " (" + storeInstallOutcome_.detail + ")";
+            }
+            std::string msg;
+            cascade::core::formatUtf8(msg, tr("could not install: %s"), reason.c_str());
+            ImGui::PushStyleColor(ImGuiCol_Text, kErrorRed);
+            ImGui::TextWrapped("%s", msg.c_str());
+            ImGui::PopStyleColor();
+            break;
+        }
+        }
+    }
+
+    if (offerKey) {
+        // Pressed again after a cancel or a failure, it simply asks again:
+        // Windows' dialog is the confirmation, so there is no second one here.
+        if (ImGui::Button(trId("Install from the Microsoft Store"), ImVec2(-FLT_MIN, 0.0f))) {
+            startStoreInstall();
+        }
+        cascade::gui::census::note("update:store-install");
+        const ImVec2 k0 = ImGui::GetItemRectMin();
+        const ImVec2 k1 = ImGui::GetItemRectMax();
+        cascade::gui::census::rect("update:store-install", k0.x, k0.y, k1.x, k1.y);
+        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyle().Colors[ImGuiCol_TextDisabled]);
+        ImGui::TextWrapped("%s", tr("Windows will ask you to confirm, and FoxSDR may close while "
+                                    "the update installs."));
+        ImGui::PopStyleColor();
+    }
+    if (ImGui::SmallButton(trId("Not now"))) { updateDismissed_ = true; }
     ImGui::Separator();
 }
 
@@ -24547,48 +24696,55 @@ void AppWindow::drawUpdatesSection() {
     // that it is IDLE, because "up to date" and "we have not asked" are
     // different statements and the second one must not wear the first one's
     // clothes.
-    // A FIFTH STATE, and it is not an invented one: a copy installed from the
-    // Microsoft Store is updated by the Store, so this section has nothing to
-    // check and must not pretend it did. "STORE" rather than "OFF", because
-    // off is a choice the user made and this is not.
+    // THE SAME STATES FOR A COPY FROM THE MICROSOFT STORE (0.99.53), asked of
+    // the Store instead of foxsdr.com, plus one only the Store has: STORE,
+    // while an install request is with Windows and its dialogs. (Until 0.99.53
+    // STORE was this row's permanent chip for a packaged copy, which asked
+    // nobody; it now asks the Store when the box is ticked.)
     const bool packaged = cascade::core::runningInPackage();
+    const bool storeOffered = packaged && storeUpdate_.ok && storeUpdate_.updates > 0;
+    const bool offered = packaged ? storeOffered : update_.newer;
+    const bool important = packaged ? storeUpdate_.mandatory : update_.critical;
 
     const char* updateChip = tr("OFF");
+    // For the census only: the state in English, whatever the language.
+    const char* state = "off";
     ImU32 updateLamp = cascade::gui::theme::kPhosphor;
     bool updateLit = false;
-    if (packaged) {
-        updateChip = tr("STORE");
-    } else if (updateCheckEnabled_) {
-        if (update_.newer) {
-            updateChip = update_.critical ? tr("IMPT") : tr("NEW");
-            updateLamp = update_.critical ? cascade::gui::theme::kAlarm
-                                          : cascade::gui::theme::kAmber;
+    if (updateCheckEnabled_) {
+        if (packaged && storeInstallPending_) {
+            updateChip = tr("STORE");
+            state = "installing";
+            updateLamp = cascade::gui::theme::kAmber;
+            updateLit = true;
+        } else if (offered) {
+            updateChip = important ? tr("IMPT") : tr("NEW");
+            state = "available";
+            updateLamp = important ? cascade::gui::theme::kAlarm : cascade::gui::theme::kAmber;
             updateLit = true;
         } else if (updatePending_) {
             updateChip = tr("CHECK");
+            state = "checking";
         } else if (updateStarted_ && updateError_.empty()) {
             updateChip = tr("OK");
+            state = "uptodate";
         } else {
             updateChip = tr("IDLE");
+            state = updateError_.empty() ? "idle" : "failed";
         }
     }
+    cascade::gui::census::note(packaged ? "updates:store-" : "updates:site-", state);
     if (!benchSection(trId("Updates"), false, updateChip, updateLamp, updateLit)) { return; }
     telemetryNotePanel("updates");
 
-    if (packaged) {
-        // No checkbox: there is nothing here for the user to decide. A tick
-        // that changed nothing would be worse than no tick at all.
-        ImGui::TextWrapped("%s", tr(cascade::core::updateCheckStandDownSentence()));
-        ImGui::TextDisabled(tr("this build: %s"), cascade::versionString());
-        ImGui::TextDisabled(tr("package: %s"), cascade::core::packageIdentity().fullName.c_str());
-        return;
-    }
-
-    if (ImGui::Checkbox(trId("Check for updates at startup"), &updateCheckEnabled_)) {
+    const char* const tickLabel = packaged ? trId("Ask the Microsoft Store for updates at startup")
+                                           : trId("Check for updates at startup");
+    if (ImGui::Checkbox(tickLabel, &updateCheckEnabled_)) {
         // Off means off immediately: a check already in flight is not waited
         // for, and none is started again this launch.
         if (!updateCheckEnabled_) {
             update_ = cascade::core::UpdateInfo{};
+            storeUpdate_ = cascade::core::StoreUpdateCheck{};
             updateError_.clear();
         } else if (!updatePending_) {
             // A RE-TICK ASKS AGAIN. This was `else if (!updateStarted_)`, and
@@ -24606,18 +24762,37 @@ void AppWindow::drawUpdatesSection() {
             startUpdateCheck();
         }
     }
-    ImGui::TextWrapped(
-        "%s",
-        tr("Asks foxsdr.com once per launch whether a newer version exists, and sends the version "
-           "you are running and nothing else - no identifier, no cookie. Nothing is downloaded or "
-           "installed unless you press the button. This is not the usage report below; the two "
-           "share nothing."));
+    if (packaged) {
+        // HONEST ABOUT WHO IS ASKED: Microsoft's Store service, through
+        // Windows, identifying the app by the package identity Windows holds.
+        ImGui::TextWrapped(
+            "%s",
+            tr("This copy came from the Microsoft Store, so FoxSDR asks the Microsoft Store once "
+               "per launch whether it has a newer version. Nothing is sent to foxsdr.com. Nothing "
+               "is downloaded or installed unless you press the key and confirm the dialog "
+               "Windows shows."));
+    } else {
+        ImGui::TextWrapped(
+            "%s",
+            tr("Asks foxsdr.com once per launch whether a newer version exists, and sends the "
+               "version you are running and nothing else - no identifier, no cookie. Nothing is "
+               "downloaded or installed unless you press the button. This is not the usage report "
+               "below; the two share nothing."));
+    }
 
     ImGui::TextDisabled(tr("this build: %s"), cascade::versionString());
+    if (packaged) {
+        ImGui::TextDisabled(tr("package: %s"), cascade::core::packageIdentity().fullName.c_str());
+    }
     if (!updateCheckEnabled_) {
         ImGui::TextDisabled("%s", tr("checking is off, so you will not be told about a new version"));
     } else if (updatePending_) {
         ImGui::TextDisabled("%s", tr("checking..."));
+    } else if (storeOffered) {
+        // No version number: the Store does not give one.
+        ImGui::TextColored(important ? kErrorRed : cascade::gui::theme::warning(), "%s",
+                           tr("the Microsoft Store has an update for this copy"));
+        if (updateDismissed_ && ImGui::SmallButton(trId("Show it again"))) { updateDismissed_ = false; }
     } else if (update_.newer) {
         ImGui::TextColored(update_.critical ? kErrorRed : cascade::gui::theme::warning(),
                            tr("%s is available"), update_.version.c_str());

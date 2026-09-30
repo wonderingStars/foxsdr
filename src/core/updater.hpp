@@ -31,6 +31,8 @@
 #include <functional>
 #include <future>
 #include <string>
+#include <thread>
+#include <utility>
 #include <vector>
 
 namespace cascade::core {
@@ -151,9 +153,17 @@ struct UpdateCheckOutcome {
 // a detached drainer, which takes the result and throws it away. The check
 // touches no static state after its network call returns, so a drainer still
 // running at process exit is simply ended with the process.
-class UpdateCheckTask {
+//
+// A TEMPLATE SINCE 0.99.53, because the Microsoft Store check and its install
+// request (core/store_update.hpp) are the same problem with a different
+// outcome type: a blocking call nothing can cancel, whose owner must be able
+// to quit without waiting for it. One implementation and one pair of named
+// waits (tests/test_shutdown_budget.cpp finds them here by name), rather than
+// a second copy that could drift from this one.
+template <typename Outcome>
+class AbandonableTask {
 public:
-    using Work = std::function<UpdateCheckOutcome()>;
+    using Work = std::function<Outcome()>;
 
     // How long reap() - and so the destructor - waits before abandoning.
     static constexpr std::chrono::milliseconds kQuitGrace{250};
@@ -161,13 +171,19 @@ public:
     // literal duration (tests/test_shutdown_budget.cpp scans for those).
     static constexpr std::chrono::milliseconds kNoWait{0};
 
-    UpdateCheckTask() = default;
-    ~UpdateCheckTask();
-    UpdateCheckTask(const UpdateCheckTask&) = delete;
-    UpdateCheckTask& operator=(const UpdateCheckTask&) = delete;
+    AbandonableTask() = default;
+    // A member future of std::async blocks in its destructor, so the
+    // destructor reaps first: the future is either taken or handed to a
+    // drainer by the time the member itself is destroyed.
+    ~AbandonableTask() { (void)reap(); }
+    AbandonableTask(const AbandonableTask&) = delete;
+    AbandonableTask& operator=(const AbandonableTask&) = delete;
 
-    // Starts `work` on its own thread. Ignored while a check is in flight.
-    void start(Work work);
+    // Starts `work` on its own thread. Ignored while a task is in flight.
+    void start(Work work) {
+        if (future_.valid() || !work) { return; }
+        future_ = std::async(std::launch::async, std::move(work));
+    }
 
     // True from start() until poll() has handed the outcome over, or reap()
     // has let it go.
@@ -175,17 +191,42 @@ public:
 
     // True ONCE, when the work has finished: `out` then holds its outcome.
     // Never blocks.
-    bool poll(UpdateCheckOutcome& out);
+    bool poll(Outcome& out) {
+        if (!future_.valid()) { return false; }
+        if (future_.wait_for(kNoWait) != std::future_status::ready) { return false; }
+        out = future_.get();
+        return true;
+    }
 
     // Waits up to `grace` for the work; if it is still running, abandons it to
     // a detached drainer. Returns true when the work had finished (or nothing
     // was running), false when it was abandoned. Either way running() is false
     // afterwards and nothing this object owns is waited on again.
-    bool reap(std::chrono::milliseconds grace = kQuitGrace);
+    bool reap(std::chrono::milliseconds grace = kQuitGrace) {
+        if (!future_.valid()) { return true; }
+        if (future_.wait_for(grace) == std::future_status::ready) {
+            (void)future_.get();
+            return true;
+        }
+        // Still inside the blocking call. The drainer owns the future now, so
+        // its blocking destructor runs on a thread nobody is waiting for; the
+        // outcome it takes is discarded, because nobody is left to show it to.
+        // An exception out of a detached thread is std::terminate, so the
+        // drainer swallows one: there is no caller left for it to reach.
+        std::thread([f = std::move(future_)]() mutable {
+            try {
+                (void)f.get();
+            } catch (...) {
+            }
+        }).detach();
+        return false;
+    }
 
 private:
-    std::future<UpdateCheckOutcome> future_;
+    std::future<Outcome> future_;
 };
+
+using UpdateCheckTask = AbandonableTask<UpdateCheckOutcome>;
 
 }  // namespace cascade::core
 

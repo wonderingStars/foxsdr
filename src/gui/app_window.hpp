@@ -46,6 +46,7 @@ struct GLFWwindow;
 #include "core/plugin_ui.hpp"
 #include "core/plugin_cleanup.hpp"
 #include "core/plugin_repo.hpp"
+#include "core/store_update.hpp"
 #include "core/updater.hpp"
 #include "core/utf8_text.hpp"
 #include "core/recorder.hpp"
@@ -775,6 +776,10 @@ private:
     void startUpdateCheck();
     void startUpdateDownload();
     void pollUpdateAsync();
+    // A copy from the Microsoft Store (0.99.53): the same banner and section,
+    // asking the Store instead of foxsdr.com - see core/store_update.hpp.
+    void drawStoreUpdateBanner();
+    void startStoreInstall();
     // Once-a-second check that the output stream is still alive, reopening it
     // if it is not. See AudioOut::streamAlive() for what kills one; the short
     // version is that a dead sink is invisible from inside the app, so the
@@ -4509,6 +4514,19 @@ private:
     cascade::core::UpdateInfo update_;
     std::string updateError_;
     std::string updateReadyPath_;     // verified installer, waiting to be run
+    // --- the Microsoft Store's answer, for a packaged copy (0.99.53) --------
+    // updateStarted_ / updatePending_ / updateError_ / updateDismissed_ above
+    // mean the same things for a Store copy as for an ordinary one; these hold
+    // what only the Store can say. Both workers return BY VALUE and capture
+    // nothing of this window, so ~AppWindow abandons them rather than waiting
+    // (core::AbandonableTask) - which matters for the install request, whose
+    // worker sits inside Windows' own dialogs for as long as the user takes.
+    cascade::core::StoreUpdateCheck storeUpdate_;        // the last answer
+    bool storeInstallPending_ = false;                   // Windows is on it
+    bool storeInstallDone_ = false;                      // an outcome to show
+    cascade::core::StoreInstallOutcome storeInstallOutcome_;
+    cascade::core::AbandonableTask<cascade::core::StoreUpdateCheck> storeCheck_;
+    cascade::core::AbandonableTask<cascade::core::StoreInstallOutcome> storeInstall_;
     // The app-update transfer's own progress and cancel, NOT pluginRepo_'s.
     // The banner used to read pluginRepo_.progress(), which nothing on this
     // path ever writes — the bar sat at 0 for the whole download — and

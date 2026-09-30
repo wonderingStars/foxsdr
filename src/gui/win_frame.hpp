@@ -148,4 +148,10 @@ CaptionLayout captionLayout();
 // install(), and on every platform but Windows.
 unsigned displayChangeCount();
 
+// The operating system's handle for `window` - its HWND on Windows, as a
+// pointer so <windows.h> stays out of this header - or null (every other
+// platform, or no window). For APIs that need an owner window for a dialog of
+// their own: the Microsoft Store's update request (core/store_update.hpp).
+void* nativeHandle(GLFWwindow* window);
+
 }  // namespace cascade::gui::frame

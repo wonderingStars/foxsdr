@@ -277,4 +277,13 @@ CaptionLayout captionLayout() { return g_layout; }
 
 unsigned displayChangeCount() { return g_displayChanges.load(std::memory_order_relaxed); }
 
+void* nativeHandle(GLFWwindow* window) {
+#ifdef _WIN32
+    return window != nullptr ? static_cast<void*>(glfwGetWin32Window(window)) : nullptr;
+#else
+    (void)window;
+    return nullptr;
+#endif
+}
+
 }  // namespace cascade::gui::frame

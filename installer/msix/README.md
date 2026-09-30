@@ -207,29 +207,63 @@ The mapping from the return code to a decision is a pure function
 answer that cannot break the ordinary installed build, which is every copy in
 the world today.
 
-### 4.1 The update check stands down
+### 4.1 The update check asks the Microsoft Store (0.99.53)
 
 `AppWindow::startUpdateCheck()` consults
-`updateCheckDisposition(packaged, userEnabled)` and, when packaged, never
-starts. The log carries, once per launch:
+`updateCheckDisposition(packaged, userEnabled)`. Unticked asks nobody; an
+ordinary install asks foxsdr.com; a **packaged** copy with the box ticked
+(`UpdateCheckDisposition::AskStore`) never asks foxsdr.com and instead asks
+the Microsoft Store, through `src/core/store_update.{hpp,cpp}`. The log
+carries, once per launch:
 
-    update check: running from a Store package - the Store delivers updates
+    update check: running from a Store package - asking the Microsoft Store, not foxsdr.com
+    store update: the Store lists <n> update(s)[, at least one mandatory]
 
-and the Settings > Updates row shows a `STORE` chip, no checkbox (there is
-nothing for the user to decide), the package full name, and:
+**Why not foxsdr.com.** That check downloads `foxsdr-setup-<ver>.exe` and
+hands it to the shell. Run from inside a package it would install a *second,
+unpackaged* FoxSDR beside the packaged one: two products, two install
+directories, two update paths, and - given section 3.2 - possibly one shared
+config between them.
 
-> this copy came from the Microsoft Store, which delivers its updates — so
-> FoxSDR does not check foxsdr.com and nothing is downloaded here
+**Why ask at all (until 0.99.53 the check simply stood down).** The Store's
+own background updating was measured to be slow: several Store installs were
+still relaunching on 0.99.26 more than a day after 1.99.44.0 went live, and a
+Store user was never told.
 
-**Why it must stand down rather than merely be pointless.** The check downloads
-`foxsdr-setup-<ver>.exe` and hands it to the shell. Run from inside a package
-that would install a *second, unpackaged* FoxSDR beside the packaged one: two
-products, two install directories, two update paths, and — given section 3.2 —
-possibly one shared config between them.
+**How.** A worker thread joins the multi-threaded apartment for the length of
+one call, takes `StoreContext::GetDefault()`, hands the main window's HWND to
+`IInitializeWithWindow::Initialize` (Microsoft: a Win32 desktop app "must
+configure the StoreContext object to specify which application window is the
+owner window for modal dialogs"), and calls
+`GetAppAndOptionalStorePackageUpdatesAsync`. The answer - how many packages,
+whether any is mandatory - comes back by value. When the Store lists one, the
+rail shows a banner (amber, or red for a package marked mandatory in Partner
+Center) with **Install from the Microsoft Store**; pressing it runs
+`RequestDownloadAndInstallStorePackageUpdatesAsync` on another worker, which
+re-queries the updates itself so no WinRT object crosses a thread. Windows
+shows its own two consent dialogs, and a completed install normally closes
+FoxSDR. The outcome (installed / you cancelled / could not install: reason)
+is shown in the banner. No version number is shown: the Store does not give
+one. A failed check is shown only in Settings > Updates, never as a banner.
+`store_update.cpp` cites the Microsoft pages behind the threading and owner
+window decisions, including the one reading that is not yet proven against the
+live Store (the "must be called on the UI thread" note on the Request* page).
 
-The CLI `--update-check` is deliberately **not** suppressed. It is a support
-tool the user invoked explicitly; the thing that must not happen on its own is
-the startup check.
+Settings > Updates has its checkbox back, as **Ask the Microsoft Store for
+updates at startup**, with the chips `CHECK` / `NEW` (or `IMPT`) / `OK` /
+`IDLE` / `OFF` as for an ordinary install, plus `STORE` while an install
+request is with Windows.
+
+**The seam.** `FOXSDR_FAKE_STORE_UPDATE=none|available|mandatory|error` makes
+both calls return canned answers without touching WinRT (and
+`FOXSDR_FAKE_STORE_INSTALL=installed|cancelled|failed` picks the install's),
+logging `store update: FOXSDR_FAKE_STORE_UPDATE=<value> - canned answer, the
+Store was not asked`. It is also the one thing that lets a `--frames` run start
+the check, which is how `tests/test_store_update_app.cpp` drives the banner,
+the key and its outcome in the real application.
+
+The CLI `--update-check` is deliberately **not** redirected. It is a support
+tool the user invoked explicitly, and it asks foxsdr.com.
 
 ### 4.2 The plugin directory, and the probe that no longer runs
 
@@ -265,9 +299,11 @@ The directory is now logged at every scan, which it never was:
 `setPackageIdentityForTest()` for the unit tests, and the environment variable
 `FOXSDR_FAKE_PACKAGE=<full name>` for a child process (`none` forces the
 unpackaged answer). The environment hook is safe because both behaviours it can
-reach are fail-safe: it can stop an update check (a loss, not a hazard) and it
-can move the plugin directory to the per-user one, which the unpackaged build
-already uses whenever it is installed to Program Files. It cannot grant
+reach are fail-safe: it can move the update check from foxsdr.com to the
+Microsoft Store (which, for a copy the Store did not install, answers with an
+error and offers nothing) and it can move the plugin directory to the per-user
+one, which the unpackaged build already uses whenever it is installed to
+Program Files. It cannot grant
 anything, load anything, or send anything. Contrast `CASCADE_CONFIG_TEST`,
 which is honoured **only** under `--frames` precisely because redirecting a
 real session's config file *would* be a hazard.
@@ -366,8 +402,9 @@ leave it to be discovered. What each covers in FoxSDR:
 Cannot act as a server. No local network access."
 * the usage report and crash reports (`telemetry.foxsdr.com`)
 * the plugin catalogue and plugin downloads (github.com)
-* the update check — which stands down inside the package, but the code path
-  is in the same binary
+* the update check — which inside the package asks the Microsoft Store through
+  Windows (section 4.1), never foxsdr.com; the foxsdr.com code path is in the
+  same binary
 * satellite element sets from CelesTrak
 * basemap tiles for the map view
 
@@ -717,9 +754,11 @@ commitment.
 
 ### What changes for the user, and should be said in the listing
 
-* The Store delivers updates; the in-app update check is off in this build
-  (section 4.1). That is the opposite of the EXE route, where the Store updates
-  nobody and the in-app check is the only channel.
+* The Store delivers updates. Since 0.99.53 the app also asks the Store at
+  startup (when the box is ticked) and offers an update it finds, installed by
+  Windows after the user confirms (section 4.1). That is the opposite of the
+  EXE route, where the Store updates nobody and the in-app check is the only
+  channel.
 * Plugins install into `%LOCALAPPDATA%\foxsdr\plugins`.
 * Depending on the answer to section 3.2, a user who also has the website build
   either shares their settings with it or does not. Say which, once it is
@@ -733,6 +772,9 @@ New, in `src/core`:
 
 * `package_identity.hpp` / `package_identity.cpp` — the query, the pure
   mapping, the two decisions, the seams.
+* `store_update.hpp` / `store_update.cpp` (0.99.53) — the Microsoft Store
+  update check and install request, their pure mappings, and the
+  `FOXSDR_FAKE_STORE_UPDATE` seam.
 
 Changed:
 
@@ -741,7 +783,9 @@ Changed:
   write probe under a package.
 * `src/gui/app_window.cpp` — the update check stands down and logs why; the
   Settings > Updates row gains a `STORE` state with no checkbox; the plugin
-  directory is logged at every scan.
+  directory is logged at every scan. (0.99.53 replaced the stand-down with the
+  Microsoft Store check, its banner and install key, and gave the row its
+  checkbox back - section 4.1.)
 
 Tests:
 
@@ -751,8 +795,15 @@ Tests:
   exercised; and the three pre-existing `choosePluginDir` rows are repeated
   verbatim, because "the new default did not change the old answers" is the
   property that makes adding the argument safe.
+* `tests/test_store_update.cpp` (0.99.53) — the pure mapping from Windows'
+  final install state, the error text, and both calls through the seam.
+* `tests/test_store_update_app.cpp` (0.99.53) — the real application under
+  `FOXSDR_FAKE_PACKAGE` + `FOXSDR_FAKE_STORE_UPDATE`: banner, key, install
+  outcome, no banner for "none" or "error", an unpackaged copy never asks the
+  Store, and an unticked box asks nobody.
 
-No change to `CMakeLists.txt` was needed — both `src/core/*.cpp` and
+No change to `CMakeLists.txt` was needed for 0.96 (0.99.53 added the
+`runtimeobject` link for the Windows Runtime) — both `src/core/*.cpp` and
 `tests/test_*.cpp` are globbed with `CONFIGURE_DEPENDS`. (A file added after a
 configure is registered but not built in the same pass with the Visual Studio
 generator, so re-run the configure, or build twice.)

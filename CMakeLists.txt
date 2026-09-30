@@ -334,6 +334,10 @@ if(WIN32)
     # Media Foundation: Windows' own MP3 encoder for the patch page's MP3
     # output (core/mp3_writer.cpp, 0.99.17).
     target_link_libraries(cascade_lib PUBLIC mf mfplat mfreadwrite mfuuid ole32)
+    # The Windows Runtime, for the Microsoft Store update check a packaged copy
+    # makes (core/store_update.cpp, 0.99.53): RoGetActivationFactory and the
+    # HSTRING functions C++/WinRT calls. Inbox on Windows 10+, like the above.
+    target_link_libraries(cascade_lib PUBLIC runtimeobject)
 endif()
 
 if(NOT WIN32)
