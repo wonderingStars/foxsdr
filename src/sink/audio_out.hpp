@@ -86,6 +86,12 @@ public:
 
     bool running() const { return running_.load(std::memory_order_relaxed); }
 
+    // True while the callback is playing from the ring rather than building
+    // its lead (see pullBlock's PRIMING note). The producer's DriftMatcher
+    // reads it: only a playing ring's fill level says anything about the
+    // clocks.
+    bool primed() const { return primed_.load(std::memory_order_relaxed); }
+
     // True while a stream is open AND PortAudio still reports it running.
     //
     // NOT the same thing as running(), and the difference is the whole reason

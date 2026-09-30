@@ -559,6 +559,9 @@ void Pipeline::setSource(std::unique_ptr<cascade::source::IqSource> s) {
         // the same order start() and setInputRateHz use.
         std::lock_guard<std::mutex> alk(audioMutex_);
         resetDecodersLocked();
+        // And a new crystal: what the drift matcher learned about the old
+        // radio's clock against the sound card's is not true of this one.
+        driftMatcher_.reset();
     }
     if (live) {
         // Resume: start the incoming source BEFORE its thread exists so the
@@ -2024,15 +2027,31 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
     // tap above just captured — post-squelch, pre-AudioOut, so the recording
     // is independent of the output device and its volume.
     if (audioRecorder_ != nullptr) { audioRecorder_->writeAudio(monoOut_.data(), k); }
-    if (audioChannels_ == 2) {
+    // THE SOUND CARD RUNS ON ITS OWN CLOCK. Everything above is in the
+    // radio's time; the sink's ring is drained in the sound card's. The
+    // DriftMatcher steers the ring's lead back to its target by resampling
+    // this copy very slightly (sink/drift_matcher.hpp has the tester report
+    // and the bench measurement), so a lead lost to a hiccup is rebuilt
+    // instead of staying lost until the ring runs dry.
+    const std::size_t chan = audioChannels_ == 2 ? 2 : 1;
+    driftMatcher_.observe(audio_->ringFrames(), audio_->running() && audio_->primed(), k);
+    const float* block = monoOut_.data();
+    if (chan == 2) {
         outIlv_.resize(2 * k);
         for (std::size_t i = 0; i < k; ++i) {
             outIlv_[2 * i] = outL_[i];
             outIlv_[2 * i + 1] = outR_[i];
         }
-        audio_->writeStereo(outIlv_.data(), k);
+        block = outIlv_.data();
+    }
+    const std::size_t matchCap = cascade::sink::DriftMatcher::maxOut(k);
+    matchedOut_.resize(matchCap * chan);
+    const std::size_t matched =
+        driftMatcher_.process(block, k, chan, matchedOut_.data(), matchCap);
+    if (chan == 2) {
+        audio_->writeStereo(matchedOut_.data(), matched);
     } else {
-        audio_->write(monoOut_.data(), k);
+        audio_->write(matchedOut_.data(), matched);
     }
 }
 

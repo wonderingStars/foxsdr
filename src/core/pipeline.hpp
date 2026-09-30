@@ -126,6 +126,7 @@
 // other carries complex.
 #include "core/scope_tap.hpp"
 #include "sink/audio_out.hpp"
+#include "sink/drift_matcher.hpp"
 #include "core/freq_converter.hpp"
 #include "source/converter_view.hpp"
 #include "source/iq_source.hpp"
@@ -883,6 +884,11 @@ private:
     std::vector<float> outL_;                    // resampled 48 kHz audio
     std::vector<float> outR_;
     std::vector<float> outIlv_;                  // interleaved 48 kHz for the sink
+    // Holds the sink's lead against the radio's clock (sink/drift_matcher.hpp):
+    // only the sound card's copy is resampled - the taps, the scope and the
+    // recorder keep the radio's own timing. Guarded by audioMutex_.
+    cascade::sink::DriftMatcher driftMatcher_;
+    std::vector<float> matchedOut_;              // driftMatcher_'s output
     std::vector<float> monoOut_;                 // (L+R)/2 for tap + recorder
     // A plugin's audio (CASCADE_CAP_AUDIO_OUT), already at kAudioRateHz, and
     // the crossfade that hands the speakers over. DSP thread only.

@@ -18,6 +18,7 @@
 #include "core/recorder.hpp"
 #include "dsp/spsc_ring.hpp"
 #include "sink/audio_out.hpp"
+#include "sink/drift_matcher.hpp"
 
 namespace cascade::core::patch {
 
@@ -176,7 +177,14 @@ public:
     }
     void write(const float* s, std::size_t n) override {
         note(s, n);
-        out_.write(s, n);
+        // The patch's radio and this sound card keep different clocks, the
+        // same as the receiver's own sink: hold the lead with the same
+        // matcher (sink/drift_matcher.hpp) rather than let each hiccup eat
+        // into it for good.
+        matcher_.observe(out_.ringFrames(), out_.running() && out_.primed(), n);
+        const std::size_t cap = sink::DriftMatcher::maxOut(n);
+        matched_.resize(cap);
+        out_.write(matched_.data(), matcher_.process(s, n, 1, matched_.data(), cap));
     }
     std::string describe() const override { return "Playing on " + label_; }
     std::string error() const override {
@@ -185,6 +193,8 @@ public:
 
 private:
     sink::AudioOut out_;
+    sink::DriftMatcher matcher_{kOutRateHz};
+    std::vector<float> matched_;
     std::string label_;
 };
 
