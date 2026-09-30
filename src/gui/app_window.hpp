@@ -2734,6 +2734,11 @@ private:
     int bookmarkGroupSel_ = 0;           // 0 = every group
     bool bookmarkFavOnly_ = false;
     bool bookmarkMarkers_ = true;        // draw bookmarks on the spectrum
+    // Close names stack onto up to three rows instead of one hiding the
+    // other (an Italian user's request, 0.99.54). Disabled in the Bookmarks
+    // section while bookmarkMarkers_ is off - see drawBookmarksSection and
+    // drawBookmarkMarkers (gui/bookmark_marker_geometry.hpp has the geometry).
+    bool bookmarkStackNames_ = true;
     char bookmarkImportPath_[512] = "";
     std::string bookmarkImportNote_;     // what the last import did
     std::vector<std::string> bookmarkGroups_;

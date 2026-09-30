@@ -476,6 +476,11 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     // getBool is either the value in the file or the default.
     getBool(j, "mapTrails", out.mapTrails);
     getBool(j, "mapTrailAltitudeColours", out.mapTrailAltitudeColours);
+    // Both default true too - see AppConfig for why (bookmarkMarkers had no
+    // config field at all before 0.99.54 and always came back on;
+    // bookmarkStackNames's feature was the one asked for).
+    getBool(j, "bookmarkMarkers", out.bookmarkMarkers);
+    getBool(j, "bookmarkStackNames", out.bookmarkStackNames);
     getInt(j, "mapTrailStyle", out.mapTrailStyle);
     // CLAMPED ON LOAD, not trusted. The file is user-editable and an unknown
     // style would otherwise reach the draw loop and select nothing at all.
@@ -1075,6 +1080,8 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
     j["interfaceScale"] = cfg.interfaceScale;
     j["mapTrails"] = cfg.mapTrails;
     j["mapTrailAltitudeColours"] = cfg.mapTrailAltitudeColours;
+    j["bookmarkMarkers"] = cfg.bookmarkMarkers;
+    j["bookmarkStackNames"] = cfg.bookmarkStackNames;
     j["mapTrailStyle"] = cfg.mapTrailStyle;
     j["aircraftIconPx"] = cfg.aircraftIconPx;
     j["mapTrailWidthPx"] = cfg.mapTrailWidthPx;

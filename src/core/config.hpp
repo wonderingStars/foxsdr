@@ -426,6 +426,28 @@ struct AppConfig {
     bool mapTrails = true;
     bool mapTrailAltitudeColours = true;
 
+    // --- Bookmark spectrum markers (0.99.54) -----------------------------------
+    // Two switches in the Bookmarks section, the same "was never saved"
+    // fault the two trail switches above once had:
+    //
+    //   bookmarkMarkers     draw bookmarks on the spectrum at all ("On the
+    //                       spectrum"). Was a plain member with no config
+    //                       field before this - it reset to on at every
+    //                       launch no matter what the user last chose.
+    //   bookmarkStackNames  a name that clashes with one already placed
+    //                       tries the row below instead of being hidden, up
+    //                       to three rows ("Stack close names" - an Italian
+    //                       user asked to read both of two close bookmarks'
+    //                       names). Off is the one-row behaviour this had
+    //                       before stacking existed.
+    //
+    // BOTH DEFAULT ON: the feature both switches gate was already the
+    // shipped behaviour (markers on, one row) or was asked for (stacking),
+    // so an install that has never heard of either key gets what it already
+    // had, or what was requested, never a silently narrower spectrum.
+    bool bookmarkMarkers = true;
+    bool bookmarkStackNames = true;
+
     // HOW a trail is drawn, not whether: 0 = line, 1 = ribbon. An integer with
     // named values rather than a bool, because a third style costs one entry
     // here instead of a second flag that can contradict the first - two bools

@@ -177,6 +177,10 @@ AppConfig junkConfig() {
     // a load path that forgets to assign them would have to overwrite.
     c.mapTrails = false;
     c.mapTrailAltitudeColours = false;
+    // Both bookmark spectrum switches default ON too, the same away-from-
+    // default rule.
+    c.bookmarkMarkers = false;
+    c.bookmarkStackNames = false;
     // Away from its default AND out of range, the same rule every other
     // clamped field here follows.
     c.mapTrailStyle = 99;
@@ -336,6 +340,8 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     CHECK(a.country == b.country);
     CHECK(a.mapTrails == b.mapTrails);
     CHECK(a.mapTrailAltitudeColours == b.mapTrailAltitudeColours);
+    CHECK(a.bookmarkMarkers == b.bookmarkMarkers);
+    CHECK(a.bookmarkStackNames == b.bookmarkStackNames);
     CHECK(a.mapTrailStyle == b.mapTrailStyle);
     CHECK(a.aircraftIconPx == b.aircraftIconPx);
     CHECK(a.mapTrailWidthPx == b.mapTrailWidthPx);
@@ -677,6 +683,11 @@ int main() {
         in.mapTrailStyle = 1;  // Ribbon, which is not the default
         in.aircraftIconPx = 40;  // legal, and neither the default (48) nor junk
         in.mapTrailWidthPx = 12;  // legal, not the default (4)
+        // The bookmark spectrum switches - asymmetric for the same reason
+        // the trail switches above are: both false is indistinguishable from
+        // a save that wrote one key twice.
+        in.bookmarkMarkers = false;
+        in.bookmarkStackNames = true;
         // The radar scope. The range is a LEGAL ladder value that is neither
         // the default (200) nor what junkConfig() holds (12345, which snaps to
         // 400), so the roundtrip proves the FILE is what came back rather than
@@ -1660,6 +1671,11 @@ int main() {
                 // right-clicking the meter, which saves nothing itself.
                 {"meterStyleVolume", [](AppConfig& c) { c.meterStyleVolume = "led"; }},
                 {"meterStyleRate", [](AppConfig& c) { c.meterStyleRate = "peak"; }},
+                // Bookmark spectrum markers and their stacking (0.99.54):
+                // both switched in the Bookmarks section, which saves
+                // nothing itself.
+                {"bookmarkMarkers", [](AppConfig& c) { c.bookmarkMarkers = false; }},
+                {"bookmarkStackNames", [](AppConfig& c) { c.bookmarkStackNames = false; }},
             };
             for (const Change& ch : changes) {
                 AppConfig other = base;
@@ -1981,6 +1997,59 @@ int main() {
         CHECK(ConfigStore::load(path, out, err));
         CHECK(out.mapTrails);
         CHECK(out.mapTrailAltitudeColours);
+    }
+
+    // --- the two bookmark spectrum switches (documented in config.hpp,
+    // 0.99.54) --------------------------------------------------------------
+    //
+    // bookmarkMarkers had NO config field at all before this - AppWindow's
+    // bookmarkMarkers_ was a plain member, so "On the spectrum" reset to on
+    // at every launch no matter what the user last chose. bookmarkStackNames
+    // is new outright ("Stack close names": an Italian user asked to read
+    // both of two bookmarks whose names would otherwise touch). Same shape
+    // of test as the map trail switches just above, on purpose - it is the
+    // same fault.
+    {
+        const std::string path = p("bookmark_markers.json");
+        AppConfig out;
+        std::string err;
+
+        // BOTH DEFAULT ON: the markers were already the shipped behaviour and
+        // stacking is what was asked for, so a config that has never heard of
+        // either key should get both.
+        const AppConfig d;
+        CHECK(d.bookmarkMarkers);
+        CHECK(d.bookmarkStackNames);
+
+        // READ FROM THE FILE - the only way to prove a bool defaulting true
+        // came off disk rather than out of the struct's own default. RED WHEN
+        // either getBool is dropped.
+        CHECK(writeText(path, "{\"bookmarkMarkers\":false,"
+                              "\"bookmarkStackNames\":false}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(err.empty());
+        CHECK(!out.bookmarkMarkers);
+        CHECK(!out.bookmarkStackNames);
+
+        // INDEPENDENT of one another: "no markers at all" and "one row
+        // instead of three" are different questions, and a save that wired
+        // one key to both fields must not pass.
+        CHECK(writeText(path, "{\"bookmarkMarkers\":true,"
+                              "\"bookmarkStackNames\":false}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.bookmarkMarkers);
+        CHECK(!out.bookmarkStackNames);
+        CHECK(writeText(path, "{\"bookmarkMarkers\":false,"
+                              "\"bookmarkStackNames\":true}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(!out.bookmarkMarkers);
+        CHECK(out.bookmarkStackNames);
+
+        // A file that predates them - the ordinary upgrade - gets both.
+        CHECK(writeText(path, "{\"mode\":\"AM\"}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.bookmarkMarkers);
+        CHECK(out.bookmarkStackNames);
     }
 
     // --- the radar scope's mode and range (documented in config.hpp) ----------

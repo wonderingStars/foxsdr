@@ -57,6 +57,7 @@
 #include "core/package_identity.hpp"
 #include "gui/band_plan_style.hpp"
 #include "gui/basemap_stand_in.hpp"
+#include "gui/bookmark_marker_geometry.hpp"
 #include "gui/plugin_markers.hpp"
 #include "gui/rate_follow_status.hpp"
 #include "gui/soundcard_panel.hpp"
@@ -770,7 +771,13 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            a.transmitSplitHz == b.transmitSplitHz && a.transmitToneHz == b.transmitToneHz &&
            a.transmitMonitor == b.transmitMonitor && a.transmitArgs == b.transmitArgs &&
            a.railBank == b.railBank && a.keyBindings == b.keyBindings &&
-           a.updateCheckEnabled == b.updateCheckEnabled;
+           a.updateCheckEnabled == b.updateCheckEnabled &&
+           // The bookmark spectrum markers and their stacking (0.99.54):
+           // both are switched in the Bookmarks section, which calls no
+           // save of its own - without them here bookmarkMarkers_ reset to
+           // on at every launch regardless of what the user last chose.
+           a.bookmarkMarkers == b.bookmarkMarkers &&
+           a.bookmarkStackNames == b.bookmarkStackNames;
 }
 
 namespace {
@@ -22863,6 +22870,19 @@ void AppWindow::drawBookmarksSection() {
                                    "there is room. Only the ones on screen are looked at, so a list\n"
                                    "of tens of thousands costs nothing."));
     }
+    cascade::gui::sameLineIfFits(cascade::gui::checkWidth(trId("Stack close names")));
+    // DISABLED WHILE "On the spectrum" IS OFF, the mapTrailAltColours_ rule:
+    // a control for how names ARE drawn is a lie while none are being drawn,
+    // and would leave a user wondering which of the two settings was broken.
+    // The value itself is untouched, so turning markers back on restores
+    // whichever choice was made here.
+    ImGui::BeginDisabled(!bookmarkMarkers_);
+    ImGui::Checkbox(trId("Stack close names"), &bookmarkStackNames_);
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+        ImGui::SetTooltip("%s", tr("Names that would overlap are placed on up to three rows\n"
+                                   "instead of being hidden. Untick for one row."));
+    }
     rebuildBookmarkView();
     ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kInkMuted));
     ImGui::Text(tr("%zu shown of %zu"), bookmarkView_.size(), bookmarkCount);
@@ -23052,10 +23072,26 @@ void AppWindow::drawBookmarkMarkers(float x0, float y0, float width, float heigh
     // carry text - never through them.
     const float headerY = spectrum_ != nullptr ? spectrum_->headerBottom() : y0;
     const float labelY = headerY + ImGui::GetTextLineHeight() + 2.0f;
-    // The x extents of the names drawn so far; a name that would touch one is
-    // left off (its tick still shows). A few dozen at most on any width.
-    std::vector<std::pair<float, float>> placed;
-    placed.reserve(64);
+    // STACKED NAMES (0.99.54, an Italian user's request): two bookmarks a
+    // couple of kHz apart used to drop the second name the moment its extent
+    // touched the first's - the tick still showed, but only one name was
+    // ever readable. "Stack close names" tries the row below instead of
+    // giving up, up to three rows, each name's own faint guide line running
+    // from the row it actually landed on down to the tick strip so a
+    // stacked name still visibly belongs to its tick. bookmarkStackNames_
+    // off (or a spectrum too short to offer a second row) is the same
+    // one-row budget the un-stacked code always had - see
+    // gui/bookmark_marker_geometry.hpp for the row choice itself.
+    const float lineH = font != nullptr ? font->CalcTextSizeA(fontPx, FLT_MAX, 0.0f, "Hg").y
+                                        : ImGui::GetTextLineHeight();
+    const float rowPitch = lineH + 1.0f;
+    const int rowCap = bookmarkStackNames_ ? cascade::gui::kBookmarkNameMaxRows : 1;
+    const int maxRows = cascade::gui::bookmarkNameRowCapacity(strip0 - labelY, rowPitch, rowCap);
+    // The x extents already placed on each row; a name that would touch one
+    // on every row it is allowed is left off (its tick still shows). A few
+    // dozen at most on any width, across every row combined.
+    std::vector<std::vector<std::pair<float, float>>> placedByRow(static_cast<std::size_t>(maxRows));
+    std::size_t placedTotal = 0;
     for (int pass = 0; pass < 2; ++pass) {
         float lastTickX = -1e9f;
         for (std::size_t i = span.first; i < span.second; i += (pass == 0 ? 1 : stride)) {
@@ -23066,25 +23102,29 @@ void AppWindow::drawBookmarkMarkers(float x0, float y0, float width, float heigh
             lastTickX = x;
             dl->AddLine(ImVec2(x, strip0), ImVec2(x, strip1), b.favourite ? favTick : tick,
                         b.favourite ? 2.0f : 1.0f);
+            // The row this bookmark's name lands on, or -1 when it is not
+            // named, the cap is already spent, it would run off the right
+            // edge, or every row available clashed.
+            int row = -1;
+            float a = 0.0f, e = 0.0f;
+            if ((b.favourite || sparse) && !b.name.empty() && placedTotal < 64) {
+                const ImVec2 sz = font != nullptr
+                                      ? font->CalcTextSizeA(fontPx, FLT_MAX, 0.0f, b.name.c_str())
+                                      : ImGui::CalcTextSize(b.name.c_str());
+                a = x + 3.0f;
+                e = a + sz.x;
+                if (e <= x0 + width) { row = cascade::gui::chooseBookmarkNameRow(placedByRow, a, e); }
+            }
+            const float lineTopY = row >= 0 ? labelY + static_cast<float>(row) * rowPitch : labelY;
             if (b.favourite || sparse) {
-                dl->AddLine(ImVec2(x, labelY), ImVec2(x, strip0), b.favourite ? tick : line, 1.0f);
+                dl->AddLine(ImVec2(x, lineTopY), ImVec2(x, strip0), b.favourite ? tick : line, 1.0f);
             }
-            if (!(b.favourite || sparse)) { continue; }
-            if (b.name.empty() || placed.size() >= 64) { continue; }
-            const ImVec2 sz = font != nullptr ? font->CalcTextSizeA(fontPx, FLT_MAX, 0.0f, b.name.c_str())
-                                              : ImGui::CalcTextSize(b.name.c_str());
-            const float a = x + 3.0f, e = x + 3.0f + sz.x;
-            if (e > x0 + width) { continue; }
-            bool clash = false;
-            for (const auto& p : placed) {
-                if (a < p.second + 6.0f && e + 6.0f > p.first) {
-                    clash = true;
-                    break;
-                }
-            }
-            if (clash) { continue; }
-            dl->AddText(font, fontPx, ImVec2(a, labelY), text, b.name.c_str());
-            placed.emplace_back(a, e);
+            if (row < 0) { continue; }
+            dl->AddText(font, fontPx, ImVec2(a, lineTopY), text, b.name.c_str());
+            placedByRow[static_cast<std::size_t>(row)].emplace_back(a, e);
+            ++placedTotal;
+            cascade::gui::census::note("bm:name:", row);
+            cascade::gui::census::rect("bm:name:", row, a, lineTopY, e, lineTopY + lineH);
         }
     }
     dl->PopClipRect();
@@ -25868,6 +25908,11 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     mapTrails_ = cfg.mapTrails;
     mapTrailAltColours_ = cfg.mapTrailAltitudeColours;
     mapTrailStyle_ = cfg.mapTrailStyle;
+    // Bookmark spectrum markers and their stacking (0.99.54): PREVIOUSLY not
+    // in AppConfig at all, so bookmarkMarkers_ kept its true default at every
+    // launch no matter what the user last chose - see drawBookmarksSection.
+    bookmarkMarkers_ = cfg.bookmarkMarkers;
+    bookmarkStackNames_ = cfg.bookmarkStackNames;
     aircraftIconPx_ = cascade::gui::clampAircraftIconPx(cfg.aircraftIconPx);
     mapTrailWidthPx_ = std::clamp(cfg.mapTrailWidthPx, 1, cascade::gui::kAircraftIconMaxPx);
 
@@ -27024,6 +27069,8 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.mapTrails = mapTrails_;
     cfg.mapTrailAltitudeColours = mapTrailAltColours_;
     cfg.mapTrailStyle = mapTrailStyle_;
+    cfg.bookmarkMarkers = bookmarkMarkers_;
+    cfg.bookmarkStackNames = bookmarkStackNames_;
     cfg.aircraftIconPx = aircraftIconPx_;
     cfg.mapTrailWidthPx = mapTrailWidthPx_;
     cfg.scopeMode = scopeMode_;
