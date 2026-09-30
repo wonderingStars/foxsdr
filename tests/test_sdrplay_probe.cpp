@@ -49,6 +49,7 @@ SdrPlayProbeOptions quickOptions(std::chrono::milliseconds perRate = std::chrono
     o.streamPerStep = std::chrono::milliseconds(15);
     o.foxsdrVersion = "0.99.50-test (0000000)";
     o.osDescription = "Windows 11 (test)";
+    o.serviceState = "stopped, manual start (SDRplayAPIService)";
     return o;
 }
 
@@ -104,6 +105,11 @@ void testTheProbeRunsTheWholeSequenceInOrder() {
     CHECK(t.find("probe version: 1") != std::string::npos);
     CHECK(t.find("FoxSDR version: 0.99.50-test") != std::string::npos);
     CHECK(t.find("OS: Windows 11 (test)") != std::string::npos);
+    // WHAT WINDOWS SAID THE SERVICE WAS DOING (0.99.55), in the header, right
+    // after the OS: the one fact a probe whose Open fails in 0 ms cannot
+    // learn through the API.
+    CHECK(t.find("OS: Windows 11 (test)\nSDRplay API service: stopped, manual start "
+                 "(SDRplayAPIService)\nstarted: ") != std::string::npos);
     CHECK(at(t, "\nSUMMARY\n") < at(t, "\nEVENTS"));
     CHECK(at(t, "\nEVENTS") < at(t, "\nDETAIL"));
     // The eight steps, in order, in the detail.
@@ -303,6 +309,13 @@ void testNoApiIsAReportThatSaysSo() {
     for (int i = 1; i < 8; ++i) { CHECK(step(r, static_cast<std::size_t>(i)).status == ProbeStatus::NotRun); }
     CHECK(r.callsMade == 0);
     CHECK(r.report.find("bob") == std::string::npos);
+    // The service line is in the header even when the API never loaded - it
+    // is asked of Windows, not of the API.
+    CHECK(r.report.find("\nSDRplay API service: stopped, manual start (SDRplayAPIService)\n") !=
+          std::string::npos);
+    // ...and says it was not asked when the caller did not fill it in.
+    const SdrPlayProbeResult none = cascade::source::runSdrPlayProbe(empty, SdrPlayProbeOptions{});
+    CHECK(none.report.find("\nSDRplay API service: (not asked)\n") != std::string::npos);
 }
 
 // The GUI's child command line: the bias switch appears ONLY when the

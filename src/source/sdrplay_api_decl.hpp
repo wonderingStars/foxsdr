@@ -57,6 +57,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
+#include <atomic>
 #include <cstddef>
 #include <mutex>
 #include <string>
@@ -717,6 +718,13 @@ struct Api {
     // Temporary, unlike sessionLost: it falls back to zero when the answer
     // arrives or the grace runs out (and then sessionLost takes over).
     mutable int controlsInFlight = 0;
+    // WHY THE LAST ATTEMPT TO REACH THE SERVICE FAILED, if it did (0.99.55):
+    // a cascade::source::SdrPlayServiceTrouble value. What the Source
+    // section's RESTART SDRPLAY SERVICE key is shown for. ATOMIC, not under
+    // sessionMutex, because it is written where an enumeration worker has
+    // just been abandoned - possibly still inside sdrplay_api_Open, holding
+    // that mutex - and read by the GUI every frame.
+    mutable std::atomic<int> serviceTrouble{0};
 };
 
 }  // namespace cascade::source::sdrplay_abi

@@ -3706,6 +3706,10 @@ void AppWindow::drawUi() {
     // faulted gets (0.90.1). After the poll above, so a reopen that just
     // resolved is seen before this asks whether another is due.
     pollSoapyRecovery();
+    // ...and the SDRplay API Service: a change in why the service last failed,
+    // and a finished RESTART SDRPLAY SERVICE (0.99.55). Two atomic reads on
+    // every frame that has nothing to do.
+    pollSdrPlayService();
     // Release a wheel-burst retune the coalescer held back (~50 ms pacing).
     pollPendingRetune();
     // Same contract for the catalogue fetch / plugin download.
@@ -8402,6 +8406,11 @@ void AppWindow::drawSourceSection() {
         }
     }
 
+    // ...AND THE KEY THAT RESTARTS THE SERVICE, drawn here whatever the text
+    // above says: a radio that failed to open (the red line further down) and
+    // a lost session show it too (0.99.55).
+    drawSdrPlayServiceKey();
+
     // NO HARDWARE FOUND, explained.
     //
     // This block is here because its absence was, for several releases, the
@@ -10354,6 +10363,137 @@ void AppWindow::adoptDeviceMirrors(cascade::source::DeviceSource& dev, const std
     deviceAntennas_ = dev.antennas();
     if (!deviceAntenna_.empty()) { dev.setAntenna(deviceAntenna_); }
     deviceAntenna_ = dev.antenna();
+}
+
+// --- RESTART SDRPLAY SERVICE (0.99.55, source/sdrplay_service.hpp) ---------
+//
+// The field report behind this: an RSP2 Pro owner whose SDRplay API Service
+// was stopped or wedged saw "Check that the SDRplay API service is running" on
+// seven launches and never found the service. Windows can say which state it
+// is in without administrator rights, and can restart it with one UAC prompt.
+
+void AppWindow::pollSdrPlayService() {
+    if (sdrPlayRestart_.takeFinished()) { finishSdrPlayServiceRestart(sdrPlayRestart_.outcome()); }
+    const cascade::source::SdrPlayServiceTrouble trouble =
+        cascade::source::sdrPlayServiceTrouble(cascade::source::processSdrPlayApi());
+    if (trouble == sdrPlayTroubleSeen_) { return; }
+    sdrPlayTroubleSeen_ = trouble;
+    if (trouble == cascade::source::SdrPlayServiceTrouble::None) {
+        // The service answered an Open: the radio is its own evidence, and a
+        // note about an earlier restart would only be stale.
+        if (!sdrPlayRestart_.running()) { sdrPlayRestartNote_.clear(); }
+        return;
+    }
+    // ONCE PER CHANGE OF TROUBLE, never per frame: what Windows says the
+    // service is doing, which decides whether the key has a service to name.
+    sdrPlayService_ = cascade::source::querySdrPlayServiceAndNote();
+}
+
+void AppWindow::finishSdrPlayServiceRestart(const cascade::source::SdrPlayRestartOutcome& o) {
+    using cascade::source::SdrPlayAfterRestart;
+    using cascade::source::SdrPlayRestartPhase;
+    using cascade::source::SdrPlayServiceState;
+    if (o.phase == SdrPlayRestartPhase::Cancelled) {
+        // Said, and nothing else done: the user chose not to.
+        cascade::core::diagLogf("source: SDRplay API Service restart cancelled at the Windows prompt");
+        sdrPlayRestartNote_ = tr("Restart cancelled.");
+        return;
+    }
+    if (o.phase == SdrPlayRestartPhase::NotStarted) {
+        cascade::core::diagWarnf("source: SDRplay API Service restart not started - error %lu",
+                                 o.win32Error);
+        sdrPlayRestartNote_ =
+            cascade::core::formatText(tr("Windows would not run the restart (error %lu)."), o.win32Error);
+        return;
+    }
+    sdrPlayService_ = o.after;
+    cascade::source::noteSdrPlayServiceStatus(o.after);
+    const char* how = (o.phase == SdrPlayRestartPhase::Done)       ? "ended"
+                      : (o.phase == SdrPlayRestartPhase::Failed)   ? "failed"
+                      : (o.phase == SdrPlayRestartPhase::TimedOut) ? "timed out"
+                                                                   : "finished";
+    cascade::core::diagLogf("source: SDRplay API Service restart %s (exit code %lu); now %s", how,
+                            o.exitCode, cascade::source::sdrPlayServiceSummary(o.after).c_str());
+
+    const bool running = o.after.state == SdrPlayServiceState::Running;
+    const SdrPlayAfterRestart what =
+        cascade::source::sdrPlayApplyServiceRestart(cascade::source::processSdrPlayApi(), running);
+    if (what == SdrPlayAfterRestart::ServiceNotRunning) {
+        std::string note;
+        if (o.phase == SdrPlayRestartPhase::TimedOut) {
+            static_assert(cascade::source::kSdrPlayRestartLimit == std::chrono::milliseconds(45000),
+                          "the sentence below quotes 45 seconds");
+            note = tr("The restart did not finish within 45 seconds.");
+        } else if (o.phase == SdrPlayRestartPhase::Failed) {
+            note = cascade::core::formatText(tr("The restart ended with exit code %lu."), o.exitCode);
+        }
+        const std::string advice = cascade::source::sdrPlayServiceAdvice(o.after);
+        if (!advice.empty()) { note += (note.empty() ? "" : " ") + advice; }
+        sdrPlayRestartNote_ = note;
+        return;
+    }
+    if (what == SdrPlayAfterRestart::RestartFoxSdr) {
+        // THE LOST SESSION STAYS LOST (see markSessionLost): a worker of ours
+        // may still be inside the vendor DLL for the orphaned device, and a
+        // new service does not bring it back. So nothing here reopens.
+        cascade::core::diagLogf("source: SDRplay API Service is running again; this session's "
+                                "SDRplay API use stays stopped until FoxSDR is restarted");
+        sdrPlayRestartNote_ = tr("The SDRplay API Service was restarted and is running. Restart "
+                                 "FoxSDR to use the SDRplay radio again.");
+        return;
+    }
+    // THIS PROCESS NEVER HAD A SESSION, so nothing of ours is inside the DLL:
+    // list the radios again and reopen the saved one, here and now.
+    sdrPlayRestartNote_ = tr("The SDRplay API Service was restarted and is running.");
+    cascade::core::diagLogf("source: SDRplay API Service is running again - rescanning and "
+                            "reopening in this session");
+    scanNative();
+    if (restoreKeep_.valid() && restoreKeep_.kind == "sdrplay" && device_ == nullptr &&
+        !deviceOpenPending_) {
+        for (std::size_t i = 0; i < nativeDevices_.size(); ++i) {
+            if (nativeDevices_[i].driver == "sdrplay" &&
+                nativeDevices_[i].args == restoreKeep_.nativeArgs) {
+                cascade::core::diagLogf("source: reopening the saved SDRplay radio");
+                selectSource(kNativeRowBase + static_cast<int>(i));
+                break;
+            }
+        }
+    }
+}
+
+void AppWindow::drawSdrPlayServiceKey() {
+#if defined(_WIN32)
+    constexpr bool kWindows = true;
+#else
+    constexpr bool kWindows = false;
+#endif
+    const cascade::source::SdrPlayRestartPhase phase = sdrPlayRestart_.phase();
+    if (!cascade::source::sdrPlayRestartKeyShown(kWindows, sdrPlayService_, sdrPlayTroubleSeen_,
+                                                 phase)) {
+        return;
+    }
+    const bool busy = phase == cascade::source::SdrPlayRestartPhase::Running;
+    ImGui::BeginDisabled(busy);
+    const bool pressed = ImGui::Button(trId("RESTART SDRPLAY SERVICE"));
+    ImGui::EndDisabled();
+    if (pressed && !busy) {
+        sdrPlayRestartNote_.clear();
+        cascade::core::diagLogf("source: RESTART SDRPLAY SERVICE pressed - restarting %s elevated",
+                                sdrPlayService_.serviceName.c_str());
+        // The main window owns the UAC prompt, so it comes up in front.
+        sdrPlayRestart_.start(sdrPlayService_.serviceName,
+                              ImGui::GetMainViewport()->PlatformHandleRaw);
+    }
+    if (busy) {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        ImGui::TextWrapped("%s", tr("Restarting the SDRplay API Service - answer the Windows "
+                                    "prompt."));
+        ImGui::PopStyleColor();
+    } else if (!sdrPlayRestartNote_.empty()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
+        ImGui::TextWrapped("%s", sdrPlayRestartNote_.c_str());
+        ImGui::PopStyleColor();
+    }
 }
 
 std::unique_ptr<cascade::source::DeviceSource> AppWindow::openDeviceSync(
@@ -25744,6 +25884,10 @@ std::string AppWindow::currentDiagnosticsBundle() {
     in.lastRunUnclean = lastRunUnclean_;
     in.launches = telemetryLaunches_;
     in.crashes = telemetryCrashes_;
+    // Asked now, of the Service Control Manager - read-only, a millisecond,
+    // and only when a bundle is made (0.99.55).
+    in.sdrPlayService =
+        cascade::source::sdrPlayServiceSummary(cascade::source::querySdrPlayService());
 
     return cascade::core::buildDiagnosticsBundle(in);
 }

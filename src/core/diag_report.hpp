@@ -159,6 +159,12 @@ struct DiagBundleInput {
     std::uint64_t launches = 0;
     std::uint64_t crashes = 0;
     std::uint64_t logLinesTotal = 0;
+    // What Windows says the SDRplay API Service is doing, in
+    // source::sdrPlayServiceSummary()'s words - "running, auto start
+    // (SDRplayAPIService)", "not installed", "not applicable" (0.99.55).
+    // Bundle-only, not in the crash context: it is asked of the Service
+    // Control Manager, which a fault path must not do. Empty prints "(none)".
+    std::string sdrPlayService;
 };
 
 std::string buildDiagnosticsBundle(const DiagBundleInput& in);

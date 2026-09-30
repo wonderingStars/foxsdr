@@ -634,6 +634,17 @@ const KnownWait kKnownWaits[] = {
     {"src/source/sdrplay_probe.hpp", "kProbeStreamPerStep", 0,
      "how long the probe streams after each frequency, LNA, antenna and bias-tee change, in "
      "its own child process; the GUI never waits for it"},
+    // RESTART SDRPLAY SERVICE (0.99.55). Both are spent on the restart's own
+    // worker thread; ~SdrPlayServiceRestart tells that worker to give up and
+    // never waits for it (it may be inside ShellExecuteExW with the UAC prompt
+    // up), so neither is on the GUI thread or in the teardown.
+    {"src/source/sdrplay_service.hpp", "kSdrPlayRestartLimit", 0,
+     "how long the restart's WORKER waits for the elevated cmd.exe (net stop / taskkill / net "
+     "start) to exit before reporting it timed out. The GUI polls a flag each frame and the "
+     "destructor does not join a running worker"},
+    {"src/source/sdrplay_service.hpp", "kSdrPlayRestartPoll", 0,
+     "how often that worker looks up from WaitForSingleObject to see whether it has been told "
+     "to give up. Spent only on the worker"},
     {"src/source/sdrplay_source.hpp", "kControlGrace", 0,
      "not a wait at all (0.99.50) - how long a control that was not answered within "
      "kControlWait is LISTENED FOR before the radio is given up. A deadline compared against a "

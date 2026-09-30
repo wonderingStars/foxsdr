@@ -491,7 +491,7 @@ const std::vector<std::string>& bundleFieldNames() {
         "arch",      "mode",      "source",     "sample-rate",
         "device-open", "sdr-model", "plugin",   "log-path",
         "crash-dir", "last-run-unclean", "launches", "crashes",
-        "log-lines-total"};
+        "log-lines-total", "sdrplay-service"};
     return names;
 }
 
@@ -564,6 +564,8 @@ std::string buildDiagnosticsBundle(const DiagBundleInput& in) {
     out += "launches: " + std::to_string(in.launches) + "\n";
     out += "crashes: " + std::to_string(in.crashes) + "\n";
     out += "log-lines-total: " + std::to_string(in.logLinesTotal) + "\n";
+    // A service's name and state, nothing about the user (see PRIVACY.md).
+    kv("sdrplay-service", in.sdrPlayService);
 
     out += "\n--- log ---\n";
     // Scrubbed exactly as an uploaded report's log is (core::scrubUploadLog):

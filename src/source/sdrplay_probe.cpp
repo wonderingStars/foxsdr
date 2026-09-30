@@ -1095,6 +1095,8 @@ SdrPlayProbeResult Probe::run() {
     out += std::string("probe version: ") + kSdrPlayProbeVersion + "\n";
     out += "FoxSDR version: " + opt_.foxsdrVersion + "\n";
     out += "OS: " + opt_.osDescription + "\n";
+    out += "SDRplay API service: " +
+           (opt_.serviceState.empty() ? std::string("(not asked)") : opt_.serviceState) + "\n";
     out += "started: " + started + "\n";
     out += fmt("limits: a call is SLOW over %lld ms and HUNG at %lld ms; %lld ms streamed per "
                "rate, %lld ms per step\n",
@@ -1290,6 +1292,9 @@ int runSdrPlayProbeToFile(const std::string& outPath, bool biasTeeOn) {
     opt.biasTeeOn = biasTeeOn;
     opt.foxsdrVersion = std::string(cascade::versionString()) + " (" + cascade::gitCommit() + ")";
     opt.osDescription = core::osDescription();
+    // Asked once, before the first API call: read-only, no administrator
+    // rights, and it answers the question an Open failing in 0 ms leaves.
+    opt.serviceState = sdrPlayServiceSummary(querySdrPlayService());
     opt.progress = [](const std::string& s) {
         std::printf("sdrplay-probe: %s\n", s.c_str());
         std::fflush(stdout);

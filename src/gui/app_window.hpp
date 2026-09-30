@@ -2604,6 +2604,26 @@ private:
     std::string sdrPlayAdvice_;
     std::string sdrPlayApiDetail_;
     bool sdrPlayRowsFound_ = false;
+
+    // THE RESTART SDRPLAY SERVICE KEY (0.99.55, source/sdrplay_service.hpp).
+    // sdrPlayService_ is what Windows last said the SDRplay API Service was
+    // doing - asked when the process's SDRplay trouble changes (never per
+    // frame) and when a restart ends. sdrPlayTroubleSeen_ is the trouble it
+    // was last asked for. The restart itself runs on sdrPlayRestart_'s
+    // worker: the UAC prompt and net's own waits never reach this thread.
+    // sdrPlayRestartNote_ is the key's outcome, already translated.
+    cascade::source::SdrPlayServiceStatus sdrPlayService_;
+    cascade::source::SdrPlayServiceTrouble sdrPlayTroubleSeen_ =
+        cascade::source::SdrPlayServiceTrouble::None;
+    cascade::source::SdrPlayServiceRestart sdrPlayRestart_;
+    std::string sdrPlayRestartNote_;
+    // Per frame: notices a change of trouble and a finished restart.
+    void pollSdrPlayService();
+    // The key, its note and the service's sentence, in the Source section.
+    void drawSdrPlayServiceKey();
+    // A finished restart: re-read the state, then reopen in this process or
+    // tell the user to restart FoxSDR (source::sdrPlayAfterServiceRestart).
+    void finishSdrPlayServiceRestart(const cascade::source::SdrPlayRestartOutcome& outcome);
     // The label each SDRplay API row last showed, by its args (0.99.36). A
     // radio this process has selected is not in the API's list, so its row is
     // put back from here (source::withClaimedSdrPlayRows) under the name the

@@ -128,6 +128,7 @@
 #include "dsp/spsc_ring.hpp"
 #include "source/device_source.hpp"
 #include "source/sdrplay_api_decl.hpp"
+#include "source/sdrplay_service.hpp"
 
 namespace cascade::source {
 
@@ -282,6 +283,54 @@ const char* sdrPlaySessionLostSentence();
 // seconds during which FoxSDR still called itself running and said nothing.
 // See SdrPlaySource::kStreamStallLimit. One string, pinned by a test.
 const char* sdrPlayStreamStalledSentence();
+
+// --- the service behind the API (0.99.55) ----------------------------------
+//
+// WHY THE LAST ATTEMPT TO REACH THE SDRPLAY SERVICE FAILED, as recorded on the
+// table (sdrplay_abi::Api::serviceTrouble). None once an Open succeeds. It is
+// what the Source section's RESTART SDRPLAY SERVICE key is shown for - the
+// three ways the service can be "not answering" as the user sees it.
+enum class SdrPlayServiceTrouble {
+    None = 0,
+    OpenFailed = 1,       // sdrplay_api_Open refused (the 0.99.52 RSP2 Pro report)
+    EnumerationHung = 2,  // a scan's worker was abandoned (kEnumerateWait)
+    SessionLost = 3       // markSessionLost: this process's session is finished
+};
+
+SdrPlayServiceTrouble sdrPlayServiceTrouble(const sdrplay_abi::Api& api);
+
+// WHETHER THE KEY IS SHOWN. Pure: on Windows only, only for a service Windows
+// actually found (a restart must name it), and only while there is trouble to
+// fix or a restart is still in progress (so its outcome stays in view).
+bool sdrPlayRestartKeyShown(bool windows, const SdrPlayServiceStatus& service,
+                            SdrPlayServiceTrouble trouble, SdrPlayRestartPhase phase);
+
+// WHAT TO DO ONCE THE SERVICE HAS BEEN RESTARTED - the decision the key's
+// completion turns on, pure so every branch is testable without a window.
+//
+//   ServiceNotRunning  Windows still does not report it running: say its
+//                      state (sdrPlayServiceAdvice) and do nothing else.
+//   ReopenInProcess    this process never got a session (sessions == 0, not
+//                      lost, no control waiting, and the session state could
+//                      be read without waiting): rescan and reopen the saved
+//                      radio now, no FoxSDR restart.
+//   RestartFoxSdr      anything else - above all a LOST session, where a
+//                      worker of ours may still be parked inside the vendor
+//                      DLL (see markSessionLost and the file header). The
+//                      latch stays set; the user is told to restart FoxSDR.
+enum class SdrPlayAfterRestart { ServiceNotRunning, ReopenInProcess, RestartFoxSdr };
+
+SdrPlayAfterRestart sdrPlayAfterServiceRestart(bool serviceRunning, bool sessionStateKnown,
+                                               int sessions, bool sessionLost,
+                                               int controlsInFlight);
+
+// The same decision applied to a table: reads its session state WITHOUT
+// WAITING (a try_lock - an abandoned enumeration worker may hold the session
+// mutex inside sdrplay_api_Open, and the GUI thread must not queue behind
+// it), and for ReopenInProcess clears the enumeration's skip reason, its
+// hold-off and the trouble record so the next scan asks the API again.
+// NEVER clears sessionLost.
+SdrPlayAfterRestart sdrPlayApplyServiceRestart(const sdrplay_abi::Api& api, bool serviceRunning);
 
 // True while the hold-off above is still running, i.e. the last enumeration
 // abandoned a wedged service and the next ones are skipping it.
@@ -920,7 +969,9 @@ private:
 
     // The *Locked helpers assume devMutex_ is held.
     const sdrplay_abi::Api& api() const;
-    bool acquireSessionLocked(std::string& error);
+    // `serviceAdvice`: see sessionAcquire in the .cpp - the SDRplay API
+    // Service sentence when Open itself failed, empty otherwise.
+    bool acquireSessionLocked(std::string& error, std::string* serviceAdvice = nullptr);
     void releaseSessionLocked();
 
     bool selectByArgsLocked(const std::string& args);

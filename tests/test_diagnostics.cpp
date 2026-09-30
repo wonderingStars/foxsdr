@@ -1107,9 +1107,15 @@ int main() {
         in.launches = 12;
         in.crashes = 1;
         in.logLinesTotal = 4011;
+        in.sdrPlayService = "stopped, manual start (SDRplayAPIService)";
 
         const std::string bundle = buildDiagnosticsBundle(in);
         CHECK(!bundle.empty());
+        // THE SDRPLAY SERVICE LINE (0.99.55), by value: the one fact a
+        // "my RSP will not open" report needs first, pinned in the exact
+        // "name: value" form the inventory below parses.
+        CHECK(bundle.find("\nsdrplay-service: stopped, manual start (SDRplayAPIService)\n") !=
+              std::string::npos);
 
         // Everything the docs promise is present, by value not just by label.
         CHECK(bundle.find("version: 0.61.0") != std::string::npos);

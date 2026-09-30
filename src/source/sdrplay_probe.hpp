@@ -81,6 +81,11 @@ struct SdrPlayProbeOptions {
     // opinion about where the version or the OS description come from.
     std::string foxsdrVersion;
     std::string osDescription;
+    // What Windows says the SDRplay API Service is doing, as
+    // sdrPlayServiceSummary() words it (0.99.55) - the one fact about the
+    // service a probe whose sdrplay_api_Open fails in 0 ms cannot find out
+    // through the API. Empty prints "(not asked)".
+    std::string serviceState;
 };
 
 struct SdrPlayProbeStep {

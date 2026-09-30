@@ -473,6 +473,23 @@ back, and this is the one case where choosing it again in the same session is
 not enough. Every other SDRplay fault, including an unplugged RSP, still
 releases the radio properly and can be re-opened without restarting anything.
 
+**The RESTART SDRPLAY SERVICE key** (0.99.55, Windows). When the SDRplay API
+refuses to open, a scan gives up on it, or the session is lost as above, the
+Source panel now says what Windows reports the **SDRplay API Service** is doing
+— stopped, disabled, still starting, running but not answering, or not
+installed — and shows a **RESTART SDRPLAY SERVICE** key. Pressing it asks for
+administrator rights through the ordinary Windows prompt and restarts the
+service (`net stop`, falling back to ending `sdrplay_apiService.exe` if the
+stop hangs, then `net start`); cancelling the prompt changes nothing. If this
+FoxSDR session had never reached the SDRplay API, the radios are listed again
+and the saved radio is reopened straight away. If the session had been lost,
+the service is restarted but FoxSDR still has to be restarted, for the reason
+given above. A disabled service has to be set back to **Automatic** in Windows
+Services first — the key cannot start a disabled service. The service name
+`SDRplayAPIService` comes from third-party listings rather than SDRplay's own
+documentation, so FoxSDR also looks the service up by its display name and by
+its program file, and uses whatever name Windows actually has for it.
+
 **A note on versions.** The driver's declarations of the API's structures were
 checked against SDRplay's published headers for 3.07, 3.11 and 3.15, compiled
 with FoxSDR's own compiler, and every size and member offset is pinned by a

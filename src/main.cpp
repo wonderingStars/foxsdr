@@ -34,6 +34,7 @@
 #include "gui/app_window.hpp"
 #include "source/iq_file_source.hpp"
 #include "source/sdrplay_probe.hpp"
+#include "source/sdrplay_service.hpp"
 #include "source/soapy_enum_proc.hpp"
 #include "source/soapy_source.hpp"
 
@@ -918,6 +919,28 @@ int main(int argc, char** argv) {
     // tee is switched on during the run ONLY with the second switch: that is
     // the command line's form of the GUI's separate confirmation, since the
     // bias tee puts power on the antenna socket.
+    // THE SDRPLAY API SERVICE'S STATE (0.99.55, source/sdrplay_service.hpp):
+    //
+    //     cascade --sdrplay-service-state
+    //
+    // Asks the Windows Service Control Manager - read-only, no administrator
+    // rights - what the SDRplay API Service is doing, prints it, and returns.
+    // Touches nothing else (no config, no window, no telemetry marker), for
+    // the probe's reasons above; it exists so support and the tests can see
+    // the query's answer on a real machine without opening the application.
+    if (argc >= 2 && std::strcmp(argv[1], "--sdrplay-service-state") == 0) {
+        if (argc != 2) {
+            std::fprintf(stderr, "cascade: --sdrplay-service-state takes no arguments\n");
+            return 2;
+        }
+        const cascade::source::SdrPlayServiceStatus st =
+            cascade::source::querySdrPlayServiceFromWindows();
+        std::printf("sdrplay-service: %s\n", cascade::source::sdrPlayServiceSummary(st).c_str());
+        const char* sentence = cascade::source::sdrPlayServiceSentence(st);
+        if (sentence[0] != '\0') { std::printf("advice: %s\n", sentence); }
+        std::fflush(stdout);
+        return 0;
+    }
     if (argc >= 2 && std::strcmp(argv[1], "--sdrplay-probe") == 0) {
         if (argc < 3 || argv[2][0] == '\0' || argv[2][0] == '-') {
             std::fprintf(stderr, "cascade: --sdrplay-probe requires an output file\n");

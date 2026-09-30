@@ -3325,6 +3325,214 @@ void testAbiLayoutIsPinnedToTheVersionsWeChecked() {
     CHECK(abi::kValidFieldSinceVersion < abi::kRspDxTunerLayoutVersion);
 }
 
+// --- the SDRplay API Service behind a refused Open (0.99.55) ---------------
+//
+// THE FIELD REPORT: an RSP2 Pro on 0.99.52, API 3.15 - "SDRplay open failed -
+// the SDRplay service did not answer: sdrplay_api_Fail (1). Check that the
+// SDRplay API service is running." on seven launches, and nothing that told
+// him WHICH state the service was in or how to fix it. The service query is
+// faked here (setSdrPlayServiceQueryForTest); the real Service Control
+// Manager path is in test_sdrplay_service.cpp.
+
+cascade::source::SdrPlayServiceStatus fakeService(cascade::source::SdrPlayServiceState state) {
+    cascade::source::SdrPlayServiceStatus s;
+    s.state = state;
+    s.startType = cascade::source::SdrPlayServiceStart::Manual;
+    if (state != cascade::source::SdrPlayServiceState::NotApplicable) {
+        s.serviceName = "SDRplayAPIService";
+    }
+    return s;
+}
+
+bool endsWith(const std::string& s, const std::string& tail) {
+    return s.size() >= tail.size() && s.compare(s.size() - tail.size(), tail.size(), tail) == 0;
+}
+
+int ringLinesContaining(const char* needle) {
+    int n = 0;
+    for (const std::string& l : cascade::core::DiagLog::instance().ringSnapshot()) {
+        if (l.find(needle) != std::string::npos) { ++n; }
+    }
+    return n;
+}
+
+void testARefusedOpenSaysWhatWindowsSaysTheServiceIsDoing() {
+    using cascade::source::SdrPlayServiceState;
+    using cascade::source::SdrPlayServiceTrouble;
+    cascade::core::DiagLog::instance().resetForTest();
+    cascade::source::sdrPlayServiceResetNoteForTest();
+    int queries = 0;
+    SdrPlayServiceState answer = SdrPlayServiceState::Stopped;
+    cascade::source::setSdrPlayServiceQueryForTest([&queries, &answer]() {
+        ++queries;
+        return fakeService(answer);
+    });
+
+    const std::string base =
+        "the SDRplay service did not answer: Fail (1). Check that the SDRplay API service is "
+        "running.";
+    const std::string stopped =
+        "The SDRplay API Service is stopped - press RESTART SDRPLAY SERVICE to start it.";
+    {
+        FakeSdrPlayApi fake;
+        fake.openResult = abi::Fail;  // what the tester's service answered, in 0 ms
+        fake.addDevice("2305000CCC", abi::kRsp2);
+        SdrPlaySource src;
+        CHECK(!openOn(src, fake));
+        // THE PANEL: the driver's own sentence, then what Windows says.
+        std::printf("the refused open's panel sentence: %s\n", src.lastError());
+        CHECK(std::string(src.lastError()) == base + " " + stopped);
+        CHECK(queries == 1);
+        CHECK(cascade::source::sdrPlayServiceTrouble(fake.table) == SdrPlayServiceTrouble::OpenFailed);
+        CHECK(!fake.called("Close"));  // Open failed: there is nothing to close
+
+        // THE LOG: the open-failed line keeps the driver's sentence (a log
+        // line is kLineBytes long) and the service's state has a line of its
+        // own - ONCE, however many times the user presses Refresh.
+        CHECK(ringLinesContaining("SDRplay open failed - the SDRplay service did not answer") == 1);
+        CHECK(ringLinesContaining("RESTART SDRPLAY SERVICE") == 0);
+        CHECK(ringLinesContaining("SDRplay API Service - stopped, manual start (SDRplayAPIService)") == 1);
+        CHECK(!src.open(""));
+        CHECK(cascade::source::enumerateSdrPlayWith(fake.table).empty());
+        CHECK(cascade::source::enumerateSdrPlayWith(fake.table).empty());
+        CHECK(queries == 4);
+        CHECK(ringLinesContaining("SDRplay API Service - stopped") == 1);
+
+        // THE SCAN'S SENTENCE, which is what the Source section shows with no
+        // radio open: the same two halves.
+        const std::string skip = cascade::source::sdrPlayLastEnumerationSkip();
+        CHECK(skip == base + " " + stopped);
+        CHECK(cascade::source::sdrPlayPanelAdvice(true, 0.0f, skip) == skip);
+
+        // THE STATE CHANGES (the service started, but still refuses): a new
+        // sentence, and exactly one new log line.
+        answer = SdrPlayServiceState::Running;
+        CHECK(!src.open(""));
+        CHECK(endsWith(src.lastError(),
+                       " The SDRplay API Service is running but did not answer - press RESTART "
+                       "SDRPLAY SERVICE."));
+        CHECK(ringLinesContaining("SDRplay API Service - running") == 1);
+        CHECK(ringLinesContaining("SDRplay API Service - stopped") == 1);
+
+        // THE SERVICE ANSWERS AGAIN: the trouble record is cleared, which is
+        // what takes the RESTART key off the panel.
+        fake.openResult = abi::Success;
+        const int before = queries;
+        CHECK(openOn(src, fake));
+        CHECK(cascade::source::sdrPlayServiceTrouble(fake.table) == SdrPlayServiceTrouble::None);
+        CHECK(queries == before);  // Windows is asked only when Open failed
+        src.closeDevice();
+    }
+    {
+        // OFF WINDOWS NOTHING IS ASKED AND NOTHING IS ADDED: the sentence is
+        // exactly what it was before 0.99.55, with no trailing space.
+        answer = SdrPlayServiceState::NotApplicable;
+        FakeSdrPlayApi fake;
+        fake.openResult = abi::Fail;
+        SdrPlaySource src;
+        CHECK(!openOn(src, fake));
+        CHECK(std::string(src.lastError()) == base);
+        CHECK(cascade::source::enumerateSdrPlayWith(fake.table).empty());
+        CHECK(cascade::source::sdrPlayLastEnumerationSkip() == base);
+    }
+    cascade::source::setSdrPlayServiceQueryForTest(nullptr);
+    cascade::source::sdrPlayServiceResetNoteForTest();
+}
+
+// WHAT A FINISHED RESTART MAY DO, on the table it was pressed for. The
+// tester's case - a process that NEVER got a session - reopens in place. A
+// LOST session is never reopened in this process: markSessionLost latched it
+// because a worker of ours may still be inside the vendor DLL, and a new
+// service does not bring that thread back.
+void testAServiceRestartReopensOnlyASessionThatWasNeverAcquired() {
+    using cascade::source::SdrPlayAfterRestart;
+    using cascade::source::SdrPlayServiceState;
+    using cascade::source::SdrPlayServiceTrouble;
+    cascade::source::setSdrPlayServiceQueryForTest(
+        []() { return fakeService(SdrPlayServiceState::Stopped); });
+
+    {  // NEVER ACQUIRED: rescan and reopen, no FoxSDR restart.
+        FakeSdrPlayApi fake;
+        fake.openResult = abi::Fail;
+        fake.addDevice("2305000CCC", abi::kRsp2);
+        CHECK(cascade::source::enumerateSdrPlayWith(fake.table).empty());
+        CHECK(!cascade::source::sdrPlayLastEnumerationSkip().empty());
+        CHECK(cascade::source::sdrPlayServiceTrouble(fake.table) == SdrPlayServiceTrouble::OpenFailed);
+
+        // The restart ran but Windows still does not report the service
+        // running: nothing is cleared, nothing is reopened.
+        CHECK(cascade::source::sdrPlayApplyServiceRestart(fake.table, false) ==
+              SdrPlayAfterRestart::ServiceNotRunning);
+        CHECK(cascade::source::sdrPlayServiceTrouble(fake.table) == SdrPlayServiceTrouble::OpenFailed);
+        CHECK(!cascade::source::sdrPlayLastEnumerationSkip().empty());
+
+        // Now it is running and answers.
+        fake.openResult = abi::Success;
+        CHECK(cascade::source::sdrPlayApplyServiceRestart(fake.table, true) ==
+              SdrPlayAfterRestart::ReopenInProcess);
+        CHECK(cascade::source::sdrPlayLastEnumerationSkip().empty());
+        CHECK(cascade::source::sdrPlayServiceTrouble(fake.table) == SdrPlayServiceTrouble::None);
+        CHECK(!cascade::source::sdrPlayEnumerationHeldOff());
+        CHECK(!fake.table.sessionLost);
+        const std::vector<cascade::source::NativeDeviceInfo> rows =
+            cascade::source::enumerateSdrPlayWith(fake.table);
+        CHECK(rows.size() == 1u);
+        SdrPlaySource src;
+        CHECK(!rows.empty() && openOn(src, fake, rows[0].args));
+        CHECK(src.isOpen());
+        src.closeDevice();
+    }
+
+    {  // LOST: the latch stays, and so does the refusal.
+        FakeSdrPlayApi fake;
+        fake.addDevice("2305000CCC", abi::kRsp2);
+        {
+            SdrPlaySource a;
+            CHECK(openOn(a, fake));
+            CHECK(a.start());
+            fake.uninitResult = abi::ServiceNotResponding;
+            a.stop();
+            a.closeDevice();
+        }
+        CHECK(fake.table.sessionLost);
+        CHECK(cascade::source::sdrPlayServiceTrouble(fake.table) == SdrPlayServiceTrouble::SessionLost);
+
+        CHECK(cascade::source::sdrPlayApplyServiceRestart(fake.table, true) ==
+              SdrPlayAfterRestart::RestartFoxSdr);
+        CHECK(fake.table.sessionLost);
+        CHECK(cascade::source::sdrPlayServiceTrouble(fake.table) == SdrPlayServiceTrouble::SessionLost);
+        // ...and nothing enters the vendor DLL afterwards: not an open, not a
+        // scan. The same refusal a lost session has always given.
+        const int opensBefore = fake.openCount;
+        const int getDevicesBefore = fake.countStarting("GetDevices");
+        SdrPlaySource b;
+        CHECK(!openOn(b, fake));
+        CHECK(std::string(b.lastError()) ==
+              std::string(cascade::source::sdrPlaySessionLostSentence()));
+        CHECK(cascade::source::enumerateSdrPlayWith(fake.table).empty());
+        CHECK(cascade::source::sdrPlayLastEnumerationSkip() ==
+              std::string(cascade::source::sdrPlaySessionLostSentence()));
+        CHECK(fake.openCount == opensBefore);
+        CHECK(fake.countStarting("GetDevices") == getDevicesBefore);
+    }
+
+    {  // A SESSION STATE THAT CANNOT BE READ WITHOUT WAITING - an abandoned
+       // scan's worker parked inside sdrplay_api_Open holds exactly this
+       // mutex - is not waited for, and is not treated as clear.
+        FakeSdrPlayApi fake;
+        fake.openResult = abi::Fail;
+        CHECK(cascade::source::enumerateSdrPlayWith(fake.table).empty());
+        std::lock_guard<std::mutex> held(fake.table.sessionMutex);
+        const auto t0 = std::chrono::steady_clock::now();
+        CHECK(cascade::source::sdrPlayApplyServiceRestart(fake.table, true) ==
+              SdrPlayAfterRestart::RestartFoxSdr);
+        CHECK(std::chrono::steady_clock::now() - t0 < std::chrono::milliseconds(200));
+        CHECK(cascade::source::sdrPlayServiceTrouble(fake.table) == SdrPlayServiceTrouble::OpenFailed);
+    }
+    cascade::source::setSdrPlayServiceQueryForTest(nullptr);
+    cascade::source::sdrPlayServiceResetNoteForTest();
+}
+
 }  // namespace
 
 int main() {
@@ -3370,6 +3578,8 @@ int main() {
     testARefusedUninitStrandsTheLinkBecauseTheServiceStillHoldsTheCallback();
     testAHealthyControlIsStillSynchronousAndAcknowledged();
     testAHealthyEnumerationIsStillSynchronousAndClearsTheSentence();
+    testARefusedOpenSaysWhatWindowsSaysTheServiceIsDoing();
+    testAServiceRestartReopensOnlyASessionThatWasNeverAcquired();
     // The three that abandon or hang a worker inside their own fake go last,
     // in the order they were written, and each releases and waits for its own
     // before it returns.

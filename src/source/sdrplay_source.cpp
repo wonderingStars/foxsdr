@@ -383,12 +383,19 @@ namespace {
 
 // Open the API once per process per table, check the version, and hand out a
 // reference count. See sdrplay_abi::Api for why the count lives in the table.
-bool sessionAcquire(const abi::Api& api, std::string& error) {
+//
+// `serviceAdvice`, when given, receives the SDRplay API Service sentence
+// (translated, for the screen) when Open itself failed - and nothing
+// otherwise. Kept apart from `error` because `error` is what the callers log,
+// and a log line is kLineBytes long: the service's state gets its own line,
+// once per change, from noteSdrPlayServiceStatus.
+bool sessionAcquire(const abi::Api& api, std::string& error, std::string* serviceAdvice = nullptr) {
+    if (serviceAdvice != nullptr) { serviceAdvice->clear(); }
     if (!api.resolved) {
         error = sdrPlayApiAdvice(false, 0.0f);
         return false;
     }
-    std::lock_guard<std::mutex> lk(api.sessionMutex);
+    std::unique_lock<std::mutex> lk(api.sessionMutex);
     // A LOST SESSION IS NOT HANDED OUT AGAIN - see markSessionLost. Checked
     // before the count, because the count is exactly what keeps the stale
     // session "open": an orphaned reference is never released.
@@ -409,6 +416,16 @@ bool sessionAcquire(const abi::Api& api, std::string& error) {
     if (err != abi::Success) {
         error = "the SDRplay service did not answer: " + errText(api, err) +
                 ". Check that the SDRplay API service is running.";
+        api.serviceTrouble.store(static_cast<int>(SdrPlayServiceTrouble::OpenFailed),
+                                 std::memory_order_release);
+        // ...AND WHAT WINDOWS SAYS THE SERVICE IS DOING (0.99.55). Asked
+        // AFTER the session mutex is let go - the Service Control Manager is
+        // local and fast, but it is not ours, and nothing else should queue
+        // behind it. This runs on the enumeration's bounded worker or on
+        // open()'s caller, never on a stream callback.
+        lk.unlock();
+        const SdrPlayServiceStatus service = querySdrPlayServiceAndNote();
+        if (serviceAdvice != nullptr) { *serviceAdvice = sdrPlayServiceAdvice(service); }
         return false;
     }
     float ver = 0.0f;
@@ -425,6 +442,9 @@ bool sessionAcquire(const abi::Api& api, std::string& error) {
     }
     api.version = ver;
     api.sessions = 1;
+    // The service answered: whatever it last failed for is over.
+    api.serviceTrouble.store(static_cast<int>(SdrPlayServiceTrouble::None),
+                             std::memory_order_release);
     return true;
 }
 
@@ -459,6 +479,8 @@ void markSessionLost(const abi::Api& api, const char* why) {
         first = !api.sessionLost;
         api.sessionLost = true;
     }
+    api.serviceTrouble.store(static_cast<int>(SdrPlayServiceTrouble::SessionLost),
+                             std::memory_order_release);
     if (first) {
         core::diagWarnf("source: SDRplay API session lost - %s; no further SDRplay API calls are "
                         "made until FoxSDR is restarted",
@@ -662,6 +684,14 @@ void armEnumerationHoldOff(std::chrono::steady_clock::time_point now) {
     holdOffUntil() = now + kEnumerateHoldOff;
 }
 
+// Back to the state every process starts in. The tests' reset, and the
+// service restart's (sdrPlayApplyServiceRestart): a hold-off armed against the
+// service that was just restarted guards nothing.
+void clearEnumerationHoldOff() {
+    std::lock_guard<std::mutex> lk(holdOffMutex());
+    holdOffUntil() = std::chrono::steady_clock::time_point{};
+}
+
 // The vendor half: everything that can block forever. Runs on the caller's
 // thread when the service is healthy and on an abandoned worker when it is
 // not, which is why it takes nothing by reference except the table itself -
@@ -670,14 +700,18 @@ std::vector<NativeDeviceInfo> enumerateSdrPlayVendor(const abi::Api& api, std::s
     std::vector<NativeDeviceInfo> out;
     skip.clear();
     std::string error;
-    if (!sessionAcquire(api, error)) {
+    std::string serviceAdvice;
+    if (!sessionAcquire(api, error, &serviceAdvice)) {
         core::diagLogf("source: SDRplay enumeration skipped - %s", error.c_str());
         // ...AND THE SCREEN GETS THE SAME SENTENCE THE LOG JUST GOT. Kept
         // verbatim rather than re-derived in the panel: the too-old case
         // knows a version number that only this call learned, and nothing
         // above this line can find it out again without opening the API a
         // second time. See sdrPlayLastEnumerationSkip.
-        skip = error;
+        //
+        // Plus, when Open itself failed, what Windows says the service is
+        // doing (0.99.55) - the log has that on a line of its own.
+        skip = serviceAdvice.empty() ? error : (error + " " + serviceAdvice);
         return out;
     }
 
@@ -803,9 +837,73 @@ bool sdrPlayEnumerationHeldOff() {
     return enumerationHeldOffAt(std::chrono::steady_clock::now());
 }
 
-void sdrPlayClearEnumerationHoldOffForTest() {
-    std::lock_guard<std::mutex> lk(holdOffMutex());
-    holdOffUntil() = std::chrono::steady_clock::time_point{};
+void sdrPlayClearEnumerationHoldOffForTest() { clearEnumerationHoldOff(); }
+
+// --- the service behind the API (0.99.55) ---------------------------------
+
+SdrPlayServiceTrouble sdrPlayServiceTrouble(const abi::Api& api) {
+    const int t = api.serviceTrouble.load(std::memory_order_acquire);
+    switch (t) {
+        case static_cast<int>(SdrPlayServiceTrouble::OpenFailed): return SdrPlayServiceTrouble::OpenFailed;
+        case static_cast<int>(SdrPlayServiceTrouble::EnumerationHung):
+            return SdrPlayServiceTrouble::EnumerationHung;
+        case static_cast<int>(SdrPlayServiceTrouble::SessionLost): return SdrPlayServiceTrouble::SessionLost;
+        default: break;
+    }
+    return SdrPlayServiceTrouble::None;
+}
+
+bool sdrPlayRestartKeyShown(bool windows, const SdrPlayServiceStatus& service,
+                            SdrPlayServiceTrouble trouble, SdrPlayRestartPhase phase) {
+    if (!windows || !sdrPlayServiceFound(service)) { return false; }
+    return trouble != SdrPlayServiceTrouble::None || phase == SdrPlayRestartPhase::Running;
+}
+
+SdrPlayAfterRestart sdrPlayAfterServiceRestart(bool serviceRunning, bool sessionStateKnown,
+                                               int sessions, bool sessionLost,
+                                               int controlsInFlight) {
+    // The service first: until Windows says it is running, there is nothing
+    // to reopen and nothing a FoxSDR restart would fix.
+    if (!serviceRunning) { return SdrPlayAfterRestart::ServiceNotRunning; }
+    // A LOST SESSION IS NEVER REOPENED IN THIS PROCESS. The latch exists
+    // because a thread of ours may still be parked inside the vendor DLL for
+    // the orphaned device, and a restarted service does not bring it back
+    // (see markSessionLost). Restarting FoxSDR is the only clean slate.
+    if (sessionLost) { return SdrPlayAfterRestart::RestartFoxSdr; }
+    // A state we could not read without waiting, a session still counted
+    // (an abandoned scan's worker may hold it) or a control still waiting for
+    // its answer: none of those is provably clear, so the same answer.
+    if (!sessionStateKnown || sessions > 0 || controlsInFlight > 0) {
+        return SdrPlayAfterRestart::RestartFoxSdr;
+    }
+    return SdrPlayAfterRestart::ReopenInProcess;
+}
+
+SdrPlayAfterRestart sdrPlayApplyServiceRestart(const abi::Api& api, bool serviceRunning) {
+    bool known = false;
+    int sessions = 0;
+    bool lost = false;
+    int inFlight = 0;
+    {
+        std::unique_lock<std::mutex> lk(api.sessionMutex, std::try_to_lock);
+        if (lk.owns_lock()) {
+            known = true;
+            sessions = api.sessions;
+            lost = api.sessionLost;
+            inFlight = api.controlsInFlight;
+        }
+    }
+    const SdrPlayAfterRestart what =
+        sdrPlayAfterServiceRestart(serviceRunning, known, sessions, lost, inFlight);
+    if (what == SdrPlayAfterRestart::ReopenInProcess) {
+        // The next scan asks the API again instead of repeating what the dead
+        // service last said, or waiting out a hold-off armed against it.
+        setEnumerationSkip(std::string());
+        clearEnumerationHoldOff();
+        api.serviceTrouble.store(static_cast<int>(SdrPlayServiceTrouble::None),
+                                 std::memory_order_release);
+    }
+    return what;
 }
 
 std::vector<NativeDeviceInfo> enumerateSdrPlayWith(const abi::Api& api) {
@@ -868,6 +966,10 @@ std::vector<NativeDeviceInfo> enumerateSdrPlayWith(const abi::Api& api) {
         // the hold-off below arranges.
         worker.detach();
         armEnumerationHoldOff(now);
+        // Recorded for the RESTART SDRPLAY SERVICE key (0.99.55) - atomically,
+        // because the worker just abandoned may be holding the session mutex.
+        api.serviceTrouble.store(static_cast<int>(SdrPlayServiceTrouble::EnumerationHung),
+                                 std::memory_order_release);
         core::diagWarnf("source: SDRplay enumeration abandoned - %s",
                         sdrPlayServiceHungSentence());
         core::diagLogf("source: SDRplay scans are held off for %lld s",
@@ -1402,9 +1504,10 @@ abi::RxChannelParamsT* SdrPlaySource::chParamsLocked() const {
     return (device_.tuner == abi::Tuner_B) ? deviceParams_->rxChannelB : deviceParams_->rxChannelA;
 }
 
-bool SdrPlaySource::acquireSessionLocked(std::string& error) {
+bool SdrPlaySource::acquireSessionLocked(std::string& error, std::string* serviceAdvice) {
+    if (serviceAdvice != nullptr) { serviceAdvice->clear(); }
     if (sessionHeld_) { return true; }
-    if (!sessionAcquire(api(), error)) { return false; }
+    if (!sessionAcquire(api(), error, serviceAdvice)) { return false; }
     sessionHeld_ = true;
     float ver = 0.0f;
     {
@@ -1617,8 +1720,12 @@ bool SdrPlaySource::open(const std::string& args) {
     streamStalled_.store(false, std::memory_order_release);
 
     std::string error;
-    if (!acquireSessionLocked(error)) {
-        setError(error);
+    std::string serviceAdvice;
+    if (!acquireSessionLocked(error, &serviceAdvice)) {
+        // The panel gets the service's state as well (0.99.55); the log line
+        // below keeps the driver's own sentence, and the state is logged on a
+        // line of its own, once per change (noteSdrPlayServiceStatus).
+        setError(serviceAdvice.empty() ? error : (error + " " + serviceAdvice));
         if (error == sdrPlaySessionLostSentence()) {
             // SHORTER THAN THE SENTENCE, as start()'s refusal is (0.99.44,
             // GitHub issue 5): prefixed, the sentence is wider than a log line
