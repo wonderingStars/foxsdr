@@ -1254,7 +1254,7 @@ std::unique_ptr<UsbDevice> openWinUsb(const std::string& path, std::string& erro
     if (file == INVALID_HANDLE_VALUE) {
         const DWORD err = ::GetLastError();
         if (err == ERROR_ACCESS_DENIED || err == ERROR_SHARING_VIOLATION) {
-            error = "the radio is already in use by another program";
+            error = kInUseError;
         } else if (err == ERROR_FILE_NOT_FOUND || err == ERROR_PATH_NOT_FOUND) {
             error = "the radio is no longer present";
         } else {

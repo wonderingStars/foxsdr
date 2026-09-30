@@ -91,6 +91,17 @@ int main() {
         // releases removing; the message is part of the contract.
         CHECK(!err.empty());
         std::printf("open of a bogus path said: %s\n", err.c_str());
+
+        // CONTENTION IS NAMED, AND NOTHING ELSE IS. A live test skips when
+        // another program holds the radio and must FAIL on every other open
+        // failure; before 2026-09-30 test_rtlsdr_live skipped on both, and
+        // reported "0 checks, 0 failed" for a tuner that would not start.
+        CHECK(!cascade::usb::errorSaysInUse(err));
+        CHECK(cascade::usb::errorSaysInUse(cascade::usb::kInUseError));
+        CHECK(cascade::usb::errorSaysInUse(std::string(cascade::usb::kInUseError) +
+                                           " or its kernel driver could not be detached"));
+        CHECK(!cascade::usb::errorSaysInUse(
+            "the tuner would not initialise: the tuner stopped answering on the I2C bus"));
     }
 
     // --- 3. The fake's own contract -----------------------------------------
@@ -161,15 +172,30 @@ int main() {
         } else {
             std::string err;
             auto dev = cascade::usb::openWinUsb(found[0].path, err);
-            if (!dev) {
+            if (!dev && cascade::usb::errorSaysInUse(err)) {
                 // Another process (a running FoxSDR, another test) holding the
                 // dongle is contention on this machine, not a transport fault.
-                std::printf("hardware half SKIPPED: the dongle would not open (%s). If "
-                            "something else on this machine has it, that is contention, "
-                            "not a failure of this code.\n",
+                std::printf("hardware half SKIPPED: %s - contention on this machine, not a "
+                            "failure of this code.\n",
                             err.c_str());
+            } else if (!dev) {
+                std::printf("the dongle would not open, and not because it is in use: %s\n",
+                            err.c_str());
+                CHECK(false);
             } else {
                 std::printf("opened %s\n", dev->path().c_str());
+
+                // A SECOND OPEN WHILE THIS ONE HOLDS IT is exactly what another
+                // program looks like, and must say so in the words a live test
+                // skips on - measured, not assumed.
+                {
+                    std::string err2;
+                    auto second = cascade::usb::openWinUsb(found[0].path, err2);
+                    std::printf("a second open while held: %s\n",
+                                second ? "OPENED" : err2.c_str());
+                    CHECK(second == nullptr);
+                    CHECK(cascade::usb::errorSaysInUse(err2));
+                }
 
                 // A VENDOR CONTROL TRANSFER THAT REACHES THE CHIP. Block 1
                 // (USB), address 0x2000 (USB_SYSCTL): a register the

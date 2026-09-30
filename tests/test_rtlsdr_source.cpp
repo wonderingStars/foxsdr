@@ -1284,5 +1284,266 @@ int main() {
         src.closeDevice();
     }
 
+    // =======================================================================
+    // 20. ONE REFUSED TUNER WRITE IS RETRIED, NOT FATAL.
+    //
+    // Found by test_rtlsdr_live on 2026-09-30: with every CPU on the machine
+    // busy, the RTL2832U intermittently refuses a single tuner I2C write
+    // (Windows error 31), and the same write is accepted once the I2C
+    // repeater has been switched back on. Demodulator writes on the same USB
+    // pipe never failed, so the refusal is on the tuner's side of the chip.
+    // Before this block the driver treated that one refusal as the end: a
+    // retune to 1090 MHz returned false and the readback stayed at 100 MHz,
+    // and an open failed with "the tuner stopped answering on the I2C bus".
+    // A refusal is retried a bounded number of times, the repeater switched
+    // on before each retry; a transfer that fails as SLOWLY as a timeout (a
+    // dongle that has stopped answering) is not, so a dead radio still fails
+    // in one control timeout.
+    // =======================================================================
+    const auto refusingI2c = [](FakeUsbDevice& fake, std::shared_ptr<int> i2cWrites,
+                                std::shared_ptr<std::vector<int>> refuse) {
+        fake.refuseControlOut = [i2cWrites, refuse](const FakeControl& c) {
+            if (!isBlockWrite(c, 6)) { return false; }
+            const int n = ++*i2cWrites;
+            for (const int r : *refuse) {
+                if (r == n) { return true; }
+            }
+            return false;
+        };
+    };
+    {
+        // (a) THE OPEN survives refused writes inside the tuner's init.
+        auto i2cWrites = std::make_shared<int>(0);
+        auto refuse = std::make_shared<std::vector<int>>(std::vector<int>{3, 4});
+        RtlSdrSource src;
+        auto fake = std::make_unique<FakeUsbDevice>();
+        dressAsR820T(*fake);
+        refusingI2c(*fake, i2cWrites, refuse);
+        CHECK(src.openWithTransport(std::move(fake), "fake R820T dongle"));
+        std::printf("open with I2C writes 3 and 4 refused: open %d, %s\n", src.isOpen() ? 1 : 0,
+                    src.lastError());
+        CHECK(src.isOpen());
+        CHECK(!src.faulted());
+        refuse->clear();
+        src.closeDevice();
+    }
+    {
+        auto i2cWrites = std::make_shared<int>(0);
+        auto refuse = std::make_shared<std::vector<int>>();  // I2C write numbers to refuse
+        RtlSdrSource src;
+        auto fake = std::make_unique<FakeUsbDevice>();
+        dressAsR820T(*fake);
+        FakeUsbDevice* f = fake.get();
+        refusingI2c(*fake, i2cWrites, refuse);
+        CHECK(src.openWithTransport(std::move(fake), "fake R820T dongle"));
+        CHECK(src.setCenterFrequencyHz(100000000.0));
+
+        // (b) THE FIELD SYMPTOM: a retune whose first two tuner writes are
+        // refused still lands, and reads back where it was asked to go -
+        // not at the 100 MHz it was tuned to before.
+        *refuse = {*i2cWrites + 1, *i2cWrites + 2};
+        f->clear();
+        const bool tuned = src.setCenterFrequencyHz(1090000000.0);
+        std::printf("retune with two refused tuner writes: %d, reads back %.4f MHz (%s)\n",
+                    tuned ? 1 : 0, src.centerFrequencyHz() / 1e6, src.lastError());
+        CHECK(tuned);
+        CHECK_NEAR(src.centerFrequencyHz(), 1090000000.0, 1.0);
+        CHECK(!src.faulted());
+        // Each retry is preceded by the repeater switched on (demod page 1
+        // register 0x01 = 0x18), and repeats the refused write byte for byte.
+        {
+            const std::vector<FakeControl> w = f->writes();
+            std::vector<std::size_t> i2c;
+            for (std::size_t i = 0; i < w.size(); ++i) {
+                if (isBlockWrite(w[i], 6)) { i2c.push_back(i); }
+            }
+            CHECK(i2c.size() >= 3);
+            if (i2c.size() >= 3) {
+                for (int k = 0; k < 2; ++k) {
+                    const std::size_t a = i2c[static_cast<std::size_t>(k)];
+                    const std::size_t b = i2c[static_cast<std::size_t>(k) + 1];
+                    CHECK(w[a].data == w[b].data);
+                    bool repeaterOn = false;
+                    for (std::size_t j = a + 1; j < b; ++j) {
+                        if (isDemodWrite(w[j]) && w[j].value == 0x0120 && w[j].index == 0x11 &&
+                            w[j].data == std::vector<std::uint8_t>{0x18}) {
+                            repeaterOn = true;
+                        }
+                    }
+                    std::printf("retry %d: repeater switched on before it: %d\n", k + 1,
+                                repeaterOn ? 1 : 0);
+                    CHECK(repeaterOn);
+                }
+            }
+        }
+
+        // (c) A TUNER THAT NEVER ANSWERS AGAIN: bounded attempts, then the
+        // retune is refused and the readback does not move.
+        refuse->clear();
+        for (int i = 1; i <= 64; ++i) { refuse->push_back(*i2cWrites + i); }
+        f->clear();
+        CHECK(!src.setCenterFrequencyHz(433920000.0));
+        CHECK_NEAR(src.centerFrequencyHz(), 1090000000.0, 1.0);
+        int attempts = 0;
+        for (const FakeControl& c : f->writes()) {
+            if (isBlockWrite(c, 6)) { ++attempts; }
+        }
+        std::printf("a tuner that never answers: %d attempts at its first write (%s)\n", attempts,
+                    src.lastError());
+        CHECK(attempts == 5);  // one, and four retries
+        CHECK(std::string(src.lastError()).find("I2C") != std::string::npos);
+        refuse->clear();
+        src.closeDevice();
+    }
+    {
+        // (d) A SLOW FAILURE IS NOT RETRIED. 450 ms is past the 400 ms retry
+        // window; a real timeout is 500 ms, and five of those would be a
+        // retune that holds the device lock for two and a half seconds.
+        auto slow = std::make_shared<bool>(false);
+        RtlSdrSource src;
+        auto fake = std::make_unique<FakeUsbDevice>();
+        dressAsR820T(*fake);
+        FakeUsbDevice* f = fake.get();
+        f->refuseControlOut = [slow](const FakeControl& c) {
+            if (!*slow || !isBlockWrite(c, 6)) { return false; }
+            std::this_thread::sleep_for(std::chrono::milliseconds(450));
+            return true;
+        };
+        CHECK(src.openWithTransport(std::move(fake), "fake R820T dongle"));
+        *slow = true;
+        f->clear();
+        CHECK(!src.setCenterFrequencyHz(1090000000.0));
+        int attempts = 0;
+        for (const FakeControl& c : f->writes()) {
+            if (isBlockWrite(c, 6)) { ++attempts; }
+        }
+        std::printf("a tuner write that fails slowly: %d attempt(s)\n", attempts);
+        CHECK(attempts == 1);
+        *slow = false;
+        src.closeDevice();
+    }
+
+    // =======================================================================
+    // 21. A RATE CHANGE DISCARDS THE SAMPLES MADE AT THE OLD RATE.
+    //
+    // setSampleRateHz() already stops the stream around the change so that
+    // no buffer is half one rate and half the other (block 9). The ring was
+    // the gap in that promise: whatever the consumer had not yet read was
+    // still there after the change, and was delivered as if it were at the
+    // new rate. Found by test_rtlsdr_live under full CPU load (2026-09-30):
+    // with the consumer ~50 ms behind, the 1.024 MS/s stream counted 2.1 to
+    // 2.8 per cent too many samples - the 2.4 MS/s ones left in the ring -
+    // while the two streams together added up exactly. Staged here with the
+    // consumer not reading at all: 2048 samples at the old rate sit in the
+    // ring when the rate changes, and 512 arrive after the restart.
+    // =======================================================================
+    {
+        RtlSdrSource src;
+        auto fake = std::make_unique<FakeUsbDevice>();
+        dressAsR820T(*fake);
+        FakeUsbDevice* f = fake.get();
+        CHECK(src.openWithTransport(std::move(fake), "fake R820T dongle"));
+        CHECK(src.setSampleRateHz(2400000.0));
+        // Old rate: 0xFF bytes, +0.996. New rate: 0x80 bytes, +0.004.
+        for (int i = 0; i < 4; ++i) {
+            f->bulkQueue.push_back(std::vector<std::uint8_t>(1024, 0xFF));
+        }
+        const int restartAt = f->beginBulkCalls + 2;  // the start, then the restart
+        f->onBeginBulk = [restartAt](FakeUsbDevice& d) {
+            if (d.beginBulkCalls == restartAt) {
+                d.bulkQueue.push_back(std::vector<std::uint8_t>(1024, 0x80));
+            }
+        };
+        CHECK(src.start());
+        // Every sample the reader has put in the ring, from the health tally
+        // - which starts afresh each time it is read, so the lines are summed.
+        unsigned long long inRing = 0;
+        const auto filled = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (inRing < 2048 && std::chrono::steady_clock::now() < filled) {
+            const std::string line = src.streamHealthLine();
+            const std::size_t at = line.rfind(", ");
+            unsigned long long n = 0;
+            if (at != std::string::npos &&
+                std::sscanf(line.c_str() + at, ", %llu samples in", &n) == 1) {
+                inRing += n;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        std::printf("before the rate change: %llu samples in the ring\n", inRing);
+        CHECK(inRing == 2048);
+
+        const bool rateSet = src.setSampleRateHz(1024000.0);
+        if (!rateSet) { std::printf("the rate change was refused: %s\n", src.lastError()); }
+        CHECK(rateSet);
+        CHECK(src.running());
+        std::vector<std::complex<float>> got(4096);
+        std::size_t oldRate = 0;
+        std::size_t newRate = 0;
+        const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+        while (newRate < 512 && std::chrono::steady_clock::now() < until) {
+            const std::size_t n = src.read(got.data(), got.size());
+            for (std::size_t i = 0; i < n; ++i) {
+                if (got[i].real() > 0.5f) {
+                    ++oldRate;
+                } else if (std::fabs(got[i].real()) < 0.1f) {
+                    ++newRate;
+                }
+            }
+        }
+        std::printf("after a rate change: %zu samples from the old rate, %zu from the new\n",
+                    oldRate, newRate);
+        CHECK(oldRate == 0);
+        CHECK(newRate == 512);
+        src.stop();
+        src.closeDevice();
+    }
+
+    // =======================================================================
+    // 22. A CONTROL CALL IS NOT STARVED BY A STREAMING READER.
+    //
+    // The reader holds the device lock for each bulk read and takes it
+    // straight back after converting, and std::timed_mutex promises no
+    // fairness: a retune waiting its 750 ms could lose every hand-off and be
+    // refused with "the radio is busy; try again" - a retune that does not
+    // take, on a radio that is working. Found as a 1-in-30 failure of block
+    // 21's rate change (2026-09-30); here the fake's empty reads (a 5 ms nap
+    // inside the lock, as a real read with nothing to deliver waits inside
+    // it) make the reader as greedy as it can be, and 200 retunes must all
+    // land.
+    // =======================================================================
+    {
+        RtlSdrSource src;
+        auto fake = std::make_unique<FakeUsbDevice>();
+        dressAsR820T(*fake);
+        CHECK(src.openWithTransport(std::move(fake), "fake R820T dongle"));
+        CHECK(src.start());
+        int refused = 0;
+        double slowestMs = 0.0;
+        std::string firstError;
+        for (int i = 0; i < 200; ++i) {
+            // Each retune arrives while the READER is the thread cycling the
+            // lock - the case a user's click is - not straight after the last
+            // retune, which would hand this thread the lock while hot.
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            const auto t0 = std::chrono::steady_clock::now();
+            if (!src.setCenterFrequencyHz((i % 2) ? 101000000.0 : 100000000.0)) {
+                if (refused++ == 0) { firstError = src.lastError(); }
+            }
+            const double ms =
+                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0)
+                    .count();
+            if (ms > slowestMs) { slowestMs = ms; }
+        }
+        std::printf("200 retunes on a streaming radio: %d refused, slowest %.1f ms%s%s\n",
+                    refused, slowestMs, refused ? " - first: " : "", firstError.c_str());
+        CHECK(refused == 0);
+        // One bulk read's hold (the fake's 5 ms) and a scheduler tick, not the
+        // 750 ms a starved call waits before giving up.
+        CHECK(slowestMs < 250.0);
+        CHECK(src.running());
+        src.stop();
+        src.closeDevice();
+    }
+
     return testSummary("test_rtlsdr_source");
 }

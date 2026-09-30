@@ -111,9 +111,21 @@ public:
     int demodReadReg(std::uint8_t page, std::uint16_t addr, std::uint8_t len);
 
     // --- the I2C repeater and the tuner bus ---------------------------------
+    //
+    // A TUNER TRANSFER THE CHIP REFUSES IS RETRIED. Measured on the bench
+    // R820T with every CPU on the machine busy (2026-09-30): single-byte tuner
+    // writes were refused with Windows error 31 (ERROR_GEN_FAILURE) while
+    // demodulator writes on the same pipe never failed, and the same write
+    // sent again, after the I2C repeater was switched back on, was accepted.
+    // A refusal is retried a bounded number of times inside a window shorter
+    // than one control timeout, so a transfer that timed out (a radio that has
+    // stopped answering) is never retried.
     bool setI2cRepeater(bool on);
     bool i2cWrite(std::uint8_t slave, const std::uint8_t* data, std::uint8_t len);
     bool i2cRead(std::uint8_t slave, std::uint8_t* data, std::uint8_t len);
+    // Tuner transfers that were refused and then recovered by a retry, since
+    // this object was made.
+    int i2cRecovered() const { return i2cRecovered_; }
     // One register, the shape a tuner probe wants. Negative when the slave
     // did not answer.
     int i2cReadReg(std::uint8_t slave, std::uint8_t reg);
@@ -215,6 +227,8 @@ public:
 
 private:
     void note(const char* what);
+    // One tuner transfer with the bounded retry described above.
+    bool i2cTransfer(bool out, std::uint8_t slave, std::uint8_t* data, std::uint8_t len);
     // The string index the device descriptor names at `offset` (14
     // iManufacturer, 15 iProduct), or `fallback` when the device descriptor
     // cannot be read.
@@ -228,6 +242,7 @@ private:
     int directSampling_ = 0;
     std::string lastError_;
     bool failed_ = false;
+    int i2cRecovered_ = 0;
 };
 
 }  // namespace cascade::source

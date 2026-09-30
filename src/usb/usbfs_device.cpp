@@ -913,7 +913,7 @@ std::unique_ptr<UsbDevice> openWinUsb(const std::string& path, std::string& erro
             error = "permission denied opening " + path +
                     " - see installer/linux/99-foxsdr-sdr.rules and installer/linux/README.md";
         } else if (err == EBUSY) {
-            error = "the radio is already in use by another program";
+            error = kInUseError;
         } else {
             error = errnoText(("opening " + path).c_str(), err);
         }
@@ -946,8 +946,7 @@ std::unique_ptr<UsbDevice> openWinUsb(const std::string& path, std::string& erro
         const int err = errno;
         error = errnoText("claiming the radio's USB interface", err);
         if (err == EBUSY) {
-            error = "the radio is already in use by another program or its kernel driver "
-                    "could not be detached";
+            error = std::string(kInUseError) + " or its kernel driver could not be detached";
         }
         ::close(fd);
         return nullptr;
