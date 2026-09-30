@@ -166,6 +166,7 @@ void checkBlockingSaveDoesNotStallTheFrameLoop() {
     double worstGap = 0.0;
     double last = nowMs();
     int frames = 0;
+    int framesWhileInFlight = 0;
     bool collected = false;
     const double until = nowMs() + 2900.0;
     while (nowMs() < until) {
@@ -175,13 +176,25 @@ void checkBlockingSaveDoesNotStallTheFrameLoop() {
         if (t - last > worstGap) { worstGap = t - last; }
         last = t;
         ++frames;
+        if (!collected) { ++framesWhileInFlight; }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 
+    std::printf("test_config_save: save-while-rendering - %d frames in 2900 ms (%d while the 2500 ms "
+                "save was in flight), worst gap %.1f ms\n",
+                frames, framesWhileInFlight, worstGap);
     // THE CHECK THE FIELD REPORT IS. A synchronous save of the same content
     // writes one hang report here; this must write none.
     CHECK(w.reportsWritten() == 0u);
-    CHECK(frames > 150);
+    // FRAMES TURNED WHILE THE DISK THOUGHT. This used to be "frames > 150"
+    // over the whole window, which asked the 10 ms sleep to average under
+    // 19.3 ms: Windows rounds it up to its 15.625 ms tick (186-187 frames on an
+    // idle desk), so one busy spell on a loaded machine failed it with no
+    // stall anywhere (0.99.56 release run). What the save must not do is hold
+    // the loop while it is in flight: a blocking save gets 0-1 frames through
+    // those 2500 ms, and even a loop slowed to 100 ms a frame gets 25. The
+    // stall itself is worstGap's job below.
+    CHECK(framesWhileInFlight >= 10);
     CHECK(worstGap < 800.0);
 
     // And the write did land, on a later frame, without anyone blocking for
