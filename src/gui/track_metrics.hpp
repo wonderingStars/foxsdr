@@ -879,6 +879,45 @@ inline void CoverageMap::record(double bearingDeg, double km) {
     if (km > maxKm_[bucket]) { maxKm_[bucket] = km; }
 }
 
+// How far a sighting of `kind` may be and still count as coverage. 0 means the
+// kind never counts.
+//
+// A SATELLITE NEVER COUNTS. Its position is a prediction from orbital elements,
+// published whether or not anything was heard, and the Satellites plugin places
+// every satellite it tracks wherever it is, below the horizon or not: fed in,
+// they would stretch wedges out to the far side of the planet and bury the
+// antenna's real pattern.
+//
+// AIRCRAFT AND VESSELS ARE LINE OF SIGHT. The radio horizon for an aircraft at
+// 45,000 ft from a mast on a 3,000 m hill is about 800 km, and ducting over the
+// sea stretches the record receptions to roughly that, so 1,000 km is past
+// anything real. A position further out is a mis-decode (a tester's ADS-B page
+// read "best 17082 km" from a receiver near Chicago), and one of them would pin
+// that bearing's wedge, and "best", for the rest of the session.
+//
+// Everything else keeps the physical limit record() applies: a station can be
+// an HF contact on the other side of the world, and that is a real reception.
+inline constexpr double kLineOfSightCoverageKm = 1000.0;
+inline double coverageLimitKm(TrackKind kind) {
+    switch (kind) {
+        case TrackKind::Satellite: return 0.0;
+        case TrackKind::Aircraft:
+        case TrackKind::Vessel: return kLineOfSightCoverageKm;
+        case TrackKind::Other: break;
+    }
+    return 20100.0;
+}
+
+// One target's sighting, measured from the receiver, into the accumulator: the
+// whole per-track rule the app applies, in one place a test can reach.
+inline void recordCoverage(CoverageMap& cov, double rxLatDeg, double rxLonDeg,
+                           double latDeg, double lonDeg, TrackKind kind) {
+    const double km = greatCircleKm(rxLatDeg, rxLonDeg, latDeg, lonDeg);
+    // Written so a NaN distance fails it too; record() would refuse one anyway.
+    if (!(km <= coverageLimitKm(kind))) { return; }
+    cov.record(initialBearingDeg(rxLatDeg, rxLonDeg, latDeg, lonDeg), km);
+}
+
 inline double CoverageMap::maxKm(int bucket) const {
     if (bucket < 0 || bucket >= kBuckets) { return 0.0; }
     return maxKm_[bucket];

@@ -30,8 +30,11 @@
 using cascade::gui::altBandStyle;
 using cascade::gui::altitudeBandIndex;
 using cascade::gui::CoverageMap;
+using cascade::gui::coverageLimitKm;
 using cascade::gui::coverageVertex;
 using cascade::gui::CoverageVertex;
+using cascade::gui::kLineOfSightCoverageKm;
+using cascade::gui::recordCoverage;
 using cascade::gui::destinationPoint;
 using cascade::gui::greatCircleKm;
 using cascade::gui::initialBearingDeg;
@@ -1528,6 +1531,85 @@ int main() {
         CHECK(cov.maxKm(6) == before);
         CHECK(cov.filledBuckets() == 1);
         CHECK(cov.peakKm() == 250.0);
+    }
+
+    // --- coverage: what counts, by kind -------------------------------------
+    // The report this pins: a receiver near Chicago read "best 17082 km" off
+    // its ADS-B map. Every case goes through recordCoverage, the one call the
+    // app makes per visible track, so the distance is measured exactly as the
+    // app measures it.
+    {
+        const double rxLat = 41.94287, rxLon = -88.12718;
+        // Tokyo is about 10,100 km from Chicago; Perth about 17,900 km.
+        const double tokyoLat = 35.68, tokyoLon = 139.69;
+        const double perthLat = -31.95, perthLon = 115.86;
+        const double tokyoKm = greatCircleKm(rxLat, rxLon, tokyoLat, tokyoLon);
+        const double perthKm = greatCircleKm(rxLat, rxLon, perthLat, perthLon);
+        CHECK(tokyoKm > 9000.0 && tokyoKm < 11000.0);
+        CHECK(perthKm > 17000.0 && perthKm < 19000.0);
+        // A real aircraft 150 km west, from the same receiver.
+        const double nearLat = 41.94287, nearLon = -89.94;
+        const double nearKm = greatCircleKm(rxLat, rxLon, nearLat, nearLon);
+        CHECK(nearKm > 140.0 && nearKm < 160.0);
+
+        // AN AIRCRAFT PAST THE RADIO HORIZON IS A MIS-DECODE: refused, and it
+        // takes no bucket. A real one counts.
+        {
+            CoverageMap cov;
+            recordCoverage(cov, rxLat, rxLon, perthLat, perthLon, TrackKind::Aircraft);
+            recordCoverage(cov, rxLat, rxLon, tokyoLat, tokyoLon, TrackKind::Aircraft);
+            CHECK(cov.empty());
+            recordCoverage(cov, rxLat, rxLon, nearLat, nearLon, TrackKind::Aircraft);
+            CHECK(cov.filledBuckets() == 1);
+            CHECK_NEAR(cov.peakKm(), nearKm, 1e-9);
+            // ...and a mis-decode arriving after it does not move the record.
+            recordCoverage(cov, rxLat, rxLon, perthLat, perthLon, TrackKind::Aircraft);
+            CHECK_NEAR(cov.peakKm(), nearKm, 1e-9);
+            CHECK(cov.filledBuckets() == 1);
+        }
+        // The same rule for a vessel.
+        {
+            CoverageMap cov;
+            recordCoverage(cov, rxLat, rxLon, perthLat, perthLon, TrackKind::Vessel);
+            CHECK(cov.empty());
+        }
+        // THE BOUNDARY. 1,000 km counts; just past it does not.
+        {
+            CHECK(coverageLimitKm(TrackKind::Aircraft) == kLineOfSightCoverageKm);
+            CHECK(coverageLimitKm(TrackKind::Vessel) == kLineOfSightCoverageKm);
+            const LatLon in = destinationPoint(rxLat, rxLon, 90.0, 999.0);
+            const LatLon out = destinationPoint(rxLat, rxLon, 90.0, 1001.0);
+            CoverageMap cov;
+            recordCoverage(cov, rxLat, rxLon, out.latDeg, out.lonDeg, TrackKind::Aircraft);
+            CHECK(cov.empty());
+            recordCoverage(cov, rxLat, rxLon, in.latDeg, in.lonDeg, TrackKind::Aircraft);
+            CHECK(cov.filledBuckets() == 1);
+            CHECK_NEAR(cov.peakKm(), 999.0, 0.5);
+        }
+        // A SATELLITE NEVER COUNTS, even straight overhead-ish: its position
+        // is a prediction, not a reception.
+        {
+            CoverageMap cov;
+            recordCoverage(cov, rxLat, rxLon, nearLat, nearLon, TrackKind::Satellite);
+            recordCoverage(cov, rxLat, rxLon, perthLat, perthLon, TrackKind::Satellite);
+            CHECK(cov.empty());
+            CHECK(coverageLimitKm(TrackKind::Satellite) == 0.0);
+        }
+        // ANYTHING ELSE keeps the physical limit: an HF station on the other
+        // side of the world is a real reception.
+        {
+            CoverageMap cov;
+            recordCoverage(cov, rxLat, rxLon, perthLat, perthLon, TrackKind::Other);
+            CHECK(cov.filledBuckets() == 1);
+            CHECK_NEAR(cov.peakKm(), perthKm, 1e-9);
+        }
+        // The bearing is measured from the receiver too: the western aircraft
+        // lands in a western bucket (bearing about 270, bucket 53 or 54).
+        {
+            CoverageMap cov;
+            recordCoverage(cov, rxLat, rxLon, nearLat, nearLon, TrackKind::Aircraft);
+            CHECK(cov.maxKm(53) > 0.0 || cov.maxKm(54) > 0.0);
+        }
     }
 
     // --- coverage: reset -----------------------------------------------------

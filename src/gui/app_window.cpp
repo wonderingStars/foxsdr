@@ -17199,8 +17199,11 @@ void AppWindow::drawPluginWindows() {
             if (!cascade::core::trackPresentation(ht.t.ageMs, ht.t.kind).visible) {
                 continue;
             }
-            coverage_.record(initialBearingDeg(rxLat_, rxLon_, ht.t.latDeg, ht.t.lonDeg),
-                             greatCircleKm(rxLat_, rxLon_, ht.t.latDeg, ht.t.lonDeg));
+            // By kind: a satellite's predicted position is not a reception,
+            // and an aircraft past the radio horizon is a mis-decode (see
+            // coverageLimitKm).
+            recordCoverage(coverage_, rxLat_, rxLon_, ht.t.latDeg, ht.t.lonDeg,
+                           detailTrackKind(ht.t.kind));
         }
     }
 
