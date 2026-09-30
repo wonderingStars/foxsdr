@@ -360,6 +360,75 @@ void testClaimPrimaryInstanceDifferentIdentitiesAreIndependent() {
 }
 
 // ---------------------------------------------------------------------------
+// primaryInstanceIdentity - the test-only instance scope. PRODUCT BEHAVIOUR
+// PINNED FIRST: with no CASCADE_CONFIG_TEST hook the identity is byte-for-byte
+// the fixed name every shipped copy of FoxSDR claims, whatever
+// FOXSDR_INSTANCE_SCOPE says - a stray env var must never split one user's
+// copies into ones that cannot hand a link to each other.
+// ---------------------------------------------------------------------------
+
+#if defined(_WIN32)
+const std::string kFixedIdentity = "Local\\FoxSDR-instance";
+std::string scopedIdentity(const std::string& /*configDir*/, const std::string& scope) {
+    return "Local\\FoxSDR-instance-" + scope;
+}
+#else
+const std::string kFixedIdentity = "/home/u/.config/foxsdr/instance.lock";
+std::string scopedIdentity(const std::string& configDir, const std::string& scope) {
+    return configDir + "/instance-" + scope + ".lock";
+}
+#endif
+
+void testPrimaryInstanceIdentityIsTheFixedNameWithoutTheTestHook() {
+    using cascade::core::primaryInstanceIdentity;
+    const std::string cfg = "/home/u/.config/foxsdr";
+    CHECK(primaryInstanceIdentity(cfg, "", "") == kFixedIdentity);
+    CHECK(primaryInstanceIdentity(cfg, "", "scope1") == kFixedIdentity);  // no hook: ignored
+#if defined(_WIN32)
+    // The literal, not a constant shared with the product: this IS the name.
+    CHECK(primaryInstanceIdentity("", "", "") == std::string("Local\\FoxSDR-instance"));
+#else
+    CHECK(primaryInstanceIdentity("", "", "") == "/tmp/foxsdr-instance.lock");
+    CHECK(primaryInstanceIdentity("", "", "scope1") == "/tmp/foxsdr-instance.lock");
+#endif
+}
+
+void testPrimaryInstanceIdentityTakesAValidScopeOnlyWithTheTestHook() {
+    using cascade::core::primaryInstanceIdentity;
+    const std::string cfg = "/home/u/.config/foxsdr";
+    const std::string hook = "/tmp/x/config.json";
+    CHECK(primaryInstanceIdentity(cfg, hook, "tl-123_ab") == scopedIdentity(cfg, "tl-123_ab"));
+    // A hook with no scope is an ordinary config-test run: the fixed name.
+    CHECK(primaryInstanceIdentity(cfg, hook, "") == kFixedIdentity);
+#if !defined(_WIN32)
+    CHECK(primaryInstanceIdentity("", hook, "s") == "/tmp/foxsdr-instance-s.lock");
+#endif
+    // The boundary: exactly kMaxInstanceScopeChars is taken, one more is not.
+    const std::string longest(cascade::core::kMaxInstanceScopeChars, 'a');
+    CHECK(primaryInstanceIdentity(cfg, hook, longest) == scopedIdentity(cfg, longest));
+    CHECK(primaryInstanceIdentity(cfg, hook, longest + "a") == kFixedIdentity);
+    // Anything that could change which kernel object / file is named, or
+    // escape the directory, is ignored outright - never sanitised into
+    // something else.
+    for (const std::string bad : {"a\\b", "a/b", "..", "a.b", "a b", " a", "a\n", "Global\\x"}) {
+        CHECK(primaryInstanceIdentity(cfg, hook, bad) == kFixedIdentity);
+    }
+}
+
+// The wiring, not just the name: a scoped claimPrimaryInstance() really holds
+// the scoped identity (a second claimant of that exact name is refused).
+void testClaimPrimaryInstanceHoldsTheScopedIdentity() {
+    const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+    const std::string scope = "unit-" + std::to_string(stamp);
+    const fs::path dir = uniqueDir("scoped");
+    std::error_code ec;
+    fs::create_directories(dir, ec);
+    CHECK(cascade::core::claimPrimaryInstance(dir.string(), "hook", scope));
+    CHECK(!cascade::core::claimPrimaryInstanceAt(scopedIdentity(dir.string(), scope)));
+    fs::remove_all(dir, ec);
+}
+
+// ---------------------------------------------------------------------------
 // betaApiBaseUrl override
 // ---------------------------------------------------------------------------
 
@@ -393,6 +462,21 @@ void testBetaApiBaseUrlOverride() {
 
 #if defined(_WIN32)
 
+// EVERY SPAWN BELOW RUNS IN THIS PROCESS'S OWN INSTANCE SCOPE. The single-
+// instance mutex is per logon session, so without this any other cascade.exe
+// on the desktop - the owner's own FoxSDR, or another checkout's ctest running
+// app smoke tests at the same moment - was "the running instance": the spawned
+// copy handed the link to it and exited without rendering, failing the
+// no-instance case at its frame and file checks. Proven 2026-09-30 with one
+// isolated --frames copy running beside this test. CASCADE_CONFIG_TEST is set
+// by every spawn too, which is what lets the app honour the scope at all.
+const std::string& spawnInstanceScope() {
+    static const std::string scope =
+        "tl-" + std::to_string(::GetCurrentProcessId()) + "-" +
+        std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+    return scope;
+}
+
 void testLinkActivationWithNoInstanceRunningLaunchesNormallyAndNeverLeaksTheToken() {
     const fs::path dir = uniqueDir("mainpath");
     std::error_code ec;
@@ -413,6 +497,7 @@ void testLinkActivationWithNoInstanceRunningLaunchesNormallyAndNeverLeaksTheToke
     ::SetEnvironmentVariableA("APPDATA", dir.string().c_str());
     ::SetEnvironmentVariableA("LOCALAPPDATA", dir.string().c_str());
     ::SetEnvironmentVariableA("CASCADE_CONFIG_TEST", cfgPath.string().c_str());
+    ::SetEnvironmentVariableA("FOXSDR_INSTANCE_SCOPE", spawnInstanceScope().c_str());
     // Every network-facing endpoint this run could reach, pointed at a port
     // nothing listens on - this test proves argv handling and the file, not
     // any network exchange, and a fresh isolated profile must never reach
@@ -437,7 +522,7 @@ void testLinkActivationWithNoInstanceRunningLaunchesNormallyAndNeverLeaksTheToke
     for (const char* v : {"APPDATA", "LOCALAPPDATA", "CASCADE_CONFIG_TEST", "FOXSDR_BETA_API_URL",
                           "FOXSDR_TESTER_USAGE_URL", "FOXSDR_TELEMETRY_URL", "FOXSDR_UPDATE_URL",
                           "FOXSDR_CRASH_URL", "FOXSDR_FEATURE_URL", "FOXSDR_PROBLEM_URL",
-                          "FOXSDR_REPORTS_URL"}) {
+                          "FOXSDR_REPORTS_URL", "FOXSDR_INSTANCE_SCOPE"}) {
         ::SetEnvironmentVariableA(v, nullptr);
     }
 
@@ -487,6 +572,7 @@ void testMalformedLinkIsDroppedWithoutEchoingTheToken() {
         ::SetEnvironmentVariableA("APPDATA", dir.string().c_str());
         ::SetEnvironmentVariableA("LOCALAPPDATA", dir.string().c_str());
         ::SetEnvironmentVariableA("CASCADE_CONFIG_TEST", cfgPath.string().c_str());
+        ::SetEnvironmentVariableA("FOXSDR_INSTANCE_SCOPE", spawnInstanceScope().c_str());
         for (const char* v : {"FOXSDR_BETA_API_URL", "FOXSDR_TESTER_USAGE_URL", "FOXSDR_TELEMETRY_URL",
                               "FOXSDR_UPDATE_URL", "FOXSDR_CRASH_URL", "FOXSDR_FEATURE_URL",
                               "FOXSDR_PROBLEM_URL", "FOXSDR_REPORTS_URL"}) {
@@ -505,7 +591,7 @@ void testMalformedLinkIsDroppedWithoutEchoingTheToken() {
         for (const char* v : {"APPDATA", "LOCALAPPDATA", "CASCADE_CONFIG_TEST", "FOXSDR_BETA_API_URL",
                               "FOXSDR_TESTER_USAGE_URL", "FOXSDR_TELEMETRY_URL", "FOXSDR_UPDATE_URL",
                               "FOXSDR_CRASH_URL", "FOXSDR_FEATURE_URL", "FOXSDR_PROBLEM_URL",
-                              "FOXSDR_REPORTS_URL"}) {
+                              "FOXSDR_REPORTS_URL", "FOXSDR_INSTANCE_SCOPE"}) {
             ::SetEnvironmentVariableA(v, nullptr);
         }
 
@@ -531,8 +617,13 @@ void testMalformedLinkIsDroppedWithoutEchoingTheToken() {
 void testLinkShapesWindowsDeliversReachTheRunningInstance() {
     // Opened and CLOSED here, not claimPrimaryInstance()'s deliberate leak:
     // the spawn tests after this one need to be the primary instance again.
-    const HANDLE running = ::CreateMutexA(nullptr, FALSE, "Local\\FoxSDR-instance");
+    // The SCOPED name each spawn below looks for (spawnInstanceScope()), spelled
+    // out here rather than asked of primaryInstanceIdentity(), so a change to
+    // the app's derivation shows up as this fake instance not being found.
+    const std::string runningName = "Local\\FoxSDR-instance-" + spawnInstanceScope();
+    const HANDLE running = ::CreateMutexA(nullptr, FALSE, runningName.c_str());
     CHECK(running != nullptr);
+    CHECK(::GetLastError() != ERROR_ALREADY_EXISTS);  // ours alone, nobody else's
 
     const std::string tok = std::string(40, 'd');
     struct Shape {
@@ -554,6 +645,7 @@ void testLinkShapesWindowsDeliversReachTheRunningInstance() {
         ::SetEnvironmentVariableA("APPDATA", dir.string().c_str());
         ::SetEnvironmentVariableA("LOCALAPPDATA", dir.string().c_str());
         ::SetEnvironmentVariableA("CASCADE_CONFIG_TEST", cfgPath.string().c_str());
+        ::SetEnvironmentVariableA("FOXSDR_INSTANCE_SCOPE", spawnInstanceScope().c_str());
         for (const char* v : {"FOXSDR_BETA_API_URL", "FOXSDR_TESTER_USAGE_URL", "FOXSDR_TELEMETRY_URL",
                               "FOXSDR_UPDATE_URL", "FOXSDR_CRASH_URL", "FOXSDR_FEATURE_URL",
                               "FOXSDR_PROBLEM_URL", "FOXSDR_REPORTS_URL"}) {
@@ -572,7 +664,7 @@ void testLinkShapesWindowsDeliversReachTheRunningInstance() {
         for (const char* v : {"APPDATA", "LOCALAPPDATA", "CASCADE_CONFIG_TEST", "FOXSDR_BETA_API_URL",
                               "FOXSDR_TESTER_USAGE_URL", "FOXSDR_TELEMETRY_URL", "FOXSDR_UPDATE_URL",
                               "FOXSDR_CRASH_URL", "FOXSDR_FEATURE_URL", "FOXSDR_PROBLEM_URL",
-                              "FOXSDR_REPORTS_URL"}) {
+                              "FOXSDR_REPORTS_URL", "FOXSDR_INSTANCE_SCOPE"}) {
             ::SetEnvironmentVariableA(v, nullptr);
         }
 
@@ -1059,6 +1151,9 @@ int main(int argc, char** argv) {
     testClaimOfGarbageContentIsEmptyButStillConsumesTheFile();
     testClaimPrimaryInstanceFirstWinsSecondDoesNot();
     testClaimPrimaryInstanceDifferentIdentitiesAreIndependent();
+    testPrimaryInstanceIdentityIsTheFixedNameWithoutTheTestHook();
+    testPrimaryInstanceIdentityTakesAValidScopeOnlyWithTheTestHook();
+    testClaimPrimaryInstanceHoldsTheScopedIdentity();
     testBetaApiBaseUrlOverride();
 #if defined(_WIN32)
     testLinkActivationWithNoInstanceRunningLaunchesNormallyAndNeverLeaksTheToken();

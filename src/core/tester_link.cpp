@@ -213,14 +213,39 @@ bool claimPrimaryInstanceAt(const std::string& identity) {
 #endif
 }
 
-bool claimPrimaryInstance(const std::string& configDir) {
+namespace {
+
+// [A-Za-z0-9_-], 1..kMaxInstanceScopeChars. Spelled out rather than
+// std::isalnum, which is locale-dependent and undefined for negative chars.
+bool validInstanceScope(const std::string& scope) {
+    if (scope.empty() || scope.size() > kMaxInstanceScopeChars) { return false; }
+    for (const char c : scope) {
+        const bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                        (c >= '0' && c <= '9') || c == '-' || c == '_';
+        if (!ok) { return false; }
+    }
+    return true;
+}
+
+}  // namespace
+
+std::string primaryInstanceIdentity(const std::string& configDir,
+                                    const std::string& testConfigHook,
+                                    const std::string& scope) {
+    const bool scoped = !testConfigHook.empty() && validInstanceScope(scope);
+    const std::string suffix = scoped ? "-" + scope : std::string();
 #if defined(_WIN32)
     (void)configDir;
-    return claimPrimaryInstanceAt("Local\\FoxSDR-instance");
+    return "Local\\FoxSDR-instance" + suffix;
 #else
-    return claimPrimaryInstanceAt(configDir.empty() ? "/tmp/foxsdr-instance.lock"
-                                                    : configDir + "/instance.lock");
+    return configDir.empty() ? "/tmp/foxsdr-instance" + suffix + ".lock"
+                             : configDir + "/instance" + suffix + ".lock";
 #endif
+}
+
+bool claimPrimaryInstance(const std::string& configDir, const std::string& testConfigHook,
+                          const std::string& scope) {
+    return claimPrimaryInstanceAt(primaryInstanceIdentity(configDir, testConfigHook, scope));
 }
 
 namespace {

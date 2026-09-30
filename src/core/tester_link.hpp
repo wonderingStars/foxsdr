@@ -122,10 +122,42 @@ std::string claimLinkRequestFile(const std::string& configDir, std::time_t now =
 // running" - it never refuses to let a second instance start.
 bool claimPrimaryInstanceAt(const std::string& identity);
 
-// claimPrimaryInstanceAt() with the real, fixed identity this application
-// uses: `Local\FoxSDR-instance` on Windows, "<configDir>/instance.lock" on
-// Linux.
-bool claimPrimaryInstance(const std::string& configDir);
+// THE INSTANCE SCOPE - a TEST-ONLY seam. `Local\` is per logon session, so
+// every cascade.exe on the desktop shares `Local\FoxSDR-instance`: a test that
+// spawns the app with a foxsdr: link and needs it to be the only copy running
+// was handed over to ANY other copy (the owner's own FoxSDR, or another
+// checkout's ctest running app smoke tests at the same moment) and exited
+// without rendering. A test run gives itself a private scope instead:
+// FOXSDR_INSTANCE_SCOPE, honoured ONLY together with CASCADE_CONFIG_TEST on a
+// bounded --frames run (main.cpp passes the hook only then - the same rule
+// that keeps CASCADE_CONFIG_TEST itself from redirecting an interactive run).
+//
+// The mutex/lock is the ONLY name involved. The hand-off channel - the
+// link-request file above - lives in ConfigStore::defaultPath()'s directory,
+// which a test already makes private by redirecting APPDATA
+// (XDG_CONFIG_HOME/HOME on Linux); nothing about it is derived from this name.
+inline constexpr char kInstanceScopeEnv[] = "FOXSDR_INSTANCE_SCOPE";
+inline constexpr std::size_t kMaxInstanceScopeChars = 64;
+
+// PURE: the identity claimPrimaryInstance() claims. `testConfigHook` is the
+// CASCADE_CONFIG_TEST value for a bounded run ("" otherwise); `scope` is the
+// FOXSDR_INSTANCE_SCOPE value. The scope is used only when the hook is
+// non-empty AND the scope is 1..kMaxInstanceScopeChars of [A-Za-z0-9_-] - it
+// becomes part of a kernel object name and a file name, so no backslash,
+// slash, dot or space ever gets in; anything else is ignored rather than
+// sanitised. Unscoped (every real launch) it is byte-for-byte the fixed name:
+//   Windows: `Local\FoxSDR-instance`        scoped: `Local\FoxSDR-instance-<scope>`
+//   Linux:   "<configDir>/instance.lock"     scoped: "<configDir>/instance-<scope>.lock"
+//            ("/tmp/foxsdr-instance.lock" / "/tmp/foxsdr-instance-<scope>.lock"
+//             when configDir is empty)
+std::string primaryInstanceIdentity(const std::string& configDir,
+                                    const std::string& testConfigHook,
+                                    const std::string& scope);
+
+// claimPrimaryInstanceAt(primaryInstanceIdentity(...)) - the identity this
+// application really claims, near the top of main().
+bool claimPrimaryInstance(const std::string& configDir, const std::string& testConfigHook,
+                          const std::string& scope);
 
 // https://foxsdr.com, overridden by FOXSDR_BETA_API_URL - a SEPARATE seam
 // from FOXSDR_TESTER_USAGE_URL (tester_usage.hpp), because a test exercising

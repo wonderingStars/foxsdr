@@ -1039,8 +1039,22 @@ int main(int argc, char** argv) {
     // process-lifetime resource). FoxSDR's multi-instance design is
     // unaffected: this only ANSWERS "is one already running", it never
     // refuses a second instance the right to start.
+    //
+    // A TEST RUN MAY CLAIM A PRIVATE SCOPE instead (tester_link.hpp,
+    // kInstanceScopeEnv): the CASCADE_CONFIG_TEST hook is passed on only for a
+    // bounded --frames run - exactly startupConfigPath()'s rule - so a real
+    // launch always claims the fixed, shared name whatever the environment says.
+    std::string instanceTestHook;
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--frames") == 0) {
+            const char* hook = std::getenv("CASCADE_CONFIG_TEST");
+            if (hook != nullptr) { instanceTestHook = hook; }
+        }
+    }
+    const char* instanceScope = std::getenv(cascade::core::kInstanceScopeEnv);
     const bool primaryInstance = cascade::core::claimPrimaryInstance(
-        std::filesystem::path(cascade::core::ConfigStore::defaultPath()).parent_path().string());
+        std::filesystem::path(cascade::core::ConfigStore::defaultPath()).parent_path().string(),
+        instanceTestHook, instanceScope != nullptr ? std::string(instanceScope) : std::string());
     // Set below when argv[1] parsed as a real beta-link activation - the flag
     // loop starting a few lines down must then skip index 1 rather than hand
     // it to strcmp against every flag name, which is what used to happen: a

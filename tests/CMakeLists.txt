@@ -78,12 +78,13 @@ foreach(src ${CASCADE_TESTS})
     set_tests_properties(${name} PROPERTIES TIMEOUT 120)
 endforeach()
 
-# test_tester_link spawns the real cascade.exe with a foxsdr: link and
-# expects it to be the ONLY copy running: with any other cascade.exe up (an
-# app_* smoke test under ctest -j), the link is handed to that copy through
-# the single-instance path and the spawned process exits without rendering,
-# which reads as a failure of the link handling. Run it alone.
-set_tests_properties(test_tester_link PROPERTIES RUN_SERIAL TRUE)
+# test_tester_link spawns the real cascade.exe with a foxsdr: link and needs
+# it to be the only copy in its single-instance scope. It used to be
+# RUN_SERIAL for that, which only kept this ctest's own app_* smoke tests away
+# and did nothing about another checkout's suite or the owner's FoxSDR. Each
+# spawn now runs in a private per-run scope (FOXSDR_INSTANCE_SCOPE, honoured
+# only with CASCADE_CONFIG_TEST - see core/tester_link.hpp), so it runs in
+# parallel like everything else.
 
 # The app doubles as a smoke test. The PASS_REGULAR_EXPRESSION makes the
 # exact-count half of the --frames contract observable: rendering N+1 frames
