@@ -1,6 +1,14 @@
 FoxSDR — after-install notes
 ==============================================
 
+DO YOU OWN A RED PITAYA? PLEASE EMAIL US
+----------------------------------------
+FoxSDR has no Red Pitaya driver of its own yet. It can only reach one
+through the SoapySDR "redpitaya" module, and we have never had a board
+to test with. If you have one, please email support@foxsdr.com with
+the board model and what happened when you picked it in FoxSDR. We
+will use what you tell us to build proper support.
+
 NO HARDWARE REQUIRED
 --------------------
 The app runs fully with zero radio hardware attached: use the built-in
@@ -230,3 +238,8 @@ alongside this file.
 
 FoxSDR is an independent project, not affiliated with or endorsed by
 SDR++ or its authors.
+
+RED PITAYA OWNERS: PLEASE EMAIL support@foxsdr.com
+--------------------------------------------------
+We have no Red Pitaya to test with. If you own one, tell us the board
+model and what happened when you picked it in FoxSDR.
