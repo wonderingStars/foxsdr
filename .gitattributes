@@ -18,4 +18,8 @@
 # fail that check while the Linux build passed it.
 resources/lang/*.json text eol=lf
 
+# THE AIRPORT FREQUENCY TABLE TOO: tools/make-airband-data.py compiles its exact
+# bytes into core/airband_assets.hpp and test_airband_data checks the two agree.
+resources/airband/*.tsv text eol=lf
+
 # Everything else in the tree keeps git's default handling.

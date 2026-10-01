@@ -49,6 +49,7 @@
 #ifndef CASCADE_CORE_PATCH_RUNNER_HPP
 #define CASCADE_CORE_PATCH_RUNNER_HPP
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <complex>
@@ -207,6 +208,17 @@ struct StripSet {
     // two demodulated channels is not defined here - the graph refuses
     // fan-in on samples for the same reason.
     NodeId listening = kNoNode;
+
+    // ...EXCEPT FOR THE AIRBAND MONITOR (2026-10, core/airband_monitor.hpp),
+    // which is not a graph and is defined as a mix: every channel's SQUELCHED
+    // audio, times mixGain, summed and played. A closed squelch contributes
+    // silence, so what is heard is whoever is talking. Every channel of such
+    // a set runs at the same rate (one decimation), so the sum is taken at
+    // the strips' rate and resampled once. `listening` is ignored while this
+    // is set.
+    bool mixAll = false;
+    float mixGain = 1.0f;
+    std::vector<float> mix;   // preallocated, kMaxBlockAudio
 
     // EVERY SPEAKER, EACH TO ITS OWN OUTPUT (0.99.17). One tap per audio Sink
     // on this radio: its channel's audio converted to 48 kHz and written to
@@ -648,6 +660,7 @@ public:
             dead.swap(retired_);
         }
         resetRing();
+        forgetSquelchReports();
         // The seq_cst store is what hands everything written above back to
         // the DSP thread: its next entry loads frozen_ and sees false only
         // after this, so it sees an empty runner.
@@ -694,6 +707,11 @@ public:
 
     static constexpr std::size_t kSquelchSlots = 64;
 
+    // ANY THREAD. How many blocks a set has run, ever: a count that stops
+    // moving is a runner with nothing to run (flushed, stopped, or starved),
+    // whatever its last squelch reports said.
+    std::uint64_t blocksRun() const { return blocksRun_.load(std::memory_order_relaxed); }
+
 private:
     struct SqCtl {
         std::atomic<NodeId> node{kNoNode};
@@ -706,6 +724,18 @@ private:
     };
     std::array<SqCtl, kSquelchSlots> sqCtl_{};
     std::array<SqRead, kSquelchSlots> sqRead_{};
+
+    // SQUELCH REPORTS DIE WITH THEIR SET. Before 2026-10 a flushed or replaced
+    // set left its last reports in place, and squelchState() kept answering
+    // for a set that no longer ran - a channel open at the flush stayed open
+    // for good (the Airband monitor's review). Called by the DSP thread when
+    // it adopts or stops, and by flushNow() while the DSP thread is frozen
+    // out; the slots are atomics, so a GUI read never sees a torn one.
+    void forgetSquelchReports() {
+        for (SqRead& r : sqRead_) { r.node.store(kNoNode, std::memory_order_release); }
+    }
+
+    std::atomic<std::uint64_t> blocksRun_{0};
 
     // DSP THREAD: the threshold the GUI set for `channel`, or `current` when it
     // has set none.
@@ -768,10 +798,16 @@ private:
             if ((taken || stop) && active_) { retired_.push_back(std::move(active_)); }
         }
         if (!taken) {
-            if (stop) { resetRing(); }
+            if (stop) {
+                resetRing();
+                forgetSquelchReports();
+            }
             return false;
         }
         active_ = std::move(taken);
+        // The old set's squelch reports go with it: until the new set has run
+        // a block, "what is channel X doing" has no answer (2026-10, review).
+        forgetSquelchReports();
         // THE RING GOES WITH THE OLD SET. Its contents are at the previous
         // channel's rate and from the previous channel's frequency; playing
         // them after a rewire is playing the patch the user just replaced.
@@ -783,6 +819,7 @@ private:
     // The body of process(), run inside a DspScope after adoptImpl().
     void processImpl(const std::complex<float>* in, std::size_t n) {
         if (!active_ || in == nullptr) { return; }
+        blocksRun_.fetch_add(1, std::memory_order_relaxed);
         for (std::size_t ci = 0; ci < active_->channels.size(); ++ci) {
             RunningChannel& rc = active_->channels[ci];
             rc.produced = 0;
@@ -825,10 +862,30 @@ private:
 
             // The listening channel also goes to the sink's rate and into
             // the ring the audio stage draws from.
-            if (rc.node == active_->listening && active_->toAudio && take > 0) {
+            if (!active_->mixAll && rc.node == active_->listening && active_->toAudio && take > 0) {
                 const std::size_t got = active_->toAudio->process(
                     heard, take, active_->resampled.data(),
                     active_->resampled.size());
+                pushRing(active_->resampled.data(), got);
+            }
+        }
+
+        // THE MIX (airband monitor): every channel's squelched audio summed
+        // at the strips' common rate, then resampled once into the ring.
+        if (active_->mixAll && active_->toAudio && !active_->mix.empty()) {
+            std::size_t m = 0;
+            for (const RunningChannel& rc : active_->channels) { m = std::max(m, rc.produced); }
+            m = std::min(m, active_->mix.size());
+            std::fill(active_->mix.begin(), active_->mix.begin() + static_cast<std::ptrdiff_t>(m),
+                      0.0f);
+            for (const RunningChannel& rc : active_->channels) {
+                const float* heard = rc.squelch ? rc.gated.data() : rc.audio.data();
+                const std::size_t k = std::min(rc.produced, m);
+                for (std::size_t i = 0; i < k; ++i) { active_->mix[i] += active_->mixGain * heard[i]; }
+            }
+            if (m > 0) {
+                const std::size_t got = active_->toAudio->process(
+                    active_->mix.data(), m, active_->resampled.data(), active_->resampled.size());
                 pushRing(active_->resampled.data(), got);
             }
         }
@@ -1076,7 +1133,7 @@ public:
 private:
     // The body of pullAudio(); see there for the contract.
     bool pullAudioImpl(float* left, float* right, std::size_t frames) {
-        if (!active_ || active_->listening == kNoNode || !active_->toAudio) {
+        if (!active_ || (active_->listening == kNoNode && !active_->mixAll) || !active_->toAudio) {
             return false;
         }
         if (left == nullptr || right == nullptr) { return false; }

@@ -100,6 +100,12 @@ exactly as many.
   element sets from CelesTrak about every twelve hours, falling back to a
   copy at foxsdr.com/tle/all.tle when CelesTrak does not answer. The request
   carries no identifier.
+- **The Airband section's airport lookup makes no network request.** The
+  airport frequency table (the FAA's for the United States, OurAirports' for
+  everywhere else) is built into FoxSDR. "Nearest airports" compares your
+  receiver position with that table on your machine. How long each frequency
+  has been heard is written beside it in `bookmarks.json`, on your machine,
+  and is never sent.
 - **A plugin can read your receiver's approximate position only if it says so
   when fitted**, and the Fitted modules / Plugin store windows show which ones
   do. See **Plugins and your receiver's position** below.

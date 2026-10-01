@@ -2,7 +2,8 @@
 
 A from-scratch software-defined radio receiver for Windows and Linux:
 spectrum and waterfall, multi-mode demodulation (NFM/WFM/AM/DSB/USB/LSB/CW),
-stereo FM with RDS, recording, bookmarks, a scanner, band plans, native
+stereo FM with RDS, recording, bookmarks, a scanner, an airband monitor that
+looks up any airport's air traffic control frequencies, band plans, native
 drivers for the RTL-SDR, the HackRF, the Airspy R2/Mini, the Airspy HF+, the
 SDRplay RSPs, the Mirics MSi2500, the RX888 mk2 and the ADALM-Pluto — which it
 also TRANSMITS through — plus AOR digital-I/Q receivers (written from AOR's
@@ -144,7 +145,9 @@ are still moving. What is in the current build:
   correct and are left alone. While it is on, the status column's RECEIVER card
   reads "PPM +1.5" and the diagnostics bundle carries a `ppm:` line.
 - **Working with signals.** Bookmarks, a band scanner with a Skip key and a
-  listen limit so a station that never goes quiet cannot stop it, and
+  listen limit so a station that never goes quiet cannot stop it (or that
+  scans only the bookmarks you tick), the Airband monitor (type an airport,
+  hear all of its control frequencies at once - see **Airband** below), and
   recording of both audio and raw I/Q. The receiver's own position - what
   every range and bearing on the map and the radar scope is measured from -
   can be typed, taken from a map click, or read from a GPS receiver on a
@@ -1434,7 +1437,9 @@ alone and keep loading.
 
 **VIEW > Bookmarks** holds any number of named frequencies - tens of thousands
 is fine - with a group, a mode, a bandwidth and a favourite star each. Click a
-row to tune it.
+row to tune it. The box at the start of each row ticks it: the Scanner's
+**Ticked frequencies** scans just the ticked rows (each with its own mode and
+bandwidth), and the Airband monitor plays the ticked AM ones.
 
 - **Import** an SDR# `frequencies.xml`, or a CSV saved from Excel: type or
   paste its path and press Import, or drop the file anywhere on the window.
@@ -1460,6 +1465,49 @@ row to tune it.
   be read. Only the span on screen is ever looked at, so a list of 33 000
   costs the display nothing; the browser page is sent the favourites and the
   few hundred nearest the tuned frequency, not the whole list.
+
+## Airband
+
+**VIEW > Airband** listens to an airport's air traffic control:
+
+- **Type the airport's code** - the ICAO code (KORD, EGLL), the three letters
+  on a luggage tag (ORD, LHR) or, in the US, the FAA's own id - and press
+  **Look up** (or Enter). Its frequencies go into the frequency list as a
+  group of their own, named after the airport, in AM at the right bandwidth
+  (10 kHz on 25 kHz channels, 6 kHz on Europe's 8.33 kHz channels, whose
+  published channel names are converted to the frequency they really are).
+  Every one is ticked except ATIS and the weather broadcasts, which talk all
+  day long. **Nearest airports** lists the six closest to your receiver
+  position. The table is built into FoxSDR - the FAA's 28-day frequency file
+  for the United States (O'Hare has 29 VHF frequencies in it, every tower,
+  ground, clearance, approach and departure sector), OurAirports for the rest
+  of the world - so a lookup needs no internet connection. Both sources are
+  public domain, and neither is for navigation.
+- **LISTEN** plays every ticked AM frequency at once, mixed into one speaker.
+  Each channel has its own squelch, so what you hear is whoever is talking,
+  and each is levelled by its own carrier, so a tower 5 km away and an
+  aircraft 80 km away play at the same loudness. When the ticked frequencies
+  span more than your radio's band (an RTL-SDR hears about 2 MHz at a time,
+  and O'Hare's span 17 MHz), they are split into blocks the radio can hold:
+  the monitor scans between the blocks, stops on a block as soon as anybody
+  in it is talking - every channel in that block keeps playing - and moves on
+  once the block has been quiet for the **hold** time. **Next block** moves
+  on by hand. A block also holds no more channels than the processor is
+  asked to carry - ten at 2.4 MS/s, fewer at higher sample rates, since every
+  channel works on every sample the radio delivers - so a lower sample rate
+  fits more channels in each block. Two ticked rows on one frequency (CTAF
+  and UNICOM often share one) are played as one channel.
+- **Squelch** sets the level a channel must reach to be heard; **Above the
+  noise** sets it 8 dB over the quiet channels. Hover a row while listening
+  to see its level. A row's lamp lights while it is heard.
+- **Which ones are busy:** the time each frequency has been heard is kept
+  with it in the frequency list and shown on its row, and **Busiest first**
+  sorts by it - measured at your aerial, so after an evening it tells you
+  which of an airport's thirty frequencies are worth ticking.
+
+The monitor uses the receiver's radio, so LISTEN switches to the RECEIVER
+view; showing the PATCH view, starting the Scanner or tuning the receiver by
+hand stops it. Clicking a row tunes the receiver to that one frequency alone.
 
 ## Markers on the waterfall
 
@@ -1724,7 +1772,7 @@ below showing that bank's sections and nothing else. SIGNAL is the receiver
 itself (source, radio, audio filters, sinks, the recorder); DECODE is the
 plugin store, the fitted modules, the decoders, target details and the
 satellites map; VIEW is the display range, the demod scope, the radar scope,
-bookmarks and the scanner; EXTEND is browser access and CAT control; SYSTEM is updates,
+bookmarks, the scanner and airband; EXTEND is browser access and CAT control; SYSTEM is updates,
 diagnostics and usage reporting. **F1 to F5** press the same five keys from
 the keyboard. Each section still opens and closes with its own key and
 keeps that state as you move between banks; a section unfolds rather than

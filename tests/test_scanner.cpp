@@ -10,6 +10,7 @@
 
 #include "test_check.hpp"
 
+#include <cmath>
 #include <cstdio>
 #include <optional>
 
@@ -392,6 +393,76 @@ int main() {
         CHECK(stepIs(sc, 0.0, false, true, 100.0e6, St::Scanning, 100.0e6));
         CHECK(stepIs(sc, 10.0, true, false, 0, St::Paused, 100.0e6));
         CHECK(stepIs(sc, 1.0e7, true, false, 0, St::Paused, 100.0e6));
+    }
+
+    // --- LIST MODE (the airband request): the ticked frequencies, in the
+    //     order given, wrapping last -> first; start/stop/step ignored ------
+    {
+        Scanner sc;
+        Scanner::Params p = latticeParams();   // range 100.0-100.4: must NOT be used
+        p.list = {121.9e6, 118.05e6, 135.4e6};
+        sc.configure(p);
+        sc.start(0.0);
+        CHECK(stepIs(sc, 0.0, false, true, 121.9e6, St::Scanning, 121.9e6));
+        CHECK(sc.index() == 0);
+        CHECK(stepIs(sc, 50.0, false, true, 118.05e6, St::Scanning, 118.05e6));
+        CHECK(stepIs(sc, 100.0, false, true, 135.4e6, St::Scanning, 135.4e6));
+        CHECK(sc.index() == 2);
+        // wrap: last entry -> first
+        CHECK(stepIs(sc, 150.0, false, true, 121.9e6, St::Scanning, 121.9e6));
+        // squelch stops it on a list entry exactly as on a lattice point,
+        // and the hold/resume brings it to the NEXT entry
+        CHECK(stepIs(sc, 160.0, true, false, 0, St::Paused, 121.9e6));
+        CHECK(stepIs(sc, 170.0, false, false, 0, St::Holding, 121.9e6));
+        CHECK(stepIs(sc, 370.0, false, false, 0, St::Scanning, 121.9e6));  // hold 200 met
+        CHECK(stepIs(sc, 470.0, false, true, 118.05e6, St::Scanning, 118.05e6));  // resume 100
+        // skip() moves to the next entry
+        sc.skip();
+        CHECK(stepIs(sc, 480.0, true, true, 135.4e6, St::Scanning, 135.4e6));
+    }
+    // A one-entry list re-emits its only frequency on every advance.
+    {
+        Scanner sc;
+        Scanner::Params p = latticeParams();
+        p.list = {125.7e6};
+        sc.configure(p);
+        sc.start(0.0);
+        CHECK(stepIs(sc, 0.0, false, true, 125.7e6, St::Scanning, 125.7e6));
+        CHECK(stepIs(sc, 50.0, false, true, 125.7e6, St::Scanning, 125.7e6));
+    }
+    // Entries that are not finite or are negative are dropped; the rest keep
+    // their order. A list left empty falls back to the range.
+    {
+        Scanner sc;
+        Scanner::Params p = latticeParams();
+        p.list = {std::nan(""), 119.0e6, -5.0, 124.35e6};
+        sc.configure(p);
+        sc.start(0.0);
+        CHECK(stepIs(sc, 0.0, false, true, 119.0e6, St::Scanning, 119.0e6));
+        CHECK(stepIs(sc, 50.0, false, true, 124.35e6, St::Scanning, 124.35e6));
+        CHECK(stepIs(sc, 100.0, false, true, 119.0e6, St::Scanning, 119.0e6));
+    }
+    {
+        Scanner sc;
+        Scanner::Params p = latticeParams();
+        p.list = {std::nan(""), -1.0};
+        sc.configure(p);
+        sc.start(0.0);
+        CHECK(stepIs(sc, 0.0, false, true, 100.0e6, St::Scanning, 100.0e6));
+        CHECK(stepIs(sc, 50.0, false, true, 100.2e6, St::Scanning, 100.2e6));
+    }
+    // Reconfiguring an active list scan restarts it at the first entry.
+    {
+        Scanner sc;
+        Scanner::Params p = latticeParams();
+        p.list = {121.6e6, 121.75e6};
+        sc.configure(p);
+        sc.start(0.0);
+        CHECK(stepIs(sc, 0.0, false, true, 121.6e6, St::Scanning, 121.6e6));
+        CHECK(stepIs(sc, 50.0, false, true, 121.75e6, St::Scanning, 121.75e6));
+        p.list = {133.0e6, 132.7e6};
+        sc.configure(p);
+        CHECK(stepIs(sc, 60.0, false, true, 133.0e6, St::Scanning, 133.0e6));
     }
 
     return testSummary("test_scanner");

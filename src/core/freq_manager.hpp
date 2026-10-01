@@ -36,6 +36,13 @@
 // groups saves byte-for-byte as it always did and an older build reading a
 // newer file simply ignores them - no schema bump.
 //
+// "scan" and "heardSeconds" (2026-10, the airband request) follow the same
+// rule. "scan" is the row's tick: the frequencies the scanner's list mode and
+// the AIRBAND monitor listen to. "heardSeconds" is how long this frequency's
+// squelch has been seen open while one of them was listening - the "which
+// ones are busy" figure nobody publishes, measured where the user lives. A
+// negative or non-finite heardSeconds loads as 0.
+//
 // Per-entry sanitization on load (repair, not reject):
 //   - name         missing or wrong-typed -> "" (still a valid bookmark)
 //   - mode         missing or wrong-typed -> "WFM"; UNKNOWN mode strings are
@@ -70,6 +77,8 @@ struct Bookmark {
     double bandwidthHz = 150000;
     std::string group;       // "" = ungrouped
     bool favourite = false;
+    bool scan = false;          // ticked: scanned / monitored
+    double heardSeconds = 0.0;  // squelch-open time measured here
 };
 
 class FreqManager {
@@ -115,8 +124,9 @@ public:
     // stable sort - O(n log n), where add() in a loop would be O(n^2) and
     // took seconds for a 33 000-entry list. Names are NOT deduplicated here:
     // a real list names a thousand channels "ATIS" and suffixing them would
-    // be noise. What IS skipped is an entry identical in name and frequency
-    // to one already present, so importing the same file twice adds nothing.
+    // be noise. What IS skipped is an entry identical in name, frequency and
+    // group to one already present, so importing the same file twice adds
+    // nothing - while two airports' "EMERG 121.5" are two entries.
     // Returns how many were added.
     std::size_t addMany(std::vector<Bookmark> items);
 

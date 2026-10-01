@@ -28,6 +28,8 @@ struct GLFWwindow;
 
 #include "core/band_plan.hpp"
 #include "core/config.hpp"
+#include "core/airband_data.hpp"
+#include "core/airband_monitor.hpp"
 #include "core/freq_manager.hpp"
 #include "core/freq_markers.hpp"
 #include "core/trace_hold.hpp"
@@ -4926,6 +4928,81 @@ private:
     // scanner did not make — a manual tune, and the user wins (scan stops).
     double scannerExpectedAbsHz_ = 0.0;
     bool scannerHasExpected_ = false;  // false until the scan's first retune
+    // LIST MODE (the airband request, 2026-10): scan the ticked rows of the
+    // frequency list instead of a range. scanListVersion_ is the list's
+    // version when the scan was configured, so ticking or unticking a row
+    // while it runs re-reads the list.
+    bool scanTicked_ = false;
+    unsigned scanListVersion_ = 0;
+    std::vector<double> scanList_;   // the list the scan was configured with
+    std::vector<double> tickedScanList() const;
+    void startTickedScan();
+
+    // The click-to-tune of a frequency-list row: frequency, then mode and
+    // bandwidth. Shared by the Bookmarks rows, the scanner's list mode and
+    // the AIRBAND rows.
+    void tuneToBookmark(const cascade::core::Bookmark& b);
+
+    // --- AIRBAND (2026-10, app_window_airband.cpp) ---------------------------
+    // "Type the airport, tick what to hear, LISTEN": the airport table
+    // (core/airband_data.hpp) fills the frequency list; the monitor
+    // (core/airband_monitor.hpp) plays every ticked AM channel inside the
+    // radio's band at once, mixed, and scans between blocks of them when they
+    // do not all fit. It runs on the RECEIVER's radio, through the pipeline's
+    // patch runner, which the receiver view does not otherwise use.
+    void drawAirbandSection();
+    void airbandFrame();                       // once a frame, after the widgets
+    void airbandLookup(const std::string& code);
+    void airbandAddAirport(const cascade::core::Airport& a);
+    void airbandStart();
+    void airbandStop(const std::string& why);
+    void airbandTuneBlock(std::size_t index);
+    void airbandFlushHeard();
+    // The rows the section shows and the monitor plays: indices into
+    // freqMgr_.list(). With a group chosen, that group's AM rows (ticked or
+    // not); with none, every ticked AM row.
+    std::vector<std::size_t> airbandRows() const;
+    // The ticked rows as channels, one per frequency; `names`, when given,
+    // gets the row naming each.
+    std::vector<cascade::core::MonitorChannel> airbandWanted(std::vector<std::string>* names = nullptr) const;
+
+    struct AirbandChan {
+        double freqHz = 0.0;
+        double bandwidthHz = 0.0;
+        std::string name;
+        bool open = false;
+        float levelDb = -200.0f;
+        double pendingHeardS = 0.0;   // squelch-open time not yet in the list
+    };
+    char airbandCode_[16] = {};
+    std::string airbandGroup_;                 // "" = every ticked AM row
+    std::string airbandNote_;
+    std::vector<const cascade::core::Airport*> airbandChoices_;   // a code that meant several
+    std::vector<std::pair<const cascade::core::Airport*, double>> airbandNearest_;
+    bool airbandBusyFirst_ = false;
+    float airbandSquelchDb_ = -55.0f;
+    double airbandHoldS_ = 2.0;
+    bool airbandListening_ = false;
+    bool airbandStartPending_ = false;         // waiting for the patch view to hand the radio back
+    std::vector<AirbandChan> airbandChans_;
+    std::vector<cascade::core::MonitorChannel> airbandPlanned_;   // what the blocks were cut from
+    std::vector<cascade::core::AirbandBlock> airbandBlocks_;
+    std::size_t airbandBlock_ = 0;
+    cascade::core::Scanner airbandScanner_;
+    cascade::core::patch::NodeId airbandFirstId_ = 0;
+    cascade::core::patch::NodeId airbandNextId_ = 0x40000000u;
+    double airbandRateHz_ = 0.0;
+    double airbandCentreHz_ = 0.0;             // the readback after the last block tune
+    bool airbandTuned_ = false;                // a block has been tuned this session
+    // The radio the blocks were cut for: its device object and kind.
+    const void* airbandSourceDevice_ = nullptr;
+    std::string airbandSourceKind_;
+    // The runner's processed-block count last frame, and when it last moved.
+    std::uint64_t airbandBlocksSeen_ = 0;
+    double airbandProgressS_ = 0.0;
+    double airbandPublishedS_ = 0.0;
+    double airbandLastFrameS_ = 0.0;
+    double airbandFlushDueS_ = 0.0;
 };
 
 }  // namespace cascade::gui

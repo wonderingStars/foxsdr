@@ -972,3 +972,20 @@ formats were not among those read, so the twelve- and ten-bit packings
 are derived from the reference's own size arithmetic and are marked as
 such in the source and in the tests.
 ----------------------------------------------------------------------
+======================================================================
+DATA: airport frequency table (resources/airband/airband.tsv)
+======================================================================
+The Airband section's airport table is built by tools/make-airband-data.py
+from two public-domain sources. No licence applies; they are credited here
+because their makers asked for nothing and deserve the credit.
+
+  - OurAirports, https://ourairports.com/data/ (airports.csv and
+    airport-frequencies.csv): "All data is released to the Public Domain,
+    and comes with no guarantee of accuracy or fitness for use."
+  - The Federal Aviation Administration's 28-day NASR subscription,
+    Frequency Data (FRQ) CSV, https://www.faa.gov/air_traffic/flight_info/
+    aeronav/aero_data/NASR_Subscription/ - a work of the United States
+    Government. Used for every US airport the FAA lists.
+
+Neither source, nor FoxSDR, is for navigation.
+----------------------------------------------------------------------

@@ -78,6 +78,17 @@
 //   next point would exceed stopHz (exact comparison, no epsilon), so every
 //   emitted frequency lies inside [startHz, stopHz] by construction.
 //
+// List mode (the airband request, 2026-10)
+// ----------------------------------------
+//   A non-empty Params::list replaces the lattice with those frequencies, in
+//   the order given: the point is "the ticked rows of the frequency list" (or
+//   the AIRBAND monitor's blocks), which are anywhere, not on a step. Index k
+//   then walks the list and wraps from its last entry to its first; every
+//   timing rule above is unchanged. configure() drops entries that are not
+//   finite or are negative; a list that ends up empty falls back to the
+//   range, so the machine always has somewhere to tune. start/stop/step are
+//   ignored while a list is in use.
+//
 // configure()
 // -----------
 //   Sanitizes in this order: stopHz < startHz -> the two are swapped;
@@ -98,8 +109,10 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
+#include <cmath>
 #include <optional>
 #include <utility>
+#include <vector>
 
 namespace cascade::core {
 
@@ -113,6 +126,8 @@ public:
         double holdMs = 2000;
         double resumeMs = 500;
         double listenMs = 0;  // longest stay on one signal; 0 = until quiet
+        // Non-empty: scan these, in this order, instead of the range.
+        std::vector<double> list;
     };
 
     enum class State { Idle, Scanning, Paused, Holding };
@@ -128,7 +143,13 @@ public:
         p.holdMs = sanitizeTimeMs(p.holdMs);
         p.resumeMs = sanitizeTimeMs(p.resumeMs);
         p.listenMs = sanitizeTimeMs(p.listenMs);
-        params_ = p;
+        std::vector<double> kept;
+        kept.reserve(p.list.size());
+        for (const double hz : p.list) {
+            if (std::isfinite(hz) && hz >= 0.0) { kept.push_back(hz); }
+        }
+        p.list = std::move(kept);
+        params_ = std::move(p);
         stepIndex_ = 0;
         phaseMs_ = 0.0;
         if (state_ != State::Idle) {
@@ -254,10 +275,17 @@ public:
 
     State state() const { return state_; }
 
-    // Always startHz + k*stepHz, inside [startHz, stopHz] by construction.
+    // Always startHz + k*stepHz, inside [startHz, stopHz] by construction -
+    // or, in list mode, list[k].
     double currentHz() const {
+        if (!params_.list.empty()) {
+            return params_.list[static_cast<std::size_t>(stepIndex_) % params_.list.size()];
+        }
         return params_.startHz + static_cast<double>(stepIndex_) * params_.stepHz;
     }
+
+    // Which list entry (or lattice point) the scan is on.
+    long long index() const { return stepIndex_; }
 
 private:
     // "not >= 0" catches NaN as well as negatives; both collapse to zero.
@@ -265,6 +293,10 @@ private:
 
     void advance() {
         const long long next = stepIndex_ + 1;
+        if (!params_.list.empty()) {
+            stepIndex_ = (next >= static_cast<long long>(params_.list.size())) ? 0 : next;
+            return;
+        }
         if (params_.startHz + static_cast<double>(next) * params_.stepHz > params_.stopHz) {
             stepIndex_ = 0;  // wrap stop -> start
         } else {

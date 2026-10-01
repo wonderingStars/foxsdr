@@ -438,6 +438,83 @@ int main() {
     }
 #endif
 
+    // --- "scan" and "heardSeconds" (the airband request): round trip, written
+    //     only when set, damaged values repaired ------------------------------
+    {
+        FreqManager m;
+        Bookmark a;
+        a.name = "ORD GND inbound";
+        a.freqHz = 121.9e6;
+        a.mode = "AM";
+        a.bandwidthHz = 10000.0;
+        a.scan = true;
+        a.heardSeconds = 1234.5;
+        m.add(a);
+        Bookmark b;
+        b.name = "plain";
+        b.freqHz = 100.0e6;
+        m.add(b);
+        std::string err;
+        const std::string path = p("scan_heard.json");
+        CHECK(m.save(path, err));
+        const std::string text = readAll(path);
+        // Present once each - for the entry that has them, and only that one.
+        CHECK(text.find("\"scan\"") != std::string::npos);
+        CHECK(text.find("\"scan\"") == text.rfind("\"scan\""));
+        CHECK(text.find("\"heardSeconds\"") != std::string::npos);
+        CHECK(text.find("\"heardSeconds\"") == text.rfind("\"heardSeconds\""));
+
+        FreqManager back;
+        CHECK(back.load(path, err));
+        CHECK(back.list().size() == 2u);
+        if (back.list().size() == 2u) {
+            CHECK(!back.list()[0].scan);
+            CHECK(back.list()[0].heardSeconds == 0.0);
+            CHECK(back.list()[1].scan);
+            CHECK(back.list()[1].heardSeconds == 1234.5);
+            checkEqual(back.list()[1], a);
+        }
+
+        // A list without either field saves exactly as before they existed.
+        FreqManager old;
+        old.add(b);
+        CHECK(old.save(p("no_scan.json"), err));
+        const std::string oldText = readAll(p("no_scan.json"));
+        CHECK(oldText.find("scan") == std::string::npos);
+        CHECK(oldText.find("heard") == std::string::npos);
+
+        // Hand-edited damage: a non-boolean scan is ignored, a negative or
+        // non-numeric heardSeconds reads as 0; the entries still load.
+        CHECK(writeText(p("scan_bad.json"),
+                        "{\"schemaVersion\":1,\"bookmarks\":["
+                        "{\"name\":\"x\",\"freqHz\":118.05e6,\"scan\":\"yes\",\"heardSeconds\":-4},"
+                        "{\"name\":\"y\",\"freqHz\":118.1e6,\"scan\":1,\"heardSeconds\":\"lots\"},"
+                        "{\"name\":\"z\",\"freqHz\":118.2e6,\"scan\":false,\"heardSeconds\":7}]}"));
+        FreqManager bad;
+        CHECK(bad.load(p("scan_bad.json"), err));
+        CHECK(bad.list().size() == 3u);
+        if (bad.list().size() == 3u) {
+            CHECK(!bad.list()[0].scan && bad.list()[0].heardSeconds == 0.0);
+            CHECK(!bad.list()[1].scan && bad.list()[1].heardSeconds == 0.0);
+            CHECK(!bad.list()[2].scan && bad.list()[2].heardSeconds == 7.0);
+        }
+    }
+
+    // --- addMany skips a repeat only in the SAME group: two airports' EMERG
+    //     121.5 are two entries; the same airport added twice adds nothing ---
+    {
+        FreqManager m;
+        Bookmark e;
+        e.name = "EMERG";
+        e.freqHz = 121.5e6;
+        e.group = "KORD Chicago O'Hare International Airport";
+        CHECK(m.addMany({e}) == 1u);
+        CHECK(m.addMany({e}) == 0u);
+        e.group = "KMDW Chicago Midway International Airport";
+        CHECK(m.addMany({e}) == 1u);
+        CHECK(m.list().size() == 2u);
+    }
+
     const int rc = testSummary("test_freq_manager");
     if (rc == 0) {
         std::error_code ec;

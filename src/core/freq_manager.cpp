@@ -133,7 +133,11 @@ bool FreqManager::load(const std::string& path, std::string& error) {
         {
             const auto fav = e.find("favourite");
             if (fav != e.end() && fav->is_boolean()) { b.favourite = fav->get<bool>(); }
+            const auto scan = e.find("scan");
+            if (scan != e.end() && scan->is_boolean()) { b.scan = scan->get<bool>(); }
         }
+        getDouble(e, "heardSeconds", b.heardSeconds);
+        if (!std::isfinite(b.heardSeconds) || b.heardSeconds < 0.0) { b.heardSeconds = 0.0; }
         if (!std::isfinite(b.bandwidthHz) || b.bandwidthHz <= 0.0) {
             // The demod chain divides by bandwidth; repair with the struct
             // default rather than inventing an epsilon floor.
@@ -177,6 +181,8 @@ bool FreqManager::save(const std::string& path, std::string& error) const {
         e["bandwidthHz"] = b.bandwidthHz;
         if (!b.group.empty()) { e["group"] = b.group; }
         if (b.favourite) { e["favourite"] = true; }
+        if (b.scan) { e["scan"] = true; }
+        if (b.heardSeconds > 0.0) { e["heardSeconds"] = b.heardSeconds; }
         arr.push_back(std::move(e));
     }
     json j;
@@ -288,12 +294,14 @@ bool FreqManager::updateAt(std::size_t index, const Bookmark& b) {
 }
 
 std::size_t FreqManager::addMany(std::vector<Bookmark> items) {
-    // What is already here, by (frequency, name), so a re-import is a no-op.
-    // Hashing the pair as a string keeps this O(n) for the lookups.
+    // What is already here, by (frequency, name, group), so a re-import is a
+    // no-op. The group is part of it since 2026-10: two airports both have an
+    // "EMERG 121.5", and the second airport's must not vanish because the
+    // first's is already in the list. Hashed as one string, O(n) to look up.
     const auto key = [](const Bookmark& b) {
         char f[40];
         std::snprintf(f, sizeof(f), "%.3f|", b.freqHz);
-        return std::string(f) + b.name;
+        return std::string(f) + b.name + '\x1f' + b.group;
     };
     std::unordered_set<std::string> have;
     have.reserve(list_.size() + items.size());

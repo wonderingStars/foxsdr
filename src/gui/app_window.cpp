@@ -2044,8 +2044,15 @@ int AppWindow::run(int frames) {
         }
 
         // THE CENSUS (gui/ui_census.hpp): walk the rail through its five banks,
-        // three frames each, so every bank's sections are drawn in one run.
-        if (cascade::gui::census::enabled()) {
+        // three frames each, so every bank's sections are drawn in one run -
+        // unless FOXSDR_CENSUS_HOLD_BANK asks for the bank the config chose to
+        // stay put, so a scripted pointer can type into a section and press its
+        // keys while the census records what happened (tests/test_airband_app).
+        static const bool censusHoldsBank = [] {
+            const char* v = std::getenv("FOXSDR_CENSUS_HOLD_BANK");
+            return v != nullptr && v[0] != '\0';
+        }();
+        if (cascade::gui::census::enabled() && !censusHoldsBank) {
             setRailBank((rendered / 3) % cascade::gui::kRailBankCount);
         }
         drawUi();
@@ -2407,6 +2414,9 @@ int AppWindow::run(int frames) {
     // unresponsive server; see core/tester_usage.hpp's TesterUsageSender for
     // where that attempt lived and why it was removed rather than tuned.
     if (!configPath_.empty()) { saveConfigNow(); }
+    // What the Airband monitor heard since its last write goes into the list
+    // before the list's own last save, not out with the process.
+    airbandFlushHeard();
     flushBookmarkSave(true);
     flushMarkerSave(true);
     cascade::core::diagLogf("frame loop ended after %d frames; shutting down", rendered);
@@ -3729,6 +3739,9 @@ void AppWindow::drawUi() {
     // frame's. Inert while the scanner is Idle — including every hermetic
     // --frames run.
     scannerFrame();
+    // The Airband monitor's driver, for the same reason and in the same place:
+    // a retune the user made this frame is already applied when it looks.
+    airbandFrame();
 
     // Apply any finished SoapySDR scan/open. Last in the frame so the result
     // lands before the next draw reads the device list.
@@ -6653,6 +6666,9 @@ void AppWindow::drawMenuColumn() {
             drawRadarSection();
             drawBookmarksSection();
             drawScannerSection();
+            // Beside the two it is built from: the frequency list it fills
+            // and the scanner whose list mode walks its blocks.
+            drawAirbandSection();
             break;
         case cascade::gui::RailBank::Extend:
             benchGroup(tr("EXTEND"));
@@ -23331,12 +23347,14 @@ void AppWindow::drawBookmarksSection() {
         }
     }
 
-    // Rows: favourite star, click-to-tune, per-row delete - through a
+    // Rows: the tick (what the scanner's list mode and the AIRBAND monitor
+    // listen to), favourite star, click-to-tune, per-row delete - through a
     // clipper, so only the rows on screen are ever laid out. The delete is
     // deferred past the loop so removeAt can never invalidate an index the
     // same frame still iterates.
     int deleteIdx = -1;
     int starIdx = -1;
+    int tickIdx = -1;
     const std::vector<cascade::core::Bookmark>& list = freqMgr_.list();
     const float delW = ImGui::GetFrameHeight();
     const float rows = std::min(12.0f, static_cast<float>(bookmarkView_.size()));
@@ -23351,6 +23369,13 @@ void AppWindow::drawBookmarksSection() {
                 if (i >= static_cast<int>(list.size())) { continue; }
                 const cascade::core::Bookmark& b = list[static_cast<std::size_t>(i)];
                 ImGui::PushID(i);
+                bool ticked = b.scan;
+                if (ImGui::Checkbox("##scan", &ticked)) { tickIdx = i; }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("%s", tr("Ticked: scanned by the Scanner's \"Ticked frequencies\"\n"
+                                               "and, for AM, played by the Airband monitor."));
+                }
+                ImGui::SameLine();
                 ImGui::PushStyleColor(ImGuiCol_Text,
                                       b.favourite ? cascade::gui::theme::vec(cascade::gui::theme::kAmber)
                                                   : cascade::gui::theme::vec(cascade::gui::theme::kInkMuted));
@@ -23366,27 +23391,8 @@ void AppWindow::drawBookmarksSection() {
                 }
                 const float rowW = ImGui::GetContentRegionAvail().x - delW - ImGui::GetStyle().ItemSpacing.x;
                 if (ImGui::Selectable(label, false, ImGuiSelectableFlags_None, ImVec2(rowW, 0.0f))) {
-                    // Click-to-tune: frequency through the shared absolute-tune
-                    // path (same as scanner retunes), then mode and bandwidth. An
-                    // unknown mode name - a newer build's file, kept verbatim by
-                    // FreqManager on purpose - leaves the current mode untouched.
-                    tuneAbsoluteHz(b.freqHz);
+                    tuneToBookmark(b);
                     testerUsage_.noteFeature("bookmarks");
-                    for (int m = 0; m < 8; ++m) {
-                        if (b.mode == kModeNames[m]) {
-                            modeIndex_ = m;
-                            pipeline_.setDemodMode(kModeMap[m]);
-                            break;
-                        }
-                    }
-                    // Same clamp as the config restore: [3 kHz, 90% of channel rate].
-                    const double bwHi = kVfoBwMaxChanFrac * pipeline_.channelRateHz();
-                    vfoBandwidthHz_ = std::max(kVfoBwMinHz, std::min(b.bandwidthHz, bwHi));
-                    pipeline_.setVfoBandwidthHz(vfoBandwidthHz_);
-                    // -1 for a bookmark saved at a bandwidth the list does not carry
-                    // (one taken while a preset had the VFO at 40 kHz, say): the combo
-                    // letters the real figure and ticks nothing.
-                    bandwidthIndex_ = bandwidthStepIndex(vfoBandwidthHz_);
                 }
                 ImGui::SameLine();
                 if (ImGui::Button("x", ImVec2(delW, 0.0f))) { deleteIdx = i; }
@@ -23395,6 +23401,12 @@ void AppWindow::drawBookmarksSection() {
         }
     }
     if (!bookmarkView_.empty()) { ImGui::EndChild(); }
+    if (tickIdx >= 0 && tickIdx < static_cast<int>(list.size())) {
+        cascade::core::Bookmark b = list[static_cast<std::size_t>(tickIdx)];
+        b.scan = !b.scan;
+        freqMgr_.updateAt(static_cast<std::size_t>(tickIdx), b);
+        saveBookmarks();
+    }
     if (starIdx >= 0 && starIdx < static_cast<int>(list.size())) {
         cascade::core::Bookmark b = list[static_cast<std::size_t>(starIdx)];
         b.favourite = !b.favourite;
@@ -23411,6 +23423,29 @@ void AppWindow::drawBookmarksSection() {
         ImGui::TextWrapped("%s", bookmarkError_.c_str());
         ImGui::PopStyleColor();
     }
+}
+
+void AppWindow::tuneToBookmark(const cascade::core::Bookmark& b) {
+    // Click-to-tune: frequency through the shared absolute-tune path (same as
+    // scanner retunes), then mode and bandwidth. An unknown mode name - a
+    // newer build's file, kept verbatim by FreqManager on purpose - leaves the
+    // current mode untouched.
+    tuneAbsoluteHz(b.freqHz);
+    for (int m = 0; m < 8; ++m) {
+        if (b.mode == kModeNames[m]) {
+            modeIndex_ = m;
+            pipeline_.setDemodMode(kModeMap[m]);
+            break;
+        }
+    }
+    // Same clamp as the config restore: [3 kHz, 90% of channel rate].
+    const double bwHi = kVfoBwMaxChanFrac * pipeline_.channelRateHz();
+    vfoBandwidthHz_ = std::max(kVfoBwMinHz, std::min(b.bandwidthHz, bwHi));
+    pipeline_.setVfoBandwidthHz(vfoBandwidthHz_);
+    // -1 for a bookmark saved at a bandwidth the list does not carry (one
+    // taken while a preset had the VFO at 40 kHz, say): the combo letters the
+    // real figure and ticks nothing.
+    bandwidthIndex_ = bandwidthStepIndex(vfoBandwidthHz_);
 }
 
 void AppWindow::saveBookmarks() {
@@ -24233,6 +24268,26 @@ void AppWindow::drawScannerSection() {
         return p;
     };
 
+    // THE TICKED ROWS OF THE FREQUENCY LIST instead of a range (the airband
+    // request, 2026-10): each stop tunes that row's frequency, mode and
+    // bandwidth, as clicking it would. The range fields stand aside.
+    const std::size_t tickedCount = tickedScanList().size();
+    {
+        bool listMode = scanTicked_;
+        std::string tickId;
+        cascade::core::formatUtf8(tickId, tr("Ticked frequencies (%zu)"), tickedCount);
+        tickId += "###scan_ticked";
+        if (ImGui::Checkbox(tickId.c_str(), &listMode)) {
+            scanTicked_ = listMode;
+            if (scanner_.active()) { scanner_.stop(); }
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("%s", tr("Scans the rows ticked in the Bookmarks list, in frequency order,\n"
+                                       "tuning each one's mode and bandwidth with it."));
+        }
+    }
+    ImGui::BeginDisabled(scanTicked_);
+
     // Commit on deactivate-after-edit (not per keystroke): while the scan is
     // ACTIVE a commit reconfigures it, which per the Scanner contract resets
     // to the new startHz — correct for new parameters, but far too jumpy to
@@ -24250,6 +24305,7 @@ void AppWindow::drawScannerSection() {
     ImGui::InputDouble(cascade::gui::labelAboveIfNeeded(trId("Step kHz")),
                        &scanStepKhz_, 0.0, 0.0, "%.2f");
     edited |= ImGui::IsItemDeactivatedAfterEdit();
+    ImGui::EndDisabled();
     ImGui::SetNextItemWidth(110.0f);
     ImGui::InputDouble(cascade::gui::labelAboveIfNeeded(trId("Dwell ms")),
                        &scanDwellMs_, 0.0, 0.0, "%.0f");
@@ -24275,19 +24331,31 @@ void AppWindow::drawScannerSection() {
     }
 
     if (edited && scanner_.active()) {
-        scanner_.configure(paramsFromMirrors());
+        if (scanTicked_) {
+            startTickedScan();
+        } else {
+            scanner_.configure(paramsFromMirrors());
+        }
         // The reconfigure re-emits a first tune on the next tick; the
         // user-tune baseline re-arms from that retune's readback.
         scannerHasExpected_ = false;
     }
 
     if (!scanner_.active()) {
+        ImGui::BeginDisabled(scanTicked_ && tickedCount == 0);
         if (ImGui::Button(trId("Start scan"), ImVec2(-FLT_MIN, 0.0f))) {
-            scanner_.configure(paramsFromMirrors());
-            scanner_.start(ImGui::GetTime() * 1000.0);
+            // One radio, one plan: the Airband monitor stands down.
+            if (airbandListening_ || airbandStartPending_) { airbandStop(""); }
+            if (scanTicked_) {
+                startTickedScan();
+            } else {
+                scanner_.configure(paramsFromMirrors());
+                scanner_.start(ImGui::GetTime() * 1000.0);
+            }
             testerUsage_.noteFeature("scanner");
             scannerHasExpected_ = false;
         }
+        ImGui::EndDisabled();
     } else {
         // STOP AND SKIP SIDE BY SIDE: skip is the operator's "next", for the
         // signal that is heard and not wanted - the retune comes on the next
@@ -24332,10 +24400,43 @@ void AppWindow::scannerFrame() {
     // the scan decision only "is a signal present now" matters, and the
     // S-meter is the one channel-power readout that is lock-free from the
     // GUI thread.
+    // LIST MODE FOLLOWS THE TICKS: a row ticked or unticked while the scan
+    // runs re-reads the list (the reconfigure restarts at the first entry,
+    // which is the Scanner's rule for new parameters). Any other edit - a
+    // star, a bookmark added elsewhere - leaves the scan where it is, or it
+    // would be pulled off the signal it is holding. Nothing ticked: stop.
+    if (scanTicked_ && freqMgr_.version() != scanListVersion_) {
+        scanListVersion_ = freqMgr_.version();
+        const std::vector<double> now = tickedScanList();
+        if (now.empty()) {
+            scanner_.stop();
+            return;
+        }
+        if (now != scanList_) { startTickedScan(); }
+    }
+
     const bool squelchOpen = pipeline_.signalPowerDb() > squelchDb_;
     const std::optional<double> retune =
         scanner_.tick(ImGui::GetTime() * 1000.0, squelchOpen);
-    if (retune.has_value()) {
+    if (retune.has_value() && scanTicked_) {
+        // The row itself, so its mode and bandwidth come with it - an
+        // airband row is AM at 10 kHz, a broadcast row WFM.
+        const std::vector<cascade::core::Bookmark>& list = freqMgr_.list();
+        const cascade::core::Bookmark* row = nullptr;
+        for (const cascade::core::Bookmark& b : list) {
+            if (b.scan && b.freqHz == *retune) {
+                row = &b;
+                break;
+            }
+        }
+        if (row != nullptr) {
+            tuneToBookmark(*row);
+        } else {
+            tuneAbsoluteHz(*retune);
+        }
+        scannerExpectedAbsHz_ = currentAbsoluteHz();
+        scannerHasExpected_ = true;
+    } else if (retune.has_value()) {
         tuneAbsoluteHz(*retune);
         // Baseline from READBACK, not the request: a device that coerces
         // the tune must not read as a user action next frame.
