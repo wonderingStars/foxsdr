@@ -412,6 +412,20 @@ public:
     double centerFrequencyHz() const override {
         return centerFrequencyHz_.load(std::memory_order_relaxed);
     }
+    // THE RETUNE AND THE STREAM START ARE LATE-CAPABLE (0.99.59, hang reports
+    // 6F550354218029F0 and 9B804643C56308CF). Both run on a worker and the
+    // caller waits kVendorCallWait. A driver that has not answered by then is
+    // NOT condemned - SoapySDRPlay3's setFrequency and activateStream did
+    // answer, seconds later, after the SDRplay API service was restarted under
+    // a live stream - it becomes the LATE CALL: the retune returns false with
+    // lastError() saying it is not answered yet, start() returns true with the
+    // stream pending, every other entry is refused at once (read() answers 0)
+    // so no second thread enters the driver, and the answer is taken when it
+    // comes, by the next entry or by the read loop: a late retune lands in
+    // centerFrequencyHz(), a late refused start becomes faulted() with the
+    // driver's words. One still unanswered after kLateCallGrace, or when the
+    // radio is stopped or closed, is given up exactly as an escape path gives
+    // up a wedged call (abandoned, condemned, "restart FoxSDR").
     bool setCenterFrequencyHz(double hz) override;
 
     // THE DRIVER'S OWN CRYSTAL CORRECTION (0.99.56, IqSource). Whether the
@@ -608,8 +622,11 @@ private:
     // setSampleRateHz), and three copies of a guarded vendor call is how one
     // of them ends up unguarded. Both assume the link's mutex is HELD.
     //
-    // activateLocked: activateStream on the calling thread, under the vendor
-    // guard (CRASH [1] lands here). True when the driver answered 0. False
+    // activateLocked: activateStream on a worker, the caller waiting
+    // kVendorCallWait, LATE-CAPABLE (see setCenterFrequencyHz) - for start()
+    // and the sample-rate change's restart alike. True when the driver
+    // answered 0, or when it has not answered yet: then *pending (if given)
+    // is set and the call is the late call, whose answer is taken later. False
     // with lastError() set when it threw or refused, or with the device
     // condemned (noteVendorFault) when it faulted. Does NOT touch running_ -
     // the caller decides what the transition means for its own state.
@@ -624,7 +641,7 @@ private:
     // in the log and in lastError() ("starting the stream", "stopping the
     // stream for a sample-rate change", ...), so the report says which of
     // the three sites the driver failed at.
-    bool activateLocked(const char* what);
+    bool activateLocked(const char* what, bool* pending = nullptr);
     bool deactivateLocked(const char* what);
 
     // Releases whatever half-built state exists, swallowing every Soapy
@@ -664,11 +681,37 @@ private:
     // same words a driver-lock timeout uses, and logs. The call itself is
     // still running when this returns; that is the point.
     //
-    // `waited` is how long the caller gave the call, for the log line: the
-    // escape paths' kVendorCallWait, or start()'s longer kActivateCallWait.
-    //
     // Caller holds the link's mutex, like every other *Locked helper.
-    void abandonWedgedDriverLocked(const char* what, std::chrono::milliseconds waited) noexcept;
+    // waitedMs is how long the call was given, for the log line: negative
+    // means the escape paths' kVendorCallWait; a late call given up passes
+    // its own age (kLateCallGrace, or how long it had been out at a stop).
+    void abandonWedgedDriverLocked(const char* what, long long waitedMs = -1) noexcept;
+
+    // THE LATE CALL - see setCenterFrequencyHz() above. Defined in the .cpp,
+    // because it holds the worker's job, which only the .cpp can name. Read
+    // and written only under link_->mutex; at most one at a time, because
+    // nothing enters the driver while one is out.
+    struct LateCall;
+    std::shared_ptr<LateCall> late_;
+    std::chrono::milliseconds lateGrace_ = kLateCallGrace;
+
+    // True while a late call still holds the driver, so the caller must stay
+    // out of it. Waits up to timeoutUs for it first (read() passes its own
+    // read quantum; control calls pass 0 and never wait). One that has
+    // answered is taken here - its result applied - and false is returned;
+    // one past lateGrace_ is given up (the device is condemned) and true is
+    // returned. The caller re-reads deviceDead() after a false, because the
+    // answer may have been a fault.
+    bool lateCallHoldsDriverLocked(long timeoutUs) noexcept;
+    // The escape paths' version, at the top of stopLocked() and
+    // teardownLocked(): an answered late call is taken, one still out is given
+    // up at once - never waited for, so a stop or a close costs what it cost
+    // before this existed.
+    void settleLateCallLocked() noexcept;
+    void reapLateCallLocked() noexcept;
+    void giveUpLateCallLocked(bool graceRanOut) noexcept;
+    // The refusal every other entry gives while a late call is out.
+    void refuseForLateCallLocked();
 
     // The only writers of the error slot. Every failure path goes through
     // setError so no site can forget the lock; clearError also resets the
@@ -796,6 +839,19 @@ public:
     // Tests only: shorten the minute so the read loop's own reporting can be
     // seen without waiting for it.
     void setStreamHealthWindowForTest(std::chrono::milliseconds w) { healthWindow_ = w; }
+
+    // HOW LONG A LATE CALL IS LISTENED FOR before it is given up (see
+    // setCenterFrequencyHz). Nothing ever blocks on this: it is the age past
+    // which the next entry, or the read loop, stops treating "not yet" as
+    // "later". Sized from the field case, not guessed: SoapySDRPlay3's
+    // setFrequency is sdrplay_api_Update - whose IPC answered in 5009 ms in
+    // the same report's log - and then up to 500 x sleep_for(1 ms), which is
+    // 7.8 s at Windows' default 15.625 ms timer; about 13 s in all. 20 s
+    // keeps that answer with room; the native SDRplay driver's kControlGrace
+    // (10 s) covers sdrplay_api_Update alone, without the wait loop.
+    static constexpr std::chrono::milliseconds kLateCallGrace{20000};
+    // Tests only: a grace a test can wait out.
+    void setLateCallGraceForTest(std::chrono::milliseconds g) { lateGrace_ = g; }
 
 private:
     void noteRead(int ret, std::size_t got);

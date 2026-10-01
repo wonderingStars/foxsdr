@@ -411,10 +411,6 @@ const KnownWait kKnownWaits[] = {
      "SoapySource::stop() - the driver-lock wait Pipeline::stop() spends on the GUI thread"},
     {"src/source/soapy_source.cpp", "kVendorCallWait", 1,
      "SoapySource::stopLocked() - the abandonable deactivateStream, once that lock is held"},
-    {"src/source/soapy_source.cpp", "kActivateCallWait", 0,
-     "not on the teardown path - the abandonable activateStream, spent only by start() and a "
-     "sample-rate change's restart (hang report 40002A91C26F3C07); stop() and closeDevice() "
-     "never activate a stream"},
     {"src/core/pipeline.cpp", "kSourceJoinWait", 1,
      "Pipeline::stop() - the wait for the source thread to exit, after both of the above"},
     {"src/core/gps_reader.hpp", "kOpenAbandonWait", 1,
@@ -456,6 +452,10 @@ const KnownWait kKnownWaits[] = {
     {"src/source/soapy_source.hpp", "kStreamHealthWindow", 0,
      "not a wait at all - the length of the window the read loop tallies before it writes "
      "its stream-health line; nothing ever sleeps or blocks on it"},
+    {"src/source/soapy_source.hpp", "kLateCallGrace", 0,
+     "not a wait at all - the age past which a late retune or stream start is given up by "
+     "the next entry or the read loop; nothing blocks on it, and the shutdown path "
+     "(stop()/teardown) gives a late call up at once rather than waiting for it"},
 
     // THE NATIVE HACKRF DRIVER, WHICH THE APPLICATION DOES NOW OPEN (0.91.0).
     // The rows are still zero and the reason is the mutual exclusion argued
