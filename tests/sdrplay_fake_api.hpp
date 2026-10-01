@@ -39,6 +39,16 @@
 
 #include "source/sdrplay_api_decl.hpp"
 
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>  // SetThreadPriority, for the service thread (see startService)
+#endif
+
 namespace fakesdrplay {
 
 namespace abi = cascade::source::sdrplay_abi;
@@ -298,6 +308,29 @@ public:
         stopService();
         serviceStop_.store(false);
         serviceThread_ = std::thread([this, blockSamples, period, wedgeAfter]() {
+            // THE SERVICE THREAD RUNS AHEAD OF THE TEST'S OWN THREADS (2026-10-01).
+            // Both this thread and the probe measuring it read steady_clock;
+            // what differs is who gets the CPU. This loop sleeps to an
+            // absolute schedule, so on Windows' 15.6 ms timer tick its 1 ms
+            // periods arrive as bursts of ~15 blocks a tick, and a late
+            // wake-up is caught up by the iterations after it - but only once
+            // it runs. At normal priority, under a full ctest -j beside other
+            // builds, it was measured waking up to 219 ms late, while the
+            // probe's own thread woke on time and read the count: a 30 ms
+            // window with NO callbacks ("no samples at all") followed by one
+            // at 164%, or a 52 ms wake past the 50 ms clamp below dropping 26%
+            // of a 150 ms window ("delivered 72% of the rate set"). 21 of 40
+            // test_sdrplay_probe runs failed that way; catching up past the
+            // clamp alone still failed 15 of 25; at this priority 0 of 60, the
+            // latest wake-up in 140 instrumented services 16.6 ms - one tick
+            // plus one period. A real service's samples come from the radio's
+            // clock, not from whichever thread the OS runs first, so the
+            // fake's stand-in for that clock is never queued behind the load.
+            // Windows only: elsewhere sleeps are not tick-quantised and
+            // raising a thread's priority needs privileges.
+#if defined(_WIN32)
+            ::SetThreadPriority(::GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
+#endif
             std::vector<short> xi(blockSamples);
             std::vector<short> xq(blockSamples);
             for (unsigned int k = 0; k < blockSamples; ++k) {
