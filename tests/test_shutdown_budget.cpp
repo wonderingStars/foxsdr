@@ -449,6 +449,10 @@ const KnownWait kKnownWaits[] = {
      "like app_window.cpp's kQuitGrace"},
     {"src/core/updater.hpp", "kNoWait", 0,
      "zero by construction - UpdateCheckTask::poll()'s once-a-frame ready-poll, not a wait"},
+    {"src/source/soapy_enum_proc.cpp", "kModuleCloseWait", 0,
+     "spent only inside the enumeration CHILD process (endEnumerateHelperProcess), unloading "
+     "the SDRplay module so its sdrplay_api_Close runs before the child ends; the application "
+     "never calls it and its shutdown never waits on a child"},
     {"src/source/soapy_source.hpp", "kStreamHealthWindow", 0,
      "not a wait at all - the length of the window the read loop tallies before it writes "
      "its stream-health line; nothing ever sleeps or blocks on it"},

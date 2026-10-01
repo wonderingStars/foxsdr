@@ -752,6 +752,93 @@ void SoapySource::setModulesLoadedHook(void (*hook)()) {
     g_modulesLoadedHook.store(hook, std::memory_order_release);
 }
 
+std::vector<std::string> SoapySource::unloadModulesRegistering(
+    const std::vector<std::string>& drivers, std::chrono::milliseconds wait) {
+    if (drivers.empty() || !runtimeAvailable()) { return {}; }
+    // Owned by the worker as well as by this frame: a module that hangs in
+    // its unload keeps the worker, and this frame stops waiting for it.
+    struct Job {
+        std::vector<std::string> drivers;
+        std::vector<std::string> unloaded;
+        std::vector<std::string> failed;
+        std::mutex m;
+        std::condition_variable cv;
+        bool done = false;
+        bool faulted = false;
+    };
+    std::shared_ptr<Job> job;
+    std::thread worker;
+    try {
+        job = std::make_shared<Job>();
+        job->drivers = drivers;
+        worker = std::thread([job]() noexcept {
+            std::vector<std::string> unloaded;
+            std::vector<std::string> failed;
+            const bool completed = guardedVendorCall([&job, &unloaded, &failed]() noexcept {
+                try {
+                    for (const std::string& path : SoapySDR::listModules()) {
+                        bool registers = false;
+                        for (const auto& entry : SoapySDR::getLoaderResult(path)) {
+                            // Only a registration that took (an empty error):
+                            // a module whose entry was refused never had its
+                            // find function run.
+                            if (entry.second.empty() &&
+                                std::find(job->drivers.begin(), job->drivers.end(),
+                                          entry.first) != job->drivers.end()) {
+                                registers = true;
+                            }
+                        }
+                        if (!registers) { continue; }
+                        const std::string err = SoapySDR::unloadModule(path);
+                        if (err.empty()) {
+                            unloaded.push_back(path);
+                        } else {
+                            failed.push_back(path + ": " + err);
+                        }
+                    }
+                } catch (...) {
+                }
+            });
+            {
+                std::lock_guard<std::mutex> lk(job->m);
+                job->unloaded = std::move(unloaded);
+                job->failed = std::move(failed);
+                job->faulted = !completed;
+                job->done = true;
+            }
+            job->cv.notify_all();
+        });
+    } catch (...) {
+        core::diagWarnf("soapy: no thread for unloading the %s module - left loaded",
+                        drivers.front().c_str());
+        return {};
+    }
+    bool done = false;
+    {
+        std::unique_lock<std::mutex> lk(job->m);
+        done = job->cv.wait_for(lk, wait, [&job] { return job->done; });
+    }
+    if (!done) {
+        worker.detach();
+        core::diagWarnf("soapy: unloading the %s module did not finish within %lld ms - left to it",
+                        drivers.front().c_str(), static_cast<long long>(wait.count()));
+        return {};
+    }
+    worker.join();
+    if (job->faulted) {
+        core::diagWarnf("soapy: unloading the %s module faulted (code 0x%08X) - contained",
+                        drivers.front().c_str(),
+                        static_cast<unsigned>(vendorGuardLastFaultCode()));
+    }
+    for (const std::string& f : job->failed) {
+        core::diagWarnf("soapy: unloading a module failed: %s", f.c_str());
+    }
+    for (const std::string& p : job->unloaded) {
+        core::diagLogf("soapy: unloaded %s before the process ends", p.c_str());
+    }
+    return job->unloaded;
+}
+
 std::vector<SoapyDeviceInfo> SoapySource::enumerateInProcessEach(
     const std::vector<std::string>& skip,
     const std::function<void(bool begin, const std::string& driver)>& onProbe) {

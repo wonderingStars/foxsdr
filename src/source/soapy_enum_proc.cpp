@@ -64,6 +64,19 @@ const std::vector<std::string>& neverAskedDrivers() {
     return names;
 }
 
+// THE DRIVERS WHOSE MODULE IS UNLOADED BEFORE THE CHILD ENDS - see
+// endEnumerateHelperProcess. Registry names, as SoapySDR::getLoaderResult
+// gives them.
+const std::vector<std::string>& modulesClosedBeforeExit() {
+    static const std::vector<std::string> names{"sdrplay"};
+    return names;
+}
+
+// How long the child gives that unload before it ends anyway. sdrplay_api_Close
+// is one IPC round trip to the service; the answer is already on the pipe, so
+// this only delays the parent's scan by what the module takes, up to this.
+constexpr std::chrono::milliseconds kModuleCloseWait{2000};
+
 bool neverAsked(const std::string& lowerName) {
     const auto& n = neverAskedDrivers();
     return std::find(n.begin(), n.end(), lowerName) != n.end();
@@ -1548,6 +1561,19 @@ int runEnumerateHelper(const char* crashDir, const char* driver, bool listDriver
 }
 
 void endEnumerateHelperProcess(int exitCode) {
+    // The answer first: it is on the pipe before any module's unload runs.
+    std::fflush(nullptr);
+    // ...THEN THE ONE MODULE THAT MUST SAY GOODBYE (2026-10-01, SDRplay field
+    // audit). SoapySDRPlay3's find function opens the SDRplay API
+    // (sdrplay_api_Open, in a function-local singleton) and its
+    // sdrplay_api_Close runs only in that singleton's destructor, at module
+    // unload; the API's specification wants Close as a client's last call,
+    // and a client that vanishes without it is a suspect for wedging the
+    // SDRplayAPIService for every later one - the application among them.
+    // So that module alone is unloaded, under the vendor guard and the
+    // bound, and every other module still ends without detaching.
+    (void)SoapySource::unloadModulesRegistering(modulesClosedBeforeExit(),
+                                                kModuleCloseWait);
     std::fflush(nullptr);
 #ifdef _WIN32
     // TerminateProcess, not ExitProcess: ExitProcess is what calls every

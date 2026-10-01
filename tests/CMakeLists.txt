@@ -27,6 +27,18 @@ if(WIN32 AND TARGET SoapySDR)
         PREFIX ""
         LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_soapy/$<CONFIG>"
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_soapy/$<CONFIG>")
+    # The same source registering "sdrplay", with SoapySDRPlay3's API-session
+    # singleton in miniature: whether the child closes that session before it
+    # ends (endEnumerateHelperProcess) is read off what it records. Stages
+    # nothing, so it never faults; same directory, so one plugin path holds both.
+    add_library(soapy_sdrplay_fixture MODULE "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/soapy_fault_module.cpp")
+    target_link_libraries(soapy_sdrplay_fixture PRIVATE SoapySDR)
+    target_compile_definitions(soapy_sdrplay_fixture PRIVATE
+        FIXTURE_DRIVER="sdrplay" FIXTURE_LABEL="SDRplay fixture" FIXTURE_STAGES=0)
+    set_target_properties(soapy_sdrplay_fixture PROPERTIES
+        PREFIX ""
+        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_soapy/$<CONFIG>"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_soapy/$<CONFIG>")
 endif()
 
 foreach(src ${CASCADE_TESTS})
@@ -87,7 +99,7 @@ foreach(src ${CASCADE_TESTS})
     elseif(name STREQUAL "test_soapy_enum_proc" AND TARGET soapy_fault_fixture)
         # Hands the fault fixture's directory to the real enumeration child;
         # cascade.exe is built first because that block runs it.
-        add_dependencies(${name} soapy_fault_fixture cascade)
+        add_dependencies(${name} soapy_fault_fixture soapy_sdrplay_fixture cascade)
         add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE_DIR:soapy_fault_fixture>")
     else()
         add_test(NAME ${name} COMMAND ${name})

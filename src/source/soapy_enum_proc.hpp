@@ -499,6 +499,13 @@ int runEnumerateHelper(const char* crashDir = nullptr, const char* driver = null
 // driver SoapyAudio had initialised faulted in its detach, below
 // __scrt_common_main_seh, ucrtbase's exit and ntdll's loader shutdown, and
 // the child that had answered died 0xC0000005. Called only by main().
+//
+// ONE EXCEPTION, before the end: the module that registered "sdrplay" is
+// unloaded (SoapySource::unloadModulesRegistering, vendor-guarded, bounded at
+// 2 s), because SoapySDRPlay3 closes the SDRplay API - sdrplay_api_Close, the
+// call the API wants last - only in a singleton destroyed at module unload,
+// and a client that vanishes without it may wedge the SDRplay API service
+// for every later client (2026-10-01, SDRplay field audit).
 [[noreturn]] void endEnumerateHelperProcess(int exitCode);
 
 // The child's ONE serialisation step, as a named function: everything between

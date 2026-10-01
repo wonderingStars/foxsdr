@@ -216,6 +216,18 @@ public:
     // always in the application - does nothing.
     static void setModulesLoadedHook(void (*hook)());
 
+    // UNLOADS, FROM THIS PROCESS, ONLY THE VENDOR MODULES THAT REGISTERED one
+    // of `drivers` (SoapySDR::getLoaderResult names each module's
+    // registrations), so that what they do on unload runs: their static
+    // destructors and DLL_PROCESS_DETACH. Called by the enumeration child
+    // alone (endEnumerateHelperProcess), which otherwise ends WITHOUT
+    // detaching any module - see that function for why. Runs on a worker
+    // under the vendor guard and is waited for at most `wait`; a module that
+    // faults or hangs in its unload is left to it, and the caller ends the
+    // process regardless. Returns the module paths unloaded.
+    static std::vector<std::string> unloadModulesRegistering(
+        const std::vector<std::string>& drivers, std::chrono::milliseconds wait);
+
     // The driver names this machine has modules for, loaded but not probed:
     // listing them touches each module's registration, never its find
     // function, which is where the faults in the field reports live. Empty

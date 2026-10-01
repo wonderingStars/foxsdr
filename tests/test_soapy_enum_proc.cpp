@@ -2261,6 +2261,50 @@ int main(int argc, char** argv) {
             // ...and which child it was, for a reader of that report alone.
             CHECK(own.find("enumeration helper: whole bus") != std::string::npos);
 
+            // THE SDRPLAY API IS CLOSED BEFORE THE CHILD ENDS, and nothing else
+            // is detached. SoapySDRPlay3 opens the SDRplay API (sdrplay_api_Open)
+            // in a function-local singleton the first time its find function
+            // runs, and sdrplay_api_Close runs only in that singleton's
+            // destructor - at module unload. A child that ends by
+            // TerminateProcess (endEnumerateHelperProcess, so no other vendor
+            // module's detach can kill it after it answered) would leave the
+            // SDRplay API service with a client that vanished without the Close
+            // the API's specification requires to be the last call. The
+            // "sdrplay" fixture build records its session's destruction and its
+            // detach; the "faultfixture" build records the same, and must
+            // record nothing: it is not unloaded.
+            {
+                std::error_code uec;
+                const std::filesystem::path unloads =
+                    std::filesystem::temp_directory_path(uec) /
+                    ("foxsdr_fixture_unloads_" + std::to_string(::GetCurrentProcessId()) + ".txt");
+                std::filesystem::remove(unloads, uec);
+                setEnvVar("FOXSDR_TEST_SOAPY_FIXTURE", "");
+                setEnvVar("FOXSDR_TEST_SOAPY_FIXTURE_UNLOADS", unloads.string().c_str());
+                clearReports();
+                cascade::source::clearSessionFaultedDriversForTest();
+                const EnumResult c = enumerateIsolated(o);
+                const std::string said = readAll(unloads);
+                bool sdrplayRow = false;
+                for (const auto& d : c.devices) {
+                    if (d.label == "SDRplay fixture") { sdrplayRow = true; }
+                }
+                std::printf("sdrplay close at exit: outcome=%s deaths=%d sdrplay row=%d "
+                            "recorded=\"%s\"\n",
+                            enumOutcomeName(c.outcome), c.childDeaths, sdrplayRow ? 1 : 0,
+                            said.c_str());
+                CHECK(c.outcome == EnumOutcome::Ok);
+                CHECK(c.childDeaths == 0);
+                CHECK(fixtureRow(c));
+                CHECK(sdrplayRow);  // its find ran, so its API session was opened
+                CHECK(said.find("sdrplay closed") != std::string::npos);
+                CHECK(said.find("sdrplay detached") != std::string::npos);
+                CHECK(said.find("faultfixture") == std::string::npos);
+                CHECK(crashReports(dir).empty());
+                setEnvVar("FOXSDR_TEST_SOAPY_FIXTURE_UNLOADS", "");
+                std::filesystem::remove(unloads, uec);
+            }
+
             setEnvVar("FOXSDR_TEST_SOAPY_FIXTURE", "");
             setEnvVar("SOAPY_SDR_PLUGIN_PATH", pluginPathBefore.c_str());
             cascade::source::clearSessionFaultedDriversForTest();
