@@ -49,6 +49,7 @@
 #endif
 
 #include "core/config.hpp"
+#include "core/diag_log.hpp"
 #include "core/patch_devices.hpp"
 #include "core/pipeline.hpp"
 #include "dsp/demod.hpp"
@@ -1367,6 +1368,22 @@ void testHungCloseAtTheSource() {
         CHECK(reopen.finished);
         CHECK(gate->hung.load() == 1);
         CHECK(SoundCardSource::abandonedCloses() == abandonedBefore + 1);
+        // ...and the line that says so describes the card without NAMING it
+        // (0.99.59): an input's name is often a label a person chose, and
+        // this line rides into crash reports and the diagnostics bundle.
+        {
+            bool said = false;
+            for (const std::string& l : cascade::core::DiagLog::instance().ringSnapshot()) {
+                if (l.find("did not close within") == std::string::npos) { continue; }
+                said = true;
+                if (l.find("USB Audio CODEC") != std::string::npos) {
+                    std::printf("hung close: the line names the card: %s\n", l.c_str());
+                }
+                CHECK(l.find("USB Audio CODEC") == std::string::npos);
+                CHECK(l.find("Windows WASAPI") != std::string::npos);  // what it is, still said
+            }
+            CHECK(said);
+        }
         if (!reopen.finished) {
             // RED: the reopen is stuck behind the hung close. Let it go before
             // anything else touches the source.

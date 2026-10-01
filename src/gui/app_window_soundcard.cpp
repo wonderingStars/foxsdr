@@ -93,9 +93,10 @@ void AppWindow::launchSoundCardOpen(bool restore, const SoundCardSettings& setti
                                      "so it is not opened again: restart FoxSDR after plugging or "
                                      "unplugging a card."),
                                   label.c_str());
-        cascade::core::diagWarnf("source: the sound card %s has stopped; not reopened by its ALSA index "
+        // The log describes the card, never names it (loggableSoundCardDescription).
+        cascade::core::diagWarnf("source: the sound card (%s) has stopped; not reopened by its ALSA index "
                                  "(restart FoxSDR)",
-                                 label.c_str());
+                                 cascade::source::loggableSoundCardDescription(soundCardLive_).c_str());
         return;
     }
     // RE-OPENING THE CARD THAT IS RUNNING - a new rate, channel or format on
@@ -205,8 +206,8 @@ void AppWindow::pollSoundCard() {
         // the combo says it is not open, and both reasons are on screen. The
         // section shows the settings the card last RAN with - what the next
         // start will try - and nothing claims it is running.
-        cascade::core::diagWarnf("source: the sound card %s did not open with new settings, nor as it was",
-                                 label.c_str());
+        cascade::core::diagWarnf("source: the sound card (%s) did not open with new settings, nor as it was",
+                                 cascade::source::loggableSoundCardDescription(r.wanted).c_str());
         if (r.gen != sourceGen_) { return; }  // another source was chosen meanwhile
         soundCard_ = r.previous;
         restoreKeepLabel_ = std::string(tr("Sound card")) + ": " + r.previous.device;
@@ -251,7 +252,8 @@ void AppWindow::pollSoundCard() {
             // the restore asked), and now the combo says so too.
             restoreKeepLabel_ = std::string(tr("Sound card")) + ": " + r.wanted.device;
         }
-        cascade::core::diagWarnf("source: the sound card %s did not open%s", label.c_str(),
+        cascade::core::diagWarnf("source: the sound card (%s) did not open%s",
+                                 cascade::source::loggableSoundCardDescription(r.wanted).c_str(),
                                  missing ? " - it is not in the list of inputs" : "");
         return;
     }

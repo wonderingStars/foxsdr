@@ -430,8 +430,22 @@ bool AorSource::open(const std::string& args) {
         return false;
     }
     link_->dev = dev_.get();
-    const auto giveUp = [this](const std::string& why) {
-        core::diagLogf("aor: open abandoned: %s", why.c_str());
+    // A port named in the args ("control=COM5") is text anybody could have
+    // typed - a path, say - and the reasons below name it as given. The
+    // screen keeps it; the log names it the way every port is logged
+    // (loggableSerialPortName: a port's name, or the kind and length of
+    // anything else), because the log rides into crash reports.
+    const std::string requestedPort = argValue(args, "control");
+    const auto giveUp = [this, requestedPort](const std::string& why) {
+        std::string logged = why;
+        if (!requestedPort.empty()) {
+            const std::string safe = cascade::core::loggableSerialPortName(requestedPort);
+            for (std::size_t at = logged.find(requestedPort); at != std::string::npos;
+                 at = logged.find(requestedPort, at + safe.size())) {
+                logged.replace(at, requestedPort.size(), safe);
+            }
+        }
+        core::diagLogf("aor: open abandoned: %s", logged.c_str());
         setError(why);
         dev_.reset();  // releases interface 0
         link_->dev = nullptr;
@@ -446,7 +460,7 @@ bool AorSource::open(const std::string& args) {
                  : aor::ftdiControlPortCandidates();
     const aor::LinkOpener opener =
         (useFake_ && fake_.openControl) ? fake_.openControl : aor::LinkOpener(&aor::openSerialControlLink);
-    const aor::Pairing pairing = aor::pairControlPort(candidates, argValue(args, "control"), opener);
+    const aor::Pairing pairing = aor::pairControlPort(candidates, requestedPort, opener);
     for (const std::string& t : pairing.tried) { core::diagLogf("aor: control port %s", t.c_str()); }
     if (!pairing.ok) { return giveUp(pairing.error); }
 

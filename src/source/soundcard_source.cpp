@@ -476,7 +476,9 @@ public:
             hostApi->name == nullptr || dev.hostApi != hostApi->name ||
             !soundCardHostApiListed(hostApi->type) ||
             (hostApi->type == paALSA && !alsaHardwareName(info->name)) || info->maxInputChannels < channels) {
-            error = "\"" + dev.name + "\" is no longer in the list of inputs";
+            // Not named: this text reaches the log through a patch radio's
+            // "would not open" line, and the card is named on screen already.
+            error = "the card is no longer in the list of inputs";
             return false;
         }
         PaStreamParameters p{};
@@ -650,7 +652,9 @@ struct SoundCardCloseTicket {
     std::mutex m;
     std::condition_variable cv;
     bool done = false;
-    std::string label;  // "device (host API)", for the log line if it is left behind
+    // What the card is, for the log line if its close is left behind -
+    // loggableSoundCardDescription(), never the card's own name (0.99.59).
+    std::string label;
 };
 
 SoundCardSource::Capture::Capture(std::size_t floats) : ring(floats) {
@@ -684,7 +688,7 @@ void waitForCloses(const std::vector<std::shared_ptr<SoundCardCloseTicket>>& tic
         if (t->cv.wait_until(lk, deadline, [&t] { return t->done; })) { continue; }
         gAbandonedCloses.fetch_add(1, std::memory_order_relaxed);
         cascade::core::diagWarnf(
-            "source: the sound card %s did not close within %lld ms; the close is left to finish on a "
+            "source: the sound card (%s) did not close within %lld ms; the close is left to finish on a "
             "thread of its own",
             t->label.c_str(), static_cast<long long>(SoundCardSource::kCloseWaitMs.count()));
     }
@@ -872,7 +876,7 @@ void SoundCardSource::closeDevice() {
     // factory for a new one - so a close still running can never shut a
     // stream opened after it.
     auto done = std::make_shared<SoundCardCloseTicket>();
-    done->label = settings_.device + " (" + settings_.hostApi + ")";
+    done->label = loggableSoundCardDescription(settings_);
     std::thread([b = std::move(backend_), c = std::move(cap_), done]() mutable {
         b->close();
         b.reset();

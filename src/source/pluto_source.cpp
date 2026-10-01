@@ -424,7 +424,8 @@ bool PlutoSource::open(const std::string& args) {
     // XML, and "the context is malformed" is a far worse message than "that
     // is not an IIO daemon".
     if (!control_->version(daemonVersion_)) {
-        setError(std::string("nothing at ") + host + " answered as an IIO daemon: " +
+        setError(std::string("nothing at ") + host + ":" + std::to_string(port) +
+                 " answered as an IIO daemon: " +
                  control_->lastError());
         control_.reset();
         return false;
@@ -587,9 +588,9 @@ bool PlutoSource::open(const std::string& args) {
     openMirror_.store(true, std::memory_order_relaxed);
 
     core::diagLogf(
-        "pluto: opened %s at %s:%u - iiod %s, firmware \"%s\", serial %s; phy %s, capture %s "
+        "pluto: opened %s on port %u - iiod %s, firmware \"%s\", serial %s; phy %s, capture %s "
         "(%s)",
-        label.c_str(), host_.c_str(), static_cast<unsigned>(port_), daemonVersion_.c_str(),
+        label.c_str(), static_cast<unsigned>(port_), daemonVersion_.c_str(),
         fwVersion_.c_str(), hwSerial_.c_str(), phyDevice_.c_str(), captureDevice_.c_str(),
         chI.scanFormat.c_str());
     if (haveLoRange_) {
