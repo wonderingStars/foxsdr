@@ -65,8 +65,14 @@ struct DiagModule {
 //     opened 102 s after launch printed all three as bare addresses, and the
 //     frame that identified the fault had to be recovered by hand.
 //
-// The device SCAN needs no entry here - it runs in a child process
-// (soapy_enum_proc), so no vendor module is mapped into this one.
+//   - the enumeration CHILD (soapy_enum_proc, runEnumerateHelper), through
+//     SoapySource::setModulesLoadedHook: once its walk has mapped the vendor
+//     modules and before any probe runs, so its own report of a probe fault
+//     names the module (2026-10-01; it used to say "?" and hash to
+//     650B88A1735695DB).
+//
+// The device SCAN needs no entry in the application - it runs in that child
+// process, so no vendor module is mapped into this one.
 //
 // Returns the number of modules captured (capped; see kMaxDiagModules in the
 // .cpp).

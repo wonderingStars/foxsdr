@@ -15,6 +15,20 @@ set_target_properties(settings_ui_fixture PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_plugins/$<CONFIG>"
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_plugins/$<CONFIG>")
 
+# A REAL SoapySDR vendor module for test_soapy_enum_proc: put on
+# SOAPY_SDR_PLUGIN_PATH and loaded by the real cascade.exe enumeration child,
+# where it faults as it is detached at exit (the 2026-10-01 field fault) or in
+# its find function. Its own directory, so nothing else is found there.
+# Windows only, as the test blocks that use it are.
+if(WIN32 AND TARGET SoapySDR)
+    add_library(soapy_fault_fixture MODULE "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/soapy_fault_module.cpp")
+    target_link_libraries(soapy_fault_fixture PRIVATE SoapySDR)
+    set_target_properties(soapy_fault_fixture PROPERTIES
+        PREFIX ""
+        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_soapy/$<CONFIG>"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_soapy/$<CONFIG>")
+endif()
+
 foreach(src ${CASCADE_TESTS})
     get_filename_component(name "${src}" NAME_WE)
     add_executable(${name} "${src}")
@@ -70,6 +84,11 @@ foreach(src ${CASCADE_TESTS})
         # the module's directory; built first.
         add_dependencies(${name} settings_ui_fixture)
         add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE_DIR:settings_ui_fixture>")
+    elseif(name STREQUAL "test_soapy_enum_proc" AND TARGET soapy_fault_fixture)
+        # Hands the fault fixture's directory to the real enumeration child;
+        # cascade.exe is built first because that block runs it.
+        add_dependencies(${name} soapy_fault_fixture cascade)
+        add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE_DIR:soapy_fault_fixture>")
     else()
         add_test(NAME ${name} COMMAND ${name})
     endif()

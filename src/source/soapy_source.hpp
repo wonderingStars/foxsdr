@@ -201,6 +201,17 @@ public:
         const std::vector<std::string>& skip,
         const std::function<void(bool begin, const std::string& driver)>& onProbe);
 
+    // CALLED ONCE THE VENDOR MODULES ARE MAPPED, before any find function
+    // runs, by both walks above (enumerateInProcess with or without a driver,
+    // and enumerateInProcessEach). Set only by the enumeration child
+    // (source/soapy_enum_proc.cpp, runEnumerateHelper), which refreshes its
+    // crash handler's module table there: a table snapshotted when the
+    // handler was armed cannot name a vendor module or its libusb, so the
+    // child's own report of a probe fault said "?" and a raw address
+    // (2026-10-01, the 650B88A1735695DB group). Null - the default, and
+    // always in the application - does nothing.
+    static void setModulesLoadedHook(void (*hook)());
+
     // The driver names this machine has modules for, loaded but not probed:
     // listing them touches each module's registration, never its find
     // function, which is where the faults in the field reports live. Empty

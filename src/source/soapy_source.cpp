@@ -18,6 +18,7 @@
 #include <SoapySDR/Types.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <condition_variable>
 #include <cstdio>
@@ -520,7 +521,18 @@ std::string lowerCopy(std::string s) {
     return s;
 }
 
+// See SoapySource::setModulesLoadedHook.
+std::atomic<void (*)()> g_modulesLoadedHook{nullptr};
+
+void runModulesLoadedHook() {
+    if (void (*hook)() = g_modulesLoadedHook.load(std::memory_order_acquire)) { hook(); }
+}
+
 }  // namespace
+
+void SoapySource::setModulesLoadedHook(void (*hook)()) {
+    g_modulesLoadedHook.store(hook, std::memory_order_release);
+}
 
 std::vector<SoapyDeviceInfo> SoapySource::enumerateInProcessEach(
     const std::vector<std::string>& skip,
@@ -551,6 +563,7 @@ std::vector<SoapyDeviceInfo> SoapySource::enumerateInProcessEach(
                 // What SoapySDR::Device::enumerate() does first (its one-shot
                 // automaticLoadModules); loadModules() skips what is loaded.
                 SoapySDR::loadModules();
+                runModulesLoadedHook();
                 // ONE THREAD PER DRIVER, all at once, in the registry's order -
                 // SoapySDR's own walk, reproduced so that it can be told what
                 // to leave out and can say what it is doing.
@@ -679,6 +692,12 @@ std::vector<SoapyDeviceInfo> SoapySource::enumerateInProcess(const std::string& 
         [](void* p) noexcept {
             auto* w = static_cast<Walk*>(p);
             try {
+                // Loaded FIRST, explicitly, so the hook runs between the load
+                // and the probe. Device::enumerate() would load them itself
+                // (its one-shot automaticLoadModules), and loadModules()
+                // skips what is already loaded.
+                SoapySDR::loadModules();
+                runModulesLoadedHook();
                 // WITH the driver key, only that module's find function runs;
                 // without it, every one of them does. Same call either way, so
                 // the guard, the catch and the row building below are shared.

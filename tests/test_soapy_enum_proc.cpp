@@ -50,6 +50,8 @@
 
 #include "core/crash_handler.hpp"
 #include "core/diag_report.hpp"
+#include "core/telemetry.hpp"
+#include "core/version.hpp"
 
 #include <SoapySDR/Device.hpp>
 #include <SoapySDR/Registry.hpp>
@@ -435,6 +437,50 @@ int fakeHelper(int argc, char** argv) {
                     cap);
         return 0;
     }
+    if (mode == "asiotrap") {
+        // THE 2026-10-01 MACHINE, faked: a Native Instruments ASIO driver
+        // behind SoapyAudio. The listing has "good" and "audio"; asking audio
+        // - on its own, or as part of a whole bus that was not told to --skip
+        // it - dies with 0xC0000005, as the field child did every time.
+        const std::string driver = driverArg(argc, argv);
+        const char* cap = gotCrashDir ? "true" : "false";
+        if (askedToListDrivers(argc, argv)) {
+            std::printf("{\"schema\":1,\"runtime\":true,\"guardedCalls\":1,\"capture\":%s,"
+                        "\"drivers\":[\"good\",\"audio\"],\"devices\":[]}\n", cap);
+            return 0;
+        }
+        const bool asksAudio =
+            driver == "audio" || (driver.empty() && !listNames(skipArg(argc, argv), "audio"));
+        if (asksAudio) {
+            std::fflush(stdout);
+#ifdef _WIN32
+            ::TerminateProcess(::GetCurrentProcess(), 0xC0000005u);
+#endif
+            std::_Exit(139);
+        }
+        std::printf("{\"schema\":1,\"runtime\":true,\"guardedCalls\":2,\"capture\":%s,"
+                    "\"devices\":[{\"label\":\"good radio\",\"args\":\"driver=good,serial=9\"}]}\n",
+                    cap);
+        return 0;
+    }
+    if (mode == "answeredthendied" || mode == "probesdonethendied") {
+        // A CHILD THAT DIES AFTER EVERY PROBE HAS ENDED - the field child of
+        // 2026-10-01, which died in a vendor module's DLL detach as it exited.
+        //   answeredthendied    its whole answer is already on the pipe;
+        //   probesdonethendied  it dies between the walk and the answer.
+        // Either way no probe was running, so "no driver's probe had begun"
+        // (what the field report said) is not the truth.
+        probeLine(true, "good");
+        probeLine(true, "audio");
+        probeLine(false, "audio");
+        probeLine(false, "good");
+        if (mode == "answeredthendied") { printOkJson(gotCrashDir); }
+        std::fflush(stdout);
+#ifdef _WIN32
+        ::TerminateProcess(::GetCurrentProcess(), 0xC0000005u);
+#endif
+        std::_Exit(139);
+    }
     if (mode == "armeduhd") {
         // THE REAL CHILD'S HANDLER, dying in the uhd probe: the listing names
         // only "uhd", and asked for it the child arms exactly as the real
@@ -806,6 +852,23 @@ std::string allReportText(const std::filesystem::path& dir) {
     return all;
 }
 
+// Only the "reason:" lines of `reports` - for a check that something is NOT
+// said, which must not trip over this process's own earlier log lines that
+// every report's log ring also carries.
+std::string reasonLines(const std::string& reports) {
+    std::string out;
+    std::size_t pos = 0;
+    while ((pos = reports.find("reason: ", pos)) != std::string::npos) {
+        if (pos == 0 || reports[pos - 1] == '\n') {
+            const std::size_t eol = reports.find('\n', pos);
+            out += reports.substr(pos, (eol == std::string::npos ? reports.size() : eol) - pos);
+            out += '\n';
+        }
+        pos += 8;
+    }
+    return out;
+}
+
 bool rowsWellFormed(const EnumResult& r) {
     for (const auto& d : r.devices) {
         if (d.label.empty() || d.args.empty()) { return false; }
@@ -856,6 +919,16 @@ int main(int argc, char** argv) {
 
     const std::string self = selfExePath();
     CHECK(!self.empty());
+    // The fault fixture's directory (tests/CMakeLists.txt), this test's one
+    // argument; the blocks that need it fail without it rather than skip.
+    // Made absolute: the child loads modules with the default-directories
+    // search order (soapy_modules.cpp), where a relative directory finds
+    // nothing - measured, a relative argument listed no fixture at all.
+    std::string fixtureDir;
+    if (argc >= 2 && argv[1][0] != '-') {
+        std::error_code aec;
+        fixtureDir = std::filesystem::absolute(std::filesystem::path(argv[1]), aec).string();
+    }
 
     // --- the outcomes are distinguishable, and say so ----------------------
     {
@@ -1241,6 +1314,48 @@ int main(int argc, char** argv) {
         CHECK(r.faultedDrivers.empty());
         cascade::source::clearSessionFaultedDriversForTest();
     }
+    // --- 2026-10-01: THE SOAPYSDR AUDIO DRIVER IS NEVER ASKED ---------------
+    //
+    // 0.99.57 on Windows 10 19045: SoapyAudio's probe initialised a Native
+    // Instruments ASIO driver ("Audio Kontrol 1"), and every child that asked
+    // it died - three reports and a per-driver sweep for one scan. Nothing it
+    // could list was ever offered: every driver=audio row is dropped from the
+    // Source list (gui/app_window.cpp isAudioDriver), refused on open, and
+    // skipped by --soapy-check and --rds-check; sound cards are FoxSDR's own
+    // sound-card source since 0.99.38. So it is not asked by any walk - the
+    // whole bus (through --skip), the sweep, or the walk beside an open radio.
+    // The fake dies with 0xC0000005 whenever audio is asked.
+    {
+        cascade::source::clearSessionFaultedDriversForTest();
+        setMode("asiotrap");
+        EnumOptions o;
+        o.helperPath = self;
+        o.allowInProcessFallback = false;
+        const EnumResult r = enumerateIsolated(o);
+        const Rows wantRows{{"good radio", "driver=good,serial=9"}};
+        std::printf("asio trap: outcome=%s attempts=%d sweep=%d deaths=%d\n",
+                    enumOutcomeName(r.outcome), r.attempts, r.sweepChildren, r.childDeaths);
+        CHECK(r.outcome == EnumOutcome::Ok);
+        CHECK(rowsOf(r) == wantRows);
+        CHECK(r.attempts == 1);       // one whole-bus child...
+        CHECK(r.sweepChildren == 0);  // ...and no sweep after it
+        CHECK(r.childDeaths == 0);
+        CHECK(r.faultedDrivers.empty());
+        CHECK(cascade::source::sessionFaultedDrivers().empty());
+
+        // BESIDE AN OPEN RADIO every driver is asked on its own: audio is not
+        // among them.
+        EnumOptions beside = o;
+        beside.skipDrivers = {"rtlsdr"};
+        const EnumResult b = enumerateIsolated(beside);
+        const std::vector<std::string> wantGood{"good"};
+        CHECK(b.outcome == EnumOutcome::Ok);
+        CHECK(b.sweptDrivers == wantGood);
+        CHECK(b.childDeaths == 0);
+        CHECK(rowsOf(b) == wantRows);
+        cascade::source::clearSessionFaultedDriversForTest();
+    }
+
     // WHAT A CHILD'S HANDLER SAID, read off its stdout (childFaultLineFrom):
     // the exact bytes core::faultLine writes, found even glued to a vendor's
     // unterminated printf, two lines at most, printable ASCII only - a
@@ -1997,6 +2112,161 @@ int main(int argc, char** argv) {
             cascade::source::clearSessionFaultedDriversForTest();
             clearReports();
         }
+
+        // --- 2026-10-01: A DEATH AFTER EVERY PROBE HAD ENDED ----------------
+        //
+        // The field child (crash 3C2F1A0F27A8FD35) died in a vendor module's
+        // DLL detach as it EXITED, its answer already written - and the parent
+        // threw the answer away, re-probed, swept, and filed a reason saying
+        // "no driver's probe had begun (it died while the driver modules were
+        // loading)", the opposite of what happened. A complete answer is now
+        // used, the death is one report that says when it happened, and a
+        // death after the walk but before the answer says that instead.
+        {
+            const auto clearReports = [&dir]() {
+                std::error_code rec;
+                for (const auto& p : crashReports(dir)) { std::filesystem::remove(p, rec); }
+            };
+#ifdef _WIN32
+            constexpr unsigned long kAvExit = 0xC0000005ul;
+#else
+            constexpr unsigned long kAvExit = 139ul;
+#endif
+            clearReports();
+            cascade::source::clearSessionFaultedDriversForTest();
+            setMode("answeredthendied");
+            EnumOptions o;
+            o.helperPath = self;
+            o.allowInProcessFallback = false;
+            const EnumResult r = enumerateIsolated(o);
+            const std::string body = allReportText(dir);
+            std::printf("answered then died: outcome=%s attempts=%d sweep=%d deaths=%d reports=%zu\n",
+                        enumOutcomeName(r.outcome), r.attempts, r.sweepChildren, r.childDeaths,
+                        crashReports(dir).size());
+            CHECK(r.outcome == EnumOutcome::Ok);
+            CHECK(rowsOf(r) == expectedOkRows());  // the answer it wrote is the answer
+            CHECK(r.attempts == 1);                // not re-probed...
+            CHECK(r.sweepChildren == 0);           // ...and not swept
+            CHECK(r.childDeaths == 1);             // but the death is not hidden
+            CHECK(r.deathExitCode == kAvExit);
+            CHECK(crashReports(dir).size() == 1u);  // one event, one report
+            CHECK(reasonLines(body).find("after its answer was complete") != std::string::npos);
+            CHECK(reasonLines(body).find("no driver's probe had begun") == std::string::npos);
+            CHECK(cascade::source::sessionFaultedDrivers().empty());
+
+            clearReports();
+            setMode("probesdonethendied");
+            EnumOptions once = o;
+            once.attempts = 1;
+            once.perDriverSweep = false;
+            const EnumResult d = enumerateIsolated(once);
+            const std::string body2 = allReportText(dir);
+            CHECK(d.outcome == EnumOutcome::ChildDied);
+            CHECK(d.inFlightDrivers.empty());
+            CHECK(crashReports(dir).size() == 1u);
+            CHECK(reasonLines(body2).find("every driver's probe had finished") != std::string::npos);
+            CHECK(reasonLines(body2).find("no driver's probe had begun") == std::string::npos);
+            cascade::source::clearSessionFaultedDriversForTest();
+            clearReports();
+        }
+
+        // --- THE REAL CHILD AND A REAL VENDOR MODULE (2026-10-01) -----------
+        //
+        // The fault fixture (tests/fixtures/soapy_fault_module.cpp) on
+        // SOAPY_SDR_PLUGIN_PATH, loaded by the REAL cascade.exe child through
+        // SoapySDR's own loader. UHD is left out, as on a machine with no
+        // USRP, so the bench's own UHD fault cannot stand in for the one
+        // staged here.
+#ifdef _WIN32
+        {
+            const auto clearReports = [&dir]() {
+                std::error_code rec;
+                for (const auto& p : crashReports(dir)) { std::filesystem::remove(p, rec); }
+            };
+            const std::string real = findRealCascade();
+            CHECK(!real.empty());
+            CHECK(!fixtureDir.empty());  // tests/CMakeLists.txt hands it over
+            const auto fixtureRow = [](const EnumResult& e) {
+                for (const auto& d : e.devices) {
+                    if (d.label == "Fault fixture") { return true; }
+                }
+                return false;
+            };
+            // Whatever this environment already had, restored afterwards.
+            const std::string pluginPathBefore = envOr("SOAPY_SDR_PLUGIN_PATH", "");
+            setEnvVar("SOAPY_SDR_PLUGIN_PATH", fixtureDir.c_str());
+
+            // A MODULE THAT FAULTS AS IT IS DETACHED AT EXIT costs nothing: the
+            // child leaves without detaching anything once its answer is
+            // written, so it exits 0, once, with the fixture's row, and files
+            // nothing.
+            clearReports();
+            cascade::source::clearSessionFaultedDriversForTest();
+            setEnvVar("FOXSDR_TEST_SOAPY_FIXTURE", "exit");
+            EnumOptions o;
+            o.helperPath = real;
+            o.allowInProcessFallback = false;
+            o.timeoutMs = 25000;
+            o.absentDrivers = {"uhd"};
+            const EnumResult r = enumerateIsolated(o);
+            std::printf("exit-fault module: outcome=%s attempts=%d sweep=%d deaths=%d "
+                        "deathExit=0x%08lX fixture=%d reports=%zu\n",
+                        enumOutcomeName(r.outcome), r.attempts, r.sweepChildren, r.childDeaths,
+                        r.deathExitCode, fixtureRow(r) ? 1 : 0, crashReports(dir).size());
+            CHECK(r.outcome == EnumOutcome::Ok);
+            CHECK(fixtureRow(r));
+            CHECK(r.attempts == 1);
+            CHECK(r.childDeaths == 0);
+            CHECK(crashReports(dir).empty());
+
+            // A MODULE THAT FAULTS IN ITS PROBE: the child's OWN report carries
+            // the build's identity and names the module - before, it had no
+            // version, os or arch (a separate, versionless crash group on the
+            // site) and the fault resolved to "?", hashing to 650B88A1735695DB,
+            // the very signature every contained child death had before 0.99.33.
+            CHECK(cascade::core::crashSignature(0xC0000005ul, "?", 0) == "650B88A1735695DB");
+            clearReports();
+            setEnvVar("FOXSDR_TEST_SOAPY_FIXTURE", "find");
+            EnumOptions once = o;
+            once.attempts = 1;
+            once.perDriverSweep = false;
+            const EnumResult f = enumerateIsolated(once);
+            std::string own;
+            int ownCount = 0;
+            for (const auto& p : crashReports(dir)) {
+                const std::string text = readAll(p);
+                if (text.find("child-exit-code:") == std::string::npos) {
+                    own += text;
+                    ++ownCount;
+                }
+            }
+            std::printf("find-fault module: outcome=%s exit=0x%08lX inflight=%zu own reports=%d\n",
+                        enumOutcomeName(f.outcome), f.exitCode, f.inFlightDrivers.size(),
+                        ownCount);
+            CHECK(f.outcome == EnumOutcome::ChildDied);
+            CHECK(f.exitCode == 0xC0000005ul);
+            // Among the probes still running: every driver probes at once.
+            CHECK(std::find(f.inFlightDrivers.begin(), f.inFlightDrivers.end(), "faultfixture") !=
+                  f.inFlightDrivers.end());
+            CHECK(ownCount == 1);
+            CHECK(own.find(std::string("version: ") + cascade::versionString() + "\n") !=
+                  std::string::npos);
+            CHECK(own.find(std::string("commit: ") + cascade::gitCommit() + "\n") !=
+                  std::string::npos);
+            CHECK(own.find("os: " + cascade::core::osDescription() + "\n") != std::string::npos);
+            CHECK(own.find("arch: " + cascade::core::archDescription() + "\n") !=
+                  std::string::npos);
+            CHECK(own.find("address: soapy_fault_fixture.dll+0x") != std::string::npos);
+            CHECK(own.find("signature: 650B88A1735695DB") == std::string::npos);
+            // ...and which child it was, for a reader of that report alone.
+            CHECK(own.find("enumeration helper: whole bus") != std::string::npos);
+
+            setEnvVar("FOXSDR_TEST_SOAPY_FIXTURE", "");
+            setEnvVar("SOAPY_SDR_PLUGIN_PATH", pluginPathBefore.c_str());
+            cascade::source::clearSessionFaultedDriversForTest();
+            clearReports();
+        }
+#endif  // _WIN32
 
         // --- THE DURABILITY PROPERTY, against the real binary ---------------
         //

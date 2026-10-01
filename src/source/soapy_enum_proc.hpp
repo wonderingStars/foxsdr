@@ -231,6 +231,21 @@ struct EnumResult {
     // another driver's thread than the one that did the damage.
     std::vector<std::string> inFlightDrivers;
 
+    // WHEN THE MOST RECENT CHILD THAT DIED WENT, as far as its own output can
+    // say (2026-10-01, crash 3C2F1A0F27A8FD35). `probesBegan`: at least one
+    // probe's begin line reached the parent - so an empty inFlightDrivers
+    // means every probe had FINISHED, not that none had begun.
+    // `answeredBeforeDeath`: its whole answer line was on the pipe before it
+    // died, so the walk was over and the answer is good. The field child died
+    // in a vendor module's DLL detach as it exited, after answering; the
+    // parent threw that answer away, re-probed, swept, and reported "no
+    // driver's probe had begun (it died while the driver modules were
+    // loading)". A complete answer is now USED (the outcome is Ok, the death
+    // still counted in childDeaths and filed once), and the reason says when
+    // the child died.
+    bool probesBegan = false;
+    bool answeredBeforeDeath = false;
+
     // WHAT THE CHILD'S OWN CRASH HANDLER SAID IT DIED OF, for the most recent
     // child that died or was killed - the core::kFaultLinePrefix lines it
     // writes to this pipe before its report (CrashHandlerConfig::
@@ -360,6 +375,17 @@ struct EnumOptions {
 // and no per-driver child is started for it. A death is deterministic by the
 // time it reaches that list (it took the whole bus twice and then its own
 // child), so re-asking it on every Refresh only costs a crash each time.
+//
+// THE SOAPYSDR "audio" DRIVER IS NEVER ASKED, by any walk - the whole bus
+// (through the child's --skip), the sweep, the walk beside an open radio and
+// the in-process fallback (2026-10-01, crash reports 4138700E14D784C6 and
+// 3C2F1A0F27A8FD35). SoapyAudio lists sound cards through RtAudio, whose ASIO
+// back end loads every ASIO driver on the machine; a Native Instruments one
+// ("Audio Kontrol 1") killed every child that asked it. And nothing it can
+// list is ever offered: every driver=audio row is dropped from the Source
+// list and refused on open (gui/app_window.cpp, isAudioDriver) and skipped
+// by --soapy-check and --rds-check; sound cards have been FoxSDR's own
+// sound-card source since 0.99.38. Asking it was all risk and no answer.
 EnumResult enumerateIsolated(const EnumOptions& options = EnumOptions{});
 
 // A driver whose own enumeration child died in this process's lifetime, and
@@ -462,6 +488,18 @@ void armEnumerateHelperProcess(const char* crashDir);
 // empty: none) - the session's faulted drivers, see enumerateIsolated.
 int runEnumerateHelper(const char* crashDir = nullptr, const char* driver = nullptr,
                        bool listDrivers = false, const char* skip = nullptr);
+
+// HOW THE HELPER ENDS, once runEnumerateHelper has returned: stdio flushed,
+// then the process terminated with `exitCode` WITHOUT the CRT's exit path -
+// no atexit handlers, no static destructors and, above all, no
+// DLL_PROCESS_DETACH into the vendor modules the walk loaded (Linux: _Exit,
+// so no destructors of the loaded .so files either). The answer is on the
+// pipe by then; nothing a vendor module does on unload can add to it, and on
+// 2026-10-01 (0.99.57, crash 3C2F1A0F27A8FD35) one did take it away: an ASIO
+// driver SoapyAudio had initialised faulted in its detach, below
+// __scrt_common_main_seh, ucrtbase's exit and ntdll's loader shutdown, and
+// the child that had answered died 0xC0000005. Called only by main().
+[[noreturn]] void endEnumerateHelperProcess(int exitCode);
 
 // The child's ONE serialisation step, as a named function: everything between
 // "the walk produced these devices" and "this is the line on stdout". It

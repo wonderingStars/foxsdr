@@ -6,6 +6,9 @@
 
 #include "core/crash_handler.hpp"
 #include "core/diag_log.hpp"
+#include "core/diag_report.hpp"
+#include "core/telemetry.hpp"
+#include "core/version.hpp"
 #include "source/vendor_guard.hpp"
 
 #include <nlohmann/json.hpp>
@@ -54,8 +57,21 @@ constexpr const char* kKeyLabel = "label";
 constexpr const char* kKeyArgs = "args";
 constexpr const char* kKeyDrivers = "drivers";
 
+// THE DRIVERS NO WALK ASKS - see "audio" in the header, above
+// enumerateIsolated. Lower-case, as every comparison below is.
+const std::vector<std::string>& neverAskedDrivers() {
+    static const std::vector<std::string> names{"audio"};
+    return names;
+}
+
+bool neverAsked(const std::string& lowerName) {
+    const auto& n = neverAskedDrivers();
+    return std::find(n.begin(), n.end(), lowerName) != n.end();
+}
+
 // Defined with the probe log's writer, below.
 std::vector<std::string> probesStillRunning(const std::string& text);
+bool anyProbeBegan(const std::string& text);
 
 #ifdef _WIN32
 
@@ -379,13 +395,20 @@ void runOneChild(const std::string& helper, unsigned long timeoutMs,
 
     if (out.outcome == EnumOutcome::ChildTimedOut) {
         out.inFlightDrivers = probesStillRunning(text);
+        out.probesBegan = anyProbeBegan(text);
         out.childFaultLine = childFaultLineFrom(text);
         return;
     }
     if (exitCode != 0) {
         out.outcome = EnumOutcome::ChildDied;
         out.inFlightDrivers = probesStillRunning(text);
+        out.probesBegan = anyProbeBegan(text);
         out.childFaultLine = childFaultLineFrom(text);
+        // A COMPLETE ANSWER IS STILL AN ANSWER: the line is written only after
+        // the whole walk, so if it parses, the child died afterwards (see
+        // EnumResult::answeredBeforeDeath). The outcome stays ChildDied here;
+        // the callers decide what a death after answering costs.
+        out.answeredBeforeDeath = parseChildOutput(text, out);
         return;
     }
     if (!parseChildOutput(text, out)) {
@@ -539,13 +562,20 @@ void runOneChild(const std::string& helper, unsigned long timeoutMs,
 
     if (out.outcome == EnumOutcome::ChildTimedOut) {
         out.inFlightDrivers = probesStillRunning(text);
+        out.probesBegan = anyProbeBegan(text);
         out.childFaultLine = childFaultLineFrom(text);
         return;
     }
     if (exitCode != 0) {
         out.outcome = EnumOutcome::ChildDied;
         out.inFlightDrivers = probesStillRunning(text);
+        out.probesBegan = anyProbeBegan(text);
         out.childFaultLine = childFaultLineFrom(text);
+        // A COMPLETE ANSWER IS STILL AN ANSWER: the line is written only after
+        // the whole walk, so if it parses, the child died afterwards (see
+        // EnumResult::answeredBeforeDeath). The outcome stays ChildDied here;
+        // the callers decide what a death after answering costs.
+        out.answeredBeforeDeath = parseChildOutput(text, out);
         return;
     }
     if (!parseChildOutput(text, out)) {
@@ -680,6 +710,12 @@ std::vector<std::string> probesStillRunning(const std::string& text) {
         }
     }
     return running;
+}
+
+// Did ANY probe's begin line arrive? With probesStillRunning empty, this is
+// what tells "every probe had finished" from "none had begun".
+bool anyProbeBegan(const std::string& text) {
+    return text.find(std::string(kProbeMarker) + "begin ") != std::string::npos;
 }
 
 // THE SITE KEEPS 200 CHARACTERS OF A REASON (foxsdr-site crash.go,
@@ -850,7 +886,9 @@ void sweepEachDriver(const std::string& helper, const EnumOptions& options,
     EnumResult listing;
     runOneChild(helper, options.timeoutMs, crashDir, listing, "--list-drivers");
     result.sweepChildren += listing.attempts;
-    if (listing.outcome != EnumOutcome::Ok || listing.drivers.empty()) {
+    // A listing child that died after its answer was complete still listed.
+    const bool listed = listing.outcome == EnumOutcome::Ok || listing.answeredBeforeDeath;
+    if (!listed || listing.drivers.empty()) {
         if (restricted) {
             // Nothing was probed, so nothing was risked: say so and give the
             // listing's own outcome, which is the honest answer.
@@ -879,6 +917,11 @@ void sweepEachDriver(const std::string& helper, const EnumOptions& options,
     std::vector<std::string> asked;
     for (const std::string& d : listing.drivers) {
         const std::string low = lowerAscii(d);
+        if (neverAsked(low)) {
+            // Not asked by any walk, and not a choice this scan made: see
+            // "audio" in the header.
+            continue;
+        }
         if (std::find(skip.begin(), skip.end(), low) != skip.end()) {
             result.skippedDrivers.push_back(low);
         } else if (std::find(absent.begin(), absent.end(), low) != absent.end()) {
@@ -944,8 +987,27 @@ void sweepEachDriver(const std::string& helper, const EnumOptions& options,
             // Its WHOLE budget, and no answer: waited out once is enough.
             rememberSlowDriver(driver);
         }
-        if (one.outcome == EnumOutcome::Ok) {
+        if (one.outcome == EnumOutcome::Ok || one.answeredBeforeDeath) {
             for (SoapyDeviceInfo& d : one.devices) { found.push_back(std::move(d)); }
+            if (one.answeredBeforeDeath) {
+                // DIED AFTER ANSWERING: its devices are listed, and the driver
+                // is neither "faulted" nor remembered - its probe worked, and
+                // leaving it out of later scans would hide its radio. The death
+                // is still counted and filed, once, saying when it happened.
+                result.childDeaths += 1;
+                result.deathExitCode = one.exitCode;
+                result.childFaultLine = one.childFaultLine;
+                const std::string reason = withChildSaid(
+                    "SDR device enumeration child process for driver=" + reportSafeName(driver) +
+                        " died after its answer was complete (contained: the answer was used)",
+                    one.childFaultLine);
+                core::reportAbsorbedChildFault(reason.c_str(), one.exitCode, 1,
+                                               childFaultSignatureTag(driver).c_str());
+                core::diagWarnf(
+                    "soapy: the '%s' driver's child died with exit 0x%08lX after its answer was "
+                    "complete - its answer was used",
+                    driver.c_str(), one.exitCode);
+            }
             continue;
         }
         // The most recent death's or kill's own words, as the header promises.
@@ -1063,6 +1125,13 @@ EnumResult enumerateIsolated(const EnumOptions& options) {
         std::string skipArg;
         for (const std::string& d : sessionSkip) { skipArg += (skipArg.empty() ? "" : ",") + d; }
         for (const std::string& d : absentSkip) { skipArg += (skipArg.empty() ? "" : ",") + d; }
+        // ...AND SO, ALWAYS, IS EVERY DRIVER NO WALK ASKS ("audio").
+        for (const std::string& d : neverAskedDrivers()) {
+            if (std::find(sessionSkip.begin(), sessionSkip.end(), d) == sessionSkip.end() &&
+                std::find(absentSkip.begin(), absentSkip.end(), d) == absentSkip.end()) {
+                skipArg += (skipArg.empty() ? "" : ",") + d;
+            }
+        }
         if (!sessionSkip.empty()) {
             core::diagWarnf(
                 "soapy: not asking %s - it crashed a device scan earlier in this session",
@@ -1132,18 +1201,41 @@ EnumResult enumerateIsolated(const EnumOptions& options) {
             // report and cost the 42 characters the child's module name
             // needs: with it, the field's own line kept only "access
             // violation 0xC000000".
+            //
+            // WHEN IT DIED, told four ways rather than two (2026-10-01, crash
+            // 3C2F1A0F27A8FD35): an empty in-flight list used to be read as
+            // "no probe had begun", and the field child it was said of had in
+            // fact finished every probe and written its answer - it died in a
+            // vendor module's DLL detach as it exited.
+            const bool answered = result.answeredBeforeDeath;
             const std::string running =
-                result.inFlightDrivers.empty()
-                    ? std::string(" - no driver's probe had begun (it died while the driver "
-                                  "modules were loading)")
-                    : " - still probing when it died: " + joinNames(result.inFlightDrivers, 8);
+                answered ? std::string(" - after its answer was complete (as it exited)")
+                : !result.inFlightDrivers.empty()
+                    ? " - still probing when it died: " + joinNames(result.inFlightDrivers, 8)
+                : result.probesBegan
+                    ? std::string(" - every driver's probe had finished when it died")
+                    : std::string(" - no driver's probe had begun (it died while the driver "
+                                  "modules were loading)");
             const std::string reason = withChildSaid(
-                "SDR device enumeration child process died (contained: the parent "
-                "survived and re-probed)" +
-                    running,
+                std::string("SDR device enumeration child process died (contained: the parent "
+                            "survived and ") +
+                    (answered ? "used its answer)" : "re-probed)") + running,
                 result.childFaultLine);
             core::reportAbsorbedChildFault(reason.c_str(), result.exitCode, i + 1,
                                            childFaultSignatureTag(std::string()).c_str());
+
+            // THE ANSWER WAS COMPLETE, so it is the answer: no retry, and no
+            // sweep - asking every driver again cannot improve on a walk that
+            // finished. The death stays counted (childDeaths) and filed above.
+            if (answered) {
+                core::diagWarnf(
+                    "soapy: enumeration child died with exit 0x%08lX after its answer was "
+                    "complete - contained; its answer was used",
+                    result.exitCode);
+                result.outcome = EnumOutcome::Ok;
+                result.exitCode = 0;
+                break;
+            }
 
             if (i + 1 < maxAttempts) {
                 core::diagWarnf(
@@ -1185,8 +1277,14 @@ EnumResult enumerateIsolated(const EnumOptions& options) {
                 result.absentDrivers.push_back(low);
             }
         }
-        result.devices = leaveOut.empty() ? SoapySource::enumerateInProcess()
-                                          : SoapySource::enumerateInProcessEach(leaveOut, {});
+        // ...nor, ever, a driver no walk asks - so this is always the walk
+        // that can leave drivers out.
+        for (const std::string& d : neverAskedDrivers()) {
+            if (std::find(leaveOut.begin(), leaveOut.end(), d) == leaveOut.end()) {
+                leaveOut.push_back(d);
+            }
+        }
+        result.devices = SoapySource::enumerateInProcessEach(leaveOut, {});
         result.sessionSkippedDrivers = faulted;
         result.fellBackInProcess = true;
     }
@@ -1269,6 +1367,19 @@ void armEnumerateHelperProcess(const char* crashDir) {
 #endif
 
     if (crashDir != nullptr && *crashDir != '\0') {
+        // THE BUILD'S IDENTITY IN THE CHILD'S OWN REPORT (2026-10-01). The
+        // context block is rendered by the application (AppWindow::
+        // refreshDiagContext), which a helper never reaches, so the child's
+        // report had no version, commit, os or arch: uploaded with none, it
+        // formed a versionless group of its own on the site. The receiver
+        // fields stay empty - there is no receiver in this process.
+        core::DiagContext ctx;
+        ctx.version = versionString();
+        ctx.commit = gitCommit();
+        ctx.os = core::osDescription();
+        ctx.arch = core::archDescription();
+        core::setDiagContext(ctx);
+
         // THE ORDINARY HANDLERS, into the directory the parent already armed.
         // exitAfterReport is what keeps the death fast and quiet: the filter
         // writes the report and TerminateProcesses with the exception code,
@@ -1361,6 +1472,35 @@ int runEnumerateHelper(const char* crashDir, const char* driver, bool listDriver
     ::_setmode(::_fileno(stdout), _O_BINARY);
 #endif
 
+    // WHICH CHILD THIS IS, as the first line of its own log ring - which its
+    // crash report carries - so a reader holding only that report knows what
+    // it was asked (2026-10-01: the uploaded child report said nothing).
+    const bool oneDriver = driver != nullptr && *driver != '\0';
+    if (listDrivers) {
+        core::diagLogf("enumeration helper: driver list");
+    } else if (oneDriver) {
+        core::diagLogf("enumeration helper: driver=%s", reportSafeName(driver).c_str());
+    } else {
+        std::string notAsked;
+        if (skip != nullptr) {
+            for (const char* c = skip; *c != '\0' && notAsked.size() < 120; ++c) {
+                // The --skip names, shown as reportSafeName shows a name, commas kept.
+                const char low = (*c >= 'A' && *c <= 'Z') ? static_cast<char>(*c - 'A' + 'a') : *c;
+                const bool ok = (low >= 'a' && low <= 'z') || (low >= '0' && low <= '9') ||
+                                low == '_' || low == '-' || low == '.' || low == ',';
+                notAsked.push_back(ok ? low : '?');
+            }
+        }
+        core::diagLogf("enumeration helper: whole bus%s%s", notAsked.empty() ? "" : ", not asking ",
+                       notAsked.c_str());
+    }
+    // THE MODULE TABLE IS REFRESHED once the vendor modules are mapped and
+    // before any probe runs (SoapySource::setModulesLoadedHook): the handler
+    // armed above snapshotted a table that cannot name them.
+    if (captureArmed) {
+        SoapySource::setModulesLoadedHook([]() { core::refreshModuleTable(); });
+    }
+
     const std::uint64_t before = vendorGuardCallCount();
     const bool runtime = SoapySource::runtimeAvailable();
     // THREE JOBS, ONE CHILD. The names-only answer exists so the parent can
@@ -1393,7 +1533,6 @@ int runEnumerateHelper(const char* crashDir, const char* driver, bool listDriver
         std::fwrite(line.data(), 1, line.size(), stdout);
         std::fflush(stdout);
     };
-    const bool oneDriver = driver != nullptr && *driver != '\0';
     const std::vector<SoapyDeviceInfo> devices =
         listDrivers  ? std::vector<SoapyDeviceInfo>()
         : oneDriver  ? SoapySource::enumerateInProcess(std::string(driver))
@@ -1406,6 +1545,20 @@ int runEnumerateHelper(const char* crashDir, const char* driver, bool listDriver
     std::fputc('\n', stdout);
     std::fflush(stdout);
     return 0;
+}
+
+void endEnumerateHelperProcess(int exitCode) {
+    std::fflush(nullptr);
+#ifdef _WIN32
+    // TerminateProcess, not ExitProcess: ExitProcess is what calls every
+    // loaded module's DllMain with DLL_PROCESS_DETACH, and that is where the
+    // 2026-10-01 field child died after answering. Pipe bytes already written
+    // stay in the pipe for the parent to read.
+    ::TerminateProcess(::GetCurrentProcess(), static_cast<UINT>(exitCode));
+#endif
+    // Linux, and the unreachable tail on Windows: no atexit handlers, no
+    // static destructors, no .so destructors.
+    std::_Exit(exitCode);
 }
 
 }  // namespace cascade::source

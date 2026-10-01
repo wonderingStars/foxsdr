@@ -985,7 +985,12 @@ int main(int argc, char** argv) {
                 return 2;
             }
         }
-        return cascade::source::runEnumerateHelper(crashDir, driver, listDrivers, skip);
+        // ENDED, NOT RETURNED: returning from main runs ExitProcess, which
+        // detaches every vendor module the walk loaded - and an ASIO driver
+        // faulting in its detach killed a child that had already answered
+        // (2026-10-01). See endEnumerateHelperProcess.
+        cascade::source::endEnumerateHelperProcess(
+            cascade::source::runEnumerateHelper(crashDir, driver, listDrivers, skip));
     }
 
     // FIRST, before anything that could fault has had the chance. The four
