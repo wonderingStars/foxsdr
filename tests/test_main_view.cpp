@@ -474,8 +474,20 @@ int main() {
     // --- deaf: a real click on the PATCH key does nothing to a scripted run ----
 #if defined(_WIN32)
     {
+        // REAL TIME FOR THE POSTER (2026-10-01). deafRun posts its click once
+        // the trace has 5 lines, and it must land before frame 30 - but a
+        // bounded run's frames are about a millisecond each, so that window
+        // was ~25 ms of wall time for a harness thread polling every 2 ms
+        // beside EnumWindows and a file read. The 0.99.59 full ctest -j
+        // missed it: "click posted at frame 60" (after the run had ended, so
+        // the post itself failed). The script now holds the frame loop for
+        // two seconds at frame 10 - inside the watchdog's start-up budget -
+        // so the trace stands at 10 lines while the click is posted, and the
+        // posted messages wait in the window's queue for frame 11's poll.
         const DeafRun deaf =
-            deafRun("deaf", config("receiver"), click(40, keyPatch->second.cx(), keyPatch->second.cy()),
+            deafRun("deaf", config("receiver"),
+                    std::string("10 sleep 2000\n") +
+                        click(40, keyPatch->second.cx(), keyPatch->second.cy()),
                     static_cast<int>(keyPatch->second.cx()), static_cast<int>(keyPatch->second.cy()));
         CHECK(deaf.started);
         // The click really went in, and early: well before the script's own.
