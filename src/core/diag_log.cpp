@@ -1071,6 +1071,39 @@ void maskNetworkAddresses(std::string& s) {
     maskIpLiterals(s);
 }
 
+// SERIAL PORT NUMBERS (0.99.59): "COM5" becomes "COM#" and "/dev/ttyUSB0"
+// "/dev/ttyUSB#". A report needs to know that a port was tried, opened or
+// refused, and in which order; which number this machine gave it is not
+// something it needs.
+void maskSerialPortNumbers(std::string& s) {
+    std::string low = lowerAscii(s);
+    std::size_t i = 0;
+    while (i + 3 < s.size()) {
+        std::size_t d = std::string::npos;
+        if (low.compare(i, 3, "com") == 0 && (i == 0 || !isAlnumChar(s[i - 1]))) {
+            d = i + 3;
+        } else if (low.compare(i, 8, "/dev/tty") == 0) {
+            d = i + 8;
+            while (d < s.size() && isAlphaChar(s[d])) { ++d; }
+        }
+        if (d == std::string::npos) {
+            ++i;
+            continue;
+        }
+        std::size_t e = d;
+        while (e < s.size() && isDigitChar(s[e])) { ++e; }
+        const bool free = e == s.size() || !(isAlnumChar(s[e]) || s[e] == '_');
+        if (e > d && e - d <= 3 && free) {
+            // Kept in step with `s`: '#' is the same in both.
+            s.replace(d, e - d, "#");
+            low.replace(d, e - d, "#");
+            i = d + 1;
+            continue;
+        }
+        i = d > i ? d : i + 1;
+    }
+}
+
 // Words that make a line one whose unlabelled numbers might be a frequency.
 bool mentionsFrequency(const std::string& low) {
     for (const char* k : {"hz", "freq", "tune", "tuning", "centre", "center", "vfo", "asked for",
@@ -1322,6 +1355,7 @@ std::string scrubLineKeeping(const std::string& line, const std::vector<std::str
     maskSoapyLabelSerials(body);
     maskUserDirs(body);
     maskNetworkAddresses(body);
+    maskSerialPortNumbers(body);
     maskQuotedNames(body);
     maskPossessiveNamesInParens(body);
     // A line at the ring's width was CUT: whatever named its numbers may be

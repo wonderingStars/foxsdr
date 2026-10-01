@@ -30,6 +30,7 @@
 #include <vector>
 
 #include "core/config.hpp"
+#include "core/diag_log.hpp"
 #include "source/aor_source.hpp"
 #include "test_check.hpp"
 #include "usb/usb_fake.hpp"
@@ -590,6 +591,28 @@ int main() {
         src2.setTransportForTest(w.transport());
         CHECK(!src2.open("control=COM3"));
         CHECK(contains(src2.lastError(), "COM3 is not an AOR receiver"));
+    }
+    // --- a port named in the args is LOGGED the way every port is (0.99.59) -------------
+    // The args accept any text, and a typed path is not a port: the screen
+    // names it as typed, the log line (which rides into crash reports) as
+    // loggableSerialPortName does - its kind and length, never the path.
+    {
+        World w;
+        w.listed = {iqDevice("fake://aor/1")};
+        w.vr = {{"D:\\radios\\my-aor-port", "$GPRMC,1"}};
+        w.build = [&](FakeUsbDevice& d, const std::string&) { makeRunning(d, payload); };
+        cascade::core::DiagLog::instance().resetForTest();
+        AorSource src;
+        src.setTransportForTest(w.transport());
+        CHECK(!src.open("control=D:\\radios\\my-aor-port"));
+        CHECK(contains(src.lastError(), "D:\\radios\\my-aor-port is not an AOR receiver"));
+        bool said = false;
+        for (const std::string& l : cascade::core::DiagLog::instance().ringSnapshot()) {
+            if (contains(l, "aor: open abandoned")) { said = true; }
+            if (contains(l, "my-aor-port")) { std::printf("the log names the typed path: %s\n", l.c_str()); }
+            CHECK(!contains(l, "my-aor-port"));
+        }
+        CHECK(said);
     }
     // --- the interface dies mid-stream: faulted, not hung ----------------------------------
     {

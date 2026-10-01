@@ -223,15 +223,19 @@ std::string scrubVendorLine(const std::string& line);
 //      ".lan", ".home", ".internal"...) anywhere, and the machine in a
 //      Windows network path ("\\NAS\share"). This machine itself (127.x,
 //      0.0.0.0, ::1, localhost) is kept;
-//   5. anything in single quotes - the names users type for patch nodes,
+//   5. the number of a serial port becomes '#' (0.99.59): "COM5" and
+//      "\\.\COM12" read "COM#", "/dev/ttyUSB0" reads "/dev/ttyUSB#" - that a
+//      port was tried, opened or refused is kept, which number this machine
+//      gave it is not;
+//   6. anything in single quotes - the names users type for patch nodes,
 //      speakers, presets - becomes '<name>' (a quoted USB hardware id is
 //      kept, its instance segment already stripped);
-//   6. inside parentheses, a possessive word ("Alice's" in "Headset (Alice's
+//   7. inside parentheses, a possessive word ("Alice's" in "Headset (Alice's
 //      AirPods Pro)") becomes <name>'s - the make and model that follow are
 //      kept, because a device-friendly-name string handed back by the
 //      operating system is frequently a Bluetooth or paired-phone label a
 //      person chose, never something this application generated;
-//   7. on a line that mentions hertz, a frequency, tuning, a centre, the VFO,
+//   8. on a line that mentions hertz, a frequency, tuning, a centre, the VFO,
 //      a range, an offset, a carrier, a preset, transmitting or keying, or
 //      "asked for"/"answered" - and on a line cut off at the ring's width -
 //      EVERY free-standing number becomes '#', except a number with a sample
@@ -240,7 +244,7 @@ std::string scrubVendorLine(const std::string& line);
 //      after "firmware", "version", "id", "tuner", "error", "code"...; a
 //      number with a hertz unit is masked whatever else is true of it, and
 //      a number glued to a word (B200, R820T, v1.0.0) is part of a name;
-//   8. any run of '#' becomes a single '#', so a masked frequency does not
+//   9. any run of '#' becomes a single '#', so a masked frequency does not
 //      say how many digits it had.
 // A line with none of these in it is returned byte for byte.
 std::string scrubUploadLine(const std::string& line);

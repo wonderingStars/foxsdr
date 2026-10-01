@@ -622,6 +622,29 @@ void networkAddresses() {
     }
 }
 
+// SERIAL PORT NAMES (0.99.59): the number Windows gave a port, or the
+// number on a Linux tty node, is masked in uploads - "COM5" becomes "COM#".
+// A diagnosis needs to know a port was tried, opened or refused, and in what
+// order; which number this machine happened to give it identifies nothing
+// the report needs.
+void serialPortNames() {
+    expectScrub("aor: control port COM5: VR -> \"AR-DV1\" (AR-DV1)",
+                "aor: control port COM#: VR -> \"AR-DV1\" (AR-DV1)");
+    expectScrub("aor: open abandoned: More than one AOR receiver answered (COM5, COM17).",
+                "aor: open abandoned: More than one AOR receiver answered (COM#, COM#).");
+    expectScrub("gps: \\\\.\\COM12 could not be opened: Access is denied.",
+                "gps: \\\\.\\COM# could not be opened: Access is denied.");
+    expectScrub("gps: listening on /dev/ttyUSB0 at 9600", "gps: listening on /dev/ttyUSB# at 9600");
+    expectScrub("gps: /dev/ttyACM12 gone", "gps: /dev/ttyACM# gone");
+    for (const char* plain : {
+             "telecom3 and COMMAND 3 and the COM port",
+             "usbfs: /dev/bus/usb/001/004 busy (-16)",
+             "gps: (a typed device path, 27 chars) could not be opened",
+         }) {
+        expectScrub(plain, plain);
+    }
+}
+
 // Sets (or, with nullptr, clears) an environment variable in the copy the
 // CRT's getenv reads. The library is linked statically into this test, so it
 // shares that copy.
@@ -722,7 +745,7 @@ void bundleHeaderPaths() {
 // A PLUGIN'S NAME IS NOT A FREQUENCY (GitHub issue 5's bundle, 0.99.43). The
 // header of that bundle read "plugin: 406 MHz Beacons 1.0.0" and every log
 // line naming the same plugin read "plugin: loaded # MHz Beacons #": the name
-// carries "MHz", so rule 7 masked every number on the line, the version with
+// carries "MHz", so rule 8 masked every number on the line, the version with
 // it. The header is the same inventory, unscrubbed, a few lines up - masking
 // it in the log protected nothing and cost the report its plugin versions.
 // The names the report itself lists are kept wherever they appear; every
@@ -775,7 +798,7 @@ void pluginNamesSurviveTheScrub() {
         CHECK(joined.find(other + "\n") != std::string::npos);
         CHECK(joined.find("406.028") == std::string::npos);
     }
-    // And a list that names nothing changes nothing: rule 7 as it was.
+    // And a list that names nothing changes nothing: rule 8 as it was.
     CHECK(cascade::core::scrubUploadLog({loaded}).front() ==
           "15:41:13.441 info plugin: loaded # MHz Beacons #");
 
@@ -805,6 +828,7 @@ void pluginNamesSurviveTheScrub() {
 int main() {
     unitRules();
     networkAddresses();
+    serialPortNames();
     bundleHeaderPaths();
     pluginNamesSurviveTheScrub();
 
