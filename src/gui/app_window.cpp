@@ -24117,7 +24117,9 @@ void AppWindow::noteTuneRefused(double requestHz, bool isPluginPreset) {
                         : radioHz < rangeLoHz   ? "below its range"
                         : radioHz > rangeHiHz   ? "above its range"
                                                 : "inside its range";
-    cascade::core::diagLogf("source: the %s refused a tune %s", pipeline_.activeSource().name(),
+    // A sound card is not named (its name() carries the card's own name).
+    cascade::core::diagLogf("source: the %s refused a tune %s",
+                            sourceKind_ == "soundcard" ? "sound card" : pipeline_.activeSource().name(),
                             where);
 }
 
@@ -24160,7 +24162,7 @@ void AppWindow::noteTuneMismatch(double requestHz, double answeredHz, bool isPlu
                            ? (answeredRadioHz - requestRadioHz) / requestRadioHz * 1.0e6
                            : 0.0;
     cascade::core::diagLogf("source: the %s answered a tune somewhere else (%s, %+.0f ppm)",
-                            pipeline_.activeSource().name(),
+                            sourceKind_ == "soundcard" ? "sound card" : pipeline_.activeSource().name(),
                             atEdge ? "at the edge of its range" : "not at a range edge", ppm);
 }
 

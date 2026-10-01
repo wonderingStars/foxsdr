@@ -75,6 +75,27 @@ std::string modelOnly(const std::string& label) {
     return at == std::string::npos ? label : label.substr(0, at);
 }
 
+// A radio the patch borrowed from the receiver, as the LOG names it. A sound
+// card's label is "Sound card: <its name> (<host API>)", and the name the
+// operating system gives an input is often one a person chose ("Headset
+// (Alice's AirPods Pro)"), so it is described instead (0.99.59).
+std::string keptRadioForLog(const std::string& kind, const cascade::source::SoundCardSettings& card,
+                            const std::string& label) {
+    if (kind == "soundcard") {
+        return "Sound card (" + cascade::source::loggableSoundCardDescription(card) + ")";
+    }
+    return modelOnly(label);
+}
+
+// A patch radio as the LOG names it: a sound card and a recording by kind -
+// the card's name may be a person's, and a recording's label is its file
+// name, which is the user's own data - and anything else by its model.
+std::string patchRadioForLog(const std::string& deviceKey, const std::string& label) {
+    if (pc::deviceDriver(deviceKey) == "soundcard") { return "a sound card"; }
+    if (pc::isIqFileKey(deviceKey)) { return "a recording"; }
+    return modelOnly(label);
+}
+
 // A speaker's destination by KIND: the WAV/MP3 file is named after the node,
 // which the user named.
 const char* destKind(const pc::AudioDest* dest) {
@@ -349,7 +370,7 @@ void AppWindow::patchReconcile() {
         cascade::core::diagLogf(
             "patch: the receiver's radio (%s) is handed to the patch page; the receiver "
             "runs on the signal generator until the patch is stopped",
-            keep.label.c_str());
+            keptRadioForLog(keep.kind, keep.card, keep.label).c_str());
         selectSource(0);
         // ...AND THE CONFIG STILL NAMES IT: currentConfig() saves the radio
         // held here rather than the generator standing in for it, so a
@@ -422,7 +443,7 @@ void AppWindow::patchReconcile() {
         if (!r.error.empty()) { patchRadioError_[id] = r.error; } else { patchRadioError_.erase(id); }
         patchRadioFailedAs_.erase(id);
         cascade::core::diagLogf("patch: radio node %u running %s at %.0f S/s",
-                                static_cast<unsigned>(id), modelOnly(r.label).c_str(),
+                                static_cast<unsigned>(id), patchRadioForLog(n->device, r.label).c_str(),
                                 radio->rateHz());
         patchRadioOpenedAs_[id] = as;
         patchRadios_[id] = std::move(radio);
@@ -910,7 +931,8 @@ void AppWindow::patchStopAll(bool restoreMain) {
             soundCardRemembered_ = keep.card;
             restoreKeepLabel_ = keep.label;
         }
-        cascade::core::diagLogf("patch: handing %s back to the receiver", keep.label.c_str());
+        cascade::core::diagLogf("patch: handing %s back to the receiver",
+                                keptRadioForLog(keep.kind, keep.card, keep.label).c_str());
         sourceSel_ = kSoundCardRow;
         launchSoundCardOpen(false, keep.card);
         return;
@@ -954,14 +976,15 @@ void AppWindow::patchStopAll(bool restoreMain) {
                       keep.label.c_str());
         sourceError_ = buf;
         cascade::core::diagWarnf("patch: could not hand %s back to the receiver - not listed",
-                                 keep.label.c_str());
+                                 keptRadioForLog(keep.kind, keep.card, keep.label).c_str());
         return;
     }
     // Back where it was tuned when the patch took it: the AIR centre is handed
     // to the open itself, which sends it through THIS radio's converter. (It
     // used to be parked on the generator standing in and read back from
     // there, which lost a centre below 0 Hz on the air.)
-    cascade::core::diagLogf("patch: handing %s back to the receiver", keep.label.c_str());
+    cascade::core::diagLogf("patch: handing %s back to the receiver",
+                            keptRadioForLog(keep.kind, keep.card, keep.label).c_str());
     selectSource(row, keep.centreHz);
 }
 

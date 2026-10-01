@@ -341,7 +341,8 @@ void AppWindow::changeConverter(const cc::ConverterSetting& s) {
             // Where it fell, never the frequency (PRIVACY.md).
             cascade::core::diagLogf("source: converter change: the %s cannot follow the air "
                                     "frequency (%s); it stays where it was",
-                                    pipeline_.activeSource().name(),
+                                    sourceKind_ == "soundcard" ? "sound card"
+                                                               : pipeline_.activeSource().name(),
                                     !(radioHz > 0.0) ? "0 Hz or below at the radio"
                                     : radioHz < rLo   ? "below its range"
                                                       : "above its range");
