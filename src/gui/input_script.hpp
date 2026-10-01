@@ -13,6 +13,11 @@
 // ONLY IN A BOUNDED --frames RUN (see AppWindow::run), off unless
 // FOXSDR_INPUT_SCRIPT names a file, like every other test hook here.
 //
+// AND NOTHING OUTSIDE REACHES IT (2026-10-01): while a script runs, the real
+// mouse and keyboard are dropped from ImGui's queue (applyInputScript), so a
+// click on a test window that opened under someone's pointer cannot land in
+// the middle of a scripted gesture.
+//
 // The format, one step per line; '#' starts a comment, except in a text
 // step, which types the whole rest of its line - '#' included:
 //

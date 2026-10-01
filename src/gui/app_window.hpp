@@ -3865,6 +3865,12 @@ private:
     long pendingCtrlWheelFrame_ = -1;
     float pendingCtrlWheelY_ = 0.0f;
     bool pendingCtrlWheelSent_ = false;
+    // THE SCRIPT IS THE ONLY POINTER AND KEYBOARD (2026-10-01): ImGui's input
+    // event id from which events in the queue were NOT put there by the
+    // script, and how many such events the last frame discarded (traced).
+    // See the top of applyInputScript.
+    unsigned int scriptNextEventId_ = 0;
+    int scriptDroppedEvents_ = 0;
     // Feeds this frame's steps into ImGui's input queue. Called between the
     // platform backend's NewFrame and ImGui::NewFrame, so the script's events
     // are the last word on the frame.

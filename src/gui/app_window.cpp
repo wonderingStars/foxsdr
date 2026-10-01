@@ -13924,18 +13924,58 @@ void AppWindow::traceScriptFrame(long frame) {
     const ImGuiIO& io = ImGui::GetIO();
     std::fprintf(f,
                  "frame %ld t=%.3f display=%.0fx%.0f mouse=%.1f,%.1f left=%d right=%d os_focus=%d "
-                 "queued=%d hovered_window=%s hovered_id=%08X active_id=%08X\n",
+                 "queued=%d dropped=%d hovered_window=%s hovered_id=%08X active_id=%08X\n",
                  frame, ImGui::GetTime(), static_cast<double>(io.DisplaySize.x),
                  static_cast<double>(io.DisplaySize.y), static_cast<double>(io.MousePos.x),
                  static_cast<double>(io.MousePos.y), io.MouseDown[0] ? 1 : 0, io.MouseDown[1] ? 1 : 0,
                  mainWindow_ != nullptr ? glfwGetWindowAttrib(mainWindow_, GLFW_FOCUSED) : -1,
-                 g.InputEventsQueue.Size, g.HoveredWindow != nullptr ? g.HoveredWindow->Name : "-",
+                 g.InputEventsQueue.Size, scriptDroppedEvents_, g.HoveredWindow != nullptr ? g.HoveredWindow->Name : "-",
                  static_cast<unsigned>(g.HoveredId), static_cast<unsigned>(g.ActiveId));
     std::fclose(f);
 }
 
 void AppWindow::applyInputScript(long frame) {
     ImGuiIO& io = ImGui::GetIO();
+    // A SCRIPTED RUN IS DEAF TO THE REAL MOUSE AND KEYBOARD (2026-10-01).
+    // The platform backend's callbacks stay installed, so whatever the OS
+    // delivers to this window - a real click, a real key, the real cursor
+    // moving over it or leaving it - was queued for ImGui beside the
+    // script's own events. Under a full ctest -j dozens of test windows open
+    // on a desk someone may be using, and one receiver run of
+    // test_freq_markers_app saved "mainView": "patch" though its script never
+    // went near the PATCH key - nothing but a click on that key changes the
+    // view there - so its right-click opened no marker menu and the scripted
+    // Remove was lost. Posting a click into a scripted run's window takes the
+    // same path: the press reached ImGui at frame 16 on the PATCH key (left=1,
+    // the key active), was still held at the script's right-click on frame
+    // 22, so again no menu opened and M1 stayed (tests/test_main_view.cpp,
+    // "deaf", proves the fix). Every pointer, wheel, key and text event in
+    // the queue that the script did not add is therefore dropped here,
+    // before ImGui::NewFrame reads the queue; focus events are left (the
+    // focus loss is already ignored, see where the script is loaded). The
+    // script's own events are told apart by ImGui's sequential event id: a
+    // step trickled over to this frame was added before scriptNextEventId_.
+    {
+        ImGuiContext& g = *ImGui::GetCurrentContext();
+        scriptDroppedEvents_ = 0;
+        for (int i = g.InputEventsQueue.Size - 1; i >= 0; --i) {
+            const ImGuiInputEvent& e = g.InputEventsQueue[i];
+            const bool input = e.Type == ImGuiInputEventType_MousePos ||
+                               e.Type == ImGuiInputEventType_MouseWheel ||
+                               e.Type == ImGuiInputEventType_MouseButton ||
+                               e.Type == ImGuiInputEventType_MouseViewport ||
+                               e.Type == ImGuiInputEventType_Key ||
+                               e.Type == ImGuiInputEventType_Text;
+            if (input && e.EventId >= scriptNextEventId_) {
+                g.InputEventsQueue.erase(g.InputEventsQueue.Data + i);
+                ++scriptDroppedEvents_;
+            }
+        }
+    }
+    struct NoteScriptEvents {
+        unsigned int& next;
+        ~NoteScriptEvents() { next = ImGui::GetCurrentContext()->InputEventsNextEventId; }
+    } noteScriptEvents{scriptNextEventId_};
     // The scripted pointer is RE-ASSERTED every frame before this frame's
     // steps: the platform backend may post the real cursor's position on a
     // frame with no step, and the script's pointer must not wander with it.

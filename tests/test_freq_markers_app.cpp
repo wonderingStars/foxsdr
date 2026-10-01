@@ -156,6 +156,9 @@ Census once(const std::string& tag, bool patch, const std::string& script, int f
     setEnv("FOXSDR_UI_CENSUS", census.string());
     setEnv("FOXSDR_WINDOW_SIZE", "1600x900");
     setEnv("FOXSDR_INPUT_SCRIPT", script.empty() ? "" : scriptFile.string());
+    // One line a frame of what the scripted pointer did, kept with the run
+    // when the test fails (2026-10-01: a lost Remove click had no evidence).
+    setEnv("FOXSDR_SCRIPT_TRACE", script.empty() ? "" : (g_dir / (tag + ".trace")).string());
     setEnv("FOXSDR_PATCH_FILE", patch ? patchFile.string() : "");
     setEnv("FOXSDR_PATCH_START", patch ? "1" : "");
     const std::string out =
@@ -391,6 +394,11 @@ int main() {
     CHECK(pdrop.has("fmk:row:2"));
 
     const int rc = testSummary("test_freq_markers_app");
-    if (rc == 0) { fs::remove_all(g_dir, ec); }
+    if (rc == 0) {
+        fs::remove_all(g_dir, ec);
+    } else {
+        // Each scripted run's census, config and FOXSDR_SCRIPT_TRACE are kept.
+        std::printf("  kept for inspection: %s\n", g_dir.string().c_str());
+    }
     return rc;
 }

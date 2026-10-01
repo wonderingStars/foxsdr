@@ -41,6 +41,7 @@
  */
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <map>
@@ -229,6 +230,122 @@ Result once(const std::string& tag, const std::string& cfgText, const std::strin
     return r;
 }
 
+#if defined(_WIN32)
+// A SCRIPTED RUN IS DEAF TO REAL INPUT (2026-10-01). A receiver run of
+// test_freq_markers_app, inside a full ctest -j, saved "mainView": "patch"
+// though its script never went near the PATCH key: a real click - the
+// owner's, on a test window that opened under the cursor - reached ImGui
+// beside the script's events. This starts cascade itself (so the window can
+// be found by the process id it was started with, never by name), lets the
+// script run, and POSTS a click on the PATCH key into that window - the path
+// a real click takes through the platform backend, without touching the
+// desk's own cursor. The script's own click on the same key comes later, at
+// frame 40, as the control: scripted input still works.
+struct DeafRun {
+    bool started = false;
+    bool posted = false;
+    long postedAtFrame = -1;          // trace lines when the click was posted
+    std::vector<std::string> trace;   // FOXSDR_SCRIPT_TRACE, one line a frame
+    std::string mainView;
+};
+
+DeafRun deafRun(const std::string& tag, const std::string& cfgText, const std::string& script,
+                int clientX, int clientY) {
+    DeafRun d;
+    const fs::path cfg = g_dir / (tag + ".json");
+    const fs::path sp = g_dir / (tag + ".script");
+    const fs::path tp = g_dir / (tag + ".trace");
+    {
+        std::ofstream f(cfg, std::ios::binary | std::ios::trunc);
+        f << cfgText;
+    }
+    {
+        std::ofstream f(sp, std::ios::binary | std::ios::trunc);
+        f << script;
+    }
+    std::error_code ec;
+    fs::remove(tp, ec);
+    setEnv("CASCADE_CONFIG_TEST", cfg.string());
+    setEnv("FOXSDR_UI_CENSUS", (g_dir / (tag + ".census")).string());
+    setEnv("FOXSDR_WINDOW_SIZE", "1280x720");
+    setEnv("FOXSDR_INPUT_SCRIPT", sp.string());
+    setEnv("FOXSDR_SCRIPT_TRACE", tp.string());
+    setEnv("FOXSDR_PATCH_FILE", "");
+    setEnv("FOXSDR_PATCH_START", "");
+    std::string cmd = "\"" + exePath() + "\" --frames " + std::to_string(kFrames);
+    STARTUPINFOA si{};
+    si.cb = sizeof si;
+    PROCESS_INFORMATION pi{};
+    d.started = ::CreateProcessA(nullptr, cmd.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW,
+                                 nullptr, nullptr, &si, &pi) != 0;
+    setEnv("FOXSDR_SCRIPT_TRACE", "");
+    if (!d.started) { return d; }
+    const auto countLines = [&]() {
+        std::ifstream in(tp);
+        long n = 0;
+        std::string line;
+        while (std::getline(in, line)) { ++n; }
+        return n;
+    };
+    struct Ctx {
+        DWORD pid;
+        HWND found;
+    } ctx{pi.dwProcessId, nullptr};
+    for (int i = 0; i < 15000 && !d.posted; ++i) {
+        if (::WaitForSingleObject(pi.hProcess, 0) == WAIT_OBJECT_0) { break; }
+        if (ctx.found == nullptr) {
+            ::EnumWindows(
+                [](HWND h, LPARAM lp) -> BOOL {
+                    auto* c = reinterpret_cast<Ctx*>(lp);
+                    DWORD p = 0;
+                    ::GetWindowThreadProcessId(h, &p);
+                    char title[128] = {};
+                    ::GetWindowTextA(h, title, sizeof title);
+                    if (p == c->pid && std::strncmp(title, "FoxSDR ", 7) == 0) {
+                        c->found = h;
+                        return FALSE;
+                    }
+                    return TRUE;
+                },
+                reinterpret_cast<LPARAM>(&ctx));
+        }
+        const long n = (ctx.found != nullptr) ? countLines() : 0;
+        if (n >= 5) {
+            const LPARAM at = MAKELPARAM(clientX, clientY);
+            d.posted = ::PostMessageA(ctx.found, WM_MOUSEMOVE, 0, at) != 0 &&
+                       ::PostMessageA(ctx.found, WM_LBUTTONDOWN, MK_LBUTTON, at) != 0 &&
+                       ::PostMessageA(ctx.found, WM_LBUTTONUP, 0, at) != 0;
+            d.postedAtFrame = n;
+        } else {
+            ::Sleep(2);
+        }
+    }
+    if (::WaitForSingleObject(pi.hProcess, 60000) != WAIT_OBJECT_0) {
+        ::TerminateProcess(pi.hProcess, 1);
+        ::WaitForSingleObject(pi.hProcess, 10000);
+    }
+    ::CloseHandle(pi.hThread);
+    ::CloseHandle(pi.hProcess);
+    {
+        std::ifstream in(tp);
+        std::string line;
+        while (std::getline(in, line)) {
+            if (!line.empty() && line.back() == '\r') { line.pop_back(); }
+            d.trace.push_back(line);
+        }
+    }
+    cascade::core::AppConfig saved;
+    std::string err;
+    if (cascade::core::ConfigStore::load(cfg.string(), saved, err)) { d.mainView = saved.mainView; }
+    return d;
+}
+
+// The frame number of a trace line ("frame 12 t=..."), or -1.
+long traceFrame(const std::string& line) {
+    return line.rfind("frame ", 0) == 0 ? std::atol(line.c_str() + 6) : -1;
+}
+#endif
+
 std::string click(int frame, float x, float y) {
     char buf[160];
     std::snprintf(buf, sizeof buf, "%d screen %.0f %.0f\n%d down\n%d up\n", frame, x, y,
@@ -353,6 +470,39 @@ int main() {
         CHECK(!logHas(*r, "source: listing native radios"));
         CHECK(!r->log.empty());
     }
+
+    // --- deaf: a real click on the PATCH key does nothing to a scripted run ----
+#if defined(_WIN32)
+    {
+        const DeafRun deaf =
+            deafRun("deaf", config("receiver"), click(40, keyPatch->second.cx(), keyPatch->second.cy()),
+                    static_cast<int>(keyPatch->second.cx()), static_cast<int>(keyPatch->second.cy()));
+        CHECK(deaf.started);
+        // The click really went in, and early: well before the script's own.
+        CHECK(deaf.posted);
+        CHECK(deaf.postedAtFrame >= 0 && deaf.postedAtFrame < 30);
+        long firstPress = -1;
+        long dropped = 0;
+        for (const std::string& l : deaf.trace) {
+            if (firstPress < 0 && l.find(" left=1 ") != std::string::npos) { firstPress = traceFrame(l); }
+            const std::size_t at = l.find(" dropped=");
+            if (at != std::string::npos) { dropped += std::atol(l.c_str() + at + 9); }
+        }
+        std::printf("  deaf: click posted at frame %ld, first press seen at frame %ld, "
+                    "%ld real events dropped, %zu frames traced\n",
+                    deaf.postedAtFrame, firstPress, dropped, deaf.trace.size());
+        CHECK(deaf.trace.size() >= static_cast<std::size_t>(kFrames) - 1);
+        // ImGui never saw the posted press: the first left button down is the
+        // script's own, at frame 42...
+        CHECK(firstPress == 42);
+        // ...the posted events reached the application and were discarded...
+        CHECK(dropped > 0);
+        // ...and the script's click on the same key still switched the view.
+        CHECK(deaf.mainView == "patch");
+    }
+#else
+    std::printf("  deaf: posting a window message is Windows only - skipped here\n");
+#endif
 
     // --- the control: adding a Radio IS asking for the native list ---------------
     // Its new node starts on a free radio, so the walk happens here - which is
