@@ -411,6 +411,10 @@ const KnownWait kKnownWaits[] = {
      "SoapySource::stop() - the driver-lock wait Pipeline::stop() spends on the GUI thread"},
     {"src/source/soapy_source.cpp", "kVendorCallWait", 1,
      "SoapySource::stopLocked() - the abandonable deactivateStream, once that lock is held"},
+    {"src/source/soapy_source.cpp", "kActivateCallWait", 0,
+     "not on the teardown path - the abandonable activateStream, spent only by start() and a "
+     "sample-rate change's restart (hang report 40002A91C26F3C07); stop() and closeDevice() "
+     "never activate a stream"},
     {"src/core/pipeline.cpp", "kSourceJoinWait", 1,
      "Pipeline::stop() - the wait for the source thread to exit, after both of the above"},
     {"src/core/gps_reader.hpp", "kOpenAbandonWait", 1,

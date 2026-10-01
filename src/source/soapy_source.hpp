@@ -185,6 +185,10 @@ public:
     // the whole-bus probe has died - see source/soapy_enum_proc.hpp.
     //
     // `driver` is a name from driverNames(). Empty means the unrestricted walk.
+    // The one driver's find function is asked with EMPTY kwargs, exactly as
+    // the unrestricted walk asks it, so a driver lists the same devices either
+    // way - never "driver=<name>", which some modules (SoapyRedPitaya) answer
+    // by echoing an unprobed row back (hang report 40002A91C26F3C07).
     static std::vector<SoapyDeviceInfo> enumerateInProcess(const std::string& driver);
 
     // THE CHILD'S WHOLE-BUS WALK (0.99.33). It differs from the one above in
@@ -660,8 +664,11 @@ private:
     // same words a driver-lock timeout uses, and logs. The call itself is
     // still running when this returns; that is the point.
     //
+    // `waited` is how long the caller gave the call, for the log line: the
+    // escape paths' kVendorCallWait, or start()'s longer kActivateCallWait.
+    //
     // Caller holds the link's mutex, like every other *Locked helper.
-    void abandonWedgedDriverLocked(const char* what) noexcept;
+    void abandonWedgedDriverLocked(const char* what, std::chrono::milliseconds waited) noexcept;
 
     // The only writers of the error slot. Every failure path goes through
     // setError so no site can forget the lock; clearError also resets the

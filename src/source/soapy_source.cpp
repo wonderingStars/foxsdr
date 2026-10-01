@@ -84,6 +84,29 @@ constexpr std::chrono::milliseconds kControlLockWait{1500};
 // every later call on the same path is skipped rather than attempted.
 constexpr std::chrono::milliseconds kVendorCallWait{1500};
 
+// How long start() (and a sample-rate change's restart) waits for ONE
+// activateStream before it gives up on the call - the same abandonment as
+// kVendorCallWait above, with a longer fuse because this is not an escape path.
+//
+// THE DEFECT, from hang report 40002A91C26F3C07 (0.99.58). The user picked a
+// "redpitaya" row while a LimeSDR was streaming; the open itself ran on the
+// worker, but Pipeline::setSource then called start() on the GUI thread, and
+// SoapyRedPitaya's activateStream is a TCP connect to 192.168.1.100:1001 (its
+// built-in default) followed by a select() with a FIVE SECOND timeout per
+// socket. Nothing answered, so the interface froze for the hang watchdog's
+// whole threshold inside WS2_32, on a call this file made inline.
+//
+// WHY NOT kVendorCallWait. A deactivate is milliseconds on every driver; an
+// activate is where a driver starts its hardware, and some legitimately take
+// longer (an SDRplay service's Init behind SoapySDRPlay3, a network radio's
+// handshake). Abandoning condemns the device until FoxSDR restarts, so the
+// fuse is twice the escape-path one. It still ends inside the hang watchdog's
+// 5000 ms (HangWatchdog::kDefaultThresholdMs) even after start() has spent its
+// whole kControlLockWait on the lock: 1500 + 3000 < 5000.
+constexpr std::chrono::milliseconds kActivateCallWait{3000};
+static_assert(kControlLockWait + kActivateCallWait < std::chrono::milliseconds(5000),
+              "start() must give the GUI thread back inside the hang watchdog's threshold");
+
 const char* const kNoDeviceName = "SoapySDR: (no device)";
 
 // The one wording for a driver that stopped answering, wherever we give up on
@@ -263,7 +286,8 @@ enum class JobOutcome {
     Abandoned,  // it never came back - the caller must condemn the device
 };
 
-JobOutcome runAbandonableVendorCall(const std::shared_ptr<VendorJob>& job) noexcept {
+JobOutcome runAbandonableVendorCall(const std::shared_ptr<VendorJob>& job,
+                                    std::chrono::milliseconds wait = kVendorCallWait) noexcept {
     std::thread worker;
     try {
         worker = std::thread([job]() noexcept {
@@ -291,7 +315,7 @@ JobOutcome runAbandonableVendorCall(const std::shared_ptr<VendorJob>& job) noexc
     bool faulted = false;
     try {
         std::unique_lock<std::mutex> lk(job->m);
-        done = job->cv.wait_for(lk, kVendorCallWait, [&job] { return job->done; });
+        done = job->cv.wait_for(lk, wait, [&job] { return job->done; });
         faulted = job->faulted;
     } catch (...) {
         done = false;  // an unwaitable latch is treated as a call that hung
@@ -698,13 +722,29 @@ std::vector<SoapyDeviceInfo> SoapySource::enumerateInProcess(const std::string& 
                 // skips what is already loaded.
                 SoapySDR::loadModules();
                 runModulesLoadedHook();
-                // WITH the driver key, only that module's find function runs;
-                // without it, every one of them does. Same call either way, so
-                // the guard, the catch and the row building below are shared.
-                SoapySDR::Kwargs ask;
-                if (!w->driver->empty()) { ask["driver"] = *w->driver; }
-                for (const SoapySDR::Kwargs& kw : SoapySDR::Device::enumerate(ask)) {
-                    w->out->push_back(rowFromKwargs(kw));
+                if (w->driver->empty()) {
+                    for (const SoapySDR::Kwargs& kw : SoapySDR::Device::enumerate()) {
+                        w->out->push_back(rowFromKwargs(kw));
+                    }
+                    return;
+                }
+                // ONE DRIVER IS ASKED EXACTLY AS THE WHOLE-BUS WALK ASKS IT:
+                // its find function, with EMPTY kwargs. Not
+                // Device::enumerate("driver=<name>"), which hands the driver
+                // key itself to the find function (SoapySDR Factory.cpp) - and
+                // to a module that reads that as "the user named me", which
+                // SoapyRedPitaya does ("TODO perform a test connection"), it
+                // means "list me unprobed". That made a phantom "redpitaya"
+                // row at its built-in 192.168.1.100 on every scan beside an
+                // open radio, and picking it froze the interface (hang report
+                // 40002A91C26F3C07). A driver must list the same devices
+                // whichever walk asked it.
+                for (const auto& entry : SoapySDR::Registry::listFindFunctions()) {
+                    if (entry.first != *w->driver) { continue; }
+                    for (SoapySDR::Kwargs kw : entry.second(SoapySDR::Kwargs())) {
+                        kw["driver"] = entry.first;
+                        w->out->push_back(rowFromKwargs(kw));
+                    }
                 }
             } catch (...) {
                 // "Never throws; empty on none/no modules": a probe failure in
@@ -1203,7 +1243,8 @@ int SoapySource::openDeviceCount() {
     return s_openDevices.load(std::memory_order_relaxed);
 }
 
-void SoapySource::abandonWedgedDriverLocked(const char* what) noexcept {
+void SoapySource::abandonWedgedDriverLocked(const char* what,
+                                            std::chrono::milliseconds waited) noexcept {
     // THE LINK IS CONDEMNED FIRST, before anything that can fail. From this
     // store on, the handles are frozen (clearDeviceStateLocked stops nulling
     // them), the dead latches survive teardown, and open() refuses - so the
@@ -1218,7 +1259,7 @@ void SoapySource::abandonWedgedDriverLocked(const char* what) noexcept {
     core::diagWarnf(
         "soapy: %s did not return within %lld ms - abandoning it rather than "
         "freezing the interface; restart FoxSDR to use this radio again",
-        what, static_cast<long long>(kVendorCallWait.count()));
+        what, static_cast<long long>(waited.count()));
     std::lock_guard<std::mutex> lk(errorMutex_);
     // Latches before the message, as in noteVendorFault: a string we could not
     // allocate must not cost the latches that actually protect the device.
@@ -1288,7 +1329,7 @@ void SoapySource::teardownLocked() noexcept {
                         noteVendorFault("closing the device stream");
                         break;
                     case JobOutcome::Abandoned:
-                        abandonWedgedDriverLocked("closing the device stream");
+                        abandonWedgedDriverLocked("closing the device stream", kVendorCallWait);
                         break;
                 }
             }
@@ -1316,7 +1357,7 @@ void SoapySource::teardownLocked() noexcept {
                         noteVendorFault("releasing the device");
                         break;
                     case JobOutcome::Abandoned:
-                        abandonWedgedDriverLocked("releasing the device");
+                        abandonWedgedDriverLocked("releasing the device", kVendorCallWait);
                         break;
                 }
             }
@@ -1472,7 +1513,7 @@ bool SoapySource::start() {
                 noteVendorFault("deactivating a condemned stream");
                 break;
             case JobOutcome::Abandoned:
-                abandonWedgedDriverLocked("deactivating a condemned stream");
+                abandonWedgedDriverLocked("deactivating a condemned stream", kVendorCallWait);
                 break;
         }
         return false;
@@ -1557,37 +1598,44 @@ void SoapySource::stopLocked() {
 }
 
 bool SoapySource::activateLocked(const char* what) {
-    struct Activate {
-        SoapySource* self;
-        int ret = 0;
-        bool threw = false;
-        std::string message;
-    } a{this};
-
-    const bool completed = guardedVendorCall([&a]() noexcept {
+    // HANG REPORT 40002A91C26F3C07 IS THIS CALL, made inline on the GUI thread
+    // (AppWindow::finishDeviceOpen -> Pipeline::setSource -> start()) into a
+    // network driver that took its full five-second connect timeout - see
+    // kActivateCallWait. So it runs where it can be abandoned, exactly like
+    // deactivateLocked below, and this thread waits kActivateCallWait for it.
+    const auto job = makeVendorJob(link_, [](VendorJob& j) noexcept {
         try {
-            a.ret = a.self->link_->dev->activateStream(a.self->link_->stream);
+            j.ret = j.link->dev->activateStream(j.link->stream);
         } catch (const std::exception& e) {
-            a.threw = true;
-            a.message = describe(e, "activateStream failed");
+            j.threw = true;
+            j.message = describe(e, "activateStream failed");
         } catch (...) {
-            a.threw = true;
-            a.message = "activateStream failed: non-standard exception";
+            j.threw = true;
+            j.message = "activateStream failed: non-standard exception";
         }
     });
-    if (!completed) {
-        noteVendorFault(what);
+    switch (job ? runAbandonableVendorCall(job, kActivateCallWait) : JobOutcome::Abandoned) {
+        case JobOutcome::Completed:
+            break;
+        case JobOutcome::Faulted:
+            noteVendorFault(what);
+            return false;
+        case JobOutcome::Abandoned:
+            // The device is condemned with the call still inside the driver;
+            // start() sees deviceDead() and the pipeline's fault poll shows the
+            // abandonment message, instead of the window going white.
+            abandonWedgedDriverLocked(what, kActivateCallWait);
+            return false;
+    }
+    if (job->threw) {
+        setError(std::move(job->message));
         return false;
     }
-    if (a.threw) {
-        setError(std::move(a.message));
-        return false;
-    }
-    if (a.ret != 0) {
+    if (job->ret != 0) {
         // errToStr is a pure code->string lookup: no device handle, no
         // hardware, nothing a vendor module can reach. Deliberately outside
         // the guarded body, where allocating a message is safe.
-        setError(std::string("activateStream failed: ") + SoapySDR::errToStr(a.ret));
+        setError(std::string("activateStream failed: ") + SoapySDR::errToStr(job->ret));
         return false;
     }
     return true;
@@ -1626,7 +1674,7 @@ bool SoapySource::deactivateLocked(const char* what) {
             // deviceDead() and never touches the driver again, which is the
             // only safe thing to do with a device that still has one of our
             // threads inside it.
-            abandonWedgedDriverLocked(what);
+            abandonWedgedDriverLocked(what, kVendorCallWait);
             return false;
     }
     if (job->threw) {
