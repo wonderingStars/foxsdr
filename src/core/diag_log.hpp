@@ -209,15 +209,29 @@ std::string scrubVendorLine(const std::string& line);
 //      "\\?\usb#vid_x&pid_y#<this>#{guid}");
 //   3. the account name in a path (\Users\X\, /home/X/, /Users/X/) becomes
 //      <user>;
-//   4. anything in single quotes - the names users type for patch nodes,
+//   4. network addresses and host names become <host>, a port after one
+//      kept (0.99.59): every IPv4 literal (four octets of 0-255, so a
+//      three-part version or "10.0.22631.4317" is not one, and neither is a
+//      dotted quad glued to a word - "FoxSDR_1.99.58.0_x64" - or after a
+//      version word - "version 1.99.58.0"), every IPv6 literal, the
+//      authority after a URL scheme ("tcp://", "rtsp://", "http(s)://", a
+//      user name and password with it), the value after "ip:", "host=",
+//      "hostname=", "remote=", "rtltcp=", "server=", "uri=", "addr=",
+//      "address=", a dotted name or a name with a port after " at ", " to "
+//      or " from ", a double-quoted dotted name or anything double-quoted
+//      after the word "host", a name under a local-network suffix (".local",
+//      ".lan", ".home", ".internal"...) anywhere, and the machine in a
+//      Windows network path ("\\NAS\share"). This machine itself (127.x,
+//      0.0.0.0, ::1, localhost) is kept;
+//   5. anything in single quotes - the names users type for patch nodes,
 //      speakers, presets - becomes '<name>' (a quoted USB hardware id is
 //      kept, its instance segment already stripped);
-//   5. inside parentheses, a possessive word ("Alice's" in "Headset (Alice's
+//   6. inside parentheses, a possessive word ("Alice's" in "Headset (Alice's
 //      AirPods Pro)") becomes <name>'s - the make and model that follow are
 //      kept, because a device-friendly-name string handed back by the
 //      operating system is frequently a Bluetooth or paired-phone label a
 //      person chose, never something this application generated;
-//   6. on a line that mentions hertz, a frequency, tuning, a centre, the VFO,
+//   7. on a line that mentions hertz, a frequency, tuning, a centre, the VFO,
 //      a range, an offset, a carrier, a preset, transmitting or keying, or
 //      "asked for"/"answered" - and on a line cut off at the ring's width -
 //      EVERY free-standing number becomes '#', except a number with a sample
@@ -226,7 +240,7 @@ std::string scrubVendorLine(const std::string& line);
 //      after "firmware", "version", "id", "tuner", "error", "code"...; a
 //      number with a hertz unit is masked whatever else is true of it, and
 //      a number glued to a word (B200, R820T, v1.0.0) is part of a name;
-//   7. any run of '#' becomes a single '#', so a masked frequency does not
+//   8. any run of '#' becomes a single '#', so a masked frequency does not
 //      say how many digits it had.
 // A line with none of these in it is returned byte for byte.
 std::string scrubUploadLine(const std::string& line);

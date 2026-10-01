@@ -255,7 +255,7 @@ std::unique_ptr<Transport> connectTcp(const std::string& host, std::uint16_t por
     addrinfo* results = nullptr;
     const int rc = ::getaddrinfo(host.c_str(), portText, &hints, &results);
     if (rc != 0 || results == nullptr) {
-        error = "could not find \"" + host +
+        error = "could not find the host \"" + host +
                 "\" on the network (is the Pluto plugged in, and is this the right address?)";
         return nullptr;
     }
