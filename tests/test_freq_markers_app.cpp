@@ -355,7 +355,21 @@ int main() {
     }
 
     // --- a patch Display part: the same menu, in absolute hertz --------------
-    const Census plearn = once("patch-learn", true, "", 90);
+    //
+    // REAL TIME FIRST (2026-10-01). The patch's radio opens on a worker, and
+    // until it has, the part has no centre: its waterfall is not measured
+    // (no fmk:wf:patch) and its right-click is not armed - the canvas's own
+    // button takes the press. A bounded run's frames are about a millisecond
+    // each, so a whole 90-frame run is ~80 ms, and the radio opening inside
+    // that was a race: a full ctest -j lost patch-drop's first right-click
+    // (frame 40, ~60 ms in; M1's drop never happened, the second right-click
+    // ~15 ms later opened the list), and three runs alone in a row lost this
+    // learn run's rect twice. A right-click at frame 3 lost it every time;
+    // the same right-click after "1 sleep 2000" did not. Each patch run
+    // therefore holds two seconds of real time at frame 25, still inside the
+    // watchdog's start-up budget, so the GUI thread's sleep is not a freeze.
+    const std::string radioOpens = "25 sleep 2000\n";
+    const Census plearn = once("patch-learn", true, radioOpens, 90);
     CHECK(plearn.ok && plearn.hasRect("fmk:wf:patch"));
     if (!plearn.hasRect("fmk:wf:patch")) { return testSummary("test_freq_markers_app"); }
     const Rect pw = plearn.rects.at("fmk:wf:patch");
@@ -363,8 +377,10 @@ int main() {
     const float py = pw.y0 + 0.20f * (pw.y1 - pw.y0);
     std::printf("    patch waterfall %.0f,%.0f..%.0f,%.0f; clicking %.0f,%.0f\n", pw.x0, pw.y0,
                 pw.x1, pw.y1, px, py);
-    // Drop, then right-click the same place again and open the list.
+    // Drop, then right-click the same place again and open the list - after
+    // the radio has had real time to open (see radioOpens above).
     const Census pdrop = once("patch-drop", true,
+                              radioOpens +
                               rightClick(40, px, py) + click(50, px + dropDx, py + dropDy) +
                                   rightClick(60, px, py) + click(70, px + listDx, py + listDy),
                               90);
