@@ -292,7 +292,20 @@ int main() {
     CHECK(plain.ok && !plain.has("trc:overlay:receiver"));
 
     // --- a patch Spectrum part: drawn too, and its trace opens the menu --------
-    const Census pl = once({"patch-learn", true, false, ", \"spectrumTraceMode\": \"peak\"", "", 90});
+    //
+    // REAL TIME FIRST (2026-10-01). The patch's radio opens on a worker, and
+    // until it has delivered a spectrum the part draws "No spectrum yet - its
+    // radio is not running." and nothing else: no trc:overlay:patch, no
+    // trc:patch:trace rect, nothing for a right-click to land on. A bounded
+    // run's frames are about a millisecond each, so this 90-frame run is
+    // ~80 ms and the radio delivering inside it was a race, which the 0.99.59
+    // full ctest -j lost (test_spectrum_trace_app.cpp:297-299); the same race
+    // in test_freq_markers_app lost 8 of 10 runs alone on a loaded desk. Both
+    // patch runs hold two seconds of real time at frame 25, still inside the
+    // watchdog's start-up budget, so the GUI thread's sleep is not a freeze.
+    const std::string radioOpens = "25 sleep 2000\n";
+    const Census pl =
+        once({"patch-learn", true, false, ", \"spectrumTraceMode\": \"peak\"", radioOpens, 90});
     CHECK(pl.ok);
     CHECK(pl.has("trc:overlay:patch"));
     CHECK(pl.has("trc:label:peak"));
@@ -302,7 +315,7 @@ int main() {
         const float px = tr.x0 + 0.3f * (tr.x1 - tr.x0);
         const float py = tr.y0 + 0.4f * (tr.y1 - tr.y0);
         const Census pm = once({"patch-menu", true, false, ", \"spectrumTraceMode\": \"peak\"",
-                                rightClick(50, px, py), 70});
+                                radioOpens + rightClick(50, px, py), 70});
         CHECK(pm.ok && pm.has("trc:menu"));
     }
 
