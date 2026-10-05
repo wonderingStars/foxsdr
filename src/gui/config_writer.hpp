@@ -171,7 +171,14 @@ public:
         const auto deadline = std::chrono::steady_clock::now() + bound;
         while (future_.valid()) {
             const auto now = std::chrono::steady_clock::now();
-            if (now >= deadline || future_.wait_for(deadline - now) != std::future_status::ready) {
+            // A bound that has already run out (0.99.64: a caller sharing one
+            // deadline between several writers gives the last of them what is
+            // left, which may be nothing) still COLLECTS a write that has
+            // finished; only one still inside the filesystem is abandoned.
+            const auto left = now < deadline ? std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                                   deadline - now)
+                                             : std::chrono::nanoseconds::zero();
+            if (future_.wait_for(left) != std::future_status::ready) {
                 abandon();
                 return false;
             }

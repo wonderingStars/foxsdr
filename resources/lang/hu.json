@@ -1249,6 +1249,7 @@
   "Saved \"%s\".": "„%s” mentve.",
   "Saved %.4f MHz as a preset for %s": "%.4f MHz mentve presetként ehhez: %s",
   "Saved %s": "Mentve: %s",
+  "Saving...": "Mentés...",
   "Scanner": "Szkenner",
   "Scanning": "Szkennelés",
   "Scanning for devices...": "Eszközök keresése...",

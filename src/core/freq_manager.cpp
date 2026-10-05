@@ -156,22 +156,10 @@ bool FreqManager::load(const std::string& path, std::string& error) {
 }
 
 bool FreqManager::save(const std::string& path, std::string& error) const {
-    error.clear();
-    const fs::path target(path);
+    return writeFile(path, serialize(), error);
+}
 
-    std::error_code ec;
-    const fs::path parent = target.parent_path();
-    if (!parent.empty()) {
-        fs::create_directories(parent, ec);
-        // create_directories is a no-op without error on an existing
-        // directory, but reports one if a FILE squats on the path.
-        if (ec || !fs::is_directory(parent)) {
-            error = "bookmarks: cannot create directory \"" + parent.string() +
-                    "\": " + (ec ? ec.message() : "path exists and is not a directory");
-            return false;
-        }
-    }
-
+std::string FreqManager::serialize() const {
     json arr = json::array();
     for (const Bookmark& b : list_) {
         json e;
@@ -192,8 +180,26 @@ bool FreqManager::save(const std::string& path, std::string& error) const {
     // includes user-entered or remote strings, and a byte that is not valid
     // UTF-8 must cost one replacement character, never a throw out of a save
     // path. tests/test_json_dump_policy.cpp holds every site to this.
-    const std::string text =
-        j.dump(4, ' ', false, nlohmann::json::error_handler_t::replace) + "\n";
+    return j.dump(4, ' ', false, nlohmann::json::error_handler_t::replace) + "\n";
+}
+
+bool FreqManager::writeFile(const std::string& path, const std::string& text,
+                            std::string& error) {
+    error.clear();
+    const fs::path target(path);
+
+    std::error_code ec;
+    const fs::path parent = target.parent_path();
+    if (!parent.empty()) {
+        fs::create_directories(parent, ec);
+        // create_directories is a no-op without error on an existing
+        // directory, but reports one if a FILE squats on the path.
+        if (ec || !fs::is_directory(parent)) {
+            error = "bookmarks: cannot create directory \"" + parent.string() +
+                    "\": " + (ec ? ec.message() : "path exists and is not a directory");
+            return false;
+        }
+    }
 
     // ATOMIC WRITE — the ConfigStore approach verbatim. The temp file lives
     // in the target's own directory so the final rename is a same-volume

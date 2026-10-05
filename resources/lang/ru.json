@@ -1249,6 +1249,7 @@
   "Saved \"%s\".": "«%s» сохранён.",
   "Saved %.4f MHz as a preset for %s": "%.4f MHz сохранена как пресет для %s",
   "Saved %s": "%s сохранён",
+  "Saving...": "Сохранение...",
   "Scanner": "Сканер",
   "Scanning": "Сканирование",
   "Scanning for devices...": "Поиск устройств...",

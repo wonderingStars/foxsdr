@@ -1249,6 +1249,7 @@
   "Saved \"%s\".": "S'ha desat «%s».",
   "Saved %.4f MHz as a preset for %s": "S'ha desat %.4f MHz com a predefinit de %s",
   "Saved %s": "S'ha desat %s",
+  "Saving...": "S'està desant...",
   "Scanner": "Escàner",
   "Scanning": "Escanejant",
   "Scanning for devices...": "S'estan cercant dispositius...",

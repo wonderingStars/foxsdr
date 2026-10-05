@@ -1119,18 +1119,19 @@ deletes the report and keeps the freeze. So the open moved.
   `Recorder::prepare()` (the rate check, the file name, the 44 header bytes: no
   disk), then an *opener* (`create_directories`, `fopen`, the header's write and
   flush: all the waiting), then `Recorder::begin()` (arms the recorder: no
-  disk). `start()` is the three in a row, and two callers still use it: the
-  `--record-check` bench, which can wait, and **the patch page's Speaker WAV, which
-  cannot**. `AppWindow::patchPublishSets` (`app_window_patch_radios.cpp`) makes the
-  speaker's file with `makeWavDest` (`core/patch_audio.cpp`, which calls
-  `Recorder::start`) - and with the same call as the fallback when the MP3
-  output cannot be made - on the GUI thread, from the patch page's reconcile. A slow
-  disk freezes the window there exactly as the Record button did. **That is still an
-  open freeze risk**: it was left alone by this change, and the same three steps
-  would fix it. The opener is a `std::function` the recorder carries
-  (`Recorder::bindOpener`), `Recorder::openFile` by default, which is the seam
-  a test stages a slow disk through. It reads its request and touches nothing
-  else.
+  disk). `start()` is the three in a row, and two callers used it on a thread that
+  could not afford it: the `--record-check` bench, which can wait, and **the patch
+  page's Speaker WAV, which could not**. `AppWindow::patchPublishSets`
+  (`app_window_patch_radios.cpp`) made the speaker's file with `makeWavDest`
+  (`core/patch_audio.cpp`, which called `Recorder::start`) - and with the same call
+  as the fallback when the MP3 output cannot be made - on the GUI thread, from the
+  patch page's reconcile; a slow disk froze the window there exactly as the Record
+  button did. **That was the open freeze risk this change left, and it is closed
+  in 0.99.64**: the patch speaker's file is opened by a worker (*The window does no
+  disk work*, below), by the same three steps. The opener is a `std::function` the
+  recorder carries (`Recorder::bindOpener`), `Recorder::openFile` by default, which
+  is the seam a test stages a slow disk through. It reads its request and touches
+  nothing else.
 - **`gui::RecordStart` (`src/gui/record_start.hpp`) runs the opener on a
   worker and nothing waits for it**, the shape of `LinkRequestPoll` and
   `ConfigWriter`: a Record press calls `prepare()`, hands the request to
@@ -1390,6 +1391,257 @@ with them, a script's `sleep` (its scope is `frame-start`) and `--diag-stall`
 (after the last scope: `other`), and, in process, a real plugin reload made slow
 through the plugins folder's signature read and a shell call through the real
 watchdog bracket.
+
+### The window does no disk work (0.99.64)
+
+Four field freezes in 0.99.58 - 0.99.63 were one defect: a file-system call on the
+thread that draws the window, made against a disk that was slow to answer (a
+synchronised or network folder, a drive that had spun down, a scanner holding the
+file). The Record button, a once-a-second look in the settings folder, the Fitted
+modules window's per-frame stat, and (0.96.3) the config write: each was fixed where
+it was found. 0.99.64 went looking for the rest. The method was every
+`std::filesystem` call, stream, `fopen`, Win32 and POSIX file call and project helper
+that wraps them in `src/gui/app_window*.cpp`, read against the thirteen places the
+0.99.63 Record fix listed as still on that thread, and then run as a test
+(`tests/test_gui_disk_audit.cpp`, below), which is how the places the list did not
+mention were found.
+
+**What is established and what is not.** Every item below was read in the source and
+reproduced in a test under a real `HangWatchdog` and a frame loop with a sleeping disk
+standing in for a slow one: before the change the frame loop stalled for the whole
+disk time (worst frame gap 2.5 s against an 800 ms threshold, one hang report per
+stall) and after it the worst gap was 26 - 36 ms. **Nothing was run against a genuinely
+slow disk**, and the cause of any one user's freeze is not established by any of it.
+
+#### The thirteen, as the source says they are
+
+| # | Where | Verdict |
+|---|---|---|
+| 1 | the patch page's Speaker WAV (`patchPublishSets` -> `makeWavDest` -> `Recorder::start`) | confirmed, **moved**. It is not per frame as the list had it: a speaker's output is made when its radio starts or the output is changed, and the page checks that every frame |
+| 2 | the MP3 destination's `create_directories` / `is_directory` | confirmed, **moved** into the destination's own worker |
+| 3 | `flushBookmarkSave` / `flushMarkerSave` from `drawUi` | confirmed, **moved** |
+| 4 | the I/Q-file **Open** button (`IqFileSource::open`) | confirmed, **moved**. Not the only place a recording is opened inline: see *Still open* |
+| 5 | `patchListRecordings` | confirmed, **moved** |
+| 6 | F12 / the Screenshot key | confirmed, **moved** (the BMP, the `.windows.txt` and the torn-off windows' pictures) |
+| 7 | the plugin picture's **Save as BMP** | confirmed, **moved** |
+| 8 | **Export for SDR#** | confirmed, **moved** |
+| 9 | **Open reports folder** (two panels), `startSdrPlayProbe`, `copyDiagnosticsBundle` | confirmed, **left, under a watchdog pause** |
+| 10 | `drawSdrPlayProbeDialog`'s read on the frame the child exits | confirmed, **left, under a watchdog pause** |
+| 11 | plugin quarantine rename / remove (`restoreQuarantinedPlugins`, `quarantineBlockedPlugins`) | confirmed, **left**: reached only from `rescanPlugins`, which already holds a pause - the open design question *A plugin rescan runs on the GUI thread*, above |
+| 12 | `loadBandPlan` | confirmed, **left, under a watchdog pause**, and **worse than the list said**: not one `is_directory` but that, a directory listing (`BandPlan::available`) and the read of the plan file |
+| 13 | `diagLogf`'s `fwrite` + `fflush` under a mutex | confirmed; **not moved - a proposal, below** |
+
+#### The pattern
+
+The shapes the 0.99.58 - 0.99.63 fixes made, once, for the rest:
+
+- **`gui::DiskJob<Result>`** (`src/gui/disk_job.hpp`) is `RecordStart`'s shape for any
+  "do this blocking thing and give me what it made". `request()` starts a worker and
+  returns, `poll()` once a frame collects a finished one and returns; **neither can
+  block**. One worker at a time (a disk that never answers costs one parked thread,
+  however often the button is pressed). The worker owns its inputs by value, never
+  `this`. A throw is contained. At quit `reap()` gives a worker still in the file system
+  250 ms and then **abandons** it (detached; the result, and so the file it holds, is
+  let go by the abandoned thread). A job out for five seconds writes one warning to
+  the log, and one line when it comes back; **neither names a file or a folder**.
+- **`gui::BackgroundSaver`** (`src/gui/background_saver.hpp`) is `ConfigWriter`'s
+  shape for a small file saved when it changes: the text is taken on the GUI thread,
+  one write is ever out, a request made behind it replaces any request already held
+  (so a burst ends as the **newest** content and an older write can never land after a
+  newer one), and the exit drain waits within a bound.
+- **`app_window_disk_work.cpp`** holds the `AppWindow` members that use them, and
+  `app_window_disk_state.hpp` the state behind an opaque pointer. Both exist for a
+  reason that has nothing to do with design: `app_window.cpp` is at the edge of what an
+  MSVC object file can hold (error C1128, "number of sections exceeded object file
+  format limit"), and the first of these, written in place, took it over.
+- **The seam for a slow disk** is a hook the worker calls immediately before it
+  touches the disk (`AppWindow::diskHookForTest_`), plus the existing
+  `Recorder::bindOpener`, `IqFileSource`'s virtual `readHeaderRaw`, and
+  `core::patch::DestSeams` for the patch speakers. All empty in the application.
+
+#### What moved, and what the user sees
+
+- **A patch speaker's WAV (1).** `makeWavDestAsync` (`core/patch_audio.hpp`) returns a
+  destination at once that already takes sound; its file is opened by a worker. The
+  sound that arrives meanwhile is **kept**, up to 20 s, and written ahead of the first
+  block that arrives after the file is open, on the radio's reader thread - the thread
+  `Recorder` was built to be written from, so `begin()` still never overlaps a write.
+  A disk slower than 20 s drops the overflow and the face says so (*the file took too
+  long to open and some sound was not written*); a file that cannot be opened is
+  reported by the face in the words `Recorder::start` gave, a frame or more later; a
+  face waiting more than a second says *waiting for the disk to open it*; a speaker
+  destroyed while its open is wedged does not wait, and the file the open eventually
+  makes is closed. The radio's other strips are **not** held for the file: the set is
+  published on the first frame, so a slow disk costs the file its first seconds and
+  nothing else. `makeWavDest` (blocking, for callers that can wait) still exists.
+  The test writes a file through a 2.5 s open and compares it with the file an inline
+  start makes **byte for byte**, and runs a real radio into the speaker: every sample
+  offered is in the file.
+- **An MP3 speaker (2)** makes its folder on its own worker, just before it opens the
+  file; a folder that cannot be made is reported by the face (*cannot create the
+  recordings folder ...*), no longer by the WAV fallback (which would have failed
+  on the same folder). The WAV fallback is for a build with no encoder, which needs no
+  disk to find out.
+- **The bookmark list and the markers (3).** `flushBookmarkSave` and `flushMarkerSave`
+  take the text on the GUI thread (`FreqManager::serialize`, `FreqMarkers::serialize`)
+  and hand the blocking half (`writeFile`: folder, temp file, flush, rename) to a
+  `BackgroundSaver`. **Data safety, each tested:** the last edit before quit is on disk
+  afterwards (the exit drain, within the one `ConfigWriter::kSaveBound` deadline the
+  config's own drain already spends - the shutdown budget is unchanged); two quick
+  edits end as the second; a slow save never lets an older one land after a newer one
+  (one write at a time, in the order asked); a save that fails is reported in the
+  words it always was, a frame or more late, and the next good save clears it; the
+  window is destroyed without waiting for a wedged write. What is **not** guaranteed:
+  a write the exit drain had to abandon (the disk did not answer within the bound) is
+  logged (*final save abandoned*) and may not land.
+- **The I/Q file's Open (4).** The header is read on a worker; Open is disabled and a
+  line under it says *Waiting for the disk to open the file: N s* after a second. A
+  result that arrives after the user chose another source is dropped and its file
+  closed (the rule a sound card's open already follows). A file that will not open
+  says what the synchronous open said.
+- **The patch's recordings list (5).** The folders are listed and the headers read on
+  a worker, with a **copy** of the probe cache that comes back grown; a press made while
+  a listing is out is remembered and run when it returns.
+- **F12 (6), Save as BMP (7), Export for SDR# (8).** The GL read-back, the window list,
+  the file's name, the picture's pixels and the list's text are the GUI thread's; the
+  folder and the file are a worker's. The picture and export keys are disabled while
+  one is out and a note says *Saving...* (the one new on-screen string, in all 33
+  catalogues); the answer replaces it in the words it always had. A screenshot asked
+  for while the last is still being written is skipped and the log says so. The
+  worker itself writes the `shot: wrote <path>` line (the one a harness looks for), so a
+  screenshot taken on the last frame of a bounded run, after which nothing polls, still
+  logs it. The `.windows.txt` beside a screenshot is now written whether or not the BMP
+  succeeded.
+
+New log lines, all in English and none naming a file or a folder: `<job>: has not
+finished for N s - it is waiting on a worker thread, the window is not`, `<job>:
+finished after N s` (jobs: *I/Q file open*, *picture save*, *frequency list export*,
+*screenshot save*, *recordings list*); `bookmarks: the save has not finished ...` and
+`markers: ...` likewise; `bookmarks: final save abandoned - the disk did not answer in
+time` (and *markers*); `patch: a speaker's WAV file has not opened for N s ...`, `could
+not be opened`, `opened after N s`; `source: an I/Q file open finished after the choice
+moved on`; `shot: the previous screenshot is still being written; this one was
+skipped`.
+
+#### What was left, and why
+
+9 - 12 are one-off, user-initiated, tiny calls where a block is acceptable, **but each
+must not file a false freeze report against a healthy application**, so each now holds
+a `WatchdogPause` (an application-paced one, capped at 30 s, reported past it): the
+reports-folder calls, the SDRplay probe's start and its read, `loadBandPlan`, the
+diagnostics switch's folder and log-file work, the plugin store's clean-up and the two
+**Remove** keys' file deletes. The pause covers the call and nothing around it (the
+unload before a plugin delete is third-party code whose freeze should be reported).
+**A pause is not a fix** - it deletes the report and keeps the freeze (the argument in
+`gui/audio_open.hpp`) - which is why the entries that are still to be moved (below) are
+**deliberately not paused**: a freeze there is a defect, and the report is how it is
+found. 11 is part of the plugin rescan and is covered by its pause.
+
+#### Still open: found by the scan, not in the list
+
+Each is in the allowlist below as **STILL OPEN**, with the reason it is not paused.
+
+- **`Recorder::stop`, on the GUI thread**: the WAV header patch (a seek and a write)
+  and the close, on the Stop key, a source change, at quit - and `~WavDest`, when a
+  patch speaker's set is retired. The start was moved in 0.99.63; **the finish was
+  not, and it is the same class**. Next: finalise on a worker with a bounded wait at
+  quit.
+- **`importBookmarkFile`**: the Import button and a file dropped on the window read the
+  SDR# list on the GUI thread. The same class as Export, which moved.
+- **A patch Radio's I/Q recording** is opened inline in `patchReconcile` when the patch
+  starts or the node's device changes: the same header read as the Source section's
+  Open, with a comment that called it "bounded, and no USB walk to wait for". The
+  hardware radios already open on a worker (`patchRadioPending_`); a recording should.
+- **The saved I/Q file is reopened inline at start-up** (`applyConfig`), before the first
+  frame. Not a stalled frame, but a window that does not appear; the sound card's
+  start-up restore already runs on a worker.
+- **`~Mp3Dest` joins its worker** and `~WavDest` finalises inline when a patch is
+  stopped: a worker wedged in the encoder's file open (it already was, before this
+  change) holds the GUI thread there.
+
+#### Item 13: `diagLogf`, and why it was not moved
+
+`DiagLog::write` (`core/diag_log.cpp`) takes `mutex_`, copies the line into the ring,
+and then, **still holding it**, does the file's `fwrite`, `fputc` and `fflush` and, when
+the file is full, the rotation (`fclose`, `remove`, `rename`, `fopen`). Any thread that
+logs - the GUI thread's `poll()`s, every worker's notice - therefore waits for the disk,
+and so does anything else that wants `mutex_`. **Who depends on the log's tail:**
+
+- A **crash report** reads the ring with `copyRingRaw()`: no lock, no allocation. It does
+  not depend on the file or on `mutex_`.
+- A **freeze report** (`hang_watchdog.cpp`, both the Windows and Linux paths) and
+  *Copy diagnostics* read it with `ringSnapshot()`, which **takes `mutex_`**. So a log
+  write stuck on the same slow profile that froze the window **holds the freeze
+  report's log section**: the report has its thread stacks (flushed per thread) and
+  then waits for the disk before it can write the log. This is the one finding about the
+  log that changes what a report carries, and it is independent of whether callers wait.
+- The **next session's** bundle reads the previous session's tail from the files
+  (`diag_history.cpp`); a run ended from the taskbar (`TerminateProcess`) has whatever
+  `fflush` had handed the operating system, which is why every line is flushed.
+
+**Why it was not changed here.** A caller that does not wait for the file has to hand the
+line to something that does, and then a hard death can lose the lines in that hand-off -
+today it cannot, on a healthy disk. That trade, and the order of lines in the file when
+two threads race, are the owner's to make. The options, in the order they should be
+done:
+
+1. **Split the lock** (ring under one mutex, file under another). `ringSnapshot()` no
+   longer waits behind a file write, which fixes the freeze report's log section without
+   touching `hang_watchdog.cpp`. Callers still wait for the disk. Cost: two threads that
+   log at the same instant may write their lines to the file in the opposite order to the
+   ring's (a ticket makes it exact, at the price of the same wait). Weakens nothing a
+   report carries. **Recommended first.**
+2. **1, and an asynchronous file writer with a bounded handshake**: the caller puts its
+   line in the ring, queues it, and waits up to a few milliseconds for the writer to have
+   flushed it; the first timeout trips a breaker so later callers do not wait until the
+   writer has caught up. On a healthy disk the line is on disk when `diagLogf` returns
+   (a hard death loses nothing); on a slow one the callers are not held and the file lags
+   the ring. Cost: a thread, rotation and `configure()` moved onto it, and a wait whose
+   bound is a number that a loaded machine can exceed (a flaky test, not a lost report).
+   Needs a hard-kill test: a child that logs and is `TerminateProcess`ed straight after
+   the call, and the parent reading the tail.
+3. **1, and a purely asynchronous writer, no handshake.** Simplest, and weakens the
+   taskbar-kill tail on a healthy disk by the writer's latency. Not recommended.
+
+Until one is chosen the GUI thread's own log calls are a known remaining wait, and the new
+workers' notices (which log from `poll()`) are rare: once a job is five seconds late and
+once when it returns.
+
+#### The structural test, and how to add to it
+
+`tests/test_gui_disk_audit.cpp` reads every `src/gui/app_window*.cpp` with comments and
+string literals blanked and finds every file-system call (the `std::filesystem` operations
+that touch a disk, streams, C stdio, the Win32 and POSIX file calls, the one-argument C
+`remove` and two-argument `rename`, and the project's own helpers named in `wrappers()`).
+Each must be **inside a lambda handed to `std::async`, `std::thread` or a job's
+`request()`** - a worker's - **or on the allowlist** (`allowed()` in the test) with the
+function it is in, the kinds of call, the reason and how it is kept from filing a false
+freeze report: `Held` (the function holds a `WatchdogPause`, checked), `HeldBy` (a named
+caller does and calls it, checked), `Startup` (before the first frame, with the watchdog
+not yet running) or `NotNeeded` (and the reason). A new unlisted call fails with a message
+that says what to do; an entry that matches nothing fails too, and so does one that claims
+a pause the function does not hold. It runs against the code it forbids first (the
+control), and was seen red by adding an unlisted `exists` to `saveBookmarks` and by
+removing the pause from `loadBandPlan`.
+
+**To add a call: do not list it - move it to a worker.** Hand the call, in a lambda that
+owns its inputs by value, to a `DiskJob` (a click that saves, opens or lists), a
+`BackgroundSaver` (a file saved when it changes) or `RecordStart` (a recording), and write
+the test beside `tests/test_gui_file_jobs.cpp`: the real handler, under a real watchdog
+and a frame loop, with a sleeping hook, red on the unmodified code. Only a one-off,
+user-initiated, tiny call belongs on the list, and it holds a pause.
+
+**What the scan cannot see:** a helper that reaches the disk and is not in `wrappers()`
+(it is lexical, one level deep: a new one goes in that list, and each entry is checked to
+exist); a lambda built into a variable and passed to a worker by name (it is flagged, so
+it is listed or written inline); anything outside `src/gui`; and `diagLogf` itself, which
+is everywhere and is item 13.
+
+`test_shutdown_budget` classifies the new bounded waits (`kQuitGrace`, `kNoWait`,
+`kStuckAfter` in `disk_job.hpp` and `background_saver.hpp`, and the two ages in
+`patch_audio.cpp`) as costing the shutdown nothing: the quit grace is spent from
+`~AppWindow` after the watchdog has stopped, and the lists' exit drain shares the
+config drain's one `kSaveBound` deadline, so the budget is unchanged.
 
 ### What a plugin playing sound writes (0.93.0)
 

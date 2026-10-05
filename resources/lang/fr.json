@@ -1249,6 +1249,7 @@
   "Saved \"%s\".": "« %s » enregistré.",
   "Saved %.4f MHz as a preset for %s": "%.4f MHz enregistré comme préréglage pour %s",
   "Saved %s": "%s enregistré",
+  "Saving...": "Enregistrement...",
   "Scanner": "Scanner",
   "Scanning": "Balayage",
   "Scanning for devices...": "Recherche de périphériques...",

@@ -192,17 +192,10 @@ bool FreqMarkers::load(const std::string& path, std::string& error) {
 }
 
 bool FreqMarkers::save(const std::string& path, std::string& error) const {
-    error.clear();
-    const fs::path target(path);
-    std::error_code ec;
-    const fs::path parent = target.parent_path();
-    if (!parent.empty()) {
-        fs::create_directories(parent, ec);
-        if (ec || !fs::is_directory(parent)) {
-            error = "markers: cannot create directory \"" + parent.string() + "\"";
-            return false;
-        }
-    }
+    return writeFile(path, serialize(), error);
+}
+
+std::string FreqMarkers::serialize() const {
     json arr = json::array();
     for (const FreqMarker& m : list_) {
         json e;
@@ -217,7 +210,22 @@ bool FreqMarkers::save(const std::string& path, std::string& error) const {
     j["next"] = next_;
     j["markers"] = std::move(arr);
     // error_handler_t::replace: a note is user text (tests/test_json_dump_policy).
-    const std::string text = j.dump(4, ' ', false, nlohmann::json::error_handler_t::replace) + "\n";
+    return j.dump(4, ' ', false, nlohmann::json::error_handler_t::replace) + "\n";
+}
+
+bool FreqMarkers::writeFile(const std::string& path, const std::string& text,
+                            std::string& error) {
+    error.clear();
+    const fs::path target(path);
+    std::error_code ec;
+    const fs::path parent = target.parent_path();
+    if (!parent.empty()) {
+        fs::create_directories(parent, ec);
+        if (ec || !fs::is_directory(parent)) {
+            error = "markers: cannot create directory \"" + parent.string() + "\"";
+            return false;
+        }
+    }
 
 #ifdef _WIN32
     const int pid = _getpid();

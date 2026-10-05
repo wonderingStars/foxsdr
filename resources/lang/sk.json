@@ -1249,6 +1249,7 @@
   "Saved \"%s\".": "Uložené „%s“.",
   "Saved %.4f MHz as a preset for %s": "%.4f MHz uložené ako predvoľba pre %s",
   "Saved %s": "Uložené: %s",
+  "Saving...": "Ukladá sa...",
   "Scanner": "Skener",
   "Scanning": "Skenuje",
   "Scanning for devices...": "Hľadajú sa zariadenia...",

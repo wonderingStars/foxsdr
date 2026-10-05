@@ -90,7 +90,15 @@ public:
     std::string clipboardText(bool utc = false) const;
 
     bool load(const std::string& path, std::string& error);
+    // serialize() then writeFile(), as FreqManager's: the GUI takes the text on
+    // its own thread and gui::BackgroundSaver runs the blocking half (0.99.64).
     bool save(const std::string& path, std::string& error) const;
+    // The file's text, exactly as save() writes it. No disk.
+    std::string serialize() const;
+    // THE BLOCKING HALF: create the directory, temp file, rename. Static and
+    // stateless, so a worker can run it with copies.
+    static bool writeFile(const std::string& path, const std::string& text,
+                          std::string& error);
 
 private:
     std::vector<FreqMarker> list_;

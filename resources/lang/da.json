@@ -1249,6 +1249,7 @@
   "Saved \"%s\".": "\"%s\" er gemt.",
   "Saved %.4f MHz as a preset for %s": "Gemte %.4f MHz som forvalg for %s",
   "Saved %s": "Gemte %s",
+  "Saving...": "Gemmer...",
   "Scanner": "Scanner",
   "Scanning": "Scanner",
   "Scanning for devices...": "Søger efter enheder...",

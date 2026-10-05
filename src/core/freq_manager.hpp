@@ -96,8 +96,22 @@ public:
 
     // Atomic write (temp file + rename over target). On failure returns
     // false with `error` set and the previous target content — if any —
-    // intact; the temp file is cleaned up.
+    // intact; the temp file is cleaned up. serialize() then writeFile(): the
+    // two halves exist separately so that the GUI can take the text on its own
+    // thread (a snapshot of the list at that instant) and hand the blocking half
+    // to gui::BackgroundSaver (0.99.64); save() is still the two in a row for
+    // every caller that can wait.
     bool save(const std::string& path, std::string& error) const;
+
+    // The file's text, exactly as save() writes it. No disk.
+    std::string serialize() const;
+
+    // THE BLOCKING HALF: create the directory, write `text` to a temporary file
+    // beside `path` and rename it over `path`. Static and stateless - it reads
+    // nothing but its arguments - so a worker can run it with copies and be
+    // abandoned at quit.
+    static bool writeFile(const std::string& path, const std::string& text,
+                          std::string& error);
 
     // Always sorted by freqHz ascending. Equal frequencies keep their
     // insertion order (stable), so adding a duplicate frequency never

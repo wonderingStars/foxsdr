@@ -1249,6 +1249,7 @@
   "Saved \"%s\".": "\"%s\" opgeslagen.",
   "Saved %.4f MHz as a preset for %s": "%.4f MHz opgeslagen als preset voor %s",
   "Saved %s": "%s opgeslagen",
+  "Saving...": "Opslaan...",
   "Scanner": "Scanner",
   "Scanning": "Scannen",
   "Scanning for devices...": "Zoeken naar apparaten...",

@@ -2271,28 +2271,31 @@ int AppWindow::run(int frames) {
                 char name[64];
                 std::snprintf(name, sizeof name, "shot-%llu.bmp",
                               static_cast<unsigned long long>(rendered));
-                std::string err;
                 const std::filesystem::path out = dir / name;
-                if (cascade::core::writeBmp24(img, out.string(), err)) {
-                    cascade::core::diagLogf("shot: wrote %s", out.string().c_str());
+                // THE FILES ARE WRITTEN BY A WORKER, NOT HERE (0.99.64): everything
+                // that needs this thread - the GL read-back, the window list - is
+                // done in this block, and the disk is handed the finished bytes
+                // (shotFlush, app_window_disk_work.cpp). The F12 key used to write
+                // a BMP and a text file on the thread that draws the window.
+                {
                     // WHERE EVERY WINDOW IS in this picture, beside it - so a
                     // capture can be cropped to one window from the numbers
                     // ImGui drew it with rather than from a guess at pixels.
                     std::filesystem::path rects = out;
                     rects.replace_extension(".windows.txt");
-                    if (std::FILE* rf = std::fopen(rects.string().c_str(), "wb")) {
-                        for (ImGuiWindow* wnd : ImGui::GetCurrentContext()->Windows) {
-                            if (wnd == nullptr || !wnd->WasActive || wnd->Hidden ||
-                                (wnd->Flags & ImGuiWindowFlags_ChildWindow) != 0) {
-                                continue;
-                            }
-                            std::fprintf(rf, "%.0f\t%.0f\t%.0f\t%.0f\t%s\n", wnd->Pos.x, wnd->Pos.y,
-                                         wnd->Size.x, wnd->Size.y, wnd->Name);
+                    std::string windowList;
+                    char line[512];
+                    for (ImGuiWindow* wnd : ImGui::GetCurrentContext()->Windows) {
+                        if (wnd == nullptr || !wnd->WasActive || wnd->Hidden ||
+                            (wnd->Flags & ImGuiWindowFlags_ChildWindow) != 0) {
+                            continue;
                         }
-                        std::fclose(rf);
+                        std::snprintf(line, sizeof line, "%.0f\t%.0f\t%.0f\t%.0f\t%s\n", wnd->Pos.x,
+                                      wnd->Pos.y, wnd->Size.x, wnd->Size.y, wnd->Name);
+                        windowList += line;
                     }
-                } else {
-                    cascade::core::diagWarnf("shot: %s", err.c_str());
+                    shotAddPicture(out.string(), std::move(img));
+                    shotAddText(rects.string(), std::move(windowList));
                 }
 
                 // THE TORN-OFF WINDOWS TOO. Each is its own GL window with
@@ -2339,14 +2342,11 @@ int AppWindow::run(int frames) {
                         std::snprintf(vname, sizeof vname, "shot-%llu-vp%d.bmp",
                                       static_cast<unsigned long long>(rendered), vpIndex++);
                         const std::filesystem::path vout = dir / vname;
-                        if (cascade::core::writeBmp24(vimg, vout.string(), err)) {
-                            cascade::core::diagLogf("shot: wrote %s", vout.string().c_str());
-                        } else {
-                            cascade::core::diagWarnf("shot: %s", err.c_str());
-                        }
+                        shotAddPicture(vout.string(), std::move(vimg));
                     }
                     glfwMakeContextCurrent(restore);
                 }
+                shotFlush();
             }
         }
 
@@ -2642,6 +2642,15 @@ int AppWindow::run(int frames) {
     // ABANDONED rather than joined - the same choice AudioOpen::reap() makes
     // for a wedged device open at quit - and logged, so a config that never
     // reached disk is a line in the log instead of a silent gap.
+    //
+    // THE TWO LISTS' LAST SAVES (0.99.64) ARE DRAINED AGAINST THE SAME DEADLINE,
+    // NOT ONE OF THEIR OWN. They run on workers of their own, started before the
+    // pipeline join above, so by now all three writes have had the same time; the
+    // shutdown budget is charged kSaveBound once, here, and stays that: whatever
+    // the config drain leaves of it is what the bookmarks and the markers get
+    // (a write that has already finished is collected even at zero).
+    const auto drainDeadline =
+        std::chrono::steady_clock::now() + cascade::gui::ConfigWriter::kSaveBound;
     if (!configPath_.empty()) {
         if (configWriter_.finishOrAbandon(cascade::gui::ConfigWriter::kSaveBound)) {
             if (configWriter_.lastOk()) {
@@ -2655,9 +2664,11 @@ int AppWindow::run(int frames) {
                 static_cast<long long>(cascade::gui::ConfigWriter::kSaveBound.count()));
         }
     }
+    drainListSaves(drainDeadline);
     // THE MARKER STAGE IS OVER, saved or abandoned: from here a normal exit is a
     // clean one to the sentinel, as it is to the unclean-exit counter's reading of
-    // a death in the teardown that follows (see the residual stated above).
+    // a death in the teardown that follows (see the residual stated above). The
+    // two lists' drain above is inside the stage: it shares the marker's deadline.
     cascade::core::breadcrumb::setPhase(
         cascade::core::breadcrumb::Phase::ShutdownClosingWindow);
 
@@ -4044,6 +4055,11 @@ void AppWindow::drawUi() {
     // After every widget, so a Stop pressed this frame has already withdrawn
     // the take it would otherwise arm. See gui/record_start.hpp.
     pollRecordStarts(ImGui::GetTime());
+    // THE GUI THREAD'S DISK WORK, COLLECTED (0.99.64): an I/Q file Open whose
+    // header a worker has read, a recordings list, a picture, an export or a
+    // screenshot written - installed, shown or logged on this frame, in the words
+    // they always had. See app_window_disk_work.cpp.
+    pollDiskJobs();
 }
 
 void AppWindow::healthPoll() {
@@ -8865,40 +8881,15 @@ void AppWindow::drawSourceSection() {
         ImGui::SetNextItemWidth(-60.0f);
         ImGui::InputText("##iq_path", iqPath_, sizeof(iqPath_));
         ImGui::SameLine();
-        if (ImGui::Button(trId("Open"))) {
-            auto file = std::make_unique<cascade::source::IqFileSource>();
-            if (!file->open(iqPath_)) {
-                sourceError_ = file->lastError();
-            } else {
-                // Carry the displayed frequency over: a file's center is
-                // nominal anyway, and a readout that jumps to 0 on source
-                // switch would read as a tuning bug. The AIR frequency carries
-                // over; the file is told it through its own converter, which
-                // is off unless the user set one for I/Q files.
-                const double fileRadioHz = radioHzForSource(
-                    "file", std::string(), pipeline_.activeSource().centerFrequencyHz());
-                if (fileRadioHz >= 0.0) { file->setCenterFrequencyHz(fileRadioHz); }
-                device_ = nullptr;  // before setSource destroys a live device
-                soapyView_ = nullptr;
-                deviceArgs_.clear();
-                deviceModel_.clear();
-                sourceError_.clear();
-                ++sourceGen_;  // a device open still in flight is now stale
-                installSource(std::move(file));
-                sourceKind_ = "file";
-                applyConverterForSource();
-                iqOpenPath_ = iqPath_;
-                // A file is a deliberate choice of source like any other, so
-                // a radio remembered from a failed restore is superseded here
-                // too - see selectSource's generator row.
-                restoreKeep_ = cascade::gui::RememberedSource{};
-                restoreKeepLabel_.clear();
-                followInputRate();  // DSP chain + frequency axis track the file's rate
-                // The RATE, never the path: a file name is the user's own data
-                // and a report is a support artefact, not a listening record.
-                cascade::core::diagLogf("source: opened an I/Q file at %.0f S/s",
-                                        pipeline_.activeSource().sampleRateHz());
-            }
+        // THE OPEN IS A WORKER'S (0.99.64): the header is read off this thread, so
+        // while it is out the key is disabled - one open at a time - and the line
+        // below says how long the disk has been taking. Neither blocks a frame.
+        ImGui::BeginDisabled(iqOpenPending());
+        if (ImGui::Button(trId("Open"))) { openIqFile(); }
+        ImGui::EndDisabled();
+        if (iqOpenPending() && iqOpenElapsedS() >= 1.0) {
+            ImGui::TextDisabled(tr("Waiting for the disk to open the file: %.0f s"),
+                                iqOpenElapsedS());
         }
     }
 
@@ -12109,8 +12100,15 @@ cascade::core::PluginCleanupResult AppWindow::cleanUpOldPluginVersions(
     // scan itself (PluginHost::scan), so in this process it is only a file.
     // Another process can still hold it - a second FoxSDR - and that is the
     // file that is queued for the next start.
-    const cascade::core::PluginCleanupResult res = cascade::core::removeSupersededPlugins(
-        pluginDir_, which, pluginRemoverFor(testHooks_.pluginRemove));
+    cascade::core::PluginCleanupResult res;
+    {
+        // LEFT ON THIS THREAD, UNDER A PAUSE (0.99.64, docs/DIAGNOSTICS.md, "The
+        // window does no disk work"): the old copies are deleted - a handful of small
+        // files in the plugin folder - on the press of the store's clean-up key.
+        cascade::core::WatchdogPause holdWatchdog(watchdog_);
+        res = cascade::core::removeSupersededPlugins(pluginDir_, which,
+                                                     pluginRemoverFor(testHooks_.pluginRemove));
+    }
     for (const std::string& f : res.removed) {
         cascade::core::diagLogf("plugin: removed old copy %s", f.c_str());
     }
@@ -13142,7 +13140,16 @@ void AppWindow::removeInstalledPlugin(const std::string& fileName) {
     // nothing is claimed that did not happen.
     detachAndUnloadPlugins();
     std::string err;
-    if (pluginRepo_.remove(pluginDir_, fileName, err)) {
+    bool deleted = false;
+    {
+        // LEFT ON THIS THREAD, UNDER A PAUSE (0.99.64): one file deleted from the
+        // plugin folder, on the press of Remove, after the module is unmapped. The
+        // pause covers the delete only - the unload above is third-party code, and a
+        // freeze in it is one to be reported.
+        cascade::core::WatchdogPause holdWatchdog(watchdog_);
+        deleted = pluginRepo_.remove(pluginDir_, fileName, err);
+    }
+    if (deleted) {
         std::string removedBuf;
         cascade::core::formatUtf8(removedBuf, tr("Removed %s"), fileName.c_str());
         installReport_ = removedBuf;
@@ -18415,47 +18422,11 @@ void AppWindow::drawPluginWindows() {
                             im.width, im.height,
                             static_cast<unsigned long long>(im.sequence));
                 ImGui::SameLine();
-                if (ImGui::SmallButton(trId("Save as BMP"))) {
-                    // Named by plugin, sequence and wall-clock time, next to
-                    // the recordings rather than in the install directory.
-                    std::error_code ec;
-                    const std::filesystem::path dir =
-                        std::filesystem::path(recordDir_.empty() ? "." : recordDir_);
-                    std::filesystem::create_directories(dir, ec);
-                    char stamp[32];
-                    const std::time_t t = std::time(nullptr);
-                    std::tm tmv{};
-#if defined(_WIN32)
-                    localtime_s(&tmv, &t);
-#else
-                    localtime_r(&t, &tmv);
-#endif
-                    std::strftime(stamp, sizeof stamp, "%Y%m%d-%H%M%S", &tmv);
-                    std::string safe = im.plugin;
-                    for (char& c : safe) {
-                        const bool ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
-                                        (c >= '0' && c <= '9') || c == '-' || c == '_';
-                        if (!ok) { c = '_'; }
-                    }
-                    const std::filesystem::path out =
-                        dir / (safe + "-" + stamp + ".bmp");
-                    std::string err;
-                    // One format string per sentence, so a translation can
-                    // place the path or the reason where its language puts it.
-                    std::string note;
-                    if (cascade::core::writeBmp24(im, out.string(), err)) {
-                        cascade::core::formatUtf8(note, tr("Saved %s"), out.string().c_str());
-                    } else {
-                        cascade::core::formatUtf8(note, tr("Save failed: %s"), err.c_str());
-                    }
-                    imageSaveNote_ = note;
-                    // WHOSE WINDOW SAID IT, AND WHEN. Without these two the
-                    // note was drawn inside EVERY image window by the loop
-                    // below, so saving the APT picture put its filename under
-                    // the SSTV one as well.
-                    imageSaveNotePlugin_ = im.plugin;
-                    imageSaveNoteAtS_ = ImGui::GetTime();
-                }
+                // Disabled while the last one is being written (0.99.64: a worker
+                // writes it, and the note below says "Saving...").
+                ImGui::BeginDisabled(imageSavePending());
+                if (ImGui::SmallButton(trId("Save as BMP"))) { saveImageBmp(im); }
+                ImGui::EndDisabled();
 
                 // Fit to the window, preserving aspect: a weather image
                 // stretched to the pane is a misread image.
@@ -22760,7 +22731,14 @@ void AppWindow::removeBlockedPlugin(const std::string& fileName) {
     // that did not use it.
     detachAndUnloadPlugins();
     std::string err;
-    if (pluginRepo_.removeQuarantined(pluginDir_, fileName, pluginQuarantineSuffix(), err)) {
+    bool deleted = false;
+    {
+        // LEFT ON THIS THREAD, UNDER A PAUSE (0.99.64): one retired file deleted from
+        // the plugin folder, on the press of Remove (see removeInstalledPlugin).
+        cascade::core::WatchdogPause holdWatchdog(watchdog_);
+        deleted = pluginRepo_.removeQuarantined(pluginDir_, fileName, pluginQuarantineSuffix(), err);
+    }
+    if (deleted) {
         // The same sentence removeInstalledPlugin() writes, and translated the
         // same way: it was the one install/remove report still joined in
         // English. Built as a string, since a file name has no set length.
@@ -22961,6 +22939,12 @@ void AppWindow::reportPluginStatus() {
 // --- Band plan overlay (P7) -----------------------------------------------------
 
 void AppWindow::loadBandPlan() {
+    // LEFT ON THIS THREAD, UNDER A PAUSE (0.99.64, docs/DIAGNOSTICS.md, "The window
+    // does no disk work"): the install folder's bandplans directory is looked at,
+    // listed and one plan file read - at start-up and on a user's choice of plan or
+    // language, never per frame. A local install folder answers at once; one on a
+    // network share is a freeze here, not a reported hang.
+    cascade::core::WatchdogPause holdWatchdog(watchdog_);
     const std::string dir = cascade::core::BandPlan::defaultDir();
     std::error_code ec;
     // Existence is checked FIRST so the overwhelmingly common "no band plans
@@ -24052,38 +24036,9 @@ void AppWindow::drawBookmarksSection() {
         // THE ONES SHOWN go out, so a search or a group picks what is shared.
         // Into the recordings folder, beside everything else FoxSDR writes,
         // as SDR#'s own format - which any SDR# user can load as it is.
-        if (ImGui::SmallButton(trId("Export for SDR#"))) {
-            std::vector<cascade::core::Bookmark> out;
-            out.reserve(bookmarkView_.size());
-            for (const std::uint32_t i : bookmarkView_) {
-                if (i < freqMgr_.list().size()) { out.push_back(freqMgr_.list()[i]); }
-            }
-            std::error_code ec;
-            std::filesystem::create_directories(std::filesystem::path(recordDir_), ec);
-            const std::time_t now = std::time(nullptr);
-            std::tm tmv{};
-#ifdef _WIN32
-            localtime_s(&tmv, &now);
-#else
-            localtime_r(&now, &tmv);
-#endif
-            char name[64];
-            std::strftime(name, sizeof(name), "foxsdr-frequencies-%Y%m%d-%H%M%S.xml", &tmv);
-            const std::filesystem::path path = std::filesystem::path(recordDir_) / name;
-            std::ofstream f(path, std::ios::binary | std::ios::trunc);
-            const std::string xml = cascade::core::exportSdrSharpXml(out);
-            f.write(xml.data(), static_cast<std::streamsize>(xml.size()));
-            f.close();
-            const std::string shown = recordDir_ + "/" + name;
-            std::string said;
-            if (f) {
-                cascade::core::formatUtf8(said, tr("Exported %zu to %s"), out.size(),
-                              shown.c_str());
-            } else {
-                cascade::core::formatUtf8(said, tr("Could not write %s"), shown.c_str());
-            }
-            bookmarkImportNote_ = said;
-        }
+        ImGui::BeginDisabled(bookmarkExportPending());
+        if (ImGui::SmallButton(trId("Export for SDR#"))) { exportBookmarksForSdrSharp(); }
+        ImGui::EndDisabled();
     }
     if (bookmarkGroupSel_ > 0 && bookmarkGroupSel_ <= static_cast<int>(bookmarkGroups_.size())) {
         ImGui::SameLine();
@@ -24203,18 +24158,6 @@ void AppWindow::saveBookmarks() {
     if (bookmarkPath_.empty()) { return; }  // hermetic run: never touch disk
     bookmarkSaveDirty_ = true;
     bookmarkSaveDueS_ = ImGui::GetTime() + 1.0;
-}
-
-void AppWindow::flushBookmarkSave(bool force) {
-    if (!bookmarkSaveDirty_ || bookmarkPath_.empty()) { return; }
-    if (!force && ImGui::GetCurrentContext() != nullptr && ImGui::GetTime() < bookmarkSaveDueS_) { return; }
-    bookmarkSaveDirty_ = false;
-    std::string err;
-    if (freqMgr_.save(bookmarkPath_, err)) {
-        bookmarkError_.clear();  // a successful save clears a stale error
-    } else {
-        bookmarkError_ = err;
-    }
 }
 
 void AppWindow::drawBookmarkMarkers(float x0, float y0, float width, float height) {
@@ -24751,37 +24694,6 @@ void AppWindow::drawMarkerWindow() {
         }
     }
     ImGui::End();
-}
-
-void AppWindow::flushMarkerSave(bool force) {
-    if (markerPath_.empty()) { return; }  // hermetic run: never touch disk
-    const unsigned v = freqMarkers_.version();
-    if (v == markerSavedVersion_) {
-        markerSaveDueS_ = -1.0;
-        return;
-    }
-    const bool haveClock = ImGui::GetCurrentContext() != nullptr;
-    const double now = haveClock ? ImGui::GetTime() : 0.0;
-    if (!force) {
-        // Half a second after a change is first seen: a note is typed a
-        // character at a time, and costs at most two writes a second rather
-        // than one a keystroke.
-        if (markerSaveDueS_ < 0.0) {
-            markerSaveDueS_ = now + 0.5;
-            return;
-        }
-        if (now < markerSaveDueS_) { return; }
-    }
-    std::string err;
-    if (freqMarkers_.save(markerPath_, err)) {
-        markerError_.clear();
-    } else {
-        markerError_ = err;
-    }
-    // Recorded either way: a save that failed is reported, not retried every
-    // frame; the next change tries again.
-    markerSavedVersion_ = v;
-    markerSaveDueS_ = -1.0;
 }
 
 // --- Shared absolute tuning (P6) -----------------------------------------------
@@ -27125,13 +27037,19 @@ void AppWindow::applyDiagnosticsEnabled(bool on) {
     // does: with Diagnostics off nothing new is counted (what is already kept
     // stays, and is still sent with the next record).
     healthLedger_->setAllowed(on);
-    cascade::core::setCrashCaptureEnabled(diagnosticsEnabled_, diagnosticsMinidump_);
-    // Guarded on diagCrashDir_ for the same reason as in run(): a run that was
-    // never allowed to write (a bounded CI run) must not start writing because
-    // a switch was flipped.
-    if (!diagCrashDir_.empty()) {
-        cascade::core::DiagLog::instance().configure(cascade::core::diagLogDir(),
-                                                     diagnosticsEnabled_);
+    {
+        // LEFT ON THIS THREAD, UNDER A PAUSE (0.99.64, docs/DIAGNOSTICS.md, "The window
+        // does no disk work"): the reports folder and the log folder are made and the
+        // log file opened - once at start-up, and on a press of the switch.
+        cascade::core::WatchdogPause holdWatchdog(watchdog_);
+        cascade::core::setCrashCaptureEnabled(diagnosticsEnabled_, diagnosticsMinidump_);
+        // Guarded on diagCrashDir_ for the same reason as in run(): a run that was
+        // never allowed to write (a bounded CI run) must not start writing because
+        // a switch was flipped.
+        if (!diagCrashDir_.empty()) {
+            cascade::core::DiagLog::instance().configure(cascade::core::diagLogDir(),
+                                                         diagnosticsEnabled_);
+        }
     }
     watchdog_.setReportDir(diagnosticsEnabled_ ? diagCrashDir_ : std::string());
     // AND THE SENTINEL, by the same switch (core/sentinel.hpp): off ends the watcher
@@ -27196,6 +27114,8 @@ void AppWindow::drawDiagnosticsSection() {
     bool dump = diagnosticsMinidump_;
     if (ImGui::Checkbox(trId("Also write a full memory dump beside a crash report"), &dump)) {
         diagnosticsMinidump_ = dump;
+        // LEFT ON THIS THREAD, UNDER A PAUSE (0.99.64): the reports folder, on a click.
+        cascade::core::WatchdogPause holdWatchdog(watchdog_);
         cascade::core::setCrashCaptureEnabled(diagnosticsEnabled_, diagnosticsMinidump_);
     }
     ImGui::TextDisabled(
@@ -27230,16 +27150,7 @@ void AppWindow::drawDiagnosticsSection() {
     ImGui::Spacing();
     if (ImGui::Button(trId("Copy diagnostics"))) { copyDiagnosticsBundle(); }
     ImGui::SameLine();
-    if (ImGui::Button(trId("Open reports folder"))) {
-        if (!crashDir.empty()) {
-            std::error_code ec;
-            std::filesystem::create_directories(std::filesystem::path(crashDir), ec);
-            // Explorer's (or the Linux file manager's) first window of a
-            // session is a multi-second cold start and this thread is inside
-            // the shell for all of it.
-            shellOpen(crashDir);
-        }
-    }
+    if (ImGui::Button(trId("Open reports folder"))) { openReportsFolder(); }
     if (!diagBundleStatus_.empty()) { ImGui::TextDisabled("%s", diagBundleStatus_.c_str()); }
 
     // THE SDRPLAY DIAGNOSTIC (0.99.50). Disabled while FoxSDR itself holds an
@@ -27290,6 +27201,11 @@ void AppWindow::drawDiagnosticsSection() {
 }
 
 void AppWindow::startSdrPlayProbe() {
+    // LEFT ON THIS THREAD, UNDER A PAUSE (0.99.64, docs/DIAGNOSTICS.md, "The window
+    // does no disk work"): one create_directories in the reports folder, on the
+    // press of a button that then starts a child process for a minute or two. A
+    // slow reports folder is a freeze here, not a reported hang.
+    cascade::core::WatchdogPause holdWatchdog(watchdog_);
     std::string dir = cascade::core::diagCrashDir();
     if (dir.empty()) { dir = cascade::core::diagLogDir(); }
     if (dir.empty()) {
@@ -27339,6 +27255,10 @@ void AppWindow::drawSdrPlayProbeDialog() {
         sdrplayProbeChild_.reset();
         std::string text;
         {
+            // LEFT ON THIS THREAD, UNDER A PAUSE (0.99.64): one read of the small
+            // text file the child wrote, on the frame it is first seen to have
+            // exited - once per diagnostic the user asked for.
+            cascade::core::WatchdogPause holdWatchdog(watchdog_);
             std::ifstream f(sdrplayProbePath_, std::ios::binary);
             if (f) {
                 text.assign((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
@@ -27445,14 +27365,7 @@ void AppWindow::drawDiagnosticsOffer() {
         ImGui::Spacing();
         if (ImGui::Button(trId("Copy diagnostics"))) { copyDiagnosticsBundle(); }
         ImGui::SameLine();
-        if (ImGui::Button(trId("Open reports folder"))) {
-            const std::string dir = cascade::core::diagCrashDir();
-            if (!dir.empty()) {
-                std::error_code ec;
-                std::filesystem::create_directories(std::filesystem::path(dir), ec);
-                shellOpen(dir);
-            }
-        }
+        if (ImGui::Button(trId("Open reports folder"))) { openReportsFolder(); }
         ImGui::SameLine();
         if (ImGui::Button(trId("Not now"))) { diagOfferOpen_ = false; }
         if (!diagBundleStatus_.empty()) { ImGui::TextDisabled("%s", diagBundleStatus_.c_str()); }
@@ -27545,6 +27458,21 @@ std::string AppWindow::currentDiagnosticsBundle(bool freshHistory) {
         cascade::core::slowFramesText(cascade::core::slowFrameCounts()));
 }
 
+void AppWindow::openReportsFolder() {
+    const std::string dir = cascade::core::diagCrashDir();
+    if (dir.empty()) { return; }
+    // LEFT ON THIS THREAD, UNDER A PAUSE (0.99.64, docs/DIAGNOSTICS.md, "The window
+    // does no disk work"): one create_directories in the reports folder, on the
+    // press of a button, before the shell is asked to show it. shellOpen holds its
+    // own bracket for the shell; this one covers the folder.
+    cascade::core::WatchdogPause holdWatchdog(watchdog_);
+    std::error_code ec;
+    std::filesystem::create_directories(std::filesystem::path(dir), ec);
+    // Explorer's (or the Linux file manager's) first window of a session is a
+    // multi-second cold start and this thread is inside the shell for all of it.
+    shellOpen(dir);
+}
+
 void AppWindow::copyDiagnosticsBundle() {
     cascade::core::DiagBundleInput in;
     in.crashDir = cascade::core::diagCrashDir();
@@ -27557,6 +27485,9 @@ void AppWindow::copyDiagnosticsBundle() {
     // is sent), so it is translated as it is written.
     diagBundleStatus_ = tr("Copied to the clipboard.");
     if (!in.crashDir.empty()) {
+        // LEFT ON THIS THREAD, UNDER A PAUSE (0.99.64): the reports folder and one
+        // small text file, on a press of Copy diagnostics.
+        cascade::core::WatchdogPause holdWatchdog(watchdog_);
         std::error_code ec;
         std::filesystem::create_directories(std::filesystem::path(in.crashDir), ec);
         const std::string path = in.crashDir + "/diagnostics.txt";

@@ -1249,6 +1249,7 @@
   "Saved \"%s\".": "\"%s\" salvestati.",
   "Saved %.4f MHz as a preset for %s": "%.4f MHz salvestati mooduli %s eelsättena",
   "Saved %s": "Salvestatud: %s",
+  "Saving...": "Salvestamine...",
   "Scanner": "Skanner",
   "Scanning": "Skannimine",
   "Scanning for devices...": "Seadmete otsimine...",

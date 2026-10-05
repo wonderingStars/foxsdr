@@ -60,6 +60,7 @@ struct GLFWwindow;
 #include "core/retune_coalescer.hpp"
 #include "core/scanner.hpp"
 #include "core/transmitter.hpp"
+#include "source/iq_file_source.hpp"
 #include "source/sdrplay_probe.hpp"
 #include "gui/basemap_cache.hpp"
 // The floor a torn-off page cannot be dragged under, and the reset generation
@@ -71,6 +72,7 @@ struct GLFWwindow;
 #include "gui/rail_banks.hpp"
 #include "gui/bench_rail.hpp"
 #include "gui/audio_open.hpp"
+#include "gui/background_saver.hpp"
 #include "gui/config_writer.hpp"
 #include "gui/link_request_poll.hpp"
 #include "gui/record_start.hpp"
@@ -670,6 +672,11 @@ inline void mapPlaceDefaultRect(float& x, float& y, float& w, float& h,
 // Owns the GLFW window, the ImGui context and the top-level panel layout.
 // All GLFW/ImGui usage stays behind this interface so main() (and any future
 // headless harness) never needs GUI headers.
+struct DiskWorkState;  // gui/app_window_disk_state.hpp: AppWindow's disk workers
+struct DiskWorkStateDeleter {
+    void operator()(DiskWorkState* p) const;  // defined in app_window_disk_work.cpp
+};
+
 class AppWindow {
 public:
     // Constructs the render pipeline with the demo SigGen signal already
@@ -1767,6 +1774,55 @@ private:
     void startReceiver();
     void endTakesOnFault();
     void installSource(std::unique_ptr<cascade::source::IqSource> src);
+    // The Source section's I/Q-file Open, lifted out of the button so a test can
+    // press the same handler. `iqFileFactory_` is the seam for a slow disk (empty
+    // in the application): it makes the IqFileSource whose open() parses the
+    // header.
+    void openIqFile();
+    // Once per frame: collects the header a worker has read and installs the
+    // source, or says why not.
+    void pollIqOpen();
+    // The install half of a successful open: everything the button did after
+    // open() returned true, for `path` as it was when Open was pressed.
+    void installOpenedIqFile(std::unique_ptr<cascade::source::IqFileSource> file,
+                             const std::string& path);
+    std::function<std::unique_ptr<cascade::source::IqFileSource>()> iqFileFactory_;
+    // --- THE GUI THREAD'S DISK WORK (0.99.64, app_window_disk_work.cpp) ---------
+    // The I/Q file's header, a picture saved as a BMP, the frequency list exported
+    // for SDR#, F12's screenshot and the patch Radio's recordings list were each a
+    // few file-system calls in a click handler, on the thread that draws the
+    // window. Each is now a gui::DiskJob: a worker that owns its inputs by value,
+    // one in flight, collected by pollDiskJobs() once a frame. The jobs live in an
+    // opaque DiskWorkState (gui/app_window_disk_state.hpp) - see that header for
+    // why - and every call that touches one is defined in app_window_disk_work.cpp.
+    // `diskHookForTest_` is the one seam for a slow disk: empty in the application,
+    // a function that sleeps in a test, called by the worker immediately before it
+    // touches the disk, which is exactly where a slow disk would hold it.
+    std::function<void()> diskHookForTest_;
+    static DiskWorkState* newDiskWorkState();
+    std::unique_ptr<DiskWorkState, DiskWorkStateDeleter> disk_{newDiskWorkState()};
+    // Whether the I/Q file Open / the picture save / the SDR# export has a worker
+    // out: the keys beside them are disabled while it has.
+    bool iqOpenPending() const;
+    bool imageSavePending() const;
+    bool bookmarkExportPending() const;
+    // How long the I/Q file Open has been waiting on its disk, 0 when it is not.
+    double iqOpenElapsedS() const;
+    // The plugin picture's "Save as BMP".
+    void saveImageBmp(const cascade::core::HostImage& im);
+    // The Bookmarks section's "Export for SDR#" (the ones shown).
+    void exportBookmarksForSdrSharp();
+    // F12 and the Screenshot key: the pictures and the window list are added to a
+    // batch as the frame takes them (the GL read-back is the GUI thread's) and the
+    // batch is handed to a worker by shotFlush().
+    void shotAddPicture(std::string path, cascade::core::HostImage image);
+    void shotAddText(std::string path, std::string text);
+    void shotFlush();
+    // Once a frame, from drawUi: collects every job above and the I/Q file Open.
+    void pollDiskJobs();
+    // The "Open reports folder" key of both diagnostics panels: makes the folder
+    // and asks the shell to show it, under a watchdog pause (0.99.64).
+    void openReportsFolder();
     bool endTakes(bool iq, bool audio, const char* why, bool asError);
     bool faultSeen_ = false;  // endTakesOnFault's edge: the latch as last frame saw it
     // The Recorder section's own "Record audio" path, lifted out of the button
@@ -1856,8 +1912,14 @@ private:
     // about a second after the last change (flushBookmarkSave, every frame and
     // at exit) - a 33 000-entry list takes ~40 ms to write, and a hitch on
     // every star clicked is exactly the slowdown an imported list must not add.
+    // 0.99.64: the write itself is on a worker (bookmarkSaver_); this takes the
+    // text, hands it over and collects the result of the one before.
     void saveBookmarks();
     void flushBookmarkSave(bool force);
+    // AT EXIT: waits, within `deadline`, for the last bookmark save and the last
+    // marker save to land; one that does not is abandoned and logged. Called
+    // once by run(), after the config's own drain, and by the tests.
+    bool drainListSaves(std::chrono::steady_clock::time_point deadline);
     // Imports an SDR# frequencies.xml or a CSV into the bookmarks.
     void importBookmarkFile(const std::string& path);
     // The filtered, cached view the Bookmarks list draws from.
@@ -3010,6 +3072,18 @@ private:
     std::string bookmarkViewKey_;
     bool bookmarkSaveDirty_ = false;
     double bookmarkSaveDueS_ = 0.0;
+    // THE TWO LISTS ARE SAVED OFF THE GUI THREAD (0.99.64). The temp file, the
+    // flush and the rename in the settings folder are blocking work, and a slow
+    // answer froze the window for as long as it lasted - gui/background_saver.hpp
+    // has the argument. The text is taken HERE, on this thread (serialize()), and
+    // the write runs on one worker per file, newest content winning; the result
+    // is collected by flushBookmarkSave / flushMarkerSave, which drawUi calls
+    // every frame, and the last request gets a bounded chance to land at exit
+    // (drainListSaves). The writer is bound to the real atomic write; a test
+    // binds one that sleeps.
+    cascade::gui::BackgroundSaver bookmarkSaver_{"bookmarks",
+                                                 &cascade::core::FreqManager::writeFile};
+    cascade::gui::BackgroundSaver markerSaver_{"markers", &cascade::core::FreqMarkers::writeFile};
     // A file dropped on the window, picked up by the next frame.
     std::string pendingDropPath_;
     // FOXSDR_BOOKMARK_IMPORT (bounded runs): opens VIEW > Bookmarks with the
@@ -4130,6 +4204,9 @@ private:
     std::map<cascade::core::patch::NodeId, std::string> patchRadioSig_;
     // Each speaker's output, and the output key it was made for.
     cascade::core::patch::DestTable patchDests_;
+    // The slow-disk seams of a speaker's file (core/patch_audio.hpp). Empty in
+    // the application; a test binds ones that sleep.
+    cascade::core::patch::DestSeams patchDestSeams_;
     std::map<cascade::core::patch::NodeId, std::string> patchDestMadeFor_;
     std::map<cascade::core::patch::NodeId, std::string> patchDestError_;
     // Each radio's newest spectrum, for its Spectrum parts and channel levels.

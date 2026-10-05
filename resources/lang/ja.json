@@ -1249,6 +1249,7 @@
   "Saved \"%s\".": "「%s」を保存しました。",
   "Saved %.4f MHz as a preset for %s": "%.4f MHz を %s のプリセットとして保存しました",
   "Saved %s": "%s を保存しました",
+  "Saving...": "保存中...",
   "Scanner": "スキャナー",
   "Scanning": "スキャン中",
   "Scanning for devices...": "デバイスをスキャン中...",

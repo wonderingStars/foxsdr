@@ -22,14 +22,23 @@
 // (the sets own it by shared_ptr and die on the GUI thread; see
 // patch_runner.hpp), so a file is never closed under a write.
 //
+// WHAT THE GUI THREAD DOES NOT DO (0.99.64): open a file. Construction is
+// instant; the WAV's open and the MP3's folder and open are a worker's (see
+// makeWavDestAsync below). What it still does is finalise a WAV when its set is
+// retired - the header patch and the close in ~WavDest - which is a known
+// remaining file-system call on that thread (docs/DIAGNOSTICS.md).
+//
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
+
+#include "core/recorder.hpp"
 
 namespace cascade::core::patch {
 
@@ -77,13 +86,41 @@ std::string fileSafeName(const std::string& name);
 // "patch-<node>-<fileSafeName(name)>".
 std::string patchFilePrefix(unsigned node, const std::string& name);
 
-// Each returns null with a reason in `error` when the destination cannot be
-// made. MP3 is null on a build without Windows' encoder - the caller then
-// makes a WAV and says so.
+// THE SLOW-DISK SEAMS (0.99.64): the two blocking steps of making a file
+// destination, replaceable so a test can stage a slow disk. Never set by the
+// application.
+struct DestSeams {
+    // How a WAV's file is opened; empty is Recorder::openFile.
+    Recorder::Opener wavOpener;
+    // How the MP3's folder is made; empty is create_directories + is_directory.
+    std::function<bool(const std::string& directory)> makeDirectory;
+};
+
+// FILES ARE OPENED OFF THE CALLING THREAD (0.99.64). A speaker's file used to be
+// made by the GUI thread - the recordings folder, the file, the header - and a
+// folder that was slow to answer froze the window for as long as it took (see
+// docs/DIAGNOSTICS.md, "The window does no disk work"). So:
+//
+//   makeWavDestAsync  NEVER BLOCKS. The destination exists at once and takes
+//                     sound at once; its file is opened by a worker, the sound
+//                     offered meanwhile is held (up to 20 s) and written ahead of
+//                     the first block that arrives after the file is open, and a
+//                     file that cannot be opened is reported by error() in the
+//                     words Recorder::start gave. THE ONE THE APPLICATION USES.
+//   makeWavDest       the same, then waits for the file: null with the reason in
+//                     `error`, as it always did. For callers that can wait.
+//   makeMp3Dest       NEVER TOUCHES THE DISK: the recordings folder and the file
+//                     are made by the destination's own worker; a folder that
+//                     cannot be made is reported by error(). Null only on a build
+//                     without Windows' encoder - the caller then makes a WAV and
+//                     says so.
+std::shared_ptr<AudioDest> makeWavDestAsync(const std::string& directory,
+                                            const std::string& prefix, std::string& error,
+                                            const DestSeams* seams = nullptr);
 std::shared_ptr<AudioDest> makeWavDest(const std::string& directory, const std::string& prefix,
-                                       std::string& error);
+                                       std::string& error, const DestSeams* seams = nullptr);
 std::shared_ptr<AudioDest> makeMp3Dest(const std::string& directory, const std::string& prefix,
-                                       std::string& error);
+                                       std::string& error, const DestSeams* seams = nullptr);
 // `deviceName` empty means the default output device.
 std::shared_ptr<AudioDest> makeDeviceDest(const std::string& deviceName, std::string& error);
 

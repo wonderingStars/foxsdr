@@ -203,22 +203,8 @@ std::vector<AppWindow::PatchDeviceChoice> AppWindow::patchDeviceChoices() const 
     return out;
 }
 
-void AppWindow::patchListRecordings() {
-    std::vector<std::string> dirs{recordDir_};
-    // A second folder for verification and for anyone who keeps recordings
-    // elsewhere - read from the environment, never guessed.
-    if (const char* s = std::getenv("FOXSDR_PATCH_SAMPLES"); s != nullptr && *s != '\0') {
-        dirs.emplace_back(s);
-    }
-    // THROUGH THE CACHE: a file already read is not opened again until it
-    // changes, and one listing opens at most kMaxRecordingOpens - this runs on
-    // the GUI thread, in a folder the patch's own speakers keep writing to.
-    const std::size_t opensBefore = patchRecordingCache_.opens;
-    patchRecordings_ =
-        pc::listIqRecordings(dirs, pc::kMaxRecordingsListed, &patchRecordingCache_);
-    cascade::core::diagLogf("patch: %zu I/Q recording(s) listed (%zu file(s) read)",
-                            patchRecordings_.size(), patchRecordingCache_.opens - opensBefore);
-}
+// patchListRecordings lives in app_window_disk_work.cpp (0.99.64): the listing is a
+// worker's, with the rest of the GUI thread's disk work.
 
 std::string AppWindow::patchDeviceLabel(const std::string& key) const {
     if (key.empty()) { return tr("No device chosen"); }
@@ -808,15 +794,20 @@ void AppWindow::patchPublishSets() {
         const std::string prefix = pc::patchFilePrefix(static_cast<unsigned>(sp.sink), n->name);
         switch (pc::outputKind(key)) {
             case pc::OutputKind::Wav:
-                dest = pc::makeWavDest(recordDir_, prefix, err);
+                // NOTHING HERE WAITS FOR THE DISK (0.99.64): the destination
+                // exists and takes sound at once, and its file is opened by a
+                // worker. This ran Recorder::start on the thread that draws the
+                // window, so a slow recordings folder froze it - the freeze the
+                // Record button had until 0.99.63 (core/patch_audio.hpp).
+                dest = pc::makeWavDestAsync(recordDir_, prefix, err, &patchDestSeams_);
                 break;
             case pc::OutputKind::Mp3: {
-                dest = pc::makeMp3Dest(recordDir_, prefix, err);
+                dest = pc::makeMp3Dest(recordDir_, prefix, err, &patchDestSeams_);
                 if (!dest) {
                     // THE FILE STILL GETS WRITTEN: an MP3 this build cannot
                     // make is a WAV, and the face says so.
                     std::string werr;
-                    dest = pc::makeWavDest(recordDir_, prefix, werr);
+                    dest = pc::makeWavDestAsync(recordDir_, prefix, werr, &patchDestSeams_);
                     err += dest ? " - writing WAV instead" : "; " + werr;
                 }
                 break;
