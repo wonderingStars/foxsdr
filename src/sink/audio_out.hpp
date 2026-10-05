@@ -33,6 +33,7 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
@@ -134,6 +135,15 @@ public:
     // answered rather than waited for.
     std::string openedDeviceName() const;
 
+    // The host API the last successful open went through ("MME", "Windows
+    // WASAPI", "Windows DirectSound"...), empty until one has. By value under
+    // the same try_lock as openedDeviceName(), and empty while an open is in
+    // progress for the same reason. A host API names a driver model, never a
+    // person's device, so unlike the device's name it is safe to put in the
+    // log and in the diagnostics bundle - and it is the first thing anyone
+    // asks about a Windows audio fault.
+    std::string openedHostApi() const;
+
     // Channel layout of the most recent SUCCESSFUL open (1 until one
     // succeeds). Deliberately retained across close(): it describes how the
     // ring's contents are laid out, and the ring outlives the stream.
@@ -224,6 +234,16 @@ private:
     // closes the previous stream before it opens the next one).
     void closeLocked();
 
+    // What an open() has to say about itself, composed under apiMutex_ and
+    // WRITTEN after it is released: a log write is a disk write, and the
+    // stream lifecycle lock is the one every other query try_locks on.
+    struct OpenNote {
+        std::string line;  // empty: nothing new to say (a repeated refusal)
+        bool warn = false;
+    };
+    // The body of open() once apiMutex_ is held. Fills `note`.
+    bool openLocked(int deviceIndex, double sampleRateHz, int channels, OpenNote& note);
+
     // 32768 samples: 32768 mono frames (682 ms at 48 kHz) or 16384 STEREO
     // frames (341 ms — a stereo frame is one L+R pair, so it costs two
     // samples). Deep enough to ride out GUI-thread hiccups on the producer
@@ -259,7 +279,16 @@ private:
     // that is precisely when recovery needs it (see streamAlive()).
     std::atomic<bool> everOpened_{false};
     std::atomic<int> openedRequested_{-1};
-    std::string openedName_;  // guarded by apiMutex_
+    std::string openedName_;     // guarded by apiMutex_
+    std::string openedHostApi_;  // guarded by apiMutex_
+    // THE LAST REFUSAL THAT WAS SAID, and when. A refusal that repeats - the
+    // audio watchdog retries a dead stream once a second - is written once and
+    // then at most once a minute: the log's ring holds 256 lines, and a line
+    // per retry would push the whole session out of a report in four minutes.
+    // A refusal for a different reason is a new fact and is always written; so
+    // is the first one after a success. Guarded by apiMutex_.
+    std::string lastRefusal_;
+    std::chrono::steady_clock::time_point lastRefusalSaid_{};
 };
 
 // Which device a recovery reopen should target, given what the last

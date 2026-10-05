@@ -2598,6 +2598,43 @@ void AppWindow::setDiagStallMs(int ms) { diagStallMs_ = (ms > 0) ? ms : 0; }
 
 void AppWindow::setDiagToggle(int mode) { diagToggle_ = (mode > 0) ? 1 : ((mode < 0) ? -1 : 0); }
 
+namespace {
+
+// THE SOUND PATH, for the report context (core::DiagAudio explains what it is
+// for and what it must never carry). A free function taking values rather than
+// reading the window, so the two places that build a context - the once-a-second
+// refresh and the Copy diagnostics bundle - cannot describe the sound
+// differently, and neither has to be an AppWindow member to share it.
+//
+// Reads only what the Sinks panel already reads each frame: nothing here opens,
+// closes or waits on the device. streamAlive() and openedHostApi() both
+// try_lock, so a worker inside the driver's open() is answered, not waited for.
+cascade::core::DiagAudio soundPathFacts(cascade::sink::AudioOut& out, bool opening,
+                                        int restarts, float volume01, bool userMuted,
+                                        bool pluginMuted, bool transmitMuted, float squelchDb,
+                                        bool squelchOpen, float signalDb) {
+    cascade::core::DiagAudio a;
+    a.known = true;
+    a.opening = opening;
+    if (!opening) {
+        a.everOpened = out.everOpened();
+        a.alive = a.everOpened && out.streamAlive();
+        a.channels = out.channels();
+        a.hostApi = out.openedHostApi();
+    }
+    a.restarts = restarts > 0 ? static_cast<unsigned>(restarts) : 0u;
+    a.volumePercent = static_cast<int>(std::lround(static_cast<double>(volume01) * 100.0));
+    a.mutedByUser = userMuted;
+    a.mutedByPlugin = pluginMuted;
+    a.mutedByTransmit = transmitMuted;
+    a.squelchDb = static_cast<double>(squelchDb);
+    a.squelchOpen = squelchOpen;
+    a.signalDb = static_cast<double>(signalDb);
+    return a;
+}
+
+}  // namespace
+
 void AppWindow::refreshDiagContext() {
     cascade::core::DiagContext ctx;
     ctx.version = cascade::versionString();
@@ -2616,6 +2653,12 @@ void AppWindow::refreshDiagContext() {
     ctx.sdrModel = deviceModel_;
     // The crystal correction and how it is applied - never a frequency.
     ctx.ppm = ppmDiagText();
+    // The sound path: the same facts the Sinks panel's chip and the rail's
+    // volume, mute and squelch controls show, none of them a frequency.
+    ctx.audio = soundPathFacts(pipeline_.audio(), audioOpen_.inFlight(), audioRecoveries_, volume_,
+                               userMuted_, !mutedBy_.empty(),
+                               transmitter_.transmitting() && !transmitMonitor_, squelchDb_,
+                               pipeline_.squelchOpen(), pipeline_.signalPowerDb());
     std::size_t loaded = 0;
     for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
         if (!p.loaded) { continue; }
@@ -26785,6 +26828,17 @@ std::string AppWindow::currentDiagnosticsBundle() {
     in.context.sampleRateHz = pipeline_.activeSource().sampleRateHz();
     in.context.deviceOpen = (device_ != nullptr);
     in.context.sdrModel = deviceModel_;
+    // The crystal correction. This used to be left at DiagContext's default
+    // ("off"), and buildDiagnosticsBundle re-renders the context from THIS
+    // struct - so every bundle said "ppm: off" whatever the setting was, and
+    // overwrote the correct line refreshDiagContext() had just rendered.
+    in.context.ppm = ppmDiagText();
+    // The sound path, from the same helper refreshDiagContext() uses.
+    in.context.audio = soundPathFacts(pipeline_.audio(), audioOpen_.inFlight(), audioRecoveries_,
+                                      volume_, userMuted_, !mutedBy_.empty(),
+                                      transmitter_.transmitting() && !transmitMonitor_,
+                                      squelchDb_, pipeline_.squelchOpen(),
+                                      pipeline_.signalPowerDb());
     for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
         if (p.loaded && in.context.plugins.size() < 32) {
             in.context.plugins.push_back(p.name + " " + p.version);

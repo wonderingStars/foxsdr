@@ -1112,6 +1112,10 @@ float Pipeline::signalPowerDb() const {
     return signalDb_.load(std::memory_order_relaxed);
 }
 
+bool Pipeline::squelchOpen() const {
+    return squelchOpen_.load(std::memory_order_relaxed);
+}
+
 void Pipeline::setAudioMuted(bool muted) {
     audioMuted_.store(muted, std::memory_order_relaxed);
 }
@@ -1814,6 +1818,11 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
     // Squelch measures the pre-demod channel and gates the (AGC'd) audio, so
     // closed-squelch output is exact digital silence after the ramp.
     squelch_.process(gateBuf_.data(), 2 * m, ilvBuf_.data());
+    // The gate's own state, once per block, for the diagnostics bundle and any
+    // other reader that wants to know whether silence is the squelch's doing
+    // (see squelchOpen()). A relaxed store of one bool: nothing is added to the
+    // per-sample loop above.
+    squelchOpen_.store(squelch_.isOpen(), std::memory_order_relaxed);
     for (std::size_t i = 0; i < m; ++i) {
         leftBuf_[i] = ilvBuf_[2 * i];
         rightBuf_[i] = ilvBuf_[2 * i + 1];

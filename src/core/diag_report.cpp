@@ -547,6 +547,73 @@ bool peBuildId(const std::string& path, std::string& buildId, std::string& pdbNa
 #endif
 }
 
+namespace {
+
+// "-50 dB": a level or a threshold, whole decibels. Never a frequency.
+std::string wholeDb(double db) {
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "%.0f dB", db);
+    return buf;
+}
+
+// THE FOUR SOUND-PATH LINES (see DiagAudio for why they exist and what they
+// must never carry). Each says "(unknown)" when nothing filled the struct in,
+// so an unfilled context cannot read as a healthy one.
+std::string audioOutputText(const DiagAudio& a) {
+    if (!a.known) { return "(unknown)"; }
+    // An open in flight is a state of the driver, not of the sink - nothing
+    // else is true of the stream until it finishes (the Sinks panel makes the
+    // same call).
+    if (a.opening) { return "opening"; }
+    if (!a.everOpened) { return "none - no output device has opened"; }
+    if (!a.alive) { return "stopped - the stream died and is being reopened"; }
+    std::string s = "open, ";
+    s += a.hostApi.empty() ? std::string("unknown host API") : a.hostApi;
+    s += a.channels == 2 ? ", 2 channels" : ", 1 channel";
+    if (a.restarts > 0) {
+        s += ", restarted " + std::to_string(a.restarts) + (a.restarts == 1 ? " time" : " times");
+    }
+    return s;
+}
+
+std::string volumeText(const DiagAudio& a) {
+    if (!a.known) { return "(unknown)"; }
+    int v = a.volumePercent;
+    if (v < 0) { v = 0; }
+    if (v > 100) { v = 100; }
+    return std::to_string(v) + "%";
+}
+
+// WHO muted it, because "muted" alone sends the reporter to the wrong control.
+// A plugin is described, never named: the Sinks panel names it, but a bundle
+// that said "ADS-B" would say which band the receiver was parked on, and what
+// somebody listens to is the most sensitive thing this application knows.
+std::string mutedText(const DiagAudio& a) {
+    if (!a.known) { return "(unknown)"; }
+    std::string s;
+    auto add = [&s](const char* who) {
+        if (!s.empty()) { s += " + "; }
+        s += who;
+    };
+    if (a.mutedByUser) { add("you"); }
+    if (a.mutedByPlugin) { add("a decoder plugin"); }
+    if (a.mutedByTransmit) { add("transmit key"); }
+    return s.empty() ? std::string("no") : s;
+}
+
+// The threshold, the gate's own state, and - when the receiver has measured one
+// - the channel power the gate is judging, so "the squelch is above the signal"
+// reads straight off one line.
+std::string squelchText(const DiagAudio& a) {
+    if (!a.known) { return "(unknown)"; }
+    std::string s = wholeDb(a.squelchDb);
+    s += a.squelchOpen ? ", open" : ", closed";
+    if (a.signalDb > -199.0) { s += " (signal " + wholeDb(a.signalDb) + ")"; }
+    return s;
+}
+
+}  // namespace
+
 void setDiagContext(const DiagContext& ctx) {
     // Rendered ONCE, here, on the healthy path. The fault path writes these
     // bytes out and formats nothing.
@@ -577,6 +644,13 @@ void setDiagContext(const DiagContext& ctx) {
     // How the radio's crystal is being corrected (0.99.56): support's first
     // question when a signal is "not where the band plan says".
     block += "ppm: " + (ctx.ppm.empty() ? std::string("off") : ctx.ppm) + "\n";
+    // THE SOUND PATH (0.99.61), BEFORE the plugin list: that list is the one
+    // part of this block that grows without bound (up to 32 lines), and a
+    // block that overruns its fixed buffer is cut at the END.
+    block += "audio-output: " + audioOutputText(ctx.audio) + "\n";
+    block += "volume: " + volumeText(ctx.audio) + "\n";
+    block += "audio-muted: " + mutedText(ctx.audio) + "\n";
+    block += "squelch: " + squelchText(ctx.audio) + "\n";
     if (ctx.plugins.empty()) {
         block += "plugin: (none)\n";
     } else {
@@ -637,7 +711,9 @@ const std::vector<std::string>& bundleFieldNames() {
         "arch",      "mode",      "source",     "sample-rate",
         "device-open", "sdr-model", "ppm",      "plugin",   "log-path",
         "crash-dir", "last-run-unclean", "launches", "crashes",
-        "log-lines-total", "sdrplay-service"};
+        "log-lines-total", "sdrplay-service",
+        // The sound path (0.99.61): see DiagAudio.
+        "audio-output", "volume", "audio-muted", "squelch"};
     return names;
 }
 

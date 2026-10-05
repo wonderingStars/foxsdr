@@ -348,6 +348,20 @@ public:
     // block after start().
     float signalPowerDb() const;
 
+    // Whether the squelch gate is OPEN - the gate's own state, not a
+    // comparison of the S-meter with the threshold. They differ exactly where
+    // it matters: the gate opens above the threshold but closes only 3 dB
+    // below it and holds for 100 ms, so the S-meter sitting just under the
+    // threshold can still be passing audio. A closed gate is a complete
+    // silence downstream: the audio chain keeps FEEDING the sink (zeros, at the
+    // normal rate), so nothing starves, nothing is logged, and every other
+    // light on the receiver - spectrum, waterfall, S-meter - stays live. It is
+    // the state a "no audio" report most needs and, before this, the one
+    // nothing recorded. Published once per DSP block into an atomic: a
+    // lock-free snapshot safe from any thread, false until the first block
+    // after start().
+    bool squelchOpen() const;
+
     // --- Broadcast-FM stereo (P7) --------------------------------------------
     // User switch, not a capability report: false forces mono (StereoFm's own
     // ramped force-mono gate, so the toggle is click-free). Default true —
@@ -941,6 +955,7 @@ private:
     ScopeTap<std::complex<float>> scopeIq_{kScopeIqTapSamples};
     ScopeTap<float> scopeMpx_{kScopeMpxTapSamples};
     std::atomic<float> signalDb_{-200.0f};
+    std::atomic<bool> squelchOpen_{false};
     std::atomic<std::uint64_t> audioSamples_{0};
     // UI snapshots, published once per block like signalDb_.
     std::atomic<bool> pilotLocked_{false};

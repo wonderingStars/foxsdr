@@ -1097,6 +1097,18 @@ int main() {
         ctx.ppm = "+1.5 by retuning";
         ctx.plugins.push_back("ADS-B 1.1.0");
         ctx.plugins.push_back("AIS 1.0.0");
+        // THE SOUND PATH (0.99.61): the four facts a "no audio from my
+        // speakers" report turned on and the bundle did not carry.
+        ctx.audio.known = true;
+        ctx.audio.everOpened = true;
+        ctx.audio.alive = true;
+        ctx.audio.channels = 2;
+        ctx.audio.hostApi = "MME";
+        ctx.audio.volumePercent = 80;
+        ctx.audio.mutedByUser = true;
+        ctx.audio.squelchDb = -50.0;
+        ctx.audio.squelchOpen = false;
+        ctx.audio.signalDb = -63.4;
 
         DiagBundleInput in;
         in.context = ctx;
@@ -1128,6 +1140,14 @@ int main() {
         CHECK(bundle.find("last-run-unclean: yes") != std::string::npos);
         CHECK(bundle.find("audio stream reopened") != std::string::npos);
         CHECK(bundle.find("log-lines-total: 4011") != std::string::npos);
+        // The sound path, by value, in the exact "name: value" form the
+        // inventory below parses. None of these is a frequency, a device's
+        // name or anything the person listened to: a driver model, a count, a
+        // percentage, who muted it, and a threshold against a level.
+        CHECK(bundle.find("\naudio-output: open, MME, 2 channels\n") != std::string::npos);
+        CHECK(bundle.find("\nvolume: 80%\n") != std::string::npos);
+        CHECK(bundle.find("\naudio-muted: you\n") != std::string::npos);
+        CHECK(bundle.find("\nsquelch: -50 dB, closed (signal -63 dB)\n") != std::string::npos);
 
         // THE INVENTORY, both directions. Collect every "name: " label in the
         // header block and compare it with the declared list as a set: an
@@ -1165,6 +1185,127 @@ int main() {
         CHECK(bundle.find("centre") == std::string::npos);
         CHECK(bundle.find("center") == std::string::npos);
         CHECK(bundle.find("bookmark") == std::string::npos);
+    }
+
+    // --- The sound path says every state a "no audio" report can be in ------
+    // The field report (0.99.58, an NESDR SMArt v5) had five minutes of log and
+    // nothing that told a closed squelch, the Mute key, a muting decoder plugin,
+    // a volume of nothing, a stream that never opened and a stream that opened
+    // and died apart - all of them are silence with a healthy-looking radio.
+    {
+        auto block = [](const DiagAudio& a) {
+            DiagContext ctx;
+            ctx.audio = a;
+            setDiagContext(ctx);
+            return diagContextBlock();
+        };
+        auto has = [](const std::string& b, const char* line) {
+            return b.find(std::string("\n") + line + "\n") != std::string::npos;
+        };
+
+        // A context nothing filled in says so, rather than reading as "fine".
+        {
+            const std::string b = block(DiagAudio{});
+            CHECK(has(b, "audio-output: (unknown)"));
+            CHECK(has(b, "volume: (unknown)"));
+            CHECK(has(b, "audio-muted: (unknown)"));
+            CHECK(has(b, "squelch: (unknown)"));
+        }
+
+        DiagAudio a;
+        a.known = true;
+        a.everOpened = true;
+        a.alive = true;
+        a.channels = 1;
+        a.hostApi = "Windows WASAPI";
+        a.volumePercent = 100;
+        a.squelchDb = -120.0;
+        a.squelchOpen = true;
+        a.signalDb = -200.0;  // nothing measured yet
+
+        // The healthy state, and a mono layout.
+        {
+            const std::string b = block(a);
+            CHECK(has(b, "audio-output: open, Windows WASAPI, 1 channel"));
+            CHECK(has(b, "volume: 100%"));
+            CHECK(has(b, "audio-muted: no"));
+            CHECK(has(b, "squelch: -120 dB, open"));  // no level to quote: not invented
+        }
+        // A stream that was restarted by the watchdog says how often.
+        {
+            DiagAudio r = a;
+            r.restarts = 1;
+            CHECK(has(block(r), "audio-output: open, Windows WASAPI, 1 channel, restarted 1 time"));
+            r.restarts = 3;
+            CHECK(has(block(r), "audio-output: open, Windows WASAPI, 1 channel, restarted 3 times"));
+        }
+        // Never opened: the one case the starvation digest cannot even run.
+        {
+            DiagAudio n = a;
+            n.everOpened = false;
+            n.alive = false;
+            CHECK(has(block(n), "audio-output: none - no output device has opened"));
+        }
+        // Opened and then died: the watchdog is reopening it.
+        {
+            DiagAudio d = a;
+            d.alive = false;
+            CHECK(has(block(d), "audio-output: stopped - the stream died and is being reopened"));
+        }
+        // A worker is inside the driver's open right now.
+        {
+            DiagAudio o = a;
+            o.opening = true;
+            CHECK(has(block(o), "audio-output: opening"));
+        }
+        // Volume.
+        {
+            DiagAudio v = a;
+            v.volumePercent = 0;
+            CHECK(has(block(v), "volume: 0%"));
+            v.volumePercent = 37;
+            CHECK(has(block(v), "volume: 37%"));
+        }
+        // WHO muted it, because "muted" alone sends the reporter to the wrong
+        // control: the Mute key, a decoder plugin parked on its preset (the
+        // Sinks panel names it; the bundle must not, because that would say
+        // which band the receiver was on), the transmit key, or several.
+        {
+            DiagAudio m = a;
+            m.mutedByUser = true;
+            CHECK(has(block(m), "audio-muted: you"));
+            m = a;
+            m.mutedByPlugin = true;
+            CHECK(has(block(m), "audio-muted: a decoder plugin"));
+            m = a;
+            m.mutedByTransmit = true;
+            CHECK(has(block(m), "audio-muted: transmit key"));
+            m = a;
+            m.mutedByUser = true;
+            m.mutedByPlugin = true;
+            CHECK(has(block(m), "audio-muted: you + a decoder plugin"));
+        }
+        // The squelch: the threshold, the gate, and the level it is judging.
+        {
+            DiagAudio s = a;
+            s.squelchDb = -40.0;
+            s.squelchOpen = false;
+            s.signalDb = -57.6;
+            CHECK(has(block(s), "squelch: -40 dB, closed (signal -58 dB)"));
+            s.squelchOpen = true;
+            s.signalDb = -22.0;
+            CHECK(has(block(s), "squelch: -40 dB, open (signal -22 dB)"));
+        }
+        // None of it is a frequency, and the device is never named.
+        {
+            DiagAudio p = a;
+            p.mutedByPlugin = true;
+            p.squelchOpen = false;
+            p.signalDb = -63.0;
+            const std::string b = block(p);
+            CHECK(b.find("Hz") == std::string::npos);
+            CHECK(b.find("MHz") == std::string::npos);
+        }
     }
 
     // --- The context block is rendered on the healthy path ------------------

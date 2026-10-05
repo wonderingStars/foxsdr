@@ -5,9 +5,13 @@
 
 #include <portaudio.h>
 
+#include "core/diag_log.hpp"
 #include "sink/pa_init.hpp"
 
+#include <chrono>
+#include <cstdio>
 #include <cstring>
+#include <string>
 
 namespace cascade::sink {
 
@@ -76,13 +80,54 @@ std::vector<AudioDevice> AudioOut::listOutputDevices() {
 }
 
 bool AudioOut::open(int deviceIndex, double sampleRateHz, int channels) {
-    if (!paOk_ || !(sampleRateHz > 0.0)) { return false; }
-    if (channels != 1 && channels != 2) { return false; }
-    // Held for the WHOLE open, Pa_OpenStream included. On Windows that is
-    // waveOutOpen, which has no timeout - so everything that takes this lock
-    // with try_lock is answering "an open is in progress" rather than waiting
-    // for a driver.
-    std::lock_guard<std::mutex> lk(apiMutex_);
+    OpenNote note;
+    bool ok = false;
+    {
+        // Held for the WHOLE open, Pa_OpenStream included. On Windows that is
+        // waveOutOpen, which has no timeout - so everything that takes this
+        // lock with try_lock is answering "an open is in progress" rather than
+        // waiting for a driver.
+        std::lock_guard<std::mutex> lk(apiMutex_);
+        ok = openLocked(deviceIndex, sampleRateHz, channels, note);
+    }
+    // SAID AFTER THE LOCK IS RELEASED (see OpenNote). One line per attempt that
+    // has something new to say, success or refusal. Until this existed NO line
+    // anywhere recorded which kind of output was opened or whether it opened,
+    // so a report of "no audio from my speakers" could not tell a stream that
+    // was never open from one that was open and being fed silence: both write
+    // nothing (the starvation digest is silent unless a callback starved, and
+    // nothing starves a stream fed zeros or one whose callback never runs).
+    if (!note.line.empty()) {
+        if (note.warn) {
+            cascade::core::diagWarnf("%s", note.line.c_str());
+        } else {
+            cascade::core::diagLogf("%s", note.line.c_str());
+        }
+    }
+    return ok;
+}
+
+bool AudioOut::openLocked(int deviceIndex, double sampleRateHz, int channels, OpenNote& note) {
+    // The one way out of every failing path: the reason, in words, said once
+    // per distinct reason and then at most once a minute (see lastRefusal_).
+    // The wording avoids "range", "offset" and the like on purpose: a line that
+    // sounds like it is about tuning has its numbers masked by the log scrub
+    // (core::scrubUploadLine), which would blank the very counts a reader needs.
+    auto refuse = [&](const std::string& why) {
+        const auto now = std::chrono::steady_clock::now();
+        if (why != lastRefusal_ || now - lastRefusalSaid_ >= std::chrono::seconds(60)) {
+            lastRefusal_ = why;
+            lastRefusalSaid_ = now;
+            note.line = "audio: output could not be opened - " + why;
+            note.warn = true;
+        }
+        return false;
+    };
+
+    if (!paOk_) { return refuse("PortAudio did not start"); }
+    if (!(sampleRateHz > 0.0) || (channels != 1 && channels != 2)) {
+        return refuse("the request itself was unusable (a rate or a channel count)");
+    }
     // Re-open semantics: switching device or rate through open() closes the
     // old stream first. closeLocked() is idempotent, so this is safe when
     // nothing is open yet.
@@ -91,11 +136,25 @@ bool AudioOut::open(int deviceIndex, double sampleRateHz, int channels) {
     const PaDeviceIndex dev = (deviceIndex < 0)
                                   ? Pa_GetDefaultOutputDevice()
                                   : static_cast<PaDeviceIndex>(deviceIndex);
+    if (deviceIndex < 0 && dev == paNoDevice) { return refuse("no default output device"); }
     if (dev == paNoDevice || dev < 0 || dev >= Pa_GetDeviceCount()) {
-        return false;
+        return refuse("no such output device");
     }
     const PaDeviceInfo* info = Pa_GetDeviceInfo(dev);
-    if (info == nullptr || info->maxOutputChannels < channels) { return false; }
+    if (info == nullptr) { return refuse("no such output device"); }
+    // The HOST API names a driver model ("MME", "Windows WASAPI"), never a
+    // person's device, so it is the one identity this log may carry. The
+    // device's own NAME is deliberately never written: the operating system
+    // hands back labels like "Headset (Alice's AirPods Pro)", and this line
+    // goes into a bundle people paste into public bug reports (the same rule
+    // as source::loggableSoundCardDescription).
+    const PaHostApiInfo* api = Pa_GetHostApiInfo(info->hostApi);
+    const std::string apiName =
+        (api != nullptr && api->name != nullptr) ? std::string(api->name) : std::string("unknown host API");
+    if (info->maxOutputChannels < channels) {
+        return refuse(apiName + " device has " + std::to_string(info->maxOutputChannels) +
+                      " output channel(s) and " + std::to_string(channels) + " are needed");
+    }
 
     // Drain anything left from a previous session so a reopen starts silent
     // instead of replaying stale audio. Safe single-threaded consumption:
@@ -125,14 +184,30 @@ bool AudioOut::open(int deviceIndex, double sampleRateHz, int channels) {
         // paNoFlag keeps PortAudio's default out-of-range clipping enabled: a
         // demod transient beyond ±1.0 gets clamped instead of wrapping into
         // full-scale noise on some host APIs.
-        if (Pa_OpenStream(&stream, nullptr, &out, sampleRateHz,
-                          paFramesPerBufferUnspecified, paNoFlag, &paOutCallback,
-                          this) != paNoError) {
-            return false;
-        }
-        if (Pa_StartStream(stream) != paNoError) {
+        // WHY a refusal is worded from PortAudio's own error text: it is the
+        // difference between "the device is in use" and "the format is not
+        // supported", which is what the next question would be. A host-API
+        // fault carries the operating system's own sentence as well.
+        auto portAudioWhy = [&](PaError err) {
+            std::string why = apiName + " refused the stream: " + Pa_GetErrorText(err);
+            if (err == paUnanticipatedHostError) {
+                const PaHostErrorInfo* h = Pa_GetLastHostErrorInfo();
+                if (h != nullptr && h->errorText != nullptr && h->errorText[0] != '\0') {
+                    why += " (";
+                    why += h->errorText;
+                    why += ")";
+                }
+            }
+            return why;
+        };
+        const PaError openErr =
+            Pa_OpenStream(&stream, nullptr, &out, sampleRateHz, paFramesPerBufferUnspecified,
+                          paNoFlag, &paOutCallback, this);
+        if (openErr != paNoError) { return refuse(portAudioWhy(openErr)); }
+        const PaError startErr = Pa_StartStream(stream);
+        if (startErr != paNoError) {
             Pa_CloseStream(stream);
-            return false;
+            return refuse(portAudioWhy(startErr));
         }
     }
     stream_ = stream;
@@ -149,6 +224,25 @@ bool AudioOut::open(int deviceIndex, double sampleRateHz, int channels) {
     // caller's fallback path re-opens mono and the producer reads channels()
     // to decide what to push.
     channels_ = channels;
+    openedHostApi_ = apiName;
+
+    // THE LINE THAT ANSWERS "was an output opened at all": the host API, the
+    // layout, the rate, whether it followed the system default or a chosen
+    // device, and the latency PortAudio actually granted (a hint rounded up to
+    // what the host API can honour). A success also ends a run of refusals, so
+    // the next refusal after it is a new fact and is said.
+    const PaStreamInfo* si = Pa_GetStreamInfo(stream);
+    char latency[32] = "";
+    if (si != nullptr) {
+        std::snprintf(latency, sizeof(latency), ", latency %.0f ms", si->outputLatency * 1000.0);
+    }
+    char line[192];
+    std::snprintf(line, sizeof(line), "audio: output opened - %s, %d channel%s, %.0f S/s, %s%s",
+                  apiName.c_str(), channels, channels == 1 ? "" : "s", sampleRateHz,
+                  deviceIndex < 0 ? "system default" : "a chosen device", latency);
+    note.line = line;
+    note.warn = false;
+    lastRefusal_.clear();
     return true;
 }
 
@@ -180,6 +274,12 @@ std::string AudioOut::openedDeviceName() const {
     std::unique_lock<std::mutex> lk(apiMutex_, std::try_to_lock);
     if (!lk.owns_lock()) { return std::string(); }
     return openedName_;
+}
+
+std::string AudioOut::openedHostApi() const {
+    std::unique_lock<std::mutex> lk(apiMutex_, std::try_to_lock);
+    if (!lk.owns_lock()) { return std::string(); }
+    return openedHostApi_;
 }
 
 bool AudioOut::streamAlive() const {

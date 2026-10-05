@@ -138,6 +138,34 @@ bool peBuildId(const std::string& path, std::string& buildId, std::string& pdbNa
 // product - plugins are third-party code running in-process - so the plugin
 // list with versions is context, not decoration. Everything here is state the
 // application already knows; none of it is re-derived.
+//
+// THE SOUND PATH (0.99.61). "I am getting no audio from my speakers", with a
+// log of five minutes and a receiver delivering every sample, was
+// undiagnosable: a stream that never opened, one that opened and died, a
+// squelch above the signal, the Mute key, a decoder plugin muting the audio on
+// its preset and a volume of nothing are all silence from a healthy-looking
+// radio, and the bundle recorded none of them. These are those facts, as plain
+// state the window already holds. None of them is a frequency, and none names
+// a device: the host API is a driver model ("MME", "Windows WASAPI"), while a
+// device's own name is an operating-system label that is often a person's name
+// ("Headset (Alice's AirPods Pro)").
+struct DiagAudio {
+    bool known = false;       // false: nothing filled this in (headless, a test)
+    bool opening = false;     // a worker is inside the driver's open right now
+    bool everOpened = false;  // an output device has opened at least once
+    bool alive = false;       // ...and its stream is still being served
+    int channels = 0;         // 1 or 2, of the open stream
+    std::string hostApi;      // "MME", "Windows WASAPI"; never the device's name
+    unsigned restarts = 0;    // times the watchdog reopened a dead stream
+    int volumePercent = 100;  // the volume control, 0-100
+    bool mutedByUser = false;      // the Mute key
+    bool mutedByPlugin = false;    // a decoder plugin parked on its preset
+    bool mutedByTransmit = false;  // the transmit key is down
+    double squelchDb = 0.0;        // the squelch threshold, dB on the channel power
+    bool squelchOpen = false;      // the gate's own state (Pipeline::squelchOpen)
+    double signalDb = -200.0;      // the channel power the gate is judging; <= -199: none yet
+};
+
 struct DiagContext {
     std::string version;     // "0.61.0", or the full nightly string
     std::string commit;      // short git SHA the binary was built from
@@ -153,6 +181,7 @@ struct DiagContext {
     // property of the radio's crystal, never a frequency.
     std::string ppm = "off";
     std::vector<std::string> plugins;  // "name version", loaded plugins only
+    DiagAudio audio;                   // the sound path, see DiagAudio
 };
 
 // Renders `ctx` into a fixed static buffer, ONCE, on the healthy path. The
