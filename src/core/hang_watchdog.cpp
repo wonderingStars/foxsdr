@@ -15,6 +15,7 @@
 #include "core/breadcrumb.hpp"
 #include "core/diag_log.hpp"
 #include "core/diag_report.hpp"
+#include "core/frame_timing.hpp"
 
 #include <chrono>
 #include <cstdio>
@@ -1083,6 +1084,12 @@ void HangWatchdog::captureAllThreads(const std::string& path, double stalledMs) 
     out << "threshold-ms: " << thresholdMs_.load(std::memory_order_relaxed) << "\n";
     out << "signature: " << sig << "\n";
     out << "threads: " << stacks.size() << "\n";
+    // WHICH PART OF THE FRAME HELD THE WINDOW, in one fixed word from the frame
+    // timer's closed list (core/frame_timing.hpp): the GUI thread publishes the
+    // scope it is in, and it is stalled, so what this thread reads now is where
+    // it stopped. A freeze then says "rail" or "plugins-reload" before anyone has
+    // found a symbol map. `other` in a process with no frame loop.
+    out << "frame-scope: " << frameScopeName(currentFrameScope()) << "\n";
     out << "--- context ---\n";
     out << diagContextBlock();
 
@@ -1259,6 +1266,8 @@ void HangWatchdog::captureAllThreads(const std::string& path, double stalledMs) 
     out << "threshold-ms: " << thresholdMs_.load(std::memory_order_relaxed) << "\n";
     out << "signature: " << sig << "\n";
     out << "threads: " << tids.size() << "\n";
+    // As in the Windows writer above: where the stalled frame was.
+    out << "frame-scope: " << frameScopeName(currentFrameScope()) << "\n";
     out << "--- context ---\n";
     out << diagContextBlock();
 

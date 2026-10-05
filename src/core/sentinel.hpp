@@ -29,7 +29,8 @@
 //   it ended before the first frame                         -> Startup  (sent)
 //   a crash exit code the handler never saw                 -> Crash    (sent)
 //   it had stopped drawing for longer than the watchdog's
-//   own threshold, then ended                               -> Frozen   (sent)
+//   own threshold, then ended - and nobody was holding the
+//   window (a drag, a menu, a prompt)                       -> Frozen   (sent)
 //   anything else: ended while it was drawing               -> Outside  (kept here)
 //
 // "SENT" means the next launch's uploader may send it, under the same switch and
@@ -60,7 +61,8 @@ enum class SentinelClass { None, Crash, Frozen, Startup, Outside, Session };
 // The START of every sentinel report's `reason:` line. FIXED: each class has one
 // sentence, so the site can classify by prefix and nothing else varies. What
 // follows the sentence is a closed vocabulary (` - <what the exit code means>;
-// phase <phase>; silent <N> s`), never text from the machine. At most 200
+// phase <phase>; in <part of the frame>; silent <N> s`), never text from the
+// machine. At most 200
 // characters in all, which is what the site keeps of a reason.
 inline constexpr const char* kSentinelReasonCrash =
     "sentinel: crash exit code, no report from the process";
@@ -93,6 +95,17 @@ struct PhaseLabel {
 // was going on (a plugin load, a radio open) while the application was up.
 PhaseLabel sentinelPhaseLabel(const breadcrumb::Snapshot& b);
 
+// The part of the frame the window's thread was in (a name from
+// core/frame_timing.hpp's closed list: "rail", "plugin-panels", ...), or nullptr
+// when the page has none that means anything: the frame loop was not turning, no
+// frame had begun, or the number is not one this build knows.
+const char* sentinelFrameScopeName(const breadcrumb::Snapshot& b);
+
+// Was a PERSON holding the frame loop - a window being dragged or resized, an
+// open menu, a prompt of the operating system's being read? Then a silent
+// heartbeat is not a freeze. True only while the frame loop is turning.
+bool sentinelUserPaced(const breadcrumb::Snapshot& b);
+
 // A crash EXIT CODE: a Windows exception or NTSTATUS error (top nibble 8, C or E)
 // other than STATUS_CONTROL_C_EXIT, which is a request to end and not a fault.
 // Anything else - 1 from taskkill, -1 from Stop-Process, 0 - is not.
@@ -122,7 +135,7 @@ struct SentinelVerdict {
     std::string reason;         // the whole `reason:` line value; empty for None
     unsigned long code = 0;     // the exit code (0 when not known)
     bool codeKnown = false;
-    std::string signatureTag;   // hashed with the code: "sentinel:<class>:<phase>"
+    std::string signatureTag;   // hashed with the code: "sentinel:<class>:<phase>[:<scope>]"
     std::int64_t silentMs = -1; // how long the heartbeat had been silent; -1 unknown
     PhaseLabel phase{"unknown", "unknown"};
     bool write() const { return cls != SentinelClass::None; }

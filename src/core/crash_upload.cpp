@@ -5,6 +5,7 @@
 #include "core/crash_upload.hpp"
 
 #include "core/diag_log.hpp"
+#include "core/frame_timing.hpp"
 #include "core/sentinel.hpp"
 
 #include <algorithm>
@@ -200,6 +201,7 @@ bool parseReportText(const std::string& text, ParsedReport& out) {
     enum class Section { Header, Context, Process, Modules, Stack, Log, Ignore };
     Section section = Section::Header;
     std::string addressText;
+    std::string frameScopeText;
     bool sawKind = false;
 
     for (const std::string& raw : lines) {
@@ -263,6 +265,10 @@ bool parseReportText(const std::string& text, ParsedReport& out) {
                 } else if (k == "code") {
                     // The exception code, e.g. 0xC0000005, verbatim.
                     out.code = v;
+                } else if (k == "frame-scope") {
+                    // A freeze report's own line (0.99.64). Kept aside until the
+                    // kind is known - see below, where it becomes the reason.
+                    frameScopeText = v;
                 }
                 // thread, stalled-ms, threshold-ms and threads are
                 // deliberately not carried: the rest is either in the stack
@@ -339,6 +345,21 @@ bool parseReportText(const std::string& text, ParsedReport& out) {
     // false and would send whoever read the sidecar looking for a corruption
     // bug that is not there.
     if (out.kind != "crash" && out.kind != "hang" && out.kind != "stall") { return false; }
+
+    // A FREEZE'S REASON IS WHERE THE FRAME WAS (0.99.64). A freeze report has no
+    // `reason:` line; it has `frame-scope:`, the part of the frame the window's
+    // thread was stalled in. That goes up in the field the receiving end already
+    // has for "what went wrong, in words", as one fixed sentence ending in a name
+    // from the frame timer's closed list - and ONLY such a name: a line that says
+    // anything else (a report edited by hand, a later build's scope this one does
+    // not know) is dropped, never forwarded, so this field cannot be made to
+    // carry text from the machine.
+    if (out.kind == "hang" && out.reason.empty() && !frameScopeText.empty()) {
+        FrameScope scope = FrameScope::Other;
+        if (frameScopeFromName(frameScopeText.c_str(), scope)) {
+            out.reason = std::string(kFreezeReasonPrefix) + frameScopeName(scope);
+        }
+    }
 
     auto lookup = [&out](const std::string& name) -> std::string {
         for (const auto& kv : out.modules) {

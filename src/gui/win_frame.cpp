@@ -33,6 +33,9 @@ CaptionLayout g_layout;
 // so it is atomic rather than a plain unsigned. See displayChangeCount().
 std::atomic<unsigned> g_displayChanges{0};
 
+// How many modal window loops have started (0.99.64). See modalLoopCount().
+std::atomic<unsigned> g_modalLoops{0};
+
 #ifdef _WIN32
 HWND g_hwnd = nullptr;
 WNDPROC g_previous = nullptr;
@@ -58,6 +61,23 @@ LRESULT CALLBACK frameProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         // the reports it sends (core/sentinel.hpp, class Session). Nothing is
         // handled here: GLFW and the backend still get the message.
         if (wParam != 0) { core::breadcrumb::noteSessionEnding(); }
+        break;
+    case WM_ENTERSIZEMOVE:
+    case WM_ENTERMENULOOP:
+        // COUNTED AND PASSED ON. See modalLoopCount() in the header: these are
+        // sent from INSIDE the operating system's own loop, which does not return
+        // until the person lets go of the window or closes the menu.
+        g_modalLoops.fetch_add(1u, std::memory_order_relaxed);
+        // AND TOLD TO THE SENTINEL (core/breadcrumb.hpp, kUserPaced): from here
+        // until the loop ends the window draws nothing and nothing is wrong, so
+        // an ending in that time is not "the window had stopped drawing".
+        core::breadcrumb::setActivity(core::breadcrumb::kUserPaced, true);
+        break;
+    case WM_EXITSIZEMOVE:
+    case WM_EXITMENULOOP:
+        // The person has let go. Not counted - modalLoopCount() counts loops, and
+        // one loop is one ENTER - and passed on like the rest.
+        core::breadcrumb::setActivity(core::breadcrumb::kUserPaced, false);
         break;
     case WM_NCHITTEST: {
         // THE FRAME ANSWERS FIRST. The window keeps a real, if invisible,
@@ -288,6 +308,8 @@ void setCaptionLayout(const CaptionLayout& layout) { g_layout = layout; }
 CaptionLayout captionLayout() { return g_layout; }
 
 unsigned displayChangeCount() { return g_displayChanges.load(std::memory_order_relaxed); }
+
+unsigned modalLoopCount() { return g_modalLoops.load(std::memory_order_relaxed); }
 
 void* nativeHandle(GLFWwindow* window) {
 #ifdef _WIN32

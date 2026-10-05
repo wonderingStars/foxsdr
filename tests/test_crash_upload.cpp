@@ -33,6 +33,7 @@
 
 #include "core/breadcrumb.hpp"
 #include "core/crash_upload.hpp"
+#include "core/frame_timing.hpp"
 #include "core/sentinel.hpp"
 #include "test_check.hpp"
 
@@ -790,6 +791,59 @@ int main() {
         CHECK(hj.contains("context"));
         CHECK(hj["context"].value("uptimeSec", 99ull) == 0ull);
         CHECK(hj["context"].value("faultThreadOwn", std::string("x")).empty());
+    }
+
+    // --- A freeze's reason is the part of the frame it was in (0.99.64) ------
+    //
+    // The freeze writer's `frame-scope:` line goes up as the reason, as ONE fixed
+    // sentence ending in a name from the frame timer's closed list - and nothing
+    // that is not such a name is ever forwarded, because the reason is shown to
+    // whoever reads the report and this line is read back off a file on disk.
+    {
+        auto withScope = [](const std::string& line) {
+            std::string text = hangReportText();
+            const std::string anchor = "threads: 2\n";
+            const std::size_t at = text.find(anchor);
+            CHECK(at != std::string::npos);
+            if (at != std::string::npos) { text.insert(at + anchor.size(), line); }
+            return text;
+        };
+        ParsedReport r;
+        CHECK(parseReportText(withScope("frame-scope: rail\n"), r));
+        CHECK(r.kind == "hang");
+        CHECK(r.reason == "freeze: the frame was in rail");
+        CHECK(r.reason.rfind(kFreezeReasonPrefix, 0) == 0);
+        const nlohmann::json j = parseOrEmpty(uploadJson(r, std::string()));
+        CHECK(j.value("reason", std::string()) == "freeze: the frame was in rail");
+        // Everything else about the report is as it was without the line.
+        CHECK(r.signature == "FEDCBA9876543210" && r.threads.size() == 2 && r.code.empty());
+
+        // Every name the timer has is accepted, and comes back as itself.
+        for (int i = 0; i < kFrameScopeCount; ++i) {
+            ParsedReport each;
+            CHECK(parseReportText(
+                withScope(std::string("frame-scope: ") + kFrameScopeNames[i] + "\n"), each));
+            CHECK(each.reason == std::string(kFreezeReasonPrefix) + kFrameScopeNames[i]);
+        }
+
+        // Anything that is not one of those names is dropped, not forwarded.
+        for (const char* bad : {"frame-scope: C:\\Users\\someone\\secret.wav\n",
+                                "frame-scope: rail; tuned to 145.500 MHz\n", "frame-scope: Rail\n",
+                                "frame-scope: \n", "frame-scope: rail extra\n"}) {
+            ParsedReport dropped;
+            CHECK(parseReportText(withScope(bad), dropped));
+            CHECK(dropped.kind == "hang");
+            CHECK(dropped.reason.empty());
+        }
+
+        // A crash report's reason is its own line; a stray frame-scope line in a
+        // crash header changes nothing.
+        std::string crash = "kind: crash\nreason: access violation\nframe-scope: rail\n"
+                            "code: 0xC0000005\nsignature: 0123456789ABCDEF\n"
+                            "--- context ---\nversion: 0.99.64\n";
+        ParsedReport c;
+        CHECK(parseReportText(crash, c));
+        CHECK(c.reason == "access violation");
     }
 
     // --- Rubbish is refused rather than posted ------------------------------

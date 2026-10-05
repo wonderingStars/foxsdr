@@ -872,8 +872,12 @@ const std::vector<std::string>& hangReportFieldNames() {
     // another fails the both-ways comparison for every report of the other
     // kind, which is how a report with nothing wrong with it would start
     // failing the suite.
-    static const std::vector<std::string> names = {"kind",      "note",     "stalled-ms",
-                                                   "threshold-ms", "signature", "threads"};
+    // `frame-scope` (0.99.64) is the part of the frame the stalled thread was in,
+    // one word from core/frame_timing.hpp's closed list, and is always written
+    // for the same reason `note` is.
+    static const std::vector<std::string> names = {"kind",         "note",      "stalled-ms",
+                                                   "threshold-ms", "signature", "threads",
+                                                   "frame-scope"};
     return names;
 }
 

@@ -1191,6 +1191,176 @@ state it draws from is), the web page does not show a start in progress (its
 button reads Record until the file is open, and a Record sent in the meantime
 is ignored), and no real slow disk was involved.
 
+### Slow frames: where the window's time went (0.99.64)
+
+Every freeze reported from the field in the weeks before this was something slow
+on the thread that draws the window - a recording's file being created, plugin
+file sizes read every frame, a settings folder looked in once a second, a plugin
+reload. The only detector was the hang watchdog, which fires at five seconds and
+then needs a stack walk and symbol maps to say where the thread was. A frame that
+takes 300 ms is the same bug at an earlier stage, is far more common, and left no
+trace at all. `core/frame_timing.hpp` measures it: how long each frame took and,
+for the slow ones, which part of the frame the time went in, in fixed words and
+without a stack. The aim is to find a freeze while it is still a stutter.
+
+**What is measured.** Each pass of the frame loop is timed from its top to its
+bottom with a steady clock. Inside the frame a fixed set of named **scopes** is
+timed with an RAII guard (`FrameScopeGuard`: two clock reads and an add, no
+allocation, no lock, no formatting). The time inside no scope is the scope
+`other`, so the scopes always add up to the frame. A scope's time is
+**exclusive**: time spent in a scope opened inside it belongs to the inner one,
+which is what lets the recording and the plugin reload be scopes of their own
+wherever they were called from.
+
+| Scope | What is in it |
+|---|---|
+| `events` | the operating system's message pump (`glfwPollEvents`) |
+| `frame-start` | a pending theme, language or scale (a font rebuild), both backends' new-frame work, a bounded run's scripted input (its `sleep` step lands here), `ImGui::NewFrame` |
+| `pre-draw` | the start of `drawUi`: key bindings, the web server's and the plugins' requests, the snapshots published for them, the transmitter's tick |
+| `plugin-panels` | the plugins' own windows: maps, pictures, instruments, decoder output |
+| `toolbar` | the cabinet, its rail and the top bar |
+| `rail` | the menu column |
+| `spectrum` | the receiver's centre: spectrum, waterfall, and the radar scope that replaces them |
+| `patch` | the patch page |
+| `status` | the status column |
+| `dialogs` | the dialogs and menus drawn at the top level |
+| `polls` | the once-a-frame polls of workers and files (sources, sound, updates, the catalogue, telemetry, the tester link) and the scanner and airband drivers |
+| `saves` | deferred saves: bookmarks, markers and the settings file |
+| `render` | `ImGui::Render`, the GL draw, the torn-off windows' own draw |
+| `present` | `glfwSwapBuffers` - on a vsynced window, mostly waiting for the display |
+| `recorder` | starting, stopping and arming a recording (nested: counted here whatever called it) |
+| `plugins-reload` | unloading every plugin and loading them again (nested, likewise) |
+| `startup` | the first 30 frames, see below |
+| `user-wait` | time a person set the pace of; never counted, see below |
+| `other` | everything not inside any of the above |
+
+**Tiers.** A frame is slow from **250 ms** (fifteen missed frames on a 60 Hz
+display, a hitch anybody sees), and is counted once, in the highest of three
+tiers it reached - 250 ms to under 1 s, 1 s to under 5 s, **5 s or more** (the
+hang watchdog's own threshold; `tests/test_frame_timing.cpp` holds the two
+equal) - against the scope that took the most of it: a table `[scope][tier]`.
+`recorder 2/0/0, plugins-reload 0/1/0` is two stutters in the recorder and one
+freeze of a plugin reload. Where 250 ms comes from: scripted runs of the
+unmodified window on the development desktop (vsynced frames of about 8.3 ms;
+median 8.0 ms and mean 8.3 ms a frame before this change and after it) recorded
+no slow frame in about 10,000 frames across the receiver, the rail's five banks
+and the patch page. The longest frame of nearly every run was 10 to 30 ms; two
+runs, made while other work was loading the machine, had one of about 95 ms and
+one of about 100 ms, both in `render`. A frame that is merely busy is nowhere near
+250 ms; this is a measurement of one machine, and the numbers are in the log of
+whoever reads them next (`cascade: frame timing:`, below).
+
+**Where it is written.**
+
+- The **log**: one line per scope per 30 seconds at most, so a hitch that repeats
+  every second cannot push the rest of the log out of its 256 lines; the ones it
+  did not write are counted in the next it does. `frame: 412 ms, 388 ms of it in
+  rail` - a warning from a second up. A start-up frame names its largest part:
+  `frame: 313 ms, 313 ms of it in startup; largest part: rail 308 ms`, and a
+  line that follows suppressed ones says so: `...; 2 more slow frames in it not
+  logged`. At exit, once, if anything was recorded: `frame: slow frames this
+  session - recorder 2/0/0, plugins-reload 0/1/0 (250 ms to 1 s / 1 s to 5 s / 5
+  s or more, by scope)`. Fixed words and numbers only - never a plugin's name, a
+  file, a path, a frequency or a device.
+- The **diagnostics bundle** (Copy diagnostics, and what a bug report attaches):
+  one line, `slow-frames: recorder 2/0/0, plugins-reload 0/1/0`, or `none`. It is
+  listed in PRIVACY.md's table and compared with it, both ways, by
+  `tests/test_diagnostics.cpp`. It is added to the bundle by
+  `AppWindow::currentDiagnosticsBundle` after the builder returns
+  (`withSlowFramesField`) and inventoried by `frameBundleFieldNames()`, **not**
+  in `buildDiagnosticsBundle` and `bundleFieldNames()`: that is the report
+  format, which was being changed elsewhere when this was written, and it keeps
+  the line out of the context block a crash or freeze report is written from. When
+  that work lands the line can move into the builder and the test drop its union.
+- **A freeze report names the scope.** `currentFrameScope()` is one atomic the
+  frame loop keeps current and any thread may read without a lock; the watchdog
+  reads it when it files a report and writes `frame-scope: rail` in the header
+  (both writers; inventoried in `hangReportFieldNames()`, PRIVACY.md and
+  `tests/test_diag_hang.cpp`). The GUI thread is stalled, so what the watchdog
+  thread reads is where it stopped. The uploader sends it as the freeze's
+  `reason` - `freeze: the frame was in rail` (`kFreezeReasonPrefix`) - and only
+  when the word is one of the timer's own names: a `frame-scope` line that says
+  anything else is dropped, not forwarded (`tests/test_crash_upload.cpp`). So a
+  freeze says which part of the frame held the window before anyone has found a
+  symbol map.
+- **So does the sentinel.** The process's own timer (and no timer a test builds)
+  writes the scope into the sentinel's breadcrumb at every change, as a number;
+  see *The sentinel*, *The breadcrumb*.
+- `slowFrameCounts()` is a snapshot of the table, for the usage record.
+- A bounded `--frames` run prints one more line at its end, like the worst frame
+  gap: `cascade: frame timing: 150 frames, mean 8.40 ms, longest 29.6 ms (in
+  frame-start), 27.1 scope switches a frame; slow frames: none; slow frames not
+  counted: 0`.
+
+**What is not counted, and why.**
+
+- **A window nobody can see, and a display being changed** - the frames
+  `PresentGrace` calls not expected to present. The driver's present call can stall
+  for seconds then and nothing in this program is wrong. The stall a display change
+  causes is in the swap that comes **before** the window procedure delivers the
+  message that says the display changed, so a slow frame is held for one frame
+  before it is counted and the next frame's first look at the window drops it.
+- **A person's time.** The hang watchdog separates its two kinds of pause by who
+  paces what is waited for, and this follows it. The **user-paced** pause (the
+  shell-open bracket: somebody reading an elevation or SmartScreen prompt) is the
+  scope `user-wait`, subtracted from the frame and from every scope. So is a
+  **modal window loop** - dragging or resizing the window, or the rail's system
+  menu - which runs inside `glfwPollEvents` and ends when the person lets go; the
+  window procedure counts the messages that start one (`WM_ENTERSIZEMOVE`,
+  `WM_ENTERMENULOOP`, `frame::modalLoopCount()`) and the frame loop moves the
+  pump's time to `user-wait` when the count moved across it. An
+  **application-paced** pause is code that is expected to finish, and it excuses
+  the **watchdog**, not the frame: a plugin reload under its `WatchdogPause` is
+  exactly the freeze this is for, so it counts as `plugins-reload`. The audio and
+  microphone opens, which wait on the window's thread for up to a bound under the
+  same kind of pause, are counted too, in the scope of the code that asked for
+  them: `polls` for the sound watchdog's reopen of a dead stream, `rail` for a
+  device picked in the Sinks section.
+- **The computer asleep.** On Windows `steady_clock` is
+  `QueryPerformanceCounter`, which keeps counting through a suspend (measured:
+  read beside `QueryUnbiasedInterruptTime` on a Windows 11 desktop the two differed
+  by exactly the time it had spent asleep). A slow frame whose two clocks differ by
+  more than a second was spanning a suspend and is dropped.
+- **Start-up is not dropped; it is its own scope.** The first 30 frames (the
+  watchdog's `kStartupFrames`) are known from the field to be able to be long - an
+  Intel GL driver compiling its shaders, a font atlas, the first plugin pages -
+  and a slow one is credited to `startup` with its largest part named. On the
+  development desktop they are not slow. What happens **before** the first frame
+  (creating the window, the plugin scan) is not a frame and is not measured here.
+
+**What the numbers can and cannot tell you.** They say which part of the frame was
+slow for how long, on the thread that draws the window: a stutter in `rail` is
+something the rail's drawing or the functions it calls waited for, and nothing
+more specific than that - not which section, which plugin, which file. `present`
+is mostly the display and the driver. `other` is time in no scope, which means a
+part of the frame has no scope yet: add one. A slow frame is a measurement of
+the **wall clock**: a machine that is busy with something else, or a thread the
+scheduler did not run, is a slow frame in whichever scope it happened in. The table
+counts frames and says nothing about the frames that were not slow, and it is for
+this session only. It does not see work on other threads - which is the point of
+moving work off the window's thread - so a recording whose file takes ten seconds
+to open on a worker is not a slow frame, and the 5 s tier is not the watchdog's
+(it excuses; this does not, except for the cases above).
+
+**What it costs.** 28 ns a guard and 0.67 µs for a whole frame of 24 guards, on the
+development desktop, with the real clock (`tests/test_frame_timing.cpp` prints the
+figures and fails above 100 µs a frame); a frame is 8 to 16 ms. The window makes 27
+scope switches a frame (26 on the patch page). Frame pacing is unchanged: the same
+scripted run, 400 frames, eleven times with this change and eleven without, had a
+median of 8.00 ms every time and a mean of 8.29 to 8.32 ms in every run but two - the
+two with the single frame of about 100 ms in `render` above, 8.5 ms.
+
+**The test hooks** (bounded `--frames` runs only, like every other hook here).
+`FOXSDR_FRAME_STALL="rail=300@45,polls=200@50"` holds the loop for the
+milliseconds inside the named scope at the frame, so every scope can be made
+slow in the real window and found. `FOXSDR_FRAME_SITUATION="hidden@40-60,display@100,modal@80"`
+plays an iconified window, a display change and a modal loop into the code the
+real events reach. `tests/test_slow_frames_app.cpp` runs the real application
+with them, a script's `sleep` (its scope is `frame-start`) and `--diag-stall`
+(after the last scope: `other`), and, in process, a real plugin reload made slow
+through the plugins folder's signature read and a shell call through the real
+watchdog bracket.
+
 ### What a plugin playing sound writes (0.93.0)
 
 A plugin holding `CASCADE_CAP_AUDIO_OUT` **replaces** the demodulated audio
@@ -2195,7 +2365,7 @@ that stage reached - the same fact the unclean-exit counter reads, per process.
 `src/core/breadcrumb.hpp`. 64 bytes, one cache line, natural alignment, plain
 integers accessed through `std::atomic_ref`. **Only enumerated or numeric values;
 no string of any kind**, so it cannot hold a name, a path, a frequency or an
-address - the 12 reserved bytes are asserted zero after every writer has run, and
+address - the 8 reserved bytes are asserted zero after every writer has run, and
 the layout is pinned offset by offset in `tests/test_sentinel.cpp`.
 
 | Offset | Size | Field | Meaning |
@@ -2207,9 +2377,10 @@ the layout is pinned offset by offset in `tests/test_sentinel.cpp`.
 | 24 | 8 | `frames` | heartbeats so far |
 | 32 | 8 | `phaseMs` | steady-clock ms when `phase` last changed |
 | 40 | 4 | `phase` | a `Phase` (below) |
-| 44 | 4 | `activity` | bits: `1` a radio is being opened, `2` plugins are being (re)loaded |
+| 44 | 4 | `activity` | bits: `1` a radio is being opened, `2` plugins are being (re)loaded, `4` a person is holding the frame loop (a window drag or resize, an open menu) |
 | 48 | 4 | `flags` | bits: `1` Windows said the session is ending, `2` reports are off |
-| 52 | 12 | reserved | zero |
+| 52 | 4 | `frameScope` | which part of the frame the GUI thread is in: `core::FrameScope` + 1, `0` before any frame |
+| 56 | 8 | reserved | zero |
 
 The phases are stages the code **really has**, set at the line that begins each
 (`main()`, `AppWindow::run`): 1 *starting* (main, before the application object),
@@ -2223,6 +2394,25 @@ exit marker*, 10 *closing the window* (GL/GLFW teardown), 11 *after shutdown*. A
 radio open and a plugin load overlap the main sequence instead of following it, so
 they are **activity bits** that refine the phase in the report (`opening a radio`,
 `reloading plugins`, and `loading plugins` while the first load runs).
+
+**Where the frame was.** `frameScope` is written by the frame timer
+(`core/frame_timing.hpp`, *Slow frames* above) at every change of scope - one more
+relaxed store in a path that already made one - and only by the process's own
+timer. While the phase is *running* the report names it: `; in rail` in the
+reason, and `:rail` at the end of what the signature is hashed from, so two
+endings in different parts of the frame are two groups. Outside *running* it is
+ignored (before the first frame there is none; after the loop has ended the last
+one written is history), and a number that is not one of the timer's nineteen is
+named as nothing: the name comes from a table, never from the page.
+
+**Who was holding it.** The third activity bit is raised by the window procedure
+on `WM_ENTERSIZEMOVE` and `WM_ENTERMENULOOP` and cleared on the matching `WM_EXIT`
+message (`gui/win_frame.cpp`) - and cleared by the next heartbeat whatever became
+of that message, because a frame drawn to the end is proof that nobody is holding
+the loop. The shell-open bracket (a prompt of the operating system's being read)
+needs no bit: the frame timer already calls it the scope `user-wait`. Either one
+makes the phase read `held by the user` and, below, keeps a long silence from
+being called a freeze.
 
 **The heartbeat is the watchdog's.** `HangWatchdog::heartbeat`, called once per
 drawn frame, now also calls `breadcrumb::beat()`, so "the window had not drawn for
@@ -2249,8 +2439,12 @@ row and boundary in `tests/test_sentinel.cpp`):
 5. It ended **before the first frame** (phase before *running*) -> *startup*, sent,
    whatever the exit code.
 6. A **crash exit code** the handler never saw -> *crash*, sent.
-7. The heartbeat had been **silent for longer than the watchdog's own threshold**
-   -> *frozen*, sent.
+7. The heartbeat had been **silent for longer than the watchdog's own threshold**,
+   and **nobody was holding the window** -> *frozen*, sent. A drag, a resize, an
+   open menu or a prompt being read stops the frame loop for as long as the
+   person likes; the watchdog excuses each (its rule 2 and its user-paced pause)
+   and so does this. A plugin reload or a radio open that never came back is not
+   excused: the application set that pace, and that silence is the freeze.
 8. Anything else -> *outside*, kept here.
 
 The "freeze threshold" is read from `HangWatchdog`'s own constants, so the two
@@ -2507,10 +2701,15 @@ them - could leave a local-only *outside* report; that is the safe direction.
 - It decides at the moment of death from a page of numbers, so it cannot say *which*
   plugin or radio; only that one was being loaded or opened.
 - A *frozen* class is a silence longer than the threshold at the moment the application
-  ended. A window held in a modal move/size loop for minutes and then ended would be
-  called frozen; the watchdog's other excuses (a pause, `win32u.dll`) are not mirrored. The
-  cost of being wrong is one upload-eligible report with the silence in it, which the
-  per-signature, five-a-day limits already bound.
+  ended, with nobody holding the window (above). Two of the watchdog's excuses are not
+  mirrored: an attached debugger, and its rule 2c (a GUI thread parked in `win32u.dll`
+  outside the two modal loops the window procedure is told about). An application ended
+  in either state after a long silence is called frozen. The cost of being wrong is one
+  upload-eligible report with the silence in it, which the per-signature, five-a-day
+  limits already bound.
+- The held-window bit is told by window messages, which exist on Windows only. Linux has
+  no such loop (GLFW's own loop never hands control to the window manager), and the
+  shell-open bracket is the scope `user-wait` on both.
 
 ### Where it is tested
 

@@ -30,6 +30,7 @@
 #include "core/crash_handler.hpp"
 #include "core/diag_log.hpp"
 #include "core/diag_report.hpp"
+#include "core/frame_timing.hpp"
 #include "core/version.hpp"
 #include "test_check.hpp"
 
@@ -1122,8 +1123,29 @@ int main() {
         in.logLinesTotal = 4011;
         in.sdrPlayService = "stopped, manual start (SDRplayAPIService)";
 
-        const std::string bundle = buildDiagnosticsBundle(in);
+        // THE BUNDLE AS THE WINDOW MAKES IT (0.99.64): the builder's text with the
+        // slow-frame line added by the function AppWindow::currentDiagnosticsBundle
+        // calls (core/frame_timing.hpp). Its field is inventoried by
+        // frameBundleFieldNames(), not by bundleFieldNames() - the report format
+        // that owns the latter was being changed elsewhere - and the comparisons
+        // below take the UNION of the two lists.
+        SlowFrameCounts slowFrames;
+        slowFrames.count[static_cast<int>(FrameScope::Recorder)][0] = 2;
+        slowFrames.count[static_cast<int>(FrameScope::PluginsReload)][1] = 1;
+        const std::string builderBundle = buildDiagnosticsBundle(in);
+        const std::string bundle = withSlowFramesField(builderBundle, slowFramesText(slowFrames));
         CHECK(!bundle.empty());
+        // The line, by value, in the exact form the inventory parses, and inside
+        // the header block - before the log, where the other lines are.
+        CHECK(bundle.find("\nslow-frames: recorder 2/0/0, plugins-reload 0/1/0\n") !=
+              std::string::npos);
+        CHECK(bundle.find("\nslow-frames: ") < bundle.find("--- log ---"));
+        // A session with none says so rather than leaving the line out.
+        CHECK(withSlowFramesField(builderBundle, slowFramesText(SlowFrameCounts{}))
+                  .find("\nslow-frames: none\n") != std::string::npos);
+        // The builder itself knows nothing of it: the line is not in the context
+        // block a crash report is written from.
+        CHECK(builderBundle.find("slow-frames") == std::string::npos);
         // THE SDRPLAY SERVICE LINE (0.99.55), by value: the one fact a
         // "my RSP will not open" report needs first, pinned in the exact
         // "name: value" form the inventory below parses.
@@ -1155,6 +1177,8 @@ int main() {
         // claims but the bundle stopped emitting.
         std::set<std::string> declared(bundleFieldNames().begin(), bundleFieldNames().end());
         CHECK(!declared.empty());
+        for (const std::string& n : frameBundleFieldNames()) { declared.insert(n); }
+        CHECK(declared.count("slow-frames") == 1);
         std::set<std::string> emitted;
         std::size_t pos = 0;
         const std::size_t logStart = bundle.find("--- log ---");

@@ -104,6 +104,12 @@ namespace cascade::core {
 // second in-memory copy of the fault, because the fault happened in a process
 // that no longer exists - and a second representation would be a second thing
 // to keep in step with crash_handler.cpp and hang_watchdog.cpp.
+
+// What an uploaded FREEZE's `reason` begins with (0.99.64); the part of the frame
+// follows it, one name from core/frame_timing.hpp's closed list. Fixed, so the
+// receiving end can tell it from a crash's reason by its first word.
+inline constexpr const char* kFreezeReasonPrefix = "freeze: the frame was in ";
+
 struct ReportFrame {
     std::string module;   // "cascade.exe", or empty when the address resolved
                           // to no module the snapshot knew about
@@ -128,8 +134,10 @@ struct ParsedReport {
     // separate an ABSORBED vendor fault (the guard filed the report and the
     // process continued — reason says so) from a process death at the same
     // address; dropping them made the two identical on the dashboard, which
-    // is how a survived teardown fault reopened a fixed signature. Hang
-    // reports have neither line, so both stay empty for a hang.
+    // is how a survived teardown fault reopened a fixed signature. A hang
+    // report has neither line: its `code` stays empty, and its `reason` is
+    // kFreezeReasonPrefix followed by the report's `frame-scope:` word when that
+    // is one of the frame timer's names (0.99.64), else empty.
     std::string reason;
     std::string code;
     std::string version;

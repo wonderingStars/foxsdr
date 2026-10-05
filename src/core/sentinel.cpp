@@ -21,6 +21,7 @@
 #include "core/diag_history.hpp"
 #include "core/diag_log.hpp"
 #include "core/diag_report.hpp"
+#include "core/frame_timing.hpp"
 #include "core/hang_watchdog.hpp"
 #include "core/telemetry.hpp"
 #include "core/version.hpp"
@@ -96,6 +97,9 @@ PhaseLabel sentinelPhaseLabel(const breadcrumb::Snapshot& b) {
             return {"opening-radio", "opening a radio"};
         }
     }
+    // Last of the three, because it is the least about the program: somebody was
+    // holding the window, or reading a prompt.
+    if (sentinelUserPaced(b)) { return {"user-held", "held by the user"}; }
     switch (b.phase) {
         case Phase::Starting: return {"starting", "starting"};
         case Phase::BuildingApp: return {"building-app", "building the application"};
@@ -115,6 +119,24 @@ PhaseLabel sentinelPhaseLabel(const breadcrumb::Snapshot& b) {
         case Phase::Unset: break;
     }
     return {"unknown", "unknown"};
+}
+
+const char* sentinelFrameScopeName(const breadcrumb::Snapshot& b) {
+    // Only while the frame loop is turning: before the first frame there is no
+    // scope, and after the loop has ended the last one written is history.
+    if (!b.valid || b.phase != breadcrumb::Phase::Running) { return nullptr; }
+    if (b.frameScope == 0 || b.frameScope > static_cast<std::uint32_t>(kFrameScopeCount)) {
+        return nullptr;
+    }
+    return kFrameScopeNames[b.frameScope - 1];
+}
+
+bool sentinelUserPaced(const breadcrumb::Snapshot& b) {
+    if (!b.valid || b.phase != breadcrumb::Phase::Running) { return false; }
+    // A modal window loop (the window procedure says so), or the shell-open
+    // bracket, which the frame timer knows as the scope user-wait.
+    if ((b.activity & breadcrumb::kUserPaced) != 0) { return true; }
+    return b.frameScope == static_cast<std::uint32_t>(FrameScope::UserWait) + 1u;
 }
 
 bool isCrashLikeExitCode(unsigned long code) {
@@ -192,7 +214,14 @@ SentinelVerdict decideSentinel(const SentinelFacts& f) {
     } else if (f.exitKnown && (isCrashLikeExitCode(f.exitCode) || f.exitCode == 0)) {
         c = SentinelClass::Crash;
     } else if (b.valid && v.silentMs >= 0 &&
-               static_cast<std::uint64_t>(v.silentMs) > sentinelFreezeThresholdMs(b)) {
+               static_cast<std::uint64_t>(v.silentMs) > sentinelFreezeThresholdMs(b) &&
+               // SILENT BECAUSE SOMEBODY WAS HOLDING IT IS NOT FROZEN. A window
+               // being dragged, an open menu, a prompt being read: the frame loop
+               // is stopped for as long as the person likes and the freeze
+               // watchdog excuses it for exactly that reason (its rule 2 and its
+               // user-paced pause). Ended from outside in that state, the
+               // application was healthy, and the report stays on the machine.
+               !sentinelUserPaced(b)) {
         c = SentinelClass::Frozen;
     }
     // A freeze the watchdog already filed, and the process then ended without
@@ -206,10 +235,17 @@ SentinelVerdict decideSentinel(const SentinelFacts& f) {
     std::string reason = sentinelClassReason(c);
     reason += " - " + sentinelExitWords(f.exitKnown, f.exitCode);
     reason += std::string("; phase ") + v.phase.words;
+    // WHICH PART OF THE FRAME, from the frame timer's closed list of names
+    // (core/frame_timing.hpp): the nearest thing to a stack this report can have.
+    const char* scope = sentinelFrameScopeName(b);
+    if (scope != nullptr) { reason += std::string("; in ") + scope; }
     if (v.silentMs >= 0) { reason += "; silent " + std::to_string(v.silentMs / 1000) + " s"; }
     if (reason.size() > 200) { reason.resize(200); }  // what the site keeps of a reason
     v.reason = std::move(reason);
     v.signatureTag = std::string("sentinel:") + sentinelClassId(c) + ":" + v.phase.id;
+    // Two freezes in different parts of the frame are different bugs, and so are
+    // two crashes: the scope is part of what groups them.
+    if (scope != nullptr) { v.signatureTag += std::string(":") + scope; }
     return v;
 }
 

@@ -45,6 +45,7 @@
 #include "core/crash_handler.hpp"
 #include "core/crash_upload.hpp"
 #include "core/diag_history.hpp"
+#include "core/frame_timing.hpp"
 #include "core/hang_watchdog.hpp"
 #include "core/sentinel.hpp"
 #include "test_check.hpp"
@@ -278,7 +279,8 @@ int main() {
         CHECK(rt<std::size_t>(offsetof(Block, phase)) == 40);
         CHECK(rt<std::size_t>(offsetof(Block, activity)) == 44);
         CHECK(rt<std::size_t>(offsetof(Block, flags)) == 48);
-        CHECK(rt<std::size_t>(offsetof(Block, reserved)) == 52);
+        CHECK(rt<std::size_t>(offsetof(Block, frameScope)) == 52);
+        CHECK(rt<std::size_t>(offsetof(Block, reserved)) == 56);
         CHECK(rt(std::is_standard_layout_v<Block>) && rt(std::is_trivially_copyable_v<Block>));
         CHECK(rt(breadcrumb::kMagic) == 0x43425846u);  // "FXBC" little-endian
         CHECK(rt(breadcrumb::kLayout) == 1u);
@@ -296,6 +298,12 @@ int main() {
               rt(static_cast<unsigned>(Phase::Finished)) == 11);
         CHECK(rt(breadcrumb::kLastPhase) == 11u);
         CHECK(rt<std::uint32_t>(breadcrumb::kOpeningRadio) == 1u && rt<std::uint32_t>(breadcrumb::kReloadingPlugins) == 2u);
+        CHECK(rt<std::uint32_t>(breadcrumb::kUserPaced) == 4u && rt<std::uint32_t>(breadcrumb::kAllActivity) == 7u);
+        // The frame scope is written as FrameScope + 1, and the watcher names it
+        // from the frame timer's own table: the numbers the two share are pinned
+        // here, at the two ends and at the one the decision reads.
+        CHECK(rt(static_cast<int>(FrameScope::Events)) == 0 && rt(static_cast<int>(FrameScope::UserWait)) == 17 &&
+              rt(static_cast<int>(FrameScope::Other)) == 18 && rt(kFrameScopeCount) == 19);
         CHECK(rt<std::uint32_t>(breadcrumb::kFlagSessionEnding) == 1u && rt<std::uint32_t>(breadcrumb::kFlagReportsOff) == 2u);
     }
 
@@ -343,6 +351,48 @@ int main() {
         breadcrumb::setActivity(breadcrumb::kOpeningRadio, false);
         CHECK(breadcrumb::read(&blk).activity == 0);
 
+        // SOMEBODY IS HOLDING THE WINDOW: raised by the window procedure, cleared
+        // by it - and cleared by the next heartbeat whatever became of the message
+        // that should have, because a frame drawn to the end proves nobody is.
+        breadcrumb::setActivity(breadcrumb::kUserPaced, true);
+        CHECK(breadcrumb::read(&blk).activity == breadcrumb::kUserPaced);
+        breadcrumb::setActivity(breadcrumb::kUserPaced, false);
+        CHECK(breadcrumb::read(&blk).activity == 0);
+        breadcrumb::setActivity(breadcrumb::kUserPaced, true);
+        breadcrumb::setActivity(breadcrumb::kOpeningRadio, true);
+        breadcrumb::beat();
+        CHECK(breadcrumb::read(&blk).activity == breadcrumb::kOpeningRadio);  // only its own bit
+        breadcrumb::setActivity(breadcrumb::kOpeningRadio, false);
+
+        // The part of the frame: a number, kept as written.
+        CHECK(breadcrumb::read(&blk).frameScope == 0u);
+        breadcrumb::setFrameScope(static_cast<std::uint32_t>(FrameScope::Rail) + 1u);
+        CHECK(breadcrumb::read(&blk).frameScope == static_cast<std::uint32_t>(FrameScope::Rail) + 1u);
+        CHECK(blk.frameScope == static_cast<std::uint32_t>(FrameScope::Rail) + 1u);
+        // ...and it is the PROCESS'S timer that writes it, at every change of
+        // scope; a timer a test builds for itself leaves the page alone.
+        {
+            FrameScopeGuard g(FrameScope::Patch);
+            CHECK(breadcrumb::read(&blk).frameScope == static_cast<std::uint32_t>(FrameScope::Patch) + 1u);
+            {
+                FrameScopeGuard inner(FrameScope::Recorder);
+                CHECK(breadcrumb::read(&blk).frameScope == static_cast<std::uint32_t>(FrameScope::Recorder) + 1u);
+            }
+            CHECK(breadcrumb::read(&blk).frameScope == static_cast<std::uint32_t>(FrameScope::Patch) + 1u);
+            FrameTimer own(&frameSteadyNanos, &frameAwakeNanos);
+            own.beginFrame(0);
+            own.switchTo(FrameScope::Rail);
+            own.endFrame();
+            CHECK(breadcrumb::read(&blk).frameScope == static_cast<std::uint32_t>(FrameScope::Patch) + 1u);
+        }
+        frameTimer().beginFrame(0);
+        CHECK(breadcrumb::read(&blk).frameScope == static_cast<std::uint32_t>(FrameScope::Other) + 1u);
+        frameTimer().userWaitBegin();
+        CHECK(breadcrumb::read(&blk).frameScope == static_cast<std::uint32_t>(FrameScope::UserWait) + 1u);
+        frameTimer().userWaitEnd();
+        CHECK(breadcrumb::read(&blk).frameScope == static_cast<std::uint32_t>(FrameScope::Other) + 1u);
+        frameTimer().resetForTest();
+
         // Flags.
         breadcrumb::noteSessionEnding();
         CHECK((breadcrumb::read(&blk).flags & breadcrumb::kFlagSessionEnding) != 0);
@@ -352,7 +402,7 @@ int main() {
         CHECK((breadcrumb::read(&blk).flags & breadcrumb::kFlagReportsOff) == 0);
 
         // NO ROOM FOR TEXT: after every writer has run, the reserved bytes are
-        // still zero, and a reader reads nothing but the nine numbers above.
+        // still zero, and a reader reads nothing but the ten numbers above.
         for (const std::uint32_t r : blk.reserved) { CHECK(r == 0u); }
 
         // A corrupt page is refused or clamped, never believed.
@@ -369,8 +419,20 @@ int main() {
         blk.activity = 0xFFFFFFFFu;
         blk.flags = 0xFFFFFFFFu;
         const breadcrumb::Snapshot junk = breadcrumb::read(&blk);
-        CHECK(junk.activity == (breadcrumb::kOpeningRadio | breadcrumb::kReloadingPlugins));
+        CHECK(junk.activity == breadcrumb::kAllActivity);
         CHECK(junk.flags == (breadcrumb::kFlagSessionEnding | breadcrumb::kFlagReportsOff));
+        // A frame scope outside the list is carried as the number it is and NAMED
+        // as nothing: the name comes from a table, bounds-checked, never the page.
+        blk.frameScope = 0xFFFFFFFFu;
+        {
+            breadcrumb::Snapshot wild = breadcrumb::read(&blk);
+            wild.phase = Phase::Running;
+            wild.activity = 0;
+            CHECK(wild.frameScope == 0xFFFFFFFFu);
+            CHECK(sentinelFrameScopeName(wild) == nullptr);
+            CHECK(!sentinelUserPaced(wild));
+        }
+        blk.frameScope = 0;
 
         // Detached, every writer is a no-op and nothing crashes.
         breadcrumb::attach(nullptr);
@@ -600,6 +662,88 @@ int main() {
             CHECK(out.cls == C::Outside && contains(out.reason, "phase unknown"));
         }
 
+        // --- which part of the frame: in the reason, and in what groups it ------
+        auto inScope = [](breadcrumb::Snapshot s, FrameScope scope) {
+            s.frameScope = static_cast<std::uint32_t>(scope) + 1u;
+            return s;
+        };
+        {
+            const SentinelVerdict v =
+                decideSentinel(facts(inScope(crumb(Phase::Running, 500, steady + 1), FrameScope::Rail), 1));
+            CHECK(v.cls == C::Frozen && v.upload());
+            CHECK(contains(v.reason, "; phase running; in rail; silent 5 s"));
+            CHECK(v.signatureTag == "sentinel:frozen:running:rail");
+            const SentinelVerdict crash =
+                decideSentinel(facts(inScope(crumb(Phase::Running, 500, 100), FrameScope::PluginPanels), kFastFail));
+            CHECK(crash.cls == C::Crash);
+            CHECK(contains(crash.reason, "; phase running; in plugin-panels; silent 0 s"));
+            CHECK(crash.signatureTag == "sentinel:crash:running:plugin-panels");
+            // Two parts of the frame are two groups; the same part is one.
+            const SentinelVerdict other =
+                decideSentinel(facts(inScope(crumb(Phase::Running, 500, steady + 1), FrameScope::Recorder), 1));
+            CHECK(other.signatureTag == "sentinel:frozen:running:recorder");
+            CHECK(other.signatureTag != v.signatureTag);
+        }
+        // Every scope has its own fixed name, and only while the frame loop turns:
+        // before the first frame there is none, and after the loop has ended the
+        // last one written is history.
+        for (int i = 0; i < kFrameScopeCount; ++i) {
+            const breadcrumb::Snapshot s = inScope(crumb(Phase::Running, 500, 100), static_cast<FrameScope>(i));
+            const char* name = sentinelFrameScopeName(s);
+            CHECK(name != nullptr && std::string(name) == kFrameScopeNames[i]);
+        }
+        CHECK(sentinelFrameScopeName(crumb(Phase::Running, 500, 100)) == nullptr);  // none written
+        for (const Phase p : {Phase::Starting, Phase::AwaitingFirstFrame, Phase::ShutdownBegun,
+                              Phase::ShutdownUnloadingPlugins, Phase::Finished}) {
+            const breadcrumb::Snapshot s = inScope(crumb(p, 500, 100), FrameScope::Rail);
+            CHECK(sentinelFrameScopeName(s) == nullptr);
+            const SentinelVerdict v = decideSentinel(facts(s, kFastFail));
+            CHECK(!contains(v.reason, "; in "));
+            CHECK(v.signatureTag.find(":rail") == std::string::npos);
+        }
+        {
+            breadcrumb::Snapshot s = crumb(Phase::Running, 500, 100);
+            s.frameScope = static_cast<std::uint32_t>(kFrameScopeCount) + 1u;  // one past the last
+            CHECK(sentinelFrameScopeName(s) == nullptr);
+            CHECK(decideSentinel(facts(s, kFastFail)).signatureTag == "sentinel:crash:running");
+        }
+
+        // --- silent because somebody was HOLDING the window is not frozen -------
+        //
+        // A drag, a resize, an open menu (the window procedure's bit) or a prompt
+        // being read (the frame timer's scope user-wait): the freeze watchdog
+        // excuses each for as long as it lasts, and an application ended from
+        // outside in that state was healthy. Kept on the machine, never sent.
+        {
+            const std::uint64_t longHold = steady + 60000;
+            const SentinelVerdict drag =
+                decideSentinel(facts(crumb(Phase::Running, 500, longHold, breadcrumb::kUserPaced), 1));
+            CHECK(drag.cls == C::Outside && !drag.upload() && sentinelReasonIsLocalOnly(drag.reason));
+            CHECK(contains(drag.reason, "; phase held by the user"));
+            CHECK(drag.signatureTag == "sentinel:outside:user-held");
+            const SentinelVerdict prompt =
+                decideSentinel(facts(inScope(crumb(Phase::Running, 500, longHold), FrameScope::UserWait), 1));
+            CHECK(prompt.cls == C::Outside && !prompt.upload());
+            CHECK(contains(prompt.reason, "; phase held by the user; in user-wait"));
+            // The control: the same silence with nobody holding it IS frozen...
+            CHECK(decideSentinel(facts(crumb(Phase::Running, 500, longHold), 1)).cls == C::Frozen);
+            CHECK(decideSentinel(facts(inScope(crumb(Phase::Running, 500, longHold), FrameScope::Events), 1)).cls == C::Frozen);
+            // ...and so is a plugin reload that never came back: the application
+            // set that pace, not a person.
+            CHECK(decideSentinel(facts(crumb(Phase::Running, 500, longHold, breadcrumb::kReloadingPlugins), 1)).cls == C::Frozen);
+            // A crash code while held is still a crash, and is sent.
+            const SentinelVerdict died =
+                decideSentinel(facts(crumb(Phase::Running, 500, longHold, breadcrumb::kUserPaced), kFastFail));
+            CHECK(died.cls == C::Crash && died.upload());
+            // Only the frame loop can be held: in a teardown step the bit means
+            // nothing, and a step that overran its budget is frozen.
+            CHECK(!sentinelUserPaced(crumb(Phase::ShutdownUnloadingPlugins, 500, 100, breadcrumb::kUserPaced)));
+            CHECK(decideSentinel(facts(crumb(Phase::ShutdownUnloadingPlugins, 500, shutdown + 1, breadcrumb::kUserPaced), 1)).cls == C::Frozen);
+            // What was going on in the program outranks who was holding the window.
+            CHECK(std::string(sentinelPhaseLabel(crumb(Phase::Running, 5, 0, breadcrumb::kUserPaced | breadcrumb::kOpeningRadio)).id) == "opening-radio");
+            CHECK(std::string(sentinelPhaseLabel(crumb(Phase::Running, 5, 0, breadcrumb::kUserPaced)).words) == "held by the user");
+        }
+
         // --- what else was going on, in the phase the report names --------------
         CHECK(std::string(sentinelPhaseLabel(crumb(Phase::Running, 5, 0, breadcrumb::kOpeningRadio)).words) == "opening a radio");
         CHECK(std::string(sentinelPhaseLabel(crumb(Phase::Running, 5, 0, breadcrumb::kReloadingPlugins)).words) == "reloading plugins");
@@ -623,12 +767,15 @@ int main() {
         const unsigned long codes[] = {0ul,          1ul,          0xFFFFFFFFul, 0xC0000005ul, 0xC0000409ul,
                                        0xC0000374ul, 0xC00000FDul, 0xC000013Aul, 0x40010004ul, 0xDEADBEEFul};
         for (std::uint32_t p = 0; p <= 12; ++p) {
-            for (const std::uint32_t activity : {0u, 1u, 2u, 3u}) {
+            for (const std::uint32_t activity : {0u, 1u, 2u, 3u, 4u, 5u, 6u, 7u}) {
                 for (const unsigned long code : codes) {
-                    for (const std::uint64_t silent : {0ull, 6000ull, 40000ull}) {
+                    for (const std::uint64_t silent : {0ull, 6000ull, 40000ull, 4000000000ull}) {
                         for (const std::uint32_t flags : {0u, 1u}) {
                             for (const bool known : {true, false}) {
+                              // Every scope the timer has, none, and two numbers it has not.
+                              for (std::uint32_t scope = 0; scope <= static_cast<std::uint32_t>(kFrameScopeCount) + 2u; ++scope) {
                                 breadcrumb::Snapshot c = crumb(static_cast<Phase>(p <= 11 ? p : 0), 500, silent, activity, flags);
+                                c.frameScope = scope <= static_cast<std::uint32_t>(kFrameScopeCount) + 1u ? scope : 0xFFFFFFFFu;
                                 const SentinelVerdict v = decideSentinel(facts(c, code, known));
                                 if (!v.write()) { continue; }
                                 ++written;
@@ -645,6 +792,12 @@ int main() {
                                 CHECK(contains(v.reason, "; phase "));
                                 CHECK(v.signatureTag.rfind("sentinel:", 0) == 0);
                                 ids.insert(sentinelClassId(v.cls));
+                                // Whole, never cut: the site keeps 200 characters
+                                // and the seconds of silence are the last of them.
+                                if (v.silentMs >= 0) {
+                                    CHECK(v.reason.size() >= 2 && v.reason.compare(v.reason.size() - 2, 2, " s") == 0);
+                                }
+                              }
                             }
                         }
                     }

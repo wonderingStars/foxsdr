@@ -37,6 +37,7 @@
 
 #include "core/diag_log.hpp"
 #include "core/diag_report.hpp"
+#include "core/frame_timing.hpp"
 #include "core/hang_watchdog.hpp"
 #include "test_check.hpp"
 
@@ -194,8 +195,13 @@ int main() {
         beatFor(w, 1600);
         CHECK(w.reportsWritten() == 0u);
 
-        // Now stall. 3x the threshold, plus the poll interval.
-        std::this_thread::sleep_for(std::chrono::milliseconds(2400 + HangWatchdog::kPollMs));
+        // Now stall. 3x the threshold, plus the poll interval. The stall is INSIDE
+        // A PART OF THE FRAME (0.99.64): this thread opens the scope `rail`, as
+        // the window's thread does while it draws the rail, and stops there.
+        {
+            cascade::core::FrameScopeGuard inRail(cascade::core::FrameScope::Rail);
+            std::this_thread::sleep_for(std::chrono::milliseconds(2400 + HangWatchdog::kPollMs));
+        }
         CHECK(w.reportsWritten() == 1u);
 
         // Exactly one, not one per poll: a wedged application must not fill
@@ -210,6 +216,11 @@ int main() {
         CHECK(text.find("kind: hang") != std::string::npos);
         CHECK(text.find("stalled-ms: ") != std::string::npos);
         CHECK(text.find("signature: ") != std::string::npos);
+        // WHERE THE FRAME WAS, read by the watchdog's thread off the stalled one:
+        // the report names the scope that thread was parked in, in the header,
+        // before the context block.
+        CHECK(text.find("\nframe-scope: rail\n") != std::string::npos);
+        CHECK(text.find("\nframe-scope: ") < text.find("--- context ---"));
 
         // THE INVENTORY, BOTH DIRECTIONS. Present-and-correct was already
         // asserted above; this asserts EXHAUSTIVE. PRIVACY.md lists what a
@@ -284,6 +295,10 @@ int main() {
         CHECK(w.running());
         std::this_thread::sleep_for(std::chrono::milliseconds(2400 + HangWatchdog::kPollMs));
         CHECK(w.reportsWritten() == 2u);
+        // The second stall was in no scope at all, and its report says so: the
+        // line is the scope at THAT stall, not the last one anybody opened.
+        CHECK(readFile(fs::path(w.lastReportPath())).find("\nframe-scope: other\n") !=
+              std::string::npos);
 
         w.stop();
         CHECK(!w.running());

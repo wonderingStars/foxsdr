@@ -32,6 +32,7 @@
 #include <vector>
 
 #include "core/crash_upload.hpp"
+#include "core/frame_timing.hpp"
 #include "core/sentinel.hpp"
 #include "test_check.hpp"
 
@@ -354,7 +355,24 @@ int main() {
             CHECK(parseReportText(readFile(r[0]), p));
             std::printf("real application, ended from outside: %s\n", p.reason.c_str());
             CHECK(p.reason.rfind(kSentinelReasonOutside, 0) == 0);
-            CHECK(contains(p.reason, "; phase running; silent "));
+            // ...AND THE REAL FRAME LOOP SAID WHERE IT WAS: between the phase and the
+            // silence is the part of the frame the window's thread was in when it
+            // was ended, written by the real frame timer into the real page - one
+            // of the timer's own names, whichever the kill happened to land in.
+            CHECK(contains(p.reason, "; phase running; in "));
+            {
+                const std::size_t in = p.reason.find("; in ");
+                const std::size_t end = p.reason.find("; silent ");
+                CHECK(in != std::string::npos && end != std::string::npos && in < end);
+                bool named = false;
+                if (in != std::string::npos && end != std::string::npos && in < end) {
+                    const std::string scope = p.reason.substr(in + 5, end - in - 5);
+                    for (int i = 0; i < cascade::core::kFrameScopeCount; ++i) {
+                        if (scope == cascade::core::kFrameScopeNames[i]) { named = true; }
+                    }
+                }
+                CHECK(named);
+            }
             // THE HEARTBEAT WAS LIVE: the real frame loop was drawing, so the silence
             // is a frame's worth, not seconds.
             const std::size_t at = p.reason.find("silent ");

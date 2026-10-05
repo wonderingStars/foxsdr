@@ -80,7 +80,18 @@ constexpr std::uint32_t kLastPhase = 11;
 enum Activity : std::uint32_t {
     kOpeningRadio = 1u << 0,      // an asynchronous device open is in flight
     kReloadingPlugins = 1u << 1,  // rescanPlugins() is running on the GUI thread
+    // A PERSON IS HOLDING THE FRAME LOOP: a modal window loop (the window is being
+    // dragged or resized, or a system or popup menu is open) runs inside the
+    // message pump and does not return until they let go. The heartbeat is silent
+    // for as long as that lasts and nothing is wrong, which is the freeze
+    // watchdog's rule 2 (hang_watchdog.hpp); this bit is how the watcher outside
+    // the process learns the same thing. Raised and cleared by the window
+    // procedure (gui/win_frame.cpp), and cleared by the next heartbeat whatever
+    // happened to the message that should have cleared it: a frame that was
+    // drawn to the end is proof that nobody is holding the loop.
+    kUserPaced = 1u << 2,
 };
+constexpr std::uint32_t kAllActivity = kOpeningRadio | kReloadingPlugins | kUserPaced;
 
 enum Flag : std::uint32_t {
     // Windows has told this process that the session is ending (WM_ENDSESSION,
@@ -109,7 +120,9 @@ constexpr std::uint32_t kLayout = 1;
 //    40      4    phase       a Phase
 //    44      4    activity    Activity bits
 //    48      4    flags       Flag bits
-//    52     12    reserved    zero
+//    52      4    frameScope  which part of the frame the GUI thread is in, as
+//                             core::FrameScope + 1 (0: no frame has begun)
+//    56      8    reserved    zero
 struct Block {
     std::uint32_t magic;
     std::uint32_t layout;
@@ -120,14 +133,16 @@ struct Block {
     std::uint32_t phase;
     std::uint32_t activity;
     std::uint32_t flags;
-    std::uint32_t reserved[3];
+    std::uint32_t frameScope;
+    std::uint32_t reserved[2];
 };
 static_assert(sizeof(Block) == 64, "the breadcrumb is one cache line");
 static_assert(offsetof(Block, magic) == 0 && offsetof(Block, layout) == 4 &&
                   offsetof(Block, startedMs) == 8 && offsetof(Block, beatMs) == 16 &&
                   offsetof(Block, frames) == 24 && offsetof(Block, phaseMs) == 32 &&
                   offsetof(Block, phase) == 40 && offsetof(Block, activity) == 44 &&
-                  offsetof(Block, flags) == 48 && offsetof(Block, reserved) == 52,
+                  offsetof(Block, flags) == 48 && offsetof(Block, frameScope) == 52 &&
+                  offsetof(Block, reserved) == 56,
               "the breadcrumb's layout is a contract with the watcher");
 static_assert(std::atomic_ref<std::uint64_t>::is_always_lock_free &&
                   std::atomic_ref<std::uint32_t>::is_always_lock_free,
@@ -213,6 +228,17 @@ inline void setFlag(Flag f, bool on) noexcept {
 
 inline void noteSessionEnding() noexcept { setFlag(kFlagSessionEnding, true); }
 
+// WHICH PART OF THE FRAME the GUI thread has just entered (core/frame_timing.hpp
+// calls this at every change of scope, with FrameScope + 1). A number from a
+// closed list, like the phase: a death or a freeze with no stack can then still
+// say "in the rail" or "in a plugin's panel". One pointer test when no watcher is
+// attached, one relaxed store when one is.
+inline void setFrameScope(std::uint32_t scopePlusOne) noexcept {
+    Block* b = g_block.load(std::memory_order_relaxed);
+    if (b == nullptr) { return; }
+    detail::at(b->frameScope).store(scopePlusOne, std::memory_order_relaxed);
+}
+
 // THE HEARTBEAT: called once per frame by the GUI thread, from
 // HangWatchdog::heartbeat - the same call the freeze watchdog is built on, so
 // "silent" means to the watcher exactly what it means to the watchdog. The second
@@ -229,6 +255,8 @@ inline void beat() noexcept {
                       static_cast<std::uint32_t>(Phase::AwaitingFirstFrame)) {
         setPhase(Phase::Running);
     }
+    // A frame was drawn to the end, so nobody is holding the loop (see kUserPaced).
+    setActivity(kUserPaced, false);
 }
 
 // ---------------------------------------------------------------------------
@@ -244,6 +272,7 @@ struct Snapshot {
     Phase phase = Phase::Unset;
     std::uint32_t activity = 0;
     std::uint32_t flags = 0;
+    std::uint32_t frameScope = 0;  // core::FrameScope + 1 as written; 0 for none
 };
 
 inline Snapshot read(const Block* b) noexcept {
@@ -261,10 +290,10 @@ inline Snapshot read(const Block* b) noexcept {
     s.phaseMs = detail::at(m.phaseMs).load(std::memory_order_relaxed);
     const std::uint32_t p = detail::at(m.phase).load(std::memory_order_relaxed);
     s.phase = (p <= kLastPhase) ? static_cast<Phase>(p) : Phase::Unset;
-    s.activity = detail::at(m.activity).load(std::memory_order_relaxed) &
-                 (kOpeningRadio | kReloadingPlugins);
+    s.activity = detail::at(m.activity).load(std::memory_order_relaxed) & kAllActivity;
     s.flags = detail::at(m.flags).load(std::memory_order_relaxed) &
               (kFlagSessionEnding | kFlagReportsOff);
+    s.frameScope = detail::at(m.frameScope).load(std::memory_order_relaxed);
     return s;
 }
 

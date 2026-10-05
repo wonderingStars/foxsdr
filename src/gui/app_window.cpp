@@ -103,6 +103,8 @@
 #include "gui/waterfall_view.hpp"
 #include "gui/present_grace.hpp"
 #include "gui/win_frame.hpp"
+// Where a slow frame spent its time (0.99.64): the scope guards below.
+#include "core/frame_timing.hpp"
 #include "source/iq_file_source.hpp"
 #include "source/rsp_rows.hpp"
 #include "source/soapy_enum_proc.hpp"
@@ -1785,12 +1787,31 @@ int AppWindow::run(int frames) {
         cascade::gui::frame::displayChangeCount() +
         g_glfwDisplayErrors.load(std::memory_order_relaxed);
 
+    // WHERE A SLOW FRAME SPENT ITS TIME (0.99.64, core/frame_timing.hpp). The
+    // timer is the process's. The two hooks are bounded runs only, like every
+    // other hook here: a stall held inside a named scope at a named frame, and the
+    // three things the operating system does that a test cannot make it do (hide
+    // the window, change the display, run a modal loop inside the message pump).
+    cascade::core::FrameTimer& frameTimer = cascade::core::frameTimer();
+    cascade::core::FrameSituations frameSituations;
+    if (frames >= 0) {
+        frameTimer.setStalls(cascade::core::parseFrameStalls(std::getenv("FOXSDR_FRAME_STALL")));
+        frameSituations =
+            cascade::core::parseFrameSituations(std::getenv("FOXSDR_FRAME_SITUATION"));
+    }
+
     int rendered = 0;
     frameCounter_ = 0;
     while (!glfwWindowShouldClose(window) && !closeRequested_) {
         // Exact-count contract: check before rendering so --frames N produces
         // N frames, and --frames 0 produces none.
         if (frames >= 0 && rendered >= frames) { break; }
+
+        // THE FRAME'S CLOCK STARTS HERE and stops at the bottom of the body; the
+        // guard is the scope the frame is in until it says otherwise (to()), and
+        // everything not inside a scope is `other`.
+        frameTimer.beginFrame(rendered);
+        cascade::core::FrameScopeGuard frameScope(cascade::core::FrameScope::Events);
 
         // The heartbeat. One relaxed store; the whole hang-detection scheme is
         // "did this line run recently", so it must stay cheap enough that
@@ -1806,7 +1827,15 @@ int AppWindow::run(int frames) {
                                                deviceOpenPending_);
         if (rendered % 300 == 0) { cascade::core::sentinelPoll(); }
 
+        // A MODAL WINDOW LOOP INSIDE THE PUMP is a person holding the window, not
+        // a slow frame: the pump does not return until they let go.
+        const unsigned modalLoopsBefore = cascade::gui::frame::modalLoopCount();
         glfwPollEvents();
+        if (cascade::gui::frame::modalLoopCount() != modalLoopsBefore ||
+            frameSituations.modalLoopAt(rendered)) {
+            frameTimer.moveToUserWait(cascade::core::FrameScope::Events);
+        }
+        frameScope.to(cascade::core::FrameScope::Other);
 
         // AFTER THE PUMP, BEFORE THE FRAME. glfwPollEvents is where the window
         // procedure runs, so a WM_DISPLAYCHANGE that arrived this frame has
@@ -1818,7 +1847,8 @@ int AppWindow::run(int frames) {
         {
             const unsigned changes = cascade::gui::frame::displayChangeCount() +
                                      g_glfwDisplayErrors.load(std::memory_order_relaxed);
-            const bool displayChanged = changes != lastDisplayChanges;
+            const bool displayChanged =
+                changes != lastDisplayChanges || frameSituations.displayChangeAt(rendered);
             if (displayChanged) {
                 lastDisplayChanges = changes;
                 cascade::core::diagLogf(
@@ -1830,8 +1860,17 @@ int AppWindow::run(int frames) {
             // hidden on purpose, see above) and true for the whole session
             // afterwards; GLFW_ICONIFIED is the minimise.
             const bool hidden = glfwGetWindowAttrib(window, GLFW_ICONIFIED) != 0 ||
-                                glfwGetWindowAttrib(window, GLFW_VISIBLE) == 0;
+                                glfwGetWindowAttrib(window, GLFW_VISIBLE) == 0 ||
+                                frameSituations.hiddenAt(rendered);
             presentGrace.update(glfwGetTime(), displayChanged, hidden);
+            // THE FRAMES THIS APPLICATION IS NOT EXPECTED TO PRESENT ARE NOT
+            // SLOW FRAMES: the window is not being shown, or a display change is
+            // being settled. And the slow frame the PREVIOUS pass left is
+            // dropped when the display changed or the window stopped being shown
+            // now: the stall a display change causes is in the swap that came
+            // before the message that says so (core/frame_timing.hpp).
+            frameTimer.settlePrevious(displayChanged || presentGrace.paused());
+            if (presentGrace.paused()) { frameTimer.excludeFrame(); }
         }
 
         // BETWEEN FRAMES: the one place the interface theme, language and
@@ -1839,6 +1878,7 @@ int AppWindow::run(int frames) {
         // is built by the same applyPending the language ends with; the scale
         // costs one float comparison when nothing moved, so it runs every
         // frame rather than behind its own pending flag.
+        frameScope.to(cascade::core::FrameScope::FrameStart);
         applyPendingTheme();
         applyPendingLanguage();
         applyPendingUiScale();
@@ -1856,6 +1896,7 @@ int AppWindow::run(int frames) {
         // The GPS fix, if one landed since the last frame: applied here, on
         // the GUI thread, through the one door. Before the UI is drawn so the
         // frame that shows "position set" is the frame the scope has it.
+        frameScope.to(cascade::core::FrameScope::Polls);
         pollGpsReader();
         // Collects a feature-request worker that has finished and, once its
         // post-send cooldown has passed, returns the SEND key to Idle on its
@@ -1863,6 +1904,7 @@ int AppWindow::run(int frames) {
         featureRequestSender_.poll(static_cast<std::uint64_t>(std::time(nullptr)));
         // ...and the same for the REPORT A BUG / DISLIKE page's sender.
         problemReportSender_.poll(static_cast<std::uint64_t>(std::time(nullptr)));
+        frameScope.to(cascade::core::FrameScope::Other);
         // The hook's ONE fetch, started on the first frame so the rest of the
         // bounded run proves the window keeps rendering while it is in
         // flight. Everything else about the browser is unchanged — this is
@@ -2105,6 +2147,7 @@ int AppWindow::run(int frames) {
         // gui/config_writer.hpp's callers. A no-op every frame nothing was
         // ever requested (hermetic runs, or a session that never changed a
         // setting), so it costs nothing to call unconditionally.
+        frameScope.to(cascade::core::FrameScope::Saves);
         pollConfigWriter();
 
         // Debounced runtime persistence: the config file follows the session
@@ -2113,7 +2156,9 @@ int AppWindow::run(int frames) {
         if (!configPath_.empty()) { maybeSaveConfig(glfwGetTime()); }
 
         // After every widget, so the hovered and active items are this frame's.
+        frameScope.to(cascade::core::FrameScope::Other);
         if (!scriptTracePath_.empty()) { traceScriptFrame(static_cast<long>(rendered)); }
+        frameScope.to(cascade::core::FrameScope::Render);
         ImGui::Render();
         int fbWidth = 0;
         int fbHeight = 0;
@@ -2170,6 +2215,7 @@ int AppWindow::run(int frames) {
         // window - and the geometry read-back that persists their rectangles
         // is unaffected, because a hidden window keeps its position.
         applyScopeWindowVisibility();
+        frameScope.to(cascade::core::FrameScope::Other);
 
         // SELF-CAPTURE, from the framebuffer this frame was drawn into. The
         // screen-grab routes (PrintWindow, a BitBlt of the desktop) cannot see
@@ -2304,7 +2350,9 @@ int AppWindow::run(int frames) {
             }
         }
 
+        frameScope.to(cascade::core::FrameScope::Present);
         glfwSwapBuffers(window);
+        frameScope.to(cascade::core::FrameScope::Other);
         ++rendered;
 
         // The context follows the session rather than being frozen at
@@ -2345,7 +2393,11 @@ int AppWindow::run(int frames) {
             std::this_thread::sleep_for(std::chrono::milliseconds(ms));
             diagSkipNextGap_ = true;
         }
+        frameTimer.endFrame();
     }
+    // The slow frame still held is counted, and the session's summary line is
+    // written if there was anything to say.
+    frameTimer.finish();
 
     // THE TEARDOWN GETS ITS OWN BUDGET, AND STAYS WATCHED.
     //
@@ -2673,6 +2725,10 @@ int AppWindow::run(int frames) {
     // makes a frame legitimately slow goes red here instead of arriving as a
     // false hang report on somebody's machine.
     std::printf("cascade: worst frame gap %.1f ms\n", watchdog_.worstGapMs());
+    // WHERE THE SLOW FRAMES WENT (0.99.64, core/frame_timing.hpp), printed the way
+    // the frame gap is so that a test - and whoever is measuring - reads the
+    // table back from a real run: tests/test_slow_frames_app.cpp.
+    std::printf("cascade: frame timing: %s\n", frameTimer.summaryText().c_str());
     // And how many times the application took a WatchdogPause, for the same
     // reason: a false-positive mitigation that no shipped call site uses is a
     // sentence in a header, not a protection. tests/test_diag_hang.cpp reads
@@ -3527,6 +3583,10 @@ void benchGroup(const char* caption) {
 }  // namespace
 
 void AppWindow::drawUi() {
+    // WHICH PART OF THE FRAME THIS IS (0.99.64, core/frame_timing.hpp): one guard
+    // walks the function through its phases with to(), and gives the caller's
+    // scope back on every way out.
+    cascade::core::FrameScopeGuard frameScope(cascade::core::FrameScope::PreDraw);
     // Clears last frame's touched marks on every settings-form field, so
     // flushUntouchedSettingsEdits() at the end of this frame can tell a field
     // some surface reaches this frame from one nobody reaches any more (see
@@ -3577,8 +3637,11 @@ void AppWindow::drawUi() {
         pendingDropPath_.clear();
         importBookmarkFile(dropped);
     }
-    flushBookmarkSave(false);
-    flushMarkerSave(false);
+    {
+        cascade::core::FrameScopeGuard savesScope(cascade::core::FrameScope::Saves);
+        flushBookmarkSave(false);
+        flushMarkerSave(false);
+    }
     publishWebSnapshot();
     publishWebAudio();
     publishWebImages();
@@ -3595,6 +3658,7 @@ void AppWindow::drawUi() {
     // Plugin windows are top-level and are drawn OUTSIDE the root window, so
     // they are movable and resizable like any other window. Drawn first so the
     // root layout below owns the remaining space.
+    frameScope.to(cascade::core::FrameScope::PluginPanels);
     drawPluginWindows();
     // THE SAFE POINT for a preset bar's key press: every loop inside
     // drawPluginWindows that a bar could have been drawn inside of - the map
@@ -3603,6 +3667,7 @@ void AppWindow::drawUi() {
     // let applyPluginPreset rebuild the very lists those loops were walking.
     // See pendingPresetRequest_'s own comment for the crash this avoids.
     consumePendingPresetRequest();
+    frameScope.to(cascade::core::FrameScope::PreDraw);
     // ONCE A FRAME, AFTER THE PAGE HAS HAD ITS SAY. drawTransmitPage above is
     // what sets transmitPttHeld_, so this has to follow it or the key would
     // always be acting on the previous frame's request. It is also the stamp
@@ -3650,6 +3715,7 @@ void AppWindow::drawUi() {
         ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBringToFrontOnFocus |
         ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar |
         ImGuiWindowFlags_NoScrollWithMouse;
+    frameScope.to(cascade::core::FrameScope::Toolbar);
     ImGui::Begin("##cascade_root", nullptr, rootFlags);
 
     // THE CABINET, FIRST AND UNDERNEATH. Painted into the root window's own
@@ -3754,6 +3820,7 @@ void AppWindow::drawUi() {
     // and the frequency, which are what keeps the aircraft arriving at all -
     // and drawScopeMode draws its own way back before anything else.
     if (scopeMode_) {
+        frameScope.to(cascade::core::FrameScope::Spectrum);
         // THE SPECTRUM IS STILL CONSUMED IN SCOPE MODE, even though nothing
         // here draws it. getLatestFrame is what advances lastFrame_, and
         // publishWebSnapshot copies its bins for the browser only when the
@@ -3778,6 +3845,7 @@ void AppWindow::drawUi() {
     } else {
         // FOLDED TO A STRIP when the user has put the rail away (0.99.49): the
         // view beside it - the patch page or the receiver - takes the width.
+        frameScope.to(cascade::core::FrameScope::Rail);
         ImGui::BeginChild("##menu_column",
                           ImVec2(cascade::gui::uiscale::px(cascade::gui::railColumnWidth(railCollapsed_)),
                                  0.0f),
@@ -3798,6 +3866,7 @@ void AppWindow::drawUi() {
         ImGui::SameLine();
 
         if (patchOpen_) {
+            frameScope.to(cascade::core::FrameScope::Patch);
             // THE PATCH VIEW (0.99.40, the owner: "display the patch panel as
             // the main"). It takes the whole area right of the rail - the
             // spectrum's, the waterfall's and the status column's - because a
@@ -3843,6 +3912,7 @@ void AppWindow::drawUi() {
 
             // The center area owns its scrolling (none): the spectrum/waterfall
             // pair always fills whatever space the splitter hands it.
+            frameScope.to(cascade::core::FrameScope::Spectrum);
             ImGui::BeginChild("##center", ImVec2(centreW, 0.0f), ImGuiChildFlags_None,
                               ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
             {
@@ -3857,6 +3927,7 @@ void AppWindow::drawUi() {
             ImGui::EndChild();
 
             if (showStatus) {
+                frameScope.to(cascade::core::FrameScope::Status);
                 ImGui::SameLine();
                 ImGui::BeginChild("##status_column", ImVec2(kStatusWidth, 0.0f),
                                   ImGuiChildFlags_None);
@@ -3876,6 +3947,7 @@ void AppWindow::drawUi() {
     // top-level thing and opening it inside a borderless full-viewport window
     // would nest it in that window's ID stack, where the dim overlay it draws
     // would sit under the panels it is meant to block.
+    frameScope.to(cascade::core::FrameScope::Dialogs);
     drawMutePopup();
     // The deck's bias tee question, at the top level for the same reason.
     drawBiasKeyConfirm();
@@ -3895,6 +3967,9 @@ void AppWindow::drawUi() {
     drawMarkerWindow();
     drawTraceModeMenu();
 
+    // EVERYTHING FROM HERE ON IS THE FRAME'S ONCE-A-FRAME HOUSEKEEPING: the polls
+    // of every worker and file, and the scanner and airband drivers.
+    frameScope.to(cascade::core::FrameScope::Polls);
     // ONE basemap eviction pass, AFTER every surface that wanted tiles has
     // asked for them. Two things ask now - the map pages, which draw inside
     // drawPluginWindows near the top of this function, and the scope, which
@@ -8024,10 +8099,26 @@ cascade::gui::ShellPauseHooks AppWindow::watchdogShellHooks() {
     // 30 s cap every other pause has would file the "hang ntdll.dll @
     // AppWindow::launchInstaller" report again for a prompt left open past it.
     // tests/test_excuse_cap.cpp holds this to being the only use in src/.
+    //
     cascade::gui::ShellPauseHooks hooks;
     hooks.pause = [this] { watchdog_.pauseUser(); };
     hooks.resume = [this] { watchdog_.resumeUser(); };
-    return hooks;
+    // THE SAME BRACKET ENDS THE FRAME'S ACCOUNT OF IT (0.99.64): a person reading
+    // a Windows prompt is not a slow frame, so the wait is the scope `user-wait`,
+    // which is subtracted from the frame and never counted (core/frame_timing.hpp).
+    // The only user-paced time there is is the only user of pauseUser(). The two
+    // hooks above stay as they were - tests/test_excuse_cap.cpp reads them - and
+    // are wrapped, not edited.
+    cascade::gui::ShellPauseHooks accounted;
+    accounted.pause = [watchdogSide = hooks.pause] {
+        watchdogSide();
+        cascade::core::frameTimer().userWaitBegin();
+    };
+    accounted.resume = [watchdogSide = hooks.resume] {
+        cascade::core::frameTimer().userWaitEnd();
+        watchdogSide();
+    };
+    return accounted;
 }
 
 bool AppWindow::shellOpen(const std::string& target) {
@@ -11592,6 +11683,9 @@ bool AppWindow::quarantineBlockedPlugins(std::string& error) {
 }
 
 void AppWindow::detachAndUnloadPlugins(cascade::core::PhaseClock* phases) {
+    // A plugin reload - and a removal's unload - is the scope `plugins-reload`
+    // wherever in the frame it is reached from (0.99.64, core/frame_timing.hpp).
+    cascade::core::FrameScopeGuard reloadScope(cascade::core::FrameScope::PluginsReload);
     // WHERE THE TIME GOES, for the one caller that asks (rescanPlugins): each of
     // the four steps below is a different kind of wait with a different owner -
     // a decoder's destroy(), the patch page's decoders and the radios' readers,
@@ -11675,6 +11769,11 @@ void AppWindow::rescanPlugins() {
     // which is also the first load, in the constructor, before the window exists.
     cascade::core::breadcrumb::ActivityScope sentinelPluginActivity(
         cascade::core::breadcrumb::kReloadingPlugins);
+    // THE WATCHDOG IS EXCUSED, THE FRAME IS NOT (0.99.64): the pause above is an
+    // application-paced one - code that is expected to finish - and a reload that
+    // holds the window for seconds is exactly the freeze the slow-frame record is
+    // for, so it is its own scope and counts (core/frame_timing.hpp).
+    cascade::core::FrameScopeGuard reloadScope(cascade::core::FrameScope::PluginsReload);
 
     // WHERE THE TIME WENT, in one log line per rescan (0.99.63). A session of
     // 0.99.58 logged the line that opens a rescan and, 119.976 s later, the first
@@ -11905,6 +12004,7 @@ void AppWindow::rescanPluginsIfChanged() {
     // and the rescan it replaces would have listed it under this same pause and
     // the same cap - a slow listing here is not a new freeze to report.
     cascade::core::WatchdogPause holdWatchdog(watchdog_);
+    cascade::core::FrameScopeGuard reloadScope(cascade::core::FrameScope::PluginsReload);
 
     if (pluginScanSigValid_) {
         // The folder the scan would read now: the same call the rescan makes,
@@ -23052,6 +23152,9 @@ void AppWindow::drawRecorderSection() {
 }
 
 void AppWindow::stopIqRecording() {
+    // The recording's start, stop and arming are the scope `recorder` wherever
+    // they are called from (0.99.64, core/frame_timing.hpp).
+    cascade::core::FrameScopeGuard recorderScope(cascade::core::FrameScope::Recorder);
     // A start still opening its file is withdrawn first: nothing is recording
     // yet, so there is no tap to take out and no header to patch, and nothing
     // here waits for the disk (RecordStart::cancel only sets a flag - the file,
@@ -23068,6 +23171,7 @@ void AppWindow::stopIqRecording() {
 }
 
 void AppWindow::stopAudioRecording() {
+    cascade::core::FrameScopeGuard recorderScope(cascade::core::FrameScope::Recorder);
     audioStart_.cancel();  // see stopIqRecording
     pipeline_.setAudioRecorder(nullptr);
     audioRecorder_.stop();
@@ -23167,6 +23271,7 @@ void AppWindow::installSource(std::unique_ptr<cascade::source::IqSource> src) {
 }
 
 bool AppWindow::startAudioRecording() {
+    cascade::core::FrameScopeGuard recorderScope(cascade::core::FrameScope::Recorder);
     // A take that is recording, or whose file is still opening, is left exactly
     // as it is: a second press of the button, the key or the browser's Record
     // changes nothing (RecordStart refuses a second open anyway, so two cannot
@@ -23190,6 +23295,7 @@ bool AppWindow::startAudioRecording() {
 }
 
 bool AppWindow::startIqRecording() {
+    cascade::core::FrameScopeGuard recorderScope(cascade::core::FrameScope::Recorder);
     // See startAudioRecording for the pending and withdrawn cases.
     if (iqRecorder_.recording() || iqStart_.pending()) { return !iqStart_.cancelled(); }
     const double rate = pipeline_.inputRateHz();
@@ -23210,6 +23316,7 @@ bool AppWindow::startIqRecording() {
 }
 
 void AppWindow::pollRecordStarts(double nowS) {
+    cascade::core::FrameScopeGuard recorderScope(cascade::core::FrameScope::Recorder);
     // Both takes, the same way: collect a finished open and act on it, then
     // say in the log - once - if one is taking long. A no-op on every frame
     // nothing was requested, so it costs nothing to call unconditionally.
@@ -27351,7 +27458,13 @@ std::string AppWindow::currentDiagnosticsBundle(bool freshHistory) {
     // (0.99.62). Not included, and not read, while diagnostics are off.
     in.history = diagHistoryForBundle(freshHistory);
 
-    return cascade::core::buildDiagnosticsBundle(in);
+    // THE SLOW-FRAME TABLE OF THIS SESSION (0.99.64, core/frame_timing.hpp): one
+    // line, `slow-frames: recorder 2/0/0, plugins-reload 0/1/0` or `none`. Added
+    // after the builder rather than inside it - the report format is changed
+    // elsewhere - and not in the context block a crash report is written from.
+    return cascade::core::withSlowFramesField(
+        cascade::core::buildDiagnosticsBundle(in),
+        cascade::core::slowFramesText(cascade::core::slowFrameCounts()));
 }
 
 void AppWindow::copyDiagnosticsBundle() {

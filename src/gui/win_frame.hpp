@@ -148,6 +148,19 @@ CaptionLayout captionLayout();
 // install(), and on every platform but Windows.
 unsigned displayChangeCount();
 
+// HOW MANY MODAL WINDOW LOOPS HAVE STARTED UNDER THIS WINDOW (0.99.64): the
+// operating system's move-and-size loop, entered when the window is dragged by
+// its rail or resized by an edge, and its menu loop, entered by the rail's
+// system menu. Both run INSIDE glfwPollEvents - the call does not return until
+// the person lets go - so a frame that contains one is as long as the person held
+// the window, and nothing in this program was slow (core/frame_timing.hpp: the
+// time is a person's, not a frame's). The frame loop reads this before and after
+// the pump; a change means the pump held one. Counted from the window procedure
+// this module already owns, the way displayChangeCount() is, and monotonic for
+// the same reason. Zero before install(), and on every platform but Windows,
+// where the window manager moves the window and the pump never waits for it.
+unsigned modalLoopCount();
+
 // The operating system's handle for `window` - its HWND on Windows, as a
 // pointer so <windows.h> stays out of this header - or null (every other
 // platform, or no window). For APIs that need an owner window for a dialog of

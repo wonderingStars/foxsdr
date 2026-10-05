@@ -311,6 +311,18 @@ add_library(cascade_lib STATIC
     ${CASCADE_CORE} ${CASCADE_DSP} ${CASCADE_GUI} ${CASCADE_SOURCE} ${CASCADE_SINK}
     ${CASCADE_NET} ${CASCADE_USB})
 
+# src/gui/app_window.cpp is one translation unit of nearly thirty thousand lines
+# and it sits within a few hundred sections of the 65,535 an ordinary MSVC object
+# file can hold (0xFE12 = 65,042 at 0.99.64, read with `dumpbin /headers`): each
+# inline function and each lambda or template it instantiates is two or three of
+# them, and one more std::function-wrapped hook stopped the compile with
+# "error C1128: number of sections exceeded object file format limit". /bigobj
+# lifts the limit for that one file, so a change to the window is not a change to
+# the object format.
+if(MSVC)
+    set_source_files_properties(src/gui/app_window.cpp PROPERTIES COMPILE_OPTIONS "/bigobj")
+endif()
+
 target_include_directories(cascade_lib PUBLIC src "${CASCADE_COMMIT_HEADER_DIR}")
 # See src/core/version.cpp: the reported version is injected, never written in.
 target_compile_definitions(cascade_lib PRIVATE

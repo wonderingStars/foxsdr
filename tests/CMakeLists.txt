@@ -161,6 +161,11 @@ foreach(src ${CASCADE_TESTS})
         add_dependencies(${name} rescan_probe_a rescan_probe_b)
         add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:rescan_probe_a>"
                  "$<TARGET_FILE:rescan_probe_b>")
+    elseif(name STREQUAL "test_slow_frames_app")
+        # Runs the real cascade.exe (built first) and, in process, a real plugin
+        # reload against one of the probe modules above.
+        add_dependencies(${name} rescan_probe_a cascade)
+        add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:rescan_probe_a>")
     elseif(name STREQUAL "test_soapy_enum_proc" AND TARGET soapy_fault_fixture)
         # Hands the fault fixture's directory to the real enumeration child;
         # cascade.exe is built first because that block runs it.
