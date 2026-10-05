@@ -1507,7 +1507,11 @@ void Pipeline::sourceThreadBody(double chainRateHz,
         while (stopToken.load(std::memory_order_relaxed) &&
                run_.load(std::memory_order_relaxed) &&
                srcRun_.load(std::memory_order_relaxed)) {
-            const std::size_t got = src.read(buf.data(), chunk);
+            // CLAMPED TO WHAT WAS ASKED FOR. read() returns how many of the
+            // `chunk` samples it wrote; a driver that returns more is wrong, and
+            // believing it would copy past the end of `buf` (tests/
+            // test_source_overreport.cpp).
+            const std::size_t got = std::min(src.read(buf.data(), chunk), chunk);
             if (!stopToken.load(std::memory_order_relaxed)) { return; }
             // AN INVERTING CONVERTER MIRRORS THE BAND, and this is where it is
             // put back the right way round - after the token test above, so an
@@ -1571,7 +1575,8 @@ void Pipeline::sourceThreadBody(double chainRateHz,
     while (stopToken.load(std::memory_order_relaxed) &&
            run_.load(std::memory_order_relaxed) &&
            srcRun_.load(std::memory_order_relaxed)) {
-        const std::size_t got = src.read(buf.data(), chunk);
+        // Clamped to what was asked for, as in the self-paced loop above.
+        const std::size_t got = std::min(src.read(buf.data(), chunk), chunk);
         // Same post-read token test as the self-paced loop, same reasons.
         if (!stopToken.load(std::memory_order_relaxed)) { return; }
         // The same mirror as the self-paced loop: a generator or a file the

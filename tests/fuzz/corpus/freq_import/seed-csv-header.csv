@@ -1,0 +1,4 @@
+Name,Frequency (MHz),Mode,Bandwidth (kHz),Group,Favourite
+Radio 2,88.1,WFM,150,FM,yes
+Tower,118.0,AM,8.33,Air,no
+bad,notanumber,AM,1,x,no

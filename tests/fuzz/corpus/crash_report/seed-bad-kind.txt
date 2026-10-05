@@ -1,0 +1,2 @@
+kind: something-else
+signature: X

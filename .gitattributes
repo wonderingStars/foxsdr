@@ -22,4 +22,11 @@ resources/lang/*.json text eol=lf
 # bytes into core/airband_assets.hpp and test_airband_data checks the two agree.
 resources/airband/*.tsv text eol=lf
 
+# THE FUZZ CORPUS IS BYTES, NEVER TEXT. Each file is an input handed to a parser
+# exactly as it is, and many of them are the point because of a byte a line-ending
+# filter would change: the CRLF of an HTTP request or an XML list, a lone CR, a
+# NUL, a vertical tab, a truncated line. With autocrlf on, a checkout would
+# silently turn them into different inputs that still pass.
+tests/fuzz/corpus/** -text
+
 # Everything else in the tree keeps git's default handling.

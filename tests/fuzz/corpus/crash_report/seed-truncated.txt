@@ -1,0 +1,22 @@
+kind: crash
+reason: access violation
+code: 0xC0000005
+address: cascade.exe+0x1A2B
+signature: 0123456789ABCDEF
+thread: 24180
+--- context ---
+version: 0.62.0
+commit: abc123def456
+os: Windows 10.0.22631
+arch: x64
+mode: WFM
+source: soapy
+sample-rate: 2400000
+device-open: yes
+sdr-model: uhd b200
+plugin: ADS-B 1.1.0
+plugin: APRS 1.0.0
+--- stack (thread 24180) ---
+  cascade.exe+0x1A2B
+  cascade.exe+0x5C10
+  0x00007FFAB0001234

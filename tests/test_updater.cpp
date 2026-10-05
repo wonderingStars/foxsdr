@@ -292,6 +292,69 @@ void testRubbishDoesNotCrashIt() {
     }
 }
 
+// A FIELD OF THE WRONG TYPE is a refusal, never an exception.
+//
+// parseUpdateManifest runs on a worker thread (UpdateCheckTask) and the GUI
+// thread collects the result with future::get(), which rethrows whatever left
+// the worker - on the one thread that must not be taken down by a web server's
+// answer. nlohmann's value(key, default) does not return the default for a
+// present-but-wrong-typed field, it THROWS (type_error 302), so a service that
+// answered {"version": 5} or {"url": null} used to end the process. Found by
+// the update_manifest fuzz target (tests/fuzz); the inputs below are in its
+// regression corpus too.
+void testWrongTypedFieldsAreRefusedNotThrown() {
+    const char* wrong[] = {
+        "{\"version\":5}",
+        "{\"version\":null}",
+        "{\"version\":[\"0.56.0\"]}",
+        "{\"version\":\"0.56.0\",\"url\":null,\"sha256\":null}",
+        "{\"version\":\"0.56.0\",\"url\":7,\"sha256\":\"x\"}",
+        "{\"version\":\"0.56.0\",\"url\":\"https://foxsdr.com/download/x.exe\",\"sha256\":{}}",
+    };
+    for (const char* s : wrong) {
+        UpdateInfo info;
+        std::string err;
+        bool threw = false;
+        bool ok = true;
+        try {
+            ok = cascade::core::parseUpdateManifest(s, "0.50.0", info, err);
+        } catch (...) {
+            threw = true;
+        }
+        if (threw) { std::printf("FAIL parseUpdateManifest threw on: %s\n", s); }
+        CHECK(!threw);
+        CHECK(!ok);
+        CHECK(!err.empty());
+    }
+
+    // In the notes, a wrong-typed field is as good as an absent one: that note
+    // loses what it cannot say and the manifest - whose version and checksum are
+    // still actionable - is kept, as a malformed note already was.
+    const std::string m =
+        "{\"version\":\"0.56.0\","
+        "\"url\":\"https://foxsdr.com/download/x.exe\","
+        "\"sha256\":\"393e5fd91b7b2292611c52af7e9f2db1e2c730d78f1639adefceaf0fb5cca0ea\","
+        "\"notes\":[{\"version\":1,\"date\":2,\"critical\":\"yes\",\"notes\":[\"no version\"]},"
+        "{\"version\":\"0.56.0\",\"date\":null,\"critical\":null,\"notes\":[\"kept\"]}]}";
+    UpdateInfo info;
+    std::string err;
+    bool threw = false;
+    bool ok = false;
+    try {
+        ok = cascade::core::parseUpdateManifest(m, "0.50.0", info, err);
+    } catch (...) {
+        threw = true;
+    }
+    CHECK(!threw);
+    CHECK(ok);
+    CHECK(info.notes.size() == 1);
+    if (info.notes.size() == 1) {
+        CHECK(info.notes[0].version == "0.56.0");
+        CHECK(info.notes[0].date.empty());
+        CHECK(!info.notes[0].critical);
+    }
+}
+
 void testNotesSurviveAndMalformedOnesAreDropped() {
     // A note with no text is not shown as an empty bullet; a whole manifest is
     // not thrown away because one note was malformed, because the version and
@@ -500,6 +563,7 @@ int main() {
     testLegitimateVersionsStillGetThrough();
     testDownloadRefusesAHostileVersion();
     testRubbishDoesNotCrashIt();
+    testWrongTypedFieldsAreRefusedNotThrown();
     testNotesSurviveAndMalformedOnesAreDropped();
     testDownloadRefusesWithoutAnUpdate();
     testDownloadHonoursACancelFlag();

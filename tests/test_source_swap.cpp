@@ -697,11 +697,18 @@ int main() {
     {
         FakeState latchSt;
         {
+            // The plugin's function table is declared BEFORE the runner that
+            // holds a pointer to it: the runner calls destroy() through that
+            // pointer when it is destroyed, and locals die in reverse order of
+            // declaration, so a table declared after it was already gone
+            // (AddressSanitizer: stack-use-after-scope in
+            // PluginRunner::destroyInstances).
+            CascadeIqDecoderApi api{};
+
             // Declared before the pipeline so it outlives it: the DSP thread
             // dereferences this pointer every block.
             cascade::core::PluginRunner runner;
 
-            CascadeIqDecoderApi api{};
             api.structSize = static_cast<std::uint32_t>(sizeof(CascadeIqDecoderApi));
             api.requiredRateHz = 0.0;  // "any rate": always instantiated
             api.preferredRateHz = 0.0;
@@ -792,9 +799,11 @@ int main() {
     {
         FakeState latchSt;
         {
+            // Before the runner, which calls destroy() through a pointer to it
+            // when it is destroyed (see the same note above).
+            CascadeIqDecoderApi api{};
             cascade::core::PluginRunner runner;
 
-            CascadeIqDecoderApi api{};
             api.structSize = static_cast<std::uint32_t>(sizeof(CascadeIqDecoderApi));
             api.requiredRateHz = 0.0;
             api.preferredRateHz = 0.0;

@@ -467,6 +467,17 @@ void checkOnlyOneWorkerIsEverOut() {
     CHECK(!poll.inFlight());
     // Free again once it has answered.
     CHECK(poll.request("dir"));
+    // And that probe is COLLECTED before `disk` goes out of scope. reap() gives
+    // a probe only kQuitGrace before it abandons it to a detached thread, and
+    // this one takes 1200 ms: the abandoned worker then wrote to `disk` after
+    // the function had returned (AddressSanitizer: stack-buffer-underflow in
+    // SlowDisk::claimer). checkQuitAbandonsAWedgedProbe is the test that
+    // abandons a probe on purpose, and it owns its disk through a shared_ptr.
+    const double until2 = nowMs() + 5000.0;
+    while (nowMs() < until2 && !poll.poll(tok)) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    CHECK(!poll.inFlight());
     CHECK(disk.maxConcurrent.load() == 1);
     poll.reap();
 }

@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<ArrayOfMemoryEntry xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <MemoryEntry>
+    <IsFavourite>true</IsFavourite>
+    <Name>Radio 2 &amp; friends</Name>
+    <GroupName>FM</GroupName>
+    <Frequency>88100000</Frequency>
+    <DetectorType>WFM</DetectorType>
+    <Shift>0</Shift>
+    <FilterBandwidth>150000</FilterBandwidth>
+  </MemoryEntry>
+  <MemoryEntry>
+    <Name>Tower</Name>
+    <Frequency>118000000</Frequency>
+    <DetectorType>AM</DetectorType>
+    <Shift>600000</Shift>
+  </MemoryEntry>
+  <MemoryEntry>
+    <Name>No frequency</Name>
+  </MemoryEntry>
+</ArrayOfMemoryEntry>

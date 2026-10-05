@@ -24,6 +24,18 @@ namespace cascade::core {
 namespace fs = std::filesystem;
 using json = nlohmann::json;
 
+namespace {
+
+// The largest marker number a file may carry. Numbers only ever grow (one per
+// marker dropped, never reused), so a billion is far beyond what any list reaches
+// - the list holds 200, and a thousand drops a day would take millennia - and low
+// enough that "highest + 1" and the counter's own increment cannot overflow an
+// int, which a number at the top of the range made them do: the next marker was
+// handed a number the list already held (tests/test_freq_markers.cpp).
+constexpr int kMaxMarkerNumber = 1'000'000'000;
+
+}  // namespace
+
 std::string FreqMarkers::defaultPath() {
     // Beside bookmarks.json, so the two lists share one directory and one set
     // of platform rules.
@@ -34,7 +46,9 @@ int FreqMarkers::add(double freqHz, std::int64_t notedUnix, double mergeHz) {
     if (!std::isfinite(freqHz) || !(freqHz > 0.0)) { return 0; }
     const double tol = (std::isfinite(mergeHz) && mergeHz > 0.0) ? mergeHz : 0.0;
     if (const int same = nearest(freqHz, tol); same != 0) { return same; }
-    if (list_.size() >= kMaxMarkers) { return 0; }
+    // Out of numbers is out of room, as the cap is: a number past
+    // kMaxMarkerNumber is one load() would not take back.
+    if (list_.size() >= kMaxMarkers || next_ >= kMaxMarkerNumber) { return 0; }
     FreqMarker m;
     m.number = next_++;
     m.freqHz = freqHz;
@@ -166,7 +180,10 @@ bool FreqMarkers::load(const std::string& path, std::string& error) {
         FreqMarker m;
         m.freqHz = hz->get<double>();
         m.number = n->get<int>();
-        if (!std::isfinite(m.freqHz) || !(m.freqHz > 0.0) || m.number <= 0) { continue; }
+        if (!std::isfinite(m.freqHz) || !(m.freqHz > 0.0) || m.number <= 0 ||
+            m.number >= kMaxMarkerNumber) {
+            continue;
+        }
         if (!seen.insert(m.number).second) { continue; }
         if (list_.size() >= kMaxMarkers) { break; }
         if (const auto t = e.find("noted"); t != e.end() && t->is_number_integer()) {
@@ -184,8 +201,11 @@ bool FreqMarkers::load(const std::string& path, std::string& error) {
     // hand-edited or older file must never make add() hand out a number that
     // is already in the list.
     int next = highest + 1;
-    if (const auto nx = j.find("next"); nx != j.end() && nx->is_number_integer()) {
-        next = std::max(next, nx->get<int>());
+    // A "next" outside the range numbers are allowed to take is as damaged as an
+    // entry there, and is not believed.
+    if (const auto nx = j.find("next");
+        nx != j.end() && nx->is_number_integer() && nx->get<std::int64_t>() < kMaxMarkerNumber) {
+        next = std::max(next, static_cast<int>(nx->get<std::int64_t>()));
     }
     next_ = next;
     return true;

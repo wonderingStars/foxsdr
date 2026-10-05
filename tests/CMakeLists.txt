@@ -120,9 +120,18 @@ foreach(src ${CASCADE_TESTS})
     # source (target options come after the configuration flags on the command
     # line), and --strip-debug drops what the linked-in library objects carry.
     # The function symbol table is untouched, so a crash test still names code.
-    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    #
+    # Not in a sanitizer build (CASCADE_SANITIZE, cmake/sanitize.cmake): that one
+    # compiles with -g1 so a report names file and line, and stripping would
+    # undo it.
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT CASCADE_SANITIZE_ENABLED)
         target_compile_options(${name} PRIVATE -g0)
         target_link_options(${name} PRIVATE -Wl,--strip-debug)
+    endif()
+    # The AddressSanitizer runtime DLL beside the test (MSVC sanitizer build
+    # only), for the reason SoapySDR.dll is staged below.
+    if(CASCADE_SANITIZE_ENABLED)
+        cascade_sanitize_stage_runtime(${name})
     endif()
     # Put SoapySDR.dll beside the test binary EXPLICITLY.
     #
@@ -210,6 +219,7 @@ foreach(src ${CASCADE_TESTS})
     # A liveness bug (stuck spin loop, deadlock) must fail the suite, not hang
     # it forever — ctest's default per-test timeout is 1500 s.
     set_tests_properties(${name} PROPERTIES TIMEOUT 120)
+    list(APPEND CASCADE_ALL_TEST_NAMES ${name})
 endforeach()
 
 # test_tester_link spawns the real cascade.exe with a foxsdr: link and needs
@@ -268,3 +278,70 @@ add_test(NAME app_cli_missing_value COMMAND cascade --frames)
 add_test(NAME app_cli_unknown_arg COMMAND cascade --bogus)
 set_tests_properties(app_cli_bad_value app_cli_negative app_cli_missing_value
                      app_cli_unknown_arg PROPERTIES WILL_FAIL TRUE TIMEOUT 30)
+
+# Fuzz targets for the parsers and the rate-dependent DSP, and the regression
+# corpus each one replays as an ordinary test (fuzz_corpus_<target>). See
+# tests/fuzz/fuzz.cmake.
+include("${CMAKE_CURRENT_SOURCE_DIR}/fuzz/fuzz.cmake")
+
+# ---------------------------------------------------------------------------
+# Sanitizer build (-DCASCADE_SANITIZE=..., cmake/sanitize.cmake). Nothing below
+# runs, and nothing above changes, when it is off.
+# ---------------------------------------------------------------------------
+if(CASCADE_SANITIZE_ENABLED)
+    list(APPEND CASCADE_ALL_TEST_NAMES app_smoke app_selftest app_version
+         app_cli_bad_value app_cli_negative app_cli_missing_value app_cli_unknown_arg)
+
+    # TESTS THAT CANNOT RUN UNDER A SANITIZER, AND WHY. Each is still registered,
+    # so ctest lists it - "Not Run (Disabled)" in its summary, and
+    # `ctest -N -L sanitize-excluded` prints the set - rather than the suite
+    # quietly getting smaller. One "name|reason" per entry (no semicolons).
+    set(CASCADE_SANITIZE_EXCLUDED_TESTS
+        # A case inside it corrupts the heap on purpose; the rest of the file is
+        # the same crash-handler territory as the three below.
+        "test_crash_second_fault|its heap-trashed case writes into freed heap blocks on purpose to prove the crash handler survives a damaged heap and AddressSanitizer reports that write as a heap-use-after-free and ends the process before the handler under test runs"
+        # Real-time audio: the DSP thread must keep pace with a source paced by
+        # the wall clock. Instrumented it does not (measured: the channel filter
+        # alone costs 40 to 85 percent of real time, the sink counts underruns),
+        # so tone and RDS measurements fail with NO sanitizer report. They pass
+        # in the plain build, which is where their timing claims are made.
+        "test_channel_bandwidth|its pipeline cases measure audio against a real-time source and the instrumented DSP thread falls behind the clock (sink underruns) so tone levels fail with no sanitizer report"
+        "test_pipeline_audio|its pipeline cases measure audio against a real-time source and the instrumented DSP thread falls behind the clock (sink underruns) so RDS and stereo measurements fail with no sanitizer report"
+        "test_pipeline_device_rate_audio|its pipeline cases measure audio against a real-time source and the instrumented DSP thread falls behind the clock (sink underruns) so tone share fails with no sanitizer report")
+
+    # TESTS THAT FAULT A CHILD PROCESS ON PURPOSE, to prove the crash handler
+    # writes its report. They run under AddressSanitizer with ASan's OWN handlers
+    # for access violations, aborts, illegal instructions and arithmetic faults
+    # switched off: with them on, the sanitizer's handler runs first, prints its
+    # report and ends the process (exit 1), and the product's handler - the thing
+    # under test - never sees the fault. Memory-error CHECKS (heap, stack, use
+    # after free) are instrumentation, not handlers, and stay on.
+    set(CASCADE_SANITIZE_FAULT_TESTS test_crash_capture test_crash_late_module
+        test_soapy_enum_proc)
+    set(_cascade_fault_env ${CASCADE_SANITIZE_TEST_ENV})
+    list(TRANSFORM _cascade_fault_env REPLACE "^ASAN_OPTIONS=(.*)$"
+         "ASAN_OPTIONS=\\1:handle_segv=0:handle_abort=0:handle_sigill=0:handle_sigfpe=0")
+
+    foreach(t ${CASCADE_ALL_TEST_NAMES})
+        # The per-test limits were chosen for a plain build.
+        get_test_property(${t} TIMEOUT _limit)
+        if(_limit)
+            math(EXPR _limit "${_limit} * ${CASCADE_SANITIZE_TIMEOUT_SCALE}")
+            set_tests_properties(${t} PROPERTIES TIMEOUT ${_limit})
+        endif()
+        # Runtime options travel with the test, not with whoever runs ctest.
+        if(t IN_LIST CASCADE_SANITIZE_FAULT_TESTS)
+            set_tests_properties(${t} PROPERTIES ENVIRONMENT "${_cascade_fault_env}")
+        else()
+            set_tests_properties(${t} PROPERTIES ENVIRONMENT "${CASCADE_SANITIZE_TEST_ENV}")
+        endif()
+    endforeach()
+
+    foreach(entry ${CASCADE_SANITIZE_EXCLUDED_TESTS})
+        string(REPLACE "|" ";" entry "${entry}")
+        list(GET entry 0 t)
+        list(GET entry 1 why)
+        set_tests_properties(${t} PROPERTIES DISABLED TRUE LABELS "sanitize-excluded")
+        message(STATUS "sanitizer: ${t} is excluded - ${why}")
+    endforeach()
+endif()

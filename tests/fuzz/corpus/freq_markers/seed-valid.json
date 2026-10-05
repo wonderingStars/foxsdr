@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "next": 5,
+  "markers": [
+    {
+      "n": 1,
+      "freqHz": 145500000,
+      "noted": 1700000000,
+      "note": "repeater"
+    },
+    {
+      "n": 2,
+      "freqHz": 433920000,
+      "noted": 1700003600
+    },
+    {
+      "n": 4,
+      "freqHz": 1090000000,
+      "noted": 9223372036854775807,
+      "note": "far future"
+    },
+    {
+      "n": 2,
+      "freqHz": 1.0
+    },
+    {
+      "n": 0,
+      "freqHz": 1.0
+    }
+  ]
+}

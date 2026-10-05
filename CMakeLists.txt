@@ -140,6 +140,12 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
 endif()
 
+# -DCASCADE_SANITIZE=address (or address,undefined on GCC/Clang) builds the
+# application, the report reader and every test with AddressSanitizer. Empty -
+# the default, and what every shipped binary is built with - this changes
+# nothing. See cmake/sanitize.cmake and docs/SANITIZERS-AND-FUZZING.md.
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/sanitize.cmake")
+
 # ---------------------------------------------------------------------------
 # External dependencies (deliberately minimal — see header comment)
 # ---------------------------------------------------------------------------
@@ -419,6 +425,18 @@ target_link_libraries(cascade PRIVATE cascade_lib)
 # report matters.
 add_executable(foxsdr-reports tools/report-reader/main.cpp)
 target_link_libraries(foxsdr-reports PRIVATE cascade_lib)
+
+# Sanitizer build only (CASCADE_SANITIZE, cmake/sanitize.cmake): instrument the
+# vendored libraries that are linked into the executables, hand the flags to
+# everything that links cascade_lib, and put the runtime beside the programs.
+if(CASCADE_SANITIZE_ENABLED)
+    foreach(_vendored imgui glfw portaudio_static cascade_pffft)
+        cascade_sanitize_target(${_vendored})
+    endforeach()
+    target_link_libraries(cascade_lib PUBLIC cascade_sanitize)
+    cascade_sanitize_stage_runtime(cascade)
+    cascade_sanitize_stage_runtime(foxsdr-reports)
+endif()
 
 # Delay-load SoapySDR so a missing or broken hardware runtime cannot stop the
 # app from starting. Without this the Windows loader kills the process before

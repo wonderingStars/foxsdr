@@ -2481,8 +2481,12 @@ void testServiceNotRespondingMakesTheDeviceDead() {
 
     // ...and an ordinary refusal is still an ordinary refusal. Without this
     // the check above would pass for any failing Update at all.
-    SdrPlaySource other;
+    // The fake is declared BEFORE the source that holds a pointer into it: the
+    // source's destructor closes the device through that table, and locals die
+    // in reverse order of declaration, so a fake declared after it was already
+    // gone (AddressSanitizer: stack-use-after-scope in sessionIsLost).
     FakeSdrPlayApi fake2;
+    SdrPlaySource other;
     fake2.addDevice("1811003EFC", abi::kRsp1A);
     CHECK(openOn(other, fake2));
     CHECK(other.start());

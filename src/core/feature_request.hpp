@@ -184,6 +184,12 @@ std::string featureRequestArch();
 // without a rebuild.
 std::string featureRequestEndpoint();
 
+// The sentence in a server's answer body ({"error": "..."}), or "" when the body
+// is empty, is not a JSON object, or carries no STRING under "error". Public so
+// a test can drive it with the answers a server must not be trusted to send: it
+// runs on the sender's worker thread, where an exception is std::terminate.
+std::string featureRequestServerError(const std::string& body);
+
 // ---------------------------------------------------------------------------
 // The state machine
 // ---------------------------------------------------------------------------

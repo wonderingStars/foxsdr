@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "plugins": [
+    {
+      "id": "pocsag",
+      "name": "POCSAG pager decoder",
+      "version": "1.2.0",
+      "file": "pocsag-1.2.0-abi3-win-x64.dll",
+      "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "abiVersion": 3,
+      "installedAt": 1700000000
+    },
+    {
+      "id": "acars",
+      "name": "ACARS",
+      "version": "0.9.1",
+      "file": "acars.dll",
+      "abiVersion": 2
+    },
+    {
+      "id": "evil",
+      "name": "Evil",
+      "version": "1",
+      "file": "..\\..\\evil.dll"
+    },
+    {
+      "id": "pocsag",
+      "name": "Dup",
+      "version": "9",
+      "file": "dup.dll"
+    }
+  ],
+  "policies": [
+    {
+      "id": "pocsag",
+      "minSupportedVersion": "1.1.0",
+      "catalogueVersion": "1.2.0",
+      "abiVersion": 3
+    },
+    {
+      "id": "acars",
+      "minSupportedVersion": "1.0.0",
+      "abiVersion": 3
+    }
+  ]
+}

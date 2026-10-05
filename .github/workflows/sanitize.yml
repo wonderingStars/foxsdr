@@ -1,0 +1,236 @@
+# Memory-error, undefined-behaviour and fuzz testing on Linux.
+#
+# A SEPARATE WORKFLOW FROM build.yml, ON PURPOSE. build.yml's two jobs produce
+# the artifacts that are released (the tarballs, the AppImages, the symbol
+# archives); nothing here may slow them down or colour their result, and a
+# workflow of its own is the only arrangement that guarantees it: its checks
+# appear beside theirs as a distinct, separately named status, it starts
+# nothing of theirs, and it is not part of their run. It is also not a
+# required check unless the repository is configured to make it one. build.yml
+# is not edited by the change that added this file.
+#
+# TWO JOBS, TWO COMPILERS, because they need different things:
+#
+#   sanitize  GCC, the compiler the release jobs ship with. The whole suite
+#             built with AddressSanitizer + UndefinedBehaviorSanitizer (and
+#             LeakSanitizer, which is part of ASan on Linux) and run under
+#             xvfb with the null audio device, exactly as build.yml runs it.
+#   fuzz      Clang, because libFuzzer is Clang's. The fuzz targets in
+#             tests/fuzz, built with ASan + UBSan + libFuzzer, the regression
+#             corpus replayed first and then each target fuzzed for a short,
+#             fixed time.
+#
+# They run in parallel on separate runners and neither waits for the other. A
+# Clang build failure (this code base has only ever been compiled with GCC and
+# MSVC) therefore costs the fuzz job and leaves the sanitizer result intact.
+#
+# HOW TO RUN IT ON A BRANCH. "Run workflow" in the Actions tab, or
+#   gh workflow run sanitize.yml --ref <branch> -f fuzz_seconds=60
+# - which GitHub only offers for a workflow file that exists on the default
+# branch. Until then the push trigger below starts it on any branch (not
+# master) whose push changes the sanitizer or fuzz files themselves.
+#
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+name: sanitize
+
+on:
+  workflow_dispatch:
+    inputs:
+      fuzz_seconds:
+        description: "Seconds to fuzz each target (the corpus replay is separate and always runs)"
+        default: "60"
+        required: false
+  push:
+    branches-ignore: [master]
+    paths:
+      - ".github/workflows/sanitize.yml"
+      - "cmake/sanitize.cmake"
+      - "tests/fuzz/**"
+      - "tools/sanitize/**"
+
+# One run per ref: a newer push replaces a run still in progress.
+concurrency:
+  group: sanitize-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  sanitize:
+    runs-on: ubuntu-24.04
+    # A Release build of ~270 programs with instrumentation, then the suite at
+    # up to several times its normal run time, on four cores.
+    timeout-minutes: 240
+    env:
+      # THE RUNTIME OPTIONS, spelled out. cmake/sanitize.cmake attaches the same
+      # strings to every test as its CTest ENVIRONMENT (so a local Linux run and
+      # this one agree); they are repeated here for the steps that do not go
+      # through CTest, and so that the policy can be read in one place:
+      #   halt_on_error / abort_on_error=0 : the first report ends the process
+      #                                      with a nonzero exit, not a core dump
+      #   print_stacktrace / symbolize     : every report carries a stack
+      #   detect_leaks=1                   : LeakSanitizer on, with the library
+      #                                      suppressions in tools/sanitize/lsan.supp
+      #   detect_stack_use_after_return    : the use-after-scope class
+      ASAN_OPTIONS: detect_leaks=1:halt_on_error=1:abort_on_error=0:print_stacktrace=1:symbolize=1:strict_string_checks=1:detect_stack_use_after_return=1:allocator_may_return_null=0
+      UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1:symbolize=1
+      LSAN_OPTIONS: print_suppressions=0:suppressions=${{ github.workspace }}/tools/sanitize/lsan.supp
+    steps:
+      - uses: actions/checkout@v4
+
+      # The same package set as build.yml's "linux" job, plus llvm-symbolizer so
+      # a report names file and line instead of an address.
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build \
+            libgl1-mesa-dev libsoapysdr-dev libssl-dev libunwind-dev \
+            libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
+            libwayland-dev libwayland-bin wayland-protocols libxkbcommon-dev \
+            libasound2-dev libasound2-plugins \
+            xvfb libgl1-mesa-dri \
+            llvm-18
+          echo "ASAN_SYMBOLIZER_PATH=$(command -v llvm-symbolizer-18)" >> "$GITHUB_ENV"
+
+      # Hosted runners on recent kernels randomise mmap with more entropy than
+      # AddressSanitizer's fixed shadow mapping tolerates, and the result is an
+      # instant "DEADLYSIGNAL" in every instrumented program. Lowering it is the
+      # documented workaround. Harmless where it is not needed.
+      - name: Make the address space safe for AddressSanitizer
+        run: sudo sysctl -w vm.mmap_rnd_bits=28 || true
+
+      - name: Configure
+        run: >
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          -DCASCADE_SANITIZE=address,undefined
+
+      - name: Build
+        run: cmake --build build -j"$(nproc)"
+
+      - name: Disk after the build
+        run: df -h . && du -sh build
+
+      # As in build.yml: the runner has no audio device, so a dummy ALSA device
+      # is provided and the audio path is exercised rather than skipped.
+      - name: Provide a null audio device
+        run: |
+          sudo modprobe snd-dummy || true
+          printf 'pcm.!default { type null }\nctl.!default { type null }\n' | sudo tee /etc/asound.conf
+
+      # What is NOT run under the sanitizer, and why, printed where it can be
+      # read: CTest lists these as "Not Run (Disabled)" at the end of the suite
+      # too. See the list and the reasons in tests/CMakeLists.txt.
+      - name: Tests excluded from the sanitizer run
+        run: ctest --test-dir build -N -L sanitize-excluded
+
+      # -j2: instrumented test programs hold several times the memory, and the
+      # real-time pipeline tests need a core each. Per-test time limits are
+      # already scaled by cmake/sanitize.cmake. tee, so the log survives as an
+      # artifact even when ctest's own output is truncated in the UI.
+      - name: Test
+        env:
+          LIBGL_ALWAYS_SOFTWARE: "1"
+        run: |
+          set -o pipefail
+          xvfb-run -a ctest --test-dir build --output-on-failure -j2 2>&1 | tee ctest.log
+
+      - name: Selftest
+        env:
+          LIBGL_ALWAYS_SOFTWARE: "1"
+        run: xvfb-run -a ./build/cascade --selftest
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sanitize-test-log
+          path: |
+            ctest.log
+            build/Testing/Temporary/LastTest.log
+          if-no-files-found: warn
+
+  fuzz:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      CC: clang-18
+      CXX: clang++-18
+      FUZZ_SECONDS: ${{ github.event.inputs.fuzz_seconds || '60' }}
+      ASAN_OPTIONS: detect_leaks=1:halt_on_error=1:abort_on_error=0:print_stacktrace=1:symbolize=1:strict_string_checks=1:detect_stack_use_after_return=1:allocator_may_return_null=0
+      UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1:symbolize=1
+      LSAN_OPTIONS: print_suppressions=0:suppressions=${{ github.workspace }}/tools/sanitize/lsan.supp
+    steps:
+      - uses: actions/checkout@v4
+
+      # clang-18 plus the runtime package that carries libFuzzer
+      # (libclang_rt.fuzzer), which clang itself does not install.
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build \
+            clang-18 libclang-rt-18-dev llvm-18 \
+            libgl1-mesa-dev libsoapysdr-dev libssl-dev libunwind-dev \
+            libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
+            libwayland-dev libwayland-bin wayland-protocols libxkbcommon-dev \
+            libasound2-dev libasound2-plugins \
+            xvfb libgl1-mesa-dri
+          echo "ASAN_SYMBOLIZER_PATH=$(command -v llvm-symbolizer-18)" >> "$GITHUB_ENV"
+
+      - name: Make the address space safe for AddressSanitizer
+        run: sudo sysctl -w vm.mmap_rnd_bits=28 || true
+
+      # 'fuzzer' puts libFuzzer's coverage counters into EVERY object, the
+      # library included (without them a fuzzer cannot see the code it is for);
+      # CASCADE_FUZZ=ON adds the fuzz_<target> executables, which are the only
+      # programs that link libFuzzer's main().
+      - name: Configure
+        run: >
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          -DCASCADE_SANITIZE=address,undefined,fuzzer -DCASCADE_FUZZ=ON
+
+      # Only what the fuzz job uses: the replay program and the libFuzzer
+      # executables. The whole suite is the other job's business.
+      - name: Build
+        run: |
+          targets=$(ctest --test-dir build -N -R '^fuzz_corpus_' | sed -n 's/.*Test *#[0-9]*: fuzz_corpus_//p' | sed 's/^/fuzz_/' | tr '\n' ' ')
+          echo "fuzz targets: $targets"
+          test -n "$targets"
+          cmake --build build -j"$(nproc)" --target fuzz_corpus_replay $targets
+
+      # THE REGRESSION CORPUS FIRST: every seed and every input that ever found
+      # a bug, once each, through the instrumented build. A bug that was fixed
+      # must stay fixed before any new input is tried.
+      - name: Replay the regression corpus
+        run: ctest --test-dir build -R '^fuzz_corpus_' --output-on-failure
+
+      # THEN EACH TARGET FOR A SHORT, FIXED TIME. libFuzzer reads the regression
+      # corpus as its seed set (the second directory, read-only in effect) and
+      # writes what it finds to work/<target>. A crash leaves the offending
+      # input in artifacts/ - that file is the bug report: add it to
+      # tests/fuzz/corpus/<target>/ with the fix. One target failing does not
+      # stop the rest: the status is collected and returned at the end.
+      - name: Fuzz each target
+        run: |
+          mkdir -p work artifacts
+          status=0
+          for t in $(ctest --test-dir build -N -R '^fuzz_corpus_' | sed -n 's/.*Test *#[0-9]*: fuzz_corpus_//p'); do
+            echo "::group::fuzz_$t (${FUZZ_SECONDS}s)"
+            mkdir -p "work/$t"
+            "build/tests/fuzz_$t" \
+              -max_total_time="$FUZZ_SECONDS" -timeout=25 -rss_limit_mb=3072 \
+              -print_final_stats=1 -artifact_prefix="artifacts/${t}-" \
+              "work/$t" "tests/fuzz/corpus/$t" || { echo "::error::fuzz_$t found a failure"; status=1; }
+            echo "::endgroup::"
+          done
+          exit $status
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fuzz-findings
+          path: |
+            artifacts/
+            work/
+          if-no-files-found: ignore

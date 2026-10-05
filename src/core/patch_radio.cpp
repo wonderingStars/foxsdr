@@ -212,7 +212,11 @@ void readerBody(const std::shared_ptr<PatchRadio::Shared>& shp) {
                          std::chrono::duration<double>(static_cast<double>(produced) / rate));
             std::this_thread::sleep_until(due);
         }
-        const std::size_t got = src.read(buf.data(), chunk);
+        // Clamped to what was asked for: a driver that returns more than the
+        // `chunk` samples it was handed room for must not be believed, or the
+        // conjugate, the runner and the spectrum copy below all read past the
+        // end of `buf` (tests/test_source_overreport.cpp).
+        const std::size_t got = std::min(src.read(buf.data(), chunk), chunk);
         if (!sh.run.load(std::memory_order_acquire)) { break; }
         if (src.faulted()) {
             const char* why = src.lastError();

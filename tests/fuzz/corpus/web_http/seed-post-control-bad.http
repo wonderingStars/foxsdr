@@ -1,0 +1,7 @@
+POST /api/control HTTP/1.1
+Host: localhost
+Content-Type: application/json
+Content-Length: 16
+Connection: close
+
+{"centerHz":"x"}

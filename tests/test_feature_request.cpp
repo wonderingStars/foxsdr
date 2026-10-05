@@ -564,5 +564,35 @@ int main() {
         CHECK(featureRequestContactHasEmailAddress(tooLong + "@example.com"));
     }
 
+    // --- the server's answer is not trusted to be well-typed ----------------
+    //
+    // featureRequestServerError runs on the sender's worker thread (a bare
+    // std::thread), where an exception is std::terminate. nlohmann's
+    // value(key, default) THROWS for a key that is present with another type,
+    // so a server (or a captive portal, or a proxy's error page that happens to
+    // be JSON) answering {"error": 5} ended the process. Found by reading the
+    // code the update_manifest fuzz target had found the same defect in.
+    {
+        CHECK(featureRequestServerError("{\"ok\":false,\"error\":\"text is too short\"}") ==
+              "text is too short");
+        const char* notASentence[] = {
+            "", "not json", "[]", "null", "7", "{}",
+            "{\"error\":5}", "{\"error\":null}", "{\"error\":[\"a\"]}", "{\"error\":{\"x\":1}}",
+            "{\"error\":true}",
+        };
+        for (const char* body : notASentence) {
+            bool threw = false;
+            std::string sentence = "stale";
+            try {
+                sentence = featureRequestServerError(body);
+            } catch (...) {
+                threw = true;
+            }
+            if (threw) { std::printf("FAIL featureRequestServerError threw on: %s\n", body); }
+            CHECK(!threw);
+            CHECK(sentence.empty());
+        }
+    }
+
     return testSummary("test_feature_request");
 }

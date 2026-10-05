@@ -1095,6 +1095,13 @@ cmake --build build --config Release
 ctest --test-dir build -C Release --output-on-failure
 ```
 
+**Memory-error and fuzz testing.** `-DCASCADE_SANITIZE=address` builds everything
+(application, tests, the libraries inside them) under AddressSanitizer in a
+separate build directory, and the parsers and rate-dependent DSP have fuzz targets
+whose regression corpus runs in the ordinary suite. Both are off unless asked for
+and change nothing in a normal build; how to run them is in
+[docs/SANITIZERS-AND-FUZZING.md](docs/SANITIZERS-AND-FUZZING.md).
+
 **Photographing the window.** Press **F12** in a running FoxSDR and it writes
 what it has just drawn, from its own framebuffer, as `shot-<frame>.bmp` into
 `FOXSDR_SHOT_DIR` (or the current directory), and logs the path. Set

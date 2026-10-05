@@ -53,3 +53,8 @@ installer/msix/Output/
 # installer\msix\make-logos.py imports resources/icon/generate_icon.py by path,
 # which leaves a bytecode cache beside it.
 __pycache__/
+
+# The scratch directory a fuzz target or its corpus replay writes beside the
+# working directory (tests/fuzz/fuzz_common.hpp); removed when the process ends
+# normally, left behind by one that crashed.
+fuzz_scratch_*/

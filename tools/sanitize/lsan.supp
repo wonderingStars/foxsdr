@@ -1,0 +1,24 @@
+# LeakSanitizer suppressions for the Linux sanitizer job
+# (.github/workflows/sanitize.yml, cmake/sanitize.cmake).
+#
+# Every line here names a LIBRARY WE DO NOT BUILD, and hides a leak only when
+# that library is on the allocation's stack. They are the display, audio and
+# GL stacks, which allocate for the life of the process and are not torn down
+# at exit by design (Mesa's software renderer, ALSA's configuration tree, the
+# X and Wayland client libraries). No entry names anything in this repository,
+# the vendored libraries or the standard library: a leak in our own code must
+# fail the job.
+#
+# These were written WITHOUT a Linux run to check them against (the job has not
+# yet been run); prune any line the first log shows is not needed.
+leak:libGLX_mesa
+leak:libEGL_mesa
+leak:libgallium
+leak:swrast_dri
+leak:libLLVM
+leak:libX11
+leak:libxcb
+leak:libwayland
+leak:libfontconfig
+leak:libasound
+leak:libdbus

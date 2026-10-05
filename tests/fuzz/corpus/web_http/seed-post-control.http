@@ -1,0 +1,7 @@
+POST /api/control HTTP/1.1
+Host: localhost
+Content-Type: application/json
+Content-Length: 35
+Connection: close
+
+{"centerHz":100000000,"mode":"WFM"}

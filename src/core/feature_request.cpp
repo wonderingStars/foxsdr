@@ -207,16 +207,16 @@ std::string featureRequestEndpoint() {
 // ---------------------------------------------------------------------------
 // The response body's "error" sentence, when there is one
 // ---------------------------------------------------------------------------
-namespace {
-
-std::string extractServerError(const std::string& body) {
+std::string featureRequestServerError(const std::string& body) {
     if (body.empty()) { return std::string(); }
     const nlohmann::json j = nlohmann::json::parse(body, nullptr, /*allow_exceptions=*/false);
     if (j.is_discarded() || !j.is_object()) { return std::string(); }
-    return j.value("error", std::string());
+    // Not j.value("error", std::string()): that THROWS for an "error" that is
+    // present as a number, null, array or object, and this runs on the
+    // sender's worker thread, where an exception is std::terminate.
+    const auto it = j.find("error");
+    return (it != j.end() && it->is_string()) ? it->get<std::string>() : std::string();
 }
-
-}  // namespace
 
 // ---------------------------------------------------------------------------
 // The state machine
@@ -266,7 +266,7 @@ bool FeatureRequestSender::sendJson(const std::string& url, const std::string& j
             st = FeatureRequestState::Sent;
         } else if (raw.status == 429) {
             st = FeatureRequestState::CoolingDown;
-            msg = extractServerError(raw.body);
+            msg = featureRequestServerError(raw.body);
             std::uint64_t retry = (raw.rateLimited && raw.retryAfterSeconds > 0)
                                       ? raw.retryAfterSeconds
                                       : kFeatureRequestCooldownSeconds;
@@ -285,7 +285,7 @@ bool FeatureRequestSender::sendJson(const std::string& url, const std::string& j
             // does, per the contract - and anything else falls back to a
             // plain sentence naming the status, so the status line is never
             // blank.
-            msg = extractServerError(raw.body);
+            msg = featureRequestServerError(raw.body);
             if (msg.empty()) {
                 // One format string, not fragments, so it can be translated
                 // (the page shows this line as it is stored).

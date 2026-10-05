@@ -42,6 +42,23 @@ constexpr std::uint64_t kMaxInstallerBytes = 256ull * 1024ull * 1024ull;
 // keeps a redirect to somewhere unrelated from ever being attempted.
 constexpr char kAllowedHost[] = "foxsdr.com";
 
+// A string (or boolean) field of a JSON object, or empty (false) when it is
+// absent OR HAS ANOTHER TYPE. Not nlohmann's value(key, default): that returns
+// the default only for an absent key and THROWS (type_error 302) for a key
+// that is present with a number, null or object in it - and this runs on the
+// update check's worker thread, whose result the GUI thread collects with
+// future::get(), which rethrows. A service answering {"version": 5} must be a
+// refusal, not the end of the process.
+std::string stringField(const json& j, const char* key) {
+    const auto it = j.find(key);
+    return (it != j.end() && it->is_string()) ? it->get<std::string>() : std::string();
+}
+
+bool boolField(const json& j, const char* key) {
+    const auto it = j.find(key);
+    return it != j.end() && it->is_boolean() && it->get<bool>();
+}
+
 // 64 lower- or upper-case hex digits and nothing else. Written here rather
 // than borrowed because PluginRepo's copy is file-local to that translation
 // unit; the rule is four lines and duplicating it is better than widening that
@@ -175,13 +192,13 @@ bool parseUpdateManifest(const std::string& text, const std::string& currentVers
         return false;
     }
 
-    out.version = j.value("version", std::string());
+    out.version = stringField(j, "version");
     if (out.version.empty()) {
         error = "the update service named no version";
         return false;
     }
-    out.url = j.value("url", std::string());
-    out.sha256 = j.value("sha256", std::string());
+    out.url = stringField(j, "url");
+    out.sha256 = stringField(j, "sha256");
 
     // THE THREE FIELDS THAT MAKE A DOWNLOAD SAFE. Each is refused rather than
     // warned about, because a manifest missing any of them cannot be acted on
@@ -213,9 +230,9 @@ bool parseUpdateManifest(const std::string& text, const std::string& currentVers
         for (const json& n : j["notes"]) {
             if (!n.is_object()) { continue; }
             ReleaseNote note;
-            note.version = n.value("version", std::string());
-            note.date = n.value("date", std::string());
-            note.critical = n.value("critical", false);
+            note.version = stringField(n, "version");
+            note.date = stringField(n, "date");
+            note.critical = boolField(n, "critical");
             if (n.contains("notes") && n["notes"].is_array()) {
                 for (const json& line : n["notes"]) {
                     if (line.is_string()) { note.notes.push_back(line.get<std::string>()); }

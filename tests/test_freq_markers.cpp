@@ -189,6 +189,45 @@ void testLoadDamage() {
     CHECK(m.add(8.0e6, 0) == 7);
 }
 
+// A NUMBER AT THE TOP OF INT cannot wrap the counter. The next number to hand out
+// was computed as highest + 1 (a signed overflow for 2147483647) and a "next"
+// from the file was taken as it stood, so a hand-edited or damaged file whose
+// numbers reached the top of the range made add() return a number the list
+// already held: two markers with one number, and remove()/setNote() addressing
+// whichever came first. Found by the freq_markers fuzz target's "the number
+// just handed out is held by exactly one marker" property.
+void testAHugeNumberCannotWrapTheCounter() {
+    std::printf("  load: a number at the top of the range is skipped, and add() stays unique\n");
+    std::string err;
+    FreqMarkers m;
+    CHECK(writeText(p("huge.json"),
+                    R"({"schemaVersion": 1, "next": 2147483647, "markers": [
+        {"n": 2147483647, "freqHz": 7.0e6},
+        {"n": 3, "freqHz": 7.1e6}
+    ]})"));
+    CHECK(m.load(p("huge.json"), err));
+    // Skipped like any other damaged entry; the sound one loads.
+    CHECK(m.size() == 1u);
+    if (m.size() == 1u) { CHECK(m.list()[0].number == 3); }
+
+    // The "next" out of range is not believed either: numbering carries on from
+    // what the list holds.
+    const int made = m.add(8.0e6, 0);
+    CHECK(made == 4);
+    int holders = 0;
+    for (const auto& marker : m.list()) { holders += (marker.number == made) ? 1 : 0; }
+    CHECK(holders == 1);
+    // And the one after it: the counter moved on and did not wrap.
+    CHECK(m.add(9.0e6, 0) == 5);
+
+    // What was handed out survives a save and a load: the number a marker is
+    // given is never one the loader would refuse.
+    CHECK(m.save(p("huge_back.json"), err));
+    FreqMarkers back;
+    CHECK(back.load(p("huge_back.json"), err));
+    CHECK(back.size() == m.size());
+}
+
 void testRounding() {
     std::printf("  a marker keeps the precision of its pixel, not of the double\n");
     CHECK(cascade::core::markerStepHz(2000.0) == 2000.0);
@@ -233,6 +272,7 @@ int main() {
     testClipboard();
     testRoundTrip();
     testLoadDamage();
+    testAHugeNumberCannotWrapTheCounter();
     testRounding();
 
     const int rc = testSummary("test_freq_markers");
