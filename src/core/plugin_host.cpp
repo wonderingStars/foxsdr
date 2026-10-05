@@ -1232,7 +1232,12 @@ void PluginHost::scan(const std::string& dir) {
         return;
     }
 
-    std::vector<fs::path> candidates;
+    // Each candidate with its SIZE, measured here and nowhere else: the entry
+    // the listing just produced already carries it (on Windows the directory
+    // iteration returns it with the name), so this is no further question to the
+    // disk - and what it spares is the Fitted modules window asking again for
+    // every module on every frame (LoadedPlugin::fileBytes).
+    std::vector<std::pair<fs::path, std::uint64_t>> candidates;
     fs::directory_iterator it(dir, fs::directory_options::skip_permission_denied, ec);
     if (ec) {
         return;
@@ -1249,7 +1254,12 @@ void PluginHost::scan(const std::string& dir) {
         if (!hasPluginExtension(it->path().filename().string())) {
             continue;
         }
-        candidates.push_back(it->path());
+        // A size the listing could not give is "not measured" (0), never a
+        // reason to leave the file out: it is still a candidate.
+        std::error_code sizeEc;
+        const std::uintmax_t bytes = it->file_size(sizeEc);
+        candidates.emplace_back(it->path(), sizeEc ? std::uint64_t{0}
+                                                   : static_cast<std::uint64_t>(bytes));
     }
 
     // Deterministic order: directory iteration order is filesystem-defined,
@@ -1257,8 +1267,10 @@ void PluginHost::scan(const std::string& dir) {
     std::sort(candidates.begin(), candidates.end());
 
     plugins_.reserve(candidates.size());
-    for (const fs::path& p : candidates) {
-        plugins_.push_back(loadOne(p));
+    for (const auto& [path, bytes] : candidates) {
+        LoadedPlugin rec = loadOne(path);
+        rec.fileBytes = bytes;
+        plugins_.push_back(std::move(rec));
     }
 
     // ONE VERSION OF A PLUGIN RUNS, NEVER TWO. See resolveDuplicatePlugins in

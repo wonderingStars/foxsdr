@@ -77,7 +77,9 @@ struct DiagModule {
 // file cannot see: a vendor module's own LoadLibrary in the middle of a probe
 // (RtAudio mapping an ASIO driver) arrives after every refresh above. That is
 // what adoptModuleContaining, below, is for - the fault path names such a
-// module itself, so the table need not have been refreshed for it.
+// module itself, so the table need not have been refreshed for it - and
+// describeModuleContaining is the same for the freeze report, which may not
+// write to the table.
 //
 // The device SCAN needs no entry in the application - it runs in that child
 // process, so no vendor module is mapped into this one.
@@ -119,9 +121,35 @@ bool resolveAddress(std::uintptr_t addr, DiagModule& out, std::uintptr_t& offset
 // lasts until the next refreshModuleTable(), which rebuilds the table.
 bool adoptModuleContaining(std::uintptr_t addr);
 
+// THE SAME NAMING, FOR A WRITER THAT MUST NOT TOUCH THE TABLE: the freeze
+// report (core/hang_watchdog.cpp). It had the crash handler's blind spot - a
+// stalled thread inside code mapped after the last refreshModuleTable() printed
+// bare addresses, and the display-stall classification, which reads module
+// names off the top frames, could not see a graphics driver the table had never
+// heard of - and adoptModuleContaining is the wrong tool for it: it APPENDS to
+// the table, whose one-writer rule is the fault path's, while the watchdog
+// thread runs beside a GUI thread that rebuilds the table at the end of every
+// plugin rescan. A racing append could drop modules from the table, and the
+// next crash report would pay for it.
+//
+// So this fills `out` and `offset` and writes nothing shared. True when the
+// table already covered `addr` (the ordinary case, answered by resolveAddress)
+// or when `addr` lies in a mapped IMAGE it does not cover; false for anything
+// that is not an image (heap, stack, a JIT page: nothing to name, and nothing is
+// invented), and on every non-Windows platform. The entry carries a name, a base
+// and a size and no pdb or build id, for adoptModuleContaining's reason.
+//
+// SAFE WHERE THE WATCHDOG USES IT: VirtualQuery and NtQueryVirtualMemory take
+// neither the loader lock nor the heap lock, and the module's headers are read
+// behind a __try. It needs prepareModuleAdoption() to have run; without it the
+// module is named "unknown-image" with its base, size and offset - still more
+// than a bare address.
+bool describeModuleContaining(std::uintptr_t addr, DiagModule& out, std::uintptr_t& offset);
+
 // The healthy-path half of adoptModuleContaining: resolves the one ntdll entry
 // point it needs, because GetProcAddress from a handler is a call into the
-// loader. Called by installCrashHandlers; harmless to call again.
+// loader. Called by installCrashHandlers and by HangWatchdog::start; harmless to
+// call again.
 void prepareModuleAdoption();
 
 // The CodeView build id of a PE ON DISK - the same value refreshModuleTable

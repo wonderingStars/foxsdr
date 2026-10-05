@@ -124,6 +124,7 @@ struct GLFWwindow;
 #include "core/feature_request.hpp"
 #include "core/problem_report.hpp"
 #include "core/hang_watchdog.hpp"
+#include "core/phase_clock.hpp"
 #include "gui/freq_scale.hpp"
 // Pulls in the bind policy and the credential types too, but NOT httplib —
 // web_server.hpp forward-declares it.
@@ -813,7 +814,12 @@ private:
     // Takes every live plugin handle off the pipeline and the UI, in the one
     // order that is safe, then unmaps the modules. The ONLY way any code here
     // may call PluginHost::unloadAll() — see the note in its body.
-    void detachAndUnloadPlugins();
+    //
+    // `phases`, when given, is told where each of its four steps begins
+    // (decoders, patch, panels and map, unload) so the rescan's one log line can
+    // say which of them took the time; null for every other caller, which write
+    // nothing (rescanPlugins, tests/test_plugin_rescan_log.cpp).
+    void detachAndUnloadPlugins(cascade::core::PhaseClock* phases = nullptr);
 
     // Starts the downloaded installer and asks the run loop to exit. Separate
     // because an installer cannot replace a binary that is still running, so

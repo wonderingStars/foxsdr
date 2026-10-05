@@ -86,7 +86,12 @@ std::string frameLine(std::uintptr_t addr) {
     DiagModule m;
     std::uintptr_t off = 0;
     char buf[160];
-    if (resolveAddress(addr, m, off)) {
+    // describeModuleContaining, not resolveAddress: the table is a snapshot, and
+    // a stalled thread can be sitting in code mapped after it was taken - a
+    // driver the display stack reloaded, a vendor DLL, a shell extension. Such a
+    // frame used to print as a bare address, so the report could not say where
+    // the thread was and the display-stall rule could not see the driver.
+    if (describeModuleContaining(addr, m, off)) {
         std::snprintf(buf, sizeof(buf), "  %s+0x%llX\n", m.name,
                       static_cast<unsigned long long>(off));
     } else {
@@ -289,6 +294,11 @@ void HangWatchdog::start(const std::string& reportDir, unsigned thresholdMs) {
     // start() is the healthy path, and walking the loader's module list from a
     // process that is already wedged is how a diagnostic becomes the fault.
     if (moduleCount() == 0) { refreshModuleTable(); }
+    // The one ntdll entry point describeModuleContaining names a late-mapped
+    // module with. Resolved HERE for the reason the table is: GetProcAddress
+    // from the capture would be a call into the loader on a process that may be
+    // wedged inside it.
+    prepareModuleAdoption();
 
     lastBeatMs_.store(nowMs(), std::memory_order_relaxed);
     worstGapMs_.store(0.0, std::memory_order_relaxed);
@@ -990,8 +1000,11 @@ void HangWatchdog::captureAllThreads(const std::string& path, double stalledMs) 
                                                             : HangWatchdog::kDisplayStallScanFrames;
             for (int i = 0; i < scan; ++i) {
                 std::uintptr_t off = 0;
-                names[i] = resolveAddress(stacks[0].frames[i], mods[i], off) ? mods[i].name
-                                                                            : nullptr;
+                // The same naming the report's frame lines use, so the kind the
+                // header states and the frames under it can never disagree.
+                names[i] = describeModuleContaining(stacks[0].frames[i], mods[i], off)
+                               ? mods[i].name
+                               : nullptr;
             }
             displayStall = HangWatchdog::isDisplayPresentationStall(names, scan);
         } else {

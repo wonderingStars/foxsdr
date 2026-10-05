@@ -15,6 +15,13 @@
 // would map it from - that would load it BEFORE the table is refreshed and
 // test nothing.
 //
+// IT ALSO WAITS (tests/test_crash_late_module.cpp, the freeze half). A freeze
+// report is written by the hang watchdog, which resolves each frame against the
+// same snapshot, so a GUI thread that is stuck INSIDE late-mapped code - a
+// driver's wait, a plugin's join - showed bare addresses there too.
+// lateFixtureBlock parks the calling thread in a wait the fixture's own frame
+// sits above, which is what a thread blocked in a vendor DLL looks like.
+//
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #ifdef _WIN32
 #include <windows.h>
@@ -22,6 +29,15 @@
 extern "C" __declspec(dllexport) __declspec(noinline) void lateFixtureFault() {
     volatile int* p = nullptr;
     *p = 1;
+}
+
+// Blocks until `event` is signalled (or `ms` passes). The result is written
+// through a volatile so the call cannot be folded into a tail jump: the frame
+// of this function has to be on the stack for the report to name it.
+extern "C" __declspec(dllexport) __declspec(noinline) unsigned long lateFixtureBlock(
+    void* event, unsigned long ms) {
+    volatile unsigned long r = ::WaitForSingleObject(static_cast<HANDLE>(event), ms);
+    return r;
 }
 
 BOOL WINAPI DllMain(HINSTANCE, DWORD, LPVOID) { return TRUE; }

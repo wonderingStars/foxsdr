@@ -303,9 +303,11 @@ struct FittedCounts {
 FittedCounts countStates(const std::vector<FittedModule>& modules, bool receiverRunning);
 
 // Builds one record from the three places the application keeps these facts,
-// so a caller cannot pair the wrong predicate with the wrong field. sizeBytes
-// is left at 0 - "not measured" - for the caller to fill in if it stats the
-// file; a size nobody looked up must never be drawn as a clean zero.
+// so a caller cannot pair the wrong predicate with the wrong field. sizeBytes is
+// the record's (LoadedPlugin::fileBytes, measured once by the scan); 0 is "not
+// measured", and a size nobody looked up must never be drawn as a clean zero.
+// NOTHING HERE OR IN THE CALLER MAY STAT THE FILE: this is built for every
+// module on every frame the window is open (tests/test_fitted_modules_no_disk).
 FittedModule makeFittedModule(const cascade::core::LoadedPlugin& p, bool stopped, bool fed,
                               std::string idleDetail, bool tuneAllowed);
 

@@ -216,6 +216,20 @@ struct LoadedPlugin {
     // HMODULE (Windows) or dlopen handle (POSIX), as void* so this header
     // stays free of <windows.h>. Null unless `loaded`.
     void* nativeHandle = nullptr;
+
+    // THE SIZE OF `path` AS THE SCAN SAW IT, in bytes; 0 means "not measured"
+    // (a record built by hand, or a size the listing could not give) and is
+    // never to be drawn as a clean zero. It is taken ONCE, by scan(), out of the
+    // directory listing it is already reading - and it is a field because the
+    // Fitted modules window used to ask the file system for it again on every
+    // frame, for every module, on the thread that draws the window: a
+    // synchronous stat per plugin per frame, in a folder that may be a network
+    // or synchronised profile, a scanner's, or a spun-down disk. That is the
+    // fault class of the settings-folder poll fixed in 0.99.61 and it is fixed
+    // the same way: nothing on the frame asks the disk, and a figure that is
+    // allowed to be as old as the last scan is the whole of it. Refused records
+    // carry it too - a file the host would not load still has a size.
+    std::uint64_t fileBytes = 0;
 };
 
 // ONE VERSION OF A PLUGIN RUNS, NEVER TWO.

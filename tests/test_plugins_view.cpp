@@ -540,7 +540,23 @@ void testRecordAdapter() {
     CHECK(!m.fed);
     CHECK(m.idleDetail == "no instance: rate mismatch");
     CHECK(m.tuneAllowed);
-    CHECK(m.sizeBytes == 0u);  // never measured by this adapter
+    // A record the scan never measured says "not measured" - 0 - and the plate
+    // reads that as no size at all, never as a clean zero.
+    CHECK(m.sizeBytes == 0u);
+    CHECK(!makeModulePlate(m).haveSizeBytes);
+
+    // THE SIZE IS THE RECORD'S, NOT THE FILE'S. The window used to stat the file
+    // for it on every frame, on the thread that draws; the scan now measures once
+    // and the adapter only carries the figure. The path below names no file, and
+    // the size still arrives - which a stat could not have given it.
+    p.path = "C:/this/folder/does/not/exist/adsb-1.2.0.dll";
+    p.fileBytes = 191488;
+    const FittedModule sized = makeFittedModule(p, false, false, "", false);
+    CHECK(sized.sizeBytes == 191488u);
+    CHECK(makeModulePlate(sized).haveSizeBytes);
+    CHECK(makeModulePlate(sized).sizeBytes == 191488u);
+    p.path = "C:/Program Files/FoxSDR/plugins/adsb-1.2.0.dll";
+    p.fileBytes = 0;
 
     // TUNE CAPABILITY COMES FROM THE TABLE POINTER, NOT THE BIT. The host
     // clears a table it could not accept, so a module that declared the bit and

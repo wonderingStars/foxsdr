@@ -291,14 +291,14 @@ bool imageSizeFromHeaders(std::uintptr_t base, std::size_t& size) {
     }
 }
 
-// The file name (no directory) out of the NT path the query left in
-// g_sectionName, narrowed by hand: printable ASCII kept, anything else '?'.
-// The pointer the kernel wrote is checked to lie INSIDE the buffer before it is
-// followed. Returns false when there is no name to give.
-bool leafNameFromSectionName(char* dst, std::size_t cap) {
-    const UNICODE_STRING& u = g_sectionName.name;
-    const WCHAR* first = g_sectionName.chars;
-    const WCHAR* last = g_sectionName.chars + kSectionNameChars;
+// The file name (no directory) out of the NT path the query left in `sb`,
+// narrowed by hand: printable ASCII kept, anything else '?'. The pointer the
+// kernel wrote is checked to lie INSIDE the buffer before it is followed.
+// Returns false when there is no name to give.
+bool leafNameFromSectionName(const SectionNameBuffer& sb, char* dst, std::size_t cap) {
+    const UNICODE_STRING& u = sb.name;
+    const WCHAR* first = sb.chars;
+    const WCHAR* last = sb.chars + kSectionNameChars;
     const std::size_t n = u.Length / sizeof(WCHAR);
     if (u.Buffer == nullptr || n == 0 || u.Buffer < first || u.Buffer + n > last) { return false; }
     std::size_t start = 0;
@@ -368,7 +368,8 @@ bool adoptModuleContaining(std::uintptr_t addr) {
                                   kMemorySectionName, &g_sectionName, sizeof(g_sectionName),
                                   &returned);
         named = status >= 0 &&
-                leafNameFromSectionName(g_adoptModule.name, sizeof(g_adoptModule.name));
+                leafNameFromSectionName(g_sectionName, g_adoptModule.name,
+                                        sizeof(g_adoptModule.name));
     }
     if (!named) { copyField(g_adoptModule.name, sizeof(g_adoptModule.name), "unknown-image"); }
     // No pdb and no build id: reading the CodeView record means formatting it,
@@ -380,6 +381,53 @@ bool adoptModuleContaining(std::uintptr_t addr) {
     return true;
 #else
     (void)addr;
+    return false;
+#endif
+}
+
+bool describeModuleContaining(std::uintptr_t addr, DiagModule& out, std::uintptr_t& offset) {
+    if (resolveAddress(addr, out, offset)) { return true; }
+#if defined(_WIN32)
+    if (addr == 0) { return false; }
+
+    // IMAGE memory only, exactly as adoptModuleContaining: a heap, a JIT page or
+    // a stack has no module to name, and a walk of a thread that moved under it
+    // hands this garbage addresses that must stay bare rather than be named.
+    MEMORY_BASIC_INFORMATION query{};
+    if (::VirtualQuery(reinterpret_cast<LPCVOID>(addr), &query, sizeof(query)) != sizeof(query)) {
+        return false;
+    }
+    if (query.Type != MEM_IMAGE || query.State != MEM_COMMIT) { return false; }
+    const auto base = reinterpret_cast<std::uintptr_t>(query.AllocationBase);
+    if (base == 0 || base > addr) { return false; }
+
+    DiagModule m;
+    m.base = base;
+    std::size_t size = 0;
+    if (!imageSizeFromHeaders(base, size) || addr - base >= size) {
+        size = reinterpret_cast<std::uintptr_t>(query.BaseAddress) + query.RegionSize - base;
+    }
+    m.size = size;
+
+    bool named = false;
+    if (const NtQueryVirtualMemoryFn ntQuery = g_ntQueryVirtualMemory.load(std::memory_order_acquire)) {
+        // On THIS thread's stack, not the static scratch the fault path uses:
+        // the freeze report is written by the watchdog thread, which is never
+        // out of stack and never runs concurrently with the handler's one
+        // writer - and sharing that scratch would be a data race with it.
+        SectionNameBuffer section;
+        section.name = UNICODE_STRING{};
+        SIZE_T returned = 0;
+        const LONG status = ntQuery(::GetCurrentProcess(), reinterpret_cast<PVOID>(addr),
+                                    kMemorySectionName, &section, sizeof(section), &returned);
+        named = status >= 0 && leafNameFromSectionName(section, m.name, sizeof(m.name));
+    }
+    if (!named) { copyField(m.name, sizeof(m.name), "unknown-image"); }
+
+    out = m;
+    offset = addr - base;
+    return true;
+#else
     return false;
 #endif
 }

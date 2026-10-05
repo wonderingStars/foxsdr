@@ -789,22 +789,182 @@ that proves the harness can see the fault; around them it requires that the
 answer still arrives, that only one worker is ever out, that quit does not wait
 for a wedged one, and that a slow check is said once and not once a frame.
 
-**Two open items this fix does not cover**, found while reading for it, and the
+**Two open items this fix did not cover**, found while reading for it, and the
 same class of fault:
 
-- `AppWindow::drawFittedModulesWindow` calls `std::filesystem::file_size` on
-  every plugin's file, every frame, while the Fitted Modules window is open (it
-  is the only way the plate gets a size). It is a synchronous stat on the GUI
-  thread, in the plugin directory rather than the settings folder, and only
-  while that window is open.
+- `AppWindow::drawFittedModulesWindow` called `std::filesystem::file_size` on
+  every plugin's file, every frame, while the Fitted Modules window was open (it
+  was the only way the plate got a size). **Closed after 0.99.62**: see *The Fitted
+  modules window asks the disk for nothing*, below.
 - The filesystem work inside `AppWindow::rescanPlugins` — the inventory read, the
   directory scan and the load of every module — also runs on the GUI thread. The
   watchdog pause around it hides a slow disk from the watchdog (rule 2b, and
-  capped at 30 s since this release), but the window still freezes for as long as
-  the disk takes, and a rescan that outlasts the cap is now reported.
+  capped at 30 s since 0.99.61), but the window still freezes for as long as the
+  disk takes, and a rescan that outlasts the cap is now reported. **Still open**:
+  see *A plugin rescan runs on the GUI thread*, below.
 
 Neither is a claim that no other synchronous filesystem call remains on that
-thread; no audit of all of them was made.
+thread. The audit made for that change covered `src/gui` (every `std::filesystem`
+call, every stream and `fopen`): the calls that remain there are made on a user's
+press, at start-up or at exit, not per frame. Nothing outside `src/gui` was
+audited for what it does when the *GUI thread* calls it.
+
+### The Fitted modules window asks the disk for nothing (after 0.99.62)
+
+The call named in the open item above ran **sixty times a second for as long as
+the window was open**, once for every loaded plugin: twenty modules is twenty
+synchronous stats per frame, on the thread that draws the window, in the plugin
+folder — which for a Store package is a redirected profile — and the window is
+the one the plugin **Rescan** key lives on, so a session that rescanned plugins
+had the window open. Where the folder was slow, every frame was as slow as the
+slowest of the twenty answers; one stat of a path on an unreachable share was
+timed at 26.7 s on the machine this was written on (that is the extreme, not the
+expected figure).
+
+The size is now a property of the record. `PluginHost::scan()` takes it from the
+directory listing it is already reading (`LoadedPlugin::fileBytes`; on Windows the
+listing returns the size with the name, so no further call is made), refused
+records included, and `makeFittedModule` carries it to the plate. 0 still means
+"not measured" and is never drawn as a size. A figure that may be as old as the
+last scan is the whole fix: an installed or updated plugin rescans, and a file
+replaced by hand shows its old size until the next rescan, as it already showed
+its old version.
+
+`tests/test_plugin_host.cpp` pins the scan (two files of different sizes get their
+own, a refused file has one, a record nobody scanned says 0);
+`tests/test_plugins_view.cpp` pins the carry, with a path that names no file;
+`tests/test_fitted_modules_no_disk.cpp` is the source scan that holds the draw
+function to no `std::filesystem`, stream, `fopen` or Win32 file call at all — and
+runs against the old code first, so a scan that cannot see the call it forbids
+would fail instead of passing blind. It is a scan of the source because no test
+can run that window against a slow disk: the call site is in `AppWindow`, which
+needs a GL context. What no test shows is the freeze itself on a real slow
+folder; the cause of it was established by reading, and the figure above by
+timing one call.
+
+### A plugin rescan runs on the GUI thread, and says where its time went (after 0.99.62)
+
+A 0.99.58 session (a Store package, twenty plugins) logged the line that opens a
+rescan and, **119.976 s later**, the line for the first plugin it had loaded. The
+rescan holds a watchdog pause, which in 0.99.58 had no limit, so the freeze was
+not reported; the only trace was those two timestamps. This is what is established
+about it, by reading, and what is not.
+
+**What `rescanPlugins()` does, all on the GUI thread, in this order:**
+
+1. `decoders` — `PluginRunner::clear()`: every decoder instance's `destroy()`
+   (third-party code).
+2. `patch` — `Runner::flushNow()` on the patch page's runner and on every patch
+   radio's: waits, with a **spin that has no bound**, for the DSP thread (or a
+   radio's reader) to leave its current block, then destroys the decoders the
+   patch holds.
+3. `panels and map` — `PluginUi::clear()` (track-source, panel and instrument
+   `destroy()`), `BasemapCache::detach()` and `TrackInfoCache::detach()`
+   (`destroy()` of the basemap and the aircraft lookup).
+4. `unload` — `FreeLibrary` of every module: each one's `DllMain` and static
+   destructors, under the loader lock.
+5. `inventory` — the quarantined files renamed back, and **every installed file
+   re-hashed** against the record made at install, then the retired ones moved
+   aside.
+6. `load` — the folder listed and every module mapped (`LoadLibrary`, its
+   `DllMain`, the descriptor query).
+7. `restart` — the log lines, and the decoders created again.
+
+**No wait of 120 s was found on that path, in the application or in the plugins.**
+A search of both for a 120-second constant, in the ways it would be spelled, finds
+only the old CAT-shutdown story in the watchdog's comments and, in the plugin
+repository, the ADS-B decoder's 120 s eviction of a silent aircraft track (a timer
+on data, not a wait). The bounded waits that exist near the path belong to other
+paths (`PatchRadio::kStopWaitMs` 3 s per radio, on the patch's close;
+`GpsReader::kOpenAbandonWait` 1 s). On the path itself the host bounds **nothing**
+it calls: the `destroy()` calls (a plugin's own join), the `flushNow()` spin,
+`FreeLibrary`, and the file system are each as long as their owner takes. The figure is
+also *under* 120 s, by 24 ms, so it is not a single 120-second timeout begun after
+the first line was written: such a wait would have ended after 120 s plus the
+rescan's own work (3.6 s on the next, warm rescan of the same plugins).
+
+**What could have held it, in the order the code supports** (all inferred, none
+shown in that session):
+
+- *A plugin's `destroy()` joining a worker that is itself waiting.* The OpenMapTiles
+  basemap's `bm_destroy` joins four tile workers, and each worker does a network
+  fetch (bounded by the plugin to 20 s plus one 15 s read), **and file I/O on the tile
+  cache that has no bound** (`readCache` / `writeCache`, in the per-user cache
+  folder). A stalled file system — which the same session shows: the Record button
+  blocked in file creation — holds a worker, and so holds `bm_destroy`, and so holds
+  the GUI thread. The plugin's HTTP helper also opens its session with Windows'
+  automatic proxy detection, which the per-phase timeouts it sets are not documented
+  to cover; that is stated as unverified. The instance and its four workers exist
+  for as long as the plugin is loaded (the host attaches it at every plugin
+  rebuild), and the workers have work only while a map is drawing tiles; the AIS
+  plugin's window opened four minutes earlier is one that feeds the map, and the
+  log does not say whether a map was on screen.
+- *The disk, in `inventory` or `load`*: every installed file is read and hashed, and
+  every module mapped, from a folder a scanner or a synchronised profile can hold.
+- *The loader lock*, taken by `unload` and `load`, held by another thread inside a
+  `DllMain`.
+- The `flushNow()` spin, only if the DSP thread or a radio's reader sat inside a
+  decoder's `process()` for two minutes; a patch had been running and was closed
+  ninety seconds before.
+
+**Is the window closeable while it runs? No.** The frame loop's `glfwPollEvents()`
+is its only message pump and the rescan is one call inside a frame; Windows marks
+the window "not responding" after five seconds and a click on its close button
+cannot reach the application.
+
+**What this change adds** is the evidence, not a cure. Every rescan writes one line:
+
+```
+plugins: reload took 3.6 s (decoders 0.0, patch 0.0, panels and map 0.3, unload 0.4, inventory 1.9, load 0.9, restart 0.1)
+```
+
+— seven laps, in that order, with the step's own seconds — and a rescan of five
+seconds or more is a **warning** that says the window did not draw for that long and
+names the slowest step. Written on every way out of the function, the early return
+included; it contains no plugin name, file or path. `tests/test_phase_clock.cpp` holds
+the clock (laps in order, a repeated name adding to its lap, the sentence turning at
+the threshold, the log level); `tests/test_plugin_rescan_log.cpp` holds the line
+through the real `AppWindow::rescanPlugins`, and that only the rescan, not the exit
+or a removal, writes it. Since 0.99.61 a rescan past `kExcuseCapMs` (30 s) is also
+**reported with every thread's stack**, which names the plugin whose worker the GUI
+thread is waiting on; the two together say which of the above it was.
+
+**What this does not do is stop the window freezing**, and that is a design decision
+rather than a repair:
+
+- *A. Destroy on a helper, with a bound, and abandon what will not stop.* The GUI
+  thread takes each handle out of its container (cheap; the runner already moves
+  its instances out before it destroys them), hands them to one helper thread that
+  calls `destroy()` in the same order, and waits a few seconds. If the helper is
+  not done, the rescan **does not unmap anything** — a module with a thread inside
+  it cannot be unmapped — marks it "did not stop", and carries on from the frame
+  loop when the helper finishes; a module whose `destroy()` never returns stays
+  mapped for the life of the process (the satellites plugin does the same to its own
+  worker) and is **not loaded again until the program is restarted**, with a notice
+  on the Fitted modules plate saying so. The window freezes for at most the wait,
+  under the five seconds Windows takes to grey it. The cost: `destroy()` stops being
+  called on the thread that called `create()` (the ABI promises "the host's control
+  thread", not the same one, and `patch` code comments say the GUI thread is where a
+  handle may die); `BasemapCache::detach()` deletes GL textures and must keep that
+  part on the GUI thread; and `rescanPlugins()` stops being synchronous for its
+  nine callers, three of which read the new list straight after.
+- *B. A modal reload.* The same work on a worker while the GUI thread runs a small
+  loop of its own that pumps events and draws "Reloading plugins — stopping
+  <step>…". Callers stay synchronous. It keeps the window drawing and closeable
+  but not usable, it has no answer for a plugin that never stops except to wait,
+  and the work that touches ImGui, GL or window state (the map and basemap
+  detach, `syncMapPagesToSaved`, `refreshPluginRunner`) has to be split back out
+  onto the GUI thread.
+- *C. Fewer rescans.* The catalogue fetch rescans every plugin whether or not
+  anything changed, because the retirement floors it caches only take effect on
+  a scan; skipping the teardown when the inventory and the blocked set are
+  unchanged removes most rescans a session sees (the log of that session shows two,
+  three seconds apart).
+
+Recommended: **A with C.** C is small and removes the exposure in the common case,
+A bounds the case that remains and is the only one that gives the conservative answer
+for a plugin that never stops — leave it mapped, say so, do not load it again — and B
+trades a smaller change for a window the user still cannot use.
 
 ### The recording's file is opened off the frame loop
 
@@ -1483,6 +1643,36 @@ the fixture is an ordinary DLL — and that no lock is taken, which rests on the
 code's own reasoning about what `VirtualQuery` and `NtQueryVirtualMemory` read
 (the address space's bookkeeping, not loader or heap state) rather than on a
 test.
+
+**A freeze report names such a DLL too (after 0.99.62).** The hang watchdog
+resolved each frame of the stalled thread against the same snapshot and was never
+given the crash handler's answer, so a GUI thread stuck *inside* code mapped
+after the last refresh — a display driver a GPU reset reloads, a vendor DLL a
+probe maps, a shell extension a dialog injects — printed those frames as bare
+addresses. Two things were lost with the name. The report could not say where
+the thread was. And the display-stall rule, which reads module names off the top
+frames to tell a monitor being switched off from a deadlock in this program,
+could not see a graphics driver the table had never heard of, so the same
+freeze was filed as a **hang** rather than kept on the machine as a **stall**.
+`describeModuleContaining` (`core/diag_report.cpp`) answers with the same
+`VirtualQuery` / `NtQueryVirtualMemory` lookup, and it is deliberately **not**
+`adoptModuleContaining`: that one appends to the table, whose single writer is the
+fault path, while the watchdog thread runs beside a GUI thread that rebuilds the
+table at the end of every plugin rescan, and a racing append could drop modules
+the next crash report needs. The new function writes nothing shared — it fills a
+local entry (file name, base, size; no PDB, no build id, as above) and the
+frame line and the classification both use it, so the `kind:` the header states
+and the frames under it cannot disagree. `HangWatchdog::start` resolves the one
+ntdll entry point it needs, for the reason the crash handler does at install:
+`GetProcAddress` from the capture would be a call into the loader on a process
+that may be wedged inside it. The module list in the report is still the
+snapshot's; a late module is named on the frame line (name and offset are all a
+vendor DLL needs) and is not listed with its base. `tests/test_crash_late_module.cpp`
+holds it with a real `HangWatchdog` and a real thread parked inside the late
+fixture — the report's stalled stack must carry `late_fault_fixture.dll+0x…` — and
+a second time with the fixture copied under an NVIDIA user-mode driver's file name,
+where the report must come out `kind: stall` and not `kind: hang`. Windows only:
+the POSIX table is refreshed after `dlopen` and nothing here changes it.
 
 **The audio driver is no longer asked at all.** Since 0.99.59 the scan never asks
 SoapySDR's `audio` driver — in the whole-bus walk, the per-driver sweep, the walk

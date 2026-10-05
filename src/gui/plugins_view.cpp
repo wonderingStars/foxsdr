@@ -233,6 +233,11 @@ FittedModule makeFittedModule(const cascade::core::LoadedPlugin& p, bool stopped
     // supplied nothing usable would otherwise be offered a grant it cannot use.
     m.tuneCapable = (p.hostClient != nullptr);
     m.tuneAllowed = tuneAllowed;
+    // THE RECORD'S SIZE, measured once by the scan (LoadedPlugin::fileBytes) and
+    // carried, never looked up here: this runs for every module on every frame
+    // the window is open, and a stat per module per frame froze windows whose
+    // plugin folder was slow. 0 is "not measured" and the plate draws no size.
+    m.sizeBytes = p.fileBytes;
     return m;
 }
 

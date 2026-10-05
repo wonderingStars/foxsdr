@@ -11556,7 +11556,17 @@ bool AppWindow::quarantineBlockedPlugins(std::string& error) {
     return true;
 }
 
-void AppWindow::detachAndUnloadPlugins() {
+void AppWindow::detachAndUnloadPlugins(cascade::core::PhaseClock* phases) {
+    // WHERE THE TIME GOES, for the one caller that asks (rescanPlugins): each of
+    // the four steps below is a different kind of wait with a different owner -
+    // a decoder's destroy(), the patch page's decoders and the radios' readers,
+    // the panels' and the map's and the track lookup's destroy() (a basemap that
+    // joins its tile workers), and the loader unmapping the modules - and a log
+    // line that says only "the rescan took two minutes" cannot tell them apart.
+    const auto lap = [phases](const char* name) {
+        if (phases != nullptr) { phases->begin(name); }
+    };
+
     // THE ORDER IS THE FEATURE, and it is why this is a function rather than
     // an open-coded sequence: it was open-coded, removeInstalledPlugin() then
     // called unloadAll() on its own, and the careful ordering below existed in
@@ -11568,6 +11578,7 @@ void AppWindow::detachAndUnloadPlugins() {
     // is memory inside a module about to be unmapped, and destroy() is code
     // inside that same module. Getting this order wrong is a crash in someone
     // else's DLL with no useful stack.
+    lap("decoders");
     pipeline_.setPluginRunner(nullptr);
     pluginRunner_.clear();
     // THE PATCH'S DECODERS, BY THE SAME RULE AND SYNCHRONOUSLY. A patch set
@@ -11578,6 +11589,7 @@ void AppWindow::detachAndUnloadPlugins() {
     // returns. The catalogue goes too: its API pointers point into the
     // modules about to go. The page rebuilds both from whatever loads next,
     // and the empty signature makes it republish.
+    lap("patch");
     pipeline_.patchRunner().flushNow();
     // Every patch radio's runner too (0.99.17): each has its own reader
     // thread that may be inside a decoder this instant. The radios keep
@@ -11594,12 +11606,14 @@ void AppWindow::detachAndUnloadPlugins() {
     patchRefused_.clear();
     // Same rule as the runner: a track-source or panel handle is memory inside
     // a module whose destroy() is code in that same module.
+    lap("panels and map");
     pluginUi_.clear();
     // And the basemap, for exactly the same reason - its handle and its tile
     // borrows live in a module about to be unmapped.
     basemap_.detach();
     trackInfo_.detach();
 
+    lap("unload");
     pluginHost_.unloadAll();
 }
 
@@ -11615,6 +11629,31 @@ void AppWindow::rescanPlugins() {
     //
     // Scope guard, because there is a `return` in the middle of this function.
     cascade::core::WatchdogPause holdWatchdog(watchdog_);
+
+    // WHERE THE TIME WENT, in one log line per rescan (after 0.99.62). A session of
+    // 0.99.58 logged the line that opens a rescan and, 119.976 s later, the first
+    // of the plugins it had loaded, with nothing between them: six different
+    // kinds of wait happen in this function, in a row, on the thread that draws
+    // the window, and the log could not say which of them had held it. Nothing in
+    // the source waits 120 s, so the two minutes belonged to something this
+    // program was waiting FOR - a plugin's destroy() joining a worker, a disk, the
+    // loader - and which one is the whole of the fix. A scope guard, because
+    // there is a `return` in the middle of this function: the rescan that
+    // returns early still says how long it took to get there.
+    //
+    // This measures; it moves nothing off the GUI thread, bounds nothing and
+    // excuses nothing - the watchdog pause above still caps at kExcuseCapMs, and
+    // a rescan past that is still reported with every thread's stack
+    // (docs/DIAGNOSTICS.md, "A plugin rescan runs on the GUI thread").
+    cascade::core::PhaseClock phases;
+    struct ReloadLog {
+        cascade::core::PhaseClock& clock;
+        ~ReloadLog() {
+            clock.end();
+            clock.log("plugins: reload",
+                      cascade::core::HangWatchdog::kDefaultThresholdMs / 1000.0);
+        }
+    } reloadLog{phases};
 
     // THE REPORT CONTEXT LISTS THE LOADED PLUGINS, and this function changes them
     // on every path out of it - including the early return below, taken after
@@ -11670,7 +11709,7 @@ void AppWindow::rescanPlugins() {
     // because a live handle is memory inside a module that is about to be
     // unmapped, and destroy() is code inside that same module. Getting this
     // order wrong is a crash in someone else's DLL with no useful stack.
-    detachAndUnloadPlugins();
+    detachAndUnloadPlugins(&phases);
     pluginEnforceError_.clear();
 
     // Un-quarantine BEFORE taking the inventory. Reconciliation and
@@ -11678,6 +11717,12 @@ void AppWindow::rescanPlugins() {
     // code renamed aside last frame would otherwise read as deleted by the
     // user — which planUpdates deliberately refuses to update, taking away the
     // one remedy a retired plugin has.
+    //
+    // THE DISK'S SHARE of the rescan starts here: the folder is listed, the
+    // quarantined files are renamed back, and every installed file is re-hashed
+    // against the record made when it was installed (loadInventory) - all
+    // synchronous, all on this thread.
+    phases.begin("inventory");
     std::string restoreError;
     if (!restoreQuarantinedPlugins(restoreError)) { pluginEnforceError_ = restoreError; }
 
@@ -11707,7 +11752,12 @@ void AppWindow::rescanPlugins() {
         return;
     }
 
+    // LoadLibrary of every module, and each one's DllMain, and the descriptor
+    // query - the loader and whatever it has to read, off a disk that may be
+    // cold or a scanner's.
+    phases.begin("load");
     pluginHost_.scan(pluginDir_);
+    phases.begin("restart");
 
     // WHICH PLUGINS ARE MAPPED, one line each, because plugins are
     // third-party code running in this process and "which one was loaded" has
@@ -17260,13 +17310,16 @@ void AppWindow::drawFittedModulesWindow() {
             // what the install record names.
             m.integrityNote = cascade::core::PluginRepo::changedSinceInstallNote(
                 pluginInventory_.plugins, file);
-            // THE ONLY SIZE THERE IS. No descriptor carries one, so it can
-            // only come from stat-ing the file; a failure leaves it at 0,
-            // which the shared plate reads as "not measured" and never draws
-            // as a clean zero.
-            std::error_code sizeEc;
-            const std::uintmax_t bytes = std::filesystem::file_size(p.path, sizeEc);
-            if (!sizeEc) { m.sizeBytes = static_cast<std::uint64_t>(bytes); }
+            // THE SIZE IS THE RECORD'S, and makeFittedModule has already
+            // carried it. No descriptor holds one, so the host measures the file
+            // once, in the scan (LoadedPlugin::fileBytes). It used to be asked of
+            // the file system HERE - one stat per module per frame, on the thread
+            // that draws this window, in a folder that may be a network or
+            // synchronised profile or a scanner's - and a slow answer from any
+            // one of them held the whole frame (0.99.61 fixed the same fault in
+            // the settings-folder poll and named this call as still open; one
+            // stat of an unreachable share measured 26.7 s). 0 stays "not
+            // measured": the shared plate draws no size for it, never a zero.
             model.modules.push_back(std::move(m));
         }
         // ONLY WHEN THE STORE DID NOT PRINT IT. installReport_/installError_

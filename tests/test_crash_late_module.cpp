@@ -18,11 +18,26 @@
 // it. A second child faults in memory that is not an image at all - the negative
 // control, which must stay a bare address and must not take the handler down.
 //
+// THE FREEZE REPORT HAD THE SAME BLIND SPOT. The hang watchdog
+// (core/hang_watchdog.cpp) names each frame of a stalled thread against the same
+// snapshot, and adoptModuleContaining - the crash handler's answer - was never
+// wired into it, so a GUI thread stuck INSIDE code mapped after the last refresh
+// (a display driver a GPU reset reloaded, a vendor DLL a probe mapped, a shell
+// extension a dialog injected) was reported as bare addresses: nothing to read,
+// and no module name for the display-stall classification, which is what tells a
+// monitor being switched off from a deadlock in this program. The freeze block
+// below is in-process, because the property is only visible in a report a real
+// watchdog wrote about a real blocked thread: this thread is the "GUI thread",
+// it refreshes the table, THEN loads the fixture and blocks inside it, and the
+// report is read back once the wait ends.
+//
 // Windows only: the fault-time lookup it covers is a Windows one. Elsewhere it
 // SKIPs by name (SKIP_LINUX), so the suite's count does not hide that it did
 // not run.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -30,11 +45,13 @@
 #include <fstream>
 #include <iterator>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "core/crash_handler.hpp"
 #include "core/diag_log.hpp"
 #include "core/diag_report.hpp"
+#include "core/hang_watchdog.hpp"
 #include "test_check.hpp"
 
 #if defined(_WIN32)
@@ -175,6 +192,67 @@ std::string section(const std::string& text, const std::string& from, const std:
     return text.substr(a, (b == std::string::npos ? text.size() : b) - a);
 }
 
+// What a freeze report says about a GUI thread that is stuck inside a DLL the
+// module table has never heard of. Returns the whole report.
+//
+// THE STALL IS REAL: this thread calls into the fixture, which parks it in a
+// kernel wait with its own frame on the stack, and a helper opens the gate only
+// once the watchdog has finished writing the report (the "--- log" trailer is
+// the last thing it writes), so the stack is read while the thread is still
+// there. NeverSuppress, because ctest may run under a debugger-ish harness and
+// a modal-loop excuse is not what is being tested.
+struct Freeze {
+    std::string report;
+    bool reported = false;
+    bool dllLoaded = false;
+};
+
+Freeze freezeInsideLateDll(const std::string& dllPath, const fs::path& dir) {
+    Freeze out;
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir, ec);
+
+    // The snapshot the report will resolve against - taken BEFORE the fixture
+    // is mapped, which is the whole condition.
+    refreshModuleTable();
+
+    HangWatchdog w;
+    w.setSuppressionForTest(HangWatchdog::SuppressionForTest::NeverSuppress);
+    w.start(dir.string(), 800);  // this thread is the one the watchdog watches
+    w.heartbeat();
+
+    const HMODULE dll = ::LoadLibraryA(dllPath.c_str());
+    out.dllLoaded = dll != nullptr;
+    using Block = unsigned long (*)(void*, unsigned long);
+    const Block block = dll == nullptr
+        ? nullptr
+        : reinterpret_cast<Block>(reinterpret_cast<void*>(::GetProcAddress(dll, "lateFixtureBlock")));
+    if (block == nullptr) {
+        w.stop();
+        return out;
+    }
+
+    HANDLE gate = ::CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    std::thread opener([&] {
+        const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(25);
+        while (std::chrono::steady_clock::now() < until) {
+            const std::string path = w.lastReportPath();
+            if (!path.empty() && readFile(path).find("--- log (last ") != std::string::npos) { break; }
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        ::SetEvent(gate);
+    });
+    block(gate, 30000);  // the stall: nothing beats the heartbeat meanwhile
+    opener.join();
+    ::CloseHandle(gate);
+
+    out.reported = !w.lastReportPath().empty();
+    if (out.reported) { out.report = readFile(w.lastReportPath()); }
+    w.stop();
+    return out;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -236,9 +314,64 @@ int main(int argc, char** argv) {
         CHECK(c.text.find("--- log") != std::string::npos);
     }
 
+    // --- A FREEZE in a DLL mapped after the table was refreshed ---------------
+    //
+    // The same code, found by the hang watchdog instead of the fault handler:
+    // the GUI thread is parked inside the fixture, and the report that names
+    // where must name the fixture rather than print the address of its frame.
+    {
+        const Freeze f = freezeInsideLateDll(dllPath, scratchDir("freeze"));
+        CHECK(f.dllLoaded);
+        CHECK(f.reported);
+        const std::string gui = section(f.report, "(gui, stalled) ---", "\n--- ");
+        std::printf("late dll, freeze: report %zu bytes\n%s\n", f.report.size(), gui.c_str());
+        CHECK(f.report.find("kind: hang") != std::string::npos);
+        // The stalled thread's stack is there at all (the precondition: a
+        // report with no frames would pass the negative check below for the
+        // wrong reason)...
+        CHECK(gui.find("\n  ntdll.dll+0x") != std::string::npos ||
+              gui.find("\n  win32u.dll+0x") != std::string::npos ||
+              gui.find("\n  KERNELBASE.dll+0x") != std::string::npos);
+        // ...and the frame inside the late DLL is NAMED, not a bare address.
+        CHECK(gui.find("\n  late_fault_fixture.dll+0x") != std::string::npos);
+        // An ordinary DLL under a stalled GUI thread is a hang in this
+        // application's own process, and stays one.
+        CHECK(f.report.find("kind: stall") == std::string::npos);
+    }
+
+    // --- THE KIND FOLLOWS THE NAME: a graphics driver mapped late ------------
+    //
+    // The reason a late module's name matters beyond reading the report. A GUI
+    // thread parked in a wait with a display driver under it is a PRESENTATION
+    // STALL - a monitor switched off, a GPU reset - which is kept on the machine
+    // and counted, not filed as a fault in this program (0.96.4, 0.99.62). The
+    // classification reads module names off the top frames, and a driver the
+    // table was never told about has none: the same freeze, filed as a hang. The
+    // fixture is copied under a name the display rule knows (an NVIDIA user-mode
+    // driver's) so the rule sees exactly what it would on a real machine.
+    {
+        const fs::path vendor = scratchDir("freeze-display");
+        std::error_code ec;
+        fs::remove_all(vendor, ec);
+        fs::create_directories(vendor, ec);
+        const fs::path driver = vendor / "nvoglv64.dll";
+        fs::copy_file(dllPath, driver, fs::copy_options::overwrite_existing, ec);
+        CHECK(!ec);
+        const Freeze f = freezeInsideLateDll(driver.string(), vendor / "reports");
+        const std::string gui = section(f.report, "(gui, stalled) ---", "\n--- ");
+        std::printf("late display driver, freeze:\n%s\n", gui.c_str());
+        CHECK(f.dllLoaded);
+        CHECK(f.reported);
+        CHECK(gui.find("\n  nvoglv64.dll+0x") != std::string::npos);
+        CHECK(f.report.find("kind: stall") == 0);
+        CHECK(f.report.find("kind: hang") == std::string::npos);
+    }
+
     if (g_checksFailed == 0) {
         std::error_code ec;
-        for (const char* tag : {"dll", "private"}) { fs::remove_all(scratchDir(tag), ec); }
+        for (const char* tag : {"dll", "private", "freeze", "freeze-display"}) {
+            fs::remove_all(scratchDir(tag), ec);
+        }
     }
     return testSummary("test_crash_late_module");
 }

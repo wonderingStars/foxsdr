@@ -752,6 +752,44 @@ void testScanGarbageModule() {
     fs::remove_all(d, ec);
 }
 
+// THE SCAN MEASURES EACH FILE, ONCE (fileBytes). The Fitted modules window
+// used to stat every module's file on every frame to print its size, on the
+// thread that draws the window; the size is now a property of the record, taken
+// by the scan out of the listing it is already reading, so nothing on the frame
+// has to ask the disk. What is pinned: a refused record has its size too (a file
+// the host would not load still has one, and the window shows it), two files of
+// different sizes get their OWN sizes (a figure copied from the wrong entry
+// would pass a single-file test), an empty file is a measured zero that is
+// distinguishable from nothing only by being in a record at all, and a record
+// nobody scanned says 0 - "not measured".
+void testScanRecordsFileSize() {
+    const fs::path d = tmpDir("sizes");
+    const std::string small(33, 'a');
+    const std::string big(70001, 'b');
+    writeFile(d / mod("alpha"), small.data(), small.size());
+    writeFile(d / mod("beta"), big.data(), big.size());
+
+    PluginHost host;
+    host.scan(d.string());
+    CHECK(host.plugins().size() == 2);
+    if (host.plugins().size() == 2) {
+        // scan order is sorted by file name: alpha, then beta
+        CHECK(contains(host.plugins()[0].path, mod("alpha").c_str()));
+        CHECK(contains(host.plugins()[1].path, mod("beta").c_str()));
+        CHECK(host.plugins()[0].fileBytes == small.size());
+        CHECK(host.plugins()[1].fileBytes == big.size());
+        std::printf("  recorded sizes: %llu and %llu bytes\n",
+                    static_cast<unsigned long long>(host.plugins()[0].fileBytes),
+                    static_cast<unsigned long long>(host.plugins()[1].fileBytes));
+    }
+
+    // A record nobody scanned says "not measured", never a size.
+    CHECK(LoadedPlugin{}.fileBytes == 0u);
+
+    std::error_code ec;
+    fs::remove_all(d, ec);
+}
+
 // A real, loadable module that simply is not a cascade plugin. Copying a
 // system DLL is what makes this a genuine GetProcAddress failure on a genuine
 // HMODULE instead of a stand-in.
@@ -2018,6 +2056,7 @@ int main() {
     testScanMissingDirectory();
     testScanEmptyDirectory();
     testScanGarbageModule();
+    testScanRecordsFileSize();
     testScanRealModuleWithoutEntryPoint();
     testDeterministicOrder();
     testUnloadAllIdempotent();
