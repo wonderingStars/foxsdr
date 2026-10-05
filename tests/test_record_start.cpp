@@ -111,8 +111,23 @@ struct AppWindowTestAccess {
     // The handlers themselves, not stand-ins for them.
     static bool startAudio(AppWindow& a) { return a.startAudioRecording(); }
     static bool startIq(AppWindow& a) { return a.startIqRecording(); }
-    static void stopAudio(AppWindow& a) { a.stopAudioRecording(); }
-    static void stopIq(AppWindow& a) { a.stopIqRecording(); }
+    // A Stop's file is closed on a worker since 0.99.65 (core/record_finish.hpp), and a
+    // Record pressed meanwhile is remembered, not started (tests/test_record_finish_async.cpp
+    // tests that). These tests are about the START, so a Stop here waits for its file
+    // to be closed and collects it, as the user's next press, a moment later, would.
+    static void settleFinishes(AppWindow& a) {
+        cascade::core::RecordFinisher::drain(std::chrono::steady_clock::now() +
+                                             std::chrono::seconds(10));
+        a.pollRecordFinishes();
+    }
+    static void stopAudio(AppWindow& a) {
+        a.stopAudioRecording();
+        settleFinishes(a);
+    }
+    static void stopIq(AppWindow& a) {
+        a.stopIqRecording();
+        settleFinishes(a);
+    }
     // What the web remote and the plugins' host API do (the Record key and the
     // buttons reach startAudioRecording/startIqRecording directly).
     static void applyRecord(AppWindow& a, std::optional<bool> iq, std::optional<bool> audio) {

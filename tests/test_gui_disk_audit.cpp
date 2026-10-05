@@ -236,6 +236,10 @@ const std::vector<Wrapper>& wrappers() {
         {"audioRecorder_.start(", "src/core/recorder.cpp", "creates a take's folder and file"},
         {"iqRecorder_.stop(", "src/core/recorder.cpp", "patches a WAV header and closes the file"},
         {"audioRecorder_.stop(", "src/core/recorder.cpp", "patches a WAV header and closes the file"},
+        // The worker's half of a take's stop (0.99.65): a call on the GUI thread would be
+        // the old stop under another name. The GUI thread uses stopForFinish, which does
+        // no I/O, and core::RecordFinisher.
+        {"Recorder::finishFile(", "src/core/recorder.cpp", "flushes, patches a WAV header and closes the file"},
         {"makeWavDest(", "src/core/patch_audio.cpp", "the blocking speaker file maker"},
         {"pluginHost_.scan(", "src/core/plugin_host.cpp", "lists the plugin folder and maps every module"},
         {"PluginHost::defaultPluginDir(", "src/core/plugin_host.cpp", "writes and removes a probe file"},
@@ -601,8 +605,15 @@ const std::vector<Allowed>& allowed() {
          "Restores the saved I/Q file source by opening it inline, once, from the constructor, "
          "before the first frame and before the watchdog starts. The same class as the Source "
          "section's Open (moved to a worker in 0.99.64) but at start-up: a saved recording on a "
-         "network share delays the first frame. Left; a start-up restore on a worker is the "
-         "sound card's pattern (launchSoundCardOpen) and is the next step here."},
+         "network share delays the first window, and no frame stops. NOT MOVED in 0.99.65, on "
+         "purpose, because it is not a move: a restore on a worker (the sound card's pattern, "
+         "launchSoundCardOpen) changes what the FIRST frame shows (the generator, then the file), "
+         "what a bounded --frames run and the screenshot harness see, and what an exit save made "
+         "before the answer writes (restoreKeep_ would have to hold the file until it lands). "
+         "tests/test_tune_control.cpp (a restore that fails, and the exit save after it), "
+         "tests/test_stop_ends_recordings.cpp (a restored file plays) and tests/test_diagnostics.cpp "
+         "assert the synchronous behaviour. A change to what start-up promises, to be decided as "
+         "one, together with the constructor's three list reads above."},
         {"app_window.cpp", "AppWindow::telemetryStartup", "helper", Pause::Startup, "",
          "Removes the stall ledger of an opted-out run, at start-up, before the first frame "
          "(the function's own comment: 'This is start-up: the read is not on the frame path')."},
@@ -685,30 +696,13 @@ const std::vector<Allowed>& allowed() {
          "Deletes one retired plugin file, on the press of Remove on a retired row (see "
          "removeInstalledPlugin)."},
 
-        // ---- STILL OPEN: found by this scan, deliberately NOT paused ------------------
-        // A pause deletes the report and keeps the freeze (gui/audio_open.hpp): for a call
-        // that is going to be moved, the report is how the next field freeze is found.
-        {"app_window.cpp", "AppWindow::stopIqRecording", "helper", Pause::NotNeeded, "",
-         "STILL OPEN (not in the audit's thirteen; found by this scan). Recorder::stop patches the "
-         "WAV header (a seek and a write) and closes the file on the GUI thread - on Stop, on a "
-         "source change and at quit. The same class as the Record button's start, moved off for "
-         "the START in 0.99.63 and not for the finish. Deliberately not paused. Next to move: "
-         "finalise on a worker, with a bounded wait at quit."},
-        {"app_window.cpp", "AppWindow::stopAudioRecording", "helper", Pause::NotNeeded, "",
-         "STILL OPEN (see stopIqRecording): the audio take's finish, the same call, the same "
-         "reason, deliberately not paused."},
-        {"app_window.cpp", "AppWindow::importBookmarkFile", "helper", Pause::NotNeeded, "",
-         "STILL OPEN (not in the audit's thirteen; found by this scan). Reads the SDR# "
-         "frequencies.xml or CSV the user typed or dropped, on the GUI thread: a path that can be "
-         "a network share. The same class as 'Export for SDR#', moved in 0.99.64. Deliberately not "
-         "paused. Next to move: a DiskJob whose worker parses the file and whose result is "
-         "applied on a later frame."},
-        {"app_window_patch_radios.cpp", "AppWindow::patchReconcile", "helper", Pause::NotNeeded, "",
-         "STILL OPEN (not in the audit's thirteen; found by this scan). A patch Radio whose device "
-         "is an I/Q recording opens it here, inline, when the patch starts or the node's device "
-         "changes - the same header read as the Source section's Open, whose comment called it "
-         "'bounded, and no USB walk to wait for'. Deliberately not paused. Next to move: the "
-         "radio-open worker every hardware radio already uses (patchRadioPending_)."},
+        // ---- NOTHING IS "STILL OPEN" ANY MORE (0.99.65) ----------------------------------
+        // The four entries the 0.99.64 scan found and deliberately did NOT pause (a pause
+        // deletes the report and keeps the freeze, gui/audio_open.hpp, so the report was
+        // how the next field freeze would be found) are on workers: stopIqRecording and
+        // stopAudioRecording (core/record_finish.hpp), importBookmarkFile (a DiskJob) and
+        // patchReconcile's I/Q recording (patchRadioPending_). Their tests are
+        // tests/test_record_finish_async.cpp and tests/test_gui_file_jobs.cpp.
     };
     return v;
 }

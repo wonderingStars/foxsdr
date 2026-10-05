@@ -2665,6 +2665,10 @@ int AppWindow::run(int frames) {
         }
     }
     drainListSaves(drainDeadline);
+    // The two takes' files, closed on workers since 0.99.65, against the SAME deadline:
+    // they have been finishing since the stop above, so by now they have had as long as
+    // the saves did, and the shutdown budget is still charged kSaveBound once.
+    drainRecordFinishes(drainDeadline);
     // THE MARKER STAGE IS OVER, saved or abandoned: from here a normal exit is a
     // clean one to the sentinel, as it is to the unclean-exit counter's reading of
     // a death in the teardown that follows (see the residual stated above). The
@@ -23156,6 +23160,14 @@ void AppWindow::drawRecorderSection() {
                          trId("Cancelling IQ start...##recIqCancelling"))) {
             stopIqRecording();
         }
+    } else if (takeFinishing(true)) {
+        // THE FILE IS BEING CLOSED on a worker (core/record_finish.hpp): the
+        // header's sizes are being written. The existing "Saving..." says it; the
+        // button is back the moment the file is closed (a Record pressed through
+        // another route meanwhile is remembered, see pollRecordFinishes).
+        ImGui::BeginDisabled();
+        ImGui::Button(trId("Saving...##recIqFinishing"), ImVec2(-FLT_MIN, 0.0f));
+        ImGui::EndDisabled();
     } else if (!iqRecorder_.recording()) {
         if (ImGui::Button(trId("Record IQ"), ImVec2(-FLT_MIN, 0.0f))) { startIqRecording(); }
     } else {
@@ -23174,6 +23186,10 @@ void AppWindow::drawRecorderSection() {
                          trId("Cancelling audio start...##recAudioCancelling"))) {
             stopAudioRecording();
         }
+    } else if (takeFinishing(false)) {
+        ImGui::BeginDisabled();  // see the I/Q take above
+        ImGui::Button(trId("Saving...##recAudioFinishing"), ImVec2(-FLT_MIN, 0.0f));
+        ImGui::EndDisabled();
     } else if (!audioRecorder_.recording()) {
         // startAudioRecording, not the start/install pair that used to be here:
         // the Record key presses this same button (see applyKeyAction), and the
@@ -23245,17 +23261,23 @@ void AppWindow::stopIqRecording() {
     // Order per the Pipeline::setIqRecorder contract: after the setter
     // returns no writeIq against this recorder is in flight or can begin
     // (the pointer swap serializes on the mutex the DSP thread holds across
-    // writes), so stop() — which patches the header and closes the file —
+    // writes), so the finish - which patches the header and closes the file -
     // cannot overlap a write. Both calls are no-ops when already idle.
+    //
+    // THE FINISH IS NOT DONE HERE (0.99.65): finishTake detaches the file from
+    // the recorder without touching the disk and a worker flushes, patches and
+    // closes it. A Record queued behind a finish still out is withdrawn too.
+    iqStartQueued_ = false;
     pipeline_.setIqRecorder(nullptr);
-    iqRecorder_.stop();
+    finishTake(true);
 }
 
 void AppWindow::stopAudioRecording() {
     cascade::core::FrameScopeGuard recorderScope(cascade::core::FrameScope::Recorder);
     audioStart_.cancel();  // see stopIqRecording
+    audioStartQueued_ = false;
     pipeline_.setAudioRecorder(nullptr);
-    audioRecorder_.stop();
+    finishTake(false);
 }
 
 bool AppWindow::endTakes(bool iq, bool audio, const char* why, bool asError) {
@@ -23359,6 +23381,16 @@ bool AppWindow::startAudioRecording() {
     // race for one file name). One whose start was withdrawn and has not yet
     // come back is neither, and a Record in that gap is not a take.
     if (audioRecorder_.recording() || audioStart_.pending()) { return !audioStart_.cancelled(); }
+    // THE PREVIOUS TAKE'S FILE IS STILL BEING CLOSED (a worker's, 0.99.65): this
+    // press is remembered and the take starts on the frame that file is closed
+    // (pollRecordFinishes). Not started now - a file name has a one-second
+    // resolution, and an open beside a file still being finalised could truncate
+    // it - and not refused either, so a Stop followed by a Record in one breath (a
+    // script, the web remote) still gives the take that was asked for.
+    if (takeFinishing(false)) {
+        audioStartQueued_ = true;
+        return true;
+    }
     // THE DISK IS NOT TOUCHED HERE. This used to be Recorder::start, whose
     // create_directories and fopen waited for the disk on this - the GUI -
     // thread, and a slow one froze the window (see gui/record_start.hpp). The
@@ -23379,6 +23411,11 @@ bool AppWindow::startIqRecording() {
     cascade::core::FrameScopeGuard recorderScope(cascade::core::FrameScope::Recorder);
     // See startAudioRecording for the pending and withdrawn cases.
     if (iqRecorder_.recording() || iqStart_.pending()) { return !iqStart_.cancelled(); }
+    // See startAudioRecording: behind a finish still out, remembered.
+    if (takeFinishing(true)) {
+        iqStartQueued_ = true;
+        return true;
+    }
     const double rate = pipeline_.inputRateHz();
     std::string err;
     cascade::core::Recorder::OpenRequest req;
@@ -23426,6 +23463,8 @@ void AppWindow::pollRecordStarts(double nowS) {
     };
     service(true, iqStart_, "I/Q");
     service(false, audioStart_, "audio");
+    // A Record that was pressed behind a take's finish, started now its file is closed.
+    pollRecordFinishes();
 }
 
 void AppWindow::finishRecordStart(bool iq, cascade::gui::RecordStart::Result& r, double nowS) {
@@ -23885,43 +23924,8 @@ void AppWindow::rebuildBookmarkView() {
     }
 }
 
-void AppWindow::importBookmarkFile(const std::string& path) {
-    std::string p = path;
-    // A path pasted from Explorer's "Copy as path" arrives quoted.
-    if (p.size() >= 2 && p.front() == '"' && p.back() == '"') { p = p.substr(1, p.size() - 2); }
-    const auto t0 = std::chrono::steady_clock::now();
-    cascade::core::ImportResult r = cascade::core::importFrequencyFile(p);
-    if (!r.error.empty() && r.items.empty()) {
-        bookmarkImportNote_ = cascade::core::formatText(tr("Could not import: %s"), r.error.c_str());
-        // The file's KIND, never its name or path: "never the name or path of
-        // a file you opened" (PRIVACY.md), and a frequency list's name is
-        // usually what is on it.
-        // importFrequencyFile's "cannot open" names the path; the log does not.
-        std::string why = r.error;
-        for (std::size_t at = why.find(p); !p.empty() && at != std::string::npos;
-             at = why.find(p, at)) {
-            why.replace(at, p.size(), "(the file)");
-        }
-        cascade::core::diagWarnf("bookmarks: an import (%s) failed: %s",
-                                 std::filesystem::path(p).extension().string().c_str(),
-                                 why.c_str());
-        return;
-    }
-    const std::size_t found = r.items.size();
-    const std::size_t added = freqMgr_.addMany(std::move(r.items));
-    const double ms =
-        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
-    char note[320];
-    cascade::core::formatUtf8(note, sizeof(note),
-                  "%s: %zu entries read, %zu added%s%s%s", r.format.c_str(), found, added,
-                  found > added ? " (the rest were already here)" : "",
-                  r.skipped > 0 ? ", some had no usable frequency" : "",
-                  r.shifted > 0 ? ", converter Shift values were not applied" : "");
-    bookmarkImportNote_ = note;
-    cascade::core::diagLogf("bookmarks: imported a %s file - %zu read, %zu added, %zu skipped, %zu shifted, %.0f ms",
-                            r.format.c_str(), found, added, r.skipped, r.shifted, ms);
-    if (added > 0) { saveBookmarks(); }
-}
+// importBookmarkFile and the application of what it read are in
+// app_window_disk_work.cpp (0.99.65): the read is a worker's.
 
 void AppWindow::drawBookmarksSection() {
     // HOW MANY ARE SAVED, which is what this section holds and the only thing
@@ -23995,7 +23999,9 @@ void AppWindow::drawBookmarksSection() {
         "##bm_import", tr("SDR# frequencies.xml or .csv - or drop it on the window"),
         bookmarkImportPath_, sizeof(bookmarkImportPath_));
     if (importBeside) { ImGui::SameLine(); }
-    ImGui::BeginDisabled(bookmarkImportPath_[0] == '\0');
+    // Disabled while a read is out (it is on a worker, 0.99.65): the file the user
+    // typed is being read, and a second press would only be remembered.
+    ImGui::BeginDisabled(bookmarkImportPath_[0] == '\0' || bookmarkImportPending());
     if (ImGui::Button(trId("Import"), ImVec2(importW, 0.0f))) { importBookmarkFile(bookmarkImportPath_); }
     ImGui::EndDisabled();
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
@@ -24007,6 +24013,12 @@ void AppWindow::drawBookmarksSection() {
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kInkMuted));
         ImGui::TextWrapped("%s", bookmarkImportNote_.c_str());
         ImGui::PopStyleColor();
+    }
+    // A read that is taking long says so, in the sentence the Record button and the
+    // I/Q file's Open already use; one answered at once never shows it.
+    if (bookmarkImportPending() && bookmarkImportElapsedS() >= 1.0) {
+        ImGui::TextDisabled(tr("Waiting for the disk to open the file: %.0f s"),
+                            bookmarkImportElapsedS());
     }
 
     // --- the view: search, group, favourites -------------------------------

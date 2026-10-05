@@ -1085,7 +1085,8 @@ const KnownWait kKnownWaits[] = {
      "from ~DiskJob, i.e. from ~AppWindow after watchdog_.stop(), outside the budgeted stretch, "
      "exactly like record_start.hpp's, link_request_poll.hpp's, config_writer.hpp's, "
      "audio_open.hpp's and app_window.cpp's kQuitGrace. Several jobs can each spend it in "
-     "turn (five at most, one per feature), still after the watchdog has stopped"},
+     "turn (six at most, one per feature - the frequency list's import joined in 0.99.65), "
+     "still after the watchdog has stopped"},
 
     // THE BOOKMARK LIST AND THE MARKERS (0.99.64, gui/background_saver.hpp): two more
     // ConfigWriters in all but name. Their last request is drained at exit within the

@@ -18,6 +18,13 @@
 //       and the file are a worker's (gui/disk_job.hpp).
 //   pollDiskJobs   the once-a-frame collection of all of the above and of the
 //       recordings list (patchListRecordings, app_window_patch_radios.cpp).
+//   importBookmarkFile   (0.99.65) the Bookmarks section's Import and a list dropped
+//       on the window: the file is read and parsed on a worker, the list is the GUI
+//       thread's and is filled by pollDiskJobs.
+//   finishTake / pollRecordFinishes / drainRecordFinishes   (0.99.65) a recording's
+//       file is closed on a worker (core/record_finish.hpp): Stop detaches it from
+//       the recorder without touching the disk, a Record pressed meanwhile is
+//       remembered, and quit drains against the deadline the saves share.
 //
 // WHY A FILE OF THEIR OWN. They are one subject, and app_window.cpp is at the edge
 // of what an MSVC object file can hold (error C1128, "number of sections exceeded
@@ -45,7 +52,9 @@
 #include "core/i18n.hpp"
 #include "core/image_write.hpp"
 #include "core/utf8_text.hpp"
+#include "core/write_fault.hpp"
 #include "core/patch_recordings.hpp"
+#include "core/record_finish.hpp"
 #include "gui/app_window_disk_state.hpp"
 #include "gui/background_saver.hpp"
 #include "gui/disk_job.hpp"
@@ -237,6 +246,76 @@ bool AppWindow::drainListSaves(std::chrono::steady_clock::time_point deadline) {
     return landed;
 }
 
+// --- A TAKE'S FILE IS CLOSED ON A WORKER (0.99.65, core/record_finish.hpp) ----------
+//
+// Recorder::stop flushed the tail, patched the header and closed the file on the
+// thread that draws the window - on Stop, on a source change, on a rate change and
+// at quit. Now the GUI thread only DETACHES the file from the recorder
+// (Recorder::stopForFinish, no I/O) and hands it to RecordFinisher.
+
+namespace {
+// What the worker said, said once, in the log and nowhere else: the synchronous stop
+// said nothing at all about a header that did not reach the file (it ignored every
+// result), and this keeps the screen the same - a line the user cannot act on, about
+// a file that still opens - while no longer losing the fact. Never names the file.
+void collectFinish(std::shared_ptr<cascade::core::RecordFinisher::Ticket>& slot, const char* what) {
+    if (!slot || !slot->done.load()) { return; }
+    if (!slot->ok.load()) {
+        cascade::core::diagWarnf(
+            "recorder: the %s take's file could not be finalised - it keeps the header it was "
+            "opened with",
+            what);
+    }
+    slot.reset();
+}
+}  // namespace
+
+void AppWindow::finishTake(bool iq) {
+    cascade::core::Recorder& rec = iq ? iqRecorder_ : audioRecorder_;
+    cascade::core::Recorder::FinishRequest req;
+    // False when there is no open file: never started, already stopped, or ended by
+    // the size limit (which closed its own file). Nothing to finish, nothing to wait for.
+    if (!rec.stopForFinish(req)) { return; }
+    (iq ? iqFinish_ : audioFinish_) = cascade::core::RecordFinisher::submit(std::move(req));
+}
+
+bool AppWindow::takeFinishing(bool iq) const {
+    const auto& slot = iq ? iqFinish_ : audioFinish_;
+    return slot && !slot->done.load();
+}
+
+void AppWindow::pollRecordFinishes() {
+    const auto service = [this](bool iq) {
+        collectFinish(iq ? iqFinish_ : audioFinish_, iq ? "I/Q" : "audio");
+        bool& queued = iq ? iqStartQueued_ : audioStartQueued_;
+        if (queued && !takeFinishing(iq)) {
+            queued = false;
+            if (iq) {
+                startIqRecording();
+            } else {
+                startAudioRecording();
+            }
+        }
+    };
+    service(true);
+    service(false);
+}
+
+bool AppWindow::drainRecordFinishes(std::chrono::steady_clock::time_point deadline) {
+    // A Record queued behind a finish is not started at quit: the window is closing.
+    iqStartQueued_ = false;
+    audioStartQueued_ = false;
+    const bool landed = cascade::core::RecordFinisher::drain(deadline);
+    if (!landed) {
+        cascade::core::diagLogf(
+            "recorder: a take's file was still being closed at exit - the disk did not answer in "
+            "time; it keeps the header it was opened with");
+    }
+    collectFinish(iqFinish_, "I/Q");
+    collectFinish(audioFinish_, "audio");
+    return landed;
+}
+
 
 // --- THE REST OF THE GUI THREAD'S DISK WORK (items 5-8 of the 0.99.64 audit) -----
 //
@@ -333,6 +412,7 @@ void AppWindow::exportBookmarksForSdrSharp() {
         std::filesystem::create_directories(std::filesystem::path(dir), ec);
         std::ofstream f(path, std::ios::binary | std::ios::trunc);
         f.write(xml.data(), static_cast<std::streamsize>(xml.size()));
+        cascade::core::writeFaultPoint("export", f);  // test seam: a write that fails part way
         f.close();
         r.ok = static_cast<bool>(f);
         return r;
@@ -395,8 +475,93 @@ void AppWindow::shotFlush() {
     });
 }
 
+void AppWindow::importBookmarkFile(const std::string& path) {
+    std::string p = path;
+    // A path pasted from Explorer's "Copy as path" arrives quoted.
+    if (p.size() >= 2 && p.front() == '"' && p.back() == '"') { p = p.substr(1, p.size() - 2); }
+    // ONE READ AT A TIME, and a list dropped on the window while one is out is not
+    // lost: it is remembered (the last one asked for) and read when the first is
+    // back (pollDiskJobs).
+    if (disk_->bookmarkImport.pending()) {
+        disk_->importAgain = p;
+        return;
+    }
+    // THE DISK IS NOT TOUCHED HERE (0.99.65). The file the user typed or dropped - a
+    // path that can be a network share or a sleeping drive - was read, and parsed,
+    // on the thread that draws the window. The worker owns the path by value and
+    // hands back what the file held; pollDiskJobs() puts it in the list.
+    const auto hook = diskHookForTest_;
+    disk_->bookmarkImport.request([p, hook]() -> ImportOutcome {
+        const auto t0 = std::chrono::steady_clock::now();
+        if (hook) { hook(); }
+        ImportOutcome o;
+        o.path = p;
+        o.result = cascade::core::importFrequencyFile(p);
+        o.ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0)
+                   .count();
+        return o;
+    });
+}
+
 void AppWindow::pollDiskJobs() {
     pollIqOpen();
+
+    // A FREQUENCY LIST READ: put in the bookmarks, in the words the synchronous
+    // import used. The list is the GUI thread's (the worker never touched it).
+    {
+        ImportOutcome o;
+        if (disk_->bookmarkImport.poll(o)) {
+            cascade::core::ImportResult& r = o.result;
+            // A worker that threw (an allocation, a corrupt file): the same sentence a
+            // file that cannot be read gets, instead of a crash in the frame loop.
+            if (disk_->bookmarkImport.threw() && r.error.empty()) {
+                r.error = "cannot read the file";
+            }
+            const std::string& p = o.path;
+            if (!r.error.empty() && r.items.empty()) {
+                bookmarkImportNote_ =
+                    cascade::core::formatText(tr("Could not import: %s"), r.error.c_str());
+                // The file's KIND, never its name or path: "never the name or path of
+                // a file you opened" (PRIVACY.md), and a frequency list's name is
+                // usually what is on it.
+                // importFrequencyFile's "cannot open" names the path; the log does not.
+                std::string why = r.error;
+                for (std::size_t at = why.find(p); !p.empty() && at != std::string::npos;
+                     at = why.find(p, at)) {
+                    why.replace(at, p.size(), "(the file)");
+                }
+                cascade::core::diagWarnf("bookmarks: an import (%s) failed: %s",
+                                         std::filesystem::path(p).extension().string().c_str(),
+                                         why.c_str());
+            } else {
+                const auto t0 = std::chrono::steady_clock::now();
+                const std::size_t found = r.items.size();
+                const std::size_t added = freqMgr_.addMany(std::move(r.items));
+                const double ms =
+                    o.ms + std::chrono::duration<double, std::milli>(
+                               std::chrono::steady_clock::now() - t0)
+                               .count();
+                char note[320];
+                cascade::core::formatUtf8(
+                    note, sizeof(note), "%s: %zu entries read, %zu added%s%s%s", r.format.c_str(),
+                    found, added, found > added ? " (the rest were already here)" : "",
+                    r.skipped > 0 ? ", some had no usable frequency" : "",
+                    r.shifted > 0 ? ", converter Shift values were not applied" : "");
+                bookmarkImportNote_ = note;
+                cascade::core::diagLogf(
+                    "bookmarks: imported a %s file - %zu read, %zu added, %zu skipped, %zu "
+                    "shifted, %.0f ms",
+                    r.format.c_str(), found, added, r.skipped, r.shifted, ms);
+                if (added > 0) { saveBookmarks(); }
+            }
+            // A list asked for while this one was being read.
+            if (!disk_->importAgain.empty()) {
+                std::string next;
+                next.swap(disk_->importAgain);
+                importBookmarkFile(next);
+            }
+        }
+    }
 
     // THE RECORDINGS LIST: the list and the cache the worker grew replace the
     // ones the window held. The cache is a copy that went out and came back, so
@@ -471,6 +636,8 @@ void DiskWorkStateDeleter::operator()(DiskWorkState* p) const { delete p; }
 bool AppWindow::iqOpenPending() const { return disk_->iqOpen.pending(); }
 bool AppWindow::imageSavePending() const { return disk_->imageSave.pending(); }
 bool AppWindow::bookmarkExportPending() const { return disk_->bookmarkExport.pending(); }
+bool AppWindow::bookmarkImportPending() const { return disk_->bookmarkImport.pending(); }
+double AppWindow::bookmarkImportElapsedS() const { return disk_->bookmarkImport.elapsedS(); }
 double AppWindow::iqOpenElapsedS() const { return disk_->iqOpen.elapsedS(); }
 
 void AppWindow::patchListRecordings() {

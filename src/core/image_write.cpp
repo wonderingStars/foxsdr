@@ -5,6 +5,8 @@
 #include <fstream>
 #include <vector>
 
+#include "core/write_fault.hpp"
+
 namespace cascade::core {
 
 bool encodeBmp24(const HostImage& img, std::vector<std::uint8_t>& out,
@@ -169,6 +171,7 @@ bool writeBmp24(const HostImage& img, const std::string& path, std::string& erro
                 static_cast<std::streamsize>(stride));
     }
     f.flush();
+    writeFaultPoint("bmp", f);  // test seam: a write that fails part way
     if (!f) {
         error = "writing \"" + path + "\" failed part way through";
         return false;

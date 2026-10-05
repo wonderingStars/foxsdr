@@ -24,6 +24,7 @@
 #include <string>
 #include <vector>
 
+#include "core/freq_import.hpp"
 #include "core/host_image.hpp"
 #include "core/patch_recordings.hpp"
 #include "gui/disk_job.hpp"
@@ -67,10 +68,22 @@ struct RecordingScan {
     cascade::core::patch::RecordingProbeCache cache;
 };
 
+// A frequency list read: what the file held, or why it could not be read. The path is
+// as it was typed less any quotes, so the failure line can leave it out of the log.
+struct ImportOutcome {
+    cascade::core::ImportResult result;
+    std::string path;
+    double ms = 0.0;  // how long the worker took, for the log line
+};
+
 struct DiskWorkState {
     DiskJob<IqOpenResult> iqOpen{"I/Q file open"};
     DiskJob<FileOutcome> imageSave{"picture save"};
     DiskJob<FileOutcome> bookmarkExport{"frequency list export"};
+    // The Import button and a file dropped on the window. An import asked for while
+    // one is out is remembered here (the last one wins) and run when it comes back.
+    DiskJob<ImportOutcome> bookmarkImport{"frequency list import"};
+    std::string importAgain;
     DiskJob<ShotOutcome> shotWrite{"screenshot save"};
     DiskJob<RecordingScan> recordingScan{"recordings list"};
     // A listing asked for while one was out is run when it comes back.

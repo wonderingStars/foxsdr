@@ -94,6 +94,11 @@ struct DestSeams {
     Recorder::Opener wavOpener;
     // How the MP3's folder is made; empty is create_directories + is_directory.
     std::function<bool(const std::string& directory)> makeDirectory;
+    // (0.99.65) A write to the MP3 that FAILS, as a full disk fails it: when set and
+    // it returns true, the encoder's write for that block counts as refused. Empty in
+    // the application. There is no unprivileged way to fill a volume under a test, and
+    // Media Foundation owns the file handle, so this is the seam.
+    std::function<bool()> mp3WriteFails;
 };
 
 // FILES ARE OPENED OFF THE CALLING THREAD (0.99.64). A speaker's file used to be

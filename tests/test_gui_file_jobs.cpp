@@ -13,6 +13,12 @@
 //     recordings folder, then the XML.
 //   * the patch Radio's device list (opened, or "Look for radios"): the recordings
 //     folders listed and up to kMaxRecordingOpens recording headers opened.
+//   * (0.99.65) the Bookmarks section's "Import", and a list dropped on the window:
+//     the file the user typed read and parsed inline.
+//   * (0.99.65) a patch Radio whose device is an I/Q recording: its header opened
+//     inline in patchReconcile, when the patch starts or the node's device changes.
+//     (Before the fix: worst frame gap 2514 ms and a hang report for the import,
+//     2503 ms and a hang report for the recording; after, about 25 ms and none.)
 //
 // Found by the 0.99.64 audit of what the 0.99.63 Record fix left on the GUI thread
 // (docs/DIAGNOSTICS.md, "The window does no disk work").
@@ -76,6 +82,8 @@
 #include "core/hang_watchdog.hpp"
 #include "core/host_image.hpp"
 #include "core/image_write.hpp"
+#include "core/patch_devices.hpp"
+#include "core/patch_graph.hpp"
 #include "core/patch_recordings.hpp"
 #include "core/recorder.hpp"
 #include "gui/app_window.hpp"
@@ -118,6 +126,51 @@ struct AppWindowTestAccess {
     static void exportBookmarks(AppWindow& a) { a.exportBookmarksForSdrSharp(); }
     static bool exportPending(AppWindow& a) { return a.bookmarkExportPending(); }
     static std::string exportNote(AppWindow& a) { return a.bookmarkImportNote_; }
+    // The Import button and a file dropped on the window both end here.
+    static void importFile(AppWindow& a, const std::string& path) { a.importBookmarkFile(path); }
+    static bool importPending(AppWindow& a) { return a.bookmarkImportPending(); }
+
+    // The patch page's Radio node on an I/Q recording (0.99.65): reconciled once a
+    // frame, as the page does, until its radio runs.
+    static cascade::core::patch::NodeId addFileRadio(AppWindow& a, const std::string& path) {
+        namespace pc = cascade::core::patch;
+        a.patchSeeded_ = true;  // no starter patch: this test builds its own
+        const pc::NodeId id = a.patchGraph_.addNode(pc::NodeKind::Radio, "Radio");
+        if (pc::Node* n = a.patchGraph_.mutableNode(id)) {
+            n->device = pc::makeIqFileKey(path);
+            n->freqHz = 100.0e6;
+            n->rateHz = 2.4e6;
+            n->on = true;
+        }
+        return id;
+    }
+    static void reconcile(AppWindow& a) {
+        a.patchRunning_ = true;
+        a.patchWasOpen_ = true;  // the page's first-frame scan is not under test
+        a.patchReconcile();
+    }
+    static bool radioRunning(AppWindow& a, cascade::core::patch::NodeId id) {
+        return a.patchRadios_.count(id) != 0;
+    }
+    static bool radioPending(AppWindow& a, cascade::core::patch::NodeId id) {
+        return a.patchRadioPending_.count(id) != 0;
+    }
+    static std::string radioError(AppWindow& a, cascade::core::patch::NodeId id) {
+        const auto it = a.patchRadioError_.find(id);
+        return it == a.patchRadioError_.end() ? std::string() : it->second;
+    }
+    static double nodeRate(AppWindow& a, cascade::core::patch::NodeId id) {
+        const cascade::core::patch::Node* n = a.patchGraph_.find(id);
+        return n == nullptr ? -1.0 : n->rateHz;
+    }
+    static void setNodeOn(AppWindow& a, cascade::core::patch::NodeId id, bool on) {
+        if (cascade::core::patch::Node* n = a.patchGraph_.mutableNode(id)) { n->on = on; }
+    }
+    static void setNodeDevice(AppWindow& a, cascade::core::patch::NodeId id, const std::string& path) {
+        if (cascade::core::patch::Node* n = a.patchGraph_.mutableNode(id)) {
+            n->device = cascade::core::patch::makeIqFileKey(path);
+        }
+    }
 
     // What the screenshot block does once the frame's pictures are taken.
     static void shot(AppWindow& a, const std::string& dir, int n, const cascade::core::HostImage& im,
@@ -498,6 +551,204 @@ void checkAFailedExportSaysWhatItSaid() {
                   [&] { return Access::exportNote(app).rfind("Exported 2 to ", 0) == 0; }));
 }
 
+// A frequency list to import: three CSV rows, or `n` rows starting at `first` MHz.
+std::string writeCsv(const char* tag, int n, double firstMhz) {
+    const fs::path p = g_scratch / (std::string(tag) + ".csv");
+    std::ofstream f(p, std::ios::binary);
+    f << "frequency,name,mode\n";
+    for (int i = 0; i < n; ++i) {
+        f << static_cast<long long>((firstMhz + 1.1 * i) * 1.0e6) << ",Import " << tag << " " << i
+          << ",NFM\n";
+    }
+    return p.string();
+}
+
+void checkTheImportNeverHoldsAFrame() {
+    AppWindow app;
+    Access::setRecordDir(app, (g_scratch / "import-slow").string());
+    const std::string csv = writeCsv("slow", 3, 101.0);
+    auto disk = makeDisk(2500);
+    Access::setHook(app, slowHook(disk));
+    bool sawPending = false;
+    stallCase("bookmark import", app, disk, [&] {
+        Access::importFile(app, csv);
+        sawPending = Access::importPending(app);
+    });
+    CHECK(sawPending);
+    CHECK(!Access::importPending(app));
+    // What was read, in the words the synchronous import used.
+    CHECK(Access::bookmarks(app).size() == 3u);
+    CHECK(Access::exportNote(app) == "CSV: 3 entries read, 3 added");
+}
+
+// An import asked for while one is out is REMEMBERED (a file dropped on the window
+// is not lost), the last one asked for wins, and it is run when the first is back.
+void checkASecondImportIsRemembered() {
+    AppWindow app;
+    Access::setRecordDir(app, (g_scratch / "import-again").string());
+    const std::string a = writeCsv("first", 2, 100.0);
+    const std::string b = writeCsv("second", 2, 120.0);
+    const std::string c = writeCsv("third", 3, 140.0);
+    auto disk = makeDisk(500);
+    Access::setHook(app, slowHook(disk));
+    Access::importFile(app, a);
+    Access::importFile(app, b);  // remembered...
+    Access::importFile(app, c);  // ...and replaced: only the last asked for runs
+    CHECK(Access::importPending(app));
+    CHECK(pumpApp(app, 12000.0, [&] { return disk->finished.load() == 2 && !Access::importPending(app); }));
+    CHECK(disk->calls.load() == 2);
+    CHECK(Access::bookmarks(app).size() == 5u);  // a's two and c's three
+    CHECK(Access::exportNote(app) == "CSV: 3 entries read, 3 added");
+}
+
+// The same words as before for a file that can be read: one pass, one note.
+void checkAnImportSaysWhatItSaid() {
+    AppWindow app;
+    Access::setRecordDir(app, (g_scratch / "import-ok").string());
+    const std::string csv = writeCsv("ok", 4, 90.0);
+    Access::importFile(app, "\"" + csv + "\"");  // a path pasted with Explorer's quotes
+    CHECK(pumpApp(app, 5000.0, [&] { return !Access::importPending(app); }));
+    CHECK(Access::bookmarks(app).size() == 4u);
+    CHECK(Access::exportNote(app) == "CSV: 4 entries read, 4 added");
+    // A file that is not there: the reason, in the words it always had; nothing added.
+    Access::importFile(app, (g_scratch / "no-such-list.csv").string());
+    CHECK(pumpApp(app, 5000.0, [&] { return !Access::importPending(app); }));
+    CHECK(Access::exportNote(app).rfind("Could not import: ", 0) == 0);
+    CHECK(Access::bookmarks(app).size() == 4u);
+    // A folder squatting on the path: also a reason, also nothing added, no hang.
+    const fs::path dirAsFile = g_scratch / "import-is-a-folder.csv";
+    std::error_code ec;
+    fs::create_directories(dirAsFile, ec);
+    Access::importFile(app, dirAsFile.string());
+    CHECK(pumpApp(app, 5000.0, [&] { return !Access::importPending(app); }));
+    CHECK(Access::exportNote(app).rfind("Could not import: ", 0) == 0);
+    CHECK(Access::bookmarks(app).size() == 4u);
+}
+
+// --- THE PATCH PAGE'S RADIO ON AN I/Q RECORDING ----------------------------------
+
+// The path of the one recording makeRecording() left in `dir`.
+std::string recordingIn(const fs::path& dir) {
+    const std::vector<fs::path> f = filesIn(dir, ".wav");
+    return f.empty() ? std::string() : f.front().string();
+}
+
+void checkAPatchRecordingOpenNeverHoldsAFrame() {
+    const fs::path dir = g_scratch / "patch-rec";
+    makeRecording(dir);
+    AppWindow app;
+    const auto id = Access::addFileRadio(app, recordingIn(dir));
+    auto disk = makeDisk(2500);
+    Access::setHook(app, slowHook(disk));
+    HangWatchdog w;
+    startWatchdog(w, reportDir("patch recording open"));
+    const LoopStats s = runFrameLoop(w, 3600.0, [&] { Access::reconcile(app); });
+    CHECK(w.reportsWritten() == 0u);
+    CHECK(s.frames > 100);
+    CHECK(s.worstGapMs < 800.0);
+    CHECK(!disk->askedFromCaller.load());
+    CHECK(disk->calls.load() == 1);
+    // What the synchronous open gave: the radio runs, the node took the
+    // recording's rate (the 2.4 MS/s it was given is not what the file holds), and
+    // nothing is said against it.
+    CHECK(Access::radioRunning(app, id));
+    CHECK(!Access::radioPending(app, id));
+    CHECK(Access::nodeRate(app, id) == 250000.0);
+    CHECK(Access::radioError(app, id).empty());
+    std::printf("  patch radio recording open: %d frames in 3.6 s, worst gap %.0f ms, hang reports %u\n",
+                s.frames, s.worstGapMs, w.reportsWritten());
+    w.stop();
+}
+
+// A recording that is not there: the node says what it always said, once, and is not
+// retried every frame - only when its device is changed, which then works.
+void checkAMissingPatchRecordingSaysWhatItSaid() {
+    const fs::path dir = g_scratch / "patch-rec-missing";
+    makeRecording(dir);
+    AppWindow app;
+    const std::string missing = (g_scratch / "no-such-recording.wav").string();
+    const auto id = Access::addFileRadio(app, missing);
+    std::string want;
+    CHECK(cascade::core::patch::openIqRecording(cascade::core::patch::makeIqFileKey(missing), 0.0,
+                                                want) == nullptr);
+    CHECK(!want.empty());
+    auto disk = makeDisk(0);
+    Access::setHook(app, slowHook(disk));
+    CHECK(pumpApp(app, 5000.0, [&] {
+        Access::reconcile(app);
+        return !Access::radioError(app, id).empty() && !Access::radioPending(app, id);
+    }));
+    CHECK(Access::radioError(app, id) == want);
+    CHECK(!Access::radioRunning(app, id));
+    // Not retried every frame.
+    for (int i = 0; i < 40; ++i) {
+        Access::reconcile(app);
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    CHECK(disk->calls.load() == 1);
+    // A recording that exists replaces it.
+    Access::setNodeDevice(app, id, recordingIn(dir));
+    CHECK(pumpApp(app, 5000.0, [&] {
+        Access::reconcile(app);
+        return Access::radioRunning(app, id);
+    }));
+    CHECK(Access::radioError(app, id).empty());
+    CHECK(Access::nodeRate(app, id) == 250000.0);
+}
+
+// A node switched off while its recording opens: the answer is dropped, the file closed,
+// and no radio appears.
+void checkARecordingNodeSwitchedOffWhileOpeningIsDropped() {
+    const fs::path dir = g_scratch / "patch-rec-off";
+    makeRecording(dir);
+    AppWindow app;
+    const auto id = Access::addFileRadio(app, recordingIn(dir));
+    auto disk = makeDisk(600);
+    Access::setHook(app, slowHook(disk));
+    Access::reconcile(app);
+    CHECK(pumpApp(app, 3000.0, [&] { return disk->calls.load() == 1; }));
+    Access::setNodeOn(app, id, false);
+    CHECK(pumpApp(app, 5000.0, [&] {
+        Access::reconcile(app);
+        return disk->finished.load() == 1 && !Access::radioPending(app, id);
+    }));
+    CHECK(!Access::radioRunning(app, id));
+    CHECK(Access::radioError(app, id).empty());
+    // Switched on again, it opens.
+    Access::setNodeOn(app, id, true);
+    CHECK(pumpApp(app, 5000.0, [&] {
+        Access::reconcile(app);
+        return Access::radioRunning(app, id);
+    }));
+}
+
+// The window destroyed while a recording is still opening does not wait for the disk.
+void checkExitWhileAPatchRecordingOpens() {
+    const fs::path dir = g_scratch / "patch-rec-exit";
+    makeRecording(dir);
+    auto disk = makeDisk(2500);
+    double destroyMs = 0.0;
+    {
+        auto app = std::make_unique<AppWindow>();
+        Access::addFileRadio(*app, recordingIn(dir));
+        Access::setHook(*app, slowHook(disk));
+        const double t0 = nowMs();
+        Access::reconcile(*app);
+        const double firstFrameMs = nowMs() - t0;
+        std::printf("  patch recording open: first reconcile took %.0f ms\n", firstFrameMs);
+        CHECK(firstFrameMs < 800.0);
+        const double t1 = nowMs();
+        app.reset();
+        destroyMs = nowMs() - t1;
+    }
+    CHECK(destroyMs < 2000.0);
+    const double until = nowMs() + 10000.0;
+    while (nowMs() < until && disk->finished.load() < 1) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    CHECK(disk->finished.load() == 1);
+}
+
 void checkTheScreenshotNeverHoldsAFrame() {
     AppWindow app;
     const fs::path dir = g_scratch / "shot-slow";
@@ -562,21 +813,23 @@ void checkExitWhileEveryWorkerIsWedged() {
         Access::saveImage(*app, testImage());
         Access::exportBookmarks(*app);
         Access::shot(*app, dir.string(), 1, testImage(), "z\n");
+        Access::importFile(*app, writeCsv("exit", 2, 130.0));
         CHECK(Access::imagePending(*app));
         CHECK(Access::exportPending(*app));
+        CHECK(Access::importPending(*app));
         const double t0 = nowMs();
         app.reset();
         destroyMs = nowMs() - t0;
     }
-    // Four wedged workers, each given the 250 ms grace in ~AppWindow and then let
+    // Five wedged workers, each given the 250 ms grace in ~AppWindow and then let
     // go: well inside the 2.5 s the disk is taking.
     CHECK(destroyMs < 2000.0);
-    std::printf("  exit with four workers wedged: ~AppWindow took %.0f ms\n", destroyMs);
+    std::printf("  exit with five workers wedged: ~AppWindow took %.0f ms\n", destroyMs);
     const double until = nowMs() + 10000.0;
-    while (nowMs() < until && disk->finished.load() < 4) {
+    while (nowMs() < until && disk->finished.load() < 5) {
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
-    CHECK(disk->finished.load() == 4);  // the abandoned workers ran to the end by themselves
+    CHECK(disk->finished.load() == 5);  // the abandoned workers ran to the end by themselves
 }
 
 }  // namespace
@@ -591,6 +844,13 @@ int main() {
     checkAFailedPictureSaveSaysWhatItSaid();
     checkTheExportNeverHoldsAFrame();
     checkAFailedExportSaysWhatItSaid();
+    checkTheImportNeverHoldsAFrame();
+    checkASecondImportIsRemembered();
+    checkAnImportSaysWhatItSaid();
+    checkAPatchRecordingOpenNeverHoldsAFrame();
+    checkAMissingPatchRecordingSaysWhatItSaid();
+    checkARecordingNodeSwitchedOffWhileOpeningIsDropped();
+    checkExitWhileAPatchRecordingOpens();
     checkTheScreenshotNeverHoldsAFrame();
     checkAFailedScreenshotIsContained();
     checkExitWhileEveryWorkerIsWedged();

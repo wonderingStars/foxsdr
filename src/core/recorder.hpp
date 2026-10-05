@@ -194,6 +194,45 @@ public:
         }
     };
 
+    // A take's file, taken OFF the recorder to be finished somewhere else
+    // (0.99.65). stop() patches the header and closes the file, and BOTH wait for
+    // the disk: the same slow answer that froze the Record button on its way in
+    // freezes the Stop button on its way out. So stop() is two steps, as start()
+    // is three:
+    //
+    //   stopForFinish()   no I/O: marks the recorder stopped and moves the file,
+    //                     its stdio buffer and the byte count into a FinishRequest.
+    //   finishFile()      THE BLOCKING PART: flush, patch the two size fields,
+    //                     close. Static, reads nothing but its argument, so a
+    //                     worker that is abandoned at quit touches no recorder.
+    //
+    // stop() is still the two in a row, for every caller that can wait (the bench,
+    // the tests, a size-limit end, which happens on the writing thread). The
+    // GUI hands the request to core::RecordFinisher (core/record_finish.hpp).
+    //
+    // MOVE-ONLY AND SELF-CLEANING, as OpenedFile is: one that is dropped closes
+    // its file, which leaves what a crash leaves - the zero-length header the
+    // opener flushed (a husk any chunk-walking reader parses).
+    struct FinishRequest {
+        // Declared BEFORE `file` so that it is destroyed AFTER it: the stream is
+        // closed (flushed) while its setvbuf buffer is still alive.
+        std::vector<char> buffer;
+        FilePtr file{nullptr, &Recorder::closeFile};
+        std::uint64_t dataBytes = 0;  // what the header's two size fields must say
+
+        FinishRequest() = default;
+        FinishRequest(FinishRequest&&) = default;
+        FinishRequest& operator=(FinishRequest&& other) noexcept {
+            if (this != &other) {
+                file.reset();
+                buffer = std::move(other.buffer);
+                file = std::move(other.file);
+                dataBytes = other.dataBytes;
+            }
+            return *this;
+        }
+    };
+
     // The blocking step. Called with the request, fills `out` and returns true,
     // or returns false with the reason in `error`. Runs on whatever thread it
     // is given and MUST touch nothing but its arguments.
@@ -234,7 +273,30 @@ public:
     // without a prior start(), and a no-op on a take that already ended
     // itself at the size limit. Counters keep their final values until the
     // next start() so the GUI can show "recorded N samples" after the fact.
+    // BLOCKS for as long as the disk takes (see FinishRequest): not for the GUI
+    // thread, which goes through stopForFinish() and core::RecordFinisher.
     void stop();
+
+    // Step one of stop(): recording() goes false and the file, its buffer and the
+    // byte count move into `out`. NO DISK. True when there was a file to finish; a
+    // no-op returning false when the recorder was idle or the take had already
+    // ended itself at the size limit. Call it only when no write can be in flight,
+    // exactly as stop() requires. The counters keep their final values.
+    bool stopForFinish(FinishRequest& out);
+
+    // Step two: patch the header and close. Returns whether the header patch
+    // reached the file (a false return leaves the zero-length header the opener
+    // flushed - a husk, not an unreadable file); the file is closed either way.
+    // Reads nothing but `req`. Runs the finish hook first (below).
+    static bool finishFile(FinishRequest&& req);
+
+    // Test seam (0.99.65): called by finishFile immediately before it touches the
+    // file, with the stream it is about to flush, patch and close - so a test can
+    // make the finish as slow as a bad disk, or pull the file out from under it
+    // (the handle closed, the device gone). A plain function pointer, null in every
+    // shipped build, set only by tests.
+    using FinishHook = void (*)(std::FILE* file);
+    static void setFinishHookForTest(FinishHook hook);
 
     bool recording() const;
     RecordKind kind() const;
@@ -282,10 +344,14 @@ private:
     // writeFailed_ so a dead disk is not hammered once per block forever.
     void flushStage(std::size_t bytes, std::size_t bytesPerFrame);
 
-    // Patch the two RIFF size fields from dataBytes_ and close the file.
-    // Shared by stop() and endAtSizeLimit() so a take that ends by filling
-    // up leaves exactly the file a take the user stopped would have.
+    // Patch the two RIFF size fields from dataBytes_ and close the file: the two
+    // steps in a row, on the calling thread. Shared by stop() and
+    // endAtSizeLimit() so a take that ends by filling up leaves exactly the file
+    // a take the user stopped would have.
     void finalizeFile();
+    // The recorder's half of stopForFinish: file_, fileBuf_ and the byte count
+    // into `out`. No disk. False when there is no file.
+    bool detachFile(FinishRequest& out);
 
     // The data chunk is full: finalize the file and end the take.
     void endAtSizeLimit();

@@ -421,9 +421,27 @@ void AppWindow::patchReconcile() {
                 kind != "file" && kind != "siggen") {
                 cascade::core::health::noteRadioFail(kind, patchRadioError_[id]);
             }
-            cascade::core::diagWarnf("patch: radio node %u would not open: %s",
-                                     static_cast<unsigned>(id), patchRadioError_[id].c_str());
+            if (pc::isIqFileKey(n->device)) {
+                // The NODE, never the file's name: a path is the user's data, and the
+                // reason a recording would not open can carry it.
+                cascade::core::diagWarnf("patch: radio node %u: its I/Q recording would not open",
+                                         static_cast<unsigned>(id));
+            } else {
+                cascade::core::diagWarnf("patch: radio node %u would not open: %s",
+                                         static_cast<unsigned>(id),
+                                         patchRadioError_[id].c_str());
+            }
             continue;
+        }
+        // A RECORDING'S RATE IS THE FILE'S, and the node takes it (the open's worker
+        // read the header; the node's 2.4 MS/s default is not what the file holds).
+        // Taking it does not reopen the radio: openedAs leaves a recording's rate out.
+        if (pc::isIqFileKey(n->device)) {
+            if (pc::Node* mn = patchGraph_.mutableNode(id);
+                mn != nullptr && std::fabs(mn->rateHz - r.src->sampleRateHz()) > 0.5) {
+                mn->rateHz = r.src->sampleRateHz();
+                patchUi_.dirty = true;
+            }
         }
         auto radio = std::make_unique<pc::PatchRadio>(id, std::move(r.src), r.label);
         // THE SAME CONVERTER the receiver uses for this device (keyed alike:
@@ -558,53 +576,40 @@ void AppWindow::patchReconcile() {
         // The node's frequency is AIR; the device is told it through the
         // converter remembered for it (off unless the user set one there).
         const cascade::core::ConverterSetting conv = converterForKey(n->device);
-        // AN I/Q RECORDING (0.99.40), opened here on the GUI thread as the
-        // Source section opens one: a header read, bounded, and no USB walk
-        // to wait for. Its RATE is the file's, and the node takes it - which
-        // does not reopen it (openedAs leaves a recording's rate out). Its
-        // CENTRE is the node's frequency: the air frequency the recording is
-        // baseband around, told to the file as the receiver's file is told
-        // one (through the "file" converter, off unless the user set it).
+        // AN I/Q RECORDING (0.99.40). Its header is read - an ifstream on a path
+        // that can be a network share or a drive that has spun down - and since
+        // 0.99.65 that is the open worker's, like every hardware radio's: it was
+        // done here, inline, on the thread that draws the window ("bounded, and no
+        // USB walk to wait for" - and still a freeze on a slow disk). The answer is
+        // collected at the top of this function, where the node's rate is taken
+        // from the file (which does not reopen it: openedAs leaves a recording's
+        // rate out) and the radio started. Its CENTRE is the node's frequency: the
+        // air frequency the recording is baseband around, told to the file as the
+        // receiver's file is told one (through the "file" converter, off unless
+        // the user set it) - converted HERE, on the thread that owns the setting.
         if (pc::isIqFileKey(n->device)) {
             const double radioHz =
                 (pc::radioCentreSet(*n) && cascade::core::airReachable(conv, centre))
                     ? cascade::core::radioFromAir(conv, centre)
                     : 0.0;
-            std::string err;
-            std::unique_ptr<cascade::source::IqFileSource> file =
-                pc::openIqRecording(n->device, radioHz, err);
-            if (!file) {
-                patchRadioError_[id] = err;
-                patchRadioFailedAs_[id] = as;
-                // The NODE, never the file's name: a path is the user's data.
-                cascade::core::diagWarnf("patch: radio node %u: its I/Q recording would not open",
-                                         static_cast<unsigned>(id));
-                continue;
-            }
-            if (std::fabs(n->rateHz - file->sampleRateHz()) > 0.5) {
-                n->rateHz = file->sampleRateHz();
-                patchUi_.dirty = true;
-            }
-            auto radio = std::make_unique<pc::PatchRadio>(id, std::move(file), "I/Q recording");
-            radio->setConverter(conv);
-            std::string serr;
-            if (!radio->start(serr)) {
-                patchRadioError_[id] = serr;
-                patchRadioFailedAs_[id] = as;
-                continue;
-            }
-            if (!pc::radioCentreSet(*n)) {
-                n->freqHz = radio->centreHz();
-                n->centreChosen = true;
-                patchUi_.dirty = true;
-            }
-            cascade::core::diagLogf("patch: radio node %u playing an I/Q recording at %.0f S/s",
-                                    static_cast<unsigned>(id), radio->rateHz());
+            patchRadioPendingAs_[id] = as;
             patchRadioError_.erase(id);
-            patchRadioFailedAs_.erase(id);
-            patchRadioOpenedAs_[id] = openedAs(*n);
-            patchRadios_[id] = std::move(radio);
-            patchRadioSig_.erase(id);
+            const auto hook = diskHookForTest_;
+            patchRadioPending_[id] = std::async(
+                std::launch::async, [device = n->device, radioHz, hook]() {
+                    PatchRadioOpen r;
+                    r.label = "I/Q recording";
+                    if (hook) { hook(); }
+                    std::string err;
+                    std::unique_ptr<cascade::source::IqFileSource> file =
+                        pc::openIqRecording(device, radioHz, err);
+                    if (!file) {
+                        r.error = err;
+                        return r;
+                    }
+                    r.src = std::move(file);
+                    return r;
+                });
             continue;
         }
         if (pc::isGeneratorKey(n->device)) {

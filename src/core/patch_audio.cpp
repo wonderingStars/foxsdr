@@ -17,6 +17,7 @@
 
 #include "core/diag_log.hpp"
 #include "core/mp3_writer.hpp"
+#include "core/record_finish.hpp"
 #include "core/recorder.hpp"
 #include "dsp/spsc_ring.hpp"
 #include "sink/audio_out.hpp"
@@ -144,9 +145,26 @@ public:
         return true;
     }
 
+    // For makeWavDest, whose callers WAIT (and whose tests read the file the moment
+    // the destination is gone): the file is finalised inside the destructor.
+    void setBlockingFinish() { blockingFinish_ = true; }
+
     ~WavDest() override {
         if (state_.load() == State::Armed) {
-            rec_.stop();  // patches the header: unchanged by 0.99.64
+            // THE FINISH IS A WORKER'S (0.99.65, core/record_finish.hpp). A speaker's
+            // destination is destroyed on the thread that retires the set that holds
+            // it - on the GUI thread when a radio is stopped, its device changed or
+            // the patch page closed - and the flush, the header patch and the close
+            // each wait for the disk. The file is detached from the recorder without
+            // touching the disk and handed to the finisher, which AppWindow drains,
+            // bounded, at quit. Header, samples and the failure answer are exactly
+            // what Recorder::stop gave; only the thread is different.
+            if (blockingFinish_) {
+                rec_.stop();
+                return;
+            }
+            Recorder::FinishRequest req;
+            if (rec_.stopForFinish(req)) { (void)RecordFinisher::submit(std::move(req)); }
             return;
         }
         // Never armed: the sound still in the pre-roll is lost with the file,
@@ -269,6 +287,7 @@ private:
     }
 
     Recorder rec_;
+    bool blockingFinish_ = false;  // makeWavDest's: finalise inside the destructor
     std::string path_;
     std::shared_ptr<Shared> shared_;
     std::atomic<State> state_{State::Opening};
@@ -288,33 +307,47 @@ public:
     // had; the WAV fallback is for the build that has no encoder, which needs no
     // disk to find out.
     Mp3Dest(std::string directory, std::string path,
-            std::function<bool(const std::string&)> makeDirectory)
-        : directory_(std::move(directory)),
-          path_(std::move(path)),
-          makeDirectory_(std::move(makeDirectory)),
-          ring_(kRingFrames) {
-        worker_ = std::thread([this] { run(); });
+            std::function<bool(const std::string&)> makeDirectory,
+            std::function<bool()> failWrite = {})
+        : path_(path),
+          s_(std::make_shared<Shared>(std::move(directory), std::move(path),
+                                      std::move(makeDirectory), std::move(failWrite))) {
+        // A thread of its own that owns the shared state: it outlives this object when the
+        // destination is retired while the disk is slow (see the destructor).
+        std::thread([s = s_] { work(*s); }).detach();
     }
     ~Mp3Dest() override {
+        // THE WORKER IS NOT JOINED (0.99.65). This destructor runs on the thread that retires
+        // the speaker's set - the GUI thread, when the patch stops, a radio's device changes or
+        // the page closes - and the worker may be inside the recordings folder, the encoder's
+        // open, a block of sound or the close that finalises the file, each of which waits as
+        // long as the disk takes. Joining here held the frame for all of it (the same freeze as
+        // the WAV's, which 0.99.64 fixed for the open and 0.99.65 for the finish). The worker
+        // owns what it touches, is told to stop and finish, and ends by itself; it is counted
+        // with the recorders' finishes so that quit gives it the bounded chance they get
+        // (core/record_finish.hpp, AppWindow::drainRecordFinishes).
         {
-            std::lock_guard<std::mutex> lock(m_);
-            stop_ = true;
+            std::lock_guard<std::mutex> lock(s_->m);
+            s_->stop = true;
+            if (!s_->ended) {
+                s_->counted = true;
+                RecordFinisher::externalBegin();
+            }
         }
-        cv_.notify_all();
-        if (worker_.joinable()) { worker_.join(); }
+        s_->cv.notify_all();
     }
     void write(const float* s, std::size_t n) override {
         note(s, n);
         // Never blocks: if the writer thread has fallen five seconds behind,
         // the overflow is dropped and counted rather than stalling the radio.
-        const std::size_t took = ring_.write(s, n);
-        if (took < n) { dropped_.fetch_add(n - took, std::memory_order_relaxed); }
+        const std::size_t took = s_->ring.write(s, n);
+        if (took < n) { s_->dropped.fetch_add(n - took, std::memory_order_relaxed); }
     }
     std::string describe() const override { return "MP3  " + baseName(path_); }
     std::string error() const override {
-        std::lock_guard<std::mutex> lock(m_);
-        if (!error_.empty()) { return error_; }
-        if (dropped_.load(std::memory_order_relaxed) > 0) {
+        std::lock_guard<std::mutex> lock(s_->m);
+        if (!s_->error.empty()) { return s_->error; }
+        if (s_->dropped.load(std::memory_order_relaxed) > 0) {
             return "the MP3 encoder fell behind and some sound was not written";
         }
         return {};
@@ -323,49 +356,87 @@ public:
 private:
     static constexpr std::size_t kRingFrames = std::size_t{1} << 18;   // ~5.5 s at 48 kHz
 
-    void run() {
+    // Everything the worker touches, owned jointly by it and the destination.
+    struct Shared {
+        Shared(std::string d, std::string p, std::function<bool(const std::string&)> mk,
+               std::function<bool()> fail)
+            : directory(std::move(d)),
+              path(std::move(p)),
+              makeDirectory(std::move(mk)),
+              failWrite(std::move(fail)),
+              ring(kRingFrames) {}
+        std::string directory;
+        std::string path;
+        std::function<bool(const std::string&)> makeDirectory;
+        std::function<bool()> failWrite;  // test seam, empty in the application
+        dsp::SpscRing<float> ring;
+        mutable std::mutex m;
+        std::condition_variable cv;
+        bool stop = false;     // the destination was retired: finish and end
+        bool ended = false;    // the worker has finished (its file closed)
+        bool counted = false;  // the retirement is counted in RecordFinisher until `ended`
+        std::string error;
+        std::atomic<std::uint64_t> dropped{0};
+    };
+
+    // The worker's last act, however it ends: tell the quit drain it is done.
+    struct EndGuard {
+        Shared& s;
+        ~EndGuard() {
+            std::lock_guard<std::mutex> lock(s.m);
+            s.ended = true;
+            if (s.counted) {
+                s.counted = false;
+                RecordFinisher::externalEnd();
+            }
+        }
+    };
+
+    static void work(Shared& s) {
+        const EndGuard guard{s};
         bool folderOk = false;
-        if (makeDirectory_) {
-            folderOk = makeDirectory_(directory_);
+        if (s.makeDirectory) {
+            folderOk = s.makeDirectory(s.directory);
         } else {
             std::error_code ec;
-            std::filesystem::create_directories(directory_, ec);
-            folderOk = !ec && std::filesystem::is_directory(directory_);
+            std::filesystem::create_directories(s.directory, ec);
+            folderOk = !ec && std::filesystem::is_directory(s.directory);
         }
         if (!folderOk) {
-            std::lock_guard<std::mutex> lock(m_);
-            error_ = "cannot create the recordings folder \"" + directory_ + "\"";
+            std::lock_guard<std::mutex> lock(s.m);
+            s.error = "cannot create the recordings folder \"" + s.directory + "\"";
             return;   // write() keeps filling the ring, which simply overflows
         }
         Mp3Writer w;
         std::string err;
-        if (!w.open(path_, static_cast<unsigned>(kOutRateHz), 1, 128, err)) {
-            std::lock_guard<std::mutex> lock(m_);
-            error_ = err;
+        if (!w.open(s.path, static_cast<unsigned>(kOutRateHz), 1, 128, err)) {
+            std::lock_guard<std::mutex> lock(s.m);
+            s.error = err;
             return;   // write() keeps filling the ring, which simply overflows
         }
         std::vector<float> f(8192);
         std::vector<std::int16_t> pcm(8192);
         const auto drain = [&] {
             for (;;) {
-                const std::size_t n = ring_.read(f.data(), f.size());
+                const std::size_t n = s.ring.read(f.data(), f.size());
                 if (n == 0) { return; }
                 for (std::size_t i = 0; i < n; ++i) {
                     const float v = std::clamp(f[i], -1.0f, 1.0f);
                     pcm[i] = static_cast<std::int16_t>(std::lround(v * 32767.0f));
                 }
-                if (!w.write(pcm.data(), n)) {
-                    std::lock_guard<std::mutex> lock(m_);
-                    if (error_.empty()) { error_ = "the MP3 encoder refused a write"; }
+                const bool refused = !w.write(pcm.data(), n) || (s.failWrite && s.failWrite());
+                if (refused) {
+                    std::lock_guard<std::mutex> lock(s.m);
+                    if (s.error.empty()) { s.error = "the MP3 encoder refused a write"; }
                 }
             }
         };
         for (;;) {
             bool stopping = false;
             {
-                std::unique_lock<std::mutex> lock(m_);
-                cv_.wait_for(lock, std::chrono::milliseconds(20), [this] { return stop_; });
-                stopping = stop_;
+                std::unique_lock<std::mutex> lock(s.m);
+                s.cv.wait_for(lock, std::chrono::milliseconds(20), [&s] { return s.stop; });
+                stopping = s.stop;
             }
             drain();
             if (stopping) { break; }
@@ -373,16 +444,8 @@ private:
         w.close();
     }
 
-    std::string directory_;
-    std::string path_;
-    std::function<bool(const std::string&)> makeDirectory_;
-    dsp::SpscRing<float> ring_;
-    std::thread worker_;
-    mutable std::mutex m_;
-    std::condition_variable cv_;
-    bool stop_ = false;
-    std::string error_;
-    std::atomic<std::uint64_t> dropped_{0};
+    std::string path_;  // for describe(); the worker has its own copy
+    std::shared_ptr<Shared> s_;
 };
 
 // --- a sound device ------------------------------------------------------------
@@ -469,7 +532,9 @@ std::shared_ptr<AudioDest> makeWavDest(const std::string& directory, const std::
         return nullptr;
     }
     // THE ONE PLACE THAT WAITS, for the callers that can: the file is open, or the
-    // reason it is not, before this returns.
+    // reason it is not, before this returns - and it is finalised when the
+    // destination goes, not left to a worker.
+    d->setBlockingFinish();
     if (!d->waitOpened(error)) { return nullptr; }
     return d;
 }
@@ -483,7 +548,9 @@ std::shared_ptr<AudioDest> makeMp3Dest(const std::string& directory, const std::
     // No disk here: the folder is the worker's (see Mp3Dest).
     return std::make_shared<Mp3Dest>(directory, timestampedPath(directory, prefix, "mp3"),
                                      seams != nullptr ? seams->makeDirectory
-                                                      : std::function<bool(const std::string&)>{});
+                                                      : std::function<bool(const std::string&)>{},
+                                     seams != nullptr ? seams->mp3WriteFails
+                                                      : std::function<bool()>{});
 }
 
 std::shared_ptr<AudioDest> makeDeviceDest(const std::string& deviceName, std::string& error) {

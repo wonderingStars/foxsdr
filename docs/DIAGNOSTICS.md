@@ -1620,29 +1620,70 @@ unload before a plugin delete is third-party code whose freeze should be reporte
 **deliberately not paused**: a freeze there is a defect, and the report is how it is
 found. 11 is part of the plugin rescan and is covered by its pause.
 
-#### Still open: found by the scan, not in the list
+#### Found by the scan, not in the list: moved in 0.99.65
 
-Each is in the allowlist below as **STILL OPEN**, with the reason it is not paused.
+The 0.99.64 scan found four calls it left on the thread, deliberately **not** paused
+(see above), listed as **STILL OPEN**. Each is now on a worker, with a test that was
+red on the unmodified code (a 2.5 s sleeping seam under a real `HangWatchdog`: worst
+frame gap about 2.5 s and one hang report before; about 26 ms and none after), and has
+left the allowlist, so the scan guards it from here on.
 
-- **`Recorder::stop`, on the GUI thread**: the WAV header patch (a seek and a write)
-  and the close, on the Stop key, a source change, at quit - and `~WavDest`, when a
-  patch speaker's set is retired. The start was moved in 0.99.63; **the finish was
-  not, and it is the same class**. Next: finalise on a worker with a bounded wait at
-  quit.
-- **`importBookmarkFile`**: the Import button and a file dropped on the window read the
-  SDR# list on the GUI thread. The same class as Export, which moved.
-- **A patch Radio's I/Q recording** is opened inline in `patchReconcile` when the patch
-  starts or the node's device changes: the same header read as the Source section's
-  Open, with a comment that called it "bounded, and no USB walk to wait for". The
-  hardware radios already open on a worker (`patchRadioPending_`); a recording should.
-- **The saved I/Q file is reopened inline at start-up** (`applyConfig`), before the first
-  frame. Not a stalled frame, but a window that does not appear; the sound card's
-  start-up restore already runs on a worker.
-- **`~Mp3Dest` joins its worker** and `~WavDest` finalises inline when a patch is
-  stopped: a worker wedged in the encoder's file open (it already was, before this
-  change) holds the GUI thread there.
+- **`Recorder::stop`** (`stopIqRecording`, `stopAudioRecording`, and `~WavDest` for a
+  patch speaker). `Recorder::stopForFinish` moves the file, its stdio buffer and the
+  byte count off the recorder **without touching the disk**; `core::RecordFinisher`
+  (`core/record_finish.hpp`) hands them to a thread of its own, which runs
+  `Recorder::finishFile` (flush, patch the header's two size fields, close). The header
+  and the samples are exactly what `stop()` gave (it is still the two in a row, for the
+  callers that can wait, and `makeWavDest`, the blocking factory, still finalises
+  inside the destructor). **Decisions:** a Record pressed while the previous take's
+  file is still being closed is **remembered, not refused and not started at once**
+  (a file name has a one-second resolution, so an open beside a file still being
+  finalised could truncate it - measured: with the check removed the second take
+  truncated the first), and starts on the frame that file is closed; a Stop in
+  between withdraws it. The panel shows the existing *Saving...* on a disabled button
+  meanwhile. **Quit** drains against the *same* deadline the config's and the lists'
+  last saves share (`drainRecordFinishes(drainDeadline)`), so the shutdown budget does
+  not grow; a finish the disk did not return within it is logged (*a take's file was
+  still being closed at exit*) and keeps the zero-length header the opener flushed.
+  **A finish that fails** (the header patch did not reach the file) says what the
+  synchronous stop said on screen - nothing - and adds one log line (*the take's file
+  could not be finalised*), never naming the file. `tests/test_record_finish_async.cpp`.
+- **`importBookmarkFile`**: a `DiskJob`; the file is read and parsed on a worker and
+  `pollDiskJobs` puts the list in. An import asked for while one is out is remembered
+  (a dropped file is not lost; the last one wins). *Waiting for the disk to open the
+  file: N s* (the sentence the Record button and the I/Q Open use) after a second. A
+  worker that throws is reported as an unreadable file instead of ending the process.
+- **A patch Radio's I/Q recording** opens through the radio-open worker every hardware
+  radio uses (`patchRadioPending_`); the node takes the file's rate when the answer
+  arrives, and the failure log line still never names the file.
+- **`~Mp3Dest` no longer joins its worker** (found by the failure-injection tests: a
+  speaker retired while its disk was slow held the frame for the rest of the disk
+  time, worst gap 1774 ms and a hang report). The worker owns its state, ends by
+  itself, and is counted with the recorders' finishes so quit gives it the same bounded
+  chance (`RecordFinisher::externalBegin/End`).
+
+**Not moved: the saved I/Q file reopened at start-up** (`applyConfig`) stays on the
+allowlist as `Startup`. It is not a move: a restore on a worker (the sound card's
+pattern) changes what the first frame shows, what a bounded `--frames` run and the
+screenshot harness see, and what an exit save made before the answer writes, and three
+tests assert the synchronous behaviour. It delays the first window on a slow share; it
+stops no frame. A decision about what start-up promises, best made together with the
+constructor's three list reads.
 
 #### Item 13: `diagLogf`, and why it was not moved
+
+**0.99.65: option 1 below is done** - the ring and the file have **two locks**. A freeze
+report's log section and *Copy diagnostics* (`ringSnapshot()`) no longer wait behind a
+file write; the test that proves it (`tests/test_diag_log_lock.cpp`) parks a write inside
+the file stage and shows the report carrying the parked line, and was red on the old
+lock (*log section ABSENT*) and green on the new (*log section present*). **What did not
+change:** every line is still flushed, a `write()` caller still waits for the disk, and
+`copyRingRaw()` is untouched. **What the file's order means now** (stated in the header
+and tested only for what is promised): each thread's own lines are in the file in the
+order that thread wrote them, nothing is lost or torn, and two threads that log at the
+same instant may land in the file in the opposite order to the ring's. Options 2 and 3
+are not done and still the owner's to decide. The paragraph below is the audit as it
+stood before the split.
 
 `DiagLog::write` (`core/diag_log.cpp`) takes `mutex_`, copies the line into the ring,
 and then, **still holding it**, does the file's `fwrite`, `fputc` and `fflush` and, when
@@ -1724,7 +1765,80 @@ is everywhere and is item 13.
 `kStuckAfter` in `disk_job.hpp` and `background_saver.hpp`, and the two ages in
 `patch_audio.cpp`) as costing the shutdown nothing: the quit grace is spent from
 `~AppWindow` after the watchdog has stopped, and the lists' exit drain shares the
-config drain's one `kSaveBound` deadline, so the budget is unchanged.
+config drain's one `kSaveBound` deadline, so the budget is unchanged. The recorders'
+finishes (0.99.65) are drained against that **same** deadline, and add no named
+duration at all (`RecordFinisher::drain` takes the deadline it is given).
+
+**The allowlist as it now stands (0.99.65):** nothing is *STILL OPEN*. Start-up: the
+constructor's three list reads, `applyConfig`'s I/Q-file restore (left, with the reason
+above) and `telemetryStartup`'s ledger removal. Developer hooks (environment variables),
+`readLocalCatalogue` (called from a worker by name), the plugin rescan (open design
+question, under a pause), and a handful of one-off user presses under a pause.
+
+### Failure injection: what each file does when the disk is not well (0.99.65)
+
+The audit above is about what the thread that draws the window waits for. This is the
+other half: what happens when the answer is *no*. `tests/test_failure_files.cpp` and
+`tests/test_failure_recording.cpp` run each case through the real code at the lowest
+level that still shows the reaction, and assert all of it - no crash, no hang (every call
+is timed), the file complete or untouched, the words returned, no temporary file left,
+and the count (`rec_fail`) once where one exists (`tests/test_health_paths.cpp`). The
+faults: a folder made read-only with `icacls` (scratch folders the test made, put back
+by a guard and an `atexit` hook, and proved by *writing* a probe file, never assumed); a
+file another program holds open (with and without sharing); a directory squatting on a
+path; a parent that is a file; a drive letter that is not there; a file truncated, cut
+mid-token or replaced by a directory; the OS handle behind a take's stream closed (what
+a full disk, a removed device and a vanished share look like above stdio). Seams, all
+function hooks, null in a shipped build: `core/write_fault.hpp` (sets a writer's stream
+bad after the bytes are written: settings, bookmarks, markers, export, BMP),
+`Recorder::setFinishHookForTest` (now passes the stream), `DestSeams::mp3WriteFails`.
+
+**Could not be reached:** a volume that really fills (no unprivileged way; the seam stands
+in); a folder removed or renamed *under an open WAV take* (Windows refuses, asserted);
+a drive pulled mid-write (a drive letter that is not there stands in for the destination
+being gone *before* the write). **Covered by existing tests, not duplicated:** a source
+that goes away mid-take (`tests/test_stop_ends_recordings.cpp`, "a fault mid-take", the
+real application; both takes finish valid); a start refused by the disk
+(`test_record_start`, `test_health_paths`); the sound output disappearing - at the
+`audio_out` seam `tests/test_audio_out.cpp` already asserts `streamAlive()` goes false,
+the opened device's identity survives and `recoveryDeviceIndex` finds it again, and
+`tests/test_audio_open.cpp` the watchdog (the patch speaker's own *the sound output
+stopped* sentence is a one-line mapping of that, not separately tested).
+
+**Findings, not fixed** (each pinned by a test that says FINDING on its output line, so a
+fix has to change that line on purpose):
+
+0. **Stop followed by Record inside one second overwrites the take that was just
+   finished.** A take is named for the *second* it was asked for
+   (`audio_YYYYMMDD_HHMMSS_48000Hz.wav`, `Recorder::makeFilename`) and the open is
+   `fopen("wb")`, so the second take opens the first one's name and truncates it: one
+   file, holding only the second take, three runs out of three
+   (`tests/test_failure_recording.cpp`). It is older than the asynchronous finish (the
+   name and the open are unchanged by it); the new "remembered Record" only keeps the
+   open from racing the finish, it cannot make the names differ.
+
+1. **A damaged `config.json`, `bookmarks.json` or `markers.json` is overwritten by the
+   next save, and no copy is kept.** The window starts on defaults, the reason goes to
+   stderr only (settings) or to a red line that the first successful save clears
+   (bookmarks, markers), and the first change - or the clean exit - replaces the file. A
+   settings file cut off mid-write by a crash, or a hand edit with one missing quote,
+   costs the whole configuration, silently.
+2. **A read-only settings folder retries the save forever.** Every debounce window the
+   write is attempted again (eight attempts in twenty simulated seconds), refused each
+   time, one stderr line per attempt, nothing in the window or the log.
+3. **A take whose disk goes away is a husk, and says so only while it runs.** The stream
+   buffer (256 KiB) holds what was "accepted" - `bytesWritten()` overclaims by up to that -
+   so on a failure the whole buffer goes with the handle: the file is the 44-byte header
+   with zero sizes. The Recorder card shows STALLED while the take runs; after Stop nothing
+   on screen says it was lost (the new log line *could not be finalised* is the only trace).
+4. **An MP3 speaker whose folder is removed under it says nothing** and records into a file
+   that no longer exists (the encoder holds no lock); a write the encoder refuses is
+   reported (*the MP3 encoder refused a write*).
+5. **The log file held by another program at start-up is silently off**: the Diagnostics
+   switch stays on, no file is written, nothing says so (the ring still works).
+6. **A screenshot's write failure is logged with the folder's path** (`shot: writing "<path>"
+   failed part way through`), against the rule that log lines never name a file; and a
+   picture whose save failed is left on disk under the name a good one would have had.
 
 ### What a plugin playing sound writes (0.93.0)
 

@@ -113,7 +113,10 @@ DiagLog& DiagLog::instance() {
 }
 
 void DiagLog::configure(const std::string& dir, bool enabled) {
-    std::lock_guard<std::mutex> lk(mutex_);
+    // The file's lock for all of it, held across the I/O: a configure that finds a
+    // write in flight waits for it, as it always did. The ring's lock is taken only
+    // at the end, for the two facts the panel reads (see publish()).
+    std::lock_guard<std::mutex> lk(fileMutex_);
     if (fp_ != nullptr) {
         std::fclose(fp_);
         fp_ = nullptr;
@@ -122,14 +125,25 @@ void DiagLog::configure(const std::string& dir, bool enabled) {
     path_.clear();
     fileBytes_ = 0;
     enabled_ = false;
+    const auto publish = [this] {
+        std::lock_guard<std::mutex> rk(ringMutex_);
+        publishedPath_ = path_;
+        fileEnabledFlag_.store(enabled_, std::memory_order_release);
+    };
     // OFF MEANS OFF: no directory is created, so a user who never turned this
     // on has no trace of it on disk at all - not an empty folder, not a
     // zero-byte file. Asserted in tests/test_diagnostics.cpp.
-    if (!enabled || dir.empty()) { return; }
+    if (!enabled || dir.empty()) {
+        publish();
+        return;
+    }
 
     std::error_code ec;
     std::filesystem::create_directories(std::filesystem::path(dir), ec);
-    if (ec && !std::filesystem::is_directory(std::filesystem::path(dir))) { return; }
+    if (ec && !std::filesystem::is_directory(std::filesystem::path(dir))) {
+        publish();
+        return;
+    }
 
     dir_ = dir;
     path_ = dir_ + "/foxsdr.log";
@@ -137,22 +151,24 @@ void DiagLog::configure(const std::string& dir, bool enabled) {
     if (fp_ == nullptr) {
         dir_.clear();
         path_.clear();
+        publish();
         return;
     }
     std::error_code sec;
     const auto sz = std::filesystem::file_size(std::filesystem::path(path_), sec);
     fileBytes_ = sec ? 0u : static_cast<std::size_t>(sz);
     enabled_ = true;
+    publish();
 }
 
 bool DiagLog::fileEnabled() const {
-    std::lock_guard<std::mutex> lk(mutex_);
-    return enabled_;
+    // Never waits for the file (see "TWO LOCKS" in the header).
+    return fileEnabledFlag_.load(std::memory_order_acquire);
 }
 
 std::string DiagLog::filePath() const {
-    std::lock_guard<std::mutex> lk(mutex_);
-    return path_;
+    std::lock_guard<std::mutex> lk(ringMutex_);
+    return publishedPath_;
 }
 
 void DiagLog::write(const char* level, const char* msg) {
@@ -168,13 +184,25 @@ void DiagLog::write(const char* level, const char* msg) {
     if (len > maxLen) { len = maxLen; }
     line[len] = '\0';
 
-    std::lock_guard<std::mutex> lk(mutex_);
-    const int slot = next_.load(std::memory_order_relaxed);
-    std::memcpy(ring_[slot], line, len + 1);
-    // RELEASE on both: copyRingRaw reads them with no lock at all, and the
-    // line bytes above must be visible before the index that points at them.
-    next_.store((slot + 1) % kRingLines, std::memory_order_release);
-    written_.fetch_add(1, std::memory_order_release);
+    {
+        // THE RING FIRST, under its own lock, released before the file is touched:
+        // a freeze report's ringSnapshot() and the panel's questions never wait
+        // behind a write that is waiting on a disk, and the line being written is
+        // already in the ring when the file stage begins.
+        std::lock_guard<std::mutex> rk(ringMutex_);
+        const int slot = next_.load(std::memory_order_relaxed);
+        std::memcpy(ring_[slot], line, len + 1);
+        // RELEASE on both: copyRingRaw reads them with no lock at all, and the
+        // line bytes above must be visible before the index that points at them.
+        next_.store((slot + 1) % kRingLines, std::memory_order_release);
+        written_.fetch_add(1, std::memory_order_release);
+    }
+    // THEN THE FILE, under the file's lock - which a slow disk holds, and which
+    // the caller still waits for, exactly as before. A file that is off is not
+    // even locked for: fileEnabledFlag_ says so without the lock, and
+    // appendToFileLocked looks again under it.
+    if (!fileEnabledFlag_.load(std::memory_order_acquire)) { return; }
+    std::lock_guard<std::mutex> fk(fileMutex_);
     appendToFileLocked(line, len);
 }
 
@@ -188,7 +216,8 @@ void DiagLog::writef(const char* level, const char* fmt, ...) {
 }
 
 std::vector<std::string> DiagLog::ringSnapshot() const {
-    std::lock_guard<std::mutex> lk(mutex_);
+    // The RING's lock only: never behind a file write (see "TWO LOCKS").
+    std::lock_guard<std::mutex> lk(ringMutex_);
     const std::uint64_t total = written_.load(std::memory_order_relaxed);
     const int count =
         (total < static_cast<std::uint64_t>(kRingLines)) ? static_cast<int>(total) : kRingLines;
@@ -204,7 +233,7 @@ std::uint64_t DiagLog::linesWritten() const { return written_.load(std::memory_o
 
 std::size_t DiagLog::copyRingRaw(char* out, std::size_t cap) const {
     // NO LOCK, NO ALLOCATION, NO CRT FORMATTING. See the header: a crash can
-    // happen while another thread holds mutex_, and blocking here would turn a
+    // happen while another thread holds a lock, and blocking here would turn a
     // crash into a hang with no report at all. The bounded cost is one
     // possibly torn line, and it is the newest one.
     if (out == nullptr || cap == 0) { return 0; }
@@ -231,7 +260,8 @@ std::size_t DiagLog::copyRingRaw(char* out, std::size_t cap) const {
 }
 
 void DiagLog::resetForTest() {
-    std::lock_guard<std::mutex> lk(mutex_);
+    std::lock_guard<std::mutex> fk(fileMutex_);
+    std::lock_guard<std::mutex> lk(ringMutex_);
     if (fp_ != nullptr) {
         std::fclose(fp_);
         fp_ = nullptr;
@@ -239,14 +269,23 @@ void DiagLog::resetForTest() {
     dir_.clear();
     path_.clear();
     enabled_ = false;
+    fileEnabledFlag_.store(false, std::memory_order_release);
+    publishedPath_.clear();
     fileBytes_ = 0;
     written_.store(0, std::memory_order_relaxed);
     next_.store(0, std::memory_order_relaxed);
     std::memset(ring_, 0, sizeof(ring_));
 }
 
+namespace {
+std::atomic<DiagLog::FileHook> g_fileHook{nullptr};
+}  // namespace
+
+void DiagLog::setFileHookForTest(FileHook hook) { g_fileHook.store(hook); }
+
 void DiagLog::appendToFileLocked(const char* line, std::size_t len) {
     if (!enabled_ || fp_ == nullptr) { return; }
+    if (const FileHook hook = g_fileHook.load()) { hook(line, len); }
     rotateIfNeededLocked(len + 1);
     if (fp_ == nullptr) { return; }
     std::fwrite(line, 1, len, fp_);

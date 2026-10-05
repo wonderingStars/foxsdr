@@ -56,6 +56,7 @@ struct GLFWwindow;
 #include "core/store_update.hpp"
 #include "core/updater.hpp"
 #include "core/utf8_text.hpp"
+#include "core/record_finish.hpp"
 #include "core/recorder.hpp"
 #include "core/retune_coalescer.hpp"
 #include "core/scanner.hpp"
@@ -1691,8 +1692,31 @@ private:
     // web remote, a plugin or the teardown - while the disk is slow to give
     // the file leaves no take behind, however the open turns out. Nothing
     // waits for the open to come back; poll finds it and closes the file.
+    //
+    // THE FILE IS CLOSED ON A WORKER (0.99.65, core/record_finish.hpp): Stop
+    // takes the tap out, detaches the file from the recorder without touching the
+    // disk (Recorder::stopForFinish) and hands it to RecordFinisher, which
+    // flushes the tail, patches the header's two size fields and closes it.
+    // Nothing here waits for the disk. Between the press and the file being
+    // closed the take is "finishing": see startIqRecording for what a Record in
+    // that gap does, and drainRecordFinishes for quit.
     void stopIqRecording();
     void stopAudioRecording();
+    // Common to both: `iq` picks the recorder, the ticket and the queued start.
+    void finishTake(bool iq);
+    // True from the Stop until the worker has closed that take's file.
+    bool takeFinishing(bool iq) const;
+    // A Record pressed while the previous take's file was still being closed is
+    // REMEMBERED, not refused and not started at once (a file name has a
+    // one-second resolution, so an open beside a file still being finalised
+    // could truncate it): pollRecordFinishes starts it on the frame the file is
+    // closed. A Stop withdraws it, exactly as it withdraws a start still opening.
+    void pollRecordFinishes();
+    // AT EXIT: waits, within `deadline`, for every take's file to be closed; one
+    // that is not is left to the process's end and logged. Called once by run(),
+    // against the deadline the config's and the lists' last saves share, and by
+    // the tests. Never grows the shutdown budget (tests/test_shutdown_budget.cpp).
+    bool drainRecordFinishes(std::chrono::steady_clock::time_point deadline);
     // THE WAY A TAKE IS REQUESTED, FROM EVERY CALLER (the Record IQ button,
     // the Record audio button, the Record key and the web remote and plugins
     // through applyControlRequest). It never touches the disk: Recorder::start
@@ -1806,6 +1830,9 @@ private:
     bool iqOpenPending() const;
     bool imageSavePending() const;
     bool bookmarkExportPending() const;
+    // The Import button and a dropped file: a worker reads the list.
+    bool bookmarkImportPending() const;
+    double bookmarkImportElapsedS() const;
     // How long the I/Q file Open has been waiting on its disk, 0 when it is not.
     double iqOpenElapsedS() const;
     // The plugin picture's "Save as BMP".
@@ -3012,6 +3039,13 @@ private:
     // is still inside the filesystem.
     cascade::gui::RecordStart iqStart_;
     cascade::gui::RecordStart audioStart_;
+    // The close behind each recorder's Stop, on a worker (core/record_finish.hpp):
+    // null, or the ticket of the last take's finish. `*StartQueued_` is a Record
+    // pressed while that finish was out (see pollRecordFinishes).
+    std::shared_ptr<cascade::core::RecordFinisher::Ticket> iqFinish_;
+    std::shared_ptr<cascade::core::RecordFinisher::Ticket> audioFinish_;
+    bool iqStartQueued_ = false;
+    bool audioStartQueued_ = false;
     std::string recordDir_;    // %USERPROFILE%/Documents/SDR-recordings
     std::string recordError_;  // red text in the Recorder section; "" = none
     // Why a take ended when nothing went WRONG (the user changed source):

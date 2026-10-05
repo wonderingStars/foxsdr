@@ -373,29 +373,73 @@ void Recorder::endAtSizeLimit() {
     finalizeFile();
 }
 
-void Recorder::finalizeFile() {
+namespace {
+std::atomic<Recorder::FinishHook> g_finishHook{nullptr};
+}  // namespace
+
+void Recorder::setFinishHookForTest(FinishHook hook) { g_finishHook.store(hook); }
+
+bool Recorder::detachFile(FinishRequest& out) {
     if (file_ == nullptr) {
-        return;  // idempotent, and safe without a prior start()
+        return false;  // idempotent, and safe without a prior start()
     }
-    std::FILE* f = file_;
+    // The buffer BEFORE the file in `out` (declaration order makes it die after
+    // it), and both moved out of the recorder, so a following begin() finds an
+    // empty fileBuf_ rather than the storage a finishing stream still uses.
+    out.buffer = std::move(fileBuf_);
+    fileBuf_.clear();
+    out.file.reset(file_);
     file_ = nullptr;
-    const std::uint64_t data = dataBytes_.load(std::memory_order_relaxed);
+    out.dataBytes = dataBytes_.load(std::memory_order_relaxed);
+    return true;
+}
+
+bool Recorder::finishFile(FinishRequest&& req) {
+    // EVERYTHING FROM HERE WAITS ON THE DISK, and nothing in here may touch a
+    // Recorder: it runs on a worker that can be abandoned at quit.
+    FinishRequest owned = std::move(req);
+    if (!owned.file) { return true; }  // nothing to finish
+    std::FILE* f = owned.file.get();
+    if (const FinishHook hook = g_finishHook.load()) { hook(f); }
+    const std::uint64_t data = owned.dataBytes;
     unsigned char sz[4];
+    bool ok = true;
     // Flush the tail of the sample stream before seeking: fseek on an
     // update stream requires it anyway, and it puts every accepted byte on
     // disk before the header starts claiming them.
-    std::fflush(f);
+    if (std::fflush(f) != 0) { ok = false; }
     // Best effort from here: if the patch itself fails (device vanished),
     // closing still leaves the parseable zero-length header from start().
     if (std::fseek(f, 4, SEEK_SET) == 0) {
         putU32(sz, static_cast<std::uint32_t>(36u + data));
-        std::fwrite(sz, 1, 4, f);
+        if (std::fwrite(sz, 1, 4, f) != 4) { ok = false; }
+    } else {
+        ok = false;
     }
     if (std::fseek(f, 40, SEEK_SET) == 0) {
         putU32(sz, static_cast<std::uint32_t>(data));
-        std::fwrite(sz, 1, 4, f);
+        if (std::fwrite(sz, 1, 4, f) != 4) { ok = false; }
+    } else {
+        ok = false;
     }
-    std::fclose(f);
+    // fclose flushes the two patches: its answer is the last word on whether they
+    // reached the file. Released from the owner so it is closed exactly once.
+    std::FILE* raw = owned.file.release();
+    if (std::fclose(raw) != 0) { ok = false; }
+    return ok;
+}
+
+void Recorder::finalizeFile() {
+    FinishRequest req;
+    if (detachFile(req)) { (void)finishFile(std::move(req)); }
+}
+
+bool Recorder::stopForFinish(FinishRequest& out) {
+    recording_.store(false, std::memory_order_release);
+    // False when the take already ended at the size limit and closed its own
+    // file, so the Stop button after that still works and still leaves the
+    // counters alone.
+    return detachFile(out);
 }
 
 void Recorder::stop() {

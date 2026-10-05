@@ -75,6 +75,7 @@
 #include "core/patch_graph.hpp"
 #include "core/patch_plan.hpp"
 #include "core/patch_radio.hpp"
+#include "core/record_finish.hpp"
 #include "core/recorder.hpp"
 #include "gui/app_window.hpp"
 #include "source/siggen_source.hpp"
@@ -400,6 +401,51 @@ void checkAppWindowMp3NeverHoldsAFrame() {
     const std::vector<fs::path> files = filesIn(dirFor("app-mp3"), ".mp3");
     CHECK(files.size() == 1u);
     if (files.size() == 1u) { CHECK(fs::file_size(files[0]) > 0u); }
+}
+
+// RETIRING A SPEAKER (0.99.65): the page closes, the radio's device changes, a speaker is
+// deleted - the destination is destroyed on the thread that retires the set, which is the GUI
+// thread. ~Mp3Dest joined its worker, so a worker still inside a slow disk (the folder, the
+// encoder's open, its last block, its close) held the frame for as long as the disk took.
+void checkRetiringAnMp3SpeakerNeverHoldsAFrame() {
+    if (!cascade::core::Mp3Writer::available()) {
+        SKIP_LINUX("no MP3 encoder on this build: the patch writes WAV instead");
+        return;
+    }
+    AppWindow app;
+    auto disk = makeDisk(2500);
+    pc::DestSeams seams;
+    seams.makeDirectory = slowMakeDirectory(disk);
+    Access::setSeams(app, seams);
+    Access::setRecordDir(app, dirFor("app-mp3-retire"));
+    Access::buildSpeakerPatch(app, "mp3", /*start=*/true);
+    Access::publish(app);  // makes the destination; its worker is now inside the slow folder step
+    const double until = nowMs() + 3000.0;
+    while (nowMs() < until && disk->calls.load() < 1) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    CHECK(disk->calls.load() == 1);
+
+    HangWatchdog w;
+    startWatchdog(w, reportDir("app-mp3-retire"));
+    bool first = true;
+    const LoopStats s = runFrameLoop(w, 3600.0, [&] {
+        if (first) {
+            first = false;
+            Access::closeRadios(app);  // the speaker is retired on the frame thread
+        }
+    });
+    CHECK(w.reportsWritten() == 0u);
+    CHECK(s.frames > 100);
+    CHECK(s.worstGapMs < 800.0);
+    std::printf("  retiring an MP3 speaker whose disk is slow: %d frames in 3.6 s, worst gap %.0f ms, "
+                "hang reports %u\n",
+                s.frames, s.worstGapMs, w.reportsWritten());
+    w.stop();
+    // The worker finishes by itself: the folder is made and the file closed.
+    CHECK(cascade::core::RecordFinisher::drain(std::chrono::steady_clock::now() +
+                                               std::chrono::seconds(10)));
+    CHECK(fs::is_directory(dirFor("app-mp3-retire")));
 }
 
 // --- 3. THE DESTINATION ON ITS OWN ---------------------------------------------
@@ -761,6 +807,7 @@ int main() {
     checkADestroyedWavDoesNotWaitForItsOpen();
     checkAppWindowWavNeverHoldsAFrame();
     checkAppWindowMp3NeverHoldsAFrame();
+    checkRetiringAnMp3SpeakerNeverHoldsAFrame();
     checkExitWhileASpeakerFileIsOpening();
     std::error_code ec;
     if (g_checksFailed == 0) { fs::remove_all(g_scratch, ec); }

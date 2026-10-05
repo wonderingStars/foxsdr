@@ -10,6 +10,7 @@
 #include "core/plugin_api.hpp"
 #include "core/telemetry.hpp"
 #include "core/tester_usage.hpp"
+#include "core/write_fault.hpp"
 // clampScopeRangeNm(): the radar scope's ladder of range steps.
 //
 // THE ONE PLACE core/ REACHES INTO gui/, and it is a considered exception
@@ -1297,6 +1298,7 @@ bool ConfigStore::writeFile(const std::string& path, const std::string& text,
         }
         f.write(text.data(), static_cast<std::streamsize>(text.size()));
         f.flush();
+        writeFaultPoint("config", f);  // test seam: a write that fails part way
         if (!f) {
             f.close();
             fs::remove(tmp, ec);  // best effort; the write already failed

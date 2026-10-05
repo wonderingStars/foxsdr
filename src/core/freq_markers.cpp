@@ -12,6 +12,7 @@
 #include <nlohmann/json.hpp>
 
 #include "core/freq_manager.hpp"
+#include "core/write_fault.hpp"
 
 #ifdef _WIN32
 #include <process.h>
@@ -262,6 +263,7 @@ bool FreqMarkers::writeFile(const std::string& path, const std::string& text,
         }
         f.write(text.data(), static_cast<std::streamsize>(text.size()));
         f.flush();
+        writeFaultPoint("markers", f);  // test seam: a write that fails part way
         if (!f) {
             f.close();
             fs::remove(tmp, ec);
