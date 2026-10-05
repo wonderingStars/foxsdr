@@ -399,6 +399,18 @@ public:
     // only the reason, which cannot tell an acknowledgement sent to the right
     // tuner from one sent to the wrong one.
     abi::TunerSelectT lastUpdateTuner = abi::Tuner_Neither;
+
+    // EVERY sdrplay_api_Update call, with all three arguments the vendor's
+    // header gives it (tuner, reasonForUpdate, reasonForUpdateExt1): the call
+    // log above is a string with the tuner left out, and a suite that cannot
+    // see the tuner cannot see a driver passing the wrong one (the 0.99.59
+    // RSPdx-R2 report). Guarded by callsMutex_ like `calls`.
+    struct UpdateRecord {
+        abi::TunerSelectT tuner;
+        unsigned int reason;
+        unsigned int ext1;
+    };
+    std::vector<UpdateRecord> updates;
     InitSnapshot atInit;
     int openCount = 0;
     int closeCount = 0;
@@ -417,9 +429,17 @@ public:
 
     // --- building a device list ------------------------------------------
 
+    // `tuners` is what GetDevices lists in DeviceT::tuner. The default is
+    // Tuner_A: that is what a single-tuner RSP is listed with as far as the
+    // vendor's own clients are concerned - SDRplay's RSPdxR2 ExtIO picks the
+    // channel block by `chosenDev->tuner == sdrplay_api_Tuner_A` on a device it
+    // never assigns `tuner` to, and the API specification's example program
+    // (3.15, section 4) selects a non-RSPduo device as listed. Through 0.99.60
+    // this defaulted to Tuner_Neither, which no vendor source supports, and
+    // every test therefore ran against a service the driver could not have met.
     void addDevice(const char* serial, unsigned char hwVer,
                    abi::RspDuoModeT duoModes = abi::RspDuoMode_Unknown,
-                   abi::TunerSelectT tuners = abi::Tuner_Neither) {
+                   abi::TunerSelectT tuners = abi::Tuner_A) {
         abi::DeviceT d{};
         std::snprintf(d.SerNo, sizeof(d.SerNo), "%s", serial);
         d.hwVer = hwVer;
@@ -794,6 +814,11 @@ private:
         if (f == nullptr) { return abi::Fail; }
         (void) dev;
         f->lastUpdateTuner = tuner;
+        {
+            std::lock_guard<std::mutex> lk(f->callsMutex_);
+            f->updates.push_back(UpdateRecord{tuner, static_cast<unsigned int>(reason),
+                                              static_cast<unsigned int>(ext1)});
+        }
         f->note(updateCall(static_cast<unsigned int>(reason), static_cast<unsigned int>(ext1)));
 
         // THE OVERLAP DETECTOR (2026-09-28) - see concurrentInUpdate's own

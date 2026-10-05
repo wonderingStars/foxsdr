@@ -203,7 +203,7 @@ void testOpenSelectInitOrderAndParameters() {
                                            "ApiVersion",
                                            "LockDeviceApi",
                                            "GetDevices",
-                                           "SelectDevice(tuner=0,mode=0)",
+                                           "SelectDevice(tuner=1,mode=0)",
                                            "UnlockDeviceApi",
                                            "DebugEnable",
                                            "GetDeviceParams"};
@@ -1848,13 +1848,18 @@ void testStaleOverloadAckDoesNotSurviveRestart() {
     src.stop();
 }
 
-// L5 of the round-3 review, pinned rather than merely measured: an overload
-// naming Tuner_Neither (what a single-tuner RSP1A's service reports) is
-// acknowledged on link.tuner, which for this model is Tuner_A - NOT
-// device_.tuner, which an ordinary control (like the retune here) uses and
-// which, for a single-tuner model, is Tuner_Neither. The two are legitimately
-// different values for the same physical radio; this test exists so a future
-// change cannot make them silently agree or disagree without a test noticing.
+// L5 of the round-3 review: an overload naming Tuner_Neither is acknowledged
+// on link.tuner (the fallback for an event that names no tuner), which for a
+// single-tuner model is Tuner_A.
+//
+// CORRECTED for the 0.99.59 RSPdx-R2 report. This test used to assert that the
+// ordinary control tuner (device_.tuner, which updateLocked() sends with every
+// retune) was Tuner_Neither for a single-tuner model and "legitimately
+// different" from the acknowledgement's Tuner_A. That expectation was the
+// defect: no vendor source selects or updates a single-tuner RSP with
+// Tuner_Neither (see testTheRspDxR2UpdatesNameTunerAWithTheExactReasons), so a
+// retune and the acknowledgement of an overload are now addressed to the SAME
+// tuner, and this test pins that they cannot drift apart again.
 void testOverloadNamingNeitherTunerAcksOnLinkTuner() {
     FakeSdrPlayApi fake;
     fake.addDevice("1811003EFB", abi::kRsp1A);
@@ -1868,8 +1873,9 @@ void testOverloadNamingNeitherTunerAcksOnLinkTuner() {
     std::complex<float> buf[4];
     (void) src.read(buf, 4);
 
-    CHECK(controlTuner == abi::Tuner_Neither);
+    CHECK(controlTuner == abi::Tuner_A);
     CHECK(fake.lastUpdateTuner == abi::Tuner_A);
+    CHECK(fake.lastUpdateTuner == controlTuner);
     src.stop();
 }
 
@@ -2075,6 +2081,186 @@ void testTheRspDxR2IsDrivenWithTheRspDxReasonsAndBlock() {
     CHECK(fake.chA.rspDuoTunerParams.biasTEnable == 0);
     CHECK(fake.devParams.rsp1aParams.rfNotchEnable == 0);
     src.stop();
+}
+
+// --- 11b. the tuner argument of sdrplay_api_Update ---------------------------
+//
+// THE 0.99.59 RSPdx-R2 REPORT (SDRplay API 3.15): the radio opens and streams
+// for 22 s, the FIRST live control (an antenna change) is never answered, and
+// the SDRplay API Service is found STOPPED afterwards. The user says a
+// frequency change and starting a decoder end the same way, in two installs.
+//
+// What every Update this driver sent carried, before this was found, was
+// `device_.tuner` - and for every model but the RSPduo the driver had set that
+// to sdrplay_api_Tuner_Neither (0) before SelectDevice. The log line says it:
+// "SDRplay opened RSPdx-R2, API 3.15, tuner 0". Nothing in the vendor's own
+// code does that for a single-tuner model:
+//   - SDRplay API Specification 3.15, section 4 (the example program, pp34-36):
+//     only an RSPduo has `tuner` or `rspDuoMode` assigned before
+//     sdrplay_api_SelectDevice; any other device is selected exactly as
+//     sdrplay_api_GetDevices returned it, and every sdrplay_api_Update passes
+//     `chosenDevice->tuner`.
+//   - SDRplay's own RSPdxR2 ExtIO (github.com/SDRplay/ExtIO_SDRplay,
+//     RSPdxR2/src/ExtIO_SDRplay.cpp): the same, and it picks the channel block
+//     with `chosenDev->tuner == sdrplay_api_Tuner_A ? rxChannelA : rxChannelB`,
+//     which only works if a single-tuner RSP is Tuner_A.
+//   - SoapySDRPlay3 Settings.cpp: `device.tuner` is assigned only for an
+//     RSPduo; every sdrplay_api_Update passes it.
+// The specification (sdrplay_api_DeviceT, p8) says `tuner` is "Set by the
+// application and used during sdrplay_api_SelectDevice() to indicate which
+// tuner(s) is to be used", and sdrplay_api_Update's `tuner` "Specifies which
+// tuner(s) to apply the update to"; Tuner_Neither is the enum's 0.
+//
+// The suite was blind to it because the fake's GetDevices answered
+// Tuner_Neither for every single-tuner model and the call log never recorded
+// the tuner of an Update at all - so "SelectDevice(tuner=0,mode=0)" was pinned
+// as the correct opening sequence.
+namespace {
+
+std::string updatesText(const std::vector<FakeSdrPlayApi::UpdateRecord>& v) {
+    std::string s;
+    for (const FakeSdrPlayApi::UpdateRecord& u : v) {
+        char b[80];
+        std::snprintf(b, sizeof(b), "[tuner %d reason 0x%08x ext1 0x%08x]",
+                      static_cast<int>(u.tuner), u.reason, u.ext1);
+        s += b;
+    }
+    return s;
+}
+
+FakeSdrPlayApi::UpdateRecord upd(abi::TunerSelectT tuner, unsigned int reason, unsigned int ext1) {
+    return FakeSdrPlayApi::UpdateRecord{tuner, reason, ext1};
+}
+
+// Compares and, on a difference, says BOTH sides - CHECK alone prints only the
+// expression, and "what did it actually send" is the whole question here.
+bool updatesAre(const FakeSdrPlayApi& fake, const std::vector<FakeSdrPlayApi::UpdateRecord>& want) {
+    const std::string got = updatesText(fake.updates);
+    const std::string exp = updatesText(want);
+    if (got != exp) {
+        std::printf("  Update calls expected %s\n  Update calls actual   %s\n", exp.c_str(),
+                    got.c_str());
+    }
+    return got == exp;
+}
+
+}  // namespace
+
+// Every control the report names, and the rest of the RSPdx family's, on a
+// radio whose service reports Tuner_A for it (what the vendor's own clients
+// rely on): the exact tuner, reason and extension word of every Update.
+void testTheRspDxR2UpdatesNameTunerAWithTheExactReasons() {
+    constexpr abi::TunerSelectT A = abi::Tuner_A;
+    FakeSdrPlayApi fake;
+    fake.addDevice("2406000R2X", abi::kRspDxR2, abi::RspDuoMode_Unknown, abi::Tuner_A);
+    SdrPlaySource src;
+    CHECK(openOn(src, fake));
+    CHECK(src.hardwareVersion() == abi::kRspDxR2);
+    // The device is selected as the service listed it: tuner A, no RSPduo mode.
+    CHECK(fake.indexStarting("SelectDevice(tuner=1,mode=0)") >= 0);
+    CHECK(src.start());
+
+    fake.updates.clear();
+    // The report's antenna change, and the other two ports.
+    CHECK(src.setAntenna("Antenna B"));
+    CHECK(src.setAntenna("Antenna C"));
+    CHECK(src.setAntenna("Antenna A"));
+    // The report's frequency change.
+    CHECK(src.setCenterFrequencyHz(145500000.0));
+    // LNA state and IF gain: one reason, two fields.
+    CHECK(src.setGainDb("LNA", 27.0));
+    CHECK(src.setGainDb("IF", -30.0));
+    // A sample-rate change from the 2 MS/s open rate to 8 MS/s: the ADC rate
+    // and the bandwidth move, the zero-IF type and the (absent) decimation
+    // do not.
+    CHECK(src.setSampleRateHz(8000000.0));
+    // What starting a decoder asks of the source: a retune and a rate (a
+    // decoder preset's 2.4 MS/s is coerced to the nearest supported, 2.048).
+    CHECK(src.setCenterFrequencyHz(1090000000.0));
+    CHECK(src.setSampleRateHz(2400000.0));
+    // And the RSPdx's own switches, which live in the extension word only.
+    CHECK(src.setBiasT(true));
+    CHECK(src.setRfNotch(true));
+    CHECK(src.setDabNotch(true));
+    CHECK(src.setHdrMode(true));
+
+    const unsigned int none = static_cast<unsigned int>(abi::Update_None);
+    const unsigned int ext0 = static_cast<unsigned int>(abi::Update_Ext1_None);
+    const unsigned int frf = static_cast<unsigned int>(abi::Update_Tuner_Frf);
+    const unsigned int gr = static_cast<unsigned int>(abi::Update_Tuner_Gr);
+    const unsigned int fsBw = static_cast<unsigned int>(abi::Update_Dev_Fs) |
+                              static_cast<unsigned int>(abi::Update_Tuner_BwType);
+    const unsigned int ant = static_cast<unsigned int>(abi::Update_RspDx_AntennaControl);
+    CHECK(updatesAre(
+        fake,
+        {upd(A, none, ant),  // antenna B
+         upd(A, none, ant),  // antenna C
+         upd(A, none, ant),  // antenna A
+         upd(A, frf, ext0),  // 145.5 MHz
+         upd(A, gr, ext0),   // LNA state 27
+         upd(A, gr, ext0),   // IF gain reduction 30
+         upd(A, fsBw, ext0), // 8 MS/s
+         upd(A, frf, ext0),  // 1090 MHz
+         upd(A, fsBw, ext0), // 2.048 MS/s
+         upd(A, none, static_cast<unsigned int>(abi::Update_RspDx_BiasTControl)),
+         upd(A, none, static_cast<unsigned int>(abi::Update_RspDx_RfNotchControl)),
+         upd(A, none, static_cast<unsigned int>(abi::Update_RspDx_RfDabNotchControl)),
+         upd(A, none, static_cast<unsigned int>(abi::Update_RspDx_HdrEnable)),
+         upd(A, none, static_cast<unsigned int>(abi::Update_RspDx_HdrBw))}));
+    // The antenna the last change left, written into the RSPdx block and not
+    // into another model's.
+    CHECK(fake.devParams.rspDxParams.antennaSel == abi::RspDx_ANTENNA_A);
+    src.stop();
+}
+
+// The same radio when the service lists it with NO tuner (Tuner_Neither) - the
+// value this driver used to force. It must still be selected and updated as
+// the one tuner an RSPdx-R2 has.
+void testASingleTunerRspIsTunerAEvenWhenTheServiceListsNone() {
+    constexpr abi::TunerSelectT A = abi::Tuner_A;
+    FakeSdrPlayApi fake;
+    fake.addDevice("2406000R2X", abi::kRspDxR2, abi::RspDuoMode_Unknown, abi::Tuner_Neither);
+    SdrPlaySource src;
+    CHECK(openOn(src, fake));
+    CHECK(fake.indexStarting("SelectDevice(tuner=1,mode=0)") >= 0);
+    CHECK(fake.indexStarting("SelectDevice(tuner=0") < 0);
+    CHECK(src.start());
+    fake.updates.clear();
+    CHECK(src.setAntenna("Antenna B"));
+    CHECK(src.setCenterFrequencyHz(145500000.0));
+    CHECK(updatesAre(
+        fake, {upd(A, static_cast<unsigned int>(abi::Update_None),
+                   static_cast<unsigned int>(abi::Update_RspDx_AntennaControl)),
+               upd(A, static_cast<unsigned int>(abi::Update_Tuner_Frf),
+                   static_cast<unsigned int>(abi::Update_Ext1_None))}));
+    src.stop();
+}
+
+// Every single-tuner model, not only the one in the report: a retune and an
+// LNA change each name Tuner_A. (The RSPduo's tuner is the user's choice and
+// is pinned by its own tests.)
+void testEverySingleTunerModelUpdatesTunerA() {
+    const unsigned char models[] = {abi::kRsp1,  abi::kRsp1A, abi::kRsp1B,
+                                    abi::kRsp2,  abi::kRspDx,  abi::kRspDxR2};
+    for (unsigned char hw : models) {
+        FakeSdrPlayApi fake;
+        fake.addDevice("1811003EFB", hw, abi::RspDuoMode_Unknown, abi::Tuner_A);
+        SdrPlaySource src;
+        CHECK(openOn(src, fake));
+        CHECK(src.start());
+        fake.updates.clear();
+        CHECK(src.setCenterFrequencyHz(102000000.0));
+        CHECK(src.setGainDb("LNA", 1.0));
+        CHECK(fake.updates.size() == 2);
+        for (const FakeSdrPlayApi::UpdateRecord& u : fake.updates) {
+            if (u.tuner != abi::Tuner_A) {
+                std::printf("  model hwVer %u sent an Update naming tuner %d\n",
+                            static_cast<unsigned>(hw), static_cast<int>(u.tuner));
+            }
+            CHECK(u.tuner == abi::Tuner_A);
+        }
+        src.stop();
+    }
 }
 
 // --- 12. teardown ---------------------------------------------------------
@@ -3570,6 +3756,9 @@ int main() {
     testOverloadNamingNeitherTunerAcksOnLinkTuner();
     testBiasTeeAndNotchesPerModel();
     testTheRspDxR2IsDrivenWithTheRspDxReasonsAndBlock();
+    testTheRspDxR2UpdatesNameTunerAWithTheExactReasons();
+    testASingleTunerRspIsTunerAEvenWhenTheServiceListsNone();
+    testEverySingleTunerModelUpdatesTunerA();
     testStopAndCloseAreBoundedAndIdempotent();
     testCloseWithoutOpenIsSafe();
     testFailuresOnTheOpeningPathUnwind();

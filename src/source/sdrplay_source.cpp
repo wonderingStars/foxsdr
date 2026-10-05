@@ -1604,7 +1604,37 @@ bool SdrPlaySource::selectByArgsLocked(const std::string& args) {
         device_.rspDuoSampleFreq = 0.0;
     } else {
         device_.rspDuoMode = abi::RspDuoMode_Unknown;
-        device_.tuner = abi::Tuner_Neither;
+        // A SINGLE-TUNER RSP HAS ONE TUNER, AND IT IS TUNER A (the 0.99.59
+        // RSPdx-R2 report). Through 0.99.60 this said Tuner_Neither, and
+        // updateLocked() puts device_.tuner into the `tuner` argument of EVERY
+        // sdrplay_api_Update - so every live control of every model but the
+        // RSPduo asked the service to apply a change to NO tuner. The report's
+        // log line shows it ("tuner 0"), followed by a first control that was
+        // never answered and a service found stopped.
+        //
+        // The vendor's own code never does this for a single-tuner model: the
+        // example program in the SDRplay API Specification 3.15 (section 4,
+        // pp34-36) assigns `tuner` and `rspDuoMode` only for an RSPduo, selects
+        // every other device exactly as sdrplay_api_GetDevices listed it and
+        // passes `chosenDevice->tuner` to every sdrplay_api_Update; SDRplay's
+        // RSPdxR2 ExtIO and SoapySDRPlay3 do the same, and the ExtIO chooses
+        // rxChannelA by `tuner == sdrplay_api_Tuner_A`. The specification
+        // calls the field the tuner "to be used" (sdrplay_api_DeviceT) and the
+        // Update argument the tuner "to apply the update to"; Tuner_Neither is
+        // neither.
+        //
+        // The listed value is kept when it is Tuner_A - which is what the
+        // vendor's own clients are handed - and Tuner_A is used when the
+        // service lists anything else, which for a model with one tuner can
+        // only mean "the one there is". What the service said is logged when
+        // it was not Tuner_A, so a field log shows which of the two this was.
+        if (device_.tuner != abi::Tuner_A) {
+            core::diagLogf(
+                "source: SDRplay listed tuner %d for a single-tuner RSP - using Tuner A, the "
+                "only tuner it has",
+                static_cast<int>(device_.tuner));
+            device_.tuner = abi::Tuner_A;
+        }
     }
 
     const abi::ErrT serr = a.SelectDevice(&device_);
