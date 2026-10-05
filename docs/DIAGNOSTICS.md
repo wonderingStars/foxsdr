@@ -806,6 +806,126 @@ same class of fault:
 Neither is a claim that no other synchronous filesystem call remains on that
 thread; no audit of all of them was made.
 
+### The recording's file is opened off the frame loop
+
+A freeze report from 0.99.58 (Windows 11, 151 s into the session). Resolved
+against the symbol archive, the GUI thread's stack was `main` → `AppWindow::run`
+→ `AppWindow::drawUi` → `AppWindow::drawMenuColumn` →
+`AppWindow::drawRecorderSection` → `core::Recorder::start` → the C runtime's
+file open → KERNELBASE → ntdll, and it stayed there for more than the
+watchdog's five seconds. The Record button's handler called `Recorder::start`
+on the frame that drew the button, and `start()` creates the recordings
+directory and opens the file before it returns: two synchronous filesystem
+calls that last as long as the disk takes to answer. The Record audio button,
+the Record key and the web remote's and plugins' record controls made the same
+call, so all of them froze the same way.
+
+**What is not established is why that user's disk was slow.** The usual
+suspects are a synchronised or network folder, a drive that has spun down and a
+scanner holding the path; none is known for this user. Nothing here has been
+run against a genuinely slow disk: the tests below stand a sleeping opener in
+for one.
+
+A watchdog pause was not the answer, for the reason the audio open gave: it
+deletes the report and keeps the freeze. So the open moved.
+
+- **`Recorder::start` is three steps, and only the middle one waits.**
+  `Recorder::prepare()` (the rate check, the file name, the 44 header bytes: no
+  disk), then an *opener* (`create_directories`, `fopen`, the header's write and
+  flush: all the waiting), then `Recorder::begin()` (arms the recorder: no
+  disk). `start()` is the three in a row, and every caller that can afford to
+  wait - the patch page's speaker files, the `--record-check` bench - still
+  uses it. The opener is a `std::function` the recorder carries
+  (`Recorder::bindOpener`), `Recorder::openFile` by default, which is the seam
+  a test stages a slow disk through. It reads its request and touches nothing
+  else.
+- **`gui::RecordStart` (`src/gui/record_start.hpp`) runs the opener on a
+  worker and nothing waits for it**, the shape of `LinkRequestPoll` and
+  `ConfigWriter`: a Record press calls `prepare()`, hands the request to
+  `request()` and returns; every frame calls `poll()` (after every widget, in
+  `drawUi`), which collects a finished open and returns. The window keeps
+  drawing for as long as the disk takes; the only cost of a slow disk is that
+  the recording starts late.
+- **The order contract in `pipeline.hpp` is unchanged.** The tap is still
+  installed after the start, never before: the frame that collects the open
+  calls `begin()` and only then `Pipeline::setIqRecorder` /
+  `setAudioRecorder`, in one function (`AppWindow::finishRecordStart`). The
+  worker never sees a recorder, so nothing can be written to a take that has not
+  been armed. The take's elapsed clock starts when the file is open, not when
+  the button was pressed, and a take opened late is byte for byte the take an
+  inline `start()` makes (the test compares both kinds).
+- **The user still learns the outcome, in the same words.** A start that
+  fails reports the opener's own error - the same text `Recorder::start` gave -
+  a frame or more later, in the Recorder section's red line and the web page's
+  `recordError`; a refusal that needs no disk (an unrepresentable rate) is
+  still immediate. While the file is opening the section shows **Starting IQ -
+  click to cancel** (or **Starting audio - ...**) in place of Record, and after a
+  second a line under it, `Waiting for the disk to open the file: N s`. The REC
+  lamp, the elapsed clock and the web page's `iqRecording` / `audioRecording`
+  stay off until the file is open, so they never overclaim.
+
+The edges, and the choices made where the right behaviour was a decision rather
+than an obvious fact. Each is tested, in `tests/test_record_start.cpp`:
+
+- **A second Record while one is opening changes nothing** (the button is a
+  cancel by then; the Record key and the browser's Record are ignored). One
+  worker is ever out, so a disk that never answers costs one parked thread, and
+  two opens can never race for one file name.
+- **A Stop while it is opening withdraws it.** The "click to cancel" button,
+  the toolbar Stop on a running receiver, the web remote's `recordIq` /
+  `recordAudio` `false` and the teardown all end up in `stopIqRecording()` /
+  `stopAudioRecording()`, which now cancel a start that is still opening. The
+  worker cannot be interrupted - it is inside the filesystem - so it is let
+  finish, its file is **closed unused** and no take starts. The panel reads
+  "Cancelling ... start" until it comes back, and a Record pressed in that gap
+  is refused rather than started alongside it. **The file the withdrawn open
+  leaves behind is the zero-sample WAV that Record followed at once by Stop has
+  always left; nothing is deleted** - the conservative choice, since the open
+  had already truncated whatever shared its name.
+- **A take whose input rate changed while its file was opening is not
+  started.** The header on that file is for the old rate, and a take whose
+  header disagrees with its samples replays detuned (the reason an accepted
+  rate change ends an I/Q take that is already running). The panel says so as a
+  notice, not an error.
+- **Quit with an open still pending does not wait for it.** `~AppWindow` gives
+  each wedged open 250 ms (`RecordStart::kQuitGrace`, after the watchdog has
+  stopped, so outside the shutdown budget) and abandons it: the future is
+  handed to a detached thread, which lets the file go when the open finally
+  returns. The worker owns everything it touches by value, which is what makes
+  that safe. The abandoned thread cannot be stopped from outside; it ends when
+  the filesystem call does, or with the process.
+
+Two log lines are the whole record a report will carry of a slow disk, written
+by `AppWindow::pollRecordStarts`; neither names the directory or the file:
+
+- `recorder: the I/Q file has not opened for N s - the open is waiting on a
+  worker thread, the window is not` (or `audio`) - a warning, once per open,
+  when one has been out for five seconds.
+- `recorder: the I/Q file opened after N s` - once, when an open that was
+  reported stuck comes back.
+
+A report whose log carries the first line and never the second was written
+while the folder was still not answering.
+
+`tests/test_record_start.cpp` holds it. A source scan requires that nothing
+under `src/gui` calls a recorder's blocking `start()`, that both takes ask
+through `RecordStart`, and that the two taps are installed in one function and
+only after `begin()`. A real `HangWatchdog` (800 ms threshold) sees a 2.5 s
+open called on the heartbeating thread (the control that proves the harness
+can see the fault), and then must see nothing - no report, no gap in the frame
+loop - against `RecordStart` alone and against a real `AppWindow` driven
+through the handlers the buttons, the key and the browser use. Around those:
+the late take equals the inline take byte for byte, a late failure has the
+inline failure's words, a second Record starts nothing, Stop by each route
+leaves no take and closes the file, an exit with two opens wedged takes a
+fraction of the 2.5 s they need and both files are closed afterwards, and a
+slow open is logged once and not once a frame.
+
+What this does not show: the panel's drawing is not read by any test (only the
+state it draws from is), the web page does not show a start in progress (its
+button reads Record until the file is open, and a Record sent in the meantime
+is ignored), and no real slow disk was involved.
+
 ### What a plugin playing sound writes (0.93.0)
 
 A plugin holding `CASCADE_CAP_AUDIO_OUT` **replaces** the demodulated audio

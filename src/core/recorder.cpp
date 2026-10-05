@@ -42,7 +42,7 @@ void putU32(unsigned char* p, std::uint32_t x) {
 
 }  // namespace
 
-Recorder::Recorder() : maxDataBytes_(kMaxDataBytes) {}
+Recorder::Recorder() : maxDataBytes_(kMaxDataBytes), opener_(&Recorder::openFile) {}
 
 Recorder::~Recorder() {
     stop();
@@ -70,6 +70,22 @@ std::string Recorder::path() const { return path_; }
 
 bool Recorder::start(RecordKind kind, const std::string& directory, double sampleRateHz,
                      std::string& error, const std::string& namePrefix) {
+    // THE THREE STEPS IN A ROW, ON THIS THREAD: the open in the middle waits
+    // for the disk, so a caller that cannot wait does not come through here
+    // (see "Slow disks" in the header).
+    OpenRequest req;
+    if (!prepare(kind, directory, sampleRateHz, namePrefix, req, error)) { return false; }
+    // Set before the open, as it always was, so a refused open still leaves
+    // path() naming the file it tried for.
+    path_ = req.path;
+    OpenedFile opened;
+    if (!opener_(req, opened, error)) { return false; }
+    return begin(std::move(opened), error);
+}
+
+bool Recorder::prepare(RecordKind kind, const std::string& directory, double sampleRateHz,
+                       const std::string& namePrefix, OpenRequest& out,
+                       std::string& error) const {
     error.clear();
     if (recording_.load(std::memory_order_acquire)) {
         // Refusing beats implicitly finalizing the current take: an implicit
@@ -102,15 +118,6 @@ bool Recorder::start(RecordKind kind, const std::string& directory, double sampl
     // An empty directory means "here": a blank GUI field should record next
     // to the executable, not fail with a confusing filesystem error.
     const fs::path dir = directory.empty() ? fs::path(".") : fs::path(directory);
-    std::error_code ec;
-    fs::create_directories(dir, ec);
-    // create_directories is a silent no-op on an existing directory but
-    // reports when a plain FILE squats on the path — check both ways.
-    if (ec || !fs::is_directory(dir)) {
-        error = "recorder: cannot create directory \"" + dir.string() +
-                "\": " + (ec ? ec.message() : "path exists and is not a directory");
-        return false;
-    }
 
     std::tm tmv{};
     const std::time_t now = std::time(nullptr);
@@ -127,26 +134,16 @@ bool Recorder::start(RecordKind kind, const std::string& directory, double sampl
                       tmv.tm_min, tmv.tm_sec);
         fileName = namePrefix + stamp;
     }
-    const fs::path path = dir / fileName;
-    path_ = path.string();
 
-    std::FILE* f = std::fopen(path.string().c_str(), "wb");
-    if (f == nullptr) {
-        error = "recorder: cannot create \"" + path.string() + "\"";
-        return false;
-    }
-    // setvbuf must precede the first I/O on the stream. Failure (it cannot
-    // realistically fail with valid arguments) just leaves stdio's default
-    // buffer — slower flush cadence, still correct — so no check.
-    if (fileBuf_.size() != kFileBufBytes) {
-        fileBuf_.resize(kFileBufBytes);
-    }
-    std::setvbuf(f, fileBuf_.data(), _IOFBF, kFileBufBytes);
+    out.kind = kind;
+    out.directory = dir.string();
+    out.path = (dir / fileName).string();
 
-    // The zero-length header, flushed immediately: this is the crash
-    // contract from the class comment. Everything before the data payload
-    // is fixed-size, so stop() can patch by absolute offset.
-    unsigned char h[44];
+    // The zero-length header, flushed by the opener as soon as the file
+    // exists: this is the crash contract from the class comment. Everything
+    // before the data payload is fixed-size, so stop() can patch by absolute
+    // offset.
+    unsigned char* h = out.header.data();
     std::memcpy(h, "RIFF", 4);
     putU32(h + 4, 36);  // RIFF size for an empty data chunk
     std::memcpy(h + 8, "WAVE", 4);
@@ -160,20 +157,68 @@ bool Recorder::start(RecordKind kind, const std::string& directory, double sampl
     putU16(h + 34, bits);
     std::memcpy(h + 36, "data", 4);
     putU32(h + 40, 0);
-    if (std::fwrite(h, 1, sizeof h, f) != sizeof h || std::fflush(f) != 0) {
-        std::fclose(f);
-        error = "recorder: writing the WAV header to \"" + path.string() +
-                "\" failed";
+    return true;
+}
+
+bool Recorder::openFile(const OpenRequest& req, OpenedFile& out, std::string& error) {
+    // EVERYTHING IN HERE WAITS ON THE DISK, and nothing in here may touch a
+    // Recorder: it runs on a worker that can be abandoned at quit.
+    const fs::path dir(req.directory);
+    std::error_code ec;
+    fs::create_directories(dir, ec);
+    // create_directories is a silent no-op on an existing directory but
+    // reports when a plain FILE squats on the path — check both ways.
+    if (ec || !fs::is_directory(dir)) {
+        error = "recorder: cannot create directory \"" + dir.string() +
+                "\": " + (ec ? ec.message() : "path exists and is not a directory");
         return false;
     }
 
+    std::FILE* f = std::fopen(req.path.c_str(), "wb");
+    if (f == nullptr) {
+        error = "recorder: cannot create \"" + req.path + "\"";
+        return false;
+    }
+    OpenedFile opened;
+    opened.kind = req.kind;
+    opened.path = req.path;
+    opened.file.reset(f);  // from here a failure closes the file by itself
+    // setvbuf must precede the first I/O on the stream. Failure (it cannot
+    // realistically fail with valid arguments) just leaves stdio's default
+    // buffer — slower flush cadence, still correct — so no check.
+    opened.buffer.resize(kFileBufBytes);
+    std::setvbuf(f, opened.buffer.data(), _IOFBF, kFileBufBytes);
+
+    if (std::fwrite(req.header.data(), 1, req.header.size(), f) != req.header.size() ||
+        std::fflush(f) != 0) {
+        error = "recorder: writing the WAV header to \"" + req.path + "\" failed";
+        return false;
+    }
+    out = std::move(opened);
+    return true;
+}
+
+bool Recorder::begin(OpenedFile&& opened, std::string& error) {
+    error.clear();
+    if (recording_.load(std::memory_order_acquire)) {
+        error = "recorder: already recording — stop the current file first";
+        return false;
+    }
+    if (!opened.file) {
+        error = "recorder: no file was opened";
+        return false;
+    }
+    // The previous take's file is closed (recording_ is false), so its stdio
+    // buffer is free to be replaced by the one this stream was set up with.
+    fileBuf_ = std::move(opened.buffer);
     stage_.assign(kStageFrames * 8u, 0);  // sized for the larger (IQ) frame
     writeFailed_.store(false, std::memory_order_relaxed);
     sizeLimit_.store(false, std::memory_order_relaxed);
     frames_.store(0, std::memory_order_relaxed);
     dataBytes_.store(0, std::memory_order_relaxed);
-    kind_.store(kind, std::memory_order_relaxed);
-    file_ = f;
+    kind_.store(opened.kind, std::memory_order_relaxed);
+    file_ = opened.file.release();
+    path_ = opened.path;
     recording_.store(true, std::memory_order_release);
     return true;
 }

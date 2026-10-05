@@ -57,6 +57,29 @@ namespace {
 std::vector<std::string> g_tempDirs;
 std::vector<std::string> g_tempFiles;
 
+// A FilePtr deleter that counts: Recorder::FilePtr's deleter is a plain
+// function pointer, so the count it keeps is global.
+int g_closes = 0;
+void countingClose(std::FILE* f) {
+    if (f != nullptr) {
+        ++g_closes;
+        std::fclose(f);
+    }
+}
+
+// The same, and it notes whether the OpenedFile `g_probe` still has the setvbuf
+// buffer it was opened with at the moment its stream is closed: a stream must
+// be closed while its buffer is alive.
+cascade::core::Recorder::OpenedFile* g_probe = nullptr;
+const char* g_expectBuf = nullptr;
+bool g_bufferGoneBeforeClose = false;
+void probingClose(std::FILE* f) {
+    if (g_probe != nullptr && g_probe->buffer.data() != g_expectBuf) {
+        g_bufferGoneBeforeClose = true;
+    }
+    countingClose(f);
+}
+
 std::string tmpDir(const char* tag) {
     std::string d =
         "recorder_" + std::to_string(TEST_GETPID()) + "_" + tag;
@@ -599,6 +622,193 @@ int main() {
             CHECK(static_cast<std::int16_t>(u16le(&b[44 + 2])) == -16384);
             CHECK(static_cast<std::int16_t>(u16le(&b[44 + 8])) == 4096);
         }
+    }
+
+    // =======================================================================
+    // start() taken apart: prepare -> an opener -> begin
+    // =======================================================================
+    //
+    // The blocking part of a start (the directory, the file, the header's
+    // write and flush) is its own step so the GUI can run it on a worker and
+    // not freeze on a slow disk (a hang report from 0.99.58 stopped inside the
+    // C runtime's file open, called from this class). tests/test_record_start.cpp
+    // holds the freeze itself; these pin the pieces: each does only its own job,
+    // and together they are exactly start().
+    {
+        // prepare() touches no disk and no state.
+        const std::string dir = tmpDir("split_pure");  // registered, never created
+        Recorder r;
+        Recorder::OpenRequest req;
+        std::string err;
+        CHECK(r.prepare(RecordKind::BasebandIq, dir, 250000.0, "", req, err));
+        CHECK(err.empty());
+        CHECK(!fs::exists(dir));
+        CHECK(!r.recording());
+        CHECK(r.path().empty());
+        CHECK(req.kind == RecordKind::BasebandIq);
+        CHECK(req.directory == dir);
+        const std::string base = fs::path(req.path).filename().string();
+        CHECK(fs::path(req.path).parent_path().string() == dir);
+        CHECK(base.rfind("iq_", 0) == 0);
+        CHECK(base.find("_250000Hz.wav") != std::string::npos);
+        // The header it built is the one checkHeader() reads off a finished
+        // empty take: float32, stereo, 250 kHz, a zero-length data chunk.
+        checkHeader(std::vector<unsigned char>(req.header.begin(), req.header.end()), 3, 2,
+                    250000, 32, 0);
+        // A blank directory means "here"; a name prefix replaces the rate name.
+        Recorder::OpenRequest here;
+        CHECK(r.prepare(RecordKind::Audio, "", 48000.0, "patch-1-spk", here, err));
+        CHECK(here.directory == ".");
+        CHECK(fs::path(here.path).filename().string().rfind("patch-1-spk_", 0) == 0);
+        // Refusals need no disk: the same words start() gives.
+        Recorder::OpenRequest none;
+        CHECK(!r.prepare(RecordKind::Audio, dir, 0.0, "", none, err));
+        CHECK(err.find("not representable") != std::string::npos);
+        CHECK(!fs::exists(dir));
+    }
+    {
+        // openFile() is the blocking step on its own: it needs no Recorder, leaves
+        // the crash contract's complete zero-length header ON DISK before anything
+        // is armed, and hands back a file that begin() can take.
+        const std::string dir = tmpDir("split_open");
+        Recorder r;
+        Recorder::OpenRequest req;
+        std::string err;
+        CHECK(r.prepare(RecordKind::Audio, dir, 8000.0, "", req, err));
+        Recorder::OpenedFile of;
+        CHECK(Recorder::openFile(req, of, err));
+        CHECK(err.empty());
+        CHECK(fs::is_directory(dir));
+        CHECK(of.file != nullptr);
+        CHECK(of.path == req.path);
+        CHECK(of.kind == RecordKind::Audio);
+        CHECK(!r.recording());  // opened is not armed
+        CHECK(r.samplesWritten() == 0u);
+        checkHeader(readAll(req.path), 1, 1, 8000, 16, 0);  // flushed, before begin()
+
+        CHECK(r.begin(std::move(of), err));
+        CHECK(of.file == nullptr);  // taken
+        CHECK(r.recording());
+        CHECK(r.kind() == RecordKind::Audio);
+        CHECK(r.path() == req.path);
+        const float a[3] = {0.25f, -0.25f, 0.5f};
+        r.writeAudio(a, 3);
+        CHECK(r.samplesWritten() == 3u);
+        CHECK(r.bytesWritten() == 6u);
+
+        // A second opened file cannot be armed over a take that is running: the
+        // take is untouched and the file is left with its owner to drop.
+        const std::string dir2 = tmpDir("split_second");
+        Recorder::OpenRequest req2;
+        CHECK(r.prepare(RecordKind::Audio, dir2, 8000.0, "", req2, err) == false);  // recording
+        CHECK(err.find("already recording") != std::string::npos);
+        Recorder spare;
+        CHECK(spare.prepare(RecordKind::Audio, dir2, 8000.0, "", req2, err));
+        Recorder::OpenedFile of2;
+        CHECK(Recorder::openFile(req2, of2, err));
+        CHECK(!r.begin(std::move(of2), err));
+        CHECK(err.find("already recording") != std::string::npos);
+        CHECK(of2.file != nullptr);
+        CHECK(r.samplesWritten() == 3u);
+        r.writeAudio(a, 3);
+        CHECK(r.samplesWritten() == 6u);
+        r.stop();
+        checkHeader(readAll(req.path), 1, 1, 8000, 16, 12);
+
+        // Nothing to arm: refused, not a crash.
+        Recorder::OpenedFile empty;
+        CHECK(!r.begin(std::move(empty), err));
+        CHECK(!err.empty());
+        CHECK(!r.recording());
+    }
+    {
+        // An OpenedFile that is dropped closes its file - the take stopped while
+        // it was opening, or a worker abandoned at quit - and one that begin()
+        // took is closed by the Recorder, once, not twice.
+        const std::string dir = tmpDir("split_drop");
+        Recorder r;
+        Recorder::OpenRequest req;
+        std::string err;
+        CHECK(r.prepare(RecordKind::BasebandIq, dir, 2000000.0, "", req, err));
+        g_closes = 0;
+        {
+            Recorder::OpenedFile of;
+            CHECK(Recorder::openFile(req, of, err));
+            std::FILE* raw = of.file.release();
+            of.file = Recorder::FilePtr(raw, &countingClose);
+            CHECK(g_closes == 0);
+        }
+        CHECK(g_closes == 1);
+        // The file it left is the husk start()+stop() has always left.
+        checkHeader(readAll(req.path), 3, 2, 2000000, 32, 0);
+        {
+            Recorder::OpenedFile of;
+            CHECK(Recorder::openFile(req, of, err));
+            std::FILE* raw = of.file.release();
+            of.file = Recorder::FilePtr(raw, &countingClose);
+            CHECK(r.begin(std::move(of), err));
+        }
+        CHECK(g_closes == 1);  // begin() took it: the dropped shell closes nothing
+        r.stop();
+        checkHeader(readAll(req.path), 3, 2, 2000000, 32, 0);
+    }
+    {
+        // Assigning over an OpenedFile that holds a file - how gui::RecordStart
+        // drops a take that was stopped while it was opening - closes THAT
+        // stream while ITS setvbuf buffer is still alive. The defaulted
+        // assignment moves the buffer first, so the stream was closed into
+        // memory that had just been freed.
+        const std::string dir = tmpDir("split_assign");
+        Recorder r;
+        Recorder::OpenRequest req;
+        std::string err;
+        CHECK(r.prepare(RecordKind::Audio, dir, 8000.0, "", req, err));
+        Recorder::OpenedFile held;
+        CHECK(Recorder::openFile(req, held, err));
+        std::FILE* raw = held.file.release();
+        held.file = Recorder::FilePtr(raw, &probingClose);
+        g_closes = 0;
+        g_bufferGoneBeforeClose = false;
+        g_probe = &held;
+        g_expectBuf = held.buffer.data();
+        CHECK(g_expectBuf != nullptr);
+        held = Recorder::OpenedFile{};
+        g_probe = nullptr;
+        CHECK(g_closes == 1);
+        CHECK(!g_bufferGoneBeforeClose);
+        CHECK(held.file == nullptr);
+    }
+    {
+        // start() IS the three in a row, through whatever opener is bound: the
+        // seam a slow disk is staged through. A refusal from it is start()'s
+        // refusal, path() still names the file it tried for, and nothing is
+        // armed.
+        const std::string dir = tmpDir("split_seam");
+        Recorder r;
+        int asked = 0;
+        Recorder::OpenRequest seen;
+        r.bindOpener([&](const Recorder::OpenRequest& q, Recorder::OpenedFile&,
+                         std::string& e) {
+            ++asked;
+            seen = q;
+            e = "recorder: the disk said no";
+            return false;
+        });
+        std::string err;
+        CHECK(!r.start(RecordKind::Audio, dir, 48000.0, err));
+        CHECK(asked == 1);
+        CHECK(err == "recorder: the disk said no");
+        CHECK(!r.recording());
+        CHECK(r.path() == seen.path);
+        CHECK(!fs::exists(dir));  // the bound opener never made it
+        // opener() is a copy of what is bound, which is how a worker gets it.
+        Recorder::OpenedFile ignored;
+        CHECK(!r.opener()(seen, ignored, err));
+        CHECK(asked == 2);
+        // The default is the real one.
+        Recorder fresh;
+        CHECK(fresh.start(RecordKind::Audio, dir, 48000.0, err));
+        fresh.stop();
     }
 
     const int rc = testSummary("test_recorder");

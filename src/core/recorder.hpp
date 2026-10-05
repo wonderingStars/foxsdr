@@ -63,16 +63,51 @@
 // recording(), kind(), both counters and both fault flags are atomic and may
 // be polled from any thread (e.g. the GUI status bar).
 //
+// Slow disks: start() WAITS FOR THE DISK, and a caller that must not wait
+// (the GUI thread) takes it apart. A freeze report from 0.99.58 (Windows 11,
+// 151 s into the session) had the GUI thread inside Recorder::start, inside
+// the C runtime's file open, for more than the hang watchdog's five seconds:
+// the Record button's handler created a file in a folder that was slow to
+// answer (a synchronised or network folder, a sleeping drive, a scanner
+// holding the path), and the window did not draw until it did. What waits is
+// exactly create_directories, fopen and the header's write and flush; the
+// rest of start() is arithmetic. So the three are separate steps:
+//
+//   prepare()   no I/O, no state: validates the rate, builds the file name and
+//               the header bytes, refuses a recorder already recording. Cheap.
+//   an opener   THE BLOCKING PART, and the only one. Runs on any thread, reads
+//               its OpenRequest and touches nothing else (see "Opener").
+//   begin()     no I/O: attaches the opened file and arms the recorder. Cheap.
+//
+// start() is the three in a row on the caller's thread, which is what every
+// caller that can afford to wait still does (the patch page's speaker files,
+// the --record-check bench). gui::RecordStart runs the middle step on a worker
+// and the other two on the GUI thread, so the window keeps drawing until the
+// file is there.
+//
+// THE ORDER CONTRACT THAT MATTERS SURVIVES THE SPLIT: the DSP thread reaches a
+// recorder only through Pipeline::set*Recorder, and Pipeline's own header says
+// start() comes FIRST and the tap SECOND. With the open on a worker that reads
+// "begin() returned true, THEN set*Recorder()" - the worker never sees the
+// Recorder, only the OpenRequest it was handed, so nothing can be written to a
+// take that has not been armed, and begin() never overlaps a write because no
+// write can be in flight against a recorder the pipeline has not been given.
+//
+
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <complex>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <ctime>
+#include <functional>
+#include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace cascade::core {
@@ -92,7 +127,9 @@ public:
     // creating missing directories. Writes + flushes the zero-length header
     // (see crash contract above). False with a reason in `error` if already
     // recording, the rate is unrepresentable in a WAV header, the directory
-    // cannot be created, or the file cannot be opened/written.
+    // cannot be created, or the file cannot be opened/written. BLOCKS for as
+    // long as the disk takes (see "Slow disks"): not for the GUI thread, which
+    // goes through gui::RecordStart.
     bool start(RecordKind kind, const std::string& directory,
                double sampleRateHz, std::string& error);
 
@@ -105,6 +142,88 @@ public:
 
     // The file the current or most recent take went to; "" before any start.
     std::string path() const;
+
+    // --- start() taken apart (see "Slow disks" above) ------------------------
+
+    // Everything the blocking step needs, by value: the directory to create,
+    // the file to create in it and the 44 header bytes to write into it. Built
+    // by prepare(); carries no pointer to any Recorder, which is what lets a
+    // worker that is still inside the filesystem at quit be abandoned.
+    struct OpenRequest {
+        RecordKind kind = RecordKind::BasebandIq;
+        std::string directory;  // created if missing; "." for "here"
+        std::string path;       // directory + file name, the file to create
+        std::array<unsigned char, 44> header{};  // zero-length data chunk
+    };
+
+    // A closed-over FILE*: fclose by default, replaceable only so a test can
+    // count closes. A function pointer rather than a type so that an OpenedFile
+    // is the same type whoever made it.
+    using FilePtr = std::unique_ptr<std::FILE, void (*)(std::FILE*)>;
+    static void closeFile(std::FILE* f) {
+        if (f != nullptr) { std::fclose(f); }
+    }
+
+    // A take's file, open, its header written and flushed, and not yet armed.
+    // MOVE-ONLY AND SELF-CLEANING: one that is dropped (a take stopped while it
+    // was still opening, or a worker abandoned at quit) closes its file, so
+    // nothing leaks a handle however the take ends. What it leaves on disk is
+    // the same zero-sample WAV that Record followed at once by Stop leaves.
+    struct OpenedFile {
+        // Declared BEFORE `file` so that it is destroyed AFTER it: the stream
+        // is closed (flushed) while its setvbuf buffer is still alive.
+        std::vector<char> buffer;
+        FilePtr file{nullptr, &Recorder::closeFile};
+        std::string path;
+        RecordKind kind = RecordKind::BasebandIq;
+
+        OpenedFile() = default;
+        OpenedFile(OpenedFile&&) = default;
+        // Closes what it holds BEFORE taking the other's buffer. The defaulted
+        // assignment moves members in declaration order, which would free this
+        // stream's setvbuf buffer first and fclose the stream into it after.
+        OpenedFile& operator=(OpenedFile&& other) noexcept {
+            if (this != &other) {
+                file.reset();
+                buffer = std::move(other.buffer);
+                file = std::move(other.file);
+                path = std::move(other.path);
+                kind = other.kind;
+            }
+            return *this;
+        }
+    };
+
+    // The blocking step. Called with the request, fills `out` and returns true,
+    // or returns false with the reason in `error`. Runs on whatever thread it
+    // is given and MUST touch nothing but its arguments.
+    using Opener = std::function<bool(const OpenRequest&, OpenedFile&, std::string&)>;
+
+    // Production opener: create_directories, fopen("wb"), setvbuf with the
+    // 256 KiB buffer the hot path is budgeted on, then the header written and
+    // flushed (the crash contract). Static and stateless on purpose.
+    static bool openFile(const OpenRequest& req, OpenedFile& out, std::string& error);
+
+    // Step one. False with the reason in `error` if already recording, or the
+    // rate is unrepresentable in a WAV header; otherwise `out` is the request.
+    // Does NOT touch the filesystem. The file's timestamp is taken HERE, so a
+    // take that waited seconds for its disk is still named for the moment the
+    // user asked.
+    bool prepare(RecordKind kind, const std::string& directory, double sampleRateHz,
+                 const std::string& namePrefix, OpenRequest& out, std::string& error) const;
+
+    // Step three. Arms the recorder on an opened file: counters reset, kind set,
+    // recording() true. False (and the file left to the caller, who still owns
+    // it) if already recording or `opened` holds no file. Call it only when no
+    // write can be in flight (see "Threading"), then install the pipeline tap.
+    bool begin(OpenedFile&& opened, std::string& error);
+
+    // How the blocking step is done: openFile unless bound otherwise, and
+    // gui::RecordStart copies it to its worker. Replacing it is the seam for
+    // slow I/O - a test binds one that sleeps (a slow disk as far as the
+    // caller can tell) or fails late. Never called by the application.
+    void bindOpener(Opener opener) { opener_ = std::move(opener); }
+    Opener opener() const { return opener_; }
 
     // No-op unless recording the matching kind (wrong-kind and pre-start
     // calls are silently ignored so the DSP loop needs no conditionals).
@@ -189,6 +308,7 @@ private:
     std::vector<char> fileBuf_;          // setvbuf storage; must outlive file_
     std::vector<unsigned char> stage_;   // little-endian staging block
     std::string path_;                   // set by start(), on the caller's thread
+    Opener opener_;                      // the blocking step; see bindOpener()
 };
 
 }  // namespace cascade::core

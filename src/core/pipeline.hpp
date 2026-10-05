@@ -682,6 +682,10 @@ public:
     // so the caller may immediately stop()/destroy the recorder. Install
     // order for a new take is therefore Recorder::start() FIRST, then
     // set*Recorder(); teardown is set*Recorder(nullptr) FIRST, then stop().
+    // (The GUI opens the file on a worker so a slow disk cannot freeze the
+    // window, and arms the recorder with Recorder::begin() on the GUI thread
+    // once the file is open: begin() is the "start" of this contract, and the
+    // tap still comes after it. See Recorder's "Slow disks".)
     // writeIq/writeAudio ignore wrong-kind and stopped recorders by their
     // own contract, so the DSP hot path needs only the null checks.
     void setIqRecorder(Recorder* r);

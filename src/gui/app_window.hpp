@@ -72,6 +72,7 @@ struct GLFWwindow;
 #include "gui/audio_open.hpp"
 #include "gui/config_writer.hpp"
 #include "gui/link_request_poll.hpp"
+#include "gui/record_start.hpp"
 #include "gui/shell_open.hpp"
 // The keyboard, as a table. ImGui-free by construction (it declares ImGuiKey
 // opaquely rather than including imgui.h - see its own note), so a KeyBindings
@@ -1632,8 +1633,40 @@ private:
     // order the Recorder contract requires (see Pipeline::set*Recorder).
     // Both are harmless no-ops when nothing is recording, so the toolbar
     // Stop path calls them unconditionally.
+    //
+    // They also WITHDRAW A START THAT IS STILL OPENING ITS FILE (see
+    // startIqRecording below): a Stop pressed - by the button, the toolbar, the
+    // web remote, a plugin or the teardown - while the disk is slow to give
+    // the file leaves no take behind, however the open turns out. Nothing
+    // waits for the open to come back; poll finds it and closes the file.
     void stopIqRecording();
     void stopAudioRecording();
+    // THE WAY A TAKE IS REQUESTED, FROM EVERY CALLER (the Record IQ button,
+    // the Record audio button, the Record key and the web remote and plugins
+    // through applyControlRequest). It never touches the disk: Recorder::start
+    // creates the directory and opens the file, which waits for the disk for as
+    // long as the disk takes, and called from here that froze the window
+    // (a hang report from 0.99.58 stopped inside it). Instead the cheap half
+    // (Recorder::prepare: the rate check, the file name, the header) is done
+    // here and the open is handed to a RecordStart worker. The rest of the
+    // start - Recorder::begin, the tap, the clock, the notices - happens in
+    // pollRecordStarts, on the frame that finds the file open, in the order
+    // Pipeline::setIqRecorder requires (begin FIRST, tap second).
+    //
+    // Returns whether a take is recording or is now on its way: true for a
+    // request accepted, true for one already pending (a second Record press
+    // changes nothing), true for one already recording; false only for a start
+    // refused at once (an unrepresentable rate), the reason in recordError_ as
+    // before. An open that FAILS is reported the same way, a frame or more
+    // later.
+    bool startIqRecording();
+    // Once per frame, after every widget. NEVER BLOCKS. `nowS` is ImGui's clock,
+    // passed in so a test can drive it without a UI context. Applies what a
+    // finished open produced: arms the recorder and installs the tap, or reports
+    // the failure, or closes the file of a take that was withdrawn.
+    void pollRecordStarts(double nowS);
+    // The shared tail of both takes' start, called by pollRecordStarts.
+    void finishRecordStart(bool iq, cascade::gui::RecordStart::Result& r, double nowS);
     // A TAKE BELONGS TO ONE UNBROKEN RUN OF ONE SOURCE. Four things end it
     // besides the Stop buttons in the Recorder section, and each is one
     // routine below so no path can forget:
@@ -1693,8 +1726,9 @@ private:
     bool faultSeen_ = false;  // endTakesOnFault's edge: the latch as last frame saw it
     // The Recorder section's own "Record audio" path, lifted out of the button
     // so the keyboard presses the SAME button rather than a second copy of it
-    // that could drift from the one on screen. Returns whether a take started;
-    // the error, when it did not, is in recordError_ exactly as before.
+    // that could drift from the one on screen. Returns whether a take is
+    // recording or on its way (see startIqRecording); the error, when it was
+    // refused, is in recordError_ exactly as before.
     bool startAudioRecording();
     // THE ONE PLACE THE DEMODULATOR MODE IS SET: modeIndex_ and the pipeline's
     // demodulator together, and the report context refreshed with them (0.99.62).
@@ -2863,6 +2897,14 @@ private:
     // stop*Recording clears the pointer before stopping the recorder.
     cascade::core::Recorder iqRecorder_;
     cascade::core::Recorder audioRecorder_;
+    // The file open behind each recorder's Record button, on a worker so a
+    // slow disk cannot hold a frame - see gui/record_start.hpp and
+    // startIqRecording(). One per recorder, because the two takes are
+    // independent. They hold no pointer to the recorders or to this window (the
+    // worker owns what it touches by value), so ~AppWindow can abandon one that
+    // is still inside the filesystem.
+    cascade::gui::RecordStart iqStart_;
+    cascade::gui::RecordStart audioStart_;
     std::string recordDir_;    // %USERPROFILE%/Documents/SDR-recordings
     std::string recordError_;  // red text in the Recorder section; "" = none
     // Why a take ended when nothing went WRONG (the user changed source):

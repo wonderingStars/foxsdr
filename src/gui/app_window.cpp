@@ -3928,6 +3928,11 @@ void AppWindow::drawUi() {
     // The portal-link flow: migration exchange, confirm-by-name, and the 1 Hz
     // link-request file poll. See tester_link.hpp.
     testerLinkPoll();
+    // A Record press or request from this frame or an earlier one, whose file
+    // has now been opened by its worker: arm the recorder and put the tap in.
+    // After every widget, so a Stop pressed this frame has already withdrawn
+    // the take it would otherwise arm. See gui/record_start.hpp.
+    pollRecordStarts(ImGui::GetTime());
 }
 
 void AppWindow::pollAudioHealth() {
@@ -22742,29 +22747,41 @@ void AppWindow::drawRecorderSection() {
     telemetryNotePanel("recorder");
 
     // Destination, always visible so the user knows where takes land. The
-    // directory is created by Recorder::start on the first record.
+    // directory is created when the first take's file is opened.
     ImGui::TextDisabled("%s", recordDir_.c_str());
+
+    // THE OPEN IS ON A WORKER (gui/record_start.hpp): between the press and the
+    // file being there, the button says so instead of the frame waiting for the
+    // disk. Plain English like the lines beside it, not tr(): a key here would
+    // need an entry in every catalogue under resources/lang. After a second of
+    // waiting the line under it says how long, so a slow disk reads as a slow
+    // disk and not as a button that did nothing; a start answered at once
+    // (nearly always) never shows that line.
+    const auto drawStarting = [](const cascade::gui::RecordStart& st, const char* label,
+                                 const char* cancelling) -> bool {
+        bool cancel = false;
+        if (st.cancelled()) {
+            ImGui::BeginDisabled();
+            ImGui::Button(cancelling, ImVec2(-FLT_MIN, 0.0f));
+            ImGui::EndDisabled();
+        } else {
+            cancel = ImGui::Button(label, ImVec2(-FLT_MIN, 0.0f));
+        }
+        if (st.elapsedS() >= 1.0) {
+            ImGui::TextDisabled("Waiting for the disk to open the file: %.0f s", st.elapsedS());
+        }
+        return cancel;
+    };
 
     // IQ take: baseband at the DSP input rate through the pipeline's raw
     // tap. Toggle button: label and action swap with the recorder state.
-    if (!iqRecorder_.recording()) {
-        if (ImGui::Button(trId("Record IQ"), ImVec2(-FLT_MIN, 0.0f))) {
-            const double rate = pipeline_.inputRateHz();
-            std::string err;
-            if (iqRecorder_.start(cascade::core::RecordKind::BasebandIq,
-                                  recordDir_, rate, err)) {
-                recordError_.clear();
-                recordNotice_.clear();
-                iqRecordRateHz_ = rate;
-                iqRecordStartS_ = ImGui::GetTime();
-                testerUsage_.noteFeature("rec-iq");
-                // Install AFTER start(): the tap must never feed a recorder
-                // that is not accepting (Pipeline::setIqRecorder contract).
-                pipeline_.setIqRecorder(&iqRecorder_);
-            } else {
-                recordError_ = err;
-            }
+    if (iqStart_.pending()) {
+        if (drawStarting(iqStart_, "Starting IQ - click to cancel##recIqStarting",
+                         "Cancelling IQ start...##recIqCancelling")) {
+            stopIqRecording();
         }
+    } else if (!iqRecorder_.recording()) {
+        if (ImGui::Button(trId("Record IQ"), ImVec2(-FLT_MIN, 0.0f))) { startIqRecording(); }
     } else {
         if (ImGui::Button(trId("Stop IQ"), ImVec2(-FLT_MIN, 0.0f))) { stopIqRecording(); }
         // Elapsed is wall time since the take started; samples/MB are the
@@ -22776,7 +22793,12 @@ void AppWindow::drawRecorderSection() {
     }
 
     // Audio take: the post-chain 48 kHz output (same point audioTap uses).
-    if (!audioRecorder_.recording()) {
+    if (audioStart_.pending()) {
+        if (drawStarting(audioStart_, "Starting audio - click to cancel##recAudioStarting",
+                         "Cancelling audio start...##recAudioCancelling")) {
+            stopAudioRecording();
+        }
+    } else if (!audioRecorder_.recording()) {
         // startAudioRecording, not the start/install pair that used to be here:
         // the Record key presses this same button (see applyKeyAction), and the
         // tap-after-start ordering the Pipeline contract requires is not
@@ -22835,6 +22857,12 @@ void AppWindow::drawRecorderSection() {
 }
 
 void AppWindow::stopIqRecording() {
+    // A start still opening its file is withdrawn first: nothing is recording
+    // yet, so there is no tap to take out and no header to patch, and nothing
+    // here waits for the disk (RecordStart::cancel only sets a flag - the file,
+    // when it arrives, is closed unused by pollRecordStarts). A no-op when no
+    // open is out.
+    iqStart_.cancel();
     // Order per the Pipeline::setIqRecorder contract: after the setter
     // returns no writeIq against this recorder is in flight or can begin
     // (the pointer swap serializes on the mutex the DSP thread holds across
@@ -22845,6 +22873,7 @@ void AppWindow::stopIqRecording() {
 }
 
 void AppWindow::stopAudioRecording() {
+    audioStart_.cancel();  // see stopIqRecording
     pipeline_.setAudioRecorder(nullptr);
     audioRecorder_.stop();
 }
@@ -22943,21 +22972,129 @@ void AppWindow::installSource(std::unique_ptr<cascade::source::IqSource> src) {
 }
 
 bool AppWindow::startAudioRecording() {
-    if (audioRecorder_.recording()) { return true; }
+    // A take that is recording, or whose file is still opening, is left exactly
+    // as it is: a second press of the button, the key or the browser's Record
+    // changes nothing (RecordStart refuses a second open anyway, so two cannot
+    // race for one file name). One whose start was withdrawn and has not yet
+    // come back is neither, and a Record in that gap is not a take.
+    if (audioRecorder_.recording() || audioStart_.pending()) { return !audioStart_.cancelled(); }
+    // THE DISK IS NOT TOUCHED HERE. This used to be Recorder::start, whose
+    // create_directories and fopen waited for the disk on this - the GUI -
+    // thread, and a slow one froze the window (see gui/record_start.hpp). The
+    // cheap half stays: a refusal that needs no disk is reported at once.
     std::string err;
-    if (!audioRecorder_.start(cascade::core::RecordKind::Audio, recordDir_,
-                              cascade::core::Pipeline::kAudioRateHz, err)) {
+    cascade::core::Recorder::OpenRequest req;
+    if (!audioRecorder_.prepare(cascade::core::RecordKind::Audio, recordDir_,
+                                cascade::core::Pipeline::kAudioRateHz, std::string{}, req,
+                                err)) {
         recordError_ = err;
         return false;
     }
+    audioStart_.request(audioRecorder_.opener(), std::move(req));
+    return true;
+}
+
+bool AppWindow::startIqRecording() {
+    // See startAudioRecording for the pending and withdrawn cases.
+    if (iqRecorder_.recording() || iqStart_.pending()) { return !iqStart_.cancelled(); }
+    const double rate = pipeline_.inputRateHz();
+    std::string err;
+    cascade::core::Recorder::OpenRequest req;
+    if (!iqRecorder_.prepare(cascade::core::RecordKind::BasebandIq, recordDir_, rate,
+                             std::string{}, req, err)) {
+        recordError_ = err;
+        return false;
+    }
+    // The rate the file's header is being written for, kept to compare with
+    // the rate when the file arrives: a take is one rate, and a source that
+    // changed it while the disk was slow must not get a header that lies
+    // (see finishRecordStart).
+    iqRecordRateHz_ = rate;
+    iqStart_.request(iqRecorder_.opener(), std::move(req));
+    return true;
+}
+
+void AppWindow::pollRecordStarts(double nowS) {
+    // Both takes, the same way: collect a finished open and act on it, then
+    // say in the log - once - if one is taking long. A no-op on every frame
+    // nothing was requested, so it costs nothing to call unconditionally.
+    const auto service = [this, nowS](bool iq, cascade::gui::RecordStart& start,
+                                      const char* what) {
+        cascade::gui::RecordStart::Result r;
+        if (start.poll(r)) { finishRecordStart(iq, r, nowS); }
+        // THE ONLY RECORD A REPORT WILL CARRY of a disk that was slow to open a
+        // recording: once when an open has been out for 5 s, once when it comes
+        // back. Neither names the directory or the file, which are in the
+        // user's profile.
+        double seconds = 0.0;
+        switch (start.takeNotice(seconds)) {
+            case cascade::gui::RecordStart::Notice::Stuck:
+                cascade::core::diagWarnf(
+                    "recorder: the %s file has not opened for %.0f s - the open is waiting on a "
+                    "worker thread, the window is not",
+                    what, seconds);
+                break;
+            case cascade::gui::RecordStart::Notice::Recovered:
+                cascade::core::diagLogf("recorder: the %s file opened after %.0f s", what, seconds);
+                break;
+            case cascade::gui::RecordStart::Notice::None:
+                break;
+        }
+    };
+    service(true, iqStart_, "I/Q");
+    service(false, audioStart_, "audio");
+}
+
+void AppWindow::finishRecordStart(bool iq, cascade::gui::RecordStart::Result& r, double nowS) {
+    cascade::core::Recorder& rec = iq ? iqRecorder_ : audioRecorder_;
+    const char* what = iq ? "I/Q" : "audio";
+    if (r.cancelled) {
+        // Stopped while the file was opening: RecordStart has already closed it,
+        // and nothing was armed or tapped. Silent on screen - the user pressed
+        // Stop, and "the recording ended because you stopped" is not news.
+        cascade::core::diagLogf(
+            "recorder: the %s take was stopped before its file finished opening", what);
+        return;
+    }
+    if (!r.ok) {
+        // The same words Recorder::start gave, a little later.
+        recordError_ = r.error;
+        return;
+    }
+    if (iq && pipeline_.inputRateHz() != iqRecordRateHz_) {
+        // THE RATE MOVED WHILE THE FILE WAS OPENING (a source switch, a SoapySDR
+        // rate change): the header on that file is for the old rate, and a take
+        // whose header disagrees with its samples replays detuned - the reason
+        // an accepted rate change ends a take already running. Not started,
+        // and said, because nothing went wrong that the user did not do.
+        r.file = cascade::core::Recorder::OpenedFile{};  // closes it, unused
+        recordNotice_ =
+            "The I/Q recording was not started because the input rate changed while its file "
+            "was opening; press Record to start a new one.";
+        cascade::core::diagLogf(
+            "recorder: the I/Q take was dropped, the input rate changed while its file opened");
+        return;
+    }
+    std::string err;
+    // ARM FIRST, TAP SECOND - the Pipeline::set*Recorder contract: the tap must
+    // never feed a recorder that is not accepting, and begin() is what makes it
+    // accept. No write can be in flight against it yet, because the pipeline
+    // has not been given it.
+    if (!rec.begin(std::move(r.file), err)) {
+        recordError_ = err;
+        return;
+    }
     recordError_.clear();
     recordNotice_.clear();
-    audioRecordStartS_ = ImGui::GetTime();
-    testerUsage_.noteFeature("rec-audio");
-    // Install AFTER start(): the tap must never feed a recorder that is not
-    // accepting (Pipeline::setAudioRecorder contract).
-    pipeline_.setAudioRecorder(&audioRecorder_);
-    return true;
+    if (iq) {
+        iqRecordStartS_ = nowS;
+        testerUsage_.noteFeature("rec-iq");
+        pipeline_.setIqRecorder(&iqRecorder_);
+    } else {
+        audioRecordStartS_ = nowS;
+        testerUsage_.noteFeature("rec-audio");
+        pipeline_.setAudioRecorder(&audioRecorder_);
+    }
 }
 
 void AppWindow::commitModeIndex(int index) {
@@ -25395,41 +25532,22 @@ void AppWindow::applyControlRequest(const cascade::net::ControlRequest& r) {
 
     // --- Recorder --------------------------------------------------------
     // The install/teardown ORDER is the Recorder contract's, not a choice:
-    // start() then set*Recorder for a new take, set*Recorder(nullptr) then
-    // stop() to end one. The stop* helpers already do the second.
+    // start then set*Recorder for a new take, set*Recorder(nullptr) then
+    // stop() to end one. The start*/stop* helpers already do both - and the
+    // start does not wait for the disk: a take asked for here is on its way,
+    // and the status shows it recording on the frame its file is open (a
+    // recordIq=false in between withdraws it).
     if (r.recordIq.has_value()) {
-        if (*r.recordIq && !iqRecorder_.recording()) {
-            const double rate = pipeline_.inputRateHz();
-            std::string err;
-            if (iqRecorder_.start(cascade::core::RecordKind::BasebandIq,
-                                  recordDir_, rate, err)) {
-                iqRecordRateHz_ = rate;
-                iqRecordStartS_ = ImGui::GetTime();
-                testerUsage_.noteFeature("rec-iq");
-                pipeline_.setIqRecorder(&iqRecorder_);
-                recordError_.clear();
-                recordNotice_.clear();
-            } else {
-                recordError_ = err;
-            }
-        } else if (!*r.recordIq) {
+        if (*r.recordIq) {
+            startIqRecording();
+        } else {
             stopIqRecording();
         }
     }
     if (r.recordAudio.has_value()) {
-        if (*r.recordAudio && !audioRecorder_.recording()) {
-            std::string err;
-            if (audioRecorder_.start(cascade::core::RecordKind::Audio, recordDir_,
-                                     cascade::core::Pipeline::kAudioRateHz, err)) {
-                audioRecordStartS_ = ImGui::GetTime();
-                testerUsage_.noteFeature("rec-audio");
-                pipeline_.setAudioRecorder(&audioRecorder_);
-                recordError_.clear();
-                recordNotice_.clear();
-            } else {
-                recordError_ = err;
-            }
-        } else if (!*r.recordAudio) {
+        if (*r.recordAudio) {
+            startAudioRecording();
+        } else {
             stopAudioRecording();
         }
     }

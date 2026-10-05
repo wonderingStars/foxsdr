@@ -1029,6 +1029,27 @@ const KnownWait kKnownWaits[] = {
      "abandoned: called from ~AppWindow after watchdog_.stop(), outside the budgeted "
      "stretch, exactly like app_window.cpp's, audio_open.hpp's and config_writer.hpp's "
      "kQuitGrace"},
+
+    // THE RECORDER'S FILE OPEN (a freeze inside Recorder::start's file open,
+    // 0.99.58). create_directories + fopen ran on the GUI thread when Record
+    // was pressed; gui/record_start.hpp moves them to a worker that nothing
+    // waits for - request() and poll() never block and cancel() only sets a
+    // flag - so there is no bound on the frame loop. The teardown's own
+    // stopIqRecording()/stopAudioRecording() withdraw a start that is still
+    // opening without waiting for it; the only wait is the reap below.
+    {"src/gui/record_start.hpp", "kStuckAfter", 0,
+     "not a wait: the age at which a file open still out is called stuck in the log (once). "
+     "Nothing blocks for it - it is compared against a clock by takeNotice() - and the frame "
+     "loop that reads it has ended before beginShutdown() raises the threshold"},
+    {"src/gui/record_start.hpp", "kNoWait", 0,
+     "zero by construction - poll()'s once-a-frame ready-check on a std::future, not a wait. "
+     "The frame loop has ended before beginShutdown() raises the threshold, so poll() is not "
+     "even called on the teardown path"},
+    {"src/gui/record_start.hpp", "kQuitGrace", 0,
+     "RecordStart::reap()'s grace before a file open still blocked in the filesystem is "
+     "abandoned: called from ~RecordStart, i.e. from ~AppWindow after watchdog_.stop(), "
+     "outside the budgeted stretch, exactly like link_request_poll.hpp's, "
+     "config_writer.hpp's, audio_open.hpp's and app_window.cpp's kQuitGrace"},
 };
 
 const KnownWait* findKnown(const std::string& file, const std::string& name) {
