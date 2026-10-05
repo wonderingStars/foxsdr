@@ -13,6 +13,7 @@
 #include <utility>
 #include <vector>
 
+#include "core/health_events.hpp"
 #include "core/plugin_repo.hpp"
 
 #if defined(_WIN32)
@@ -261,11 +262,19 @@ bool checkForUpdate(const std::string& baseUrl, const std::string& currentVersio
     std::string url = baseUrl + "?v=" + currentVersion;
     if (!channel.empty()) { url += "&channel=" + channel; }
 
+    // COUNTED, ANONYMOUSLY (0.99.64, core/health_events.hpp): a check that did
+    // not complete - the service could not be reached, or did not answer with a
+    // manifest this build will act on. Nothing of what it said is kept.
     std::string body;
     if (!PluginRepo::fetchText(url, kMaxManifestBytes, body, error)) {
+        health::noteUpdateCheckFailed();
         return false;
     }
-    return parseUpdateManifest(body, currentVersion, out, error);
+    if (!parseUpdateManifest(body, currentVersion, out, error)) {
+        health::noteUpdateCheckFailed();
+        return false;
+    }
+    return true;
 }
 
 bool downloadUpdate(const UpdateInfo& info, std::string& outPath, std::string& error,
@@ -298,6 +307,7 @@ bool downloadUpdate(const UpdateInfo& info, std::string& outPath, std::string& e
     fs::path dir = fs::temp_directory_path(ec);
     if (ec) {
         error = "no temporary directory available";
+        health::noteUpdateDownloadFailed();
         return false;
     }
     dir /= "foxsdr-update";
@@ -307,8 +317,19 @@ bool downloadUpdate(const UpdateInfo& info, std::string& outPath, std::string& e
     // accumulating installers in the user's temp directory.
     const fs::path dest = dir / ("foxsdr-setup-" + info.version + ".exe");
 
+    // COUNTED, ANONYMOUSLY (0.99.64, core/health_events.hpp), and told apart by
+    // the failure's KIND rather than its text: a download that did not complete
+    // (the network, the disk) and bytes that did not hash to the published
+    // digest are different problems with different owners. A cancel is neither.
+    PluginRepo::FetchFailure why = PluginRepo::FetchFailure::None;
     if (!PluginRepo::fetchVerifiedFile(info.url, info.sha256, dest.string(), kMaxInstallerBytes,
-                                       error, progress, cancel)) {
+                                       error, progress, cancel, &why)) {
+        switch (why) {
+            case PluginRepo::FetchFailure::Transfer:
+            case PluginRepo::FetchFailure::Place: health::noteUpdateDownloadFailed(); break;
+            case PluginRepo::FetchFailure::Verify: health::noteUpdateVerifyFailed(); break;
+            default: break;  // cancelled, refused before any transfer, none
+        }
         return false;
     }
     // The bar sat at whatever the last chunk made it; the file is verified and

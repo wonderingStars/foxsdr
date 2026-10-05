@@ -2001,10 +2001,13 @@ FoxSDR reports anonymous usage counts. **Usage reporting**, in the **SYSTEM**
 group of the rail, is
 **on by default** — untick it and reporting stops. It sends counts only:
 version, operating system, session length, which modes and plugins get used,
-which radio model, and how many times the window froze because the display
-driver was waiting (a bare number, nothing about the freeze itself), against a
-random identifier created on your machine. Switching it off deletes that
-identifier.
+which radio model, how many times the window froze because the display
+driver was waiting (a bare number, nothing about the freeze itself), and — since
+0.99.64 — how many times something quietly did not work: a radio that would not
+open, no sound output, an update or a plugin install that failed, as counts of a
+fixed list of kinds and never any message, name or path, and only while
+Diagnostics is on as well. All against a random identifier created on your
+machine. Switching it off deletes that identifier.
 
 **It never sends frequencies, anything decoded, your location, or your IP
 address**, and hardware serial numbers are stripped before the radio model is

@@ -19,6 +19,7 @@
 #include <fstream>
 #include <functional>
 #include <iterator>
+#include <mutex>
 #include <string>
 #include <system_error>
 #include <vector>
@@ -609,10 +610,10 @@ bool resolveSameHostRedirect(const UrlParts& from, const std::string& location, 
 // keep name and chain checking on - and revocation checking is EXPLICITLY
 // enabled on top. Automatic redirects are switched off so rule 3 can be
 // enforced by hand.
-bool httpsGet(const std::string& url, std::uint64_t maxBytes,
-              const std::function<bool(const void*, std::size_t)>& sink,
-              std::atomic<float>* progress, std::atomic<bool>* cancel, std::string& error,
-              const HttpTimeouts& timeouts = HttpTimeouts{}) {
+bool httpsGetNetwork(const std::string& url, std::uint64_t maxBytes,
+                     const std::function<bool(const void*, std::size_t)>& sink,
+                     std::atomic<float>* progress, std::atomic<bool>* cancel, std::string& error,
+                     const HttpTimeouts& timeouts = HttpTimeouts{}) {
     UrlParts parts;
     if (!crackHttpsUrl(url, parts, error)) {
         return false;
@@ -907,10 +908,10 @@ bool resolveSameHostRedirect(const UrlParts& from, const std::string& location, 
     return true;
 }
 
-bool httpsGet(const std::string& url, std::uint64_t maxBytes,
-              const std::function<bool(const void*, std::size_t)>& sink,
-              std::atomic<float>* progress, std::atomic<bool>* cancel, std::string& error,
-              const HttpTimeouts& timeouts = HttpTimeouts{}) {
+bool httpsGetNetwork(const std::string& url, std::uint64_t maxBytes,
+                     const std::function<bool(const void*, std::size_t)>& sink,
+                     std::atomic<float>* progress, std::atomic<bool>* cancel, std::string& error,
+                     const HttpTimeouts& timeouts = HttpTimeouts{}) {
     UrlParts parts;
     if (!crackHttpsUrl(url, parts, error)) {
         return false;
@@ -1022,7 +1023,47 @@ bool httpsGet(const std::string& url, std::uint64_t maxBytes,
 
 #endif  // _WIN32
 
+// THE ONE FUNCTION EVERY TRANSFER GOES THROUGH, and the seam a test can stand in
+// for (PluginRepo::setTransportForTest, 0.99.64). The two httpsGetNetwork bodies
+// above are the real thing, one per platform; this is a single indirection in
+// front of them. A shipped build never sets the hook, so it costs one empty
+// std::function test per transfer.
+std::mutex& testTransportMutex() {
+    static std::mutex m;
+    return m;
+}
+PluginRepo::TestTransport& testTransportSlot() {
+    static PluginRepo::TestTransport t;
+    return t;
+}
+
+bool httpsGet(const std::string& url, std::uint64_t maxBytes,
+              const std::function<bool(const void*, std::size_t)>& sink,
+              std::atomic<float>* progress, std::atomic<bool>* cancel, std::string& error,
+              const HttpTimeouts& timeouts = HttpTimeouts{}) {
+    PluginRepo::TestTransport hook;
+    {
+        std::lock_guard<std::mutex> lk(testTransportMutex());
+        hook = testTransportSlot();
+    }
+    if (hook) {
+        // Cancelled is cancelled whoever serves the bytes: the same check the
+        // real transports make before they connect.
+        if (cancel != nullptr && cancel->load(std::memory_order_relaxed)) {
+            error = "cancelled";
+            return false;
+        }
+        return hook(url, maxBytes, sink, error);
+    }
+    return httpsGetNetwork(url, maxBytes, sink, progress, cancel, error, timeouts);
+}
+
 }  // namespace
+
+void PluginRepo::setTransportForTest(TestTransport transport) {
+    std::lock_guard<std::mutex> lk(testTransportMutex());
+    testTransportSlot() = std::move(transport);
+}
 
 // ---------------------------------------------------------------------------
 // PluginCatalogEntry
@@ -2177,15 +2218,22 @@ bool PluginRepo::fetchText(const std::string& url, std::uint64_t maxBytes, std::
 bool PluginRepo::fetchVerifiedFile(const std::string& url, const std::string& expectedSha256,
                                    const std::string& destPath, std::uint64_t maxBytes,
                                    std::string& error, std::atomic<float>* progress,
-                                   std::atomic<bool>* cancel) {
+                                   std::atomic<bool>* cancel, FetchFailure* failure) {
     error.clear();
+    // WHICH KIND OF FAILURE, for the caller that counts them (see FetchFailure).
+    // Set at every way out, so a caller never reads a stale value.
+    const auto fail = [failure](FetchFailure why) {
+        if (failure != nullptr) { *failure = why; }
+        return false;
+    };
+    if (failure != nullptr) { *failure = FetchFailure::None; }
     if (!isHttpsUrl(url)) {
         error = "refusing a non-https download URL: \"" + url + "\"";
-        return false;
+        return fail(FetchFailure::Refused);
     }
     if (!isWellFormedSha256(expectedSha256)) {
         error = "sha256 must be 64 hexadecimal digits";
-        return false;
+        return fail(FetchFailure::Refused);
     }
 
     // The temp file sits beside the destination so the final move is a
@@ -2202,7 +2250,7 @@ bool PluginRepo::fetchVerifiedFile(const std::string& url, const std::string& ex
         std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
         if (!f) {
             error = "cannot create \"" + tmp.string() + "\"";
-            return false;
+            return fail(FetchFailure::Place);
         }
         std::uint64_t written = 0;
         const auto sink = [&f, &written, maxBytes](const void* p, std::size_t n) {
@@ -2212,9 +2260,13 @@ bool PluginRepo::fetchVerifiedFile(const std::string& url, const std::string& ex
             return static_cast<bool>(f);
         };
         if (!httpsGet(url, maxBytes, sink, progress, cancel, error)) {
+            // A write the disk refused ends the transfer too, from inside the
+            // sink: that is the disk's failure, not the network's.
+            const bool diskFull = !f;
             f.close();
             fs::remove(tmp, ec);
-            return false;
+            if (error == "cancelled") { return fail(FetchFailure::Cancelled); }
+            return fail(diskFull ? FetchFailure::Place : FetchFailure::Transfer);
         }
     }
 
@@ -2223,12 +2275,12 @@ bool PluginRepo::fetchVerifiedFile(const std::string& url, const std::string& ex
     std::string actual;
     if (!sha256File(tmp.string(), actual, error)) {
         fs::remove(tmp, ec);
-        return false;
+        return fail(FetchFailure::Place);
     }
     if (!sha256Matches(expectedSha256, actual)) {
         fs::remove(tmp, ec);
         error = "sha256 mismatch: expected " + toLowerAscii(expectedSha256) + ", got " + actual;
-        return false;
+        return fail(FetchFailure::Verify);
     }
 
     fs::remove(target, ec);
@@ -2236,7 +2288,7 @@ bool PluginRepo::fetchVerifiedFile(const std::string& url, const std::string& ex
     if (ec) {
         fs::remove(tmp, ec);
         error = "cannot move the verified file into place: " + ec.message();
-        return false;
+        return fail(FetchFailure::Place);
     }
     return true;
 }
@@ -2247,10 +2299,18 @@ bool PluginRepo::fetchIndex(const std::string& url, std::string& error) {
     progress_.store(0.0f, std::memory_order_relaxed);
     cancel_.store(false, std::memory_order_relaxed);
 
+    // COUNTED, ANONYMOUSLY (0.99.64, core/health_events.hpp): a catalogue that
+    // could not be had - not reachable, not a catalogue, refused - but not one
+    // the user (or a quit) cancelled. Nothing of the error text is kept.
+    const auto failed = [&error]() {
+        if (error != "cancelled") { health::notePluginCatalogueFailed(); }
+        return false;
+    };
+
     // RULE 1, before any socket exists.
     if (!isHttpsUrl(url)) {
         error = "refusing a non-https catalogue URL: \"" + url + "\"";
-        return false;
+        return failed();
     }
     std::string body;
     body.reserve(64 * 1024);
@@ -2259,11 +2319,12 @@ bool PluginRepo::fetchIndex(const std::string& url, std::string& error) {
         return true;
     };
     if (!httpsGet(url, kMaxIndexBytes, sink, &progress_, &cancel_, error)) {
-        return false;
+        return failed();
     }
     progress_.store(1.0f, std::memory_order_relaxed);
     // A parse failure leaves entries_ empty, which fetchIndex documents.
-    return parseIndex(body, entries_, error);
+    if (!parseIndex(body, entries_, error)) { return failed(); }
+    return true;
 }
 
 bool PluginRepo::fetchRegionalIndex(const std::string& url, std::vector<PluginCatalogEntry>& out,
@@ -2307,6 +2368,19 @@ bool PluginRepo::fetchRegionalIndex(const std::string& url, std::vector<PluginCa
 
 bool PluginRepo::install(const PluginCatalogEntry& e, const std::string& pluginsDir,
                          std::string& installedPath, std::string& error) {
+    // THE ANONYMOUS COUNT OF A FAILED INSTALL (0.99.64, core/health_events.hpp):
+    // one of network, hash, write, other - never the entry, the file or the
+    // message. Every way in (the store's install, an update) comes through here.
+    // A cancelled transfer is not a failed install.
+    health::InstallClass failClass = health::InstallClass::Other;
+    const bool ok = installImpl(e, pluginsDir, installedPath, error, failClass);
+    if (!ok && error != "cancelled") { health::notePluginInstallFailed(failClass); }
+    return ok;
+}
+
+bool PluginRepo::installImpl(const PluginCatalogEntry& e, const std::string& pluginsDir,
+                             std::string& installedPath, std::string& error,
+                             health::InstallClass& failClass) {
     installedPath.clear();
     error.clear();
     progress_.store(0.0f, std::memory_order_relaxed);
@@ -2360,6 +2434,7 @@ bool PluginRepo::install(const PluginCatalogEntry& e, const std::string& plugins
     fs::create_directories(fs::path(pluginsDir), ec);
     if (!fs::is_directory(fs::path(pluginsDir), ec)) {
         error = "cannot create the plugins directory \"" + pluginsDir + "\"";
+        failClass = health::InstallClass::Write;
         return false;
     }
 
@@ -2389,6 +2464,7 @@ bool PluginRepo::install(const PluginCatalogEntry& e, const std::string& plugins
         std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
         if (!out) {
             error = "cannot create the temporary file \"" + tmp.string() + "\"";
+            failClass = health::InstallClass::Write;
             return false;
         }
         std::string hashError;
@@ -2402,9 +2478,13 @@ bool PluginRepo::install(const PluginCatalogEntry& e, const std::string& plugins
         // RULE 4: the cap is the module's, never anything sizeBytes claimed.
         ok = httpsGet(p->url, kMaxPluginBytes, sink, &progress_, &cancel_, error);
         out.flush();
+        // A transfer that failed is the network's, unless the disk refused a
+        // write on the way (which also ends the transfer, from inside the sink).
+        if (!ok) { failClass = out ? health::InstallClass::Net : health::InstallClass::Write; }
         if (ok && !out) {
             ok = false;
             error = "writing \"" + tmp.string() + "\" failed";
+            failClass = health::InstallClass::Write;
         }
         out.close();
         if (ok && !hasher.finishHex(actual, error)) {
@@ -2422,6 +2502,7 @@ bool PluginRepo::install(const PluginCatalogEntry& e, const std::string& plugins
         fs::remove(tmp, ignored);
         error = "\"" + e.name + "\" failed its integrity check and was discarded (expected " +
                 expected + ", got " + actual + ")";
+        failClass = health::InstallClass::Hash;
         return false;
     }
 
@@ -2431,6 +2512,7 @@ bool PluginRepo::install(const PluginCatalogEntry& e, const std::string& plugins
         fs::remove(tmp, ignored);
         error = "cannot move the verified plugin into place at \"" + target.string() +
                 "\": " + ec.message();
+        failClass = health::InstallClass::Write;
         return false;
     }
 

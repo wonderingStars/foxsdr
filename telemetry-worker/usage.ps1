@@ -283,4 +283,108 @@ if (-not $reporting) {
         Write-Host ("  Not measured (these builds send no count): {0}" -f ($names -join ", "))
     }
 }
+
+# WHAT FAILS, by version (0.99.64) - the failures that are NOT crashes: a radio that
+# would not open, no sound output, an update or a plugin install that failed. The
+# crash store cannot see these (the application did not crash, it did not work),
+# and a release in which something quietly stops working is exactly what this
+# section exists to show. Five releases once shipped that detected no radio at
+# all; 46 of the 49 people who took one never came back.
+#
+# THE SAME DISCIPLINE AS THE STALLS ABOVE. Every question asks only about rows
+# with blob12 = '1' - the rows whose client SENT the failure counts - so an old
+# build, and every row written before the field existed, is never counted as
+# "nothing failed". Those versions are listed apart as not measured, worked out
+# by subtracting the versions that report from every version seen. Install counts
+# are count(DISTINCT index1), never uniq(). (Without credentials the script never
+# reaches here: the token check at the top stops it before anything is printed.)
+#
+# THE COLUMNS (README.md): blob12 is the marker, blob13 the `token=count` text
+# (vocabulary only - the Worker drops anything else), double6..double9 the sums of
+# radio failures, radio opens, radios whose samples arrived and sessions with
+# sound. The sums come from the validated tokens, never from a number the client
+# sent beside them. One row is one record; a record carries every count the
+# client had not yet had accepted, so a count is "times", a row is "a session
+# (or more, after a failed send)".
+Write-Host ""
+Write-Host "What fails, by version" -ForegroundColor Cyan
+$healthReporting = Invoke-Sql "SELECT blob1 AS version, count(DISTINCT index1) AS installs, count() AS sessions, sum(double6) AS radioFail, sum(double7) AS radioOpen, sum(double8) AS radioData, sum(double9) AS sound FROM foxsdr_usage WHERE $window AND blob12 = '1' GROUP BY blob1 ORDER BY installs DESC"
+if (-not $healthReporting) {
+    Write-Host "  No build in this window reports failure counts yet."
+    Write-Host "  That is not zero failures - it is unmeasured."
+} else {
+    Write-Host "  Per version (only builds that send the counts):"
+    Write-Host ("  {0,-34} {1,8} {2,9} {3,11} {4,11} {5,9} {6,10}" -f "version", "installs", "sessions", "radio fail", "radio open", "samples", "w/ sound")
+    foreach ($r in $healthReporting) {
+        $label = [string]$r.version
+        if (-not $label) { $label = "(not reported)" }
+        Write-Host ("  {0,-34} {1,8} {2,9} {3,11} {4,11} {5,9} {6,10}" -f $label, $r.installs, $r.sessions, $r.radioFail, $r.radioOpen, $r.radioData, $r.sound)
+    }
+    Write-Host "  radio fail = radio opens that failed; radio open = opens that succeeded; samples = opened radios whose samples reached the display;"
+    Write-Host "  w/ sound = sessions in which the speakers played. A reporting version with a zero is a real zero."
+
+    # Every failure token seen, per version. The tokens are read out of the
+    # distinct count strings (one row per distinct string and version), so the
+    # sessions and the total are exact; the installs are asked for per token with
+    # count(DISTINCT index1), which cannot be added up from the strings.
+    $stringRows = Invoke-Sql "SELECT blob1 AS version, blob13 AS health, count() AS sessions FROM foxsdr_usage WHERE $window AND blob12 = '1' AND blob13 != '' GROUP BY blob1, blob13 ORDER BY sessions DESC LIMIT 1000"
+    $stat = @{}
+    $tokens = @{}
+    foreach ($row in @($stringRows)) {
+        $ver = [string]$row.version
+        $n = [int64]$row.sessions
+        foreach ($pair in ([string]$row.health).Split(',')) {
+            $eq = $pair.IndexOf('=')
+            if ($eq -lt 1) { continue }
+            $tok = $pair.Substring(0, $eq)
+            # Pasted into SQL below: only what the vocabulary is made of.
+            if ($tok -notmatch '^[a-z0-9_.]+$') { continue }
+            $cnt = [int64]0
+            if (-not [int64]::TryParse($pair.Substring($eq + 1), [ref]$cnt)) { continue }
+            $key = "$ver|$tok"
+            if (-not $stat.ContainsKey($key)) {
+                $stat[$key] = @{ version = $ver; token = $tok; installs = [int64]0; sessions = [int64]0; total = [int64]0 }
+            }
+            $stat[$key].sessions += $n
+            $stat[$key].total += $cnt * $n
+            $tokens[$tok] = $true
+        }
+    }
+    foreach ($tok in @($tokens.Keys | Sort-Object)) {
+        $per = Invoke-Sql "SELECT blob1 AS version, count(DISTINCT index1) AS installs FROM foxsdr_usage WHERE $window AND blob12 = '1' AND (startsWith(blob13, '$tok=') OR position(blob13, ',$tok=') > 0) GROUP BY blob1"
+        foreach ($p in @($per)) {
+            $k = "$([string]$p.version)|$tok"
+            if ($stat.ContainsKey($k)) { $stat[$k].installs = [int64]$p.installs }
+        }
+    }
+    Write-Host ""
+    if ($stat.Count -eq 0) {
+        Write-Host "  No failure was reported by any build in this window."
+    } else {
+        Write-Host "  Failures by event (events are written driver.reason, api.reason or class - see PRIVACY.md):"
+        Write-Host ("  {0,-34} {1,-32} {2,8} {3,9} {4,7}" -f "version", "event", "installs", "sessions", "count")
+        $ordered = $stat.Values | Sort-Object -Property @{ Expression = { $_.version } }, @{ Expression = { $_.sessions }; Descending = $true }, @{ Expression = { $_.token } }
+        foreach ($s in $ordered) {
+            $label = [string]$s.version
+            if (-not $label) { $label = "(not reported)" }
+            Write-Host ("  {0,-34} {1,-32} {2,8} {3,9} {4,7}" -f $label, $s.token, $s.installs, $s.sessions, $s.total)
+        }
+        Write-Host "  installs = distinct installs with the event; sessions = records carrying it; count = times it happened (sound_ok and scan_none count once a session)."
+        if (@($stringRows).Count -ge 1000) {
+            Write-Host "  (the 1000 most common count strings were read; the rarest are not shown)"
+        }
+    }
+    $seenHealth = Invoke-Sql "SELECT blob1 AS version FROM foxsdr_usage WHERE $window GROUP BY blob1 ORDER BY blob1"
+    $healthReports = @{}
+    foreach ($r in $healthReporting) { $healthReports[[string]$r.version] = $true }
+    $healthNames = @()
+    foreach ($v in @($seenHealth)) {
+        if (-not $healthReports.ContainsKey([string]$v.version)) {
+            if ($v.version) { $healthNames += [string]$v.version } else { $healthNames += "(not reported)" }
+        }
+    }
+    if ($healthNames.Count -gt 0) {
+        Write-Host ("  Not measured (these builds send no failure counts): {0}" -f ($healthNames -join ", "))
+    }
+}
 Write-Host ""

@@ -428,6 +428,13 @@ void AppWindow::patchReconcile() {
         if (!r.src) {
             patchRadioError_[id] = r.error.empty() ? "the device would not open" : r.error;
             patchRadioFailedAs_[id] = as;
+            // THE PATCH PAGE'S RADIO THAT WOULD NOT OPEN is counted as the
+            // receiver's is (0.99.64, core/health_events.hpp): the driver kind
+            // and a reason class, nothing of the message.
+            if (const std::string kind = pc::deviceDriver(n->device);
+                kind != "file" && kind != "siggen") {
+                cascade::core::health::noteRadioFail(kind, patchRadioError_[id]);
+            }
             cascade::core::diagWarnf("patch: radio node %u would not open: %s",
                                      static_cast<unsigned>(id), patchRadioError_[id].c_str());
             continue;
@@ -458,6 +465,10 @@ void AppWindow::patchReconcile() {
         patchRadioOpenedAs_[id] = as;
         patchRadios_[id] = std::move(radio);
         patchRadioSig_.erase(id);
+        if (const std::string kind = pc::deviceDriver(n->device);
+            kind != "file" && kind != "siggen") {
+            cascade::core::health::noteRadioOpen(kind);
+        }
         // TESTER USAGE: the patch opens its own radios independently of the
         // receiver's Source section (finishDeviceOpen), so it needs the same
         // hook here - on the same "actually started", not "was asked for",

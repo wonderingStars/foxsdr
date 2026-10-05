@@ -75,6 +75,7 @@
 #include <thread>
 #include <utility>
 
+#include "core/health_events.hpp"
 #include "core/recorder.hpp"
 
 namespace cascade::gui {
@@ -181,6 +182,13 @@ public:
             out.file = cascade::core::Recorder::OpenedFile{};  // closes it, unused
         }
         cancelled_ = false;
+        // A START THAT FAILED (the file could not be opened) is COUNTED,
+        // ANONYMOUSLY (0.99.64, core/health_events.hpp): one count, nothing of
+        // the reason, the path or the file. A take the user withdrew while it
+        // opened is not a failure and is not counted. Here, where the answer is
+        // collected - once, on the thread that owns the recorder, never in the
+        // worker that was inside the filesystem.
+        if (!out.ok && !out.cancelled) { cascade::core::health::noteRecordFailed(); }
         if (stuckReported_) {
             recoveredAfterS_ = tookS;
             recoveredPending_ = true;

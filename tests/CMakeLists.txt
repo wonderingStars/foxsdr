@@ -32,6 +32,25 @@ foreach(probe a b)
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_rescan_${probe}/$<CONFIG>")
 endforeach()
 
+# A REAL PLUGIN MODULE THAT DECLARES THE WRONG ABI, for test_health_paths: the
+# plugin host loads it as any plugin and refuses it, which is the "abi" word of
+# the anonymous failure count (core/health_events.hpp). Its own directory.
+add_library(abi_mismatch_fixture MODULE "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/abi_mismatch_plugin.cpp")
+target_include_directories(abi_mismatch_fixture PRIVATE "${CMAKE_SOURCE_DIR}/src/core")
+set_target_properties(abi_mismatch_fixture PROPERTIES
+    PREFIX ""
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_abi/$<CONFIG>"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_abi/$<CONFIG>")
+# ...and the same source as the plugin a host that is NOT the one it was built for
+# meets in the field: its query declines (returns null) for an ABI it does not know.
+add_library(abi_decline_fixture MODULE "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/abi_mismatch_plugin.cpp")
+target_include_directories(abi_decline_fixture PRIVATE "${CMAKE_SOURCE_DIR}/src/core")
+target_compile_definitions(abi_decline_fixture PRIVATE ABI_FIXTURE_DECLINES)
+set_target_properties(abi_decline_fixture PROPERTIES
+    PREFIX ""
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_abi_decline/$<CONFIG>"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_abi_decline/$<CONFIG>")
+
 # A REAL SoapySDR vendor module for test_soapy_enum_proc: put on
 # SOAPY_SDR_PLUGIN_PATH and loaded by the real cascade.exe enumeration child,
 # where it faults as it is detached at exit (the 2026-10-01 field fault) or in
@@ -155,6 +174,11 @@ foreach(src ${CASCADE_TESTS})
         # the module's directory; built first.
         add_dependencies(${name} settings_ui_fixture)
         add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE_DIR:settings_ui_fixture>")
+    elseif(name STREQUAL "test_health_paths")
+        # Loads the wrong-ABI fixture module through the real plugin host; built first.
+        add_dependencies(${name} abi_mismatch_fixture abi_decline_fixture)
+        add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:abi_mismatch_fixture>"
+                 "$<TARGET_FILE:abi_decline_fixture>")
     elseif(name STREQUAL "test_plugin_rescan_skip")
         # Copies the two probe modules into a plugins folder of its own and
         # drives the real AppWindow's rescan against it; built first.

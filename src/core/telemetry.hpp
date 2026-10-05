@@ -56,6 +56,8 @@
 #include <thread>
 #include <vector>
 
+#include "core/health_events.hpp"
+
 namespace cascade::core {
 
 // One session's worth of counters, accumulated in memory and journalled to
@@ -86,6 +88,17 @@ struct TelemetryReport {
     // few minutes from one whose never has. See StallLedger below for where
     // the running count lives and why it survives a session killed mid-freeze.
     std::uint64_t stalls = 0;
+    // FAILURES THAT ARE NOT CRASHES (0.99.64): a radio that would not open, no
+    // sound output, an update or a plugin install that failed - counted, never
+    // described. One string of `token=count` pairs from a fixed vocabulary
+    // (core/health_events.hpp), e.g. "radio_fail.rtlsdr.busy=2,sound_ok.wasapi=1";
+    // empty when there was nothing to report. toJson() passes it through
+    // health::sanitise(), so nothing outside the vocabulary can be sent whatever
+    // this member holds. Where the running counts live, and how they survive a
+    // crash and are taken off only when a record carrying them was accepted:
+    // health::HealthLedger, which does for these what StallLedger does for
+    // `stalls`.
+    std::string health;
     // WHERE THIS COPY CAME FROM and WHEN it first reported (0.99.47). The
     // channel is read from the running copy (installChannel()); the first-run
     // date and version are written once, when the install id is created, and
@@ -331,6 +344,13 @@ private:
 TelemetryReporter::SendDone settleOnAccept(std::shared_ptr<StallLedger> ledger,
                                            std::uint64_t carried);
 
+// The same for both ledgers: each is reduced by what the record carried, and
+// only if the server accepted it.
+TelemetryReporter::SendDone settleOnAccept(std::shared_ptr<StallLedger> stalls,
+                                           std::uint64_t carriedStalls,
+                                           std::shared_ptr<health::HealthLedger> healthLedger,
+                                           health::Counts carriedHealth);
+
 // `recordJson` with its `stalls` member set to `stalls`. The stored session
 // record is journalled while the session runs, so its own number is only as
 // fresh as the last save; the number actually sent is the ledger's at the
@@ -349,6 +369,17 @@ std::string withStalls(const std::string& recordJson, std::uint64_t stalls);
 bool prepareStartupRecord(const std::string& configDir, const std::string& pendingJson,
                           const StallLedger& ledger, std::string& outJson,
                           std::uint64_t& outCarried);
+
+// THE SAME DECISION WITH THE HEALTH COUNTS ALONGSIDE THE STALLS (0.99.64). The
+// record sent also has its `health` member set to what the health ledger held for
+// EARLIER sessions when this run started (HealthLedger::priorCounts) - never what
+// this run has counted since, which describes a different session and goes with
+// the next record. `outCarriedHealth` is what to take off if the server accepts
+// it (pass both carried values to the four-argument settleOnAccept below).
+bool prepareStartupRecord(const std::string& configDir, const std::string& pendingJson,
+                          const StallLedger& stalls, const health::HealthLedger& healthLedger,
+                          std::string& outJson, std::uint64_t& outCarriedStalls,
+                          health::Counts& outCarriedHealth);
 
 // How this copy was installed, read from the running program - nothing is
 // written at install time. Windows: "store" when running as a Microsoft Store

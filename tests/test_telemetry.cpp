@@ -137,7 +137,7 @@ void testPayloadContainsOnlyTheAgreedFields() {
     // and they have to come and change the privacy notice too - which is
     // exactly the conversation that should happen.
     const std::set<std::string> allowed = {
-        "id", "v", "os", "arch", "launches", "crashes", "stalls", "ch", "first", "fv",
+        "id", "v", "os", "arch", "launches", "crashes", "stalls", "health", "ch", "first", "fv",
         "sessionSec", "sdr", "modes", "panels", "plugins"};
     std::set<std::string> actual;
     for (auto it = j.begin(); it != j.end(); ++it) { actual.insert(it.key()); }
@@ -185,6 +185,7 @@ const std::map<std::string, std::string>& usageFieldLabels() {
         {"launches", "Launch count"},
         {"crashes", "Crash count"},
         {"stalls", "Display stalls"},
+        {"health", "Failure counts"},
         {"sessionSec", "Session length"},
         {"sdr", "SDR model"},
         {"modes", "Demodulators used"},

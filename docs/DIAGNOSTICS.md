@@ -563,6 +563,36 @@ attributed to a new one. `tests/test_stall_count.cpp` holds all of this, includi
 the real capture on the real watchdog thread; the Worker side is held by
 `telemetry-worker/worker.test.mjs`.
 
+**Failures that are not crashes are counted the same way (since 0.99.64).** A radio that
+would not open, no sound output, an update or a plugin install that failed:
+the application does not crash, so no report exists, and a release in which
+something quietly stops working was invisible (five once shipped that detected
+no radio at all). The usage record's `health` field carries counts of a fixed
+vocabulary (`core/health_events.hpp`; PRIVACY.md, *Failures that are not crashes,
+in full*) - never a message, a device name, a serial, a path or a frequency: the
+driver's own sentence is classified into one of eight words and dropped
+(`classifyRadioOpen`), the sound output's reason is read off PortAudio's error
+code, and a word that is not in the tables cannot be made into a token, read
+back from the file or kept by the Worker. `core::HealthLedger` is
+`StallLedger`'s arrangement for a set of counts: a file beside `config.json`
+(`telemetry-health`: the install id, then `token=count` lines), written by a
+short-lived thread of its own so no caller waits on a disk, subtracted only when
+the server answered 2xx, removed when reporting goes off. Where it differs, and
+why: (1) it has to keep the PREVIOUS session's counts apart from this run's - the
+record sent at start-up describes the previous session, and a failure of this
+build filed under the last build's version is the one mistake the feature must not
+make - so `priorCounts()` (what the file held at arm time) is what the start-up
+record carries; (2) the saved radio is opened before the application has read
+whether reporting is on, so counts made before the decision are held in memory
+(and dropped if it is off); (3) like the stalls it needs Diagnostics on as well as
+usage reporting (`setAllowed`); (4) events that repeat by themselves (the audio
+watchdog's retry, a rescan meeting the same refused plugin) count once a session.
+Nothing counts on the DSP or audio threads - `test_health_paths` scans for it.
+`tests/test_health_events.cpp` (vocabulary, ledger, documents),
+`test_health_paths.cpp` (each event through its real failure) and
+`test_health_app.cpp` (the window's wiring and the real binary, including a
+process ended after a failure) hold it.
+
 Before any of that, two things stop such a report being written at all
 (`gui/present_grace.hpp`): the watchdog is paused for a bounded 10 s grace when
 a display change is seen — `WM_DISPLAYCHANGE`, counted in the window procedure,

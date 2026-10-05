@@ -208,9 +208,15 @@ LoadedPlugin loadOne(const fs::path& p) {
     LoadedPlugin rec;
     rec.path = p.string();
 
+    // A PLUGIN REFUSED AT LOAD IS COUNTED, ANONYMOUSLY (0.99.64,
+    // core/health_events.hpp): one of "built for another ABI" and "could not be
+    // loaded", never which plugin or what the loader said. A file in the plugins
+    // folder that exports no plugin entry point is not counted at all - it is a
+    // stray library, not a plugin that failed.
     NativeModule mod = openModule(p);
     if (mod == kNoModule) {
         rec.error = "cannot be loaded as a module: " + lastOsError();
+        health::notePluginLoadRefused(health::LoadClass::Load);
         return rec;
     }
 
@@ -229,6 +235,7 @@ LoadedPlugin loadOne(const fs::path& p) {
     std::string queryError;
     if (!safeQuery(query, &desc, queryError)) {
         rec.error = queryError;
+        health::notePluginLoadRefused(health::LoadClass::Load);
         closeModule(mod);
         return rec;
     }
@@ -236,6 +243,15 @@ LoadedPlugin loadOne(const fs::path& p) {
     const PluginRejection why = validatePluginDesc(desc);
     if (why != PluginRejection::None) {
         rec.error = describePluginRejection(why, desc);
+        // "Built for another ABI" is three ways of saying the same thing from here: a
+        // descriptor that says so, a descriptor of another size, and - the common
+        // one, what every plugin built for an OLDER host answers - a query that
+        // returns null for a host version it does not know.
+        health::notePluginLoadRefused((why == PluginRejection::AbiVersionMismatch ||
+                                       why == PluginRejection::NullDescriptor ||
+                                       why == PluginRejection::DescStructSizeMismatch)
+                                          ? health::LoadClass::Abi
+                                          : health::LoadClass::Load);
         // A refused plugin does not get to stay in the address space: its
         // DllMain already ran, but leaving it mapped would also leave its
         // static initialisers, threads and hooks alive for no benefit.

@@ -6,6 +6,7 @@
 #include <portaudio.h>
 
 #include "core/diag_log.hpp"
+#include "core/health_events.hpp"
 #include "sink/pa_init.hpp"
 
 #include <chrono>
@@ -36,6 +37,25 @@ int paOutCallback(const void* /*input*/, void* output, unsigned long frameCount,
     AudioOut::pullBlock(userData, static_cast<float*>(output),
                         static_cast<std::size_t>(frameCount));
     return paContinue;  // stream runs until close(); starvation plays silence
+}
+
+// WHAT A PORTAUDIO REFUSAL MEANS, as one of the five classes the health count
+// has (core/health_events.hpp, 0.99.64). By the error CODE, never its text: the
+// code is the same on every host API and in every language.
+cascade::core::health::SoundReason soundReasonFor(PaError err) {
+    using cascade::core::health::SoundReason;
+    switch (err) {
+        case paDeviceUnavailable: return SoundReason::Busy;
+        case paInvalidDevice: return SoundReason::NoDevice;
+        case paInvalidSampleRate:
+        case paInvalidChannelCount:
+        case paSampleFormatNotSupported:
+        case paBadIODeviceCombination:
+        case paIncompatibleHostApiSpecificStreamInfo: return SoundReason::Format;
+        case paUnanticipatedHostError: return SoundReason::Host;
+        default: break;
+    }
+    return SoundReason::Other;
 }
 
 }  // namespace
@@ -104,6 +124,14 @@ bool AudioOut::open(int deviceIndex, double sampleRateHz, int channels) {
             cascade::core::diagLogf("%s", note.line.c_str());
         }
     }
+    // THE ANONYMOUS COUNT OF A REFUSED OUTPUT (0.99.64): the host API and one of
+    // five reasons, nothing the OS said. Here, after the lock is released and
+    // off the realtime path: every refusal counts, because the health ledger
+    // itself keeps a repeated one (the watchdog's once-a-second retry) to one a
+    // session.
+    if (note.failed) {
+        cascade::core::health::noteSoundFail(note.api, note.reason);
+    }
     return ok;
 }
 
@@ -113,7 +141,11 @@ bool AudioOut::openLocked(int deviceIndex, double sampleRateHz, int channels, Op
     // The wording avoids "range", "offset" and the like on purpose: a line that
     // sounds like it is about tuning has its numbers masked by the log scrub
     // (core::scrubUploadLine), which would blank the very counts a reader needs.
-    auto refuse = [&](const std::string& why) {
+    auto refuse = [&](const std::string& why, cascade::core::health::SoundReason reason,
+                      cascade::core::health::AudioApi api = cascade::core::health::AudioApi::None) {
+        note.failed = true;
+        note.reason = reason;
+        note.api = api;
         const auto now = std::chrono::steady_clock::now();
         if (why != lastRefusal_ || now - lastRefusalSaid_ >= std::chrono::seconds(60)) {
             lastRefusal_ = why;
@@ -124,9 +156,11 @@ bool AudioOut::openLocked(int deviceIndex, double sampleRateHz, int channels, Op
         return false;
     };
 
-    if (!paOk_) { return refuse("PortAudio did not start"); }
+    using cascade::core::health::SoundReason;
+    if (!paOk_) { return refuse("PortAudio did not start", SoundReason::NoDevice); }
     if (!(sampleRateHz > 0.0) || (channels != 1 && channels != 2)) {
-        return refuse("the request itself was unusable (a rate or a channel count)");
+        return refuse("the request itself was unusable (a rate or a channel count)",
+                      SoundReason::Format);
     }
     // Re-open semantics: switching device or rate through open() closes the
     // old stream first. closeLocked() is idempotent, so this is safe when
@@ -136,12 +170,14 @@ bool AudioOut::openLocked(int deviceIndex, double sampleRateHz, int channels, Op
     const PaDeviceIndex dev = (deviceIndex < 0)
                                   ? Pa_GetDefaultOutputDevice()
                                   : static_cast<PaDeviceIndex>(deviceIndex);
-    if (deviceIndex < 0 && dev == paNoDevice) { return refuse("no default output device"); }
+    if (deviceIndex < 0 && dev == paNoDevice) {
+        return refuse("no default output device", SoundReason::NoDevice);
+    }
     if (dev == paNoDevice || dev < 0 || dev >= Pa_GetDeviceCount()) {
-        return refuse("no such output device");
+        return refuse("no such output device", SoundReason::NoDevice);
     }
     const PaDeviceInfo* info = Pa_GetDeviceInfo(dev);
-    if (info == nullptr) { return refuse("no such output device"); }
+    if (info == nullptr) { return refuse("no such output device", SoundReason::NoDevice); }
     // The HOST API names a driver model ("MME", "Windows WASAPI"), never a
     // person's device, so it is the one identity this log may carry. The
     // device's own NAME is deliberately never written: the operating system
@@ -151,9 +187,12 @@ bool AudioOut::openLocked(int deviceIndex, double sampleRateHz, int channels, Op
     const PaHostApiInfo* api = Pa_GetHostApiInfo(info->hostApi);
     const std::string apiName =
         (api != nullptr && api->name != nullptr) ? std::string(api->name) : std::string("unknown host API");
+    const cascade::core::health::AudioApi healthApi =
+        cascade::core::health::audioApiFromName(apiName);
     if (info->maxOutputChannels < channels) {
         return refuse(apiName + " device has " + std::to_string(info->maxOutputChannels) +
-                      " output channel(s) and " + std::to_string(channels) + " are needed");
+                          " output channel(s) and " + std::to_string(channels) + " are needed",
+                      SoundReason::Format, healthApi);
     }
 
     // Drain anything left from a previous session so a reopen starts silent
@@ -203,11 +242,13 @@ bool AudioOut::openLocked(int deviceIndex, double sampleRateHz, int channels, Op
         const PaError openErr =
             Pa_OpenStream(&stream, nullptr, &out, sampleRateHz, paFramesPerBufferUnspecified,
                           paNoFlag, &paOutCallback, this);
-        if (openErr != paNoError) { return refuse(portAudioWhy(openErr)); }
+        if (openErr != paNoError) {
+            return refuse(portAudioWhy(openErr), soundReasonFor(openErr), healthApi);
+        }
         const PaError startErr = Pa_StartStream(stream);
         if (startErr != paNoError) {
             Pa_CloseStream(stream);
-            return refuse(portAudioWhy(startErr));
+            return refuse(portAudioWhy(startErr), soundReasonFor(startErr), healthApi);
         }
     }
     stream_ = stream;

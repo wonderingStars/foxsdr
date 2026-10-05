@@ -40,6 +40,7 @@
 #include <string>
 #include <vector>
 
+#include "core/health_events.hpp"
 #include "dsp/spsc_ring.hpp"
 
 namespace cascade::sink {
@@ -240,6 +241,13 @@ private:
     struct OpenNote {
         std::string line;  // empty: nothing new to say (a repeated refusal)
         bool warn = false;
+        // THE ANONYMOUS COUNT OF A REFUSAL (0.99.64, core/health_events.hpp):
+        // set on EVERY refusal, including a repeated one whose log line is
+        // suppressed - the ledger keeps one per session, the log keeps one a
+        // minute. The class is read off PortAudio's error CODE, never its text.
+        bool failed = false;
+        cascade::core::health::SoundReason reason = cascade::core::health::SoundReason::Other;
+        cascade::core::health::AudioApi api = cascade::core::health::AudioApi::None;
     };
     // The body of open() once apiMutex_ is held. Fills `note`.
     bool openLocked(int deviceIndex, double sampleRateHz, int channels, OpenNote& note);

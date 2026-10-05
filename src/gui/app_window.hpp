@@ -800,6 +800,16 @@ private:
     // version is that a dead sink is invisible from inside the app, so the
     // only fix is to keep asking.
     void pollAudioHealth();
+    // THE TWO SUCCESSES THE ANONYMOUS FAILURE COUNTS NEED AS A DENOMINATOR
+    // (0.99.64, core/health_events.hpp), both read off state that already
+    // exists, once per frame, on this thread - nothing on the DSP or audio
+    // threads: the output has played (the sink's own "primed" latch, once per
+    // session) and an opened radio's samples have reached the display (a
+    // spectrum frame newer than the one the pipeline held when the radio was
+    // installed, once per open).
+    void healthPoll();
+    // A radio of `kind` has just been installed: start watching for its samples.
+    void healthWatchSamples(const std::string& kind);
     // Collects a finished asynchronous audio-device open. Called once per
     // frame, BEFORE pollAudioHealth: the watchdog must not judge a sink that
     // an open has just handed back.
@@ -3245,6 +3255,23 @@ private:
     std::shared_ptr<cascade::core::StallLedger> stallLedger_ =
         std::make_shared<cascade::core::StallLedger>();
     std::string telemetryLedgerPath_;   // beside config.json; empty = memory only
+    // THE FAILURES THAT ARE NOT CRASHES (0.99.64): the process's one health
+    // ledger, the same object every call site counts into (core/health_events.hpp
+    // - an audio sink, a driver, the updater and the plugin host do not know about
+    // this window). Armed and disarmed here, by the same switch as the stalls.
+    // Its file is `telemetry-health`, beside config.json (healthLedgerPath_).
+    std::shared_ptr<cascade::core::health::HealthLedger> healthLedger_ =
+        cascade::core::health::globalLedger();
+    std::string healthLedgerPath_;
+    // The samples watch healthPoll() keeps for the radio just installed: its
+    // driver kind, the newest spectrum frame the pipeline held when it was
+    // installed (anything newer came from this radio), and the cursor the poll
+    // reads frames with. Off once the radio has been seen to deliver.
+    bool healthWatching_ = false;
+    std::string healthWatchKind_;
+    std::uint64_t healthWatchSeq_ = 0;
+    cascade::core::SpectrumFrame healthProbe_;
+    bool healthSoundNoted_ = false;     // the output has played this session
     // "Running now" beats: a minimal ping every five minutes while the app is
     // open, only while reporting is on. See HeartbeatSender in telemetry.hpp.
     cascade::core::HeartbeatSender telemetryHeartbeat_;

@@ -8,15 +8,22 @@ that just ended.
 
     npx wrangler deploy
 
-**Deploy the Worker before shipping an application that sends `stalls`** (see
-*Display stalls* below). The change is additive - one blob and one double are
-appended after the existing columns, and a record without the field is still
-accepted exactly as before - so the order is not a matter of breaking anything.
-It decides what is *lost*: an application that reports a count to the old Worker
-gets a 204 and the old Worker discards the field, and the application, having
-been told its record was accepted, forgets the count. Worker first loses
-nothing; application first loses the counts of every session until the Worker is
-deployed.
+**Deploy the Worker before shipping an application that sends `stalls` or
+`health`** (see *Display stalls* and *Failures that are not crashes* below). The
+change is additive - blobs and doubles are appended after the existing columns,
+and a record without the field is still accepted exactly as before - so the order
+is not a matter of breaking anything. It decides what is *lost*: an application
+that reports a count to the old Worker gets a 204 and the old Worker discards the
+field, and the application, having been told its record was accepted, forgets the
+count. Worker first loses nothing; application first loses the counts of every
+session until the Worker is deployed. (`worker.test.mjs` runs this against the
+0.99.63 Worker kept byte for byte in `test-fixtures/`: a 204, the field gone, the
+row exactly what a record without it writes.)
+
+**A word added to the failure vocabulary is the same case, and is added to
+`worker.js` first**: the Worker drops a word it does not know, so a client that
+sends one before the Worker has it loses that count (and nothing else - the rest
+of the record, and the other counts in the string, are stored).
 
 ## The columns of `foxsdr_usage`
 
@@ -32,11 +39,21 @@ corrupts every row written before.
 | `blob5`, `blob6`, `blob7` | most-used demodulator, installed plugins, panels opened |
 | `blob8`, `blob9`, `blob10` | install channel, first-run day (UTC), version that created the id |
 | `blob11` | `'1'` when this client sent a display-stall count, else `''` |
+| `blob12` | `'1'` when this client sent failure counts (`health`), else `''` |
+| `blob13` | the failure counts, `token=count,token=count` from the fixed vocabulary, canonical order; `''` when nothing failed - meaningful only where `blob12 = '1'` |
 | `double1` | launches since install (lifetime) |
 | `double2` | unclean exits since install (lifetime) |
 | `double3` | length of the session the record describes, seconds |
 | `double4` | seconds in the most-used demodulator |
 | `double5` | display stalls this record carries (per row, not a lifetime figure) - meaningful only where `blob11 = '1'` |
+| `double6` | radio opens that failed: the sum of every `radio_fail.*` count in `blob13` (per row) - only where `blob12 = '1'` |
+| `double7` | radio opens that succeeded: the sum of `radio_open.*` (per row) - only where `blob12 = '1'` |
+| `double8` | opened radios whose samples reached the display: the sum of `radio_data.*` (per row) - only where `blob12 = '1'` |
+| `double9` | sessions in which the speakers played: the sum of `sound_ok.*` (per row) - only where `blob12 = '1'` |
+
+Column budget: Analytics Engine allows 20 blobs and 20 doubles a row. `blob1`..`blob13`
+and `double1`..`double9` are used: 7 blobs and 11 doubles are free. (The 16 KB
+limit on a row's blobs is nowhere near: the widest `blob13` is 832 characters.)
 
 ### Display stalls
 
@@ -64,6 +81,73 @@ carrying a `stalls` field is still just a heartbeat.
 Because the application carries a count until a record carrying it is accepted
 (HTTP 2xx), `double5` is a per-row *delta*: a window's total is `sum(double5)`,
 not a maximum.
+
+### Failures that are not crashes
+
+A radio that would not open, no sound output, an update or a plugin install that
+failed: failures where the application did not crash and so nothing reported
+them. The record carries one string, `health`, of `token=count` pairs
+(`radio_open.rtlsdr=1,radio_fail.rtlsdr.busy=2,sound_ok.wasapi=1`); PRIVACY.md
+(*Failures that are not crashes, in full*) lists every word and what it means.
+
+**Encoding, and why one string.** One blob (`blob13`) for all the tokens plus one
+marker blob and four doubles, instead of a column per event: the vocabulary is
+200 tokens wide (12 drivers x 8 reasons alone is 96) and a column per token would
+not fit in 20, and every new event would be a schema change. As one string it is
+still queryable - `startsWith(blob13, 'radio_fail.rtlsdr.busy=') OR
+position(blob13, ',radio_fail.rtlsdr.busy=') > 0` is "sessions with that failure",
+and `usage.ps1` reads the counts out of the distinct strings. The four doubles are
+the sums that SQL cannot take out of a string (all radio failures, all radio
+opens, all radios that delivered samples, all sessions with sound).
+
+**Strict.** The Worker keeps a token only if it is exactly an event of its
+vocabulary (`HEALTH_EVENTS` in `worker.js`, between two markers) followed by one
+word from each of that event's lists; anything else in the string is dropped and
+what is stored is the canonical re-encoding (vocabulary order, repeats merged,
+counts 1..999, at most 24 distinct tokens of which at most 8 are radio failures).
+The doubles are computed from those validated tokens, never from a number the
+client sends beside them. `tests/test_health_events.cpp` holds `HEALTH_EVENTS`
+to the application's own table and to PRIVACY.md, and `worker.test.mjs` throws
+hostile text at it (a device name, a serial, a path, an injection, a number in
+another script).
+
+**Not reported is not zero.** `blob12 = '1'` is written only when the client
+sent a usable string - a JSON string; the empty string is a real "nothing
+failed". A number, `null`, an array, an object, a string with no legal pair in it,
+or one longer than the application ever writes is *not reported*: the record is
+still stored (a bad optional field must not cost a session's length), `blob12 = ''`,
+`blob13 = ''` and the doubles are 0. Always ask about failures with
+`blob12 = '1'`; builds that do not send them are *unmeasured*, not clean.
+
+**A row is a record, not necessarily one session.** Counts ride until a record
+carrying them is accepted, so after a failed send a record can carry more than
+one session's counts, and every count is per row (like `double5`). Some events are
+counted once per session by the application (`scan_none`, `sound_ok.*`,
+`sound_fail.*`, `plug_load.*`), so for those a count of 1 means "this session had
+it".
+
+**The column map for readers of the dataset** (the website reads it too):
+
+| To get | Ask for |
+|---|---|
+| sessions that reported failure counts | `blob12 = '1'` |
+| sessions with one failure | `blob12 = '1' AND (startsWith(blob13, 'TOKEN=') OR position(blob13, ',TOKEN=') > 0)` |
+| installs with one failure | the same, with `count(DISTINCT index1)` |
+| radio open failure rate by version | `sum(double6) / (sum(double6) + sum(double7))` where `blob12 = '1'`, grouped by `blob1` |
+| opened radios that never delivered | `sum(double7) - sum(double8)` where `blob12 = '1'` |
+| sessions that had sound | `sum(double9)` where `blob12 = '1'` (a session count: `sound_ok` is once a session) |
+| builds that do not measure it | every `blob1` seen, minus those with `blob12 = '1'` |
+
+Compatibility, as `worker.test.mjs` measures it:
+
+| Client | Worker | Status | What is stored |
+|---|---|---|---|
+| 0.99.61 (no `stalls`, no `health`) | new | 204 | the eleven old blobs and five doubles as before; `blob12`, `blob13` empty, `double6..9` = 0 - not reported |
+| 0.99.62 (`stalls`) | new | 204 | as above, with the stall count |
+| 0.99.64 (`health`) | new | 204 | everything, validated |
+| 0.99.64, malformed `health` | new | 204 | everything except `health`: not reported |
+| 0.99.64 | **old** (0.99.63) | 204 | the old columns only; `health` is discarded, and the client, told 2xx, forgets it |
+| a bad id, GET, bad JSON, over 4096 bytes | new | 400, 405, 400, 413 | nothing (unchanged) |
 
 ## Reading the numbers
 
@@ -96,6 +180,13 @@ zeroes for data it could not read.
 reports a count, how many installs reported one, how many of those reported at
 least one stall, and the total number of stalls. Builds that send no count are
 listed apart as *not measured* - they are not zero.
+
+After it, **What fails, by version** (0.99.64): for each version that sends the
+failure counts, its installs and records and the four headline sums (radio opens
+that failed and that succeeded, radios whose samples arrived, sessions with
+sound), then every failure event seen - installs (`count(DISTINCT index1)`),
+records carrying it and the total count - and, apart, the builds that send no
+failure counts, which are *not measured*.
 
 The Worker and the reader are held by `worker.test.mjs` (`node --test`, needs
 Node 22.7 or later; registered with ctest as `telemetry_worker`). It imports the

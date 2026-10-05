@@ -199,6 +199,15 @@ void AppWindow::pollSoundCard() {
         soundCardListed_ = true;
     }
     const std::string label = r.wanted.device + " (" + r.wanted.hostApi + ")";
+    // A SOUND CARD INPUT THAT WOULD NOT OPEN is counted like a radio that would
+    // not (0.99.64, core/health_events.hpp): the driver kind "soundcard" and a
+    // reason class - never the card's name, which is often a person's.
+    if (!r.src) {
+        const cascade::source::SoundCardMatch where = cascade::source::matchSoundCard(
+            r.devices, r.wanted.device, r.wanted.hostApi, r.wanted.pickedFromList);
+        const bool gone = !r.wanted.device.empty() && where.at < 0 && where.candidates.empty();
+        cascade::core::health::noteRadioFail("soundcard", gone ? "the card is not connected" : r.error);
+    }
     if (!r.src && r.released) {
         // NEITHER THE NEW SETTINGS NOR THE OLD ONES OPENED. The card was
         // released for this open, so the generator is what is running; the
@@ -281,6 +290,8 @@ void AppWindow::pollSoundCard() {
     soundCardLive_ = soundCard_;
     installSource(std::move(r.src));
     sourceKind_ = "soundcard";
+    cascade::core::health::noteRadioOpen("soundcard");
+    healthWatchSamples("soundcard");
     // THIS CARD'S converter, after the install put the pipeline back to Off
     // and before anything reads the air centre below (see
     // soundCardConverter for what a card can have in front of it).

@@ -4023,6 +4023,7 @@ void AppWindow::drawUi() {
     // not judge a stream an open is still installing.
     pollAudioOpen();
     pollAudioHealth();
+    healthPoll();
     pollMicOpen();
     // "Still running" beat, five-minute cadence. A no-op when reporting is
     // off, and never blocks - see HeartbeatSender::poll.
@@ -4043,6 +4044,39 @@ void AppWindow::drawUi() {
     // After every widget, so a Stop pressed this frame has already withdrawn
     // the take it would otherwise arm. See gui/record_start.hpp.
     pollRecordStarts(ImGui::GetTime());
+}
+
+void AppWindow::healthPoll() {
+    // THE OUTPUT HAS PLAYED, once a session: the sink's own latch, set by the
+    // audio callback when the ring held its lead and the first real block went
+    // out (AudioOut::primed). One relaxed atomic read a frame until it is seen.
+    // The host API is asked for with it, and a frame on which the sink is busy
+    // being (re)opened answers empty - the next frame asks again.
+    if (!healthSoundNoted_ && pipeline_.audio().primed()) {
+        const std::string api = pipeline_.audio().openedHostApi();
+        if (!api.empty()) {
+            healthSoundNoted_ = true;
+            cascade::core::health::noteSoundOk(api);
+        }
+    }
+    // AN OPENED RADIO'S SAMPLES HAVE ARRIVED: a spectrum frame newer than the
+    // newest one the pipeline held when the radio was installed can only have
+    // been made from this radio's samples (installing a source quiesces and
+    // joins the old one's threads first). Read with the watch's own cursor, so
+    // the display's is untouched, and only until the radio has been seen.
+    if (healthWatching_ && pipeline_.getLatestFrame(healthProbe_) &&
+        healthProbe_.seq > healthWatchSeq_) {
+        healthWatching_ = false;
+        cascade::core::health::noteRadioData(healthWatchKind_);
+    }
+}
+
+void AppWindow::healthWatchSamples(const std::string& kind) {
+    healthWatchKind_ = kind;
+    healthProbe_ = cascade::core::SpectrumFrame{};
+    // The newest frame the pipeline holds right now, if any, is the baseline.
+    healthWatchSeq_ = pipeline_.getLatestFrame(healthProbe_) ? healthProbe_.seq : 0;
+    healthWatching_ = true;
 }
 
 void AppWindow::pollAudioHealth() {
@@ -8148,7 +8182,7 @@ bool AppWindow::launchInstaller(const std::string& path) {
     // machine 28 s after launch. core/hang_watchdog.hpp's rule 2b names this
     // exact case ("a native modal dialog ... MUST take one too"); see
     // gui/shell_open.hpp for why a pause and not a helper thread.
-    return cascade::gui::runShellOpen(watchdogShellHooks(), [&path]() -> bool {
+    const bool started = cascade::gui::runShellOpen(watchdogShellHooks(), [&path]() -> bool {
         // ShellExecute rather than CreateProcess: the installer asks for
         // elevation through its manifest, and only the shell will show that
         // prompt. The return is the documented "> 32 means it started"
@@ -8159,6 +8193,10 @@ bool AppWindow::launchInstaller(const std::string& path) {
                                              SW_SHOWNORMAL);
         return reinterpret_cast<std::intptr_t>(rc) > 32;
     });
+    // An installer that could not be started is COUNTED, anonymously (0.99.64,
+    // core/health_events.hpp) - the user pressed the button and nothing ran.
+    if (!started) { cascade::core::health::noteUpdateRunFailed(); }
+    return started;
 #else
     // The installer is a Windows setup program; there is nothing to launch
     // elsewhere, and saying so is better than appearing to succeed.
@@ -9460,6 +9498,14 @@ void AppWindow::pollSourceAsync() {
         soapyAbsentDrivers_ =
             soapyScanAbsent_ ? *soapyScanAbsent_ : std::vector<std::string>();
         soapyScanAbsent_.reset();
+        // A SCAN THAT FOUND NO RADIO AT ALL, counted anonymously (0.99.64,
+        // core/health_events.hpp): the whole-bus scan, not one that left some
+        // drivers out beside an open radio, and with the native list empty too.
+        // The ledger keeps one a session, so a Refresh that finds nothing again
+        // is not a second.
+        if (!soapyScanPartial_ && soapyDevices_.empty() && nativeDevices_.empty()) {
+            cascade::core::health::noteScanNone();
+        }
         if (sourceSel_ >= kNativeRowBase || sourceSel_ < 0) {
             // Re-find the open device by its args (labels can repeat); if it
             // vanished from the scan the device stays open and selected, and
@@ -9618,6 +9664,11 @@ void AppWindow::finishDeviceOpen(DeviceOpenResult r) {
     if (!r.dev) {
         const std::string why = r.error.empty() ? "device open failed" : r.error;
         sourceError_ = why;
+        // A RADIO THAT WOULD NOT OPEN, COUNTED ANONYMOUSLY (0.99.64,
+        // core/health_events.hpp): the driver kind and one of eight reason
+        // classes read off what the driver said - and nothing of what it said.
+        // Not for a result the user had already moved on from (returned above).
+        cascade::core::health::noteRadioFail(r.kind, why);
         if (r.recovery) {
             // THE ONE AUTOMATIC REOPEN DID NOT TAKE. The dead radio was
             // closed before the attempt, the generator is what is installed,
@@ -9732,6 +9783,12 @@ void AppWindow::finishDeviceOpen(DeviceOpenResult r) {
     ++sourceGen_;  // this install is itself a source change
     installSource(std::move(r.dev));
     sourceKind_ = r.kind;
+    // A RADIO OPENED - the denominator of the failures above - and the watch for
+    // its samples to arrive (0.99.64, core/health_events.hpp).
+    if (r.kind != "siggen" && r.kind != "file") {
+        cascade::core::health::noteRadioOpen(r.kind);
+        healthWatchSamples(r.kind);
+    }
     // TESTER USAGE: which radio kind, and whether it went through this
     // product's OWN native drivers - the one place every successful device
     // open funnels through, radio or otherwise, which is what makes it the
@@ -11911,6 +11968,16 @@ void AppWindow::rescanPlugins() {
     }
     pluginBlocked_ = cascade::core::PluginRepo::blockedPlugins(pluginInventory_.plugins,
                                                                pluginInventory_.policies);
+    // PLUGINS REFUSED BEFORE THEY ARE LOADED are counted like those refused at
+    // load (0.99.64, core/health_events.hpp): retired by the catalogue's floor,
+    // or built for another ABI - the reason class only, never which plugin. The
+    // ledger keeps one of each per session, so every rescan may say it again.
+    for (const cascade::core::BlockedPlugin& b : pluginBlocked_) {
+        cascade::core::health::notePluginLoadRefused(
+            b.reason == cascade::core::PluginBlockReason::AbiMismatch
+                ? cascade::core::health::LoadClass::Abi
+                : cascade::core::health::LoadClass::Retired);
+    }
 
     // Judged afresh by this scan below; nothing is superseded by a scan that
     // does not happen.
@@ -26503,8 +26570,10 @@ void AppWindow::drawUsageReportingSection() {
     ImGui::TextWrapped(
         "%s",
         tr("Anonymous counts only: version, operating system, how long sessions "
-           "run, which modes and plugins get used, which radio model, and how many "
-           "times the window froze waiting for the display driver. Never "
+           "run, which modes and plugins get used, which radio model, how many "
+           "times the window froze waiting for the display driver, and how many "
+           "times something quietly did not work (a radio that would not open, no "
+           "sound output, a failed update or plugin install). Never "
            "frequencies, never anything decoded, never your location, and no IP "
            "address is recorded."));
     ImGui::Spacing();
@@ -26526,6 +26595,8 @@ void AppWindow::drawUsageReportingSection() {
             if (telemetryEnabled_) {
                 stallLedger_->arm(telemetryLedgerPath_, telemetryInstallId_,
                                   /*loadExisting=*/false);
+                healthLedger_->arm(healthLedgerPath_, telemetryInstallId_,
+                                   /*loadExisting=*/false);
             }
         } else if (!on) {
             // Off DELETES the identifier, so a later opt-in gets a new one
@@ -26540,6 +26611,9 @@ void AppWindow::drawUsageReportingSection() {
             // The stall count goes too: nothing kept, nothing counted, and its
             // file removed (on a thread of its own - see StallLedger::disarm).
             stallLedger_->disarm();
+            // ...and the failure counts with it: nothing kept, nothing counted,
+            // the file removed (0.99.64).
+            healthLedger_->disarm();
         }
         // The heartbeat follows the switch in the same click: off disarms it
         // (configure refuses the now-empty id), on arms it with the new id.
@@ -26600,8 +26674,8 @@ void AppWindow::drawUsageReportingSection() {
         ImGui::TextWrapped(
             "%s",
             tr("Each launch: id (random), version, os, arch, launches, crashes, "
-               "display stalls, session seconds, sdr model, modes used, panels, "
-               "plugins."));
+               "display stalls, failure counts, session seconds, sdr model, modes used, "
+               "panels, plugins."));
         ImGui::TextWrapped(
             "%s",
             tr("Every five minutes while open: id (the same one), version, a beat "
@@ -27047,6 +27121,10 @@ void AppWindow::applyDiagnosticsEnabled(bool on) {
     // one call, and tests/test_diag_hang.cpp drives the real application
     // through THIS function in both of them.
     diagnosticsEnabled_ = on;
+    // THE FAILURE COUNTS FOLLOW THIS SWITCH TOO (0.99.64), as the stall count
+    // does: with Diagnostics off nothing new is counted (what is already kept
+    // stays, and is still sent with the next record).
+    healthLedger_->setAllowed(on);
     cascade::core::setCrashCaptureEnabled(diagnosticsEnabled_, diagnosticsMinidump_);
     // Guarded on diagCrashDir_ for the same reason as in run(): a run that was
     // never allowed to write (a bounded CI run) must not start writing because
@@ -27964,6 +28042,12 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
             ++sourceGen_;  // same invariant as the file branch above
             installSource(std::move(dev));
             sourceKind_ = kind;
+            // THE SAVED RADIO OPENED (0.99.64, core/health_events.hpp): counted
+            // like any other open. This runs BEFORE the application has read
+            // whether usage reporting is on, and the ledger holds what it is
+            // given until it has (telemetryStartup).
+            cascade::core::health::noteRadioOpen(kind);
+            healthWatchSamples(kind);
             applyConverterForSource();
             // Point the combo at the restored device if this machine still
             // enumerates it; -1 otherwise (preview falls back to live name).
@@ -27986,6 +28070,11 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
                                     deviceModel_.c_str(), kind.c_str(),
                                     pipeline_.activeSource().sampleRateHz());
         } else {
+            // THE SAVED RADIO WOULD NOT OPEN, counted anonymously (0.99.64,
+            // core/health_events.hpp): the driver kind and a reason class,
+            // nothing of the message - which quotes the device arguments back.
+            // The most common failure there is, and the first thing this run does.
+            cascade::core::health::noteRadioFail(kind, sourceError_);
             // openDeviceSync already set sourceError_. A radio that was there last
             // session and is not there now is the single most common support
             // question this product gets - but the driver's own message quotes
@@ -28168,6 +28257,22 @@ void AppWindow::telemetryStartup(const cascade::core::AppConfig& cfg) {
         stallLedger_->disarm();
         cascade::core::StallLedger::removeFile(telemetryLedgerPath_);
     }
+    // THE FAILURES THAT ARE NOT CRASHES (0.99.64), on the same terms: armed only
+    // for a real identity, which an opted-out run does not have, and counted only
+    // while Diagnostics is on as well (the rule the stall count follows). It
+    // picks up what earlier sessions left AND keeps what THIS run counted before
+    // it knew whether reporting was on - the saved radio is opened by the config
+    // restore, which ran first, and that failure belongs to this session. An
+    // opted-out run drops all of it and removes a file an earlier opted-in run
+    // left.
+    healthLedgerPath_ = cascade::core::health::HealthLedger::pathIn(configDir);
+    healthLedger_->setAllowed(diagnosticsEnabled_);
+    if (telemetryEnabled_ && !telemetryInstallId_.empty()) {
+        healthLedger_->arm(healthLedgerPath_, telemetryInstallId_, /*loadExisting=*/true);
+    } else {
+        healthLedger_->disarm();
+        cascade::core::health::HealthLedger::removeFile(healthLedgerPath_);
+    }
     // Last session's report goes now, on a thread, while the window is coming
     // up. Nothing waits for it and nothing reports if it fails.
     //
@@ -28188,10 +28293,16 @@ void AppWindow::telemetryStartup(const cascade::core::AppConfig& cfg) {
         // and only if the server answers 2xx.
         std::string record;
         std::uint64_t carried = 0;
+        // The health counts ride the same record, and are taken off by the same
+        // acceptance: what EARLIER sessions left (this run's own counts describe
+        // this session and go with the next record).
+        cascade::core::health::Counts carriedHealth;
         if (cascade::core::prepareStartupRecord(configDir, cfg.telemetryPending, *stallLedger_,
-                                                record, carried)) {
-            telemetryReporter_.send(cascade::core::telemetryEndpoint(), record,
-                                    cascade::core::settleOnAccept(stallLedger_, carried));
+                                                *healthLedger_, record, carried, carriedHealth)) {
+            telemetryReporter_.send(
+                cascade::core::telemetryEndpoint(), record,
+                cascade::core::settleOnAccept(stallLedger_, carried, healthLedger_,
+                                              std::move(carriedHealth)));
         }
     }
     // Heartbeats are NOT armed here: this runs for bounded --frames runs too,
@@ -28282,6 +28393,9 @@ void AppWindow::telemetryJournal(cascade::core::AppConfig& cfg) {
     // the next start-up (see telemetryStartup), which also holds a stall that
     // happened after the last save.
     r.stalls = stallLedger_->count();
+    // The health counts as of THIS save, for the same reason: what is actually
+    // sent is the ledger's at the next start-up (telemetryStartup).
+    r.health = healthLedger_->encoded();
     const double now = glfwGetTime();
     r.session.seconds = static_cast<std::uint64_t>(
         now > telemetrySessionStart_ ? now - telemetrySessionStart_ : 0.0);

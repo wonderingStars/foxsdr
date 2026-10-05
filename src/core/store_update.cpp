@@ -58,6 +58,7 @@
 #include <string>
 
 #include "core/diag_log.hpp"
+#include "core/health_events.hpp"
 #include "core/i18n.hpp"  // FOX_TR_NOOP: the reasons are drawn through tr()
 
 #if defined(_WIN32)
@@ -359,6 +360,9 @@ StoreUpdateCheck checkStoreForUpdates(void* ownerWindow) {
                  out.mandatory ? ", at least one mandatory" : "");
     } else {
         diagWarnf("store update: the check did not complete: %s", out.error.c_str());
+        // Counted (0.99.64, core/health_events.hpp): an update check that did not
+        // complete, and nothing of what it said.
+        health::noteUpdateCheckFailed();
     }
     return out;
 }
@@ -387,6 +391,9 @@ StoreInstallOutcome requestStoreUpdateInstall(void* ownerWindow) {
 #endif
     }
     logInstall(out);
+    // The Store's install request that did not happen (not one the user
+    // declined): counted as "the update could not be started" (0.99.64).
+    if (out.result == StoreInstallResult::Failed) { health::noteUpdateRunFailed(); }
     return out;
 }
 

@@ -66,6 +66,9 @@ exactly as many.
   A second small file, `telemetry-stalls`, appears there only if the display
   has frozen on you: it holds your install identifier and a count (see
   **Display stalls, in full** below) and is removed when you turn reporting off.
+  A third, `telemetry-health` (since 0.99.64), holds your install identifier and
+  the failure counts that have not yet been sent (see **Failures that are not
+  crashes, in full** below) and is removed in the same way.
 - **No personal data is collected**, and no IP address or location is recorded.
 - **Crash and freeze reports are written to your machine, and — if you leave
   Diagnostics on — the report *text* is sent on the next start.** Not from
@@ -140,6 +143,7 @@ One report per launch, describing the session that just finished:
 | Launch count | `12` | Whether the software gets used more than once. |
 | Crash count | `1` | How often it fails. |
 | Display stalls | `0` | How many times the window froze because the display driver was waiting, not FoxSDR (a monitor switched off, a graphics-driver reset, a remote session reconnecting) - a bare number, with no stack, no driver name and no time of day, and zero for almost everyone. |
+| Failure counts | `radio_fail.rtlsdr.busy=2` | How many times something quietly did not work, as counts of a **fixed list of kinds** (see **Failures that are not crashes, in full** below): a radio that would not open (the driver and one of eight reasons), no sound output, an update or a plugin install that failed, a plugin refused at load, a recording that could not start - and how many radios and outputs *did* open, so that a failure has something to be compared with. Words from that list and numbers, never a device name, a serial number, a path, a frequency or any message text. Empty for most people. Since 0.99.64. |
 | Session length | `3600` seconds | Whether sessions are minutes or hours. |
 | SDR model | `uhd b200` | Which radios to prioritise. **Serial numbers are stripped** before sending. |
 | Demodulators used | `WFM: 3000s` | Which modes justify further work. |
@@ -165,6 +169,153 @@ off; if the report could not be sent it stays and goes with the next one.
 Switching usage reporting off removes the file, and a file left by an earlier
 identifier is ignored. The detector is part of **Diagnostics**: with Diagnostics
 off nothing is detected, so nothing is counted.
+
+### Failures that are not crashes, in full (since 0.99.64)
+
+**Why.** Version 0.55.0 fixed a fault that stopped every earlier build from
+detecting any radio at all - and 46 of the 49 people who had one never came
+back, because the application did not crash: it simply did not work, and nothing
+told us. A crash report cannot see that. So the usage report also carries *how
+many times* something quietly failed, and nothing about what, where or on what.
+
+**What is sent.** One extra field, `health`: a short text of `kind=count` pairs
+from the **fixed list below**, for example
+`radio_open.rtlsdr=1,radio_data.rtlsdr=1,radio_fail.rtlsdr.busy=2,sound_ok.wasapi=1`
+(an RTL-SDR that opened once and delivered samples, failed to open twice because
+another program had it, and sound that played through WASAPI). It is the empty
+text when nothing failed.
+
+**It cannot carry anything else.** FoxSDR builds each kind from a fixed table and
+sends nothing that is not in it; the receiving server throws away anything that
+is not in the same table, and refuses to keep more than 24 different kinds, 8 of
+them radio failures, a count above 999, or a text longer than 832 characters.
+Where a reason is read off what a driver said ("the radio is already in use by
+another program"), FoxSDR reads it, picks one of the eight words below and
+**throws the sentence away**: no message, device name, serial number, USB
+address, file name, folder, frequency or position is ever kept or sent. A test
+holds the code, the server and this page to the same list, in both directions: a
+word cannot be added to one without the others.
+
+**When it is counted.** Only while **Usage reporting** is on **and Diagnostics is
+on** - the same rule as the display stalls - and nothing is counted on the
+signal-processing or audio threads: each count is made where the decision is,
+when a radio is opened, a sound output is opened, a download finishes. The saved
+radio is the first thing FoxSDR opens, before it has read your settings; a
+failure then is held in memory until it has, and dropped if reporting is off.
+Some kinds are counted once a session however often they repeat (marked below).
+
+**Where it is kept until it is sent.** In a small file named `telemetry-health`
+beside `config.json`: your install identifier on the first line, then one
+`kind=count` per line, and nothing else. It is written by a short thread of its
+own so that the window never waits for the disk, and it is on disk almost at
+once - so a failure in a session that then crashes, or is ended from the
+taskbar, is still reported. It is removed when it holds nothing, and when you
+switch usage reporting off (a file left by an earlier identifier is ignored). The
+report sent at start-up describes the *previous* session, so it carries what
+earlier sessions left in the file, and what this run counts goes with the next
+report: a failure of this version is never filed under the last one. What a
+report carried is taken off only once the server has accepted it; if it could
+not be sent, the counts wait for the next one.
+
+**Events.** `<driver>`, `<api>`, `<why>` and `<class>` are words from the tables
+that follow.
+
+| Event | Counted when |
+|---|---|
+| `scan_none` | A scan of the radios found none at all - nothing from FoxSDR's own USB listing and nothing from SoapySDR. Once a session. |
+| `radio_open.<driver>` | A radio opened: the saved radio at start-up, one chosen in the Source list, one on the patch page. |
+| `radio_data.<driver>` | An opened radio's samples reached the display (the first spectrum picture made from them). |
+| `radio_fail.<driver>.<why>` | A radio would not open. |
+| `sound_ok.<api>` | The speakers played at some point in the session. Once a session. |
+| `sound_fail.<api>.<why>` | The sound output could not be opened. Once a session for each kind. |
+| `upd_check` | An update check did not complete (foxsdr.com, or the Microsoft Store for a Store copy). |
+| `upd_dl` | An update download did not complete. |
+| `upd_verify` | An update downloaded and did not match its published checksum, and was discarded. |
+| `upd_run` | The installer could not be started, or the Microsoft Store's install request failed. |
+| `plug_cat` | The plugin catalogue could not be fetched or read. |
+| `plug_inst.<class>` | A plugin install failed. |
+| `plug_load.<class>` | A plugin was refused at load. Once a session for each kind. |
+| `rec_fail` | A recording could not be started: its file could not be opened. |
+
+**Drivers.** The kind of radio driver, the same word the diagnostics already use.
+A name FoxSDR does not know is `other`.
+
+| Word | Which |
+|---|---|
+| `rtlsdr` | RTL-SDR dongles, through FoxSDR's own driver |
+| `hackrf` | HackRF |
+| `airspy` | Airspy R2 / Mini |
+| `airspyhf` | Airspy HF+ |
+| `sdrplay` | SDRplay RSP, through the SDRplay API |
+| `mirisdr` | Mirics-based dongles |
+| `rx888` | RX888 |
+| `pluto` | ADALM-Pluto |
+| `aor` | AOR digital I/Q interface |
+| `soapy` | anything opened through a SoapySDR module |
+| `soundcard` | a sound card used as the radio's input |
+| `other` | none of the above |
+
+**Why a radio would not open.** Read off what the driver said, then the text is
+dropped. Anything not recognised is `other`.
+
+| Word | Meaning |
+|---|---|
+| `busy` | another program has it |
+| `driver` | the driver, the vendor's API or its service is missing or not running |
+| `bind` | present but not reachable: not bound to WinUSB, or no permission on the device |
+| `absent` | not there (any more): unplugged, or no radio at that address |
+| `timeout` | it did not answer |
+| `vendor` | the vendor's driver reported an error of its own |
+| `rate` | it would not run at the sample rate asked |
+| `other` | none of the above |
+
+**Audio host APIs.** The sound system's kind - never the name of the output
+device, which is often a person's name. `none` means FoxSDR did not get as far as
+one.
+
+| Word | Which |
+|---|---|
+| `mme` | Windows MME |
+| `dsound` | Windows DirectSound |
+| `wasapi` | Windows WASAPI |
+| `wdmks` | Windows WDM-KS |
+| `asio` | ASIO |
+| `alsa` | ALSA |
+| `jack` | JACK |
+| `oss` | OSS |
+| `coreaudio` | Core Audio |
+| `none` | no host API reached (no default output, PortAudio did not start) |
+| `other` | none of the above |
+
+**Why the sound output would not open.** From the sound system's own error code,
+not its text.
+
+| Word | Meaning |
+|---|---|
+| `nodevice` | no output device, or not the one asked for |
+| `busy` | the device is in use or unavailable |
+| `format` | the device would not take the rate or channel layout |
+| `host` | the operating system's audio layer reported an error |
+| `other` | none of the above |
+
+**Plugin install failures.**
+
+| Word | Meaning |
+|---|---|
+| `net` | the download did not complete |
+| `hash` | the file did not match its published checksum and was discarded |
+| `write` | the disk refused it (the folder, the temporary file, the final move) |
+| `other` | refused before any download (not built for this FoxSDR, an unsafe file name) |
+
+**Plugin refusals.**
+
+| Word | Meaning |
+|---|---|
+| `abi` | built for a different plugin interface version than this FoxSDR (its description says so, or it declines this version) |
+| `retired` | older than the catalogue's minimum supported version |
+| `load` | could not be loaded as a module, or its description was refused |
+
+A file in the plugins folder that is not a plugin at all is not counted.
 
 ### The "still running" beat
 

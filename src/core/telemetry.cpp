@@ -208,6 +208,9 @@ std::string TelemetryReport::toJson() const {
     j["launches"] = launches;
     j["crashes"] = crashes;
     j["stalls"] = stalls;
+    // Through the vocabulary a second time: whatever this member was filled
+    // with, only legal tokens leave the machine.
+    j["health"] = health::sanitise(health);
     j["ch"] = channel;
     j["first"] = firstRun;
     j["fv"] = firstVersion;
@@ -765,6 +768,33 @@ bool prepareStartupRecord(const std::string& configDir, const std::string& pendi
     if (!configDir.empty() && !claimReportSend(configDir, pendingJson)) { return false; }
     outCarried = ledger.count();
     outJson = withStalls(pendingJson, outCarried);
+    return true;
+}
+
+TelemetryReporter::SendDone settleOnAccept(std::shared_ptr<StallLedger> stalls,
+                                           std::uint64_t carriedStalls,
+                                           std::shared_ptr<health::HealthLedger> healthLedger,
+                                           health::Counts carriedHealth) {
+    return [stalls = std::move(stalls), carriedStalls, healthLedger = std::move(healthLedger),
+            carriedHealth = std::move(carriedHealth)](bool accepted) {
+        if (!accepted) { return; }
+        if (stalls) { stalls->settle(carriedStalls); }
+        if (healthLedger) { healthLedger->settle(carriedHealth); }
+    };
+}
+
+bool prepareStartupRecord(const std::string& configDir, const std::string& pendingJson,
+                          const StallLedger& stalls, const health::HealthLedger& healthLedger,
+                          std::string& outJson, std::uint64_t& outCarriedStalls,
+                          health::Counts& outCarriedHealth) {
+    outCarriedHealth.clear();
+    if (!prepareStartupRecord(configDir, pendingJson, stalls, outJson, outCarriedStalls)) {
+        return false;
+    }
+    // EARLIER SESSIONS ONLY: this run's own counts describe the session still
+    // in progress, whose record is sent at the next start-up.
+    outCarriedHealth = healthLedger.priorCounts();
+    outJson = health::withHealth(outJson, health::encode(outCarriedHealth));
     return true;
 }
 

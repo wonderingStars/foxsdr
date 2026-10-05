@@ -159,10 +159,12 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "core/health_events.hpp"
 #include "core/plugin_abi.h"
 
 namespace cascade::core {
@@ -511,10 +513,42 @@ public:
     // polled between chunks so the transfer can be stopped. The updater is the
     // caller that needs them: an app-update download with no cancel is one
     // that a quit has to wait out.
+    //
+    // `failure`, when given, says WHICH KIND of failure ended it (0.99.64): the
+    // update download counts a failed transfer and a failed verification
+    // separately (core/health_events.hpp) and must not read that off the error
+    // text.
+    enum class FetchFailure {
+        None,       // it succeeded
+        Cancelled,  // the caller's flag stopped it: not a failure of anything
+        Refused,    // refused before any transfer (not https, a malformed digest)
+        Transfer,   // the download itself failed: network, HTTP status, size cap
+        Verify,     // the bytes arrived and did not hash to the published digest
+        Place       // the disk: the temporary file, the hash read, the final move
+    };
     static bool fetchVerifiedFile(const std::string& url, const std::string& expectedSha256,
                                   const std::string& destPath, std::uint64_t maxBytes,
                                   std::string& error, std::atomic<float>* progress = nullptr,
-                                  std::atomic<bool>* cancel = nullptr);
+                                  std::atomic<bool>* cancel = nullptr,
+                                  FetchFailure* failure = nullptr);
+
+    // THE TRANSPORT SEAM FOR TESTS (0.99.64). Every download and every document
+    // this class fetches goes through one function, httpsGet, and until now the
+    // only way to prove what happens after a transfer - a digest that does not
+    // match, a body that is not a catalogue, a server that answers 500 - was a
+    // live HTTPS server, which no test has. When this is set, httpsGet hands the
+    // URL to it INSTEAD of opening a connection: it feeds `sink` the bytes the
+    // "server" sends (and returns false with `error` for one that failed), and
+    // every rule that is enforced AFTER the transfer - the hash, the cap, the
+    // parse, the temporary file and the rename - runs for real. The https-only,
+    // redirect and host rules are enforced BEFORE httpsGet and are untouched.
+    // Empty (the default, and in every shipped build: nothing but a test calls
+    // this) restores the network. Not thread-safe against a transfer already in
+    // flight: set it before one starts.
+    using TestTransport = std::function<bool(const std::string& url, std::uint64_t maxBytes,
+                                             const std::function<bool(const void*, std::size_t)>& sink,
+                                             std::string& error)>;
+    static void setTransportForTest(TestTransport transport);
 
     // THE INTEGRITY DECISION, as one named function that install() calls.
     //
@@ -836,6 +870,14 @@ public:
     void cancel() { cancel_.store(true, std::memory_order_relaxed); }
 
 private:
+    // install() as it always was, plus the CLASS of the failure it ended in
+    // (0.99.64): install() counts a failed install anonymously by class
+    // (core/health_events.hpp) and the class is known only where the failure
+    // happens. `failClass` starts as Other - a refusal before any transfer.
+    bool installImpl(const PluginCatalogEntry& e, const std::string& pluginsDir,
+                     std::string& installedPath, std::string& error,
+                     health::InstallClass& failClass);
+
     std::vector<PluginCatalogEntry> entries_;
     std::atomic<float> progress_{0.0f};
     std::atomic<bool> cancel_{false};
