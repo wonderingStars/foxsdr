@@ -732,6 +732,21 @@ private:
     // runs it before any thread exists); touches only demod_, so it is safe to
     // call before stereo_ has been built.
     void applyDemodDeemphasisLocked();
+    // Turns the user's bandwidth (vfoBandwidthHz_) into what the two blocks
+    // that enforce it are told, for the CURRENT mode: the channel filter's own
+    // bandwidth and, for the sideband modes, the demodulator's sideband width.
+    // One rule in one place, called from every point that changes the mode, the
+    // bandwidth or the rate (and so rebuilds either block). Caller holds
+    // audioMutex_ (the constructor runs it before any thread exists).
+    //
+    // AM, DSB, FM, RAW: the channel filter IS the bandwidth, symmetric about
+    // the tuned frequency. USB, LSB, CW: the wanted sideband lies on ONE side of
+    // the carrier and the demodulator selects it, so the bandwidth is the
+    // sideband's width (Demodulator::setSsbBandwidthHz) and the channel filter
+    // - symmetric, so it needs the sideband's reach on both sides - is left
+    // kSidebandChannelFactor times as wide, wide enough never to touch the
+    // audio and narrow enough to keep the neighbouring channels out.
+    void applyChannelBandwidthLocked();
 
     // PUBLISHES EVERY PER-FRAME GETTER'S MIRROR from the live objects. Caller
     // holds audioMutex_ (the constructor runs it before any thread exists).

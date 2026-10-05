@@ -102,6 +102,24 @@ public:
     void setDeemphasisUs(double us);
     double deemphasisUs() const { return deemphTauSec_ * 1.0e6; }
 
+    // The WIDTH OF THE WANTED SIDEBAND for USB, LSB and CW, in Hz: the audio
+    // passband runs from the carrier out to about this far (-6 dB at 1.2 x, the
+    // design the 3 kHz default has always had, scaled in proportion). Default
+    // 3000 - a Demodulator nobody calls this on is bit-for-bit what it was.
+    // The other modes ignore it.
+    //
+    // Clamped into [1 kHz, 0.3 x the channel rate]; a non-finite value means
+    // the default. Redesigns the sideband filter and the two BFOs, so it
+    // restarts a running sideband mode like a mode change does; asking for the
+    // width already in force does nothing at all.
+    //
+    // THE CHANNEL FILTER AHEAD OF THIS IS SYMMETRIC about the carrier, and the
+    // wanted sideband reaches out to about 1.2 x this width on ONE side, so a
+    // caller that narrows the channel filter for a sideband mode must leave it
+    // at least twice that wide (core::Pipeline gives it four times B).
+    void setSsbBandwidthHz(double bandwidthHz);
+    double ssbBandwidthHz() const { return ssbBandwidthHz_; }
+
 private:
     void processSsb(const std::complex<float>* in, std::size_t n, float* out);
 
@@ -129,6 +147,7 @@ private:
     // 1 = plain streaming FIR), BFO up-mix.
     Nco shiftDown_;
     Nco shiftUp_;
+    double ssbBandwidthHz_ = 3000.0;  // B; see setSsbBandwidthHz
     FirDecimator ssbFilter_;
     std::vector<std::complex<float>> work_;      // down-mixed block
     std::vector<std::complex<float>> filtered_;  // filter output (n+1 capacity)

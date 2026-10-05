@@ -192,6 +192,13 @@ bool acceptedInputRate(double rateHz, unsigned* decimOut, double* chanRateOut,
 // bandwidth of +/-75 kHz deviation with 15 kHz audio is ~180 kHz; 150 kHz is
 // the conventional receiver setting and fits the 200 kHz channel's 0.9x clamp).
 constexpr double kDefaultVfoBandwidthHz = 150000.0;
+// The channel filter in USB, LSB and CW, as a multiple of the sideband width B
+// the demodulator is given (see applyChannelBandwidthLocked). The filter is
+// symmetric about the carrier and its -6 dB edge is half of this, so 4 puts
+// that edge at 2 B: the sideband (flat to B, -6 dB at 1.2 B in the demodulator)
+// passes with under 1 dB of extra droop, and anything beyond ~4 B is gone before
+// it reaches the demodulator.
+constexpr double kSidebandChannelFactor = 4.0;
 // The decimation search above prefers channels this filter fits unclipped;
 // it is declared there, before this constant, so the two are tied here.
 static_assert(kWfmUnclippedChannelHz * 0.9 - kDefaultVfoBandwidthHz < 1e-6 &&
@@ -401,6 +408,22 @@ void Pipeline::applyDemodDeemphasisLocked() {
     // downstream.
     const bool wfm = (demod_.mode() == cascade::dsp::DemodMode::WFM);
     demod_.setDeemphasisUs(wfm ? 0.0 : deemphasisUs_);
+}
+
+void Pipeline::applyChannelBandwidthLocked() {
+    const cascade::dsp::DemodMode m = demod_.mode();
+    const bool sideband = (m == cascade::dsp::DemodMode::USB ||
+                           m == cascade::dsp::DemodMode::LSB ||
+                           m == cascade::dsp::DemodMode::CW);
+    if (!sideband) {
+        vfo_.setBandwidthHz(vfoBandwidthHz_);
+        return;
+    }
+    // The demodulator clamps B for its channel rate; the channel filter is
+    // sized from what B really became, not from the raw request. (The Vfo then
+    // clamps its own width, so a very wide request stays inside the channel.)
+    demod_.setSsbBandwidthHz(vfoBandwidthHz_);
+    vfo_.setBandwidthHz(kSidebandChannelFactor * demod_.ssbBandwidthHz());
 }
 
 void Pipeline::resetDecodersLocked() {
@@ -912,6 +935,11 @@ void Pipeline::setDemodMode(cascade::dsp::DemodMode m) {
     // because leaving it at the bare "off" this line used to be is exactly
     // what made the De-emph control inert on every mode but WFM.
     applyDemodDeemphasisLocked();
+    // ...and it decides what the bandwidth MEANS: the whole symmetric channel
+    // in AM, the width of one sideband in USB/LSB/CW. A caller that sets the
+    // mode and never the bandwidth (a browser, a plugin) must not be left with
+    // the previous mode's channel filter.
+    applyChannelBandwidthLocked();
     agc_.reset();       // new level regime: relearn the gain from neutral
     // Leaving WFM abandons the composite the decoders were tracking, and
     // coming back to it is a fresh acquisition either way.
@@ -1070,7 +1098,7 @@ void Pipeline::setVfoBandwidthHz(double bandwidthHz) {
     // so a later rate switch can re-apply the caller's intent, re-clamped for
     // the NEW channel rate (clamping a clamp would ratchet the bandwidth).
     vfoBandwidthHz_ = bandwidthHz;
-    vfo_.setBandwidthHz(bandwidthHz);
+    applyChannelBandwidthLocked();
     publishParamMirrorsLocked();
 }
 
@@ -1203,6 +1231,10 @@ bool Pipeline::setInputRateHz(double rateHz) {
         // leaving it on there would put a second 50 us pole in the audio and
         // gut the 57 kHz subcarrier RDS needs.
         applyDemodDeemphasisLocked();
+        // Likewise a rebuilt demodulator starts at the default sideband width,
+        // and the Vfo built above was given the raw request: both are put back
+        // to what the user's bandwidth means in THIS mode at the NEW rate.
+        applyChannelBandwidthLocked();
 
         // Stereo + RDS decoders, rebuilt for the new composite rate (this
         // re-applies the user's de-emphasis and force-mono settings and

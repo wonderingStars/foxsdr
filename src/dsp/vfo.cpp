@@ -44,6 +44,42 @@ std::vector<float> channelTaps(double rateHz, double channelRate, double bw) {
                                WindowType::BlackmanHarris);
 }
 
+// THE NARROW CHANNEL FILTER, which runs at the CHANNEL rate, after the
+// decimation, and is the only reason a 3 kHz or a 10 kHz bandwidth is 3 kHz or
+// 10 kHz wide.
+//
+// WHY THE FILTER ABOVE CANNOT DO IT. channelTaps() spends its taps on the
+// distance from the passband edge to the channel Nyquist (it has to: that is
+// where the aliases fold in), and that distance is ~100 kHz at every
+// bandwidth. At 2.4 MS/s a 3 kHz request therefore gets 103 taps and a 10 kHz
+// request 107 - and a windowed sinc that is a hundred taps long and whose
+// cutoff is a thousand-sample sinc wide is simply the WINDOW, whatever the
+// cutoff says. Measured through the real class (tests/test_channel_
+// bandwidth.cpp): the 3 kHz filter read -0.1 dB at +5 kHz and -5.1 dB at
+// +30 kHz, the 10 kHz filter -0.2 and -5.9, so "AM, 10 kHz" let a station
+// 30 kHz away through at half amplitude and the bandwidth control moved the
+// result by a few tenths of a dB. Three users reported exactly that.
+//
+// So a narrow request gets a second, ordinary filter where the sample rate is
+// low enough to afford the length: the same windowed sinc, with a transition
+// band proportional to the BANDWIDTH instead of to the channel.
+//
+// WHERE THE EDGE IS. Here, unlike the wide design above, the passband is flat
+// TO bw/2 rather than 6 dB down at it: a windowed sinc is -6 dB at its cutoff
+// and flat only about half a transition width before it, so the cutoff is
+// placed half a transition above the edge. (The airband strip learned this the
+// hard way - core/patch_strip.hpp: a cutoff AT the edge left a 6 kHz channel
+// flat to about 2 kHz and its voices muffled.) For a transition of
+// kNarrowTransitionFraction * bw = 0.5 bw the measured response is flat to
+// bw/2, -6 dB at 0.75 bw, about -32 dB at bw and below -90 dB from 1.25 bw.
+std::vector<float> narrowTaps(double channelRate, double bw) {
+    const double transHz = Vfo::kNarrowTransitionFraction * bw;
+    const double cutoffNorm = (0.5 * bw + 0.5 * transHz) / channelRate;
+    const double transNorm = transHz / channelRate;
+    return windowedSincLowpass(tapsForTransition(transNorm), cutoffNorm,
+                               WindowType::BlackmanHarris);
+}
+
 // The prime factors of n, largest first.
 std::vector<unsigned> primeFactorsDescending(unsigned n) {
     std::vector<unsigned> f;
@@ -107,13 +143,28 @@ double Vfo::clampBandwidth(double bw) const {
 // Below kStagedMinInputRateHz nothing changes at all: the measured headroom
 // there is several times real time, and every radio that runs there - an
 // RTL-SDR, an Airspy at 2.5 or 3 MS/s - keeps exactly the filter it had.
-std::vector<FirDecimator> Vfo::designStages(double bw) const {
+//
+// A NARROW BANDWIDTH ADDS ONE MORE STAGE (see narrowTaps): the anti-alias part
+// is then designed for a wide channel and the narrow filter follows at the
+// channel rate. A bandwidth of kNarrowBelowChannelFraction of the channel rate
+// or more is not narrow, takes none of this, and is exactly the filter it
+// always was, tap for tap.
+std::vector<FirDecimator> Vfo::designStages(double bwRequest) const {
     const double channelRate = inputRate_ / static_cast<double>(decimFactor_);
+    const bool narrow = bwRequest < kNarrowBelowChannelFraction * channelRate;
+    // The anti-alias part of a narrow design is built for a wide channel: at
+    // least a quarter of the channel rate, and at least twice the narrow
+    // bandwidth so its own roll-off stays clear of the narrow filter's skirt.
+    // It only has to keep aliases out; the narrow stage does the selecting.
+    const double bw = narrow
+                          ? std::max(kNarrowBelowChannelFraction * channelRate, 2.0 * bwRequest)
+                          : bwRequest;
     std::vector<FirDecimator> stages;
     std::vector<unsigned> factors;
     if (inputRate_ >= kStagedMinInputRateHz) { factors = primeFactorsDescending(decimFactor_); }
     if (factors.size() < 2) {
         stages.emplace_back(channelTaps(inputRate_, channelRate, bw), decimFactor_);
+        if (narrow) { stages.emplace_back(narrowTaps(channelRate, bwRequest), 1); }
         return stages;
     }
     // Every factor but the smallest becomes an alias-guard stage; the
@@ -136,6 +187,7 @@ std::vector<FirDecimator> Vfo::designStages(double bw) const {
         rate = out;
     }
     stages.emplace_back(channelTaps(rate, channelRate, bw), factors.back());
+    if (narrow) { stages.emplace_back(narrowTaps(channelRate, bwRequest), 1); }
     return stages;
 }
 

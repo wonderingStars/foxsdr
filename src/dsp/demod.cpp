@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "dsp/demod.hpp"
 
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 
@@ -54,8 +55,14 @@ constexpr double kTwoPi = 6.283185307179586476925286766559;
 //      returns to its original audio frequency, the rejected sideband is gone.
 // The FIR group delay only adds a constant audio phase offset (inaudible);
 // frequencies are restored exactly because the two BFOs cancel.
+//
+// B IS A SETTING (setSsbBandwidthHz), DEFAULT 3 kHz. Until 0.99.60 it was a
+// constant, so the receiver's Bandwidth control reached the SSB modes only
+// through the channel filter - which did not narrow anything (see dsp/vfo.hpp)
+// - and a user who picked 6 kHz or 10 kHz in USB heard exactly the same 3 kHz
+// of audio. The three numbers below are the 3 kHz design; every other width
+// scales them in proportion, so B = 3000 is bit-for-bit the filter it was.
 constexpr double kSsbAudioBandwidthHz = 3000.0;  // B: voice SSB channel width
-constexpr double kSsbBfoHz = kSsbAudioBandwidthHz / 2.0;  // Weaver BFO = B/2
 // Low-pass -6 dB cutoff in the shifted domain. 2100 Hz rather than the ideal
 // B/2 = 1500 Hz: the windowed-sinc transition is centered on the cutoff, and
 // pushing the cutoff up keeps the passband flat out to the B/2 band edge while
@@ -66,6 +73,11 @@ constexpr double kSsbCutoffHz = 2100.0;
 // Full transition width budget in Hz; sets the tap count via the standard
 // Hamming windowed-sinc estimate (transition ~ 3.3/N of the sample rate).
 constexpr double kSsbTransitionHz = 1000.0;
+// The widths setSsbBandwidthHz accepts: 1 kHz is about the narrowest the tap
+// cap (2047) can still build with its transition intact, and 0.3 x the channel
+// rate is where the shifted band (B/2 + the 0.7 B cutoff) stops fitting.
+constexpr double kSsbMinBandwidthHz = 1000.0;
+constexpr double kSsbMaxRateFraction = 0.3;
 // CW sidetone: a carrier on the VFO center beats at this audio pitch.
 constexpr double kCwToneHz = 700.0;
 
@@ -108,13 +120,16 @@ constexpr double kAmDcCutoffHz = 30.0;
 // target, at roughly half the tap count the Blackman-Harris window would
 // spend for margin nobody can hear on SSB. Tap count scales with the rate so
 // the transition width in Hz is rate-independent.
-std::vector<float> designSsbTaps(double rate) {
+std::vector<float> designSsbTaps(double rate, double bandwidthHz) {
+    // Everything scales with B/3000: at the default this is x1.0 exactly, so
+    // the design below is the one that has always shipped.
+    const double scale = bandwidthHz / kSsbAudioBandwidthHz;
     std::size_t n =
-        static_cast<std::size_t>(std::ceil(3.3 * rate / kSsbTransitionHz));
+        static_cast<std::size_t>(std::ceil(3.3 * rate / (kSsbTransitionHz * scale)));
     if (n < 63) { n = 63; }        // floor: keep >40 dB feasible at low rates
     if (n > 2047) { n = 2047; }    // cap: bound CPU at very high channel rates
     if (n % 2 == 0) { ++n; }       // windowedSincLowpass requires odd length
-    double cutoff = kSsbCutoffHz / rate;
+    double cutoff = kSsbCutoffHz * scale / rate;
     // Degenerate very-low-rate guard: keep the design inside the (0, 0.5)
     // precondition instead of asserting deep in the filter designer.
     if (cutoff > 0.45) { cutoff = 0.45; }
@@ -124,7 +139,8 @@ std::vector<float> designSsbTaps(double rate) {
 }  // namespace
 
 Demodulator::Demodulator(double channelRateHz)
-    : rate_(channelRateHz), ssbFilter_(designSsbTaps(channelRateHz), 1) {
+    : rate_(channelRateHz),
+      ssbFilter_(designSsbTaps(channelRateHz, kSsbAudioBandwidthHz), 1) {
     assert(rate_ > 0.0);
     deemphTauSec_ = kDefaultDeemphTauSec;
     deemphPole_ = std::exp(-1.0 / (rate_ * deemphTauSec_));
@@ -150,9 +166,26 @@ void Demodulator::setDeemphasisUs(double us) {
     deemphState_ = 0.0;
 }
 
+void Demodulator::setSsbBandwidthHz(double bandwidthHz) {
+    // A non-finite request lands on the default, so a bad value can never
+    // poison the filter design.
+    double bw = std::isfinite(bandwidthHz) ? bandwidthHz : kSsbAudioBandwidthHz;
+    bw = std::min(std::max(bw, kSsbMinBandwidthHz), kSsbMaxRateFraction * rate_);
+    if (bw == ssbBandwidthHz_) { return; }  // idempotent: no gratuitous reset
+    ssbBandwidthHz_ = bw;
+    ssbFilter_ = FirDecimator(designSsbTaps(rate_, bw), 1);
+    // The BFOs follow B. Only the sideband modes run the Weaver chain, so only
+    // they are restarted (a documented clean start, like a mode change); AM, FM
+    // and the rest keep their state untouched and pick the new width up at the
+    // next setMode into a sideband mode.
+    if (mode_ == DemodMode::USB || mode_ == DemodMode::LSB || mode_ == DemodMode::CW) {
+        setMode(mode_);
+    }
+}
+
 void Demodulator::setMode(DemodMode m) {
     mode_ = m;
-    const double bfo = kSsbBfoHz / rate_;
+    const double bfo = 0.5 * ssbBandwidthHz_ / rate_;  // Weaver BFO = B/2
     switch (m) {
         case DemodMode::USB:
             // Wanted sideband [0,+B]: shift DOWN by B/2 to center it on DC.

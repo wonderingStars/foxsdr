@@ -6789,11 +6789,9 @@ void AppWindow::drawRadioSection() {
         formatBandwidth(vfoBandwidthHz_, bwPreview, sizeof(bwPreview));
         if (ImGui::BeginCombo(cascade::gui::labelAboveIfNeeded(trId("Bandwidth")), bwPreview)) {
             for (int i = 0; i < kBwCount; ++i) {
-                if (ImGui::Selectable(kBwLabels[i], bandwidthIndex_ == i)) {
-                    bandwidthIndex_ = i;
-                    vfoBandwidthHz_ = kBwHz[i];
-                    pipeline_.setVfoBandwidthHz(vfoBandwidthHz_);
-                }
+                // setBandwidthIndex, as setModeIndex is for the mode buttons:
+                // one place that sets the bandwidth AND says so in the log.
+                if (ImGui::Selectable(kBwLabels[i], bandwidthIndex_ == i)) { setBandwidthIndex(i); }
                 // What ImGui::Combo does for its own list, kept so opening
                 // this one from the keyboard still lands on the step in use.
                 // With bandwidthIndex_ at -1 nothing takes the focus, which is
@@ -10806,6 +10804,11 @@ void AppWindow::drawCenterPanels() {
         if (!ImGui::IsMouseDown(0)) {
             vfoDrag_ = VfoDrag::None;
             band.dragging = false;
+            // The drag has SETTLED: one line for the width it ended on.
+            if (vfoBandwidthDragged_) {
+                vfoBandwidthDragged_ = false;
+                logBandwidthChange("dragged on the spectrum");
+            }
         } else {
             // xToHz is deliberately unclamped, so dragging past the panel
             // edge keeps working; the offset/bandwidth clamps below are what
@@ -10835,8 +10838,15 @@ void AppWindow::drawCenterPanels() {
                 double bw = 2.0 * std::fabs(mouseHz - bandCenterAbs);
                 const double bwHi = kVfoBwMaxChanFrac * pipeline_.channelRateHz();
                 bw = std::max(kVfoBwMinHz, std::min(bw, bwHi));
-                vfoBandwidthHz_ = bw;
-                pipeline_.setVfoBandwidthHz(bw);
+                // Only a width that MOVED reaches the filter: redesigning it
+                // restarts its history, and a held mouse would do that every
+                // frame. The line in the log is written once, when the drag
+                // lets go (below), not once per frame of it.
+                if (bw != vfoBandwidthHz_) {
+                    vfoBandwidthHz_ = bw;
+                    pipeline_.setVfoBandwidthHz(bw);
+                    vfoBandwidthDragged_ = true;
+                }
                 ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
             }
             // Recompute the band from post-drag state so the overlay tracks
@@ -19260,6 +19270,7 @@ void AppWindow::applyPluginPreset(const cascade::core::LoadedPlugin& p,
 
     if (ps.bandwidthHz > 0.0) {
         const double bwHi = kVfoBwMaxChanFrac * pipeline_.channelRateHz();
+        const double bwBefore = vfoBandwidthHz_;
         vfoBandwidthHz_ = std::max(kVfoBwMinHz, std::min(ps.bandwidthHz, bwHi));
         pipeline_.setVfoBandwidthHz(vfoBandwidthHz_);
         // -1 WHEN THE PRESET ASKED FOR SOMETHING THE LIST DOES NOT CARRY, and
@@ -19267,6 +19278,7 @@ void AppWindow::applyPluginPreset(const cascade::core::LoadedPlugin& p,
         // one is 12.5 kHz. Pointing the combo there made it letter a bandwidth
         // the receiver was not running and, on the next click, apply it.
         bandwidthIndex_ = bandwidthStepIndex(vfoBandwidthHz_);
+        if (vfoBandwidthHz_ != bwBefore) { logBandwidthChange("decoder preset"); }
     }
 
     // WHERE the frequency goes differs by decoder kind, and getting it wrong
@@ -22801,6 +22813,25 @@ void AppWindow::setModeIndex(int index) {
     testerUsage_.noteFeature("modes");
 }
 
+// THE LINE THAT WAS MISSING. Three 0.99.59 reports said the bandwidth control
+// did nothing, and the log could not say whether it had ever been used: a mode
+// change wrote "mode: AM, bandwidth 10000" and a bandwidth change wrote
+// nothing at all. Bandwidth only, never a frequency (see setModeIndex).
+void AppWindow::logBandwidthChange(const char* how) {
+    cascade::core::diagLogf("bandwidth: %.0f Hz in %s (%s)", vfoBandwidthHz_,
+                            kModeNames[modeIndex_], how);
+}
+
+void AppWindow::setBandwidthIndex(int index) {
+    if (index < 0 || index >= kBwCount) { return; }
+    const double before = vfoBandwidthHz_;
+    bandwidthIndex_ = index;
+    vfoBandwidthHz_ = kBwHz[index];
+    pipeline_.setVfoBandwidthHz(vfoBandwidthHz_);
+    // A pick of the step already in force changes nothing and says nothing.
+    if (vfoBandwidthHz_ != before) { logBandwidthChange("bandwidth list"); }
+}
+
 // --- The keyboard ------------------------------------------------------------
 //
 // ONE PLACE IN THE FRAME. Every shortcut the application answers passes through
@@ -23485,12 +23516,14 @@ void AppWindow::tuneToBookmark(const cascade::core::Bookmark& b) {
     }
     // Same clamp as the config restore: [3 kHz, 90% of channel rate].
     const double bwHi = kVfoBwMaxChanFrac * pipeline_.channelRateHz();
+    const double bwBefore = vfoBandwidthHz_;
     vfoBandwidthHz_ = std::max(kVfoBwMinHz, std::min(b.bandwidthHz, bwHi));
     pipeline_.setVfoBandwidthHz(vfoBandwidthHz_);
     // -1 for a bookmark saved at a bandwidth the list does not carry (one
     // taken while a preset had the VFO at 40 kHz, say): the combo letters the
     // real figure and ticks nothing.
     bandwidthIndex_ = bandwidthStepIndex(vfoBandwidthHz_);
+    if (vfoBandwidthHz_ != bwBefore) { logBandwidthChange("bookmark"); }
 }
 
 void AppWindow::saveBookmarks() {
@@ -24977,6 +25010,9 @@ void AppWindow::applyControlRequest(const cascade::net::ControlRequest& r) {
         // made from this window.
         retuneSourceHz(*r.centerHz);
     }
+    // What the width was before THIS request, so the line below is written for
+    // a request that moved it - by a mode (its default) or by a width of its own.
+    const double remoteBwBefore = vfoBandwidthHz_;
     if (r.mode.has_value()) {
         // Mapped by NAME, never by index: the button table's order and the
         // DemodMode enum's order deliberately differ.
@@ -25005,6 +25041,7 @@ void AppWindow::applyControlRequest(const cascade::net::ControlRequest& r) {
         // the combo shows what the VFO is, and ticks nothing.
         bandwidthIndex_ = bandwidthStepIndex(vfoBandwidthHz_);
     }
+    if (vfoBandwidthHz_ != remoteBwBefore) { logBandwidthChange("remote request"); }
     if (r.vfoOffsetHz.has_value()) {
         // Clamped against the LIVE rate, the same rule the config restore
         // uses — web_control's range check is a sanity bound, not this.

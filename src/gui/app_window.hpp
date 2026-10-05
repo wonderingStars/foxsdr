@@ -1699,6 +1699,15 @@ private:
     // reason: a mode key must set the demodulator, its default bandwidth and
     // the log line identically to a click on the button beside it.
     void setModeIndex(int index);
+    // The bandwidth list's own path, the same kind of lift: sets the filter and
+    // writes "bandwidth: N Hz in MODE (how)" to the log (a mode button already
+    // logged its default bandwidth; a change of the bandwidth never logged
+    // anything). setBandwidthIndex is a pick from the list; logBandwidthChange
+    // is for the other ways the width moves (a drag on the spectrum, a browser
+    // request, a bookmark or a decoder preset), which set vfoBandwidthHz_
+    // themselves.
+    void setBandwidthIndex(int index);
+    void logBandwidthChange(const char* how);
 
     // --- The keyboard ---------------------------------------------------------
     // ONE PLACE IN THE FRAME where a pressed chord becomes an action, and one
@@ -2762,6 +2771,9 @@ private:
     double vfoBandwidthHz_ = 150000.0;
     enum class VfoDrag { None, Center, EdgeLow, EdgeHigh };
     VfoDrag vfoDrag_ = VfoDrag::None;
+    // An edge drag has moved the bandwidth and has not let go yet: the one log
+    // line for it is written on release, not once per frame of the drag.
+    bool vfoBandwidthDragged_ = false;
     // mouseHz - band center at grab time, so a center drag never makes the
     // band jump to put its center under the cursor.
     double vfoGrabDeltaHz_ = 0.0;
