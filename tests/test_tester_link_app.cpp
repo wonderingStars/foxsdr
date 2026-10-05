@@ -14,12 +14,27 @@
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <chrono>
+#include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <thread>
+#include <vector>
+
+// The site stand-in below is a real loopback HTTP server. Included before
+// <windows.h> (httplib brings in winsock2.h itself), and with the same
+// CPPHTTPLIB_OPENSSL_SUPPORT choice as every other translation unit that
+// includes it on non-Windows (see test_tester_link.cpp's note on the layout
+// mismatch that follows from disagreeing).
+#if !defined(_WIN32)
+#ifndef CPPHTTPLIB_OPENSSL_SUPPORT
+#define CPPHTTPLIB_OPENSSL_SUPPORT
+#endif
+#endif
+#include <httplib.h>
 
 #if defined(_WIN32)
 #include <process.h>
@@ -78,6 +93,100 @@ std::string reportWithToken(const std::string& tok) {
     j["token"] = tok;
     j["version"] = "1.0";
     return j.dump();
+}
+
+// THE SITE'S CONFIRM-BY-NAME ENDPOINT (GET /api/beta/app-token/me), in a form the
+// test controls. It records the Authorization header of every lookup that
+// reaches it, so a test can say WHICH token was looked up and HOW MANY TIMES by
+// asking the site, and it either refuses at once or holds each lookup until the
+// test lets it answer.
+//
+// WHY THE TEST NEEDS ONE. The lookup runs on a worker and AppWindow clears
+// testerLinkResolvingToken_ the moment a later testerLinkPoll() collects its
+// answer, so that field is true only while the lookup is out - and for how long
+// it is out the product has no say: it is however long the host takes to fail a
+// connection nothing answers. Pointed at a closed loopback port that was
+// measured here at about two seconds on Windows (three runs, 2.02 to 2.05 s
+// from the check to the lookup being collected), and on the Linux CI runner it
+// was over before the test next looked - which is why a check of the
+// field passed on one and failed on the other with the product behaving
+// identically on both. A stand-in that either answers at once or does not answer
+// until told makes both timelines happen on every platform, on purpose.
+class SiteStandIn {
+public:
+    enum class Mode {
+        FailAtOnce,  // answers 500 immediately: the lookup is over before anyone looks
+        Hold,        // does not answer until release(): the lookup is out for as long as wanted
+    };
+
+    bool start(Mode mode) {
+        mode_ = mode;
+        server_.Get("/api/beta/app-token/me",
+                    [this](const httplib::Request& req, httplib::Response& res) {
+                        {
+                            std::lock_guard<std::mutex> lk(mu_);
+                            bearers_.push_back(req.get_header_value("Authorization"));
+                        }
+                        if (mode_ == Mode::Hold) {
+                            std::unique_lock<std::mutex> lk(mu_);
+                            // The cap only stops a failed test leaving a thread parked.
+                            cv_.wait_for(lk, std::chrono::seconds(30), [this] { return released_; });
+                            res.status = 200;
+                            res.set_content("{\"name\":\"Linked Tester\"}", "application/json");
+                            return;
+                        }
+                        res.status = 500;
+                        res.set_content("{}", "application/json");
+                    });
+        port_ = server_.bind_to_any_port("127.0.0.1");
+        if (port_ <= 0) { return false; }
+        thread_ = std::thread([this] { server_.listen_after_bind(); });
+        server_.wait_until_ready();
+        return true;
+    }
+
+    // Lets every held lookup answer 200 with a name.
+    void release() {
+        std::lock_guard<std::mutex> lk(mu_);
+        released_ = true;
+        cv_.notify_all();
+    }
+
+    // The Authorization header of every lookup received, in arrival order.
+    std::vector<std::string> bearers() {
+        std::lock_guard<std::mutex> lk(mu_);
+        return bearers_;
+    }
+
+    std::string baseUrl() const { return "http://127.0.0.1:" + std::to_string(port_); }
+
+    ~SiteStandIn() {
+        release();
+        server_.stop();
+        if (thread_.joinable()) { thread_.join(); }
+    }
+
+private:
+    Mode mode_ = Mode::FailAtOnce;
+    httplib::Server server_;
+    int port_ = 0;
+    std::thread thread_;
+    std::mutex mu_;
+    std::condition_variable cv_;
+    bool released_ = false;
+    std::vector<std::string> bearers_;
+};
+
+// Waits, bounded, for `ready()` - for a worker or a server thread to do
+// something the test cannot do for it. False on timeout, never a hang.
+template <class Ready>
+bool waitUntil(Ready ready, int budgetMs = 10000) {
+    const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(budgetMs);
+    while (!ready()) {
+        if (std::chrono::steady_clock::now() >= until) { return false; }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return true;
 }
 
 }  // namespace
@@ -161,8 +270,18 @@ struct AppWindowTestAccess {
             a.testerLinkPoll();
         }
     }
+    // One frame's poll with the ~1 Hz gate left as it is: collects a lookup's
+    // answer when it has come, asks the disk nothing new.
+    static void pump(AppWindow& a) { a.testerLinkPoll(); }
     static std::string queuedLinkToken(AppWindow& a) { return a.testerLinkQueuedToken_; }
+    // TRANSIENT: set when a lookup starts, cleared on the frame its answer is
+    // collected. How long it is set is how long the lookup takes, which no test
+    // controls on a real network - read it only where the lookup is held open.
     static std::string resolvingToken(AppWindow& a) { return a.testerLinkResolvingToken_; }
+    static std::string pendingToken(AppWindow& a) {
+        return a.testerLinkPending_ ? a.testerLinkPending_->token : std::string();
+    }
+    static bool hasLinkError(AppWindow& a) { return !a.testerLinkError_.empty(); }
 };
 
 }  // namespace cascade::gui
@@ -327,10 +446,20 @@ void testPressLinkOverProvenSameTesterKeepsTheQueue() {
 // --- the one-shot link-request file: queued, not dropped, while a decision --
 // is pending (finding 7) --------------------------------------------------------
 
-void testALinkArrivingWhilePendingIsQueuedNotDropped() {
+// Run once with a lookup that is still out when the test looks and once with a
+// lookup that is already over, because which of the two a host produces is not
+// the product's doing and the scenario must hold in both.
+void testALinkArrivingWhilePendingIsQueuedNotDropped(SiteStandIn::Mode mode) {
+    const bool held = (mode == SiteStandIn::Mode::Hold);
     std::printf("  a link arriving while a decision is pending is queued, not dropped - and "
-                "the LATEST one wins\n");
-    const fs::path dir = g_scratch / "linkqueue";
+                "the LATEST one wins (%s)\n",
+                held ? "lookup still out when looked at" : "lookup already over when looked at");
+
+    SiteStandIn site;
+    CHECK(site.start(mode));
+    setEnv("FOXSDR_BETA_API_URL", site.baseUrl());  // read when the lookup starts
+
+    const fs::path dir = g_scratch / (held ? "linkqueue-held" : "linkqueue-failed");
     std::error_code ec;
     fs::create_directories(dir, ec);
     const fs::path cfgPath = dir / "config.json";
@@ -358,6 +487,9 @@ void testALinkArrivingWhilePendingIsQueuedNotDropped() {
     CHECK(cascade::core::writeLinkRequestFile(configDir, tokB));
     Access::forcePoll(app);
     CHECK(Access::queuedLinkToken(app) == tokB);
+    // While the prompt is up NOTHING has been looked up: neither token has
+    // reached the site.
+    CHECK(site.bearers().empty());
 
     // The tester finally answers the earlier prompt - the gate opens, and
     // the QUEUED (latest) token is what gets started, never the discarded
@@ -365,8 +497,47 @@ void testALinkArrivingWhilePendingIsQueuedNotDropped() {
     Access::pressNotNow(app);
     Access::forcePoll(app);
     CHECK(Access::queuedLinkToken(app).empty());
-    CHECK(Access::resolvingToken(app) == tokB);
 
+    // WHAT WAS STARTED, read where it cannot depend on timing: at the site. The
+    // lookup is made on a worker, so wait (bounded) for it to arrive. It must be
+    // the LATEST token, and the only one - the discarded first token never
+    // reaches the site.
+    const std::vector<std::string> onlyB = {"Bearer " + tokB};
+    CHECK(waitUntil([&] { return !site.bearers().empty(); }));
+    CHECK(site.bearers() == onlyB);
+
+    if (held) {
+        // The lookup cannot finish until released, so the field that names what
+        // is being resolved is set for the whole of this block - by construction,
+        // not by how slow a connection is.
+        CHECK(Access::resolvingToken(app) == tokB);
+        site.release();
+    }
+    // However long it took, let the lookup be collected.
+    CHECK(waitUntil([&] {
+        Access::pump(app);
+        return Access::resolvingToken(app).empty();
+    }));
+    if (held) {
+        // Answered: the prompt that comes up is for the latest token's owner.
+        CHECK(Access::pendingToken(app) == tokB);
+        CHECK(!Access::hasLinkError(app));
+    } else {
+        // Refused: nothing is put in front of the tester as if it were a link to
+        // confirm, and the failure is shown rather than lost.
+        CHECK(!Access::hasPending(app));
+        CHECK(Access::hasLinkError(app));
+    }
+    // Started exactly once. Frames keep running; nothing re-queues or re-starts
+    // the token, and the discarded one never turns up.
+    for (int i = 0; i < 50; ++i) {
+        Access::pump(app);
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    CHECK(Access::queuedLinkToken(app).empty());
+    CHECK(site.bearers() == onlyB);
+
+    setEnv("FOXSDR_BETA_API_URL", "http://127.0.0.1:9");  // what isolate() set
     fs::remove_all(dir, ec);
 }
 
@@ -391,7 +562,8 @@ int main() {
     testPressLinkOverUnknownLegacyTokenDropsTheQueue();
     testPressLinkOverProvenSameTesterKeepsTheQueue();
 
-    testALinkArrivingWhilePendingIsQueuedNotDropped();
+    testALinkArrivingWhilePendingIsQueuedNotDropped(SiteStandIn::Mode::Hold);
+    testALinkArrivingWhilePendingIsQueuedNotDropped(SiteStandIn::Mode::FailAtOnce);
 
     std::error_code ec;
     fs::remove_all(g_scratch, ec);

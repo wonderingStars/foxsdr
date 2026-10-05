@@ -29,7 +29,24 @@
 // fails depending on the machine, and the test requires the matching line
 // whichever happened.
 //
+// THE NAME CHECK IS A FUNCTION, AND IS TESTED AS ONE (nameWrittenInto, below,
+// and checkTheNameCheckItself). Its first form - "does the line contain the
+// device's name" - failed on the Linux CI runner although the product had done
+// nothing wrong: the line there was
+//   audio: output opened - ALSA, 2 channels, 48000 S/s, system default, latency 9 ms
+// and ALSA hands PortAudio its PCM aliases as device names, verbatim
+// (third_party/portaudio/src/hostapi/alsa/pa_linux_alsa.c, BuildDeviceList: the
+// id of each entry under `pcm` in the ALSA configuration becomes the device's
+// name, and the entry called "default" becomes the default output). "default" is
+// a substring of the line's own words "system default", so the substring test
+// reported a leak of a name that is the line's own vocabulary. The properties
+// worth holding are the two the helper states: a name the line writes anywhere
+// OUTSIDE its own fixed wording is a leak, and a name that is only a piece of
+// that wording is not.
+//
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#include <portaudio.h>
+
 #include <cstddef>
 #include <cstdio>
 #include <string>
@@ -56,13 +73,175 @@ std::vector<std::string> outputLines() {
 
 bool contains(const std::string& s, const char* what) { return s.find(what) != std::string::npos; }
 
+// THE WORDS THE LINES CARRY BY CONSTRUCTION - every fixed phrase AudioOut::
+// openLocked can write, plus the host API the open went through. Taken from
+// src/sink/audio_out.cpp; if a phrase is reworded there and not here, a device
+// whose name happens to be that phrase is reported as a leak, which is the
+// loud direction to be wrong in.
+std::vector<std::string> ownWords(const std::vector<std::string>& hostApis) {
+    std::vector<std::string> w = {
+        "audio: output opened - ",
+        "audio: output could not be opened - ",
+        "system default",
+        "a chosen device",
+        "channels",
+        "channel",
+        "S/s",
+        "latency",
+        "PortAudio did not start",
+        "the request itself was unusable (a rate or a channel count)",
+        "no default output device",
+        "no such output device",
+        "device has",
+        "output channel(s)",
+        "are needed",
+        "refused the stream",
+        "unknown host API",
+    };
+    for (const std::string& a : hostApis) {
+        if (!a.empty()) { w.push_back(a); }
+    }
+    return w;
+}
+
+// Names shorter than this are not looked for: one to three characters match
+// digits and punctuation the line has in every form ("2 channels", ", ").
+constexpr std::size_t kShortestCheckedName = 4;
+
+// Whether `name` is WRITTEN into `line`: true when it occurs anywhere that the
+// line's own fixed wording does not account for. An occurrence that lies wholly
+// inside the wording (the name "default" inside "system default", the name
+// "WASAPI" inside the host API "Windows WASAPI") is the wording, not the name.
+// EVERY occurrence is considered, so a name that appears once inside the
+// wording and once outside it is still reported - the check cannot be satisfied
+// by the wording happening to contain the name as well.
+bool nameWrittenInto(const std::string& line, const std::string& name,
+                     const std::vector<std::string>& hostApis) {
+    if (name.size() < kShortestCheckedName) { return false; }
+    std::vector<bool> own(line.size(), false);
+    for (const std::string& phrase : ownWords(hostApis)) {
+        for (std::size_t p = line.find(phrase); p != std::string::npos;
+             p = line.find(phrase, p + 1)) {
+            for (std::size_t i = 0; i < phrase.size(); ++i) { own[p + i] = true; }
+        }
+    }
+    for (std::size_t p = line.find(name); p != std::string::npos; p = line.find(name, p + 1)) {
+        bool explained = true;
+        for (std::size_t i = 0; i < name.size() && explained; ++i) { explained = own[p + i]; }
+        if (!explained) { return true; }
+    }
+    return false;
+}
+
+// Every host API PortAudio knows on this machine (valid while an AudioOut is
+// alive: its constructor initialises PortAudio). A refusal names the host API of
+// the device it was asked for, which need not be the one last opened.
+std::vector<std::string> allHostApis() {
+    std::vector<std::string> out;
+    const PaHostApiIndex n = Pa_GetHostApiCount();
+    for (PaHostApiIndex i = 0; i < n; ++i) {
+        const PaHostApiInfo* api = Pa_GetHostApiInfo(i);
+        if (api != nullptr && api->name != nullptr) { out.push_back(api->name); }
+    }
+    return out;
+}
+
+// NEVER THE DEVICE'S NAME: no output device on this machine is written into
+// `line`. Every device is checked, because the one opened is not necessarily the
+// default, and a device is reported by its index, not its name - the name is the
+// thing this test exists to keep out of logs and out of pasted reports.
+void checkNoDeviceNameIn(const std::string& line, const std::vector<AudioDevice>& devices,
+                         const std::vector<std::string>& hostApis) {
+    for (const AudioDevice& d : devices) {
+        const bool leaked = nameWrittenInto(line, d.name, hostApis);
+        if (leaked) { std::printf("  the line names output device #%d\n", d.index); }
+        CHECK(!leaked);
+    }
+}
+
+// THE CHECK, CHECKED. No hardware: lines and names are injected, so this runs
+// the same way on every machine and does not depend on what sounds cards the
+// machine has.
+void checkTheNameCheckItself() {
+    const std::vector<std::string> alsa = {"ALSA"};
+    const std::vector<std::string> wasapi = {"MME", "Windows WASAPI"};
+
+    // The line the Linux CI runner wrote, verbatim: it contains no device name.
+    const std::string ci =
+        "audio: output opened - ALSA, 2 channels, 48000 S/s, system default, latency 9 ms";
+
+    // THE CI FAILURE, REPRODUCED. The original check was !contains(line, name).
+    // ALSA names its default output "default": that check calls it a leak.
+    CHECK(contains(ci, "default"));
+
+    // -- NOT a leak: names that are only a piece of the line's own wording, or
+    //    are not in the line at all. Every ALSA alias a runner can list among
+    //    them, and the host API's own name and fragments of it.
+    for (const char* alias : {"default", "sysdefault", "dmix", "front", "pulse", "iec958",
+                              "surround40", "hdmi", "usbstream", "ALSA"}) {
+        CHECK(!nameWrittenInto(ci, alias, alsa));
+    }
+    CHECK(!nameWrittenInto(ci, "system default", alsa));
+    CHECK(!nameWrittenInto(ci, "latency", alsa));
+    CHECK(!nameWrittenInto(ci, "channels", alsa));
+    CHECK(!nameWrittenInto(ci, "Speakers (Realtek High Definition Audio)", alsa));
+    CHECK(!nameWrittenInto(ci, "", alsa));  // an empty name is nothing to look for
+    const std::string wasLine =
+        "audio: output opened - Windows WASAPI, 2 channels, 48000 S/s, system default, "
+        "latency 10 ms";
+    for (const char* piece : {"Windows WASAPI", "WASAPI", "Windows"}) {
+        CHECK(!nameWrittenInto(wasLine, piece, wasapi));  // a substring of the host API's name
+    }
+    const std::string chosen =
+        "audio: output opened - MME, 1 channel, 48000 S/s, a chosen device, latency 90 ms";
+    CHECK(!nameWrittenInto(chosen, "chosen device", wasapi));
+    CHECK(!nameWrittenInto(chosen, "Speakers (Realtek High Definition Audio)", wasapi));
+    const std::string refused = "audio: output could not be opened - no default output device";
+    CHECK(!nameWrittenInto(refused, "default", alsa));
+    CHECK(!nameWrittenInto(refused, "output device", alsa));
+
+    // -- A LEAK: the name written where the line has no wording for it. Each of
+    //    these is a product that did what the privacy rule forbids.
+    // A card's name appended to the line.
+    CHECK(nameWrittenInto(ci + " (Speakers (Realtek High Definition Audio))",
+                          "Speakers (Realtek High Definition Audio)", alsa));
+    // ...in place of the words "a chosen device".
+    CHECK(nameWrittenInto(
+        "audio: output opened - MME, 2 channels, 48000 S/s, Headphones (USB Audio Device), "
+        "latency 90 ms",
+        "Headphones (USB Audio Device)", wasapi));
+    // THE ALIAS THE FIX EXISTS FOR, WRITTEN: the device NAMED "default" printed in
+    // place of "system default" is still the name being written...
+    CHECK(nameWrittenInto("audio: output opened - ALSA, 2 channels, 48000 S/s, default, "
+                          "latency 9 ms",
+                          "default", alsa));
+    // ...and so is the same name printed IN ADDITION to the line's own "system
+    // default" - the wording containing it must not excuse the extra copy.
+    CHECK(nameWrittenInto(ci + " [default]", "default", alsa));
+    CHECK(nameWrittenInto(ci + " (sysdefault)", "sysdefault", alsa));
+    // A name that is a piece of the host API's, written somewhere else.
+    CHECK(nameWrittenInto(wasLine + " (WASAPI)", "WASAPI", wasapi));
+    // A refusal that names the device it was refused.
+    CHECK(nameWrittenInto("audio: output could not be opened - Speakers (Realtek High "
+                          "Definition Audio) refused the stream: Invalid sample rate",
+                          "Speakers (Realtek High Definition Audio)", wasapi));
+    // A name that straddles the wording and what follows it is not excused by
+    // the part that overlaps.
+    CHECK(nameWrittenInto("audio: output opened - ALSA, 2 channels, 48000 S/s, system default "
+                          "monitor, latency 9 ms",
+                          "default monitor", alsa));
+}
+
 }  // namespace
 
 int main() {
+    checkTheNameCheckItself();
+
     DiagLog::instance().configure(std::string(), false);  // ring only; no file
     DiagLog::instance().resetForTest();
 
     AudioOut ao;
+    const std::vector<std::string> hostApis = allHostApis();
 
     // --- A refused open is logged, with a reason ----------------------------
     {
@@ -122,10 +301,57 @@ int main() {
             }
             // NEVER THE DEVICE'S NAME. Every output device on this machine is
             // checked, because the default is not necessarily the one opened.
-            for (const AudioDevice& d : ao.listOutputDevices()) {
-                if (d.name.size() >= 4u) { CHECK(!contains(l, d.name.c_str())); }
+            checkNoDeviceNameIn(l, ao.listOutputDevices(), hostApis);
+            // The generic aliases an ALSA machine lists as device names are the
+            // line's own vocabulary, never a leak, whatever this machine lists.
+            for (const char* alias : {"default", "sysdefault", "dmix", "front", "pulse"}) {
+                CHECK(!nameWrittenInto(l, alias, hostApis));
             }
         }
+        ao.close();
+    }
+
+    // --- A device opened BY INDEX is logged as a chosen one, and still not by name
+    // The default-device open above says "system default" and never reaches the
+    // wording a picked device gets. Here the default device is opened by its own
+    // index and then up to three others, and each line is held to the same rule:
+    // no device's name anywhere in it.
+    {
+        const std::vector<AudioDevice> devices = ao.listOutputDevices();
+        std::vector<int> picked;
+        for (const AudioDevice& d : devices) {
+            if (d.isDefault) { picked.push_back(d.index); }
+        }
+        for (const AudioDevice& d : devices) {
+            if (picked.size() >= 4u) { break; }
+            if (!d.isDefault) { picked.push_back(d.index); }
+        }
+        int written = 0;
+        for (const int index : picked) {
+            const std::size_t before = outputLines().size();
+            const bool ok = ao.open(index, 48000.0, 1);
+            const std::vector<std::string> lines = outputLines();
+            if (lines.size() == before + 1u) {
+                const std::string& l = lines.back();
+                ++written;
+                if (ok) {
+                    CHECK(contains(l, "audio: output opened"));
+                    CHECK(contains(l, "a chosen device"));
+                    CHECK(!contains(l, "system default"));
+                    CHECK(contains(l, "1 channel"));
+                    CHECK(!ao.openedHostApi().empty());
+                    CHECK(contains(l, ao.openedHostApi().c_str()));
+                } else {
+                    CHECK(contains(l, "audio: output could not be opened"));
+                }
+                checkNoDeviceNameIn(l, devices, hostApis);
+            } else {
+                // A refusal for a reason already said writes nothing (the
+                // once-a-minute rule above); a success always writes a line.
+                CHECK(!ok);
+            }
+        }
+        std::printf("opened %zu device(s) by index, %d line(s) written\n", picked.size(), written);
         ao.close();
     }
 
