@@ -36,6 +36,25 @@ function num(v, max) {
   return Number.isFinite(n) && n >= 0 ? Math.min(Math.floor(n), max) : 0;
 }
 
+// DISPLAY STALLS: how many times the client's hang watchdog classified a freeze
+// as the display driver's (not the application's) and the server has not yet
+// been told. One bare integer; see PRIVACY.md "Display stalls".
+//
+// Returns the count, or null when the client did not send a USABLE one - and
+// null is "not reported", which is not zero. Old clients never send the field,
+// and a record whose count is the wrong shape is treated the same way rather
+// than rejected (the rest of the record is still good, and a bad optional field
+// must not cost a session's length) or coerced to 0 (which would read as "this
+// install measured its stalls and had none"). Deliberately STRICT, unlike
+// num() above: only a JSON number counts, so "3", true, [], {} and null are all
+// "not reported". Fractions are floored and anything above MAX_STALLS is
+// clamped to it, so a hostile client cannot write an unbounded number.
+const MAX_STALLS = 100000;  // the application's own cap (StallLedger::kMaxCount)
+function stallCount(v) {
+  if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) { return null; }
+  return Math.min(Math.floor(v), MAX_STALLS) || 0;  // || 0 turns -0 into 0
+}
+
 export default {
   async fetch(request, env) {
     if (request.method === 'OPTIONS') {
@@ -100,6 +119,7 @@ export default {
     const panels = Array.isArray(body.panels)
       ? body.panels.slice(0, 10).map((p) => clamp(p, 16)).join(',')
       : '';
+    const stalls = stallCount(body.stalls);
 
     env.USAGE.writeDataPoint({
       // index1 is the install id: the ONLY field that distinguishes one
@@ -124,12 +144,29 @@ export default {
         clamp(body.ch, 12),     // blob8  install channel (store/installer/appimage/tarball/android)
         clamp(body.first, 10),  // blob9  first-run day, UTC, YYYY-MM-DD
         clamp(body.fv, 48),     // blob10 version that created the install id
+        // Display stalls: blob11 says whether this client SENT a count at all,
+        // and double5 is the count. Both, because a row written before this
+        // existed, and a row from an old client, have no value in either column,
+        // and a count alone cannot tell "reported zero" from "never reported".
+        // (What an unwritten column reads back as is not something this file
+        // relies on - Cloudflare's documentation does not say - which is why
+        // the marker is a value that is only ever WRITTEN when the field was
+        // sent: a reader asks for blob11 = '1' and treats every other row as
+        // unmeasured.) Appended AFTER the existing columns: no earlier column
+        // changed meaning.
+        stalls === null ? '' : '1',  // blob11 '1' = the client reported a stall count
       ],
       doubles: [
         num(body.launches, 1e6),    // double1  launches since install
         num(body.crashes, 1e6),     // double2  unclean exits since install (lifetime, never reset)
         num(body.sessionSec, 86400 * 30),  // double3  last session length
         topSec,                     // double4  seconds in the top mode
+        // double5  display stalls this record carries: stalls the client has
+        // counted and the server has not yet been told (carried until a record
+        // is accepted, so a failed send does not lose them). Per ROW, so a
+        // window's total is sum(double5) - not a lifetime figure like double2.
+        // Meaningful only where blob11 = '1'.
+        stalls === null ? 0 : stalls,
       ],
     });
 

@@ -53,7 +53,13 @@ param(
     # build by anything except the id.
     #
     # Pass -ExcludeInstalls @() to see the unfiltered dataset.
-    [string[]]$ExcludeInstalls = @('397c600669cd9fa2dfb4b7d911edb70c', '8a7e3dd06082265df1e21fc7e2d47ed3')  # the owner's old and current desktop ids
+    [string[]]$ExcludeInstalls = @('397c600669cd9fa2dfb4b7d911edb70c', '8a7e3dd06082265df1e21fc7e2d47ed3'),  # the owner's old and current desktop ids
+    # WHERE THE SQL API IS. Only the tests change this: telemetry-worker/
+    # worker.test.mjs points it at a stand-in on loopback to read back the
+    # queries this script sends and to feed it canned rows, so the reader is
+    # exercised without a token, an account or a network. The token goes to
+    # whatever this names, so never set it from anything you did not write.
+    [string]$ApiBase = "https://api.cloudflare.com/client/v4"
 )
 
 $ErrorActionPreference = "Stop"
@@ -76,7 +82,7 @@ if (-not $AccountId) {
     Write-Error "No account id. Set CLOUDFLARE_ACCOUNT_ID, or run 'npx wrangler deploy' once so the id is cached."
 }
 
-$uri = "https://api.cloudflare.com/client/v4/accounts/$AccountId/analytics_engine/sql"
+$uri = "$ApiBase/accounts/$AccountId/analytics_engine/sql"
 
 function Invoke-Sql([string]$sql) {
     try {
@@ -226,5 +232,55 @@ if ($crash -and $crash[0].installs -gt 0) {
     Write-Host "Stability" -ForegroundColor Cyan
     Write-Host ("  unclean exits reported          {0}" -f $crash[0].crashes)
     Write-Host ("  per install                     {0:N2}" -f ($crash[0].crashes / $crash[0].installs))
+}
+
+# DISPLAY STALLS, per version - how often the window freezes because the display
+# driver was waiting, which the crash store cannot say: those reports are kept
+# on the user's machine on purpose, so this one number is all that reaches us.
+#
+# Three queries, the install counts being count(DISTINCT index1) and never
+# uniq(), and the two that count stalls asking only about rows with blob11 = '1'
+# - the rows whose client SENT a stall count. That condition is the whole point
+# of the section: an old build, and every row written before the field existed,
+# has no count, and counting them as zero would print a confident zero for a
+# number nobody has measured. Those versions are listed apart, as unmeasured -
+# worked out here by subtracting the versions that report from every version
+# seen, so nothing depends on what an unwritten column reads back as (which
+# Cloudflare does not document). (Without credentials the script never reaches here: the token
+# check at the top stops it before anything is printed, so there is no table of
+# zeroes for data that could not be read.)
+Write-Host ""
+Write-Host "Display stalls, by version" -ForegroundColor Cyan
+$reporting = Invoke-Sql "SELECT blob1 AS version, count(DISTINCT index1) AS installs FROM foxsdr_usage WHERE $window AND blob11 = '1' GROUP BY blob1 ORDER BY installs DESC"
+if (-not $reporting) {
+    Write-Host "  No build in this window reports a stall count yet."
+    Write-Host "  That is not zero stalls - it is unmeasured."
+} else {
+    $stalled = Invoke-Sql "SELECT blob1 AS version, count(DISTINCT index1) AS installs, sum(double5) AS stalls FROM foxsdr_usage WHERE $window AND blob11 = '1' AND double5 > 0 GROUP BY blob1"
+    $byVersion = @{}
+    foreach ($s in @($stalled)) { $byVersion[[string]$s.version] = $s }
+    Write-Host ("  {0,-34} {1,8} {2,12} {3,8}" -f "version", "installs", "with stalls", "stalls")
+    foreach ($r in $reporting) {
+        $hit = $byVersion[[string]$r.version]
+        $with = 0
+        $total = 0
+        if ($hit) { $with = [int64]$hit.installs; $total = [int64]$hit.stalls }
+        $label = [string]$r.version
+        if (-not $label) { $label = "(not reported)" }
+        Write-Host ("  {0,-34} {1,8} {2,12} {3,8}" -f $label, $r.installs, $with, $total)
+    }
+    Write-Host "  installs = distinct installs on that version that reported a count; stalls = the sum of the counts."
+    $seen = Invoke-Sql "SELECT blob1 AS version FROM foxsdr_usage WHERE $window GROUP BY blob1 ORDER BY blob1"
+    $reportsCount = @{}
+    foreach ($r in $reporting) { $reportsCount[[string]$r.version] = $true }
+    $names = @()
+    foreach ($v in @($seen)) {
+        if (-not $reportsCount.ContainsKey([string]$v.version)) {
+            if ($v.version) { $names += [string]$v.version } else { $names += "(not reported)" }
+        }
+    }
+    if ($names.Count -gt 0) {
+        Write-Host ("  Not measured (these builds send no count): {0}" -f ($names -join ", "))
+    }
 }
 Write-Host ""
