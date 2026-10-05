@@ -3346,6 +3346,9 @@ private:
     std::uint64_t healthWatchSeq_ = 0;
     cascade::core::SpectrumFrame healthProbe_;
     bool healthSoundNoted_ = false;     // the output has played this session
+    // What moved in the counters healthPoll() reads for the recoveries a signal
+    // thread or a vendor call's worker meets (core/health_events.hpp).
+    cascade::core::health::RecoveryWatch recoveryWatch_;
     // "Running now" beats: a minimal ping every five minutes while the app is
     // open, only while reporting is on. See HeartbeatSender in telemetry.hpp.
     cascade::core::HeartbeatSender telemetryHeartbeat_;

@@ -18,7 +18,9 @@
 #include <thread>
 #include <vector>
 
+#include "core/health_events.hpp"
 #include "core/plugin_ui.hpp"
+#include "core/telemetry.hpp"
 #include "test_check.hpp"
 
 namespace {
@@ -1470,6 +1472,41 @@ int main() {
         CHECK(g_pn.created == 2);
         CHECK(ui.tracks().size() == 1u);
         CHECK(ui.panels().size() == 1u);
+    }
+
+    // --- THE USAGE RECORD (0.99.64): a host call that threw is a recovery ---
+    //
+    // `recovered.pluginapi`. The trampolines can be entered from a plugin's own thread, so they
+    // do not count - they RAISE A FLAG (one relaxed OR), and the window's per-frame poll turns it
+    // into the count (drainRecovered). The real trigger: a tune service that throws, behind the
+    // real host table a plugin is handed. The plugin gets the ABI's own "failed", never the throw.
+    {
+        namespace health = cascade::core::health;
+        auto g = health::globalLedger();
+        g->reset();
+        g->arm("", cascade::core::newInstallId(), false);
+        health::drainRecovered();                        // nothing raised by an earlier case
+
+        resetAll();
+        const CascadeHostClientApi hcApi = makeHostClientApi();
+        LoadedPlugin p = plugAt("Tracker", "C:/plugins/tracker.dll");
+        p.hostClient = &hcApi;
+        HostServices services;
+        services.tune = [](double) -> std::int32_t { throw std::runtime_error("boom"); };
+        PluginUi ui;
+        ui.setServices(services);
+        ui.setTuneAllowed("tracker.dll", true);
+        ui.rebuild({p});
+        CHECK(g_hc.attaches == 1);
+        CHECK(requestTuneFrom(0, 137.1e6) == CASCADE_TUNE_FAILED);
+        CHECK(g->counts().empty());                      // raised, not counted: nothing took a lock
+        health::drainRecovered();
+        CHECK(g->counts() == (health::Counts{{"recovered.pluginapi", 1}}));
+        // Once a session however often the plugin asks.
+        for (int i = 0; i < 20; ++i) { CHECK(requestTuneFrom(0, 137.1e6) == CASCADE_TUNE_FAILED); }
+        health::drainRecovered();
+        CHECK(g->counts() == (health::Counts{{"recovered.pluginapi", 1}}));
+        g->reset();
     }
 
     // --- A STOPPED PLUGIN CANNOT MOVE THE RECEIVER -------------------------

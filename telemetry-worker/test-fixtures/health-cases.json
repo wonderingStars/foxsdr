@@ -1,0 +1,72 @@
+[
+  {
+    "name": "the failure families: written order, merged, clamped, junk dropped",
+    "input": "rec_fail=2,junk=1,scan_none=1,rec_fail=3,upd_dl=5000,x",
+    "expected": "scan_none=1,upd_dl=999,rec_fail=5"
+  },
+  {
+    "name": "slow comes after the failures in the written order",
+    "input": "slow.rail.250ms=2,upd_dl=1",
+    "expected": "upd_dl=1,slow.rail.250ms=2"
+  },
+  {
+    "name": "user-wait is not a word",
+    "input": "slow.user-wait.250ms=3,slow.rail.250ms=1,slow.user-wait.5s=1",
+    "expected": "slow.rail.250ms=1"
+  },
+  {
+    "name": "nine slow tokens, one tier: the lowest count goes",
+    "input": "slow.events.250ms=1,slow.frame-start.250ms=2,slow.pre-draw.250ms=3,slow.plugin-panels.250ms=4,slow.toolbar.250ms=5,slow.rail.250ms=6,slow.spectrum.250ms=7,slow.patch.250ms=8,slow.status.250ms=9",
+    "expected": "slow.frame-start.250ms=2,slow.pre-draw.250ms=3,slow.plugin-panels.250ms=4,slow.toolbar.250ms=5,slow.rail.250ms=6,slow.spectrum.250ms=7,slow.patch.250ms=8,slow.status.250ms=9"
+  },
+  {
+    "name": "nine slow tokens, equal counts: the last in the written order goes",
+    "input": "slow.events.250ms=3,slow.frame-start.250ms=3,slow.pre-draw.250ms=3,slow.plugin-panels.250ms=3,slow.toolbar.250ms=3,slow.rail.250ms=3,slow.spectrum.250ms=3,slow.patch.250ms=3,slow.status.250ms=3",
+    "expected": "slow.events.250ms=3,slow.frame-start.250ms=3,slow.pre-draw.250ms=3,slow.plugin-panels.250ms=3,slow.toolbar.250ms=3,slow.rail.250ms=3,slow.spectrum.250ms=3,slow.patch.250ms=3"
+  },
+  {
+    "name": "a 5 s frame beats eight stutters of 999",
+    "input": "slow.events.250ms=999,slow.frame-start.250ms=999,slow.pre-draw.250ms=999,slow.plugin-panels.250ms=999,slow.toolbar.250ms=999,slow.rail.250ms=999,slow.spectrum.250ms=999,slow.patch.250ms=999,slow.other.5s=1",
+    "expected": "slow.events.250ms=999,slow.frame-start.250ms=999,slow.pre-draw.250ms=999,slow.plugin-panels.250ms=999,slow.toolbar.250ms=999,slow.rail.250ms=999,slow.spectrum.250ms=999,slow.other.5s=1"
+  },
+  {
+    "name": "a 1 s and a 5 s frame are kept over the weakest stutter",
+    "input": "slow.events.250ms=5,slow.frame-start.250ms=5,slow.pre-draw.250ms=5,slow.plugin-panels.250ms=5,slow.toolbar.250ms=5,slow.rail.250ms=5,slow.dialogs.1s=1,slow.polls.5s=1,slow.saves.250ms=1",
+    "expected": "slow.events.250ms=5,slow.frame-start.250ms=5,slow.pre-draw.250ms=5,slow.plugin-panels.250ms=5,slow.toolbar.250ms=5,slow.rail.250ms=5,slow.dialogs.1s=1,slow.polls.5s=1"
+  },
+  {
+    "name": "repeats of a slow token are merged and clamped",
+    "input": "slow.rail.5s=600,slow.rail.5s=600",
+    "expected": "slow.rail.5s=999"
+  },
+  {
+    "name": "recovered, nine distinct: the lowest count goes",
+    "input": "recovered.audio=1,recovered.reopen=2,recovered.srcthread=3,recovered.vendorcall=4,recovered.ringdrop=5,recovered.dspexc=6,recovered.cfgsave=7,recovered.enumchild=8,recovered.pluginapi=9",
+    "expected": "recovered.reopen=2,recovered.srcthread=3,recovered.vendorcall=4,recovered.ringdrop=5,recovered.dspexc=6,recovered.cfgsave=7,recovered.enumchild=8,recovered.pluginapi=9"
+  },
+  {
+    "name": "recovered, thirteen at one count: the earlier eight in the written order stay",
+    "input": "recovered.sdrlost=1,recovered.sdrenum=1,recovered.patchload=1,recovered.webroute=1,recovered.pluginapi=1,recovered.enumchild=1,recovered.cfgsave=1,recovered.dspexc=1,recovered.ringdrop=1,recovered.vendorcall=1,recovered.srcthread=1,recovered.reopen=1,recovered.audio=1",
+    "expected": "recovered.audio=1,recovered.reopen=1,recovered.srcthread=1,recovered.vendorcall=1,recovered.ringdrop=1,recovered.dspexc=1,recovered.cfgsave=1,recovered.enumchild=1"
+  },
+  {
+    "name": "all the families, given backwards, come out in the written order",
+    "input": "recovered.sdrlost=1,slow.other.1s=2,rec_fail=1,scan_none=1",
+    "expected": "scan_none=1,rec_fail=1,slow.other.1s=2,recovered.sdrlost=1"
+  },
+  {
+    "name": "a word the vocabulary does not have is dropped",
+    "input": "recovered.nope=1,recovered.audio.x=1,recovered.audio=1,slow.rail.2s=4,slow.rail.250ms.x=2",
+    "expected": "recovered.audio=1"
+  },
+  {
+    "name": "nothing legal in it",
+    "input": "slow.user-wait.250ms=1,junk,recovered=1,slow=2",
+    "expected": ""
+  },
+  {
+    "name": "a zero or a non-number count is not a count",
+    "input": "slow.rail.250ms=0,slow.rail.1s=x,recovered.audio=0,slow.rail.5s=1",
+    "expected": "slow.rail.5s=1"
+  }
+]

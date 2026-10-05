@@ -22,6 +22,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -38,6 +39,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include "core/frame_timing.hpp"
 #include "core/health_events.hpp"
 #include "core/plugin_host.hpp"
 #include "core/plugin_repo.hpp"
@@ -164,6 +166,296 @@ void testNothingOnTheHotPathsCounts() {
     const std::size_t note = audio.find("noteSoundFail");
     const std::size_t locked = audio.find("bool AudioOut::openLocked(");
     CHECK(note != std::string::npos && locked != std::string::npos && note < locked);
+}
+
+// WHAT THE PROGRAM RECOVERED FROM (0.99.64), where it is counted and where it must NOT be.
+//
+//   - A signal thread (the source and DSP threads in pipeline.cpp, everything in src/dsp, the audio
+//     callback, the plugin runner that runs on the DSP thread) never counts: its recoveries are COUNTERS
+//     (Pipeline::abandonedSourceThreads / ringDroppedSamples / dspThreadExceptions, SoapySource::
+//     driverCallsAbandoned) that a poll the window already makes reads (RecoveryWatch), or a FLAG raised
+//     with one relaxed OR and counted by that poll (raiseRecovered / drainRecovered).
+//   - The one place in the tree that raises a flag is the plugin host-API trampolines, and it raises only.
+//   - Every word of the vocabulary has exactly the sites the survey (docs/DIAGNOSTICS.md) names - no word
+//     is counted somewhere nobody listed, and none is listed and never counted.
+std::string stripComments(const std::string& text) {
+    std::string out;
+    out.reserve(text.size());
+    for (std::size_t i = 0; i < text.size(); ++i) {
+        if (text.compare(i, 2, "//") == 0) {
+            while (i < text.size() && text[i] != '\n') { ++i; }
+            out += '\n';
+        } else {
+            out += text[i];
+        }
+    }
+    return out;
+}
+
+void testRecoveriesAreCountedOnlyWhereTheSurveySaysAndNeverOnASignalThread() {
+    const fs::path root(CASCADE_SOURCE_DIR);
+    // 1. A signal thread never counts, never takes the ledger's lock, and never raises a flag either
+    //    (a counter it already keeps is read by the poll).
+    std::vector<fs::path> signalFiles;
+    for (const auto& e : fs::recursive_directory_iterator(root / "src" / "dsp")) {
+        if (e.is_regular_file()) { signalFiles.push_back(e.path()); }
+    }
+    signalFiles.push_back(root / "src" / "core" / "pipeline.cpp");
+    signalFiles.push_back(root / "src" / "core" / "pipeline.hpp");
+    signalFiles.push_back(root / "src" / "core" / "plugin_runner.cpp");
+    for (const fs::path& f : signalFiles) {
+        const std::string code = stripComments(readFile(f));
+        CHECK(!code.empty());
+        for (const char* banned : {"noteRecovered", "raiseRecovered", "drainRecovered", "noteSlowFrame", "health::note",
+                                   "health_events", "->note(", "globalLedger"}) {
+            if (code.find(banned) != std::string::npos) {
+                std::printf("FAIL %s mentions %s on a signal thread\n", f.string().c_str(), banned);
+            }
+            CHECK(code.find(banned) == std::string::npos);
+        }
+    }
+    // the audio callback's body, comments aside
+    {
+        const std::string audio = readFile(root / "src" / "sink" / "audio_out.cpp");
+        const std::size_t from = audio.find("std::size_t AudioOut::pullBlock(");
+        const std::size_t to = audio.find("std::size_t AudioOut::ringFrames()");
+        CHECK(from != std::string::npos && to != std::string::npos && to > from);
+        const std::string body = stripComments(audio.substr(from, to - from));
+        CHECK(body.find("Recovered") == std::string::npos);
+        CHECK(body.find("raiseRecovered") == std::string::npos);
+    }
+    // The DSP thread's catch blocks keep a COUNTER and nothing else of this kind.
+    {
+        const std::string pipe = stripComments(readFile(root / "src" / "core" / "pipeline.cpp"));
+        std::size_t at = 0;
+        int blocks = 0;
+        while ((at = pipe.find("noteThreadFault(\"DSP thread\"", at)) != std::string::npos) {
+            ++blocks;
+            CHECK(pipe.rfind("dspExceptions_.fetch_add", at) != std::string::npos &&
+                  at - pipe.rfind("dspExceptions_.fetch_add", at) < 120);
+            at += 10;
+        }
+        CHECK(blocks == 2);
+    }
+    // 2. The plugin host-API trampolines: raise a flag, and nothing that takes a lock.
+    {
+        const std::string ui = stripComments(readFile(root / "src" / "core" / "plugin_ui.cpp"));
+        CHECK(ui.find("noteRecovered") == std::string::npos);
+        CHECK(ui.find("health::note") == std::string::npos);
+        CHECK(ui.find("globalLedger") == std::string::npos);
+        std::size_t raises = 0;
+        for (std::size_t at = 0; (at = ui.find("raiseHostFault();", at)) != std::string::npos; at += 10) { ++raises; }
+        CHECK(raises == 6);            // the four host calls and the two level-1 helpers' catch blocks
+        CHECK(ui.find("health::raiseRecovered(cascade::core::health::Recovered::PluginApi)") != std::string::npos);
+    }
+    // 3. Every word of the vocabulary has the sites the survey names, and no others.
+    struct Site {
+        const char* word;
+        const char* file;
+        int count;          // occurrences of `Recovered::<word>` in that file
+    };
+    const std::vector<Site> sites = {
+        {"Audio", "src/gui/app_window.cpp", 1},      {"Reopen", "src/gui/app_window.cpp", 1},
+        {"CfgSave", "src/gui/app_window.cpp", 1},    {"PatchLoad", "src/gui/app_window.cpp", 1},
+        {"SdrEnum", "src/gui/app_window.cpp", 1},    {"SdrLost", "src/gui/app_window.cpp", 1},
+        {"EnumChild", "src/source/soapy_enum_proc.cpp", 1},
+        {"PluginApi", "src/core/plugin_ui.cpp", 1},  {"WebRoute", "src/net/web_server.cpp", 1},
+    };
+    // The four counters a poll reads: named in the window's poll, where the readings are made.
+    const std::string window = readFile(root / "src" / "gui" / "app_window.cpp");
+    for (const char* reading : {"now.sourceThreadsAbandoned = static_cast<unsigned long long>(pipeline_.abandonedSourceThreads())",
+                                "now.vendorCallsAbandoned = cascade::source::SoapySource::driverCallsAbandoned()",
+                                "now.ringDroppedSamples = pipeline_.ringDroppedSamples()",
+                                "now.dspThreadExceptions = static_cast<unsigned long long>(pipeline_.dspThreadExceptions())",
+                                "recoveryWatch_.poll(now)", "cascade::core::health::drainRecovered()"}) {
+        if (window.find(reading) == std::string::npos) { std::printf("FAIL the window's poll lacks %s\n", reading); }
+        CHECK(window.find(reading) != std::string::npos);
+    }
+    const std::set<std::string> watched = {"SrcThread", "VendorCall", "RingDrop", "DspExc"};
+    CHECK(sites.size() + watched.size() == health::kRecoveredCount);
+    // scan the whole tree for uses outside the vocabulary's own files
+    std::map<std::string, std::map<std::string, int>> found;   // word -> file -> count
+    for (const auto& e : fs::recursive_directory_iterator(root / "src")) {
+        if (!e.is_regular_file()) { continue; }
+        const std::string ext = e.path().extension().string();
+        if (ext != ".cpp" && ext != ".hpp" && ext != ".h") { continue; }
+        const std::string name = e.path().filename().string();
+        if (name == "health_events.cpp" || name == "health_events.hpp") { continue; }
+        const std::string code = stripComments(readFile(e.path()));
+        const std::string rel = fs::relative(e.path(), root).generic_string();
+        for (std::size_t at = 0; (at = code.find("Recovered::", at)) != std::string::npos; at += 11) {
+            std::size_t end = at + 11;
+            while (end < code.size() && (std::isalnum(static_cast<unsigned char>(code[end])) != 0)) { ++end; }
+            ++found[code.substr(at + 11, end - at - 11)][rel];
+        }
+    }
+    for (const Site& s : sites) {
+        const auto it = found.find(s.word);
+        CHECK(it != found.end());
+        if (it == found.end()) { std::printf("FAIL Recovered::%s is counted nowhere\n", s.word); continue; }
+        CHECK(it->second.size() == 1);
+        const auto f = it->second.find(s.file);
+        CHECK(f != it->second.end() && f->second == s.count);
+        if (f == it->second.end() || f->second != s.count) {
+            std::printf("FAIL Recovered::%s is used in:", s.word);
+            for (const auto& kv : it->second) { std::printf(" %s x%d", kv.first.c_str(), kv.second); }
+            std::printf(" (expected %s x%d)\n", s.file, s.count);
+        }
+    }
+    // ...and nothing else is counted that the table does not know (the watched four have no direct use at all).
+    std::size_t known = 0;
+    for (const auto& kv : found) {
+        const bool listed = std::any_of(sites.begin(), sites.end(), [&](const Site& s) { return kv.first == s.word; });
+        if (!listed) { std::printf("FAIL Recovered::%s is used outside the survey's table\n", kv.first.c_str()); }
+        CHECK(listed);
+        known += listed ? 1 : 0;
+    }
+    CHECK(known == sites.size());
+}
+
+// ---------------------------------------------------------------------------
+// SLOW FRAMES: counted where the frame timer commits one, by the PROCESS's
+// timer only, and never by waiting on a disk.
+// ---------------------------------------------------------------------------
+namespace slowfake {
+std::int64_t g_now = 5'000'000'000'000LL;
+std::int64_t steady() { return g_now; }
+std::int64_t awake() { return g_now; }
+void advanceMs(std::int64_t ms) { g_now += ms * 1'000'000LL; }
+
+std::atomic<int> g_stalls{0};
+void stallTheWriter() {
+    ++g_stalls;
+    std::this_thread::sleep_for(std::chrono::milliseconds(600));
+}
+
+// One frame in which `scope` took `ms`, then the next frame's top, which is where a held slow frame is
+// settled (counted) - as the window's loop does it.
+template <class Timer>
+void slowFrame(Timer& t, long index, cascade::core::FrameScope scope, std::int64_t ms, bool discard = false) {
+    t.beginFrame(index);
+    t.settlePrevious(false);
+    {
+        cascade::core::FrameScopeGuard g(t, scope);
+        advanceMs(ms);
+    }
+    t.endFrame();
+    t.beginFrame(index + 1);
+    t.settlePrevious(discard);
+    t.endFrame();
+}
+}  // namespace slowfake
+
+void testASlowFrameIsCountedByTheProcessTimerOnly() {
+    using cascade::core::FrameScope;
+    using cascade::core::FrameTimer;
+    auto g = fresh();
+
+    // THE PROCESS TIMER (the one the window drives): each slow frame is one count, in its scope and tier.
+    {
+        FrameTimer proc{FrameTimer::ProcessTimer{}};
+        proc.setClocksForTest(&slowfake::steady, &slowfake::awake);
+        proc.setSinkForTest([](bool, const char*) {});
+        slowfake::slowFrame(proc, 40, FrameScope::Rail, 300);                  // a stutter
+        slowfake::slowFrame(proc, 42, FrameScope::Rail, 300);                  // another, same cell
+        slowfake::slowFrame(proc, 44, FrameScope::PluginsReload, 1200);        // a freeze the person noticed
+        slowfake::slowFrame(proc, 46, FrameScope::Saves, 6000);                // what the watchdog would have said
+        slowfake::slowFrame(proc, 48, FrameScope::Spectrum, 249);              // not slow: not counted
+        slowfake::slowFrame(proc, 50, FrameScope::Render, 400, /*discard=*/true);  // display changed: dropped
+        slowfake::slowFrame(proc, 5, FrameScope::Rail, 260);                   // the first 30 frames are start-up
+        EXPECT_COUNTS(g, (Counts{{"slow.rail.250ms", 2}, {"slow.plugins-reload.1s", 1}, {"slow.saves.5s", 1},
+                                 {"slow.startup.250ms", 1}}));
+        // The timer's own table says the same thing.
+        CHECK(proc.counts().count[static_cast<int>(FrameScope::Rail)][0] == 2);
+        CHECK(proc.counts().count[static_cast<int>(FrameScope::PluginsReload)][1] == 1);
+    }
+    // THE PERSON'S OWN TIME is never counted: a Windows prompt answered inside the frame.
+    {
+        FrameTimer proc{FrameTimer::ProcessTimer{}};
+        proc.setClocksForTest(&slowfake::steady, &slowfake::awake);
+        proc.setSinkForTest([](bool, const char*) {});
+        auto g2 = fresh();
+        proc.beginFrame(60);
+        proc.settlePrevious(false);
+        proc.userWaitBegin();
+        slowfake::advanceMs(4000);
+        proc.userWaitEnd();
+        proc.endFrame();
+        proc.beginFrame(61);
+        proc.settlePrevious(false);
+        proc.endFrame();
+        CHECK(g2->counts().empty());
+    }
+    // A TIMER A TEST BUILDS counts into its own table and into nothing else.
+    {
+        auto g3 = fresh();
+        FrameTimer built(&slowfake::steady, &slowfake::awake);
+        built.setSinkForTest([](bool, const char*) {});
+        slowfake::slowFrame(built, 70, FrameScope::Toolbar, 500);
+        slowfake::slowFrame(built, 72, FrameScope::Toolbar, 2000);
+        CHECK(built.counts().count[static_cast<int>(FrameScope::Toolbar)][0] == 1);
+        CHECK(built.counts().count[static_cast<int>(FrameScope::Toolbar)][1] == 1);
+        CHECK(g3->counts().empty());
+    }
+    // Reporting off: the process timer counts its table and the ledger counts nothing.
+    {
+        auto g4 = health::globalLedger();
+        g4->reset();
+        g4->disarm();
+        FrameTimer proc{FrameTimer::ProcessTimer{}};
+        proc.setClocksForTest(&slowfake::steady, &slowfake::awake);
+        proc.setSinkForTest([](bool, const char*) {});
+        slowfake::slowFrame(proc, 80, FrameScope::Rail, 300);
+        CHECK(proc.counts().count[static_cast<int>(FrameScope::Rail)][0] == 1);
+        CHECK(g4->counts().empty());
+    }
+}
+
+void testACommittedSlowFrameNeverWaitsOnTheDisk() {
+    using cascade::core::FrameScope;
+    using cascade::core::FrameTimer;
+    // The window's thread commits a slow frame (FrameTimer::commit). With the ledger's WRITER made to
+    // take 600 ms - a slow share, a disk spinning up - the commits still return at once, and the file
+    // arrives afterwards: the time the window's thread spent is what moves with a synchronous write.
+    const fs::path dir = scratch("slowdisk");
+    const std::string id = cascade::core::newInstallId();
+    const std::string file = health::HealthLedger::pathIn(dir.string());
+    auto g = health::globalLedger();
+    g->reset();
+    g->arm(file, id, false);
+    slowfake::g_stalls = 0;
+    health::HealthLedger::setWriteHookForTest(&slowfake::stallTheWriter);
+
+    FrameTimer proc{FrameTimer::ProcessTimer{}};
+    proc.setClocksForTest(&slowfake::steady, &slowfake::awake);
+    proc.setSinkForTest([](bool, const char*) {});
+    double worstMs = 0.0, totalMs = 0.0;
+    for (int i = 0; i < 40; ++i) {
+        // the commit happens in settlePrevious at the top of the NEXT frame: time that call
+        proc.beginFrame(100 + 4 * i);
+        proc.settlePrevious(false);
+        { cascade::core::FrameScopeGuard s(proc, FrameScope::Rail); slowfake::advanceMs(300); }
+        proc.endFrame();
+        const auto t0 = std::chrono::steady_clock::now();
+        proc.beginFrame(101 + 4 * i);
+        proc.settlePrevious(false);
+        const double ms =
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        proc.endFrame();
+        worstMs = std::max(worstMs, ms);
+        totalMs += ms;
+        if (totalMs > 2000.0) { break; }    // a commit that waits on the disk: report it, do not sit out 40 stalls
+    }
+    std::printf("health: 40 slow frames committed with the writer stalled 600 ms: total %.3f ms, worst %.3f ms\n",
+                totalMs, worstMs);
+    CHECK(totalMs < 300.0);
+    CHECK(g->flush(10000));
+    health::HealthLedger::setWriteHookForTest(nullptr);
+    CHECK(slowfake::g_stalls.load() >= 1);
+    Counts onDisk;
+    CHECK(health::HealthLedger::parseFileText(readFile(file), id, onDisk));
+    CHECK(onDisk == (Counts{{"slow.rail.250ms", 40}}));
+    g->reset();
 }
 
 // ---------------------------------------------------------------------------
@@ -717,6 +1009,9 @@ int main(int argc, char** argv) {
     if (argc > 1) { g_abiFixture = argv[1]; }
     if (argc > 2) { g_declineFixture = argv[2]; }
     testNothingOnTheHotPathsCounts();
+    testRecoveriesAreCountedOnlyWhereTheSurveySaysAndNeverOnASignalThread();
+    testASlowFrameIsCountedByTheProcessTimerOnly();
+    testACommittedSlowFrameNeverWaitsOnTheDisk();
     testASoundOutputThatCannotBeOpenedIsCounted();
     testEveryNativeDriversRefusalIsClassified();
     testTheAorDriversRefusalIsClassified();

@@ -29,6 +29,8 @@
 #include "source/soapy_source.hpp"
 
 #include "core/diag_log.hpp"
+#include "core/health_events.hpp"
+#include "core/telemetry.hpp"
 #include "source/soapy_enum_proc.hpp"
 
 #include <SoapySDR/Device.hpp>
@@ -1500,6 +1502,16 @@ int main() {
         resetWedge();
         g_wedgeDeactivate.store(true, std::memory_order_relaxed);
         const unsigned long long abandonedBefore = SoapySource::driverCallsAbandoned();
+        // THE USAGE RECORD (0.99.64): the window's poll reads this very counter and counts a rise as
+        // `recovered.vendorcall` (core/health_events.hpp, RecoveryWatch). The real trigger: this wedged
+        // deactivateStream, abandoned by the real escape path.
+        auto healthLedger = cascade::core::health::globalLedger();
+        healthLedger->reset();
+        healthLedger->arm("", cascade::core::newInstallId(), false);
+        cascade::core::health::RecoveryWatch healthWatch;
+        cascade::core::health::RecoveryReadings healthReadings;
+        healthReadings.vendorCallsAbandoned = abandonedBefore;
+        healthWatch.poll(healthReadings);                     // the baseline
 
         // On the heap, so the source can be DESTROYED while the driver call is
         // still parked inside the fake - the case that turns this fix into a
@@ -1512,6 +1524,11 @@ int main() {
         src->stop();
         const long long stopMs = msSince(t0);
         std::printf("  stop() returned after %lld ms (driver still inside)\n", stopMs);
+        healthReadings.vendorCallsAbandoned = SoapySource::driverCallsAbandoned();
+        healthWatch.poll(healthReadings);
+        CHECK(healthLedger->counts() ==
+              (cascade::core::health::Counts{{"recovered.vendorcall", 1}}));
+        healthLedger->reset();
         // The wedge holds for 20 s. Anything near that is stop() waiting it
         // out, which is the freeze itself.
         CHECK(stopMs < 3000);

@@ -52,6 +52,7 @@
 #include "core/crash_upload.hpp"
 #include "core/diag_log.hpp"
 #include "core/diag_report.hpp"
+#include "core/health_events.hpp"
 #include "core/telemetry.hpp"
 #include "core/version.hpp"
 
@@ -1199,6 +1200,35 @@ int main(int argc, char** argv) {
         CHECK(r.devices.empty());
         CHECK(r.attempts == 0);  // nothing was ever started
         CHECK(!r.fellBackInProcess);
+    }
+
+    // --- THE USAGE RECORD (0.99.64): a child that died and was CONTAINED is a recovery ----
+    // `recovered.enumchild`, counted where the death is recorded, once a session. The real
+    // trigger: this test's own helper dying, through the same enumerateIsolated the window calls.
+    {
+        namespace health = cascade::core::health;
+        auto g = health::globalLedger();
+        g->reset();
+        g->arm("", cascade::core::newInstallId(), false);
+        setMode("ok");
+        EnumOptions healthy;
+        healthy.helperPath = self;
+        healthy.allowInProcessFallback = false;
+        CHECK(enumerateIsolated(healthy).outcome == EnumOutcome::Ok);
+        CHECK(g->counts().empty());                  // a healthy scan counts nothing
+        setMode("die");
+        EnumOptions dying;
+        dying.helperPath = self;
+        dying.allowInProcessFallback = false;
+        const EnumResult died = enumerateIsolated(dying);
+        CHECK(died.outcome == EnumOutcome::ChildDied);
+        CHECK(died.childDeaths >= 1);
+        CHECK(g->counts() == (health::Counts{{"recovered.enumchild", 1}}));
+        // ...and a second scan that meets it again is not a second count: once a session.
+        CHECK(enumerateIsolated(dying).outcome == EnumOutcome::ChildDied);
+        CHECK(g->counts() == (health::Counts{{"recovered.enumchild", 1}}));
+        g->reset();
+        cascade::source::clearSessionFaultedDriversForTest();
     }
 
     // --- Ok: the child answered, and the answer was believed ----------------

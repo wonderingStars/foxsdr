@@ -47,6 +47,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include "core/frame_timing.hpp"
 #include "core/health_events.hpp"
 #include "core/i18n.hpp"
 #include "core/telemetry.hpp"
@@ -126,15 +127,18 @@ std::uint32_t countOf(const Counts& c, const std::string& token) {
 void testEveryTokenIsLegalAndNothingElseIs() {
     const std::vector<std::string> all = health::allTokens();
     // 1 scan + 12 + 12 + 96 (driver x reason) + 11 + 55 (api x reason) + 4 update
-    // + 1 catalogue + 4 + 3 plugin + 1 recording
-    CHECK(all.size() == 200);
+    // + 1 catalogue + 4 + 3 plugin + 1 recording = 200 failure tokens; then
+    // 54 slow (18 countable scopes x 3 tiers) and 13 recovered.
+    CHECK(all.size() == 200 + 54 + 13);
     std::set<std::string> unique(all.begin(), all.end());
     CHECK(unique.size() == all.size());
     for (const std::string& t : all) {
         if (!health::validToken(t)) { std::printf("FAIL %s is in allTokens() and not valid\n", t.c_str()); }
         CHECK(health::validToken(t));
         CHECK(t.size() <= 29);
-        for (char c : t) { CHECK((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '.'); }
+        for (char c : t) {
+            CHECK((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '.' || c == '-');
+        }
     }
 
     // What is NOT a token: case, a missing or extra qualifier, a stray byte, free text.
@@ -256,6 +260,7 @@ void testEncodingIsStrictAndBounded() {
     // failures and the 16 longest of everything else, every count at 999.
     std::vector<std::string> fails, others;
     for (const std::string& t : health::allTokens()) {
+        if (t.rfind("slow.", 0) == 0 || t.rfind("recovered.", 0) == 0) { continue; }
         (t.rfind("radio_fail.", 0) == 0 ? fails : others).push_back(t);
     }
     auto longest = [](std::vector<std::string>& v, std::size_t n) {
@@ -264,15 +269,15 @@ void testEncodingIsStrictAndBounded() {
         v.resize(n);
     };
     longest(fails, health::kMaxRadioFailTokens);
-    longest(others, health::kMaxTokens - health::kMaxRadioFailTokens);
+    longest(others, health::kMaxBaseTokens - health::kMaxRadioFailTokens);
     Counts worst;
     for (const auto& t : fails) { worst[t] = 999; }
     for (const auto& t : others) { worst[t] = 999; }
-    CHECK(worst.size() == health::kMaxTokens);
+    CHECK(worst.size() == health::kMaxBaseTokens);
     const std::string widest = health::encode(worst);
     CHECK(health::decode(widest, back) && back == worst);   // none was cut for length
     CHECK(widest.size() <= health::kMaxEncodedBytes);
-    std::printf("health: the widest legal record is %zu bytes (cap %zu)\n", widest.size(),
+    std::printf("health: the widest legal failure record is %zu bytes (cap %zu)\n", widest.size(),
                 health::kMaxEncodedBytes);
 }
 
@@ -322,12 +327,15 @@ void testBoundsHold() {
     // Far more distinct tokens than may be carried: the first 24 are kept.
     std::size_t sent = 0;
     for (const std::string& t : health::allTokens()) {
-        if (t.rfind("radio_fail.", 0) == 0) { continue; }
+        if (t.rfind("radio_fail.", 0) == 0 || t.rfind("slow.", 0) == 0 ||
+            t.rfind("recovered.", 0) == 0) {
+            continue;
+        }
         l.note(t);
         ++sent;
     }
-    CHECK(sent > health::kMaxTokens);
-    CHECK(l.counts().size() == health::kMaxTokens);
+    CHECK(sent > health::kMaxBaseTokens);
+    CHECK(l.counts().size() == health::kMaxBaseTokens);
 
     // Radio failures are the one wide family: at most 8 distinct pairs, even in an
     // otherwise empty ledger.
@@ -664,6 +672,514 @@ void testTheGlobalLedgerIsWhatTheHelpersCountInto() {
 }
 
 // ---------------------------------------------------------------------------
+// SLOW FRAMES and RECOVERIES (0.99.64, the second pass over this vocabulary).
+// ---------------------------------------------------------------------------
+using cascade::core::FrameScope;
+using cascade::core::kFrameScopeCount;
+using cascade::core::kFrameScopeNames;
+
+std::string slowTok(int scope, int tier) {
+    static const char* const tiers[] = {"250ms", "1s", "5s"};
+    return std::string("slow.") + kFrameScopeNames[scope] + "." + tiers[tier];
+}
+
+// What a record of `c` carries, read back through the strict decoder.
+Counts carriedBy(const Counts& c) {
+    Counts back;
+    const std::string text = health::encode(c);
+    if (!health::decode(text, back)) { std::printf("FAIL encode wrote text decode refuses: %s\n", text.c_str()); }
+    return back;
+}
+
+void testSlowFrameWordsAreTheFrameTimersOwn() {
+    // THE SCOPE WORDS ARE kFrameScopeNames, spelt as the frame timer spells them
+    // - hyphens included - minus `user-wait`, which is time a person set the pace
+    // of and is never counted.
+    std::vector<std::string> want;
+    for (int i = 0; i < kFrameScopeCount; ++i) {
+        if (i != static_cast<int>(FrameScope::UserWait)) { want.push_back(kFrameScopeNames[i]); }
+    }
+    CHECK(want.size() == 18);
+    CHECK(health::slowScopeWords() == want);
+    const std::vector<std::string>& scopes = health::slowScopeWords();
+    CHECK(std::find(scopes.begin(), scopes.end(), "user-wait") == scopes.end());
+    for (const char* w : {"other", "startup", "plugin-panels", "plugins-reload", "frame-start", "pre-draw",
+                          "user-wait"}) {
+        const bool present = std::find(scopes.begin(), scopes.end(), w) != scopes.end();
+        CHECK(present == (std::string(w) != "user-wait"));
+    }
+    // THE TIER WORDS ARE THE TIER WIDTHS the timer uses, in order.
+    std::vector<std::string> tiers;
+    for (int t = 0; t < cascade::core::kSlowFrameTiers; ++t) {
+        const long long ns = cascade::core::kSlowFrameTierNs[t];
+        tiers.push_back(ns % 1'000'000'000LL == 0 ? std::to_string(ns / 1'000'000'000LL) + "s"
+                                                  : std::to_string(ns / 1'000'000LL) + "ms");
+    }
+    CHECK(tiers == (std::vector<std::string>{"250ms", "1s", "5s"}));
+    CHECK(health::slowTierWords() == tiers);
+
+    // Every scope x tier is a legal token, built the same way by tokenSlowFrame.
+    int n = 0;
+    for (int s = 0; s < kFrameScopeCount; ++s) {
+        for (int t = 0; t < 3; ++t) {
+            if (s == static_cast<int>(FrameScope::UserWait)) {
+                CHECK(health::tokenSlowFrame(s, t).empty());
+                CHECK(!health::validToken(slowTok(s, t)));
+                continue;
+            }
+            const std::string tok = slowTok(s, t);
+            if (!health::validToken(tok)) { std::printf("FAIL %s is not a legal token\n", tok.c_str()); }
+            CHECK(health::validToken(tok));
+            CHECK(health::tokenSlowFrame(s, t) == tok);
+            ++n;
+        }
+    }
+    CHECK(n == 54);
+    // What is not a token: the user's own time, a tier that is not one of the three,
+    // a missing or extra part, the wrong case, a scope the timer does not have.
+    for (const char* bad : {"slow.user-wait.250ms", "slow.user-wait.1s", "slow.rail.2s", "slow.rail.250", "slow.rail",
+                            "slow", "slow.rail.250ms.x", "slow..250ms", "slow.rail.", "slow.Rail.250ms",
+                            "slow.rail.250MS", "slow.rail.0ms", "slow.plugin_panels.250ms", "slow.plugins.250ms",
+                            "slow.rail.250ms ", " slow.rail.250ms", "slow.rail.250ms=1", "slow.rail.1S",
+                            "slow.all.250ms"}) {
+        if (health::validToken(bad)) { std::printf("FAIL \"%s\" was accepted\n", bad); }
+        CHECK(!health::validToken(bad));
+    }
+    // Out of range builds nothing.
+    CHECK(health::tokenSlowFrame(-1, 0).empty());
+    CHECK(health::tokenSlowFrame(kFrameScopeCount, 0).empty());
+    CHECK(health::tokenSlowFrame(0, -1).empty());
+    CHECK(health::tokenSlowFrame(0, 3).empty());
+    // slow, then recovered, are LAST in the written order.
+    const std::vector<health::VocabularyEntry>& v = health::vocabulary();
+    CHECK(v.size() >= 2 && v[v.size() - 2].name == "slow" && v.back().name == "recovered");
+    CHECK(v[v.size() - 2].qualifiers.size() == 2 && v.back().qualifiers.size() == 1);
+    CHECK(health::encode({{slowTok(0, 0), 1}, {"rec_fail", 1}, {"recovered.audio", 1}, {"scan_none", 1}}) ==
+          "scan_none=1,rec_fail=1," + slowTok(0, 0) + "=1,recovered.audio=1");
+}
+
+void testSlowFramesCountThroughTheLedger() {
+    HealthLedger l;
+    l.arm("", cascade::core::newInstallId(), false);
+    // A slow frame is one count each time (it is not once a session: how many is the
+    // question), in the token of its scope and tier.
+    for (int i = 0; i < 3; ++i) { l.note(slowTok(static_cast<int>(FrameScope::Rail), 0)); }
+    l.note(slowTok(static_cast<int>(FrameScope::Rail), 1));
+    l.note(slowTok(static_cast<int>(FrameScope::PluginsReload), 2));
+    CHECK(l.counts() == (Counts{{"slow.rail.250ms", 3}, {"slow.rail.1s", 1}, {"slow.plugins-reload.5s", 1}}));
+    // user-wait is refused at the ledger too.
+    l.note("slow.user-wait.250ms");
+    CHECK(l.counts().size() == 3);
+    // Through the helper the frame timer calls: the scope index and the tier.
+    auto g = health::globalLedger();
+    g->reset();
+    g->arm("", cascade::core::newInstallId(), false);
+    health::noteSlowFrame(static_cast<int>(FrameScope::Spectrum), 0);
+    health::noteSlowFrame(static_cast<int>(FrameScope::Spectrum), 0);
+    health::noteSlowFrame(static_cast<int>(FrameScope::Startup), 2);
+    health::noteSlowFrame(static_cast<int>(FrameScope::UserWait), 0);   // never counted
+    health::noteSlowFrame(kFrameScopeCount, 0);
+    health::noteSlowFrame(0, 7);
+    CHECK(g->counts() == (Counts{{"slow.spectrum.250ms", 2}, {"slow.startup.5s", 1}}));
+    g->reset();
+}
+
+void testSlowTokensPerRecordKeepTheWorst() {
+    const int kStart = 0;
+    // 1. Exactly the cap: all kept (the boundary).
+    {
+        Counts c;
+        for (int i = 0; i < 8; ++i) { c[slowTok(i, 0)] = 1; }
+        CHECK(carriedBy(c) == c);
+    }
+    // 2. One more, same tier, counts 1..9: the LOWEST COUNT goes.
+    {
+        Counts c;
+        for (int i = 0; i < 9; ++i) { c[slowTok(i, 0)] = static_cast<std::uint32_t>(i + 1); }
+        Counts want = c;
+        want.erase(slowTok(0, 0));
+        CHECK(carriedBy(c) == want);
+    }
+    // 3. One more, same tier, same count: the LATEST IN THE WRITTEN ORDER goes.
+    {
+        Counts c;
+        for (int i = 0; i < 9; ++i) { c[slowTok(kStart + i, 0)] = 3; }
+        Counts want = c;
+        want.erase(slowTok(8, 0));
+        CHECK(carriedBy(c) == want);
+    }
+    // 4. A HIGHER TIER beats a higher count: one 5 s frame against eight stutters of
+    //    999, the 5 s is kept and the last stutter in the written order goes.
+    {
+        Counts c;
+        for (int i = 0; i < 8; ++i) { c[slowTok(i, 0)] = 999; }
+        c[slowTok(static_cast<int>(FrameScope::Other), 2)] = 1;
+        Counts want = c;
+        want.erase(slowTok(7, 0));
+        CHECK(carriedBy(c) == want);
+        CHECK(carriedBy(c).count(slowTok(static_cast<int>(FrameScope::Other), 2)) == 1);
+    }
+    // 5. ...and a 1 s frame beats a stutter the same way, and loses to a 5 s one.
+    {
+        Counts c;
+        for (int i = 0; i < 6; ++i) { c[slowTok(i, 0)] = 999; }
+        c[slowTok(9, 1)] = 1;
+        c[slowTok(10, 2)] = 1;
+        c[slowTok(11, 0)] = 1;      // the weakest: the 9th, a stutter with count 1
+        Counts want = c;
+        want.erase(slowTok(11, 0));
+        CHECK(carriedBy(c) == want);
+    }
+    // 6. Of all 54 tokens present at count 1: the eight 5 s ones that come first in the order.
+    {
+        Counts c;
+        for (int s = 0; s < kFrameScopeCount; ++s) {
+            if (s == static_cast<int>(FrameScope::UserWait)) { continue; }
+            for (int t = 0; t < 3; ++t) { c[slowTok(s, t)] = 1; }
+        }
+        CHECK(c.size() == 54);
+        Counts want;
+        int taken = 0;
+        for (int s = 0; s < kFrameScopeCount && taken < 8; ++s) {
+            if (s == static_cast<int>(FrameScope::UserWait)) { continue; }
+            want[slowTok(s, 2)] = 1;
+            ++taken;
+        }
+        CHECK(carriedBy(c) == want);
+    }
+    // 7. The cap is on `slow` alone: it never takes a failure's place, and a failure never takes its.
+    {
+        Counts c = {{"scan_none", 1}, {"radio_fail.rtlsdr.busy", 2}, {"upd_dl", 1}};
+        for (int i = 0; i < 12; ++i) { c[slowTok(i, 0)] = 1; }
+        const Counts back = carriedBy(c);
+        CHECK(back.size() == 3 + health::kMaxSlowTokens);
+        CHECK(back.count("scan_none") == 1 && back.count("radio_fail.rtlsdr.busy") == 1 && back.count("upd_dl") == 1);
+    }
+    // 8. The ledger KEEPS what a record cannot carry, so nothing is lost by the cap, and
+    //    the same text out of sanitise() is the same selection, in any order.
+    {
+        HealthLedger l;
+        l.arm("", cascade::core::newInstallId(), false);
+        for (int i = 0; i < 12; ++i) { l.note(slowTok(i, i % 3)); }
+        CHECK(l.counts().size() == 12);
+        CHECK(carriedBy(l.counts()).size() == health::kMaxSlowTokens);
+        const Counts held = l.counts();
+        std::string text;
+        for (const auto& kv : held) { text += (text.empty() ? "" : ",") + kv.first + "=" + std::to_string(kv.second); }
+        std::string reversed;
+        for (auto it = held.rbegin(); it != held.rend(); ++it) {
+            reversed += (reversed.empty() ? "" : ",") + it->first + "=" + std::to_string(it->second);
+        }
+        CHECK(health::sanitise(text) == health::encode(l.counts()));
+        CHECK(health::sanitise(reversed) == health::encode(l.counts()));
+    }
+    // decode is strict about the cap: nine slow tokens in one record is not what encode writes.
+    {
+        std::string nine;
+        for (int i = 0; i < 9; ++i) { nine += (nine.empty() ? "" : ",") + slowTok(i, 0) + "=1"; }
+        Counts out;
+        CHECK(!health::decode(nine, out));
+        CHECK(out.empty());
+        std::string eight = nine.substr(0, nine.rfind(','));
+        CHECK(health::decode(eight, out) && out.size() == 8);
+    }
+}
+
+void testRecoveredWordsAndCap() {
+    const std::vector<std::string> words = {"audio",    "reopen",    "srcthread", "vendorcall", "ringdrop",
+                                            "dspexc", "cfgsave",  "enumchild", "pluginapi",  "webroute",
+                                            "patchload", "sdrenum",  "sdrlost"};
+    CHECK(health::recoveredWords() == words);
+    CHECK(health::kRecoveredCount == words.size());
+    for (std::size_t i = 0; i < words.size(); ++i) {
+        const health::Recovered r = static_cast<health::Recovered>(i);
+        CHECK(words[i] == health::recoveredWord(r));
+        CHECK(health::tokenRecovered(r) == "recovered." + words[i]);
+        CHECK(health::validToken("recovered." + words[i]));
+        // one fixed lower-case word: letters only
+        for (char c : words[i]) { CHECK(c >= 'a' && c <= 'z'); }
+    }
+    for (const char* bad : {"recovered", "recovered.", "recovered.audio.x", "recovered.Audio", "recovered.unknown",
+                            "recovered.audio=1", "recover.audio", "recovered.src-thread", "recovered.audio "}) {
+        if (health::validToken(bad)) { std::printf("FAIL \"%s\" was accepted\n", bad); }
+        CHECK(!health::validToken(bad));
+    }
+    // Once a session for what repeats by itself; once an occurrence for the rest.
+    const std::set<std::string> once = {"audio", "reopen", "ringdrop", "cfgsave", "enumchild", "pluginapi",
+                                        "webroute", "sdrenum", "sdrlost"};
+    for (std::size_t i = 0; i < words.size(); ++i) {
+        CHECK(health::recoveredOncePerSession(static_cast<health::Recovered>(i)) == (once.count(words[i]) == 1));
+    }
+    HealthLedger l;
+    l.arm("", cascade::core::newInstallId(), false);
+    for (int i = 0; i < 5; ++i) {
+        l.note("recovered.audio");
+        l.note("recovered.srcthread");
+    }
+    l.note("recovered.vendorcall", 4);
+    l.note("recovered.ringdrop", 4);
+    CHECK(l.counts() == (Counts{{"recovered.audio", 1}, {"recovered.srcthread", 5},
+                                {"recovered.vendorcall", 4}, {"recovered.ringdrop", 1}}));
+
+    // THE CAP: at most 8 distinct recovered tokens in a record. At the boundary all 8 stay...
+    Counts c;
+    for (int i = 0; i < 8; ++i) { c["recovered." + words[static_cast<std::size_t>(i)]] = 1; }
+    CHECK(carriedBy(c) == c);
+    // ...with a ninth the higher COUNTS stay (counts 1..9: the 1 goes)...
+    Counts nine;
+    for (int i = 0; i < 9; ++i) { nine["recovered." + words[static_cast<std::size_t>(i)]] = static_cast<std::uint32_t>(i + 1); }
+    Counts want = nine;
+    want.erase("recovered.audio");
+    CHECK(carriedBy(nine) == want);
+    // ...and with equal counts the earlier in the written order stay.
+    Counts all;
+    for (const std::string& w : words) { all["recovered." + w] = 2; }
+    Counts first8;
+    for (int i = 0; i < 8; ++i) { first8["recovered." + words[static_cast<std::size_t>(i)]] = 2; }
+    CHECK(carriedBy(all) == first8);
+    // It is its own family: it does not take a failure's place, and 24 failures leave it its 8.
+    Counts mixed = {{"scan_none", 1}};
+    for (const std::string& w : words) { mixed["recovered." + w] = 1; }
+    CHECK(carriedBy(mixed).size() == 1 + health::kMaxRecoveredTokens);
+    // decode refuses nine.
+    std::string text;
+    for (int i = 0; i < 9; ++i) { text += (text.empty() ? "" : ",") + std::string("recovered.") + words[static_cast<std::size_t>(i)] + "=1"; }
+    Counts out;
+    CHECK(!health::decode(text, out));
+}
+
+void testARecordCarriesTheSelectionAndSettlesExactlyThat() {
+    // The start-up record carries the SELECTION of the earlier sessions' counts, and
+    // only that selection is taken off when the server accepts it: what the cap left
+    // out stays in the ledger and goes with the next record.
+    const fs::path dir = scratch("selection");
+    const std::string id = cascade::core::newInstallId();
+    const std::string file = HealthLedger::pathIn(u8(dir));
+    Counts before = {{"scan_none", 1}, {"upd_dl", 2}};
+    for (int i = 0; i < 12; ++i) { before[slowTok(i, 0)] = static_cast<std::uint32_t>(i + 1); }
+    writeFile(file, HealthLedger::fileText(id, before));
+    auto l = std::make_shared<HealthLedger>();
+    l->arm(file, id, true);
+    CHECK(l->priorCounts().size() == before.size());      // the file's whole content is read back
+
+    const std::string pending = "{\"id\":\"" + id + "\",\"v\":\"0.99.63\"}";
+    std::string json;
+    std::uint64_t carriedStalls = 0;
+    Counts carried;
+    StallLedger stalls;
+    CHECK(cascade::core::prepareStartupRecord("", pending, stalls, *l, json, carriedStalls, carried));
+    const std::string text = nlohmann::json::parse(json)["health"].get<std::string>();
+    Counts sent;
+    CHECK(health::decode(text, sent));
+    CHECK(sent == carried);                                // what it settles is what it sent
+    CHECK(sent.size() == 2 + health::kMaxSlowTokens);
+    CHECK(sent.count(slowTok(0, 0)) == 0);                 // the lowest counts were left out
+    CHECK(sent.count(slowTok(11, 0)) == 1);
+
+    l->settle(carried);
+    CHECK(l->flush());
+    Counts left = l->counts();
+    CHECK(left.size() == 12 - health::kMaxSlowTokens);     // the four left out are still kept
+    CHECK(left.count(slowTok(0, 0)) == 1 && left.count(slowTok(3, 0)) == 1 && left.count(slowTok(4, 0)) == 0);
+    CHECK(readFile(file) == HealthLedger::fileText(id, left));
+}
+
+void testTheLedgersFileHoldsEverythingItMayCarry() {
+    // The ledger keeps what a record cannot carry (every `slow` and `recovered` kind it met), so the
+    // FILE can be wider than any record: 24 of the longest failure kinds, every slow kind and every
+    // recovered word, all at 999. arm() reads at most 4096 bytes of it back; one that did not fit would
+    // be cut short and silently lose counts.
+    std::vector<std::string> fails, others;
+    for (const std::string& t : health::allTokens()) {
+        if (t.rfind("slow.", 0) == 0 || t.rfind("recovered.", 0) == 0) { continue; }
+        (t.rfind("radio_fail.", 0) == 0 ? fails : others).push_back(t);
+    }
+    auto longest = [](std::vector<std::string>& v, std::size_t n) {
+        std::stable_sort(v.begin(), v.end(),
+                         [](const std::string& a, const std::string& b) { return a.size() > b.size(); });
+        v.resize(n);
+    };
+    longest(fails, health::kMaxRadioFailTokens);
+    longest(others, health::kMaxBaseTokens - health::kMaxRadioFailTokens);
+    Counts widest;
+    for (const std::string& t : fails) { widest[t] = 999; }
+    for (const std::string& t : others) { widest[t] = 999; }
+    for (const std::string& t : health::allTokens()) {
+        if (t.rfind("slow.", 0) == 0 || t.rfind("recovered.", 0) == 0) { widest[t] = 999; }
+    }
+    CHECK(widest.size() == health::kMaxBaseTokens + 54 + health::kRecoveredCount);
+    const std::string id = cascade::core::newInstallId();
+    const std::string text = HealthLedger::fileText(id, widest);
+    std::printf("health: the widest ledger file is %zu bytes (read back with a 4096-byte buffer)\n", text.size());
+    CHECK(text.size() < 4096);
+    const fs::path dir = scratch("widestfile");
+    const std::string file = HealthLedger::pathIn(u8(dir));
+    writeFile(file, text);
+    HealthLedger l;
+    l.arm(file, id, true);
+    CHECK(l.priorCounts() == widest);
+    // ...and what a record carries of it is the selection, never more than its own cap.
+    CHECK(health::encode(l.priorCounts()).size() <= health::kMaxEncodedBytes);
+    CHECK(carriedBy(l.priorCounts()).size() <= health::kMaxRecordTokens);
+    // THE WIDEST RECORD: the 832-byte cap (what an older Worker accepts) cuts the newest families first and
+    // never displaces a failure token; what it leaves out stays in the ledger for the next record.
+    const Counts sent = carriedBy(widest);
+    std::size_t failureKept = 0, slowKept = 0, recoveredKept = 0;
+    for (const auto& kv : sent) {
+        if (kv.first.rfind("slow.", 0) == 0) { ++slowKept; }
+        else if (kv.first.rfind("recovered.", 0) == 0) { ++recoveredKept; }
+        else { ++failureKept; }
+    }
+    std::printf("health: the widest legal record carries %zu failure, %zu slow and %zu recovered tokens in %zu bytes (cap %zu)\n",
+                failureKept, slowKept, recoveredKept, health::encode(widest).size(), health::kMaxEncodedBytes);
+    CHECK(failureKept == health::kMaxBaseTokens);
+    CHECK(slowKept <= health::kMaxSlowTokens && recoveredKept <= health::kMaxRecoveredTokens);
+    CHECK(health::encode(widest).size() <= health::kMaxEncodedBytes);
+}
+
+std::atomic<int> gWriterStalls{0};
+void stallTheWriter() {
+    ++gWriterStalls;
+    std::this_thread::sleep_for(std::chrono::milliseconds(700));
+}
+
+void testASlowFrameNeverWaitsOnTheDisk() {
+    // THE GUI THREAD COUNTS A SLOW FRAME (FrameTimer::commit -> noteSlowFrame ->
+    // HealthLedger::note) and must not wait on a disk. With the WRITER made to take
+    // 700 ms - a slow share, a laptop disk spinning up - a note that wrote the file
+    // itself would take at least that; this is what separates "handed to its own
+    // thread" from "wrote it". The figure that moves is the time the CALLER spent.
+    const fs::path dir = scratch("stalled");
+    const std::string id = cascade::core::newInstallId();
+    const std::string file = HealthLedger::pathIn(u8(dir));
+    gWriterStalls = 0;
+    HealthLedger::setWriteHookForTest(&stallTheWriter);
+    HealthLedger l;
+    l.arm(file, id, false);
+    double worstMs = 0.0, totalMs = 0.0;
+    const int kNotes = 300;
+    for (int i = 0; i < kNotes; ++i) {
+        const auto t0 = std::chrono::steady_clock::now();
+        l.note(slowTok(i % kFrameScopeCount == static_cast<int>(FrameScope::UserWait) ? 0 : i % kFrameScopeCount, i % 3));
+        const double ms =
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        worstMs = std::max(worstMs, ms);
+        totalMs += ms;
+        if (i == 2) { std::this_thread::sleep_for(std::chrono::milliseconds(50)); }   // the writer is inside its stall now
+        if (totalMs > 2000.0) { break; }    // a note that waits on the disk: report it, do not sit out 300 stalls
+    }
+    std::printf("health: %d slow-frame notes with the writer stalled 700 ms: total %.2f ms, worst single %.3f ms\n",
+                kNotes, totalMs, worstMs);
+    CHECK(totalMs < 350.0);      // a synchronous write is >= 700 ms for the first note alone
+    CHECK(worstMs < 300.0);
+    CHECK(l.flush(10000));
+    HealthLedger::setWriteHookForTest(nullptr);
+    CHECK(gWriterStalls.load() >= 1);                       // the hook really ran on the writer
+    CHECK(readFile(file) == HealthLedger::fileText(id, l.counts()));
+    CHECK(l.counts().size() > health::kMaxSlowTokens);      // the ledger kept every kind it met
+}
+
+void testTheWatchCountsWhatTheCountersSay() {
+    auto g = health::globalLedger();
+    g->reset();
+    g->arm("", cascade::core::newInstallId(), false);
+    health::RecoveryWatch w;
+    health::RecoveryReadings r;
+    r.sourceThreadsAbandoned = 5;
+    r.vendorCallsAbandoned = 7;
+    r.ringDroppedSamples = 100;
+    r.dspThreadExceptions = 2;
+    // The first poll is the baseline: what a process had before the poll began is not news.
+    w.poll(r);
+    CHECK(g->counts().empty());
+    w.poll(r);
+    CHECK(g->counts().empty());
+    // Each counter that moved: once an occurrence for the abandonments and the exceptions...
+    r.sourceThreadsAbandoned = 6;
+    w.poll(r);
+    CHECK(g->counts() == (Counts{{"recovered.srcthread", 1}}));
+    r.vendorCallsAbandoned = 9;
+    r.dspThreadExceptions = 3;
+    w.poll(r);
+    CHECK(g->counts() == (Counts{{"recovered.srcthread", 1}, {"recovered.vendorcall", 2}, {"recovered.dspexc", 1}}));
+    // ...once a session for the ring, however much more it drops, and however often it is polled.
+    r.ringDroppedSamples = 4096;
+    w.poll(r);
+    r.ringDroppedSamples = 1 << 20;
+    w.poll(r);
+    w.poll(r);
+    CHECK(countOf(g->counts(), "recovered.ringdrop") == 1);
+    // A counter that went DOWN (a new process-wide baseline in a test) is not a count.
+    health::RecoveryReadings lower;
+    w.poll(lower);
+    CHECK(g->counts().size() == 4);
+    // Nothing is counted into a ledger that is off.
+    g->reset();
+    g->disarm();
+    health::RecoveryWatch off;
+    off.poll(health::RecoveryReadings{});
+    health::RecoveryReadings moved;
+    moved.sourceThreadsAbandoned = 3;
+    off.poll(moved);
+    CHECK(g->counts().empty());
+    g->reset();
+}
+
+void testARaisedFlagIsCountedWhereTheDrainRuns() {
+    auto g = health::globalLedger();
+    g->reset();
+    g->arm("", cascade::core::newInstallId(), false);
+    // The raise is for a thread that must not take a lock: it counts nothing by itself.
+    std::thread t([] {
+        for (int i = 0; i < 1000; ++i) { health::raiseRecovered(health::Recovered::PluginApi); }
+    });
+    t.join();
+    CHECK(g->counts().empty());
+    health::drainRecovered();
+    CHECK(g->counts() == (Counts{{"recovered.pluginapi", 1}}));
+    health::drainRecovered();                       // nothing new raised: nothing counted
+    CHECK(g->counts() == (Counts{{"recovered.pluginapi", 1}}));
+    // A word that is counted per occurrence: one count per drain that finds it raised.
+    health::raiseRecovered(health::Recovered::DspExc);
+    health::drainRecovered();
+    health::raiseRecovered(health::Recovered::DspExc);
+    health::drainRecovered();
+    CHECK(countOf(g->counts(), "recovered.dspexc") == 2);
+    // noteRecovered counts at once, and refuses nothing it should count.
+    health::noteRecovered(health::Recovered::CfgSave);
+    health::noteRecovered(health::Recovered::CfgSave);
+    CHECK(countOf(g->counts(), "recovered.cfgsave") == 1);
+    health::noteRecovered(health::Recovered::PatchLoad);
+    health::noteRecovered(health::Recovered::PatchLoad);
+    CHECK(countOf(g->counts(), "recovered.patchload") == 2);
+    g->reset();
+}
+
+// The cases the Worker's tests read too (telemetry-worker/test-fixtures/health-cases.json):
+// one text in, the canonical text out, by both implementations.
+void testTheSharedSelectionCases() {
+    const nlohmann::json cases =
+        nlohmann::json::parse(sourceFile("telemetry-worker/test-fixtures/health-cases.json"), nullptr, false);
+    CHECK(cases.is_array());
+    if (!cases.is_array()) { return; }
+    CHECK(cases.size() >= 12);
+    for (const nlohmann::json& c : cases) {
+        const std::string name = c.value("name", std::string());
+        const std::string got = health::sanitise(c["input"].get<std::string>());
+        const std::string want = c["expected"].get<std::string>();
+        if (got != want) {
+            std::printf("FAIL case \"%s\":\n   input    %s\n   got      %s\n   expected %s\n", name.c_str(),
+                        c["input"].get<std::string>().c_str(), got.c_str(), want.c_str());
+        }
+        CHECK(got == want);
+        // and what it expects is a text encode() itself writes.
+        Counts back;
+        CHECK(health::decode(want, back));
+        CHECK(health::encode(back) == want);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // The reasons are read off what the drivers REALLY say.
 // ---------------------------------------------------------------------------
 void testReasonsFromTheDriversOwnSentences() {
@@ -783,8 +1299,17 @@ void testTheRecordCarriesOnlyVocabulary() {
 
 // One bold-led table of PRIVACY.md ("**Drivers.** ..." and the table after it): the
 // code-span words in its first column.
+std::vector<std::pair<std::string, std::string>> docRows(const std::string& doc, const std::string& heading);
+
 std::vector<std::string> docWords(const std::string& doc, const std::string& heading) {
     std::vector<std::string> words;
+    for (const auto& row : docRows(doc, heading)) { words.push_back(row.first); }
+    return words;
+}
+
+// The same table as (first code-span word, whole row) pairs.
+std::vector<std::pair<std::string, std::string>> docRows(const std::string& doc, const std::string& heading) {
+    std::vector<std::pair<std::string, std::string>> words;
     const std::size_t at = doc.find("**" + heading + ".**");
     if (at == std::string::npos) { return words; }
     std::istringstream lines(doc.substr(at));
@@ -802,7 +1327,7 @@ std::vector<std::string> docWords(const std::string& doc, const std::string& hea
         const std::size_t a = line.find('`');
         const std::size_t b = line.find('`', a + 1);
         if (a == std::string::npos || b == std::string::npos) { continue; }
-        words.push_back(line.substr(a + 1, b - a - 1));
+        words.push_back({line.substr(a + 1, b - a - 1), line});
     }
     return words;
 }
@@ -815,6 +1340,7 @@ std::vector<std::string> sortedCopy(std::vector<std::string> v) {
 // The vocabulary's own lists, by the heading PRIVACY.md and the Worker use for them.
 struct Lists {
     std::vector<std::string> events, drivers, radioReasons, apis, soundReasons, installClasses, loadClasses;
+    std::vector<std::string> slowScopes, slowTiers, recovered;
 };
 
 Lists codeLists() {
@@ -827,6 +1353,8 @@ Lists codeLists() {
         if (e.name == "sound_fail") { l.soundReasons = e.qualifiers[1]; }
         if (e.name == "plug_inst") { l.installClasses = e.qualifiers[0]; }
         if (e.name == "plug_load") { l.loadClasses = e.qualifiers[0]; }
+        if (e.name == "slow") { l.slowScopes = e.qualifiers[0]; l.slowTiers = e.qualifiers[1]; }
+        if (e.name == "recovered") { l.recovered = e.qualifiers[0]; }
     }
     return l;
 }
@@ -879,6 +1407,25 @@ void testPrivacyListsEveryWordOfTheVocabulary() {
     same("Why the sound output would not open", code.soundReasons);
     same("Plugin install failures", code.installClasses);
     same("Plugin refusals", code.loadClasses);
+    same("Slow-frame scopes", code.slowScopes);
+    same("Slow-frame tiers", code.slowTiers);
+    same("Recovered from", code.recovered);
+    // `user-wait` is named in the page - as the one scope that is NOT counted - but is never a
+    // word of the scopes table.
+    CHECK(doc.find("`user-wait`") != std::string::npos);
+    CHECK(std::find(code.slowScopes.begin(), code.slowScopes.end(), "user-wait") == code.slowScopes.end());
+    // The "Recovered from" table says "Once a session." on exactly the rows the code counts once a session.
+    for (const auto& row : docRows(doc, "Recovered from")) {
+        bool codeOnce = false;
+        for (std::size_t i = 0; i < health::recoveredWords().size(); ++i) {
+            if (health::recoveredWords()[i] == row.first) {
+                codeOnce = health::recoveredOncePerSession(static_cast<health::Recovered>(i));
+            }
+        }
+        const bool docOnce = row.second.find("Once a session.") != std::string::npos;
+        if (docOnce != codeOnce) { std::printf("FAIL PRIVACY.md row for %s: once a session %d, code %d\n", row.first.c_str(), docOnce, codeOnce); }
+        CHECK(docOnce == codeOnce);
+    }
 }
 
 void testTheWorkerCarriesTheSameVocabulary() {
@@ -908,7 +1455,9 @@ void testTheWorkerCarriesTheSameVocabulary() {
         return at == std::string::npos ? -1L : std::strtol(js.c_str() + at + std::strlen("const ") + std::strlen(name) + 3, nullptr, 10);
     };
     CHECK(constant("MAX_HEALTH_CHARS") == static_cast<long>(health::kMaxEncodedBytes));
-    CHECK(constant("MAX_HEALTH_TOKENS") == static_cast<long>(health::kMaxTokens));
+    CHECK(constant("MAX_HEALTH_BASE_TOKENS") == static_cast<long>(health::kMaxBaseTokens));
+    CHECK(constant("MAX_HEALTH_SLOW_TOKENS") == static_cast<long>(health::kMaxSlowTokens));
+    CHECK(constant("MAX_HEALTH_RECOVERED_TOKENS") == static_cast<long>(health::kMaxRecoveredTokens));
     CHECK(constant("MAX_HEALTH_RADIO_FAIL_TOKENS") == static_cast<long>(health::kMaxRadioFailTokens));
     CHECK(constant("MAX_HEALTH_COUNT") == static_cast<long>(health::kMaxCount));
 }
@@ -928,6 +1477,16 @@ int main() {
     testDiagnosticsIsTheSecondGate();
     testTheFileIsWrittenOffTheCallersThread();
     testTheGlobalLedgerIsWhatTheHelpersCountInto();
+    testSlowFrameWordsAreTheFrameTimersOwn();
+    testSlowFramesCountThroughTheLedger();
+    testSlowTokensPerRecordKeepTheWorst();
+    testRecoveredWordsAndCap();
+    testARecordCarriesTheSelectionAndSettlesExactlyThat();
+    testTheLedgersFileHoldsEverythingItMayCarry();
+    testASlowFrameNeverWaitsOnTheDisk();
+    testTheWatchCountsWhatTheCountersSay();
+    testARaisedFlagIsCountedWhereTheDrainRuns();
+    testTheSharedSelectionCases();
     testReasonsFromTheDriversOwnSentences();
     testTheTranslatedSentencesAreClassifiedInTheLanguageInForce();
     testTheRecordCarriesOnlyVocabulary();

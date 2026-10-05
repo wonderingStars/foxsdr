@@ -43,8 +43,10 @@
 #include <httplib.h>
 #include <nlohmann/json.hpp>
 
+#include "core/health_events.hpp"
 #include "core/plugin_abi.h"
 #include "core/plugin_ui.hpp"
+#include "core/telemetry.hpp"
 #include "dsp/demod.hpp"
 // For kTxLicenceNotice: the page's transmit sentence is pinned against the
 // desktop page's own constant rather than against a copy of the words.
@@ -515,6 +517,42 @@ void testSpectrumEndpoint() {
     }
 
     server.stop();
+}
+
+void testAHandlerThatThrowsIsCountedOnceASession() {
+    // THE USAGE RECORD (0.99.64): the server survives a handler that throws, answering 500, and that is
+    // a recovery - `recovered.webroute`, once a session, never the message (it can name a path). The
+    // real trigger: a status provider that throws, behind the real route on a real socket.
+    namespace health = cascade::core::health;
+    auto g = health::globalLedger();
+    g->reset();
+    g->arm("", cascade::core::newInstallId(), false);
+    WebServer server;
+    server.setStatusProvider([]() -> RadioStatus {
+        throw std::runtime_error("boom: C:\\Users\\someone\\secret.txt");
+    });
+    std::string error;
+    const int port = startOnFreePort(server, loopbackConfig(), error);
+    CHECK(port > 0);
+    if (port <= 0) {
+        return;
+    }
+    httplib::Client cli("127.0.0.1", port);
+    cli.set_connection_timeout(5, 0);
+    CHECK(g->counts().empty());
+    auto first = cli.Get("/api/status");
+    CHECK(static_cast<bool>(first));
+    if (first) { CHECK(first->status == 500); }
+    CHECK(g->counts() == (health::Counts{{"recovered.webroute", 1}}));
+    auto second = cli.Get("/api/status");
+    CHECK(static_cast<bool>(second));
+    CHECK(g->counts() == (health::Counts{{"recovered.webroute", 1}}));     // once a session
+    // A request that works counts nothing more, and the message is nowhere in what was counted.
+    auto page = cli.Get("/");
+    CHECK(static_cast<bool>(page));
+    CHECK(health::encode(g->counts()).find("boom") == std::string::npos);
+    server.stop();
+    g->reset();
 }
 
 void testInvalidUtf8FromAPluginDoesNotKillTheApi() {
@@ -2351,6 +2389,7 @@ int main() {
     testSessionExpiresOnTheInjectedClock();
     testOffMachineBindWithoutPasswordNeverListens();
     testSpectrumEndpoint();
+    testAHandlerThatThrowsIsCountedOnceASession();
     testInvalidUtf8FromAPluginDoesNotKillTheApi();
     testStaleCursorFromAPreviousRunRecovers();
     testRestartRevokesSessions();

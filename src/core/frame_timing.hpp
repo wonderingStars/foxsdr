@@ -85,6 +85,13 @@
 //    What happens BEFORE the first frame (the window, the plugin scan) is not a
 //    frame and is not measured here.
 //
+// THE USAGE RECORD (0.99.64). The process's own timer - and no timer a test builds
+// - also counts every slow frame it commits into core/health_events.hpp's ledger
+// as `slow.<scope>.<tier>`, the scope's own name and a tier word (`250ms`, `1s`,
+// `5s`), in the record the usage report sends (PRIVACY.md, "Failures that are not
+// crashes"). `user-wait` is never counted, so it is not a word of it. That is the
+// slow path only, on the window's thread, and it waits on no disk.
+//
 // THE LOG. At most ONE line per scope per kLogGapNs (30 s), so a hitch that
 // repeats every second cannot push the rest of the log out of its 256-line ring;
 // the lines it did not write are counted in the next one it does. And one summary

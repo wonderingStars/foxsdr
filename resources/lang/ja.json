@@ -230,7 +230,7 @@
   "Andorra": "アンドラ",
   "Angola": "アンゴラ",
   "Anguilla": "アンギラ",
-  "Anonymous counts only: version, operating system, how long sessions run, which modes and plugins get used, which radio model, how many times the window froze waiting for the display driver, and how many times something quietly did not work (a radio that would not open, no sound output, a failed update or plugin install). Never frequencies, never anything decoded, never your location, and no IP address is recorded.": "匿名の集計のみ: バージョン、OS、セッションの長さ、使われたモードとプラグイン、SDR の機種、ウィンドウがディスプレイドライバーの応答待ちで固まった回数、および何かが黙って動作しなかった回数（開けなかった SDR、音声出力なし、失敗した更新やプラグインのインストール）。周波数やデコード内容、位置情報は一切含まず、IP アドレスも記録しません。",
+  "Anonymous counts only: version, operating system, how long sessions run, which modes and plugins get used, which radio model, how many times the window froze waiting for the display driver, how many times something quietly did not work (a radio that would not open, no sound output, a failed update or plugin install), how many times the window was slow and which part of it was, and how many times FoxSDR recovered from a fault on its own. Never frequencies, never anything decoded, never your location, and no IP address is recorded.": "匿名の集計のみ: バージョン、OS、セッションの長さ、使われたモードとプラグイン、SDR の機種、ウィンドウがディスプレイドライバーの応答待ちで固まった回数、何かが黙って動作しなかった回数（開けなかった SDR、音声出力なし、失敗した更新やプラグインのインストール）、ウィンドウの動作が遅くなった回数とどの部分が遅かったか、および FoxSDR が障害から自力で回復した回数。周波数やデコード内容、位置情報は一切含まず、IP アドレスも記録しません。",
   "Another preset already has that name.": "その名前は別のプリセットが使っています。",
   "Another radio here already uses this device.": "ここにある別の SDR がすでにこのデバイスを使用しています。",
   "Antenna": "アンテナ",

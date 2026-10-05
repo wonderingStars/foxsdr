@@ -84,15 +84,22 @@ const HEALTH_EVENTS = [
   { "name": "plug_cat", "qualifiers": [] },
   { "name": "plug_inst", "qualifiers": [["net", "hash", "write", "other"]] },
   { "name": "plug_load", "qualifiers": [["abi", "retired", "load"]] },
-  { "name": "rec_fail", "qualifiers": [] }
+  { "name": "rec_fail", "qualifiers": [] },
+  { "name": "slow", "qualifiers": [["events", "frame-start", "pre-draw", "plugin-panels", "toolbar", "rail", "spectrum", "patch", "status", "dialogs", "polls", "saves", "render", "present", "recorder", "plugins-reload", "startup", "other"], ["250ms", "1s", "5s"]] },
+  { "name": "recovered", "qualifiers": [["audio", "reopen", "srcthread", "vendorcall", "ringdrop", "dspexc", "cfgsave", "enumchild", "pluginapi", "webroute", "patchload", "sdrenum", "sdrlost"]] }
 ];
 // END HEALTH VOCABULARY
 
-// The application's own bounds (health::kMaxTokens, kMaxRadioFailTokens,
-// kMaxCount, kMaxEncodedBytes): a record that exceeds them was not written by it.
+// The application's own bounds (health::kMaxBaseTokens, kMaxRadioFailTokens,
+// kMaxSlowTokens, kMaxRecoveredTokens, kMaxCount, kMaxEncodedBytes): a record that
+// exceeds them was not written by it. The failure families carry at most
+// MAX_HEALTH_BASE_TOKENS distinct tokens; `slow` and `recovered` have caps of their
+// own, and over them the WORST are kept (healthParse).
 const MAX_HEALTH_CHARS = 832;
-const MAX_HEALTH_TOKENS = 24;
+const MAX_HEALTH_BASE_TOKENS = 24;
 const MAX_HEALTH_RADIO_FAIL_TOKENS = 8;
+const MAX_HEALTH_SLOW_TOKENS = 8;
+const MAX_HEALTH_RECOVERED_TOKENS = 8;
 const MAX_HEALTH_COUNT = 999;
 
 // Every legal token, expanded, in written order -> its rank in that order. The
@@ -118,12 +125,24 @@ const HEALTH_RANK = (() => {
 // ever writes, is not reported. A string with SOME legal pairs keeps those and
 // drops the rest, so a client one vocabulary ahead still reports what this
 // Worker understands. Repeats are merged, counts are clamped to 1..999, and no
-// more than MAX_HEALTH_TOKENS distinct tokens (MAX_HEALTH_RADIO_FAIL_TOKENS of
-// them radio failures) are kept.
+// more than MAX_HEALTH_BASE_TOKENS distinct failure tokens (MAX_HEALTH_RADIO_FAIL_TOKENS
+// of them radio failures) are kept; the first ones met, as the application's own
+// ledger does. `slow` and `recovered` tokens are merged first and then cut to their
+// own caps, KEEPING THE WORST - for `slow` the higher tier (5s, then 1s, then 250ms),
+// then the higher count, then the earlier in the written order; for `recovered` the
+// higher count, then the earlier in the written order - the rule the application
+// applies to what it writes (health::selectForRecord), held to this by the cases in
+// test-fixtures/health-cases.json, which both read.
+const HEALTH_SLOW_TIERS = HEALTH_EVENTS.find((e) => e.name === 'slow').qualifiers[1];
+function healthSlowTier(token) {
+  return HEALTH_SLOW_TIERS.indexOf(token.slice(token.lastIndexOf('.') + 1));
+}
 function healthParse(v) {
   if (typeof v !== 'string' || v.length > MAX_HEALTH_CHARS) { return null; }
   if (v === '') { return { text: '', counts: new Map() }; }
-  const counts = new Map();
+  const base = new Map();
+  const slow = new Map();
+  const recovered = new Map();
   let radioFails = 0;
   for (const piece of v.split(',')) {
     const eq = piece.indexOf('=');
@@ -133,20 +152,35 @@ function healthParse(v) {
     if (!HEALTH_RANK.has(token) || !/^[0-9]{1,4}$/.test(digits)) { continue; }
     const n = Math.min(Number(digits), MAX_HEALTH_COUNT);
     if (n < 1) { continue; }
-    if (!counts.has(token)) {
-      if (counts.size >= MAX_HEALTH_TOKENS) { continue; }
+    const family = token.startsWith('slow.') ? slow
+      : token.startsWith('recovered.') ? recovered : base;
+    if (family === base && !base.has(token)) {
+      if (base.size >= MAX_HEALTH_BASE_TOKENS) { continue; }
       if (token.startsWith('radio_fail.')) {
         if (radioFails >= MAX_HEALTH_RADIO_FAIL_TOKENS) { continue; }
         radioFails += 1;
       }
     }
-    counts.set(token, Math.min((counts.get(token) || 0) + n, MAX_HEALTH_COUNT));
+    family.set(token, Math.min((family.get(token) || 0) + n, MAX_HEALTH_COUNT));
+  }
+  const byRank = (a, b) => HEALTH_RANK.get(a) - HEALTH_RANK.get(b);
+  let slowKept = [...slow.keys()];
+  if (slowKept.length > MAX_HEALTH_SLOW_TOKENS) {
+    slowKept.sort((a, b) => (healthSlowTier(b) - healthSlowTier(a))
+      || (slow.get(b) - slow.get(a)) || byRank(a, b));
+    slowKept = slowKept.slice(0, MAX_HEALTH_SLOW_TOKENS);
+  }
+  let recoveredKept = [...recovered.keys()];
+  if (recoveredKept.length > MAX_HEALTH_RECOVERED_TOKENS) {
+    recoveredKept.sort((a, b) => (recovered.get(b) - recovered.get(a)) || byRank(a, b));
+    recoveredKept = recoveredKept.slice(0, MAX_HEALTH_RECOVERED_TOKENS);
+  }
+  const counts = new Map();
+  for (const t of [...base.keys(), ...slowKept, ...recoveredKept].sort(byRank)) {
+    counts.set(t, base.get(t) || slow.get(t) || recovered.get(t));
   }
   if (counts.size === 0) { return null; }
-  const text = [...counts.keys()]
-    .sort((a, b) => HEALTH_RANK.get(a) - HEALTH_RANK.get(b))
-    .map((t) => `${t}=${counts.get(t)}`)
-    .join(',');
+  const text = [...counts.entries()].map(([t, n]) => `${t}=${n}`).join(',');
   return { text, counts };
 }
 
@@ -156,6 +190,17 @@ function healthSum(h, event) {
   let total = 0;
   for (const [token, n] of h.counts) {
     if (token === event || token.startsWith(`${event}.`)) { total += n; }
+  }
+  return total;
+}
+
+// The slow frames of the tiers from `minTier` up: 0 is every slow frame, 1 the
+// frames of a second or more. From the validated tokens only.
+function healthSlowFrom(h, minTier) {
+  if (h === null) { return 0; }
+  let total = 0;
+  for (const [token, n] of h.counts) {
+    if (token.startsWith('slow.') && healthSlowTier(token) >= minTier) { total += n; }
   }
   return total;
 }
@@ -289,6 +334,13 @@ export default {
         healthSum(health, 'radio_open'),  // double7  radio opens that succeeded
         healthSum(health, 'radio_data'),  // double8  opened radios whose samples arrived
         healthSum(health, 'sound_ok'),    // double9  sessions in which the speakers played
+        // double10..double12 (0.99.64, slow frames and recoveries), the same way:
+        // sums of the validated tokens in blob13, never numbers the client sent.
+        // Per ROW, meaningful only where blob12 = '1'. A client that does not send
+        // these families writes 0, which is a real zero for it.
+        healthSum(health, 'slow'),        // double10 slow frames, 250 ms or more
+        healthSlowFrom(health, 1),        // double11 slow frames of a second or more
+        healthSum(health, 'recovered'),   // double12 recoveries
       ],
     });
 

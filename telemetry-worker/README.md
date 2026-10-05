@@ -40,7 +40,7 @@ corrupts every row written before.
 | `blob8`, `blob9`, `blob10` | install channel, first-run day (UTC), version that created the id |
 | `blob11` | `'1'` when this client sent a display-stall count, else `''` |
 | `blob12` | `'1'` when this client sent failure counts (`health`), else `''` |
-| `blob13` | the failure counts, `token=count,token=count` from the fixed vocabulary, canonical order; `''` when nothing failed - meaningful only where `blob12 = '1'` |
+| `blob13` | the counts, `token=count,token=count` from the fixed vocabulary, canonical order: failures, then `slow.<scope>.<tier>`, then `recovered.<what>`; `''` when nothing was counted - meaningful only where `blob12 = '1'` |
 | `double1` | launches since install (lifetime) |
 | `double2` | unclean exits since install (lifetime) |
 | `double3` | length of the session the record describes, seconds |
@@ -50,10 +50,14 @@ corrupts every row written before.
 | `double7` | radio opens that succeeded: the sum of `radio_open.*` (per row) - only where `blob12 = '1'` |
 | `double8` | opened radios whose samples reached the display: the sum of `radio_data.*` (per row) - only where `blob12 = '1'` |
 | `double9` | sessions in which the speakers played: the sum of `sound_ok.*` (per row) - only where `blob12 = '1'` |
+| `double10` | slow frames: the sum of every `slow.*` count in `blob13` (per row) - only where `blob12 = '1'` |
+| `double11` | slow frames of a second or more: the sum of the `slow.*.1s` and `slow.*.5s` counts (per row) - only where `blob12 = '1'` |
+| `double12` | recoveries: the sum of every `recovered.*` count in `blob13` (per row) - only where `blob12 = '1'` |
 
 Column budget: Analytics Engine allows 20 blobs and 20 doubles a row. `blob1`..`blob13`
-and `double1`..`double9` are used: 7 blobs and 11 doubles are free. (The 16 KB
-limit on a row's blobs is nowhere near: the widest `blob13` is 832 characters.)
+and `double1`..`double12` are used: 7 blobs and 8 doubles are free. Slow frames and
+recoveries took no blob (they ride in `blob13`) and three doubles. (The 16 KB
+limit on a row's blobs is nowhere near: `blob13` is never more than 832 characters.)
 
 ### Display stalls
 
@@ -91,8 +95,8 @@ them. The record carries one string, `health`, of `token=count` pairs
 (*Failures that are not crashes, in full*) lists every word and what it means.
 
 **Encoding, and why one string.** One blob (`blob13`) for all the tokens plus one
-marker blob and four doubles, instead of a column per event: the vocabulary is
-200 tokens wide (12 drivers x 8 reasons alone is 96) and a column per token would
+marker blob and seven doubles, instead of a column per event: the vocabulary is
+267 tokens wide (12 drivers x 8 reasons alone is 96) and a column per token would
 not fit in 20, and every new event would be a schema change. As one string it is
 still queryable - `startsWith(blob13, 'radio_fail.rtlsdr.busy=') OR
 position(blob13, ',radio_fail.rtlsdr.busy=') > 0` is "sessions with that failure",
@@ -104,7 +108,14 @@ opens, all radios that delivered samples, all sessions with sound).
 vocabulary (`HEALTH_EVENTS` in `worker.js`, between two markers) followed by one
 word from each of that event's lists; anything else in the string is dropped and
 what is stored is the canonical re-encoding (vocabulary order, repeats merged,
-counts 1..999, at most 24 distinct tokens of which at most 8 are radio failures).
+counts 1..999, at most 24 distinct failure tokens of which at most 8 are radio
+failures, at most 8 distinct `slow` tokens and at most 8 distinct `recovered` ones).
+Over its cap a family keeps the **worst**: `slow` the higher tier first (`5s`, then
+`1s`, then `250ms`), then the higher count, then the earlier in the written order
+(the scope's place in the frame, then the tier); `recovered` the higher count, then
+the earlier in the written order. The application writes the same selection
+(`health::selectForRecord`), and `test-fixtures/health-cases.json` is read by
+both its test and the Worker's, so the two cannot drift.
 The doubles are computed from those validated tokens, never from a number the
 client sends beside them. `tests/test_health_events.cpp` holds `HEALTH_EVENTS`
 to the application's own table and to PRIVACY.md, and `worker.test.mjs` throws
@@ -137,6 +148,15 @@ it".
 | opened radios that never delivered | `sum(double7) - sum(double8)` where `blob12 = '1'` |
 | sessions that had sound | `sum(double9)` where `blob12 = '1'` (a session count: `sound_ok` is once a session) |
 | builds that do not measure it | every `blob1` seen, minus those with `blob12 = '1'` |
+| slow frames by version | `sum(double10)` and `sum(double11)` where `blob12 = '1'`, grouped by `blob1`; per 1,000 records: `1000 * sum(double10) / count()` |
+| installs with any slow frame | `count(DISTINCT index1)` where `blob12 = '1' AND double10 > 0` |
+| installs with slow frames in one scope | `blob12 = '1' AND (startsWith(blob13, 'slow.SCOPE.') OR position(blob13, ',slow.SCOPE.') > 0)`, with `count(DISTINCT index1)` |
+| installs that recovered from anything | `count(DISTINCT index1)` where `blob12 = '1' AND double12 > 0` |
+| installs that recovered at one place | the failure query above with `TOKEN` = `recovered.WORD` |
+
+(A build that sends `health` sends slow frames and recoveries too - 0.99.64 is the
+first to send either - so `blob12 = '1'` also means those were measured, and a zero
+in `double10..12` is a real zero.)
 
 Compatibility, as `worker.test.mjs` measures it:
 
@@ -144,9 +164,12 @@ Compatibility, as `worker.test.mjs` measures it:
 |---|---|---|---|
 | 0.99.61 (no `stalls`, no `health`) | new | 204 | the eleven old blobs and five doubles as before; `blob12`, `blob13` empty, `double6..9` = 0 - not reported |
 | 0.99.62 (`stalls`) | new | 204 | as above, with the stall count |
-| 0.99.64 (`health`) | new | 204 | everything, validated |
+| failure counts only (the Worker's first `health`) | new | 204 | the same row it wrote, byte for byte; `double10..12` = 0 |
+| 0.99.64 (`health`, with `slow` and `recovered`) | new | 204 | everything, validated; `double10..12` the three sums |
 | 0.99.64, malformed `health` | new | 204 | everything except `health`: not reported |
 | 0.99.64 | **old** (0.99.63) | 204 | the old columns only; `health` is discarded, and the client, told 2xx, forgets it |
+| 0.99.64 | the Worker that has `health` but not `slow` / `recovered` (`test-fixtures/worker-health-counts.js`) | 204 | the failure tokens as before, `slow` and `recovered` tokens dropped, `double6..9` right, no `double10..12`; a record with only the new families is *not reported* there |
+| the longest record the client writes (832 characters) | the same older Worker | 204 | every failure token read - a record is never longer than that Worker's own limit |
 | a bad id, GET, bad JSON, over 4096 bytes | new | 400, 405, 400, 413 | nothing (unchanged) |
 
 ## Reading the numbers
@@ -187,6 +210,15 @@ that failed and that succeeded, radios whose samples arrived, sessions with
 sound), then every failure event seen - installs (`count(DISTINCT index1)`),
 records carrying it and the total count - and, apart, the builds that send no
 failure counts, which are *not measured*.
+
+Then **Slow frames, by version** (0.99.64): per version, the installs that
+reported, the installs with at least one slow frame, slow frames per 1,000 records
+and those of a second or more per 1,000, and the top five scopes (installs, records,
+slow frames, of a second or more); and **Recovered from, by version**: per version,
+the installs that reported, those with at least one recovery, the sum, and the top
+five words (installs, records, count). The same rule: only rows with `blob12 = '1'`,
+installs from `count(DISTINCT index1)`, and a version that sends nothing is
+unmeasured, never zero.
 
 The Worker and the reader are held by `worker.test.mjs` (`node --test`, needs
 Node 22.7 or later; registered with ctest as `telemetry_worker`). It imports the

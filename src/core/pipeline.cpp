@@ -1440,8 +1440,10 @@ void Pipeline::dspThreadMain() {
     try {
         dspThreadBody();
     } catch (const std::exception& e) {
+        dspExceptions_.fetch_add(1, std::memory_order_relaxed);
         noteThreadFault("DSP thread", e.what());
     } catch (...) {
+        dspExceptions_.fetch_add(1, std::memory_order_relaxed);
         noteThreadFault("DSP thread", "non-standard exception");
     }
 }

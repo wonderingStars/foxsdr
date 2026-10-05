@@ -339,6 +339,9 @@ if (-not $healthReporting) {
             $tok = $pair.Substring(0, $eq)
             # Pasted into SQL below: only what the vocabulary is made of.
             if ($tok -notmatch '^[a-z0-9_.]+$') { continue }
+            # The same text also carries the slow frames and the recoveries, which
+            # have their own sections below; their tokens are not failures.
+            if ($tok -match '^(slow|recovered)\.') { continue }
             $cnt = [int64]0
             if (-not [int64]::TryParse($pair.Substring($eq + 1), [ref]$cnt)) { continue }
             $key = "$ver|$tok"
@@ -385,6 +388,184 @@ if (-not $healthReporting) {
     }
     if ($healthNames.Count -gt 0) {
         Write-Host ("  Not measured (these builds send no failure counts): {0}" -f ($healthNames -join ", "))
+    }
+}
+
+# SLOW FRAMES, by version (0.99.64, the second pass) - how often the window took a
+# quarter of a second or more to draw a frame, and which part of the frame the time
+# went in. The hang watchdog fires at five seconds and the crash store sees only
+# what ends in a report; a stutter that never becomes a freeze left no trace at all.
+#
+# THE SAME DISCIPLINE: only rows with blob12 = '1' (the client SENT its counts; 0.99.64
+# is the first build to send either family, so such a row measured its frames), the
+# rest listed apart by the "What fails" section above. Installs are count(DISTINCT
+# index1), never uniq(). The sums are double10 (every slow frame) and double11
+# (those of a second or more), computed by the Worker from the validated tokens; the
+# scopes are read out of the count strings (blob13) exactly as the failures are, and
+# each scope's installs asked for with count(DISTINCT index1). `user-wait` is never a
+# scope: the application does not count it, and the Worker drops it.
+Write-Host ""
+Write-Host "Slow frames, by version" -ForegroundColor Cyan
+$slowVersions = Invoke-Sql "SELECT blob1 AS version, count(DISTINCT index1) AS installs, count() AS sessions, sum(double10) AS slow, sum(double11) AS slowLong FROM foxsdr_usage WHERE $window AND blob12 = '1' GROUP BY blob1 ORDER BY installs DESC"
+if (-not $slowVersions) {
+    Write-Host "  No build in this window reports slow frames yet."
+    Write-Host "  That is not zero slow frames - it is unmeasured."
+} else {
+    $withSlow = Invoke-Sql "SELECT blob1 AS version, count(DISTINCT index1) AS installs FROM foxsdr_usage WHERE $window AND blob12 = '1' AND double10 > 0 GROUP BY blob1"
+    $withSlowBy = @{}
+    foreach ($s in @($withSlow)) { $withSlowBy[[string]$s.version] = [int64]$s.installs }
+    Write-Host ("  {0,-34} {1,8} {2,9} {3,10} {4,11} {5,11}" -f "version", "installs", "sessions", "w/ slow", "per 1000", "1 s+ /1000")
+    foreach ($r in $slowVersions) {
+        $label = [string]$r.version
+        if (-not $label) { $label = "(not reported)" }
+        $with = 0
+        if ($withSlowBy.ContainsKey([string]$r.version)) { $with = $withSlowBy[[string]$r.version] }
+        $sessions = [double]$r.sessions
+        $per = 0.0
+        $perLong = 0.0
+        if ($sessions -gt 0) { $per = 1000.0 * [double]$r.slow / $sessions; $perLong = 1000.0 * [double]$r.slowLong / $sessions }
+        Write-Host ("  {0,-34} {1,8} {2,9} {3,10} {4,11:F1} {5,11:F1}" -f $label, $r.installs, $r.sessions, $with, $per, $perLong)
+    }
+    Write-Host "  installs = distinct installs that reported; w/ slow = those with at least one slow frame (250 ms or more); per 1000 = slow frames"
+    Write-Host "  per 1,000 records (a record is a session); 1 s+ = the slow frames of a second or more. A reporting version with a zero is a real zero."
+
+    # The scopes: one row per distinct count string and version, so sessions and
+    # frames are exact; installs per scope come from the database, per version.
+    $slowStrings = Invoke-Sql "SELECT blob1 AS version, blob13 AS slowHealth, count() AS sessions FROM foxsdr_usage WHERE $window AND blob12 = '1' AND position(blob13, 'slow.') > 0 GROUP BY blob1, blob13 ORDER BY sessions DESC LIMIT 1000"
+    $scopeStat = @{}
+    $scopes = @{}
+    foreach ($row in @($slowStrings)) {
+        $ver = [string]$row.version
+        $n = [int64]$row.sessions
+        $seenScope = @{}
+        foreach ($pair in ([string]$row.slowHealth).Split(',')) {
+            $eq = $pair.IndexOf('=')
+            if ($eq -lt 1) { continue }
+            # Pasted into SQL below: only a scope and a tier of the vocabulary.
+            if ($pair.Substring(0, $eq) -notmatch '^slow\.([a-z]+(-[a-z]+)*)\.(250ms|1s|5s)$') { continue }
+            $scope = $Matches[1]
+            $tier = $Matches[3]
+            # Never a word of the vocabulary (the application does not count it and the
+            # Worker drops it); refused here as well so it can never reach a query.
+            if ($scope -eq 'user-wait') { continue }
+            $cnt = [int64]0
+            if (-not [int64]::TryParse($pair.Substring($eq + 1), [ref]$cnt)) { continue }
+            $key = "$ver|$scope"
+            if (-not $scopeStat.ContainsKey($key)) {
+                $scopeStat[$key] = @{ version = $ver; scope = $scope; installs = [int64]0; sessions = [int64]0; frames = [int64]0; long = [int64]0 }
+            }
+            if (-not $seenScope.ContainsKey($scope)) { $scopeStat[$key].sessions += $n; $seenScope[$scope] = $true }
+            $scopeStat[$key].frames += $cnt * $n
+            if ($tier -ne '250ms') { $scopeStat[$key].long += $cnt * $n }
+            $scopes[$scope] = $true
+        }
+    }
+    foreach ($scope in @($scopes.Keys | Sort-Object)) {
+        $per = Invoke-Sql "SELECT blob1 AS version, count(DISTINCT index1) AS installs FROM foxsdr_usage WHERE $window AND blob12 = '1' AND (startsWith(blob13, 'slow.$scope.') OR position(blob13, ',slow.$scope.') > 0) GROUP BY blob1"
+        foreach ($p in @($per)) {
+            $k = "$([string]$p.version)|$scope"
+            if ($scopeStat.ContainsKey($k)) { $scopeStat[$k].installs = [int64]$p.installs }
+        }
+    }
+    Write-Host ""
+    if ($scopeStat.Count -eq 0) {
+        Write-Host "  No slow frame was reported by any build in this window."
+    } else {
+        Write-Host "  Top scopes (the part of the frame that took most of the slow frame; at most 5 a version):"
+        Write-Host ("  {0,-34} {1,-16} {2,8} {3,9} {4,8} {5,8}" -f "version", "scope", "installs", "sessions", "frames", "1 s+")
+        $byVersion = $scopeStat.Values | Group-Object -Property { $_.version } | Sort-Object -Property Name
+        foreach ($g in $byVersion) {
+            $top = $g.Group | Sort-Object -Property @{ Expression = { $_.frames }; Descending = $true }, @{ Expression = { $_.scope } } | Select-Object -First 5
+            foreach ($s in $top) {
+                $label = [string]$s.version
+                if (-not $label) { $label = "(not reported)" }
+                Write-Host ("  {0,-34} {1,-16} {2,8} {3,9} {4,8} {5,8}" -f $label, $s.scope, $s.installs, $s.sessions, $s.frames, $s.long)
+            }
+        }
+        Write-Host "  installs = distinct installs with a slow frame in the scope; sessions = records carrying it; frames = slow frames in it; 1 s+ = of a second or more."
+        if (@($slowStrings).Count -ge 1000) {
+            Write-Host "  (the 1000 most common count strings were read; the rarest are not shown)"
+        }
+    }
+}
+
+# WHAT THE PROGRAM RECOVERED FROM, by version (0.99.64, the second pass) - the places
+# it met a fault and carried on without telling anybody: the sound output restarted,
+# a radio's driver reopened, a settings file that could not be written (PRIVACY.md,
+# "Recovered from"). The same discipline: rows with blob12 = '1' only, installs
+# from count(DISTINCT index1), the sum double12 computed by the Worker from the
+# validated tokens, the tokens read out of the count strings (blob13) and each
+# token's installs asked for from the database.
+Write-Host ""
+Write-Host "Recovered from, by version" -ForegroundColor Cyan
+$recVersions = Invoke-Sql "SELECT blob1 AS version, count(DISTINCT index1) AS installs, count() AS sessions, sum(double12) AS recoveries FROM foxsdr_usage WHERE $window AND blob12 = '1' GROUP BY blob1 ORDER BY installs DESC"
+if (-not $recVersions) {
+    Write-Host "  No build in this window reports recoveries yet."
+    Write-Host "  That is not zero recoveries - it is unmeasured."
+} else {
+    $withRec = Invoke-Sql "SELECT blob1 AS version, count(DISTINCT index1) AS installs FROM foxsdr_usage WHERE $window AND blob12 = '1' AND double12 > 0 GROUP BY blob1"
+    $withRecBy = @{}
+    foreach ($s in @($withRec)) { $withRecBy[[string]$s.version] = [int64]$s.installs }
+    Write-Host ("  {0,-34} {1,8} {2,9} {3,12} {4,11}" -f "version", "installs", "sessions", "w/ recovery", "recoveries")
+    foreach ($r in $recVersions) {
+        $label = [string]$r.version
+        if (-not $label) { $label = "(not reported)" }
+        $with = 0
+        if ($withRecBy.ContainsKey([string]$r.version)) { $with = $withRecBy[[string]$r.version] }
+        Write-Host ("  {0,-34} {1,8} {2,9} {3,12} {4,11}" -f $label, $r.installs, $r.sessions, $with, $r.recoveries)
+    }
+    Write-Host "  installs = distinct installs that reported; w/ recovery = those with at least one; recoveries = the sum of the counts (a word that"
+    Write-Host "  can repeat by itself counts once a session). A reporting version with a zero is a real zero."
+
+    $recStrings = Invoke-Sql "SELECT blob1 AS version, blob13 AS recoveredHealth, count() AS sessions FROM foxsdr_usage WHERE $window AND blob12 = '1' AND position(blob13, 'recovered.') > 0 GROUP BY blob1, blob13 ORDER BY sessions DESC LIMIT 1000"
+    $recStat = @{}
+    $recTokens = @{}
+    foreach ($row in @($recStrings)) {
+        $ver = [string]$row.version
+        $n = [int64]$row.sessions
+        foreach ($pair in ([string]$row.recoveredHealth).Split(',')) {
+            $eq = $pair.IndexOf('=')
+            if ($eq -lt 1) { continue }
+            # Pasted into SQL below: only a word of the vocabulary.
+            if ($pair.Substring(0, $eq) -notmatch '^recovered\.[a-z]+$') { continue }
+            $tok = $pair.Substring(0, $eq)
+            $cnt = [int64]0
+            if (-not [int64]::TryParse($pair.Substring($eq + 1), [ref]$cnt)) { continue }
+            $key = "$ver|$tok"
+            if (-not $recStat.ContainsKey($key)) {
+                $recStat[$key] = @{ version = $ver; token = $tok; installs = [int64]0; sessions = [int64]0; total = [int64]0 }
+            }
+            $recStat[$key].sessions += $n
+            $recStat[$key].total += $cnt * $n
+            $recTokens[$tok] = $true
+        }
+    }
+    foreach ($tok in @($recTokens.Keys | Sort-Object)) {
+        $per = Invoke-Sql "SELECT blob1 AS version, count(DISTINCT index1) AS installs FROM foxsdr_usage WHERE $window AND blob12 = '1' AND (startsWith(blob13, '$tok=') OR position(blob13, ',$tok=') > 0) GROUP BY blob1"
+        foreach ($p in @($per)) {
+            $k = "$([string]$p.version)|$tok"
+            if ($recStat.ContainsKey($k)) { $recStat[$k].installs = [int64]$p.installs }
+        }
+    }
+    Write-Host ""
+    if ($recStat.Count -eq 0) {
+        Write-Host "  No recovery was reported by any build in this window."
+    } else {
+        Write-Host "  Top recoveries (at most 5 a version; the word is the place - see PRIVACY.md):"
+        Write-Host ("  {0,-34} {1,-24} {2,8} {3,9} {4,7}" -f "version", "recovered", "installs", "sessions", "count")
+        $recByVersion = $recStat.Values | Group-Object -Property { $_.version } | Sort-Object -Property Name
+        foreach ($g in $recByVersion) {
+            $top = $g.Group | Sort-Object -Property @{ Expression = { $_.sessions }; Descending = $true }, @{ Expression = { $_.token } } | Select-Object -First 5
+            foreach ($s in $top) {
+                $label = [string]$s.version
+                if (-not $label) { $label = "(not reported)" }
+                Write-Host ("  {0,-34} {1,-24} {2,8} {3,9} {4,7}" -f $label, $s.token, $s.installs, $s.sessions, $s.total)
+            }
+        }
+        Write-Host "  installs = distinct installs with the word; sessions = records carrying it; count = times it happened."
+        if (@($recStrings).Count -ge 1000) {
+            Write-Host "  (the 1000 most common count strings were read; the rarest are not shown)"
+        }
     }
 }
 Write-Host ""

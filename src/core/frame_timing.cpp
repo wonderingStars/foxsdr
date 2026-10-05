@@ -14,6 +14,7 @@
 #include <thread>
 
 #include "core/diag_log.hpp"
+#include "core/health_events.hpp"
 
 #if defined(_WIN32)
 #ifndef NOMINMAX
@@ -300,6 +301,13 @@ void FrameTimer::commit(const Held& h) {
     const int si = idx(h.scope);
     table_[si][h.tier].fetch_add(1, std::memory_order_relaxed);
     ++recorded_;
+    // THE USAGE RECORD (0.99.64, core/health_events.hpp): one count in `slow.<scope>.
+    // <tier>`, for the PROCESS's timer only - a timer a test builds is not the
+    // window's and counts into its own table and nothing else. On the slow path
+    // only (a frame already 250 ms or more late), on the window's thread, and it
+    // WAITS ON NO DISK: the ledger takes a mutex that is never held across I/O,
+    // updates a small map, and hands the file to a thread of its own.
+    if (mirror_) { health::noteSlowFrame(si, h.tier); }
     const std::int64_t now = steady_();
     if (logged_[si] && now - lastLogNs_[si] < kLogGapNs) {
         ++suppressed_[si];

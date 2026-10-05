@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
@@ -17,12 +18,71 @@
 
 #include <nlohmann/json.hpp>
 
+#include "core/frame_timing.hpp"
 #include "core/i18n.hpp"
 #include "core/telemetry.hpp"
 
 namespace cascade::core::health {
 
 namespace {
+
+// WHAT THE PROGRAM RECOVERED FROM: the words and, for each, whether it is counted
+// once a session (it can repeat by itself) or once an occurrence. The order is the
+// enum's and the written order.
+struct RecoveredInfo {
+    const char* word;
+    bool oncePerSession;
+};
+constexpr RecoveredInfo kRecovered[kRecoveredCount] = {
+    {"audio", true},        // the watchdog retries every second
+    {"reopen", true},       // at most once a minute, by itself
+    {"srcthread", false},   // each is a leaked thread: how many is the point
+    {"vendorcall", false},  // likewise
+    {"ringdrop", true},     // a ring that overflows overflows again
+    {"dspexc", false},      // the receiver stops; a restart is a new occurrence
+    {"cfgsave", true},      // the debounce retries it by itself
+    {"enumchild", true},    // every rescan can meet it again
+    {"pluginapi", true},    // a plugin that throws once throws every frame
+    {"webroute", true},     // a client that polls a failing route
+    {"patchload", false},   // start-up, once by nature
+    {"sdrenum", true},      // the service stays wedged
+    {"sdrlost", true},      // the session stays lost
+};
+
+// The frame timer's own names for the scopes, but for `user-wait`.
+const std::vector<std::string>& scopeWordList() {
+    static const std::vector<std::string> w = [] {
+        std::vector<std::string> v;
+        for (int i = 0; i < kFrameScopeCount; ++i) {
+            if (i != static_cast<int>(FrameScope::UserWait)) { v.push_back(kFrameScopeNames[i]); }
+        }
+        return v;
+    }();
+    return w;
+}
+
+// The widths of the tiers: 250ms, 1s, 5s.
+const std::vector<std::string>& tierWordList() {
+    static const std::vector<std::string> w = [] {
+        std::vector<std::string> v;
+        for (int t = 0; t < kSlowFrameTiers; ++t) {
+            const std::int64_t ns = kSlowFrameTierNs[t];
+            v.push_back(ns % 1'000'000'000LL == 0 ? std::to_string(ns / 1'000'000'000LL) + "s"
+                                                  : std::to_string(ns / 1'000'000LL) + "ms");
+        }
+        return v;
+    }();
+    return w;
+}
+
+const std::vector<std::string>& recoveredWordList() {
+    static const std::vector<std::string> w = [] {
+        std::vector<std::string> v;
+        for (const RecoveredInfo& r : kRecovered) { v.push_back(r.word); }
+        return v;
+    }();
+    return w;
+}
 
 // ---------------------------------------------------------------------------
 // The tables. THESE ARE THE VOCABULARY: a word that is not here cannot be made
@@ -79,6 +139,10 @@ const std::vector<VocabularyEntry>& vocabulary() {
         {"plug_inst", {installWords()}, false},
         {"plug_load", {loadWords()}, true},
         {"rec_fail", {}, false},
+        // 0.99.64, the second pass: LAST in the written order, so a record an older
+        // Worker reads has every earlier token where it always was.
+        {"slow", {scopeWordList(), tierWordList()}, false},
+        {"recovered", {recoveredWordList()}, false},
     };
     return v;
 }
@@ -86,12 +150,15 @@ const std::vector<VocabularyEntry>& vocabulary() {
 namespace {
 
 // A token taken apart: where its event and each qualifier sit in the tables.
+enum class Family : std::uint8_t { Base, Slow, Recovered };
+
 struct Parsed {
     int event = -1;
     int q1 = -1;
     int q2 = -1;
     bool once = false;
     bool radioFail = false;
+    Family family = Family::Base;
 };
 
 int indexOf(const Words& w, std::string_view s) {
@@ -122,6 +189,9 @@ bool parseToken(std::string_view token, Parsed& out) {
         out.event = static_cast<int>(e);
         out.once = v[e].oncePerSession;
         out.radioFail = v[e].name == "radio_fail";
+        out.family = v[e].name == "slow"        ? Family::Slow
+                     : v[e].name == "recovered" ? Family::Recovered
+                                                : Family::Base;
         if (n >= 2) {
             out.q1 = indexOf(v[e].qualifiers[0], parts[1]);
             if (out.q1 < 0) { return false; }
@@ -129,6 +199,10 @@ bool parseToken(std::string_view token, Parsed& out) {
         if (n >= 3) {
             out.q2 = indexOf(v[e].qualifiers[1], parts[2]);
             if (out.q2 < 0) { return false; }
+        }
+        // Whether a recovery is once a session is the word's, not the family's.
+        if (out.family == Family::Recovered) {
+            out.once = kRecovered[static_cast<std::size_t>(out.q1)].oncePerSession;
         }
         return true;
     }
@@ -357,21 +431,33 @@ std::string tokenRecordFail() { return "rec_fail"; }
 
 namespace {
 
-// Adds `n` to `token`'s count in `into`, keeping every bound: a new token is
-// refused once kMaxTokens are carried, or once kMaxRadioFailTokens of them are
-// radio failures; a count stops at kMaxCount. True when anything was added.
+bool isSlowOrRecovered(const std::string& token) {
+    return token.rfind("slow.", 0) == 0 || token.rfind("recovered.", 0) == 0;
+}
+
+// Adds `n` to `token`'s count in `into`, keeping every bound OF A LEDGER: a new
+// failure token is refused once kMaxBaseTokens failure tokens are held, or once
+// kMaxRadioFailTokens of them are radio failures; a count stops at kMaxCount.
+// `slow` and `recovered` tokens are never refused for how many are held - there
+// are only 54 and 13 of them, the vocabulary bounds them - because the cap that
+// applies to them is the RECORD's (selectForRecord keeps the worst), and a ledger
+// that dropped the rest on arrival could not know which were the worst.
+// True when anything was added.
 bool addCapped(Counts& into, const std::string& token, std::uint64_t n) {
     Parsed p;
     if (n == 0 || !parseToken(token, p)) { return false; }
     auto it = into.find(token);
     if (it == into.end()) {
-        if (into.size() >= kMaxTokens) { return false; }
-        if (p.radioFail) {
+        if (p.family == Family::Base) {
+            std::size_t base = 0;
             std::size_t fails = 0;
             for (const auto& kv : into) {
+                if (isSlowOrRecovered(kv.first)) { continue; }
+                ++base;
                 if (kv.first.rfind("radio_fail.", 0) == 0) { ++fails; }
             }
-            if (fails >= kMaxRadioFailTokens) { return false; }
+            if (base >= kMaxBaseTokens) { return false; }
+            if (p.radioFail && fails >= kMaxRadioFailTokens) { return false; }
         }
         it = into.emplace(token, 0u).first;
     }
@@ -396,16 +482,74 @@ std::vector<std::pair<std::string, std::uint32_t>> inWrittenOrder(const Counts& 
 
 }  // namespace
 
+Counts selectForRecord(const Counts& counts) {
+    struct Item {
+        std::string token;
+        std::uint32_t n;
+        Parsed p;
+    };
+    std::vector<Item> base, slow, recovered;
+    for (const auto& kv : counts) {
+        Parsed p;
+        if (kv.second == 0 || !parseToken(kv.first, p)) { continue; }
+        Item it{kv.first, std::min(kv.second, kMaxCount), p};
+        (p.family == Family::Slow ? slow : p.family == Family::Recovered ? recovered : base)
+            .push_back(std::move(it));
+    }
+    auto writtenFirst = [](const Item& a, const Item& b) { return orderKey(a.p) < orderKey(b.p); };
+
+    // The failure families: the earlier in the written order, within their caps.
+    std::sort(base.begin(), base.end(), writtenFirst);
+    std::vector<Item> chosen;
+    std::size_t fails = 0;
+    for (Item& it : base) {
+        if (chosen.size() >= kMaxBaseTokens) { break; }
+        if (it.p.radioFail) {
+            if (fails >= kMaxRadioFailTokens) { continue; }
+            ++fails;
+        }
+        chosen.push_back(std::move(it));
+    }
+    // `slow`, over its cap: the worst - the higher tier, then the higher count, then
+    // the earlier in the written order.
+    if (slow.size() > kMaxSlowTokens) {
+        std::sort(slow.begin(), slow.end(), [&](const Item& a, const Item& b) {
+            if (a.p.q2 != b.p.q2) { return a.p.q2 > b.p.q2; }
+            if (a.n != b.n) { return a.n > b.n; }
+            return writtenFirst(a, b);
+        });
+        slow.resize(kMaxSlowTokens);
+    }
+    // `recovered`, over its cap: the higher count, then the earlier in the written order.
+    if (recovered.size() > kMaxRecoveredTokens) {
+        std::sort(recovered.begin(), recovered.end(), [&](const Item& a, const Item& b) {
+            if (a.n != b.n) { return a.n > b.n; }
+            return writtenFirst(a, b);
+        });
+        recovered.resize(kMaxRecoveredTokens);
+    }
+    for (Item& it : slow) { chosen.push_back(std::move(it)); }
+    for (Item& it : recovered) { chosen.push_back(std::move(it)); }
+    std::sort(chosen.begin(), chosen.end(), writtenFirst);
+
+    // The text: tokens are added in the written order until the next would not fit.
+    Counts out;
+    std::size_t bytes = 0;
+    for (const Item& it : chosen) {
+        const std::size_t piece = it.token.size() + 1 + std::to_string(it.n).size();
+        const std::size_t add = piece + (out.empty() ? 0 : 1);
+        if (bytes + add > kMaxEncodedBytes) { break; }
+        bytes += add;
+        out[it.token] = it.n;
+    }
+    return out;
+}
+
 std::string encode(const Counts& counts) {
     std::string out;
-    std::size_t pairs = 0;
-    for (const auto& kv : inWrittenOrder(counts)) {
-        if (pairs >= kMaxTokens) { break; }
-        std::string piece = kv.first + "=" + std::to_string(kv.second);
-        if (out.size() + piece.size() + (out.empty() ? 0 : 1) > kMaxEncodedBytes) { break; }
+    for (const auto& kv : inWrittenOrder(selectForRecord(counts))) {
         if (!out.empty()) { out += ','; }
-        out += piece;
-        ++pairs;
+        out += kv.first + "=" + std::to_string(kv.second);
     }
     return out;
 }
@@ -415,7 +559,9 @@ bool decode(std::string_view text, Counts& out) {
     if (text.empty()) { return true; }
     if (text.size() > kMaxEncodedBytes) { return false; }
     std::size_t at = 0;
-    std::size_t pairs = 0;
+    // Each family has its own cap: the failures, `slow`, `recovered`.
+    std::size_t pairs[3] = {0, 0, 0};
+    const std::size_t caps[3] = {kMaxBaseTokens, kMaxSlowTokens, kMaxRecoveredTokens};
     while (at <= text.size()) {
         const std::size_t comma = text.find(',', at);
         const std::string_view piece =
@@ -424,13 +570,15 @@ bool decode(std::string_view text, Counts& out) {
         if (eq == std::string_view::npos) { out.clear(); return false; }
         const std::string token(piece.substr(0, eq));
         const std::string_view digits = piece.substr(eq + 1);
-        if (!validToken(token) || digits.empty() || digits.size() > 3) { out.clear(); return false; }
+        Parsed p;
+        if (!parseToken(token, p) || digits.empty() || digits.size() > 3) { out.clear(); return false; }
         std::uint32_t n = 0;
         for (char c : digits) {
             if (c < '0' || c > '9') { out.clear(); return false; }
             n = n * 10 + static_cast<std::uint32_t>(c - '0');
         }
-        if (n < 1 || n > kMaxCount || out.count(token) != 0 || ++pairs > kMaxTokens) {
+        const std::size_t f = static_cast<std::size_t>(p.family);
+        if (n < 1 || n > kMaxCount || out.count(token) != 0 || ++pairs[f] > caps[f]) {
             out.clear();
             return false;
         }
@@ -585,6 +733,8 @@ void writeAtomically(const std::string& path, const std::string& text) {
 
 }  // namespace
 
+static std::atomic<void (*)()> g_writeHook{nullptr};
+
 // The writer: one short-lived thread at a time, started by the first change and
 // ending when nothing is left to write. It owns a share of the state, so the
 // ledger may be gone before it finishes, and the caller never waits on a disk.
@@ -619,6 +769,9 @@ static void healthWriterLoop(SharedPtr s) {
                 text = HealthLedger::fileText(s->installId, s->counts);
             }
         }
+        // A test's slow disk: runs on THIS thread, with the ledger's lock released,
+        // so it can only ever delay the file and never a caller of note().
+        if (void (*hook)() = g_writeHook.load()) { hook(); }
         if (remove) {
             std::error_code ec;
             std::filesystem::remove(utf8Path(path), ec);
@@ -723,14 +876,19 @@ bool HealthLedger::armed() const {
     return s_->armed;
 }
 
-void HealthLedger::note(const std::string& token) {
+void HealthLedger::note(const std::string& token) { note(token, 1); }
+
+void HealthLedger::note(const std::string& token, std::uint32_t times) {
     Parsed p;
-    if (!parseToken(token, p)) { return; }
+    if (times == 0 || !parseToken(token, p)) { return; }
     std::lock_guard<std::mutex> lk(s_->m);
     if (s_->decided && (!s_->armed || !s_->allowed)) { return; }
     if (!s_->decided && !s_->allowed) { return; }
-    if (p.once && !s_->once.insert(token).second) { return; }
-    if (addCapped(s_->counts, token, 1) && s_->armed) { scheduleWriteLocked(s_); }
+    if (p.once) {
+        if (!s_->once.insert(token).second) { return; }
+        times = 1;
+    }
+    if (addCapped(s_->counts, token, times) && s_->armed) { scheduleWriteLocked(s_); }
 }
 
 Counts HealthLedger::counts() const {
@@ -814,6 +972,92 @@ void notePluginCatalogueFailed() { note(tokenPluginCatalogue()); }
 void notePluginInstallFailed(InstallClass c) { note(tokenPluginInstall(c)); }
 void notePluginLoadRefused(LoadClass c) { note(tokenPluginLoad(c)); }
 void noteRecordFailed() { note(tokenRecordFail()); }
+
+// ---------------------------------------------------------------------------
+// Slow frames, and what the program recovered from (0.99.64)
+// ---------------------------------------------------------------------------
+
+const std::vector<std::string>& slowScopeWords() { return scopeWordList(); }
+const std::vector<std::string>& slowTierWords() { return tierWordList(); }
+const std::vector<std::string>& recoveredWords() { return recoveredWordList(); }
+
+std::string tokenSlowFrame(int frameScope, int tier) {
+    if (frameScope < 0 || frameScope >= kFrameScopeCount ||
+        frameScope == static_cast<int>(FrameScope::UserWait) || tier < 0 || tier >= kSlowFrameTiers) {
+        return std::string();
+    }
+    return build("slow", kFrameScopeNames[frameScope], tierWordList()[static_cast<std::size_t>(tier)]);
+}
+
+const char* recoveredWord(Recovered r) {
+    const std::size_t i = static_cast<std::size_t>(r);
+    return i < kRecoveredCount ? kRecovered[i].word : "";
+}
+std::string tokenRecovered(Recovered r) {
+    const std::string w = recoveredWord(r);
+    return w.empty() ? std::string() : build("recovered", w);
+}
+bool recoveredOncePerSession(Recovered r) {
+    const std::size_t i = static_cast<std::size_t>(r);
+    return i < kRecoveredCount && kRecovered[i].oncePerSession;
+}
+
+void HealthLedger::setWriteHookForTest(void (*hook)()) { g_writeHook.store(hook); }
+
+void noteSlowFrame(int frameScope, int tier) {
+    const std::string token = tokenSlowFrame(frameScope, tier);
+    if (!token.empty()) { note(token); }
+}
+
+void noteRecovered(Recovered r) {
+    const std::string token = tokenRecovered(r);
+    if (!token.empty()) { note(token); }
+}
+
+namespace {
+// The words raised and not yet counted: one bit each. Lock-free, so a thread that
+// must not take a lock can still say "this happened".
+std::atomic<std::uint32_t> g_raisedRecovered{0};
+}  // namespace
+
+void raiseRecovered(Recovered r) {
+    const std::size_t i = static_cast<std::size_t>(r);
+    if (i < kRecoveredCount) { g_raisedRecovered.fetch_or(1u << i, std::memory_order_relaxed); }
+}
+
+void drainRecovered() {
+    const std::uint32_t bits = g_raisedRecovered.exchange(0u, std::memory_order_relaxed);
+    if (bits == 0) { return; }
+    for (std::size_t i = 0; i < kRecoveredCount; ++i) {
+        if ((bits & (1u << i)) != 0) { noteRecovered(static_cast<Recovered>(i)); }
+    }
+}
+
+void RecoveryWatch::poll(const RecoveryReadings& now) {
+    if (!started_) {
+        // The first look is the baseline: what the process had before it is not news.
+        started_ = true;
+        last_ = now;
+        return;
+    }
+    auto moved = [](unsigned long long a, unsigned long long b) {
+        return a > b ? static_cast<std::uint32_t>(std::min<unsigned long long>(a - b, kMaxCount)) : 0u;
+    };
+    auto g = globalLedger();
+    if (const std::uint32_t n = moved(now.sourceThreadsAbandoned, last_.sourceThreadsAbandoned)) {
+        g->note(tokenRecovered(Recovered::SrcThread), n);
+    }
+    if (const std::uint32_t n = moved(now.vendorCallsAbandoned, last_.vendorCallsAbandoned)) {
+        g->note(tokenRecovered(Recovered::VendorCall), n);
+    }
+    if (const std::uint32_t n = moved(now.ringDroppedSamples, last_.ringDroppedSamples)) {
+        g->note(tokenRecovered(Recovered::RingDrop), n);
+    }
+    if (const std::uint32_t n = moved(now.dspThreadExceptions, last_.dspThreadExceptions)) {
+        g->note(tokenRecovered(Recovered::DspExc), n);
+    }
+    last_ = now;
+}
 
 std::string withHealth(const std::string& recordJson, const std::string& encoded) {
     nlohmann::json j = nlohmann::json::parse(recordJson, nullptr, /*allow_exceptions=*/false);

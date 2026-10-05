@@ -7,6 +7,7 @@
 #include "core/crash_handler.hpp"
 #include "core/diag_log.hpp"
 #include "core/diag_report.hpp"
+#include "core/health_events.hpp"
 #include "core/telemetry.hpp"
 #include "core/version.hpp"
 #include "source/vendor_guard.hpp"
@@ -45,6 +46,14 @@ namespace cascade::source {
 namespace {
 
 constexpr int kSchema = 1;
+
+// A SCAN CHILD THAT DIED AND WAS CONTAINED (the parent survived and went on) is
+// a recovery the usage record counts: `recovered.enumchild`, once a session.
+// Counted by the scan's own worker thread - the window's or a test's - where the
+// death is recorded; never on a signal thread, and a no-op in the child process
+// itself and whenever reporting is off. Nothing of the death (its exit code, the
+// driver, the child's words) is passed on: the word is the whole of it.
+void noteContainedChildDeath() { core::health::noteRecovered(core::health::Recovered::EnumChild); }
 
 // The child's whole vocabulary, in one place so the writer and the reader
 // cannot drift apart.
@@ -1076,6 +1085,7 @@ void sweepEachDriver(const std::string& helper, const EnumOptions& options,
                 // leaving it out of later scans would hide its radio. The death
                 // is still counted and filed, once, saying when it happened.
                 result.childDeaths += 1;
+                noteContainedChildDeath();
                 result.deathExitCode = one.exitCode;
                 result.childFaultLine = one.childFaultLine;
                 const std::string reason = withChildSaid(
@@ -1095,6 +1105,7 @@ void sweepEachDriver(const std::string& helper, const EnumOptions& options,
         result.childFaultLine = one.childFaultLine;
         if (one.outcome == EnumOutcome::ChildDied) {
             result.childDeaths += 1;
+            noteContainedChildDeath();
             result.deathExitCode = one.exitCode;
             // FILED PER DRIVER, NAMED, AND UNDER ITS OWN SIGNATURE, because
             // the driver name is the one thing the whole-bus death could never
@@ -1253,6 +1264,7 @@ EnumResult enumerateIsolated(const EnumOptions& options) {
             // for why a timeout is not.
             if (result.outcome != EnumOutcome::ChildDied) { break; }
             result.childDeaths += 1;
+            noteContainedChildDeath();
             result.deathExitCode = result.exitCode;
 
             // FILED HERE, AT THE DEATH, and not once at the end - which is

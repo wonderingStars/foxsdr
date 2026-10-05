@@ -793,7 +793,12 @@ bool prepareStartupRecord(const std::string& configDir, const std::string& pendi
     }
     // EARLIER SESSIONS ONLY: this run's own counts describe the session still
     // in progress, whose record is sent at the next start-up.
-    outCarriedHealth = healthLedger.priorCounts();
+    //
+    // THE SELECTION, not everything: a record carries at most the worst eight
+    // `slow` tokens and eight `recovered` ones, and exactly what it carries is
+    // what is taken off when the server accepts it. What it left out stays kept
+    // and goes with the next record (health::selectForRecord).
+    outCarriedHealth = health::selectForRecord(healthLedger.priorCounts());
     outJson = health::withHealth(outJson, health::encode(outCarriedHealth));
     return true;
 }

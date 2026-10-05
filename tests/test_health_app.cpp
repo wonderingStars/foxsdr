@@ -44,6 +44,7 @@
 
 #include "core/config.hpp"
 #include "core/health_events.hpp"
+#include "core/patch_io.hpp"
 #include "core/plugin_host.hpp"
 #include "core/plugin_repo.hpp"
 #include "core/telemetry.hpp"
@@ -51,6 +52,7 @@
 #include "sink/audio_out.hpp"
 #include "source/device_source.hpp"
 #include "source/rtlsdr_source.hpp"
+#include "source/sdrplay_source.hpp"
 #include "source/soundcard_source.hpp"
 #include "test_check.hpp"
 
@@ -130,10 +132,100 @@ private:
     bool open_ = false;
 };
 
+// A driver whose read() never returns until released - what the receiver's stop abandons a thread to.
+struct HungWorld {
+    std::atomic<bool> entered{false};
+    std::atomic<bool> release{false};
+};
+HungWorld g_hung;
+
+class HungRadio final : public cascade::source::DeviceSource {
+public:
+    bool start() override { return true; }
+    void stop() override {}   // an abort the driver ignores
+    bool running() const override { return true; }
+    bool selfPaced() const override { return true; }
+    double sampleRateHz() const override { return 2.4e6; }
+    bool setSampleRateHz(double) override { return true; }
+    double centerFrequencyHz() const override { return 100.0e6; }
+    bool setCenterFrequencyHz(double) override { return true; }
+    std::size_t read(std::complex<float>*, std::size_t) override {
+        g_hung.entered = true;
+        while (!g_hung.release.load()) { std::this_thread::sleep_for(std::chrono::milliseconds(1)); }
+        return 0;
+    }
+    const char* name() const override { return "Hung radio"; }
+    const char* lastError() const override { return ""; }
+    const char* driverKey() const override { return "hung"; }
+    bool open(const std::string&) override { open_ = true; return true; }
+    void closeDevice() override { open_ = false; }
+    bool isOpen() const override { return open_; }
+    std::vector<cascade::source::GainInfo> gains() const override { return {}; }
+    bool setGainDb(const std::string&, double) override { return false; }
+    double gainDb(const std::string&) const override { return 0.0; }
+    bool autoGainSupported() const override { return false; }
+    bool setAutoGain(bool) override { return false; }
+    bool autoGain() const override { return false; }
+    std::vector<std::string> antennas() const override { return {}; }
+    bool setAntenna(const std::string&) override { return false; }
+    std::string antenna() const override { return {}; }
+    std::vector<double> supportedSampleRatesHz() const override { return {2.4e6}; }
+    bool frequencyRangeHz(double& lo, double& hi) const override { lo = 24.0e6; hi = 1766.0e6; return true; }
+    bool deviceDead() const override { return false; }
+    std::string faultedWhile() const override { return {}; }
+
+private:
+    bool open_ = false;
+};
+
+// A radio that hands over samples as fast as memory goes, with a DSP thread behind it that cannot keep
+// up: the ring fills and the source thread drops what does not fit.
+class FloodRadio final : public cascade::source::DeviceSource {
+public:
+    bool start() override { abort_ = false; return true; }
+    void stop() override { abort_ = true; }
+    bool running() const override { return !abort_; }
+    bool selfPaced() const override { return true; }
+    double sampleRateHz() const override { return 2.4e6; }
+    bool setSampleRateHz(double) override { return true; }
+    double centerFrequencyHz() const override { return 100.0e6; }
+    bool setCenterFrequencyHz(double) override { return true; }
+    std::size_t read(std::complex<float>* dst, std::size_t n) override {
+        if (abort_) { return 0; }
+        for (std::size_t i = 0; i < n; ++i) { dst[i] = {0.0f, 0.0f}; }
+        return n;
+    }
+    const char* name() const override { return "Flooding radio"; }
+    const char* lastError() const override { return ""; }
+    const char* driverKey() const override { return "flood"; }
+    bool open(const std::string&) override { open_ = true; return true; }
+    void closeDevice() override { open_ = false; }
+    bool isOpen() const override { return open_; }
+    std::vector<cascade::source::GainInfo> gains() const override { return {}; }
+    bool setGainDb(const std::string&, double) override { return false; }
+    double gainDb(const std::string&) const override { return 0.0; }
+    bool autoGainSupported() const override { return false; }
+    bool setAutoGain(bool) override { return false; }
+    bool autoGain() const override { return false; }
+    std::vector<std::string> antennas() const override { return {}; }
+    bool setAntenna(const std::string&) override { return false; }
+    std::string antenna() const override { return {}; }
+    std::vector<double> supportedSampleRatesHz() const override { return {2.4e6}; }
+    bool frequencyRangeHz(double& lo, double& hi) const override { lo = 24.0e6; hi = 1766.0e6; return true; }
+    bool deviceDead() const override { return false; }
+    std::string faultedWhile() const override { return {}; }
+
+private:
+    std::atomic<bool> abort_{true};
+    bool open_ = false;
+};
+
 std::unique_ptr<cascade::source::DeviceSource> makeRadio(const std::string& kind) {
     if (kind == "rtlsdr" && g_script.realRtl.load()) {
         return std::make_unique<cascade::source::RtlSdrSource>();
     }
+    if (kind == "hung") { return std::make_unique<HungRadio>(); }
+    if (kind == "flood") { return std::make_unique<FloodRadio>(); }
     return std::make_unique<FakeRadio>(kind);
 }
 
@@ -385,6 +477,34 @@ struct AppWindowTestAccess {
     static bool launch(AppWindow& a, const std::string& path) { return a.launchInstaller(path); }
 
     static void rescan(AppWindow& a) { a.rescanPlugins(); }
+
+    // --- what the program recovered from (0.99.64) ---
+    static void reopenAfterFault(AppWindow& a) { a.reopenAfterDriverFault(); }
+    // A settings save, through the window's own writer made to refuse (a read-only profile, a full
+    // disk, a file another program holds) or to accept; waits for the worker the way the frame loop does.
+    static bool save(AppWindow& a, bool accepted) {
+        a.configWriter_.bind([accepted](const std::string&, const std::string&, std::string& error) {
+            if (!accepted) { error = "the disk refused it"; }
+            return accepted;
+        });
+        const unsigned before = a.configWriter_.completed();
+        a.requestConfigSave(cascade::core::AppConfig{});
+        const auto t0 = std::chrono::steady_clock::now();
+        while (a.configWriter_.completed() == before) {
+            a.pollConfigWriter();
+            if (std::chrono::steady_clock::now() - t0 > std::chrono::seconds(20)) { return false; }
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        return true;
+    }
+    // The audio watchdog's reopen (or the user's own pick), with the open made to succeed or fail.
+    static void audioOpen(AppWindow& a, bool byWatchdog, bool opens) {
+        a.audioOpen_.bind([opens](int) { return opens; }, [] {}, [] {});
+        (void)a.requestAudioOpen(-1, byWatchdog);
+    }
+    static int audioRecoveries(AppWindow& a) { return a.audioRecoveries_; }
+    static void sdrPlayPoll(AppWindow& a) { a.pollSdrPlayService(); }
+    static std::uint64_t ringDropped(AppWindow& a) { return a.pipeline_.ringDroppedSamples(); }
 };
 
 }  // namespace cascade::gui
@@ -935,6 +1055,240 @@ void testTheRealApplicationCountsKeepsAndClears() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// WHAT THE PROGRAM RECOVERED FROM (0.99.64), counted where the window decides it. Each word is
+// driven through its real trigger where one can be made here and through the nearest seam where
+// not; the header of each block says which.
+// ---------------------------------------------------------------------------
+void testRecoveriesAreCountedWhereTheWindowMeetsThem() {
+    // `reopen` - SEAM: reopenAfterDriverFault() itself, with a radio installed; what DECIDES it is due
+    // (a Soapy vendor fault latched on a real driver) needs a vendor module and is held by
+    // test_soapy_vendor_guard / test_converter_app_paths. Once a session: it repeats by itself.
+    {
+        auto g = fresh();
+        setNative({{"rtlsdr", "RTL-SDR A", kArgs}});
+        cascade::gui::AppWindow app;
+        CHECK(Access::selectNative(app, kArgs));
+        CHECK(countOf(g->counts(), "recovered.reopen") == 0);    // opening a radio is not a recovery
+        Access::reopenAfterFault(app);
+        CHECK(Access::waitOpen(app));
+        CHECK(countOf(g->counts(), "recovered.reopen") == 1);
+        Access::reopenAfterFault(app);
+        CHECK(Access::waitOpen(app));
+        CHECK(countOf(g->counts(), "recovered.reopen") == 1);    // once a session
+    }
+    // `cfgsave` - SEAM: the window's own writer made to refuse. A save that works counts nothing.
+    {
+        auto g = fresh();
+        cascade::gui::AppWindow app;
+        CHECK(Access::save(app, true));
+        CHECK(countOf(g->counts(), "recovered.cfgsave") == 0);
+        CHECK(Access::save(app, false));
+        CHECK(countOf(g->counts(), "recovered.cfgsave") == 1);
+        CHECK(Access::save(app, false));
+        CHECK(countOf(g->counts(), "recovered.cfgsave") == 1);   // the debounce retries by itself: once
+    }
+    // `audio` - SEAM: the watchdog's reopen with the open made to succeed. The user's own pick, and a
+    // reopen that fails, are not "stopped and came back".
+    {
+        auto g = fresh();
+        cascade::gui::AppWindow app;
+        Access::audioOpen(app, /*byWatchdog=*/false, /*opens=*/true);
+        CHECK(countOf(g->counts(), "recovered.audio") == 0);
+        Access::audioOpen(app, /*byWatchdog=*/true, /*opens=*/false);
+        CHECK(countOf(g->counts(), "recovered.audio") == 0);
+        CHECK(Access::audioRecoveries(app) == 0);
+        Access::audioOpen(app, /*byWatchdog=*/true, /*opens=*/true);
+        CHECK(Access::audioRecoveries(app) == 1);
+        CHECK(countOf(g->counts(), "recovered.audio") == 1);
+        Access::audioOpen(app, /*byWatchdog=*/true, /*opens=*/true);
+        CHECK(Access::audioRecoveries(app) == 2);
+        CHECK(countOf(g->counts(), "recovered.audio") == 1);     // once a session
+    }
+    // `patchload` - REAL: restoring a saved patch whose wire the rules forbid (the loader offers every
+    // wire to connect() and drops what it refuses) - the very path the start-up restore takes.
+    {
+        auto g = fresh();
+        cascade::gui::AppWindow app;
+        cascade::core::AppConfig cfg;
+        cfg.patch = std::string(cascade::core::patch::kPatchMagic) + " 1\n" +
+                    "node 1 0 0 0 0 Radio\nnode 2 3 1 200 0 ACARS\nwire 1 0 2 0\n";
+        Access::restore(app, cfg);
+        CHECK(countOf(g->counts(), "recovered.patchload") == 1);
+        // A patch that loads whole counts nothing.
+        auto g2 = fresh();
+        cascade::core::AppConfig clean;
+        clean.patch = std::string(cascade::core::patch::kPatchMagic) + " 1\n" + "node 1 0 0 0 0 Radio\n";
+        Access::restore(app, clean);
+        CHECK(countOf(g2->counts(), "recovered.patchload") == 0);
+    }
+    // `sdrenum` and `sdrlost` - SEAM: the process-wide SDRplay table's own trouble word, which the
+    // service poll reads (an abandoned scan worker, a lost session). An open that was refused
+    // (trouble 1) is a radio failure, counted as one, and is not a recovery.
+    {
+        auto g = fresh();
+        cascade::gui::AppWindow app;
+        const auto& api = cascade::source::processSdrPlayApi();
+        api.serviceTrouble.store(1);
+        Access::sdrPlayPoll(app);
+        CHECK(g->counts().empty());
+        api.serviceTrouble.store(2);
+        Access::sdrPlayPoll(app);
+        Access::sdrPlayPoll(app);
+        CHECK(countOf(g->counts(), "recovered.sdrenum") == 1);
+        CHECK(countOf(g->counts(), "recovered.sdrlost") == 0);
+        api.serviceTrouble.store(3);
+        Access::sdrPlayPoll(app);
+        CHECK(countOf(g->counts(), "recovered.sdrlost") == 1);
+        api.serviceTrouble.store(0);
+        Access::sdrPlayPoll(app);
+        CHECK(g->counts().size() == 2);
+    }
+    // `ringdrop` - REAL: a radio that hands over samples faster than the DSP thread takes them off. The
+    // window's poll reads the pipeline's own dropped-samples counter; once a session.
+    {
+        auto g = fresh();
+        setNative({{"flood", "Flood", kArgs}});
+        cascade::gui::AppWindow app;
+        Access::poll(app);                                       // the first look is the baseline
+        CHECK(Access::selectNative(app, kArgs));
+        Access::start(app);
+        const auto t0 = std::chrono::steady_clock::now();
+        while (Access::ringDropped(app) == 0 &&
+               std::chrono::steady_clock::now() - t0 < std::chrono::seconds(20)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        CHECK(Access::ringDropped(app) > 0);
+        Access::poll(app);
+        CHECK(countOf(g->counts(), "recovered.ringdrop") == 1);
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        Access::poll(app);
+        CHECK(countOf(g->counts(), "recovered.ringdrop") == 1);
+        Access::stop(app);
+    }
+    // `srcthread` - REAL: a driver whose read() never returns. The receiver's stop lets the thread go after
+    // 3 s rather than freeze the window, and the poll reads the pipeline's own abandoned-threads counter.
+    {
+        auto g = fresh();
+        g_hung.entered = false;
+        g_hung.release = false;
+        setNative({{"hung", "Hung", kArgs}});
+        cascade::gui::AppWindow app;
+        Access::poll(app);                                       // the baseline
+        CHECK(Access::selectNative(app, kArgs));
+        Access::start(app);
+        const auto t0 = std::chrono::steady_clock::now();
+        while (!g_hung.entered.load() && std::chrono::steady_clock::now() - t0 < std::chrono::seconds(20)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        CHECK(g_hung.entered.load());
+        CHECK(countOf(g->counts(), "recovered.srcthread") == 0);
+        Access::stop(app);                                       // abandons the thread
+        Access::poll(app);
+        CHECK(countOf(g->counts(), "recovered.srcthread") == 1);
+        Access::poll(app);
+        CHECK(countOf(g->counts(), "recovered.srcthread") == 1); // not counted again by being looked at again
+        g_hung.release = true;                                   // let the abandoned thread end
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SLOW FRAMES THROUGH THE REAL WINDOW (0.99.64): a frame held inside a named scope by the
+// application's own test hook (FOXSDR_FRAME_STALL, as tests/test_slow_frames_app.cpp does) ends
+// in the ledger's FILE, which is where the next start-up's record reads it.
+// ---------------------------------------------------------------------------
+
+// A config with no saved radio, so that nothing but what the test provokes is counted beside it.
+void writeBareConfig(const fs::path& config, const std::string& id, bool reporting, bool diagnostics) {
+    cascade::core::AppConfig cfg;
+    cfg.telemetryEnabled = reporting;
+    cfg.telemetryInstallId = reporting ? id : std::string();
+    cfg.telemetryLaunches = 4;
+    cfg.telemetryCleanExit = true;
+    cfg.diagnosticsEnabled = diagnostics;
+    std::string err;
+    CHECK(cascade::core::ConfigStore::writeFile(config.string(),
+                                                cascade::core::ConfigStore::serialize(cfg), err));
+}
+
+// The counts of every tier of one scope.
+std::uint32_t slowIn(const Counts& c, const std::string& scope) {
+    std::uint32_t n = 0;
+    for (const auto& kv : c) {
+        if (kv.first.rfind("slow." + scope + ".", 0) == 0) { n += kv.second; }
+    }
+    return n;
+}
+
+Counts ledgerFile(const fs::path& dir, const std::string& id) {
+    Counts c;
+    const std::string text = readFile(HealthLedger::pathIn(u8(dir)));
+    if (!text.empty()) { HealthLedger::parseFileText(text, id, c); }
+    return c;
+}
+
+void testASlowFrameOfTheRealWindowEndsInTheLedgerFile() {
+    const std::string id = cascade::core::newInstallId();
+
+    // ON, three scopes and three tiers: a stutter in the rail, a freeze in the saves, 5 s in render.
+    {
+        const fs::path dir = scratchDir("slow-on");
+        const fs::path config = dir / "config.json";
+        writeBareConfig(config, id, true, true);
+        setEnv("FOXSDR_FRAME_STALL", "rail=300@45,saves=1200@60,render=5000@75");
+        runApp(config, AppRun{150, ""});
+        setEnv("FOXSDR_FRAME_STALL", nullptr);
+        const Counts onDisk = ledgerFile(dir, id);
+        std::printf("health: the real window left %s\n", health::encode(onDisk).c_str());
+        CHECK(slowIn(onDisk, "rail") >= 1);
+        CHECK(slowIn(onDisk, "saves") >= 1);
+        CHECK(countOf(onDisk, "slow.render.5s") >= 1);
+        // The 5 s stall is a freeze of its own tier, the 1.2 s one is not in the stutter tier.
+        CHECK(countOf(onDisk, "slow.saves.1s") >= 1);
+        for (const auto& kv : onDisk) { CHECK(kv.first.rfind("slow.", 0) == 0); }   // and nothing else
+        // The record the session journals carries them too (as of that save).
+        Counts journalled;
+        CHECK(health::decode(pendingHealth(config), journalled));
+        CHECK(!journalled.empty());
+        for (const auto& kv : journalled) { CHECK(kv.first.rfind("slow.", 0) == 0); }
+    }
+
+    // A PERSON'S OWN TIME is not counted: a modal loop (dragging the window) inside the message pump
+    // moves the whole of a 400 ms stall in `events` to user-wait.
+    {
+        const fs::path dir = scratchDir("slow-userwait");
+        const fs::path config = dir / "config.json";
+        writeBareConfig(config, id, true, true);
+        setEnv("FOXSDR_FRAME_STALL", "events=400@50");
+        setEnv("FOXSDR_FRAME_SITUATION", "modal@50");
+        runApp(config, AppRun{90, ""});
+        setEnv("FOXSDR_FRAME_STALL", nullptr);
+        setEnv("FOXSDR_FRAME_SITUATION", nullptr);
+        const Counts onDisk = ledgerFile(dir, id);
+        std::printf("health: with the stall moved to user-wait the window left %s\n",
+                    health::encode(onDisk).c_str());
+        CHECK(slowIn(onDisk, "events") == 0);
+        CHECK(slowIn(onDisk, "user-wait") == 0);
+    }
+
+    // OFF and DIAGNOSTICS OFF: nothing counted, nothing kept.
+    {
+        const fs::path dir = scratchDir("slow-off");
+        const fs::path config = dir / "config.json";
+        writeBareConfig(config, id, false, true);
+        setEnv("FOXSDR_FRAME_STALL", "rail=300@45");
+        runApp(config, AppRun{90, ""});
+        CHECK(!fs::exists(HealthLedger::pathIn(u8(dir))));
+        const fs::path dir2 = scratchDir("slow-nodiag");
+        const fs::path config2 = dir2 / "config.json";
+        writeBareConfig(config2, id, true, false);
+        runApp(config2, AppRun{90, ""});
+        setEnv("FOXSDR_FRAME_STALL", nullptr);
+        CHECK(!fs::exists(HealthLedger::pathIn(u8(dir2))));
+    }
+}
+
 #if defined(_WIN32)
 struct Child {
     HANDLE process = nullptr;
@@ -1056,6 +1410,8 @@ int main() {
     testAnInstallerThatCannotBeStartedIsCounted();
     testPluginsBlockedBeforeLoadAreCounted();
     testTheRealApplicationCountsKeepsAndClears();
+    testRecoveriesAreCountedWhereTheWindowMeetsThem();
+    testASlowFrameOfTheRealWindowEndsInTheLedgerFile();
 #if defined(_WIN32)
     testAFailureSurvivesEndTask();
 #else

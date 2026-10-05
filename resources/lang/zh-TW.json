@@ -230,7 +230,7 @@
   "Andorra": "安道爾",
   "Angola": "安哥拉",
   "Anguilla": "安圭拉",
-  "Anonymous counts only: version, operating system, how long sessions run, which modes and plugins get used, which radio model, how many times the window froze waiting for the display driver, and how many times something quietly did not work (a radio that would not open, no sound output, a failed update or plugin install). Never frequencies, never anything decoded, never your location, and no IP address is recorded.": "僅限匿名計數：版本、作業系統、工作階段持續多久、使用了哪些模式與外掛程式、無線電型號，視窗因等待顯示驅動程式而卡住的次數，以及某些功能悄悄失靈的次數（無法開啟的無線電、沒有聲音輸出、更新或外掛程式安裝失敗）。絕不包含頻率、任何解碼內容或您的位置，也不會記錄 IP 位址。",
+  "Anonymous counts only: version, operating system, how long sessions run, which modes and plugins get used, which radio model, how many times the window froze waiting for the display driver, how many times something quietly did not work (a radio that would not open, no sound output, a failed update or plugin install), how many times the window was slow and which part of it was, and how many times FoxSDR recovered from a fault on its own. Never frequencies, never anything decoded, never your location, and no IP address is recorded.": "僅限匿名計數：版本、作業系統、工作階段持續多久、使用了哪些模式與外掛程式、無線電型號，視窗因等待顯示驅動程式而卡住的次數，某些功能悄悄失靈的次數（無法開啟的無線電、沒有聲音輸出、更新或外掛程式安裝失敗），視窗變慢的次數以及是哪一部分變慢，以及 FoxSDR 自行從故障中復原的次數。絕不包含頻率、任何解碼內容或您的位置，也不會記錄 IP 位址。",
   "Another preset already has that name.": "另一個預設已使用這個名稱。",
   "Another radio here already uses this device.": "這裡已有另一部無線電在使用這個裝置。",
   "Antenna": "天線",

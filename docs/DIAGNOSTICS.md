@@ -593,6 +593,86 @@ Nothing counts on the DSP or audio threads - `test_health_paths` scans for it.
 `test_health_app.cpp` (the window's wiring and the real binary, including a
 process ended after a failure) hold it.
 
+**Slow frames and recoveries ride the same record (since 0.99.64).** Two more
+families in the one `health` string, written after the failures: `slow.<scope>.<tier>`
+and `recovered.<what>`.
+
+*Slow frames.* `core::FrameTimer::commit` - the slow path of the frame timer, run on
+the window's thread for a frame that was already 250 ms or more - counts one
+`slow.<scope>.<tier>` for the **process's own timer only** (`mirror_`; a timer a
+test builds counts into its own table and nothing else). The scope is a name of
+`kFrameScopeNames`, hyphens included (`plugin-panels`, `plugins-reload`), and every
+one of them but `user-wait`, which is a person's time and is never counted and so is
+not a word. The tier is `250ms`, `1s` or `5s`, from `kSlowFrameTierNs`. The cost on
+the window's thread is `HealthLedger::note`: parse one token, one mutex (never held
+across I/O, so another thread's file write cannot make it wait), a small map
+update, and - when no writer is running - the creation of the writer thread that
+does the disk work (`healthWriterLoop`, detached; the caller never waits on it).
+Measured with the writer made to stall 700 ms (`testASlowFrameNeverWaitsOnTheDisk`,
+`testACommittedSlowFrameNeverWaitsOnTheDisk`): 300 notes cost 0.2 ms in all, the
+worst single one under 0.1 ms (the one that creates the writer thread); a synchronous
+write costs the stall - the same tests with `note()` made to wait on the writer
+measure 2,100 ms and 716 ms for the worst single note.
+The record carries at most **eight** distinct `slow` tokens; over eight the worst
+are kept - the higher tier first, then the higher count, then the earlier in the
+written order - and what is left out stays in the ledger for the next record
+(`health::selectForRecord`, which the start-up record's settle uses, so nothing
+is subtracted that was not sent). The tier words start with a digit (`250ms`,
+`1s`, `5s`); the token grammar - dot-separated parts of lower-case letters, digits,
+`_` and `-` - carries them and the hyphenated scope names, so nothing about the
+words had to change.
+
+*Recoveries.* A fault the program met and carried on from without telling the
+person, at one of a fixed list of places, one word each (`recovered.<what>`; the
+table in PRIVACY.md). Counted at the site on the control path, once a session where
+the place can repeat by itself and once an occurrence otherwise
+(`recoveredOncePerSession`). **Never on a DSP, source or audio thread**: where the
+fault is met on one, the thread keeps a counter or raises a flag - one relaxed atomic
+OR - and `AppWindow::healthPoll`, which the frame loop already runs, turns it into
+the count (`RecoveryWatch`, `drainRecovered`). `tests/test_health_paths.cpp`
+scans `src/dsp`, `pipeline.cpp` and the audio callback for any call into the ledger
+and holds every word to the sites listed here, in both directions. At most **eight**
+distinct `recovered` tokens in a record, the higher counts first.
+
+The sites that are counted:
+
+| Word | Site | Counted from |
+|---|---|---|
+| `audio` | `AppWindow::applyAudioOpenResult`, the watchdog's reopen that worked | the window's thread |
+| `reopen` | `AppWindow::reopenAfterDriverFault`, a SoapySDR driver fault answered by reopening the radio | the window's thread |
+| `srcthread` | `Pipeline::quiesceSourceThreadLocked`'s abandonment, read as `abandonedSourceThreads()` | the poll |
+| `vendorcall` | `SoapySource::driverCallsAbandoned()`, a vendor call let go after `kVendorCallWait` | the poll |
+| `ringdrop` | `Pipeline::ringDroppedSamples()`, the source ring full | the poll |
+| `dspexc` | `Pipeline::dspThreadExceptions()`, the DSP thread's catch blocks | the poll |
+| `cfgsave` | `AppWindow::pollConfigWriter`, the settings write that failed | the window's thread |
+| `enumchild` | `soapy_enum_proc.cpp`, a scan child that died and was contained | the scan's worker |
+| `pluginapi` | `plugin_ui.cpp`'s six host-API trampolines that caught an exception | a flag, then the poll |
+| `webroute` | `WebServer`'s exception handler, a route that threw | the web worker |
+| `patchload` | `AppWindow::applyConfig`, a saved patch that lost connections | the window's thread |
+| `sdrenum` | `AppWindow::pollSdrPlayService`, the SDRplay scan worker let go | the window's thread |
+| `sdrlost` | `AppWindow::pollSdrPlayService`, the SDRplay API session lost | the window's thread |
+
+**Surveyed and deliberately not counted**, so the next reader does not re-do the
+survey: the person's own actions that look like recoveries (re-picking a stopped
+sound card's row, pressing the SDRplay restart key); `catch (...)` blocks that turn
+a vendor throw into a dead-device state (45 in `soapy_source.cpp` - the automatic
+reopen they lead to is `reopen`); the source thread's catch block (a USB radio pulled
+mid-capture throws from the driver, so a count would mostly count unplugging); the
+network clients that are silent by design (the usage report, the tester report,
+the crash upload, the update drain - a report cannot report its own failure); the
+Store check's and install's exceptions (already `upd_run`); an opener that threw
+(already `rec_fail`) and a plugin entry point that threw (already `plug_load`);
+path-narrowing fallbacks (`shell_open.hpp`, `patch_recordings.cpp`); the MP3
+encoder's ring (the recorder tells the person); the SDRplay source's own dropped
+sample counter (no control-path reader beside it); a settings file that could not
+be READ at start-up (the usage decision is made from that same file, so the ledger is
+never decided and nothing could be kept); and the GL context, of which there is no
+loss handling to count. A recovery that can only be counted from a signal thread
+with no control-path poll beside it is left out rather than counted there.
+
+The column budget, the Worker's rule for the new families and the compatibility
+rows are in `telemetry-worker/README.md`.
+
 Before any of that, two things stop such a report being written at all
 (`gui/present_grace.hpp`): the watchdog is paused for a bounded 10 s grace when
 a display change is seen — `WM_DISPLAYCHANGE`, counted in the window procedure,
@@ -1317,7 +1397,10 @@ whoever reads them next (`cascade: frame timing:`, below).
 - **So does the sentinel.** The process's own timer (and no timer a test builds)
   writes the scope into the sentinel's breadcrumb at every change, as a number;
   see *The sentinel*, *The breadcrumb*.
-- `slowFrameCounts()` is a snapshot of the table, for the usage record.
+- `slowFrameCounts()` is a snapshot of the table. The usage record does not read it:
+  the process's own timer counts each slow frame into the health ledger as it
+  commits it (`slow.<scope>.<tier>`, 0.99.64, see *Failures that are not crashes*
+  below; `user-wait` is never counted).
 - A bounded `--frames` run prints one more line at its end, like the worst frame
   gap: `cascade: frame timing: 150 frames, mean 8.40 ms, longest 29.6 ms (in
   frame-start), 27.1 scope switches a frame; slow frames: none; slow frames not

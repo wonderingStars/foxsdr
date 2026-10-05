@@ -143,7 +143,7 @@ One report per launch, describing the session that just finished:
 | Launch count | `12` | Whether the software gets used more than once. |
 | Crash count | `1` | How often it fails. |
 | Display stalls | `0` | How many times the window froze because the display driver was waiting, not FoxSDR (a monitor switched off, a graphics-driver reset, a remote session reconnecting) - a bare number, with no stack, no driver name and no time of day, and zero for almost everyone. |
-| Failure counts | `radio_fail.rtlsdr.busy=2` | How many times something quietly did not work, as counts of a **fixed list of kinds** (see **Failures that are not crashes, in full** below): a radio that would not open (the driver and one of eight reasons), no sound output, an update or a plugin install that failed, a plugin refused at load, a recording that could not start - and how many radios and outputs *did* open, so that a failure has something to be compared with. Words from that list and numbers, never a device name, a serial number, a path, a frequency or any message text. Empty for most people. Since 0.99.64. |
+| Failure counts | `radio_fail.rtlsdr.busy=2` | How many times something quietly did not work, as counts of a **fixed list of kinds** (see **Failures that are not crashes, in full** below): a radio that would not open (the driver and one of eight reasons), no sound output, an update or a plugin install that failed, a plugin refused at load, a recording that could not start - and how many radios and outputs *did* open, so that a failure has something to be compared with. The same field also carries how many frames of the window took a quarter of a second or more and which part of the frame the time went in (`slow.rail.250ms=3`), and how many times FoxSDR met a fault at one of a fixed list of places and carried on (`recovered.audio=1`). Words from that list and numbers, never a device name, a serial number, a path, a frequency or any message text. Empty for most people. Since 0.99.64. |
 | Session length | `3600` seconds | Whether sessions are minutes or hours. |
 | SDR model | `uhd b200` | Which radios to prioritise. **Serial numbers are stripped** before sending. |
 | Demodulators used | `WFM: 3000s` | Which modes justify further work. |
@@ -187,8 +187,9 @@ text when nothing failed.
 
 **It cannot carry anything else.** FoxSDR builds each kind from a fixed table and
 sends nothing that is not in it; the receiving server throws away anything that
-is not in the same table, and refuses to keep more than 24 different kinds, 8 of
-them radio failures, a count above 999, or a text longer than 832 characters.
+is not in the same table, and refuses to keep more than 24 different failure kinds
+(8 of them radio failures), 8 different slow-frame kinds, 8 different recoveries,
+a count above 999, or a text longer than 832 characters.
 Where a reason is read off what a driver said ("the radio is already in use by
 another program"), FoxSDR reads it, picks one of the eight words below and
 **throws the sentence away**: no message, device name, serial number, USB
@@ -217,8 +218,33 @@ report: a failure of this version is never filed under the last one. What a
 report carried is taken off only once the server has accepted it; if it could
 not be sent, the counts wait for the next one.
 
-**Events.** `<driver>`, `<api>`, `<why>` and `<class>` are words from the tables
-that follow.
+**Slow frames (since 0.99.64).** The window is drawn in frames, about 8
+milliseconds each on a healthy machine. FoxSDR times each frame and the parts of
+it with two clock readings a part (no text, no allocation, no disk), and a frame
+that takes **250 milliseconds or more** is counted once: under the part of the
+frame that took most of it (the scope table below - FoxSDR's own parts of the
+window, such as `rail` or `spectrum`, never anything of yours) and under how slow
+it was (`250ms` for 250 ms to under a second, `1s` for one second to under five,
+`5s` for five seconds or more). So `slow.rail.250ms=3` is three stutters in the
+rail's part of the frame. Time you spent answering a Windows prompt, or dragging
+or resizing the window, is taken out and never counted: `user-wait` is the one
+part of the frame that is **not** a word of the list. A frame while the window was
+minimised or a display change was settling is not counted. It is counted on the
+window's own thread, which hands the file write to the thread of its own (never the
+signal-processing or audio threads), and a record carries at most the **eight
+worst** kinds - the longer slowness first, then the higher count; what does not
+fit stays in the file for the next record.
+
+**What FoxSDR recovered from (since 0.99.64).** Where the program meets a fault
+and carries on without telling you - the sound output died and was restarted, a
+radio driver faulted and the radio was reopened, a settings file could not be
+written - it counts that it did, with one fixed word for the place (the table
+below). It never records what went wrong, on which device, or with what message.
+A recovery that can repeat by itself is counted once a session (marked), the
+others each time; a record carries at most eight different ones.
+
+**Events.** `<driver>`, `<api>`, `<why>`, `<class>`, `<scope>`, `<tier>` and
+`<what>` are words from the tables that follow.
 
 | Event | Counted when |
 |---|---|
@@ -236,6 +262,8 @@ that follow.
 | `plug_inst.<class>` | A plugin install failed. |
 | `plug_load.<class>` | A plugin was refused at load. Once a session for each kind. |
 | `rec_fail` | A recording could not be started: its file could not be opened. |
+| `slow.<scope>.<tier>` | A frame of the window took 250 ms or more: one count for each such frame, under the part of the frame that took most of it and the tier it reached. Not once a session - how many is the question. |
+| `recovered.<what>` | FoxSDR met a fault at the place the word names and carried on. |
 
 **Drivers.** The kind of radio driver, the same word the diagnostics already use.
 A name FoxSDR does not know is `other`.
@@ -316,6 +344,60 @@ not its text.
 | `load` | could not be loaded as a module, or its description was refused |
 
 A file in the plugins folder that is not a plugin at all is not counted.
+
+**Slow-frame scopes.** The parts of a frame, FoxSDR's own names for them, spelt as
+the application spells them. A scope's time is its own: time in a part opened
+inside it belongs to the inner one. `user-wait` - time a person set the pace of -
+is not in this table because it is never counted.
+
+| Word | The part of the frame |
+|---|---|
+| `events` | the operating system's message pump |
+| `frame-start` | a pending theme, language or scale change, and the start of the frame |
+| `pre-draw` | key bindings and the requests of the web server and plugins |
+| `plugin-panels` | the plugins' own windows |
+| `toolbar` | the cabinet and the top bar |
+| `rail` | the menu column |
+| `spectrum` | the receiver's centre: spectrum and waterfall |
+| `patch` | the patch page |
+| `status` | the status column |
+| `dialogs` | dialogs and menus |
+| `polls` | the once-a-frame checks of radios, sound, updates, the catalogue and the like |
+| `saves` | saving bookmarks, markers and the settings file |
+| `render` | building and drawing the picture |
+| `present` | handing the picture to the display, which on a synchronised display is mostly waiting for it |
+| `recorder` | starting, stopping and arming a recording |
+| `plugins-reload` | unloading every plugin and loading them again |
+| `startup` | the first 30 frames of a run, which are known to be long |
+| `other` | everything not inside any of the above |
+
+**Slow-frame tiers.** How slow, as the widest of three bands the frame reached.
+
+| Word | The frame took |
+|---|---|
+| `250ms` | 250 milliseconds to under one second |
+| `1s` | one second to under five |
+| `5s` | five seconds or more |
+
+**Recovered from.** The places, one word each. A fault that is not at one of
+these places is not counted at all. "Once a session" marks a place that can repeat
+by itself, so a count of 1 means "this session had it".
+
+| Word | FoxSDR met this and carried on |
+|---|---|
+| `audio` | the sound output stopped and the watchdog restarted it. Once a session. |
+| `reopen` | a SoapySDR radio's driver faulted and FoxSDR reopened the radio by itself. Once a session. |
+| `srcthread` | a radio driver's read never returned when the receiver was stopped, and FoxSDR let the thread go rather than freeze the window. |
+| `vendorcall` | a call into a SoapySDR vendor module did not return in time and was let go. |
+| `ringdrop` | the radio delivered samples faster than they were taken off and some were dropped. Once a session. |
+| `dspexc` | the signal-processing thread threw an error that was caught, and the receiver stopped rather than the program. |
+| `cfgsave` | the settings file could not be written. Once a session. |
+| `enumchild` | the helper that lists SoapySDR radios died and was contained. Once a session. |
+| `pluginapi` | a plugin's call into FoxSDR threw an error and was answered with a default. Once a session. |
+| `webroute` | a web-interface handler threw an error and the server answered with a failure. Once a session. |
+| `patchload` | a saved patch loaded with connections left out. |
+| `sdrenum` | the SDRplay service did not answer a scan, and the scan was let go. Once a session. |
+| `sdrlost` | the SDRplay API session was lost and SDRplay is shut for the rest of the session. Once a session. |
 
 ### The "still running" beat
 

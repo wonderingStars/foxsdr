@@ -25,6 +25,9 @@
 //     plug_inst.<class>           a plugin install failed (net, hash, write...)
 //     plug_load.<class>           a plugin was refused at load
 //     rec_fail                    a recording could not be started
+//     slow.<scope>.<tier>         a frame of the window took 250 ms or more, in
+//                                 the part of the frame that took most of it
+//     recovered.<what>            the program met a fault and carried on
 //
 // The driver word is the kind the diagnostics already use for a radio
 // (rtlsdr, hackrf, airspy, sdrplay, soapy, pluto...); the reason is a CLASS
@@ -74,6 +77,28 @@ enum class LoadClass : std::uint8_t { Abi, Retired, Load };
 enum class AudioApi : std::uint8_t {
     Mme, DirectSound, Wasapi, Wdmks, Asio, Alsa, Jack, Oss, CoreAudio, None, Other
 };
+
+// WHAT THE PROGRAM RECOVERED FROM (0.99.64): a fault it met and carried on from
+// without telling the person. One fixed word each; a "kind" of one of these is
+// another word, never a qualifier made from data. The order is the written order
+// of the words in a record. Each has ONE site that counts it (the survey in
+// docs/DIAGNOSTICS.md names them), held to the list by tests/test_health_paths.cpp.
+enum class Recovered : std::uint8_t {
+    Audio,       // the output stream died and the watchdog restarted it
+    Reopen,      // a SoapySDR radio's driver faulted and the radio was reopened
+    SrcThread,   // a source thread was abandoned to a driver call that never returned
+    VendorCall,  // a SoapySDR vendor call was abandoned because it never returned
+    RingDrop,    // the source ring was full and samples were dropped
+    DspExc,      // the signal-processing thread threw, was caught, and the receiver stopped
+    CfgSave,     // the settings file could not be written
+    EnumChild,   // a SoapySDR enumeration child died and was contained
+    PluginApi,   // a plugin's call into the host API threw, and was answered with a default
+    WebRoute,    // a web handler threw and the server answered 500
+    PatchLoad,   // a saved patch loaded with connections dropped
+    SdrEnum,     // the SDRplay service's enumeration was abandoned
+    SdrLost,     // the SDRplay API session was lost and shut for the session
+};
+inline constexpr std::size_t kRecoveredCount = 13;
 
 // One event of the vocabulary, as documentation and the Worker see it: its
 // name, the word lists of its qualifiers in order (empty for a bare event), and
@@ -135,6 +160,29 @@ std::string tokenPluginInstall(InstallClass c);
 std::string tokenPluginLoad(LoadClass c);
 std::string tokenRecordFail();
 
+// SLOW FRAMES (0.99.64). The scope is a frame scope's own name as
+// core/frame_timing.hpp spells it (hyphens included: "plugin-panels",
+// "plugins-reload") - every one of them but `user-wait`, which is time a person
+// set the pace of and is never counted, so it is not a word. The tier is the
+// fixed width of the slowness: "250ms" (250 ms to under 1 s), "1s" (1 s to under
+// 5 s), "5s" (5 s or more). A frame is one count, in the highest tier it
+// reached. Tier words are `250ms`, `1s` and `5s` and nothing else: they start
+// with a digit, which the grammar (lower-case letters, digits, '_', '-') carries.
+const std::vector<std::string>& slowScopeWords();
+const std::vector<std::string>& slowTierWords();
+// The token for the frame scope with this index in core::kFrameScopeNames and
+// this tier (0..2); empty for `user-wait` and for anything out of range.
+std::string tokenSlowFrame(int frameScope, int tier);
+
+// WHAT THE PROGRAM RECOVERED FROM. Words of Recovered, in written order.
+const std::vector<std::string>& recoveredWords();
+const char* recoveredWord(Recovered r);
+std::string tokenRecovered(Recovered r);
+// True when this word is counted at most once a session (it can repeat by itself:
+// a watchdog's retry, a once-a-minute reopen, a ring that overflows again and
+// again). The others are counted once per occurrence.
+bool recoveredOncePerSession(Recovered r);
+
 // ---------------------------------------------------------------------------
 // Counts, and their one-string encoding
 // ---------------------------------------------------------------------------
@@ -143,23 +191,49 @@ std::string tokenRecordFail();
 using Counts = std::map<std::string, std::uint32_t>;
 
 constexpr std::uint32_t kMaxCount = 999;
-// Distinct tokens carried at once, and of those how many may be radio failures
-// (driver x reason pairs, the one family that can be wide).
-constexpr std::size_t kMaxTokens = 24;
+// THE BOUNDS OF A RECORD, one per family of tokens. The failure families (every
+// event but the last two) carry at most kMaxBaseTokens distinct tokens, of which
+// at most kMaxRadioFailTokens are radio failures (driver x reason pairs, the one
+// family that can be wide). `slow` carries at most kMaxSlowTokens distinct
+// tokens and `recovered` at most kMaxRecoveredTokens, so a record has at most
+// kMaxRecordTokens. When there are MORE than the cap in a family, the ones kept
+// are the worst - see selectForRecord().
+constexpr std::size_t kMaxBaseTokens = 24;
 constexpr std::size_t kMaxRadioFailTokens = 8;
-// 24 tokens at their longest ("radio_fail.airspyhf.timeout=999," is 32) fit
-// with room to spare; the Worker clamps to the same number.
+constexpr std::size_t kMaxSlowTokens = 8;
+constexpr std::size_t kMaxRecoveredTokens = 8;
+constexpr std::size_t kMaxRecordTokens = kMaxBaseTokens + kMaxSlowTokens + kMaxRecoveredTokens;
+// The text of a record is never longer than this, so an older Worker - which
+// refuses a longer text outright - still reads every record this build writes.
+// The failure tokens come first in the written order and `slow` and `recovered`
+// last, so a record that cannot hold everything loses the newest families first;
+// what is left out stays in the ledger and goes with the next record.
 constexpr std::size_t kMaxEncodedBytes = 832;
 
-// "token=count,token=count" in the written order of the vocabulary; empty for no
-// counts. Anything that is not a legal token, or has no count, is left out; the
-// result is never longer than kMaxEncodedBytes.
+// WHAT A RECORD CARRIES OF `counts`: every legal token with its count clamped to
+// 1..kMaxCount, the families cut to their caps, and the whole kept within
+// kMaxEncodedBytes. THE RULES, in the order they apply:
+//   - `slow`, more than kMaxSlowTokens distinct: the worst are kept - the higher
+//     tier first (5s, then 1s, then 250ms), then the higher count, then the earlier
+//     in the written order (the scope's place in the frame, then the tier).
+//   - `recovered`, more than kMaxRecoveredTokens distinct: the higher count first,
+//     then the earlier in the written order.
+//   - the failure families: kMaxBaseTokens, kMaxRadioFailTokens of them radio
+//     failures, the earlier in the written order first (a ledger never holds more).
+//   - the text: tokens are added in the written order until the next would not fit
+//     in kMaxEncodedBytes.
+// The start-up record's counts are settled against exactly this selection, so
+// whatever it leaves out stays kept for the next record.
+Counts selectForRecord(const Counts& counts);
+
+// "token=count,token=count" in the written order of the vocabulary: the text of
+// selectForRecord(counts); empty for no counts.
 std::string encode(const Counts& counts);
 
 // The strict inverse: false (and `out` empty) for text that is not exactly what
 // encode() writes - an unknown token, a count outside 1..kMaxCount, a repeated
-// token, a stray byte, more than kMaxTokens pairs or more than
-// kMaxEncodedBytes. The empty string is zero counts.
+// token, a stray byte, a family over its cap, or more than kMaxEncodedBytes. The
+// empty string is zero counts.
 bool decode(std::string_view text, Counts& out);
 
 // Keeps only what is legal in `text` (whatever its order or length), merging
@@ -236,6 +310,14 @@ public:
     // decision: held in memory, bounded. After it: counted only when armed and
     // allowed.
     void note(const std::string& token);
+    // `times` occurrences at once (a poll that finds a counter has moved by
+    // that much). A token counted once a session is counted once however many.
+    void note(const std::string& token, std::uint32_t times);
+
+    // A hook the WRITER THREAD calls just before it writes the file, with no lock
+    // of the ledger held: for the tests, to make a slow disk. Null (the default)
+    // is no hook. Process-wide.
+    static void setWriteHookForTest(void (*hook)());
 
     // Everything kept (earlier sessions and this one), and the part that
     // describes EARLIER sessions only (what the start-up record carries).
@@ -297,6 +379,44 @@ void notePluginCatalogueFailed();
 void notePluginInstallFailed(InstallClass c);
 void notePluginLoadRefused(LoadClass c);
 void noteRecordFailed();
+
+// One slow frame (core::FrameTimer::commit, GUI thread): `frameScope` is the
+// scope's index in core::kFrameScopeNames and `tier` 0..2. Nothing for
+// `user-wait` or anything out of range.
+void noteSlowFrame(int frameScope, int tier);
+
+// WHAT THE PROGRAM RECOVERED FROM. noteRecovered() counts at once: for the
+// control path (the window's thread, a scan or web worker) and never for a DSP,
+// source or audio thread, because it takes the ledger's lock. raiseRecovered() is
+// for the places a signal thread or a plugin's thread meets the fault: ONE
+// relaxed atomic OR, no lock, no allocation, nothing else; drainRecovered() - run
+// by a poll the window already makes every frame - turns what was raised into
+// counts. Both are no-ops until the ledger is armed (the raise is simply drained
+// into a ledger that ignores it).
+void noteRecovered(Recovered r);
+void raiseRecovered(Recovered r);
+void drainRecovered();
+
+// THE POLL FOR WHAT ONLY A COUNTER CAN SAY. Four recoveries happen inside a
+// thread this code must not count from (the pipeline's source and DSP threads,
+// a vendor call's worker); each leaves a monotonic counter the control path can
+// read. A poll gives this the readings; the FIRST poll only takes the baseline
+// (a process that has already abandoned a call before the poll started is not
+// news), and every later poll counts what moved.
+struct RecoveryReadings {
+    unsigned long long sourceThreadsAbandoned = 0;  // Pipeline::abandonedSourceThreads()
+    unsigned long long vendorCallsAbandoned = 0;    // SoapySource::driverCallsAbandoned()
+    unsigned long long ringDroppedSamples = 0;      // Pipeline::ringDroppedSamples()
+    unsigned long long dspThreadExceptions = 0;     // Pipeline::dspThreadExceptions()
+};
+class RecoveryWatch {
+public:
+    void poll(const RecoveryReadings& now);
+
+private:
+    bool started_ = false;
+    RecoveryReadings last_;
+};
 
 // ---------------------------------------------------------------------------
 // The usage record's `health` member

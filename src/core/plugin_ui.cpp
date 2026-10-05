@@ -2,6 +2,7 @@
 
 #include "core/plugin_ui.hpp"
 
+#include "core/health_events.hpp"
 #include "core/version.hpp"
 
 #include <algorithm>
@@ -350,6 +351,17 @@ void detachBridges(const PluginUi* owner) {
     }
 }
 
+// A HOST CALL THAT THREW, answered with a default: a recovery the usage record
+// counts (`recovered.pluginapi`, core/health_events.hpp). These trampolines are
+// entered on whatever thread the plugin calls from - including its own, and the
+// signal-processing thread - so this only RAISES A FLAG: one relaxed atomic OR,
+// no lock, no allocation. The window's per-frame poll turns the flag into the
+// count. Held to this by tests/test_health_paths.cpp (no call that takes a lock
+// is allowed in this file).
+inline void raiseHostFault() noexcept {
+    cascade::core::health::raiseRecovered(cascade::core::health::Recovered::PluginApi);
+}
+
 // NOTHING THROWS ACROSS THE BOUNDARY IN THIS DIRECTION EITHER. The ABI makes
 // plugins promise that no exception reaches the host; the host owes the same
 // promise back, because the frames above these trampolines belong to a third
@@ -364,6 +376,7 @@ double hostCentre(void* ctx) {
         if (c == nullptr || c->self == nullptr || !c->self->hasServices()) { return 0.0; }
         return c->self->servicesCentreHz();
     } catch (...) {
+        raiseHostFault();
         return 0.0;
     }
 }
@@ -374,6 +387,7 @@ double hostRate(void* ctx) {
         if (c == nullptr || c->self == nullptr || !c->self->hasServices()) { return 0.0; }
         return c->self->servicesRateHz();
     } catch (...) {
+        raiseHostFault();
         return 0.0;
     }
 }
@@ -384,6 +398,7 @@ std::int32_t hostTune(void* ctx, double centreHz) {
         if (c == nullptr || c->self == nullptr) { return CASCADE_TUNE_FAILED; }
         return c->self->tuneRequestFromPlugin(c->plugin, centreHz);
     } catch (...) {
+        raiseHostFault();
         return CASCADE_TUNE_FAILED;
     }
 }
@@ -394,6 +409,7 @@ std::int64_t hostTime(void* ctx) {
         if (c == nullptr || c->self == nullptr || !c->self->hasServices()) { return 0; }
         return c->self->servicesUnixTimeMs();
     } catch (...) {
+        raiseHostFault();
         return 0;
     }
 }
@@ -413,6 +429,7 @@ std::int32_t level1(void* ctx, F&& f) {
         if (c == nullptr || !c->core || c->client == nullptr) { return CASCADE_API_DETACHED; }
         return f(*c->core, *c->client);
     } catch (...) {
+        raiseHostFault();
         return CASCADE_API_FAILED;
     }
 }
@@ -537,6 +554,7 @@ std::uint64_t l1SettingsSeq(void* ctx) {
         if (c == nullptr || !c->core || c->client == nullptr) { return 1u; }
         return c->core->settingsUiSeq(c->client->name);
     } catch (...) {
+        raiseHostFault();
         return 1u;
     }
 }

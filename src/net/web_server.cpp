@@ -4,6 +4,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "net/web_server.hpp"
 
+#include "core/health_events.hpp"
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -3789,6 +3791,11 @@ bool WebServer::Impl::start(const WebServerConfig& cfg, std::string& error) {
         std::fprintf(stderr, "cascade: web handler threw on %s %s: %s\n",
                      req.method.c_str(), req.path.c_str(), what.c_str());
         std::fflush(stderr);
+        // THE SERVER SURVIVED A HANDLER THAT THREW (the answer below is the 500):
+        // a recovery the usage record counts, once a session - `recovered.webroute`.
+        // On a web worker thread, never a signal thread; the word is all of it (the
+        // route and the message above stay on this console and in this response).
+        cascade::core::health::noteRecovered(cascade::core::health::Recovered::WebRoute);
         nlohmann::json j;
         j["error"] = what;
         j["path"] = req.path;

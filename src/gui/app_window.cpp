@@ -4085,6 +4085,19 @@ void AppWindow::healthPoll() {
         healthWatching_ = false;
         cascade::core::health::noteRadioData(healthWatchKind_);
     }
+    // WHAT THE PROGRAM RECOVERED FROM IN PLACES THIS WINDOW MUST NOT COUNT FROM
+    // (0.99.64): the flags a plugin's thread raised, and four counters the
+    // pipeline's threads and a vendor call's worker keep. Every one is read here,
+    // by a poll the frame loop already makes - nothing is counted on the DSP,
+    // source or audio thread, and the cost is one atomic exchange and four relaxed
+    // loads a frame.
+    cascade::core::health::drainRecovered();
+    cascade::core::health::RecoveryReadings now;
+    now.sourceThreadsAbandoned = static_cast<unsigned long long>(pipeline_.abandonedSourceThreads());
+    now.vendorCallsAbandoned = cascade::source::SoapySource::driverCallsAbandoned();
+    now.ringDroppedSamples = pipeline_.ringDroppedSamples();
+    now.dspThreadExceptions = static_cast<unsigned long long>(pipeline_.dspThreadExceptions());
+    recoveryWatch_.poll(now);
 }
 
 void AppWindow::healthWatchSamples(const std::string& kind) {
@@ -4259,6 +4272,10 @@ void AppWindow::applyAudioOpenResult() {
         return;
     }
     ++audioRecoveries_;
+    // THE OUTPUT STOPPED AND CAME BACK ON ITS OWN: counted once a session (the
+    // watchdog checks once a second, so a device that flaps would otherwise count
+    // every flap; audioRecoveries_ above is the number the Sinks panel shows).
+    cascade::core::health::noteRecovered(cascade::core::health::Recovered::Audio);
     std::string buf;
     // Two whole sentences rather than an "s" glued on: a translation's plural
     // is not a suffix.
@@ -10019,6 +10036,10 @@ void AppWindow::reopenAfterDriverFault() {
     // gate let it through - so the reopen itself is DeviceSource work and a
     // test can drive it with a device of its own (AppWindowTestAccess).
     if (device_ == nullptr) { return; }
+    // THE DRIVER FAULTED AND THE RADIO IS BEING REOPENED BY ITSELF: counted, once
+    // a session (at most once a minute, by itself, for as long as the driver keeps
+    // faulting). Nothing of the fault - the driver's words, the radio - is kept.
+    cascade::core::health::noteRecovered(cascade::core::health::Recovered::Reopen);
 
     // EVERYTHING THE REOPEN NEEDS IS READ FROM THE DEAD SOURCE FIRST. Its
     // mirrors survive the fault on purpose (a rate or a retune that faulted
@@ -10815,6 +10836,15 @@ void AppWindow::pollSdrPlayService() {
         cascade::source::sdrPlayServiceTrouble(cascade::source::processSdrPlayApi());
     if (trouble == sdrPlayTroubleSeen_) { return; }
     sdrPlayTroubleSeen_ = trouble;
+    // THE TWO TROUBLES THAT ARE A RECOVERY, counted on the change to them: a scan
+    // whose worker was let go because the service never answered, and a session
+    // the process gave up for good. (An Open that was refused is a radio failure
+    // and is counted as one where the radio is opened.)
+    if (trouble == cascade::source::SdrPlayServiceTrouble::EnumerationHung) {
+        cascade::core::health::noteRecovered(cascade::core::health::Recovered::SdrEnum);
+    } else if (trouble == cascade::source::SdrPlayServiceTrouble::SessionLost) {
+        cascade::core::health::noteRecovered(cascade::core::health::Recovered::SdrLost);
+    }
     if (trouble == cascade::source::SdrPlayServiceTrouble::None) {
         // The service answered an Open: the radio is its own evidence, and a
         // note about an earlier restart would only be stale.
@@ -26483,9 +26513,11 @@ void AppWindow::drawUsageReportingSection() {
         "%s",
         tr("Anonymous counts only: version, operating system, how long sessions "
            "run, which modes and plugins get used, which radio model, how many "
-           "times the window froze waiting for the display driver, and how many "
+           "times the window froze waiting for the display driver, how many "
            "times something quietly did not work (a radio that would not open, no "
-           "sound output, a failed update or plugin install). Never "
+           "sound output, a failed update or plugin install), how many times the "
+           "window was slow and which part of it was, and how many times FoxSDR "
+           "recovered from a fault on its own. Never "
            "frequencies, never anything decoded, never your location, and no IP "
            "address is recorded."));
     ImGui::Spacing();
@@ -27579,6 +27611,10 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
         if (replacePatch(cfg.patch, PatchReplace::Restore, &dropped) && dropped > 0) {
             std::fprintf(stderr, "cascade: patch loaded with %d connection(s) dropped\n",
                          dropped);
+            // THE SAVED PATCH LOST CONNECTIONS on the way back in, and the window
+            // went on with the rest: counted (the restore runs before the usage
+            // decision is made, and the ledger holds it until it is).
+            cascade::core::health::noteRecovered(cascade::core::health::Recovered::PatchLoad);
         }
     }
     // THE MAIN VIEW (0.99.40): the face the window was showing when it last
@@ -29033,6 +29069,11 @@ void AppWindow::pollConfigWriter() {
         if (!configWriter_.inFlight()) { savedCfg_ = lastRequestedConfig_; }
     } else {
         std::fprintf(stderr, "cascade: %s\n", configWriter_.lastError().c_str());
+        // THE SETTINGS FILE COULD NOT BE WRITTEN (a read-only profile, a full disk,
+        // a file another program holds) and the window carries on with what it
+        // has: counted, once a session - the debounce asks again by itself, so a
+        // count of 1 means "this session had it". Never the message (a path).
+        cascade::core::health::noteRecovered(cascade::core::health::Recovered::CfgSave);
     }
 }
 

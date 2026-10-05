@@ -210,6 +210,14 @@ public:
     int abandonedSourceThreads() const {
         return srcThreadsAbandoned_.load(std::memory_order_relaxed);
     }
+    // Diagnostics, and the usage record's `recovered.dspexc`: how many times the
+    // DSP thread threw an exception that dspThreadMain caught (the pipeline then
+    // stops itself and says so; see noteThreadFault). 0 on every healthy path. Only
+    // a counter: the window's own poll turns a rise into the count, so nothing
+    // here counts from the signal thread (core/health_events.hpp).
+    int dspThreadExceptions() const {
+        return dspExceptions_.load(std::memory_order_relaxed);
+    }
     // Diagnostics/tests: samples the source thread read but the ring had no
     // room for (SpscRing::write accepts only what fits). Never reset, so a
     // caller measures a window by taking a difference. Before this counter
@@ -1039,6 +1047,8 @@ private:
     // timing alone - and "zero for healthy sessions" is the assertion
     // that keeps kSourceJoinWait honest.
     std::atomic<int> srcThreadsAbandoned_{0};
+    // See dspThreadExceptions(). Written only by the DSP thread's catch blocks.
+    std::atomic<int> dspExceptions_{0};
     // See ringDroppedSamples(). Written only by the source thread.
     std::atomic<std::uint64_t> ringDropped_{0};
 
