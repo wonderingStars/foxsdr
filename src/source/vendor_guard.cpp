@@ -81,6 +81,19 @@ void resolveSelfModule() noexcept {
     g_selfResolved.store(true, std::memory_order_release);
 }
 
+// THE REASON OF AN ABSORBED FAULT'S REPORT, a literal in static storage because
+// the filter that passes it runs on a fault path and must allocate nothing. It
+// begins with core::kAbsorbedFaultReasonPrefix, and that is checked HERE at
+// compile time: core::crashReportWrittenByProcess tells a report of this kind
+// from the report of a DEATH by exactly that prefix, so a reworded reason here
+// that dropped it would make a child's earlier absorbed report stand in for the
+// parent's only record of a later death.
+constexpr char kAbsorbedReason[] =
+    "fault in a third-party SDR module, absorbed by the vendor-call guard "
+    "(the process continued; the call reported failure to its caller)";
+static_assert(core::reasonStartsWith(kAbsorbedReason, core::kAbsorbedFaultReasonPrefix),
+              "the absorbed-fault reason must begin with core::kAbsorbedFaultReasonPrefix");
+
 // The filter proper. Kept OUT of the guard function itself so that the guard's
 // own frame holds nothing but pointers: MSVC rejects __try in a frame that
 // needs C++ object unwinding (C2712), and a filter written inline is where
@@ -110,10 +123,7 @@ int vendorFaultFilter(EXCEPTION_POINTERS* ep) noexcept {
     // The exception code is carried in the report's own `code` field, so the
     // reason names the CLASS of fault rather than guessing at which of the
     // eight absorbable codes this was.
-    core::reportAbsorbedFault(
-        "fault in a third-party SDR module, absorbed by the vendor-call guard "
-        "(the process continued; the call reported failure to its caller)",
-        static_cast<unsigned long>(code), addr, ep);
+    core::reportAbsorbedFault(kAbsorbedReason, static_cast<unsigned long>(code), addr, ep);
     return EXCEPTION_EXECUTE_HANDLER;
 }
 #endif

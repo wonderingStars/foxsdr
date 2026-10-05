@@ -1327,5 +1327,74 @@ int main() {
         CHECK(block.find("ppm: off") != std::string::npos);
     }
 
+    // --- The patch page's radios: driver kinds, and nothing else ------------
+    // 0.99.62. `source` describes the receiver, whose radio the patch page may
+    // have been handed, so a fault on a patch radio's thread read as a fault
+    // with no radio at all. The line is a count and KINDS - never a serial, a
+    // path, a label or a frequency.
+    {
+        auto patch = [](std::vector<std::string> kinds) {
+            DiagContext ctx;
+            ctx.patchRadioKinds = std::move(kinds);
+            setDiagContext(ctx);
+            const std::string t = "\n" + diagContextBlock();
+            const std::string key = "\npatch-radios: ";
+            const std::size_t at = t.find(key);
+            if (at == std::string::npos) { return std::string("(missing)"); }
+            const std::size_t from = at + key.size();
+            return t.substr(from, t.find('\n', from) - from);
+        };
+        CHECK(patch({}) == "none");
+        CHECK(patch({"rtlsdr"}) == "1 (rtlsdr)");
+        CHECK(patch({"rtlsdr", "soapy"}) == "2 (rtlsdr, soapy)");
+        CHECK(patch({"soapy", "soapy", "siggen", "iqfile"}) == "4 (soapy, soapy, siggen, iqfile)");
+        // A whole device key, a serial, a capital, an empty string, a path: each
+        // is cut to the leading run of lower-case letters and digits, and what
+        // that leaves nothing of reads "other".
+        const std::string odd =
+            patch({"rtlsdr|serial=0000000A", "Serial0000000A", "", "C:\\Users\\Alice\\rec.iq",
+                   "iqfile|path=C:\\Users\\Alice\\rec.iq", "a-very-long-driver-name-indeed"});
+        CHECK(odd == "6 (rtlsdr, other, other, other, iqfile, a)");
+        CHECK(patch({"abcdefghijklmnopqrstuvwxyz0123456789"}) == "1 (abcdefghijklmnop)");
+        // At most eight are listed; the count always says how many there are.
+        CHECK(patch({"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"}) ==
+              "10 (a, b, c, d, e, f, g, h, ...)");
+        // The block never carries the pieces of the keys above.
+        DiagContext ctx;
+        ctx.patchRadioKinds = {"rtlsdr|serial=0000000A", "iqfile|path=C:\\Users\\Alice\\rec.iq"};
+        setDiagContext(ctx);
+        const std::string b = diagContextBlock();
+        CHECK(b.find("0000000A") == std::string::npos);
+        CHECK(b.find("Alice") == std::string::npos);
+        CHECK(b.find("serial") == std::string::npos);
+        CHECK(b.find("rec.iq") == std::string::npos);
+    }
+
+    // --- An unchanged block writes nothing (0.99.62) ------------------------
+    // AppWindow renders the context every frame now, so the common call has
+    // nothing new to say, and a rewrite of the buffer is sixty chances a second
+    // for a fault handler on another thread to read it half written. The proof is
+    // the byte after the block's end - the terminator, which a rewrite puts
+    // back and a skipped call leaves alone.
+    {
+        DiagContext ctx;
+        ctx.mode = "USB";
+        setDiagContext(ctx);
+        int len = 0;
+        char* raw = const_cast<char*>(diagContextRaw(len));
+        CHECK(len > 0);
+        const std::string before = diagContextBlock();
+        raw[len] = 'Z';
+        setDiagContext(ctx);  // the same block
+        CHECK(raw[len] == 'Z');
+        CHECK(diagContextBlock() == before);
+        ctx.mode = "AM";  // a changed block IS written, terminator included
+        setDiagContext(ctx);
+        CHECK(diagContextBlock().find("mode: AM") != std::string::npos);
+        int len2 = 0;
+        const char* raw2 = diagContextRaw(len2);
+        CHECK(raw2[len2] == '\0');
+    }
+
     return testSummary("test_diagnostics");
 }

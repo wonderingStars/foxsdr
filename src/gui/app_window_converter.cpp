@@ -174,6 +174,17 @@ void AppWindow::applyConverterForSource() {
     // install site calls this, before any tune, which is exactly where the
     // correction has to be in force.
     applyPpmForSource();
+    // THE SOURCE IS NOW WHOLLY INSTALLED, and this is the one step every
+    // install, swap and close of it ends with: installSource() and the kind,
+    // device and model assignments around it have all run, so the report context
+    // is rendered HERE, from a state that agrees with itself (0.99.62). It used
+    // to wait for the next once-a-second refresh, and a fault in the first read
+    // of a radio the user had just opened - the most fault-prone moment of its
+    // life - was written out describing the radio before it: three 0.99.59
+    // reports said `source: siggen` and `device-open: no` beside a log line
+    // saying a radio had opened. tests/test_diag_context_app.cpp holds that every
+    // installSource() is followed by this call.
+    refreshDiagContext();
 }
 
 double AppWindow::radioHzForSource(const std::string& kind, const std::string& args,

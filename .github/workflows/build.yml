@@ -134,6 +134,61 @@ jobs:
           name: foxsdr-linux-x64-appimage
           path: dist/FoxSDR-*-x86_64.AppImage
 
+      # THE SYMBOLS FOR THIS EXACT BUILD, KEPT.
+      #
+      # The Build step's last action (tools/archive-symbols-linux.sh, wired in
+      # CMakeLists.txt) wrote symbols/ on this runner: the split-debug file
+      # that carries the line tables, the function map and an index row, keyed
+      # by the GNU build id of the very build/cascade the tarball and the
+      # AppImage above contain. The runner is discarded when the job ends, so
+      # without this step the build that reaches users has its symbols
+      # nowhere, and every crash report against it can be named at best and
+      # never placed on a line. Copying the artifact into the symbol archive is
+      # still a manual step - docs/DIAGNOSTICS.md, "Linux symbols".
+      #
+      # The two steps below are LAST on purpose: the tarball and the AppImage
+      # are already uploaded when they run, so a mistake in this bookkeeping
+      # can turn the job red but cannot withhold a release artifact.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: foxsdr-linux-x64-symbols
+          path: symbols/
+          if-no-files-found: warn
+
+      # What a working symbol archive looks like, asserted: the archived file
+      # has line tables, the binary that ships has none (a full-DWARF cascade
+      # would be tens of megabytes heavier for every user), and a real address
+      # in the shipped binary resolves to a function and a line in the archived
+      # file with the same addr2line a developer will use. Matches are done
+      # with case rather than a pipe into grep -q, because a pipe plus
+      # pipefail turns grep's early exit into a spurious failure.
+      - name: Check the symbol archive
+        run: |
+          set -eu
+          id=$(readelf -n build/cascade | sed -n 's/.*Build ID: \([0-9a-f]*\).*/\1/p')
+          test -n "$id"
+          dbg="symbols/cascade.debug/$id/cascade.debug"
+          echo "build id $id"
+          ls -l build/cascade "$dbg"
+          dbg_sections=$(readelf -S -W "$dbg")
+          bin_sections=$(readelf -S -W build/cascade)
+          printf '%s\n' "$dbg_sections" | grep -E '\.debug_(info|line)' || true
+          case "$dbg_sections" in
+            *.debug_line*) ;;
+            *) echo "FAIL: the archived split-debug file has no line tables"; exit 1 ;;
+          esac
+          case "$bin_sections" in
+            *.debug_info*|*.debug_line*) echo "FAIL: the binary that ships still carries DWARF"; exit 1 ;;
+          esac
+          addr=$(nm build/cascade | awk '$2 == "T" && $3 == "main" { print $1 }')
+          test -n "$addr"
+          where=$(addr2line -f -C -e "$dbg" "0x$addr")
+          echo "$where"
+          case "$where" in
+            *main.cpp:[0-9]*) ;;
+            *) echo "FAIL: main() did not resolve to a source line in the archived file"; exit 1 ;;
+          esac
+
   # Same job as "linux" above, on GitHub's hosted Arm64 runner, for the
   # Raspberry Pi (64-bit Raspberry Pi OS is aarch64) and other Arm64 Linux
   # desktops. "ubuntu-24.04-arm" is GitHub's documented label for the free
@@ -208,3 +263,39 @@ jobs:
         with:
           name: foxsdr-linux-arm64-appimage
           path: dist/FoxSDR-*-aarch64.AppImage
+
+      # The same two steps as the "linux" job's closing pair (read the comments
+      # there), for the arm64 build. Its build id is its own, so its symbols
+      # are a separate artifact.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: foxsdr-linux-arm64-symbols
+          path: symbols/
+          if-no-files-found: warn
+
+      - name: Check the symbol archive
+        run: |
+          set -eu
+          id=$(readelf -n build/cascade | sed -n 's/.*Build ID: \([0-9a-f]*\).*/\1/p')
+          test -n "$id"
+          dbg="symbols/cascade.debug/$id/cascade.debug"
+          echo "build id $id"
+          ls -l build/cascade "$dbg"
+          dbg_sections=$(readelf -S -W "$dbg")
+          bin_sections=$(readelf -S -W build/cascade)
+          printf '%s\n' "$dbg_sections" | grep -E '\.debug_(info|line)' || true
+          case "$dbg_sections" in
+            *.debug_line*) ;;
+            *) echo "FAIL: the archived split-debug file has no line tables"; exit 1 ;;
+          esac
+          case "$bin_sections" in
+            *.debug_info*|*.debug_line*) echo "FAIL: the binary that ships still carries DWARF"; exit 1 ;;
+          esac
+          addr=$(nm build/cascade | awk '$2 == "T" && $3 == "main" { print $1 }')
+          test -n "$addr"
+          where=$(addr2line -f -C -e "$dbg" "0x$addr")
+          echo "$where"
+          case "$where" in
+            *main.cpp:[0-9]*) ;;
+            *) echo "FAIL: main() did not resolve to a source line in the archived file"; exit 1 ;;
+          esac

@@ -1580,7 +1580,16 @@ int AppWindow::run(int frames) {
     // detachAndUnloadPlugins(); tests/test_clean_exit_marker.cpp kills the
     // process inside it and reads the config back.
     int unloadStallMs = 0;
+    // The freeze --diag-stall stages, classified as the DISPLAY's rather than as
+    // a hang (HangWatchdog::setForceDisplayStallForTest). A display driver's
+    // frames cannot be staged from a test, and without this the count of display
+    // stalls - the watchdog's sink, the ledger, the config journal, the next
+    // start - could not be exercised end to end against the real binary.
+    // Bounded runs only, like every hook here.
+    bool forceDisplayStall = false;
     if (frames >= 0) {
+        const char* forceStall = std::getenv("CASCADE_DIAG_FORCE_DISPLAY_STALL");
+        forceDisplayStall = forceStall != nullptr && forceStall[0] == '1';
         const char* hook = std::getenv("CASCADE_PLUGIN_TEST");
         if (hook != nullptr && *hook != '\0') { pluginTestHook_ = hook; }
         // The deck's bias tee stand-in (gui/bias_tee.hpp, biasStandInFor):
@@ -1720,6 +1729,11 @@ int AppWindow::run(int frames) {
     // the mid-session toggle cannot drift apart again.
     applyDiagnosticsEnabled(diagnosticsEnabled_);
     refreshDiagContext();
+    // A freeze the watchdog classifies as the DISPLAY's, not ours, is counted on
+    // the watchdog's own thread (see StallLedger). The ledger refuses unless
+    // usage reporting is on, so an opted-out run counts nothing.
+    watchdog_.setDisplayStallSink([ledger = stallLedger_] { ledger->note(); });
+    watchdog_.setForceDisplayStallForTest(forceDisplayStall);
     watchdog_.start(diagnosticsEnabled_ ? diagCrashDir_ : std::string());
     watchdog_.beginStartup();  // the first frames get their own budget (hang_watchdog.hpp)
     // ...and, on the same healthy path, anything the LAST run left on disk.
@@ -2277,8 +2291,15 @@ int AppWindow::run(int frames) {
 
         // The context follows the session rather than being frozen at
         // start-up: a report filed after the user switched to the B200 must
-        // say so. Once a second at 60 Hz, out of state that already exists.
-        if ((rendered % 60) == 0) { refreshDiagContext(); }
+        // say so. EVERY FRAME since 0.99.62 (it was one in sixty): this is the
+        // net under the event hooks - the source install, the rate, the mode,
+        // the plugin rescan, the patch radios - so a writer of any of that state
+        // who forgets the call is wrong for one frame, not for a second, and the
+        // fault handler's block is never more than that stale about anything
+        // else it says (volume, mute, the squelch's gate, the sound output).
+        // Out of state that already exists, and an unchanged block writes
+        // nothing (setDiagContext).
+        refreshDiagContext();
 
         // --diag-toggle: flip the Settings > Diagnostics switch mid-session,
         // through the SAME function the checkbox calls, on frame 30 - before
@@ -2671,12 +2692,24 @@ cascade::core::DiagAudio soundPathFacts(cascade::sink::AudioOut& out, bool openi
 
 }  // namespace
 
-void AppWindow::refreshDiagContext() {
+// THE ONE PLACE THE REPORT CONTEXT IS BUILT FROM THE WINDOW'S STATE. Both the
+// block a fault handler writes out (refreshDiagContext) and the Copy diagnostics
+// bundle (currentDiagnosticsBundle) take it from here: the bundle re-renders its
+// own context into the same buffer, so a second builder that forgot a field
+// would overwrite the live block with a wrong one every time somebody copied
+// their diagnostics - the `ppm:` line was wrong in every bundle until 0.99.61
+// for exactly that reason. `loadedOut`, when given, receives the number of
+// plugins that are loaded (the context lists at most 32 of them).
+cascade::core::DiagContext AppWindow::currentDiagContext(std::size_t* loadedOut) {
     cascade::core::DiagContext ctx;
-    ctx.version = cascade::versionString();
-    ctx.commit = cascade::gitCommit();
-    ctx.os = cascade::core::osDescription();
-    ctx.arch = cascade::core::archDescription();
+    static const std::string kVersion = cascade::versionString();
+    static const std::string kCommit = cascade::gitCommit();
+    static const std::string kOs = cascade::core::osDescription();
+    static const std::string kArch = cascade::core::archDescription();
+    ctx.version = kVersion;
+    ctx.commit = kCommit;
+    ctx.os = kOs;
+    ctx.arch = kArch;
     ctx.mode = kModeNames[modeIndex_];
     ctx.sourceKind = sourceKind_;
     ctx.sampleRateHz = pipeline_.activeSource().sampleRateHz();
@@ -2689,6 +2722,19 @@ void AppWindow::refreshDiagContext() {
     ctx.sdrModel = deviceModel_;
     // The crystal correction and how it is applied - never a frequency.
     ctx.ppm = ppmDiagText();
+    // THE PATCH PAGE'S RADIOS, by driver kind and nothing else: the part of the
+    // node's device key before its '|' (a generator is "siggen", a recording is
+    // "iqfile"), so the key's arguments - a serial, a path - are never read into
+    // the block. A fault on a patch radio otherwise reads as a fault with no radio
+    // at all (the 0.99.59 `sdrplay` report: `source: siggen`, `device-open: no`).
+    // One entry per RUNNING radio (patchRadios_), not per node on the canvas.
+    for (const auto& running : patchRadios_) {
+        const cascade::core::patch::Node* node = patchGraph_.find(running.first);
+        const std::string key = node != nullptr ? node->device : std::string();
+        const std::string driver = cascade::core::patch::deviceDriver(key);
+        ctx.patchRadioKinds.push_back(driver.empty() ? key.substr(0, key.find('|')) : driver);
+    }
+    std::sort(ctx.patchRadioKinds.begin(), ctx.patchRadioKinds.end());
     // The sound path: the same facts the Sinks panel's chip and the rail's
     // volume, mute and squelch controls show, none of them a frequency.
     ctx.audio = soundPathFacts(pipeline_.audio(), audioOpen_.inFlight(), audioRecoveries_, volume_,
@@ -2701,7 +2747,25 @@ void AppWindow::refreshDiagContext() {
         ++loaded;
         if (ctx.plugins.size() < 32) { ctx.plugins.push_back(p.name + " " + p.version); }
     }
-    cascade::core::setDiagContext(ctx);
+    if (loadedOut != nullptr) { *loadedOut = loaded; }
+    return ctx;
+}
+
+void AppWindow::refreshDiagContext() {
+    // CHEAP ENOUGH TO RUN EVERY FRAME, which it now does (run()), and after every
+    // event that changes what the block says: the source installed, closed or
+    // swapped (applyConverterForSource, the step every install ends with), a rate
+    // change (followInputRate), a mode change (commitModeIndex), the plugin set
+    // (rescanPlugins) and the patch page's radios starting and stopping
+    // (patchReconcile, patchStopAll). A fault handler cannot compute any of this
+    // (docs/DIAGNOSTICS.md, "What a fault handler is allowed to do"), so the block
+    // is rendered here, on the healthy path, and the handler writes out the bytes.
+    // Through 0.99.61 it ran once per 60 frames, so a fault in the first second
+    // after a radio opened described the radio before it. The four constants are
+    // read once; the rest is a few strings, and setDiagContext() writes nothing
+    // when the rendering is what the buffer already holds.
+    std::size_t loaded = 0;
+    cascade::core::setDiagContext(currentDiagContext(&loaded));
 
     // The module table only has to be rebuilt when something LOADED CODE.
     // Doing it every frame would mean walking the loader's module list 60
@@ -10725,6 +10789,12 @@ std::unique_ptr<cascade::source::DeviceSource> AppWindow::openDeviceSync(
 
 void AppWindow::followInputRate() {
     const double rate = pipeline_.activeSource().sampleRateHz();
+    // THE REPORT CONTEXT SAYS THE RATE, so it is rendered on every way out of
+    // here - a rate change by the Rate combo, a plugin preset or the browser, and
+    // every source change, all end in this function - and it is the rate the
+    // source reads back, not the one that was asked for. A 30.72 MS/s Pluto was
+    // the whole cause of one 0.99.59 crash and was nowhere in its context.
+    DiagContextOnExit refreshOnExit{*this};
     if (!(rate > 0.0)) { return; }  // never-opened source; nothing to follow
     // A refusal (the chain kept its old rate: no decimation gives an exact
     // channel, or out of the supported range) is said on the device panel,
@@ -11540,6 +11610,12 @@ void AppWindow::rescanPlugins() {
     //
     // Scope guard, because there is a `return` in the middle of this function.
     cascade::core::WatchdogPause holdWatchdog(watchdog_);
+
+    // THE REPORT CONTEXT LISTS THE LOADED PLUGINS, and this function changes them
+    // on every path out of it - including the early return below, taken after
+    // every plugin has been unloaded - so the block is rendered on the way out
+    // rather than at one of the exits (0.99.62).
+    DiagContextOnExit refreshOnExit{*this};
 
     // The plugin windows the user has OPEN ride through the rescan: their
     // identities are the plugin's name and its window's title, so a plugin
@@ -19324,8 +19400,7 @@ void AppWindow::applyPluginPreset(const cascade::core::LoadedPlugin& p,
         };
         const int idx = kAbiToIndex[ps.demodMode];
         if (idx >= 0) {
-            modeIndex_ = idx;
-            pipeline_.setDemodMode(kModeMap[idx]);
+            commitModeIndex(idx);
             bandwidthIndex_ = kModeDefaultBw[idx];
             vfoBandwidthHz_ = kBwHz[bandwidthIndex_];
             pipeline_.setVfoBandwidthHz(vfoBandwidthHz_);
@@ -22885,10 +22960,16 @@ bool AppWindow::startAudioRecording() {
     return true;
 }
 
-void AppWindow::setModeIndex(int index) {
+void AppWindow::commitModeIndex(int index) {
     if (index < 0 || index >= 8) { return; }
     modeIndex_ = index;
     pipeline_.setDemodMode(kModeMap[index]);
+    refreshDiagContext();
+}
+
+void AppWindow::setModeIndex(int index) {
+    if (index < 0 || index >= 8) { return; }
+    commitModeIndex(index);
     bandwidthIndex_ = kModeDefaultBw[index];
     vfoBandwidthHz_ = kBwHz[bandwidthIndex_];
     pipeline_.setVfoBandwidthHz(vfoBandwidthHz_);
@@ -23594,8 +23675,7 @@ void AppWindow::tuneToBookmark(const cascade::core::Bookmark& b) {
     tuneAbsoluteHz(b.freqHz);
     for (int m = 0; m < 8; ++m) {
         if (b.mode == kModeNames[m]) {
-            modeIndex_ = m;
-            pipeline_.setDemodMode(kModeMap[m]);
+            commitModeIndex(m);
             break;
         }
     }
@@ -25104,8 +25184,7 @@ void AppWindow::applyControlRequest(const cascade::net::ControlRequest& r) {
         const std::string want = cascade::dsp::modeName(*r.mode);
         for (int i = 0; i < 8; ++i) {
             if (want == kModeNames[i]) {
-                modeIndex_ = i;
-                pipeline_.setDemodMode(kModeMap[i]);
+                commitModeIndex(i);
                 // A mode button here also moves the bandwidth to that
                 // mode's default, so a browser mode change behaves the
                 // same way. An explicit bandwidthHz in the SAME request
@@ -25376,8 +25455,7 @@ void AppWindow::applyControlRequest(const cascade::net::ControlRequest& r) {
             const cascade::core::Bookmark b = freqMgr_.list()[i];
             for (int m = 0; m < 8; ++m) {
                 if (b.mode == kModeNames[m]) {
-                    modeIndex_ = m;
-                    pipeline_.setDemodMode(kModeMap[m]);
+                    commitModeIndex(m);
                     break;
                 }
             }
@@ -26003,7 +26081,8 @@ void AppWindow::drawUsageReportingSection() {
     ImGui::TextWrapped(
         "%s",
         tr("Anonymous counts only: version, operating system, how long sessions "
-           "run, which modes and plugins get used, and which radio model. Never "
+           "run, which modes and plugins get used, which radio model, and how many "
+           "times the window froze waiting for the display driver. Never "
            "frequencies, never anything decoded, never your location, and no IP "
            "address is recorded."));
     ImGui::Spacing();
@@ -26019,6 +26098,13 @@ void AppWindow::drawUsageReportingSection() {
             // Born with the id: this is the first run THIS id describes.
             telemetryFirstRun_ = telemetryEnabled_ ? cascade::core::utcDateToday() : std::string();
             telemetryFirstVersion_ = telemetryEnabled_ ? cascade::versionString() : std::string();
+            // A new identity starts counting display stalls from nothing, and
+            // reads no file: this is the frame loop, and a copy left by an
+            // earlier identity is ignored anyway (its id is not this one).
+            if (telemetryEnabled_) {
+                stallLedger_->arm(telemetryLedgerPath_, telemetryInstallId_,
+                                  /*loadExisting=*/false);
+            }
         } else if (!on) {
             // Off DELETES the identifier, so a later opt-in gets a new one
             // that cannot be tied to the old. Any report still waiting to be
@@ -26029,6 +26115,9 @@ void AppWindow::drawUsageReportingSection() {
             // not be linkable to this one by its first-run date.
             telemetryFirstRun_.clear();
             telemetryFirstVersion_.clear();
+            // The stall count goes too: nothing kept, nothing counted, and its
+            // file removed (on a thread of its own - see StallLedger::disarm).
+            stallLedger_->disarm();
         }
         // The heartbeat follows the switch in the same click: off disarms it
         // (configure refuses the now-empty id), on arms it with the new id.
@@ -26089,7 +26178,8 @@ void AppWindow::drawUsageReportingSection() {
         ImGui::TextWrapped(
             "%s",
             tr("Each launch: id (random), version, os, arch, launches, crashes, "
-               "session seconds, sdr model, modes used, panels, plugins."));
+               "display stalls, session seconds, sdr model, modes used, panels, "
+               "plugins."));
         ImGui::TextWrapped(
             "%s",
             tr("Every five minutes while open: id (the same one), version, a beat "
@@ -26544,6 +26634,16 @@ void AppWindow::applyDiagnosticsEnabled(bool on) {
                                                      diagnosticsEnabled_);
     }
     watchdog_.setReportDir(diagnosticsEnabled_ ? diagCrashDir_ : std::string());
+    // THE FIRST CALL IS THE START OF THE SESSION (run() makes it before anything
+    // else is logged): whether the log file was on then is whether this session's
+    // start line is in it, which is what tells this session from the one before.
+    // A switch turned on part-way through leaves that line out of the file.
+    if (!diagStartApplied_) {
+        diagStartApplied_ = true;
+        diagLogHasSessionStart_ = on;
+    }
+    // The early read of the previous session's log (and nothing at all when off).
+    if (diagnosticsEnabled_) { startDiagHistoryRead(); }
 }
 
 void AppWindow::drawDiagnosticsSection() {
@@ -26853,7 +26953,54 @@ void AppWindow::drawDiagnosticsOffer() {
     ImGui::End();
 }
 
-std::string AppWindow::currentDiagnosticsBundle() {
+void AppWindow::startDiagHistoryRead() {
+    // The early read: the previous session's log is only ever in the files, and
+    // this session's own lines can rotate them. Does nothing - and reads nothing -
+    // while diagnostics are off.
+    (void)diagHistoryForBundle(false);
+}
+
+cascade::core::DiagHistory AppWindow::diagHistoryForBundle(bool freshHistory) {
+    // OFF MEANS OFF: with the switch off, or in a run that may not touch the disk
+    // (a bounded --frames run keeps an empty diagCrashDir_), the bundle gets
+    // neither section and no read is started. tests/test_diag_history.cpp holds
+    // that readsStarted() stays at zero.
+    if (!diagnosticsEnabled_ || diagCrashDir_.empty()) { return cascade::core::DiagHistory{}; }
+
+    // The reports are asked for again when the answer is older than this. A
+    // freeze report is written by the watchdog thread of THIS session, so a list
+    // read at start-up would not have it; five seconds is far inside the time it
+    // takes a person to open the report page, and the page's own once-a-second
+    // rebuild must not start a read every time.
+    constexpr std::int64_t kHistoryMaxAgeMs = 5000;
+    const std::int64_t nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                   std::chrono::steady_clock::now().time_since_epoch())
+                                   .count();
+    diagHistory_.refresh(cascade::core::diagLogDir(), cascade::core::diagCrashDir(), nowMs,
+                         freshHistory ? 0 : kHistoryMaxAgeMs);
+    // A person's own click waits - boundedly, and only for a worker - so what they
+    // copy has the answer in it; nothing else waits at all.
+    if (freshHistory) { (void)diagHistory_.waitIdle(std::chrono::milliseconds(750)); }
+
+    cascade::core::DiagHistory h = diagHistory_.snapshot();
+    // The previous session is whatever precedes the NEWEST start line in the
+    // files, which is this session's only if this session's lines are in them. A
+    // log file that is not being written (a folder that could not be made, or
+    // diagnostics switched on part-way through the session) cannot say.
+    if (!h.pending && !cascade::core::DiagLog::instance().fileEnabled()) {
+        h.previous = cascade::core::PreviousSessionLog{};
+        h.previous.reason = "the log file is not being written, so this session cannot be told "
+                            "from the one before it";
+    } else if (!h.pending && !diagLogHasSessionStart_) {
+        h.previous = cascade::core::PreviousSessionLog{};
+        h.previous.reason = "diagnostics were switched on part-way through this session, so its "
+                            "start is not in the log files and the session before it cannot be "
+                            "told apart";
+    }
+    return h;
+}
+
+std::string AppWindow::currentDiagnosticsBundle(bool freshHistory) {
     // EVERY FIELD HERE ALREADY EXISTS somewhere in this window. A bundle that
     // re-derived the version, the plugin list or the radio model would be a
     // second source of truth for exactly the facts a support conversation
@@ -26861,31 +27008,12 @@ std::string AppWindow::currentDiagnosticsBundle() {
     refreshDiagContext();
 
     cascade::core::DiagBundleInput in;
-    in.context.version = cascade::versionString();
-    in.context.commit = cascade::gitCommit();
-    in.context.os = cascade::core::osDescription();
-    in.context.arch = cascade::core::archDescription();
-    in.context.mode = kModeNames[modeIndex_];
-    in.context.sourceKind = sourceKind_;
-    in.context.sampleRateHz = pipeline_.activeSource().sampleRateHz();
-    in.context.deviceOpen = (device_ != nullptr);
-    in.context.sdrModel = deviceModel_;
-    // The crystal correction. This used to be left at DiagContext's default
-    // ("off"), and buildDiagnosticsBundle re-renders the context from THIS
-    // struct - so every bundle said "ppm: off" whatever the setting was, and
-    // overwrote the correct line refreshDiagContext() had just rendered.
-    in.context.ppm = ppmDiagText();
-    // The sound path, from the same helper refreshDiagContext() uses.
-    in.context.audio = soundPathFacts(pipeline_.audio(), audioOpen_.inFlight(), audioRecoveries_,
-                                      volume_, userMuted_, !mutedBy_.empty(),
-                                      transmitter_.transmitting() && !transmitMonitor_,
-                                      squelchDb_, pipeline_.squelchOpen(),
-                                      pipeline_.signalPowerDb());
-    for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
-        if (p.loaded && in.context.plugins.size() < 32) {
-            in.context.plugins.push_back(p.name + " " + p.version);
-        }
-    }
+    // THE SAME BUILDER THE FAULT HANDLER'S BLOCK COMES FROM. buildDiagnosticsBundle
+    // re-renders this struct into the buffer a crash report is written from, so a
+    // second builder that left a field at its default - as this one did with the
+    // crystal correction until 0.99.61 - overwrote the live block with a wrong
+    // one every time somebody copied their diagnostics.
+    in.context = currentDiagContext();
     in.logLines = cascade::core::DiagLog::instance().ringSnapshot();
     in.logLinesTotal = cascade::core::DiagLog::instance().linesWritten();
     in.logPath = cascade::core::DiagLog::instance().filePath();
@@ -26897,6 +27025,9 @@ std::string AppWindow::currentDiagnosticsBundle() {
     // and only when a bundle is made (0.99.55).
     in.sdrPlayService =
         cascade::source::sdrPlayServiceSummary(cascade::source::querySdrPlayService());
+    // The end of the previous session's log and the reports on this machine
+    // (0.99.62). Not included, and not read, while diagnostics are off.
+    in.history = diagHistoryForBundle(freshHistory);
 
     return cascade::core::buildDiagnosticsBundle(in);
 }
@@ -26904,7 +27035,7 @@ std::string AppWindow::currentDiagnosticsBundle() {
 void AppWindow::copyDiagnosticsBundle() {
     cascade::core::DiagBundleInput in;
     in.crashDir = cascade::core::diagCrashDir();
-    const std::string bundle = currentDiagnosticsBundle();
+    const std::string bundle = currentDiagnosticsBundle(/*freshHistory=*/true);
     ImGui::SetClipboardText(bundle.c_str());
 
     // ...and on disk as well as on the clipboard, because a clipboard does not
@@ -27225,8 +27356,7 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
 
     for (int i = 0; i < 8; ++i) {
         if (cfg.mode == kModeNames[i]) {
-            modeIndex_ = i;
-            pipeline_.setDemodMode(kModeMap[i]);
+            commitModeIndex(i);
             break;  // an unknown mode name keeps the construction default
         }
     }
@@ -27583,6 +27713,26 @@ void AppWindow::telemetryStartup(const cascade::core::AppConfig& cfg) {
         cfg.crashUploadBlockedUntil);
     telemetrySessionStart_ = glfwGetTime();
     telemetryModeAccrual_.reset(telemetrySessionStart_);
+    // The directory config.json lives in: the two small files this feature keeps
+    // beside it (the send marker below, and the display-stall ledger).
+    std::string configDir;
+    {
+        const std::size_t cut = configPath_.find_last_of("/\\");
+        if (cut != std::string::npos) { configDir = configPath_.substr(0, cut); }
+    }
+    // DISPLAY STALLS. Armed only for a real identity, which an opted-out run
+    // does not have - so off means nothing is counted and nothing is kept - and
+    // it picks up what earlier sessions left (a session ended from the taskbar
+    // mid-freeze left its count in this file, written by the watchdog's own
+    // thread). This is start-up: the read is not on the frame path. An opted-out
+    // run also clears a file an earlier opted-in run left behind.
+    telemetryLedgerPath_ = cascade::core::StallLedger::pathIn(configDir);
+    if (telemetryEnabled_ && !telemetryInstallId_.empty()) {
+        stallLedger_->arm(telemetryLedgerPath_, telemetryInstallId_, /*loadExisting=*/true);
+    } else {
+        stallLedger_->disarm();
+        cascade::core::StallLedger::removeFile(telemetryLedgerPath_);
+    }
     // Last session's report goes now, on a thread, while the window is coming
     // up. Nothing waits for it and nothing reports if it fails.
     //
@@ -27595,12 +27745,18 @@ void AppWindow::telemetryStartup(const cascade::core::AppConfig& cfg) {
     // the old behaviour.
     if (telemetryEnabled_ && !telemetryInstallId_.empty() &&
         !cfg.telemetryPending.empty()) {
-        std::string configDir;
-        const std::size_t cut = configPath_.find_last_of("/\\");
-        if (cut != std::string::npos) { configDir = configPath_.substr(0, cut); }
-        if (configDir.empty() ||
-            cascade::core::claimReportSend(configDir, cfg.telemetryPending)) {
-            telemetryReporter_.send(cascade::core::telemetryEndpoint(), cfg.telemetryPending);
+        // prepareStartupRecord claims the report AS STORED and hands back what
+        // to send: the record with the ledger's count as of THIS moment - the
+        // ledger is written by the watchdog thread the instant a stall is
+        // classified, so it holds the freeze the user ended from the taskbar,
+        // which no save ever saw. The ledger is reduced by exactly `carried`,
+        // and only if the server answers 2xx.
+        std::string record;
+        std::uint64_t carried = 0;
+        if (cascade::core::prepareStartupRecord(configDir, cfg.telemetryPending, *stallLedger_,
+                                                record, carried)) {
+            telemetryReporter_.send(cascade::core::telemetryEndpoint(), record,
+                                    cascade::core::settleOnAccept(stallLedger_, carried));
         }
     }
     // Heartbeats are NOT armed here: this runs for bounded --frames runs too,
@@ -27686,6 +27842,11 @@ void AppWindow::telemetryJournal(cascade::core::AppConfig& cfg) {
     r.firstVersion = telemetryFirstVersion_;
     r.launches = telemetryLaunches_;
     r.crashes = telemetryCrashes_;
+    // One atomic read - the frame path never touches the ledger's file. This is
+    // the figure as of THIS save; what is actually sent is the ledger's own at
+    // the next start-up (see telemetryStartup), which also holds a stall that
+    // happened after the last save.
+    r.stalls = stallLedger_->count();
     const double now = glfwGetTime();
     r.session.seconds = static_cast<std::uint64_t>(
         now > telemetrySessionStart_ ? now - telemetrySessionStart_ : 0.0);

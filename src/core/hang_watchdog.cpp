@@ -295,6 +295,7 @@ void HangWatchdog::start(const std::string& reportDir, unsigned thresholdMs) {
     paused_.store(0, std::memory_order_relaxed);
     reported_.store(false, std::memory_order_relaxed);
     reports_.store(0, std::memory_order_relaxed);
+    displayStalls_.store(0, std::memory_order_relaxed);
     startupFramesLeft_.store(0, std::memory_order_relaxed);
     skipGap_.store(true, std::memory_order_relaxed);
     stop_.store(false, std::memory_order_relaxed);
@@ -452,6 +453,39 @@ void HangWatchdog::resume() {
 }
 
 unsigned HangWatchdog::reportsWritten() const { return reports_.load(std::memory_order_acquire); }
+
+unsigned HangWatchdog::displayStallsRecorded() const {
+    return displayStalls_.load(std::memory_order_acquire);
+}
+
+void HangWatchdog::setForceDisplayStallForTest(bool on) {
+    forceDisplayStall_.store(on, std::memory_order_relaxed);
+}
+
+void HangWatchdog::setDisplayStallSink(std::function<void()> sink) {
+    std::lock_guard<std::mutex> lk(sinkMutex_);
+    displayStallSink_ = std::move(sink);
+}
+
+void HangWatchdog::recordFreezeKind(bool displayStall) {
+    // A HANG IS NOT COUNTED AWAY. It is a fault in this program, it is reported
+    // in full, and the usage number is about the display's behaviour only.
+    if (!displayStall) { return; }
+    displayStalls_.fetch_add(1, std::memory_order_release);
+    std::function<void()> sink;
+    {
+        std::lock_guard<std::mutex> lk(sinkMutex_);
+        sink = displayStallSink_;
+    }
+    if (!sink) { return; }
+    try {
+        sink();
+    } catch (...) {
+        // The watchdog thread must survive its own bookkeeping: a count that
+        // could not be kept is a number that reads low, never a reason to stop
+        // watching.
+    }
+}
 
 std::string HangWatchdog::lastReportPath() const {
     std::lock_guard<std::mutex> lk(pathMutex_);
@@ -865,7 +899,9 @@ void HangWatchdog::captureAllThreads(const std::string& path, double stalledMs) 
     // is genuinely running can move under the walk and produce a garbled tail;
     // the frames are guarded by __except for exactly that, and the threads that
     // matter in a hang are the ones that are not going anywhere. Frame 0 (Rip),
-    // which is what the signature is built from, is captured exactly.
+    // which is what the signature falls back to when no frame of ours is on the
+    // stalled stack (the signature proper comes from phase 1b's walk), is
+    // captured exactly.
     std::vector<ThreadStack> stacks;
     std::vector<CONTEXT> contexts;
     stacks.reserve(tids.size());
@@ -909,24 +945,16 @@ void HangWatchdog::captureAllThreads(const std::string& path, double stalledMs) 
         contexts.push_back(ctx);
     }
 
-    const char* topModule = "?";
-    std::uintptr_t topOffset = 0;
-    if (!stacks.empty() && stacks[0].count > 0) {
-        DiagModule m;
-        std::uintptr_t off = 0;
-        if (resolveAddress(stacks[0].frames[0], m, off)) {
-            topModule = m.name;
-            topOffset = off;
-        }
-    }
-
     // PHASE 1b - THE STALLED THREAD'S WALK, AND WHY IT COMES BEFORE THE HEADER.
     //
     // The `kind` line is the first line of the file and decides how the report
     // groups, so it has to be right before anything is written - and telling a
     // display stall from a real hang needs the frames UNDER the top one, not
-    // just frame 0 (which is ntdll.dll for every wait there is). So exactly one
-    // walk is moved ahead of the header: the stalled thread's.
+    // just frame 0 (which is ntdll.dll for every wait there is). The signature
+    // needs them for the same reason: it is built from the first frame of OUR
+    // code on the stalled thread, and that is never frame 0 of a thread that is
+    // waiting. So exactly one walk is moved ahead of the header: the stalled
+    // thread's.
     //
     // WHAT THAT COSTS, plainly. The header is written first because phase 2's
     // unwinder can in principle block on the loader lock, and a report that
@@ -935,17 +963,21 @@ void HangWatchdog::captureAllThreads(const std::string& path, double stalledMs) 
     // of the three options: the thread walked here is by definition not moving,
     // it is the one walk whose result the report cannot be written without, and
     // the alternative - filing every AMD display stall as a hang in this
-    // application - is the defect being fixed. Every other thread is still
-    // walked after the header, exactly as before.
+    // application, or every freeze under one signature - is the defect being
+    // fixed. Every other thread is still walked after the header, exactly as
+    // before.
     //
-    // ONLY WHEN IT MIGHT MATTER: a stalled thread whose frame 0 is not a kernel
-    // wait cannot be waiting on presentation, so the ordinary path is untouched
-    // for it and the header goes out first as it always did.
+    // ONLY WHEN IT MIGHT MATTER: a stalled thread whose frame 0 is already in
+    // this program's own image is keyed by that frame as it always was, and
+    // cannot be waiting on presentation (the rule needs a wait at the top), so
+    // the ordinary path is untouched for it and the header goes out first as it
+    // always did. Any other frame 0 - a kernel wait, a vendor driver, an address
+    // no module claims - is walked here.
     bool displayStall = false;
     bool guiWalked = false;
 #if defined(_WIN32) && defined(_M_X64)
     if (!stacks.empty() && stacks[0].tid == gui && stacks[0].tid != self &&
-        stacks[0].count > 0 && isKernelWaitModule(topModule)) {
+        stacks[0].count > 0 && !inMainImage(stacks[0].frames[0])) {
         CONTEXT ctx = contexts[0];
         const int n = walkThreadContext(&ctx, stacks[0].frames, kMaxHangFrames);
         if (n > 0) {
@@ -964,22 +996,38 @@ void HangWatchdog::captureAllThreads(const std::string& path, double stalledMs) 
             displayStall = HangWatchdog::isDisplayPresentationStall(names, scan);
         } else {
             // The walk yielded nothing: frame 0 is still the register the
-            // signature is built from, so put it back rather than leaving an
+            // signature falls back to, so put it back rather than leaving an
             // empty stack behind.
             stacks[0].frames[0] = static_cast<std::uintptr_t>(contexts[0].Rip);
             stacks[0].count = 1;
         }
     }
 #endif
+    if (forceDisplayStall_.load(std::memory_order_relaxed)) { displayStall = true; }  // test hook
 
     // 0x48414E47 is 'HANG' - a hang and a crash at the same address are
     // different bugs and must not group together. 0x5354414C is 'STAL', and it
     // is a THIRD group for the same reason: a stall in the display driver and a
-    // deadlock in this application can present the same top frame
-    // (ntdll.dll+the same wait), and letting them share a signature would bury
-    // a real bug under a pile of monitors being switched off.
+    // deadlock in this application can present the same frame, and letting them
+    // share a signature would bury a real bug under a pile of monitors being
+    // switched off.
+    //
+    // THE FRAME THE SIGNATURE IS BUILT FROM IS THE FIRST FRAME OF OURS (0.99.62),
+    // not frame 0. It used to be frame 0, and a stalled GUI thread is parked in
+    // the same few kernel stubs whatever it is waiting for, so every freeze of
+    // one machine hashed to one value and the uploader's 24-hour de-duplication
+    // dropped the second of two different freezes. See freezeSignature().
     const std::string sig =
-        crashSignature(displayStall ? 0x5354414Cul : 0x48414E47ul, topModule, topOffset);
+        stacks.empty()
+            ? freezeSignature(displayStall ? 0x5354414Cul : 0x48414E47ul, nullptr, 0)
+            : freezeSignature(displayStall ? 0x5354414Cul : 0x48414E47ul, stacks[0].frames,
+                              stacks[0].count);
+
+    // THE KIND IS KNOWN, so a display stall is COUNTED NOW, on this thread,
+    // before anything below can fail or wedge: the report is only ever kept on
+    // the machine, and the number is the one thing about it that is reported
+    // (HangWatchdog::recordFreezeKind). Nothing is suspended at this point.
+    recordFreezeKind(displayStall);
 
     // THE IDENTIFYING HALF GOES TO DISK FIRST, and is flushed, exactly as
     // crash_handler.cpp does on the fault path. Phase 1 above can no longer
@@ -1086,7 +1134,7 @@ void HangWatchdog::captureAllThreads(const std::string& path, double stalledMs) 
             CONTEXT ctx = contexts[i];
             ts.count = walkThreadContext(&ctx, ts.frames, kMaxHangFrames);
             // A walk that yielded nothing still has the register frame, which
-            // is the one the signature was built from.
+            // is the one the report's `module`/`offset` name.
             if (ts.count == 0) {
                 ts.frames[0] = static_cast<std::uintptr_t>(contexts[i].Rip);
                 ts.count = 1;
@@ -1147,16 +1195,6 @@ void HangWatchdog::captureAllThreads(const std::string& path, double stalledMs) 
     // from a hang in this application. The same rule decides both platforms;
     // isDisplayModule knows the Linux graphics libraries.
     ThreadStack first = tids.empty() ? ThreadStack{} : captureOneLinuxThread(tids[0], self);
-    const char* topModule = "?";
-    std::uintptr_t topOffset = 0;
-    if (first.count > 0) {
-        DiagModule m;
-        std::uintptr_t off = 0;
-        if (resolveAddress(first.frames[0], m, off)) {
-            topModule = m.name;
-            topOffset = off;
-        }
-    }
     bool displayStall = false;
     if (!tids.empty() && tids[0] == gui && gui != self && first.count > 0) {
         DiagModule mods[HangWatchdog::kDisplayStallScanFrames];
@@ -1170,9 +1208,21 @@ void HangWatchdog::captureAllThreads(const std::string& path, double stalledMs) 
         }
         displayStall = HangWatchdog::isDisplayPresentationStall(names, scan);
     }
-    // 'STAL' / 'HANG', for the reason given at the Windows signature above.
+    if (forceDisplayStall_.load(std::memory_order_relaxed)) { displayStall = true; }  // test hook
+    // 'STAL' / 'HANG', and the first frame of OURS rather than frame 0, for the
+    // reasons given at the Windows signature above. The stack was walked in full
+    // before this point on this platform (captureOneLinuxThread), so there is
+    // no separate pre-header walk to add. NOT COMPILED OR RUN on the machine this
+    // was written on (no Linux toolchain): freezeSignature() is the same shared
+    // function the Windows path calls, and what Linux adds is that the main image
+    // is module 0 of the dl_iterate_phdr snapshot - a non-PIE executable, whose
+    // load bias is 0, reads as "no frame is ours" and keeps the old key.
     const std::string sig =
-        crashSignature(displayStall ? 0x5354414Cul : 0x48414E47ul, topModule, topOffset);
+        freezeSignature(displayStall ? 0x5354414Cul : 0x48414E47ul, first.frames, first.count);
+
+    // Counted here for the reason given at the Windows call: the kind is known,
+    // the report stays on the machine, the number does not.
+    recordFreezeKind(displayStall);
 
     std::ofstream out(path, std::ios::binary | std::ios::trunc);
     if (!out) { return; }

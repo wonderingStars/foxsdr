@@ -37,6 +37,8 @@
 #include <string>
 #include <vector>
 
+#include "core/diag_history.hpp"
+
 namespace cascade::core {
 
 // One loaded module, in the form the fault path needs it. Fixed-size char
@@ -180,14 +182,29 @@ struct DiagContext {
     // and how it is applied - "+1.5 in the radio", "+1.5 by retuning". A
     // property of the radio's crystal, never a frequency.
     std::string ppm = "off";
+    // THE RADIOS THE PATCH PAGE HAS RUNNING (0.99.62), by DRIVER KIND ONLY - one
+    // entry per running radio: "rtlsdr", "soapy", "sdrplay", "iqfile",
+    // "siggen". Never a label, a serial, the arguments the radio was opened
+    // with or a frequency. A second signal path is invisible in every other
+    // line of the block (`source` describes the receiver, which the patch page
+    // may have handed its radio to), and a fault on a patch radio's thread then
+    // reads as a fault with no radio at all: the 0.99.59 report of a SoapySDR
+    // `sdrplay` radio opened by the patch page said `source: siggen` and
+    // `device-open: no`. Each entry is reduced to lower-case letters and digits
+    // when it is rendered, so a caller that is handed something odd cannot put
+    // it in a report.
+    std::vector<std::string> patchRadioKinds;
     std::vector<std::string> plugins;  // "name version", loaded plugins only
     DiagAudio audio;                   // the sound path, see DiagAudio
 };
 
-// Renders `ctx` into a fixed static buffer, ONCE, on the healthy path. The
-// fault path writes those bytes out and formats nothing. Safe to call as
-// often as the application likes; the cost is one snprintf of a few hundred
-// bytes.
+// Renders `ctx` into a fixed static buffer, on the healthy path. The fault path
+// writes those bytes out and formats nothing. Safe to call as often as the
+// application likes - AppWindow calls it every frame and after every event that
+// changes what it says (AppWindow::refreshDiagContext) - because a call whose
+// rendering is byte-for-byte what the buffer already holds writes nothing: the
+// cost of an unchanged block is building the text, and the buffer a fault
+// handler may be reading at that instant is not touched.
 void setDiagContext(const DiagContext& ctx);
 
 // The rendered block, for tests and for the bundle. Empty until the first
@@ -223,6 +240,42 @@ std::string crashSignature(unsigned long code, const char* moduleName,
 void crashSignatureRaw(unsigned long code, const char* moduleName,
                        std::uintptr_t offset, char out[17]);
 
+// THE MAIN EXECUTABLE'S OWN IMAGE (0.99.62), for the question "is this frame
+// ours?". The base address of the running program: GetModuleHandle(nullptr) on
+// Windows (read from the process block, no loader lock) and module 0 of the
+// snapshot on POSIX, which dl_iterate_phdr always lists first. 0 when it cannot
+// be told - a POSIX non-PIE executable has a load bias of 0 - and every caller
+// treats 0 as "no frame is ours", which is the safe direction.
+std::uintptr_t mainImageBase();
+
+// True when `addr` lies inside the main executable, by the module snapshot.
+bool inMainImage(std::uintptr_t addr);
+
+// THE SIGNATURE OF A FREEZE (kind hang or stall), over the stalled thread's
+// frames, top first.
+//
+// It identifies the code of OURS that was waiting, not the kernel stub it was
+// waiting in. A frozen GUI thread is almost always parked in the same few wait
+// stubs (ntdll.dll's NtWaitForSingleObject, win32u.dll's message wait), so a key
+// built from frame 0 gave every freeze one signature whatever had stopped, and
+// the uploader's 24-hour de-duplication then dropped the second of two different
+// freezes as a repeat of the first. So: the hash is `kindTag` plus the module
+// and the module-relative offset of the FIRST frame (nearest the top) that lies
+// in the main executable. Falls back to frame 0 - module and offset, or "?" and 0
+// when it names no module - when no frame of the stack is ours: a thread parked
+// on a stack with nothing of this program on it has nothing better to be keyed by.
+//
+// The offset is build-specific, so one freeze in two builds is two signatures.
+// That has always been true of a crash signature and is correct (the offsets
+// differ, and so do the symbols needed to read them).
+//
+// `kindTag` keeps a display stall ('STAL') out of the group of a hang ('HANG'),
+// whatever frame the two share. A frame whose top is already in the main
+// executable hashes exactly as the old key did. Healthy-path only: it takes a
+// std::string and is not for a fault handler. The result is 16 uppercase hex
+// digits, the same form as crashSignature().
+std::string freezeSignature(unsigned long kindTag, const std::uintptr_t* frames, int count);
+
 // ---------------------------------------------------------------------------
 // The "copy diagnostics" bundle
 // ---------------------------------------------------------------------------
@@ -241,7 +294,21 @@ struct DiagBundleInput {
     // Bundle-only, not in the crash context: it is asked of the Service
     // Control Manager, which a fault path must not do. Empty prints "(none)".
     std::string sdrPlayService;
+    // THE SESSIONS BEFORE THIS ONE (0.99.62): the end of the previous session's
+    // log and one line per crash or freeze report on the machine, written after
+    // the current log under headings of their own. `history.included` false -
+    // diagnostics off, or nothing asked for it - adds neither section, not even a
+    // heading, and nothing was read to fill it. See core/diag_history.hpp for why.
+    DiagHistory history;
 };
+
+// The headings the two history sections are written under. The problem-report
+// attachment's truncation (problem_report.cpp) keeps the NEWEST lines after the
+// log marker, which is where these sit, so they outlast the current log's oldest
+// lines when a bundle is cut to its size cap.
+inline constexpr const char* kPreviousSessionHeading =
+    "--- previous session (the end of its log) ---";
+inline constexpr const char* kReportsHeading = "--- reports on this machine ---";
 
 std::string buildDiagnosticsBundle(const DiagBundleInput& in);
 

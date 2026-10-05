@@ -193,6 +193,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -475,6 +476,37 @@ public:
     unsigned reportsWritten() const;
     std::string lastReportPath() const;
 
+    // COUNTING A DISPLAY STALL, which the report alone does not let anyone do:
+    // a `kind: stall` report stays on the user's machine, so how OFTEN it
+    // happens was invisible. The capture calls recordFreezeKind() once it has
+    // decided a freeze's kind (isDisplayPresentationStall, on both platforms);
+    // for a stall it bumps displayStallsRecorded() and calls the sink, and for
+    // a hang it does nothing at all - a hang is a fault in this program and is
+    // reported, not counted away.
+    //
+    // THE SINK RUNS ON THE WATCHDOG'S THREAD and only there. That is the
+    // point: the user ending a frozen window from the taskbar is
+    // TerminateProcess, nothing on the GUI thread runs again, and this thread
+    // is the one that is alive at the moment of the stall. It is called with no
+    // thread suspended and none of this class's locks held. It takes the
+    // application's side of the count (core/telemetry.hpp StallLedger) and
+    // must not call back into anything the GUI thread may hold.
+    //
+    // PUBLIC because it is the decision-to-count glue and tests drive it with
+    // the REAL classifier's answer; the capture is the only production caller.
+    void recordFreezeKind(bool displayStall);
+    void setDisplayStallSink(std::function<void()> sink);
+    // Stalls recorded since start(), for this watchdog only.
+    unsigned displayStallsRecorded() const;
+
+    // TEST HOOK. A display driver's frames cannot be staged from ctest - there
+    // is no monitor to switch off - so the capture's own wiring (classify,
+    // write `kind: stall`, count, call the sink on the watchdog thread) would
+    // otherwise be reachable only by reading it. With this set the next capture
+    // treats the freeze as a display stall whatever its frames say; everything
+    // after the classification is the real code.
+    void setForceDisplayStallForTest(bool on);
+
     // Worst heartbeat interval observed, in milliseconds. This is the number
     // the threshold is justified against, and `cascade --frames N` prints it
     // so a test can hold the justification to a real measurement.
@@ -587,6 +619,11 @@ private:
     std::atomic<unsigned> excuseCapMs_{kExcuseCapMs};
     std::atomic<bool> reported_{false};
     std::atomic<unsigned> reports_{0};
+    std::atomic<unsigned> displayStalls_{0};
+    std::atomic<bool> forceDisplayStall_{false};  // setForceDisplayStallForTest
+    // Guards the sink's pointer only; the sink itself is called outside it.
+    mutable std::mutex sinkMutex_;
+    std::function<void()> displayStallSink_;
     std::atomic<int> suppression_{0};   // SuppressionForTest, as an int
     std::atomic<int> captureAbort_{0};  // CaptureAbortForTest, as an int
     // NOT reset by start(), unlike everything above it: see pausesTaken().

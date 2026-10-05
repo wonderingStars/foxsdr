@@ -342,6 +342,14 @@ void AppWindow::patchReconcile() {
     // Radio's device list opened, "Look for radios", or a Radio part added
     // (it starts on a free radio, so it needs the native list).
 
+    // THE REPORT CONTEXT NAMES THE PATCH PAGE'S RADIOS (0.99.62), by driver kind,
+    // and this is where they start and stop - a radio that opened, one that was
+    // switched off or changed, one that faulted and was retired - so the block is
+    // rendered on the way out, whichever of the paths below was taken. Without it
+    // a fault on a patch radio's thread was reported as a fault with no radio at
+    // all (`source: siggen`, `device-open: no`).
+    DiagContextOnExit refreshOnExit{*this};
+
     // --- the receiver's radio goes to the patch ------------------------------
     // ONLY WHILE THE PATCH RUNS (0.99.18): an open page with the patch stopped
     // leaves the receiver alone, so a patch can be built while listening.
@@ -879,6 +887,11 @@ void AppWindow::patchPublishSets() {
 }
 
 void AppWindow::patchStopAll(bool restoreMain) {
+    // Every radio is retired below, and the block names the running ones (see
+    // patchReconcile), so it is rendered on every way out of here, the early
+    // return included. Rendered AFTER the radios are gone: a fault while one is
+    // being closed is still reported with that radio running, which is true.
+    DiagContextOnExit refreshOnExit{*this};
     if (!patchRadios_.empty()) {
         // Worded apart, so a log says which: a patch stopped (STOP, ALL OFF,
         // the receiver view chosen) or the application closing.

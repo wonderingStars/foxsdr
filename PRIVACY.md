@@ -63,6 +63,9 @@ exactly as many.
   an empty file named `telemetry-sent-` plus 16 hexadecimal characters beside
   `config.json`. The characters are a checksum of the report already
   described here; the file holds nothing, and the next report replaces it.
+  A second small file, `telemetry-stalls`, appears there only if the display
+  has frozen on you: it holds your install identifier and a count (see
+  **Display stalls, in full** below) and is removed when you turn reporting off.
 - **No personal data is collected**, and no IP address or location is recorded.
 - **Crash and freeze reports are written to your machine, and — if you leave
   Diagnostics on — the report *text* is sent on the next start.** Not from
@@ -136,6 +139,7 @@ One report per launch, describing the session that just finished:
 | First version | `0.99.47` | The version that created the identifier - which download you started from. Deleted with it, like the first run. |
 | Launch count | `12` | Whether the software gets used more than once. |
 | Crash count | `1` | How often it fails. |
+| Display stalls | `0` | How many times the window froze because the display driver was waiting, not FoxSDR (a monitor switched off, a graphics-driver reset, a remote session reconnecting) - a bare number, with no stack, no driver name and no time of day, and zero for almost everyone. |
 | Session length | `3600` seconds | Whether sessions are minutes or hours. |
 | SDR model | `uhd b200` | Which radios to prioritise. **Serial numbers are stripped** before sending. |
 | Demodulators used | `WFM: 3000s` | Which modes justify further work. |
@@ -143,8 +147,24 @@ One report per launch, describing the session that just finished:
 | Installed plugins | `ADS-B 1.0.0` | Which decoders justify further work. |
 
 That is the complete list. The payload is asserted field-by-field by an
-automated test (`tests/test_telemetry.cpp`), so a new field cannot be added
-without that test failing and this document being updated with it.
+automated test (`tests/test_telemetry.cpp`), in **both** directions, and the
+same test reads this table: a field added to the report without a row here
+fails it, and so does a row here that the report does not send. A new field
+cannot be added without that test failing and this document being updated with
+it.
+
+**Display stalls, in full (since 0.99.62).** A freeze that FoxSDR's freeze detector decides was
+the display driver waiting (see `kind: stall` under *Crash and freeze reports*)
+is kept on your machine and never uploaded. What the usage report carries about
+those is the number of them, and nothing else. To make sure a freeze you end
+from the taskbar is still counted, the number is kept in a small file named
+`telemetry-stalls` beside `config.json`, holding your install identifier and that
+one number; it exists only once there has been a stall to count. After the
+report that carries a number has been accepted by the server the number is taken
+off; if the report could not be sent it stays and goes with the next one.
+Switching usage reporting off removes the file, and a file left by an earlier
+identifier is ignored. The detector is part of **Diagnostics**: with Diagnostics
+off nothing is detected, so nothing is counted.
 
 ### The "still running" beat
 
@@ -306,7 +326,10 @@ A report contains these fields and no others:
 | `volume` | `80%` | Since 0.99.61: the volume control. A volume of nothing is silence from a healthy receiver. |
 | `audio-muted` | `no`, `you`, `a decoder plugin` | Since 0.99.61: whether the audio is muted and WHO muted it — `you` (the Mute key), `a decoder plugin` (an I/Q decoder holds the audio down while the receiver is on one of its presets), `transmit key`, or several joined with `+`. A plugin is described and **not named**, because its name would say which band the receiver was tuned to. |
 | `squelch` | `-50 dB, closed (signal -63 dB)` | Since 0.99.61: the squelch threshold, whether the gate is open, and the signal level the gate is judging when the receiver has measured one. Decibels against full scale: a **level, not a frequency** — it says nothing about what you listen to. A gate that stays closed is complete silence from a healthy receiver. |
+| `patch-radios` | `none`, `1 (rtlsdr)`, `2 (rtlsdr, soapy)` | Since 0.99.62: how many radios the patch page has running, and the **driver kind** of each - `rtlsdr`, `soapy`, `sdrplay`, `iqfile` (a recording) or `siggen` (the generator) - or `none`. **Kinds only**: never a radio's name, its serial number, the address or arguments it was opened with, the name of a recording, or a frequency - the line is built from the part of the patch node's device key before its first vertical bar, reduced to lower-case letters and digits, so the part after it is never read. `source` describes the receiver, whose radio the patch page may have been handed, so a fault on a patch radio's thread otherwise reads as a fault with no radio at all (a 0.99.59 report of one said `source: siggen` and `device-open: no`). It is in the report file on your machine and in the bundle; it is **not** one of the fields the automatic crash report sends (see *What is sent when a report is uploaded*). |
 | the log | the last 256 lines | State changes — source opened, rate set, plugin started — never signal content, and **never the name or path of a file you opened**. Since 0.99.61 it also says when a sound output opens or is refused (`audio: output opened - MME, 2 channels, 48000 S/s, system default`): the driver model, the layout and the rate, **never the name of your sound device**. When an I/Q file fails to reopen the log records that it did not reopen; the file name stays on screen, where you already know it. Since 0.89.0 the log also records what the radio driver said (`soapy:` lines) and what its libraries printed to the standard error stream (`vendor:` lines), with serial numbers stripped and the digits of any line mentioning a frequency masked — see the `log` row under *What is sent when a report is uploaded* for the exact rule. Since 0.99.33 the bundle's log is scrubbed by exactly that rule, the same as an uploaded report's, because a bundle is made to be pasted somewhere. Since 0.99.59 that rule also replaces every network address and computer name with `<host>`, keeping the port after it, and the number of a serial port with `#` (`COM#`, `/dev/ttyUSB#`) - see the same row for where it looks. |
+| the previous session's log | the last 80 lines of the session before this one, scrubbed | Since 0.99.62, under a heading of its own after the log: the end of the log of the session BEFORE this one, read from the log files on your machine (`foxsdr.log`, `foxsdr.1.log` and `foxsdr.2.log`, in the folder the Diagnostics section shows). At most 80 lines and 12 KiB, the newest kept; sessions are told apart by the line FoxSDR writes when it starts, which names its version and build. It exists because a window that froze, was ended from the taskbar and was then restarted is gone from the log of the session you report from. **Every line goes through the same scrub as the log above** - serial numbers, account names in paths, network addresses and computer names, quoted names, and every number on a line that mentions a frequency - and the heading says in words when there is no earlier session, or when it cannot be found (for instance when Diagnostics was switched on part-way through this session). **With Diagnostics off nothing is read and neither this row nor the next is added**, not even a heading. Only ever in the bundle you copy or choose to attach; never in the automatic crash report. |
+| the reports on this machine | one line per report, the newest ten | Since 0.99.62, under a heading of its own: for each of the newest ten `crash-*` and `hang-*` files in the reports folder, its kind (`crash`, `hang` or `stall`), how long ago it was written, the version that wrote it, how long that session had been running, how long the interface was stalled (a freeze) or the reason and code (a crash), its grouping signature, and what became of sending it - `sent`, `duplicate`, `local-only`, `backoff`, `rate-limited`, `failed`, `abandoned`, `too-large`, `expired`, `refused`, or `none` when nothing has swept it. It is the answer to "did the watchdog fire, and did the report reach you". **No stack, no log lines, no module list, no context block, no file name and no path**: nothing is read from a report beyond those fields, and a memory dump or a saved copy of this bundle in the same folder is never opened. Each line is passed through the same scrub as the log. Only ever in the bundle you copy or choose to attach; never in the automatic crash report. |
 
 A crash or freeze report written by the application itself carries the same
 context block as the table above — the same bytes, so the two cannot drift —
@@ -347,7 +370,16 @@ That
 small process can also write a report of its own, into the same folder and with
 the same fields, and only when diagnostics are switched on: it is handed the
 folder by the session that started it and is told nothing at all when the
-setting is off. These used to be either a dead application or nothing at all;
+setting is off. Since 0.99.62 the session writes its own report of that
+death only when the small process's report does not already cover it, so one
+death is one report rather than up to three, and the small process's own
+report says on the end of its `reason` line the things the session's used to:
+which search it was asked for (every driver, one named driver, or the list of
+drivers), which try it was, and that the application survived it - for example
+`access violation - enumeration child, driver=uhd, attempt 1 (contained)`, the
+driver being the same installed driver's short name as above. That is the same
+`reason` field, so nothing is added to what is sent. These used to be either a
+dead application or nothing at all;
 none of them adds a field, and all are governed by the same switch in
 **Settings → Diagnostics** as every other report on this page.
 
@@ -355,7 +387,7 @@ none of them adds a field, and all are governed by the same switch in
 
 | Field | Example | Why |
 |---|---|---|
-| `kind` | `hang` or `stall` | As above. `stall` means the wait was inside the display driver or the window system rather than inside FoxSDR - a monitor switched off, a resolution change, a remote session, or on Linux a window the compositor is not showing. Those are kept on your machine and never sent. |
+| `kind` | `hang` or `stall` | As above. `stall` means the wait was inside the display driver or the window system rather than inside FoxSDR - a monitor switched off, a resolution change, a remote session, or on Linux a window the compositor is not showing. Those are kept on your machine and never sent; only a bare count of them is in the usage report (*Display stalls*, above). |
 | `note` | `the gui thread did not complete a frame within the threshold` | The same distinction in one sentence, so a report says what it is without anyone having to know the codes. |
 | `stalled-ms` | `7213` | How long the interface had been unresponsive. |
 | `threshold-ms` | `5000` | What it was measured against, so the number above can be judged. |
@@ -406,7 +438,7 @@ One request per report, on the **next** start after the failure, to
 | Field | Example | Why |
 |---|---|---|
 | `schema` | `1` | Which version of this list the request follows. |
-| `kind` | `crash` or `hang` | Which of the two documents it is. A freeze whose `kind` is `stall` - the display driver was waiting, not FoxSDR - is never uploaded at all; it stays on your machine. |
+| `kind` | `crash` or `hang` | Which of the two documents it is. A freeze whose `kind` is `stall` - the display driver was waiting, not FoxSDR - is never uploaded at all; it stays on your machine, and only how many there were reaches the usage report. |
 | `version` | `0.62.0` | Which release. |
 | `commit` | `98a9d7d617a7` | Which build. Only the commit names a build; the offsets below are meaningless against the wrong one. |
 | `buildId` | `651FD5EB…C528` | Which *link*. Two builds of one version have different code at the same offsets. This identifies the compiled file, not you or your machine. |
@@ -543,8 +575,10 @@ and no crash report; if FoxSDR crashed, the crash report described above is a
 separate thing with its own switch. The diagnostics log, when you choose to
 attach it, is the same context a crash report carries (version, commit,
 operating system, mode, the loaded plugins, whether a device was open) plus
-your recent log lines - never a frequency, never a hardware serial, never the
-install identifier telemetry uses.
+your recent log lines, the end of the previous session's log and one line per
+crash or freeze report on your machine (the last two rows of the bundle's table
+above; with Diagnostics off the bundle has neither) - never a frequency, never a
+hardware serial, never the install identifier telemetry uses.
 
 ### What is sent when you report a bug or a dislike
 

@@ -352,9 +352,13 @@ bool parseReportText(const std::string& text, ParsedReport& out) {
     }
 
     // A crash report names the faulting address in its header. A freeze report
-    // does not: its signature was built from the TOP FRAME OF THE FIRST THREAD
-    // captured, which is the stalled one, so that is the frame that has to name
-    // the module here or the two would group differently.
+    // does not: its `module`/`offset` are the TOP FRAME OF THE FIRST THREAD
+    // captured, which is the stalled one. Since 0.99.62 that is no longer what
+    // the freeze's SIGNATURE is built from (that is the first frame of the main
+    // executable on the stalled thread - core/diag_report.hpp, freezeSignature),
+    // and this function does not recompute a signature: the one on the file's own
+    // `signature:` line is carried as it was written, which is also what keeps a
+    // report written by an older build uploadable unchanged.
     if (!addressText.empty()) {
         std::string m;
         std::uint64_t off = 0;

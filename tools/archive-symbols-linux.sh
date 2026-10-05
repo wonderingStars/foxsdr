@@ -9,16 +9,30 @@
 #
 # WHAT DIFFERS FOR ELF, in full:
 #
-#   - there is no PDB. A normal (non `-s`-linked) binary already carries its
-#     DWARF debug info inline, so the archive keeps TWO things instead of a
-#     matched exe+pdb pair: a split-debug file (the debug info alone, via
-#     `objcopy --only-keep-debug`) under
+#   - there is no PDB. The DWARF is IN the binary the linker produced, provided
+#     the compiler was given -g: CMakeLists.txt adds it to the Release flags on
+#     Linux, and until it did NOTHING here had a line table to keep - every
+#     archived cascade.debug before that change held a symbol table and no
+#     .debug_* section at all (measured with readelf), so a Linux frame could
+#     be named but never placed on a line. So the archive keeps TWO things
+#     instead of a matched exe+pdb pair: a split-debug file (the debug info
+#     alone, via `objcopy --only-keep-debug`, sections compressed) under
 #         <root>/<module>.debug/<build-id>/<module>.debug
-#     and the stripped binary itself under
+#     and the SHIPPED binary - the same one with its DWARF removed - under
 #         <root>/<module>/<build-id>/<module>
 #     - the exact two paths src/core/report_reader.hpp's
 #     SymbolArchive::elfSymbolPath() already looks for, in that priority
 #     order (split debug first, because it is the one with line tables).
+#   - the DWARF is removed from the binary in the build tree, in place, once
+#     the split file is safely written, because that binary is what the CI
+#     tarball and the AppImage copy: left in, a full-DWARF cascade would be
+#     tens of megabytes heavier for every user. Only debug information goes
+#     (`--strip-debug`); the function symbol table stays, so
+#     tools/elf_symmap.py and the crash handler see the binary they always
+#     saw. The build id lives in a note section neither step touches, so it is
+#     the same before and after, and so is the archive key. A Debug or
+#     RelWithDebInfo build is left alone (see --config): that binary is a
+#     developer's, and is for a debugger.
 #   - the build id comes from the NT_GNU_BUILD_ID note rather than a CodeView
 #     record; tools/elf_symmap.py reads the identical note, so the archive key
 #     and the map's own `buildId` field agree by construction, the same way
@@ -45,6 +59,7 @@ VERSION=""
 COMMIT=""
 COMMIT_HEADER=""
 MODULE="cascade"
+CONFIG=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -60,6 +75,9 @@ while [ $# -gt 0 ]; do
         # own idea, e.g. a plugin repository archiving into this tree).
         --commit-header) COMMIT_HEADER="$2"; shift 2 ;;
         --module) MODULE="$2"; shift 2 ;;
+        # The CMake configuration ($<CONFIG>). Absent or empty means a shipping
+        # build: the DWARF is taken out of the binary after it is archived.
+        --config) CONFIG="$2"; shift 2 ;;
         *) warn "unknown argument: $1"; shift ;;
     esac
 done
@@ -69,7 +87,7 @@ if [ -z "$COMMIT" ] && [ -n "$COMMIT_HEADER" ] && [ -f "$COMMIT_HEADER" ]; then
 fi
 
 if [ -z "$BINARY" ] || [ -z "$ARCHIVE_ROOT" ]; then
-    warn "usage: --binary PATH --archive-root DIR [--version V] [--commit C] [--module NAME]"
+    warn "usage: --binary PATH --archive-root DIR [--version V] [--commit C] [--module NAME] [--config CONFIG]"
     exit 0
 fi
 if [ ! -f "$BINARY" ]; then
@@ -119,20 +137,70 @@ fi
 
 if [ "$NEED" = "1" ]; then
     if command -v objcopy >/dev/null 2>&1; then
-        # --only-keep-debug then --add-gnu-debuglink is the standard split-debug
-        # recipe; the copy left in the archive as "the module" also keeps its
-        # full symbol table (no --strip-debug applied to it) so tools/elf_symmap.py
-        # can read it even on a machine that has only this half of the archive.
-        if objcopy --only-keep-debug "$BINARY" "$DEBUG_DEST" 2>/tmp/.objcopy_err.$$; then
-            chmod 644 "$DEBUG_DEST" 2>/dev/null || true
+        # --only-keep-debug, then --strip-debug, then --add-gnu-debuglink is the
+        # order binutils' own documentation gives for a split-debug file, and
+        # the order matters: the strip must come AFTER the debug file has been
+        # written and checked, or a failed split would leave nothing anywhere.
+        #
+        # The split file is written with its sections compressed
+        # (--compress-debug-sections=zlib, the value every binutils with the
+        # option accepts): the DWARF for this program is tens of megabytes
+        # even so, and several times that left uncompressed. binutils' addr2line
+        # reads compressed sections, which is what the report reader drives. If
+        # this objcopy refuses the option the file is written plain rather
+        # than not at all.
+        ERR_FILE="/tmp/.objcopy_err.$$"
+        SPLIT_OK=0
+        if objcopy --only-keep-debug --compress-debug-sections=zlib "$BINARY" "$DEBUG_DEST" 2>"$ERR_FILE"; then
+            SPLIT_OK=1
         else
-            warn "objcopy --only-keep-debug failed: $(cat /tmp/.objcopy_err.$$ 2>/dev/null)"
+            FIRST_ERR="$(cat "$ERR_FILE" 2>/dev/null)"
+            if objcopy --only-keep-debug "$BINARY" "$DEBUG_DEST" 2>"$ERR_FILE"; then
+                warn "objcopy refused --compress-debug-sections=zlib ($FIRST_ERR); the split-debug file is archived uncompressed"
+                SPLIT_OK=1
+            else
+                warn "objcopy --only-keep-debug failed: $(cat "$ERR_FILE" 2>/dev/null)"
+                # A half-written file here would be picked up by the reader as
+                # though it were the archive for this build id.
+                rm -f "$DEBUG_DEST"
+            fi
         fi
-        rm -f /tmp/.objcopy_err.$$
+        rm -f "$ERR_FILE"
+
+        if [ "$SPLIT_OK" = "1" ] && [ -s "$DEBUG_DEST" ]; then
+            chmod 644 "$DEBUG_DEST" 2>/dev/null || true
+            # Take the DWARF out of the binary that ships, now that it is saved.
+            # The symbol table stays (--strip-debug, not --strip-all), and the
+            # debuglink names the split file so gdb can find it from the binary.
+            case "$CONFIG" in
+                Debug|RelWithDebInfo) : ;;
+                *)
+                    if ! objcopy --strip-debug --add-gnu-debuglink="$DEBUG_DEST" "$BINARY" 2>"$ERR_FILE"; then
+                        warn "could not remove the DWARF from $BINARY ($(cat "$ERR_FILE" 2>/dev/null)); the shipped binary still carries it"
+                    fi
+                    rm -f "$ERR_FILE"
+                    ;;
+            esac
+        fi
     else
         warn "objcopy not found; no split-debug file archived for build id $BUILD_ID (the module copy below still carries its symbol table)"
     fi
     cp -f "$BINARY" "$MODULE_DEST"
+fi
+
+# DID THE ARCHIVED FILE ACTUALLY GET LINE TABLES? Looked at every run, not only
+# when this run split the file: an archive that names functions but places none
+# on a line is the failure that went unnoticed until a crash needed it, and the
+# only way to notice it earlier is for the build to say so. Never fatal, like
+# everything here.
+LINE_TABLES="unchecked"
+if [ -s "$DEBUG_DEST" ] && command -v readelf >/dev/null 2>&1; then
+    if readelf -S -W "$DEBUG_DEST" 2>/dev/null | grep -q '\.debug_line'; then
+        LINE_TABLES="yes"
+    else
+        LINE_TABLES="NO"
+        warn "NO LINE TABLES in $DEBUG_DEST - was $BINARY compiled without -g? A report against build id $BUILD_ID will name functions only."
+    fi
 fi
 
 # THE SYMBOL MAP, beside the split-debug file - the same "beside the archived
@@ -158,5 +226,5 @@ if [ ! -f "$INDEX_PATH" ] || ! grep -qF "	$BUILD_ID	" "$INDEX_PATH"; then
     printf '%s\r\n' "$LINE" >> "$INDEX_PATH"
 fi
 
-echo "archive-symbols-linux: $MODULE $VERSION build $BUILD_ID -> $MODULE_DEST"
+echo "archive-symbols-linux: $MODULE $VERSION build $BUILD_ID -> $MODULE_DEST (line tables: $LINE_TABLES)"
 exit 0

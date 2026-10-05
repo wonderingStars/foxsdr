@@ -215,9 +215,16 @@ bool parseChildOutput(const std::string& text, EnumResult& out) {
 // `crashDir` is handed to the child on its command line when it is non-empty,
 // and is the parent's already-armed capture directory - see CRASH CAPTURE IN
 // THE CHILD in the header.
+//
+// `attemptNo` (0: not told) is handed down as --attempt=N, so the child's own
+// crash report can say which try it was: only the parent knows. The child's
+// process id and start time are left in `out` (childPid, childSpawnedAt) for
+// the question "did that child write a report of its own death".
 void runOneChild(const std::string& helper, unsigned long timeoutMs,
                  const std::string& crashDir, EnumResult& out,
-                 const std::string& extraArg = std::string()) {
+                 const std::string& extraArg = std::string(), int attemptNo = 0) {
+    const std::string attemptArg =
+        attemptNo > 0 ? "--attempt=" + std::to_string(attemptNo) : std::string();
 #ifdef _WIN32
     SECURITY_ATTRIBUTES sa{};
     sa.nLength = sizeof(sa);
@@ -320,6 +327,7 @@ void runOneChild(const std::string& helper, unsigned long timeoutMs,
     // One more flag, quoted the same way: --list-drivers, or --driver=<name>
     // where the name comes from a child of ours and never from a user.
     if (!extraArg.empty()) { cmd += L" \"" + widen(extraArg) + L"\""; }
+    if (!attemptArg.empty()) { cmd += L" \"" + widen(attemptArg) + L"\""; }
     cmd.push_back(L'\0');
 
     // A JOB THE CHILD CANNOT OUTLIVE, and this is not belt-and-braces.
@@ -351,6 +359,8 @@ void runOneChild(const std::string& helper, unsigned long timeoutMs,
     PROCESS_INFORMATION pi{};
     const DWORD flags = CREATE_NO_WINDOW | CREATE_SUSPENDED |
                         (haveAttrs ? EXTENDED_STARTUPINFO_PRESENT : 0ul);
+    // Taken BEFORE the spawn: any report the child writes is stamped after it.
+    const auto spawnedAt = std::chrono::system_clock::now();
     const BOOL ok = ::CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, TRUE, flags,
                                      nullptr, nullptr, &si, &pi);
     // The parent's copy of the WRITE end must go now, whether or not the spawn
@@ -369,6 +379,9 @@ void runOneChild(const std::string& helper, unsigned long timeoutMs,
     if (job != nullptr) { ::AssignProcessToJobObject(job, pi.hProcess); }
     ::ResumeThread(pi.hThread);
     out.attempts += 1;
+    // THE CHILD'S PROCESS ID, which is what its crash report is named with.
+    out.childPid = static_cast<unsigned long>(pi.dwProcessId);
+    out.childSpawnedAt = spawnedAt;
 
     // DRAINED ON ITS OWN THREAD, not after the wait. A pipe holds 64 KiB by
     // default; a child that filled it would block in WriteFile while this
@@ -469,11 +482,14 @@ void runOneChild(const std::string& helper, unsigned long timeoutMs,
     argStorage.push_back("--enumerate-json");
     if (!crashDir.empty()) { argStorage.push_back("--crash-dir=" + crashDir); }
     if (!extraArg.empty()) { argStorage.push_back(extraArg); }
+    if (!attemptArg.empty()) { argStorage.push_back(attemptArg); }
     std::vector<char*> argv;
     argv.reserve(argStorage.size() + 1);
     for (std::string& s : argStorage) { argv.push_back(s.data()); }
     argv.push_back(nullptr);
 
+    // Taken BEFORE the fork: any report the child writes is stamped after it.
+    const auto spawnedAt = std::chrono::system_clock::now();
     const pid_t pid = ::fork();
     if (pid < 0) {
         out.outcome = EnumOutcome::SpawnFailed;
@@ -512,6 +528,10 @@ void runOneChild(const std::string& helper, unsigned long timeoutMs,
     ::close(pipeFds[1]);
     if (nullFd >= 0) { ::close(nullFd); }
     out.attempts += 1;
+    // THE CHILD'S PROCESS ID, which its crash report is named with (the exec
+    // keeps the pid fork() returned).
+    out.childPid = static_cast<unsigned long>(pid);
+    out.childSpawnedAt = spawnedAt;
 
     // DRAINED ON ITS OWN THREAD, not after the wait - see the Windows side
     // for why: a full pipe would otherwise deadlock against a child that is
@@ -759,6 +779,34 @@ std::string joinNames(const std::vector<std::string>& names, std::size_t most) {
     return out;
 }
 
+// ONE REPORT PER CHILD DEATH (2026-10-04) - see the header. The parent files its
+// stackless report of a child's death only when the child's own crash handler
+// did not report it: when `child` wrote a report into `crashDir` - named with
+// its process id, on disk before this process saw it exit - that report has the
+// stack and the module list, says which walk and which attempt it was in its
+// reason line, and carries the probe log that is the "still probing" shortlist,
+// and a second report for the same death would only be a second upload spent on
+// it. Everything the child's handler can never see lands here and is filed
+// exactly as it always was.
+//
+// `crashDir` is the parent's own armed directory, and is empty when diagnostics
+// are off - in which case no child was told one, there is nothing to look for,
+// and reportAbsorbedChildFault below is itself a no-op: off means off.
+//
+// Returns whether the parent filed its own report.
+bool reportChildDeathUnlessChildDid(const std::string& crashDir, const EnumResult& child,
+                                    const std::string& reason, int attempt,
+                                    const std::string& signatureTag) {
+    if (!crashDir.empty() && child.childPid != 0 &&
+        core::crashReportWrittenByProcess(crashDir, child.childPid, child.childSpawnedAt)) {
+        core::diagLogf("soapy: the child's own crash report covers this death - no second "
+                       "report filed");
+        return false;
+    }
+    core::reportAbsorbedChildFault(reason.c_str(), child.exitCode, attempt, signatureTag.c_str());
+    return true;
+}
+
 }  // namespace
 
 std::vector<FaultedDriver> sessionFaultedDrivers() {
@@ -779,6 +827,25 @@ std::string childFaultSignatureTag(const std::string& driver) {
 
 std::string probeMarkerLine(bool begin, const std::string& driver) {
     return std::string(kProbeMarker) + (begin ? "begin " : "end ") + driver + "\n";
+}
+
+std::string enumerateChildReasonSuffix(bool listDrivers, const char* driver, int attempt) {
+    // The name is third-party text in a "name: value" line: reportSafeName's
+    // alphabet, and cut short - see the header for the 200-character budget.
+    constexpr std::size_t kMostNameChars = 16;
+    std::string out = " - enumeration child, ";
+    if (listDrivers) {
+        out += "driver list";
+    } else if (driver != nullptr && *driver != '\0') {
+        std::string name = reportSafeName(driver);
+        if (name.size() > kMostNameChars) { name.resize(kMostNameChars); }
+        out += "driver=" + name;
+    } else {
+        out += "whole bus";
+    }
+    if (attempt > 0) { out += ", attempt " + std::to_string(attempt > 99 ? 99 : attempt); }
+    out += " (contained)";
+    return out;
 }
 
 std::string childFaultLineFrom(const std::string& childStdout) {
@@ -897,7 +964,8 @@ void sweepEachDriver(const std::string& helper, const EnumOptions& options,
     constexpr unsigned long kMinChildMs = 250;
 
     EnumResult listing;
-    runOneChild(helper, options.timeoutMs, crashDir, listing, "--list-drivers");
+    // ATTEMPT 1, like every child of the sweep: each driver gets one child.
+    runOneChild(helper, options.timeoutMs, crashDir, listing, "--list-drivers", 1);
     result.sweepChildren += listing.attempts;
     // A listing child that died after its answer was complete still listed.
     const bool listed = listing.outcome == EnumOutcome::Ok || listing.answeredBeforeDeath;
@@ -993,7 +1061,7 @@ void sweepEachDriver(const std::string& helper, const EnumOptions& options,
         }
         result.sweptDrivers.push_back(driver);
         EnumResult one;
-        runOneChild(helper, childMs, crashDir, one, "--driver=" + driver);
+        runOneChild(helper, childMs, crashDir, one, "--driver=" + driver, 1);
         result.sweepChildren += one.attempts;
         if (restricted && one.outcome == EnumOutcome::ChildTimedOut &&
             childMs == options.timeoutMs) {
@@ -1014,8 +1082,8 @@ void sweepEachDriver(const std::string& helper, const EnumOptions& options,
                     "SDR device enumeration child process for driver=" + reportSafeName(driver) +
                         " died after its answer was complete (contained: the answer was used)",
                     one.childFaultLine);
-                core::reportAbsorbedChildFault(reason.c_str(), one.exitCode, 1,
-                                               childFaultSignatureTag(driver).c_str());
+                reportChildDeathUnlessChildDid(crashDir, one, reason, 1,
+                                               childFaultSignatureTag(driver));
                 core::diagWarnf(
                     "soapy: the '%s' driver's child died with exit 0x%08lX after its answer was "
                     "complete - its answer was used",
@@ -1043,8 +1111,8 @@ void sweepEachDriver(const std::string& helper, const EnumOptions& options,
                 "SDR device enumeration child process died probing driver=" +
                     reportSafeName(driver) + " (contained: every other driver was still probed)",
                 one.childFaultLine);
-            core::reportAbsorbedChildFault(reason.c_str(), one.exitCode, 1,
-                                           childFaultSignatureTag(driver).c_str());
+            reportChildDeathUnlessChildDid(crashDir, one, reason, 1,
+                                           childFaultSignatureTag(driver));
             // Deterministic by now: the driver died with nothing else running
             // in its process. Asking it again on every Refresh only costs a
             // crash each time.
@@ -1173,7 +1241,7 @@ EnumResult enumerateIsolated(const EnumOptions& options) {
             // not erase the death that made it necessary.
             attempt.childDeaths = result.childDeaths;
             attempt.deathExitCode = result.deathExitCode;
-            runOneChild(helper, options.timeoutMs, childCrashDir, attempt, skipArg);
+            runOneChild(helper, options.timeoutMs, childCrashDir, attempt, skipArg, i + 1);
             // ...and neither must it erase which probes that death interrupted.
             if (attempt.outcome == EnumOutcome::Ok || attempt.outcome == EnumOutcome::Malformed) {
                 attempt.inFlightDrivers = result.inFlightDrivers;
@@ -1243,8 +1311,8 @@ EnumResult enumerateIsolated(const EnumOptions& options) {
                             "survived and ") +
                     (answered ? "used its answer)" : "re-probed)") + running,
                 result.childFaultLine);
-            core::reportAbsorbedChildFault(reason.c_str(), result.exitCode, i + 1,
-                                           childFaultSignatureTag(std::string()).c_str());
+            reportChildDeathUnlessChildDid(childCrashDir, result, reason, i + 1,
+                                           childFaultSignatureTag(std::string()));
 
             // THE ANSWER WAS COMPLETE, so it is the answer: no retry, and no
             // sweep - asking every driver again cannot improve on a walk that
@@ -1379,7 +1447,8 @@ LONG WINAPI quietDeath(EXCEPTION_POINTERS* ep) {
 }  // namespace
 #endif
 
-void armEnumerateHelperProcess(const char* crashDir) {
+void armEnumerateHelperProcess(const char* crashDir, const char* reasonSuffix,
+                               const char* unresolvedSignatureTag) {
 #ifdef _WIN32
     // FIRST, and unconditionally: whichever way this process dies, it must do
     // it without a Windows Error Reporting round trip. A helper is expected to
@@ -1426,6 +1495,16 @@ void armEnumerateHelperProcess(const char* crashDir) {
         // died of even when the child's own report never gets written. See
         // EnumResult::childFaultLine.
         cfg.faultLineToStdout = true;
+        // WHICH CHILD THIS IS, on the end of its report's reason line - the
+        // driver, the attempt, that the application survived. The parent files
+        // no report of a death this child's own report covers, so these facts
+        // are said here (see "ONE REPORT PER CHILD DEATH" in the header).
+        if (reasonSuffix != nullptr) { cfg.reasonSuffix = reasonSuffix; }
+        // ...AND WHAT A FAULT IN NO MODULE HASHES, so the drivers' unresolved
+        // faults stay apart as the parent's own per-driver reports kept them.
+        if (unresolvedSignatureTag != nullptr) {
+            cfg.unresolvedSignatureTag = unresolvedSignatureTag;
+        }
         core::installCrashHandlers(cfg);
         return;
     }
@@ -1484,8 +1563,20 @@ std::string enumerationReportJson(bool runtimeAvailable,
 }
 
 int runEnumerateHelper(const char* crashDir, const char* driver, bool listDrivers,
-                       const char* skip) {
-    armEnumerateHelperProcess(crashDir);
+                       const char* skip, int attempt) {
+    // WHICH CHILD THIS IS, rendered NOW, on the healthy path, and handed to the
+    // handler to say on the end of its report's reason line: the parent files
+    // no report of a death this child's own report covers, so the facts only
+    // the parent's reports used to carry - which driver, which attempt, that
+    // the application survived - are in this one.
+    const std::string reasonSuffix = enumerateChildReasonSuffix(listDrivers, driver, attempt);
+    // The grouping tag for a fault in no module: the same one the parent's own
+    // report of this death would have hashed (childFaultSignatureTag), and a
+    // tag of its own for the driver listing, which the parent never reported.
+    const std::string signatureTag =
+        listDrivers ? std::string("enumerate-child:driver-list")
+                    : childFaultSignatureTag(driver != nullptr ? driver : "");
+    armEnumerateHelperProcess(crashDir, reasonSuffix.c_str(), signatureTag.c_str());
     const bool captureArmed = !core::activeCrashDir().empty();
 #ifdef _WIN32
     // Binary stdout: the one line below must reach the parent byte for byte,
@@ -1554,6 +1645,17 @@ int runEnumerateHelper(const char* crashDir, const char* driver, bool listDriver
         std::lock_guard<std::mutex> lk(logMutex);
         std::fwrite(line.data(), 1, line.size(), stdout);
         std::fflush(stdout);
+        // ...AND INTO THIS PROCESS'S OWN LOG RING (2026-10-04), which is what
+        // this child's crash report carries. The parent no longer files a
+        // report of a death that this child's report covers, and the
+        // parent's was where "still probing when it died" lived: with the
+        // ring holding the same begin/end lines, a probe that began and never
+        // ended is that shortlist, read off the uploaded log. The name goes
+        // through reportSafeName because it is third-party text. Healthy
+        // path: this runs on a probe thread before and after its find
+        // function, never from the fault handler.
+        const std::string ringLine = probeMarkerLine(begin, reportSafeName(name));
+        core::diagLogf("%.*s", static_cast<int>(ringLine.size() - 1), ringLine.c_str());
     };
     const std::vector<SoapyDeviceInfo> devices =
         listDrivers  ? std::vector<SoapyDeviceInfo>()

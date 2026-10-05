@@ -453,6 +453,17 @@ const KnownWait kKnownWaits[] = {
      "spent only inside the enumeration CHILD process (endEnumerateHelperProcess), unloading "
      "the SDRplay module so its sdrplay_api_Close runs before the child ends; the application "
      "never calls it and its shutdown never waits on a child"},
+    // THE ONE-REPORT-PER-DEATH LOOKUP (2026-10-04). crashReportWrittenByProcess
+    // is asked by the parent after an enumeration child has already exited, and
+    // its 2000 ms is not a wait of any kind: it is the tolerance added to a file's
+    // last-write time before comparing it with the spawn time, for file systems
+    // with coarse timestamps (FAT keeps two seconds). Nothing sleeps or blocks on
+    // it, and a shutdown neither enumerates nor waits on a child.
+    {"src/core/crash_handler.cpp", "kSlack", 0,
+     "not a wait at all - the timestamp tolerance (FAT's two seconds) that "
+     "crashReportWrittenByProcess adds to a report's last-write time before comparing it with "
+     "the spawn time; nothing sleeps or blocks on it, and it runs after an enumeration child "
+     "has already exited"},
     {"src/source/soapy_source.hpp", "kStreamHealthWindow", 0,
      "not a wait at all - the length of the window the read loop tallies before it writes "
      "its stream-health line; nothing ever sleeps or blocks on it"},

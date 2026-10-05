@@ -65,6 +65,7 @@
 #ifndef CASCADE_CORE_CRASH_HANDLER_HPP
 #define CASCADE_CORE_CRASH_HANDLER_HPP
 
+#include <chrono>
 #include <string>
 
 namespace cascade::core {
@@ -111,11 +112,60 @@ struct CrashHandlerConfig {
     // see kFaultLinePrefix below. Field report F204602B5329B268: a child died
     // with 0xE0000002 and the parent could say nothing about what it died of.
     bool faultLineToStdout = false;
+
+    // WHAT THIS PROCESS IS, said on the end of the `reason:` line of every
+    // report it writes (2026-10-04). Rendered by the caller on the healthy
+    // path and copied here into fixed storage - the fault path only copies
+    // those bytes out, it formats nothing. Empty (the default) adds nothing.
+    //
+    // It exists for the enumeration child (source/soapy_enum_proc.cpp): its own
+    // report is the one with the stack, and the parent no longer files a second
+    // report for the same death, so the facts only the parent's report used to
+    // carry - which driver the child was asked about, which attempt it was,
+    // that the application survived it - have to be in the child's. The
+    // `reason` line is the one field already uploaded verbatim, so nothing new
+    // leaves the machine. Printable ASCII only, and at most 127 characters:
+    // anything else is replaced with '?' or cut, because a report is
+    // "name: value" lines and the text may come from a third party's driver
+    // name.
+    std::string reasonSuffix;
+
+    // WHAT THE SIGNATURE HASHES IN PLACE OF A MODULE NAME when the faulting
+    // address belongs to no module at all (2026-10-04): private memory, a
+    // jump through a freed pointer. Empty (the default) keeps the "?" every
+    // such fault has always hashed, which is one group per exception code - so
+    // two different drivers faulting that way on one machine were one
+    // signature, and one upload a day.
+    //
+    // It exists for the enumeration child, for the reason reasonSuffix does:
+    // the parent used to file a report per death under a tag of its own
+    // ("enumerate-child:driver=uhd", source::childFaultSignatureTag), which
+    // kept such faults apart per driver and is no longer filed when the child's
+    // report covers the death. A fault that DOES resolve to a module is
+    // unaffected: it groups by that module and offset, so one fault is one
+    // signature whichever walk met it, and two drivers' faults - in two modules
+    // - are two. Same limits as reasonSuffix.
+    std::string unresolvedSignatureTag;
 };
 
 // The prefix of every line faultLineToStdout writes. Shared with the parent
 // that reads them, so the writer and the reader cannot drift apart.
 constexpr const char* kFaultLinePrefix = "cascade-fault: ";
+
+// THE START OF THE `reason:` LINE OF AN ABSORBED VENDOR FAULT, which
+// source/vendor_guard.cpp files from its __except filter and then carries on
+// from. Shared so that crashReportWrittenByProcess below can tell such a report
+// from the report of a DEATH, and so that vendor_guard.cpp can static_assert its
+// own wording still starts with it.
+constexpr const char* kAbsorbedFaultReasonPrefix = "fault in a third-party SDR module, absorbed";
+
+// Compile-time prefix test, for the static_assert above's one user.
+constexpr bool reasonStartsWith(const char* reason, const char* prefix) noexcept {
+    for (; *prefix != '\0'; ++prefix, ++reason) {
+        if (*reason != *prefix) { return false; }
+    }
+    return true;
+}
 
 // Install as early in main() as possible - before anything that could fault
 // has had a chance to. Idempotent; a second call replaces the configuration.
@@ -144,6 +194,41 @@ std::string lastCrashReportPath();
 // string on the child's command line, and passes nothing when it is empty, so
 // the child's capture is exactly the parent's consent and never more.
 std::string activeCrashDir();
+
+// DID THE CRASH HANDLER OF PROCESS `pid` WRITE A REPORT OF ITS OWN DEATH INTO
+// `crashDir`? (2026-10-04.) HEALTHY PATH ONLY: it lists a directory and reads
+// files, none of which a fault path may do.
+//
+// WHY. A child that dies leaves up to three reports for one death - its own,
+// written by the handler it armed (it has the stack and the module list), and
+// the parent's stackless report of the same death. The parent now files its own
+// only when the child left none, and this is how it knows. It is the PARENT
+// asking about a CHILD that has already exited: the report is named with the
+// child's process id (buildReportPath), and is on disk before the parent
+// observes the exit, because the handler writes it and only then terminates.
+//
+// A report counts only if ALL of these hold, each of them a way the answer
+// would otherwise be wrong:
+//
+//   - the file name carries `pid` as its process-id field - the second-to-last
+//     "-"-separated field before ".txt", which is where both writers put it
+//     ("crash-<stamp>-<pid>-<seq>.txt", the stamp being a calendar time on
+//     Windows and epoch seconds on Linux). Matched whole, so 4242 is not 14242;
+//   - it was last written no earlier than `notBefore` (less two seconds of file
+//     system slack): process ids are reused, and a crash directory is where
+//     reports accumulate for weeks, so an old report of an unrelated process
+//     that happened to hold this number must not suppress a death's only record;
+//   - its header is a whole crash report: `kind: crash` and a 16-digit
+//     `signature:`, which is what the uploader needs to send it at all. A file
+//     the handler created and never wrote to (the process was killed between
+//     the two) is not a report and must not stand in for one;
+//   - its `reason:` is not an ABSORBED vendor fault (kAbsorbedFaultReasonPrefix):
+//     a child that absorbed a fault and carried on writes a report with its own
+//     process id too, and if it then dies by a route the handler never sees
+//     (a heap corruption, a vendor TerminateProcess) that earlier file is not
+//     the report of the death.
+bool crashReportWrittenByProcess(const std::string& crashDir, unsigned long pid,
+                                 std::chrono::system_clock::time_point notBefore);
 
 // A fault that was ABSORBED rather than fatal, filed so that it is still
 // visible to the report reader and the uploader.
@@ -180,7 +265,9 @@ void reportAbsorbedFault(const char* reason, unsigned long code, const void* fau
 // WHY IT EXISTS. `cascade --enumerate-json` is expected to die occasionally by
 // design (the contained libusb fault under an old UHD), and
 // source/soapy_enum_proc.cpp files a report at every death so the containment
-// does not make the fault invisible. It filed it through reportAbsorbedFault
+// does not make the fault invisible - since 2026-10-04, at every death the
+// child's own crash handler did not already report (crashReportWrittenByProcess
+// above), so that one death is one report. It filed it through reportAbsorbedFault
 // with no exception pointers, which walked the CURRENT thread's stack - the
 // std::async worker of the device scan, the one caller that arrives here with a
 // nearly spent stack. Twice: B9D41A8D on 0.64.0, which the __try in

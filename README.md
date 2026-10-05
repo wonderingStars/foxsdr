@@ -1194,6 +1194,18 @@ CI builds and smoke-tests this AppImage (`--version`, then `--frames 60` under
 Xvfb) on every push and publishes it as a separate build artifact alongside
 the tarball.
 
+**Debug information.** A Release build on Linux compiles with `-g` so that a
+crash report can be placed on a source line, not just a function. After the
+link, `tools/archive-symbols-linux.sh` writes the DWARF (compressed) to
+`symbols/cascade.debug/<build id>/cascade.debug` and strips it from
+`build/cascade`, so the tarball and the AppImage carry none; CI uploads that
+`symbols/` directory as a `foxsdr-linux-*-symbols` artifact. A `Debug` or
+`RelWithDebInfo` build keeps its DWARF in the binary, which is the one to use
+under a debugger. To put an offset from a report on a line, run
+`addr2line -f -C -e symbols/cascade.debug/<build id>/cascade.debug 0x<offset>`;
+`docs/DIAGNOSTICS.md` ("Linux symbols") has the rest, including frames in
+system libraries.
+
 **Plugins: one catalogue, both platforms.** The catalogue lists every build of
 a plugin and each installation picks the one matching its own os and
 architecture, so a Windows and a Linux machine read the identical file and
@@ -1989,8 +2001,10 @@ FoxSDR reports anonymous usage counts. **Usage reporting**, in the **SYSTEM**
 group of the rail, is
 **on by default** — untick it and reporting stops. It sends counts only:
 version, operating system, session length, which modes and plugins get used,
-and which radio model, against a random identifier created on your machine.
-Switching it off deletes that identifier.
+which radio model, and how many times the window froze because the display
+driver was waiting (a bare number, nothing about the freeze itself), against a
+random identifier created on your machine. Switching it off deletes that
+identifier.
 
 **It never sends frequencies, anything decoded, your location, or your IP
 address**, and hardware serial numbers are stripped before the radio model is
@@ -2080,7 +2094,9 @@ holds the request, the code and that document to each other in both directions.
   either is excused for at most 30 seconds since 0.99.61, so a frame loop that
   genuinely stops there is still reported; a minimised window whose loop keeps
   turning never is); and if a stall gets past both, the report is marked `stall` rather than `hang`, kept on
-  the machine, and never counted among faults in FoxSDR. What it is **not** is
+  the machine, and never counted among faults in FoxSDR (since 0.99.62 only
+  how many there were goes into the anonymous usage report, and only while both
+  usage reporting and Diagnostics are on). What it is **not** is
   "ignore anything that looks like presenting": a report from 0.96.2 had the
   same call on top and was a dead radio service, which is a real fault and is
   still reported.
@@ -2125,6 +2141,38 @@ holds the request, the code and that document to each other in both directions.
   made after the plugins have stopped. A fault in the very last step of closing,
   the graphics teardown, is still not counted as unclean; the watchdog, stopped
   last, is what covers that.
+- **A freeze is grouped by FoxSDR's own code** (0.99.62). A frozen window is
+  nearly always parked in the same few Windows wait routines whatever it is
+  waiting for, and a freeze report's grouping signature was taken from that
+  wait, so freezes from different causes shared one signature. The upload sends
+  one report per signature per day, so the second kind of freeze in a day was
+  set aside on the machine and never arrived. The signature is now taken from the
+  first frame of FoxSDR's own code on the frozen thread. What a report contains,
+  and what is sent, does not change, and a freeze report written by an earlier
+  version keeps the signature it was written with. Checked in FoxSDR's tests with
+  a real watchdog and real blocked threads; no freeze of this kind was
+  reproduced on a real session, and the Linux path was not compiled.
+- **One failure of the radio search is one report** (0.99.62). When the separate
+  process that looks for radios died, one death could file up to three reports -
+  the process's own, and two from FoxSDR about the same death - and so use three
+  of the five uploads a machine may send in a day, for a fault the application
+  survived. The process's own report is now the one whenever it wrote one, and it
+  says on its `reason` line which search it was, which try it was and that
+  FoxSDR survived; no field is added to what is sent. FoxSDR files its own report
+  only for a death that process could not report itself (a heap corruption, a
+  driver ending the process itself, a death before the process had set up its own
+  report). Checked on Windows against the real program and test drivers that are
+  made to fail; the Linux path was not compiled.
+- **A report describes the radio that was in use** (0.99.62). The receiver's
+  state in a report or a diagnostics bundle - source, sample rate, mode, radio
+  model, loaded plugins - was refreshed once a second, so a fault in the first
+  second after a radio was opened described the radio before it. It is now
+  refreshed on every frame and at the moment any of those changes. A new
+  `patch-radios` line lists the radios the patch page is running by driver kind
+  only (`rtlsdr`, `soapy`, ...), never a name, a serial number or an address; it
+  is in the report file on your machine and in the bundle, and it is not part of
+  the report that is sent automatically. Whether this clears the field faults
+  that prompted it is untested.
 - A rotating log lives in `%LOCALAPPDATA%\FoxSDR\logs\foxsdr.log`. Since
   0.89.0 it records what the **radio driver** says as well as what FoxSDR
   does: SoapySDR's own log is bridged in (lines beginning `soapy:`), and in a
@@ -2158,8 +2206,10 @@ holds the request, the code and that document to each other in both directions.
   system, loaded plugins with versions, source and device state, the sound
   output's state, the volume, whether the sound is muted and by what, the squelch
   threshold and whether it is open (since 0.99.61 - never the sound card's name
-  or a frequency), and the recent log on your clipboard, so you can read it
-  before you send it to anybody. Off
+  or a frequency), the recent log, and - since 0.99.62 - the end of the
+  previous session's log and one line per crash or freeze report on the
+  machine (what it was, when, and what became of sending it), on your clipboard,
+  so you can read it before you send it to anybody. Off
   means off — no directory, no file, and off from the first instruction the
   application runs rather than from its first frame: the switch is read before
   anything is armed or created.

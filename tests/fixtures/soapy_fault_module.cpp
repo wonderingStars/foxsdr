@@ -19,6 +19,14 @@
 //   find  an access violation inside the find function, on the probe thread
 //         SoapySDR's walk runs it on - the shape of the libusb fault - so the
 //         child's own crash report can be checked for what it names.
+//   thread  an access violation on a thread the find function SPAWNS FOR
+//         ITSELF and then waits for - the shape of the libusb fault, which is
+//         raised on a thread UHD creates, and the one stage whose fault the
+//         vendor guard cannot absorb. "find" faults on the thread SoapySDR
+//         runs the function on, which a single-driver walk makes the CALLING
+//         thread, so that walk absorbs it (exit 0, no devices) and only the
+//         whole-bus walk dies. This one kills the child in both, which is what
+//         a test of the per-driver sweep needs: a driver whose own child dies.
 //   late  an access violation in a DLL the find function maps itself
 //         (FOXSDR_TEST_SOAPY_LATE_DLL, tests/fixtures/late_fault_dll.cpp) -
 //         the shape of the 2026-10-01 ASIO driver, which RtAudio maps in the
@@ -50,6 +58,7 @@
 #include <cstring>
 #include <stdexcept>
 #include <string>
+#include <thread>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -67,7 +76,7 @@
 
 namespace {
 
-enum class Stage { None, Exit, Find, Late };
+enum class Stage { None, Exit, Find, Thread, Late };
 
 Stage stageFromEnvironment() {
 #if FIXTURE_STAGES
@@ -75,6 +84,7 @@ Stage stageFromEnvironment() {
     if (v == nullptr) { return Stage::None; }
     if (std::strcmp(v, "exit") == 0) { return Stage::Exit; }
     if (std::strcmp(v, "find") == 0) { return Stage::Find; }
+    if (std::strcmp(v, "thread") == 0) { return Stage::Thread; }
     if (std::strcmp(v, "late") == 0) { return Stage::Late; }
 #endif
     return Stage::None;
@@ -131,8 +141,17 @@ void callIntoLateDll() {
 #endif
 }
 
+// THE FAULT ON A THREAD OF ITS OWN (stage "thread"): created by the find
+// function and waited for, so the faulting thread's stack holds nothing of the
+// caller's - and so no __try around the call into this module can see it.
+void accessViolationOnAnotherThread() {
+    std::thread t([] { accessViolation(); });
+    t.join();
+}
+
 SoapySDR::KwargsList findFixture(const SoapySDR::Kwargs&) {
     if (g_stage == Stage::Find) { accessViolation(); }
+    if (g_stage == Stage::Thread) { accessViolationOnAnotherThread(); }
     if (g_stage == Stage::Late) { callIntoLateDll(); }
     (void)apiSession();
     SoapySDR::Kwargs k;

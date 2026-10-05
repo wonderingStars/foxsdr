@@ -658,6 +658,19 @@ std::string joinList(const std::vector<std::string>& v) {
     return out.empty() ? std::string("(none)") : out;
 }
 
+// What follows a resolved function name: its file and line, or - when the
+// archived symbols name the function but carry no source line for the offset -
+// that fact, in words. A symbol-table-only archive (a Linux build compiled
+// without -g, which is what every archived cascade.debug was until the build
+// changed) used to print exactly as a complete answer would, just shorter, so
+// nothing on the page said a line had been unavailable rather than overlooked.
+std::string locationSuffix(const SymbolResult& s) {
+    if (s.file.empty()) { return "  (function only: no source line in the archived symbols)"; }
+    std::string out = "  " + s.file;
+    if (s.line > 0) { out += ":" + std::to_string(s.line); }
+    return out;
+}
+
 // A frame, for a human.
 //
 // NOTE WHAT IS NOT HERE: the raw offset. An offset without the matching PDB is
@@ -671,11 +684,7 @@ std::string frameLine(const SymbolisedFrame& f) {
     if (f.symbol.resolved) {
         out += "!";
         out += f.symbol.function;
-        if (!f.symbol.file.empty()) {
-            out += "  ";
-            out += f.symbol.file;
-            if (f.symbol.line > 0) { out += ":" + std::to_string(f.symbol.line); }
-        }
+        out += locationSuffix(f.symbol);
     } else {
         out += "  -- ";
         out += f.symbol.note;
@@ -715,10 +724,7 @@ std::string renderGroupsText(const std::vector<ReportGroup>& groups, int totalRe
         out += g.module.empty() ? std::string("(unknown module)") : g.module;
         if (g.symbol.resolved) {
             out += "!" + g.symbol.function;
-            if (!g.symbol.file.empty()) {
-                out += "  " + g.symbol.file;
-                if (g.symbol.line > 0) { out += ":" + std::to_string(g.symbol.line); }
-            }
+            out += locationSuffix(g.symbol);
             out += "\n";
         } else {
             out += "\n                NOT SYMBOLISED: " + g.symbol.note + "\n";

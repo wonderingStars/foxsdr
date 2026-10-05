@@ -48,7 +48,10 @@
 
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <map>
+#include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -74,6 +77,15 @@ struct TelemetryReport {
     std::string arch;       // "x64"
     std::uint64_t launches = 0;
     std::uint64_t crashes = 0;
+    // DISPLAY STALLS: how many times the hang watchdog classified a freeze as
+    // `kind: stall` (the display driver, not this application - see
+    // HangWatchdog::isDisplayPresentationStall) and the record has not yet
+    // been accepted by the server. A bare count: no stack, no module, no
+    // driver name, no time of day. Those reports never leave the machine, so
+    // without this number nobody can tell a user whose window freezes every
+    // few minutes from one whose never has. See StallLedger below for where
+    // the running count lives and why it survives a session killed mid-freeze.
+    std::uint64_t stalls = 0;
     // WHERE THIS COPY CAME FROM and WHEN it first reported (0.99.47). The
     // channel is read from the running copy (installChannel()); the first-run
     // date and version are written once, when the install id is created, and
@@ -172,8 +184,22 @@ constexpr char kHomepageUrl[] = "https://foxsdr.com";
 // Every failure is silent. A usage counter that interrupted somebody's
 // listening to complain it could not reach a server would be worse than
 // having no usage counter.
+//
+// WHETHER THE SERVER TOOK IT. The transport reads the HTTP STATUS and nothing
+// else from the answer - never the body - and `done` is told whether it was a
+// 2xx. That is all a local counter needs to know to decide whether to keep
+// itself (see StallLedger): the server still cannot instruct this client to do
+// anything, only be heard or not. `done` runs on the sender thread, once, and
+// is NOT called at all when nothing was sent (empty url or body, or a send
+// already running) - "not sent" and "sent and refused" are both "not accepted"
+// to a counter that only subtracts on an acceptance.
 class TelemetryReporter {
 public:
+    // True when the server accepted the record (an HTTP 2xx).
+    using SendDone = std::function<void(bool accepted)>;
+    // One POST. True only for an accepted answer; every failure is false.
+    using Transport = std::function<bool(const std::string& url, const std::string& json)>;
+
     TelemetryReporter() = default;
     ~TelemetryReporter();
 
@@ -181,13 +207,148 @@ public:
     TelemetryReporter& operator=(const TelemetryReporter&) = delete;
 
     // No-op when `url` or `json` is empty, or when a send is already running.
-    void send(const std::string& url, const std::string& json);
+    void send(const std::string& url, const std::string& json, SendDone done = SendDone());
+
+    // The same send over a transport the CALLER supplies. send() is exactly
+    // this with the real one; it exists so the "accepted" and "refused" halves
+    // can be driven from a test without a TLS server on every platform.
+    void sendVia(Transport transport, const std::string& url, const std::string& json,
+                 SendDone done = SendDone());
 
     bool busy() const;
 
 private:
     std::thread thread_;
 };
+
+// An HTTP answer this client counts as "the server took the record": 2xx.
+bool httpStatusAccepted(int status);
+
+// DISPLAY STALLS - the one number a stall report cannot give by itself.
+//
+// WHY A NUMBER AT ALL. A freeze report whose `kind` is `stall` (the display
+// driver was waiting, not this application) is deliberately kept on the user's
+// machine: a display driver's behaviour is not this product's fault to file.
+// That is the right privacy and noise decision, and it means nobody can see
+// HOW OFTEN it happens - a user reporting "the window freezes" may be hitting
+// one every few minutes, and from outside that is indistinguishable from
+// never. So the count, and only the count, rides in the usage record
+// (TelemetryReport::stalls).
+//
+// WHERE THE RUNNING COUNT LIVES, AND WHY. The path a stall is most likely on is
+// the user ending a frozen window from the taskbar, which is TerminateProcess:
+// nothing runs, the GUI thread never saves the config again, and anything held
+// only in memory or only in config.json is gone. The GUI thread is also the
+// one thread that must never touch the disk during a freeze. So the count is
+// written by the WATCHDOG's own thread, the instant the freeze is classified,
+// to a tiny file beside config.json (`telemetry-stalls`): the install id it
+// belongs to, a space, and the number. Nothing on the GUI thread's frame path
+// reads or writes it - the frame loop only reads an atomic.
+//
+// WHEN IT IS SENT, AND WHEN IT RESETS. The record for a session is sent at the
+// NEXT start (see the file header), so at that start the pending record is sent
+// with `stalls` set to whatever the ledger holds, and the ledger is reduced by
+// exactly that many ONLY WHEN THE SERVER ACCEPTED THE RECORD. A send that fails
+// (no network, a refusal, a record that was never sent) leaves the count where
+// it is and it rides the next record; a stall that happens after the record was
+// built is not lost to the subtraction. The one way to count a stall twice is a
+// record the server accepted whose acceptance this process never saw because it
+// was ended in the seconds after launch - rare, and the safe direction for a
+// number whose job is to say "this happens".
+//
+// OFF MEANS OFF. A disarmed ledger counts nothing, keeps nothing and reports
+// zero; arming needs a real install id, which an opted-out run does not have;
+// and the file is removed when reporting is switched off. The id inside the
+// file means a copy left behind by an earlier identity is ignored rather than
+// attributed to a new one.
+//
+// Thread safety: note() and settle() run on the watchdog and sender threads;
+// arm(), disarm() and count() on the GUI thread. count() is one atomic read.
+// The GUI thread takes a lock only to swap a pointer - never one held across
+// file I/O.
+class StallLedger {
+public:
+    // Far past anything a day of constant stalls produces (the watchdog files
+    // one per stall and a stall takes at least five seconds); the Worker
+    // clamps to the same number.
+    static constexpr std::uint64_t kMaxCount = 100000;
+    static constexpr char kFileName[] = "telemetry-stalls";
+
+    StallLedger() = default;
+    StallLedger(const StallLedger&) = delete;
+    StallLedger& operator=(const StallLedger&) = delete;
+
+    // Starts counting for `installId`, keeping the number in the file `path`
+    // (UTF-8; empty keeps it in memory only, which is what a run with no
+    // config directory gets). `loadExisting` reads a previous session's number
+    // back - start-up only, never from the frame loop. An id that is not a
+    // real install id disarms instead: with no identity there is nobody to
+    // count for.
+    void arm(const std::string& path, const std::string& installId, bool loadExisting);
+
+    // Stops, forgets the number and removes the file. The removal runs on a
+    // thread of its own so the Settings switch never waits on a disk.
+    void disarm();
+
+    bool armed() const { return armed_.load(std::memory_order_acquire); }
+
+    // One more display stall. Called from the watchdog's thread. No-op when
+    // disarmed.
+    void note();
+
+    // Stalls recorded and not yet accepted by the server. Zero when disarmed.
+    std::uint64_t count() const;
+
+    // A record that carried `carried` stalls was accepted: forget that many.
+    void settle(std::uint64_t carried);
+
+    // "<install id> <count>\n" - exposed for the test, which has to read it.
+    static std::string fileText(const std::string& installId, std::uint64_t count);
+    // The number in `text` when it belongs to `installId`, else false.
+    static bool parseFileText(const std::string& text, const std::string& installId,
+                              std::uint64_t& count);
+    // The ledger's file inside the directory config.json lives in.
+    static std::string pathIn(const std::string& configDir);
+    // Removes `path`, ignoring every error.
+    static void removeFile(const std::string& path);
+
+private:
+    struct Target {
+        std::string path;
+        std::string installId;
+    };
+    void persist();
+
+    std::atomic<bool> armed_{false};
+    std::atomic<std::uint64_t> count_{0};
+    std::mutex targetMutex_;  // guards target_ ONLY; never held across I/O
+    std::shared_ptr<const Target> target_;
+    std::mutex ioMutex_;      // serialises the two threads that write the file
+};
+
+// What a send does with the ledger when it finishes: subtract `carried` if,
+// and only if, the record was accepted.
+TelemetryReporter::SendDone settleOnAccept(std::shared_ptr<StallLedger> ledger,
+                                           std::uint64_t carried);
+
+// `recordJson` with its `stalls` member set to `stalls`. The stored session
+// record is journalled while the session runs, so its own number is only as
+// fresh as the last save; the number actually sent is the ledger's at the
+// moment of sending. A record that is not a JSON object is returned unchanged.
+std::string withStalls(const std::string& recordJson, std::uint64_t stalls);
+
+// START-UP'S DECISION about the previous session's pending record, in one place
+// a test can reach. True when `outJson` is to be sent: the record with the
+// ledger's count as of THIS moment (not the figure the last save journalled -
+// the ledger holds a stall that no save ever saw), and `outCarried` the number
+// to subtract if the server accepts it (pass both to settleOnAccept). False
+// when nothing is to be sent: no pending record, or this exact stored record
+// was already claimed by a launch (see claimReportSend, which this calls on the
+// record AS STORED so the count changing cannot make a duplicate). An empty
+// `configDir` has nowhere to claim and fails open, as claimReportSend does.
+bool prepareStartupRecord(const std::string& configDir, const std::string& pendingJson,
+                          const StallLedger& ledger, std::string& outJson,
+                          std::uint64_t& outCarried);
 
 // How this copy was installed, read from the running program - nothing is
 // written at install time. Windows: "store" when running as a Microsoft Store

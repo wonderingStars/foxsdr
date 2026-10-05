@@ -49,6 +49,7 @@
 #include "source/soapy_enum_proc.hpp"
 
 #include "core/crash_handler.hpp"
+#include "core/crash_upload.hpp"
 #include "core/diag_log.hpp"
 #include "core/diag_report.hpp"
 #include "core/telemetry.hpp"
@@ -200,6 +201,16 @@ std::string skipArg(int argc, char** argv) {
         if (std::strncmp(argv[i], flag, n) == 0) { return std::string(argv[i] + n); }
     }
     return std::string();
+}
+
+// The --attempt=N this child was told (0 when it was not told).
+int attemptArg(int argc, char** argv) {
+    const char* flag = "--attempt=";
+    const std::size_t n = std::strlen(flag);
+    for (int i = 1; i < argc; ++i) {
+        if (std::strncmp(argv[i], flag, n) == 0) { return std::atoi(argv[i] + n); }
+    }
+    return 0;
 }
 
 bool listNames(const std::string& csv, const std::string& name) {
@@ -526,10 +537,34 @@ int fakeHelper(int argc, char** argv) {
                 crashDir = argv[i] + std::strlen(flag);
             }
         }
-        cascade::source::armEnumerateHelperProcess(crashDir.c_str());
+        // The production tail of the reason line, from the arguments this
+        // child was really given (--driver, --attempt) - the wiring from the
+        // parent's command line to the child's report is what is under test.
+        const std::string suffix = cascade::source::enumerateChildReasonSuffix(
+            false, driver.c_str(), attemptArg(argc, argv));
+        cascade::source::armEnumerateHelperProcess(crashDir.c_str(), suffix.c_str());
         probeLine(true, driver.empty() ? "uhd" : driver.c_str());
         cascade::core::raiseTestFault(cascade::core::TestFaultKind::AccessViolation);
         return 0;  // unreachable
+    }
+    if (mode == "fieldlineuhd") {
+        // "armeduhd" WITHOUT THE HANDLER: the field's own line, verbatim, on
+        // the pipe, and then a death that leaves no report of its own - so the
+        // parent's per-driver report is the only one, and carries the line.
+        if (askedToListDrivers(argc, argv)) {
+            std::printf("{\"schema\":1,\"runtime\":true,\"guardedCalls\":1,\"capture\":%s,"
+                        "\"drivers\":[\"uhd\"],\"devices\":[]}\n",
+                        gotCrashDir ? "true" : "false");
+            return 0;
+        }
+        const std::string line = std::string(cascade::core::kFaultLinePrefix) +
+                                 "access violation 0xC0000005 at libusb-1.0.dll+0x10490\n";
+        std::fwrite(line.data(), 1, line.size(), stdout);
+        std::fflush(stdout);
+#ifdef _WIN32
+        ::TerminateProcess(::GetCurrentProcess(), 0xC0000005u);
+#endif
+        std::_Exit(139);
     }
     if (mode == "armedwholebus" || mode == "fieldline") {
         // THE WHOLE-BUS DEATH'S REASON, AT FULL LENGTH (review of 5e7b968).
@@ -564,9 +599,76 @@ int fakeHelper(int argc, char** argv) {
                 crashDir = argv[i] + std::strlen(flag);
             }
         }
-        cascade::source::armEnumerateHelperProcess(crashDir.c_str());
+        const std::string suffix = cascade::source::enumerateChildReasonSuffix(
+            false, nullptr, attemptArg(argc, argv));
+        cascade::source::armEnumerateHelperProcess(crashDir.c_str(), suffix.c_str());
         cascade::core::raiseTestFault(cascade::core::TestFaultKind::AccessViolation);
         return 0;  // unreachable
+    }
+#ifdef _WIN32
+    if (mode == "unresolved") {
+        // TWO DRIVERS THAT FAULT IN NO MODULE AT ALL (2026-10-04): the listing
+        // has "adrv" and "bdrv", and every walk - the whole bus and each driver
+        // alone - arms the production handler (the production tail and tag, from
+        // the arguments it was really given) and executes a page of private
+        // memory with UD2 in it, so the faulting address resolves to nothing.
+        // Such faults used to share one signature whatever driver they were in.
+        const std::string driver = driverArg(argc, argv);
+        if (askedToListDrivers(argc, argv)) {
+            std::printf("{\"schema\":1,\"runtime\":true,\"guardedCalls\":1,\"capture\":%s,"
+                        "\"drivers\":[\"adrv\",\"bdrv\"],\"devices\":[]}\n",
+                        gotCrashDir ? "true" : "false");
+            return 0;
+        }
+        std::string crashDir;
+        for (int i = 1; i < argc; ++i) {
+            const char* flag = "--crash-dir=";
+            if (std::strncmp(argv[i], flag, std::strlen(flag)) == 0) {
+                crashDir = argv[i] + std::strlen(flag);
+            }
+        }
+        const std::string suffix = cascade::source::enumerateChildReasonSuffix(
+            false, driver.c_str(), attemptArg(argc, argv));
+        const std::string tag = cascade::source::childFaultSignatureTag(driver);
+        cascade::source::armEnumerateHelperProcess(crashDir.c_str(), suffix.c_str(), tag.c_str());
+        void* page = ::VirtualAlloc(nullptr, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+        if (page == nullptr) { return 10; }
+        const unsigned char ud2[] = {0x0F, 0x0B};
+        std::memcpy(page, ud2, sizeof(ud2));
+        using Code = void (*)();
+        reinterpret_cast<Code>(page)();
+        return 7;  // never reached
+    }
+#endif
+    if (mode == "armedterminate" || mode == "armedabsorbed") {
+        // A CHILD WITH THE PRODUCTION HANDLER ARMED THAT DIES WITHOUT IT EVER
+        // RUNNING (2026-10-04, one report per death): a heap corruption, a
+        // vendor TerminateProcess - the deaths no user-mode filter sees, so the
+        // child leaves NO report of its own for them and the parent's stackless
+        // one is the only record there will ever be.
+        //   armedterminate  armed, then dies unseen;
+        //   armedabsorbed   armed, files an ABSORBED vendor fault first (a
+        //                   report the child's own guard wrote and then
+        //                   carried on from), and only then dies unseen. That
+        //                   file carries this child's process id too, and must
+        //                   not be mistaken for the report of the death.
+        // The listing fails (exit 5), so no sweep follows.
+        if (askedToListDrivers(argc, argv)) { return 5; }
+        std::string crashDir;
+        for (int i = 1; i < argc; ++i) {
+            const char* flag = "--crash-dir=";
+            if (std::strncmp(argv[i], flag, std::strlen(flag)) == 0) {
+                crashDir = argv[i] + std::strlen(flag);
+            }
+        }
+        cascade::source::armEnumerateHelperProcess(crashDir.c_str());
+        if (mode == "armedabsorbed") {
+            cascade::core::reportAbsorbedFault(
+                "fault in a third-party SDR module, absorbed by the vendor-call guard "
+                "(the process continued; the call reported failure to its caller)",
+                0xC0000005ul, nullptr, nullptr);
+        }
+        dieOfHeapCorruption();
     }
     if (mode == "garbage") {
         std::printf("this is not json at all\n");
@@ -901,6 +1003,82 @@ bool rowsWellFormed(const EnumResult& r) {
     return true;
 }
 
+// --- one report per child death (2026-10-04) --------------------------------
+//
+// The uploader's own reading of a report, so "has a stack" and "would be sent"
+// are asked of the same parser and the same decision the product uses rather
+// than of a substring.
+
+// True when the report parses and carries at least one frame on some thread.
+// The stackless child-death report parses too - it just has nothing under its
+// stack heading - which is exactly the difference.
+bool reportHasStack(const std::string& text) {
+    cascade::core::ParsedReport p;
+    if (!cascade::core::parseReportText(text, p)) { return false; }
+    for (const auto& t : p.threads) {
+        if (!t.frames.empty()) { return true; }
+    }
+    return false;
+}
+
+std::string signatureOf(const std::string& text) {
+    cascade::core::ParsedReport p;
+    if (!cascade::core::parseReportText(text, p)) { return std::string(); }
+    return p.signature;
+}
+
+// How many of `texts` the uploader would SEND inside ONE 24-hour window: each
+// is put through the real decideUpload against the real policy state, and
+// noteSent is called for the ones it lets through, exactly as the sweep does.
+// Never more than kMaxPerWindow, so this is a count of distinct faults up to
+// the daily budget, which is the budget the report is spending.
+int wouldSend(const std::vector<std::string>& texts) {
+    cascade::core::UploadPolicyState state;
+    constexpr std::uint64_t kNow = 1800000000ull;
+    int sent = 0;
+    for (const std::string& t : texts) {
+        cascade::core::ParsedReport p;
+        if (!cascade::core::parseReportText(t, p)) { continue; }
+        if (cascade::core::decideUpload(state, true, p.signature, kNow) ==
+            cascade::core::UploadDecision::Send) {
+            cascade::core::noteSent(state, p.signature, kNow);
+            ++sent;
+        }
+    }
+    return sent;
+}
+
+std::vector<std::string> reportTexts(const std::filesystem::path& dir) {
+    std::vector<std::string> out;
+    for (const auto& p : crashReports(dir)) { out.push_back(readAll(p)); }
+    return out;
+}
+
+// Every file in `dir` of any name: "no file from either process" is a claim
+// about the directory, not about the crash-*.txt ones.
+std::size_t filesIn(const std::filesystem::path& dir) {
+    std::size_t n = 0;
+    std::error_code ec;
+    for (const auto& e : std::filesystem::directory_iterator(dir, ec)) {
+        (void)e;
+        ++n;
+    }
+    return n;
+}
+
+// THE DRIVERS THIS MACHINE'S SOAPYSDR INSTALL BRINGS, left out of the scans
+// that stage a fault in a fixture driver. The sweep asks every driver of the
+// listing in a child of its own, and this install lists a dozen real ones
+// (vcpkg's default module directory) whose probes would open real radios -
+// minutes of wall time, and a real libusb fault to confuse a count of
+// reports. "sdrplay" is here because the sdrplay fixture shares its name with
+// the real module. The fixtures' own drivers are the only ones left to ask.
+std::vector<std::string> realDriversToLeaveOut() {
+    return {"airspy",   "airspyhf", "bladerf",   "hackrf", "lime",
+            "netsdr",   "null",     "plutosdr",  "redpitaya", "remote",
+            "rtlsdr",   "sdrplay",  "uhd"};
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -960,6 +1138,13 @@ int main(int argc, char** argv) {
     if (argc >= 3 && argv[2][0] != '-') {
         std::error_code aec;
         lateDll = std::filesystem::absolute(std::filesystem::path(argv[2]), aec).string();
+    }
+    // The SECOND faulting driver's directory (this test's third argument): a
+    // module of another name, so its faults hash to another signature.
+    std::string fixtureDirB;
+    if (argc >= 4 && argv[3][0] != '-') {
+        std::error_code aec;
+        fixtureDirB = std::filesystem::absolute(std::filesystem::path(argv[3]), aec).string();
     }
 
     // --- the outcomes are distinguishable, and say so ----------------------
@@ -2110,14 +2295,25 @@ int main(int argc, char** argv) {
         // not finish - and the parent's report could name nothing but that
         // code. The child's handler now writes one line to the pipe BEFORE its
         // report (armEnumerateHelperProcess sets faultLineToStdout), and the
-        // parent's per-driver report carries it. Staged with the production
-        // arming in a real child that really faults, beside an "open radio"
-        // so the per-driver report is the one filed.
+        // parent's per-driver report carries it.
+        //
+        // Two children, beside an "open radio" so the per-driver report is the
+        // one at issue:
+        //   armeduhd      the production arming and a real fault: the child's
+        //                 own handler runs and writes the report, the parent
+        //                 files NOTHING for the same death (2026-10-04), and
+        //                 the report says which driver and which attempt in
+        //                 its reason line;
+        //   fieldlineuhd  the field's line on the pipe and a death the handler
+        //                 never saw: the parent's per-driver report is the
+        //                 only one, and carries the child's words.
         {
             const auto clearReports = [&dir]() {
                 std::error_code rec;
                 for (const auto& p : crashReports(dir)) { std::filesystem::remove(p, rec); }
             };
+            const std::vector<std::string> wantUhd{"uhd"};
+
             clearReports();
             cascade::source::clearSessionFaultedDriversForTest();
             setMode("armeduhd");
@@ -2129,23 +2325,46 @@ int main(int argc, char** argv) {
             std::printf("armed uhd child: outcome=%s exit=0x%08lX line=[%s] reports=%zu\n",
                         enumOutcomeName(r.outcome), r.deathExitCode, r.childFaultLine.c_str(),
                         crashReports(dir).size());
-            const std::vector<std::string> wantUhd{"uhd"};
             CHECK(r.faultedDrivers == wantUhd);
             CHECK(r.childFaultLine.rfind("access violation", 0) == 0);
             CHECK(r.childFaultLine.find(" at ") != std::string::npos);
             const std::string body = allReportText(dir);
-            // The child's own report AND the parent's.
-            CHECK(crashReports(dir).size() == 2u);
-            CHECK(body.find("died probing driver=uhd (contained: every other driver was still "
-                            "probed) - child: access violation") != std::string::npos);
+            // ONE REPORT FOR THE ONE DEATH: the child's own, with its stack.
+            CHECK(crashReports(dir).size() == 1u);
+            CHECK(reportHasStack(body));
+            CHECK(body.find("child-exit-code:") == std::string::npos);
+            // ...and it says what only the parent's report used to: which
+            // driver, which attempt, and that the application survived.
+            const std::string armedReason = reasonLines(body);
+            CHECK(armedReason.find("reason: access violation - enumeration child, driver=uhd, "
+                                   "attempt 1 (contained)") != std::string::npos);
+            // THE SITE KEEPS 200 CHARACTERS OF A REASON (crash.go clip).
+            const std::size_t armedLen =
+                armedReason.size() > std::strlen("reason: ") + 1
+                    ? armedReason.size() - 1 - std::strlen("reason: ")
+                    : 0u;
+            std::printf("armed per-driver reason: %zu characters\n", armedLen);
+            CHECK(armedLen > 0u && armedLen <= 200u);
+            cascade::source::clearSessionFaultedDriversForTest();
+            clearReports();
+
+            setMode("fieldlineuhd");
+            const EnumResult f = enumerateIsolated(o);
+            const std::string fbody = allReportText(dir);
+            CHECK(f.faultedDrivers == wantUhd);
+            CHECK(f.childFaultLine.rfind("access violation", 0) == 0);
+            CHECK(crashReports(dir).size() == 1u);  // the parent's, alone
+            CHECK(!reportHasStack(fbody));
+            CHECK(fbody.find("died probing driver=uhd (contained: every other driver was still "
+                             "probed) - child: access violation") != std::string::npos);
             // THE SITE KEEPS 200 CHARACTERS OF A REASON (crash.go clip), and
             // the driver's name is in the half that must survive.
-            const std::size_t at = body.find("reason: SDR device enumeration child process died "
-                                             "probing driver=uhd");
+            const std::size_t at = fbody.find("reason: SDR device enumeration child process died "
+                                              "probing driver=uhd");
             CHECK(at != std::string::npos);
             if (at != std::string::npos) {
-                const std::size_t eol = body.find('\n', at);
-                const std::size_t len = (eol == std::string::npos ? body.size() : eol) - at -
+                const std::size_t eol = fbody.find('\n', at);
+                const std::size_t len = (eol == std::string::npos ? fbody.size() : eol) - at -
                                         std::strlen("reason: ");
                 std::printf("per-driver reason: %zu characters\n", len);
                 CHECK(len <= 200u);
@@ -2163,6 +2382,12 @@ int main(int argc, char** argv) {
         // handler's line and the field's own libusb line, with the field
         // machine's drivers still probing: every parent reason within 200,
         // the driver list whole, and the child's words kept where they fit.
+        //
+        // Since 2026-10-04 only the "fieldline" child - a death its handler
+        // never saw - leaves the parent a report to write. "armedwholebus" runs
+        // the production handler, so its two deaths are two reports of the
+        // CHILDREN'S, and what is held to the 200 characters is the reason
+        // those carry, with the tail that names the walk and the attempt.
         for (const char* m : {"armedwholebus", "fieldline"}) {
             const auto clearReports = [&dir]() {
                 std::error_code rec;
@@ -2179,6 +2404,39 @@ int main(int argc, char** argv) {
             CHECK(r.childDeaths == 2);
             CHECK(r.childFaultLine.rfind("access violation", 0) == 0);
             const std::string body = allReportText(dir);
+            if (std::strcmp(m, "armedwholebus") == 0) {
+                // THE PRODUCTION HANDLER RAN IN BOTH CHILDREN (2026-10-04): two
+                // deaths, two reports - the children's own, each with its
+                // stack - and none from the parent, whose reasons below are
+                // therefore only for the child that never wrote one. Each says
+                // which walk and which attempt in a reason that fits the
+                // site's 200 characters.
+                const std::vector<std::string> texts = reportTexts(dir);
+                int withStack = 0;
+                int attempt1 = 0;
+                int attempt2 = 0;
+                for (const std::string& t : texts) {
+                    if (reportHasStack(t)) { ++withStack; }
+                    const std::string rl = reasonLines(t);
+                    CHECK(rl.size() > std::strlen("reason: ") + 1 &&
+                          rl.size() - 1 - std::strlen("reason: ") <= 200u);
+                    CHECK(rl.find("access violation - enumeration child, whole bus, attempt ") !=
+                          std::string::npos);
+                    CHECK(rl.find(" (contained)") != std::string::npos);
+                    if (rl.find("attempt 1 ") != std::string::npos) { ++attempt1; }
+                    if (rl.find("attempt 2 ") != std::string::npos) { ++attempt2; }
+                }
+                std::printf("armedwholebus: reports=%zu with-stack=%d attempt1=%d attempt2=%d\n",
+                            texts.size(), withStack, attempt1, attempt2);
+                CHECK(texts.size() == 2u);
+                CHECK(withStack == 2);
+                CHECK(attempt1 == 1);
+                CHECK(attempt2 == 1);
+                CHECK(body.find("child-exit-code:") == std::string::npos);
+                cascade::source::clearSessionFaultedDriversForTest();
+                clearReports();
+                continue;
+            }
             std::size_t pos = 0;
             int wholeBus = 0;
             while ((pos = body.find("reason: SDR device enumeration child process died", pos)) !=
@@ -2442,6 +2700,491 @@ int main(int argc, char** argv) {
             setEnvVar("FOXSDR_TEST_SOAPY_FIXTURE", "");
             setEnvVar("SOAPY_SDR_PLUGIN_PATH", pluginPathBefore.c_str());
             cascade::source::clearSessionFaultedDriversForTest();
+            clearReports();
+        }
+#endif  // _WIN32
+
+        // --- 2026-10-04: ONE REPORT PER CHILD DEATH -------------------------
+        //
+        // A child that dies leaves up to three reports for the one death: its
+        // own, written by the handler it armed (it has the stack and the
+        // module list), the parent's whole-bus report of it, and - after a
+        // second whole-bus death - the parent's per-driver one from the
+        // sweep, which has no stack at all. One user's deterministic ASIO
+        // fault produced six files in one scan and, after the client's
+        // 24-hour de-duplication, three uploads: three of the five a day a
+        // machine is allowed, for a fault the application survived. The
+        // parent now files its own report only for a death whose child left
+        // none: heap corruption, a vendor TerminateProcess, a child that died
+        // before it armed.
+        //
+        // (c) FIRST, because it is the half that must NOT change: the deaths
+        // the child's handler never sees keep the parent's stackless report,
+        // once - and a report the child wrote for something else (an
+        // absorbed vendor fault, which it carried on from) is not the report
+        // of the death. Four fake children, on every platform.
+        {
+            const auto clearReports = [&dir]() {
+                std::error_code rec;
+                for (const auto& p : crashReports(dir)) { std::filesystem::remove(p, rec); }
+            };
+            cascade::source::clearSessionFaultedDriversForTest();
+            EnumOptions once;
+            once.helperPath = self;
+            once.allowInProcessFallback = false;
+            once.attempts = 1;
+            once.perDriverSweep = false;
+
+            // ARMED, THEN DIES UNSEEN: the child's handler never runs, so the
+            // child has no report and the parent's is the only record.
+            clearReports();
+            setMode("armedterminate");
+            const EnumResult u = enumerateIsolated(once);
+            const std::string ut = allReportText(dir);
+            std::printf("armed child dies unseen: outcome=%s exit=0x%08lX reports=%zu\n",
+                        enumOutcomeName(u.outcome), u.deathExitCode, crashReports(dir).size());
+            CHECK(u.outcome == EnumOutcome::ChildDied);
+            CHECK(u.deathExitCode == kHeapCorruptionExit);
+            CHECK(crashReports(dir).size() == 1u);
+            CHECK(!reportHasStack(ut));
+            CHECK(ut.find("the fault was in a child process") != std::string::npos);
+            CHECK(ut.find("child-exit-code: 0x") != std::string::npos);
+            CHECK(reasonLines(ut).find("enumeration child process died") != std::string::npos);
+
+            // ARMED, FILES AN ABSORBED FAULT, THEN DIES UNSEEN: two files, and
+            // the second is the parent's. The absorbed one carries this
+            // child's process id as well, and is not the death's report.
+            clearReports();
+            setMode("armedabsorbed");
+            const EnumResult ab = enumerateIsolated(once);
+            const std::vector<std::string> abTexts = reportTexts(dir);
+            int absorbedFiles = 0;
+            int parentFiles = 0;
+            for (const std::string& t : abTexts) {
+                if (t.find("absorbed by the vendor-call guard") != std::string::npos) {
+                    ++absorbedFiles;
+                }
+                if (t.find("child-exit-code: 0x") != std::string::npos) { ++parentFiles; }
+            }
+            std::printf("armed child absorbs then dies unseen: outcome=%s reports=%zu "
+                        "absorbed=%d parent=%d\n",
+                        enumOutcomeName(ab.outcome), abTexts.size(), absorbedFiles, parentFiles);
+            CHECK(ab.outcome == EnumOutcome::ChildDied);
+            CHECK(abTexts.size() == 2u);
+            CHECK(absorbedFiles == 1);
+            CHECK(parentFiles == 1);
+
+            // DEAD BEFORE IT ARMED (a bare exit code): the parent's report,
+            // once.
+            clearReports();
+            setMode("die");
+            const EnumResult dd = enumerateIsolated(once);
+            const std::string ddText = allReportText(dir);
+            CHECK(dd.outcome == EnumOutcome::ChildDied);
+            CHECK(crashReports(dir).size() == 1u);
+            CHECK(!reportHasStack(ddText));
+            CHECK(ddText.find("code: 0x00000007") != std::string::npos);
+
+            // THE TIMEOUT KILL files nothing, from either process, and did not
+            // before: only a ChildDied outcome is ever reported, a wedged
+            // probe is logged and counted. Pinned so the guard's arrival is
+            // not read as a change to it.
+            clearReports();
+            setMode("hang");
+            EnumOptions slow = once;
+            slow.timeoutMs = 1500;
+            const EnumResult hh = enumerateIsolated(slow);
+            CHECK(hh.outcome == EnumOutcome::ChildTimedOut);
+            CHECK(crashReports(dir).empty());
+
+            setMode("");
+            cascade::source::clearSessionFaultedDriversForTest();
+            clearReports();
+        }
+
+#ifdef _WIN32
+        // TWO DRIVERS THAT FAULT IN NO MODULE: the signature of a fault in
+        // private memory has no module to hash, and every such fault shared
+        // the one "?" signature - so two drivers' faults were one upload a day.
+        // The parent's own per-driver report used to keep them apart (its tag);
+        // now that the child's report covers the death, the child hashes the
+        // same tag when it has no module to hash. Four deaths (two whole-bus,
+        // then each driver alone), four reports, and three signatures: the
+        // whole bus's, "adrv"'s and "bdrv"'s.
+        {
+            const auto clearReports = [&dir]() {
+                std::error_code rec;
+                for (const auto& p : crashReports(dir)) { std::filesystem::remove(p, rec); }
+            };
+            clearReports();
+            cascade::source::clearSessionFaultedDriversForTest();
+            setMode("unresolved");
+            EnumOptions o;
+            o.helperPath = self;
+            o.allowInProcessFallback = false;
+            const EnumResult r = enumerateIsolated(o);
+            const std::vector<std::string> texts = reportTexts(dir);
+            const auto sigWhere = [&texts](const char* needle) {
+                for (const std::string& t : texts) {
+                    if (reasonLines(t).find(needle) != std::string::npos) { return signatureOf(t); }
+                }
+                return std::string();
+            };
+            const std::string sigWhole = sigWhere("whole bus");
+            const std::string sigA = sigWhere("driver=adrv");
+            const std::string sigB = sigWhere("driver=bdrv");
+            const std::string shared =
+                cascade::core::crashSignature(0xC000001Dul, "?", 0);  // illegal instruction
+            int withStack = 0;
+            for (const std::string& t : texts) {
+                if (reportHasStack(t)) { ++withStack; }
+            }
+            std::printf("unresolved faults: deaths=%d reports=%zu with-stack=%d uploads=%d "
+                        "whole=%s a=%s b=%s\n",
+                        r.childDeaths, texts.size(), withStack, wouldSend(texts),
+                        sigWhole.c_str(), sigA.c_str(), sigB.c_str());
+            CHECK(r.childDeaths == 4);
+            CHECK(texts.size() == 4u);
+            CHECK(withStack == 4);
+            CHECK(!sigWhole.empty() && !sigA.empty() && !sigB.empty());
+            CHECK(sigA != sigB);       // two drivers, two groups
+            CHECK(sigA != sigWhole);
+            CHECK(sigB != sigWhole);
+            CHECK(sigWhole != shared);  // and not the "?" every one of them shared
+            CHECK(sigA != shared && sigB != shared);
+            CHECK(wouldSend(texts) == 3);
+            cascade::source::clearSessionFaultedDriversForTest();
+            setMode("");
+            clearReports();
+        }
+#endif
+
+        // --- THE QUESTION THE PARENT ASKS, ON ITS OWN -----------------------
+        //
+        // core::crashReportWrittenByProcess: "did the handler of process P
+        // write a report of its own death into this directory". Every way the
+        // answer could be wrong is a file in a directory below, because a wrong
+        // yes silently loses a death's only record and a wrong no is the second
+        // upload this change removes.
+        {
+            namespace fs = std::filesystem;
+            using std::chrono::hours;
+            using std::chrono::seconds;
+            using std::chrono::system_clock;
+            std::error_code pec;
+            const fs::path pd = std::filesystem::temp_directory_path(pec) /
+                                ("enum_pidreports_" + std::to_string(currentPid()));
+            fs::remove_all(pd, pec);
+            fs::create_directories(pd, pec);
+            const auto put = [&pd](const std::string& name, const std::string& text) {
+                std::ofstream(pd / name, std::ios::binary) << text;
+            };
+            const std::string whole =
+                "kind: crash\nreason: access violation\ncode: 0xC0000005\n"
+                "address: x.dll+0x10\nsignature: 0123456789ABCDEF\nthread: 1\n--- context ---\n";
+            const std::string absorbed =
+                "kind: crash\nreason: fault in a third-party SDR module, absorbed by the "
+                "vendor-call guard (the process continued; the call reported failure to its "
+                "caller)\ncode: 0xC0000005\naddress: x.dll+0x10\nsignature: 0123456789ABCDEF\n"
+                "thread: 1\n--- context ---\n";
+            const auto d = pd.string();
+            const auto since = system_clock::now() - seconds(60);
+
+            // A whole report, Windows-style and Linux-style names.
+            put("crash-20261004-120000-4242-1.txt", whole);
+            put("crash-1759593600-7777-3.txt", whole);
+            CHECK(cascade::core::crashReportWrittenByProcess(d, 4242, since));
+            CHECK(cascade::core::crashReportWrittenByProcess(d, 7777, since));
+            // The process id is matched whole: not a prefix, not a suffix.
+            CHECK(!cascade::core::crashReportWrittenByProcess(d, 424, since));
+            CHECK(!cascade::core::crashReportWrittenByProcess(d, 42420, since));
+            CHECK(!cascade::core::crashReportWrittenByProcess(d, 242, since));
+            CHECK(!cascade::core::crashReportWrittenByProcess(d, 1, since));
+            CHECK(!cascade::core::crashReportWrittenByProcess(d, 0, since));
+            CHECK(!cascade::core::crashReportWrittenByProcess("", 4242, since));
+            CHECK(!cascade::core::crashReportWrittenByProcess((pd / "nope").string(), 4242, since));
+
+            // A STALE report of an unrelated process that held this number
+            // once: older than the spawn, so it is not the death's.
+            put("crash-20250101-120000-9000-1.txt", whole);
+            fs::last_write_time(pd / "crash-20250101-120000-9000-1.txt",
+                                fs::file_time_type::clock::now() - hours(2), pec);
+            CHECK(!cascade::core::crashReportWrittenByProcess(d, 9000, since));
+            CHECK(cascade::core::crashReportWrittenByProcess(d, 9000,
+                                                              system_clock::now() - hours(3)));
+            // ...and a fresh report is not "stale" merely because the spawn
+            // time asked about is in the future.
+            CHECK(!cascade::core::crashReportWrittenByProcess(d, 4242,
+                                                               system_clock::now() + hours(1)));
+
+            // NOT A REPORT: created and never written to; killed after the
+            // kind line; a signature that is not sixteen hex digits.
+            put("crash-20261004-120000-6000-1.txt", "");
+            put("crash-20261004-120000-6001-1.txt", "kind: crash\nreason: access violation\n");
+            put("crash-20261004-120000-6002-1.txt",
+                "kind: crash\nreason: access violation\ncode: 0x1\naddress: x\nsignature: 0123\n");
+            put("crash-20261004-120000-6003-1.txt",
+                "kind: crash\nreason: access violation\ncode: 0x1\naddress: x\n"
+                "signature: 0123456789ABCDEG\n");
+            put("crash-20261004-120000-6004-1.txt", "kind: hang\nsignature: 0123456789ABCDEF\n");
+            for (const unsigned long p : {6000ul, 6001ul, 6002ul, 6003ul, 6004ul}) {
+                CHECK(!cascade::core::crashReportWrittenByProcess(d, p, since));
+            }
+
+            // THE SAME PROCESS ABSORBED A FAULT EARLIER: that file is not the
+            // report of a death, so a child that then died unseen still needs
+            // the parent's - but a child that ALSO wrote a fatal report has one.
+            put("crash-20261004-120000-5000-1.txt", absorbed);
+            CHECK(!cascade::core::crashReportWrittenByProcess(d, 5000, since));
+            put("crash-20261004-120001-5000-2.txt", whole);
+            CHECK(cascade::core::crashReportWrittenByProcess(d, 5000, since));
+
+            // NOT A CRASH REPORT'S NAME: a freeze report, a dump, a sidecar.
+            put("hang-20261004-120000-8000-1.txt", whole);
+            put("crash-20261004-120000-8100-1.dmp", whole);
+            put("crash-20261004-120000-8200-1.txt.upload", whole);
+            put("crash-20261004-120000-x-1.txt", whole);
+            for (const unsigned long p : {8000ul, 8100ul, 8200ul}) {
+                CHECK(!cascade::core::crashReportWrittenByProcess(d, p, since));
+            }
+            fs::remove_all(pd, pec);
+        }
+
+        // --- WHAT THE CHILD'S OWN REPORT SAYS ABOUT THE CHILD ----------------
+        {
+            using cascade::source::enumerateChildReasonSuffix;
+            CHECK(enumerateChildReasonSuffix(false, nullptr, 1) ==
+                  " - enumeration child, whole bus, attempt 1 (contained)");
+            CHECK(enumerateChildReasonSuffix(false, "", 2) ==
+                  " - enumeration child, whole bus, attempt 2 (contained)");
+            CHECK(enumerateChildReasonSuffix(false, "uhd", 1) ==
+                  " - enumeration child, driver=uhd, attempt 1 (contained)");
+            CHECK(enumerateChildReasonSuffix(true, "uhd", 1) ==
+                  " - enumeration child, driver list, attempt 1 (contained)");
+            // Not told which attempt (a hand-started child): said nowhere.
+            CHECK(enumerateChildReasonSuffix(false, "uhd", 0) ==
+                  " - enumeration child, driver=uhd (contained)");
+            // A driver name is third-party text in a "name: value" line: one
+            // newline would split the reason and forge a field.
+            const std::string evil = enumerateChildReasonSuffix(false, "Evil\nkind: hang", 1);
+            CHECK(evil.find('\n') == std::string::npos);
+            CHECK(evil.find("driver=evil?kind??hang") != std::string::npos);
+            // THE BUDGET: the site keeps 200 characters of a reason. The
+            // longest this product writes for a fatal fault is about ninety
+            // (the abort one) and for an absorbed vendor fault 134; the tail
+            // behind a driver of any length has to fit behind the first
+            // always and behind the second for every real driver name.
+            const std::string longest =
+                enumerateChildReasonSuffix(false, std::string(80, 'x').c_str(), 99);
+            CHECK(90u + longest.size() <= 200u);
+            CHECK(134u + enumerateChildReasonSuffix(false, "faultfixture", 2).size() <= 200u);
+        }
+
+#ifdef _WIN32
+        // (a), (b) and (d) against the REAL child and REAL vendor modules: the
+        // fault fixtures (tests/fixtures/soapy_fault_module.cpp) fault inside
+        // a driver's find function on the probe thread SoapySDR runs it on -
+        // the shape of the libusb fault - so the child's own handler writes
+        // the report with the stack, and what the parent then does about the
+        // same death is what is under test. Only the fixtures' drivers are
+        // asked: every real driver of this install is left out
+        // (realDriversToLeaveOut), whole bus and sweep alike.
+        {
+            const auto clearReports = [&dir]() {
+                std::error_code rec;
+                for (const auto& p : crashReports(dir)) { std::filesystem::remove(p, rec); }
+            };
+            const auto wipe = [&dir]() {
+                std::error_code rec;
+                for (const auto& e : std::filesystem::directory_iterator(dir, rec)) {
+                    std::error_code rm;
+                    std::filesystem::remove_all(e.path(), rm);
+                }
+            };
+            const std::string real = findRealCascade();
+            CHECK(!real.empty());
+            CHECK(!fixtureDir.empty());
+            CHECK(!fixtureDirB.empty());  // tests/CMakeLists.txt hands it over
+            const std::string pluginPathBefore = envOr("SOAPY_SDR_PLUGIN_PATH", "");
+            setEnvVar("SOAPY_SDR_PLUGIN_PATH", fixtureDir.c_str());
+            // "thread", not "find": the fault is raised on a thread the find
+            // function spawns, which is the libusb fault's shape and the one
+            // fault the vendor guard cannot absorb. A single-driver walk runs
+            // the find function on its CALLING thread, so a "find" fault there
+            // is absorbed (exit 0, an empty list) and the sweep's child would
+            // never die - the deterministic case needs a driver whose own
+            // child dies.
+            setEnvVar("FOXSDR_TEST_SOAPY_FIXTURE", "thread");
+
+            EnumOptions full;  // the whole product path: two whole-bus tries, then the sweep
+            full.helperPath = real;
+            full.allowInProcessFallback = false;
+            full.timeoutMs = 25000;
+            full.absentDrivers = realDriversToLeaveOut();
+
+            // (a) A CHILD THAT FAULTS INSIDE A DRIVER'S FIND FUNCTION: ONE
+            // report, with the stack, naming the driver and the attempt.
+            //
+            // THE WHOLE BUS first, one try: no driver is asked alone here
+            // (every driver probes at once), so the report says "whole bus",
+            // which attempt it was, and - because the child writes its probe
+            // log into its own log ring as well as to the parent - which
+            // probes had begun and not ended, which is the "still probing
+            // when it died" shortlist the parent's own report used to carry.
+            clearReports();
+            cascade::source::clearSessionFaultedDriversForTest();
+            EnumOptions once = full;
+            once.attempts = 1;
+            once.perDriverSweep = false;
+            const EnumResult w = enumerateIsolated(once);
+            const std::string wText = allReportText(dir);
+            std::printf("find-fault whole bus: outcome=%s exit=0x%08lX reports=%zu stack=%d\n",
+                        enumOutcomeName(w.outcome), w.exitCode, crashReports(dir).size(),
+                        reportHasStack(wText) ? 1 : 0);
+            CHECK(w.outcome == EnumOutcome::ChildDied);
+            CHECK(w.exitCode == 0xC0000005ul);
+            CHECK(crashReports(dir).size() == 1u);
+            CHECK(reportHasStack(wText));
+            CHECK(wText.find("address: soapy_fault_fixture.dll+0x") != std::string::npos);
+            CHECK(reasonLines(wText).find("whole bus") != std::string::npos);
+            CHECK(reasonLines(wText).find("attempt 1") != std::string::npos);
+            CHECK(wText.find("cascade-probe: begin faultfixture") != std::string::npos);
+            CHECK(wText.find("cascade-probe: end faultfixture") == std::string::npos);
+
+            // ONE DRIVER ALONE, in the walk beside an open radio (nothing is
+            // actually open: the skip list only has to be non-empty): the
+            // listing child, then each driver left in its own child. The
+            // fixture's child dies, and its one report names the driver.
+            clearReports();
+            cascade::source::clearSessionFaultedDriversForTest();
+            EnumOptions beside = full;
+            beside.skipDrivers = {"nothing-open"};
+            const EnumResult one = enumerateIsolated(beside);
+            const std::string oneText = allReportText(dir);
+            const std::vector<std::string> wantFixture{"faultfixture"};
+            std::printf("find-fault one driver: faulted=%zu reports=%zu stack=%d\n",
+                        one.faultedDrivers.size(), crashReports(dir).size(),
+                        reportHasStack(oneText) ? 1 : 0);
+            CHECK(one.faultedDrivers == wantFixture);
+            CHECK(crashReports(dir).size() == 1u);
+            CHECK(reportHasStack(oneText));
+            CHECK(reasonLines(oneText).find("driver=faultfixture") != std::string::npos);
+            CHECK(reasonLines(oneText).find("attempt 1") != std::string::npos);
+            cascade::source::clearSessionFaultedDriversForTest();
+
+            // THE LONGEST REASON THE TAIL HAS TO FIT BEHIND: a fault the vendor
+            // guard ABSORBS in the child - "find" runs on the calling thread
+            // of a single-driver walk - keeps the child alive (exit 0, no
+            // death, nothing for the parent to report) and writes its own
+            // report, whose reason is the guard's 134 characters. The tail
+            // goes behind that too, and the whole still fits the site's 200.
+            clearReports();
+            setEnvVar("FOXSDR_TEST_SOAPY_FIXTURE", "find");
+            const EnumResult absorbedWalk = enumerateIsolated(beside);
+            const std::string absorbedText = allReportText(dir);
+            const std::string absorbedReason = reasonLines(absorbedText);
+            const std::size_t absorbedLen =
+                absorbedReason.size() > std::strlen("reason: ") + 1
+                    ? absorbedReason.size() - 1 - std::strlen("reason: ")
+                    : 0u;
+            std::printf("absorbed in the child: deaths=%d reports=%zu reason=%zu chars\n",
+                        absorbedWalk.childDeaths, crashReports(dir).size(), absorbedLen);
+            CHECK(absorbedWalk.childDeaths == 0);
+            CHECK(crashReports(dir).size() == 1u);
+            CHECK(absorbedReason.find(std::string("reason: ") +
+                                      cascade::core::kAbsorbedFaultReasonPrefix) == 0u);
+            CHECK(absorbedReason.find("driver=faultfixture, attempt 1 (contained)") !=
+                  std::string::npos);
+            CHECK(absorbedLen > 0u && absorbedLen <= 200u);
+            setEnvVar("FOXSDR_TEST_SOAPY_FIXTURE", "thread");
+
+            // (b) THE DETERMINISTIC CASE, end to end: two whole-bus deaths,
+            // then the sweep finds the culprit and it dies again. Three
+            // deaths, so three files - one per death - each with its stack,
+            // all one fault, and so ONE upload within a day. Before this
+            // change: six files (three of the child's own, two whole-bus and
+            // one per-driver from the parent), three uploads.
+            clearReports();
+            const EnumResult det = enumerateIsolated(full);
+            const std::vector<std::string> detTexts = reportTexts(dir);
+            int detStacks = 0;
+            std::vector<std::string> detSigs;
+            for (const std::string& t : detTexts) {
+                if (reportHasStack(t)) { ++detStacks; }
+                const std::string sig = signatureOf(t);
+                if (std::find(detSigs.begin(), detSigs.end(), sig) == detSigs.end()) {
+                    detSigs.push_back(sig);
+                }
+            }
+            const int detSends = wouldSend(detTexts);
+            std::printf("deterministic fault: deaths=%d reports=%zu with-stack=%d "
+                        "signatures=%zu uploads=%d\n",
+                        det.childDeaths, detTexts.size(), detStacks, detSigs.size(), detSends);
+            CHECK(det.outcome == EnumOutcome::ChildDied);
+            CHECK(det.attempts == 2);
+            CHECK(det.sweptPerDriver);
+            CHECK(det.faultedDrivers == wantFixture);
+            CHECK(det.childDeaths == 3);
+            CHECK(detTexts.size() == static_cast<std::size_t>(det.childDeaths));
+            CHECK(detStacks == static_cast<int>(detTexts.size()));
+            CHECK(detSigs.size() == 1u);
+            CHECK(detSends == 1);
+            cascade::source::clearSessionFaultedDriversForTest();
+
+            // TWO DIFFERENT FAULTING DRIVERS on one machine are two faults:
+            // four deaths (two whole-bus, whichever fixture's probe thread
+            // faulted first, then each fixture alone), each with its stack,
+            // two signatures, two uploads - and the same fault twice in a day
+            // is still one upload (above).
+            clearReports();
+            const std::string both = fixtureDir + ";" + fixtureDirB;
+            setEnvVar("SOAPY_SDR_PLUGIN_PATH", both.c_str());
+            const EnumResult two = enumerateIsolated(full);
+            const std::vector<std::string> twoTexts = reportTexts(dir);
+            int twoStacks = 0;
+            std::vector<std::string> twoSigs;
+            for (const std::string& t : twoTexts) {
+                if (reportHasStack(t)) { ++twoStacks; }
+                const std::string sig = signatureOf(t);
+                if (std::find(twoSigs.begin(), twoSigs.end(), sig) == twoSigs.end()) {
+                    twoSigs.push_back(sig);
+                }
+            }
+            const int twoSends = wouldSend(twoTexts);
+            std::printf("two faulting drivers: deaths=%d reports=%zu with-stack=%d "
+                        "signatures=%zu uploads=%d faulted=%zu\n",
+                        two.childDeaths, twoTexts.size(), twoStacks, twoSigs.size(), twoSends,
+                        two.faultedDrivers.size());
+            CHECK(two.faultedDrivers.size() == 2u);
+            CHECK(two.childDeaths == 4);
+            CHECK(twoTexts.size() == static_cast<std::size_t>(two.childDeaths));
+            CHECK(twoStacks == static_cast<int>(twoTexts.size()));
+            CHECK(twoSigs.size() == 2u);
+            CHECK(twoSends == 2);
+            cascade::source::clearSessionFaultedDriversForTest();
+            setEnvVar("SOAPY_SDR_PLUGIN_PATH", fixtureDir.c_str());
+
+            // (d) DIAGNOSTICS OFF: no file from either process. The deaths
+            // still happen and are still contained (that is what makes this a
+            // test of the parent and the child and not of a scan that never
+            // faulted), and the crash directory stays exactly as empty as it
+            // was - the child is handed no directory, so it dies quietly, and
+            // the parent's own writer is disabled.
+            cascade::core::setCrashCaptureEnabled(false, false);
+            CHECK(cascade::core::activeCrashDir().empty());
+            wipe();
+            CHECK(filesIn(dir) == 0u);
+            const EnumResult off = enumerateIsolated(full);
+            std::printf("diagnostics off: deaths=%d files=%zu\n", off.childDeaths, filesIn(dir));
+            CHECK(off.childDeaths == 3);
+            CHECK(off.faultedDrivers == wantFixture);
+            CHECK(filesIn(dir) == 0u);
+            cascade::core::setCrashCaptureEnabled(true, false);
+            CHECK(cascade::core::activeCrashDir() == dir.string());
+            cascade::source::clearSessionFaultedDriversForTest();
+
+            setEnvVar("FOXSDR_TEST_SOAPY_FIXTURE", "");
+            setEnvVar("SOAPY_SDR_PLUGIN_PATH", pluginPathBefore.c_str());
             clearReports();
         }
 #endif  // _WIN32

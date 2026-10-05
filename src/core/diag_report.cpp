@@ -601,6 +601,34 @@ std::string mutedText(const DiagAudio& a) {
     return s.empty() ? std::string("no") : s;
 }
 
+// THE PATCH PAGE'S RADIOS, as a count and the driver kinds: "none", "1 (rtlsdr)",
+// "2 (rtlsdr, soapy)". A kind is only ever the LEADING run of lower-case letters
+// and digits of what it is handed, at most sixteen of them, and anything that
+// leaves nothing reads "other". The caller hands over the part of a device key
+// before its first '|', and this is the second lock on the same door: a whole key
+// ("rtlsdr|serial=0000000A") stops at the '|', and an argument string that starts
+// with a capital or a symbol leaves nothing, so neither can carry a serial into a
+// report. At most eight kinds are listed; the count always says how many there are.
+std::string patchRadiosText(const std::vector<std::string>& kinds) {
+    if (kinds.empty()) { return "none"; }
+    constexpr std::size_t kListed = 8;
+    std::string s = std::to_string(kinds.size()) + " (";
+    for (std::size_t i = 0; i < kinds.size() && i < kListed; ++i) {
+        std::string k;
+        for (const char c : kinds[i]) {
+            const bool lower = c >= 'a' && c <= 'z';
+            const bool digit = c >= '0' && c <= '9';
+            if (!lower && !digit) { break; }
+            k += c;
+            if (k.size() >= 16) { break; }
+        }
+        if (i > 0) { s += ", "; }
+        s += k.empty() ? std::string("other") : k;
+    }
+    if (kinds.size() > kListed) { s += ", ..."; }
+    return s + ")";
+}
+
 // The threshold, the gate's own state, and - when the receiver has measured one
 // - the channel power the gate is judging, so "the squelch is above the signal"
 // reads straight off one line.
@@ -651,6 +679,9 @@ void setDiagContext(const DiagContext& ctx) {
     block += "volume: " + volumeText(ctx.audio) + "\n";
     block += "audio-muted: " + mutedText(ctx.audio) + "\n";
     block += "squelch: " + squelchText(ctx.audio) + "\n";
+    // THE PATCH PAGE'S RADIOS (0.99.62), also before the plugin list. `source`
+    // above is the receiver's radio; these are the OTHER signal paths.
+    block += "patch-radios: " + patchRadiosText(ctx.patchRadioKinds) + "\n";
     if (ctx.plugins.empty()) {
         block += "plugin: (none)\n";
     } else {
@@ -659,6 +690,15 @@ void setDiagContext(const DiagContext& ctx) {
 
     std::size_t n = block.size();
     if (n > kContextBytes - 1) { n = kContextBytes - 1; }
+    // UNCHANGED MEANS UNTOUCHED. The application renders this every frame
+    // (AppWindow::refreshDiagContext), so the common call has nothing new to
+    // say, and rewriting the buffer 60 times a second would give a fault
+    // handler on another thread 60 chances a second to read it half-written.
+    // Only the writer ever changes it, so the comparison needs no lock.
+    if (static_cast<int>(n) == g_contextLen.load(std::memory_order_acquire) &&
+        std::memcmp(g_context, block.data(), n) == 0) {
+        return;
+    }
     std::memcpy(g_context, block.data(), n);
     g_context[n] = '\0';
     g_contextLen.store(static_cast<int>(n), std::memory_order_release);
@@ -700,6 +740,49 @@ std::string crashSignature(unsigned long code, const char* moduleName, std::uint
     return std::string(buf);
 }
 
+std::uintptr_t mainImageBase() {
+#if defined(_WIN32)
+    // The process block's own image base: no loader lock, no allocation.
+    return reinterpret_cast<std::uintptr_t>(::GetModuleHandleW(nullptr));
+#else
+    // dl_iterate_phdr always visits the main program first (see
+    // elfModuleCallback), so module 0 of the snapshot is it. A non-PIE
+    // executable reports a load bias of 0, which reads as "unknown".
+    DiagModule m;
+    return moduleAt(0, m) ? m.base : static_cast<std::uintptr_t>(0);
+#endif
+}
+
+bool inMainImage(std::uintptr_t addr) {
+    const std::uintptr_t self = mainImageBase();
+    if (self == 0) { return false; }
+    DiagModule m;
+    std::uintptr_t off = 0;
+    return resolveAddress(addr, m, off) && m.base == self;
+}
+
+std::string freezeSignature(unsigned long kindTag, const std::uintptr_t* frames, int count) {
+    // No frames at all keys exactly as the old code did for a thread with none:
+    // an unnamed module at offset 0.
+    if (frames == nullptr || count <= 0) { return crashSignature(kindTag, "?", 0); }
+
+    DiagModule m;
+    std::uintptr_t off = 0;
+    // THE FIRST FRAME OF OURS, nearest the top: the code of this program that
+    // was waiting, which is what tells one freeze from another.
+    const std::uintptr_t self = mainImageBase();
+    if (self != 0) {
+        for (int i = 0; i < count; ++i) {
+            if (resolveAddress(frames[i], m, off) && m.base == self) {
+                return crashSignature(kindTag, m.name, off);
+            }
+        }
+    }
+    // Nothing of ours on this stack: the old key, frame 0.
+    if (resolveAddress(frames[0], m, off)) { return crashSignature(kindTag, m.name, off); }
+    return crashSignature(kindTag, "?", 0);
+}
+
 const std::vector<std::string>& bundleFieldNames() {
     // THE INVENTORY. PRIVACY.md documents these field by field, and
     // tests/test_diagnostics.cpp compares this list with what the bundle
@@ -713,7 +796,10 @@ const std::vector<std::string>& bundleFieldNames() {
         "crash-dir", "last-run-unclean", "launches", "crashes",
         "log-lines-total", "sdrplay-service",
         // The sound path (0.99.61): see DiagAudio.
-        "audio-output", "volume", "audio-muted", "squelch"};
+        "audio-output", "volume", "audio-muted", "squelch",
+        // The patch page's radios, by driver kind (0.99.62): see
+        // DiagContext::patchRadioKinds.
+        "patch-radios"};
     return names;
 }
 
@@ -798,6 +884,61 @@ std::string buildDiagnosticsBundle(const DiagBundleInput& in) {
     for (const std::string& line : scrubUploadLog(in.logLines, in.context.plugins)) {
         out += line;
         out += "\n";
+    }
+
+    // THE SESSIONS BEFORE THIS ONE, after the current log and each under its own
+    // heading (0.99.62). Both are written ONLY when the caller asked for them
+    // (history.included): with diagnostics off nothing is read and nothing is
+    // added, not even a heading. Every line of either goes through the same scrub
+    // as the log above - the previous session's log is a log, and the report
+    // lines are built from fields a file supplied.
+    if (in.history.included) {
+        const DiagHistory& h = in.history;
+
+        out += "\n";
+        out += kPreviousSessionHeading;
+        out += "\n";
+        if (h.pending) {
+            out += "(still being read - copy the diagnostics again in a moment)\n";
+        } else if (!h.previous.found) {
+            out += "none - " +
+                   (h.previous.reason.empty() ? std::string("there is no earlier session to show")
+                                              : h.previous.reason) +
+                   "\n";
+        } else {
+            std::string head = "session: " + (h.previous.build.empty()
+                                                  ? std::string("(build not recorded)")
+                                                  : h.previous.build);
+            head += ", " + std::to_string(h.previous.sessionLines) + " lines in the log files, ";
+            head += h.previous.lines.size() < h.previous.sessionLines
+                        ? "the last " + std::to_string(h.previous.lines.size()) + " follow"
+                        : std::string("all of them follow");
+            out += scrubUploadLine(head);
+            out += "\n";
+            for (const std::string& line : scrubUploadLog(h.previous.lines, in.context.plugins)) {
+                out += line;
+                out += "\n";
+            }
+        }
+
+        out += "\n";
+        out += kReportsHeading;
+        out += "\n";
+        if (h.pending) {
+            out += "(still being read - copy the diagnostics again in a moment)\n";
+        } else if (!h.reports.readable) {
+            out += "none - the reports folder could not be read\n";
+        } else if (h.reports.newest.empty()) {
+            out += "none - the reports folder holds no crash or freeze report\n";
+        } else {
+            out += "newest " + std::to_string(h.reports.newest.size()) + " of " +
+                   std::to_string(h.reports.total) + (h.reports.totalCapped ? "+" : "") +
+                   " - when it was written, what it was, and what became of sending it\n";
+            for (const ReportSummary& r : h.reports.newest) {
+                out += scrubUploadLine(reportSummaryLine(r));
+                out += "\n";
+            }
+        }
     }
     return out;
 }

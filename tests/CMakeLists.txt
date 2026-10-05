@@ -39,6 +39,21 @@ if(WIN32 AND TARGET SoapySDR)
         PREFIX ""
         LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_soapy/$<CONFIG>"
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_soapy/$<CONFIG>")
+    # A SECOND FAULTING DRIVER, in a module of another name and a directory of
+    # its own: the same source registering "faultfixtureb". Two drivers that
+    # fault on one machine fault in two different modules, so their reports
+    # must hash to two different signatures - the check that one fault's
+    # reports collapse into one upload and two faults' reports do not needs a
+    # second module that really faults. A directory of its own, so the tests
+    # that want ONE faulting driver put only the first on the plugin path.
+    add_library(soapy_fault_fixture_b MODULE "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/soapy_fault_module.cpp")
+    target_link_libraries(soapy_fault_fixture_b PRIVATE SoapySDR)
+    target_compile_definitions(soapy_fault_fixture_b PRIVATE
+        FIXTURE_DRIVER="faultfixtureb" FIXTURE_LABEL="Fault fixture B")
+    set_target_properties(soapy_fault_fixture_b PROPERTIES
+        PREFIX ""
+        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_soapy_b/$<CONFIG>"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_soapy_b/$<CONFIG>")
 endif()
 
 # A DLL that is mapped only when something loads it and faults when called
@@ -59,6 +74,20 @@ foreach(src ${CASCADE_TESTS})
     add_executable(${name} "${src}")
     target_link_libraries(${name} PRIVATE cascade_lib)
     target_include_directories(${name} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+    # NO DWARF IN A TEST EXECUTABLE (Linux). The Release flags carry -g so that
+    # the application's own link has line tables to archive (see CMakeLists.txt),
+    # and this tree builds 265 test programs on the same flags. Measured on
+    # GCC: one translation unit that includes nlohmann::json went from 0.4 MB to
+    # 6.4 MB of object with -g, and every test links most of cascade_lib - so
+    # without this the CI runner would be asked to hold hundreds of full-DWARF
+    # executables nobody will ever read. -g0 negates -g for the test's own
+    # source (target options come after the configuration flags on the command
+    # line), and --strip-debug drops what the linked-in library objects carry.
+    # The function symbol table is untouched, so a crash test still names code.
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        target_compile_options(${name} PRIVATE -g0)
+        target_link_options(${name} PRIVATE -Wl,--strip-debug)
+    endif()
     # Put SoapySDR.dll beside the test binary EXPLICITLY.
     #
     # The application delay-loads it, so a missing runtime there is a readable
@@ -112,11 +141,13 @@ foreach(src ${CASCADE_TESTS})
     elseif(name STREQUAL "test_soapy_enum_proc" AND TARGET soapy_fault_fixture)
         # Hands the fault fixture's directory to the real enumeration child;
         # cascade.exe is built first because that block runs it.
-        add_dependencies(${name} soapy_fault_fixture soapy_sdrplay_fixture late_fault_fixture cascade)
+        add_dependencies(${name} soapy_fault_fixture soapy_fault_fixture_b soapy_sdrplay_fixture
+                         late_fault_fixture cascade)
         # The second argument is the late-mapped DLL's full path, handed to the
-        # fault fixture through the environment (its "late" stage).
+        # fault fixture through the environment (its "late" stage). The third
+        # is the second faulting driver's directory.
         add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE_DIR:soapy_fault_fixture>"
-                 "$<TARGET_FILE:late_fault_fixture>")
+                 "$<TARGET_FILE:late_fault_fixture>" "$<TARGET_FILE_DIR:soapy_fault_fixture_b>")
     elseif(name STREQUAL "test_crash_late_module" AND TARGET late_fault_fixture)
         # Loads the late fixture by full path after arming its handlers.
         add_dependencies(${name} late_fault_fixture)
@@ -166,6 +197,17 @@ add_test(NAME app_version COMMAND cascade --version)
 set_tests_properties(app_version PROPERTIES
     TIMEOUT 30
     PASS_REGULAR_EXPRESSION "^FoxSDR ${CASCADE_VERSION_STRING}\n$")
+
+# The usage Worker and its reader (telemetry-worker/): the Worker's handler is
+# imported and driven with old-format, new-format and malformed records, and
+# usage.ps1 is run against a stand-in for Cloudflare's SQL API on loopback. Plain
+# Node, no wrangler, no account, no network. Registered only where node is found.
+find_program(CASCADE_NODE node)
+if(CASCADE_NODE)
+    add_test(NAME telemetry_worker
+             COMMAND ${CASCADE_NODE} --test "${CMAKE_SOURCE_DIR}/telemetry-worker/worker.test.mjs")
+    set_tests_properties(telemetry_worker PROPERTIES TIMEOUT 240)
+endif()
 
 # CLI error contract: each malformed invocation must exit nonzero.
 add_test(NAME app_cli_bad_value COMMAND cascade --frames abc)

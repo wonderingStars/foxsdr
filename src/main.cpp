@@ -964,11 +964,16 @@ int main(int argc, char** argv) {
     constexpr const char* kDriverFlag = "--driver=";
     constexpr const char* kListDriversFlag = "--list-drivers";
     constexpr const char* kSkipFlag = "--skip=";
+    // Which try the parent says this child is (2026-10-04): only the parent
+    // knows, and the child's own crash report - the one with the stack, and now
+    // the only one filed for a death it covers - says it on its reason line.
+    constexpr const char* kAttemptFlag = "--attempt=";
     if (argc >= 2 && std::strcmp(argv[1], "--enumerate-json") == 0) {
         const char* crashDir = nullptr;
         const char* driver = nullptr;
         const char* skip = nullptr;
         bool listDrivers = false;
+        int attempt = 0;
         for (int i = 2; i < argc; ++i) {
             if (std::strncmp(argv[i], kCrashDirFlag, std::strlen(kCrashDirFlag)) == 0) {
                 crashDir = argv[i] + std::strlen(kCrashDirFlag);
@@ -976,12 +981,17 @@ int main(int argc, char** argv) {
                 driver = argv[i] + std::strlen(kDriverFlag);
             } else if (std::strncmp(argv[i], kSkipFlag, std::strlen(kSkipFlag)) == 0) {
                 skip = argv[i] + std::strlen(kSkipFlag);
+            } else if (std::strncmp(argv[i], kAttemptFlag, std::strlen(kAttemptFlag)) == 0) {
+                // A number or nothing: anything else leaves it 0, "not told".
+                attempt = std::atoi(argv[i] + std::strlen(kAttemptFlag));
+                if (attempt < 0) { attempt = 0; }
             } else if (std::strcmp(argv[i], kListDriversFlag) == 0) {
                 listDrivers = true;
             } else {
                 std::fprintf(stderr,
-                             "cascade: --enumerate-json takes only %s, %s, %s and %s\n",
-                             kCrashDirFlag, kDriverFlag, kSkipFlag, kListDriversFlag);
+                             "cascade: --enumerate-json takes only %s, %s, %s, %s and %s\n",
+                             kCrashDirFlag, kDriverFlag, kSkipFlag, kAttemptFlag,
+                             kListDriversFlag);
                 return 2;
             }
         }
@@ -990,7 +1000,7 @@ int main(int argc, char** argv) {
         // faulting in its detach killed a child that had already answered
         // (2026-10-01). See endEnumerateHelperProcess.
         cascade::source::endEnumerateHelperProcess(
-            cascade::source::runEnumerateHelper(crashDir, driver, listDrivers, skip));
+            cascade::source::runEnumerateHelper(crashDir, driver, listDrivers, skip, attempt));
     }
 
     // FIRST, before anything that could fault has had the chance. The four

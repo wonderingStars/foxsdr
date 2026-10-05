@@ -14,7 +14,11 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <map>
 #include <set>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -133,7 +137,7 @@ void testPayloadContainsOnlyTheAgreedFields() {
     // and they have to come and change the privacy notice too - which is
     // exactly the conversation that should happen.
     const std::set<std::string> allowed = {
-        "id", "v", "os", "arch", "launches", "crashes", "ch", "first", "fv",
+        "id", "v", "os", "arch", "launches", "crashes", "stalls", "ch", "first", "fv",
         "sessionSec", "sdr", "modes", "panels", "plugins"};
     std::set<std::string> actual;
     for (auto it = j.begin(); it != j.end(); ++it) { actual.insert(it.key()); }
@@ -150,6 +154,122 @@ void testPayloadContainsOnlyTheAgreedFields() {
 
     // And the serial has not crept back in through the whole-document route.
     CHECK(r.toJson().find("EDR04ZDB2") == std::string::npos);
+}
+
+// ---------------------------------------------------------------------------
+// PRIVACY.md, held to the payload in BOTH directions.
+//
+// testPayloadContainsOnlyTheAgreedFields above compares the payload to a list
+// that lives in this file, so a field added to the payload and to that list
+// passed without PRIVACY.md ever being opened - and PRIVACY.md's own sentence
+// ("a new field cannot be added without that test failing and this document
+// being updated with it") was only half true. The crash upload, the feature
+// request and the problem report each read the document; the usage record did
+// not. This is the missing half.
+//
+// The document's table names fields in words ("Launch count"), not by their
+// JSON key, so the mapping from key to row label is held HERE. That is what
+// makes the comparison two-way: a payload key with no row fails, a row with no
+// payload key fails, and a key added to this table but not to the document
+// fails.
+// ---------------------------------------------------------------------------
+const std::map<std::string, std::string>& usageFieldLabels() {
+    static const std::map<std::string, std::string> kLabels = {
+        {"id", "Install identifier"},
+        {"v", "Application version"},
+        {"os", "Operating system"},
+        {"arch", "Architecture"},
+        {"ch", "How it was installed"},
+        {"first", "First run"},
+        {"fv", "First version"},
+        {"launches", "Launch count"},
+        {"crashes", "Crash count"},
+        {"stalls", "Display stalls"},
+        {"sessionSec", "Session length"},
+        {"sdr", "SDR model"},
+        {"modes", "Demodulators used"},
+        {"panels", "Panels opened"},
+        {"plugins", "Installed plugins"},
+    };
+    return kLabels;
+}
+
+// The first column of the usage report's table in PRIVACY.md - the rows between
+// its heading and the next one (the "still running" beat has a table of its
+// own, and is held by testBeatPayloadContainsOnlyTheAgreedFields).
+std::set<std::string> documentedUsageRows(bool* found) {
+    std::set<std::string> rows;
+    std::ifstream in(std::filesystem::path(CASCADE_SOURCE_DIR) / "PRIVACY.md", std::ios::binary);
+    const std::string doc((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    const std::string heading = "## What is sent when usage reporting is enabled";
+    const std::size_t start = doc.find(heading);
+    *found = start != std::string::npos;
+    if (!*found) { return rows; }
+    std::size_t end = doc.find("\n#", start + heading.size());
+    if (end == std::string::npos) { end = doc.size(); }
+    std::istringstream lines(doc.substr(start, end - start));
+    std::string line;
+    while (std::getline(lines, line)) {
+        if (line.rfind("| ", 0) != 0) { continue; }
+        const std::size_t bar = line.find(" |", 2);
+        if (bar == std::string::npos) { continue; }
+        const std::string cell = line.substr(2, bar - 2);
+        if (cell == "Field") { continue; }   // the header row
+        rows.insert(cell);
+    }
+    return rows;
+}
+
+void testPrivacyDocumentsEveryUsagePayloadField() {
+    TelemetryReport r;
+    r.installId = newInstallId();
+    r.appVersion = "0.48.0";
+    const nlohmann::json j = nlohmann::json::parse(r.toJson());
+
+    std::set<std::string> payloadKeys;
+    for (auto it = j.begin(); it != j.end(); ++it) { payloadKeys.insert(it.key()); }
+    std::set<std::string> mappedKeys, mappedLabels;
+    for (const auto& kv : usageFieldLabels()) {
+        mappedKeys.insert(kv.first);
+        mappedLabels.insert(kv.second);
+    }
+
+    bool found = false;
+    const std::set<std::string> documented = documentedUsageRows(&found);
+    CHECK(found);
+
+    // Payload -> document: every key the report sends has a row.
+    for (const std::string& k : payloadKeys) {
+        if (mappedKeys.count(k) == 0) {
+            std::printf("FAIL the payload sends \"%s\" and this test has no PRIVACY.md row for it\n",
+                        k.c_str());
+        }
+        CHECK(mappedKeys.count(k) == 1);
+    }
+    // Document -> payload: every row has a key the report really sends.
+    for (const std::string& row : documented) {
+        if (mappedLabels.count(row) == 0) {
+            std::printf("FAIL PRIVACY.md documents \"%s\" and no payload field maps to it\n",
+                        row.c_str());
+        }
+        CHECK(mappedLabels.count(row) == 1);
+    }
+    // And the two lists this test holds agree with the payload and the
+    // document exactly, so an entry cannot linger after its field is gone.
+    for (const std::string& k : mappedKeys) {
+        if (payloadKeys.count(k) == 0) {
+            std::printf("FAIL the table maps \"%s\" but the payload no longer sends it\n", k.c_str());
+        }
+        CHECK(payloadKeys.count(k) == 1);
+    }
+    for (const std::string& label : mappedLabels) {
+        if (documented.count(label) == 0) {
+            std::printf("FAIL PRIVACY.md has no row \"%s\"\n", label.c_str());
+        }
+        CHECK(documented.count(label) == 1);
+    }
+    CHECK(payloadKeys == mappedKeys);
+    CHECK(documented == mappedLabels);
 }
 
 void testPluginNamesCannotBreakTheReport() {
@@ -677,6 +797,7 @@ int main() {
     testDeviceSerialIsStripped();
     testInstallIdIsRandomAndValidated();
     testPayloadContainsOnlyTheAgreedFields();
+    testPrivacyDocumentsEveryUsagePayloadField();
     testPluginNamesCannotBreakTheReport();
     testModeSecondsAccrueAcrossFrames();
     testPanelsReachThePayload();

@@ -32,8 +32,12 @@ Both carry: exact version **and** git commit, the stack as `module+offset`, the
 loaded module list with each module's **build id**, the last 256 log lines from
 the in-memory ring, the application context (mode, source, sample rate, radio
 model with the serial stripped, the crystal correction, the sound path - output
-state, volume, who muted it and the squelch, since 0.99.61 - and the loaded
-plugins with versions), and a **stable signature** for grouping.
+state, volume, who muted it and the squelch, since 0.99.61 - the radios the
+patch page has running, by driver kind, since 0.99.62, and the loaded plugins
+with versions), and a **stable signature** for grouping. Since 0.99.62 that
+context is rendered after every event that changes what it says, and on every
+frame, rather than once a second: see *The context block follows the session*
+below.
 
 Since 0.99.56 the context has a `ppm:` line: `off`, `not applicable` (switched
 on over the generator, a sound card or an I/Q file), or the value in force and
@@ -67,7 +71,10 @@ marks a frame as ours — which is why the same step matters for **plugins**: a
 plugin frame with a map is named by the plugin's own function, and without one
 every distinct bug inside that plugin collapses into a single group, since
 every plugin stack passes through the same host dispatch on its way down. The client signature
-stays in the payload as transport identity and the client-side dedup key.
+stays in the payload as transport identity and the client-side dedup key. For a
+**freeze** (`hang` or `stall`) that signature is, since 0.99.62, hashed from the
+first frame of the stalled thread that lies in our own executable rather than
+from its top frame - see *What a freeze's signature is built from* below.
 
 ### What the native drivers write (0.91.0, 0.92.0, 0.93.0)
 
@@ -485,8 +492,13 @@ that the payload cap and the ring are at least that).
 
 A report about a **fault in a child process** carries two more lines in that
 same block, and no stack at all (0.96.4). `child-exit-code` is what the child
-died of and `child-attempt` is which try it was; the stack section says, in
-words, that the fault was in another process and this one has nothing to show.
+died of and `child-attempt` is which try it was (the uploader reads only
+`uptime-sec` and `fault-thread-own` out of this block, so neither line is sent:
+what reaches the server of a child death is the `reason` line, the `code`, the
+`signature` and the log); the stack section says, in words, that the fault was
+in another process and this one has nothing to show. Since 0.99.62 such a
+report is written only for a death the child's own crash handler did not
+report (see *One report per death*).
 It is written that way because it had to be: the enumeration helper
 (`cascade --enumerate-json`) is expected to die occasionally by design, and the
 report filed at each death used to walk the stack of whichever worker thread
@@ -522,6 +534,35 @@ store accepts `crash` and `hang`, and a display driver's behaviour is not this
 product's fault to file. The sidecar beside it says so rather than implying the
 file was unreadable.
 
+**What does leave the machine is how many there were, and only that (since 0.99.62).** Keeping
+the report local made the frequency invisible: a user whose window freezes every
+few minutes and one whose never has looked identical from outside. So the usage
+record (PRIVACY.md, *What is sent when usage reporting is enabled*) carries one
+integer, `stalls`: how many freezes the watchdog classified `stall` and the
+server has not yet been told about. No stack, no module, no driver name, no time
+of day. It is counted by the same call that writes the `kind` line
+(`HangWatchdog::recordFreezeKind`, on the watchdog's own thread, once the kind
+is known); a `hang` is not counted at all. The classification needs the report
+to be captured, so **a stall is counted only while Diagnostics is on** - with it
+off nothing is detected, and nothing is counted.
+
+Where the running number lives is dictated by the way a stall most often ends:
+the user closes the frozen window from the taskbar, which is `TerminateProcess`,
+and nothing on the GUI thread ever runs again - so neither memory nor
+`config.json` can hold it. `core::StallLedger` keeps it in a file beside
+`config.json`, `telemetry-stalls`, holding the install id it belongs to and the
+number, and **the watchdog's thread writes it** the moment the freeze is
+classified (temp file and rename, so a kill mid-write leaves the old number or
+the new one). The GUI thread only ever reads an atomic. The next start reads it
+back, sends it in the record for the session that just ended, and subtracts
+exactly what it sent **only if the server answered 2xx** - the transport reads
+the HTTP status and nothing else. A send that fails, or never happens, leaves it
+to ride the next record. Reporting off: nothing is counted, nothing is kept, the
+file is removed, and a file left by an earlier identity is ignored rather than
+attributed to a new one. `tests/test_stall_count.cpp` holds all of this, including
+the real capture on the real watchdog thread; the Worker side is held by
+`telemetry-worker/worker.test.mjs`.
+
 Before any of that, two things stop such a report being written at all
 (`gui/present_grace.hpp`): the watchdog is paused for a bounded 10 s grace when
 a display change is seen — `WM_DISPLAYCHANGE`, counted in the window procedure,
@@ -535,6 +576,85 @@ grace was only bounded by the frame loop noticing it had expired, and the
 "as long as it is minimised" pause was not bounded at all, so a loop that
 stopped while either was held was never reported. A minimised window whose loop
 keeps turning is still never reported, however long it stays minimised.
+
+### What a freeze's signature is built from (0.99.62)
+
+Until 0.99.62 a freeze report's `signature` was hashed from the report's kind
+tag (`HANG`, or `STAL` for a display stall) plus the **module and offset of frame
+0** of the stalled thread. A frozen GUI thread is almost always parked in the same
+few kernel wait stubs - `ntdll.dll`'s wait for a handle or a condition variable,
+`win32u.dll`'s message wait - and frame 0 of every one of those waits is the same
+instruction whatever the thread is waiting *for*. So freezes from completely
+different causes (the audio open, a shell call, a lock a worker holds) shared one
+signature. The upload de-duplicates by signature for 24 hours
+(`decideUpload`, `kDedupSeconds`, `src/core/crash_upload.cpp`), so a user who met
+two different freezes in a day sent the first, and the second was marked
+`duplicate` in its `.upload` sidecar and never arrived. The server was not the
+problem - it re-groups what it receives by the nearest named frame of our own code
+- the loss was on the client, before the upload.
+
+The signature now identifies **the code of ours that was waiting**
+(`core::freezeSignature`, `src/core/diag_report.cpp`): the hash is the kind tag,
+plus the module and the module-relative offset of the **first frame, nearest the
+top, of the stalled thread that lies in the main executable** - the same test
+`fault-thread-own` applies to a crash. Two properties are held by
+`tests/test_hang_signature.cpp`, against a real watchdog and real blocked
+threads: two stalls parked in the *same* kernel wait from two *different* functions
+of the program get different signatures, and the same stall twice gets the same
+one. Through the real `decideUpload` the first sends two reports and the second
+sends one.
+
+- **When no frame of the stalled thread is ours** (a thread idling in the thread
+  pool, a stack of vendor code only, a Linux non-PIE executable whose load bias of
+  0 cannot be told from "unknown") it falls back to the old key, frame 0, and still
+  gets a signature.
+- **A display stall keeps its own tag.** `STAL` and `HANG` are different hash
+  inputs, so a monitor being switched off can never share a group with a deadlock
+  even when both are keyed by the same frame. Stalls are still kept on the machine
+  and never uploaded.
+- **The form is unchanged**: 16 uppercase hex digits, the shape the dedup memory,
+  the wire contract and PRIVACY.md already describe. What leaves the machine does
+  not change, and neither do the payload's `module` and `offset`, which still name
+  frame 0 of the stalled thread; the server's re-grouping reads the stacks.
+- **The offset is build-specific.** One freeze in two builds has two signatures.
+  That has always been true of a crash signature and is correct - the offsets
+  differ, and so do the symbols needed to read them. (A frame-0 key in `ntdll.dll`
+  did survive across builds, but it grouped everything.)
+- **The nearest frame of ours can still be a shared wrapper.** If two different
+  causes both reach their wait through one function of ours - a helper every call
+  site goes through - they share that frame and so a signature. The full stacks in
+  the payload are what tells them apart; this change removes the kernel stub from
+  the key, not the possibility of a common helper.
+- **The stalled thread is walked before the header** whenever its frame 0 is not
+  already in our image (it used to be only when frame 0 was a kernel wait). The
+  signature needs the frames under the wait, and the `kind` line, which is the first
+  line of the file, is decided from the same walk. A thread whose frame 0 is already
+  ours is keyed by that frame exactly as before, with no earlier walk. The cost is the
+  one phase 1b already carried and documents in `hang_watchdog.cpp`: a wedge in that
+  one walk costs the whole report.
+- **Migration.** The uploader reads the signature from the report file's own
+  `signature:` line and never recomputes it, so a freeze report written by the
+  previous build and swept by this one is judged by its old-style signature exactly
+  as before: nothing is lost and nothing is sent twice because of it. The dedup memory
+  in the config is read as it always was (a signature and a time). After the upgrade a
+  freeze that the old build had already sent in the last 24 hours is a *new*
+  signature, so it can be sent once more - at most once per new signature, inside the
+  existing five-a-day cap - and the server, which groups by named frame (above),
+  is not asked to tell the two apart by their signatures.
+- **On Linux** the same function is used: the stack is already walked in full
+  before the header there, and the main image is module 0 of the `dl_iterate_phdr`
+  snapshot. This path has not been compiled or run by the author of this change.
+
+**Crash signatures are not changed**, and they have a narrower form of the same
+loss: the key is the code, the faulting module and the offset of the *faulting
+instruction*, so two different faults reached from different callers of ours share a
+signature only when they fault at the very same instruction of one module - the
+shared system-DLL case (an unrelated fault in the same `ntdll.dll` or `ucrtbase.dll`
+routine) - and a crash ends the process, so a second one in 24 hours also needs a
+restart. An absorbed vendor fault is the opposite constraint: it recurs
+indefinitely, and one upload a day is the behaviour that keeps it from filling the
+five-a-day allowance, so folding the caller of ours into *its* key would multiply it
+by the number of distinct call sites that reach it.
 
 ### Shell calls are made under a watchdog pause
 
@@ -811,6 +931,174 @@ the bundle cannot describe the sound differently. What they do not stage: the
 once-a-minute repeat of a standing refusal, a device that opens and then dies, or
 a host API that reports an unanticipated error.
 
+### The context block follows the session, not the last second (0.99.62)
+
+Three crash reports from 0.99.59 carried a context block that read `source:
+siggen`, `device-open: no`, `sample-rate: 2000000` and no radio model, while the
+log tail of the same report said a radio had just opened: `source: opened miri
+(soapy) at 2000000 S/s` one second before the fault; `source: opened ADALM-Pluto
+(network) (pluto) at 30720000 S/s` immediately before one, the rate that was the
+whole cause of that crash and nowhere in its context; and `patch: radio node 4
+running SDRplay RSP1A (SoapySDR) at 2000000 S/s`. A fourth report, from a session
+whose radio had been restored from the saved configuration at start-up, had a
+correct block.
+
+**What the code did (proven, by reading it and by the test below).** A fault
+handler cannot compute anything, so the block is rendered on the healthy path and
+the handler writes out the bytes. Through 0.99.61 that render, `AppWindow::
+refreshDiagContext`, was called from exactly three places: once in `run()` before
+the first frame, by `currentDiagnosticsBundle` (Copy diagnostics and the report
+page), and once per 60 rendered frames in the frame loop - about a second at
+60 Hz. No source change, rate change, mode change, plugin rescan or patch radio
+called it. So the block was never more than about a second old, **and exactly that
+old after a radio opened**. The premise "it is refreshed at start-up but not after
+a radio is opened from the Source list" was half right: there was a refresh, a slow
+one, which is why the fourth report - fault long after a restore - was correct.
+`tests/test_diag_context_app.cpp` drives a real `AppWindow` through an interactive
+open with no frame drawn, as a fault one millisecond after the open would see it:
+on the unmodified tree the block read `source: siggen`, `device-open: no`,
+`sample-rate: 2000000` against the window's own `rtlsdr`, open, 2048000.
+
+**What is inferred, not proven.** That each of the three faults came inside that
+second: reports (a) and (b) put the open one second and "immediately" before the
+fault, which fits, and nothing else in the code produces a stale block for longer.
+Report (c) was **not stale**: `source: siggen` was true of the receiver, and the
+radio was a second signal path the block did not describe at all.
+
+**The fix.** One builder, `AppWindow::currentDiagContext`, is the only place the
+context is assembled from the window's state (the Copy diagnostics bundle used to
+carry a second copy of it, which re-renders into the same buffer and had left `ppm:`
+at its default in every bundle until 0.99.61). `refreshDiagContext` renders it and
+is now called:
+
+- on **every frame** (the net under everything below: a writer that forgets the
+  call is wrong for a frame, not for a second - and the volume, mute, squelch gate
+  and sound output, which change by other routes, are never more than a frame old);
+- at the end of `applyConverterForSource`, the step every install, swap and close of
+  the source ends with (the Source list's asynchronous open, its failure and its
+  fall-back to the generator, the swap back to the generator, the patch page
+  handing a radio back, the I/Q file, the sound card, the driver-fault reopen, and
+  the startup restore) - after `installSource` and the `sourceKind_`, `device_` and
+  `deviceModel_` assignments around it, so the block is rendered from a state that
+  agrees with itself;
+- on every way out of `followInputRate` (the Rate combo, a plugin preset and the
+  browser's rate request all end there, and so does every source change), with the
+  rate the source READS BACK, not the one asked for;
+- in `commitModeIndex`, the one place `modeIndex_` is assigned (the mode buttons
+  and keys, a plugin preset, a bookmark from the desktop and from the browser, the
+  browser's mode request, and the config restore);
+- on every way out of `rescanPlugins` (the early return after the quarantine
+  failed included, which is taken after every plugin has been unloaded);
+- on every way out of `patchReconcile` and `patchStopAll`, where the patch page's
+  radios start, are switched off or retired, and stop.
+
+It is cheap enough for that: the version, commit, OS and architecture strings are
+read once, and `setDiagContext` writes **nothing** when the block it renders is
+byte-for-byte what the buffer already holds, so the buffer a fault handler may be
+reading is not touched sixty times a second. The structural half of the test holds
+that `modeIndex_` is assigned nowhere but `commitModeIndex`, that every
+`installSource` is followed by `applyConverterForSource`, and that the frame loop
+no longer refreshes one frame in sixty.
+
+**The new line.** `patch-radios:` is `none`, or the number of radios the patch page
+has running and their **driver kinds** - `1 (rtlsdr)`, `2 (rtlsdr, soapy)` - sorted,
+one per running radio. Kinds only: it is built from the part of each patch node's
+device key before its first vertical bar (`siggen` for the generator, `iqfile` for a
+recording, whose path is never read), and the renderer keeps only the leading run of
+lower-case letters and digits of that, so a serial or a path cannot reach it. A fault
+on a patch radio's thread otherwise reads as a fault with no radio at all.
+`crash_upload.cpp` reads a fixed list of context lines (`mode`, `source`,
+`sample-rate`, `device-open`, `sdr-model`, `plugin`) and **does not carry this one**:
+the upload's `context` object is the wire contract PRIVACY.md lists, a new key in it
+would need the receiving end changed first (it has not been, and whether it would
+tolerate an unknown key is not something this repository can show) - so the line is
+in the report file on the machine and in the bundle, and not on the dashboard.
+
+**What this does not close.** The block is rendered at the end of `applyConverterForSource`,
+not before `pipeline_.setSource` starts the new source's thread, so a fault in the
+first read of a new stream can still land in the few microseconds between the thread
+starting and the render. The mid-render write of the fixed buffer is still not atomic
+against a handler on another thread (it now happens only when the text changes). The
+plugin-set hook is held structurally and by a rescan with no plugins installed, not by
+loading a real plugin into the test. And whether the three field faults are fixed by
+any of this is untested: the context describes them, it does not cause or cure them.
+
+### What the bundle says about the sessions before this one (0.99.62)
+
+A user's window froze after twenty minutes; they ended it from the taskbar,
+restarted, and sent the bundle five minutes into the next session. The bundle
+described a healthy five-minute session: the in-memory log ring holds the CURRENT
+session only, and nothing in the bundle said whether a freeze report had been
+written or uploaded. The bundle (Copy diagnostics, and the attachment of the REPORT
+A BUG page) now carries two more sections after the log, each under its own heading
+(`src/core/diag_history.{hpp,cpp}`, assembled by `buildDiagnosticsBundle`):
+
+- **`--- previous session (the end of its log) ---`**: the last lines of the session
+  before this one, read from the rotating log files (`foxsdr.2.log`, `foxsdr.1.log`,
+  `foxsdr.log`, oldest first, concatenated). Sessions are cut at the line `main()`
+  writes first, `FoxSDR <version> (<commit>) starting`, and **the newest such line is
+  this session**; the session before it is the one shown. At most **80 lines and
+  12 KiB**, the newest kept, under a `session: FoxSDR 0.99.59 (<commit>), N lines in
+  the log files, the last M follow` line. Every line goes through
+  `core::scrubUploadLog` with the report's plugin inventory, the same call the
+  current log goes through. When there is none the section says why in a sentence:
+  `none - the log files hold no session before this one`, `none - no session start
+  line is in the log files`, `none - the log folder holds no log file`, and so on.
+- **`--- reports on this machine ---`**: for the newest **ten** `crash-*.txt` and
+  `hang-*.txt` files (by the time they were written), one line:
+  `hang, 1 min ago, version 0.99.59, uptime 1200 s, stalled 7213 ms, signature
+  7C04AAAABBBBCCCC, upload sent`, or for a crash `crash, 2 h ago, version 0.99.59,
+  uptime 3600 s, access violation (0xC0000005), signature 1B2C3D4E5F607182, upload
+  none`. The kind is `crash`, `hang` or `stall`; the upload word is the sidecar's
+  `status:` - `sent`, `duplicate`, `local-only` (a stall, which is never sent),
+  `backoff`, `rate-limited`, `failed`, `abandoned`, `too-large`, `expired`,
+  `refused` - `other` for a word the uploader does not write, and `none` when there is
+  no sidecar (nothing has swept the report, or sending is off). Nothing else is read:
+  no stack, no log, no module list, no context block, no file name or path; a `.dmp`
+  or a saved `diagnostics.txt` in the same folder is never opened. Each line passes
+  through `scrubUploadLine`. This is what answers "did the watchdog fire, and did the
+  report reach us". (The uploader writes ten statuses, `rate-limited` and `refused`
+  among them, and all ten are carried.)
+
+**Off means off.** With Diagnostics off, or in a run that may not touch the disk (a
+bounded `--frames` run has no reports folder), the bundle adds neither section, not
+even a heading, and nothing is read: the only read path is `DiagHistoryCache`, whose
+`readsStarted()` stays at zero (`tests/test_diag_history.cpp`, through a real window).
+
+**It is read off the frame loop.** The reports folder is in the same tree as the
+settings folder whose synchronous `exists()` froze a window for five seconds (*The
+settings-folder poll is answered off the frame loop*), and the problem-report page
+rebuilds its attachment about once a second while its box is ticked. So
+`DiagHistoryCache` owns one worker thread at a time and the window never reads a file
+itself: the previous session is read **once**, at the start of `run()` (and when
+Diagnostics is switched on), before this session's own lines can rotate it away; the
+report list is read again when the answer is older than five seconds, and a person's
+own click on Copy diagnostics asks for a fresh one and waits for it for at most 750 ms.
+At exit a read still blocked in the filesystem is abandoned, not joined. A bundle made
+before the first read has finished says `(still being read - copy the diagnostics
+again in a moment)`.
+
+**Not in the automatic upload.** `crash_upload.cpp` reads a fixed list of fields from
+a report and none of this is in it; the bundle is only ever sent by the user's own
+action.
+
+**Known limits, stated.**
+
+- The previous session is "whatever precedes the newest start line", which is this
+  session's only if this session's start line is in the files. A session that started
+  with Diagnostics off and had it switched on part-way through has no start line there,
+  so the section says so (`none - diagnostics were switched on part-way through this
+  session ...`) rather than showing the wrong session; so does a log file that is not
+  being written.
+- Two FoxSDR windows appending to the same log interleave their lines and their start
+  lines, and the section then shows whatever the newest start line implies.
+- The log files keep three files of 1 MiB; a previous session older than that is gone,
+  and the section says there is none.
+- Not exercised against a real freeze followed by a real restart: the tests build the
+  files and reports by hand in the shapes the writers produce (`DiagLog`'s
+  `HH:MM:SS.mmm level text` lines, `crash_handler.cpp` and `hang_watchdog.cpp`'s
+  headers, `crash_upload.cpp`'s sidecar).
+
 ### The bandwidth line (0.99.61)
 
 `bandwidth: N Hz in MODE (how)` — written when the receiver's width changes,
@@ -892,45 +1180,139 @@ two records of one event that can disagree.
 The "Afterwards" row above says the process dies, and for a fatal fault it
 does. The device search is the exception, because it is the one place where the
 alternative is that the most reproducible fault this product has ever had stays
-invisible. It produces three reports, all of `kind: crash`:
+invisible. It produces three kinds of report, all of `kind: crash` — and since
+0.99.62 **one death produces one of them, not several** (see *One report per
+death* below):
 
 | Reason line begins | Raised by | Written by | Stack |
 |---|---|---|---|
 | `fault in a third-party SDR module, absorbed…` | a vendor driver faulting on our own calling thread | `src/source/vendor_guard.cpp`, from its `__except` **filter** — `EXCEPTION_POINTERS` are dead by the time the handler body runs | the fault's |
-| `access violation` (or any ordinary fatal reason) | the helper process faulting on **any thread**, in whatever module: in cascade's own code, which the guard deliberately refuses to absorb, **or in a vendor DLL** — a thread a driver created, or an ASIO driver a vendor module maps itself in the middle of a probe | the helper's own crash handler, installed by `armEnumerateHelperProcess` into the directory the parent passed down; since 0.99.59 the report carries `version`, `commit`, `os` and `arch`, which the helper had no way to render before | the fault's |
-| `SDR device enumeration child process died…` | the helper process dying by any route the parent can only see from outside — the libusb fault on a UHD thread, a heap corruption (`0xC0000374`), or the timeout kill | `src/source/soapy_enum_proc.cpp`, in the parent, with the child's exit code as `code` | none — the stack section says the fault was in another process |
+| `access violation` (or any ordinary fatal reason), ending ` - enumeration child, <walk>, attempt N (contained)` | the helper process faulting on **any thread**, in whatever module: in cascade's own code, which the guard deliberately refuses to absorb, **or in a vendor DLL** — a thread a driver created, or an ASIO driver a vendor module maps itself in the middle of a probe | the helper's own crash handler, installed by `armEnumerateHelperProcess` into the directory the parent passed down; since 0.99.59 the report carries `version`, `commit`, `os` and `arch`, which the helper had no way to render before; since 0.99.62 the reason ends with the walk, the driver and the attempt | the fault's |
+| `SDR device enumeration child process died…` | the helper process dying by a route **its own handler never sees** — a heap corruption (`0xC0000374`), a vendor `TerminateProcess`, a death before it armed — and so one the parent can only see from outside | `src/source/soapy_enum_proc.cpp`, in the parent, with the child's exit code as `code`, **and only when the child left no report of its own for that death** | none — the stack section says the fault was in another process |
 
 **Which driver (0.99.34).** SoapySDR runs every driver's find function at once,
 on a thread each, so a whole-bus helper that dies has no single driver to
 blame. The helper therefore writes a probe log to the parent as it goes
-(`cascade-probe: begin <driver>` / `end <driver>`), and the whole-bus report's
-reason ends with the drivers **still probing when it died** — a shortlist, not a
-verdict, since a heap corruption is detected at a later allocation, possibly on
-another driver's thread. The per-driver sweep that follows two whole-bus deaths
-is what names a culprit: its report reads `…died probing driver=<name>`, and
-that driver is then left out of every scan for the rest of the session (the
-Source panel says so in one line). Each report's signature hashes
+(`cascade-probe: begin <driver>` / `end <driver>`), and the parent's whole-bus
+report's reason ends with the drivers **still probing when it died** — a
+shortlist, not a verdict, since a heap corruption is detected at a later
+allocation, possibly on another driver's thread. (Since 0.99.62 the same
+begin/end lines are also written to the helper's own log ring, so the helper's
+own report carries the shortlist in its log; the parent's report, which exists
+only for the deaths that report cannot cover, still carries it in its reason.)
+The per-driver sweep that follows two whole-bus deaths is what names a culprit:
+the report of its death reads `…died probing driver=<name>` (the parent's) or
+ends `…, driver=<name>, attempt 1 (contained)` (the helper's own), and that
+driver is then left out of every scan for the rest of the session (the Source
+panel says so in one line). The **parent's** reports hash
 `enumerate-child:whole-bus` or `enumerate-child:driver=<name>` in place of the
 faulting module; before 0.99.34 it hashed `"?"`, so every contained death of one
 exit code was one crash group (`650B88A1735695DB` = `0xC0000005`,
 `91965660116CF497` = `0xC0000374`), and the per-driver report was dropped by
-the uploader's 24-hour de-duplication as a repeat of the whole-bus one.
+the uploader's 24-hour de-duplication as a repeat of the whole-bus one. The
+helper's own report hashes the faulting module and offset, as every crash
+report does — see *One report per death* for why that is the right grouping.
 
 They are filed as `kind: crash` rather than a new kind on purpose:
 `src/core/crash_upload.cpp` forwards `crash` and `hang` and **refuses anything
 else**, so a new spelling would be a report nobody ever receives.
 
-**The third one is written at every death, not only when the whole scan
-fails.** The common shape of the libusb fault is "first helper died, the retry
+**A death is reported at every death, not only when the whole scan fails.**
+The common shape of the libusb fault is "first helper died, the retry
 worked": on this bench, at roughly one child in forty, some forty of every
 forty-one occurrences end that way. Filing only when *every* attempt died would
 report about one in forty-one of them, and the other forty would exist as a
 line in `foxsdr.log` — which is never uploaded on its own. The success of the
-containment is exactly what would have made the fault invisible.
+containment is exactly what would have made the fault invisible. (The report is
+the helper's own when its handler ran, and the parent's third kind above when it
+did not.)
 
-Its `address` is `0`: the fault was in another process and this one has no
-address to offer, so it groups by reason and code rather than by module and
-offset, and the useful half is the `code`. The middle row exists so that a
+**One report per death (0.99.62).** Before this, one death could leave
+*three* reports: the helper's own (the stack and the module list), the parent's
+whole-bus report of it (no stack; the drivers still probing) and — after a
+second whole-bus death — the parent's per-driver report from the sweep (no
+stack; the driver). One machine's deterministic ASIO-driver fault produced six
+report files in one scan and, after the client's 24-hour de-duplication, three
+uploads: three of the five a machine may send in a day, for a fault the
+application survived, so that a genuine crash later the same day could be
+rate-limited away; and on the dashboard it was three unrelated groups. Now:
+
+- **The helper's report is the report, whenever the helper wrote one.** The
+  parent starts the helper itself, so it knows its process id
+  (`EnumResult::childPid`), and the helper's report is named with that id
+  (`crash-<stamp>-<pid>-<seq>.txt`) and is on disk before the parent sees the
+  exit, because the handler writes and only then terminates. The parent asks the
+  crash directory (`core::crashReportWrittenByProcess`) and files its own report
+  only when the answer is no. That answer is yes only for a file that is named
+  for that process id **whole** (not 14242 for 4242), was written **no earlier
+  than the spawn** (process ids are reused and the folder keeps reports for
+  weeks), has a whole header — `kind: crash` and a sixteen-digit `signature` —
+  because a file the handler created and never wrote to is not a report, and is
+  **not an absorbed vendor fault**, because a helper that absorbed a fault and
+  carried on has a report with its own process id too, and if it then dies by a
+  route its handler never sees, that earlier file is not the report of the death.
+  `vendor_guard.cpp` `static_assert`s its reason still begins with the prefix that
+  distinction rests on.
+- **What the helper's handler never sees keeps the parent's report exactly as it
+  was:** a heap corruption (`0xC0000374`), a vendor `TerminateProcess`, a helper
+  that died before it armed, an absorbed-then-unseen death. The timeout kill
+  never produced a parent report — only a `ChildDied` outcome is reported — and
+  still does not. With diagnostics off neither process writes a file: the helper
+  is handed no directory, so it dies quietly, and the parent's writer is
+  disabled.
+- **The facts only the parent's reports carried are in the helper's.** The
+  helper knows its own arguments, so on the healthy path, before it arms, it
+  renders the tail of its `reason:` line — ` - enumeration child, whole bus,
+  attempt 2 (contained)`, ` - enumeration child, driver=uhd, attempt 1
+  (contained)`, or `driver list` — and hands it to its crash handler to copy out
+  at fault time (`CrashHandlerConfig::reasonSuffix`: fixed storage, nothing
+  formatted on the fault path). The attempt is handed down on the command line
+  (`--attempt=N`), because only the parent knows it. This rides in the `reason`
+  line, which is already uploaded verbatim: **no new upload field**, and nothing
+  new leaves the machine. The driver is cut to 16 characters; the site keeps 200
+  of a reason and the tail has to fit behind the longest reason this product
+  writes (an absorbed fault's, 134) — pinned by a test against a real absorbed
+  fault in a real helper.
+- **The "still probing when it died" shortlist is kept in the helper's log, not
+  in its reason.** It is known only as the fault happens, and the parent reads it
+  off the pipe. The options were the parent appending a line to the file the
+  helper wrote (a second writer on a report the next start reads, with a new way
+  to leave it half-written if the parent itself dies mid-append), accepting its
+  loss, or keeping the parent's report and so the second upload. Instead the
+  helper writes each `cascade-probe: begin/end <driver>` line to its own log ring
+  as well as to the parent, and the ring is in the report and in the uploaded
+  `log`: a probe that began and never ended is the shortlist, and the stack names
+  the faulting module besides. What is lost is that the shortlist is no longer on
+  the dashboard's reason line for a death that has a stack.
+- **The signature is the fault's, so one fault is one upload.** The helper's
+  report hashes the faulting module and offset like every crash report, so the
+  same fault met by two whole-bus helpers and then by the per-driver helper is
+  one signature and one upload inside the 24-hour window (`decideUpload`,
+  `kDedupSeconds`), where it was three. Two *different* drivers faulting fault in
+  two different modules and are two signatures. A fault in **no module** (private
+  memory, a jump through a freed pointer) has no module to hash and used to share
+  one `"?"` signature per exception code — which, now that the parent's tagged
+  report is not filed, would have made two drivers' such faults one group. The
+  helper therefore hashes `enumerate-child:whole-bus`,
+  `enumerate-child:driver=<name>` or `enumerate-child:driver-list` in that case
+  only (`CrashHandlerConfig::unresolvedSignatureTag`), so those stay apart per
+  walk and per driver.
+
+`tests/test_soapy_enum_proc.cpp` pins all of it against the real binary and real
+vendor modules (`tests/fixtures/soapy_fault_module.cpp`, whose `thread` stage
+faults on a thread the find function spawns — the libusb fault's shape, and the
+one fault the vendor guard cannot absorb, so the per-driver helper dies too): one
+file for one death with a stack, the driver and the attempt; three deaths and
+three files with one signature and one upload for the deterministic case; two
+faulting drivers' four files, two signatures, two uploads; diagnostics off, no
+file; and the deaths the helper's handler never sees, one stackless parent
+report each. **What is not shown:** the POSIX spawn path and the POSIX crash
+handler's tail and tag, which cannot be built on the machine this was written on.
+
+The parent's report (the third row) has an `address` of `0`: the fault was in
+another process and this one has no address to offer, so it groups by its tag
+and code rather than by module and offset, and the useful half is the `code`. The
+middle row exists so that a
 fault on that path is not reduced to an exit code — the helper runs above
 `installCrashHandlers` in `main()` and would otherwise have no handler at all —
 and it is not limited to our own code: the handler reports whatever reaches it,
@@ -1418,6 +1800,167 @@ Release builds are compiled with `/Zi` and linked with `/DEBUG /OPT:REF
 /OPT:ICF`. `/Zi` is a debug-*information* switch, not an optimisation switch:
 the generated code is byte-for-byte what `/O2` produced without it.
 
+### Linux symbols: what the archive holds, and where it comes from
+
+A Linux frame is `module offset build-id`, and what it can be turned into
+depends on what is in `symbols/cascade.debug/<build id>/cascade.debug`. For a
+long time that was assumed, from the file's size alone, to be too small to hold
+line tables. It was then opened.
+
+**What it held, measured (October 2026).** The 0.99.59 file
+(`ec687d3420afc88116b06e356f0311ed13cda489`, 1,463,664 bytes) has 34 sections
+and none of them is `.debug_*`: it is a symbol table (`.symtab`, `.strtab`) with
+every code section marked NOBITS, and nothing else. A search of all 60
+`cascade.debug` files in the mirror for `.debug_`/`.zdebug_` section names found
+none; the larger ones (up to 10 MB, built by GCC 15.2 where 0.99.59 was built by
+GCC 13.3) show the same section list with different padding, not DWARF. The
+plugins' `.so.debug` files are the opposite: all 29 contain `.debug_*` section
+names, and the two opened carry `.debug_info` and `.debug_line`, because the
+plugin repository compiles with `-g`. So a Linux frame in the application could be
+named — "52 bytes before the end of `_glfwTerminateWayland`" — and never placed
+on a line, where the same frame on Windows resolves to a file and line from the
+PDB.
+
+**The step that lost it was the compiler.** CMake's Release flags for GCC and
+Clang are `-O3 -DNDEBUG`; the application's `CMakeLists.txt` added `/Zi` for
+Windows and nothing for Linux, so the binary never had DWARF to keep.
+`tools/archive-symbols-linux.sh` split whatever the binary carried, and its
+header said a normal binary "already carries its DWARF debug info inline",
+which was true of nothing it had been run on. Nothing stripped the binary
+afterwards either: the CI tarball and the AppImage copy `build/cascade` as
+linked.
+
+**What happens now.**
+
+- The Release configuration on Linux compiles C and C++ with `-g`
+  (`CMakeLists.txt`). `-g` is a debug-information switch and does not change the
+  code: GCC's manual says `-g0` negates `-g` and provides `-fcompare-debug` to
+  check that debug information changes nothing, and 12 of this repository's own
+  translation units compiled at `-O3` with and without `-g` (GCC 16, x86-64)
+  had byte-identical code and data sections. (`-fcompare-debug` itself flagged
+  one of four files tried, `src/dsp/rds.cpp`, although that file's emitted
+  sections were identical either way. Only GCC was measured; Clang is not used
+  for a shipped build.)
+- After the link, `tools/archive-symbols-linux.sh` runs
+  `objcopy --only-keep-debug --compress-debug-sections=zlib` to write
+  `cascade.debug` (plain, with a warning, if that `objcopy` refuses the
+  option), then `objcopy --strip-debug --add-gnu-debuglink=<that file>` on the
+  binary in the build tree, and archives that stripped binary as
+  `cascade/<build id>/cascade`. The order is the one binutils documents, and
+  the strip comes only after the split file exists. The build id is in a note
+  section neither step touches, so it is the same before and after. A `Debug`
+  or `RelWithDebInfo` build keeps its DWARF in the binary.
+- Only DWARF is removed (`--strip-debug`, not `--strip-all`): the function
+  symbol table stays, and `symmap.json.gz` is unchanged — regenerated from a
+  real 0.99.59 binary before and after the strip it is identical, and the
+  website's format is untouched.
+- The test executables (`tests/CMakeLists.txt`) compile with `-g0` and link with
+  `--strip-debug`. They are not shipped, there are 265 of them, and one
+  translation unit that includes nlohmann::json grew from 0.4 MB to 6.4 MB of
+  object with `-g`.
+- The script prints `(line tables: yes)` or `(line tables: NO)` and warns when
+  the archived file has no `.debug_line`; it never fails the build, like the
+  rest of it.
+
+**Size.** Nothing has been built with this change at the time of writing, so
+there is no measured figure. The plugin builds give the ratio — a plugin's
+`.so.debug` is 3 to 13 times its shipped module, and zlib halved the small one
+tried — and the PDB for the same program is about 44 MB; expect tens of
+megabytes per Linux build, two builds (x86-64 and arm64) per release. Replace
+this paragraph with the real number from the first CI artifact.
+
+**Where the Linux release symbols come from.** The release notes name the
+files `foxsdr-<version>-linux-x64.tar.gz` and `FoxSDR-<version>-x86_64.AppImage`
+(and the arm64 pair), which are exactly what the CI workflow produces, so the
+released Linux files are taken to be CI's, built on a runner that is thrown
+away. Before this change the workflow uploaded those files and nothing else, so the
+`symbols/` the build wrote on the runner was lost, and `tools/build-nightly.ps1`
+mirrors Windows PDBs only. Any Linux entry in the mirror was therefore copied
+there by hand from a build made elsewhere. A build id in a user's report finds
+its symbols only if the build the user was given is the build that was archived,
+and that must be checked rather than assumed:
+
+    readelf -n cascade | grep "Build ID"     # on the cascade inside the released tarball
+
+and compare it with the directory name under `cascade.debug/` in the mirror.
+
+Each CI job now uploads its `symbols/` as an artifact —
+`foxsdr-linux-x64-symbols` and `foxsdr-linux-arm64-symbols` — and then checks
+it (below). Mirroring is still by hand, and it must use the artifacts of the
+**same run** that produced the release files: a rebuild of the same commit is
+not guaranteed to produce the same build id. Artifacts expire, so do it when the
+release is made.
+
+1. Download both symbol artifacts and unzip them.
+2. Copy `cascade.debug/<build id>/` and `cascade/<build id>/` from each into the
+   same-named directories of the symbol mirror. Entries are keyed by build id,
+   so the two architectures and every earlier build sit side by side.
+3. Append the artifact's `index.txt` rows that the mirror's `index.txt` does not
+   already hold. Each row is terminated `\r\n` and the file has no byte-order
+   mark, as the script writes it; do not replace the mirror's file with the
+   artifact's.
+4. Check: `readelf -S -W <mirror>/cascade.debug/<build id>/cascade.debug`
+   lists `.debug_line`.
+
+**What the first CI run must show.** The "Check the symbol archive" step at the
+end of each Linux job prints the archived file's `.debug_info`/`.debug_line`
+sections, fails if `.debug_line` is missing, fails if the shipped
+`build/cascade` still has `.debug_info`, and resolves `main` through
+`addr2line -f -C -e` to a line in `main.cpp`. The same three can be run by hand
+against any archived file:
+
+    readelf -S -W symbols/cascade.debug/<id>/cascade.debug | grep debug_
+    addr2line -f -C -i -e symbols/cascade.debug/<id>/cascade.debug 0x<offset>
+    readelf -S -W <shipped cascade> | grep -c debug_       # 0
+
+`addr2line` reads the compressed sections (the binutils 2.46 build on the
+development machine did). The CI image's own binutils is the one that matters
+for the archive step: Ubuntu 24.04 ships binutils 2.42, the arm64 job runs on
+`ubuntu-24.04-arm`, and the 0.99.59 archive's compiler string is Ubuntu 24.04's
+GCC 13.3 — and the CI step above is what proves it, rather than this sentence.
+
+**Reading a Linux report.** `foxsdr-reports --archive symbols\` resolves ELF
+frames (a 40-digit lowercase build id) with `addr2line`, found through
+`FOXSDR_ADDR2LINE`, then `addr2line` on `PATH`, then `wsl addr2line`. A
+Windows machine with MSYS2's binutils works: set `FOXSDR_ADDR2LINE` to its
+`addr2line.exe` if it is not on `PATH`. A frame prints one of two ways:
+
+    cascade!<function>  <file>:<line>
+    cascade!<function>  (function only: no source line in the archived symbols)
+
+The second means the archived file names the function and has no line for that
+offset: a build made before the Linux build compiled with `-g`, or an address
+with no line entry (a PLT stub, a compiler thunk). `-i` on a hand-run
+`addr2line` also lists the functions inlined at that address. With no usable
+`addr2line` the reader says so and names the archived file, and never prints a
+half-answer.
+
+**Frames in system libraries.** glibc, libwayland-client, Mesa, libstdc++ and
+the rest can never be in our archive. They do not need to be: the report's
+`--- modules ---` block carries a GNU build id for every module the process had
+loaded, system libraries included (`diag_report.cpp` walks them with
+`dl_iterate_phdr`), and a distribution's debuginfod server indexes its debug
+packages by exactly that id. As a manual step for the person reading a report —
+nothing in FoxSDR, and not `foxsdr-reports`, contacts these servers:
+
+    export DEBUGINFOD_URLS="https://debuginfod.elfutils.org/"
+    debuginfod-find debuginfo <build id of the module, from the report>
+    addr2line -f -C -e <the path debuginfod-find printed> 0x<the frame's offset>
+
+`debuginfod-find` (elfutils) saves the file into a local cache and prints its
+path. Without elfutils the same file is
+`curl -o module.debug https://debuginfod.elfutils.org/buildid/<build id>/debuginfo`.
+`https://debuginfod.elfutils.org/` federates selected servers; the
+distributions run their own, to be chosen from the report's `systems:` line:
+`https://debuginfod.ubuntu.com/`, `https://debuginfod.debian.net/`,
+`https://debuginfod.fedoraproject.org/`, `https://debuginfod.archlinux.org/` and
+`https://debuginfod.opensuse.org/` (`DEBUGINFOD_URLS` takes several,
+space-separated). A build id no server knows is a library version that
+distribution no longer serves, or another distribution; there is nothing to fix
+on our side. The request sends a build id, which identifies a library and not a
+user, to a third party — which is why it is a person's decision and not a
+feature.
+
 ## Reading a report
 
 1. Take the `build=` value for the faulting module out of the `--- modules ---`
@@ -1429,7 +1972,11 @@ the generated code is byte-for-byte what `/O2` produced without it.
 3. Point a debugger at the archive as a symbol path and resolve the
    `module+offset` frames — or, for reports that came in over the network, run
    `foxsdr-reports --archive symbols\`, which does exactly this for a whole feed
-   at once and groups it by signature. See *Phase 2* below.
+   at once and groups it by signature. See *Phase 2* below. A Linux report's
+   build id is the 40-digit lowercase GNU build id and its file is
+   `symbols/cascade.debug/<build id>/cascade.debug`; *Linux symbols* above
+   covers what it can and cannot place on a line, and how to read a frame that
+   is in a system library.
 4. `commit:` in the report names the tree to check out — exactly, unless it ends
    in `-dirty`, which says the build was made from a tree with uncommitted
    changes and that commit is only the nearest one.
@@ -1493,6 +2040,9 @@ never be re-derived from a later build.
   minidump switch, and has **Copy diagnostics** — one click that puts the whole
   bundle on the clipboard *and* saves it as `crashes\diagnostics.txt`, because a
   clipboard does not survive the next copy and a support thread can take days.
+  Since 0.99.62 the bundle also carries the end of the previous session's log and
+  one line per crash or freeze report on the machine, under their own headings after
+  the log - *What the bundle says about the sessions before this one*, above.
 - After a run that did not exit cleanly (detected by the same
   `telemetryCleanExit` marker the crash counter already uses), the next start
   offers the same thing in a dialog. A crash handler can write a report but it
@@ -1538,6 +2088,10 @@ real binary with that config and requires the tree not to exist — the two
 older "off means off" tests could not see it, because they call
 `configure()`/`installCrashHandlers()` themselves and so say nothing about
 *when* `main()` calls them.
+
+**Off means off for the bundle's reach into earlier sessions too (0.99.62).** With the
+switch off the bundle gets neither the previous session's log nor the report list, not
+even a heading, and no file is read for them.
 
 The directory path is still handed to the crash handler while capture is off,
 so that switching diagnostics **on** mid-session has somewhere to write; the
@@ -1591,7 +2145,10 @@ them is why the code is shaped the way it is:
    control), and with the cancel deliberately removed the same run took **9.5 s**.
    That 7.6-second gap is the whole reason the handle is published at all.
 3. **Rate-limit and deduplicate on the client.** The same signature goes at most
-   once per 24 h, and at most 5 reports per 24 h whatever their signatures. Both
+   once per 24 h, and at most 5 reports per 24 h whatever their signatures. (For a
+   freeze "the same signature" means the same first frame of our own code on the
+   stalled thread, not the same kernel wait - *What a freeze's signature is built
+   from*, above.) Both
    counters live in the config, because a crash loop *is* a sequence of runs and
    a limit held in memory would reset on every restart. A 429 that arrives
    anyway is honoured, `Retry-After` clamped into a sane range.
@@ -1649,6 +2206,17 @@ Verified end to end against the real archive: an offset in the shipped
 `cascade.exe` resolved to `cascade::net::CatServer::serveClient` at
 `src/net/cat_server.cpp:446`, with the plugin frame beside it named as
 unarchived.
+
+ELF frames (a GNU build id of 40 or 32 hex digits) go to `addr2line` against the
+archived `.debug`, on any platform, rather than to a DWARF parser of our own. A
+frame whose archived file has the function and no line for the offset prints
+`(function only: no source line in the archived symbols)` rather than looking
+like a complete answer; the JSON has an empty `file` and a `line` of 0.
+`tests/test_report_reader.cpp` runs this through the real `addr2line` against
+two small ELF files built by `tests/elf_line_fixture.hpp` — one with DWARF line
+tables, one with a symbol table only — whose answers are known in advance, and
+checks the tool-absent message with `PATH` really emptied. On Linux a missing
+`addr2line` fails that test; on Windows it is a stated skip.
 
 ### A freeze report now carries the module table
 

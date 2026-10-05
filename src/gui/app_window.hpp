@@ -28,6 +28,7 @@ struct GLFWwindow;
 
 #include "core/band_plan.hpp"
 #include "core/config.hpp"
+#include "core/diag_report.hpp"
 #include "core/airband_data.hpp"
 #include "core/airband_monitor.hpp"
 #include "core/freq_manager.hpp"
@@ -1695,6 +1696,14 @@ private:
     // that could drift from the one on screen. Returns whether a take started;
     // the error, when it did not, is in recordError_ exactly as before.
     bool startAudioRecording();
+    // THE ONE PLACE THE DEMODULATOR MODE IS SET: modeIndex_ and the pipeline's
+    // demodulator together, and the report context refreshed with them (0.99.62).
+    // The button and key route, a plugin preset, a bookmark (desktop and browser),
+    // the browser's own mode request and the config restore all end here, so a
+    // fault right after a mode change is reported in that mode.
+    // tests/test_diag_context_app.cpp holds that modeIndex_ is assigned nowhere
+    // else.
+    void commitModeIndex(int index);
     // The Radio section's own mode-button path, lifted out for the same
     // reason: a mode key must set the demodulator, its default bandwidth and
     // the log line identically to a click on the button beside it.
@@ -3152,6 +3161,13 @@ private:
     // and sent at the NEXT start-up. Nothing here is transmitted unless the
     // user has turned reporting on.
     cascade::core::TelemetryReporter telemetryReporter_;
+    // DISPLAY STALLS the hang watchdog classified, kept for the usage record.
+    // Shared with the watchdog's sink and with the send's completion, both of
+    // which run on other threads; see StallLedger in core/telemetry.hpp for why
+    // it lives in a file the WATCHDOG's thread writes and not in the config.
+    std::shared_ptr<cascade::core::StallLedger> stallLedger_ =
+        std::make_shared<cascade::core::StallLedger>();
+    std::string telemetryLedgerPath_;   // beside config.json; empty = memory only
     // "Running now" beats: a minimal ping every five minutes while the app is
     // open, only while reporting is on. See HeartbeatSender in telemetry.hpp.
     cascade::core::HeartbeatSender telemetryHeartbeat_;
@@ -3405,9 +3421,22 @@ private:
     // asked for cannot become "the worst frame gap this build measured".
     bool diagSkipNextGap_ = false;
     // Rebuilds the report context out of state the application already has -
-    // mode, source, rate, radio model, loaded plugins with versions. Nothing
-    // here is re-derived.
+    // mode, source, rate, radio model, loaded plugins with versions, the patch
+    // page's radios by kind. Nothing here is re-derived. Called every frame and
+    // after every event that changes what the block says (see its definition),
+    // and cheap enough for that: an unchanged block writes nothing.
     void refreshDiagContext();
+    // Renders the report context when the scope holding it ends - for a function
+    // that changes what the block says on SEVERAL ways out (an early return, a
+    // loop's `continue`): followInputRate, rescanPlugins, patchReconcile and
+    // patchStopAll.
+    struct DiagContextOnExit {
+        AppWindow& window;
+        ~DiagContextOnExit() { window.refreshDiagContext(); }
+    };
+    // The context itself, built from the window's state - the one builder both
+    // the block a fault handler writes out and the Copy diagnostics bundle use.
+    cascade::core::DiagContext currentDiagContext(std::size_t* loadedOut = nullptr);
     std::size_t diagPluginCount_ = static_cast<std::size_t>(-1);
     // The previous session did not reach its clean-exit save. Reuses
     // telemetryCleanExit, which already detects exactly this, and is the
@@ -3529,7 +3558,26 @@ private:
     // shared by copyDiagnosticsBundle() and the problem-report page's
     // attachment/preview, so there is one place that assembles a
     // DiagBundleInput from the window's own state.
-    std::string currentDiagnosticsBundle();
+    // `freshHistory` is true for a person's own click (Copy diagnostics): the
+    // report list is read again, and waited for a moment, so a freeze report
+    // written a minute ago is in what they copy. The problem-report page's
+    // once-a-second rebuild leaves it false and takes what has been read.
+    std::string currentDiagnosticsBundle(bool freshHistory = false);
+    // THE SESSIONS BEFORE THIS ONE for the bundle (core/diag_history.hpp): the end
+    // of the previous session's log and the reports on this machine. Read on a
+    // worker, never on the frame; with diagnostics off - or a run that may not
+    // touch the disk - it returns an answer with `included` false and starts
+    // NOTHING. startDiagHistoryRead() is the early read (run() start, and the
+    // moment diagnostics are switched on), so the previous session is read before
+    // this session's log can rotate it away.
+    cascade::core::DiagHistory diagHistoryForBundle(bool freshHistory);
+    void startDiagHistoryRead();
+    cascade::core::DiagHistoryCache diagHistory_;
+    // applyDiagnosticsEnabled's first call is the start of the session; whether
+    // the switch was on then is whether the log file holds this session's start
+    // line (see diagHistoryForBundle).
+    bool diagStartApplied_ = false;
+    bool diagLogHasSessionStart_ = false;
     // "Serial ports" settings section: the machine's ports as a table, and
     // the GPS row (drawGpsPositionControl) that used to be findable only
     // under the rail's Radar section. Drawn before Diagnostics, on the SYSTEM

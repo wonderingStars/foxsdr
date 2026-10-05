@@ -65,13 +65,53 @@
 // it keeps the fast quiet death and writes no report at all: diagnostics off
 // means off, in the child exactly as in the parent.
 //
+// ONE REPORT PER CHILD DEATH (2026-10-04), and it is the child's whenever the
+// child wrote one. Until then a death could leave THREE: the child's own (the
+// stack and the module list), the parent's whole-bus report of it (no stack;
+// the drivers still probing), and - after a second whole-bus death - the
+// parent's per-driver report from the sweep (no stack; the driver). One user's
+// deterministic ASIO fault made six files in one scan and, after the client's
+// 24-hour de-duplication, three uploads: three of the five a machine may send
+// a day, for a fault the application survived, and on the dashboard three
+// unrelated groups. A real crash later that day could then be rate-limited
+// away.
+//
+// So the parent files its own report only for a death the child's handler did
+// not report. It asks the crash directory (core::crashReportWrittenByProcess):
+// the child's report is named with the child's process id, which the spawn
+// exposes as EnumResult::childPid, and is on disk before the parent sees the
+// exit, because the handler writes and then terminates. What the child's
+// handler can never see keeps the parent's stackless report exactly as it was:
+// a heap corruption (0xC0000374), a vendor TerminateProcess, a child that died
+// before it armed - and a child that absorbed a fault earlier and then died
+// by one of those routes, whose earlier file is not the report of its death.
+// (The timeout kill never produced a parent report and still does not: only a
+// ChildDied outcome is reported.)
+//
+// THE FACTS ONLY THE PARENT'S REPORTS CARRIED travel in the child's. The
+// child knows its own arguments, so it renders - on the healthy path, before it
+// arms - the tail of its reason line (enumerateChildReasonSuffix): "
+// - enumeration child, driver=uhd, attempt 1 (contained)". The attempt is
+// handed down on the command line (--attempt=N), because only the parent knows
+// it. The `reason` is the one field the uploader already sends verbatim, so
+// nothing new leaves the machine. The "still probing when it died" shortlist
+// is the one thing the child cannot put in its reason (it is not known until
+// the fault), so it travels in the child's LOG instead: the probe log the child
+// writes to the parent is written to the child's own log ring as well
+// (runEnumerateHelper), and the ring is in the report and is uploaded - a probe
+// that began and never ended is the same shortlist, read off the log, and
+// the stack names the faulting module besides. The alternatives were worse:
+// the parent appending to a file another process wrote (a second writer on a
+// report the next start will read, with a new way to leave it half-written if
+// the parent itself dies mid-append), or keeping the parent's report and so
+// the second upload.
+//
 // WHAT IS STILL ONLY AN EXIT CODE, stated plainly: the fault this whole file
 // exists for is raised on a thread UHD spawned, and a report for it is
 // written by the child's own handler only if that filter runs. When the child
-// dies without one - killed by the timeout, or by a fault no user-mode filter
-// sees - the parent still files its own ChildDied report, which carries the
-// exit code and the PARENT'S stack, not the fault's. The two are told apart
-// by the reason line.
+// dies without one - by a fault no user-mode filter sees - the parent still
+// files its own ChildDied report, which carries the exit code and not a
+// stack at all. The two are told apart by the reason line.
 //
 // THE CHILD CANNOT OUTLIVE THE PARENT. It is started inside a job object with
 // KILL_ON_JOB_CLOSE, because the timeout below only protects anyone while
@@ -114,6 +154,7 @@
 #ifndef CASCADE_SOURCE_SOAPY_ENUM_PROC_HPP
 #define CASCADE_SOURCE_SOAPY_ENUM_PROC_HPP
 
+#include <chrono>
 #include <string>
 #include <vector>
 
@@ -172,6 +213,15 @@ struct EnumResult {
     // How many children were started. 2 means the first one died and the
     // retry is what produced this answer.
     int attempts = 0;
+
+    // THE MOST RECENT CHILD'S PROCESS ID, and when it was started (0 and the
+    // epoch when none was). The crash handler names its report with the process
+    // id, so these are how the parent asks the crash directory "did that child
+    // write a report of its own death" (core::crashReportWrittenByProcess,
+    // which also wants the start time: process ids are reused, and the crash
+    // directory keeps reports for weeks). Set at the spawn, before the wait.
+    unsigned long childPid = 0;
+    std::chrono::system_clock::time_point childSpawnedAt{};
 
     // HOW MANY CHILDREN DIED, and with what, EVEN WHEN THE ANSWER IS Ok.
     //
@@ -462,7 +512,40 @@ std::string enumerateHelperPath();
 //
 // The directory is created here if it does not exist; it is only ever the one
 // the parent already had armed.
-void armEnumerateHelperProcess(const char* crashDir);
+//
+// `reasonSuffix` (null or empty: none) is what this process says on the end of
+// the `reason:` line of its own report - see enumerateChildReasonSuffix. It is
+// rendered by the caller on the healthy path and installed with the handlers
+// (CrashHandlerConfig::reasonSuffix); it is ignored when `crashDir` is empty,
+// because a process that writes no report has no reason line to put it on.
+//
+// `unresolvedSignatureTag` (null or empty: none) is what its report's signature
+// hashes in place of a module name when the fault is in no module at all -
+// childFaultSignatureTag of the walk. A fault in a module groups by that module
+// and offset, so one fault is one signature whichever walk met it; one in
+// private memory has no module, and without a tag every driver's such fault
+// shared one signature (and so one upload a day), where the parent's own report
+// of the same death used to keep them apart.
+void armEnumerateHelperProcess(const char* crashDir, const char* reasonSuffix = nullptr,
+                               const char* unresolvedSignatureTag = nullptr);
+
+// WHAT THE CHILD'S OWN REPORT SAYS ABOUT THE CHILD, the tail of its `reason:`
+// line (2026-10-04): which walk it was asked for, which attempt it was, and
+// that the application survived it. For example
+//
+//   " - enumeration child, whole bus, attempt 2 (contained)"
+//   " - enumeration child, driver=uhd, attempt 1 (contained)"
+//   " - enumeration child, driver list, attempt 1 (contained)"
+//
+// `listDrivers` wins over `driver`; an empty or null `driver` is the whole bus;
+// `attempt` of 0 or less leaves the attempt out (a child started by hand, or by
+// a parent that predates the flag). The driver name is third-party text, so it
+// is passed through the same alphabet as every other name in a report line and
+// cut to 16 characters - the site keeps 200 characters of a reason, the longest
+// fatal reason this product writes is about 90 and an absorbed fault's is 134,
+// and the tail has to fit behind either. A pure function, so the wording and
+// the budget are tested without a child.
+std::string enumerateChildReasonSuffix(bool listDrivers, const char* driver, int attempt);
 
 // THE CHILD SIDE. Runs the vendor walk in this process and writes one line of
 // JSON to stdout:
@@ -486,8 +569,10 @@ void armEnumerateHelperProcess(const char* crashDir);
 // and no devices, which is how the parent knows what to sweep. `skip` is a
 // comma-separated list of drivers the whole-bus walk leaves out (null or
 // empty: none) - the session's faulted drivers, see enumerateIsolated.
+// `attempt` is which try the parent says this is (--attempt=N; 0: not told) and
+// goes, with the walk above, into the tail of this child's own reason line.
 int runEnumerateHelper(const char* crashDir = nullptr, const char* driver = nullptr,
-                       bool listDrivers = false, const char* skip = nullptr);
+                       bool listDrivers = false, const char* skip = nullptr, int attempt = 0);
 
 // HOW THE HELPER ENDS, once runEnumerateHelper has returned: stdio flushed,
 // then the process terminated with `exitCode` WITHOUT the CRT's exit path -

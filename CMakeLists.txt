@@ -112,6 +112,28 @@ if(MSVC)
     string(APPEND CMAKE_CXX_FLAGS_RELEASE " /Zi")
     string(APPEND CMAKE_EXE_LINKER_FLAGS_RELEASE " /DEBUG /OPT:REF /OPT:ICF")
     string(APPEND CMAKE_SHARED_LINKER_FLAGS_RELEASE " /DEBUG /OPT:REF /OPT:ICF")
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # THE LINUX HALF OF THE SAME RULE. CMake's own Release flags for GCC and
+    # Clang are "-O3 -DNDEBUG" and carry no -g, so until this line every Linux
+    # build was linked with NO line tables - measured with readelf on the
+    # archived 0.99.59 split-debug file: a symbol table and no .debug_*
+    # section - and a Linux crash could be named ("52 bytes before the end of
+    # _glfwTerminateWayland") but never placed on a line, which is what the
+    # Windows PDB gives for free.
+    #
+    # -g is a debug-INFORMATION switch, like /Zi: it does not change the code
+    # generated (GCC's manual: -g0 negates -g, and -fcompare-debug exists to
+    # check that debug info changes nothing; and 12 of this repository's own
+    # translation units, compiled at -O3 with and without -g by GCC 16 on
+    # x86-64, had byte-identical code and data sections). C as well as C++,
+    # because the frame that started this was in GLFW, which is C.
+    #
+    # The DWARF does NOT ship. tools/archive-symbols-linux.sh, run after the
+    # link, splits it into the symbol archive and strips the binary the CI
+    # tarball and the AppImage copy; the test executables (tests/CMakeLists.txt)
+    # never carry it at all.
+    string(APPEND CMAKE_C_FLAGS_RELEASE " -g")
+    string(APPEND CMAKE_CXX_FLAGS_RELEASE " -g")
 endif()
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
@@ -479,6 +501,9 @@ else()
                 --version "${CASCADE_VERSION_STRING}"
                 --commit-header "${CASCADE_COMMIT_HEADER}"
                 --module "$<TARGET_FILE_BASE_NAME:cascade>"
+                # Debug and RelWithDebInfo keep their DWARF in the binary; any
+                # other configuration has it split out and stripped.
+                --config "$<CONFIG>"
         VERBATIM)
 endif()
 

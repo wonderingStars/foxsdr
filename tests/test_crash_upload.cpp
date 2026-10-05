@@ -666,8 +666,10 @@ int main() {
         CHECK(r.threads.size() == 2);
         CHECK(at(r.threads, 0).id == 100);
         CHECK(at(r.threads, 1).id == 200);
-        // The stalled thread's top frame is what the signature was built from,
-        // so it is what `module`/`offset` name.
+        // The stalled thread's top frame is what `module`/`offset` name. (Until
+        // 0.99.62 it was also what the signature was built from; the signature is
+        // now the first frame of the main executable, and the uploader carries the
+        // file's own `signature:` line as written - tests/test_hang_signature.cpp.)
         CHECK(r.module == "cascade.exe");
         CHECK(r.offset == 0x9999ull);
         CHECK(r.mode == "NFM");
