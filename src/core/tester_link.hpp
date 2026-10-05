@@ -91,8 +91,12 @@ inline constexpr std::int64_t kLinkRequestMaxAgeSec = 24LL * 60 * 60;
 // created.
 bool writeLinkRequestFile(const std::string& configDir, const std::string& token);
 
-// One poll, meant to be called at ~1 Hz on the GUI thread
-// (AppWindow::testerLinkPoll). If linkRequestPath(configDir) exists: claims
+// One poll, called at ~1 Hz by AppWindow::testerLinkPoll - ON A WORKER, through
+// gui::LinkRequestPoll, and never on the GUI thread: every line of this is a
+// synchronous filesystem call in the user's config directory, and a call that
+// takes five seconds there froze the window (field report "hang ntdll.dll @
+// __std_fs_get_stats", 0.99.59). Nothing in it needs a UI thread. If
+// linkRequestPath(configDir) exists: claims
 // it by renaming to a PID-suffixed sibling first (atomic - two instances
 // polling in the same instant can never both claim it, so the loser simply
 // sees nothing to claim), reads at most kMaxLinkRequestBytes, deletes the

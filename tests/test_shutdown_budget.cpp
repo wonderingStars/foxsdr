@@ -998,6 +998,26 @@ const KnownWait kKnownWaits[] = {
      "budgeted stretch, exactly like app_window.cpp's kQuitGrace and audio_open.hpp's. A "
      "session that reaches this at all already had its one deliberate chance, at "
      "kSaveBound above"},
+
+    // THE BETA-TESTER LINK-REQUEST POLL (field report "hang ntdll.dll @
+    // __std_fs_get_stats", 0.99.59). Its once-a-second exists() on the config
+    // directory ran on the GUI thread and froze it; gui/link_request_poll.hpp
+    // moves it to a worker that nothing waits for - request() and poll() never
+    // block, so there is no bound on the frame loop and nothing at all on the
+    // shutdown path except the reap below.
+    {"src/gui/link_request_poll.hpp", "kStuckAfter", 0,
+     "not a wait: the age at which a probe still out is called stuck in the log (once). "
+     "Nothing blocks for it - it is compared against a clock by takeNotice() - and the frame "
+     "loop that reads it has ended before beginShutdown() raises the threshold"},
+    {"src/gui/link_request_poll.hpp", "kNoWait", 0,
+     "zero by construction - poll()'s once-a-frame ready-check on a std::future, not a wait. "
+     "The frame loop has ended before beginShutdown() raises the threshold, so poll() is not "
+     "even called on the teardown path"},
+    {"src/gui/link_request_poll.hpp", "kQuitGrace", 0,
+     "LinkRequestPoll::reap()'s grace before a probe still blocked in the filesystem is "
+     "abandoned: called from ~AppWindow after watchdog_.stop(), outside the budgeted "
+     "stretch, exactly like app_window.cpp's, audio_open.hpp's and config_writer.hpp's "
+     "kQuitGrace"},
 };
 
 const KnownWait* findKnown(const std::string& file, const std::string& name) {

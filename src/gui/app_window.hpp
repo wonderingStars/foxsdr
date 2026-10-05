@@ -70,6 +70,7 @@ struct GLFWwindow;
 #include "gui/bench_rail.hpp"
 #include "gui/audio_open.hpp"
 #include "gui/config_writer.hpp"
+#include "gui/link_request_poll.hpp"
 #include "gui/shell_open.hpp"
 // The keyboard, as a table. ImGui-free by construction (it declares ImGuiKey
 // opaquely rather than including imgui.h - see its own note), so a KeyBindings
@@ -3263,13 +3264,21 @@ private:
     bool testerMigrationTried_ = false;
 
     // The link-request file (core/tester_link.hpp) is polled at ~1 Hz, not
-    // every frame - a stat() call is cheap but there is no reason to pay it
-    // 60 times a second for a file that, in the overwhelming majority of
-    // frames, does not exist. Starts far in the past so the VERY FIRST frame
-    // always polls once - a fresh launch that just wrote its own
-    // link-request file (main.cpp's primary-instance path) must not wait a
-    // second to notice it.
+    // every frame - there is no reason to ask the disk 60 times a second for a
+    // file that, in the overwhelming majority of frames, does not exist.
+    // Starts far in the past so the VERY FIRST frame always polls once - a
+    // fresh launch that just wrote its own link-request file (main.cpp's
+    // primary-instance path) must not wait a second to notice it.
     double testerLinkPollLast_ = -1.0e9;
+
+    // WHERE THE POLL'S FILESYSTEM CALL RUNS - A WORKER, NEVER THIS THREAD. The
+    // poll was a synchronous std::filesystem::exists() in a directory
+    // (%APPDATA%\foxsdr) that can be redirected, synced or scanned, and it
+    // froze the window (field report "hang ntdll.dll @ __std_fs_get_stats",
+    // 0.99.59). gui/link_request_poll.hpp carries the report and the argument;
+    // testerLinkPoll() only ever asks it and collects from it, and neither
+    // can block.
+    cascade::gui::LinkRequestPoll linkRequestPoll_;
 
     // A token claimed from the link-request file while a confirm-by-name
     // lookup was already in flight or a prompt was already awaiting the

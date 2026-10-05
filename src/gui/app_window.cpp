@@ -27887,19 +27887,21 @@ void AppWindow::testerLinkPoll() {
     }
 
     // --- the one-shot link-request file, ~1 Hz -----------------------------
-    // A stat() is cheap, but there is no reason to pay it every frame for a
-    // file that, in the overwhelming majority of frames, does not exist.
     // Hermetic runs (empty configPath_) never touch the disk, same rule as
     // maybeSaveConfig.
     if (configPath_.empty()) { return; }
-    const double now = glfwGetTime();
-    if (now - testerLinkPollLast_ < 1.0) { return; }
-    testerLinkPollLast_ = now;
-    const std::string configDir =
-        std::filesystem::path(configPath_).parent_path().string();
-    const std::string token = cascade::core::claimLinkRequestFile(configDir);
-    if (!token.empty()) {
-        // claimLinkRequestFile() has already deleted the file - if a lookup
+
+    // THE FILESYSTEM IS ASKED ON A WORKER AND NO FRAME WAITS FOR IT. This was
+    // a synchronous exists() under the comment "a stat() is cheap", in the
+    // directory config.json lives in; the first second %APPDATA% could not
+    // answer froze the window (field report "hang ntdll.dll @
+    // __std_fs_get_stats", 0.99.59). gui/link_request_poll.hpp has the whole
+    // argument. Collected FIRST and every frame, so an answer is acted on the
+    // frame it lands rather than up to a second later; the question itself is
+    // still asked at ~1 Hz, below.
+    std::string token;
+    if (linkRequestPoll_.poll(token) && !token.empty()) {
+        // The worker has already claimed AND deleted the file - if a lookup
         // or a confirm/replace prompt is already occupying this flow, this
         // token must be held rather than dropped, or a link clicked while
         // one was already in progress would simply be lost. LATEST WINS: a
@@ -27907,6 +27909,31 @@ void AppWindow::testerLinkPoll() {
         // whatever was queued, since only the most recent click is the one
         // the tester actually meant.
         testerLinkQueuedToken_ = token;
+    }
+    // THE ONLY RECORD A REPORT WILL CARRY of a configuration directory that
+    // went away for a while: once when a check has been out for 5 s, once when
+    // it comes back. Nothing here names the directory or the token.
+    double noticeS = 0.0;
+    switch (linkRequestPoll_.takeNotice(noticeS)) {
+        case cascade::gui::LinkRequestPoll::Notice::Stuck:
+            cascade::core::diagWarnf(
+                "tester link: the configuration directory has not answered a status check "
+                "for %.0f s - the check is waiting on a worker thread, the window is not",
+                noticeS);
+            break;
+        case cascade::gui::LinkRequestPoll::Notice::Recovered:
+            cascade::core::diagLogf(
+                "tester link: the configuration directory answered after %.0f s", noticeS);
+            break;
+        case cascade::gui::LinkRequestPoll::Notice::None:
+            break;
+    }
+    const double now = glfwGetTime();
+    if (now - testerLinkPollLast_ >= 1.0) {
+        testerLinkPollLast_ = now;
+        // A no-op while the previous check is still out: a directory that
+        // never answers costs one parked thread, not one a second.
+        linkRequestPoll_.request(std::filesystem::path(configPath_).parent_path().string());
     }
     if (!testerLinkQueuedToken_.empty() && !testerLinkNameSender_.busy() && !testerLinkPending_) {
         testerLinkResolvingToken_ = testerLinkQueuedToken_;

@@ -143,9 +143,23 @@ struct AppWindowTestAccess {
     // --link-tester's own effect (main.cpp) plus the file-poll path, for the
     // queuing test - forces the ~1 Hz throttle to expire so a poll actually
     // re-checks the file rather than being a same-second no-op.
+    //
+    // THE CLAIM IS NOT MADE INSIDE testerLinkPoll() ANY MORE. It runs on a
+    // worker (gui/link_request_poll.hpp - a synchronous exists() in the config
+    // directory froze the window, field report "hang ntdll.dll @
+    // __std_fs_get_stats") and its answer is collected by a later call, so one
+    // call is no longer "one poll's whole effect". This helper therefore keeps
+    // calling - with the ~1 Hz gate left closed, so no second question is
+    // asked - until the question it asked has been answered and acted on,
+    // which is what every assertion below was written to observe.
     static void forcePoll(AppWindow& a) {
         a.testerLinkPollLast_ = -1.0e9;
         a.testerLinkPoll();
+        const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (a.linkRequestPoll_.inFlight() && std::chrono::steady_clock::now() < until) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            a.testerLinkPoll();
+        }
     }
     static std::string queuedLinkToken(AppWindow& a) { return a.testerLinkQueuedToken_; }
     static std::string resolvingToken(AppWindow& a) { return a.testerLinkResolvingToken_; }
