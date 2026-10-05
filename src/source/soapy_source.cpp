@@ -4,6 +4,7 @@
 #include "core/diag_log.hpp"
 #include "source/soapy_enum_proc.hpp"
 #include "source/soapy_log_bridge.hpp"
+#include "source/sdrplay_source.hpp"
 #include "source/soapy_modules.hpp"
 #include "source/vendor_guard.hpp"
 
@@ -1098,6 +1099,25 @@ bool SoapySource::open(const std::string& args) {
         setError(kAbandonedMessage);
         return false;
     }
+    // ONE CHIP, ONE ROUTE. The SoapySDR `sdrplay` and `miri` modules reach the
+    // same silicon as this product's native SDRplay and Mirics drivers, inside
+    // this process, and nothing they do is visible to those drivers - so the
+    // decision the native routes already obey is made HERE, before the module
+    // is asked to make anything: after the SDRplay API session is lost or a
+    // worker was abandoned inside it, no such device is opened for the rest of
+    // the process; and a Mirics device is not opened for a radio the SDRplay
+    // API manages. This is the one place every receiver, patch, restore and
+    // fallback open of a SoapySDR device passes through (rsp_rows.hpp holds
+    // the rule and the field reports behind it). Empty for every other driver,
+    // which it never even looks up. After the release above, like every other
+    // refusal here: the previous device is already unmade.
+    {
+        const std::string refused = soapyMiricsRefusal(args);
+        if (!refused.empty()) {
+            setError(refused);
+            return false;
+        }
+    }
     if (!runtimeAvailable()) {
         setError(
             "SoapySDR runtime not found (SoapySDR.dll). Reinstall, or use the "
@@ -2114,6 +2134,32 @@ std::size_t SoapySource::read(std::complex<float>* dst, std::size_t n) {
     try {
         const int ret = link_->dev->readStream(link_->stream, buffs, n, flags, timeNs,
                                                kReadTimeoutUs);
+        // THE COUNT IS THE MODULE'S WORD, AND IT IS BOUNDED BY OURS. The buffer
+        // holds n samples and SoapySDR's contract is that the answer is at most
+        // n. A module that answers more has already written past the end of
+        // the caller's buffer; taking the number at face value then made it
+        // worse - sanitizeNonFinite below would scan, and rewrite, elements
+        // past the end, and every caller processes `got` samples out of a
+        // buffer sized for n. So an over-long answer is a broken contract:
+        // none of it is read or used, the device is faulted through the path
+        // a driver that throws takes (the pipeline stops with the reason and
+        // the radio is not read again), and 0 is returned - not n, because
+        // the first n samples came from a module whose state is suspect.
+        // Hardening only: nothing here claims to explain any field crash.
+        if (ret > 0 && static_cast<std::size_t>(ret) > n) {
+            noteRead(SOAPY_SDR_STREAM_ERROR, 0u);
+            core::diagWarnf(
+                "soapy: readStream returned %d samples for a request of %zu - the module wrote "
+                "past the caller's buffer; the device is faulted and will not be read again",
+                ret, n);
+            std::lock_guard<std::mutex> lk(errorMutex_);
+            lastError_ =
+                "the radio's driver returned more samples than it was asked for, so its output "
+                "cannot be trusted and FoxSDR stopped reading it - reconnect the radio and pick "
+                "the source again, or restart FoxSDR";
+            faulted_ = true;
+            return 0;
+        }
         noteRead(ret, ret > 0 ? static_cast<std::size_t>(ret) : 0u);
         if (ret > 0) {
             const std::size_t got = static_cast<std::size_t>(ret);

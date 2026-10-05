@@ -725,6 +725,15 @@ struct Api {
     // just been abandoned - possibly still inside sdrplay_api_Open, holding
     // that mutex - and read by the GUI every frame.
     mutable std::atomic<int> serviceTrouble{0};
+    // THE LOST-SESSION LATCH, READABLE WITHOUT THE SESSION MUTEX (one chip, one
+    // route). `sessionLost` above is guarded by sessionMutex, and an abandoned
+    // enumeration worker may be parked inside sdrplay_api_Open still HOLDING
+    // that mutex - the same reason serviceTrouble is atomic. The question "may
+    // a SoapySDR sdrplay or miri module be opened now?" is asked from the GUI
+    // thread and from every patch radio's worker, and must never queue behind
+    // a wedged service. Written by markSessionLost alongside the field above;
+    // like it, never cleared.
+    mutable std::atomic<bool> sessionLostFlag{false};
 };
 
 }  // namespace cascade::source::sdrplay_abi

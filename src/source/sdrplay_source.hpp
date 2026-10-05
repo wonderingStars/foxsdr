@@ -161,6 +161,67 @@ bool sdrPlayApiPresent();
 // std::nullopt restores the real answer (processSdrPlayApi().resolved).
 void setSdrPlayApiPresentForTest(std::optional<bool> present);
 
+// --- ONE CHIP, ONE ROUTE: what the process knows about the API's health -------
+//
+// An RSP1/RSP1A/RSP2 is a Mirics chip, and FoxSDR can reach one four ways: its
+// native SDRplay driver (through the API), its native Mirics driver, and
+// SoapySDR's `sdrplay` and `miri` modules. The two SoapySDR modules run inside
+// this process exactly as the API does - SoapySDRPlay3 calls the same vendor
+// library, SoapyMiri drives the same silicon - so none of the four can be
+// allowed to ignore what the others have learned. Two field reports (0.99.59,
+// one Linux RSP1A): a SoapyMiri read() faulting on a radio the SDRplay service
+// also owned, and a heap corruption seconds after the patch page opened the
+// radio through SoapySDRPlay3 AFTER the native driver had declared the API
+// session lost ("no further SDRplay API calls are made until FoxSDR is
+// restarted" - and the Soapy module simply made them).
+//
+// This is the part of that rule that is a fact about the PROCESS, readable
+// without a call, a lock or a wait (see Api::sessionLostFlag). The decision
+// made from it is pure and lives in rsp_rows.hpp (miricsSoapyRouteRefusal).
+struct SdrPlayApiState {
+    bool installed = false;        // the API is on this machine (sdrPlayApiPresent)
+    bool sessionLost = false;      // markSessionLost: this process's session is finished
+    bool workerAbandoned = false;  // an enumeration worker was abandoned inside the API and
+                                   // nothing since has shown the service answering again
+};
+
+// The state of one table, atomics only - NEVER the session mutex, which an
+// abandoned worker may hold. `installed` is the table's own `resolved`.
+SdrPlayApiState sdrPlayApiStateOf(const sdrplay_abi::Api& api);
+
+// The process's: the test override when one is set, otherwise
+// sdrPlayApiPresent() plus the process table's latches. Loads the vendor
+// library on first use (one failed LoadLibrary where there is none), so ask it
+// only about a driver that is in the Mirics family.
+SdrPlayApiState sdrPlayApiState();
+
+// Overrides the answer above for a test. std::nullopt restores the real one.
+void setSdrPlayApiStateForTest(std::optional<SdrPlayApiState> state);
+
+// THE NATIVE SCAN AS IT STOOD BEFORE THE DUPLICATE RSP ROWS WERE HIDDEN - the
+// API's own rows plus every native Mirics row, including the ones the Source
+// list no longer shows. That list is the only record of WHICH radios the API
+// manages, and it lives in the GUI; a SoapySDR open is made on a worker that
+// cannot see it. Published by AppWindow::scanNative, read by
+// soapyMiricsRefusal below. Process-scope and last-writer-wins, like the
+// enumeration's skip reason.
+void sdrPlayPublishNativeRows(std::vector<NativeDeviceInfo> rows);
+std::vector<NativeDeviceInfo> sdrPlayPublishedNativeRows();
+// Whether any scan has published since the process started. Until one has, the
+// rows are unknown - not "empty" - and a caller that is about to open a
+// SoapySDR Mirics device on its own (a saved patch) scans first.
+bool sdrPlayNativeRowsPublished();
+
+// THE ONE QUESTION EVERY SOAPY OPEN ASKS BEFORE IT MAKES A DEVICE: "may this
+// SoapySDR device be opened, given everything the other routes to the same
+// chip know?" Empty when it may (including for every driver outside the
+// Mirics family, which it never even looks up); otherwise the sentence the
+// user is shown as the reason the radio would not open. Gathers the state and
+// hands it to the pure decision (rsp_rows.hpp), so SoapySource::open - the one
+// place every receiver, patch, restore and fallback open of a SoapySDR device
+// passes through - cannot be bypassed by a new call site.
+std::string soapyMiricsRefusal(const std::string& soapyArgs);
+
 // The documented 64-bit install path, exposed so the log and the tests can
 // both name the same string.
 const char* sdrPlayApiDllPath();

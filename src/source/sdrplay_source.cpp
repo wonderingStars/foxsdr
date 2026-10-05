@@ -6,6 +6,7 @@
 #include "core/diag_log.hpp"
 #include "core/i18n.hpp"
 #include "core/utf8_text.hpp"
+#include "source/rsp_rows.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -320,6 +321,87 @@ void setSdrPlayApiPresentForTest(std::optional<bool> present) {
     apiPresentOverrideSlot() = present;
 }
 
+// --- one chip, one route --------------------------------------------------
+
+SdrPlayApiState sdrPlayApiStateOf(const abi::Api& api) {
+    SdrPlayApiState s;
+    s.installed = api.resolved;
+    // ATOMICS ONLY: an abandoned worker may be parked inside sdrplay_api_Open
+    // holding sessionMutex, and this is asked from the GUI thread and from
+    // every patch radio's worker.
+    s.sessionLost = api.sessionLostFlag.load(std::memory_order_acquire);
+    s.workerAbandoned =
+        sdrPlayServiceTrouble(api) == SdrPlayServiceTrouble::EnumerationHung;
+    return s;
+}
+
+namespace {
+std::mutex& apiStateOverrideMutex() {
+    static std::mutex m;
+    return m;
+}
+std::optional<SdrPlayApiState>& apiStateOverrideSlot() {
+    static std::optional<SdrPlayApiState> v;
+    return v;
+}
+std::mutex& publishedRowsMutex() {
+    static std::mutex m;
+    return m;
+}
+std::vector<NativeDeviceInfo>& publishedRowsSlot() {
+    static std::vector<NativeDeviceInfo> v;
+    return v;
+}
+bool& publishedRowsFlag() {
+    static bool published = false;
+    return published;
+}
+}  // namespace
+
+SdrPlayApiState sdrPlayApiState() {
+    {
+        std::lock_guard<std::mutex> lk(apiStateOverrideMutex());
+        if (apiStateOverrideSlot().has_value()) { return *apiStateOverrideSlot(); }
+    }
+    SdrPlayApiState s = sdrPlayApiStateOf(processSdrPlayApi());
+    s.installed = sdrPlayApiPresent();
+    return s;
+}
+
+void setSdrPlayApiStateForTest(std::optional<SdrPlayApiState> state) {
+    std::lock_guard<std::mutex> lk(apiStateOverrideMutex());
+    apiStateOverrideSlot() = state;
+}
+
+void sdrPlayPublishNativeRows(std::vector<NativeDeviceInfo> rows) {
+    std::lock_guard<std::mutex> lk(publishedRowsMutex());
+    publishedRowsSlot() = std::move(rows);
+    publishedRowsFlag() = true;
+}
+
+std::vector<NativeDeviceInfo> sdrPlayPublishedNativeRows() {
+    std::lock_guard<std::mutex> lk(publishedRowsMutex());
+    return publishedRowsSlot();
+}
+
+bool sdrPlayNativeRowsPublished() {
+    std::lock_guard<std::mutex> lk(publishedRowsMutex());
+    return publishedRowsFlag();
+}
+
+std::string soapyMiricsRefusal(const std::string& soapyArgs) {
+    // A driver outside the Mirics family is nobody's chip, and must not load
+    // the vendor library just to be told so.
+    if (!isMiricsSoapyArgs(soapyArgs)) { return std::string(); }
+    const MiricsSoapyRefusal why = miricsSoapyRouteRefusal(
+        soapyArgs, sdrPlayApiState(), sdrPlayPublishedNativeRows(), kNativeMiricsOpenUnsafeWithApi);
+    if (why == MiricsSoapyRefusal::None) { return std::string(); }
+    // The DRIVER, never the args: a Mirics radio's args carry its serial.
+    core::diagWarnf("source: refused to open a SoapySDR %s device - %s",
+                    soapyDriverNameOf(soapyArgs).c_str(), miricsSoapyRefusalSentence(why));
+    return std::string(miricsSoapyRefusalSentence(why));
+}
+
 // USER COPY, in the user's language: it is drawn under the Source row and
 // given as the reason a device would not open. With English in force tr()
 // answers the English these sentences always were.
@@ -473,6 +555,11 @@ void sessionRelease(const abi::Api& api) {
 // ReleaseDevice. Latched on the table, so it is process-wide in the field and
 // per-fake in the tests, and logged once.
 void markSessionLost(const abi::Api& api, const char* why) {
+    // THE LOCK-FREE LATCH FIRST (one chip, one route): the SoapySDR modules'
+    // refusal reads it without the session mutex, and it must hold from this
+    // instant even if taking that mutex below has to wait behind a worker
+    // parked inside sdrplay_api_Open.
+    api.sessionLostFlag.store(true, std::memory_order_release);
     bool first = false;
     {
         std::lock_guard<std::mutex> lk(api.sessionMutex);

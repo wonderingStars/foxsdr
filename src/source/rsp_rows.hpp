@@ -164,6 +164,20 @@ inline bool apiAlreadyLists(const NativeDeviceInfo& nativeRow,
     return !anyApiSerial;
 }
 
+// IS THIS NATIVE ROW ONE THE SDRPLAY API MANAGES - i.e. the row the duplicate
+// rule hides, GIVEN THAT THE API IS INSTALLED. The single predicate behind
+// withoutDuplicateRsps and behind the SoapySDR Mirics module's refusal
+// (miricsSoapyRouteRefusal), so the two lists cannot disagree about which
+// radios the API owns: Windows (`nativeOpenUnsafe`) - every row this driver
+// believes is an SDRplay unit; Linux - only one the API's own enumeration
+// lists (apiAlreadyLists). A television stick is never managed by it.
+inline bool nativeRspHiddenByApi(const NativeDeviceInfo& row,
+                                 const std::vector<NativeDeviceInfo>& apiRows,
+                                 bool nativeOpenUnsafe) {
+    if (!isNativeRspRow(row)) { return false; }
+    return nativeOpenUnsafe || apiAlreadyLists(row, apiRows);
+}
+
 // The Source list with the duplicates taken out. `rows` is every row, in the
 // order the list will show them. `apiInstalled` is source::sdrPlayApiPresent()
 // - whether the SDRplay API is on this machine AT ALL, not whether this
@@ -186,15 +200,12 @@ inline std::vector<NativeDeviceInfo> withoutDuplicateRsps(
     for (const NativeDeviceInfo& r : rows) {
         if (r.driver == "sdrplay") { apiRows.push_back(r); }
     }
-    if (!nativeOpenUnsafe && apiRows.empty()) { return rows; }
+    // (No early return for "Linux and the API listed nothing": the predicate
+    // answers false for every row then, so the list comes back unchanged.)
     std::vector<NativeDeviceInfo> out;
     out.reserve(rows.size());
     for (const NativeDeviceInfo& r : rows) {
-        if (!isNativeRspRow(r)) {
-            out.push_back(r);
-            continue;
-        }
-        if (nativeOpenUnsafe || apiAlreadyLists(r, apiRows)) { continue; }
+        if (nativeRspHiddenByApi(r, apiRows, nativeOpenUnsafe)) { continue; }
         out.push_back(r);
     }
     return out;
@@ -307,6 +318,167 @@ inline std::vector<NativeDeviceInfo> withClaimedSdrPlayRows(
             }
         }
         if (!listed) { out.push_back(c); }
+    }
+    return out;
+}
+
+// ---------------------------------------------------------------------------
+// ONE CHIP, ONE ROUTE
+// ---------------------------------------------------------------------------
+//
+// An RSP1/RSP1A/RSP2 is a Mirics chip reachable FOUR ways: this product's
+// native SDRplay driver (through the API), its native Mirics driver, and
+// SoapySDR's `sdrplay` and `miri` modules, which run in this process beside
+// both. The two native routes already obey the rules above (sessionAcquire
+// refuses a lost session; the Mirics driver refuses on Windows while the API
+// is installed). The two SoapySDR routes obeyed NOTHING, and two field reports
+// (0.99.59, one Linux RSP1A with the API installed) are the two ways that went
+// wrong:
+//
+//   - the receiver's Source list hid the native Mirics row of the radio the
+//     API manages and still offered - and opened - SoapyMiri's row for the
+//     same radio, which then faulted in readStream;
+//   - after the native driver declared the API session lost ("no further
+//     SDRplay API calls are made until FoxSDR is restarted"), the patch page
+//     opened the radio through SoapySDRPlay3, which makes those calls itself,
+//     and the process aborted on a corrupted heap seconds later (the open was
+//     allowed; that it caused the abort is an inference from timing).
+//
+// THE DECISION, PURE so a machine with no radio and no API can pin all of it:
+// miricsSoapyRouteRefusal. It is asked from one place - SoapySource::open,
+// through soapyMiricsRefusal() - so every receiver, patch, restore and
+// fallback open obeys it, and from the scan merge, so a row that can only
+// fail is not offered.
+//
+//   (a) THE API IS QUARANTINED: its session is lost, or a worker was abandoned
+//       inside it. Then NO SoapySDR sdrplay or miri device is opened for the
+//       rest of the process. (`mirisdr` is also listed: no module publishes
+//       it, but device_scan_plan.hpp's Mirics family already names it.)
+//   (b) A MIRICS DEVICE FOR A RADIO THE API MANAGES: exactly the radios whose
+//       native Mirics row the duplicate rule hides (nativeRspHiddenByApi).
+//       WHAT "MANAGED" CAN BE KNOWN AS, from the code and nothing else: a
+//       native Mirics row this driver recognises as an SDRplay unit (a USB
+//       id and model decision - read from the bus, no device opened), which
+//       on Windows is every such row while the API is installed and on Linux
+//       is one the API's own enumeration lists (the existing Linux rule - a
+//       stopped service lists nothing and takes nothing away). A SoapySDR
+//       Mirics row is tied to such a radio by its serial, case-insensitively;
+//       a row that names no serial, or a radio whose own row names none,
+//       cannot be told apart and is treated as the managed radio. A serial
+//       that PROVABLY differs from every managed radio's keeps its route.
+//
+// WHAT IS NEVER REFUSED, so no working route is taken away: any other
+// SoapySDR driver; `driver=sdrplay` while the API is healthy (unchanged: the
+// prefer-native rule upgrades the row, and the module is the way in where the
+// native route cannot take it); `driver=miri` when no API is installed (a
+// genuine Mirics dongle on a machine with no SDRplay software), when the API
+// lists no radio of this kind on Linux, or when the scan holds no SDRplay-
+// flavoured native row at all. The one cost is stated: with an RSP and a
+// genuine Mirics stick plugged in together, a SoapySDR Mirics row that names
+// no serial is refused - the stick's own native row is listed and works.
+
+enum class MiricsSoapyRefusal { None, SessionLost, ManagedByApi };
+
+// The SoapySDR driver names that reach this chip's silicon, lower-case.
+inline bool isMiricsSoapyDriver(const std::string& lowerDriver) {
+    return lowerDriver == "sdrplay" || lowerDriver == "miri" || lowerDriver == "mirisdr";
+}
+
+inline std::string soapyDriverNameOf(const std::string& soapyArgs) {
+    std::string d = argValue(soapyArgs, "driver");
+    for (char& c : d) {
+        if (c >= 'A' && c <= 'Z') { c = static_cast<char>(c - 'A' + 'a'); }
+    }
+    return d;
+}
+
+inline bool isMiricsSoapyArgs(const std::string& soapyArgs) {
+    return isMiricsSoapyDriver(soapyDriverNameOf(soapyArgs));
+}
+
+inline bool serialsEqualIgnoringCase(const std::string& a, const std::string& b) {
+    if (a.size() != b.size()) { return false; }
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        char x = a[i];
+        char y = b[i];
+        if (x >= 'A' && x <= 'Z') { x = static_cast<char>(x - 'A' + 'a'); }
+        if (y >= 'A' && y <= 'Z') { y = static_cast<char>(y - 'A' + 'a'); }
+        if (x != y) { return false; }
+    }
+    return true;
+}
+
+// `soapyArgs` is the SoapySDR device's args ("driver=miri, serial=..."); `api`
+// is what the process knows of the API's health (sdrPlayApiState()); `rows` is
+// the native scan BEFORE the duplicate rows were hidden (the API's own rows
+// plus every native Mirics row); `nativeOpenUnsafe` is
+// kNativeMiricsOpenUnsafeWithApi at every real call site.
+inline MiricsSoapyRefusal miricsSoapyRouteRefusal(const std::string& soapyArgs,
+                                                  const SdrPlayApiState& api,
+                                                  const std::vector<NativeDeviceInfo>& rows,
+                                                  bool nativeOpenUnsafe) {
+    const std::string driver = soapyDriverNameOf(soapyArgs);
+    if (!isMiricsSoapyDriver(driver)) { return MiricsSoapyRefusal::None; }
+    // (a) FIRST, and for every route and every radio: nothing may enter the
+    // process's SDRplay world again.
+    if (api.sessionLost || api.workerAbandoned) { return MiricsSoapyRefusal::SessionLost; }
+    // The SDRplay module with a HEALTHY API is not this rule's business.
+    if (driver == "sdrplay") { return MiricsSoapyRefusal::None; }
+    // (b) A Mirics device with no SDRplay API on the machine is a Mirics
+    // dongle, whatever its row looks like.
+    if (!api.installed) { return MiricsSoapyRefusal::None; }
+    std::vector<NativeDeviceInfo> apiRows;
+    for (const NativeDeviceInfo& r : rows) {
+        if (r.driver == "sdrplay") { apiRows.push_back(r); }
+    }
+    const std::string want = argValue(soapyArgs, "serial");
+    for (const NativeDeviceInfo& r : rows) {
+        if (!nativeRspHiddenByApi(r, apiRows, nativeOpenUnsafe)) { continue; }
+        const std::string have = argValue(r.args, "serial");
+        if (want.empty() || have.empty() || serialsEqualIgnoringCase(want, have)) {
+            return MiricsSoapyRefusal::ManagedByApi;
+        }
+    }
+    return MiricsSoapyRefusal::None;
+}
+
+// THE REASON, pinned like every other sentence a user is told about an RSP
+// (plain English, like sdrPlaySessionLostSentence: it is what open() reports
+// and what the patch node shows). Empty for None.
+inline const char* miricsSoapyRefusalSentence(MiricsSoapyRefusal why) {
+    switch (why) {
+        case MiricsSoapyRefusal::SessionLost:
+            return "FoxSDR will not open an SDRplay or Mirics radio through SoapySDR because the "
+                   "SDRplay API stopped answering earlier in this session - restart the SDRplay "
+                   "API service, then restart FoxSDR";
+        case MiricsSoapyRefusal::ManagedByApi:
+            return "this radio is an SDRplay RSP that the SDRplay API manages, so FoxSDR does not "
+                   "also open it through SoapySDR's Mirics module - pick its SDRplay row instead";
+        case MiricsSoapyRefusal::None: break;
+    }
+    return "";
+}
+
+// A SoapySDR scan's rows with the ones that can only fail taken out - the same
+// decision, applied to the list. `Row` has `.args`. A row whose args equal
+// `keepArgs` is never dropped: the radio already open through it must not lose
+// its row under its own feet.
+template <class Row>
+std::vector<Row> withoutRefusedMiricsSoapyRows(const std::vector<Row>& rows,
+                                               const SdrPlayApiState& api,
+                                               const std::vector<NativeDeviceInfo>& nativeRows,
+                                               bool nativeOpenUnsafe,
+                                               const std::string& keepArgs = std::string()) {
+    std::vector<Row> out;
+    out.reserve(rows.size());
+    for (const Row& r : rows) {
+        const bool keep = !keepArgs.empty() && r.args == keepArgs;
+        if (!keep &&
+            miricsSoapyRouteRefusal(r.args, api, nativeRows, nativeOpenUnsafe) !=
+                MiricsSoapyRefusal::None) {
+            continue;
+        }
+        out.push_back(r);
     }
     return out;
 }

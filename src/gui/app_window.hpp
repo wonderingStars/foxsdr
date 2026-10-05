@@ -1865,6 +1865,15 @@ private:
     // enumeration is nothing like a Soapy scan.
     void scanNative();
 
+    // ONE CHIP, ONE ROUTE: takes out of soapyDevices_ the SoapySDR sdrplay and
+    // miri rows that source::miricsSoapyRouteRefusal says can only fail (the
+    // SDRplay API session is lost, or the API manages that radio), so the
+    // Source list and the patch page's device list never offer them. The row
+    // of the radio already open through SoapySDR is kept. Called after every
+    // Soapy scan merge and every native scan, because both change the answer;
+    // SoapySource::open enforces the same decision for a row that got through.
+    void dropRefusedMiricsSoapyRows();
+
     // WHERE EACH FAMILY'S ROWS START IN THE SOURCE COMBO. Row 0 is the
     // generator, row 1 the IQ file and row 2 the sound card; the native radios
     // come next, and the SoapySDR devices after them. Named rather than written

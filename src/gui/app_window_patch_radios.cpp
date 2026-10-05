@@ -45,6 +45,8 @@
 #include "gui/soundcard_panel.hpp"
 #include "gui/theme.hpp"
 #include "gui/ui_scale.hpp"
+#include "source/rsp_rows.hpp"
+#include "source/sdrplay_source.hpp"
 #include "source/siggen_source.hpp"
 #include "source/soapy_source.hpp"
 
@@ -638,6 +640,17 @@ void AppWindow::patchReconcile() {
         // waits for the scan and is started on the frame after it ends.
         if (soapyScanPending_ && cascade::gui::scanMayProbe(soapyScanSkip_, driver, args)) {
             continue;
+        }
+        // ONE CHIP, ONE ROUTE. A saved patch can name a SoapySDR Mirics device
+        // before any native scan this session, and whether the SDRplay API
+        // manages that radio is read off that scan (SoapySource::open asks the
+        // published rows). The native walk opens nothing and costs one bounded
+        // question to the SDRplay service; it is asked once, here, only for a
+        // device in that family. The open itself is refused on the worker
+        // (SoapySource::open) with the reason, whatever this finds.
+        if (driver == "soapy" && cascade::source::isMiricsSoapyArgs(args) &&
+            !cascade::source::sdrPlayNativeRowsPublished()) {
+            scanNative();
         }
         const std::string label = patchDeviceLabel(n->device);
         patchRadioPendingAs_[id] = as;

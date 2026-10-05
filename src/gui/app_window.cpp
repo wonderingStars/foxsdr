@@ -9171,6 +9171,10 @@ void AppWindow::pollSourceAsync() {
                                              });
             if (!present) { soapyDevices_.push_back(std::move(d)); }
         }
+        // ONE CHIP, ONE ROUTE: the scan listed every SoapySDR module's rows,
+        // including SoapyMiri's row for an RSP the SDRplay API manages and
+        // both Mirics-family rows after the API session was lost. Not offered.
+        dropRefusedMiricsSoapyRows();
         soapyScanSkip_.clear();
         soapyScanPending_ = false;
         // What THIS scan left out for having nothing to find - replacing the
@@ -10038,11 +10042,15 @@ void AppWindow::scanNative() {
         // selection is followed exactly as after a real scan, so a test can
         // move rows under it.
         nativeDevices_ = testHooks_.nativeScan();
+        // Published like a real scan's, so a test that drives the Soapy
+        // Mirics rule through the window sees the rows it listed.
+        cascade::source::sdrPlayPublishNativeRows(nativeDevices_);
         nativeRowLabels_.clear();
         for (const cascade::source::NativeDeviceInfo& d : nativeDevices_) {
             nativeRowLabels_.push_back(d.label);
         }
         nativeUnbound_.clear();
+        dropRefusedMiricsSoapyRows();
         followSourceRowAfterRescan(rowsBefore);
         return;
     }
@@ -10133,6 +10141,12 @@ void AppWindow::scanNative() {
     // actually lists the same radio) still applies - usbfs does not enforce
     // the Windows-specific reason native access is unsafe there, so a Linux
     // user's native row may genuinely work while the daemon is stopped.
+    // ONE CHIP, ONE ROUTE: the list AS IT STANDS BEFORE THE DUPLICATES GO is
+    // the only record of which radios the SDRplay API manages, and a SoapySDR
+    // open is made on a worker that cannot see this window's state. Handed to
+    // source/ here so SoapySource::open can ask the same question the hiding
+    // below answers (see source/rsp_rows.hpp).
+    cascade::source::sdrPlayPublishNativeRows(nativeDevices_);
     const bool sdrPlayApiInstalled = cascade::source::sdrPlayApiPresent();
     const bool sdrPlayOrphaned = cascade::source::anyRspOrphanedByHiding(
         nativeDevices_, sdrPlayApiInstalled, cascade::source::kNativeMiricsOpenUnsafeWithApi);
@@ -10263,7 +10277,38 @@ void AppWindow::scanNative() {
     }
     nativeUnbound_ = cascade::usb::enumerateUnbound(ids);
 
+    // The API's state or the managed radios may have changed since the last
+    // Soapy scan: a lost session, or an RSP the API now lists. The selection
+    // is followed by what it is, below, so a row that goes does not move it.
+    dropRefusedMiricsSoapyRows();
     followSourceRowAfterRescan(rowsBefore);
+}
+
+void AppWindow::dropRefusedMiricsSoapyRows() {
+    // Only a list that holds a Mirics-family row needs the API's state, and
+    // asking it loads the vendor library: a machine with no such row never does.
+    bool any = false;
+    for (const cascade::source::SoapyDeviceInfo& d : soapyDevices_) {
+        if (cascade::source::isMiricsSoapyArgs(d.args)) {
+            any = true;
+            break;
+        }
+    }
+    if (!any) { return; }
+    const std::size_t before = soapyDevices_.size();
+    soapyDevices_ = cascade::source::withoutRefusedMiricsSoapyRows(
+        soapyDevices_, cascade::source::sdrPlayApiState(),
+        cascade::source::sdrPlayPublishedNativeRows(), cascade::source::kNativeMiricsOpenUnsafeWithApi,
+        soapyView_ != nullptr ? deviceArgs_ : std::string());
+    const std::size_t hidden = before - soapyDevices_.size();
+    if (hidden > 0) {
+        // LOGGED, like the native rows hidden beside it: a row that vanishes
+        // without explanation is the report this prevents from the other side.
+        cascade::core::diagLogf(
+            "source: %zu SoapySDR SDRplay/Mirics row(s) hidden - another route to the same chip "
+            "owns it, or the SDRplay API session was lost",
+            hidden);
+    }
 }
 
 void AppWindow::followSourceRowAfterRescan(const std::vector<cascade::gui::SourceRowKey>& rowsBefore) {

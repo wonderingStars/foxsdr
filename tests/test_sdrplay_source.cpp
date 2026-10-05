@@ -3443,6 +3443,16 @@ void testAWedgedEnumerationIsAbandonedAndThenHeldOff() {
     CHECK(cascade::source::sdrPlayLastEnumerationSkip() ==
           std::string(cascade::source::sdrPlayServiceHungSentence()));
     CHECK(cascade::source::sdrPlayEnumerationHeldOff());
+    // ONE CHIP, ONE ROUTE: a worker parked inside the API is "abandoned" as
+    // far as every other route to the same chip is concerned, and the question
+    // is answered while that worker is still inside GetDevices - from atomics,
+    // never from the session mutex it may be holding.
+    {
+        const cascade::source::SdrPlayApiState st = cascade::source::sdrPlayApiStateOf(fake->table);
+        CHECK(st.installed);
+        CHECK(st.workerAbandoned);
+        CHECK(!st.sessionLost);  // an abandoned scan is not a lost session
+    }
 
     // AND THE NEXT SCAN DOES NOT TOUCH THE API AT ALL. The source combo scans
     // every time it opens, so without the hold-off each of those would spend
@@ -3487,6 +3497,10 @@ void testAHealthyEnumerationIsStillSynchronousAndClearsTheSentence() {
     CHECK(ms < 1000);
     CHECK(cascade::source::sdrPlayLastEnumerationSkip().empty());
     CHECK(!cascade::source::sdrPlayEnumerationHeldOff());
+    {   // A healthy table is not quarantined (one chip, one route).
+        const cascade::source::SdrPlayApiState st = cascade::source::sdrPlayApiStateOf(fake.table);
+        CHECK(st.installed && !st.sessionLost && !st.workerAbandoned);
+    }
     CHECK(fake.called("GetDevices"));
     // The session is balanced: opened once, closed once, whichever thread did it.
     CHECK(fake.openCount == 1);
@@ -3644,6 +3658,12 @@ void testAServiceRestartReopensOnlyASessionThatWasNeverAcquired() {
         CHECK(cascade::source::enumerateSdrPlayWith(fake.table).empty());
         CHECK(!cascade::source::sdrPlayLastEnumerationSkip().empty());
         CHECK(cascade::source::sdrPlayServiceTrouble(fake.table) == SdrPlayServiceTrouble::OpenFailed);
+        // A service that merely refused an Open has nobody parked inside it:
+        // not a quarantine (one chip, one route).
+        {
+            const cascade::source::SdrPlayApiState st = cascade::source::sdrPlayApiStateOf(fake.table);
+            CHECK(!st.sessionLost && !st.workerAbandoned);
+        }
 
         // The restart ran but Windows still does not report the service
         // running: nothing is cleared, nothing is reopened.
@@ -3682,10 +3702,14 @@ void testAServiceRestartReopensOnlyASessionThatWasNeverAcquired() {
         }
         CHECK(fake.table.sessionLost);
         CHECK(cascade::source::sdrPlayServiceTrouble(fake.table) == SdrPlayServiceTrouble::SessionLost);
+        // ONE CHIP, ONE ROUTE: the lock-free view every SoapySDR open reads
+        // says the same, and keeps saying it after a restart attempt.
+        CHECK(cascade::source::sdrPlayApiStateOf(fake.table).sessionLost);
 
         CHECK(cascade::source::sdrPlayApplyServiceRestart(fake.table, true) ==
               SdrPlayAfterRestart::RestartFoxSdr);
         CHECK(fake.table.sessionLost);
+        CHECK(cascade::source::sdrPlayApiStateOf(fake.table).sessionLost);
         CHECK(cascade::source::sdrPlayServiceTrouble(fake.table) == SdrPlayServiceTrouble::SessionLost);
         // ...and nothing enters the vendor DLL afterwards: not an open, not a
         // scan. The same refusal a lost session has always given.
