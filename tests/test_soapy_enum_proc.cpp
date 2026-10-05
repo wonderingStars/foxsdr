@@ -2335,9 +2335,15 @@ int main(int argc, char** argv) {
             CHECK(body.find("child-exit-code:") == std::string::npos);
             // ...and it says what only the parent's report used to: which
             // driver, which attempt, and that the application survived.
+            // The words BETWEEN the two are the platform's: Windows writes
+            // "access violation", Linux "access violation (SIGSEGV)". This
+            // check pinned the Windows spelling and failed on the first Linux
+            // run (0.99.62) with the suffix present and correct, so it holds
+            // the two halves it is about and not what sits between them.
             const std::string armedReason = reasonLines(body);
-            CHECK(armedReason.find("reason: access violation - enumeration child, driver=uhd, "
-                                   "attempt 1 (contained)") != std::string::npos);
+            CHECK(armedReason.rfind("reason: access violation", 0) == 0);
+            CHECK(armedReason.find(" - enumeration child, driver=uhd, attempt 1 (contained)") !=
+                  std::string::npos);
             // THE SITE KEEPS 200 CHARACTERS OF A REASON (crash.go clip).
             const std::size_t armedLen =
                 armedReason.size() > std::strlen("reason: ") + 1
@@ -2420,7 +2426,10 @@ int main(int argc, char** argv) {
                     const std::string rl = reasonLines(t);
                     CHECK(rl.size() > std::strlen("reason: ") + 1 &&
                           rl.size() - 1 - std::strlen("reason: ") <= 200u);
-                    CHECK(rl.find("access violation - enumeration child, whole bus, attempt ") !=
+                    // Two halves, for the reason given at the per-driver check
+                    // above: Linux names the signal between them.
+                    CHECK(rl.rfind("reason: access violation", 0) == 0);
+                    CHECK(rl.find(" - enumeration child, whole bus, attempt ") !=
                           std::string::npos);
                     CHECK(rl.find(" (contained)") != std::string::npos);
                     if (rl.find("attempt 1 ") != std::string::npos) { ++attempt1; }
