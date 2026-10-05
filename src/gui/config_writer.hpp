@@ -121,6 +121,8 @@ public:
     // queued behind it as a second write: only the latest survives, because
     // a burst of saves means the last state is the only one that matters.
     void requestAsync(std::string path, std::string text) {
+        // A writer told not to write writes nothing - and does not pretend it did (lastOk()).
+        if (forbidden_) { return; }
         if (inFlight()) {
             queuedPath_ = std::move(path);
             queuedText_ = std::move(text);
@@ -129,6 +131,18 @@ public:
         }
         start(std::move(path), std::move(text));
     }
+
+    // THIS WRITER MUST NOT WRITE (0.99.65). The file it saves is DAMAGED - it failed to load - and
+    // could not be kept aside (core/damaged_file.hpp), so a save would destroy the only copy of what
+    // the user had. From here every request is dropped, for the rest of the session; `reason` is
+    // what lastError() says (a sentence naming no path), and lastOk() stays false so the exit
+    // drain reports it as it reports a refused write.
+    void forbidWrites(std::string reason) {
+        forbidden_ = true;
+        lastOk_ = false;
+        lastError_ = std::move(reason);
+    }
+    bool writesForbidden() const { return forbidden_; }
 
     // Once per frame. Collects a worker that has finished and starts
     // whatever was coalesced behind it. Returns true when a result was
@@ -232,6 +246,7 @@ private:
     std::string queuedPath_;
     std::string queuedText_;
     bool hasQueued_ = false;
+    bool forbidden_ = false;
     bool lastOk_ = false;
     std::string lastError_;
     unsigned completed_ = 0;

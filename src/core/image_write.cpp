@@ -2,6 +2,7 @@
 
 #include "core/image_write.hpp"
 
+#include <filesystem>
 #include <fstream>
 #include <vector>
 
@@ -85,10 +86,25 @@ bool encodeBmp24(const HostImage& img, std::vector<std::uint8_t>& out,
     return true;
 }
 
-bool writeBmp24(const HostImage& img, const std::string& path, std::string& error) {
+const char* bmpFailureWords(BmpFailure why) {
+    switch (why) {
+        case BmpFailure::None: return "";
+        case BmpFailure::NoImage: return "there is no image to save";
+        case BmpFailure::CouldNotOpen: return "the file could not be opened";
+        case BmpFailure::WriteFailed: return "the write failed part way through";
+    }
+    return "";
+}
+
+bool writeBmp24(const HostImage& img, const std::string& path, std::string& error,
+                BmpFailure* cause) {
     error.clear();
+    BmpFailure sink = BmpFailure::None;
+    BmpFailure& why = cause != nullptr ? *cause : sink;
+    why = BmpFailure::None;
     if (img.width == 0 || img.height == 0 || img.pixels.empty()) {
         error = "there is no image to save yet";
+        why = BmpFailure::NoImage;
         return false;
     }
     const std::size_t srcBpp = (img.format == CASCADE_IMAGE_RGB24) ? 3u : 1u;
@@ -98,6 +114,7 @@ bool writeBmp24(const HostImage& img, const std::string& path, std::string& erro
         // Refused rather than trusted: the buffer is smaller than the declared
         // dimensions, and writing it would read past the end.
         error = "image buffer is smaller than its declared size";
+        why = BmpFailure::NoImage;
         return false;
     }
 
@@ -113,6 +130,7 @@ bool writeBmp24(const HostImage& img, const std::string& path, std::string& erro
     std::ofstream f(path, std::ios::binary);
     if (!f) {
         error = "cannot open \"" + path + "\" for writing";
+        why = BmpFailure::CouldNotOpen;
         return false;
     }
 
@@ -173,7 +191,13 @@ bool writeBmp24(const HostImage& img, const std::string& path, std::string& erro
     f.flush();
     writeFaultPoint("bmp", f);  // test seam: a write that fails part way
     if (!f) {
+        // THE PICTURE THAT DID NOT REACH THE DISK WHOLE IS NOT LEFT BEHIND (0.99.65): it would sit
+        // under the name a good one has, truncated, and open as a corrupt image.
+        f.close();
+        std::error_code removed;
+        std::filesystem::remove(std::filesystem::path(path), removed);
         error = "writing \"" + path + "\" failed part way through";
+        why = BmpFailure::WriteFailed;
         return false;
     }
     return true;

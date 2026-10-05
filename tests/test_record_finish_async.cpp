@@ -37,6 +37,7 @@
 #include <complex>
 #include <cstdint>
 #include <cstdio>
+#include <exception>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -57,6 +58,7 @@
 #include <unistd.h>
 #endif
 
+#include "failing_disk.hpp"
 #include "core/diag_log.hpp"
 #include "core/hang_watchdog.hpp"
 #include "core/patch_audio.hpp"
@@ -81,6 +83,11 @@ namespace cascade::gui {
 // The friend AppWindow names for the test files that drive its private members.
 struct AppWindowTestAccess {
     static void setRecordDir(AppWindow& a, std::string d) { a.recordDir_ = std::move(d); }
+    // The file opener of both takes (the seam for a disk that fails: tests/failing_disk.hpp).
+    static void bindOpener(AppWindow& a, Recorder::Opener o) {
+        a.iqRecorder_.bindOpener(o);
+        a.audioRecorder_.bindOpener(std::move(o));
+    }
     static bool startAudio(AppWindow& a) { return a.startAudioRecording(); }
     static bool startIq(AppWindow& a) { return a.startIqRecording(); }
     static void stopAudio(AppWindow& a) { a.stopAudioRecording(); }
@@ -204,9 +211,7 @@ void slowFinish(std::FILE* f) {
     if (std::this_thread::get_id() == g_caller) { g_hookOnCaller.store(true); }
     std::this_thread::sleep_for(std::chrono::milliseconds(g_hookMs.load()));
     if (g_hookPullFile.load() && f != nullptr) {
-#if defined(_WIN32)
-        ::CloseHandle(reinterpret_cast<HANDLE>(_get_osfhandle(_fileno(f))));
-#endif
+        failing_disk::pull(f);  // Windows only; nothing on POSIX
     }
     g_hookFinished.fetch_add(1);
 }
@@ -583,10 +588,21 @@ void checkQuitDrainsWithinTheDeadline() {
 // --- 5. A FINISH THAT FAILS --------------------------------------------------
 
 void checkAFailingFinishSaysWhatTheSynchronousStopSaid() {
+    if (!failing_disk::available()) {
+        std::printf("  failing finish: NOT REACHED (no way to fail a take's disk on this platform)\n");
+        return;
+    }
     resetHook(100);
+    // WINDOWS: the handle behind the stream is closed when the finish starts (the hook). LINUX: the
+    // take's stream is /dev/full from the open, so the finish's flush meets a real ENOSPC; the hook
+    // only sleeps (tests/failing_disk.hpp - a descriptor is never closed behind a stream on POSIX).
     g_hookPullFile.store(true);
     Recorder::setFinishHookForTest(&slowFinish);
     AppWindow app;
+#if defined(__linux__)
+    Access::bindOpener(app, [](const Recorder::OpenRequest& req, Recorder::OpenedFile& out,
+                               std::string& err) { return failing_disk::open(req, out, err); });
+#endif
     takeAudio(app, "failing", 24000);
     const std::uint64_t accepted = Access::audioRec(app).bytesWritten();
     CHECK(accepted == 48000u);
@@ -625,15 +641,30 @@ void checkAFailingFinishSaysWhatTheSynchronousStopSaid() {
 
 }  // namespace
 
+// A case that THROWS is a failed check with its message, never a terminate: an uncaught exception
+// ended test_failure_files on Linux in 0.08 s and took every later case with it (0.99.65).
+#define GUARDED(call)                                                              \
+    do {                                                                           \
+        try {                                                                      \
+            call;                                                                  \
+        } catch (const std::exception& e) {                                        \
+            std::printf("  EXCEPTION in %s: %s\n", #call, e.what());                \
+            CHECK(false);                                                          \
+        } catch (...) {                                                            \
+            std::printf("  EXCEPTION in %s: (not a std::exception)\n", #call);      \
+            CHECK(false);                                                          \
+        }                                                                          \
+    } while (0)
+
 int main() {
     isolate();
-    checkTheSynchronousStopIsReported();
-    checkTheStopKeysNeverHoldAFrame();
-    checkRetiringASpeakerNeverHoldsAFrame();
-    checkARecordBehindAFinishIsRemembered();
-    checkAStopWithdrawsTheRememberedRecord();
-    checkQuitDrainsWithinTheDeadline();
-    checkAFailingFinishSaysWhatTheSynchronousStopSaid();
+    GUARDED(checkTheSynchronousStopIsReported());
+    GUARDED(checkTheStopKeysNeverHoldAFrame());
+    GUARDED(checkRetiringASpeakerNeverHoldsAFrame());
+    GUARDED(checkARecordBehindAFinishIsRemembered());
+    GUARDED(checkAStopWithdrawsTheRememberedRecord());
+    GUARDED(checkQuitDrainsWithinTheDeadline());
+    GUARDED(checkAFailingFinishSaysWhatTheSynchronousStopSaid());
     std::error_code ec;
     if (g_checksFailed == 0) { fs::remove_all(g_scratch, ec); }
     return testSummary("test_record_finish_async");

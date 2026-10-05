@@ -19,6 +19,7 @@
 #include "core/mp3_writer.hpp"
 #include "core/record_finish.hpp"
 #include "core/recorder.hpp"
+#include "core/unique_file.hpp"
 #include "dsp/spsc_ring.hpp"
 #include "sink/audio_out.hpp"
 #include "sink/drift_matcher.hpp"
@@ -111,6 +112,9 @@ public:
                                      .count();
             {
                 std::lock_guard<std::mutex> lock(sh->m);
+                // THE NAME ACTUALLY USED (0.99.65): the opener steps to "name-2.wav" when the
+                // second's name is taken, and describe() must say the name that is on disk.
+                if (ok) { sh->usedPath = file.path; }
                 sh->file = std::move(file);
                 sh->ok = ok;
                 sh->error = ok ? std::string() : err;
@@ -212,7 +216,13 @@ public:
     }
 
     std::string describe() const override {
-        std::string d = "WAV  " + baseName(path_);
+        // The name the file was given when it opened; until then, the one it asked for.
+        std::string shownPath = path_;
+        {
+            std::lock_guard<std::mutex> lock(shared_->m);
+            if (!shared_->usedPath.empty()) { shownPath = shared_->usedPath; }
+        }
+        std::string d = "WAV  " + baseName(shownPath);
         if (state_.load(std::memory_order_acquire) == State::Opening) {
             const double ageS = std::chrono::duration<double>(std::chrono::steady_clock::now() -
                                                               shared_->started)
@@ -258,6 +268,7 @@ private:
         bool done = false;
         bool ok = false;
         std::string error;
+        std::string usedPath;  // the file's name once it is open (see the worker)
         Recorder::OpenedFile file;
         std::atomic<bool> ready{false};  // `done`, for the reader thread's lock-free check
         std::atomic<bool> stuckLogged{false};
@@ -343,7 +354,14 @@ public:
         const std::size_t took = s_->ring.write(s, n);
         if (took < n) { s_->dropped.fetch_add(n - took, std::memory_order_relaxed); }
     }
-    std::string describe() const override { return "MP3  " + baseName(path_); }
+    std::string describe() const override {
+        std::string shownPath = path_;  // the name it asked for, until the file exists
+        {
+            std::lock_guard<std::mutex> lock(s_->m);
+            if (!s_->usedPath.empty()) { shownPath = s_->usedPath; }
+        }
+        return "MP3  " + baseName(shownPath);
+    }
     std::string error() const override {
         std::lock_guard<std::mutex> lock(s_->m);
         if (!s_->error.empty()) { return s_->error; }
@@ -376,6 +394,7 @@ private:
         bool ended = false;    // the worker has finished (its file closed)
         bool counted = false;  // the retirement is counted in RecordFinisher until `ended`
         std::string error;
+        std::string usedPath;  // the file's name once it exists (the second's name, or "-2" ...)
         std::atomic<std::uint64_t> dropped{0};
     };
 
@@ -407,9 +426,27 @@ private:
             s.error = "cannot create the recordings folder \"" + s.directory + "\"";
             return;   // write() keeps filling the ring, which simply overflows
         }
+        // THE NAME IS DECIDED HERE AND TAKEN ATOMICALLY (0.99.65, core/unique_file.hpp): the file is
+        // created empty and exclusively, stepping to "name-2.mp3" when the second's name is taken,
+        // so the encoder opens a file that is already this speaker's and never one that was
+        // somebody else's. Media Foundation creates its own file, which is why this is a
+        // reservation of the name rather than the encoder's own exclusive create.
+        std::string usedPath;
+        bool exhausted = false;
+        if (!reserveUnique(s.path, usedPath, exhausted)) {
+            std::lock_guard<std::mutex> lock(s.m);
+            s.error = "mp3: cannot create \"" + s.path + "\"";
+            return;   // write() keeps filling the ring, which simply overflows
+        }
+        {
+            std::lock_guard<std::mutex> lock(s.m);
+            s.usedPath = usedPath;  // describe() says the name that is on disk
+        }
         Mp3Writer w;
         std::string err;
-        if (!w.open(s.path, static_cast<unsigned>(kOutRateHz), 1, 128, err)) {
+        if (!w.open(usedPath, static_cast<unsigned>(kOutRateHz), 1, 128, err)) {
+            std::error_code gone;
+            std::filesystem::remove(std::filesystem::path(usedPath), gone);  // the empty reservation
             std::lock_guard<std::mutex> lock(s.m);
             s.error = err;
             return;   // write() keeps filling the ring, which simply overflows

@@ -11,6 +11,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include "core/file_read.hpp"
 #include "core/write_fault.hpp"
 
 #ifdef _WIN32
@@ -72,15 +73,28 @@ bool FreqManager::load(const std::string& path, std::string& error) {
         return true;  // first run: no bookmarks, and nothing went wrong
     }
 
-    std::ifstream f(path, std::ios::binary);
-    if (!f) {
-        error = "bookmarks: cannot open \"" + path + "\" for reading";
-        return false;
+    // READ THROUGH readTextFile (core/file_read.hpp, 0.99.65): a directory where the file should be
+    // - and a read that fails - is answered here, on every platform. The stream this read used to
+    // hand to the JSON parser threw out of its buffer on Linux ("Is a directory") and ended the
+    // program, whatever allow_exceptions said.
+    std::string text;
+    switch (readTextFile(path, text)) {
+        case ReadResult::Ok:
+            break;
+        case ReadResult::IsDirectory:
+            error = "bookmarks: \"" + path + "\" is a directory, not a file";
+            return false;
+        case ReadResult::CannotOpen:
+            error = "bookmarks: cannot open \"" + path + "\" for reading";
+            return false;
+        case ReadResult::ReadError:
+            error = "bookmarks: \"" + path + "\" could not be read";
+            return false;
     }
 
     // allow_exceptions=false: a corrupt file is an expected condition here,
     // not an exceptional one; parse errors surface as a discarded value.
-    const json j = json::parse(f, nullptr, /*allow_exceptions=*/false);
+    const json j = json::parse(text, nullptr, /*allow_exceptions=*/false);
     if (j.is_discarded()) {
         error = "bookmarks: \"" + path + "\" is not valid JSON";
         return false;

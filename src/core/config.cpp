@@ -3,6 +3,7 @@
 
 #include "core/bias_tee_memory.hpp"
 #include "core/diag_log.hpp"
+#include "core/file_read.hpp"
 #include "core/patch_presets.hpp"
 #include "core/ppm_correction.hpp"
 #include "core/trace_hold.hpp"
@@ -186,25 +187,33 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
         return true;  // first run: defaults, and nothing went wrong
     }
 
-    // A directory must be rejected before it is opened. Windows refuses to
-    // open one at all, so `!f` below is enough there; POSIX opens it happily
-    // and then throws on the first read, which aborted the process rather
-    // than reporting a bad path. Checking the type here fails the same way on
-    // both platforms.
-    if (fs::is_directory(fs::path(path), ec)) {
-        error = "config: \"" + path + "\" is a directory, not a file";
-        return false;
-    }
-
-    std::ifstream f(path, std::ios::binary);
-    if (!f) {
-        error = "config: cannot open \"" + path + "\" for reading";
-        return false;
+    // A directory must be rejected before it is read. Windows refuses to
+    // open one at all; POSIX opens it happily and then THROWS on the first
+    // read, which aborted the process rather than reporting a bad path.
+    // readTextFile (core/file_read.hpp) answers a directory, a file that will
+    // not open and a read that fails - by an error or by a throw out of the
+    // buffer - the same way on both platforms, and never throws (0.99.65: the
+    // same reading is now used by every loader here; bookmarks.json,
+    // markers.json and the band plans had the stream read this one was
+    // spared, and ended the program on Linux).
+    std::string text;
+    switch (readTextFile(path, text)) {
+        case ReadResult::Ok:
+            break;
+        case ReadResult::IsDirectory:
+            error = "config: \"" + path + "\" is a directory, not a file";
+            return false;
+        case ReadResult::CannotOpen:
+            error = "config: cannot open \"" + path + "\" for reading";
+            return false;
+        case ReadResult::ReadError:
+            error = "config: \"" + path + "\" could not be read";
+            return false;
     }
 
     // allow_exceptions=false: a corrupt file is an expected condition here,
     // not an exceptional one; parse errors surface as a discarded value.
-    const json j = json::parse(f, nullptr, /*allow_exceptions=*/false);
+    const json j = json::parse(text, nullptr, /*allow_exceptions=*/false);
     if (j.is_discarded()) {
         error = "config: \"" + path + "\" is not valid JSON";
         return false;

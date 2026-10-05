@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/plugin_cleanup.hpp"
 
+#include "core/file_read.hpp"
+
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
@@ -105,9 +107,12 @@ const char* pendingRemovalFileName() { return "pending-removal.json"; }
 
 std::vector<std::string> loadPendingRemovals(const std::string& pluginsDir) {
     std::vector<std::string> out;
-    std::ifstream in(fs::path(pluginsDir) / pendingRemovalFileName(), std::ios::binary);
-    if (!in) { return out; }
-    const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    // Through readTextFile (core/file_read.hpp, 0.99.65): a folder squatting on this name, or a read
+    // that fails, is "no queue" - the stream read this replaced threw on Linux and ended the program.
+    std::string text;
+    if (readTextFile(fs::path(pluginsDir) / pendingRemovalFileName(), text) != ReadResult::Ok) {
+        return out;
+    }
     const json j = json::parse(text, nullptr, false);
     if (!j.is_object() || !j.contains("files") || !j["files"].is_array()) { return out; }
     for (const json& f : j["files"]) {

@@ -47,6 +47,7 @@
 
 #include <imgui.h>
 
+#include "core/damaged_file.hpp"
 #include "core/diag_log.hpp"
 #include "core/freq_import.hpp"
 #include "core/i18n.hpp"
@@ -55,6 +56,7 @@
 #include "core/write_fault.hpp"
 #include "core/patch_recordings.hpp"
 #include "core/record_finish.hpp"
+#include "core/unique_file.hpp"
 #include "gui/app_window_disk_state.hpp"
 #include "gui/background_saver.hpp"
 #include "gui/disk_job.hpp"
@@ -366,9 +368,17 @@ void AppWindow::saveImageBmp(const cascade::core::HostImage& im) {
             std::error_code ec;
             std::filesystem::create_directories(std::filesystem::path(dir), ec);
             std::string err;
-            if (cascade::core::writeBmp24(im, out, err)) {
+            // THE NAME IS TAKEN ATOMICALLY HERE (0.99.65, core/unique_file.hpp): two saves inside one
+            // second are two files ("...-101010.bmp", "...-101010-2.bmp"), never the second over the
+            // first, and the note says the name that is on disk. A picture that fails to write is
+            // removed by writeBmp24 - the reserved file with it.
+            std::string used;
+            bool exhausted = false;
+            if (!cascade::core::reserveUnique(out, used, exhausted)) {
+                r.text = "cannot open \"" + out + "\" for writing";
+            } else if (cascade::core::writeBmp24(im, used, err)) {
                 r.ok = true;
-                r.text = out;
+                r.text = used;
             } else {
                 r.text = err;
             }
@@ -410,11 +420,20 @@ void AppWindow::exportBookmarksForSdrSharp() {
         r.text = shown;
         std::error_code ec;
         std::filesystem::create_directories(std::filesystem::path(dir), ec);
-        std::ofstream f(path, std::ios::binary | std::ios::trunc);
+        // THE NAME IS TAKEN ATOMICALLY HERE (0.99.65, core/unique_file.hpp), as the picture's is: two
+        // exports inside one second are two files, and the note names the one on disk.
+        std::string used;
+        bool exhausted = false;
+        int index = 1;
+        if (!cascade::core::reserveUnique(path, used, exhausted, &index)) { return r; }  // not written
+        r.text = cascade::core::numberedPath(shown, index);
+        std::ofstream f(used, std::ios::binary | std::ios::trunc);
         f.write(xml.data(), static_cast<std::streamsize>(xml.size()));
         cascade::core::writeFaultPoint("export", f);  // test seam: a write that fails part way
         f.close();
         r.ok = static_cast<bool>(f);
+        // A list that did not reach the disk whole is not left behind (the empty file taken for it).
+        if (!r.ok) { std::filesystem::remove(std::filesystem::path(used), ec); }
         return r;
     });
     bookmarkImportNote_ = tr("Saving...");
@@ -460,14 +479,19 @@ void AppWindow::shotFlush() {
                 continue;
             }
             std::string err;
+            cascade::core::BmpFailure why = cascade::core::BmpFailure::None;
             // SAID BY THE WORKER, in the words the frame loop used to say it, so
             // that a screenshot taken on the LAST frame of a bounded run - after
             // which no frame polls - still logs the path a harness looks for.
-            if (cascade::core::writeBmp24(f.image, f.path, err)) {
+            if (cascade::core::writeBmp24(f.image, f.path, err, &why)) {
                 cascade::core::diagLogf("shot: wrote %s", f.path.c_str());
                 ++r.written;
             } else {
-                cascade::core::diagWarnf("shot: %s", err.c_str());
+                // FROM THE CAUSE, NOT FROM THE WRITER'S TEXT (0.99.65): that text names the file, and
+                // a log line never names a path (it goes into every report). The picture that failed
+                // is removed by writeBmp24.
+                cascade::core::diagWarnf("shot: a screenshot could not be written (%s)",
+                                         cascade::core::bmpFailureWords(why));
                 ++r.failed;
             }
         }
@@ -670,6 +694,106 @@ void AppWindow::patchListRecordings() {
             r.cache = std::move(cache);
             return r;
         });
+}
+
+// --- A DAMAGED FILE IS KEPT ASIDE, NEVER SAVED OVER (0.99.65, core/damaged_file.hpp) ---------
+//
+// config.json, bookmarks.json and markers.json are loaded once, by the constructor, before the
+// first frame; one that failed to load was left on disk and then saved over by the first change
+// (or the clean exit). This is called at the three load sites, at start-up - disk work of the
+// kind the constructor's three reads already are - and adds nothing to a frame.
+
+void AppWindow::setAsideDamagedFile(const char* which, const std::string& path) {
+    const cascade::core::SetAsideResult r = cascade::core::setDamagedFileAside(path);
+    const unsigned long long bytes = static_cast<unsigned long long>(r.bytes);
+    switch (r.outcome) {
+        case cascade::core::SetAsideResult::Outcome::NothingToKeep:
+            return;  // a first run, an empty file, or a folder: nothing to lose, nothing said
+        case cascade::core::SetAsideResult::Outcome::KeptAside:
+            // WHICH FILE AND HOW BIG, and no path: a log line never names one.
+            cascade::core::diagLogf(
+                "%s: a damaged file (%llu bytes) was kept aside beside the live one; the next save "
+                "writes a new file",
+                which, bytes);
+            return;
+        case cascade::core::SetAsideResult::Outcome::CouldNotKeep:
+            break;
+    }
+    // THE RENAME WAS REFUSED (held by another program, a read-only folder): the damaged file stays
+    // exactly as it is, and this file's saver writes nothing for the rest of the session. The red
+    // line the two lists already show stays up; the settings file has the log line.
+    const std::string name = which;
+    if (name == "settings") {
+        configWriter_.forbidWrites(
+            "config: not saved - the damaged settings file could not be kept aside");
+    } else if (name == "bookmarks") {
+        bookmarkSaver_.forbidWrites(
+            "bookmarks: not saved - the damaged file could not be kept aside");
+    } else if (name == "markers") {
+        markerSaver_.forbidWrites("markers: not saved - the damaged file could not be kept aside");
+    }
+    cascade::core::diagWarnf(
+        "%s: a damaged file (%llu bytes) could not be kept aside, so nothing will be saved over it "
+        "in this session",
+        which, bytes);
+}
+
+// --- THE SETTINGS SAVE BACKS OFF (0.99.65) ----------------------------------------------------
+//
+// A failed settings write used to be asked for again every debounce window (two seconds) for as
+// long as the folder stayed read-only, one stderr line each time. Now each failure lengthens the
+// wait - doubling from the debounce window to five minutes - and the first success puts it back.
+// The failure is said once per run of failures, in a sentence that names no path (the writer's own
+// text does). The clean-exit save is not held by it.
+
+namespace {
+
+constexpr double kConfigRetryCapS = 300.0;  // five minutes
+
+// What the writer's sentence (which names the file) said, as a cause.
+const char* configFailureCause(const std::string& error) {
+    if (error.find("cannot create temp file") != std::string::npos) {
+        return "the settings folder would not take a new file";
+    }
+    if (error.find("atomic replace") != std::string::npos) {
+        return "the settings file is held by another program or could not be replaced";
+    }
+    if (error.find("write to temp file") != std::string::npos) { return "the write failed part way"; }
+    if (error.find("cannot create directory") != std::string::npos) {
+        return "the settings folder could not be made";
+    }
+    return "the write failed";
+}
+
+}  // namespace
+
+void AppWindow::noteConfigWrite(bool ok, const std::string& error) {
+    if (ok) {
+        disk_->configFailures = 0;
+        disk_->configFailureFresh = false;
+        disk_->configRetryAtS = 0.0;
+        disk_->configFailureLogged = false;  // the next failure starts a new run
+        return;
+    }
+    ++disk_->configFailures;
+    disk_->configFailureFresh = true;  // the next maybeSaveConfig gives it the clock
+    if (!disk_->configFailureLogged) {
+        disk_->configFailureLogged = true;
+        cascade::core::diagWarnf(
+            "config: the settings could not be saved (%s); trying again, with a longer wait each time",
+            configFailureCause(error));
+    }
+}
+
+bool AppWindow::configRetryHeld(double nowS, double baseWaitS) {
+    if (disk_->configFailureFresh) {
+        disk_->configFailureFresh = false;
+        double wait = baseWaitS;
+        for (int i = 0; i < disk_->configFailures && wait < kConfigRetryCapS; ++i) { wait *= 2.0; }
+        if (wait > kConfigRetryCapS) { wait = kConfigRetryCapS; }
+        disk_->configRetryAtS = nowS + wait;
+    }
+    return nowS < disk_->configRetryAtS;
 }
 
 }  // namespace cascade::gui

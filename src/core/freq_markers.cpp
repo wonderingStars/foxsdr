@@ -11,6 +11,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include "core/file_read.hpp"
 #include "core/freq_manager.hpp"
 #include "core/write_fault.hpp"
 
@@ -150,12 +151,23 @@ bool FreqMarkers::load(const std::string& path, std::string& error) {
 
     std::error_code ec;
     if (!fs::exists(fs::path(path), ec)) { return true; }
-    std::ifstream f(path, std::ios::binary);
-    if (!f) {
-        error = "markers: cannot open \"" + path + "\" for reading";
-        return false;
+    // Read through readTextFile (core/file_read.hpp, 0.99.65), as FreqManager::load does: a
+    // directory, or a read that fails, is answered and never thrown.
+    std::string text;
+    switch (readTextFile(path, text)) {
+        case ReadResult::Ok:
+            break;
+        case ReadResult::IsDirectory:
+            error = "markers: \"" + path + "\" is a directory, not a file";
+            return false;
+        case ReadResult::CannotOpen:
+            error = "markers: cannot open \"" + path + "\" for reading";
+            return false;
+        case ReadResult::ReadError:
+            error = "markers: \"" + path + "\" could not be read";
+            return false;
     }
-    const json j = json::parse(f, nullptr, false);
+    const json j = json::parse(text, nullptr, false);
     if (j.is_discarded() || !j.is_object()) {
         error = "markers: \"" + path + "\" is not a JSON object";
         return false;

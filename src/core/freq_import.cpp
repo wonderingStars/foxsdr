@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/freq_import.hpp"
 
+#include "core/file_read.hpp"
+
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -408,15 +410,24 @@ ImportResult importFrequencyList(std::string_view text) {
 }
 
 ImportResult importFrequencyFile(const std::string& path) {
-    std::ifstream f(path, std::ios::binary);
-    if (!f) {
-        ImportResult r;
-        r.error = "cannot open \"" + path + "\"";
-        return r;
+    // Through readTextFile (core/file_read.hpp, 0.99.65): a FOLDER dropped on the window, or a read
+    // that fails, is answered in words and never thrown.
+    std::string text;
+    switch (readTextFile(path, text)) {
+        case ReadResult::Ok:
+            break;
+        case ReadResult::IsDirectory:
+        case ReadResult::CannotOpen: {
+            ImportResult r;
+            r.error = "cannot open \"" + path + "\"";
+            return r;
+        }
+        case ReadResult::ReadError: {
+            ImportResult r;
+            r.error = "cannot read \"" + path + "\"";
+            return r;
+        }
     }
-    std::ostringstream ss;
-    ss << f.rdbuf();
-    const std::string text = ss.str();
     return importFrequencyList(text);
 }
 

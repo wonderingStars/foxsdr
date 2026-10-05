@@ -1794,10 +1794,37 @@ mid-token or replaced by a directory; the OS handle behind a take's stream close
 a full disk, a removed device and a vanished share look like above stdio). Seams, all
 function hooks, null in a shipped build: `core/write_fault.hpp` (sets a writer's stream
 bad after the bytes are written: settings, bookmarks, markers, export, BMP),
-`Recorder::setFinishHookForTest` (now passes the stream), `DestSeams::mp3WriteFails`.
+`Recorder::setFinishHookForTest` (now passes the stream), `DestSeams::mp3WriteFails`,
+`core/file_read.hpp`'s `setReadFaultHookForTest` (a read that throws).
+
+**The same tests on Linux (0.99.65, after the first Linux run).** The first Linux build
+failed three of them, for reasons that are worth keeping: (1) **a product defect** - see
+*A folder where a file should be ended the program on Linux*, below; (2) the injection of a
+failing disk. Closing the OS handle behind a stream is a Windows technique: on POSIX a
+closed descriptor number is handed to the next open in the process, so writes through the
+stale stream could land in another file, and it does not make the writes fail. It is
+never run there. `tests/failing_disk.hpp` does it per platform: Windows closes the handle
+once the take has run healthily; Linux gives the take a `/dev/full` stream from the start (a
+real `ENOSPC` on every write that reaches the OS; the stdio buffer takes the first 256 KiB
+exactly as on Windows, and the file the take names stays the 44-byte header the opener
+flushed); anywhere else the case reports NOT REACHED. (3) A folder removed under an open
+take: Windows refuses (asserted); POSIX removes it, the file is unlinked and keeps receiving
+writes, Stop closes a file with no name - **pinned as a FINDING** of the same kind as the MP3
+speaker's, and printed as one. (4) What else leaned on Windows semantics: a read-only folder
+(`icacls` on Windows, the permission bits on POSIX, both *proved by writing a probe file*, so
+a run as root reports NOT REACHED instead of passing for the wrong reason); a file "held open
+by another program" (no POSIX equivalent - an open file can be renamed, replaced and
+unlinked - so its cases are guarded out; where the point was a refused rename, the folder's
+permission stands in; for the log file that cannot be opened, the file's own write bits do);
+the plugin file that cannot be deleted (guarded out: the only POSIX refusal is the folder's
+permission, which also stops the queue file the case is about); a drive letter that is not
+there (guarded out); the settings folder (`APPDATA` on Windows, `XDG_CONFIG_HOME` on POSIX:
+both are set). And no case can end the process any more: each runs under a guard that turns a
+throw into a failed check with its message.
 
 **Could not be reached:** a volume that really fills (no unprivileged way; the seam stands
-in); a folder removed or renamed *under an open WAV take* (Windows refuses, asserted);
+in); a folder removed or renamed *under an open WAV take* on Windows (refused, asserted; on
+POSIX it is reached and pinned);
 a drive pulled mid-write (a drive letter that is not there stands in for the destination
 being gone *before* the write). **Covered by existing tests, not duplicated:** a source
 that goes away mid-take (`tests/test_stop_ends_recordings.cpp`, "a fault mid-take", the
@@ -1808,27 +1835,91 @@ the opened device's identity survives and `recoveryDeviceIndex` finds it again, 
 `tests/test_audio_open.cpp` the watchdog (the patch speaker's own *the sound output
 stopped* sentence is a one-line mapping of that, not separately tested).
 
-**Findings, not fixed** (each pinned by a test that says FINDING on its output line, so a
-fix has to change that line on purpose):
+**A folder where a file should be ended the program on Linux (found by the first Linux run,
+fixed).** `bookmarks.json`, `markers.json` and a band plan were read by handing an
+`std::ifstream` to `json::parse` - and `ConfigStore::load` had been spared only because it
+already checked for a directory first. On Linux an `ifstream` *opens* a directory and the
+*read* then fails by **throwing** out of the stream's buffer (`std::__ios_failure`,
+"basic_filebuf::underflow error reading the file: Is a directory"); nlohmann's stream adapter
+and `istreambuf_iterator` read the buffer directly, past the stream's own error handling, so
+the exception went straight out of the loader (`allow_exceptions=false` only covers parse
+errors) and, in the constructor, ended the program. A real read error on a failing disk does
+the same. `core/file_read.hpp`: `readTextFile` answers a directory (`IsDirectory`), a file that
+will not open and a read that fails - by an error or a throw - and never throws; `slurpStream`
+reads with `istream::read`, which turns a throwing buffer into `badbit`. Every loader of these
+files now reads through it (`ConfigStore`, `FreqManager`, `FreqMarkers`, `BandPlan::parseInto`,
+and the readers that open a fixed name in a folder the user can write to: the plugin manifest
+and its `forgetFile`, the pending-removal list, an imported frequency list, and the two
+developer environment hooks). Checked and left, because they cannot throw: every `read()`,
+`getline` and `>>` (they catch), `ostream << rdbuf()` (libstdc++ catches it and sets failbit),
+the one reader that skips anything that is not a regular file before it reads (`fonts.cpp`),
+the one that sizes the file first (`readLocalCatalogue`, which a directory fails), the report,
+sentinel, crash-upload, history, health and telemetry readers (all `read()` or `getline`), and
+the Windows-only PE reader.
+No `exceptions(...)` is set on a file stream anywhere in `src/`. Verified against GCC's own
+libstdc++ with a stream whose buffer throws: `json::parse` and `istreambuf_iterator` throw,
+`slurpStream`, `read`, `getline`, `>>` and `<< rdbuf()` do not. `tests/test_file_read.cpp`
+(a throwing buffer; each loader, with a directory and with a read that throws through the seam).
 
-0. **Stop followed by Record inside one second overwrites the take that was just
-   finished.** A take is named for the *second* it was asked for
-   (`audio_YYYYMMDD_HHMMSS_48000Hz.wav`, `Recorder::makeFilename`) and the open is
-   `fopen("wb")`, so the second take opens the first one's name and truncates it: one
-   file, holding only the second take, three runs out of three
-   (`tests/test_failure_recording.cpp`). It is older than the asynchronous finish (the
-   name and the open are unchanged by it); the new "remembered Record" only keeps the
-   open from racing the finish, it cannot make the names differ.
+**Fixed in the second pass of 0.99.65** (four of the six findings the first pass pinned;
+each test was seen red on the code that had the defect, then green, then red again with the
+fix taken out):
 
-1. **A damaged `config.json`, `bookmarks.json` or `markers.json` is overwritten by the
-   next save, and no copy is kept.** The window starts on defaults, the reason goes to
-   stderr only (settings) or to a red line that the first successful save clears
-   (bookmarks, markers), and the first change - or the clean exit - replaces the file. A
-   settings file cut off mid-write by a crash, or a hand edit with one missing quote,
-   costs the whole configuration, silently.
-2. **A read-only settings folder retries the save forever.** Every debounce window the
-   write is attempted again (eight attempts in twenty simulated seconds), refused each
-   time, one stderr line per attempt, nothing in the window or the log.
+0. **A take never opens over an existing file** (was: Stop then Record inside one second
+   overwrote the take just finished - one file, holding only the second take, three runs
+   out of three). `core/unique_file.hpp`: when the name a file would get (the *second* it
+   was asked for) is taken - by the take just finished, one still being finalised, another
+   writer of this process in the same second, or a stranger's file or folder - the file
+   gets a number before its extension, `name.wav`, `name-2.wav` ... `name-99.wav`, and past
+   that the take fails in the words a refused create always had. The name is decided **on
+   the worker, where the file is opened**, by an **exclusive create** (`_O_EXCL` /
+   `O_EXCL`, i.e. `CREATE_NEW`), so there is no window between looking and opening. The
+   name used travels back in `OpenedFile::path` and is what `Recorder::path()`, a speaker's
+   `describe()` and a note read. Sites: `Recorder::openFile` (the audio and I/Q takes and a
+   patch speaker's WAV, `createUnique`); a patch speaker's MP3 (`Mp3Dest`, `reserveUnique`:
+   Media Foundation creates its own file, so the exclusive create reserves the name and the
+   encoder opens a file that is already the speaker's); the picture save and the SDR# export
+   (`reserveUnique`, on their workers). **Left as they were, on purpose:** F12's
+   `shot-<frame>.bmp` (named by the frame counter, not the clock, and addressed by name by the
+   verification harness) and the SDRplay diagnostic's `sdrplay-diagnostic-<time>.txt`
+   (written by a child process, one at a time, the key disabled while it runs).
+   `tests/test_unique_file.cpp` (including eight threads asking for one name at once),
+   `tests/test_failure_recording.cpp`, `tests/test_failure_files.cpp`.
+1. **A damaged `config.json`, `bookmarks.json` or `markers.json` is kept aside, never saved
+   over** (was: replaced by defaults on the first save, no copy kept - a settings file cut
+   off by a crash cost the whole configuration, silently). `core/damaged_file.hpp`: a file
+   that exists, is not empty and fails to load is renamed, at start-up where the load failed
+   and before anything can save, to `<name>.bad-<UTC yyyymmdd-hhmmss>` (a second in the same
+   second takes `-2`, `-3` ...), and the three newest such copies of that file are kept.
+   One log line per file kept aside, saying which of the three and how big, naming no path.
+   A missing file (a first run), an empty file and a folder squatting on the name have
+   nothing to keep. **If the rename is refused** (held by another program, a read-only
+   folder) that file's saver is told to write nothing for the session
+   (`ConfigWriter::forbidWrites`, `BackgroundSaver::forbidWrites`), the log says so once, and
+   the red line the two lists already show stays up (no write ever lands to clear it). The
+   band plan is never written by the application and is out of scope. No new on-screen
+   string. `tests/test_damaged_file.cpp`, `tests/test_failure_files.cpp`.
+2. **A read-only settings folder is not retried every two seconds for ever** (was: eight
+   attempts in twenty simulated seconds, one stderr line each). A failed write now doubles the
+   wait before the next attempt, from the debounce window up to five minutes
+   (`AppWindow::configRetryHeld`), and the first success puts it back; an hour of a folder
+   that stays read-only is about eighteen attempts. The failure is logged once per run of
+   failures (*the settings could not be saved (<cause>)*, the cause a class, never the
+   writer's sentence, which names the file), and the clean-exit save is not held by the wait
+   and tries once. The `recovered.cfgsave` count (once a session) is unchanged.
+6. **A screenshot's write failure is logged without the path, and the failed picture is
+   removed** (was: `shot: writing "<path>" failed part way through`, and the truncated BMP left
+   on disk under the name a good one would have had). `writeBmp24` reports a cause
+   (`BmpFailure`, no path in its words) and removes a file whose write failed, for the F12
+   screenshot and for Save as BMP; the export removes the file it reserved when its write
+   fails. The patch page's *radio stopped* line no longer carries a recording's fault text
+   (it named the file); `shot: wrote <path>` is **unchanged**, by design (the harness looks
+   for it) - see the report.
+
+**Findings still pinned, not fixed** (each by a test that says FINDING on its output line, so
+a fix has to change that line on purpose; they need words in the 33 catalogues or a decision
+about where to say it):
+
 3. **A take whose disk goes away is a husk, and says so only while it runs.** The stream
    buffer (256 KiB) holds what was "accepted" - `bytesWritten()` overclaims by up to that -
    so on a failure the whole buffer goes with the handle: the file is the 44-byte header
@@ -1839,9 +1930,6 @@ fix has to change that line on purpose):
    reported (*the MP3 encoder refused a write*).
 5. **The log file held by another program at start-up is silently off**: the Diagnostics
    switch stays on, no file is written, nothing says so (the ring still works).
-6. **A screenshot's write failure is logged with the folder's path** (`shot: writing "<path>"
-   failed part way through`), against the rule that log lines never name a file; and a
-   picture whose save failed is left on disk under the name a good one would have had.
 
 ### What a plugin playing sound writes (0.93.0)
 

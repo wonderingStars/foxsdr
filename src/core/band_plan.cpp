@@ -9,6 +9,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include "core/file_read.hpp"
 #include "core/i18n.hpp"
 
 #ifdef _WIN32
@@ -103,15 +104,28 @@ std::string BandPlan::defaultDir() {
 
 bool BandPlan::parseInto(const std::string& path, std::vector<BandEntry>& out,
                          PlanInfo& info, std::string& error) {
-    std::ifstream f(path, std::ios::binary);
-    if (!f) {
-        error = "band plan: cannot open \"" + path + "\" for reading";
-        return false;
+    // Read through readTextFile (core/file_read.hpp, 0.99.65): a directory, or a read that fails,
+    // is answered here and never thrown (the stream this used to hand to the parser threw out of
+    // its buffer on Linux and ended the program). Every plan reached through available() and
+    // loadDirectory() is a regular file already; loadFile() takes whatever path it is given.
+    std::string text;
+    switch (readTextFile(path, text)) {
+        case ReadResult::Ok:
+            break;
+        case ReadResult::IsDirectory:
+            error = "band plan: \"" + path + "\" is a directory, not a file";
+            return false;
+        case ReadResult::CannotOpen:
+            error = "band plan: cannot open \"" + path + "\" for reading";
+            return false;
+        case ReadResult::ReadError:
+            error = "band plan: \"" + path + "\" could not be read";
+            return false;
     }
 
     // allow_exceptions=false: a hand-edited file is expected to be broken
     // sometimes; that is a reportable condition, not an exceptional one.
-    const json j = json::parse(f, nullptr, /*allow_exceptions=*/false);
+    const json j = json::parse(text, nullptr, /*allow_exceptions=*/false);
     if (j.is_discarded()) {
         error = "band plan: \"" + path + "\" is not valid JSON";
         return false;

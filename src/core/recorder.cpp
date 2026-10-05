@@ -6,6 +6,8 @@
 #include <cstring>
 #include <filesystem>
 
+#include "core/unique_file.hpp"
+
 namespace fs = std::filesystem;
 
 namespace cascade::core {
@@ -174,14 +176,24 @@ bool Recorder::openFile(const OpenRequest& req, OpenedFile& out, std::string& er
         return false;
     }
 
-    std::FILE* f = std::fopen(req.path.c_str(), "wb");
+    // THE NAME IS DECIDED HERE, ON THE WORKER, AND THE FILE IS CREATED EXCLUSIVELY (0.99.65,
+    // core/unique_file.hpp). req.path is the name the take WANTS (the second it was asked for);
+    // when something is there already - the take just finished, one still being finalised, another
+    // writer of this process, a stranger's file - the take goes to "name-2.wav", "name-3.wav" ...
+    // and never opens over a file. opened.path is the name actually used, which is what begin()
+    // keeps and everything that shows a take's name reads. Past kMaxUniqueNames the create fails
+    // in the words a refused create always had.
+    std::string usedPath;
+    bool exhausted = false;
+    std::FILE* f = createUnique(req.path, usedPath, exhausted);
     if (f == nullptr) {
+        (void)exhausted;  // taken to the end, or refused outright: the same words
         error = "recorder: cannot create \"" + req.path + "\"";
         return false;
     }
     OpenedFile opened;
     opened.kind = req.kind;
-    opened.path = req.path;
+    opened.path = usedPath;
     opened.file.reset(f);  // from here a failure closes the file by itself
     // setvbuf must precede the first I/O on the stream. Failure (it cannot
     // realistically fail with valid arguments) just leaves stdio's default
@@ -191,7 +203,7 @@ bool Recorder::openFile(const OpenRequest& req, OpenedFile& out, std::string& er
 
     if (std::fwrite(req.header.data(), 1, req.header.size(), f) != req.header.size() ||
         std::fflush(f) != 0) {
-        error = "recorder: writing the WAV header to \"" + req.path + "\" failed";
+        error = "recorder: writing the WAV header to \"" + usedPath + "\" failed";
         return false;
     }
     out = std::move(opened);

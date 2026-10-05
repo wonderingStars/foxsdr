@@ -254,6 +254,13 @@ const std::vector<Wrapper>& wrappers() {
         {"setCrashCaptureEnabled(", "src/core/crash_handler.cpp", "creates the reports folder"},
         {"addCatalogueFile(", "src/core/i18n.cpp", "reads a language catalogue"},
         {"StallLedger::removeFile(", "src/core/telemetry.cpp", "deletes the stall ledger"},
+        // 0.99.65: a damaged settings file is renamed aside and its older copies removed; a name is
+        // taken by an exclusive create. Neither belongs on the thread that draws the window.
+        {"readTextFile(", "src/core/file_read.cpp", "reads a whole file (a developer hook's script or patch)"},
+        {"setDamagedFileAside(", "src/core/damaged_file.cpp", "renames a damaged file aside and prunes older copies"},
+        {"setAsideDamagedFile(", "src/gui/app_window_disk_work.cpp", "keeps a damaged file aside (start-up only)"},
+        {"reserveUnique(", "src/core/unique_file.cpp", "creates a file under the first free name"},
+        {"createUnique(", "src/core/unique_file.cpp", "creates a file under the first free name"},
     };
     return v;
 }
@@ -614,12 +621,17 @@ const std::vector<Allowed>& allowed() {
          "tests/test_stop_ends_recordings.cpp (a restored file plays) and tests/test_diagnostics.cpp "
          "assert the synchronous behaviour. A change to what start-up promises, to be decided as "
          "one, together with the constructor's three list reads above."},
+        {"app_window_disk_work.cpp", "AppWindow::setAsideDamagedFile", "helper", Pause::Startup, "",
+         "0.99.65: renames a damaged config.json, bookmarks.json or markers.json aside (and removes "
+         "older copies) where the constructor's load of it failed - at start-up, before the first "
+         "frame and before the watchdog starts, beside the three reads it follows. Called from "
+         "nowhere else; it adds nothing to a frame."},
         {"app_window.cpp", "AppWindow::telemetryStartup", "helper", Pause::Startup, "",
          "Removes the stall ledger of an opted-out run, at start-up, before the first frame "
          "(the function's own comment: 'This is start-up: the read is not on the frame path')."},
 
         // ---- DEVELOPER AND TRANSLATOR HOOKS: an environment variable, read once -------
-        {"app_window.cpp", "AppWindow::run", "stream", Pause::NotNeeded, "",
+        {"app_window.cpp", "AppWindow::run", "helper", Pause::NotNeeded, "",
          "Two developer environment variables, FOXSDR_INPUT_SCRIPT and FOXSDR_PATCH_FILE: each "
          "names a file the verification harness (bounded --frames runs, screenshot sweeps) reads "
          "once, before the first frame or on it. No user sets them and a normal session never "

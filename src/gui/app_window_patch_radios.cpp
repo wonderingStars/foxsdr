@@ -519,7 +519,16 @@ void AppWindow::patchReconcile() {
         if (!it->second->fault().empty()) {
             patchRadioError_[id] = it->second->fault();
             patchRadioFailedAs_[id] = patchRadioOpenedAs_[id];
-            cascade::core::diagWarnf("patch: radio stopped: %s", it->second->fault().c_str());
+            // A RECORDING'S FAULT NAMES THE FILE ("I/O error while reading 'IQ file: <name>'"), and
+            // a log line never does (0.99.65): the line says which node and that it was a recording;
+            // the words, file name and all, are on the node's face for the person who chose it.
+            if (n != nullptr && pc::isIqFileKey(n->device)) {
+                cascade::core::diagWarnf(
+                    "patch: radio node %u stopped: its I/Q recording could not be read any further",
+                    static_cast<unsigned>(id));
+            } else {
+                cascade::core::diagWarnf("patch: radio stopped: %s", it->second->fault().c_str());
+            }
         }
         it->second->stop();
         it = patchRadios_.erase(it);

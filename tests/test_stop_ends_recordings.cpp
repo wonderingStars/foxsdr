@@ -67,6 +67,7 @@
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/recorder.hpp"
+#include "core/unique_file.hpp"
 #include "test_check.hpp"
 
 #include <httplib.h>
@@ -411,11 +412,15 @@ void checkAllClosed(const fs::path& dir, const char* what) {
 // seconds would be given, so the recorder's open fails: a real refused start
 // with a real error, to prove a later fault does not write over it. Named by
 // the recorder's own pure makeFilename, so a format change moves them too.
+//
+// EVERY NAME THE RECORDER WOULD TRY (0.99.65, core/unique_file.hpp): a take whose second's name
+// is taken goes on to "name-2.wav", "name-3.wav" ... up to "name-99.wav", and steps past a folder
+// as it does past a file, so the refusal needs all ninety-nine of each second's names taken.
 std::vector<fs::path> blockAudioNames(const fs::path& recDir) {
     std::vector<fs::path> made;
     std::error_code ec;
     const std::time_t now = std::time(nullptr);
-    for (int k = -1; k <= 8; ++k) {
+    for (int k = -1; k <= 5; ++k) {
         const std::time_t t = now + k;
         std::tm tm{};
 #if defined(_WIN32)
@@ -423,9 +428,14 @@ std::vector<fs::path> blockAudioNames(const fs::path& recDir) {
 #else
         localtime_r(&t, &tm);
 #endif
-        const fs::path p = recDir / cascade::core::Recorder::makeFilename(
-                                        cascade::core::RecordKind::Audio, 48000.0, tm);
-        if (!fs::exists(p, ec) && fs::create_directories(p, ec)) { made.push_back(p); }
+        const std::string wanted =
+            (recDir / cascade::core::Recorder::makeFilename(cascade::core::RecordKind::Audio, 48000.0,
+                                                            tm))
+                .string();
+        for (int n = 1; n <= cascade::core::kMaxUniqueNames; ++n) {
+            const fs::path p = cascade::core::numberedPath(wanted, n);
+            if (!fs::exists(p, ec) && fs::create_directories(p, ec)) { made.push_back(p); }
+        }
     }
     return made;
 }

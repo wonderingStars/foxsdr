@@ -69,6 +69,13 @@ public:
     void bind(Writer writer) { writer_.bind(std::move(writer)); }
     void setStuckAfterForTest(std::chrono::milliseconds d) { stuckAfter_ = d; }
 
+    // THIS FILE MUST NOT BE WRITTEN THIS SESSION (0.99.65): it is damaged and could not be kept
+    // aside, so a save would destroy the only copy (core/damaged_file.hpp). Every request after
+    // this is dropped; the red line the list already shows stays up, since no write ever lands to
+    // clear it.
+    void forbidWrites(std::string reason) { writer_.forbidWrites(std::move(reason)); }
+    bool writesForbidden() const { return writer_.writesForbidden(); }
+
     // Ask for `text` to be written to `path`. NEVER BLOCKS.
     void request(std::string path, std::string text) {
         if (!writer_.inFlight()) { busySince_ = std::chrono::steady_clock::now(); }

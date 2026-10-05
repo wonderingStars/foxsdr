@@ -90,6 +90,12 @@ struct DiskWorkState {
     bool listAgain = false;
     // The screenshot being put together by the frame that took it.
     std::vector<ShotFile> shotBatch;
+
+    // THE SETTINGS SAVE'S BACK-OFF (0.99.65, AppWindow::noteConfigWrite / configRetryHeld).
+    int configFailures = 0;            // writes that failed in a row
+    bool configFailureFresh = false;   // one has failed and has not yet been given the clock
+    double configRetryAtS = 0.0;       // the earliest the debounce may ask again
+    bool configFailureLogged = false;  // this run of failures has been said in the log
 };
 
 }  // namespace cascade::gui

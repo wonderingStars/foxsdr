@@ -152,7 +152,11 @@ public:
     struct OpenRequest {
         RecordKind kind = RecordKind::BasebandIq;
         std::string directory;  // created if missing; "." for "here"
-        std::string path;       // directory + file name, the file to create
+        // Directory + file name: the name the take WANTS (the second it was asked
+        // for). The opener creates it exclusively and, when something is there,
+        // takes "name-2.wav", "name-3.wav" ... (core/unique_file.hpp); the name it
+        // used comes back in OpenedFile::path.
+        std::string path;
         std::array<unsigned char, 44> header{};  // zero-length data chunk
     };
 
@@ -174,7 +178,7 @@ public:
         // is closed (flushed) while its setvbuf buffer is still alive.
         std::vector<char> buffer;
         FilePtr file{nullptr, &Recorder::closeFile};
-        std::string path;
+        std::string path;  // the name ACTUALLY USED (see OpenRequest::path): what begin() keeps
         RecordKind kind = RecordKind::BasebandIq;
 
         OpenedFile() = default;

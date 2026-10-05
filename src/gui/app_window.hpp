@@ -2028,7 +2028,25 @@ private:
     // failed save is retried automatically because savedCfg_ stays stale,
     // so the next frame's maybeSaveConfig() sees "still different" and
     // restarts the debounce window on its own.
+    //
+    // 0.99.65: ... but not at the debounce rate for ever. A failed write lengthens the wait before
+    // the next attempt (doubling, from the debounce window up to five minutes), and the first
+    // success puts it back; the failure is logged once per run of failures, naming no path. The
+    // clean-exit save (saveConfigNow) is not held by it and tries once.
     void pollConfigWriter();
+    // A settings write finished: `ok`, or the writer's own sentence (which names the file) when not.
+    void noteConfigWrite(bool ok, const std::string& error);
+    // Gives a failure noted by pollConfigWriter the clock it did not have, and says whether the
+    // next attempt must still wait. `baseWaitS` is the debounce window the wait doubles from.
+    bool configRetryHeld(double nowS, double baseWaitS);
+
+    // A FILE THAT FAILED TO LOAD IS KEPT ASIDE, NEVER SAVED OVER (0.99.65, core/damaged_file.hpp).
+    // Called at start-up for config.json, bookmarks.json and markers.json where the load failed,
+    // before anything can save: `which` is "settings", "bookmarks" or "markers". Renames the damaged
+    // file to <name>.bad-<UTC time> (keeping the three newest) and says so once in the log; if the
+    // rename is refused, that file's saver is told to write nothing this session, and the log says
+    // that once. Start-up disk work, on the allowlist beside the three reads.
+    void setAsideDamagedFile(const char* which, const std::string& path);
 
     // Opens a radio of `kind` ("soapy" or one of the eight native driver keys)
     // by its args on

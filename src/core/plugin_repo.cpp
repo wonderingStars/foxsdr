@@ -7,6 +7,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/plugin_repo.hpp"
 
+#include "core/file_read.hpp"
 #include "core/i18n.hpp"
 #include "core/utf8_text.hpp"
 
@@ -1817,14 +1818,14 @@ bool PluginRepo::loadInventory(const std::string& pluginsDir, PluginInventory& o
     bool ok = true;
     if (fs::exists(mpath, ec)) {
         out.manifestPresent = true;
-        std::ifstream f(mpath, std::ios::binary);
-        if (!f) {
+        // Through readTextFile (core/file_read.hpp, 0.99.65): a folder on the manifest's name, or a
+        // read that fails, is "cannot be read" - the stream read this replaced threw on Linux.
+        std::string text;
+        if (readTextFile(mpath, text) != ReadResult::Ok) {
             error = "plugin manifest: cannot open \"" + mpath.string() + "\" for reading";
             out.notes.push_back(error + "; treating every installed plugin as unmanaged");
             ok = false;
         } else {
-            const std::string text((std::istreambuf_iterator<char>(f)),
-                                   std::istreambuf_iterator<char>());
             if (!parseManifest(text, out.plugins, out.policies, out.notes, error)) {
                 out.notes.push_back(error + "; treating every installed plugin as unmanaged");
                 out.plugins.clear();
@@ -2613,10 +2614,8 @@ bool forgetFile(const std::string& pluginsDir, const std::string& fileName, std:
     const fs::path mpath(PluginRepo::manifestPath(pluginsDir));
     std::error_code ec;
     if (!fs::exists(mpath, ec)) { return true; }
-    std::ifstream f(mpath, std::ios::binary);
-    if (!f) { return true; }
-    const std::string text((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-    f.close();
+    std::string text;
+    if (readTextFile(mpath, text) != ReadResult::Ok) { return true; }
     std::vector<InstalledPlugin> plugins;
     std::vector<CachedPolicy> policies;
     std::vector<std::string> notes;

@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "gui/app_window.hpp"
+#include "core/file_read.hpp"
 #include "core/patch_io.hpp"
 #include "core/patch_levels.hpp"
 #include "core/patch_plan.hpp"
@@ -1106,6 +1107,8 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
             updateCheckEnabled_ = cfg.updateCheckEnabled;
         } else {
             std::fprintf(stderr, "cascade: %s\n", err.c_str());
+            // KEPT ASIDE BEFORE ANYTHING CAN SAVE OVER IT (0.99.65, core/damaged_file.hpp).
+            setAsideDamagedFile("settings", configPath_);
         }
         if (configAnnounce_) {
             // ONE diagnostic line, printed only under CASCADE_CONFIG_TEST
@@ -1133,13 +1136,19 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
         // config-test diagnostic contract stays byte-identical.
         bookmarkPath_ = cascade::core::FreqManager::defaultPath();
         std::string bmErr;
-        if (!freqMgr_.load(bookmarkPath_, bmErr)) { bookmarkError_ = bmErr; }
+        if (!freqMgr_.load(bookmarkPath_, bmErr)) {
+            bookmarkError_ = bmErr;
+            setAsideDamagedFile("bookmarks", bookmarkPath_);  // the red line stays up (0.99.65)
+        }
 
         // The waterfall's markers, under the same gate and beside them. A
         // damaged file is reported in the Markers window, never on stdout.
         markerPath_ = cascade::core::FreqMarkers::defaultPath();
         std::string mkErr;
-        if (!freqMarkers_.load(markerPath_, mkErr)) { markerError_ = mkErr; }
+        if (!freqMarkers_.load(markerPath_, mkErr)) {
+            markerError_ = mkErr;
+            setAsideDamagedFile("markers", markerPath_);  // the red line stays up (0.99.65)
+        }
         markerSavedVersion_ = freqMarkers_.version();
     }
 }
@@ -1618,10 +1627,8 @@ int AppWindow::run(int frames) {
         // an interactive session can never be driven by a stray variable.
         if (const char* script = std::getenv("FOXSDR_INPUT_SCRIPT");
             script != nullptr && *script != '\0') {
-            std::ifstream in(script, std::ios::binary);
-            if (in) {
-                const std::string text((std::istreambuf_iterator<char>(in)),
-                                       std::istreambuf_iterator<char>());
+            std::string text;  // readTextFile (core/file_read.hpp): a folder or a failing read is not a script
+            if (cascade::core::readTextFile(script, text) == cascade::core::ReadResult::Ok) {
                 const cascade::gui::ScriptParse sp = cascade::gui::parseInputScript(text);
                 inputScript_ = sp.steps;
                 inputScriptPos_ = 0;
@@ -2091,10 +2098,8 @@ int AppWindow::run(int frames) {
         if (!patchFileLoaded_) {
             if (const char* pf = std::getenv("FOXSDR_PATCH_FILE")) {
                 patchFileLoaded_ = true;
-                std::ifstream in(pf, std::ios::binary);
-                if (in) {
-                    const std::string text((std::istreambuf_iterator<char>(in)),
-                                           std::istreambuf_iterator<char>());
+                std::string text;  // readTextFile (core/file_read.hpp): a folder or a failing read is not a patch
+                if (cascade::core::readTextFile(pf, text) == cascade::core::ReadResult::Ok) {
                     int dropped = 0;
                     if (replacePatch(text, PatchReplace::File, &dropped)) {
                         std::fprintf(stderr,
@@ -29033,6 +29038,13 @@ cascade::core::AppConfig AppWindow::currentConfig() {
 }
 
 void AppWindow::maybeSaveConfig(double nowS) {
+    // A DAMAGED SETTINGS FILE THAT COULD NOT BE KEPT ASIDE is never saved over (0.99.65,
+    // core/damaged_file.hpp): the writer was told so at start-up, and there is nothing to ask for.
+    if (configWriter_.writesForbidden()) { return; }
+    // A FAILED WRITE'S WAIT (0.99.65): each failure doubles it, from the debounce window up to five
+    // minutes; the first success puts it back. Asked every call so that a failure just noted by
+    // pollConfigWriter is given the clock it did not have.
+    const bool retryHeld = configRetryHeld(nowS, kConfigDebounceS);
     cascade::core::AppConfig cur = currentConfig();
     if (configsEqual(cur, savedCfg_)) {
         lastChangeTimeS_ = -1.0;  // clean again (e.g. change was undone)
@@ -29045,7 +29057,7 @@ void AppWindow::maybeSaveConfig(double nowS) {
         lastChangeTimeS_ = nowS;
         return;
     }
-    if (nowS - lastChangeTimeS_ >= kConfigDebounceS) {
+    if (!retryHeld && nowS - lastChangeTimeS_ >= kConfigDebounceS) {
         // THE REQUEST NEVER BLOCKS (see gui/config_writer.hpp) - this is the
         // exact call the 0.96.3 field report's stack ran synchronously
         // instead. lastChangeTimeS_ resets to -1.0 optimistically: if the
@@ -29079,8 +29091,12 @@ void AppWindow::pollConfigWriter() {
         // runs) - see gui/config_writer.hpp's finishOrAbandon() comment for
         // the same reasoning applied to the shutdown drain below.
         if (!configWriter_.inFlight()) { savedCfg_ = lastRequestedConfig_; }
+        noteConfigWrite(true, std::string());  // the wait after failures goes back to the start
     } else {
         std::fprintf(stderr, "cascade: %s\n", configWriter_.lastError().c_str());
+        // The wait before the next attempt is lengthened, and the failure said once in the log
+        // (0.99.65): a read-only folder is not asked again every two seconds for ever.
+        noteConfigWrite(false, configWriter_.lastError());
         // THE SETTINGS FILE COULD NOT BE WRITTEN (a read-only profile, a full disk,
         // a file another program holds) and the window carries on with what it
         // has: counted, once a session - the debounce asks again by itself, so a
