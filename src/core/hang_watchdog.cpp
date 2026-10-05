@@ -400,7 +400,43 @@ bool HangWatchdog::running() const { return running_.load(std::memory_order_acqu
 
 void HangWatchdog::pause() {
     pauses_.fetch_add(1, std::memory_order_relaxed);
+    // The instant a CONTINUOUS pause begins is recorded BEFORE the count moves,
+    // so the watchdog thread never sees a held pause with a stale start.
+    if (paused_.load(std::memory_order_relaxed) == 0) {
+        pausedSinceMs_.store(nowMs(), std::memory_order_relaxed);
+    }
     paused_.fetch_add(1, std::memory_order_relaxed);
+}
+
+void HangWatchdog::pauseUser() {
+    // A user-paced pause IS a pause: pausesTaken() counts it (that counter, which
+    // `cascade --frames N` prints, is "how many times did the application take a
+    // pause", not "how many were capped"), and it is held in paused_ like any
+    // other, so the release of the last pause of either kind re-arms the clock
+    // in resume(). userPaused_ is raised FIRST: between the two increments the
+    // watchdog thread then sees an uncapped pause rather than a capped one with
+    // a stale start.
+    pauses_.fetch_add(1, std::memory_order_relaxed);
+    userPaused_.fetch_add(1, std::memory_order_relaxed);
+    paused_.fetch_add(1, std::memory_order_relaxed);
+}
+
+void HangWatchdog::resumeUser() {
+    // The release of the LAST user-paced pause is where an application-paced
+    // pause still held (a rescan nested inside a long shell call) starts to be
+    // measured: it was excused without a cap until now, and its age so far is the
+    // user's, not its own. So its start is re-stamped to this instant, BEFORE the
+    // user count drops - while that count is above zero the watchdog thread
+    // ignores the stamp, and the moment it reads zero the stamp is already fresh.
+    if (userPaused_.load(std::memory_order_relaxed) <= 1) {
+        pausedSinceMs_.store(nowMs(), std::memory_order_relaxed);
+    }
+    userPaused_.fetch_sub(1, std::memory_order_relaxed);
+    resume();
+}
+
+void HangWatchdog::setExcuseCapMs(unsigned ms) {
+    excuseCapMs_.store(ms > 0 ? ms : kExcuseCapMs, std::memory_order_relaxed);
 }
 
 unsigned HangWatchdog::pausesTaken() const { return pauses_.load(std::memory_order_relaxed); }
@@ -602,22 +638,22 @@ bool HangWatchdog::guiThreadIsPumping() const {
 #endif
 }
 
-bool HangWatchdog::suppressed() const {
+HangWatchdog::Excuse HangWatchdog::excuse() const {
     const int mode = suppression_.load(std::memory_order_relaxed);
     if (mode == static_cast<int>(SuppressionForTest::NeverSuppress)) {
         // The debugger and modal rules are off, as the mode promises; rule 2c
         // still answers when a test has injected a module, because that mode
         // is how the rule itself gets tested.
         std::lock_guard<std::mutex> lk(stalledModuleMutex_);
-        if (!stalledModuleForTest_.empty()) {
-            return isMessagePumpModule(stalledModuleForTest_.c_str());
+        if (!stalledModuleForTest_.empty() && isMessagePumpModule(stalledModuleForTest_.c_str())) {
+            return Excuse::Pumping;
         }
-        return false;
+        return Excuse::None;
     }
-    if (mode == static_cast<int>(SuppressionForTest::AlwaysSuppress)) { return true; }
+    if (mode == static_cast<int>(SuppressionForTest::AlwaysSuppress)) { return Excuse::Standing; }
 #if defined(_WIN32)
     // 1. A break is not a hang.
-    if (::IsDebuggerPresent()) { return true; }
+    if (::IsDebuggerPresent()) { return Excuse::Standing; }
     // 2. A nested Windows modal loop - a window drag, a resize, an open system
     //    or popup menu - stops the application's own loop turning over for as
     //    long as the user holds it, legitimately, sometimes for minutes.
@@ -627,7 +663,7 @@ bool HangWatchdog::suppressed() const {
     if (tid != 0 && ::GetGUIThreadInfo(tid, &gi) != 0) {
         const DWORD modal = GUI_INMOVESIZE | GUI_INMENUMODE | GUI_POPUPMENUMODE |
                             GUI_SYSTEMMENUMODE;
-        if ((gi.flags & modal) != 0) { return true; }
+        if ((gi.flags & modal) != 0) { return Excuse::Standing; }
     }
 #elif defined(__linux__)
     // 1. A break is not a hang, POSIX equivalent: /proc/self/status names the
@@ -642,7 +678,7 @@ bool HangWatchdog::suppressed() const {
         while (std::getline(status, line)) {
             if (line.rfind("TracerPid:", 0) == 0) {
                 const std::string v = line.substr(10);
-                if (std::atoi(v.c_str()) != 0) { return true; }
+                if (std::atoi(v.c_str()) != 0) { return Excuse::Standing; }
                 break;
             }
         }
@@ -650,13 +686,19 @@ bool HangWatchdog::suppressed() const {
 #endif
     // 2c. A nested loop those flags do not cover: the thread is parked in the
     //     window manager's own wait, which the application's frame loop never
-    //     does on its own (it only ever PeekMessages). See the header.
-    if (guiThreadIsPumping()) { return true; }
-    return false;
+    //     does on its own (it only ever PeekMessages). See the header - and
+    //     see setExcuseCapMs(): this excuse, unlike the two above, is a guess
+    //     from one register, and win32u.dll holds far more than message waits,
+    //     so it is the one that is capped.
+    if (guiThreadIsPumping()) { return Excuse::Pumping; }
+    return Excuse::None;
 }
 
 void HangWatchdog::threadMain() {
     double lastPoll = nowMs();
+    // When rule 2c first excused the stall now in progress, or 0 for none. Only
+    // this thread reads or writes it.
+    double pumpExcusedSinceMs = 0.0;
     while (true) {
         // THE POLL WAIT, INTERRUPTIBLE. A plain sleep_for here meant that
         // asking the watchdog to stop cost the rest of a poll - up to half a
@@ -685,9 +727,33 @@ void HangWatchdog::threadMain() {
             continue;
         }
 
-        if (paused_.load(std::memory_order_relaxed) > 0) {
+        const double cap = static_cast<double>(excuseCapMs_.load(std::memory_order_relaxed));
+
+        // A USER-PACED PAUSE EXCUSES A STALL FOR AS LONG AS IT IS HELD - the shell
+        // call's consent prompt is read at the person's pace, and no cap is the
+        // right one for that (see setExcuseCapMs). It outranks the capped kind:
+        // while one is held an application-paced pause held with it is excused
+        // too, and its own cap starts when the last user-paced one is released
+        // (resumeUser re-stamps pausedSinceMs_).
+        if (userPaused_.load(std::memory_order_relaxed) > 0) {
             lastBeatMs_.store(now, std::memory_order_relaxed);
+            pumpExcusedSinceMs = 0.0;
             continue;
+        }
+
+        // AN APPLICATION-PACED PAUSE EXCUSES A STALL FOR AT MOST THE CAP (see
+        // setExcuseCapMs). While it does, the clock is re-armed every poll, so
+        // the first poll past the cap finds a stall of about one poll and the
+        // report follows a threshold later. If the GUI thread is beating (a
+        // minimised window) the clock never runs out, whatever the age of the
+        // pause.
+        if (paused_.load(std::memory_order_relaxed) > 0) {
+            const double since = pausedSinceMs_.load(std::memory_order_relaxed);
+            if (now - since < cap) {
+                lastBeatMs_.store(now, std::memory_order_relaxed);
+                pumpExcusedSinceMs = 0.0;
+                continue;
+            }
         }
 
         const double stalled = now - lastBeatMs_.load(std::memory_order_relaxed);
@@ -695,13 +761,29 @@ void HangWatchdog::threadMain() {
             // RECOVERY. The application came back - and the 120 s CAT shutdown
             // freeze did come back. Log it with the duration and re-arm; the
             // app is never killed.
+            pumpExcusedSinceMs = 0.0;
             if (reported_.exchange(false, std::memory_order_relaxed)) {
                 DiagLog::instance().writef("warn", "gui thread recovered after a stall");
             }
             continue;
         }
         if (reported_.load(std::memory_order_relaxed)) { continue; }
-        if (suppressed()) { continue; }
+        const Excuse why = excuse();
+        if (why == Excuse::Standing) {
+            pumpExcusedSinceMs = 0.0;
+            continue;
+        }
+        if (why == Excuse::Pumping) {
+            // RULE 2c IS EXCUSED FOR AT MOST THE CAP, counted from the first
+            // poll that granted it in this stall. Past that the thread is not
+            // "pumping", it is stuck somewhere in win32u.dll - a GPU driver's
+            // wait, a SendMessage nobody answers - and the report below says
+            // which, with the frames to show it.
+            if (pumpExcusedSinceMs == 0.0) { pumpExcusedSinceMs = now; }
+            if (now - pumpExcusedSinceMs < cap) { continue; }
+        } else {
+            pumpExcusedSinceMs = 0.0;
+        }
 
         // ASKED TO STOP IS NOT STALLED - false-positive rule 4 in the header.
         // stop() is called at the very end of AppWindow::run(), so once the

@@ -111,7 +111,12 @@
 //      PeekMessage, and the only way its GUI thread can sit inside win32u's
 //      wait syscalls for seconds is for a loop Windows owns to have taken the
 //      thread over and gone idle in it. A stalled thread whose Rip is inside
-//      win32u.dll is pumping, not hung, whatever the flags say.
+//      win32u.dll is pumping, not hung, whatever the flags say - FOR AT MOST
+//      kExcuseCapMs. The premise holds for message waits and fails for the rest
+//      of win32u.dll, which is the user-mode end of every graphics-kernel call
+//      (a driver's present and fence waits) and of SendMessage to another
+//      thread's window; a freeze there was excused for as long as it lasted,
+//      so the excuse is capped (see setExcuseCapMs, tests/test_excuse_cap.cpp).
 //   2b. BLOCKING WORK THE APPLICATION ENTERS KNOWINGLY, which is WatchdogPause.
 //      One path in this application takes it today, and it is named rather
 //      than described in the abstract because a mitigation nobody calls is not
@@ -123,7 +128,23 @@
 //      are async, and there is no native file dialog) - MUST take one too.
 //      `cascade --frames N` prints how many pauses the run took and
 //      tests/test_diag_hang.cpp requires at least one, so this stops being
-//      true loudly rather than quietly.
+//      true loudly rather than quietly. (Five call sites take one today: the
+//      rescan, the audio and microphone opens in gui/audio_open.hpp, shell
+//      calls in gui/shell_open.hpp, and the display/minimise pause in
+//      gui/present_grace.hpp.)
+//      THERE ARE TWO KINDS, by who sets the pace of what is waited for. A pause
+//      the APPLICATION paces - the rescan, the audio and microphone opens, the
+//      display grace: code that is expected to finish - excuses a stall for at
+//      most kExcuseCapMs, because the code that ends it runs on the GUI thread
+//      and a freeze inside it would otherwise never be reported. A pause a
+//      PERSON paces - the shell-open bracket, where the wait is somebody reading
+//      an elevation or SmartScreen prompt - is pauseUser()/resumeUser() and is
+//      NOT capped: a cap there would file the very false report (the field
+//      report "hang ntdll.dll @ cascade::gui::AppWindow::launchInstaller") that
+//      the bracket exists to stop. That bracket is the only user of the
+//      uncapped kind, and tests/test_excuse_cap.cpp holds it to that. What it
+//      leaves unreported, by design, is a shell call that never returns and shows
+//      no dialog. See setExcuseCapMs().
 //   2d. THE DISPLAY ITSELF STOPPING, which is not the application stopping.
 //      A monitor switched off, a resolution change, a GPU driver reset, an
 //      adapter switch or a remote session taking the desktop over all stall
@@ -376,8 +397,82 @@ public:
 
     // Bracket blocking work the application enters deliberately. Nested calls
     // are counted, so an inner pause cannot un-pause an outer one.
+    //
+    // TWO KINDS, by who sets the pace of what is being waited for:
+    //   pause()/resume() - the APPLICATION's own code paces it (a plugin rescan,
+    //     an audio or microphone open, the display-change grace). That code is
+    //     expected to finish, so the pause excuses a stall for at most the cap -
+    //     see setExcuseCapMs().
+    //   pauseUser()/resumeUser() - a PERSON paces it. Today that is exactly one
+    //     thing: the bracket gui::runShellOpen() puts around ShellExecute, where
+    //     the wait is somebody reading an elevation or SmartScreen prompt. No cap
+    //     is the right cap for that, and one would file again the false report
+    //     that bracket exists to prevent. There is deliberately no scope guard for
+    //     it (WatchdogPause is the guard for the capped kind): the product
+    //     reaches it through gui::ShellPauseHooks only, and tests/test_excuse_cap.cpp
+    //     scans src/ to keep it that way. Both kinds are counted by pausesTaken()
+    //     and held in the same count, so the clock is re-armed when the last pause
+    //     of either kind is released.
     void pause();
     void resume();
+    void pauseUser();
+    void resumeUser();
+
+    // HOW LONG AN EXCUSE MAY LAST, in milliseconds - two of the watchdog's
+    // excuses had no end of their own, and a freeze inside either was never
+    // reported however long the window sat not responding.
+    //
+    // AN APPLICATION-PACED PAUSE (pause()/resume()) is ended by the code that
+    // took it, and in every case that matters that code runs on the GUI thread:
+    // the plugin rescan holds one across every plugin's destroy() (a worker
+    // join), the audio and microphone opens hold one across a driver call, and
+    // the display-change grace in gui/present_grace.hpp is released by the frame
+    // loop's next update(). If the GUI thread stops inside any of them nothing
+    // releases the pause - the "bounded" ten-second display grace included, since
+    // the frame that would notice it has expired is the frame that is not
+    // running. All of that is code that is expected to finish, which is what
+    // makes a cap right for it.
+    //
+    // A USER-PACED PAUSE (pauseUser()/resumeUser()) is NOT capped. It is the shell
+    // call's bracket, and what it waits for is a person: ShellExecute does not
+    // return until an elevation or SmartScreen prompt has been answered, and a
+    // prompt left open while its reader is away from the desk is not a hang -
+    // docs/DIAGNOSTICS.md, "Shell calls are made under a watchdog pause", is the
+    // report this product shipped before it had the bracket. While at least one
+    // is held a stall is excused without limit, whether or not capped pauses are
+    // held with it. When the last one is released the ordinary rules apply
+    // again, and a capped pause still held at that moment is measured from that
+    // moment - its cap starts afresh then, so a rescan nested inside a long shell
+    // call is not reported the instant the prompt closes.
+    //
+    // WHAT THAT LEAVES UNREPORTED, BY DESIGN: a ShellExecute that never returns
+    // and shows no dialog. The wait is excused because it is indistinguishable,
+    // from here, from a prompt nobody has answered yet; the only watch on it is
+    // the person, who sees the window not responding.
+    //
+    // RULE 2c (a stalled thread inside win32u.dll "is pumping") is excused for
+    // as long as the thread stays there, and win32u.dll is the user-mode end of
+    // every win32k and graphics-kernel system call, not only of the message
+    // waits the rule was written for: a GPU driver's present and fence waits
+    // (NtGdiDdDDI*), a SendMessage to another thread's window (NtUserMessageCall)
+    // and a clipboard owner that never answers all park a thread there.
+    //
+    // So those two excuses are capped. A continuous application-paced pause, or a
+    // continuous stretch of stall inside win32u, excuses at most this long; past
+    // it the excuse is no longer granted (a pause is still counted - nothing is
+    // leaked or double-released) and the ordinary threshold applies from the
+    // moment it ran out, so the report is written about 5 s later with the frames
+    // that show where the thread really is. Each continuous pause gets its own
+    // cap (the clock starts when the count goes 0 -> 1, or when the last
+    // user-paced pause is released over a capped one). It bounds what is EXCUSED,
+    // never what is beating: a window minimised for an hour whose loop keeps
+    // turning is still never reported. NOT capped: the debugger and the
+    // modal-loop flags, which are exact (a person is dragging the window, or a
+    // debugger is attached), and a user-paced pause (above), whose wait is a
+    // person's. 30 s covers a plugin rescan off a cold disk many times over; a
+    // capped stall that outlives it was not a short blocking call.
+    static constexpr unsigned kExcuseCapMs = 30000;
+    void setExcuseCapMs(unsigned ms);
 
     // Hang reports written this session, and the newest one's path.
     unsigned reportsWritten() const;
@@ -463,7 +558,12 @@ private:
     // The three false-positive rules of the header comment, in one place, so
     // the wiring a test CAN reach is the same wiring the debugger and modal
     // checks a test CANNOT reach go through.
-    bool suppressed() const;
+    //
+    // Standing: excused for as long as it lasts (a debugger, a modal loop, a
+    // test's AlwaysSuppress). Pumping: rule 2c, excused for at most the cap -
+    // see setExcuseCapMs().
+    enum class Excuse { None, Standing, Pumping };
+    Excuse excuse() const;
     // Rule 2c: whether the stalled GUI thread is parked in the window
     // manager's own message wait. Answers from the injected module name when
     // one is set, otherwise from one register read of the GUI thread.
@@ -477,7 +577,17 @@ private:
     // never has to reason about a wrapping tick count.
     std::atomic<double> lastBeatMs_{0.0};
     std::atomic<double> worstGapMs_{0.0};
+    // Every pause held, of either kind (see pause() and pauseUser()).
     std::atomic<int> paused_{0};
+    // How many of those are USER-paced: a subset of paused_ (raised just before
+    // it and dropped just before it, so the watchdog thread never sees a user-
+    // paced pause as a capped one). While it is above zero the cap does not run.
+    std::atomic<int> userPaused_{0};
+    // See setExcuseCapMs(): when the cap on the CURRENT application-paced
+    // stretch began - the count going 0 -> 1, or the release of the last
+    // user-paced pause over a capped one - and how long one may excuse a stall.
+    std::atomic<double> pausedSinceMs_{0.0};
+    std::atomic<unsigned> excuseCapMs_{kExcuseCapMs};
     std::atomic<bool> reported_{false};
     std::atomic<unsigned> reports_{0};
     std::atomic<int> suppression_{0};   // SuppressionForTest, as an int
@@ -536,8 +646,10 @@ private:
     std::string stalledModuleForTest_;
 };
 
-// Scope guard for blocking work: pauses on construction, resumes on
-// destruction, including on the exception path.
+// Scope guard for blocking work the APPLICATION paces: pauses on construction,
+// resumes on destruction, including on the exception path. Capped - see
+// HangWatchdog::setExcuseCapMs(). There is no guard for the uncapped, user-paced
+// kind (pauseUser/resumeUser); that is on purpose.
 class WatchdogPause {
 public:
     explicit WatchdogPause(HangWatchdog& w) : w_(w) { w_.pause(); }

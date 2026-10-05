@@ -1575,6 +1575,11 @@ int AppWindow::run(int frames) {
     // like the plugin hooks above: an interactive session can never be wedged
     // by a stray environment variable.
     int shutdownStallMs = 0;
+    // The same wedge, one stage later: standing for a plugin whose destroy() (a
+    // worker join, a vendor close) never returns. See where it is read, after
+    // detachAndUnloadPlugins(); tests/test_clean_exit_marker.cpp kills the
+    // process inside it and reads the config back.
+    int unloadStallMs = 0;
     if (frames >= 0) {
         const char* hook = std::getenv("CASCADE_PLUGIN_TEST");
         if (hook != nullptr && *hook != '\0') { pluginTestHook_ = hook; }
@@ -1622,6 +1627,11 @@ int AppWindow::run(int frames) {
         if (shutdownStall != nullptr && *shutdownStall != '\0') {
             shutdownStallMs = std::atoi(shutdownStall);
             if (shutdownStallMs < 0) { shutdownStallMs = 0; }
+        }
+        const char* unloadStall = std::getenv("CASCADE_DIAG_UNLOAD_STALL_MS");
+        if (unloadStall != nullptr && *unloadStall != '\0') {
+            unloadStallMs = std::atoi(unloadStall);
+            if (unloadStallMs < 0) { unloadStallMs = 0; }
         }
         // The enforcement diagnostic (see reportPluginStatus). Same rules: only
         // in a bounded run, and silent unless asked for, so the
@@ -2441,28 +2451,78 @@ int AppWindow::run(int frames) {
     // outside it.
     pipeline_.stop();
 
-    // THE CLEAN-EXIT MARKER, after the pipeline join. The join above — DSP
-    // threads, the CAT server, the USB device stack — is where the worst
-    // shipped shutdown freeze lived, so the marker must not be on disk before
-    // it completes; a death in there now leaves telemetryCleanExit=false and
-    // is counted, where until 0.66.0 it read as a clean exit.
+    // THE CLEAN-EXIT MARKER IS NOT WRITTEN HERE. It is written below, after the
+    // plugins have come down. It sat at this spot from 0.66.0 - after the
+    // pipeline join, which is where the worst shipped shutdown freeze lived -
+    // but the stage that follows is
+    // the one that runs every plugin's destroy(), which is third-party code:
+    // a worker join, a vendor close, a flush. One that never returns leaves
+    // the window on screen and not responding; the user ends it from the
+    // taskbar (End task is TerminateProcess, nothing runs); and the file on
+    // disk, written three steps earlier, already said "clean". Reported on
+    // 0.99.59 with Radar Sweep running: killed from the taskbar, next start
+    // recorded no crash, the bundle read last-run-unclean: no and crashes: 0
+    // over 79 launches. tests/test_clean_exit_marker.cpp kills the real binary
+    // inside this stage and reads the config back.
+
+    // THE PLUGINS COME DOWN HERE, ON THE NORMAL PATH, and for the same reason
+    // the waterfall does just below: this is the last moment at which the
+    // whole object graph is still alive and the GL context is still current.
     //
-    // It rewrites THE SNAPSHOT THE SAVE ABOVE JUST WROTE with one field
+    // The pipeline is stopped and joined above, so no DSP thread can be inside
+    // a plugin; the final-state save above has been queued, so nothing further
+    // reads the stop list or the tune grants. detachAndUnloadPlugins() then
+    // destroys the decoder instances BEFORE the host services they may call on their way
+    // out (Survey Engine 0.1.0 asks the host for the time from inside
+    // destroy()) and unmaps the modules last. ~AppWindow calls it again as a
+    // net for the paths that never reach here - a failed backend init, a test
+    // that never entered the frame loop - and finds nothing left to do.
+    //
+    // A basemap plugin's tiles are GL textures, which is the other half of why
+    // it is here rather than in the destructor: glDeleteTextures needs this
+    // context current, and by ~AppWindow it is gone.
+    //
+    // THE PATCH'S RADIOS STOP FIRST (0.99.17): each has a reader thread that
+    // may be inside a plugin decoder, and each speaker's file is finalised
+    // when its radio's sets go. The receiver's radio is not reopened on the
+    // way out - the config already remembers it (patchMainKeep_).
+    patchStopAll(false);
+    detachAndUnloadPlugins();
+
+    // The deliberate wedge in THIS stage - the one the plugins' own code runs
+    // in. Bounded runs only (see where unloadStallMs is read). Printed so a
+    // test can prove the process is inside it before it kills it.
+    if (unloadStallMs > 0) {
+        std::printf("cascade: --diag-unload-stall wedging the plugin unload for %d ms\n",
+                    unloadStallMs);
+        std::fflush(stdout);
+        std::this_thread::sleep_for(std::chrono::milliseconds(unloadStallMs));
+    }
+
+    // THE CLEAN-EXIT MARKER, after the last of the third-party code. The pipeline
+    // join - DSP threads, the CAT server, the USB device stack - and the plugins'
+    // own destroy() above are the two places a shutdown has wedged or can wedge,
+    // so the marker must not be on disk before both have completed; a death in
+    // either leaves telemetryCleanExit=false and is counted (until 0.66.0 the
+    // first of them read as a clean exit, and until the change recorded above
+    // the second still did).
+    //
+    // It rewrites THE SNAPSHOT THE FINAL-STATE SAVE JUST QUEUED with one field
     // changed, rather than calling saveConfigNow() again, and that shape is
     // the point. A second currentConfig() would re-derive every value at a
     // moment when the session is half torn down: it rebuilds the pending
     // usage report through telemetryJournal, whose clock is glfwGetTime()
-    // (0.0 once GLFW is terminated — every session would then report zero
+    // (0.0 once GLFW is terminated - every session would then report zero
     // seconds), and it re-reads live source state through a pipeline that has
     // just been stopped. Neither can happen to a snapshot taken while
     // everything was still alive. Residual, stated plainly: a death in the
-    // GL/GLFW teardown below still counts as a clean exit — the watchdog,
+    // GL/GLFW teardown below still counts as a clean exit - the watchdog,
     // stopped last as ever, is what covers that stretch.
     telemetryCleanExit_ = true;
     if (!configPath_.empty()) {
         // Built on lastRequestedConfig_, not savedCfg_: the final-state save
-        // just above (still async - see gui/config_writer.hpp) may not have
-        // been collected yet, so savedCfg_ can still be one save behind.
+        // (still async - see gui/config_writer.hpp) may not have been
+        // collected yet, so savedCfg_ can still be one save behind.
         // lastRequestedConfig_ is not - it is set the instant a save is
         // REQUESTED, which is exactly the "what did we just ask to be
         // written" this rewrite needs, and nothing has requested another
@@ -2493,30 +2553,6 @@ int AppWindow::run(int frames) {
                 static_cast<long long>(cascade::gui::ConfigWriter::kSaveBound.count()));
         }
     }
-
-    // THE PLUGINS COME DOWN HERE, ON THE NORMAL PATH, and for the same reason
-    // the waterfall does just below: this is the last moment at which the
-    // whole object graph is still alive and the GL context is still current.
-    //
-    // The pipeline is stopped and joined above, so no DSP thread can be inside
-    // a plugin; the config has been written, so nothing further reads the stop
-    // list or the tune grants. detachAndUnloadPlugins() then destroys the
-    // decoder instances BEFORE the host services they may call on their way
-    // out (Survey Engine 0.1.0 asks the host for the time from inside
-    // destroy()) and unmaps the modules last. ~AppWindow calls it again as a
-    // net for the paths that never reach here - a failed backend init, a test
-    // that never entered the frame loop - and finds nothing left to do.
-    //
-    // A basemap plugin's tiles are GL textures, which is the other half of why
-    // it is here rather than in the destructor: glDeleteTextures needs this
-    // context current, and by ~AppWindow it is gone.
-    //
-    // THE PATCH'S RADIOS STOP FIRST (0.99.17): each has a reader thread that
-    // may be inside a plugin decoder, and each speaker's file is finalised
-    // when its radio's sets go. The receiver's radio is not reopened on the
-    // way out - the config already remembers it (patchMainKeep_).
-    patchStopAll(false);
-    detachAndUnloadPlugins();
 
     // The waterfall owns a GL texture whose deletion requires the creating
     // context to be current. AppWindow outlives that context (main() destroys
@@ -7878,9 +7914,15 @@ void AppWindow::pollUpdateAsync() {
 }
 
 cascade::gui::ShellPauseHooks AppWindow::watchdogShellHooks() {
+    // THE ONE USER-PACED PAUSE in the application, and so the one that is not
+    // capped (HangWatchdog::pauseUser). What this bracket waits for is a person
+    // reading an elevation or SmartScreen prompt, however long that takes; the
+    // 30 s cap every other pause has would file the "hang ntdll.dll @
+    // AppWindow::launchInstaller" report again for a prompt left open past it.
+    // tests/test_excuse_cap.cpp holds this to being the only use in src/.
     cascade::gui::ShellPauseHooks hooks;
-    hooks.pause = [this] { watchdog_.pause(); };
-    hooks.resume = [this] { watchdog_.resume(); };
+    hooks.pause = [this] { watchdog_.pauseUser(); };
+    hooks.resume = [this] { watchdog_.resumeUser(); };
     return hooks;
 }
 
