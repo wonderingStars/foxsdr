@@ -3,11 +3,15 @@
 Every library the application links is vendored here, pinned to the exact
 revision the app was built and tested against, so an upstream change can never
 break or alter this build. Sources are verbatim upstream copies — **no vendored
-file has been modified**, with TWO documented exceptions: Dear ImGui carries two
-fenced patches, its word wrap for Chinese and Japanese and a colour table pushed
-for every popup-like window (`imgui/FOXSDR-PATCHES.md`), and GLFW carries one,
-a cherry-pick of an upstream fix to the order its Wayland backend shuts down in
-(`glfw/FOXSDR-PATCHES.md`). Each subdirectory keeps its upstream license file.
+file has been modified**, with TWO documented exceptions: Dear ImGui carries three
+fenced patches, its word wrap for Chinese and Japanese, a colour table pushed
+for every popup-like window, and a cache that skips its GLFW backend's per-frame
+mouse-passthrough call when the value has not changed
+(`imgui/FOXSDR-PATCHES.md`), and GLFW carries one, a cherry-pick of an upstream
+fix to the order its Wayland backend shuts down in (`glfw/FOXSDR-PATCHES.md`).
+(The Noto Sans Condensed fonts are not verbatim either: they are subsetted, and
+their own section below says so.) Each subdirectory keeps its upstream license
+file.
 
 Those license files, plus SoapySDR's, are reproduced verbatim in
 `installer/THIRD-PARTY-LICENSES.txt`, the aggregate notice shipped with the
@@ -52,7 +56,7 @@ vcpkg fetches the full repo archive instead, so its hash is not comparable.)
 ## Per-library notes
 
 ### Dear ImGui (`third_party/imgui/`)
-**Patched in two places.** First (0.99.28): `ImFontCalcWordWrapPositionEx` in
+**Patched in three places.** First (0.99.28): `ImFontCalcWordWrapPositionEx` in
 `imgui_draw.cpp` breaks Chinese and Japanese lines between characters and
 keeps closing marks off the start of a line. Every changed line is fenced by
 `FOXSDR PATCH (cjk-wrap)` comments; what it does, why, and how to re-apply it
@@ -65,7 +69,16 @@ every popup, menu, combo list, modal and tooltip, so a theme can letter its
 menus in their own ink. Fenced by `FOXSDR PATCH (popup-colours)`; an empty
 table - FoxSDR's default bench - pushes nothing. `tests/test_theme.cpp` reads
 the colours a live tooltip, popup and modal draw with and goes red without it.
-The archive hash in the table is of the UNPATCHED upstream archive.
+**And in a third place** (2026-09-28): `backends/imgui_impl_glfw.cpp` and
+`backends/imgui_impl_glfw.h` remember the last `GLFW_MOUSE_PASSTHROUGH` value set
+on each window and skip the `glfwSetWindowAttrib` call when it has not changed,
+where upstream makes it for every viewport on every frame (field report `hang
+win32u.dll @ _glfwSetWindowMousePassthroughWin32`, 0.99.26; repaired in 0.99.44
+so that a destroyed window's record cannot be inherited by a new window at the
+same address). Fenced by `FOXSDR PATCH (mouse-passthrough-cache)`;
+`tests/test_mouse_passthrough_cache.cpp` counts the calls and requires one for a
+steady frame loop. The archive hash in the table is of the UNPATCHED upstream
+archive.
 
 Vendored subset per spec: the core sources (`imgui*.cpp/h`, `imconfig.h`,
 `imstb_*.h`), the two backends the app uses
@@ -106,8 +119,10 @@ EGL, libdecor, wayland-egl, xkbcommon and wayland-cursor libraries before
 finds it, and `glfw/FOXSDR-PATCHES.md` has the what, the why and how to drop
 it. Every other file is the pristine 3.4 archive (the archive hash above is of
 that unpatched archive); the Windows and macOS backends are not touched.
-`tests/test_glfw_wayland_terminate.cpp` holds the order in place.
-Built via `add_subdirectory` with
+`tests/test_glfw_wayland_terminate.cpp` holds the order in place. GLFW's Zlib
+licence asks that an altered source version be plainly marked as such
+(`glfw/LICENSE.md`, condition 2); those fences and `glfw/FOXSDR-PATCHES.md` are
+the mark. Built via `add_subdirectory` with
 `GLFW_BUILD_DOCS/TESTS/EXAMPLES=OFF`, `GLFW_INSTALL=OFF`. Static library
 (vcpkg's x64-windows build was a DLL; static linkage is a deliberate
 deployment simplification — same code, same version).

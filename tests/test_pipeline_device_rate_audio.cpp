@@ -355,13 +355,25 @@ int main() {
     // --- 900,001 S/s: refused, and what that does to the audio ---------------
     // The radio is allowed this rate (rateSupported) but the chain is not: no
     // integer decimation lands the channel in 150-300 kHz. The chain stays at
-    // the 2 MS/s it was built at, so a 1 kHz tone arrives at 1 kHz * 2e6 / 900001.
+    // the 2 MS/s it was built at, so everything it is handed is 2e6 / 900001 =
+    // 2.22 times further out than it believes: the carrier 25 kHz up the band
+    // arrives 55.6 kHz up, which is 30.6 kHz from where the VFO sits.
+    //
+    // WHAT THAT SOUNDS LIKE DEPENDS ON THE CHANNEL FILTER, and this check was
+    // first written against the filter that did not narrow (the bandwidth
+    // fault: +30 kHz only 5.9 dB down), where the misplaced carrier leaked
+    // through and its tone came out at 2222 Hz, level 0.28. With a 10 kHz AM
+    // channel that is really 10 kHz, a carrier 30.6 kHz off is rejected and
+    // the station is simply not heard (measured: tap rms 0.0000). The thing
+    // held here is that one: a refused rate does not deliver the station, and
+    // the misplaced carrier does not get through the channel filter.
     {
         CHECK(cascade::source::Rtl2832u::rateSupported(900001u));
         const Measured m = measure(900001.0, kAm);
         print("AM", 900001.0, m);
         CHECK(!m.accepted);
-        CHECK_NEAR(m.dominantHz, kToneHz * 2000000.0 / 900001.0, 25.0);
+        CHECK(m.rms < 0.1 * amRef.rms);
+        CHECK(m.toneShare < 0.1);
     }
 
     // --- The other modes, at the rates around 250 kS/s -----------------------

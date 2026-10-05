@@ -16,10 +16,14 @@
 //   because a pause that never expires is the watchdog switched off, and a
 //   display that never comes back really is worth a report.
 //
-//   THE WINDOW IS NOT BEING SHOWN. Iconified, or hidden. Held for as long as
-//   that lasts and NOT bounded: a window minimised for an hour is not a hang,
-//   it is a window minimised for an hour, and every frame of it is skipped by
-//   the compositor rather than by this program.
+//   THE WINDOW IS NOT BEING SHOWN. Iconified, or hidden. HELD for as long as
+//   that lasts: a window minimised for an hour is not a hang, it is a window
+//   minimised for an hour, and every frame of it is skipped by the compositor
+//   rather than by this program. What the hold EXCUSES is bounded all the
+//   same (0.99.61): like every application-paced pause it excuses a GUI
+//   thread that has stopped beating for at most HangWatchdog::kExcuseCapMs.
+//   A minimised window whose frame loop is still turning is never reported
+//   however long it is held; one whose thread has frozen is, after the cap.
 //
 // WHY A SEPARATE CLASS RATHER THAN TWO BOOLS IN AppWindow. The pause is
 // COUNTED (HangWatchdog::pause/resume nest), so a pause taken twice and

@@ -118,20 +118,17 @@
 //      thread's window; a freeze there was excused for as long as it lasted,
 //      so the excuse is capped (see setExcuseCapMs, tests/test_excuse_cap.cpp).
 //   2b. BLOCKING WORK THE APPLICATION ENTERS KNOWINGLY, which is WatchdogPause.
-//      One path in this application takes it today, and it is named rather
-//      than described in the abstract because a mitigation nobody calls is not
-//      a mitigation: AppWindow::rescanPlugins(), which unloads and then
-//      LoadLibrary-s every installed plugin on the GUI thread. Twelve modules
-//      off a cold disk is a legitimate multi-second gap. Anything else added
-//      later that blocks the GUI thread - a synchronous device open, a native
-//      modal dialog, neither of which exists here yet (the Soapy open and scan
-//      are async, and there is no native file dialog) - MUST take one too.
-//      `cascade --frames N` prints how many pauses the run took and
-//      tests/test_diag_hang.cpp requires at least one, so this stops being
-//      true loudly rather than quietly. (Five call sites take one today: the
+//      The paths that take it are named rather than described in the abstract,
+//      because a mitigation nobody calls is not a mitigation. The first was
+//      AppWindow::rescanPlugins(), which unloads and then LoadLibrary-s every
+//      installed plugin on the GUI thread: twelve modules off a cold disk is a
+//      legitimate multi-second gap. Five call sites take one today: that
 //      rescan, the audio and microphone opens in gui/audio_open.hpp, shell
 //      calls in gui/shell_open.hpp, and the display/minimise pause in
-//      gui/present_grace.hpp.)
+//      gui/present_grace.hpp. Anything added later that blocks the GUI thread
+//      MUST take one too. `cascade --frames N` prints how many pauses the run
+//      took and tests/test_diag_hang.cpp requires at least one, so this stops
+//      being true loudly rather than quietly.
 //      THERE ARE TWO KINDS, by who sets the pace of what is waited for. A pause
 //      the APPLICATION paces - the rescan, the audio and microphone opens, the
 //      display grace: code that is expected to finish - excuses a stall for at

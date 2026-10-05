@@ -60,7 +60,7 @@ Internal project/binary name: `cascade`.
 
 ## Where it is now
 
-The current release is **0.99.60** (October 2026), in open beta and free for
+The current release is **0.99.61** (October 2026), in open beta and free for
 noncommercial use, with its decoders and instruments delivered as plugins from
 a catalogue. These are screenshots of an earlier shipping build.
 
@@ -110,7 +110,14 @@ are still moving. What is in the current build:
   (`driver=miri`) or RX888 (`driver=sddc`) is OPENED NATIVELY on
   the next launch without being asked, and the log says so; a dongle whose
   tuner the native driver does not support (E4000, FC0012/13) falls back to the
-  SoapySDR path and says why. The Source section lists the native radios first, labelled
+  SoapySDR path and says why. An RSP1, RSP1A or RSP2 is a Mirics chip that can
+  be reached four ways, and since 0.99.61 the SoapySDR ones do not go round the
+  SDRplay API: once the SDRplay connection has been lost in a session, no
+  SoapySDR `sdrplay` or Mirics row is offered and a saved setup that names one
+  is refused with the reason, and a SoapySDR Mirics (`miri`) row is not offered
+  for a radio the SDRplay API manages. A Mirics dongle on a computer with no
+  SDRplay software is not affected, and the SoapySDR `sdrplay` row stays
+  available while the connection is healthy. The Source section lists the native radios first, labelled
   "(native)", and names any radio that is plugged in but not bound to WinUSB -
   an RTL dongle still on the DVB-T driver, an Airspy still on its vendor one, a
   television stick still on its DVB-T one - rather than leaving it silently
@@ -428,9 +435,12 @@ recorded.
 **What it does.** RSP1, RSP1A, RSP1B, RSP2, RSPduo, RSPdx and RSPdx-R2, 1 kHz
 to 2 GHz, 62.5 kS/s to 10 MS/s. Everything below 2 MS/s is produced the way the
 hardware actually produces it — the binary fractions of 2 MS/s by decimating a
-6 MHz front end at the 1.62 MHz IF, the audio rates (96/192/384/768 kS/s) by
-decimating a fast zero-IF one — because the RSP's front end does not run below
-2 MS/s and getting that wrong puts the receiver 1.62 MHz off frequency. The IF
+2 MS/s zero-IF front end, the audio rates (96/192/384/768 kS/s) by decimating a
+faster (3.072 MS/s) zero-IF one — because the RSP's front end does not run below
+2 MS/s. Every rate is zero-IF: through 0.99.43 the binary fractions were taken
+from a 6 MHz front end at a 1.62 MHz low IF, on the assumption that the service
+down-converts and divides by three, and two RSP2 field logs showed it delivering
+the 6 MS/s ADC rate instead, so 0.99.44 replaced it. The IF
 gain is presented as a NEGATIVE gain (−59 to −20 dB) because the hardware's own
 number is a gain REDUCTION and a slider whose right-hand end is quieter is the
 kind of inconsistency that gets blamed on the radio; the LNA is presented in
@@ -499,6 +509,19 @@ back, and this is the one case where choosing it again in the same session is
 not enough. Every other SDRplay fault, including an unplugged RSP, still
 releases the radio properly and can be re-opened without restarting anything.
 
+**The tuner every live control names** (0.99.61). An RSPdx-R2 on 0.99.59 opened,
+and the first control after that was never answered and the service was then
+found stopped; RSP1A and RSP2 owners had sent matching reports. For every model
+but the RSPduo, FoxSDR had sent each frequency, antenna, gain and sample-rate
+change to the service naming *no* tuner (`Tuner_Neither`, which the open line
+printed as `tuner 0`), where SDRplay's own example program, its RSPdx-R2 ExtIO
+and SoapySDRPlay3 name the one the radio has. FoxSDR now names Tuner A and the
+open line reads `tuner 1`. That the old argument deviated from SDRplay's own
+clients is checked against their published interface and source; that it is why
+the service stopped answering is an inference, and none of this has met a real
+RSP. If yours still stops, send the SDRplay diagnostic from the Diagnostics
+section (its **Run SDRplay diagnostic** button).
+
 **The RESTART SDRPLAY SERVICE key** (0.99.55, Windows). When the SDRplay API
 refuses to open, a scan gives up on it, or the session is lost as above, the
 Source panel now says what Windows reports the **SDRplay API Service** is doing
@@ -532,7 +555,7 @@ the SDRplay API is not installed on it, so nothing here has met the real
 service — that is stated plainly rather than implied. What is proved is the
 driver: it reaches the API through one table of function pointers, and
 `tests/test_sdrplay_source.cpp` fills that table with a fake that answers the
-way the vendor's header says the service does. 487 checks cover the exact call
+way the vendor's header says the service does. More than 1,200 checks cover the exact call
 sequence at open, the exact parameters the radio is started with, every update
 reason against the change that caused it, the sample conversion, the per-model
 antenna, notch and bias-tee routing, the rate-and-decimation plan for every
@@ -2053,8 +2076,10 @@ holds the request, the code and that document to each other in both directions.
   driver, and on one user's AMD machine that lasted over five seconds - long
   enough for the watchdog to file a report about a program that was doing
   nothing wrong. FoxSDR now stands the watchdog down for ten seconds when it
-  sees the display change, and for as long as its window is minimised; and if a
-  stall gets past both, the report is marked `stall` rather than `hang`, kept on
+  sees the display change, and while its window is minimised (a stall excused by
+  either is excused for at most 30 seconds since 0.99.61, so a frame loop that
+  genuinely stops there is still reported; a minimised window whose loop keeps
+  turning never is); and if a stall gets past both, the report is marked `stall` rather than `hang`, kept on
   the machine, and never counted among faults in FoxSDR. What it is **not** is
   "ignore anything that looks like presenting": a report from 0.96.2 had the
   same call on top and was a dead radio service, which is a real fault and is
@@ -2063,7 +2088,28 @@ holds the request, the code and that document to each other in both directions.
   Starting the downloaded installer asks Windows for elevation, and that dialog
   waits for you - which 0.96.2 recorded as a five-second freeze. Every place
   FoxSDR hands something to Windows (the installer, the reports folder, the
-  privacy-policy link) now tells the watchdog it is deliberately waiting.
+  privacy-policy link) now tells the watchdog it is deliberately waiting - and
+  that is the one wait with no time limit, because what it waits for is you
+  reading the prompt. A shell call that never returns and shows no dialog is,
+  by design, still not reported.
+- **A freeze can no longer be excused for ever** (0.99.61). Two of the reasons
+  the watchdog accepts for a pause in drawing had no end: a pause FoxSDR takes
+  itself (a plugin rescan, opening the sound output or the microphone, the
+  display change above) and a thread sitting inside Windows' own window code
+  (`win32u.dll`, which is also where a graphics driver's waits and a message
+  sent to a window nobody answers end up). A real freeze that began during
+  either was never reported. Each now excuses a stall for at most 30 seconds.
+  Checked in FoxSDR's tests against a real watchdog on a shortened clock; no
+  freeze of that kind was reproduced on a real session.
+- **The window no longer waits on the settings folder** (0.99.61). Once a second,
+  in every session, FoxSDR checked its settings folder for a link request from
+  the beta-tester page, on the thread that draws the window, and a report
+  (`hang ntdll.dll @ __std_fs_get_stats`) showed that thread stuck there. The
+  check now runs on a background thread and nothing waits for it; the log says
+  once when the folder has not answered for five seconds and once when it does.
+  Why that user's folder was slow is not known. Two other places that ask the
+  disk from that thread are not covered: the sizes shown in the Fitted modules
+  window, and the plugin rescan.
 - **Closing counts as well, on a longer clock.** Shutting down is where this
   product's worst freeze ever happened, so the watchdog stays armed right
   through it — but closing legitimately waits on the radio driver for a few
@@ -2071,6 +2117,14 @@ holds the request, the code and that document to each other in both directions.
   was judged by the same five, and a slow but perfectly healthy close could
   file a freeze report against an application that had already exited. The
   report says which clock it was measured against.
+- **A freeze while closing, ended from the taskbar, is counted as a crash**
+  (0.99.61). FoxSDR used to record "closed normally" before it had finished
+  shutting its plugins down, so a session that froze inside a plugin's own
+  shutdown and was ended from the taskbar looked like an ordinary close on the
+  next start - one user's bundle read no crash in 79 launches. The record is now
+  made after the plugins have stopped. A fault in the very last step of closing,
+  the graphics teardown, is still not counted as unclean; the watchdog, stopped
+  last, is what covers that.
 - A rotating log lives in `%LOCALAPPDATA%\FoxSDR\logs\foxsdr.log`. Since
   0.89.0 it records what the **radio driver** says as well as what FoxSDR
   does: SoapySDR's own log is bridged in (lines beginning `soapy:`), and in a
@@ -2101,8 +2155,11 @@ holds the request, the code and that document to each other in both directions.
   loop stops sending on its own.
 - **SYSTEM → Diagnostics** on the rail shows both paths, has the on/off switch, and has
   **Copy diagnostics**: one click that puts the version, commit, operating
-  system, loaded plugins with versions, source and device state and the recent
-  log on your clipboard, so you can read it before you send it to anybody. Off
+  system, loaded plugins with versions, source and device state, the sound
+  output's state, the volume, whether the sound is muted and by what, the squelch
+  threshold and whether it is open (since 0.99.61 - never the sound card's name
+  or a frequency), and the recent log on your clipboard, so you can read it
+  before you send it to anybody. Off
   means off — no directory, no file, and off from the first instruction the
   application runs rather than from its first frame: the switch is read before
   anything is armed or created.
