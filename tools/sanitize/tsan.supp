@@ -1,0 +1,47 @@
+# ThreadSanitizer suppressions for the Linux tsan job
+# (.github/workflows/sanitize.yml, cmake/sanitize.cmake, tests/tsan.cmake).
+#
+# STARTS EMPTY OF OUR CODE, AND STAYS THAT WAY. Every line below names a library
+# this repository does not build, and hides a report only when that library is on
+# the report's stack. Nothing names anything in src/, in a test, or in a vendored
+# library compiled here (imgui, glfw, portaudio, pffft): a race in those is a
+# finding, not noise. A race in our code is fixed, not listed.
+#
+# WHY THIRD-PARTY LIBRARIES NEED THEM AT ALL. ThreadSanitizer sees only what is
+# instrumented and what it can intercept (pthread calls, atomics it knows). A
+# library built without it synchronises through its own atomics, futexes and fences,
+# which it cannot see, so an access of ours to memory such a library hands over
+# looks unsynchronised when it is not.
+#
+# These were written WITHOUT a Linux run to check them against; the first log is what
+# shows which of them are needed, and any line it does not need should go.
+
+# ALSA: the sound server's plugin layer and pcm locking use futex-based waits that
+# are invisible to the sanitizer; our audio sink writes to a pcm another thread of
+# the library services.
+called_from_lib:libasound.so.2
+
+# Mesa's software renderer (llvmpipe, via libgallium or swrast_dri) and the LLVM it
+# JIT-compiles with: its own worker-thread pool and queues, running under every
+# test that opens the hidden window under xvfb.
+called_from_lib:libgallium
+called_from_lib:swrast_dri.so
+called_from_lib:libLLVM
+called_from_lib:libGLX_mesa.so.0
+called_from_lib:libEGL_mesa.so.0
+
+# The X11 and Wayland client libraries: their display-connection locking is
+# internal (XInitThreads / the wl_display queue lock).
+called_from_lib:libX11.so
+called_from_lib:libxcb.so
+called_from_lib:libwayland-client.so.0
+
+# DELIBERATELY NOT LISTED.
+#   libusb       - not linked: the USB drivers use usbfs directly (src/usb).
+#   PortAudio    - vendored, so compiled here WITH instrumentation, like our own
+#                  code. Its callback thread and our writer share a ring buffer
+#                  whose ordering PortAudio makes with full memory barriers
+#                  (PaUtil_FullMemoryBarrier), which ThreadSanitizer does not model
+#                  as synchronisation. If the first log reports that ring, the line
+#                  to add is `race:PaUtil_` (the PortAudio ring's functions), with
+#                  that report as the reason; it is not added on a guess.

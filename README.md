@@ -1095,11 +1095,15 @@ cmake --build build --config Release
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-**Memory-error and fuzz testing.** `-DCASCADE_SANITIZE=address` builds everything
-(application, tests, the libraries inside them) under AddressSanitizer in a
-separate build directory, and the parsers and rate-dependent DSP have fuzz targets
-whose regression corpus runs in the ordinary suite. Both are off unless asked for
-and change nothing in a normal build; how to run them is in
+**Memory-error, thread, static-analysis and fuzz testing.**
+`-DCASCADE_SANITIZE=address` builds everything (application, tests, the libraries
+inside them) under AddressSanitizer in a separate build directory,
+`-DCASCADE_SANITIZE=thread` does the same under ThreadSanitizer (Linux, GCC or
+Clang) for the tests that put threads against each other,
+`-DCASCADE_ANALYZE=ON` runs MSVC's `/analyze` over our own code, and the parsers
+and rate-dependent DSP have fuzz targets whose regression corpus runs in the
+ordinary suite. All are off unless asked for and change nothing in a normal build;
+how to run them, what they found and what the warning counts are is in
 [docs/SANITIZERS-AND-FUZZING.md](docs/SANITIZERS-AND-FUZZING.md).
 
 **Photographing the window.** Press **F12** in a running FoxSDR and it writes

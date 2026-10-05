@@ -146,6 +146,11 @@ endif()
 # nothing. See cmake/sanitize.cmake and docs/SANITIZERS-AND-FUZZING.md.
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/sanitize.cmake")
 
+# -DCASCADE_ANALYZE=ON runs MSVC's /analyze over OUR code; -DCASCADE_WERROR=ON
+# makes our warnings errors. Both off - the default - change nothing. See
+# cmake/analyze.cmake and docs/SANITIZERS-AND-FUZZING.md.
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/analyze.cmake")
+
 # ---------------------------------------------------------------------------
 # External dependencies (deliberately minimal — see header comment)
 # ---------------------------------------------------------------------------
@@ -282,6 +287,11 @@ if(MSVC)
         NOMINMAX WIN32_LEAN_AND_MEAN _USE_MATH_DEFINES _CRT_SECURE_NO_WARNINGS)
 else()
     target_compile_options(cascade_flags INTERFACE -Wall -Wextra)
+endif()
+# CASCADE_ANALYZE / CASCADE_WERROR (cmake/analyze.cmake): carried by cascade_flags,
+# so by exactly the targets /W4 already applies to.
+if(TARGET cascade_analyze)
+    target_link_libraries(cascade_flags INTERFACE cascade_analyze)
 endif()
 
 # ---------------------------------------------------------------------------

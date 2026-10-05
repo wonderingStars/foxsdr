@@ -322,6 +322,16 @@ if(CASCADE_SANITIZE_ENABLED)
     list(TRANSFORM _cascade_fault_env REPLACE "^ASAN_OPTIONS=(.*)$"
          "ASAN_OPTIONS=\\1:handle_segv=0:handle_abort=0:handle_sigill=0:handle_sigfpe=0")
 
+    if(CASCADE_SANITIZE_THREAD)
+        # THREADSANITIZER RUNS A SELECTION, NOT THE SUITE. Only a test that puts
+        # two of our threads against each other can find a race, so the job builds
+        # and runs those (label `tsan`, target cascade_tsan_tests) and every other
+        # test is disabled and labelled `sanitize-excluded`, with its reason, as
+        # above. The lists and the judgement behind them are in tests/tsan.cmake.
+        include("${CMAKE_CURRENT_SOURCE_DIR}/tsan.cmake")
+        cascade_tsan_select()
+    endif()
+
     foreach(t ${CASCADE_ALL_TEST_NAMES})
         # The per-test limits were chosen for a plain build.
         get_test_property(${t} TIMEOUT _limit)

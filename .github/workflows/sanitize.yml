@@ -9,20 +9,25 @@
 # required check unless the repository is configured to make it one. build.yml
 # is not edited by the change that added this file.
 #
-# TWO JOBS, TWO COMPILERS, because they need different things:
+# THREE JOBS, because they need different things:
 #
 #   sanitize  GCC, the compiler the release jobs ship with. The whole suite
 #             built with AddressSanitizer + UndefinedBehaviorSanitizer (and
 #             LeakSanitizer, which is part of ASan on Linux) and run under
 #             xvfb with the null audio device, exactly as build.yml runs it.
+#   tsan      GCC again, ThreadSanitizer. It cannot share a build with ASan
+#             (the two will not live in one process), so it is a build of its
+#             own, and it runs a SELECTION of the suite - the tests that put
+#             our threads against each other (tests/tsan.cmake says which, and
+#             why the rest are out). Added blind: nothing in it has run.
 #   fuzz      Clang, because libFuzzer is Clang's. The fuzz targets in
 #             tests/fuzz, built with ASan + UBSan + libFuzzer, the regression
 #             corpus replayed first and then each target fuzzed for a short,
 #             fixed time.
 #
-# They run in parallel on separate runners and neither waits for the other. A
+# They run in parallel on separate runners and none waits for another. A
 # Clang build failure (this code base has only ever been compiled with GCC and
-# MSVC) therefore costs the fuzz job and leaves the sanitizer result intact.
+# MSVC) therefore costs the fuzz job and leaves the other two results intact.
 #
 # HOW TO RUN IT ON A BRANCH. "Run workflow" in the Actions tab, or
 #   gh workflow run sanitize.yml --ref <branch> -f fuzz_seconds=60
@@ -46,6 +51,7 @@ on:
       - ".github/workflows/sanitize.yml"
       - "cmake/sanitize.cmake"
       - "tests/fuzz/**"
+      - "tests/tsan.cmake"
       - "tools/sanitize/**"
 
 # One run per ref: a newer push replaces a run still in progress.
@@ -145,6 +151,88 @@ jobs:
         if: always()
         with:
           name: sanitize-test-log
+          path: |
+            ctest.log
+            build/Testing/Temporary/LastTest.log
+          if-no-files-found: warn
+
+  # THREADSANITIZER. Written without a Linux run, like everything in this file, and
+  # the least certain of it: nothing here has been executed, and a thread
+  # sanitizer's first run on a program with this many threads is normally the one
+  # that teaches you what its noise is. Read the first log before believing it.
+  tsan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    env:
+      # halt_on_error: the first race ends the process. second_deadlock_stack: a
+      # lock-order report shows both orders. history_size=4: the "previous access"
+      # stack of a race that is a while old (the default of 2 loses it). The same
+      # string cmake/sanitize.cmake gives every test as its CTest ENVIRONMENT;
+      # repeated here for readability and for steps outside CTest. Suppressions are
+      # third-party libraries only (tools/sanitize/tsan.supp); nothing of ours is in
+      # it.
+      TSAN_OPTIONS: halt_on_error=1:second_deadlock_stack=1:history_size=4:symbolize=1:print_suppressions=0:suppressions=${{ github.workspace }}/tools/sanitize/tsan.supp
+    steps:
+      - uses: actions/checkout@v4
+
+      # The same package set as the sanitize job; llvm-18 for llvm-symbolizer.
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build \
+            libgl1-mesa-dev libsoapysdr-dev libssl-dev libunwind-dev \
+            libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
+            libwayland-dev libwayland-bin wayland-protocols libxkbcommon-dev \
+            libasound2-dev libasound2-plugins \
+            xvfb libgl1-mesa-dri \
+            llvm-18
+          # On PATH under its plain name, which is where every sanitizer looks, so
+          # it is found whatever TSAN_OPTIONS says (CTest sets its own).
+          sudo ln -sf "$(command -v llvm-symbolizer-18)" /usr/local/bin/llvm-symbolizer
+
+      # ThreadSanitizer maps its shadow at fixed addresses and fails at start-up
+      # ("unexpected memory mapping") on a kernel that randomises mmap with more
+      # entropy than it allows for; lowering it is the documented workaround.
+      - name: Make the address space safe for ThreadSanitizer
+        run: sudo sysctl -w vm.mmap_rnd_bits=28 || true
+
+      - name: Configure
+        run: >
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          -DCASCADE_SANITIZE=thread
+
+      # Only the tests this job runs (and the libraries they link): the target
+      # cascade_tsan_tests is made by tests/tsan.cmake from the list there.
+      - name: Build
+        run: cmake --build build -j"$(nproc)" --target cascade_tsan_tests
+
+      - name: Provide a null audio device
+        run: |
+          sudo modprobe snd-dummy || true
+          printf 'pcm.!default { type null }\nctl.!default { type null }\n' | sudo tee /etc/asound.conf
+
+      # What is not run, and why, where it can be read: the disabled tests are
+      # listed by ctest, and the reasons are in tests/tsan.cmake (the named ones are
+      # also printed at configure time).
+      - name: Tests not run under ThreadSanitizer
+        run: |
+          echo "::group::excluded tests"
+          ctest --test-dir build -N -L sanitize-excluded
+          echo "::endgroup::"
+          echo "run: $(ctest --test-dir build -N -L tsan | tail -n 1)"
+
+      - name: Test
+        env:
+          LIBGL_ALWAYS_SOFTWARE: "1"
+        run: |
+          set -o pipefail
+          xvfb-run -a ctest --test-dir build -L tsan --output-on-failure -j2 2>&1 | tee ctest.log
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tsan-test-log
           path: |
             ctest.log
             build/Testing/Temporary/LastTest.log
