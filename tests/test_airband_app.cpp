@@ -22,6 +22,18 @@
  * layout reported for that key, so nothing here depends on where the rail
  * happens to put the section.
  *
+ * REAL TIME, NOT FRAMES (2026-10). "Heard" is seconds of the wall clock, and
+ * the radio, the patch runner and the squelch work in real time on their own
+ * threads, so how long a listen lasts is how long the run takes - and a bounded
+ * run's frames are not a clock. With the display pacing them (vsync) the 299
+ * frames of the listen run last 2.5 s and the monitor heard 1.8 to 2.4 s; with
+ * the desktop not presenting (display idle or asleep, the window covered, a
+ * remote session) they last 0.26 s and it heard 0.03 to 0.18 s. The same
+ * listening passed or failed on the display alone. The two listen runs
+ * therefore hold the frame loop for real time themselves (the script's `sleep`
+ * step, see hold()) and say so in the check: the run must have lasted that
+ * long, so a script whose holds were lost fails on that, not on "heard".
+ *
  * SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
  */
 #include <cstdio>
@@ -176,6 +188,42 @@ std::string click(int frame, const Rect& at) {
     return buf;
 }
 
+// Real time held inside the script after LISTEN: kHoldSteps sleeps of kHoldMs,
+// ten frames apart from `first`, 2 s in all - about what the display gave the
+// run before (heard 1.8 to 2.4 s) and four times the threshold below.
+//
+// EACH SLEEP MUST BE WELL UNDER 0.5 S. The script sleeps after the frame's
+// time step has been taken, so the sleep shows up as the next frame's elapsed
+// time, and the monitor treats a runner whose block count has not moved for
+// 0.5 s (kAirbandStaleS) as stalled and drops that frame's squelch reports.
+// Six holds of 500 ms lost two to four of their frames that way (measured:
+// "live" false on them, though the runner's block count had risen by about a
+// thousand over each); 250 ms keeps the monitor's view whole. Nor may one
+// exceed the one second a single frame is allowed to credit.
+constexpr int kHoldSteps = 8;
+constexpr int kHoldMs = 250;
+constexpr double kHoldS = kHoldSteps * kHoldMs / 1000.0;
+
+std::string hold(int first) {
+    std::string s;
+    for (int i = 0; i < kHoldSteps; ++i) {
+        s += std::to_string(first + 10 * i) + " sleep " + std::to_string(kHoldMs) + "\n";
+    }
+    return s;
+}
+
+// The last frame time (seconds, the application's own clock) a run's script
+// trace recorded; -1 when there is none.
+double traceEnd(const std::string& tag) {
+    std::ifstream in(g_dir / (tag + ".trace"));
+    std::string line, last;
+    while (std::getline(in, line)) {
+        if (!line.empty()) { last = line; }
+    }
+    const std::size_t at = last.find(" t=");
+    return at == std::string::npos ? -1.0 : std::atof(last.c_str() + at + 3);
+}
+
 const char* kTwoRows =
     "{\n"
     "  \"schemaVersion\": 1,\n"
@@ -188,9 +236,14 @@ const char* kTwoRows =
     "  ]\n"
     "}\n";
 
-void checkListen(const Result& r, const char* what) {
+void checkListen(const Result& r, const std::string& tag, const char* what) {
     std::printf("  %s\n", what);
     CHECK(r.ok);
+    // The premise of the heard-time check below: the run lasted the real time
+    // its script held, whatever the display did to its frames.
+    const double ran = traceEnd(tag);
+    std::printf("    ran %.2f s (script holds %.1f s)\n", ran, kHoldS);
+    CHECK(ran >= kHoldS - 0.01);
     CHECK(r.items.count("airband:listening") == 1);
     CHECK(r.items.count("airband:blocks:1") == 1);
     // The one centre that holds both, between them: the generator's tone
@@ -290,8 +343,9 @@ int main() {
         CHECK(layout.rects.count("airband:listen") == 1);
         if (layout.rects.count("airband:listen") == 1) {
             writeBookmarks(kTwoRows);
-            const Result r = once("listen", 300, "receiver", click(60, layout.rects.at("airband:listen")));
-            checkListen(r, "listen on the receiver view");
+            const Result r = once("listen", 300, "receiver",
+                                  click(60, layout.rects.at("airband:listen")) + hold(70));
+            checkListen(r, "listen", "listen on the receiver view");
         }
     }
 
@@ -303,8 +357,9 @@ int main() {
         CHECK(layout.rects.count("airband:listen") == 1);
         if (layout.rects.count("airband:listen") == 1) {
             writeBookmarks(kTwoRows);
-            const Result r = once("handback", 360, "patch", click(60, layout.rects.at("airband:listen")));
-            checkListen(r, "listen pressed on the patch view");
+            const Result r = once("handback", 360, "patch",
+                                  click(60, layout.rects.at("airband:listen")) + hold(70));
+            checkListen(r, "handback", "listen pressed on the patch view");
         }
     }
 
