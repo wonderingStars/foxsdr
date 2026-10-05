@@ -305,6 +305,14 @@ std::vector<unsigned char> readBytes(const fs::path& path) {
                                       std::istreambuf_iterator<char>());
 }
 
+// Waits, bounded, for every file a destination handed to the record finisher to be closed: a
+// speaker's WAV is flushed, patched and closed on the finisher's worker after its destructor has
+// returned (and an MP3's worker ends by itself, counted with them). What the application's quit does.
+bool drainTheFinisher() {
+    return cascade::core::RecordFinisher::drain(std::chrono::steady_clock::now() +
+                                                std::chrono::seconds(10));
+}
+
 // The regular files in `dir` with the extension `ext`.
 std::vector<fs::path> filesIn(const std::string& dir, const char* ext) {
     std::vector<fs::path> out;
@@ -359,7 +367,11 @@ void checkAppWindowWavNeverHoldsAFrame() {
     CHECK(offered > 48000u * 2u);  // not vacuous: several seconds of real sound
     CHECK(dest && dest->error().empty());
     Access::closeRadios(app);
-    dest.reset();  // the last reference: the file is finalised here
+    dest.reset();  // the last reference: the destination hands its file to the finisher here
+    // THE FILE IS FINISHED BY THE RECORD FINISHER'S WORKER, NOT BY THE DESTRUCTOR (0.99.65): flushed,
+    // its header patched, closed - on a thread of its own, after reset() has returned. Read before that
+    // and the file is the husk the opener flushed. The drain is what the application's quit does too.
+    CHECK(drainTheFinisher());
     const std::vector<fs::path> files = filesIn(dirFor("app-wav"), ".wav");
     CHECK(files.size() == 1u);
     if (files.size() == 1u) {
@@ -397,6 +409,9 @@ void checkAppWindowMp3NeverHoldsAFrame() {
                 s.frames, s.worstGapMs, w.reportsWritten());
     w.stop();
     Access::closeRadios(app);
+    // The MP3's worker ends by itself (the destructor does not join it) and is counted with the
+    // recorders' finishes: wait for it before looking at its file.
+    CHECK(drainTheFinisher());
     // The folder was made (late) and the file is there and has sound in it.
     const std::vector<fs::path> files = filesIn(dirFor("app-mp3"), ".mp3");
     CHECK(files.size() == 1u);
@@ -499,7 +514,11 @@ void checkALateWavIsTheSameFileAsAnInlineOne() {
     }
     CHECK(d->samples() == signal.size());
     CHECK(d->error().empty());
-    d.reset();  // finalises the file
+    d.reset();  // hands the file to the record finisher, which closes it on a thread of its own
+    // The inline reference is closed by Recorder::stop() above; THIS one is closed by the finisher's
+    // worker AFTER reset() returns, so reading it straight away races the header patch (the size
+    // check passes - the tail is flushed first - and the bytes differ by the header). Drain first.
+    CHECK(drainTheFinisher());
 
     const std::vector<fs::path> a = filesIn(lateDir, ".wav");
     const std::vector<fs::path> b = filesIn(refDir, ".wav");
@@ -583,6 +602,7 @@ void checkADiskSlowerThanThePreRollDropsAndSaysSo() {
     d->write(tail.data(), tail.size());
     CHECK(d->error().find("took too long to open") != std::string::npos);  // still said
     d.reset();
+    CHECK(drainTheFinisher());  // the file is closed by the finisher's worker, not by reset()
     const std::vector<fs::path> files = filesIn(dir, ".wav");
     CHECK(files.size() == 1u);
     if (files.size() == 1u) {

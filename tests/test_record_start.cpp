@@ -910,6 +910,9 @@ void checkAppWindowStartsNeverHoldAFrame() {
     // Both takes end as they always did: headers on disk, valid.
     Access::stopAudio(app);
     Access::applyRecord(app, false, std::nullopt);
+    // The web route's stop closes its file on the record finisher's worker (the Access::stopAudio
+    // above waits for its own): wait for it before the headers are read.
+    Access::settleFinishes(app);
     CHECK(!Access::audioRecording(app));
     CHECK(!Access::iqRecording(app));
     const std::vector<fs::path> files = filesIn(dirFor("app-slow"));

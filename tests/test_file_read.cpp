@@ -44,6 +44,7 @@
 #include "core/freq_manager.hpp"
 #include "core/freq_markers.hpp"
 #include "core/plugin_cleanup.hpp"
+#include "core/plugin_host.hpp"
 #include "core/plugin_repo.hpp"
 #include "test_check.hpp"
 
@@ -64,6 +65,16 @@ void putText(const fs::path& p, const std::string& text) {
 }
 
 bool contains(const std::string& hay, const char* needle) { return hay.find(needle) != std::string::npos; }
+
+// The extension a plugin file has on THIS platform, asked of the product's own predicate
+// (PluginHost::hasPluginExtension) rather than a second #ifdef list kept here: the candidates are
+// only the spellings that exist, and the product says which one it accepts.
+std::string moduleExtension() {
+    for (const char* ext : {".dll", ".so", ".dylib"}) {
+        if (cascade::core::PluginHost::hasPluginExtension(std::string("x") + ext)) { return ext; }
+    }
+    return ".dll";
+}
 
 // A buffer whose read fails by throwing, as libstdc++'s filebuf does.
 class ThrowingBuf final : public std::streambuf {
@@ -280,7 +291,10 @@ void theOtherReaders() {
         CHECK(!threw);
         CHECK(got.empty());
         fs::remove_all(name, ec);
-        putText(name, "{\"files\":[\"a-1.0.0.dll\"]}");
+        // A PLUGIN FILE NAME AS THIS PLATFORM HAS IT: the loader keeps only names the install sanitiser
+        // accepts, and that insists on the host's own module extension (".dll" is no plugin on Linux).
+        const std::string plugin = "a-1.0.0" + moduleExtension();
+        putText(name, "{\"files\":[\"" + plugin + "\"]}");
         CHECK(cascade::core::loadPendingRemovals(dir.string()).size() == 1u);
         {
             FailRead fail(name);
@@ -322,17 +336,23 @@ void theOtherReaders() {
             CHECK(!threw);
         }
         // forgetFile (reached by Remove) reads it too.
-        putText(pdir / "gone-1.0.0.dll", "x");
+        const std::string gone = "gone-1.0.0" + moduleExtension();
+        putText(pdir / gone, "x");
         {
             FailRead fail(manifest);
             threw = false;
+            bool removed = false;
             cascade::core::PluginRepo repo;
             try {
-                (void)repo.remove(pdir.string(), "gone-1.0.0.dll", err);
+                removed = repo.remove(pdir.string(), gone, err);
             } catch (...) {
                 threw = true;
             }
             CHECK(!threw);
+            // Not vacuous: the name was one the sanitiser accepts, so the file really went and
+            // forgetFile really tried to read the manifest (and, unable to, forgot nothing).
+            CHECK(removed);
+            CHECK(!fs::exists(pdir / gone, ec));
         }
     }
     // An imported frequency list: a dropped FOLDER, and a read that throws.

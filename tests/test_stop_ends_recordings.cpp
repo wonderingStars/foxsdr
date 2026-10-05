@@ -378,6 +378,29 @@ std::vector<Take> takes(const fs::path& dir, const char* prefix) {
     return out;
 }
 
+// THE TAKES AS THEY ARE ONCE THEY ARE CLOSED. A take's file is closed - its tail flushed, its header
+// patched - by the record finisher's worker (core/record_finish.hpp, 0.99.65) AFTER the stop that
+// asked for it has returned, in another process from this test, so the only way to know it is closed
+// is to look at the file: wait, bounded, until every take with `prefix` has a header that declares
+// exactly the bytes after it (and, with `wantData`, at least one of them - an unpatched take declares
+// none). A fixed sleep after the stop is a hope that the worker was scheduled in time; this is a check.
+std::vector<Take> takesWhenClosed(const fs::path& dir, const char* prefix, bool wantData) {
+    const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    std::vector<Take> t;
+    for (;;) {
+        t = takes(dir, prefix);
+        bool closed = !t.empty() || !wantData;
+        for (const Take& k : t) {
+            if (!k.headerOk || static_cast<std::uintmax_t>(k.declaredData) + 44u != k.fileBytes ||
+                (wantData && k.declaredData == 0)) {
+                closed = false;
+            }
+        }
+        if (closed || std::chrono::steady_clock::now() >= until) { return t; }
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+}
+
 // A finished take: one file, whose header declares every byte after it and
 // at least one of them.
 void checkFinalised(const std::vector<Take>& t, const char* what) {
@@ -398,7 +421,7 @@ void checkFinalised(const std::vector<Take>& t, const char* what) {
 // nothing finalised.
 void checkAllClosed(const fs::path& dir, const char* what) {
     for (const char* prefix : {"iq_", "audio_"}) {
-        for (const Take& k : takes(dir, prefix)) {
+        for (const Take& k : takesWhenClosed(dir, prefix, /*wantData=*/false)) {
             std::printf("  %s: %s  file %llu bytes, header declares %u data bytes\n", what,
                         k.path.filename().string().c_str(),
                         static_cast<unsigned long long>(k.fileBytes), k.declaredData);
@@ -665,9 +688,9 @@ void webStopEndsTakes() {
     CHECK(!jb(s, "audioRecording"));
     // A user's own stop is not news: no reason line for it.
     CHECK(s.value("recordError", std::string()).empty());
-    // ...and on disk: both files closed with honest headers.
-    const std::vector<Take> iq1 = takes(ss.recDir(), "iq_");
-    const std::vector<Take> au1 = takes(ss.recDir(), "audio_");
+    // ...and on disk: both files closed with honest headers (waited for: the close is a worker's).
+    const std::vector<Take> iq1 = takesWhenClosed(ss.recDir(), "iq_", /*wantData=*/true);
+    const std::vector<Take> au1 = takesWhenClosed(ss.recDir(), "audio_", /*wantData=*/true);
     checkFinalised(iq1, "iq take after stop");
     checkFinalised(au1, "audio take after stop");
 
@@ -763,8 +786,8 @@ void faultEndsTakes() {
     const std::string afterFault = s.value("recordError", std::string());
     CHECK(afterFault.find("fault") != std::string::npos);
     CHECK(afterFault.find(refused) != std::string::npos);
-    const std::vector<Take> iq1 = takes(ss.recDir(), "iq_");
-    const std::vector<Take> au1 = takes(ss.recDir(), "audio_");
+    const std::vector<Take> iq1 = takesWhenClosed(ss.recDir(), "iq_", /*wantData=*/true);
+    const std::vector<Take> au1 = takesWhenClosed(ss.recDir(), "audio_", /*wantData=*/true);
     checkFinalised(iq1, "iq take after the fault");
     checkFinalised(au1, "audio take stopped before the fault");
 
@@ -892,7 +915,7 @@ void sameRateSwitchEndsIqTake() {
     // FAIL lamp lights for any recordError (lampFail in web_server.cpp).
     CHECK(s.value("recordNotice", std::string()).find("source") != std::string::npos);
     CHECK(s.value("recordError", std::string()).empty());
-    const std::vector<Take> iq1 = takes(ss.recDir(), "iq_");
+    const std::vector<Take> iq1 = takesWhenClosed(ss.recDir(), "iq_", /*wantData=*/true);
     checkFinalised(iq1, "iq take after the switch");
     // The audio take carries on: it is what the speaker plays, and a source
     // change does not change its format any more than a retune does.
