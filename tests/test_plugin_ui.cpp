@@ -1474,7 +1474,7 @@ int main() {
         CHECK(ui.panels().size() == 1u);
     }
 
-    // --- THE USAGE RECORD (0.99.64): a host call that threw is a recovery ---
+    // --- THE USAGE RECORD (0.99.65): a host call that threw is a recovery ---
     //
     // `recovered.pluginapi`. The trampolines can be entered from a plugin's own thread, so they
     // do not count - they RAISE A FLAG (one relaxed OR), and the window's per-frame poll turns it

@@ -391,23 +391,61 @@ if (-not $healthReporting) {
     }
 }
 
-# SLOW FRAMES, by version (0.99.64, the second pass) - how often the window took a
+# WHICH BUILDS MEASURE slow frames and recoveries (0.99.65). Those two families were
+# added a release after the failure counts: 0.99.64 sends `health` (blob12 = '1')
+# and NEVER measured either, so its rows carry zeros in double10..12 that mean
+# "not measured", not "none happened". blob12 = '1' therefore does not say whether
+# these were measured, and its meaning is not changed (the website queries it): the
+# rule is on the VERSION in blob1, in this one named constant, compared as a version
+# (0.99.100 is later than 0.99.65; as text it would be earlier). A version that is
+# not plain major.minor.patch - a pre-release such as 0.99.65-rc1, a nightly, an
+# empty or odd string - is never assumed to measure them: it cannot be ordered
+# reliably, and the safe side is "not measured". The rule, for anyone who writes
+# another reader: slow frames and recoveries are measured from 0.99.65; a row from
+# an earlier build is unmeasured whatever its doubles say.
+$FirstVersionThatMeasuresSlowFramesAndRecoveries = '0.99.65'
+function Test-MeasuresSlowFramesAndRecoveries([string]$v) {
+    if ($v -notmatch '^(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})$') { return $false }
+    return ([version]$v) -ge ([version]$FirstVersionThatMeasuresSlowFramesAndRecoveries)
+}
+# Every version seen in the window, measuring or not: what the "Not measured" lines are
+# worked out from (every version seen, minus those that measure), never from how an
+# unwritten column reads back.
+$allSeen = Invoke-Sql "SELECT blob1 AS version FROM foxsdr_usage WHERE $window GROUP BY blob1 ORDER BY blob1"
+function Show-NotMeasuredSlowFramesAndRecoveries([string]$what, $measuredRows) {
+    $have = @{}
+    foreach ($r in @($measuredRows)) { $have[[string]$r.version] = $true }
+    $names = @()
+    foreach ($v in @($allSeen)) {
+        $ver = [string]$v.version
+        if (-not $have.ContainsKey($ver)) {
+            if ($ver) { $names += $ver } else { $names += "(not reported)" }
+        }
+    }
+    if ($names.Count -gt 0) {
+        Write-Host ("  Not measured (builds before {0} send no {1}, whatever their double10..12 say, and a version that is not plain major.minor.patch is never assumed to): {2}" -f $FirstVersionThatMeasuresSlowFramesAndRecoveries, $what, ($names -join ", "))
+    }
+}
+
+# SLOW FRAMES, by version (0.99.65) - how often the window took a
 # quarter of a second or more to draw a frame, and which part of the frame the time
 # went in. The hang watchdog fires at five seconds and the crash store sees only
 # what ends in a report; a stutter that never becomes a freeze left no trace at all.
 #
-# THE SAME DISCIPLINE: only rows with blob12 = '1' (the client SENT its counts; 0.99.64
-# is the first build to send either family, so such a row measured its frames), the
-# rest listed apart by the "What fails" section above. Installs are count(DISTINCT
-# index1), never uniq(). The sums are double10 (every slow frame) and double11
-# (those of a second or more), computed by the Worker from the validated tokens; the
-# scopes are read out of the count strings (blob13) exactly as the failures are, and
-# each scope's installs asked for with count(DISTINCT index1). `user-wait` is never a
-# scope: the application does not count it, and the Worker drops it.
+# THE SAME DISCIPLINE: only rows with blob12 = '1' (the client SENT its counts) AND a
+# version that measures slow frames (the rule above) - a 0.99.64 row has blob12 = '1'
+# and zeros, and is listed apart as not measured, never printed as a zero. Installs are
+# count(DISTINCT index1), never uniq(). The sums are double10 (every slow frame) and
+# double11 (those of a second or more), computed by the Worker from the validated
+# tokens; the scopes are read out of the count strings (blob13) exactly as the
+# failures are, and each scope's installs asked for with count(DISTINCT index1).
+# `user-wait` is never a scope: the application does not count it, and the Worker
+# drops it. Every figure is per version, so rows that do not measure move none of them.
 Write-Host ""
 Write-Host "Slow frames, by version" -ForegroundColor Cyan
 $slowVersions = Invoke-Sql "SELECT blob1 AS version, count(DISTINCT index1) AS installs, count() AS sessions, sum(double10) AS slow, sum(double11) AS slowLong FROM foxsdr_usage WHERE $window AND blob12 = '1' GROUP BY blob1 ORDER BY installs DESC"
-if (-not $slowVersions) {
+$slowMeasured = @(@($slowVersions) | Where-Object { $_ -and (Test-MeasuresSlowFramesAndRecoveries ([string]$_.version)) })
+if ($slowMeasured.Count -eq 0) {
     Write-Host "  No build in this window reports slow frames yet."
     Write-Host "  That is not zero slow frames - it is unmeasured."
 } else {
@@ -415,7 +453,7 @@ if (-not $slowVersions) {
     $withSlowBy = @{}
     foreach ($s in @($withSlow)) { $withSlowBy[[string]$s.version] = [int64]$s.installs }
     Write-Host ("  {0,-34} {1,8} {2,9} {3,10} {4,11} {5,11}" -f "version", "installs", "sessions", "w/ slow", "per 1000", "1 s+ /1000")
-    foreach ($r in $slowVersions) {
+    foreach ($r in $slowMeasured) {
         $label = [string]$r.version
         if (-not $label) { $label = "(not reported)" }
         $with = 0
@@ -427,7 +465,7 @@ if (-not $slowVersions) {
         Write-Host ("  {0,-34} {1,8} {2,9} {3,10} {4,11:F1} {5,11:F1}" -f $label, $r.installs, $r.sessions, $with, $per, $perLong)
     }
     Write-Host "  installs = distinct installs that reported; w/ slow = those with at least one slow frame (250 ms or more); per 1000 = slow frames"
-    Write-Host "  per 1,000 records (a record is a session); 1 s+ = the slow frames of a second or more. A reporting version with a zero is a real zero."
+    Write-Host "  per 1,000 records (a record is a session); 1 s+ = the slow frames of a second or more. A version that measures them, with a zero, is a real zero."
 
     # The scopes: one row per distinct count string and version, so sessions and
     # frames are exact; installs per scope come from the database, per version.
@@ -436,6 +474,8 @@ if (-not $slowVersions) {
     $scopes = @{}
     foreach ($row in @($slowStrings)) {
         $ver = [string]$row.version
+        # A row of a build that does not measure slow frames is not read as a measurement.
+        if (-not (Test-MeasuresSlowFramesAndRecoveries $ver)) { continue }
         $n = [int64]$row.sessions
         $seenScope = @{}
         foreach ($pair in ([string]$row.slowHealth).Split(',')) {
@@ -488,18 +528,21 @@ if (-not $slowVersions) {
         }
     }
 }
+Show-NotMeasuredSlowFramesAndRecoveries "slow frames" $slowMeasured
 
-# WHAT THE PROGRAM RECOVERED FROM, by version (0.99.64, the second pass) - the places
+# WHAT THE PROGRAM RECOVERED FROM, by version (0.99.65) - the places
 # it met a fault and carried on without telling anybody: the sound output restarted,
 # a radio's driver reopened, a settings file that could not be written (PRIVACY.md,
-# "Recovered from"). The same discipline: rows with blob12 = '1' only, installs
-# from count(DISTINCT index1), the sum double12 computed by the Worker from the
-# validated tokens, the tokens read out of the count strings (blob13) and each
-# token's installs asked for from the database.
+# "Recovered from"). The same discipline: rows with blob12 = '1' only AND a version
+# that measures recoveries (the rule above: a 0.99.64 row is not measured, never a
+# zero), installs from count(DISTINCT index1), the sum double12 computed by the
+# Worker from the validated tokens, the tokens read out of the count strings
+# (blob13) and each token's installs asked for from the database.
 Write-Host ""
 Write-Host "Recovered from, by version" -ForegroundColor Cyan
 $recVersions = Invoke-Sql "SELECT blob1 AS version, count(DISTINCT index1) AS installs, count() AS sessions, sum(double12) AS recoveries FROM foxsdr_usage WHERE $window AND blob12 = '1' GROUP BY blob1 ORDER BY installs DESC"
-if (-not $recVersions) {
+$recMeasured = @(@($recVersions) | Where-Object { $_ -and (Test-MeasuresSlowFramesAndRecoveries ([string]$_.version)) })
+if ($recMeasured.Count -eq 0) {
     Write-Host "  No build in this window reports recoveries yet."
     Write-Host "  That is not zero recoveries - it is unmeasured."
 } else {
@@ -507,7 +550,7 @@ if (-not $recVersions) {
     $withRecBy = @{}
     foreach ($s in @($withRec)) { $withRecBy[[string]$s.version] = [int64]$s.installs }
     Write-Host ("  {0,-34} {1,8} {2,9} {3,12} {4,11}" -f "version", "installs", "sessions", "w/ recovery", "recoveries")
-    foreach ($r in $recVersions) {
+    foreach ($r in $recMeasured) {
         $label = [string]$r.version
         if (-not $label) { $label = "(not reported)" }
         $with = 0
@@ -515,13 +558,15 @@ if (-not $recVersions) {
         Write-Host ("  {0,-34} {1,8} {2,9} {3,12} {4,11}" -f $label, $r.installs, $r.sessions, $with, $r.recoveries)
     }
     Write-Host "  installs = distinct installs that reported; w/ recovery = those with at least one; recoveries = the sum of the counts (a word that"
-    Write-Host "  can repeat by itself counts once a session). A reporting version with a zero is a real zero."
+    Write-Host "  can repeat by itself counts once a session). A version that measures them, with a zero, is a real zero."
 
     $recStrings = Invoke-Sql "SELECT blob1 AS version, blob13 AS recoveredHealth, count() AS sessions FROM foxsdr_usage WHERE $window AND blob12 = '1' AND position(blob13, 'recovered.') > 0 GROUP BY blob1, blob13 ORDER BY sessions DESC LIMIT 1000"
     $recStat = @{}
     $recTokens = @{}
     foreach ($row in @($recStrings)) {
         $ver = [string]$row.version
+        # A row of a build that does not measure recoveries is not read as a measurement.
+        if (-not (Test-MeasuresSlowFramesAndRecoveries $ver)) { continue }
         $n = [int64]$row.sessions
         foreach ($pair in ([string]$row.recoveredHealth).Split(',')) {
             $eq = $pair.IndexOf('=')
@@ -568,4 +613,5 @@ if (-not $recVersions) {
         }
     }
 }
+Show-NotMeasuredSlowFramesAndRecoveries "recoveries" $recMeasured
 Write-Host ""

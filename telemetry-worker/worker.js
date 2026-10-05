@@ -334,10 +334,14 @@ export default {
         healthSum(health, 'radio_open'),  // double7  radio opens that succeeded
         healthSum(health, 'radio_data'),  // double8  opened radios whose samples arrived
         healthSum(health, 'sound_ok'),    // double9  sessions in which the speakers played
-        // double10..double12 (0.99.64, slow frames and recoveries), the same way:
+        // double10..double12 (0.99.65, slow frames and recoveries), the same way:
         // sums of the validated tokens in blob13, never numbers the client sent.
-        // Per ROW, meaningful only where blob12 = '1'. A client that does not send
-        // these families writes 0, which is a real zero for it.
+        // Per ROW, and MEASURED ONLY FROM 0.99.65: a 0.99.64 client sends `health`
+        // (so blob12 = '1') with the failure counts only and never measured either
+        // family, so its rows hold 0 here and that 0 means "not measured", not "none
+        // happened". This Worker cannot tell the two apart - blob12 and the doubles
+        // look the same - so a READER decides by the version in blob1
+        // (telemetry-worker/README.md, usage.ps1), and never by these zeros.
         healthSum(health, 'slow'),        // double10 slow frames, 250 ms or more
         healthSlowFrom(health, 1),        // double11 slow frames of a second or more
         healthSum(health, 'recovered'),   // double12 recoveries

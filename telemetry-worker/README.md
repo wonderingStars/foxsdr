@@ -23,7 +23,12 @@ row exactly what a record without it writes.)
 **A word added to the failure vocabulary is the same case, and is added to
 `worker.js` first**: the Worker drops a word it does not know, so a client that
 sends one before the Worker has it loses that count (and nothing else - the rest
-of the record, and the other counts in the string, are stored).
+of the record, and the other counts in the string, are stored). Slow frames and
+recoveries (`slow.*`, `recovered.*`) are exactly that case: 0.99.64 shipped the
+failure counts and the Worker that goes with them (kept byte for byte in
+`test-fixtures/worker-health-counts.js`), and 0.99.65 adds the two new families, so
+**this Worker is deployed before 0.99.65 ships** - the 0.99.64 Worker drops every
+`slow.*` and `recovered.*` word it is sent.
 
 ## The columns of `foxsdr_usage`
 
@@ -50,9 +55,9 @@ corrupts every row written before.
 | `double7` | radio opens that succeeded: the sum of `radio_open.*` (per row) - only where `blob12 = '1'` |
 | `double8` | opened radios whose samples reached the display: the sum of `radio_data.*` (per row) - only where `blob12 = '1'` |
 | `double9` | sessions in which the speakers played: the sum of `sound_ok.*` (per row) - only where `blob12 = '1'` |
-| `double10` | slow frames: the sum of every `slow.*` count in `blob13` (per row) - only where `blob12 = '1'` |
-| `double11` | slow frames of a second or more: the sum of the `slow.*.1s` and `slow.*.5s` counts (per row) - only where `blob12 = '1'` |
-| `double12` | recoveries: the sum of every `recovered.*` count in `blob13` (per row) - only where `blob12 = '1'` |
+| `double10` | slow frames: the sum of every `slow.*` count in `blob13` (per row) - **measured only from 0.99.65** (see the rule below) |
+| `double11` | slow frames of a second or more: the sum of the `slow.*.1s` and `slow.*.5s` counts (per row) - measured only from 0.99.65 |
+| `double12` | recoveries: the sum of every `recovered.*` count in `blob13` (per row) - measured only from 0.99.65 |
 
 Column budget: Analytics Engine allows 20 blobs and 20 doubles a row. `blob1`..`blob13`
 and `double1`..`double12` are used: 7 blobs and 8 doubles are free. Slow frames and
@@ -130,6 +135,20 @@ still stored (a bad optional field must not cost a session's length), `blob12 = 
 `blob13 = ''` and the doubles are 0. Always ask about failures with
 `blob12 = '1'`; builds that do not send them are *unmeasured*, not clean.
 
+**`blob12 = '1'` does not say that slow frames and recoveries were measured.** 0.99.64
+sent the failure counts and nothing of the two families that 0.99.65 added, so a
+0.99.64 row has `blob12 = '1'`, a `blob13` with failures only and **zeros** in
+`double10..12` - zeros that mean "never measured", not "none happened". `blob12`
+keeps the meaning the website already queries (the client sent failure counts) and
+nothing about it changed; the rule that tells the two apart is on the version in
+`blob1`. **For anyone writing a reader: slow frames and recoveries are measured from
+0.99.65; a row from an earlier build is unmeasured whatever its doubles say.** Compare
+versions as versions (0.99.100 is later than 0.99.65; as text it is earlier), and
+treat a `blob1` that is not plain `major.minor.patch` - a pre-release such as
+`0.99.65-rc1`, a nightly, an empty or odd string - as *not measured*: it cannot be
+ordered reliably, and that is the safe side. `usage.ps1` holds the rule in one named
+constant, `$FirstVersionThatMeasuresSlowFramesAndRecoveries`.
+
 **A row is a record, not necessarily one session.** Counts ride until a record
 carrying them is accepted, so after a failed send a record can carry more than
 one session's counts, and every count is per row (like `double5`). Some events are
@@ -148,15 +167,17 @@ it".
 | opened radios that never delivered | `sum(double7) - sum(double8)` where `blob12 = '1'` |
 | sessions that had sound | `sum(double9)` where `blob12 = '1'` (a session count: `sound_ok` is once a session) |
 | builds that do not measure it | every `blob1` seen, minus those with `blob12 = '1'` |
-| slow frames by version | `sum(double10)` and `sum(double11)` where `blob12 = '1'`, grouped by `blob1`; per 1,000 records: `1000 * sum(double10) / count()` |
-| installs with any slow frame | `count(DISTINCT index1)` where `blob12 = '1' AND double10 > 0` |
+| slow frames by version | `sum(double10)` and `sum(double11)` where `blob12 = '1'`, grouped by `blob1`, **keeping only the versions that measure them (0.99.65 and later)**; per 1,000 records: `1000 * sum(double10) / count()` |
+| installs with any slow frame | `count(DISTINCT index1)` where `blob12 = '1' AND double10 > 0` (a 0.99.64 row never qualifies, so this needs no version rule) |
 | installs with slow frames in one scope | `blob12 = '1' AND (startsWith(blob13, 'slow.SCOPE.') OR position(blob13, ',slow.SCOPE.') > 0)`, with `count(DISTINCT index1)` |
-| installs that recovered from anything | `count(DISTINCT index1)` where `blob12 = '1' AND double12 > 0` |
+| installs that recovered from anything | `count(DISTINCT index1)` where `blob12 = '1' AND double12 > 0` (likewise) |
 | installs that recovered at one place | the failure query above with `TOKEN` = `recovered.WORD` |
+| builds that do not measure slow frames or recoveries | every `blob1` seen, minus the versions 0.99.65 and later (as versions; a pre-release or odd `blob1` is *not measured*) |
 
-(A build that sends `health` sends slow frames and recoveries too - 0.99.64 is the
-first to send either - so `blob12 = '1'` also means those were measured, and a zero
-in `double10..12` is a real zero.)
+**The rule, in one line: slow frames and recoveries are measured from 0.99.65; a row
+from an earlier build is unmeasured whatever its doubles say.** Any average, rate or
+"none in this window" over `double10..12` or over `slow.*` / `recovered.*` tokens must
+leave 0.99.64 and earlier rows out of its denominator, not count them as zero.
 
 Compatibility, as `worker.test.mjs` measures it:
 
@@ -164,12 +185,12 @@ Compatibility, as `worker.test.mjs` measures it:
 |---|---|---|---|
 | 0.99.61 (no `stalls`, no `health`) | new | 204 | the eleven old blobs and five doubles as before; `blob12`, `blob13` empty, `double6..9` = 0 - not reported |
 | 0.99.62 (`stalls`) | new | 204 | as above, with the stall count |
-| failure counts only (the Worker's first `health`) | new | 204 | the same row it wrote, byte for byte; `double10..12` = 0 |
-| 0.99.64 (`health`, with `slow` and `recovered`) | new | 204 | everything, validated; `double10..12` the three sums |
-| 0.99.64, malformed `health` | new | 204 | everything except `health`: not reported |
+| 0.99.64 (`health`: failure counts only) | new | 204 | the row the 0.99.64 Worker wrote, byte for byte, plus `double10..12` = 0 - **which is unmeasured, not zero** (the rule above) |
+| 0.99.65 (`health`, with `slow` and `recovered`) | new | 204 | everything, validated; `double10..12` the three sums, measured |
+| 0.99.65, malformed `health` | new | 204 | everything except `health`: not reported |
 | 0.99.64 | **old** (0.99.63) | 204 | the old columns only; `health` is discarded, and the client, told 2xx, forgets it |
-| 0.99.64 | the Worker that has `health` but not `slow` / `recovered` (`test-fixtures/worker-health-counts.js`) | 204 | the failure tokens as before, `slow` and `recovered` tokens dropped, `double6..9` right, no `double10..12`; a record with only the new families is *not reported* there |
-| the longest record the client writes (832 characters) | the same older Worker | 204 | every failure token read - a record is never longer than that Worker's own limit |
+| 0.99.65 | the 0.99.64 Worker (`test-fixtures/worker-health-counts.js`, the one deployed today) | 204 | the failure tokens as before, `slow` and `recovered` tokens dropped, `double6..9` right, no `double10..12`; a record with only the new families is *not reported* there - which is why the new Worker is deployed first |
+| 0.99.65, the longest record the client writes (832 characters) | the 0.99.64 Worker | 204 | every failure token read - a record is never longer than that Worker's own limit |
 | a bad id, GET, bad JSON, over 4096 bytes | new | 400, 405, 400, 413 | nothing (unchanged) |
 
 ## Reading the numbers
@@ -211,14 +232,18 @@ sound), then every failure event seen - installs (`count(DISTINCT index1)`),
 records carrying it and the total count - and, apart, the builds that send no
 failure counts, which are *not measured*.
 
-Then **Slow frames, by version** (0.99.64): per version, the installs that
+Then **Slow frames, by version** (0.99.65): per version, the installs that
 reported, the installs with at least one slow frame, slow frames per 1,000 records
 and those of a second or more per 1,000, and the top five scopes (installs, records,
 slow frames, of a second or more); and **Recovered from, by version**: per version,
 the installs that reported, those with at least one recovery, the sum, and the top
-five words (installs, records, count). The same rule: only rows with `blob12 = '1'`,
-installs from `count(DISTINCT index1)`, and a version that sends nothing is
-unmeasured, never zero.
+five words (installs, records, count). The same rule: only rows with `blob12 = '1'`
+**and a version that measures them** (the constant
+`$FirstVersionThatMeasuresSlowFramesAndRecoveries`, 0.99.65, compared as a version),
+installs from `count(DISTINCT index1)`; every other version seen - 0.99.64, whose
+rows carry zeros it never measured, a pre-release, an odd string, a build with no
+`health` at all - is listed apart as *not measured*, never printed as a zero, and
+moves no figure of the versions that did measure (every figure is per version).
 
 The Worker and the reader are held by `worker.test.mjs` (`node --test`, needs
 Node 22.7 or later; registered with ctest as `telemetry_worker`). It imports the

@@ -78,7 +78,7 @@ enum class AudioApi : std::uint8_t {
     Mme, DirectSound, Wasapi, Wdmks, Asio, Alsa, Jack, Oss, CoreAudio, None, Other
 };
 
-// WHAT THE PROGRAM RECOVERED FROM (0.99.64): a fault it met and carried on from
+// WHAT THE PROGRAM RECOVERED FROM (0.99.65): a fault it met and carried on from
 // without telling the person. One fixed word each; a "kind" of one of these is
 // another word, never a qualifier made from data. The order is the written order
 // of the words in a record. Each has ONE site that counts it (the survey in
@@ -160,7 +160,7 @@ std::string tokenPluginInstall(InstallClass c);
 std::string tokenPluginLoad(LoadClass c);
 std::string tokenRecordFail();
 
-// SLOW FRAMES (0.99.64). The scope is a frame scope's own name as
+// SLOW FRAMES (0.99.65). The scope is a frame scope's own name as
 // core/frame_timing.hpp spells it (hyphens included: "plugin-panels",
 // "plugins-reload") - every one of them but `user-wait`, which is time a person
 // set the pace of and is never counted, so it is not a word. The tier is the

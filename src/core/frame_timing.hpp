@@ -85,7 +85,7 @@
 //    What happens BEFORE the first frame (the window, the plugin scan) is not a
 //    frame and is not measured here.
 //
-// THE USAGE RECORD (0.99.64). The process's own timer - and no timer a test builds
+// THE USAGE RECORD (0.99.65). The process's own timer - and no timer a test builds
 // - also counts every slow frame it commits into core/health_events.hpp's ledger
 // as `slow.<scope>.<tier>`, the scope's own name and a tier word (`250ms`, `1s`,
 // `5s`), in the record the usage report sends (PRIVACY.md, "Failures that are not

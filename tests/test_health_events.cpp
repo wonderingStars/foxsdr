@@ -672,7 +672,7 @@ void testTheGlobalLedgerIsWhatTheHelpersCountInto() {
 }
 
 // ---------------------------------------------------------------------------
-// SLOW FRAMES and RECOVERIES (0.99.64, the second pass over this vocabulary).
+// SLOW FRAMES and RECOVERIES (0.99.65, the second pass over this vocabulary).
 // ---------------------------------------------------------------------------
 using cascade::core::FrameScope;
 using cascade::core::kFrameScopeCount;

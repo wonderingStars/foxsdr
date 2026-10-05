@@ -478,7 +478,7 @@ struct AppWindowTestAccess {
 
     static void rescan(AppWindow& a) { a.rescanPlugins(); }
 
-    // --- what the program recovered from (0.99.64) ---
+    // --- what the program recovered from (0.99.65) ---
     static void reopenAfterFault(AppWindow& a) { a.reopenAfterDriverFault(); }
     // A settings save, through the window's own writer made to refuse (a read-only profile, a full
     // disk, a file another program holds) or to accept; waits for the worker the way the frame loop does.
@@ -1056,7 +1056,7 @@ void testTheRealApplicationCountsKeepsAndClears() {
 }
 
 // ---------------------------------------------------------------------------
-// WHAT THE PROGRAM RECOVERED FROM (0.99.64), counted where the window decides it. Each word is
+// WHAT THE PROGRAM RECOVERED FROM (0.99.65), counted where the window decides it. Each word is
 // driven through its real trigger where one can be made here and through the nearest seam where
 // not; the header of each block says which.
 // ---------------------------------------------------------------------------
@@ -1194,7 +1194,7 @@ void testRecoveriesAreCountedWhereTheWindowMeetsThem() {
 }
 
 // ---------------------------------------------------------------------------
-// SLOW FRAMES THROUGH THE REAL WINDOW (0.99.64): a frame held inside a named scope by the
+// SLOW FRAMES THROUGH THE REAL WINDOW (0.99.65): a frame held inside a named scope by the
 // application's own test hook (FOXSDR_FRAME_STALL, as tests/test_slow_frames_app.cpp does) ends
 // in the ledger's FILE, which is where the next start-up's record reads it.
 // ---------------------------------------------------------------------------

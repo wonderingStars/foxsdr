@@ -4090,7 +4090,7 @@ void AppWindow::healthPoll() {
         cascade::core::health::noteRadioData(healthWatchKind_);
     }
     // WHAT THE PROGRAM RECOVERED FROM IN PLACES THIS WINDOW MUST NOT COUNT FROM
-    // (0.99.64): the flags a plugin's thread raised, and four counters the
+    // (0.99.65): the flags a plugin's thread raised, and four counters the
     // pipeline's threads and a vendor call's worker keep. Every one is read here,
     // by a poll the frame loop already makes - nothing is counted on the DSP,
     // source or audio thread, and the cost is one atomic exchange and four relaxed

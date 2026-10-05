@@ -139,7 +139,7 @@ const std::vector<VocabularyEntry>& vocabulary() {
         {"plug_inst", {installWords()}, false},
         {"plug_load", {loadWords()}, true},
         {"rec_fail", {}, false},
-        // 0.99.64, the second pass: LAST in the written order, so a record an older
+        // 0.99.65: LAST in the written order, so a record an older
         // Worker reads has every earlier token where it always was.
         {"slow", {scopeWordList(), tierWordList()}, false},
         {"recovered", {recoveredWordList()}, false},
@@ -974,7 +974,7 @@ void notePluginLoadRefused(LoadClass c) { note(tokenPluginLoad(c)); }
 void noteRecordFailed() { note(tokenRecordFail()); }
 
 // ---------------------------------------------------------------------------
-// Slow frames, and what the program recovered from (0.99.64)
+// Slow frames, and what the program recovered from (0.99.65)
 // ---------------------------------------------------------------------------
 
 const std::vector<std::string>& slowScopeWords() { return scopeWordList(); }

@@ -228,7 +228,7 @@ test('nothing outside the vocabulary can be written into the dataset', async () 
     'scan_none= 1', 'scan_none=1x', 'scan_none=-1', 'scan_none=1.5', 'scan_none=',
     'scan_none=00001', 'sound_ok.wasapi=١', 'scan_none\n=1', 'rec_fail=1;DROP TABLE',
     'RADIO_FAIL.rtlsdr.busy=1', ' scan_none=1', 'plug_load.abi =1',
-    // the second pass: user-wait is not a word, a tier is one of three, a scope is a word, a recovery is one word
+    // slow frames and recoveries (0.99.65): user-wait is not a word, a tier is one of three, a scope is a word, a recovery is one word
     'slow.user-wait.250ms=1', 'slow.rail.2s=1', 'slow.rail=1', 'slow.Rail.250ms=1', 'slow.my-panel.1s=1',
     'slow.rail.250ms.x=1', 'recovered.nope=1', 'recovered.audio.x=1', 'recovered=1', 'recovered.Audio=1',
     'recovered.C:\\Users\\someone=1',
@@ -352,7 +352,7 @@ test('the column budget: Analytics Engine allows 20 blobs and 20 doubles, and th
   assert.ok(biggest < 16384);
 });
 
-// ---- Slow frames and recoveries (0.99.64, the second pass) ---------------------
+// ---- Slow frames and recoveries (0.99.65) ---------------------------------------
 //
 // The same `health` string carries two more families. Compatibility is held in both
 // directions against the Worker as it was when the failure counts shipped, kept byte
@@ -373,9 +373,13 @@ async function postTo(workerModule, body) {
 }
 const healthCountsWorker = (await import('./test-fixtures/worker-health-counts.js')).default;
 
+// The two clients: 0.99.65 is the first to send slow frames and recoveries, 0.99.64 sent failure counts only.
+function newRecord() { return { ...oldRecord(), v: '0.99.65' }; }
+function record064() { return { ...oldRecord(), v: '0.99.64' }; }
+
 test('slow frames and recoveries are stored in blob13 in the written order, and fill double10..12', async () => {
   const sent = `${HEALTH},${SLOW},${RECOVERED}`;
-  const p = (await post({ ...oldRecord(), stalls: 0, health: sent })).usage[0];
+  const p = (await post({ ...newRecord(), stalls: 0, health: sent })).usage[0];
   assert.equal(p.blobs[11], '1');
   // events < rail < plugins-reload in the written order; within rail, 250ms before 1s
   assert.equal(p.blobs[12], `${HEALTH},slow.events.250ms=4,slow.rail.250ms=3,slow.rail.1s=2,`
@@ -388,7 +392,7 @@ test('slow frames and recoveries are stored in blob13 in the written order, and 
 
 test('the new sums are of the validated tokens, never a number the client sent', async () => {
   const rec = {
-    ...oldRecord(),
+    ...newRecord(),
     health: 'slow.rail.250ms=1,slow.user-wait.5s=500,recovered.audio=1,recovered.nope=900',
     slowFrames: 9999, slow: 9999, recovered: 9999, healthSlow: 9999,   // fields nobody reads
   };
@@ -396,7 +400,7 @@ test('the new sums are of the validated tokens, never a number the client sent',
   assert.equal(p.blobs[12], 'slow.rail.250ms=1,recovered.audio=1');
   assert.deepEqual(p.doubles.slice(9, 12), [1, 0, 1]);
   // a 5 s frame counts in "a second or more", and only there on top of the total
-  const five = (await post({ ...oldRecord(), health: 'slow.startup.5s=2' })).usage[0];
+  const five = (await post({ ...newRecord(), health: 'slow.startup.5s=2' })).usage[0];
   assert.deepEqual(five.doubles.slice(9, 12), [2, 2, 0]);
 });
 
@@ -405,7 +409,7 @@ test('the cases both implementations read: the selection of the worst, the order
   assert.ok(cases.length >= 12);
   for (const c of cases) {
     assert.ok(c.input.length <= 832, c.name);
-    const p = (await post({ ...oldRecord(), health: c.input })).usage[0];
+    const p = (await post({ ...newRecord(), health: c.input })).usage[0];
     if (c.expected === '') {
       assert.equal(p.blobs[11], '', `${c.name}: a text with nothing legal in it is not reported`);
       assert.equal(p.blobs[12], '', c.name);
@@ -421,27 +425,27 @@ test('the caps: eight slow tokens and eight recoveries, over them the worst are 
   const recovered = vocabularyFromWorker().find((e) => e.name === 'recovered').qualifiers[0];
   // at the boundary: exactly eight slow tokens, all kept
   const eight = scopes.slice(0, 8).map((s) => `slow.${s}.250ms=1`).join(',');
-  assert.equal((await post({ ...oldRecord(), health: eight })).usage[0].blobs[12], eight);
+  assert.equal((await post({ ...newRecord(), health: eight })).usage[0].blobs[12], eight);
   // one more, in any order: the one that goes is the last in the written order
   const nine = scopes.slice(0, 9).map((s) => `slow.${s}.250ms=1`);
   const shuffled = [...nine].reverse().join(',');
-  assert.equal((await post({ ...oldRecord(), health: shuffled })).usage[0].blobs[12], eight);
+  assert.equal((await post({ ...newRecord(), health: shuffled })).usage[0].blobs[12], eight);
   // the other family has its own cap and takes nothing from the first
   const mixed = `${eight},${recovered.slice(0, 8).map((w) => `recovered.${w}=1`).join(',')}`;
-  assert.equal((await post({ ...oldRecord(), health: mixed })).usage[0].blobs[12], mixed);
+  assert.equal((await post({ ...newRecord(), health: mixed })).usage[0].blobs[12], mixed);
   const many = `${mixed},recovered.${recovered[8]}=1,slow.${scopes[8]}.5s=1`;
-  const stored = (await post({ ...oldRecord(), health: many })).usage[0].blobs[12].split(',');
+  const stored = (await post({ ...newRecord(), health: many })).usage[0].blobs[12].split(',');
   assert.equal(stored.filter((t) => t.startsWith('slow.')).length, 8);
   assert.equal(stored.filter((t) => t.startsWith('recovered.')).length, 8);
   assert.ok(stored.includes(`slow.${scopes[8]}.5s=1`), 'the 5 s frame is kept over a stutter');
   // the failure families are not touched by either
   const withFailures = `upd_dl=1,${many}`;
-  assert.ok((await post({ ...oldRecord(), health: withFailures })).usage[0].blobs[12].startsWith('upd_dl=1,'));
+  assert.ok((await post({ ...newRecord(), health: withFailures })).usage[0].blobs[12].startsWith('upd_dl=1,'));
 });
 
 test('NEW CLIENT (slow frames, recoveries) -> OLD WORKER: a 204, the failure tokens read, the new ones dropped', async () => {
   const sent = `${HEALTH},${SLOW},${RECOVERED}`;
-  const old = await postTo(healthCountsWorker, { ...oldRecord(), stalls: 0, health: sent });
+  const old = await postTo(healthCountsWorker, { ...newRecord(), stalls: 0, health: sent });
   assert.equal(old.status, 204);
   const p = old.usage[0];
   assert.equal(p.blobs[11], '1');
@@ -449,12 +453,12 @@ test('NEW CLIENT (slow frames, recoveries) -> OLD WORKER: a 204, the failure tok
   assert.deepEqual(p.doubles.slice(5, 9), [2, 3, 3, 1]);
   assert.equal(p.doubles.length, 9);                                   // it has no double10..12
   // ...and the same record as the NEW Worker writes it: the same first thirteen blobs but for the text
-  const now = (await post({ ...oldRecord(), stalls: 0, health: sent })).usage[0];
+  const now = (await post({ ...newRecord(), stalls: 0, health: sent })).usage[0];
   assert.deepEqual(now.blobs.slice(0, 12), p.blobs.slice(0, 12));
   assert.deepEqual(now.doubles.slice(0, 9), p.doubles);
   // A record with ONLY the new families is, to the old Worker, nothing it understands: not reported,
   // never zero - and the record is still taken.
-  const only = await postTo(healthCountsWorker, { ...oldRecord(), health: `${SLOW},${RECOVERED}` });
+  const only = await postTo(healthCountsWorker, { ...newRecord(), health: `${SLOW},${RECOVERED}` });
   assert.equal(only.status, 204);
   assert.equal(only.usage[0].blobs[11], '');
   assert.deepEqual(only.usage[0].doubles.slice(0, 5), [12, 1, 3600, 3000, 0]);
@@ -479,23 +483,26 @@ test('NEW CLIENT (slow frames, recoveries) -> OLD WORKER: a 204, the failure tok
   let record = text;
   for (const e of extra) { if (record.length + 1 + e.length <= 832) { record += `,${e}`; } }
   assert.ok(record.length <= 832);
-  const oldWide = (await postTo(healthCountsWorker, { ...oldRecord(), health: record })).usage[0];
+  const oldWide = (await postTo(healthCountsWorker, { ...newRecord(), health: record })).usage[0];
   assert.equal(oldWide.blobs[11], '1');
   assert.equal(oldWide.blobs[12].split(',').length, 24);              // every failure token, none lost to the new ones
   // ...and the NEW Worker keeps all of it - the failure tokens AND the slow ones that fit beside them -
   // because the cap on the failure tokens is not the cap on the families after them.
-  const newWide = (await post({ ...oldRecord(), health: record })).usage[0];
+  const newWide = (await post({ ...newRecord(), health: record })).usage[0];
   assert.equal(newWide.blobs[12], record);
   assert.ok(newWide.blobs[12].split(',').length > 24, 'slow tokens beside 24 failure tokens are kept');
 });
 
-test('OLD CLIENT (failure counts only) -> NEW WORKER: the row the old Worker wrote, and zeros in the new columns', async () => {
-  for (const body of [oldRecord(), { ...oldRecord(), stalls: 2 }, { ...oldRecord(), stalls: 2, health: HEALTH },
-    { ...oldRecord(), health: '' }]) {
+test('0.99.64 CLIENT (failure counts only) -> NEW WORKER: the row the 0.99.64 Worker wrote, and zeros in the new columns', async () => {
+  for (const body of [oldRecord(), { ...record064(), stalls: 2 }, { ...record064(), stalls: 2, health: HEALTH },
+    { ...record064(), health: '' }]) {
     const was = (await postTo(healthCountsWorker, body)).usage[0];
     const now = (await post(body)).usage[0];
     assert.deepEqual(now.blobs, was.blobs, JSON.stringify(body.health));
     assert.deepEqual(now.doubles.slice(0, 9), was.doubles);
+    // These zeros are what the new Worker writes for a build that never measured slow frames or recoveries.
+    // They mean "not measured"; the Worker cannot say so (blob12 is '1' on these rows), so the reader does,
+    // by version (usage.ps1, telemetry-worker/README.md).
     assert.deepEqual(now.doubles.slice(9, 12), [0, 0, 0]);
   }
 });
@@ -763,35 +770,58 @@ readerTest('when no build sends failure counts the reader says unmeasured and pr
 });
 
 readerTest('the reader prints slow frames per version: installs with any, per 1,000 records, the top scopes, only rows that SENT counts', async () => {
+  // A BUILD THAT MEASURES slow frames is 0.99.65 or later. Every row below with a version before that - the
+  // 0.99.64 ones carry blob12 = '1' and ZEROS in double10..12 because that build never measured them -
+  // must come out as not measured, and must move no figure of the rows that did.
   const { server, queries, port } = await standIn({
-    reporting: [], stalled: [], unmeasured: [], healthVersions: [], seen: [],
+    reporting: [], stalled: [], unmeasured: [], healthVersions: [],
+    seen: [{ version: '0.99.50' }, { version: '0.99.64' }, { version: '0.99.65' }, { version: '0.99.100' }, { version: '0.99.9' },
+      { version: '0.99.65-rc1' }, { version: 'junk' }, { version: '' }],
     slowVersions: [
-      { version: '0.99.64', installs: '4', sessions: '20', slow: '30', slowLong: '6' },
-      { version: '0.99.65', installs: '2', sessions: '5', slow: '0', slowLong: '0' },
+      { version: '0.99.64', installs: '9', sessions: '100', slow: '0', slowLong: '0' },
+      { version: '0.99.65', installs: '4', sessions: '20', slow: '30', slowLong: '6' },
+      { version: '0.99.100', installs: '2', sessions: '4', slow: '2', slowLong: '0' },
+      { version: '0.99.9', installs: '1', sessions: '7', slow: '0', slowLong: '0' },        // text sorts above 0.99.65; it is older
+      { version: '0.99.65-rc1', installs: '1', sessions: '3', slow: '0', slowLong: '0' },   // a pre-release is never assumed
+      { version: 'junk', installs: '1', sessions: '3', slow: '0', slowLong: '0' },
+      { version: '', installs: '1', sessions: '3', slow: '0', slowLong: '0' },
     ],
-    withSlow: [{ version: '0.99.64', installs: '3' }],
+    withSlow: [{ version: '0.99.65', installs: '3' }, { version: '0.99.100', installs: '2' }],
     slowStrings: [
-      { version: '0.99.64', slowHealth: 'slow.rail.250ms=3,slow.rail.1s=1,slow.plugins-reload.5s=1', sessions: '4' },
-      { version: '0.99.64', slowHealth: 'slow.rail.250ms=2', sessions: '5' },
+      { version: '0.99.65', slowHealth: 'slow.rail.250ms=3,slow.rail.1s=1,slow.plugins-reload.5s=1', sessions: '4' },
+      { version: '0.99.65', slowHealth: 'slow.rail.250ms=2', sessions: '5' },
       // text that is not the vocabulary - an injection, and the one scope that is not a word - never reaches a query
-      { version: '0.99.64', slowHealth: "slow.rail.250ms=1,slow.evil'--.1s=1,slow.user-wait.250ms=9", sessions: '1' },
+      { version: '0.99.65', slowHealth: "slow.rail.250ms=1,slow.evil'--.1s=1,slow.user-wait.250ms=9", sessions: '1' },
+      // a row of a build that does not measure carrying a slow token anyway is not read as a measurement
+      { version: '0.99.64', slowHealth: 'slow.rail.250ms=9', sessions: '1' },
     ],
     slowInstalls: {
-      rail: [{ version: '0.99.64', installs: '3' }],
-      'plugins-reload': [{ version: '0.99.64', installs: '1' }],
+      rail: [{ version: '0.99.65', installs: '3' }, { version: '0.99.64', installs: '1' }],
+      'plugins-reload': [{ version: '0.99.65', installs: '1' }],
     },
   });
   try {
     const r = await runAgainst(port);
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stdout, /Slow frames, by version/);
+    const section = r.stdout.slice(r.stdout.indexOf('Slow frames, by version'), r.stdout.indexOf('Recovered from, by version'));
     // version, installs, sessions, installs with any slow frame, slow per 1,000 records, 1 s+ per 1,000
-    assert.match(r.stdout, /0\.99\.64\s+4\s+20\s+3\s+1500\.0\s+300\.0\b/);
-    // a reporting version with no slow frame is a real zero, printed
-    assert.match(r.stdout, /0\.99\.65\s+2\s+5\s+0\s+0\.0\s+0\.0\b/);
+    assert.match(section, /0\.99\.65\s+4\s+20\s+3\s+1500\.0\s+300\.0\b/);
+    // (the 1500.0 above is per version: the unmeasured 0.99.64's 100 sessions of zeros moved nothing)
+    // versions are compared as VERSIONS: 0.99.100 measures, 0.99.9 does not
+    assert.match(section, /0\.99\.100\s+2\s+4\s+2\s+500\.0\s+0\.0\b/);
+    // none of these is a row of the table, and none is shown as a zero
+    for (const v of ['0\\.99\\.64', '0\\.99\\.9', '0\\.99\\.65-rc1', 'junk', '0\\.99\\.50']) {
+      assert.doesNotMatch(section, new RegExp(`^\\s+${v}\\s+\\d`, 'm'), `${v} must not be a table row`);
+    }
+    const notMeasured = section.split('\n').find((l) => /Not measured/.test(l)) || '';
+    // exactly the versions that do not measure - and neither 0.99.65 nor 0.99.100, which do
+    assert.deepEqual(notMeasured.slice(notMeasured.lastIndexOf('): ') + 3).split(', '),
+      ['0.99.50', '0.99.64', '0.99.9', '0.99.65-rc1', 'junk', '(not reported)']);
     // top scopes: installs (count(DISTINCT index1)), records carrying it, slow frames, of a second or more
-    assert.match(r.stdout, /0\.99\.64\s+rail\s+3\s+10\s+27\s+4\b/);
-    assert.match(r.stdout, /0\.99\.64\s+plugins-reload\s+1\s+4\s+4\s+4\b/);
+    assert.match(section, /0\.99\.65\s+rail\s+3\s+10\s+27\s+4\b/);
+    assert.match(section, /0\.99\.65\s+plugins-reload\s+1\s+4\s+4\s+4\b/);
+    assert.doesNotMatch(section, /0\.99\.64\s+rail/);
     assert.doesNotMatch(r.stdout, /user-wait/);
 
     const slowQueries = queries.filter((q) => /double10|slowHealth|slow\./.test(q));
@@ -824,46 +854,87 @@ readerTest('when no build sends slow frames the reader says unmeasured; a report
   } finally {
     none.server.close();
   }
-  const zero = await standIn({
-    reporting: [], stalled: [], unmeasured: [], healthVersions: [], seen: [],
+  // ONLY a build that does not measure it (0.99.64: blob12 = '1', zeros in double10..12): unmeasured, never zero.
+  const early = await standIn({
+    reporting: [], stalled: [], unmeasured: [], healthVersions: [], seen: [{ version: '0.99.64' }],
     slowVersions: [{ version: '0.99.64', installs: '3', sessions: '3', slow: '0', slowLong: '0' }],
+    slowStrings: [],
+  });
+  try {
+    const r = await runAgainst(early.port);
+    assert.equal(r.status, 0, r.stderr);
+    const section = r.stdout.slice(r.stdout.indexOf('Slow frames, by version'), r.stdout.indexOf('Recovered from, by version'));
+    assert.match(section, /No build in this window reports slow frames yet/);
+    assert.match(section, /not zero slow frames/);
+    assert.match(section, /Not measured[^\n]*0\.99\.64/);
+    assert.doesNotMatch(section, /0\.99\.64\s+3\s+3/);
+    assert.doesNotMatch(section, /w\/ slow/);
+    assert.doesNotMatch(section, /No slow frame was reported/);
+  } finally {
+    early.server.close();
+  }
+  // A build that measures it and had none: a real zero, printed - beside an unmeasured 0.99.64 that is not.
+  const zero = await standIn({
+    reporting: [], stalled: [], unmeasured: [], healthVersions: [], seen: [{ version: '0.99.64' }, { version: '0.99.65' }],
+    slowVersions: [
+      { version: '0.99.64', installs: '3', sessions: '3', slow: '0', slowLong: '0' },
+      { version: '0.99.65', installs: '3', sessions: '3', slow: '0', slowLong: '0' },
+    ],
     slowStrings: [],
   });
   try {
     const r = await runAgainst(zero.port);
     assert.equal(r.status, 0, r.stderr);
-    assert.match(r.stdout, /0\.99\.64\s+3\s+3\s+0\s+0\.0\s+0\.0\b/);
-    assert.match(r.stdout, /No slow frame was reported by any build in this window/);
+    const section = r.stdout.slice(r.stdout.indexOf('Slow frames, by version'), r.stdout.indexOf('Recovered from, by version'));
+    assert.match(section, /0\.99\.65\s+3\s+3\s+0\s+0\.0\s+0\.0\b/);
+    assert.doesNotMatch(section, /^\s+0\.99\.64\s+\d/m);
+    assert.match(section, /Not measured[^\n]*0\.99\.64/);
+    assert.match(section, /No slow frame was reported by any build in this window/);
   } finally {
     zero.server.close();
   }
 });
 
 readerTest('the reader prints what was recovered from per version: installs with any, the top words, only rows that SENT counts', async () => {
+  // As for slow frames: recoveries are measured from 0.99.65; a 0.99.64 row (blob12 = '1', double12 = 0) is not zero.
   const { server, queries, port } = await standIn({
-    reporting: [], stalled: [], unmeasured: [], healthVersions: [], seen: [],
-    recVersions: [{ version: '0.99.64', installs: '4', sessions: '20', recoveries: '7' }],
-    withRec: [{ version: '0.99.64', installs: '2' }],
+    reporting: [], stalled: [], unmeasured: [], healthVersions: [],
+    seen: [{ version: '0.99.64' }, { version: '0.99.65' }, { version: '0.99.65-rc1' }, { version: 'junk' }],
+    recVersions: [
+      { version: '0.99.64', installs: '9', sessions: '100', recoveries: '0' },
+      { version: '0.99.65', installs: '4', sessions: '20', recoveries: '7' },
+      { version: '0.99.65-rc1', installs: '1', sessions: '2', recoveries: '0' },
+      { version: 'junk', installs: '1', sessions: '2', recoveries: '0' },
+    ],
+    withRec: [{ version: '0.99.65', installs: '2' }],
     recStrings: [
-      { version: '0.99.64', recoveredHealth: 'recovered.audio=1,recovered.srcthread=2', sessions: '3' },
-      { version: '0.99.64', recoveredHealth: 'recovered.audio=1', sessions: '2' },
-      { version: '0.99.64', recoveredHealth: "recovered.evil'--=1,recovered.cfgsave=1", sessions: '1' },
+      { version: '0.99.65', recoveredHealth: 'recovered.audio=1,recovered.srcthread=2', sessions: '3' },
+      { version: '0.99.65', recoveredHealth: 'recovered.audio=1', sessions: '2' },
+      { version: '0.99.65', recoveredHealth: "recovered.evil'--=1,recovered.cfgsave=1", sessions: '1' },
+      { version: '0.99.64', recoveredHealth: 'recovered.audio=5', sessions: '1' },   // not read as a measurement
     ],
     healthInstalls: {
-      'recovered.audio': [{ version: '0.99.64', installs: '2' }],
-      'recovered.srcthread': [{ version: '0.99.64', installs: '1' }],
-      'recovered.cfgsave': [{ version: '0.99.64', installs: '1' }],
+      'recovered.audio': [{ version: '0.99.65', installs: '2' }, { version: '0.99.64', installs: '1' }],
+      'recovered.srcthread': [{ version: '0.99.65', installs: '1' }],
+      'recovered.cfgsave': [{ version: '0.99.65', installs: '1' }],
     },
   });
   try {
     const r = await runAgainst(port);
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stdout, /Recovered from, by version/);
-    assert.match(r.stdout, /0\.99\.64\s+4\s+20\s+2\s+7\b/);
+    const section = r.stdout.slice(r.stdout.indexOf('Recovered from, by version'));
+    assert.match(section, /0\.99\.65\s+4\s+20\s+2\s+7\b/);
     // word: installs, records, count
-    assert.match(r.stdout, /0\.99\.64\s+recovered\.audio\s+2\s+5\s+5\b/);
-    assert.match(r.stdout, /0\.99\.64\s+recovered\.srcthread\s+1\s+3\s+6\b/);
-    assert.match(r.stdout, /0\.99\.64\s+recovered\.cfgsave\s+1\s+1\s+1\b/);
+    assert.match(section, /0\.99\.65\s+recovered\.audio\s+2\s+5\s+5\b/);
+    assert.match(section, /0\.99\.65\s+recovered\.srcthread\s+1\s+3\s+6\b/);
+    assert.match(section, /0\.99\.65\s+recovered\.cfgsave\s+1\s+1\s+1\b/);
+    // the unmeasured builds are not rows, not zeros and not words of the table - they are named apart
+    for (const v of ['0\\.99\\.64', '0\\.99\\.65-rc1', 'junk']) {
+      assert.doesNotMatch(section, new RegExp(`^\\s+${v}\\s+\\S`, 'm'), `${v} must not be a row`);
+    }
+    const notMeasured = section.split('\n').find((l) => /Not measured/.test(l)) || '';
+    for (const v of ['0.99.64', '0.99.65-rc1', 'junk']) { assert.ok(notMeasured.includes(v), `${v}: ${notMeasured}`); }
     const recQueries = queries.filter((q) => /double12|recoveredHealth|recovered\./.test(q));
     assert.ok(recQueries.length >= 6, 'versions, installs with any, count strings, one install count per word');
     for (const q of queries) {
@@ -890,18 +961,52 @@ readerTest('when no build sends recoveries the reader says unmeasured; a reporti
   } finally {
     none.server.close();
   }
-  const zero = await standIn({
-    reporting: [], stalled: [], unmeasured: [], healthVersions: [], seen: [],
+  // ONLY a build that does not measure it (0.99.64: blob12 = '1', double12 = 0): unmeasured, never zero.
+  const early = await standIn({
+    reporting: [], stalled: [], unmeasured: [], healthVersions: [], seen: [{ version: '0.99.64' }],
     recVersions: [{ version: '0.99.64', installs: '3', sessions: '3', recoveries: '0' }], recStrings: [],
+  });
+  try {
+    const r = await runAgainst(early.port);
+    assert.equal(r.status, 0, r.stderr);
+    const section = r.stdout.slice(r.stdout.indexOf('Recovered from, by version'));
+    assert.match(section, /No build in this window reports recoveries yet/);
+    assert.match(section, /not zero recoveries/);
+    assert.match(section, /Not measured[^\n]*0\.99\.64/);
+    assert.doesNotMatch(section, /0\.99\.64\s+3\s+3/);
+    assert.doesNotMatch(section, /w\/ recovery|No recovery was reported/);
+  } finally {
+    early.server.close();
+  }
+  // A build that measures it and recovered from nothing: a real zero, beside an unmeasured 0.99.64 that is not.
+  const zero = await standIn({
+    reporting: [], stalled: [], unmeasured: [], healthVersions: [], seen: [{ version: '0.99.64' }, { version: '0.99.65' }],
+    recVersions: [
+      { version: '0.99.64', installs: '3', sessions: '3', recoveries: '0' },
+      { version: '0.99.65', installs: '3', sessions: '3', recoveries: '0' },
+    ],
+    recStrings: [],
   });
   try {
     const r = await runAgainst(zero.port);
     assert.equal(r.status, 0, r.stderr);
-    assert.match(r.stdout, /0\.99\.64\s+3\s+3\s+0\s+0\b/);
-    assert.match(r.stdout, /No recovery was reported by any build in this window/);
+    const section = r.stdout.slice(r.stdout.indexOf('Recovered from, by version'));
+    assert.match(section, /0\.99\.65\s+3\s+3\s+0\s+0\b/);
+    assert.doesNotMatch(section, /^\s+0\.99\.64\s+\d/m);
+    assert.match(section, /Not measured[^\n]*0\.99\.64/);
+    assert.match(section, /No recovery was reported by any build in this window/);
   } finally {
     zero.server.close();
   }
+});
+
+readerTest('the rule that decides which builds measure slow frames and recoveries is one named constant, and the README states it', () => {
+  const reader = readFileSync(`${here}usage.ps1`, 'utf8');
+  const constants = reader.match(/^\$FirstVersionThatMeasuresSlowFramesAndRecoveries\s*=\s*'([0-9.]+)'/m);
+  assert.ok(constants, 'one named constant');
+  assert.equal(constants[1], '0.99.65');
+  const readme = readFileSync(`${here}README.md`, 'utf8').replace(/\s+/g, ' ');
+  assert.match(readme, /slow frames and recoveries are measured from 0\.99\.65; a row from an earlier build is unmeasured whatever its doubles say/);
 });
 
 readerTest('a reporting build with no failure at all says so, and prints no event rows', async () => {

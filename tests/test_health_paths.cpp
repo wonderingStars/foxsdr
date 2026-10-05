@@ -168,7 +168,7 @@ void testNothingOnTheHotPathsCounts() {
     CHECK(note != std::string::npos && locked != std::string::npos && note < locked);
 }
 
-// WHAT THE PROGRAM RECOVERED FROM (0.99.64), where it is counted and where it must NOT be.
+// WHAT THE PROGRAM RECOVERED FROM (0.99.65), where it is counted and where it must NOT be.
 //
 //   - A signal thread (the source and DSP threads in pipeline.cpp, everything in src/dsp, the audio
 //     callback, the plugin runner that runs on the DSP thread) never counts: its recoveries are COUNTERS

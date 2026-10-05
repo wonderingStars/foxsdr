@@ -1202,7 +1202,7 @@ int main(int argc, char** argv) {
         CHECK(!r.fellBackInProcess);
     }
 
-    // --- THE USAGE RECORD (0.99.64): a child that died and was CONTAINED is a recovery ----
+    // --- THE USAGE RECORD (0.99.65): a child that died and was CONTAINED is a recovery ----
     // `recovered.enumchild`, counted where the death is recorded, once a session. The real
     // trigger: this test's own helper dying, through the same enumerateIsolated the window calls.
     {

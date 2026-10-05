@@ -2015,14 +2015,15 @@ version, operating system, session length, which modes and plugins get used,
 which radio model, how many times the window froze because the display
 driver was waiting (a bare number, nothing about the freeze itself), and — since
 0.99.64 — how many times something quietly did not work: a radio that would not
-open, no sound output, an update or a plugin install that failed; how many times
-the window was slow (a frame of a quarter of a second or more) and which part of
-it was (`rail`, `spectrum`, `saves` - FoxSDR's own names for its parts); and how
-many times FoxSDR met a fault at one of a fixed list of places and carried on
-(the sound output restarted, a radio reopened, a settings file that could not be
-written) - as counts of a fixed list of kinds and never any message, name or
-path, and only while Diagnostics is on as well. All against a random identifier
-created on your machine. Switching it off deletes that identifier.
+open, no sound output, an update or a plugin install that failed, and — since
+0.99.65 — how many times the window was slow (a frame of a quarter of a second or
+more) and which part of it was (`rail`, `spectrum`, `saves` - FoxSDR's own names
+for its parts), and how many times FoxSDR met a fault at one of a fixed list of
+places and carried on (the sound output restarted, a radio reopened, a settings
+file that could not be written) - as counts of a fixed list of kinds and never any
+message, name or path, and only while Diagnostics is on as well. All against a
+random identifier created on your machine. Switching it off deletes that
+identifier.
 
 **It never sends frequencies, anything decoded, your location, or your IP
 address**, and hardware serial numbers are stripped before the radio model is

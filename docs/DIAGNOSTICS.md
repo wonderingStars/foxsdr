@@ -593,9 +593,12 @@ Nothing counts on the DSP or audio threads - `test_health_paths` scans for it.
 `test_health_app.cpp` (the window's wiring and the real binary, including a
 process ended after a failure) hold it.
 
-**Slow frames and recoveries ride the same record (since 0.99.64).** Two more
+**Slow frames and recoveries ride the same record (since 0.99.65).** Two more
 families in the one `health` string, written after the failures: `slow.<scope>.<tier>`
-and `recovered.<what>`.
+and `recovered.<what>`. 0.99.64 shipped the field with the failure counts only, so
+a 0.99.64 record carries neither family and its zeros in the Worker's
+`double10..12` are *unmeasured*, not zero (`telemetry-worker/README.md`, the rule for
+readers; `usage.ps1` applies it by version).
 
 *Slow frames.* `core::FrameTimer::commit` - the slow path of the frame timer, run on
 the window's thread for a frame that was already 250 ms or more - counts one
@@ -1399,7 +1402,7 @@ whoever reads them next (`cascade: frame timing:`, below).
   see *The sentinel*, *The breadcrumb*.
 - `slowFrameCounts()` is a snapshot of the table. The usage record does not read it:
   the process's own timer counts each slow frame into the health ledger as it
-  commits it (`slow.<scope>.<tier>`, 0.99.64, see *Failures that are not crashes*
+  commits it (`slow.<scope>.<tier>`, 0.99.65, see *Failures that are not crashes*
   below; `user-wait` is never counted).
 - A bounded `--frames` run prints one more line at its end, like the worst frame
   gap: `cascade: frame timing: 150 frames, mean 8.40 ms, longest 29.6 ms (in

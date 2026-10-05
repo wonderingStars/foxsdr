@@ -1502,7 +1502,7 @@ int main() {
         resetWedge();
         g_wedgeDeactivate.store(true, std::memory_order_relaxed);
         const unsigned long long abandonedBefore = SoapySource::driverCallsAbandoned();
-        // THE USAGE RECORD (0.99.64): the window's poll reads this very counter and counts a rise as
+        // THE USAGE RECORD (0.99.65): the window's poll reads this very counter and counts a rise as
         // `recovered.vendorcall` (core/health_events.hpp, RecoveryWatch). The real trigger: this wedged
         // deactivateStream, abandoned by the real escape path.
         auto healthLedger = cascade::core::health::globalLedger();

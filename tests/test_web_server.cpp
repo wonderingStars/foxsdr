@@ -520,7 +520,7 @@ void testSpectrumEndpoint() {
 }
 
 void testAHandlerThatThrowsIsCountedOnceASession() {
-    // THE USAGE RECORD (0.99.64): the server survives a handler that throws, answering 500, and that is
+    // THE USAGE RECORD (0.99.65): the server survives a handler that throws, answering 500, and that is
     // a recovery - `recovered.webroute`, once a session, never the message (it can name a path). The
     // real trigger: a status provider that throws, behind the real route on a real socket.
     namespace health = cascade::core::health;
