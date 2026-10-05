@@ -11567,6 +11567,11 @@ void AppWindow::detachAndUnloadPlugins(cascade::core::PhaseClock* phases) {
         if (phases != nullptr) { phases->begin(name); }
     };
 
+    // NOTHING IS LOADED AFTER THIS, so no signature taken for an earlier scan
+    // describes what is loaded (rescanPluginsIfChanged): a removal calls this and
+    // then rescans, and the rescan is what makes the signature true again.
+    pluginScanSigValid_ = false;
+
     // THE ORDER IS THE FEATURE, and it is why this is a function rather than
     // an open-coded sequence: it was open-coded, removeInstalledPlugin() then
     // called unloadAll() on its own, and the careful ordering below existed in
@@ -11630,7 +11635,7 @@ void AppWindow::rescanPlugins() {
     // Scope guard, because there is a `return` in the middle of this function.
     cascade::core::WatchdogPause holdWatchdog(watchdog_);
 
-    // WHERE THE TIME WENT, in one log line per rescan (after 0.99.62). A session of
+    // WHERE THE TIME WENT, in one log line per rescan (0.99.63). A session of
     // 0.99.58 logged the line that opens a rescan and, 119.976 s later, the first
     // of the plugins it had loaded, with nothing between them: six different
     // kinds of wait happen in this function, in a row, on the thread that draws
@@ -11726,6 +11731,33 @@ void AppWindow::rescanPlugins() {
     std::string restoreError;
     if (!restoreQuarantinedPlugins(restoreError)) { pluginEnforceError_ = restoreError; }
 
+    // THE MANIFEST AS THIS SCAN IS ABOUT TO READ IT, noted before it is read: the
+    // signature taken below, after the quarantine, must find it exactly so. The
+    // catalogue worker writes the manifest from its own thread, and a floor
+    // written between the read and the listing would be in the signature and
+    // not in the blocked set - a retired plugin the next automatic rescan would
+    // then decline to look for. Three numbers from one stat; this is the slow
+    // path, which has just taken the folder apart.
+    struct ManifestStamp {
+        bool present = false;
+        std::uint64_t bytes = 0;
+        std::int64_t when = 0;
+    };
+    const auto stampOfManifest = [this]() {
+        ManifestStamp s;
+        const std::filesystem::path m(cascade::core::PluginRepo::manifestPath(pluginDir_));
+        std::error_code ec;
+        const std::uintmax_t bytes = std::filesystem::file_size(m, ec);
+        if (ec) { return s; }
+        const std::filesystem::file_time_type when = std::filesystem::last_write_time(m, ec);
+        if (ec) { return s; }
+        s.present = true;
+        s.bytes = static_cast<std::uint64_t>(bytes);
+        s.when = static_cast<std::int64_t>(when.time_since_epoch().count());
+        return s;
+    };
+    const ManifestStamp manifestRead = stampOfManifest();
+
     std::string invError;
     // A corrupt or absent manifest is an ordinary state and its own kind of
     // fail-open: nothing is recorded, so nothing is retired.
@@ -11755,6 +11787,26 @@ void AppWindow::rescanPlugins() {
     // LoadLibrary of every module, and each one's DllMain, and the descriptor
     // query - the loader and whatever it has to read, off a disk that may be
     // cold or a scanner's.
+    // THE SIGNATURE OF WHAT THE SCAN IS ABOUT TO LOAD (core/plugin_dir_signature.
+    // hpp), taken BEFORE it loads anything and AFTER the quarantine, so it is the
+    // folder as the scan will see it - a retired module already renamed aside -
+    // and so equal to what the next check finds if nobody touches the folder. A
+    // file that changes between this listing and the scan's own is then a
+    // difference the next check sees, never one it misses. Kept only if the
+    // manifest in it is the one the inventory above read; judged at the end, with
+    // what the scan loaded.
+    cascade::core::PluginDirSignature scanSig;
+    bool scanSigOk = (testHooks_.pluginDirSignature != nullptr
+                          ? testHooks_.pluginDirSignature
+                          : &cascade::core::readPluginDirSignature)(pluginDir_, scanSig);
+    if (scanSigOk) {
+        const cascade::core::PluginDirSignature::Entry* m =
+            scanSig.find(cascade::core::PluginRepo::manifestFileName());
+        scanSigOk = (m != nullptr) == manifestRead.present &&
+                    (m == nullptr || (m->bytes == manifestRead.bytes &&
+                                      m->writeTime == manifestRead.when));
+    }
+
     phases.begin("load");
     pluginHost_.scan(pluginDir_);
     phases.begin("restart");
@@ -11789,6 +11841,47 @@ void AppWindow::rescanPlugins() {
     // is only pointed at the runner once they exist — so the DSP thread never
     // sees a half-built set.
     refreshPluginRunner();
+
+    // THE SCAN RAN TO ITS END: the signature taken above is what is loaded, and
+    // rescanPluginsIfChanged may take it as that - unless something this scan did
+    // is not explained by files. A module REFUSED (not turned off as an old copy
+    // of another) may have been refused for what the loader found outside the
+    // folder - a runtime a module needs, since installed - which no listing of
+    // the folder can show, so such a scan is never skipped afterwards. An
+    // enforcement error (a rename that failed, a restore that failed) is a scan
+    // that did not finish what it set out to.
+    bool refused = false;
+    for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
+        if (!p.loaded && p.supersededBy.empty()) { refused = true; }
+    }
+    pluginScanSig_ = std::move(scanSig);
+    pluginScanSigValid_ = scanSigOk && pluginEnforceError_.empty() && !refused;
+}
+
+void AppWindow::rescanPluginsIfChanged() {
+    // THE PAUSE THE RESCAN HOLDS, held across the listing that decides whether
+    // there is one: a folder that is slow to list is the case this exists for,
+    // and the rescan it replaces would have listed it under this same pause and
+    // the same cap - a slow listing here is not a new freeze to report.
+    cascade::core::WatchdogPause holdWatchdog(watchdog_);
+
+    if (pluginScanSigValid_) {
+        // The folder the scan would read now: the same call the rescan makes,
+        // so a folder that moved (the executable's own is no longer writable, a
+        // package) is a different signature without further ado.
+        const std::string dir = cascade::core::PluginHost::defaultPluginDir();
+        cascade::core::PluginDirSignature now;
+        const bool listed = (testHooks_.pluginDirSignature != nullptr
+                                 ? testHooks_.pluginDirSignature
+                                 : &cascade::core::readPluginDirSignature)(dir, now);
+        if (listed && now == pluginScanSig_) {
+            // Neither a name nor a path: which plugins there are is in the
+            // line each scan wrote when it loaded them.
+            cascade::core::diagLogf("plugins: reload skipped - nothing changed since the last scan");
+            return;
+        }
+    }
+    rescanPlugins();
 }
 
 namespace {
@@ -12582,8 +12675,15 @@ void AppWindow::pollPluginAsync() {
             pluginLastUpdateCheck_ = static_cast<std::int64_t>(std::time(nullptr));
             // The floors the worker just cached only take effect on the next
             // scan, and a user who has just been told a plugin is retired
-            // should not have to restart to stop running it.
-            rescanPlugins();
+            // should not have to restart to stop running it. But a fetch that
+            // changed no floor and no file has nothing to take effect: the full
+            // rescan - every decoder destroyed, every module unmapped and mapped
+            // again, on this thread, unbounded - is made only when the plugins
+            // folder is not what the last scan left (rescanPluginsIfChanged).
+            // The worker leaves the manifest alone when the catalogue taught it
+            // nothing (PluginRepo::cacheCataloguePolicies), so "unchanged" is a
+            // state a fetch can leave the folder in.
+            rescanPluginsIfChanged();
             // A cache-write failure is red text next to a catalogue that
             // nevertheless loaded: the list is real, the policy behind it was
             // not remembered, and both facts are shown.
@@ -22805,11 +22905,11 @@ void AppWindow::drawRecorderSection() {
 
     // THE OPEN IS ON A WORKER (gui/record_start.hpp): between the press and the
     // file being there, the button says so instead of the frame waiting for the
-    // disk. Plain English like the lines beside it, not tr(): a key here would
-    // need an entry in every catalogue under resources/lang. After a second of
-    // waiting the line under it says how long, so a slow disk reads as a slow
-    // disk and not as a button that did nothing; a start answered at once
-    // (nearly always) never shows that line.
+    // disk. The labels are passed in already translated (trId at the call
+    // site, where the literal is the catalogue key), the "waiting" line is
+    // translated whole. After a second of waiting the line under it says how
+    // long, so a slow disk reads as a slow disk and not as a button that did
+    // nothing; a start answered at once (nearly always) never shows that line.
     const auto drawStarting = [](const cascade::gui::RecordStart& st, const char* label,
                                  const char* cancelling) -> bool {
         bool cancel = false;
@@ -22821,7 +22921,8 @@ void AppWindow::drawRecorderSection() {
             cancel = ImGui::Button(label, ImVec2(-FLT_MIN, 0.0f));
         }
         if (st.elapsedS() >= 1.0) {
-            ImGui::TextDisabled("Waiting for the disk to open the file: %.0f s", st.elapsedS());
+            ImGui::TextDisabled(tr("Waiting for the disk to open the file: %.0f s"),
+                                st.elapsedS());
         }
         return cancel;
     };
@@ -22829,8 +22930,8 @@ void AppWindow::drawRecorderSection() {
     // IQ take: baseband at the DSP input rate through the pipeline's raw
     // tap. Toggle button: label and action swap with the recorder state.
     if (iqStart_.pending()) {
-        if (drawStarting(iqStart_, "Starting IQ - click to cancel##recIqStarting",
-                         "Cancelling IQ start...##recIqCancelling")) {
+        if (drawStarting(iqStart_, trId("Starting IQ - click to cancel##recIqStarting"),
+                         trId("Cancelling IQ start...##recIqCancelling"))) {
             stopIqRecording();
         }
     } else if (!iqRecorder_.recording()) {
@@ -22847,8 +22948,8 @@ void AppWindow::drawRecorderSection() {
 
     // Audio take: the post-chain 48 kHz output (same point audioTap uses).
     if (audioStart_.pending()) {
-        if (drawStarting(audioStart_, "Starting audio - click to cancel##recAudioStarting",
-                         "Cancelling audio start...##recAudioCancelling")) {
+        if (drawStarting(audioStart_, trId("Starting audio - click to cancel##recAudioStarting"),
+                         trId("Cancelling audio start...##recAudioCancelling"))) {
             stopAudioRecording();
         }
     } else if (!audioRecorder_.recording()) {
@@ -23121,9 +23222,11 @@ void AppWindow::finishRecordStart(bool iq, cascade::gui::RecordStart::Result& r,
         // an accepted rate change ends a take already running. Not started,
         // and said, because nothing went wrong that the user did not do.
         r.file = cascade::core::Recorder::OpenedFile{};  // closes it, unused
+        // Translated where it is set, like the other notes this window keeps in
+        // a member (sdrPlayRestartNote_, gpsRefusal_). The log line below is not.
         recordNotice_ =
-            "The I/Q recording was not started because the input rate changed while its file "
-            "was opening; press Record to start a new one.";
+            tr("The I/Q recording was not started because the input rate changed while its "
+               "file was opening; press Record to start a new one.");
         cascade::core::diagLogf(
             "recorder: the I/Q take was dropped, the input rate changed while its file opened");
         return;

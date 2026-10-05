@@ -2124,8 +2124,9 @@ holds the request, the code and that document to each other in both directions.
   check now runs on a background thread and nothing waits for it; the log says
   once when the folder has not answered for five seconds and once when it does.
   Why that user's folder was slow is not known. Two other places that ask the
-  disk from that thread are not covered: the sizes shown in the Fitted modules
-  window, and the plugin rescan.
+  disk from that thread were not covered by that change: the sizes shown in the
+  Fitted modules window, which 0.99.63 fixed (below), and the plugin rescan,
+  which 0.99.63 only measures and sometimes skips (below).
 - **Closing counts as well, on a longer clock.** Shutting down is where this
   product's worst freeze ever happened, so the watchdog stays armed right
   through it — but closing legitimately waits on the radio driver for a few
@@ -2173,6 +2174,61 @@ holds the request, the code and that document to each other in both directions.
   is in the report file on your machine and in the bundle, and it is not part of
   the report that is sent automatically. Whether this clears the field faults
   that prompted it is untested.
+- **Pressing Record no longer waits for the disk** (0.99.63). A freeze report
+  from 0.99.58 had the window stopped for more than five seconds inside the
+  call that creates a recording's folder and file, on the thread that draws the
+  window; the Record IQ and Record audio buttons, the Record key and the web
+  remote's record controls all made that call. The file is now opened in the
+  background: until it exists the button reads **Starting IQ - click to cancel**
+  (or **Starting audio - ...**), after a second a line under it says how long
+  the disk has been taking, and Stop, or a click on that button, withdraws the
+  start (the file is closed when it arrives and no recording begins). A failed
+  open is reported in the same words as before, a moment later. The log says
+  once when an open has been out for five seconds and once when it returns,
+  naming neither the folder nor the file. Checked in FoxSDR's tests with a
+  stand-in for a slow disk and a real freeze watchdog, not on a real slow disk.
+  **Not covered:** a recording started by a speaker on the patch page still
+  creates its file the old way, on the window's thread.
+- **A plugin reload is skipped when nothing in the plugins folder changed, and
+  says where its time went** (0.99.63). Fetching the plugin catalogue used to
+  unload and load every plugin again whether or not anything had changed, on the
+  thread that draws the window. It now compares one listing of the plugins
+  folder (each file's name, size and last-write time) with the one taken for the
+  last completed reload and skips the reload when they are the same; the log
+  says so in one line that names nothing. Anything else - a file added, removed,
+  renamed or replaced, a retirement rule that changed, a plugin the last reload
+  refused, no earlier reload to compare with - reloads as before, and the
+  Rescan key, an install, an update and a removal always do. Every reload that
+  runs now writes one log line with the seconds each of its seven steps took
+  (a reload of five seconds or more is a warning naming the slowest step), with
+  no plugin name, file or path. **Not fixed:** a reload that is needed still
+  runs on the window's thread with no limit and can still hold the window for as
+  long as a plugin takes to stop. One 0.99.58 session froze for two minutes
+  inside one, and what held it is not known; the timing line, and the freeze
+  report written for a reload that runs past 30 seconds, are there to find out.
+  Checked in FoxSDR's tests against the real window and real plugin modules
+  that record when they are loaded and unloaded, with a catalogue read from a
+  local file; not over the network, not against a slow plugin.
+- **The Fitted modules window no longer asks the disk for sizes** (0.99.63).
+  While it was open it read the size of every plugin's file on every frame, on
+  the thread that draws it, and a slow or sleeping disk or an unreachable share
+  held the window on one slow answer. The size is now taken once, when the
+  plugins are scanned, and the window draws that: a file replaced by hand shows
+  its old size until the next reload. Checked in FoxSDR's tests, one of which
+  holds the drawing function to no file-system call at all; not seen on a real
+  slow disk.
+- **A freeze report names a module loaded after start-up** (0.99.63). A frame in
+  code mapped after the module list was last refreshed - a graphics driver the
+  system reloaded, a vendor DLL, a shell extension - used to print as a bare
+  address, so a report could not say where the thread was and the display-stall
+  rule could not recognise a graphics driver it had never seen: that freeze was
+  filed as a hang instead of a stall. Such a frame is now named by file name and
+  offset like any other, and a freeze inside a late-loaded display driver is
+  kept on the machine as a stall. What is sent for such a frame is the file's
+  name (never a path) and the offset, where it was an empty module and an
+  address; PRIVACY.md says so. Windows only. Checked in FoxSDR's tests with a
+  real watchdog and a DLL loaded after the module list, not on a real driver
+  freeze.
 - A rotating log lives in `%LOCALAPPDATA%\FoxSDR\logs\foxsdr.log`. Since
   0.89.0 it records what the **radio driver** says as well as what FoxSDR
   does: SoapySDR's own log is bridged in (lines beginning `soapy:`), and in a

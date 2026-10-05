@@ -38,6 +38,7 @@ struct GLFWwindow;
 #include "core/i18n.hpp"
 #include "core/pipeline.hpp"
 #include "core/ppm_correction.hpp"
+#include "core/plugin_dir_signature.hpp"
 #include "core/plugin_host.hpp"
 #include "core/plugin_runner.hpp"
 #include "core/patch_graph.hpp"
@@ -747,6 +748,11 @@ private:
         // (core::PluginFileRemover), so a test can play a file Windows will
         // not let go of (tests/test_plugin_cleanup_app.cpp).
         bool (*pluginRemove)(const std::string& dir, const std::string& file, std::string& error);
+        // Replaces the plugins folder's signature read (core::
+        // readPluginDirSignature) when set, so a test can play a listing that
+        // fails (tests/test_plugin_rescan_skip.cpp).
+        bool (*pluginDirSignature)(const std::string& dir,
+                                   cascade::core::PluginDirSignature& out);
     };
     // Set by the test before any AppWindow exists and never changed while one
     // does, so the worker threads that read makeDevice race with nothing.
@@ -1583,7 +1589,30 @@ private:
     // Band plan (optional program data) and plugins (optional user
     // installs) — both silently absent when their directory does not exist.
     void loadBandPlan();
+    // THE FULL RESCAN, ALWAYS: every decoder destroyed, every module unmapped and
+    // mapped again, the manifest re-read and every installed file re-hashed. What
+    // the user's own requests call - the Fitted modules window's Rescan key, an
+    // install, an update, a removal, the clean-up - and the start-up scan. A new
+    // caller gets this one, because the other can decline to do anything.
     void rescanPlugins();
+    // THE RESCAN AN AUTOMATIC TRIGGER MAKES (0.99.63), which is the plugin
+    // catalogue fetch's completion and nothing else: the full rescan above - but
+    // only when the plugins folder is not what the last COMPLETED scan left. One
+    // directory listing (core/plugin_dir_signature.hpp) is compared with the one
+    // taken just before that scan loaded anything; equal, and nothing is torn
+    // down - one log line says so (plugins: reload skipped - nothing changed
+    // since the last scan). Different, or no completed scan to compare with, or a
+    // listing that cannot be made, or a last scan that left a module refused:
+    // exactly rescanPlugins().
+    void rescanPluginsIfChanged();
+    // The signature taken for the scan that last COMPLETED, and whether it may
+    // be trusted as "what is loaded now". Cleared when a rescan begins and when
+    // the plugins are taken down (detachAndUnloadPlugins), set again only by a
+    // rescan that ran to its end with no enforcement error, no manifest written
+    // under it and no module refused for a reason a file could not explain - so
+    // a scan that fell short leaves nothing for rescanPluginsIfChanged to trust.
+    cascade::core::PluginDirSignature pluginScanSig_;
+    bool pluginScanSigValid_ = false;
     // THE OLD COPIES UPDATES LEAVE BEHIND (0.99.49 beta feedback;
     // core/plugin_cleanup.hpp). pluginOldCopies_ is every copy the rules allow
     // to go, rebuilt at each rescan; the store's CLEAN UP OLD VERSIONS key

@@ -636,6 +636,13 @@ public:
 
     // load -> mergePolicies -> save, for the one call the UI makes after a
     // successful fetch. This is the ONLY moment a policy is written.
+    //
+    // It writes ONLY WHEN THERE IS SOMETHING TO WRITE (0.99.63): a usable
+    // manifest whose cached policies the merge left exactly as they were is not
+    // rewritten, so its last-write time stays put. The plugin rescan reads that
+    // time (core/plugin_dir_signature.hpp) to tell a changed folder from an
+    // unchanged one, and a rewrite of identical bytes was reading as a change.
+    // A missing or corrupt manifest is written, a new or moved policy is written.
     static bool cacheCataloguePolicies(const std::string& pluginsDir,
                                        const std::vector<PluginCatalogEntry>& catalogue,
                                        std::string& error);

@@ -2000,6 +2000,97 @@ int main() {
     }
 
     // ---------------------------------------------------------------------
+    // A catalogue that taught nothing writes nothing (0.99.63). The manifest is
+    // in the plugins folder, and the plugin rescan tells a changed folder from an
+    // unchanged one by the folder's listing - so a manifest rewritten with the
+    // bytes it already had was a changed last-write time, every catalogue fetch
+    // looked like a change, and a rescan with nothing to find tore every plugin
+    // down. What is checked is the file's own bytes and time: the time is first
+    // put two days back, so a rewrite cannot hide behind a clock tick.
+    // ---------------------------------------------------------------------
+    {
+        const fs::path d = tmpDir("cache_noop");
+        fs::create_directories(d);
+        const std::string dir = d.string();
+        writeText(d / mod("cascade_pocsag"), "module");
+        const fs::path manifest(PluginRepo::manifestPath(dir));
+        const auto longAgo = [&]() {
+            const fs::file_time_type t = fs::file_time_type::clock::now() - std::chrono::hours(48);
+            std::error_code lec;
+            fs::last_write_time(manifest, t, lec);
+            return fs::last_write_time(manifest);  // as the file system rounded it
+        };
+
+        std::vector<PluginCatalogEntry> catalogue;
+        catalogue.push_back(catEntry("pocsag", "1.2.0", CASCADE_PLUGIN_ABI_VERSION,
+                                     mod("cascade_pocsag")));
+        catalogue[0].minSupportedVersion = "1.1.0";
+        std::string err;
+
+        // No manifest yet: it is written, as it always was.
+        CHECK(!fs::exists(manifest));
+        CHECK(PluginRepo::cacheCataloguePolicies(dir, catalogue, err));
+        CHECK(fs::exists(manifest));
+
+        // The SAME catalogue again: not a byte, not a tick.
+        fs::file_time_type stamp = longAgo();
+        const std::string before = readAll(manifest);
+        CHECK(!before.empty());
+        CHECK(PluginRepo::cacheCataloguePolicies(dir, catalogue, err));
+        CHECK(err.empty());
+        CHECK(fs::last_write_time(manifest) == stamp);
+        CHECK(readAll(manifest) == before);
+
+        // An empty catalogue has nothing to merge either: left alone.
+        CHECK(PluginRepo::cacheCataloguePolicies(dir, {}, err));
+        CHECK(fs::last_write_time(manifest) == stamp);
+        CHECK(readAll(manifest) == before);
+
+        // A floor that moved: written, and the new floor is what is cached.
+        catalogue[0].minSupportedVersion = "1.1.5";
+        CHECK(PluginRepo::cacheCataloguePolicies(dir, catalogue, err));
+        CHECK(fs::last_write_time(manifest) != stamp);
+        CHECK(readAll(manifest) != before);
+        {
+            PluginInventory inv;
+            CHECK(PluginRepo::loadInventory(dir, inv, err));
+            CHECK(inv.policies.size() == 1u);
+            if (inv.policies.size() == 1u) {
+                CHECK(inv.policies[0].minSupportedVersion == "1.1.5");
+            }
+        }
+
+        // The catalogue's version moving, the floor not: also a change.
+        stamp = longAgo();
+        catalogue[0].version = "1.3.0";
+        CHECK(PluginRepo::cacheCataloguePolicies(dir, catalogue, err));
+        CHECK(fs::last_write_time(manifest) != stamp);
+
+        // A policy for an id the manifest had never heard of: a change.
+        stamp = longAgo();
+        catalogue.push_back(catEntry("flex", "0.6.0", CASCADE_PLUGIN_ABI_VERSION,
+                                     mod("cascade_flex")));
+        CHECK(PluginRepo::cacheCataloguePolicies(dir, catalogue, err));
+        CHECK(fs::last_write_time(manifest) != stamp);
+
+        // A manifest that does not parse is rewritten, as it always was: the
+        // floors are being written afresh from the catalogue.
+        writeText(manifest, "this is not a manifest");
+        stamp = longAgo();
+        CHECK(PluginRepo::cacheCataloguePolicies(dir, catalogue, err));
+        CHECK(fs::last_write_time(manifest) != stamp);
+        {
+            PluginInventory inv;
+            CHECK(PluginRepo::loadInventory(dir, inv, err));
+            CHECK(inv.manifestUsable);
+            CHECK(inv.policies.size() == 2u);
+        }
+
+        std::error_code ec;
+        fs::remove_all(d, ec);
+    }
+
+    // ---------------------------------------------------------------------
     // mergePolicies, in isolation
     // ---------------------------------------------------------------------
     {

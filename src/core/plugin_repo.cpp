@@ -1920,6 +1920,25 @@ void PluginRepo::mergePolicies(std::vector<CachedPolicy>& cached,
     // retirement floor that was already published.
 }
 
+namespace {
+
+// Field for field and in order: the merge replaces a policy in its own place and
+// appends a new one, so two lists that mean the same thing are the same list.
+bool sameCachedPolicies(const std::vector<CachedPolicy>& a, const std::vector<CachedPolicy>& b) {
+    if (a.size() != b.size()) { return false; }
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        if (a[i].id != b[i].id || a[i].known != b[i].known ||
+            a[i].minSupportedVersion != b[i].minSupportedVersion ||
+            a[i].catalogueVersion != b[i].catalogueVersion ||
+            a[i].abiVersion != b[i].abiVersion) {
+            return false;
+        }
+    }
+    return true;
+}
+
+}  // namespace
+
 bool PluginRepo::cacheCataloguePolicies(const std::string& pluginsDir,
                                         const std::vector<PluginCatalogEntry>& catalogue,
                                         std::string& error) {
@@ -1930,7 +1949,20 @@ bool PluginRepo::cacheCataloguePolicies(const std::string& pluginsDir,
     // which plugins are installed (they degrade to unmanaged, i.e. fail open),
     // never a floor - the floors are being rewritten from the catalogue here.
     (void)loadInventory(pluginsDir, inv, loadError);
+    const std::vector<CachedPolicy> before = inv.policies;
     mergePolicies(inv.policies, catalogue);
+    // A CATALOGUE THAT TAUGHT US NOTHING WRITES NOTHING (0.99.63). The manifest
+    // is in the plugins folder, and the plugin rescan decides whether the folder
+    // has changed by its listing (core/plugin_dir_signature.hpp): a manifest
+    // rewritten with the bytes it already had is a changed last-write time, so
+    // every catalogue fetch looked like a change and a rescan that had nothing to
+    // find tore every plugin down. Only a USABLE manifest is left alone: a
+    // missing or corrupt one is still written, as it always was, and a floor
+    // that moved - or a policy that is new - still is.
+    if (inv.manifestUsable && sameCachedPolicies(before, inv.policies)) {
+        error.clear();
+        return true;
+    }
     return saveManifest(pluginsDir, inv.plugins, inv.policies, error);
 }
 

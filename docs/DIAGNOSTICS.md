@@ -794,7 +794,7 @@ same class of fault:
 
 - `AppWindow::drawFittedModulesWindow` called `std::filesystem::file_size` on
   every plugin's file, every frame, while the Fitted Modules window was open (it
-  was the only way the plate got a size). **Closed after 0.99.62**: see *The Fitted
+  was the only way the plate got a size). **Closed in 0.99.63**: see *The Fitted
   modules window asks the disk for nothing*, below.
 - The filesystem work inside `AppWindow::rescanPlugins` — the inventory read, the
   directory scan and the load of every module — also runs on the GUI thread. The
@@ -809,7 +809,7 @@ call, every stream and `fopen`): the calls that remain there are made on a user'
 press, at start-up or at exit, not per frame. Nothing outside `src/gui` was
 audited for what it does when the *GUI thread* calls it.
 
-### The Fitted modules window asks the disk for nothing (after 0.99.62)
+### The Fitted modules window asks the disk for nothing (0.99.63)
 
 The call named in the open item above ran **sixty times a second for as long as
 the window was open**, once for every loaded plugin: twenty modules is twenty
@@ -842,7 +842,7 @@ needs a GL context. What no test shows is the freeze itself on a real slow
 folder; the cause of it was established by reading, and the figure above by
 timing one call.
 
-### A plugin rescan runs on the GUI thread, and says where its time went (after 0.99.62)
+### A plugin rescan runs on the GUI thread, and says where its time went (0.99.63)
 
 A 0.99.58 session (a Store package, twenty plugins) logged the line that opens a
 rescan and, **119.976 s later**, the line for the first plugin it had loaded. The
@@ -891,7 +891,8 @@ shown in that session):
   fetch (bounded by the plugin to 20 s plus one 15 s read), **and file I/O on the tile
   cache that has no bound** (`readCache` / `writeCache`, in the per-user cache
   folder). A stalled file system — which the same session shows: the Record button
-  blocked in file creation — holds a worker, and so holds `bm_destroy`, and so holds
+  blocked in file creation (since moved off the frame loop: *The recording's file is
+  opened off the frame loop*, below) — holds a worker, and so holds `bm_destroy`, and so holds
   the GUI thread. The plugin's HTTP helper also opens its session with Windows'
   automatic proxy detection, which the per-phase timeouts it sets are not documented
   to cover; that is stated as unverified. The instance and its four workers exist
@@ -912,7 +913,9 @@ is its only message pump and the rescan is one call inside a frame; Windows mark
 the window "not responding" after five seconds and a click on its close button
 cannot reach the application.
 
-**What this change adds** is the evidence, not a cure. Every rescan writes one line:
+**What this change adds** is the evidence, not a cure. Every rescan that runs writes
+one line (one that is skipped writes the notice described under *A rescan with nothing
+to find*, below, instead):
 
 ```
 plugins: reload took 3.6 s (decoders 0.0, patch 0.0, panels and map 0.3, unload 0.4, inventory 1.9, load 0.9, restart 0.1)
@@ -947,7 +950,8 @@ rather than a repair:
   thread", not the same one, and `patch` code comments say the GUI thread is where a
   handle may die); `BasemapCache::detach()` deletes GL textures and must keep that
   part on the GUI thread; and `rescanPlugins()` stops being synchronous for its
-  nine callers, three of which read the new list straight after.
+  eight call sites (the table below; an earlier version of this text said nine),
+  several of which read the new list straight after.
 - *B. A modal reload.* The same work on a worker while the GUI thread runs a small
   loop of its own that pumps events and draws "Reloading plugins — stopping
   <step>…". Callers stay synchronous. It keeps the window drawing and closeable
@@ -955,18 +959,110 @@ rather than a repair:
   and the work that touches ImGui, GL or window state (the map and basemap
   detach, `syncMapPagesToSaved`, `refreshPluginRunner`) has to be split back out
   onto the GUI thread.
-- *C. Fewer rescans.* The catalogue fetch rescans every plugin whether or not
+- *C. Fewer rescans.* The catalogue fetch rescanned every plugin whether or not
   anything changed, because the retirement floors it caches only take effect on
-  a scan; skipping the teardown when the inventory and the blocked set are
-  unchanged removes most rescans a session sees (the log of that session shows two,
-  three seconds apart).
+  a scan; skipping the teardown when nothing has changed removes the rescans a
+  session sees for no reason (the log of that session shows two, three seconds
+  apart). **Done in 0.99.63**: see the next section.
 
-Recommended: **A with C.** C is small and removes the exposure in the common case,
-A bounds the case that remains and is the only one that gives the conservative answer
-for a plugin that never stops — leave it mapped, say so, do not load it again — and B
-trades a smaller change for a window the user still cannot use.
+Recommended: **A with C.** C is built, below, and removes the exposure in the common
+case. **A is not built, and waits for evidence.** It changes which thread
+`destroy()` runs on, for *every* plugin, to answer a freeze whose phase is not yet
+known: of the seven laps above, A bounds the ones that are a plugin's `destroy()`
+joining a worker (`decoders`, `patch`, `panels and map`), and does nothing for the
+disk in `inventory` or `load`, or for the loader in `unload`. The per-phase line
+above and the 30 s report say which it was; a change of that weight is made for the
+phase the field shows, not for the one the reading suggests. B trades a smaller
+change for a window the user still cannot use.
 
-### The recording's file is opened off the frame loop
+### A rescan with nothing to find tears nothing down (0.99.63)
+
+`rescanPlugins()` has eight call sites. Seven are the user's own acts or follow a
+change to the folder, and run the whole rescan, always. **One fires with nothing
+changed**, and it is the one that ran twice, three seconds apart, in the field log.
+
+| Call site | What triggers it | Can anything have changed? | Does |
+|---|---|---|---|
+| `AppWindow` construction | the start-up scan | the first scan: no signature | full |
+| `cleanUpOldPluginVersions` | the store's clean-up key, or an update's clean-up | only called when files were just removed | full |
+| `processPendingPluginRemovals` | start-up, after the scan | only called when a queued old copy was just removed | full |
+| `pollPluginAsync`, a finished **catalogue fetch** | the store window's first open in a session, or CHECK NOW | **yes: usually nothing** - the files are as the last scan left them and the catalogue taught the manifest nothing | **skipped when unchanged** |
+| `pollPluginAsync`, a finished install or update | the user's Install / Update | a file landed | full |
+| `removeInstalledPlugin` | the Remove key | it has already unloaded everything | full |
+| the Fitted modules window's Rescan key | the user | explicit | full |
+| `removeBlockedPlugin` | Remove on a retired row | it has already unloaded everything | full |
+
+`rescanPlugins()` itself is unchanged and is what a new caller gets. The catalogue
+fetch calls `rescanPluginsIfChanged()`, which compares **one directory listing** of the
+plugins folder with the one taken for the last scan that completed
+(`core/plugin_dir_signature.hpp`). Equal: nothing is destroyed, unmapped or mapped, and
+the log says `plugins: reload skipped - nothing changed since the last scan` (no name,
+no path). Anything else - different, no completed scan to compare with, a listing that
+cannot be made - is exactly the rescan of before.
+
+**What the signature holds, and why that is the whole of what decides what loads.**
+The folder's path, and for every regular file in it (not only the modules) its name,
+size and last-write time. A rescan's result is a function of:
+
+1. *The modules*: the files in the folder. Name, size, time.
+2. *The blocked set*: `installed.json`, which is in the same folder and holds the
+   installed records and the cached catalogue policy - the retirement floors. The
+   catalogue fetch is the only thing that writes a floor, and it writes that file;
+   enforcement reads the cache, never the network, so no network or registry read
+   decides a scan. The manifest is a file in the listing like any other.
+3. *Which modules are aside*: the `.disabled` files a retirement leaves, also in the
+   listing, which the signature is taken after (so a retired module renamed aside by
+   the scan is the folder the next check finds).
+4. *The host's own constants* (the ABI, the version comparison): fixed for a build.
+5. *The loader's view outside the folder* (a runtime a module needs, on the system
+   path): **not in any listing**. It can only change what a *refused* module does, so
+   a scan that left any module refused - other than one turned off as an old copy of
+   another - is never skipped afterwards.
+
+Three more rules keep a signature from outliving the truth. It is taken *before* the
+scan loads anything (a file that changes during the scan is a difference the next
+check sees, never one it misses); it is thrown away by a manifest that changed between
+the inventory read and the listing (a floor the scan did not read must not be taken for
+one it did); and it is invalid while a scan is under way, after the plugins are taken
+down, and after a scan that ended in an enforcement error.
+
+**The catalogue fetch no longer rewrites a manifest it learned nothing from**
+(`PluginRepo::cacheCataloguePolicies`). It used to save the manifest after every
+successful fetch, byte for byte as it was, and the new last-write time looked like a
+change: with the signature alone the skip would never have fired for the one trigger it
+exists for. A usable manifest whose policies the merge left as they were is now left
+alone; a missing or unreadable one, a moved floor and a new policy are written as ever.
+
+**The disk work the check adds on the GUI thread is one directory listing.** On Windows
+the listing returns each entry with its size and last-write time, so no file is
+opened, read, hashed or asked about on its own; on a POSIX standard library an entry's
+size and time are one `stat` each, still no open. The check does not add the call to
+`PluginHost::defaultPluginDir()`, which a rescan always made, and which writes and
+removes a probe file in the executable's plugins folder when it is writable: a skipped
+rescan still pays that, once. Under the same watchdog pause as the rescan, so a folder
+slow to list is not a new freeze to report. A full rescan adds one more listing and one
+`stat` of the manifest.
+
+**What a signature cannot see**, so nobody assumes otherwise: a file replaced by one of
+the *same size and the same last-write time* (a copy that keeps times, onto a file system
+whose clock is coarser than the copy - FAT's two seconds); a module a plugin or another
+program writes into its own folder (that changes the listing, which is the safe way to
+be wrong: a rescan). A skip also leaves the decoder instances, panels and map pages
+alone, rather than rebuilding them for the current source; every source change
+rebuilds them by its own path.
+
+`tests/test_plugin_rescan_skip.cpp` holds it through the real `AppWindow` and real
+modules (`tests/fixtures/rescan_probe_plugin.cpp` writes to a file whenever it is
+mapped, unmapped, asked for a decoder and asked to destroy one, so every check is about
+what happened to a module and not about what the application says): an unchanged folder
+tears nothing down; each of a file added, removed, replaced by one of another size,
+replaced by one of the same size and a newer time, and a floor moved or lifted does the
+whole rescan (and the retired plugin is not loaded); so does a first scan, a listing that
+cannot be made, a refused module, a manifest that landed mid-scan and a takedown no scan
+followed; and an explicit rescan with nothing changed does the whole thing.
+`tests/test_plugin_repo.cpp` holds the manifest left alone.
+
+### The recording's file is opened off the frame loop (0.99.63)
 
 A freeze report from 0.99.58 (Windows 11, 151 s into the session). Resolved
 against the symbol archive, the GUI thread's stack was `main` → `AppWindow::run`
@@ -993,9 +1089,15 @@ deletes the report and keeps the freeze. So the open moved.
   `Recorder::prepare()` (the rate check, the file name, the 44 header bytes: no
   disk), then an *opener* (`create_directories`, `fopen`, the header's write and
   flush: all the waiting), then `Recorder::begin()` (arms the recorder: no
-  disk). `start()` is the three in a row, and every caller that can afford to
-  wait - the patch page's speaker files, the `--record-check` bench - still
-  uses it. The opener is a `std::function` the recorder carries
+  disk). `start()` is the three in a row, and two callers still use it: the
+  `--record-check` bench, which can wait, and **the patch page's Speaker WAV, which
+  cannot**. `AppWindow::patchPublishSets` (`app_window_patch_radios.cpp`) makes the
+  speaker's file with `makeWavDest` (`core/patch_audio.cpp`, which calls
+  `Recorder::start`) - and with the same call as the fallback when the MP3
+  output cannot be made - on the GUI thread, from the patch page's reconcile. A slow
+  disk freezes the window there exactly as the Record button did. **That is still an
+  open freeze risk**: it was left alone by this change, and the same three steps
+  would fix it. The opener is a `std::function` the recorder carries
   (`Recorder::bindOpener`), `Recorder::openFile` by default, which is the seam
   a test stages a slow disk through. It reads its request and touches nothing
   else.
@@ -1020,9 +1122,12 @@ deletes the report and keeps the freeze. So the open moved.
   `recordError`; a refusal that needs no disk (an unrepresentable rate) is
   still immediate. While the file is opening the section shows **Starting IQ -
   click to cancel** (or **Starting audio - ...**) in place of Record, and after a
-  second a line under it, `Waiting for the disk to open the file: N s`. The REC
-  lamp, the elapsed clock and the web page's `iqRecording` / `audioRecording`
-  stay off until the file is open, so they never overclaim.
+  second a line under it, `Waiting for the disk to open the file: N s`. These
+  words, and the rate-change notice below, are on-screen text and go through the
+  translation catalogues like the buttons beside them; the log lines below are
+  English, as every log line is. The REC lamp, the elapsed clock and the web
+  page's `iqRecording` / `audioRecording` stay off until the file is open, so
+  they never overclaim.
 
 The edges, and the choices made where the right behaviour was a decision rather
 than an obvious fact. Each is tested, in `tests/test_record_start.cpp`:
@@ -1644,7 +1749,7 @@ code's own reasoning about what `VirtualQuery` and `NtQueryVirtualMemory` read
 (the address space's bookkeeping, not loader or heap state) rather than on a
 test.
 
-**A freeze report names such a DLL too (after 0.99.62).** The hang watchdog
+**A freeze report names such a DLL too (0.99.63).** The hang watchdog
 resolved each frame of the stalled thread against the same snapshot and was never
 given the crash handler's answer, so a GUI thread stuck *inside* code mapped
 after the last refresh — a display driver a GPU reset reloads, a vendor DLL a

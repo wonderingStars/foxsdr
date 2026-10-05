@@ -15,6 +15,23 @@ set_target_properties(settings_ui_fixture PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_plugins/$<CONFIG>"
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_plugins/$<CONFIG>")
 
+# TWO REAL plugin modules for test_plugin_rescan_skip, from one source
+# (tests/fixtures/rescan_probe_plugin.cpp): each writes a line to a file when
+# the host maps it, unmaps it, creates a decoder and destroys one, so the test
+# can prove that a skipped rescan tore nothing down and a full one tore it all
+# down. Two, with different declared names, so one is never an old copy of the
+# other. Output file names are the targets' own ("rescan_probe_a", "..._b").
+foreach(probe a b)
+    add_library(rescan_probe_${probe} MODULE
+        "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/rescan_probe_plugin.cpp")
+    target_include_directories(rescan_probe_${probe} PRIVATE "${CMAKE_SOURCE_DIR}/src/core")
+    target_compile_definitions(rescan_probe_${probe} PRIVATE PROBE_ID="${probe}")
+    set_target_properties(rescan_probe_${probe} PROPERTIES
+        PREFIX ""
+        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_rescan_${probe}/$<CONFIG>"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_rescan_${probe}/$<CONFIG>")
+endforeach()
+
 # A REAL SoapySDR vendor module for test_soapy_enum_proc: put on
 # SOAPY_SDR_PLUGIN_PATH and loaded by the real cascade.exe enumeration child,
 # where it faults as it is detached at exit (the 2026-10-01 field fault) or in
@@ -138,6 +155,12 @@ foreach(src ${CASCADE_TESTS})
         # the module's directory; built first.
         add_dependencies(${name} settings_ui_fixture)
         add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE_DIR:settings_ui_fixture>")
+    elseif(name STREQUAL "test_plugin_rescan_skip")
+        # Copies the two probe modules into a plugins folder of its own and
+        # drives the real AppWindow's rescan against it; built first.
+        add_dependencies(${name} rescan_probe_a rescan_probe_b)
+        add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:rescan_probe_a>"
+                 "$<TARGET_FILE:rescan_probe_b>")
     elseif(name STREQUAL "test_soapy_enum_proc" AND TARGET soapy_fault_fixture)
         # Hands the fault fixture's directory to the real enumeration child;
         # cascade.exe is built first because that block runs it.
