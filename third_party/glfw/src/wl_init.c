@@ -902,17 +902,10 @@ void _glfwTerminateWayland(void)
         libdecor_unref(_glfw.wl.libdecor.context);
     }
 
-    if (_glfw.wl.libdecor.handle)
-    {
-        _glfwPlatformFreeModule(_glfw.wl.libdecor.handle);
-        _glfw.wl.libdecor.handle = NULL;
-    }
-
-    if (_glfw.wl.egl.handle)
-    {
-        _glfwPlatformFreeModule(_glfw.wl.egl.handle);
-        _glfw.wl.egl.handle = NULL;
-    }
+    // FOXSDR PATCH (wayland-terminate-order): the libdecor and wayland-egl
+    // modules used to be unloaded here; they are now unloaded at the end of
+    // this function, after wl_display_disconnect (upstream glfw commit
+    // 162896e5b9). See third_party/glfw/FOXSDR-PATCHES.md.
 
     if (_glfw.wl.xkb.composeState)
         xkb_compose_state_unref(_glfw.wl.xkb.composeState);
@@ -922,21 +915,11 @@ void _glfwTerminateWayland(void)
         xkb_state_unref(_glfw.wl.xkb.state);
     if (_glfw.wl.xkb.context)
         xkb_context_unref(_glfw.wl.xkb.context);
-    if (_glfw.wl.xkb.handle)
-    {
-        _glfwPlatformFreeModule(_glfw.wl.xkb.handle);
-        _glfw.wl.xkb.handle = NULL;
-    }
 
     if (_glfw.wl.cursorTheme)
         wl_cursor_theme_destroy(_glfw.wl.cursorTheme);
     if (_glfw.wl.cursorThemeHiDPI)
         wl_cursor_theme_destroy(_glfw.wl.cursorThemeHiDPI);
-    if (_glfw.wl.cursor.handle)
-    {
-        _glfwPlatformFreeModule(_glfw.wl.cursor.handle);
-        _glfw.wl.cursor.handle = NULL;
-    }
 
     for (unsigned int i = 0; i < _glfw.wl.offerCount; i++)
         wl_data_offer_destroy(_glfw.wl.offers[i].offer);
@@ -995,6 +978,44 @@ void _glfwTerminateWayland(void)
         close(_glfw.wl.keyRepeatTimerfd);
     if (_glfw.wl.cursorTimerfd >= 0)
         close(_glfw.wl.cursorTimerfd);
+
+    // FOXSDR PATCH (wayland-terminate-order): every module is unloaded only
+    // now, after wl_display_disconnect (upstream glfw commit 162896e5b9, glfw
+    // issue 2744). wl_display_disconnect destroys the events still queued on
+    // the display, and each one reads its message description out of the
+    // module that defined the object - unloading a driver's EGL library first
+    // left those descriptions in unmapped memory and the disconnect faulted.
+    // The EGL handle is released here rather than in _glfwTerminateEGL, which
+    // leaves it alone on Wayland. See third_party/glfw/FOXSDR-PATCHES.md.
+    if (_glfw.egl.handle)
+    {
+        _glfwPlatformFreeModule(_glfw.egl.handle);
+        _glfw.egl.handle = NULL;
+    }
+
+    if (_glfw.wl.libdecor.handle)
+    {
+        _glfwPlatformFreeModule(_glfw.wl.libdecor.handle);
+        _glfw.wl.libdecor.handle = NULL;
+    }
+
+    if (_glfw.wl.egl.handle)
+    {
+        _glfwPlatformFreeModule(_glfw.wl.egl.handle);
+        _glfw.wl.egl.handle = NULL;
+    }
+
+    if (_glfw.wl.xkb.handle)
+    {
+        _glfwPlatformFreeModule(_glfw.wl.xkb.handle);
+        _glfw.wl.xkb.handle = NULL;
+    }
+
+    if (_glfw.wl.cursor.handle)
+    {
+        _glfwPlatformFreeModule(_glfw.wl.cursor.handle);
+        _glfw.wl.cursor.handle = NULL;
+    }
 
     _glfw_free(_glfw.wl.clipboardString);
 }

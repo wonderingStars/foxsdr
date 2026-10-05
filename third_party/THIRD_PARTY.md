@@ -3,10 +3,11 @@
 Every library the application links is vendored here, pinned to the exact
 revision the app was built and tested against, so an upstream change can never
 break or alter this build. Sources are verbatim upstream copies — **no vendored
-file has been modified**, with ONE documented exception: Dear ImGui carries two
+file has been modified**, with TWO documented exceptions: Dear ImGui carries two
 fenced patches, its word wrap for Chinese and Japanese and a colour table pushed
-for every popup-like window (`imgui/FOXSDR-PATCHES.md`). Each subdirectory keeps
-its upstream license file.
+for every popup-like window (`imgui/FOXSDR-PATCHES.md`), and GLFW carries one,
+a cherry-pick of an upstream fix to the order its Wayland backend shuts down in
+(`glfw/FOXSDR-PATCHES.md`). Each subdirectory keeps its upstream license file.
 
 Those license files, plus SoapySDR's, are reproduced verbatim in
 `installer/THIRD-PARTY-LICENSES.txt`, the aggregate notice shipped with the
@@ -94,7 +95,19 @@ master branch, so there is nothing on that side to compare a docking archive
 against. The SHA256 above is of the archive actually fetched.
 
 ### GLFW (`third_party/glfw/`)
-Full pristine 3.4 tree. Built via `add_subdirectory` with
+Full 3.4 tree, **plus one fenced patch**: upstream's post-3.4 commit
+`162896e5b9` ("Wayland: free modules at end of terminate function",
+glfw/glfw issue #2744), which stops `glfwTerminate` on Wayland unloading the
+EGL, libdecor, wayland-egl, xkbcommon and wayland-cursor libraries before
+`wl_display_disconnect` — the crash FoxSDR 0.99.59 reported on exit
+(`libwayland-client.so.0` under `_glfwTerminateWayland`). It touches two files,
+`src/wl_init.c` and `src/egl_context.c`, each change fenced by `FOXSDR PATCH
+(wayland-terminate-order)`; `grep -rn "FOXSDR PATCH" third_party/glfw/src`
+finds it, and `glfw/FOXSDR-PATCHES.md` has the what, the why and how to drop
+it. Every other file is the pristine 3.4 archive (the archive hash above is of
+that unpatched archive); the Windows and macOS backends are not touched.
+`tests/test_glfw_wayland_terminate.cpp` holds the order in place.
+Built via `add_subdirectory` with
 `GLFW_BUILD_DOCS/TESTS/EXAMPLES=OFF`, `GLFW_INSTALL=OFF`. Static library
 (vcpkg's x64-windows build was a DLL; static linkage is a deliberate
 deployment simplification — same code, same version).
