@@ -1108,6 +1108,15 @@ EnumResult enumerateIsolated(const EnumOptions& options) {
     const std::string helper =
         options.helperPath.empty() ? enumerateHelperPath() : options.helperPath;
 
+    // THE DRIVERS NO WALK ASKS, SAID ONCE A SCAN (2026-10-04), in the voice of
+    // the uhd line below: whichever walk runs - the whole bus, the sweep after
+    // its death, the walk beside an open radio, the in-process fallback - it
+    // leaves these out, and a log that does not say so cannot tell a reader why
+    // no sound card was listed or that the 0.99.57 ASIO fault was shut out.
+    core::diagLogf("soapy: not asking %s - sound cards have their own source here, and nothing "
+                   "it lists is offered",
+                   joinNames(neverAskedDrivers(), 8).c_str());
+
     // Only ever the parent's own armed directory, and empty when the user has
     // diagnostics off - so the child's capture is exactly the parent's consent.
     const std::string childCrashDir = core::activeCrashDir();

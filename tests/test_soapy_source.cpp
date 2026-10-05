@@ -719,6 +719,23 @@ SoapySDR::KwargsList findRateOrder(const SoapySDR::Kwargs& args) {
 
 SoapySDR::Device* makeRateOrder(const SoapySDR::Kwargs&) { return new RateOrderDevice(); }
 
+// A STAND-IN FOR SOAPYAUDIO'S "audio" DRIVER that counts every time it is asked
+// - to find or to make anything. The real one lists sound cards through
+// RtAudio, whose ASIO back end loads every ASIO driver on the machine; on the
+// 2026-10-01 field machine one of them faulted (crash reports
+// 4138700E14D784C6, 3C2F1A0F27A8FD35).
+std::atomic<int> g_audioAsked{0};
+
+SoapySDR::KwargsList findAudioTrap(const SoapySDR::Kwargs&) {
+    ++g_audioAsked;
+    return {};
+}
+
+SoapySDR::Device* makeAudioTrap(const SoapySDR::Kwargs&) {
+    ++g_audioAsked;
+    return nullptr;
+}
+
 // True when the NEWEST line in the diagnostics ring carries `text`. The ring
 // is what a crash report is flushed from, so "newest" is exactly the line the
 // next report of this shape would show last before the fault.
@@ -920,6 +937,37 @@ int main() {
 
         // Destructor of a failed-open instance runs at scope exit — must be
         // clean (covered again in bulk below).
+    }
+
+    // --- a SoapySDR sound card is never opened (2026-10-04) ------------------
+    //
+    // The device scan never asks SoapySDR's "audio" driver
+    // (source/soapy_enum_proc.cpp, neverAsked), and the application drops every
+    // driver=audio row from the Source list and refuses a saved one on open
+    // (gui/app_window.cpp, isAudioDriver) - but a PATCH radio names its device
+    // by args from a saved patch and opens it here directly. Device::make runs
+    // the named driver's find function, so a patch from a build that listed
+    // sound cards would have asked the ASIO-walking driver in the application's
+    // own process. open() refuses it, in words that say what to use instead,
+    // before the driver is asked anything. Sound cards are the "Sound card"
+    // source.
+    {
+        g_audioAsked = 0;
+        SoapySDR::Registry reg("audio", &findAudioTrap, &makeAudioTrap, SOAPY_SDR_ABI_VERSION);
+        SoapySource src;
+        const bool opened = src.open("driver=audio,device_id=0");
+        std::printf("audio open: %s, asked=%d, lastError=\"%s\"\n", opened ? "true" : "false",
+                    g_audioAsked.load(), src.lastError());
+        CHECK(!opened);
+        CHECK(g_audioAsked.load() == 0);  // the driver was not asked to find or make
+        CHECK(std::strstr(src.lastError(), "sound card") != nullptr);
+        CHECK(!src.isOpen());
+        // The same refusal however the key is spelled and spaced.
+        CHECK(!src.open(" Driver = Audio , device_id=1"));
+        CHECK(g_audioAsked.load() == 0);
+        // A driver that merely begins with the name is not the sound card's.
+        CHECK(!src.open("driver=audiofoo"));
+        CHECK(std::strstr(src.lastError(), "sound card") == nullptr);
     }
 
     // --- 100x construct/destruct: nothing observable leaks or crashes -------

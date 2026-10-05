@@ -71,6 +71,12 @@ struct DiagModule {
 //     names the module (2026-10-01; it used to say "?" and hash to
 //     650B88A1735695DB).
 //
+// No list of call sites can be complete, because code is mapped by things this
+// file cannot see: a vendor module's own LoadLibrary in the middle of a probe
+// (RtAudio mapping an ASIO driver) arrives after every refresh above. That is
+// what adoptModuleContaining, below, is for - the fault path names such a
+// module itself, so the table need not have been refreshed for it.
+//
 // The device SCAN needs no entry in the application - it runs in that child
 // process, so no vendor module is mapped into this one.
 //
@@ -84,6 +90,37 @@ bool moduleAt(int index, DiagModule& out);
 // Linear search of the snapshot. False when `addr` belongs to no module
 // currently in the table, in which case the caller reports the raw address.
 bool resolveAddress(std::uintptr_t addr, DiagModule& out, std::uintptr_t& offset);
+
+// A MODULE MAPPED AFTER THE LAST refreshModuleTable(), named from the FAULT
+// PATH (2026-10-04). The snapshot cannot know about code that arrived after it
+// was taken, and refreshing it from a handler means the loader lock - so a
+// fault in such code used to report a bare address, list no module for it, and
+// hash to the signature every unresolved fault of that code shares. That is the
+// field report of 2026-10-01: a Native Instruments ASIO driver, which RtAudio
+// maps in the middle of SoapyAudio's probe, long after the enumeration child
+// had refreshed its table for the vendor modules (setModulesLoadedHook), was
+// nine frames named "-".
+//
+// If `addr` is inside a mapped IMAGE the table does not yet cover, this appends
+// that image - file name, base, size - and returns true; true as well when the
+// table already covered it. False for anything that is not an image (heap, JIT
+// page, stack: nothing to name, and nothing is invented), when the table is
+// full, and on every non-Windows platform, whose handler still has only what
+// refreshModuleTable() saw.
+//
+// FAULT-PATH SAFE, and held to the handler's rules: no allocation, no lock, no
+// CRT formatting. VirtualQuery and NtQueryVirtualMemory read the address
+// space's own bookkeeping and take neither the loader lock nor the heap lock;
+// the module's headers are read behind a __try; the scratch is static, which
+// is safe because the fault path admits one writer at a time. The entry has no
+// pdb and no build id (reading the CodeView record means formatting it); it
+// lasts until the next refreshModuleTable(), which rebuilds the table.
+bool adoptModuleContaining(std::uintptr_t addr);
+
+// The healthy-path half of adoptModuleContaining: resolves the one ntdll entry
+// point it needs, because GetProcAddress from a handler is a call into the
+// loader. Called by installCrashHandlers; harmless to call again.
+void prepareModuleAdoption();
 
 // The CodeView build id of a PE ON DISK - the same value refreshModuleTable
 // reads out of the mapped image. This is what tools/archive-symbols.ps1 keys

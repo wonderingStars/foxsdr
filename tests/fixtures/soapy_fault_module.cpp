@@ -19,6 +19,11 @@
 //   find  an access violation inside the find function, on the probe thread
 //         SoapySDR's walk runs it on - the shape of the libusb fault - so the
 //         child's own crash report can be checked for what it names.
+//   late  an access violation in a DLL the find function maps itself
+//         (FOXSDR_TEST_SOAPY_LATE_DLL, tests/fixtures/late_fault_dll.cpp) -
+//         the shape of the 2026-10-01 ASIO driver, which RtAudio maps in the
+//         middle of SoapyAudio's probe, after the child has refreshed its
+//         crash handler's module table for the modules it loaded up front.
 //   anything else  a well-behaved module.
 //
 // WHAT IT RECORDS, in every build, when FOXSDR_TEST_SOAPY_FIXTURE_UNLOADS
@@ -62,7 +67,7 @@
 
 namespace {
 
-enum class Stage { None, Exit, Find };
+enum class Stage { None, Exit, Find, Late };
 
 Stage stageFromEnvironment() {
 #if FIXTURE_STAGES
@@ -70,6 +75,7 @@ Stage stageFromEnvironment() {
     if (v == nullptr) { return Stage::None; }
     if (std::strcmp(v, "exit") == 0) { return Stage::Exit; }
     if (std::strcmp(v, "find") == 0) { return Stage::Find; }
+    if (std::strcmp(v, "late") == 0) { return Stage::Late; }
 #endif
     return Stage::None;
 }
@@ -107,8 +113,27 @@ void accessViolation() {
     *p = 1;
 }
 
+// THE FAULT IN A DLL MAPPED DURING THE PROBE (stage "late"): the shape of
+// SoapyAudio's RtAudio loading an ASIO driver while its find function runs.
+// The child refreshed its crash handler's module table once this module was
+// loaded and before any find function ran, so a DLL mapped here is in no
+// table - tests/fixtures/late_fault_dll.cpp, at the path the test names.
+void callIntoLateDll() {
+#ifdef _WIN32
+    const char* path = std::getenv("FOXSDR_TEST_SOAPY_LATE_DLL");
+    if (path == nullptr || *path == '\0') { return; }
+    const HMODULE dll = ::LoadLibraryA(path);
+    if (dll == nullptr) { return; }
+    using Fault = void (*)();
+    const Fault fault = reinterpret_cast<Fault>(
+        reinterpret_cast<void*>(::GetProcAddress(dll, "lateFixtureFault")));
+    if (fault != nullptr) { fault(); }
+#endif
+}
+
 SoapySDR::KwargsList findFixture(const SoapySDR::Kwargs&) {
     if (g_stage == Stage::Find) { accessViolation(); }
+    if (g_stage == Stage::Late) { callIntoLateDll(); }
     (void)apiSession();
     SoapySDR::Kwargs k;
     k["label"] = FIXTURE_LABEL;

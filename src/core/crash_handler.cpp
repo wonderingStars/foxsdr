@@ -8,6 +8,9 @@
 //   GetLocalTime / GetCurrentProcessId      TEB and shared-page reads
 //   RtlCaptureStackBackTrace or
 //   RtlLookupFunctionEntry + RtlVirtualUnwind
+//   VirtualQuery + NtQueryVirtualMemory, only for an address in a module the
+//     table was not refreshed for (adoptModuleContaining, diag_report.cpp):
+//     reads of the address space's own bookkeeping, no loader lock, no heap
 //   Sleep, only while ANOTHER thread's report is being written
 //   memcpy, and integer rendering written by hand
 //
@@ -712,6 +715,14 @@ void writeReport(const char* reason, unsigned long code, std::uintptr_t faultAdd
     if (e.h == INVALID_HANDLE_VALUE) { return; }
     g_openReport = e.h;
 
+    // A MODULE MAPPED SINCE THE TABLE WAS LAST REFRESHED is named here, before
+    // the address is resolved: the signature, the `address:` line and the
+    // frames below would otherwise be bare numbers for the very code that most
+    // needs a name (a vendor DLL a probe mapped itself - the 2026-10-01 ASIO
+    // driver). See adoptModuleContaining for why this is allowed on this path.
+    // A no-op for an address the table already covers, and for address 0.
+    adoptModuleContaining(faultAddr);
+
     DiagModule fm;
     std::uintptr_t foff = 0;
     const bool resolved = resolveAddress(faultAddr, fm, foff);
@@ -751,6 +762,11 @@ void writeReport(const char* reason, unsigned long code, std::uintptr_t faultAdd
     // of what this process knows, and they are worth more than a stack of the
     // observer.
     const int nFrames = (child != nullptr) ? 0 : captureFramesGuarded(ep, true);
+    // The same naming for every frame the walk found: a late-mapped DLL is
+    // usually the top of the stack, not its only appearance.
+    for (int i = 0; i < nFrames; ++i) {
+        adoptModuleContaining(static_cast<std::uintptr_t>(g_frames[i]));
+    }
     if (nFrames == 0) {
         // SAID, not left as an empty section. A stack section with no frames
         // and no explanation reads as "this fault had no stack", which is
@@ -925,7 +941,17 @@ void faultLine(const char* what, unsigned long code, std::uintptr_t addr) {
 // cannot be taken. Returns only when this thread holds it.
 void enterFatal(const char* what, unsigned long code, std::uintptr_t addr) {
     const FaultPathEntry entry = acquireFaultPath(kOtherThreadWaitMs);
-    if (entry == FaultPathEntry::Acquired) { return; }
+    if (entry == FaultPathEntry::Acquired) {
+        // The faulting address is named BEFORE anything is written with it:
+        // the line the enumeration child writes to its parent's pipe
+        // (faultLine) and the stderr line both print it as module+offset, and
+        // for code mapped since the table was last refreshed they used to
+        // print a bare address - "cascade: fatal exception 0xC0000005 at
+        // 0x00007FFF52E84E94" in the 0.99.57 field log. Only the thread that
+        // holds the fault path may add to the table. See adoptModuleContaining.
+        adoptModuleContaining(addr);
+        return;
+    }
     handlerCannotRun(entry == FaultPathEntry::SameThread, what, code, addr);
 }
 
@@ -1084,6 +1110,10 @@ void installCrashHandlers(const CrashHandlerConfig& cfg) {
     // The module snapshot the fault path searches. Refreshed again by the
     // application after anything that loads code; this is just the floor.
     if (moduleCount() == 0) { refreshModuleTable(); }
+    // The one ntdll entry point the fault path needs to NAME a module mapped
+    // after that snapshot (adoptModuleContaining), looked up here because
+    // GetProcAddress from a handler is a call into the loader.
+    prepareModuleAdoption();
     // Our own image, for the process block's fault-thread-own line. A module
     // handle IS its base address; read here on the healthy path.
     g_selfBase = reinterpret_cast<std::uintptr_t>(::GetModuleHandleW(nullptr));

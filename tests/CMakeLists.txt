@@ -41,6 +41,19 @@ if(WIN32 AND TARGET SoapySDR)
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_soapy/$<CONFIG>")
 endif()
 
+# A DLL that is mapped only when something loads it and faults when called
+# (tests/fixtures/late_fault_dll.cpp): for the tests that prove the crash
+# handler names code mapped AFTER its module table was last refreshed. Its own
+# directory, and never on SOAPY_SDR_PLUGIN_PATH or the test's search path -
+# either would map it up front and test nothing. Windows only, as they are.
+if(WIN32)
+    add_library(late_fault_fixture MODULE "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/late_fault_dll.cpp")
+    set_target_properties(late_fault_fixture PROPERTIES
+        PREFIX ""
+        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_late/$<CONFIG>"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_late/$<CONFIG>")
+endif()
+
 foreach(src ${CASCADE_TESTS})
     get_filename_component(name "${src}" NAME_WE)
     add_executable(${name} "${src}")
@@ -99,8 +112,15 @@ foreach(src ${CASCADE_TESTS})
     elseif(name STREQUAL "test_soapy_enum_proc" AND TARGET soapy_fault_fixture)
         # Hands the fault fixture's directory to the real enumeration child;
         # cascade.exe is built first because that block runs it.
-        add_dependencies(${name} soapy_fault_fixture soapy_sdrplay_fixture cascade)
-        add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE_DIR:soapy_fault_fixture>")
+        add_dependencies(${name} soapy_fault_fixture soapy_sdrplay_fixture late_fault_fixture cascade)
+        # The second argument is the late-mapped DLL's full path, handed to the
+        # fault fixture through the environment (its "late" stage).
+        add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE_DIR:soapy_fault_fixture>"
+                 "$<TARGET_FILE:late_fault_fixture>")
+    elseif(name STREQUAL "test_crash_late_module" AND TARGET late_fault_fixture)
+        # Loads the late fixture by full path after arming its handlers.
+        add_dependencies(${name} late_fault_fixture)
+        add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:late_fault_fixture>")
     else()
         add_test(NAME ${name} COMMAND ${name})
     endif()

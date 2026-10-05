@@ -49,6 +49,7 @@
 #include "source/soapy_enum_proc.hpp"
 
 #include "core/crash_handler.hpp"
+#include "core/diag_log.hpp"
 #include "core/diag_report.hpp"
 #include "core/telemetry.hpp"
 #include "core/version.hpp"
@@ -452,6 +453,30 @@ int fakeHelper(int argc, char** argv) {
         const bool asksAudio =
             driver == "audio" || (driver.empty() && !listNames(skipArg(argc, argv), "audio"));
         if (asksAudio) {
+            std::fflush(stdout);
+#ifdef _WIN32
+            ::TerminateProcess(::GetCurrentProcess(), 0xC0000005u);
+#endif
+            std::_Exit(139);
+        }
+        std::printf("{\"schema\":1,\"runtime\":true,\"guardedCalls\":2,\"capture\":%s,"
+                    "\"devices\":[{\"label\":\"good radio\",\"args\":\"driver=good,serial=9\"}]}\n",
+                    cap);
+        return 0;
+    }
+    if (mode == "asiosweep") {
+        // THE SAME MACHINE, WITH A WHOLE BUS THAT DIES FOR ANOTHER REASON (a
+        // stand-in for the libusb fault): every attempt of the whole bus dies,
+        // so the parent lists the driver names - "good" and "audio" - and asks
+        // each on its own. Asking audio, as the 0.99.57 sweep did, dies again.
+        const std::string driver = driverArg(argc, argv);
+        const char* cap = gotCrashDir ? "true" : "false";
+        if (askedToListDrivers(argc, argv)) {
+            std::printf("{\"schema\":1,\"runtime\":true,\"guardedCalls\":1,\"capture\":%s,"
+                        "\"drivers\":[\"good\",\"audio\"],\"devices\":[]}\n", cap);
+            return 0;
+        }
+        if (driver.empty() || driver == "audio") {
             std::fflush(stdout);
 #ifdef _WIN32
             ::TerminateProcess(::GetCurrentProcess(), 0xC0000005u);
@@ -929,6 +954,13 @@ int main(int argc, char** argv) {
         std::error_code aec;
         fixtureDir = std::filesystem::absolute(std::filesystem::path(argv[1]), aec).string();
     }
+    // The DLL the fault fixture maps by itself in its "late" stage (this
+    // test's second argument, tests/CMakeLists.txt) - never in fixtureDir.
+    std::string lateDll;
+    if (argc >= 3 && argv[2][0] != '-') {
+        std::error_code aec;
+        lateDll = std::filesystem::absolute(std::filesystem::path(argv[2]), aec).string();
+    }
 
     // --- the outcomes are distinguishable, and say so ----------------------
     {
@@ -1353,6 +1385,68 @@ int main(int argc, char** argv) {
         CHECK(b.sweptDrivers == wantGood);
         CHECK(b.childDeaths == 0);
         CHECK(rowsOf(b) == wantRows);
+        cascade::source::clearSessionFaultedDriversForTest();
+    }
+    // --- ...AND THE LOG SAYS SO, ONCE A SCAN (2026-10-04) ---------------------
+    //
+    // Leaving a driver out silently is a choice nobody reading a log can see:
+    // the uhd skip says "not asking uhd - no hardware of theirs is on this
+    // machine" and the audio one said nothing at all, so a report's log tail
+    // from a machine with SoapyAudio installed carried no trace of why a
+    // sound card never appeared, nor that the 0.99.57 fault had been shut out.
+    // One line per scan, whichever walk ran it.
+    {
+        cascade::source::clearSessionFaultedDriversForTest();
+        setMode("asiotrap");
+        EnumOptions o;
+        o.helperPath = self;
+        o.allowInProcessFallback = false;
+        const auto notAskingAudio = []() {
+            int n = 0;
+            for (const std::string& l : cascade::core::DiagLog::instance().ringSnapshot()) {
+                if (l.find("soapy: not asking audio - ") != std::string::npos) { ++n; }
+            }
+            return n;
+        };
+        cascade::core::DiagLog::instance().resetForTest();
+        (void)enumerateIsolated(o);
+        const int whole = notAskingAudio();
+        cascade::core::DiagLog::instance().resetForTest();
+        EnumOptions beside = o;
+        beside.skipDrivers = {"rtlsdr"};
+        (void)enumerateIsolated(beside);
+        const int sweep = notAskingAudio();
+        std::printf("audio skip log lines: whole bus=%d beside an open radio=%d\n", whole, sweep);
+        CHECK(whole == 1);
+        CHECK(sweep == 1);
+        cascade::core::DiagLog::instance().resetForTest();
+        cascade::source::clearSessionFaultedDriversForTest();
+    }
+    // --- ...AND AFTER A WHOLE-BUS DEATH, THE PER-DRIVER SWEEP LEAVES IT OUT TOO
+    //
+    // The fourth walk, and the one the asio trap above cannot reach: its fake
+    // answers the whole bus, so the sweep never runs. Here the whole bus dies
+    // for a reason that is not audio's (a stand-in for the libusb fault), the
+    // child is asked for its driver names - "good" and "audio" - and then
+    // asked each; audio would die again if asked.
+    {
+        cascade::source::clearSessionFaultedDriversForTest();
+        setMode("asiosweep");
+        EnumOptions o;
+        o.helperPath = self;
+        o.allowInProcessFallback = false;
+        const EnumResult r = enumerateIsolated(o);
+        const Rows wantRows{{"good radio", "driver=good,serial=9"}};
+        const std::vector<std::string> wantGood{"good"};
+        std::printf("asio sweep: outcome=%s attempts=%d sweep=%d swept=%zu faulted=%zu\n",
+                    enumOutcomeName(r.outcome), r.attempts, r.sweepChildren,
+                    r.sweptDrivers.size(), r.faultedDrivers.size());
+        CHECK(r.outcome == EnumOutcome::Ok);
+        CHECK(r.sweptPerDriver);
+        CHECK(r.sweptDrivers == wantGood);  // audio is not among the drivers asked
+        CHECK(r.faultedDrivers.empty());
+        CHECK(rowsOf(r) == wantRows);
+        CHECK(cascade::source::sessionFaultedDrivers().empty());
         cascade::source::clearSessionFaultedDriversForTest();
     }
 
@@ -2260,6 +2354,46 @@ int main(int argc, char** argv) {
             CHECK(own.find("signature: 650B88A1735695DB") == std::string::npos);
             // ...and which child it was, for a reader of that report alone.
             CHECK(own.find("enumeration helper: whole bus") != std::string::npos);
+
+            // A MODULE THAT FAULTS IN A DLL IT MAPS DURING ITS PROBE (2026-10-04):
+            // the field child's actual shape - SoapyAudio's RtAudio maps an ASIO
+            // driver in the middle of its find function, long after the child
+            // refreshed its crash handler's module table for the modules it
+            // loaded up front (setModulesLoadedHook), so the 0.99.57 report
+            // listed the faulting frames as bare addresses and named nothing.
+            // The DLL is in no table the child ever built; the report must name
+            // it anyway - in its address, its module list and the line the
+            // child writes to the parent's pipe.
+            CHECK(!lateDll.empty());  // tests/CMakeLists.txt hands it over
+            clearReports();
+            cascade::source::clearSessionFaultedDriversForTest();
+            setEnvVar("FOXSDR_TEST_SOAPY_FIXTURE", "late");
+            setEnvVar("FOXSDR_TEST_SOAPY_LATE_DLL", lateDll.c_str());
+            const EnumResult l = enumerateIsolated(once);
+            std::string lateOwn;
+            int lateOwnCount = 0;
+            for (const auto& p : crashReports(dir)) {
+                const std::string text = readAll(p);
+                if (text.find("child-exit-code:") == std::string::npos) {
+                    lateOwn += text;
+                    ++lateOwnCount;
+                }
+            }
+            std::printf("late-dll fault: outcome=%s exit=0x%08lX own reports=%d childSaid=\"%s\"\n",
+                        enumOutcomeName(l.outcome), l.exitCode, lateOwnCount,
+                        l.childFaultLine.c_str());
+            CHECK(l.outcome == EnumOutcome::ChildDied);
+            CHECK(l.exitCode == 0xC0000005ul);
+            CHECK(lateOwnCount == 1);
+            CHECK(lateOwn.find(std::string("version: ") + cascade::versionString() + "\n") !=
+                  std::string::npos);
+            CHECK(lateOwn.find(std::string("commit: ") + cascade::gitCommit() + "\n") !=
+                  std::string::npos);
+            CHECK(lateOwn.find("address: late_fault_fixture.dll+0x") != std::string::npos);
+            CHECK(lateOwn.find("  late_fault_fixture.dll base=0x") != std::string::npos);
+            CHECK(lateOwn.find("signature: 650B88A1735695DB") == std::string::npos);
+            CHECK(l.childFaultLine.find("late_fault_fixture.dll+0x") != std::string::npos);
+            setEnvVar("FOXSDR_TEST_SOAPY_LATE_DLL", "");
 
             // THE SDRPLAY API IS CLOSED BEFORE THE CHILD ENDS, and nothing else
             // is detached. SoapySDRPlay3 opens the SDRplay API (sdrplay_api_Open)

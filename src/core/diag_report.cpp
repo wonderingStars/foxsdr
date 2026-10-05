@@ -18,6 +18,7 @@
 #include <windows.h>
 
 #include <psapi.h>
+#include <winternl.h>  // UNICODE_STRING, for the section-name query below
 #pragma comment(lib, "psapi.lib")
 #else
 #include <elf.h>
@@ -239,7 +240,149 @@ int elfModuleCallback(struct dl_phdr_info* info, std::size_t /*size*/, void* dat
 }
 #endif  // !_WIN32
 
+#if defined(_WIN32)
+// ---------------------------------------------------------------------------
+// WINDOWS: naming a module the snapshot has never heard of, FROM THE FAULT PATH
+// ---------------------------------------------------------------------------
+//
+// Everything below runs inside the crash handler, so it obeys the handler's
+// rules (docs/DIAGNOSTICS.md, "What a fault handler is allowed to do"): no
+// allocation, no lock, no CRT formatting. What it uses is VirtualQuery and
+// ntdll's NtQueryVirtualMemory - system calls that read the address space's
+// own bookkeeping and take neither the loader lock nor the heap lock - and
+// plain reads of the module's own headers, behind a __try. The scratch it
+// needs is STATIC, never on the stack the fault may have just exhausted; that
+// is safe because the fault path admits exactly one writer at a time.
+
+// NtQueryVirtualMemory(process, address, MemorySectionName = 2, buffer,
+// length, returned): for an address inside a mapped image it fills the buffer
+// with the NT path of the file the image was mapped from. Resolved on the
+// healthy path (prepareModuleAdoption) - GetProcAddress in a handler is a call
+// into the loader.
+using NtQueryVirtualMemoryFn = LONG(NTAPI*)(HANDLE, PVOID, int, PVOID, SIZE_T, PSIZE_T);
+std::atomic<NtQueryVirtualMemoryFn> g_ntQueryVirtualMemory{nullptr};
+constexpr int kMemorySectionName = 2;
+
+// 1024 UTF-16 units: far longer than any path the loader maps from. A longer
+// one makes the query fail and the module is named "unknown-image", which
+// still gives its base, its size and the offset - nothing is invented.
+constexpr std::size_t kSectionNameChars = 1024;
+struct SectionNameBuffer {
+    UNICODE_STRING name;
+    WCHAR chars[kSectionNameChars];
+};
+SectionNameBuffer g_sectionName;
+MEMORY_BASIC_INFORMATION g_adoptQuery;
+DiagModule g_adoptModule;
+
+// The image's own idea of its size, read from its headers. POD only and behind
+// __try: a header page that cannot be read ends the lookup instead of the
+// process.
+bool imageSizeFromHeaders(std::uintptr_t base, std::size_t& size) {
+    __try {
+        const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
+        if (dos->e_magic != IMAGE_DOS_SIGNATURE) { return false; }
+        const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(base + dos->e_lfanew);
+        if (nt->Signature != IMAGE_NT_SIGNATURE) { return false; }
+        size = static_cast<std::size_t>(nt->OptionalHeader.SizeOfImage);
+        return size != 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+// The file name (no directory) out of the NT path the query left in
+// g_sectionName, narrowed by hand: printable ASCII kept, anything else '?'.
+// The pointer the kernel wrote is checked to lie INSIDE the buffer before it is
+// followed. Returns false when there is no name to give.
+bool leafNameFromSectionName(char* dst, std::size_t cap) {
+    const UNICODE_STRING& u = g_sectionName.name;
+    const WCHAR* first = g_sectionName.chars;
+    const WCHAR* last = g_sectionName.chars + kSectionNameChars;
+    const std::size_t n = u.Length / sizeof(WCHAR);
+    if (u.Buffer == nullptr || n == 0 || u.Buffer < first || u.Buffer + n > last) { return false; }
+    std::size_t start = 0;
+    for (std::size_t i = 0; i < n; ++i) {
+        if (u.Buffer[i] == L'\\' || u.Buffer[i] == L'/') { start = i + 1; }
+    }
+    std::size_t at = 0;
+    for (std::size_t i = start; i < n && at + 1 < cap; ++i) {
+        const WCHAR c = u.Buffer[i];
+        dst[at++] = (c >= 0x20 && c < 0x7F) ? static_cast<char>(c) : '?';
+    }
+    dst[at] = '\0';
+    return at > 0;
+}
+#endif  // _WIN32
+
 }  // namespace
+
+void prepareModuleAdoption() {
+#if defined(_WIN32)
+    const HMODULE ntdll = ::GetModuleHandleW(L"ntdll.dll");
+    if (ntdll == nullptr) { return; }
+    g_ntQueryVirtualMemory.store(
+        reinterpret_cast<NtQueryVirtualMemoryFn>(
+            reinterpret_cast<void*>(::GetProcAddress(ntdll, "NtQueryVirtualMemory"))),
+        std::memory_order_release);
+#endif
+}
+
+bool adoptModuleContaining(std::uintptr_t addr) {
+#if defined(_WIN32)
+    if (addr == 0) { return false; }
+    {
+        DiagModule known;
+        std::uintptr_t off = 0;
+        if (resolveAddress(addr, known, off)) { return true; }
+    }
+    const int n = g_moduleCount.load(std::memory_order_acquire);
+    if (n >= kMaxDiagModules) { return false; }
+
+    // IMAGE memory only: code in a heap, a JIT page or a stack has no module
+    // to name, and inventing one would put a lie in the report.
+    if (::VirtualQuery(reinterpret_cast<LPCVOID>(addr), &g_adoptQuery, sizeof(g_adoptQuery)) !=
+        sizeof(g_adoptQuery)) {
+        return false;
+    }
+    if (g_adoptQuery.Type != MEM_IMAGE || g_adoptQuery.State != MEM_COMMIT) { return false; }
+    const auto base = reinterpret_cast<std::uintptr_t>(g_adoptQuery.AllocationBase);
+    if (base == 0 || base > addr) { return false; }
+
+    g_adoptModule = DiagModule{};
+    g_adoptModule.base = base;
+    std::size_t size = 0;
+    if (!imageSizeFromHeaders(base, size) || addr - base >= size) {
+        // Headers unreadable (or not describing this address): the part of the
+        // allocation this region proves is mapped, up to and past `addr`.
+        size = reinterpret_cast<std::uintptr_t>(g_adoptQuery.BaseAddress) +
+               g_adoptQuery.RegionSize - base;
+    }
+    g_adoptModule.size = size;
+
+    bool named = false;
+    if (const NtQueryVirtualMemoryFn query = g_ntQueryVirtualMemory.load(std::memory_order_acquire)) {
+        g_sectionName.name = UNICODE_STRING{};
+        SIZE_T returned = 0;
+        const LONG status = query(::GetCurrentProcess(), reinterpret_cast<PVOID>(addr),
+                                  kMemorySectionName, &g_sectionName, sizeof(g_sectionName),
+                                  &returned);
+        named = status >= 0 &&
+                leafNameFromSectionName(g_adoptModule.name, sizeof(g_adoptModule.name));
+    }
+    if (!named) { copyField(g_adoptModule.name, sizeof(g_adoptModule.name), "unknown-image"); }
+    // No pdb and no build id: reading the CodeView record means formatting it,
+    // and formatting is a CRT call. A module nobody archived symbols for - the
+    // vendor's, which is what arrives late - needs its name, base and size.
+
+    g_modules[n] = g_adoptModule;
+    g_moduleCount.store(n + 1, std::memory_order_release);
+    return true;
+#else
+    (void)addr;
+    return false;
+#endif
+}
 
 int refreshModuleTable() {
 #if defined(_WIN32)

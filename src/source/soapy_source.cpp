@@ -747,6 +747,36 @@ void runModulesLoadedHook() {
     if (void (*hook)() = g_modulesLoadedHook.load(std::memory_order_acquire)) { hook(); }
 }
 
+// WHETHER AN ARGS STRING NAMES SOAPYSDR'S "audio" DRIVER - SoapyAudio, which
+// lists sound cards through RtAudio and, on Windows, loads every ASIO driver on
+// the machine to do it. "driver" is matched as a key and "audio" as the whole
+// value, ignoring case and the spaces round them; "driver=audiofoo" is another
+// driver. Hand-parsed because open() has not yet proved SoapySDR.dll is there,
+// and SoapySDR::KwargsFromString is a call into it.
+bool namesSoundCardDriver(const std::string& args) {
+    const auto trimmedLower = [](const std::string& s) {
+        std::size_t a = 0;
+        std::size_t b = s.size();
+        while (a < b && (s[a] == ' ' || s[a] == '\t')) { ++a; }
+        while (b > a && (s[b - 1] == ' ' || s[b - 1] == '\t')) { --b; }
+        return lowerCopy(s.substr(a, b - a));
+    };
+    std::size_t pos = 0;
+    while (pos <= args.size()) {
+        std::size_t end = args.find(',', pos);
+        if (end == std::string::npos) { end = args.size(); }
+        const std::string field = args.substr(pos, end - pos);
+        const std::size_t eq = field.find('=');
+        if (eq != std::string::npos && trimmedLower(field.substr(0, eq)) == "driver" &&
+            trimmedLower(field.substr(eq + 1)) == "audio") {
+            return true;
+        }
+        if (end == args.size()) { break; }
+        pos = end + 1;
+    }
+    return false;
+}
+
 }  // namespace
 
 void SoapySource::setModulesLoadedHook(void (*hook)()) {
@@ -1117,6 +1147,19 @@ bool SoapySource::open(const std::string& args) {
             setError(refused);
             return false;
         }
+    }
+    // A SOUND CARD IS NOT A RADIO, and asking for one here would run the
+    // "audio" driver's find function in THIS process - the ASIO walk the device
+    // scan keeps out of its child (neverAskedDrivers, soapy_enum_proc.cpp). The
+    // Source list never offers such a row and a saved Source is refused before
+    // it gets here (gui/app_window.cpp, isAudioDriver); a patch radio opens by
+    // the args its saved patch carries, and reaches this call directly. Refused
+    // after the release above, like every failed open, so nothing stays open.
+    if (namesSoundCardDriver(args)) {
+        setError(
+            "SoapySDR's audio driver lists sound cards, not radios, and is never "
+            "opened here - use the Sound card source for a sound card.");
+        return false;
     }
     if (!runtimeAvailable()) {
         setError(
