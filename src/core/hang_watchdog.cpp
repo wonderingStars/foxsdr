@@ -12,6 +12,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/hang_watchdog.hpp"
 
+#include "core/breadcrumb.hpp"
 #include "core/diag_log.hpp"
 #include "core/diag_report.hpp"
 
@@ -378,6 +379,11 @@ std::string HangWatchdog::reportDir() const {
 void HangWatchdog::heartbeat(bool recordGap) {
     const double now = nowMs();
     const double prev = lastBeatMs_.exchange(now, std::memory_order_relaxed);
+    // THE SENTINEL'S HEARTBEAT is this one (core/breadcrumb.hpp): what the watcher
+    // outside the process calls "the window had not drawn for N s" is exactly what
+    // this watchdog calls a stall, because both are read off the same call. A
+    // pointer test when no watcher is attached; two relaxed stores when one is.
+    breadcrumb::beat();
 #if defined(_WIN32)
     guiThreadId_.store(::GetCurrentThreadId(), std::memory_order_relaxed);
 #elif defined(__linux__)

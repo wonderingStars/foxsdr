@@ -40,11 +40,13 @@
 #include <GLFW/glfw3.h>
 
 #include "core/version.hpp"
+#include "core/breadcrumb.hpp"
 #include "core/crash_handler.hpp"
 #include "core/diag_log.hpp"
 #include "core/freq_import.hpp"
 #include "core/diag_report.hpp"
 #include "core/i18n.hpp"
+#include "core/sentinel.hpp"
 #include "core/utf8_text.hpp"
 // Generated window-icon pixels. Reached by a path relative to this file
 // because resources/ is deliberately not on any target's include path — the
@@ -1279,6 +1281,9 @@ void monitorWorkareaForWindow(GLFWwindow* window, int& areaX, int& areaY, int& a
 }  // namespace
 
 int AppWindow::run(int frames) {
+    // WHERE THE SENTINEL SEES THIS PROCESS (core/breadcrumb.hpp): the phases are
+    // stages this function really has, set at the line that begins each of them.
+    cascade::core::breadcrumb::setPhase(cascade::core::breadcrumb::Phase::CreatingWindow);
     glfwSetErrorCallback(&glfwErrorCallback);
     if (!glfwInit()) {
         std::fprintf(stderr, "cascade: glfwInit failed\n");
@@ -1529,6 +1534,11 @@ int AppWindow::run(int frames) {
     // and drawCabinetRail draws no keys.
     cascade::gui::frame::install(window);
     glfwShowWindow(window);
+    // The window is up. Everything from here to the end of the first frame - the
+    // receiver, the watchdog, the config save, the first draw - is still start-up
+    // to the sentinel; the second heartbeat (HangWatchdog::heartbeat) ends it.
+    cascade::core::breadcrumb::setPhase(
+        cascade::core::breadcrumb::Phase::AwaitingFirstFrame);
 
     // A previous run() tore the waterfall down with its GL context (see the
     // teardown below); re-create it against the new context so run() stays
@@ -1787,6 +1797,14 @@ int AppWindow::run(int frames) {
         // nobody is ever tempted to call it less often than every frame.
         watchdog_.heartbeat(!diagSkipNextGap_);
         diagSkipNextGap_ = false;
+        // What else is going on, for the sentinel: a radio being opened on a
+        // worker. Mirrored from the state the window already keeps, each frame -
+        // a pointer test and a compare when nothing changed. And, about every five
+        // seconds, one non-blocking look at whether the watcher itself is still
+        // there (it says so once in the log if not).
+        cascade::core::breadcrumb::setActivity(cascade::core::breadcrumb::kOpeningRadio,
+                                               deviceOpenPending_);
+        if (rendered % 300 == 0) { cascade::core::sentinelPoll(); }
 
         glfwPollEvents();
 
@@ -2361,6 +2379,11 @@ int AppWindow::run(int frames) {
     // invisible again.
     presentGrace.release();
 
+    // THE SENTINEL'S SHUTDOWN STEPS (core/breadcrumb.hpp), set where each stage of
+    // this teardown begins: it is the same list this comment block already walks,
+    // and a freeze in any of them is "the shutdown stopped in step N" to the
+    // watcher, judged against the same long budget the watchdog uses.
+    cascade::core::breadcrumb::setPhase(cascade::core::breadcrumb::Phase::ShutdownBegun);
     watchdog_.beginShutdown();
     const auto teardownStart = std::chrono::steady_clock::now();
     // NO SOUND CARD CLOSE IS WAITED FOR FROM HERE ON: each is handed to its
@@ -2470,6 +2493,8 @@ int AppWindow::run(int frames) {
     // ended further up this teardown ("Closing the window mid-take"), and
     // this is the one pipeline_.stop() tests/test_stop_ends_recordings allows
     // outside it.
+    cascade::core::breadcrumb::setPhase(
+        cascade::core::breadcrumb::Phase::ShutdownStoppingReceiver);
     pipeline_.stop();
 
     // THE CLEAN-EXIT MARKER IS NOT WRITTEN HERE. It is written below, after the
@@ -2507,6 +2532,8 @@ int AppWindow::run(int frames) {
     // may be inside a plugin decoder, and each speaker's file is finalised
     // when its radio's sets go. The receiver's radio is not reopened on the
     // way out - the config already remembers it (patchMainKeep_).
+    cascade::core::breadcrumb::setPhase(
+        cascade::core::breadcrumb::Phase::ShutdownUnloadingPlugins);
     patchStopAll(false);
     detachAndUnloadPlugins();
 
@@ -2539,6 +2566,8 @@ int AppWindow::run(int frames) {
     // everything was still alive. Residual, stated plainly: a death in the
     // GL/GLFW teardown below still counts as a clean exit - the watchdog,
     // stopped last as ever, is what covers that stretch.
+    cascade::core::breadcrumb::setPhase(
+        cascade::core::breadcrumb::Phase::ShutdownWritingMarker);
     telemetryCleanExit_ = true;
     if (!configPath_.empty()) {
         // Built on lastRequestedConfig_, not savedCfg_: the final-state save
@@ -2574,6 +2603,11 @@ int AppWindow::run(int frames) {
                 static_cast<long long>(cascade::gui::ConfigWriter::kSaveBound.count()));
         }
     }
+    // THE MARKER STAGE IS OVER, saved or abandoned: from here a normal exit is a
+    // clean one to the sentinel, as it is to the unclean-exit counter's reading of
+    // a death in the teardown that follows (see the residual stated above).
+    cascade::core::breadcrumb::setPhase(
+        cascade::core::breadcrumb::Phase::ShutdownClosingWindow);
 
     // The waterfall owns a GL texture whose deletion requires the creating
     // context to be current. AppWindow outlives that context (main() destroys
@@ -2644,6 +2678,7 @@ int AppWindow::run(int frames) {
     // sentence in a header, not a protection. tests/test_diag_hang.cpp reads
     // this line back and requires at least one — the plugin scan.
     std::printf("cascade: watchdog pauses %u\n", watchdog_.pausesTaken());
+    cascade::core::breadcrumb::setPhase(cascade::core::breadcrumb::Phase::Finished);
     return 0;
 }
 
@@ -11634,6 +11669,12 @@ void AppWindow::rescanPlugins() {
     //
     // Scope guard, because there is a `return` in the middle of this function.
     cascade::core::WatchdogPause holdWatchdog(watchdog_);
+    // AND TOLD TO THE SENTINEL (core/breadcrumb.hpp), the same way: a death inside
+    // a plugin's load or unload is the most likely death this application has, and
+    // the report should say it was in one. Raised for the length of the call -
+    // which is also the first load, in the constructor, before the window exists.
+    cascade::core::breadcrumb::ActivityScope sentinelPluginActivity(
+        cascade::core::breadcrumb::kReloadingPlugins);
 
     // WHERE THE TIME WENT, in one log line per rescan (0.99.63). A session of
     // 0.99.58 logged the line that opens a rescan and, 119.976 s later, the first
@@ -26908,6 +26949,13 @@ void AppWindow::applyDiagnosticsEnabled(bool on) {
                                                      diagnosticsEnabled_);
     }
     watchdog_.setReportDir(diagnosticsEnabled_ ? diagCrashDir_ : std::string());
+    // AND THE SENTINEL, by the same switch (core/sentinel.hpp): off ends the watcher
+    // and forbids any report from it; on starts one if this run may have one at all
+    // (main() armed it only for an interactive session, or a test that asked) and
+    // none is running. A run never allowed to write has no directory, and gets none.
+    if (!diagCrashDir_.empty()) {
+        cascade::core::sentinelSetEnabled(diagnosticsEnabled_);
+    }
     // THE FIRST CALL IS THE START OF THE SESSION (run() makes it before anything
     // else is logged): whether the log file was on then is whether this session's
     // start line is in it, which is what tells this session from the one before.

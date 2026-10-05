@@ -314,6 +314,34 @@ PreviousSessionLog readPreviousSessionLog(const std::string& logDir, std::size_t
     return out;
 }
 
+SessionLogTail readNewestSessionLogTail(const std::string& logDir, std::size_t maxLines) {
+    SessionLogTail out;
+    if (logDir.empty()) { return out; }
+    std::error_code ec;
+    if (!fs::is_directory(fs::path(logDir), ec)) { return out; }
+
+    std::vector<std::string> all;
+    for (const std::string& name : logFileNamesOldestFirst()) {
+        const fs::path p = fs::path(logDir) / name;
+        if (!fs::is_regular_file(p, ec)) { continue; }
+        std::vector<std::string> part = readTailLines(p, kLogFileReadBytes);
+        all.insert(all.end(), std::make_move_iterator(part.begin()),
+                   std::make_move_iterator(part.end()));
+    }
+    std::size_t from = 0;
+    for (std::size_t i = all.size(); i > 0; --i) {
+        if (isSessionStartLine(all[i - 1])) {
+            from = i - 1;
+            out.found = true;
+            break;
+        }
+    }
+    out.sessionLines = all.size() - from;
+    const std::size_t keep = std::min(maxLines, out.sessionLines);
+    out.lines.assign(all.end() - static_cast<std::ptrdiff_t>(keep), all.end());
+    return out;
+}
+
 std::string agoText(std::int64_t ageSec) {
     if (ageSec < 0) { return "(age unknown)"; }
     if (ageSec < 60) { return "just now"; }

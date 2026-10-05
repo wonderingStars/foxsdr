@@ -5,6 +5,7 @@
 #include "core/crash_upload.hpp"
 
 #include "core/diag_log.hpp"
+#include "core/sentinel.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -1225,9 +1226,17 @@ Sidecar readSidecar(const std::string& path) {
 
 // A status nothing will change. Everything else is retried on a later start,
 // up to kMaxAttempts.
+//
+// `local-only` IS TERMINAL SINCE 0.99.64. It used to be re-examined on every start,
+// which cost nothing while it meant a display stall (rare) and would have cost the
+// next real report its place once it also means "ended from outside": the sweep
+// looks at the newest few candidates only, and a handful of those kept on the
+// machine would have crowded an older report that is still waiting to be sent out
+// of the window for ever. The report stays on disk and in the bundle's list; only
+// the repeated looking stops.
 bool terminalStatus(const std::string& s) {
     return s == "sent" || s == "duplicate" || s == "abandoned" || s == "refused" ||
-           s == "too-large" || s == "expired";
+           s == "too-large" || s == "expired" || s == "local-only";
 }
 
 void writeSidecar(const std::string& reportPath, const std::string& status, int attempts,
@@ -1343,6 +1352,25 @@ SweepOutcome sweepCrashDir(const SweepParams& params,
                          "a display-driver presentation stall, not a fault in FoxSDR; it "
                          "stays on this machine and is not sent");
             out.notes.push_back(p.filename().string() + ": display stall, kept local");
+            continue;
+        }
+
+        // AN ENDING THE SENTINEL SAW THAT IS NOT A FAULT IN THIS APPLICATION is
+        // not sent either (0.99.64): the user ended it from Task Manager while
+        // the window was drawing, or the session was closing. Reports like these
+        // are written whenever the application is ended from outside, and a
+        // healthy session ended that way must not spend the five a day that a
+        // crash needs. They stay on the machine, in the folder and in the bundle's
+        // list, with the class in the reason; the sidecar says why they were not
+        // sent. Decided by the reason's fixed wording (core/sentinel.hpp), the
+        // same words the writer starts every such reason with.
+        if (r.kind == "crash" && sentinelReasonIsLocalOnly(r.reason)) {
+            ++out.refused;
+            writeSidecar(path, "local-only", sc.attempts, r.signature, params.nowEpoch,
+                         "the sentinel saw this session end from outside while the window was "
+                         "drawing, or as the session closed; that is not a fault in FoxSDR, so "
+                         "it stays on this machine and is not sent");
+            out.notes.push_back(p.filename().string() + ": ended from outside, kept local");
             continue;
         }
 

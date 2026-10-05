@@ -31,7 +31,9 @@
 
 #include <nlohmann/json.hpp>
 
+#include "core/breadcrumb.hpp"
 #include "core/crash_upload.hpp"
+#include "core/sentinel.hpp"
 #include "test_check.hpp"
 
 #if defined(_WIN32)
@@ -591,6 +593,101 @@ void writeConfig(const fs::path& p, bool diagnostics) {
 #endif  // _WIN32
 
 }  // namespace
+
+// THE SWEEP AND THE SENTINEL'S REPORTS (0.99.64), against a real socket: a report
+// the sentinel wrote of a window that had stopped drawing is sent, with exactly the
+// documented fields and nothing new; a report of an ending from outside while the
+// window was drawing (the user ended it from Task Manager) never reaches the wire,
+// spends none of the day's five, and says why in its sidecar. See core/sentinel.hpp.
+// A free function, called once from main() after both platforms' blocks, because
+// the StubServer above exists on both.
+static void sentinelSweepBlock() {
+    const fs::path dir = scratchDir("sentinel");
+    SentinelReportInfo info;
+    info.version = "0.99.64";
+    info.commit = "abc123def456";
+    info.os = "Windows 10.0.22631";
+    info.arch = "x64";
+    info.uptimeSec = 3600;
+    info.logLines = {"12:00:00.000 info FoxSDR 0.99.64 (abc123def456) starting",
+                     "12:00:09.000 info source: opened"};
+    info.logTotalLines = 2;
+    breadcrumb::Snapshot crumb;
+    crumb.valid = true;
+    crumb.startedMs = 1000;
+    crumb.phase = breadcrumb::Phase::Running;
+    crumb.frames = 500;
+    auto verdictFor = [&](unsigned long code, std::uint64_t silentMs) {
+        SentinelFacts f;
+        f.exitKnown = true;
+        f.exitCode = code;
+        f.nowMs = 10'000'000;
+        crumb.beatMs = f.nowMs - silentMs;
+        crumb.phaseMs = f.nowMs - silentMs;
+        f.crumb = crumb;
+        return decideSentinel(f);
+    };
+    const SentinelVerdict frozen = verdictFor(1, 9000);
+    const SentinelVerdict outside = verdictFor(1, 100);
+    CHECK(frozen.cls == SentinelClass::Frozen && frozen.upload());
+    CHECK(outside.cls == SentinelClass::Outside && !outside.upload());
+    const fs::path sendable = dir / "crash-20260825-120000-1234-999999.txt";
+    const fs::path kept = dir / "crash-20260825-130000-1235-999999.txt";
+    writeFile(sendable, renderSentinelReport(frozen, info));
+    writeFile(kept, renderSentinelReport(outside, info));
+
+    StubServer srv;
+    CHECK(srv.start(StubServer::Mode::Accept204));
+    SweepParams p;
+    p.crashDir = dir.string();
+    p.url = srv.url();
+    p.enabled = true;
+    p.installId = "4f9c1d2e3a4b5c6d7e8f90a1b2c3d4e5";
+    p.nowEpoch = 1'700'000'000ull;
+    auto cancel = std::make_shared<UploadCancel>();
+    const SweepOutcome out = sweepCrashDir(p, cancel);
+
+    CHECK(out.considered == 2);
+    CHECK(out.sent == 1);
+    CHECK(out.refused == 1);  // the one kept here
+    CHECK(srv.connections() == 1);
+    // Only the sendable one used any of the day's five.
+    CHECK(out.state.windowCount == 1 && out.state.recent.size() == 1);
+    const std::vector<std::string> bodies = srv.bodies();
+    CHECK(bodies.size() == 1);
+    if (bodies.size() == 1) {
+        const nlohmann::json j = nlohmann::json::parse(bodies[0], nullptr, false);
+        CHECK(!j.is_discarded());
+        if (!j.is_discarded()) {
+            // Exactly the documented request: the sentinel adds no field.
+            std::set<std::string> keys;
+            for (auto it = j.begin(); it != j.end(); ++it) { keys.insert(it.key()); }
+            CHECK(keys == std::set<std::string>(uploadFieldNames().begin(), uploadFieldNames().end()));
+            std::set<std::string> ctxKeys;
+            for (auto it = j["context"].begin(); it != j["context"].end(); ++it) { ctxKeys.insert(it.key()); }
+            CHECK(ctxKeys == std::set<std::string>(uploadContextFieldNames().begin(),
+                                                   uploadContextFieldNames().end()));
+            CHECK(j["kind"] == "crash");
+            CHECK(j["reason"].get<std::string>().rfind(kSentinelReasonFrozen, 0) == 0);
+            CHECK(j["code"] == "0x00000001");
+            CHECK(j["context"]["uptimeSec"] == 3600);
+            CHECK(j["threads"].empty() && j["plugins"].empty());
+            // ...and the kept one is nowhere in it.
+            CHECK(bodies[0].find("ended from outside") == std::string::npos);
+        }
+    }
+    CHECK(readFile(uploadSidecarPath(sendable.string())).find("status: sent") != std::string::npos);
+    const std::string side = readFile(uploadSidecarPath(kept.string()));
+    CHECK(side.find("status: local-only") != std::string::npos);
+    CHECK(side.find("not a fault in FoxSDR") != std::string::npos);
+    // A second start: neither is looked at again, and nothing is sent.
+    const SweepOutcome again = sweepCrashDir(p, cancel);
+    CHECK(again.considered == 0 && again.sent == 0);
+    CHECK(srv.connections() == 1);
+    srv.stop();
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+}
 
 int main() {
     // --- The report parses back into the fields the wire contract needs -----
@@ -1717,6 +1814,8 @@ int main() {
         CHECK(dialog.find("No memory dump is sent, ever") != std::string::npos);
         CHECK(dialog.find("Settings > Diagnostics") != std::string::npos);
     }
+
+    sentinelSweepBlock();
 
     return testSummary("test_crash_upload");
 }

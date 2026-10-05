@@ -464,6 +464,19 @@ const KnownWait kKnownWaits[] = {
      "crashReportWrittenByProcess adds to a report's last-write time before comparing it with "
      "the spawn time; nothing sleeps or blocks on it, and it runs after an enumeration child "
      "has already exited"},
+    // THE SENTINEL (0.99.64). Its one bounded wait is spent in ITS OWN PROCESS, after the
+    // application has ended: runSentinelMain arms a detached thread that ends the sentinel
+    // one second after the application's exit, so the executable (which the sentinel is a
+    // running copy of) can be replaced by an installer even if the disk stalls. The
+    // application never calls it and never waits for the sentinel - not at exit, not when
+    // Diagnostics is switched off (TerminateProcess/SIGKILL, neither waited for), not in
+    // sentinelPoll() (a zero-timeout handle test, once in about 300 frames). The sentinel's
+    // other wait - the application's process handle, or the pipe on Linux - is unbounded on
+    // purpose and is not a chrono constant: it is the thing the process exists to do.
+    {"src/core/sentinel.hpp", "kSentinelExitDeadline", 0,
+     "spent only inside the sentinel process (armSentinelExitDeadline, from runSentinelMain, "
+     "after the application has already ended); the application never waits for the sentinel, "
+     "so its shutdown path never spends it"},
     {"src/source/soapy_source.hpp", "kStreamHealthWindow", 0,
      "not a wait at all - the length of the window the read loop tallies before it writes "
      "its stream-health line; nothing ever sleeps or blocks on it"},

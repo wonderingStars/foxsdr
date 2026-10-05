@@ -2229,6 +2229,37 @@ holds the request, the code and that document to each other in both directions.
   address; PRIVACY.md says so. Windows only. Checked in FoxSDR's tests with a
   real watchdog and a DLL loaded after the module list, not on a real driver
   freeze.
+- **An ending nothing inside FoxSDR could report is now written up by a watcher**
+  (0.99.64). A fast-fail, a heap corruption or a stack overflow runs no handler; a
+  window frozen so hard that the watchdog is stuck too cannot report itself; one
+  ended from the taskbar never gets the chance; and a death during start-up comes
+  before any of it is armed. Those reached us as a bare count of unclean exits, with
+  no cause, and no way to tell a crash from a PC that was shut down. With
+  Diagnostics on, an interactive session now starts a second copy of its own program
+  with no window - the *sentinel* - that does nothing but wait for the first to end.
+  It is given the right to wait for FoxSDR and read its exit code, and a 64-byte page
+  of numbers FoxSDR keeps up to date (the stage it is in, whether a radio or plugins
+  are being opened, when it last drew a frame); it reads none of FoxSDR's memory and
+  takes no dump. When FoxSDR ends it writes one report in the usual folder - or none
+  at all if FoxSDR ended normally or already reported the death itself - saying the
+  exit code in words (access violation, fast-fail, heap corruption, stack overflow),
+  the stage, how long it had run and how long the window had been silent, with the
+  end of the log. A crash exit code, a window that had stopped drawing, and a death
+  before the first frame are sent like any other report; **an ending from outside
+  while the window was drawing (Task Manager, `taskkill`) and one as Windows closed
+  the session are kept on your machine and never sent**, so a healthy FoxSDR you end
+  that way cannot use up the five reports a day a crash needs. The sentinel sends
+  nothing itself, is not started with Diagnostics off (and is ended if you switch it
+  off), leaves within a second of FoxSDR ending so the installer can replace the
+  program, and if it cannot start or dies FoxSDR carries on and says so once in the
+  log. Starting it costs the program about a millisecond. Checked on Windows against
+  real processes that really die and against the real program; **the Linux half
+  compiles only against stand-in declarations and has never run** (it can learn that
+  FoxSDR has gone, never how, and says so in the report), and a real log off or
+  shutdown, a real Task Manager *End task* and the Microsoft Store package were not
+  exercised. The design, the decision table, every fixed sentence and what is
+  proven are in [docs/DIAGNOSTICS.md](docs/DIAGNOSTICS.md) ("The sentinel"); what a
+  report carries is in [PRIVACY.md](PRIVACY.md), and a test holds the two to the code.
 - A rotating log lives in `%LOCALAPPDATA%\FoxSDR\logs\foxsdr.log`. Since
   0.89.0 it records what the **radio driver** says as well as what FoxSDR
   does: SoapySDR's own log is bridged in (lines beginning `soapy:`), and in a

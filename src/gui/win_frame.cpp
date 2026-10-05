@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cstdlib>
 
+#include "core/breadcrumb.hpp"
 #include "core/diag_log.hpp"
 
 #ifdef _WIN32
@@ -46,6 +47,17 @@ LRESULT CALLBACK frameProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         // move. Nothing is handled here - GLFW and the backend still get the
         // message exactly as before.
         g_displayChanges.fetch_add(1u, std::memory_order_relaxed);
+        break;
+    case WM_ENDSESSION:
+        // THE SESSION IS ENDING (a log off or a shutdown), told to the sentinel
+        // and passed on: with wParam TRUE "the Windows session can end any time
+        // after all applications have returned from processing this message"
+        // (WM_ENDSESSION). Windows then ends the process from outside - nothing
+        // after this line is certain to run - and the sentinel, which sees the
+        // exit from another process, uses this flag to keep that ending out of
+        // the reports it sends (core/sentinel.hpp, class Session). Nothing is
+        // handled here: GLFW and the backend still get the message.
+        if (wParam != 0) { core::breadcrumb::noteSessionEnding(); }
         break;
     case WM_NCHITTEST: {
         // THE FRAME ANSWERS FIRST. The window keeps a real, if invisible,

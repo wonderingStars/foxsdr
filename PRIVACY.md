@@ -429,6 +429,61 @@ against a report from a real fault in a real child process; the freeze header by
 `tests/test_diag_hang.cpp`, against a report from a real stall. The first of
 those also asserts the absence of the things below.
 
+**A sentinel report (since 0.99.64).** Some endings nothing inside FoxSDR can
+report: a fast-fail that skips every handler, a stack overflow, a window frozen
+so hard that the freeze watchdog is stuck too, a death before the handlers are
+armed, a window that froze and was then ended from the taskbar. In an
+interactive session, with Diagnostics on, FoxSDR starts a second copy of its own
+program, with no window, that does nothing but wait for the first to end - the
+*sentinel*. It is given a handle that lets it wait for FoxSDR and read how it
+ended (its exit code and when it started and stopped - not its memory, and no
+dump), and a small shared page of numbers that FoxSDR keeps up to date: which
+stage it is in (starting, building the application, creating the window, waiting
+for the first frame, running, or one step of shutting down), whether a radio is
+being opened or plugins are being loaded, how many frames it has drawn and when
+it last drew one, and whether Windows has said the session is closing. **The page
+has no room for text, so it can never hold a name, a path, a frequency or an
+address.** When FoxSDR ends, the sentinel writes ONE report in the same folder
+and format as the others - and none at all when FoxSDR ended normally, or already
+wrote a report of this ending itself. The sentinel sends nothing: its report is
+sent, like every other, at the next start, under the same switch and the same
+limits. With Diagnostics off it is not started, and it is ended if you switch
+Diagnostics off during a session. FoxSDR's log says once, in one line, when it
+starts one (with the sentinel's process number, an operating-system number that
+means nothing once it has ended) and once if it ends before FoxSDR does. A
+sentinel report carries exactly these lines and no others:
+
+| Line | Example | Why |
+|---|---|---|
+| `kind` | `crash` | The same kind as a crash report, so nothing that reads reports changes. |
+| `reason` | `sentinel: crash exit code, no report from the process - fast-fail (abort or failed integrity check); phase running; silent 0 s` | One fixed sentence per class (the second table below), then what the exit code means, the stage FoxSDR was in, and how many whole seconds its drawing had been silent. The exit code's meaning, the stage and the number come from closed lists - `access violation`, `fast-fail`, `heap corruption`, `stack overflow`, `unknown exit code` (or, on Linux, `exit status not available on this platform`), and the stages above - never from text on your machine. |
+| `code` | `0xC0000409` | The exit code Windows recorded for the process, as a number; `unknown` on Linux, where a process that is not the parent cannot learn it. A code, not content. |
+| `signature` | `A31F…` | Groups repeats of one kind of ending together: derived from the class, the exit code and the stage - never from the time and never from anything about you. |
+| `version`, `commit`, `os`, `arch` | `0.99.64`, `Windows 10.0.22631` | As in every report. |
+| `receiver` | `not known to the sentinel` | A fixed sentence in place of the receiver lines (mode, source, radio, plugins): the sentinel cannot read them, and says so instead of leaving them blank. |
+| `uptime-sec` | `2731` | How many seconds FoxSDR had been running. |
+| `fault-thread-own` | `unknown` | Always `unknown`: the sentinel sees no stack. |
+| the log | the last 256 lines | The end of this session's log, read back from the log file - the same lines a crash report carries from memory, scrubbed by exactly the same rule when it is uploaded. When two copies of FoxSDR run at once they share one log file, so the tail is the end of that shared file. |
+
+Which endings are **sent** and which are **kept on your machine**, by the
+sentence the `reason` begins with:
+
+| Class | The reason begins | What is done with it |
+|---|---|---|
+| `crash` | `sentinel: crash exit code, no report from the process` | sent |
+| `frozen` | `sentinel: window had stopped drawing when it ended` | sent |
+| `startup` | `sentinel: ended before the first frame` | sent |
+| `outside` | `sentinel: ended from outside, window was drawing` | kept here |
+| `session` | `sentinel: ended as the session closed` | kept here |
+
+An ending from outside while the window was drawing (you ended FoxSDR from Task
+Manager, or from a script) and an ending as Windows closed your session are
+**never uploaded**: they are not faults in FoxSDR, and a healthy FoxSDR that you
+end that way must not use up the five reports a day a crash needs. They stay in
+the reports folder and in the *reports on this machine* list of the bundle, with
+the class in the reason. Nothing new is personal in any of it: codes, fixed
+words, whole seconds, and the log lines a crash report already carries.
+
 **A full memory dump is off by default.** If you switch it on
 (Settings → Diagnostics) a `.dmp` file is written *beside* the text report. A
 memory dump is a copy of the program's memory and can contain file names, window
@@ -454,7 +509,7 @@ One request per report, on the **next** start after the failure, to
 | `module`, `offset` | `cascade.exe`, `1179648` | Where it failed, as a file name and a distance into that file. Not an address in your memory. |
 | `signature` | `A31F…` (16 hex digits) | Groups repeats of one bug. Derived from the fault kind, the faulting module and the offset — never from the time and never from anything about you. |
 | `os`, `arch` | `Windows 10.0.22631`, `x64` | Whether a fault is specific to a Windows version. |
-| `reason` | `access violation`, or `fault in a third-party SDR module, absorbed…` | The report's own reason line, verbatim. This is what separates a fault the application **survived** (a driver fault absorbed by the vendor-call guard) from one that killed it — without it the two are indistinguishable rows. Empty for a freeze report, which has no such line. |
+| `reason` | `access violation`, or `fault in a third-party SDR module, absorbed…` | The report's own reason line, verbatim. This is what separates a fault the application **survived** (a driver fault absorbed by the vendor-call guard) from one that killed it — without it the two are indistinguishable rows. Empty for a freeze report, which has no such line. Since 0.99.64 it can also be a **sentinel** reason (*A sentinel report*, above): a fixed sentence beginning `sentinel: `, then the meaning of the exit code, the stage and the seconds of silence - again from closed lists. The two classes kept on the machine are never uploaded. |
 | `code` | `0xC0000005` | The Windows exception code, verbatim from the report. A code, not content. Empty for a freeze report. |
 | `installId` | `4f9c…`, **or empty** | The same anonymous identifier the usage report uses, so the receiving end can stop one machine flooding it. **If usage reporting is off there is no identifier and this is sent empty** — a crash report never creates one. |
 | `plugins` | `[{name, version, buildId}]` | Plugins are third-party code running inside the application, and which one was loaded has already been the answer to real faults. |

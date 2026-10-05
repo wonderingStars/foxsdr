@@ -1289,7 +1289,11 @@ bool isWholeFatalReportHead(const std::string& head) {
             sawKind = true;
         } else if (line.rfind("reason: ", 0) == 0) {
             const std::string reason = line.substr(8);
-            absorbed = reasonStartsWith(reason.c_str(), kAbsorbedFaultReasonPrefix);
+            // A fault the process SURVIVED is not the report of a death: an
+            // absorbed vendor fault, or its report of a child process's death.
+            absorbed = reasonStartsWith(reason.c_str(), kAbsorbedFaultReasonPrefix) ||
+                       reasonStartsWith(reason.c_str(), kChildDeathReasonPrefix) ||
+                       reasonStartsWith(reason.c_str(), "child process fault (contained)");
         } else if (complete && line.rfind("signature: ", 0) == 0) {
             const std::string sig = line.substr(11);
             bool hex = sig.size() == 16;

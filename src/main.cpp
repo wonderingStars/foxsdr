@@ -38,9 +38,11 @@
 #include "source/soapy_enum_proc.hpp"
 #include "source/soapy_source.hpp"
 
+#include "core/breadcrumb.hpp"
 #include "core/crash_handler.hpp"
 #include "core/diag_log.hpp"
 #include "core/diag_report.hpp"
+#include "core/sentinel.hpp"
 #include "core/tester_link.hpp"
 
 // ---------------------------------------------------------------------------
@@ -960,6 +962,23 @@ int main(int argc, char** argv) {
         return cascade::source::runSdrPlayProbeToFile(argv[2], biasTee);
     }
 
+    // THE SENTINEL (0.99.64, core/sentinel.hpp):
+    //
+    //     cascade --sentinel --app-pid=N --app-handle=H --map-handle=M ...
+    //
+    // The same executable, started by the application itself, which waits for the
+    // application to end and writes the one report of an ending nothing inside it
+    // could report. Returns here for the reasons the helpers above do and a few
+    // more: no configuration is read or written, no crash handler is installed (it
+    // would write reports of its own), no instance mutex is claimed, no window,
+    // console, GL or radio is opened. The accepted arguments are enumerated by
+    // runSentinelMain, which refuses anything else, and argv[1] must be the flag
+    // itself, so no combination of arguments to a real session can turn it into a
+    // watcher.
+    if (argc >= 2 && std::strcmp(argv[1], "--sentinel") == 0) {
+        return cascade::core::runSentinelMain(argc, argv);
+    }
+
     constexpr const char* kCrashDirFlag = "--crash-dir=";
     constexpr const char* kDriverFlag = "--driver=";
     constexpr const char* kListDriversFlag = "--list-drivers";
@@ -1346,6 +1365,28 @@ int main(int argc, char** argv) {
     // the harness; a developer at a terminal keeps theirs (the capture
     // declines a console someone else is attached to - see diag_log.hpp).
     if (frames < 0) { cascade::core::installStderrCapture(); }
+
+    // THE SENTINEL, for an interactive session only (core/sentinel.hpp): started
+    // HERE, after every tool mode has returned and before the application object
+    // exists, so that the stretch with the most to go wrong - the plugin load, the
+    // window, the first frame - is watched. A bounded --frames run never starts one
+    // unless a test says so with CASCADE_SENTINEL_TEST, honoured only with --frames
+    // and only when the run may write diagnostics at all, like every test seam in
+    // this file. It follows the Diagnostics switch exactly: `wanted` is the stored
+    // switch, and the Settings checkbox starts and ends it through the same call
+    // that arms every other part of diagnostics (AppWindow::applyDiagnosticsEnabled).
+    {
+        const char* hook = std::getenv("CASCADE_SENTINEL_TEST");
+        const bool sentinelTest = frames >= 0 && hook != nullptr && hook[0] == '1';
+        if (mayWrite && (frames < 0 || sentinelTest)) {
+            cascade::core::SentinelOptions so;
+            so.crashDir = cascade::core::diagCrashDir();
+            so.logDir = cascade::core::diagLogDir();
+            cascade::core::sentinelConfigure(so);
+            cascade::core::sentinelSetEnabled(wanted);
+            cascade::core::breadcrumb::setPhase(cascade::core::breadcrumb::Phase::BuildingApp);
+        }
+    }
 
     cascade::gui::AppWindow app(configPath, announceConfig);
     // Empty unless this run is ALLOWED to write - which is not the same as

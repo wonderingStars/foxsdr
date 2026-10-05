@@ -41,7 +41,9 @@
 // /GS stack-cookie failure, 0xC0000409) transfers straight to the kernel and
 // no user-mode handler runs. Those appear as an unclean exit with no report -
 // which the telemetryCleanExit marker still counts, so they are visible as a
-// number even when they are invisible as a report.
+// number even when they are invisible as a report. Since 0.99.64 a watcher
+// OUTSIDE the process writes one for them (core/sentinel.hpp): it sees the exit
+// code, and this file's own reports are how it knows not to write a second.
 //
 // WRITING A REPORT FROM A BROKEN PROCESS. Everything the fault path needs is
 // prepared while the process is still healthy: the directory is created at
@@ -159,6 +161,15 @@ constexpr const char* kFaultLinePrefix = "cascade-fault: ";
 // own wording still starts with it.
 constexpr const char* kAbsorbedFaultReasonPrefix = "fault in a third-party SDR module, absorbed";
 
+// THE START OF THE `reason:` LINE OF THE PARENT'S REPORT OF AN ENUMERATION CHILD'S
+// DEATH (source/soapy_enum_proc.cpp), and the second kind of report that is
+// written by a process that SURVIVED. Shared so that crashReportWrittenByProcess
+// can tell it from the report of a death: until 0.99.64 it was only ever asked
+// about a CHILD's process id, whose own reports never begin this way, and the
+// sentinel now asks it about the APPLICATION's - whose folder entries include
+// these, for deaths of its children that it carried on from.
+constexpr const char* kChildDeathReasonPrefix = "SDR device enumeration child process died";
+
 // Compile-time prefix test, for the static_assert above's one user.
 constexpr bool reasonStartsWith(const char* reason, const char* prefix) noexcept {
     for (; *prefix != '\0'; ++prefix, ++reason) {
@@ -222,11 +233,12 @@ std::string activeCrashDir();
 //     `signature:`, which is what the uploader needs to send it at all. A file
 //     the handler created and never wrote to (the process was killed between
 //     the two) is not a report and must not stand in for one;
-//   - its `reason:` is not an ABSORBED vendor fault (kAbsorbedFaultReasonPrefix):
-//     a child that absorbed a fault and carried on writes a report with its own
-//     process id too, and if it then dies by a route the handler never sees
-//     (a heap corruption, a vendor TerminateProcess) that earlier file is not
-//     the report of the death.
+//   - its `reason:` is not an ABSORBED vendor fault (kAbsorbedFaultReasonPrefix)
+//     and not a parent's report of a CHILD's death (kChildDeathReasonPrefix, or
+//     the writer's own default "child process fault (contained)"): a process that
+//     absorbed a fault and carried on writes a report with its own process id too,
+//     and if it then dies by a route the handler never sees (a heap corruption, a
+//     vendor TerminateProcess) that earlier file is not the report of the death.
 bool crashReportWrittenByProcess(const std::string& crashDir, unsigned long pid,
                                  std::chrono::system_clock::time_point notBefore);
 

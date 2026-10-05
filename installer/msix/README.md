@@ -585,6 +585,13 @@ package is rebuilt, and `build-msix.ps1 -TestSign` makes a fresh one if so.
 **Close it through its window, never `Stop-Process`.** FoxSDR counts an
 unclean exit as a crash (`telemetryCrashes`), so every forced kill inflates the
 owner's own figures — that has happened before, and the rows cannot be deleted.
+Since 0.99.64 a forced kill of a healthy session also leaves a `sentinel: ended from
+outside` report in the reports folder (never uploaded: `docs/DIAGNOSTICS.md`, "The
+sentinel"), and the packaged process starts a second copy of its own executable, with
+no window, to write it. Whether a packaged full-trust process may do that was not
+established from Microsoft's documentation (the packaged-app page is silent) and no
+signed package has run it; the enumeration child already starts the same executable as
+a child, so a package that blocked one would have blocked the other.
 
 **Black-hole the endpoints before any launch.** A development build posting to
 the live endpoint pollutes the product analytics, and Analytics Engine is

@@ -2090,7 +2090,8 @@ of the report is written and flushed before phase 2 starts, and
 `__fastfail` (the `/GS` stack-cookie failure, `0xC0000409`) transfers straight
 to the kernel and no user-mode handler runs. Those appear as an unclean exit
 with no report — which `telemetryCleanExit` still counts, so they are visible as
-a number even when they are invisible as a report.
+a number even when they are invisible as a report. (Since 0.99.64 a watcher outside
+the process writes one: see *The sentinel*, below.)
 
 ### A finding worth keeping
 
@@ -2103,6 +2104,430 @@ process with `0xC0000409` and left **no report at all**. `abort()` is where all
 of those paths converge on whatever thread they happen on, and the UCRT raises
 `SIGABRT` before it fast-fails — so a `SIGABRT` handler is the net underneath,
 and it is load-bearing rather than belt-and-braces.
+
+## The sentinel — the ending nothing inside the process can report (0.99.64)
+
+**Measured, 2026-10.** Over seven days the installs counted at least 85 sessions
+that ended uncleanly out of 925, while about a dozen crash and freeze reports
+arrived. Most abnormal endings therefore reached us as a bare counter, with no
+cause - and some are innocent (the PC was shut down, the user ended the program
+from Task Manager), which that counter cannot tell from a crash. What the
+in-process reporting above cannot see is exactly the list the counter was
+standing in for:
+
+- a death in which no handler runs: a fast-fail (`0xC0000409`, which the
+  `__fastfail` documentation says invokes no exception handler), a heap
+  corruption (`0xC0000374`), a stack overflow, a fault *inside* the handler;
+- a window that froze and was then ended from the taskbar (the 0.99.59 report
+  above, and the freeze so total that the watchdog thread is stuck too);
+- a death during start-up, before the handlers and the watchdog are armed.
+
+The sentinel is a small watcher that notices such an ending and writes **one**
+report saying what can be known.
+
+### What it is
+
+The **same executable**, started by the application itself with
+`cascade --sentinel ...` (`runSentinelMain`, `src/core/sentinel.hpp`), not a second
+binary: the installer ships one. `main()` dispatches on that flag before anything
+else - no configuration is read or written, no crash handler is installed (it
+would write reports of its own), no instance mutex is claimed, no window,
+console, GL or radio is opened. The tool and helper modes (`--version`,
+`--selftest`, the enumeration helper, the SDRplay probe) never start one, and a
+bounded `--frames` run starts one only when a test asks
+(`CASCADE_SENTINEL_TEST=1`, honoured only with `--frames` and only when the run
+may write diagnostics at all). An interactive session starts one per application
+instance, from `main()` just before the `AppWindow` object is built, so the
+plugin load, the window and the first frame are watched.
+
+It follows the **Diagnostics switch exactly**, through the same call that arms
+every other part of diagnostics (`AppWindow::applyDiagnosticsEnabled`): with the
+switch off at start no process is started; switched off mid-session the watcher is
+ended and the breadcrumb's `reports-off` flag is raised first, so that nothing is
+written whatever happens next; switched on mid-session, one starts then. With
+Diagnostics off nothing of it exists but a page of memory in the application's
+own address space.
+
+While it waits it uses no CPU: it blocks on the application's process handle.
+Measured on the real binary after ten seconds of waiting: **0 ms of CPU, 8.7 MB
+working set (2.3 MB private)**.
+
+### What it can see, and what it cannot
+
+It reads **no memory** of the application and takes **no dump** - no debugger, no
+`ReadProcessMemory`, no minidump. It has three things and nothing else:
+
+1. **A handle to the application's process with `SYNCHRONIZE |
+   PROCESS_QUERY_LIMITED_INFORMATION`** and no other right: enough to wait for the
+   process and read its exit code and its start and exit times. It is a handle to
+   *this* process handed down by inheritance, not a lookup by process id, which
+   could name a different process if the id were reused. It is not enough to read
+   memory, suspend, debug or end the application, and nothing here needs more.
+2. **The breadcrumb**, a 64-byte page of shared memory the application writes
+   deliberately (below), mapped **read-only** in the watcher (`FILE_MAP_READ`) and
+   **unnamed** - a pagefile-backed section with no object name, so there is
+   nothing for another user or another session to open, and no name that could
+   collide across users or sessions.
+3. **Files the application already writes:** the log (read back from
+   `foxsdr.log`, `foxsdr.1.log`, `foxsdr.2.log` - every line is flushed as it is
+   written) and the reports folder.
+
+Exactly those two handles are inherited (`PROC_THREAD_ATTRIBUTE_HANDLE_LIST`), as
+inheritable *copies* made for the one spawn and closed straight after it; the
+watcher is created with `CREATE_NO_WINDOW`, no standard handles, no job. A list that
+cannot be built is a start that does not happen, because the alternative - inherit
+everything - would hand it whatever pipe another thread has open at that instant
+(the enumeration child's own comment is about the same hazard). It is told nothing
+else: its command line is the application's process id and the two handle numbers,
+and the two folders (the same folder the enumeration child is given).
+
+**The clean-exit marker is not read from the configuration.** The sentinel could
+have read it; it does not, because the configuration file is shared by every
+instance (FoxSDR has never been single-instance), so what it says cannot say which
+*process* finished. The
+application mirrors the marker's stage into the breadcrumb at the instant it writes
+the marker (`ShutdownWritingMarker` then `ShutdownClosingWindow`, after the bounded
+wait whether the save landed or was abandoned), and "clean" means exit code 0 *and*
+that stage reached - the same fact the unclean-exit counter reads, per process.
+
+### The breadcrumb
+
+`src/core/breadcrumb.hpp`. 64 bytes, one cache line, natural alignment, plain
+integers accessed through `std::atomic_ref`. **Only enumerated or numeric values;
+no string of any kind**, so it cannot hold a name, a path, a frequency or an
+address - the 12 reserved bytes are asserted zero after every writer has run, and
+the layout is pinned offset by offset in `tests/test_sentinel.cpp`.
+
+| Offset | Size | Field | Meaning |
+|---|---|---|---|
+| 0 | 4 | `magic` | `0x43425846` ("FXBC"), written last with release |
+| 4 | 4 | `layout` | `1` |
+| 8 | 8 | `startedMs` | steady-clock ms when the block was made |
+| 16 | 8 | `beatMs` | steady-clock ms of the last frame's heartbeat (0: none yet) |
+| 24 | 8 | `frames` | heartbeats so far |
+| 32 | 8 | `phaseMs` | steady-clock ms when `phase` last changed |
+| 40 | 4 | `phase` | a `Phase` (below) |
+| 44 | 4 | `activity` | bits: `1` a radio is being opened, `2` plugins are being (re)loaded |
+| 48 | 4 | `flags` | bits: `1` Windows said the session is ending, `2` reports are off |
+| 52 | 12 | reserved | zero |
+
+The phases are stages the code **really has**, set at the line that begins each
+(`main()`, `AppWindow::run`): 1 *starting* (main, before the application object),
+2 *building the application* (the constructor: the band plan and the first plugin
+load), 3 *creating the window* (GLFW, GL, ImGui), 4 *waiting for the first frame*
+(window shown; receiver, watchdog and the first config save), 5 *running*, then the
+teardown's own steps, the same list its comment block walks: 6 *shutting down:
+saving* (recordings closed, transmitter and GPS stopped, final state saved), 7
+*stopping the receiver* (`pipeline_.stop()`), 8 *unloading plugins*, 9 *writing the
+exit marker*, 10 *closing the window* (GL/GLFW teardown), 11 *after shutdown*. A
+radio open and a plugin load overlap the main sequence instead of following it, so
+they are **activity bits** that refine the phase in the report (`opening a radio`,
+`reloading plugins`, and `loading plugins` while the first load runs).
+
+**The heartbeat is the watchdog's.** `HangWatchdog::heartbeat`, called once per
+drawn frame, now also calls `breadcrumb::beat()`, so "the window had not drawn for
+N s" to the watcher is exactly what the watchdog calls a stall. The second
+heartbeat ends *waiting for the first frame* (so a death during the first frame is
+still start-up). **Hot path, measured:** 18 ns per frame for the heartbeat, the
+activity mirror and a phase write together, **zero allocations** (a replaced
+`operator new` counts them), lock-free (`atomic_ref` on 32- and 64-bit integers is
+always lock-free here, `static_assert`ed).
+
+### What it decides
+
+When the application ends, in this order (`decideSentinel`, a pure function, every
+row and boundary in `tests/test_sentinel.cpp`):
+
+1. `reports-off` flag set -> nothing. **Off means off**, whatever else is true.
+2. A **whole report of this death by the in-process handler** exists -> nothing
+   (below).
+3. **Clean** -> nothing, and the sentinel is gone at once: exit code 0 and the
+   shutdown reached `closing the window`. (Exit code 0 *before* that stage is not
+   clean: it is reported as a crash-class ending, `exit code 0 before the shutdown
+   had finished`. A death after the marker with a crash code is still a crash.)
+4. The **session was closing** -> *session*, kept here.
+5. It ended **before the first frame** (phase before *running*) -> *startup*, sent,
+   whatever the exit code.
+6. A **crash exit code** the handler never saw -> *crash*, sent.
+7. The heartbeat had been **silent for longer than the watchdog's own threshold**
+   -> *frozen*, sent.
+8. Anything else -> *outside*, kept here.
+
+The "freeze threshold" is read from `HangWatchdog`'s own constants, so the two
+cannot disagree: its start-up budget (`kStartupThresholdMs`, 30 s) for the first
+`kStartupFrames` (30) heartbeats, `kDefaultThresholdMs` (5 s) after, and
+`kShutdownThresholdMs` (27 s) once the frame loop has ended - measured from the
+later of the last heartbeat and the last change of phase, because a teardown has
+no heartbeats and has instead the moment it entered its step. A freeze the
+watchdog filed (a `hang-<pid>-N.txt` written *after the last sign of life*) covers
+the freeze **and** the ending that follows it, so a frozen-then-killed window whose
+watchdog did report gets one report, not two; a freeze report from before the last
+heartbeat (the window recovered, then ended another way) covers nothing.
+
+A *crash code* is a Windows exception or NTSTATUS error as an exit code: top nibble
+`8`, `C` or `E`, other than `STATUS_CONTROL_C_EXIT` (`0xC000013A`, a request to end,
+not a fault). `1` from `taskkill /F`, `-1` from `Stop-Process`, `0` are not. The words
+each exit code gets are tabulated below.
+
+**What each class writes, and whether it uploads.** Every report is `kind: crash`
+(below: why), with a `reason` that is one **fixed sentence** per class followed by
+a closed vocabulary - ` - <what the exit code means>; phase <phase>; silent <N> s`
+- and a `signature` hashed from **class + exit code + phase** (`sentinel:<class>:<phase>`
+through `crashSignature`), so the same kind of ending groups together across builds
+and machines.
+
+| Class | The reason begins | Sent? |
+|---|---|---|
+| crash | `sentinel: crash exit code, no report from the process` | **sent** |
+| frozen | `sentinel: window had stopped drawing when it ended` | **sent** |
+| startup | `sentinel: ended before the first frame` | **sent** |
+| outside | `sentinel: ended from outside, window was drawing` | kept here |
+| session | `sentinel: ended as the session closed` | kept here |
+
+*Kept here* means the uploader never sends it, **spends nothing of the five a day
+on it**, and does not let it crowd an older report out of the sweep's window (see
+*What the uploader does*). They are still in the folder and in the bundle's
+*reports on this machine* list, with the class in the reason. The whole reason is at
+most 200 characters (what the site keeps), checked over every combination of phase,
+activity, exit code and silence in the test.
+
+**What an exit code means** (`sentinelExitWords`; the words are the whole of what a
+report says about a code, and `unknown exit code` is the answer for everything not in
+the table):
+
+| Exit code | The report says | Verified against |
+|---|---|---|
+| `0xC0000005` | `access violation` | Windows SDK 10.0.26100 `ntstatus.h`: `STATUS_ACCESS_VIOLATION` ("The instruction at 0x%08lx referenced memory at 0x%08lx...") |
+| `0xC0000409` | `fast-fail (abort or failed integrity check)` | `ntstatus.h`: `STATUS_STACK_BUFFER_OVERRUN`; and Microsoft's `__fastfail` page: "User-mode fast fail requests appear as a second chance non-continuable exception with exception code 0xC0000409 ... no exception handlers are invoked" |
+| `0xC0000374` | `heap corruption` | `ntstatus.h`: `STATUS_HEAP_CORRUPTION` ("A heap has been corrupted.") |
+| `0xC00000FD` | `stack overflow` | `ntstatus.h`: `STATUS_STACK_OVERFLOW` |
+| `0xC000013A` | `Ctrl+C or a console close` | `ntstatus.h`: `STATUS_CONTROL_C_EXIT` ("The application terminated as a result of a CTRL+C.") |
+| `1` | `ended by another process (exit code 1, as taskkill /F does)` | **Measured**, 2026-10-05, Windows 11 22631: `taskkill /F` ends a process with 1. Microsoft's `TerminateProcess` page documents only that the *caller* chooses the code; that Task Manager's *End task* also leaves 1 is widely stated but **was not measured here**, which is why the words name `taskkill /F` and not Task Manager |
+| `-1` (`0xFFFFFFFF`) | `ended by another process (exit code -1, as Stop-Process and Process.Kill do)` | **Measured** in the same session: PowerShell 5.1's `Stop-Process -Force` and .NET's `Process.Kill()` both leave -1 |
+| `0` before the shutdown finished | `exit code 0 before the shutdown had finished` | by construction |
+| anything else | `unknown exit code` | - |
+
+### What Windows gives a process when the session ends, and what the sentinel does about it
+
+Looked up, not assumed:
+
+- Windows sends `WM_QUERYENDSESSION` and then `WM_ENDSESSION` to the top-level
+  windows of each process ("Applications with a window and message queue receive
+  shutdown notifications through the WM_QUERYENDSESSION and WM_ENDSESSION messages",
+  *Shutting Down*). A Microsoft engineer's archived account of debugging this
+  (*Application termination when user logs off*) is that `CSRSS` then
+  `TerminateProcess`es the process; what it does for processes with no windows it
+  says it left out. **No document says what exit code that termination leaves, and
+  none was measured here** (the owner's session cannot be logged off by a test), so
+  the class is decided by something other than the code.
+- **Console control events do not reach this program.** `SetConsoleCtrlHandler`'s
+  page: if a console application loads `user32.dll` or `gdi32.dll`, its handler "does
+  not get called for the CTRL_LOGOFF_EVENT and CTRL_SHUTDOWN_EVENT events". `cascade.exe`
+  is a console-subsystem executable that links `user32.dll`, and so is the sentinel -
+  which is the same file. The documented alternative is a window handling
+  `WM_ENDSESSION`, and the sentinel may hold no window; the *application* has one.
+- So the **application's own window** says it: the existing window-procedure hook
+  (`gui/win_frame.cpp`) notes `WM_ENDSESSION` with `wParam` TRUE ("the Windows
+  session can end any time after all applications have returned from processing this
+  message") into the breadcrumb's `session ending` flag and passes the message on
+  unchanged. The sentinel adds what the operating system itself says when it wakes:
+  `GetSystemMetrics(SM_SHUTTINGDOWN)` - "Nonzero if the current session is shutting
+  down". Either one makes the ending a *session* ending, ahead of every class but
+  "nothing" and "clean". And it asks to be among the last processes ended
+  (`SetProcessShutdownParameters(0x100, SHUTDOWN_NORETRY)`: the page's "application
+  reserved last shutdown range"; all processes start at 0x280), best effort.
+
+**What is proven and what is not.** The wiring is: a real `WM_ENDSESSION` is sent to
+the real `cascade.exe`'s window, the application carries on (it is not ended by it),
+and when it is then killed the report is the *session* class and local-only
+(`tests/test_sentinel_app.cpp`). **Not shown:** that Windows really sends it at a
+log off or shutdown in this application's situation (it is documented, not
+observed), that `SM_SHUTTINGDOWN` is already set when the sentinel wakes, that the
+sentinel itself outlives the application in a closing session at all, or what exit
+code the termination leaves. If the sentinel is ended first it writes nothing, which
+is the safe direction.
+
+### One report per death
+
+The in-process handler writes its report **before** the process dies - it is
+`TerminateProcess`ed, or runs on to Windows Error Reporting, only afterwards - and
+the sentinel acts only after the process object is signalled, when no thread is left
+to write anything. So the order "handler writes, then the sentinel looks" is a
+property of the platform, not of timing: a handler cannot write late. (A handler
+killed part-way through leaves a file with no whole header, which is not a report -
+below - so the sentinel then writes the one.) The check is
+`crashReportWrittenByProcess` (above), reused, asked about the *application's*
+process id:
+
+- The sentinel's own report is named `crash-<stamp>-<application pid>-999999.txt`:
+  the application's id, so the same function finds it and asking twice is answered
+  the same; and a sequence number no in-process report reaches, so it can never
+  overwrite one.
+- **Two fixes the reuse needed.** The function was written to be asked about a
+  *child's* process id, whose own reports never begin with the parent's
+  survived-fault wording. Asked about the *application*, the folder also holds the
+  application's reports of a fault it survived - and a report of an enumeration
+  child's death (`SDR device enumeration child process died ...`) was counted as the
+  report of the application's own death and would have hidden it. It is now excluded
+  like an absorbed vendor fault (`kChildDeathReasonPrefix`, shared with
+  `soapy_enum_proc.cpp`, which now builds its reasons from that constant, and the
+  writer's default `child process fault (contained)`). A file the handler created and
+  never wrote to is still not a report (the existing whole-header rule), so a
+  process killed between the two is reported by the sentinel.
+- Freeze reports (`hang-<pid>-N.txt`, kind `hang` or `stall`) are looked for the same
+  way, by process id (Linux names them with pid 0, so any freeze report since the last
+  heartbeat counts there).
+
+### What the uploader does with it
+
+`kind: crash` is the only kind the site accepts besides `hang`, so **a new kind would
+be rejected** (`crashKinds` in the site's `crash.go`; `kind must be crash or hang`).
+The sentinel therefore uses `kind: crash` with a fixed `reason` prefix, and nothing
+new is uploaded: the payload is exactly the fields `uploadFieldNames()` lists, no
+more (asserted against a real sentinel report in `tests/test_sentinel.cpp`). What
+arrives is `reason` (the fixed sentence plus the closed vocabulary), `code`, the
+`signature`, `uptimeSec`, the log tail and the build identity; `module`, `offset`,
+`threads` and `plugins` are empty and the receiver context says `not known to the
+sentinel`.
+
+- **Local classes** (`outside`, `session`) are recognised by their fixed reason
+  prefix (`sentinelReasonIsLocalOnly`, shared with the writer) and get a `local-only`
+  sidecar with an accurate note; they never reach `decideUpload`, so they spend none
+  of the five a day and set no signature memory.
+- **`local-only` is now a terminal sidecar status.** The sweep examines only the
+  newest four candidates per start, and a status that was re-examined every start
+  would let five reports ended from Task Manager hide an older crash report that is
+  still waiting to be sent, for ever. (It was harmless while only display stalls had
+  it.) `tests/test_sentinel.cpp` stages exactly that - one sendable report and five
+  newer local ones - and requires the sendable one to be attempted by the second start.
+- The **site's limits** it fits: reason 200 characters, code 24, signature 200, body
+  64 KiB (a sentinel report carries a log tail and nothing else, about the size of
+  any crash report's). **What the site should learn**: that a `reason` beginning
+  `sentinel: ` is not an in-process fault and has no stack (group by the signature,
+  never by the stack-less `module`/`offset`); that `crash`, `frozen` and `startup`
+  count as faults of the build (the first is a crash, the second a freeze, the third a
+  failure to start - none of them survived) and the two local classes are never
+  received; that `startup` carries the exit code and the phase in the signature, so
+  the phase list above is the vocabulary to chart; and that
+  `reliabilityReasonSurvived` should *not* treat these as survived (they end the
+  process). The site's `Survived()` test looks for `(contained` and for ` - enumeration
+  child, `; neither string occurs in a sentinel reason.
+
+### What it costs, and the promises it keeps
+
+- **Start-up.** `sentinelSetEnabled(true)` is one `CreateProcess` and returns:
+  **0.7 ms median** (min 0.6, max 2.4) over 25 starts in a test; **2.3-3.4 ms** as
+  the real application measured it (the figure is in its own log line,
+  `sentinel: watching this session (process N, started in X ms)`, which also carries
+  the sentinel's process number - an operating-system number that means nothing once it
+  has ended). The watcher's own start-up runs beside the application, not in front of it.
+  **End to end**, the real `cascade.exe --frames 3` with and without a sentinel, twelve
+  runs of each interleaved on this machine: from the application's first log line to
+  `frame loop starting`, a median of **1185 ms without and 1190 ms with**; wall time for
+  the whole run 2021 ms and 2018 ms. The spread between runs (1047-2157 ms) is far larger
+  than the difference, so the cost is not measurable at that scale.
+- **The application never waits for it**, at exit or anywhere: its side contains one
+  non-blocking test (`WaitForSingleObject(h, 0)`, about once in 300 frames), and ending
+  it on the Diagnostics switch is `TerminateProcess`/`SIGKILL`, neither waited for. A
+  source scan in `tests/test_sentinel.cpp` requires every wait on the application's side
+  of both host files to be a zero timeout or `WNOHANG`, and `AppWindow` to talk to it in
+  exactly the places named above.
+- **If it cannot start, or dies, the application is unaffected and says so once**:
+  `sentinel: not started (<what>, error N); an ending this session that the application
+  cannot report itself will not be written up`, or `sentinel: the watcher ended while the
+  application was still running (...)` - tested by ending a real watcher from outside and
+  by naming an executable that does not exist.
+- **It leaves within a second of the application ending** so that the installer, and the
+  in-app *Install now and restart*, can replace `cascade.exe` - which the sentinel is a
+  running copy of. Measured: the real sentinel was gone **58-68 ms** after the real
+  application ended and `cascade.exe` could be **deleted 69-82 ms** after (the same
+  measurement with a stand-in: 1 ms and 7 ms), and while the application runs the delete
+  is refused, so the test cannot pass for the wrong reason. A hard deadline
+  (`kSentinelExitDeadline`, 1000 ms, armed the instant the application has ended) ends
+  the process whatever a stuck disk is doing; the cost of that is a lost report, never an
+  installer that cannot proceed. It is the sentinel's one bounded wait and is classified
+  in `tests/test_shutdown_budget.cpp` (spent in the sentinel process only, zero on the
+  application's shutdown path); the wait that gives the sentinel its purpose - the
+  application's process handle - is unbounded by design.
+- **No dialog, ever**: the sentinel sets `SEM_NOGPFAULTERRORBOX` first. The tests' stand-in
+  applications do too, and ask Windows not to show fault UI (`WER_FAULT_REPORTING_NO_UI`):
+  a real `__fastfail` goes straight to Windows Error Reporting, which with only the error
+  mode started `WerFault.exe` quietly on this machine (two instances, no window; the
+  other three deaths started none).
+
+### Platforms
+
+**Windows 11** is what is described above. **Linux** is built the same way and says plainly
+what it cannot know. A watcher that is not the *parent* cannot learn a process's exit
+status, and the process tree is deliberately not restructured: the sentinel is the
+application's child, started with `fork`+`exec` in its own session (so a Ctrl-C in the
+terminal does not end it with the application) with every other descriptor closed. The
+application keeps the write end of a pipe open for its life and the sentinel blocks on
+`read`; end-of-file means the application has gone, by any route including `SIGKILL` (the
+OOM killer, `kill -9`). The breadcrumb is a `memfd` (unnamed), the exit code is unknown, so:
+the report's `code:` is `unknown`, its reason ends `exit status not available on this
+platform`, there is no *crash* class and no *session* class, and the decision uses the
+marker stage, the heartbeat age and the existing-report check - the in-process POSIX
+handler already catches the fatal signals, so what is left for this watcher is `SIGKILL`
+and a window that froze and was then killed. **Not verified: any of it runs on Linux.** What
+was done: `sentinel_host_posix.cpp` passes GCC 16.1 `-fsyntax-only -Wall -Wextra` against
+stand-in declarations of the Linux calls it makes (the real headers are not on the Windows
+machine this was written on), which checks syntax and the types as *declared by those
+stand-ins*, not that the real glibc and kernel behave as assumed; the portable code in
+`sentinel.cpp` is compiled and tested on Windows only (GCC accepts its Windows branch
+too, as a second compiler and standard library), so its three `#else` branches (the
+epoch-second report name, `_exit` in the deadline, the pid-0 freeze-report name) are
+unchecked; and the Linux half of `tests/test_sentinel_proc.cpp` (a `SIGKILL` while drawing,
+a `SIGKILL` before the first frame, a clean exit) is **unrun** - it passed the same
+syntax-only check, lifted out as a function, against the same stand-ins.
+
+**The Microsoft Store package** (`installer/msix/README.md`) does not forbid or change
+anything here, as far as can be read: it is a full-trust (`mediumIL`) desktop app, the
+enumeration child already starts the same executable as a child, `%LOCALAPPDATA%` writes
+are not redirected for such an app on the current documentation, and the sentinel writes
+only to the folder the application gives it. **Not established:** Microsoft's packaged-app
+documentation says nothing either way about a packaged process starting another copy of its
+own executable (the page was read for it and is silent), and no signed package was run here.
+What a Store update does to the package's processes - it ends them, and the sentinel with
+them - could leave a local-only *outside* report; that is the safe direction.
+
+### Known limits
+
+- **It is visible.** A session with Diagnostics on has a second `cascade.exe` in Task
+  Manager's list, with no window (a background process of about 9 MB). Ending the
+  application's whole process tree ends the sentinel with it, and an installer that
+  ends `cascade.exe` by name ends both; the sentinel may then write one `outside`
+  report, which is kept on the machine.
+- The log tail is the end of the *shared* log file: two instances interleave their lines,
+  and if Diagnostics was switched on part-way through a session the tail can begin in an
+  earlier session (the report's log heading says how many lines the session had in the
+  files).
+- A death before `main()` reaches the sentinel's start (reading the arguments and the
+  configuration: milliseconds) is not watched.
+- It decides at the moment of death from a page of numbers, so it cannot say *which*
+  plugin or radio; only that one was being loaded or opened.
+- A *frozen* class is a silence longer than the threshold at the moment the application
+  ended. A window held in a modal move/size loop for minutes and then ended would be
+  called frozen; the watchdog's other excuses (a pause, `win32u.dll`) are not mirrored. The
+  cost of being wrong is one upload-eligible report with the silence in it, which the
+  per-signature, five-a-day limits already bound.
+
+### Where it is tested
+
+`tests/test_sentinel.cpp` (in-process: the layout, the hot path, the decision table, the
+vocabulary, the report and its field inventory against this code *and* `PRIVACY.md` in both
+directions, what the uploader makes of it, one report per death, the log tail);
+`tests/test_sentinel_proc.cpp` (stand-in applications that really die: a clean exit, a
+replaceable executable, an ending from outside, a real `__fastfail`, a real access
+violation, a heap corruption, a real stack overflow, a death the in-process handler
+reported, a frozen window, a death before the first frame, a closing session, the
+sentinel killed first, one that cannot start, two instances at once, the Diagnostics switch
+in both directions, the start-up cost); `tests/test_sentinel_app.cpp` (the real `cascade.exe`:
+a clean scripted run, the replaceable file, an ending from outside with the real phase and
+heartbeat, a real `WM_ENDSESSION`, the real Diagnostics switch, stored Diagnostics off,
+Diagnostics switched on mid-session). **Not exercised by any test:** a real log off or
+shutdown; a real Task Manager *End task* (the exit code was measured with `taskkill /F`, not
+with it); a shutdown that wedges for the full 27 s; the Store package; Linux.
 
 ## Symbols — where the archive lives, and why that was a decision
 

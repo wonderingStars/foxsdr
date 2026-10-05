@@ -95,6 +95,26 @@ PreviousSessionLog readPreviousSessionLog(const std::string& logDir,
 // "12:34:56.789 info FoxSDR 0.99.61 (abc123def456) starting".
 bool isSessionStartLine(const std::string& line);
 
+// THE END OF THE NEWEST SESSION'S LOG (0.99.64), for the sentinel: it writes the
+// report of a session that has just ended and has no in-memory ring to copy, so
+// it reads the same lines from the files the application flushed them to (every
+// line is flushed as it is written). The same files, the same oldest-first
+// order and the same session boundary as readPreviousSessionLog - but the NEWEST
+// session, not the one before it: from the last start line to the end, and of
+// that the last `maxLines`. UNSCRUBBED, like the ring a crash report copies; the
+// uploader scrubs every line as it builds the request.
+//
+// If the files hold no start line (diagnostics was switched on part-way through
+// the session) the whole of what was read is the tail, which can begin in an
+// earlier session; `found` says which. Two instances share one log file, so
+// their lines interleave: the tail is the end of that shared file.
+struct SessionLogTail {
+    bool found = false;               // a start line was found and the tail begins at it
+    std::vector<std::string> lines;   // at most maxLines, oldest first
+    std::size_t sessionLines = 0;     // how many lines the session had in the files
+};
+SessionLogTail readNewestSessionLogTail(const std::string& logDir, std::size_t maxLines);
+
 // ONE REPORT, reduced to what is not identifying.
 struct ReportSummary {
     std::string kind;       // "crash", "hang" or "stall"; "unknown" for a file that says none

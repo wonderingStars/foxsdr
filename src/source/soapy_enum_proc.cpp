@@ -1108,7 +1108,7 @@ void sweepEachDriver(const std::string& helper, const EnumOptions& options,
             // which the exit code alone cannot give when the handler could
             // not finish.
             const std::string reason = withChildSaid(
-                "SDR device enumeration child process died probing driver=" +
+                std::string(core::kChildDeathReasonPrefix) + " probing driver=" +
                     reportSafeName(driver) + " (contained: every other driver was still probed)",
                 one.childFaultLine);
             reportChildDeathUnlessChildDid(crashDir, one, reason, 1,
@@ -1307,8 +1307,8 @@ EnumResult enumerateIsolated(const EnumOptions& options) {
                     : std::string(" - no driver's probe had begun (it died while the driver "
                                   "modules were loading)");
             const std::string reason = withChildSaid(
-                std::string("SDR device enumeration child process died (contained: the parent "
-                            "survived and ") +
+                std::string(core::kChildDeathReasonPrefix) +
+                    " (contained: the parent survived and " +
                     (answered ? "used its answer)" : "re-probed)") + running,
                 result.childFaultLine);
             reportChildDeathUnlessChildDid(childCrashDir, result, reason, i + 1,
