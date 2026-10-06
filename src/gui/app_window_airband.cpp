@@ -1045,9 +1045,10 @@ void AppWindow::drawAirbandSection() {
     if (!rows.empty()) { ImGui::EndChild(); }
     if (setAll >= 0) {
         // Every row of the group, found again BY WHAT IT IS before each
-        // update: updateAt re-inserts a row after the others on its
-        // frequency, so an index taken before the first update can point at
-        // a different row by the second (CTAF and UNICOM on one frequency).
+        // update: an index taken before the first update must not be trusted
+        // by the second (until 0.99.66 updateAt re-inserted a row after the
+        // others on its frequency - CTAF and UNICOM on one frequency - and it
+        // still does when the frequency itself changes).
         struct Id {
             double freqHz;
             std::string name;

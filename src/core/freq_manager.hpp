@@ -127,10 +127,14 @@ public:
     int add(Bookmark b);
 
     // Both are bounds-checked: an out-of-range index returns false and
-    // changes nothing. updateAt replaces the entry then re-sorts (the edit
-    // may have moved its frequency); the replacement's name is taken
-    // verbatim — deduping an in-place edit against the list would collide
-    // the entry with its own old name, so renames are the caller's problem.
+    // changes nothing. updateAt replaces the entry; when the edit moved its
+    // frequency the entry is re-sorted (landing after any peers on the new
+    // frequency), and when the frequency is the same the entry stays where it
+    // is - so an edit of any other field never reorders rows that share a
+    // frequency (the airband monitor plays the first of them). The replacement's
+    // name is taken verbatim — deduping an in-place edit against the list
+    // would collide the entry with its own old name, so renames are the
+    // caller's problem. Either way version() increases.
     bool removeAt(std::size_t index);
     bool updateAt(std::size_t index, const Bookmark& b);
 

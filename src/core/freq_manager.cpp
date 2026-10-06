@@ -308,9 +308,26 @@ bool FreqManager::updateAt(std::size_t index, const Bookmark& b) {
     if (index >= list_.size()) {
         return false;
     }
-    // Erase-then-reinsert rather than assign-then-sort: it reuses the one
-    // insertion path that maintains the invariant, so there is exactly one
-    // place where ordering can be right or wrong.
+    // A FREQUENCY THAT DID NOT MOVE KEEPS THE ROW'S PLACE. Erase-then-reinsert
+    // lands a row AFTER its peers on the same frequency (insertSorted's
+    // upper_bound), so an edit of any other field - the airband monitor's
+    // heard-time flush every 20 s, a tick toggled, a star - used to send the
+    // row behind the other rows on its frequency. Two ticked rows on one
+    // frequency ("High" AM, "HighNfm" NFM) are one channel, named and moded by
+    // the FIRST of them: the flush swapped them, the monitor saw a different
+    // set and restarted on the other row (CI's arm64 run 37462575079). The
+    // order among equal frequencies is the file's order, and only an edit that
+    // moves the frequency may change it. A non-finite frequency never takes
+    // this path (inf == inf would, NaN != NaN would not): it is re-inserted as
+    // it always was.
+    if (std::isfinite(b.freqHz) && b.freqHz == list_[index].freqHz) {
+        list_[index] = b;
+        ++version_;   // insertSorted bumps it on the other path; an edit in place is a change too
+        return true;
+    }
+    // The frequency moved: erase-then-reinsert rather than assign-then-sort,
+    // so the one insertion path that maintains the invariant is the only place
+    // where ordering can be right or wrong.
     list_.erase(list_.begin() + static_cast<std::ptrdiff_t>(index));
     insertSorted(b);
     return true;

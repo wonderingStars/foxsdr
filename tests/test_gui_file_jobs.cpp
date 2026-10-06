@@ -169,6 +169,39 @@ struct AppWindowTestAccess {
     }
     // How many channels the monitor would play from what is ticked.
     static std::size_t wantedChannels(AppWindow& a) { return a.airbandWanted().size(); }
+    // The channels the monitor would play, and the rows that name them (what airbandStart
+    // takes from airbandWanted, and what the running monitor compares each frame).
+    static std::vector<cascade::core::MonitorChannel> wanted(AppWindow& a,
+                                                             std::vector<std::string>& names) {
+        return a.airbandWanted(&names);
+    }
+    // The channel table airbandStart builds from that list - the receiver, the block plan and
+    // the runner left out, which the heard-time flush does not read - and the heard time a
+    // channel has behind it that the flush has not yet put into the list.
+    static void openChannels(AppWindow& a) {
+        std::vector<std::string> names;
+        const std::vector<cascade::core::MonitorChannel> want = a.airbandWanted(&names);
+        a.airbandChans_.clear();
+        for (std::size_t i = 0; i < want.size(); ++i) {
+            AppWindow::AirbandChan c;
+            c.freqHz = want[i].freqHz;
+            c.bandwidthHz = want[i].bandwidthHz;
+            c.name = names[i];
+            a.airbandChans_.push_back(std::move(c));
+        }
+    }
+    static void setPendingHeard(AppWindow& a, const std::string& name, double seconds) {
+        for (AppWindow::AirbandChan& c : a.airbandChans_) {
+            if (c.name == name) { c.pendingHeardS = seconds; }
+        }
+    }
+    static double pendingHeard(AppWindow& a) {
+        double s = 0.0;
+        for (const AppWindow::AirbandChan& c : a.airbandChans_) { s += c.pendingHeardS; }
+        return s;
+    }
+    // The monitor's 20-second write of the heard time into the list.
+    static void flushHeard(AppWindow& a) { a.airbandFlushHeard(); }
     // The Import key with the field and the path as typed.
     static void importPreset(AppWindow& a, const std::string& name, const std::string& path) {
         setPresetField(a, name);
@@ -1055,6 +1088,81 @@ void checkATypedFrequencyIsTheSameChannelAsTheListsOwn() {
     CHECK(Access::wantedChannels(app) == 761u);   // 761 frequencies, each typed AND listed: no doubles
 }
 
+// THE HEARD-TIME FLUSH DOES NOT HAND A FREQUENCY TO THE OTHER ROW: "High" (AM) and "HighNfm"
+// (NFM) are both ticked on 120.300 MHz, which is one channel, named and moded by the first of
+// them. The monitor writes the heard seconds of a channel into its row every 20 s through
+// FreqManager::updateAt, which used to re-insert the row AFTER its peers on that frequency:
+// "High" went behind "HighNfm", airbandWanted() named the NFM row, the running monitor saw a
+// different set (it compares frequency, width and mode) and restarted on the NFM row, which was
+// credited from then on. (CI's arm64 run 37462575079: High 19.95 s, HighNfm 6.08 s.)
+void checkTheHeardTimeFlushKeepsTheChannelOnItsRow() {
+    AppWindow app;
+    Access::addRow(app, "High", 120.3e6, "AM", "Manual", true);
+    Access::addRow(app, "HighNfm", 120.3e6, "NFM", "Manual", true);
+    Access::addRow(app, "Low", 119.7e6, "AM", "Manual", true);
+    Access::setAirbandGroup(app, "");   // "every ticked"
+
+    std::vector<std::string> namesBefore;
+    const std::vector<cascade::core::MonitorChannel> before = Access::wanted(app, namesBefore);
+    CHECK(before.size() == 2u);          // 119.700 and 120.300: the NFM row is no third channel
+    CHECK(namesBefore.size() == 2u);
+    if (before.size() != 2u || namesBefore.size() != 2u) { return; }
+    CHECK(namesBefore[0] == "Low");
+    CHECK(namesBefore[1] == "High");     // the first ticked row on 120.300: the AM one
+    CHECK(before[1].mode == cascade::core::MonitorMode::Am);
+
+    // The monitor is listening to them, and "High" has been heard for 7.25 s since the last flush.
+    Access::openChannels(app);
+    Access::setPendingHeard(app, "High", 7.25);
+    CHECK(Access::pendingHeard(app) == 7.25);
+    Access::flushHeard(app);
+    CHECK(Access::pendingHeard(app) == 0.0);
+
+    // The seconds went to the row that was heard, and only to it.
+    {
+        const std::vector<cascade::core::Bookmark> list = Access::bookmarks(app);
+        const cascade::core::Bookmark* high = rowNamed(list, "High");
+        const cascade::core::Bookmark* nfm = rowNamed(list, "HighNfm");
+        const cascade::core::Bookmark* low = rowNamed(list, "Low");
+        CHECK(high != nullptr && nfm != nullptr && low != nullptr);
+        if (high != nullptr && nfm != nullptr && low != nullptr) {
+            CHECK(high->heardSeconds == 7.25);
+            CHECK(nfm->heardSeconds == 0.0);
+            CHECK(low->heardSeconds == 0.0);
+        }
+    }
+
+    // And the monitor's choice is the same set, so it keeps playing what it was playing: the
+    // same rows by name, and the same frequency, width and mode for each (what airbandFrame compares).
+    std::vector<std::string> namesAfter;
+    const std::vector<cascade::core::MonitorChannel> after = Access::wanted(app, namesAfter);
+    CHECK(namesAfter == namesBefore);
+    CHECK(after.size() == before.size());
+    for (std::size_t i = 0; i < after.size() && i < before.size(); ++i) {
+        CHECK(after[i].freqHz == before[i].freqHz);
+        CHECK(after[i].bandwidthHz == before[i].bandwidthHz);
+        CHECK(after[i].mode == before[i].mode);
+    }
+
+    // A flush every 20 s for a long listen: still the same row, and every flush went to it.
+    for (int i = 0; i < 5; ++i) {
+        Access::setPendingHeard(app, "High", 1.0);
+        Access::flushHeard(app);
+    }
+    std::vector<std::string> namesLater;
+    Access::wanted(app, namesLater);
+    CHECK(namesLater == namesBefore);
+    const std::vector<cascade::core::Bookmark> list = Access::bookmarks(app);
+    const cascade::core::Bookmark* high = rowNamed(list, "High");
+    const cascade::core::Bookmark* nfm = rowNamed(list, "HighNfm");
+    if (high != nullptr && nfm != nullptr) {
+        CHECK(high->heardSeconds == 12.25);
+        CHECK(nfm->heardSeconds == 0.0);
+    } else {
+        CHECK(high != nullptr && nfm != nullptr);
+    }
+}
+
 // ADD AND IMPORT DO NOT CHANGE WHAT A LISTENING MONITOR PLAYS: with the monitor on, "every
 // ticked" stays "every ticked" and another preset's rows stay unplayed - setting the group on
 // show narrowed the playing set to the preset the row went to. Not listening, they put the
@@ -1494,6 +1602,7 @@ int main() {
     checkAnExportOfAPresetWritesOnlyThatGroup();
     checkAnExportOfNothingAndOfABlockedFolder();
     checkATypedFrequencyIsTheSameChannelAsTheListsOwn();
+    checkTheHeardTimeFlushKeepsTheChannelOnItsRow();
     checkAddAndImportKeepAListeningMonitorsChoice();
     checkRemovingThePresetBeingListenedToStopsTheMonitor();
     checkAThrowingExportWorkerAnswersTheSectionThatAsked();

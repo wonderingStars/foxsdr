@@ -74,6 +74,28 @@ bool sortedByFreq(const std::vector<Bookmark>& v) {
     return true;
 }
 
+// The names in list order ("C,A,B"), so a wrong order is one failure line that
+// says what the order was.
+std::string orderOf(const FreqManager& m) {
+    std::string s;
+    for (const Bookmark& b : m.list()) {
+        if (!s.empty()) { s += ','; }
+        s += b.name;
+    }
+    return s;
+}
+
+void checkOrder(const FreqManager& m, const std::string& want, int line) {
+    ++g_checksRun;
+    const std::string got = orderOf(m);
+    if (got != want) {
+        ++g_checksFailed;
+        std::printf("FAIL %s:%d  list order \"%s\", wanted \"%s\"\n", __FILE__, line, got.c_str(),
+                    want.c_str());
+    }
+}
+#define CHECK_ORDER(m, want) checkOrder((m), (want), __LINE__)
+
 // Field-by-field equality with one CHECK each, so a mismatch names the field.
 void checkEqual(const Bookmark& a, const Bookmark& b) {
     CHECK(a.name == b.name);
@@ -383,6 +405,113 @@ int main() {
         CHECK(m.list().size() == 2u);
         CHECK(m.list()[0].name == "mid");
         CHECK(m.list()[1].name == "low-moved");
+    }
+
+    // --- updateAt: an edit that leaves the frequency alone keeps the row's place
+    // THE BUG (CI's arm64 run 37462575079): the airband monitor credits heard
+    // time every 20 s through updateAt, which erased the row and re-inserted it
+    // AFTER its peers on the same frequency. Two ticked rows on one frequency
+    // ("High" AM, "HighNfm" NFM) swapped places at the first flush, and the
+    // monitor - which plays the FIRST of them - changed channel from the AM row
+    // to the NFM one in the middle of a session. The order among equal
+    // frequencies is the file's order and only an edit that moves the
+    // frequency may change it.
+    {
+        FreqManager m;
+        Bookmark a;
+        a.name = "A";
+        a.freqHz = 20.0;
+        a.mode = "AM";
+        a.scan = true;
+        Bookmark b;
+        b.name = "B";
+        b.freqHz = 20.0;
+        b.mode = "NFM";
+        b.scan = true;
+        Bookmark c;
+        c.name = "C";
+        c.freqHz = 10.0;
+        CHECK(m.add(a) == 0);
+        CHECK(m.add(b) == 1);   // after its peer: insertion order among equals
+        CHECK(m.add(c) == 0);
+        CHECK_ORDER(m, "C,A,B");
+
+        // Only heardSeconds changed (the monitor's flush): "A" stays before "B".
+        unsigned v = m.version();
+        Bookmark edit = m.list()[1];
+        CHECK(edit.name == "A");
+        edit.heardSeconds += 3.5;
+        CHECK(m.updateAt(1, edit));
+        CHECK_ORDER(m, "C,A,B");
+        CHECK(m.list()[1].heardSeconds == 3.5);
+        CHECK(m.list()[2].heardSeconds == 0.0);
+        CHECK(m.version() > v);   // a row changed in place is still a change to a version reader
+
+        // Only scan changed (a tick toggled): same.
+        v = m.version();
+        edit = m.list()[1];
+        edit.scan = false;
+        CHECK(m.updateAt(1, edit));
+        CHECK_ORDER(m, "C,A,B");
+        CHECK(!m.list()[1].scan);
+        CHECK(m.version() > v);
+
+        // The flush repeated: still the same order after ten of them, and the
+        // other row of the pair edited too (the last of a tie stays last).
+        for (int i = 0; i < 10; ++i) {
+            edit = m.list()[1];
+            edit.heardSeconds += 1.0;
+            CHECK(m.updateAt(1, edit));
+            edit = m.list()[2];
+            edit.heardSeconds += 1.0;
+            CHECK(m.updateAt(2, edit));
+        }
+        CHECK_ORDER(m, "C,A,B");
+        CHECK(m.list()[1].heardSeconds == 13.5);
+        CHECK(m.list()[2].heardSeconds == 10.0);
+
+        // An edit of the first of a tie on a different field entirely, or of a
+        // row with no peer, changes nothing about the order either.
+        edit = m.list()[0];
+        edit.favourite = true;
+        CHECK(m.updateAt(0, edit));
+        CHECK_ORDER(m, "C,A,B");
+
+        // A CHANGED frequency still re-sorts. "A" to 30: behind everything.
+        v = m.version();
+        edit = m.list()[1];
+        edit.freqHz = 30.0;
+        CHECK(m.updateAt(1, edit));
+        CHECK_ORDER(m, "C,B,A");
+        CHECK(sortedByFreq(m.list()));
+        CHECK(m.version() > v);
+
+        // "B" to 10, onto "C"'s frequency: it lands after its new peer (the
+        // insertion rule for a frequency that is new to the row), ahead of "A".
+        v = m.version();
+        edit = m.list()[1];
+        CHECK(edit.name == "B");
+        edit.freqHz = 10.0;
+        CHECK(m.updateAt(1, edit));
+        CHECK_ORDER(m, "C,B,A");
+        CHECK(m.list()[1].freqHz == 10.0);
+        CHECK(sortedByFreq(m.list()));
+        CHECK(m.version() > v);
+
+        // And back below it: "A" to 5 leads the list.
+        edit = m.list()[2];
+        edit.freqHz = 5.0;
+        CHECK(m.updateAt(2, edit));
+        CHECK_ORDER(m, "A,C,B");
+        CHECK(sortedByFreq(m.list()));
+
+        // Bounds unchanged: out of range is refused, changes nothing and does
+        // not touch the version.
+        v = m.version();
+        CHECK(!m.updateAt(3, edit));
+        CHECK(!m.updateAt(static_cast<std::size_t>(-1), edit));
+        CHECK(m.version() == v);
+        CHECK_ORDER(m, "A,C,B");
     }
 
 #ifdef _WIN32
