@@ -485,6 +485,16 @@ inline void encodeFreq(std::uint32_t freqHz, std::uint8_t out[kFreqPayloadBytes]
     }
 }
 
+// THE SAME PAYLOAD AT ANY WIDTH, little-endian, for the board that takes eight
+// bytes where an Airspy takes four (hydrasdr_protocol.hpp: the HydraSDR RFOne's
+// SET_FREQ carries a uint64). `width` bytes of `freqHz` are written, least
+// significant first; at width 4 the bytes are exactly encodeFreq's.
+inline void encodeFreqWide(std::uint64_t freqHz, std::uint8_t* out, std::size_t width) {
+    for (std::size_t b = 0; b < width; ++b) {
+        out[b] = static_cast<std::uint8_t>((freqHz >> (8 * b)) & 0xFFu);
+    }
+}
+
 // --- GET_SAMPLERATES ------------------------------------------------------
 
 // libairspy airspy.c:812-832, airspy_read_samplerates_from_fw: one IN request

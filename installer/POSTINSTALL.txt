@@ -37,6 +37,8 @@ SIX RADIOS OVER USB: NOTHING TO INSTALL
 From 0.91.0 FoxSDR drives the RTL-SDR and the HackRF itself, from
 0.92.0 the Airspy R2 / Mini and the Airspy HF+ Discovery / Dual, and
 from 0.93.0 the Mirics MSi2500 family and the RX888 mk2 as well.
+From 0.99.66 the HydraSDR RFOne is driven the same way - written from the
+vendor's published sources and NOT YET TRIED ON A REAL UNIT.
 There is no SoapySDR install, no PothosSDR, no radioconda and no vendor
 DLL anywhere in the path: FoxSDR talks to the radio over WinUSB, with
 its own driver, its own reader thread and its own device enumeration.
@@ -96,8 +98,8 @@ Receive only: the Pluto is a transceiver, and FoxSDR is a receiver.
 
 BIAS TEES
 --------------------------------------------------------
-The radios with a bias tee (HackRF, Airspy R2 / Mini, an Airspy HF+
-whose board has one, an RSP that has one, a Mirics receiver and an
+The radios with a bias tee (HackRF, Airspy R2 / Mini, HydraSDR RFOne,
+an Airspy HF+ whose board has one, an RSP that has one, a Mirics receiver and an
 RX888) get a "Bias tee" checkbox under the gain sliders.
 It is off every time FoxSDR opens a radio and off again when it closes
 one, so nothing can leave power on your antenna port unannounced; the
@@ -150,8 +152,8 @@ SDR you must replace that driver with WinUSB:
   4. In the dropdown select the radio. An RTL dongle is a composite
      device and its SDR half is the entry named "Bulk-In, Interface
      (Interface 0)"; on a dongle that also does DAB/FM, Interface 0 is
-     still the SDR one. A HackRF, an Airspy R2 / Mini and an Airspy HF+
-     each appear once, under their own name. A Mirics receiver is the
+     still the SDR one. A HackRF, an Airspy R2 / Mini, a HydraSDR RFOne
+     and an Airspy HF+ each appear once, under their own name. A Mirics receiver is the
      entry whose USB ID is 1DF7 2500 (or 1DF7 3000 / 1DF7 3010 for an
      early SDRplay RSP1 or RSP2, 2040 D300 for a Hauppauge WinTV 133559
      LF, 07CA 8591 for an AverMedia A859, 04BB 0537 for an IO-DATA

@@ -126,10 +126,11 @@ std::uint32_t countOf(const Counts& c, const std::string& token) {
 // ---------------------------------------------------------------------------
 void testEveryTokenIsLegalAndNothingElseIs() {
     const std::vector<std::string> all = health::allTokens();
-    // 1 scan + 12 + 12 + 96 (driver x reason) + 11 + 55 (api x reason) + 4 update
-    // + 1 catalogue + 4 + 3 plugin + 1 recording = 200 failure tokens; then
-    // 54 slow (18 countable scopes x 3 tiers) and 13 recovered.
-    CHECK(all.size() == 200 + 54 + 13);
+    // 1 scan + 13 + 13 + 104 (driver x reason) + 11 + 55 (api x reason) + 4 update
+    // + 1 catalogue + 4 + 3 plugin + 1 recording = 210 failure tokens (0.99.66: the
+    // thirteenth driver word, hydrasdr, adds one open, one data and eight fail
+    // tokens); then 54 slow (18 countable scopes x 3 tiers) and 13 recovered.
+    CHECK(all.size() == 210 + 54 + 13);
     std::set<std::string> unique(all.begin(), all.end());
     CHECK(unique.size() == all.size());
     for (const std::string& t : all) {
@@ -160,7 +161,7 @@ void testBuildersCannotCarryFreeText() {
     using health::RadioReason;
     for (int r = 0; r <= static_cast<int>(RadioReason::Other); ++r) {
         for (const char* d : {"rtlsdr", "hackrf", "airspy", "airspyhf", "sdrplay", "mirisdr", "rx888",
-                              "pluto", "aor", "soapy", "soundcard"}) {
+                              "pluto", "aor", "hydrasdr", "soapy", "soundcard"}) {
             CHECK(health::validToken(health::tokenRadioFail(d, static_cast<RadioReason>(r))));
         }
     }
@@ -1200,6 +1201,7 @@ void testReasonsFromTheDriversOwnSentences() {
         // present but not reachable
         {"rtlsdr", std::string("no RTL-SDR is ") + cascade::usb::kBindHint + " on this machine", RadioReason::Bind},
         {"airspy", "WinUsb_Initialize (is the device bound to WinUSB?): The parameter is incorrect.", RadioReason::Bind},
+        {"hydrasdr", "no HydraSDR found (is it plugged in, and bound to WinUSB?)", RadioReason::Bind},
         {"hackrf", "permission denied opening /dev/bus/usb/001/004 (see installer/linux/README.md)", RadioReason::Bind},
         // the driver or service is not there
         {"sdrplay", cascade::source::sdrPlayApiAdvice(false, 0.0f), RadioReason::Driver},

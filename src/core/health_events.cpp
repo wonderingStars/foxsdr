@@ -94,7 +94,8 @@ using Words = std::vector<std::string>;
 
 const Words& driverWords() {
     static const Words w = {"rtlsdr", "hackrf", "airspy", "airspyhf", "sdrplay", "mirisdr",
-                            "rx888",  "pluto",  "aor",    "soapy",    "soundcard", "other"};
+                            "rx888",  "pluto",  "aor",    "hydrasdr", "soapy",    "soundcard",
+                            "other"};
     return w;
 }
 const Words& radioReasonWords() {

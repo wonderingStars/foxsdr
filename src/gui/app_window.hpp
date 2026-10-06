@@ -148,6 +148,7 @@ struct GLFWwindow;
 // that is the VENDOR's API called directly, not a SoapySDR module wrapping
 // it, which is what every crash in this product's first month came out of.
 #include "source/airspy_source.hpp"
+#include "source/hydrasdr_source.hpp"
 #include "source/airspyhf_source.hpp"
 #include "source/aor_source.hpp"
 #include "source/hackrf_source.hpp"
@@ -2980,7 +2981,7 @@ private:
     // The ACTIVE source's kind as the config store spells it. Tracked at each
     // successful switch because the pipeline does not expose source identity.
     // "siggen"|"file"|"soapy"|"rtlsdr"|"hackrf"|"airspy"|"airspyhf"|
-    // "sdrplay"|"mirisdr"|"rx888"|"pluto"|"soundcard"|"aor"
+    // "sdrplay"|"mirisdr"|"rx888"|"pluto"|"soundcard"|"aor"|"hydrasdr"
     std::string sourceKind_ = "siggen";
 
     // WHAT THE CONFIG REMEMBERS, ONE SLOT PER FAMILY, and they are separate

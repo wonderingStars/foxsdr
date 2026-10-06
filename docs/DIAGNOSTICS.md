@@ -97,7 +97,7 @@ describe code this product can be held responsible for.
 - `source: opened RTL2838UHIDIR (rtlsdr) at 2400000 S/s` - written by the
   application when it installs the radio in the pipeline. The parenthesis is
   the DRIVER KIND (`soapy`, `rtlsdr`, `hackrf`, `airspy`, `airspyhf`,
-  `sdrplay`, `mirisdr`, `rx888`, `pluto`, `aor`): two rows
+  `sdrplay`, `mirisdr`, `rx888`, `pluto`, `aor`, `hydrasdr`): two rows
   in the Source dropdown can name one physical radio, and a report has to say
   which of them was taken. Every one is its own key and none is a family
   name - `airspy` and `airspyhf` are different USB ids, different hardware and
@@ -127,6 +127,15 @@ describe code this product can be held responsible for.
   verbatim rather than a model guessed from it. There is no `--airspy-check`:
   the Airspy equivalent of `--rtlsdr-check` was not added, because there is no
   Airspy on the bench this was written on for it to have been proven against.
+- The HydraSDR RFOne (`hydrasdr`, 0.99.66) is the Airspy driver with a
+  HydraSDR's profile, so it writes the Airspy's lines under its own key:
+  `hydrasdr: opened HydraSDR RFOne (serial ...) - board id 1, firmware
+  "HydraSDR RFOne <tag> <date>", serial ...` and the rates line. Its refusals
+  read the same way (`no HydraSDR found (is it plugged in, and bound to
+  WinUSB?)` is counted as `radio_fail.hydrasdr.bind`). It has NOT been run
+  against a real RFOne: if a report from one carries a `hydrasdr:` line, that
+  line is the first evidence there is. Its serial is stripped from an upload
+  by the same rule as an Airspy's (`HYDRASDR_SN:...`).
 - The four added in 0.93.0 write the same shapes again, plus the lines only
   they can produce:
   - `source: SDRplay API - ...` once per process, from the loader, naming the

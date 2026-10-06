@@ -117,6 +117,12 @@ SUBSYSTEM=="usb", ATTR{idVendor}=="0511", ATTR{idProduct}=="0037", TAG+="uaccess
 SUBSYSTEM=="usb", ATTR{idVendor}=="1d50", ATTR{idProduct}=="60a1", TAG+="uaccess", MODE="0660", GROUP="plugdev"
 SUBSYSTEM=="usb", ATTR{idVendor}=="03eb", ATTR{idProduct}=="800c", TAG+="uaccess", MODE="0660", GROUP="plugdev"
 
+# HydraSDR RFOne (src/source/hydrasdr_protocol.hpp): 38af:0001, the id in the
+# firmware's own descriptor (rfone_fw m0/usb_descriptor.c) and the vendor's host
+# library's udev rule. NOT TRIED ON A REAL UNIT. Its prototype id is an Airspy's
+# (1d50:60a1, above) and is not claimed separately.
+SUBSYSTEM=="usb", ATTR{idVendor}=="38af", ATTR{idProduct}=="0001", TAG+="uaccess", MODE="0660", GROUP="plugdev"
+
 # AOR digital-I/Q interface (AR5700D; AR2300/AR5001D/AR6000 with IQ5001),
 # src/source/aor_protocol.hpp - the Cypress FX2 at 08D0:A001, the same id
 # before and after its firmware is loaded. Its CONTROL port is an FTDI

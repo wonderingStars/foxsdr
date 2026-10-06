@@ -5,7 +5,8 @@ spectrum and waterfall, multi-mode demodulation (NFM/WFM/AM/DSB/USB/LSB/CW),
 stereo FM with RDS, recording, bookmarks, a scanner, an airband monitor that
 looks up any airport's air traffic control frequencies, band plans, native
 drivers for the RTL-SDR, the HackRF, the Airspy R2/Mini, the Airspy HF+, the
-SDRplay RSPs, the Mirics MSi2500, the RX888 mk2 and the ADALM-Pluto — which it
+HydraSDR RFOne (written from the vendor's published sources, not yet tested on
+hardware), the SDRplay RSPs, the Mirics MSi2500, the RX888 mk2 and the ADALM-Pluto — which it
 also TRANSMITS through — plus AOR digital-I/Q receivers (written from AOR's
 documentation, not yet tested on hardware), and hardware support for any
 other radio SoapySDR can reach.
@@ -22,7 +23,7 @@ other radio SoapySDR can reach.
 > - **The native USB drivers reach their radios on Linux through their own
 >   usbfs transport, not yet confirmed against real hardware.** Since 0.97.0
 >   the RTL-SDR, HackRF, Airspy R2/Mini, Airspy HF+, RX888 mk2 and Mirics
->   drivers talk to their radios on Linux through `src/usb/usbfs_device.cpp`,
+>   drivers (and, from 0.99.66, the HydraSDR RFOne's) talk to their radios on Linux through `src/usb/usbfs_device.cpp`,
 >   the kernel's own usbfs interface — no libusb, no SoapySDR module; the udev
 >   rule in `installer/linux/` grants a desktop user access to the device
 >   nodes. That transport is written and unit-tested on a machine with no
@@ -89,6 +90,7 @@ are still moving. What is in the current build:
   AGC, noise reduction, manual and automatic notch, de-emphasis, stereo FM with
   pilot lock, and RDS (programme service name, radio text, PI, PTY).
 - **Hardware.** An RTL-SDR, a HackRF, an Airspy R2/Mini, an Airspy HF+, a
+  HydraSDR RFOne (not yet tested on hardware - see its section below), a
   Mirics MSi2500 or an RX888 mk2 through FoxSDR's OWN drivers, needing no
   SoapySDR install of any kind - only that the radio is bound to WinUSB
   (Zadig), which every SDR application needs anyway. An **SDRplay RSP** is
@@ -106,7 +108,8 @@ are still moving. What is in the current build:
   decibels — and a bias-tee switch on the radios that have one. Developed against an Ettus B200
   and an RTL2838 (R820T); the built-in signal generator and IQ-file playback
   mean it runs with no radio at all.
-  A saved SoapySDR RTL-SDR, HackRF, Airspy, Airspy HF+, SDRplay, Mirics
+  A saved SoapySDR RTL-SDR, HackRF, Airspy, Airspy HF+, HydraSDR
+  (`driver=hydrasdr`), SDRplay, Mirics
   (`driver=miri`) or RX888 (`driver=sddc`) is OPENED NATIVELY on
   the next launch without being asked, and the log says so; a dongle whose
   tuner the native driver does not support (E4000, FC0012/13) falls back to the
@@ -359,6 +362,37 @@ and puts it back after the open, because a mast-head amplifier does not stop nee
 power because the application was closed.
 
 Tuning range 24 MHz to 1.75 GHz.
+
+## The native HydraSDR RFOne driver (0.99.66, NOT YET TESTED ON HARDWARE)
+
+**The HydraSDR RFOne** (USB 38AF:0001) is opened by FoxSDR's own driver, over the
+same transport and with the same panel as the Airspy R2 - it appears in the Source
+list as "HydraSDR RFOne" once it is bound to WinUSB with Zadig. It is written from
+the vendor's published sources only (the `rfone_host` host library and the
+`rfone_fw` firmware on github.com/hydrasdr) and checked against a fake built from
+that firmware's source; **nobody who wrote it has held an RFOne**, so every
+statement here is "the vendor's source says", not "it was seen to work". If you have
+one, a report of what happened on first open (the log's `hydrasdr:` lines) is the
+most useful thing you can send.
+
+What it is: the RFOne is an Airspy R2 on the wire - the same twelve-bit ADC and
+packed stream, the same twenty-eight vendor requests, the same LNA / mixer / VGA
+registers and the same Linear / Sensitive / Free gain modes with decimation - so the
+driver is the Airspy driver given the RFOne's own constants rather than a second
+copy. What differs, and is handled: the USB id; a 64-bit frequency payload; the bias
+tee, which the HydraSDR host switches with its own request; a tuning range of 24 MHz
+to 1.8 GHz; the three sample rates its firmware lists (10, 5 and 2.5 MS/s, read from
+the radio like the Airspy's); and **three receive ports - ANT, CABLE1 and CABLE2 -**
+chosen from the Antenna list. The bias tee powers the ANT connector only, and
+is switched off every time FoxSDR opens or closes the radio, as the Airspy's is.
+
+What it deliberately does not do: it does not claim the RFOne's prototype USB id
+(1D50:60A1, which is an Airspy's own and cannot be told from one without opening
+it), so a prototype board shows up as an Airspy and is not supported; and it does not
+send the five requests the host library added in 1.1.0 (capabilities, bandwidth list
+and setting, temperature, unified gain), which the published firmware does not
+implement. A firmware newer than the public source that offers sample rates in other
+than the 12-bit packed form would not be understood.
 
 ## The native Airspy HF+ driver
 
@@ -1154,8 +1188,8 @@ Audio goes through ALSA. On a machine whose audio is managed by PulseAudio or
 PipeWire, install `libasound2-plugins` so ALSA's default device routes to the
 sound server rather than claiming the hardware directly.
 
-**Hardware.** The RTL-SDR, HackRF, Airspy R2/Mini, Airspy HF+, RX888 mk2 and
-Mirics native drivers talk to their radios on Linux through
+**Hardware.** The RTL-SDR, HackRF, Airspy R2/Mini, Airspy HF+, HydraSDR RFOne,
+RX888 mk2 and Mirics native drivers talk to their radios on Linux through
 `src/usb/usbfs_device.cpp` — the kernel's usbfs ioctls on
 `/dev/bus/usb/BBB/DDD`, not libusb — behind the same `src/usb/usb_device.hpp`
 contract the Windows WinUSB transport keeps. Install the udev rule from

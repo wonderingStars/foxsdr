@@ -54,6 +54,7 @@
 #include "source/airspy_source.hpp"
 #include "source/airspyhf_source.hpp"
 #include "source/hackrf_source.hpp"
+#include "source/hydrasdr_source.hpp"
 #include "source/mirisdr_source.hpp"
 #include "source/rtlsdr_source.hpp"
 #include "source/rx888_source.hpp"
@@ -538,6 +539,7 @@ void testEveryNativeDriversRefusalIsClassified() {
     expectNativeDriverRefusal<cascade::source::HackRfSource>("hackrf");
     expectNativeDriverRefusal<cascade::source::AirspySource>("airspy");
     expectNativeDriverRefusal<cascade::source::AirspyHfSource>("airspyhf");
+    expectNativeDriverRefusal<cascade::source::HydraSdrSource>("hydrasdr");
     expectNativeDriverRefusal<cascade::source::MiriSdrSource>("mirisdr");
     expectNativeDriverRefusal<cascade::source::Rx888Source>("rx888");
 }

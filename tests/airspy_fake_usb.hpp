@@ -492,6 +492,11 @@ public:
     const std::string& path() const override { return path_; }
     const std::string& lastError() const override { return lastError_; }
 
+protected:
+    // For a sibling fake (hydrasdr_fake_usb.hpp) that stalls a request this
+    // fake would have answered: the same slot a failed transfer fills.
+    void setLastError(std::string e) { lastError_ = std::move(e); }
+
 private:
     // WinUSB's words for a read on a halted pipe, as winusb_device.cpp's
     // readBulk builds them from GetLastError() - the exact text of the field

@@ -30,7 +30,9 @@
 //   - sourceKind  must be "siggen" | "file" | "soapy" | "rtlsdr" | "hackrf" |
 //     "airspy" | "airspyhf" | "sdrplay" | "mirisdr" | "rx888" | "pluto" |
 //     "soundcard" (a sound card's input, settings in `soundCard` below) |
-//     "aor" (the native AOR digital-I/Q driver, source/aor_source.hpp);
+//     "aor" (the native AOR digital-I/Q driver, source/aor_source.hpp) |
+//     "hydrasdr" (the HydraSDR RFOne, source/hydrasdr_source.hpp, an Airspy
+//     driver given the RFOne's profile);
 //     anything else resets to "siggen" (the only source that can never fail
 //     to exist). The last eight are the native drivers, which reach their
 //     radio without any SoapySDR install at all - six of them over our own
@@ -119,7 +121,7 @@ namespace cascade::core {
 struct AppConfig {
     int schemaVersion = 1;
     // "siggen"|"file"|"soapy"|"rtlsdr"|"hackrf"|"airspy"|"airspyhf"|
-    // "sdrplay"|"mirisdr"|"rx888"|"pluto"|"soundcard"|"aor"
+    // "sdrplay"|"mirisdr"|"rx888"|"pluto"|"soundcard"|"aor"|"hydrasdr"
     std::string sourceKind = "siggen";
     // RX antenna port for a Soapy device, e.g. "TX/RX" or "RX2" on a B200.
     // Empty means "whatever the driver defaults to", which is what every

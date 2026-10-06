@@ -112,6 +112,9 @@ inline std::vector<std::string> soapyModulesForFamily(const std::string& kind,
     if (k == "hackrf") { return {"hackrf"}; }
     if (k == "airspy") { return {"airspy"}; }
     if (k == "airspyhf") { return {"airspyhf"}; }
+    // SoapyHydraSDR registers itself as "hydrasdr"
+    // (github.com/hydrasdr/SoapyHydraSDR, Registration.cpp:78).
+    if (k == "hydrasdr") { return {"hydrasdr"}; }
     if (k == "sdrplay" || k == "mirisdr") { return kMirics; }
     if (k == "rx888") { return {"sddc"}; }
     if (k == "pluto") { return {"plutosdr"}; }

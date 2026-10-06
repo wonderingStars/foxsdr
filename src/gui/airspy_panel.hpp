@@ -77,7 +77,7 @@ inline cascade::core::AirspySetting airspySettingOf(const cascade::source::Airsp
 // A NEW radio past the cap is not remembered; one already known always is.
 inline void airspyRemember(std::map<std::string, cascade::core::AirspySetting>& memory,
                            const std::string& args, const cascade::source::AirspySource& a) {
-    const std::string key = cascade::core::airspyRadioKey(args);
+    const std::string key = cascade::core::airspyRadioKey(args, a.driverKey());
     if (memory.count(key) == 0 && memory.size() >= cascade::core::kMaxAirspyRadios) { return; }
     memory[key] = airspySettingOf(a);
 }
@@ -107,7 +107,7 @@ inline void airspyApplySetting(const cascade::core::AirspySetting& remembered,
 inline bool airspyApplyRemembered(
     const std::map<std::string, cascade::core::AirspySetting>& memory, const std::string& args,
     cascade::source::AirspySource& a) {
-    const auto it = memory.find(cascade::core::airspyRadioKey(args));
+    const auto it = memory.find(cascade::core::airspyRadioKey(args, a.driverKey()));
     if (it == memory.end()) { return false; }
     airspyApplySetting(it->second, a);
     return true;

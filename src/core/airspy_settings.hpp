@@ -38,8 +38,12 @@ struct AirspySetting {
 // A hand-edited or hostile file cannot grow the config without bound.
 inline constexpr std::size_t kMaxAirspyRadios = 64;
 
-inline std::string airspyRadioKey(const std::string& args) {
-    return biasTeeRadioKey("airspy", args);
+// `kind` is the driver key of the radio the memory belongs to: "airspy", or
+// "hydrasdr" for the HydraSDR RFOne, which is driven by the same panel and
+// keeps the same memory under its own name. The default is the Airspy's, so
+// every existing caller (and every saved config) is untouched.
+inline std::string airspyRadioKey(const std::string& args, const std::string& kind = "airspy") {
+    return biasTeeRadioKey(kind, args);
 }
 
 // Every value into the range the driver accepts, an unknown mode to "free"
@@ -58,13 +62,15 @@ inline AirspySetting sanitiseAirspySetting(AirspySetting s) {
     return s;
 }
 
-// The map as loaded: every entry sanitised, entries with no "airspy|" radio
-// key dropped, and at most kMaxAirspyRadios kept.
+// The map as loaded: every entry sanitised, entries with no "airspy|" or
+// "hydrasdr|" radio key dropped, and at most kMaxAirspyRadios kept.
 inline std::map<std::string, AirspySetting> sanitiseAirspySettings(
     const std::map<std::string, AirspySetting>& in) {
     std::map<std::string, AirspySetting> out;
     for (const auto& [key, s] : in) {
-        if (key.rfind("airspy|", 0) != 0 || key.size() <= 7) { continue; }
+        const bool airspyKey = key.rfind("airspy|", 0) == 0 && key.size() > 7;
+        const bool hydraKey = key.rfind("hydrasdr|", 0) == 0 && key.size() > 9;
+        if (!airspyKey && !hydraKey) { continue; }
         if (out.size() >= kMaxAirspyRadios) { break; }
         out[key] = sanitiseAirspySetting(s);
     }

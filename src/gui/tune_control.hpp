@@ -1558,7 +1558,7 @@ inline bool fallbackNamesTheSameDongle(const std::string& nativeKey,
 inline bool isNativeSourceKind(const std::string& kind) {
     return kind == "rtlsdr" || kind == "hackrf" || kind == "airspy" || kind == "airspyhf" ||
            kind == "sdrplay" || kind == "mirisdr" || kind == "rx888" || kind == "pluto" ||
-           kind == "aor";
+           kind == "aor" || kind == "hydrasdr";
 }
 
 // WHAT TO CALL A RECORDING ON SCREEN: its own name, not the path it lives at.

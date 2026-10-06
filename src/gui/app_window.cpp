@@ -9902,8 +9902,8 @@ void AppWindow::launchDeviceOpen(DeviceOpenResult r, const std::string& busyLabe
     deviceOpenReqGen_ = sourceGen_;
     // An Airspy's own memory travels with the request (see airspyAtOpen).
     r.airspyAtOpen.reset();
-    if (r.kind == "airspy") {
-        const auto mem = airspyMemory_.find(cascade::core::airspyRadioKey(r.args));
+    if (r.kind == "airspy" || r.kind == "hydrasdr") {
+        const auto mem = airspyMemory_.find(cascade::core::airspyRadioKey(r.args, r.kind));
         if (mem != airspyMemory_.end()) { r.airspyAtOpen = mem->second; }
     }
     // The RSP pre-Init tune (see the worker below) is a RADIO frequency, so
@@ -10364,6 +10364,7 @@ std::unique_ptr<cascade::source::DeviceSource> AppWindow::makeDeviceSource(
     if (kind == "soundcard") { return std::make_unique<cascade::source::SoundCardSource>(); }
     if (kind == "hackrf") { return std::make_unique<cascade::source::HackRfSource>(); }
     if (kind == "airspy") { return std::make_unique<cascade::source::AirspySource>(); }
+    if (kind == "hydrasdr") { return std::make_unique<cascade::source::HydraSdrSource>(); }
     if (kind == "airspyhf") { return std::make_unique<cascade::source::AirspyHfSource>(); }
     if (kind == "sdrplay") { return std::make_unique<cascade::source::SdrPlaySource>(); }
     if (kind == "mirisdr") { return std::make_unique<cascade::source::MiriSdrSource>(); }
@@ -10415,6 +10416,9 @@ void AppWindow::scanNative() {
         nativeDevices_.push_back(std::move(d));
     }
     for (cascade::source::NativeDeviceInfo& d : cascade::source::enumerateAirspy()) {
+        nativeDevices_.push_back(std::move(d));
+    }
+    for (cascade::source::NativeDeviceInfo& d : cascade::source::enumerateHydraSdr()) {
         nativeDevices_.push_back(std::move(d));
     }
     for (cascade::source::NativeDeviceInfo& d : cascade::source::enumerateAirspyHf()) {
@@ -10615,6 +10619,9 @@ void AppWindow::scanNative() {
         ids.push_back(id);
     }
     for (const cascade::usb::UsbId& id : cascade::source::airspyUsbIds()) {
+        ids.push_back(id);
+    }
+    for (const cascade::usb::UsbId& id : cascade::source::hydraSdrUsbIds()) {
         ids.push_back(id);
     }
     for (const cascade::usb::UsbId& id : cascade::source::airspyHfUsbIds()) {

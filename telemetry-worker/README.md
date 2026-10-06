@@ -101,7 +101,7 @@ them. The record carries one string, `health`, of `token=count` pairs
 
 **Encoding, and why one string.** One blob (`blob13`) for all the tokens plus one
 marker blob and seven doubles, instead of a column per event: the vocabulary is
-267 tokens wide (12 drivers x 8 reasons alone is 96) and a column per token would
+277 tokens wide (13 drivers x 8 reasons alone is 104) and a column per token would
 not fit in 20, and every new event would be a schema change. As one string it is
 still queryable - `startsWith(blob13, 'radio_fail.rtlsdr.busy=') OR
 position(blob13, ',radio_fail.rtlsdr.busy=') > 0` is "sessions with that failure",

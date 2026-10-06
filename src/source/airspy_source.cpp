@@ -7,6 +7,7 @@
 #include "source/airspy_source.hpp"
 
 #include "core/diag_log.hpp"
+#include "source/hydrasdr_protocol.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -58,6 +59,38 @@ std::string hexWords(const std::uint8_t* data, std::size_t words) {
 
 std::vector<cascade::usb::UsbId> airspyUsbIds() { return {{airspy::kUsbVid, airspy::kUsbPid}}; }
 
+namespace {
+// libairspy airspy.c:119 area: GET_SAMPLERATES's fallback, airspy.c:902-906.
+constexpr std::uint32_t kAirspyFallbackRates[] = {10000000u, 2500000u};
+constexpr const char* kAirspyPorts[] = {"RX"};
+}  // namespace
+
+// THE AIRSPY'S PROFILE: every value here is what the driver had written into it
+// before the profile existed, which is the reason tests/test_airspy_source.cpp
+// passes unchanged.
+const DeviceProfile& airspyProfile() {
+    static const DeviceProfile p = {
+        /*driverKey*/ "airspy",
+        /*productName*/ "Airspy",
+        /*genericModel*/ "Airspy",
+        /*namePrefix*/ "Airspy: ",
+        /*noDeviceName*/ "Airspy: (no device)",
+        /*usbVid*/ airspy::kUsbVid,
+        /*usbPid*/ airspy::kUsbPid,
+        /*freqPayloadBytes*/ airspy::kFreqPayloadBytes,
+        /*minFrequencyHz*/ airspy::kMinFrequencyHz,
+        /*maxFrequencyHz*/ airspy::kMaxFrequencyHz,
+        /*biasTee*/ BiasTeeVia::GpioWrite,
+        /*ports*/ kAirspyPorts,
+        /*portCount*/ 1,
+        /*firmwarePrefix*/ "",
+        /*fallbackRatesHz*/ kAirspyFallbackRates,
+        /*fallbackRateCount*/ 2,
+        /*modelFrom*/ &airspyModelFrom,
+    };
+    return p;
+}
+
 std::string airspyModelFrom(const std::string& text) {
     const std::string up = uppered(text);
     // "MINI" is the only word either string carries that separates the two
@@ -70,18 +103,23 @@ std::string airspyModelFrom(const std::string& text) {
 
 std::vector<NativeDeviceInfo> airspyDevicesFrom(
     const std::vector<cascade::usb::UsbDeviceInfo>& devices) {
+    return devicesFromProfile(airspyProfile(), devices);
+}
+
+std::vector<NativeDeviceInfo> devicesFromProfile(
+    const DeviceProfile& profile, const std::vector<cascade::usb::UsbDeviceInfo>& devices) {
     std::vector<NativeDeviceInfo> out;
     int index = 0;
     for (const cascade::usb::UsbDeviceInfo& d : devices) {
-        if (d.vid != airspy::kUsbVid || d.pid != airspy::kUsbPid) { continue; }
+        if (d.vid != profile.usbVid || d.pid != profile.usbPid) { continue; }
         NativeDeviceInfo info;
-        info.driver = "airspy";
+        info.driver = profile.driverKey;
         // The bus-reported description is the only thing at enumeration time
         // that can tell a Mini from an R2 (see airspyModelFrom in the header
         // for why the board id cannot). When it is empty - which happens on a
         // devnode whose product string never got cached - the label says
         // "Airspy" and open() corrects it from the firmware version string.
-        info.label = airspyModelFrom(d.description);
+        info.label = profile.modelFrom(d.description);
         if (!d.serial.empty()) {
             info.label += " (serial " + d.serial + ")";
             info.args = "serial=" + d.serial;
@@ -106,7 +144,16 @@ std::vector<NativeDeviceInfo> enumerateAirspy() {
 
 // --- construction ---------------------------------------------------------
 
+AirspySource::AirspySource(const DeviceProfile& profile)
+    : profile_(profile),
+      link_(std::make_shared<ReaderLink>(kRingCapacitySamples(), profile.driverKey)),
+      name_(profile.noDeviceName) {}
+
 AirspySource::~AirspySource() { closeDevice(); }
+
+std::string AirspySource::noDeviceSentence(const char* function) const {
+    return std::string(function) + "() called with no " + profile_.productName + " open";
+}
 
 void AirspySource::setTransportForTest(std::vector<cascade::usb::UsbDeviceInfo> devices,
                                        UsbOpenFn opener) {
@@ -147,7 +194,7 @@ void AirspySource::noteTransportFaultOn(ReaderLink& link, const char* what,
         link.faulted = true;
         link.deviceDead = true;
     }
-    core::diagWarnf("airspy: transfer failed while %s%s%s", what, detail.empty() ? "" : ": ",
+    core::diagWarnf("%s: transfer failed while %s%s%s", link.tag, what, detail.empty() ? "" : ": ",
                     detail.c_str());
 }
 
@@ -202,7 +249,7 @@ bool AirspySource::controlOutLocked(airspy::VendorRequest r, std::uint16_t value
                                     std::uint16_t index, const std::uint8_t* data,
                                     std::size_t len, const char* what) {
     if (dev_ == nullptr) {
-        setError(std::string("no Airspy is open (") + what + ")");
+        setError(std::string("no ") + profile_.productName + " is open (" + what + ")");
         return false;
     }
     if (deviceDead()) { return false; }
@@ -220,7 +267,7 @@ bool AirspySource::controlInLocked(airspy::VendorRequest r, std::uint16_t value,
                                    const char* what, std::size_t* moved) {
     if (moved != nullptr) { *moved = 0; }
     if (dev_ == nullptr) {
-        setError(std::string("no Airspy is open (") + what + ")");
+        setError(std::string("no ") + profile_.productName + " is open (" + what + ")");
         return false;
     }
     if (deviceDead()) { return false; }
@@ -299,15 +346,25 @@ bool AirspySource::readSampleRatesLocked() {
     // reference's own fallback list.
     if (deviceDead()) { return false; }
     if (!ok || raw.empty()) {
+        if (profile_.fallbackRateCount == 0) {
+            // A PROFILE WITH NO FALLBACK (the HydraSDR's: its host library has
+            // none either - the count is simply zero and no rate can be set).
+            // A radio that cannot say what it runs at is not opened, and
+            // nothing failed on the wire, so the device is not condemned.
+            setError(std::string("the ") + profile_.productName +
+                     " did not answer GET_SAMPLERATES, so there is no sample rate to run at");
+            return false;
+        }
         // libairspy airspy.c:902-906, verbatim: an R2's two rates, in the
         // firmware's own order. Said out loud, because a receiver quietly
         // offering rates it was never told about is a lie the spectrum would
         // not reveal.
         core::diagWarnf(
-            "airspy: the firmware did not answer GET_SAMPLERATES; falling back to libairspy's "
+            "%s: the firmware did not answer GET_SAMPLERATES; falling back to libairspy's "
             "own default list (10 and 2.5 MS/s), which is right for an R2 and may not be for "
-            "this board");
-        raw = {10000000u, 2500000u};
+            "this board",
+            profile_.driverKey);
+        raw.assign(profile_.fallbackRatesHz, profile_.fallbackRatesHz + profile_.fallbackRateCount);
         clearError();
     }
 
@@ -339,10 +396,12 @@ bool AirspySource::programRateIndexLocked(std::size_t index, const char* what) {
 
 bool AirspySource::programFrequencyLocked(double hz, const char* what) {
     // libairspy airspy.c:1631-1657: an OUT, value and index zero, four bytes
-    // of little-endian Hz.
-    std::uint8_t payload[airspy::kFreqPayloadBytes];
-    airspy::encodeFreq(static_cast<std::uint32_t>(hz + 0.5), payload);
-    return controlOutLocked(airspy::VendorRequest::SetFreq, 0, 0, payload, sizeof(payload), what);
+    // of little-endian Hz - or eight, on the radio whose firmware takes a
+    // uint64 (the profile's width; hydrasdr_protocol.hpp has the lines).
+    std::uint8_t payload[8] = {0};
+    const std::size_t width = std::min<std::size_t>(profile_.freqPayloadBytes, sizeof(payload));
+    airspy::encodeFreqWide(static_cast<std::uint64_t>(hz + 0.5), payload, width);
+    return controlOutLocked(airspy::VendorRequest::SetFreq, 0, 0, payload, width, what);
 }
 
 bool AirspySource::programPackingLocked(bool on) {
@@ -462,11 +521,39 @@ bool AirspySource::programBiasTLocked(bool on) {
     // request GPIO_WRITE, the state in the VALUE word and (port << 5) | pin in
     // the INDEX word. See airspy_protocol.hpp's kBiasTPortPin for why this is
     // not request 20.
-    if (!controlOutLocked(airspy::VendorRequest::GpioWrite, on ? 1 : 0, airspy::kBiasTPortPin,
-                          nullptr, 0, "switching the bias tee")) {
+    //
+    // THE HYDRASDR'S HOST DOES NOT DO THAT: it sends SET_RF_BIAS_CMD (request
+    // 20), value 0, the state in the INDEX word (hydrasdr_protocol.hpp), and the
+    // profile says which of the two this radio is spoken to with.
+    const bool ok =
+        profile_.biasTee == BiasTeeVia::RfBiasRequest
+            ? controlOutLocked(airspy::VendorRequest::SetRfBiasCmd, 0, on ? 1 : 0, nullptr, 0,
+                               "switching the bias tee")
+            : controlOutLocked(airspy::VendorRequest::GpioWrite, on ? 1 : 0, airspy::kBiasTPortPin,
+                               nullptr, 0, "switching the bias tee");
+    if (!ok) { return false; }
+    biasT_.store(on, std::memory_order_relaxed);
+    return true;
+}
+
+bool AirspySource::programRfPortLocked(std::size_t index, const char* what) {
+    // The HydraSDR host's hydrasdr_set_rf_port (hydrasdr_shared.c:2221-2242): an
+    // IN, value 0, the port in the INDEX word, one byte back that must be 1.
+    // The firmware STALLS a port it does not have (m0/usb_req.c:897-913), which
+    // is a failed transfer here and condemns the device like any other; this
+    // driver only ever sends the profile's own.
+    std::uint8_t ack = 0;
+    std::size_t moved = 0;
+    const std::uint16_t port = static_cast<std::uint16_t>(index);
+    if (!controlInLocked(hydrasdr::kSetRfPortRequest, 0, port, &ack, 1, what, &moved)) {
         return false;
     }
-    biasT_.store(on, std::memory_order_relaxed);
+    if (moved != 1 || ack != 1) {
+        setError(std::string("the ") + profile_.productName + " would not select receive port " +
+                 profile_.ports[index]);
+        return false;
+    }
+    portIndex_.store(index, std::memory_order_relaxed);
     return true;
 }
 
@@ -478,17 +565,19 @@ bool AirspySource::resolveDevice(const std::string& args, cascade::usb::UsbDevic
     if (useFakeTransport_) {
         devices = fakeDevices_;
     } else {
-        devices = cascade::usb::enumerateWinUsb(airspyUsbIds());
+        devices = cascade::usb::enumerateWinUsb({{profile_.usbVid, profile_.usbPid}});
     }
-    // Keep only Airspys: a caller may hand us a list from a wider scan, and
-    // opening somebody else's dongle with Airspy vendor requests would be
-    // worse than finding nothing.
+    // Keep only OUR radio: a caller may hand us a list from a wider scan, and
+    // opening somebody else's dongle with these vendor requests would be worse
+    // than finding nothing - an Airspy's id is not a HydraSDR's, and the other
+    // way about.
     std::vector<cascade::usb::UsbDeviceInfo> ours;
     for (const cascade::usb::UsbDeviceInfo& d : devices) {
-        if (d.vid == airspy::kUsbVid && d.pid == airspy::kUsbPid) { ours.push_back(d); }
+        if (d.vid == profile_.usbVid && d.pid == profile_.usbPid) { ours.push_back(d); }
     }
     if (ours.empty()) {
-        error = "no Airspy found (is it plugged in, and bound to WinUSB?)";
+        error = std::string("no ") + profile_.productName +
+                " found (is it plugged in, and bound to WinUSB?)";
         return false;
     }
 
@@ -506,7 +595,8 @@ bool AirspySource::resolveDevice(const std::string& args, cascade::usb::UsbDevic
                 return true;
             }
         }
-        error = "no Airspy with serial " + serial + " is connected";
+        error = std::string("no ") + profile_.productName + " with serial " + serial +
+                " is connected";
         return false;
     }
 
@@ -517,7 +607,7 @@ bool AirspySource::resolveDevice(const std::string& args, cascade::usb::UsbDevic
         const long n = std::strtol(indexText.c_str(), &end, 10);
         if (end == indexText.c_str() || *end != '\0' || n < 0 ||
             static_cast<std::size_t>(n) >= ours.size()) {
-            error = "there is no Airspy at index " + indexText;
+            error = std::string("there is no ") + profile_.productName + " at index " + indexText;
             return false;
         }
         index = static_cast<std::size_t>(n);
@@ -529,7 +619,7 @@ bool AirspySource::resolveDevice(const std::string& args, cascade::usb::UsbDevic
 bool AirspySource::open(const std::string& args) {
     std::lock_guard<std::mutex> lk(devMutex_);
     if (dev_ != nullptr) {
-        setError("this Airspy source already has a device open");
+        setError(std::string("this ") + profile_.productName + " source already has a device open");
         return false;
     }
 
@@ -547,7 +637,7 @@ bool AirspySource::open(const std::string& args) {
         dev = cascade::usb::openWinUsb(info.path, error);
     }
     if (dev == nullptr) {
-        setError(error.empty() ? std::string("could not open the Airspy") : error);
+        setError(error.empty() ? std::string("could not open the ") + profile_.productName : error);
         return false;
     }
     dev_ = std::move(dev);
@@ -569,7 +659,9 @@ bool AirspySource::open(const std::string& args) {
     if (!controlInLocked(airspy::VendorRequest::BoardIdRead, 0, 0, &boardId, 1,
                          "reading the board id", &moved) ||
         moved != 1) {
-        if (moved != 1) { setError("the Airspy did not answer its board id"); }
+        if (moved != 1) {
+            setError(std::string("the ") + profile_.productName + " did not answer its board id");
+        }
         return giveUp();
     }
     boardId_ = boardId;
@@ -587,6 +679,18 @@ bool AirspySource::open(const std::string& args) {
     if (moved > kVersionBytes) { moved = kVersionBytes; }
     version[moved] = 0;
     firmwareVersion_ = reinterpret_cast<const char*>(version);
+    // A DEVICE THAT DOES NOT SAY WHAT THE PROFILE EXPECTS is not ours: the
+    // HydraSDR host refuses one whose version string does not begin "HydraSDR RF"
+    // (hydrasdr.c:187). Nothing has been programmed yet, and the device is
+    // handed back as it was found.
+    if (profile_.firmwarePrefix[0] != '\0' &&
+        firmwareVersion_.compare(0, std::strlen(profile_.firmwarePrefix),
+                                 profile_.firmwarePrefix) != 0) {
+        setError(std::string("the device on the ") + profile_.productName +
+                 "'s USB id did not report a firmware version beginning \"" +
+                 profile_.firmwarePrefix + "\" (it said \"" + firmwareVersion_ + "\")");
+        return giveUp();
+    }
 
     // airspy.h:108-111: two part-id words then four serial words.
     constexpr std::size_t kPartIdSerialNoBytes = 24;
@@ -595,7 +699,8 @@ bool AirspySource::open(const std::string& args) {
                          sizeof(partSerial), "reading the part id and serial number", &moved) ||
         moved != kPartIdSerialNoBytes) {
         if (moved != kPartIdSerialNoBytes) {
-            setError("the Airspy answered a short part id / serial number");
+            setError(std::string("the ") + profile_.productName +
+                     " answered a short part id / serial number");
         }
         return giveUp();
     }
@@ -607,8 +712,8 @@ bool AirspySource::open(const std::string& args) {
     // section's row already says and a name that changed on open would be a
     // different radio as far as the user is concerned; the firmware version
     // string only when the description had nothing to say.
-    model_ = airspyModelFrom(info.description);
-    if (model_ == "Airspy") { model_ = airspyModelFrom(firmwareVersion_); }
+    model_ = profile_.modelFrom(info.description);
+    if (model_ == profile_.genericModel) { model_ = profile_.modelFrom(firmwareVersion_); }
 
     // --- a KNOWN state -------------------------------------------------
     // RECEIVER_MODE OFF FIRST. An Airspy keeps whatever the last application
@@ -644,8 +749,12 @@ bool AirspySource::open(const std::string& args) {
         // from setAutoGain() read the same way.
         programMixerAgcLocked(false) && programLnaAgcLocked(false) &&
         programLnaLocked(kDefaultGainIndex) && programMixerLocked(kDefaultGainIndex) &&
-        programVgaLocked(kDefaultGainIndex) && programBiasTLocked(false);
+        programVgaLocked(kDefaultGainIndex) && programBiasTLocked(false) &&
+        // A radio with several receive ports is put on the first, so what is
+        // open is what the combo shows whatever the last program left.
+        (profile_.portCount < 2 || programRfPortLocked(0, "selecting the first receive port"));
     if (!configured) { return giveUp(); }
+    portIndex_.store(0, std::memory_order_relaxed);
     // FREE MODE, both AGCs off, 8/8/8 - what the transfers above just put on
     // the radio. The table modes keep their defaults until chosen, and the
     // decimation starts at none: a remembered choice is the application's to
@@ -666,7 +775,7 @@ bool AirspySource::open(const std::string& args) {
 
     std::string label = model_;
     if (!info.serial.empty()) { label += " (serial " + info.serial + ")"; }
-    setName("Airspy: " + label);
+    setName(std::string(profile_.namePrefix) + label);
     openMirror_.store(true, std::memory_order_relaxed);
 
     std::string rateList;
@@ -680,11 +789,11 @@ bool AirspySource::open(const std::string& args) {
     // the end on a real R2 - the first field report's log stops at "serial
     // ...26a464dc28593e93, " - which is exactly the part that says whether
     // GET_SAMPLERATES answered.
-    core::diagLogf("airspy: opened %s - board id %u, firmware \"%s\", serial %s", label.c_str(),
-                   static_cast<unsigned>(boardId_), firmwareVersion_.c_str(),
+    core::diagLogf("%s: opened %s - board id %u, firmware \"%s\", serial %s", profile_.driverKey,
+                   label.c_str(), static_cast<unsigned>(boardId_), firmwareVersion_.c_str(),
                    partIdSerialNo_.c_str());
-    core::diagLogf("airspy: rates %s MS/s complex (packed 12-bit, %.3f MS/s at the ADC)",
-                   rateList.c_str(), rates_[startRate] * 2.0 / 1e6);
+    core::diagLogf("%s: rates %s MS/s complex (packed 12-bit, %.3f MS/s at the ADC)",
+                   profile_.driverKey, rateList.c_str(), rates_[startRate] * 2.0 / 1e6);
     return true;
 }
 
@@ -714,7 +823,8 @@ void AirspySource::closeDevice() {
     hardwareRateHz_.store(0.0, std::memory_order_relaxed);
     centerFrequencyHz_.store(0.0, std::memory_order_relaxed);
     packing_.store(false, std::memory_order_relaxed);
-    setName("Airspy: (no device)");
+    portIndex_.store(0, std::memory_order_relaxed);
+    setName(profile_.noDeviceName);
 }
 
 std::uint8_t AirspySource::boardId() const {
@@ -978,9 +1088,9 @@ void AirspySource::readerThreadBody(std::shared_ptr<ReaderLink> link) {
             ++rearms;
             lastRearm = std::chrono::steady_clock::now();
             core::diagWarnf(
-                "airspy: %s; restarting the stream the way libairspy starts it - receiver off, "
+                "%s: %s; restarting the stream the way libairspy starts it - receiver off, "
                 "clear the halt, receiver on (attempt %d of %d)",
-                detail.c_str(), rearms, kMaxStreamRearms);
+                link->tag, detail.c_str(), rearms, kMaxStreamRearms);
             std::string why;
             const Rearm r = rearmStreamOn(*link, why);
             if (r == Rearm::Stopped) { break; }
@@ -1201,7 +1311,7 @@ std::vector<unsigned> AirspySource::decimationChoices() const {
 bool AirspySource::setDecimation(unsigned factor) {
     std::lock_guard<std::mutex> lk(devMutex_);
     if (dev_ == nullptr) {
-        setError("setDecimation() called with no Airspy open");
+        setError(noDeviceSentence("setDecimation"));
         return false;
     }
     if (deviceDead()) { return false; }
@@ -1209,9 +1319,9 @@ bool AirspySource::setDecimation(unsigned factor) {
     if (std::find(choices.begin(), choices.end(), factor) == choices.end()) {
         char buf[160];
         std::snprintf(buf, sizeof(buf),
-                      "the Airspy cannot decimate by %u here: it takes 1, 2, 4 ... up to %u, where "
+                      "the %s cannot decimate by %u here: it takes 1, 2, 4 ... up to %u, where "
                       "every sample rate it lists stays a whole number of hertz",
-                      factor, choices.empty() ? 1u : choices.back());
+                      profile_.productName, factor, choices.empty() ? 1u : choices.back());
         setError(buf);
         return false;
     }
@@ -1243,12 +1353,13 @@ bool AirspySource::setSampleRateHzExplicit(double hz) {
 
 bool AirspySource::setSampleRateHzLocked(double hz, bool crossDecimation) {
     if (dev_ == nullptr) {
-        setError("setSampleRateHz() called with no Airspy open");
+        setError(noDeviceSentence("setSampleRateHz"));
         return false;
     }
     if (deviceDead()) { return false; }
     if (rates_.empty()) {
-        setError("this Airspy has not told us which sample rates it supports");
+        setError(std::string("this ") + profile_.productName +
+                 " has not told us which sample rates it supports");
         return false;
     }
     if (!(hz > 0.0)) {  // negated compare so a NaN lands here
@@ -1381,15 +1492,16 @@ bool AirspySource::setSampleRateHzLocked(double hz, bool crossDecimation) {
 bool AirspySource::setCenterFrequencyHz(double hz) {
     std::lock_guard<std::mutex> lk(devMutex_);
     if (dev_ == nullptr) {
-        setError("setCenterFrequencyHz() called with no Airspy open");
+        setError(noDeviceSentence("setCenterFrequencyHz"));
         return false;
     }
     if (deviceDead()) { return false; }
-    if (!(hz >= airspy::kMinFrequencyHz && hz <= airspy::kMaxFrequencyHz)) {
+    if (!(hz >= profile_.minFrequencyHz && hz <= profile_.maxFrequencyHz)) {
         char buf[176];
         std::snprintf(buf, sizeof(buf),
-                      "the Airspy tunes %.0f MHz to %.0f MHz; %.6f MHz is outside that",
-                      airspy::kMinFrequencyHz / 1e6, airspy::kMaxFrequencyHz / 1e6, hz / 1e6);
+                      "the %s tunes %.0f MHz to %.0f MHz; %.6f MHz is outside that",
+                      profile_.productName, profile_.minFrequencyHz / 1e6,
+                      profile_.maxFrequencyHz / 1e6, hz / 1e6);
         setError(buf);
         return false;
     }
@@ -1399,8 +1511,8 @@ bool AirspySource::setCenterFrequencyHz(double hz) {
 }
 
 bool AirspySource::frequencyRangeHz(double& loHz, double& hiHz) const {
-    loHz = airspy::kMinFrequencyHz;
-    hiHz = airspy::kMaxFrequencyHz;
+    loHz = profile_.minFrequencyHz;
+    hiHz = profile_.maxFrequencyHz;
     return true;
 }
 
@@ -1436,7 +1548,7 @@ std::vector<GainInfo> AirspySource::gains() const {
 bool AirspySource::setGainState(const GainState& st) {
     std::lock_guard<std::mutex> lk(devMutex_);
     if (dev_ == nullptr) {
-        setError("setGainState() called with no Airspy open");
+        setError(noDeviceSentence("setGainState"));
         return false;
     }
     if (deviceDead()) { return false; }
@@ -1468,7 +1580,7 @@ AirspySource::GainState AirspySource::gainState() const {
 bool AirspySource::setGainMode(GainMode mode) {
     std::lock_guard<std::mutex> lk(devMutex_);
     if (dev_ == nullptr) {
-        setError("setGainMode() called with no Airspy open");
+        setError(noDeviceSentence("setGainMode"));
         return false;
     }
     if (deviceDead()) { return false; }
@@ -1478,7 +1590,7 @@ bool AirspySource::setGainMode(GainMode mode) {
 bool AirspySource::setGainDb(const std::string& gainName, double db) {
     std::lock_guard<std::mutex> lk(devMutex_);
     if (dev_ == nullptr) {
-        setError("setGainDb() called with no Airspy open");
+        setError(noDeviceSentence("setGainDb"));
         return false;
     }
     if (deviceDead()) { return false; }
@@ -1508,7 +1620,8 @@ bool AirspySource::setGainDb(const std::string& gainName, double db) {
         if (fromOtherMode) { return programFreeLocked(); }
         return programVgaLocked(vgaIndex_.load(std::memory_order_relaxed));
     }
-    setError("the Airspy has no gain called \"" + gainName + "\"");
+    setError(std::string("the ") + profile_.productName + " has no gain called \"" + gainName +
+             "\"");
     return false;
 }
 
@@ -1532,7 +1645,7 @@ double AirspySource::gainDb(const std::string& gainName) const {
 bool AirspySource::setLnaAgc(bool on) {
     std::lock_guard<std::mutex> lk(devMutex_);
     if (dev_ == nullptr) {
-        setError("setLnaAgc() called with no Airspy open");
+        setError(noDeviceSentence("setLnaAgc"));
         return false;
     }
     if (deviceDead()) { return false; }
@@ -1547,7 +1660,7 @@ bool AirspySource::setLnaAgc(bool on) {
 bool AirspySource::setMixerAgc(bool on) {
     std::lock_guard<std::mutex> lk(devMutex_);
     if (dev_ == nullptr) {
-        setError("setMixerAgc() called with no Airspy open");
+        setError(noDeviceSentence("setMixerAgc"));
         return false;
     }
     if (deviceDead()) { return false; }
@@ -1560,7 +1673,7 @@ bool AirspySource::setMixerAgc(bool on) {
 bool AirspySource::setAutoGain(bool on) {
     std::lock_guard<std::mutex> lk(devMutex_);
     if (dev_ == nullptr) {
-        setError("setAutoGain() called with no Airspy open");
+        setError(noDeviceSentence("setAutoGain"));
         return false;
     }
     if (deviceDead()) { return false; }
@@ -1580,16 +1693,51 @@ bool AirspySource::setAutoGain(bool on) {
     return true;
 }
 
+std::vector<std::string> AirspySource::antennas() const {
+    return std::vector<std::string>(profile_.ports, profile_.ports + profile_.portCount);
+}
+
+std::string AirspySource::antenna() const {
+    const std::size_t i = portIndex_.load(std::memory_order_relaxed);
+    return profile_.ports[i < profile_.portCount ? i : 0];
+}
+
 bool AirspySource::setAntenna(const std::string& antennaName) {
-    if (antennaName == "RX") { return true; }
-    setError("the Airspy has one receive port, \"RX\"");
-    return false;
+    std::size_t want = profile_.portCount;
+    for (std::size_t i = 0; i < profile_.portCount; ++i) {
+        if (antennaName == profile_.ports[i]) { want = i; }
+    }
+    if (want == profile_.portCount) {
+        if (profile_.portCount == 1) {
+            setError(std::string("the ") + profile_.productName + " has one receive port, \"" +
+                     profile_.ports[0] + "\"");
+        } else {
+            std::string names;
+            for (std::size_t i = 0; i < profile_.portCount; ++i) {
+                names += std::string(i == 0 ? "" : ", ") + "\"" + profile_.ports[i] + "\"";
+            }
+            setError(std::string("the ") + profile_.productName + " has no receive port \"" +
+                     antennaName + "\"; it has " + names);
+        }
+        return false;
+    }
+    // ONE PORT: nothing to send, and nothing to have gone wrong - the answer
+    // was always just the name (and still works with no radio open).
+    if (profile_.portCount == 1) { return true; }
+    std::lock_guard<std::mutex> lk(devMutex_);
+    if (dev_ == nullptr) {
+        setError(noDeviceSentence("setAntenna"));
+        return false;
+    }
+    if (deviceDead()) { return false; }
+    if (want == portIndex_.load(std::memory_order_relaxed)) { return true; }
+    return programRfPortLocked(want, "selecting the receive port");
 }
 
 bool AirspySource::setBiasT(bool on) {
     std::lock_guard<std::mutex> lk(devMutex_);
     if (dev_ == nullptr) {
-        setError("setBiasT() called with no Airspy open");
+        setError(noDeviceSentence("setBiasT"));
         return false;
     }
     if (deviceDead()) { return false; }

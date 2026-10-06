@@ -26,12 +26,22 @@ const here = fileURLToPath(new URL('.', import.meta.url));
 // The Worker's own vocabulary of failure events, read out of worker.js between its
 // two markers (strict JSON, so this and tests/test_health_events.cpp can both read
 // it): an array of { name, qualifiers: [[word, ...], ...] }.
-function vocabularyFromWorker() {
-  const text = readFileSync(`${here}worker.js`, 'utf8');
+function vocabularyFromWorker(file = 'worker.js') {
+  const text = readFileSync(`${here}${file}`, 'utf8');
   const begin = text.indexOf('// BEGIN HEALTH VOCABULARY');
   const end = text.indexOf('// END HEALTH VOCABULARY');
-  assert.ok(begin >= 0 && end > begin, 'the vocabulary markers are in worker.js');
+  assert.ok(begin >= 0 && end > begin, `the vocabulary markers are in ${file}`);
   return JSON.parse(text.slice(text.indexOf('[', begin), text.lastIndexOf(']', end) + 1));
+}
+// Every legal token a vocabulary makes, in written order.
+function tokensOf(vocabulary) {
+  const all = [];
+  for (const ev of vocabulary) {
+    let names = [ev.name];
+    for (const words of ev.qualifiers) { names = names.flatMap((n) => words.map((w) => `${n}.${w}`)); }
+    all.push(...names);
+  }
+  return all;
 }
 const ID = 'a'.repeat(32);
 
@@ -464,13 +474,13 @@ test('NEW CLIENT (slow frames, recoveries) -> OLD WORKER: a 204, the failure tok
   assert.deepEqual(only.usage[0].doubles.slice(0, 5), [12, 1, 3600, 3000, 0]);
   // THE LONGEST RECORD THE CLIENT WRITES is read whole by the old Worker: it is never more than 832
   // characters, so the old Worker's own limit does not refuse it.
-  const all = [];
-  for (const ev of vocabularyFromWorker()) {
-    let names = [ev.name];
-    for (const words of ev.qualifiers) { names = names.flatMap((n) => words.map((w) => `${n}.${w}`)); }
-    all.push(...names);
-  }
-  const base = all.filter((t) => !t.startsWith('slow.') && !t.startsWith('recovered.'));
+  const all = tokensOf(vocabularyFromWorker());
+  // ONLY WORDS THE OLD WORKER KNOWS (0.99.66). The claim is that the NEW FAMILIES (slow frames,
+  // recoveries) cannot push a record past what the old Worker reads; a driver word added AFTER
+  // that Worker was frozen (hydrasdr) is a token it drops, whatever the length of the record, and
+  // counting it here would test the age of the fixture rather than the claim.
+  const oldKnown = new Set(tokensOf(vocabularyFromWorker('test-fixtures/worker-health-counts.js')));
+  const base = all.filter((t) => !t.startsWith('slow.') && !t.startsWith('recovered.') && oldKnown.has(t));
   const longest = (list, n) => [...list].sort((a, b) => b.length - a.length).slice(0, n);
   const worstBase = [
     ...longest(base.filter((t) => t.startsWith('radio_fail.')), 8),
@@ -491,6 +501,18 @@ test('NEW CLIENT (slow frames, recoveries) -> OLD WORKER: a 204, the failure tok
   const newWide = (await post({ ...newRecord(), health: record })).usage[0];
   assert.equal(newWide.blobs[12], record);
   assert.ok(newWide.blobs[12].split(',').length > 24, 'slow tokens beside 24 failure tokens are kept');
+});
+
+test('0.99.66 CLIENT (a hydrasdr token) -> OLD WORKER: a 204, that token dropped and the rest read; the NEW Worker keeps it', async () => {
+  // Why the Worker is deployed BEFORE a client that sends a new driver word: the Worker
+  // before this one drops the word it does not know and still takes the record.
+  const sent = 'radio_open.hydrasdr=1,radio_fail.hydrasdr.bind=2,radio_open.rtlsdr=1';
+  const old = await postTo(healthCountsWorker, { ...newRecord(), stalls: 0, health: sent });
+  assert.equal(old.status, 204);
+  assert.equal(old.usage[0].blobs[12], 'radio_open.rtlsdr=1');
+  const now = await post({ ...newRecord(), stalls: 0, health: sent });
+  assert.equal(now.usage[0].blobs[12], 'radio_open.rtlsdr=1,radio_open.hydrasdr=1,radio_fail.hydrasdr.bind=2');
+  assert.deepEqual(now.usage[0].doubles.slice(5, 9), [2, 2, 0, 0]);   // 2 failures, 2 opens, none delivered, no sound
 });
 
 test('0.99.64 CLIENT (failure counts only) -> NEW WORKER: the row the 0.99.64 Worker wrote, and zeros in the new columns', async () => {

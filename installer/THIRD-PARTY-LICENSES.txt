@@ -408,6 +408,45 @@ AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ======================================================================
+COMPONENT: libhydrasdr and the HydraSDR RFOne firmware (the HydraSDR USB vendor protocol)
+======================================================================
+LICENCE:   MIT (libhydrasdr: hydrasdr_commands.h, hydrasdr_shared.c,
+           hydrasdr_rfone.c); BSD 3-Clause (libhydrasdr: hydrasdr.c, the same
+           notice as libairspy's above with HydraSDR's own copyright lines);
+           GPL-2.0 (the firmware, read for the protocol only - none of its code
+           is used)
+SOURCE:    https://github.com/hydrasdr/rfone_host - libhydrasdr/src/ (v1.1.3);
+           https://github.com/hydrasdr/rfone_fw - m0/usb_req.c,
+           m0/usb_descriptor.c, common/hydrasdr_commands.h (main)
+
+FoxSDR's native HydraSDR RFOne driver (src/source/hydrasdr_protocol.hpp,
+src/source/hydrasdr_source.{hpp,cpp}) is the Airspy driver above given the
+RFOne's constants, and those constants are the HydraSDR WIRE PROTOCOL: the USB
+ids, the SET_FREQ payload width, the bias-tee and receive-port request numbers
+and layouts, the port names and the tuning range. They are facts about how to
+talk to the device; no libhydrasdr or firmware code is linked, shipped or
+transcribed. The libhydrasdr MIT notice follows as its licence asks.
+
+Copyright (C) 2013-2026, Benjamin Vernoux <bvernoux@hydrasdr.com>
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in the
+Software without restriction, including without limitation the rights to use,
+copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the
+Software, and to permit persons to whom the Software is furnished to do so,
+subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN
+AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+======================================================================
 COMPONENT: libairspyhf (USB protocol and host DSP, ported - nothing linked or shipped)
 ======================================================================
 ======================================================================

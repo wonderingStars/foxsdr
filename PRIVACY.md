@@ -281,6 +281,7 @@ A name FoxSDR does not know is `other`.
 | `rx888` | RX888 |
 | `pluto` | ADALM-Pluto |
 | `aor` | AOR digital I/Q interface |
+| `hydrasdr` | HydraSDR RFOne |
 | `soapy` | anything opened through a SoapySDR module |
 | `soundcard` | a sound card used as the radio's input |
 | `other` | none of the above |
