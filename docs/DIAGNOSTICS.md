@@ -440,7 +440,10 @@ the panel:
   console-subsystem binary, so a Start Menu launch has a console too, one
   Windows created with nothing else attached; the test that separates that
   from a developer's terminal is `GetConsoleProcessList` reporting more than
-  this one process. The write end is inheritable on purpose, so the
+  this one process. (Closing that console, or Ctrl+C in it, asks for the
+  window's own close since 0.99.67 - `core/console_close.hpp`; until then
+  kernel32's default handler ended the process on the spot, mid-frame.) The
+  write end is inheritable on purpose, so the
   device-enumeration child's stderr (which UHD's discovery errors go to) lands
   here as well. The diagnostic log itself never writes to stderr, so nothing
   it does can loop back; the crash handler's one stderr line goes to the
@@ -3074,7 +3077,7 @@ the table):
 | `0xC0000409` | `fast-fail (abort or failed integrity check)` | `ntstatus.h`: `STATUS_STACK_BUFFER_OVERRUN`; and Microsoft's `__fastfail` page: "User-mode fast fail requests appear as a second chance non-continuable exception with exception code 0xC0000409 ... no exception handlers are invoked" |
 | `0xC0000374` | `heap corruption` | `ntstatus.h`: `STATUS_HEAP_CORRUPTION` ("A heap has been corrupted.") |
 | `0xC00000FD` | `stack overflow` | `ntstatus.h`: `STATUS_STACK_OVERFLOW` |
-| `0xC000013A` | `Ctrl+C or a console close` | `ntstatus.h`: `STATUS_CONTROL_C_EXIT` ("The application terminated as a result of a CTRL+C.") |
+| `0xC000013A` | `Ctrl+C or a console close` | `ntstatus.h`: `STATUS_CONTROL_C_EXIT` ("The application terminated as a result of a CTRL+C."). Since 0.99.67 the program answers Ctrl+C, Ctrl+Break and a closing console with its own close (`core/console_close.hpp`), so this code now means the shutdown did not finish inside the 5000 ms the system allows a closing console (HandlerRoutine's Timeouts table) |
 | `1` | `ended by another process (exit code 1, as taskkill /F does)` | **Measured**, 2026-10-05, Windows 11 22631: `taskkill /F` ends a process with 1. Microsoft's `TerminateProcess` page documents only that the *caller* chooses the code; that Task Manager's *End task* also leaves 1 is widely stated but **was not measured here**, which is why the words name `taskkill /F` and not Task Manager |
 | `-1` (`0xFFFFFFFF`) | `ended by another process (exit code -1, as Stop-Process and Process.Kill do)` | **Measured** in the same session: PowerShell 5.1's `Stop-Process -Force` and .NET's `Process.Kill()` both leave -1 |
 | `0` before the shutdown finished | `exit code 0 before the shutdown had finished` | by construction |
@@ -3093,12 +3096,20 @@ Looked up, not assumed:
   says it left out. **No document says what exit code that termination leaves, and
   none was measured here** (the owner's session cannot be logged off by a test), so
   the class is decided by something other than the code.
-- **Console control events do not reach this program.** `SetConsoleCtrlHandler`'s
-  page: if a console application loads `user32.dll` or `gdi32.dll`, its handler "does
-  not get called for the CTRL_LOGOFF_EVENT and CTRL_SHUTDOWN_EVENT events". `cascade.exe`
-  is a console-subsystem executable that links `user32.dll`, and so is the sentinel -
-  which is the same file. The documented alternative is a window handling
-  `WM_ENDSESSION`, and the sentinel may hold no window; the *application* has one.
+- **The logoff and shutdown console events do not reach this program.**
+  `SetConsoleCtrlHandler`'s page: if a console application loads `user32.dll` or
+  `gdi32.dll`, its handler "does not get called for the CTRL_LOGOFF_EVENT and
+  CTRL_SHUTDOWN_EVENT events". `cascade.exe` is a console-subsystem executable that
+  links `user32.dll`, and so is the sentinel - which is the same file. The documented
+  alternative is a window handling `WM_ENDSESSION`, and the sentinel may hold no
+  window; the *application* has one. The other three console events - Ctrl+C,
+  Ctrl+Break and the console window closing - DO arrive, and until 0.99.66 the
+  default handler answered them with `ExitProcess(STATUS_CONTROL_C_EXIT)`, which the
+  sentinel then filed as an ending from outside (a field report of 2026-10-06: the
+  console window a Start Menu launch brings, closed by hand, 135 s into a healthy
+  session). Since 0.99.67 `core/console_close.cpp` answers them with the window's
+  own close; `tests/test_sentinel_app.cpp` sends the real program Ctrl+Break and
+  requires exit code 0 and no report.
 - So the **application's own window** says it: the existing window-procedure hook
   (`gui/win_frame.cpp`) notes `WM_ENDSESSION` with `wParam` TRUE ("the Windows
   session can end any time after all applications have returned from processing this

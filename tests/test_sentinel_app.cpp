@@ -85,8 +85,11 @@ struct App {
 };
 
 // Starts `exe` with `args` against a scratch tree, with the sentinel seam on. The
-// environment is set for the child and put back at once.
-App startApp(const fs::path& dir, const std::string& exe, const std::string& args) {
+// environment is set for the child and put back at once. `creationFlags` is
+// CREATE_NO_WINDOW - a console of its own, invisible - unless a scenario needs
+// the application on THIS console (the console scenario below).
+App startApp(const fs::path& dir, const std::string& exe, const std::string& args,
+             DWORD creationFlags = CREATE_NO_WINDOW) {
     App a;
     a.dir = dir;
     std::error_code ec;
@@ -112,7 +115,7 @@ App startApp(const fs::path& dir, const std::string& exe, const std::string& arg
     si.hStdError = nul;
     PROCESS_INFORMATION pi{};
     const BOOL ok = ::CreateProcessA(nullptr, mutableCmd.data(), nullptr, nullptr, TRUE,
-                                     CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
+                                     creationFlags, nullptr, nullptr, &si, &pi);
     ::SetEnvironmentVariableA("FOXSDR_DIAG_DIR", nullptr);
     ::SetEnvironmentVariableA("CASCADE_CONFIG_TEST", nullptr);
     ::SetEnvironmentVariableA("CASCADE_SENTINEL_TEST", nullptr);
@@ -172,6 +175,10 @@ void closeApp(App& a) {
 HANDLE openWatch(unsigned long pid) {
     return ::OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, static_cast<DWORD>(pid));
 }
+
+// For the console scenario: this test shares its console with the application it
+// signals, and must not be ended by the event itself.
+BOOL WINAPI ignoreBreak(DWORD type) { return type == CTRL_BREAK_EVENT ? TRUE : FALSE; }
 
 bool gone(HANDLE h, unsigned timeoutMs) {
     return h == nullptr || ::WaitForSingleObject(h, timeoutMs) == WAIT_OBJECT_0;
@@ -382,6 +389,44 @@ int main() {
             CHECK(contains(readFile(r[0]), "frame loop starting (bounded)"));  // the real log's tail
             CHECK(sweepStatus(dir, r[0]) == "local-only");
         }
+        if (watch != nullptr) { ::CloseHandle(watch); }
+        closeApp(app);
+        std::error_code ec;
+        if (g_checksFailed == 0) { fs::remove_all(dir, ec); }
+    }
+
+    // =======================================================================
+    // THE CONSOLE'S OWN WAY OF ENDING A PROGRAM - Ctrl+C, Ctrl+Break or its window
+    // closed - is a close, not a death (0.99.67, core/console_close.hpp)
+    // =======================================================================
+    {
+        const fs::path dir = scratch("console");
+        // The application shares this test's console (no CREATE_NO_WINDOW) in a
+        // process group of its own, which is what GenerateConsoleCtrlEvent addresses.
+        // Ctrl+Break is the one event it can deliver to another group (the system
+        // switches Ctrl+C off in a new group); the handler treats the three alike.
+        if (::GetConsoleWindow() == nullptr) { ::AllocConsole(); }
+        ::SetConsoleCtrlHandler(&ignoreBreak, TRUE);
+        App app = startApp(dir, exe, "--frames 1000000", CREATE_NEW_PROCESS_GROUP);
+        CHECK(app.started);
+        CHECK(waitForLog(app, "frame loop starting (bounded)", 60000));
+        const SentinelLine line = sentinelLine(logOf(app));
+        HANDLE watch = openWatch(line.pid);
+        CHECK(line.pid != 0 && watch != nullptr);
+        sleepMs(1500);  // past its first frames, as a person's session would be
+        CHECK(::GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, app.pid) != 0);
+        const DWORD code = waitExit(app, 30000);
+        std::printf("real application, Ctrl+Break at its console: exit code 0x%08lX\n",
+                    static_cast<unsigned long>(code));
+        // Not STATUS_CONTROL_C_EXIT (0xC000013A) from the system's default handler:
+        // the frame loop ended and the shutdown ran to its last stage, which is the
+        // only way the sentinel writes nothing.
+        CHECK(code == 0);
+        CHECK(gone(watch, 3000));
+        sleepMs(300);
+        CHECK(allReports(dir) == 0);
+        CHECK(contains(logOf(app), "console: Ctrl+C or Ctrl+Break"));
+        ::SetConsoleCtrlHandler(&ignoreBreak, FALSE);
         if (watch != nullptr) { ::CloseHandle(watch); }
         closeApp(app);
         std::error_code ec;

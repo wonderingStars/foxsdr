@@ -42,6 +42,7 @@
 
 #include "core/version.hpp"
 #include "core/breadcrumb.hpp"
+#include "core/console_close.hpp"
 #include "core/crash_handler.hpp"
 #include "core/diag_log.hpp"
 #include "core/freq_import.hpp"
@@ -1809,7 +1810,10 @@ int AppWindow::run(int frames) {
 
     int rendered = 0;
     frameCounter_ = 0;
-    while (!glfwWindowShouldClose(window) && !closeRequested_) {
+    // ...or the console the program was started on asked for the close - Ctrl+C,
+    // Ctrl+Break or its window closing (core/console_close.hpp, 0.99.67).
+    while (!glfwWindowShouldClose(window) && !closeRequested_ &&
+           !cascade::core::consoleCloseRequested()) {
         // Exact-count contract: check before rendering so --frames N produces
         // N frames, and --frames 0 produces none.
         if (frames >= 0 && rendered >= frames) { break; }

@@ -39,6 +39,7 @@
 #include "source/soapy_source.hpp"
 
 #include "core/breadcrumb.hpp"
+#include "core/console_close.hpp"
 #include "core/crash_handler.hpp"
 #include "core/diag_log.hpp"
 #include "core/diag_report.hpp"
@@ -1366,6 +1367,21 @@ int main(int argc, char** argv) {
     // declines a console someone else is attached to - see diag_log.hpp).
     if (frames < 0) { cascade::core::installStderrCapture(); }
 
+    // A bounded run standing in for a real session under the sentinel seam
+    // (tests/test_sentinel_app.cpp): honoured only with --frames, like every test
+    // seam in this file. Read once, for the two things below that follow it.
+    const char* sentinelHook = std::getenv("CASCADE_SENTINEL_TEST");
+    const bool sentinelTest = frames >= 0 && sentinelHook != nullptr && sentinelHook[0] == '1';
+
+    // THE CONSOLE CONTROL HANDLER (0.99.67, core/console_close.hpp), for a real
+    // session and for a bounded run under the sentinel seam, so the test can send
+    // the event. cascade.exe is a console-subsystem program, so a Start Menu launch
+    // has a console window of its own; without this, closing that window - or
+    // Ctrl+C in it - ended the process before a line of the shutdown had run, and
+    // the sentinel filed it as an ending from outside (field report, 2026-10-06).
+    // Now it is the close the window's own button asks for.
+    if (frames < 0 || sentinelTest) { cascade::core::installConsoleCloseHandler(); }
+
     // THE SENTINEL, for an interactive session only (core/sentinel.hpp): started
     // HERE, after every tool mode has returned and before the application object
     // exists, so that the stretch with the most to go wrong - the plugin load, the
@@ -1376,8 +1392,6 @@ int main(int argc, char** argv) {
     // switch, and the Settings checkbox starts and ends it through the same call
     // that arms every other part of diagnostics (AppWindow::applyDiagnosticsEnabled).
     {
-        const char* hook = std::getenv("CASCADE_SENTINEL_TEST");
-        const bool sentinelTest = frames >= 0 && hook != nullptr && hook[0] == '1';
         if (mayWrite && (frames < 0 || sentinelTest)) {
             cascade::core::SentinelOptions so;
             so.crashDir = cascade::core::diagCrashDir();
