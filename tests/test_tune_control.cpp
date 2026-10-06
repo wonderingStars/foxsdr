@@ -10,7 +10,9 @@
 // unobservable outside a live retune against real (or absent) hardware.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#include <cmath>
 #include <cstdio>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -1602,6 +1604,139 @@ int main() {
             // the deck's own rule that the zeros ahead of the first
             // significant digit carry no value.
             CHECK(p.dimAlpha < p.digitAlpha);
+        }
+    }
+
+    // --- radioCanTune: the Airband add row's range rule (0.99.66) -------------
+    //
+    // The rule a refused tune is judged by, applied to a frequency offered to a
+    // list: above 0 Hz at the radio and, when the radio publishes a range,
+    // inside it - the ends included - and nothing is known about a radio that
+    // published none.
+    {
+        using cascade::gui::radioCanTune;
+        // An RTL-SDR's R820T2: 24 MHz to 1766 MHz.
+        const double lo = 24.0e6;
+        const double hi = 1766.0e6;
+        CHECK(radioCanTune(121.5e6, true, lo, hi));       // inside
+        CHECK(radioCanTune(lo, true, lo, hi));            // the ends are in
+        CHECK(radioCanTune(hi, true, lo, hi));
+        CHECK(!radioCanTune(7.1e6, true, lo, hi));        // below: the 7.1 MHz of issue 2
+        CHECK(!radioCanTune(lo - 1.0, true, lo, hi));
+        CHECK(!radioCanTune(hi + 1.0, true, lo, hi));     // above
+        CHECK(!radioCanTune(2.4e9, true, lo, hi));
+        // No published range: anything above 0 Hz, nothing else.
+        CHECK(radioCanTune(7.1e6, false, 0.0, 0.0));
+        CHECK(radioCanTune(121.5e6, false, lo, hi));      // a range given but not published
+        CHECK(radioCanTune(7.1e6, true, hi, lo));         // an upside-down range is no range
+        CHECK(radioCanTune(7.1e6, true, 100.0e6, 100.0e6));
+        // Never at or below 0 Hz, nor a number that is not one - a converter
+        // whose LO is above the air frequency asks the radio for a negative.
+        CHECK(!radioCanTune(0.0, false, 0.0, 0.0));
+        CHECK(!radioCanTune(-5.0e6, false, 0.0, 0.0));
+        CHECK(!radioCanTune(-5.0e6, true, lo, hi));
+        CHECK(!radioCanTune(std::nan(""), false, 0.0, 0.0));
+        CHECK(!radioCanTune(std::numeric_limits<double>::infinity(), false, 0.0, 0.0));
+    }
+
+    // --- parseMhz: a typed frequency is a whole number of hertz (0.99.66 review) ---
+    //
+    // 128.050 times 1e6 is 128050000.00000001 as a double. The monitor takes one
+    // channel per EXACT frequency (airbandWanted), so a row typed as 128.050 played
+    // beside an airport's or a CSV's 128050000 as a second strip. Every channel of
+    // the 25 kHz raster of the civil airband, 118.000 to 137.000 MHz, is typed in
+    // and must come back as the integer number of hertz it names.
+    {
+        using cascade::gui::parseMhz;
+        int rows = 0;
+        int notWhole = 0;
+        int different = 0;
+        char firstBad[32] = "";
+        for (int k = 0; k <= 760; ++k) {
+            const long long khz = 118000 + 25LL * k;
+            char text[32];
+            std::snprintf(text, sizeof(text), "%lld.%03lld", khz / 1000, khz % 1000);
+            const double mhz = static_cast<double>(khz) / 1000.0;
+            double hz = -1.0;
+            const bool ok = parseMhz(text, hz);
+            ++rows;
+            CHECK(ok);
+            const bool whole = std::isfinite(hz) && hz == std::floor(hz);
+            const bool same = hz == static_cast<double>(std::llround(mhz * 1.0e6)) &&
+                              hz == static_cast<double>(khz * 1000);
+            if (!whole) { ++notWhole; }
+            if (!same) { ++different; }
+            if ((!whole || !same) && firstBad[0] == '\0') { std::snprintf(firstBad, sizeof(firstBad), "%s", text); }
+        }
+        std::printf("  parseMhz over the 25 kHz raster: %d rows, %d not whole hertz, %d different from "
+                    "llround(mhz*1e6)%s%s\n",
+                    rows, notWhole, different, firstBad[0] != '\0' ? ", first " : "", firstBad);
+        CHECK(rows == 761);
+        CHECK(notWhole == 0);
+        CHECK(different == 0);
+
+        double hz = 0.0;
+        // The case the review named, and a decimal comma and spaces round it.
+        CHECK(parseMhz("128.050", hz) && hz == 128050000.0);
+        CHECK(parseMhz(" 128,050 ", hz) && hz == 128050000.0);
+        CHECK(parseMhz("121.5", hz) && hz == 121500000.0);
+        CHECK(parseMhz("121.500", hz) && hz == 121500000.0);
+        // Below the raster's step: the hertz it rounds to. 6 decimals is a hertz.
+        CHECK(parseMhz("121.500001", hz) && hz == 121500001.0);
+        CHECK(parseMhz("121.5000004", hz) && hz == 121500000.0);
+        CHECK(parseMhz("9999.999999", hz) && hz == 9999999999.0);
+
+        // What is refused, unchanged: no figure, text that is not one, nothing above the
+        // counter's largest frequency, and a figure that rounds to 0 Hz.
+        for (const char* bad : {"", " ", ".", "abc", "121.5x", "1e3", "-5", "+5", "0", "0.0", "0.0000001",
+                                "1.2.3", "10000", "9999.9999999", "121.5 MHz"}) {
+            double out = 123.0;
+            CHECK(!parseMhz(bad, out));
+            CHECK(out == 123.0);   // a refusal leaves the answer alone
+        }
+    }
+
+    // --- the preset field: what a chosen group puts in it (0.99.66 review) ---------
+    //
+    // The keys act on the field TRIMMED (airbandPresetName); choosing a group in the list
+    // copies its name there. A group stored with spaces round it, or longer than the field,
+    // used to leave Export CSV and Remove preset dead or acting on the OLD name.
+    {
+        using cascade::gui::presetFieldText;
+        using cascade::gui::trimPresetName;
+        // Fits: as it is.
+        CHECK(presetFieldText("Marine", 128) == "Marine");
+        CHECK(presetFieldText("KORD Chicago O'Hare International Airport", 128) ==
+              "KORD Chicago O'Hare International Airport");
+        // Trims: what the keys will read, not the stored spaces.
+        CHECK(presetFieldText("  Marine \t", 128) == "Marine");
+        CHECK(presetFieldText("\r\nTower Zone 2 ", 128) == "Tower Zone 2");
+        // A name in another script is not cut - only ASCII blanks are trimmed (an
+        // ideographic space, E3 80 80, is part of the name).
+        CHECK(presetFieldText("  Th\xC3\xA9\xC3\xA2tre  ", 128) == "Th\xC3\xA9\xC3\xA2tre");
+        CHECK(presetFieldText("\xE3\x80\x80X", 128) == "\xE3\x80\x80X");
+        // Nothing but blanks, or nothing: nothing to put (the keys read "Manual").
+        CHECK(presetFieldText("   ", 128).empty());
+        CHECK(presetFieldText("", 128).empty());
+        // The boundary: the field's last byte is the terminator, so 127 bytes fit 128 and
+        // 128 do not.
+        CHECK(presetFieldText(std::string(127, 'x'), 128) == std::string(127, 'x'));
+        CHECK(presetFieldText(std::string(128, 'x'), 128).empty());
+        // Too long: nothing is copied - not the first 127 bytes, not the old text.
+        CHECK(presetFieldText(std::string(300, 'y'), 128).empty());
+        // Too long as stored, short enough once trimmed: the trimmed name goes in.
+        CHECK(presetFieldText("  " + std::string(126, 'z') + "  ", 128) == std::string(126, 'z'));
+        // The same boundary at the OLD field size shows why it was enlarged: a 64-byte name
+        // did not fit 64.
+        CHECK(presetFieldText(std::string(64, 'q'), 64).empty());
+        CHECK(presetFieldText(std::string(64, 'q'), 128) == std::string(64, 'q'));
+        // What the keys read of the field is what the list showed: for every name that goes in,
+        // trimming it again changes nothing, and it is the group's own trimmed name.
+        for (const char* g : {"Marine", "  Marine ", "Tower Zone 2", "\tA\t", "Caf\xC3\xA9 "}) {
+            const std::string f = presetFieldText(g, 128);
+            CHECK(!f.empty());
+            CHECK(trimPresetName(f) == f);
+            CHECK(f == trimPresetName(g));
         }
     }
 

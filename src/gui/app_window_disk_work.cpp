@@ -21,6 +21,11 @@
 //   importBookmarkFile   (0.99.65) the Bookmarks section's Import and a list dropped
 //       on the window: the file is read and parsed on a worker, the list is the GUI
 //       thread's and is filled by pollDiskJobs.
+//   importBookmarkFile(path, into) / exportGroupCsv   (0.99.66) the AIRBAND section's
+//       presets: the same two workers. An import carries the preset it was pressed for
+//       (ImportInto), which pollDiskJobs puts on every row on the window's thread; an
+//       export writes one group as a CSV beside the SDR# export's file. Each says its
+//       result in the AIRBAND section (airbandPresetNote_).
 //   finishTake / pollRecordFinishes / drainRecordFinishes   (0.99.65) a recording's
 //       file is closed on a worker (core/record_finish.hpp): Stop detaches it from
 //       the recorder without touching the disk, a Record pressed meanwhile is
@@ -396,6 +401,44 @@ void AppWindow::exportBookmarksForSdrSharp() {
     for (const std::uint32_t i : bookmarkView_) {
         if (i < freqMgr_.list().size()) { out.push_back(freqMgr_.list()[i]); }
     }
+    // THE TEXT IS MADE HERE (it is a walk of the list); THE DISK IS THE WORKER'S -
+    // the recordings folder and the file, as the handler used to make them on the
+    // thread that draws the window (startListExport).
+    startListExport(cascade::core::exportSdrSharpXml(out), "foxsdr-frequencies-%Y%m%d-%H%M%S.xml",
+                    out.size(), /*preset=*/false);
+}
+
+// THE AIRBAND SECTION'S EXPORT (0.99.66): a preset - the rows of one group of the
+// list, every mode, ticked or not - as a CSV that importCsv reads back whole, with
+// its tick. The same worker, folder, unique name and notes as the SDR# export.
+void AppWindow::exportGroupCsv(const std::string& group) {
+    if (disk_->bookmarkExport.pending()) { return; }
+    std::vector<cascade::core::Bookmark> out;
+    for (const cascade::core::Bookmark& b : freqMgr_.list()) {
+        if (b.group == group) { out.push_back(b); }
+    }
+    airbandPresetFolderKey_ = false;
+    if (out.empty()) {
+        airbandPresetNote_ = cascade::core::formatText(
+            tr("Nothing to export: the preset \"%s\" has no rows."), group.c_str());
+        return;
+    }
+    // THE PRESET'S NAME IN THE FILE'S, as far as a file name can carry it: letters,
+    // digits, '-' and '_'; anything else (a space, a slash, a letter outside ASCII)
+    // is '_', and a long name is cut, so the name is a name on every file system.
+    std::string safe;
+    for (const char c : group) {
+        const bool ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+                        c == '-' || c == '_';
+        safe.push_back(ok ? c : '_');
+        if (safe.size() >= 40) { break; }
+    }
+    startListExport(cascade::core::exportCsv(out), "foxsdr-" + safe + "-%Y%m%d-%H%M%S.csv", out.size(),
+                    /*preset=*/true);
+}
+
+void AppWindow::startListExport(std::string text, const std::string& namePattern, std::size_t count,
+                                bool preset) {
     const std::time_t now = std::time(nullptr);
     std::tm tmv{};
 #ifdef _WIN32
@@ -403,17 +446,17 @@ void AppWindow::exportBookmarksForSdrSharp() {
 #else
     localtime_r(&now, &tmv);
 #endif
-    char name[64];
-    std::strftime(name, sizeof(name), "foxsdr-frequencies-%Y%m%d-%H%M%S.xml", &tmv);
+    char name[128];
+    std::strftime(name, sizeof(name), namePattern.c_str(), &tmv);
     const std::string shown = recordDir_ + "/" + name;
     const std::filesystem::path path = std::filesystem::path(recordDir_) / name;
-    // THE TEXT IS MADE HERE (it is a walk of the list); THE DISK IS THE WORKER'S -
-    // the recordings folder and the file, as the handler used to make them on the
-    // thread that draws the window.
-    const std::string xml = cascade::core::exportSdrSharpXml(out);
     const auto hook = diskHookForTest_;
-    disk_->bookmarkExport.request([xml, dir = recordDir_, path = path.string(), shown,
-                             count = out.size(), hook]() -> FileOutcome {
+    // WHO ASKED is kept here, on the window's thread, for pollDiskJobs: a worker that
+    // throws returns a default FileOutcome, which would send a preset's note to the
+    // Bookmarks section and leave "Saving..." in this one for good (0.99.66 review).
+    disk_->exportForPreset = preset;
+    disk_->bookmarkExport.request([xml = std::move(text), dir = recordDir_, path = path.string(), shown,
+                             count, hook]() -> FileOutcome {
         if (hook) { hook(); }
         FileOutcome r;
         r.count = count;
@@ -436,7 +479,11 @@ void AppWindow::exportBookmarksForSdrSharp() {
         if (!r.ok) { std::filesystem::remove(std::filesystem::path(used), ec); }
         return r;
     });
-    bookmarkImportNote_ = tr("Saving...");
+    if (preset) {
+        airbandPresetNote_ = tr("Saving...");
+    } else {
+        bookmarkImportNote_ = tr("Saving...");
+    }
 }
 
 void AppWindow::shotAddPicture(std::string path, cascade::core::HostImage image) {
@@ -499,15 +546,18 @@ void AppWindow::shotFlush() {
     });
 }
 
-void AppWindow::importBookmarkFile(const std::string& path) {
+void AppWindow::importBookmarkFile(const std::string& path, const cascade::core::ImportInto& into) {
     std::string p = path;
     // A path pasted from Explorer's "Copy as path" arrives quoted.
     if (p.size() >= 2 && p.front() == '"' && p.back() == '"') { p = p.substr(1, p.size() - 2); }
     // ONE READ AT A TIME, and a list dropped on the window while one is out is not
     // lost: it is remembered (the last one asked for) and read when the first is
-    // back (pollDiskJobs).
+    // back (pollDiskJobs). It is remembered with the preset it was asked for
+    // (0.99.66), so an Import pressed for one preset and then another is not
+    // read into the wrong one.
     if (disk_->bookmarkImport.pending()) {
         disk_->importAgain = p;
+        disk_->importAgainInto = into;
         return;
     }
     // THE DISK IS NOT TOUCHED HERE (0.99.65). The file the user typed or dropped - a
@@ -515,6 +565,7 @@ void AppWindow::importBookmarkFile(const std::string& path) {
     // on the thread that draws the window. The worker owns the path by value and
     // hands back what the file held; pollDiskJobs() puts it in the list.
     const auto hook = diskHookForTest_;
+    disk_->importInto = into;
     disk_->bookmarkImport.request([p, hook]() -> ImportOutcome {
         const auto t0 = std::chrono::steady_clock::now();
         if (hook) { hook(); }
@@ -536,6 +587,13 @@ void AppWindow::pollDiskJobs() {
         ImportOutcome o;
         if (disk_->bookmarkImport.poll(o)) {
             cascade::core::ImportResult& r = o.result;
+            // WHO ASKED (0.99.66): the AIRBAND section's Import names the preset the rows
+            // join; an empty group is the Bookmarks section's Import or a dropped file. The
+            // note goes to the section that asked.
+            const cascade::core::ImportInto into = disk_->importInto;
+            const bool forPreset = !into.group.empty();
+            std::string& noteTo = forPreset ? airbandPresetNote_ : bookmarkImportNote_;
+            if (forPreset) { airbandPresetFolderKey_ = false; }
             // A worker that threw (an allocation, a corrupt file): the same sentence a
             // file that cannot be read gets, instead of a crash in the frame loop.
             if (disk_->bookmarkImport.threw() && r.error.empty()) {
@@ -543,8 +601,7 @@ void AppWindow::pollDiskJobs() {
             }
             const std::string& p = o.path;
             if (!r.error.empty() && r.items.empty()) {
-                bookmarkImportNote_ =
-                    cascade::core::formatText(tr("Could not import: %s"), r.error.c_str());
+                noteTo = cascade::core::formatText(tr("Could not import: %s"), r.error.c_str());
                 // The file's KIND, never its name or path: "never the name or path of
                 // a file you opened" (PRIVACY.md), and a frequency list's name is
                 // usually what is on it.
@@ -560,18 +617,53 @@ void AppWindow::pollDiskJobs() {
             } else {
                 const auto t0 = std::chrono::steady_clock::now();
                 const std::size_t found = r.items.size();
+                // THE PRESET'S NAME AND TICK, put on every row HERE, on the window's thread,
+                // after the worker has read the file and before the rows join the list
+                // (0.99.66): whatever group and tick the file gave them, they are the
+                // preset's, ticked when the monitor can play them (AM, NFM) and not when
+                // it cannot, and addMany then skips what the preset already has.
+                cascade::core::applyImportInto(r.items, into);
+                // How many of them the AIRBAND monitor can play: AM and NFM. The rest are
+                // bookmarks all the same.
+                std::size_t playable = 0;
+                for (const cascade::core::Bookmark& b : r.items) {
+                    cascade::core::MonitorMode mm = cascade::core::MonitorMode::Am;
+                    if (cascade::core::monitorModeFor(b.mode, mm)) { ++playable; }
+                }
                 const std::size_t added = freqMgr_.addMany(std::move(r.items));
                 const double ms =
                     o.ms + std::chrono::duration<double, std::milli>(
                                std::chrono::steady_clock::now() - t0)
                                .count();
-                char note[320];
-                cascade::core::formatUtf8(
-                    note, sizeof(note), "%s: %zu entries read, %zu added%s%s%s", r.format.c_str(),
-                    found, added, found > added ? " (the rest were already here)" : "",
-                    r.skipped > 0 ? ", some had no usable frequency" : "",
-                    r.shifted > 0 ? ", converter Shift values were not applied" : "");
-                bookmarkImportNote_ = note;
+                if (forPreset) {
+                    noteTo = cascade::core::formatText(
+                        tr("Preset \"%s\": %zu read, %zu new; the monitor can play %zu of the rows read "
+                           "(AM or NFM)."),
+                        into.group.c_str(), found, added, playable);
+                    if (r.skipped > 0) {
+                        noteTo += " ";
+                        noteTo += tr("Some rows of the file had no usable frequency.");
+                    }
+                    // THE CONVERTER'S SHIFT is not applied (importSdrSharpXml): the Bookmarks
+                    // section's note says so, and a preset's must too - an SDR# file with Shift
+                    // values would otherwise land at the wrong frequencies without a word.
+                    if (r.shifted > 0) {
+                        noteTo += " ";
+                        noteTo += tr("Converter Shift values were not applied.");
+                    }
+                    // Show the preset the rows joined, as the lookup of an airport does -
+                    // unless the monitor is listening, or the preset has nothing it can play.
+                    airbandShowGroup(into.group);
+                    testerUsage_.noteFeature("airband");
+                } else {
+                    char note[320];
+                    cascade::core::formatUtf8(
+                        note, sizeof(note), "%s: %zu entries read, %zu added%s%s%s", r.format.c_str(),
+                        found, added, found > added ? " (the rest were already here)" : "",
+                        r.skipped > 0 ? ", some had no usable frequency" : "",
+                        r.shifted > 0 ? ", converter Shift values were not applied" : "");
+                    noteTo = note;
+                }
                 cascade::core::diagLogf(
                     "bookmarks: imported a %s file - %zu read, %zu added, %zu skipped, %zu "
                     "shifted, %.0f ms",
@@ -582,7 +674,9 @@ void AppWindow::pollDiskJobs() {
             if (!disk_->importAgain.empty()) {
                 std::string next;
                 next.swap(disk_->importAgain);
-                importBookmarkFile(next);
+                const cascade::core::ImportInto nextInto = disk_->importAgainInto;
+                disk_->importAgainInto = cascade::core::ImportInto{};
+                importBookmarkFile(next, nextInto);
             }
         }
     }
@@ -639,7 +733,14 @@ void AppWindow::pollDiskJobs() {
             } else {
                 cascade::core::formatUtf8(said, tr("Could not write %s"), r.text.c_str());
             }
-            bookmarkImportNote_ = said;
+            // The AIRBAND section's export (0.99.66) says it in that section, and a
+            // file that was written offers to open its folder.
+            if (disk_->exportForPreset) {
+                airbandPresetNote_ = said;
+                airbandPresetFolderKey_ = r.ok;
+            } else {
+                bookmarkImportNote_ = said;
+            }
         }
     }
 

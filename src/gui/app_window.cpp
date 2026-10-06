@@ -11172,6 +11172,14 @@ void AppWindow::drawCenterPanels() {
     // passband nothing on screen shows. Only the drag's CONTINUATION moves
     // here - starting one needs the item's hover state, which does not exist
     // until the panel has been submitted, and it stays below.
+    //
+    // WHILE THE AIRBAND MONITOR LISTENS (0.99.66) THE VFO IS NOT WHAT IS HEARD:
+    // its audio is faded out for the monitor's mix of channels, so its shaded
+    // band, its passband peak, its line down the waterfall and its grab handles
+    // all describe a demodulator that is not playing. None of them is drawn or
+    // acts until the monitor stops; drawAirbandMarkers shows the channels that
+    // ARE heard. Everything below that depends on the band reads this one flag.
+    const bool vfoHidden = airbandListening_;
     double bandCenterAbs = src.centerFrequencyHz() + pipeline_.vfoOffsetHz();
     SpectrumView::VfoBand band;
     band.x0Frac = scale_.hzToX(bandCenterAbs - 0.5 * vfoBandwidthHz_);
@@ -11181,7 +11189,9 @@ void AppWindow::drawCenterPanels() {
     const double mouseFrac =
         static_cast<double>(io.MousePos.x - specPos.x) / static_cast<double>(width);
     if (vfoDrag_ != VfoDrag::None) {
-        if (!ImGui::IsMouseDown(0)) {
+        // (A drag the monitor's start found already in progress ends here, on
+        // the same path as a button let go: nothing visible is being dragged.)
+        if (!ImGui::IsMouseDown(0) || vfoHidden) {
             vfoDrag_ = VfoDrag::None;
             band.dragging = false;
             // The drag has SETTLED: one line for the width it ended on.
@@ -11259,7 +11269,7 @@ void AppWindow::drawCenterPanels() {
     // SPECTRUM and appends the bin count it was actually handed.
     SpectrumView::Chrome chrome;
     chrome.emaAlpha = kAveragingAlpha;
-    chrome.passband = &band;
+    chrome.passband = vfoHidden ? nullptr : &band;   // no band drawn, no peak "in" it
     chrome.dataAgeSec = (lastFrameSeenS_ >= 0.0) ? (nowS - lastFrameSeenS_) : -1.0;
     chrome.freqTicks = (tickCount > 0) ? axisTicks : nullptr;
     chrome.freqTickCount = tickCount;
@@ -11295,6 +11305,13 @@ void AppWindow::drawCenterPanels() {
     if (bookmarkMarkers_ && !freqMgr_.list().empty()) {
         drawBookmarkMarkers(specPos.x, specPos.y, width, spectrumHeight);
     }
+    // The channels the AIRBAND monitor is playing (0.99.66), in place of the
+    // VFO band that is not drawn meanwhile. Not under bookmarkMarkers_: the
+    // marks are the monitor's, and switching the bookmark names off must not
+    // blind the one picture of what is being heard.
+    if (airbandListening_ && airbandTuned_ && !airbandChans_.empty()) {
+        drawAirbandMarkers(specPos.x, specPos.y, width, spectrumHeight);
+    }
     // The plugins' own marks (host API level 1), over the bookmarks and under
     // the gridlines and the VFO overlay, which stay the topmost furniture: a
     // plugin can annotate the spectrum, never cover the user's tuning.
@@ -11321,9 +11338,17 @@ void AppWindow::drawCenterPanels() {
 
     // STARTING a drag, which is the half that needs the hover state and so
     // could not move above the panel with the continuation.
+    //
+    // WITH THE VFO HIDDEN (the monitor is listening, 0.99.66) there is no band
+    // to hit: a press on the middle of the spectrum is "off the band", so it
+    // never starts an invisible drag or shows a move/resize cursor, and the
+    // tooltip - which tells of a "shaded band" that is not there - stays off.
+    // A plain click still tunes the VFO and a double-click still unzooms, as
+    // they do for any press off the band; neither involves the band.
     if (vfoDrag_ == VfoDrag::None && specHovered) {
-        const auto hit = SpectrumView::hitTest(
-            mouseFrac, band, static_cast<double>(kVfoEdgeTolPx) / width);
+        const auto hit = vfoHidden ? SpectrumView::VfoHit::None
+                                   : SpectrumView::hitTest(
+                                         mouseFrac, band, static_cast<double>(kVfoEdgeTolPx) / width);
         if (hit == SpectrumView::VfoHit::EdgeLow ||
             hit == SpectrumView::VfoHit::EdgeHigh) {
             ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
@@ -11336,7 +11361,8 @@ void AppWindow::drawCenterPanels() {
         // the window has had a tooltip from the start. Shown after ImGui's
         // normal hover delay and only while nothing is being dragged, so it
         // never sits under a hand that is already working.
-        if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_NoSharedDelay) &&
+        if (!vfoHidden &&
+            ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_NoSharedDelay) &&
             !ImGui::IsMouseDown(0)) {
             if (hit == SpectrumView::VfoHit::Center) {
                 ImGui::SetTooltip(tr("Drag to move the tuned band | drag an edge to widen it\n"
@@ -11371,7 +11397,17 @@ void AppWindow::drawCenterPanels() {
     if (specHovered && vfoDrag_ == VfoDrag::None && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
         traceMenuPending_ = true;
     }
-    spectrum_->drawVfoOverlay(band, width, spectrumHeight);
+    if (vfoHidden) {
+        cascade::gui::census::note("airband:vfo-hidden");
+        cascade::gui::census::rect("rx:vfo", 0.0f, 0.0f, 0.0f, 0.0f);
+    } else {
+        spectrum_->drawVfoOverlay(band, width, spectrumHeight);
+        // Where the band is on screen, so a test can tell "drawn again" from
+        // "never hidden" by the LAST frame; an empty rectangle above is "hidden".
+        cascade::gui::census::rect("rx:vfo", specPos.x + static_cast<float>(band.x0Frac) * width,
+                                   specPos.y, specPos.x + static_cast<float>(band.x1Frac) * width,
+                                   specPos.y + spectrumHeight);
+    }
 
     // Splitter: an invisible button whose vertical drag re-balances the
     // spectrum/waterfall split. Ratio (not pixels) so a window resize keeps
@@ -11469,8 +11505,10 @@ void AppWindow::drawCenterPanels() {
 
     // Thin VFO marker on the waterfall (the parity spec's "where am I tuned"
     // line), culled when the tuned frequency is scrolled out of view.
+    // Not while the monitor listens (0.99.66): it marks the VFO, which is not
+    // what is heard then (see vfoHidden above).
     const double markFrac = scale_.hzToX(bandCenterAbs);
-    if (markFrac >= 0.0 && markFrac <= 1.0) {
+    if (!vfoHidden && markFrac >= 0.0 && markFrac <= 1.0) {
         const float x = wfPos.x + static_cast<float>(markFrac) * width;
         drawList->AddLine(ImVec2(x, wfPos.y), ImVec2(x, wfPos.y + waterfallHeight),
                           kWfMarkerColor);
@@ -24132,7 +24170,7 @@ void AppWindow::drawBookmarksSection() {
                 if (ImGui::Checkbox("##scan", &ticked)) { tickIdx = i; }
                 if (ImGui::IsItemHovered()) {
                     ImGui::SetTooltip("%s", tr("Ticked: scanned by the Scanner's \"Ticked frequencies\"\n"
-                                               "and, for AM, played by the Airband monitor."));
+                                               "and, for AM or NFM, played by the Airband monitor."));
                 }
                 ImGui::SameLine();
                 ImGui::PushStyleColor(ImGuiCol_Text,

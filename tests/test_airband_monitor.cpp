@@ -1,6 +1,6 @@
 // Tests for core/airband_monitor.hpp - cutting a list of airband channels into
-// blocks one capture can hold, and running a block: several AM channels off
-// one radio, each squelched, mixed into one speaker.
+// blocks one capture can hold, and running a block: several AM (and, since
+// 0.99.66, NFM) channels off one radio, each squelched, mixed into one speaker.
 //
 // The block tests check INVARIANTS against arithmetic done here (every
 // channel in exactly one block, every member inside the usable span of its
@@ -101,6 +101,73 @@ struct AmTx {
     double toneHz;
     double depth;      // modulation index
 };
+
+// What ONE monitored channel plays (0.99.66): a set of just that channel, fed
+// a single transmitter on it - AM at `depth`, or FM at `deviationHz` peak - and
+// run through the real runner for two seconds. Measured on the second one,
+// after every filter and the carrier average have settled: the RMS of the
+// mixed audio the speaker would be given, and the amplitude of the tone in it
+// (so a loud noise cannot pass for a loud voice).
+struct Played {
+    double rms = 0.0;
+    double toneAmp = 0.0;
+    bool open = false;
+    bool built = false;
+};
+
+Played playOne(const MonitorChannel& chn, double fs, double toneHz, double depthOrDeviationHz) {
+    Played out;
+    const double centre = chn.freqHz - 50000.0;   // off the DC spike, as the planner does
+    const std::vector<MonitorChannel> c = {chn};
+    AirbandBlock blk;
+    blk.centreHz = centre;
+    blk.members = {0};
+    const patch::NodeId id = 3000;
+    std::shared_ptr<patch::StripSet> set = buildMonitorSet(c, blk, centre, fs, -75.0f, id);
+    out.built = set != nullptr;
+    if (!set) { return out; }
+    patch::Runner runner;
+    runner.publish(set);
+
+    const bool fm = chn.mode == MonitorMode::Nfm;
+    const double offset = chn.freqHz - centre;
+    const std::size_t block = static_cast<std::size_t>(fs / 100.0);   // 10 ms
+    std::vector<std::complex<float>> iq(block);
+    std::vector<float> outL(480), outR(480), heard;
+    std::uint32_t lcg = 4242u;
+    const auto noise = [&lcg]() {
+        lcg = lcg * 1664525u + 1013904223u;
+        return (static_cast<double>(lcg >> 8) / 16777216.0 - 0.5) * 2e-4;
+    };
+    std::uint64_t t = 0;
+    for (int b = 0; b < 200; ++b) {   // 2 s
+        for (std::size_t i = 0; i < block; ++i, ++t) {
+            const double ts = static_cast<double>(t) / fs;
+            std::complex<double> s(noise(), noise());
+            if (fm) {
+                // Peak deviation D at tone f is a phase swing of D/f radians.
+                const double ph = 2.0 * kPi * offset * ts +
+                                  (depthOrDeviationHz / toneHz) * std::sin(2.0 * kPi * toneHz * ts);
+                s += std::polar(0.1, ph);
+            } else {
+                const double env = 0.1 * (1.0 + depthOrDeviationHz * std::cos(2.0 * kPi * toneHz * ts));
+                s += env * std::polar(1.0, 2.0 * kPi * offset * ts);
+            }
+            iq[i] = std::complex<float>(static_cast<float>(s.real()), static_cast<float>(s.imag()));
+        }
+        runner.process(iq.data(), iq.size());
+        CHECK(runner.pullAudio(outL.data(), outR.data(), outL.size()));
+        heard.insert(heard.end(), outL.begin(), outL.end());
+    }
+    float lvl = 0.0f;
+    runner.squelchState(id, lvl, out.open);
+    const std::size_t from = heard.size() / 2;
+    double sum = 0.0;
+    for (std::size_t i = from; i < heard.size(); ++i) { sum += static_cast<double>(heard[i]) * heard[i]; }
+    out.rms = std::sqrt(sum / static_cast<double>(heard.size() - from));
+    out.toneAmp = toneAmp(heard, from, toneHz, 48000.0);
+    return out;
+}
 
 }  // namespace
 
@@ -523,6 +590,107 @@ int main() {
             CHECK(settled > 0.3);
             CHECK(std::fabs(20.0 * std::log10(early / settled)) < 2.0);
         }
+    }
+
+    // --- AM AND NFM (0.99.66) --------------------------------------------------
+    //
+    // Which list rows the monitor plays: exactly "AM" and "NFM".
+    {
+        MonitorMode m = MonitorMode::Nfm;
+        CHECK(monitorModeFor("AM", m) && m == MonitorMode::Am);
+        CHECK(monitorModeFor("NFM", m) && m == MonitorMode::Nfm);
+        m = MonitorMode::Am;
+        for (const char* other : {"WFM", "USB", "LSB", "CW", "DSB", "RAW", "FM", "am", "Nfm", ""}) {
+            CHECK(!monitorModeFor(other, m));
+            CHECK(m == MonitorMode::Am);   // untouched when it says no
+        }
+        // A channel written the way every one was before the mode existed is AM.
+        const MonitorChannel legacy{121.6e6, 10000.0};
+        CHECK(legacy.mode == MonitorMode::Am);
+    }
+
+    // What buildMonitorSet makes of each mode: an NFM channel is an FM strip
+    // with no carrier normalisation and a level; an AM channel is what it
+    // always was. The same block holds both, in frequency order.
+    {
+        const double fs = 2.4e6;
+        const double centre = 121.7e6;
+        std::vector<MonitorChannel> c = {MonitorChannel{121.6e6, 10000.0, MonitorMode::Am},
+                                         MonitorChannel{121.75e6, 12500.0, MonitorMode::Nfm}};
+        AirbandBlock blk;
+        blk.centreHz = centre;
+        blk.members = {0, 1};
+        const auto set = buildMonitorSet(c, blk, centre, fs, -75.0f, 500);
+        CHECK(set != nullptr);
+        if (set && set->channels.size() == 2) {
+            const patch::RunningChannel& am = set->channels[0];
+            const patch::RunningChannel& nfm = set->channels[1];
+            CHECK(am.mode == patch::Demod::Am);
+            CHECK(am.strip.amNormalise());
+            CHECK(am.mixLevel == 1.0f);
+            CHECK(am.strip.channelFilterTaps() > 0);
+            CHECK(nfm.mode == patch::Demod::Fm);
+            CHECK(!nfm.strip.amNormalise());
+            CHECK(nfm.mixLevel > 1.0f);
+            CHECK(nfm.strip.channelFilterTaps() > 0);   // the row's bandwidth, as AM's
+            CHECK(am.squelch != nullptr && nfm.squelch != nullptr);
+        }
+        // Flip the first channel's mode and the first strip follows: the mapping
+        // is per channel, not per set.
+        c[0].mode = MonitorMode::Nfm;
+        c[1].mode = MonitorMode::Am;
+        const auto flipped = buildMonitorSet(c, blk, centre, fs, -75.0f, 500);
+        CHECK(flipped != nullptr);
+        if (flipped && flipped->channels.size() == 2) {
+            CHECK(flipped->channels[0].mode == patch::Demod::Fm);
+            CHECK(flipped->channels[1].mode == patch::Demod::Am);
+        }
+    }
+
+    // THE LEVEL, as arithmetic: kNfmTargetPeak * rate / (2 pi deviation), the
+    // deviation a fifth of the channel width held to 1.25-5 kHz; and what it
+    // does with a rate or a width that is nothing.
+    {
+        const double twoPi = 2.0 * kPi;
+        CHECK_NEAR(nfmMixLevel(12500.0, 48000.0), kNfmTargetPeak * 48000.0 / (twoPi * 2500.0), 1e-4);
+        CHECK_NEAR(nfmMixLevel(25000.0, 48000.0), kNfmTargetPeak * 48000.0 / (twoPi * 5000.0), 1e-4);
+        // Wider than any NFM channel is held at 5 kHz, narrower at 1.25 kHz.
+        CHECK_NEAR(nfmMixLevel(150000.0, 48000.0), nfmMixLevel(25000.0, 48000.0), 1e-6);
+        CHECK_NEAR(nfmMixLevel(2000.0, 48000.0), nfmMixLevel(6250.0, 48000.0), 1e-6);
+        // Radians per sample shrink as the rate grows, so the level grows with it.
+        CHECK_NEAR(nfmMixLevel(12500.0, 96000.0), 2.0 * nfmMixLevel(12500.0, 48000.0), 1e-4);
+        CHECK(nfmMixLevel(12500.0, 0.0) == 1.0f);
+        CHECK(nfmMixLevel(12500.0, std::nan("")) == 1.0f);
+        CHECK(nfmMixLevel(0.0, 48000.0) == nfmMixLevel(12500.0, 48000.0));
+        CHECK(nfmMixLevel(std::nan(""), 48000.0) == nfmMixLevel(12500.0, 48000.0));
+    }
+
+    // THE MEASUREMENT BEHIND THAT LEVEL: an AM channel carrying a tone at 80%
+    // modulation and a 12.5 kHz NFM channel carrying a tone at 2.5 kHz
+    // deviation, each alone through the real runner, play at a similar
+    // loudness - at the 48 kHz channel rate of a 2.4 MS/s radio and at the
+    // 47.6 kHz of an RTL-SDR at 2.048. Without the level the NFM channel is
+    // the quieter by the ratio of 2.5 kHz deviation (0.33 rad/sample at 48 kHz)
+    // to an 80% envelope (0.48 normalised): 0.68, 3.3 dB down - inside a
+    // factor of 2, so that bound alone cannot tell a missing level from a
+    // present one; the second, +-2.5 dB, does.
+    for (const double fs : {2.4e6, 2.048e6}) {
+        const Played am = playOne(MonitorChannel{121.6e6, 10000.0, MonitorMode::Am}, fs, 500.0, 0.8);
+        const Played nfm = playOne(MonitorChannel{121.6e6, 12500.0, MonitorMode::Nfm}, fs, 1000.0, 2500.0);
+        CHECK(am.built && nfm.built);
+        const double ratio = nfm.rms / am.rms;
+        std::printf("  at %.3f MS/s: AM 80%% rms %.4f (tone %.4f), NFM 2.5 kHz rms %.4f (tone %.4f), "
+                    "NFM/AM %.2f, level %.3f\n",
+                    fs / 1e6, am.rms, am.toneAmp, nfm.rms, nfm.toneAmp, ratio,
+                    static_cast<double>(nfmMixLevel(12500.0, fs / patch::chooseChannelRate(fs).decimation)));
+        CHECK(am.open && nfm.open);
+        // What was measured is the voice tone, not noise: a pure tone's amplitude
+        // is sqrt(2) times its rms.
+        CHECK(am.toneAmp > 0.9 * std::sqrt(2.0) * am.rms);
+        CHECK(nfm.toneAmp > 0.9 * std::sqrt(2.0) * nfm.rms);
+        // Within a factor of 2 of each other, and in fact much closer.
+        CHECK(ratio > 0.5 && ratio < 2.0);
+        CHECK(ratio > 0.75 && ratio < 1.33);
     }
 
     // --- what one strip costs (printed, not asserted: it is this machine's) -

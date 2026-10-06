@@ -31,6 +31,7 @@ struct GLFWwindow;
 #include "core/diag_report.hpp"
 #include "core/airband_data.hpp"
 #include "core/airband_monitor.hpp"
+#include "core/freq_import.hpp"
 #include "core/freq_manager.hpp"
 #include "core/freq_markers.hpp"
 #include "core/trace_hold.hpp"
@@ -1840,6 +1841,15 @@ private:
     void saveImageBmp(const cascade::core::HostImage& im);
     // The Bookmarks section's "Export for SDR#" (the ones shown).
     void exportBookmarksForSdrSharp();
+    // The AIRBAND section's "Export CSV" (0.99.66): the rows of the group `group`, as
+    // the CSV core/freq_import.hpp's exportCsv writes, into the recordings folder as
+    // foxsdr-<group>-<stamp>.csv, on the same worker as the SDR# export. A group with
+    // no rows writes nothing and says so. The note goes to airbandPresetNote_.
+    void exportGroupCsv(const std::string& group);
+    // What both exports share: the file name, the text made on this thread, and the
+    // worker that reserves the name, writes it and says where it went.
+    void startListExport(std::string text, const std::string& fileName, std::size_t count,
+                         bool preset);
     // F12 and the Screenshot key: the pictures and the window list are added to a
     // batch as the frame takes them (the GL read-back is the GUI thread's) and the
     // batch is handed to a worker by shotFlush().
@@ -1948,12 +1958,18 @@ private:
     // marker save to land; one that does not is abandoned and logged. Called
     // once by run(), after the config's own drain, and by the tests.
     bool drainListSaves(std::chrono::steady_clock::time_point deadline);
-    // Imports an SDR# frequencies.xml or a CSV into the bookmarks.
-    void importBookmarkFile(const std::string& path);
+    // Imports an SDR# frequencies.xml or a CSV into the bookmarks. With `into` (0.99.66,
+    // the AIRBAND section's Import) every row joins that group whatever the file wrote and
+    // the rows the monitor plays (AM, NFM) are ticked; the default leaves the rows as the
+    // file has them.
+    void importBookmarkFile(const std::string& path, const cascade::core::ImportInto& into = {});
     // The filtered, cached view the Bookmarks list draws from.
     void rebuildBookmarkView();
     // Bookmarks inside the visible span, as marks on the spectrum.
     void drawBookmarkMarkers(float x0, float y0, float width, float height);
+    // 0.99.66: the channels the AIRBAND monitor is playing, as shaded marks on
+    // the spectrum (defined in app_window_airband.cpp, which has the why).
+    void drawAirbandMarkers(float x0, float y0, float width, float height);
 
     // --- Frequency markers on the waterfall (a user's request, 2026-09-30) ----
     // Right-click a waterfall - the receiver's or a patch Display part's - to
@@ -5261,24 +5277,36 @@ private:
     // --- AIRBAND (2026-10, app_window_airband.cpp) ---------------------------
     // "Type the airport, tick what to hear, LISTEN": the airport table
     // (core/airband_data.hpp) fills the frequency list; the monitor
-    // (core/airband_monitor.hpp) plays every ticked AM channel inside the
-    // radio's band at once, mixed, and scans between blocks of them when they
-    // do not all fit. It runs on the RECEIVER's radio, through the pipeline's
-    // patch runner, which the receiver view does not otherwise use.
+    // (core/airband_monitor.hpp) plays every ticked AM or NFM channel inside
+    // the radio's band at once, mixed, and scans between blocks of them when
+    // they do not all fit. It runs on the RECEIVER's radio, through the
+    // pipeline's patch runner, which the receiver view does not otherwise use.
+    // A frequency typed into the add row (0.99.66) joins the list in the group of
+    // the PRESET named in the section's field, "Manual" until it is changed; a
+    // preset is that group, imported into from a file, exported as a CSV and
+    // removed from the section (app_window_airband.cpp has the why).
     void drawAirbandSection();
     void airbandFrame();                       // once a frame, after the widgets
     void airbandLookup(const std::string& code);
     void airbandAddAirport(const cascade::core::Airport& a);
+    void airbandAddManual();                   // the add row's Add key
+    // The preset's name as the field holds it: trimmed, "Manual" when it is empty.
+    std::string airbandPresetName() const;
+    // Puts a group the section has just added rows to on show - not while the monitor
+    // listens, and not a group with no row the monitor can play.
+    void airbandShowGroup(const std::string& group);
+    void airbandImportPreset();                // the Import key: the file's rows into the preset
+    void airbandRemovePreset();                // the Remove preset key: the group's rows leave the list
     void airbandStart();
     void airbandStop(const std::string& why);
     void airbandTuneBlock(std::size_t index);
     void airbandFlushHeard();
     // The rows the section shows and the monitor plays: indices into
-    // freqMgr_.list(). With a group chosen, that group's AM rows (ticked or
-    // not); with none, every ticked AM row.
+    // freqMgr_.list(). With a group chosen, that group's AM and NFM rows
+    // (ticked or not); with none, every ticked AM or NFM row.
     std::vector<std::size_t> airbandRows() const;
-    // The ticked rows as channels, one per frequency; `names`, when given,
-    // gets the row naming each.
+    // The ticked rows as channels, one per frequency and mode; `names`, when
+    // given, gets the row naming each.
     std::vector<cascade::core::MonitorChannel> airbandWanted(std::vector<std::string>* names = nullptr) const;
 
     struct AirbandChan {
@@ -5290,7 +5318,20 @@ private:
         double pendingHeardS = 0.0;   // squelch-open time not yet in the list
     };
     char airbandCode_[16] = {};
-    std::string airbandGroup_;                 // "" = every ticked AM row
+    // The add row (0.99.66): the frequency as typed (MHz), an optional name,
+    // and the mode's index into the row's {AM, NFM}.
+    char airbandAddMhz_[32] = {};
+    char airbandAddName_[96] = {};
+    int airbandAddMode_ = 0;
+    // The preset block (0.99.66): the name (a group of the frequency list), the path
+    // of a file to import into it, and what the last import, export or removal said -
+    // here, in this section, and not under the Bookmarks section's Import. A finished
+    // export also offers to open the folder it went to.
+    char airbandPresetName_[128] = "Manual";   // what a chosen group puts here: presetFieldText
+    char airbandImportPath_[512] = {};
+    std::string airbandPresetNote_;
+    bool airbandPresetFolderKey_ = false;
+    std::string airbandGroup_;                 // "" = every ticked AM or NFM row
     std::string airbandNote_;
     std::vector<const cascade::core::Airport*> airbandChoices_;   // a code that meant several
     std::vector<std::pair<const cascade::core::Airport*, double>> airbandNearest_;

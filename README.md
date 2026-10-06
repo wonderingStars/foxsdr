@@ -1519,7 +1519,7 @@ alone and keep loading.
 is fine - with a group, a mode, a bandwidth and a favourite star each. Click a
 row to tune it. The box at the start of each row ticks it: the Scanner's
 **Ticked frequencies** scans just the ticked rows (each with its own mode and
-bandwidth), and the Airband monitor plays the ticked AM ones.
+bandwidth), and the Airband monitor plays the ticked AM and NFM ones.
 
 - **Import** an SDR# `frequencies.xml`, or a CSV saved from Excel: type or
   paste its path and press Import, or drop the file anywhere on the window.
@@ -1563,10 +1563,27 @@ bandwidth), and the Airband monitor plays the ticked AM ones.
   ground, clearance, approach and departure sector), OurAirports for the rest
   of the world - so a lookup needs no internet connection. Both sources are
   public domain, and neither is for navigation.
-- **LISTEN** plays every ticked AM frequency at once, mixed into one speaker.
-  Each channel has its own squelch, so what you hear is whoever is talking,
-  and each is levelled by its own carrier, so a tower 5 km away and an
-  aircraft 80 km away play at the same loudness. When the ticked frequencies
+- **Your own frequencies:** under the airport box, type a frequency in MHz,
+  choose AM or NFM, optionally give it a name, and press **Add**. It joins
+  the frequency list as a ticked row of the preset named in the **Preset**
+  box above it ("Manual" until you change it), so the group list shows it,
+  it is marked on the spectrum, and LISTEN plays it with the rest. WFM is not
+  offered: broadcast FM is too wide for the monitor. A frequency outside what
+  your radio covers is refused, with the range it does cover.
+- **Presets:** a preset is a named group of the frequency list. Type or paste
+  the path of a CSV or an SDR# frequencies.xml and press **Import** to read
+  the file into the preset, its AM and NFM rows ticked whatever the file said
+  (a WFM, SSB or CW row is kept unticked: the monitor does not play it), and
+  **Export CSV** writes the preset to the recordings folder as
+  `foxsdr-<name>-<time>.csv` - the file Import reads back, ticks included -
+  while **Remove preset** takes its rows out of the list. Add and Import show
+  the preset they filled unless LISTEN is playing, and Remove preset stops
+  LISTEN when it is playing that preset.
+- **LISTEN** plays every ticked AM or NFM frequency at once, mixed into one
+  speaker. Each channel has its own squelch, so what you hear is whoever is
+  talking, and each AM channel is levelled by its own carrier, so a tower 5 km
+  away and an aircraft 80 km away play at the same loudness (an NFM channel
+  is mixed at a level that matches an AM one). When the ticked frequencies
   span more than your radio's band (an RTL-SDR hears about 2 MHz at a time,
   and O'Hare's span 17 MHz), they are split into blocks the radio can hold:
   the monitor scans between the blocks, stops on a block as soon as anybody

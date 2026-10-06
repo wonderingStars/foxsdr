@@ -443,6 +443,251 @@ int main() {
         }
     }
 
+    // [CSV-RT] (0.99.66) a preset exported as CSV and imported back is the same
+    // preset: name, group, frequency, mode, bandwidth, favourite AND the tick (the
+    // SDR# export drops it). A name with a comma and a quotation mark, a group with a
+    // comma, a plain row with no group, and an unticked one.
+    {
+        std::vector<Bookmark> v;
+        Bookmark a;
+        a.name = "Tower, \"North\" 118.7";
+        a.group = "Harbour, east";
+        a.freqHz = 118700000.0;
+        a.mode = "AM";
+        a.bandwidthHz = 8330.0;
+        a.favourite = true;
+        a.scan = true;
+        v.push_back(a);
+        Bookmark b;
+        b.name = "Ch 16";
+        b.group = "Marine";
+        b.freqHz = 156800000.0;
+        b.mode = "NFM";
+        b.bandwidthHz = 12500.0;
+        b.favourite = false;
+        b.scan = false;
+        v.push_back(b);
+        Bookmark c;
+        c.name = "Plain";
+        c.freqHz = 98500000.0;
+        c.mode = "WFM";
+        c.bandwidthHz = 150000.0;
+        c.scan = true;
+        v.push_back(c);
+
+        const std::string csv = cascade::core::exportCsv(v);
+        // The UTF-8 byte order mark Excel needs, then the header, and a CRLF after every
+        // line as the XML export has.
+        CHECK(csv.rfind("\xEF\xBB\xBF" "frequency_mhz,name,group,mode,bandwidth_hz,favourite,ticked\r\n", 0) == 0u);
+        CHECK(csv.find("118.700000,\"Tower, \"\"North\"\" 118.7\",\"Harbour, east\",AM,8330,1,1\r\n") !=
+              std::string::npos);
+        CHECK(csv.find("156.800000,Ch 16,Marine,NFM,12500,0,0\r\n") != std::string::npos);
+        CHECK(csv.find("98.500000,Plain,,WFM,150000,0,1\r\n") != std::string::npos);
+        CHECK(std::count(csv.begin(), csv.end(), '\n') == 4);
+        CHECK(std::count(csv.begin(), csv.end(), '\r') == 4);
+
+        const ImportResult r = cascade::core::importFrequencyList(csv);
+        CHECK(r.error.empty());
+        CHECK(r.format == "CSV");
+        CHECK(r.skipped == 0u);
+        CHECK(r.items.size() == 3u);
+        if (r.items.size() == 3u) {
+            for (std::size_t i = 0; i < 3u; ++i) {
+                const Bookmark& got = r.items[i];
+                const Bookmark& want = v[i];
+                CHECK(got.name == want.name);
+                CHECK(got.group == want.group);
+                CHECK(got.freqHz == want.freqHz);
+                CHECK(got.mode == want.mode);
+                CHECK(got.bandwidthHz == want.bandwidthHz);
+                CHECK(got.favourite == want.favourite);
+                // THE TICK: the column the SDR# export has no place for.
+                CHECK(got.scan == want.scan);
+            }
+        }
+        // An empty list is the header alone, and reads back as nothing to read.
+        CHECK(cascade::core::exportCsv({}) ==
+              "\xEF\xBB\xBF" "frequency_mhz,name,group,mode,bandwidth_hz,favourite,ticked\r\n");
+        CHECK(!cascade::core::importCsv(cascade::core::exportCsv({})).error.empty());
+    }
+
+    // [CSV-BOM] the export starts with ONE UTF-8 byte order mark (Excel reads a CSV without
+    // one as the local code page and shows a name outside ASCII as mojibake), and what
+    // follows it - a name in two scripts included - reads back whole through the importer
+    // that drops the mark.
+    {
+        std::vector<Bookmark> v;
+        Bookmark a;
+        a.name = "Caf\xC3\xA9 T\xC3\xB6wer \xE6\x9D\xB1\xE4\xBA\xAC";   // "Cafe-acute Tower-umlaut Tokyo"
+        a.group = "Z\xC3\xBCrich";
+        a.freqHz = 118100000.0;
+        a.mode = "AM";
+        a.bandwidthHz = 8330.0;
+        a.scan = true;
+        v.push_back(a);
+        const std::string csv = cascade::core::exportCsv(v);
+        CHECK(csv.size() > 6u);
+        CHECK(csv.compare(0, 3, "\xEF\xBB\xBF") == 0);
+        CHECK(csv.compare(3, 3, "\xEF\xBB\xBF") != 0);   // one mark, not two
+        CHECK(csv.compare(3, 9, "frequency") == 0);     // the header follows it at once
+        const ImportResult r = cascade::core::importFrequencyList(csv);
+        CHECK(r.error.empty() && r.skipped == 0u && r.items.size() == 1u);
+        if (r.items.size() == 1u) {
+            CHECK(r.items[0].name == a.name);
+            CHECK(r.items[0].group == a.group);
+            CHECK(r.items[0].freqHz == a.freqHz && r.items[0].scan);
+        }
+    }
+
+    // [CSV-BREAK] a line break in a name, a group or a mode is written as a SPACE. importCsv cuts
+    // the text into lines before it reads a quoted field, so a quoted field that kept its break
+    // lost its row the group and the mode - and the next line its place in the file. A CR LF
+    // pair is one break and one space; a lone CR or LF is one too.
+    {
+        std::vector<Bookmark> v;
+        Bookmark a;
+        a.name = "Tower\r\nNorth";
+        a.group = "Harbour\neast";
+        a.freqHz = 118700000.0;
+        a.mode = "AM";
+        a.bandwidthHz = 8330.0;
+        a.favourite = true;
+        a.scan = true;
+        v.push_back(a);
+        Bookmark b;
+        b.name = "Ground\rSouth, \"two\"\r\n";   // a break at the end, a comma and quotes beside breaks
+        b.group = "Harbour";
+        b.freqHz = 121900000.0;
+        b.mode = "NFM";
+        b.bandwidthHz = 12500.0;
+        b.scan = true;
+        v.push_back(b);
+        Bookmark c;
+        c.name = "After";
+        c.group = "Harbour";
+        c.freqHz = 122800000.0;
+        c.mode = "AM";
+        c.bandwidthHz = 10000.0;
+        c.scan = false;
+        v.push_back(c);
+
+        const std::string csv = cascade::core::exportCsv(v);
+        // Three rows and the header: four lines, so four CRLFs and no other break in the text.
+        CHECK(std::count(csv.begin(), csv.end(), '\n') == 4);
+        CHECK(std::count(csv.begin(), csv.end(), '\r') == 4);
+        const ImportResult r = cascade::core::importFrequencyList(csv);
+        CHECK(r.error.empty());
+        CHECK(r.skipped == 0u);
+        CHECK(r.items.size() == 3u);
+        if (r.items.size() == 3u) {
+            CHECK(r.items[0].name == "Tower North");      // CR LF -> one space
+            CHECK(r.items[0].group == "Harbour east");    // a lone LF -> a space
+            CHECK(r.items[0].mode == "AM");               // the mode and the columns after it survive
+            CHECK(r.items[0].bandwidthHz == 8330.0 && r.items[0].favourite && r.items[0].scan);
+            CHECK(r.items[0].freqHz == 118700000.0);
+            CHECK(r.items[1].name == "Ground South, \"two\"");   // a lone CR; the trailing CR LF's space is trimmed
+            CHECK(r.items[1].group == "Harbour" && r.items[1].mode == "NFM");
+            CHECK(r.items[1].freqHz == 121900000.0 && r.items[1].scan);
+            // THE NEXT LINE IS NOT SKIPPED.
+            CHECK(r.items[2].name == "After" && r.items[2].freqHz == 122800000.0 && !r.items[2].scan);
+        }
+        // A break in the mode column too (a hand-edited row); the mode stays one word's width.
+        std::vector<Bookmark> w(1);
+        w[0].name = "Odd";
+        w[0].group = "G";
+        w[0].freqHz = 118000000.0;
+        w[0].mode = "AM\r\n";
+        w[0].bandwidthHz = 10000.0;
+        const std::string odd = cascade::core::exportCsv(w);
+        CHECK(std::count(odd.begin(), odd.end(), '\n') == 2);
+        const ImportResult o = cascade::core::importFrequencyList(odd);
+        CHECK(o.items.size() == 1u && o.skipped == 0u);
+    }
+
+    // [CSV-TICK] the tick column, whichever header names it, and which values mean
+    // ticked: 1, true, yes or y in any case; anything else, and a file with no such
+    // column, is not.
+    {
+        const ImportResult t = cascade::core::importCsv(
+            "frequency,name,ticked\n121.5,A,1\n121.6,B,TRUE\n121.7,C,yes\n121.8,D,Y\n121.9,E,0\n"
+            "122.0,F,no\n122.1,G,\n122.2,H,True\n");
+        CHECK(t.items.size() == 8u);
+        if (t.items.size() == 8u) {
+            const bool want[8] = {true, true, true, true, false, false, false, true};
+            for (std::size_t i = 0; i < 8u; ++i) { CHECK(t.items[i].scan == want[i]); }
+        }
+        // "scan" names it too, in any column position and with a ';' separator.
+        const ImportResult s = cascade::core::importCsv("Scan;Freq (MHz);Name\nyes;121,5;A\n0;121,6;B\n");
+        CHECK(s.items.size() == 2u);
+        if (s.items.size() == 2u) {
+            CHECK(s.items[0].scan && s.items[0].freqHz == 121500000.0 && s.items[0].name == "A");
+            CHECK(!s.items[1].scan && s.items[1].freqHz == 121600000.0 && s.items[1].name == "B");
+        }
+        // No such column - a header without one, and no header at all: nothing is ticked.
+        const ImportResult n = cascade::core::importCsv("frequency,name\n121.5,A\n");
+        CHECK(n.items.size() == 1u && !n.items[0].scan);
+        const ImportResult h = cascade::core::importCsv("121.5,A,Group,NFM,12500\n");
+        CHECK(h.items.size() == 1u && !h.items[0].scan && h.items[0].group == "Group");
+    }
+
+    // [INTO] applyImportInto: a group puts it on every row, whatever the file wrote - and the
+    // tick on every row the AIRBAND monitor can play (AM, NFM), whatever the file wrote; a row
+    // it cannot play (WFM, SSB, CW...) joins the group UNTICKED, for a tick on it would put it
+    // in the Scanner's list mode with no key in the AIRBAND section to take it out again. No
+    // group leaves the rows as the file had them.
+    {
+        std::vector<Bookmark> rows;
+        Bookmark a;
+        a.name = "A";
+        a.group = "Other";
+        a.freqHz = 121.5e6;
+        a.mode = "AM";
+        a.scan = false;
+        rows.push_back(a);
+        Bookmark b;
+        b.name = "B";
+        b.freqHz = 121.6e6;
+        b.mode = "NFM";
+        b.scan = true;
+        rows.push_back(b);
+        Bookmark w;
+        w.name = "Broadcast";
+        w.freqHz = 98.5e6;
+        w.mode = "WFM";
+        w.group = "Radio";
+        w.scan = true;   // the file ticked it
+        rows.push_back(w);
+        Bookmark u;
+        u.name = "Ham";
+        u.freqHz = 7.1e6;
+        u.mode = "LSB";
+        u.scan = false;
+        rows.push_back(u);
+        Bookmark c;
+        c.name = "Morse";
+        c.freqHz = 14.05e6;
+        c.mode = "CW";
+        c.scan = true;
+        rows.push_back(c);
+        std::vector<Bookmark> asIs = rows;
+        cascade::core::applyImportInto(asIs, cascade::core::ImportInto{});
+        CHECK(asIs[0].group == "Other" && !asIs[0].scan);
+        CHECK(asIs[1].group.empty() && asIs[1].scan);
+        CHECK(asIs[2].group == "Radio" && asIs[2].scan);   // no group: as the file had it, tick and all
+        cascade::core::applyImportInto(rows, cascade::core::ImportInto{"Marine", true});
+        for (const Bookmark& r : rows) { CHECK(r.group == "Marine"); }
+        CHECK(rows[0].scan);    // AM
+        CHECK(rows[1].scan);    // NFM
+        CHECK(!rows[2].scan);   // WFM: the file's tick is taken off too
+        CHECK(!rows[3].scan);   // LSB
+        CHECK(!rows[4].scan);   // CW: the file's tick is taken off too
+        // Nothing else of a row is touched.
+        CHECK(rows[2].freqHz == 98.5e6 && rows[2].mode == "WFM" && rows[2].name == "Broadcast");
+        std::vector<Bookmark> unticked = rows;
+        cascade::core::applyImportInto(unticked, cascade::core::ImportInto{"Tower", false});
+        for (const Bookmark& r : unticked) { CHECK(r.group == "Tower" && !r.scan); }
+    }
+
     // [SAVE] group and favourite survive the bookmark file; a plain bookmark
     // is saved without either key, exactly as before
     {

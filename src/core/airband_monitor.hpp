@@ -19,11 +19,23 @@
 // is heard from its first syllable, which a one-channel scanner cannot do.
 //
 // THE DSP IS THE PATCH PAGE'S, reused rather than written again: one
-// patch::Strip per channel (mix to DC, decimate, narrow, AM), one dsp::Squelch
-// each, and patch::Runner's hand-off to the receiver's audio - the same path
-// the patch used before its radios had their own devices (pipeline.cpp, "THE
-// PATCH TAPS THE SAME RAW BAND"). What is new is StripSet::mixAll: every
-// channel's squelched audio summed into the one speaker.
+// patch::Strip per channel (mix to DC, decimate, narrow, AM or FM), one
+// dsp::Squelch each, and patch::Runner's hand-off to the receiver's audio - the
+// same path the patch used before its radios had their own devices
+// (pipeline.cpp, "THE PATCH TAPS THE SAME RAW BAND"). What is new is
+// StripSet::mixAll: every channel's squelched audio summed into the one
+// speaker.
+//
+// AM AND NFM (0.99.66, a tester's "MANUAL" list with a demodulator column). A
+// channel plays as AM (airband, the request above) or as NFM (marine, business
+// and public-service radio typed in by hand); the strip already has an FM
+// discriminator, so NFM is that branch behind the same channel filter and
+// squelch. WFM is NOT offered: the strip's channel rate is 24-96 kHz, wide FM
+// needs 200 kHz and a de-emphasis stage, neither of which a strip has. An FM
+// strip's audio is radians per sample, a far smaller number than a normalised
+// AM envelope, so each NFM channel is mixed at a level derived from that
+// figure (nfmMixLevel) - see tests/test_airband_monitor.cpp for the
+// measurement.
 //
 // planAirbandBlocks() is pure and table-tested (tests/test_airband_monitor.cpp);
 // buildMonitorSet() allocates and is GUI-thread only, like every set builder.
@@ -36,6 +48,7 @@
 #include <cstddef>
 #include <memory>
 #include <numeric>
+#include <string_view>
 #include <vector>
 
 #include "core/patch_plan.hpp"
@@ -43,10 +56,31 @@
 
 namespace cascade::core {
 
-// One channel to monitor: where it is and how wide.
+// What a channel is demodulated as. AM is the default so a channel written
+// {freqHz, bandwidthHz} - every one before 0.99.66 - is the AM channel it was.
+enum class MonitorMode : std::uint8_t { Am, Nfm };
+
+// The monitor's mode for a frequency-list row's mode name, or false when the
+// monitor does not play it. EXACTLY "AM" and "NFM": the list's mode names are
+// the demodulator's (dsp/demod.cpp), and a row in WFM, SSB, CW... is not
+// something a strip plays - it is not a near miss to be rounded to one.
+inline bool monitorModeFor(std::string_view bookmarkMode, MonitorMode& out) {
+    if (bookmarkMode == "AM") {
+        out = MonitorMode::Am;
+        return true;
+    }
+    if (bookmarkMode == "NFM") {
+        out = MonitorMode::Nfm;
+        return true;
+    }
+    return false;
+}
+
+// One channel to monitor: where it is, how wide, and how it is demodulated.
 struct MonitorChannel {
     double freqHz = 0.0;
     double bandwidthHz = 10000.0;
+    MonitorMode mode = MonitorMode::Am;
 };
 
 struct AirbandBlock {
@@ -232,11 +266,41 @@ inline std::size_t monitorChannelsPerBlock(double deviceRateHz) {
 // as a matter of course.
 inline constexpr float kMonitorMixGain = 0.5f;
 
+// THE LEVEL OF AN NFM CHANNEL (0.99.66). A strip's FM audio is the angle the
+// carrier turned per sample, 2*pi*deviation/rate radians: a 2.5 kHz peak
+// deviation at a 48 kHz channel rate is 0.33 - a third of what a carrier-
+// normalised AM channel reads at 80% modulation (0.48, measured:
+// tests/test_airband_monitor.cpp prints it) - so an NFM channel mixed at the
+// AM gain would be about 3 dB quieter than the AM one beside it in the same
+// speaker, and about 10 dB at a 25 kHz channel's 5 kHz. The multiplier that
+// levels them is derived rather than tuned: the peak an AM channel plays at
+// (kNfmTargetPeak, that measured 0.48) over the peak a channel at its nominal
+// deviation gives,
+//     kNfmTargetPeak * outRate / (2*pi * nominalDeviation)
+// and it depends on the channel rate (24-96 kHz, whatever whole decimation of
+// the radio's rate lands nearest 48 kHz), because radians per sample shrink
+// as the rate grows.
+//
+// The nominal deviation is a fifth of the channel width: 2.5 kHz for the
+// 12.5 kHz channel a row is added with, 5 kHz for a 25 kHz one (the usual
+// pairing of deviation and channel), limited to 1.25-5 kHz so a row edited to
+// some odd bandwidth is not turned up or down without limit.
+inline constexpr double kNfmTargetPeak = 0.48;
+
+inline float nfmMixLevel(double bandwidthHz, double outRateHz) {
+    if (!(outRateHz > 0.0) || !std::isfinite(outRateHz)) { return 1.0f; }
+    const double bw = std::isfinite(bandwidthHz) && bandwidthHz > 0.0 ? bandwidthHz : 12500.0;
+    const double deviationHz = std::clamp(bw / 5.0, 1250.0, 5000.0);
+    constexpr double kTwoPi = 6.283185307179586;
+    return static_cast<float>(kNfmTargetPeak * outRateHz / (kTwoPi * deviationHz));
+}
+
 // The set that runs one block: a strip per member (offset from `centreHz`,
-// narrowed to its bandwidth, AM, carrier-normalised), a squelch each at
-// `squelchDb`, every channel's gated audio mixed into the receiver's speaker.
-// Channel identities are `firstId + i` for the i-th member, so a caller that
-// changes block can tell the new set's squelch reports from the old one's.
+// narrowed to its bandwidth, AM carrier-normalised or FM, by the channel's
+// mode), a squelch each at `squelchDb`, every channel's gated audio mixed into
+// the receiver's speaker. Channel identities are `firstId + i` for the i-th
+// member, so a caller that changes block can tell the new set's squelch
+// reports from the old one's.
 // Null when no whole decimation of `deviceRateHz` lands in the audio band.
 // GUI THREAD ONLY - it allocates.
 inline std::shared_ptr<patch::StripSet> buildMonitorSet(const std::vector<MonitorChannel>& channels,
@@ -254,10 +318,12 @@ inline std::shared_ptr<patch::StripSet> buildMonitorSet(const std::vector<Monito
         const MonitorChannel& c = channels[block.members[i]];
         patch::RunningChannel ch;
         ch.node = firstId + static_cast<patch::NodeId>(i);
-        ch.mode = patch::Demod::Am;
+        const bool nfm = c.mode == MonitorMode::Nfm;
+        ch.mode = nfm ? patch::Demod::Fm : patch::Demod::Am;
         ch.strip.configure(c.freqHz - centreHz, deviceRateHz, rc.decimation);
         ch.strip.setChannelFilter(c.bandwidthHz);
-        ch.strip.setAmNormalise(true);
+        ch.strip.setAmNormalise(!nfm);   // an FM strip has no carrier to divide by
+        ch.mixLevel = nfm ? nfmMixLevel(c.bandwidthHz, ch.strip.outRateHz()) : 1.0f;
         ch.squelch = std::make_unique<cascade::dsp::Squelch>(ch.strip.outRateHz());
         ch.squelchDb = squelchDb;
         ch.squelch->setThresholdDb(squelchDb);

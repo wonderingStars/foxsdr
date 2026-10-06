@@ -80,10 +80,24 @@ struct DiskWorkState {
     DiskJob<IqOpenResult> iqOpen{"I/Q file open"};
     DiskJob<FileOutcome> imageSave{"picture save"};
     DiskJob<FileOutcome> bookmarkExport{"frequency list export"};
+    // WHO ASKED FOR THE EXPORT NOW OUT (0.99.66): true = the AIRBAND section's Export CSV of
+    // a preset, whose note is said in that section; false = the Bookmarks section's export for
+    // SDR#. Set on the window's thread when the export starts and read when it comes back, as
+    // importInto is, and not carried in the worker's result: a worker that threw comes back
+    // default-constructed and must still say which section asked. One export is ever out.
+    bool exportForPreset = false;
     // The Import button and a file dropped on the window. An import asked for while
     // one is out is remembered here (the last one wins) and run when it comes back.
     DiskJob<ImportOutcome> bookmarkImport{"frequency list import"};
     std::string importAgain;
+    // WHERE THE ROWS GO (0.99.66): the preset the AIRBAND section's Import was pressed for,
+    // for the read now out (importInto) and for the one remembered (importAgainInto). Empty
+    // group = as the file says (the Bookmarks section, a dropped file). Kept here, on the
+    // window's thread, and not in the worker's result: a read that threw comes back
+    // default-constructed and must still say which section asked. What pollDiskJobs applies
+    // is what was asked for, not what the preset field says by the time the file is read.
+    cascade::core::ImportInto importInto;
+    cascade::core::ImportInto importAgainInto;
     DiskJob<ShotOutcome> shotWrite{"screenshot save"};
     DiskJob<RecordingScan> recordingScan{"recordings list"};
     // A listing asked for while one was out is run when it comes back.

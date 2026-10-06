@@ -96,6 +96,11 @@ struct RunningChannel {
     std::unique_ptr<cascade::dsp::Squelch> squelch;
     float squelchDb = 0.0f;       // the threshold the squelch is set to now
     std::vector<float> gated;
+    // THIS CHANNEL'S SHARE OF THE MIX (0.99.66), times StripSet::mixGain, in
+    // a mixAll set (the airband monitor); no other path reads it. An FM
+    // strip's audio is radians per sample and an AM strip's a normalised
+    // envelope, so the monitor levels them against each other here.
+    float mixLevel = 1.0f;
 };
 
 // The threshold that means "squelch off": far below any channel's noise.
@@ -211,11 +216,11 @@ struct StripSet {
 
     // ...EXCEPT FOR THE AIRBAND MONITOR (2026-10, core/airband_monitor.hpp),
     // which is not a graph and is defined as a mix: every channel's SQUELCHED
-    // audio, times mixGain, summed and played. A closed squelch contributes
-    // silence, so what is heard is whoever is talking. Every channel of such
-    // a set runs at the same rate (one decimation), so the sum is taken at
-    // the strips' rate and resampled once. `listening` is ignored while this
-    // is set.
+    // audio, times mixGain (and its own RunningChannel::mixLevel), summed and
+    // played. A closed squelch contributes silence, so what is heard is
+    // whoever is talking. Every channel of such a set runs at the same rate
+    // (one decimation), so the sum is taken at the strips' rate and
+    // resampled once. `listening` is ignored while this is set.
     bool mixAll = false;
     float mixGain = 1.0f;
     std::vector<float> mix;   // preallocated, kMaxBlockAudio
@@ -881,7 +886,8 @@ private:
             for (const RunningChannel& rc : active_->channels) {
                 const float* heard = rc.squelch ? rc.gated.data() : rc.audio.data();
                 const std::size_t k = std::min(rc.produced, m);
-                for (std::size_t i = 0; i < k; ++i) { active_->mix[i] += active_->mixGain * heard[i]; }
+                const float g = active_->mixGain * rc.mixLevel;
+                for (std::size_t i = 0; i < k; ++i) { active_->mix[i] += g * heard[i]; }
             }
             if (m > 0) {
                 const std::size_t got = active_->toAudio->process(

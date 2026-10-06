@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <optional>
 #include <string>
@@ -135,6 +136,73 @@ inline std::string tuneRefusedMessage(double requestHz, bool hasRange, double ra
         msg += " This preset needs a receiver that covers that band.";
     }
     return msg;
+}
+
+// --- A frequency offered to a list, not tuned (0.99.66) --------------------
+//
+// The Airband section's add row takes a frequency the radio will be asked for
+// later, so it is judged by the rule tuneRefusedMessage applies to a tune that
+// was refused: the RADIO's frequency (a converter's LO already taken out,
+// core::radioFromAir) must be above 0 Hz and, when the radio publishes a range,
+// inside it, ends included. A radio that published none (the generator, an
+// I/Q file, a driver that cannot say) refuses nothing it cannot know about.
+inline bool radioCanTune(double radioHz, bool hasRange, double rangeLoHz, double rangeHiHz) {
+    if (!std::isfinite(radioHz) || !(radioHz > 0.0)) { return false; }
+    if (!hasRange || !(rangeHiHz > rangeLoHz)) { return true; }
+    return radioHz >= rangeLoHz && radioHz <= rangeHiHz;
+}
+
+// A FREQUENCY TYPED IN MHz, as a person writes it: "121.5", "121.500", " 121,5 ".
+// A comma is a decimal point (a European keyboard); nothing else is accepted, so
+// "121.5x" and "1e3" are refused rather than guessed at. The answer is a WHOLE
+// NUMBER OF HERTZ (0.99.66 review): 128.050 times 1e6 is 128050000.00000001 in a
+// double, and the monitor's one-channel-per-frequency rule compares frequencies
+// exactly, so the typed row would have played beside the airport's or the CSV's
+// 128050000 as a second strip. Positive (a figure that rounds to 0 Hz is refused)
+// and no more than the largest frequency the counter shows (9999.999999 MHz).
+inline bool parseMhz(const char* text, double& outHz) {
+    std::string t;
+    for (const char* p = text; *p != '\0'; ++p) {
+        if (*p == ' ' || *p == '\t') { continue; }
+        t += (*p == ',') ? '.' : *p;
+    }
+    if (t.empty()) { return false; }
+    for (const char c : t) {
+        if (!((c >= '0' && c <= '9') || c == '.')) { return false; }
+    }
+    char* end = nullptr;
+    const double mhz = std::strtod(t.c_str(), &end);
+    if (end == t.c_str() || *end != '\0' || !std::isfinite(mhz) || !(mhz > 0.0)) { return false; }
+    const double hz = std::round(mhz * 1.0e6);
+    if (!(hz > 0.0) || hz > 9999999999.0) { return false; }
+    outHz = hz;
+    return true;
+}
+
+// --- The Airband section's preset field (0.99.66) --------------------------------
+//
+// The field holds the name of the group the section's Add, Import, Export CSV and
+// Remove preset act on. What they act on is the field TRIMMED (ASCII spaces, tabs
+// and line breaks only, so a name in any script is never cut), "Manual" when
+// nothing is left.
+inline std::string trimPresetName(const std::string& s) {
+    const auto blank = [](char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; };
+    std::size_t lo = 0;
+    std::size_t hi = s.size();
+    while (lo < hi && blank(s[lo])) { ++lo; }
+    while (hi > lo && blank(s[hi - 1])) { --hi; }
+    return s.substr(lo, hi - lo);
+}
+
+// WHAT CHOOSING A GROUP IN THE LIST PUTS IN THE FIELD: the group's name trimmed
+// exactly as the keys will read it, so the buttons act on the list that is
+// showing. `capacity` is the field's size in bytes, its terminator included. A name
+// that does not fit (its trimmed length must be below `capacity`) gives "" - the
+// field is cleared and nothing is copied cut short, so a long name is never half of
+// itself - and so does a group whose name is only spaces.
+inline std::string presetFieldText(const std::string& group, std::size_t capacity) {
+    const std::string t = trimPresetName(group);
+    return t.size() < capacity ? t : std::string();
 }
 
 // --- Auto-preset on start: "we want the user to have to do nothing" --------

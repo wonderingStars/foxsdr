@@ -100,6 +100,9 @@ public:
     std::size_t channelFilterTaps() const { return chanTaps_.size(); }
 
     void setAmNormalise(bool on) { amNormalise_ = on; }
+    // What setAmNormalise last said (0.99.66: the airband monitor sets it per
+    // channel, and a test reads it back).
+    bool amNormalise() const { return amNormalise_; }
 
     void reset() {
         phase_ = std::complex<double>(1.0, 0.0);

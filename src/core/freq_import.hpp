@@ -21,7 +21,8 @@
 // CSV is the other door, because an Excel user can "Save as CSV" directly:
 // comma, semicolon or tab separated (whichever the header or first data line
 // uses most), quoted fields allowed, an optional header naming the columns in
-// any order (frequency/freq, name, group, mode, bandwidth, favourite). Without
+// any order (frequency/freq, name, group, mode, bandwidth, favourite, and since
+// 0.99.66 ticked - or scan - which is Bookmark::scan: 1, true, yes or y). Without
 // a header the columns are frequency, name, group, mode, bandwidth. A frequency
 // is in Hz unless the header says MHz or kHz, or it is under 100 000 - which no
 // receivable frequency in Hz is, and every one written in MHz is. A bandwidth
@@ -29,6 +30,14 @@
 // a "# exported ..." comment, an Excel title row: anything that neither starts
 // with a number nor names a frequency column - are skipped and counted in
 // `skipped`, rather than taken as a header that names nothing.
+//
+// CSV OUT (0.99.66, exportCsv): the AIRBAND section's presets - a preset is a
+// group of the frequency list - are written as the CSV this reads, one file per
+// preset, header frequency_mhz,name,group,mode,bandwidth_hz,favourite,ticked.
+// Unlike the SDR# XML it keeps the tick, so a preset that goes out and comes
+// back is the same preset. The file is what the importer reads, in a
+// spreadsheet or an editor, and nothing here is a new format: it is the CSV
+// above with every column named.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
@@ -66,6 +75,35 @@ ImportResult importFrequencyFile(const std::string& path);
 
 // SDR#'s frequencies.xml for `list`, so a list built here can go back.
 std::string exportSdrSharpXml(const std::vector<Bookmark>& list);
+
+// A CSV for `list` (0.99.66): the header frequency_mhz,name,group,mode,
+// bandwidth_hz,favourite,ticked, then one row per bookmark - the frequency in
+// MHz to six places (the hertz), the favourite and the tick as 1 or 0 (a
+// spreadsheet in any language keeps a number), and a field quoted, its quotes
+// doubled, when it holds a comma or a quote. A line break in a name, group or
+// mode is written as a space (importCsv cuts the text into lines before it reads
+// a quoted field, so a break kept inside quotes would lose the row its columns).
+// CRLF line ends, as the XML export has, and the text starts with a UTF-8 byte
+// order mark, which Excel needs to read a name outside ASCII and importCsv drops.
+// importCsv reads it back whole.
+std::string exportCsv(const std::vector<Bookmark>& list);
+
+// WHERE AN IMPORT'S ROWS GO (0.99.66). The AIRBAND section imports a file INTO a
+// preset: every row joins the group `group` - whatever group the file gave it -
+// and, with `tick`, the rows the AIRBAND monitor can play (AM and NFM) are ticked
+// and the others (WFM, SSB, CW...) are added unticked: a tick on a row the
+// section does not list could not be undone there, and the Scanner's list mode
+// would take it. An empty `group` is the Bookmarks section's and a dropped
+// file's import: the rows are left as the file wrote them.
+struct ImportInto {
+    std::string group;
+    bool tick = false;
+};
+
+// Puts `into` on every row of `items` (nothing when into.group is empty). The
+// window calls it on its own thread, after the worker has read the file and
+// before the rows are added to the list.
+void applyImportInto(std::vector<Bookmark>& items, const ImportInto& into);
 
 // The bandwidth a mode gets when a list does not give one - an NFM channel
 // imported at a 150 kHz default would swallow its neighbours.

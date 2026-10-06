@@ -16,14 +16,50 @@
 //     FREQUENCY LIST as a group, ticked - so they are also bookmarks on the
 //     spectrum, clickable, exportable, and the scanner's list mode can use
 //     them;
-//   - the monitor: core/airband_monitor.hpp cuts the ticked AM rows into
-//     blocks the radio's band can hold and plays a block's channels at once,
-//     mixed, each behind its own squelch; with more than one block,
+//   - the add row (0.99.66): a tester asked for a MANUAL list - "the user can
+//     enter their own list of frequencies to scan through ... another column
+//     in the list for the demodulator". A frequency in MHz, an optional name
+//     and a mode (AM or NFM) become a ticked row of the PRESET named in the
+//     field above it (the group "Manual" until that is changed) in the
+//     FREQUENCY LIST, like any other row: saved with it, on the spectrum, and
+//     played by the monitor. WFM is not offered - the monitor's strips run at
+//     24-96 kHz and have no de-emphasis - and a WFM row is not played;
+//   - presets (0.99.66): the same tester asked to "upload a file of
+//     frequencies", to "enter frequencies and save them as a preset" and to
+//     "export the file of frequencies". A preset IS a group of the frequency
+//     list - saved with it, already in the group list above - and nothing
+//     more: no new file format. By hand: the add row. IMPORT: the path of a
+//     .csv or an SDR# frequencies.xml, typed or pasted (FoxSDR has no file
+//     dialog; a file dropped on the window still goes in as the file says), is
+//     read on a worker and every row joins the preset whatever group the file
+//     gave it, the AM and NFM rows TICKED whatever tick the file gave them; a
+//     row the monitor cannot play (not AM or NFM) is kept as a bookmark all the
+//     same - UNTICKED, for a ticked WFM row would enter the Scanner's list mode
+//     and this section could not show it to untick - and the note counts the
+//     ones the monitor will play. EXPORT CSV: the preset's rows, every mode, tick kept, into the
+//     recordings folder as foxsdr-<preset>-<stamp>.csv - the file Import reads -
+//     with a key that opens the folder. REMOVE PRESET takes the group's rows out
+//     of the list, as the Bookmarks section's "Remove this group" does, without
+//     asking. The notes of all three are said in this section. Choosing a group
+//     in the list below puts its name in the preset field, so the keys act on
+//     the list that is showing;
+//   - the monitor: core/airband_monitor.hpp cuts the ticked AM and NFM rows
+//     into blocks the radio's band can hold and plays a block's channels at
+//     once, mixed, each behind its own squelch; with more than one block,
 //     core::Scanner in list mode walks the block centres, stops where anybody
 //     is talking and moves on when the block has been quiet for the hold time;
 //   - "which ones are busy": every second a channel's squelch is open while
 //     the monitor plays it is added to that row's heardSeconds, saved with the
-//     list, and the rows can be sorted by it.
+//     list, and the rows can be sorted by it;
+//   - the spectrum (0.99.66): while the monitor listens, the receiver's
+//     spectrum shows what is being HEARD instead of the VFO it is not
+//     demodulating - each channel of the block on the air is a shaded mark
+//     at its frequency and bandwidth, bright with a centre line while its
+//     squelch is open and faint while it is shut, the same two states as the
+//     lamp in the list; the VFO's shaded band, its line down the waterfall and
+//     its "peak in passband" figure are not drawn until the monitor stops. A
+//     tester asked for exactly this: the shaded area in the middle "is not
+//     the frequency or bandwidth being demodulated".
 //
 // IT RUNS ON THE RECEIVER'S RADIO. The DSP is the pipeline's patch runner -
 // the hand-off the patch page used before its radios opened devices of their
@@ -39,14 +75,17 @@
 #include <cfloat>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <vector>
 
 #include <imgui.h>
 
 #include "core/diag_log.hpp"
+#include "core/freq_import.hpp"
 #include "core/i18n.hpp"
 #include "core/utf8_text.hpp"
+#include "gui/airband_marker_geometry.hpp"
 #include "gui/bench_rail.hpp"
 #include "gui/text_fit.hpp"
 #include "gui/ui_census.hpp"
@@ -80,7 +119,17 @@ constexpr double kAirbandSettleS = 0.15;
 // saves to disk a second after any change.
 constexpr double kAirbandFlushS = 20.0;
 
-bool isAm(const cc::Bookmark& b) { return b.mode == "AM"; }
+// The preset the section starts with, and the one an emptied name field means
+// (0.99.66). A name in the user's list, not a label: it is stored as it is here
+// in every language.
+constexpr const char* kManualGroup = "Manual";
+
+// The rows the monitor plays: AM, and since 0.99.66 NFM. Any other mode (WFM,
+// SSB, CW...) is not an airband row - not shown, not ticked into the monitor.
+bool playsInMonitor(const cc::Bookmark& b) {
+    cc::MonitorMode m = cc::MonitorMode::Am;
+    return cc::monitorModeFor(b.mode, m);
+}
 
 // "1h 02m", "12m 30s", "45s"; "-" for never.
 std::string heardText(double s) {
@@ -134,7 +183,7 @@ std::vector<std::size_t> AppWindow::airbandRows() const {
     const std::vector<cc::Bookmark>& list = freqMgr_.list();
     for (std::size_t i = 0; i < list.size(); ++i) {
         const cc::Bookmark& b = list[i];
-        if (!isAm(b)) { continue; }
+        if (!playsInMonitor(b)) { continue; }
         if (airbandGroup_.empty() ? b.scan : (b.group == airbandGroup_)) { rows.push_back(i); }
     }
     return rows;
@@ -142,16 +191,20 @@ std::vector<std::size_t> AppWindow::airbandRows() const {
 
 std::vector<cc::MonitorChannel> AppWindow::airbandWanted(std::vector<std::string>* names) const {
     // ONE CHANNEL PER FREQUENCY. Two ticked rows on one frequency (CTAF and
-    // UNICOM share 122.8 at many fields) are one channel on the air; two
-    // strips would play it twice as loud for twice the work. The first row
-    // (the list is sorted, ties in insertion order) names it.
+    // UNICOM share 122.8 at many fields; an AM and an NFM row typed on the same
+    // frequency) are one channel on the air: two strips would play it twice as
+    // loud for twice the work, and a carrier is one transmitter whatever the
+    // rows call it. The first ticked row (the list is sorted, ties in insertion
+    // order) names it and gives it its mode and width.
     std::vector<cc::MonitorChannel> out;
     if (names != nullptr) { names->clear(); }
     for (const std::size_t i : airbandRows()) {
         const cc::Bookmark& b = freqMgr_.list()[i];
         if (!b.scan) { continue; }
+        cc::MonitorChannel ch{b.freqHz, b.bandwidthHz};
+        if (!cc::monitorModeFor(b.mode, ch.mode)) { continue; }
         if (!out.empty() && out.back().freqHz == b.freqHz) { continue; }
-        out.push_back(cc::MonitorChannel{b.freqHz, b.bandwidthHz});
+        out.push_back(ch);
         if (names != nullptr) { names->push_back(b.name); }
     }
     return out;
@@ -199,6 +252,117 @@ void AppWindow::airbandLookup(const std::string& code) {
                                   found.size());
 }
 
+// THE PRESET THE SECTION ACTS ON (0.99.66): what the name field holds, without
+// the spaces round it, or "Manual" when nothing is left. ASCII spaces only, so a
+// name in any script is never cut.
+std::string AppWindow::airbandPresetName() const {
+    const std::string t = cascade::gui::trimPresetName(airbandPresetName_);
+    return t.empty() ? std::string(kManualGroup) : t;
+}
+
+// SHOW A GROUP THE SECTION HAS JUST ADDED TO (0.99.66 review): Add and the
+// preset's Import put the group on show, as an airport's lookup does - but only
+// when that cannot change what is being played. A monitor that is listening keeps
+// its choice (the preset showing, or "every ticked"): a row added to another
+// preset must not narrow "every ticked" down to it. And a group the monitor has
+// nothing to play in (an import of WFM rows only, a file that added nothing) is
+// not put on show: the combo would name a group the list may not even have.
+void AppWindow::airbandShowGroup(const std::string& group) {
+    if (airbandListening_) { return; }
+    for (const cc::Bookmark& b : freqMgr_.list()) {
+        if (b.group == group && playsInMonitor(b)) {
+            airbandGroup_ = group;
+            return;
+        }
+    }
+}
+
+// THE PRESET'S IMPORT KEY: the file at the typed path, read on a worker, its rows
+// into the preset - in its group, the AM and NFM ones ticked, whatever the file
+// said (pollDiskJobs puts them there, and says what it did in this section).
+void AppWindow::airbandImportPreset() {
+    if (airbandImportPath_[0] == '\0') { return; }
+    airbandPresetNote_.clear();
+    airbandPresetFolderKey_ = false;
+    importBookmarkFile(airbandImportPath_, cc::ImportInto{airbandPresetName(), true});
+}
+
+// THE PRESET'S REMOVE KEY: its rows leave the frequency list, whatever their mode
+// or tick. No confirmation, as the Bookmarks section's "Remove this group" has none.
+void AppWindow::airbandRemovePreset() {
+    const std::string g = airbandPresetName();
+    // THE MONITOR IS PLAYING THIS PRESET (0.99.66 review): with its group gone,
+    // airbandGroup_ is cleared below and the next frame would cut the blocks again
+    // from "every ticked row" of the WHOLE list - a different set of channels from
+    // the one the user chose - or, with none ticked, stop it with no reason. It is
+    // stopped here instead, saying why, before the rows go.
+    if (airbandListening_ && airbandGroup_ == g) {
+        airbandStop(tr("Stopped: the preset was removed."));
+    }
+    const std::size_t n = freqMgr_.removeGroup(g);
+    airbandPresetNote_ = cc::formatText(tr("Removed %zu from \"%s\""), n, g.c_str());
+    airbandPresetFolderKey_ = false;
+    if (airbandGroup_ == g) { airbandGroup_.clear(); }
+    saveBookmarks();
+    cc::diagLogf("airband: a preset was removed (%zu rows)", n);
+}
+
+// A FREQUENCY OF YOUR OWN (0.99.66). The add row's Add key: the typed MHz, the
+// mode chosen and the optional name become one ticked row of the preset named
+// in the field above (the group "Manual" until that is changed) in the
+// frequency list, saved with it like any other change.
+void AppWindow::airbandAddManual() {
+    double hz = 0.0;
+    if (!parseMhz(airbandAddMhz_, hz)) {
+        airbandNote_ = cc::formatText(tr("could not read frequency \"%s\""), airbandAddMhz_);
+        return;
+    }
+    // THE SAME RULE AS A TUNE THE RADIO REFUSES (noteTuneRefused): a
+    // frequency outside what the radio publishes it covers is not accepted,
+    // and the note says what it does cover. Judged at the RADIO, so a
+    // converter's LO is taken out first. A radio that publishes no range (the
+    // generator, an I/Q file) refuses nothing; the list is the user's.
+    const cc::ConverterSetting conv = pipeline_.converter();
+    double rangeLoHz = 0.0;
+    double rangeHiHz = 0.0;
+    const bool hasRange = device_ != nullptr && device_->frequencyRangeHz(rangeLoHz, rangeHiHz);
+    if (!cascade::gui::radioCanTune(cc::radioFromAir(conv, hz), hasRange, rangeLoHz, rangeHiHz)) {
+        std::string note;
+        if (cc::converterActive(conv)) { note = converterTuneNote(hz, /*refused=*/true, 0.0, false); }
+        if (note.empty()) {
+            note = cc::formatText(tr("This radio cannot tune to %s. Its range is %s to %s."),
+                                  cc::converterHzText(hz).c_str(), cc::converterHzText(rangeLoHz).c_str(),
+                                  cc::converterHzText(rangeHiHz).c_str());
+        }
+        airbandNote_ = note;
+        return;
+    }
+    static const char* const kModes[] = {"AM", "NFM"};
+    cc::Bookmark b;
+    b.mode = kModes[airbandAddMode_ == 1 ? 1 : 0];
+    b.freqHz = hz;
+    b.bandwidthHz = cc::defaultBandwidthForMode(b.mode);
+    const std::string group = airbandPresetName();
+    b.group = group;
+    b.scan = true;
+    b.name = airbandAddName_;
+    if (b.name.empty()) {
+        // A nameless row would render blank: the frequency, as "Add current"
+        // names one.
+        char def[32];
+        std::snprintf(def, sizeof(def), "%.4f MHz", hz / 1.0e6);
+        b.name = def;
+    }
+    freqMgr_.add(std::move(b));
+    saveBookmarks();
+    airbandAddMhz_[0] = '\0';
+    airbandAddName_[0] = '\0';
+    airbandShowGroup(group);   // show the list it joined, as an airport's lookup does - unless listening
+    airbandNote_.clear();
+    testerUsage_.noteFeature("airband");
+    cc::diagLogf("airband: a frequency was typed into a preset");
+}
+
 // --- listening -----------------------------------------------------------------
 
 void AppWindow::airbandStart() {
@@ -206,7 +370,7 @@ void AppWindow::airbandStart() {
     std::vector<std::string> names;
     const std::vector<cc::MonitorChannel> want = airbandWanted(&names);
     if (want.empty()) {
-        airbandNote_ = tr("Tick at least one AM frequency to listen to.");
+        airbandNote_ = tr("Tick at least one AM or NFM frequency to listen to.");
         return;
     }
     // THE PATCH VIEW HAS THE RECEIVER'S RADIO: hand it back first, then start
@@ -415,7 +579,8 @@ void AppWindow::airbandFrame() {
         bool same = want.size() == airbandPlanned_.size();
         for (std::size_t i = 0; same && i < want.size(); ++i) {
             same = want[i].freqHz == airbandPlanned_[i].freqHz &&
-                   want[i].bandwidthHz == airbandPlanned_[i].bandwidthHz;
+                   want[i].bandwidthHz == airbandPlanned_[i].bandwidthHz &&
+                   want[i].mode == airbandPlanned_[i].mode;
         }
         if (!same) {
             airbandStop("");
@@ -426,6 +591,7 @@ void AppWindow::airbandFrame() {
 
     census::note("airband:listening");
     census::note("airband:blocks:", static_cast<int>(airbandBlocks_.size()));
+    census::note("airband:channels:", static_cast<int>(airbandChans_.size()));
     // What every channel of the block on the air is doing.
     const double dt = std::max(0.0, std::min(1.0, nowS - airbandLastFrameS_));
     airbandLastFrameS_ = nowS;
@@ -481,6 +647,48 @@ void AppWindow::airbandFrame() {
         airbandFlushHeard();
         airbandFlushDueS_ = nowS + kAirbandFlushS;
     }
+}
+
+// --- the spectrum --------------------------------------------------------------
+
+// WHAT THE SPECTRUM SAYS WHILE THE MONITOR LISTENS (0.99.66). The strips tap
+// the raw band at each channel's own offset and the VFO's audio is faded out
+// for their mix, so the VFO's shaded band - which the receiver view draws as
+// "what is being demodulated" - names nothing that is heard. drawCenterPanels
+// leaves it, its waterfall line and its passband peak off while the monitor
+// listens, and this draws what IS heard in their place: one mark per channel
+// of the block on the air, in the two states the list's lamp has.
+//
+// Called after the bookmark markers and before the gridlines, so the axis
+// furniture stays on top; clipped to the panel, because a mark at the edge of
+// the view must not paint the header or the waterfall under it. No names: the
+// bookmark markers already carry them, and a mark that also lettered itself
+// would hide the trace it is meant to sit on.
+//
+// The census gets "airband:mark:<kHz>" for a channel whose squelch is open (the
+// same spelling as the list's "airband:open:<kHz>") and the rectangle of every
+// mark drawn, so the test can hold the marks to where the channels are.
+void AppWindow::drawAirbandMarkers(float x0, float y0, float width, float height) {
+    if (airbandBlock_ >= airbandBlocks_.size()) { return; }
+    const cc::AirbandBlock& blk = airbandBlocks_[airbandBlock_];
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->PushClipRect(ImVec2(x0, y0), ImVec2(x0 + width, y0 + height), true);
+    const ImU32 openFill = cascade::gui::theme::withAlpha(cascade::gui::theme::kPhosphor, 0.30f);
+    const ImU32 openLine = cascade::gui::theme::kPhosphor;
+    const ImU32 shutFill = cascade::gui::theme::withAlpha(cascade::gui::theme::kPhosphor, 0.08f);
+    const ImU32 shutLine = cascade::gui::theme::withAlpha(cascade::gui::theme::kPhosphorDim, 0.6f);
+    for (const std::size_t ci : blk.members) {
+        if (ci >= airbandChans_.size()) { continue; }
+        const AirbandChan& c = airbandChans_[ci];
+        cascade::gui::AirbandMarkExtent e;
+        if (!cascade::gui::airbandMarkExtent(scale_, c.freqHz, c.bandwidthHz, x0, width, e)) { continue; }
+        dl->AddRectFilled(ImVec2(e.xLo, y0), ImVec2(e.xHi, y0 + height), c.open ? openFill : shutFill);
+        dl->AddLine(ImVec2(e.xCentre, y0), ImVec2(e.xCentre, y0 + height), c.open ? openLine : shutLine, 1.0f);
+        const int kHz = static_cast<int>(std::lround(c.freqHz / 1000.0));
+        if (c.open) { census::note("airband:mark:", kHz); }
+        census::rect("airband:mk:", kHz, e.xLo, y0, e.xHi, y0 + height);
+    }
+    dl->PopClipRect();
 }
 
 // --- the section ---------------------------------------------------------------
@@ -561,16 +769,153 @@ void AppWindow::drawAirbandSection() {
         }
         if (pick != nullptr) { airbandAddAirport(*pick); }
     }
+
+    // --- a PRESET, and a frequency of your own for it (0.99.66) ----------------
+    // THE PRESET'S NAME first: the group of the frequency list that Add, Import,
+    // Export CSV and Remove preset all act on. The caption sits beside the field
+    // when the rail holds both, above it when it does not (text_fit.hpp's rule),
+    // and the hover on either says what a preset is.
+    {
+        const char* const presetHelp =
+            tr("A preset is a named list of frequencies - a group of the frequency list.\n"
+               "Add puts a frequency in it. Import reads a .csv or an SDR# frequencies.xml\n"
+               "into it, the AM and NFM rows ticked. Export CSV writes it to the recordings folder.\n"
+               "Remove preset takes its rows out of the list.");
+        const float capW = ImGui::CalcTextSize(tr("Preset")).x;
+        const bool capBeside = cascade::gui::fitsBeside(90.0f, spacing, capW, ImGui::GetContentRegionAvail().x);
+        if (capBeside) { ImGui::AlignTextToFramePadding(); }
+        ImGui::TextUnformatted(tr("Preset"));
+        if (ImGui::IsItemHovered()) { ImGui::SetTooltip("%s", presetHelp); }
+        if (capBeside) { ImGui::SameLine(); }
+        ImGui::SetNextItemWidth(-1.0f);
+        cascade::gui::inputTextWithFittedHint("##airband_preset", tr("Preset"), airbandPresetName_,
+                                              sizeof(airbandPresetName_));
+        census::rect("airband:preset", ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y,
+                     ImGui::GetItemRectMax().x, ImGui::GetItemRectMax().y);
+        if (ImGui::IsItemHovered()) { ImGui::SetTooltip("%s", presetHelp); }
+    }
+    // The frequency in MHz beside the mode, then an optional name beside Add;
+    // each pair stacks when the rail is too narrow to hold it (text_fit.hpp's
+    // rule). The mode is AM or NFM only: WFM is not something the monitor plays.
+    {
+        static const char* const kAddModes[] = {"AM", "NFM"};
+        const ImGuiStyle& st = ImGui::GetStyle();
+        const float modeW = std::max(64.0f, ImGui::CalcTextSize("NFM").x + st.FramePadding.x * 2.0f +
+                                                ImGui::GetFrameHeight());
+        const bool modeBeside = cascade::gui::fitsBeside(90.0f, spacing, modeW, ImGui::GetContentRegionAvail().x);
+        ImGui::SetNextItemWidth(modeBeside ? -(modeW + spacing) : -1.0f);
+        cascade::gui::inputTextWithFittedHint("##airband_add_mhz", tr("Frequency (MHz)"), airbandAddMhz_,
+                                              sizeof(airbandAddMhz_));
+        census::rect("airband:addfreq", ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y,
+                     ImGui::GetItemRectMax().x, ImGui::GetItemRectMax().y);
+        if (modeBeside) { ImGui::SameLine(); }
+        ImGui::SetNextItemWidth(modeBeside ? modeW : -1.0f);
+        const bool modeOpen = ImGui::BeginCombo("##airband_add_mode", kAddModes[airbandAddMode_ == 1 ? 1 : 0]);
+        census::rect("airband:mode", ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y,
+                     ImGui::GetItemRectMax().x, ImGui::GetItemRectMax().y);
+        if (modeOpen) {
+            for (int m = 0; m < 2; ++m) {
+                if (ImGui::Selectable(kAddModes[m], airbandAddMode_ == m)) { airbandAddMode_ = m; }
+                census::rect("airband:mode:", m, ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y,
+                             ImGui::GetItemRectMax().x, ImGui::GetItemRectMax().y);
+            }
+            ImGui::EndCombo();
+        }
+        const float addW = std::max(60.0f, cascade::gui::buttonWidth(trId("Add##airband_add")));
+        const bool addBeside = cascade::gui::fitsBeside(90.0f, spacing, addW, ImGui::GetContentRegionAvail().x);
+        ImGui::SetNextItemWidth(addBeside ? -(addW + spacing) : -1.0f);
+        cascade::gui::inputTextWithFittedHint("##airband_add_name", tr("name"), airbandAddName_,
+                                              sizeof(airbandAddName_));
+        census::rect("airband:addname", ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y,
+                     ImGui::GetItemRectMax().x, ImGui::GetItemRectMax().y);
+        if (addBeside) { ImGui::SameLine(); }
+        ImGui::BeginDisabled(airbandAddMhz_[0] == '\0');
+        if (ImGui::Button(trId("Add##airband_add"), ImVec2(addBeside ? addW : -FLT_MIN, 0.0f))) {
+            airbandAddManual();
+        }
+        census::rect("airband:add", ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y,
+                     ImGui::GetItemRectMax().x, ImGui::GetItemRectMax().y);
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+            ImGui::SetTooltip("%s", tr("Adds the frequency to the preset named above, ticked. With no name\n"
+                                       "it is named by its frequency.\n"
+                                       "AM is for aircraft; NFM is narrow FM - marine, business and\n"
+                                       "public-service radio."));
+        }
+    }
     if (!airbandNote_.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kInkMuted));
         ImGui::TextWrapped("%s", airbandNote_.c_str());
         ImGui::PopStyleColor();
     }
 
-    // --- which rows: one airport's group, or every ticked AM row -----------
+    // THE PRESET'S FILE KEYS (0.99.66): the path of a file to read into it and
+    // Import beside it, then Export CSV and Remove preset. The path is typed or
+    // pasted - FoxSDR has no file dialog - like the Bookmarks section's, and a
+    // file dropped on the window still goes in as the file says.
+    {
+        const float importW = std::max(82.0f, cascade::gui::buttonWidth(trId("Import##airband_import")));
+        const bool importBeside = cascade::gui::fitsBeside(90.0f, spacing, importW, ImGui::GetContentRegionAvail().x);
+        ImGui::SetNextItemWidth(importBeside ? -(importW + spacing) : -1.0f);
+        cascade::gui::inputTextWithFittedHint("##airband_import_path", tr("SDR# frequencies.xml or .csv - its path"),
+                                              airbandImportPath_, sizeof(airbandImportPath_));
+        census::rect("airband:importpath", ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y,
+                     ImGui::GetItemRectMax().x, ImGui::GetItemRectMax().y);
+        if (importBeside) { ImGui::SameLine(); }
+        // Disabled while a read is out (the Bookmarks section's rule): the file named
+        // is being read, and a second press would only be remembered.
+        ImGui::BeginDisabled(airbandImportPath_[0] == '\0' || bookmarkImportPending());
+        if (ImGui::Button(trId("Import##airband_import"), ImVec2(importBeside ? importW : -FLT_MIN, 0.0f))) {
+            airbandImportPreset();
+        }
+        census::rect("airband:import", ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y,
+                     ImGui::GetItemRectMax().x, ImGui::GetItemRectMax().y);
+        ImGui::EndDisabled();
+
+        // The preset's rows, whatever their mode or tick: what Export has to write and
+        // Remove has to take out.
+        const std::string preset = airbandPresetName();
+        std::size_t presetRows = 0;
+        for (const cc::Bookmark& b : freqMgr_.list()) { presetRows += (b.group == preset) ? 1u : 0u; }
+        const float avail = ImGui::GetContentRegionAvail().x;
+        const float half = (avail - spacing) * 0.5f;
+        const bool keysBeside = cascade::gui::buttonWidth(trId("Export CSV##airband_export")) <= half &&
+                                cascade::gui::buttonWidth(trId("Remove preset##airband_remove")) <= half;
+        const ImVec2 keySize(keysBeside ? half : -FLT_MIN, 0.0f);
+        ImGui::BeginDisabled(presetRows == 0 || bookmarkExportPending());
+        if (ImGui::Button(trId("Export CSV##airband_export"), keySize)) { exportGroupCsv(preset); }
+        census::rect("airband:export", ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y,
+                     ImGui::GetItemRectMax().x, ImGui::GetItemRectMax().y);
+        ImGui::EndDisabled();
+        if (keysBeside) { ImGui::SameLine(); }
+        ImGui::BeginDisabled(presetRows == 0);
+        if (ImGui::Button(trId("Remove preset##airband_remove"), keySize)) { airbandRemovePreset(); }
+        census::rect("airband:remove", ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y,
+                     ImGui::GetItemRectMax().x, ImGui::GetItemRectMax().y);
+        ImGui::EndDisabled();
+        if (!airbandPresetNote_.empty()) {
+            ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kInkMuted));
+            ImGui::TextWrapped("%s", airbandPresetNote_.c_str());
+            ImGui::PopStyleColor();
+        }
+        // A read that is taking long says so, in the Bookmarks section's sentence.
+        if (bookmarkImportPending() && bookmarkImportElapsedS() >= 1.0) {
+            ImGui::TextDisabled(tr("Waiting for the disk to open the file: %.0f s"), bookmarkImportElapsedS());
+        }
+        // A file that was written: the key that shows where. The folder is the
+        // recordings folder, which the export has made by now.
+        if (airbandPresetFolderKey_) {
+            if (ImGui::SmallButton(trId("Open the folder##airband_folder"))) { shellOpen(recordDir_); }
+            census::rect("airband:openfolder", ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y,
+                         ImGui::GetItemRectMax().x, ImGui::GetItemRectMax().y);
+        }
+    }
+
+    // --- which rows: one group (an airport's, or "Manual"), or every ticked
+    //     AM or NFM row -----------------------------------------------------
     std::vector<std::string> groups;
     for (const cc::Bookmark& b : freqMgr_.list()) {
-        if (isAm(b) && !b.group.empty() &&
+        if (playsInMonitor(b) && !b.group.empty() &&
             std::find(groups.begin(), groups.end(), b.group) == groups.end()) {
             groups.push_back(b.group);
         }
@@ -581,14 +926,26 @@ void AppWindow::drawAirbandSection() {
     }
     ImGui::SetNextItemWidth(-1.0f);
     if (ImGui::BeginCombo("##airband_group",
-                          airbandGroup_.empty() ? tr("Every ticked AM frequency") : airbandGroup_.c_str(),
+                          airbandGroup_.empty() ? tr("Every ticked AM or NFM frequency") : airbandGroup_.c_str(),
                           ImGuiComboFlags_HeightLarge)) {
-        if (ImGui::Selectable(trId("Every ticked AM frequency"), airbandGroup_.empty())) {
+        if (ImGui::Selectable(trId("Every ticked AM or NFM frequency"), airbandGroup_.empty())) {
             airbandGroup_.clear();
         }
         for (std::size_t g = 0; g < groups.size(); ++g) {
             ImGui::PushID(static_cast<int>(g));
-            if (ImGui::Selectable(groups[g].c_str(), airbandGroup_ == groups[g])) { airbandGroup_ = groups[g]; }
+            if (ImGui::Selectable(groups[g].c_str(), airbandGroup_ == groups[g])) {
+                airbandGroup_ = groups[g];
+                // THE GROUP SHOWN IS THE PRESET ACTED ON (0.99.66): Add, Export CSV and
+                // Remove preset take the name from the field above, so choosing a group
+                // here puts its name there - a group chosen and a preset named that were
+                // two different things would export the wrong list. The name goes in
+                // TRIMMED, as the keys read it (a group stored with spaces round it
+                // would otherwise leave them dead), and one that still does not fit is
+                // not copied cut short - or left as the OLD name, which Export CSV and
+                // Remove preset would then act on, unconfirmed: the field is cleared.
+                const std::string field = cascade::gui::presetFieldText(groups[g], sizeof(airbandPresetName_));
+                std::snprintf(airbandPresetName_, sizeof(airbandPresetName_), "%s", field.c_str());
+            }
             ImGui::PopID();
         }
         ImGui::EndCombo();
@@ -777,7 +1134,7 @@ void AppWindow::drawAirbandSection() {
         census::rect("airband:listen", ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y,
                      ImGui::GetItemRectMax().x, ImGui::GetItemRectMax().y);
         if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("%s", tr("Plays every ticked AM frequency the radio's band can hold at\n"
+            ImGui::SetTooltip("%s", tr("Plays every ticked AM or NFM frequency the radio's band can hold at\n"
                                        "once, mixed; when they do not all fit, scans between blocks of\n"
                                        "them and stops wherever someone is talking. Uses the receiver's\n"
                                        "radio, so it switches to the RECEIVER view."));
