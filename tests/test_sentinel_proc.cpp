@@ -44,7 +44,9 @@
 #include "core/crash_handler.hpp"
 #include "core/crash_upload.hpp"
 #include "core/diag_log.hpp"
+#include "core/diag_report.hpp"
 #include "core/hang_watchdog.hpp"
+#include "core/report_reader.hpp"
 #include "core/sentinel.hpp"
 #include "test_check.hpp"
 
@@ -53,6 +55,8 @@
 #include <windows.h>
 
 #include <werapi.h>
+
+#include "os_event_oracle.hpp"
 #pragma comment(lib, "wer.lib")
 #else
 #include <fcntl.h>
@@ -153,7 +157,16 @@ int standIn(int argc, char** argv) {
     // quietly - measured on this machine: two silent instances, no window - so the
     // process also asks Windows, in the SDK's own words, that "fault reporting UI
     // should not be shown" (WER_FAULT_REPORTING_NO_UI), on any machine.
-    ::SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
+    //
+    // EXCEPT FOR THE ONE SCENARIO THAT NEEDS WINDOWS' CRASH RECORD (0.99.66): a process
+    // that sets SEM_NOGPFAULTERRORBOX gets NO Application Error event, measured on
+    // Windows 11 22631 for a fast-fail and for an access violation (docs/DIAGNOSTICS.md,
+    // "Where in the process it ended"), and the sentinel's new read would find nothing.
+    // "failfast-wer" sets the UI flag alone, which was measured to write the event and
+    // to show no window.
+    if (argValue(argc, argv, "scenario") != "failfast-wer") {
+        ::SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
+    }
     ::WerSetFlags(WER_FAULT_REPORTING_NO_UI);
     ::SetUnhandledExceptionFilter(&quietDeath);
 #endif
@@ -278,6 +291,10 @@ int standIn(int argc, char** argv) {
     }
     if (scenario == "failfast") {
         dieAfterRunning([] { __fastfail(7); });  // FAST_FAIL_FATAL_APP_EXIT: what abort() ends in
+    }
+    if (scenario == "failfast-wer") {
+        // The same death, with Windows Error Reporting left to write its record of it.
+        dieAfterRunning([] { __fastfail(7); });
     }
     if (scenario == "heap") {
         // Windows raises this from inside the heap manager and no user-mode filter
@@ -682,6 +699,111 @@ int main(int argc, char** argv) {
             CHECK(contains(d.text, std::string("stand-in: about to die (") + r.scenario + ")"));
             // UPLOAD-ELIGIBLE: the sweep ATTEMPTS it (and, with nothing listening, fails).
             CHECK(sweepStatus(dir, d.reports[0]) == "failed");
+        }
+        std::error_code ec;
+        if (g_checksFailed == 0) { fs::remove_all(dir, ec); }
+    }
+
+    // =======================================================================
+    // A FAST-FAIL THAT WINDOWS RECORDED (0.99.66): the real stand-in dies of a real
+    // __fastfail with Windows Error Reporting left to write its record, and the REAL
+    // sentinel process reads that record from the real Application event log.
+    // =======================================================================
+    {
+        const fs::path dir = scratch("failfast-wer");
+        const Death d = liveAndDie(dir, "failfast-wer", 0);
+        std::printf("failfast-wer: application exit 0x%08lX\n", static_cast<unsigned long>(d.appExit));
+        CHECK(d.appExit == 0xC0000409ul);
+        CHECK(d.sentinelGone);
+        CHECK(d.reports.size() == 1);
+        if (d.reports.size() == 1) {
+            CHECK(d.parsedOk);
+            std::printf("failfast-wer: %s\n", d.parsed.reason.c_str());
+            // The class and the words are what every sentinel crash report says.
+            CHECK(d.parsed.reason.rfind(kSentinelReasonCrash, 0) == 0);
+            CHECK(d.parsed.code == "0xC0000409");
+            const bool located = contains(d.text, "\naddress: ");
+            // THE INDEPENDENT WITNESS, asked only if the report has no location: did Windows
+            // write the event at all? (Waits for it only in that case.)
+            const bool witnessed = located || oracle::applicationErrorEventFor(d.appPid, 20000);
+            if (!located && !witnessed) {
+                ++g_checksSkipped;
+                std::printf("SKIP: Windows wrote no Application Error event for the stand-in within 20 s "
+                            "(Windows Error Reporting disabled by a policy, or the Application log disabled "
+                            "or full): the sentinel's read of it cannot be exercised on this machine\n");
+            } else {
+                // Windows wrote it, so the report must carry it.
+                CHECK(located);
+                if (located) {
+                    const std::string self = selfPath();
+                    const std::size_t cut = self.find_last_of("\\/");
+                    const std::string selfName = cut == std::string::npos ? self : self.substr(cut + 1);
+                    std::printf("failfast-wer: %s\n", d.parsed.module.empty() ? "(no module)" : (d.parsed.module + "+0x" + std::to_string(d.parsed.offset)).c_str());
+                    CHECK(::_stricmp(d.parsed.module.c_str(), selfName.c_str()) == 0);
+                    CHECK(d.parsed.offset > 0);
+                    // a location inside this very image (the stand-in is this executable)
+                    const auto* base = reinterpret_cast<const unsigned char*>(::GetModuleHandleW(nullptr));
+                    const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
+                    const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(base + dos->e_lfanew);
+                    CHECK(d.parsed.offset < nt->OptionalHeader.SizeOfImage);
+                    CHECK(contains(d.text, std::string("\naddress-source: ") + kSentinelAddressSource + "\n"));
+                    // nothing of a path in the header the location came into
+                    const std::string header = d.text.substr(0, d.text.find("--- context ---"));
+                    CHECK(!contains(header, "AppData") && !contains(header, "C:\\") && !contains(header, "Users"));
+                    // the uploader carries the module and the offset, in the fields it always has
+                    const std::string body = uploadJson(d.parsed, "4f9c1d2e3a4b5c6d7e8f90a1b2c3d4e5");
+                    CHECK(contains(body, "\"module\":\"" + d.parsed.module + "\""));
+                    CHECK(!contains(body, "address-source"));
+                    // and it is still sent: the sweep ATTEMPTS it (nothing listens, so it fails)
+                    CHECK(sweepStatus(dir, d.reports[0]) == "failed");
+
+                    // THE LOCATION IS IN THE STAND-IN'S OWN EXECUTABLE, so the report carries that
+                    // file's module line and the parsed report has its build id - the key the
+                    // reader resolves an offset by. The expected id is read from the FILE ON DISK
+                    // (peBuildId), another route than the mapped image the sentinel read it from.
+                    std::string fileId, filePdb;
+                    CHECK(peBuildId(self, fileId, filePdb));
+                    CHECK(!fileId.empty());
+                    CHECK(contains(d.text, "\n--- modules ---\n  " + d.parsed.module + " base=0x"));
+                    CHECK(contains(d.text, " pdb=" + filePdb + " build=" + fileId + "\n"));
+                    CHECK(d.parsed.buildId == fileId);
+                    CHECK(contains(body, "\"buildId\":\"" + fileId + "\""));
+
+                    // THE READER RESOLVES IT. An archive laid out as tools/archive-symbols.ps1 lays
+                    // it out, made from this executable's own PDB, and the one call the reader
+                    // (foxsdr-reports) makes for a report: module, build id, offset.
+                    const fs::path archiveRoot = scratch("failfast-wer-archive");
+                    const fs::path pdbBeside = fs::path(self).parent_path() / filePdb;
+                    const fs::path pdbDest = archiveRoot / filePdb / fileId / filePdb;
+                    std::error_code cec;
+                    fs::create_directories(pdbDest.parent_path(), cec);
+                    cec.clear();
+                    fs::copy_file(pdbBeside, pdbDest, fs::copy_options::overwrite_existing, cec);
+                    CHECK(fs::exists(pdbBeside) && !cec);
+                    {
+                        SymbolArchive archive(archiveRoot.string());
+                        const SymbolResult s = archive.resolve(d.parsed.module, d.parsed.buildId, d.parsed.offset);
+                        std::printf("failfast-wer resolved: %s (%s:%d) note=%s\n", s.function.c_str(), s.file.c_str(),
+                                    s.line, s.note.c_str());
+                        CHECK(s.resolved);
+                        CHECK(s.function.find("standIn") != std::string::npos);
+                        CHECK(s.file.find("test_sentinel_proc.cpp") != std::string::npos);
+                        CHECK(s.line > 0);
+                        CHECK(s.note.empty());
+                    }
+                    // Before this change the report had NO build id and the reader said so and stopped;
+                    // with no archive at all it now names the build id it wants:
+                    {
+                        const SymbolArchive empty((archiveRoot / "not-here").string());
+                        const SymbolResult s = empty.resolve(d.parsed.module, d.parsed.buildId, d.parsed.offset);
+                        CHECK(!s.resolved);
+                        CHECK(s.note.find(fileId) != std::string::npos);
+                        CHECK(s.note.find("carries no build id") == std::string::npos);
+                    }
+                    std::error_code rec;
+                    if (g_checksFailed == 0) { fs::remove_all(archiveRoot, rec); }
+                }
+            }
         }
         std::error_code ec;
         if (g_checksFailed == 0) { fs::remove_all(dir, ec); }

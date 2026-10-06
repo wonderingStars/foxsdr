@@ -279,6 +279,17 @@ std::uintptr_t mainImageBase();
 // True when `addr` lies inside the main executable, by the module snapshot.
 bool inMainImage(std::uintptr_t addr);
 
+// THIS PROCESS'S OWN EXECUTABLE AS A MODULE-TABLE ENTRY (0.99.66), read straight from
+// its mapped image and WITHOUT touching the shared table: file name (the leaf), base,
+// size, the PDB's file name and the CodeView build id - the same values
+// refreshModuleTable() would give the first entry, and so the same `build=` a crash
+// report writes for it. It exists for the sentinel, which is a second copy of the
+// application's own executable (core/sentinel.hpp) and so knows the application's
+// build id without reading anything of the application. Healthy path only. False
+// where it cannot be told - on every non-Windows platform, where nothing asks - and
+// then `out` is untouched; `buildId` is empty when the image carries no CodeView record.
+bool describeMainModule(DiagModule& out);
+
 // THE SIGNATURE OF A FREEZE (kind hang or stall), over the stalled thread's
 // frames, top first.
 //

@@ -23,7 +23,9 @@
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <atomic>
+#include <cctype>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -31,11 +33,15 @@
 #include <filesystem>
 #include <fstream>
 #include <ctime>
+#include <functional>
 #include <iterator>
 #include <memory>
+#include <mutex>
 #include <new>
 #include <set>
+#include <stdexcept>
 #include <string>
+#include <thread>
 #include <type_traits>
 #include <vector>
 
@@ -45,6 +51,7 @@
 #include "core/crash_handler.hpp"
 #include "core/crash_upload.hpp"
 #include "core/diag_history.hpp"
+#include "core/diag_report.hpp"
 #include "core/frame_timing.hpp"
 #include "core/hang_watchdog.hpp"
 #include "core/sentinel.hpp"
@@ -895,6 +902,35 @@ int main() {
         // section names exactly these lines.
         const std::string section = sentinelPrivacySection();
         CHECK(!section.empty());
+        // 0.99.66: the plain statements about Windows' own record of the crash are in the
+        // document (whitespace squeezed, because the document wraps its lines).
+        {
+            std::string squeezed;
+            bool space = false;
+            for (const char c : section) {
+                if (c == ' ' || c == '\n' || c == '\r' || c == '\t') {
+                    space = true;
+                } else {
+                    if (space && !squeezed.empty()) { squeezed.push_back(' '); }
+                    space = false;
+                    squeezed.push_back(c);
+                }
+            }
+            CHECK(contains(squeezed, "(since 0.99.66, Windows only)"));
+            CHECK(contains(squeezed, "FoxSDR reads Windows' own record of FoxSDR's own crash"));
+            CHECK(contains(squeezed, "keeps only three things from it: the module's file name (never its folder), "
+                                     "the distance into it, and the crash code"));
+            CHECK(contains(squeezed, "its process number and the time it started, both"));
+            CHECK(contains(squeezed, "the full path of FoxSDR (which can contain your account name)"));
+            CHECK(contains(squeezed, "none of that is read into anything FoxSDR keeps or sends"));
+            CHECK(contains(squeezed, "FoxSDR changes no Windows setting for this, and nothing of the kind exists on Linux"));
+            CHECK(contains(squeezed, "`address-source` is not sent"));
+            CHECK(contains(squeezed, "it is FoxSDR's own file and FoxSDR's own build identifier, the same line "
+                                     "every crash report already carries for it"));
+            CHECK(contains(squeezed, "only the build identifier is sent, in the `buildId` field every crash report "
+                                     "already has"));
+            CHECK(contains(squeezed, "A report with no address has no such block"));
+        }
         const std::size_t t2 = section.find("| Class |");
         CHECK(t2 != std::string::npos);
         std::set<std::string> documented;
@@ -932,6 +968,10 @@ int main() {
         std::set<std::string> expected = header;
         expected.insert(context.begin(), context.end());
         expected.insert(process.begin(), process.end());
+        // 0.99.66: the two lines a located report adds are documented in the same table.
+        expected.insert(sentinelLocationFieldNames().begin(), sentinelLocationFieldNames().end());
+        // ...and the one-line module block of a location in our own executable.
+        expected.insert(sentinelModuleBlockFieldNames().begin(), sentinelModuleBlockFieldNames().end());
         for (const std::string& n : documented) { std::printf("documented line: %s\n", n.c_str()); }
         CHECK(documented == expected);
         CHECK(documentedClasses == (std::set<std::string>{"crash", "frozen", "startup", "outside", "session"}));
@@ -975,6 +1015,266 @@ int main() {
             ParsedReport lp;
             CHECK(parseReportText(text, lp) && lp.code == "unknown");
         }
+    }
+
+    // =======================================================================
+    // 7b. NO LOCATION: THE REPORT IS BYTE FOR BYTE WHAT 0.99.64 AND 0.99.65 WROTE
+    // =======================================================================
+    // The expected text is written out, and its three signatures were computed
+    // OUTSIDE this code (a Python FNV-1a over the code, the tag and the offset),
+    // so "unchanged" is not "equal to whatever the code says now".
+    SentinelReportInfo plainInfo;
+    plainInfo.version = "0.99.64";
+    plainInfo.commit = "abc123def456";
+    plainInfo.os = "Windows 10.0.22631";
+    plainInfo.arch = "x64";
+    plainInfo.uptimeSec = 2731;
+    plainInfo.logTotalLines = 4011;
+    plainInfo.logLines = {"12:00:00.000 info line a", "12:00:00.001 info line b"};
+    auto golden = [](const std::string& reasonTail, const std::string& sig, const std::string& extraHeader) {
+        return std::string("kind: crash\nreason: sentinel: crash exit code, no report from the process - "
+                           "fast-fail (abort or failed integrity check); ") +
+               reasonTail + "\ncode: 0xC0000409\n" + extraHeader + "signature: " + sig +
+               "\n--- context ---\nversion: 0.99.64\ncommit: abc123def456\nos: Windows 10.0.22631\n"
+               "arch: x64\nreceiver: not known to the sentinel\n--- process ---\nuptime-sec: 2731\n"
+               "fault-thread-own: unknown\n--- log (last 2 of 4011 lines) ---\n"
+               "12:00:00.000 info line a\n12:00:00.001 info line b\n";
+    };
+    auto withScope = [](breadcrumb::Snapshot c, FrameScope s) {
+        c.frameScope = static_cast<std::uint32_t>(s) + 1u;
+        return c;
+    };
+    {
+        const SentinelVerdict radio = decideSentinel(facts(crumb(Phase::Running, 500, 120, breadcrumb::kOpeningRadio), 0xC0000409ul));
+        CHECK(renderSentinelReport(radio, plainInfo) ==
+              golden("phase opening a radio; silent 0 s", "5BE2BD0EC80F9487", ""));
+        const SentinelVerdict render =
+            decideSentinel(facts(withScope(crumb(Phase::Running, 500, 2000), FrameScope::Render), 0xC0000409ul));
+        CHECK(renderSentinelReport(render, plainInfo) ==
+              golden("phase running; in render; silent 2 s", "501D3B6226CCCE88", ""));
+        // a Startup-class ending, which is the other class a location can attach to
+        const SentinelVerdict startup = decideSentinel(facts(crumb(Phase::CreatingWindow, 0, 100), 0xC0000409ul));
+        CHECK(startup.cls == SentinelClass::Startup);
+        const std::string startupText = renderSentinelReport(startup, plainInfo);
+        CHECK(contains(startupText, "\nsignature: A4B54C53E287AF1D\n"));
+        CHECK(!contains(startupText, "address"));
+        // and the new entry points, given no location, change nothing
+        CHECK(sentinelSignature(render, nullptr) == "501D3B6226CCCE88");
+        SentinelReportInfo notLocated = plainInfo;
+        notLocated.located = false;
+        notLocated.location.module = "ucrtbase.dll";  // a stray value with `located` false is not rendered
+        notLocated.location.offset = 0x7F6FE;
+        CHECK(renderSentinelReport(render, notLocated) == renderSentinelReport(render, plainInfo));
+    }
+
+    // =======================================================================
+    // 7c. WITH A LOCATION: two lines, a refined signature, and the uploader's fields
+    // =======================================================================
+    {
+        const std::string kAddressLine = "address: ucrtbase.dll+0x7F6FE\n";
+        const std::string kSourceLine = std::string("address-source: ") + kSentinelAddressSource + "\n";
+        const SentinelVerdict render =
+            decideSentinel(facts(withScope(crumb(Phase::Running, 500, 2000), FrameScope::Render), 0xC0000409ul));
+        SentinelReportInfo here = plainInfo;
+        here.located = true;
+        here.location.module = "ucrtbase.dll";
+        here.location.offset = 0x7F6FE;
+        const std::string located = renderSentinelReport(render, here);
+        // exactly the report above, with the two lines after `code` and a signature over the location
+        CHECK(located == golden("phase running; in render; silent 2 s", "BE2193D0B411F7DA", kAddressLine + kSourceLine));
+        CHECK(std::string(kSentinelAddressSource).find("not a stack") != std::string::npos);
+        CHECK(std::string(kSentinelAddressSource).find("Windows") != std::string::npos);
+
+        // THE SIGNATURE: a refinement. Computed outside this code (see 7b).
+        CHECK(sentinelSignature(render, &here.location) == "BE2193D0B411F7DA");
+        OsCrashLocation other = here.location;
+        other.module = "nvoglv64.dll";
+        CHECK(sentinelSignature(render, &other) == "03D3047D9ED7CD77");     // another module: another group
+        other = here.location;
+        other.offset = 0x7F6FF;
+        CHECK(sentinelSignature(render, &other) == "4E92CA79A1E876CF");     // another offset: another group
+        // the same fault with another silence, another frame: the same group
+        const SentinelVerdict later = decideSentinel(facts(withScope(crumb(Phase::Running, 900, 7000), FrameScope::Render), 0xC0000409ul));
+        CHECK(sentinelSignature(later, &here.location) == "BE2193D0B411F7DA");
+        // the phase and the part of the frame stay in it: a refinement, never a merge
+        const SentinelVerdict rail = decideSentinel(facts(withScope(crumb(Phase::Running, 500, 2000), FrameScope::Rail), 0xC0000409ul));
+        CHECK(sentinelSignature(rail, &here.location) != "BE2193D0B411F7DA");
+        const SentinelVerdict radio = decideSentinel(facts(crumb(Phase::Running, 500, 120, breadcrumb::kOpeningRadio), 0xC0000409ul));
+        CHECK(sentinelSignature(radio, &here.location) != sentinelSignature(render, &here.location));
+        // ...and the located signature is neither the unlocated one nor an in-process report's
+        // of the same module and offset (the two kinds of report are never joined)
+        CHECK(sentinelSignature(render, &here.location) != sentinelSignature(render, nullptr));
+        CHECK(crashSignature(0xC0000409ul, "ucrtbase.dll", 0x7F6FE) == "992DA295BFD5DFD0");
+        CHECK(sentinelSignature(render, &here.location) != crashSignature(0xC0000409ul, "ucrtbase.dll", 0x7F6FE));
+        // WHATEVER FILLS THE INFO IN, nothing but a plain file name reaches the report: a path,
+        // a name with a separator or a control character, a stack-hash word, and the report is
+        // the unlocated one (and its signature is the unlocated one).
+        for (const char* bad : {"C:\\Users\\someone\\evil.dll", "..\\evil.dll", "a/b.dll", "a b.dll", "a\nb.dll",
+                                "unknown", "StackHash_0a9e", ""}) {
+            SentinelReportInfo hostile = plainInfo;
+            hostile.located = true;
+            hostile.location.module = bad;
+            hostile.location.offset = 0x7F6FE;
+            CHECK(renderSentinelReport(render, hostile) == renderSentinelReport(render, plainInfo));
+        }
+        // Two lines, nowhere else, and in the header (before the first marker).
+        CHECK(countOf(located, "address") == 2);
+        CHECK(located.find("address:") < located.find("--- context ---"));
+        CHECK(located.find("address:") < located.find("\nsignature:"));
+        CHECK(!contains(located, "--- stack") && !contains(located, "--- modules"));
+
+        // THE INVENTORY, both ways, for a located report: the header gains exactly the two
+        // names sentinelLocationFieldNames() lists, and nothing else changes.
+        std::set<std::string> expectedHeader(sentinelHeaderFieldNames().begin(), sentinelHeaderFieldNames().end());
+        const std::set<std::string> locationNames(sentinelLocationFieldNames().begin(), sentinelLocationFieldNames().end());
+        CHECK(locationNames == (std::set<std::string>{"address", "address-source"}));
+        for (const std::string& n : locationNames) { CHECK(expectedHeader.count(n) == 0); }
+        expectedHeader.insert(locationNames.begin(), locationNames.end());
+        CHECK(headerLines(located) == expectedHeader);
+        CHECK(sectionLines(located, "--- context ---") ==
+              std::set<std::string>(sentinelContextFieldNames().begin(), sentinelContextFieldNames().end()));
+        CHECK(sectionLines(located, "--- process ---") ==
+              std::set<std::string>(sentinelProcessFieldNames().begin(), sentinelProcessFieldNames().end()));
+        CHECK(headerLines(renderSentinelReport(render, plainInfo)) ==
+              std::set<std::string>(sentinelHeaderFieldNames().begin(), sentinelHeaderFieldNames().end()));
+
+        // WHAT THE UPLOADER MAKES OF IT: the module and the offset, in the fields the in-process
+        // reports use; no field that was not already uploaded.
+        ParsedReport p;
+        CHECK(parseReportText(located, p));
+        CHECK(p.kind == "crash" && p.code == "0xC0000409");
+        CHECK(p.module == "ucrtbase.dll" && p.offset == 0x7F6FE);
+        CHECK(p.signature == "BE2193D0B411F7DA");
+        CHECK(p.reason.rfind(kSentinelReasonCrash, 0) == 0 && !sentinelReasonIsLocalOnly(p.reason));
+        CHECK(p.threads.empty() && p.buildId.empty());  // no stack and no module table to take a build id from
+        const nlohmann::json j = nlohmann::json::parse(uploadJson(p, "4f9c1d2e3a4b5c6d7e8f90a1b2c3d4e5"));
+        std::set<std::string> keys;
+        for (auto it = j.begin(); it != j.end(); ++it) { keys.insert(it.key()); }
+        CHECK(keys == std::set<std::string>(uploadFieldNames().begin(), uploadFieldNames().end()));
+        CHECK(j["module"] == "ucrtbase.dll" && j["offset"] == 0x7F6FE);
+        CHECK(j["signature"] == "BE2193D0B411F7DA");
+        // the line that says where it came from is not in the payload, and nor is anything like a path
+        const std::string body = j.dump();
+        CHECK(!contains(body, "address-source") && !contains(body, "crash record"));
+        CHECK(!contains(body, "\\\\") && !contains(body, "C:/") && !contains(body, "Users"));
+        // and the unlocated report still parses to NO module, as before
+        ParsedReport p0;
+        CHECK(parseReportText(renderSentinelReport(render, plainInfo), p0));
+        CHECK(p0.module.empty() && p0.offset == 0);
+        CHECK(p0.signature == "501D3B6226CCCE88");
+
+        // WHEN IT IS ASKED FOR: the two classes that are sent and carry a crash code, no other
+        CHECK(sentinelWantsOsCrashRecord(render));
+        CHECK(sentinelWantsOsCrashRecord(radio));
+        CHECK(sentinelWantsOsCrashRecord(decideSentinel(facts(crumb(Phase::CreatingWindow, 0, 100), 0xC0000409ul))));
+        CHECK(sentinelWantsOsCrashRecord(decideSentinel(facts(crumb(Phase::Running, 500, 20), 0xC0000005ul))));
+        CHECK(!sentinelWantsOsCrashRecord(decideSentinel(facts(crumb(Phase::Running, 500, 20), 1))));            // outside
+        CHECK(!sentinelWantsOsCrashRecord(decideSentinel(facts(crumb(Phase::Running, 500, 20), 0xFFFFFFFFul)))); // outside
+        CHECK(!sentinelWantsOsCrashRecord(decideSentinel(facts(crumb(Phase::Running, 500, 6500), 1))));          // a freeze
+        CHECK(!sentinelWantsOsCrashRecord(decideSentinel(facts(crumb(Phase::Running, 500, 20, 0, breadcrumb::kFlagSessionEnding), 0xC0000409ul))));  // session
+        CHECK(!sentinelWantsOsCrashRecord(decideSentinel(facts(crumb(Phase::Running, 500, 20), 0, true))));      // exit 0 before shutdown ended
+        CHECK(!sentinelWantsOsCrashRecord(decideSentinel(facts(crumb(Phase::Running, 500, 6500), 0, false))));   // Linux: no exit code
+        CHECK(!sentinelWantsOsCrashRecord(decideSentinel(facts(crumb(Phase::Running, 500, 20), 0xC000013Aul)))); // Ctrl+C is not a fault
+        CHECK(!sentinelWantsOsCrashRecord(SentinelVerdict()));                                                   // no verdict at all
+    }
+
+    // =======================================================================
+    // 7d. A LOCATION IN OUR OWN EXECUTABLE carries its one module-table line (0.99.66)
+    // =======================================================================
+    // The sentinel is a copy of the application's own executable, so it knows the
+    // application's build id; the report says it in the crash writer's own line format,
+    // between the context and the process block, so that ONE parser reads both and the
+    // reader has a build id for the offset.
+    {
+        const SentinelVerdict v =
+            decideSentinel(facts(withScope(crumb(Phase::Running, 500, 2000), FrameScope::Render), 0xC0000409ul));
+        constexpr const char* kId = "0123456789ABCDEF0123456789ABCDEF1";
+        SentinelReportInfo own = plainInfo;
+        own.located = true;
+        own.location.module = "cascade.exe";
+        own.location.offset = 0x1A2B;
+        SentinelReportInfo bare = own;  // the same location, no module line
+        own.hasModule = true;
+        own.moduleBase = 0x00007FF612340000ull;
+        own.moduleSize = 0x25000;
+        own.modulePdb = "cascade.pdb";
+        own.moduleBuildId = kId;
+
+        const std::string line = std::string("  cascade.exe base=0x00007FF612340000 size=0x25000 "
+                                             "pdb=cascade.pdb build=") + kId + "\n";
+        // Exactly the located report with the block between the context and the process block.
+        std::string expected = renderSentinelReport(v, bare);
+        const std::size_t at = expected.find("--- process ---\n");
+        CHECK(at != std::string::npos);
+        expected.insert(at, "--- modules ---\n" + line);
+        const std::string text = renderSentinelReport(v, own);
+        CHECK(text == expected);
+        CHECK(!contains(renderSentinelReport(v, bare), "--- modules"));
+
+        // THE UPLOADER'S PARSER reads it: the build id, for the module the address names.
+        ParsedReport p;
+        CHECK(parseReportText(text, p));
+        CHECK(p.module == "cascade.exe" && p.offset == 0x1A2B);
+        CHECK(p.buildId == kId);
+        CHECK(p.modules.size() == 1 && p.modules[0].first == "cascade.exe" && p.modules[0].second == kId);
+        // ...and the sections after it still read: the process block, the log
+        CHECK(p.uptimeSec == 2731 && p.log.size() == 2 && p.faultThreadOwn == "unknown");
+        // only the build id goes up: no load address, no size, no PDB name
+        const std::string body = nlohmann::json::parse(uploadJson(p, "4f9c1d2e3a4b5c6d7e8f90a1b2c3d4e5")).dump();
+        CHECK(contains(body, std::string("\"buildId\":\"") + kId + "\""));
+        CHECK(!contains(body, "7FF612340000") && !contains(body, "25000") && !contains(body, "cascade.pdb") &&
+              !contains(body, "base="));
+        // the signature does not depend on any of it
+        CHECK(p.signature == sentinelSignature(v, &own.location));
+
+        // THE INVENTORY, both ways: four sections now, and the line's keys are the documented ones
+        std::size_t sections = 0;
+        for (std::size_t s = text.find("\n--- "); s != std::string::npos; s = text.find("\n--- ", s + 1)) { ++sections; }
+        CHECK(sections == 4);  // context, modules, process, log
+        std::set<std::string> keys = {"modules"};
+        std::size_t pos = 0;
+        while ((pos = line.find('=', pos)) != std::string::npos) {
+            std::size_t b = pos;
+            while (b > 0 && line[b - 1] != ' ') { --b; }
+            keys.insert(line.substr(b, pos - b));
+            ++pos;
+        }
+        CHECK(keys == std::set<std::string>(sentinelModuleBlockFieldNames().begin(), sentinelModuleBlockFieldNames().end()));
+        CHECK(sectionLines(text, "--- context ---") ==
+              std::set<std::string>(sentinelContextFieldNames().begin(), sentinelContextFieldNames().end()));
+        CHECK(sectionLines(text, "--- process ---") ==
+              std::set<std::string>(sentinelProcessFieldNames().begin(), sentinelProcessFieldNames().end()));
+
+        // WITHOUT A LOCATION THERE IS NO BLOCK, whatever else the info says: the report is
+        // the unlocated one, byte for byte.
+        SentinelReportInfo notLocated = own;
+        notLocated.located = false;
+        CHECK(renderSentinelReport(v, notLocated) == renderSentinelReport(v, plainInfo));
+        CHECK(!contains(renderSentinelReport(v, plainInfo), "--- modules"));
+
+        // WHATEVER FILLS IT IN, the line is made of validated parts: a PDB that is not a
+        // plain file name and a build id that is not hex digits are `(none)`, and then the
+        // uploader has no build id (never a made-up one).
+        for (const char* badPdb : {"C:\\x\\cascade.pdb", "a b.pdb", "..\\a.pdb", "", "unknown"}) {
+            SentinelReportInfo h = own;
+            h.modulePdb = badPdb;
+            const std::string t = renderSentinelReport(v, h);
+            CHECK(contains(t, " pdb=(none) build=" + std::string(kId) + "\n"));
+        }
+        for (const std::string& badId : {std::string(), std::string("xyz"), std::string("12 34"), std::string("0x12"),
+                                         std::string(48, 'A'), std::string("AB\nCD"), std::string("C:\\id")}) {
+            SentinelReportInfo h = own;
+            h.moduleBuildId = badId;
+            const std::string t = renderSentinelReport(v, h);
+            CHECK(contains(t, " pdb=cascade.pdb build=(none)\n"));
+            ParsedReport hp;
+            CHECK(parseReportText(t, hp) && hp.buildId.empty() && hp.module == "cascade.exe");
+        }
+        // a build id the image does not carry is `(none)` too, as the crash writer says it
+        SentinelReportInfo none = own;
+        none.moduleBuildId.clear();
+        none.modulePdb.clear();
+        CHECK(contains(renderSentinelReport(v, none), "pdb=(none) build=(none)\n"));
     }
 
     // =======================================================================
@@ -1273,6 +1573,314 @@ int main() {
     }
 
     // =======================================================================
+    // 11b. THE LAST ACT, with Windows' crash record (0.99.66): found, not found, not
+    // asked for, and a reader that never answers
+    // =======================================================================
+    {
+        const fs::path dir = scratchDir("located");
+        const fs::path logs = scratchDir("locatedlogs");
+        writeFile(logs / "foxsdr.log", "12:00:00.000 info FoxSDR 0.99.66 (abc123def456) starting\n12:00:02.000 info the last line\n");
+
+        constexpr std::uint64_t kCreated = 0x1dd550dfc7fb5deull;
+        auto eventFor = [](unsigned long pid, std::uint64_t created, unsigned long code, const std::string& module,
+                           const std::string& offset) {
+            char buf[40];
+            std::string x =
+                "<Event xmlns='http://schemas.microsoft.com/win/2004/08/events/event'><System>"
+                "<Provider Name='Application Error' Guid='{a0e9b465-b939-57d7-b27d-95d8e925ff57}'/>"
+                "<EventID>1000</EventID></System><EventData><Data Name='AppName'>cascade.exe</Data>"
+                "<Data Name='ModuleName'>" + module + "</Data><Data Name='ExceptionCode'>";
+            std::snprintf(buf, sizeof(buf), "%lx", code);
+            x += buf;
+            x += "</Data><Data Name='FaultingOffset'>" + offset + "</Data><Data Name='ProcessId'>0x";
+            std::snprintf(buf, sizeof(buf), "%lx", pid);
+            x += buf;
+            x += "</Data><Data Name='ProcessCreationTime'>0x";
+            std::snprintf(buf, sizeof(buf), "%llx", static_cast<unsigned long long>(created));
+            x += buf;
+            x += "</Data><Data Name='AppPath'>C:\\Users\\someone\\FoxSDR\\cascade.exe</Data></EventData></Event>";
+            return x;
+        };
+        auto source = [](std::vector<std::string> events, std::shared_ptr<std::atomic<int>> asked) {
+            OsEventSource s = [events = std::move(events), asked](const std::string&,
+                                                                  const std::function<bool(const std::string&)>& each,
+                                                                  const std::atomic<bool>&) {
+                if (asked) { asked->fetch_add(1); }
+                for (const std::string& e : events) {
+                    if (each(e)) { return; }
+                }
+            };
+            return s;
+        };
+        auto endOf = [&](unsigned long pid, unsigned long code, const breadcrumb::Snapshot& c, OsEventSource src) {
+            SentinelEnd e;
+            e.appPid = pid;
+            e.exitKnown = true;
+            e.exitCode = code;
+            e.crumb = c;
+            e.crashDir = dir.string();
+            e.logDir = logs.string();
+            e.uptimeSec = 77;
+            e.appStartFileTime = kCreated;
+            e.appEndFileTime = kCreated + 600'000'000ull;
+            e.osEventSource = std::move(src);
+            // A short wait, so that the cases where nothing matches do not each spend the
+            // watcher's whole budget; the two that test the budget itself say otherwise.
+            e.osRecordBudget = std::chrono::milliseconds(80);
+            return e;
+        };
+        auto fresh = [](Phase p) {
+            breadcrumb::Snapshot s;
+            s.valid = true;
+            const std::uint64_t now = breadcrumb::nowMs();
+            s.startedMs = now - 60000;
+            s.phase = p;
+            s.frames = p >= Phase::Running ? 600 : 0;
+            s.beatMs = p >= Phase::Running ? now - 10 : 0;
+            s.phaseMs = now - 50000;
+            return s;
+        };
+        // The report as it is written WITHOUT any location, for the others to equal.
+        const SentinelOutcome plain =
+            finishSentinelWatch(endOf(7000, 0xC0000409ul, fresh(Phase::Running), source({}, nullptr)));
+        CHECK(plain.verdict.cls == SentinelClass::Crash && !plain.reportPath.empty());
+        const std::string plainText = readFile(plain.reportPath);
+        CHECK(!contains(plainText, "address"));
+
+        // FOUND: this death's event, among others that are not.
+        auto asked = std::make_shared<std::atomic<int>>(0);
+        const SentinelOutcome found = finishSentinelWatch(endOf(
+            7001, 0xC0000409ul, fresh(Phase::Running),
+            source({eventFor(9999, kCreated, 0xC0000409ul, "nvoglv64.dll", "0000000000000010"),   // another process
+                    eventFor(7001, kCreated - 1, 0xC0000409ul, "old.dll", "0000000000000020"),     // the same id, an earlier run
+                    eventFor(7001, kCreated, 0xC0000409ul, "ucrtbase.dll", "000000000007f6fe")},   // ours
+                   asked)));
+        CHECK(found.verdict.cls == SentinelClass::Crash && !found.reportPath.empty() && found.located);
+        CHECK(asked->load() == 1);
+        const std::string text = readFile(found.reportPath);
+        CHECK(!contains(text, "--- modules"));  // a fault in the C runtime gets no module line of ours
+        CHECK(contains(text, "\naddress: ucrtbase.dll+0x7F6FE\n"));
+        CHECK(contains(text, std::string("\naddress-source: ") + kSentinelAddressSource + "\n"));
+        CHECK(!contains(text, "someone") && !contains(text, "Users") && !contains(text, "nvoglv64") &&
+              !contains(text, "old.dll"));
+        ParsedReport pr;
+        CHECK(parseReportText(text, pr));
+        CHECK(pr.module == "ucrtbase.dll" && pr.offset == 0x7F6FE);
+        CHECK(pr.signature != sentinelSignature(found.verdict, nullptr));
+        OsCrashLocation expectedLocation;
+        expectedLocation.module = "ucrtbase.dll";
+        expectedLocation.offset = 0x7F6FE;
+        CHECK(pr.signature == sentinelSignature(found.verdict, &expectedLocation));
+        // it is the same report as the unlocated one, plus exactly the three changed lines
+        {
+            std::string expected = plainText;
+            const std::size_t sigAt = expected.find("signature: ");
+            const std::size_t sigEnd = expected.find('\n', sigAt);
+            expected.replace(sigAt, sigEnd - sigAt,
+                             std::string("address: ucrtbase.dll+0x7F6FE\naddress-source: ") + kSentinelAddressSource +
+                                 "\nsignature: " + pr.signature);
+            CHECK(text == expected);
+        }
+
+        // THE STARTUP CLASS carries one too (a crash code before the first frame).
+        const SentinelOutcome startup = finishSentinelWatch(endOf(
+            7002, 0xC0000005ul, fresh(Phase::CreatingWindow),
+            source({eventFor(7002, kCreated, 0xC0000005ul, "nvoglv64.dll", "0000000000001234")}, nullptr)));
+        CHECK(startup.verdict.cls == SentinelClass::Startup);
+        CHECK(contains(readFile(startup.reportPath), "\naddress: nvoglv64.dll+0x1234\n"));
+        CHECK(!contains(readFile(startup.reportPath), "--- modules"));  // a vendor DLL: no line of ours
+
+#if defined(_WIN32)
+        // A LOCATION IN OUR OWN EXECUTABLE (0.99.66). In this test the "application" is this
+        // very program and the sentinel is the calling process, a copy of the same file: the
+        // report gets the module line, with the build id of the file. The expected id is read
+        // from the FILE ON DISK (peBuildId) - another route than the mapped image the report's
+        // is read from.
+        {
+            std::string path(1024, '\0');
+            path.resize(::GetModuleFileNameA(nullptr, path.data(), static_cast<DWORD>(path.size())));
+            const std::size_t cut = path.find_last_of("\\/");
+            const std::string leaf = cut == std::string::npos ? path : path.substr(cut + 1);
+            std::string fileId, filePdb;
+            CHECK(peBuildId(path, fileId, filePdb));
+            CHECK(!fileId.empty() && !filePdb.empty());
+
+            DiagModule m;
+            CHECK(describeMainModule(m));
+            CHECK(leaf.size() == std::strlen(m.name) && _stricmp(leaf.c_str(), m.name) == 0);
+            CHECK(fileId == m.buildId && filePdb == m.pdb);
+            CHECK(m.base == reinterpret_cast<std::uintptr_t>(::GetModuleHandleW(nullptr)) && m.size > 0x1000);
+
+            const SentinelOutcome own = finishSentinelWatch(endOf(
+                7050, 0xC0000409ul, fresh(Phase::Running),
+                source({eventFor(7050, kCreated, 0xC0000409ul, leaf, "000000000000beef")}, nullptr)));
+            CHECK(own.located);
+            const std::string ownText = readFile(own.reportPath);
+            CHECK(contains(ownText, "\naddress: " + leaf + "+0xBEEF\n"));
+            CHECK(contains(ownText, "\n--- modules ---\n  " + leaf + " base=0x"));
+            CHECK(contains(ownText, " pdb=" + filePdb + " build=" + fileId + "\n"));
+            CHECK(countOf(ownText, "\n  " + leaf + " base=") == 1);  // ONE line
+            ParsedReport op;
+            CHECK(parseReportText(ownText, op));
+            CHECK(op.module == leaf && op.offset == 0xBEEF);
+            CHECK(op.buildId == fileId);
+
+            // The event may spell the file name in another case; the line uses the event's
+            // spelling, so the parser's exact lookup still finds it.
+            std::string upper = leaf;
+            for (char& c : upper) { c = static_cast<char>(std::toupper(static_cast<unsigned char>(c))); }
+            const SentinelOutcome shouted = finishSentinelWatch(endOf(
+                7051, 0xC0000409ul, fresh(Phase::Running),
+                source({eventFor(7051, kCreated, 0xC0000409ul, upper, "000000000000beef")}, nullptr)));
+            ParsedReport sp;
+            CHECK(shouted.located && parseReportText(readFile(shouted.reportPath), sp));
+            CHECK(sp.module == upper && sp.buildId == fileId);
+
+            // Another module with a similar name is not ours.
+            const SentinelOutcome other = finishSentinelWatch(endOf(
+                7052, 0xC0000409ul, fresh(Phase::Running),
+                source({eventFor(7052, kCreated, 0xC0000409ul, "x" + leaf, "000000000000beef")}, nullptr)));
+            CHECK(other.located && !contains(readFile(other.reportPath), "--- modules"));
+        }
+#endif
+
+        // NOT FOUND, for every reason an event can be wrong: the report is the unlocated one, to the byte.
+        auto sameAsPlain = [&](unsigned long pid, const OsEventSource& s, unsigned long code = 0xC0000409ul) {
+            const SentinelOutcome o = finishSentinelWatch(endOf(pid, code, fresh(Phase::Running), s));
+            return !o.reportPath.empty() && !o.located && readFile(o.reportPath) == plainText;
+        };
+        CHECK(sameAsPlain(7010, source({}, nullptr)));  // an empty log
+        CHECK(sameAsPlain(7011, source({eventFor(7011, kCreated, 0xC0000409ul, "C:\\Windows\\x.dll", "000000000007f6fe")}, nullptr)));
+        CHECK(sameAsPlain(7012, source({eventFor(7012, kCreated, 0xC0000409ul, "x.dll", "zz")}, nullptr)));
+        CHECK(sameAsPlain(7013, source({eventFor(7014, kCreated, 0xC0000409ul, "x.dll", "10")}, nullptr)));          // another pid
+        CHECK(sameAsPlain(7015, source({eventFor(7015, kCreated + 5, 0xC0000409ul, "x.dll", "10")}, nullptr)));      // an earlier run
+        CHECK(sameAsPlain(7016, source({eventFor(7016, kCreated, 0xC0000005ul, "x.dll", "10")}, nullptr)));          // another exception
+        CHECK(sameAsPlain(7017, source({"<Event>garbage"}, nullptr)));
+        {
+            const OsEventSource thrower = [](const std::string&, const std::function<bool(const std::string&)>&,
+                                             const std::atomic<bool>&) { throw std::runtime_error("no log"); };
+            CHECK(sameAsPlain(7018, thrower));
+        }
+
+        // NOT ASKED FOR: an ending from outside, a freeze, a closing session, a death whose
+        // start time is not known - the source is never called, however well it would match.
+        auto never = std::make_shared<std::atomic<int>>(0);
+        const OsEventSource matching = source({eventFor(7020, kCreated, 1, "x.dll", "10"),
+                                               eventFor(7020, kCreated, 0xC0000409ul, "x.dll", "10")}, never);
+        const SentinelOutcome outside = finishSentinelWatch(endOf(7020, 1, fresh(Phase::Running), matching));
+        CHECK(outside.verdict.cls == SentinelClass::Outside && !contains(readFile(outside.reportPath), "address"));
+        breadcrumb::Snapshot closing = fresh(Phase::Running);
+        closing.flags = breadcrumb::kFlagSessionEnding;
+        const SentinelOutcome session = finishSentinelWatch(endOf(7021, 0xC0000409ul, closing, matching));
+        CHECK(session.verdict.cls == SentinelClass::Session && !contains(readFile(session.reportPath), "address"));
+        SentinelEnd noStart = endOf(7022, 0xC0000409ul, fresh(Phase::Running), matching);
+        noStart.appStartFileTime = 0;
+        const SentinelOutcome unknownStart = finishSentinelWatch(noStart);
+        CHECK(unknownStart.verdict.cls == SentinelClass::Crash && readFile(unknownStart.reportPath) == plainText);
+        SentinelEnd noCode = endOf(7023, 0, fresh(Phase::Running), matching);
+        noCode.exitKnown = false;  // the Linux watcher: no exit code at all
+        CHECK(!contains(readFile(finishSentinelWatch(noCode).reportPath), "address"));
+        CHECK(never->load() == 0);
+
+        // THE BOUND. A log reader that never answers: the last act returns within its budget
+        // plus the work of writing the report, and the report is written, unlocated.
+        {
+            struct Stuck {
+                std::mutex m;
+                std::condition_variable cv;
+                bool open = false;
+                std::atomic<bool> entered{false};
+                std::atomic<bool> left{false};
+            };
+            auto stuck = std::make_shared<Stuck>();
+            auto reportWasThere = std::make_shared<std::atomic<bool>>(false);
+            const std::string reportDir = dir.string();
+            const OsEventSource never_answers = [stuck, reportWasThere, reportDir](
+                                                    const std::string&, const std::function<bool(const std::string&)>&,
+                                                    const std::atomic<bool>&) {
+                // THE REPORT IS ALREADY ON DISK when the first question is asked.
+                std::error_code lec;
+                for (const auto& f : fs::directory_iterator(reportDir, lec)) {
+                    if (f.path().filename().string().find("-7030-999999.txt") != std::string::npos) {
+                        reportWasThere->store(true);
+                    }
+                }
+                stuck->entered = true;
+                std::unique_lock<std::mutex> lk(stuck->m);
+                stuck->cv.wait(lk, [&] { return stuck->open; });
+                stuck->left = true;
+            };
+            SentinelEnd stuckEnd = endOf(7030, 0xC0000409ul, fresh(Phase::Running), never_answers);
+            stuckEnd.osRecordBudget = std::chrono::milliseconds(-1);  // the watcher's own, kSentinelOsRecordBudget
+            const auto t0 = std::chrono::steady_clock::now();
+            const SentinelOutcome o = finishSentinelWatch(stuckEnd);
+            const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+            std::printf("a log reader that never answers: the last act took %.0f ms (budget %lld ms, deadline %lld ms)\n", ms,
+                        static_cast<long long>(kSentinelOsRecordBudget.count()),
+                        static_cast<long long>(kSentinelExitDeadline.count()));
+            CHECK(stuck->entered.load());
+            CHECK(!stuck->left.load());
+            CHECK(reportWasThere->load());
+            CHECK(o.verdict.cls == SentinelClass::Crash && !o.reportPath.empty() && !o.located);
+            CHECK(readFile(o.reportPath) == plainText);
+            CHECK(ms >= static_cast<double>(kSentinelOsRecordBudget.count()) - 20.0);  // it did wait its budget
+            CHECK(ms < static_cast<double>(kSentinelOsRecordBudget.count()) + 120.0);  // and no longer
+            CHECK(ms < static_cast<double>(kSentinelExitDeadline.count()));            // inside the deadline
+            {
+                std::lock_guard<std::mutex> lk(stuck->m);
+                stuck->open = true;
+            }
+            stuck->cv.notify_all();
+            for (int i = 0; i < 200 && !stuck->left.load(); ++i) { std::this_thread::sleep_for(std::chrono::milliseconds(10)); }
+        }
+
+        // ASKED AGAIN UNTIL IT SHOWS. The event is stamped before the process object is
+        // signalled and is not always readable when the watcher wakes (measured: not at the
+        // first query in 24 of 40 real deaths): the watcher asks again, and when it finds the
+        // event the report is REPLACED by one that carries it - one report, nothing beside it.
+        {
+            auto asks = std::make_shared<std::atomic<int>>(0);
+            const std::string ev = eventFor(7040, kCreated, 0xC0000409ul, "ucrtbase.dll", "000000000007f6fe");
+            const OsEventSource showsOnFourth = [asks, ev](const std::string&,
+                                                           const std::function<bool(const std::string&)>& each,
+                                                           const std::atomic<bool>&) {
+                if (asks->fetch_add(1) + 1 >= 4) { each(ev); }
+            };
+            SentinelEnd later = endOf(7040, 0xC0000409ul, fresh(Phase::Running), showsOnFourth);
+            later.osRecordBudget = std::chrono::milliseconds(2000);
+            const auto t0 = std::chrono::steady_clock::now();
+            const SentinelOutcome o = finishSentinelWatch(later);
+            const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+            CHECK(o.located && o.verdict.cls == SentinelClass::Crash);
+            CHECK(asks->load() == 4);
+            CHECK(ms >= 3.0 * static_cast<double>(kOsCrashRetryInterval.count()) - 5.0);  // it did wait between the asks
+            CHECK(contains(readFile(o.reportPath), "\naddress: ucrtbase.dll+0x7F6FE\n"));
+            std::size_t mine = 0, leftovers = 0;
+            std::error_code lec;
+            for (const auto& f : fs::directory_iterator(dir, lec)) {
+                const std::string n = f.path().filename().string();
+                if (n.find("-7040-") != std::string::npos) { ++mine; }
+                if (n.size() > 4 && n.compare(n.size() - 4, 4, ".tmp") == 0) { ++leftovers; }
+            }
+            CHECK(mine == 1);       // one report for the death
+            CHECK(leftovers == 0);  // and no file written beside it is left behind
+            // an event that only shows after the budget is not waited for
+            auto slowAsks = std::make_shared<std::atomic<int>>(0);
+            const OsEventSource neverShows = [slowAsks](const std::string&, const std::function<bool(const std::string&)>&,
+                                                        const std::atomic<bool>&) { slowAsks->fetch_add(1); };
+            const SentinelOutcome none = finishSentinelWatch(endOf(7041, 0xC0000409ul, fresh(Phase::Running), neverShows));
+            CHECK(!none.located && readFile(none.reportPath) == plainText);
+            CHECK(slowAsks->load() >= 2);  // it did ask again, within the 80 ms it was given
+        }
+
+        std::error_code ec;
+        if (g_checksFailed == 0) {
+            fs::remove_all(dir, ec);
+            fs::remove_all(logs, ec);
+        }
+    }
+
+    // =======================================================================
     // 12. THE APPLICATION NEVER WAITS FOR THE SENTINEL, read off the source
     // =======================================================================
     {
@@ -1310,6 +1918,45 @@ int main() {
         const std::string appWindow = readFile(fs::path(CASCADE_SOURCE_DIR) / "src/gui/app_window.cpp");
         CHECK(countOf(appWindow, "sentinelSetEnabled(") == 1);
         CHECK(countOf(appWindow, "sentinelPoll(") == 1);
+    }
+
+    // =======================================================================
+    // 13. THE APPLICATION KEEPS WINDOWS' CRASH RECORD FOR ITS OWN DEATHS (0.99.66)
+    // =======================================================================
+    // A process that sets SEM_NOGPFAULTERRORBOX gets no Application Error event (measured,
+    // docs/DIAGNOSTICS.md), and the sentinel's location comes from that event. So the
+    // application must never set it, and nor may anything that loads into it. In `src` the
+    // only places that do are the two helper processes - the sentinel's own entry point and
+    // the enumeration child - which are not the application. Read off the source, comments
+    // left out: a third place is a decision to make, not a thing to find out later.
+    {
+        std::set<std::string> users;
+        std::error_code ec;
+        const fs::path root = fs::path(CASCADE_SOURCE_DIR);
+        std::size_t scanned = 0;
+        for (const auto& entry : fs::recursive_directory_iterator(root / "src", ec)) {
+            if (!entry.is_regular_file()) { continue; }
+            const std::string ext = entry.path().extension().string();
+            if (ext != ".cpp" && ext != ".hpp" && ext != ".h" && ext != ".cc" && ext != ".c") { continue; }
+            ++scanned;
+            std::ifstream in(entry.path(), std::ios::binary);
+            std::string line;
+            while (std::getline(in, line)) {
+                const std::size_t slashes = line.find("//");
+                const std::string code = slashes == std::string::npos ? line : line.substr(0, slashes);
+                if (contains(code, "SEM_NOGPFAULTERRORBOX") || contains(code, "WerSetFlags") ||
+                    contains(code, "WerAddExcludedApplication")) {
+                    users.insert(fs::relative(entry.path(), root).generic_string());
+                }
+            }
+        }
+        CHECK(scanned > 200);  // it really walked the source tree
+        CHECK(users == (std::set<std::string>{"src/core/sentinel_host_win.cpp", "src/source/soapy_enum_proc.cpp"}));
+        // and the first of those two is the watcher's entry point, never the application's
+        const std::string host = readFile(root / "src/core/sentinel_host_win.cpp");
+        const std::size_t main = host.find("int runSentinelMain(");
+        const std::size_t sem = host.find("SEM_NOGPFAULTERRORBOX");
+        CHECK(main != std::string::npos && sem != std::string::npos && sem > main);
     }
 
     return testSummary("test_sentinel");

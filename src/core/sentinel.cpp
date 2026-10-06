@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
@@ -252,9 +253,32 @@ SentinelVerdict decideSentinel(const SentinelFacts& f) {
 // ---------------------------------------------------------------------------
 // The report
 // ---------------------------------------------------------------------------
-std::string renderSentinelReport(const SentinelVerdict& v, const SentinelReportInfo& info) {
+bool sentinelWantsOsCrashRecord(const SentinelVerdict& v) {
+    return (v.cls == SentinelClass::Crash || v.cls == SentinelClass::Startup) && v.codeKnown &&
+           isCrashLikeExitCode(v.code);
+}
+
+std::string sentinelSignature(const SentinelVerdict& v, const OsCrashLocation* location) {
     char sig[17] = {};
-    crashSignatureRaw(v.codeKnown ? v.code : 0ul, v.signatureTag.c_str(), 0, sig);
+    const unsigned long code = v.codeKnown ? v.code : 0ul;
+    if (location != nullptr && !location->module.empty()) {
+        // THE LOCATION REFINES THE TAG, it does not replace it: the same hash input as ever
+        // (`<tag>`), joined to the module with an '@' so that no module name can make one
+        // tag read as another, and the offset where the hash has always taken it. A report
+        // without a location hashes exactly as it did in 0.99.64 and 0.99.65.
+        const std::string hashed = v.signatureTag + "@" + location->module;
+        crashSignatureRaw(code, hashed.c_str(), static_cast<std::uintptr_t>(location->offset), sig);
+    } else {
+        crashSignatureRaw(code, v.signatureTag.c_str(), 0, sig);
+    }
+    return std::string(sig);
+}
+
+std::string renderSentinelReport(const SentinelVerdict& v, const SentinelReportInfo& info) {
+    // A location is attached only if what it names is a plain file name: whatever filled
+    // it in, nothing else can reach the report.
+    const bool located = info.located && osCrashModuleNameOk(info.location.module);
+    const std::string sig = sentinelSignature(v, located ? &info.location : nullptr);
     char code[16] = {};
     if (v.codeKnown) { std::snprintf(code, sizeof(code), "0x%08lX", v.code); }
 
@@ -263,13 +287,46 @@ std::string renderSentinelReport(const SentinelVerdict& v, const SentinelReportI
     out += "kind: crash\n";
     out += "reason: " + v.reason + "\n";
     out += std::string("code: ") + (v.codeKnown ? code : "unknown") + "\n";
-    out += std::string("signature: ") + sig + "\n";
+    if (located) {
+        // WHERE WINDOWS SAYS IT ENDED (0.99.66): the line the in-process reports carry,
+        // which the uploader reads into the payload's `module` and `offset`, and one line
+        // saying it is not a stack frame. Hex digits are unpadded and upper case, as the
+        // in-process writer renders them.
+        char off[24] = {};
+        std::snprintf(off, sizeof(off), "%llX", static_cast<unsigned long long>(info.location.offset));
+        out += "address: " + info.location.module + "+0x" + off + "\n";
+        out += std::string("address-source: ") + kSentinelAddressSource + "\n";
+    }
+    out += "signature: " + sig + "\n";
     out += "--- context ---\n";
     out += "version: " + info.version + "\n";
     out += "commit: " + info.commit + "\n";
     out += "os: " + info.os + "\n";
     out += "arch: " + info.arch + "\n";
     out += "receiver: not known to the sentinel\n";
+    if (located && info.hasModule) {
+        // THE APPLICATION'S OWN EXECUTABLE, in the crash writer's own line format
+        // (crash_handler.cpp, writeModules - one parser reads both), so that the build id
+        // is there for the offset above. The file name is the validated one from the
+        // event, never a path; the PDB's is a plain file name or `(none)`, and the build
+        // id is hex digits or `(none)`, whatever filled the info in.
+        auto hexOnly = [](const std::string& s) {
+            if (s.empty() || s.size() > 47) { return false; }
+            for (const char c : s) {
+                const bool hex = (c >= '0' && c <= '9') || (c >= 'A' && c <= 'F') || (c >= 'a' && c <= 'f');
+                if (!hex) { return false; }
+            }
+            return true;
+        };
+        char nums[64] = {};
+        std::snprintf(nums, sizeof(nums), " base=0x%016llX size=0x%llX",
+                      static_cast<unsigned long long>(info.moduleBase),
+                      static_cast<unsigned long long>(info.moduleSize));
+        out += "--- modules ---\n";
+        out += "  " + info.location.module + nums + " pdb=" +
+               (osCrashModuleNameOk(info.modulePdb) ? info.modulePdb : std::string("(none)")) +
+               " build=" + (hexOnly(info.moduleBuildId) ? info.moduleBuildId : std::string("(none)")) + "\n";
+    }
     out += "--- process ---\n";
     if (info.uptimeSec >= 0) { out += "uptime-sec: " + std::to_string(info.uptimeSec) + "\n"; }
     out += "fault-thread-own: unknown\n";
@@ -284,6 +341,16 @@ std::string renderSentinelReport(const SentinelVerdict& v, const SentinelReportI
 
 const std::vector<std::string>& sentinelHeaderFieldNames() {
     static const std::vector<std::string> names = {"kind", "reason", "code", "signature"};
+    return names;
+}
+
+const std::vector<std::string>& sentinelLocationFieldNames() {
+    static const std::vector<std::string> names = {"address", "address-source"};
+    return names;
+}
+
+const std::vector<std::string>& sentinelModuleBlockFieldNames() {
+    static const std::vector<std::string> names = {"modules", "base", "size", "pdb", "build"};
     return names;
 }
 
@@ -397,6 +464,31 @@ void armSentinelExitDeadline() {
     }
 }
 
+namespace {
+
+// Two file names that differ at most in case (Windows file names do not).
+bool sameFileNameNoCase(const char* a, const std::string& b) {
+    const std::size_t n = std::strlen(a);
+    if (n != b.size()) { return false; }
+    for (std::size_t i = 0; i < n; ++i) {
+        if (std::tolower(static_cast<unsigned char>(a[i])) != std::tolower(static_cast<unsigned char>(b[i]))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// A file written whole: opened for truncation, written, flushed, and checked.
+bool writeWholeFile(const fs::path& path, const std::string& text) {
+    std::ofstream file(path, std::ios::binary | std::ios::trunc);
+    if (!file) { return false; }
+    file.write(text.data(), static_cast<std::streamsize>(text.size()));
+    file.flush();
+    return static_cast<bool>(file);
+}
+
+}  // namespace
+
 SentinelOutcome finishSentinelWatch(const SentinelEnd& e) {
     SentinelOutcome out;
 
@@ -452,16 +544,64 @@ SentinelOutcome finishSentinelWatch(const SentinelEnd& e) {
     // the sentinel writes nowhere the application would not.
     std::error_code ec;
     if (e.crashDir.empty() || !fs::is_directory(fs::path(e.crashDir), ec)) { return out; }
+
+    // THE REPORT IS WRITTEN FIRST, exactly as it was before 0.99.66, and only then is
+    // Windows' crash record waited for (below): a read that stalls, or a disk that is slow
+    // after it, can cost the location but never the report.
     const fs::path path = fs::path(e.crashDir) / sentinelReportFileName(e.appPid, sysNow);
-    const std::string text = renderSentinelReport(out.verdict, info);
-    {
-        std::ofstream file(path, std::ios::binary | std::ios::trunc);
-        if (!file) { return out; }
-        file.write(text.data(), static_cast<std::streamsize>(text.size()));
-        file.flush();
-        if (!file) { return out; }
-    }
+    if (!writeWholeFile(path, renderSentinelReport(out.verdict, info))) { return out; }
     out.reportPath = path.string();
+
+    // WHERE WINDOWS SAYS IT ENDED (0.99.66), only for the endings that carry a crash code
+    // and are written for sending, and only when the application's start time is known
+    // (the event is matched by process id AND creation time). Windows Error Reporting stamps
+    // its event before the process object is signalled, but the log does not always show it
+    // yet when this watcher wakes (0 to about 750 ms later, measured), so the lookup asks
+    // again until it does or kSentinelOsRecordBudget is gone. If it is found, the report is
+    // REPLACED by one that carries it - written beside the report and renamed over it, so
+    // that the deadline cannot leave half of either. Elsewhere, nothing is found.
+    if (sentinelWantsOsCrashRecord(out.verdict) && e.appStartFileTime != 0) {
+        OsCrashQuery q;
+        q.pid = e.appPid;
+        q.startFileTime = e.appStartFileTime;
+        q.endFileTime = e.appEndFileTime;
+        q.exitCode = e.exitCode;
+        const std::chrono::milliseconds budget =
+            e.osRecordBudget.count() >= 0 ? e.osRecordBudget : kSentinelOsRecordBudget;
+        const OsCrashLookup found = findOsCrashRecord(q, budget, e.osEventSource, kOsCrashRetryInterval);
+        if (found.found) {
+            info.located = true;
+            info.location = found.location;
+            // A location in OUR OWN executable gets its module-table line, because the
+            // sentinel is a copy of the same file and so its build id is the application's.
+            // A fault in anything else (a vendor DLL, the C runtime) gets none: its build
+            // id is not ours to name and nothing here could resolve it. A report with no
+            // location has no module block either, so it stays what 0.99.65 wrote.
+            DiagModule self;
+            if (describeMainModule(self) && sameFileNameNoCase(self.name, info.location.module)) {
+                info.hasModule = true;
+                info.moduleBase = static_cast<std::uint64_t>(self.base);
+                info.moduleSize = static_cast<std::uint64_t>(self.size);
+                info.modulePdb = self.pdb;
+                info.moduleBuildId = self.buildId;
+            }
+            fs::path beside = path;
+            beside += ".tmp";  // not "*.txt": the uploader and the folder list never see it
+            if (writeWholeFile(beside, renderSentinelReport(out.verdict, info))) {
+                std::error_code rec;
+                fs::rename(beside, path, rec);  // replaces the first report in one step
+                if (rec) {
+                    std::error_code dec;
+                    fs::remove(beside, dec);
+                } else {
+                    out.located = true;
+                }
+            } else {
+                std::error_code dec;
+                fs::remove(beside, dec);
+            }
+        }
+    }
     return out;
 }
 

@@ -809,6 +809,28 @@ bool inMainImage(std::uintptr_t addr) {
     return resolveAddress(addr, m, off) && m.base == self;
 }
 
+bool describeMainModule(DiagModule& out) {
+#if defined(_WIN32)
+    HMODULE self = ::GetModuleHandleW(nullptr);
+    if (self == nullptr) { return false; }
+    MODULEINFO mi{};
+    if (::GetModuleInformation(::GetCurrentProcess(), self, &mi, sizeof(mi)) == 0) { return false; }
+    DiagModule m;
+    m.base = reinterpret_cast<std::uintptr_t>(mi.lpBaseOfDll);
+    m.size = static_cast<std::size_t>(mi.SizeOfImage);
+    char nameBuf[MAX_PATH] = {};
+    if (::GetModuleBaseNameA(::GetCurrentProcess(), self, nameBuf, sizeof(nameBuf)) == 0) { return false; }
+    copyField(m.name, sizeof(m.name), nameBuf);
+    codeViewFromImage(reinterpret_cast<const unsigned char*>(mi.lpBaseOfDll), m.buildId,
+                      sizeof(m.buildId), m.pdb, sizeof(m.pdb));
+    out = m;
+    return true;
+#else
+    (void)out;
+    return false;  // nothing on this platform asks: the sentinel locates nothing here
+#endif
+}
+
 std::string freezeSignature(unsigned long kindTag, const std::uintptr_t* frames, int count) {
     // No frames at all keys exactly as the old code did for a thread with none:
     // an unnamed module at offset 0.

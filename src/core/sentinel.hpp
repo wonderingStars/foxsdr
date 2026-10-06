@@ -40,6 +40,17 @@
 // application that the user ends from Task Manager must not use up the daily
 // five, which is the whole reason there are two kinds.
 //
+// WHERE IT ENDED (0.99.66, Windows only). For the two classes that carry a crash
+// exit code - Crash and Startup - the watcher also asks Windows where the crash
+// was: Windows Error Reporting writes an "Application Error" event (id 1000) for
+// the application's death, naming the faulting module and the offset in it, and
+// the event is already in the log when the process object is signalled
+// (core/os_crash_record.hpp: measured, and what is kept and matched). The module's
+// FILE NAME and the offset go into the report as its `address:` line, with a line
+// saying they came from Windows' record and not from a stack, and they refine the
+// signature. The read is bounded (kSentinelOsRecordBudget), unelevated and quiet:
+// no event, no access or no answer in time all leave the report exactly as it was.
+//
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #ifndef CASCADE_CORE_SENTINEL_HPP
 #define CASCADE_CORE_SENTINEL_HPP
@@ -50,6 +61,7 @@
 #include <vector>
 
 #include "core/breadcrumb.hpp"
+#include "core/os_crash_record.hpp"
 
 namespace cascade::core {
 
@@ -142,6 +154,13 @@ struct SentinelVerdict {
     bool upload() const { return sentinelClassUploads(cls); }
 };
 
+// Is this a verdict for which Windows' own crash record is worth asking for
+// (0.99.66)? Only an ending that carries a crash exit code AND is written for
+// sending: the Crash class, and the Startup class when the code is a crash code. An
+// ending from outside (taskkill's 1, Stop-Process's -1), a closing session and a
+// freeze have no Application Error event to find, and must not pay for a read.
+bool sentinelWantsOsCrashRecord(const SentinelVerdict& v);
+
 // How long the heartbeat may be silent before the ending is "frozen": the SAME
 // thresholds the freeze watchdog judges by - its start-up budget for the first
 // frames, its frame threshold afterwards, its shutdown budget once the frame loop
@@ -158,13 +177,55 @@ struct SentinelReportInfo {
     std::int64_t uptimeSec = -1;            // -1: not known, the line is left out
     std::vector<std::string> logLines;      // the end of the session's log, oldest first
     std::size_t logTotalLines = 0;          // how many lines the session had in the files
+    // WHERE WINDOWS SAYS IT ENDED (0.99.66): the faulting module's file name and the
+    // offset in it, from the Application Error event of this death. `located` false
+    // (the default, and every report written before 0.99.66) adds nothing to the
+    // report - not a line, not a byte.
+    bool located = false;
+    OsCrashLocation location;
+    // THE ONE MODULE-TABLE LINE, for a location that names the application's own
+    // executable (0.99.66): what the crash writer's `--- modules ---` block says of
+    // it, so that `parseReportText` gives the report the build id the offset
+    // resolves against. Only with `located`, and only when `location.module` is this
+    // executable's file name (finishSentinelWatch decides); the line's file name is
+    // `location.module`, so the two always agree. `moduleBase` and `moduleSize` are
+    // the sentinel's own image's - a copy of the same file, never read by the reader
+    // and not sent; `modulePdb` is the PDB's file name and `moduleBuildId` the
+    // CodeView id, empty when the image carries none (the line then says `(none)`, as
+    // the crash writer's does).
+    bool hasModule = false;
+    std::uint64_t moduleBase = 0;
+    std::uint64_t moduleSize = 0;
+    std::string modulePdb;
+    std::string moduleBuildId;
 };
+
+// The fixed sentence of the `address-source:` line, which says the `address:` line
+// above it is not a stack frame.
+inline constexpr const char* kSentinelAddressSource =
+    "Windows' crash record of this process (Application Error event 1000), not a stack";
 
 // The text of the report: the existing format (kind, reason, code, signature,
 // context, process, log), no stack and no module list because there is nothing
 // of either to show. Every header line and every context line it can carry is
-// listed below.
+// listed below. With a location, two more header lines: `address: <module>+0x<offset>`
+// (the line the in-process reports carry, which the uploader reads into the
+// payload's `module` and `offset`) and `address-source:`, and the signature is
+// hashed over the location as well as over what it was hashed over before. When
+// the location names the application's own executable the report also carries a
+// `--- modules ---` block of that ONE line, between the context and the process
+// block, so that the reader has a build id for the offset.
 std::string renderSentinelReport(const SentinelVerdict& v, const SentinelReportInfo& info);
+
+// THE SIGNATURE of a sentinel report: what it has always been - the exit code and
+// the tag (class, phase, frame scope) - and, when Windows named the fault, the
+// module and the offset as well, as `<tag>@<module>` and the offset. A refinement,
+// never a merge: a report without a location hashes exactly as one always did, so
+// every report written by 0.99.64 and 0.99.65 keeps its group; with one, the group
+// splits by WHERE (a graphics driver's check, our own executable, a CRT's) but is
+// never joined to another. (Why the phase and part of the frame stay in it:
+// docs/DIAGNOSTICS.md, "Where in the process it ended".)
+std::string sentinelSignature(const SentinelVerdict& v, const OsCrashLocation* location);
 
 // THE INVENTORY, in the spirit of crashReportFieldNames(): PRIVACY.md documents
 // these field by field and tests/test_sentinel.cpp compares them with a report a
@@ -174,6 +235,14 @@ std::string renderSentinelReport(const SentinelVerdict& v, const SentinelReportI
 const std::vector<std::string>& sentinelHeaderFieldNames();
 const std::vector<std::string>& sentinelContextFieldNames();
 const std::vector<std::string>& sentinelProcessFieldNames();
+// The header lines a report carries ONLY when Windows' record located the fault
+// (0.99.66): `address` and `address-source`. Documented in PRIVACY.md with the rest,
+// and compared with a located report in both directions.
+const std::vector<std::string>& sentinelLocationFieldNames();
+// What the one-line `--- modules ---` block of such a report is made of (0.99.66): the
+// block's name and the four keys of its line, `base=`, `size=`, `pdb=`, `build=`.
+// Documented in PRIVACY.md and compared with a real report in both directions.
+const std::vector<std::string>& sentinelModuleBlockFieldNames();
 
 // "crash-<stamp>-<application pid>-999999.txt". Named with the APPLICATION's
 // process id so that crashReportWrittenByProcess finds it (one report per
@@ -202,11 +271,24 @@ struct SentinelEnd {
     breadcrumb::Snapshot crumb;
     std::string crashDir;
     std::string logDir;
+    // The application's creation and end times as FILETIMEs (100 ns ticks since
+    // 1601), exactly as GetProcessTimes gave them: what Windows' crash record is
+    // matched by (0.99.66). 0 where not known - Linux, a failed call - and then no
+    // location is looked for.
+    std::uint64_t appStartFileTime = 0;
+    std::uint64_t appEndFileTime = 0;
+    // Where the Application Error events come from. Empty: the Windows event log. A
+    // test names a fixture, or one that never answers.
+    OsEventSource osEventSource;
+    // How long to wait for them: negative means kSentinelOsRecordBudget (below), which is
+    // what the watcher always uses. Only a test says otherwise, to keep its own run short.
+    std::chrono::milliseconds osRecordBudget{-1};
 };
 
 struct SentinelOutcome {
     SentinelVerdict verdict;
     std::string reportPath;  // empty when nothing was written
+    bool located = false;    // Windows' crash record was found and is in the report (0.99.66)
 };
 
 // Looks for an in-process report of this death, decides, and writes the one
@@ -221,6 +303,19 @@ SentinelOutcome finishSentinelWatch(const SentinelEnd& end);
 // installer that cannot replace cascade.exe.
 inline constexpr std::chrono::milliseconds kSentinelExitDeadline{1000};
 void armSentinelExitDeadline();
+
+// HOW LONG THE WATCHER WAITS FOR WINDOWS' CRASH RECORD (0.99.66). Measured on this
+// machine (docs/DIAGNOSTICS.md): the event is STAMPED 250-475 ms before the
+// application's process object is signalled but is not always READABLE when the
+// watcher wakes. In the real watcher, 16 of 38 deaths showed it at the first query and
+// the other 22 showed it 40-373 ms later; a plain polling probe and the unit test saw
+// it 561-752 ms later in 8 runs of about 180. 800 ms covers all of those and leaves
+// 200 ms of the exit deadline over. The report has been written
+// before the wait begins (finishSentinelWatch), so the wait can cost the location and
+// never the report; a read that has not answered is left behind.
+inline constexpr std::chrono::milliseconds kSentinelOsRecordBudget{800};
+static_assert(kSentinelOsRecordBudget.count() + 150 <= kSentinelExitDeadline.count(),
+              "the crash-record wait must leave part of the exit deadline over");
 
 // ---------------------------------------------------------------------------
 // The application's side: starting it, switching it, noticing it die.

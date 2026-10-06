@@ -353,6 +353,12 @@ int runSentinelMain(int argc, char** argv) {
     if (::GetProcessTimes(app, &created, &exited, &kernel, &user) != 0) {
         end.appStartedKnown = true;
         end.appStarted = fromFileTime(created);
+        // The same two instants, untouched, for matching Windows' crash record of this
+        // death (core/os_crash_record.hpp): its ProcessCreationTime is this very value.
+        end.appStartFileTime = (static_cast<std::uint64_t>(created.dwHighDateTime) << 32) |
+                               static_cast<std::uint64_t>(created.dwLowDateTime);
+        end.appEndFileTime = (static_cast<std::uint64_t>(exited.dwHighDateTime) << 32) |
+                             static_cast<std::uint64_t>(exited.dwLowDateTime);
         ULARGE_INTEGER a, b;
         a.LowPart = created.dwLowDateTime;
         a.HighPart = created.dwHighDateTime;

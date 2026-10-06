@@ -477,6 +477,21 @@ const KnownWait kKnownWaits[] = {
      "spent only inside the sentinel process (armSentinelExitDeadline, from runSentinelMain, "
      "after the application has already ended); the application never waits for the sentinel, "
      "so its shutdown path never spends it"},
+    // THE SENTINEL'S READ OF WINDOWS' CRASH RECORD (0.99.66). The bound on one lookup of the
+    // Application Error event (core/os_crash_record.hpp, findOsCrashRecord): spent only inside
+    // the sentinel process, only after the application has already ended and only for an ending
+    // with a crash exit code, and inside kSentinelExitDeadline, which cuts the process off
+    // whatever the read is doing. The application never calls it.
+    {"src/core/sentinel.hpp", "kSentinelOsRecordBudget", 0,
+     "spent only inside the sentinel process (finishSentinelWatch, after the application has "
+     "already ended, and only for a crash exit code), within kSentinelExitDeadline; the "
+     "application never reads Windows' crash record, so its shutdown path never spends it"},
+    // ...and the pause between two of its asks. Not a wait the application ever makes: the
+    // lookup runs on a worker thread of the sentinel process, after the application has ended.
+    {"src/core/os_crash_record.hpp", "kOsCrashRetryInterval", 0,
+     "the pause between two asks of the Application event log, spent only on the lookup's own "
+     "worker thread inside the sentinel process, after the application has already ended; the "
+     "application never calls the lookup, so its shutdown path never spends it"},
     {"src/source/soapy_source.hpp", "kStreamHealthWindow", 0,
      "not a wait at all - the length of the window the read loop tallies before it writes "
      "its stream-health line; nothing ever sleeps or blocks on it"},

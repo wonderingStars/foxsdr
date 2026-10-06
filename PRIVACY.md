@@ -698,7 +698,10 @@ sentinel report carries exactly these lines and no others:
 | `kind` | `crash` | The same kind as a crash report, so nothing that reads reports changes. |
 | `reason` | `sentinel: crash exit code, no report from the process - fast-fail (abort or failed integrity check); phase running; silent 0 s` | One fixed sentence per class (the second table below), then what the exit code means, the stage FoxSDR was in, while it was running the part of drawing the window that was under way (`; in rail` - one of the words listed under `frame-scope` above), and how many whole seconds its drawing had been silent. The exit code's meaning, the stage, the part and the number come from closed lists - `access violation`, `fast-fail`, `heap corruption`, `stack overflow`, `unknown exit code` (or, on Linux, `exit status not available on this platform`), and the stages above - never from text on your machine. |
 | `code` | `0xC0000409` | The exit code Windows recorded for the process, as a number; `unknown` on Linux, where a process that is not the parent cannot learn it. A code, not content. |
-| `signature` | `A31F…` | Groups repeats of one kind of ending together: derived from the class, the exit code, the stage and the part of drawing the window - never from the time and never from anything about you. |
+| `address` | `ucrtbase.dll+0x7F6FE` | **Only when Windows' own record of the crash names it (since 0.99.66, Windows only; the paragraph after the second table).** The file name of the module the crash happened in - never its folder - and the distance into it in hex, written as the crash reports above write their address. Left out altogether when Windows' record is not there. |
+| `address-source` | `Windows' crash record of this process (Application Error event 1000), not a stack` | Present exactly when `address` is, and always this one fixed sentence: it says the address is Windows' own record and not a stack FoxSDR read. Not part of what is sent. |
+| `modules` (`base`, `size`, `pdb`, `build`) | `  cascade.exe base=0x00007FF6… size=0x25000 pdb=cascade.pdb build=651FD5EB…` | **Only with `address`, and only when the address is inside FoxSDR's own program file (since 0.99.66, Windows only).** The one line of the module list that every crash report already carries for that file; `--- modules ---` is a block of just this line: the file's name (never its folder), where the sentinel's copy of the program was loaded and how large it is, the name of its debugging-symbols file and the identifier of that compiled file. It is what lets the reader find the matching symbols for the address. A fault in any other module (a graphics driver, a radio's driver) gets no such line. |
+| `signature` | `A31F…` | Groups repeats of one kind of ending together: derived from the class, the exit code, the stage and the part of drawing the window - and, when `address` is present, from that module and distance as well - never from the time and never from anything about you. |
 | `version`, `commit`, `os`, `arch` | `0.99.64`, `Windows 10.0.22631` | As in every report. |
 | `receiver` | `not known to the sentinel` | A fixed sentence in place of the receiver lines (mode, source, radio, plugins): the sentinel cannot read them, and says so instead of leaving them blank. |
 | `uptime-sec` | `2731` | How many seconds FoxSDR had been running. |
@@ -715,6 +718,44 @@ sentence the `reason` begins with:
 | `startup` | `sentinel: ended before the first frame` | sent |
 | `outside` | `sentinel: ended from outside, window was drawing` | kept here |
 | `session` | `sentinel: ended as the session closed` | kept here |
+
+**Windows' own record of a crash (since 0.99.66, Windows only).** When FoxSDR ends
+with a Windows crash code that nothing inside it could report - the first two
+classes in the table above - the sentinel also reads the one thing Windows itself
+wrote about that ending. Windows Error Reporting records every application crash in
+the Application event log (an "Application Error" entry, number 1000): the program,
+the module the crash was in, and the distance into it. **FoxSDR reads Windows' own
+record of FoxSDR's own crash, through Windows' documented event-log interface, as
+you and without administrator rights, and keeps only three things from it: the
+module's file name (never its folder), the distance into it, and the crash code**
+(which the report already carries as `code`). The entry is used only if it names
+this very run of FoxSDR - its process number and the time it started, both - so an
+entry about another program, another copy of FoxSDR or an earlier run is never
+used. The entry also holds the full path of FoxSDR (which can contain your account
+name), the module's full path and other details; none of that is read into
+anything FoxSDR keeps or sends. What is kept is checked: the file name must be a
+plain file name of at most 63 letters, digits and the characters `.` `_` `-` `+`,
+the distance must be hex digits, and anything else is dropped. A file name can say
+that a piece of software is installed on your computer, so it is stated here; it is
+the same kind of name the module list and the frames above already carry for
+drivers. If Windows wrote no such entry (Windows Error Reporting is switched off by
+a policy, the log is disabled or full, the program ended another way), if the entry
+cannot be read, or if it does not appear within eight tenths of a second, the
+report is written exactly as it was before, with neither line. It is not looked for
+at all after an ending from outside, a closing session or a freeze. FoxSDR changes
+no Windows setting for this, and nothing of the kind exists on Linux. When the
+address is inside FoxSDR's own program file, the report also carries one line for
+that file in a `--- modules ---` block, so the address can be matched to the
+symbols of that exact build: **it is FoxSDR's own file and FoxSDR's own build
+identifier, the same line every crash report already carries for it** (the
+sentinel is a second copy of the same file, so its identifier is the program's).
+The load address and size on that line are those of the sentinel's copy and stay on
+your machine; only the build identifier is sent, in the `buildId` field every crash
+report already has. A report with no address has no such block. The report is
+written first and replaced by the one with the address only if the entry turns up.
+When the report is sent, the address travels in the `module` and `offset` fields
+that every crash report already has (the table of what is sent, below);
+`address-source` is not sent.
 
 An ending from outside while the window was drawing (you ended FoxSDR from Task
 Manager, or from a script), an ending from outside while you were holding the
@@ -749,7 +790,7 @@ One request per report, on the **next** start after the failure, to
 | `version` | `0.62.0` | Which release. |
 | `commit` | `98a9d7d617a7` | Which build. Only the commit names a build; the offsets below are meaningless against the wrong one. |
 | `buildId` | `651FD5EB…C528` | Which *link*. Two builds of one version have different code at the same offsets. This identifies the compiled file, not you or your machine. |
-| `module`, `offset` | `cascade.exe`, `1179648` | Where it failed, as a file name and a distance into that file. Not an address in your memory. |
+| `module`, `offset` | `cascade.exe`, `1179648` | Where it failed, as a file name and a distance into that file. Not an address in your memory. For a sentinel report (above) these are empty, except since 0.99.66 when Windows' own record of the crash named the module: then they are that module's file name and the distance into it, nothing more. |
 | `signature` | `A31F…` (16 hex digits) | Groups repeats of one bug. Derived from the fault kind, the faulting module and the offset — never from the time and never from anything about you. |
 | `os`, `arch` | `Windows 10.0.22631`, `x64` | Whether a fault is specific to a Windows version. |
 | `reason` | `access violation`, or `fault in a third-party SDR module, absorbed…` | The report's own reason line, verbatim. This is what separates a fault the application **survived** (a driver fault absorbed by the vendor-call guard) from one that killed it — without it the two are indistinguishable rows. A freeze report has no such line: until 0.99.64 this was empty for a freeze, and since 0.99.64 it is the fixed sentence `freeze: the frame was in ` followed by the report's `frame-scope` word (above) - and only when that word is one of the nineteen on the list; anything else is dropped, not sent. Since 0.99.64 it can also be a **sentinel** reason (*A sentinel report*, above): a fixed sentence beginning `sentinel: `, then the meaning of the exit code, the stage, the part of drawing the window and the seconds of silence - again from closed lists. The two classes kept on the machine are never uploaded. |

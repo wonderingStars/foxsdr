@@ -43,7 +43,11 @@
 // which the telemetryCleanExit marker still counts, so they are visible as a
 // number even when they are invisible as a report. Since 0.99.64 a watcher
 // OUTSIDE the process writes one for them (core/sentinel.hpp): it sees the exit
-// code, and this file's own reports are how it knows not to write a second.
+// code, and this file's own reports are how it knows not to write a second. Since
+// 0.99.66 that report also says WHERE, on Windows, from the one place a fast-fail
+// is recorded: the "Application Error" event Windows Error Reporting writes to the
+// Application log (core/os_crash_record.hpp) - the faulting module's file name and
+// the offset in it, never a stack, and never a path.
 //
 // WRITING A REPORT FROM A BROKEN PROCESS. Everything the fault path needs is
 // prepared while the process is still healthy: the directory is created at

@@ -3150,9 +3150,11 @@ The sentinel therefore uses `kind: crash` with a fixed `reason` prefix, and noth
 new is uploaded: the payload is exactly the fields `uploadFieldNames()` lists, no
 more (asserted against a real sentinel report in `tests/test_sentinel.cpp`). What
 arrives is `reason` (the fixed sentence plus the closed vocabulary), `code`, the
-`signature`, `uptimeSec`, the log tail and the build identity; `module`, `offset`,
-`threads` and `plugins` are empty and the receiver context says `not known to the
-sentinel`.
+`signature`, `uptimeSec`, the log tail and the build identity; `threads` and `plugins`
+are empty and the receiver context says `not known to the sentinel`; `module` and
+`offset` are empty too - **except, since 0.99.66, on a Windows crash-class report for
+which Windows' own record of the crash named the module** (*Where in the process it
+ended*, below): then they are that module's file name and the distance into it.
 
 - **Local classes** (`outside`, `session`) are recognised by their fixed reason
   prefix (`sentinelReasonIsLocalOnly`, shared with the writer) and get a `local-only`
@@ -3168,7 +3170,11 @@ sentinel`.
   64 KiB (a sentinel report carries a log tail and nothing else, about the size of
   any crash report's). **What the site should learn**: that a `reason` beginning
   `sentinel: ` is not an in-process fault and has no stack (group by the signature,
-  never by the stack-less `module`/`offset`); that `crash`, `frozen` and `startup`
+  never by the stack-less `module`/`offset`; since 0.99.66 a crash-class one may carry
+  a `module` and `offset` that are Windows' own record of where the crash was, not a
+  stack frame - an offset into a `/GS` failure routine or the C runtime's `abort` is the
+  same for every failure in that module, so it names a module and not a function);
+  that `crash`, `frozen` and `startup`
   count as faults of the build (the first is a crash, the second a freeze, the third a
   failure to start - none of them survived) and the two local classes are never
   received; that `startup` carries the exit code and the phase in the signature, so
@@ -3176,6 +3182,245 @@ sentinel`.
   `reliabilityReasonSurvived` should *not* treat these as survived (they end the
   process). The site's `Survived()` test looks for `(contained` and for ` - enumeration
   child, `; neither string occurs in a sentinel reason.
+
+### Where in the process it ended: Windows' own crash record (0.99.66)
+
+**The motive.** The first sentinel report from a user (0.99.64, Windows 10.0.22631, 48 minutes in)
+read `crash exit code, no report from the process - fast-fail (abort or failed integrity check);
+phase running; in render; silent 2 s`, code `0xC0000409`. A direct `__fastfail` - a `/GS`
+stack-cookie failure, a hardened-library check, a third-party DLL such as a graphics or radio
+driver failing fast - runs no handler, so the sentinel knew the class, the code, the phase and the
+part of the frame and nothing about **where**. Windows itself records that: for every application
+crash Windows Error Reporting writes an *Application Error* event, id 1000, to the Application
+event log. Since 0.99.66 the sentinel reads it and the report says where. **Windows only**:
+`os_crash_record.hpp` has a portable half (validation, matching, the bounded lookup - which exists
+on every platform only so that its tests do) and `os_crash_record_win.cpp`, and on any other
+platform the event source is empty and nothing is ever found. Nothing equivalent was built or is
+claimed for Linux, and the non-Windows side was **not compiled** (no Linux toolchain was available
+for this change; it is a one-line stub and `#if !defined(_WIN32)` guards).
+
+#### What was observed (Windows 11 22631, 2026-10-05, an unelevated shell: token elevation 0, Medium integrity level)
+
+Written down from runs, not remembered. A tiny executable (`probe.exe`, `/GS`, `/MD`) and a DLL it
+loads (`probe_mod.dll`; the work-package prefix its real file name carried is dropped here and in
+the test fixtures) were made to die on purpose, each run in its own process with `WerSetFlags(WER_FAULT_REPORTING_NO_UI)`
+(and no window was seen: the process list was sampled for a `WerFault.exe` with a window during 10 runs, 0 seen),
+and the event read back with `Get-WinEvent` and, separately, with C++ against `wevtapi`.
+
+| Death | Event? | `ModuleName` + `FaultingOffset` | `ExceptionCode` |
+|---|---|---|---|
+| `__fastfail(7)` inline in the executable | yes | `probe.exe` + `0x15e8` | `c0000409` |
+| `/GS` stack-cookie failure, function A, in the executable | yes | `probe.exe` + `0x1e31` | `c0000409` |
+| `/GS` stack-cookie failure, a **different** function B | yes | `probe.exe` + `0x1e31` (**the same**) | `c0000409` |
+| access violation in the executable | yes | `probe.exe` + `0x165c` | `c0000005` |
+| `__fastfail(7)` in a **DLL** the executable loaded | yes | `probe_mod.dll` + `0x1335` | `c0000409` |
+| access violation in that DLL | yes | `probe_mod.dll` + `0x1350` | `c0000005` |
+| `abort()` in the C runtime (an earlier, real crash of a fuzz replay in this log) | yes | `ucrtbase.dll` + `0x7f6fe` | `c0000409` |
+| the same `__fastfail` with `SEM_NOGPFAULTERRORBOX` set (alone, and with the flag above) | **no** (2 of 2) | - | - |
+| an access violation with `SEM_NOGPFAULTERRORBOX` set | **no** | - | - |
+| `TerminateProcess(self, 0xC0000409)` | **no** | - | - |
+| a normal exit | **no** | - | - |
+| Windows Error Reporting disabled by a policy | **not measured**: reading or changing a Windows error-reporting setting was out of bounds for this work; the reader treats "no event" as "not known" whatever the cause | - | - |
+
+- **The fields, by name** (`EvtRender` XML, in this order): `AppName`, `AppVersion`, `AppTimeStamp`,
+  `ModuleName`, `ModuleVersion`, `ModuleTimeStamp`, `ExceptionCode`, `FaultingOffset`, `ProcessId`,
+  `ProcessCreationTime`, `AppPath`, `ModulePath`, `IntegratorReportId`, `PackageFullName`,
+  `PackageRelativeAppId`. `ExceptionCode` is 8 hex digits with no prefix; `FaultingOffset` is 16
+  zero-padded hex digits; `ProcessId` is `0x` and lower-case hex (the formatted message shows
+  `0x0x92F0` - it prefixes a value that already has its own); `ProcessCreationTime` is `0x` and the
+  hex of the process's creation FILETIME, **equal in 7 of 7 direct comparisons to what the process
+  reports** (to 100 ns), and the real sentinel matched more than 40 events on it. `AppPath` and `ModulePath` are full paths, `C:\Users\<account>\...` among
+  them. So the event offers a process id **and** a start time, and the executable path is never
+  needed to match it.
+- **A DLL versus the executable.** `ModuleName` is the module the faulting instruction was in: the
+  DLL's file name for a failure inside it, the executable's for one inline in it. **A `/GS` failure
+  reports the shared failure routine, not the function that overflowed** (two different overflowing
+  functions, one module and one offset), and `abort()` and the CRT's invalid-parameter exit report
+  the C runtime's: for those the *module* is the information and the offset is the same for every
+  such failure of that build. A check written inline in a vendor DLL reports its own offset.
+- **Unelevated.** Read as an ordinary user, no privilege, no group membership beyond a normal
+  session: the Application log is readable by ordinary users (the Security log is the one that is
+  not). The log also holds *other programs'* crash events, full paths included, which is why the
+  reader keeps five named fields and nothing else.
+- **When.** The event's time stamp is **214-475 ms before** the process object is signalled
+  (about 80 deaths: WerFault suspends the process, writes the event, queues its report, then ends
+  the process). **That is not when it can be read.** A watcher that asks the instant the process
+  object is signalled finds it in some runs and not in others. The real watcher (the stand-in
+  application under `tests/test_sentinel_proc.cpp`, 38 deaths with a trace, a 900 ms budget): 16
+  found at the first query (0.8-1.1 ms), 22 later, after 40, 42, 88, 92, 130, 130, 139, 184, 186, 190, 223,
+  274, 296, 332, 361, 364, 364, 368, 368, 370, 371, 373 ms (and an earlier set of 20 with a 350 ms
+  budget gave up on 3). Two other probes that poll the same API - a plain C++ loop against
+  `probe.exe`, 120 deaths under several polling patterns, and the unit test's real child - saw
+  561, 580, 602, 605, 607, 622, 689 and 752 ms in 8 runs of about 180. A PowerShell
+  reader (`System.Diagnostics.Eventing.Reader`, 50 deaths) saw it 7-101 ms after `WaitForExit` returned;
+  **that difference was not reconciled** and is reported rather than explained. The numbers used
+  are the C++ ones, which are the code path that ships.
+
+#### Where the reader goes, and why
+
+**In the sentinel, at the moment of death, after the report has been written - and not at the next
+launch.** The measurement says the event is mostly readable within 400 ms of the death and in all
+runs but a few within 800 ms, and the sentinel may live 1000 ms (`kSentinelExitDeadline`). So:
+
+1. The report is written first, **exactly as 0.99.65 wrote it** (this is the report that was
+   already guaranteed to exist), so a stalled log reader or a slow disk afterwards can cost the
+   location and never the report. (An earlier shape of this change waited first and wrote after;
+   a read that ate the deadline would have cost the whole report. It was changed before it ever
+   shipped.)
+2. Then, only for a verdict that is a crash class (*crash*, or *startup* with a crash code) **and**
+   an application start time that is known, the sentinel asks the Application log - on a worker
+   thread, for at most `kSentinelOsRecordBudget` (800 ms), again every `kOsCrashRetryInterval`
+   (25 ms) until the event shows. It is never asked for an ending from outside, a closing session
+   or a freeze, which have no such event and would only pay for the wait.
+3. If the event is found, the report is **replaced** by one that carries it: written beside the
+   report as `<name>.txt.tmp` (which the uploader and the folder list, which look for `*.txt`,
+   never see) and renamed over it, so the deadline can never leave half of either.
+
+The cost of "no event" (a machine with Windows Error Reporting disabled, a process that set
+`SEM_NOGPFAULTERRORBOX`) is that the sentinel lives up to 800 ms longer after a crash-coded death.
+Nothing else is delayed: the application is already gone, and the installer-replace case that the
+deadline protects is not a crash.
+
+**Why not the next launch?** It is the right place for an event that arrives later than the
+sentinel can wait, and this one mostly does not. Built, it would need: the report to carry the
+application's start time (a new line beyond the three values this change may keep) or a weaker
+match (the process id from the file name, the exit code and `uptime-sec` from the report, and a
+tolerance on the time), the uploader to rewrite a report (it does not today: `sweepCrashDir` reads
+a report and builds a payload, it writes only the `.upload` sidecar), and the *signature* to change
+after the fact, which the five-a-day and once-a-day-per-signature limits are keyed on. Not built. The
+cost of leaving it out is the tail: an event that takes longer than 800 ms to appear is lost, and
+the report stays what 0.99.65 wrote. **That is the decision to review.**
+
+#### What is kept, and what is matched
+
+Kept: the faulting module's **file name**, the **offset**, and the exception code (which is the
+report's existing `code` line: the event's code must equal the exit code, so nothing new is stored).
+**Matched** by process id **and** creation time **and** exit code, all three, as numbers: an event
+about another program, another instance, an earlier run of the same process id, or another
+exception is never attached (the same events were asked about with a neighbouring id, a creation
+time one tick off and a different code, in the unit test and against the real event). Validated: the
+name is a plain file name of 1-63 characters from `[A-Za-z0-9._+-]` beginning with a letter, digit
+or underscore - never a separator, a space, markup, a control character or a byte above 0x7F, and
+never `unknown` or `StackHash_...` (what Windows writes when it could not name the module); the
+offset is 1-16 hex digits below 2^32 (a larger number is a raw address, which Windows writes when no
+module holds the fault); a field named twice, missing, or not a whole `<Data Name='x'>text</Data>`
+element drops the event. The parser reads five named fields and never reads, copies or keeps
+`AppPath`, `ModulePath` or any other: a hostile `AppPath` that spells out a `<Data Name='ModuleName'>`
+cannot supply or spoil a value (it is text, with its `<` escaped).
+
+#### What the report says now, and the signature
+
+```
+kind: crash
+reason: sentinel: crash exit code, no report from the process - fast-fail (abort or failed integrity check); phase running; in render; silent 2 s
+code: 0xC0000409
+address: ucrtbase.dll+0x7F6FE
+address-source: Windows' crash record of this process (Application Error event 1000), not a stack
+signature: BE2193D0B411F7DA
+--- context ---
+...
+```
+
+`address:` is the line the in-process reports carry, which `parseReportText` reads into
+`module` and `offset` and the payload sends; `address-source:` is read by nothing and is not
+sent. A report with no location has **neither line and is byte for byte what 0.99.64 and
+0.99.65 wrote**.
+
+**The module line, for a location in our own executable.** When the module the event names is
+this program's own file (compared case-insensitively with the sentinel's own file name), the
+report also carries a `--- modules ---` block of ONE line, between the context and the process
+block, in the crash writer's own format - `  <file> base=0x<16 digits> size=0x<hex> pdb=<pdb>
+build=<id>` (`crash_handler.cpp`'s `writeModules`; `parseModuleLine` reads both):
+
+```
+--- modules ---
+  cascade.exe base=0x00007FF612340000 size=0x25000 pdb=cascade.pdb build=651FD5EB...
+```
+
+`parseReportText` then gives the report a `buildId` (it looks the module named by `address:` up
+in the table), the payload's `buildId` carries it, and `foxsdr-reports` resolves the offset
+against the archived PDB of that exact link. **Why only then, and not always:** a block written
+for every report would change every report that has no location - the byte-identical 0.99.65
+report is a promise and a test - and for a fault in a vendor DLL or the C runtime it would carry
+a build id that is not ours to name and that nothing here could resolve. The sentinel IS the
+application's executable (a second copy of the same file, started by it), so its own build id is
+the application's; it is read from the sentinel's own mapped image (`describeMainModule`, the
+same `codeViewFromImage` the crash writer's table uses) and never from the application. The file
+name in the line is the validated name from the event (so the line and the `address:` line
+always agree to the letter, whatever case the event spells), never a path; the PDB name is a plain
+file name or `(none)`; the build id is hex digits or `(none)`. `base` and `size` are the sentinel
+copy's own image values: nothing reads them, and nothing sends them (`buildId` is the only part of
+the line that goes up). *Verified end to end:* the stand-in application's real `__fastfail` is
+located in its own executable, the parsed report's `buildId` equals the id read from the executable
+FILE on disk (`peBuildId`), and `SymbolArchive::resolve(module, buildId, offset)` - the call
+`foxsdr-reports` makes - resolves the offset to `standIn` at the `__fastfail` line in
+`test_sentinel_proc.cpp`, against an archive made from the test executable's own PDB.
+
+**The application keeps Windows' crash record for its own deaths.** `SEM_NOGPFAULTERRORBOX` is set
+in exactly two places in `src`, both helper processes: `runSentinelMain` (`sentinel_host_win.cpp`)
+and the enumeration child (`soapy_enum_proc.cpp`). The application sets neither it nor
+`WerSetFlags` (its one `SetThreadErrorMode`, `plugin_host.cpp`, is thread-scoped and sets
+`SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX` only), and nothing vendored under `third_party`
+sets it. `tests/test_sentinel.cpp` reads the source and fails on a third user.
+
+**The signature when the location is known.** Recommended and implemented: the hash gains the
+module and the offset and **keeps** what it was made of - `crashSignatureRaw(code,
+"<tag>@<module>", offset)`, where `<tag>` is `sentinel:<class>:<phase>[:<scope>]` as before. A
+**refinement, never a merge**: every group splits by *where* and none joins another. Why the phase
+and the frame scope stay in it: the location says in which *module*, and often not in which
+*function* - a `/GS` failure and an `abort()` give one offset per module whoever called - so
+hashing the location alone would put every such failure of a build into one group and **lose** the
+split the phase and the part of the frame already give. And it keeps every report written by 0.99.64
+and 0.99.65 uploadable and grouped as it is: the uploader carries the `signature:` line of the
+file as written and recomputes nothing, a report with no location still hashes exactly as before
+(pinned in `tests/test_sentinel.cpp` against values computed outside the code, with a Python
+FNV-1a), and the located signature of the same module and offset is not an in-process report's
+(they are not joined).
+
+**The alternative, for a decision:** hash the location only, `crashSignatureRaw(code, module,
+offset)` - the same input the in-process handler uses. Its virtue is that the same fault found in
+two phases is one group, and a sentinel report and an in-process report of the same module and
+offset would share one. Its cost is the one above: every `/GS` failure, and every `abort()`, of one
+module in one build would be one group however many bugs it is, and the groups the 0.99.64
+signature already has (`running:render`, `running:plugin-panels`, ...) would be merged away.
+A third option, leaving the signature alone and grouping by `(signature, module)` on the site,
+needs a change on the site, which is not in this repository.
+
+#### What this does not do, and what was not verified
+
+- **A location in a module that is not our own executable has no build id** (a vendor DLL, the C
+  runtime): the module's *name* is the finding there. A location in our own executable has one
+  (*The module line*, above). The sentinel's build id is the application's only because it is a
+  copy of the same file: a test that names another executable to run as the sentinel
+  (`SentinelOptions::exePath`) changes that, and the application never does.
+- **Not verified:** Windows 10 (only 22631 was available: the event's layout there is documented
+  nowhere in this work, and an event without named data is dropped, so it would show as no
+  location, never as a wrong one); a policy-disabled Windows Error Reporting (above); a full or
+  disabled log; an event that appears later than 800 ms; the non-Windows build (not compiled);
+  the Store package; that no dialog can appear on a machine whose Windows Error Reporting UI
+  settings differ (the tests set `WER_FAULT_REPORTING_NO_UI` and none was seen).
+- **Every deliberate death leaves an entry**: each crash the tests cause leaves an `AppCrash_<exe>_...`
+  folder under `C:\ProgramData\Microsoft\Windows\WER\ReportArchive` and two *Windows Error
+  Reporting* (1001) events, on the machine that ran it. Whether Windows sends them on is the
+  machine's own setting, which was not queried.
+
+#### Where it is tested
+
+`tests/test_os_crash_record.cpp`: the validation tables; the parser against events captured above
+and hostile variants of them (a path where a name should be, separators, control characters,
+over-long and non-ASCII names, non-hex and over-wide offsets, a missing or doubled field, an event
+for another program, another process id, an earlier run, another exception); the query and its
+window; the lookup against a fixture source, its retry, and its **time bound** (a source that never
+answers costs its budget and no more); and a **real child** that really fails fast, whose event is
+read back. `tests/test_sentinel.cpp`: the report byte for byte without a location, with one, the
+signature, the inventory and `PRIVACY.md` in both directions, what the uploader makes of it, the
+last act with a fixture log (found, retried, not found, never asked, a stalled reader). 
+`tests/test_sentinel_proc.cpp`: the real stand-in dies of a real `__fastfail` and the real sentinel
+process reads the real log. The real-process tests **say SKIP, with the reason**, if this machine
+wrote no event and an independent witness (`tests/os_event_oracle.hpp`) confirms it; if the
+witness sees the event and the reader does not, that is a failure. They also **cannot use the
+`SEM_NOGPFAULTERRORBOX` that every other crash test sets** (above), and set only
+`WER_FAULT_REPORTING_NO_UI`.
 
 ### What it costs, and the promises it keeps
 
@@ -3209,8 +3454,11 @@ sentinel`.
   is refused, so the test cannot pass for the wrong reason. A hard deadline
   (`kSentinelExitDeadline`, 1000 ms, armed the instant the application has ended) ends
   the process whatever a stuck disk is doing; the cost of that is a lost report, never an
-  installer that cannot proceed. It is the sentinel's one bounded wait and is classified
-  in `tests/test_shutdown_budget.cpp` (spent in the sentinel process only, zero on the
+  installer that cannot proceed. (Since 0.99.66 a crash-coded ending also waits up to 800 ms
+  for Windows' own record of the crash, *after* its report is written, inside the same
+  deadline; an ending that is not a crash does not.) The deadline and that wait are the
+  sentinel's bounded waits, classified in `tests/test_shutdown_budget.cpp` (spent in the
+  sentinel process only, zero on the
   application's shutdown path); the wait that gives the sentinel its purpose - the
   application's process handle - is unbounded by design.
 - **No dialog, ever**: the sentinel sets `SEM_NOGPFAULTERRORBOX` first. The tests' stand-in
@@ -3285,7 +3533,10 @@ them - could leave a local-only *outside* report; that is the safe direction.
 
 `tests/test_sentinel.cpp` (in-process: the layout, the hot path, the decision table, the
 vocabulary, the report and its field inventory against this code *and* `PRIVACY.md` in both
-directions, what the uploader makes of it, one report per death, the log tail);
+directions, what the uploader makes of it, one report per death, the log tail, and since
+0.99.66 the report with and without Windows' crash record - see *Where in the process it
+ended*); `tests/test_os_crash_record.cpp` (the reader of that record: parser, validation,
+matching, time bound, and a real child that fails fast);
 `tests/test_sentinel_proc.cpp` (stand-in applications that really die: a clean exit, a
 replaceable executable, an ending from outside, a real `__fastfail`, a real access
 violation, a heap corruption, a real stack overflow, a death the in-process handler
