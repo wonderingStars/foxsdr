@@ -44,7 +44,15 @@
  *             through a window of its own;
  *   remove while listening   (0.99.66 review) Remove preset pressed on the
  *             preset the monitor is playing stops the monitor - it is not cut
- *             again from "every ticked row" of the rest of the list.
+ *             again from "every ticked row" of the rest of the list;
+ *   caption   (0.99.71) while it listens, the block on the air and the name
+ *             heard are lettered at the top of the spectrum, and in the rail
+ *             the two status lines sit above the row list - not under the
+ *             keys, where O'Hare's twenty-nine rows put them below the fold
+ *             (a tester, 2026-10-07): with O'Hare's list and LISTEN pressed
+ *             the lines are on screen in a 1000-pixel window without the
+ *             rail being scrolled further, and the caption is on the
+ *             spectrum; idle, neither is drawn.
  *
  * Every click is aimed at the rectangle a first, unscripted run of the same
  * layout reported for that key, so nothing here depends on where the rail
@@ -308,6 +316,27 @@ float vfoRectWidth(const Result& r) {
     return it == r.rects.end() ? -1.0f : it->second.x1 - it->second.x0;
 }
 
+// THE RAIL'S STATUS LINES ARE ABOVE THE ROW LIST (0.99.71): on the run's last
+// frame, still listening, the block line and the "Hearing:" line are both drawn,
+// both end above the list's top edge, and the second follows the first. Until
+// 0.99.71 they were the last lines of the section, under the keys.
+void checkStatusAboveList(const Result& r) {
+    const auto status = r.rects.find("airband:status");
+    const auto hearing = r.rects.find("airband:hearing");
+    const auto rows = r.rects.find("airband:rowlist");
+    CHECK(status != r.rects.end());
+    CHECK(hearing != r.rects.end());
+    CHECK(rows != r.rects.end());
+    if (status == r.rects.end() || hearing == r.rects.end() || rows == r.rects.end()) { return; }
+    std::printf("    rail: status y %.1f..%.1f, hearing y %.1f..%.1f, row list y %.1f..%.1f\n",
+                static_cast<double>(status->second.y0), static_cast<double>(status->second.y1),
+                static_cast<double>(hearing->second.y0), static_cast<double>(hearing->second.y1),
+                static_cast<double>(rows->second.y0), static_cast<double>(rows->second.y1));
+    CHECK(status->second.y1 <= rows->second.y0 + 0.01f);
+    CHECK(hearing->second.y0 >= status->second.y1 - 0.01f);
+    CHECK(hearing->second.y1 <= rows->second.y0 + 0.01f);
+}
+
 // `centreKhz` is where the one block's centre lands. Two 10 kHz rows put it
 // halfway between them, 120 000 kHz; an NFM row 12.5 kHz wide beside a 10 kHz
 // AM one has a wider upper edge, so the middle of the block's extent
@@ -374,6 +403,26 @@ void checkListen(const Result& r, const std::string& tag, const char* what, int 
     std::printf("    heard: High %.2f s, Low %.2f s\n", heardHigh, heardLow);
     CHECK(heardHigh > 0.5);
     CHECK(heardLow == 0.0);
+
+    // THE CAPTION (0.99.71): on the run's last frame, still listening, the block
+    // line is lettered on the spectrum - inside the panel, in its top third, at
+    // least a few words wide - and the open channel's name was lettered with it
+    // at some point of the run (the note). In the rail the two status lines sit
+    // ABOVE the row list, the second straight under the first.
+    const auto cap = r.rects.find("airband:caption");
+    CHECK(cap != r.rects.end());
+    CHECK(r.items.count("airband:caption:hearing") == 1);
+    if (cap != r.rects.end() && spec != r.rects.end()) {
+        std::printf("    caption: x %.1f..%.1f, y %.1f..%.1f (spectrum y %.1f..%.1f)\n",
+                    static_cast<double>(cap->second.x0), static_cast<double>(cap->second.x1),
+                    static_cast<double>(cap->second.y0), static_cast<double>(cap->second.y1),
+                    static_cast<double>(spec->second.y0), static_cast<double>(spec->second.y1));
+        CHECK(cap->second.x0 >= spec->second.x0 && cap->second.x1 <= spec->second.x1 + 0.01f);
+        CHECK(cap->second.y0 >= spec->second.y0);
+        CHECK(cap->second.y1 <= spec->second.y0 + (spec->second.y1 - spec->second.y0) / 3.0f);
+        CHECK(cap->second.x1 - cap->second.x0 > 40.0f);
+    }
+    checkStatusAboveList(r);
 }
 
 }  // namespace
@@ -444,6 +493,43 @@ int main() {
             CHECK(atisUnticked);
             CHECK(groundTicked);
             CHECK(allAm);
+
+            // THE TESTER'S CASE (0.99.71): O'Hare's rows are in the list now; LISTEN
+            // pressed on them. The two status lines are above the row list and ON
+            // SCREEN in this 1000-pixel window with the rail scrolled no further than
+            // every run scrolls it - until 0.99.71 they were the last lines of the
+            // section, under the keys, which with this list sit at pixel row 909 of
+            // 1000 (measured on 0.99.70), so the lines were off the bottom of any
+            // shorter window - and the spectrum carries the caption. Several blocks:
+            // the generator's one tone opens no squelch here, so what is held is the
+            // placing, not a name. (A fresh run does not remember the group the
+            // lookup put on show, so it lists "every ticked AM or NFM frequency":
+            // the 28 ticked rows, ATIS left out.)
+            const Result layout29 = once("ord-layout", 60, "receiver", "");
+            CHECK(layout29.ok);
+            CHECK(layout29.items.count("airband:rows:28") == 1);
+            CHECK(layout29.rects.count("airband:listen") == 1);
+            if (layout29.rects.count("airband:listen") == 1) {
+                const Rect key = layout29.rects.at("airband:listen");
+                std::printf("  listen to O'Hare's list (29 rows; the LISTEN key is at y %.0f)\n",
+                            static_cast<double>(key.y0));
+                const Result r = once("ord-listen", 300, "receiver", click(60, key) + hold(70));
+                CHECK(r.ok);
+                CHECK(r.items.count("airband:listening") == 1);
+                CHECK(r.items.count("airband:blocks:1") == 0);   // O'Hare spans 17 MHz: several blocks
+                checkStatusAboveList(r);
+                const auto hearing = r.rects.find("airband:hearing");
+                if (hearing != r.rects.end()) { CHECK(hearing->second.y1 <= 1000.0f); }
+                const auto cap = r.rects.find("airband:caption");
+                const auto spec = r.rects.find("trc:spec:receiver");
+                CHECK(cap != r.rects.end());
+                CHECK(spec != r.rects.end());
+                if (cap != r.rects.end() && spec != r.rects.end()) {
+                    CHECK(cap->second.y0 >= spec->second.y0);
+                    CHECK(cap->second.y1 <= spec->second.y0 + (spec->second.y1 - spec->second.y0) / 3.0f);
+                    CHECK(cap->second.x0 >= spec->second.x0 && cap->second.x1 <= spec->second.x1 + 0.01f);
+                }
+            }
         }
     }
 
@@ -461,6 +547,13 @@ int main() {
         CHECK(layout.rects.count("airband:mk:120300") == 0);
         std::printf("  idle: the VFO band is %.1f px wide\n", static_cast<double>(vfoRectWidth(layout)));
         CHECK(vfoRectWidth(layout) > 1.0f);
+        // Idle, nothing is said about hearing: no caption on the spectrum, no
+        // status lines in the rail (0.99.71).
+        CHECK(layout.rects.count("airband:caption") == 0);
+        CHECK(layout.items.count("airband:caption:hearing") == 0);
+        CHECK(layout.rects.count("airband:status") == 0);
+        CHECK(layout.rects.count("airband:hearing") == 0);
+        CHECK(layout.rects.count("airband:rowlist") == 1);
         if (layout.rects.count("airband:listen") == 1) {
             writeBookmarks(kTwoRows);
             const Result r = once("listen", 300, "receiver",

@@ -89,6 +89,7 @@
 #include "core/utf8_text.hpp"
 #include "gui/airband_marker_geometry.hpp"
 #include "gui/bench_rail.hpp"
+#include "gui/fonts.hpp"
 #include "gui/text_fit.hpp"
 #include "gui/ui_census.hpp"
 #include "gui/theme.hpp"
@@ -709,6 +710,81 @@ void AppWindow::drawAirbandMarkers(float x0, float y0, float width, float height
     dl->PopClipRect();
 }
 
+// --- the status lines ----------------------------------------------------------
+
+// THE TWO LINES THAT SAY WHAT IS BEING HEARD (0.99.71): the block on the air -
+// "Block 2 of 6: 10 channels, 118.100-119.950 MHz", or "All 7 channels at
+// once, ..." when one block holds every ticked row - and the names of the
+// channels whose squelch is open this frame. Built once, here, for both
+// places that show them: the section in the rail (above its row list) and the
+// caption on the spectrum (drawAirbandCaption).
+bool AppWindow::airbandStatusText(std::string& block, std::string& hearing) const {
+    block.clear();
+    hearing.clear();
+    if (!airbandListening_ || airbandBlock_ >= airbandBlocks_.size()) { return false; }
+    const cc::AirbandBlock& blk = airbandBlocks_[airbandBlock_];
+    double lo = 0.0, hi = 0.0;
+    if (!blk.members.empty() && blk.members.back() < airbandPlanned_.size()) {
+        lo = airbandPlanned_[blk.members.front()].freqHz;
+        hi = airbandPlanned_[blk.members.back()].freqHz;
+    }
+    if (airbandBlocks_.size() > 1) {
+        block = cc::formatText(tr("Block %zu of %zu: %zu channels, %.3f-%.3f MHz"), airbandBlock_ + 1,
+                               airbandBlocks_.size(), blk.members.size(), lo / 1e6, hi / 1e6);
+    } else {
+        block = cc::formatText(tr("All %zu channels at once, %.3f-%.3f MHz"), blk.members.size(), lo / 1e6,
+                               hi / 1e6);
+    }
+    for (const AirbandChan& c : airbandChans_) {
+        if (!c.open) { continue; }
+        if (!hearing.empty()) { hearing += ", "; }
+        hearing += c.name;
+    }
+    return true;
+}
+
+// THE CAPTION ON THE SPECTRUM (0.99.71). A tester listening to O'Hare, whose
+// twenty-nine rows make the section taller than the rail, had to hold the rail
+// scrolled to its foot to read which frequency was talking: the status lines
+// were the last thing the section drew, under the keys (measured on 0.99.70 in
+// a 1600 x 1000 window with the rail scrolled to the section: the keys at pixel
+// row 909, the two lines below them). They now sit above the row list in the
+// rail, and are lettered here as well, at the left under the spectrum's header
+// - the row the trace-mode label uses, over the channel marks drawAirbandMarkers
+// has just drawn - so the message is on the picture the listener is watching,
+// whatever the rail shows. The block's line in the rail's green, then the names
+// in its amber, on ONE line: a long list of names is cut at the panel's edge
+// rather than wrapped down over the trace. Drawn after the gridlines as the
+// panel's topmost lettering, and one row lower while PEAK HOLD or AVERAGE is
+// showing, so the two never cross.
+//
+// The census gets the caption's rectangle ("airband:caption") and a note
+// ("airband:caption:hearing") when names were lettered, so the test can hold it
+// to the top of the spectrum and know it named the open channel.
+void AppWindow::drawAirbandCaption(float x0, float y0, float width, float yBottom) {
+    std::string block, hearing;
+    if (!airbandStatusText(block, hearing)) { return; }
+    ImFont* font = cascade::gui::fonts::ui();
+    const float px = ImGui::GetFontSize() * 0.8f;
+    float y = y0 + 2.0f;
+    if (spectrumTraceMode_ != cc::TraceMode::Normal) { y += px + 2.0f; }
+    if (y + px > yBottom) { return; }
+    const float x = x0 + 6.0f;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->PushClipRect(ImVec2(x0, y0), ImVec2(x0 + width, yBottom), true);
+    dl->AddText(font, px, ImVec2(x, y), cascade::gui::theme::kPhosphor, block.c_str());
+    float xEnd = x + font->CalcTextSizeA(px, FLT_MAX, 0.0f, block.c_str()).x;
+    if (!hearing.empty()) {
+        const std::string said = cc::formatText(tr("Hearing: %s"), hearing.c_str());
+        const float gap = px;
+        dl->AddText(font, px, ImVec2(xEnd + gap, y), cascade::gui::theme::kAmber, said.c_str());
+        xEnd += gap + font->CalcTextSizeA(px, FLT_MAX, 0.0f, said.c_str()).x;
+        census::note("airband:caption:hearing");
+    }
+    dl->PopClipRect();
+    census::rect("airband:caption", x, y, std::min(xEnd, x0 + width), y + px);
+}
+
 // --- the section ---------------------------------------------------------------
 
 void AppWindow::drawAirbandSection() {
@@ -1012,6 +1088,43 @@ void AppWindow::drawAirbandSection() {
                                    "FoxSDR listened - measured here, at your aerial, and kept."));
     }
 
+    // WHAT IS BEING HEARD, ABOVE THE LIST (0.99.71): the block on the air and
+    // the names talking in it were the last lines of the section, under the
+    // keys - and a tester listening to O'Hare, whose twenty-nine rows make the
+    // section taller than the rail, had to hold the rail scrolled to its foot
+    // to read them. They sit here now, between the list's heading and its
+    // rows, and the spectrum carries them too (drawAirbandCaption). ALWAYS TWO
+    // LINES TALL: "Hearing: -" while every squelch is shut, and the same two
+    // lines left empty while the monitor is idle - so a talker starting does
+    // not push the rows and the keys down a line under the hand about to press
+    // them, and STOP is drawn exactly where LISTEN was (the stop scenario of
+    // tests/test_airband_app presses the same spot; the first build of this
+    // change had moved the key two lines down and the press missed it).
+    {
+        std::string block, hearing;
+        const float slotH = 2.0f * ImGui::GetTextLineHeightWithSpacing();
+        if (airbandStartPending_) {
+            ImGui::TextWrapped("%s", tr("Handing the radio back from the patch view..."));
+            ImGui::Dummy(ImVec2(0.0f, slotH - ImGui::GetTextLineHeightWithSpacing()));
+        } else if (!airbandStatusText(block, hearing)) {
+            ImGui::Dummy(ImVec2(0.0f, slotH));
+        } else {
+            ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kPhosphor));
+            ImGui::TextWrapped("%s", block.c_str());
+            ImGui::PopStyleColor();
+            census::rect("airband:status", ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y,
+                         ImGui::GetItemRectMax().x, ImGui::GetItemRectMax().y);
+            const bool talking = !hearing.empty();
+            ImGui::PushStyleColor(ImGuiCol_Text,
+                                  cascade::gui::theme::vec(talking ? cascade::gui::theme::kAmber
+                                                                   : cascade::gui::theme::kInkMuted));
+            ImGui::TextWrapped(tr("Hearing: %s"), talking ? hearing.c_str() : "-");
+            ImGui::PopStyleColor();
+            census::rect("airband:hearing", ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y,
+                         ImGui::GetItemRectMax().x, ImGui::GetItemRectMax().y);
+        }
+    }
+
     // Rows: tick, live lamp, frequency and name (click to tune the receiver
     // to that one alone), time heard.
     int toggleIdx = -1;
@@ -1060,7 +1173,12 @@ void AppWindow::drawAirbandSection() {
             }
         }
     }
-    if (!rows.empty()) { ImGui::EndChild(); }
+    if (!rows.empty()) {
+        ImGui::EndChild();
+        // Where the list is, so a test can hold the status lines above it.
+        census::rect("airband:rowlist", ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y,
+                     ImGui::GetItemRectMax().x, ImGui::GetItemRectMax().y);
+    }
     if (setAll >= 0) {
         // Every row of the group, found again BY WHAT IT IS before each
         // update: an index taken before the first update must not be trusted
@@ -1169,37 +1287,9 @@ void AppWindow::drawAirbandSection() {
             if (ImGui::Button(trId("Next block"), ImVec2(-FLT_MIN, 0.0f))) { airbandScanner_.skip(); }
         }
     }
-
-    if (airbandStartPending_) {
-        ImGui::TextWrapped("%s", tr("Handing the radio back from the patch view..."));
-    } else if (airbandListening_ && airbandBlock_ < airbandBlocks_.size()) {
-        const cc::AirbandBlock& blk = airbandBlocks_[airbandBlock_];
-        double lo = 0.0, hi = 0.0;
-        if (!blk.members.empty() && blk.members.back() < airbandPlanned_.size()) {
-            lo = airbandPlanned_[blk.members.front()].freqHz;
-            hi = airbandPlanned_[blk.members.back()].freqHz;
-        }
-        ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kPhosphor));
-        if (airbandBlocks_.size() > 1) {
-            ImGui::TextWrapped(tr("Block %zu of %zu: %zu channels, %.3f-%.3f MHz"), airbandBlock_ + 1,
-                               airbandBlocks_.size(), blk.members.size(), lo / 1e6, hi / 1e6);
-        } else {
-            ImGui::TextWrapped(tr("All %zu channels at once, %.3f-%.3f MHz"), blk.members.size(), lo / 1e6,
-                               hi / 1e6);
-        }
-        ImGui::PopStyleColor();
-        std::string hearing;
-        for (const AirbandChan& c : airbandChans_) {
-            if (!c.open) { continue; }
-            if (!hearing.empty()) { hearing += ", "; }
-            hearing += c.name;
-        }
-        if (!hearing.empty()) {
-            ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kAmber));
-            ImGui::TextWrapped(tr("Hearing: %s"), hearing.c_str());
-            ImGui::PopStyleColor();
-        }
-    }
+    // The block on the air and who is talking in it are said above the row
+    // list (0.99.71), and on the spectrum - not here, under the keys, where a
+    // long list put them below the fold.
 }
 
 }  // namespace cascade::gui

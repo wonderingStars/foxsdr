@@ -63,7 +63,7 @@ Internal project/binary name: `cascade`.
 
 ## Where it is now
 
-The current release is **0.99.70** (October 2026), in open beta and free for
+The current release is **0.99.71** (October 2026), in open beta and free for
 noncommercial use, with its decoders and instruments delivered as plugins from
 a catalogue. These are screenshots of an earlier shipping build.
 
@@ -1693,7 +1693,13 @@ bandwidth), and the Airband monitor plays the ticked AM and NFM ones.
   asked to carry - ten at 2.4 MS/s, fewer at higher sample rates, since every
   channel works on every sample the radio delivers - so a lower sample rate
   fits more channels in each block. Two ticked rows on one frequency (CTAF
-  and UNICOM often share one) are played as one channel.
+  and UNICOM often share one) are played as one channel. While it plays, what
+  is being heard is written in two places: in the section, just above the
+  list of frequencies - the block on the air, and **Hearing:** the names
+  whose squelch is open ("Hearing: -" while nobody is talking) - and, since
+  0.99.71, at the top left of the spectrum, over the channel marks, so an
+  airport whose list fills the rail (O'Hare's twenty-nine rows) need not be
+  scrolled to see who is talking.
 - **Squelch** sets the level a channel must reach to be heard; **Above the
   noise** sets it 8 dB over the quiet channels. Hover a row while listening
   to see its level. A row's lamp lights while it is heard.

@@ -262,11 +262,12 @@ set_tests_properties(test_exit_cause_app PROPERTIES TIMEOUT 600)
 # tests at about half that speed (test_airband_app: 123 s here, 261 s there), so
 # the loop's two minutes killed it on both Linux jobs of the 0.99.69 run.
 set_tests_properties(test_radio_setup_app PROPERTIES TIMEOUT 600)
-# The airband test starts the application twenty-nine times (a layout run and a
-# scripted run per scenario: lookup, listen, hand-back, the spectrum, the typed
-# list, presets). Six runs took 68 s on the x64 runner and 101 s on arm64, so
-# twenty-nine will not fit the loop's two minutes there (0.99.66: both Linux jobs
-# timed out at 120 s). On this desktop it is 80 s.
+# The airband test starts the application thirty-one times (a layout run and a
+# scripted run per scenario: lookup, O'Hare's list listened to (0.99.71), listen,
+# hand-back, the spectrum, the typed list, presets). Six runs took 68 s on the
+# x64 runner and 101 s on arm64, so twenty-nine would not fit the loop's two
+# minutes there (0.99.66: both Linux jobs timed out at 120 s). On this desktop
+# it is 80 s.
 set_tests_properties(test_airband_app PROPERTIES TIMEOUT 900)
 
 add_test(NAME app_smoke COMMAND cascade --frames 3)

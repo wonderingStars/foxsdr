@@ -1992,6 +1992,12 @@ private:
     // 0.99.66: the channels the AIRBAND monitor is playing, as shaded marks on
     // the spectrum (defined in app_window_airband.cpp, which has the why).
     void drawAirbandMarkers(float x0, float y0, float width, float height);
+    // 0.99.71: what the monitor is hearing, lettered under the spectrum's
+    // header - the rail's two status lines, on the picture the listener is
+    // watching (a tester with O'Hare's twenty-nine rows had to scroll the
+    // rail to its foot to read them). `yBottom` is the panel's lower edge,
+    // for the clip. Defined in app_window_airband.cpp.
+    void drawAirbandCaption(float x0, float y0, float width, float yBottom);
 
     // --- Frequency markers on the waterfall (a user's request, 2026-09-30) ----
     // Right-click a waterfall - the receiver's or a patch Display part's - to
@@ -5435,6 +5441,11 @@ private:
     // The ticked rows as channels, one per frequency and mode; `names`, when
     // given, gets the row naming each.
     std::vector<cascade::core::MonitorChannel> airbandWanted(std::vector<std::string>* names = nullptr) const;
+    // 0.99.71: the two status lines the rail's section and the spectrum's
+    // caption share - the block on the air, and the names of the channels
+    // whose squelch is open. False when the monitor is not on a block;
+    // `hearing` is empty while every squelch is shut.
+    bool airbandStatusText(std::string& block, std::string& hearing) const;
 
     struct AirbandChan {
         double freqHz = 0.0;

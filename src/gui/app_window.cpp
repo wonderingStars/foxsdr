@@ -11506,6 +11506,13 @@ void AppWindow::drawCenterPanels() {
         drawList->AddLine(ImVec2(x, specPos.y), ImVec2(x, specPos.y + spectrumHeight),
                           kTickGridColor);
     }
+    // What the AIRBAND monitor is hearing (0.99.71), lettered under the header
+    // on the row the trace-mode label uses: the rail's two status lines, on the
+    // picture the listener watches (the why is at drawAirbandCaption). After
+    // the gridlines, as the panel's topmost lettering.
+    if (airbandListening_ && airbandTuned_ && !airbandChans_.empty()) {
+        drawAirbandCaption(specPos.x, spectrum_->headerBottom(), width, specPos.y + spectrumHeight);
+    }
 
     // STARTING a drag, which is the half that needs the hover state and so
     // could not move above the panel with the continuation.
