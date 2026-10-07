@@ -256,6 +256,12 @@ set_tests_properties(test_theme_census PROPERTIES TIMEOUT 600)
 # report and a session start are stamped in whole seconds. 78 s on this desktop; the
 # loop's two minutes is not enough on a loaded runner. Windows only (it SKIPs elsewhere).
 set_tests_properties(test_exit_cause_app PROPERTIES TIMEOUT 600)
+# The radio-setup test starts the real application fifteen times (one per
+# synthetic machine, the persisted tick, the key, CHECK AGAIN, and the real bus).
+# 71 s on this desktop; the GitHub Linux runners run the application-launching
+# tests at about half that speed (test_airband_app: 123 s here, 261 s there), so
+# the loop's two minutes killed it on both Linux jobs of the 0.99.69 run.
+set_tests_properties(test_radio_setup_app PROPERTIES TIMEOUT 600)
 # The airband test starts the application twenty-nine times (a layout run and a
 # scripted run per scenario: lookup, listen, hand-back, the spectrum, the typed
 # list, presets). Six runs took 68 s on the x64 runner and 101 s on arm64, so

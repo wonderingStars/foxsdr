@@ -449,7 +449,10 @@ jobs:
         shell: pwsh
         run: |
           foreach ($pass in 1, 2) {
-            cmake --build build --config Release --target cascade -- -m:4
+            # `-m` alone: PowerShell hands a native command `-m:4` as `-m:` and `4`,
+            # and MSBuild answers MSB1031 "Specify the maximum number of CPUs" (the
+            # first run, 37615786440). Without a count MSBuild uses every core.
+            cmake --build build --config Release --target cascade -- -m
             if ($LASTEXITCODE -ne 0) { throw "build pass $pass failed" }
             "pass ${pass}: $((Get-FileHash build\Release\cascade.exe -Algorithm SHA256).Hash)"
           }

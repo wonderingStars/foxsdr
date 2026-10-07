@@ -287,8 +287,18 @@ std::string envOr(const char* name, const char* fallback) {
 // process with status 1 before the SIGSEGV the parent is waiting for happens
 // (core/ubsan_exempt.hpp). Inlined into fakeHelper it would take that function's
 // instrumentation, so it is kept apart.
+//
+// THE NULL IS READ AT RUN TIME, from a volatile that nothing can fold. Written as
+// `volatile int* p = nullptr; *p = 1;` in a function of its own, GCC's release
+// build of 0.99.69 (CI run 37615786440, x64 and arm64 alike) emitted no fault
+// at all: 0 of 200 children died where every one must. Inline in fakeHelper, and
+// in the crash handler's raiseTestFault, the same two lines have always faulted;
+// a pointer the optimiser can see is null in a leaf function is a path it may
+// treat as unreachable. A pointer it must load first is one it has to store
+// through, and the store at address 0 is the SIGSEGV the parent waits for.
 CASCADE_UBSAN_EXEMPT __attribute__((noinline)) void storeThroughNull() {
-    volatile int* p = nullptr;
+    static volatile std::uintptr_t zero = 0;
+    volatile int* p = reinterpret_cast<volatile int*>(zero);
     *p = 1;
 }
 #endif

@@ -454,6 +454,9 @@ void testTheRealBusIsProbed() {
 }  // namespace
 
 int main() {
+    // Unbuffered, so a run that ctest kills on its time limit still shows which
+    // case it had reached: the 0.99.69 Linux timeout printed nothing at all.
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
     std::printf("test_radio_setup_app\n");
     g_dir = fs::temp_directory_path() / ("cascade-radio-setup-" + std::to_string(pid()));
     std::error_code ec;
