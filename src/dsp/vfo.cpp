@@ -23,6 +23,10 @@ constexpr std::size_t kChunk = 8192;
 // absurd decimations. windowedSincLowpass requires an odd length (symmetric
 // peak, integer group delay); both clamp bounds are odd so the OR cannot
 // exceed the cap.
+//
+// transNorm is positive and finite for every bandwidth Vfo::clampBandwidth lets
+// through (at least 0.05 / decimation); a NaN reaching the cast below is
+// undefined behaviour, which is why clampBandwidth must not pass one on.
 std::size_t tapsForTransition(double transNorm) {
     std::size_t n = static_cast<std::size_t>(92.0 / (22.0 * transNorm)) + 1;
     n = std::clamp<std::size_t>(n, 11, 16383);
@@ -112,7 +116,14 @@ double Vfo::clampBandwidth(double bw) const {
     // transition band on each side before the channel Nyquist, which a finite
     // filter needs to actually attenuate the aliases. Lower bound keeps the
     // windowed-sinc cutoff strictly positive (design precondition).
-    return std::clamp(bw, 0.01 * channelRate, 0.9 * channelRate);
+    //
+    // NOT std::clamp: it returns a NaN unchanged (every comparison with NaN is
+    // false, so neither bound applies), and a NaN bandwidth designs NaN taps
+    // that turn the whole channel into NaN until the next redesign. A request
+    // that is not a number is the narrowest bandwidth, as -infinity already is.
+    const double lo = 0.01 * channelRate;
+    if (!(bw > lo)) { return lo; }
+    return std::min(bw, 0.9 * channelRate);
 }
 
 // WHY STAGES, AND WHY ONLY ABOVE 4 MS/s.

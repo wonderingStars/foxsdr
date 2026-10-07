@@ -1,16 +1,20 @@
 // The console's own way of ending a program, turned into the window's close.
 //
-// cascade.exe is a console-subsystem program (CMakeLists.txt: add_executable
-// without WIN32, so that the tool modes print to the terminal that ran them),
-// which means a Start Menu launch brings a console window of its own - a black
-// window, or a Windows Terminal tab, titled cascade.exe - beside the real one
-// (diag_log.hpp, stderrIsWatchedConsole). A console delivers three events to the
+// Until 0.99.69 cascade.exe was a console-subsystem program (so that the tool modes
+// print to the terminal that ran them), which meant a Start Menu launch brought a
+// console window of its own - a black window, or a Windows Terminal tab, titled
+// cascade.exe - beside the real one (diag_log.hpp, stderrIsWatchedConsole). It is a
+// windows-subsystem program now and a Start Menu launch has no console at all
+// (console_owner.hpp), but a session started from a terminal still borrows the
+// terminal's console, and the three events below are delivered to it just the same.
+// A console delivers three events to the
 // programs on it: Ctrl+C, Ctrl+Break, and its window being closed. A program that
 // has installed no handler gets kernel32's default one, which answers each with
 // ExitProcess(STATUS_CONTROL_C_EXIT): the process is gone at once, mid-frame, with
 // nothing saved and the radio left open, and the sentinel files an ending from
 // outside. That is the 0.99.66 field report of 2026-10-06 (code 0xC000013A, "window
-// was drawing - Ctrl+C or a console close"): someone closed the console window.
+// was drawing - Ctrl+C or a console close"): someone closed the console window
+// the program had then.
 //
 // This handler answers the three events by asking the frame loop to end, which is
 // what the window's own close button does, so the ordinary shutdown runs: settings

@@ -182,11 +182,11 @@ int main() {
         CHECK(actual == mandatory);
 
         // The full inventory PRIVACY.md's table names - the seven mandatory
-        // fields plus the one optional `diagnostics` - whether or not THIS
-        // particular payload attached it.
+        // fields plus the two optional ones, `diagnostics` and (0.99.69)
+        // `attachments` - whether or not THIS particular payload carried them.
         std::set<std::string> everyField = mandatory;
         for (const std::string& f : problemReportOptionalFieldNames()) { everyField.insert(f); }
-        CHECK(everyField.size() == 8);
+        CHECK(everyField.size() == 9);
         const std::set<std::string> documented = documentedProblemReportFields();
         CHECK(!documented.empty());
         CHECK(documented == everyField);
@@ -216,8 +216,63 @@ int main() {
         std::set<std::string> actual;
         for (auto it = j1.begin(); it != j1.end(); ++it) { actual.insert(it.key()); }
         std::set<std::string> full(problemReportFieldNames().begin(), problemReportFieldNames().end());
-        for (const std::string& f : problemReportOptionalFieldNames()) { full.insert(f); }
+        full.insert("diagnostics");  // the optional field this payload carries; not `attachments`
         CHECK(actual == full);
+        CHECK(!j1.contains("attachments"));
+    }
+
+    // --- THE OPTIONAL NINTH FIELD (0.99.69): present only when a report was
+    //     recognised in the message; an older client's body is unchanged ------
+    {
+        // No attachment: not there, not an empty array, and the body is exactly
+        // what a build before 0.99.69 wrote for the same payload.
+        const ProblemReportPayload plain = samplePayload("bug");
+        CHECK(plain.attachments.empty());
+        const std::string plainJson = problemReportJson(plain);
+        CHECK(plainJson.find("attachments") == std::string::npos);
+        CHECK(plainJson ==
+              "{\"arch\":\"x64\",\"contact\":\"\",\"kind\":\"bug\",\"platform\":\"windows\","
+              "\"schema\":1,\"text\":\"The waterfall freezes when I change the sample rate\","
+              "\"version\":\"0.99.20-test\"}");
+
+        ProblemReportPayload p = samplePayload("bug");
+        PastedReport a;
+        a.reportClass = "sentinel:outside";
+        a.version = "0.99.66";
+        a.text = "kind: crash\nreason: sentinel: ended from outside, window was drawing\n";
+        p.attachments.push_back(a);
+        const nlohmann::json j = parseOrEmpty(problemReportJson(p));
+        CHECK(j.contains("attachments") && j["attachments"].is_array() && j["attachments"].size() == 1);
+        if (j.contains("attachments") && j["attachments"].is_array() && j["attachments"].size() == 1) {
+            const nlohmann::json& e = j["attachments"][0];
+            std::set<std::string> keys;
+            for (auto it = e.begin(); it != e.end(); ++it) { keys.insert(it.key()); }
+            const std::set<std::string> want(problemReportAttachmentFieldNames().begin(),
+                                             problemReportAttachmentFieldNames().end());
+            CHECK(want.size() == 3);
+            CHECK(keys == want);
+            CHECK(e.value("class", std::string()) == "sentinel:outside");
+            CHECK(e.value("version", std::string()) == "0.99.66");
+            CHECK(e.value("text", std::string()) == a.text);
+        }
+        // With both optional fields, every one of the nine keys is there.
+        p.diagnostics = "FoxSDR diagnostics bundle\n--- log ---\nx\n";
+        const nlohmann::json both = parseOrEmpty(problemReportJson(p));
+        std::set<std::string> actual;
+        for (auto it = both.begin(); it != both.end(); ++it) { actual.insert(it.key()); }
+        std::set<std::string> everyField(problemReportFieldNames().begin(), problemReportFieldNames().end());
+        for (const std::string& f : problemReportOptionalFieldNames()) { everyField.insert(f); }
+        CHECK(actual == everyField);
+
+        // PRIVACY.md's `attachments` row names the three keys of an element.
+        std::ifstream in(fs::path(CASCADE_SOURCE_DIR) / "PRIVACY.md", std::ios::binary);
+        const std::string doc((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        const std::size_t row = doc.find("| `attachments` |");
+        CHECK(row != std::string::npos);
+        const std::string rowText = row == std::string::npos ? std::string() : doc.substr(row, doc.find('\n', row) - row);
+        for (const std::string& f : problemReportAttachmentFieldNames()) {
+            CHECK(rowText.find("`" + f + "`") != std::string::npos);
+        }
     }
 
     // --- THE CHECKBOX'S OWN DEFAULT: ticked for a bug, not for a dislike ----
@@ -473,6 +528,75 @@ int main() {
         }
         CHECK(st == FeatureRequestState::Sent);
         CHECK(falseFailureFrames == 0);
+        srv.stop();
+    }
+    {
+        // THE SAME FALLBACK FOR THE NINTH FIELD (0.99.69). A site that knows
+        // `diagnostics` but not `attachments` refuses a body carrying the
+        // attachment; the retry carries the seven mandatory fields only, and
+        // says nothing about the log when no log was attached.
+        StubServer srv("/api/problem-report");
+        CHECK(srv.start(StubServer::Mode::RejectAttachments));
+        cascade::core::ProblemReportSendFlow flow;
+        ProblemReportPayload p = samplePayload("bug");
+        PastedReport a;
+        a.reportClass = "crash";
+        a.version = "0.99.66";
+        a.text = "kind: crash\nsignature: 0123456789ABCDEF\n--- context ---\nversion: 0.99.66\n";
+        p.attachments.push_back(a);
+        const std::uint64_t t0 = 4700;
+        CHECK(flow.send(srv.url(), p, t0));
+        CHECK(waitForFlowTerminal(flow, t0) == FeatureRequestState::Sent);
+        CHECK(flow.lastStatus() == 200);
+        CHECK(!flow.diagnosticsDropped());  // no log was attached, so none was lost
+        CHECK(srv.connections() == 2);
+        const std::vector<std::string> bodies = srv.bodies();
+        CHECK(bodies.size() == 2);
+        CHECK(at(bodies, 0).find("\"attachments\"") != std::string::npos);
+        CHECK(at(bodies, 1).find("\"attachments\"") == std::string::npos);
+        CHECK(at(bodies, 1).find("\"text\"") != std::string::npos);
+        srv.stop();
+    }
+    {
+        // With the log as well, the retry drops both and the page is told the log
+        // was dropped.
+        StubServer srv("/api/problem-report");
+        CHECK(srv.start(StubServer::Mode::RejectAttachments));
+        cascade::core::ProblemReportSendFlow flow;
+        ProblemReportPayload p = samplePayload("bug");
+        p.diagnostics = "FoxSDR diagnostics bundle\ngenerated: x\n--- log ---\nline\n";
+        PastedReport a;
+        a.reportClass = "hang";
+        a.version = "0.99.66";
+        a.text = "kind: hang\n";
+        p.attachments.push_back(a);
+        const std::uint64_t t0 = 4800;
+        CHECK(flow.send(srv.url(), p, t0));
+        CHECK(waitForFlowTerminal(flow, t0) == FeatureRequestState::Sent);
+        CHECK(flow.diagnosticsDropped());
+        CHECK(srv.connections() == 2);
+        const std::vector<std::string> bodies = srv.bodies();
+        CHECK(at(bodies, 1).find("\"attachments\"") == std::string::npos);
+        CHECK(at(bodies, 1).find("\"diagnostics\"") == std::string::npos);
+        srv.stop();
+    }
+    {
+        // A site that knows the field takes it first time: one request, nothing dropped.
+        StubServer srv("/api/problem-report");
+        CHECK(srv.start(StubServer::Mode::Accept200));
+        cascade::core::ProblemReportSendFlow flow;
+        ProblemReportPayload p = samplePayload("bug");
+        PastedReport a;
+        a.reportClass = "stall";
+        a.version = "0.99.66";
+        a.text = "kind: stall\n";
+        p.attachments.push_back(a);
+        const std::uint64_t t0 = 4900;
+        CHECK(flow.send(srv.url(), p, t0));
+        CHECK(waitForFlowTerminal(flow, t0) == FeatureRequestState::Sent);
+        CHECK(srv.connections() == 1);
+        CHECK(at(srv.bodies(), 0).find("\"attachments\"") != std::string::npos);
+        CHECK(!flow.diagnosticsDropped());
         srv.stop();
     }
     {

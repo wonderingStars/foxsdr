@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/diag_history.hpp"
 
+#include "core/foreign_modules.hpp"
+
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
@@ -10,6 +12,9 @@
 #include <iterator>
 #include <thread>
 #include <utility>
+
+#include "core/i18n.hpp"
+#include "core/sentinel.hpp"
 
 namespace cascade::core {
 
@@ -339,6 +344,11 @@ SessionLogTail readNewestSessionLogTail(const std::string& logDir, std::size_t m
     out.sessionLines = all.size() - from;
     const std::size_t keep = std::min(maxLines, out.sessionLines);
     out.lines.assign(all.end() - static_cast<std::ptrdiff_t>(keep), all.end());
+    // The session's lines that name the other software's DLLs, from the whole session and
+    // not only its tail (see SessionLogTail::moduleLines).
+    for (std::size_t i = from; i < all.size(); ++i) {
+        if (isForeignModulesLogLine(all[i])) { out.moduleLines.push_back(all[i]); }
+    }
     return out;
 }
 
@@ -389,6 +399,7 @@ ReportListing listRecentReports(const std::string& crashDir, std::time_t now,
 
     for (const Found& f : found) {
         ReportSummary r;
+        r.writtenEpoch = f.epoch;
         r.ageSec = (f.epoch > 0 && static_cast<std::int64_t>(now) >= f.epoch)
                        ? static_cast<std::int64_t>(now) - f.epoch
                        : -1;
@@ -416,6 +427,25 @@ std::string reportSummaryLine(const ReportSummary& r) {
     s += ", signature " + (r.signature.empty() ? std::string("none") : r.signature);
     s += ", upload " + (r.upload.empty() ? std::string("none") : r.upload);
     return s;
+}
+
+std::string localOnlyReason(const ReportSummary& r) {
+    if (r.upload != "local-only") { return std::string(); }
+    // The same two tests, in the same order, as sweepCrashDir's: a stall first, then a
+    // crash-kind report with one of the sentinel's two kept-here sentences.
+    if (r.kind == "stall") {
+        return FOX_TR_NOOP(
+            "A display-driver presentation stall: the graphics stack was waiting for a "
+            "display, which is not a fault in FoxSDR, so this report stays on this machine "
+            "and is not sent.");
+    }
+    if (r.kind == "crash" && sentinelReasonIsLocalOnly(r.reason)) {
+        return FOX_TR_NOOP(
+            "FoxSDR was ended from outside (Task Manager, taskkill, a log-off or a shutdown) "
+            "while it was working normally, which is not a fault in FoxSDR, so this report "
+            "stays on this machine and is not sent.");
+    }
+    return FOX_TR_NOOP("This kind of report is never sent, so it stays on this machine.");
 }
 
 DiagHistory readDiagHistory(const std::string& logDir, const std::string& crashDir,

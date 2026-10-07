@@ -11,11 +11,19 @@
 #include <complex>
 #include <cstddef>
 #include <cstdint>
+#include <mutex>
 
 #include "dsp/nco.hpp"
 
 namespace cascade::source {
 
+// THREADS. Every member function is safe against every other from any thread:
+// the configuration calls and generate() take one mutex. Pipeline::sigGen() is
+// documented "configure tones before/while running" and the source thread calls
+// generate() on this object, so a caller retuning a slot is, by design, on a
+// different thread from the one reading it; that was unsynchronised until 0.99.69
+// (ThreadSanitizer found it). The lock is held for one generate() call - a few
+// thousand samples - and uncontended on every path the application takes.
 class SigGen {
 public:
     explicit SigGen(double sampleRateHz);
@@ -48,6 +56,8 @@ private:
     };
 
     double sampleRateHz_;
+    // Guards tones_, noiseSigma_ and rng_ (sampleRateHz_ never changes).
+    std::mutex mutex_;
     std::array<Tone, 4> tones_{};
     float noiseSigma_ = 0.0f;  // per-component (I or Q) std dev; 0 = disabled
     // Fixed seed, not a random device: the project testing protocol bans

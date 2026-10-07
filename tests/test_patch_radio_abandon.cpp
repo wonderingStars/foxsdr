@@ -127,10 +127,16 @@ public:
         return cv_.wait_for(lk, std::chrono::milliseconds(ms), [&] { return wedged_; });
     }
     void release() {
-        {
-            std::lock_guard<std::mutex> lk(m_);
-            released_ = true;
-        }
+        // NOTIFIED WITH THE LOCK STILL HELD. The thread this releases is an abandoned
+        // reader whose owner then destroys this source, condition variable included;
+        // notified after the unlock, the broadcast could still be inside
+        // pthread_cond_broadcast while that thread woke, finished and ran
+        // pthread_cond_destroy on the same object - the race ThreadSanitizer reported
+        // in the first Linux run (37355910809, ~WedgingSource). Held, the woken thread
+        // cannot return from its wait, let alone destroy anything, until this call has
+        // left the broadcast and the mutex.
+        std::lock_guard<std::mutex> lk(m_);
+        released_ = true;
         cv_.notify_all();
     }
     int stopCalls() const { return stopCalls_.load(std::memory_order_relaxed); }

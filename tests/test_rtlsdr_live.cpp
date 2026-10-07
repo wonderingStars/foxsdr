@@ -17,9 +17,11 @@
 // machine, not a defect, and it is named as such.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <complex>
+#include <cstddef>
 #include <cstdio>
 #include <string>
 #include <thread>
@@ -27,6 +29,7 @@
 
 #include "core/diag_log.hpp"
 #include "source/rtlsdr_source.hpp"
+#include "source/sample_pattern.hpp"
 #include "test_check.hpp"
 #include "usb/usb_device.hpp"
 
@@ -46,6 +49,10 @@ constexpr double kStreamSeconds = 5.0;
 // generous for a USB device measured with a wall clock over five seconds and
 // tight enough that a stream running at the wrong rate cannot pass.
 constexpr double kRateTolerance = 0.02;
+// The first samples of a stream are kept, contiguous, for the fixed-pattern
+// check below: enough for eight repeats of the longest period looked for.
+constexpr std::size_t kPatternSamples = 32768;
+constexpr std::size_t kMaxPatternPeriod = 4096;
 
 struct StreamResult {
     std::size_t samples = 0;
@@ -53,6 +60,7 @@ struct StreamResult {
     double meanMag = 0.0;
     double peakMag = 0.0;
     bool faulted = false;
+    std::vector<std::complex<float>> head;  // the first kPatternSamples, in order
 };
 
 // Reads for `seconds` and reports what came back. Deliberately does NOT sleep
@@ -70,6 +78,10 @@ StreamResult streamFor(RtlSdrSource& src, double seconds) {
             const double m = std::abs(buf[i]);
             sum += m;
             if (m > r.peakMag) { r.peakMag = m; }
+        }
+        if (r.head.size() < kPatternSamples) {
+            const std::size_t take = std::min(got, kPatternSamples - r.head.size());
+            r.head.insert(r.head.end(), buf.begin(), buf.begin() + static_cast<std::ptrdiff_t>(take));
         }
         r.samples += got;
         if (src.faulted()) {
@@ -160,6 +172,39 @@ bool oneCycle(const std::string& args, int cycle) {
     CHECK(a.meanMag > 0.001);
     CHECK(a.meanMag < 0.95);
     CHECK(a.peakMag > 0.0);
+
+    // NOT A FIXED PATTERN. On 2026-10-06 this dongle stopped receiving and
+    // delivered the same 1880 samples over and over at every frequency, and
+    // every check above passed on it for a day: the count was exact, the
+    // level was plausible, the stream health was perfect. A real stream never
+    // matches itself bit for bit at any lag (source/sample_pattern.hpp); one
+    // that does is a digital pattern, and the failure must say so and say what
+    // the driver's own lock check made of the tuner, so the cause is named
+    // instead of the symptom.
+    {
+        CHECK(a.head.size() >= 2 * kMaxPatternPeriod);
+        const std::size_t period =
+            cascade::source::exactRepeatPeriod(a.head.data(), a.head.size(), kMaxPatternPeriod);
+        if (period != 0) {
+            std::printf("  cycle %d: the first %zu samples REPEAT EXACTLY every %zu samples -\n"
+                        "  a fixed digital pattern, not a radio signal. The tuner or converter is\n"
+                        "  not delivering RF; unplug the dongle, plug it back in and run again.\n",
+                        cycle, a.head.size(), period);
+            bool saidPll = false;
+            for (const std::string& line : cascade::core::DiagLog::instance().ringSnapshot()) {
+                if (line.find("PLL") != std::string::npos) {
+                    std::printf("  cycle %d: the driver's lock check: %s\n", cycle, line.c_str());
+                    saidPll = true;
+                }
+            }
+            if (!saidPll) {
+                std::printf("  cycle %d: the driver's lock check reported the tuner locked on "
+                            "every tune.\n",
+                            cycle);
+            }
+        }
+        CHECK(period == 0);
+    }
 
     // THE RATE CHANGE ON A LIVE STREAM, which is where the Soapy path used to
     // kill the process. 1.0 MS/s is not one of the standard rates, so it is

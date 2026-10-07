@@ -6,7 +6,7 @@
 // the optional `diagnostics` field 2026-09-28):
 //
 //   POST https://foxsdr.com/api/problem-report   Content-Type: application/json
-//   { schema:1, kind, text, contact, version, platform, arch, diagnostics? }
+//   { schema:1, kind, text, contact, version, platform, arch, diagnostics?, attachments? }
 //   kind is "bug" or "dislike" and nothing else
 //   diagnostics, when present, is the same text "Copy diagnostics" copies,
 //     scrubbed and capped at kProblemReportDiagnosticsMaxBytes bytes; ABSENT
@@ -14,6 +14,21 @@
 //   200 {"ok":true}
 //   400 {"ok":false,"error":"<sentence>"}   405 | 413 | 415
 //   429 {"ok":false,"error":"<sentence>"}, with a Retry-After header
+//
+// A NINTH FIELD, `attachments` (0.99.69, site 2.67.0), OPTIONAL like `diagnostics`:
+//   attachments: [ { class, version, text } ]
+// present only when the text the person typed or pasted CONTAINS a crash, freeze or
+// sentinel report (core/pasted_report.hpp recognises one), at most one element:
+//   class    one of pastedReportClassIds() - "crash", "hang", "stall" or
+//            "sentinel:crash|frozen|startup|outside|session"
+//   version  the `version:` line of the report's own context block (the build that
+//            wrote it), "" when it names none
+//   text     the report, from its `kind:` line, LF line endings, at most
+//            kPastedReportMaxBytes
+// It adds NOTHING the person is not already sending - `text` above carries the same
+// words, unchanged - and changes only how the site files them. ABSENT, never an empty
+// array, when nothing was recognised, so a report without one is byte for byte what
+// an older build sent.
 //
 // SEVEN FIELDS ALWAYS, AN EIGHTH SOMETIMES: the feature request's six
 // (feature_request.hpp) plus the kind the person chose, exactly as before -
@@ -34,16 +49,18 @@
 // least its header).
 //
 // AN OLDER SITE (OR THIS ONE, THE MOMENT BEFORE ITS OWN CHANGE LANDS) DOES
-// NOT KNOW THIS FIELD. problems.go decodes with DisallowUnknownFields, so an
-// eighth key it does not expect fails the WHOLE decode with HTTP 400 and the
-// generic "that did not arrive as valid JSON" - indistinguishable, on
+// NOT KNOW THESE FIELDS. problems.go decodes with DisallowUnknownFields, so an
+// eighth or ninth key it does not expect fails the WHOLE decode with HTTP 400 and
+// the generic "that did not arrive as valid JSON" - indistinguishable, on
 // purpose, from genuinely malformed JSON. ProblemReportSendFlow below is
 // exactly this fallback: a report that fails with 400 while it carried
-// `diagnostics` is retried once, immediately, with the field left out, and
-// diagnosticsDropped() tells the page to say so plainly. Every OTHER 400 (a
-// real validation sentence - the text too short, an unknown kind) fails the
-// retry the same way it failed the first attempt, so the person still sees
-// the true reason.
+// `diagnostics` or `attachments` is retried once, immediately, with BOTH left
+// out (an older site may know neither), and diagnosticsDropped() tells the page
+// to say so plainly when the log was one of them. Nothing is lost with the
+// attachments: `text` carries the same words. Every OTHER 400 (a real
+// validation sentence - the text too short, an unknown kind) fails the retry the
+// same way it failed the first attempt, so the person still sees the true
+// reason.
 //
 // WHY THIS FILE IS SMALL. Everything a problem report shares with a feature
 // request is REUSED, not copied:
@@ -74,6 +91,7 @@
 #include <vector>
 
 #include "core/feature_request.hpp"
+#include "core/pasted_report.hpp"
 
 namespace cascade::core {
 
@@ -102,6 +120,9 @@ struct ProblemReportPayload {
     // file header). problemReportJson() omits the field entirely when this
     // is empty, rather than sending an empty string.
     std::string diagnostics;
+    // The report recognised in `text` (detectPastedReport), or empty - and then
+    // problemReportJson() omits the `attachments` field entirely.
+    std::vector<PastedReport> attachments;
 };
 
 // True for exactly "bug" and "dislike" - case-sensitive, because the server
@@ -118,15 +139,20 @@ std::string problemReportJson(const ProblemReportPayload& p);
 // problemReportJson() actually emits and with PRIVACY.md's own table.
 const std::vector<std::string>& problemReportFieldNames();
 
-// THE ONE OPTIONAL FIELD BEYOND THE SEVEN ABOVE - {"diagnostics"}, present
-// only when a report is sent with it attached. Kept separate from
+// THE OPTIONAL FIELDS BEYOND THE SEVEN ABOVE - {"diagnostics", "attachments"},
+// each present only when a report is sent with it. Kept separate from
 // problemReportFieldNames() rather than folded into it because every field
-// in THAT list is always in the JSON, even when empty (`contact`), and
-// `diagnostics` is the one field that is either present with real content or
-// not there at all. PRIVACY.md's table carries this field too, and
-// tests/test_problem_report.cpp checks both: the seven alone when a payload
-// carries no diagnostics, the seven plus this one when it does.
+// in THAT list is always in the JSON, even when empty (`contact`), and these
+// are fields that are either present with real content or not there at all.
+// PRIVACY.md's table carries them too, and tests/test_problem_report.cpp
+// checks both: the seven alone when a payload carries neither, the seven plus
+// the ones it does carry otherwise.
 const std::vector<std::string>& problemReportOptionalFieldNames();
+
+// What one element of `attachments` is made of: {"class", "version", "text"}.
+// PRIVACY.md documents them, and tests/test_pasted_report.cpp compares the list
+// with what problemReportJson() emits for a recognised report.
+const std::vector<std::string>& problemReportAttachmentFieldNames();
 
 // Empty when the kind is one of the two; otherwise the sentence the page
 // shows beside its disabled SEND key. The page starts with NEITHER chosen, so
@@ -227,14 +253,15 @@ inline bool problemReportDiagCacheStale(bool cacheValid, std::uint64_t cachedLin
 // The older-site fallback
 // ---------------------------------------------------------------------------
 
-// True when a report that carried `diagnostics` failed with exactly the
-// failure an older site (or this one, before its own `diagnostics` change
-// lands) gives an unknown JSON field - HTTP 400 - and a retry without the
-// field is worth trying. False whenever `sentDiagnostics` is false (nothing
-// to drop) or the status was anything else (a real validation sentence, a
-// 429, a network failure): none of those are fixed by leaving the log out,
-// and retrying them would only spend the sender's cooldown for nothing.
-bool problemReportShouldRetryWithoutDiagnostics(bool sentDiagnostics, int httpStatus);
+// True when a report that carried an OPTIONAL field (`diagnostics`, or since
+// 0.99.69 `attachments`) failed with exactly the failure an older site (or this
+// one, before its own change lands) gives an unknown JSON field - HTTP 400 - and
+// a retry without the field is worth trying. False whenever `sentOptional` is
+// false (nothing to drop) or the status was anything else (a real validation
+// sentence, a 429, a network failure): none of those are fixed by leaving the
+// field out, and retrying them would only spend the sender's cooldown for
+// nothing. (The name is from when `diagnostics` was the only optional field.)
+bool problemReportShouldRetryWithoutDiagnostics(bool sentOptional, int httpStatus);
 
 // WHERE REPORTS GO. https://foxsdr.com/api/problem-report, overridable by the
 // env var FOXSDR_PROBLEM_URL - read fresh on every call through both the
@@ -292,19 +319,21 @@ public:
     int lastStatus() const;
     bool busy() const;
 
-    // True from the moment the fallback retries a send onward, whatever that
-    // retry's own outcome - cleared again by the next send(). The page reads
-    // this once the state is terminal to decide whether to say the log could
-    // not be sent, regardless of whether the report itself ended up Sent or
-    // Failed.
+    // True from the moment the fallback retries a send that carried the
+    // diagnostics log onward, whatever that retry's own outcome - cleared again by
+    // the next send(). A retry that dropped only an attachment does not set it:
+    // the attachment's words are in the message. The page reads this once the
+    // state is terminal to decide whether to say the log could not be sent,
+    // regardless of whether the report itself ended up Sent or Failed.
     bool diagnosticsDropped() const { return dropped_; }
 
 private:
     ProblemReportSender primary_;
     std::unique_ptr<ProblemReportSender> retry_;
     std::string endpoint_;
-    std::string retryBody_;  // the payload's JSON with `diagnostics` left out
+    std::string retryBody_;  // the payload's JSON with `diagnostics` and `attachments` left out
     bool hadDiagnostics_ = false;
+    bool hadOptional_ = false;  // diagnostics or attachments: what the fallback can drop
     bool retried_ = false;
     bool dropped_ = false;
     // The state primary_ was in as of the last poll(), so the Sending ->

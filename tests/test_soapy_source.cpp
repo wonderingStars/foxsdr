@@ -30,6 +30,7 @@
 
 #include "core/diag_log.hpp"
 #include "core/health_events.hpp"
+#include "core/leak_on_purpose.hpp"
 #include "core/telemetry.hpp"
 #include "source/soapy_enum_proc.hpp"
 
@@ -268,7 +269,13 @@ SoapySDR::KwargsList findStall(const SoapySDR::Kwargs& args) {
     return SoapySDR::KwargsList{k};
 }
 
-SoapySDR::Device* makeStall(const SoapySDR::Kwargs&) { return new StallingDevice(); }
+// A stalling device is abandoned by design (SoapySource's dead-device policy leaks
+// the handle of a radio whose driver will not answer), and these tests let its
+// parked call go afterwards, so nothing would reach it any more: marked, or
+// LeakSanitizer reports it (core/leak_on_purpose.hpp).
+SoapySDR::Device* makeStall(const SoapySDR::Kwargs&) {
+    return cascade::core::leakOnPurpose(new StallingDevice());
+}
 
 // A device that answers reads from a script: a positive count delivers that
 // many zero samples, anything else is returned to the caller as the driver's
@@ -479,7 +486,10 @@ SoapySDR::KwargsList findWedge(const SoapySDR::Kwargs& args) {
     return SoapySDR::KwargsList{k};
 }
 
-SoapySDR::Device* makeWedge(const SoapySDR::Kwargs&) { return new WedgingDevice(); }
+// Abandoned by design, like the stalling device above (core/leak_on_purpose.hpp).
+SoapySDR::Device* makeWedge(const SoapySDR::Kwargs&) {
+    return cascade::core::leakOnPurpose(new WedgingDevice());
+}
 
 // ---------------------------------------------------------------------------
 // A DRIVER THAT LISTS WHATEVER IT IS NAMED IN, which is SoapyRedPitaya's find

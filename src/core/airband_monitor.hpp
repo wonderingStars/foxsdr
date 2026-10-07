@@ -30,12 +30,18 @@
 // channel plays as AM (airband, the request above) or as NFM (marine, business
 // and public-service radio typed in by hand); the strip already has an FM
 // discriminator, so NFM is that branch behind the same channel filter and
-// squelch. WFM is NOT offered: the strip's channel rate is 24-96 kHz, wide FM
-// needs 200 kHz and a de-emphasis stage, neither of which a strip has. An FM
-// strip's audio is radians per sample, a far smaller number than a normalised
-// AM envelope, so each NFM channel is mixed at a level derived from that
-// figure (nfmMixLevel) - see tests/test_airband_monitor.cpp for the
-// measurement.
+// squelch. WFM is NOT offered: the strip's channel rate is 24-96 kHz and wide
+// FM needs 200 kHz. An FM strip's audio is radians per sample, a far smaller
+// number than a normalised AM envelope, so each NFM channel is mixed at a level
+// derived from that figure (nfmMixLevel) - see tests/test_airband_monitor.cpp
+// for the measurement.
+//
+// NFM DE-EMPHASIS (0.99.69). The discriminator's output is flat in frequency
+// for a constant deviation, so an NFM channel played straight from the strip
+// was bright and harsh beside the receiver, whose NFM has always run the 50 us
+// network. An NFM channel's strip now runs it too (kNfmDeemphasisUs, the
+// receiver's default; dsp/deemphasis.hpp is the one filter both use). An AM
+// channel's audio is an envelope and needs none, so it has none.
 //
 // planAirbandBlocks() is pure and table-tested (tests/test_airband_monitor.cpp);
 // buildMonitorSet() allocates and is GUI-thread only, like every set builder.
@@ -287,6 +293,13 @@ inline constexpr float kMonitorMixGain = 0.5f;
 // some odd bandwidth is not turned up or down without limit.
 inline constexpr double kNfmTargetPeak = 0.48;
 
+// The de-emphasis an NFM channel's strip runs, in microseconds: the receiver's
+// own default (Pipeline::deemphasisUs starts at 50), which is the standard
+// everywhere but the Americas and South Korea. A 1 kHz voice tone loses 0.4 dB
+// to it, so the level above - measured at 1 kHz - is not retuned for it; a
+// 3 kHz sibilant loses 2.8 dB, which is the point.
+inline constexpr double kNfmDeemphasisUs = 50.0;
+
 inline float nfmMixLevel(double bandwidthHz, double outRateHz) {
     if (!(outRateHz > 0.0) || !std::isfinite(outRateHz)) { return 1.0f; }
     const double bw = std::isfinite(bandwidthHz) && bandwidthHz > 0.0 ? bandwidthHz : 12500.0;
@@ -323,6 +336,8 @@ inline std::shared_ptr<patch::StripSet> buildMonitorSet(const std::vector<Monito
         ch.strip.configure(c.freqHz - centreHz, deviceRateHz, rc.decimation);
         ch.strip.setChannelFilter(c.bandwidthHz);
         ch.strip.setAmNormalise(!nfm);   // an FM strip has no carrier to divide by
+        // FM rows only: an AM envelope has no pre-emphasis to undo.
+        if (nfm) { ch.strip.setDeemphasisUs(kNfmDeemphasisUs); }
         ch.mixLevel = nfm ? nfmMixLevel(c.bandwidthHz, ch.strip.outRateHz()) : 1.0f;
         ch.squelch = std::make_unique<cascade::dsp::Squelch>(ch.strip.outRateHz());
         ch.squelchDb = squelchDb;

@@ -60,6 +60,7 @@ using cascade::core::LoadedPlugin;
 using cascade::gui::countStates;
 using cascade::gui::FittedCounts;
 using cascade::gui::FittedModule;
+using cascade::gui::fittedOrphanSentence;
 using cascade::gui::fittedState;
 using cascade::gui::FittedState;
 using cascade::gui::fittedStateSentence;
@@ -625,6 +626,46 @@ void testWindowsAgree() {
     CHECK(std::string(moduleStateWord(fedPlate)) != "NOT FED");
 }
 
+// ORPHANED FILES (0.99.69): the one line a row carries, and what it must not do.
+// The classification itself is core's and is tested on real files in
+// test_plugin_cleanup; what is pinned here is the window's half of it - the
+// host's words come through verbatim after the plugin-index sentence (they carry
+// numbers a paraphrase would lose, as the refusal sentence's do), a file that is
+// not an orphan has no such line, and the flag changes no state.
+void testOrphans() {
+    FittedModule refused = module(false, false, 0u, false);
+    refused.name.clear();
+    refused.error = "plugin reports ABI version 2, expected 3";
+
+    // Not an orphan unless the application says so: a built record, a refused one,
+    // a running one.
+    CHECK(!refused.orphaned);
+    CHECK(!module(true, false, kDecoderBit, true).orphaned);
+    CHECK(fittedOrphanSentence(refused).empty());
+    CHECK(fittedOrphanSentence(module(true, false, kDecoderBit, true)).empty());
+    LoadedPlugin lp;
+    lp.path = "/p/thing-1.0.0.dll";
+    CHECK(!makeFittedModule(lp, false, false, "", false).orphaned);
+
+    // An orphan: the plugin-store sentence, then the host's words EXACTLY.
+    refused.orphaned = true;
+    CHECK(fittedOrphanSentence(refused) ==
+          "Not installed from the plugin store and not running: plugin reports ABI version 2, "
+          "expected 3");
+    // ...and with no reason recorded, no colon and nothing invented.
+    FittedModule silent = refused;
+    silent.error.clear();
+    CHECK(fittedOrphanSentence(silent) == "Not installed from the plugin store and not running.");
+    // One line: the host's own text is not edited into several.
+    CHECK(fittedOrphanSentence(refused).find('\n') == std::string::npos);
+
+    // The flag is about REMOVAL; it is not a sixth state. A refused file stays REFUSED,
+    // and the counts do not move.
+    CHECK(fittedState(refused, true) == FittedState::Refused);
+    std::vector<FittedModule> two = {refused, module(true, false, kDecoderBit, true)};
+    CHECK(sameCounts(countStates(two, true), counts(1, 0, 0, 0, 1, 2)));
+}
+
 }  // namespace
 
 int main() {
@@ -636,5 +677,6 @@ int main() {
     testPlateAdapter();
     testRecordAdapter();
     testWindowsAgree();
+    testOrphans();
     return testSummary("test_plugins_view");
 }

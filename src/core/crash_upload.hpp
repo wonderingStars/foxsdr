@@ -158,6 +158,13 @@ struct ParsedReport {
     std::string sdrModel;
     double sampleRateHz = 0.0;
     bool deviceOpen = false;
+    // The report's `foreign-modules:` line (0.99.69): the FILE NAMES of the other
+    // software's DLLs that were loaded into the process, as core/foreign_modules.hpp
+    // writes them. Already put through normaliseForeignField when parsed, so it is a
+    // list of plain file names, or `(none)`, or EMPTY - for a report that says nothing
+    // about it (an older build's, `(not recorded)`, `(not scanned yet)`) and for any
+    // value that is not a list of plain names.
+    std::string foreignModules;
     std::vector<std::string> plugins;  // "name version", as the report writes them
 
     // The `--- process ---` block both writers add since 0.89.0. `uptimeSec`

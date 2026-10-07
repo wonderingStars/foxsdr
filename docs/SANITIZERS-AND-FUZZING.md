@@ -52,6 +52,18 @@ vendored libraries linked into them.
   process on purpose, to prove the crash handler writes its report, do run, with
   AddressSanitizer's own fault handlers switched off (otherwise it ends the process
   before the product's handler sees the fault). Memory-error checks stay on.
+- **A leak that is the design is marked where it is made, not suppressed.** When a
+  driver or the pipeline gives up on a thread that will not return, it leaks the
+  object that thread is inside on purpose; a test that lets the thread go afterwards
+  leaves that object unreachable, which LeakSanitizer reports. `leakOnPurpose()`
+  (`core/leak_on_purpose.hpp`) excludes exactly that object (and what only it
+  reaches) and is the identity everywhere LeakSanitizer is not running. `lsan.supp`
+  stays libraries-only, so a leak of the same object on an ordinary path is still found.
+- **A function whose job is the fault is exempt from UndefinedBehaviorSanitizer,
+  by name.** `CASCADE_UBSAN_EXEMPT` (`core/ubsan_exempt.hpp`) is on `raiseTestFault`
+  and on the null store of `test_soapy_enum_proc`'s helper: UBSan's null check would
+  report that store and end the child before the SIGSEGV the crash handler is being
+  tested on.
 - **Timing-sensitive tests can fail for speed alone.** An instrumented DSP thread
   can fall behind a source paced by the wall clock; the symptom is a numeric
   failure with no sanitizer report. Read the output before believing either way.
@@ -65,7 +77,11 @@ xvfb-run -a ctest --test-dir build-tsan -L tsan --output-on-failure -j2
 ```
 
 `thread` is GCC/Clang on Linux only (MSVC has no thread sanitizer: asking for it
-there is a configure error). It cannot share a process with `address`
+there is a configure error), and the CI job uses Clang 18: GCC 13's libtsan has no
+interceptor for `pthread_mutex_clocklock`, which libstdc++ calls for every
+`std::timed_mutex::try_lock_for`, so under it every unlock of such a mutex is
+reported as an unlock of an unlocked mutex and the happens-before edge of the lock
+is lost (LLVM added the interceptor in December 2023, release 18). It cannot share a process with `address`
 or `fuzzer`, so CMake refuses `address,thread` and `thread,fuzzer`; `thread,undefined`
 is allowed. Runtime options (`TSAN_OPTIONS`: stop at the first report, show both
 stacks of a lock-order inversion, a longer access history, the suppressions file)
@@ -81,28 +97,36 @@ the config/bookmark/marker savers and the disk jobs, the health ledger's writer,
 the frame timer, the watchdog, the web and CAT servers, the telemetry sender, the
 sound sink's callback thread, and the real web server over a loopback socket.
 Everything else is registered, disabled and labelled `sanitize-excluded`, like the
-ASan exclusions, so `ctest -N -L sanitize-excluded` prints it. Of those, 41 are
+ASan exclusions, so `ctest -N -L sanitize-excluded` prints it. Of those, 42 are
 excluded one by one with a reason in the file - they start the real application as
 a child process (a separate process whose reports would not reach this one's),
 fault a process on purpose, measure against the wall clock (an instrumented DSP
 thread falls behind a paced source and fails with no race report), or drive the
-whole window under a software GL context - and the other 202 start no thread and
+whole window under a software GL context - and the other 201 start no thread and
 drive no code that has one. Judge a test by what it starts, not by its name, when
 you move one.
 
 **Suppressions** are in `tools/sanitize/tsan.supp` and name third-party libraries
-only (`called_from_lib:` the sound server, Mesa, X11/Wayland), each with the
-reason. Nothing of this repository is in it and nothing may be added for it: a
-race in our code is fixed. The vendored libraries are compiled here with the
-sanitizer, so a report in them is a finding too. PortAudio's ring buffer orders
-its two threads with full memory barriers, which ThreadSanitizer does not model;
-if the first log reports it, the line to add is named in the file, with that
-report as the reason.
+only (`called_from_lib:` the sound server, PulseAudio's client library, libunwind,
+Mesa, X11/Wayland), each with the reason. Nothing of this repository is in it and
+nothing may be added for it: a race in our code is fixed. The vendored libraries are
+compiled here with the sanitizer, so a report in them is a finding too, with one
+named exception: two upstream PortAudio races (`paUtilErr_`, a scratch variable every
+thread assigns, and the unlocked first read of `parentWaiting` in
+`PaUnixThread_New`), listed by exact name with the argument that each is benign;
+patching the vendored tree instead is the open alternative. PortAudio's ring buffer
+orders its two threads with full memory barriers, which ThreadSanitizer does not
+model; if a log reports it, the line to add is named in the file, with that report
+as the reason.
 
-**The list, the suppressions and the job were written without a Linux run.** The
-first log shows which of the 70 are too slow or too noisy and which exclusions are
-worth lifting; do not read the absence of a report from a job that has never run
-as a result.
+**The first run (37355910809) failed 39 of the 70, and what it showed is not the
+whole story.** `halt_on_error` ends a test at its FIRST report, so a test that
+stopped on a library's noise has not yet shown what comes after it. 33 stopped on
+the five classes above (suppressed, or the compiler changed); five more stopped on
+races in tests and in the signal generator (fixed) and one on a timing test
+(`test_patch_audio`, now excluded). The next run is expected to show the next layer.
+Do not read the absence of a report from a test that has not yet got past its first
+one as a result.
 
 ### Shared state across threads in 0.99.64 (read, not run)
 
@@ -282,10 +306,14 @@ application, not the tests).
 `.github/workflows/sanitize.yml` (separate from `build.yml`, so it can neither slow
 nor colour the release jobs) has three jobs, in parallel on separate runners: the
 whole suite under ASan + UBSan with GCC; the thread-sanitizer selection of
-`tests/tsan.cmake` under ThreadSanitizer with GCC (`tsan`); and the fuzz targets
+`tests/tsan.cmake` under ThreadSanitizer with Clang 18 (`tsan`); and the fuzz targets
 under Clang - the corpus replayed first, then each target for a short fixed time
 (`fuzz_seconds`, default 60). Start it on a branch from the Actions tab or with
-`gh workflow run sanitize.yml --ref <branch>`. None of it has run on Linux yet; the
-first run of each job will show what needs correcting, and `tsan` the most.
+`gh workflow run sanitize.yml --ref <branch>`. It has run once (37355910809, on the
+tree of 17ffcbe, 13 commits before 0.99.68) and failed all three jobs: 22 of 313
+tests under ASan + UBSan, 39 of 70 under ThreadSanitizer, and the corpus replay of
+`channel_chain` (the "Fuzz each target" step never ran, so no target has been fuzzed
+yet). Each failure and its class is in the change that answered it; the second run
+will show what they were hiding.
 `CASCADE_ANALYZE` has no CI job: it needs MSVC, and `build.yml`'s Windows job is
 not edited by this work.

@@ -207,6 +207,10 @@ std::string TelemetryReport::toJson() const {
     j["arch"] = arch;
     j["launches"] = launches;
     j["crashes"] = crashes;
+    j["exits_died"] = exits.died;
+    j["exits_killed"] = exits.killed;
+    j["exits_ended"] = exits.ended;
+    j["exits_unknown"] = exits.unknown;
     j["stalls"] = stalls;
     // Through the vocabulary a second time: whatever this member was filled
     // with, only legal tokens leave the machine.

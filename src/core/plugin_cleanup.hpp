@@ -34,6 +34,18 @@
 // the same rules, so a queue entry can never delete a file that has since
 // become the only or the newest copy.
 //
+// ORPHANED FILES (0.99.69) are the other thing a plugin folder collects, and
+// the rules above never touch them: a module file that the plugin index does
+// not know (no install record, and not a file the catalogue publishes for this
+// platform) AND that is not running (refused at load, or turned off as another
+// copy). Nothing removes it, and nothing said so - the inventory's own note is
+// "is installed but not recorded; it is left alone", in the diagnostics log. The
+// Fitted modules window now says so on the file's row and plate and offers
+// REMOVE FILE, which deletes that one file after a confirmation. THE RULE IS IN
+// classifyPluginFiles() AND IS RE-APPLIED AT THE MOMENT OF REMOVAL
+// (removeOrphanedPlugin): a file the index knows, or that is loaded, is never an
+// orphan, whatever the window showed a moment ago.
+//
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
@@ -86,6 +98,41 @@ struct PluginCleanupResult {
 PluginCleanupResult removeSupersededPlugins(const std::string& pluginsDir,
                                             const std::vector<SupersededPlugin>& which,
                                             const PluginFileRemover& remover);
+
+// What one module file in the plugins folder is, as far as removal is
+// concerned. The file is the scan's own record of it (PluginHost::plugins()).
+struct PluginFileVerdict {
+    std::string file;      // the module's bare file name (pluginKey)
+    bool indexed = false;  // an install record names it, or the catalogue publishes it for this platform
+    bool loaded = false;   // the host has it mapped and running
+    // The host's own words for why it is not running (LoadedPlugin::error),
+    // verbatim; empty when it gave none, and for a file that is loaded.
+    std::string detail;
+
+    // NOT KNOWN TO THE INDEX AND NOT RUNNING: the only kind of file that may be
+    // offered for removal. Either flag alone protects a file.
+    bool orphaned() const { return !indexed && !loaded; }
+};
+
+// One verdict per record, in scan order. Pure: `records` is one scan's
+// PluginHost::plugins(), `manifest` the store's install records, `catalogue`
+// the catalogue as last fetched (empty when it never was: then only the
+// install records speak for the index, and a file the catalogue would have
+// named is judged on being loaded alone). A record with no file name is left out.
+std::vector<PluginFileVerdict> classifyPluginFiles(const std::vector<LoadedPlugin>& records,
+                                                   const std::vector<InstalledPlugin>& manifest,
+                                                   const std::vector<PluginCatalogEntry>& catalogue);
+
+// Deletes the ONE module file `file` if, judged now against the same inputs,
+// it is an orphan, and says why not otherwise: it is loaded, or the index knows
+// it, or the last scan found no such module. Returns whether it was deleted;
+// `error` holds the reason when not, in English like PluginRepo's own. The name
+// handed to `remover` is the scan's spelling of it, never the caller's.
+bool removeOrphanedPlugin(const std::string& pluginsDir, const std::string& file,
+                          const std::vector<LoadedPlugin>& records,
+                          const std::vector<InstalledPlugin>& manifest,
+                          const std::vector<PluginCatalogEntry>& catalogue,
+                          const PluginFileRemover& remover, std::string& error);
 
 // THE QUEUE, pending-removal.json in the plugins directory. PluginHost loads
 // only module files, so it is never mistaken for a plugin. A name the install

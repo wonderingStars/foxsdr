@@ -7,6 +7,7 @@
 #include "source/airspy_source.hpp"
 
 #include "core/diag_log.hpp"
+#include "core/leak_on_purpose.hpp"
 #include "source/hydrasdr_protocol.hpp"
 
 #include <algorithm>
@@ -962,7 +963,9 @@ void AirspySource::stopStreamingLocked() {
                                "the reader did not return; the radio is left to the operating "
                                "system and FoxSDR must be restarted to use it again");
             reader_.detach();
-            (void)dev_.release();
+            // Marked for LeakSanitizer, which a test that lets the zombie go
+            // would otherwise see as a leak (core/leak_on_purpose.hpp).
+            cascade::core::leakOnPurpose(dev_.release());
             running_.store(false, std::memory_order_relaxed);
             return;
         }

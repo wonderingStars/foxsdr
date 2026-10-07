@@ -1731,6 +1731,9 @@ int main() {
                 // Look for network USRPs (2026-09-25): a Source-section tick
                 // that calls no save of its own.
                 {"lookForNetworkUsrps", [](AppConfig& c) { c.lookForNetworkUsrps = true; }},
+                // "Don't show this again" on the RADIO SETUP page (2026-10-06):
+                // a tick on a page that calls no save of its own.
+                {"radioSetupDontShow", [](AppConfig& c) { c.radioSetupDontShow = true; }},
                 // The converters (0.99.36): set in the Source section, which
                 // calls no save of its own - a new one, and a changed LO, a
                 // changed inversion and a switch-off of an existing one.
@@ -3982,6 +3985,42 @@ int main() {
         AppConfig typed;
         CHECK(ConfigStore::load(bad, typed, err));
         CHECK(!typed.lookForNetworkUsrps);
+    }
+
+    // --- "Don't show this again" on the RADIO SETUP page (2026-10-06) ---------
+    //
+    // OFF unless the person ticked it: every config written before this build -
+    // every install that has never seen the page - must get the page. On
+    // survives a round trip, and a value of the wrong type is the default (a
+    // hand-edited "yes" must not silence a page that exists to help).
+    {
+        CHECK(!AppConfig{}.radioSetupDontShow);
+        std::string err;
+        const std::string none = p("radiosetup_absent.json");
+        CHECK(writeText(none, "{}\n"));
+        AppConfig blank = junkConfig();
+        blank.radioSetupDontShow = true;
+        CHECK(ConfigStore::load(none, blank, err));
+        CHECK(!blank.radioSetupDontShow);
+
+        AppConfig in;
+        in.radioSetupDontShow = true;
+        const std::string path = p("radiosetup_roundtrip.json");
+        CHECK(ConfigStore::save(path, in, err));
+        AppConfig out;
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.radioSetupDontShow);
+        // ...and the tick is the only thing that changed.
+        in.radioSetupDontShow = false;
+        CHECK(ConfigStore::save(path, in, err));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(!out.radioSetupDontShow);
+
+        const std::string bad = p("radiosetup_badtype.json");
+        CHECK(writeText(bad, "{\"radioSetupDontShow\": \"yes\"}\n"));
+        AppConfig typed;
+        CHECK(ConfigStore::load(bad, typed, err));
+        CHECK(!typed.radioSetupDontShow);
     }
 
     const int rc = testSummary("test_config");

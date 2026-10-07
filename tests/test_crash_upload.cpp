@@ -951,6 +951,67 @@ int main() {
         CHECK(anon.value("installId", std::string("x")).empty());
     }
 
+    // --- THE OTHER SOFTWARE'S DLLs (0.99.69): the report's `foreign-modules:` line is sent as
+    // context.foreignModules - FILE NAMES, nothing else - and only what passes the one
+    // validator. Every other value is sent as an empty string, and the key is always there.
+    {
+        auto withLine = [](const std::string& value) {
+            std::string t = crashReportText();
+            const std::size_t at = t.find("plugin: ADS-B");
+            t.insert(at, "foreign-modules: " + value + "\n");
+            return t;
+        };
+        auto sentValue = [](const ParsedReport& r) {
+            const nlohmann::json j = nlohmann::json::parse(uploadJson(r, std::string()), nullptr, false);
+            if (!j.is_object() || !j.contains("context") || !j["context"].contains("foreignModules")) {
+                return std::string("(missing)");
+            }
+            return j["context"]["foreignModules"].get<std::string>();
+        };
+
+        ParsedReport r;
+        CHECK(parseReportText(withLine("NahimicOSD.dll, RTSSHooks64.dll"), r));
+        CHECK(sentValue(r) == "NahimicOSD.dll, RTSSHooks64.dll");
+        // A report from before 0.99.69 has no such line: sent, empty.
+        ParsedReport old;
+        CHECK(parseReportText(crashReportText(), old));
+        CHECK(sentValue(old).empty());
+        // The sentences that say nothing about the modules are sent as nothing; "none" is
+        // the one that says something.
+        ParsedReport none;
+        CHECK(parseReportText(withLine("(none)"), none));
+        CHECK(sentValue(none) == "(none)");
+        for (const char* v : {"(not recorded)", "(not scanned yet)", "(not applicable)", ""}) {
+            ParsedReport q;
+            CHECK(parseReportText(withLine(v), q));
+            CHECK(sentValue(q).empty());
+        }
+        // A path, a folder, a control character in a name, an overlong name: dropped, at
+        // the parse and again where the request is built.
+        ParsedReport edited;
+        CHECK(parseReportText(
+            withLine("C:\\Users\\steve\\Overwolf\\evil.dll, good.dll, /etc/passwd, a\tb.dll, " +
+                     std::string(80, 'x') + ".dll"),
+            edited));
+        CHECK(sentValue(edited) == "good.dll");
+        // The parse alone, whatever the request builder would do after it: the parsed report
+        // already holds only what passed (ParsedReport::foreignModules).
+        CHECK(edited.foreignModules == "good.dll");
+        CHECK(r.foreignModules == "NahimicOSD.dll, RTSSHooks64.dll");
+        CHECK(old.foreignModules.empty());
+        CHECK(none.foreignModules == "(none)");
+        edited.foreignModules = "C:\\Users\\steve\\evil.dll, kept.dll";  // set after the parse
+        CHECK(sentValue(edited) == "kept.dll");
+        // The list's own "+K more" is carried.
+        ParsedReport more;
+        CHECK(parseReportText(withLine("a.dll, b.dll, +7 more"), more));
+        CHECK(sentValue(more) == "a.dll, b.dll, +7 more");
+        // And the bytes that leave the machine carry no folder of the machine's.
+        const std::string body = uploadJson(edited, std::string());
+        CHECK(body.find("Users") == std::string::npos);
+        CHECK(body.find("steve") == std::string::npos);
+    }
+
     // --- The payload is capped locally, not by making the server say 413 ---
     {
         ParsedReport r;

@@ -6,7 +6,9 @@
 #include "core/diag_report.hpp"
 
 #include "core/diag_log.hpp"
+#include "core/foreign_modules.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <cstdio>
 #include <cstring>
@@ -730,6 +732,18 @@ void setDiagContext(const DiagContext& ctx) {
     // THE PATCH PAGE'S RADIOS (0.99.62), also before the plugin list. `source`
     // above is the receiver's radio; these are the OTHER signal paths.
     block += "patch-radios: " + patchRadiosText(ctx.patchRadioKinds) + "\n";
+    // THE OTHER SOFTWARE'S DLLs (0.99.69), also before the plugin list for the same
+    // reason. Re-rendered through the one validator that the uploader and the sentinel
+    // apply too (normaliseForeignField), so a caller that is handed something odd cannot
+    // put it in a report: a list keeps only the names that are plain file names, and
+    // anything that is not a list says `(not recorded)`.
+    {
+        const std::string& v = ctx.foreignModules;
+        const std::string norm = normaliseForeignField(v);
+        const bool sentence = v == "(not scanned yet)" || v == "(not applicable)";
+        block += "foreign-modules: " +
+                 (!norm.empty() ? norm : (sentence ? v : std::string("(not recorded)"))) + "\n";
+    }
     if (ctx.plugins.empty()) {
         block += "plugin: (none)\n";
     } else {
@@ -869,7 +883,10 @@ const std::vector<std::string>& bundleFieldNames() {
         "audio-output", "volume", "audio-muted", "squelch",
         // The patch page's radios, by driver kind (0.99.62): see
         // DiagContext::patchRadioKinds.
-        "patch-radios"};
+        "patch-radios",
+        // The other software's DLLs in the process, by file name (0.99.69): see
+        // DiagContext::foreignModules.
+        "foreign-modules"};
     return names;
 }
 
@@ -1008,8 +1025,22 @@ std::string buildDiagnosticsBundle(const DiagBundleInput& in) {
             out += "newest " + std::to_string(h.reports.newest.size()) + " of " +
                    std::to_string(h.reports.total) + (h.reports.totalCapped ? "+" : "") +
                    " - when it was written, what it was, and what became of sending it\n";
+            std::vector<std::string> whyLocal;  // one sentence per distinct reason, in list order
             for (const ReportSummary& r : h.reports.newest) {
                 out += scrubUploadLine(reportSummaryLine(r));
+                out += "\n";
+                const std::string why = localOnlyReason(r);
+                if (!why.empty() && std::find(whyLocal.begin(), whyLocal.end(), why) == whyLocal.end()) {
+                    whyLocal.push_back(why);
+                }
+            }
+            // WHAT `upload local-only` MEANS (0.99.69): said once per reason, under
+            // the list, because the bare word sent a tester to the bug form to ask.
+            // The reports themselves are in the reports folder the `crash-dir` line
+            // above names.
+            for (const std::string& why : whyLocal) {
+                out += scrubUploadLine("local-only: " + why +
+                                       " The report is in the reports folder (the crash-dir line above).");
                 out += "\n";
             }
         }

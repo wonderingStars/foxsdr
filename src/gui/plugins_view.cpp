@@ -133,6 +133,16 @@ std::string fittedStateSentence(const FittedModule& m, bool receiverRunning) {
     return tr("Fitted, and not being fed. No reason was recorded for it.");
 }
 
+std::string fittedOrphanSentence(const FittedModule& m) {
+    if (!m.orphaned) { return std::string(); }
+    // THE HOST'S WORDS ARE QUOTED, never rewritten: they carry the numbers a
+    // paraphrase would lose ("expected 3, plugin reports 2"), exactly as the
+    // refusal sentence above does.
+    if (m.error.empty()) { return tr("Not installed from the plugin store and not running."); }
+    return cascade::core::formatText(tr("Not installed from the plugin store and not running: %s"),
+                                     m.error.c_str());
+}
+
 ModulePlate makeModulePlate(const FittedModule& m) {
     ModulePlate p;
 
@@ -900,8 +910,12 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck,
                 const ModulePlate rowPlate = makeModulePlate(m);
                 // A REFUSED MODULE'S LINE IS ITS REFUSAL. Nothing was read out
                 // of the file, so it has no reach to summarise, and the reason
-                // it did not load is the only thing worth the space.
-                const std::string body = (st == FittedState::Refused)
+                // it did not load is the only thing worth the space. AN ORPHAN'S
+                // (0.99.69) says first that it was not installed from the plugin store:
+                // the host's refusal follows, verbatim.
+                const std::string body = m.orphaned
+                                             ? fittedOrphanSentence(m)
+                                         : (st == FittedState::Refused)
                                              ? fittedStateSentence(m, model.receiverRunning)
                                              : moduleReachSummary(rowPlate);
                 const float h = rowHeight(body, bodyW);
@@ -1086,6 +1100,20 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck,
                 py += noteHeight(innerW, m.integrityNote.c_str()) + 8.0f;
             }
 
+            // AN ORPHANED FILE (0.99.69): said before the keys, so the key that
+            // follows is read for what it does. The one-line reason is on the
+            // row; this is the rest of it - that nothing else will ever touch the
+            // file, and what REMOVE FILE is allowed to take.
+            if (m.orphaned) {
+                static const char* kOrphan = FOX_TR_NOOP(
+                    "This file was not installed from the plugin store - it has no install "
+                    "record and the catalogue does not list it - and it is not running, so "
+                    "FoxSDR has left it where it is. REMOVE FILE deletes this one file and "
+                    "nothing else.");
+                drawNote(pdl, ImVec2(po.x, py), innerW, theme::kGold, tr(kOrphan));
+                py += noteHeight(innerW, tr(kOrphan)) + 8.0f;
+            }
+
             // ---- the actions ---------------------------------------------
             // Taller than a row key because these are the consequential ones -
             // and measured, because "consequential" is no protection against a
@@ -1111,11 +1139,17 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck,
             // downloaded and may not be able to get back, so a single mis-click
             // must not do it.
             const bool armed = (deck.confirmRemove == m.file);
+            //
+            // AN ORPHAN'S KEY IS ITS OWN (0.99.69), the same two steps: it asks
+            // the application for the guarded removal, which judges the file
+            // again before it deletes it.
             if (drawDeckKey(pdl, ImVec2(po.x + half + 8.0f, py), ImVec2(po.x + innerW, py + keyH),
-                            armed ? tr("CONFIRM DELETE") : tr("REMOVE MODULE"), true,
-                            "plateremove")) {
+                            armed ? tr("CONFIRM DELETE")
+                                  : (m.orphaned ? tr("REMOVE FILE") : tr("REMOVE MODULE")),
+                            true, "plateremove")) {
                 if (armed) {
-                    act.kind = FittedModulesAction::Kind::Remove;
+                    act.kind = m.orphaned ? FittedModulesAction::Kind::RemoveOrphan
+                                          : FittedModulesAction::Kind::Remove;
                     act.file = m.file;
                     deck.confirmRemove.clear();
                 } else {

@@ -181,11 +181,17 @@ public:
 
     void stop() {
         run_ = false;
+        // JOIN FIRST, then close and forget the listening socket. The loop reads
+        // listen_ on every pass (select takes a 100 ms timeout, so it leaves within
+        // that), and a stop that wrote listen_ = kTestInvalidSocket under it was a
+        // data race: ThreadSanitizer's first Linux run (37355910809) reported it at
+        // the read in loop(). Closing under a select was also a descriptor another
+        // open could be handed.
+        if (thread_.joinable()) { thread_.join(); }
         if (listen_ != kTestInvalidSocket) {
             closeTestSocket(listen_);
             listen_ = kTestInvalidSocket;
         }
-        if (thread_.joinable()) { thread_.join(); }
         for (test_socket_t s : held_) { closeTestSocket(s); }
         held_.clear();
     }

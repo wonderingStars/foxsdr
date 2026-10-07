@@ -502,7 +502,19 @@ public:
 
     // --- helpers for the assertions --------------------------------------
 
+    // EVERY READER OF `calls` TAKES callsMutex_, the lock note() writes under: a
+    // worker the driver has left inside the fake can still be logging while a test
+    // counts, and an unlocked size() beside a push_back is the data race
+    // ThreadSanitizer reported in the first Linux run (37355910809, in
+    // testALateAnswerGivesTheRadioBack). Tests count with callCount(), never with
+    // calls.size().
+    std::size_t callCount() const {
+        std::lock_guard<std::mutex> lk(callsMutex_);
+        return calls.size();
+    }
+
     bool called(const std::string& what) const {
+        std::lock_guard<std::mutex> lk(callsMutex_);
         for (const std::string& c : calls) {
             if (c == what) { return true; }
         }
@@ -511,6 +523,7 @@ public:
 
     // The index of the first call equal to `what`, or -1.
     int indexOf(const std::string& what) const {
+        std::lock_guard<std::mutex> lk(callsMutex_);
         for (std::size_t i = 0; i < calls.size(); ++i) {
             if (calls[i] == what) { return static_cast<int>(i); }
         }
@@ -522,6 +535,7 @@ public:
     // "Update(0x00020000,0x00000000)", so a test can ask either exactly or by
     // shape.
     int indexStarting(const std::string& prefix) const {
+        std::lock_guard<std::mutex> lk(callsMutex_);
         for (std::size_t i = 0; i < calls.size(); ++i) {
             if (calls[i].size() >= prefix.size() &&
                 calls[i].compare(0, prefix.size(), prefix) == 0) {
@@ -532,6 +546,7 @@ public:
     }
 
     int countStarting(const std::string& prefix) const {
+        std::lock_guard<std::mutex> lk(callsMutex_);
         int n = 0;
         for (const std::string& c : calls) {
             if (c.size() >= prefix.size() && c.compare(0, prefix.size(), prefix) == 0) { ++n; }
@@ -540,6 +555,7 @@ public:
     }
 
     std::string joined() const {
+        std::lock_guard<std::mutex> lk(callsMutex_);
         std::string s;
         for (const std::string& c : calls) {
             if (!s.empty()) { s += " "; }
@@ -570,7 +586,7 @@ private:
         std::lock_guard<std::mutex> lk(callsMutex_);
         calls.push_back(std::move(s));
     }
-    std::mutex callsMutex_;
+    mutable std::mutex callsMutex_;
 
     // A call that has to queue behind a worker parked inside Update, because
     // the vendor DLL lets one call at a time near a device. `entered` records

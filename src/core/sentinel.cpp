@@ -22,6 +22,7 @@
 #include "core/diag_history.hpp"
 #include "core/diag_log.hpp"
 #include "core/diag_report.hpp"
+#include "core/foreign_modules.hpp"
 #include "core/frame_timing.hpp"
 #include "core/hang_watchdog.hpp"
 #include "core/telemetry.hpp"
@@ -304,6 +305,15 @@ std::string renderSentinelReport(const SentinelVerdict& v, const SentinelReportI
     out += "os: " + info.os + "\n";
     out += "arch: " + info.arch + "\n";
     out += "receiver: not known to the sentinel\n";
+    {
+        // THE OTHER SOFTWARE'S DLLs IN THE PROCESS (0.99.69): file names only, rebuilt by
+        // finishSentinelWatch from what the application logged. Re-rendered through the
+        // validator the uploader applies too, so whatever filled the info in, a list keeps
+        // only plain file names and anything else reads `(not recorded)`. Always written,
+        // like `receiver`, so the inventory of this block is the same for every report.
+        const std::string norm = normaliseForeignField(info.foreignModules);
+        out += "foreign-modules: " + (norm.empty() ? std::string("(not recorded)") : norm) + "\n";
+    }
     if (located && info.hasModule) {
         // THE APPLICATION'S OWN EXECUTABLE, in the crash writer's own line format
         // (crash_handler.cpp, writeModules - one parser reads both), so that the build id
@@ -355,7 +365,8 @@ const std::vector<std::string>& sentinelModuleBlockFieldNames() {
 }
 
 const std::vector<std::string>& sentinelContextFieldNames() {
-    static const std::vector<std::string> names = {"version", "commit", "os", "arch", "receiver"};
+    static const std::vector<std::string> names = {"version", "commit", "os", "arch", "receiver",
+                                                   "foreign-modules"};
     return names;
 }
 
@@ -538,6 +549,10 @@ SentinelOutcome finishSentinelWatch(const SentinelEnd& e) {
     const SessionLogTail tail = readNewestSessionLogTail(e.logDir, DiagLog::kRingLines);
     info.logLines = tail.lines;
     info.logTotalLines = tail.sessionLines;
+    // The other software's DLLs, from the application's own start line and arrival lines
+    // anywhere in the session (not only the tail above, which a long session has moved
+    // past them) - the one record of it that outlives the process.
+    info.foreignModules = foreignFieldFromLog(tail.moduleLines);
 
     // WRITTEN INTO THE FOLDER THE APPLICATION ARMED, and never created here: a
     // folder that is not there means the application's own capture is off, and

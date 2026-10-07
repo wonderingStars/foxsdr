@@ -20,7 +20,8 @@
 //     remembered request) and Export CSV of a group (checkAnImportIntoAPreset... to
 //     checkAnExportOfNothing...). The review's fixes follow them (checkATypedFrequency...
 //     to checkAPresetImportSaysShiftValues...): a typed frequency is whole hertz, Add and
-//     Import leave a listening monitor's choice alone, Remove preset stops the monitor that
+//     Import (and, from 0.99.69, an airport lookup: checkAnAirportLookupKeeps...) leave a
+//     listening monitor's choice alone, Remove preset stops the monitor that
 //     plays that preset, a throwing export worker still answers the section that asked, and
 //     a preset import says when SDR#'s converter Shift was not applied.
 //   * (0.99.65) a patch Radio whose device is an I/Q recording: its header opened
@@ -87,6 +88,7 @@
 #include <imgui.h>
 #include <imgui_internal.h>
 
+#include "core/airband_data.hpp"
 #include "core/freq_import.hpp"
 #include "core/hang_watchdog.hpp"
 #include "core/host_image.hpp"
@@ -158,6 +160,8 @@ struct AppWindowTestAccess {
     static void setListening(AppWindow& a, bool on) { a.airbandListening_ = on; }
     static bool listening(AppWindow& a) { return a.airbandListening_; }
     static void setAirbandGroup(AppWindow& a, const std::string& g) { a.airbandGroup_ = g; }
+    // The airport field's Enter: a code typed and looked up (one match adds its list at once).
+    static void lookupAirport(AppWindow& a, const std::string& code) { a.airbandLookup(code); }
     static std::string airbandNote(AppWindow& a) { return a.airbandNote_; }
     static void setAirbandNote(AppWindow& a, const std::string& n) { a.airbandNote_ = n; }
     // The add row's Add key with the frequency as typed, the mode's index (0 AM, 1 NFM), a name.
@@ -1228,6 +1232,73 @@ void checkAddAndImportKeepAListeningMonitorsChoice() {
     CHECK(Access::airbandGroup(app).empty());
 }
 
+// AN AIRPORT LOOKUP DOES NOT CHANGE WHAT A LISTENING MONITOR PLAYS (0.99.69), as Add and Import
+// do not (above). The lookup used to put the airport's list on show unconditionally, and the group
+// on show is what the monitor plays: the running monitor compares airbandWanted() every frame and
+// restarts on a different set, so a lookup made while listening to one preset replaced it with the
+// airport's rows, and one made while listening to "every ticked" narrowed it to the airport's.
+// The rows are added either way - ticked as the table says - and the note says what the monitor
+// is still playing when the new rows are not part of it.
+void checkAnAirportLookupKeepsAListeningMonitorsChoice() {
+    namespace cc = cascade::core;
+    const std::vector<const cc::Airport*> ord = cc::findAirports(cc::airbandTable(), "KORD");
+    const std::vector<const cc::Airport*> mdw = cc::findAirports(cc::airbandTable(), "KMDW");
+    CHECK(ord.size() == 1u && mdw.size() == 1u);
+    if (ord.size() != 1u || mdw.size() != 1u) { return; }
+    const std::string ordGroup = cc::airportGroupName(*ord.front());
+    const std::string mdwGroup = cc::airportGroupName(*mdw.front());
+    const std::size_t ordRows = cc::airportBookmarks(*ord.front()).size();
+    const std::size_t mdwRows = cc::airportBookmarks(*mdw.front()).size();
+    CHECK(ordRows > 3u && mdwRows > 3u);
+
+    AppWindow app;
+    Access::setRecordDir(app, (g_scratch / "listen-airport").string());
+    Access::addRow(app, "Tower", 118.7e6, "AM", "KXYZ", true);
+
+    // Not listening: the lookup puts the airport's list on show, as it always did.
+    Access::lookupAirport(app, "KORD");
+    CHECK(Access::airbandGroup(app) == ordGroup);
+    CHECK(Access::bookmarks(app).size() == 1u + ordRows);
+    CHECK(Access::airbandNote(app).find("added to the frequency list") != std::string::npos);
+    CHECK(Access::airbandNote(app).find("keeps playing") == std::string::npos);
+
+    // Listening to ANOTHER preset: the rows are added, the monitor stays on its preset (the
+    // channels it plays are the one Tower row it had, not the airport's), and the note says
+    // so and which list to choose.
+    Access::setAirbandGroup(app, "KXYZ");
+    Access::setListening(app, true);
+    std::vector<std::string> names;
+    CHECK(Access::wanted(app, names).size() == 1u);   // Tower alone
+    Access::lookupAirport(app, "KMDW");
+    CHECK(Access::airbandGroup(app) == "KXYZ");
+    CHECK(Access::wanted(app, names).size() == 1u);   // still Tower alone: nothing was swapped under it
+    CHECK(Access::bookmarks(app).size() == 1u + ordRows + mdwRows);   // ...and the rows were added
+    CHECK(Access::airbandNote(app).find("The monitor keeps playing KXYZ;") != std::string::npos);
+    CHECK(Access::airbandNote(app).find(mdwGroup) != std::string::npos);
+    CHECK(Access::listening(app));
+
+    // Listening to "every ticked": nothing is narrowed, and there is no "keeps playing" for a
+    // monitor that plays everything ticked.
+    Access::setAirbandGroup(app, "");
+    const std::size_t before = Access::wantedChannels(app);
+    Access::lookupAirport(app, "KORD");   // already in the list: added 0, and the group not moved
+    CHECK(Access::airbandGroup(app).empty());
+    CHECK(Access::wantedChannels(app) == before);
+    CHECK(Access::airbandNote(app).find("already in the frequency list") != std::string::npos);
+    CHECK(Access::airbandNote(app).find("keeps playing") == std::string::npos);
+
+    // Listening to the airport's own list, looked up again: nothing to say either.
+    Access::setAirbandGroup(app, ordGroup);
+    Access::lookupAirport(app, "KORD");
+    CHECK(Access::airbandGroup(app) == ordGroup);
+    CHECK(Access::airbandNote(app).find("keeps playing") == std::string::npos);
+
+    // Stopped again: the lookup puts the airport on show once more.
+    Access::setListening(app, false);
+    Access::lookupAirport(app, "KMDW");
+    CHECK(Access::airbandGroup(app) == mdwGroup);
+}
+
 // REMOVE PRESET ON THE PRESET THE MONITOR IS PLAYING stops it, and says why: with its group gone
 // the monitor would otherwise be cut again from "every ticked row" of the whole list - a
 // different set from the one chosen - or stopped with no reason when none was ticked.
@@ -1604,6 +1675,7 @@ int main() {
     checkATypedFrequencyIsTheSameChannelAsTheListsOwn();
     checkTheHeardTimeFlushKeepsTheChannelOnItsRow();
     checkAddAndImportKeepAListeningMonitorsChoice();
+    checkAnAirportLookupKeepsAListeningMonitorsChoice();
     checkRemovingThePresetBeingListenedToStopsTheMonitor();
     checkAThrowingExportWorkerAnswersTheSectionThatAsked();
     checkAPresetImportSaysShiftValuesWereNotApplied();

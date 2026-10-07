@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#include "dsp/deemphasis.hpp"
 #include "dsp/fir.hpp"
 #include "dsp/nco.hpp"
 #include "dsp/quad_demod.hpp"
@@ -100,7 +101,7 @@ public:
     // that for WFM, inside StereoFm — passes 0 here, so no path ever applies
     // the network twice.
     void setDeemphasisUs(double us);
-    double deemphasisUs() const { return deemphTauSec_ * 1.0e6; }
+    double deemphasisUs() const { return deemph_.timeUs(); }
 
     // The WIDTH OF THE WANTED SIDEBAND for USB, LSB and CW, in Hz: the audio
     // passband runs from the carrier out to about this far (-6 dB at 1.2 x, the
@@ -130,13 +131,8 @@ private:
     // (radians/sample); loudness normalization is the downstream Agc's job.
     QuadDemod quad_{1.0f};
 
-    // FM deemphasis one-pole, run by NFM and WFM alike:
-    // y[n] = (1-p)*x[n] + p*y[n-1]. Pole and state kept in double so the
-    // filter matches its analytic transfer function to well below any
-    // audio-relevant error.
-    double deemphTauSec_ = 0.0;  // 0 = de-emphasis disabled (pole 0 = passthrough)
-    double deemphPole_ = 0.0;
-    double deemphState_ = 0.0;
+    // FM deemphasis one-pole, run by NFM and WFM alike (dsp/deemphasis.hpp).
+    Deemphasis deemph_;
 
     // AM DC blocker: y[n] = x[n] - x[n-1] + R*y[n-1].
     double dcPole_ = 0.0;

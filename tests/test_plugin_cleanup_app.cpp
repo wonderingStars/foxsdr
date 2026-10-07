@@ -11,7 +11,13 @@
 //   - a copy that cannot be deleted (TestHooks::pluginRemove plays Windows
 //     refusing a mapped module) is queued, the panel says it goes at the next
 //     start, and the next start's processPendingPluginRemovals takes it -
-//     unless that scan no longer finds it an old copy.
+//     unless that scan no longer finds it an old copy;
+//   - (0.99.69) REMOVE FILE on an orphaned file judges the file again against
+//     the window's own scan: a row gone stale - a file this window's host has no
+//     record of - removes nothing and says why, and a name that tries to leave
+//     the folder removes nothing. The positive path (an orphan that goes, a
+//     running or indexed file that stays) is on real files in
+//     tests/test_plugin_cleanup.cpp: nothing here loads a module.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <cstdio>
@@ -127,6 +133,10 @@ struct AppWindowTestAccess {
         return a.cleanUpAfterUpdate(installed.string());
     }
     static std::string report(AppWindow& a) { return model(a).cleanupReport; }
+    // The Fitted modules window's REMOVE FILE, once confirmed, and what it said.
+    static void removeOrphan(AppWindow& a, const std::string& file) { a.removeOrphanedPlugin(file); }
+    static std::string installError(AppWindow& a) { return a.installError_; }
+    static std::string installReport(AppWindow& a) { return a.installReport_; }
 };
 
 }  // namespace cascade::gui
@@ -193,6 +203,23 @@ int main() {
         CHECK(cascade::core::loadPendingRemovals(d.string()) ==
               std::vector<std::string>{mod("sat-1.0.0")});
         g_locked.clear();
+    }
+
+    // --- REMOVE FILE judges the file again (0.99.69) ----------------------------------
+    {
+        const fs::path d = pluginsDir("orphan", {mod("stray")});
+        Access::scanned(app, d, {});   // this window's host has found no module in `d`
+        const fs::path outside = d.parent_path() / mod("outside");
+        { std::ofstream o(outside, std::ios::binary); o << "x"; }
+        for (const std::string& name : {mod("stray"), std::string("../") + mod("outside"), std::string()}) {
+            Access::removeOrphan(app, name);
+            std::printf("  REMOVE FILE on a stale row (%s): %s\n", name.c_str(),
+                        Access::installError(app).c_str());
+            CHECK(Access::installError(app).find("last scan") != std::string::npos);
+            CHECK(Access::installReport(app).empty());
+            CHECK(fs::exists(d / mod("stray")));   // nothing was deleted
+            CHECK(fs::exists(outside));
+        }
     }
 
     std::error_code ec;

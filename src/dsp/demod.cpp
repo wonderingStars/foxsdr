@@ -82,27 +82,15 @@ constexpr double kSsbMaxRateFraction = 0.3;
 constexpr double kCwToneHz = 700.0;
 
 // --- FM deemphasis -----------------------------------------------------------
-// Broadcast FM pre-emphasizes highs with an RC network — 75 us in the Americas,
-// 50 us elsewhere, which is what setDeemphasisUs picks between — and the
-// receiver undoes it with the matching one-pole low-pass H(s) = 1/(1 + s*tau).
-// Discretized by pole matching (impulse invariance): the analog pole at
-// s = -1/tau maps to z = p = exp(-T/tau) with T = 1/rate, and the numerator is
-// scaled so DC gain is exactly 1:
-//     H(z) = (1 - p) / (1 - p*z^-1)
-// Pole matching over bilinear because it preserves both the time constant and
-// the DC gain exactly with no frequency prewarping decision; the deemphasis
-// corner (1/(2*pi*tau) ~ 2.1 kHz) sits far below Nyquist at any WFM channel
-// rate, where the two mappings agree closely anyway.
-// Default de-emphasis: 50 us. That is the standard everywhere except the
-// Americas and South Korea, so it is the correct global default; the setter
-// below makes it a user choice rather than a compile-time assumption.
+// The one-pole network, its derivation and its 50 us default live in
+// dsp/deemphasis.hpp (0.99.69: the airband monitor's FM strips run the same
+// filter, so it is one class rather than two copies of the arithmetic).
 //
-// ONE network, shared by NFM. Nothing in the derivation above depends on the
-// channel being wide, and the receiver's De-emph control offers the same two
-// constants for both FM modes — but process() used to apply the filter in its
-// WFM case alone, which is what left that control inert on the narrowband mode
-// a pager, APRS or weather-satellite listener is tuned to.
-constexpr double kDefaultDeemphTauSec = 50e-6;
+// ONE network, shared by NFM. Nothing in the derivation depends on the channel
+// being wide, and the receiver's De-emph control offers the same two constants
+// for both FM modes — but process() used to apply the filter in its WFM case
+// alone, which is what left that control inert on the narrowband mode a pager,
+// APRS or weather-satellite listener is tuned to.
 
 // --- AM DC blocker -------------------------------------------------------
 // The envelope of an AM carrier is (carrier amplitude) + modulation: the
@@ -140,30 +128,17 @@ std::vector<float> designSsbTaps(double rate, double bandwidthHz) {
 
 Demodulator::Demodulator(double channelRateHz)
     : rate_(channelRateHz),
+      deemph_(channelRateHz),   // 50 us, the global default
       ssbFilter_(designSsbTaps(channelRateHz, kSsbAudioBandwidthHz), 1) {
     assert(rate_ > 0.0);
-    deemphTauSec_ = kDefaultDeemphTauSec;
-    deemphPole_ = std::exp(-1.0 / (rate_ * deemphTauSec_));
     dcPole_ = std::exp(-kTwoPi * kAmDcCutoffHz / rate_);
     setMode(DemodMode::NFM);
 }
 
 void Demodulator::setDeemphasisUs(double us) {
-    // Reject nonsense rather than poisoning the filter with a NaN pole; 0 (and
-    // anything non-finite/negative treated as 0) means "no de-emphasis", which
-    // the process loop implements as a pole of exactly 0 — a pass-through,
-    // since y = (1-p)*x + p*y collapses to y = x at p = 0.
-    if (!(us > 0.0) || !std::isfinite(us)) {
-        deemphTauSec_ = 0.0;
-        deemphPole_ = 0.0;
-        deemphState_ = 0.0;
-        return;
-    }
-    deemphTauSec_ = us * 1.0e-6;
-    deemphPole_ = std::exp(-1.0 / (rate_ * deemphTauSec_));
-    // Clear the filter memory: carrying a state charged at the old time
-    // constant produces an audible thump on the switch.
-    deemphState_ = 0.0;
+    // Nonsense (and 0) means "no de-emphasis", and the filter clears its memory
+    // either way: see dsp/deemphasis.hpp.
+    deemph_.setTimeUs(us);
 }
 
 void Demodulator::setSsbBandwidthHz(double bandwidthHz) {
@@ -217,7 +192,7 @@ void Demodulator::setMode(DemodMode m) {
 
 void Demodulator::reset() {
     quad_.reset();
-    deemphState_ = 0.0;
+    deemph_.reset();
     dcPrevIn_ = 0.0;
     dcPrevOut_ = 0.0;
     shiftDown_.reset();
@@ -240,16 +215,9 @@ std::size_t Demodulator::process(const std::complex<float>* in, std::size_t n,
             // alike, and persists — did nothing whatsoever in NFM. Owners that
             // de-emphasise downstream instead set 0 us (the pipeline does, for
             // WFM, where StereoFm applies the network after the stereo matrix):
-            // a pole of exactly 0 makes g == 1 and the loop below an exact
+            // a pole of exactly 0 makes g == 1 and the loop an exact
             // pass-through, so no signal is ever de-emphasised twice.
-            const double p = deemphPole_;
-            const double g = 1.0 - p;
-            double s = deemphState_;
-            for (std::size_t i = 0; i < n; ++i) {
-                s = g * static_cast<double>(out[i]) + p * s;
-                out[i] = static_cast<float>(s);
-            }
-            deemphState_ = s;
+            deemph_.process(out, n);
             break;
         }
 

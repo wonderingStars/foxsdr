@@ -19,7 +19,7 @@
 # SoapySDR ABI — vendoring it would break exactly what it exists to provide.
 
 cmake_minimum_required(VERSION 3.20)
-project(cascade VERSION 0.99.68 LANGUAGES C CXX)
+project(cascade VERSION 0.99.69 LANGUAGES C CXX)
 
 # The version string the BINARY reports, which is not always the project
 # version. A nightly is built from this tree with a pre-release suffix naming
@@ -411,9 +411,32 @@ endif()
 # and the test binaries neither need it nor should carry it. The runtime window
 # icon is a separate mechanism set in AppWindow::run; see
 # resources/icon/README.md.
+#
+# THE WINDOWS SUBSYSTEM (0.99.69). cascade.exe used to be a console-subsystem
+# program, so that --version and the bench checks print to the terminal that ran
+# them, and every launch NOT from a terminal - the Start Menu, Explorer, the Store
+# tile - made Windows create a console for it: with Windows Terminal as the default
+# host, a Windows Terminal window beside the real one for the whole session. Calling
+# FreeConsole() at the top of main() was measured and is not enough: the console
+# host is created by process start-up, before main runs, and the window was still
+# visible for about 255 ms. Only an image with no console at start-up has none, so
+# the executable is WIN32 (/SUBSYSTEM:WINDOWS) and keeps `int main` through
+# /ENTRY:mainCRTStartup rather than gaining a WinMain; the terminal comes back, for
+# the tool modes and for Ctrl+C, through AttachConsole (core/console_owner.hpp).
+# What it costs (measured, 0.99.69): cmd.exe and PowerShell do not wait for a
+# windows-subsystem program, so `cascade --version` at a prompt returns before it
+# has printed and ERRORLEVEL / $LASTEXITCODE are not its exit code. PowerShell
+# waits, captures and sets $LASTEXITCODE only when the output is piped in the SAME
+# pipeline (`& cascade.exe --version 2>&1 | Out-String`; `(& cascade.exe --version)
+# | ...` comes back empty - installer/msix/build-msix.ps1 was changed for that), and
+# a harness that reads pipes or waits on the process handle (ctest, CreateProcess,
+# Git Bash) is unaffected.
 if(WIN32)
     enable_language(RC)
-    add_executable(cascade src/main.cpp resources/icon/foxsdr.rc)
+    add_executable(cascade WIN32 src/main.cpp resources/icon/foxsdr.rc)
+    if(MSVC)
+        target_link_options(cascade PRIVATE /ENTRY:mainCRTStartup)
+    endif()
 else()
     add_executable(cascade src/main.cpp)
 endif()

@@ -110,6 +110,20 @@ std::string problemReportJson(const ProblemReportPayload& p) {
     // trimmed: this is already the finished, scrubbed, size-capped bundle
     // text (prepareDiagnosticsForReport()), not a sentence the person typed.
     if (!p.diagnostics.empty()) { j["diagnostics"] = p.diagnostics; }
+    // Present only when the message contained a report (see the header). The
+    // text is the recognised report as it is: it has already been through
+    // detectPastedReport, which normalised its line endings and capped it.
+    if (!p.attachments.empty()) {
+        nlohmann::json arr = nlohmann::json::array();
+        for (const PastedReport& a : p.attachments) {
+            nlohmann::json e;
+            e["class"] = a.reportClass;
+            e["version"] = a.version;
+            e["text"] = a.text;
+            arr.push_back(std::move(e));
+        }
+        j["attachments"] = std::move(arr);
+    }
     // replace, not throw - a person's own words must never make this
     // unserialisable (see feature_request.cpp's dumpPayload()).
     return j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
@@ -122,7 +136,12 @@ const std::vector<std::string>& problemReportFieldNames() {
 }
 
 const std::vector<std::string>& problemReportOptionalFieldNames() {
-    static const std::vector<std::string> names = {"diagnostics"};
+    static const std::vector<std::string> names = {"diagnostics", "attachments"};
+    return names;
+}
+
+const std::vector<std::string>& problemReportAttachmentFieldNames() {
+    static const std::vector<std::string> names = {"class", "version", "text"};
     return names;
 }
 
@@ -234,8 +253,8 @@ std::string appendProbeToDiagnosticsForReport(const std::string& prepared,
     return bundle + marker + probe;
 }
 
-bool problemReportShouldRetryWithoutDiagnostics(bool sentDiagnostics, int httpStatus) {
-    return sentDiagnostics && httpStatus == 400;
+bool problemReportShouldRetryWithoutDiagnostics(bool sentOptional, int httpStatus) {
+    return sentOptional && httpStatus == 400;
 }
 
 std::string problemReportEndpoint() {
@@ -257,13 +276,17 @@ std::string problemReportEndpoint() {
 bool ProblemReportSendFlow::send(const std::string& url, const ProblemReportPayload& payload,
                                  std::uint64_t nowEpoch) {
     hadDiagnostics_ = !payload.diagnostics.empty();
+    hadOptional_ = hadDiagnostics_ || !payload.attachments.empty();
     retried_ = false;
     dropped_ = false;
     retry_.reset();
     endpoint_ = url;
-    ProblemReportPayload withoutDiag = payload;
-    withoutDiag.diagnostics.clear();
-    retryBody_ = problemReportJson(withoutDiag);
+    // An older site may know neither optional field, so the retry carries the seven
+    // mandatory ones only.
+    ProblemReportPayload withoutOptional = payload;
+    withoutOptional.diagnostics.clear();
+    withoutOptional.attachments.clear();
+    retryBody_ = problemReportJson(withoutOptional);
     const bool started = primary_.sendJson(url, problemReportJson(payload), nowEpoch);
     lastPrimaryState_ = primary_.state();
     return started;
@@ -276,9 +299,9 @@ void ProblemReportSendFlow::poll(std::uint64_t nowEpoch) {
     const FeatureRequestState now = primary_.state();
     if (lastPrimaryState_ == FeatureRequestState::Sending &&
         now == FeatureRequestState::Failed && !retried_ &&
-        problemReportShouldRetryWithoutDiagnostics(hadDiagnostics_, primary_.lastStatus())) {
+        problemReportShouldRetryWithoutDiagnostics(hadOptional_, primary_.lastStatus())) {
         retried_ = true;
-        dropped_ = true;
+        dropped_ = hadDiagnostics_;
         retry_ = std::make_unique<ProblemReportSender>();
         retry_->sendJson(endpoint_, retryBody_, nowEpoch);
     }

@@ -315,6 +315,186 @@ int main() {
         CHECK(cascade::core::loadPendingRemovals(d.string()).empty());
     }
 
+    // --- [9] ORPHANED FILES (0.99.69): the classification --------------------------------
+    //
+    // A module file is an orphan when the index does not know it AND it is not
+    // running. Either alone protects it. The index knows a file by an install
+    // record (any record, whatever the inventory found of its file) or by the
+    // catalogue publishing that file name for THIS platform.
+    const std::string kStrayError = "plugin reports ABI version 2, expected 3";
+    const auto catalogueNaming = [](const std::string& file, bool thisPlatform) {
+        cascade::core::PluginCatalogEntry e;
+        e.id = "cat";
+        e.name = "Catalogue entry";
+        cascade::core::PluginPlatform p;
+        p.os = thisPlatform ? cascade::core::PluginRepo::hostOs() : "plan9";
+        p.arch = thisPlatform ? cascade::core::PluginRepo::hostArch() : "mips";
+        p.file = file;
+        e.platforms.push_back(p);
+        return e;
+    };
+    const auto refused = [&](const fs::path& dir, const std::string& file, const std::string& error) {
+        LoadedPlugin p = rec(dir, file, "", "", false);
+        p.error = error;
+        return p;
+    };
+    // The folder the table's files live in. Names are the scan's.
+    const fs::path od = freshDir("orphans", {mod("managed"), mod("running"), mod("both"),
+                                             mod("stray-bad"), mod("stray-old"), mod("catalogued"),
+                                             mod("Mixed-Case"), mod("elsewhere"), mod("lost-record"),
+                                             mod("never-scanned")});
+    std::vector<LoadedPlugin> orecs = {
+        refused(od, mod("managed"), "refused: no entry point"),   // recorded, not running
+        rec(od, mod("running"), "Running", "1.0.0", true),         // running, unrecorded
+        rec(od, mod("both"), "Both", "1.0.0", true),               // running and recorded
+        refused(od, mod("stray-bad"), kStrayError),                // neither: an orphan
+        rec(od, mod("stray-old"), "Old", "0.9.0", false, mod("stray-new")),   // an old side-loaded copy
+        refused(od, mod("catalogued"), "refused: no entry point"), // the catalogue names it
+        refused(od, mod("mixed-case"), "refused: no entry point"), // the record spells it otherwise
+        refused(od, mod("elsewhere"), ""),                         // another platform's file name: an orphan
+        refused(od, mod("lost-record"), "refused: no entry point"),
+    };
+    LoadedPlugin pathless;   // a record with no file name has nothing to be an orphan of
+    orecs.push_back(pathless);
+    InstalledPlugin lost = installed("lost", mod("lost-record"), "1.0.0");
+    lost.missingFromDisk = true;   // the inventory could not find it; the name is still the index's
+    const std::vector<InstalledPlugin> omanifest = {
+        installed("managed", mod("managed"), "1.0.0"), installed("both", mod("both"), "1.0.0"),
+        installed("mixed", mod("MIXED-CASE"), "1.0.0"), lost};
+    const std::vector<cascade::core::PluginCatalogEntry> ocatalogue = {
+        catalogueNaming(mod("catalogued"), true), catalogueNaming(mod("elsewhere"), false)};
+
+    {
+        const auto v = cascade::core::classifyPluginFiles(orecs, omanifest, ocatalogue);
+        CHECK(v.size() == 9u);   // the pathless record is not a file
+        const auto find = [&](const std::string& f) -> const cascade::core::PluginFileVerdict* {
+            for (const auto& x : v) {
+                if (x.file == f) { return &x; }
+            }
+            return nullptr;
+        };
+        struct Want { const char* stem; bool indexed; bool loaded; bool orphaned; };
+        const Want table[] = {
+            {"managed", true, false, false},      {"running", false, true, false},
+            {"both", true, true, false},          {"stray-bad", false, false, true},
+            {"stray-old", false, false, true},    {"catalogued", true, false, false},
+            {"mixed-case", true, false, false},   {"elsewhere", false, false, true},
+            {"lost-record", true, false, false},
+        };
+        for (const Want& w : table) {
+            const auto* x = find(mod(w.stem));
+            CHECK(x != nullptr);
+            if (x == nullptr) { continue; }
+            if (x->indexed != w.indexed || x->loaded != w.loaded || x->orphaned() != w.orphaned) {
+                std::printf("  %s: indexed %d loaded %d orphaned %d\n", w.stem, x->indexed, x->loaded,
+                            x->orphaned());
+            }
+            CHECK(x->indexed == w.indexed);
+            CHECK(x->loaded == w.loaded);
+            CHECK(x->orphaned() == w.orphaned);
+        }
+        // The host's own words come through verbatim for an orphan, and a running
+        // file has none.
+        const auto* bad = find(mod("stray-bad"));
+        CHECK(bad != nullptr && bad->detail == kStrayError);
+        const auto* old = find(mod("stray-old"));
+        CHECK(old != nullptr && old->detail == "Ignored: another copy");
+        const auto* run = find(mod("running"));
+        CHECK(run != nullptr && run->detail.empty());
+        // Nothing known at all (no manifest, no catalogue fetched yet): the running
+        // file is still protected, and every refused one is an orphan.
+        const auto bare = cascade::core::classifyPluginFiles(orecs, {}, {});
+        int orphans = 0;
+        for (const auto& x : bare) { orphans += x.orphaned() ? 1 : 0; }
+        CHECK(orphans == 7);   // all nine files bar the two that are running
+    }
+
+    // --- [10] ...and the removal, on real files -------------------------------------------
+    const auto remains = [&](const std::string& stem) { return exists(od, mod(stem)); };
+    {
+        std::string err;
+        // The orphan goes, and ONLY it.
+        CHECK(cascade::core::removeOrphanedPlugin(od.string(), mod("stray-bad"), orecs, omanifest,
+                                                  ocatalogue, remover, err));
+        CHECK(err.empty());
+        CHECK(!remains("stray-bad"));
+        for (const char* other : {"managed", "running", "both", "stray-old", "catalogued", "Mixed-Case",
+                                  "elsewhere", "lost-record", "never-scanned"}) {
+            CHECK(remains(other));
+        }
+        // The same file again: it is gone and the scan record is stale, and the
+        // answer is the filesystem's, not a pretence.
+        CHECK(!cascade::core::removeOrphanedPlugin(od.string(), mod("stray-bad"), orecs, omanifest,
+                                                   ocatalogue, remover, err));
+        CHECK(!err.empty());
+
+        // A file the index knows, a file that is running, a file the catalogue names:
+        // refused with the reason, and the file is still there.
+        err.clear();
+        CHECK(!cascade::core::removeOrphanedPlugin(od.string(), mod("managed"), orecs, omanifest,
+                                                   ocatalogue, remover, err));
+        CHECK(err.find("plugin index") != std::string::npos);
+        CHECK(remains("managed"));
+        err.clear();
+        CHECK(!cascade::core::removeOrphanedPlugin(od.string(), mod("running"), orecs, omanifest,
+                                                   ocatalogue, remover, err));
+        CHECK(err.find("running") != std::string::npos);
+        CHECK(remains("running"));
+        err.clear();
+        CHECK(!cascade::core::removeOrphanedPlugin(od.string(), mod("both"), orecs, omanifest,
+                                                   ocatalogue, remover, err));
+        CHECK(remains("both"));
+        err.clear();
+        CHECK(!cascade::core::removeOrphanedPlugin(od.string(), mod("catalogued"), orecs, omanifest,
+                                                   ocatalogue, remover, err));
+        CHECK(err.find("plugin index") != std::string::npos);
+        CHECK(remains("catalogued"));
+        err.clear();
+        CHECK(!cascade::core::removeOrphanedPlugin(od.string(), mod("lost-record"), orecs, omanifest,
+                                                   ocatalogue, remover, err));
+        CHECK(remains("lost-record"));
+
+        // A file on disk the last scan did not find is not offered either, and a name
+        // that tries to leave the folder names nothing: the file outside survives.
+        err.clear();
+        CHECK(!cascade::core::removeOrphanedPlugin(od.string(), mod("never-scanned"), orecs, omanifest,
+                                                   ocatalogue, remover, err));
+        CHECK(err.find("last scan") != std::string::npos);
+        CHECK(remains("never-scanned"));
+        const fs::path outside = od.parent_path() / mod("outside-the-folder");
+        { std::ofstream o(outside, std::ios::binary); o << "x"; }
+        for (const std::string hostile : {std::string("../") + mod("outside-the-folder"), std::string(""),
+                                          std::string("..")}) {
+            err.clear();
+            CHECK(!cascade::core::removeOrphanedPlugin(od.string(), hostile, orecs, omanifest, ocatalogue,
+                                                       remover, err));
+            CHECK(!err.empty());
+        }
+        CHECK(fs::exists(outside));
+
+        // A locked orphan (the remover refuses) is reported, not queued and not
+        // pretended: the file is there and so is the reason.
+        err.clear();
+        CHECK(!cascade::core::removeOrphanedPlugin(od.string(), mod("elsewhere"), orecs, omanifest,
+                                                   ocatalogue, lockedRemover({mod("elsewhere")}), err));
+        CHECK(err == "the file is in use");
+        CHECK(remains("elsewhere"));
+        CHECK(cascade::core::loadPendingRemovals(od.string()).empty());
+
+        // The remover is handed the SCAN'S spelling of the name, not the caller's, and
+        // the name's case does not stop it matching.
+        std::string handed;
+        const cascade::core::PluginFileRemover spy = [&](const std::string&, const std::string& f,
+                                                         std::string&) {
+            handed = f;
+            return true;
+        };
+        err.clear();
+        CHECK(cascade::core::removeOrphanedPlugin(od.string(), mod("ELSEWHERE"), orecs, omanifest, {},
+                                                  spy, err));
+        CHECK(handed == mod("elsewhere"));
+    }
+
     const int rc = testSummary("test_plugin_cleanup");
     if (rc == 0) {
         std::error_code ec;

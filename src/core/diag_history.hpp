@@ -112,6 +112,13 @@ struct SessionLogTail {
     bool found = false;               // a start line was found and the tail begins at it
     std::vector<std::string> lines;   // at most maxLines, oldest first
     std::size_t sessionLines = 0;     // how many lines the session had in the files
+    // EVERY line of the whole session that names the other software's DLLs in the
+    // process (the `modules:` line at start and each `module arrived:` line, 0.99.69 -
+    // core/foreign_modules.hpp), not only the ones in `lines`: the sentinel's report puts
+    // the list in its own context block, and in a long session the start line is far
+    // older than the last 256 lines. A handful of lines at most (a session writes at
+    // most one start line and kForeignMaxArrivalLines arrivals).
+    std::vector<std::string> moduleLines;
 };
 SessionLogTail readNewestSessionLogTail(const std::string& logDir, std::size_t maxLines);
 
@@ -127,6 +134,13 @@ struct ReportSummary {
     std::string signature;  // the grouping signature
     std::string upload;     // sent, duplicate, local-only, backoff, rate-limited, failed,
                             // abandoned, too-large, expired, refused, other - or none
+    // When the file was last written, in seconds since the epoch; 0 when unknown.
+    // The age above is this against the moment of the read, which is no use to a
+    // caller that decides later than the listing was made: core/exit_cause.cpp
+    // chooses the reports that belong to the previous session by it (0.99.69). It
+    // is not part of reportSummaryLine, so nothing that prints a report gains a
+    // field.
+    std::int64_t writtenEpoch = 0;
 };
 
 struct ReportListing {
@@ -153,6 +167,22 @@ ReportListing listRecentReports(const std::string& crashDir, std::time_t now,
 std::string reportSummaryLine(const ReportSummary& r);
 // "just now", "12 min ago", "3 h ago", "5 d ago"; "(age unknown)" for a negative age.
 std::string agoText(std::int64_t ageSec);
+
+// WHY A REPORT THE UPLOADER MARKED `local-only` STAYS ON THIS MACHINE (0.99.69), in
+// one plain sentence, or "" for a report that is not local-only. Until 0.99.69 the
+// bundle said only `upload local-only`, and a tester on 0.99.66 pasted the whole
+// report into the bug form to ask what it meant. The reasons are the uploader's own
+// (core/crash_upload.cpp sweepCrashDir, which decides by the same two tests):
+//   - a display-driver presentation stall (`kind: stall`): the graphics stack was
+//     waiting for a display, which is not a fault in FoxSDR;
+//   - a crash-kind report whose reason is one of the sentinel's two kept-here
+//     sentences (core/sentinel.hpp, sentinelReasonIsLocalOnly): FoxSDR was ended from
+//     outside, or as the session closed, while it was working normally;
+//   - anything else the sweep might one day keep: the general sentence.
+// Fixed English, marked for the catalogue (FOX_TR_NOOP): the bundle carries it as it
+// is, and the report page shows it through tr(). It names no path and no file - where
+// the file is, is the reports folder the bundle's `crash-dir` line and the page name.
+std::string localOnlyReason(const ReportSummary& r);
 
 // BOTH, as the bundle carries them. `included` false is the diagnostics-off case:
 // the bundle adds neither section, not even a heading.

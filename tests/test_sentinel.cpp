@@ -1019,6 +1019,7 @@ int main() {
 
     // =======================================================================
     // 7b. NO LOCATION: THE REPORT IS BYTE FOR BYTE WHAT 0.99.64 AND 0.99.65 WROTE
+    // (apart from the one context line 0.99.69 added, `foreign-modules`)
     // =======================================================================
     // The expected text is written out, and its three signatures were computed
     // OUTSIDE this code (a Python FNV-1a over the code, the tag and the offset),
@@ -1036,7 +1037,11 @@ int main() {
                            "fast-fail (abort or failed integrity check); ") +
                reasonTail + "\ncode: 0xC0000409\n" + extraHeader + "signature: " + sig +
                "\n--- context ---\nversion: 0.99.64\ncommit: abc123def456\nos: Windows 10.0.22631\n"
-               "arch: x64\nreceiver: not known to the sentinel\n--- process ---\nuptime-sec: 2731\n"
+               "arch: x64\nreceiver: not known to the sentinel\n"
+               // 0.99.69: the one line a report gained, with the value it has when the info
+               // names nothing (the default). The headers, the signatures and every other
+               // line are exactly what 0.99.64 and 0.99.65 wrote.
+               "foreign-modules: (not recorded)\n--- process ---\nuptime-sec: 2731\n"
                "fault-thread-own: unknown\n--- log (last 2 of 4011 lines) ---\n"
                "12:00:00.000 info line a\n12:00:00.001 info line b\n";
     };
@@ -1570,6 +1575,158 @@ int main() {
             fs::remove_all(dir, ec);
             fs::remove_all(logs, ec);
         }
+    }
+
+    // =======================================================================
+    // 11a. THE OTHER SOFTWARE'S DLLs IN A SENTINEL REPORT (0.99.69): the application logs
+    // the file names of every module that is neither Windows' nor its own, once at start
+    // and once per arrival (core/foreign_modules.hpp), and the sentinel - which reads none of
+    // the application's memory - carries them in its report's context block, rebuilt from
+    // the log, because the report's own log tail is 256 lines and a long session's start
+    // line is far behind them
+    // =======================================================================
+    {
+        const fs::path dir = scratchDir("foreign");
+        auto stamped = [](const std::string& m) { return "12:00:00.000 info " + m + "\n"; };
+        const std::string session = stamped("FoxSDR 0.99.69 (abc123def456) starting");
+
+        // One sentinel report from a log of `logText`, as a crash the process never saw.
+        auto reportFor = [&](const char* tag, unsigned long pid, const std::string& logText) {
+            const fs::path logs = dir / tag / "logs";
+            const fs::path crashes = dir / tag / "crashes";
+            std::error_code mk;
+            fs::create_directories(logs, mk);
+            fs::create_directories(crashes, mk);
+            writeFile(logs / "foxsdr.log", logText);
+            SentinelEnd e;
+            e.appPid = pid;
+            e.exitKnown = true;
+            e.exitCode = 0xC0000409ul;
+            e.crashDir = crashes.string();
+            e.logDir = logs.string();
+            e.uptimeSec = 3000;
+            breadcrumb::Snapshot s;
+            s.valid = true;
+            const std::uint64_t now = breadcrumb::nowMs();
+            s.startedMs = now - 60000;
+            s.phase = Phase::Running;
+            s.frames = 600;
+            s.beatMs = now - 10;
+            s.phaseMs = now - 50000;
+            e.crumb = s;
+            const SentinelOutcome o = finishSentinelWatch(e);
+            CHECK(!o.reportPath.empty());
+            return o.reportPath.empty() ? std::string() : readFile(o.reportPath);
+        };
+        // The text of the context line, and of the report's own log section.
+        auto lineOf = [](const std::string& text, const std::string& key) {
+            const std::size_t at = text.find("\n" + key);
+            if (at == std::string::npos) { return std::string("(absent)"); }
+            const std::size_t end = text.find('\n', at + 1);
+            return text.substr(at + 1, end - at - 1);
+        };
+        auto logSection = [](const std::string& text) {
+            const std::size_t at = text.find("--- log (last ");
+            return at == std::string::npos ? std::string() : text.substr(at);
+        };
+
+        // A SESSION'S START, A MODULES LINE AND A LATER ARRIVAL: the report names all three, in
+        // the context block, and its log tail carries the start line too.
+        {
+            const std::string text = reportFor(
+                "short", 8101,
+                session + stamped("modules: 2 foreign - NahimicOSD.dll, RTSSHooks64.dll") + stamped("source: opened") +
+                    stamped("module arrived: ZetaOverlay.dll (12.3 s)"));
+            CHECK(contains(text, "\nforeign-modules: NahimicOSD.dll, RTSSHooks64.dll, ZetaOverlay.dll\n"));
+            CHECK(contains(logSection(text), "modules: 2 foreign - NahimicOSD.dll, RTSSHooks64.dll"));
+            // The line is in the context block, which is where the reader looks.
+            CHECK(text.find("foreign-modules: ") < text.find("--- process ---"));
+            CHECK(text.find("receiver: ") < text.find("foreign-modules: "));
+            // What the uploader reads out of it, and what it would send.
+            ParsedReport p;
+            CHECK(parseReportText(text, p));
+            CHECK(p.foreignModules == "NahimicOSD.dll, RTSSHooks64.dll, ZetaOverlay.dll");
+            const nlohmann::json j = nlohmann::json::parse(uploadJson(p, std::string()), nullptr, false);
+            CHECK(j.is_object() && j["context"].value("foreignModules", std::string("x")) ==
+                                       "NahimicOSD.dll, RTSSHooks64.dll, ZetaOverlay.dll");
+        }
+
+        // A LONG SESSION: six hundred lines after the start line push the `modules:` line out
+        // of the 256-line tail - which is exactly why the report has its own field. The arrival
+        // late in the session is in the tail and in the field; the start line is in the field
+        // only.
+        {
+            std::string log = session + stamped("modules: 2 foreign - NahimicOSD.dll, RTSSHooks64.dll");
+            for (int i = 0; i < 600; ++i) { log += stamped("source: tuned " + std::to_string(i)); }
+            log += stamped("module arrived: ZetaOverlay.dll (2999.0 s)");
+            const std::string text = reportFor("long", 8102, log);
+            CHECK(!contains(logSection(text), "modules: 2 foreign"));   // the tail has moved past it...
+            CHECK(contains(logSection(text), "module arrived: ZetaOverlay.dll"));
+            CHECK(contains(text, "\nforeign-modules: NahimicOSD.dll, RTSSHooks64.dll, ZetaOverlay.dll\n"));  // ...the field has not
+        }
+
+        // NO MODULE LINE AT ALL (diagnostics came on part-way through the session): the report
+        // says so, and the uploader sends nothing for it.
+        {
+            const std::string text = reportFor("none-logged", 8103, session + stamped("source: opened"));
+            CHECK(lineOf(text, "foreign-modules: ") == "foreign-modules: (not recorded)");
+            ParsedReport p;
+            CHECK(parseReportText(text, p));
+            CHECK(p.foreignModules.empty());
+            const nlohmann::json j = nlohmann::json::parse(uploadJson(p, std::string()), nullptr, false);
+            CHECK(j.is_object() && j["context"].contains("foreignModules") &&
+                  j["context"]["foreignModules"].get<std::string>().empty());
+        }
+
+        // NONE FOREIGN is a statement, not an absence.
+        {
+            const std::string text = reportFor("nothing-foreign", 8104, session + stamped("modules: none foreign"));
+            CHECK(lineOf(text, "foreign-modules: ") == "foreign-modules: (none)");
+            ParsedReport p;
+            CHECK(parseReportText(text, p));
+            CHECK(p.foreignModules == "(none)");
+        }
+
+        // THE START LINE'S OWN "+K more" is carried, because those names are not in the log.
+        {
+            const std::string text = reportFor("capped", 8105,
+                                               session + stamped("modules: 9 foreign - a.dll, b.dll, +7 more"));
+            CHECK(lineOf(text, "foreign-modules: ") == "foreign-modules: a.dll, b.dll, +7 more");
+        }
+
+        // AN EARLIER SESSION'S LINES ARE NOT THIS SESSION'S: only what follows the newest
+        // start line counts.
+        {
+            const std::string text = reportFor(
+                "earlier", 8106,
+                stamped("FoxSDR 0.99.68 (111111111111) starting") + stamped("modules: 1 foreign - OldOverlay.dll") +
+                    session + stamped("source: opened"));
+            CHECK(lineOf(text, "foreign-modules: ") == "foreign-modules: (not recorded)");
+            CHECK(!contains(lineOf(text, "foreign-modules: "), "OldOverlay"));
+        }
+
+        // A LINE THAT IS NOT NAMES-ONLY is not carried: a hand-edited log that put a path in
+        // the line does not get the path into the report's context block or the upload.
+        {
+            const std::string text = reportFor(
+                "edited", 8107,
+                session + stamped("modules: 2 foreign - C:\\Users\\steve\\Overwolf\\evil.dll, good.dll") +
+                    stamped("module arrived: D:\\x\\worse.dll (1.0 s)"));
+            const std::string field = lineOf(text, "foreign-modules: ");
+            CHECK(field == "foreign-modules: good.dll");
+            CHECK(!contains(field, "evil") && !contains(field, "worse") && !contains(field, "\\"));
+        }
+
+        // Another process's lines that only look like ours are not read as ours.
+        {
+            const std::string text = reportFor(
+                "lookalike", 8108,
+                session + stamped("vendor: modules: 1 foreign - evil.dll") + "modules: 1 foreign - evil.dll\n");
+            CHECK(lineOf(text, "foreign-modules: ") == "foreign-modules: (not recorded)");
+        }
+
+        std::error_code ec;
+        if (g_checksFailed == 0) { fs::remove_all(dir, ec); }
     }
 
     // =======================================================================

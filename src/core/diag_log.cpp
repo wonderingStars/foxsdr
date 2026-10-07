@@ -1581,11 +1581,12 @@ bool stderrIsWatchedConsole() {
     // A character device that is not a console (NUL, a serial port) has no
     // reader either.
     if (::GetConsoleMode(h, &mode) == 0) { return false; }
-    // THE DISTINCTION THAT MATTERS. cascade.exe is a console-subsystem binary,
-    // so a Start Menu launch gets a console too - one Windows created for it,
-    // with nothing else attached and nobody reading it. A terminal launch
-    // shares the shell's console, so the shell is on the list as well. Only
-    // the second is a person watching.
+    // THE DISTINCTION THAT MATTERS. Until 0.99.69 cascade.exe was a console-
+    // subsystem binary, so a Start Menu launch got a console too - one Windows
+    // created for it, with nothing else attached and nobody reading it (now such a
+    // launch has none, and the check above has already said no). A terminal
+    // launch shares the shell's console (borrowed, console_owner.hpp), so the
+    // shell is on the list as well. Only the second is a person watching.
     DWORD pids[4] = {};
     const DWORD n = ::GetConsoleProcessList(pids, 4);
     return n > 1;

@@ -61,7 +61,7 @@ Internal project/binary name: `cascade`.
 
 ## Where it is now
 
-The current release is **0.99.68** (October 2026), in open beta and free for
+The current release is **0.99.69** (October 2026), in open beta and free for
 noncommercial use, with its decoders and instruments delivered as plugins from
 a catalogue. These are screenshots of an earlier shipping build.
 
@@ -2447,8 +2447,11 @@ receiver** until the original driver is put back.
 `cascade.exe --soapy-check` prints the search paths, the loaded modules and
 either the device it opened or the reason there was none, and
 `cascade.exe --rtlsdr-check` does the same for the native RTL-SDR path: what is
-bound to WinUSB, which tuner answered, the gain ranges, and how many samples
-arrived in three seconds.
+bound to WinUSB, which tuner answered, the gain ranges, how many samples
+arrived in three seconds, and whether they are a signal at all - a dongle that
+has stopped receiving can deliver the same few thousand samples over and over
+at the right rate and level, and the check says so and tells you to unplug it
+and plug it back in.
 
 **The hardware search runs in a separate short-lived process.** Looking for
 radios means loading every SDR driver installed on the machine and letting each

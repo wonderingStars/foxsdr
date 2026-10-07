@@ -23,7 +23,9 @@
 //     field above it (the group "Manual" until that is changed) in the
 //     FREQUENCY LIST, like any other row: saved with it, on the spectrum, and
 //     played by the monitor. WFM is not offered - the monitor's strips run at
-//     24-96 kHz and have no de-emphasis - and a WFM row is not played;
+//     24-96 kHz and wide FM needs 200 kHz - and a WFM row is not played (an
+//     NFM row is played through the 50 us de-emphasis the receiver's NFM has,
+//     since 0.99.69);
 //   - presets (0.99.66): the same tester asked to "upload a file of
 //     frequencies", to "enter frequencies and save them as a preset" and to
 //     "export the file of frequencies". A preset IS a group of the frequency
@@ -220,16 +222,32 @@ void AppWindow::airbandAddAirport(const cc::Airport& a) {
     const std::size_t total = items.size();
     const std::size_t added = freqMgr_.addMany(std::move(items));
     saveBookmarks();
-    airbandGroup_ = cc::airportGroupName(a);
+    const std::string group = cc::airportGroupName(a);
+    // PUT THE AIRPORT ON SHOW - unless the monitor is listening (0.99.69). The
+    // group on show is what the monitor plays, and the running monitor restarts
+    // on any change of it: a lookup used to replace the preset being heard with
+    // the airport's rows, or narrow "every ticked" down to them, under the
+    // listener's ear. The rows are added either way, as Add and Import do.
+    airbandShowGroup(group);
     testerUsage_.noteFeature("airband");
     if (added == 0) {
         airbandNote_ = cc::formatText(tr("%s is already in the frequency list (%zu frequencies)."),
-                                      airbandGroup_.c_str(), total);
+                                      group.c_str(), total);
     } else {
         airbandNote_ = cc::formatText(
             tr("%s: %zu frequencies added to the frequency list, %zu ticked. ATIS and weather "
                "broadcasts are left unticked - they never stop talking."),
-            airbandGroup_.c_str(), added, ticked);
+            group.c_str(), added, ticked);
+    }
+    // A monitor playing ANOTHER preset does not play these rows, and a note that
+    // says "ticked" would read as though it did: say what it is still playing and
+    // where the choice is. ("Every ticked" plays them - they are ticked - and the
+    // airport's own list needs no telling.)
+    if (airbandListening_ && !airbandGroup_.empty() && airbandGroup_ != group) {
+        airbandNote_ += " " + cc::formatText(
+                                  tr("The monitor keeps playing %s; choose %s in the group list to "
+                                     "hear it."),
+                                  airbandGroup_.c_str(), group.c_str());
     }
     cc::diagLogf("airband: an airport's list added (%zu frequencies, %zu new)", total, added);
 }
@@ -261,8 +279,8 @@ std::string AppWindow::airbandPresetName() const {
 }
 
 // SHOW A GROUP THE SECTION HAS JUST ADDED TO (0.99.66 review): Add and the
-// preset's Import put the group on show, as an airport's lookup does - but only
-// when that cannot change what is being played. A monitor that is listening keeps
+// preset's Import put the group on show - as an airport's lookup does, since
+// 0.99.69 - but only when that cannot change what is being played. A monitor that is listening keeps
 // its choice (the preset showing, or "every ticked"): a row added to another
 // preset must not narrow "every ticked" down to it. And a group the monitor has
 // nothing to play in (an import of WFM rows only, a file that added nothing) is

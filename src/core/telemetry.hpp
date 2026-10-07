@@ -56,6 +56,7 @@
 #include <thread>
 #include <vector>
 
+#include "core/exit_cause.hpp"
 #include "core/health_events.hpp"
 
 namespace cascade::core {
@@ -79,6 +80,14 @@ struct TelemetryReport {
     std::string arch;       // "x64"
     std::uint64_t launches = 0;
     std::uint64_t crashes = 0;
+    // HOW THOSE UNCLEAN EXITS ENDED (0.99.69, core/exit_cause.hpp): four lifetime
+    // counters, sent as `exits_died`, `exits_killed`, `exits_ended` and
+    // `exits_unknown`. Bare numbers, kept and reset exactly like `crashes`, and
+    // classed only from what Diagnostics already writes on the machine (a report's
+    // kind and its fixed sentence): no report text, no code, no module and no time of
+    // day leaves it. Their sum is the unclean exits counted since 0.99.69, so
+    // `crashes` minus the sum is the number from before the split existed.
+    ExitCounts exits;
     // DISPLAY STALLS: how many times the hang watchdog classified a freeze as
     // `kind: stall` (the display driver, not this application - see
     // HangWatchdog::isDisplayPresentationStall) and the record has not yet

@@ -222,6 +222,16 @@ struct DiagContext {
     // when it is rendered, so a caller that is handed something odd cannot put
     // it in a report.
     std::vector<std::string> patchRadioKinds;
+    // THE OTHER SOFTWARE'S DLLs IN THIS PROCESS (0.99.69, core/foreign_modules.hpp): the
+    // VALUE of the `foreign-modules:` line, already rendered by the watch that knows -
+    // the file names (never a folder) of every loaded module that is neither Windows' nor
+    // ours, alphabetical, `(none)` for none, or one of the fixed sentences `(not scanned
+    // yet)` and `(not applicable)`. `(not recorded)`, the default, is what a process that
+    // runs no watch says (the enumeration child, a test, a headless run). It is in the
+    // context block, not only in the log, because the log's tail is 256 lines and the
+    // first lines of a long session are gone from it; it is the line a reader of a "died
+    // in present" report uses to see what overlay was in the process.
+    std::string foreignModules = "(not recorded)";
     std::vector<std::string> plugins;  // "name version", loaded plugins only
     DiagAudio audio;                   // the sound path, see DiagAudio
 };

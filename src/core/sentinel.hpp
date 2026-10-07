@@ -177,6 +177,16 @@ struct SentinelReportInfo {
     std::int64_t uptimeSec = -1;            // -1: not known, the line is left out
     std::vector<std::string> logLines;      // the end of the session's log, oldest first
     std::size_t logTotalLines = 0;          // how many lines the session had in the files
+    // THE OTHER SOFTWARE'S DLLs IN THE PROCESS (0.99.69), the value of the context line
+    // `foreign-modules:`. The sentinel reads no memory of the application, so this is
+    // rebuilt from the one place the application wrote it that outlives it: the
+    // `modules:` line it logs at start and each `module arrived:` line after it, read
+    // from the WHOLE session's log (SessionLogTail::moduleLines) and not from the
+    // 256-line tail, which a long session has moved far past the start line. File
+    // names only, as the application writes them. `(not recorded)` - the default - when
+    // the log holds neither (diagnostics was switched on part-way, or the line has
+    // been rotated away).
+    std::string foreignModules = "(not recorded)";
     // WHERE WINDOWS SAYS IT ENDED (0.99.66): the faulting module's file name and the
     // offset in it, from the Application Error event of this death. `located` false
     // (the default, and every report written before 0.99.66) adds nothing to the

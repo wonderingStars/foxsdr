@@ -13,6 +13,7 @@
 
 #include "core/diag_log.hpp"
 #include "core/i18n.hpp"
+#include "core/leak_on_purpose.hpp"
 #include "core/serial_port.hpp"
 #include "core/utf8_text.hpp"
 #include "source/fx2_loader.hpp"
@@ -575,7 +576,8 @@ void AorSource::stopStreamingLocked() {
                                "the reader did not return; the interface is left to the operating "
                                "system and FoxSDR must be restarted to use it again");
             reader_.detach();
-            (void)dev_.release();
+            // Marked for LeakSanitizer (core/leak_on_purpose.hpp).
+            cascade::core::leakOnPurpose(dev_.release());
             running_.store(false, std::memory_order_relaxed);
             return;
         }

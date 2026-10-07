@@ -120,7 +120,12 @@ void testPayloadContainsOnlyTheAgreedFields() {
     r.os = osDescription();
     r.arch = archDescription();
     r.launches = 12;
-    r.crashes = 1;
+    r.crashes = 7;
+    // How the unclean exits ended (0.99.69): four counts that add up.
+    r.exits.died = 2;
+    r.exits.killed = 3;
+    r.exits.ended = 1;
+    r.exits.unknown = 1;
     r.channel = "installer";
     r.firstRun = "2026-09-29";
     r.firstVersion = "0.99.46";
@@ -137,15 +142,26 @@ void testPayloadContainsOnlyTheAgreedFields() {
     // and they have to come and change the privacy notice too - which is
     // exactly the conversation that should happen.
     const std::set<std::string> allowed = {
-        "id", "v", "os", "arch", "launches", "crashes", "stalls", "health", "ch", "first", "fv",
-        "sessionSec", "sdr", "modes", "panels", "plugins"};
+        "id", "v", "os", "arch", "launches", "crashes", "exits_died", "exits_killed", "exits_ended",
+        "exits_unknown", "stalls", "health", "ch", "first", "fv", "sessionSec", "sdr", "modes",
+        "panels", "plugins"};
     std::set<std::string> actual;
     for (auto it = j.begin(); it != j.end(); ++it) { actual.insert(it.key()); }
     CHECK(actual == allowed);
 
     CHECK(j["v"] == "0.48.0");
     CHECK(j["launches"] == 12);
-    CHECK(j["crashes"] == 1);
+    CHECK(j["crashes"] == 7);
+    // THE SPLIT RIDES BESIDE THE SUM, as bare numbers under their own names, and the
+    // four add up to what a client that has only ever run this version would send.
+    CHECK(j["exits_died"] == 2);
+    CHECK(j["exits_killed"] == 3);
+    CHECK(j["exits_ended"] == 1);
+    CHECK(j["exits_unknown"] == 1);
+    CHECK(j["exits_died"].is_number_unsigned() && j["exits_unknown"].is_number_unsigned());
+    CHECK(j["exits_died"].get<std::uint64_t>() + j["exits_killed"].get<std::uint64_t>() +
+              j["exits_ended"].get<std::uint64_t>() + j["exits_unknown"].get<std::uint64_t>() ==
+          j["crashes"].get<std::uint64_t>());
     CHECK(j["ch"] == "installer");
     CHECK(j["first"] == "2026-09-29");
     CHECK(j["fv"] == "0.99.46");
@@ -184,6 +200,10 @@ const std::map<std::string, std::string>& usageFieldLabels() {
         {"fv", "First version"},
         {"launches", "Launch count"},
         {"crashes", "Crash count"},
+        {"exits_died", "Unclean exits: died"},
+        {"exits_killed", "Unclean exits: killed"},
+        {"exits_ended", "Unclean exits: ended by the system"},
+        {"exits_unknown", "Unclean exits: unknown"},
         {"stalls", "Display stalls"},
         {"health", "Failure counts"},
         {"sessionSec", "Session length"},

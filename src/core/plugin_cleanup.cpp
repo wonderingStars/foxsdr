@@ -94,6 +94,58 @@ std::vector<SupersededPlugin> supersededBy(const std::vector<SupersededPlugin>& 
     return out;
 }
 
+std::vector<PluginFileVerdict> classifyPluginFiles(const std::vector<LoadedPlugin>& records,
+                                                   const std::vector<InstalledPlugin>& manifest,
+                                                   const std::vector<PluginCatalogEntry>& catalogue) {
+    // THE INDEX KNOWS A FILE two ways: the manifest records it (even a record
+    // whose file the inventory failed to find - the name is still its own), or
+    // the catalogue publishes that very file name for this platform.
+    const auto known = [&](const std::string& file) {
+        for (const InstalledPlugin& r : manifest) {
+            if (sameFile(r.file, file)) { return true; }
+        }
+        for (const PluginCatalogEntry& e : catalogue) {
+            const PluginPlatform* p = e.thisPlatform();
+            if (p != nullptr && sameFile(p->file, file)) { return true; }
+        }
+        return false;
+    };
+    std::vector<PluginFileVerdict> out;
+    out.reserve(records.size());
+    for (const LoadedPlugin& p : records) {
+        PluginFileVerdict v;
+        v.file = pluginKey(p);
+        if (v.file.empty()) { continue; }
+        v.loaded = p.loaded;
+        v.indexed = known(v.file);
+        if (!p.loaded) { v.detail = p.error; }
+        out.push_back(std::move(v));
+    }
+    return out;
+}
+
+bool removeOrphanedPlugin(const std::string& pluginsDir, const std::string& file,
+                          const std::vector<LoadedPlugin>& records,
+                          const std::vector<InstalledPlugin>& manifest,
+                          const std::vector<PluginCatalogEntry>& catalogue,
+                          const PluginFileRemover& remover, std::string& error) {
+    error.clear();
+    for (const PluginFileVerdict& v : classifyPluginFiles(records, manifest, catalogue)) {
+        if (!sameFile(v.file, file)) { continue; }
+        if (v.loaded) {
+            error = "\"" + v.file + "\" is running, so it is not removed as an orphaned file";
+            return false;
+        }
+        if (v.indexed) {
+            error = "\"" + v.file + "\" is in the plugin index, so it is not removed as an orphaned file";
+            return false;
+        }
+        return remover(pluginsDir, v.file, error);
+    }
+    error = "\"" + file + "\" is not a module the last scan found, so it is not removed";
+    return false;
+}
+
 PluginFileRemover defaultPluginFileRemover() {
     return [](const std::string& pluginsDir, const std::string& file, std::string& error) {
         // PluginRepo::remove keeps no state of its own; the instance is only

@@ -30,6 +30,7 @@
 #include "core/crash_handler.hpp"
 #include "core/diag_log.hpp"
 #include "core/diag_report.hpp"
+#include "core/foreign_modules.hpp"
 #include "core/frame_timing.hpp"
 #include "core/version.hpp"
 #include "test_check.hpp"
@@ -1096,6 +1097,8 @@ int main() {
         ctx.deviceOpen = true;
         ctx.sdrModel = "uhd b200";
         ctx.ppm = "+1.5 by retuning";
+        // THE OTHER SOFTWARE'S DLLs (0.99.69): file names, as the watch hands them over.
+        ctx.foreignModules = "NahimicOSD.dll, RTSSHooks64.dll";
         ctx.plugins.push_back("ADS-B 1.1.0");
         ctx.plugins.push_back("AIS 1.0.0");
         // THE SOUND PATH (0.99.61): the four facts a "no audio from my
@@ -1151,6 +1154,13 @@ int main() {
         // "name: value" form the inventory below parses.
         CHECK(bundle.find("\nsdrplay-service: stopped, manual start (SDRplayAPIService)\n") !=
               std::string::npos);
+
+        // THE OTHER SOFTWARE'S DLLs (0.99.69), by value, in the exact "name: value" form the
+        // inventory parses, inside the header block and BEFORE the plugin list (the one part
+        // of the block that is cut when it overruns its buffer).
+        CHECK(bundle.find("\nforeign-modules: NahimicOSD.dll, RTSSHooks64.dll\n") != std::string::npos);
+        CHECK(bundle.find("\nforeign-modules: ") < bundle.find("\nplugin: "));
+        CHECK(bundle.find("\nforeign-modules: ") < bundle.find("--- log ---"));
 
         // Everything the docs promise is present, by value not just by label.
         CHECK(bundle.find("version: 0.61.0") != std::string::npos);
@@ -1209,6 +1219,59 @@ int main() {
         CHECK(bundle.find("centre") == std::string::npos);
         CHECK(bundle.find("center") == std::string::npos);
         CHECK(bundle.find("bookmark") == std::string::npos);
+    }
+
+    // --- The other software's DLLs say every state they can be in (0.99.69) -------
+    // A process that never looked says `(not recorded)`, the first moments of a run say
+    // `(not scanned yet)`, Linux says `(not applicable)`, none foreign is `(none)`, and
+    // a value that is not a list of plain file names - a path, a sentence - is never
+    // carried: the line says `(not recorded)` in its place.
+    {
+        auto block = [](const std::string& v) {
+            DiagContext ctx;
+            ctx.foreignModules = v;
+            setDiagContext(ctx);
+            return diagContextBlock();
+        };
+        auto has = [](const std::string& b, const char* line) {
+            return b.find(std::string("\n") + line + "\n") != std::string::npos;
+        };
+        {
+            DiagContext fresh;  // the default: nothing filled it in
+            setDiagContext(fresh);
+            CHECK(has("\n" + diagContextBlock(), "foreign-modules: (not recorded)"));
+        }
+        CHECK(has("\n" + block("(not scanned yet)"), "foreign-modules: (not scanned yet)"));
+        CHECK(has("\n" + block("(not applicable)"), "foreign-modules: (not applicable)"));
+        CHECK(has("\n" + block("(none)"), "foreign-modules: (none)"));
+        CHECK(has("\n" + block("a.dll, b.dll, +3 more"), "foreign-modules: a.dll, b.dll, +3 more"));
+        CHECK(has("\n" + block("C:\\Users\\steve\\evil.dll"), "foreign-modules: (not recorded)"));
+        CHECK(has("\n" + block("this is not a list: at all"), "foreign-modules: (not recorded)"));
+        CHECK(block("C:\\Users\\steve\\evil.dll").find("evil") == std::string::npos);
+        // A list with one bad name keeps the good one, and only that.
+        CHECK(has("\n" + block("C:\\x\\evil.dll, good.dll"), "foreign-modules: good.dll"));
+        // The line is in the block ahead of the plugin list, which is what a full buffer cuts.
+        {
+            DiagContext c;
+            c.foreignModules = "a.dll";
+            for (int i = 0; i < 32; ++i) { c.plugins.push_back("A plugin with a fairly long name " + std::to_string(i) + " 1.0.0"); }
+            setDiagContext(c);
+            const std::string b = diagContextBlock();
+            CHECK(b.find("foreign-modules: a.dll") != std::string::npos);
+            CHECK(b.find("foreign-modules: ") < b.find("plugin: "));
+        }
+        // The widest the list gets, with the plugin list at its longest: still whole.
+        {
+            std::vector<std::string> names;
+            for (int i = 0; i < 60; ++i) { names.push_back("Overlay" + std::to_string(100 + i) + "xxxxxxxxxxxxxxxxxx.dll"); }
+            DiagContext c;
+            c.foreignModules = foreignFieldText(names);
+            for (int i = 0; i < 32; ++i) { c.plugins.push_back("A plugin with a fairly long name " + std::to_string(i) + " 1.0.0"); }
+            setDiagContext(c);
+            const std::string b = diagContextBlock();
+            CHECK(b.find("foreign-modules: " + c.foreignModules + "\n") != std::string::npos);
+            CHECK(b.find("plugin: A plugin with a fairly long name 0 1.0.0") != std::string::npos);
+        }
     }
 
     // --- The sound path says every state a "no audio" report can be in ------

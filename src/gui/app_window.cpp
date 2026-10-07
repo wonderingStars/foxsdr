@@ -610,6 +610,9 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            a.nativeArgs == b.nativeArgs &&
            // A tick in the Source section that calls no save of its own.
            a.lookForNetworkUsrps == b.lookForNetworkUsrps &&
+           // The RADIO SETUP page's "Don't show this again" tick: a click that
+           // calls no save of its own.
+           a.radioSetupDontShow == b.radioSetupDontShow &&
            // The per-radio bias tee memory: switched by the checkbox and the
            // deck's key, neither of which saves on its own.
            a.biasTee == b.biasTee &&
@@ -753,6 +756,15 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            a.telemetryFirstVersion == b.telemetryFirstVersion &&
            a.telemetryLaunches == b.telemetryLaunches &&
            a.telemetryCrashes == b.telemetryCrashes &&
+           // The classes of those unclean exits (0.99.69): the unknown that start-up
+           // counts is moved to its class a moment later, once the evidence has been
+           // read, and that move has to be written like the count it came from. The
+           // session's start is not here - it is constant for the session and rides on
+           // the forced save at the top of the frame loop.
+           a.telemetryExitsDied == b.telemetryExitsDied &&
+           a.telemetryExitsKilled == b.telemetryExitsKilled &&
+           a.telemetryExitsEnded == b.telemetryExitsEnded &&
+           a.telemetryExitsUnknown == b.telemetryExitsUnknown &&
            // Tester usage: only the token, on telemetryInstallId's own rule -
            // it changes on a click (pasting or removing a code) and nothing
            // else makes this field's row of the file stale. testerUsageCurrent
@@ -1614,6 +1626,22 @@ int AppWindow::run(int frames) {
         forceDisplayStall = forceStall != nullptr && forceStall[0] == '1';
         const char* hook = std::getenv("CASCADE_PLUGIN_TEST");
         if (hook != nullptr && *hook != '\0') { pluginTestHook_ = hook; }
+        // A SYNTHETIC MACHINE FOR THE RADIO SETUP PAGE (core/radio_setup.hpp,
+        // fakeInventory): replaces the probe and the application's own radio
+        // lists, so a test makes the page appear with a chosen finding on a desk
+        // that holds a real radio, or stay away on one that holds none. Bounded
+        // runs only, like every hook here: an interactive session can never be
+        // told it has no radio by a stray variable.
+        if (const char* fake = std::getenv("FOXSDR_FAKE_RADIO_SETUP");
+            fake != nullptr && *fake != '\0') {
+            radioSetupFake_ = fake;
+        }
+        radioSetupBounded_ = true;
+        // A DLL to map on frame 90, standing in for another program's injected hook
+        // (foreignModuleTestPath_ in the header). Bounded runs only, like every hook here.
+        if (const char* fm = std::getenv("CASCADE_FOREIGN_MODULE_TEST"); fm != nullptr && *fm != '\0') {
+            foreignModuleTestPath_ = fm;
+        }
         // The deck's bias tee stand-in (gui/bias_tee.hpp, biasStandInFor):
         // bounded runs only, for the same reason as the script below.
         biasStandIn_ = cascade::gui::biasStandInFor(std::getenv("FOXSDR_FORCE_BIAS_KEY"), true);
@@ -1749,6 +1777,13 @@ int AppWindow::run(int frames) {
     // the mid-session toggle cannot drift apart again.
     applyDiagnosticsEnabled(diagnosticsEnabled_);
     refreshDiagContext();
+    // THE OTHER SOFTWARE'S DLLs (0.99.69, core/foreign_modules.hpp): the window is up and
+    // the log file is armed, so the line that names every loaded module that is neither
+    // Windows' nor ours can reach the file. Started here, after applyDiagnosticsEnabled, for
+    // that reason; the scan itself is on a thread of its own, so the first frame is not
+    // waiting for the module list, and poll() (once a frame, below) writes one line per
+    // arrival after it. Idempotent, so a second run() on this object starts nothing.
+    foreignModules_.start();
     // A freeze the watchdog classifies as the DISPLAY's, not ours, is counted on
     // the watchdog's own thread (see StallLedger). The ledger refuses unless
     // usage reporting is on, so an opted-out run counts nothing.
@@ -1841,6 +1876,11 @@ int AppWindow::run(int frames) {
         cascade::core::breadcrumb::setActivity(cascade::core::breadcrumb::kOpeningRadio,
                                                deviceOpenPending_);
         if (rendered % 300 == 0) { cascade::core::sentinelPoll(); }
+        // HOW THE PREVIOUS SESSION ENDED (0.99.69): while an unclean exit found at
+        // start-up is waiting for its evidence this asks, each frame, whether the
+        // worker that reads the reports folder has answered - a flag test when
+        // nothing is waiting, a mutex test when something is, never a disk read.
+        exitCausePoll();
 
         // A MODAL WINDOW LOOP INSIDE THE PUMP is a person holding the window, not
         // a slow frame: the pump does not return until they let go.
@@ -1919,6 +1959,9 @@ int AppWindow::run(int frames) {
         featureRequestSender_.poll(static_cast<std::uint64_t>(std::time(nullptr)));
         // ...and the same for the REPORT A BUG / DISLIKE page's sender.
         problemReportSender_.poll(static_cast<std::uint64_t>(std::time(nullptr)));
+        // The RADIO SETUP probe: started on the first frame, collected without
+        // ever waiting, and the once-a-launch decision to raise the page.
+        radioSetupFrame();
         frameScope.to(cascade::core::FrameScope::Other);
         // The hook's ONE fetch, started on the first frame so the rest of the
         // bounded run proves the window keeps rendering while it is in
@@ -2378,7 +2421,13 @@ int AppWindow::run(int frames) {
         // else it says (volume, mute, the squelch's gate, the sound output).
         // Out of state that already exists, and an unchanged block writes
         // nothing (setDiagContext).
+        //
+        // THE ARRIVALS FIRST (0.99.69): a module another program injected since the last
+        // frame is written to the log here, on this thread, and is in the list the block
+        // is rendered from on the next line. One atomic load when nothing arrived.
+        foreignModules_.poll();
         refreshDiagContext();
+        loadForeignModuleForTest(rendered);  // the bounded-run seam, see the header
 
         // --diag-toggle: flip the Settings > Diagnostics switch mid-session,
         // through the SAME function the checkbox calls, on frame 30 - before
@@ -2856,6 +2905,10 @@ cascade::core::DiagContext AppWindow::currentDiagContext(std::size_t* loadedOut)
         ctx.patchRadioKinds.push_back(driver.empty() ? key.substr(0, key.find('|')) : driver);
     }
     std::sort(ctx.patchRadioKinds.begin(), ctx.patchRadioKinds.end());
+    // The other software's DLLs in this process, by file name (0.99.69): what the watch has
+    // seen at start and since. In the one builder, so a bundle and a fault report say the
+    // same thing about it.
+    ctx.foreignModules = foreignModules_.contextValue();
     // The sound path: the same facts the Sinks panel's chip and the rail's
     // volume, mute and squelch controls show, none of them a frequency.
     ctx.audio = soundPathFacts(pipeline_.audio(), audioOpen_.inFlight(), audioRecoveries_, volume_,
@@ -2899,6 +2952,22 @@ void AppWindow::refreshDiagContext() {
         diagPluginCount_ = loaded;
         cascade::core::refreshModuleTable();
     }
+}
+
+void AppWindow::loadForeignModuleForTest(int rendered) {
+    // THE BOUNDED-RUN SEAM (foreignModuleTestPath_, CASCADE_FOREIGN_MODULE_TEST): another
+    // program's DLL arrives on frame 90, on this thread, the way a hook an overlay injects
+    // does - once, and left mapped. Nothing to do in any other run: the path is empty.
+#if defined(_WIN32)
+    if (foreignModuleTestPath_.empty() || rendered != 90) { return; }
+    const std::string path = foreignModuleTestPath_;
+    foreignModuleTestPath_.clear();
+    if (::LoadLibraryA(path.c_str()) == nullptr) {
+        std::fprintf(stderr, "cascade: CASCADE_FOREIGN_MODULE_TEST could not load its DLL\n");
+    }
+#else
+    (void)rendered;
+#endif
 }
 
 namespace {
@@ -8687,6 +8756,17 @@ void AppWindow::drawSourceSection() {
                                    "like) as well as on USB. A USB USRP is always looked for "
                                    "when one is plugged in."));
     }
+    // THE WAY BACK TO THE RADIO SETUP PAGE, here because this is where a person
+    // looks when their radio is not in the list above. The page opens by itself
+    // once a launch for someone with no usable radio and can be silenced for
+    // good; this key opens it whenever they want it, silenced or not.
+    if (ImGui::SmallButton(trId("RADIO SETUP"))) { radioSetupOpen_ = true; }
+    cascade::gui::census::note("source:radio-setup");
+    {
+        const ImVec2 k0 = ImGui::GetItemRectMin();
+        const ImVec2 k1 = ImGui::GetItemRectMax();
+        cascade::gui::census::rect("source:radio-setup", k0.x, k0.y, k1.x, k1.y);
+    }
     // SAID WHEN THE LAST SCAN LEFT UHD OUT, so a network USRP that is not in
     // the list is not missing silently (gui::networkUsrpHint). Not while the
     // box is ticked: the rescan that tick starts is about to answer it.
@@ -13253,6 +13333,40 @@ void AppWindow::removeInstalledPlugin(const std::string& fileName) {
     rescanPlugins();
 }
 
+void AppWindow::removeOrphanedPlugin(const std::string& fileName) {
+    installError_.clear();
+    installReport_.clear();
+    std::string err;
+    bool deleted = false;
+    {
+        // The delete only, on the GUI thread and under a pause, as removeInstalledPlugin's
+        // is. NOTHING IS UNLOADED: the file removed is, by the rule judged here, not
+        // loaded - and when it is, the rule refuses and nothing is deleted.
+        cascade::core::WatchdogPause holdWatchdog(watchdog_);
+        deleted = cascade::core::removeOrphanedPlugin(
+            pluginDir_, fileName, pluginHost_.plugins(), pluginInventory_.plugins, catalog_,
+            pluginRemoverFor(testHooks_.pluginRemove), err);
+    }
+    // ONE LINE, whichever way it went: the file is a third party's code or a
+    // user's own, and "what did FoxSDR delete from my plugin folder" has to have
+    // an answer in the log that outlives the window.
+    if (deleted) {
+        cascade::core::diagLogf("plugin inventory: removed %s (not in the plugin index, not running)",
+                                fileName.c_str());
+        std::string removedBuf;
+        cascade::core::formatUtf8(removedBuf, tr("Removed %s"), fileName.c_str());
+        installReport_ = removedBuf;
+        // The folder changed, so the list is read again; a refusal changed
+        // nothing and leaves every module as it was (the window's Rescan key is
+        // there for a row gone stale).
+        rescanPlugins();
+    } else {
+        cascade::core::diagLogf("plugin inventory: did not remove %s: %s", fileName.c_str(),
+                                err.c_str());
+        installError_ = err;
+    }
+}
+
 void AppWindow::refreshPluginRunner() {
     // Decoder instances are created FOR a sample rate and a centre frequency,
     // so they are only valid for the source that was active when they were
@@ -17686,6 +17800,12 @@ void AppWindow::drawFittedModulesWindow() {
         const std::vector<cascade::core::DecoderStatus> status = pluginRunner_.status();
         const std::vector<cascade::core::LoadedPlugin>& list = pluginHost_.plugins();
         const std::vector<std::string> settingsAskers = pluginUi_.api().settingsRequesters();
+        // WHICH FILES THE PLUGIN INDEX DOES NOT KNOW AND THE HOST IS NOT RUNNING
+        // (0.99.69, core/plugin_cleanup.hpp). Pure, from what this frame already
+        // holds - the scan, the install records, the catalogue - and no question to
+        // the disk.
+        const std::vector<cascade::core::PluginFileVerdict> verdicts =
+            cascade::core::classifyPluginFiles(list, pluginInventory_.plugins, catalog_);
         model.modules.reserve(list.size());
         for (const cascade::core::LoadedPlugin& p : list) {
             const std::string file = cascade::core::pluginKey(p);
@@ -17719,6 +17839,12 @@ void AppWindow::drawFittedModulesWindow() {
             // what the install record names.
             m.integrityNote = cascade::core::PluginRepo::changedSinceInstallNote(
                 pluginInventory_.plugins, file);
+            for (const cascade::core::PluginFileVerdict& v : verdicts) {
+                if (v.file == file) {
+                    m.orphaned = v.orphaned();
+                    break;
+                }
+            }
             // THE SIZE IS THE RECORD'S, and makeFittedModule has already
             // carried it. No descriptor holds one, so the host measures the file
             // once, in the scan (LoadedPlugin::fileBytes). It used to be asked of
@@ -17794,6 +17920,9 @@ void AppWindow::drawFittedModulesWindow() {
                 break;
             case cascade::gui::FittedModulesAction::Kind::Remove:
                 removeInstalledPlugin(act.file);
+                break;
+            case cascade::gui::FittedModulesAction::Kind::RemoveOrphan:
+                removeOrphanedPlugin(act.file);
                 break;
             case cascade::gui::FittedModulesAction::Kind::SetTune:
                 setPluginTuneAllowed(act.file, act.flag);
@@ -18555,6 +18684,7 @@ void AppWindow::drawPluginWindows() {
     drawDemodScopePage();
     drawFeatureRequestPage();
     drawProblemReportPage();
+    drawRadioSetupPage();
 
     // Plugin-declared windows. Each gets its own, titled by the plugin, so two
     // plugins cannot collide in one panel.
@@ -22144,6 +22274,25 @@ void AppWindow::drawProblemReportPage() {
     ImGui::Text(tr("%zu / %zu characters"), chars, cascade::core::kFeatureRequestMaxChars);
     ImGui::PopStyleColor();
 
+    // --- a report pasted into the box, recognised (0.99.69) -----------------
+    //
+    // A tester pasted a whole sentinel report here by hand, because the diagnostics
+    // bundle said `upload local-only` and nothing said what that meant. The text is
+    // already going with the message; recognising it lets it travel as a structured
+    // attachment (core/pasted_report.hpp), so the site can file it as the report it
+    // is. One line, drawn BEFORE SEND, so the person knows it was understood.
+    if (!problemReportPastedValid_ || problemReportPastedFor_ != problemReportText_) {
+        problemReportPasted_ = cascade::core::detectPastedReport(problemReportText_);
+        problemReportPastedFor_ = problemReportText_;
+        problemReportPastedValid_ = true;
+    }
+    if (problemReportPasted_) {
+        ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kPhosphor));
+        ImGui::TextWrapped(tr("A report was recognised and attached as %s"),
+                           problemReportPasted_->reportClass.c_str());
+        ImGui::PopStyleColor();
+    }
+
     // --- the optional contact line ----------------------------------------
     ImGui::TextUnformatted(tr("Email or callsign (optional)"));
     {
@@ -22211,6 +22360,25 @@ void AppWindow::drawProblemReportPage() {
         if (problemReportShowDiag_) {
             ImGui::InputTextMultiline("##problemreportdiagpreview", &preparedDiag,
                                       ImVec2(-1.0f, 140.0f), ImGuiInputTextFlags_ReadOnly);
+            // WHAT `upload local-only` IN THAT TEXT MEANS (0.99.69), in a sentence the
+            // person can read in their own language and with the folder the file is
+            // in. The bundle's own list says it once per reason in English; this is the
+            // newest such report's reason, from the same function.
+            const cascade::core::DiagHistory hist = diagHistoryForBundle(false);
+            std::string why;
+            for (const cascade::core::ReportSummary& r : hist.reports.newest) {
+                why = cascade::core::localOnlyReason(r);
+                if (!why.empty()) { break; }
+            }
+            if (!why.empty()) {
+                const std::string dir = cascade::core::diagCrashDir();
+                std::string where;
+                cascade::core::formatUtf8(where, tr("The file is in the reports folder: %s"),
+                                          dir.empty() ? tr("(unavailable)") : dir.c_str());
+                ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kInkMuted));
+                ImGui::TextWrapped("%s %s", tr(why.c_str()), where.c_str());
+                ImGui::PopStyleColor();
+            }
         }
     } else {
         problemReportShowDiag_ = false;
@@ -22309,6 +22477,13 @@ void AppWindow::drawProblemReportPage() {
             // "Attach the diagnostics log" section above) - the exact text
             // "Show what will be sent" would have shown, sent byte for byte.
             payload.diagnostics = preparedDiag;
+        }
+        // The report the line above the contact box said was recognised: the
+        // same words as the message, sent once more with their class (see
+        // core/problem_report.hpp, `attachments`). Re-read from the text as it is
+        // NOW, not from the cache, so what is sent is what the box holds.
+        if (const auto pasted = cascade::core::detectPastedReport(problemReportText_)) {
+            payload.attachments.push_back(*pasted);
         }
         problemReportSentChars_ = cascade::core::featureRequestTextCharCount(problemReportText_);
         problemReportSentKind_ = problemReportKind_;
@@ -26758,6 +26933,13 @@ void AppWindow::drawUsageReportingSection() {
             tr("Each launch: id (random), version, os, arch, launches, crashes, "
                "display stalls, failure counts, session seconds, sdr model, modes used, "
                "panels, plugins."));
+        // 0.99.69: the crash count is split by how the unclean exit ended. Four more
+        // bare counts; the sentence says what they are and that they are only counts.
+        ImGui::TextWrapped(
+            "%s",
+            tr("The crash count is also split by how each unclean exit ended: crashed, "
+               "ended from outside, ended by the system, or not known. Four more counts, "
+               "nothing else."));
         ImGui::TextWrapped(
             "%s",
             tr("Every five minutes while open: id (the same one), version, a beat "
@@ -27688,6 +27870,8 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     // the user has.
     lookForNetworkUsrps_ = cfg.lookForNetworkUsrps;
     startupSoapyArgs_ = cfg.soapyArgs;
+    // The RADIO SETUP page's remembered choice (never the page's open flag).
+    radioSetupDontShow_ = cfg.radioSetupDontShow;
     // Panel mirrors + always-safe DSP settings first (none of these can
     // fail; load() already range-sanitized volume/split/db*).
     volume_ = cfg.volume;
@@ -28323,11 +28507,41 @@ void AppWindow::telemetryStartup(const cascade::core::AppConfig& cfg) {
     }
     telemetryLaunches_ = cfg.telemetryLaunches + 1;
     telemetryCrashes_ = cfg.telemetryCrashes;
+    telemetryExits_.died = cfg.telemetryExitsDied;
+    telemetryExits_.killed = cfg.telemetryExitsKilled;
+    telemetryExits_.ended = cfg.telemetryExitsEnded;
+    telemetryExits_.unknown = cfg.telemetryExitsUnknown;
+    // WHEN THIS SESSION BEGAN, for the next start-up (core/exit_cause.hpp, "which
+    // report belongs to the previous session"). Written by every save of this
+    // session, the first of which is the forced one at the top of the frame loop that
+    // also puts the unclean-exit marker on disk, so the two reach the file together.
+    {
+        const std::time_t began = std::time(nullptr);
+        telemetrySessionStartedEpoch_ = began > 0 ? static_cast<std::uint64_t>(began) : 0u;
+    }
     // The previous run never wrote its clean-exit marker, so it did not end
     // normally. This is the whole crash-counting mechanism: no crash handler,
     // no minidump, nothing uploaded from the failure itself - just the
     // observation that last time the marker was never set.
-    if (!cfg.telemetryCleanExit) { ++telemetryCrashes_; }
+    if (!cfg.telemetryCleanExit) {
+        ++telemetryCrashes_;
+        // HOW IT ENDED (0.99.69). Counted as `unknown` in the same breath as
+        // `crashes` goes up, so the four classes add up to the unclean exits at every
+        // instant; the evidence is read a moment later, off this thread, and moves it
+        // to its class (exitCausePoll). A run with nothing to read - Diagnostics off,
+        // or a predecessor that recorded no start - is final at once.
+        telemetryExits_.noteUnclean();
+        exitCausePrevStart_ = cfg.telemetrySessionStarted;
+        if (!diagnosticsEnabled_) {
+            exitCauseFinish(cascade::core::unknownExit(
+                "Diagnostics were off, so nothing was recorded about it"));
+        } else if (exitCausePrevStart_ == 0) {
+            exitCauseFinish(cascade::core::classifyPreviousExit(
+                cascade::core::ReportListing{}, 0, static_cast<std::int64_t>(telemetrySessionStartedEpoch_)));
+        } else {
+            exitCausePending_ = true;
+        }
+    }
     // THE SAME MARKER, REUSED AS THE TRIGGER TO OFFER A REPORT. It already
     // detects exactly "the last run did not end normally", which is precisely
     // the moment to ask - a crash handler can write a report but it cannot ask
@@ -28416,6 +28630,36 @@ void AppWindow::telemetryStartup(const cascade::core::AppConfig& cfg) {
     // check that follows the same rule.
 }
 
+void AppWindow::exitCauseFinish(const cascade::core::ExitVerdict& v) {
+    exitCausePending_ = false;
+    // One line, whatever the answer, so a log read later says how the session
+    // before it ended and why that is the answer ("unknown" says why too).
+    cascade::core::diagLogf("%s", cascade::core::previousExitLogLine(v).c_str());
+    // The count is moved from `unknown` to the class; for `unknown` itself it is
+    // already there. Either way the total has not changed.
+    telemetryExits_.refine(v.cls);
+}
+
+void AppWindow::exitCausePoll() {
+    if (!exitCausePending_) { return; }
+    // Nothing to read from, now: the switch was turned off, or this run may not
+    // touch the disk at all (a bounded run with no reports folder). Final.
+    if (!diagnosticsEnabled_ || diagCrashDir_.empty()) {
+        exitCauseFinish(cascade::core::unknownExit(
+            diagnosticsEnabled_ ? "this run may not read the reports folder"
+                                : "Diagnostics were switched off before it could be read"));
+        return;
+    }
+    // The listing is read on a worker (startDiagHistoryRead, at the start of the
+    // session); until it has answered, keep waiting - a mutex test, no disk.
+    if (!diagHistory_.ready()) { return; }
+    const cascade::core::DiagHistory h = diagHistory_.snapshot();
+    if (h.pending) { return; }
+    exitCauseFinish(cascade::core::classifyPreviousExit(
+        h.reports, static_cast<std::int64_t>(exitCausePrevStart_),
+        static_cast<std::int64_t>(telemetrySessionStartedEpoch_)));
+}
+
 void AppWindow::crashUploadStart() {
     // OFF MEANS OFF FOR UPLOADING TOO. Both halves are required: the user's
     // switch, and "may this run write to the machine at all" - a bounded CI run
@@ -28477,6 +28721,11 @@ void AppWindow::telemetryJournal(cascade::core::AppConfig& cfg) {
     cfg.telemetryFirstVersion = telemetryFirstVersion_;
     cfg.telemetryLaunches = telemetryLaunches_;
     cfg.telemetryCrashes = telemetryCrashes_;
+    cfg.telemetryExitsDied = telemetryExits_.died;
+    cfg.telemetryExitsKilled = telemetryExits_.killed;
+    cfg.telemetryExitsEnded = telemetryExits_.ended;
+    cfg.telemetryExitsUnknown = telemetryExits_.unknown;
+    cfg.telemetrySessionStarted = telemetrySessionStartedEpoch_;
     cfg.telemetryPending.clear();
     if (!telemetryEnabled_ || telemetryInstallId_.empty()) {
         return;  // opted out: nothing is written, so nothing can later be sent
@@ -28493,6 +28742,7 @@ void AppWindow::telemetryJournal(cascade::core::AppConfig& cfg) {
     r.firstVersion = telemetryFirstVersion_;
     r.launches = telemetryLaunches_;
     r.crashes = telemetryCrashes_;
+    r.exits = telemetryExits_;
     // One atomic read - the frame path never touches the ledger's file. This is
     // the figure as of THIS save; what is actually sent is the ledger's own at
     // the next start-up (see telemetryStartup), which also holds a stall that
@@ -29005,6 +29255,7 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.soapyArgs = src.soapyArgs;
     cfg.nativeArgs = src.nativeArgs;
     cfg.lookForNetworkUsrps = lookForNetworkUsrps_;
+    cfg.radioSetupDontShow = radioSetupDontShow_;
     cfg.biasTee = biasTeePanel_.remembered;
     // Every radio's converter, including those not open now: a converter is
     // part of how that radio is cabled, and must survive a session without it.

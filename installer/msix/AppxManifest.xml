@@ -259,9 +259,17 @@
           It is also the mechanism the packaged-run evidence in README.md was
           collected through.
 
-          desktop4:Subsystem="console" matches the binary: cascade.exe is
-          linked /SUBSYSTEM:CONSOLE (PE Subsystem=3), so it writes its
-          diagnostics to an inherited console rather than to nowhere.
+          desktop4:Subsystem="console" matched the binary until 0.99.69:
+          cascade.exe was linked /SUBSYSTEM:CONSOLE (PE Subsystem=3), so it
+          wrote its diagnostics to an inherited console rather than to nowhere.
+          From 0.99.69 it is a windows-subsystem binary (PE Subsystem=2), so a
+          Start Menu launch has no console window, and it borrows its parent's
+          console with AttachConsole when a terminal started it
+          (src/core/console_owner.hpp). This declaration was NOT changed and has
+          NOT been tried against the new binary: whether an alias started from a
+          terminal still leaves the process a parent console to borrow, or needs
+          Subsystem="windows", is a question only an installed package answers.
+          Run the alias with the version switch at a prompt on the first install.
 
           Schema: uap5:Extension Category="windows.appExecutionAlias", per
           learn.microsoft.com/uwp/schemas/appxpackage/uapmanifestschema/element-uap5-appexecutionalias

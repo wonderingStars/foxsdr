@@ -705,6 +705,14 @@ const KnownWait kKnownWaits[] = {
     {"src/source/sdrplay_service.hpp", "kSdrPlayRestartPoll", 0,
      "how often that worker looks up from WaitForSingleObject to see whether it has been told "
      "to give up. Spent only on the worker"},
+    // THE RADIO SETUP PROBE (2026-10-06). A deadline compared against a clock by
+    // Probe::poll() once a frame, never a wait: nothing sleeps or blocks on it.
+    // The probe's worker is detached and owns its own state, ~Probe joins
+    // nothing, so a probe stuck inside SetupAPI costs the teardown nothing.
+    {"src/core/radio_setup.hpp", "kProbeBudget", 0,
+     "not a wait at all - how long the GUI keeps polling a radio-setup probe before it stops "
+     "waiting and calls the check unreadable. A comparison against steady_clock inside "
+     "Probe::poll(); the worker is detached and ~Probe never joins it"},
     {"src/source/sdrplay_source.hpp", "kControlGrace", 0,
      "not a wait at all (0.99.50) - how long a control that was not answered within "
      "kControlWait is LISTENED FOR before the radio is given up. A deadline compared against a "

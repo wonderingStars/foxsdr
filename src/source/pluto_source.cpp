@@ -6,6 +6,7 @@
 #include "source/pluto_source.hpp"
 
 #include "core/diag_log.hpp"
+#include "core/leak_on_purpose.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -767,7 +768,8 @@ void PlutoSource::stopStreamingLocked() {
                       "the reader did not return; the connection is left to the operating "
                       "system and FoxSDR must be restarted to use this board again");
             reader_.detach();
-            (void)stream_.release();
+            // Marked for LeakSanitizer (core/leak_on_purpose.hpp).
+            cascade::core::leakOnPurpose(stream_.release());
             running_.store(false, std::memory_order_relaxed);
             return;
         }

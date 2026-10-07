@@ -24,6 +24,9 @@
 // disagree with the one the update check uses about which of two versions is
 // newer, and then the host would keep a plugin the updater calls stale.
 #include "core/plugin_repo.hpp"
+// For registerOwnModuleFolder: a plugin and the DLLs beside it are FoxSDR's own to load, so
+// the diagnostic log's "other software's DLLs" list must not name them (0.99.69).
+#include "core/foreign_modules.hpp"
 
 #if defined(_WIN32)
 #include <process.h>  // _getpid, for the write probe's temp name
@@ -1239,6 +1242,11 @@ bool PluginHost::hasPluginExtension(const std::string& filename) {
 void PluginHost::scan(const std::string& dir) {
     unloadAll();
     directory_ = dir;
+    // BEFORE any plugin is mapped. The per-user plugins folder is not under the program's,
+    // so without this each plugin (and the DLLs it brings) would be written to the log as
+    // another program's component, and every plugin load would be an "arrival". The list
+    // of plugins is already in every report; this keeps them out of the other list.
+    registerOwnModuleFolder(dir);
 
     std::error_code ec;
     // The non-throwing overloads throughout: a missing plugins directory is

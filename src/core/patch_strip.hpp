@@ -22,7 +22,7 @@
 // crowd. The tests assert a neighbour is rejected rather than merely that the
 // wanted channel survives, because a strip with no filter passes the second.
 //
-// TWO OPTIONAL STAGES (2026-10, for the AIRBAND monitor), both OFF unless a
+// THREE OPTIONAL STAGES (2026-10, for the AIRBAND monitor), all OFF unless a
 // caller turns them on, so a patch built before them sounds exactly as it did:
 //
 //   setChannelFilter(bw)  a second low-pass AT THE OUTPUT RATE, `bw` wide
@@ -35,6 +35,12 @@
 //       strong tower and a weak aircraft play at the same loudness - the job
 //       the receiver's AGC does for its one channel, done per strip because a
 //       monitor mixes several.
+//   setDeemphasisUs(us)  (0.99.69) the FM discriminator's audio through the
+//       one-pole de-emphasis the receiver's own NFM has always had
+//       (dsp/deemphasis.hpp, the class dsp::Demodulator runs). The
+//       discriminator is flat in frequency for a constant deviation, so
+//       without it a voice channel plays bright and hissy. FM only; AM audio
+//       is an envelope and passes untouched.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #ifndef CASCADE_CORE_PATCH_STRIP_HPP
@@ -46,6 +52,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <vector>
+
+#include "dsp/deemphasis.hpp"
 
 namespace cascade::core::patch {
 
@@ -65,6 +73,10 @@ inline constexpr std::size_t kNcoRenormInterval = 4096;
 
 class Strip {
 public:
+    // De-emphasis starts OFF: the filter's own default is the receiver's 50 us,
+    // and a strip nobody asked for it on must sound as it always did.
+    Strip() { deemph_.setTimeUs(0.0); }
+
     // `offsetHz` is signed and measured from the radio's centre.
     void configure(double offsetHz, double inRateHz, unsigned decimation) {
         inRateHz_ = inRateHz;
@@ -84,6 +96,9 @@ public:
         const double r = outRateHz();
         attackC_ = (r > 0.0) ? static_cast<float>(1.0 - std::exp(-1.0 / (0.010 * r))) : 0.0f;
         releaseC_ = (r > 0.0) ? static_cast<float>(1.0 - std::exp(-1.0 / (0.300 * r))) : 0.0f;
+        // The de-emphasis pole is a function of the output rate: a reconfigure
+        // keeps the time constant and places the pole for the new rate.
+        deemph_.setRate(r);
         reset();
     }
 
@@ -104,6 +119,12 @@ public:
     // channel, and a test reads it back).
     bool amNormalise() const { return amNormalise_; }
 
+    // FM de-emphasis time constant in microseconds (0.99.69), applied to FM
+    // audio only; 0 (the default) is off. The airband monitor sets the
+    // receiver's 50 us on an NFM channel. A reconfigure keeps it.
+    void setDeemphasisUs(double us) { deemph_.setTimeUs(us); }
+    double deemphasisUs() const { return deemph_.timeUs(); }
+
     void reset() {
         phase_ = std::complex<double>(1.0, 0.0);
         sinceRenorm_ = 0;
@@ -114,6 +135,7 @@ public:
         dcState_ = 0.0f;
         carrier_ = 0.0f;
         havePrev_ = false;
+        deemph_.reset();
         chanHistory_.assign(chanTaps_.size(), std::complex<float>(0.0f, 0.0f));
         chanPos_ = 0;
     }
@@ -231,6 +253,12 @@ private:
                                   : 0.0f;
         dcState_ += a * (v - dcState_);
         float y = v - dcState_;
+
+        // FM DE-EMPHASIS (0.99.69, when asked): after the DC blocker, which is
+        // linear, so the two commute; before the squelch gates a copy and the
+        // monitor levels it, so both see the audio that is played. A strip
+        // without one is untouched: not even a multiply by one.
+        if (mode == Demod::Fm && deemph_.enabled()) { y = deemph_.step(y); }
 
         // CARRIER NORMALISATION (AM only, when asked). The envelope rides on
         // the carrier, so dividing the audio by the carrier's level turns a
@@ -351,6 +379,7 @@ private:
     std::vector<std::complex<float>> chanHistory_;
     std::size_t chanPos_ = 0;
     bool amNormalise_ = false;
+    cascade::dsp::Deemphasis deemph_;
     float carrier_ = 0.0f;
     float attackC_ = 0.0f;
     float releaseC_ = 0.0f;

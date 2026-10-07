@@ -614,4 +614,71 @@ if ($recMeasured.Count -eq 0) {
     }
 }
 Show-NotMeasuredSlowFramesAndRecoveries "recoveries" $recMeasured
+
+# UNCLEAN EXITS BY CAUSE, per version (0.99.69). `double2` (the "unclean exits
+# reported" under Stability above) counts every session that never wrote its
+# clean-exit marker, and that is a crash, a task ended from outside, the system
+# closing the session, or an ending nothing can explain. The application now sends
+# the four classes beside it (exits_died, exits_killed, exits_ended, exits_unknown:
+# double13..double16), and this is where they are read.
+#
+# THEY ARE LIFETIME COUNTERS, like double2, so a window's figure is a DIFFERENCE and
+# never a sum: for each install, the highest value of a counter among its rows of a
+# version minus the lowest. One row comes back per install and version (the id is
+# grouped by and not selected: nothing here reads one) and the script adds them up.
+# That counts the exits between an install's first and last report of a version, so
+# the denominator is the sessions whose END is on record - sessions minus installs -
+# and the share is of those, not of all sessions.
+#
+# THE SAME DISCIPLINE AS THE STALLS ABOVE. Every question asks only about rows with
+# blob14 = '1' - the rows whose client SENT a split - so an application older than
+# 0.99.69, and every row written before the Worker knew the fields, is never counted
+# as "nothing ended that way". Those versions are listed apart as not measured,
+# worked out by subtracting the versions that report from every version seen. Install
+# counts are the number of rows, each one install; count(DISTINCT index1) is never
+# replaced by uniq().
+Write-Host ""
+Write-Host "Unclean exits by cause, by version" -ForegroundColor Cyan
+$exitRows = Invoke-Sql "SELECT blob1 AS version, count() AS sessions, max(double13) - min(double13) AS exitsDied, max(double14) - min(double14) AS exitsKilled, max(double15) - min(double15) AS exitsEnded, max(double16) - min(double16) AS exitsUnknown FROM foxsdr_usage WHERE $window AND blob14 = '1' GROUP BY blob1, index1 LIMIT 100000"
+if (-not $exitRows) {
+    Write-Host "  No build in this window reports unclean exits by cause yet."
+    Write-Host "  That is not zero exits - it is unmeasured."
+} else {
+    $exitStat = @{}
+    foreach ($row in @($exitRows)) {
+        $ver = [string]$row.version
+        if (-not $exitStat.ContainsKey($ver)) {
+            $exitStat[$ver] = @{ installs = [int64]0; sessions = [int64]0; died = [int64]0; killed = [int64]0; ended = [int64]0; unknown = [int64]0 }
+        }
+        $s = $exitStat[$ver]
+        $s.installs += 1
+        $s.sessions += [int64]$row.sessions
+        $s.died += [int64]$row.exitsDied
+        $s.killed += [int64]$row.exitsKilled
+        $s.ended += [int64]$row.exitsEnded
+        $s.unknown += [int64]$row.exitsUnknown
+    }
+    Write-Host ("  {0,-34} {1,8} {2,9} {3,8} {4,8} {5,8} {6,8} {7,8}" -f "version", "installs", "ends seen", "died", "killed", "ended", "unknown", "died %")
+    foreach ($ver in @($exitStat.Keys | Sort-Object)) {
+        $s = $exitStat[$ver]
+        $ends = $s.sessions - $s.installs
+        $label = $ver
+        if (-not $label) { $label = "(not reported)" }
+        $pct = "-"
+        if ($ends -gt 0) { $pct = ("{0:N1}" -f (100.0 * $s.died / $ends)) }
+        Write-Host ("  {0,-34} {1,8} {2,9} {3,8} {4,8} {5,8} {6,8} {7,8}" -f $label, $s.installs, $ends, $s.died, $s.killed, $s.ended, $s.unknown, $pct)
+    }
+    Write-Host "  installs = installs that reported the split; ends seen = their sessions minus one each (the sessions whose end is on record);"
+    Write-Host "  died / killed / ended / unknown = the rise of each lifetime counter across the window, summed; died % = died / ends seen."
+    $exitSeen = Invoke-Sql "SELECT blob1 AS version FROM foxsdr_usage WHERE $window GROUP BY blob1 ORDER BY blob1"
+    $exitNames = @()
+    foreach ($v in @($exitSeen)) {
+        if (-not $exitStat.ContainsKey([string]$v.version)) {
+            if ($v.version) { $exitNames += [string]$v.version } else { $exitNames += "(not reported)" }
+        }
+    }
+    if ($exitNames.Count -gt 0) {
+        Write-Host ("  Not measured (these builds send no split): {0}" -f ($exitNames -join ", "))
+    }
+}
 Write-Host ""

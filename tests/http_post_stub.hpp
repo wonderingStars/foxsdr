@@ -61,7 +61,11 @@ public:
     // accepted with 200, so a test can drive the real fallback
     // (ProblemReportSendFlow) against something that behaves like the
     // pre-diagnostics contract rather than hand-waving the server side.
-    enum class Mode { Accept200, BadRequest400, RateLimit429, Hang, Refuse, RejectUnknownField };
+    //
+    // RejectAttachments is the same for the one field a site between 2.45.3 and
+    // 2.67.0 knows less than the application: it accepts `diagnostics` and
+    // refuses a body carrying `attachments` (0.99.69).
+    enum class Mode { Accept200, BadRequest400, RateLimit429, Hang, Refuse, RejectUnknownField, RejectAttachments };
 
     // The route this stub answers on. The Windows variant accepts any path
     // and only uses this to build url(); the POSIX variant registers it.
@@ -180,8 +184,10 @@ private:
                 resp = "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\n"
                        "Content-Length: " +
                        std::to_string(body.size()) + "\r\n\r\n" + body;
-            } else if (mode_ == Mode::RejectUnknownField &&
-                       bodyReceived.find("\"diagnostics\"") != std::string::npos) {
+            } else if ((mode_ == Mode::RejectUnknownField &&
+                        bodyReceived.find("\"diagnostics\"") != std::string::npos) ||
+                       (mode_ == Mode::RejectAttachments &&
+                        bodyReceived.find("\"attachments\"") != std::string::npos)) {
                 const std::string body = "{\"ok\":false,\"error\":\"that did not arrive as valid JSON\"}";
                 resp = "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\n"
                        "Content-Length: " +
@@ -226,7 +232,7 @@ public:
     // See the Windows variant's identical enum for what RejectUnknownField
     // emulates: problems.go's DisallowUnknownFields decoder against a body
     // carrying a field this (older) contract does not know.
-    enum class Mode { Accept200, BadRequest400, RateLimit429, Hang, Refuse, RejectUnknownField };
+    enum class Mode { Accept200, BadRequest400, RateLimit429, Hang, Refuse, RejectUnknownField, RejectAttachments };
 
     // The route this stub answers on. The Windows variant accepts any path
     // and only uses this to build url(); the POSIX variant registers it.
@@ -271,8 +277,10 @@ public:
                                  "{\"ok\":false,\"error\":\"text must be between 10 and "
                                  "2000 characters\"}",
                                  "application/json");
-                         } else if (mode_ == Mode::RejectUnknownField &&
-                                    req.body.find("\"diagnostics\"") != std::string::npos) {
+                         } else if ((mode_ == Mode::RejectUnknownField &&
+                                     req.body.find("\"diagnostics\"") != std::string::npos) ||
+                                    (mode_ == Mode::RejectAttachments &&
+                                     req.body.find("\"attachments\"") != std::string::npos)) {
                              res.status = 400;
                              res.set_content(
                                  "{\"ok\":false,\"error\":\"that did not arrive as valid JSON\"}",

@@ -40,6 +40,7 @@ struct GLFWwindow;
 #include "core/i18n.hpp"
 #include "core/pipeline.hpp"
 #include "core/ppm_correction.hpp"
+#include "core/radio_setup.hpp"
 #include "core/plugin_dir_signature.hpp"
 #include "core/plugin_host.hpp"
 #include "core/plugin_runner.hpp"
@@ -130,6 +131,7 @@ struct GLFWwindow;
 #include "core/feature_request.hpp"
 #include "core/problem_report.hpp"
 #include "core/hang_watchdog.hpp"
+#include "core/foreign_modules.hpp"
 #include "core/phase_clock.hpp"
 #include "gui/freq_scale.hpp"
 // Pulls in the bind policy and the credential types too, but NOT httplib —
@@ -3443,6 +3445,22 @@ private:
     std::string telemetryFirstVersion_;
     std::uint64_t telemetryLaunches_ = 0;
     std::uint64_t telemetryCrashes_ = 0;
+    // HOW THE UNCLEAN EXITS ENDED (0.99.69, core/exit_cause.hpp). Moves with
+    // telemetryCrashes_ at every instant: an unclean exit found at start-up is
+    // `unknown` at once and is refined to its class when the evidence has been read.
+    cascade::core::ExitCounts telemetryExits_;
+    // When THIS session began (epoch seconds), journalled for the next start-up to
+    // use as the lower edge of "the previous session's reports"; and, while an
+    // unclean exit found at this start-up is still waiting for its evidence, when the
+    // session that ended began (the config's value as it was read).
+    std::uint64_t telemetrySessionStartedEpoch_ = 0;
+    std::uint64_t exitCausePrevStart_ = 0;
+    bool exitCausePending_ = false;
+    // Looks, once per frame while an exit is waiting, for the evidence: the report
+    // listing diagHistory_ reads on a worker (never a disk read on this thread).
+    void exitCausePoll();
+    // Writes the verdict's one log line, refines the counters and stops waiting.
+    void exitCauseFinish(const cascade::core::ExitVerdict& v);
     // The VOLUME meter's needle, carried between frames so it can fall
     // gently rather than follow every syllable - see gui/volume_meter.hpp.
     float volumeNeedle_ = 0.0f;
@@ -3708,6 +3726,8 @@ private:
     // after every event that changes what the block says (see its definition),
     // and cheap enough for that: an unchanged block writes nothing.
     void refreshDiagContext();
+    // The CASCADE_FOREIGN_MODULE_TEST seam (foreignModuleTestPath_): maps its DLL on frame 90.
+    void loadForeignModuleForTest(int rendered);
     // Renders the report context when the scope holding it ends - for a function
     // that changes what the block says on SEVERAL ways out (an early return, a
     // loop's `continue`): followInputRate, rescanPlugins, patchReconcile and
@@ -3787,6 +3807,41 @@ private:
     float featureRequestBelowBoxH_ = 0.0f;
     void drawFeatureRequestPage();
 
+    // --- RADIO SETUP (core/radio_setup.hpp, gui/app_window_radio_setup.cpp) ---
+    //
+    // THE FIRST-RUN PAGE: what is plugged in, what is installed for it, and the
+    // one thing to install when the two do not add up. It opens BY ITSELF once
+    // a launch, when the start-up probe has finished, the application's own
+    // enumeration has listed no radio, nothing the probe found is usable, and
+    // the person has not ticked "Don't show this again"; and by a key in the
+    // Source section whenever they want it. The open flag is in no config (the
+    // same rule as every torn-off page: nothing here is reopened at start-up by
+    // a file); the one thing that IS saved is the tick, as
+    // AppConfig::radioSetupDontShow.
+    bool radioSetupOpen_ = false;
+    bool radioSetupDontShow_ = false;
+    // The probe's worker, started on the first frame and again by CHECK AGAIN.
+    cascade::core::radiosetup::Probe radioSetupProbe_;
+    bool radioSetupStarted_ = false;
+    // The once-a-launch decision to raise the page has been made (whichever way).
+    bool radioSetupDecided_ = false;
+    // FOXSDR_FAKE_RADIO_SETUP, read in bounded runs only: a synthetic machine
+    // that replaces the probe AND the application's own lists, so a test can
+    // make the page appear with a chosen finding on any desk.
+    std::string radioSetupFake_;
+    // This is a bounded (--frames) run. A bounded run never has the page raise
+    // itself on the real bus: it is a test harness, a CI runner has no radio
+    // and would get the page over every scripted click of every other test, and
+    // "no window opens itself at launch" is the rule those runs keep. It still
+    // probes and logs; the page is raised there only for a synthetic machine.
+    bool radioSetupBounded_ = false;
+    // What the probe saw plus what the application's own lists hold now.
+    cascade::core::radiosetup::Inventory radioSetupInventory() const;
+    void radioSetupStartProbe();
+    void radioSetupFrame();
+    void radioSetupCheckAgain();
+    void drawRadioSetupPage();
+
     // --- REPORT A BUG / DISLIKE (see core/problem_report.hpp) ----------------
     //
     // The second key on the STATUS column, directly under REQUEST A FEATURE
@@ -3827,6 +3882,13 @@ private:
     std::uint64_t problemReportDiagCacheLines_ = 0;
     std::uint64_t problemReportDiagCacheEpoch_ = 0;
     bool problemReportDiagCacheValid_ = false;
+    // THE REPORT RECOGNISED IN THE TEXT BOX (0.99.69, core/pasted_report.hpp), looked
+    // for again only when the text is not the text it was last looked for in: the
+    // box holds up to 100000 characters and the page is drawn every frame, so the
+    // scan is not repeated for a text that has not changed. Empty when none was found.
+    std::optional<cascade::core::PastedReport> problemReportPasted_;
+    std::string problemReportPastedFor_;
+    bool problemReportPastedValid_ = false;
     cascade::core::ProblemReportSendFlow problemReportSender_;
     cascade::core::FeatureRequestState problemReportLastLoggedState_ =
         cascade::core::FeatureRequestState::Idle;
@@ -3855,6 +3917,19 @@ private:
     cascade::core::DiagHistory diagHistoryForBundle(bool freshHistory);
     void startDiagHistoryRead();
     cascade::core::DiagHistoryCache diagHistory_;
+    // THE OTHER SOFTWARE'S DLLs IN THIS PROCESS (0.99.69, core/foreign_modules.hpp): started
+    // in run() once the window is up - its scan runs on a thread of its own, so start-up
+    // does not wait for it - and polled once a frame, which writes a log line for each
+    // foreign module that has arrived since. currentDiagContext() reads the list from it
+    // for the `foreign-modules:` line of every report.
+    cascade::core::ForeignModuleWatch foreignModules_;
+    // CASCADE_FOREIGN_MODULE_TEST=<path of a DLL> (0.99.69, bounded runs only, Windows only):
+    // the frame loop maps that DLL with LoadLibrary on frame 90, from the window's own
+    // thread, once. It is what another program's injected hook looks like to the loader, and
+    // the only way a test can see a REAL arrival reach the real log, through the real
+    // frame loop's poll() - the one call that writes the line - in the real program.
+    // Empty once it has been done, and in every run that is not a bounded one.
+    std::string foreignModuleTestPath_;
     // applyDiagnosticsEnabled's first call is the start of the session; whether
     // the switch was on then is whether the log file holds this session's start
     // line (see diagHistoryForBundle).
@@ -4964,6 +5039,15 @@ private:
     // Deletes one installed plugin (see drawPluginsSection for the
     // unload-first rationale) and rescans.
     void removeInstalledPlugin(const std::string& fileName);
+
+    // Deletes one ORPHANED module file (0.99.69, core/plugin_cleanup.hpp): not
+    // in the plugin index and not running. Judged again here, against the live
+    // scan, install records and catalogue, so a key pressed on a stale row can
+    // never delete a file the index knows or one that is loaded. Nothing is
+    // unloaded first - an orphan is not mapped - and the folder is rescanned
+    // after a deletion (a refusal changes nothing, so reloads nothing). One
+    // diagnostics line says what was done.
+    void removeOrphanedPlugin(const std::string& fileName);
 
     // Deletes one BLOCKED (retired or ABI-mismatched) plugin. Separate from
     // removeInstalledPlugin because a blocked plugin is not on disk under its

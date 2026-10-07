@@ -240,6 +240,7 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     getString(j, "sourceKind", out.sourceKind);
     getString(j, "soapyArgs", out.soapyArgs);
     getBool(j, "lookForNetworkUsrps", out.lookForNetworkUsrps);
+    getBool(j, "radioSetupDontShow", out.radioSetupDontShow);
     getString(j, "nativeArgs", out.nativeArgs);
     // THE BIAS TEE, PER RADIO (AppConfig::biasTee). Element-wise tolerant: an
     // entry that is not a bool, or whose key is not "<kind>|<args>", is
@@ -696,6 +697,11 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     getString(j, "telemetryInstallId", out.telemetryInstallId);
     getUint64(j, "telemetryLaunches", out.telemetryLaunches);
     getUint64(j, "telemetryCrashes", out.telemetryCrashes);
+    getUint64(j, "telemetryExitsDied", out.telemetryExitsDied);
+    getUint64(j, "telemetryExitsKilled", out.telemetryExitsKilled);
+    getUint64(j, "telemetryExitsEnded", out.telemetryExitsEnded);
+    getUint64(j, "telemetryExitsUnknown", out.telemetryExitsUnknown);
+    getUint64(j, "telemetrySessionStarted", out.telemetrySessionStarted);
     getString(j, "telemetryFirstRun", out.telemetryFirstRun);
     getString(j, "telemetryFirstVersion", out.telemetryFirstVersion);
     getBool(j, "telemetryCleanExit", out.telemetryCleanExit);
@@ -1031,6 +1037,7 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
     j["sourceKind"] = cfg.sourceKind;
     j["soapyArgs"] = cfg.soapyArgs;
     j["lookForNetworkUsrps"] = cfg.lookForNetworkUsrps;
+    j["radioSetupDontShow"] = cfg.radioSetupDontShow;
     j["nativeArgs"] = cfg.nativeArgs;
     {
         json bias = json::object();
@@ -1236,6 +1243,11 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
     j["telemetryInstallId"] = cfg.telemetryInstallId;
     j["telemetryLaunches"] = cfg.telemetryLaunches;
     j["telemetryCrashes"] = cfg.telemetryCrashes;
+    j["telemetryExitsDied"] = cfg.telemetryExitsDied;
+    j["telemetryExitsKilled"] = cfg.telemetryExitsKilled;
+    j["telemetryExitsEnded"] = cfg.telemetryExitsEnded;
+    j["telemetryExitsUnknown"] = cfg.telemetryExitsUnknown;
+    j["telemetrySessionStarted"] = cfg.telemetrySessionStarted;
     j["telemetryFirstRun"] = cfg.telemetryFirstRun;
     j["telemetryFirstVersion"] = cfg.telemetryFirstVersion;
     j["telemetryCleanExit"] = cfg.telemetryCleanExit;

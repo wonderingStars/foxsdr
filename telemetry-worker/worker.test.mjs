@@ -354,8 +354,8 @@ test('NEW CLIENT -> OLD WORKER: a 204, the field discarded, and the row exactly 
 
 test('the column budget: Analytics Engine allows 20 blobs and 20 doubles, and this is how many are used', async () => {
   const p = (await post({ ...oldRecord(), stalls: 0, health: HEALTH })).usage[0];
-  assert.equal(p.blobs.length, 13);      // unchanged by slow frames and recoveries: they live in blob13
-  assert.equal(p.doubles.length, 12);    // double10..12 are the three new sums
+  assert.equal(p.blobs.length, 14);      // blob14 is the unclean-exits marker (0.99.69); slow frames and recoveries live in blob13
+  assert.equal(p.doubles.length, 16);    // double13..16 are the four unclean-exit counters (0.99.69)
   assert.ok(p.blobs.length <= 20 && p.doubles.length <= 20);
   // The 16 KB blob budget: the longest record this Worker can write is far under it.
   const biggest = p.blobs.reduce((n, b) => n + Buffer.byteLength(b), 0) + 832 + 48 + 40 + 8 + 32 + 8 + 840 + 160 + 16 + 10 + 48;
@@ -397,7 +397,8 @@ test('slow frames and recoveries are stored in blob13 in the written order, and 
   assert.deepEqual(p.doubles.slice(5, 9), [2, 3, 3, 1]);       // the failure sums are unmoved
   // double10: every slow frame (4+3+2+1); double11: those of a second or more (2+1); double12: 1+2
   assert.deepEqual(p.doubles.slice(9, 12), [10, 3, 3]);
-  assert.equal(p.doubles.length, 12);
+  assert.equal(p.doubles.length, 16);   // double13..16 are the unclean-exit counters (0.99.69), 0 for this client
+  assert.deepEqual(p.doubles.slice(12), [0, 0, 0, 0]);
 });
 
 test('the new sums are of the validated tokens, never a number the client sent', async () => {
@@ -520,12 +521,15 @@ test('0.99.64 CLIENT (failure counts only) -> NEW WORKER: the row the 0.99.64 Wo
     { ...record064(), health: '' }]) {
     const was = (await postTo(healthCountsWorker, body)).usage[0];
     const now = (await post(body)).usage[0];
-    assert.deepEqual(now.blobs, was.blobs, JSON.stringify(body.health));
+    // The thirteen blobs the 0.99.64 Worker wrote, unmoved; blob14 (0.99.69) is appended after them, empty here.
+    assert.deepEqual(now.blobs.slice(0, 13), was.blobs, JSON.stringify(body.health));
+    assert.equal(now.blobs[13], '');
     assert.deepEqual(now.doubles.slice(0, 9), was.doubles);
     // These zeros are what the new Worker writes for a build that never measured slow frames or recoveries.
     // They mean "not measured"; the Worker cannot say so (blob12 is '1' on these rows), so the reader does,
     // by version (usage.ps1, telemetry-worker/README.md).
     assert.deepEqual(now.doubles.slice(9, 12), [0, 0, 0]);
+    assert.deepEqual(now.doubles.slice(12), [0, 0, 0, 0]);   // and double13..16 (0.99.69): not measured either
   }
 });
 
@@ -534,6 +538,157 @@ test('a heartbeat cannot be turned into a failure report either', async () => {
   assert.equal(r.status, 204);
   assert.equal(r.usage.length, 0);
   assert.deepEqual(r.beats[0], { indexes: [ID], blobs: ['0.99.64'] });
+});
+
+// ---- Unclean exits by cause (0.99.69) ---------------------------------------
+//
+// `crashes` counts every session that never wrote its clean-exit marker; the client
+// now sends the four classes beside it (exits_died, exits_killed, exits_ended,
+// exits_unknown). They are stored as blob14 (the marker, '1' only when a usable split
+// was sent) and double13..double16, following the convention the stall count and the
+// failure counts set: a marker blob, and zeros in the doubles when absent. A reader asks
+// for blob14 = '1'.
+
+// A 0.99.69 client: seven unclean exits, five of them classified since the split existed.
+function record068(extra = {}) {
+  return {
+    ...oldRecord(), v: '0.99.69', crashes: 7, stalls: 0, health: '',
+    exits_died: 1, exits_killed: 2, exits_ended: 1, exits_unknown: 1, ...extra,
+  };
+}
+
+test('a 0.99.69 client stores its split in double13..16 and marks blob14', async () => {
+  const p = (await post(record068())).usage[0];
+  assert.equal(p.blobs[13], '1');
+  assert.deepEqual(p.doubles.slice(12), [1, 2, 1, 1]);   // died, killed, ended, unknown
+  // double2 is the sum's other half: crashes - (the four) = the exits from before the split existed
+  assert.equal(p.doubles[1], 7);
+  assert.equal(p.doubles[1] - p.doubles.slice(12).reduce((a, b) => a + b, 0), 2);
+  // ...and nothing earlier moved: the same record without the split writes the same first 13 blobs and 12 doubles.
+  const bare = (await post({ ...record068(), exits_died: undefined, exits_killed: undefined,
+    exits_ended: undefined, exits_unknown: undefined })).usage[0];
+  assert.deepEqual(p.indexes, bare.indexes);
+  assert.deepEqual(p.blobs.slice(0, 13), bare.blobs.slice(0, 13));
+  assert.deepEqual(p.doubles.slice(0, 12), bare.doubles.slice(0, 12));
+});
+
+test('an older client (no split) reads as NOT REPORTED: blob14 is empty and the four doubles are 0', async () => {
+  for (const body of [oldRecord(), { ...oldRecord(), stalls: 1, health: '' },
+    { ...oldRecord(), v: '0.99.67', crashes: 3, stalls: 0, health: HEALTH }]) {
+    const p = (await post(body)).usage[0];
+    assert.equal(p.blobs.length, 14);
+    assert.equal(p.blobs[13], '');
+    assert.deepEqual(p.doubles.slice(12), [0, 0, 0, 0]);
+  }
+});
+
+test('a reported all-zero split is a real zero, distinct from never reported', async () => {
+  const p = (await post({ ...oldRecord(), v: '0.99.69', crashes: 0, exits_died: 0, exits_killed: 0,
+    exits_ended: 0, exits_unknown: 0 })).usage[0];
+  assert.equal(p.blobs[13], '1');
+  assert.deepEqual(p.doubles.slice(12), [0, 0, 0, 0]);
+});
+
+test('THE INVARIANT: a split whose four add up to more than crashes was not written by the application', async () => {
+  // Equal (an install that has only ever run 0.99.69) and less (older exits not classified) are both fine...
+  assert.equal((await post(record068({ crashes: 5 }))).usage[0].blobs[13], '1');
+  assert.equal((await post(record068({ crashes: 9 }))).usage[0].blobs[13], '1');
+  // ...more is not: not reported, the record still stored, the doubles 0.
+  const r = await post(record068({ crashes: 4 }));
+  assert.equal(r.status, 204);
+  assert.equal(r.usage.length, 1);
+  assert.equal(r.usage[0].blobs[13], '');
+  assert.deepEqual(r.usage[0].doubles.slice(12), [0, 0, 0, 0]);
+  assert.equal(r.usage[0].doubles[1], 4);                 // crashes itself is untouched
+  assert.equal(r.usage[0].doubles[2], 3600);              // and so is the session length
+  // A split with no crashes beside it at all cannot hold either.
+  const noCrashes = { ...record068() };
+  delete noCrashes.crashes;
+  assert.equal((await post(noCrashes)).usage[0].blobs[13], '');
+});
+
+test('a malformed split is NOT REPORTED, all or nothing, and never costs the record', async () => {
+  const bad = [
+    { exits_died: '1' },            // a numeric string: only a JSON number counts
+    { exits_killed: null },
+    { exits_ended: true },
+    { exits_unknown: [1] },
+    { exits_died: {} },
+    { exits_died: -1 },             // negative
+    { exits_killed: -0.5 },
+  ];
+  for (const change of bad) {
+    const r = await post(record068(change));
+    assert.equal(r.status, 204, JSON.stringify(change));
+    assert.equal(r.usage.length, 1);
+    assert.equal(r.usage[0].blobs[13], '', JSON.stringify(change));
+    assert.deepEqual(r.usage[0].doubles.slice(12), [0, 0, 0, 0], JSON.stringify(change));
+    assert.equal(r.usage[0].doubles[2], 3600);   // the session length is still taken
+  }
+  // Partial: any one of the four missing is "not reported", never "zero".
+  for (const missing of ['exits_died', 'exits_killed', 'exits_ended', 'exits_unknown']) {
+    const body = record068();
+    delete body[missing];
+    const p = (await post(body)).usage[0];
+    assert.equal(p.blobs[13], '', missing);
+    assert.deepEqual(p.doubles.slice(12), [0, 0, 0, 0], missing);
+  }
+  // Non-finite numbers cannot be written in JSON, and an out-of-range one parses to Infinity.
+  const raw = JSON.stringify(record068()).replace('"exits_died":1', '"exits_died":1e999');
+  assert.equal((await post(null, { raw })).usage[0].blobs[13], '');
+});
+
+test('a fraction is floored and an enormous count is clamped to the bound crashes has', async () => {
+  const frac = (await post(record068({ crashes: 20, exits_died: 2.9, exits_killed: 0.4 }))).usage[0];
+  assert.deepEqual(frac.doubles.slice(12), [2, 0, 1, 1]);
+  const big = (await post(record068({ crashes: 1e9, exits_died: 1e9, exits_killed: 0, exits_ended: 0,
+    exits_unknown: 0 }))).usage[0];
+  assert.equal(big.blobs[13], '1');
+  assert.deepEqual(big.doubles.slice(12), [1e6, 0, 0, 0]);
+  assert.equal(big.doubles[1], 1e6);
+  const raw = JSON.stringify(record068()).replace('"exits_died":1', '"exits_died":-0');
+  const negZero = (await post(null, { raw })).usage[0];
+  assert.equal(negZero.blobs[13], '1');
+  assert.equal(Object.is(negZero.doubles[12], 0), true);
+});
+
+test('a heartbeat cannot be turned into a session report by carrying a split', async () => {
+  const r = await post({ id: ID, v: '0.99.69', beat: 1, crashes: 9, exits_died: 1, exits_killed: 1,
+    exits_ended: 1, exits_unknown: 1 });
+  assert.equal(r.status, 204);
+  assert.equal(r.usage.length, 0);
+  assert.deepEqual(r.beats[0], { indexes: [ID], blobs: ['0.99.69'] });
+});
+
+test('NEW CLIENT -> OLD WORKER (0.99.67): a 204, the split discarded, and the row exactly what a record without it writes', async () => {
+  // The Worker as it was when 0.99.67 shipped, kept byte for byte: this is why the
+  // Worker is deployed before an application that sends the split is released.
+  const was = (await import('./test-fixtures/worker-0.99.67.js')).default;
+  const withSplit = await postTo(was, record068());
+  const without = await postTo(was, { ...record068(), exits_died: undefined, exits_killed: undefined,
+    exits_ended: undefined, exits_unknown: undefined });
+  assert.equal(withSplit.status, 204);
+  assert.deepEqual(withSplit.usage, without.usage);
+  assert.equal(withSplit.usage[0].blobs.length, 13);      // the old Worker has no blob14
+  assert.equal(withSplit.usage[0].doubles.length, 12);    // and no double13..16
+  // ...and the NEW Worker, given the same record, writes the same first thirteen blobs and twelve doubles.
+  const now = (await post(record068())).usage[0];
+  assert.deepEqual(now.blobs.slice(0, 13), withSplit.usage[0].blobs);
+  assert.deepEqual(now.doubles.slice(0, 12), withSplit.usage[0].doubles);
+});
+
+test('an OLD client -> NEW Worker (0.99.67 record): the row the 0.99.67 Worker wrote, plus the empty marker and zeros', async () => {
+  const was = (await import('./test-fixtures/worker-0.99.67.js')).default;
+  for (const body of [oldRecord(), { ...oldRecord(), v: '0.99.67', crashes: 2, stalls: 0, health: HEALTH },
+    { ...oldRecord(), v: '0.99.67', stalls: 1, health: `${HEALTH},${SLOW},${RECOVERED}` }]) {
+    const before = (await postTo(was, body)).usage[0];
+    const now = (await post(body)).usage[0];
+    assert.deepEqual(now.indexes, before.indexes);
+    assert.deepEqual(now.blobs.slice(0, 13), before.blobs);
+    assert.equal(now.blobs[13], '');
+    assert.deepEqual(now.doubles.slice(0, 12), before.doubles);
+    assert.deepEqual(now.doubles.slice(12), [0, 0, 0, 0]);
+  }
 });
 
 // ---- What must keep working ------------------------------------------------
@@ -607,7 +762,9 @@ function standIn(rows) {
       let data = [];
       const perToken = sql.match(/startsWith\(blob13, '([a-z0-9_.]+)='\)/);
       const perScope = sql.match(/startsWith\(blob13, 'slow\.([a-z-]+)\.'\)/);
-      if (/AS radioFail/.test(sql)) {
+      if (/AS exitsDied/.test(sql)) {
+        data = rows.exitRows || [];
+      } else if (/AS radioFail/.test(sql)) {
         data = rows.healthVersions || [];
       } else if (/AS slowLong/.test(sql)) {
         data = rows.slowVersions || [];
@@ -1045,4 +1202,73 @@ readerTest('a reporting build with no failure at all says so, and prints no even
   } finally {
     server.close();
   }
+});
+
+// ---- Unclean exits by cause, as the reader prints them (0.99.69) ----------------
+
+readerTest('the reader prints unclean exits by cause per version, as a difference of lifetime counters, and lists the unmeasured builds apart', async () => {
+  // One row per install and version, the id grouped by and not selected: what the reader sends back is
+  // (sessions, rise of each counter). Two installs on 0.99.69 and one on 0.99.70.
+  const { server, queries, port } = await standIn({
+    reporting: [], stalled: [], unmeasured: [],
+    seen: [{ version: '0.99.66' }, { version: '0.99.67' }, { version: '0.99.69' }, { version: '0.99.70' }],
+    exitRows: [
+      { version: '0.99.69', sessions: '10', exitsDied: '1', exitsKilled: '2', exitsEnded: '0', exitsUnknown: '1' },
+      { version: '0.99.69', sessions: '6', exitsDied: '0', exitsKilled: '1', exitsEnded: '1', exitsUnknown: '0' },
+      { version: '0.99.70', sessions: '1', exitsDied: '0', exitsKilled: '0', exitsEnded: '0', exitsUnknown: '0' },
+    ],
+  });
+  try {
+    const r = await runAgainst(port);
+    assert.equal(r.status, 0, r.stderr);
+    const section = r.stdout.slice(r.stdout.indexOf('Unclean exits by cause, by version'));
+    assert.ok(section.length < r.stdout.length, 'the section is printed');
+    // installs, ends seen (sessions minus installs: 16 - 2 = 14), died, killed, ended, unknown, died %
+    assert.match(section, /0\.99\.69\s+2\s+14\s+1\s+3\s+1\s+1\s+7\.1\b/);
+    // a version with ONE session has no end on record, and a share of nothing is a dash, not a zero
+    assert.match(section, /0\.99\.70\s+1\s+0\s+0\s+0\s+0\s+0\s+-/);
+    // builds that send no split are named as not measured, never printed as zero rows
+    assert.match(section, /Not measured[^\n]*0\.99\.66[^\n]*0\.99\.67/);
+    assert.doesNotMatch(section, /^\s+0\.99\.6[67]\s+\d/m);
+
+    const exitQueries = queries.filter((q) => /blob14/.test(q));
+    assert.equal(exitQueries.length, 1);
+    const q = exitQueries[0];
+    // Only builds that SENT a split; per install and version; the id is not read; never uniq().
+    assert.match(q, /blob14 = '1'/);
+    assert.match(q, /GROUP BY blob1, index1/);
+    const selectList = q.slice(q.indexOf('SELECT') + 6, q.indexOf(' FROM '));
+    assert.doesNotMatch(selectList, /index1/, 'the install id is grouped by and never selected');
+    assert.match(q, /max\(double13\) - min\(double13\)/);
+    assert.match(q, /max\(double16\) - min\(double16\)/);
+    assert.doesNotMatch(q, /sum\(double1[3-6]\)/, 'a lifetime counter is never summed across rows');
+    for (const each of queries) { assert.doesNotMatch(each, /uniq\s*\(/i); }
+  } finally {
+    server.close();
+  }
+});
+
+readerTest('when no build reports a split the reader says unmeasured and prints no zero rows', async () => {
+  const { server, port } = await standIn({
+    reporting: [], stalled: [], unmeasured: [], seen: [{ version: '0.99.67' }], exitRows: [],
+  });
+  try {
+    const r = await runAgainst(port);
+    assert.equal(r.status, 0, r.stderr);
+    const section = r.stdout.slice(r.stdout.indexOf('Unclean exits by cause, by version'));
+    assert.match(section, /No build in this window reports unclean exits by cause yet/);
+    assert.match(section, /not zero exits/);
+    assert.doesNotMatch(section, /ends seen/);
+  } finally {
+    server.close();
+  }
+});
+
+test('the README schema table lists blob14 and double13..double16, and says absent is not zero', () => {
+  const readme = readFileSync(`${here}README.md`, 'utf8').replace(/\r\n/g, '\n');
+  assert.match(readme, /\| `blob14` \| `'1'` when this client sent the unclean-exit split/);
+  for (const [col, word] of [['double13', 'died'], ['double14', 'killed'], ['double15', 'ended'], ['double16', 'unknown']]) {
+    assert.match(readme, new RegExp(`\| \`${col}\` \|[^\n]*${word}`), col);
+  }
+  assert.match(readme.replace(/\s+/g, ' '), /An unwritten split is not zero/);
 });

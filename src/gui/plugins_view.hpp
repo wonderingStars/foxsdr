@@ -167,6 +167,14 @@ struct FittedModule {
     // apart from `notice` so a module cannot overwrite it by logging.
     std::string integrityNote;
 
+    // ORPHANED (0.99.69): core::classifyPluginFiles() says this file is not
+    // known to the plugin index (no install record, and not a file the
+    // catalogue publishes for this platform) AND is not running. The window
+    // then says so on the file's row and plate and offers REMOVE FILE, which
+    // deletes that one file. False for a running module and for one the index
+    // knows, whatever it did at load; a record built by hand is not an orphan.
+    bool orphaned = false;
+
     // Size of the file on disk in bytes. 0 means NOT MEASURED and the shared
     // plate says so; it never prints a clean zero, which would be the opposite
     // claim. There is no size in any descriptor, so this can only ever come
@@ -243,6 +251,10 @@ struct FittedModulesAction {
         Start,     // AppWindow::setPluginStopped(file, false)
         Stop,      // AppWindow::setPluginStopped(file, true)
         Remove,    // AppWindow::removeInstalledPlugin(file)
+        // AppWindow::removeOrphanedPlugin(file) (0.99.69): the same two-step key
+        // as Remove, on a file that is not in the plugin index and not running -
+        // and the app re-checks that before it deletes anything.
+        RemoveOrphan,
         SetTune,   // AppWindow::setPluginTuneAllowed(file, flag)
         // Host API level 1: AppWindow::setPluginSettingsAllowed(file, flag),
         // and a press of one of the module's own command keys (id).
@@ -276,6 +288,13 @@ const char* fittedStateWord(FittedState s);
 // change it. For NotFed this is the RUNNER'S OWN sentence wherever it recorded
 // one, quoted rather than rewritten.
 std::string fittedStateSentence(const FittedModule& m, bool receiverRunning);
+
+// The ONE LINE an orphaned file's row carries (0.99.69): that it was not
+// installed from the plugin store (the plugin index does not know it) and is not
+// running, then the host's own reason for the second half, verbatim, when it
+// gave one. Empty for a file that is not an orphan, so a caller can use the
+// answer as the test.
+std::string fittedOrphanSentence(const FittedModule& m);
 
 // The kind tag and the one-line reach summary on a row come from the SHARED
 // component - moduleKindTag(), moduleReachSummary() and moduleReachColour() in

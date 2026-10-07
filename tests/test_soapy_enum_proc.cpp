@@ -54,6 +54,7 @@
 #include "core/diag_report.hpp"
 #include "core/health_events.hpp"
 #include "core/telemetry.hpp"
+#include "core/ubsan_exempt.hpp"
 #include "core/version.hpp"
 
 #include <SoapySDR/Device.hpp>
@@ -279,6 +280,18 @@ std::string envOr(const char* name, const char* fallback) {
     const char* v = std::getenv(name);
     return (v != nullptr && *v != '\0') ? std::string(v) : std::string(fallback);
 }
+
+#ifndef _WIN32
+// The store the helper dies of on Linux. Out of line and exempt from
+// UndefinedBehaviorSanitizer: its null check would report this store and end the
+// process with status 1 before the SIGSEGV the parent is waiting for happens
+// (core/ubsan_exempt.hpp). Inlined into fakeHelper it would take that function's
+// instrumentation, so it is kept apart.
+CASCADE_UBSAN_EXEMPT __attribute__((noinline)) void storeThroughNull() {
+    volatile int* p = nullptr;
+    *p = 1;
+}
+#endif
 
 // --- the fake helper -------------------------------------------------------
 int fakeHelper(int argc, char** argv) {
@@ -705,8 +718,7 @@ int fakeHelper(int argc, char** argv) {
         // parent side reads this back as WIFSIGNALED(SIGSEGV), reported as
         // exitCode 128+11=139; see the "0xC0000005 on Windows, 139 on Linux"
         // comment below at the count of injected faults.
-        volatile int* p = nullptr;
-        *p = 1;
+        storeThroughNull();
         return 0;  // unreachable
 #endif
     }

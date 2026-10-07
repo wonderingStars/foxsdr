@@ -55,6 +55,43 @@ function stallCount(v) {
   return Math.min(Math.floor(v), MAX_STALLS) || 0;  // || 0 turns -0 into 0
 }
 
+// UNCLEAN EXITS BY CAUSE (0.99.69): `crashes` has always counted every session that
+// never wrote its clean-exit marker, and that is a fault, a kill from outside, the
+// operating system closing the session, or an ending nothing can explain. The
+// client now sends four more lifetime counters beside it - exits_died, exits_killed,
+// exits_ended, exits_unknown (PRIVACY.md, "How an unclean exit ended") - whose sum is
+// the unclean exits counted since 0.99.69.
+//
+// ABSENT IS NOT ZERO, and this follows the convention `stalls` and `health` set
+// above rather than inventing another (-1 in the doubles would have been a second
+// way of saying the same thing): a marker BLOB (blob14) that is '1' only when the
+// client sent a usable split, and doubles that hold 0 otherwise. A row written by
+// an application older than 0.99.69, or by this Worker before it knew the fields,
+// has blob14 = '' and four zeros that mean "not measured", never "none ended
+// that way" - so a reader asks for blob14 = '1' and treats every other row as
+// unmeasured.
+//
+// Returns [died, killed, ended, unknown], or null when the client did not send a
+// usable split. USABLE is all-or-nothing and strict, like stallCount: all four
+// present, each a JSON NUMBER that is finite and not negative (a string, true,
+// null, an array or an object is not); a fraction is floored and anything above
+// MAX_EXITS clamped. A split with only some of the four, or whose four add up to
+// more than the `crashes` beside them, was not written by the application (its
+// classes are only ever counted with an unclean exit, so they cannot outnumber
+// them) and is treated as not reported; the rest of the record is still stored.
+const MAX_EXITS = 1e6;  // the bound `crashes` has (double2)
+const EXIT_FIELDS = ['exits_died', 'exits_killed', 'exits_ended', 'exits_unknown'];
+function exitSplit(body) {
+  const out = [];
+  for (const name of EXIT_FIELDS) {
+    const v = body[name];
+    if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) { return null; }
+    out.push(Math.min(Math.floor(v), MAX_EXITS) || 0);
+  }
+  if (out[0] + out[1] + out[2] + out[3] > num(body.crashes, MAX_EXITS)) { return null; }
+  return out;
+}
+
 // FAILURES THAT ARE NOT CRASHES (0.99.64): a radio that would not open, no sound
 // output, an update or a plugin install that failed - counted, never described.
 // The client sends ONE string of `token=count` pairs, e.g.
@@ -271,6 +308,7 @@ export default {
       : '';
     const stalls = stallCount(body.stalls);
     const health = healthParse(body.health);
+    const exits = exitSplit(body);
 
     env.USAGE.writeDataPoint({
       // index1 is the install id: the ONLY field that distinguishes one
@@ -314,6 +352,12 @@ export default {
         // existing columns: no earlier column changed meaning.
         health === null ? '' : '1',        // blob12 '1' = the client reported failure counts
         health === null ? '' : health.text,  // blob13 the tokens, vocabulary only
+        // 0.99.69: unclean exits by cause. blob14 is the marker, exactly as blob11 and
+        // blob12 are for stalls and failure counts: '1' only when the client SENT a
+        // usable split (exitSplit), '' for an application older than 0.99.69 and for
+        // a malformed one - so double13..double16 are meaningful only where
+        // blob14 = '1'. Appended AFTER the existing columns: nothing earlier changed.
+        exits === null ? '' : '1',  // blob14 '1' = the client reported unclean exits by cause
       ],
       doubles: [
         num(body.launches, 1e6),    // double1  launches since install
@@ -345,6 +389,15 @@ export default {
         healthSum(health, 'slow'),        // double10 slow frames, 250 ms or more
         healthSlowFrom(health, 1),        // double11 slow frames of a second or more
         healthSum(health, 'recovered'),   // double12 recoveries
+        // double13..double16 (0.99.69): unclean exits by cause, LIFETIME counters like
+        // double2 (never reset, so a window is read as the difference between an
+        // install's first and last row, not as a sum), and meaningful only where
+        // blob14 = '1'. Their sum is the unclean exits counted since 0.99.69, so it is
+        // never more than double2 (exitSplit refuses a record in which it is).
+        exits === null ? 0 : exits[0],    // double13 unclean exits that were a fault (died)
+        exits === null ? 0 : exits[1],    // double14 ended from outside (killed)
+        exits === null ? 0 : exits[2],    // double15 ended by the operating system (ended)
+        exits === null ? 0 : exits[3],    // double16 no evidence (unknown)
       ],
     });
 

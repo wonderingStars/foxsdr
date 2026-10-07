@@ -5,6 +5,7 @@
 #include "core/crash_upload.hpp"
 
 #include "core/diag_log.hpp"
+#include "core/foreign_modules.hpp"
 #include "core/frame_timing.hpp"
 #include "core/sentinel.hpp"
 
@@ -293,6 +294,11 @@ bool parseReportText(const std::string& text, ParsedReport& out) {
                 out.deviceOpen = (v == "yes");
             } else if (k == "sdr-model") {
                 out.sdrModel = (v == "(none)") ? std::string() : v;
+            } else if (k == "foreign-modules") {
+                // File names only (0.99.69): re-rendered from the names that are plain file
+                // names, so a hand-edited or damaged line cannot carry anything else out, and
+                // empty for every value that is not a list (`(not recorded)` and the rest).
+                out.foreignModules = normaliseForeignField(v);
             } else if (k == "plugin") {
                 if (v != "(none)" && !v.empty() && out.plugins.size() < kMaxPlugins) {
                     out.plugins.push_back(v);
@@ -463,6 +469,11 @@ nlohmann::json buildPayload(const ParsedReport& r, const std::string& installId,
     ctx["sampleRate"] = r.sampleRateHz;
     ctx["deviceOpen"] = r.deviceOpen;
     ctx["sdrModel"] = r.sdrModel;
+    // The FILE NAMES of the other software's DLLs that were loaded into the process
+    // (0.99.69): never a folder, never a version. Always present, empty when the report
+    // says nothing about it. Re-validated here as well as where it was parsed, because
+    // this is the one place it becomes bytes that leave the machine.
+    ctx["foreignModules"] = normaliseForeignField(r.foreignModules);
     // Seconds from process start to the fault; 0 means the report predates
     // the process block. Whether the faulting thread was one of ours, as the
     // three-way answer the writer gave: "true", "false", or "" for a freeze
@@ -572,7 +583,7 @@ const std::vector<std::string>& uploadFieldNames() {
 const std::vector<std::string>& uploadContextFieldNames() {
     static const std::vector<std::string> names = {"mode",     "source",    "sampleRate",
                                                    "deviceOpen", "sdrModel", "uptimeSec",
-                                                   "faultThreadOwn"};
+                                                   "faultThreadOwn", "foreignModules"};
     return names;
 }
 

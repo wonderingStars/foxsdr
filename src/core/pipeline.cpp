@@ -22,6 +22,7 @@
 #include "core/pipeline.hpp"
 
 #include "core/diag_log.hpp"
+#include "core/leak_on_purpose.hpp"
 #include "core/plugin_runner.hpp"
 #include "dsp/limiter.hpp"
 
@@ -495,7 +496,8 @@ Pipeline::~Pipeline() {
     // caller with a shorter-lived Pipeline must not have to rediscover this
     // the hard way.
     if (zombieSource_) {
-        static_cast<void>(external_.release());
+        // Marked for LeakSanitizer (core/leak_on_purpose.hpp).
+        leakOnPurpose(external_.release());
         zombieSource_ = false;
     }
 }
@@ -552,7 +554,8 @@ void Pipeline::setSource(std::unique_ptr<cascade::source::IqSource> s) {
     // later stop()/setSource() does not leak a second, perfectly healthy
     // source it never needed to.
     if (zombieSource_) {
-        static_cast<void>(external_.release());
+        // Marked for LeakSanitizer (core/leak_on_purpose.hpp).
+        leakOnPurpose(external_.release());
         zombieSource_ = false;
     }
     // Swap. Destroying the outgoing external source here is race-free on

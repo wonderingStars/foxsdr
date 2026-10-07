@@ -33,9 +33,11 @@ set(CASCADE_TSAN_TESTS
     test_pipeline test_pipeline_getters test_pipeline_ring_rate test_pipeline_file_fault
     test_thread_fault test_source_swap test_source_overreport test_spsc_ring test_scope_tap
     test_audio_clip test_rate_follow test_scope_taps_wired
+    # the generator the pipeline's source thread reads while a caller retunes it
+    test_siggen
     # patch radios: one reader thread each, and a speaker written from its own
     test_patch_radio test_patch_radio_abandon test_patch_dest_async test_patch_runner
-    test_patch_decoders test_patch_audio
+    test_patch_decoders
     test_converter_app_paths test_converter_routing
     # the plugin runner and the host API plugins call from their own threads
     test_plugin_runner test_plugin_destroy_reentry test_plugin_api test_plugin_audio
@@ -85,7 +87,10 @@ _cascade_tsan_exclude(
 _cascade_tsan_exclude(
     "it measures audio against a source paced by the wall clock: an instrumented DSP thread runs several times slower and falls behind it, so it fails with no race report (the same tests are excluded under AddressSanitizer for the same reason)"
     test_pipeline_audio test_pipeline_device_rate_audio test_channel_bandwidth
-    test_soundcard_source test_airband_app)
+    test_soundcard_source test_airband_app
+    # Found by the first run (37355910809): its 1 kHz patch tone read 0.0047 where it
+    # must exceed 0.01, "patch starved frames: 1", and no race report at all.
+    test_patch_audio)
 
 _cascade_tsan_exclude(
     "it drives the whole window under a software GL context: the threads in it are the test's own helpers, and Mesa's thread pool is what ThreadSanitizer would mostly see"

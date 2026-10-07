@@ -358,8 +358,8 @@ std::string maskAccountNames(const std::string& text);
 //
 // It is only installed for an interactive session (main.cpp decides), and
 // only when nobody is watching stderr: a pipe or a file, or a console this
-// process is the ONLY thing attached to (the one Windows allocates for a
-// Start Menu launch). A developer running from a terminal keeps their stderr.
+// process is the ONLY thing attached to (what a Start Menu launch had until
+// 0.99.69; it has no console now, core/console_owner.hpp). A developer running from a terminal keeps their stderr.
 // `evenIfConsole` overrides that rule for the test, which runs under ctest
 // (a pipe) and from a terminal (a console) and must behave the same in both.
 //

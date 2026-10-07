@@ -15,11 +15,17 @@
 #             built with AddressSanitizer + UndefinedBehaviorSanitizer (and
 #             LeakSanitizer, which is part of ASan on Linux) and run under
 #             xvfb with the null audio device, exactly as build.yml runs it.
-#   tsan      GCC again, ThreadSanitizer. It cannot share a build with ASan
-#             (the two will not live in one process), so it is a build of its
-#             own, and it runs a SELECTION of the suite - the tests that put
-#             our threads against each other (tests/tsan.cmake says which, and
-#             why the rest are out). Added blind: nothing in it has run.
+#   tsan      Clang 18, ThreadSanitizer. Clang and not GCC because GCC 13's
+#             libtsan has no interceptor for pthread_mutex_clocklock, which
+#             libstdc++ calls for every std::timed_mutex::try_lock_for, so
+#             TSan never sees the lock, reports every unlock of such a mutex as
+#             "unlock of an unlocked mutex" and loses the happens-before edge
+#             the lock gives (the interceptor is in LLVM 18; the first run,
+#             37355910809, failed three tests on it). It cannot share a build
+#             with ASan (the two will not live in one process), so it is a
+#             build of its own, and it runs a SELECTION of the suite - the
+#             tests that put our threads against each other (tests/tsan.cmake
+#             says which, and why the rest are out).
 #   fuzz      Clang, because libFuzzer is Clang's. The fuzz targets in
 #             tests/fuzz, built with ASan + UBSan + libFuzzer, the regression
 #             corpus replayed first and then each target fuzzed for a short,
@@ -142,10 +148,13 @@ jobs:
           set -o pipefail
           xvfb-run -a ctest --test-dir build --output-on-failure -j2 2>&1 | tee ctest.log
 
-      - name: Selftest
-        env:
-          LIBGL_ALWAYS_SOFTWARE: "1"
-        run: xvfb-run -a ./build/cascade --selftest
+      # NO "cascade --selftest" STEP, as there is none in the TSan job: it is the
+      # ctest entry app_selftest, which tests/CMakeLists.txt excludes from every
+      # sanitizer run, and for the same reason. It measures the 700 Hz CW sidetone of
+      # the built-in generator through the real pipeline, the generator is paced by
+      # the wall clock, an instrumented DSP thread falls behind it and the ring drops
+      # samples, so the tone read 773 Hz in the first run (37355910809) with no
+      # sanitizer report. build.yml runs it in the plain build, where the claim is made.
 
       - uses: actions/upload-artifact@v4
         if: always()
@@ -156,14 +165,18 @@ jobs:
             build/Testing/Temporary/LastTest.log
           if-no-files-found: warn
 
-  # THREADSANITIZER. Written without a Linux run, like everything in this file, and
-  # the least certain of it: nothing here has been executed, and a thread
-  # sanitizer's first run on a program with this many threads is normally the one
-  # that teaches you what its noise is. Read the first log before believing it.
+  # THREADSANITIZER. A thread sanitizer's first run on a program with this many
+  # threads is normally the one that teaches you what its noise is; the first run
+  # (37355910809) did, and tools/sanitize/tsan.supp and tests/tsan.cmake carry what
+  # it taught. halt_on_error means each test shows only its FIRST report, so the
+  # next run is expected to show the next one: read the log before believing it.
   tsan:
     runs-on: ubuntu-24.04
     timeout-minutes: 240
     env:
+      # Clang 18, not GCC 13: see the head of this file (pthread_mutex_clocklock).
+      CC: clang-18
+      CXX: clang++-18
       # halt_on_error: the first race ends the process. second_deadlock_stack: a
       # lock-order report shows both orders. history_size=4: the "previous access"
       # stack of a race that is a while old (the default of 2 loses it). The same
@@ -175,12 +188,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # The same package set as the sanitize job; llvm-18 for llvm-symbolizer.
+      # The same package set as the fuzz job (clang-18 and the runtime package that
+      # carries libclang_rt.tsan); llvm-18 for llvm-symbolizer.
       - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential cmake ninja-build \
+            clang-18 libclang-rt-18-dev \
             libgl1-mesa-dev libsoapysdr-dev libssl-dev libunwind-dev \
             libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
             libwayland-dev libwayland-bin wayland-protocols libxkbcommon-dev \

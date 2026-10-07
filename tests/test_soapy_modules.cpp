@@ -286,6 +286,25 @@ void testEveryModuleDirAddedComesWithItsVendorBinDir() {
     }
 }
 
+void testTheFoldersTheDiagnosticLogCallsOursAreBothOfEveryRoot() {
+    // 0.99.69 (core/foreign_modules.hpp): the diagnostic log names the OTHER software's DLLs
+    // in the process. A vendor's module and the DLLs it depends on (rtlsdr.dll,
+    // libusb-1.0.dll) are loaded on purpose, so both of an install's folders are "ours" -
+    // a list of only the module folders would name every driver DLL the moment a radio
+    // opened. The order is the roots' own, module folder then bin folder.
+    VendorRoot a;
+    a.moduleDir = nativeJoin({kProgramFiles, "PothosSDR", "lib", "SoapySDR", "modules0.8"});
+    a.binDir = nativeJoin({kProgramFiles, "PothosSDR", "bin"});
+    VendorRoot b;
+    b.moduleDir = nativeJoin({kHome, "radioconda", "Library", "lib", "SoapySDR", "modules0.8"});
+    b.binDir = nativeJoin({kHome, "radioconda", "Library", "bin"});
+    const std::vector<std::string> own = cascade::source::ownFoldersOf({a, b});
+    CHECK(own.size() == 4);
+    CHECK(own.size() == 4 && own[0] == a.moduleDir && own[1] == a.binDir && own[2] == b.moduleDir &&
+          own[3] == b.binDir);
+    CHECK(cascade::source::ownFoldersOf({}).empty());  // nothing adopted: nothing registered
+}
+
 }  // namespace
 
 int main() {
@@ -301,5 +320,6 @@ int main() {
     testNothingToAddYieldsNoChange();
     testTwoInstallsAreBothAdded();
     testEveryModuleDirAddedComesWithItsVendorBinDir();
+    testTheFoldersTheDiagnosticLogCallsOursAreBothOfEveryRoot();
     return testSummary("test_soapy_modules");
 }

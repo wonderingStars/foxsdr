@@ -40,6 +40,7 @@
 
 #include "core/breadcrumb.hpp"
 #include "core/console_close.hpp"
+#include "core/console_owner.hpp"
 #include "core/crash_handler.hpp"
 #include "core/diag_log.hpp"
 #include "core/diag_report.hpp"
@@ -889,6 +890,17 @@ int runRecordCheck() {
 }  // namespace
 
 int main(int argc, char** argv) {
+    // THE CONSOLE, before anything is printed or opened (0.99.69, core/console_owner.hpp).
+    // cascade.exe is a windows-subsystem program (CMakeLists.txt), so a launch from
+    // the Start Menu or Explorer gets no console and no black window beside the
+    // real one - until 0.99.69 it did, and on a desktop with Windows Terminal as
+    // the default host that was a Windows Terminal window for the whole session.
+    // The tool modes below still print, so a process started from a shell borrows
+    // the shell's console here (AttachConsole) and gets its standard handles back;
+    // one started from Explorer finds no parent console and has none. FIRST in
+    // main(), above the helper modes, because every line this function prints
+    // afterwards must already know where it is printing.
+    cascade::core::applyConsoleOwnership();
     // THE ENUMERATION HELPER, decided before anything else in this function.
     //
     // `cascade --enumerate-json` is not a user-facing mode: it is the child
@@ -1375,12 +1387,27 @@ int main(int argc, char** argv) {
 
     // THE CONSOLE CONTROL HANDLER (0.99.67, core/console_close.hpp), for a real
     // session and for a bounded run under the sentinel seam, so the test can send
-    // the event. cascade.exe is a console-subsystem program, so a Start Menu launch
-    // has a console window of its own; without this, closing that window - or
+    // the event. Until 0.99.69 cascade.exe was a console-subsystem program, so a
+    // Start Menu launch had a console window of its own; closing that window - or
     // Ctrl+C in it - ended the process before a line of the shutdown had run, and
     // the sentinel filed it as an ending from outside (field report, 2026-10-06).
-    // Now it is the close the window's own button asks for.
+    // That window is gone now, but a session started from a terminal still shares
+    // the terminal's console (applyConsoleOwnership), and closing the terminal or
+    // Ctrl+C in it is the same event: it is the close the window's own button asks for.
     if (frames < 0 || sentinelTest) { cascade::core::installConsoleCloseHandler(); }
+    // What applyConsoleOwnership did at the top, in the log, for the next report
+    // that starts "a black window appeared" (or "closing it killed the program").
+    // Windows only: elsewhere there is no console to own and nothing to say.
+#if defined(_WIN32)
+    {
+        const cascade::core::ConsoleOutcome co = cascade::core::consoleOutcome();
+        const char* did = "kept";
+        if (co.decision.action == cascade::core::ConsoleAction::Attach) {
+            did = co.attached ? "attached to the parent's" : "none, and the parent has none";
+        }
+        cascade::core::diagLogf("console: %s (%s)", did, co.decision.reason);
+    }
+#endif
 
     // THE SENTINEL, for an interactive session only (core/sentinel.hpp): started
     // HERE, after every tool mode has returned and before the application object

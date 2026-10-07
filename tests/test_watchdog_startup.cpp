@@ -114,6 +114,7 @@ int main() {
     testShutdownDuringStartupIsNotOverwritten();
     testDegenerateCallsChangeNothing();
     testStartupStallIsNotReportedButALaterOneIs();
-    std::printf("test_watchdog_startup: %d checks, %d failed\n", g_checksRun, g_checksFailed);
+    std::printf("test_watchdog_startup: %d checks, %d failed\n", g_checksRun.load(),
+                g_checksFailed.load());
     return g_checksFailed == 0 ? 0 : 1;
 }

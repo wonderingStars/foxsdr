@@ -403,6 +403,70 @@ void testReports() {
         CHECK(!has(sec, secret));
     }
 
+    // WHY `upload local-only` (0.99.69). A tester on 0.99.66 saw the word, had no idea
+    // what it meant, and pasted the whole report into the bug form to ask. The bundle
+    // now says, once per reason, under the list - the seeded stall is the one
+    // local-only report here - and the reason is a function of the report, so the
+    // page can say the same sentence through tr().
+    {
+        CHECK(has(sec, "local-only: A display-driver presentation stall"));
+        CHECK(has(sec, "not a fault in FoxSDR"));
+        CHECK(has(sec, "stays on this machine and is not sent"));
+        CHECK(has(sec, "reports folder"));
+        CHECK(countOf(sec, "local-only: ") == 1u);
+        // Under the list, after its last line, not in the middle of it.
+        CHECK(sec.find("local-only: ") > sec.find("upload none"));
+
+        ReportSummary r;
+        r.kind = "stall";
+        r.upload = "local-only";
+        CHECK(has(localOnlyReason(r), "display-driver presentation stall"));
+        // The sentinel's two kept-here endings, by the same sentences the uploader tests.
+        r = ReportSummary();
+        r.kind = "crash";
+        r.upload = "local-only";
+        r.reason = "sentinel: ended from outside, window was drawing - ended by another process";
+        CHECK(has(localOnlyReason(r), "ended from outside"));
+        const std::string outside = localOnlyReason(r);
+        r.reason = "sentinel: ended as the session closed - exit code 0 before the shutdown had finished";
+        CHECK(localOnlyReason(r) == outside);
+        // Anything else the sweep might keep: the general sentence, never a guess.
+        r.reason = "access violation";
+        CHECK(has(localOnlyReason(r), "never sent"));
+        CHECK(!has(localOnlyReason(r), "ended from outside") && !has(localOnlyReason(r), "display"));
+        // Not local-only: nothing to explain.
+        for (const char* status : {"sent", "none", "duplicate", "backoff", "failed", "expired", ""}) {
+            r.upload = status;
+            CHECK(localOnlyReason(r).empty());
+        }
+
+        // Several reports of one reason say it once; two reasons say two lines, and
+        // a listing with no local-only report says none.
+        DiagHistory h;
+        h.included = true;
+        h.reports.readable = true;
+        h.reports.total = 4;
+        for (int i = 0; i < 3; ++i) {
+            ReportSummary o;
+            o.kind = "crash";
+            o.upload = "local-only";
+            o.reason = "sentinel: ended from outside, window was drawing";
+            o.code = "0x00000001";
+            o.signature = "AAAABBBBCCCCDDDD";
+            h.reports.newest.push_back(o);
+        }
+        ReportSummary st;
+        st.kind = "stall";
+        st.upload = "local-only";
+        h.reports.newest.push_back(st);
+        const std::string many = sectionOf(bundleWith(h), kReportsHeading);
+        CHECK(countOf(many, "local-only: ") == 2u);
+        CHECK(has(many, "local-only: FoxSDR was ended from outside"));
+        CHECK(has(many, "local-only: A display-driver presentation stall"));
+        for (ReportSummary& s2 : h.reports.newest) { s2.upload = "sent"; }
+        CHECK(countOf(sectionOf(bundleWith(h), kReportsHeading), "local-only: ") == 0u);
+    }
+
     // THE BOUND: twelve reports list ten, and say so.
     {
         const fs::path many = g_scratch / "case2b" / "crashes";

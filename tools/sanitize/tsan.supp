@@ -1,11 +1,14 @@
 # ThreadSanitizer suppressions for the Linux tsan job
 # (.github/workflows/sanitize.yml, cmake/sanitize.cmake, tests/tsan.cmake).
 #
-# STARTS EMPTY OF OUR CODE, AND STAYS THAT WAY. Every line below names a library
-# this repository does not build, and hides a report only when that library is on
-# the report's stack. Nothing names anything in src/, in a test, or in a vendored
-# library compiled here (imgui, glfw, portaudio, pffft): a race in those is a
-# finding, not noise. A race in our code is fixed, not listed.
+# STARTS EMPTY OF OUR CODE, AND STAYS THAT WAY. Every `called_from_lib` line below
+# names a library this repository does not build, and hides a report only when that
+# library is on the report's stack. Nothing names anything in src/, in a test, or in
+# a vendored library compiled here (imgui, glfw, pffft): a race in those is a
+# finding, not noise. A race in our code is fixed, not listed. THE ONE EXCEPTION is
+# two named races in the vendored PortAudio, at the end of this file, each shown to
+# be benign by construction and each matched by the exact name of the thing it is
+# about, not by a library.
 #
 # WHY THIRD-PARTY LIBRARIES NEED THEM AT ALL. ThreadSanitizer sees only what is
 # instrumented and what it can intercept (pthread calls, atomics it knows). A
@@ -13,8 +16,10 @@
 # which it cannot see, so an access of ours to memory such a library hands over
 # looks unsynchronised when it is not.
 #
-# These were written WITHOUT a Linux run to check them against; the first log is what
-# shows which of them are needed, and any line it does not need should go.
+# The first run (37355910809) was the first Linux run to check them against. It showed
+# that the libunwind, libpulsecommon and PortAudio lines below were missing; it did not
+# exercise every other line here (libasound only appears behind the pulse report, and
+# nothing reached the display libraries), so those stay until a log shows them unneeded.
 
 # ALSA: the sound server's plugin layer and pcm locking use futex-based waits that
 # are invisible to the sanitizer; our audio sink writes to a pcm another thread of
@@ -36,12 +41,61 @@ called_from_lib:libX11.so
 called_from_lib:libxcb.so
 called_from_lib:libwayland-client.so.0
 
+# PulseAudio's client library. ALSA's "default" pcm resolves to its pulse plugin on
+# the runner, and opening it (PortAudio's BuildDeviceList, every test that touches
+# the sound sink) starts a threaded main loop inside libpulsecommon. That thread
+# allocates the library's own mutexes (pa_xmalloc) and hands them to the thread that
+# opened the pcm through the library's atomics and an eventfd, none of which
+# ThreadSanitizer sees. Reported as "data race ... in pa_mutex_lock" in 15 of the
+# first run's tests: the two accesses are the malloc on the loop thread and the
+# pthread_mutex_lock on ours, on a 40-byte block the library allocated, both made
+# from inside the library. Nothing of ours is on either side.
+called_from_lib:libpulsecommon
+
+# libunwind. The hang watchdog and the crash path capture another thread's stack by
+# signalling it and walking from the handler (unw_step). libunwind initialises its
+# signal mask once, under its own lock, on the first thread to unwind (sigfillset),
+# and every later unwind reads it (sigprocmask) with no lock, trusting the library's
+# own initialised flag, which is an atomic ThreadSanitizer cannot see because the
+# library is not instrumented. Reported as "data race ... in _ULx86_64_step" in 9 of
+# the first run's tests (test_excuse_cap, test_hang_signature and test_watchdog_startup
+# among them): both accesses are interceptor calls made from inside libunwind, to
+# libunwind's own global (libunwind.so.8+0x16a80), not to any memory of ours.
+called_from_lib:libunwind.so.8
+
+# THE TWO UPSTREAM PORTAUDIO RACES. PortAudio is vendored (third_party/portaudio, at
+# the pinned upstream commit) and compiled here WITH instrumentation, so unlike a
+# system library its races are ours to answer for; these two are real data races in
+# the C sense, are in upstream PortAudio as pinned, and are harmless by construction.
+# They are matched by exact name, so a race on anything else in PortAudio - its
+# callback ring above all - is still reported. The alternative to listing them is to
+# patch the vendored tree (THIRD_PARTY.md records its patches); that has not been done
+# because pa_unix_util.c is not compiled on Windows, so the change could not be built
+# where this repository is developed.
+#
+#   paUtilErr_   - a file-static scratch int, `static PaError paUtilErr_` in
+#                  pa_unix_util.h, assigned the result of a pthread call by
+#                  PA_ENSURE / PA_ENSURE_SYSTEM / PA_ASSERT_CALL and compared in the
+#                  same statement. Every thread writes it; the only value ever stored
+#                  by a call that succeeds is 0, and a failed pthread_mutex_unlock is
+#                  a programming error PortAudio asserts on. Reported in 5 tests as a
+#                  write/write race in PaUnixMutex_Unlock.
+race:paUtilErr_
+#   PaUnixThread_NotifyParent - sets `parentWaiting = 0` under the thread's mutex;
+#                  PaUnixThread_New reads that flag once without the mutex (a double-
+#                  checked wait: if it reads a stale 1 it takes the mutex and
+#                  re-reads in the while loop, if it reads 0 the child has already
+#                  signalled), so the unlocked read is a hint that is always
+#                  re-verified. Reported in test_audio_open_log. The function is a
+#                  dozen lines whose only shared field is that flag.
+race:PaUnixThread_NotifyParent
+
 # DELIBERATELY NOT LISTED.
 #   libusb       - not linked: the USB drivers use usbfs directly (src/usb).
-#   PortAudio    - vendored, so compiled here WITH instrumentation, like our own
-#                  code. Its callback thread and our writer share a ring buffer
-#                  whose ordering PortAudio makes with full memory barriers
-#                  (PaUtil_FullMemoryBarrier), which ThreadSanitizer does not model
-#                  as synchronisation. If the first log reports that ring, the line
-#                  to add is `race:PaUtil_` (the PortAudio ring's functions), with
-#                  that report as the reason; it is not added on a guess.
+#   PortAudio's ring buffer - its callback thread and our writer share it, and its
+#                  ordering is made with full memory barriers (PaUtil_FullMemoryBarrier),
+#                  which ThreadSanitizer does not model as synchronisation. No run has
+#                  reported it yet (every test stopped on an earlier report first, so
+#                  that is not evidence it is clean). If a log reports that ring, the
+#                  line to add is `race:PaUtil_` (the ring's functions), with that
+#                  report as the reason; it is not added on a guess.

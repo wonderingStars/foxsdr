@@ -43,6 +43,7 @@
 
 #include "core/diag_log.hpp"
 #include "core/diag_report.hpp"
+#include "core/ubsan_exempt.hpp"
 
 #include <csignal>
 #include <cstdlib>
@@ -1479,7 +1480,11 @@ void pokePureVirtual(PureBase* b) { b->nowhere(); }
 
 }  // namespace
 
-void raiseTestFault(TestFaultKind kind) {
+// CASCADE_UBSAN_EXEMPT: the access violation below IS undefined behaviour, raised
+// on purpose to prove the handler writes its report. UndefinedBehaviorSanitizer's
+// null check would report it first and end the process before the fault happens
+// (core/ubsan_exempt.hpp). Nothing else in this file is exempt.
+CASCADE_UBSAN_EXEMPT void raiseTestFault(TestFaultKind kind) {
     switch (kind) {
         case TestFaultKind::AccessViolation: {
             // volatile so the store is really emitted rather than folded into

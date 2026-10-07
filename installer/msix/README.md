@@ -451,11 +451,18 @@ console.
       <uap5:AppExecutionAlias desktop4:Subsystem="console">
         <uap5:ExecutionAlias Alias="foxsdr.exe" />
 
-`desktop4:Subsystem="console"` matches the binary: `cascade.exe` is linked
-`/SUBSYSTEM:CONSOLE` (PE Subsystem field = 3, read from the header), so it
-writes its diagnostics to an inherited console rather than to nowhere. This is
-also the mechanism by which a packaged run can be driven and measured at all —
-see section 9.
+`desktop4:Subsystem="console"` matched the binary until 0.99.69: `cascade.exe`
+was linked `/SUBSYSTEM:CONSOLE` (PE Subsystem field = 3, read from the header),
+so it wrote its diagnostics to an inherited console rather than to nowhere. From
+0.99.69 it is a windows-subsystem binary (Subsystem = 2) so that a Start Menu
+launch has no console window, and it borrows its parent's console with
+`AttachConsole` when a terminal started it (`src/core/console_owner.hpp`). **The
+alias declaration was not changed and has not been tried against the new
+binary**: whether an alias started from a terminal still leaves the process a
+parent console to borrow, or needs `desktop4:Subsystem="windows"`, is a question
+only an installed package answers - run `foxsdr --version` at a prompt on the
+first install. The alias is also the mechanism by which a packaged run can be
+driven and measured at all — see section 9.
 
 ---
 

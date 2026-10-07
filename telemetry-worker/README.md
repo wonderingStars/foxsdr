@@ -8,8 +8,9 @@ that just ended.
 
     npx wrangler deploy
 
-**Deploy the Worker before shipping an application that sends `stalls` or
-`health`** (see *Display stalls* and *Failures that are not crashes* below). The
+**Deploy the Worker before shipping an application that sends `stalls`, `health`
+or the unclean-exit split** (see *Display stalls*, *Failures that are not crashes*
+and *Unclean exits by cause* below). The
 change is additive - blobs and doubles are appended after the existing columns,
 and a record without the field is still accepted exactly as before - so the order
 is not a matter of breaking anything. It decides what is *lost*: an application
@@ -46,6 +47,7 @@ corrupts every row written before.
 | `blob11` | `'1'` when this client sent a display-stall count, else `''` |
 | `blob12` | `'1'` when this client sent failure counts (`health`), else `''` |
 | `blob13` | the counts, `token=count,token=count` from the fixed vocabulary, canonical order: failures, then `slow.<scope>.<tier>`, then `recovered.<what>`; `''` when nothing was counted - meaningful only where `blob12 = '1'` |
+| `blob14` | `'1'` when this client sent the unclean-exit split by cause (`exits_died`, `exits_killed`, `exits_ended`, `exits_unknown`), else `''` (0.99.69) |
 | `double1` | launches since install (lifetime) |
 | `double2` | unclean exits since install (lifetime) |
 | `double3` | length of the session the record describes, seconds |
@@ -58,11 +60,66 @@ corrupts every row written before.
 | `double10` | slow frames: the sum of every `slow.*` count in `blob13` (per row) - **measured only from 0.99.65** (see the rule below) |
 | `double11` | slow frames of a second or more: the sum of the `slow.*.1s` and `slow.*.5s` counts (per row) - measured only from 0.99.65 |
 | `double12` | recoveries: the sum of every `recovered.*` count in `blob13` (per row) - measured only from 0.99.65 |
+| `double13` | unclean exits that were a fault in the application - **died** (lifetime, never reset) - only where `blob14 = '1'` |
+| `double14` | unclean exits ended from outside while the application was working normally - **killed** (lifetime) - only where `blob14 = '1'` |
+| `double15` | unclean exits that were the operating system closing the session - **ended** (lifetime) - only where `blob14 = '1'` |
+| `double16` | unclean exits with no evidence of how they ended - **unknown** (lifetime) - only where `blob14 = '1'` |
 
-Column budget: Analytics Engine allows 20 blobs and 20 doubles a row. `blob1`..`blob13`
-and `double1`..`double12` are used: 7 blobs and 8 doubles are free. Slow frames and
-recoveries took no blob (they ride in `blob13`) and three doubles. (The 16 KB
-limit on a row's blobs is nowhere near: `blob13` is never more than 832 characters.)
+Column budget: Analytics Engine allows 20 blobs and 20 doubles a row. `blob1`..`blob14`
+and `double1`..`double16` are used: 6 blobs and 4 doubles are free. Slow frames and
+recoveries took no blob (they ride in `blob13`) and three doubles; the unclean-exit split
+took one blob (its marker) and four doubles. (The 16 KB limit on a row's blobs is
+nowhere near: `blob13` is never more than 832 characters.)
+
+### Unclean exits by cause
+
+`double2` has always been the number of sessions that never wrote the clean-exit
+marker, and that is four different things: the application failing, a task ended
+from outside (Task Manager, `taskkill`, an installer, a closed console window),
+the operating system closing the session (a log off, a shutdown), and an ending
+nothing can explain (a power cut, Diagnostics off). The record carries the four
+classes beside it as `exits_died`, `exits_killed`, `exits_ended` and
+`exits_unknown` (PRIVACY.md, *How an unclean exit ended*; the rule that sorts an
+exit into a class is `src/core/exit_cause.hpp` in the application). **Every
+unclean exit from 0.99.69 on is in exactly one of them, so their sum is the
+unclean exits counted since then and `double2` minus the sum is how many came
+before the split existed.** They are written to `double13`..`double16`, with
+`blob14` as the marker.
+
+**An unwritten split is not zero.** This follows the convention the stall count
+and the failure counts set - a marker blob that is `'1'` only when the client sent
+the field, and doubles that hold 0 otherwise - and not a second one (`-1` in the
+doubles would have been two ways of saying one thing). A row from an application
+older than 0.99.69, from a Worker that did not know the fields, or whose split was
+not usable has `blob14 = ''` and four zeros that mean *not measured*, never *none
+ended that way*. **Always ask about the split with `blob14 = '1'`.**
+
+**Validation.** All or nothing, and strict like `stalls`: the four must all be
+present and each a JSON **number** that is finite and not negative (`"1"`, `true`,
+`null`, arrays and objects are not usable); a fraction is floored and a value above
+1,000,000 (the bound `double2` has) is clamped. A split whose four add up to **more
+than `crashes`** was not written by the application - a class is only ever counted
+together with an unclean exit - and is treated as not reported. An unusable split is
+`blob14 = ''`, the doubles are 0, and the rest of the record is still written. A
+heartbeat carrying the fields is still just a heartbeat.
+
+**They are lifetime counters, like `double2`**, so a window's figure is a *difference*
+and never a sum: for each install, the highest value among its rows of a version
+minus the lowest, summed over the installs (`usage.ps1` and the site's reliability
+page do this; the install id is grouped by in the query and never selected). That
+counts the exits between an install's first and last report of a version, so the
+denominator for a share is the sessions whose end is on record - an install's
+sessions of that version, minus one.
+
+**Deploy the Worker before an application that sends the split is released.** The
+old Worker answers 204 and drops the four fields, and the application, told its
+record was accepted, has nothing to resend. Every row written until the Worker is
+deployed has `blob14 = ''` - those sessions are unmeasured, whatever the client sent -
+and because the counters are cumulative, the exits that happened in between show up
+in the first row written after the deploy, which a per-version difference then
+attributes to that row's version and not to the sessions they came from. Worker
+first loses nothing. `worker.test.mjs` holds the old behaviour against the 0.99.67
+Worker kept byte for byte in `test-fixtures/worker-0.99.67.js`.
 
 ### Display stalls
 
@@ -245,6 +302,12 @@ rows carry zeros it never measured, a pre-release, an odd string, a build with n
 `health` at all - is listed apart as *not measured*, never printed as a zero, and
 moves no figure of the versions that did measure (every figure is per version).
 
+It then prints **Unclean exits by cause, by version** (0.99.69): for each version
+that reports the split (`blob14 = '1'`), the installs, the *ends seen* (their
+sessions minus one each, the sessions whose end is on record), and the rise of the
+died, killed, ended and unknown counters summed over the installs, with died as a
+share of ends seen. Builds that send no split are listed apart as *not measured*.
+
 The Worker and the reader are held by `worker.test.mjs` (`node --test`, needs
 Node 22.7 or later; registered with ctest as `telemetry_worker`). It imports the
 handler with a fake `env`, and runs `usage.ps1` against a stand-in for the SQL API
@@ -285,6 +348,20 @@ Crash rate per install:
     SELECT sum(double2) / count(DISTINCT index1) AS crashes_per_install
     FROM foxsdr_usage
     WHERE timestamp > NOW() - INTERVAL '30' DAY
+
+Unclean exits by cause (0.99.69) - one row per install and version, each counter
+the rise of a lifetime counter across the window; add the rows up per version (the
+install id is grouped by and not selected, and only rows with the marker are
+asked about, because every other row is unmeasured):
+
+    SELECT blob1 AS version, count() AS sessions,
+           max(double13) - min(double13) AS exitsDied,
+           max(double14) - min(double14) AS exitsKilled,
+           max(double15) - min(double15) AS exitsEnded,
+           max(double16) - min(double16) AS exitsUnknown
+    FROM foxsdr_usage
+    WHERE timestamp > NOW() - INTERVAL '30' DAY AND blob14 = '1'
+    GROUP BY blob1, index1
 
 Display stalls per version - installs that report a count, then of those the
 installs with at least one stall and the stalls in total. Two queries, because

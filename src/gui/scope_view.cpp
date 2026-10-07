@@ -3109,8 +3109,16 @@ void ScopeView::draw(float width, float height,
         if (!cardinal && !numberTicks) { continue; }
         // tr(): the four cardinal letters are the same keys the hemisphere
         // letters use (i18n::hemisphereLetter); a figure passes through.
-        const char* lblText = tr(scopeBearingLabel(b).c_str());
-        const std::string lbl = lblText;
+        //
+        // THE KEY IS KEPT IN A VARIABLE, not built inside the call. tr() hands back
+        // the pointer it was given whenever nothing translates it (English, or a
+        // catalogue without the entry), so with the key a temporary the pointer
+        // outlived it: the next line then read a std::string that had already been
+        // destroyed - a stack-use-after-scope (found by AddressSanitizer, on Linux
+        // and with MSVC's, in test_scope_face and test_patch_map_credit), which
+        // usually shows the right text because the stack slot is still intact.
+        const std::string key = scopeBearingLabel(b);
+        const std::string lbl = tr(key.c_str());
         const ImVec2 sz = ImGui::CalcTextSize(lbl.c_str());
         // Centred on its own tick at a fixed inset, so the twelve labels sit on
         // one circle rather than drifting with the length of the text.

@@ -3,11 +3,20 @@
 # Linux is built and tested on every push, on both x86_64 (ubuntu-latest) and
 # aarch64 (ubuntu-24.04-arm, GitHub's hosted Arm64 runner for public repos -
 # see the "arm64" job below) for the Raspberry Pi and other Arm64 Linux
-# desktops. Windows is deliberately NOT built here: the Windows build
-# consumes SoapySDR from a local vcpkg tree, and a CI runner that installs
-# its own copy would be testing a different dependency set than the one the
-# shipped installer is built against. The Windows build is verified locally
-# before release instead.
+# desktops.
+#
+# Windows is built here too, by the "windows" job at the end of this file: the
+# Release build, the Inno Setup installer, the MSIX and the symbol archive. The
+# one thing that kept it out of CI was SoapySDR, the only dependency that is not
+# vendored: a runner that installed its own copy would be building against a
+# different dependency set than the shipped installer. The job therefore takes
+# SoapySDR from a vcpkg checkout pinned to the commit of the vcpkg tree the
+# shipped installer is built against (read the job's comments), not from
+# whatever the runner image carries. It builds and packages and does not run
+# the test suite, and the installer that ships is still the one
+# tools/release.ps1 builds and install-tests on the release machine; the
+# artifacts of this job are what that one is compared with. The job is new and
+# has not run on a runner yet.
 name: build
 
 on:
@@ -299,3 +308,244 @@ jobs:
             *main.cpp:[0-9]*) ;;
             *) echo "FAIL: main() did not resolve to a source line in the archived file"; exit 1 ;;
           esac
+
+  # THE WINDOWS BUILD: Release, installer, MSIX, symbols. NEW, and not yet run on
+  # a runner: every step below is written from the documentation and from what the
+  # release machine does, and the first push will show which of them needs
+  # correcting. Linux's jobs above are unchanged and independent of this one.
+  #
+  # WHY windows-2022 AND NOT windows-latest. "windows-latest" is Windows Server
+  # 2025 with Visual Studio 2026 only (actions/runner-images README, 2026-10-06:
+  # windows-latest = windows-2025-vs2026), and CMakeLists.txt is configured with
+  # the "Visual Studio 17 2022" generator on the release machine. windows-2022
+  # carries Visual Studio Enterprise 2022 17.14, Windows SDK 10.0.26100.0, CMake
+  # 3.31.6, Python 3.14.7 in its tool cache and Inno Setup 6.7.1 (same readme).
+  #
+  # WHAT THE CMAKE NEEDS FROM VCPKG: one package, soapysdr (CMakeLists.txt:
+  # find_package(SoapySDR CONFIG REQUIRED)). Everything else - Dear ImGui, GLFW,
+  # PortAudio, pffft, nlohmann/json, cpp-httplib - is vendored under third_party/
+  # and built by CMake itself; OpenSSL is not used on Windows (CNG and WinHTTP
+  # instead). There is no vcpkg.json manifest and there must not be one at the
+  # repository root: with the toolchain file in use it would switch every local
+  # build to manifest mode and away from C:\vcpkg\installed.
+  #
+  # THE PIN. VCPKG_COMMIT is `git -C C:\vcpkg rev-parse HEAD` on the machine that
+  # builds the shipped installer (2026-10-06); that tree has soapysdr 0.8.1,
+  # port-version 0 (installed\vcpkg\info\soapysdr_0.8.1_x64-windows.list). The
+  # job checks out vcpkg at that commit instead of using the runner's own
+  # C:\vcpkg, whose commit is whatever the image was built with, and refuses to
+  # go on if the installed version is not the one expected. When the release
+  # machine's vcpkg moves, move this commit with it (and SOAPYSDR_EXPECTED).
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 120
+    env:
+      VCPKG_COMMIT: 19780d9cdf84d0944cf9a318666703b89ab6629c
+      SOAPYSDR_EXPECTED: 0.8.1
+      VCPKG_DISABLE_METRICS: "1"
+      # vcpkg's binary cache (docs: learn.microsoft.com/vcpkg/users/binarycaching,
+      # "Default binary cache": %VCPKG_DEFAULT_BINARY_CACHE% is the first location
+      # the default files provider looks at). The folder is restored from, and
+      # saved to, GitHub's cache below, so soapysdr is compiled once per pinned
+      # commit and not on every push.
+      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}\.vcpkg-archives
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read the version
+        shell: pwsh
+        run: |
+          $text = Get-Content -Raw CMakeLists.txt
+          $m = [regex]::Match($text, '(?m)^project\(cascade VERSION (\d+\.\d+\.\d+)')
+          if (-not $m.Success) { throw 'no project(cascade VERSION x.y.z line in CMakeLists.txt' }
+          "CASCADE_VERSION=$($m.Groups[1].Value)" >> $env:GITHUB_ENV
+          "version $($m.Groups[1].Value)"
+
+      # archive-symbols.ps1 and build-msix.ps1 both run `py -3.14` (the symbol map
+      # export and the Store logos), and the logos need Pillow.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+
+      # If the py launcher does not know the interpreter setup-python installed,
+      # `py -3.14` is made to resolve to it with a small shim ahead of it on PATH.
+      # Skipped when the launcher already answers.
+      - name: Make "py -3.14" resolve, and install Pillow
+        shell: pwsh
+        run: |
+          py -3.14 --version
+          if ($LASTEXITCODE -ne 0) {
+            $shim = Join-Path $env:RUNNER_TEMP 'pyshim'
+            New-Item -ItemType Directory -Path $shim -Force | Out-Null
+            @(
+              '@echo off',
+              'setlocal enabledelayedexpansion',
+              'set "rest="',
+              'shift',
+              ':next',
+              'if "%~1"=="" goto run',
+              'set rest=!rest! "%~1"',
+              'shift',
+              'goto next',
+              ':run',
+              'python !rest!'
+            ) | Set-Content -Path (Join-Path $shim 'py.cmd') -Encoding ascii
+            $shim >> $env:GITHUB_PATH
+            $env:PATH = "$shim;$env:PATH"
+            py -3.14 --version
+            if ($LASTEXITCODE -ne 0) { throw 'py -3.14 does not resolve even through the shim' }
+          }
+          py -3.14 -m pip install --disable-pip-version-check pillow
+          if ($LASTEXITCODE -ne 0) { throw 'pip install pillow failed' }
+
+      - name: Restore the vcpkg binary cache
+        id: vcpkg-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
+          key: vcpkg-windows-2022-${{ env.VCPKG_COMMIT }}-soapysdr-x64-windows
+
+      - name: vcpkg at the pinned commit, and SoapySDR
+        shell: pwsh
+        run: |
+          function Run { & $args[0] $args[1..($args.Count - 1)]; if ($LASTEXITCODE -ne 0) { throw "failed: $($args -join ' ')" } }
+          $root = Join-Path $env:RUNNER_TEMP 'vcpkg'
+          Run git init $root
+          Run git -C $root remote add origin https://github.com/microsoft/vcpkg.git
+          Run git -C $root fetch --depth 1 origin $env:VCPKG_COMMIT
+          Run git -C $root checkout --detach FETCH_HEAD
+          Run "$root\bootstrap-vcpkg.bat" -disableMetrics
+          New-Item -ItemType Directory -Path $env:VCPKG_DEFAULT_BINARY_CACHE -Force | Out-Null
+          Run "$root\vcpkg.exe" install soapysdr:x64-windows
+          $listed = & "$root\vcpkg.exe" list soapysdr
+          $listed
+          if (($listed -join "`n") -notmatch ('soapysdr:x64-windows\s+' + [regex]::Escape($env:SOAPYSDR_EXPECTED))) {
+            throw "soapysdr is not $env:SOAPYSDR_EXPECTED: this build would not be against the shipped dependency set"
+          }
+          "VCPKG_ROOT=$root" >> $env:GITHUB_ENV
+
+      # Saved HERE, before the build, so a failure further down does not throw away
+      # the half-hour of compiling it just paid for.
+      - name: Save the vcpkg binary cache
+        if: steps.vcpkg-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
+          key: vcpkg-windows-2022-${{ env.VCPKG_COMMIT }}-soapysdr-x64-windows
+
+      - name: Configure
+        shell: pwsh
+        run: |
+          cmake -S . -B build -G "Visual Studio 17 2022" -A x64 `
+            "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET=x64-windows -DCMAKE_BUILD_TYPE=Release
+          if ($LASTEXITCODE -ne 0) { throw 'configure failed' }
+
+      # Twice, as on the release machine: the second pass must change nothing, and
+      # printing both hashes shows whether it did. Only the `cascade` target, because
+      # the installer and the package need nothing else; the POST_BUILD step on it is
+      # what archives the symbols (CMakeLists.txt).
+      - name: Build, twice
+        shell: pwsh
+        run: |
+          foreach ($pass in 1, 2) {
+            cmake --build build --config Release --target cascade -- -m:4
+            if ($LASTEXITCODE -ne 0) { throw "build pass $pass failed" }
+            "pass ${pass}: $((Get-FileHash build\Release\cascade.exe -Algorithm SHA256).Hash)"
+          }
+
+      # The binary has to say the version it was built as. Read through redirected
+      # files, which works whether cascade.exe is a console or a Windows-subsystem
+      # program (from PowerShell `& cascade.exe --version` captures nothing for the
+      # second kind).
+      - name: Check the binary names its own version
+        shell: pwsh
+        run: |
+          $exe = (Resolve-Path build\Release\cascade.exe).Path
+          $out = Join-Path $env:RUNNER_TEMP 'version.out'
+          $p = Start-Process -FilePath $exe -ArgumentList '--version' -RedirectStandardOutput $out -RedirectStandardError "$out.err" -Wait -PassThru -NoNewWindow
+          $line = (Get-Content $out | Where-Object { $_.Trim() -ne '' } | Select-Object -First 1)
+          "exit $($p.ExitCode): $line"
+          if ($p.ExitCode -ne 0 -or $line.Trim() -ne "FoxSDR $env:CASCADE_VERSION") { throw "expected 'FoxSDR $env:CASCADE_VERSION'" }
+
+      - name: Find Inno Setup and the VC redistributable
+        shell: pwsh
+        run: |
+          $iscc = $null
+          $candidates = @("${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:ProgramFiles\Inno Setup 6\ISCC.exe")
+          foreach ($c in $candidates) { if (Test-Path $c) { $iscc = $c; break } }
+          if (-not $iscc) {
+            choco install innosetup -y --no-progress
+            foreach ($c in $candidates) { if (Test-Path $c) { $iscc = $c; break } }
+          }
+          if (-not $iscc) { throw 'Inno Setup is not on the runner and choco could not install it' }
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath
+          $crt = Get-ChildItem "$vs\VC\Redist\MSVC" -Directory |
+            Where-Object { Test-Path "$($_.FullName)\x64\Microsoft.VC143.CRT\msvcp140.dll" } |
+            Sort-Object Name | Select-Object -Last 1
+          if (-not $crt) { throw "no x64 Microsoft.VC143.CRT under $vs\VC\Redist\MSVC" }
+          "ISCC=$iscc" >> $env:GITHUB_ENV
+          "VCCRT=$($crt.FullName)\x64\Microsoft.VC143.CRT" >> $env:GITHUB_ENV
+          "ISCC $iscc"
+          "CRT  $($crt.FullName)"
+
+      - name: Installer
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path out -Force | Out-Null
+          & $env:ISCC "/O$PWD\out" "/DBuildDir=$PWD\build\Release" "/DVcCrtDir=$env:VCCRT" installer\cascade.iss
+          if ($LASTEXITCODE -ne 0) { throw 'ISCC failed' }
+          Get-ChildItem out | Format-Table Name, Length
+          if (-not (Test-Path "out\foxsdr-setup-$env:CASCADE_VERSION.exe")) { throw 'the installer is not named for the version' }
+
+      # The Store package, with the Partner Center identity of the real product, so it
+      # is the same package a release submits (unsigned: the Store signs it). Needs
+      # makeappx and makepri from the Windows SDK, which build-msix.ps1 finds under
+      # C:\Program Files (x86)\Windows Kits\10\bin.
+      - name: MSIX
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path msix-in -Force | Out-Null
+          Copy-Item build\Release\cascade.exe, build\Release\SoapySDR.dll msix-in\
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File installer\msix\build-msix.ps1 `
+            -BuildDir "$PWD\msix-in" -VcCrtDir $env:VCCRT `
+            -IdentityName hedgerowlabs.FoxSDR -IdentityPublisher "CN=A483DBDF-9D74-4013-9DFA-B1BE0334C31F" `
+            -PublisherDisplayName hedgerowlabs -Force
+          if ($LASTEXITCODE -ne 0) { throw 'build-msix.ps1 failed' }
+          Get-ChildItem installer\msix\Output | Format-Table Name, Length
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: foxsdr-windows-installer
+          path: out/foxsdr-setup-*.exe
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: foxsdr-windows-msix
+          path: installer/msix/Output/FoxSDR-*-x64.msix
+
+      # THE SYMBOLS FOR THIS EXACT BUILD, KEPT: the Windows half of what the Linux
+      # jobs do. The Build step's POST_BUILD ran tools/archive-symbols.ps1 on this
+      # runner, which wrote symbols\cascade.pdb\<build id>\{cascade.pdb,symmap.json.gz}
+      # and symbols\cascade.exe\<stamp>\cascade.exe, keyed by the CodeView build id of
+      # the very cascade.exe the installer and the package contain. The runner is
+      # discarded when the job ends. As on Linux these last two steps are LAST on
+      # purpose: a mistake in this bookkeeping can turn the job red but cannot
+      # withhold the installer or the package.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: foxsdr-windows-symbols
+          path: symbols/
+          if-no-files-found: warn
+
+      - name: Check the symbol archive
+        shell: pwsh
+        run: |
+          $paths = @(& .\tools\archive-symbols.ps1 -Binary (Resolve-Path build\Release\cascade.exe).Path -ArchiveRoot (Join-Path $PWD 'symbols') -Version $env:CASCADE_VERSION -EmitPaths)
+          $paths
+          if ($paths.Count -lt 4) { throw 'the archiver returned fewer than the pdb, the exe, the map and index.txt' }
+          foreach ($rel in $paths) {
+            $full = Join-Path 'symbols' $rel
+            if (-not (Test-Path $full) -or (Get-Item $full).Length -eq 0) { throw "missing or empty: $full" }
+          }
+          if (-not ($paths -match 'symmap\.json\.gz$')) { throw 'no symbol map: the crash dashboard groups faults by it' }

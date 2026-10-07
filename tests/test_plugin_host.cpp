@@ -41,6 +41,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/plugin_host.hpp"
 
+#include "core/leak_on_purpose.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -163,7 +165,9 @@ CascadeIqDecoderApi validIqDecoder() {
 // hold two at once, which rules out a local array (dangles the moment we
 // return) and a shared static one (the two would alias). A small deliberate
 // leak is the honest answer in a test binary: a few dozen 16-byte allocations
-// that are never freed, and no lifetime question to get wrong.
+// that are never freed, and no lifetime question to get wrong. Marked as such
+// for LeakSanitizer, which otherwise reports every one of them at exit
+// (core/leak_on_purpose.hpp).
 //
 // An entry is emitted only for a NON-NULL table, while `caps` is set
 // independently. That preserves what the old fixture expressed by nulling a
@@ -172,7 +176,7 @@ CascadeIqDecoderApi validIqDecoder() {
 CascadePluginDesc descFor(uint32_t caps, const CascadeDecoderApi* dec,
                           const CascadeIqDecoderApi* iq,
                           const CascadeImageDecoderApi* img = nullptr) {
-    auto* entries = new CascadeCapabilityEntry[3]{};
+    auto* entries = cascade::core::leakOnPurpose(new CascadeCapabilityEntry[3]{});
     uint32_t n = 0;
     if (dec != nullptr) {
         entries[n++] = {CASCADE_CAP_DECODER, static_cast<uint32_t>(sizeof(CascadeDecoderApi)),
@@ -1299,7 +1303,7 @@ CascadeTrackInfoApi validTrackInfo() {
 // is leaked deliberately, for the reason descFor documents.
 CascadePluginDesc descWith(uint32_t caps, const CascadeCapabilityEntry* entries,
                            uint32_t count) {
-    auto* owned = new CascadeCapabilityEntry[count > 0 ? count : 1]{};
+    auto* owned = cascade::core::leakOnPurpose(new CascadeCapabilityEntry[count > 0 ? count : 1]{});
     for (uint32_t i = 0; i < count; ++i) { owned[i] = entries[i]; }
     CascadePluginDesc p{};
     p.structSize = static_cast<uint32_t>(sizeof(CascadePluginDesc));

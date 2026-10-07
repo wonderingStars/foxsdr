@@ -47,6 +47,7 @@
 #include <vector>
 
 #include "core/diag_log.hpp"
+#include "core/leak_on_purpose.hpp"
 #include "core/pipeline.hpp"
 #include "core/plugin_runner.hpp"
 #include "sdrplay_fake_api.hpp"
@@ -652,9 +653,11 @@ void testAStallIsStillNamedWhenTheReaderIsSlow() {
 // ControlNeverEntersTheVendorDll (test_sdrplay_source.cpp) does not cover.
 void testStopsOwnUninitIsBoundedAsTheFirstCall() {
     cascade::core::DiagLog::instance().resetForTest();
-    FakeSdrPlayApi* fake = new FakeSdrPlayApi();
+    // On the heap and never destroyed: the Uninit that hangs is abandoned inside the
+    // fake, and the driver's answer to that is to leak (core/leak_on_purpose.hpp).
+    FakeSdrPlayApi* fake = cascade::core::leakOnPurpose(new FakeSdrPlayApi());
     fake->addDevice("1706012347", abi::kRsp2);
-    SdrPlaySource* src = new SdrPlaySource();
+    SdrPlaySource* src = cascade::core::leakOnPurpose(new SdrPlaySource());
     src->setApiForTest(&fake->table);
     CHECK(src->open(""));
     CHECK(src->start());

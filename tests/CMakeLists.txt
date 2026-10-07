@@ -209,6 +209,19 @@ foreach(src ${CASCADE_TESTS})
         # is the second faulting driver's directory.
         add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE_DIR:soapy_fault_fixture>"
                  "$<TARGET_FILE:late_fault_fixture>" "$<TARGET_FILE_DIR:soapy_fault_fixture_b>")
+    elseif(name STREQUAL "test_foreign_modules" AND TARGET late_fault_fixture)
+        # The arrival test copies this DLL into a scratch folder - outside the test's own
+        # folder and outside Windows' - and loads it for real; built first. The DLL is
+        # mapped only when something loads it and does nothing when it is, which is all
+        # a stand-in for another program's injected overlay has to be.
+        add_dependencies(${name} late_fault_fixture)
+        add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:late_fault_fixture>")
+    elseif(name STREQUAL "test_foreign_modules_app" AND TARGET late_fault_fixture)
+        # The same DLL, mapped by the REAL cascade.exe on a frame of its own
+        # (CASCADE_FOREIGN_MODULE_TEST) so the arrival reaches the real log through the
+        # real frame loop; both built first.
+        add_dependencies(${name} late_fault_fixture cascade)
+        add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:late_fault_fixture>")
     elseif(name STREQUAL "test_crash_late_module" AND TARGET late_fault_fixture)
         # Loads the late fixture by full path after arming its handlers.
         add_dependencies(${name} late_fault_fixture)
@@ -237,6 +250,12 @@ endforeach()
 # window sizes), so it gets more than the loop's two minutes - most of all on a
 # software-rendered Linux runner.
 set_tests_properties(test_theme_census PROPERTIES TIMEOUT 600)
+# The exit-cause test starts the real application eleven times (a staged run per
+# class and per case with nothing to read, then two real kills and the start that
+# reads them) and leaves a second between each kill and the next start, because a
+# report and a session start are stamped in whole seconds. 78 s on this desktop; the
+# loop's two minutes is not enough on a loaded runner. Windows only (it SKIPs elsewhere).
+set_tests_properties(test_exit_cause_app PROPERTIES TIMEOUT 600)
 # The airband test starts the application twenty-nine times (a layout run and a
 # scripted run per scenario: lookup, listen, hand-back, the spectrum, the typed
 # list, presets). Six runs took 68 s on the x64 runner and 101 s on arm64, so
@@ -313,7 +332,15 @@ if(CASCADE_SANITIZE_ENABLED)
         # in the plain build, which is where their timing claims are made.
         "test_channel_bandwidth|its pipeline cases measure audio against a real-time source and the instrumented DSP thread falls behind the clock (sink underruns) so tone levels fail with no sanitizer report"
         "test_pipeline_audio|its pipeline cases measure audio against a real-time source and the instrumented DSP thread falls behind the clock (sink underruns) so RDS and stereo measurements fail with no sanitizer report"
-        "test_pipeline_device_rate_audio|its pipeline cases measure audio against a real-time source and the instrumented DSP thread falls behind the clock (sink underruns) so tone share fails with no sanitizer report")
+        "test_pipeline_device_rate_audio|its pipeline cases measure audio against a real-time source and the instrumented DSP thread falls behind the clock (sink underruns) so tone share fails with no sanitizer report"
+        # The same cause, found by the first Linux run (37355910809): the generator
+        # is paced by the wall clock, a DSP thread that is behind lets the ring fill,
+        # the source drops the overflow (Pipeline::sourceThreadBody) and every drop is
+        # a phase jump in the tone being measured - 773 Hz where the CW sidetone is
+        # 700, a 1 kHz patch tone at 0.006 where it must exceed 0.01.
+        "app_selftest|it measures the CW sidetone of the built-in generator through the real pipeline and the instrumented DSP thread falls behind the clock (ring overflow drops samples) so the tone reads 773 Hz instead of 700 with no sanitizer report"
+        "test_patch_audio|its pipeline cases measure tone levels against a real-time source and the instrumented DSP thread falls behind the clock (ring overflow drops samples, the patch's own ring starves) so levels fail with no sanitizer report"
+        "test_plugin_audio|its takeover case measures the length of a changeover in the real pipeline's audio against a real-time source and the instrumented DSP thread falls behind the clock: the fade read 68 frames where it is 240 with no sanitizer report (1896 of its 1897 checks passed, so this one is a loss of coverage worth revisiting)")
 
     # TESTS THAT FAULT A CHILD PROCESS ON PURPOSE, to prove the crash handler
     # writes its report. They run under AddressSanitizer with ASan's OWN handlers

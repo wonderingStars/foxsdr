@@ -23,6 +23,7 @@ void SigGen::setTone(int slot, double freqHz, float amplitudeDb) {
     if (slot < 0 || slot >= static_cast<int>(tones_.size())) {
         return;  // contract is 0..3; ignore junk rather than corrupt memory
     }
+    std::lock_guard<std::mutex> lock(mutex_);
     Tone& t = tones_[static_cast<std::size_t>(slot)];
     // Nco::setFrequency folds any out-of-range normalized frequency back into
     // [-0.5, 0.5) itself (a sampled tone aliases there anyway), so no
@@ -38,10 +39,12 @@ void SigGen::clearTone(int slot) {
     }
     // The phase accumulator is deliberately left alone: an inactive slot's
     // Nco is simply not stepped, so a later re-enable resumes deterministically.
+    std::lock_guard<std::mutex> lock(mutex_);
     tones_[static_cast<std::size_t>(slot)].active = false;
 }
 
 void SigGen::setNoiseFloorDb(float db) {
+    std::lock_guard<std::mutex> lock(mutex_);
     if (db <= -300.0f) {
         // Exact zeros, not a ~1e-15 residue: the "noise off" state must be
         // provably silent so tests (and the spectrum display) see a true floor.
@@ -74,6 +77,7 @@ void SigGen::generate(std::complex<float>* dst, std::size_t n) {
     if (dst == nullptr || n == 0) {
         return;
     }
+    std::lock_guard<std::mutex> lock(mutex_);
     // Noise (or zero) fill happens first, in one pass, and the tone loop never
     // touches rng_. That ordering is what makes the output invariant under
     // chunking: sample k always consumes the same LCG draws and the same Nco

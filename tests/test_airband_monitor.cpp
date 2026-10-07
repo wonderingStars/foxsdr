@@ -629,8 +629,10 @@ int main() {
             CHECK(am.strip.amNormalise());
             CHECK(am.mixLevel == 1.0f);
             CHECK(am.strip.channelFilterTaps() > 0);
+            CHECK(am.strip.deemphasisUs() == 0.0);   // AM has no pre-emphasis to undo
             CHECK(nfm.mode == patch::Demod::Fm);
             CHECK(!nfm.strip.amNormalise());
+            CHECK_NEAR(nfm.strip.deemphasisUs(), kNfmDeemphasisUs, 1e-9);   // 0.99.69
             CHECK(nfm.mixLevel > 1.0f);
             CHECK(nfm.strip.channelFilterTaps() > 0);   // the row's bandwidth, as AM's
             CHECK(am.squelch != nullptr && nfm.squelch != nullptr);
@@ -644,6 +646,8 @@ int main() {
         if (flipped && flipped->channels.size() == 2) {
             CHECK(flipped->channels[0].mode == patch::Demod::Fm);
             CHECK(flipped->channels[1].mode == patch::Demod::Am);
+            CHECK_NEAR(flipped->channels[0].strip.deemphasisUs(), kNfmDeemphasisUs, 1e-9);
+            CHECK(flipped->channels[1].strip.deemphasisUs() == 0.0);
         }
     }
 
@@ -691,6 +695,98 @@ int main() {
         // Within a factor of 2 of each other, and in fact much closer.
         CHECK(ratio > 0.5 && ratio < 2.0);
         CHECK(ratio > 0.75 && ratio < 1.33);
+    }
+
+    // --- NFM DE-EMPHASIS (0.99.69) ---------------------------------------------
+    //
+    // A strip's FM audio is the discriminator's output, which is FLAT in
+    // frequency for a constant deviation: a 3 kHz tone comes out as loud as a
+    // 1 kHz one, and a ground or company channel typed in as NFM played harsh
+    // and hissy beside the receiver, whose NFM has always had the 50 us network.
+    // An NFM channel now runs it (dsp/deemphasis.hpp); an AM channel does not,
+    // its envelope detector needs none and a 3 kHz voice tone must stay as loud
+    // as a 1 kHz one.
+    //
+    // Measured through the real runner, one channel alone, the 3 kHz tone over
+    // the 1 kHz tone at equal deviation (FM) and at equal depth (AM). For the
+    // one-pole at the strip's own rate the answer is arithmetic done here:
+    //     |H(f)| = (1 - p) / |1 - p e^{-jw}|,   p = exp(-1 / (rate * 50 us)).
+    // About -2.3 dB at 48 kHz; the bug is 0 dB.
+    for (const double fs : {2.4e6, 2.048e6}) {
+        const double stripRate = fs / patch::chooseChannelRate(fs).decimation;
+        const auto deemphGain = [&](double f) {
+            const double p = std::exp(-1.0 / (stripRate * 50e-6));
+            const double w = 2.0 * kPi * f / stripRate;
+            return (1.0 - p) / std::abs(1.0 - p * std::polar(1.0, -w));
+        };
+        const double wantDb = 20.0 * std::log10(deemphGain(3000.0) / deemphGain(1000.0));
+
+        const MonitorChannel nfmCh{121.6e6, 12500.0, MonitorMode::Nfm};
+        const Played f1 = playOne(nfmCh, fs, 1000.0, 1500.0);
+        const Played f3 = playOne(nfmCh, fs, 3000.0, 1500.0);
+        const MonitorChannel amCh{121.6e6, 10000.0, MonitorMode::Am};
+        const Played a1 = playOne(amCh, fs, 1000.0, 0.5);
+        const Played a3 = playOne(amCh, fs, 3000.0, 0.5);
+        CHECK(f1.built && f3.built && a1.built && a3.built);
+        CHECK(f1.open && f3.open && a1.open && a3.open);
+        CHECK(f1.toneAmp > 0.0 && a1.toneAmp > 0.0);
+        const double fmDb = 20.0 * std::log10(f3.toneAmp / f1.toneAmp);
+        const double amDb = 20.0 * std::log10(a3.toneAmp / a1.toneAmp);
+        std::printf("  at %.3f MS/s, 3 kHz over 1 kHz: NFM %.2f dB (50 us pole says %.2f), AM %.2f dB\n",
+                    fs / 1e6, fmDb, wantDb, amDb);
+        CHECK(wantDb < -2.0 && wantDb > -2.6);   // the arithmetic itself, so a typo here cannot pass
+        CHECK(fmDb < -1.8);                      // attenuated at all
+        CHECK_NEAR(fmDb, wantDb, 0.4);           // and by the 50 us network, not some other amount
+        CHECK_NEAR(amDb, 0.0, 0.5);              // AM left alone
+    }
+
+    // The strip's own contract, bare: de-emphasis is off until asked, a
+    // reconfigure keeps what was asked, FM audio changes with it and AM audio
+    // does not change by a bit even when it is on (the patch page's strips
+    // never ask, and must sound as they did).
+    {
+        const double fs = 2.4e6;
+        patch::Strip plain, on;
+        plain.configure(0.0, fs, 50);
+        on.configure(0.0, fs, 50);
+        CHECK(plain.deemphasisUs() == 0.0);
+        on.setDeemphasisUs(50.0);
+        on.configure(0.0, fs, 25);
+        CHECK_NEAR(on.deemphasisUs(), 50.0, 1e-9);
+        on.configure(0.0, fs, 50);
+        on.setDeemphasisUs(std::nan(""));   // nonsense is off, never a NaN pole
+        CHECK(on.deemphasisUs() == 0.0);
+        on.setDeemphasisUs(50.0);
+
+        std::vector<std::complex<float>> iq(24000);
+        std::vector<float> amPlain, amOn, fmPlain, fmOn;
+        std::uint64_t t = 0;
+        for (int b = 0; b < 10; ++b) {
+            for (std::size_t i = 0; i < iq.size(); ++i, ++t) {
+                const double ts = static_cast<double>(t) / fs;
+                const double ph = 2.0 * kPi * 20000.0 * ts + 1.5 * std::sin(2.0 * kPi * 1000.0 * ts);
+                iq[i] = std::complex<float>(static_cast<float>(0.1 * std::cos(ph)),
+                                            static_cast<float>(0.1 * std::sin(ph)));
+            }
+            plain.process(iq.data(), iq.size(), patch::Demod::Am, amPlain);
+            on.process(iq.data(), iq.size(), patch::Demod::Am, amOn);
+        }
+        CHECK(!amPlain.empty() && amPlain == amOn);
+        plain.reset();
+        on.reset();
+        t = 0;
+        for (int b = 0; b < 10; ++b) {
+            for (std::size_t i = 0; i < iq.size(); ++i, ++t) {
+                const double ts = static_cast<double>(t) / fs;
+                const double ph = 2.0 * kPi * 20000.0 * ts + 1.5 * std::sin(2.0 * kPi * 1000.0 * ts);
+                iq[i] = std::complex<float>(static_cast<float>(0.1 * std::cos(ph)),
+                                            static_cast<float>(0.1 * std::sin(ph)));
+            }
+            plain.process(iq.data(), iq.size(), patch::Demod::Fm, fmPlain);
+            on.process(iq.data(), iq.size(), patch::Demod::Fm, fmOn);
+        }
+        CHECK(!fmPlain.empty() && fmPlain.size() == fmOn.size());
+        CHECK(fmPlain != fmOn);
     }
 
     // --- what one strip costs (printed, not asserted: it is this machine's) -

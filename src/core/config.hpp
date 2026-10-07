@@ -140,6 +140,14 @@ struct AppConfig {
     // is on. Field report F204602B5329B268: UHD's probe killed the scan's
     // child on a machine whose only radio was an SDRplay.
     bool lookForNetworkUsrps = false;
+    // "DON'T SHOW THIS AGAIN" on the RADIO SETUP page (2026-10-06,
+    // core/radio_setup.hpp). The page opens by itself, once a launch, for a
+    // person whose machine shows no radio the program can use; this is the
+    // tick that stops it. OFF by default, so every config written before this
+    // build - every install that has never seen the page - gets it. It stops
+    // only the page raising itself: the key in the Source section still opens
+    // it, and the check still runs and logs.
+    bool radioSetupDontShow = false;
     // ARGS OF THE LAST NATIVE DEVICE, and a SEPARATE FIELD from soapyArgs on
     // purpose rather than one shared slot with sourceKind deciding which
     // grammar it holds.
@@ -1013,6 +1021,25 @@ struct AppConfig {
     // Launches and unclean exits since installation. Counters only.
     std::uint64_t telemetryLaunches = 0;
     std::uint64_t telemetryCrashes = 0;
+
+    // HOW THOSE UNCLEAN EXITS ENDED (0.99.69, core/exit_cause.hpp): four more
+    // lifetime counters beside `telemetryCrashes`, never reset, and moved together
+    // with it - from the first start of 0.99.69 on, every unclean exit adds one to
+    // `telemetryCrashes` and one to exactly one of these, so their sum is the number
+    // of unclean exits counted since then. Not back-filled: `telemetryCrashes` minus
+    // the sum is how many came before the classes existed. A missing key reads 0.
+    std::uint64_t telemetryExitsDied = 0;
+    std::uint64_t telemetryExitsKilled = 0;
+    std::uint64_t telemetryExitsEnded = 0;
+    std::uint64_t telemetryExitsUnknown = 0;
+
+    // When the session that last wrote this file BEGAN, seconds since the epoch
+    // (0.99.69). It is the lower edge of "the reports that belong to the session
+    // that has just ended" (core/exit_cause.hpp): reports pile up in one folder for
+    // weeks, and without a start there is no telling the previous session's ending
+    // from an older one's. Local only, never sent. 0 when no session has written it
+    // - a file an earlier build saved - and then an unclean exit is `unknown`.
+    std::uint64_t telemetrySessionStarted = 0;
 
     // When this install id was created (UTC day, "2026-09-29") and the
     // version that created it. Written once, with the id, and deleted with

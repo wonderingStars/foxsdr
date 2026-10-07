@@ -248,6 +248,18 @@ peak magnitude, and the stream-health line. Exit 0 means samples arrived and
 were plausible; exit 1 names which of the checks failed, including the
 commonest cause of all - nothing bound to WinUSB, and what to do about it.
 
+A fifth failure was added after the bench's own dongle stopped receiving on
+2026-10-06 and passed every check for a day: it delivered the same 1880
+samples over and over at every frequency, at exactly the rate, at a plausible
+level, with no error. The check (and `tests/test_rtlsdr_live.cpp`) now keeps
+the first 32768 samples and asks whether the block repeats itself exactly at
+any lag up to 4096 samples (`src/source/sample_pattern.hpp`, proved in
+`tests/test_sample_pattern.cpp`). A stream from the air never does; one that
+does is a digital pattern from a tuner or converter that has stopped
+delivering RF, so the check prints the period, what the driver's own PLL lock
+check made of the tuner, and the one remedy known - unplug the dongle and plug
+it back in - and exits 1.
+
 ### One chip, one route: SoapySDR's SDRplay and Mirics modules (0.99.61)
 
 An RSP1, RSP1A or RSP2 is a Mirics chip, and FoxSDR can reach one four ways: its
@@ -436,13 +448,17 @@ the panel:
   only). An anonymous pipe replaces fd 2 and `STD_ERROR_HANDLE`; a reader
   thread logs each line as `vendor: <line>`. It is installed only for an
   interactive session — never `--frames`, `--selftest`, `--soapy-check` or the
-  other tools — and only when nobody is watching stderr. `cascade.exe` is a
-  console-subsystem binary, so a Start Menu launch has a console too, one
-  Windows created with nothing else attached; the test that separates that
-  from a developer's terminal is `GetConsoleProcessList` reporting more than
-  this one process. (Closing that console, or Ctrl+C in it, asks for the
-  window's own close since 0.99.67 - `core/console_close.hpp`; until then
-  kernel32's default handler ended the process on the spot, mid-frame.) The
+  other tools — and only when nobody is watching stderr. Until 0.99.69
+  `cascade.exe` was a console-subsystem binary, so a Start Menu launch had a
+  console too, one Windows created with nothing else attached, and the test
+  that separated that from a developer's terminal was `GetConsoleProcessList`
+  reporting more than this one process. It is a windows-subsystem binary now
+  (`core/console_owner.hpp`): a Start Menu launch has no console, the standard
+  handles are null, and the same test still tells a terminal (the shell's console,
+  borrowed with `AttachConsole`) from nothing. (Closing a terminal, or Ctrl+C in
+  it, asks for the window's own close since 0.99.67 - `core/console_close.hpp`;
+  until then kernel32's default handler ended the process on the spot,
+  mid-frame.) The
   write end is inheritable on purpose, so the
   device-enumeration child's stderr (which UHD's discovery errors go to) lands
   here as well. The diagnostic log itself never writes to stderr, so nothing
@@ -3099,17 +3115,20 @@ Looked up, not assumed:
 - **The logoff and shutdown console events do not reach this program.**
   `SetConsoleCtrlHandler`'s page: if a console application loads `user32.dll` or
   `gdi32.dll`, its handler "does not get called for the CTRL_LOGOFF_EVENT and
-  CTRL_SHUTDOWN_EVENT events". `cascade.exe` is a console-subsystem executable that
-  links `user32.dll`, and so is the sentinel - which is the same file. The documented
+  CTRL_SHUTDOWN_EVENT events". `cascade.exe` links `user32.dll` (it was a
+  console-subsystem executable until 0.99.69, and borrows its parent's console when
+  that is a terminal), and so is the sentinel - which is the same file. The documented
   alternative is a window handling `WM_ENDSESSION`, and the sentinel may hold no
   window; the *application* has one. The other three console events - Ctrl+C,
   Ctrl+Break and the console window closing - DO arrive, and until 0.99.66 the
   default handler answered them with `ExitProcess(STATUS_CONTROL_C_EXIT)`, which the
   sentinel then filed as an ending from outside (a field report of 2026-10-06: the
-  console window a Start Menu launch brings, closed by hand, 135 s into a healthy
+  console window a Start Menu launch brought, closed by hand, 135 s into a healthy
   session). Since 0.99.67 `core/console_close.cpp` answers them with the window's
   own close; `tests/test_sentinel_app.cpp` sends the real program Ctrl+Break and
-  requires exit code 0 and no report.
+  requires exit code 0 and no report. Since 0.99.69 a Start Menu launch has no
+  console to close (`core/console_owner.hpp`); the handler is for a session
+  started from a terminal.
 - So the **application's own window** says it: the existing window-procedure hook
   (`gui/win_frame.cpp`) notes `WM_ENDSESSION` with `wParam` TRUE ("the Windows
   session can end any time after all applications have returned from processing this
@@ -3441,6 +3460,196 @@ wrote no event and an independent witness (`tests/os_event_oracle.hpp`) confirms
 witness sees the event and the reader does not, that is a failure. They also **cannot use the
 `SEM_NOGPFAULTERRORBOX` that every other crash test sets** (above), and set only
 `WER_FAULT_REPORTING_NO_UI`.
+
+### How the next start sorts an unclean exit (0.99.69)
+
+The usage report's `crashes` has always been the number of sessions that never wrote the
+clean-exit marker - a fault, a task ended from outside, the system closing the session, a
+power cut - and the website could not tell them apart. From 0.99.69 the next start sorts each
+into exactly one of four lifetime counters beside it (`exits_died`, `exits_killed`,
+`exits_ended`, `exits_unknown`), and `src/core/exit_cause.hpp` is the rule. It reads only what
+this section already writes:
+
+| The previous session left | Class |
+|---|---|
+| a `kind: crash` report from the process's own handler (not an absorbed fault, not a child's death) | died |
+| a sentinel report: `crash`, `frozen`, or `startup` with a crash exit code | died |
+| a sentinel report: `outside`, or `startup` with an exit code that is not a crash (`1`, `-1`, `0xC000013A`) | killed |
+| a sentinel report: `session` | ended |
+| no ending report, a `kind: hang` report | died |
+| no ending report, a `kind: stall` report | killed |
+| nothing in the window, Diagnostics off, an unreadable folder, no recorded start | unknown |
+
+Four decisions are in that table and are stated here so that they can be reversed. **`frozen` is
+`died`**: the window had stopped drawing and then was ended, and the failure was the application's
+whoever pressed End task (the website's crash table calls the same report a freeze, a column of
+its own). **`session` is `ended` and not `killed`**: the sentinel decides it ahead of every
+other class by the session's state and not by an exit code, and this document records that no
+document or measurement says what code a logoff leaves; kept apart, a reader can add it to
+`killed` and cannot take it out of a merged class. **`startup` is split by its exit code**,
+because "before the first frame" says when and not by what. **A hang report decides only when
+nothing else ended the session**, because the sentinel files no ending of its own for a freeze
+the watchdog reported and that never recovered (`freezeReportExists`); one that recovered and was
+then ended has its ending's own report, which is looked at first.
+
+Which reports are the previous session's: those written between its start - the application
+journals it as `telemetrySessionStarted` in `config.json` - and this session's start (and five
+seconds' slack). An older build wrote no start, so its run is `unknown`. A report and a start are
+stamped in whole seconds, so a death and a restart inside **the same second** cannot be told
+apart; the sentinel's own report can also land a moment after a very fast restart. Both read as
+`unknown` or as the neighbouring session's ending, and are not corrected.
+
+The count and the class move together at every instant: the unclean exit is counted as `unknown`
+at start-up, in the same breath as `crashes`, and the evidence - the report listing
+`DiagHistoryCache` already reads on a worker - moves it to its class a moment later
+(`AppWindow::exitCausePoll`, one flag test a frame, never a disk read on the window's thread).
+A session ended before the evidence was read has left `crashes` and `unknown` moved together, so
+the four classes always add up to the unclean exits counted since 0.99.69. They are not
+back-filled: `crashes` minus their sum is how many came before. One line goes to the log when
+the class is known (`previous session ended: killed (ended from outside while the window was
+drawing: ended by another process (exit code 1, as taskkill /F does))`), built only from the
+sentinel's own closed vocabulary. With Diagnostics off nothing is read, the sentinel did not run,
+and every unclean exit is `unknown`. Held by `tests/test_exit_cause.cpp` (the rule, against real
+sentinel reports) and `tests/test_exit_cause_app.cpp` (the real application, staged and killed).
+### What else was in the process: the other software's DLLs (0.99.69)
+
+**Why.** The two field deaths this section was written for (0.99.64 on an RSP1 after 48 minutes, 0.99.65 on an
+RTL-SDR after 12 seconds) were fast-fails "in present" and "in render": the hand-off to the graphics driver, where
+the overlay DLLs that other programs inject into every process (an audio driver's on-screen display, a frame-rate
+counter, an input or capture tool) put themselves in the path of every swap. The only death of that shape ever seen
+on the developer's own desktop was inside `NahimicOSD.dll`. Since 0.99.66 a sentinel report names the *faulting*
+module from Windows' record; nothing said what *else* was loaded, which is the next question. Now one log line at
+start and one on each arrival name every loaded module that is neither Windows' nor ours - **file names only,
+never a folder** - and the same list is in the report's own context block. Source: `src/core/foreign_modules.{hpp,cpp}`;
+what a file name discloses is in `PRIVACY.md` (the `foreign-modules` rows), and the plain statement is there and on
+the privacy page of the site.
+
+**What counts as ours** (and the rule is short on purpose, so that the list is short):
+
+- the folder of the program file and everything beneath it (the executable, the vcpkg DLLs beside it, the bundled C++
+  runtime, a `plugins` folder);
+- the Windows folder (`GetSystemWindowsDirectoryW`, not `%SystemRoot%`, which a process can be started with another
+  value of) and everything beneath it - System32, SysWOW64, WinSxS, **and the driver store** (which is under System32), so by
+  this rule a graphics driver's own user-mode DLLs are *not* listed (the sentinel already names the faulting one) while an
+  overlay is, because it lives in the other program's own folder;
+- the SDR vendors' folders: the module folder and the `bin` folder of every install `ensureVendorModulesVisible` adopted
+  (`source/soapy_modules.cpp` registers them before anything of theirs is loaded), every folder `SOAPY_SDR_PLUGIN_PATH`
+  names, and every folder a plugin scan was pointed at (`PluginHost::scan`, because the per-user plugin folder is under
+  `%LOCALAPPDATA%`, not under the program). A vendor's own API DLL that lives outside all of these (the SDRplay API's, for
+  one) is by this rule listed once a radio has loaded it, which is information and not noise; that case was **not
+  exercised** (no radio was opened for this work);
+- the C and C++ runtime by the exact paths the loader reports for it (`vcruntime140.dll`, `msvcp140*.dll`, `ucrtbase.dll`
+  and the debug and OpenMP siblings), for a development machine that loads them from a Redist folder.
+
+Everything else is foreign. The classifier (`isForeignModule`) is **pure and compares canonical strings, not the disk**:
+`GetFinalPathNameByHandle` would open each module's file (a module on a disconnected share, or one deleted after it was
+mapped, fails or stalls), would resolve junctions to somewhere the roots do not name, and cannot be tested on the
+synthetic paths the property needs. So the `\\?\`, `\\?\UNC\` and `\??\` prefixes are dropped, slashes made backslashes,
+`.` and `..` resolved, separators collapsed and case folded the way the file system folds it (`CompareStringOrdinal`);
+a root that names a whole drive is ignored (it would turn the classifier off). The one thing a string cannot know is an
+8.3 short name, so the Windows half expands a path that carries a `~` with `GetLongPathNameW` (local drive letters only -
+it can block on a network path) before it asks, for the module and the roots alike. **Measured, not assumed:** the
+loader reports a module loaded through a short path by that short path (`C:\Users\steve\FOXSDR~2\WP35-D~1\...`), so
+the expansion is needed, and `tests/test_foreign_modules.cpp` loads a DLL that way.
+
+**The lines.** At start, once the window is up and the log file armed, written by a thread of its own (so the first frame
+does not wait for it):
+
+```
+12:34:56.789 info modules: 3 foreign - AudioDevProps2.dll, NahimicOSD.dll, ProductInfo.dll
+12:34:56.789 info modules: none foreign
+```
+
+alphabetical (ASCII case folded), each name once. The message is capped at **150 characters** - the log's line is 191
+wide including its 18-character stamp, and a line cut at that width has every number on it masked by the upload scrub
+(`scrubUploadLine`, rule 8) - and beyond it ends `, +K more`. On each arrival after that, from the frame loop:
+
+```
+12:41:02.115 info module arrived: NahimicOSD.dll (12.3 s)
+```
+
+the seconds since the process started (`GetProcessTimes`, one decimal). **Nothing is written when a module is unloaded.**
+A name is written once a session (a DLL that is loaded, freed and loaded again is one line), and a session writes at most
+**32** arrival lines, then one `module arrivals: 32 logged, the rest are listed in the report's foreign-modules line only`.
+Two more lines say when the machinery itself is limited: `module watch: the loader notification is not available,
+looking again every 10 s` (the fallback, below) and `module arrivals missed: N (more modules loaded at once than the queue
+holds)`. None of the three begins `modules: ` or `module arrived: `, which are the two prefixes a reader picks up.
+
+**The context field.** The log's tail is 256 lines, so in a long session the start line is gone from a report's own log.
+The same list is therefore in the report's `--- context ---` block, in every report that block is written for - a crash
+report, a freeze report, the bundle - as
+
+```
+foreign-modules: AudioDevProps2.dll, NahimicOSD.dll, ProductInfo.dll
+```
+
+(`(none)`, or `+K more` after at most **480** characters; `(not scanned yet)` before the start scan has finished,
+`(not applicable)` off Windows, `(not recorded)` for a process that runs no watch - the enumeration child, a headless run).
+It is rendered with the other context lines, **before the plugin list** (the part of the 4096-byte block that is cut when it
+overruns), and every value goes through one validator (`normaliseForeignField`: each name must be 1-63 characters of
+letters, digits and `. _ - + ( ) ~ @ & ! = ; { } [ ] ?` and an inner space; anything else is dropped, not repaired), the same
+one the uploader and the sentinel apply. `fileNameOnly` writes every other character as `?`, one per code point, so a name
+that cannot be put in a report is still a name.
+
+**The sentinel** reads none of the application's memory, so its report's `foreign-modules:` line is **rebuilt from the log
+file**: `readNewestSessionLogTail` now also returns every `modules:` and `module arrived:` line of the *whole* newest session
+(`SessionLogTail::moduleLines`), not only the last 256, and `foreignFieldFromLog` turns them into the list - the start
+line's names, its own `+K more`, and every arrival after it. The line is always written (like `receiver:`), `(not recorded)`
+when the log has neither. The report's signature is **unchanged**: it was never hashed over the context block.
+
+**The upload.** The report's line is sent as `context.foreignModules` (`PRIVACY.md`, *What is sent when a report is
+uploaded*), re-validated where the request is built. On the site (`crash.go`) the context map is stored generically; the
+only change is a cap of its own for that key (520 bytes, the general one is 200 and cut a list in the middle of a name, and
+the names that sort last go first) and a `<details>` on the fault page for a long value.
+
+**Arrivals: the notification, and the fallback.** `LdrRegisterDllNotification` (ntdll, in no SDK header - the entry
+points are resolved with `GetProcAddress` and the records are declared in the `.cpp` from the documented layout; present
+since Vista, used by crash reporters and security products) is registered **before** the start scan, so no module can fall
+between the two; the drain does not write a name the scan already listed. Its callback runs **inside the loader lock** in
+the thread that loaded the module, so it does only this: copy the full path (the first 299 characters - the roots are
+prefixes), the base name and `GetTickCount64()` into a preallocated slot under an SRW lock, and return. It allocates
+nothing, logs nothing and calls nothing that loads. The queue holds 128 slots; a full queue drops the new arrival and
+counts it. The frame loop's `poll()` drains it once a frame (one atomic load when nothing arrived), classifies and writes.
+`poll()` does nothing until the start scan has written its line, so an arrival line can never precede it. When the
+registration fails - the entry points are missing or ntdll refuses - the same queue is fed by a rescan of the loaded
+modules every 10 s on a thread of its own, comparing against what it saw before, and the log says so once. The destructor
+unregisters (which returns when no callback is running) and never joins: the worker owns what it touches.
+
+**What this desktop's own `cascade.exe` reported** (2026-10-06, a bounded `--frames` run against a scratch tree,
+`tests/test_foreign_modules_app.cpp`): `modules: 3 foreign - AudioDevProps2.dll, NahimicOSD.dll, ProductInfo.dll`, and the
+same three names in the sentinel report of the same session and in a freeze report of another. `NahimicOSD.dll` is
+the overlay the one death of this shape that was ever seen here was inside. The start scan returned from `start()` in 0.02 ms
+and finished (module list, classification, line) 8-20 ms later in the test process (three runs).
+
+**Where it is tested.** `tests/test_foreign_modules.cpp`: the classifier on paths that exist on no machine of ours (System32,
+SysWOW64, WinSxS, the program folder, a plugin subfolder, a DLL beside the executable, `Program Files\Nahimic\NahimicOSD.dll`,
+`\\?\`, `\??\`, mixed case, `..`, a sibling folder that merely starts the same, a share, a profile folder, the 8.3 spelling
+the string cannot judge); `fileNameOnly` never returns a separator, for inputs chosen to break that; the start line's
+format, its cap and the boundary where one name more needs `+K more`; the arrival line; the lines surviving the upload scrub
+unchanged; and, against the **real loader**, in the test process: a DLL that is under neither the test's folder nor Windows'
+is copied to a scratch folder and loaded, and exactly that name is written, once, after the start line, with its seconds;
+the unload writes nothing; a second load of the name writes nothing; a Windows DLL loaded the same way writes nothing;
+a DLL under a folder registered as ours writes nothing; 140 loads at once report the 12 the queue could not hold and stop
+the log at 32 lines and say so; the fallback finds the same arrival by rescanning; a DLL loaded through its short path
+beside the program is ours; and a hundred watches started and destroyed in a row leave a process that can still load a DLL.
+`tests/test_foreign_modules_app.cpp`: the real `cascade.exe` writes one start line within its width; a DLL the
+window's own thread maps on frame 90 (`CASCADE_FOREIGN_MODULE_TEST=<path>`, a bounded-run seam, Windows only - what an
+injected hook looks like to the loader) is written by the real frame loop's `poll()` as `module arrived: ForeignInjected.dll
+(2.7 s)`, once, after the start line; and the sentinel report of that session (ended from outside) and the freeze report of
+another carry the list, the first with the arrival. `tests/test_sentinel.cpp` (`11a`): a sentinel report of
+a session with a `modules:` line and an arrival names both; a session of 600 more lines (the start line out of the tail)
+still names them; no module line, none foreign, a `+K more`, an earlier session's line, a path in a hand-edited line and a
+lookalike line are each handled as the documents say. `tests/test_crash_upload.cpp` and `tests/test_diagnostics.cpp`: the
+payload, the bundle, the states of the line, and `PRIVACY.md` in both directions.
+
+**Not verified, and known.** Windows 10 and Windows on ARM (only 11 22631, x64 was available); a graphics-driver overlay
+that injects *during* a present rather than through `LoadLibrary` at some other time (the test loads a DLL with
+`LoadLibraryW`; an injector that maps by hand is invisible to the loader's notification and to `EnumProcessModulesEx` alike,
+and so to this); the Linux build (the non-Windows half was compiled as a separate translation unit with GCC under MinGW's
+headers, not built on Linux); the Microsoft Store package (its program folder is read-only and its plugins live under
+`%LOCALAPPDATA%`, which the plugin scan registers, but no package was run); a module whose file name has no extension (it is
+listed as written, and is *kept* only if it passes the name rule). The list says what was loaded at the start or has arrived
+since; it never shrinks, because an unload is not logged, so a report may name a DLL that had already gone.
 
 ### What it costs, and the promises it keeps
 
