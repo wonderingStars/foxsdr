@@ -414,7 +414,7 @@ struct AppWindowTestAccess {
     static bool watching(AppWindow& a) { return a.healthWatching_; }
     static void poll(AppWindow& a) { a.healthPoll(); }
     static void start(AppWindow& a) { a.startReceiver(); }
-    static void stop(AppWindow& a) { a.stopReceiver(); }
+    static void stop(AppWindow& a) { a.stopReceiver("test_health_app"); }
     static cascade::sink::AudioOut& audio(AppWindow& a) { return a.pipeline_.audio(); }
 
     // The patch page's radio.

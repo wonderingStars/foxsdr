@@ -23,9 +23,12 @@
 //
 // 1. END TO END. The application is started as a child with the web server
 //    on a loopback port and driven over HTTP; what it reports AND the files
-//    on disk are checked. Three sessions:
+//    on disk are checked. Four sessions:
 //      web stop   - on the generator: record, stop, restart; both takes must
 //                   end at the stop with honest headers and stay ended.
+//      idle stop  - on the generator, nothing recording, the audio mutex held
+//                   by the application itself (0.99.68): the stop must spend
+//                   no time on the recorders, which had nothing to end.
 //      fault      - on an I/Q file, which is the fault seam: the file is
 //                   overwritten with a stub mid-take, the source's read fails
 //                   and the pipeline latches the fault. Both takes must end
@@ -670,6 +673,31 @@ bool sameSize(const std::vector<Take>& a, const std::vector<Take>& b) {
     return a.size() == 1 && b.size() == 1 && a[0].fileBytes == b[0].fileBytes;
 }
 
+// The session's diagnostic log as it stands (FOXSDR_DIAG_DIR/logs/foxsdr.log).
+std::string diagLogOf(const Session& ss) {
+    std::ifstream in(ss.dir() / "diag" / "logs" / "foxsdr.log", std::ios::binary);
+    std::stringstream buf;
+    buf << in.rdbuf();
+    return buf.str();
+}
+
+// The first slow-frame line ("frame: N ms, M ms of it in <scope>",
+// core/frame_timing.cpp) at or after `from`, whole and without its line end;
+// empty when there is none. For the test's printout only.
+std::string firstSlowFrameLine(const std::string& text, std::size_t from) {
+    for (std::size_t at = text.find("frame: ", from); at != std::string::npos;
+         at = text.find("frame: ", at + 7)) {
+        const std::size_t digit = at + 7;
+        if (digit >= text.size() || text[digit] < '0' || text[digit] > '9') { continue; }
+        std::size_t eol = text.find('\n', at);
+        if (eol == std::string::npos) { eol = text.size(); }
+        std::string line = text.substr(at, eol - at);
+        while (!line.empty() && (line.back() == '\r' || line.back() == '\n')) { line.pop_back(); }
+        return line;
+    }
+    return std::string();
+}
+
 // --- Session 1: a stop from the web remote ----------------------------------------------
 
 void webStopEndsTakes() {
@@ -688,6 +716,9 @@ void webStopEndsTakes() {
     CHECK(!jb(s, "audioRecording"));
     // A user's own stop is not news: no reason line for it.
     CHECK(s.value("recordError", std::string()).empty());
+    // ...but the log says who asked and what the stop ended (0.99.68).
+    CHECK(diagLogOf(ss).find("receiver: stop requested by a control request (the web remote or a "
+                             "plugin); ending the I/Q and audio recordings") != std::string::npos);
     // ...and on disk: both files closed with honest headers (waited for: the close is a worker's).
     const std::vector<Take> iq1 = takesWhenClosed(ss.recDir(), "iq_", /*wantData=*/true);
     const std::vector<Take> au1 = takesWhenClosed(ss.recDir(), "audio_", /*wantData=*/true);
@@ -718,6 +749,80 @@ void webStopEndsTakes() {
     std::printf("  armed while stopped, then stop again: audioRecording=%d\n",
                 jb(s, "audioRecording") ? 1 : 0);
     CHECK(jb(s, "audioRecording"));
+}
+
+// --- Session 1b: a stop with nothing recording does not wait on the recorders ------------
+
+void idleStopDoesNotWaitOnTheRecorders() {
+    // The 0.99.65 field report: four seconds into a session with nothing
+    // recording, a stop's frame spent 701 ms in `recorder` - the recorder
+    // setters queued behind the DSP thread's block, which a plugin can stretch
+    // - eight seconds before a fast-fail nobody has explained. Here a thread of
+    // the application's takes that mutex for 1500 ms the moment the stop is
+    // applied (FOXSDR_HOLD_AUDIO_LOCK, bounded runs only: the stop arrives in
+    // the middle of a block). A stop asked for with nothing recording must not
+    // spend that time on the recorders, and the log says who asked, that there
+    // was nothing to end, and what the recorders' part of the stop cost.
+    //
+    // WHAT IS ASSERTED, AND WHY NOT THE FRAME'S SCOPE: the first version of
+    // this test began the hold in the frame loop and read the slow-frame line
+    // that followed, and its break-it check (the guard removed) did not fail in
+    // five runs of twelve. The GUI thread's next ask of the mutex was the web
+    // remote's audio push (publishWebAudio -> Pipeline::audioTap, in pre-draw),
+    // which waited out the whole hold there; the stop, applied a frame later,
+    // found the mutex free, and the slow frame in the log was that earlier
+    // one. The hold now begins inside the stop's own request, and the number
+    // asserted on is the recorders' part of the stop as stopReceiver measures
+    // it (~1490 ms with the guard removed, 0 ms with it).
+    setEnv("FOXSDR_HOLD_AUDIO_LOCK", "1500");
+    Session ss;
+    const bool opened = ss.open("idlestop", "", "siggen");
+    setEnv("FOXSDR_HOLD_AUDIO_LOCK", "");
+    if (!opened) { return; }
+    httplib::Client& cli = ss.cli();
+    nlohmann::json s;
+    CHECK(control(cli, R"({"running":true})"));
+    CHECK(waitStatus(cli, s, 20000, [](const nlohmann::json& j) { return jb(j, "running"); }));
+
+    const auto t0 = std::chrono::steady_clock::now();
+    CHECK(control(cli, R"({"running":false})"));
+    CHECK(waitStatus(cli, s, 20000, [](const nlohmann::json& j) { return !jb(j, "running"); }));
+    const long long stopMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                 std::chrono::steady_clock::now() - t0)
+                                 .count();
+    s = ss.settle();  // the frame that carried the stop has committed its timing by now
+    const std::string text = diagLogOf(ss);
+    // The hold is logged once the mutex really is held, inside the stop and
+    // before the attribution line; everything below is read from there on.
+    const std::size_t held = text.find("test: holding the audio lock for 1500 ms");
+    CHECK(held != std::string::npos);
+    const std::size_t from = held == std::string::npos ? 0 : held;
+    const std::string askedBy =
+        "receiver: stop requested by a control request (the web remote or a plugin); ";
+    const std::size_t asked = text.find(askedBy, from);
+    CHECK(asked != std::string::npos);
+    // That line, whatever it says it ended: the recorders' milliseconds are read
+    // from it either way, so a stop that did end them fails with the number.
+    std::string askedLine;
+    long long recordersMs = -1;
+    if (asked != std::string::npos) {
+        const std::size_t eol = text.find('\n', asked);
+        askedLine = text.substr(asked, eol == std::string::npos ? std::string::npos : eol - asked);
+        const std::size_t paren = askedLine.find("(recorders ");
+        if (paren == std::string::npos ||
+            std::sscanf(askedLine.c_str() + paren, "(recorders %lld ms)", &recordersMs) != 1) {
+            recordersMs = -1;
+        }
+    }
+    const std::string slowLine = firstSlowFrameLine(text, from);
+    std::printf("  idle stop under a 1500 ms hold of the audio lock: the stop took %lld ms; "
+                "recorders %lld ms; first slow frame after the hold: %s\n",
+                stopMs, recordersMs, slowLine.empty() ? "(none logged)" : slowLine.c_str());
+    CHECK(askedLine.find(askedBy + "no recording to end (recorders ") == 0);
+    CHECK(!jb(s, "iqRecording") && !jb(s, "audioRecording"));
+    // The recorders had nothing to end, so the stop spent no time on them - not
+    // the hold, which would be 1000 ms and more.
+    CHECK(recordersMs >= 0 && recordersMs < 100);
 }
 
 // --- Session 2: a fault mid-take ---------------------------------------------------------
@@ -1046,12 +1151,12 @@ void everyStopUsesTheRoutine() {
                     if (k > i && lines[k].rfind("}", 0) == 0) { break; }
                 }
             }
-            if (l.find("stopReceiver()") != std::string::npos &&
-                l.find("AppWindow::stopReceiver()") == std::string::npos &&
-                l.find("void stopReceiver()") == std::string::npos) {
+            if (l.find("stopReceiver(") != std::string::npos &&
+                l.find("AppWindow::stopReceiver(") == std::string::npos &&
+                l.find("void stopReceiver(") == std::string::npos) {
                 callers.push_back(enclosingMember(lines, i));
             }
-            if (l.rfind("void AppWindow::stopReceiver()", 0) == 0) {
+            if (l.rfind("void AppWindow::stopReceiver(", 0) == 0) {
                 for (std::size_t k = i; k < lines.size(); ++k) {
                     routineBody += lines[k] + "\n";
                     if (k > i && lines[k].rfind("}", 0) == 0) { break; }
@@ -1107,6 +1212,7 @@ int main() {
     std::setvbuf(stdout, nullptr, _IONBF, 0);  // a hang still shows how far it got
     everyStopUsesTheRoutine();
     webStopEndsTakes();
+    idleStopDoesNotWaitOnTheRecorders();
     faultEndsTakes();
     sameRateSwitchEndsIqTake();
     std::error_code ec;

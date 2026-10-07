@@ -1209,8 +1209,8 @@ bool Pipeline::setInputRateHz(double rateHz) {
 
     {
         // audioMutex_ is still required even with the DSP thread down:
-        // audioTap()/setDemodMode()/setVfo* may arrive concurrently from
-        // other control-plane threads. controlMutex_ -> audioMutex_ is the
+        // setDemodMode()/setVfo* may arrive concurrently from other
+        // control-plane threads. controlMutex_ -> audioMutex_ is the
         // same acquisition order start() uses, and the DSP thread never takes
         // controlMutex_, so the ordering cannot deadlock.
         std::lock_guard<std::mutex> alk(audioMutex_);
@@ -1341,7 +1341,10 @@ void Pipeline::setAudioRecorder(Recorder* r) {
 }
 
 std::size_t Pipeline::audioTap(float* dst, std::size_t n) const {
-    std::lock_guard<std::mutex> lk(audioMutex_);
+    // tapMutex_ alone, never audioMutex_: see the declaration for why and for
+    // the lock order. The DSP thread holds this only while it writes a block's
+    // frames into the window, so the GUI thread does not wait for a block.
+    std::lock_guard<std::mutex> lk(tapMutex_);
     const std::size_t frames = tapBuf_.size() / 2;
     const std::size_t avail = std::min(n, tapFilled_);
     // The newest frame sits at tapWrite_ - 1; walk back `avail` frames and
@@ -1357,7 +1360,7 @@ std::size_t Pipeline::audioTap(float* dst, std::size_t n) const {
 
 std::size_t Pipeline::audioTapStereo(float* dstLeft, float* dstRight,
                                      std::size_t n) const {
-    std::lock_guard<std::mutex> lk(audioMutex_);
+    std::lock_guard<std::mutex> lk(tapMutex_);  // alone; see audioTap()
     const std::size_t frames = tapBuf_.size() / 2;
     const std::size_t avail = std::min(n, tapFilled_);
     const std::size_t start = (tapWrite_ + frames - avail) % frames;
@@ -2049,12 +2052,18 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
     // even with no device open; then the non-blocking push to the sink (a
     // full ring drops the overflow — the device, not this thread, is behind).
     const std::size_t tapFrames = tapBuf_.size() / 2;
-    for (std::size_t i = 0; i < k; ++i) {
-        tapBuf_[2 * tapWrite_] = outL_[i];
-        tapBuf_[2 * tapWrite_ + 1] = outR_[i];
-        tapWrite_ = (tapWrite_ + 1) % tapFrames;
+    {
+        // audioMutex_ is held (above); tapMutex_ nests inside it for this copy
+        // only, so audioTap()/audioTapStereo() never wait for a whole block.
+        // Order audioMutex_ -> tapMutex_ here, tapMutex_ alone in the readers.
+        std::lock_guard<std::mutex> tapLk(tapMutex_);
+        for (std::size_t i = 0; i < k; ++i) {
+            tapBuf_[2 * tapWrite_] = outL_[i];
+            tapBuf_[2 * tapWrite_ + 1] = outR_[i];
+            tapWrite_ = (tapWrite_ + 1) % tapFrames;
+        }
+        tapFilled_ = std::min(tapFrames, tapFilled_ + k);
     }
-    tapFilled_ = std::min(tapFrames, tapFilled_ + k);
     // THE DEMOD SCOPE'S AUDIO TAP, at the same instant and from the same
     // downmix the recorder takes - which is the whole reason it is HERE and
     // not at the sink. Everything above this line has already happened: a
@@ -2064,10 +2073,10 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
     // contradict the speakers - the same argument the mute's own comment
     // makes about the four consumers below it.
     //
-    // A SECOND TAP RATHER THAN A WIDER tapBuf_, because that one is read under
-    // audioMutex_ - the mutex this thread holds across a whole block - and a
-    // render thread must not queue behind DSP for a picture. It is also 4096
-    // frames, 85 ms, where the scope's longest sweep is half a second.
+    // A SECOND TAP RATHER THAN A WIDER tapBuf_, because that one is a locked
+    // copy (tapMutex_, taken by this thread for each block's frames) and a
+    // render thread must not queue behind even that for a picture. It is also
+    // 4096 frames, 85 ms, where the scope's longest sweep is half a second.
     scopeAudio_.push(monoOut_.data(), k);
     // Counted in FRAMES, unchanged in meaning: one per 48 kHz instant.
     audioSamples_.fetch_add(k, std::memory_order_relaxed);

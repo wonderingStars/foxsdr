@@ -1806,6 +1806,10 @@ int AppWindow::run(int frames) {
         frameTimer.setStalls(cascade::core::parseFrameStalls(std::getenv("FOXSDR_FRAME_STALL")));
         frameSituations =
             cascade::core::parseFrameSituations(std::getenv("FOXSDR_FRAME_SITUATION"));
+        // TEST SEAM (0.99.68): a held audio mutex at the next stop, see
+        // holdAudioLockMs_ in the header and holdAudioLockForTest().
+        const char* hold = std::getenv("FOXSDR_HOLD_AUDIO_LOCK");
+        if (hold != nullptr && *hold != '\0') { holdAudioLockMs_ = std::atoi(hold); }
     }
 
     int rendered = 0;
@@ -2535,6 +2539,8 @@ int AppWindow::run(int frames) {
     flushBookmarkSave(true);
     flushMarkerSave(true);
     cascade::core::diagLogf("frame loop ended after %d frames; shutting down", rendered);
+    // The test seam's holder, if one ran: bounded by its own milliseconds.
+    if (holdAudioLockThread_.joinable()) { holdAudioLockThread_.join(); }
 
     // The deliberate shutdown wedge, in the place the real one lives: the
     // stretch around pipeline_.stop(), where the bounded driver waits are
@@ -5440,7 +5446,7 @@ void AppWindow::drawToolbar() {
         if (running) {
             // Ends any take, then joins both pipeline threads (stopReceiver:
             // the one stop every path shares).
-            stopReceiver();
+            stopReceiver("the STOP dome");
         } else {
             startReceiver();
         }
@@ -17178,7 +17184,7 @@ void AppWindow::drawScopeMode() {
             if (running) {
                 // The same stop as the dome, recordings included: this used
                 // to be a bare pipeline_.stop() that left a take open.
-                stopReceiver();
+                stopReceiver("the scope's POWER key");
             } else {
                 startReceiver();
             }
@@ -23389,18 +23395,74 @@ void AppWindow::startReceiver() {
     faultSeen_ = false;
 }
 
-void AppWindow::stopReceiver() {
+void AppWindow::holdAudioLockForTest() {
+    // The seam of FOXSDR_HOLD_AUDIO_LOCK (0.99.68, bounded runs only, see
+    // holdAudioLockMs_ in the header): a thread of this process takes the audio
+    // mutex - the one the DSP thread holds across a block - and keeps it for
+    // that many milliseconds, standing in for a plugin that stretched a block.
+    // Once, and logged only when the mutex really is held, so the test can tell
+    // a hold that happened from one that did not.
+    holdAudioLockDone_ = true;
+    holdAudioLockThread_ = std::thread([this] {
+        pipeline_.holdLockForTest(cascade::core::Pipeline::LockForTest::Audio, holdAudioLockMs_,
+                                  &holdAudioLockAcquired_);
+    });
+    for (int i = 0; i < 250 && !holdAudioLockAcquired_.load(std::memory_order_acquire); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    if (holdAudioLockAcquired_.load(std::memory_order_acquire)) {
+        cascade::core::diagLogf("test: holding the audio lock for %d ms", holdAudioLockMs_);
+    } else {
+        cascade::core::diagLogf("test: the audio lock could not be taken");
+    }
+}
+
+void AppWindow::stopReceiver(const char* who) {
     // Play-stop while recording stops the recording cleanly (spec): taps
     // uninstalled and both WAVs finalized BEFORE the DSP threads join, so a
     // take can never outlive the sample flow it was taping. Only when the
     // receiver is running or faulted - see the header for why a stop that
-    // stops nothing leaves an armed take alone. Silent, as it always was: the
-    // user pressed Stop, and "the recording ended because you stopped" is
-    // not news.
-    if (pipeline_.running() || pipeline_.faulted()) {
-        stopIqRecording();
-        stopAudioRecording();
-    }
+    // stops nothing leaves an armed take alone. Silent on screen, as it always
+    // was: the user pressed Stop, and "the recording ended because you
+    // stopped" is not news.
+    //
+    // ONLY A TAKE THAT IS RUNNING, OR WHOSE FILE IS STILL OPENING, IS ENDED
+    // (0.99.68). Each recording stop swaps the pipeline's recorder pointer
+    // under audioMutex_, the mutex the DSP thread holds across a whole block,
+    // so with nothing recording a stop still queued twice behind the block in
+    // progress - and a plugin-heavy block runs for hundreds of milliseconds.
+    // The 0.99.65 fast-fail's log: a 740 ms frame, 701 ms of it in recorder,
+    // four seconds in, nothing recording, eight seconds before the death. An
+    // idle recorder has no tap to take out and no file to finish, so that wait
+    // is not spent; a start whose file is still opening, or queued behind a
+    // finish, is withdrawn as before. The stop still waits once, inside
+    // pipeline_.stop(), for the block in progress to end - that wait is the
+    // join's, and it is charged to the caller's scope, not the recorders'.
+    const bool running = pipeline_.running() || pipeline_.faulted();
+    const bool iq = running && (iqRecorder_.recording() || iqStart_.pending() || iqStartQueued_);
+    const bool audio =
+        running && (audioRecorder_.recording() || audioStart_.pending() || audioStartQueued_);
+    // The two recording stops timed, for the log line below: the time spent in
+    // the scope `recorder` by this stop, the quantity the 0.99.65 report showed
+    // as 701 ms. tests/test_stop_ends_recordings.cpp asserts on it.
+    const auto recordersFrom = std::chrono::steady_clock::now();
+    if (iq) { stopIqRecording(); }
+    if (audio) { stopAudioRecording(); }
+    const long long recordersMs = static_cast<long long>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() -
+                                                              recordersFrom)
+            .count());
+    // WHO ASKED, in the log (0.99.68): that same report's log showed the
+    // stop's cost and nothing of its cause. One line, before the stop itself,
+    // so it is there even if the stop is the last thing the session does. It
+    // ends with what the recorders' part of the stop cost.
+    cascade::core::diagLogf("receiver: stop requested by %s; %s (recorders %lld ms)", who,
+                            !running       ? "the receiver was not running"
+                            : (iq && audio) ? "ending the I/Q and audio recordings"
+                            : iq            ? "ending the I/Q recording"
+                            : audio         ? "ending the audio recording"
+                                            : "no recording to end",
+                            recordersMs);
     // Unconditional, as applyControlRequest's own stop always was (the dome,
     // the key and POWER only ever call this on a running receiver): on a
     // faulted pipeline, run flag already down, it still joins the threads
@@ -23777,7 +23839,7 @@ void AppWindow::applyKeyAction(cascade::gui::KeyAction action) {
             if (pipeline_.running()) {
                 // The toolbar's own stop: a take can never outlive the
                 // sample flow it was taping.
-                stopReceiver();
+                stopReceiver("the Start/Stop key");
             } else {
                 startReceiver();
             }
@@ -25682,7 +25744,17 @@ void AppWindow::applyControlRequest(const cascade::net::ControlRequest& r) {
             // command that sets the run state.) A bare pipeline_.stop() here
             // left both takes open with zero-length headers, and the next
             // start from anywhere appended to them across the gap.
-            stopReceiver();
+            //
+            // THE TEST SEAM OF FOXSDR_HOLD_AUDIO_LOCK (0.99.68, bounded runs
+            // only), taken HERE so that the stop below runs while the audio
+            // mutex is held: see holdAudioLockMs_ in the header. Not from the
+            // frame loop, where the GUI thread's own next ask of the mutex
+            // (the web remote's audio push, in pre-draw) waited out the hold
+            // before the stop was ever applied.
+            if (holdAudioLockMs_ > 0 && !holdAudioLockDone_ && pipeline_.running()) {
+                holdAudioLockForTest();
+            }
+            stopReceiver("a control request (the web remote or a plugin)");
         }
     }
     if (r.centerHz.has_value()) {

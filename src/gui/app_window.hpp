@@ -18,6 +18,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -1796,7 +1797,22 @@ private:
     // pipeline_.start() to startReceiver, every pipeline_.setSource() to
     // installSource, and drives the stop, the faults and the same-rate
     // switch through the real application.
-    void stopReceiver();
+    //
+    // `who` (0.99.68) names the caller in one diagnostic-log line - "the STOP
+    // dome", "the Start/Stop key", "the scope's POWER key", "a control request
+    // (the web remote or a plugin)" - with what the stop ended, because the
+    // 0.99.65 fast-fail's log showed a stop's cost and nothing of its cause.
+    // The same release stopped an idle recorder being "ended": each recording
+    // stop waits on the mutex the DSP thread holds across a block, which a
+    // plugin can stretch to hundreds of milliseconds, and an idle recorder has
+    // nothing to end. The line ends with what the two recording stops cost, in
+    // milliseconds ("(recorders 0 ms)"): the time this stop spent in the scope
+    // `recorder`. tests/test_stop_ends_recordings.cpp holds that mutex from
+    // inside the real application and reads that number.
+    void stopReceiver(const char* who);
+    // The FOXSDR_HOLD_AUDIO_LOCK seam, called once from applyControlRequest
+    // just before a stop (see holdAudioLockMs_).
+    void holdAudioLockForTest();
     void startReceiver();
     void endTakesOnFault();
     void installSource(std::unique_ptr<cascade::source::IqSource> src);
@@ -3663,6 +3679,22 @@ private:
     // --diag-toggle on|off: flip the diagnostics switch on frame 30. See
     // setDiagToggle().
     int diagToggle_ = 0;
+    // FOXSDR_HOLD_AUDIO_LOCK=<ms> (0.99.68, bounded runs only): the first stop
+    // of a running receiver that a control request makes (applyControlRequest,
+    // `running` false) first has holdAudioLockThread_ take the pipeline's audio
+    // mutex for that many milliseconds (Pipeline::holdLockForTest, via
+    // holdAudioLockForTest), standing in for a plugin that stretched a DSP block
+    // that the stop arrives in the middle of, and the log says so once it is
+    // held. Taken by the stop's own request, and not from the frame loop, so that
+    // nothing else of the GUI thread's can be the one to wait out the hold (the
+    // web remote's audio push did, in pre-draw) before the stop's recorder
+    // setters ask for the mutex. tests/test_stop_ends_recordings.cpp reads how
+    // long a stop with nothing recording then spent on the recorders, from the
+    // log line stopReceiver writes. Zero: no seam. Joined after the frame loop.
+    int holdAudioLockMs_ = 0;
+    bool holdAudioLockDone_ = false;
+    std::atomic<bool> holdAudioLockAcquired_{false};
+    std::thread holdAudioLockThread_;
     // The whole diagnostics switch - crash handler, log AND watchdog - in one
     // place. The checkbox, the arming path in run() and the test hook all go
     // through it; they used to disagree about the watchdog.

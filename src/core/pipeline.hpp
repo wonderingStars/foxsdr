@@ -545,8 +545,8 @@ public:
     //      overflow by design and never blocks the source)
     //   2. dspThread_ joined        (after this NO thread touches the
     //      estimator or the audio chain, so rebuilding them is race-free)
-    //   3. chain rebuilt under audioMutex_ (audioTap()/setters may arrive
-    //      from other threads while the DSP thread is down)
+    //   3. chain rebuilt under audioMutex_ (the setters may arrive from other
+    //      threads while the DSP thread is down)
     //   4. dspRun_ set, DSP thread respawned
     // Holding controlMutex_ across the whole switch is what makes a
     // stop()-during-switch impossible by construction: stop(), start(),
@@ -636,9 +636,9 @@ public:
     //
     // A THIRD AND FOURTH TAP, and the reasons they are not the two above are
     // in core/scope_tap.hpp and beside each push site in the .cpp. In short:
-    // audioTap is 85 ms long and is read under the mutex the DSP thread holds
-    // across a whole block, and the scope's longest sweep is half a second
-    // and is read by the render thread once a frame.
+    // audioTap is 85 ms long and is a locked copy (tapMutex_), and the
+    // scope's longest sweep is half a second and is read by the render thread
+    // once a frame.
     //
     // WHAT EACH ONE CARRIES:
     //
@@ -944,6 +944,22 @@ private:
     float pluginLastR_ = 0.0f;
     // Rolling pre-AudioOut tap window (interleaved L,R; kAudioTapSize FRAMES)
     // + producer-side counters (test support).
+    //
+    // GUARDED BY tapMutex_, NOT audioMutex_. audioTap()/audioTapStereo() used to
+    // take audioMutex_, which processAudioBlock holds across a WHOLE block, so
+    // the GUI thread - AppWindow::publishWebAudio reads the tap every frame that
+    // has new audio while the browser remote is on - queued behind the entire
+    // DSP block (measured: 1507 ms inside publishWebAudio with the mutex held
+    // for 1500 ms by the test seam that stands in for a plugin stretching a
+    // block). tapMutex_ is held only for the copy of one block's frames
+    // into the window, and for a reader's copy out of it: microseconds.
+    //
+    // LOCK ORDER: on the DSP thread audioMutex_ is taken first and tapMutex_
+    // nests inside it for just that copy; the readers take tapMutex_ ALONE.
+    // Nothing ever waits for audioMutex_ while holding tapMutex_, so the two
+    // cannot deadlock. Keep it that way: never take audioMutex_ (or anything
+    // that does) under tapMutex_.
+    mutable std::mutex tapMutex_;
     std::vector<float> tapBuf_;
     std::size_t tapWrite_ = 0;   // in frames
     std::size_t tapFilled_ = 0;  // in frames
