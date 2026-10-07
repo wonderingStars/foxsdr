@@ -32,12 +32,15 @@
 //     "soundcard" (a sound card's input, settings in `soundCard` below) |
 //     "aor" (the native AOR digital-I/Q driver, source/aor_source.hpp) |
 //     "hydrasdr" (the HydraSDR RFOne, source/hydrasdr_source.hpp, an Airspy
-//     driver given the RFOne's profile);
+//     driver given the RFOne's profile) |
+//     "rtltcp" (a client for an rtl_tcp server, source/rtl_tcp_source.hpp,
+//     its address in `rtlTcpAddr` below);
 //     anything else resets to "siggen" (the only source that can never fail
-//     to exist). The last eight are the native drivers, which reach their
+//     to exist). The last nine are the native drivers, which reach their
 //     radio without any SoapySDR install at all - six of them over our own
 //     WinUSB transport, "sdrplay" through the vendor API the user installed,
-//     and "pluto" over TCP to the board's own iiod daemon.
+//     "pluto" over TCP to the board's own iiod daemon and "rtltcp" over TCP
+//     to an rtl_tcp server.
 //     EVERY ONE IS ITS OWN KEY AND NOT A FAMILY NAME: they are different USB
 //     ids (or no USB at all), different hardware and different bands, and a
 //     config that named one must never open another. "airspy" and "airspyhf"
@@ -121,7 +124,7 @@ namespace cascade::core {
 struct AppConfig {
     int schemaVersion = 1;
     // "siggen"|"file"|"soapy"|"rtlsdr"|"hackrf"|"airspy"|"airspyhf"|
-    // "sdrplay"|"mirisdr"|"rx888"|"pluto"|"soundcard"|"aor"|"hydrasdr"
+    // "sdrplay"|"mirisdr"|"rx888"|"pluto"|"soundcard"|"aor"|"hydrasdr"|"rtltcp"
     std::string sourceKind = "siggen";
     // RX antenna port for a Soapy device, e.g. "TX/RX" or "RX2" on a B200.
     // Empty means "whatever the driver defaults to", which is what every
@@ -242,6 +245,14 @@ struct AppConfig {
     // The default is the address the board's own USB Ethernet gadget serves
     // out of the box, which is what an ADALM-Pluto on a cable answers at.
     std::string plutoUri = "ip:192.168.2.1";
+    // WHERE THE RTL_TCP SERVER IS, "host" or "host:port" (an IPv6 literal in
+    // brackets when it carries a port) - the Pluto's field in every respect:
+    // typed rather than discovered, kept whether or not the server answered so
+    // a wrong address comes back to be corrected, and carried as
+    // "rtltcp=<this>" in nativeArgs once a server really opens. The default is
+    // the server's own, on this machine at its default port. An empty value on
+    // load falls back to it.
+    std::string rtlTcpAddr = "127.0.0.1:1234";
     std::string iqFilePath;
     // THE SOUND CARD SOURCE's settings (sourceKind "soundcard"), kept whether
     // or not it is the source in use - the same rule as iqFilePath and

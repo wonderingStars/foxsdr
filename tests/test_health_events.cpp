@@ -126,11 +126,12 @@ std::uint32_t countOf(const Counts& c, const std::string& token) {
 // ---------------------------------------------------------------------------
 void testEveryTokenIsLegalAndNothingElseIs() {
     const std::vector<std::string> all = health::allTokens();
-    // 1 scan + 13 + 13 + 104 (driver x reason) + 11 + 55 (api x reason) + 4 update
-    // + 1 catalogue + 4 + 3 plugin + 1 recording = 210 failure tokens (0.99.66: the
-    // thirteenth driver word, hydrasdr, adds one open, one data and eight fail
-    // tokens); then 54 slow (18 countable scopes x 3 tiers) and 13 recovered.
-    CHECK(all.size() == 210 + 54 + 13);
+    // 1 scan + 14 + 14 + 112 (driver x reason) + 11 + 55 (api x reason) + 4 update
+    // + 1 catalogue + 4 + 3 plugin + 1 recording = 220 failure tokens (0.99.66: the
+    // thirteenth driver word, hydrasdr, added one open, one data and eight fail
+    // tokens; 0.99.70: the fourteenth, rtltcp, adds the same ten again); then 54
+    // slow (18 countable scopes x 3 tiers) and 13 recovered.
+    CHECK(all.size() == 220 + 54 + 13);
     std::set<std::string> unique(all.begin(), all.end());
     CHECK(unique.size() == all.size());
     for (const std::string& t : all) {
@@ -161,7 +162,7 @@ void testBuildersCannotCarryFreeText() {
     using health::RadioReason;
     for (int r = 0; r <= static_cast<int>(RadioReason::Other); ++r) {
         for (const char* d : {"rtlsdr", "hackrf", "airspy", "airspyhf", "sdrplay", "mirisdr", "rx888",
-                              "pluto", "aor", "hydrasdr", "soapy", "soundcard"}) {
+                              "pluto", "aor", "hydrasdr", "rtltcp", "soapy", "soundcard"}) {
             CHECK(health::validToken(health::tokenRadioFail(d, static_cast<RadioReason>(r))));
         }
     }
@@ -1222,6 +1223,31 @@ void testReasonsFromTheDriversOwnSentences() {
         {"rtlsdr", "no RTL-SDR with serial 00000001 is present", RadioReason::Absent},
         {"rtlsdr", "the radio is no longer present", RadioReason::Absent},
         {"pluto", "nothing at the radio's address:30431 answered as an IIO daemon", RadioReason::Absent},
+        // THE RTL_TCP CLIENT'S OWN SENTENCES (rtl_tcp_source.cpp, connectLocked, and the shared
+        // socket code's connect failures), word for word. A refusal and an address that speaks
+        // something else are "nothing there"; a connect or a header read that ran out of time
+        // is a timeout, which is checked first so the "nothing at" in the same sentence does
+        // not win.
+        {"rtltcp",
+         "could not reach the rtl_tcp server at the host:1234 - connect failed (network error "
+         "10061) (nothing at that address accepted the connection - is rtl_tcp running there?)",
+         RadioReason::Absent},
+        {"rtltcp",
+         "could not find the host \"the-host\" on the network (nothing at that name was found - "
+         "is rtl_tcp running there, and is the address right?)",
+         RadioReason::Absent},
+        {"rtltcp",
+         "nothing at the-host:1234 speaks rtl_tcp (it answered, but not with an rtl_tcp header)",
+         RadioReason::Absent},
+        {"rtltcp",
+         "could not reach the rtl_tcp server at the-host:1234 - the rtl_tcp server did not "
+         "answer in time (is it at this address?) (nothing at that address accepted the "
+         "connection - is rtl_tcp running there?)",
+         RadioReason::Timeout},
+        {"rtltcp",
+         "nothing at the-host:1234 answered as an rtl_tcp server (the rtl_tcp server stopped "
+         "answering (receive timed out))",
+         RadioReason::Timeout},
         {"soapy", "SoapySDR::Device::make() no match for args: driver=uhd", RadioReason::Absent},
         {"soundcard", "the card is not connected", RadioReason::Absent},
         // a vendor stack's own words

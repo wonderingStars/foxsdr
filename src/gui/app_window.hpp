@@ -159,6 +159,7 @@ struct GLFWwindow;
 #include "source/mirisdr_source.hpp"
 #include "source/pluto_source.hpp"
 #include "source/pluto_tx.hpp"
+#include "source/rtl_tcp_source.hpp"
 #include "source/rtlsdr_source.hpp"
 #include "source/rx888_source.hpp"
 #include "source/sdrplay_source.hpp"
@@ -962,6 +963,9 @@ private:
     // the address typed in plutoUri_, carrying the air frequency read BEFORE
     // the close. Its own member so the converter test can press it.
     void openPlutoFromBox();
+    // The rtl_tcp row's Open key: the same shape as the Pluto's, for the
+    // address typed in rtlTcpAddr_.
+    void openRtlTcpFromBox();
     void drawCenterPanels();
     // THE SLIM TICK STRIP BETWEEN THE PANELS IS GONE, and this is where it was
     // declared. SpectrumView now letters the frequency axis along the foot of
@@ -2926,7 +2930,8 @@ private:
     // row is not a discovery at all: a network cannot be walked, so
     // scanNative appends ONE row for it unconditionally, at the end, and that
     // row opens nothing until the user presses Open on an address. See
-    // plutoUri_ and kPlutoDriverKey.
+    // plutoUri_ and kPlutoDriverKey. The rtl_tcp server's row (0.99.70) is the
+    // same kind of row and follows it: see rtlTcpAddr_ and kRtlTcpDriverKey.
     std::vector<cascade::source::NativeDeviceInfo> nativeDevices_;
     // Their combo captions, composed once by scanNative(): the row label with
     // " (native)" appended. Stored rather than built per frame because the
@@ -2949,6 +2954,12 @@ private:
     // timeout and no wait - a user who has never owned one can select it,
     // read what it wants, and select something else.
     char plutoUri_[192] = "ip:192.168.2.1";
+
+    // WHERE THE RTL_TCP SERVER IS - the Pluto's shape exactly (an address, not
+    // a discovery; nothing is contacted until Open), seeded from
+    // AppConfig::rtlTcpAddr and written back by currentConfig(). "host" or
+    // "host:port"; the default is the server's own, on this machine.
+    char rtlTcpAddr_[192] = "127.0.0.1:1234";
 
     // WHAT THE SOURCE SECTION SAYS ABOUT THE SDRPLAY API WHEN THERE IS NO RSP
     // ROW TO SHOW. Composed by scanNative() from the driver's own pure
@@ -3015,7 +3026,7 @@ private:
     // The ACTIVE source's kind as the config store spells it. Tracked at each
     // successful switch because the pipeline does not expose source identity.
     // "siggen"|"file"|"soapy"|"rtlsdr"|"hackrf"|"airspy"|"airspyhf"|
-    // "sdrplay"|"mirisdr"|"rx888"|"pluto"|"soundcard"|"aor"|"hydrasdr"
+    // "sdrplay"|"mirisdr"|"rx888"|"pluto"|"soundcard"|"aor"|"hydrasdr"|"rtltcp"
     std::string sourceKind_ = "siggen";
 
     // WHAT THE CONFIG REMEMBERS, ONE SLOT PER FAMILY, and they are separate

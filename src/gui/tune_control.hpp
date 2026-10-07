@@ -1606,8 +1606,8 @@ inline bool fallbackNamesTheSameDongle(const std::string& nativeKey,
 
 // --- The saved radio outlives a restore that could not open it -------------
 
-// ONE PLACE DECIDES WHICH SOURCE KINDS ARE NATIVE DRIVERS. There are eight of
-// them, read by the config restore, the web remote's device match,
+// ONE PLACE DECIDES WHICH SOURCE KINDS ARE NATIVE DRIVERS. There are nine of
+// them (the rtl_tcp client, "rtltcp", is the second one reached over a network), read by the config restore, the web remote's device match,
 // makeDeviceSource's construction and the remembered-source rule below, and a
 // list of string literals copied per call site is one chance per copy for an
 // Airspy to become quietly unrestorable while everything else keeps working.
@@ -1626,7 +1626,7 @@ inline bool fallbackNamesTheSameDongle(const std::string& nativeKey,
 inline bool isNativeSourceKind(const std::string& kind) {
     return kind == "rtlsdr" || kind == "hackrf" || kind == "airspy" || kind == "airspyhf" ||
            kind == "sdrplay" || kind == "mirisdr" || kind == "rx888" || kind == "pluto" ||
-           kind == "aor" || kind == "hydrasdr";
+           kind == "aor" || kind == "hydrasdr" || kind == "rtltcp";
 }
 
 // WHAT TO CALL A RECORDING ON SCREEN: its own name, not the path it lives at.

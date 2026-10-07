@@ -195,6 +195,10 @@ bool withAdcSwitches(cascade::source::DeviceSource* dev, Fn&& fn) {
 // is three chances for a typo that compiles.
 constexpr const char* kPlutoDriverKey = "pluto";
 
+// THE RTL_TCP ROW'S DRIVER KEY, for the same reasons. It is the Pluto's twin
+// in the list: a row that is an address, not a radio that was found.
+constexpr const char* kRtlTcpDriverKey = "rtltcp";
+
 // Takes a resolved device-open result and lets it go, which is precisely what
 // closes the device: the result owns the SoapySource and its destructor is the
 // close. Templated only so it can live here, at file scope, without naming
@@ -625,7 +629,8 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            // Each Airspy's gain mode, gains and decimation: set in the Source
            // section, which calls no save of its own.
            a.airspy == b.airspy &&
-           a.plutoUri == b.plutoUri && a.soapyAntenna == b.soapyAntenna &&
+           a.plutoUri == b.plutoUri && a.rtlTcpAddr == b.rtlTcpAddr &&
+           a.soapyAntenna == b.soapyAntenna &&
            a.iqFilePath == b.iqFilePath && a.centerHz == b.centerHz &&
            a.mode == b.mode && a.bandwidthHz == b.bandwidthHz &&
            a.squelchDb == b.squelchDb && a.volume == b.volume &&
@@ -8523,7 +8528,7 @@ bool AppWindow::noRadioHardwareShown() const {
     const bool soapyBusy = soapyScanPending_ || deviceOpenPending_;
     return cascade::gui::noRadioHardwareFound(
         soapyScanned_, soapyScanPartial_, soapyBusy, soapyDevices_.size(),
-        cascade::gui::nativeRadiosFound(nativeDevices_, kPlutoDriverKey));
+        cascade::gui::nativeRadiosFound(nativeDevices_, kPlutoDriverKey, kRtlTcpDriverKey));
 }
 
 std::vector<std::string> AppWindow::patchHeldRadioNames() const {
@@ -8776,11 +8781,17 @@ void AppWindow::drawSourceSection() {
         ImGui::TextWrapped("%s", tr(hint));
         ImGui::PopStyleColor();
     }
-    if (scanGated) {
+    // An rtl_tcp source beside the scan leaves no driver out of it (a TCP
+    // connection protects no local dongle), so there is nothing to explain.
+    const cascade::gui::SoapyScanPlan scanPlan = scanGated ? soapyScanPlan()
+                                                           : cascade::gui::SoapyScanPlan{};
+    const bool scanLeavesNothingOut =
+        scanPlan.mode == cascade::gui::SoapyScanMode::SkipSome && scanPlan.skipDrivers.empty();
+    if (scanGated && !scanLeavesNothingOut) {
         // WHAT THE SCAN DOES BESIDE AN OPEN RADIO (2026-09-23): usually it
         // still runs, leaving out only the open radios' own drivers; it is
         // deferred only when it cannot vouch for one (device_scan_plan.hpp).
-        const cascade::gui::SoapyScanPlan plan = soapyScanPlan();
+        const cascade::gui::SoapyScanPlan& plan = scanPlan;
         std::string why;
         if (plan.mode == cascade::gui::SoapyScanMode::SkipSome) {
             std::string names;
@@ -9044,6 +9055,25 @@ void AppWindow::drawSourceSection() {
                 "typed. Nothing is contacted until you press Open."));
             ImGui::PopStyleColor();
             if (openPluto) { openPlutoFromBox(); }
+        }
+        // THE RTL_TCP SERVER'S ADDRESS: the Pluto's box in every respect
+        // above (Open, never selection; nothing contacted until pressed; a
+        // failed Open leaves whatever is installed running).
+        if (plutoRow < nativeDevices_.size() &&
+            nativeDevices_[plutoRow].driver == kRtlTcpDriverKey) {
+            ImGui::BeginDisabled(deviceOpenPending_);
+            ImGui::SetNextItemWidth(-60.0f);
+            ImGui::InputText("##rtltcp_addr", rtlTcpAddr_, sizeof(rtlTcpAddr_));
+            ImGui::SameLine();
+            const bool openRtlTcp = ImGui::Button(trId("Open"));
+            ImGui::EndDisabled();
+            ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+            ImGui::TextWrapped(
+                tr("The address of a running rtl_tcp server, as host or host:port (the port is "
+                   "1234 unless the server was started with another). Nothing is contacted "
+                   "until you press Open."));
+            ImGui::PopStyleColor();
+            if (openRtlTcp) { openRtlTcpFromBox(); }
         }
     }
 
@@ -10251,6 +10281,42 @@ void AppWindow::openPlutoFromBox() {
     launchDeviceOpen(std::move(req), "ADALM-Pluto at " + std::string(plutoUri_));
 }
 
+void AppWindow::openRtlTcpFromBox() {
+    sourceError_.clear();
+    // The Pluto's recipe, step for step (see openPlutoFromBox): the args are
+    // re-derived from the box so an address typed since the list was built is
+    // the one opened, the air frequency is read before the close, and the open
+    // runs on the worker so a server that is not there spends its connect
+    // bound off the GUI thread.
+    const std::string args = std::string("rtltcp=") + rtlTcpAddr_;
+    const std::optional<double> keepCenterHz = carriedAirCentre();
+    DeviceOpenResult req;
+    if (device_ != nullptr) {
+        req.closedRadio = cascade::gui::rememberedSourceAfterFailedOpen(
+            sourceKind_, cfgSoapyArgs_, cfgNativeArgs_, "",
+            pipeline_.activeSource().sampleRateHz());
+        req.closedLabel = deviceModel_;
+        // The model, never the address: this line goes in the report.
+        cascade::core::diagLogf("source: closing %s before opening the rtl_tcp server",
+                                deviceModel_.c_str());
+        device_ = nullptr;
+        soapyView_ = nullptr;
+        deviceArgs_.clear();
+        deviceModel_.clear();
+        ++sourceGen_;
+        installSource(nullptr);
+        sourceKind_ = "siggen";
+        applyConverterForSource();
+        followInputRate();
+    }
+    req.kind = kRtlTcpDriverKey;
+    req.args = args;
+    req.row = sourceSel_;
+    req.requestRateHz = kSoapyRateHz[kSoapyRateDefaultIndex];
+    req.keepCenterHz = keepCenterHz;
+    launchDeviceOpen(std::move(req), "rtl_tcp server at " + std::string(rtlTcpAddr_));
+}
+
 void AppWindow::selectSource(int idx, std::optional<double> carryAirHz) {
     // RE-CLICK ON THE CURRENT ROW: a no-op - unless the radio installed there
     // has DIED (unplugged, or a driver fault the receiver latched), when the
@@ -10353,7 +10419,7 @@ void AppWindow::selectSource(int idx, std::optional<double> carryAirHz) {
         // front of a user who was only reading the list. The address box and
         // the Open key appear instead (see drawSourceSection), and the
         // pipeline keeps whatever is installed until Open succeeds.
-        if (kind == kPlutoDriverKey) {
+        if (kind == kPlutoDriverKey || kind == kRtlTcpDriverKey) {
             sourceSel_ = idx;
             return;
         }
@@ -10461,6 +10527,7 @@ std::unique_ptr<cascade::source::DeviceSource> AppWindow::makeDeviceSource(
     if (kind == "rx888") { return std::make_unique<cascade::source::Rx888Source>(); }
     if (kind == "aor") { return std::make_unique<cascade::source::AorSource>(); }
     if (kind == kPlutoDriverKey) { return std::make_unique<cascade::source::PlutoSource>(); }
+    if (kind == kRtlTcpDriverKey) { return std::make_unique<cascade::source::RtlTcpSource>(); }
     if (kind == "soapy") { return std::make_unique<cascade::source::SoapySource>(); }
     return nullptr;
 }
@@ -10671,6 +10738,18 @@ void AppWindow::scanNative() {
         pluto.args = std::string("uri=") + plutoUri_;
         nativeDevices_.push_back(std::move(pluto));
     }
+    // THE RTL_TCP SERVER, THE SAME KIND OF ROW AND FOR THE SAME REASON: a
+    // server on a network cannot be found by looking, so one fixed row follows
+    // the Pluto's, and choosing it shows an address box and an Open key.
+    {
+        cascade::source::NativeDeviceInfo rtlTcp;
+        rtlTcp.driver = kRtlTcpDriverKey;
+        rtlTcp.label = FOX_TR_NOOP("rtl_tcp server (network)");
+        // Kept in step with the box, as the Pluto's args are, so a restored
+        // server's saved nativeArgs matches this row (see applyConfig).
+        rtlTcp.args = std::string("rtltcp=") + rtlTcpAddr_;
+        nativeDevices_.push_back(std::move(rtlTcp));
+    }
     nativeRowLabels_.clear();
     for (const cascade::source::NativeDeviceInfo& d : nativeDevices_) {
         // "(native)" is not decoration: with a Soapy row for the same dongle
@@ -10678,7 +10757,7 @@ void AppWindow::scanNative() {
         // are picking, and which one they got. The Pluto's row is exempt: it
         // is not a radio that was found, and "(native)" on it would suggest
         // there is a non-native row for the same board somewhere.
-        if (d.driver == kPlutoDriverKey) {
+        if (d.driver == kPlutoDriverKey || d.driver == kRtlTcpDriverKey) {
             nativeRowLabels_.push_back(tr(d.label.c_str()));  // FOX_TR_NOOP where it is set
         } else {
             std::string rowBuf;
@@ -10799,7 +10878,9 @@ std::vector<cascade::gui::SourceRowKey> AppWindow::sourceRowKeys() const {
         // THE PLUTO ROW BY ITS FAMILY ALONE: there is only ever one, and its
         // args are whatever the address box held when the list was built, so
         // an address typed since would otherwise lose the selection.
-        keys.push_back({d.driver, d.driver == kPlutoDriverKey ? std::string() : d.args});
+        // ...AND THE RTL_TCP ROW LIKEWISE: one row, whatever address is typed.
+        const bool addressRow = d.driver == kPlutoDriverKey || d.driver == kRtlTcpDriverKey;
+        keys.push_back({d.driver, addressRow ? std::string() : d.args});
     }
     for (const cascade::source::SoapyDeviceInfo& d : soapyDevices_) {
         keys.push_back({"soapy", d.args});
@@ -27902,6 +27983,9 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     // is the user's own typing and belongs to them, not to the session that
     // happened to open a radio.
     cascade::core::formatUtf8(plutoUri_, sizeof(plutoUri_), "%s", cfg.plutoUri.c_str());
+    // The rtl_tcp server's address, seeded for the same reason and before the
+    // same scanNative(): its row's args are "rtltcp=" plus this box.
+    cascade::core::formatUtf8(rtlTcpAddr_, sizeof(rtlTcpAddr_), "%s", cfg.rtlTcpAddr.c_str());
 
     // P7 settings. All are pure DSP switches with no failure mode, and the
     // loader has already clamped every one of them into range.
@@ -29271,6 +29355,7 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     // to survive a launch in which the board never answered so it can be
     // corrected next time rather than retyped from nothing.
     cfg.plutoUri = plutoUri_;
+    cfg.rtlTcpAddr = rtlTcpAddr_;
     // THE FILE THIS SESSION PLAYED, or the one it could not find. Normally
     // iqOpenPath_, which is the last recording that actually opened; when the
     // saved source was a file and the restore could not open it, the same

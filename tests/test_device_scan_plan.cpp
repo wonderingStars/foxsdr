@@ -99,6 +99,28 @@ void testTheFamilyTable() {
     CHECK(!known);
     soapyModulesForFamily("soapy", "serial=31", known);  // no driver named
     CHECK(!known);
+    // THE RTL_TCP CLIENT (0.99.70) IS A KNOWN FAMILY WITH NO SOAPY MODULE: it is
+    // a TCP connection no module's probe touches, so it protects no local
+    // dongle and a scan beside it must not be deferred (a deferral would say
+    // "the vendor probe opens and resets every dongle" about a socket).
+    CHECK(soapyModulesForFamily("rtltcp", "rtltcp=127.0.0.1:1234", known).empty());
+    CHECK(known);
+    {
+        const auto p = planSoapyScan({{"rtltcp", "rtltcp=127.0.0.1:1234"}}, 0, false);
+        CHECK(p.mode != SoapyScanMode::Defer);
+        CHECK(p.mode == SoapyScanMode::SkipSome);
+        CHECK(p.skipDrivers.empty());  // nothing is left out of the scan
+        // Beside a real dongle it adds nothing to what that dongle leaves out.
+        const auto q = planSoapyScan({{"rtltcp", "rtltcp=10.0.0.5:1234"}, {"rtlsdr", "serial=1"}},
+                                     0, false);
+        CHECK(q.mode == SoapyScanMode::SkipSome);
+        CHECK(q.skipDrivers == Names({"rtlsdr"}));
+        // Still deferred for the reasons that have nothing to do with the family.
+        CHECK(planSoapyScan({{"rtltcp", "rtltcp=127.0.0.1:1234"}}, 0, true).mode ==
+              SoapyScanMode::Defer);
+        CHECK(planSoapyScan({{"rtltcp", "rtltcp=127.0.0.1:1234"}}, 1, false).mode ==
+              SoapyScanMode::Defer);
+    }
 }
 
 // DEFERRED, exactly as before, whenever it cannot vouch for a driver.
@@ -124,6 +146,10 @@ void testWhatAScanInFlightMayProbe() {
     CHECK(scanMayProbe(Names({}), "rtlsdr", "serial=1"));
     CHECK(scanMayProbe(Names({}), "soapy", "driver=uhd"));
     CHECK(!scanMayProbe(Names({}), "siggen", ""));
+    // A TCP source is never on a bus a probe walks: a patch radio on one does
+    // not wait for a scan, whole-bus or partial.
+    CHECK(!scanMayProbe(Names({}), "rtltcp", "rtltcp=127.0.0.1:1234"));
+    CHECK(!scanMayProbe(Names({"rtlsdr"}), "rtltcp", "rtltcp=127.0.0.1:1234"));
     // A scan that left rtlsdr out does not touch an RTL dongle...
     CHECK(!scanMayProbe(Names({"rtlsdr"}), "rtlsdr", "serial=2"));
     // ...but does ask uhd, so a B200 waits.

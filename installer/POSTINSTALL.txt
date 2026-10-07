@@ -96,14 +96,38 @@ is tried again on the next start.
 
 Receive only: the Pluto is a transceiver, and FoxSDR is a receiver.
 
+RTL_TCP: A REMOTE RTL-SDR, NOTHING INSTALLED
+--------------------------------------------------------
+rtl_tcp is a small server that ships with the RTL-SDR software: it holds
+a dongle on one machine (a Raspberry Pi, another PC) and streams its
+samples over the network. FoxSDR is the client, and nothing needs
+installing on this machine.
+
+Like the Pluto it is an address and not a discovery: the Source dropdown
+always ends with "rtl_tcp server (network)"; choosing it shows an address
+box and an Open key, and NOTHING is contacted until you press Open. Type
+the server's address as host or host:port - the port is 1234 unless the
+server was started with another. The address is remembered.
+
+The samples are 8-bit, as rtl_tcp sends them, so the dynamic range is the
+RTL-SDR's own. The server never confirms a setting, so the panel shows
+what FoxSDR asked for. The connection is kept from Open until you close
+the source or choose another: Stop only pauses, and the server (it serves
+one client at a time) stays busy for other programs until then. If the
+connection is lost the receiver stops with the reason; nothing reconnects
+by itself, so open it again when the server is back.
+
 BIAS TEES
 --------------------------------------------------------
 The radios with a bias tee (HackRF, Airspy R2 / Mini, HydraSDR RFOne,
 an Airspy HF+ whose board has one, an RSP that has one, a Mirics receiver and an
-RX888) get a "Bias tee" checkbox under the gain sliders.
+RX888, and a remote RTL-SDR through rtl_tcp - where the server never says
+whether its dongle has one) get a "Bias tee" checkbox under the gain sliders.
 It is off every time FoxSDR opens a radio and off again when it closes
 one, so nothing can leave power on your antenna port unannounced; the
-setting is remembered and put back after the open. Leave it off unless
+setting is remembered and put back after the open (for an rtl_tcp server
+an "on" is not remembered - there is no serial number to key it by - so it
+starts off on every open). Leave it off unless
 you have an amplifier at the mast that needs it - equipment that is not
 expecting power on the connector can be damaged by it.
 

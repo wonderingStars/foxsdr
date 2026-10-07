@@ -339,6 +339,11 @@ std::vector<DiscoveredWait> discoverBoundedWaits(const fs::path& srcRoot) {
 //                    + usb kAbortDrainWait 250                         = 2750 ms
 //   PlutoSource      kReaderJoinWait 2500 (the bounded join in
 //                    stopStreamingLocked), and NOTHING ELSE               = 2500 ms
+//   RtlTcpSource     kReaderJoinWait 2500 (the same bounded join, in
+//                    closeDevice() - stop() is a flag flip and waits for
+//                    nothing), and NOTHING ELSE: the close shutdown()s the
+//                    socket first, so the join normally takes milliseconds;
+//                    2500 is the bound if the reader is stranded         = 2500 ms
 //
 // THE PLUTO'S COLUMN IS THE ONE THAT WAS DECIDED RATHER THAN MEASURED, and
 // what was decided is worth recording because it is the only place in this
@@ -892,13 +897,16 @@ const KnownWait kKnownWaits[] = {
     // frees the buffer when the connection drops either way - so the rows
     // stay zero and kShutdownBoundedWaitsMs stays 7000.
     {"src/source/iiod_client.hpp", "kConnectWait", 0,
-     "the bound on connecting to a Pluto's iiod daemon. Spent by open() and by the second "
-     "connection start() makes for the samples - both on the OPEN path. A shutdown connects "
-     "to nothing"},
+     "the bound on connecting to a Pluto's iiod daemon - and, through the same socket code, to "
+     "an rtl_tcp server (RtlTcpSource uses it too). Spent by open() - and by the second "
+     "connection a Pluto's start() makes for the samples - all on the OPEN path, on the thread "
+     "that called open(). An rtl_tcp start() makes no connection at all (the socket lives from "
+     "open() to closeDevice()), and a shutdown connects to nothing"},
     {"src/source/iiod_client.hpp", "kReplyWait", 0,
-     "the socket's send and receive bound once connected. NONE of these is on the teardown "
-     "path any more: stopStreamingLocked sends nothing after the join, and the reader's own "
-     "receives are spent on the reader's thread, which the join below already covers"},
+     "the socket's send and receive bound once connected (the Pluto's and the rtl_tcp "
+     "client's). NONE of these is on the teardown path any more: stopStreamingLocked sends "
+     "nothing after the join, and the reader's own receives are spent on the reader's thread, "
+     "which the join below already covers"},
     {"src/source/pluto_source.hpp", "kReaderJoinWait", 0,
      "the bounded join in PlutoSource::stopStreamingLocked(), and the WHOLE of the 2500 ms "
      "Pluto column. Longer than iiod::kReplyWait deliberately - the reader's longest "
@@ -913,6 +921,28 @@ const KnownWait kKnownWaits[] = {
     {"src/source/pluto_source.hpp", "kStreamHealthWindow", 0,
      "not a wait at all - the Pluto reader's tally window before it writes its stream-health "
      "line, matching SoapySource's; nothing sleeps or blocks on it"},
+
+    // THE RTL_TCP CLIENT (0.99.70), A SECOND NETWORK DRIVER BUILT THE PLUTO'S WAY: one reader
+    // thread on a socket, a bounded join, and no command sent on the way out. The reader and the
+    // socket live from open() to closeDevice(); stop() only stops KEEPING samples (the reader
+    // goes on draining the socket) and returns at once, so the join is on the CLOSE path alone,
+    // where closeDevice() first shutdown()s the socket so a parked reader wakes. Its connect and
+    // socket bounds are iiod::kConnectWait and iiod::kReplyWait above, so its whole column is
+    // the one join - 2500 ms, spent INSTEAD OF the Soapy pair's 3000, never as well as it.
+    {"src/source/rtl_tcp_source.hpp", "kReaderJoinWait", 0,
+     "the bounded join in RtlTcpSource::stopReaderLocked() (closeDevice's path; stop() joins "
+     "nothing), and the WHOLE of the 2500 ms rtl_tcp column - the Pluto's argument word for "
+     "word: longer than iiod::kReplyWait, because the reader's longest legitimate stall is "
+     "one socket receive. It is reached only if the reader ignores the shutdown() the close "
+     "sends first - normally the join is instant. Zero because an rtl_tcp teardown REPLACES "
+     "the Soapy one rather than adding to it (one source is installed at a time)"},
+    {"src/source/rtl_tcp_source.hpp", "kReadWait", 0,
+     "RtlTcpSource::read()'s wait for samples, spent on the pipeline's source thread, which "
+     "the teardown already waits for through kSourceJoinWait's 3000 ms - never on the GUI "
+     "teardown thread"},
+    {"src/source/rtl_tcp_source.hpp", "kStreamHealthWindow", 0,
+     "not a wait at all - the rtl_tcp reader's tally window before it writes its "
+     "stream-health line, matching the other drivers'; nothing sleeps or blocks on it"},
 
     // THE SOUND CARD SOURCE (0.99.36). Nothing it does on stop() waits: stop()
     // sets a flag the read loop tests every 2 ms, and the stream itself is

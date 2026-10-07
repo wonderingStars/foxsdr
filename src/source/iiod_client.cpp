@@ -6,12 +6,14 @@
 #include "source/iiod_client.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cerrno>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <utility>
 
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -83,7 +85,35 @@ bool ensureWinsock() { return true; }
 
 int lastSocketError() { return errno; }
 bool wouldBlock(int err) { return err == EINPROGRESS || err == EAGAIN || err == EWOULDBLOCK; }
-bool isTimeout(int err) { return err == EAGAIN || err == EWOULDBLOCK || err == EINTR; }
+// EINTR IS NOT A TIMEOUT: a signal landed on the thread inside a send or a
+// receive, and the socket has said nothing about the peer. Counting it as one
+// turned a healthy rtl_tcp stream into a latched "receive timed out" fault on
+// whatever signal the process happened to take. The callers retry it (see
+// interrupted()) against what is left of their own bound.
+bool isTimeout(int err) { return err == EAGAIN || err == EWOULDBLOCK; }
+bool interrupted(int err) { return err == EINTR; }
+
+// Re-arms ONE of the socket's two timeouts (SO_RCVTIMEO / SO_SNDTIMEO) to what
+// is left of `deadline`, so a retry after EINTR cannot stretch the bound a
+// call was given: the kernel restarts the full timeout on every retry. False
+// when the deadline has already passed - the caller then reports a timeout.
+bool rearmTimeout(std::intptr_t s, int option, std::chrono::steady_clock::time_point deadline) {
+    const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(
+        deadline - std::chrono::steady_clock::now());
+    if (left.count() <= 0) { return false; }
+    timeval tv{};
+    tv.tv_sec = static_cast<long>(left.count() / 1000);
+    tv.tv_usec = static_cast<long>((left.count() % 1000) * 1000);
+    ::setsockopt(static_cast<int>(s), SOL_SOCKET, option, &tv, sizeof(tv));
+    return true;
+}
+
+void restoreTimeout(std::intptr_t s, int option, std::chrono::milliseconds w) {
+    timeval tv{};
+    tv.tv_sec = static_cast<long>(w.count() / 1000);
+    tv.tv_usec = static_cast<long>((w.count() % 1000) * 1000);
+    ::setsockopt(static_cast<int>(s), SOL_SOCKET, option, &tv, sizeof(tv));
+}
 
 void setNonBlocking(std::intptr_t s, bool on) {
     const int fd = static_cast<int>(s);
@@ -111,12 +141,16 @@ std::string socketErrorText(const char* what, int err) {
 // The real transport. Everything it can do is send, receive and close, and
 // every one of those is bounded by the socket's own timeouts - see
 // setIoTimeouts above.
+//
+// THE TWO DIRECTIONS KEEP THEIR OWN ERROR TEXT. The Pluto's client is one
+// serial conversation, but the rtl_tcp source sends a command from the GUI
+// thread while its reader thread is parked in a receive on the same socket,
+// and one std::string written by both would be a data race. lastError()
+// answers with whichever direction failed last.
 class TcpTransport : public Transport {
 public:
-    TcpTransport(std::intptr_t sock, std::chrono::milliseconds ioWait)
-        : sock_(sock), ioWait_(ioWait) {
-        (void)ioWait_;
-    }
+    TcpTransport(std::intptr_t sock, std::chrono::milliseconds ioWait, std::string peerName)
+        : sock_(sock), ioWait_(ioWait), peer_(std::move(peerName)) {}
     ~TcpTransport() override { close(); }
 
     bool sendAll(const void* data, std::size_t n) override {
@@ -124,21 +158,41 @@ public:
         std::size_t sent = 0;
         while (sent < n) {
             if (sock_ == kInvalidSock) {
-                error_ = "the connection is closed";
+                sendError_ = "the connection is closed";
+                lastIsRecv_.store(false, std::memory_order_release);
                 return false;
             }
+            int got = 0;
+            int err = 0;
 #if defined(_WIN32)
-            const int got = ::send(static_cast<SOCKET>(sock_), p + sent,
-                                   static_cast<int>(n - sent), 0);
+            got = ::send(static_cast<SOCKET>(sock_), p + sent, static_cast<int>(n - sent), 0);
+            if (got <= 0) { err = lastSocketError(); }
 #else
-            const int got = static_cast<int>(
-                ::send(static_cast<int>(sock_), p + sent, n - sent, MSG_NOSIGNAL));
+            // A SIGNAL ON THIS THREAD (EINTR) IS RETRIED against what is left
+            // of this send's own bound - never counted as the peer being slow.
+            const auto deadline = std::chrono::steady_clock::now() + ioWait_;
+            bool rearmed = false;
+            for (;;) {
+                got = static_cast<int>(
+                    ::send(static_cast<int>(sock_), p + sent, n - sent, MSG_NOSIGNAL));
+                if (got > 0) { break; }
+                err = lastSocketError();
+                if (got < 0 && interrupted(err)) {
+                    if (rearmTimeout(sock_, SO_SNDTIMEO, deadline)) {
+                        rearmed = true;
+                        continue;
+                    }
+                    err = EAGAIN;  // the bound is spent: a timeout
+                }
+                break;
+            }
+            if (rearmed) { restoreTimeout(sock_, SO_SNDTIMEO, ioWait_); }
 #endif
             if (got <= 0) {
-                const int err = lastSocketError();
-                error_ = isTimeout(err)
-                             ? "the Pluto stopped accepting commands (send timed out)"
-                             : socketErrorText("send", err);
+                sendError_ = isTimeout(err)
+                                 ? peer_ + " stopped accepting commands (send timed out)"
+                                 : socketErrorText("send", err);
+                lastIsRecv_.store(false, std::memory_order_release);
                 return false;
             }
             sent += static_cast<std::size_t>(got);
@@ -150,33 +204,82 @@ public:
         char* p = static_cast<char*>(data);
         std::size_t got = 0;
         while (got < n) {
-            if (sock_ == kInvalidSock) {
-                error_ = "the connection is closed";
-                return false;
-            }
-#if defined(_WIN32)
-            const int r =
-                ::recv(static_cast<SOCKET>(sock_), p + got, static_cast<int>(n - got), 0);
-#else
-            const int r = static_cast<int>(::recv(static_cast<int>(sock_), p + got, n - got, 0));
-#endif
-            if (r == 0) {
-                // AN ORDERLY CLOSE IS STILL A LOST REPLY. The daemon hangs up
-                // when its own parser gives up on us, and a client that read
-                // that as "no more data for now" would wait for a sample
-                // buffer that can never arrive.
-                error_ = "the Pluto closed the connection";
-                return false;
-            }
-            if (r < 0) {
-                const int err = lastSocketError();
-                error_ = isTimeout(err) ? "the Pluto stopped answering (receive timed out)"
-                                        : socketErrorText("receive", err);
-                return false;
-            }
-            got += static_cast<std::size_t>(r);
+            std::size_t part = 0;
+            if (!recvSome(p + got, n - got, part)) { return false; }
+            got += part;
         }
         return true;
+    }
+
+    // ONE recv(), the single place a receive happens: recvAll is a loop over
+    // it. Never returns true with nothing delivered - a zero is an orderly
+    // close, which is a failure.
+    bool recvSome(void* data, std::size_t max, std::size_t& got) override {
+        got = 0;
+        if (max == 0) { return true; }
+        if (sock_ == kInvalidSock) {
+            recvError_ = "the connection is closed";
+            lastIsRecv_.store(true, std::memory_order_release);
+            return false;
+        }
+        int err = 0;
+#if defined(_WIN32)
+        const int r =
+            ::recv(static_cast<SOCKET>(sock_), static_cast<char*>(data), static_cast<int>(max), 0);
+        if (r < 0) { err = lastSocketError(); }
+#else
+        // A SIGNAL ON THIS THREAD (EINTR) IS RETRIED against what is left of
+        // this receive's own bound (SO_RCVTIMEO restarts in full on every
+        // retry, so it is re-armed from a deadline). Before this a signal
+        // turned a healthy stream into a latched "receive timed out".
+        const auto deadline = std::chrono::steady_clock::now() + ioWait_;
+        bool rearmed = false;
+        int r = 0;
+        for (;;) {
+            r = static_cast<int>(::recv(static_cast<int>(sock_), data, max, 0));
+            if (r >= 0) { break; }
+            err = lastSocketError();
+            if (interrupted(err)) {
+                if (rearmTimeout(sock_, SO_RCVTIMEO, deadline)) {
+                    rearmed = true;
+                    continue;
+                }
+                err = EAGAIN;  // the bound is spent: a timeout
+            }
+            break;
+        }
+        if (rearmed) { restoreTimeout(sock_, SO_RCVTIMEO, ioWait_); }
+#endif
+        if (r == 0) {
+            // AN ORDERLY CLOSE IS STILL A LOST REPLY. The daemon hangs up
+            // when its own parser gives up on us, and a client that read
+            // that as "no more data for now" would wait for a sample
+            // buffer that can never arrive.
+            recvError_ = peer_ + " closed the connection";
+            lastIsRecv_.store(true, std::memory_order_release);
+            return false;
+        }
+        if (r < 0) {
+            recvError_ = isTimeout(err) ? peer_ + " stopped answering (receive timed out)"
+                                        : socketErrorText("receive", err);
+            lastIsRecv_.store(true, std::memory_order_release);
+            return false;
+        }
+        got = static_cast<std::size_t>(r);
+        return true;
+    }
+
+    // Wakes a receive parked on another thread WITHOUT closing the descriptor
+    // (closing one under a blocked recv is undefined on POSIX and racy on
+    // Windows). Both directions are shut, so a send in flight fails too.
+    void shutdown() override {
+        const std::intptr_t s = sock_;
+        if (s == kInvalidSock) { return; }
+#if defined(_WIN32)
+        ::shutdown(static_cast<SOCKET>(s), SD_BOTH);
+#else
+        ::shutdown(static_cast<int>(s), SHUT_RDWR);
+#endif
     }
 
     void close() override {
@@ -186,12 +289,18 @@ public:
         }
     }
 
-    const char* lastError() const override { return error_.c_str(); }
+    const char* lastError() const override {
+        return lastIsRecv_.load(std::memory_order_acquire) ? recvError_.c_str()
+                                                           : sendError_.c_str();
+    }
 
 private:
     std::intptr_t sock_ = kInvalidSock;
     std::chrono::milliseconds ioWait_;
-    std::string error_;
+    std::string peer_;
+    std::string sendError_;
+    std::string recvError_;
+    std::atomic<bool> lastIsRecv_{false};
 };
 
 bool identChar(char c) {
@@ -238,7 +347,8 @@ std::string unescape(const std::string& in) {
 
 std::unique_ptr<Transport> connectTcp(const std::string& host, std::uint16_t port,
                                       std::chrono::milliseconds connectWait,
-                                      std::chrono::milliseconds ioWait, std::string& error) {
+                                      std::chrono::milliseconds ioWait, std::string& error,
+                                      const PeerWording& peer) {
     error.clear();
     if (!ensureWinsock()) {
         error = "could not initialise the network stack";
@@ -255,8 +365,8 @@ std::unique_ptr<Transport> connectTcp(const std::string& host, std::uint16_t por
     addrinfo* results = nullptr;
     const int rc = ::getaddrinfo(host.c_str(), portText, &hints, &results);
     if (rc != 0 || results == nullptr) {
-        error = "could not find the host \"" + host +
-                "\" on the network (is the Pluto plugged in, and is this the right address?)";
+        error = "could not find the host \"" + host + "\" on the network (" +
+                peer.unknownHostHint + ")";
         return nullptr;
     }
 
@@ -284,30 +394,55 @@ std::unique_ptr<Transport> connectTcp(const std::string& host, std::uint16_t por
 #endif
         if (ret != 0) {
             const int err = lastSocketError();
-            if (!wouldBlock(err)) {
+#if defined(_WIN32)
+            const bool inProgress = wouldBlock(err);
+#else
+            // EINTR on a non-blocking connect: the attempt carries on
+            // asynchronously (POSIX), so it is waited for like EINPROGRESS.
+            const bool inProgress = wouldBlock(err) || interrupted(err);
+#endif
+            if (!inProgress) {
                 lastFailure = socketErrorText("connect", err);
                 closeSock(s);
                 continue;
             }
-            fd_set wfds;
-            fd_set efds;
-            FD_ZERO(&wfds);
-            FD_ZERO(&efds);
+            // THE WAIT IS BOUNDED BY ONE DEADLINE, and a select that a signal
+            // interrupts (EINTR, POSIX) is run again against what is left of
+            // it: before this it was reported as "did not answer".
+            const auto deadline = std::chrono::steady_clock::now() + connectWait;
+            int sel = 0;
+            for (;;) {
+                fd_set wfds;
+                fd_set efds;
+                FD_ZERO(&wfds);
+                FD_ZERO(&efds);
 #if defined(_WIN32)
-            FD_SET(static_cast<SOCKET>(s), &wfds);
-            FD_SET(static_cast<SOCKET>(s), &efds);
-            const int nfds = 0;
+                FD_SET(static_cast<SOCKET>(s), &wfds);
+                FD_SET(static_cast<SOCKET>(s), &efds);
+                const int nfds = 0;
 #else
-            FD_SET(static_cast<int>(s), &wfds);
-            FD_SET(static_cast<int>(s), &efds);
-            const int nfds = static_cast<int>(s) + 1;
+                FD_SET(static_cast<int>(s), &wfds);
+                FD_SET(static_cast<int>(s), &efds);
+                const int nfds = static_cast<int>(s) + 1;
 #endif
-            timeval tv{};
-            tv.tv_sec = static_cast<long>(connectWait.count() / 1000);
-            tv.tv_usec = static_cast<long>((connectWait.count() % 1000) * 1000);
-            const int sel = ::select(nfds, nullptr, &wfds, &efds, &tv);
+                auto left = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    deadline - std::chrono::steady_clock::now());
+                if (left.count() < 0) { left = std::chrono::milliseconds(0); }
+                timeval tv{};
+                tv.tv_sec = static_cast<long>(left.count() / 1000);
+                tv.tv_usec = static_cast<long>((left.count() % 1000) * 1000);
+                sel = ::select(nfds, nullptr, &wfds, &efds, &tv);
+#if !defined(_WIN32)
+                if (sel < 0 && interrupted(lastSocketError()) &&
+                    std::chrono::steady_clock::now() < deadline) {
+                    continue;
+                }
+#endif
+                break;
+            }
             if (sel <= 0) {
-                lastFailure = "the Pluto did not answer in time (is it at this address?)";
+                lastFailure = std::string(peer.name) +
+                              " did not answer in time (is it at this address?)";
                 closeSock(s);
                 continue;
             }
@@ -342,11 +477,12 @@ std::unique_ptr<Transport> connectTcp(const std::string& host, std::uint16_t por
     ::freeaddrinfo(results);
 
     if (sock == kInvalidSock) {
-        error = "could not reach the Pluto at " + host + ":" + portText +
+        error = std::string("could not reach ") + peer.name + " at " + host + ":" + portText +
                 (lastFailure.empty() ? std::string() : (" - " + lastFailure));
+        if (peer.unreachableHint[0] != '\0') { error += std::string(" (") + peer.unreachableHint + ")"; }
         return nullptr;
     }
-    return std::unique_ptr<Transport>(new TcpTransport(sock, ioWait));
+    return std::unique_ptr<Transport>(new TcpTransport(sock, ioWait, peer.name));
 }
 
 // --- the context ----------------------------------------------------------

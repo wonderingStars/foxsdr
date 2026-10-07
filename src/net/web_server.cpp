@@ -1021,7 +1021,7 @@ let lastDevKey = '', lastAntKey = '', lastGainKey = '';
 // about eight of them would hide the gain and antenna rows for whichever it
 // had missed, and nothing would say why.
 const RADIO_KINDS = ['soapy', 'rtlsdr', 'hackrf', 'airspy', 'airspyhf',
-                     'sdrplay', 'mirisdr', 'rx888', 'pluto', 'hydrasdr'];
+                     'sdrplay', 'mirisdr', 'rx888', 'pluto', 'hydrasdr', 'rtltcp'];
 function isRadioKind(k) { return RADIO_KINDS.indexOf(k) >= 0; }
 
 // HOW A GAIN IS LETTERED, and it is the desktop's own rule

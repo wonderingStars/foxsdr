@@ -478,7 +478,7 @@ test('NEW CLIENT (slow frames, recoveries) -> OLD WORKER: a 204, the failure tok
   const all = tokensOf(vocabularyFromWorker());
   // ONLY WORDS THE OLD WORKER KNOWS (0.99.66). The claim is that the NEW FAMILIES (slow frames,
   // recoveries) cannot push a record past what the old Worker reads; a driver word added AFTER
-  // that Worker was frozen (hydrasdr) is a token it drops, whatever the length of the record, and
+  // that Worker was frozen (hydrasdr, rtltcp) is a token it drops, whatever the length of the record, and
   // counting it here would test the age of the fixture rather than the claim.
   const oldKnown = new Set(tokensOf(vocabularyFromWorker('test-fixtures/worker-health-counts.js')));
   const base = all.filter((t) => !t.startsWith('slow.') && !t.startsWith('recovered.') && oldKnown.has(t));
@@ -514,6 +514,23 @@ test('0.99.66 CLIENT (a hydrasdr token) -> OLD WORKER: a 204, that token dropped
   const now = await post({ ...newRecord(), stalls: 0, health: sent });
   assert.equal(now.usage[0].blobs[12], 'radio_open.rtlsdr=1,radio_open.hydrasdr=1,radio_fail.hydrasdr.bind=2');
   assert.deepEqual(now.usage[0].doubles.slice(5, 9), [2, 2, 0, 0]);   // 2 failures, 2 opens, none delivered, no sound
+});
+
+test('0.99.70 CLIENT (an rtltcp token) -> OLD WORKER: a 204, that token dropped and the rest read; the NEW Worker keeps it', async () => {
+  // THE SAME ORDER OF DEPLOYMENT, for the rtl_tcp network source: telemetry-worker/worker.js must
+  // be deployed BEFORE a client that sends the word "rtltcp" ships, or every open and every failure
+  // of that driver is silently dropped (the record itself is still taken). The Worker that predates
+  // the word is the fixture here.
+  const sent = 'radio_open.rtltcp=1,radio_fail.rtltcp.absent=2,radio_open.rtlsdr=1';
+  const old = await postTo(healthCountsWorker, { ...newRecord(), stalls: 0, health: sent });
+  assert.equal(old.status, 204);
+  assert.equal(old.usage[0].blobs[12], 'radio_open.rtlsdr=1');
+  const now = await post({ ...newRecord(), stalls: 0, health: sent });
+  assert.equal(now.usage[0].blobs[12], 'radio_open.rtlsdr=1,radio_open.rtltcp=1,radio_fail.rtltcp.absent=2');
+  assert.deepEqual(now.usage[0].doubles.slice(5, 9), [2, 2, 0, 0]);   // 2 failures, 2 opens, none delivered, no sound
+  // ...and the word is only a driver word: it is not a way to write anything else.
+  const bad = await post({ ...newRecord(), stalls: 0, health: 'radio_open.rtltcp.extra=1,radio_open.rtl_tcp=1' });
+  assert.equal(bad.usage[0].blobs[12], '');
 });
 
 test('0.99.64 CLIENT (failure counts only) -> NEW WORKER: the row the 0.99.64 Worker wrote, and zeros in the new columns', async () => {

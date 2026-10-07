@@ -172,7 +172,8 @@ std::vector<AppWindow::PatchDeviceChoice> AppWindow::patchDeviceChoices() const 
     for (const cascade::source::NativeDeviceInfo& d : nativeDevices_) {
         // A Pluto needs its address typed in the Source panel; the patch has
         // no field for it, so it is not offered here rather than failing.
-        if (d.driver == "pluto") { continue; }
+        // The rtl_tcp server's row is an address too, and the same.
+        if (d.driver == "pluto" || d.driver == "rtltcp") { continue; }
         out.push_back({pc::makeDeviceKey(d.driver, d.args), d.label});
     }
     for (const cascade::source::SoapyDeviceInfo& d : soapyDevices_) {

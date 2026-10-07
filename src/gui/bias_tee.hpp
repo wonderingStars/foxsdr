@@ -21,6 +21,7 @@
 #include "source/device_source.hpp"
 #include "source/hackrf_source.hpp"
 #include "source/mirisdr_source.hpp"
+#include "source/rtl_tcp_source.hpp"
 #include "source/rtlsdr_source.hpp"
 #include "source/rx888_source.hpp"
 #include "source/sdrplay_source.hpp"
@@ -81,6 +82,9 @@ bool withBiasTee(cascade::source::DeviceSource* dev, Fn&& fn) {
     if (auto* m = dynamic_cast<cascade::source::MiriSdrSource*>(dev)) { return fn(*m); }
     if (auto* r = dynamic_cast<cascade::source::Rx888Source*>(dev)) { return fn(*r); }
     if (auto* rtl = dynamic_cast<cascade::source::RtlSdrSource*>(dev)) { return fn(*rtl); }
+    // A remote RTL-SDR (rtl_tcp command 0x0e). Its "on" is never remembered:
+    // the args are host:port, which names no radio (biasTeeArgsNameARadio).
+    if (auto* tcp = dynamic_cast<cascade::source::RtlTcpSource*>(dev)) { return fn(*tcp); }
     return false;
 }
 

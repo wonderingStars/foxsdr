@@ -627,6 +627,28 @@ void TunerR82xx::aggregateRangeTenthDb(int& loOut, int& hiOut) {
     }
 }
 
+std::vector<int> TunerR82xx::aggregateLadderTenthDb() {
+    // The same walk as aggregateRangeTenthDb and setAggregateGainTenthDb:
+    // LNA up one, mixer up one, and so on, recording the running total after
+    // every step. Stops at the peak, so the mixer's last (negative) step is
+    // not a rung.
+    int lo = 0;
+    int hi = 0;
+    aggregateRangeTenthDb(lo, hi);
+    std::vector<int> out{0};
+    int total = 0;
+    int lna = 0;
+    int mix = 0;
+    for (int i = 0; i < 15 && total < hi; ++i) {
+        total += kLnaSteps[++lna];
+        if (total > out.back()) { out.push_back(total); }
+        if (total >= hi) { break; }
+        total += kMixerSteps[++mix];
+        if (total > out.back()) { out.push_back(total); }
+    }
+    return out;
+}
+
 bool TunerR82xx::setStageIndex(Stage stage, int index) {
     if (index < 0) { index = 0; }
     if (index > 15) { index = 15; }

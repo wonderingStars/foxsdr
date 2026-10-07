@@ -124,7 +124,11 @@ inline PpmMethod ppmMethodFor(const std::string& kind, bool radioCorrects) {
 // driver's register (Rtl2832u::setFreqCorrectionPpm takes an int, as
 // librtlsdr's does). The typed value is rounded to the nearest whole ppm,
 // halves away from zero (ppmWholeForRadio); the UI says which number went in.
-inline bool ppmRadioTakesWholePpm(const std::string& kind) { return kind == "rtlsdr"; }
+// An rtl_tcp server's dongle is the same chip behind the same call: the
+// protocol's correction command carries a whole number (rtl_tcp_source.hpp).
+inline bool ppmRadioTakesWholePpm(const std::string& kind) {
+    return kind == "rtlsdr" || kind == "rtltcp";
+}
 inline int ppmWholeForRadio(double ppm) {
     return static_cast<int>(std::lround(sanitisePpm(ppm)));
 }

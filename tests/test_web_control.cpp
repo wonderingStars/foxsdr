@@ -271,6 +271,11 @@ void testSourceFields() {
     CHECK(accepts("{\"sourceKind\":\"mirisdr\",\"soapyArgs\":\"index=0\"}"));
     CHECK(accepts("{\"sourceKind\":\"rx888\",\"soapyArgs\":\"serial=SDDC0012\"}"));
     CHECK(accepts("{\"sourceKind\":\"pluto\",\"soapyArgs\":\"uri=ip:192.168.2.1\"}"));
+    // ...and "rtltcp" (0.99.70) on the same terms as the Pluto: its args are a
+    // NETWORK ADDRESS too, admitted here and matched by the application
+    // against the one enumerated row (selecting that row opens nothing).
+    CHECK(accepts("{\"sourceKind\":\"rtltcp\",\"soapyArgs\":\"rtltcp=127.0.0.1:1234\"}"));
+    CHECK(!accepts("{\"sourceKind\":\"rtl_tcp\"}"));
     // Everything outside the eleven is still refused, and the error says so.
     // The three near-misses are the SoapySDR module names for three of the
     // native drivers, which are NOT source kinds here.

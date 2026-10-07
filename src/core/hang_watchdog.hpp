@@ -249,7 +249,8 @@ public:
     // teardown spends ONE of these columns and never two: SoapySDR 3000 ms,
     // a native RTL-SDR 2000, a native HackRF 1350, a native Airspy R2/Mini
     // 1750, a native Airspy HF+ 1750, an SDRplay RSP 250, a native Mirics
-    // 1750, a native RX888 2750 and an ADALM-Pluto 2500. The worst is the one
+    // 1750, a native RX888 2750, an ADALM-Pluto 2500 and an rtl_tcp client
+    // 2500 (0.99.70: the same one bounded join). The worst is the one
     // charged above; the others are covered by it rather than added to it.
     // Re-derived when the Airspys were wired in (0.92.0) and again when the
     // last four were (0.93.0), and unchanged both times: every native column

@@ -84,6 +84,14 @@ std::vector<cascade::source::NativeDeviceInfo> fakeScan() {
     pluto.label = "ADALM-Pluto (network)";
     pluto.args = "uri=ip:192.168.2.1";
     out.push_back(pluto);
+    // ...and so is the rtl_tcp server row (0.99.70), which follows it: an
+    // address to type, never a radio that was found. With no dongle plugged
+    // in, the "No radio hardware found" warning must still show beside BOTH.
+    cascade::source::NativeDeviceInfo rtlTcp;
+    rtlTcp.driver = "rtltcp";
+    rtlTcp.label = "rtl_tcp server (network)";
+    rtlTcp.args = "rtltcp=127.0.0.1:1234";
+    out.push_back(rtlTcp);
     return out;
 }
 

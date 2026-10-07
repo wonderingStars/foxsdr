@@ -152,6 +152,11 @@ void testValuesAndKeys() {
     CHECK(cc::ppmWholeForRadio(-0.4) == 0);
     CHECK(cc::ppmRadioTakesWholePpm("rtlsdr"));
     CHECK(!cc::ppmRadioTakesWholePpm("soapy"));
+    // The rtl_tcp client's correction command carries a whole number too
+    // (0.99.70), the radio's own and applicable like any radio with a crystal.
+    CHECK(cc::ppmRadioTakesWholePpm("rtltcp"));
+    CHECK(cc::ppmKindApplies("rtltcp"));
+    CHECK(cc::ppmMethodFor("rtltcp", true) == PpmMethod::InRadio);
 
     // ONE CRYSTAL, ONE KEY: the native driver's args and SoapySDR's for the
     // same dongle name the same radio.

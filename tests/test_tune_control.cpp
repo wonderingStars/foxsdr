@@ -1187,6 +1187,10 @@ int main() {
         CHECK(isNativeSourceKind("mirisdr"));
         CHECK(isNativeSourceKind("rx888"));
         CHECK(isNativeSourceKind("pluto"));
+        // The rtl_tcp client (0.99.70): our own driver, reached over TCP.
+        CHECK(isNativeSourceKind("rtltcp"));
+        CHECK(!isNativeSourceKind("rtl_tcp"));
+        CHECK(!isNativeSourceKind("rtltcp "));
         // NOT native, and each for its own reason: two are sources that are
         // not radios, one is the vendor path, and the last three are the
         // SoapySDR module names for three of the eight above - which are

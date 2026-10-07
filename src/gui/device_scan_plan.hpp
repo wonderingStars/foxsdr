@@ -118,6 +118,10 @@ inline std::vector<std::string> soapyModulesForFamily(const std::string& kind,
     if (k == "sdrplay" || k == "mirisdr") { return kMirics; }
     if (k == "rx888") { return {"sddc"}; }
     if (k == "pluto") { return {"plutosdr"}; }
+    // THE RTL_TCP CLIENT is a TCP connection to a server somewhere else: no
+    // SoapySDR module's probe can reach it, so it protects no local dongle. A
+    // KNOWN family with nothing to leave out - the scan proceeds beside it.
+    if (k == "rtltcp") { return {}; }
     if (k == "soapy") {
         const std::string d = detail::driverOf(args);
         if (d == "sdrplay" || d == "miri" || d == "mirisdr") { return kMirics; }
@@ -173,7 +177,10 @@ inline bool scanMayProbe(const std::vector<std::string>& scanSkip, const std::st
     const std::string k = detail::lowerAscii(kind);
     // A sound card is reached through the audio stack, never the USB bus a
     // SoapySDR probe walks.
-    if (k == "siggen" || k == "file" || k == "soundcard" || k.empty()) { return false; }
+    // An rtl_tcp source is a TCP connection: no probe walks that either.
+    if (k == "siggen" || k == "file" || k == "soundcard" || k == "rtltcp" || k.empty()) {
+        return false;
+    }
     if (scanSkip.empty()) { return true; }
     bool known = true;
     const std::vector<std::string> mods = soapyModulesForFamily(kind, args, known);

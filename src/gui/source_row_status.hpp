@@ -39,12 +39,17 @@ namespace cascade::gui {
 // The radios the native drivers found. The ADALM-Pluto row is NOT one of them:
 // it is always in the list (a network cannot be walked, so it is a row that
 // asks for an address - see AppWindow::scanNative) and says nothing about what
-// is plugged in. `plutoDriver` is that row's driver key.
+// is plugged in. `plutoDriver` is that row's driver key. The rtl_tcp row is the
+// same kind of row (an address to type, never a radio that was found), so its
+// key is the optional second one; nullptr, the default, excludes nothing more.
 inline std::size_t nativeRadiosFound(const std::vector<cascade::source::NativeDeviceInfo>& native,
-                                     const char* plutoDriver) {
+                                     const char* plutoDriver,
+                                     const char* otherNetworkDriver = nullptr) {
     std::size_t n = 0;
     for (const cascade::source::NativeDeviceInfo& d : native) {
-        if (plutoDriver == nullptr || d.driver != plutoDriver) { ++n; }
+        const bool plutoRow = plutoDriver != nullptr && d.driver == plutoDriver;
+        const bool networkRow = otherNetworkDriver != nullptr && d.driver == otherNetworkDriver;
+        if (!plutoRow && !networkRow) { ++n; }
     }
     return n;
 }

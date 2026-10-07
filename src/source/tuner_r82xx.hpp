@@ -39,6 +39,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include "source/rtl2832u.hpp"
 
@@ -150,6 +151,13 @@ public:
     static void stageRangeTenthDb(Stage stage, int& loOut, int& hiOut);
     // The aggregate's own range, which is the LNA and mixer walked together.
     static void aggregateRangeTenthDb(int& loOut, int& hiOut);
+    // THE LADDER ITSELF: every setting the aggregate walk (setAggregateGainTenthDb)
+    // can land on, in tenths of a dB, ascending, from 0 to the peak
+    // aggregateRangeTenthDb reports. Built by the same walk rather than typed
+    // out, so the tables above stay the one source of these numbers. The
+    // rtl_tcp client (rtl_tcp_source.hpp) uses it to tell its gain slider which
+    // values exist; a remote server rounds to its own tuner's steps anyway.
+    static std::vector<int> aggregateLadderTenthDb();
 
     const std::string& lastError() const { return lastError_; }
 

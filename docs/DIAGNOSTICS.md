@@ -84,7 +84,8 @@ over its own WinUSB
 transport, with no SoapySDR module in the path. Two more radios are driven
 natively without that transport: an SDRplay RSP through the vendor API the
 user installed (`sdrplay`), and an ADALM-Pluto over TCP to the board's own
-daemon (`pluto`). The log lines that produces
+daemon (`pluto`); from 0.99.70 a remote RTL-SDR is reached over TCP through an
+rtl_tcp server (`rtltcp`). The log lines that produces
 are deliberately the same shape as the SoapySDR ones, so one log reads the
 same whichever way a radio was opened - the only difference is that these
 describe code this product can be held responsible for.
@@ -97,15 +98,15 @@ describe code this product can be held responsible for.
 - `source: opened RTL2838UHIDIR (rtlsdr) at 2400000 S/s` - written by the
   application when it installs the radio in the pipeline. The parenthesis is
   the DRIVER KIND (`soapy`, `rtlsdr`, `hackrf`, `airspy`, `airspyhf`,
-  `sdrplay`, `mirisdr`, `rx888`, `pluto`, `aor`, `hydrasdr`): two rows
+  `sdrplay`, `mirisdr`, `rx888`, `pluto`, `aor`, `hydrasdr`, `rtltcp`): two rows
   in the Source dropdown can name one physical radio, and a report has to say
   which of them was taken. Every one is its own key and none is a family
   name - `airspy` and `airspyhf` are different USB ids, different hardware and
   different bands, and `mirisdr` is not `sdrplay` even though an early RSP1 is
   a Mirics device, because one goes through the vendor service and the other
   over the bare MSi2500. Two of the keys name radios that are not on the USB
-  bus at all: `sdrplay` is reached through `sdrplay_api.dll` and `pluto` over
-  the network.
+  bus at all: `sdrplay` is reached through `sdrplay_api.dll`, and `pluto` and
+  `rtltcp` over the network.
 - `source: opening RTL2838UHIDIR natively (was SoapySDR rtlsdr)` - the
   prefer-native rule firing. A config saved before 0.91.0 says "SoapySDR,
   driver=rtlsdr" because that was the only way to reach the dongle; the
@@ -234,6 +235,55 @@ describe code this product can be held responsible for.
     than a model from a table, including whether it is a stock AD9363 or one
     with the AD9364 unlock applied - the tuning range differs by a factor of
     ten between them and nothing else in a report would reveal which.
+  - The rtl_tcp client (`rtltcp`, 0.99.70, `src/source/rtl_tcp_source.cpp`) writes
+    these lines and no others of its own. **None of them carries the server's
+    address** - the Source section shows it, the settings file holds it, and the
+    log does not (`diag_log.cpp` would scrub one anyway, but the driver never
+    writes it, so no rule has to catch it). That includes the lines the
+    application writes that quote the source's own name (`source: the %s
+    refused a tune ...`): the name is `rtl_tcp server: R820T (network)`, the
+    tuner and no address:
+    - `rtltcp: opened R820T on port 1234 - 29 tuner gain steps` - once per
+      connection the user opens: the tuner the server's header named
+      (`R820T`, `R828D`, `E4000`, `FC0012`, `FC0013`, `FC2580` or `unknown
+      tuner`), the port, and how many tuner gain steps the server reported. A
+      report from an rtl_tcp user that has no `rtltcp: opened` line never got as
+      far as a valid header.
+    - A Stop and a Start write nothing: the connection and its reader live from
+      the open to the close, Stop only stops keeping samples and Start only
+      resumes, so there is no reconnect line and nothing is restated. (A server
+      that goes silent or away while the source is stopped still faults it, with
+      the `failed while reading samples` line below, because the reader keeps
+      draining the socket.)
+    - `rtltcp: failed while reading samples: the rtl_tcp server closed the
+      connection` - a warning, and the one that matters: the stream ended
+      mid-session. The sentence after the colon is the transport's own - `closed
+      the connection` (an orderly close: the server was stopped or its dongle
+      was unplugged), `stopped answering (receive timed out)` (the server went
+      silent for two seconds) or `receive failed (network error N)`. The same
+      line with `while sending a command` is a command that could not be sent.
+      The screen shows "the connection to the rtl_tcp server was lost while ..."
+      and nothing reconnects by itself.
+    - `rtltcp: failed while waiting for the sample reader to stop: the reader did
+      not return; FoxSDR must be restarted to use this source again` - the reader
+      thread did not return within its 2500 ms bound and is abandoned (the
+      Pluto's rule).
+    - `source: stream health - reads ..., with samples ..., timeouts ...,
+      overflows ..., errors ..., longest gap ... ms, ... samples in ... s` - the
+      shared stream-health line, from the rtl_tcp reader too. A `reads` count is
+      receives, not buffers: a network hands over however many bytes it likes.
+    Why the wording of a failed open matters: a refused connection, a server that
+    speaks something else, one that never sends a header and a connection that
+    dies mid-stream are different problems, and the open's refusals are worded
+    so the anonymous counts file them apart (`radio_fail.rtltcp.absent` for no
+    server at the address or one that does not speak rtl_tcp,
+    `radio_fail.rtltcp.timeout` for one that did not answer in time). It was run
+    against the real rtl_tcp program on 2026-10-06 (radioconda's rtl_tcp.exe
+    serving an RTL2838 with an R820T on the same computer): the opened line and,
+    when the server was stopped, the failed-while-reading line both appeared in
+    the log. It has not been run against a server on another computer or on
+    Linux: a report from one that carries an `rtltcp:` line is the first
+    evidence there is.
 
 **`cascade.exe --rtlsdr-check`** is the native counterpart of `--soapy-check`
 and answers the question the suite cannot. The register sequences are proven

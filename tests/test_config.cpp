@@ -124,6 +124,7 @@ AppConfig junkConfig() {
     // its default for - a load that forgot this field entirely would leave
     // the caller's value here and pass a test that used "".
     c.plutoUri = "garbage";
+    c.rtlTcpAddr = "garbage";
     c.iqFilePath = "garbage";
     c.centerHz = -1.0;
     c.mode = "garbage";
@@ -313,6 +314,7 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     CHECK(a.ppm == b.ppm);
     CHECK(a.airspy == b.airspy);
     CHECK(a.plutoUri == b.plutoUri);
+    CHECK(a.rtlTcpAddr == b.rtlTcpAddr);
     CHECK(a.iqFilePath == b.iqFilePath);
     CHECK(a.centerHz == b.centerHz);
     CHECK(a.mode == b.mode);
@@ -653,6 +655,7 @@ int main() {
             in.airspy["airspy|index=0"] = sen;
         }
         in.plutoUri = "ip:pluto.local";
+        in.rtlTcpAddr = "192.168.1.20:1235";
         in.iqFilePath = "C:/iq/capture_2msps.wav";
         in.centerHz = 433920000.0;
         in.mode = "USB";
@@ -1137,6 +1140,37 @@ int main() {
         CHECK(ConfigStore::load(path, out, err));
         CHECK(out.plutoUri == "ip:192.168.2.1");
 
+        // THE RTL_TCP SERVER'S ADDRESS, the Pluto's rule for the same reasons:
+        // typed, kept whether or not the server answered, and an empty or
+        // missing one falls back to the server's own default (this machine,
+        // port 1234) rather than coming up as a blank box.
+        out = junkConfig();
+        CHECK(writeText(path, "{\"schemaVersion\":1,\"rtlTcpAddr\":\"10.0.0.7:1235\"}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.rtlTcpAddr == "10.0.0.7:1235");
+        out = junkConfig();
+        CHECK(writeText(path, "{\"schemaVersion\":1}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.rtlTcpAddr == "127.0.0.1:1234");
+        out = junkConfig();
+        CHECK(writeText(path, "{\"schemaVersion\":1,\"rtlTcpAddr\":\"\"}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.rtlTcpAddr == "127.0.0.1:1234");
+        // The kind is a whitelisted source, args are a network address like
+        // the Pluto's, and a near miss resets rather than landing on another.
+        CHECK(writeText(path,
+                        "{\"schemaVersion\":1,\"sourceKind\":\"rtltcp\","
+                        "\"nativeArgs\":\"rtltcp=192.168.1.20:1234\"}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.sourceKind == "rtltcp");
+        CHECK(out.nativeArgs == "rtltcp=192.168.1.20:1234");
+        for (const char* nearMiss : {"rtl_tcp", "rtl-tcp", "RTLTCP", "rtltcp "}) {
+            CHECK(writeText(path, std::string("{\"schemaVersion\":1,\"sourceKind\":\"") + nearMiss +
+                                      "\"}\n"));
+            CHECK(ConfigStore::load(path, out, err));
+            CHECK(out.sourceKind == "siggen");
+        }
+
         // THE BIAS TEE SURVIVES A RESTART, and it is the one persisted
         // setting in this file that puts POWER on a connector rather than
         // changing what is heard. It is saved because a mast-head amplifier
@@ -1423,6 +1457,29 @@ int main() {
         CHECK(next.nativeArgs == "uri=ip:192.168.2.1");
         CHECK(next.plutoUri == "ip:192.168.2.1");
         CHECK(next.sampleRateHz == 4000000.0);
+
+        // A SAVED RTL_TCP SERVER, the same sequence: a server on a network is
+        // as likely as a Pluto to be absent on any given launch, and its args
+        // are an address too.
+        const cascade::gui::RememberedSource tcpKeep =
+            cascade::gui::rememberedSourceAfterFailedOpen("rtltcp", "", "rtltcp=192.168.1.20:1234",
+                                                          "", 2048000.0);
+        CHECK(tcpKeep.valid());
+        AppConfig savedTcp;
+        savedTcp.schemaVersion = 1;
+        const cascade::gui::SavedSource srcT =
+            cascade::gui::sourceToSave("siggen", "", "", "", 2000000.0, tcpKeep);
+        savedTcp.sourceKind = srcT.kind;
+        savedTcp.soapyArgs = srcT.soapyArgs;
+        savedTcp.nativeArgs = srcT.nativeArgs;
+        savedTcp.sampleRateHz = srcT.sampleRateHz;
+        savedTcp.rtlTcpAddr = "192.168.1.20:1234";
+        CHECK(ConfigStore::save(path, savedTcp, err));
+        CHECK(ConfigStore::load(path, next, err));
+        CHECK(next.sourceKind == "rtltcp");
+        CHECK(next.nativeArgs == "rtltcp=192.168.1.20:1234");
+        CHECK(next.rtlTcpAddr == "192.168.1.20:1234");
+        CHECK(next.sampleRateHz == 2048000.0);
 
         // A SAVED SOAPY DEVICE, same sequence, and the kind that must survive
         // is "soapy" rather than a native driver key.
@@ -1722,6 +1779,12 @@ int main() {
                 {"transmitToneHz", [](AppConfig& c) { c.transmitToneHz = 1750.0; }},
                 {"transmitMonitor", [](AppConfig& c) { c.transmitMonitor = true; }},
                 {"transmitArgs", [](AppConfig& c) { c.transmitArgs = "driver=plutosdr"; }},
+                // The rtl_tcp server's address (0.99.70): typed into the Source
+                // section's box, which calls no save of its own - so a field
+                // missing here is an address that reaches the file only by
+                // accident (the Pluto's own plutoUri is the other half).
+                {"plutoUri", [](AppConfig& c) { c.plutoUri = "ip:10.1.1.1"; }},
+                {"rtlTcpAddr", [](AppConfig& c) { c.rtlTcpAddr = "10.1.1.2:1235"; }},
                 {"railBank", [](AppConfig& c) { c.railBank = 4; }},
                 // The main view (0.99.40): switched by a key that saves
                 // nothing itself.

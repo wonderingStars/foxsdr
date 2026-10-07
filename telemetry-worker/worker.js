@@ -109,9 +109,9 @@ function exitSplit(body) {
 // BEGIN HEALTH VOCABULARY
 const HEALTH_EVENTS = [
   { "name": "scan_none", "qualifiers": [] },
-  { "name": "radio_open", "qualifiers": [["rtlsdr", "hackrf", "airspy", "airspyhf", "sdrplay", "mirisdr", "rx888", "pluto", "aor", "hydrasdr", "soapy", "soundcard", "other"]] },
-  { "name": "radio_data", "qualifiers": [["rtlsdr", "hackrf", "airspy", "airspyhf", "sdrplay", "mirisdr", "rx888", "pluto", "aor", "hydrasdr", "soapy", "soundcard", "other"]] },
-  { "name": "radio_fail", "qualifiers": [["rtlsdr", "hackrf", "airspy", "airspyhf", "sdrplay", "mirisdr", "rx888", "pluto", "aor", "hydrasdr", "soapy", "soundcard", "other"], ["busy", "driver", "bind", "absent", "timeout", "vendor", "rate", "other"]] },
+  { "name": "radio_open", "qualifiers": [["rtlsdr", "hackrf", "airspy", "airspyhf", "sdrplay", "mirisdr", "rx888", "pluto", "aor", "hydrasdr", "rtltcp", "soapy", "soundcard", "other"]] },
+  { "name": "radio_data", "qualifiers": [["rtlsdr", "hackrf", "airspy", "airspyhf", "sdrplay", "mirisdr", "rx888", "pluto", "aor", "hydrasdr", "rtltcp", "soapy", "soundcard", "other"]] },
+  { "name": "radio_fail", "qualifiers": [["rtlsdr", "hackrf", "airspy", "airspyhf", "sdrplay", "mirisdr", "rx888", "pluto", "aor", "hydrasdr", "rtltcp", "soapy", "soundcard", "other"], ["busy", "driver", "bind", "absent", "timeout", "vendor", "rate", "other"]] },
   { "name": "sound_ok", "qualifiers": [["mme", "dsound", "wasapi", "wdmks", "asio", "alsa", "jack", "oss", "coreaudio", "none", "other"]] },
   { "name": "sound_fail", "qualifiers": [["mme", "dsound", "wasapi", "wdmks", "asio", "alsa", "jack", "oss", "coreaudio", "none", "other"], ["nodevice", "busy", "format", "host", "other"]] },
   { "name": "upd_check", "qualifiers": [] },

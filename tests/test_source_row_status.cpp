@@ -40,6 +40,14 @@ int main() {
     CHECK(nativeRadiosFound({row("rtlsdr", "NESDR SMArt v5"), row("pluto", "ADALM-Pluto")},
                             "pluto") == 1u);
     CHECK(nativeRadiosFound({row("rtlsdr", "a"), row("hackrf", "b")}, "pluto") == 2u);
+    // ...and neither is the rtl_tcp server's (0.99.70), when its key is passed
+    // as the second address row. Passing only the Pluto's key still counts it,
+    // which is what the default of "no second row" has always meant.
+    CHECK(nativeRadiosFound({row("pluto", "ADALM-Pluto"), row("rtltcp", "rtl_tcp server")}, "pluto",
+                            "rtltcp") == 0u);
+    CHECK(nativeRadiosFound({row("rtlsdr", "a"), row("pluto", "p"), row("rtltcp", "r")}, "pluto",
+                            "rtltcp") == 1u);
+    CHECK(nativeRadiosFound({row("rtltcp", "rtl_tcp server")}, "pluto") == 1u);
 
     // --- "No radio hardware found" -------------------------------------------
     // The tester's case: SoapySDR found nothing, the native driver found one.

@@ -341,6 +341,7 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
         }
     }
     getString(j, "plutoUri", out.plutoUri);
+    getString(j, "rtlTcpAddr", out.rtlTcpAddr);
     getString(j, "soapyAntenna", out.soapyAntenna);
     getString(j, "iqFilePath", out.iqFilePath);
     if (const auto sc = j.find("soundCard"); sc != j.end() && sc->is_object()) {
@@ -848,7 +849,8 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
         out.sourceKind != "airspyhf" && out.sourceKind != "sdrplay" &&
         out.sourceKind != "mirisdr" && out.sourceKind != "rx888" &&
         out.sourceKind != "pluto" && out.sourceKind != "soundcard" &&
-        out.sourceKind != "aor" && out.sourceKind != "hydrasdr") {
+        out.sourceKind != "aor" && out.sourceKind != "hydrasdr" &&
+        out.sourceKind != "rtltcp") {
         out.sourceKind = defaults.sourceKind;
     }
     // The sound card's settings, each back to its default on its own when
@@ -868,6 +870,10 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     // serves out of the box - the same answer a config that has never seen
     // the key gets.
     if (out.plutoUri.empty()) { out.plutoUri = defaults.plutoUri; }
+    // The rtl_tcp server's address, the same rule: a cleared box is a field
+    // that was emptied, not a choice, and falls back to the server's own
+    // default (this machine, port 1234).
+    if (out.rtlTcpAddr.empty()) { out.rtlTcpAddr = defaults.rtlTcpAddr; }
     // Map window geometry is validated as ONE rectangle: any bad component
     // discards all four, so the window falls back to the size derived from the
     // monitor rather than to a rectangle half of which somebody hand-edited.
@@ -1074,6 +1080,7 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
         j["airspy"] = std::move(as);
     }
     j["plutoUri"] = cfg.plutoUri;
+    j["rtlTcpAddr"] = cfg.rtlTcpAddr;
     j["soapyAntenna"] = cfg.soapyAntenna;
     j["iqFilePath"] = cfg.iqFilePath;
     j["soundCard"] = {{"device", cfg.soundCard.device},     {"hostApi", cfg.soundCard.hostApi},

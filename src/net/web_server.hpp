@@ -182,7 +182,7 @@ struct RadioStatus {
     };
 
     // "siggen"|"file"|"soapy"|"rtlsdr"|"hackrf"|"airspy"|"airspyhf"|
-    // "sdrplay"|"mirisdr"|"rx888"|"pluto"|"hydrasdr"
+    // "sdrplay"|"mirisdr"|"rx888"|"pluto"|"hydrasdr"|"rtltcp"
     std::string sourceKind = "siggen";
     std::string soapyArgs;               // args of the open device, if any
     std::string antenna;                 // RX port the DRIVER reports

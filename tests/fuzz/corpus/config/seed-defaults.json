@@ -78,6 +78,7 @@
     "railBank": 0,
     "railCollapsed": false,
     "readingsScale": 1.0,
+    "rtlTcpAddr": "",
     "rxLatDeg": 0.0,
     "rxLonDeg": 0.0,
     "rxPositionSet": false,

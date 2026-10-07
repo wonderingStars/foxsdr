@@ -8,8 +8,10 @@ drivers for the RTL-SDR, the HackRF, the Airspy R2/Mini, the Airspy HF+, the
 HydraSDR RFOne (written from the vendor's published sources, not yet tested on
 hardware), the SDRplay RSPs, the Mirics MSi2500, the RX888 mk2 and the ADALM-Pluto — which it
 also TRANSMITS through — plus AOR digital-I/Q receivers (written from AOR's
-documentation, not yet tested on hardware), and hardware support for any
-other radio SoapySDR can reach.
+documentation, not yet tested on hardware), a client for the rtl_tcp network
+server (a remote RTL-SDR; verified against the real rtl_tcp server with an
+RTL-SDR on 2026-10-06),
+and hardware support for any other radio SoapySDR can reach.
 
 > ### Linux status
 >
@@ -61,7 +63,7 @@ Internal project/binary name: `cascade`.
 
 ## Where it is now
 
-The current release is **0.99.69** (October 2026), in open beta and free for
+The current release is **0.99.70** (October 2026), in open beta and free for
 noncommercial use, with its decoders and instruments delivered as plugins from
 a catalogue. These are screenshots of an earlier shipping build.
 
@@ -97,8 +99,10 @@ are still moving. What is in the current build:
   driven natively too, through the SDRplay API the user installs, because
   SDRplay publish no device protocol and an RSP cannot be reached any other
   way. An **ADALM-Pluto** is driven natively over the network, with no libiio
-  and no vendor module at all - it is the one radio whose address is typed
-  rather than discovered, because a network cannot be walked. Anything else -
+  and no vendor module at all - its address is typed rather than discovered,
+  because a network cannot be walked. A remote RTL-SDR is reached the same way
+  through an **rtl_tcp** server (see *The rtl_tcp network source* below).
+  Anything else -
   a USRP, a LimeSDR - through SoapySDR as before.
   Antenna, sample-rate and per-stage gain selection on all of them,
   with each gain slider spanning what that stage will actually accept and
@@ -143,7 +147,8 @@ are still moving. What is in the current build:
   its own crystal is sent the value - the native RTL-SDR driver (whole ppm
   only: the typed value is rounded to the nearest whole ppm, halves away from
   zero, and the Source section says which number went in; its sample rate is
-  corrected too) and any SoapySDR radio whose driver reports a frequency
+  corrected too), the rtl_tcp client (the same whole ppm, sent to the remote
+  dongle) and any SoapySDR radio whose driver reports a frequency
   correction. Every other radio - HackRF, Airspy, RX888, Pluto, AOR, SDRplay
   for now, and SoapySDR drivers without one - is corrected by retuning: it is
   asked for the frequency that lands it on the one you chose, so the centre
@@ -764,6 +769,96 @@ description came from libiio's daemon under its LGPL-2.1 licence; the notice is
 in `installer/THIRD-PARTY-LICENSES.txt`, and nothing of libiio is linked or
 shipped.
 
+## The rtl_tcp network source
+
+**rtl_tcp** is the small server that ships with the RTL-SDR software: it holds
+a dongle on one machine and streams its samples over TCP to a client on
+another, which is how an RTL-SDR on a Raspberry Pi in the loft, or on another
+PC, is listened to from here. Several other programs imitate its protocol
+(SDR++ Server has an rtl_tcp-compatible mode), so "an rtl_tcp server" is
+whatever answers that protocol at an address. FoxSDR connects to one with its
+own client - nothing is installed on this machine, and no SoapySDR module is
+involved.
+
+**To use it,** choose **rtl_tcp server (network)** at the end of the Source
+dropdown, type the server's address into the box - `host` or `host:port`, and
+the port is 1234 unless the server was started with another (`127.0.0.1:1234`
+is what the box holds until you change it) - and press **Open**. Like the
+Pluto's row it is an address and not a discovery: selecting the row contacts
+nothing, a failed Open leaves whatever was running still running with the reason
+beneath the box, and what you typed is remembered for next time whether or not
+the server answered. A bracketed IPv6 address with a port, `[fe80::1]:1234`, is
+accepted.
+
+**What it does.** The sample rate menu is the RTL-SDR's own. Gain for an R820T
+or R828D tuner is in real decibels on the same ladder as the native RTL-SDR
+driver; for any other tuner (an E4000, say) the server publishes only how many
+gain steps it has, so the slider shows bare step numbers and no decibel figure
+is invented. Automatic gain, the bias tee switch and the crystal correction
+(whole ppm) are sent to the remote dongle. **The server never acknowledges a
+command**, so what the panel shows for a gain, rate or bias tee is what FoxSDR
+asked for - the server rounds a gain to the nearest step its tuner has and does
+not say which. The tuning range shown is the tuner's usual one, for
+information only: a dongle with direct sampling or an up-converter can reach
+below it, and FoxSDR sends whatever frequency you ask for.
+
+**Samples are 8-bit**, because that is what rtl_tcp sends: the dynamic range is
+the RTL-SDR's own, whatever the network.
+
+**Stop pauses; closing the source lets go of the server.** The connection is
+made when you press Open and kept until the source is closed or another is
+chosen. Stop and Start only pause and resume: Stop returns at once, and while it
+is stopped FoxSDR goes on receiving the server's stream and throws it away, so
+the server is never held up, and Start has no connection to make and throws away
+anything that arrived in between. Two consequences. rtl_tcp serves one client at
+a time, so the server stays busy for every other program until you close the
+source (a stopped source is still a connected one). And a stopped source still
+costs the network the whole stream - several megabytes a second at the top
+sample rate - so close it rather than leave it stopped on a metered link. On
+open, FoxSDR restates every setting to the server (its dongle keeps what the last
+client left: the crystal correction, the bias tee), so nothing is taken on
+trust; changes made while stopped are sent at once.
+
+**If the connection is lost** - the server stopped, the network dropped, or it
+went silent for two seconds - the receiver stops with "Device stopped" and the
+reason, and nothing reconnects by itself: open it again when the server is back.
+
+**Every wait is bounded.** A connect gives up after three seconds, the header
+read and every later send and receive after two, and closing the source wakes
+the reader thread and joins it within two and a half. Stop and Start wait for
+nothing. The diagnostic log carries the tuner and the port, never the address,
+and the source's own name (which the log quotes) has no address in it
+(`docs/DIAGNOSTICS.md`).
+
+**The SoapySDR device scan is not held back** by an open rtl_tcp source: the
+scan waits for a local radio because its probe would reset the dongle, and a
+network connection has no dongle here to protect.
+
+**How it is verified.** The suite runs without an rtl_tcp server: the proof
+there is the protocol rather than a spectrum.
+`tests/test_rtl_tcp_source.cpp` runs a fake server on the loopback interface - a
+real socket, real threads - and checks the header parse, the exact bytes of
+every command (the big-endian value, the two's-complement ppm), the decoding of
+the 8-bit stream across receives that split a sample in half (on a scripted
+transport that hands over exactly the chunk sizes it is given, because a real
+socket may merge small sends), what a stop and a start deliver, the fault when
+the server goes away or goes silent, the wording of each way an open can fail,
+a stop that returns at once, and a reader that never comes back.
+**It was also run against the real server, by hand, on 2026-10-06**: the
+`rtl_tcp.exe` that ships with radioconda, serving an RTL2838 with an R820T tuner
+on the same computer. FoxSDR connected, read the header (the tuner and its 29
+gain steps), took the stream at 2.4 million samples a second, and when the
+server was stopped part way through it reported the lost connection, with no
+address in the log. A Stop followed by a Start, sent through the browser remote
+(which runs the same code as the window's keys), was tried against it on
+2026-10-07: the spectrum froze, kept the connection, and ran again after the
+Start. **What is not verified**: pressing the Stop and Start keys in the
+window itself, a server on another computer, a server that only imitates
+rtl_tcp, and Linux. The
+suite itself still checks only against the fake, which was written from the
+protocol's public description, as the driver was; librtlsdr's GPL source was
+not used for any code.
+
 
 ## A sound card as the receiver
 
@@ -1206,7 +1301,12 @@ but like everything else under "Linux status" at the top of this file, that
 path has not been exercised against a real RSP. The ADALM-Pluto's driver
 (`src/source/iiod_client.*`) talks IIOD over a plain TCP socket rather than
 USB, so it already builds and runs identically on both platforms — it is
-likewise unverified against a real Pluto here. Any radio SoapySDR itself can
+likewise unverified against a real Pluto here. The rtl_tcp client
+(`src/source/rtl_tcp_source.*`) shares that socket code and is written to the
+same portable calls, but it has only been built and tested on Windows so far;
+the retry of a receive or connect that a signal interrupts (EINTR), which only
+Linux produces, has not been run at all.
+Any radio SoapySDR itself can
 reach (`libsoapysdr-dev` above) already works the same as on Windows. Opening
 the reports folder, the update banner's "Open foxsdr.com" and the privacy
 policy link all go through `xdg-open`, forked and exec'd directly (never
@@ -2413,7 +2513,8 @@ radio to WinUSB with Zadig, which every SDR application needs and which
 RSP** needs the SDRplay API 3.x from sdrplay.com and nothing else - no SoapySDR
 module - because SDRplay publish no device protocol and the tuner is programmed
 by a Windows service. An **ADALM-Pluto** needs nothing installed at all: FoxSDR
-speaks to the board's own daemon over the network. Any OTHER radio - a USRP, a
+speaks to the board's own daemon over the network. So does an **rtl_tcp**
+server: FoxSDR is the client, and the server runs wherever the dongle is. Any OTHER radio - a USRP, a
 LimeSDR - still reaches FoxSDR through SoapySDR vendor
 modules, which are a separate install (PothosSDR or radioconda); see
 `POSTINSTALL.txt` in the install folder. FoxSDR runs with no hardware at all
