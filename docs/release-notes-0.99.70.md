@@ -7,16 +7,16 @@ Still not fixed, and known: the two fast-fail deaths reported from the field (0.
 ---
 
 **SHA-256 of `foxsdr-setup-0.99.70.exe`:**
-`TBD`
+`95399ad9983aecac71458856f7fdb9a69a00a4591a255f3fd17d02c6066c9f38`
 
 **SHA-256 of `FoxSDR-0.99.70-x86_64.AppImage`:**
-`TBD`
+`4ac2b465329981859a483de44437fa2c4ea54b5c394f66b65d8fb859bd066582`
 
 **SHA-256 of `foxsdr-0.99.70-linux-x64.tar.gz`:**
-`TBD`
+`cca03ccd4e49d217ad10ffb204e7949e23f6b15553949b7ec61313252a340155`
 
 **SHA-256 of `FoxSDR-0.99.70-aarch64.AppImage`:**
-`TBD`
+`55567d9de71d9f1266a501661a217214dd3193738725454c4eda2de0b8fea15f`
 
 **SHA-256 of `foxsdr-0.99.70-linux-arm64.tar.gz`:**
-`TBD`
+`9add51bc0d682ba30c7d696746e00716747a564f33df5972e15945eaa9a102a2`
