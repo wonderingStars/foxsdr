@@ -161,7 +161,7 @@ marker blob and seven doubles, instead of a column per event: the vocabulary is
 277 tokens wide (13 drivers x 8 reasons alone is 104) and a column per token would
 not fit in 20, and every new event would be a schema change. As one string it is
 still queryable - `startsWith(blob13, 'radio_fail.rtlsdr.busy=') OR
-position(blob13, ',radio_fail.rtlsdr.busy=') > 0` is "sessions with that failure",
+position(',radio_fail.rtlsdr.busy=' IN blob13) > 0` is "sessions with that failure",
 and `usage.ps1` reads the counts out of the distinct strings. The four doubles are
 the sums that SQL cannot take out of a string (all radio failures, all radio
 opens, all radios that delivered samples, all sessions with sound).
@@ -218,7 +218,7 @@ it".
 | To get | Ask for |
 |---|---|
 | sessions that reported failure counts | `blob12 = '1'` |
-| sessions with one failure | `blob12 = '1' AND (startsWith(blob13, 'TOKEN=') OR position(blob13, ',TOKEN=') > 0)` |
+| sessions with one failure | `blob12 = '1' AND (startsWith(blob13, 'TOKEN=') OR position(',TOKEN=' IN blob13) > 0)` |
 | installs with one failure | the same, with `count(DISTINCT index1)` |
 | radio open failure rate by version | `sum(double6) / (sum(double6) + sum(double7))` where `blob12 = '1'`, grouped by `blob1` |
 | opened radios that never delivered | `sum(double7) - sum(double8)` where `blob12 = '1'` |
@@ -226,7 +226,7 @@ it".
 | builds that do not measure it | every `blob1` seen, minus those with `blob12 = '1'` |
 | slow frames by version | `sum(double10)` and `sum(double11)` where `blob12 = '1'`, grouped by `blob1`, **keeping only the versions that measure them (0.99.65 and later)**; per 1,000 records: `1000 * sum(double10) / count()` |
 | installs with any slow frame | `count(DISTINCT index1)` where `blob12 = '1' AND double10 > 0` (a 0.99.64 row never qualifies, so this needs no version rule) |
-| installs with slow frames in one scope | `blob12 = '1' AND (startsWith(blob13, 'slow.SCOPE.') OR position(blob13, ',slow.SCOPE.') > 0)`, with `count(DISTINCT index1)` |
+| installs with slow frames in one scope | `blob12 = '1' AND (startsWith(blob13, 'slow.SCOPE.') OR position(',slow.SCOPE.' IN blob13) > 0)`, with `count(DISTINCT index1)` |
 | installs that recovered from anything | `count(DISTINCT index1)` where `blob12 = '1' AND double12 > 0` (likewise) |
 | installs that recovered at one place | the failure query above with `TOKEN` = `recovered.WORD` |
 | builds that do not measure slow frames or recoveries | every `blob1` seen, minus the versions 0.99.65 and later (as versions; a pre-release or odd `blob1` is *not measured*) |

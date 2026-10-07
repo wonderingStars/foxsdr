@@ -354,7 +354,7 @@ if (-not $healthReporting) {
         }
     }
     foreach ($tok in @($tokens.Keys | Sort-Object)) {
-        $per = Invoke-Sql "SELECT blob1 AS version, count(DISTINCT index1) AS installs FROM foxsdr_usage WHERE $window AND blob12 = '1' AND (startsWith(blob13, '$tok=') OR position(blob13, ',$tok=') > 0) GROUP BY blob1"
+        $per = Invoke-Sql "SELECT blob1 AS version, count(DISTINCT index1) AS installs FROM foxsdr_usage WHERE $window AND blob12 = '1' AND (startsWith(blob13, '$tok=') OR position(',$tok=' IN blob13) > 0) GROUP BY blob1"
         foreach ($p in @($per)) {
             $k = "$([string]$p.version)|$tok"
             if ($stat.ContainsKey($k)) { $stat[$k].installs = [int64]$p.installs }
@@ -469,7 +469,7 @@ if ($slowMeasured.Count -eq 0) {
 
     # The scopes: one row per distinct count string and version, so sessions and
     # frames are exact; installs per scope come from the database, per version.
-    $slowStrings = Invoke-Sql "SELECT blob1 AS version, blob13 AS slowHealth, count() AS sessions FROM foxsdr_usage WHERE $window AND blob12 = '1' AND position(blob13, 'slow.') > 0 GROUP BY blob1, blob13 ORDER BY sessions DESC LIMIT 1000"
+    $slowStrings = Invoke-Sql "SELECT blob1 AS version, blob13 AS slowHealth, count() AS sessions FROM foxsdr_usage WHERE $window AND blob12 = '1' AND position('slow.' IN blob13) > 0 GROUP BY blob1, blob13 ORDER BY sessions DESC LIMIT 1000"
     $scopeStat = @{}
     $scopes = @{}
     foreach ($row in @($slowStrings)) {
@@ -501,7 +501,7 @@ if ($slowMeasured.Count -eq 0) {
         }
     }
     foreach ($scope in @($scopes.Keys | Sort-Object)) {
-        $per = Invoke-Sql "SELECT blob1 AS version, count(DISTINCT index1) AS installs FROM foxsdr_usage WHERE $window AND blob12 = '1' AND (startsWith(blob13, 'slow.$scope.') OR position(blob13, ',slow.$scope.') > 0) GROUP BY blob1"
+        $per = Invoke-Sql "SELECT blob1 AS version, count(DISTINCT index1) AS installs FROM foxsdr_usage WHERE $window AND blob12 = '1' AND (startsWith(blob13, 'slow.$scope.') OR position(',slow.$scope.' IN blob13) > 0) GROUP BY blob1"
         foreach ($p in @($per)) {
             $k = "$([string]$p.version)|$scope"
             if ($scopeStat.ContainsKey($k)) { $scopeStat[$k].installs = [int64]$p.installs }
@@ -560,7 +560,7 @@ if ($recMeasured.Count -eq 0) {
     Write-Host "  installs = distinct installs that reported; w/ recovery = those with at least one; recoveries = the sum of the counts (a word that"
     Write-Host "  can repeat by itself counts once a session). A version that measures them, with a zero, is a real zero."
 
-    $recStrings = Invoke-Sql "SELECT blob1 AS version, blob13 AS recoveredHealth, count() AS sessions FROM foxsdr_usage WHERE $window AND blob12 = '1' AND position(blob13, 'recovered.') > 0 GROUP BY blob1, blob13 ORDER BY sessions DESC LIMIT 1000"
+    $recStrings = Invoke-Sql "SELECT blob1 AS version, blob13 AS recoveredHealth, count() AS sessions FROM foxsdr_usage WHERE $window AND blob12 = '1' AND position('recovered.' IN blob13) > 0 GROUP BY blob1, blob13 ORDER BY sessions DESC LIMIT 1000"
     $recStat = @{}
     $recTokens = @{}
     foreach ($row in @($recStrings)) {
@@ -586,7 +586,7 @@ if ($recMeasured.Count -eq 0) {
         }
     }
     foreach ($tok in @($recTokens.Keys | Sort-Object)) {
-        $per = Invoke-Sql "SELECT blob1 AS version, count(DISTINCT index1) AS installs FROM foxsdr_usage WHERE $window AND blob12 = '1' AND (startsWith(blob13, '$tok=') OR position(blob13, ',$tok=') > 0) GROUP BY blob1"
+        $per = Invoke-Sql "SELECT blob1 AS version, count(DISTINCT index1) AS installs FROM foxsdr_usage WHERE $window AND blob12 = '1' AND (startsWith(blob13, '$tok=') OR position(',$tok=' IN blob13) > 0) GROUP BY blob1"
         foreach ($p in @($per)) {
             $k = "$([string]$p.version)|$tok"
             if ($recStat.ContainsKey($k)) { $recStat[$k].installs = [int64]$p.installs }
