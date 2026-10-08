@@ -383,8 +383,20 @@ int main() {
         CHECK(window.find("kind == \"hydrasdr\"") != std::string::npos);
         const std::string rules = readText("installer/linux/99-foxsdr-sdr.rules");
         CHECK(rules.find("ATTR{idVendor}==\"38af\", ATTR{idProduct}==\"0001\"") != std::string::npos);
+        // The front page keeps one table row for the RFOne that says it is
+        // unconfirmed; the driver's own section moved to docs/HARDWARE.md when
+        // the README was cut down to a front page.
         const std::string readme = readText("README.md");
-        CHECK(readme.find("The native HydraSDR RFOne driver (0.99.66, NOT YET TESTED ON HARDWARE)") !=
+        const std::size_t rowStart = readme.find("| HydraSDR RFOne |");
+        CHECK(rowStart != std::string::npos);
+        if (rowStart != std::string::npos) {
+            const std::size_t rowEnd = readme.find('\n', rowStart);
+            const std::string row = readme.substr(
+                rowStart, rowEnd == std::string::npos ? std::string::npos : rowEnd - rowStart);
+            CHECK(row.find("Not yet tested on hardware") != std::string::npos);
+        }
+        CHECK(readText("docs/HARDWARE.md")
+                  .find("The native HydraSDR RFOne driver (0.99.66, NOT YET TESTED ON HARDWARE)") !=
               std::string::npos);
         CHECK(readText("PRIVACY.md").find("| `hydrasdr` | HydraSDR RFOne |") != std::string::npos);
     }
