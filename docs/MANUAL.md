@@ -297,7 +297,14 @@ whatever was showing when it was closed - no page, no map, no decoder output, an
 than the radar scope. Every one of them is a key on the rail away, and nothing opens a window but
 your own hand. A plugin's own window - a decoded picture, a plugin's panel - has a row of its own
 under DECODE, with a chip saying what it holds (WAIT, RX or IMG for a picture, a row count for a
-panel): press the row to open it, its key to close it.
+panel): press the row to open it, its key to close it. A decoder with no window of its own - the
+POCSAG and DMR decoders, say - writes its lines in the shared **Decoder output** window, which a
+preset on such a decoder opens for you. That window, and a decoded picture's, opens INSIDE the main
+window, in the middle of it, wherever the main window is on the screen: it used to open past the
+main window's right edge, and on a main window that reached the edge of the screen only a narrow
+strip of its frame showed - "a partial vertical bar" - where the lines should have been. Drag it
+by its top rail to put it beside the radio or on another screen; **RESET WINDOW SIZES** in the
+Fitted modules window brings it back.
 
 A plugin may declare several capabilities. Decoders are fed real samples —
 either the tuned, demodulated audio or the raw receiver band — and produce
@@ -927,7 +934,8 @@ both to the desktop, with a taskbar button to come back from. Since 0.88.2 no
 page can be dragged smaller than 240 x 140, which is the size below which its
 body stopped being drawn at all and left a rail with nothing under it, and
 **RESET WINDOW SIZES** in the Fitted modules window puts every decoder, panel,
-instrument and map window back to its default size and position. On Linux the
+instrument and map window back to its default size and position - for the Decoder
+output window and a picture window, the middle of the main window. On Linux the
 main window keeps the frame the desktop gives it, and the rail carries the
 name alone.
 

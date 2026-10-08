@@ -14397,14 +14397,50 @@ void AppWindow::endPage() {
     ImGui::End();
 }
 
-void AppWindow::placeAsSeparateWindow(int slot) {
+void AppWindow::placeInsideMainWindow(int slot, float wantW, float wantH, float& outW,
+                                      float& outH) {
+    // INSIDE THE MAIN WINDOW, the way the plugin store and the request pages
+    // open (cascade::gui::pageOpenInside), and not past its right edge the way
+    // this used to. The old anchor was the main window's right edge plus 166 px,
+    // chosen so the page would be its OWN operating system window, and it
+    // looked at no monitor and no main window: with the main window within
+    // about 185 px of the right edge of the screen (maximised, snapped, or
+    // simply filling a 1080p screen) the page was off the screen, ImGui's
+    // clamp left exactly 19 px of it showing - its brass margin - and the
+    // person who pressed POCSAG or DMR saw "a partial vertical bar" where the
+    // decoded lines should be (report df5aff7da93dc88c, 0.99.71, 125 %
+    // scaling, main window 1618 x 947 at 192,82 on a 1920-wide screen). A key
+    // that opens nothing visible has told nobody anything. The page is still
+    // an ordinary window: dragged out of the main window it becomes its own
+    // operating system window, which is how it reaches a second screen.
+    //
     // FirstUseEver throughout, so this is a starting position and never fights
-    // the user afterwards.
+    // the user afterwards - and beginPage's RESET WINDOW SIZES re-arms exactly
+    // that, so a reset puts the page back HERE, position as well as size. The
+    // size is NOT multiplied by the interface size: none of the other pages
+    // that open inside (the store, the request pages, the radio setup) are,
+    // and the rectangle is held to the main window whatever the scale.
+    const ImGuiViewport* mv = ImGui::GetMainViewport();
     float x = 0.0f;
     float y = 0.0f;
-    separateWindowAnchor(slot, x, y);
+    cascade::gui::pageOpenInsideStaggered(mv->Pos.x, mv->Pos.y, mv->Size.x, mv->Size.y, wantW,
+                                          wantH, slot, x, y, outW, outH);
     ImGui::SetNextWindowPos(ImVec2(x, y), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(kSeparatePageW, kSeparatePageH), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(outW, outH), ImGuiCond_FirstUseEver);
+}
+
+// THE PAGE `windowId` AS IMGUI HOLDS IT THIS FRAME, in the census under `name`.
+// By window id rather than ImGui::GetWindowPos(): once beginPage has answered
+// true the current window is the page's well (a child inset by the cabinet's
+// margin), whose rectangle is not the page's. Called after beginPage whether
+// or not it answered true, so a page rolled up to its rail is still on the
+// list. Nothing at all unless the census is on.
+static void noteWindowRectInCensus(std::string_view name, const char* windowId) {
+    if (!cascade::gui::census::enabled()) { return; }
+    const ImGuiWindow* w = ImGui::FindWindowByName(windowId);
+    if (w == nullptr) { return; }
+    cascade::gui::census::rect(name, w->Pos.x, w->Pos.y, w->Pos.x + w->Size.x,
+                               w->Pos.y + w->Size.y);
 }
 
 void AppWindow::mapDefaultSize(float& widthPx, float& heightPx) {
@@ -19094,17 +19130,30 @@ void AppWindow::drawPluginWindows() {
         const std::string id = im.plugin + " image###image_" + im.plugin;
         if (!pluginWindows_.shown(id)) { continue; }
         telemetryNotePanel("image");
-        // Its own operating system window, for the same reason as the map: a
-        // received picture is something to put beside the radio, or on another
-        // screen, not a panel inside it. Staggered per decoder so two plugins
-        // producing pictures do not land exactly on top of each other.
-        placeAsSeparateWindow(static_cast<int>(i) + 1);
+        // A page that opens INSIDE THE MAIN WINDOW, where the press that asked
+        // for it can be seen to have worked, and that can be dragged out of it
+        // to sit beside the radio or on another screen (it used to open past
+        // the main window's edge, to be its own operating system window, and
+        // on a main window that reached the screen's edge it opened with its
+        // 19 px margin on screen and nothing else). Staggered per decoder so
+        // two plugins producing pictures do not land exactly on top of each
+        // other.
+        float imageW = kSeparatePageW;
+        float imageH = kSeparatePageH;
+        placeInsideMainWindow(static_cast<int>(i) + 1, kSeparatePageW, kSeparatePageH, imageW,
+                              imageH);
         // A REAL p_open, so the frame's close key is not a lie: closing takes
         // the window out of pluginWindows_ and its row's lamp goes out.
         bool imageOpen = true;
         const std::string railName = pluginPageLegend(tr("%s IMAGE"), im.plugin);
-        if (beginPage(id.c_str(), railName.c_str(), &imageOpen, 0, kSeparatePageW,
-                      kSeparatePageH)) {
+        const bool imageDrawn =
+            beginPage(id.c_str(), railName.c_str(), &imageOpen, 0, imageW, imageH);
+        // WHERE THE PICTURE WINDOW IS, every frame it is shown (the census; see
+        // tests/test_decoder_window_app.cpp for the Decoder output window's).
+        if (cascade::gui::census::enabled()) {
+            noteWindowRectInCensus("image:window:" + im.plugin, id.c_str());
+        }
+        if (imageDrawn) {
             drawPluginPresetBar(im.plugin);
             drawPluginSettingsSection(im.plugin);
             if (im.width == 0 || im.height == 0) {
@@ -21848,11 +21897,18 @@ void AppWindow::drawDecoderStatusRows() {
 }
 
 void AppWindow::drawDecoderWindow() {
-    // ITS OWN OPERATING SYSTEM WINDOW, for the same reason the map and the
-    // decoded images have one: a decoder's output is the reason the plugin
-    // exists, and continuous text - CW, RTTY, APRS - is something to put
-    // beside the radio or on a second screen, not to read through a slot in a
-    // side panel.
+    // A PAGE OF ITS OWN, opened inside the main window and free to be dragged
+    // out of it: a decoder's output is the reason the plugin exists, and
+    // continuous text - CW, RTTY, APRS - is something to put beside the radio
+    // or on a second screen, not to read through a slot in a side panel.
+    //
+    // IT OPENS WHERE IT CAN BE SEEN. It used to open past the main window's
+    // right edge so as to be a separate operating system window, and on a
+    // main window that reached the screen's edge that was off the screen with
+    // only its 19 px margin showing: a French tester pressed the POCSAG and
+    // DMR presets and got "a partial vertical bar" (report df5aff7da93dc88c,
+    // 0.99.71, log line "preset: opened the Decoder output window for DMR
+    // Monitor" and nothing else). See placeInsideMainWindow.
     //
     // IT NEVER OPENS ITSELF. Until 0.79.1 it did, on a decoder's first line -
     // and the NOAA APT decoder says "listening" the moment it is fed, so the
@@ -21874,17 +21930,19 @@ void AppWindow::drawDecoderWindow() {
     if (!decoderWindowOpen_) { return; }
     telemetryNotePanel("decoded");
 
-    placeAsSeparateWindow(9);
-    if (openForCapture) {
-        // A separate page opens BESIDE the main window, which is outside the
-        // only framebuffer a self-capture reads. Under the capture seam alone
-        // it opens inside instead; the later SetNextWindowPos wins.
-        const ImGuiViewport* mv = ImGui::GetMainViewport();
-        ImGui::SetNextWindowPos(ImVec2(mv->Pos.x + 420.0f, mv->Pos.y + 200.0f),
-                                ImGuiCond_FirstUseEver);
-    }
-    if (beginPage("Decoder output###decoderout", tr("DECODER OUTPUT"), &decoderWindowOpen_, 0,
-                  kSeparatePageW, kSeparatePageH)) {
+    // The same placement under the capture seam as for a person: the seam used
+    // to force a position inside the main window, because the page opened
+    // beside it - outside the only framebuffer a self-capture reads - and that
+    // is what hid the defect from every capture.
+    float pageW = kSeparatePageW;
+    float pageH = kSeparatePageH;
+    placeInsideMainWindow(0, kSeparatePageW, kSeparatePageH, pageW, pageH);
+    const bool pageDrawn = beginPage("Decoder output###decoderout", tr("DECODER OUTPUT"),
+                                     &decoderWindowOpen_, 0, pageW, pageH);
+    // WHERE THE WINDOW IS, every frame it is shown (the census), so a test can
+    // ask whether it is on the screen and how much of it is.
+    noteWindowRectInCensus("decoder:window", "Decoder output###decoderout");
+    if (pageDrawn) {
         ImGui::Checkbox(trId("Follow"), &decoderAutoScroll_);
         ImGui::SameLine();
         if (ImGui::SmallButton(trId("Clear##declog"))) { decoderLog_.clear(); }

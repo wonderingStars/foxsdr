@@ -644,7 +644,7 @@ inline void mapClampRestoredSize(int x, int y, int& w, int& h,
 //
 // The default size is capped at kMapWorkAreaShare, but the default POSITION
 // was never checked against anything, and the two only make a usable window
-// together. placeAsSeparateWindow anchors the map at the main window's top
+// together. separateWindowAnchor anchors the map at the main window's top
 // right plus 60 px, so once the default height grew to use the screen the
 // monitor offers, the bottom fell off the work area whenever the main window
 // sat low: measured on this 5120x1440 desktop with the main window at y=400,
@@ -1570,24 +1570,36 @@ private:
     // page this session ride through untouched, so a geometry saved for a
     // plugin that is temporarily uninstalled is not erased by unrelated saves.
     void syncMapPagesToSaved();
-    // Starting position and size for a window that should be its OWN operating
-    // system window rather than a panel inside the main one. `slot` staggers
-    // several of them. See the definition for why the position is what decides
-    // this — ImGui has no flag for it.
-    void placeAsSeparateWindow(int slot);
-    // The size it opens at. Named rather than written twice because the same
-    // pair is what beginPage is handed as the page's default size, and a
-    // "reset window sizes" that put a window back to a DIFFERENT rectangle
-    // than the one it opens at would be a third size nobody asked for.
+    // Starting position and size for a page that opens INSIDE THE MAIN WINDOW,
+    // centred and stepped down and right by `slot` so two that open together
+    // do not hide each other (gui/page_geometry.hpp, pageOpenInsideStaggered).
+    // `wantW` x `wantH` is the size it would like; `outW` x `outH` is what it
+    // gets once held to the main window, and is what the caller hands
+    // beginPage as the page's default so a RESET WINDOW SIZES puts it back to
+    // the rectangle it opened at - position as well as size, because the
+    // placement is queued FirstUseEver every frame and beginPage's reset
+    // re-arms that. Used by the Decoder output window (slot 0) and the plugin
+    // picture windows (slot index + 1), which used to hang off the main
+    // window's right edge so as to be a separate operating system window and
+    // opened with only their 19 px margin on screen whenever the main window
+    // reached the edge of the screen (report df5aff7da93dc88c). A page dragged
+    // out of the main window still becomes its own window.
+    void placeInsideMainWindow(int slot, float wantW, float wantH, float& outW, float& outH);
+    // The size such a page opens at. Named rather than written twice because
+    // the same pair is what beginPage is handed as the page's default size,
+    // and a "reset window sizes" that put a window back to a DIFFERENT
+    // rectangle than the one it opens at would be a third size nobody asked
+    // for.
     static constexpr float kSeparatePageW = 720.0f;
     static constexpr float kSeparatePageH = 520.0f;
-    // The same, at a size the caller asks for and MOVED so all of it - the
+    // A window at a size the caller asks for and MOVED so all of it - the
     // resize grip in the bottom-right corner included - lands on the monitor
-    // it opens on (mapPlaceDefaultRect). placeAsSeparateWindow's fixed
-    // 720 x 520 is too small for a catalogue and its data plate, and an
-    // anchor that knows nothing about the monitor is how the map window came
-    // to open with its bottom off the work area. FirstUseEver throughout, so
-    // this is where a window OPENS and never fights a later drag.
+    // it opens on (mapPlaceDefaultRect). The fixed 720 x 520 above is too
+    // small for a catalogue and its data plate, and an anchor that knows
+    // nothing about the monitor (separateWindowAnchor on its own) is how the
+    // map window came to open with its bottom off the work area. FirstUseEver
+    // throughout, so this is where a window OPENS and never fights a later
+    // drag.
     void placeFeatureWindow(int slot, float wantW, float wantH);
     // The same, but preferring a rectangle SAVED from a previous session.
     // The saved one is used only if it is still reachable on the monitors
@@ -1600,10 +1612,15 @@ private:
     // is persisted is what the window was actually asked to be.
     void placeSavedFeatureWindow(int slot, int& x, int& y, int& w, int& h, float wantW,
                                  float wantH);
-    // The same anchor as a VALUE rather than as a side effect. The map needs
-    // it before it is used: its default rectangle has to be checked against
-    // the monitor (mapPlaceDefaultRect), and a function that only calls
-    // SetNextWindowPos cannot answer where the window would have gone.
+    // The anchor a window that is MEANT to be its own operating system window
+    // hangs from - just past the main window's right edge, stepped by `slot` -
+    // as a VALUE. The map and the feature windows need it before it is used:
+    // the default rectangle has to be checked against the monitor
+    // (mapPlaceDefaultRect), because the anchor on its own knows nothing about
+    // one and lands off the screen whenever the main window reaches the
+    // screen's right edge. A page that has to be seen the moment a key opens
+    // it does not use this: it opens inside the main window
+    // (placeInsideMainWindow).
     static void separateWindowAnchor(int slot, float& x, float& y);
     // Where the map window should open when the config has no saved geometry:
     // a size derived from the MONITOR's work area, not a constant. See the

@@ -45,6 +45,16 @@ set_target_properties(rescan_probe_a_newer PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_rescan_a_newer/$<CONFIG>"
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_rescan_a_newer/$<CONFIG>")
 
+# A REAL PLUGIN MODULE WHOSE OUTPUT IS A PICTURE, for test_decoder_window_app: an image decoder
+# (CASCADE_CAP_IMAGE_DECODER) that never offers a picture, so the host opens the plugin's image
+# window and that window says it is waiting. Its own directory, like the probes above.
+add_library(image_probe_fixture MODULE "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/image_probe_plugin.cpp")
+target_include_directories(image_probe_fixture PRIVATE "${CMAKE_SOURCE_DIR}/src/core")
+set_target_properties(image_probe_fixture PROPERTIES
+    PREFIX ""
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_image/$<CONFIG>"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_image/$<CONFIG>")
+
 # A REAL PLUGIN MODULE THAT DECLARES THE WRONG ABI, for test_health_paths: the
 # plugin host loads it as any plugin and refuses it, which is the "abi" word of
 # the anonymous failure count (core/health_events.hpp). Its own directory.
@@ -224,6 +234,14 @@ foreach(src ${CASCADE_TESTS})
         # into a scratch plugins folder as store-c 1.0.0.
         add_dependencies(${name} rescan_probe_a cascade)
         add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:rescan_probe_a>")
+    elseif(name STREQUAL "test_decoder_window_app")
+        # Runs the real cascade.exe (built first) in one viewport, presses the probe decoder's
+        # preset (the probe module above, copied into a scratch plugins folder) and reads where
+        # the shared Decoder output window opened from the UI census; and, with the image
+        # fixture beside it, where a plugin's picture window opens.
+        add_dependencies(${name} rescan_probe_a image_probe_fixture cascade)
+        add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:rescan_probe_a>"
+                 "$<TARGET_FILE:image_probe_fixture>")
     elseif(name STREQUAL "test_soapy_enum_proc" AND TARGET soapy_fault_fixture)
         # Hands the fault fixture's directory to the real enumeration child;
         # cascade.exe is built first because that block runs it.
@@ -306,6 +324,11 @@ set_tests_properties(test_plugin_catalogue_app PROPERTIES TIMEOUT 300)
 # remembered rectangle, the Fitted modules window and its page). Each is 120 to 200 frames.
 # Linux runners are half this desktop's speed, so it is given the generous bound its siblings are.
 set_tests_properties(test_plugin_store_app PROPERTIES TIMEOUT 600)
+# The Decoder output window test starts the real application nine times (the preset on three
+# window sizes, the capture seam, two picture-window runs, and a layout, a drag and a reset run),
+# 100 to 110 frames each.
+# The same bound, for the same reason, as the store test.
+set_tests_properties(test_decoder_window_app PROPERTIES TIMEOUT 600)
 
 add_test(NAME app_smoke COMMAND cascade --frames 3)
 set_tests_properties(app_smoke PROPERTIES

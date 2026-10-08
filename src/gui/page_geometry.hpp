@@ -81,6 +81,38 @@ inline void pageOpenInside(float vpX, float vpY, float vpW, float vpH, float wan
     if (!(y >= vpY)) { y = vpY; }
 }
 
+// THE STEP BETWEEN PAGES OPENED INSIDE THE MAIN WINDOW ONE AFTER ANOTHER, so
+// two that open together do not land exactly on top of each other and hide
+// the first one's rail. The same 34 px step the map pages and
+// AppWindow::separateWindowAnchor use.
+inline constexpr float kPageInsideStagger = 34.0f;
+
+// pageOpenInside, STEPPED DOWN AND RIGHT by `slot` times kPageInsideStagger
+// (slot 0 is exactly pageOpenInside's centred rectangle) and then held so the
+// WHOLE page is still inside the viewport. Held rather than wrapped: a slot
+// large enough to push the page off the edge ends flush against the corner,
+// which is a stack of pages the user can see and drag apart, where a position
+// past the edge is a window with nothing but its 19 px margin showing (the
+// Decoder output window's field report, df5aff7da93dc88c).
+//
+// The viewport's own corner wins over the far edge, as it does in
+// pageOpenInside: a page wider than the viewport has its rail at the corner.
+inline void pageOpenInsideStaggered(float vpX, float vpY, float vpW, float vpH, float wantW,
+                                    float wantH, int slot, float& x, float& y, float& w,
+                                    float& h) {
+    pageOpenInside(vpX, vpY, vpW, vpH, wantW, wantH, x, y, w, h);
+    if (slot <= 0) { return; }
+    const float step = kPageInsideStagger * static_cast<float>(slot);
+    x += step;
+    y += step;
+    const float maxX = vpX + vpW - w;
+    const float maxY = vpY + vpH - h;
+    if (!(x <= maxX)) { x = maxX; }  // NaN-safe, as above
+    if (!(y <= maxY)) { y = maxY; }
+    if (!(x >= vpX)) { x = vpX; }
+    if (!(y >= vpY)) { y = vpY; }
+}
+
 // WHETHER THIS PAGE STILL OWES THE USER A RE-PLACEMENT, and the counter that
 // makes it happen exactly once.
 //
