@@ -2181,9 +2181,14 @@ private:
     // openDeviceSync so the async and synchronous opens cannot drift apart -
     // they had two copies of this before, and they had already drifted.
     // `args` is what the device was opened with; the RTL-SDR's bias tee rule
-    // needs it to know WHICH dongle this is.
+    // needs it to know WHICH dongle this is. `restoreRemembered` is whether
+    // the radio's remembered automatic-gain switch is put back (autoGainMemory_):
+    // true for every open the user asked for, false for the reopen after a driver
+    // fault, where the state the user had a moment ago (DeviceOpenResult::
+    // recoveryAgc) is applied afterwards and is the better witness.
     void adoptDeviceMirrors(cascade::source::DeviceSource& dev, const std::string& kind,
-                            const std::string& args, double requestRateHz);
+                            const std::string& args, double requestRateHz,
+                            bool restoreRemembered = true);
 
     // Makes the DSP chain follow activeSource().sampleRateHz() (rate-follow).
     // A pipeline refusal — fractional channel rate — keeps the old chain and
@@ -2675,6 +2680,23 @@ private:
     cascade::source::GainUnit firstGainUnit() const { return gainUnitAt(0); }
     bool deviceAgcSupported_ = false;
     bool deviceAgc_ = false;
+    // EACH RADIO'S AUTO GAIN SWITCH, REMEMBERED (0.99.73, AppConfig::
+    // autoGainByRadio): radio key (core::biasTeeRadioKey of the driver and the
+    // args the radio was opened with) -> whether the box was ticked when the user
+    // last changed it and the radio accepted. Seeded by applyConfig, written by
+    // changeAutoGain (and by the reopen after a driver fault), put back by
+    // adoptDeviceMirrors at every open of a radio that supports auto gain - never
+    // an Airspy, whose AGC switches belong to its gain mode (airspyMemory_).
+    std::map<std::string, bool> autoGainMemory_;
+    // THE AUTO GAIN BOX AND THE BROWSER'S "agc" SETTING BOTH COME HERE: asks the
+    // open radio for `want`, and on acceptance mirrors it into deviceAgc_ and
+    // remembers it for this radio. On a refusal nothing changes except
+    // sourceError_ (the driver's own words). False on a refusal, with no radio
+    // open, or on a radio that has no auto gain.
+    bool changeAutoGain(bool want);
+    // Writes `on` into autoGainMemory_ for the radio `dev` opened with `args`
+    // (no-op for an Airspy; a new radio past the cap is not remembered).
+    void rememberAutoGain(cascade::source::DeviceSource& dev, const std::string& args, bool on);
 
     // THE AIRSPY R2 / MINI's OWN CONTROLS (0.99.41, gui/app_window_airspy.cpp):
     // one gain mode at a time - Sensitive, Linear or Free, the reference

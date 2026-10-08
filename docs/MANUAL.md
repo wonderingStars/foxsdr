@@ -30,7 +30,7 @@ are still moving. What is in the current build:
   lettered in the unit that stage is really measured in — decibels on every
   radio but the Airspy R2/Mini, whose gains are the hardware's own
   register steps and are shown as bare step numbers rather than invented
-  decibels — and a bias-tee switch on the radios that have one. Developed against an Ettus B200
+  decibels — and a bias-tee switch on the radios that have one. The **Auto gain** switch is remembered per radio and put back when that radio is opened again (an Airspy keeps its own gain mode instead). Developed against an Ettus B200
   and an RTL2838 (R820T); the built-in signal generator and IQ-file playback
   mean it runs with no radio at all.
   A saved SoapySDR RTL-SDR, HackRF, Airspy, Airspy HF+, HydraSDR

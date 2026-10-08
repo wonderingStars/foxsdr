@@ -629,6 +629,9 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            // Each Airspy's gain mode, gains and decimation: set in the Source
            // section, which calls no save of its own.
            a.airspy == b.airspy &&
+           // Each radio's Auto gain switch (0.99.73): ticked in the Source
+           // section, which calls no save of its own.
+           a.autoGainByRadio == b.autoGainByRadio &&
            a.plutoUri == b.plutoUri && a.rtlTcpAddr == b.rtlTcpAddr &&
            a.soapyAntenna == b.soapyAntenna &&
            a.iqFilePath == b.iqFilePath && a.centerHz == b.centerHz &&
@@ -9187,12 +9190,12 @@ void AppWindow::drawSourceSection() {
         if (airspyPanel) {
             // drawn above
         } else if (deviceAgcSupported_) {
-            if (ImGui::Checkbox(trId("Auto gain"), &deviceAgc_)) {
-                if (!device_->setAutoGain(deviceAgc_)) {
-                    sourceError_ = device_->lastError();
-                    deviceAgc_ = !deviceAgc_;  // the device did not change mode
-                }
-            }
+            // The box is drawn over a copy: changeAutoGain moves deviceAgc_ only
+            // when the radio accepted the change, so a refusal leaves the box
+            // where it was (the device did not change mode), and an accepted
+            // change is remembered for this radio (autoGainMemory_).
+            bool agcBox = deviceAgc_;
+            if (ImGui::Checkbox(trId("Auto gain"), &agcBox)) { changeAutoGain(agcBox); }
         } else {
             ImGui::TextDisabled(tr("Auto gain: not supported"));
         }
@@ -9885,7 +9888,11 @@ void AppWindow::finishDeviceOpen(DeviceOpenResult r) {
     // the make() that just finished on the worker. One shared function with
     // the synchronous config restore, which used to keep its own copy of this
     // and had already drifted from it.
-    adoptDeviceMirrors(*r.dev, r.kind, r.args, r.requestRateHz);
+    //
+    // A RECOVERY REOPEN DOES NOT PUT THE REMEMBERED AUTO GAIN BACK (the last
+    // argument): it is the same radio to the user, whose own state a moment ago
+    // (r.recoveryAgc) is applied below, after the gains, exactly as before.
+    adoptDeviceMirrors(*r.dev, r.kind, r.args, r.requestRateHz, !r.recovery);
     if (r.recovery) {
         // THE GAINS THE USER HAD, written over the defaults just primed: a
         // reopen after a driver fault is the same radio to the user, and a
@@ -9906,6 +9913,9 @@ void AppWindow::finishDeviceOpen(DeviceOpenResult r) {
         }
         if (r.recoveryAgc && deviceAgcSupported_ && r.dev->setAutoGain(true)) {
             deviceAgc_ = true;
+            // ...and written down for this radio again (0.99.73): it was on, and
+            // the memory should say so even if nothing wrote it earlier.
+            rememberAutoGain(*r.dev, r.args, true);
         }
     }
     // The antenna is settled by adoptDeviceMirrors above, on the same rule it
@@ -10910,7 +10920,8 @@ bool AppWindow::radioNotOpenLit() const {
 }
 
 void AppWindow::adoptDeviceMirrors(cascade::source::DeviceSource& dev, const std::string& kind,
-                                   const std::string& args, double requestRateHz) {
+                                   const std::string& args, double requestRateHz,
+                                   bool restoreRemembered) {
     // ONE COPY OF THIS, shared by the worker-thread open and the synchronous
     // config restore. There were two before, and they had already drifted:
     // only one of them pointed the Rate combo at the device's ACTUAL readback
@@ -10981,6 +10992,39 @@ void AppWindow::adoptDeviceMirrors(cascade::source::DeviceSource& dev, const std
         deviceGainsDb_[i] = static_cast<float>(dev.gainDb(deviceGainNames_[i]));
     }
 
+    // THE AUTO GAIN THE USER LEFT THIS RADIO ON (0.99.73): the probe above has
+    // put every radio but an Airspy on manual gain, and the sliders have read
+    // the manual values off it - so a radio whose box was ticked when it was
+    // last used is put back on auto gain HERE, after both, and the box and the
+    // greyed sliders then say so (deviceAgc_). Per radio, under the same key as
+    // the bias tee (driver and serial; the whole args for a radio with no
+    // serial). A "false" or no entry leaves the manual gain the probe chose,
+    // which is what every open did before this. Nothing is erased on an open: the
+    // map keeps the radios that are not plugged in.
+    //
+    // NOTHING HERE IS DRIVER-SPECIFIC: every native driver, an rtl_tcp server
+    // and a Soapy device that answers autoGainSupported() gets it through the
+    // same setAutoGain call the box makes. A radio that does not support auto
+    // gain, or refuses the call, stays on manual gain with the box off - said
+    // once in the log, since a user who ticked it last time would otherwise find
+    // it unticked with no reason given.
+    //
+    // NOT AN AIRSPY: its two AGC switches are part of its gain mode, which the
+    // Airspy path put back at open (AppConfig::airspy), and the code above read
+    // them back into deviceAgc_. And not a recovery reopen (restoreRemembered
+    // false): the caller applies the state the user had a moment ago.
+    if (restoreRemembered && cascade::gui::asAirspy(&dev) == nullptr) {
+        const auto mem = autoGainMemory_.find(cascade::core::biasTeeRadioKey(dev.driverKey(), args));
+        if (mem != autoGainMemory_.end() && mem->second) {
+            if (deviceAgcSupported_ && dev.setAutoGain(true)) {
+                deviceAgc_ = true;
+            } else {
+                cascade::core::diagWarnf(
+                    "source: auto gain remembered on but the radio refused it");
+            }
+        }
+    }
+
     // THE BIAS TEE, AFTER THE DEVICE IS UP, and only when the radio has one
     // this panel can reach. The six non-RTL drivers switch it OFF as part of
     // open(), so a remembered "on" is re-applied here or a mast-head
@@ -11024,6 +11068,36 @@ void AppWindow::adoptDeviceMirrors(cascade::source::DeviceSource& dev, const std
     deviceAntennas_ = dev.antennas();
     if (!deviceAntenna_.empty()) { dev.setAntenna(deviceAntenna_); }
     deviceAntenna_ = dev.antenna();
+}
+
+void AppWindow::rememberAutoGain(cascade::source::DeviceSource& dev, const std::string& args,
+                                 bool on) {
+    // An Airspy's AGC switches are part of its gain mode, remembered in
+    // airspyMemory_ by airspyRememberOpen; a second record here would be a
+    // second witness that could disagree.
+    if (cascade::gui::asAirspy(&dev) != nullptr) { return; }
+    const std::string key = cascade::core::biasTeeRadioKey(dev.driverKey(), args);
+    // A new radio past the cap is not remembered (the bias tee's rule); one
+    // already in the map is always updated.
+    if (autoGainMemory_.count(key) == 0 &&
+        autoGainMemory_.size() >= cascade::core::kBiasTeeMemoryCap) {
+        return;
+    }
+    autoGainMemory_[key] = on;
+}
+
+bool AppWindow::changeAutoGain(bool want) {
+    if (device_ == nullptr || !deviceAgcSupported_) { return false; }
+    if (!device_->setAutoGain(want)) {
+        sourceError_ = device_->lastError();
+        return false;  // the device did not change mode: the box stays where it was
+    }
+    deviceAgc_ = want;
+    // An "off" is remembered as well as an "on": a radio set back to manual
+    // gain stays on manual gain at its next open. The debounced save notices
+    // through configsEqual (autoGainByRadio); this calls no save of its own.
+    rememberAutoGain(*device_, deviceArgs_, want);
+    return true;
 }
 
 // --- RESTART SDRPLAY SERVICE (0.99.55, source/sdrplay_service.hpp) ---------
@@ -26697,14 +26771,14 @@ void AppWindow::applyControlRequest(const cascade::net::ControlRequest& r) {
             }
         }
         if (r.agc.has_value() && deviceAgcSupported_) {
-            if (device_->setAutoGain(*r.agc)) {
-                deviceAgc_ = *r.agc;
+            // The box's own path (changeAutoGain): on acceptance the mirror
+            // follows and the radio's memory is written (0.99.73); on a refusal
+            // the driver's words go to sourceError_.
+            if (changeAutoGain(*r.agc)) {
                 if (cascade::gui::asAirspy(device_) != nullptr) {
                     refreshDeviceGainMirrors();
                     airspyRememberOpen();
                 }
-            } else {
-                sourceError_ = device_->lastError();
             }
         }
     }
@@ -28447,6 +28521,10 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     // Each Airspy's gain mode, gains and decimation, put back by
     // adoptDeviceMirrors on that radio's own open, like the bias tee above.
     airspyMemory_ = cfg.airspy;
+    // Each radio's Auto gain switch, put back by adoptDeviceMirrors on that
+    // radio's own open (0.99.73). Seeded here, before any open, so a saved
+    // radio that does not open this launch keeps its entry for the next save.
+    autoGainMemory_ = cfg.autoGainByRadio;
     // THE PLUTO'S ADDRESS IS SEEDED HERE TOO, and it has to be before the
     // scanNative() further down: that is what builds the Pluto's row, the
     // row's args are "uri=" plus this box, and the restore below finds the
@@ -29827,6 +29905,8 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.ppm = ppmValues_;
     // Every Airspy's gain mode, gains and decimation, open now or not.
     cfg.airspy = airspyMemory_;
+    // Every radio's Auto gain switch, open now or not (0.99.73).
+    cfg.autoGainByRadio = autoGainMemory_;
     // WHAT IS IN THE BOX, not what opened. A Pluto that is on the bench has
     // its address in nativeArgs as well; this field is the typing, and it has
     // to survive a launch in which the board never answered so it can be

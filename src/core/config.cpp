@@ -340,6 +340,25 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
             out.airspy = std::move(as);
         }
     }
+    // EACH RADIO'S AUTOMATIC GAIN SWITCH, PER RADIO (0.99.73,
+    // AppConfig::autoGainByRadio). Element-wise tolerant like the bias tee's
+    // memory it shares a key with: an entry that is not a bool, or whose key is
+    // not "<kind>|<args>", is skipped and the rest are kept; at most
+    // kBiasTeeMemoryCap are kept. No rule about serials here - an "on" is not
+    // a power switch (see the field). A file without the key has none.
+    {
+        const auto it = j.find("autoGainByRadio");
+        if (it != j.end() && it->is_object()) {
+            for (auto e = it->begin(); e != it->end(); ++e) {
+                if (!e.value().is_boolean()) { continue; }
+                const std::string& key = e.key();
+                const std::size_t bar = key.find('|');
+                if (bar == std::string::npos || bar == 0) { continue; }
+                if (out.autoGainByRadio.size() >= kBiasTeeMemoryCap) { break; }
+                out.autoGainByRadio[key] = e.value().get<bool>();
+            }
+        }
+    }
     getString(j, "plutoUri", out.plutoUri);
     getString(j, "rtlTcpAddr", out.rtlTcpAddr);
     getString(j, "soapyAntenna", out.soapyAntenna);
@@ -1090,6 +1109,11 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
                          {"decimation", s.decimation}};
         }
         j["airspy"] = std::move(as);
+    }
+    {
+        json agc = json::object();
+        for (const auto& [radio, on] : cfg.autoGainByRadio) { agc[radio] = on; }
+        j["autoGainByRadio"] = std::move(agc);
     }
     j["plutoUri"] = cfg.plutoUri;
     j["rtlTcpAddr"] = cfg.rtlTcpAddr;

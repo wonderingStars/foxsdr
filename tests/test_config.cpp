@@ -115,6 +115,8 @@ AppConfig junkConfig() {
     c.nativeArgs = "garbage";
     // A bias tee memory the file never mentioned must not survive a load.
     c.biasTee["garbage|serial=1"] = true;
+    // An auto gain memory the file never mentioned must not survive a load.
+    c.autoGainByRadio["garbage|serial=1"] = true;
     // A converter the file never mentioned must not survive a load.
     c.converters["garbage"] = {cascade::core::ConverterMode::Up, 99.0e6, true};
     // A crystal correction the file never mentioned must not survive a load.
@@ -316,6 +318,7 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     CHECK(a.soapyArgs == b.soapyArgs);
     CHECK(a.nativeArgs == b.nativeArgs);
     CHECK(a.biasTee == b.biasTee);
+    CHECK(a.autoGainByRadio == b.autoGainByRadio);
     CHECK(a.converters == b.converters);
     CHECK(a.ppmCorrection == b.ppmCorrection);
     CHECK(a.ppm == b.ppm);
@@ -485,7 +488,13 @@ int main() {
         in.mapPages ={{"ADS-B", 10, 20, 800, 600, true},
                        {"Satellites", 30, 40, 640, 480, false}};
         in.volume = 0.25f;
+        // A radio's remembered Auto gain (0.99.73) is HOW it opens, not
+        // whether a window shows: it comes through the start-up state untouched.
+        in.autoGainByRadio["rtlsdr|serial=00000042"] = true;
+        in.autoGainByRadio["hackrf|serial=abc"] = false;
         const AppConfig out = cascade::core::startupState(in);
+        CHECK(out.autoGainByRadio.size() == 2);
+        CHECK(out.autoGainByRadio == in.autoGainByRadio);
         CHECK(!out.scopeMode);
         // The demod scope is a WINDOW, so it obeys the same rule the radar
         // scope and the two plugin windows do: what was showing is recorded
@@ -679,6 +688,12 @@ int main() {
         // THE BIAS TEE, PER RADIO: an on and an off, two families.
         in.biasTee["rtlsdr|serial=00000042"] = true;
         in.biasTee["hackrf|serial=abc"] = false;
+        // EACH RADIO'S AUTO GAIN SWITCH (0.99.73): an on and an off for two
+        // radios, and an "on" for a radio known only by position (unlike the
+        // bias tee's, nothing refuses it).
+        in.autoGainByRadio["rtlsdr|serial=00000042"] = true;
+        in.autoGainByRadio["hackrf|serial=abc"] = false;
+        in.autoGainByRadio["rtlsdr|index=0"] = true;
         // THE CONVERTERS, one of each shape: the tester's 125 MHz up-converter
         // on a dongle, an inverting down-converter set explicitly on the
         // generator, and one switched OFF that keeps the LO it was given.
@@ -1326,6 +1341,76 @@ int main() {
             CHECK(out.biasTee.size() == 64);
         }
 
+        // EACH RADIO'S AUTO GAIN SWITCH (0.99.73, AppConfig::autoGainByRadio).
+        // A config that has never seen the key has none: every radio opens on
+        // manual gain, as it did before the memory. (junkConfig set an entry, so
+        // a loader that forgot the key would leave it behind.)
+        out = junkConfig();
+        CHECK(writeText(path, "{\"schemaVersion\":1,\"sourceKind\":\"rtlsdr\"}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.autoGainByRadio.empty());
+        // Two radios, an on and an off, both read back; and one for a radio
+        // known only by position, which the bias tee's rules would refuse.
+        out = junkConfig();
+        CHECK(writeText(path, "{\"schemaVersion\":1,\"autoGainByRadio\":{"
+                              "\"rtlsdr|serial=00000042\":true,\"hackrf|serial=abc\":false,"
+                              "\"rtlsdr|index=0\":true}}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.autoGainByRadio.size() == 3);
+        CHECK(out.autoGainByRadio.count("rtlsdr|serial=00000042") == 1 &&
+              out.autoGainByRadio.at("rtlsdr|serial=00000042"));
+        CHECK(out.autoGainByRadio.count("hackrf|serial=abc") == 1 &&
+              !out.autoGainByRadio.at("hackrf|serial=abc"));
+        CHECK(out.autoGainByRadio.count("rtlsdr|index=0") == 1 &&
+              out.autoGainByRadio.at("rtlsdr|index=0"));
+        // A MALFORMED ENTRY IS DROPPED AND THE REST ARE KEPT: values that are
+        // not a bool (a number, a string, null, an object), a key with no
+        // "<kind>|" in front and one with an empty kind.
+        out = junkConfig();
+        CHECK(writeText(path, "{\"schemaVersion\":1,\"autoGainByRadio\":{"
+                              "\"airspy|serial=n\":1,\"airspy|serial=s\":\"true\","
+                              "\"airspy|serial=z\":null,\"airspy|serial=o\":{\"on\":true},"
+                              "\"nobar\":true,\"|serial=nokind\":true,"
+                              "\"hackrf|serial=keep\":true}}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.autoGainByRadio.size() == 1);
+        CHECK(out.autoGainByRadio.count("hackrf|serial=keep") == 1 &&
+              out.autoGainByRadio.at("hackrf|serial=keep"));
+        // Not an object at all: nothing remembered, and the rest of the file
+        // still loads.
+        out = junkConfig();
+        CHECK(writeText(path, "{\"schemaVersion\":1,\"sourceKind\":\"hackrf\","
+                              "\"autoGainByRadio\":[true,false]}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.autoGainByRadio.empty());
+        CHECK(out.sourceKind == "hackrf");
+        // THE CAP: a file with 65 radios loads 64, the bias tee memory's bound.
+        {
+            std::string text = "{\"schemaVersion\":1,\"autoGainByRadio\":{";
+            for (int i = 0; i < 65; ++i) {
+                if (i > 0) { text += ","; }
+                text += "\"rtlsdr|serial=" + std::to_string(1000 + i) + "\":true";
+            }
+            text += "}}\n";
+            out = junkConfig();
+            CHECK(writeText(path, text));
+            CHECK(ConfigStore::load(path, out, err));
+            std::printf("  a 65-radio auto gain memory loads %zu\n", out.autoGainByRadio.size());
+            CHECK(out.autoGainByRadio.size() == 64);
+        }
+        // AND IT IS WRITTEN: save then load keeps both values, and the file
+        // names the key.
+        {
+            AppConfig in;
+            in.autoGainByRadio["rtlsdr|serial=1"] = true;
+            in.autoGainByRadio["hackrf|serial=2"] = false;
+            CHECK(ConfigStore::save(path, in, err));
+            CHECK(readAll(path).find("\"autoGainByRadio\"") != std::string::npos);
+            out = junkConfig();
+            CHECK(ConfigStore::load(path, out, err));
+            CHECK(out.autoGainByRadio == in.autoGainByRadio);
+        }
+
         // THE CONVERTERS (0.99.36), per radio. A config that predates them
         // has none - every radio, the generator and a file start with no
         // converter - and anything the file cannot mean reads as OFF.
@@ -1829,6 +1914,16 @@ int main() {
             AppConfig biasOff = biasOn;
             biasOff.biasTee["rtlsdr|serial=00000042"] = false;
             CHECK(!cascade::gui::configsEqual(biasOn, biasOff));
+            // The per-radio Auto gain memory (0.99.73), both ways, and a flip
+            // of an existing entry: ticking the box calls no save of its own.
+            AppConfig agcOn = base;
+            agcOn.autoGainByRadio["rtlsdr|serial=00000042"] = true;
+            CHECK(!cascade::gui::configsEqual(base, agcOn));
+            CHECK(!cascade::gui::configsEqual(agcOn, base));
+            AppConfig agcOff = agcOn;
+            agcOff.autoGainByRadio["rtlsdr|serial=00000042"] = false;
+            CHECK(!cascade::gui::configsEqual(agcOn, agcOff));
+            CHECK(!cascade::gui::configsEqual(agcOff, agcOn));
 
             // The transmitter's settings, the rail bank, the rebound keys and
             // the update-check switch: every one of them is changed by a click

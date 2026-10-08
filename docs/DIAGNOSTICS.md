@@ -120,6 +120,15 @@ describe code this product can be held responsible for.
   abandoned and the radio is condemned` - a warning, and the native
   counterpart of SoapySource's abandonment. The remedy is the same one and is
   told to the user in the same words: restart FoxSDR to use this radio again.
+- `source: auto gain remembered on but the radio refused it` - a warning,
+  written at an open (0.99.73) when the Auto gain box was ticked the last time
+  this radio was used (`autoGainByRadio` in `config.json`, per radio, under the
+  bias tee's key) and the radio now says it has no automatic gain or refuses
+  the switch. The radio opens on manual gain with the box unticked, as every
+  radio did before the memory existed, and the remembered "on" is kept for the
+  next open. Written once per open, never for an Airspy (its AGC switches are
+  part of its gain mode) and not for the reopen after a driver fault (that
+  restores what the user had a moment ago).
 - The stream-health line below is written by the native drivers too, in the
   same format and on the same rules.
 - The Airspy drivers write the same shapes under their own names - the open

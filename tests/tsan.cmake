@@ -45,7 +45,7 @@ set(CASCADE_TSAN_TESTS
     # sources with threads of their own, and the vendor-call guard
     test_sdrplay_stall test_sdrplay_source test_sdrplay_service test_soapy_read_bound
     test_soapy_vendor_guard test_vendor_guard test_iq_file_source test_pluto_source
-    test_pluto_tx test_aor_source test_one_chip_one_route test_ppm_app
+    test_pluto_tx test_aor_source test_one_chip_one_route test_ppm_app test_autogain_app
     # work moved off the window's thread (0.99.64 and before): the savers, the disk
     # jobs, the opens, the polls
     test_config_save test_bookmark_save_async test_gui_disk_audit test_gui_file_jobs

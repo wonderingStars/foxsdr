@@ -228,6 +228,25 @@ struct AppConfig {
     // no decimation) until the user changes something on it; every value is
     // clamped on load (core::sanitiseAirspySettings).
     std::map<std::string, AirspySetting> airspy;
+    // EACH RADIO'S AUTOMATIC GAIN SWITCH (0.99.73), remembered per radio under
+    // the bias tee's key (core::biasTeeRadioKey - "<driver>|serial=<serial>", or
+    // "<driver>|<args>" for a radio with no serial) -> whether the Source
+    // section's "Auto gain" box was ticked when the user last changed it and the
+    // radio accepted the change. Stored as the object "autoGainByRadio". The
+    // owner's words: "remember last state of auto gain ... so it always does
+    // that". Before this every radio but the Airspy was forced back to manual
+    // gain at every open, so a radio left on auto gain came back on manual gain
+    // after every restart. An "off" is remembered as well as an "on" (a radio
+    // set back to manual stays manual); nothing is removed at open, so the map
+    // keeps the radios that are not plugged in. Unlike the bias tee there is no
+    // serial gate on an "on": auto gain puts nothing on a connector, and a radio
+    // known only by position that comes back ticked is visibly ticked. The
+    // Airspys are not in it (their AGC switches are part of the gain mode
+    // AppConfig::airspy already holds). EMPTY BY DEFAULT, which is today's
+    // behaviour: every radio opens on manual gain. Element-wise tolerant on
+    // load: an entry that is not a bool, or whose key is not "<kind>|<args>", is
+    // skipped, and the map is capped at core::kBiasTeeMemoryCap.
+    std::map<std::string, bool> autoGainByRadio;
     // WHERE THE PLUTO IS, and it is a field of its own because it is the one
     // radio FoxSDR cannot find by looking.
     //
