@@ -188,6 +188,7 @@ struct DemodScopeFeed;
 class PluginStoreView;
 struct PluginStoreDeck;
 struct PluginStoreModel;
+struct StoreModule;
 struct FittedModulesDeck;
 
 // Whether a device open that finished on a worker thread should still be
@@ -4921,6 +4922,22 @@ private:
         // remembered.
         std::string policyError;
 
+        // The catalogue cache (0.99.72): the time of this read, whether the two
+        // cache files were written on the worker, and why not when they were not
+        // - a failed cache write is reported next to a catalogue that nevertheless
+        // loaded, like policyError. `parseReport` is what parseIndex() dropped from
+        // the PUBLIC index and why (never the regional list's: that outcome is not
+        // disclosed). `pruned` is how many cached pictures the catalogue no longer
+        // names that the worker deleted.
+        std::int64_t readTime = 0;
+        std::string cacheError;
+        std::vector<std::string> parseReport;
+        std::size_t pruned = 0;
+        // A FAILED read brings the kept copy back (read on the worker, so the GUI
+        // thread does no disk work): empty when there is none, or it was unusable.
+        std::vector<cascade::core::PluginCatalogEntry> keptEntries;
+        std::int64_t keptTime = 0;
+
         // REGIONAL CATALOGUE outcome, for the CASCADE_PLUGIN_TEST hook only
         // (reportPluginTestResult). "not-asked" - the default - covers both
         // "the public fetch failed" and "regionalWanted() said no"; a
@@ -4947,10 +4964,107 @@ private:
     std::future<CatalogFetchResult> catalogFuture_;
     std::future<PluginInstallResult> installFuture_;
     bool catalogPending_ = false;
+
+    // --- THE CATALOGUE CACHE AND ITS FRESHNESS (0.99.72) --------------------
+    //
+    // catalog_ can now hold a catalogue this session did NOT read: the kept copy
+    // (<plugins dir>/catalogue.json, PluginRepo::saveCatalogueCache), loaded at
+    // start-up so the store opens populated and put back when a refresh fails so
+    // a failed refresh no longer empties the list. These two say which it is:
+    //   catalogueFromCache_  true while catalog_ is the kept copy; false once a
+    //                        fetch succeeded this session (and while catalog_ is
+    //                        empty, where it means nothing);
+    //   catalogueReadTime_   seconds since the epoch of the read behind catalog_ -
+    //                        the fetch's own time, or the time the cache file
+    //                        recorded; 0 = no catalogue, or a kept copy whose time
+    //                        was not recorded (to be drawn as unknown, never as
+    //                        1970).
+    // catalogError_ holds the reason a refresh failed, verbatim, beside a kept
+    // copy that is in use: "Catalogue from <date>; could not refresh: <reason>" is
+    // the VIEW's sentence, made from these three.
+    //
+    // THE SESSION'S ONE AUTOMATIC READ and the rail chip's IDLE both mean "read
+    // THIS session", so both ask `catalog_` non-empty AND NOT catalogueFromCache_:
+    // a kept copy opens the store populated, but the first open still asks the
+    // network once, and the rail still says IDLE (not OK) for a list nobody has
+    // looked at since the last run.
+    std::int64_t catalogueReadTime_ = 0;
+    bool catalogueFromCache_ = false;
+    // Start-up: loads the kept copy into catalog_ (no network). A cache that cannot
+    // be used is ignored and said so in the log; nothing is repaired or deleted.
+    void loadCachedCatalogue();
+    // True when catalog_ holds a list read this session.
+    bool catalogueReadThisSession() const { return !catalog_.empty() && !catalogueFromCache_; }
+
+    // --- INSTALLED STATE BY ID AND VERSION (0.99.72) ------------------------
+    //
+    // What the last scan knows of each module with a version, joined to the
+    // install records by file so each carries the catalogue id the record gave it
+    // (a module no record names carries its declared name). The input
+    // PluginRepo::installStateFor wants, built from live state.
+    std::vector<cascade::core::ScannedModule> scannedModules() const;
+    // The state of one catalogue entry: NotInstalled / Installed /
+    // UpdateAvailable{installedVersion} / NewerInstalled, by plugin id and version
+    // from installed.json and the scan - never by file name.
+    cascade::core::InstallState pluginInstallState(const cascade::core::PluginCatalogEntry& e) const;
+
+    // --- SCREENSHOTS (0.99.72) ----------------------------------------------
+    //
+    // A plugin's pictures are fetched ONLY when the view asks for them (the page
+    // of one plugin being opened - never for the grid), one at a time on the same
+    // std::async slot pattern as installs, and NEVER while a catalogue fetch, an
+    // install or an update is in flight, or an ADD ALL run is active (those
+    // refuse to start while one is: one transfer at a time, PluginRepo has one
+    // cancel). Each picture is tracked by its sha256 - the cache key, so a
+    // picture two plugins share is one request:
+    //   Pending  queued or in flight;
+    //   Ready    on disk at `path` (<plugins dir>/store-cache/<sha256>.png), its
+    //            bytes hashed to the catalogue's digest - the view decodes it to a
+    //            texture and owns that;
+    //   Failed   `reason`, verbatim and in English from PluginRepo.
+    // Nothing is decoded here and nothing is drawn.
+    enum class PictureState { None, Pending, Ready, Failed };
+    struct PictureStatus {
+        PictureState state = PictureState::None;
+        std::string path;    // Ready only
+        std::string reason;  // Failed only
+    };
+    struct ScreenshotFetchResult {
+        std::string sha256;
+        bool ok = false;
+        std::string path;
+        std::string error;
+    };
+    std::future<ScreenshotFetchResult> screenshotFuture_;
+    bool screenshotPending_ = false;
+    std::deque<cascade::core::CatalogScreenshot> screenshotQueue_;
+    std::map<std::string, PictureStatus> pictures_;  // by sha256
+    // Queues every picture of catalogue entry `pluginId` that is not already Ready,
+    // queued or in flight; a Failed one is queued again only when `retryFailed`
+    // (the view passes true on the edge of opening a page, and false on later
+    // frames, so a picture that failed is not retried sixty times a second). An
+    // id the catalogue does not hold queues nothing.
+    void requestScreenshots(const std::string& pluginId, bool retryFailed = false);
+    // The status of one picture; state None for one never requested.
+    PictureStatus pictureStatus(const cascade::core::CatalogScreenshot& s) const;
+    // Starts the next queued picture when the slot is free. Called once per frame
+    // from pollPluginAsync, after it has collected whatever finished.
+    void pumpScreenshots();
+    // After a catalogue replaced catalog_: drops the status and the queue entry of
+    // every picture the new catalogue does not name.
+    void forgetStalePictures();
     // The store's one automatic catalogue read per session (gui/store_first_open.hpp).
     cascade::gui::StoreFirstOpen storeFirstOpen_;
     bool installPending_ = false;
     std::string installBusyName_;  // shown in "Downloading <name>..."
+    // The catalogue id of the plugin the transfer in flight is for (0.99.72): the store
+    // draws FITTING... on that plugin's key and on no other.
+    std::string installBusyId_;
+    // THE LAST CATALOGUE READ FAILED (0.99.72): catalogError_ is then a refresh that did
+    // not happen, and the rows on screen are a kept copy or an earlier read. As against a
+    // catalogue that LOADED with a warning beside it (it could not be kept, its policy
+    // could not be saved), where catalogError_ is also set.
+    bool catalogueRefreshFailed_ = false;
 
     // Starts the catalogue fetch on a worker. https:// goes through
     // PluginRepo::fetchIndex; a path with no "://" scheme is read from disk
@@ -5002,9 +5116,18 @@ private:
     // state, and a second transcription of catalogue row into StoreModule
     // would be a second set of rules about what "fitted" and "blocked" mean.
     void buildPluginStoreModel(PluginStoreModel& model);
+    // One catalogue row -> one StoreModule (0.99.72): the transcription
+    // buildPluginStoreModel makes for every row, and the fitted window's page makes
+    // again for the module whose page is open. `updates` is plannedPluginUpdates(),
+    // made once by the caller.
+    void fillStoreModule(int index, const std::vector<cascade::core::PluginUpdate>& updates,
+                         cascade::gui::StoreModule& sm) const;
     // Builds the queue from the store's own plan and starts it. Re-plans from
     // live state rather than trusting the plan the key was drawn from.
-    void startAddAll(bool noticesAcknowledged);
+    // `updatesOnly` is UPDATE ALL (0.99.72): the same queue with nothing to fetch in it -
+    // an update needs no acknowledgement, because a plugin that is fitted has had its
+    // notice shown.
+    void startAddAll(bool noticesAcknowledged, bool updatesOnly = false);
     // Starts the next module in the queue when the slot is free, and writes
     // the summary when the queue empties. Called once per frame, after
     // pollPluginAsync has had its chance to clear installPending_.
@@ -5020,14 +5143,16 @@ private:
     // Consumes finished catalogue/install futures; called once per frame from
     // drawUi, right beside pollSourceAsync.
     void pollPluginAsync();
-    // True if the catalogue entry's file name already exists in the plugins
-    // directory, comparing against every record PluginHost produced — loaded
-    // AND refused — and against the manifest's own records. A refused DLL
-    // still occupies the name, so treating it as "not installed" would offer
-    // an install that could not replace it; and a RETIRED plugin has been
-    // renamed out of the scan, so the host has no record of it at all — the
-    // manifest is what keeps it from looking uninstalled and sending the user
-    // down an Install path when Update is the remedy.
+    // True if SOME version of the catalogue entry's plugin is installed: by plugin
+    // id and version (pluginInstallState), from the install records AND the
+    // scan, and NOT by file name (0.99.72) - the file the 1.8.1 entry writes has
+    // never been on disk beside an installed 1.8.0, and the old file-name test
+    // called that NOT INSTALLED and offered a second install. UpdateAvailable and
+    // NewerInstalled are installed: the remedy for the first is the update, and
+    // for neither is a plain install. A RETIRED plugin has been renamed out of the
+    // scan, so the host has no record of it; its install record is what keeps it
+    // from looking uninstalled and sending the user down an Install path when
+    // Update is the remedy.
     bool catalogEntryInstalled(const cascade::core::PluginCatalogEntry& e) const;
     // The HOST RECORD for a catalogue entry, or null when the host has none.
     //
@@ -5106,6 +5231,19 @@ private:
     int fittedWinY_ = 0;
     int fittedWinW_ = 0;
     int fittedWinH_ = 0;
+    // THE PLUGIN STORE'S OWN RECTANGLE (0.99.72), remembered the way the fitted
+    // window's is above: AppConfig::pluginStoreX/Y/Width/Height, zero width =
+    // nothing saved, restored through placeSavedFeatureWindow and read back
+    // from the live window every frame it is drawn (drawPluginStoreWindow).
+    int storeWinX_ = 0;
+    int storeWinY_ = 0;
+    int storeWinW_ = 0;
+    int storeWinH_ = 0;
+    // WHICH PLUGIN THE LAST INSTALL REPORT OR ERROR CONCERNS (0.99.72): the
+    // catalogue id of the plugin startInstall / startUpdate was last asked about.
+    // The store's page shows installReport_ / installError_ under the header key
+    // of THAT plugin and of no other.
+    std::string installResultId_;
     // Whether the STORE WINDOW actually drew its content this frame.
     //
     // THE ORDERING CONSTRAINT SURVIVED BOTH BODIES BECOMING WINDOWS, it only

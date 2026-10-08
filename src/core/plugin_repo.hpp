@@ -185,6 +185,22 @@ struct PluginPlatform {
     std::uint64_t sizeBytes = 0;
 };
 
+// One picture of a plugin at work, as the catalogue names it (0.99.72, the
+// plugin store's page for one plugin). Like every field here it came off the
+// wire: parseIndex() keeps only a picture whose `url` is https and whose `sha256`
+// is exactly 64 hexadecimal digits (lower-cased), and fetchScreenshot() refuses
+// anything that does not hash to it. `sizeBytes`, `width` and `height` are
+// ADVISORY - for laying out a frame before the picture arrives, never a limit
+// and never an allocation size (the 4 MiB cap is kMaxScreenshotBytes).
+struct CatalogScreenshot {
+    std::string url;      // https:// only
+    std::string sha256;   // 64 lower-case hex digits; also the cache file's name
+    std::string caption;  // one line under the picture; never empty
+    std::uint64_t sizeBytes = 0;
+    int width = 0;
+    int height = 0;
+};
+
 // One plugin as the catalogue describes it.
 struct PluginCatalogEntry {
     std::string id;           // stable machine identifier, e.g. "pocsag"
@@ -196,6 +212,29 @@ struct PluginCatalogEntry {
     std::string description;  // paragraph for the detail pane
     std::string homepage;
     std::string legalNotice;  // e.g. patent/export notes the author wants shown
+
+    // --- The shop-window fields (0.99.72). ALL OPTIONAL: a catalogue that has
+    // none of them parses exactly as it did before they existed, and an older
+    // client ignores them (unknown keys always were). They are cosmetic, so a
+    // wrong TYPE in one of them costs that field (it keeps its default and the
+    // parse report says why), never the catalogue - unlike the security fields
+    // above, where a half-understood document is refused whole.
+    std::string category;          // "aircraft", "marine", "satellites-weather",
+                                   // "meters-paging", "broadcast" or "maps-tools";
+                                   // kept verbatim - an unknown word is the view's OTHER
+    bool experimental = false;     // never decoded a real signal
+    std::string whatsNew;          // one short paragraph about THIS version
+    std::string published;         // "YYYY-MM-DD" (a malformed date is dropped)
+    std::vector<CatalogScreenshot> screenshots;  // at most kMaxScreenshotsPerPlugin
+    // What the binary declares, as the catalogue read it off the binary: the
+    // names exactly as published ("CASCADE_CAP_IQ_DECODER", in order, known or
+    // not) and the ABI bits of the ones this host knows. A name this host has
+    // never heard of keeps its place in capabilityNames and sets no bit - a newer
+    // catalogue naming a newer capability is not an error. 0 and empty when the
+    // catalogue says nothing, which is not the same as "declares none": the
+    // store draws NOT DECLARED only for an uninstalled plugin with no names.
+    std::uint32_t capabilities = 0;
+    std::vector<std::string> capabilityNames;
 
     // The plugin ABI the binary was built against. Must equal
     // CASCADE_PLUGIN_ABI_VERSION exactly to be installable.
@@ -326,6 +365,38 @@ struct PluginUpdate {
     const PluginCatalogEntry* entry = nullptr;
 };
 
+// ---------------------------------------------------------------------------
+// Installed state, by plugin id and version (0.99.72)
+// ---------------------------------------------------------------------------
+
+// What the plugin host's last scan knows about one module file, reduced to what
+// installStateFor() needs. Built by the caller from PluginHost::plugins(): `id` is
+// the catalogue id of the install record that names `file` (the scan itself only
+// knows a module's declared name, which is not the catalogue's id), or, for a
+// module no record names - a side-loaded one - its declared name. A module whose
+// `id` matches no catalogue entry is simply never asked about. A record with no
+// descriptor (a module refused before its description could be read) has no
+// version and is left out by the caller.
+struct ScannedModule {
+    std::string id;
+    std::string version;  // what the module's own descriptor says it is
+    std::string file;     // bare module file name
+};
+
+enum class InstallStateKind {
+    NotInstalled,     // no copy of this plugin, in any version
+    Installed,        // the installed version is the catalogue's
+    UpdateAvailable,  // the catalogue has a newer version than the newest installed
+    NewerInstalled,   // an installed copy is newer than the catalogue's
+};
+
+struct InstallState {
+    InstallStateKind kind = InstallStateKind::NotInstalled;
+    // The NEWEST version found installed; empty when NotInstalled. For an
+    // UpdateAvailable this is the "from" of "vX to vY".
+    std::string installedVersion;
+};
+
 class PluginRepo {
 public:
     PluginRepo() = default;
@@ -353,6 +424,24 @@ public:
 
     // Redirect hops allowed, all of which must stay on the same host (rule 3).
     static constexpr int kMaxRedirects = 4;
+
+    // ONE PICTURE, AT MOST 4 MiB (0.99.72). A screenshot is a 1040 x 650 PNG of a
+    // few hundred kilobytes; this is the bound on what a hostile or broken server
+    // can make the store write, enforced against the bytes that ARRIVE (the same
+    // stance as rule 4, and sizeBytes in the catalogue is never trusted for it).
+    static constexpr std::uint64_t kMaxScreenshotBytes = 4ull * 1024ull * 1024ull;
+
+    // How many pictures one plugin may list; parseIndex() keeps the first this many
+    // and says it dropped the rest. A page fetches its pictures one after another,
+    // so this is also the most one page can ask the network for.
+    static constexpr std::size_t kMaxScreenshotsPerPlugin = 8;
+
+    // The catalogue cache's two files in the plugins directory, and the
+    // directory of cached pictures. Named here so the plugin folder's signature
+    // (core/plugin_dir_signature.cpp) and the tests agree with the writer.
+    static const char* catalogueCacheFileName();      // "catalogue.json"
+    static const char* catalogueCacheTimeFileName();  // "catalogue.json.time"
+    static const char* screenshotCacheDirName();      // "store-cache"
 
     // The published catalogue index:
     //   https://raw.githubusercontent.com/wonderingStars/foxsdr-plugins/master/index.json
@@ -430,6 +519,9 @@ public:
     //   - ANY of its platform URLs fails isRegionalDownloadUrl(url,
     //     downloadPrefix) - one bad platform condemns the whole entry,
     //     including a platform whose own URL was fine.
+    // A regional entry that survives carries NO screenshots (0.99.72): a picture
+    // is fetched from the address its entry names, and a regional list must not be
+    // able to make the store contact an address of its choosing.
     static RegionalMergeResult mergeRegional(const std::vector<PluginCatalogEntry>& publicEntries,
                                              const std::vector<PluginCatalogEntry>& regionalEntries,
                                              const std::string& downloadPrefix);
@@ -457,8 +549,56 @@ public:
     // decision belongs to sanitiseFileName() at install time, so there is
     // exactly one enforcement point; refusing an entire catalogue because one
     // entry has an odd filename would deny the user every other plugin.
+    //
+    // THE SHOP-WINDOW FIELDS (0.99.72: category, experimental, whatsNew,
+    // published, screenshots, capabilities) are optional and cosmetic, so they
+    // are read more gently than everything above: a field of the wrong type, a
+    // malformed date, a capability that is not a string, and a screenshots entry
+    // that is not an object, lacks a url, sha256 or caption, has a url that is not
+    // https or a sha256 that is not 64 hexadecimal digits, are each DROPPED - the
+    // plugin and the catalogue survive - and, when `report` is given, one English
+    // line per drop says which plugin, which item and why (nothing is appended
+    // when nothing was dropped). `report` is for the log and for tests; the
+    // caller owns it and parseIndex() never clears it. On a REFUSED index it may
+    // hold what was noted before the refusal: read it only after a true return.
     static bool parseIndex(const std::string& json, std::vector<PluginCatalogEntry>& out,
-                           std::string& error);
+                           std::string& error, std::vector<std::string>* report = nullptr);
+
+    // The ABI bit a catalogue capability NAME stands for ("CASCADE_CAP_IQ_DECODER"
+    // -> CASCADE_CAP_IQ_DECODER), or 0 for a name this host does not know. The
+    // match is exact and case-sensitive: the names are the C macro names the
+    // catalogue generator reads off the binary.
+    static std::uint32_t capabilityBitForName(const std::string& name);
+
+    // ---- Installed state by id and version (0.99.72) -----------------------
+    //
+    // Whether the plugin `e` describes is installed, and how its version stands
+    // against the catalogue's - judged by plugin id and compareVersions(), NEVER
+    // by file name (a file name carries its version, so the file the 1.8.1 entry
+    // would write has never been on disk beside an installed 1.8.0).
+    //
+    // WHAT COUNTS AS INSTALLED, for `e.id`:
+    //   - a scanned module whose id is `e.id` (the scan wins: it is the version
+    //     the module itself declares, so a file replaced by hand is seen as what
+    //     it is);
+    //   - an install record for `e.id` whose file is not missing from the disk,
+    //     UNLESS the scan knows that very file (then the scan's word was taken). A
+    //     record the scan does not know is a module that was turned aside - a
+    //     retired one - and is still installed.
+    // Several copies: the newest version speaks. NotInstalled when there are none.
+    //
+    // THEN: the catalogue's version newer -> UpdateAvailable{installedVersion};
+    // equal -> Installed; older -> NewerInstalled. The one more UpdateAvailable,
+    // the same one planUpdates() plans: the versions are equal, the catalogue
+    // entry targets this host's ABI and an install record says the installed
+    // build targeted another (a rebuild at the same version number).
+    //
+    // PURE: no disk, no clock. It does not ask whether the entry can be
+    // installed on this host (a build for it, an ABI): that is the install gate's
+    // question, and an update that cannot run still is an update that exists.
+    static InstallState installStateFor(const PluginCatalogEntry& e,
+                                        const std::vector<InstalledPlugin>& installed,
+                                        const std::vector<ScannedModule>& scanned);
 
     // THE PATH-TRAVERSAL GUARD (rule 6). Accepts only a bare filename made of
     // [A-Za-z0-9._-], starting with a letter or digit, containing no "..",
@@ -780,6 +920,80 @@ public:
 
     const std::vector<PluginCatalogEntry>& entries() const { return entries_; }
 
+    // The raw text of the index the last SUCCESSFUL fetchIndex() read (what
+    // saveCatalogueCache() keeps), and the parse report of that same read (the
+    // lines parseIndex() gave: what it dropped and why). Both empty after a
+    // fetchIndex() that failed, exactly as entries() is. Read on the thread that
+    // ran the fetch, after it returned.
+    const std::string& lastIndexText() const { return lastIndexText_; }
+    const std::vector<std::string>& lastParseReport() const { return lastParseReport_; }
+
+    // ---- The catalogue cache (0.99.72) --------------------------------------
+    //
+    // The index the last good read produced, kept on disk beside installed.json
+    // as `catalogue.json` with the time of that read in `catalogue.json.time`
+    // (seconds since the epoch, one line), so the store can show the last known
+    // list when the network is away and say how old it is, instead of an empty
+    // window. It is the PUBLIC index only: the regional list's outcome is never
+    // disclosed or kept (see the REGIONAL CATALOGUE block).
+    //
+    // saveCatalogueCache() is called ONLY after a read that parsed - never with
+    // text that was refused, because a cache that holds what the client refused
+    // would offer it next start. Each file is written whole to "<name>.part" and
+    // renamed over the old one (the manifest's route), so a crash leaves the old
+    // pair or the new file, never half of either; the pair is written text first.
+    // Returns false with `error` on a bad argument (empty text, over
+    // kMaxIndexBytes) or a failed write, and writes nothing in the first case.
+    //
+    // The plugin folder's signature (core/plugin_dir_signature.cpp) does NOT
+    // count these two files - nor their ".part" - because a catalogue fetch that
+    // changed them is not a change to which plugins there are, and counting them
+    // made every fetch look like one (the 0.99.63 rescan fault).
+    static bool saveCatalogueCache(const std::string& pluginsDir, const std::string& rawIndexText,
+                                   std::int64_t readTimeUnix, std::string& error);
+
+    // Reads the cache back through the ordinary parseIndex(), so a cache is held
+    // to every rule a fetched index is. True with `entries` filled and `readTime`
+    // set (0 when the time file is missing or unreadable: "not recorded", which
+    // the caller draws as an unknown date, never as 1970). False with `error` -
+    // a reason in English - when there is no cache, it cannot be read, or it does
+    // not parse (a corrupt cache is IGNORED, never repaired and never deleted);
+    // `entries` is empty then.
+    static bool loadCachedIndex(const std::string& pluginsDir,
+                                std::vector<PluginCatalogEntry>& entries, std::int64_t& readTime,
+                                std::string& error);
+
+    // ---- Screenshots (0.99.72) ----------------------------------------------
+    //
+    // WHERE A PICTURE LIVES: "<pluginsDir>/store-cache/<sha256>.png". The name is
+    // the catalogue's digest of the bytes, so a cached file is its own proof (it is
+    // re-hashed before it is trusted) and two plugins naming one picture share it.
+    // Empty for a digest that is not 64 hexadecimal digits.
+    static std::string screenshotCachePath(const std::string& pluginsDir,
+                                           const std::string& sha256);
+
+    // Makes sure the picture is in the cache and says where. A cached file whose
+    // bytes hash to `s.sha256` is returned WITHOUT any request; a cached file that
+    // does not is deleted and fetched again. Otherwise: https only (refused before
+    // any socket), the same transport as every other transfer here but with a short
+    // leash - 4 s to connect, 15 s to receive - and a hard cap of
+    // kMaxScreenshotBytes against the bytes that arrive; the body is streamed to
+    // "<sha256>.png.part" while it is hashed, a digest that is not the catalogue's
+    // deletes the part and refuses, and only a match is renamed into place. Nothing
+    // is left behind on any failure. The request carries the URL and nothing else.
+    // Blocking: off the UI thread. cancel() stops it. Does NOT touch progress():
+    // that bar belongs to installs.
+    bool fetchScreenshot(const std::string& pluginsDir, const CatalogScreenshot& s,
+                         std::string& localPath, std::string& error);
+
+    // Deletes the cached pictures the catalogue no longer names (and any ".part" a
+    // killed run left), and returns the file names it deleted. It touches only files
+    // of the shape the cache writes - "<64 hex>.png" and "*.part" - so anything
+    // else a person put in the folder stays. Call it with a catalogue that was
+    // just read successfully, never with the cached or an empty fallback.
+    static std::vector<std::string> pruneScreenshotCache(
+        const std::string& pluginsDir, const std::vector<PluginCatalogEntry>& catalogue);
+
     // Downloads, verifies and installs one entry into `pluginsDir`, creating
     // that directory if needed. On success `installedPath` is the installed
     // file. Returns false with `error` on anything at all, and NEVER leaves a
@@ -879,6 +1093,8 @@ private:
                      health::InstallClass& failClass);
 
     std::vector<PluginCatalogEntry> entries_;
+    std::string lastIndexText_;                // see lastIndexText()
+    std::vector<std::string> lastParseReport_;  // see lastParseReport()
     std::atomic<float> progress_{0.0f};
     std::atomic<bool> cancel_{false};
 };

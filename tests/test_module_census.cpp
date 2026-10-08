@@ -374,7 +374,12 @@ int main() {
         const std::string s = decoderAbsenceNote(c);
         CHECK(contains(s, "\"ADS-B\""));
         CHECK(contains(s, "you stopped it"));
-        CHECK(contains(s, "STOPPED BY YOU"));
+        // The window's word for a stopped module is STOPPED (0.99.72: it was STOPPED BY YOU), and
+        // its keys are on the module's row - the data plate the old sentence named is gone.
+        CHECK(contains(s, "STOPPED"));
+        CHECK(!contains(s, "STOPPED BY YOU"));
+        CHECK(contains(s, "on its row"));
+        CHECK(!contains(s, "plate"));
         CHECK(!mentionsInstalling(s));
         CHECK(!contains(s, "Plugin store"));
         // And it may not claim the module decodes any particular thing: the
@@ -491,6 +496,9 @@ int main() {
         const std::string s = trackSourceAbsenceNote(c, "aircraft positions", kRemedySentinel);
         CHECK(contains(s, "Nothing is publishing aircraft positions"));
         CHECK(contains(s, "\"ADS-B\" is a track source and you stopped it"));
+        // Where the key is: on the module's row (the data plate this sentence used to name is gone).
+        CHECK(contains(s, "on its row"));
+        CHECK(!contains(s, "plate"));
         CHECK(!contains(s, kRemedySentinel));
         CHECK(!mentionsInstalling(s));
     }

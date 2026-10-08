@@ -148,7 +148,7 @@ std::string trackSourceAbsenceNote(const ModuleCensus& c, const char* subject,
             s = buf;
         }
         s += tr(" A stopped module stays fitted and is given no track source until you "
-                "start it again - the key is on its own plate in the Fitted modules window.");
+                "start it again - the key is on its row in the Fitted modules window.");
         return s;
     }
     if (c.refused > 0) {
@@ -218,8 +218,8 @@ std::string decoderAbsenceNote(const ModuleCensus& c) {
             s = buf;
         }
         s += tr(" A stopped module stays fitted and is fed no signal until you start it "
-                "again - the Fitted modules window letters it STOPPED BY YOU and the key "
-                "is on its plate.");
+                "again - the Fitted modules window letters it STOPPED and the key "
+                "is on its row.");
         return s;
     }
     if (c.refused > 0) {

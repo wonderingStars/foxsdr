@@ -106,6 +106,30 @@ exactly as many.
   stores neither the code nor the address and records nothing about the
   request. Neither request carries an identifier, and the foxsdr.com request
   is not made when you have pointed the store at a different catalogue.
+- **Since 0.99.72 the plugin store shows a picture of a plugin at work, and
+  keeps the last catalogue it read.**
+  - *The pictures.* When — and only when — you open one plugin's page in the
+    store, FoxSDR fetches that plugin's pictures, one after another, from the
+    address the catalogue gives for each (on raw.githubusercontent.com, the
+    same place as the public list). The request carries **nothing but that
+    address** — no identifier, no cookie, nothing about you or your machine —
+    and is made only over https. The list of plugins does not fetch any
+    picture. Each picture is limited to 4 MiB and checked against the digest
+    the catalogue publishes before it is used; one that does not match is
+    thrown away. A picture is kept on your machine as
+    `store-cache\<digest>.png` in the plugins folder, so the next time its
+    page opens it is read from there and nothing is requested; a picture the
+    catalogue stops listing is deleted the next time the catalogue is read.
+    A plugin that comes from the regional list shows no pictures, so that
+    list never makes FoxSDR contact another address.
+  - *The kept catalogue.* After every successful read of the public
+    catalogue FoxSDR writes it, unchanged, to `catalogue.json` in the plugins
+    folder (beside `installed.json`), with the time of the read in
+    `catalogue.json.time`. Nothing is sent: it is read back at start-up so
+    the store opens with the list it had last time, and is shown with its
+    date when the catalogue cannot be reached. A file that does not read as a
+    catalogue is ignored. The regional list is never kept. Delete the two
+    files and the next read writes them again.
 - The Satellites plugin, when it is fitted and tracking, fetches orbital
   element sets from CelesTrak about every twelve hours, falling back to a
   copy at foxsdr.com/tle/all.tle when CelesTrak does not answer. The request

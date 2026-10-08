@@ -638,6 +638,10 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     getInt(j, "fittedModulesY", out.fittedModulesY);
     getInt(j, "fittedModulesWidth", out.fittedModulesWidth);
     getInt(j, "fittedModulesHeight", out.fittedModulesHeight);
+    getInt(j, "pluginStoreX", out.pluginStoreX);
+    getInt(j, "pluginStoreY", out.pluginStoreY);
+    getInt(j, "pluginStoreWidth", out.pluginStoreWidth);
+    getInt(j, "pluginStoreHeight", out.pluginStoreHeight);
     getInt64(j, "pluginLastUpdateCheck", out.pluginLastUpdateCheck);
     getStringArray(j, "pluginTuneAllowed", out.pluginTuneAllowed);
     getStringArray(j, "closedWindows", out.closedWindows);
@@ -922,6 +926,14 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
             out.fittedModulesY = 0;
             out.fittedModulesWidth = 0;
             out.fittedModulesHeight = 0;
+        }
+        // The plugin store window's rectangle (0.99.72): the same rule.
+        if (!rectOk(out.pluginStoreX, out.pluginStoreY, out.pluginStoreWidth,
+                    out.pluginStoreHeight)) {
+            out.pluginStoreX = 0;
+            out.pluginStoreY = 0;
+            out.pluginStoreWidth = 0;
+            out.pluginStoreHeight = 0;
         }
     }
     // The receiver's position is validated as ONE position, for the same reason
@@ -1209,6 +1221,10 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
     j["fittedModulesY"] = cfg.fittedModulesY;
     j["fittedModulesWidth"] = cfg.fittedModulesWidth;
     j["fittedModulesHeight"] = cfg.fittedModulesHeight;
+    j["pluginStoreX"] = cfg.pluginStoreX;
+    j["pluginStoreY"] = cfg.pluginStoreY;
+    j["pluginStoreWidth"] = cfg.pluginStoreWidth;
+    j["pluginStoreHeight"] = cfg.pluginStoreHeight;
     j["pluginLastUpdateCheck"] = cfg.pluginLastUpdateCheck;
     j["pluginTuneAllowed"] = cfg.pluginTuneAllowed;
     j["closedWindows"] = cfg.closedWindows;

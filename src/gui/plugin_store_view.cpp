@@ -1,42 +1,56 @@
-// plugin_store_view.cpp - the PLUGIN STORE window, and the shared DATA PLATE.
+// plugin_store_view.cpp - the PLUGIN STORE window, and the page body it shares
+// with the FITTED MODULES window.
 //
 // Read the header first: it carries the division of labour with the FITTED
-// MODULES window and, more importantly, the one claim from the design that
-// this file refuses to draw.
+// MODULES window and, more importantly, the one claim this file refuses to draw.
 //
-// THE BENCH VOCABULARY. scope_face.hpp is the shared vocabulary and everything
-// in it that fits is used here - bevels, rails, group captions, lamps, the
-// drum well. What it does not have and this window needs - a recessed WELL, a
-// LABELLED brass key, a two-position ROCKER, a selector SEGMENT, a HATCH and a
-// NOTE - is built in the anonymous namespace below, exactly as map_view.cpp
-// had to build them for the satellites window. They are duplicated rather than
-// promoted because scope_face.hpp is not this agent's file to change; when a
-// third window wants them, that is the moment to promote all three copies into
-// it rather than to make a fourth.
+// THE LOOK. A shop window in the application's own theme: phosphor outlines on the
+// well, ivory names, muted summaries, small engraved capitals for headings and
+// keys, the category glyphs drawn with the draw list. Nothing here is a bitmap
+// except the catalogue's own pictures. Every colour is a theme:: name, so all six
+// themes carry it, and every size comes from fonts::, so the interface scale does.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 #include "gui/plugin_store_view.hpp"
 
 #include <algorithm>
+#include <array>
+#include <cfloat>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <string>
 #include <string_view>
 #include <vector>
 
 #include "core/i18n.hpp"
-#include "core/utf8_text.hpp"
 #include "core/plugin_abi.h"
 #include "core/plugin_repo.hpp"
+#include "core/png_decode.hpp"
+#include "core/utf8_text.hpp"
 #include "gui/fonts.hpp"
-#include "gui/ui_scale.hpp"
 #include "gui/scope_face.hpp"
 #include "gui/text_fit.hpp"
 #include "gui/theme.hpp"
 #include "gui/ui_census.hpp"
+#include "gui/ui_scale.hpp"
 #include "imgui.h"
+
+// GL last: <GL/gl.h> on Windows needs <windows.h> first, and the macros it brings
+// are not wanted by anything above.
+#if defined(_WIN32)
+#include <windows.h>
+#endif
+#include <GL/gl.h>
+
+#ifndef GL_CLAMP_TO_EDGE
+#define GL_CLAMP_TO_EDGE 0x812F
+#endif
 
 namespace cascade::gui {
 using cascade::i18n::tr;
@@ -44,6 +58,8 @@ using cascade::i18n::trId;
 namespace {
 
 // --- measurement --------------------------------------------------------------
+
+float S() { return uiscale::factor(); }
 
 float textW(ImFont* f, float px, const char* s) {
     return f->CalcTextSizeA(px, FLT_MAX, 0.0f, s).x;
@@ -57,932 +73,6 @@ float wrapH(ImFont* f, float px, float wrapWidth, const char* s) {
     return f->CalcTextSizeA(px, FLT_MAX, wrapWidth, s).y;
 }
 
-// A figure is a figure only if it is made of figures. fonts.hpp is narrow
-// about this for a measured reason - Nova Mono's capitals merge into solid
-// blocks below about 20px - so the monospaced face is chosen by TESTING the
-// string rather than by a call site's opinion of what it holds. A version
-// string ("1.4.2") and a size ("2.10") are figures; "2.1 MB" is not, because
-// the unit is a word.
-bool allFigures(const char* s) {
-    if (s == nullptr || s[0] == '\0') { return false; }
-    for (const char* p = s; *p != '\0'; ++p) {
-        const bool digit = (*p >= '0' && *p <= '9');
-        if (!digit && *p != '.' && *p != '-' && *p != ':') { return false; }
-    }
-    return true;
-}
-
-ImFont* faceForValue(const char* s) {
-    return allFigures(s) ? fonts::reading() : fonts::ui();
-}
-
-// THE ONE SIZE EVERY SENTENCE IN THIS WINDOW IS SET IN, through the public
-// accessor so a test and the drawing cannot disagree about it. See
-// storeProsePx() at the foot of this file for why it is no longer the tiny
-// engraving - and note that every measured height and every key width in here
-// already derives from it, which is what made the raise one change rather than
-// a sweep of literals.
-float prose() { return storeProsePx(); }
-
-// --- the vocabulary this window adds ------------------------------------------
-
-// The recessed bay a group of controls sits in: dark enamel cut into the
-// panel, a brass lip around it and the bevel lit from below, which is what
-// makes it read as a hole rather than as a dark rectangle.
-void addDeckWell(ImDrawList* dl, const ImVec2& tl, const ImVec2& br) {
-    if (dl == nullptr || br.x - tl.x < 8.0f || br.y - tl.y < 8.0f) { return; }
-    const float r = theme::kPanelRounding;
-    dl->AddRectFilled(tl, br, theme::kEnamelDark, r);
-    if (br.x - tl.x > r * 2.0f) {
-        dl->AddRectFilledMultiColor(ImVec2(tl.x + r, tl.y), ImVec2(br.x - r, br.y),
-                                    theme::kEnamelDark, theme::kEnamelDark, theme::kWell,
-                                    theme::kWell);
-    }
-    dl->AddRect(tl, br, theme::withAlpha(theme::kBrassBright, 0.75f), r, 0, 2.0f);
-    addBenchBevel(dl, tl, br, r, false);
-}
-
-// The inner box a block of the data plate sits in: the well's own floor, one
-// hairline in. Flat rather than gradient, so a box inside a well does not read
-// as a second well.
-void addPlateBox(ImDrawList* dl, const ImVec2& tl, const ImVec2& br) {
-    if (dl == nullptr || br.x - tl.x < 8.0f || br.y - tl.y < 8.0f) { return; }
-    dl->AddRectFilled(tl, br, theme::kWell, theme::kKeyRounding);
-    dl->AddRect(tl, br, theme::withAlpha(theme::kBrassDark, 0.9f), theme::kKeyRounding, 0,
-                theme::kHairline);
-}
-
-// A labelled brass key, one or two lines. Disabled draws it drained and
-// refuses the click - and the sentence saying WHY lives beside it, because a
-// greyed key with no explanation is the fault this redesign exists to remove.
-bool drawDeckKey(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, const char* line1,
-                 const char* line2, bool enabled, const char* id) {
-    if (dl == nullptr || br.x - tl.x < 8.0f || br.y - tl.y < 8.0f) { return false; }
-    ImGui::PushID(id);
-    ImGui::SetCursorScreenPos(tl);
-    ImGui::BeginDisabled(!enabled);
-    const bool pressed = ImGui::InvisibleButton("##key", ImVec2(br.x - tl.x, br.y - tl.y));
-    const bool hovered = ImGui::IsItemHovered();
-    const bool held = ImGui::IsItemActive();
-    const bool focused = ImGui::IsItemFocused();
-    ImGui::EndDisabled();
-    ImGui::PopID();
-
-    const float r = theme::kKeyRounding;
-    if (!enabled) {
-        dl->AddRectFilled(tl, br, theme::kWell, r);
-        dl->AddRect(tl, br, theme::withAlpha(theme::kBrassDark, 0.80f), r, 0,
-                    theme::kHairline);
-    } else {
-        if (!held) {
-            // Proud metal casts a shadow; a pressed key does not. That one
-            // difference is the state indication before any colour is used.
-            dl->AddRectFilled(ImVec2(tl.x + 1.0f, tl.y + 2.0f),
-                              ImVec2(br.x + 1.0f, br.y + 2.0f),
-                              theme::withAlpha(theme::kVoid, 0.45f), r);
-        }
-        const ImU32 top = held ? theme::kBrassMid : (hovered ? theme::kIvory : theme::kCream);
-        const ImU32 bot = held ? theme::kBrassDark : theme::kBrassBright;
-        dl->AddRectFilled(tl, br, bot, r);
-        if (br.x - tl.x > r * 2.0f) {
-            dl->AddRectFilledMultiColor(ImVec2(tl.x + r, tl.y), ImVec2(br.x - r, br.y), top,
-                                        top, bot, bot);
-        }
-        addBenchBevel(dl, tl, br, r, !held);
-    }
-    if (focused) {
-        dl->AddRect(ImVec2(tl.x - 2.0f, tl.y - 2.0f), ImVec2(br.x + 2.0f, br.y + 2.0f),
-                    theme::kBrassBright, r + 1.0f, 0, theme::kHairline);
-    }
-
-    // Engraved into brass, which the palette's rule allows for a caption on
-    // metal and forbids for a reading on glass. A dead key letters in a muted
-    // ink instead, so it reads as unavailable rather than as unlabelled.
-    //
-    // MUTED, NOT FAINT. A disabled key's ground is kWell; kInkFaint on it is
-    // about 4:1, and this window has three keys that spend most of their life
-    // disabled - FIT on a module that cannot be fitted, ALREADY FITTED, and
-    // CHECK NOW before a source is set - so the dead label is the one a user
-    // most often has to read. kInkMuted is about 6:1 there and is still a
-    // clear step below the cream of a live key.
-    ImFont* f = fonts::ui();
-    const float px = prose();
-    const ImU32 ink = enabled ? theme::kEnamel : theme::kInkMuted;
-    const float lh = faceH(f, px);
-    const int lines = (line2 != nullptr && line2[0] != '\0') ? 2 : 1;
-    float y = (tl.y + br.y) * 0.5f - lh * static_cast<float>(lines) * 0.5f +
-              (held ? 1.0f : 0.0f);
-    const float cx = (tl.x + br.x) * 0.5f;
-    dl->AddText(f, px, ImVec2(cx - textW(f, px, line1) * 0.5f, y), ink, line1);
-    if (lines == 2) {
-        y += lh;
-        dl->AddText(f, px, ImVec2(cx - textW(f, px, line2) * 0.5f, y), ink, line2);
-    }
-    return pressed;
-}
-
-// One rocker row: the switch, its label plate and a right-aligned count. The
-// paddle's POSITION says which way it is thrown - up for on, down for off - so
-// the control is readable in a greyscale photograph and by the roughly one man
-// in twelve for whom colour alone is not a signal.
-bool drawRockerRow(ImDrawList* dl, const ImVec2& tl, float width, float rowH,
-                   const char* label, const char* trailing, bool on, const char* id) {
-    if (dl == nullptr || width < 50.0f || rowH < 10.0f) { return false; }
-    ImGui::PushID(id);
-    ImGui::SetCursorScreenPos(tl);
-    const bool pressed = ImGui::InvisibleButton("##rocker", ImVec2(width, rowH));
-    const bool hovered = ImGui::IsItemHovered();
-    const bool focused = ImGui::IsItemFocused();
-    ImGui::PopID();
-
-    const float rw = 16.0f;
-    const ImVec2 rTL(tl.x, tl.y + 1.0f);
-    const ImVec2 rBR(tl.x + rw, tl.y + rowH - 1.0f);
-    dl->AddRectFilled(rTL, rBR, theme::kVoid, theme::kKeyRounding);
-    dl->AddRect(rTL, rBR, theme::withAlpha(theme::kBrassMid, 0.9f), theme::kKeyRounding, 0,
-                theme::kHairline);
-    const float ph = (rBR.y - rTL.y) * 0.42f;
-    const ImVec2 pTL(rTL.x + 2.0f, on ? rTL.y + 2.0f : rBR.y - 2.0f - ph);
-    const ImVec2 pBR(rBR.x - 2.0f, pTL.y + ph);
-    dl->AddRectFilled(pTL, pBR, on ? theme::kCream : theme::kBrassMid, 1.0f);
-    addBenchBevel(dl, pTL, pBR, 1.0f, true);
-
-    ImFont* f = fonts::ui();
-    const float px = prose();
-    // THE PLATE'S WORD IS FITTED TO THE ROW (gui/text_fit.hpp), so a column
-    // too narrow for the word at its own size draws the word smaller rather
-    // than putting the plate out through the count and the switch beside it.
-    // The room is what storeShowRockerMinWidth reserves; English, which fits,
-    // is drawn exactly as before.
-    const float room =
-        width - rw - 7.0f - 12.0f - 6.0f - textW(fonts::reading(), px, "000");
-    const float lpx = fitTextPx(f, px, label, room, fitFloorFor(px));
-    const float lw = std::min(textW(f, lpx, label), std::max(0.0f, room));
-    const float lh = faceH(f, px);
-    const ImVec2 lTL(tl.x + rw + 7.0f, tl.y + (rowH - lh - 5.0f) * 0.5f);
-    const ImVec2 lBR(lTL.x + lw + 12.0f, lTL.y + lh + 5.0f);
-    if (on) {
-        dl->AddRectFilled(lTL, lBR, theme::kBrassBright, theme::kKeyRounding);
-        addBenchBevel(dl, lTL, lBR, theme::kKeyRounding, true);
-    } else {
-        dl->AddRect(lTL, lBR, theme::withAlpha(theme::kBrassDark, 0.9f), theme::kKeyRounding,
-                    0, theme::kHairline);
-    }
-    {
-        const ImVec4 clip(lTL.x, lTL.y, lBR.x - 3.0f, lBR.y);
-        const float h = faceH(f, lpx);
-        dl->AddText(f, lpx, ImVec2(lTL.x + 6.0f, lTL.y + 2.0f + (lh - h) * 0.5f),
-                    on ? theme::kEnamel : theme::kCream, label, nullptr, 0.0f, &clip);
-    }
-    if (hovered) {
-        dl->AddRect(lTL, lBR, theme::withAlpha(theme::kBrassBright, 0.7f),
-                    theme::kKeyRounding, 0, theme::kHairline);
-    }
-    if (focused) {
-        dl->AddRect(ImVec2(tl.x - 2.0f, tl.y - 1.0f),
-                    ImVec2(tl.x + width + 2.0f, tl.y + rowH + 1.0f), theme::kBrassBright,
-                    theme::kKeyRounding, 0, theme::kHairline);
-    }
-    // HOW MANY ROWS THIS SWITCH IS HOLDING BACK, on the switch itself. A
-    // filter that hides things without saying how many is how a user comes to
-    // believe the catalogue is short.
-    if (trailing != nullptr && trailing[0] != '\0') {
-        ImFont* rf = faceForValue(trailing);
-        const float rW = textW(rf, px, trailing);
-        const float rx = tl.x + width - rW;
-        if (rx > lBR.x + 6.0f) {
-            dl->AddText(rf, px, ImVec2(rx, tl.y + (rowH - faceH(rf, px)) * 0.5f),
-                        on ? theme::kAmber : theme::kInkFaint, trailing);
-        }
-    }
-    return pressed;
-}
-
-// One segment of a selector. The selected one is a key PRESSED IN - the idiom
-// drawBenchKey uses for an engaged function key - rather than a coloured tab:
-// rust in this palette means trouble, and a sort order is not trouble.
-bool drawSegment(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, const char* label,
-                 bool selected, const char* id) {
-    if (dl == nullptr || br.x - tl.x < 6.0f) { return false; }
-    ImGui::PushID(id);
-    ImGui::SetCursorScreenPos(tl);
-    const bool pressed = ImGui::InvisibleButton("##seg", ImVec2(br.x - tl.x, br.y - tl.y));
-    const bool hovered = ImGui::IsItemHovered();
-    const bool focused = ImGui::IsItemFocused();
-    ImGui::PopID();
-
-    const float r = theme::kKeyRounding;
-    if (selected) {
-        dl->AddRectFilled(tl, br, theme::kBrassDark, r);
-        dl->AddRectFilledMultiColor(tl, ImVec2(br.x, tl.y + (br.y - tl.y) * 0.45f),
-                                    theme::withAlpha(theme::kVoid, 0.55f),
-                                    theme::withAlpha(theme::kVoid, 0.55f),
-                                    theme::withAlpha(theme::kVoid, 0.0f),
-                                    theme::withAlpha(theme::kVoid, 0.0f));
-    } else {
-        dl->AddRectFilled(ImVec2(tl.x + 1.0f, tl.y + 2.0f), ImVec2(br.x + 1.0f, br.y + 2.0f),
-                          theme::withAlpha(theme::kVoid, 0.40f), r);
-        dl->AddRectFilled(tl, br, hovered ? theme::kBrassBright : theme::kBrassMid, r);
-    }
-    addBenchBevel(dl, tl, br, r, !selected);
-    if (focused) {
-        dl->AddRect(ImVec2(tl.x - 2.0f, tl.y - 2.0f), ImVec2(br.x + 2.0f, br.y + 2.0f),
-                    theme::kBrassBright, r + 1.0f, 0, theme::kHairline);
-    }
-    ImFont* f = fonts::ui();
-    const float px = prose();
-    // FITTED TO THE SEGMENT (gui/text_fit.hpp), not drawn raw at one size
-    // regardless of room: three equal-width segments (segW = wellInner / 3)
-    // give MAKER and VERSION less room than NAME needs at the interface
-    // size's larger fonts, and an unfitted AddText simply ran the word
-    // through the segment beside it (an Opus review's M3 - "MAKER" over
-    // "VERSION"). A label that already fits is drawn exactly as it always
-    // was, at `px`.
-    const float room = (br.x - tl.x) - 8.0f;
-    const float fitted = fitTextPx(f, px, label, room, fitFloorFor(px));
-    dl->AddText(f, fitted,
-                ImVec2((tl.x + br.x) * 0.5f - textW(f, fitted, label) * 0.5f,
-                       (tl.y + br.y) * 0.5f - faceH(f, fitted) * 0.5f + (selected ? 1.0f : 0.0f)),
-                selected ? theme::kCream : theme::kEnamel, label);
-    return pressed;
-}
-
-// A HATCHED VALUE: there is no source for this figure, and here is the space
-// it would occupy if there were. Diagonal ruling rather than a zero, because
-// "0 bytes" and "nobody told us the size" are opposite statements.
-void addHatch(ImDrawList* dl, const ImVec2& tl, const ImVec2& br) {
-    if (dl == nullptr || br.x - tl.x < 4.0f || br.y - tl.y < 4.0f) { return; }
-    dl->PushClipRect(tl, br, true);
-    const float h = br.y - tl.y;
-    const ImU32 col = theme::withAlpha(theme::kInkMuted, 0.24f);
-    for (float x = tl.x - h; x < br.x; x += 6.0f) {
-        dl->AddLine(ImVec2(x, br.y), ImVec2(x + h, tl.y), col, 2.0f);
-    }
-    dl->PopClipRect();
-}
-
-// A note: a coloured rule down the left, a wash behind it and the sentence
-// itself. `accent` carries the meaning - phosphor for something working, gold
-// for something the user should look at, rust for something refused.
-float noteHeight(float width, const char* text) {
-    ImFont* f = fonts::ui();
-    const float px = prose();
-    if (text == nullptr || text[0] == '\0') { return 0.0f; }
-    return wrapH(f, px, width - 12.0f, text) + 9.0f;
-}
-
-void drawNote(ImDrawList* dl, const ImVec2& tl, float width, ImU32 accent,
-              const char* text) {
-    if (dl == nullptr || width < 30.0f || text == nullptr || text[0] == '\0') { return; }
-    ImFont* f = fonts::ui();
-    const float px = prose();
-    const float h = noteHeight(width, text);
-    dl->AddRectFilled(tl, ImVec2(tl.x + width, tl.y + h), theme::withAlpha(accent, 0.10f));
-    dl->AddRectFilled(tl, ImVec2(tl.x + 2.0f, tl.y + h), accent);
-    dl->AddText(f, px, ImVec2(tl.x + 9.0f, tl.y + 4.0f), accent, text, nullptr,
-                width - 12.0f);
-}
-
-// "3 OF 11 SHOWN": the figures in the monospaced face and in amber because
-// they are readings; the words beside them in the ui face and in ink because
-// they are not. One helper so the two never get transcribed the other way
-// round at a second call site.
-void drawCountLine(ImDrawList* dl, const ImVec2& at, int n, int m, const char* trail) {
-    ImFont* uf = fonts::ui();
-    ImFont* rf = fonts::reading();
-    const float px = prose();
-    char nBuf[16];
-    char mBuf[16];
-    std::snprintf(nBuf, sizeof nBuf, "%d", n);
-    std::snprintf(mBuf, sizeof mBuf, "%d", m);
-    const float base = at.y;
-    const float uOff = base + (faceH(rf, px) - faceH(uf, px)) * 0.5f;
-    float x = at.x;
-    // THE WORDS ARE MUTED, NOT FAINT. The two figures are the reading and keep
-    // the amber; the words between and after them are what say WHAT was
-    // counted, and "3 OF 11 MODULES SHOWN" with the words unreadable is a pair
-    // of numbers about nothing.
-    dl->AddText(rf, px, ImVec2(x, base), theme::kAmber, nBuf);
-    x += textW(rf, px, nBuf);
-    // THE ONE FRAGMENT KEY IN THIS FILE, and deliberately: the two figures
-    // are drawn in the reading face and the word between them in the ui
-    // face, so the line cannot be one format string. "N <word> M" is the
-    // order in every language the bench is translated into.
-    const char* of = tr(" OF ");
-    dl->AddText(uf, px, ImVec2(x, uOff), theme::kInkMuted, of);
-    x += textW(uf, px, of);
-    dl->AddText(rf, px, ImVec2(x, base), theme::kAmber, mBuf);
-    x += textW(rf, px, mBuf);
-    dl->AddText(uf, px, ImVec2(x + 4.0f, uOff), theme::kInkMuted, trail);
-}
-
-float countLineHeight() {
-    return std::max(faceH(fonts::reading(), prose()), faceH(fonts::ui(), prose()));
-}
-
-// --- the plate's contents ------------------------------------------------------
-
-// One cell of the facts grid. `hatched` is the honest empty: no source for
-// this value, drawn as ruling with the reason lettered over it.
-struct PlateFact {
-    const char* key;
-    std::string value;
-    bool hatched = false;
-    ImU32 tone = theme::kIvory;
-};
-
-// One row of the reach list. `outward` marks a capability that reaches beyond
-// the host - asking to move the receiver, or fetching from a server - which is
-// the only distinction the declaration honestly supports.
-struct ReachRow {
-    const char* key;
-    std::string detail;
-    bool outward = false;
-};
-
-std::string bytesText(std::uint64_t bytes) {
-    char buf[32];
-    if (bytes >= 1024ull * 1024ull) {
-        std::snprintf(buf, sizeof buf, "%.2f MB", static_cast<double>(bytes) / 1.0e6);
-    } else if (bytes >= 1000ull) {
-        std::snprintf(buf, sizeof buf, "%.0f kB", static_cast<double>(bytes) / 1.0e3);
-    } else {
-        // EXACT UNDER A KILOBYTE, because rounding gets to "0 kB" - which is
-        // the one figure this plate must never print for something that is
-        // there. A 33-byte file that is not a module at all read as nothing at
-        // all, which is the same conflation the hatching exists to prevent.
-        std::snprintf(buf, sizeof buf, "%llu bytes", static_cast<unsigned long long>(bytes));
-    }
-    return buf;
-}
-
-// THE THREE BITS THAT MAKE A MODULE SOMETHING SIGNAL CAN BE ROUTED TO.
-// PluginRunner creates an instance for a decoder, an I/Q decoder or an image
-// decoder and for nothing else, so a module with none of them is fed nothing
-// by design - the same constant the FITTED MODULES window derives its NoSignal
-// state from, and the reason both windows can say so in the same words.
-constexpr std::uint32_t kSignalCaps =
-    CASCADE_CAP_DECODER | CASCADE_CAP_IQ_DECODER | CASCADE_CAP_IMAGE_DECODER;
-
-// What this side can honestly say about a module on this machine. See the
-// header: STARTED is the coarser half of the fitted window's FED / NOT FED,
-// never a contradiction of it, because nothing on this side is told whether
-// anything is reaching the module.
-enum class PlateState { NotFitted, Refused, Stopped, NoSignal, Started };
-
-PlateState plateState(const ModulePlate& m) {
-    if (!m.fitted) { return PlateState::NotFitted; }
-    if (!m.loaded) { return PlateState::Refused; }
-    if (!m.running) { return PlateState::Stopped; }
-    // Only a module whose declaration was actually read can be known to take
-    // no signal. Without it this is a module that is started and nothing more,
-    // which is what the word says.
-    if (m.haveCapabilities && (m.capabilities & kSignalCaps) == 0u) {
-        return PlateState::NoSignal;
-    }
-    return PlateState::Started;
-}
-
-// NEVER READ IS NOT THE SAME AS NOT STATED, and the difference is three
-// separate claims about a module nobody has read. A file the host refused
-// before validatePluginDesc accepted it never had its name, version, author or
-// licence copied out (plugin_host.cpp:232-249), so all four arrive here empty
-// - and "not stated" and "none declared" would report the maker's silence
-// where the truth is our own ignorance. One phrase, used for every such cell.
-const char* kNotRead = FOX_TR_NOOP("not read");
-
-std::vector<PlateFact> collectFacts(const ModulePlate& m) {
-    std::vector<PlateFact> f;
-    // A cell whose source was never read is hatched and lettered faint,
-    // whatever the cell would otherwise have said.
-    const bool read = m.haveDescriptor;
-
-    PlateFact maker{tr("MAKER"), m.maker, false, theme::kIvory};
-    if (!read) {
-        maker.value = tr(kNotRead);
-        maker.hatched = true;
-        maker.tone = theme::kInkFaint;
-    } else if (m.maker.empty()) {
-        maker.value = tr("not stated");
-        maker.hatched = true;
-    }
-    f.push_back(maker);
-
-    // NOT DIMMED WHEN ABSENT, and this one matters: the host refuses to LOAD a
-    // module that declares no licence, and the store refuses to install a
-    // catalogue entry without one. "No licence" is a decision, not a blank -
-    // but only where a licence was actually looked for. On a refused file the
-    // gold "none declared" would be an accusation nobody checked.
-    PlateFact lic{tr("LICENCE"), m.licence, false, theme::kIvory};
-    if (!read) {
-        lic.value = tr(kNotRead);
-        lic.hatched = true;
-        lic.tone = theme::kInkFaint;
-    } else if (m.licence.empty()) {
-        lic.value = tr("none declared");
-        lic.hatched = true;
-        lic.tone = theme::kGold;
-    }
-    f.push_back(lic);
-
-    PlateFact ver{tr("VERSION"), m.version, false, theme::kAmber};
-    if (!read || m.version.empty()) {
-        ver.value = read ? tr("not stated") : tr(kNotRead);
-        ver.hatched = true;
-        ver.tone = read ? theme::kIvory : theme::kInkFaint;
-    }
-    f.push_back(ver);
-
-    PlateFact size{tr("DOWNLOAD"), {}, false, theme::kAmber};
-    if (m.haveSizeBytes) {
-        size.value = bytesText(m.sizeBytes);
-    } else {
-        // The catalogue's size is advisory and OPTIONAL, and there is no
-        // published-date field anywhere in the record, so neither is invented.
-        size.value = tr("not stated");
-        size.hatched = true;
-        size.tone = theme::kIvory;
-    }
-    f.push_back(size);
-
-    PlateFact abi{tr("PLUGIN ABI"), {}, false, theme::kIvory};
-    if (!m.haveAbi) {
-        // abiVersion 0 in a manifest means "not recorded", which the retirement
-        // predicate treats as UNKNOWN and never as a mismatch. Same rule here.
-        abi.value = tr("not recorded");
-        abi.hatched = true;
-    } else {
-        std::string buf;
-        if (m.abiVersion == m.hostAbiVersion) {
-            cascade::core::formatUtf8(buf, tr("%u, matches this build"), m.abiVersion);
-            abi.tone = theme::kIvory;
-        } else {
-            cascade::core::formatUtf8(buf, tr("%u, this build needs %u"), m.abiVersion,
-                          m.hostAbiVersion);
-            abi.tone = theme::kGold;
-        }
-        abi.value = buf;
-    }
-    f.push_back(abi);
-
-    // FITTED IS NOT THE SAME AS STARTED, a module that was refused is a third
-    // thing again, and a module that takes no signal at all is a fourth - so
-    // each gets its own words rather than one lamp the user has to interpret.
-    //
-    // THIS LINE NO LONGER SAYS "RUNNING". It used to letter "fitted and
-    // running" in phosphor for anything loaded and not stopped, which put a
-    // working light on a decoder that might be fed nothing at all - a claim
-    // this side cannot test, because it is handed no runner and no receiver.
-    // It says what it knows, in the same five words the row and the lamp use.
-    PlateFact state{tr("ON THIS MACHINE"), {}, false, theme::kInkMuted};
-    state.tone = moduleStateColour(m);
-    switch (plateState(m)) {
-        case PlateState::NotFitted: state.value = tr("not fitted"); break;
-        case PlateState::Refused: state.value = tr("fitted, refused"); break;
-        case PlateState::Stopped: state.value = tr("fitted, stopped"); break;
-        case PlateState::NoSignal: state.value = tr("fitted, takes no signal"); break;
-        case PlateState::Started:
-            // STARTED, NOT DECODING. Whether anything reaches it is on the
-            // FITTED MODULES window, which is handed the runner and the
-            // receiver; saying more here would be the two windows disagreeing.
-            state.value = tr("fitted and started");
-            break;
-    }
-    f.push_back(state);
-
-    if (!m.fileName.empty()) {
-        f.push_back({tr("FILE"), m.fileName, false, theme::kInkMuted});
-    }
-    if (!m.platforms.empty()) {
-        f.push_back({tr("BUILDS FOR"), m.platforms, false, theme::kInkMuted});
-    }
-    if (!m.retirementFloor.empty()) {
-        // Empty is the normal case and means NO floor. It is only ever drawn
-        // when the catalogue positively published one.
-        f.push_back({tr("RETIRED BELOW"), m.retirementFloor, false, theme::kGold});
-    }
-    return f;
-}
-
-std::vector<ReachRow> collectReach(const ModulePlate& m) {
-    std::vector<ReachRow> r;
-    if (!m.haveCapabilities) { return r; }
-    const std::uint32_t c = m.capabilities;
-    if ((c & CASCADE_CAP_DECODER) != 0u) {
-        r.push_back({tr("Audio decoder"), tr("Fed the demodulated audio the speakers get."),
-                     false});
-    }
-    if ((c & CASCADE_CAP_IQ_DECODER) != 0u) {
-        r.push_back({tr("I/Q decoder"),
-                     tr("Fed complex baseband straight from the receiver."), false});
-    }
-    if ((c & CASCADE_CAP_IMAGE_DECODER) != 0u) {
-        r.push_back({tr("Image decoder"),
-                     tr("Fed samples; returns pictures the host displays."), false});
-    }
-    if ((c & CASCADE_CAP_AUDIO_OUT) != 0u) {
-        // REPLACES, and the word is the whole row. This is not a module that
-        // adds a sound to the receiver's: while it is decoding, what the
-        // speakers play is the module's and the demodulated audio is not
-        // there at all - which is exactly what a user who has just fitted a
-        // DAB decoder and can no longer hear the band needs to have been told
-        // before it happens.
-        r.push_back({tr("Plays sound through FoxSDR"),
-                     tr("Replaces the receiver's audio while it is decoding."), false});
-    }
-    if ((c & CASCADE_CAP_AUDIO_PROCESSOR) != 0u) {
-        // CHANGES, not replaces - the row above's opposite, and the user needs
-        // to know which of the two a module does before a voice sounds odd.
-        r.push_back({tr("Audio processor"),
-                     tr("Changes the receiver's audio before you hear it."), false});
-    }
-    if ((c & CASCADE_CAP_TRACK_SOURCE) != 0u) {
-        r.push_back({tr("Map targets"),
-                     tr("Publishes positions the host draws on its map."), false});
-    }
-    if ((c & CASCADE_CAP_PANEL) != 0u) {
-        r.push_back({tr("A window of its own"),
-                     tr("Rows and controls the host draws for it."), false});
-    }
-    if ((c & CASCADE_CAP_INSTRUMENT) != 0u) {
-        r.push_back({tr("An instrument of its own"),
-                     tr("A face the host draws as a piece of equipment, fed by the module."),
-                     false});
-    }
-    if ((c & CASCADE_CAP_PRESET) != 0u) {
-        // Worth its own row precisely because it looks like tuning and is not.
-        r.push_back({tr("Presets"), tr("Publishes where it listens. A suggestion - pressing "
-                                       "one is the user tuning, not the module."),
-                     false});
-    }
-    if ((c & CASCADE_CAP_HOST_CLIENT) != 0u) {
-        std::string d;
-        if (!m.haveTuneGrant) {
-            // TWO GRANTS since host API level 1 (0.99.31): this one, and the
-            // radio-settings grant on the module's plate in Fitted modules.
-            d = tr("Refused unless you grant it, per module. This grant and the "
-                   "radio-settings grant are the only permissions the console actually "
-                   "enforces.");
-        } else if (m.tuneGranted) {
-            d = tr("GRANTED. It may retune the receiver on its own, without asking again.");
-        } else {
-            d = tr("Not granted, so every request to retune is answered DENIED.");
-        }
-        r.push_back({tr("Can ask to move the receiver"), d, true});
-    }
-    if ((c & CASCADE_CAP_RECEIVER_LOCATOR) != 0u) {
-        // UNCONDITIONAL, unlike the two grants above: there is no key to
-        // refuse it with - see the header's note on CASCADE_CAP_RECEIVER_
-        // LOCATOR. A module either declared the bit or it did not, and this
-        // row is the one place that says so before anything is fitted.
-        r.push_back({tr("Can read your receiver's locator"),
-                     tr("Sees a 6-character Maidenhead grid square for wherever the "
-                        "receiver's position is set (GPS, \"Set RX here\", or typed) - a "
-                        "few kilometres' precision, not an exact point. What it does with "
-                        "that is up to the module; some report it onward, such as an "
-                        "optional PSK Reporter upload."),
-                     true});
-    }
-    if ((c & CASCADE_CAP_BASEMAP) != 0u) {
-        // NOT "a server you point it at", which is what this row used to say.
-        // CascadeBasemapApi carries no server field and there is no setting in
-        // this console that aims a basemap module anywhere: the host asks for
-        // the tile at (z, x, y) and the module answers it from wherever it
-        // likes. Handing the user a control they have not got, on the one row
-        // whose job is to warn them this capability reaches outward, is the
-        // worst place in the console to do it.
-        r.push_back({tr("Map imagery"),
-                     tr("Supplies the map tiles from whatever source it chose - which may "
-                        "be an online tile server. Nothing here points it at one."),
-                     true});
-    }
-    if ((c & CASCADE_CAP_TRACK_INFO) != 0u) {
-        r.push_back({tr("Target look-up"),
-                     tr("Looks up who a target is, from whatever source it chose - which "
-                        "may be an online service."),
-                     true});
-    }
-    if (r.empty()) {
-        // A descriptor must declare at least one KNOWN bit to load at all, so
-        // both of these are states the caller had to construct: no bits at
-        // all, or only bits this build has never heard of. They are different
-        // facts and get different words rather than one shrug.
-        if (m.capabilities == 0u) {
-            r.push_back({tr("Declares nothing"), tr("The record carries no capability bits."),
-                         false});
-        } else {
-            r.push_back({tr("Declares a capability this build does not know"),
-                         tr("The module was built against a newer host."), true});
-        }
-    }
-    return r;
-}
-
-// THE SENTENCE THE DESIGN GOT WRONG, corrected here and stated once.
-//
-// The mock says the reach list is "enforced by the console - a module cannot
-// take anything not on this list". It is not. Plugins load in-process
-// (LoadLibraryExW / dlopen), there is no sandbox and no permission model, and
-// the CASCADE_CAP_* bits say what a module PROVIDES rather than what it may
-// take. Printing the mock's sentence would hand the user a guarantee on the
-// exact card - unverified maker, no licence - where they would lean on it
-// hardest.
-const char* kReachLead = FOX_TR_NOOP(
-    "Declared by the maker, not enforced. A fitted module is loaded into this "
-    "application's own process and runs with every privilege the application has: "
-    "there is no sandbox and no permission model. This list is what the module says "
-    "it PROVIDES, not a limit on what it can take.");
-
-const char* kReachUnknown = FOX_TR_NOOP(
-    "The catalogue index carries no capability field, so what this module declares is "
-    "not known until it is fitted. Fitting it is what fills this in.");
-
-// AN EMPTY LIST MEANS TWO DIFFERENT THINGS AND MUST NOT BE DRAWN ONE WAY.
-// Above: a catalogue row nobody has fitted, whose declaration has never been
-// read. Here: a file that IS fitted and that the host did not accept - so it
-// reaches nothing at this moment because it is not loaded, which is not the
-// same as a module that asks for nothing. Saying "not declared until it is
-// fitted" of it would be false twice over: it is fitted, and its silence is
-// the refusal's, not the module's.
-//
-// It does NOT say the descriptor was never read, because that is only true of
-// some refusals - a module the duplicate resolver turned off was read in full
-// first. What is true of every one of them is that no capability list reached
-// this panel and none of the module is loaded.
-const char* kReachRefused = FOX_TR_NOOP(
-    "Not known here, and nothing is routed to it. This file is fitted and the host did "
-    "not accept it, so no capability list reached this panel and none of the module is "
-    "loaded. That is not the same as a module which declares nothing.");
-
-const char* kReachTuneNote = FOX_TR_NOOP(
-    "The tune grant above and the radio-settings grant are the only permissions this "
-    "console does enforce: without them every request to retune, or to change the "
-    "receiver's settings, is refused. Nothing else in the list is a gate.");
-
-const char* kReachNoTuneNote = FOX_TR_NOOP(
-    "The only permissions this console enforces are the per-module tune and "
-    "radio-settings grants, and this module asks for neither. Nothing else in the list "
-    "is a gate.");
-
-// One pass that both measures and draws, so the two can never drift apart.
-float layoutPlate(ImDrawList* dl, const ImVec2& tl, float width, const ModulePlate& m,
-                  bool draw) {
-    constexpr float kBoxPad = 12.0f;
-    constexpr float kBoxGap = 10.0f;
-
-    ImFont* uf = fonts::ui();
-    ImFont* lf = fonts::legend();
-    const float tiny = prose();
-    // THE NAME LINE TAKES THE SAME LARGEST SIZE as the prose under it and is
-    // told apart by its FACE - Georgia Bold against Georgia Regular - rather
-    // than by a second figure. One size for the page is what makes "go bigger
-    // on the font" one edit; a heading size on top of it would be a second
-    // number to keep in step with the first.
-    const float uiPx = prose();
-    const float tinyH = faceH(uf, tiny);
-    const float legH = faceH(lf, tiny);
-    const float inner = width - kBoxPad * 2.0f;
-    if (inner < 60.0f) { return 0.0f; }
-    // THE PLATE'S NAME WRAPS TOO, and for the same reason the row's does: this
-    // column is a third of the window, "406 MHz Distress Beacon Decoder (EPIRB
-    // / ELT / PLB)" does not fit across it at any size worth reading, and the
-    // child that holds the plate simply CUT it - the plate's heading read "406
-    // MHz Distress Beacon Decoder (EPIR". Measured here so the box that
-    // contains it is the height the name actually takes.
-    const char* plateName = m.name.empty() ? tr("(unnamed module)") : m.name.c_str();
-    const float nameH = wrapH(lf, uiPx, inner, plateName);
-
-    const std::vector<PlateFact> facts = collectFacts(m);
-    const std::vector<ReachRow> reach = collectReach(m);
-    // WHICH KIND OF "NOT KNOWN" THIS IS. Chosen once, so the pass that
-    // measures the box and the pass that letters it cannot pick differently.
-    const char* unknownReach = tr((m.fitted && !m.loaded) ? kReachRefused : kReachUnknown);
-    const float colW = (inner - 14.0f) * 0.5f;
-
-    // --- box 1: identity ----------------------------------------------------
-    // THE LINE UNDER THE NAME IS THE SAME CLAIM AS THE CELLS BELOW IT, and it
-    // used to make it twice as loudly: "maker not stated  ·  v?" for a file
-    // whose descriptor was never read reports the maker's silence and a
-    // missing version number, when the truth is that nobody has opened it.
-    std::string meta;
-    if (!m.haveDescriptor) {
-        meta = tr("nothing was read out of this file");
-    } else {
-        cascade::core::formatUtf8(meta, tr("%s  \xc2\xb7  v%s"),
-                      m.maker.empty() ? tr("maker not stated") : m.maker.c_str(),
-                      m.version.empty() ? "?" : m.version.c_str());
-    }
-    const float blurbH = m.blurb.empty() ? 0.0f : (wrapH(uf, tiny, inner, m.blurb.c_str()) + 8.0f);
-    const int factRows = (static_cast<int>(facts.size()) + 1) / 2;
-    // THE ROW IS AS TALL AS THE TALLEST VALUE IN IT, measured in the face that
-    // value will actually be drawn in. Every cell is drawn WRAPPED to its
-    // column, so a value that no longer fits on one line does not clip - it
-    // takes a second and prints through the key of the row beneath it. The two
-    // that get close are "fitted, takes no signal" and "12, this build needs
-    // 13", and whether either fits depends on the face's size AND on how
-    // narrow the caller made the plate, which is exactly the pair of things a
-    // constant cannot know.
-    float factValueH = tinyH;
-    for (const PlateFact& f : facts) {
-        factValueH = std::max(
-            factValueH, wrapH(faceForValue(f.value.c_str()), tiny, colW, f.value.c_str()));
-    }
-    const float factRowH = legH + 2.0f + factValueH + 8.0f;
-    float box1H = kBoxPad + nameH + 3.0f + tinyH + blurbH + 10.0f + 1.0f + 10.0f +
-                  factRowH * static_cast<float>(factRows) + kBoxPad - 8.0f;
-    const float homeH = m.homepage.empty() ? 0.0f : (tinyH + 6.0f);
-    box1H += homeH;
-    const float originH = m.originNote.empty() ? 0.0f : (tinyH + 6.0f);
-    box1H += originH;
-
-    // --- box 2: what this module reaches -------------------------------------
-    const float markW = 18.0f;
-    float box2H = kBoxPad + legH + 8.0f + wrapH(uf, tiny, inner, tr(kReachLead)) + 10.0f;
-    if (reach.empty()) {
-        box2H += noteHeight(inner, unknownReach);
-    } else {
-        for (const ReachRow& r : reach) {
-            box2H += faceH(uf, tiny) + 2.0f +
-                     wrapH(uf, tiny, inner - markW, r.detail.c_str()) + 8.0f;
-        }
-        box2H += 3.0f;
-        box2H += noteHeight(inner, tr((m.capabilities & CASCADE_CAP_HOST_CLIENT) != 0u
-                                          ? kReachTuneNote
-                                          : kReachNoTuneNote));
-    }
-    box2H += kBoxPad;
-
-    // --- box 3: the maker's legal notice, only when there is one -------------
-    float box3H = 0.0f;
-    if (!m.legalNotice.empty()) {
-        box3H = kBoxPad + legH + 8.0f + noteHeight(inner, m.legalNotice.c_str()) + kBoxPad;
-    }
-
-    // --- box 4: the refusal reason, only when the module was refused ---------
-    float box4H = 0.0f;
-    if (m.fitted && !m.loaded && !m.refusalReason.empty()) {
-        box4H = kBoxPad + legH + 8.0f + noteHeight(inner, m.refusalReason.c_str()) + kBoxPad;
-    }
-
-    float total = box1H + kBoxGap + box2H;
-    if (box3H > 0.0f) { total += kBoxGap + box3H; }
-    if (box4H > 0.0f) { total += kBoxGap + box4H; }
-    if (!draw || dl == nullptr) { return total; }
-
-    // ======================= drawing ========================================
-    float boxTop = tl.y;
-
-    // ---- identity ----------------------------------------------------------
-    {
-        const ImVec2 bTL(tl.x, boxTop);
-        const ImVec2 bBR(tl.x + width, boxTop + box1H);
-        addPlateBox(dl, bTL, bBR);
-        const float x = bTL.x + kBoxPad;
-        float y = bTL.y + kBoxPad;
-        dl->AddText(lf, uiPx, ImVec2(x, y), theme::kIvory, plateName, nullptr, inner);
-        y += nameH + 3.0f;
-        dl->AddText(uf, tiny, ImVec2(x, y), theme::kInkMuted, meta.c_str());
-        y += tinyH;
-        if (!m.blurb.empty()) {
-            y += 8.0f;
-            dl->AddText(uf, tiny, ImVec2(x, y), theme::kCream, m.blurb.c_str(), nullptr,
-                        inner);
-            y += blurbH - 8.0f;
-        }
-        y += 10.0f;
-        addBenchRail(dl, x, bBR.x - kBoxPad, y);
-        y += 10.0f;
-
-        for (std::size_t i = 0; i < facts.size(); ++i) {
-            const PlateFact& f = facts[i];
-            const float cx = x + (i % 2u == 0u ? 0.0f : (colW + 14.0f));
-            const float cy = y + factRowH * static_cast<float>(i / 2u);
-            // THE KEY IS WHAT MAKES THE VALUE MEAN ANYTHING, so it is lettered
-            // to be read: muted ink on the plate's dark ground is about 6:1
-            // where the faint it used to take is about 4:1, and the value
-            // under it still carries the emphasis in its own tone.
-            //
-            // FITTED TO ITS COLUMN (gui/text_fit.hpp): "AUF DIESEM RECHNER"
-            // ran past the plate's edge and lost its last letters. A key that
-            // fits is drawn exactly as before; one that does not is drawn
-            // smaller, centred on the same line, and cut at the column only
-            // if it will not fit even at the floor.
-            const float keyPx = fitTextPx(lf, tiny, f.key, colW, fitFloorFor(tiny));
-            const ImVec2 keyAt(cx, cy + (tiny - keyPx) * 0.5f);
-            if (keyPx == tiny) {
-                dl->AddText(lf, tiny, keyAt, theme::kInkMuted, f.key);
-            } else {
-                const ImVec4 keyClip(cx, cy, cx + colW, cy + legH + 2.0f);
-                dl->AddText(lf, keyPx, keyAt, theme::kInkMuted, f.key, nullptr, 0.0f, &keyClip);
-            }
-            const ImVec2 vAt(cx, cy + legH + 2.0f);
-            if (f.hatched) {
-                addHatch(dl, ImVec2(vAt.x, vAt.y + 1.0f),
-                         ImVec2(vAt.x + colW, vAt.y + tinyH - 1.0f));
-            }
-            ImFont* vf = faceForValue(f.value.c_str());
-            dl->AddText(vf, tiny, vAt, f.hatched ? theme::kInkFaint : f.tone,
-                        f.value.c_str(), nullptr, colW);
-        }
-        y += factRowH * static_cast<float>(factRows);
-        if (!m.homepage.empty()) {
-            // A URL IS FOR COPYING, so it is lettered to be transcribed rather
-            // than to be sensed. Faint ink on this ground is about 4:1, which
-            // is where a run of punctuation stops being readable first.
-            dl->AddText(uf, tiny, ImVec2(x, y - 2.0f), theme::kInkMuted, m.homepage.c_str(),
-                        nullptr, inner);
-        }
-        if (!m.originNote.empty()) {
-            // Stacks directly under the homepage line (offset by homeH,
-            // which is 0 when there is none) — the same muted ink, since
-            // this is a fact about the module, not a warning.
-            dl->AddText(uf, tiny, ImVec2(x, y - 2.0f + homeH), theme::kInkMuted,
-                        m.originNote.c_str(), nullptr, inner);
-        }
-        boxTop = bBR.y + kBoxGap;
-    }
-
-    // ---- what this module reaches ------------------------------------------
-    {
-        const ImVec2 bTL(tl.x, boxTop);
-        const ImVec2 bBR(tl.x + width, boxTop + box2H);
-        addPlateBox(dl, bTL, bBR);
-        const float x = bTL.x + kBoxPad;
-        float y = bTL.y + kBoxPad;
-        addBenchGroupCaption(dl, ImVec2(x, y), inner, tr("WHAT THIS MODULE REACHES"));
-        y += legH + 8.0f;
-        dl->AddText(uf, tiny, ImVec2(x, y), theme::kInkMuted, tr(kReachLead), nullptr, inner);
-        y += wrapH(uf, tiny, inner, tr(kReachLead)) + 10.0f;
-
-        if (reach.empty()) {
-            drawNote(dl, ImVec2(x, y), inner, theme::kGold, unknownReach);
-        } else {
-            for (const ReachRow& r : reach) {
-                // The mark: a filled, glowing dot for a capability that
-                // reaches outward, a hollow ring for one that only produces
-                // output. Never rust - a declared capability is not a fault,
-                // and rust in this palette means trouble.
-                const ImVec2 c(x + 5.0f, y + faceH(uf, tiny) * 0.5f);
-                if (r.outward) {
-                    dl->AddCircleFilled(c, 4.5f, theme::withAlpha(theme::kGold, 0.28f), 12);
-                    dl->AddCircleFilled(c, 3.0f, theme::kGold, 12);
-                } else {
-                    dl->AddCircle(c, 3.5f, theme::kInkFaint, 12, 1.5f);
-                }
-                dl->AddText(uf, tiny, ImVec2(x + markW, y),
-                            r.outward ? theme::kIvory : theme::kCream, r.key);
-                y += faceH(uf, tiny) + 2.0f;
-                // THE SENTENCE UNDER EACH REACH ROW IS THE ANSWER to what the
-                // module can actually do with this machine - the one thing on
-                // this plate a user reads before deciding to fit something.
-                // Muted rather than faint for that reason alone.
-                dl->AddText(uf, tiny, ImVec2(x + markW, y), theme::kInkMuted,
-                            r.detail.c_str(), nullptr, inner - markW);
-                y += wrapH(uf, tiny, inner - markW, r.detail.c_str()) + 8.0f;
-            }
-            y += 3.0f;
-            drawNote(dl, ImVec2(x, y), inner, theme::kGold,
-                     tr((m.capabilities & CASCADE_CAP_HOST_CLIENT) != 0u ? kReachTuneNote
-                                                                         : kReachNoTuneNote));
-        }
-        boxTop = bBR.y + kBoxGap;
-    }
-
-    // ---- the maker's legal notice ------------------------------------------
-    if (box3H > 0.0f) {
-        const ImVec2 bTL(tl.x, boxTop);
-        const ImVec2 bBR(tl.x + width, boxTop + box3H);
-        addPlateBox(dl, bTL, bBR);
-        const float x = bTL.x + kBoxPad;
-        float y = bTL.y + kBoxPad;
-        addBenchGroupCaption(dl, ImVec2(x, y), inner, tr("LEGAL NOTICE"));
-        y += legH + 8.0f;
-        // VERBATIM. Some decoders demodulate transmissions whose interception
-        // is an offence in some countries; this is the author saying so, and
-        // paraphrasing it would be answering for them.
-        drawNote(dl, ImVec2(x, y), inner, theme::kGold, m.legalNotice.c_str());
-        boxTop = bBR.y + kBoxGap;
-    }
-
-    // ---- why a fitted module was refused ------------------------------------
-    if (box4H > 0.0f) {
-        const ImVec2 bTL(tl.x, boxTop);
-        const ImVec2 bBR(tl.x + width, boxTop + box4H);
-        addPlateBox(dl, bTL, bBR);
-        const float x = bTL.x + kBoxPad;
-        float y = bTL.y + kBoxPad;
-        addBenchGroupCaption(dl, ImVec2(x, y), inner, tr("WHY IT IS NOT RUNNING"));
-        y += legH + 8.0f;
-        // PluginHost's own reason, word for word. "My plugin does not appear"
-        // with no explanation is the support ticket the host was written to
-        // prevent, and re-wording its answer here would put it back.
-        drawNote(dl, ImVec2(x, y), inner, theme::kAlarm, m.refusalReason.c_str());
-    }
-    return total;
-}
-
-// --- filtering and ordering ----------------------------------------------------
-
 std::string lowerAscii(const std::string& s) {
     std::string out = s;
     for (char& c : out) {
@@ -991,35 +81,497 @@ std::string lowerAscii(const std::string& s) {
     return out;
 }
 
-bool matchesQuery(const StoreModule& sm, const std::string& lowerQuery) {
-    if (lowerQuery.empty()) { return true; }
-    const std::string hay =
-        lowerAscii(sm.plate.name + " " + sm.plate.maker + " " + sm.plate.blurb);
-    return hay.find(lowerQuery) != std::string::npos;
+// THE ONE SIZE EVERY SENTENCE ON A PAGE IS SET IN, through the public accessor so a
+// test and the drawing cannot disagree about it.
+float prose() { return storeProsePx(); }
+
+bool figureLike(const char* s) {
+    if (s == nullptr || s[0] == '\0') { return false; }
+    for (const char* p = s; *p != '\0'; ++p) {
+        const bool ok = (*p >= '0' && *p <= '9') || *p == '.' || *p == '-' || *p == ':' ||
+                        *p == ' ';
+        if (!ok) { return false; }
+    }
+    return true;
 }
 
-// ---------------------------------------------------------------------------
-// HAS ANYBODY ASKED, AND WHAT CAME BACK
-// ---------------------------------------------------------------------------
-//
-// FOUR ANSWERS, NOT TWO. "There are no rows" was drawn as "no catalogue has
-// been read" everywhere in this window, which is right for a store nobody has
-// pressed CHECK NOW on and wrong - and unescapable - for the two other ways to
-// have no rows: a fetch that succeeded and returned an index listing no
-// modules, and a fetch that failed. Both of those have been asked, and telling
-// their user to press CHECK NOW is telling them to do again the thing they
-// just did.
-//
-// The evidence is the pair of strings AppWindow clears at the start of every
-// fetch and fills in at the end of it; see PluginStoreModel for why status is
-// tested before error.
-enum class CatalogueState {
-    NeverAsked,  // nothing fetched this session
-    Failed,      // asked, and the attempt failed. sourceError says why
-    ReadEmpty,   // asked, answered, and the index listed no modules
-    Read,        // asked, answered, and there are rows
+std::string bytesText(std::uint64_t bytes) {
+    char buf[32];
+    if (bytes >= 1024ull * 1024ull) {
+        std::snprintf(buf, sizeof buf, "%.2f MB", static_cast<double>(bytes) / 1.0e6);
+    } else if (bytes >= 1000ull) {
+        std::snprintf(buf, sizeof buf, "%.0f kB", static_cast<double>(bytes) / 1.0e3);
+    } else {
+        // EXACT UNDER A KILOBYTE, because rounding gets to "0 kB" - the one figure
+        // that must never be printed for something that is there.
+        std::snprintf(buf, sizeof buf, "%llu bytes", static_cast<unsigned long long>(bytes));
+    }
+    return buf;
+}
+
+// The census helpers: names are built only when the census is on.
+void censusRect(const std::string& name, float x0, float y0, float x1, float y1) {
+    if (census::enabled()) { census::rect(name, x0, y0, x1, y1); }
+}
+
+// --- text cut to a width -------------------------------------------------------
+
+std::vector<const char*> charStarts(const char* text) {
+    std::vector<const char*> b;
+    const char* p = text;
+    while (*p != '\0') {
+        b.push_back(p);
+        p = cascade::core::utf8Next(p);
+    }
+    b.push_back(p);  // the end
+    return b;
+}
+
+// --- the flattening of the glyphs' paths ---------------------------------------
+
+struct Affine {
+    float a = 1, b = 0, c = 0, d = 1, e = 0, f = 0;
+    ImVec2 apply(float x, float y) const { return ImVec2(a * x + c * y + e, b * x + d * y + f); }
 };
 
+Affine mul(const Affine& l, const Affine& r) {  // l * r (r applied first)
+    Affine o;
+    o.a = l.a * r.a + l.c * r.b;
+    o.b = l.b * r.a + l.d * r.b;
+    o.c = l.a * r.c + l.c * r.d;
+    o.d = l.b * r.c + l.d * r.d;
+    o.e = l.a * r.e + l.c * r.f + l.e;
+    o.f = l.b * r.e + l.d * r.f + l.f;
+    return o;
+}
+Affine translate(float x, float y) {
+    Affine t;
+    t.e = x;
+    t.f = y;
+    return t;
+}
+Affine scaleBy(float s) {
+    Affine t;
+    t.a = s;
+    t.d = s;
+    return t;
+}
+Affine rotateDeg(float deg) {
+    const float r = deg * 3.14159265358979f / 180.0f;
+    Affine t;
+    t.a = std::cos(r);
+    t.b = std::sin(r);
+    t.c = -std::sin(r);
+    t.d = std::cos(r);
+    return t;
+}
+
+struct Glyph {
+    std::vector<std::vector<ImVec2>> lines;  // in a 56 x 56 box
+    std::vector<bool> closed;
+    std::vector<ImVec2> dots;
+};
+
+void addLine(Glyph& g, std::vector<ImVec2> pts, bool closed) {
+    if (pts.size() >= 2) {
+        g.lines.push_back(std::move(pts));
+        g.closed.push_back(closed);
+    }
+}
+
+// A small SVG path reader: M L H V C Q T A Z, absolute and relative. Enough for the
+// six shapes below, which are the mock-up's own paths.
+void addPath(Glyph& g, const char* d, const Affine& tf) {
+    const char* p = d;
+    const auto skip = [&] {
+        while (*p == ' ' || *p == ',' || *p == '\t' || *p == '\n') { ++p; }
+    };
+    const auto number = [&](float& out) {
+        skip();
+        const char* q = p;
+        if (*q == '-' || *q == '+') { ++q; }
+        bool any = false;
+        while (*q >= '0' && *q <= '9') { ++q; any = true; }
+        if (*q == '.') {
+            ++q;
+            while (*q >= '0' && *q <= '9') { ++q; any = true; }
+        }
+        if (!any) { return false; }
+        out = static_cast<float>(std::strtod(std::string(p, q).c_str(), nullptr));
+        p = q;
+        return true;
+    };
+    float cx = 0, cy = 0, sx = 0, sy = 0, lastCx = 0, lastCy = 0;
+    char lastCmd = 0;
+    std::vector<ImVec2> cur;
+    const auto emit = [&](bool closed) {
+        if (cur.size() == 2 && std::fabs(cur[0].x - cur[1].x) < 0.5f &&
+            std::fabs(cur[0].y - cur[1].y) < 0.5f) {
+            g.dots.push_back(cur[0]);  // a zero-length stroke with round caps is a dot
+        } else {
+            addLine(g, cur, closed);
+        }
+        cur.clear();
+    };
+    const auto pt = [&](float x, float y) { cur.push_back(tf.apply(x, y)); };
+    char cmd = 0;
+    while (true) {
+        skip();
+        if (*p == '\0') { break; }
+        if ((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z')) {
+            cmd = *p++;
+        } else if (cmd == 'M') {
+            cmd = 'L';
+        } else if (cmd == 'm') {
+            cmd = 'l';
+        }
+        const bool rel = cmd >= 'a' && cmd <= 'z';
+        const char C = static_cast<char>(rel ? cmd - 32 : cmd);
+        float v[7] = {0, 0, 0, 0, 0, 0, 0};
+        const auto args = [&](int n) {
+            for (int i = 0; i < n; ++i) {
+                if (!number(v[i])) { return false; }
+            }
+            return true;
+        };
+        switch (C) {
+            case 'Z':
+                if (!cur.empty()) { emit(true); }
+                cx = sx;
+                cy = sy;
+                lastCmd = 'Z';
+                continue;
+            case 'M':
+                if (!args(2)) { return; }
+                if (!cur.empty()) { emit(false); }
+                cx = rel ? cx + v[0] : v[0];
+                cy = rel ? cy + v[1] : v[1];
+                sx = cx;
+                sy = cy;
+                pt(cx, cy);
+                break;
+            case 'L':
+                if (!args(2)) { return; }
+                if (cur.empty()) { pt(cx, cy); }
+                cx = rel ? cx + v[0] : v[0];
+                cy = rel ? cy + v[1] : v[1];
+                pt(cx, cy);
+                break;
+            case 'H':
+                if (!args(1)) { return; }
+                if (cur.empty()) { pt(cx, cy); }
+                cx = rel ? cx + v[0] : v[0];
+                pt(cx, cy);
+                break;
+            case 'V':
+                if (!args(1)) { return; }
+                if (cur.empty()) { pt(cx, cy); }
+                cy = rel ? cy + v[0] : v[0];
+                pt(cx, cy);
+                break;
+            case 'C': {
+                if (!args(6)) { return; }
+                if (cur.empty()) { pt(cx, cy); }
+                const float x1 = rel ? cx + v[0] : v[0], y1 = rel ? cy + v[1] : v[1];
+                const float x2 = rel ? cx + v[2] : v[2], y2 = rel ? cy + v[3] : v[3];
+                const float x3 = rel ? cx + v[4] : v[4], y3 = rel ? cy + v[5] : v[5];
+                for (int i = 1; i <= 14; ++i) {
+                    const float t = static_cast<float>(i) / 14.0f, u = 1.0f - t;
+                    pt(u * u * u * cx + 3 * u * u * t * x1 + 3 * u * t * t * x2 + t * t * t * x3,
+                       u * u * u * cy + 3 * u * u * t * y1 + 3 * u * t * t * y2 + t * t * t * y3);
+                }
+                lastCx = x2;
+                lastCy = y2;
+                cx = x3;
+                cy = y3;
+                break;
+            }
+            case 'Q':
+            case 'T': {
+                float x1, y1, x2, y2;
+                if (C == 'Q') {
+                    if (!args(4)) { return; }
+                    x1 = rel ? cx + v[0] : v[0];
+                    y1 = rel ? cy + v[1] : v[1];
+                    x2 = rel ? cx + v[2] : v[2];
+                    y2 = rel ? cy + v[3] : v[3];
+                } else {
+                    if (!args(2)) { return; }
+                    // the reflection of the previous quadratic control about this point
+                    x1 = (lastCmd == 'Q' || lastCmd == 'T') ? 2 * cx - lastCx : cx;
+                    y1 = (lastCmd == 'Q' || lastCmd == 'T') ? 2 * cy - lastCy : cy;
+                    x2 = rel ? cx + v[0] : v[0];
+                    y2 = rel ? cy + v[1] : v[1];
+                }
+                if (cur.empty()) { pt(cx, cy); }
+                for (int i = 1; i <= 10; ++i) {
+                    const float t = static_cast<float>(i) / 10.0f, u = 1.0f - t;
+                    pt(u * u * cx + 2 * u * t * x1 + t * t * x2,
+                       u * u * cy + 2 * u * t * y1 + t * t * y2);
+                }
+                lastCx = x1;
+                lastCy = y1;
+                cx = x2;
+                cy = y2;
+                break;
+            }
+            case 'A': {
+                // v: rx ry rotation large-arc sweep x y. Circular arcs only (rx == ry).
+                if (!args(7)) { return; }
+                const float r = v[0];
+                const bool large = v[3] != 0.0f, sweep = v[4] != 0.0f;
+                const float x2 = rel ? cx + v[5] : v[5], y2 = rel ? cy + v[6] : v[6];
+                if (cur.empty()) { pt(cx, cy); }
+                const float dx = (cx - x2) * 0.5f, dy = (cy - y2) * 0.5f;
+                const float d2 = dx * dx + dy * dy;
+                if (d2 > 0.0f && r > 0.0f) {
+                    float rr = r;
+                    if (d2 > rr * rr) { rr = std::sqrt(d2); }
+                    const float k = std::sqrt(std::max(0.0f, (rr * rr - d2) / d2));
+                    const float sgn = (large == sweep) ? -1.0f : 1.0f;
+                    const float ccx = sgn * k * dy + (cx + x2) * 0.5f;
+                    const float ccy = -sgn * k * dx + (cy + y2) * 0.5f;
+                    const float a0 = std::atan2(cy - ccy, cx - ccx);
+                    float a1 = std::atan2(y2 - ccy, x2 - ccx);
+                    float da = a1 - a0;
+                    if (sweep && da < 0) { da += 6.28318530718f; }
+                    if (!sweep && da > 0) { da -= 6.28318530718f; }
+                    const int n = std::max(4, static_cast<int>(std::fabs(da) * 6.0f));
+                    for (int i = 1; i <= n; ++i) {
+                        const float a = a0 + da * static_cast<float>(i) / static_cast<float>(n);
+                        pt(ccx + rr * std::cos(a), ccy + rr * std::sin(a));
+                    }
+                } else {
+                    pt(x2, y2);
+                }
+                cx = x2;
+                cy = y2;
+                break;
+            }
+            default:
+                return;
+        }
+        lastCmd = C;
+    }
+    if (!cur.empty()) { emit(false); }
+}
+
+void addCircle(Glyph& g, float cx, float cy, float r, const Affine& tf) {
+    std::vector<ImVec2> pts;
+    for (int i = 0; i < 28; ++i) {
+        const float a = 6.28318530718f * static_cast<float>(i) / 28.0f;
+        pts.push_back(tf.apply(cx + r * std::cos(a), cy + r * std::sin(a)));
+    }
+    addLine(g, std::move(pts), true);
+}
+
+void addRect(Glyph& g, float x, float y, float w, float h, const Affine& tf) {
+    addLine(g, {tf.apply(x, y), tf.apply(x + w, y), tf.apply(x + w, y + h), tf.apply(x, y + h)},
+            true);
+}
+
+const Glyph& glyphFor(const std::string& category) {
+    static const std::array<Glyph, 6> glyphs = [] {
+        std::array<Glyph, 6> g;
+        const Affine id;
+        // aircraft: the mock-up's group transform, applied to its one path
+        {
+            const Affine tf = mul(translate(28, 28),
+                                  mul(rotateDeg(40), mul(scaleBy(0.82f), translate(-28, -28))));
+            addPath(g[0],
+                    "M28 5C30.2 5 31.5 8 31.5 12V22L51 35V39L31.5 33.5V43L37 47.5V51L28 48.5L19 "
+                    "51V47.5L24.5 43V33.5L5 39V35L24.5 22V12C24.5 8 25.8 5 28 5Z",
+                    tf);
+        }
+        // marine
+        addPath(g[1], "M5 33H51L45 44H12Z", id);
+        addPath(g[1], "M15 33V26H37V33", id);
+        addPath(g[1], "M21 26V20H31V26", id);
+        addPath(g[1], "M25 20V13H30V20", id);
+        addPath(g[1], "M20 29.5h.01M25 29.5h.01M30 29.5h.01M35 29.5h.01", id);
+        addPath(g[1], "M4 49q5-3.5 10 0t10 0t10 0t10 0t10 0", id);
+        // satellites and weather: rotated -45 degrees about the middle
+        {
+            const Affine tf = mul(translate(28, 28), mul(rotateDeg(-45), translate(-28, -28)));
+            addRect(g[2], 22, 22, 12, 12, tf);
+            addPath(g[2], "M22 28H20M34 28H36", tf);
+            addRect(g[2], 5, 22.5f, 15, 11, tf);
+            addRect(g[2], 36, 22.5f, 15, 11, tf);
+            addPath(g[2], "M10 22.5V33.5M15 22.5V33.5M41 22.5V33.5M46 22.5V33.5", tf);
+            addPath(g[2], "M28 34V38M23.5 43Q28 36 32.5 43", tf);
+        }
+        // meters and paging: a dial
+        addCircle(g[3], 28, 30, 22, id);
+        addPath(g[3],
+                "M16.74 23.5L13.28 21.5M19.64 20.04L17.07 16.98M23.55 17.78L22.19 14.02M28 "
+                "17V13M32.45 17.78L33.81 14.02M36.36 20.04L38.93 16.98M39.26 23.5L42.72 21.5",
+                id);
+        addPath(g[3], "M28 30L37 17", id);
+        addCircle(g[3], 28, 30, 2.5f, id);
+        addPath(g[3], "M19 42H37", id);
+        // voice and data: a mast with its waves
+        addCircle(g[4], 28, 12, 2, id);
+        addPath(g[4],
+                "M28 14L20 50M28 14L36 50M18 50H38M25.8 24H30.2M24 32H32M22.2 40H33.8M24 "
+                "32L33.8 40M32 32L22.2 40",
+                id);
+        addPath(g[4], "M21 8A8 8 0 0 0 21 16M17 5A13 13 0 0 0 17 19M35 8A8 8 0 0 1 35 16M39 "
+                      "5A13 13 0 0 1 39 19",
+                id);
+        // maps and tools: a pin
+        addPath(g[5], "M28 50C28 50 12 33 12 22A16 16 0 0 1 44 22C44 33 28 50 28 50Z", id);
+        addCircle(g[5], 28, 22, 6, id);
+        addPath(g[5], "M17 53H39", id);
+        return g;
+    }();
+    // The dial is the glyph of anything with no category of its own.
+    if (category == "aircraft") { return glyphs[0]; }
+    if (category == "marine") { return glyphs[1]; }
+    if (category == "satellites-weather") { return glyphs[2]; }
+    if (category == "broadcast") { return glyphs[4]; }
+    if (category == "maps-tools") { return glyphs[5]; }
+    return glyphs[3];
+}
+
+// --- the keys --------------------------------------------------------------------
+
+float keyPx() { return fonts::tinyPx(); }
+float keyTracking() { return keyPx() * 0.10f; }
+
+// A SMALL CAPS WORD AT THE KEY'S SIZE, tracked, fitted into [x0, x1] and centred.
+void drawKeyWord(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, const char* label,
+                 ImU32 ink, float yNudge = 0.0f) {
+    ImFont* f = fonts::legend();
+    float px = keyPx();
+    const float room = (br.x - tl.x) - 8.0f;
+    px = fitTrackedPx(f, px, label, 0.10f, room, fitFloorFor(px));
+    const float w = trackedWidth(f, px, label, px * 0.10f);
+    const float h = faceH(f, px);
+    const ImVec2 at((tl.x + br.x) * 0.5f - w * 0.5f, (tl.y + br.y) * 0.5f - h * 0.5f + yNudge);
+    addTrackedText(dl, f, px, at, ink, label, px * 0.10f, br.x - 2.0f);
+}
+
+void drawLoupe(ImDrawList* dl, const ImVec2& c, float r, ImU32 col) {
+    dl->AddCircle(c, r, col, 16, 1.6f);
+    dl->AddLine(ImVec2(c.x + r * 0.72f, c.y + r * 0.72f), ImVec2(c.x + r * 1.7f, c.y + r * 1.7f),
+                col, 1.8f);
+}
+
+// A tab of the top bar: proud metal, the active one lit and carrying the phosphor
+// underline that says where you are.
+bool drawTab(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, const char* label, bool active,
+             const char* id) {
+    ImGui::PushID(id);
+    ImGui::SetCursorScreenPos(tl);
+    const bool pressed = ImGui::InvisibleButton("##tab", ImVec2(br.x - tl.x, br.y - tl.y));
+    const bool hovered = ImGui::IsItemHovered();
+    const bool focused = ImGui::IsItemFocused();
+    ImGui::PopID();
+    const float r = theme::kKeyRounding;
+    const ImU32 top = active ? theme::kIvory : (hovered ? theme::kBrassBright : theme::kBrassMid);
+    const ImU32 bot = active ? theme::kCream : theme::kBrassDark;
+    dl->AddRectFilled(tl, br, bot, r);
+    if (br.x - tl.x > r * 2.0f) {
+        dl->AddRectFilledMultiColor(ImVec2(tl.x + r, tl.y), ImVec2(br.x - r, br.y), top, top, bot,
+                                    bot);
+    }
+    addBenchBevel(dl, tl, br, r, true);
+    drawKeyWord(dl, tl, br, label, active ? theme::kEnamel : theme::kCream);
+    if (active) {
+        // The underline: phosphor, with a soft glow, under the key.
+        const float y = br.y + 7.0f * S();
+        dl->AddRectFilled(ImVec2(tl.x, y - 1.0f), ImVec2(br.x, y + 3.0f),
+                          theme::withAlpha(theme::kPhosphor, 0.25f));
+        dl->AddRectFilled(ImVec2(tl.x, y), ImVec2(br.x, y + 2.0f), theme::kPhosphor);
+    }
+    if (focused) {
+        dl->AddRect(ImVec2(tl.x - 2.0f, tl.y - 2.0f), ImVec2(br.x + 2.0f, br.y + 2.0f),
+                    theme::kBrassBright, r + 1.0f, 0, theme::kHairline);
+    }
+    return pressed;
+}
+
+// A small amber, muted or phosphor outline badge: EXPERIMENTAL, WINDOWS ONLY.
+float badgeWidth(const char* label) {
+    ImFont* f = fonts::legend();
+    const float px = std::max(10.0f, keyPx() * 0.78f);
+    return trackedWidth(f, px, label, px * 0.08f) + 10.0f * S();
+}
+float badgeHeight() {
+    return faceH(fonts::legend(), std::max(10.0f, keyPx() * 0.78f)) + 4.0f * S();
+}
+void drawBadge(ImDrawList* dl, const ImVec2& tl, const char* label, ImU32 ink) {
+    ImFont* f = fonts::legend();
+    const float px = std::max(10.0f, keyPx() * 0.78f);
+    const float w = badgeWidth(label);
+    const float h = badgeHeight();
+    dl->AddRect(tl, ImVec2(tl.x + w, tl.y + h), ink, 1.0f, 0, 1.0f);
+    addTrackedText(dl, f, px, ImVec2(tl.x + 5.0f * S(), tl.y + 2.0f * S()), ink, label,
+                   px * 0.08f);
+}
+
+// A phosphor underline sweeping along a key while a transfer with no known length
+// runs, or filling to `frac` when there is one.
+void drawFittingLine(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, float frac) {
+    const float y1 = br.y - 1.0f;
+    const float y0 = y1 - 2.0f;
+    dl->AddRectFilled(ImVec2(tl.x + 1.0f, y0), ImVec2(br.x - 1.0f, y1),
+                      theme::withAlpha(theme::kPhosphorDim, 0.35f));
+    const float w = br.x - tl.x - 2.0f;
+    if (frac > 0.0f) {
+        dl->AddRectFilled(ImVec2(tl.x + 1.0f, y0), ImVec2(tl.x + 1.0f + w * std::min(1.0f, frac), y1),
+                          theme::kPhosphor);
+    } else {
+        const float t = static_cast<float>(std::fmod(ImGui::GetTime() * 0.9, 1.0));
+        const float seg = w * 0.3f;
+        const float x0 = tl.x + 1.0f + (w + seg) * t - seg;
+        dl->AddRectFilled(ImVec2(std::max(tl.x + 1.0f, x0), y0),
+                          ImVec2(std::min(br.x - 1.0f, x0 + seg), y1), theme::kPhosphor);
+    }
+}
+
+// --- the words -------------------------------------------------------------------
+
+const char* const kNoticeReason = FOX_TR_NOOP("the legal notice must be acknowledged first");
+const char* const kTransferReason = FOX_TR_NOOP("a transfer is already in progress");
+
+bool localTm(std::int64_t t, std::tm& out) {
+    const std::time_t tt = static_cast<std::time_t>(t);
+#if defined(_WIN32)
+    return localtime_s(&out, &tt) == 0;
+#else
+    return localtime_r(&tt, &out) != nullptr;
+#endif
+}
+
+std::string dateText(std::int64_t t) {
+    std::tm tm{};
+    if (t <= 0 || !localTm(t, tm)) { return tr("an unknown date"); }
+    char buf[32];
+    std::snprintf(buf, sizeof buf, "%04d-%02d-%02d", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday);
+    return buf;
+}
+
+// "HH:MM" for a read made today, "YYYY-MM-DD HH:MM" for an earlier day.
+std::string readTimeText(std::int64_t t, std::int64_t now) {
+    std::tm tm{};
+    if (t <= 0 || !localTm(t, tm)) { return tr("an unknown date"); }
+    std::tm nowTm{};
+    const bool haveNow = localTm(now, nowTm);
+    const bool today = haveNow && nowTm.tm_year == tm.tm_year && nowTm.tm_yday == tm.tm_yday;
+    char buf[48];
+    if (today) {
+        std::snprintf(buf, sizeof buf, "%02d:%02d", tm.tm_hour, tm.tm_min);
+    } else {
+        std::snprintf(buf, sizeof buf, "%04d-%02d-%02d %02d:%02d", tm.tm_year + 1900,
+                      tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min);
+    }
+    return buf;
+}
+
+// What a catalogue with no rows says, and why. FOUR answers, not two: nobody has
+// asked, it was asked and failed, it was asked and listed nothing, or it was read.
+enum class CatalogueState { NeverAsked, Failed, ReadEmpty, Read };
 CatalogueState catalogueState(const PluginStoreModel& m) {
     if (m.haveCatalogue) { return CatalogueState::Read; }
     if (!m.sourceStatus.empty()) { return CatalogueState::ReadEmpty; }
@@ -1027,104 +579,505 @@ CatalogueState catalogueState(const PluginStoreModel& m) {
     return CatalogueState::NeverAsked;
 }
 
-// The three disjoint, exhaustive state categories the SHOW well switches on.
-enum class StateGroup { Fitted, Available, Blocked };
+}  // namespace
 
-StateGroup stateGroup(const StoreModule& sm) {
-    if (sm.plate.fitted) { return StateGroup::Fitted; }
-    return sm.installableHere ? StateGroup::Available : StateGroup::Blocked;
+// ===========================================================================
+// THE WORDS AND DECISIONS - pure
+// ===========================================================================
+
+StoreCategory storeCategoryFor(const std::string& id) {
+    if (id == "aircraft") { return StoreCategory::Aircraft; }
+    if (id == "marine") { return StoreCategory::Marine; }
+    if (id == "satellites-weather") { return StoreCategory::SatellitesWeather; }
+    if (id == "meters-paging") { return StoreCategory::MetersPaging; }
+    if (id == "broadcast") { return StoreCategory::VoiceData; }
+    if (id == "maps-tools") { return StoreCategory::MapsTools; }
+    return StoreCategory::Other;
 }
 
-// ...and the three disjoint, exhaustive kind categories.
-enum class KindGroup { Decoder, Other, Undeclared };
-
-KindGroup kindGroup(const ModulePlate& m) {
-    if (!m.haveCapabilities) { return KindGroup::Undeclared; }
-    constexpr std::uint32_t kDecoderBits =
-        CASCADE_CAP_DECODER | CASCADE_CAP_IQ_DECODER | CASCADE_CAP_IMAGE_DECODER;
-    return (m.capabilities & kDecoderBits) != 0u ? KindGroup::Decoder : KindGroup::Other;
+const char* storeCategoryHeading(StoreCategory c) {
+    switch (c) {
+        case StoreCategory::Aircraft: return tr("AIRCRAFT");
+        case StoreCategory::Marine: return tr("MARINE");
+        case StoreCategory::SatellitesWeather: return tr("SATELLITES AND WEATHER");
+        case StoreCategory::MetersPaging: return tr("METERS AND PAGING");
+        case StoreCategory::VoiceData: return tr("VOICE AND DATA");
+        case StoreCategory::MapsTools: return tr("MAPS AND TOOLS");
+        case StoreCategory::Other: return tr("OTHER");
+    }
+    return tr("OTHER");
 }
 
-bool passesShow(const StoreModule& sm, const PluginStoreDeck& d) {
-    switch (stateGroup(sm)) {
-        case StateGroup::Fitted:
-            if (!d.showFitted) { return false; }
-            break;
-        case StateGroup::Available:
-            if (!d.showAvailable) { return false; }
-            break;
-        case StateGroup::Blocked:
-            if (!d.showBlocked) { return false; }
+const char* storeCategoryCensusName(StoreCategory c) {
+    switch (c) {
+        case StoreCategory::Aircraft: return "aircraft";
+        case StoreCategory::Marine: return "marine";
+        case StoreCategory::SatellitesWeather: return "satellites";
+        case StoreCategory::MetersPaging: return "meters";
+        case StoreCategory::VoiceData: return "voice";
+        case StoreCategory::MapsTools: return "maps";
+        case StoreCategory::Other: return "other";
+    }
+    return "other";
+}
+
+StoreKey storeKeyFor(const StoreModule& sm, const StoreKeyIn& in) {
+    StoreKey k;
+    // This plugin's own transfer: FITTING..., not a key to press.
+    if (!in.busyId.empty() && in.busyId == sm.id) {
+        k.kind = StoreKeyKind::Fitting;
+        return k;
+    }
+    switch (sm.install) {
+        case StoreInstallKind::Installed:
+        case StoreInstallKind::NewerInstalled:
+            k.kind = StoreKeyKind::Installed;
+            return k;
+        case StoreInstallKind::UpdateAvailable:
+            k.kind = StoreKeyKind::Update;
+            if (sm.updateToVersion.empty()) {
+                // Newer by version and not plannable here: no build for this host, or
+                // another ABI. The key says so rather than doing nothing.
+                k.reason = sm.updateBlockedReason;
+            } else if (in.busyAny) {
+                k.reason = kTransferReason;
+            }
+            k.enabled = k.reason.empty() && !sm.updateToVersion.empty();
+            return k;
+        case StoreInstallKind::NotInstalled:
             break;
     }
-    switch (kindGroup(sm.plate)) {
-        case KindGroup::Decoder: return d.showDecoders;
-        case KindGroup::Other: return d.showOtherKinds;
-        case KindGroup::Undeclared: return d.showUndeclared;
+    k.kind = StoreKeyKind::Get;
+    // The gate asked as if the notice were acknowledged: whatever it says is a
+    // reason a tick cannot cure.
+    std::string reason = sm.blockedReasonIfAcknowledged;
+    if (reason.empty() && !sm.plate.legalNotice.empty()) {
+        if (in.onPage) {
+            if (!in.noticeTicked) { reason = kNoticeReason; }
+        } else {
+            // On a card, GET on a plugin with a notice OPENS ITS PAGE: the notice cannot
+            // be skipped, and the key is not greyed for it.
+            k.opensPage = true;
+        }
     }
-    return true;
+    k.reason = reason;
+    k.enabled = reason.empty();
+    return k;
+}
+
+const char* storeKeyLabel(StoreKeyKind k) {
+    switch (k) {
+        case StoreKeyKind::Get: return tr("GET");
+        case StoreKeyKind::Fitting: return tr("FITTING...");
+        case StoreKeyKind::Installed: return tr("INSTALLED");
+        case StoreKeyKind::Update: return tr("UPDATE");
+    }
+    return tr("GET");
+}
+
+const char* storeKeyCensusState(const StoreKey& k) {
+    if ((k.kind == StoreKeyKind::Get || k.kind == StoreKeyKind::Update) && !k.enabled) {
+        return "greyed";
+    }
+    switch (k.kind) {
+        case StoreKeyKind::Get: return "get";
+        case StoreKeyKind::Fitting: return "fitting";
+        case StoreKeyKind::Installed: return "installed";
+        case StoreKeyKind::Update: return "update";
+    }
+    return "get";
+}
+
+const char* storeExperimentalBadge() { return tr("EXPERIMENTAL"); }
+
+const char* storeBuildBadge(const StoreModule& sm) {
+    if (sm.haveBuildHere) { return ""; }
+    if (sm.buildsWindows && !sm.buildsLinux) { return tr("WINDOWS ONLY"); }
+    if (sm.buildsLinux && !sm.buildsWindows) { return tr("LINUX ONLY"); }
+    return "";
+}
+
+std::string storeHeaderMeta(const StoreModule& sm, const std::string& hostPlatform) {
+    const ModulePlate& p = sm.plate;
+    std::string out = p.maker.empty() ? std::string(tr("maker not stated")) : p.maker;
+    const auto add = [&](const std::string& piece) { out += "  \xc2\xb7  " + piece; };
+    add(cascade::core::formatText(tr("version %s"), p.version.empty() ? "?" : p.version.c_str()));
+    if (sm.haveBuildHere) {
+        if (p.haveSizeBytes) { add(bytesText(p.sizeBytes)); }
+        add(hostPlatform.empty() ? p.platforms : hostPlatform);
+    } else {
+        add(tr("no build for this system"));
+    }
+    return out;
+}
+
+std::string storeFromTo(const std::string& from, const std::string& to) {
+    return cascade::core::formatText(tr("%s to %s"), from.c_str(), to.c_str());
+}
+
+int storeUpdateCount(const PluginStoreModel& m) {
+    int n = 0;
+    for (const StoreModule& sm : m.modules) {
+        if (!sm.updateToVersion.empty()) { ++n; }
+    }
+    return n;
+}
+
+bool storeMatchesQuery(const StoreModule& sm, const std::string& lowerQuery) {
+    if (lowerQuery.empty()) { return true; }
+    const std::string hay = lowerAscii(sm.plate.name + " " + sm.plate.summary + " " +
+                                       sm.plate.blurb + " " +
+                                       storeCategoryHeading(storeCategoryFor(sm.plate.category)));
+    return hay.find(lowerQuery) != std::string::npos;
+}
+
+std::vector<StoreSection> storeBrowseSections(const PluginStoreModel& m,
+                                              const std::string& lowerQuery) {
+    std::array<std::vector<int>, kStoreCategoryCount> by;
+    for (int i = 0; i < static_cast<int>(m.modules.size()); ++i) {
+        const StoreModule& sm = m.modules[static_cast<std::size_t>(i)];
+        if (!storeMatchesQuery(sm, lowerQuery)) { continue; }
+        by[static_cast<std::size_t>(storeCategoryFor(sm.plate.category))].push_back(i);
+    }
+    std::vector<StoreSection> out;
+    for (int c = 0; c < kStoreCategoryCount; ++c) {
+        std::vector<int>& v = by[static_cast<std::size_t>(c)];
+        if (v.empty()) { continue; }
+        std::sort(v.begin(), v.end(), [&](int a, int b) {
+            const StoreModule& x = m.modules[static_cast<std::size_t>(a)];
+            const StoreModule& y = m.modules[static_cast<std::size_t>(b)];
+            const std::string la = lowerAscii(x.plate.name), lb = lowerAscii(y.plate.name);
+            if (la != lb) { return la < lb; }
+            return x.id < y.id;
+        });
+        StoreSection s;
+        s.category = static_cast<StoreCategory>(c);
+        s.modules = std::move(v);
+        out.push_back(std::move(s));
+    }
+    return out;
+}
+
+std::vector<int> storeUpdateRows(const PluginStoreModel& m, const std::string& lowerQuery) {
+    std::vector<int> rows;
+    for (int i = 0; i < static_cast<int>(m.modules.size()); ++i) {
+        const StoreModule& sm = m.modules[static_cast<std::size_t>(i)];
+        if (sm.updateToVersion.empty() || !storeMatchesQuery(sm, lowerQuery)) { continue; }
+        rows.push_back(i);
+    }
+    std::sort(rows.begin(), rows.end(), [&](int a, int b) {
+        return lowerAscii(m.modules[static_cast<std::size_t>(a)].plate.name) <
+               lowerAscii(m.modules[static_cast<std::size_t>(b)].plate.name);
+    });
+    return rows;
+}
+
+StoreCatalogueLine storeCatalogueLine(const PluginStoreModel& m, std::int64_t nowUnix) {
+    StoreCatalogueLine l;
+    if (!m.haveCatalogue) {
+        l.text = tr("CATALOGUE NOT READ");
+        return l;
+    }
+    l.cached = m.catalogueFromCache;
+    if (m.refreshFailed && !m.sourceError.empty()) {
+        // THE COPY ON SCREEN IS NOT THE LATEST, and the reason is the user's evidence,
+        // verbatim: a kept copy from an earlier session, or an earlier read of this one.
+        l.text = cascade::core::formatText(tr("Catalogue from %s; could not refresh: %s"),
+                                           dateText(m.catalogueReadTime).c_str(),
+                                           m.sourceError.c_str());
+        l.tone = StoreLineTone::Amber;
+        return l;
+    }
+    l.text = cascade::core::formatText(tr("Catalogue read %s"),
+                                       readTimeText(m.catalogueReadTime, nowUnix).c_str());
+    return l;
+}
+
+int storeColumnsFor(float contentWidth) { return contentWidth >= 1120.0f ? 3 : 2; }
+
+float storeProsePx() { return fonts::panelPx(); }
+
+ImGuiWindowFlags storeFaceWindowFlags() {
+    // The view's own body child scrolls; this pane holds exactly the view.
+    return ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
+}
+
+void forgetCatalogueConsent(PluginStoreDeck& deck) {
+    deck.legalAck = false;
+    deck.addAllAck = false;
+}
+
+std::vector<std::string> modulePageSections(bool hasNoticeBox) {
+    std::vector<std::string> s = {"screenshots", "whatitdoes", "whatsnew"};
+    if (hasNoticeBox) { s.push_back("beforeyoufitit"); }
+    s.push_back("details");
+    return s;
+}
+
+std::string moduleWhatsNewText(const ModulePlate& m) {
+    if (!m.whatsNew.empty()) { return m.whatsNew; }
+    return cascade::core::formatText(tr("%s: first release."),
+                                     m.version.empty() ? "?" : m.version.c_str());
+}
+
+// ===========================================================================
+// REACH, FACTS, AND THE REASONS
+// ===========================================================================
+
+namespace {
+
+const char* kNotRead = FOX_TR_NOOP("not read");
+
+// THE THREE BITS THAT MAKE A MODULE SOMETHING SIGNAL CAN BE ROUTED TO.
+constexpr std::uint32_t kSignalCaps =
+    CASCADE_CAP_DECODER | CASCADE_CAP_IQ_DECODER | CASCADE_CAP_IMAGE_DECODER;
+
+enum class PlateState { NotFitted, Refused, Stopped, NoSignal, Started };
+
+PlateState plateState(const ModulePlate& m) {
+    if (!m.fitted) { return PlateState::NotFitted; }
+    if (!m.loaded) { return PlateState::Refused; }
+    if (!m.running) { return PlateState::Stopped; }
+    if (m.haveCapabilities && (m.capabilities & kSignalCaps) == 0u) { return PlateState::NoSignal; }
+    return PlateState::Started;
 }
 
 }  // namespace
 
-// --- the shared plate, and the row vocabulary that goes with it ---------------
-
-float moduleDataPlateHeight(float width, const ModulePlate& m) {
-    return layoutPlate(nullptr, ImVec2(0.0f, 0.0f), width, m, false);
-}
-
-float drawModuleDataPlate(ImDrawList* dl, const ImVec2& tl, float width,
-                          const ModulePlate& m) {
-    return layoutPlate(dl, tl, width, m, true);
-}
-
-const char* moduleKindTag(const ModulePlate& m) {
-    if (!m.haveCapabilities) {
-        // TWO REASONS, TWO TAGS. A catalogue row has not declared anything to
-        // us YET, and fitting it is what fills that in; a file the host would
-        // not accept has no kind on this panel at all, and tagging it "NOT
-        // DECLARED" would put the silence on the module rather than on the
-        // refusal.
-        return (m.fitted && !m.loaded) ? tr("NOT KNOWN") : tr("NOT DECLARED");
-    }
+std::vector<ReachRow> moduleReachRows(const ModulePlate& m) {
+    std::vector<ReachRow> r;
+    if (!m.haveCapabilities) { return r; }
     const std::uint32_t c = m.capabilities;
-    if ((c & (CASCADE_CAP_DECODER | CASCADE_CAP_IQ_DECODER | CASCADE_CAP_IMAGE_DECODER)) !=
-        0u) {
-        return tr("DECODER");
+    const auto add = [&](const char* key, const std::string& detail, bool outward) {
+        r.push_back(ReachRow{key, detail, outward});
+    };
+    if ((c & CASCADE_CAP_DECODER) != 0u) {
+        add(tr("Audio decoder"), tr("Fed the demodulated audio the speakers get."), false);
     }
-    if ((c & (CASCADE_CAP_TRACK_SOURCE | CASCADE_CAP_BASEMAP | CASCADE_CAP_TRACK_INFO)) !=
-        0u) {
-        return tr("MAP");
+    if ((c & CASCADE_CAP_IQ_DECODER) != 0u) {
+        add(tr("I/Q decoder"), tr("Fed complex baseband straight from the receiver."), false);
     }
-    if ((c & (CASCADE_CAP_PANEL | CASCADE_CAP_INSTRUMENT)) != 0u) { return tr("PANEL"); }
-    if ((c & (CASCADE_CAP_HOST_CLIENT | CASCADE_CAP_PRESET)) != 0u) { return tr("CONTROL"); }
-    return tr("MODULE");
+    if ((c & CASCADE_CAP_IMAGE_DECODER) != 0u) {
+        add(tr("Image decoder"), tr("Fed samples; returns pictures the host displays."), false);
+    }
+    if ((c & CASCADE_CAP_AUDIO_OUT) != 0u) {
+        // REPLACES, and the word is the whole row: while it decodes, what the
+        // speakers play is the module's and the demodulated audio is not there.
+        add(tr("Plays sound through FoxSDR"),
+            tr("Replaces the receiver's audio while it is decoding."), false);
+    }
+    if ((c & CASCADE_CAP_AUDIO_PROCESSOR) != 0u) {
+        add(tr("Audio processor"), tr("Changes the receiver's audio before you hear it."), false);
+    }
+    if ((c & CASCADE_CAP_TRACK_SOURCE) != 0u) {
+        add(tr("Map targets"), tr("Publishes positions the host draws on its map."), false);
+    }
+    if ((c & CASCADE_CAP_PANEL) != 0u) {
+        add(tr("A window of its own"), tr("Rows and controls the host draws for it."), false);
+    }
+    if ((c & CASCADE_CAP_INSTRUMENT) != 0u) {
+        add(tr("An instrument of its own"),
+            tr("A face the host draws as a piece of equipment, fed by the module."), false);
+    }
+    if ((c & CASCADE_CAP_PRESET) != 0u) {
+        add(tr("Presets"),
+            tr("Publishes where it listens. A suggestion - pressing one is the user tuning, not "
+               "the module."),
+            false);
+    }
+    if ((c & CASCADE_CAP_HOST_CLIENT) != 0u) {
+        std::string d;
+        if (!m.haveTuneGrant) {
+            d = tr("Refused unless you grant it, per module. This grant and the radio-settings "
+                   "grant are the only permissions the console actually enforces.");
+        } else if (m.tuneGranted) {
+            d = tr("GRANTED. It may retune the receiver on its own, without asking again.");
+        } else {
+            d = tr("Not granted, so every request to retune is answered DENIED.");
+        }
+        add(tr("Can ask to move the receiver"), d, true);
+    }
+    if ((c & CASCADE_CAP_RECEIVER_LOCATOR) != 0u) {
+        add(tr("Can read your receiver's locator"),
+            tr("Sees a 6-character Maidenhead grid square for wherever the receiver's position is "
+               "set (GPS, \"Set RX here\", or typed) - a few kilometres' precision, not an exact "
+               "point. What it does with that is up to the module; some report it onward, such as "
+               "an optional PSK Reporter upload."),
+            true);
+    }
+    if ((c & CASCADE_CAP_BASEMAP) != 0u) {
+        add(tr("Map imagery"),
+            tr("Supplies the map tiles from whatever source it chose - which may be an online "
+               "tile server. Nothing here points it at one."),
+            true);
+    }
+    if ((c & CASCADE_CAP_TRACK_INFO) != 0u) {
+        add(tr("Target look-up"),
+            tr("Looks up who a target is, from whatever source it chose - which may be an online "
+               "service."),
+            true);
+    }
+    if (r.empty()) {
+        if (m.capabilities == 0u) {
+            add(tr("Declares nothing"), tr("The record carries no capability bits."), false);
+        } else {
+            add(tr("Declares a capability this build does not know"),
+                tr("The module was built against a newer host."), true);
+        }
+    }
+    return r;
 }
 
-// See plugin_store_view.hpp. Every word moduleKindTag can return, measured in
-// the face the chip is lettered in, plus the shoulder the chip needs either
-// side of it. The list is written out rather than derived, because a tag
-// missing from it is a chip that overflows in exactly the state nobody tests.
-float moduleKindTagWidth() {
-    static const char* const kTags[] = {
-        FOX_TR_NOOP("NOT KNOWN"), FOX_TR_NOOP("NOT DECLARED"), FOX_TR_NOOP("DECODER"),
-        FOX_TR_NOOP("MAP"),       FOX_TR_NOOP("PANEL"),        FOX_TR_NOOP("CONTROL"),
-        FOX_TR_NOOP("MODULE")};
-    ImFont* f = fonts::ui();
-    const float px = fonts::tinyPx();
-    float w = 0.0f;
-    for (const char* t : kTags) { w = std::max(w, textW(f, px, tr(t))); }
-    // The floor is the width the store's card used before this was measured,
-    // so a narrow face cannot shrink the chip out of the design.
-    return std::max(84.0f, w + 14.0f);
+std::string moduleReachesLine(const ModulePlate& m) {
+    if (!m.haveCapabilities) {
+        return (m.fitted && !m.loaded) ? tr("not known: the host did not accept this file")
+                                       : tr("not declared until it is fitted");
+    }
+    std::string out;
+    for (const ReachRow& r : moduleReachRows(m)) {
+        if (!out.empty()) { out += ", "; }
+        out += r.key;
+    }
+    return out;
+}
+
+std::string moduleReachSummary(const ModulePlate& m) {
+    // NEVER "reaches nothing". Every plugin here is native code mapped into this
+    // process; there is no data-only module type.
+    if (!m.haveCapabilities) {
+        return (m.fitted && !m.loaded) ? tr("not known: the host did not accept this file")
+                                       : tr("not declared until it is fitted");
+    }
+    if ((m.capabilities & CASCADE_CAP_HOST_CLIENT) != 0u) {
+        return m.haveTuneGrant && m.tuneGranted ? tr("granted: may move the receiver")
+                                                : tr("asks to move the receiver");
+    }
+    if ((m.capabilities & (CASCADE_CAP_BASEMAP | CASCADE_CAP_TRACK_INFO)) != 0u) {
+        return tr("may fetch from a server it chose");
+    }
+    return tr("publishes to the host only");
+}
+
+ImU32 moduleReachColour(const ModulePlate& m) {
+    if (!m.haveCapabilities) { return theme::kInkFaint; }
+    if ((m.capabilities &
+         (CASCADE_CAP_HOST_CLIENT | CASCADE_CAP_BASEMAP | CASCADE_CAP_TRACK_INFO)) != 0u) {
+        return theme::kGold;
+    }
+    return theme::kInkMuted;
+}
+
+std::string moduleMachineText(const ModulePlate& m) {
+    switch (plateState(m)) {
+        case PlateState::NotFitted: return tr("not fitted");
+        case PlateState::Refused: return tr("fitted, refused");
+        case PlateState::Stopped: return tr("fitted, stopped");
+        case PlateState::NoSignal: return tr("fitted, takes no signal");
+        case PlateState::Started: return tr("fitted and started");
+    }
+    return tr("not fitted");
+}
+
+std::vector<PageFact> modulePageFacts(const ModulePlate& m) {
+    std::vector<PageFact> f;
+    const bool read = m.haveDescriptor;
+    const auto hatch = [&](const char* key, const std::string& why) {
+        PageFact x;
+        x.key = key;
+        x.value = why;
+        x.hatched = true;
+        return x;
+    };
+
+    {
+        PageFact x{tr("MAKER"), m.maker, false, false, 0};
+        if (!read) {
+            x = hatch(tr("MAKER"), tr(kNotRead));
+        } else if (m.maker.empty()) {
+            x = hatch(tr("MAKER"), tr("not stated"));
+        }
+        f.push_back(x);
+    }
+    {
+        // "No licence" is a decision, not a blank - but only where one was looked for.
+        PageFact x{tr("LICENCE"), m.licence, false, false, 0};
+        if (!read) {
+            x = hatch(tr("LICENCE"), tr(kNotRead));
+        } else if (m.licence.empty()) {
+            x = hatch(tr("LICENCE"), tr("none declared"));
+            x.tone = theme::kGold;
+        }
+        f.push_back(x);
+    }
+    {
+        PageFact x{tr("VERSION"), m.version, false, false, theme::kAmber};
+        if (!read || m.version.empty()) { x = hatch(tr("VERSION"), read ? tr("not stated") : tr(kNotRead)); }
+        f.push_back(x);
+    }
+    {
+        PageFact x{tr("PLUGIN ABI"), {}, false, false, 0};
+        if (!m.haveAbi) {
+            // abiVersion 0 means "not recorded": unknown, never a mismatch.
+            x = hatch(tr("PLUGIN ABI"), tr("not recorded"));
+        } else if (m.abiVersion == m.hostAbiVersion) {
+            x.value = cascade::core::formatText(tr("%u, matches this build"), m.abiVersion);
+            x.tone = theme::kPhosphor;
+        } else {
+            x.value = cascade::core::formatText(tr("%u, this build needs %u"), m.abiVersion,
+                                                m.hostAbiVersion);
+            x.tone = theme::kGold;
+        }
+        f.push_back(x);
+    }
+    {
+        PageFact x{tr("DOWNLOAD"), {}, false, false, theme::kAmber};
+        if (m.haveSizeBytes) {
+            x.value = bytesText(m.sizeBytes);
+        } else {
+            x = hatch(tr("DOWNLOAD"), tr("not stated"));
+        }
+        f.push_back(x);
+    }
+    {
+        PageFact x{tr("BUILDS FOR"), m.platforms, false, false, 0};
+        if (m.platforms.empty()) { x = hatch(tr("BUILDS FOR"), tr("not stated")); }
+        f.push_back(x);
+    }
+    {
+        PageFact x{tr("REACHES"), moduleReachesLine(m), false, false, 0};
+        if (!m.haveCapabilities) { x.hatched = true; }
+        f.push_back(x);
+    }
+    {
+        PageFact x{tr("HOMEPAGE"), m.homepage, false, true, 0};
+        if (m.homepage.empty()) { x = hatch(tr("HOMEPAGE"), tr("not stated")); }
+        f.push_back(x);
+    }
+    {
+        PageFact x{tr("SHA-256"), m.sha256, false, true, theme::kAmber};
+        if (m.sha256.empty()) { x = hatch(tr("SHA-256"), tr("not stated")); }
+        f.push_back(x);
+    }
+    {
+        PageFact x{tr("PUBLISHED"), m.published, false, false, 0};
+        if (m.published.empty()) { x = hatch(tr("PUBLISHED"), tr("not stated")); }
+        f.push_back(x);
+    }
+    if (m.fitted) {
+        PageFact x{tr("ON THIS MACHINE"), moduleMachineText(m), false, false, 0};
+        x.tone = plateState(m) == PlateState::Refused ? theme::kAlarmHot : theme::kIvory;
+        f.push_back(x);
+        if (!m.fileName.empty()) {
+            f.push_back(PageFact{tr("FILE"), m.fileName, false, true, theme::kInkMuted});
+        }
+    }
+    if (!m.retirementFloor.empty()) {
+        f.push_back(PageFact{tr("RETIRED BELOW"), m.retirementFloor, false, false, theme::kGold});
+    }
+    return f;
 }
 
 // --- a reason kept in English, drawn in the language in force -----------------
-//
-// The two formats the valued reasons are made from. ONE STRING SERVES THREE
-// JOBS: it makes the English (pluginAbiMismatchReason), it is the pattern that
-// sentence is recognised by (trStoredReason), and it is the catalogue key the
-// translation is found under - so the three cannot drift apart.
 namespace {
 constexpr const char* kAbiReasonFormat =
     FOX_TR_NOOP("not compatible with this version (built for plugin ABI %u, this build "
@@ -1137,8 +1090,6 @@ std::string pluginAbiMismatchReason(unsigned builtFor, unsigned required) {
 }
 
 std::string pluginNoBuildReason(const std::string& platform) {
-    // Built as a string: the platform is the host's own "os/arch" and short,
-    // but there is no length that makes a fixed buffer the right tool.
     const std::string_view fmt(kNoBuildReasonFormat);
     const std::size_t at = fmt.find("%s");
     return std::string(fmt.substr(0, at)) + platform + std::string(fmt.substr(at + 2));
@@ -1146,8 +1097,8 @@ std::string pluginNoBuildReason(const std::string& platform) {
 
 std::string trStoredReason(const std::string& english) {
     if (english.empty()) { return english; }
-    // tr() hands back its own argument when nothing translates it, so a
-    // different pointer is a catalogue hit.
+    // tr() hands back its own argument when nothing translates it, so a different
+    // pointer is a catalogue hit.
     const char* hit = tr(english.c_str());
     if (hit != english.c_str()) { return hit; }
 
@@ -1172,201 +1123,6 @@ std::string trStoredReason(const std::string& english) {
     return english;
 }
 
-std::string moduleReachSummary(const ModulePlate& m) {
-    // NEVER "reaches nothing". Every plugin here is native code mapped into
-    // this process; there is no data-only module type, so no module reaches
-    // nothing and no row may say it does.
-    if (!m.haveCapabilities) {
-        // A refused file IS fitted, so "until it is fitted" would be false of
-        // it - and it is silent because the host would not have it, not
-        // because it asks for nothing.
-        return (m.fitted && !m.loaded) ? tr("not known: the host did not accept this file")
-                                       : tr("not declared until it is fitted");
-    }
-    if ((m.capabilities & CASCADE_CAP_HOST_CLIENT) != 0u) {
-        return m.haveTuneGrant && m.tuneGranted ? tr("granted: may move the receiver")
-                                                : tr("asks to move the receiver");
-    }
-    if ((m.capabilities & (CASCADE_CAP_BASEMAP | CASCADE_CAP_TRACK_INFO)) != 0u) {
-        // "a server you choose" was false of both: neither capability takes a
-        // server from this console, so whatever they reach is the module's
-        // choice and the console never learns what it was. "may" because
-        // nothing here can tell whether the source is on the network at all -
-        // the reach list below says the same thing at length.
-        return tr("may fetch from a server it chose");
-    }
-    return tr("publishes to the host only");
-}
-
-ImU32 moduleReachColour(const ModulePlate& m) {
-    // FAINT STAYS FAINT HERE, and it was tried the other way. Raising the
-    // unknown case to kInkMuted for legibility would have made it the SAME
-    // tone as the inward case two lines below - two different answers in one
-    // colour, which is worse than a dim one, and testReachColour rejected it
-    // on exactly that ground. The three tones on this ladder are the whole
-    // signal; the legibility of the sentence they colour is bought with the
-    // size raise instead.
-    if (!m.haveCapabilities) { return theme::kInkFaint; }
-    if ((m.capabilities &
-         (CASCADE_CAP_HOST_CLIENT | CASCADE_CAP_BASEMAP | CASCADE_CAP_TRACK_INFO)) != 0u) {
-        return theme::kGold;
-    }
-    return theme::kInkMuted;
-}
-
-const char* moduleStateWord(const ModulePlate& m) {
-    switch (plateState(m)) {
-        case PlateState::NotFitted: return tr("NOT FITTED");
-        case PlateState::Refused: return tr("REFUSED");
-        case PlateState::Stopped: return tr("STOPPED");
-        case PlateState::NoSignal: return tr("TAKES NO SIGNAL");
-        case PlateState::Started: return tr("STARTED");
-    }
-    return tr("NOT FITTED");
-}
-
-ImU32 moduleStateColour(const ModulePlate& m) {
-    switch (plateState(m)) {
-        // FAINT STAYS FAINT HERE, for the same reason as moduleReachColour
-        // above: NoSignal three lines down is kInkMuted, so lifting NotFitted
-        // to it would letter two of the five states identically. Five states
-        // need five tones more than one of them needs a brighter one, and
-        // testStateInkAndLamp rejected the change on that ground.
-        case PlateState::NotFitted: return theme::kInkFaint;
-        case PlateState::Refused: return theme::kAlarm;
-        // A stop is a choice the user made, so it letters in plain ink rather
-        // than in anything that reads as trouble - the same rule, and the same
-        // tone, the FITTED MODULES window uses for it.
-        case PlateState::Stopped: return theme::kCream;
-        case PlateState::NoSignal: return theme::kInkMuted;
-        // NOT PHOSPHOR. Phosphor in this palette means something is working,
-        // and "started" is not "working" - see the header.
-        case PlateState::Started: return theme::kIvory;
-    }
-    return theme::kInkFaint;
-}
-
-bool moduleStateLampLit(const ModulePlate& m) {
-    return plateState(m) == PlateState::Refused;
-}
-
-const char* storeSortLabel(int index) {
-    switch (index) {
-        case 1: return tr("MAKER");
-        case 2: return tr("VERSION");
-        default: return tr("NAME");
-    }
-}
-
-// See the header, and fonts.hpp for why kPanelSize exists at all. It is the
-// theme's own largest size, added for this page and read by nothing else, so
-// the raise cannot move the rail, the spectrum axis or a meter face - the
-// exact sweep raising kUiSize cost in 0.79.0 and gave back in 0.84.0. Nothing
-// here invents a figure.
-float storeProsePx() { return fonts::panelPx(); }
-
-// See the header. The six SHOW labels, the widest measured at `labelPx`, and
-// the switch, the plate's padding and a three-figure count around it -
-// drawRockerRow's own geometry.
-float storeShowRockerMinWidth(float labelPx) {
-    ImFont* uf = fonts::ui();
-    return 16.0f + 7.0f +
-           std::max({textW(uf, labelPx, tr("NOT DECLARED")), textW(uf, labelPx, tr("OTHER KINDS")),
-                     textW(uf, labelPx, tr("NOT FITTED")), textW(uf, labelPx, tr("CANNOT FIT")),
-                     textW(uf, labelPx, tr("DECODERS")), textW(uf, labelPx, tr("FITTED"))}) +
-           12.0f + 6.0f + textW(fonts::reading(), prose(), "000");
-}
-
-bool storeShowTwoColumns(float colW) {
-    return colW >= storeShowRockerMinWidth(fitFloorFor(prose()));
-}
-
-// See the header: the widest thing the action column holds - a key's word
-// with its metal, or an install word - measured from every word it can say.
-float storeActionColumnWidth() {
-    ImFont* uf = fonts::ui();
-    const float px = prose();
-    return std::max({150.0f, textW(uf, px, tr("FIT")) + 28.0f, textW(uf, px, tr("UPDATE")) + 28.0f,
-                     textW(uf, px, tr("FITTED")) + 28.0f, textW(uf, px, tr("NOT INSTALLED")) + 18.0f,
-                     textW(uf, px, tr("CANNOT FIT")) + 18.0f, textW(uf, px, tr("INSTALLED")) + 18.0f,
-                     textW(uf, px, tr("REFUSED")) + 18.0f});
-}
-
-float storeStatusWordRoom() { return std::max(40.0f, storeActionColumnWidth() - 18.0f); }
-
-LineFit storeStatusWordFit(const char* word) {
-    return fitLine(fonts::ui(), prose(), word, storeStatusWordRoom(), fitFloorFor(prose()));
-}
-
-// No NoScrollbar and no NoScrollWithMouse: see the header. The scrollbar only
-// appears when the view is taller than the pane, which at the design size it
-// is not.
-ImGuiWindowFlags storeFaceWindowFlags() { return ImGuiWindowFlags_None; }
-
-// ===========================================================================
-// THE INSTALL STATE - the catalogue's question, not the runner's
-// ===========================================================================
-
-StoreInstallState storeInstallState(const StoreModule& sm) {
-    const ModulePlate& p = sm.plate;
-    if (p.fitted) {
-        // REFUSED FIRST. A file that is here and that the host would not have
-        // is the most important thing this window can say about it, and it is
-        // the same word - and the same ink - moduleStateWord uses, so the row
-        // and the plate beside it cannot describe one module two ways.
-        if (!p.loaded) { return StoreInstallState::Refused; }
-        if (!sm.updateToVersion.empty()) { return StoreInstallState::UpdateAvailable; }
-        return StoreInstallState::Installed;
-    }
-    // NOT INSTALLED AND CANNOT FIT ARE DIFFERENT ANSWERS and the difference is
-    // whether anything the user does could change it. installableHere is the
-    // STABLE fact - an exact ABI match and a build for this os/arch - and
-    // deliberately not blockedReason, which also carries "a transfer is
-    // already in progress" and would move a row between two words while a
-    // download ran.
-    return sm.installableHere ? StoreInstallState::NotInstalled
-                              : StoreInstallState::CannotFit;
-}
-
-const char* storeInstallWord(StoreInstallState s) {
-    switch (s) {
-        case StoreInstallState::NotInstalled: return tr("NOT INSTALLED");
-        case StoreInstallState::CannotFit: return tr("CANNOT FIT");
-        case StoreInstallState::Installed: return tr("INSTALLED");
-        case StoreInstallState::UpdateAvailable: return tr("UPDATE");
-        case StoreInstallState::Refused: return tr("REFUSED");
-    }
-    return tr("NOT INSTALLED");
-}
-
-ImU32 storeInstallColour(StoreInstallState s) {
-    switch (s) {
-        // PLAIN INK, NOT FAINT AND NOT GOLD. Most of the catalogue is in this
-        // state on a fresh machine, so it is the word the user reads most
-        // often - and not having something is not a fault to be coloured as
-        // one.
-        case StoreInstallState::NotInstalled: return theme::kCream;
-        // A fact about this machine rather than a fault of the module. Muted,
-        // which is a clear step below the cream above it; the gold note on the
-        // row carries the reason at length.
-        case StoreInstallState::CannotFit: return theme::kInkMuted;
-        case StoreInstallState::Installed: return theme::kPhosphor;
-        // GOLD, NOT AMBER. Amber in this palette is a READING - something the
-        // radio or the machine measured - and an offer from a catalogue is
-        // not a measurement. Gold is this window's "something to look at",
-        // and it is what the updates banner above already letters in.
-        case StoreInstallState::UpdateAvailable: return theme::kGold;
-        case StoreInstallState::Refused: return theme::kAlarm;
-    }
-    return theme::kCream;
-}
-
-void forgetCatalogueConsent(PluginStoreDeck& deck) {
-    deck.selected = -1;
-    deck.legalAck = false;
-    deck.addAllAck = false;
-}
-
 // ===========================================================================
 // OLD VERSIONS - the words
 // ===========================================================================
@@ -1376,7 +1132,6 @@ std::string storeCleanupKeyLabel(std::size_t count) {
 }
 
 std::string storeOldCopyLine(const StoreOldCopy& c) {
-    // One format string, so a translation can order the four parts.
     return cascade::core::formatText(tr("%s %s - %s (%s stays)"), c.name.c_str(),
                                      c.version.c_str(), c.file.c_str(), c.keptVersion.c_str());
 }
@@ -1400,7 +1155,6 @@ std::string pluginCleanupReport(const cascade::core::PluginCleanupResult& r) {
                                               join(r.removed).c_str());
     }
     if (!r.queued.empty()) {
-        // SAID, because the file is still on disk and the user can see it.
         const std::string q = cascade::core::formatText(
             tr("In use, so removed the next time FoxSDR starts: %s."), join(r.queued).c_str());
         out += (out.empty() ? "" : " ") + q;
@@ -1414,7 +1168,7 @@ std::string pluginCleanupReport(const cascade::core::PluginCleanupResult& r) {
 }
 
 // ===========================================================================
-// ADD ALL - what it picks, and what the key says
+// GET EVERYTHING - what it picks, and what the key says
 // ===========================================================================
 
 AddAllPlan planAddAll(const PluginStoreModel& model, bool noticesAcknowledged) {
@@ -1424,26 +1178,23 @@ AddAllPlan planAddAll(const PluginStoreModel& model, bool noticesAcknowledged) {
         const StoreModule& sm = model.modules[static_cast<std::size_t>(i)];
         const std::string& name = sm.plate.name;
         const std::string shown = name.empty() ? std::string(tr("(unnamed module)")) : name;
-        if (sm.plate.fitted) {
-            // A FITTED MODULE IS ONLY EVER AN UPDATE HERE. It is never listed
-            // as skipped: "already installed" is the outcome the user pressed
-            // this key for, not a thing that went wrong, and a summary that
-            // reported five of them as passed over would bury the one that
-            // actually could not be fitted.
+        if (sm.plate.fitted || sm.install != StoreInstallKind::NotInstalled) {
+            // A FITTED MODULE IS ONLY EVER AN UPDATE HERE. It is never listed as
+            // skipped: "already installed" is the outcome the user pressed this key
+            // for, not a thing that went wrong.
             if (!sm.updateToVersion.empty()) { plan.update.push_back(i); }
             continue;
         }
-        // THE SAME GATE A SINGLE FIT GOES THROUGH, asked of every row - with
-        // the notice treated as acknowledged only when the user has ticked
-        // the one box beside this key.
+        // THE SAME GATE A SINGLE GET GOES THROUGH, asked of every row - with the
+        // notice treated as acknowledged only when the user has ticked the one box.
         const std::string& why =
             noticesAcknowledged ? sm.blockedReasonIfAcknowledged : sm.blockedReason;
         if (why.empty()) {
             plan.install.push_back(i);
             continue;
         }
-        // HELD BY A NOTICE AND NOTHING ELSE is the one skip the user can undo
-        // from this panel, so it is counted apart from the rest.
+        // HELD BY A NOTICE AND NOTHING ELSE is the one skip the user can undo from
+        // this panel, so it is counted apart from the rest.
         if (!sm.plate.legalNotice.empty() && sm.blockedReasonIfAcknowledged.empty()) {
             ++plan.heldByNotice;
         }
@@ -1453,611 +1204,297 @@ AddAllPlan planAddAll(const PluginStoreModel& model, bool noticesAcknowledged) {
     const int n = static_cast<int>(plan.install.size());
     const int m = static_cast<int>(plan.update.size());
     std::string buf;
-    // Singular and plural are whole keys, never an English "S" handed in by
-    // %s: a translation has to be able to write its own plural.
     if (n > 0 && m > 0) {
         cascade::core::formatUtf8(buf,
-                      n == 1 ? tr("ADD %d PLUGIN, UPDATE %d") : tr("ADD %d PLUGINS, UPDATE %d"),
-                      n, m);
+                                  n == 1 ? tr("ADD %d PLUGIN, UPDATE %d") : tr("ADD %d PLUGINS, UPDATE %d"),
+                                  n, m);
         plan.label = buf;
     } else if (n > 0) {
-        // "ALL" ONLY WHEN IT REALLY IS ALL. A key engraved ADD ALL PLUGINS
-        // that quietly passes over seven of them is the kind of copy this
-        // window exists to refuse.
         if (plan.skipped.empty()) {
             plan.label = tr("ADD ALL PLUGINS");
         } else {
-            cascade::core::formatUtf8(buf, n == 1 ? tr("ADD %d PLUGIN") : tr("ADD %d PLUGINS"),
-                          n);
+            cascade::core::formatUtf8(buf, n == 1 ? tr("ADD %d PLUGIN") : tr("ADD %d PLUGINS"), n);
             plan.label = buf;
         }
     } else if (m > 0) {
-        cascade::core::formatUtf8(buf, m == 1 ? tr("UPDATE %d PLUGIN") : tr("UPDATE %d PLUGINS"),
-                      m);
+        cascade::core::formatUtf8(buf, m == 1 ? tr("UPDATE %d PLUGIN") : tr("UPDATE %d PLUGINS"), m);
         plan.label = buf;
     } else {
         plan.label = tr("ADD ALL PLUGINS");
     }
 
     // --- and why it may not be pressed --------------------------------------
-    //
-    // THE SAME FOUR CATALOGUE STATES the rest of the window distinguishes:
-    // nobody has asked, it was asked and failed, it was asked and listed
-    // nothing, or it was read. Telling a user whose check just failed to press
-    // CHECK NOW is telling them to do again the thing that did not work.
     if (!model.haveCatalogue) {
         if (!model.sourceStatus.empty()) {
             plan.blockedReason = tr("the catalogue was read and it lists no modules at all");
         } else if (!model.sourceError.empty()) {
             plan.blockedReason =
-                tr("the last check did not return a catalogue - its reason is under "
-                   "CATALOGUE SOURCE");
+                tr("the last check did not return a catalogue - its reason is shown at the top "
+                   "of the list");
         } else {
             plan.blockedReason =
-                tr("no catalogue has been read yet - press CHECK NOW and this application "
-                   "asks the source once");
+                tr("no catalogue has been read yet - press CHECK NOW and this application asks "
+                   "the source once");
         }
     } else if (model.busy) {
-        // One transfer at a time is what the downloader actually does, so a
-        // second run started over the first would be two operations sharing
-        // one progress bar and one CANCEL.
         plan.blockedReason = tr("a transfer is already in progress");
     } else if (n == 0 && m == 0) {
         plan.blockedReason =
             plan.skipped.empty()
-                ? tr("every module in the catalogue is already fitted, and none has a "
-                     "newer build")
-                : tr("nothing in the catalogue can be fitted on this machine - each "
-                     "module's own reason is on its row");
+                ? tr("every module in the catalogue is already fitted, and none has a newer build")
+                : tr("nothing in the catalogue can be fitted on this machine - each module's own "
+                     "reason is on its page");
     }
     return plan;
 }
 
 // ===========================================================================
-// THE WINDOW
+// THE SHARED VOCABULARY
 // ===========================================================================
 
-void PluginStoreView::draw(float width, float height, const PluginStoreModel& model,
-                           PluginStoreDeck& deck) {
-    // Cleared first, so a request is answered once or not at all.
-    cleanup_ = false;
-    checkNow_ = false;
-    cancel_ = false;
-    addAll_ = false;
-    fitIndex_ = -1;
-    updateIndex_ = -1;
+float outlineKeyHeight() { return std::max(26.0f * S(), faceH(fonts::legend(), keyPx()) + 12.0f * S()); }
 
-    ImGui::PushID("pluginstore");
+float outlineKeyWidth(const char* label) {
+    return std::max(66.0f * S(), trackedWidth(fonts::legend(), keyPx(), label, keyTracking()) +
+                                     26.0f * S());
+}
+
+float chassisKeyWidth(const char* label) {
+    return std::max(60.0f * S(), trackedWidth(fonts::legend(), keyPx(), label, keyTracking()) +
+                                     24.0f * S());
+}
+
+bool drawOutlineKey(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, const char* label,
+                    ImU32 ink, bool enabled, const char* id, const char* hoverText,
+                    KeyRect* out) {
+    if (dl == nullptr || br.x - tl.x < 8.0f || br.y - tl.y < 8.0f) { return false; }
+    ImGui::PushID(id);
+    ImGui::SetCursorScreenPos(tl);
+    const bool pressed = ImGui::InvisibleButton("##key", ImVec2(br.x - tl.x, br.y - tl.y));
+    const bool hovered = ImGui::IsItemHovered();
+    const bool focused = ImGui::IsItemFocused();
+    ImGui::PopID();
+    if (out != nullptr) {
+        out->tl = tl;
+        out->br = br;
+    }
+    const float r = 2.0f;
+    const ImU32 line = enabled ? ink : theme::withAlpha(theme::kBrassDark, 0.9f);
+    const ImU32 text = enabled ? ink : theme::kInkFaint;
+    if (enabled && hovered) {
+        dl->AddRectFilled(tl, br, theme::withAlpha(ink, 0.14f), r);
+        dl->AddRect(ImVec2(tl.x - 2.0f, tl.y - 2.0f), ImVec2(br.x + 2.0f, br.y + 2.0f),
+                    theme::withAlpha(ink, 0.25f), r + 2.0f, 0, 2.0f);
+    }
+    dl->AddRect(tl, br, line, r, 0, 1.0f);
+    drawKeyWord(dl, tl, br, label, text);
+    if (focused) {
+        dl->AddRect(ImVec2(tl.x - 3.0f, tl.y - 3.0f), ImVec2(br.x + 3.0f, br.y + 3.0f),
+                    theme::kBrassBright, r + 2.0f, 0, theme::kHairline);
+    }
+    if (hovered && hoverText != nullptr && hoverText[0] != '\0') {
+        ImGui::SetTooltip("%s", hoverText);
+    }
+    return pressed && enabled;
+}
+
+bool drawChassisKey(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, const char* label,
+                    bool enabled, const char* id, KeyRect* out) {
+    if (dl == nullptr || br.x - tl.x < 8.0f || br.y - tl.y < 8.0f) { return false; }
+    ImGui::PushID(id);
+    ImGui::SetCursorScreenPos(tl);
+    ImGui::BeginDisabled(!enabled);
+    const bool pressed = ImGui::InvisibleButton("##key", ImVec2(br.x - tl.x, br.y - tl.y));
+    const bool hovered = ImGui::IsItemHovered();
+    const bool held = ImGui::IsItemActive();
+    const bool focused = ImGui::IsItemFocused();
+    ImGui::EndDisabled();
+    ImGui::PopID();
+    if (out != nullptr) {
+        out->tl = tl;
+        out->br = br;
+    }
+    const float r = theme::kKeyRounding;
+    if (!enabled) {
+        dl->AddRectFilled(tl, br, theme::kWell, r);
+        dl->AddRect(tl, br, theme::withAlpha(theme::kBrassDark, 0.80f), r, 0, theme::kHairline);
+    } else {
+        if (!held) {
+            dl->AddRectFilled(ImVec2(tl.x + 1.0f, tl.y + 2.0f), ImVec2(br.x + 1.0f, br.y + 2.0f),
+                              theme::withAlpha(theme::kVoid, 0.45f), r);
+        }
+        const ImU32 top = held ? theme::kBrassMid : (hovered ? theme::kIvory : theme::kCream);
+        const ImU32 bot = held ? theme::kBrassDark : theme::kBrassBright;
+        dl->AddRectFilled(tl, br, bot, r);
+        if (br.x - tl.x > r * 2.0f) {
+            dl->AddRectFilledMultiColor(ImVec2(tl.x + r, tl.y), ImVec2(br.x - r, br.y), top, top,
+                                        bot, bot);
+        }
+        addBenchBevel(dl, tl, br, r, !held);
+    }
+    if (focused) {
+        dl->AddRect(ImVec2(tl.x - 2.0f, tl.y - 2.0f), ImVec2(br.x + 2.0f, br.y + 2.0f),
+                    theme::kBrassBright, r + 1.0f, 0, theme::kHairline);
+    }
+    drawKeyWord(dl, tl, br, label, enabled ? theme::kEnamel : theme::kInkMuted, held ? 1.0f : 0.0f);
+    return pressed;
+}
+
+bool drawSearchField(const ImVec2& tl, float w, const char* hint, char* buf, std::size_t bufSize,
+                     KeyRect* out) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    const ImVec2 origin = ImGui::GetCursorScreenPos();
-
-    // TOO NARROW TO DRAW HONESTLY, so it says so instead of drawing a squashed
-    // deck with controls collapsed to nothing. This is a real operating-system
-    // window the user can drag to any size, and a panel that silently omits
-    // half its switches at 400px is worse than one that asks to be widened.
-    // 640, NOT 560: the deck is three wells side by side and every word in
-    // them grew with storeProsePx(), so the figure the old face fitted in is
-    // no longer the figure this one does. Measured the same way it always was
-    // - by widening the window until the rockers' label plates stop running
-    // into their counts.
-    if (width < 640.0f || height < 260.0f) {
-        const char* small =
-            tr("This window is too narrow to lay out the catalogue. Widen it and the deck, "
-               "the module list and the data plate come back.");
-        if (width > 80.0f) {
-            drawNote(dl, origin, std::max(60.0f, width - 8.0f), theme::kGold, small);
-        }
-        ImGui::Dummy(ImVec2(std::max(1.0f, width), std::max(1.0f, height)));
-        ImGui::PopID();
-        return;
-    }
-
     ImFont* uf = fonts::ui();
-    ImFont* lf = fonts::legend();
-    ImFont* rf = fonts::reading();
-    const float tiny = prose();
-    // THE NAME LINE TAKES THE SAME LARGEST SIZE as the prose under it and is
-    // told apart by its FACE - Georgia Bold against Georgia Regular - rather
-    // than by a second figure. One size for the page is what makes "go bigger
-    // on the font" one edit; a heading size on top of it would be a second
-    // number to keep in step with the first.
-    const float uiPx = prose();
-    const float tinyH = faceH(uf, tiny);
-    const float legH = faceH(lf, tiny);
-    const float nameH = faceH(lf, uiPx);
-
-    constexpr float kPad = 10.0f;
-    constexpr float kGap = 10.0f;
-    // THE CONTROL HEIGHTS, MEASURED RATHER THAN TYPED. Each was fitted around
-    // a 12 px engraving and each holds a different amount of it, so no single
-    // adjustment would have been right for all three:
-    //
-    //   A KEY carries one centred word.
-    //
-    //   A ROCKER carries a label PLATE, which is the face's height plus five,
-    //   and the rows are stacked with no gap between them - so a row only as
-    //   tall as its own plate makes two neighbouring plates touch.
-    //
-    //   A SEGMENT carries one centred word in the shallowest of the three.
-    //
-    // And the PLATE KEY at the foot of the data plate carries TWO lines -
-    // "UPDATE MODULE" over "TO v1.2.3" - so it is the one that runs out of
-    // room first as the face grows: 34 px holds two 14 px lines with three
-    // pixels top and bottom, and two 17 px lines not at all.
-    //
-    // The old figures stay as floors: they are the design's proportions and
-    // nothing here should shrink if a future face happens to be short.
-    const float kKeyH = std::max(28.0f, tinyH + 12.0f);
-    const float kRockerH = std::max(22.0f, tinyH + 10.0f);
-    const float kSegH = std::max(24.0f, tinyH + 10.0f);
-    const float kPlateKeyH = std::max(34.0f, tinyH * 2.0f + 8.0f);
-    // AND THE FIXED KEY WIDTHS, each from the widest word it can carry. Every
-    // one of these was a literal, and a key whose word no longer fits does not
-    // wrap or clip - drawDeckKey CENTRES its label, so the word simply hangs
-    // out over both machined edges.
-    const float kClearW = std::max(60.0f, textW(uf, tiny, tr("CLEAR")) + 22.0f);
-    const float kCheckW = std::max({92.0f, textW(uf, tiny, tr("CHECK NOW")) + 22.0f,
-                                    textW(uf, tiny, tr("CHECK AGAIN")) + 22.0f});
-    const float kUpdKeyW = std::max(96.0f, textW(uf, tiny, tr("UPDATE")) + 22.0f);
-    // The banner's caption column: a lamp, then the longest of the five
-    // headings it can show, then the "n MODULES" line under it. Sized for the
-    // widest so the divider and the note beside it do not move when the
-    // catalogue's state changes.
-    const float kBannerCapW =
-        std::max({178.0f,
-                  6.0f * 2.0f + 8.0f +
-                      std::max({textW(lf, tiny, tr("CATALOGUE NOT READ")),
-                                textW(lf, tiny, tr("LAST CHECK FAILED")),
-                                textW(lf, tiny, tr("CATALOGUE IS EMPTY")),
-                                textW(lf, tiny, tr("UPDATES AVAILABLE")),
-                                textW(lf, tiny, tr("NO UPDATES"))}) +
-                      kPad * 2.0f});
-
-    // --- which rows are on screen, and in what order -------------------------
-    const std::string q = lowerAscii(std::string(deck.search));
-    std::vector<int> visible;
-    visible.reserve(model.modules.size());
-    int hiddenByShow = 0;
-    for (int i = 0; i < static_cast<int>(model.modules.size()); ++i) {
-        const StoreModule& sm = model.modules[static_cast<std::size_t>(i)];
-        if (!passesShow(sm, deck)) {
-            ++hiddenByShow;
-            continue;
-        }
-        if (!matchesQuery(sm, q)) { continue; }
-        visible.push_back(i);
+    const float px = fonts::uiPx();
+    const float fieldH = std::max(30.0f * S(), px + 14.0f * S());
+    const ImVec2 br(tl.x + w, tl.y + fieldH);
+    dl->AddRectFilled(tl, br, theme::kVoid, 2.0f);
+    dl->AddRect(tl, br, theme::kBrassDark, 2.0f, 0, 1.0f);
+    drawLoupe(dl, ImVec2(tl.x + 16.0f * S(), tl.y + fieldH * 0.5f - 2.0f * S()), 5.0f * S(),
+              theme::kInkFaint);
+    const float padL = 32.0f * S();
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
+                        ImVec2(padL, std::max(2.0f, (fieldH - faceH(uf, px)) * 0.5f)));
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));  // theme-exempt: transparent over the well
+    ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));  // theme-exempt: transparent over the well
+    ImGui::PushStyleColor(ImGuiCol_FrameBgActive, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));  // theme-exempt: transparent over the well
+    ImGui::PushStyleColor(ImGuiCol_Text, theme::vec(theme::kIvory));
+    ImGui::PushStyleColor(ImGuiCol_TextDisabled, theme::vec(theme::kInkMuted));
+    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));  // theme-exempt: the well draws its own edge
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
+    ImGui::PushFont(uf, px / uiscale::factor());
+    ImGui::SetCursorScreenPos(tl);
+    ImGui::SetNextItemWidth(w);
+    const bool changed = inputTextWithFittedHint("##search", hint, buf, bufSize);
+    ImGui::PopFont();
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor(6);
+    if (ImGui::IsItemActive() || ImGui::IsItemFocused()) {
+        dl->AddRect(tl, br, theme::kPhosphor, 2.0f, 0, 1.0f);
     }
-    const int sortKey = std::clamp(deck.sortKey, 0, kStoreSortCount - 1);
-    deck.sortKey = sortKey;
-    std::sort(visible.begin(), visible.end(), [&](int a, int b) {
-        const ModulePlate& pa = model.modules[static_cast<std::size_t>(a)].plate;
-        const ModulePlate& pb = model.modules[static_cast<std::size_t>(b)].plate;
-        if (sortKey == 1) {
-            const std::string la = lowerAscii(pa.maker);
-            const std::string lb = lowerAscii(pb.maker);
-            if (la != lb) { return la < lb; }
-        } else if (sortKey == 2) {
-            // The PRODUCT'S comparator, not a string compare. It orders dotted
-            // parts as NUMBERS, which is the difference between putting 1.10.0
-            // above 1.9.0 and below it - and reusing it is what stops this list
-            // and the update planner disagreeing about which build is newer.
-            const int c = cascade::core::PluginRepo::compareVersions(pa.version, pb.version);
-            if (c != 0) { return c > 0; }
-        }
-        return lowerAscii(pa.name) < lowerAscii(pb.name);
-    });
-
-    // The selection follows the catalogue rather than an index that may now
-    // name a different module. Out of range picks the first visible row, and
-    // any move clears the legal acknowledgement - a tick given to one plugin
-    // is consent for that plugin and nothing else.
-    const int wanted = deck.selected;
-    if (deck.selected < 0 || deck.selected >= static_cast<int>(model.modules.size()) ||
-        std::find(visible.begin(), visible.end(), deck.selected) == visible.end()) {
-        deck.selected = visible.empty() ? -1 : visible.front();
+    if (out != nullptr) {
+        out->tl = tl;
+        out->br = br;
     }
-    if (deck.selected != wanted) { deck.legalAck = false; }
+    return changed;
+}
 
-    int updateCount = 0;
-    for (const StoreModule& sm : model.modules) {
-        if (!sm.updateToVersion.empty()) { ++updateCount; }
+float drawSectionHeading(ImDrawList* dl, const ImVec2& tl, float width, const char* text) {
+    ImFont* f = fonts::legend();
+    const float px = std::max(11.0f, keyPx() * 0.9f);
+    const float track = px * 0.18f;
+    const float tw = trackedWidth(f, px, text, track);
+    const float h = faceH(f, px);
+    addTrackedText(dl, f, px, tl, theme::kCream, text, track, tl.x + width);
+    const float x0 = tl.x + tw + 12.0f * S();
+    if (x0 < tl.x + width) {
+        dl->AddLine(ImVec2(x0, tl.y + h * 0.55f), ImVec2(tl.x + width, tl.y + h * 0.55f),
+                    theme::withAlpha(theme::kBrassMid, 0.8f), 1.0f);
     }
+    return h + 10.0f * S();
+}
 
-    // ======================= ADD ALL PLUGINS ================================
-    //
-    // THE ONE KEY AT THE TOP OF THE PAGE, and it is the largest thing on it
-    // because it is the only control here that acts on the whole catalogue.
-    // Everything it does, a single FIT already did: the same download, the
-    // same https rule, the same sha256, the same ABI test, the same refusal
-    // messages - one after another, because PluginRepo applies exactly one
-    // transfer at a time and this key does not get to be the exception.
-    //
-    // WHAT IT REFUSES TO DO is take a consent nobody gave. Seven of the
-    // twenty-four modules in the live catalogue carry a maker's legal notice,
-    // and a key that swept those in silently would be the worst kind of bulk
-    // action there is. They are named, they are counted, and one tick beside
-    // the key adds them - or does not, and the key says ADD 17 PLUGINS
-    // instead of ADD ALL PLUGINS, which is the truth about what it will do.
-    const AddAllPlan plan = planAddAll(model, deck.addAllAck);
-    int noticeModules = 0;
-    std::string noticeNames;
-    for (const StoreModule& sm : model.modules) {
-        if (sm.plate.fitted || sm.plate.legalNotice.empty()) { continue; }
-        if (!sm.blockedReasonIfAcknowledged.empty()) { continue; }
-        ++noticeModules;
-        if (!noticeNames.empty()) { noticeNames += ", "; }
-        noticeNames += sm.plate.name.empty() ? tr("(unnamed module)") : sm.plate.name;
-    }
-
-    // The key is measured from the longest engraving it can ever carry, not
-    // from the one it happens to have: drawDeckKey CENTRES its label and does
-    // not clip, so a key too narrow does not shorten the word - it hangs it
-    // out over both machined edges.
-    const float addKeyW = std::max({320.0f, textW(uf, tiny, plan.label.c_str()) + 40.0f,
-                                    textW(uf, tiny, tr("ADD ALL PLUGINS")) + 40.0f});
-    const float addKeyH = std::max(54.0f, tinyH * 2.0f + 18.0f);
-    const float addNoteW = width - kPad * 3.0f - addKeyW - 12.0f;
-
-    std::string addLead;
-    ImU32 addAccent = theme::kInkMuted;
-    if (model.addAllRunning) {
-        addLead = model.addAllProgress.empty()
-                      ? std::string(
-                            tr("Working through the catalogue, one module at a time."))
-                      : model.addAllProgress;
-        addAccent = theme::kGold;
-    } else if (!plan.blockedReason.empty()) {
-        // A DEAD KEY ALWAYS SAYS WHY - the rule this whole window is built on.
-        std::string buf;
-        cascade::core::formatUtf8(buf, tr("Cannot add all: %s"), plan.blockedReason.c_str());
-        addLead = buf;
-        addAccent = theme::kGold;
-    } else {
-        std::string lead;
-        cascade::core::formatUtf8(lead,
-                      tr("%d to fetch and %d to update, one after another. Each is fetched "
-                         "over https and refused unless its bytes hash to the sha256 the "
-                         "catalogue published - the same gate a single FIT goes through. A "
-                         "module that fails does not stop the rest."),
-                      static_cast<int>(plan.install.size()),
-                      static_cast<int>(plan.update.size()));
-        addLead = lead;
-    }
-
-    std::string addSkipLine;
-    if (!model.addAllRunning && noticeModules > 0) {
-        // BUILT AS A STRING, NOT INTO A BUFFER. Seven module names run past
-        // three hundred characters and a 320-byte snprintf cut the sentence at
-        // "...is on that module's DAT" - a truncated sentence about consent,
-        // on the one note whose job is to say exactly what is being consented
-        // to. There is no length that is safely enough here, so there is no
-        // length.
-        // ONE FORMAT STRING, sized to the actual name list rather than a fixed
-        // buffer: seven module names can run past three hundred characters,
-        // and a translation cannot reorder %d and %s, so both sit in the same
-        // sentence rather than being concatenated around a middle fragment.
-        const char* fmt =
-            tr("%d of these carry a legal notice from their maker: %s. Each notice is on "
-               "that module's DATA PLATE below.");
-        std::vector<char> buf(noticeNames.size() + std::strlen(fmt) + 32);
-        std::snprintf(buf.data(), buf.size(), fmt, noticeModules, noticeNames.c_str());
-        addSkipLine = buf.data();
-    }
-
-    const bool addAckRow = noticeModules > 0 && !model.addAllRunning;
-    // THE CONSENT'S WORDS STAY IN THE KEY'S COLUMN. The tick sits under the
-    // ADD ALL key and its label was lettered to the right of it unbounded; in
-    // German, "Ich akzeptiere die obigen Rechtshinweise von 7 Plugins" ran
-    // across the gold note beside the key and the two sentences overprinted.
-    // Words that fit beside the tick are the same Checkbox call as before;
-    // words that do not are wrapped inside the column, and the row grows.
-    std::string ack;
-    float ackWrapH = 0.0f;  // > 0: the label is wrapped, and this tall
-    const ImGuiStyle& ackStyle = ImGui::GetStyle();
-    const float ackBox = tiny + ackStyle.FramePadding.y * 2.0f;  // the square, at tiny
-    const float ackTextX = ackBox + ackStyle.ItemInnerSpacing.x;
-    const float ackColW = addKeyW - 4.0f;
-    if (addAckRow) {
-        cascade::core::formatUtf8(ack,
-                      noticeModules == 1 ? tr("I accept the %d legal notice above")
-                                         : tr("I accept the %d legal notices above"),
-                      noticeModules);
-        if (ackTextX + textW(uf, tiny, ack.c_str()) > ackColW + 0.5f) {
-            ackWrapH = uf->CalcTextSizeA(tiny, FLT_MAX, ackColW - ackTextX, ack.c_str()).y;
+std::string ellipsize(ImFont* font, float px, const char* text, float maxW) {
+    if (text == nullptr) { return {}; }
+    if (textW(font, px, text) <= maxW) { return text; }
+    const float dotsW = textW(font, px, "...");
+    if (maxW <= dotsW) { return "..."; }
+    const std::vector<const char*> b = charStarts(text);
+    // The largest prefix that, with the dots, still fits: binary search over characters.
+    std::size_t lo = 0, hi = b.size() - 1;
+    while (lo < hi) {
+        const std::size_t mid = (lo + hi + 1) / 2;
+        const float w = font->CalcTextSizeA(px, FLT_MAX, 0.0f, text, b[mid]).x;
+        if (w + dotsW <= maxW) {
+            lo = mid;
+        } else {
+            hi = mid - 1;
         }
     }
-    const float addAckH =
-        addAckRow ? (std::max(tinyH, ackWrapH + ackStyle.FramePadding.y) + 12.0f) : 0.0f;
-    float addTextH = noteHeight(addNoteW, addLead.c_str());
-    if (!addSkipLine.empty()) { addTextH += 4.0f + noteHeight(addNoteW, addSkipLine.c_str()); }
-    if (!model.addAllSummary.empty()) {
-        addTextH += 4.0f + noteHeight(addNoteW, model.addAllSummary.c_str());
-    }
-    const float addAllH = kPad + std::max(addKeyH + addAckH, addTextH) + kPad;
-    const float addAllTotal = addAllH + kGap;
+    std::string out(text, b[lo]);
+    while (!out.empty() && out.back() == ' ') { out.pop_back(); }
+    return out + "...";
+}
 
-    ImGui::Dummy(ImVec2(width, addAllTotal));
-    {
-        const ImVec2 tl(origin.x, origin.y);
-        const ImVec2 br(tl.x + width, tl.y + addAllH);
-        addDeckWell(dl, tl, br);
-        dl->PushClipRect(ImVec2(tl.x + 2.0f, tl.y + 2.0f), ImVec2(br.x - 2.0f, br.y - 2.0f),
-                         true);
-        const ImVec2 kTL(tl.x + kPad, tl.y + kPad);
-        if (drawDeckKey(dl, kTL, ImVec2(kTL.x + addKeyW, kTL.y + addKeyH),
-                        plan.label.c_str(), nullptr,
-                        plan.blockedReason.empty() && !model.addAllRunning, "addall")) {
-            addAll_ = true;
-        }
-        if (addAckRow) {
-            // A REAL TICK, not a rocker: this is a consent and it reads as one
-            // everywhere else in this application.
-            ImGui::SetCursorScreenPos(ImVec2(kTL.x + 2.0f, kTL.y + addKeyH + 6.0f));
-            ImGui::PushStyleColor(ImGuiCol_Text, theme::vec(theme::kCream));
-            // /uiscale::factor(): see the note beside the PushFont(uf, uiPx
-            // / ...) calls in this file - `tiny` (prose()) already carries
-            // the live scale.
-            ImGui::PushFont(uf, tiny / cascade::gui::uiscale::factor());
-            if (ackWrapH <= 0.0f) {
-                ImGui::Checkbox(ack.c_str(), &deck.addAllAck);
-            } else {
-                // The box alone, then its words wrapped beside it in the
-                // key's column - and the words still tick it, as a label's do.
-                const ImVec2 boxAt = ImGui::GetCursorScreenPos();
-                ImGui::Checkbox("##addallack", &deck.addAllAck);
-                const ImVec2 textAt(boxAt.x + ackTextX, boxAt.y + ackStyle.FramePadding.y);
-                dl->AddText(uf, tiny, textAt, theme::kCream, ack.c_str(), nullptr, ackColW - ackTextX);
-                ImGui::SetCursorScreenPos(textAt);
-                if (ImGui::InvisibleButton("##addallackwords",
-                                           ImVec2(ackColW - ackTextX, ackWrapH))) {
-                    deck.addAllAck = !deck.addAllAck;
-                }
-            }
-            ImGui::PopFont();
-            ImGui::PopStyleColor();
-        }
-        float ny = tl.y + kPad;
-        drawNote(dl, ImVec2(tl.x + kPad * 2.0f + addKeyW, ny), addNoteW, addAccent,
-                 addLead.c_str());
-        ny += noteHeight(addNoteW, addLead.c_str());
-        if (!addSkipLine.empty()) {
-            ny += 4.0f;
-            drawNote(dl, ImVec2(tl.x + kPad * 2.0f + addKeyW, ny), addNoteW, theme::kGold,
-                     addSkipLine.c_str());
-            ny += noteHeight(addNoteW, addSkipLine.c_str());
-        }
-        if (!model.addAllSummary.empty()) {
-            // WHAT THE RUN ACTUALLY DID, left on the panel after it ends -
-            // "23 installed, 0 failed", or the names that failed with the
-            // reason each of them gave, verbatim.
-            ny += 4.0f;
-            drawNote(dl, ImVec2(tl.x + kPad * 2.0f + addKeyW, ny), addNoteW,
-                     model.addAllFailed ? theme::kAlarm : theme::kPhosphor,
-                     model.addAllSummary.c_str());
-        }
-        dl->PopClipRect();
-    }
+float addEllipsized(ImDrawList* dl, ImFont* font, float px, const ImVec2& at, ImU32 col,
+                    const char* text, float maxW) {
+    const std::string s = ellipsize(font, px, text, maxW);
+    dl->AddText(font, px, at, col, s.c_str());
+    return textW(font, px, s.c_str());
+}
 
-    // ======================= THE UPDATES BANNER =============================
-    //
-    // NOT "HELD". The design's banner says two updates are held because they
-    // replace a module that is currently decoding, and offers one key that
-    // fits both. This application holds nothing: PluginRepo::planUpdates is a
-    // pure function of the catalogue and the manifest, applyUpdate runs the
-    // moment the user presses a key, and there is no decoding test anywhere on
-    // that path. A banner saying "held" would describe a mechanism that does
-    // not exist, and the reason it gave would be an invention.
-    //
-    // So the banner reports what IS true - what the catalogue offers, whether
-    // anything has been read at all, and what pressing UPDATE does - and the
-    // key is per module, because one transfer at a time is the rule the
-    // repository actually enforces.
-    const CatalogueState catState = catalogueState(model);
-    const char* bannerCaption;
-    const char* bannerNote;
-    ImU32 bannerLamp;
-    bool bannerLit;
-    if (catState == CatalogueState::NeverAsked) {
-        bannerCaption = tr("CATALOGUE NOT READ");
-        bannerLamp = theme::kGold;
-        bannerLit = false;
-        bannerNote =
-            tr("Nothing has been fetched, so nothing here is a count of what exists. The "
-               "catalogue is read the first time this window opens in a session, and again "
-               "whenever you press CHECK NOW - never at startup.");
-    } else if (catState == CatalogueState::Failed) {
-        // ASKED, AND IT DID NOT ANSWER. Telling this user to press CHECK NOW
-        // is telling them to do again the thing that just failed, so the
-        // banner says what happened and points at the reason instead.
-        bannerCaption = tr("LAST CHECK FAILED");
-        bannerLamp = theme::kAlarm;
-        bannerLit = true;
-        bannerNote =
-            tr("The last check did not return a catalogue, so nothing here is a count of "
-               "what exists. The reason it gave is printed under CATALOGUE SOURCE, word for "
-               "word. Nothing is retried on its own.");
-    } else if (catState == CatalogueState::ReadEmpty) {
-        // ANSWERED, AND THE ANSWER WAS NONE. That is a fact about the
-        // catalogue, not a state to keep pressing CHECK NOW against.
-        bannerCaption = tr("CATALOGUE IS EMPTY");
-        bannerLamp = theme::kGold;
-        bannerLit = true;
-        bannerNote =
-            tr("The catalogue was read and it lists no modules at all. Nothing is hidden by "
-               "the switches below - there is nothing to hide - and this is the whole answer "
-               "until the catalogue itself changes.");
-    } else if (updateCount == 0) {
-        bannerCaption = tr("NO UPDATES");
-        bannerLamp = theme::kPhosphor;
-        bannerLit = true;
-        bannerNote =
-            tr("The catalogue was read and no fitted module has a newer build in it. Nothing "
-               "updates on its own, so this is the whole answer until you check again.");
-    } else {
-        bannerCaption = tr("UPDATES AVAILABLE");
-        bannerLamp = theme::kGold;
-        bannerLit = true;
-        // WHAT ACTUALLY HAPPENS TO THE BYTES. This sentence said the key
-        // "checks its signature". Nothing in this product verifies a
-        // signature, and a security guarantee invented on a panel is the worst
-        // kind of copy there is: the user leans on it precisely where they can
-        // least afford to. What PluginRepo::install does is listed instead,
-        // including the one thing the sha256 does NOT prove.
-        bannerNote =
-            tr("Available, not held: nothing defers an update here, and nothing applies one "
-               "unasked. Each key below fetches that build over https, refuses it unless the "
-               "bytes hash to the sha256 the catalogue published, and only then moves it into "
-               "the modules folder and reloads - one at a time, because one transfer at a "
-               "time is all the downloader does. That digest comes from the same catalogue "
-               "as the file: it proves the download arrived unaltered, and it is not a "
-               "signature and vouches for nobody.");
+void drawCategoryGlyph(ImDrawList* dl, const ImVec2& tl, float box, const std::string& category,
+                       ImU32 colour, float strokePx) {
+    if (dl == nullptr || box < 4.0f) { return; }
+    const Glyph& g = glyphFor(category);
+    const float k = box / 56.0f;
+    std::vector<ImVec2> pts;
+    // A faint wider pass under the line is the glow the mock-up's shadow gave it.
+    for (int pass = 0; pass < 2; ++pass) {
+        const ImU32 col = pass == 0 ? theme::withAlpha(colour, 0.20f) : colour;
+        const float th = pass == 0 ? strokePx * 3.0f : strokePx;
+        for (std::size_t i = 0; i < g.lines.size(); ++i) {
+            pts.clear();
+            for (const ImVec2& p : g.lines[i]) { pts.push_back(ImVec2(tl.x + p.x * k, tl.y + p.y * k)); }
+            dl->AddPolyline(pts.data(), static_cast<int>(pts.size()), col,
+                            g.closed[i] ? ImDrawFlags_Closed : ImDrawFlags_None, th);
+        }
+        for (const ImVec2& d : g.dots) {
+            dl->AddCircleFilled(ImVec2(tl.x + d.x * k, tl.y + d.y * k), th * 0.55f, col, 8);
+        }
+    }
+}
+
+// --- the cleanup foot -------------------------------------------------------------
+
+bool drawCleanupFoot(const std::vector<StoreOldCopy>& oldCopies, const std::string& report,
+                     bool busy, float width, const char* censusKey, const char* censusYes) {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImFont* uf = fonts::ui();
+    const float px = fonts::uiPx();
+    const std::size_t oldCount = oldCopies.size();
+    bool accepted = false;
+    ImGui::PushID("cleanupfoot");
+    if (oldCount > 0) {
+        const std::string label = storeCleanupKeyLabel(oldCount);
+        const ImVec2 at = ImGui::GetCursorScreenPos();
+        const float kw = outlineKeyWidth(label.c_str());
+        const float kh = outlineKeyHeight();
+        KeyRect kr;
+        if (drawOutlineKey(dl, at, ImVec2(at.x + kw, at.y + kh), label.c_str(),
+                           theme::kInkMuted, !busy, "cleanupold", nullptr, &kr)) {
+            ImGui::OpenPopup("###cleanupconfirm");
+        }
+        if (censusKey != nullptr) { censusRect(censusKey, kr.tl.x, kr.tl.y, kr.br.x, kr.br.y); }
+        // The old copies, a line each, beside the key (at most three).
+        std::string note;
+        for (std::size_t k = 0; k < oldCount && k < 3; ++k) {
+            note += (k == 0 ? "" : "\n") + storeOldCopyLine(oldCopies[k]);
+        }
+        if (oldCount > 3) {
+            note += "\n" + cascade::core::formatText(tr("and %zu more"), oldCount - 3);
+        }
+        const float nx = at.x + kw + 16.0f * S();
+        const float nw = std::max(60.0f, width - (nx - at.x));
+        dl->AddText(uf, px, ImVec2(nx, at.y), theme::kInkMuted, note.c_str(), nullptr, nw);
+        const float nh = wrapH(uf, px, nw, note.c_str());
+        float y = at.y + std::max(kh, nh) + 8.0f * S();
+        if (!report.empty()) {
+            dl->AddText(uf, px, ImVec2(at.x, y), theme::kPhosphor, report.c_str(), nullptr, width);
+            y += wrapH(uf, px, width, report.c_str()) + 6.0f * S();
+        }
+        ImGui::SetCursorScreenPos(ImVec2(at.x, y));
+        ImGui::Dummy(ImVec2(1.0f, 1.0f));
+    } else if (!report.empty()) {
+        // A clean-up that has just taken the last one: its report stays where the key was.
+        const ImVec2 at = ImGui::GetCursorScreenPos();
+        dl->AddText(uf, px, at, theme::kPhosphor, report.c_str(), nullptr, width);
+        ImGui::SetCursorScreenPos(ImVec2(at.x, at.y + wrapH(uf, px, width, report.c_str()) + 6.0f * S()));
+        ImGui::Dummy(ImVec2(1.0f, 1.0f));
     }
 
-    const float capW = kBannerCapW;
-    const float bannerNoteW = width - capW - kPad * 3.0f - 12.0f;
-    const float bannerHeadH = std::max(20.0f, noteHeight(bannerNoteW, bannerNote));
-    const float updKeyW = kUpdKeyW;
-    const float updNoteW = width - kPad * 2.0f - updKeyW - 12.0f;
-
-    std::vector<int> updRows;
-    for (int i = 0; i < static_cast<int>(model.modules.size()); ++i) {
-        if (!model.modules[static_cast<std::size_t>(i)].updateToVersion.empty()) {
-            updRows.push_back(i);
-        }
-    }
-    float updBlockH = 0.0f;
-    std::vector<float> updRowH(updRows.size(), 0.0f);
-    for (std::size_t k = 0; k < updRows.size(); ++k) {
-        const StoreModule& sm = model.modules[static_cast<std::size_t>(updRows[k])];
-        const float textH = faceH(uf, uiPx) + 3.0f + tinyH + 3.0f +
-                            wrapH(uf, tiny, updNoteW, sm.updateReason.c_str());
-        updRowH[k] = std::max(kKeyH + 6.0f, textH) + 14.0f;
-        updBlockH += updRowH[k] + 6.0f;
-    }
-    // THE OLD VERSIONS ROW (0.99.49), under the updates: every copy an update
-    // left on disk, and ONE key that removes them all after one confirmation.
-    const std::size_t oldCount = model.oldCopies.size();
-    const std::string cleanupLabel = storeCleanupKeyLabel(oldCount);
-    const float cleanKeyW = std::max(kUpdKeyW, textW(uf, tiny, cleanupLabel.c_str()) + 22.0f);
-    const float oldNoteW = width - kPad * 2.0f - cleanKeyW - 32.0f;
-    std::string oldNote;
-    for (std::size_t k = 0; k < oldCount && k < 3; ++k) {
-        oldNote += (k == 0 ? "" : "\n") + storeOldCopyLine(model.oldCopies[k]);
-    }
-    if (oldCount > 3) {
-        oldNote += "\n" + cascade::core::formatText(tr("and %zu more"), oldCount - 3);
-    }
-    const float oldRowH =
-        oldCount == 0 ? 0.0f
-                      : std::max(kKeyH + 6.0f, faceH(uf, uiPx) + 3.0f +
-                                                   wrapH(uf, tiny, oldNoteW, oldNote.c_str())) +
-                            14.0f;
-    const float cleanNoteW = width - kPad * 2.0f;
-    const float cleanNoteH =
-        model.cleanupReport.empty() ? 0.0f : noteHeight(cleanNoteW, model.cleanupReport.c_str());
-    const float bannerH = kPad + bannerHeadH + (updRows.empty() ? 0.0f : (8.0f + updBlockH)) +
-                          (oldCount == 0 ? 0.0f : (8.0f + oldRowH)) +
-                          (cleanNoteH > 0.0f ? 8.0f + cleanNoteH : 0.0f) + kPad;
-
-    ImGui::Dummy(ImVec2(width, bannerH));
-    {
-        // BELOW THE ADD ALL WELL, not at the page's own origin: the two wells
-        // are stacked and a banner still drawn at origin.y would simply paint
-        // over the key. (It did, on the first run of this page.)
-        const ImVec2 tl(origin.x, origin.y + addAllTotal);
-        const ImVec2 br(tl.x + width, tl.y + bannerH);
-        addDeckWell(dl, tl, br);
-        const float lampR = 6.0f;
-        const ImVec2 lampC(tl.x + kPad + lampR, tl.y + kPad + lampR + 2.0f);
-        drawBenchLamp(dl, lampC, lampR, bannerLamp, bannerLit, nullptr);
-        // THE WORD IS DRAWN WHATEVER THE LAMP DOES. A state carried by colour
-        // alone is unreadable in a greyscale photograph and to about one man
-        // in twelve.
-        dl->AddText(lf, tiny, ImVec2(lampC.x + lampR + 8.0f, lampC.y - legH * 0.5f),
-                    bannerLit ? bannerLamp : theme::kInkMuted, bannerCaption);
-        if (updateCount > 0) {
-            char n[16];
-            std::snprintf(n, sizeof n, "%d", updateCount);
-            dl->AddText(rf, tiny,
-                        ImVec2(lampC.x + lampR + 8.0f, lampC.y - legH * 0.5f + legH + 3.0f),
-                        theme::kAmber, n);
-            dl->AddText(uf, tiny,
-                        ImVec2(lampC.x + lampR + 8.0f + textW(rf, tiny, n) + 4.0f,
-                               lampC.y - legH * 0.5f + legH + 3.0f),
-                        theme::kInkMuted, updateCount == 1 ? tr("MODULE") : tr("MODULES"));
-        }
-        addBenchDivider(dl, tl.x + kPad + capW - 10.0f, tl.y + kPad,
-                        tl.y + kPad + bannerHeadH);
-        drawNote(dl, ImVec2(tl.x + kPad + capW, tl.y + kPad), bannerNoteW,
-                 bannerLit ? bannerLamp : theme::kInkMuted, bannerNote);
-
-        float y = tl.y + kPad + bannerHeadH + 8.0f;
-        for (std::size_t k = 0; k < updRows.size(); ++k) {
-            const int idx = updRows[k];
-            const StoreModule& sm = model.modules[static_cast<std::size_t>(idx)];
-            const ImVec2 rTL(tl.x + kPad, y);
-            const ImVec2 rBR(br.x - kPad, y + updRowH[k]);
-            addPlateBox(dl, rTL, rBR);
-            float ry = rTL.y + 7.0f;
-            dl->AddText(uf, uiPx, ImVec2(rTL.x + 10.0f, ry), theme::kIvory,
-                        sm.plate.name.c_str());
-            ry += faceH(uf, uiPx) + 3.0f;
-            // FROM and TO, both drawn: an update that only names where it is
-            // going does not let anyone tell a step from a leap.
-            float vx = rTL.x + 10.0f;
-            dl->AddText(rf, tiny, ImVec2(vx, ry), theme::kInkMuted,
-                        sm.plate.version.c_str());
-            vx += textW(rf, tiny, sm.plate.version.c_str()) + 8.0f;
-            dl->AddText(uf, tiny, ImVec2(vx, ry), theme::kInkFaint, tr("to"));
-            vx += textW(uf, tiny, tr("to")) + 8.0f;
-            dl->AddText(rf, tiny, ImVec2(vx, ry), theme::kAmber,
-                        sm.updateToVersion.c_str());
-            ry += tinyH + 3.0f;
-            if (!sm.updateReason.empty()) {
-                // PluginUpdate::reason, verbatim - it is user-facing copy the
-                // planner already wrote, and two wordings of one decision is
-                // how a product comes to give two answers.
-                dl->AddText(uf, tiny, ImVec2(rTL.x + 10.0f, ry), theme::kInkMuted,
-                            sm.updateReason.c_str(), nullptr, updNoteW);
-            }
-            char keyId[24];
-            std::snprintf(keyId, sizeof keyId, "upd%d", idx);
-            const ImVec2 kTL(rBR.x - 10.0f - updKeyW, rTL.y + (updRowH[k] - kKeyH) * 0.5f);
-            if (drawDeckKey(dl, kTL, ImVec2(kTL.x + updKeyW, kTL.y + kKeyH), tr("UPDATE"),
-                            nullptr, !model.busy, keyId)) {
-                updateIndex_ = idx;
-            }
-            y += updRowH[k] + 6.0f;
-        }
-        if (oldCount > 0) {
-            y += updRows.empty() ? 8.0f : 2.0f;
-            const ImVec2 rTL(tl.x + kPad, y);
-            const ImVec2 rBR(br.x - kPad, y + oldRowH);
-            addPlateBox(dl, rTL, rBR);
-            const float ry = rTL.y + 7.0f;
-            dl->AddText(uf, uiPx, ImVec2(rTL.x + 10.0f, ry), theme::kIvory,
-                        tr("Old versions left behind by updates"));
-            dl->AddText(uf, tiny, ImVec2(rTL.x + 10.0f, ry + faceH(uf, uiPx) + 3.0f),
-                        theme::kInkMuted, oldNote.c_str(), nullptr, oldNoteW);
-            const ImVec2 kTL(rBR.x - 10.0f - cleanKeyW, rTL.y + (oldRowH - kKeyH) * 0.5f);
-            const ImVec2 kBR(kTL.x + cleanKeyW, kTL.y + kKeyH);
-            if (drawDeckKey(dl, kTL, kBR, cleanupLabel.c_str(), nullptr, !model.busy,
-                            "cleanupold")) {
-                ImGui::OpenPopup("###cleanupconfirm");
-            }
-            census::rect("storekey:cleanup", kTL.x, kTL.y, kBR.x, kBR.y);
-            y += oldRowH;
-        }
-        if (cleanNoteH > 0.0f) {
-            y += 8.0f;
-            drawNote(dl, ImVec2(tl.x + kPad, y), cleanNoteW, theme::kPhosphor,
-                     model.cleanupReport.c_str());
-        }
-    }
-
-    // THE ONE CONFIRMATION, listing every file that will go. Accepting it is
-    // the whole of the request; the caller removes exactly the copies its own
-    // state still calls superseded.
+    // THE ONE CONFIRMATION, listing every file that will go. Accepting it is the
+    // whole of the request; the caller removes exactly the copies its own state still
+    // calls superseded.
     ImGui::SetNextWindowSizeConstraints(ImVec2(360.0f, 0.0f),
                                         ImVec2(std::max(360.0f, width * 0.8f), FLT_MAX));
     if (ImGui::BeginPopupModal(trId("Remove old plugin versions###cleanupconfirm"), nullptr,
@@ -2071,787 +1508,1260 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
                                         "deleted."));
             ImGui::PopTextWrapPos();
             ImGui::Spacing();
-            for (const StoreOldCopy& c : model.oldCopies) {
+            for (const StoreOldCopy& c : oldCopies) {
                 ImGui::BulletText("%s", storeOldCopyLine(c).c_str());
             }
             ImGui::Spacing();
             const std::string yes = storeCleanupConfirmLabel(oldCount) + "###cleanupyes";
             if (ImGui::Button(yes.c_str())) {
-                cleanup_ = true;
+                accepted = true;
                 ImGui::CloseCurrentPopup();
             }
             {
                 const ImVec2 a = ImGui::GetItemRectMin();
                 const ImVec2 b = ImGui::GetItemRectMax();
-                census::rect("storekey:cleanupyes", a.x, a.y, b.x, b.y);
+                if (censusYes != nullptr) { censusRect(censusYes, a.x, a.y, b.x, b.y); }
             }
             ImGui::SameLine();
             if (ImGui::Button(trId("Keep them###cleanupno"))) { ImGui::CloseCurrentPopup(); }
         }
         ImGui::EndPopup();
     }
+    ImGui::PopID();
+    return accepted;
+}
 
-    // ======================= THE CONTROL DECK ===============================
-    ImGui::SetCursorScreenPos(ImVec2(origin.x, origin.y + addAllTotal + bannerH + kGap));
-    const ImVec2 deckTL = ImGui::GetCursorScreenPos();
-    const float wellW = (width - kGap * 2.0f) / 3.0f;
-    const float wellInner = wellW - kPad * 2.0f;
+// ===========================================================================
+// THE PICTURES
+// ===========================================================================
 
-    const ImGuiStyle& style = ImGui::GetStyle();
-    const float fieldH = uiPx + style.FramePadding.y * 2.0f + 6.0f;
-    const char* searchLegend = tr("Searches name, maker and description.");
-    // WRAPPED, NOT ONE LINE: the legend is drawn with a wrap width below
-    // (wellInner), and at the interface size's larger fonts - or a well
-    // narrowed by a translation - it can take two lines. Reserving only
-    // `tinyH` here (an Opus review's M3) let the count line ("0 OF 0 MODULES
-    // KNOWN") start where the legend's SECOND line still was, drawing one
-    // over the other.
-    const float searchLegendH = wrapH(uf, tiny, wellInner, searchLegend);
-    const float deckAH = kPad + legH + 8.0f + fieldH + 9.0f + searchLegendH + 4.0f +
-                         countLineHeight() + kPad;
+PagePictureCache::~PagePictureCache() { releaseAll(); }
 
-    const char* showNote =
-        tr("Three states and three kinds, and every module is in exactly one of each. NOT "
-           "DECLARED is not a gap in this window: the catalogue index carries no capability "
-           "field, so a module's kind is only known once it is fitted.");
-    // TWO COLUMNS WHEN THEY FIT, ONE WHEN THEY DO NOT. A rocker whose label
-    // plate has been squeezed off the row is a switch nobody can read, so the
-    // well grows taller rather than letting that happen.
-    //
-    // AND "FIT" IS MEASURED FROM THE LONGEST LABEL, not from 74. A rocker's
-    // plate is drawn at the label's own width and is never clipped, so a
-    // column too narrow does not shorten the word - it puts the plate out
-    // through the switch beside it and through the count on the right-hand end
-    // of the row. At 14 px the longest of these six needs about 82 px of
-    // column before its count, so 74 was already the wrong side of the line
-    // and said so nowhere.
-    //
-    // AND THE LONGEST LABEL MAY BE DRAWN SMALLER FIRST (storeShowTwoColumns):
-    // a translation a third longer than the English used to collapse the well
-    // to one column of six, which took the SHOW well - and with it the whole
-    // deck - three rows taller for the sake of one word (pt-PT, lt).
-    const float showColW = (wellInner - 12.0f) * 0.5f;
-    const bool showTwoCols = storeShowTwoColumns(showColW);
-    const float showRows = showTwoCols ? 3.0f : 6.0f;
-    const float deckBH = kPad + legH + 8.0f + kRockerH * showRows + 8.0f +
-                         noteHeight(wellInner, showNote) + kPad;
-
-    const std::string sourceLine =
-        model.sourceUrl.empty() ? std::string(tr("no catalogue source set")) : model.sourceUrl;
-    const float srcTextW = wellInner - kCheckW - 8.0f;
-    const float srcLineH = std::max(kKeyH, wrapH(uf, tiny, srcTextW, sourceLine.c_str()));
-    float deckCH = kPad + legH + 8.0f + kSegH + 12.0f + 1.0f + 10.0f + legH + 8.0f +
-                   srcLineH + kPad;
-    if (!model.sourceStatus.empty()) {
-        deckCH += 6.0f + wrapH(uf, tiny, wellInner, model.sourceStatus.c_str());
+void PagePictureCache::releaseAll() {
+    for (auto& kv : entries_) {
+        if (kv.second.tex != 0u) { glDeleteTextures(1, &kv.second.tex); }
     }
-    if (!model.sourceError.empty()) {
-        deckCH += 6.0f + noteHeight(wellInner, model.sourceError.c_str());
-    }
-    if (model.busy) { deckCH += 6.0f + 14.0f + 4.0f + kKeyH; }
+    entries_.clear();
+}
 
-    const float deckH = std::max(deckAH, std::max(deckBH, deckCH));
-    ImGui::Dummy(ImVec2(width, deckH));
+const PagePictureCache::Entry* PagePictureCache::find(const StorePicture& p) {
+    if (p.state != PictureState::Ready || p.sha256.empty()) { return nullptr; }
+    const auto it = entries_.find(p.sha256);
+    if (it != entries_.end()) { return &it->second; }
+    if (decodedThisFrame_) { return nullptr; }  // one decode a frame, so eight do not freeze it
+    decodedThisFrame_ = true;
 
-    // ---- CATALOGUE SEARCH ---------------------------------------------------
+    Entry e;
+    std::vector<unsigned char> bytes;
     {
-        const ImVec2 tl(deckTL.x, deckTL.y);
-        const ImVec2 br(tl.x + wellW, tl.y + deckH);
-        addDeckWell(dl, tl, br);
-        dl->PushClipRect(ImVec2(tl.x + 2.0f, tl.y + 2.0f), ImVec2(br.x - 2.0f, br.y - 2.0f),
-                         true);
-        float y = tl.y + kPad;
-        addBenchGroupCaption(dl, ImVec2(tl.x + kPad, y), wellInner, tr("CATALOGUE SEARCH"));
-        y += legH + 8.0f;
-
-        const float clearW = kClearW;
-        const ImVec2 fTL(tl.x + kPad, y);
-        const ImVec2 fBR(fTL.x + wellInner - clearW - 8.0f, y + fieldH);
-        drawFreqDrumWell(dl, fTL, fBR);
-        // THE QUERY IS LETTERED IVORY, not amber. Amber in this palette is a
-        // READING - something the radio or the machine measured - and what the
-        // user typed is a control. The count beneath it is the reading.
-        ImGui::SetCursorScreenPos(ImVec2(fTL.x + 7.0f, fTL.y + 3.0f));
-        ImGui::SetNextItemWidth(fBR.x - fTL.x - 14.0f);
-        ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));  // theme-exempt: fully transparent, the drum well shows through
-        ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));  // theme-exempt: fully transparent, the drum well shows through
-        ImGui::PushStyleColor(ImGuiCol_FrameBgActive, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));  // theme-exempt: fully transparent, the drum well shows through
-        ImGui::PushStyleColor(ImGuiCol_Text, theme::vec(theme::kIvory));
-        // The field's PLACEHOLDER, which is the only instruction the search
-        // gives before anything is typed - muted rather than faint for that.
-        ImGui::PushStyleColor(ImGuiCol_TextDisabled, theme::vec(theme::kInkMuted));
-        // /uiscale::factor(): PushFont's argument is the PRE-FontScaleMain
-        // base; uiPx (prose(), fonts::panelPx()) already carries the live
-        // scale, and style.FontScaleMain would otherwise apply it twice.
-        ImGui::PushFont(uf, uiPx / cascade::gui::uiscale::factor());
-        // Fitted to the field (text_fit.hpp): the translated hint ran past the
-        // field's end and was cut mid-word ("...susiaurintumėte katalog", lt).
-        inputTextWithFittedHint("##search", tr("type to narrow the catalogue"), deck.search,
-                                sizeof deck.search);
-        ImGui::PopFont();
-        ImGui::PopStyleColor(5);
-
-        if (drawDeckKey(dl, ImVec2(fBR.x + 8.0f, y),
-                        ImVec2(fBR.x + 8.0f + clearW, y + fieldH), tr("CLEAR"), nullptr,
-                        deck.search[0] != '\0', "clear")) {
-            deck.search[0] = '\0';
+        std::ifstream in(std::filesystem::path(p.path), std::ios::binary);
+        if (in.good()) {
+            bytes.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
         }
-        y += fieldH + 9.0f;
-        dl->AddText(uf, tiny, ImVec2(tl.x + kPad, y), theme::kInkMuted, searchLegend,
-                    nullptr, wellInner);
-        y += searchLegendH + 4.0f;
-        // WHAT IS ON SCREEN AND WHAT EXISTS, both. "3 shown" alone cannot tell
-        // a short catalogue from a filter that is hiding most of it.
-        drawCountLine(dl, ImVec2(tl.x + kPad, y), static_cast<int>(visible.size()),
-                      static_cast<int>(model.modules.size()),
-                      catState == CatalogueState::Read ? tr("MODULES SHOWN")
-                                                        : tr("MODULES KNOWN"));
-        dl->PopClipRect();
     }
+    cascade::core::PngImage img;
+    std::string err;
+    if (bytes.empty()) {
+        e.error = "the picture file cannot be read";
+    } else if (!cascade::core::decodePng(bytes, 4096, img, err)) {
+        e.error = err;
+    } else {
+        GLint maxTex = 0;
+        glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxTex);
+        if (maxTex > 0 && (img.width > maxTex || img.height > maxTex)) {
+            e.error = "the picture is larger than this display can hold";
+        } else {
+            GLuint tex = 0;
+            glGenTextures(1, &tex);
+            glBindTexture(GL_TEXTURE_2D, tex);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, img.width, img.height, 0, GL_RGBA,
+                         GL_UNSIGNED_BYTE, img.rgba.data());
+            e.tex = tex;
+            e.width = img.width;
+            e.height = img.height;
+        }
+    }
+    return &(entries_[p.sha256] = e);
+}
 
-    // ---- SHOW ---------------------------------------------------------------
-    {
-        const ImVec2 tl(deckTL.x + wellW + kGap, deckTL.y);
-        const ImVec2 br(tl.x + wellW, tl.y + deckH);
-        addDeckWell(dl, tl, br);
-        dl->PushClipRect(ImVec2(tl.x + 2.0f, tl.y + 2.0f), ImVec2(br.x - 2.0f, br.y - 2.0f),
-                         true);
-        float y = tl.y + kPad;
-        addBenchGroupCaption(dl, ImVec2(tl.x + kPad, y), wellInner, tr("SHOW"));
-        y += legH + 8.0f;
+// ===========================================================================
+// THE PAGE BODY - one renderer, two callers
+// ===========================================================================
 
-        int nFitted = 0;
-        int nAvail = 0;
-        int nBlocked = 0;
-        int nDec = 0;
-        int nOther = 0;
-        int nUndec = 0;
-        for (const StoreModule& sm : model.modules) {
-            switch (stateGroup(sm)) {
-                case StateGroup::Fitted: ++nFitted; break;
-                case StateGroup::Available: ++nAvail; break;
-                case StateGroup::Blocked: ++nBlocked; break;
-            }
-            switch (kindGroup(sm.plate)) {
-                case KindGroup::Decoder: ++nDec; break;
-                case KindGroup::Other: ++nOther; break;
-                case KindGroup::Undeclared: ++nUndec; break;
+namespace {
+
+// THE SENTENCE THE DESIGN GOT WRONG, corrected here and stated once. The mock says
+// the reach list is "enforced by the console - a module cannot take anything not on
+// this list". It is not: plugins load in-process (LoadLibraryExW / dlopen), there is
+// no sandbox and no permission model, and the CASCADE_CAP_* bits say what a module
+// PROVIDES rather than what it may take.
+const char* kReachLead = FOX_TR_NOOP(
+    "Declared by the maker, not enforced. A fitted module is loaded into this "
+    "application's own process and runs with every privilege the application has: "
+    "there is no sandbox and no permission model. This list is what the module says "
+    "it PROVIDES, not a limit on what it can take.");
+
+constexpr float kFrameW = 520.0f;
+constexpr float kFrameH = 325.0f;
+constexpr float kFrameGap = 14.0f;
+
+// A CAPTION IN ITS OWN FRAME'S WIDTH: at most two lines, broken where ImGui would break them, the
+// second ending in "..." when the caption is longer. A caption never runs past its frame.
+std::vector<std::string> captionLines(ImFont* f, float px, const std::string& caption, float w) {
+    std::string flat = caption;
+    for (char& c : flat) {
+        if (c == '\n' || c == '\r' || c == '\t') { c = ' '; }
+    }
+    std::vector<std::string> out;
+    const char* s = flat.c_str();
+    const char* const end = s + flat.size();
+    while (out.size() < 2) {
+        while (s < end && *s == ' ') { ++s; }
+        if (s >= end) { break; }
+        if (out.size() == 1) {
+            // The last line: what remains, cut with the dots when it is more than fits.
+            out.push_back(ellipsize(f, px, s, w));
+            break;
+        }
+        const char* e = f->CalcWordWrapPosition(px, s, end, w);
+        if (e <= s) { e = s + 1; }  // a word wider than the frame: one character at a time
+        std::string line(s, e);
+        while (!line.empty() && line.back() == ' ') { line.pop_back(); }
+        out.push_back(line);
+        s = e;
+    }
+    return out;
+}
+
+// A small chassis-grey arrow key at an end of the strip.
+bool drawStripArrow(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, bool left, bool dim,
+                    const char* id) {
+    ImGui::PushID(id);
+    ImGui::SetCursorScreenPos(tl);
+    ImGui::SetNextItemAllowOverlap();
+    const bool pressed = ImGui::InvisibleButton("##arrow", ImVec2(br.x - tl.x, br.y - tl.y));
+    const bool hovered = ImGui::IsItemHovered();
+    ImGui::PopID();
+    const float a = dim ? 0.35f : (hovered ? 1.0f : 0.85f);
+    dl->AddRectFilled(tl, br, theme::withAlpha(theme::kBrassMid, a), 2.0f);
+    dl->AddRect(tl, br, theme::withAlpha(theme::kBrassBright, a), 2.0f, 0, 1.0f);
+    const float cx = (tl.x + br.x) * 0.5f, cy = (tl.y + br.y) * 0.5f, k = 7.0f * S();
+    const float s = left ? -1.0f : 1.0f;
+    const ImVec2 pts[3] = {ImVec2(cx - s * k * 0.5f, cy - k), ImVec2(cx + s * k * 0.5f, cy),
+                           ImVec2(cx - s * k * 0.5f, cy + k)};
+    dl->AddPolyline(pts, 3, theme::withAlpha(theme::kIvory, a), ImDrawFlags_None, 2.0f);
+    return pressed && !dim;
+}
+
+// The strip. Returns its total height (frames and captions).
+float drawPictureStrip(const ModulePageIn& in, ModulePageState& state, PagePictureCache& cache,
+                       const ImVec2& o, float W) {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImFont* uf = fonts::ui();
+    const float px = fonts::uiPx();
+    const float k = S();
+    const float fw = kFrameW * k, fh = kFrameH * k, gap = kFrameGap * k;
+    const std::vector<StorePicture> none;
+    const std::vector<StorePicture>& pics = in.pictures != nullptr ? *in.pictures : none;
+    const int n = pics.empty() ? 1 : static_cast<int>(pics.size());
+    const float total = static_cast<float>(n) * fw + static_cast<float>(n - 1) * gap;
+    const float maxScroll = std::max(0.0f, total - W);
+
+    // The tallest caption, so the strip is one height whatever it holds.
+    const float capLineH = faceH(uf, px);
+    std::vector<std::vector<std::string>> caps;
+    float capH = 0.0f;
+    for (const StorePicture& p : pics) {
+        caps.push_back(captionLines(uf, px, p.caption, fw));
+        capH = std::max(capH, capLineH * static_cast<float>(caps.back().size()));
+    }
+    const float capTop = fh + 8.0f * k;
+    const float stripH = capTop + capH;
+
+    // THE STRIP IS ONE ITEM: the wheel over it scrolls it sideways (and only while it
+    // can, so the page's own scroll still works at its ends), and the arrows are laid
+    // over its ends.
+    ImGui::SetCursorScreenPos(o);
+    ImGui::SetNextItemAllowOverlap();
+    ImGui::PushID("strip");
+    ImGui::InvisibleButton("##strip", ImVec2(W, fh));
+    const bool hovered = ImGui::IsItemHovered();
+    if (hovered && maxScroll > 0.0f) {
+        const ImGuiIO& io = ImGui::GetIO();
+        const float wheel = io.MouseWheel + io.MouseWheelH;
+        if (wheel != 0.0f) {
+            const float next = std::clamp(state.stripTarget - wheel * 70.0f * k, 0.0f, maxScroll);
+            if (next != state.stripTarget) {
+                state.stripTarget = next;
+                ImGui::SetItemKeyOwner(ImGuiKey_MouseWheelY);
             }
         }
-        const float colW = showTwoCols ? showColW : wellInner;
-        struct Row {
-            const char* label;
-            bool* flag;
-            int count;
-            const char* id;
+    }
+    ImGui::PopID();
+    state.stripTarget = std::clamp(state.stripTarget, 0.0f, maxScroll);
+    // Eased toward the target: a click on an arrow glides.
+    const float dt = std::min(0.05f, ImGui::GetIO().DeltaTime);
+    state.stripX += (state.stripTarget - state.stripX) * std::min(1.0f, dt * 14.0f);
+    if (std::fabs(state.stripTarget - state.stripX) < 0.5f) { state.stripX = state.stripTarget; }
+    state.stripX = std::clamp(state.stripX, 0.0f, maxScroll);
+
+    dl->PushClipRect(o, ImVec2(o.x + W, o.y + stripH), true);
+    for (int i = 0; i < n; ++i) {
+        const float x = o.x - state.stripX + static_cast<float>(i) * (fw + gap);
+        if (x + fw < o.x || x > o.x + W) { continue; }
+        const ImVec2 ftl(x, o.y), fbr(x + fw, o.y + fh);
+        dl->AddRectFilled(ftl, fbr, theme::kVoid);
+        const ImVec2 mid((ftl.x + fbr.x) * 0.5f, (ftl.y + fbr.y) * 0.5f);
+        if (pics.empty()) {
+            // NO PICTURES PUBLISHED: the frame in the theme - a faint grid, the
+            // category glyph large and dim, and the sentence.
+            const float step = 26.0f * k;
+            for (float gx = ftl.x + step; gx < fbr.x; gx += step) {
+                dl->AddLine(ImVec2(gx, ftl.y), ImVec2(gx, fbr.y), theme::withAlpha(theme::kBrassDark, 0.30f));
+            }
+            for (float gy = ftl.y + step; gy < fbr.y; gy += step) {
+                dl->AddLine(ImVec2(ftl.x, gy), ImVec2(fbr.x, gy), theme::withAlpha(theme::kBrassDark, 0.30f));
+            }
+            const float gb = 130.0f * k;
+            drawCategoryGlyph(dl, ImVec2(mid.x - gb * 0.5f, mid.y - gb * 0.5f - 18.0f * k), gb,
+                              in.glyphCategory != nullptr ? in.glyphCategory : "",
+                              theme::withAlpha(theme::kPhosphor, 0.28f), 1.15f * gb / 56.0f);
+            const char* msg = tr("No pictures published yet");
+            dl->AddText(uf, px, ImVec2(mid.x - textW(uf, px, msg) * 0.5f, mid.y + gb * 0.5f - 6.0f * k),
+                        theme::kInkMuted, msg);
+        } else {
+            const StorePicture& p = pics[static_cast<std::size_t>(i)];
+            const PagePictureCache::Entry* e = cache.find(p);
+            std::string word;
+            ImU32 wcol = theme::kInkMuted;
+            if (e != nullptr && e->tex != 0u) {
+                // CONTAINED in the frame, centred - a picture of another shape is never stretched.
+                const float sc = std::min(fw / static_cast<float>(e->width), fh / static_cast<float>(e->height));
+                const float iw = static_cast<float>(e->width) * sc, ih = static_cast<float>(e->height) * sc;
+                dl->AddImage(static_cast<ImTextureID>(static_cast<std::uintptr_t>(e->tex)),
+                             ImVec2(mid.x - iw * 0.5f, mid.y - ih * 0.5f),
+                             ImVec2(mid.x + iw * 0.5f, mid.y + ih * 0.5f));
+            } else if (e != nullptr) {
+                word = trStoredReason(e->error);
+            } else if (p.state == PictureState::Failed) {
+                word = trStoredReason(p.reason);
+            } else {
+                word = tr("loading...");
+            }
+            if (census::enabled()) {
+                // WHAT THE FRAME SHOWS: the decoded picture, the reason it would not decode, the
+                // reason it was not fetched, or the wait.
+                const char* frameState = (e != nullptr && e->tex != 0u) ? "texture"
+                                         : e != nullptr                  ? "error"
+                                         : p.state == PictureState::Failed ? "failed"
+                                                                           : "loading";
+                census::note(std::string(in.census != nullptr ? in.census : "store") + ":picture:",
+                             in.id + ":" + std::to_string(i) + ":" + frameState);
+            }
+            if (!word.empty()) {
+                const float ww = fw - 40.0f * k;
+                const float wh = wrapH(uf, px, ww, word.c_str());
+                dl->AddText(uf, px, ImVec2(mid.x - std::min(ww, textW(uf, px, word.c_str())) * 0.5f,
+                                           mid.y - wh * 0.5f),
+                            wcol, word.c_str(), nullptr, ww);
+            }
+            const std::vector<std::string>& cl = caps[static_cast<std::size_t>(i)];
+            for (std::size_t li = 0; li < cl.size(); ++li) {
+                dl->AddText(uf, px, ImVec2(x, o.y + capTop + capLineH * static_cast<float>(li)),
+                            theme::kInkMuted, cl[li].c_str());
+            }
+        }
+        dl->AddRect(ftl, fbr, theme::withAlpha(theme::kBrassMid, 0.9f), 0.0f, 0, 1.0f);
+    }
+    dl->PopClipRect();
+
+    // The arrows: both ends, dimmed at the ends, absent with one frame in view.
+    if (maxScroll > 0.0f) {
+        const float aw = 28.0f * k, ah = 56.0f * k;
+        const float ay = o.y + fh * 0.5f - ah * 0.5f;
+        if (drawStripArrow(dl, ImVec2(o.x + 6.0f * k, ay), ImVec2(o.x + 6.0f * k + aw, ay + ah), true,
+                           state.stripTarget <= 0.5f, "left")) {
+            state.stripTarget = std::max(0.0f, state.stripTarget - (fw + gap));
+        }
+        if (drawStripArrow(dl, ImVec2(o.x + W - 6.0f * k - aw, ay), ImVec2(o.x + W - 6.0f * k, ay + ah),
+                           false, state.stripTarget >= maxScroll - 0.5f, "right")) {
+            state.stripTarget = std::min(maxScroll, state.stripTarget + (fw + gap));
+        }
+    }
+    return stripH;
+}
+
+}  // namespace
+
+void drawModulePageBody(const ModulePageIn& in, ModulePageState& state, PagePictureCache& cache) {
+    if (in.plate == nullptr) { return; }
+    const ModulePlate& m = *in.plate;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImFont* uf = fonts::ui();
+    const float k = S();
+    const float pr = prose();
+    const ImVec2 o = ImGui::GetCursorScreenPos();
+    const float W = std::max(160.0f, in.width);
+    const std::string pfx = in.census != nullptr ? in.census : "store";
+    float y = o.y;
+
+    const auto section = [&](const char* name, float y0, float y1) {
+        if (census::enabled()) {
+            census::note(pfx + ":section:", name);
+            census::rect(pfx + ":section:" + name, o.x, y0, o.x + W, y1);
+        }
+    };
+    const float gapAfter = 22.0f * k;
+
+    if (in.catalogued) {
+        // ---- SCREENSHOTS --------------------------------------------------------
+        {
+            const float y0 = y;
+            y += drawSectionHeading(dl, ImVec2(o.x, y), W, tr("SCREENSHOTS"));
+            if (census::enabled()) {
+                const int n = in.pictures != nullptr ? static_cast<int>(in.pictures->size()) : 0;
+                census::note(pfx + ":pictures:", in.id + ":" + std::to_string(n));
+            }
+            cache.beginFrame();
+            y += drawPictureStrip(in, state, cache, ImVec2(o.x, y), W);
+            section("screenshots", y0, y);
+            y += gapAfter;
+        }
+        // ---- WHAT IT DOES -------------------------------------------------------
+        {
+            const float y0 = y;
+            y += drawSectionHeading(dl, ImVec2(o.x, y), W, tr("WHAT IT DOES"));
+            const std::string& text = m.blurb.empty() ? m.summary : m.blurb;
+            if (text.empty()) {
+                dl->AddText(uf, pr, ImVec2(o.x, y), theme::kInkMuted, tr("not stated"));
+                y += faceH(uf, pr);
+            } else {
+                dl->AddText(uf, pr, ImVec2(o.x, y), theme::kIvory, text.c_str(), nullptr, W);
+                y += wrapH(uf, pr, W, text.c_str());
+            }
+            section("whatitdoes", y0, y);
+            y += gapAfter;
+        }
+        // ---- WHAT'S NEW ---------------------------------------------------------
+        {
+            const float y0 = y;
+            y += drawSectionHeading(dl, ImVec2(o.x, y), W, tr("WHAT'S NEW"));
+            const std::string text = moduleWhatsNewText(m);
+            dl->AddText(uf, pr, ImVec2(o.x, y), theme::kIvory, text.c_str(), nullptr, W);
+            y += wrapH(uf, pr, W, text.c_str());
+            section("whatsnew", y0, y);
+            y += gapAfter;
+        }
+        // ---- BEFORE YOU FIT IT --------------------------------------------------
+        if (in.noticeBox && !m.legalNotice.empty()) {
+            const float y0 = y;
+            y += drawSectionHeading(dl, ImVec2(o.x, y), W, tr("BEFORE YOU FIT IT"));
+            const float pad = 14.0f * k;
+            const float textH = wrapH(uf, pr, W - pad * 2.0f, m.legalNotice.c_str());
+            const ImGuiStyle& st = ImGui::GetStyle();
+            const float tickH = pr + st.FramePadding.y * 2.0f;
+            const float boxH = pad + textH + 12.0f * k + tickH + pad;
+            const ImVec2 btl(o.x, y), bbr(o.x + W, y + boxH);
+            dl->AddRectFilled(btl, bbr, theme::withAlpha(theme::kAmber, 0.06f));
+            dl->AddRect(btl, bbr, theme::kAmber, 0.0f, 0, 1.0f);
+            // VERBATIM. Some decoders demodulate transmissions whose interception is an
+            // offence in some countries; this is the author saying so, and paraphrasing
+            // it would be answering for them.
+            dl->AddText(uf, pr, ImVec2(btl.x + pad, btl.y + pad), theme::kIvory, m.legalNotice.c_str(),
+                        nullptr, W - pad * 2.0f);
+            if (in.noticeTick != nullptr) {
+                ImGui::SetCursorScreenPos(ImVec2(btl.x + pad, btl.y + pad + textH + 12.0f * k));
+                ImGui::PushStyleColor(ImGuiCol_Text, theme::vec(theme::kIvory));
+                ImGui::PushStyleColor(ImGuiCol_CheckMark, theme::vec(theme::kAmber));
+                ImGui::PushFont(uf, pr / uiscale::factor());
+                ImGui::Checkbox(trId("I have read the notice above and accept responsibility"),
+                                in.noticeTick);
+                const ImVec2 a = ImGui::GetItemRectMin();
+                const ImVec2 b = ImGui::GetItemRectMax();
+                censusRect(pfx + ":page:tick", a.x, a.y, b.x, b.y);
+                ImGui::PopFont();
+                ImGui::PopStyleColor(2);
+            }
+            y = bbr.y;
+            section("beforeyoufitit", y0, y);
+            y += gapAfter;
+        }
+    }
+    // ---- DETAILS ---------------------------------------------------------------
+    {
+        const float y0 = y;
+        y += drawSectionHeading(dl, ImVec2(o.x, y), W, tr("DETAILS"));
+        const char* label = state.showDetails ? tr("HIDE DETAILS") : tr("SHOW DETAILS");
+        const float kw = chassisKeyWidth(label), kh = outlineKeyHeight();
+        KeyRect dk;
+        if (drawChassisKey(dl, ImVec2(o.x, y), ImVec2(o.x + kw, y + kh), label, true, "details", &dk)) {
+            state.showDetails = !state.showDetails;
+        }
+        censusRect(pfx + ":page:details", dk.tl.x, dk.tl.y, dk.br.x, dk.br.y);
+        if (state.showDetails && census::enabled()) { census::note(pfx + ":details:", "open"); }
+        y += kh + 10.0f * k;
+        if (state.showDetails) {
+            const std::vector<PageFact> facts = modulePageFacts(m);
+            const float keyW = 178.0f * k;
+            const float valW = std::max(60.0f, W - keyW - 28.0f * k);
+            const float fpx = fonts::uiPx();
+            ImFont* lf = fonts::legend();
+            const float tpx = std::max(11.0f, keyPx() * 0.9f);
+            const ImVec2 gtl(o.x, y);
+            float gy = y;
+            for (std::size_t i = 0; i < facts.size(); ++i) {
+                const PageFact& f = facts[i];
+                // A figure (a version, a digest) in the figure face; words in the reading face.
+                ImFont* face = (f.copyable && !f.hatched && f.key == tr("SHA-256")) || (!f.hatched && figureLike(f.value.c_str()))
+                                   ? fonts::reading()
+                                   : uf;
+                const float vh = wrapH(face, fpx, valW, f.value.c_str());
+                const float rowH = std::max(faceH(lf, tpx), std::max(vh, faceH(face, fpx))) + 16.0f * k;
+                const ImVec2 rtl(o.x, gy), rbr(o.x + W, gy + rowH);
+                dl->AddRectFilled(rtl, rbr, theme::withAlpha(theme::kWell, 0.7f));
+                dl->AddLine(ImVec2(rtl.x, rbr.y), ImVec2(rbr.x, rbr.y),
+                            theme::withAlpha(theme::kBrassDark, 0.8f), 1.0f);
+                // FITTED TO ITS COLUMN (gui/text_fit.hpp): a translated "AUF DIESEM RECHNER" must be
+                // drawn smaller, not cut off at the column's edge.
+                const float kpx = fitTrackedPx(lf, tpx, f.key.c_str(), 0.14f, keyW - 8.0f * k, fitFloorFor(tpx));
+                addTrackedText(dl, lf, kpx, ImVec2(rtl.x + 14.0f * k, rtl.y + 8.0f * k),
+                               theme::kInkMuted, f.key.c_str(), kpx * 0.14f, rtl.x + keyW);
+                const ImVec2 vat(rtl.x + keyW + 14.0f * k, rtl.y + 8.0f * k);
+                if (f.hatched) {
+                    // No source for this value: ruled, with the reason lettered over it.
+                    const ImVec2 h0(vat.x, vat.y + 1.0f), h1(vat.x + std::min(valW, textW(face, fpx, f.value.c_str()) + 24.0f * k), vat.y + faceH(face, fpx) - 1.0f);
+                    dl->PushClipRect(h0, h1, true);
+                    for (float hx = h0.x - (h1.y - h0.y); hx < h1.x; hx += 6.0f) {
+                        dl->AddLine(ImVec2(hx, h1.y), ImVec2(hx + (h1.y - h0.y), h0.y),
+                                    theme::withAlpha(theme::kInkMuted, 0.20f), 2.0f);
+                    }
+                    dl->PopClipRect();
+                }
+                const ImU32 col = f.hatched ? (f.tone != 0 ? f.tone : theme::kInkFaint)
+                                            : (f.tone != 0 ? f.tone : theme::kIvory);
+                if (f.copyable && !f.hatched) {
+                    // A URL OR A DIGEST IS FOR COPYING: selectable text, read-only.
+                    std::vector<char> buf(f.value.begin(), f.value.end());
+                    buf.push_back('\0');
+                    ImGui::PushID(static_cast<int>(i));
+                    ImGui::SetCursorScreenPos(ImVec2(vat.x - 4.0f * k, vat.y - 2.0f * k));
+                    ImGui::SetNextItemWidth(valW + 8.0f * k);
+                    ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));  // theme-exempt: plain text on the row
+                    ImGui::PushStyleColor(ImGuiCol_Text, theme::vec(col));
+                    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
+                    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(4.0f * k, 2.0f * k));
+                    ImGui::PushFont(face, fpx / uiscale::factor());
+                    ImGui::InputText("##copy", buf.data(), buf.size(), ImGuiInputTextFlags_ReadOnly);
+                    ImGui::PopFont();
+                    ImGui::PopStyleVar(2);
+                    ImGui::PopStyleColor(2);
+                    ImGui::PopID();
+                } else {
+                    dl->AddText(face, fpx, vat, col, f.value.c_str(), nullptr, valW);
+                }
+                gy += rowH;
+            }
+            dl->AddRect(gtl, ImVec2(o.x + W, gy), theme::withAlpha(theme::kBrassDark, 0.9f), 0.0f, 0, 1.0f);
+            y = gy;
+            if (in.showReachLead) {
+                // WHAT REACHES MEANS, once, under the grid: declared, not enforced. The claim
+                // this file refuses to make is the design's "a module cannot take anything not
+                // on this list"; this is the sentence it is replaced with.
+                y += 10.0f * k;
+                const char* lead = tr(kReachLead);
+                dl->AddText(uf, fonts::uiPx(), ImVec2(o.x, y), theme::kInkMuted, lead, nullptr, W);
+                y += wrapH(uf, fonts::uiPx(), W, lead);
+            }
+        }
+        section("details", y0, y);
+        y += gapAfter;
+    }
+    ImGui::SetCursorScreenPos(ImVec2(o.x, y));
+    ImGui::Dummy(ImVec2(W, 1.0f));
+}
+
+// ===========================================================================
+// THE WINDOW
+// ===========================================================================
+
+PluginStoreView::~PluginStoreView() {}
+
+namespace {
+
+// One catalogue card. Returns what was pressed: 1 = open the page, 2 = the key.
+struct CardResult {
+    bool openPage = false;
+    bool keyPressed = false;
+};
+
+float cardKeyWidth() {
+    return std::max({outlineKeyWidth(tr("GET")), outlineKeyWidth(tr("FITTING...")),
+                     outlineKeyWidth(tr("INSTALLED")), outlineKeyWidth(tr("UPDATE"))});
+}
+
+float cardHeight() {
+    const float k = S();
+    const float pad = 10.0f * k;
+    const float nameH = faceH(fonts::ui(), prose());
+    const float sumH = faceH(fonts::ui(), fonts::uiPx());
+    const float rowH = std::max(outlineKeyHeight(), badgeHeight());
+    return std::max(96.0f * k, pad + nameH + 2.0f * k + sumH + 6.0f * k + rowH + pad);
+}
+
+CardResult drawCard(ImDrawList* dl, const StoreModule& sm, const StoreKey& key, const ImVec2& tl,
+                    float w, float h, float progress) {
+    CardResult res;
+    const float k = S();
+    ImFont* uf = fonts::ui();
+    const float pad = 10.0f * k;
+    const ImVec2 br(tl.x + w, tl.y + h);
+    const bool hoverCard = ImGui::IsMouseHoveringRect(tl, br);
+    dl->AddRectFilled(tl, br, theme::kEnamelDark);
+    dl->AddRect(tl, br, hoverCard ? theme::kBrassMid : theme::withAlpha(theme::kBrassDark, 0.9f),
+                0.0f, 0, 1.0f);
+
+    ImGui::PushID(sm.id.c_str());
+    // --- the glyph ------------------------------------------------------------
+    const float gb = 58.0f * k;
+    const ImVec2 gtl(tl.x + pad, tl.y + (h - gb) * 0.5f);
+    const ImVec2 gbr(gtl.x + gb, gtl.y + gb);
+    ImGui::SetCursorScreenPos(gtl);
+    if (ImGui::InvisibleButton("##glyph", ImVec2(gb, gb))) { res.openPage = true; }
+    const bool gHover = ImGui::IsItemHovered();
+    dl->AddRectFilled(gtl, gbr, theme::kVoid);
+    dl->AddRect(gtl, gbr, gHover ? theme::kPhosphor : theme::kBrassDark, 0.0f, 0, 1.0f);
+    drawCategoryGlyph(dl, ImVec2(gtl.x + 1.0f, gtl.y + 1.0f), gb - 2.0f, sm.plate.category,
+                      theme::kPhosphor, 1.6f * (gb - 2.0f) / 56.0f);
+
+    // --- the text column ------------------------------------------------------
+    const float tx = gbr.x + 12.0f * k;
+    const float tw = std::max(40.0f, br.x - pad - tx);
+    float ty = tl.y + pad - 1.0f * k;
+    const char* nameText = sm.plate.name.empty() ? tr("(unnamed module)") : sm.plate.name.c_str();
+    const float npx = fitTextPx(uf, prose(), nameText, tw, prose() * 0.8f);
+    ImGui::SetCursorScreenPos(ImVec2(tx, ty));
+    const float nameH = faceH(uf, prose());
+    const std::string shownName = ellipsize(uf, npx, nameText, tw);
+    const float nameW = std::min(tw, textW(uf, npx, shownName.c_str()));
+    if (ImGui::InvisibleButton("##name", ImVec2(std::max(8.0f, nameW), nameH))) { res.openPage = true; }
+    const bool nHover = ImGui::IsItemHovered();
+    const ImVec2 nmin = ImGui::GetItemRectMin(), nmax = ImGui::GetItemRectMax();
+    dl->AddText(uf, npx, ImVec2(tx, ty + (nameH - faceH(uf, npx)) * 0.5f),
+                nHover || gHover ? theme::kPhosphor : theme::kIvory, shownName.c_str());
+    ty += nameH + 2.0f * k;
+    const std::string& sum = sm.plate.summary.empty() ? sm.plate.blurb : sm.plate.summary;
+    addEllipsized(dl, uf, fonts::uiPx(), ImVec2(tx, ty), theme::kInkMuted, sum.c_str(), tw);
+
+    // --- the lower row: badges at the left, the one key at the right ------------
+    const float rowH = std::max(outlineKeyHeight(), badgeHeight());
+    const float rowY = br.y - pad - rowH;
+    const float kw = cardKeyWidth();
+    const ImVec2 ktl(br.x - pad - kw, rowY), kbr(br.x - pad, rowY + rowH);
+    KeyRect kr{ktl, kbr};
+    const char* word = storeKeyLabel(key.kind);
+    // The words the key's hover says: why a greyed key is greyed.
+    const std::string why = (!key.enabled && !key.reason.empty()) ? trStoredReason(key.reason)
+                                                                  : std::string();
+    switch (key.kind) {
+        case StoreKeyKind::Get:
+            if (drawOutlineKey(dl, ktl, kbr, word, theme::kPhosphor, key.enabled, "key", why.c_str())) {
+                res.keyPressed = true;
+            }
+            break;
+        case StoreKeyKind::Update: {
+            if (drawOutlineKey(dl, ktl, kbr, word, theme::kAmber, key.enabled, "key", why.c_str())) {
+                res.keyPressed = true;
+            }
+            // "vX to vY" in amber, beside the key.
+            const std::string ft = storeFromTo(sm.installedVersion, sm.updateToVersion.empty()
+                                                                        ? sm.plate.version
+                                                                        : sm.updateToVersion);
+            // In the reading face (digits of one width) the versions looked like a string of
+            // separate figures; the text face sets them as the mock-up does.
+            ImFont* rf = fonts::ui();
+            const float rpx = fonts::tinyPx() * 1.15f;
+            const float rw = textW(rf, rpx, ft.c_str());
+            dl->AddText(rf, rpx, ImVec2(ktl.x - 10.0f * k - rw, rowY + (rowH - faceH(rf, rpx)) * 0.5f),
+                        theme::kAmber, ft.c_str());
+            break;
+        }
+        case StoreKeyKind::Fitting: {
+            ImGui::PushID("key");
+            ImGui::SetCursorScreenPos(ktl);
+            ImGui::InvisibleButton("##fitting", ImVec2(kbr.x - ktl.x, kbr.y - ktl.y));
+            ImGui::PopID();
+            dl->AddRect(ktl, kbr, theme::kPhosphorDim, 2.0f, 0, 1.0f);
+            drawKeyWord(dl, ktl, kbr, word, theme::kPhosphor);
+            drawFittingLine(dl, ktl, kbr, progress);
+            break;
+        }
+        case StoreKeyKind::Installed: {
+            ImGui::PushID("key");
+            ImGui::SetCursorScreenPos(ktl);
+            ImGui::InvisibleButton("##installed", ImVec2(kbr.x - ktl.x, kbr.y - ktl.y));
+            ImGui::PopID();
+            drawKeyWord(dl, ktl, kbr, word, theme::kInkMuted);
+            break;
+        }
+    }
+    // Badges: EXPERIMENTAL in amber, a build badge in muted outline.
+    {
+        float bx = tx;
+        const float by = rowY + (rowH - badgeHeight()) * 0.5f;
+        const float room = (key.kind == StoreKeyKind::Update ? ktl.x - 150.0f * k : ktl.x) - bx;
+        const auto badge = [&](const char* label, ImU32 ink) {
+            if (label == nullptr || label[0] == '\0') { return; }
+            const float bw = badgeWidth(label);
+            if (bx + bw - tx > room) { return; }
+            drawBadge(dl, ImVec2(bx, by), label, ink);
+            bx += bw + 5.0f * k;
         };
-        const Row rows[6] = {
-            {tr("FITTED"), &deck.showFitted, nFitted, "sf"},
-            {tr("DECODERS"), &deck.showDecoders, nDec, "sd"},
-            {tr("NOT FITTED"), &deck.showAvailable, nAvail, "sa"},
-            {tr("OTHER KINDS"), &deck.showOtherKinds, nOther, "so"},
-            {tr("CANNOT FIT"), &deck.showBlocked, nBlocked, "sb"},
-            {tr("NOT DECLARED"), &deck.showUndeclared, nUndec, "su"},
-        };
-        for (int i = 0; i < 6; ++i) {
-            const float rx =
-                tl.x + kPad + ((showTwoCols && i % 2 == 1) ? (colW + 12.0f) : 0.0f);
-            const float ry =
-                y + kRockerH * static_cast<float>(showTwoCols ? (i / 2) : i);
-            char cnt[16];
-            std::snprintf(cnt, sizeof cnt, "%d", rows[i].count);
-            if (drawRockerRow(dl, ImVec2(rx, ry), colW, kRockerH, rows[i].label, cnt,
-                              *rows[i].flag, rows[i].id)) {
-                *rows[i].flag = !*rows[i].flag;
-            }
+        if (sm.plate.experimental) { badge(storeExperimentalBadge(), theme::kAmber); }
+        badge(storeBuildBadge(sm), theme::kInkMuted);
+    }
+    if (census::enabled()) {
+        const std::string base = "store:card:" + sm.id;
+        census::rect(base, tl.x, tl.y, br.x, br.y);
+        census::rect(base + ":key", kr.tl.x, kr.tl.y, kr.br.x, kr.br.y);
+        census::rect(base + ":name", nmin.x, nmin.y, nmax.x, nmax.y);
+        census::note("store:key:", sm.id + ":" + storeKeyCensusState(key));
+    }
+    ImGui::PopID();
+    return res;
+}
+
+}  // namespace
+
+void PluginStoreView::draw(float width, float height, const PluginStoreModel& model,
+                           PluginStoreDeck& deck) {
+    // Cleared first, so a request is answered once or not at all.
+    cleanup_ = false;
+    checkNow_ = false;
+    cancel_ = false;
+    addAll_ = false;
+    updateAll_ = false;
+    fitIndex_ = -1;
+    updateIndex_ = -1;
+    pageOpened_.clear();
+
+    ImGui::PushID("pluginstore");
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 origin = ImGui::GetCursorScreenPos();
+    const float k = S();
+
+    // TOO NARROW TO DRAW HONESTLY, so it says so instead of drawing a squashed bar.
+    if (width < kStoreMinWidth || height < 200.0f) {
+        const char* small =
+            tr("This window is too narrow to lay out the catalogue. Widen it and the plugins come "
+               "back.");
+        if (width > 80.0f) {
+            dl->AddText(fonts::ui(), fonts::uiPx(), origin, theme::kGold, small, nullptr,
+                        std::max(60.0f, width - 8.0f));
         }
-        y += kRockerH * showRows + 8.0f;
-        drawNote(dl, ImVec2(tl.x + kPad, y), wellInner, theme::kInkMuted, showNote);
-        dl->PopClipRect();
+        ImGui::Dummy(ImVec2(std::max(1.0f, width), std::max(1.0f, height)));
+        ImGui::PopID();
+        return;
     }
 
-    // ---- SORT and CATALOGUE SOURCE -----------------------------------------
-    {
-        const ImVec2 tl(deckTL.x + (wellW + kGap) * 2.0f, deckTL.y);
-        const ImVec2 br(tl.x + wellW, tl.y + deckH);
-        addDeckWell(dl, tl, br);
-        dl->PushClipRect(ImVec2(tl.x + 2.0f, tl.y + 2.0f), ImVec2(br.x - 2.0f, br.y - 2.0f),
-                         true);
-        float y = tl.y + kPad;
-        addBenchGroupCaption(dl, ImVec2(tl.x + kPad, y), wellInner, tr("SORT"));
-        y += legH + 8.0f;
-        // THREE SEGMENTS, NOT A MENU: the whole option set visible at once, so
-        // the current order is legible without opening anything.
-        const float segW = (wellInner - 8.0f) / 3.0f;
-        for (int i = 0; i < kStoreSortCount; ++i) {
-            const ImVec2 sTL(tl.x + kPad + (segW + 4.0f) * static_cast<float>(i), y);
-            char id[8];
-            std::snprintf(id, sizeof id, "srt%d", i);
-            if (drawSegment(dl, sTL, ImVec2(sTL.x + segW, sTL.y + kSegH),
-                            storeSortLabel(i), sortKey == i, id)) {
-                deck.sortKey = i;
+    ImFont* uf = fonts::ui();
+    const float upx = fonts::uiPx();
+
+    // --- the page bookkeeping: an id, so a refresh cannot swap the plugin under it ----
+    int pageIdx = -1;
+    if (!deck.pageId.empty()) {
+        for (int i = 0; i < static_cast<int>(model.modules.size()); ++i) {
+            if (model.modules[static_cast<std::size_t>(i)].id == deck.pageId) {
+                pageIdx = i;
+                break;
             }
         }
-        y += kSegH + 12.0f;
-        addBenchRail(dl, tl.x + kPad, br.x - kPad, y);
-        y += 10.0f;
-        addBenchGroupCaption(dl, ImVec2(tl.x + kPad, y), wellInner, tr("CATALOGUE SOURCE"));
-        y += legH + 8.0f;
+        // A plugin the catalogue no longer lists has no page to show. Only once a
+        // catalogue is on screen: an empty one is "not read", not "gone".
+        if (pageIdx < 0 && model.haveCatalogue) { deck.pageId.clear(); }
+    }
+    if (deck.pageId != lastPage_) {
+        // The edge: a new page. The tick belongs to the page that had it, the strip starts at
+        // its first picture, and the caller is told to ask for the pictures.
+        deck.legalAck = false;
+        deck.page.reset();
+        lastPage_ = deck.pageId;
+        if (!deck.pageId.empty()) { pageOpened_ = deck.pageId; }
+    }
+    pageId_ = deck.pageId;
+    if (deck.tab != lastTab_) { lastTab_ = deck.tab; }
 
-        // WHERE THE MODULES WOULD COME FROM, printed before the key that goes
-        // and gets them. A store that will not say what it is about to contact
-        // is asking for a decision it has withheld the facts for.
-        dl->AddText(uf, tiny, ImVec2(tl.x + kPad, y), theme::kInkMuted,
-                    sourceLine.c_str(), nullptr, srcTextW);
-        if (drawDeckKey(dl, ImVec2(br.x - kPad - kCheckW, y),
-                        ImVec2(br.x - kPad, y + kKeyH),
-                        // AGAIN once anything has been asked, whatever came
-                        // back. A failed check and an empty catalogue have
-                        // both been asked, and a key still saying NOW invites
-                        // the user to do again what they just did.
-                        catState == CatalogueState::NeverAsked ? tr("CHECK NOW")
-                                                               : tr("CHECK AGAIN"),
-                        nullptr,
-                        !model.busy && !model.sourceUrl.empty(), "checknow")) {
+    const std::string query = lowerAscii(std::string(deck.search));
+    const int updateCount = storeUpdateCount(model);
+
+    // ======================= THE TOP BAR ===========================================
+    //
+    // ONE ROW: the search field at the left, the two tabs in the middle, the
+    // catalogue line and its key at the right. Nothing else is above the list.
+    const float pad = 16.0f * k;
+    const float barH = std::max(56.0f * k, outlineKeyHeight() + 30.0f * k);
+    dl->AddRectFilled(origin, ImVec2(origin.x + width, origin.y + barH), theme::kEnamelDark);
+    dl->AddLine(ImVec2(origin.x, origin.y + barH - 1.0f), ImVec2(origin.x + width, origin.y + barH - 1.0f),
+                theme::kBrassDark, 1.0f);
+    const float cy = origin.y + (barH - 6.0f * k) * 0.5f;
+    const float keyH = outlineKeyHeight();
+    {
+        // search
+        const float sw = std::clamp(width * 0.2f, 200.0f * k, 300.0f * k);
+        KeyRect sr;
+        const float fieldH = std::max(30.0f * k, upx + 14.0f * k);
+        if (drawSearchField(ImVec2(origin.x + pad, cy - fieldH * 0.5f), sw, tr("Search plugins"),
+                            deck.search, sizeof deck.search, &sr)) {
+            // Typing is looking for something: that is on the list, not on a page.
+            deck.pageId.clear();
+        }
+        censusRect("store:search", sr.tl.x, sr.tl.y, sr.br.x, sr.br.y);
+
+        // the tabs
+        const std::string updLabel = cascade::core::formatText(tr("UPDATES (%zu)"),
+                                                               static_cast<std::size_t>(updateCount));
+        const char* browseLabel = tr("BROWSE");
+        const float tabH = std::max(30.0f * k, keyH + 4.0f * k);
+        const float bw = std::max(chassisKeyWidth(browseLabel), 100.0f * k) + 16.0f * k;
+        const float uw = std::max(chassisKeyWidth(updLabel.c_str()), 120.0f * k) + 16.0f * k;
+        const float tabsW = bw + 8.0f * k + uw;
+        // Centred in the bar, but never closer to the search field than a gap.
+        float tx = origin.x + (width - tabsW) * 0.5f;
+        tx = std::max(tx, origin.x + pad + sw + 24.0f * k);
+        const float ty = cy - tabH * 0.5f;
+        const bool browseOn = deck.tab == 0;
+        if (drawTab(dl, ImVec2(tx, ty), ImVec2(tx + bw, ty + tabH), browseLabel, browseOn, "tabbrowse")) {
+            deck.tab = 0;
+            deck.pageId.clear();
+        }
+        censusRect("store:tab:browse", tx, ty, tx + bw, ty + tabH);
+        const float ux = tx + bw + 8.0f * k;
+        if (drawTab(dl, ImVec2(ux, ty), ImVec2(ux + uw, ty + tabH), updLabel.c_str(), !browseOn, "tabupdates")) {
+            deck.tab = 1;
+            deck.pageId.clear();
+        }
+        censusRect("store:tab:updates", ux, ty, ux + uw, ty + tabH);
+        if (census::enabled()) {
+            census::note("store:tab:", deck.tab == 0 ? "browse" : "updates");
+            census::note("store:count:updates:", updateCount);
+        }
+
+        // the catalogue line and its key, at the right
+        const StoreCatalogueLine line = storeCatalogueLine(model, static_cast<std::int64_t>(std::time(nullptr)));
+        const bool asked = model.haveCatalogue || !model.sourceStatus.empty() || !model.sourceError.empty();
+        const char* checkLabel = asked ? tr("CHECK AGAIN") : tr("CHECK NOW");
+        const float cw = chassisKeyWidth(checkLabel);
+        const float ckx = origin.x + width - pad - cw;
+        KeyRect ck;
+        if (drawChassisKey(dl, ImVec2(ckx, cy - keyH * 0.5f), ImVec2(ckx + cw, cy + keyH * 0.5f), checkLabel,
+                           !model.busy && !model.pictureBusy && !model.sourceUrl.empty(), "check", &ck)) {
             checkNow_ = true;
         }
-        y += srcLineH;
-
+        censusRect("store:check", ck.tl.x, ck.tl.y, ck.br.x, ck.br.y);
+        float rightEdge = ckx - 14.0f * k;
         if (model.busy) {
-            y += 6.0f;
-            // PluginRepo::progress() stays at 0 when the server sends no
-            // Content-Length. The bar then simply does not move rather than
-            // inventing a figure, and the label says what is moving.
-            const ImVec2 pTL(tl.x + kPad, y);
-            const ImVec2 pBR(br.x - kPad, y + 14.0f);
-            dl->AddRectFilled(pTL, pBR, theme::kVoid, 2.0f);
-            const float frac = std::clamp(model.progress, 0.0f, 1.0f);
-            if (frac > 0.0f) {
-                dl->AddRectFilled(pTL, ImVec2(pTL.x + (pBR.x - pTL.x) * frac, pBR.y),
-                                  theme::kAmber, 2.0f);
-            }
-            dl->AddRect(pTL, pBR, theme::withAlpha(theme::kBrassMid, 0.9f), 2.0f, 0,
-                        theme::kHairline);
-            if (!model.busyLabel.empty()) {
-                dl->AddText(uf, tiny, ImVec2(pTL.x + 6.0f, pTL.y + 1.0f), theme::kCream,
-                            model.busyLabel.c_str(), nullptr, pBR.x - pTL.x - 12.0f);
-            }
-            y += 14.0f + 4.0f;
-            if (drawDeckKey(dl, ImVec2(tl.x + kPad, y), ImVec2(br.x - kPad, y + kKeyH),
-                            tr("CANCEL"), nullptr, true, "cancel")) {
+            const char* cl = tr("CANCEL");
+            const float clw = chassisKeyWidth(cl);
+            const float clx = ckx - 10.0f * k - clw;
+            if (drawChassisKey(dl, ImVec2(clx, cy - keyH * 0.5f), ImVec2(clx + clw, cy + keyH * 0.5f), cl,
+                               true, "cancel")) {
                 cancel_ = true;
             }
-            y += kKeyH;
+            rightEdge = clx - 14.0f * k;
         }
-        if (!model.sourceStatus.empty()) {
-            y += 6.0f;
-            dl->AddText(uf, tiny, ImVec2(tl.x + kPad, y), theme::kInkMuted,
-                        model.sourceStatus.c_str(), nullptr, wellInner);
-            y += wrapH(uf, tiny, wellInner, model.sourceStatus.c_str());
-        }
-        if (!model.sourceError.empty()) {
-            // VERBATIM AND IN RUST. A private repository answers 404, a TLS
-            // failure says so, and the text PluginRepo wrote is the only
-            // evidence the user has.
-            y += 6.0f;
-            drawNote(dl, ImVec2(tl.x + kPad, y), wellInner, theme::kAlarm,
-                     model.sourceError.c_str());
-        }
-        dl->PopClipRect();
-    }
-
-    // ======================= THE BODY =======================================
-    ImGui::SetCursorScreenPos(ImVec2(origin.x, deckTL.y + deckH + kGap));
-    const ImVec2 bodyTL = ImGui::GetCursorScreenPos();
-    // THE FLOOR IS kStoreListMinH, NOT 120. At 120 the list could be squeezed
-    // to less than one module card by the three bands above it, and past that
-    // the body ran off the bottom of a pane that could not scroll. With the
-    // floor the body keeps room for two cards and more, and when the window is
-    // too short for that as well the pane it is drawn in scrolls
-    // (storeFaceWindowFlags) rather than hiding what does not fit.
-    const float bodyH = std::max(kStoreListMinH, origin.y + height - bodyTL.y);
-    // The plate takes a third, but never at the cost of a list too narrow to
-    // read a module name in - the list is what this window is FOR, and a plate
-    // beside three characters of name would be the tail wagging the dog.
-    //
-    // THE FLOOR AND THE CEILING BOTH ROSE WITH THE FACE. The plate is a column
-    // of wrapped sentences - the reach rows most of all - and 260 px of it at
-    // 21 px is four or five words a line, which is a paragraph nobody reads.
-    // The list keeps its 400 px floor for the same reason: the longest name in
-    // the live catalogue is "406 MHz Distress Beacon Decoder (EPIRB / ELT /
-    // PLB)" at fifty-one characters, and it now WRAPS rather than being cut at
-    // the column edge, so the column has to be wide enough for that to be two
-    // lines and not six.
-    const float plateW =
-        std::min(std::clamp(width * 0.33f, 340.0f, 560.0f),
-                 std::max(280.0f, width - kGap - 400.0f));
-    const float listW = width - plateW - kGap;
-
-    // ---- the module list ----------------------------------------------------
-    {
-        const ImVec2 tl = bodyTL;
-        const ImVec2 br(tl.x + listW, tl.y + bodyH);
-        addDeckWell(dl, tl, br);
-        float y = tl.y + kPad;
-        dl->AddText(lf, uiPx, ImVec2(tl.x + kPad, y), theme::kIvory, tr("MODULES"));
-        {
-            char cnt[24];
-            std::snprintf(cnt, sizeof cnt, "%d", static_cast<int>(visible.size()));
-            const float cw = textW(rf, tiny, cnt) + 6.0f + textW(uf, tiny, tr("SHOWN"));
-            dl->AddText(rf, tiny, ImVec2(br.x - kPad - cw, y + nameH - faceH(rf, tiny)),
-                        theme::kAmber, cnt);
-            dl->AddText(uf, tiny,
-                        ImVec2(br.x - kPad - cw + textW(rf, tiny, cnt) + 6.0f,
-                               y + nameH - faceH(uf, tiny)),
-                        theme::kInkMuted, tr("SHOWN"));
-        }
-        y += nameH + 6.0f;
-        addBenchRail(dl, tl.x + kPad, br.x - kPad, y);
-        y += 8.0f;
-
-        const float childH = br.y - y - kPad;
-        ImGui::SetCursorScreenPos(ImVec2(tl.x + kPad, y));
-        ImGui::BeginChild("##modlist", ImVec2(listW - kPad * 2.0f, std::max(40.0f, childH)),
-                          ImGuiChildFlags_None, ImGuiWindowFlags_NoBackground);
-        {
-            ImDrawList* cdl = ImGui::GetWindowDrawList();
-            const float cw = std::max(120.0f, ImGui::GetContentRegionAvail().x);
-            if (visible.empty()) {
-                const ImVec2 at = ImGui::GetCursorScreenPos();
-                // WHY THE LIST IS EMPTY, and there are four reasons, not two.
-                // "Press CHECK NOW" is the right answer to exactly one of
-                // them; said to the other three it sends the user round a loop
-                // that cannot end, because the check has already happened.
-                const char* why = "";
-                switch (catState) {
-                    case CatalogueState::NeverAsked:
-                        why = tr("No catalogue has been read yet. Press CHECK NOW above and "
-                                 "this application asks the source once.");
-                        break;
-                    case CatalogueState::Failed:
-                        why = tr("The last check did not return a catalogue, so there is "
-                                 "nothing to list. The reason it gave is under CATALOGUE "
-                                 "SOURCE above, word for word.");
-                        break;
-                    case CatalogueState::ReadEmpty:
-                        why = tr("The catalogue was read and it lists no modules at all. "
-                                 "Nothing here is hidden by the switches above.");
-                        break;
-                    case CatalogueState::Read:
-                        why = (hiddenByShow > 0 || deck.search[0] != '\0')
-                                  ? tr("Every module is hidden by the SHOW switches or the "
-                                       "search above. The counts on the switches say how "
-                                       "many each holds.")
-                                  : tr("No module in the catalogue matches.");
-                        break;
-                }
-                drawNote(cdl, at, cw - 8.0f, theme::kGold, why);
-                ImGui::Dummy(ImVec2(cw, noteHeight(cw - 8.0f, why)));
-            }
-            // BOTH FIXED COLUMNS MEASURED FROM THEIR OWN WORDS. The tag chip
-            // is the shared measurement, so this card and the fitted-modules
-            // row draw one chip and not two; the action column has to hold
-            // whichever of FIT, UPDATE and FITTED this row gets, plus the
-            // state word wrapped beneath it, and 92 px was fitted around a
-            // 12 px face.
-            //
-            // THE ACTION COLUMN ALSO HOLDS THE INSTALL WORD NOW, and that is
-            // the longest thing in it: "NOT INSTALLED" at the page's own size
-            // is wider than any of the three key labels. It is measured from
-            // every word storeInstallWord can return rather than from the one
-            // this row happens to get, because a column that changed width
-            // with its word would move the module's name beside it from row
-            // to row.
-            const float kTagW = moduleKindTagWidth();
-            const float kActW = storeActionColumnWidth();
-            constexpr float kCardPad = 14.0f;
-            for (int idx : visible) {
-                const StoreModule& sm = model.modules[static_cast<std::size_t>(idx)];
-                const ModulePlate& p = sm.plate;
-                const bool isSel = idx == deck.selected;
-                const float midW = std::max(120.0f, cw - kTagW - kActW - kCardPad * 3.0f);
-                const std::string reach = moduleReachSummary(p);
-                // THE SUMMARY ON THE ROW, THE DESCRIPTION ON THE PLATE. See
-                // ModulePlate::summary: the live catalogue's descriptions run
-                // to three thousand characters, and a row that wrapped one was
-                // eleven lines tall - so the list showed ONE module of
-                // twenty-four and the rest were a scroll away. Nothing is cut
-                // to make this fit; the shorter of the two fields is simply
-                // the one a list is for.
-                const std::string& rowText = p.summary.empty() ? p.blurb : p.summary;
-                const StoreInstallState instState = storeInstallState(sm);
-                const char* instWord = storeInstallWord(instState);
-
-                // The maker/licence foot line, built here rather than in the
-                // drawing block below because whether the reach summary fits
-                // BESIDE it decides the row's height. Measuring from one string
-                // and drawing another is how a row comes to clip itself.
-                std::string foot;
-                cascade::core::formatUtf8(foot, tr("%s  \xc2\xb7  %s"),
-                              p.maker.empty() ? tr("maker not stated") : p.maker.c_str(),
-                              p.licence.empty() ? tr("no licence declared")
-                                                : p.licence.c_str());
-                const bool reachBeside =
-                    textW(uf, tiny, foot.c_str()) + 14.0f + textW(uf, tiny, reach.c_str()) <
-                    midW + 6.0f;
-
-                // WHY THE FIT KEY ON THIS ROW IS DEAD. A greyed key with no
-                // sentence beside it is the fault this window exists to
-                // remove, and until now the row's key was drawn dead from
-                // blockedReason with nothing to explain it - the plate said
-                // why, one selection away, for whichever module happened to be
-                // on it. The reason belongs on the row that refuses.
-                std::string blockedLine;
-                if (!p.fitted && !sm.blockedReason.empty()) {
-                    // The reason is English in the model (it is compared and
-                    // logged), and translated here, where it is drawn.
-                    const std::string why = trStoredReason(sm.blockedReason);
-                    const char* fmt = tr("Cannot fit: %s");
-                    std::vector<char> buf(why.size() + std::strlen(fmt) + 8);
-                    std::snprintf(buf.data(), buf.size(), fmt, why.c_str());
-                    blockedLine = buf.data();
-                }
-
-                // THE NAME WRAPS NOW, and that is the truncation this change
-                // set out to remove. It used to be laid end to end with the
-                // version and the state word and CLIPPED to this column, which
-                // on the longest name in the live catalogue - "406 MHz
-                // Distress Beacon Decoder (EPIRB / ELT / PLB)", fifty-one
-                // characters - cut it at "(EPIR". A name is the one string on
-                // the card a user matches against what they were looking for,
-                // so it is the last one that may be cut.
-                const char* nameText =
-                    p.name.empty() ? tr("(unnamed module)") : p.name.c_str();
-                const float rowNameH = wrapH(lf, uiPx, midW, nameText);
-                const float idLineH = std::max(faceH(rf, tiny), tinyH);
-                const float rowsH =
-                    rowNameH + 3.0f + idLineH + 6.0f +
-                    (rowText.empty() ? 0.0f : wrapH(uf, tiny, midW, rowText.c_str()) + 6.0f) +
-                    tinyH + (reachBeside ? 0.0f : tinyH + 2.0f) +
-                    (blockedLine.empty() ? 0.0f : noteHeight(midW, blockedLine.c_str()) + 4.0f);
-                // The action column: the key, then the INSTALL word beneath it
-                // and the running state word beneath that - each ONE LINE,
-                // drawn smaller to fit the column, and wrapped only when even
-                // the smaller word cannot hold it (storeStatusWordFit). A word
-                // running out over the card's edge is worse than a smaller
-                // word, and a word broken in half - "PAIGALDAMAT / A", which
-                // is what wrapping at full size did - is worse than both.
-                const char* stateWord = moduleStateWord(p);  // already translated
-                const float stateWordW = storeStatusWordRoom();
-                const LineFit instFit = storeStatusWordFit(instWord);
-                const LineFit stateFit = storeStatusWordFit(stateWord);
-                const float instH = fittedLineHeight(uf, tiny, instWord, stateWordW, instFit);
-                const float stateH = fittedLineHeight(uf, tiny, stateWord, stateWordW, stateFit);
-                const float actH = kKeyH + 8.0f + instH + 6.0f + stateH;
-                const float cardH = std::max(rowsH, actH) + kCardPad * 2.0f;
-
-                const ImVec2 cTL = ImGui::GetCursorScreenPos();
-                const ImVec2 cBR(cTL.x + cw, cTL.y + cardH);
-
-                ImGui::PushID(idx);
-                ImGui::SetCursorScreenPos(cTL);
-                // THE WHOLE ROW SELECTS, AND THE KEY ON IT STILL WORKS. Without
-                // AllowOverlap the card's hit area claims the hover first and
-                // every key drawn inside it afterwards is dead - the button is
-                // visibly there, takes the pointer, and does nothing.
-                ImGui::SetNextItemAllowOverlap();
-                if (ImGui::InvisibleButton("##card", ImVec2(cw, cardH))) {
-                    deck.selected = idx;
-                    deck.legalAck = false;
-                }
-                const bool hovered = ImGui::IsItemHovered();
-
-                cdl->AddRectFilled(cTL, cBR, isSel ? theme::kEnamel : theme::kWell,
-                                   theme::kKeyRounding);
-                cdl->AddRect(cTL, cBR,
-                             isSel ? theme::kBrassBright
-                                   : theme::withAlpha(theme::kBrassDark,
-                                                      hovered ? 1.0f : 0.75f),
-                             theme::kKeyRounding, 0, theme::kHairline);
-                if (isSel) {
-                    // The selected row is picked out with a rust bar, which is
-                    // the one place rust is not trouble: it is the cursor, not
-                    // a reading and not a fault.
-                    cdl->AddRectFilled(cTL, ImVec2(cTL.x + 3.0f, cBR.y), theme::kAlarm);
-                }
-
-                // --- the kind tag ------------------------------------------
-                {
-                    const ImVec2 tTL(cTL.x + kCardPad, cTL.y + kCardPad);
-                    const ImVec2 tBR(tTL.x + kTagW,
-                                     tTL.y + faceH(uf, fonts::tinyPx()) + 6.0f);
-                    cdl->AddRectFilled(tTL, tBR, theme::kBrassBright, 1.0f);
-                    addBenchBevel(cdl, tTL, tBR, 1.0f, true);
-                    const char* tag = moduleKindTag(p);
-                    // THE CHIP KEEPS THE TINY FACE and moduleKindTagWidth's own
-                    // measurement, because it is SHARED with the FITTED MODULES
-                    // window: one chip drawn two sizes in two windows is exactly
-                    // the inconsistency that function was written to end. It is
-                    // a category label on metal, not a sentence.
-                    cdl->AddText(uf, fonts::tinyPx(),
-                                 ImVec2((tTL.x + tBR.x) * 0.5f -
-                                            textW(uf, fonts::tinyPx(), tag) * 0.5f,
-                                        tTL.y + 3.0f),
-                                 theme::kEnamel, tag);
-                }
-
-                const float mx = cTL.x + kCardPad + kTagW + kCardPad;
-                float my = cTL.y + kCardPad;
-                // WRAPPED, NOT CLIPPED. midW is the same width the card's
-                // height was measured from, so what is drawn and what was
-                // measured cannot disagree - and a name too long for one line
-                // takes a second rather than being cut mid-word.
-                cdl->AddText(lf, uiPx, ImVec2(mx, my), isSel ? theme::kIvory : theme::kCream,
-                             nameText, nullptr, midW);
-                my += rowNameH + 3.0f;
-                {
-                    // THE VERSION AND THE INSTALL STATE, on their own line and
-                    // at the page's own size. Both used to be squeezed onto the
-                    // end of the name line in the smallest engraving the
-                    // application has, and both are what a user is actually
-                    // scanning the list for.
-                    float vx = mx;
-                    if (!p.version.empty()) {
-                        cdl->AddText(rf, tiny, ImVec2(vx, my + idLineH - faceH(rf, tiny)),
-                                     theme::kAmber, p.version.c_str());
-                        vx += textW(rf, tiny, p.version.c_str()) + 16.0f;
-                    }
-                    cdl->AddText(uf, tiny, ImVec2(vx, my + idLineH - tinyH),
-                                 storeInstallColour(instState), instWord);
-                }
-                my += idLineH + 6.0f;
-                if (!rowText.empty()) {
-                    cdl->AddText(uf, tiny, ImVec2(mx, my), theme::kCream, rowText.c_str(),
-                                 nullptr, midW);
-                    my += wrapH(uf, tiny, midW, rowText.c_str()) + 6.0f;
-                }
-                {
-                    // Maker and licence on the ROW, not only on the plate: the
-                    // terms a module arrives under are part of choosing it,
-                    // not a detail to discover after fitting.
-                    // MUTED, NOT FAINT. This line is the maker and the licence
-                    // - the terms the module arrives under - and the comment
-                    // above says why they are on the row at all. A line worth
-                    // putting there is a line worth being able to read.
-                    cdl->AddText(uf, tiny, ImVec2(mx, my),
-                                 p.licence.empty() ? theme::kGold : theme::kInkMuted, foot.c_str());
-                    if (reachBeside) {
-                        cdl->AddText(uf, tiny,
-                                     ImVec2(mx + textW(uf, tiny, foot.c_str()) + 14.0f, my),
-                                     moduleReachColour(p), reach.c_str());
-                        my += tinyH;
-                    } else {
-                        cdl->AddText(uf, tiny, ImVec2(mx, my + tinyH + 2.0f),
-                                     moduleReachColour(p), reach.c_str());
-                        my += tinyH + tinyH + 2.0f;
-                    }
-                }
-                if (!blockedLine.empty()) {
-                    // BESIDE THE KEY THAT REFUSED, on the same row, in the
-                    // same words the plate uses for the same fact. Gold, not
-                    // rust: a module this machine cannot fit is not a fault,
-                    // it is a thing to read.
-                    my += 4.0f;
-                    drawNote(cdl, ImVec2(mx, my), midW, theme::kGold, blockedLine.c_str());
-                }
-
-                // --- the action key and the running lamp --------------------
-                {
-                    const float ax = cBR.x - kCardPad - kActW;
-                    const float ay = cTL.y + kCardPad;
-                    const bool hasUpdate = !sm.updateToVersion.empty();
-                    if (!p.fitted) {
-                        if (drawDeckKey(cdl, ImVec2(ax, ay), ImVec2(ax + kActW, ay + kKeyH),
-                                        tr("FIT"), nullptr, sm.blockedReason.empty(), "fit")) {
-                            fitIndex_ = idx;
-                        }
-                    } else if (hasUpdate) {
-                        if (drawDeckKey(cdl, ImVec2(ax, ay), ImVec2(ax + kActW, ay + kKeyH),
-                                        tr("UPDATE"), nullptr, !model.busy, "upd")) {
-                            updateIndex_ = idx;
-                        }
-                    } else {
-                        // NO REMOVE AND NO STOP HERE, deliberately. This window
-                        // is the catalogue; running, stopping and removing a
-                        // fitted module belong to the FITTED MODULES window, and
-                        // two windows offering the same control is how they come
-                        // to disagree about what it did.
-                        drawDeckKey(cdl, ImVec2(ax, ay), ImVec2(ax + kActW, ay + kKeyH),
-                                    tr("FITTED"), nullptr, false, "fitted");
-                    }
-                    // THE STATE WORD AND ITS LAMP, from the shared component,
-                    // so this row and the plate beside it cannot describe one
-                    // module two ways - and so neither of them says RUNNING,
-                    // which this side has no way to test. STARTED is what is
-                    // known here; whether anything reaches the module is the
-                    // FITTED MODULES window's answer, and it is handed the
-                    // runner and the receiver to give it.
-                    //
-                    // THE INSTALL WORD GOES FIRST, directly under the key, in
-                    // the theme's own ink for that state: it answers the
-                    // question this window is FOR ("have I got this, and is it
-                    // current"), and the running state below answers a
-                    // different one.
-                    float ly = ay + kKeyH + 8.0f;
-                    addFittedLine(cdl, uf, tiny, ImVec2(ax, ly), storeInstallColour(instState),
-                                  instWord, stateWordW, instFit);
-                    ly += instH + 6.0f;
-                    const ImVec2 lampC(ax + 6.0f, ly + tinyH * 0.5f);
-                    drawBenchLamp(cdl, lampC, 4.5f, moduleStateColour(p),
-                                  moduleStateLampLit(p), nullptr);
-                    addFittedLine(cdl, uf, tiny, ImVec2(lampC.x + 9.0f, ly), moduleStateColour(p),
-                                  stateWord, stateWordW, stateFit);
-                }
-                ImGui::PopID();
-                ImGui::SetCursorScreenPos(ImVec2(cTL.x, cBR.y + 10.0f));
-                ImGui::Dummy(ImVec2(cw, 0.0f));
+        const float lineLeft = ux + uw + 18.0f * k;
+        const float room = rightEdge - lineLeft;
+        if (room > 40.0f) {
+            const std::string shown = ellipsize(uf, upx, line.text.c_str(), room);
+            const float lw = textW(uf, upx, shown.c_str());
+            const ImVec2 lat(rightEdge - lw, cy - faceH(uf, upx) * 0.5f);
+            dl->AddText(uf, upx, lat, line.tone == StoreLineTone::Amber ? theme::kAmber : theme::kInkMuted,
+                        shown.c_str());
+            if (shown != line.text && ImGui::IsMouseHoveringRect(lat, ImVec2(lat.x + lw, lat.y + faceH(uf, upx)))) {
+                ImGui::SetTooltip("%s", line.text.c_str());
             }
         }
-        ImGui::EndChild();
+        if (line.cached && census::enabled()) { census::note("store:catalogue:cache"); }
     }
 
-    // ---- the data plate -----------------------------------------------------
+    // ======================= THE BODY ================================================
+    const float bodyH = std::max(40.0f, height - barH);
+    ImGui::SetCursorScreenPos(ImVec2(origin.x, origin.y + barH));
+    const bool onPage = pageIdx >= 0;
+    const char* childId = onPage ? "##storepage" : (deck.tab == 0 ? "##storelist" : "##storeupdates");
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, theme::vec(theme::kWell));
+    ImGui::BeginChild(childId, ImVec2(width, bodyH), ImGuiChildFlags_None, ImGuiWindowFlags_None);
+    ImGui::PopStyleColor();
     {
-        const ImVec2 tl(bodyTL.x + listW + kGap, bodyTL.y);
-        const ImVec2 br(tl.x + plateW, tl.y + bodyH);
-        addDeckWell(dl, tl, br);
-        float y = tl.y + kPad;
-        dl->AddText(lf, uiPx, ImVec2(tl.x + kPad, y), theme::kIvory, tr("DATA PLATE"));
-        y += nameH + 6.0f;
-        addBenchRail(dl, tl.x + kPad, br.x - kPad, y);
-        y += 8.0f;
+        ImDrawList* cdl = ImGui::GetWindowDrawList();
+        const ImVec2 co = ImGui::GetCursorScreenPos();
+        const float availW = ImGui::GetContentRegionAvail().x;
+        const float contentW = std::max(300.0f, availW - 2.0f * pad);
+        const float x0 = co.x + pad;
+        float y = co.y + pad;
 
-        const float childH = br.y - y - kPad;
-        ImGui::SetCursorScreenPos(ImVec2(tl.x + kPad, y));
-        ImGui::BeginChild("##plate", ImVec2(plateW - kPad * 2.0f, std::max(40.0f, childH)),
-                          ImGuiChildFlags_None, ImGuiWindowFlags_NoBackground);
-        {
-            ImDrawList* pdl = ImGui::GetWindowDrawList();
-            const float pw = std::max(120.0f, ImGui::GetContentRegionAvail().x);
-            if (deck.selected < 0 ||
-                deck.selected >= static_cast<int>(model.modules.size())) {
-                const char* none = "";
-                switch (catState) {
-                    case CatalogueState::NeverAsked:
-                        none = tr("Nothing to describe yet. Press CHECK NOW to read the "
-                                  "catalogue.");
+        // THE INSTALL ERROR, wherever the user is: a GET on a card that fails must not
+        // be silent. (The page shows it under its own key as well.)
+        const auto nameOf = [&](const std::string& id) {
+            for (const StoreModule& sm : model.modules) {
+                if (sm.id == id) { return sm.plate.name; }
+            }
+            return std::string();
+        };
+        const auto drawError = [&]() {
+            // A CATALOGUE THAT LOADED WITH A WARNING (it could not be kept for the next
+            // start, its version policy could not be saved): the list is real, and so is
+            // the reason, verbatim.
+            if (model.haveCatalogue && !model.refreshFailed && !model.sourceError.empty()) {
+                cdl->AddText(uf, upx, ImVec2(x0, y), theme::kAmber, model.sourceError.c_str(), nullptr, contentW);
+                y += wrapH(uf, upx, contentW, model.sourceError.c_str()) + 10.0f * k;
+            }
+            if (model.resultError.empty() || onPage) { return; }
+            const std::string who = nameOf(model.resultId);
+            const std::string text = (who.empty() ? std::string() : who + ": ") + trStoredReason(model.resultError);
+            cdl->AddText(uf, upx, ImVec2(x0, y), theme::kAlarmHot, text.c_str(), nullptr, contentW);
+            if (census::enabled()) { census::note("store:error:", model.resultId); }
+            y += wrapH(uf, upx, contentW, text.c_str()) + 10.0f * k;
+        };
+
+        const CatalogueState cs = catalogueState(model);
+        const auto drawEmptyState = [&]() {
+            std::string why;
+            ImU32 col = theme::kInkMuted;
+            switch (cs) {
+                case CatalogueState::NeverAsked:
+                    why = tr("No catalogue has been read yet. Press CHECK NOW above and this "
+                             "application asks the source once.");
+                    break;
+                case CatalogueState::Failed:
+                    why = std::string(tr("The catalogue could not be read:")) + " " + model.sourceError;
+                    col = theme::kAlarmHot;
+                    break;
+                case CatalogueState::ReadEmpty:
+                    why = tr("The catalogue was read and it lists no plugins.");
+                    break;
+                case CatalogueState::Read:
+                    why = tr("No plugin matches that search.");
+                    break;
+            }
+            cdl->AddText(uf, prose(), ImVec2(x0, y + 10.0f * k), col, why.c_str(), nullptr, contentW);
+            y += 10.0f * k + wrapH(uf, prose(), contentW, why.c_str()) + 10.0f * k;
+        };
+
+        if (onPage) {
+            // ================= THE PLUGIN PAGE ======================================
+            const StoreModule& sm = model.modules[static_cast<std::size_t>(pageIdx)];
+            const ModulePlate& p = sm.plate;
+            // "< BROWSE"
+            {
+                const char* bl = tr("< BROWSE");
+                const float bw = chassisKeyWidth(bl);
+                const float bh = outlineKeyHeight();
+                KeyRect br;
+                if (drawChassisKey(cdl, ImVec2(x0, y), ImVec2(x0 + bw, y + bh), bl, true, "back", &br)) {
+                    deck.pageId.clear();
+                    deck.tab = 0;
+                    if (census::enabled()) { census::note("store:page:closed:", "back"); }
+                }
+                censusRect("store:page:back", br.tl.x, br.tl.y, br.br.x, br.br.y);
+                y += bh + 14.0f * k;
+            }
+            if (census::enabled()) { census::note("store:page:", sm.id); }
+            // THE PAGE COLUMN GROWS WITH THE WINDOW: all of it less the margins, up to 1180 px, so the
+            // pictures' strip shows about two frames in a 1480 px window and one and a half in 1234.
+            const float colW = std::min(contentW, 1180.0f * k);
+            // ---- the header -------------------------------------------------------
+            StoreKeyIn kin;
+            kin.busyId = model.busyId;
+            kin.busyAny = model.busy;
+            kin.onPage = true;
+            kin.noticeTicked = deck.legalAck;
+            const StoreKey key = storeKeyFor(sm, kin);
+            const float gb = 96.0f * k;
+            const float hpad = 16.0f * k;
+            const std::string meta = storeHeaderMeta(sm, model.hostPlatform);
+            const float namePx = prose() * 1.45f;
+            const float keyW2 = cardKeyWidth() + 20.0f * k;
+            const float textColW = std::max(80.0f, colW - hpad * 3.0f - gb - keyW2 - 10.0f * k);
+            const float nameH = wrapH(uf, namePx, textColW, p.name.c_str());
+            const float metaH = wrapH(uf, upx, textColW, meta.c_str());
+            const float badgeRowH = (p.experimental || storeBuildBadge(sm)[0] != '\0') ? badgeHeight() + 6.0f * k : 0.0f;
+            const float headH = std::max(gb + hpad * 2.0f, hpad * 2.0f + nameH + 4.0f * k + metaH + badgeRowH);
+            const ImVec2 htl(x0, y), hbr(x0 + colW, y + headH);
+            cdl->AddRectFilled(htl, hbr, theme::kEnamelDark);
+            cdl->AddRect(htl, hbr, theme::withAlpha(theme::kBrassDark, 0.9f), 0.0f, 0, 1.0f);
+            const ImVec2 gtl(htl.x + hpad, htl.y + (headH - gb) * 0.5f);
+            cdl->AddRectFilled(gtl, ImVec2(gtl.x + gb, gtl.y + gb), theme::kVoid);
+            cdl->AddRect(gtl, ImVec2(gtl.x + gb, gtl.y + gb), theme::kBrassDark, 0.0f, 0, 1.0f);
+            drawCategoryGlyph(cdl, ImVec2(gtl.x + 2.0f, gtl.y + 2.0f), gb - 4.0f, p.category,
+                              theme::kPhosphor, 1.6f * (gb - 4.0f) / 56.0f);
+            float hy = htl.y + hpad;
+            const float tx = gtl.x + gb + hpad;
+            cdl->AddText(uf, namePx, ImVec2(tx, hy), theme::kIvory, p.name.c_str(), nullptr, textColW);
+            hy += nameH + 4.0f * k;
+            cdl->AddText(uf, upx, ImVec2(tx, hy), theme::kInkMuted, meta.c_str(), nullptr, textColW);
+            hy += metaH + 6.0f * k;
+            {
+                float bx = tx;
+                if (p.experimental) {
+                    drawBadge(cdl, ImVec2(bx, hy), storeExperimentalBadge(), theme::kAmber);
+                    bx += badgeWidth(storeExperimentalBadge()) + 5.0f * k;
+                }
+                const char* bb = storeBuildBadge(sm);
+                if (bb[0] != '\0') { drawBadge(cdl, ImVec2(bx, hy), bb, theme::kInkMuted); }
+            }
+            // the ONE key, at the right
+            {
+                const float kw = cardKeyWidth() + 20.0f * k;
+                const float kh = outlineKeyHeight() + 6.0f * k;
+                const ImVec2 ktl(hbr.x - hpad - kw, htl.y + (headH - kh) * 0.5f);
+                const ImVec2 kbr(ktl.x + kw, ktl.y + kh);
+                const std::string why = (!key.enabled && !key.reason.empty()) ? trStoredReason(key.reason)
+                                                                               : std::string();
+                const char* word = storeKeyLabel(key.kind);
+                bool pressed = false;
+                switch (key.kind) {
+                    case StoreKeyKind::Get:
+                        pressed = drawOutlineKey(cdl, ktl, kbr, word, theme::kPhosphor, key.enabled, "pagekey",
+                                                 why.c_str());
+                        if (pressed) { fitIndex_ = pageIdx; }
                         break;
-                    case CatalogueState::Failed:
-                        none = tr("Nothing to describe: the last check did not return a "
-                                  "catalogue. Its reason is under CATALOGUE SOURCE.");
+                    case StoreKeyKind::Update: {
+                        const std::string ft = storeFromTo(sm.installedVersion, sm.updateToVersion.empty()
+                                                                                    ? p.version
+                                                                                    : sm.updateToVersion);
+                        ImFont* rf = fonts::ui();
+                        const float rpx = fonts::tinyPx() * 1.25f;
+                        const float rw = textW(rf, rpx, ft.c_str());
+                        cdl->AddText(rf, rpx, ImVec2(ktl.x - 12.0f * k - rw, ktl.y + (kh - faceH(rf, rpx)) * 0.5f),
+                                     theme::kAmber, ft.c_str());
+                        pressed = drawOutlineKey(cdl, ktl, kbr, word, theme::kAmber, key.enabled, "pagekey",
+                                                 why.c_str());
+                        if (pressed) { updateIndex_ = pageIdx; }
                         break;
-                    case CatalogueState::ReadEmpty:
-                        none = tr("Nothing to describe: the catalogue was read and it lists "
-                                  "no modules.");
+                    }
+                    case StoreKeyKind::Fitting:
+                        ImGui::PushID("pagekey");
+                        ImGui::SetCursorScreenPos(ktl);
+                        ImGui::InvisibleButton("##fitting", ImVec2(kbr.x - ktl.x, kbr.y - ktl.y));
+                        ImGui::PopID();
+                        cdl->AddRect(ktl, kbr, theme::kPhosphorDim, 2.0f, 0, 1.0f);
+                        drawKeyWord(cdl, ktl, kbr, word, theme::kPhosphor);
+                        drawFittingLine(cdl, ktl, kbr, model.progress);
                         break;
-                    case CatalogueState::Read:
-                        none = tr("Nothing selected. Pick a module on the left and its "
-                                  "plate is drawn here.");
+                    case StoreKeyKind::Installed:
+                        ImGui::PushID("pagekey");
+                        ImGui::SetCursorScreenPos(ktl);
+                        ImGui::InvisibleButton("##installed", ImVec2(kbr.x - ktl.x, kbr.y - ktl.y));
+                        ImGui::PopID();
+                        drawKeyWord(cdl, ktl, kbr, word, theme::kInkMuted);
                         break;
                 }
-                drawNote(pdl, ImGui::GetCursorScreenPos(), pw - 6.0f, theme::kInkMuted,
-                         none);
-                ImGui::Dummy(ImVec2(pw, noteHeight(pw - 6.0f, none)));
-            } else {
-                const StoreModule& sm =
-                    model.modules[static_cast<std::size_t>(deck.selected)];
-                const ImVec2 at = ImGui::GetCursorScreenPos();
-                const float h = drawModuleDataPlate(pdl, at, pw - 6.0f, sm.plate);
-                ImGui::SetCursorScreenPos(ImVec2(at.x, at.y + h + 10.0f));
+                censusRect("store:page:key", ktl.x, ktl.y, kbr.x, kbr.y);
+                if (census::enabled()) {
+                    census::note("store:key:", sm.id + ":" + storeKeyCensusState(key));
+                    // The PAGE's own key state, apart from the card's: "greyed before the tick, get
+                    // after" is a statement about this key and no other.
+                    census::note("store:page:key:", storeKeyCensusState(key));
+                }
+            }
+            y = hbr.y;
+            // THE INSTALL REPORT AND ERROR, directly UNDER the header (and its key) of the plugin they
+            // concern and of no other: PluginRepo's own words, verbatim - a sha256 mismatch names both
+            // digests, and paraphrasing it would throw away the only evidence the user has.
+            if (model.resultId == sm.id) {
+                const std::string& txt = model.resultError.empty() ? model.resultReport : model.resultError;
+                if (!txt.empty()) {
+                    const std::string shown = model.resultError.empty() ? txt : trStoredReason(txt);
+                    y += 10.0f * k;
+                    cdl->AddText(uf, upx, ImVec2(x0, y), model.resultError.empty() ? theme::kPhosphor : theme::kAlarmHot,
+                                 shown.c_str(), nullptr, colW);
+                    y += wrapH(uf, upx, colW, shown.c_str());
+                    if (census::enabled()) {
+                        census::note("store:page:result:", model.resultError.empty() ? "report" : "error");
+                    }
+                }
+            }
+            y += 22.0f * k;
+            ImGui::SetCursorScreenPos(ImVec2(x0, y));
+            ImGui::Dummy(ImVec2(1.0f, 1.0f));
 
-                // --- the acknowledgement gate, then the key -----------------
-                if (!sm.plate.legalNotice.empty() && !sm.plate.fitted) {
+            // ---- the body: the shared renderer -------------------------------------
+            ModulePageIn in;
+            in.census = "store";
+            in.id = sm.id;
+            in.plate = &p;
+            in.pictures = &sm.pictures;
+            in.catalogued = true;
+            in.noticeBox = !p.legalNotice.empty() && sm.install == StoreInstallKind::NotInstalled;
+            in.noticeTick = &deck.legalAck;
+            in.width = colW;
+            in.glyphCategory = p.category.c_str();
+            ImGui::SetCursorScreenPos(ImVec2(x0, y));
+            drawModulePageBody(in, deck.page, pictures_);
+            y = ImGui::GetCursorScreenPos().y;
+        } else if (deck.tab == 0) {
+            // ================= BROWSE ================================================
+            drawError();
+            const std::vector<StoreSection> sections = storeBrowseSections(model, query);
+            if (sections.empty()) {
+                drawEmptyState();
+            }
+            const int cols = storeColumnsFor(width);
+            const float gapX = 14.0f * k, gapY = 12.0f * k;
+            const float cardW = (contentW - gapX * static_cast<float>(cols - 1)) / static_cast<float>(cols);
+            const float cardH = cardHeight();
+            StoreKeyIn kin;
+            kin.busyId = model.busyId;
+            kin.busyAny = model.busy;
+            for (const StoreSection& sec : sections) {
+                const float hh = drawSectionHeading(cdl, ImVec2(x0, y), contentW, storeCategoryHeading(sec.category));
+                if (census::enabled()) {
+                    census::note("store:section:", storeCategoryCensusName(sec.category));
+                    census::rect(std::string("store:section:") + storeCategoryCensusName(sec.category), x0, y,
+                                 x0 + contentW, y + hh);
+                }
+                y += hh;
+                for (std::size_t i = 0; i < sec.modules.size(); ++i) {
+                    const int mi = sec.modules[i];
+                    const StoreModule& sm = model.modules[static_cast<std::size_t>(mi)];
+                    const int col = static_cast<int>(i) % cols;
+                    const int row = static_cast<int>(i) / cols;
+                    const ImVec2 ctl(x0 + static_cast<float>(col) * (cardW + gapX),
+                                     y + static_cast<float>(row) * (cardH + gapY));
+                    const StoreKey key = storeKeyFor(sm, kin);
+                    const CardResult r = drawCard(cdl, sm, key, ctl, cardW, cardH, model.progress);
+                    if (r.openPage) {
+                        deck.pageId = sm.id;
+                        deck.tab = 0;
+                    }
+                    if (r.keyPressed) {
+                        if (key.kind == StoreKeyKind::Get) {
+                            if (key.opensPage) {
+                                deck.pageId = sm.id;
+                            } else {
+                                fitIndex_ = mi;
+                            }
+                        } else if (key.kind == StoreKeyKind::Update) {
+                            updateIndex_ = mi;
+                        }
+                    }
+                }
+                const int rows = (static_cast<int>(sec.modules.size()) + cols - 1) / cols;
+                y += static_cast<float>(rows) * (cardH + gapY) + 10.0f * k;
+            }
+
+            // ---- GET EVERYTHING, at the foot ---------------------------------------
+            if (!model.modules.empty() && query.empty()) {
+                y += 8.0f * k;
+                cdl->AddLine(ImVec2(x0, y), ImVec2(x0 + contentW, y), theme::withAlpha(theme::kBrassDark, 0.8f), 1.0f);
+                y += 16.0f * k;
+                const AddAllPlan plan = planAddAll(model, deck.addAllAck);
+                int noticeModules = 0;
+                std::string noticeNames;
+                for (const StoreModule& sm : model.modules) {
+                    if (sm.install != StoreInstallKind::NotInstalled || sm.plate.fitted || sm.plate.legalNotice.empty()) { continue; }
+                    if (!sm.blockedReasonIfAcknowledged.empty()) { continue; }
+                    ++noticeModules;
+                    if (!noticeNames.empty()) { noticeNames += ", "; }
+                    noticeNames += sm.plate.name.empty() ? tr("(unnamed module)") : sm.plate.name;
+                }
+                const char* gl = tr("GET EVERYTHING");
+                const float kw = outlineKeyWidth(gl) + 16.0f * k;
+                const float kh = outlineKeyHeight() + 6.0f * k;
+                const bool enabled = plan.blockedReason.empty() && !model.addAllRunning;
+                KeyRect kr;
+                if (drawOutlineKey(cdl, ImVec2(x0, y), ImVec2(x0 + kw, y + kh), gl, theme::kInkMuted, enabled,
+                                   "geteverything",
+                                   enabled ? nullptr : trStoredReason(plan.blockedReason).c_str(), &kr)) {
+                    addAll_ = true;
+                }
+                censusRect("store:geteverything", kr.tl.x, kr.tl.y, kr.br.x, kr.br.y);
+                // the note beside it
+                std::string lead;
+                ImU32 lcol = theme::kInkMuted;
+                if (model.addAllRunning) {
+                    lead = model.addAllProgress.empty()
+                               ? std::string(tr("Working through the catalogue, one module at a time."))
+                               : model.addAllProgress;
+                    lcol = theme::kGold;
+                } else if (!plan.blockedReason.empty()) {
+                    lead = cascade::core::formatText(tr("Cannot add all: %s"),
+                                                     trStoredReason(plan.blockedReason).c_str());
+                } else {
+                    lead = cascade::core::formatText(
+                        tr("%d to fetch and %d to update, one after another. Each is fetched over "
+                           "https and refused unless its bytes hash to the sha256 the catalogue "
+                           "published - the same gate a single GET goes through. A module that "
+                           "fails does not stop the rest."),
+                        static_cast<int>(plan.install.size()), static_cast<int>(plan.update.size()));
+                }
+                const float nx = x0 + kw + 18.0f * k;
+                const float nw = std::max(120.0f, contentW - kw - 18.0f * k);
+                cdl->AddText(uf, upx, ImVec2(nx, y), lcol, lead.c_str(), nullptr, nw);
+                float ny = y + wrapH(uf, upx, nw, lead.c_str());
+                if (!model.addAllRunning && noticeModules > 0) {
+                    const std::string skip = cascade::core::formatText(
+                        tr("%d of these carry a legal notice from their maker: %s. Each notice is "
+                           "on that plugin's page."),
+                        noticeModules, noticeNames.c_str());
+                    ny += 6.0f * k;
+                    cdl->AddText(uf, upx, ImVec2(nx, ny), theme::kGold, skip.c_str(), nullptr, nw);
+                    ny += wrapH(uf, upx, nw, skip.c_str()) + 6.0f * k;
+                    // THE COMBINED TICK: one consent covering every notice in the run.
+                    const std::string ack = cascade::core::formatText(
+                        noticeModules == 1 ? tr("I accept the %d legal notice on its plugin's page")
+                                           : tr("I accept the %d legal notices on their plugins' pages"),
+                        noticeModules);
+                    ImGui::SetCursorScreenPos(ImVec2(nx, ny));
                     ImGui::PushStyleColor(ImGuiCol_Text, theme::vec(theme::kCream));
-                    // See the note beside the other PushFont(uf, uiPx / ...)
-                    // call in this file: uiPx already carries the live scale.
-                    ImGui::PushFont(uf, uiPx / cascade::gui::uiscale::factor());
-                    ImGui::Checkbox(
-                        trId("I have read the notice above and accept responsibility"),
-                        &deck.legalAck);
+                    ImGui::PushFont(uf, upx / uiscale::factor());
+                    ImGui::Checkbox(ack.c_str(), &deck.addAllAck);
+                    const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+                    censusRect("store:geteverything:tick", a.x, a.y, b.x, b.y);
                     ImGui::PopFont();
                     ImGui::PopStyleColor();
+                    ny = b.y + 6.0f * k;
                 }
-
-                const ImVec2 kTL = ImGui::GetCursorScreenPos();
-                const bool hasUpdate = !sm.updateToVersion.empty();
-                // The gate the DESKTOP already applies, plus this window's own
-                // acknowledgement. blockedReason comes from the one predicate
-                // the existing button uses, so the sentence under this key and
-                // the key itself cannot disagree.
-                std::string blocked = sm.blockedReason;
-                if (blocked.empty() && !sm.plate.legalNotice.empty() && !sm.plate.fitted &&
-                    !deck.legalAck) {
-                    // The predicate's own English words, translated with the
-                    // rest where the sentence is drawn below.
-                    blocked = FOX_TR_NOOP("the legal notice must be acknowledged first");
+                if (!model.addAllSummary.empty()) {
+                    ny += 4.0f * k;
+                    cdl->AddText(uf, upx, ImVec2(nx, ny), model.addAllFailed ? theme::kAlarmHot : theme::kPhosphor,
+                                 model.addAllSummary.c_str(), nullptr, nw);
+                    ny += wrapH(uf, upx, nw, model.addAllSummary.c_str());
                 }
-                if (!sm.plate.fitted) {
-                    if (drawDeckKey(pdl, kTL, ImVec2(kTL.x + pw - 6.0f, kTL.y + kPlateKeyH),
-                                    tr("FIT MODULE"), nullptr, blocked.empty(), "platefit")) {
-                        fitIndex_ = deck.selected;
-                    }
-                } else if (hasUpdate) {
-                    std::string to;
-                    cascade::core::formatUtf8(to, tr("TO v%s"), sm.updateToVersion.c_str());
-                    if (drawDeckKey(pdl, kTL, ImVec2(kTL.x + pw - 6.0f, kTL.y + kPlateKeyH),
-                                    tr("UPDATE MODULE"), to.c_str(), !model.busy, "plateupd")) {
-                        updateIndex_ = deck.selected;
-                    }
-                } else {
-                    drawDeckKey(pdl, kTL, ImVec2(kTL.x + pw - 6.0f, kTL.y + kPlateKeyH),
-                                tr("ALREADY FITTED"), nullptr, false, "platefitted");
-                }
-                ImGui::SetCursorScreenPos(ImVec2(kTL.x, kTL.y + kPlateKeyH + 8.0f));
-                ImGui::Dummy(ImVec2(pw, 0.0f));
-
-                float ny = kTL.y + kPlateKeyH + 8.0f;
-                if (!blocked.empty() && !sm.plate.fitted) {
-                    // A DEAD KEY ALWAYS SAYS WHY. A greyed control with no
-                    // sentence beside it is the fault this whole redesign
-                    // exists to remove.
-                    const std::string shownWhy = trStoredReason(blocked);
-                    const char* whyFmt = tr("Cannot fit: %s");
-                    std::vector<char> whyBuf(shownWhy.size() + std::strlen(whyFmt) + 8);
-                    std::snprintf(whyBuf.data(), whyBuf.size(), whyFmt, shownWhy.c_str());
-                    const std::string why = whyBuf.data();
-                    drawNote(pdl, ImVec2(kTL.x, ny), pw - 6.0f, theme::kGold, why.c_str());
-                    ny += noteHeight(pw - 6.0f, why.c_str()) + 8.0f;
-                } else if (sm.plate.fitted && !hasUpdate) {
-                    const char* note =
-                        tr("Fitted. Starting, stopping and removing it are on the FITTED "
-                           "MODULES window - this one is the catalogue.");
-                    drawNote(pdl, ImVec2(kTL.x, ny), pw - 6.0f, theme::kPhosphor, note);
-                    ny += noteHeight(pw - 6.0f, note) + 8.0f;
-                }
-                if (!model.resultError.empty()) {
-                    // PluginRepo's own words. A sha256 mismatch names both
-                    // digests, and paraphrasing it would throw away the only
-                    // evidence the user has that the bytes were not the bytes
-                    // the catalogue vouched for.
-                    //
-                    // The refusals the store itself makes ("already
-                    // installed", a notice not yet accepted) come through
-                    // here as well, in English, and are drawn translated;
-                    // PluginRepo's own sentences are not in any catalogue and
-                    // come back exactly as written.
-                    const std::string resultError = trStoredReason(model.resultError);
-                    drawNote(pdl, ImVec2(kTL.x, ny), pw - 6.0f, theme::kAlarm,
-                             resultError.c_str());
-                    ny += noteHeight(pw - 6.0f, resultError.c_str()) + 8.0f;
-                }
-                if (!model.resultReport.empty()) {
-                    drawNote(pdl, ImVec2(kTL.x, ny), pw - 6.0f, theme::kPhosphor,
-                             model.resultReport.c_str());
-                    ny += noteHeight(pw - 6.0f, model.resultReport.c_str()) + 8.0f;
-                }
-                ImGui::SetCursorScreenPos(ImVec2(kTL.x, ny));
-                ImGui::Dummy(ImVec2(pw, 0.0f));
+                y = std::max(y + kh, ny) + 24.0f * k;
             }
+        } else {
+            // ================= UPDATES ===============================================
+            drawError();
+            const std::vector<int> rows = storeUpdateRows(model, query);
+            const bool haveRows = updateCount > 0;
+            // The heading, with UPDATE ALL at its right.
+            {
+                const char* heading = haveRows ? tr("UPDATES AVAILABLE") : tr("NO UPDATES");
+                const char* ua = tr("UPDATE ALL");
+                const float uw = outlineKeyWidth(ua) + 8.0f * k;
+                const float uh = outlineKeyHeight();
+                const float hh = drawSectionHeading(cdl, ImVec2(x0, y), haveRows ? contentW - uw - 14.0f * k : contentW,
+                                                    heading);
+                if (haveRows) {
+                    const AddAllPlan plan = planAddAll(model, false);
+                    const bool enabled = !model.busy && !model.addAllRunning && !plan.update.empty() && model.haveCatalogue;
+                    KeyRect kr;
+                    if (drawOutlineKey(cdl, ImVec2(x0 + contentW - uw, y - 4.0f * k), ImVec2(x0 + contentW, y - 4.0f * k + uh),
+                                       ua, theme::kAmber, enabled, "updateall",
+                                       enabled ? nullptr : tr("a transfer is already in progress"), &kr)) {
+                        updateAll_ = true;
+                    }
+                    censusRect("store:updateall", kr.tl.x, kr.tl.y, kr.br.x, kr.br.y);
+                }
+                y += std::max(hh, uh) + 4.0f * k;
+            }
+            if (!model.haveCatalogue) {
+                drawEmptyState();
+            }
+            const float rowH = std::max(64.0f * k, prose() + upx + 28.0f * k);
+            StoreKeyIn kin;
+            kin.busyId = model.busyId;
+            kin.busyAny = model.busy;
+            const ImVec2 listTL(x0, y);
+            for (std::size_t ri = 0; ri < rows.size(); ++ri) {
+                const int mi = rows[ri];
+                const StoreModule& sm = model.modules[static_cast<std::size_t>(mi)];
+                const ImVec2 rtl(x0, y), rbr(x0 + contentW, y + rowH);
+                cdl->AddRectFilled(rtl, rbr, theme::kEnamelDark);
+                if (ri > 0) { cdl->AddLine(ImVec2(rtl.x, rtl.y), ImVec2(rbr.x, rtl.y), theme::withAlpha(theme::kBrassDark, 0.8f)); }
+                ImGui::PushID(sm.id.c_str());
+                const float gb = 46.0f * k;
+                const ImVec2 gtl(rtl.x + 14.0f * k, rtl.y + (rowH - gb) * 0.5f);
+                ImGui::SetCursorScreenPos(gtl);
+                bool open = ImGui::InvisibleButton("##glyph", ImVec2(gb, gb));
+                const bool gHover = ImGui::IsItemHovered();
+                cdl->AddRectFilled(gtl, ImVec2(gtl.x + gb, gtl.y + gb), theme::kVoid);
+                cdl->AddRect(gtl, ImVec2(gtl.x + gb, gtl.y + gb), gHover ? theme::kPhosphor : theme::kBrassDark);
+                drawCategoryGlyph(cdl, ImVec2(gtl.x + 1.0f, gtl.y + 1.0f), gb - 2.0f, sm.plate.category,
+                                  theme::kPhosphor, 1.8f * (gb - 2.0f) / 56.0f);
+                const StoreKey key = storeKeyFor(sm, kin);
+                const float kw = cardKeyWidth();
+                const float kh = outlineKeyHeight();
+                const ImVec2 ktl(rbr.x - 14.0f * k - kw, rtl.y + (rowH - kh) * 0.5f);
+                const float tx = gtl.x + gb + 14.0f * k;
+                const float tw = std::max(60.0f, ktl.x - 16.0f * k - tx);
+                const float nameH = faceH(uf, prose());
+                const float ty = rtl.y + (rowH - nameH - 2.0f * k - faceH(uf, upx)) * 0.5f;
+                ImGui::SetCursorScreenPos(ImVec2(tx, ty));
+                const float nw = std::min(tw, textW(uf, prose(), sm.plate.name.c_str()));
+                if (ImGui::InvisibleButton("##name", ImVec2(std::max(8.0f, nw), nameH))) { open = true; }
+                const bool nHover = ImGui::IsItemHovered();
+                cdl->AddText(uf, prose(), ImVec2(tx, ty), nHover || gHover ? theme::kPhosphor : theme::kIvory,
+                             sm.plate.name.c_str());
+                const std::string ft = storeFromTo(sm.installedVersion, sm.updateToVersion);
+                ImFont* rf = fonts::ui();
+                const float rpx = fonts::tinyPx() * 1.15f;
+                cdl->AddText(rf, rpx, ImVec2(tx + nw + 14.0f * k, ty + (nameH - faceH(rf, rpx)) * 0.5f),
+                             theme::kAmber, ft.c_str());
+                const std::string& line = !sm.plate.whatsNew.empty() ? sm.plate.whatsNew : sm.updateReason;
+                addEllipsized(cdl, uf, upx, ImVec2(tx, ty + nameH + 2.0f * k), theme::kInkMuted, line.c_str(), tw);
+                KeyRect kr;
+                const std::string why = (!key.enabled && !key.reason.empty()) ? trStoredReason(key.reason) : std::string();
+                if (key.kind == StoreKeyKind::Fitting) {
+                    ImGui::SetCursorScreenPos(ktl);
+                    ImGui::InvisibleButton("##fitting", ImVec2(kw, kh));
+                    cdl->AddRect(ktl, ImVec2(ktl.x + kw, ktl.y + kh), theme::kPhosphorDim, 2.0f);
+                    drawKeyWord(cdl, ktl, ImVec2(ktl.x + kw, ktl.y + kh), storeKeyLabel(key.kind), theme::kPhosphor);
+                    drawFittingLine(cdl, ktl, ImVec2(ktl.x + kw, ktl.y + kh), model.progress);
+                    kr = KeyRect{ktl, ImVec2(ktl.x + kw, ktl.y + kh)};
+                } else if (drawOutlineKey(cdl, ktl, ImVec2(ktl.x + kw, ktl.y + kh), storeKeyLabel(StoreKeyKind::Update),
+                                          theme::kAmber, key.enabled, "key", why.c_str(), &kr)) {
+                    updateIndex_ = mi;
+                }
+                if (census::enabled()) {
+                    const std::string base = "store:card:" + sm.id;
+                    census::rect(base, rtl.x, rtl.y, rbr.x, rbr.y);
+                    census::rect(base + ":key", kr.tl.x, kr.tl.y, kr.br.x, kr.br.y);
+                    census::rect(base + ":name", tx, ty, tx + nw, ty + nameH);
+                    census::note("store:key:", sm.id + ":" + storeKeyCensusState(key));
+                    census::note("store:update:", sm.id + ":" + ft);
+                }
+                ImGui::PopID();
+                if (open) { deck.pageId = sm.id; deck.tab = 0; }
+                y += rowH;
+            }
+            if (!rows.empty()) {
+                cdl->AddRect(listTL, ImVec2(x0 + contentW, y), theme::withAlpha(theme::kBrassDark, 0.9f));
+            }
+            if (haveRows) {
+                y += 12.0f * k;
+                const char* note = tr("Updates are fetched when you press CHECK AGAIN. Nothing updates itself.");
+                cdl->AddText(uf, upx, ImVec2(x0, y), theme::kInkMuted, note, nullptr, contentW);
+                y += wrapH(uf, upx, contentW, note) + 16.0f * k;
+            }
+            // ---- CLEAN UP OLD VERSIONS, at the foot ------------------------------------
+            ImGui::SetCursorScreenPos(ImVec2(x0, y));
+            if (drawCleanupFoot(model.oldCopies, model.cleanupReport, model.busy, contentW, "storekey:cleanup",
+                                "storekey:cleanupyes")) {
+                cleanup_ = true;
+            }
+            y = ImGui::GetCursorScreenPos().y + 12.0f * k;
         }
-        ImGui::EndChild();
+
+        ImGui::SetCursorScreenPos(ImVec2(x0, y + 8.0f * k));
+        ImGui::Dummy(ImVec2(1.0f, 1.0f));
+    }
+    ImGui::EndChild();
+
+    // Esc returns from a page - and only that, and not while a field has the keyboard.
+    if (onPage && ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
+        ImGui::IsKeyPressed(ImGuiKey_Escape, false) && !ImGui::IsAnyItemActive() &&
+        !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId)) {
+        deck.pageId.clear();
+        if (census::enabled()) { census::note("store:page:closed:", "esc"); }
     }
 
-    ImGui::SetCursorScreenPos(ImVec2(origin.x, bodyTL.y + bodyH));
     ImGui::PopID();
 }
 

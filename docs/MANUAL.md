@@ -206,49 +206,98 @@ same way every decoder in this project is written from its own specification.
 
 ## Plugins
 
-Decoders can be installed as separate native plugins, from an in-app
-catalogue. Two keys in the **DECODE** group of the FUNCTION SELECT rail open
-the two windows this lives in: **Plugin store** is the catalogue — what each
-module is, what it reaches for, what it costs to fit, and the updates the
-catalogue offers — and **Plugins** opens **Fitted modules**, which is what is
-already installed on this machine, which of them are being fed, which were
-refused and why, and the keys that start, stop, remove and permit them. Each
-is a real window you can drag as large as your screen. **Fitted modules**
-comes back at the size and place you left it, because its rectangle is
-written to the configuration file with everything else; the store's is not,
-so it holds what you drag it to only until FoxSDR closes. Since 0.96.0 the
-store opens *inside* the main window rather than
-overhanging its right edge, where on a single monitor it could land off the
-screen entirely. Everything on that page is set in the largest engraving
-FoxSDR has, because it is a page you read before deciding to put somebody
-else's native code into this process: a module's name, the one-line summary
-the catalogue publishes, its version, its licence, what it reaches for, and a
-plain word for what it is on this machine — **NOT INSTALLED**, **CANNOT FIT**,
-**INSTALLED**, **UPDATE** or **REFUSED**. One key at the top fits the whole
-catalogue: **ADD ALL PLUGINS** fetches everything that is not installed and
-updates everything that is behind, one after another, through exactly the
-same path a single **FIT** takes — https, the byte cap, the exact ABI match,
-and the sha256 the catalogue published, which every download must hash to
-before it is moved into the modules folder. It says what it will do before you
-press it ("ADD 17 PLUGINS", "ADD 3 PLUGINS, UPDATE 2"), names any module it
-will pass over and why, and reports what happened when it finishes ("24
-installed, 0 failed", or the names that failed with the reason each gave). A
-module that fails does not stop the rest. Modules whose maker attached a legal
-notice are counted and named separately and are added only if you tick the
-acknowledgement beside the key — an "add all" is not a way to consent to
-something you were never shown. Neither window reopens by
-itself: since 0.79.1 FoxSDR always starts on the main window alone, whatever
-was showing when it was closed - no page, no map, no decoder output, and the
-bench rather than the radar scope. Every one of them is a key on the rail
-away, and nothing opens a window but your own hand. A plugin's own window -
-a decoded picture, a plugin's panel - has a row of its own under DECODE,
-with a chip saying what it holds (WAIT, RX or IMG for a picture, a row count
-for a panel): press the row to open it, its key to close it. (Before 0.79.1
-the pages you left open came back, the decoder output opened itself on a
-decoder's first line, a map page opened itself on its first target, and a
-plugin's window appeared whenever the plugin published one.) The catalogue is contacted when you
-open the store window (the first time in a session) or press **CHECK NOW**
-inside it: nothing is fetched at startup, and no plugin ever updates itself.
+Decoders can be installed as separate native plugins, from an in-app catalogue. Two keys in
+the **DECODE** group of the FUNCTION SELECT rail open the two windows this lives in, and they
+are two windows on purpose, each meant to be simple: **Plugin store** is what you could have,
+and **Plugins** opens **Fitted modules**, which is what you have and whether it is working.
+Each is a real window you can drag as large as your screen, and each comes back at the size
+and place you left it, because its rectangle is written to the configuration file with
+everything else. The store opens *inside* the main window rather than overhanging its right
+edge, where on a single monitor it could land off the screen entirely.
+
+**The Plugin store** has one bar along the top and two tabs. The bar holds a search field
+(it looks through names, one-line summaries, descriptions and the category's name), the
+tabs **BROWSE** and **UPDATES (n)**, and at the right when the catalogue was last read
+("Catalogue read 14:07") with **CHECK AGAIN**. **BROWSE** is the catalogue in sections -
+AIRCRAFT, MARINE, SATELLITES AND WEATHER, METERS AND PAGING, VOICE AND DATA, MAPS AND TOOLS,
+and OTHER for anything the catalogue has not filed - each a grid of cards: a small drawing of
+what the plugin is for, its name, a line about it, a badge when it has never decoded a real
+signal (**EXPERIMENTAL**) or has no build for your system (**WINDOWS ONLY**, **LINUX ONLY**),
+and one key at the right: **GET**, **FITTING...** while its download runs, **INSTALLED** or
+**UPDATE** with the two versions beside it. A key that cannot act is drawn greyed and says why
+when you rest the pointer on it - the plugin was built for another plugin ABI, there is no build
+for this system, the catalogue states no licence, another transfer is running. A click on a
+card's name or drawing opens that plugin's **page**; **GET** on a plugin whose maker attached a
+legal notice does the same instead of fitting it, because the notice cannot be skipped.
+
+A plugin's page is what an app store's would be: a header with its name, its maker, version,
+download size and the build for this system, and the one key; then **SCREENSHOTS**, a strip of
+the pictures its maker published, two arrows and the mouse wheel moving along it (a plugin with
+none shows a frame saying so); **WHAT IT DOES**; **WHAT'S NEW** in this version; and, for a
+plugin with a legal notice, **BEFORE YOU FIT IT** - the notice, verbatim, in a box with a
+tick, "I have read the notice above and accept responsibility", which the key stays greyed
+until you give; and last **SHOW DETAILS**, which opens the facts: maker, licence, version, the
+plugin ABI and whether it matches this build, download size, the systems it is built for, what
+it reaches (in the words the Fitted modules page uses), its home page, the SHA-256 of the build
+for this system, the day it was published and, if it is fitted, where it is. The reach list is
+what the module *declares*, not a limit on it: a fitted module runs inside FoxSDR with every
+privilege FoxSDR has, and the page says so beside the list. Esc, or **< BROWSE**, comes back to
+the list. An install's result - "Installed ... to ..." or the reason it failed, word for word -
+is shown under the key of the plugin it concerns.
+
+**UPDATES (n)** lists what the catalogue offers that you are behind on: the plugin, "1.8.0 to
+1.8.1", the first line of what is new, and an **UPDATE** key; **UPDATE ALL** at the top right
+does them one after another. An update that succeeds takes the older copy of that plugin with
+it, by itself (an older file still in use goes at the next start), and **CLEAN UP OLD VERSIONS
+(n)** at the foot of the tab removes any other leftovers, asking once. Nothing updates itself:
+"Updates are fetched when you press CHECK AGAIN."
+
+At the foot of BROWSE, a muted **GET EVERYTHING** fetches everything that is not installed and
+updates everything that is behind, one after another, through exactly the path a single **GET**
+takes - https, the byte cap, the exact ABI match, and the sha256 the catalogue published, which
+every download must hash to before it is moved into the modules folder. It says what it will do
+before you press it ("14 to fetch and 2 to update ..."), names any plugin it will pass over and
+why, and reports what happened when it finishes ("24 installed, 0 failed", or the names that
+failed with the reason each gave); a plugin that fails does not stop the rest. Plugins whose
+maker attached a legal notice are counted and named and are added only if you tick the
+acknowledgement beside the key - "get everything" is not a way to consent to something you were
+never shown.
+
+**The catalogue** is contacted when you open the store window (the first time in a session) or
+press **CHECK NOW** / **CHECK AGAIN**: nothing is fetched at startup, and no plugin ever updates
+itself. The last catalogue read successfully is kept beside the install records
+(`catalogue.json`) and is what the store shows, at once, the next time; if a refresh then fails the
+list stays and the top bar says so in amber - "Catalogue from 2026-10-07; could not refresh:
+<the reason>" - instead of the store going empty. **A plugin's pictures** are fetched only when
+you open its page, one at a time, over https, at most 4 MiB each, and each is checked against the
+sha256 the catalogue published before it is kept (under `store-cache` in the plugins folder, named
+by that digest, and removed again when the catalogue stops naming it); a request carries the
+picture's address and nothing else, and a plugin that comes from the regional list shows none.
+Nothing is fetched for the grid.
+
+**Fitted modules** is the operating panel. Along its top bar: a search field, five filter chips
+with their lamps and counts - **FED**, **NOT DECODING**, **TAKES NO SIGNAL**, **STOPPED**,
+**REFUSED**, each a toggle - and **SCAN AGAIN** and **RESET WINDOW SIZES**. Under it one muted line
+says whether the receiver is running (a module with a matched decoder is only fed while it is) and,
+after a dot, which folder the modules were read from. Then one row per module, sorted by name: its
+drawing, name and version, under the name an amber warning when it reaches beyond FoxSDR ("asks to
+move the receiver", "may fetch from a server it chose" - nothing for a module that publishes to the
+host only) or, for a module the host refused, the host's own reason; at the right what it is doing -
+**FED**, **NOT DECODING**, **TAKES NO SIGNAL**, **STOPPED** or **REFUSED**, with its lamp - then
+**STOP** (or **START**) and **REMOVE**, which asks twice: **CONFIRM** appears beside it for five
+seconds. **CLEAN UP OLD VERSIONS (n)** is at the foot when an update left copies behind. A click on
+a module's name opens its **page**: its header with the same **STOP** key, then **ON THIS MACHINE**
+- the state with its lamp, what the module reaches, the sentence that explains the state (for a
+refused module, why it is not running, in the host's words), the file it was loaded from, its
+plugin ABI and the day it was fitted - and, for a module the catalogue knows, the same pictures,
+description and notes the store's page shows, and the facts behind **SHOW DETAILS**.
+
+Neither window reopens by itself: since 0.79.1 FoxSDR always starts on the main window alone,
+whatever was showing when it was closed - no page, no map, no decoder output, and the bench rather
+than the radar scope. Every one of them is a key on the rail away, and nothing opens a window but
+your own hand. A plugin's own window - a decoded picture, a plugin's panel - has a row of its own
+under DECODE, with a chip saying what it holds (WAIT, RX or IMG for a picture, a row count for a
+panel): press the row to open it, its key to close it.
 
 A plugin may declare several capabilities. Decoders are fed real samples —
 either the tuned, demodulated audio or the raw receiver band — and produce
@@ -303,16 +352,16 @@ starved-callback count — a decoder that cannot keep up and a device that is
 starving sound identical and are repaired in different places — and the browser
 reads the same two facts from `/api/status` as `audioSource`,
 `audioPluginGaps` and `audioPluginGapFrames`. In the **Plugin store**, a module
-that can do this says so on its own plate before you fit it.
+that can do this says so on its page, under REACHES, before you fit it.
 
 **Stop and start.** In the Fitted modules window every loaded module's row
-carries a **STOP** key, and a stopped one carries **START**; the selected
-module's plate carries the same as **STOP MODULE** / **START MODULE**.
+carries a **STOP** key, and a stopped one carries **START**; the module's
+page carries the same key at the right of its header.
 Stopping destroys everything that plugin had
 running — its decoders, its map targets and trails, its window, its basemap
 tiles — while leaving the module loaded and the row where it was, so a stopped
 plugin decodes nothing, draws nothing, and cannot move the receiver. The row
-then reads **STOPPED BY YOU**, lettered in plain ivory rather than in anything
+then reads **STOPPED**, lettered in plain ivory rather than in anything
 that reads as a fault, because a module you switched off is a choice — and a
 plugin that produces nothing for a reason you have forgotten choosing is
 exactly what this must not become. It is
@@ -347,8 +396,8 @@ is remembered between sessions.
 "Running" here means actually decoding, not merely loaded. A plugin you have
 stopped mutes nothing, and neither does one sitting idle because the receiver
 is not producing the sample rate it asked for — the Fitted modules window
-already says so on that module's row, in gold, and quotes the reason on its
-plate, and taking the sound away on behalf of a decoder the
+already says so on that module's row (**NOT DECODING**), and quotes the reason on its
+page, and taking the sound away on behalf of a decoder the
 program itself says is not being fed would be silence for no benefit.
 
 **Tuning away.** Leave a running decoder's preset and FoxSDR asks once whether
@@ -361,7 +410,8 @@ only after you have returned to a preset and left it again.
 
 **Tune permission.** A plugin that can move the receiver can also take it away
 from you, so a plugin may only retune the radio if you press **GRANT RECEIVER
-CONTROL** on that module's plate in the Fitted modules window. The key is
+CONTROL** on that module's page in the Fitted modules window (in its ON THIS
+MACHINE box, under what the module reaches). The key is
 offered only for a module that can actually ask — one that declares no host
 client could never use the grant, and a control that sets something nothing
 reads is a control that lies about having done something. It is off by default
@@ -380,7 +430,7 @@ mute, whether it is running, which radio it is, the signal level and the
 S-meter - and can ask to change any of it. Asking to **tune** needs the same
 **GRANT RECEIVER CONTROL** as before; asking to change anything else (mode,
 bandwidth, squelch, gains, sample rate, volume, mute, start or stop) needs a
-separate **GRANT RADIO SETTINGS** key, which appears on the module's plate once
+separate **GRANT RADIO SETTINGS** key, which appears on the module's page once
 the module has asked. The two are kept apart so that a grant you already gave a
 satellite tracker still means only what it meant. A request is applied by the
 application itself on its next frame, through the same code a click or a
@@ -388,8 +438,8 @@ browser request goes through, and a stopped or ungranted module's requests are
 refused outright. A plugin can also put **marks** on the spectrum and waterfall,
 keep **its own settings** (saved in the config file under the plugin's name, so
 they survive an update), show **messages** in the Decoder output window (a
-warning or an error also appears on its plate), and offer **keys of its own** on
-its plate. And a new capability lets a plugin **process the audio you hear** in
+warning or an error also appears on its page), and offer **keys of its own** on
+its page. And a new capability lets a plugin **process the audio you hear** in
 place - a filter, a limiter - after the receiver's own processing and before
 the volume, the mute, the recorder and the speakers; stopping the module takes
 it out of the chain. None of this lets a plugin reach files or the network
@@ -401,15 +451,17 @@ the plugin repository.
 Security model, in one line: every download is https, sha256-verified against
 the catalogue before it is allowed to become a file, size-capped, refused on a
 cross-host redirect, and written under a sanitised bare filename inside the
-plugins directory.
+plugins directory; a plugin's pictures are held to the same https and sha256
+rule and a 4 MiB cap, and are decoded by a PNG reader that refuses anything that
+is not a PNG or claims a size no screen needs.
 
 **Where that directory is** depends on whether the application can write to its
 own: a portable copy keeps plugins in `plugins/` beside the executable, while an
 installation under a directory the user does not own — `C:\Program Files\FoxSDR`
 being the ordinary case — uses `%LOCALAPPDATA%\foxsdr\plugins` instead
 (`$XDG_DATA_HOME/foxsdr/plugins`, or `~/.local/share/foxsdr/plugins`, on Linux).
-The Fitted modules window prints the one in use, in full, under **MODULES ARE
-READ FROM**, and each module's plate says which file it was **LOADED FROM**.
+The Fitted modules window prints the one in use, in full, after "read from" on the
+line under its top bar, and each module's page names its **FILE**.
 Nothing needs elevating either way.
 
 Compatibility is ABI-exact. A plugin must be built against this host's
@@ -1027,9 +1079,14 @@ each says what starts it:
   country code for your connection, stores nothing, logs nothing, and is not
   asked for when you have pointed the store at a different catalogue. See
   [PRIVACY.md](../PRIVACY.md).
-- **A plugin download**, when you press **FIT MODULE** or **UPDATE MODULE** for
+- **A plugin download**, when you press **GET** or **UPDATE** for
   one — always https, sha256-verified against the catalogue, size-capped and
   refused on a cross-host redirect.
+- **A plugin's pictures**, when you open its page in the Plugin store: each is
+  fetched once from the address the catalogue gives, over https, checked against
+  the catalogue's sha256 and a 4 MiB cap, and kept under `store-cache` in the
+  plugins folder. The request carries that address and nothing else; a plugin
+  from the regional list shows none. See [PRIVACY.md](../PRIVACY.md).
 - **A crash or freeze report**, and only with Diagnostics on: the report's text
   goes out the *next* time you open the application, never from inside the
   fault. See [When it crashes or freezes](#when-it-crashes-or-freezes).
@@ -1044,7 +1101,7 @@ each says what starts it:
 A plugin is native code loaded into this application's own process, so an
 installed plugin may make requests of its own — a basemap plugin fetching map
 tiles from the server you pointed it at is the ordinary case. That is the
-plugin's traffic, not the host's, and it is why each module's plate says
+plugin's traffic, not the host's, and it is why each module's page says
 plainly that a fitted module runs with every privilege the application has,
 with no sandbox and no permission model, and that its declared capability list
 is what the maker says the module PROVIDES rather than a limit on what it can

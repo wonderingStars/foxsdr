@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/plugin_dir_signature.hpp"
 
+#include "core/plugin_repo.hpp"
+
 #include <algorithm>
 #include <filesystem>
 #include <system_error>
@@ -10,6 +12,16 @@
 namespace fs = std::filesystem;
 
 namespace cascade::core {
+
+namespace {
+
+bool isCatalogueCacheFile(const std::string& name) {
+    const std::string json = PluginRepo::catalogueCacheFileName();
+    const std::string time = PluginRepo::catalogueCacheTimeFileName();
+    return name == json || name == time || name == json + ".part" || name == time + ".part";
+}
+
+}  // namespace
 
 bool readPluginDirSignature(const std::string& dir, PluginDirSignature& out) {
     out = PluginDirSignature{};
@@ -40,6 +52,12 @@ bool readPluginDirSignature(const std::string& dir, PluginDirSignature& out) {
         }
         PluginDirSignature::Entry e;
         e.name = it->path().filename().string();
+        // THE CATALOGUE CACHE IS NOT A CHANGE TO THE PLUGINS (0.99.72). Every good
+        // catalogue read rewrites catalogue.json and catalogue.json.time, beside
+        // the modules; counted, each fetch would look like a changed folder and the
+        // rescan it exists to skip would run after all (the 0.99.63 fault). Only
+        // those two names, and the ".part" a write is renamed from.
+        if (isCatalogueCacheFile(e.name)) { continue; }
         // Both come with the listing's entry (on Windows, from the find data it
         // was made from): neither is a question to the file.
         const std::uintmax_t bytes = it->file_size(entryEc);

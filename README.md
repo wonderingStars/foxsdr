@@ -8,7 +8,7 @@ decoder plugins from an in-app catalogue. Most radios are driven by FoxSDR's
 own drivers, so nothing else has to be installed. The whole interface can be
 served to a browser on your own network.
 
-The current release is **0.99.71** (October 2026), in open beta. Free for
+The current release is **0.99.72** (October 2026), in open beta. Free for
 noncommercial use; see [License](#license). Website:
 [foxsdr.com](https://foxsdr.com).
 
@@ -89,9 +89,9 @@ Full detail in [docs/MANUAL.md](docs/MANUAL.md).
 
 Decoders are separate native plugins installed from the in-app **Plugin
 store**: ADS-B, AIS, APRS, ACARS, POCSAG, FLEX, SSTV, WEFAX, weather
-satellites, 406 MHz beacons and more, 28 in all, 21 of them on Linux too. Every
+satellites, 406 MHz beacons and more, 37 in all, 24 of them on Linux too. Every
 download is https and checked against the catalogue's SHA-256 before it becomes
-a file. A plugin runs with the application's own privileges, its plate says so,
+a file. A plugin runs with the application's own privileges, its page says so,
 and it may only retune the radio once you grant it. Writing one:
 [docs/PLUGIN-API.md](docs/PLUGIN-API.md).
 

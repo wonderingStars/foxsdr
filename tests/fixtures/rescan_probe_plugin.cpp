@@ -37,6 +37,14 @@
 #define PROBE_ID "a"
 #endif
 
+// The version the descriptor declares. A second build of the SAME probe with a newer
+// version (tests/CMakeLists.txt, rescan_probe_a_newer) is "the next release of that
+// plugin" for tests/test_plugin_update_cleanup_app.cpp: same declared name, so the
+// host takes the older for an old copy of the newer.
+#ifndef PROBE_VERSION
+#define PROBE_VERSION "1.0.0"
+#endif
+
 namespace {
 
 void note(const char* event) {
@@ -97,7 +105,7 @@ const CascadePluginDesc kDesc = {
     static_cast<uint32_t>(sizeof(CascadePluginDesc)),
     CASCADE_PLUGIN_ABI_VERSION,
     "Rescan Probe " PROBE_ID,
-    "1.0.0",
+    PROBE_VERSION,
     "FoxSDR tests",
     "PolyForm-Noncommercial-1.0.0",
     CASCADE_CAP_DECODER,

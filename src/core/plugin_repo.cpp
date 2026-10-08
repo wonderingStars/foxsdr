@@ -264,6 +264,175 @@ bool wantUint(const json& j, const char* key, bool required, std::uint64_t& dst,
     return true;
 }
 
+// ---------------------------------------------------------------------------
+// The shop-window fields (0.99.72). Optional and cosmetic, so - unlike the
+// getters above - a wrong type is a field left at its default plus a line in
+// the parse report, never a refused catalogue.
+// ---------------------------------------------------------------------------
+
+void noteDrop(std::vector<std::string>* report, const std::string& where, const std::string& what) {
+    if (report != nullptr) { report->push_back(where + ": " + what); }
+}
+
+// `key` as a string, if it is one. Absent or null is silence (the normal case).
+bool softString(const json& j, const char* key, std::string& dst, const std::string& where,
+                std::vector<std::string>* report) {
+    const auto it = j.find(key);
+    if (it == j.end() || it->is_null()) { return false; }
+    if (!it->is_string()) {
+        noteDrop(report, where, std::string("\"") + key + "\" is not a string; ignored");
+        return false;
+    }
+    dst = it->get<std::string>();
+    return true;
+}
+
+// YYYY-MM-DD, digits where digits go. Not a calendar check: the field is shown
+// as it is, and the only thing worth refusing is a shape that is not a date.
+bool looksLikeIsoDate(const std::string& s) {
+    if (s.size() != 10 || s[4] != '-' || s[7] != '-') { return false; }
+    for (std::size_t i = 0; i < s.size(); ++i) {
+        if (i == 4 || i == 7) { continue; }
+        if (s[i] < '0' || s[i] > '9') { return false; }
+    }
+    return true;
+}
+
+// A non-negative integer that fits an int (a picture's width or height); anything
+// else, absent included, is 0 = "not stated".
+int softSmallInt(const json& j, const char* key) {
+    const auto it = j.find(key);
+    if (it == j.end() || !it->is_number_unsigned()) { return 0; }
+    const std::uint64_t v = it->get<std::uint64_t>();
+    return v <= 100000ull ? static_cast<int>(v) : 0;
+}
+
+struct CapabilityName {
+    const char* name;
+    std::uint32_t bit;
+};
+// Every capability this host's ABI header defines, by the macro's own name -
+// the spelling the catalogue generator publishes. A bit added to plugin_abi.h
+// needs its name added here; the unknown-name path is what keeps a catalogue
+// that is ahead of this build from being an error.
+const CapabilityName kCapabilityNames[] = {
+    {"CASCADE_CAP_DECODER", CASCADE_CAP_DECODER},
+    {"CASCADE_CAP_IQ_DECODER", CASCADE_CAP_IQ_DECODER},
+    {"CASCADE_CAP_IMAGE_DECODER", CASCADE_CAP_IMAGE_DECODER},
+    {"CASCADE_CAP_TRACK_SOURCE", CASCADE_CAP_TRACK_SOURCE},
+    {"CASCADE_CAP_PANEL", CASCADE_CAP_PANEL},
+    {"CASCADE_CAP_HOST_CLIENT", CASCADE_CAP_HOST_CLIENT},
+    {"CASCADE_CAP_PRESET", CASCADE_CAP_PRESET},
+    {"CASCADE_CAP_BASEMAP", CASCADE_CAP_BASEMAP},
+    {"CASCADE_CAP_TRACK_INFO", CASCADE_CAP_TRACK_INFO},
+    {"CASCADE_CAP_INSTRUMENT", CASCADE_CAP_INSTRUMENT},
+    {"CASCADE_CAP_AUDIO_OUT", CASCADE_CAP_AUDIO_OUT},
+    {"CASCADE_CAP_AUDIO_PROCESSOR", CASCADE_CAP_AUDIO_PROCESSOR},
+    {"CASCADE_CAP_SETTINGS_UI", CASCADE_CAP_SETTINGS_UI},
+    {"CASCADE_CAP_RECEIVER_LOCATOR", CASCADE_CAP_RECEIVER_LOCATOR},
+};
+
+// Reads the shop-window fields of one catalogue entry into `e`. Never fails.
+void readShopFields(const json& pj, PluginCatalogEntry& e, std::vector<std::string>* report) {
+    const std::string where = "plugin \"" + e.id + "\"";
+
+    softString(pj, "category", e.category, where, report);
+    softString(pj, "whatsNew", e.whatsNew, where, report);
+
+    std::string published;
+    if (softString(pj, "published", published, where, report)) {
+        if (looksLikeIsoDate(published)) {
+            e.published = published;
+        } else {
+            noteDrop(report, where, "\"published\" is not a YYYY-MM-DD date; ignored");
+        }
+    }
+
+    const auto expIt = pj.find("experimental");
+    if (expIt != pj.end() && !expIt->is_null()) {
+        if (expIt->is_boolean()) {
+            e.experimental = expIt->get<bool>();
+        } else {
+            noteDrop(report, where, "\"experimental\" is not true or false; ignored");
+        }
+    }
+
+    const auto capIt = pj.find("capabilities");
+    if (capIt != pj.end() && !capIt->is_null()) {
+        if (!capIt->is_array()) {
+            noteDrop(report, where, "\"capabilities\" is not an array; ignored");
+        } else {
+            std::size_t ci = 0;
+            for (const json& cj : *capIt) {
+                const std::size_t at = ci++;
+                if (!cj.is_string()) {
+                    noteDrop(report, where,
+                             "capability " + std::to_string(at) + " is not a string; ignored");
+                    continue;
+                }
+                const std::string name = cj.get<std::string>();
+                e.capabilityNames.push_back(name);
+                e.capabilities |= PluginRepo::capabilityBitForName(name);
+            }
+        }
+    }
+
+    const auto shotsIt = pj.find("screenshots");
+    if (shotsIt != pj.end() && !shotsIt->is_null()) {
+        if (!shotsIt->is_array()) {
+            noteDrop(report, where, "\"screenshots\" is not an array; ignored");
+            return;
+        }
+        std::size_t si = 0;
+        for (const json& sj : *shotsIt) {
+            const std::string swhere = where + " screenshot " + std::to_string(si);
+            ++si;
+            if (e.screenshots.size() >= PluginRepo::kMaxScreenshotsPerPlugin) {
+                noteDrop(report, swhere,
+                         "dropped: a plugin may list at most " +
+                             std::to_string(PluginRepo::kMaxScreenshotsPerPlugin) + " pictures");
+                continue;
+            }
+            if (!sj.is_object()) {
+                noteDrop(report, swhere, "dropped: not a JSON object");
+                continue;
+            }
+            CatalogScreenshot s;
+            std::string scratch;  // the strict getters' message is not used: the plugin survives
+            if (!wantString(sj, "url", true, s.url, swhere, scratch)) {
+                noteDrop(report, swhere, "dropped: no url");
+                continue;
+            }
+            if (!wantString(sj, "sha256", true, s.sha256, swhere, scratch)) {
+                noteDrop(report, swhere, "dropped: no sha256");
+                continue;
+            }
+            if (!wantString(sj, "caption", true, s.caption, swhere, scratch)) {
+                noteDrop(report, swhere, "dropped: no caption");
+                continue;
+            }
+            // RULE 1 and RULE 2 again, for a picture: a plain-text URL never
+            // reaches the transport, and there is no "unverified" picture.
+            if (!PluginRepo::isHttpsUrl(s.url)) {
+                noteDrop(report, swhere, "dropped: url is not https");
+                continue;
+            }
+            if (!isWellFormedSha256(s.sha256)) {
+                noteDrop(report, swhere, "dropped: sha256 is not 64 hexadecimal digits");
+                continue;
+            }
+            s.sha256 = toLowerAscii(s.sha256);
+            const auto sizeIt = sj.find("sizeBytes");
+            if (sizeIt != sj.end() && sizeIt->is_number_unsigned()) {
+                s.sizeBytes = sizeIt->get<std::uint64_t>();
+            }
+            s.width = softSmallInt(sj, "width");
+            s.height = softSmallInt(sj, "height");
+            e.screenshots.push_back(std::move(s));
+        }
+    }
+}
+
 // Per-phase timeouts for one httpsGet() call, shared by both platform
 // transports below. The defaults reproduce exactly what this file used
 // before these fields existed (10 s to resolve+connect, 20 s to send, 30 s
@@ -1230,6 +1399,12 @@ PluginRepo::RegionalMergeResult PluginRepo::mergeRegional(
         }
         PluginCatalogEntry copy = e;
         copy.regional = true;
+        // NO PICTURES FROM THE REGIONAL LIST (0.99.72). A picture is fetched from
+        // the address its entry names, and PRIVACY.md promises the store's only other
+        // address is the public catalogue's own origin; a regional entry's pictures
+        // would be an address the regional server picks. The binary's own URL is held
+        // to the regional prefix above, and a picture has no such rule - so it has none.
+        copy.screenshots.clear();
         result.merged.push_back(std::move(copy));
         ++result.added;
     }
@@ -1330,7 +1505,7 @@ bool PluginRepo::sanitiseFileName(const std::string& raw, std::string& out, std:
 }
 
 bool PluginRepo::parseIndex(const std::string& text, std::vector<PluginCatalogEntry>& out,
-                            std::string& error) {
+                            std::string& error, std::vector<std::string>* report) {
     out.clear();
     error.clear();
 
@@ -1459,6 +1634,10 @@ bool PluginRepo::parseIndex(const std::string& text, std::vector<PluginCatalogEn
         // A missing "platforms" key is not an error: an entry announced before
         // its first build exists is a legitimate state, and thisPlatform()
         // simply reports nullptr.
+
+        // The shop-window fields last: they cannot fail the entry, and `e.id`
+        // is settled by now for the report to name.
+        readShopFields(pj, e, report);
 
         parsed.push_back(std::move(e));
     }
@@ -2196,6 +2375,70 @@ std::vector<PluginUpdate> PluginRepo::planUpdates(const std::vector<PluginCatalo
 }
 
 // ---------------------------------------------------------------------------
+// Capability names and installed state by id and version (0.99.72)
+// ---------------------------------------------------------------------------
+
+std::uint32_t PluginRepo::capabilityBitForName(const std::string& name) {
+    for (const CapabilityName& c : kCapabilityNames) {
+        if (name == c.name) { return c.bit; }
+    }
+    return 0;
+}
+
+InstallState PluginRepo::installStateFor(const PluginCatalogEntry& e,
+                                         const std::vector<InstalledPlugin>& installed,
+                                         const std::vector<ScannedModule>& scanned) {
+    InstallState st;
+    if (e.id.empty()) { return st; }
+
+    bool found = false;
+    std::string newest;
+    const auto consider = [&](const std::string& version) {
+        if (!found || compareVersions(version, newest) > 0) { newest = version; }
+        found = true;
+    };
+    // The same-version rebuild planUpdates() also plans: an install record whose
+    // build targeted another ABI than this host's.
+    bool recordedForOtherAbi = false;
+    const std::uint32_t hostAbi = static_cast<std::uint32_t>(CASCADE_PLUGIN_ABI_VERSION);
+
+    // THE SCAN FIRST: what the module itself declares is what is running.
+    for (const ScannedModule& m : scanned) {
+        if (m.id == e.id) { consider(m.version); }
+    }
+    for (const InstalledPlugin& r : installed) {
+        if (r.id != e.id) { continue; }
+        // A record whose file the user deleted is not an installed plugin, and
+        // updating it would put back what they removed (planUpdates says the same).
+        if (r.missingFromDisk) { continue; }
+        if (r.abiVersion != 0 && r.abiVersion != hostAbi) { recordedForOtherAbi = true; }
+        // The scan wins where both know the module - the file is the join.
+        bool scanKnowsIt = false;
+        for (const ScannedModule& m : scanned) {
+            if (m.id == e.id && iequalsAscii(m.file, r.file)) {
+                scanKnowsIt = true;
+                break;
+            }
+        }
+        if (!scanKnowsIt) { consider(r.version); }
+    }
+    if (!found) { return st; }
+
+    st.installedVersion = newest;
+    const int cmp = compareVersions(e.version, newest);
+    if (cmp > 0) {
+        st.kind = InstallStateKind::UpdateAvailable;
+    } else if (cmp < 0) {
+        st.kind = InstallStateKind::NewerInstalled;
+    } else if (recordedForOtherAbi && e.abiVersion == hostAbi) {
+        st.kind = InstallStateKind::UpdateAvailable;
+    } else {
+        st.kind = InstallStateKind::Installed;
+    }
+    return st;
+}
+
+// ---------------------------------------------------------------------------
 // Network operations
 // ---------------------------------------------------------------------------
 
@@ -2296,6 +2539,8 @@ bool PluginRepo::fetchVerifiedFile(const std::string& url, const std::string& ex
 
 bool PluginRepo::fetchIndex(const std::string& url, std::string& error) {
     entries_.clear();
+    lastIndexText_.clear();
+    lastParseReport_.clear();
     error.clear();
     progress_.store(0.0f, std::memory_order_relaxed);
     cancel_.store(false, std::memory_order_relaxed);
@@ -2324,7 +2569,13 @@ bool PluginRepo::fetchIndex(const std::string& url, std::string& error) {
     }
     progress_.store(1.0f, std::memory_order_relaxed);
     // A parse failure leaves entries_ empty, which fetchIndex documents.
-    if (!parseIndex(body, entries_, error)) { return failed(); }
+    if (!parseIndex(body, entries_, error, &lastParseReport_)) {
+        lastParseReport_.clear();
+        return failed();
+    }
+    // Kept only now that it parsed: the text saveCatalogueCache() writes is text
+    // this client accepted, never text it refused.
+    lastIndexText_ = std::move(body);
     return true;
 }
 
@@ -2365,6 +2616,296 @@ bool PluginRepo::fetchRegionalIndex(const std::string& url, std::vector<PluginCa
         return false;
     }
     return parseIndex(body, out, error);
+}
+
+// ---------------------------------------------------------------------------
+// The catalogue cache (0.99.72)
+// ---------------------------------------------------------------------------
+
+const char* PluginRepo::catalogueCacheFileName() { return "catalogue.json"; }
+const char* PluginRepo::catalogueCacheTimeFileName() { return "catalogue.json.time"; }
+const char* PluginRepo::screenshotCacheDirName() { return "store-cache"; }
+
+namespace {
+
+// <target>.part, whole, then one rename over <target>: the manifest's route, so a
+// crash or a full disk leaves the old file or the new one and never half of
+// either, and a failed write leaves no ".part" behind.
+bool writeWholeFileAtomically(const fs::path& target, const std::string& text,
+                              std::string& error) {
+    fs::path part = target;
+    part += ".part";
+    std::error_code ec;
+    {
+        std::ofstream f(part, std::ios::binary | std::ios::trunc);
+        if (!f) {
+            error = "cannot create \"" + part.string() + "\"";
+            return false;
+        }
+        f.write(text.data(), static_cast<std::streamsize>(text.size()));
+        f.flush();
+        if (!f) {
+            f.close();
+            fs::remove(part, ec);
+            error = "writing \"" + part.string() + "\" failed";
+            return false;
+        }
+    }
+    fs::rename(part, target, ec);
+    if (ec) {
+        std::error_code ignored;
+        fs::remove(part, ignored);
+        error = "cannot replace \"" + target.string() + "\": " + ec.message();
+        return false;
+    }
+    return true;
+}
+
+}  // namespace
+
+bool PluginRepo::saveCatalogueCache(const std::string& pluginsDir, const std::string& rawIndexText,
+                                    std::int64_t readTimeUnix, std::string& error) {
+    error.clear();
+    if (pluginsDir.empty()) {
+        error = "no plugins directory to keep the catalogue in";
+        return false;
+    }
+    if (rawIndexText.empty()) {
+        error = "there is no catalogue text to keep";
+        return false;
+    }
+    if (rawIndexText.size() > kMaxIndexBytes) {
+        error = "the catalogue is larger than the " + std::to_string(kMaxIndexBytes) +
+                "-byte limit, so it is not kept";
+        return false;
+    }
+    // THE CACHE HOLDS WHAT THIS CLIENT ACCEPTS. The caller hands over text that
+    // parsed, and this checks it anyway: a careless caller must not be able to
+    // make the next start offer what a fetch refused.
+    {
+        std::vector<PluginCatalogEntry> scratch;
+        std::string parseError;
+        if (!parseIndex(rawIndexText, scratch, parseError)) {
+            error = "the catalogue is not kept because it is not one: " + parseError;
+            return false;
+        }
+    }
+    std::error_code ec;
+    fs::create_directories(fs::path(pluginsDir), ec);
+    if (!fs::is_directory(fs::path(pluginsDir), ec)) {
+        error = "cannot create the plugins directory \"" + pluginsDir + "\"";
+        return false;
+    }
+    if (!writeWholeFileAtomically(fs::path(pluginsDir) / catalogueCacheFileName(), rawIndexText,
+                                  error)) {
+        return false;
+    }
+    return writeWholeFileAtomically(fs::path(pluginsDir) / catalogueCacheTimeFileName(),
+                                    std::to_string(readTimeUnix) + "\n", error);
+}
+
+bool PluginRepo::loadCachedIndex(const std::string& pluginsDir,
+                                 std::vector<PluginCatalogEntry>& entries, std::int64_t& readTime,
+                                 std::string& error) {
+    entries.clear();
+    readTime = 0;
+    error.clear();
+    const fs::path file = fs::path(pluginsDir) / catalogueCacheFileName();
+    std::error_code ec;
+    if (!fs::exists(file, ec)) {
+        error = "no catalogue has been kept yet";
+        return false;
+    }
+    std::string text;
+    if (readTextFile(file, text) != ReadResult::Ok) {
+        error = "the kept catalogue cannot be read";
+        return false;
+    }
+    if (text.size() > kMaxIndexBytes) {
+        error = "the kept catalogue is larger than the " + std::to_string(kMaxIndexBytes) +
+                "-byte limit";
+        return false;
+    }
+    std::string parseError;
+    if (!parseIndex(text, entries, parseError)) {
+        entries.clear();
+        error = "the kept catalogue is not usable and was ignored: " + parseError;
+        return false;
+    }
+    // The time is a second file; its absence or damage costs the date, not the
+    // list. 0 reads as "not recorded".
+    std::string timeText;
+    if (readTextFile(fs::path(pluginsDir) / catalogueCacheTimeFileName(), timeText) ==
+        ReadResult::Ok) {
+        while (!timeText.empty() && (timeText.back() == '\n' || timeText.back() == '\r' ||
+                                     timeText.back() == ' ')) {
+            timeText.pop_back();
+        }
+        if (!timeText.empty() && timeText.size() <= 18 && allDigits(timeText)) {
+            readTime = std::stoll(timeText);
+        }
+    }
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Screenshots (0.99.72)
+// ---------------------------------------------------------------------------
+
+std::string PluginRepo::screenshotCachePath(const std::string& pluginsDir,
+                                            const std::string& sha256) {
+    if (!isWellFormedSha256(sha256)) { return std::string(); }
+    return (fs::path(pluginsDir) / screenshotCacheDirName() / (toLowerAscii(sha256) + ".png"))
+        .string();
+}
+
+bool PluginRepo::fetchScreenshot(const std::string& pluginsDir, const CatalogScreenshot& s,
+                                 std::string& localPath, std::string& error) {
+    localPath.clear();
+    error.clear();
+    // A cancel that arrived between two operations must not kill this one (the
+    // same rule as install()).
+    cancel_.store(false, std::memory_order_relaxed);
+
+    // Everything below runs BEFORE any socket or any file.
+    if (!isHttpsUrl(s.url)) {
+        error = "refusing a non-https picture URL: \"" + s.url + "\"";
+        return false;
+    }
+    if (!isWellFormedSha256(s.sha256)) {
+        error = "the picture's sha256 must be 64 hexadecimal digits";
+        return false;
+    }
+    if (pluginsDir.empty()) {
+        error = "no plugins directory to keep the picture in";
+        return false;
+    }
+    const std::string expected = toLowerAscii(s.sha256);
+    const fs::path target(screenshotCachePath(pluginsDir, expected));
+    std::error_code ec;
+
+    // THE CACHE FIRST, and a cached file is believed only after it is hashed: a
+    // file that is not the picture its name says (damaged, or put there) is
+    // deleted and fetched again, and a good one costs no request at all.
+    if (fs::is_regular_file(target, ec)) {
+        std::string actual;
+        std::string hashError;
+        if (sha256File(target.string(), actual, hashError) && sha256Matches(expected, actual)) {
+            localPath = target.string();
+            return true;
+        }
+        fs::remove(target, ec);
+    }
+
+    fs::create_directories(target.parent_path(), ec);
+    if (!fs::is_directory(target.parent_path(), ec)) {
+        error = "cannot create the picture cache \"" + target.parent_path().string() + "\"";
+        return false;
+    }
+    fs::path part = target;
+    part += ".part";
+    fs::remove(part, ec);  // debris from a killed earlier run
+
+    std::string actual;
+    bool ok = false;
+    {
+        Sha256 hasher;
+        if (!hasher.init(error)) { return false; }
+        std::ofstream out(part, std::ios::binary | std::ios::trunc);
+        if (!out) {
+            error = "cannot create the temporary file \"" + part.string() + "\"";
+            return false;
+        }
+        std::uint64_t written = 0;
+        bool overCap = false;
+        std::string hashError;
+        // RULE 4, for a picture: the cap is checked against what ARRIVES, and the
+        // sink refuses the chunk that would cross it - so a transport that does not
+        // count (a test's) and one that does end in the same place.
+        const auto sink = [&](const void* buf, std::size_t n) {
+            if (written + n > kMaxScreenshotBytes) {
+                overCap = true;
+                return false;
+            }
+            if (!hasher.update(buf, n, hashError)) { return false; }
+            out.write(static_cast<const char*>(buf), static_cast<std::streamsize>(n));
+            written += n;
+            return static_cast<bool>(out);
+        };
+        ok = httpsGet(s.url, kMaxScreenshotBytes, sink, nullptr, &cancel_, error,
+                      HttpTimeouts{/*connectMs=*/4000, /*sendMs=*/4000, /*receiveMs=*/15000});
+        out.flush();
+        const bool diskOk = static_cast<bool>(out);
+        out.close();
+        if (overCap) {
+            ok = false;
+            error = "the picture is larger than " + std::to_string(kMaxScreenshotBytes / 1024ull / 1024ull) +
+                    " MiB and was refused";
+        } else if (!ok && !hashError.empty()) {
+            error = hashError;
+        } else if (ok && !diskOk) {
+            ok = false;
+            error = "writing \"" + part.string() + "\" failed";
+        }
+        if (ok && !hasher.finishHex(actual, error)) { ok = false; }
+    }
+    if (!ok) {
+        fs::remove(part, ec);
+        return false;
+    }
+    if (!sha256Matches(expected, actual)) {
+        fs::remove(part, ec);
+        error = "the picture failed its integrity check and was discarded (expected " + expected +
+                ", got " + actual + ")";
+        return false;
+    }
+    fs::rename(part, target, ec);
+    if (ec) {
+        std::error_code ignored;
+        fs::remove(part, ignored);
+        error = "cannot move the verified picture into place at \"" + target.string() +
+                "\": " + ec.message();
+        return false;
+    }
+    localPath = target.string();
+    return true;
+}
+
+std::vector<std::string> PluginRepo::pruneScreenshotCache(
+    const std::string& pluginsDir, const std::vector<PluginCatalogEntry>& catalogue) {
+    std::vector<std::string> removed;
+    std::vector<std::string> wanted;  // "<sha>.png", lower case
+    for (const PluginCatalogEntry& e : catalogue) {
+        for (const CatalogScreenshot& s : e.screenshots) {
+            if (isWellFormedSha256(s.sha256)) { wanted.push_back(toLowerAscii(s.sha256) + ".png"); }
+        }
+    }
+    const fs::path dir = fs::path(pluginsDir) / screenshotCacheDirName();
+    std::error_code ec;
+    if (!fs::is_directory(dir, ec)) { return removed; }
+
+    std::vector<fs::path> doomed;
+    for (auto it = fs::directory_iterator(dir, ec); !ec && it != fs::directory_iterator();
+         it.increment(ec)) {
+        std::error_code fec;
+        if (!it->is_regular_file(fec)) { continue; }
+        const std::string name = it->path().filename().string();
+        const bool isPicture = name.size() == 64 + 4 && name.compare(64, 4, ".png") == 0 &&
+                               isWellFormedSha256(name.substr(0, 64));
+        const bool isDebris = name.size() > 5 && name.compare(name.size() - 5, 5, ".part") == 0;
+        if (!isPicture && !isDebris) { continue; }  // not ours: left alone
+        if (isPicture &&
+            std::find(wanted.begin(), wanted.end(), toLowerAscii(name)) != wanted.end()) {
+            continue;
+        }
+        doomed.push_back(it->path());
+    }
+    for (const fs::path& p : doomed) {
+        std::error_code rec;
+        if (fs::remove(p, rec) && !rec) { removed.push_back(p.filename().string()); }
+    }
+    std::sort(removed.begin(), removed.end());
+    return removed;
 }
 
 bool PluginRepo::install(const PluginCatalogEntry& e, const std::string& pluginsDir,

@@ -2378,6 +2378,36 @@ There is deliberately no per-module *success* line: the host already writes
 that follows each install, and a second "installed" line beside it would be
 two records of one event that can disagree.
 
+### What the plugin store's kept catalogue writes (0.99.72)
+
+The store keeps the last catalogue it read (`catalogue.json` and
+`catalogue.json.time` beside `installed.json`) and shows it when the network is
+away. Four lines say what happened to it; none names a file, a path or an
+address (the reason a refresh failed can carry the catalogue address, and an
+address is never written to the log), and none is written when nothing happened.
+
+- **At start-up, `info`**, only when a kept catalogue was found and used:
+  `plugin store: kept catalogue loaded - 24 plugins`. Nothing is fetched; this
+  is a file read.
+- **At start-up, `warn`**, when a kept catalogue was found and could not be
+  used (not a catalogue this build accepts, or unreadable): `plugin store: kept
+  catalogue ignored - the kept catalogue is not usable and was ignored: plugin
+  index: not valid JSON`. The file is left where it is, neither repaired nor
+  deleted; the next good read replaces it.
+- **After a refresh that failed, `info`**, when the store has a list to keep
+  showing: `plugin store: catalogue refresh failed - showing the kept copy of
+  24 plugins` (or `the earlier copy`, when the list on screen was read earlier
+  in the same session). The reason is on screen, not here.
+- **After a refresh that worked, `info`**, one line for each (at most eight, then
+  `and N more`) item the catalogue carried that this build dropped, naming the
+  plugin and why: `plugin store: catalogue note - plugin "adsb" screenshot 1:
+  dropped: url is not https`. A catalogue author's mistake is seen nowhere else.
+
+An update that succeeds now removes the copy it replaced by itself, for that
+plugin only, under the clean-up key's rules; the lines are the clean-up's own,
+unchanged: `plugin: removed old copy adsb-1.0.0.dll`, or `plugin: old copy
+adsb-1.0.0.dll is in use - queued for the next start`.
+
 ### The device-enumeration reports
 
 The "Afterwards" row above says the process dies, and for a fatal fault it

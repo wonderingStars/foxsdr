@@ -32,6 +32,19 @@ foreach(probe a b)
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_rescan_${probe}/$<CONFIG>")
 endforeach()
 
+# THE NEXT RELEASE OF PROBE "a" (0.99.72), for test_plugin_update_cleanup_app: the same
+# source and the same declared name as rescan_probe_a, but version 1.1.0. An update from the
+# one to the other is "a plugin updated", and the older file is what the update must take with
+# it - with the same declared name the host takes the older for an old copy of the newer.
+add_library(rescan_probe_a_newer MODULE
+    "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/rescan_probe_plugin.cpp")
+target_include_directories(rescan_probe_a_newer PRIVATE "${CMAKE_SOURCE_DIR}/src/core")
+target_compile_definitions(rescan_probe_a_newer PRIVATE PROBE_ID="a" PROBE_VERSION="1.1.0")
+set_target_properties(rescan_probe_a_newer PROPERTIES
+    PREFIX ""
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_rescan_a_newer/$<CONFIG>"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_rescan_a_newer/$<CONFIG>")
+
 # A REAL PLUGIN MODULE THAT DECLARES THE WRONG ABI, for test_health_paths: the
 # plugin host loads it as any plugin and refuses it, which is the "abi" word of
 # the anonymous failure count (core/health_events.hpp). Its own directory.
@@ -194,9 +207,21 @@ foreach(src ${CASCADE_TESTS})
         add_dependencies(${name} rescan_probe_a rescan_probe_b)
         add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:rescan_probe_a>"
                  "$<TARGET_FILE:rescan_probe_b>")
+    elseif(name STREQUAL "test_plugin_update_cleanup_app")
+        # A real AppWindow updating a real plugin module (probe a 1.0.0 -> 1.1.0) beside an
+        # unrelated one (probe b); all three built first, in that order on the command line.
+        add_dependencies(${name} rescan_probe_a rescan_probe_a_newer rescan_probe_b)
+        add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:rescan_probe_a>"
+                 "$<TARGET_FILE:rescan_probe_a_newer>" "$<TARGET_FILE:rescan_probe_b>")
     elseif(name STREQUAL "test_slow_frames_app")
         # Runs the real cascade.exe (built first) and, in process, a real plugin
         # reload against one of the probe modules above.
+        add_dependencies(${name} rescan_probe_a cascade)
+        add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:rescan_probe_a>")
+    elseif(name STREQUAL "test_plugin_store_app")
+        # Runs the real cascade.exe (built first) against a local catalogue of three fake
+        # plugins, one of them installed as a real module: the probe fixture above, copied
+        # into a scratch plugins folder as store-c 1.0.0.
         add_dependencies(${name} rescan_probe_a cascade)
         add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:rescan_probe_a>")
     elseif(name STREQUAL "test_soapy_enum_proc" AND TARGET soapy_fault_fixture)
@@ -269,6 +294,18 @@ set_tests_properties(test_radio_setup_app PROPERTIES TIMEOUT 600)
 # minutes there (0.99.66: both Linux jobs timed out at 120 s). On this desktop
 # it is 80 s.
 set_tests_properties(test_airband_app PROPERTIES TIMEOUT 900)
+# The update-cleanup test runs the real AppWindow's plugin rescan five times against real
+# modules and waits on a worker for each transfer (a second or two here); the Linux runners
+# are half this desktop's speed, so it is given its own bound instead of the loop's two minutes.
+set_tests_properties(test_plugin_update_cleanup_app PROPERTIES TIMEOUT 300)
+# The catalogue/pictures test builds the real AppWindow six times and waits on workers (a few
+# hundred milliseconds each here); same reasoning, same bound.
+set_tests_properties(test_plugin_catalogue_app PROPERTIES TIMEOUT 300)
+# The store test starts the real application about a dozen times (a layout run and a scripted
+# run per scenario: the Browse and Updates tabs, a page, the legal notice's tick, the window's
+# remembered rectangle, the Fitted modules window and its page). Each is 120 to 200 frames.
+# Linux runners are half this desktop's speed, so it is given the generous bound its siblings are.
+set_tests_properties(test_plugin_store_app PROPERTIES TIMEOUT 600)
 
 add_test(NAME app_smoke COMMAND cascade --frames 3)
 set_tests_properties(app_smoke PROPERTIES

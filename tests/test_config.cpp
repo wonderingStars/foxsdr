@@ -262,6 +262,13 @@ AppConfig junkConfig() {
     c.fittedModulesY = 999999;
     c.fittedModulesWidth = -5;
     c.fittedModulesHeight = 999999;
+    // The plugin store window's rectangle (0.99.72), under the same rule: away
+    // from "nothing saved" and out of range, so a load path that forgets one
+    // of the four is caught here.
+    c.pluginStoreX = -999999;
+    c.pluginStoreY = 999999;
+    c.pluginStoreWidth = -5;
+    c.pluginStoreHeight = 999999;
     // P10: away from its default AND out of range, so a load path that forgets
     // to assign it is caught by the same rule as every other field.
     c.pluginLastUpdateCheck = -999;
@@ -394,6 +401,10 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     CHECK(a.fittedModulesY == b.fittedModulesY);
     CHECK(a.fittedModulesWidth == b.fittedModulesWidth);
     CHECK(a.fittedModulesHeight == b.fittedModulesHeight);
+    CHECK(a.pluginStoreX == b.pluginStoreX);
+    CHECK(a.pluginStoreY == b.pluginStoreY);
+    CHECK(a.pluginStoreWidth == b.pluginStoreWidth);
+    CHECK(a.pluginStoreHeight == b.pluginStoreHeight);
     CHECK(a.pluginLastUpdateCheck == b.pluginLastUpdateCheck);
     CHECK(a.pluginTuneAllowed == b.pluginTuneAllowed);
     CHECK(a.pluginsStopped == b.pluginsStopped);
@@ -467,7 +478,11 @@ int main() {
         in.fittedModulesY = 50;
         in.fittedModulesWidth = 900;
         in.fittedModulesHeight = 700;
-        in.mapPages = {{"ADS-B", 10, 20, 800, 600, true},
+        in.pluginStoreX = 60;
+        in.pluginStoreY = 70;
+        in.pluginStoreWidth = 1100;
+        in.pluginStoreHeight = 800;
+        in.mapPages ={{"ADS-B", 10, 20, 800, 600, true},
                        {"Satellites", 30, 40, 640, 480, false}};
         in.volume = 0.25f;
         const AppConfig out = cascade::core::startupState(in);
@@ -505,6 +520,11 @@ int main() {
         CHECK(out.fittedModulesY == 50);
         CHECK(out.fittedModulesWidth == 900);
         CHECK(out.fittedModulesHeight == 700);
+        // The store's rectangle comes back too: where it sat, not whether it was open.
+        CHECK(out.pluginStoreX == 60);
+        CHECK(out.pluginStoreY == 70);
+        CHECK(out.pluginStoreWidth == 1100);
+        CHECK(out.pluginStoreHeight == 800);
         CHECK(out.mapPages.size() == 2 && out.mapPages[0].plugin == "ADS-B" &&
               out.mapPages[0].x == 10 && out.mapPages[0].y == 20 &&
               out.mapPages[0].width == 800 && out.mapPages[0].height == 600);
@@ -567,6 +587,57 @@ int main() {
         out = junkConfig();
         CHECK(ConfigStore::load(path, out, err));
         CHECK(out.mainView == "patch");
+    }
+
+    // THE PLUGIN STORE WINDOW'S RECTANGLE (0.99.72): written whole, read back whole, and discarded whole
+    // when any one number of it is out of range - the Fitted modules window's rule, and a rectangle a
+    // run saves is where the next run opens it. The junk-config test above cannot see a field that is
+    // never written (the junk is out of range, so the loaded value is the default either way): this
+    // one round-trips a GOOD rectangle.
+    {
+        const std::string path = p("store_rect.json");
+        std::string err;
+        AppConfig in;
+        in.pluginStoreX = 86;
+        in.pluginStoreY = 49;
+        in.pluginStoreWidth = 1430;
+        in.pluginStoreHeight = 927;
+        in.fittedModulesX = 40;
+        in.fittedModulesY = 50;
+        in.fittedModulesWidth = 900;
+        in.fittedModulesHeight = 700;
+        CHECK(ConfigStore::save(path, in, err));
+        const std::string text = readAll(path);
+        CHECK(text.find("\"pluginStoreX\": 86") != std::string::npos);
+        CHECK(text.find("\"pluginStoreY\": 49") != std::string::npos);
+        CHECK(text.find("\"pluginStoreWidth\": 1430") != std::string::npos);
+        CHECK(text.find("\"pluginStoreHeight\": 927") != std::string::npos);
+        AppConfig out = junkConfig();
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.pluginStoreX == 86);
+        CHECK(out.pluginStoreY == 49);
+        CHECK(out.pluginStoreWidth == 1430);
+        CHECK(out.pluginStoreHeight == 927);
+        // ...the two windows' rectangles are two records, neither disturbing the other.
+        CHECK(out.fittedModulesX == 40 && out.fittedModulesWidth == 900);
+        // ONE BAD NUMBER DISCARDS THE RECTANGLE (a half-rejected one is a rectangle nobody chose), and
+        // leaves the Fitted modules window's alone.
+        CHECK(writeText(path,
+                        "{\"pluginStoreX\": 86, \"pluginStoreY\": 49, \"pluginStoreWidth\": -5, "
+                        "\"pluginStoreHeight\": 927, \"fittedModulesX\": 40, \"fittedModulesY\": 50, "
+                        "\"fittedModulesWidth\": 900, \"fittedModulesHeight\": 700}\n"));
+        out = junkConfig();
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.pluginStoreX == 0 && out.pluginStoreY == 0);
+        CHECK(out.pluginStoreWidth == 0 && out.pluginStoreHeight == 0);
+        CHECK(out.fittedModulesWidth == 900);
+        // A config from before 0.99.72 says nothing: "nothing saved", which the window reads as "open at
+        // the default size, inside the main window".
+        CHECK(writeText(path, "{\"volume\": 0.5}\n"));
+        out = junkConfig();
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.pluginStoreWidth == 0 && out.pluginStoreHeight == 0);
+        CHECK(AppConfig{}.pluginStoreWidth == 0);
     }
 
     // --- the spectrum's trace mode is normalised and clamped on load ----------

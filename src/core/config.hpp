@@ -807,6 +807,17 @@ struct AppConfig {
     int fittedModulesWidth = 0;
     int fittedModulesHeight = 0;
 
+    // Where the PLUGIN STORE window sat at the last exit (0.99.72): its rectangle,
+    // restored the way the fitted modules window's is. Its open flag is
+    // pluginBrowserOpen above, likewise recorded and not restored. The rule is
+    // the fitted rectangle's verbatim: zero width means "nothing saved", the
+    // position is only honoured when a size was saved with it, and an
+    // out-of-range component discards the whole rectangle.
+    int pluginStoreX = 0;
+    int pluginStoreY = 0;
+    int pluginStoreWidth = 0;
+    int pluginStoreHeight = 0;
+
     // --- Plugin version policy (P10) ------------------------------------------
     // When a plugin catalogue was last successfully seen, in seconds since the
     // Unix epoch; 0 means never. It exists so the UI can say how old the

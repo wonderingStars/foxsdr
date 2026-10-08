@@ -1,61 +1,56 @@
-// plugin_store_view.hpp - the PLUGIN STORE window's content: the catalogue.
+// plugin_store_view.hpp - the PLUGIN STORE window's content: the catalogue, as a
+// shop window (0.99.72).
 //
-// ONE FUNCTION, ONE WINDOW. The design handoff's principle, and the same one
-// the satellites map already follows: everything for choosing a module is in
-// this window, and the rail row that opens it is only the key. What this
-// window is NOT is the operating panel - running or stopped, start, stop,
-// remove, and why a fitted module was refused all belong to the FITTED MODULES
-// window beside it. This one answers "what could I have"; that one answers
-// "what do I have, and is it working". They share the DATA PLATE below and
-// nothing else, so a module reads identically in both.
+// TWO TABS AND A PAGE. BROWSE is the catalogue in category sections of cards;
+// UPDATES (n) is what the catalogue offers over what is fitted; a card's name or
+// glyph opens the plugin's own PAGE - pictures, what it does, what is new, the
+// legal notice it has to be read against, and the facts folded behind SHOW
+// DETAILS. What this window is NOT is the operating panel: running or stopped,
+// start, stop, remove, and why a fitted module was refused all belong to the
+// FITTED MODULES window beside it (gui/plugins_view.hpp). This one answers "what
+// could I have"; that one answers "what do I have, and is it working". They share
+// the PLUGIN PAGE BODY below - one renderer, two callers - and nothing else, so a
+// module's pictures, description and facts read identically in both.
 //
 // ---------------------------------------------------------------------------
 // THE ONE CLAIM THIS FILE REFUSES TO MAKE, and it is a safety matter.
 //
-// The design's data plate says of the reach list: "enforced by the console - a
-// module cannot take anything not on this list", and "a module that asks for
-// anything outside this list is refused at the point it asks". That is FALSE
-// of this product and it is not drawn.
+// A design for a store of native code says of the reach list: "enforced by the
+// console - a module cannot take anything not on this list". That is FALSE of
+// this product and it is not drawn. Plugins are loaded IN-PROCESS: LoadLibraryExW
+// on Windows (src/core/plugin_host.cpp), dlopen on POSIX. There is no sandbox, no
+// permission model and no out-of-process host. The CASCADE_CAP_* bits describe
+// what a module PROVIDES - a decoder, a basemap, a panel, a preset - and are not
+// a limit on what it may take. A fitted module runs with every privilege this
+// application has.
 //
-// Plugins are loaded IN-PROCESS: LoadLibraryExW on Windows
-// (src/core/plugin_host.cpp:98), dlopen on POSIX (:130). There is no sandbox,
-// no permission model and no out-of-process host. The CASCADE_CAP_* bits
-// describe what a module PROVIDES - a decoder, a basemap, a panel, a preset -
-// and are not a limit on what it may take. A fitted module runs with every
-// privilege this application has.
+// So REACHES is stated in plain words, and its CLAIM is "declared by the maker,
+// not enforced" (kReachLead in the .cpp). The one thing that IS enforced is named
+// as such - the per-module tune and radio-settings grants, which PluginUi refuses
+// without - and nothing else is dressed up as a guarantee.
 //
-// So the reach panel is KEPT, because stating reach in plain words before the
-// fit key is the design's best idea, and its CLAIM is corrected: declared by
-// the maker, not enforced. The one thing that IS enforced is named as such -
-// the per-module tune grant, which PluginUi refuses without (see plugin_ui.hpp
-// and CASCADE_TUNE_DENIED) - and nothing else is dressed up as a guarantee.
-//
-// Printing the design's sentence would hand the user a guarantee the product
-// does not provide, on the very card - unverified maker, no licence stated -
-// where they would lean on it hardest.
-//
-// THE SAME RULE APPLIES TO THE DOWNLOAD, and it caught this file out once.
-// The updates banner said each key "checks its signature". NOTHING IN THIS
-// PRODUCT VERIFIES A SIGNATURE. What PluginRepo::install actually does is
-// worth stating and is stated - https only with the platform's certificate
-// checks on, no cross-host redirect, a hard byte cap, an untrusted-file-name
-// sanitiser, an exact ABI match, and a mandatory sha256 that the streamed
-// bytes must match before the temp file is renamed into the plugins directory
-// - but that digest is published by the same catalogue as the file, so it
-// proves the bytes arrived unaltered and vouches for nobody. Saying
-// "signature" would promise a second party who does not exist.
+// THE SAME RULE APPLIES TO THE DOWNLOAD. NOTHING IN THIS PRODUCT VERIFIES A
+// SIGNATURE. What PluginRepo::install does - https only with certificate checks
+// on, no cross-host redirect, a hard byte cap, an exact ABI match, and a
+// mandatory sha256 the streamed bytes must match before the file is renamed into
+// the plugins directory - proves the bytes arrived unaltered, and the digest is
+// published by the same catalogue as the file, so it vouches for nobody. No copy
+// in this window says "signature".
 // ---------------------------------------------------------------------------
 //
 // WHAT IT CANNOT COMPUTE IS AN INPUT. This view owns no catalogue, no plugin
-// host and no network. Everything it draws arrives in PluginStoreModel, filled
-// by the wiring from the sources named against each field, so a figure on the
-// panel can always be traced back to something the application measured.
+// host and no network. Everything it draws arrives in PluginStoreModel, filled by
+// AppWindow::buildPluginStoreModel from the sources named against each field, so
+// a figure on the page can always be traced back to something the application
+// measured. What the view asks for goes back as REQUESTS the caller applies after
+// the frame.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #ifndef CASCADE_GUI_PLUGIN_STORE_VIEW_HPP
 #define CASCADE_GUI_PLUGIN_STORE_VIEW_HPP
 
 #include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -66,130 +61,79 @@
 namespace cascade::gui {
 
 // ===========================================================================
-// THE DATA PLATE - the component SHARED with the FITTED MODULES window
+// ONE MODULE'S FACTS - shared by the store page and the fitted modules page
 // ===========================================================================
 //
-// It lives here, in the store's files, and the fitted-modules window includes
-// this header for it. One implementation, so the same module reads identically
-// in both windows: the same facts in the same order, the same words for a
-// missing one, and the same reach panel with the same corrected claim.
-//
 // IT KNOWS NOTHING ABOUT EITHER WINDOW. No catalogue, no filter, no selection,
-// no store-only state - only a plain struct of what one module IS. That is
-// what lets the other window pass a module it built from PluginHost records
-// with no catalogue in sight.
+// no store-only state: a plain struct of what one module IS, so the other window
+// can pass a module it built from PluginHost records with no catalogue in sight.
 //
-// EVERY OPTIONAL FIELD IS ABSENT-BY-DEFAULT AND SAYS SO WHEN DRAWN. "0 bytes"
-// and "we were never told the size" are opposite statements, and this product
-// has been bitten by exactly that conflation before (see the no-reading rule
-// at the top of scope_face.hpp). So a value that has no source is drawn
-// hatched with the reason beside it, never as a clean zero.
+// EVERY OPTIONAL FIELD IS ABSENT-BY-DEFAULT AND SAYS SO WHEN DRAWN. "0 bytes" and
+// "we were never told the size" are opposite statements, and this product has
+// been bitten by exactly that conflation before (see the no-reading rule at the
+// top of scope_face.hpp). A value with no source is drawn hatched with the reason
+// beside it, never as a clean zero.
 struct ModulePlate {
     // --- identity ----------------------------------------------------------
-    // From PluginCatalogEntry (name/version/author/licence/summary/
-    // description/homepage/legalNotice) for a catalogue row, or from
-    // LoadedPlugin (name/version/author/licence) for one that is fitted.
-    //
-    // WAS THERE A RECORD TO COPY THESE FROM AT ALL? A catalogue row always
-    // has one, so this is TRUE by default and the caller only ever turns it
-    // off. A FITTED module may not: PluginHost copies name, version, author
-    // and licence out of the descriptor only AFTER validatePluginDesc accepts
-    // it (plugin_host.cpp:232-249), so a file refused before that point - the
-    // wrong ABI, no entry point, a capability with no table - reaches this
-    // struct with all four empty. Drawing them as "not stated" and "none
-    // declared" would be three inventions about a module nobody has read:
-    // "the maker did not say" and "we never got as far as asking" are
-    // opposite claims, and only the second one is true. FALSE makes the plate
-    // letter those cells "not read" instead.
-    //
-    // It is NOT the same question as `loaded`. The host's duplicate resolver
-    // turns a loaded module off AFTER reading it (plugin_host.cpp:826), so
-    // that record is not loaded and its identity is perfectly well known.
+    // WAS THERE A RECORD TO COPY THESE FROM AT ALL? A catalogue row always has
+    // one, so this is TRUE by default and the caller only ever turns it off. A
+    // FITTED module may not: PluginHost copies name, version, author and licence
+    // out of the descriptor only AFTER validatePluginDesc accepts it, so a file
+    // refused before that point reaches this struct with all four empty. Drawing
+    // them as "not stated" would be three inventions about a module nobody has
+    // read: FALSE makes the page letter those cells "not read" instead. It is NOT
+    // the same question as `loaded`: the duplicate resolver turns a loaded module
+    // off AFTER reading it, so that record is not loaded and its identity is
+    // perfectly well known.
     bool haveDescriptor = true;
 
     std::string name;
     std::string version;
-    std::string maker;    // EMPTY means the record states no author. Drawn as
-                          // "not stated" - never invented, never blanked.
-                          // Meaningless unless haveDescriptor.
-    std::string licence;  // EMPTY means none declared. The host refuses to
-                          // LOAD a module with no licence, so this is a fact
-                          // worth its own line rather than a shrug - but only
-                          // when haveDescriptor says a licence was looked for.
-    std::string blurb;    // summary, or description when there is one
+    std::string maker;    // EMPTY means the record states no author
+    std::string licence;  // EMPTY means none declared (only meaningful when haveDescriptor)
+    std::string blurb;    // the description, or the summary when there is none:
+                          // WHAT IT DOES
 
-    // THE ONE-LINE SUMMARY, KEPT APART FROM THE DESCRIPTION, and the reason is
-    // a list nobody could read. `blurb` carries whichever of the two the
-    // catalogue gave, which in the live index means the DESCRIPTION - 528 to
-    // 2979 characters of it - and a row that wraps all of that is eleven lines
-    // tall, so one module filled the whole list and the other twenty-three
-    // were a scroll away. The summaries in the same index run 47 to 106
-    // characters: one or two lines, which is a row.
-    //
-    // EMPTY IS NORMAL and falls back to `blurb`, because a catalogue that
-    // states only a description is a catalogue this window still has to draw.
-    // Nothing is ever cut to make it fit - the row wraps what it is given.
+    // THE ONE-LINE SUMMARY, KEPT APART FROM THE DESCRIPTION: the live index's
+    // descriptions run to three thousand characters and its summaries to about a
+    // hundred. A card is one line; the page is the paragraph.
     std::string summary;
 
     std::string homepage;
-    std::string legalNotice;  // shown verbatim; the acknowledgement gate is
-                              // the store's, not the plate's
+    std::string legalNotice;  // shown verbatim; the acknowledgement gate is the store's
+    std::string originNote;   // ONE MUTED LINE for a regional plugin; empty draws nothing
 
-    // ONE MUTED LINE for a plugin offered only to some connections — set
-    // from PluginCatalogEntry::regional (never read from the catalogue's own
-    // JSON; see plugin_repo.hpp's REGIONAL CATALOGUE block for why). EMPTY
-    // draws nothing, which is every module today and every non-regional row
-    // from here on.
-    std::string originNote;
-
-    // Bare file name in the plugins directory. Empty when the module is not
-    // installed here - which is the normal case for a catalogue row.
+    // Bare file name in the plugins directory. Empty when not installed here.
     std::string fileName;
 
     // --- state on THIS machine ---------------------------------------------
-    bool fitted = false;   // installed: a host record or a manifest row exists
-    bool loaded = false;   // mapped and validated right now (LoadedPlugin::loaded)
-    bool running = false;  // loaded AND not in the stop set (PluginUi::isStopped)
-
-    // LoadedPlugin::error, verbatim - empty iff loaded. This is the refusal
-    // reason, and it is the whole reason a fitted module can be silent.
-    std::string refusalReason;
+    bool fitted = false;   // a host record or an install record exists
+    bool loaded = false;   // mapped and validated right now
+    bool running = false;  // loaded AND not stopped
+    std::string refusalReason;  // LoadedPlugin::error, verbatim - empty iff loaded
 
     // --- what the module declares ------------------------------------------
-    // OR of CASCADE_CAP_* bits, from LoadedPlugin::capabilities.
-    //
-    // `haveCapabilities` is FALSE for a catalogue row, and that is not an
-    // oversight to be papered over: PluginCatalogEntry carries no capability
-    // field, so what a module declares is genuinely unknown until it is
-    // fitted. The plate says that in words rather than drawing an empty list
-    // that would read as "it declares nothing".
-    //
-    // IT IS ALSO FALSE FOR A REFUSED MODULE, for a different reason, and the
-    // plate says which: a catalogue row has not been read yet, while a refused
-    // file was read and rejected - it reaches nothing because it is not
-    // loaded, not because it is harmless. An empty list drawn the same way for
-    // both would report the second as the first.
+    // OR of CASCADE_CAP_* bits. For a FITTED module they are the descriptor's;
+    // for a catalogue row, what the catalogue says the binary declares
+    // (PluginCatalogEntry::capabilities) - and `haveCapabilities` is FALSE when
+    // the catalogue says nothing, which is "not declared", not "declares none".
+    // IT IS ALSO FALSE FOR A REFUSED MODULE, for a different reason: it was read
+    // and rejected, so it reaches nothing because it is not loaded.
     bool haveCapabilities = false;
     std::uint32_t capabilities = 0;
 
     // The per-module tune grant - the ONE permission this product actually
-    // enforces. `haveTuneGrant` false means the grant was not looked up (a
-    // catalogue row); it does not mean "denied".
+    // enforces on this side. `haveTuneGrant` false means it was not looked up.
     bool haveTuneGrant = false;
     bool tuneGranted = false;
 
     // --- the platform record -----------------------------------------------
-    // PluginPlatform::sizeBytes for the build matching this host. Advisory in
-    // the catalogue and advisory here. 0 with haveSizeBytes false means the
-    // catalogue stated no size; there is no published date field anywhere in
-    // the record, so no published date is drawn.
     bool haveSizeBytes = false;
     std::uint64_t sizeBytes = 0;
 
-    // PluginCatalogEntry::abiVersion against CASCADE_PLUGIN_ABI_VERSION, or
-    // InstalledPlugin::abiVersion for a fitted one. abiVersion 0 in a manifest
-    // means "not recorded" and must be passed as haveAbi = false, never as a
-    // mismatch - the same fail-open rule pluginBlockReason follows.
+    // PluginCatalogEntry::abiVersion against CASCADE_PLUGIN_ABI_VERSION, or the
+    // install record's for a fitted one. abiVersion 0 in a manifest means "not
+    // recorded" and must be passed as haveAbi = false, never as a mismatch.
     bool haveAbi = false;
     std::uint32_t abiVersion = 0;
     std::uint32_t hostAbiVersion = 0;
@@ -198,181 +142,262 @@ struct ModulePlate {
     // build for. Empty when there is no catalogue record to read them from.
     std::string platforms;
 
-    // PluginCatalogEntry::minSupportedVersion - the retirement floor. Empty is
-    // the normal case and means NO floor; it must never be read as "retire
-    // everything".
+    // PluginCatalogEntry::minSupportedVersion - the retirement floor. Empty is the
+    // normal case and means NO floor.
     std::string retirementFloor;
+
+    // --- the shop-window fields (0.99.72) ----------------------------------
+    std::string category;   // catalogue id: "aircraft", "marine", ... or "" / unknown
+    bool experimental = false;
+    std::string whatsNew;   // one short paragraph about THIS version, or empty
+    std::string published;  // "YYYY-MM-DD" or empty
+    std::string sha256;     // the digest of THIS host's build, or empty
 };
 
-// The height the plate will take at `width`. Measured, not guessed, so a
-// caller can size a column before drawing into it.
-float moduleDataPlateHeight(float width, const ModulePlate& m);
+// The reach words of a module (today's, from the descriptor or catalogue bits).
+// One row per thing it declares: `key` the short name, `detail` the sentence
+// under it, `outward` set for a capability that reaches beyond the host.
+struct ReachRow {
+    std::string key;
+    std::string detail;
+    bool outward = false;
+};
+std::vector<ReachRow> moduleReachRows(const ModulePlate& m);
 
-// Draws the plate at `tl`, `width` wide. Returns the height consumed, which
-// equals moduleDataPlateHeight(width, m).
-//
-// Draws only - it creates no ImGui items and raises no requests, so the two
-// windows can put their own keys wherever their own layout wants them.
-float drawModuleDataPlate(ImDrawList* dl, const ImVec2& tl, float width,
-                          const ModulePlate& m);
+// The reach row names joined for one line ("Audio decoder, Map targets"), or the
+// words for "not declared" / "not known" when there are none to say.
+std::string moduleReachesLine(const ModulePlate& m);
 
-// The KIND TAG - the small plate at the head of a module row.
-//
-// Derived from the declared capability bits, so it is a fact about the module
-// rather than a category somebody typed. With no capability word it returns
-// "NOT DECLARED" for a catalogue row, which genuinely does not say one yet,
-// and "NOT KNOWN" for a fitted module the host would not accept - whose
-// silence belongs to the refusal and not to the module.
-const char* moduleKindTag(const ModulePlate& m);
-
-// HOW WIDE THAT PLATE HAS TO BE, measured across EVERY word it can carry.
-//
-// IT WAS TWO NUMBERS, AND THAT IS THE FAULT THIS FIXES. The store's card used
-// 84 px and the fitted-modules row used 82 minus 8, which is 74 - the same
-// component, drawn ten pixels apart in the two windows the shared plate exists
-// to keep identical. Both still HELD their words after the engraving grew
-// ("NOT DECLARED", the longest, measures 46.8 px at 14), so this is a
-// consistency fix rather than an overflow one; what it also buys is that the
-// chip can never quietly stop holding them, because the tag is CENTRED in it
-// and not clipped - a tag wider than its plate is not cut, it hangs out over
-// the machined edge at both ends.
-//
-// And it is measured across every tag rather than the one on screen, because a
-// chip that changed width with its word would move the module's name beside it
-// from row to row.
-//
-// Call inside a frame: it asks the atlas to measure.
-float moduleKindTagWidth();
-
-// The one-line REACH SUMMARY for a row: what this module declares, in the
-// fewest honest words. Never says "reaches nothing" - every plugin here is
-// native code in this process, so nothing reaches nothing.
+// The one-line REACH SUMMARY for a fitted row: what this module declares, in the
+// fewest honest words. Never says "reaches nothing" - every plugin here is native
+// code in this process.
 std::string moduleReachSummary(const ModulePlate& m);
 
-// The colour that summary is drawn in, by the furthest thing the module
-// declares: ivory-ink for a module that only produces output, gold for one
-// that reaches outward (asks to move the receiver, or fetches from a server),
-// faint for one whose declaration is unknown. NEVER rust - a declared
-// capability is not a fault, and rust in this palette means trouble.
+// The colour that summary is drawn in, by the furthest thing the module declares.
+// NEVER rust - a declared capability is not a fault.
 ImU32 moduleReachColour(const ModulePlate& m);
+
+// "fitted and started", "not fitted", ... : the ON THIS MACHINE fact, from the
+// same rule everywhere. Never says RUNNING: whether anything reaches the module is
+// the FITTED MODULES window's answer, and it is handed the runner.
+std::string moduleMachineText(const ModulePlate& m);
 
 // --- a reason kept in English, drawn in the language in force -----------------
 //
 // WHY A MODULE CANNOT BE FITTED is one English sentence
-// (AppWindow::pluginInstallBlockedReason), and it has to stay English where it
-// is made: ADD ALL compares it ("already installed" is not a failure), the log
+// (AppWindow::pluginInstallBlockedReason), and it has to stay English where it is
+// made: ADD ALL compares it ("already installed" is not a failure), the log
 // records it, and the web page is handed it. So each reason is a FOX_TR_NOOP
-// literal where it is defined, and translated only where it is DRAWN - the
-// "Cannot fit:" line on a row and on the data plate, the red result line
-// under them, the fitted window's copy of that line and the ADD ALL summary.
-//
-// Two of the reasons carry a value - the plugin ABI it was built for, the
-// platform nobody built it for - so the English is made from a format string
-// by the functions below, and trStoredReason() recognises a sentence made by
-// either and formats the same values into that format's translation. The
-// round trip is checked: a sentence that merely looks like one of them is
-// drawn as it came.
+// literal where it is defined, and translated only where it is DRAWN. Two of the
+// reasons carry a value - the plugin ABI it was built for, the platform nobody
+// built it for - so the English is made from a format string by the functions
+// below, and trStoredReason() recognises a sentence made by either and formats the
+// same values into that format's translation.
 std::string pluginAbiMismatchReason(unsigned builtFor, unsigned required);
 std::string pluginNoBuildReason(const std::string& platform);  // "windows/x64"
 
 // `english` in the language in force: its catalogue entry when it has one, a
-// sentence from one of the two formats above re-made in its translation,
-// otherwise `english` itself - so with English in force, and for words the
-// host passes on verbatim (PluginRepo's sha256 and I/O errors), the text is
-// byte for byte what it was.
+// sentence from one of the two formats above re-made in its translation, otherwise
+// `english` itself - so with English in force, and for words the host passes on
+// verbatim (PluginRepo's sha256 and I/O errors), the text is byte for byte what it
+// was.
 std::string trStoredReason(const std::string& english);
 
-// WHAT THE HOST KNOWS ABOUT THIS MODULE ON THIS MACHINE, in one word.
-//
-//   NOT FITTED        no file for it here
-//   REFUSED           a file is here and the host rejected it
-//   STOPPED           loaded, and the user stopped it
-//   TAKES NO SIGNAL   loaded, started, and it declares no decoder - so
-//                     nothing is ever routed to it, by design
-//   STARTED           loaded and not stopped
-//
-// STARTED IS DELIBERATELY NOT "RUNNING". Whether a decoder is actually being
-// fed depends on the runner's instance table and the receiver's own run state,
-// and the plate is handed neither - it is a description of a module, not a
-// meter. The FITTED MODULES window is handed both and splits this same module
-// into FED and NOT FED; "started" is the coarser of the two answers and never
-// the contradicting one, which is what lets the two windows sit side by side.
-//
-// The five words come from one function so that the row, the lamp beside it
-// and the plate's own ON THIS MACHINE line cannot disagree.
-const char* moduleStateWord(const ModulePlate& m);
+// ===========================================================================
+// THE PAGE'S SHARED PARTS
+// ===========================================================================
 
-// The ink that word is lettered in. Phosphor is reserved for something known
-// to be working, which is a claim this side cannot make, so STARTED letters in
-// plain ivory.
-ImU32 moduleStateColour(const ModulePlate& m);
+// One picture of a plugin as the page knows it: the catalogue's record, and where
+// the fetch has got to (AppWindow::pictureStatus).
+enum class PictureState { None, Pending, Ready, Failed };
+struct StorePicture {
+    std::string sha256;   // the cache key, and the texture's
+    std::string caption;  // one line under the frame
+    int width = 0;        // advisory (the catalogue's); the frame is 16:10 whatever it says
+    int height = 0;
+    PictureState state = PictureState::None;
+    std::string path;     // Ready: the cached file
+    std::string reason;   // Failed: PluginRepo's English words
+};
 
-// Whether a lamp beside that word is LIT. Only REFUSED lights one: a panel of
-// lit lamps means nothing, and this side cannot see the one state - being fed
-// - that would earn a green light.
-bool moduleStateLampLit(const ModulePlate& m);
+// THE DECODED PICTURES, kept for the window's life. One GL texture per sha256,
+// made the first time a Ready picture is drawn - decoded with core::decodePng
+// (refusing anything that is not a PNG, over 4096 px a side, or damaged) and
+// uploaded once. A picture that will not decode keeps its reason and is not tried
+// again. releaseAll() deletes every texture: call it when the window closes. At
+// most ONE picture is decoded per frame, so a plugin with eight does not freeze it.
+class PagePictureCache {
+public:
+    struct Entry {
+        unsigned tex = 0;     // GL texture name, 0 when it did not decode
+        int width = 0;
+        int height = 0;
+        std::string error;    // why it did not decode (core::decodePng's words)
+    };
+    PagePictureCache() = default;
+    // The textures are owned: a copy would delete them twice.
+    PagePictureCache(const PagePictureCache&) = delete;
+    PagePictureCache& operator=(const PagePictureCache&) = delete;
+    ~PagePictureCache();
+
+    // The decoded picture for `p` (state Ready), decoding it now unless a decode
+    // already happened this frame; null while it is not yet available.
+    const Entry* find(const StorePicture& p);
+    void beginFrame() { decodedThisFrame_ = false; }
+    void releaseAll();
+    std::size_t size() const { return entries_.size(); }
+
+private:
+    std::map<std::string, Entry> entries_;
+    bool decodedThisFrame_ = false;
+};
+
+// What a page remembers between frames. Owned by the CALLER (a deck), because it
+// outlives one frame; one per window, so the store's page and the fitted page
+// each keep their own.
+struct ModulePageState {
+    bool showDetails = false;  // SHOW DETAILS / HIDE DETAILS
+    float stripX = 0.0f;       // the pictures' horizontal scroll, in pixels
+    float stripTarget = 0.0f;  // where the arrow keys are taking it
+    void reset() { *this = ModulePageState{}; }
+};
+
+// One row of the DETAILS grid.
+struct PageFact {
+    std::string key;     // already translated
+    std::string value;   // already translated
+    bool hatched = false;  // no source: drawn ruled with the reason lettered over it
+    bool copyable = false; // a URL or a digest: drawn as selectable text
+    ImU32 tone = 0;        // 0 = the default ivory
+};
+
+// The facts in order: MAKER, LICENCE, VERSION, PLUGIN ABI, DOWNLOAD, BUILDS FOR,
+// REACHES, HOMEPAGE, SHA-256, PUBLISHED, then - when fitted - ON THIS MACHINE and
+// FILE, and RETIRED BELOW when set. A fact with no source is hatched and says why
+// ("not stated", "not recorded", "not read"); nothing is invented.
+std::vector<PageFact> modulePageFacts(const ModulePlate& m);
+
+// The names of the page's sections, in the order they are drawn (these are also
+// the census names, "store:section:<name>"): screenshots, whatitdoes, whatsnew,
+// then beforeyoufitit ONLY when `hasNoticeBox` (a plugin with a legal notice that
+// is not fitted yet), then details.
+std::vector<std::string> modulePageSections(bool hasNoticeBox);
+
+// WHAT'S NEW: `whatsNew` when the catalogue has one, otherwise "<version>: first
+// release." - a plugin whose catalogue says nothing new is a first release.
+std::string moduleWhatsNewText(const ModulePlate& m);
+
+// What the shared body is handed. The pointers are borrowed for the call.
+struct ModulePageIn {
+    const char* census = "store";             // "store" or "fitted": the census prefix
+    std::string id;                           // the catalogue id (census and texture names)
+    const ModulePlate* plate = nullptr;
+    const std::vector<StorePicture>* pictures = nullptr;  // null/empty: none published
+    bool catalogued = true;     // false: not in the catalogue - DETAILS only
+    // THE "declared by the maker, not enforced" sentence under the DETAILS grid. The
+    // fitted page says it beside its own reach list and so turns this off.
+    bool showReachLead = true;
+    bool noticeBox = false;     // draw BEFORE YOU FIT IT with the tick
+    bool* noticeTick = nullptr; // the tick's state (store only)
+    float width = 0.0f;         // the column the page is laid out in
+    // The category glyph behind a plugin with no pictures: the catalogue id.
+    const char* glyphCategory = "";
+};
+
+// Draws the page from SCREENSHOTS down at the ImGui cursor, `in.width` wide, and
+// leaves the cursor below it. ALL CALLED FROM INSIDE A CHILD WINDOW the caller
+// owns. Draws only what `in` says; it raises no request and changes no state but
+// `state` and the tick. The sections draw in the order modulePageSections() gives.
+void drawModulePageBody(const ModulePageIn& in, ModulePageState& state,
+                        PagePictureCache& pictures);
+
+// ===========================================================================
+// THE GLYPHS - one per category, drawn with the draw list in phosphor outline
+// ===========================================================================
+//
+// The shapes are the mock-up's SVG paths (an aeroplane, a ship, a satellite, a
+// meter dial, a radio mast, a map pin), flattened to polylines once and drawn at
+// any size with a faint glow beneath. `category` is the catalogue id; anything
+// else (empty, unknown) draws the dial. `box` is the side of the square the glyph
+// is centred in. Draws only.
+void drawCategoryGlyph(ImDrawList* dl, const ImVec2& tl, float box, const std::string& category,
+                       ImU32 colour, float strokePx);
 
 // ===========================================================================
 // THE STORE
 // ===========================================================================
 
+// The store's categories in the order the BROWSE tab shows them. VOICE AND DATA
+// is the on-screen name of the catalogue category `broadcast`; OTHER holds an
+// entry with no category or one this build does not know (today the regional
+// Radar Sweep).
+enum class StoreCategory {
+    Aircraft,
+    Marine,
+    SatellitesWeather,
+    MetersPaging,
+    VoiceData,
+    MapsTools,
+    Other,
+};
+inline constexpr int kStoreCategoryCount = 7;
+StoreCategory storeCategoryFor(const std::string& catalogueId);
+const char* storeCategoryHeading(StoreCategory c);      // translated, capitals
+const char* storeCategoryCensusName(StoreCategory c);   // "aircraft", ..., "voice", "maps", "other"
+
+// The install state the catalogue card speaks for, from the install records and the
+// scan by plugin id and version (PluginRepo::installStateFor).
+enum class StoreInstallKind { NotInstalled, Installed, UpdateAvailable, NewerInstalled };
+
 // One catalogue row, as the wiring supplies it.
 struct StoreModule {
-    // Everything the shared plate draws. `plate.fitted` is what the FITTED
-    // rocker filters on, and it must be computed with the SAME test the
-    // desktop already uses (AppWindow::catalogEntryInstalled), which compares
-    // the sanitised file name against both the host's records and the
-    // manifest - so a retired plugin still counts as fitted.
+    // Everything the page draws (see ModulePlate): identity, what it does, facts.
     ModulePlate plate;
 
-    // PluginCatalogEntry::id - the key an update is planned against.
+    // PluginCatalogEntry::id - the key an update is planned against, the page is
+    // opened by, and the census names a card by.
     std::string id;
 
     // IS THERE A BUILD THIS MACHINE COULD RUN? PluginCatalogEntry::compatible
-    // (abiVersion exactly this host's) AND thisPlatform() != nullptr (an
-    // os/arch build exists). A STABLE fact about the entry, which is why the
-    // SHOW well sorts rows on it rather than on blockedReason: that reason
-    // includes transient states such as "a transfer is already in progress",
-    // and a filter that moved rows between categories while a download ran
-    // would be a filter the user cannot trust.
+    // (abiVersion exactly this host's) AND thisPlatform() != nullptr. A STABLE
+    // fact about the entry (not "a transfer is in flight").
     bool installableHere = false;
 
-    // WHY FIT MAY NOT BE PRESSED, or empty when it may.
-    //
-    // MUST come from the SAME predicate the desktop's button uses
-    // (AppWindow::pluginInstallBlockedReason), so the sentence under the key
-    // and the key itself can never disagree. That predicate already covers a
-    // transfer in flight, an ABI mismatch, no build for this host, no licence
-    // declared, already installed, and an unacknowledged legal notice.
-    std::string blockedReason;
+    // WHETHER THIS HOST HAS A BUILD AT ALL, and which operating systems the entry
+    // publishes one for: what the build badge (WINDOWS ONLY / LINUX ONLY) says
+    // when this host has none.
+    bool haveBuildHere = false;
+    bool buildsWindows = false;
+    bool buildsLinux = false;
 
-    // THE SAME PREDICATE ASKED AS IF THE MAKER'S NOTICE HAD BEEN ACKNOWLEDGED,
-    // and it exists for ADD ALL alone.
-    //
-    // `blockedReason` above is asked with the acknowledgement that belongs to
-    // the SELECTED row and to no other, so every other module carrying a legal
-    // notice reads "the legal notice must be acknowledged first" - seven of
-    // the twenty-four in the live catalogue. An ADD ALL that silently passed
-    // over seven modules would be a key whose word was a lie; one that
-    // installed them regardless would be taking a consent nobody gave. So the
-    // window is told BOTH answers, offers one tick that covers the notices,
-    // and names the modules it is asking about.
-    //
-    // Identical to blockedReason for every module that has no notice.
+    StoreInstallKind install = StoreInstallKind::NotInstalled;
+    std::string installedVersion;  // the newest installed version; "" when none
+
+    // WHY GET MAY NOT BE PRESSED, or empty when it may - from the SAME predicate the
+    // desktop's key uses (AppWindow::pluginInstallBlockedReason), so the sentence
+    // under the key and the key itself can never disagree. Asked with the notice
+    // acknowledged only for the plugin whose page is open and ticked.
+    std::string blockedReason;
+    // THE SAME PREDICATE ASKED AS IF THE MAKER'S NOTICE HAD BEEN ACKNOWLEDGED. Empty
+    // means "nothing but the notice stands in the way"; it also lets ADD ALL count
+    // the modules one tick would add. Identical to blockedReason for a module with
+    // no notice.
     std::string blockedReasonIfAcknowledged;
 
-    // From PluginRepo::planUpdates, when a plan exists for this id. Both empty
-    // when none does - which is also the state before any catalogue has been
-    // fetched, and the store says which of the two it is rather than printing
-    // a clean zero.
+    // From PluginRepo::planUpdates, when a plan exists for this id. Both empty when
+    // none does.
     std::string updateToVersion;
     std::string updateReason;  // PluginUpdate::reason, verbatim
+    // UpdateAvailable by version but not plannable here (no build for this host,
+    // another ABI): the English reason the UPDATE key is greyed, else empty.
+    std::string updateBlockedReason;
+
+    // The pictures the catalogue names, with the fetch's progress.
+    std::vector<StorePicture> pictures;
 };
 
-// Everything the store draws that it cannot work out for itself.
-// ONE OLD COPY AN UPDATE LEFT BEHIND (0.99.49 beta feedback), as the store
-// shows it: core::supersededPlugins decided it may go, and this is what the
-// user is told about it before it does.
+// ONE OLD COPY AN UPDATE LEFT BEHIND, as the store shows it: core::supersededPlugins
+// decided it may go, and this is what the user is told about it before it does.
 struct StoreOldCopy {
     std::string name;         // the plugin, as it declares itself
     std::string version;      // the old copy's
@@ -380,264 +405,228 @@ struct StoreOldCopy {
     std::string keptVersion;  // the copy that stays and is running
 };
 
+// Everything the store draws that it cannot work out for itself.
 struct PluginStoreModel {
     std::vector<StoreModule> modules;
 
     // THE OLD COPIES UPDATES LEFT ON DISK, every one of which may be removed
-    // (core/plugin_cleanup.hpp). Non-empty draws the "CLEAN UP OLD VERSIONS
-    // (N)" key, which removes all of them after ONE confirmation that lists
-    // them - instead of a Remove key and a confirmation per file.
+    // (core/plugin_cleanup.hpp). Non-empty draws "CLEAN UP OLD VERSIONS (N)" at the
+    // foot of the UPDATES tab, which removes all of them after ONE confirmation.
     std::vector<StoreOldCopy> oldCopies;
-    // What the last clean-up did (pluginCleanupReport), shown where the row
-    // was: the key's own outcome, whether or not a module is selected.
+    // What the last clean-up did (pluginCleanupReport).
     std::string cleanupReport;
 
-    // AppWindow::pluginCatalogueUrl_ - where the catalogue was read from. An
-    // https:// index, or a path to a local index.json.
+    // AppWindow::pluginCatalogueUrl_ - where the catalogue was read from.
     std::string sourceUrl;
 
-    // ARE THERE ROWS? This is AppWindow::catalog_ being non-empty and nothing
-    // more, so it answers "is there a catalogue to show" and CANNOT answer
-    // "has one ever been read" - a fetch that succeeded and returned an index
-    // listing no plugins leaves it false, exactly like a fetch nobody ever
-    // asked for. Those are different facts, and a window that reports the
-    // first as the second sends the user to press CHECK NOW for ever.
-    //
-    // The window therefore never reads this alone: see the three states
-    // below, which it derives from this and the two strings that follow.
+    // This host's platform as the catalogue spells it ("windows/x64"): what the
+    // page's header line says the size and build are OF.
+    std::string hostPlatform;
+
+    // ARE THERE ROWS? AppWindow::catalog_ being non-empty and nothing more.
     bool haveCatalogue = false;
 
-    // AppWindow::catalogStatus_ / catalogError_, verbatim. A fetch failure is
-    // the user's evidence and is never paraphrased.
-    //
-    // THEY ARE ALSO THE EVIDENCE THAT A FETCH HAPPENED AT ALL, which is what
-    // separates the three states the window draws. AppWindow clears BOTH when
-    // it starts a fetch, sets `sourceStatus` on every success ("N plugins in
-    // the catalogue") and `sourceError` on every failure, so the pair always
-    // describes the LAST completed attempt and nothing older:
-    //
-    //   both empty, no rows      nobody has asked. Nothing here is a count.
-    //   status set, no rows      it was read, and it listed no modules.
-    //   error only, no rows      it was asked and the attempt failed; the
-    //                            reason is printed verbatim under CATALOGUE
-    //                            SOURCE.
-    //   rows                     it was read.
-    //
-    // Status is tested BEFORE error because a successful fetch can set both:
-    // the catalogue loads and the version policy behind it fails to cache,
-    // which is a read catalogue with a warning, not a failed check.
+    // AppWindow::catalogStatus_ / catalogError_, verbatim. A fetch failure is the
+    // user's evidence and is never paraphrased. sourceError is the reason a refresh
+    // failed (and a kept copy is on screen, or nothing is).
     std::string sourceStatus;
     std::string sourceError;
 
-    // A fetch or a download is in flight (catalogPending_ || installPending_),
-    // with PluginRepo::progress() and the name of what is moving. progress
-    // stays at 0 when the server sends no Content-Length, and the bar then
-    // simply does not move rather than inventing a figure.
+    // THE KEPT COPY (0.99.72): seconds since the epoch of the read behind the rows
+    // (0 = unknown, never drawn as 1970), and whether the rows are the copy kept on
+    // disk from an earlier session rather than a read this session.
+    std::int64_t catalogueReadTime = 0;
+    bool catalogueFromCache = false;
+    // sourceError is a REFRESH THAT FAILED (the rows on screen are then not the latest),
+    // as against a warning beside a catalogue that was read ("the catalogue loaded, but
+    // could not be kept for the next start"): the top bar says "could not refresh" only
+    // for the first. The second is drawn as a note above the list.
+    bool refreshFailed = false;
+    // A picture is being fetched or is queued: the one transfer slot is held, so CHECK
+    // AGAIN waits (it would be refused) - but nothing draws a CANCEL for it.
+    bool pictureBusy = false;
+
+    // A fetch or a download is in flight, with PluginRepo::progress() and the name
+    // and id of what is moving. progress stays at 0 when the server sends no
+    // Content-Length, and the key's line then sweeps rather than inventing a figure.
     bool busy = false;
     float progress = 0.0f;
     std::string busyLabel;
+    std::string busyId;  // the plugin being fitted or updated, empty for a catalogue read
 
-    // AppWindow::installReport_ / installError_, verbatim. A sha256 mismatch
-    // names both digests and must be shown exactly as PluginRepo wrote it.
+    // AppWindow::installReport_ / installError_, verbatim, and the id of the plugin
+    // they concern (AppWindow::installResultId_): the page of THAT plugin shows them
+    // under its header key and no other page does.
     std::string resultReport;
     std::string resultError;
+    std::string resultId;
 
-    // --- the ADD ALL run ----------------------------------------------------
-    //
-    // An ADD ALL is not one operation: it is N transfers through the single
-    // install path, one after another, because PluginRepo applies exactly one
-    // at a time. These three say where that run has got to, and the window
-    // draws them instead of guessing from `busy`.
-    //
-    // `addAllProgress` is the line under the key while it runs - "installing 4
-    // of 23: GOES Weather Satellites (HRIT / LRIT)" - and `addAllSummary` is
-    // what is left on the panel when it ends: "23 installed, 0 failed", or the
-    // names that failed with the reason each gave. Both empty means no run has
-    // happened this session.
+    // --- the GET EVERYTHING run ---------------------------------------------
+    // The same queue ADD ALL always was: N transfers through the single install
+    // path, one after another.
     bool addAllRunning = false;
     std::string addAllProgress;
     std::string addAllSummary;
-    // True when the run ended with at least one failure, so the summary is
-    // lettered as trouble rather than as a result.
     bool addAllFailed = false;
 };
 
-// ===========================================================================
-// WHAT THE STORE SAYS ABOUT A MODULE ON THIS MACHINE, in one word
-// ===========================================================================
-//
-// NOT moduleStateWord, and the two answer different questions. That one is
-// about RUNNING - started, stopped, refused, fed nothing - and it is shared
-// with the FITTED MODULES window, which is the window about running. This one
-// is the CATALOGUE's question: is this module here, and is it current. A store
-// that answers "STARTED" to "have I got this" is answering something else.
-enum class StoreInstallState {
-    NotInstalled,     // no file for it here, and one could be fetched
-    CannotFit,        // no file here, and no build this machine could run
-    Installed,        // here, loaded, and the catalogue offers nothing newer
-    UpdateAvailable,  // here, and the catalogue offers a newer build
-    Refused,          // here, and the host would not have it
+// ---------------------------------------------------------------------------
+// WHAT A CARD'S KEY SAYS - pure, so it can be checked without a frame
+// ---------------------------------------------------------------------------
+enum class StoreKeyKind {
+    Get,        // GET: not installed
+    Fitting,    // FITTING...: this plugin's transfer is running
+    Installed,  // INSTALLED: some version is here and the catalogue has nothing newer
+    Update,     // UPDATE: here, and the catalogue offers a newer build
 };
 
-StoreInstallState storeInstallState(const StoreModule& sm);
+struct StoreKeyIn {
+    std::string busyId;      // PluginStoreModel::busyId
+    bool busyAny = false;    // PluginStoreModel::busy: a transfer is running somewhere
+    bool onPage = false;     // this is the page key (a card's GET on a notice plugin is not greyed)
+    bool noticeTicked = false;  // the page's tick, for THIS plugin
+};
 
-// The word itself: NOT INSTALLED, CANNOT FIT, INSTALLED, UPDATE, REFUSED.
-// Drawn at the window's own prose size beside the key, not as a chip - "not
-// only a small icon" was the whole complaint.
-const char* storeInstallWord(StoreInstallState s);
+struct StoreKey {
+    StoreKeyKind kind = StoreKeyKind::Get;
+    bool enabled = false;
+    // English. Why the key is greyed, when it is; drawn translated on hover.
+    std::string reason;
+    // GET on a card whose plugin carries a legal notice that has not been ticked:
+    // pressing it OPENS THE PAGE, where the notice has to be read.
+    bool opensPage = false;
+};
 
-// The ink it is lettered in. NEVER kAmber: amber in this palette is a READING,
-// something the machine measured, and an install state is not a measurement.
-// Only REFUSED takes the alarm ink - not being installed is not a fault.
-ImU32 storeInstallColour(StoreInstallState s);
+// THE ONE DECISION. By install state first (FITTING while this plugin is moving,
+// INSTALLED for an installed or newer one, UPDATE for an older one), then by the
+// gate: a build for this host, the ABI, a licence, no transfer running, and the
+// notice. The reasons are the existing ones, in English.
+StoreKey storeKeyFor(const StoreModule& sm, const StoreKeyIn& in);
 
-// THE SIZE THIS WINDOW SETS ITS PROSE IN, from the theme's own ladder.
-//
-// It was fonts::kTinySize - the smallest engraving in the application - for
-// every sentence on the panel: the module summaries, the maker and licence
-// line, the reach rows on the data plate, every note and every key's label.
-// That is the right size for a word cut into a metal chip and the wrong one
-// for the paragraph a user reads before deciding to install something, which
-// is what the owner reported ("make the plugin store larger and easier to
-// read"). This is a theme size and not a number invented here; the captions
-// keep theirs.
+const char* storeKeyLabel(StoreKeyKind k);  // translated: GET / FITTING... / INSTALLED / UPDATE
+// "get", "fitting", "installed", "update", or "greyed" for a key that cannot act:
+// the census state of "store:key:<id>:<state>".
+const char* storeKeyCensusState(const StoreKey& k);
+
+// The badge words. EXPERIMENTAL is on the entry; a BUILD badge (WINDOWS ONLY or LINUX
+// ONLY, translated) appears only when this host has NO build for the entry and the
+// entry's builds are all one operating system. Empty otherwise.
+const char* storeBuildBadge(const StoreModule& sm);
+const char* storeExperimentalBadge();
+
+// The line under a page's name: "<maker> · version <v> · <size> · <builds>", the
+// size and builds of THIS host's build, or "no build for this system" in their
+// place. `hostPlatform` is "windows/x64" or empty.
+std::string storeHeaderMeta(const StoreModule& sm, const std::string& hostPlatform);
+
+// "%s to %s": the update's two versions.
+std::string storeFromTo(const std::string& from, const std::string& to);
+
+// The count on the UPDATES tab: modules whose update the planner has a plan for.
+int storeUpdateCount(const PluginStoreModel& m);
+
+// Case-insensitive (ASCII) substring over name, summary, description and the
+// category's on-screen word. An empty query matches everything.
+bool storeMatchesQuery(const StoreModule& sm, const std::string& lowerQuery);
+
+// One category's cards, as indices into PluginStoreModel::modules, sorted by name.
+struct StoreSection {
+    StoreCategory category = StoreCategory::Other;
+    std::vector<int> modules;
+};
+// The sections that have a card, in the fixed order, for `lowerQuery`.
+std::vector<StoreSection> storeBrowseSections(const PluginStoreModel& m,
+                                              const std::string& lowerQuery);
+// The UPDATES tab's rows: planned updates matching the query, sorted by name.
+std::vector<int> storeUpdateRows(const PluginStoreModel& m, const std::string& lowerQuery);
+
+// The top bar's catalogue line and its tone.
+enum class StoreLineTone { Muted, Amber };
+struct StoreCatalogueLine {
+    std::string text;
+    StoreLineTone tone = StoreLineTone::Muted;
+    bool cached = false;  // the kept copy is what is on screen: noted "store:catalogue:cache"
+};
+// "Catalogue read HH:MM" (or with the date when it was not today), "Catalogue from
+// <date>; could not refresh: <reason>" in amber when a kept copy is on screen after
+// a failed refresh, "CATALOGUE NOT READ" before the first read. `nowUnix` is the
+// clock and `localTime` converts seconds to the local broken-down time, so a test
+// can fix both; the default uses the machine's.
+StoreCatalogueLine storeCatalogueLine(const PluginStoreModel& m, std::int64_t nowUnix);
+
+// Columns of cards: three at 1120 px of content and wider, two below. (The window's
+// minimum usable width is 900.)
+int storeColumnsFor(float contentWidth);
+inline constexpr float kStoreMinWidth = 900.0f;
+
+// THE SIZE THIS WINDOW SETS ITS PROSE IN, from the theme's own ladder (the panel
+// size): see fonts.hpp for why it exists at all.
 float storeProsePx();
 
-// THE SHOW WELL'S SIX ROCKERS keep their two columns in every language. The
-// width one rocker row needs with its longest label lettered at `labelPx`
-// (drawRockerRow's switch, plate padding and a three-figure count around it),
-// and whether a column `colW` wide holds two columns: it does whenever the
-// longest label fits at its FLOOR (seven tenths of storeProsePx), because
-// drawRockerRow draws a label smaller before it lets it run past its plate.
-// English fits at full size, so its well is exactly what it was.
-float storeShowRockerMinWidth(float labelPx);
-bool storeShowTwoColumns(float colW);
-
-// THE CARD'S ACTION COLUMN: the key and, under it, the install word and the
-// running-state word. Its width is measured from every word it can hold. A
-// status word is ONE LINE, drawn smaller to fit the column (down to seven
-// tenths of storeProsePx) and wrapped only when even that cannot hold it -
-// never broken in the middle of the word the way "PAIGALDAMAT / A" was
-// (et, 34-language review).
-float storeActionColumnWidth();
-float storeStatusWordRoom();
-LineFit storeStatusWordFit(const char* word);
-
-// THE LIST IS WHAT THIS WINDOW IS FOR, AND IT HAD NO FLOOR (the owner,
-// 2026-09-18, on 0.99.2: "it's not letting me scroll on the plugin store to see
-// the plugins"). Three bands sit above it - the ADD ALL well, the updates
-// banner and the three-well control deck - and together they come to about
-// 590 px at the page's engraving sizes. The store opens clamped inside the
-// main window, which on a fresh install is 1282 x 745, so the store is about
-// 1234 x 697 and the list was left 65 px: less than one module card, with the
-// other twenty-three "a scroll away" in a pane nobody could see into. Shorter
-// still, the list was pushed below the window's bottom edge entirely.
-//
-// This is the least height the BODY - the module list column and the data
-// plate beside it - is ever given. The list column spends about 55 px of it on
-// its own heading and rule, so the list itself keeps about 345 px: two whole
-// module cards (about 130 px each with a one-line summary at these sizes) and
-// part of a third. 340 was tried first and left the list 285 px.
-inline constexpr float kStoreListMinH = 400.0f;
-
-// THE FLAGS OF THE PANE THE WHOLE STORE IS DRAWN INTO, owned here so the
-// window that draws it and the test that measures it cannot disagree. It was
-// NoScrollbar | NoScrollWithMouse, on the grounds that the view always fits
-// the pane it is given - which it did not, and a pane that cannot scroll turns
-// "does not fit" into "is not there". It now scrolls, with a scrollbar that
-// appears only when there is something below the edge: when the window is
-// tall enough nothing changes, and when it is not, the list is still reachable.
+// THE FLAGS OF THE PANE THE WHOLE STORE IS DRAWN INTO, owned here so the window
+// that draws it and the test that measures it cannot disagree. The view's own
+// body child scrolls, so this pane does not.
 ImGuiWindowFlags storeFaceWindowFlags();
 
-// The control deck's settings. Owned by the CALLER because they outlive one
-// frame and the caller may persist them; the view edits them in place and
-// keeps no second copy.
+// The persistent state of the window. Owned by the CALLER because it outlives one
+// frame and the caller may persist it; the view edits it in place.
 struct PluginStoreDeck {
-    // The search text, over name, maker and description. A fixed buffer
-    // because it is handed straight to ImGui::InputText.
+    // The search text. A fixed buffer because it is handed straight to InputText.
     char search[128] = {0};
 
-    // The SHOW well. Two groups of three rockers; within a group the rows
-    // shown are the OR of what is switched on, and a row must pass BOTH
-    // groups. THE THREE CATEGORIES IN EACH GROUP ARE DISJOINT AND EXHAUSTIVE -
-    // every module is in exactly one of each - which is what makes the
-    // semantics readable without a legend, and makes "nothing switched on
-    // shows nothing" a statement the well can safely make.
-    bool showFitted = true;      // installed on this machine
-    bool showAvailable = true;   // not installed, StoreModule::installableHere
-    bool showBlocked = true;     // not installed, and no build this host can run
-    bool showDecoders = true;    // declares a decoder capability
-    bool showOtherKinds = true;  // declares something, but not a decoder
-    bool showUndeclared = true;  // capabilities not known - every catalogue row
+    int tab = 0;               // 0 BROWSE, 1 UPDATES
+    // The plugin whose page is open ("" = the grid). An id, not an index: a
+    // refresh can reorder the catalogue underneath.
+    std::string pageId;
+    ModulePageState page;
 
-    // 0 NAME, 1 MAKER, 2 VERSION. See kStoreSortCount.
-    int sortKey = 0;
-
-    // Index into PluginStoreModel::modules, or -1 for nothing selected. The
-    // view clamps it and re-clamps it when the catalogue changes underneath.
-    int selected = -1;
-
-    // The legal-notice acknowledgement, which belongs to ONE module. The view
-    // clears it whenever the selection moves, so a tick given to the plugin
-    // the user just read about is never carried over to the next one.
+    // The legal-notice acknowledgement, which belongs to the plugin whose page is
+    // open. The view clears it whenever the page changes, so a tick given to the
+    // plugin the user just read about is never carried to the next one.
     bool legalAck = false;
 
-    // THE ADD ALL ACKNOWLEDGEMENT, which is a DIFFERENT tick and deliberately
-    // not the one above. It covers every module in the run that carries a
-    // maker's notice, the window names them beside it, and it is not persisted
-    // anywhere - a consent that survived a restart would be a consent nobody
-    // remembers giving. For the same reason it does not survive a catalogue
-    // refresh (forgetCatalogueConsent, below) or the end of the run it was
-    // given for: until 2026-09-24 it lived as long as the process, so a tick
-    // given against one catalogue's notices covered the next one's too.
+    // THE GET EVERYTHING ACKNOWLEDGEMENT, a DIFFERENT tick: it covers every plugin
+    // in the run that carries a notice, and is not persisted anywhere.
     bool addAllAck = false;
 };
 
-// THE CATALOGUE IS BEING REPLACED: every consent given against the old one
-// goes with it. The selection, because a fetch can leave the same index naming
-// a different module; the single-module tick, because it was consent for the
-// module that index used to name; and the ADD ALL tick, because it was given
-// against the notices the OLD catalogue listed - a new or reworded notice in
-// the next one has been read by nobody. Called by AppWindow::startCatalogFetch
+// THE CATALOGUE IS BEING REPLACED: every consent given against the old one goes
+// with it - the page's tick, and the GET EVERYTHING tick, because both were given
+// against notices the OLD catalogue listed. Called by AppWindow::startCatalogFetch
 // at the moment the ground moves.
 void forgetCatalogueConsent(PluginStoreDeck& deck);
 
 // ===========================================================================
-// ADD ALL - the whole decision, in one pure function
+// GET EVERYTHING - the whole decision, in one pure function
 // ===========================================================================
 //
-// WHAT IT PICKS AND WHAT THE KEY SAYS, with no ImGui in it, so both can be
-// checked against a model built in a test rather than against a screenshot.
-// The window does nothing with this but draw it and, on a press, hand the two
-// index lists back.
+// WHAT IT PICKS AND WHAT THE KEY SAYS, with no ImGui in it. The window does
+// nothing with this but draw it and, on a press, hand the request back.
 struct AddAllPlan {
-    // Indices into PluginStoreModel::modules, in catalogue order. Every one is
-    // a module whose own blockedReason was empty, so each goes through the
-    // SAME gate a single FIT goes through - and is re-tested at the moment it
-    // starts, because a plan made one frame is applied over many.
+    // Indices into PluginStoreModel::modules, in catalogue order. Every one is a
+    // module whose own gate was empty, re-tested at the moment it starts.
     std::vector<int> install;
     std::vector<int> update;
 
-    // "NAME - reason", one per module the run will pass over. NAMED, because
-    // "17 installed, 7 skipped" tells the user nothing they can act on.
+    // "NAME - reason", one per module the run will pass over. NAMED, because "17
+    // installed, 7 skipped" tells the user nothing they can act on.
     std::vector<std::string> skipped;
 
-    // How many of `skipped` are held back by a maker's notice alone - the ones
-    // the tick beside the key would add. Zero once it is ticked.
+    // How many of `skipped` are held back by a maker's notice alone - the ones the
+    // tick would add. Zero once it is ticked.
     int heldByNotice = 0;
 
-    // The engraving on the key. "ADD ALL PLUGINS" when the run really is all
-    // of them; otherwise the counts, so the word and the deed agree.
+    // The engraving the key used to carry ("ADD ALL PLUGINS", or the counts). The
+    // store's key now always reads GET EVERYTHING; this stays for the log and the
+    // web page.
     std::string label;
 
-    // Empty when the key may be pressed. A dead key ALWAYS says why - the rule
-    // the rest of this window already follows.
+    // Empty when the key may be pressed. A dead key ALWAYS says why.
     std::string blockedReason;
 };
 
 // `noticesAcknowledged` is PluginStoreDeck::addAllAck: it swaps each module's
-// blockedReason for its blockedReasonIfAcknowledged, which is the same string
-// for every module that carries no notice.
+// blockedReason for its blockedReasonIfAcknowledged.
 AddAllPlan planAddAll(const PluginStoreModel& model, bool noticesAcknowledged);
 
 // ===========================================================================
@@ -650,68 +639,109 @@ std::string storeCleanupKeyLabel(std::size_t count);
 std::string storeOldCopyLine(const StoreOldCopy& c);
 // The confirmation's own key: "Remove 1 file" / "Remove 3 files".
 std::string storeCleanupConfirmLabel(std::size_t count);
-// WHAT A CLEAN-UP DID, in one or more sentences for the panel: how many were
-// removed, which are in use and will go at the next start, which could not be
-// removed and why. Empty when it did nothing.
+// WHAT A CLEAN-UP DID, in one or more sentences for the panel. Empty when it did
+// nothing.
 std::string pluginCleanupReport(const cascade::core::PluginCleanupResult& r);
 
-inline constexpr int kStoreSortCount = 3;
+// Draws the CLEAN UP OLD VERSIONS key, its one confirmation popup and the report
+// under it, at the ImGui cursor, `width` wide. Returns true on the frame the
+// confirmation was ACCEPTED (the caller removes what its own state still calls
+// superseded). Shared by the store's UPDATES tab and the fitted modules window's
+// foot, so the two cannot disagree. `censusKey` names the key's census rect
+// ("storekey:cleanup" in the store - the name existing tests find it by).
+bool drawCleanupFoot(const std::vector<StoreOldCopy>& oldCopies, const std::string& report,
+                     bool busy, float width, const char* censusKey, const char* censusYes);
 
-// The engraved word over sort key `index`. An index outside the range answers
-// with the first key rather than with whatever the last case happened to be.
-const char* storeSortLabel(int index);
+// ===========================================================================
+// THE SHARED KEY AND CHIP VOCABULARY (used by both windows)
+// ===========================================================================
+// A key with an outline in `ink` and its word in the legend face: the GET / UPDATE
+// / REMOVE / STOP family. `enabled` false draws it greyed. Returns true on a press
+// of an enabled key. `out` receives the rectangle drawn (when given). `hoverText`,
+// when non-empty, is the tooltip (always shown for a greyed key: it says why).
+struct KeyRect {
+    ImVec2 tl;
+    ImVec2 br;
+};
+bool drawOutlineKey(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, const char* label,
+                    ImU32 ink, bool enabled, const char* id, const char* hoverText,
+                    KeyRect* out = nullptr);
+// The width an outline key needs for `label`.
+float outlineKeyWidth(const char* label);
+float outlineKeyHeight();
+// The small chassis-grey key of the top bar (CHECK AGAIN, SCAN AGAIN, SHOW DETAILS):
+// proud metal with its word engraved.
+bool drawChassisKey(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, const char* label,
+                    bool enabled, const char* id, KeyRect* out = nullptr);
+float chassisKeyWidth(const char* label);
+// The search field of a top bar at `tl`, `w` wide, with the loupe and the hint.
+// Returns true when the text changed; the field's rectangle is in `out`.
+bool drawSearchField(const ImVec2& tl, float w, const char* hint, char* buf, std::size_t bufSize,
+                     KeyRect* out);
+// A section heading with its rule: small capitals, a line to the right edge.
+// Returns the height it took.
+float drawSectionHeading(ImDrawList* dl, const ImVec2& tl, float width, const char* text);
+// `text` cut with "..." so it fits `maxW`, drawn at `at`. Returns the width drawn.
+float addEllipsized(ImDrawList* dl, ImFont* font, float px, const ImVec2& at, ImU32 col,
+                    const char* text, float maxW);
+// The same cut, as a string, for a test.
+std::string ellipsize(ImFont* font, float px, const char* text, float maxW);
 
+// ===========================================================================
+// THE VIEW
+// ===========================================================================
 class PluginStoreView {
 public:
+    ~PluginStoreView();
+
     // Draws the whole window's content into the CURRENT ImGui window, filling
     // `width` x `height`. `model` is borrowed for the call only.
-    void draw(float width, float height, const PluginStoreModel& model,
-              PluginStoreDeck& deck);
+    void draw(float width, float height, const PluginStoreModel& model, PluginStoreDeck& deck);
+
+    // Deletes every picture texture. The caller does it when the window closes (the
+    // pictures are kept for the window's life, and no longer).
+    void releasePictures() { pictures_.releaseAll(); }
 
     // --- what the last draw() asked for ------------------------------------
     //
-    // Requests rather than callbacks, for the reason MapView raises its own:
-    // the caller is the only object that knows about the plugin host, the
-    // repository and the worker threads, and it applies them AFTER the frame
-    // rather than from inside a draw. All three are cleared at the start of
-    // every draw(), so a request is answered once or not at all.
+    // Requests rather than callbacks: the caller is the only object that knows
+    // about the plugin host, the repository and the worker threads, and it applies
+    // them AFTER the frame. All are cleared at the start of every draw(), so a
+    // request is answered once or not at all.
 
-    // CHECK NOW was pressed: fetch the catalogue at model.sourceUrl.
+    // CHECK NOW / CHECK AGAIN was pressed: fetch the catalogue at model.sourceUrl.
     bool checkNowRequested() const { return checkNow_; }
-
     // CANCEL was pressed during a transfer.
     bool cancelRequested() const { return cancel_; }
-
-    // FIT was pressed on this index into model.modules, or -1. The view only
-    // offers it where StoreModule::blockedReason is empty, but the caller must
-    // still re-test: the predicate can have changed between the frame that
-    // drew the key and the frame that handles it.
+    // GET was pressed on this index into model.modules, or -1. The view only
+    // offers it where the gate is empty, but the caller must re-test.
     int fitRequested() const { return fitIndex_; }
-
-    // UPDATE was pressed on this index into model.modules, or -1. One module
-    // per press, deliberately: PluginRepo has a single progress/cancel pair
-    // and applies exactly one transfer at a time (see planUpdates' note that
-    // there is no bulk and no automatic caller), so there is no key here that
-    // fits several at once.
+    // UPDATE was pressed on this index into model.modules, or -1.
     int updateRequested() const { return updateIndex_; }
-
-    // ADD ALL PLUGINS was pressed. The caller re-plans from its own state
-    // rather than trusting the plan the key was drawn from - one frame's plan
-    // applied over a run of transfers is exactly the thing that goes stale.
+    // GET EVERYTHING was pressed. The caller re-plans from its own state.
     bool addAllRequested() const { return addAll_; }
-
-    // "CLEAN UP OLD VERSIONS" was pressed AND its one confirmation accepted:
-    // remove every copy in model.oldCopies. The caller re-derives the list
-    // from its own state rather than trusting the frame's model.
+    // UPDATE ALL was pressed.
+    bool updateAllRequested() const { return updateAll_; }
+    // CLEAN UP OLD VERSIONS was pressed AND its one confirmation accepted.
     bool cleanupRequested() const { return cleanup_; }
+    // The id of the plugin whose page was OPENED this frame (the edge), or empty:
+    // the caller asks for its pictures then. pageId() is the page showing now.
+    const std::string& pageOpened() const { return pageOpened_; }
+    const std::string& pageId() const { return pageId_; }
 
 private:
     bool cleanup_ = false;
     bool checkNow_ = false;
     bool cancel_ = false;
     bool addAll_ = false;
+    bool updateAll_ = false;
     int fitIndex_ = -1;
     int updateIndex_ = -1;
+    std::string pageOpened_;
+    std::string pageId_;
+    std::string lastPage_;
+    int lastTab_ = -1;
+    PagePictureCache pictures_;
 };
 
 }  // namespace cascade::gui

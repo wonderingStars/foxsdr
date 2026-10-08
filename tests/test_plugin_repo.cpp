@@ -2776,6 +2776,488 @@ int main() {
     }
 
     // ---------------------------------------------------------------------
+    // 0.99.72, item 1: the shop-window fields (category, experimental,
+    // whatsNew, published, screenshots, capabilities). Optional and cosmetic: a
+    // catalogue without them parses exactly as it always did, and a wrong one
+    // costs the field - or the one picture - never the plugin.
+    // ---------------------------------------------------------------------
+    {
+        const std::string good64 = "ABCDEF0123456789abcdef0123456789ABCDEF0123456789abcdef0123456789";
+        const auto doc = [](const std::string& extra) {
+            return std::string("{\"schemaVersion\":1,\"plugins\":[{\"id\":\"adsb\",\"name\":\"ADS-B\","
+                               "\"version\":\"1.8.1\",\"abiVersion\":") +
+                   abiText() + (extra.empty() ? "" : "," + extra) + "}]}";
+        };
+        const auto shot = [](const std::string& url, const std::string& sha,
+                             const std::string& caption) {
+            return "{\"url\":\"" + url + "\",\"sha256\":\"" + sha + "\",\"caption\":\"" + caption +
+                   "\"}";
+        };
+
+        // EVERY FIELD, read as published.
+        {
+            std::vector<PluginCatalogEntry> v;
+            std::vector<std::string> report;
+            std::string err = "stale";
+            const std::string extra =
+                "\"category\":\"aircraft\",\"experimental\":true,"
+                "\"whatsNew\":\"1.8.1: Keeps phantom aircraft off the map.\","
+                "\"published\":\"2026-10-01\","
+                "\"capabilities\":[\"CASCADE_CAP_IQ_DECODER\",\"CASCADE_CAP_TRACK_SOURCE\","
+                "\"CASCADE_CAP_FROM_THE_FUTURE\"],"
+                "\"screenshots\":[{\"file\":\"screenshots/adsb/1.png\","
+                "\"url\":\"https://raw.githubusercontent.com/x/y/master/screenshots/adsb/1.png\","
+                "\"sha256\":\"" + good64 + "\",\"sizeBytes\":123456,\"width\":1040,"
+                "\"height\":650,\"caption\":\"The map with a dozen aircraft\"},"
+                "{\"url\":\"https://example.invalid/2.png\",\"sha256\":\"" + std::string(64, 'b') +
+                "\",\"caption\":\"No size stated\"}]";
+            CHECK(PluginRepo::parseIndex(doc(extra), v, err, &report));
+            CHECK(err.empty());
+            CHECK(report.empty());
+            CHECK(v.size() == 1u);
+            if (v.size() == 1u) {
+                const PluginCatalogEntry& e = v[0];
+                CHECK(e.id == "adsb");
+                CHECK(e.category == "aircraft");
+                CHECK(e.experimental);
+                CHECK(e.whatsNew == "1.8.1: Keeps phantom aircraft off the map.");
+                CHECK(e.published == "2026-10-01");
+                CHECK(e.screenshots.size() == 2u);
+                if (e.screenshots.size() == 2u) {
+                    const auto& s = e.screenshots[0];
+                    CHECK(s.url == "https://raw.githubusercontent.com/x/y/master/screenshots/adsb/1.png");
+                    CHECK(s.sha256 == "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789");
+                    CHECK(s.caption == "The map with a dozen aircraft");
+                    CHECK(s.sizeBytes == 123456u);
+                    CHECK(s.width == 1040);
+                    CHECK(s.height == 650);
+                    // The optional numbers of the second are simply not stated.
+                    CHECK(e.screenshots[1].sizeBytes == 0u);
+                    CHECK(e.screenshots[1].width == 0);
+                    CHECK(e.screenshots[1].height == 0);
+                    CHECK(e.screenshots[1].caption == "No size stated");
+                }
+                // The names are kept as published, known or not, in order; the bits
+                // are those of the names this host knows.
+                CHECK(e.capabilityNames.size() == 3u);
+                if (e.capabilityNames.size() == 3u) {
+                    CHECK(e.capabilityNames[0] == "CASCADE_CAP_IQ_DECODER");
+                    CHECK(e.capabilityNames[1] == "CASCADE_CAP_TRACK_SOURCE");
+                    CHECK(e.capabilityNames[2] == "CASCADE_CAP_FROM_THE_FUTURE");
+                }
+                CHECK(e.capabilities == (CASCADE_CAP_IQ_DECODER | CASCADE_CAP_TRACK_SOURCE));
+                // ...and the security fields beside them are untouched by any of it.
+                CHECK(e.version == "1.8.1");
+                CHECK(e.compatible);
+            }
+        }
+
+        // ABSENT = DEFAULTS, and the report says nothing. Across the whole good
+        // index (four entries, none of the new keys): every new field is its default,
+        // and parsing with a report and without one gives the same entries.
+        {
+            std::vector<PluginCatalogEntry> withReport;
+            std::vector<PluginCatalogEntry> without;
+            std::vector<std::string> report;
+            std::string err;
+            CHECK(PluginRepo::parseIndex(goodIndex(), withReport, err, &report));
+            CHECK(PluginRepo::parseIndex(goodIndex(), without, err));
+            CHECK(report.empty());
+            CHECK(withReport.size() == 4u);
+            CHECK(without.size() == withReport.size());
+            for (std::size_t i = 0; i < withReport.size() && i < without.size(); ++i) {
+                const PluginCatalogEntry& a = withReport[i];
+                const PluginCatalogEntry& b = without[i];
+                CHECK(a.category.empty());
+                CHECK(!a.experimental);
+                CHECK(a.whatsNew.empty());
+                CHECK(a.published.empty());
+                CHECK(a.screenshots.empty());
+                CHECK(a.capabilities == 0u);
+                CHECK(a.capabilityNames.empty());
+                CHECK(a.id == b.id && a.name == b.name && a.version == b.version &&
+                      a.author == b.author && a.licence == b.licence && a.summary == b.summary &&
+                      a.description == b.description && a.homepage == b.homepage &&
+                      a.legalNotice == b.legalNotice &&
+                      a.minSupportedVersion == b.minSupportedVersion &&
+                      a.abiVersion == b.abiVersion && a.compatible == b.compatible &&
+                      a.platforms.size() == b.platforms.size());
+            }
+            // The first entry is the one the rest of this file pins field by field.
+            if (!withReport.empty()) {
+                CHECK(withReport[0].id == "pocsag");
+                CHECK(withReport[0].version == "1.2.0");
+                CHECK(withReport[0].minSupportedVersion == "1.1.0");
+                CHECK(withReport[0].platforms.size() == 2u);
+            }
+        }
+
+        // EACH REFUSAL OF A PICTURE, in one document with one good picture among
+        // them: the plugin and the good picture survive, and each bad one is a
+        // line naming the plugin, the picture and why.
+        {
+            std::vector<PluginCatalogEntry> v;
+            std::vector<std::string> report;
+            std::string err;
+            const std::string hex = std::string(64, 'c');
+            const std::string extra =
+                "\"screenshots\":["
+                "\"not an object\","                                                   // 0
+                "{\"sha256\":\"" + hex + "\",\"caption\":\"no url\"},"                    // 1
+                "{\"url\":\"https://example.invalid/a.png\",\"caption\":\"no sha\"},"     // 2
+                "{\"url\":\"https://example.invalid/a.png\",\"sha256\":\"" + hex + "\"}," // 3 no caption
+                + shot("http://example.invalid/a.png", hex, "plain http") + ","           // 4
+                + shot("https://example.invalid/a.png", std::string(63, 'a'), "short") + ","  // 5
+                + shot("https://example.invalid/a.png", std::string(63, 'a') + "g", "not hex") + ","  // 6
+                + shot("https://example.invalid/a.png", hex, "") + ","                    // 7 empty caption
+                + shot("https://example.invalid/good.png", hex, "the good one") + "]";    // 8
+            CHECK(PluginRepo::parseIndex(doc(extra), v, err, &report));
+            CHECK(v.size() == 1u);
+            CHECK(report.size() == 8u);
+            if (report.size() == 8u) {
+                CHECK(contains(report[0], "adsb") && contains(report[0], "screenshot 0") &&
+                      contains(report[0], "not a JSON object"));
+                CHECK(contains(report[1], "screenshot 1") && contains(report[1], "no url"));
+                CHECK(contains(report[2], "screenshot 2") && contains(report[2], "no sha256"));
+                CHECK(contains(report[3], "screenshot 3") && contains(report[3], "no caption"));
+                CHECK(contains(report[4], "screenshot 4") && contains(report[4], "not https"));
+                CHECK(contains(report[5], "screenshot 5") && contains(report[5], "64 hexadecimal"));
+                CHECK(contains(report[6], "screenshot 6") && contains(report[6], "64 hexadecimal"));
+                CHECK(contains(report[7], "screenshot 7") && contains(report[7], "no caption"));
+            }
+            if (v.size() == 1u) {
+                CHECK(v[0].id == "adsb");
+                CHECK(v[0].screenshots.size() == 1u);
+                if (v[0].screenshots.size() == 1u) {
+                    CHECK(v[0].screenshots[0].caption == "the good one");
+                    CHECK(v[0].screenshots[0].url == "https://example.invalid/good.png");
+                }
+            }
+            // The same document without a report to fill still parses the same.
+            std::vector<PluginCatalogEntry> quiet;
+            CHECK(PluginRepo::parseIndex(doc(extra), quiet, err));
+            CHECK(quiet.size() == 1u && quiet[0].screenshots.size() == 1u);
+        }
+
+        // WRONG TYPES COST THE FIELD, NOT THE CATALOGUE.
+        {
+            std::vector<PluginCatalogEntry> v;
+            std::vector<std::string> report;
+            std::string err;
+            const std::string extra =
+                "\"category\":5,\"experimental\":\"yes\",\"whatsNew\":[\"x\"],"
+                "\"published\":\"yesterday\",\"screenshots\":{\"a\":1},"
+                "\"capabilities\":[1,\"CASCADE_CAP_DECODER\",null]";
+            CHECK(PluginRepo::parseIndex(doc(extra), v, err, &report));
+            CHECK(v.size() == 1u);
+            CHECK(report.size() == 7u);  // five fields, and the two capabilities that are not strings
+            if (v.size() == 1u) {
+                CHECK(v[0].category.empty());
+                CHECK(!v[0].experimental);
+                CHECK(v[0].whatsNew.empty());
+                CHECK(v[0].published.empty());
+                CHECK(v[0].screenshots.empty());
+                CHECK(v[0].capabilityNames == std::vector<std::string>{"CASCADE_CAP_DECODER"});
+                CHECK(v[0].capabilities == CASCADE_CAP_DECODER);
+            }
+            // "capabilities" that is not an array at all.
+            v.clear();
+            report.clear();
+            CHECK(PluginRepo::parseIndex(doc("\"capabilities\":\"CASCADE_CAP_DECODER\""), v, err,
+                                         &report));
+            CHECK(v.size() == 1u && v[0].capabilities == 0u && v[0].capabilityNames.empty());
+            CHECK(report.size() == 1u);
+            // A date has a shape: ten characters, digits and two dashes.
+            for (const char* bad : {"2026-1-01", "2026/10/01", "20261001", "2026-10-0x",
+                                    "2026-10-011"}) {
+                v.clear();
+                report.clear();
+                CHECK(PluginRepo::parseIndex(doc(std::string("\"published\":\"") + bad + "\""), v,
+                                             err, &report));
+                CHECK(v.size() == 1u && v[0].published.empty());
+                CHECK(report.size() == 1u);
+            }
+            // ...and null is silence, as an absent key is.
+            v.clear();
+            report.clear();
+            CHECK(PluginRepo::parseIndex(doc("\"category\":null,\"screenshots\":null"), v, err,
+                                         &report));
+            CHECK(v.size() == 1u && report.empty());
+        }
+
+        // A PLUGIN MAY LIST AT MOST kMaxScreenshotsPerPlugin PICTURES: the first
+        // that many are kept and each extra one is a line, so one page cannot ask the
+        // network for a thousand.
+        {
+            std::string pics = "\"screenshots\":[";
+            const std::size_t total = PluginRepo::kMaxScreenshotsPerPlugin + 2;
+            for (std::size_t i = 0; i < total; ++i) {
+                if (i != 0) { pics += ","; }
+                pics += shot("https://example.invalid/" + std::to_string(i) + ".png",
+                             std::string(64, "0123456789abcdef"[i]),  // hex digits only: 'g' is not one
+                             "picture " + std::to_string(i));
+            }
+            pics += "]";
+            std::vector<PluginCatalogEntry> v;
+            std::vector<std::string> report;
+            std::string err;
+            CHECK(PluginRepo::parseIndex(doc(pics), v, err, &report));
+            CHECK(v.size() == 1u);
+            if (v.size() == 1u) {
+                CHECK(v[0].screenshots.size() == PluginRepo::kMaxScreenshotsPerPlugin);
+                CHECK(v[0].screenshots.back().caption ==
+                      "picture " + std::to_string(PluginRepo::kMaxScreenshotsPerPlugin - 1));
+            }
+            CHECK(report.size() == 2u);
+            if (report.size() == 2u) { CHECK(contains(report[0], "at most")); }
+        }
+
+        // THE NAME -> BIT MAP. Every capability the ABI header defines has a name,
+        // each name its own bit, and together they are exactly what the host knows;
+        // an unknown, differently-cased or empty name is no bit.
+        {
+            const char* const names[] = {
+                "CASCADE_CAP_DECODER",        "CASCADE_CAP_IQ_DECODER",
+                "CASCADE_CAP_IMAGE_DECODER",  "CASCADE_CAP_TRACK_SOURCE",
+                "CASCADE_CAP_PANEL",          "CASCADE_CAP_HOST_CLIENT",
+                "CASCADE_CAP_PRESET",         "CASCADE_CAP_BASEMAP",
+                "CASCADE_CAP_TRACK_INFO",     "CASCADE_CAP_INSTRUMENT",
+                "CASCADE_CAP_AUDIO_OUT",      "CASCADE_CAP_AUDIO_PROCESSOR",
+                "CASCADE_CAP_SETTINGS_UI",    "CASCADE_CAP_RECEIVER_LOCATOR"};
+            const std::uint32_t bits[] = {
+                CASCADE_CAP_DECODER,        CASCADE_CAP_IQ_DECODER,
+                CASCADE_CAP_IMAGE_DECODER,  CASCADE_CAP_TRACK_SOURCE,
+                CASCADE_CAP_PANEL,          CASCADE_CAP_HOST_CLIENT,
+                CASCADE_CAP_PRESET,         CASCADE_CAP_BASEMAP,
+                CASCADE_CAP_TRACK_INFO,     CASCADE_CAP_INSTRUMENT,
+                CASCADE_CAP_AUDIO_OUT,      CASCADE_CAP_AUDIO_PROCESSOR,
+                CASCADE_CAP_SETTINGS_UI,    CASCADE_CAP_RECEIVER_LOCATOR};
+            std::uint32_t all = 0;
+            for (std::size_t i = 0; i < sizeof(bits) / sizeof(bits[0]); ++i) {
+                CHECK(PluginRepo::capabilityBitForName(names[i]) == bits[i]);
+                CHECK((all & bits[i]) == 0u);  // no two names share a bit
+                all |= bits[i];
+            }
+            CHECK(all == static_cast<std::uint32_t>(CASCADE_CAP_ALL_KNOWN));
+            CHECK(PluginRepo::capabilityBitForName("CASCADE_CAP_NOPE") == 0u);
+            CHECK(PluginRepo::capabilityBitForName("cascade_cap_decoder") == 0u);
+            CHECK(PluginRepo::capabilityBitForName("CASCADE_CAP_DECODER ") == 0u);
+            CHECK(PluginRepo::capabilityBitForName("") == 0u);
+        }
+
+        // A hostile shop field cannot loosen a security field: a picture's URL is
+        // held to the same https rule as a binary's, and the document is still
+        // refused whole for a bad PLATFORM hash however good the pictures are.
+        {
+            std::vector<PluginCatalogEntry> v;
+            std::string err;
+            const std::string badPlatform =
+                "\"screenshots\":[" + shot("https://example.invalid/a.png", std::string(64, 'a'), "ok") +
+                "],\"platforms\":[{\"os\":\"windows\",\"arch\":\"x64\",\"file\":\"a.dll\","
+                "\"url\":\"https://example.invalid/a.dll\",\"sha256\":\"short\"}]";
+            CHECK(!PluginRepo::parseIndex(doc(badPlatform), v, err));
+            CHECK(v.empty());
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // 0.99.72, item 2: installed state by plugin id and version
+    // (PluginRepo::installStateFor) - never by file name.
+    // ---------------------------------------------------------------------
+    {
+        using cascade::core::InstallState;
+        using cascade::core::InstallStateKind;
+        using cascade::core::ScannedModule;
+        const std::uint32_t hostAbi = static_cast<std::uint32_t>(CASCADE_PLUGIN_ABI_VERSION);
+        const auto adsb = [&](const std::string& version, const std::string& file) {
+            PluginCatalogEntry e = catEntry("adsb", version, hostAbi, file);
+            return e;
+        };
+        const auto scanned = [](const std::string& id, const std::string& version,
+                                const std::string& file) {
+            ScannedModule m;
+            m.id = id;
+            m.version = version;
+            m.file = file;
+            return m;
+        };
+        const auto state = [](const PluginCatalogEntry& e, const std::vector<InstalledPlugin>& inst,
+                              const std::vector<ScannedModule>& scan) {
+            return PluginRepo::installStateFor(e, inst, scan);
+        };
+
+        // NOT INSTALLED: nothing, or only other plugins.
+        {
+            const InstallState s = state(adsb("1.8.1", mod("adsb-1.8.1")), {}, {});
+            CHECK(s.kind == InstallStateKind::NotInstalled);
+            CHECK(s.installedVersion.empty());
+            const InstallState other =
+                state(adsb("1.8.1", mod("adsb-1.8.1")),
+                      {installedRec("apt", "1.8.1", hostAbi, mod("apt-1.8.1"))},
+                      {scanned("apt", "1.8.1", mod("apt-1.8.1")), scanned("ADS-B", "1.8.1", mod("x"))});
+            CHECK(other.kind == InstallStateKind::NotInstalled);
+            // An entry with no id is nothing to look up.
+            PluginCatalogEntry noId = adsb("1.8.1", mod("adsb-1.8.1"));
+            noId.id.clear();
+            CHECK(state(noId, {installedRec("", "1.8.1")}, {}).kind == InstallStateKind::NotInstalled);
+        }
+
+        // THE FOUR STATES from install records alone.
+        {
+            const PluginCatalogEntry e = adsb("1.8.1", mod("adsb-1.8.1"));
+            const InstallState same =
+                state(e, {installedRec("adsb", "1.8.1", hostAbi, mod("adsb-1.8.1"))}, {});
+            CHECK(same.kind == InstallStateKind::Installed);
+            CHECK(same.installedVersion == "1.8.1");
+
+            // THE BUG THIS EXISTS FOR: 1.8.0 is installed under ITS OWN file name, so
+            // the 1.8.1 row's file is nowhere on disk - and the row is an UPDATE.
+            const InstallState older =
+                state(e, {installedRec("adsb", "1.8.0", hostAbi, mod("adsb-1.8.0"))}, {});
+            CHECK(older.kind == InstallStateKind::UpdateAvailable);
+            CHECK(older.installedVersion == "1.8.0");
+
+            const InstallState newer =
+                state(e, {installedRec("adsb", "1.9.0", hostAbi, mod("adsb-1.9.0"))}, {});
+            CHECK(newer.kind == InstallStateKind::NewerInstalled);
+            CHECK(newer.installedVersion == "1.9.0");
+
+            // Numeric, not textual: 1.10.0 is newer than 1.9.0.
+            const InstallState ten =
+                state(adsb("1.9.0", mod("adsb-1.9.0")),
+                      {installedRec("adsb", "1.10.0", hostAbi, mod("adsb-1.10.0"))}, {});
+            CHECK(ten.kind == InstallStateKind::NewerInstalled);
+        }
+
+        // NEVER BY FILE NAME, in both directions.
+        {
+            // The same file name, an older version: an update, not "installed".
+            const InstallState sameFile =
+                state(adsb("1.8.1", mod("adsb")), {installedRec("adsb", "1.8.0", hostAbi, mod("adsb"))}, {});
+            CHECK(sameFile.kind == InstallStateKind::UpdateAvailable);
+            // A different file name, the same version: installed.
+            const InstallState otherFile =
+                state(adsb("1.8.1", mod("adsb-1.8.1")),
+                      {installedRec("adsb", "1.8.1", hostAbi, mod("renamed-by-hand"))}, {});
+            CHECK(otherFile.kind == InstallStateKind::Installed);
+            // A scanned module that happens to carry the entry's file name but is
+            // another plugin's id is not this plugin.
+            const InstallState impostor =
+                state(adsb("1.8.1", mod("adsb-1.8.1")), {},
+                      {scanned("something-else", "1.8.1", mod("adsb-1.8.1"))});
+            CHECK(impostor.kind == InstallStateKind::NotInstalled);
+        }
+
+        // A VERSION ONLY IN THE SCAN (a module no record names, carrying the id).
+        {
+            const PluginCatalogEntry e = adsb("1.8.1", mod("adsb-1.8.1"));
+            const InstallState older = state(e, {}, {scanned("adsb", "1.8.0", mod("adsb-1.8.0"))});
+            CHECK(older.kind == InstallStateKind::UpdateAvailable);
+            CHECK(older.installedVersion == "1.8.0");
+            CHECK(state(e, {}, {scanned("adsb", "1.8.1", mod("adsb-1.8.1"))}).kind ==
+                  InstallStateKind::Installed);
+            CHECK(state(e, {}, {scanned("adsb", "2.0.0", mod("adsb-2.0.0"))}).kind ==
+                  InstallStateKind::NewerInstalled);
+        }
+
+        // THE SCAN WINS where both know the module (the file is the join, compared
+        // as NTFS compares it): a file replaced by hand is what its descriptor says.
+        {
+            const PluginCatalogEntry e = adsb("1.8.1", mod("adsb-1.8.1"));
+            const InstallState swappedUp =
+                state(e, {installedRec("adsb", "1.8.0", hostAbi, mod("adsb-1.8.0"))},
+                      {scanned("adsb", "1.9.0", mod("adsb-1.8.0"))});
+            CHECK(swappedUp.kind == InstallStateKind::NewerInstalled);
+            CHECK(swappedUp.installedVersion == "1.9.0");
+            const InstallState swappedDown =
+                state(e, {installedRec("adsb", "1.9.0", hostAbi, mod("adsb-1.9.0"))},
+                      {scanned("adsb", "1.8.0", mod("adsb-1.9.0"))});
+            CHECK(swappedDown.kind == InstallStateKind::UpdateAvailable);
+            CHECK(swappedDown.installedVersion == "1.8.0");
+            const InstallState otherCase =
+                state(e, {installedRec("adsb", "1.8.0", hostAbi, mod("adsb-1.8.0"))},
+                      {scanned("adsb", "1.8.1", mod("ADSB-1.8.0"))});
+            CHECK(otherCase.kind == InstallStateKind::Installed);
+            // A record the scan does NOT know (a module turned aside - retired) is
+            // still an installed copy: the record speaks.
+            const InstallState retired =
+                state(e, {installedRec("adsb", "1.8.0", hostAbi, mod("adsb-1.8.0"))}, {});
+            CHECK(retired.kind == InstallStateKind::UpdateAvailable);
+        }
+
+        // TWO INSTALLED COPIES: the newer one speaks, whatever the order.
+        {
+            const PluginCatalogEntry e = adsb("1.8.1", mod("adsb-1.8.1"));
+            for (int order = 0; order < 2; ++order) {
+                std::vector<ScannedModule> scan{scanned("adsb", "1.8.0", mod("adsb-1.8.0")),
+                                                scanned("adsb", "1.8.1", mod("adsb-1.8.1"))};
+                std::vector<InstalledPlugin> recs{
+                    installedRec("adsb", "1.7.0", hostAbi, mod("adsb-1.7.0")),
+                    installedRec("adsb", "1.8.0", hostAbi, mod("adsb-1.8.0"))};
+                if (order == 1) {
+                    std::reverse(scan.begin(), scan.end());
+                    std::reverse(recs.begin(), recs.end());
+                }
+                const InstallState both = state(e, recs, scan);
+                CHECK(both.kind == InstallStateKind::Installed);
+                CHECK(both.installedVersion == "1.8.1");
+                // Records alone: 1.7.0 and 1.8.0 - the entry (1.8.1) is an update from 1.8.0.
+                const InstallState recsOnly = state(e, recs, {});
+                CHECK(recsOnly.kind == InstallStateKind::UpdateAvailable);
+                CHECK(recsOnly.installedVersion == "1.8.0");
+                // Scan alone: 1.8.0 and 1.8.1.
+                CHECK(state(e, {}, scan).installedVersion == "1.8.1");
+            }
+            // An old copy beside a NEWER one than the catalogue's: newer installed.
+            const InstallState newerWins =
+                state(adsb("1.8.1", mod("adsb-1.8.1")), {},
+                      {scanned("adsb", "1.9.0", mod("adsb-1.9.0")),
+                       scanned("adsb", "1.7.0", mod("adsb-1.7.0"))});
+            CHECK(newerWins.kind == InstallStateKind::NewerInstalled);
+            CHECK(newerWins.installedVersion == "1.9.0");
+        }
+
+        // A RECORD WHOSE FILE THE USER DELETED is not an installed plugin.
+        {
+            InstalledPlugin gone = installedRec("adsb", "1.8.0", hostAbi, mod("adsb-1.8.0"));
+            gone.missingFromDisk = true;
+            CHECK(state(adsb("1.8.1", mod("adsb-1.8.1")), {gone}, {}).kind ==
+                  InstallStateKind::NotInstalled);
+            // ...unless the scan says the module is there after all.
+            CHECK(state(adsb("1.8.1", mod("adsb-1.8.1")), {gone},
+                        {scanned("adsb", "1.8.0", mod("adsb-1.8.0"))})
+                      .kind == InstallStateKind::UpdateAvailable);
+        }
+
+        // THE SAME-VERSION REBUILD planUpdates() also plans: equal versions, the
+        // installed build targeted another ABI, the catalogue's targets this host's.
+        {
+            const PluginCatalogEntry e = adsb("1.8.1", mod("adsb-1.8.1"));
+            const std::uint32_t otherAbi = hostAbi + 7u;
+            const InstallState rebuild =
+                state(e, {installedRec("adsb", "1.8.1", otherAbi, mod("adsb-1.8.1-old"))}, {});
+            CHECK(rebuild.kind == InstallStateKind::UpdateAvailable);
+            CHECK(rebuild.installedVersion == "1.8.1");
+            // An unrecorded ABI (0) is unknown, never a mismatch.
+            CHECK(state(e, {installedRec("adsb", "1.8.1", 0, mod("adsb-1.8.1"))}, {}).kind ==
+                  InstallStateKind::Installed);
+            // The catalogue's own build is not for this host: nothing to update to.
+            PluginCatalogEntry foreign = adsb("1.8.1", mod("adsb-1.8.1"));
+            foreign.abiVersion = otherAbi;
+            CHECK(state(foreign, {installedRec("adsb", "1.8.1", otherAbi, mod("adsb-1.8.1"))}, {})
+                      .kind == InstallStateKind::Installed);
+            // And it agrees with the planner on all three.
+            std::vector<PluginCatalogEntry> cat{e};
+            CHECK(PluginRepo::planUpdates(
+                      cat, {installedRec("adsb", "1.8.1", otherAbi, mod("adsb-1.8.1-old"))})
+                      .size() == 1u);
+            CHECK(PluginRepo::planUpdates(
+                      cat, {installedRec("adsb", "1.8.1", hostAbi, mod("adsb-1.8.1"))})
+                      .empty());
+        }
+    }
+
+    // ---------------------------------------------------------------------
     // Optional live fetch. Off by default: the catalogue repository is
     // private, so a failure here would say nothing about this code.
     // ---------------------------------------------------------------------

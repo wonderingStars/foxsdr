@@ -27,6 +27,11 @@
 //   - the "<module>.disabled" files a retirement leaves, so a quarantined module
 //     that was put back, or removed, by hand is seen.
 //
+// ONE EXCEPTION (0.99.72): the plugin store's catalogue cache - catalogue.json,
+// catalogue.json.time and the ".part" each is renamed from - is not counted. A
+// good catalogue read rewrites it every time, it decides nothing about which
+// modules load, and counted it made every fetch look like a changed folder.
+//
 // WHAT IT CANNOT SEE, stated so nobody assumes otherwise: a file replaced by
 // one with the same size and the same last-write time (a copy that preserves
 // times, onto a file system whose clock is coarser than the copy), and anything

@@ -1,69 +1,59 @@
 // plugins_view.hpp - the FITTED MODULES window: the operating panel for the
 // plugins this machine actually has.
 //
-// WHY IT IS SEPARATE FROM THE PLUGIN STORE. The store is a catalogue and
-// answers "what could I have" - browse, search, filter, fit. This window
-// answers the other question, which is the one a user asks when something is
-// wrong: "what have I got, and is it working". They are two windows rather
-// than one section because a function that gets its own window gets a shape,
-// and the rail row becomes the key that opens it rather than a lid over a
-// drawer. Everything about a fitted module is in here.
+// WHY IT IS SEPARATE FROM THE PLUGIN STORE. The store is a catalogue and answers
+// "what could I have" - browse, search, fit. This window answers the other
+// question, the one a user asks when something is wrong: "what have I got, and is
+// it working". They are two windows rather than one section because a function
+// that gets its own window gets a shape, and the rail row becomes the key that
+// opens it rather than a lid over a drawer. Everything about a fitted module is in
+// here.
 //
-// THE STATE MODEL IS THE POINT OF THIS WINDOW. Before it, the Plugins section
-// of the rail could say "loaded" and "stopped" and nothing else, which left
-// the two most common faults unanswerable:
+// SIMPLE, BY THE OWNER'S WORDS (2026-10-08: "I want to keep separate windows but
+// they both need to be simple"). A top bar - search, the five feed-state chips,
+// SCAN AGAIN and RESET WINDOW SIZES - the one verdict line, and one full-width row
+// per module: glyph, name, version, the reach warning or the refusal under the
+// name, the state word with its lamp, STOP or START, and a two-step REMOVE. A
+// click on a name opens the module's PAGE in the same window: an ON THIS MACHINE
+// box, then - when the module is in the catalogue - the very pictures,
+// description and notes the store's page draws (gui/plugin_store_view.hpp's
+// drawModulePageBody, one renderer for both), and the facts folded behind SHOW
+// DETAILS.
 //
-//   - "my decoder is installed and produces nothing" - because nothing is
-//     ROUTED to it. The application knows this precisely (PluginRunner keeps a
-//     DecoderStatus per instance with a ready-to-display sentence) and the
-//     rail showed the sentence in a place nobody associates with the module.
+// THE STATE MODEL IS THE POINT OF THIS WINDOW. Before it, the Plugins section of
+// the rail could say "loaded" and "stopped" and nothing else, which left the two
+// most common faults unanswerable:
+//
+//   - "my decoder is installed and produces nothing" - because nothing is ROUTED
+//     to it. The application knows this precisely (PluginRunner keeps a
+//     DecoderStatus per instance with a ready-to-display sentence).
 //
 //   - "my plugin does not appear" - because the host FOUND the file, read its
-//     descriptor and REFUSED it. LoadedPlugin::error has carried the exact
-//     reason since the host was written - wrong ABI version, a missing entry
-//     point, a declared capability with no table behind it - and no surface in
-//     this product ever printed it. It is printed here, verbatim.
+//     descriptor and REFUSED it. LoadedPlugin::error has carried the exact reason
+//     since the host was written, and it is printed here, verbatim.
 //
-// So this window distinguishes five states, and every one of them is derived
-// from a predicate that already exists in the product rather than from a new
-// opinion invented here:
+// So this window distinguishes five states, and every one of them is derived from
+// a predicate that already exists in the product rather than from a new opinion:
 //
 //   FED           loaded, not stopped, PluginRunner::isFeeding(key), and the
-//                 receiver is running. This is the same composition
-//                 core/plugin_ui.hpp calls ACTUALLY DECODING and the audio
-//                 mute already acts on, with the receiver's own run state
-//                 added - a decoder matched to a rate nobody is producing is
-//                 not being fed, whatever the runner's table says.
+//                 receiver is running.
 //   NOT FED       loaded, not stopped, and something is between it and the
 //                 samples. The reason is the runner's own sentence, quoted.
-//   TAKES NO      loaded, not stopped, and it declares no decoder at all.
-//   SIGNAL        A basemap or a track source is fed nothing by design, and
-//                 calling that "not fed" would put a fault on a module doing
-//                 exactly what it was fitted to do.
-//   STOPPED       in the stop set. The user's own choice, so it is lettered as
-//                 a choice and not as trouble.
+//                 (Lettered NOT DECODING, the word of the chip that counts it.)
+//   TAKES NO      loaded, not stopped, and it declares no decoder at all. A
+//   SIGNAL        basemap or a track source is fed nothing by design.
+//   STOPPED       in the stop set. The user's own choice, lettered as a choice.
 //   REFUSED       the file was found and rejected; `error` says why.
 //
-// WHAT THIS WINDOW DOES NOT COVER, deliberately: the catalogue, held updates,
-// and the RETIRED modules the version policy quarantines out of the scan.
-// Those are the store's - a retired module is a fact about what the catalogue
-// now says, not about what the host loaded, and PluginHost never sees it.
+// WHAT THIS WINDOW DOES NOT COVER, deliberately: the catalogue, held updates, and
+// the RETIRED modules the version policy quarantines out of the scan. Those are
+// the store's.
 //
-// THE DATA PLATE IS NOT DRAWN HERE. The design makes it a component SHARED
-// with the plugin store so one module reads identically in both windows, and
-// it lives in gui/plugin_store_view.hpp: ModulePlate, moduleDataPlateHeight,
-// drawModuleDataPlate, moduleKindTag, moduleReachSummary, moduleReachColour.
-// This window builds a ModulePlate from its own record (makeModulePlate) and
-// hands it over. The identity, the facts, the reach panel and the refusal
-// reason are all that component's; what this file adds around it is the
-// operating state, the path the module was loaded from, and the keys.
-//
-// PURE FIRST, DRAWN SECOND, which is the split track_detail_view.hpp uses and
-// for the same reason. WHAT the window says - which state a module is in, what
-// sentence explains it, what words its capability bits become - is decided by
-// the free functions below, which have no ImGui in them and can be exercised
-// without a graphics context. HOW it is drawn is the rest, and contains no
-// decisions.
+// PURE FIRST, DRAWN SECOND, which is the split track_detail_view.hpp uses and for
+// the same reason. WHAT the window says - which state a module is in, what
+// sentence explains it, what words its capability bits become - is decided by the
+// free functions below, which have no ImGui in them and can be exercised without a
+// graphics context. HOW it is drawn is the rest, and contains no decisions.
 //
 // GUI THREAD ONLY, like everything else in this directory.
 //
@@ -81,9 +71,9 @@
 
 namespace cascade::gui {
 
-// The five distinct answers this application can give to "is my module
-// working". Derived by fittedState() and by nothing else, so the word on the
-// row, the lamp beside it and the sentence on the plate cannot disagree.
+// The five distinct answers this application can give to "is my module working".
+// Derived by fittedState() and by nothing else, so the word on the row, the lamp
+// beside it and the sentence on the page cannot disagree.
 enum class FittedState {
     Fed,        // being given signal right now
     NotFed,     // could be fed, and is not
@@ -92,22 +82,28 @@ enum class FittedState {
     Refused,    // found on disk and rejected at load
 };
 
-// One module as this window shows it. EVERY FIELD NAMES ITS SOURCE, because
-// the whole value of this window is that nothing on it was invented here.
+// One module as this window shows it. EVERY FIELD NAMES ITS SOURCE, because the
+// whole value of this window is that nothing on it was invented here.
 struct FittedModule {
     // core::pluginKey(p) - the module file name, which is the identity every
-    // per-module decision in this product is keyed on (the stop, the tune
-    // grant, the mute override). Never the display name, which the module
-    // itself chooses and two modules may share.
+    // per-module decision in this product is keyed on (the stop, the tune grant,
+    // the mute override). Never the display name, which the module itself chooses
+    // and two modules may share.
     std::string file;
+    // THE ROW'S NAME FOR THE CENSUS AND FOR THE PAGE'S PICTURES: the catalogue id
+    // the install record gave this file when there is one, otherwise the file name.
+    std::string id;
+    // The catalogue id alone ("" for a module the catalogue does not know): what the
+    // page asks the store for pictures with.
+    std::string catalogueId;
+    // The catalogue's category for the glyph ("aircraft", ...), or "" when the module
+    // is not in the catalogue and the kind's glyph is drawn instead.
+    std::string category;
     // LoadedPlugin::path - the absolute path the module was loaded FROM.
-    // "Which copy is running" is the other question with no answer today: a
-    // plugin file name embeds its version, so an upgrade ADDS a file, and the
-    // host's duplicate resolver turns the loser off with a reason.
     std::string path;
 
-    // LoadedPlugin descriptor fields, copied by the host. All empty on a
-    // module that was refused before its descriptor could be read.
+    // LoadedPlugin descriptor fields, copied by the host. All empty on a module that
+    // was refused before its descriptor could be read.
     std::string name;
     std::string version;
     std::string author;
@@ -115,42 +111,37 @@ struct FittedModule {
     std::uint32_t capabilities = 0;
 
     bool loaded = false;   // LoadedPlugin::loaded
-    // LoadedPlugin::error - empty if and only if loaded. Printed VERBATIM;
-    // this string is the answer to "my plugin does not appear" and paraphrasing
-    // it would throw away the numbers it carries ("expected 3, plugin reports 2").
+    // LoadedPlugin::error - empty if and only if loaded. Printed VERBATIM; this
+    // string is the answer to "my plugin does not appear" and paraphrasing it would
+    // throw away the numbers it carries ("expected 3, plugin reports 2").
     std::string error;
 
     // AppWindow::pluginIsStopped(file) - the durable stop set.
     bool stopped = false;
-    // PluginRunner::isFeeding(file) - the runner has an instance for this
-    // module MATCHED to the rate the pipeline is delivering. Not the same
-    // question as "is it stopped", and not the same question as "is the
-    // receiver running" either; see FittedState above.
+    // PluginRunner::isFeeding(file) - the runner has an instance for this module
+    // MATCHED to the rate the pipeline is delivering.
     bool fed = false;
-    // DecoderStatus::detail for this module when its reason is not Running -
-    // the runner's own ready-to-display sentence, quoted rather than rewritten
-    // so this window and the rail cannot describe one idle decoder two ways.
-    // Empty when the runner recorded nothing.
+    // DecoderStatus::detail for this module when its reason is not Running - the
+    // runner's own ready-to-display sentence, quoted rather than rewritten. Empty
+    // when the runner recorded nothing.
     std::string idleDetail;
 
-    // LoadedPlugin::hostClient != nullptr - the module declared
-    // CASCADE_CAP_HOST_CLIENT and can therefore ASK to move the receiver.
+    // LoadedPlugin::hostClient != nullptr - the module declared CASCADE_CAP_HOST_CLIENT
+    // and can therefore ASK to move the receiver.
     bool tuneCapable = false;
-    // PluginUi::tuneAllowed(file). The one reach in this product that is
-    // actually enforced: request_tune is answered CASCADE_TUNE_DENIED unless
-    // the user granted it, per module, defaulting to off.
+    // PluginUi::tuneAllowed(file). The one reach in this product that is actually
+    // enforced: request_tune is answered CASCADE_TUNE_DENIED unless the user granted
+    // it, per module, defaulting to off.
     bool tuneAllowed = false;
 
     // --- HOST API LEVEL 1 (0.99.31) -----------------------------------------
-    // PluginApiCore::settingsRequesters() contains this file: the module has
-    // asked at least once to change a receiver SETTING (mode, gains, volume,
-    // ...), so the SETTINGS grant means something for it. A key offered to a
-    // module that never asks would be a control that changes nothing.
+    // PluginApiCore::settingsRequesters() contains this file: the module has asked at
+    // least once to change a receiver SETTING, so the SETTINGS grant means something
+    // for it.
     bool settingsCapable = false;
-    // PluginUi::settingsAllowed(file) - the second grant, off by default.
     bool settingsAllowed = false;
-    // The module's own command keys (CascadeHostApi::add_command), in the
-    // order it added them. Labels are the module's own text, drawn as given.
+    // The module's own command keys (CascadeHostApi::add_command), in the order it
+    // added them. Labels are the module's own text, drawn as given.
     struct Command {
         std::uint32_t id = 0;
         std::string label;
@@ -160,90 +151,99 @@ struct FittedModule {
     std::uint32_t noticeLevel = 0;
     std::string notice;
 
-    // PluginRepo::changedSinceInstallNote for this file: the bytes on disk are
-    // not the ones sha256-verified when it was installed. Empty when they are,
-    // or when no install record exists (a hand-fitted module has nothing to
-    // disagree with). The HOST's finding, never the module's - it is drawn
-    // apart from `notice` so a module cannot overwrite it by logging.
+    // PluginRepo::changedSinceInstallNote for this file: the bytes on disk are not the
+    // ones sha256-verified when it was installed. Empty when they are, or when no
+    // install record exists. The HOST's finding, never the module's.
     std::string integrityNote;
 
-    // ORPHANED (0.99.69): core::classifyPluginFiles() says this file is not
-    // known to the plugin index (no install record, and not a file the
-    // catalogue publishes for this platform) AND is not running. The window
-    // then says so on the file's row and plate and offers REMOVE FILE, which
-    // deletes that one file. False for a running module and for one the index
-    // knows, whatever it did at load; a record built by hand is not an orphan.
+    // ORPHANED (0.99.69): core::classifyPluginFiles() says this file is not known to
+    // the plugin index AND is not running. The row then says so and REMOVE deletes
+    // that one file (AppWindow::removeOrphanedPlugin re-checks before it does).
     bool orphaned = false;
 
-    // Size of the file on disk in bytes. 0 means NOT MEASURED and the shared
-    // plate says so; it never prints a clean zero, which would be the opposite
-    // claim. There is no size in any descriptor, so this can only ever come
-    // from the caller stat-ing the file.
-    //
-    // NO FITTED DATE. InstalledPlugin::installedAtUnix does record one, but
-    // the shared plate has no field for it, and a fact drawn only in this
-    // window would break the one property the shared plate exists for - that a
-    // module reads identically in both.
+    // Size of the file on disk in bytes. 0 means NOT MEASURED; it never prints a
+    // clean zero, which would be the opposite claim.
     std::uint64_t sizeBytes = 0;
+
+    // From the install record (installed.json), when there is one: the plugin ABI the
+    // fitted build was made for (0 = not recorded) and when it was fitted (0 = not
+    // recorded, drawn as nothing and never as 1970).
+    std::uint32_t abiVersion = 0;
+    std::int64_t fittedAtUnix = 0;
+
+    // The module's page needs the catalogue's record of it (pictures, description,
+    // what is new) when the catalogue knows it: an index into
+    // FittedModulesModel::catalogue, or -1. Filled only while this module's page is
+    // open.
+    int catalogueIndex = -1;
 };
 
-// The record as the SHARED data plate wants it. One adapter, so the fitted
-// window and the store cannot describe the same module differently.
+// The record as the SHARED page wants it, for a module the catalogue does not know
+// (or for the facts of one it does). One adapter, so the fitted window and the store
+// cannot describe the same module differently.
 //
 // The catalogue-only fields are left absent rather than guessed: a LoadedPlugin
-// carries no summary, no homepage, no legal notice, no platform list, no
-// retirement floor, and - the one that matters - no ABI version, because the
-// host checks the descriptor's abiVersion at load and does not copy it into the
-// record. haveAbi is therefore FALSE, which the plate reads as "not recorded"
-// and never as a mismatch.
+// carries no summary, no homepage, no legal notice, no platform list, no retirement
+// floor. haveAbi follows the install record's ABI when there is one.
 //
-// AND NEITHER ARE THE IDENTITY FIELDS OF A MODULE NOBODY READ. PluginHost
-// copies name, version, author and licence out of the descriptor only after it
-// accepts one, so a file refused before that arrives here with all four empty
-// - and the plate would have drawn a maker, a version and "no licence
-// declared" for a module it had never opened. ModulePlate::haveDescriptor says
-// which of those two this record is, and it is decided by the record itself
-// rather than by `loaded`: the host's duplicate resolver turns a module off
-// AFTER reading it, and that one is refused with its identity perfectly known.
+// AND NEITHER ARE THE IDENTITY FIELDS OF A MODULE NOBODY READ. PluginHost copies
+// name, version, author and licence out of the descriptor only after it accepts one,
+// so a file refused before that arrives here with all four empty -
+// ModulePlate::haveDescriptor says which of those two this record is, and it is
+// decided by the record itself rather than by `loaded`.
 ModulePlate makeModulePlate(const FittedModule& m);
 
 // What the window is told, once per frame.
 struct FittedModulesModel {
     std::vector<FittedModule> modules;  // PluginHost::plugins() order
     std::string directory;              // PluginHost::directory()
-    // Pipeline::running(). Gates FED for every module at once, which is why it
-    // is stated on the panel rather than left to be inferred from four idle
-    // rows.
+    // Pipeline::running(). Gates FED for every module at once, which is why it is
+    // stated on the window rather than left to be inferred from four idle rows.
     bool receiverRunning = false;
     // AppWindow's last install/remove outcome, verbatim. Either may be empty.
     std::string report;
     std::string error;
+    // THE OLD COPIES UPDATES LEFT BEHIND (core/plugin_cleanup.hpp), and what the last
+    // clean-up did: "CLEAN UP OLD VERSIONS (n)" is at the foot of the list when there
+    // are any.
+    std::vector<StoreOldCopy> oldCopies;
+    std::string cleanupReport;
+    // The catalogue's records of the modules a page needs (see
+    // FittedModule::catalogueIndex): empty while no page is open.
+    std::vector<StoreModule> catalogue;
 };
 
-// The window's own persistent state, owned by the caller so it survives the
-// frame. Same arrangement as MapView's SatelliteDeck.
+// The window's own persistent state, owned by the caller so it survives the frame.
 struct FittedModulesDeck {
-    // Index into the FILTERED list, clamped every frame - the model's vector
-    // is rebuilt by every rescan and an index into the old one is a different
-    // module.
-    int selected = 0;
+    char search[128] = {0};
+    // The five chips, each a toggle, all on by default.
     bool showFed = true;
     bool showIdle = true;      // NotFed only - see showNoSignal
-    // ITS OWN KEY, because it is its own state. One key over both NotFed and
-    // NoSignal was labelled NOT DECODING, which made a basemap - a module that
-    // can never decode anything - a decoder that is not decoding.
+    // ITS OWN KEY, because it is its own state: one key over both NotFed and NoSignal
+    // was labelled NOT DECODING, which made a basemap - a module that can never decode
+    // anything - a decoder that is not decoding.
     bool showNoSignal = true;
     bool showStopped = true;
     bool showRefused = true;
-    // The module file name awaiting a second press of Remove. Empty when
-    // nothing is armed. A file name rather than an index for the reason the
-    // whole product keys on file names: a rescan reorders the list.
+    // The module file name awaiting a second press (CONFIRM), and the ImGui time the
+    // arming lapses (five seconds). A file name rather than an index for the reason
+    // the whole product keys on file names: a rescan reorders the list.
     std::string confirmRemove;
+    double confirmUntil = 0.0;
+    // The module file of the open page ("" = the list), and the page's own state.
+    std::string pageFile;
+    ModulePageState page;
+    // The catalogue id of the page's module, set on the frame the page OPENS so the
+    // caller asks for its pictures; the caller clears it.
+    std::string pageOpenedCatalogueId;
+    std::string lastPageFile;
+    // The decoded pictures of the page, kept for the window's life.
+    PagePictureCache pictures;
 };
 
-// What the frame's clicks asked for. The window itself changes nothing: it
-// owns no host, no runner and no config, and every action here is one the
-// application already has a method for.
+// What the frame's clicks asked for. The window itself changes nothing: it owns no
+// host, no runner and no config, and every action here is one the application
+// already has a method for.
 struct FittedModulesAction {
     enum class Kind {
         None,
@@ -251,23 +251,22 @@ struct FittedModulesAction {
         Start,     // AppWindow::setPluginStopped(file, false)
         Stop,      // AppWindow::setPluginStopped(file, true)
         Remove,    // AppWindow::removeInstalledPlugin(file)
-        // AppWindow::removeOrphanedPlugin(file) (0.99.69): the same two-step key
-        // as Remove, on a file that is not in the plugin index and not running -
-        // and the app re-checks that before it deletes anything.
+        // AppWindow::removeOrphanedPlugin(file) (0.99.69): the same two-step key on a
+        // file that is not in the plugin index and not running - and the app re-checks
+        // that before it deletes anything.
         RemoveOrphan,
         SetTune,   // AppWindow::setPluginTuneAllowed(file, flag)
-        // Host API level 1: AppWindow::setPluginSettingsAllowed(file, flag),
-        // and a press of one of the module's own command keys (id).
+        // Host API level 1: AppWindow::setPluginSettingsAllowed(file, flag), and a
+        // press of one of the module's own command keys (id).
         SetSettings,
         Command,
-        // AppWindow::resetPageWindows(). THE WAY BACK FROM A WINDOW DRAGGED
-        // TOO SMALL TO USE. A page's resize grip is invisible by design, so a
-        // decoder window pulled down to its rail leaves almost nothing to take
-        // hold of - reported by a beta tester who could not get the ACARS
-        // printer back. It is on THIS window because it is the one panel that
-        // is about every fitted module at once, and because it is reachable
-        // from the rail whatever state the other windows are in.
+        // AppWindow::resetPageWindows(). THE WAY BACK FROM A WINDOW DRAGGED TOO SMALL
+        // TO USE: a page's resize grip is invisible by design, so a decoder window
+        // pulled down to its rail leaves almost nothing to take hold of.
         ResetWindows,
+        // CLEAN UP OLD VERSIONS, confirmed once for all of them
+        // (AppWindow::cleanUpOldVersionsConfirmed).
+        CleanUp,
     };
     Kind kind = Kind::None;
     std::string file;   // empty for Rescan
@@ -277,40 +276,38 @@ struct FittedModulesAction {
 
 // --- what the window SAYS, decided without ImGui -----------------------------
 
-// The state of one module. `receiverRunning` is the pipeline's own run state:
-// a decoder matched to a rate nobody is producing is not being fed.
+// The state of one module. `receiverRunning` is the pipeline's own run state: a
+// decoder matched to a rate nobody is producing is not being fed.
 FittedState fittedState(const FittedModule& m, bool receiverRunning);
 
 // The word printed on the row, in capitals. Never null.
 const char* fittedStateWord(FittedState s);
 
-// The sentence on the plate: why the module is in that state, and what would
-// change it. For NotFed this is the RUNNER'S OWN sentence wherever it recorded
-// one, quoted rather than rewritten.
+// The sentence on the page: why the module is in that state, and what would change
+// it. For NotFed this is the RUNNER'S OWN sentence wherever it recorded one, quoted
+// rather than rewritten.
 std::string fittedStateSentence(const FittedModule& m, bool receiverRunning);
 
-// The ONE LINE an orphaned file's row carries (0.99.69): that it was not
-// installed from the plugin store (the plugin index does not know it) and is not
-// running, then the host's own reason for the second half, verbatim, when it
-// gave one. Empty for a file that is not an orphan, so a caller can use the
-// answer as the test.
+// The ONE LINE an orphaned file's row carries (0.99.69): that it was not installed
+// from the plugin store and is not running, then the host's own reason for the second
+// half, verbatim, when it gave one. Empty for a file that is not an orphan.
 std::string fittedOrphanSentence(const FittedModule& m);
 
-// The kind tag and the one-line reach summary on a row come from the SHARED
-// component - moduleKindTag(), moduleReachSummary() and moduleReachColour() in
-// gui/plugin_store_view.hpp, called on the ModulePlate this window builds. They
-// are deliberately not reimplemented here: a module that reads "DECODER" in the
-// store and "TRACKS" on this panel would be one module described two ways.
+// THE LINE UNDER A ROW'S NAME, or empty: an orphan's sentence, or a REFUSED module's
+// one-line reason (the host's, verbatim), or - for a module that reaches outward - the
+// reach warning ("asks to move the receiver", "may fetch from a server it chose").
+// Nothing for a module that "publishes to the host only". `refusal` says the line is a
+// refusal (letter it muted), `warning` that it is a reach warning (letter it in amber).
+struct FittedRowNote {
+    std::string text;
+    bool refusal = false;
+    bool warning = false;
+};
+FittedRowNote fittedRowNote(const FittedModule& m, bool receiverRunning);
 
-// How many modules are in each state. The counts on the strip come from here
-// so they cannot drift from the rows.
-//
-// ONE COUNTER PER STATE, and NoSignal is not folded into notFed any more. It
-// was, under a caption reading NOT DECODING, which counted a basemap - a
-// module that declares no decoder and can never decode anything - as a decoder
-// that is not decoding, and lit a lamp over the total. A count must answer the
-// question its caption asks; these five are the five states fittedState()
-// returns and nothing is added together on the way to the strip.
+// How many modules are in each state. The counts on the chips come from here so they
+// cannot drift from the rows. ONE COUNTER PER STATE: nothing is added together on the
+// way to the chips.
 struct FittedCounts {
     int fed = 0;
     int notFed = 0;    // NotFed: could be fed, and is not
@@ -321,22 +318,35 @@ struct FittedCounts {
 };
 FittedCounts countStates(const std::vector<FittedModule>& modules, bool receiverRunning);
 
-// Builds one record from the three places the application keeps these facts,
-// so a caller cannot pair the wrong predicate with the wrong field. sizeBytes is
-// the record's (LoadedPlugin::fileBytes, measured once by the scan); 0 is "not
-// measured", and a size nobody looked up must never be drawn as a clean zero.
-// NOTHING HERE OR IN THE CALLER MAY STAT THE FILE: this is built for every
-// module on every frame the window is open (tests/test_fitted_modules_no_disk).
+// The one muted verdict line under the top bar: the receiver's run state in one
+// sentence ("The receiver is running, so a module with a matched decoder is being
+// fed."), then, after a dot, "read from <plugins dir>" - or "No directory has been
+// scanned yet." when none has been.
+std::string fittedVerdictLine(bool receiverRunning, const std::string& directory);
+
+// Which modules the chips leave on screen, and in what order: sorted by name (the file
+// name for a module whose name was never read), filtered by the chips and by `lowerQuery`
+// over name, file and version. Indices into `modules`.
+std::vector<int> fittedVisibleRows(const std::vector<FittedModule>& modules, bool receiverRunning,
+                                   const FittedModulesDeck& deck);
+
+// "fitted 2026-10-07" for a module whose install record says when, else empty.
+std::string fittedDateText(const FittedModule& m);
+
+// Builds one record from the three places the application keeps these facts, so a
+// caller cannot pair the wrong predicate with the wrong field. sizeBytes is the
+// record's (LoadedPlugin::fileBytes, measured once by the scan); 0 is "not measured".
+// NOTHING HERE OR IN THE CALLER MAY STAT THE FILE: this is built for every module on
+// every frame the window is open (tests/test_fitted_modules_no_disk).
 FittedModule makeFittedModule(const cascade::core::LoadedPlugin& p, bool stopped, bool fed,
                               std::string idleDetail, bool tuneAllowed);
 
 // --- the window --------------------------------------------------------------
 
-// Draws the whole panel into the CURRENT ImGui window and returns whatever the
-// user asked for this frame. The caller opens the window, places it and applies
-// the action; nothing here touches the host.
-FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck,
-                                           const FittedModulesModel& model);
+// Draws the whole panel into the CURRENT ImGui window and returns whatever the user
+// asked for this frame. The caller opens the window, places it and applies the action;
+// nothing here touches the host.
+FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck, const FittedModulesModel& model);
 
 }  // namespace cascade::gui
 
