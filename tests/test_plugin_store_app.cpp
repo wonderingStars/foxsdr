@@ -577,10 +577,33 @@ int main(int argc, char** argv) {
     }
 
     // --- THE WINDOW REMEMBERS WHERE IT WAS ---------------------------------------------
+    //
+    // THE RECTANGLES HERE ARE CHOSEN TO TEST THE REMEMBERING, NOT THE CLAMPING. With nothing saved
+    // the store opens at its preferred 1480 x 980 held inside the MAIN window (pageOpenInside;
+    // this test's window is 1600 x 1000), and reads back about 1430 wide. A SAVED rectangle is
+    // held on the way back in to the MONITOR's work area instead, measured from its own corner
+    // (mapClampRestoredSize). On a screen narrower than the main window - the Linux runners' Xvfb
+    // screen is 1280 wide - the 1430 px rectangle the first run saves at x 85 is cut to 1195 (1280
+    // less 85) on reopening, and the next run saves 1145: CI run 37776378832 failed `w2 - w1 <= 60`
+    // that way on both Linux jobs, while this desktop's wider screen cut nothing. So the run whose
+    // rectangle is remembered is GIVEN one by hand that fits any plausible screen and the main
+    // window (100,80 1100 x 700), and what is asked is that the next run reopens it where the first
+    // left it. The unconfigured run below is kept only to know the width the default has.
     {
+        resetPluginsFolder(false);
+        RunOptions plain;
+        plain.frames = 70;
+        const Result unconfigured = once("rect-default", plain);
+        CHECK(unconfigured.ok);
+        const int wDefault = jsonInt(readFile(g_dir / "rect-default.json"), "pluginStoreWidth");
+        std::printf("    an unconfigured run saved the store %d wide\n", wDefault);
+        CHECK(wDefault > 400);
+
         resetPluginsFolder(false);
         RunOptions o;
         o.frames = 70;
+        o.extraJson =
+            ", \"pluginStoreX\": 100, \"pluginStoreY\": 80, \"pluginStoreWidth\": 1100, \"pluginStoreHeight\": 700";
         const Result first = once("rect-1", o);
         CHECK(first.ok);
         const std::string cfgText = readFile(g_dir / "rect-1.json");
@@ -592,6 +615,9 @@ int main(int argc, char** argv) {
         // A run that opened the store saves its rectangle.
         CHECK(w1 > 400);
         CHECK(h1 > 300);
+        // ...and it is not the default's: were it the default's, the comparison below would pass
+        // whether or not anything had been remembered.
+        CHECK(std::abs(w1 - wDefault) > 100);
         // THE NEXT RUN, from the config the first wrote, opens it where it was. The two runs' rectangles
         // are not asked to be EQUAL, because this headless single-viewport run reads a window's position
         // and size back about 25 px in and 50 px smaller than it was set - the Fitted modules window,
@@ -614,8 +640,8 @@ int main(int argc, char** argv) {
         CHECK(std::abs(w2 - w1) <= 60);
         CHECK(std::abs(jsonInt(cfg2, "pluginStoreHeight") - h1) <= 60);
         // AND A RECTANGLE PUT THERE BY HAND IS WHERE THE RUN OPENS IT - the proof that it was restored,
-        // and not merely that the default is the default: the default is 1430 x 927 at 86,49 here, and
-        // what comes back is the hand-made 1010 x 710 within that one step.
+        // and not merely that the default is the default: the default is about 1430 wide (wDefault),
+        // and what comes back is the hand-made 1010 x 710 within that one step.
         resetPluginsFolder(false);
         RunOptions hand;
         hand.frames = 70;
@@ -632,7 +658,7 @@ int main(int argc, char** argv) {
         CHECK(std::abs(jsonInt(cfg3, "pluginStoreWidth") - 1010) <= 60);
         CHECK(std::abs(jsonInt(cfg3, "pluginStoreHeight") - 710) <= 60);
         // ...and it is a different rectangle from the one an unconfigured run opens.
-        CHECK(std::abs(jsonInt(cfg3, "pluginStoreWidth") - w1) > 100);
+        CHECK(std::abs(jsonInt(cfg3, "pluginStoreWidth") - wDefault) > 100);
     }
 
     // --- THE FITTED MODULES WINDOW ----------------------------------------------------
