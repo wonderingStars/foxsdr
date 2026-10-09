@@ -17,14 +17,18 @@
 // ring is exactly where the matcher wants it and the correction stays near zero - a
 // difference of thousands of ppm, not a timing margin.
 //
-// An output that never plays (a build server's ALSA `null` device opens and does not
-// call back) is a SKIP, printed, never a pass.
+// An output that never plays is a SKIP, printed, never a pass. GitHub's ALSA
+// `null` device can even prime briefly, then stop draining: both Linux jobs
+// saw +3/+4 ppm instead of +5000 ppm. The workflow names that fixture
+// explicitly, so this real-speaker integration test skips on that fixture.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/pipeline.hpp"
 
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
+#include <string_view>
 #include <thread>
 
 #include "sink/audio_out.hpp"
@@ -36,6 +40,13 @@ using std::chrono::seconds;
 using std::chrono::steady_clock;
 
 int main() {
+    const char* nullAudio = std::getenv("FOXSDR_CI_NULL_AUDIO");
+    if (nullAudio != nullptr && std::string_view(nullAudio) == "1") {
+        std::printf("SKIP the pipeline's target: CI uses ALSA null, which cannot sustain playback\n");
+        ++g_checksSkipped;
+        return testSummary("test_pipeline_audio_lead");
+    }
+
     Pipeline::Config cfg;
     cfg.sampleRateHz = 1000000.0;
     cfg.fftSize = 1024;

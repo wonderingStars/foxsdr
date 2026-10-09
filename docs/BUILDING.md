@@ -78,6 +78,11 @@ ctest --test-dir build --output-on-failure
 Audio goes through ALSA. On a machine whose audio is managed by PulseAudio or
 PipeWire, install `libasound2-plugins` so ALSA's default device routes to the
 sound server rather than claiming the hardware directly.
+GitHub's Linux jobs instead route ALSA to `null`. That device can open and
+briefly prime while failing to sustain playback, so the pipeline audio-lead
+integration test is explicitly reported as skipped there. It runs on a machine
+with real audio output; the null-device jobs still run the sink's callback and
+buffer tests.
 
 **Hardware.** The RTL-SDR, HackRF, Airspy R2/Mini, Airspy HF+, HydraSDR RFOne,
 RX888 mk2 and Mirics native drivers talk to their radios on Linux through

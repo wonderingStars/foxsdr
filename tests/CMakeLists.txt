@@ -356,6 +356,9 @@ set_tests_properties(test_plugin_inuse_app PROPERTIES TIMEOUT 600)
 # here; the Linux runners are half this desktop's speed and open ALSA's `null` device slowly, so it is
 # given the generous bound its siblings are rather than the loop's two minutes.
 set_tests_properties(test_audio_lead_app PROPERTIES TIMEOUT 300)
+# A null ALSA sink cannot prove sustained playback. Report the integration test's
+# explicit skip as Skipped in CTest, while real-output runs still test the join.
+set_tests_properties(test_pipeline_audio_lead PROPERTIES SKIP_REGULAR_EXPRESSION "SKIP the pipeline's target")
 # The priority test starts a real pipeline twice (a stop and a start is a new thread and a new request).
 set_tests_properties(test_dsp_priority PROPERTIES TIMEOUT 120)
 
