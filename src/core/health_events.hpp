@@ -97,8 +97,9 @@ enum class Recovered : std::uint8_t {
     PatchLoad,   // a saved patch loaded with connections dropped
     SdrEnum,     // the SDRplay service's enumeration was abandoned
     SdrLost,     // the SDRplay API session was lost and shut for the session
+    AudioLead,   // the audio buffer was deepened because this computer fell behind (0.99.73)
 };
-inline constexpr std::size_t kRecoveredCount = 13;
+inline constexpr std::size_t kRecoveredCount = 14;
 
 // One event of the vocabulary, as documentation and the Worker see it: its
 // name, the word lists of its qualifiers in order (empty for a bare event), and

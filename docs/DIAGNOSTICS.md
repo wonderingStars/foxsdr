@@ -741,6 +741,7 @@ The sites that are counted:
 | `patchload` | `AppWindow::applyConfig`, a saved patch that lost connections | the window's thread |
 | `sdrenum` | `AppWindow::pollSdrPlayService`, the SDRplay scan worker let go | the window's thread |
 | `sdrlost` | `AppWindow::pollSdrPlayService`, the SDRplay API session lost | the window's thread |
+| `audiolead` | `AppWindow::closeAudioMinute`, the once-a-minute close that deepened the audio buffer (0.99.73; see *The DSP thread asks for priority, and the audio buffer deepens itself*) | the window's thread |
 
 **Surveyed and deliberately not counted**, so the next reader does not re-do the
 survey: the person's own actions that look like recoveries (re-picking a stopped
@@ -2142,6 +2143,201 @@ the bundle its own volume, mute and squelch and that the once-a-second refresh a
 the bundle cannot describe the sound differently. What they do not stage: the
 once-a-minute repeat of a standing refusal, a device that opens and then dies, or
 a host API that reports an unanticipated error.
+
+### The DSP thread asks for priority, and the audio buffer deepens itself (0.99.73)
+
+The 12CF report: a Store user on 0.99.64, an RSP1A at 2.048 MS/s, thirty plugins
+loaded, **110 to 126 starved audio callbacks every minute** and frames of 260 to
+320 ms. The owner asked whether a larger buffer would stop the lost frames "as not
+every computer is as fast as this one". Alone it would not (a producer that is late
+is late whatever the buffer), so two things changed together. **Neither is
+established to fix that user's machine** - there is no log from it after the change -
+and the release notes say so.
+
+**Nothing set a thread priority before.** PortAudio raises its own callback thread
+(the consumer of the audio ring). The producer - `Pipeline::dspThreadMain`, the one
+entry of all four DSP spawn sites, and the thread every plugin's `process()` runs on
+- and the thread that fills the I/Q ring (`Pipeline::sourceThreadMain`) ran at
+normal priority beside the window, the plugins' own threads and whatever else the
+machine was doing. Both now ask the operating system for priority
+(`core/thread_priority.hpp`), once at thread start, and put it back when the thread
+ends:
+
+- **Windows:** the Multimedia Class Scheduler, class `Pro Audio`
+  (`AvSetMmThreadCharacteristicsW`). `avrt.dll` is loaded at run time from System32
+  and never linked, so the Linux and Android builds are the same sources and a
+  Windows without the service still starts. When that fails, the thread is raised to
+  `THREAD_PRIORITY_ABOVE_NORMAL` instead.
+- **Linux (and Android):** `pthread_setschedparam(SCHED_RR, 1)`. An ordinary user is
+  refused (`EPERM`) and the thread stays as it was; nice is not raised, which needs
+  privileges too.
+- **Anywhere else:** nothing, and the outcome says so.
+
+Two lines in the log say how it came out, one per thread start (a stop and a start
+is a new thread and a new line):
+
+- `dsp: thread priority <outcome>` - the DSP thread.
+- `dsp: source thread priority <outcome>` - the thread that fills the I/Q ring.
+
+`<outcome>` is `mmcss`, `above-normal`, `sched-rr`, or `none: <reason>`. The reason is
+a fixed phrase or an error number, never a path or an operating-system sentence:
+`no MMCSS (avrt.dll unavailable)`, `MMCSS refused (error N)` (each followed by
+`; SetThreadPriority refused (error N)` when the fallback failed too), `EPERM`,
+`error N`, `scheduling policy unreadable`, `not supported on this platform`. **A
+`none:` line is a finding, not a fault**: it is what a Linux user who has not been
+given real-time scheduling will see, and on Windows it means neither MMCSS nor a
+plain priority change was allowed. The outcomes are also readable as
+`Pipeline::dspThreadPriority()` and `sourceThreadPriority()`; nothing is published in
+`/api/status` and nothing is uploaded.
+
+**The buffer.** The sink's ring was 32768 samples (341 ms in stereo) with a fixed
+120 ms lead - the callback played nothing until 120 ms were queued, and after an
+underrun it went silent and waited for 120 ms again - and the `DriftMatcher` steered
+the fill to a fixed 160 ms. A deeper lead alone would have been bled back down to
+160 ms. Now:
+
+- The ring is 131072 samples (1.37 s in stereo, 512 KiB per sink), so no resize is
+  ever needed.
+- The **lead** is a runtime value held in each `AudioOut` (a lock-free atomic the
+  callback reads when it is not yet playing), and the matcher's **target** is the
+  sink's lead plus 40 ms, handed over with every observation
+  (`AudioOut::targetFrames()`). A patch speaker has its own sink and its own matcher,
+  so its own lead and target.
+- **The policy** (`sink::nextAudioLead`, a pure function with its own table test): when
+  a minute closes with **three or more** starved callbacks, the lead steps up one
+  rung through 120, 240, 480, 960 ms and never above 960 ms. Fewer than three does
+  nothing, and **nothing ever steps down**: a machine that fell behind once will
+  again. A fixed setting (`audioBufferMs` in the settings file, which the Sinks rail's
+  **Audio buffer** box writes; `0` is AUTOMATIC) never steps. AUTOMATIC starts at
+  120 ms the first time; the depth it reached is remembered across launches as
+  `audioBufferAutoMs` in the settings file (0, 120, 240, 480 or 960; anything else loads
+  as 0), written when a minute's starved callbacks deepen the receiver's sink and read
+  at start-up, where an AUTOMATIC session starts at that depth - never below 120 ms or
+  above 960, only ever deeper than the session already is, and without the "raised"
+  line, sentence or health count (a restored depth is not a raise). A fixed setting
+  ignores it and keeps it; choosing AUTOMATIC from a fixed value resets the lead to
+  120 ms and forgets it.
+- It is applied from the window's thread (`AppWindow::closeAudioMinute`, called by the
+  once-a-minute branch of `pollAudioHealth`), never from the callback, and takes
+  effect at the next re-prime: a ring that is already playing is not stopped, the
+  matcher simply steers it to the new target; the next underrun is followed by silence
+  until the new lead is queued - about the step's worth, once.
+- Each step writes **`audio: buffer raised to <N> ms after <N> starved callbacks in a
+  minute`** (a patch speaker's carries ` (patch speaker)` at the end), shows
+  "Audio buffer raised to 240 ms: this computer fell behind 5 times in the last
+  minute." once on the **AUDIO - UNDERRUNS** card and under the setting in the Sinks
+  rail, and is counted as the health word `recovered.audiolead` (once a session;
+  PRIVACY.md). The starvation digest above it (`audio: N starved callbacks in the last
+  minute ...`) is unchanged, and still written first.
+- `/api/status` gains **`audioLeadMs`**, the lead in force in milliseconds, beside
+  `audioRingMs` and `audioRingCapacityMs`.
+
+What the tests establish: `tests/test_audio_lead.cpp` every transition of the policy,
+the ceiling, the quiet minute, the fixed setting and the legal settings;
+`tests/test_audio_out.cpp` that the callback honours a raised lead on the first
+prime and on the re-prime after an underrun (with fills chosen to clear 120 ms and
+not the lead under test), that a playing ring is not stopped by a raise, that the
+lead is counted in frames in stereo, and that the ring takes the deepest lead plus
+the matcher's margin; `tests/test_drift_matcher.cpp` that the target follows the lead
+(a 20-minute closed loop at a 240 ms lead settles at 280 +- 15 ms, and the same loop
+with the old fixed target settles at 160, which is the bug) and the same at 480 and
+960 ms; `tests/test_dsp_priority.cpp` that the outcome is a real one on Windows
+(`mmcss` or `above-normal`, never `none`), that the operating system's own priority
+is higher while the scope lives and what it was afterwards (on the owner's desktop,
+Windows 11 build 22631, a thread under "Pro Audio" reads 15, `THREAD_PRIORITY_TIME_CRITICAL`,
+from `GetThreadPriority` and 0 again afterwards; with MMCSS refused it reads 1 and
+0), that the fallback works with MMCSS refused, and that a real pipeline reports both
+threads and logs both lines; `tests/test_pipeline_audio_lead.cpp` that a real
+pipeline hands the drift matcher the *sink's* target - a lead raised to 960 ms
+while it plays pins the matcher's correction at its +5000 ppm cap, where the old
+fixed 160 ms target could not have exceeded about 3000; `tests/test_audio_lead_app.cpp` that a real window, fed real starved
+callbacks, deepens the buffer at three and not at two, writes the line, words the
+card and rail sentence, counts the health word once, keeps AUTOMATIC out of the
+settings file, never steps a fixed value, and that the word reaches the next usage
+record; `tests/test_health_app.cpp`, `test_health_events.cpp` and
+`test_health_paths.cpp` that the word is in the vocabulary, the survey and the
+window's one site; and `telemetry-worker/worker.test.mjs` that the Worker keeps it
+and the 0.99.67 Worker drops it.
+
+**What they do not establish.** That any particular computer stops starving: the
+simulation is the sink's own code against the matcher's, with no real device and no
+slow machine. That the card and the rail *draw* the sentence (they ask one function
+for it, and the test reads the source for both calls; nothing here draws a window).
+That MMCSS does for the DSP thread what it does for an audio-class thread of a
+program that sleeps on a device - it is a larger share of the scheduler for a thread
+that is nearly always runnable, which is not the same promise. A minute is the
+smallest unit the policy sees: a computer that starves 100 times in a second and then
+recovers is one bad minute, and one rung.
+
+### A fitted plugin runs only while it is used (0.99.73)
+
+The same 12CF report: thirty plugins loaded, and each of them fed every DSP block and
+polled every GUI frame whether anyone was looking at it or not. Fitting a plugin used
+to create its decoder at once; now a plugin is created when something **uses** it and
+put down again 30 seconds after the last use ends (`core/plugin_run.hpp`,
+`AppWindow::updatePluginLifecycle`). **Nothing here is established to fix that
+user's machine**; the release notes say what it does and does not claim.
+
+**Three run states** per plugin, kept in the settings file as `pluginRun` (plugin id ->
+`"auto"` | `"always"` | `"stopped"`; AUTO is never written), by the plugin's id - its
+file name without the extension and the `-<version>...` part - so an update does not
+lose a choice. The old `pluginsStopped` list of file names is read **once** and each
+entry becomes `pluginRun[<id>] = "stopped"`; the file is saved with the old list empty
+from then on (an older build that reads it sees nothing stopped).
+
+**What counts as a use** (`core::PluginUse`, evaluated once a frame on the window's
+thread by `AppWindow::pluginUseOf`): one of the plugin's windows is shown; its map page
+is open; the radar scope is showing and it is a track source; a running patch has a
+Decoder node naming it; it is the audio-out plugin holding the speakers; the Decoder
+output window is open and it is a text decoder; the web server has a live session and
+it is a track or image source; its decoder node is wired to a patch Text sink. **Two
+additions the owner's list did not name**, because without them two kinds of plugin
+would silently stop working: an in-chain audio processor, and a module that only
+attaches to the host, are in use as long as they are fitted (`standing duty`). The
+passive consumers - coverage accumulation, the web snapshot, aircraft-info look-ups -
+do **not** count. A START press and a preset press set ALWAYS; the tune that opening a
+window does for you does not; STOP sets STOPPED.
+
+**Two log lines**, one per transition of an AUTO plugin:
+
+- `plugin: <name> woke - <signal>` - `<signal>` is `window open`, `map page open`,
+  `radar scope showing`, `patch node running`, `playing audio`, `decoder output
+  window open`, `browser connected`, `wired to a Text sink` or `standing duty`.
+- `plugin: <name> dormant after 30 s without a use`.
+
+A plugin pinned to ALWAYS, or started by START, is not logged here: that was the user's
+own press. A stopped plugin writes nothing. The bounded run's census prints
+`plugin run: always=<n> idle=<n>` beside the existing `plugin stopped:` lines (the
+stopped ones are now ids).
+
+**A test seam**: `FOXSDR_DORMANT_AFTER_MS=<n>` (1 to 3 600 000) replaces the 30 seconds
+for the process, so a test does not wait half a minute; the log line still says "30 s".
+Not documented for users, and ignored when it is not a whole number in range.
+
+**What the per-plugin start and stop do not do**: begin a new stream epoch (a plugin
+started mid-epoch has been handed only the frames since its start; the clock counts the
+stream), touch another plugin's instance, status row or counters, or rebuild the
+runner. A wholesale rebuild (a new source, rate, centre, a rescan) is unchanged except
+that it creates only the plugins that should be running.
+
+What the tests establish: `tests/test_plugin_run.cpp` the id rule, the stop set kept by
+id, every signal alone and together, the clock (a wake on the very frame, a sleep not
+a millisecond before 30 s, a want inside the window resetting it, ALWAYS and STOPPED);
+`tests/test_plugin_runner.cpp`, `test_plugin_audio.cpp` and `test_plugin_ui.cpp` that
+`startPlugin` / `stopPlugin` create and destroy exactly one plugin's instances, leave
+the others' state, counters, status rows, pictures, speakers' claim and the epoch
+alone, and that a wholesale rebuild keeps what they left; `tests/test_plugins_view.cpp`,
+`test_running_view.cpp` and `test_module_census.cpp` that IDLE is a state, a chip, a
+sentence and a START key and is not counted as a fault anywhere;
+`tests/test_plugin_inuse_app.cpp` that the real window, with real modules (each
+writes its own attach, create, destroy and detach to a file), creates
+nothing at start, wakes a plugin within a frame of its window being opened, puts it
+down after the (shortened) interval and wakes it again, keeps START and the
+KEEP RUNNING tick across a restart, lets a preset press pin a plugin and the tune that
+opening a window does not, and migrates an old `pluginsStopped` file by id across a
+version change. What they do not: that a real plugin of any age behaves under
+being created and destroyed at a user's pace (the ones in the field were written
+expecting one `create()` per session), nor that any computer stops starving.
 
 ### The context block follows the session, not the last second (0.99.62)
 

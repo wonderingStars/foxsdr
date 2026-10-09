@@ -673,19 +673,26 @@ int main(int argc, char** argv) {
         const Result r = once("fitted", o);
         CHECK(r.ok);
         if (r.ok) {
-            // The search, the five chips with their counts, and the two keys at the right.
+            // The search, the six chips with their counts (0.99.73: IDLE is the sixth), and the two
+            // keys at the right.
             CHECK(r.rect("fitted:search") != nullptr);
             CHECK(r.rect("fitted:scan") != nullptr);
             CHECK(r.rect("fitted:reset") != nullptr);
             int counted = 0;
-            for (const char* st : {"fed", "notfed", "nosignal", "stopped", "refused"}) {
+            for (const char* st : {"fed", "idle", "notfed", "nosignal", "stopped", "refused"}) {
                 CHECK(r.rect(std::string("fitted:chip:") + st) != nullptr);
                 for (int n = 0; n <= 3; ++n) {
                     if (r.has(std::string("fitted:count:") + st + ":" + std::to_string(n))) { counted += n; }
                 }
             }
-            // ONE MODULE IS FITTED, and the five counts add up to it.
+            // ONE MODULE IS FITTED, and the six counts add up to it.
             CHECK(counted == 1);
+            // ...AND IT IS IDLE: nothing is using it, so it has no decoder - which is not a fault. It
+            // reads IDLE (the chip counts it, the row says so) and not NOT DECODING.
+            CHECK(r.has("fitted:count:idle:1"));
+            CHECK(r.has("fitted:state:store-c:idle"));
+            CHECK(!r.has("fitted:state:store-c:notfed"));
+            CHECK(!r.has("fitted:count:notfed:1"));
             if (r.rect("fitted:search") != nullptr && r.rect("fitted:chip:fed") != nullptr &&
                 r.rect("fitted:scan") != nullptr && r.rect("fitted:reset") != nullptr) {
                 CHECK(r.rect("fitted:search")->x1 <= r.rect("fitted:chip:fed")->x0 ||
@@ -729,7 +736,9 @@ int main(int argc, char** argv) {
         CHECK(fs::exists(pluginsDir() / (std::string("store-c-1.0.0") + kExt)));
     }
     {
-        // STOP stops it: the row's state word becomes STOPPED BY YOU.
+        // THE KEY ON AN IDLE ROW READS START (0.99.73), and pressing it pins the module: it has a
+        // decoder from then on, so the row stops reading IDLE (it reads NOT DECODING here, the
+        // receiver being stopped), and it does not read STOPPED.
         resetPluginsFolder(true);
         RunOptions o;
         o.frames = 100;
@@ -737,9 +746,32 @@ int main(int argc, char** argv) {
         o.openFitted = true;
         o.extraJson = kFittedRect;
         o.script = click(40, fKey);
+        const Result r = once("fitted-start", o);
+        CHECK(r.ok);
+        if (r.ok) {
+            CHECK(r.has("fitted:state:store-c:idle"));    // before the press
+            CHECK(r.has("fitted:state:store-c:notfed"));  // after it: it has an instance, the radio is off
+            CHECK(!r.has("fitted:state:store-c:stopped"));
+            CHECK(readFile(g_dir / "fitted-start.json").find("\"store-c\": \"always\"") != std::string::npos);
+        }
+    }
+    {
+        // STOP stops it: the row's state word becomes STOPPED. The module starts pinned (a config that
+        // says "always"), so its key reads STOP in the place the idle one's read START.
+        resetPluginsFolder(true);
+        RunOptions o;
+        o.frames = 100;
+        o.openStore = false;
+        o.openFitted = true;
+        o.extraJson = std::string(kFittedRect) + ", \"pluginRun\": { \"store-c\": \"always\" }";
+        o.script = click(40, fKey);
         const Result r = once("fitted-stop", o);
         CHECK(r.ok);
-        if (r.ok) { CHECK(r.has("fitted:state:store-c:stopped")); }
+        if (r.ok) {
+            CHECK(!r.has("fitted:state:store-c:idle"));
+            CHECK(r.has("fitted:state:store-c:stopped"));
+            CHECK(readFile(g_dir / "fitted-stop.json").find("\"store-c\": \"stopped\"") != std::string::npos);
+        }
     }
     {
         // A CLICK ON THE NAME OPENS THE PAGE: ON THIS MACHINE first, then the catalogue's sections.

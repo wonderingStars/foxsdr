@@ -48,10 +48,16 @@ namespace cascade::sink {
 
 class DriftMatcher {
 public:
-    // 160 ms at 48 kHz. Above the 120 ms prime so a freshly primed ring is
-    // steered UP to it (a little more headroom against the next hiccup than
-    // the prime alone gave), and under half of the 341 ms stereo ring so a
-    // burst of producer catch-up still fits without dropping.
+    // 160 ms at 48 kHz: THE DEFAULT TARGET, for the default 120 ms lead. Above
+    // the lead so a freshly primed ring is steered UP to it (a little more
+    // headroom against the next hiccup than the prime alone gave), and well
+    // inside the ring so a burst of producer catch-up still fits without
+    // dropping. Since 0.99.73 the lead is adjustable (AudioOut::setLeadFrames)
+    // and the target is not a constant of the matcher but a value its caller
+    // hands over with every observation - AudioOut::targetFrames(), the lead
+    // plus 40 ms - so a deeper lead is steered TO and not bled back down to
+    // 160 ms. Two sinks (the receiver's and a patch speaker's) have two leads and
+    // so two targets, which is why it is not held here.
     static constexpr double kTargetFrames = 7680.0;
 
     // The ceiling on the correction: 0.5 %. A realistic two-crystal
@@ -75,8 +81,11 @@ public:
     // written. `fillFrames` is how many frames the sink's ring holds right
     // now; `playing` is false while the sink is priming (or has no device),
     // when the fill says nothing about the clocks - the controller then holds
-    // what it has learned and waits.
-    void observe(std::size_t fillFrames, bool playing, std::size_t blockFrames);
+    // what it has learned and waits. `targetFrames` is the fill to steer to:
+    // the sink's AudioOut::targetFrames() (its lead plus 40 ms); the default is
+    // the 160 ms of the 120 ms lead.
+    void observe(std::size_t fillFrames, bool playing, std::size_t blockFrames,
+                 double targetFrames = kTargetFrames);
 
     // Output frames per input frame. 1.0 before the first observation.
     double ratio() const { return 1.0 + correctionPpm_ * 1e-6; }

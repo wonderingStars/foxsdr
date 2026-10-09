@@ -44,6 +44,7 @@ struct GLFWwindow;
 #include "core/plugin_dir_signature.hpp"
 #include "core/plugin_host.hpp"
 #include "core/plugin_runner.hpp"
+#include "core/plugin_run.hpp"
 #include "core/patch_graph.hpp"
 #include "core/patch_plan.hpp"
 #include "core/patch_presets.hpp"
@@ -815,6 +816,29 @@ private:
     // version is that a dead sink is invisible from inside the app, so the
     // only fix is to keep asking.
     void pollAudioHealth();
+    // A MINUTE OF AUDIO HAS CLOSED (0.99.73): called by pollAudioHealth once a
+    // minute, with the ring's level at that instant (the next minute's low-water
+    // mark starts there). It writes the starvation digest as it always did, and
+    // then decides whether this computer has fallen behind often enough for the
+    // buffer to deepen (sink::nextAudioLead): on the receiver's sink and on each
+    // patch speaker that is a sound device. Never from the audio callback - this
+    // is the GUI thread, and the lead it sets is one relaxed store the callback
+    // reads at its next re-prime. A seam as well: it takes no clock, so a test
+    // closes minutes at will.
+    void closeAudioMinute(std::size_t ringFramesNow);
+    // The Sinks rail's AUDIO BUFFER: 0 is AUTOMATIC, 120, 240, 480 or 960 a
+    // fixed value. Sets the live lead (a fixed value at once; AUTOMATIC puts it
+    // back to 120 ms and forgets a raise this session made - and the depth
+    // AUTOMATIC had remembered across launches, AppConfig::audioBufferAutoMs) and
+    // nothing else - the caller saves the config.
+    void setAudioBufferMs(int ms);
+    // The lead the receiver's sink is demanding now, in ms.
+    int audioLeadNowMs();
+    // "Audio buffer raised to 240 ms: this computer fell behind 5 times in the
+    // last minute." - in the language in force; empty until this session has
+    // raised it. Drawn on the AUDIO card and in the Sinks rail from here, so the
+    // two cannot word it differently.
+    std::string audioLeadNotice() const;
     // THE TWO SUCCESSES THE ANONYMOUS FAILURE COUNTS NEED AS A DENOMINATOR
     // (0.99.64, core/health_events.hpp), both read off state that already
     // exists, once per frame, on this thread - nothing on the DSP or audio
@@ -1136,7 +1160,15 @@ private:
     // and re-validated `ps` from the plugin itself: a preset is a plugin
     // publishing where it listens, never a plugin retuning the radio — that
     // still needs the separate per-plugin permission.
-    void applyPluginPreset(const cascade::core::LoadedPlugin& p, const CascadePreset& ps);
+    //
+    // `pin` (0.99.73): a preset PRESS is the deliberate "run this" and pins the
+    // plugin to ALWAYS, so it outlives the window being closed. The tune that
+    // OPENING A WINDOW does on its own (maybeAutoPresetOnShow) passes false: the
+    // open window already wants the plugin, and pinning it there would leave
+    // every plugin that has a preset running for ever after its window was
+    // first opened - the very thing AUTO exists to end.
+    void applyPluginPreset(const cascade::core::LoadedPlugin& p, const CascadePreset& ps,
+                           bool pin = true);
     // The window half of a preset press: the plugin's map page, picture,
     // panels and instruments, or Decoder output for a text decoder.
     void openPluginWindowsFor(const cascade::core::LoadedPlugin& p);
@@ -1218,16 +1250,70 @@ private:
     // both check pipeline_.running() beside this, exactly as they always did.
     std::size_t fedDecoderCount() const;
     // Whether the user has stopped this plugin. `pluginKey` is a module file
-    // name (cascade::core::pluginKey), the same identity the tune grant uses.
+    // name (cascade::core::pluginKey); the stop is kept against the plugin's ID
+    // (core::pluginRunId), so it outlives an update of the module.
     bool pluginIsStopped(const std::string& pluginKey) const;
-    // Records a stop or a start WITHOUT rebuilding: updates the durable list
-    // and pushes it into the runner and the UI half, so the next rebuild sees
-    // it. Split from the button's action below because applyPluginPreset has
-    // to start a plugin and then rebuild ONCE, having also moved the receiver.
+
+    // --- How a fitted plugin runs (0.99.73, core/plugin_run.hpp) --------------
+    // AUTO runs while something is using it and goes dormant 30 s after; ALWAYS
+    // is the user's "keep running" (a START or a preset press sets it); STOPPED
+    // is the old stop. Absent from the map is AUTO.
+    cascade::core::PluginRun pluginRunMode(const std::string& pluginKey) const;
+    // Whether this plugin is DORMANT: set to AUTO, nothing is using it, and so
+    // it has no instance. False for a plugin with nothing to start, and for one
+    // that is running.
+    bool pluginIsIdle(const std::string& pluginKey) const;
+    // The "keep running" tick and the Stop/Start keys: sets the mode and
+    // starts or stops THAT plugin's instances only. ALWAYS from AUTO starts it
+    // now; AUTO from ALWAYS leaves it running and lets the 30 s clock take it
+    // down once nothing wants it.
+    void setPluginRun(const std::string& pluginKey, cascade::core::PluginRun mode);
+    // ONCE A FRAME, on the GUI thread, before anything is drawn: works out which
+    // plugins are wanted (pluginUseOf), steps each one's life
+    // (core::stepPluginLife) and wakes or puts to sleep exactly those that
+    // changed - one startPlugin / stopPlugin each - logging
+    // `plugin: <name> woke - <signal>` and `plugin: <name> dormant after 30 s
+    // without a use`.
+    void updatePluginLifecycle();
+    // The signals of core::PluginUse for one plugin, read from the screen and
+    // the patch. `playingKey` is the module file name holding the speakers (read
+    // once per frame) and `browserSessions` the live browser sessions.
+    cascade::core::PluginUse pluginUseOf(const cascade::core::LoadedPlugin& p,
+                                         const std::string& playingKey,
+                                         std::size_t browserSessions) const;
+    // Whether the plugin's instances should exist: not STOPPED, and either
+    // ALWAYS or awake. What a wholesale rebuild is told through the dormant set.
+    bool pluginShouldRun(const cascade::core::LoadedPlugin& p) const;
+    // Pushes the stop set and the dormant set (as plugin ids) into the runner
+    // and the UI half, which apply them at their next rebuild.
+    void pushPluginHoldSets();
+    // One plugin's instances, created or destroyed alone: the runner's, the UI
+    // half's, the mute snapshot's and the basemap / track-info attach (which
+    // follows a plugin being STOPPED, not one going dormant).
+    void startPluginInstances(const cascade::core::LoadedPlugin& p);
+    void stopPluginInstances(const std::string& pluginKey);
+    // The first loaded, not stopped plugin with a basemap / a track-info table
+    // wins, as it always has; split out of refreshPluginRunner so a stop or a
+    // start of one plugin can redo it without a rebuild.
+    void attachBasemapAndTrackInfo();
+    // The track sources a map page exists for: loaded, not stopped and declaring
+    // a track source - whether or not an instance exists, so a dormant tracker
+    // keeps its page and its rail row and opening the page is how it is woken.
+    std::vector<std::string> declaredTrackPluginNames() const;
+    // Fitted decoders that are dormant (AUTO, not in use), and fitted text
+    // decoders that are not stopped (the ones the Decoder output window wakes).
+    std::size_t idleDecoderCount() const;
+    std::size_t wakeableTextDecoderCount() const;
+
+    // Records a stop or a start WITHOUT rebuilding: updates the durable mode
+    // (a stop is STOPPED, a start is ALWAYS - the deliberate "run this") and
+    // pushes the hold sets into the runner and the UI half, so the next rebuild
+    // sees it. Split from the button's action below because applyPluginPreset
+    // has to start a plugin and then rebuild ONCE, having also moved the receiver.
     void recordPluginStopped(const std::string& pluginKey, bool stopped);
-    // The Stop/Start button's action: record it, then rebuild through the one
-    // lifecycle path everything else uses, so a stop tears the plugin's
-    // instances down and a start builds them against the CURRENT receiver.
+    // The Stop/Start button's action: STOPPED or ALWAYS, and then THAT plugin's
+    // instances are destroyed or created alone (no wholesale rebuild: the other
+    // plugins, their state and the stream epoch are left as they are).
     void setPluginStopped(const std::string& pluginKey, bool stopped);
     // "WE WANT THE USER TO HAVE TO DO NOTHING" (the owner's words). Called
     // from setPluginStopped's own START branch only: looks the plugin back up
@@ -1254,8 +1340,9 @@ private:
     // autoPresetIndexOnStart, apply through applyPluginPreset, and log with
     // `verb` standing in for what just happened ("started" / "window
     // opened"). `verb` is a string literal from the two call sites, never
-    // plugin-supplied text.
-    void maybeAutoPreset(const std::string& pluginKey, const char* verb);
+    // plugin-supplied text. `pin` is applyPluginPreset's: true for a START
+    // (the plugin is already pinned), false for a window being opened.
+    void maybeAutoPreset(const std::string& pluginKey, const char* verb, bool pin);
     // THE REVERSE OF cascade::core::pluginKey(): HostImage/HostPanel/
     // HostInstrument/MapPage all carry a plugin's DISPLAY name (LoadedPlugin::
     // name), the same identity drawPluginWindowRows and drawMapPageSections
@@ -2296,6 +2383,21 @@ private:
     std::size_t audioRingLowWaterFrames_ = SIZE_MAX;
     std::uint64_t audioUnderrunsAtLogStart_ = 0;
     std::uint64_t audioPrimingAtLogStart_ = 0;
+    // THE AUDIO BUFFER (0.99.73). The setting (0 automatic; see AppConfig::
+    // audioBufferMs), and what this session's automatic mode has done: the lead
+    // it last raised to and how many starved callbacks the minute that raised it
+    // saw (0 = never raised; the notice is drawn while this is non-zero).
+    int audioBufferMs_ = 0;
+    int audioLeadRaisedToMs_ = 0;
+    int audioLeadRaisedStarved_ = 0;
+    // AppConfig::audioBufferAutoMs - the depth AUTOMATIC reached, remembered so the next launch
+    // starts there (0 = it never had to). Written by closeAudioMinute when it raises the receiver
+    // sink's lead, applied by applyConfig while the setting is AUTOMATIC, forgotten when the setting
+    // is CHANGED to AUTOMATIC (setAudioBufferMs).
+    int audioBufferAutoMs_ = 0;
+    // Each patch speaker's starved-callback count at the last minute that closed,
+    // so a minute's worth is a difference. Pruned to the speakers that exist.
+    std::map<cascade::core::patch::NodeId, std::uint64_t> patchStarvedAtMinute_;
     float splitRatio_ = 0.4f;  // spectrum's share of the center area
 
     // --- Source menu state (P4) ---------------------------------------------
@@ -4824,12 +4926,25 @@ private:
     // The plugins' marks, copied out of the core only when its sequence moves.
     std::vector<cascade::core::HostMarker> pluginMarkers_;
     std::uint64_t pluginMarkersSeq_ = 0;
-    // AppConfig::pluginsStopped. The durable copy of "the user stopped this
-    // plugin", by module file name, held here for the same reason the grants
-    // are: PluginRunner and PluginUi are rebuilt on every source change and
-    // cleared on every rescan, so the decision has to live somewhere neither
-    // touches.
-    std::vector<std::string> pluginsStopped_;
+    // AppConfig::pluginRun. The durable copy of how each plugin runs, by plugin
+    // ID (the version-stripped file name, core::pluginRunId), held here for the
+    // same reason the grants are: PluginRunner and PluginUi are rebuilt on every
+    // source change and cleared on every rescan, so the decision has to live
+    // somewhere neither touches. An id with no entry is AUTO. It replaces the
+    // file-name list AppConfig::pluginsStopped, which applyConfig migrates once.
+    std::map<std::string, cascade::core::PluginRun> pluginRun_;
+    // Each plugin's life, by id: whether it has been woken and when it was last
+    // wanted (core::PluginLife). Session only; a plugin starts every launch
+    // asleep unless it is ALWAYS.
+    std::map<std::string, cascade::core::PluginLife> pluginLife_;
+    // A manual tune offers AUTO audio-output decoders one lifecycle wake.
+    // Actual playback then keeps only its holder wanted; no instance is needed
+    // to produce the initial signal.
+    bool audioOutputTunePending_ = false;
+    // How long after its last want a plugin goes dormant. 30 s; the test seam
+    // FOXSDR_DORMANT_AFTER_MS (docs/DIAGNOSTICS.md) shortens it so a test need
+    // not wait half a minute.
+    std::int64_t pluginDormantAfterMs_ = cascade::core::kPluginDormantAfterMs;
     // AppConfig::pluginMuteOverride. Held here for the same reason: the value
     // is a decision about a plugin, and the objects that act on it are torn
     // down and rebuilt underneath it.

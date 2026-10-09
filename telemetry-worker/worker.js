@@ -123,7 +123,7 @@ const HEALTH_EVENTS = [
   { "name": "plug_load", "qualifiers": [["abi", "retired", "load"]] },
   { "name": "rec_fail", "qualifiers": [] },
   { "name": "slow", "qualifiers": [["events", "frame-start", "pre-draw", "plugin-panels", "toolbar", "rail", "spectrum", "patch", "status", "dialogs", "polls", "saves", "render", "present", "recorder", "plugins-reload", "startup", "other"], ["250ms", "1s", "5s"]] },
-  { "name": "recovered", "qualifiers": [["audio", "reopen", "srcthread", "vendorcall", "ringdrop", "dspexc", "cfgsave", "enumchild", "pluginapi", "webroute", "patchload", "sdrenum", "sdrlost"]] }
+  { "name": "recovered", "qualifiers": [["audio", "reopen", "srcthread", "vendorcall", "ringdrop", "dspexc", "cfgsave", "enumchild", "pluginapi", "webroute", "patchload", "sdrenum", "sdrlost", "audiolead"]] }
 ];
 // END HEALTH VOCABULARY
 

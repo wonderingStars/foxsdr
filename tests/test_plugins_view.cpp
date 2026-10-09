@@ -96,7 +96,7 @@ bool has(const std::string& hay, const char* needle) {
 // another fails HERE rather than passing an assertion on the field that did not
 // change. Six named fields, no indexing.
 bool sameCounts(const FittedCounts& a, const FittedCounts& b) {
-    return a.fed == b.fed && a.notFed == b.notFed && a.noSignal == b.noSignal &&
+    return a.fed == b.fed && a.idle == b.idle && a.notFed == b.notFed && a.noSignal == b.noSignal &&
            a.stopped == b.stopped && a.refused == b.refused && a.total == b.total;
 }
 
@@ -240,7 +240,9 @@ void testStateWords() {
     const std::string noSignal = fittedStateWord(FittedState::NoSignal);
     const std::string stopped = fittedStateWord(FittedState::Stopped);
     const std::string refused = fittedStateWord(FittedState::Refused);
+    const std::string idle = fittedStateWord(FittedState::Idle);
 
+    CHECK(idle == "IDLE");  // 0.99.73: AUTO and not in use - the word on the row and on its chip
     CHECK(fed == "FED");
     // The row (and the page's state word) letter this state as the CHIP that counts it does.
     CHECK(notFed == "NOT DECODING");
@@ -250,7 +252,7 @@ void testStateWords() {
 
     // Five states must letter as five DIFFERENT words, or the row cannot be
     // read back to the state that produced it.
-    const std::vector<std::string> words = {fed, notFed, noSignal, stopped, refused};
+    const std::vector<std::string> words = {fed, notFed, noSignal, stopped, refused, idle};
     std::vector<std::string> sorted = words;
     std::sort(sorted.begin(), sorted.end());
     CHECK(std::unique(sorted.begin(), sorted.end()) == sorted.end());
@@ -840,6 +842,153 @@ void testOrphans() {
     CHECK(sameCounts(countStates(two, true), counts(1, 0, 0, 0, 1, 2)));
 }
 
+// ---------------------------------------------------------------------------
+// 12. IDLE (0.99.73): a module set to AUTO that nothing is using. Not a fault.
+// ---------------------------------------------------------------------------
+//
+// THE PRECEDENCE, transcribed from the owner's sentence and not from the code:
+//     REFUSED > STOPPED > TAKES NO SIGNAL > FED > IDLE > NOT DECODING
+// swept over every combination of the six inputs and a mask of each kind, so a guard moved one
+// place in fittedState() changes at least one row.
+FittedState expectedWithIdle(bool loaded, bool stopped, std::uint32_t caps, bool fed, bool idle,
+                             bool receiverRunning) {
+    const bool signalBearing = (caps & (kDecoderBit | kIqBit | kImageBit)) != 0u;
+    if (!loaded) { return FittedState::Refused; }
+    if (stopped) { return FittedState::Stopped; }
+    if (!signalBearing) { return FittedState::NoSignal; }
+    if (fed && receiverRunning) { return FittedState::Fed; }
+    if (idle) { return FittedState::Idle; }
+    return FittedState::NotFed;
+}
+
+void testIdleState() {
+    const std::uint32_t masks[] = {0u, CASCADE_CAP_BASEMAP, kDecoderBit, kIqBit, kImageBit,
+                                   CASCADE_CAP_TRACK_SOURCE | CASCADE_CAP_PANEL,
+                                   kDecoderBit | CASCADE_CAP_TRACK_SOURCE, CASCADE_CAP_ALL_KNOWN};
+    int rows = 0;
+    for (std::uint32_t caps : masks) {
+        for (int bits = 0; bits < 32; ++bits) {
+            const bool loaded = (bits & 1) != 0;
+            const bool stopped = (bits & 2) != 0;
+            const bool fed = (bits & 4) != 0;
+            const bool running = (bits & 8) != 0;
+            const bool idle = (bits & 16) != 0;
+            FittedModule m = module(loaded, stopped, caps, fed);
+            m.idle = idle;
+            if (!loaded) { m.error = "wrong ABI: expected 3, plugin reports 2"; }
+            CHECK(fittedState(m, running) == expectedWithIdle(loaded, stopped, caps, fed, idle, running));
+            ++rows;
+        }
+    }
+    CHECK(rows == 8 * 32);
+
+    // The named cases the sweep covers, written out with their reasons.
+    FittedModule idle = module(true, false, kDecoderBit, false);
+    idle.idle = true;
+    CHECK(fittedState(idle, true) == FittedState::Idle);
+    // ...whether or not the receiver is running: a sleeping module is idle, not "fed nothing because
+    // the receiver is stopped" - it has no instance to feed either way.
+    CHECK(fittedState(idle, false) == FittedState::Idle);
+    // NOT NOT DECODING: the same module without the idle flag is the fault the flag is not.
+    FittedModule broken = module(true, false, kDecoderBit, false);
+    CHECK(fittedState(broken, true) == FittedState::NotFed);
+    // FED beats IDLE (a record cannot be both, and the working answer wins).
+    FittedModule both = module(true, false, kDecoderBit, true);
+    both.idle = true;
+    CHECK(fittedState(both, true) == FittedState::Fed);
+    // TAKES NO SIGNAL beats IDLE: a track-source module that is asleep still takes no signal.
+    FittedModule tracker = module(true, false, CASCADE_CAP_TRACK_SOURCE, false);
+    tracker.idle = true;
+    CHECK(fittedState(tracker, true) == FittedState::NoSignal);
+    // STOPPED and REFUSED both beat IDLE.
+    FittedModule stopped = module(true, true, kDecoderBit, false);
+    stopped.idle = true;
+    CHECK(fittedState(stopped, true) == FittedState::Stopped);
+    FittedModule refused = module(false, false, kDecoderBit, false);
+    refused.idle = true;
+    CHECK(fittedState(refused, true) == FittedState::Refused);
+
+    // THE SENTENCE says what it is and what to do, and does not blame anything.
+    const std::string s = fittedStateSentence(idle, true);
+    CHECK(has(s, "idle"));
+    CHECK(has(s, "30 seconds"));
+    CHECK(has(s, "KEEP RUNNING"));
+    CHECK(!has(s, "not being fed"));
+    CHECK(!has(s, "failed"));
+    CHECK(fittedStateSentence(idle, false) == s);  // the receiver's state does not change it
+    CHECK(s != fittedStateSentence(broken, true));
+
+    // THE KEY WORD: START for a module that is not running - idle as well as stopped - and STOP for
+    // one that is, so a press on an idle row pins it and a press on a running one stops it.
+    CHECK(cascade::gui::fittedOffersStart(idle));
+    CHECK(std::string(cascade::gui::fittedKeyWord(idle)) == "START");
+    CHECK(cascade::gui::fittedOffersStart(stopped));
+    CHECK(std::string(cascade::gui::fittedKeyWord(stopped)) == "START");
+    CHECK(!cascade::gui::fittedOffersStart(broken));
+    CHECK(std::string(cascade::gui::fittedKeyWord(broken)) == "STOP");
+    const FittedModule running = module(true, false, kDecoderBit, true);
+    CHECK(!cascade::gui::fittedOffersStart(running));
+    CHECK(std::string(cascade::gui::fittedKeyWord(running)) == "STOP");
+}
+
+void testIdleChipAndRows() {
+    FittedModule idleA = module(true, false, kDecoderBit, false);
+    idleA.idle = true;
+    idleA.name = "Alpha";
+    idleA.file = "alpha-1.0.0.dll";
+    FittedModule idleB = module(true, false, kIqBit, false);
+    idleB.idle = true;
+    idleB.name = "Bravo";
+    idleB.file = "bravo-1.0.0.dll";
+    FittedModule fed = module(true, false, kDecoderBit, true);
+    fed.name = "Charlie";
+    fed.file = "charlie-1.0.0.dll";
+    FittedModule broken = module(true, false, kDecoderBit, false);
+    broken.name = "Delta";
+    broken.file = "delta-1.0.0.dll";
+    std::vector<FittedModule> mods = {idleA, idleB, fed, broken};
+
+    // IDLE IS COUNTED BY ITSELF and added to nothing: it is not NOT DECODING.
+    const FittedCounts c = countStates(mods, true);
+    CHECK(c.idle == 2);
+    CHECK(c.fed == 1);
+    CHECK(c.notFed == 1);
+    CHECK(c.noSignal == 0 && c.stopped == 0 && c.refused == 0);
+    CHECK(c.fed + c.idle + c.notFed + c.noSignal + c.stopped + c.refused == c.total);
+    CHECK(c.total == 4);
+    // Only idle modules: the chip that letters decoders failing to decode reads zero.
+    const FittedCounts onlyIdle = countStates({idleA, idleB}, true);
+    CHECK(onlyIdle.idle == 2 && onlyIdle.notFed == 0 && onlyIdle.total == 2);
+    // The receiver stopped moves the FED one into NOT DECODING and the idle ones nowhere.
+    const FittedCounts rxStopped = countStates(mods, false);
+    CHECK(rxStopped.idle == 2 && rxStopped.fed == 0 && rxStopped.notFed == 2);
+
+    // THE CHIP'S TOGGLE decides whether idle rows are listed, and only them.
+    FittedModulesDeck deck;
+    CHECK(fittedVisibleRows(mods, true, deck).size() == 4u);
+    deck.showIdleDormant = false;
+    const std::vector<int> shown = fittedVisibleRows(mods, true, deck);
+    CHECK(shown.size() == 2u);
+    for (int i : shown) { CHECK(!mods[static_cast<std::size_t>(i)].idle); }
+    deck.showIdleDormant = true;
+    deck.showIdle = false;  // the NOT DECODING chip: hides Delta only
+    CHECK(fittedVisibleRows(mods, true, deck).size() == 3u);
+
+    // The record adapter carries the two new facts, and defaults to a module that is running and AUTO.
+    LoadedPlugin lp;
+    lp.path = "/p/thing-1.0.0.dll";
+    lp.name = "Thing";
+    lp.loaded = true;
+    lp.capabilities = kDecoderBit;
+    const FittedModule plain = makeFittedModule(lp, false, false, "", false);
+    CHECK(!plain.idle);
+    CHECK(!plain.keepRunning);
+    const FittedModule built = makeFittedModule(lp, false, false, "", false, true, true);
+    CHECK(built.idle);
+    CHECK(built.keepRunning);
+    CHECK(fittedState(built, true) == FittedState::Idle);
+}
+
 }  // namespace
 
 int main() {
@@ -856,5 +1005,7 @@ int main() {
     testVerdictAndRows();
     testPageFactsForAFittedModule();
     testChipCounts();
+    testIdleState();
+    testIdleChipAndRows();
     return testSummary("test_plugins_view");
 }

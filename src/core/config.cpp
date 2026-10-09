@@ -9,9 +9,12 @@
 #include "core/trace_hold.hpp"
 
 #include "core/plugin_api.hpp"
+#include "core/plugin_run.hpp"
 #include "core/telemetry.hpp"
 #include "core/tester_usage.hpp"
 #include "core/write_fault.hpp"
+// validAudioBufferSetting(): the four buffers the sink has (0.99.73).
+#include "sink/audio_out.hpp"
 // clampScopeRangeNm(): the radar scope's ladder of range steps.
 //
 // THE ONE PLACE core/ REACHES INTO gui/, and it is a considered exception
@@ -143,6 +146,22 @@ std::vector<std::string> sanitisePluginNames(const std::vector<std::string>& in)
         if (n.empty()) { continue; }
         if (std::find(out.begin(), out.end(), n) != out.end()) { continue; }
         out.push_back(n);
+        if (out.size() >= AppConfig::kMaxTuneGrants) { break; }
+    }
+    return out;
+}
+
+// How each plugin runs (AppConfig::pluginRun): plugin id -> "auto" | "always" | "stopped".
+// Entry by entry, so one bad line costs nothing else: an empty or over-long id, or a word that
+// is not one of the three, is dropped; at most kMaxTuneGrants entries are kept (std::map walks
+// in key order, so which ones is not a matter of the file's order).
+std::map<std::string, std::string> sanitisePluginRun(const std::map<std::string, std::string>& in) {
+    std::map<std::string, std::string> out;
+    for (const auto& [id, word] : in) {
+        if (id.empty() || id.size() > 128u) { continue; }
+        PluginRun r = PluginRun::Auto;
+        if (!parsePluginRun(word, r)) { continue; }
+        out.emplace(id, word);
         if (out.size() >= AppConfig::kMaxTuneGrants) { break; }
     }
     return out;
@@ -377,6 +396,8 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     getDouble(j, "bandwidthHz", out.bandwidthHz);
     getFloat(j, "squelchDb", out.squelchDb);
     getFloat(j, "volume", out.volume);
+    getInt(j, "audioBufferMs", out.audioBufferMs);
+    getInt(j, "audioBufferAutoMs", out.audioBufferAutoMs);
     getFloat(j, "dbMin", out.dbMin);
     getFloat(j, "dbMax", out.dbMax);
     getFloat(j, "splitRatio", out.splitRatio);
@@ -665,6 +686,18 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     getStringArray(j, "pluginTuneAllowed", out.pluginTuneAllowed);
     getStringArray(j, "closedWindows", out.closedWindows);
     getStringArray(j, "pluginsStopped", out.pluginsStopped);
+    // How each plugin runs (0.99.73): an object of strings. A member that is not a
+    // string is a hand-edit and is skipped; the words are checked in the sanitiser.
+    {
+        const auto it = j.find("pluginRun");
+        if (it != j.end() && it->is_object()) {
+            std::map<std::string, std::string> m;
+            for (auto p = it->begin(); p != it->end(); ++p) {
+                if (p.value().is_string()) { m[p.key()] = p.value().get<std::string>(); }
+            }
+            out.pluginRun = std::move(m);
+        }
+    }
     getStringArray(j, "pluginMuteOverride", out.pluginMuteOverride);
     // Host API level 1 (0.99.31). The grant is a list like the others; the
     // settings store is an object of objects, read element-wise: a member
@@ -855,6 +888,14 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     // Range sanitization — each rule and its WHY is documented in the header.
     const AppConfig defaults;
     out.volume = clampf(out.volume, 0.0f, 1.0f);
+    if (!cascade::sink::validAudioBufferSetting(out.audioBufferMs)) {
+        out.audioBufferMs = 0;  // automatic: see the header
+    }
+    // The depth AUTOMATIC reached last time: the same legal set, and 0 ("it never had to") for
+    // anything else, so a hand-edited 5000 cannot start the next session five seconds behind.
+    if (!cascade::sink::validAudioBufferSetting(out.audioBufferAutoMs)) {
+        out.audioBufferAutoMs = 0;
+    }
     out.splitRatio = clampf(out.splitRatio, 0.1f, 0.9f);
     if (out.deemphasisIndex < 0) { out.deemphasisIndex = 0; }
     if (out.deemphasisIndex > 2) { out.deemphasisIndex = 2; }
@@ -1044,6 +1085,7 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     // a plugin name but is bounded by the same reasoning.
     out.closedWindows = sanitisePluginNames(out.closedWindows);
     out.pluginsStopped = sanitisePluginNames(out.pluginsStopped);
+    out.pluginRun = sanitisePluginRun(out.pluginRun);
     // And the mute overrides, for the third time from the same function. A
     // duplicate here would be a preference that flipped twice - which is the
     // same as not being there at all, but only if something removes it.
@@ -1128,6 +1170,8 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
     j["bandwidthHz"] = cfg.bandwidthHz;
     j["squelchDb"] = cfg.squelchDb;
     j["volume"] = cfg.volume;
+    j["audioBufferMs"] = cfg.audioBufferMs;
+    j["audioBufferAutoMs"] = cfg.audioBufferAutoMs;
     j["dbMin"] = cfg.dbMin;
     j["dbMax"] = cfg.dbMax;
     j["splitRatio"] = cfg.splitRatio;
@@ -1253,6 +1297,11 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
     j["pluginTuneAllowed"] = cfg.pluginTuneAllowed;
     j["closedWindows"] = cfg.closedWindows;
     j["pluginsStopped"] = cfg.pluginsStopped;
+    {
+        json run = json::object();
+        for (const auto& [id, word] : cfg.pluginRun) { run[id] = word; }
+        j["pluginRun"] = std::move(run);
+    }
     j["pluginMuteOverride"] = cfg.pluginMuteOverride;
     j["pluginSettingsAllowed"] = cfg.pluginSettingsAllowed;
     {

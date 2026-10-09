@@ -334,13 +334,19 @@ public:
     // nothing on the screen and nothing waiting to act. Clients staying live
     // never see a transient DETACHED.
     void setLiveSet(const std::vector<std::string>& keys);
+    // ONE module's live flag, for the per-plugin start and stop (0.99.73): a
+    // module put to sleep loses its marks, commands, pending presses and queued
+    // requests exactly as one left out of setLiveSet does, and every other
+    // client is left as it is. An unknown key changes nothing.
+    void setLive(const std::string& key, bool live);
 
     // False when the owner is being destroyed: every client answers DETACHED
     // from then on, whatever its own flag says.
     void setAttached(bool attached);
     bool attached() const { return attached_.load(std::memory_order_acquire); }
 
-    // Grants and the stop set, keyed on module file name.
+    // Grants keyed on module file name; the stop set on the plugin's id (the
+    // file names it is handed are reduced to ids, core/plugin_run.hpp).
     void setTuneGranted(const std::string& key, bool granted);
     void setSettingsGranted(const std::string& key, bool granted);
     void setStopped(const std::vector<std::string>& keys);

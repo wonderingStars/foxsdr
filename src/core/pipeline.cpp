@@ -24,6 +24,7 @@
 #include "core/diag_log.hpp"
 #include "core/leak_on_purpose.hpp"
 #include "core/plugin_runner.hpp"
+#include "core/thread_priority.hpp"
 #include "dsp/limiter.hpp"
 
 #include <algorithm>
@@ -1391,6 +1392,17 @@ void Pipeline::noteThreadFault(const char* where, const char* what) {
 
 bool Pipeline::faulted() const { return faulted_.load(std::memory_order_relaxed); }
 
+std::string Pipeline::dspThreadPriority() const { return dspPriority_->get(); }
+
+std::string Pipeline::sourceThreadPriority() const { return srcPriority_->get(); }
+
+double Pipeline::driftCorrectionPpm() {
+    // The matcher belongs to the DSP thread and is guarded by audioMutex_, which
+    // that thread holds for a block at a time.
+    std::lock_guard<std::mutex> lk(audioMutex_);
+    return driftMatcher_.correctionPpm();
+}
+
 std::string Pipeline::faultMessage() const {
     std::lock_guard<std::mutex> lk(faultMutex_);
     return faultMsg_;
@@ -1412,8 +1424,8 @@ void Pipeline::spawnSourceThread(double chainRateHz) {
     // srcStopToken_/srcExitFuture_ hold by the time this thread actually
     // runs — a later spawn overwrites both members with a DIFFERENT pair,
     // and this closure never sees that change.
-    srcThread_ = std::thread([this, chainRateHz, token, exitPromise]() {
-        sourceThreadMain(chainRateHz, token);
+    srcThread_ = std::thread([this, chainRateHz, token, exitPromise, priority = srcPriority_]() {
+        sourceThreadMain(chainRateHz, token, priority);
         // Fulfilled from INSIDE the thread, after sourceThreadMain has fully
         // returned, so "the future is ready" means "this OS thread is done
         // and join() will return immediately" — see stop()'s use of it.
@@ -1427,7 +1439,17 @@ void Pipeline::spawnSourceThread(double chainRateHz) {
 // from deep inside a stream read when the USB device is pulled mid-capture —
 // that is precisely how unplugging the SDR used to kill the whole app.
 void Pipeline::sourceThreadMain(double chainRateHz,
-                                std::shared_ptr<std::atomic<bool>> stopToken) {
+                                std::shared_ptr<std::atomic<bool>> stopToken,
+                                std::shared_ptr<PriorityNote> priority) {
+    // THE THREAD THAT FILLS THE I/Q RING asks for the same treatment as the DSP
+    // thread that drains it (core/thread_priority.hpp, 0.99.73): a producer that
+    // is scheduled late overflows the ring, and the DSP thread behind it starves
+    // the sound card. Put back when this function returns. The outcome goes into
+    // `priority`, a share this generation owns, and NOT into a Pipeline member:
+    // a generation the session abandoned may wake after the Pipeline has gone.
+    const cascade::core::ThreadPriorityScope raised;
+    priority->set(raised.outcome());
+    cascade::core::diagLogf("dsp: source thread priority %s", raised.outcome().c_str());
     try {
         sourceThreadBody(chainRateHz, *stopToken);
     } catch (const std::exception& e) {
@@ -1443,6 +1465,17 @@ void Pipeline::dspThreadMain() {
     // call from here (the settings store, which allocates) refuse it by this
     // mark rather than by trusting the plugin to know where it is.
     const cascade::core::RealtimeThreadScope realtime;
+    // AND ASKS THE OPERATING SYSTEM TO SCHEDULE IT AHEAD OF ORDINARY WORK
+    // (core/thread_priority.hpp, 0.99.73; Windows: the Multimedia Class
+    // Scheduler's "Pro Audio" class, else above-normal; Linux: SCHED_RR where it
+    // is allowed). Every plugin's process() runs on this thread, and the sound
+    // card's ring is drained by a callback thread PortAudio has already raised:
+    // a producer that runs late is what starves it. Put back when this function
+    // returns. One line in the log, once per thread start - it is the first thing
+    // a "choppy audio" report needs and the only place it can be read from.
+    const cascade::core::ThreadPriorityScope raised;
+    dspPriority_->set(raised.outcome());
+    cascade::core::diagLogf("dsp: thread priority %s", raised.outcome().c_str());
     try {
         dspThreadBody();
     } catch (const std::exception& e) {
@@ -2094,7 +2127,11 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
     // and the bench measurement), so a lead lost to a hiccup is rebuilt
     // instead of staying lost until the ring runs dry.
     const std::size_t chan = audioChannels_ == 2 ? 2 : 1;
-    driftMatcher_.observe(audio_->ringFrames(), audio_->running() && audio_->primed(), k);
+    // The target is the SINK's (its lead plus 40 ms), read here on every block:
+    // the lead is raised from the window's thread while this one runs, and a
+    // matcher still steering to 160 ms would bleed a deeper lead back down.
+    driftMatcher_.observe(audio_->ringFrames(), audio_->running() && audio_->primed(), k,
+                          static_cast<double>(audio_->targetFrames()));
     const float* block = monoOut_.data();
     if (chan == 2) {
         outIlv_.resize(2 * k);

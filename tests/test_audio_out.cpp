@@ -298,10 +298,164 @@ int main() {
         CHECK(ao.ringFrames() == 0u);
     }
 
+    // --- THE LEAD IS A RUNTIME VALUE (0.99.73) -------------------------------
+    // The 12CF report: a slow computer starved 110 to 126 callbacks a minute at
+    // the fixed 120 ms lead. The sink's lead is now held per instance and read
+    // by the callback, so the application can deepen it. Every assertion below
+    // is written to fail on the OLD constant: each fills the ring to a level
+    // that clears 120 ms and does NOT clear the lead under test.
+    {
+        // A new sink starts where it always did, and its matcher's target is the
+        // lead plus 40 ms: today's 120 -> 160.
+        AudioOut ao;
+        CHECK(ao.leadFrames() == AudioOut::kPrimeFrames);
+        CHECK(ao.leadFrames() == 5760u);
+        CHECK(ao.targetFrames() == 7680u);
+
+        // setLeadFrames takes effect on the object and the target follows it.
+        ao.setLeadFrames(11520);   // 240 ms
+        CHECK(ao.leadFrames() == 11520u);
+        CHECK(ao.targetFrames() == 11520u + 1920u);   // 280 ms
+        // Clamped to what the ring can hold: never below the default, never above 960 ms.
+        ao.setLeadFrames(0);
+        CHECK(ao.leadFrames() == AudioOut::kPrimeFrames);
+        ao.setLeadFrames(1);
+        CHECK(ao.leadFrames() == AudioOut::kPrimeFrames);
+        ao.setLeadFrames(std::size_t{1} << 40);
+        CHECK(ao.leadFrames() == AudioOut::kMaxLeadFrames);
+        CHECK(ao.leadFrames() == 46080u);
+        ao.setLeadFrames(46080);
+        CHECK(ao.leadFrames() == 46080u);
+    }
+    {
+        // PRIME AT 240 AFTER A RAISE. 6000 frames is more than the old constant
+        // (5760) and less than the lead (11520): the callback must stay silent,
+        // uncounted, and keep what is queued.
+        AudioOut ao;
+        ao.setVolume(1.0f);
+        ao.setLeadFrames(11520);
+        std::vector<float> chunk(6000);
+        for (float& s : chunk) { s = nextSample(); }
+        CHECK(ao.write(chunk.data(), chunk.size()) == chunk.size());
+        float dst[480];
+        for (float& d : dst) { d = 123.0f; }
+        CHECK(AudioOut::pullBlock(&ao, dst, 480) == 0u);          // still priming
+        for (float d : dst) { CHECK(d == 0.0f); }
+        CHECK(!ao.primed());
+        CHECK(ao.underruns() == 0u);
+        CHECK(ao.ringFrames() == 6000u);                          // nothing consumed
+        // One frame short of the lead is still short...
+        std::vector<float> more(11519 - 6000);
+        for (float& s : more) { s = nextSample(); }
+        CHECK(ao.write(more.data(), more.size()) == more.size());
+        CHECK(ao.ringFrames() == 11519u);
+        CHECK(AudioOut::pullBlock(&ao, dst, 480) == 0u);
+        CHECK(!ao.primed());
+        // ...and the frame that makes 11520 primes it: THAT callback plays, from the front.
+        const float last = nextSample();
+        CHECK(ao.write(&last, 1) == 1u);
+        CHECK(AudioOut::pullBlock(&ao, dst, 480) == 480u);
+        CHECK(ao.primed());
+        for (int i = 0; i < 480; ++i) { CHECK(dst[i] == chunk[static_cast<std::size_t>(i)]); }
+        CHECK(ao.underruns() == 0u);
+    }
+    {
+        // RE-PRIME AFTER AN UNDERRUN USES THE NEW LEAD, and a ring that is already
+        // playing is not stopped by the raise.
+        AudioOut ao;
+        ao.setVolume(1.0f);
+        primeAndDrain(ao, 1);                 // primed at the default lead, ring empty
+        std::vector<float> chunk(3000);
+        for (float& s : chunk) { s = nextSample(); }
+        CHECK(ao.write(chunk.data(), chunk.size()) == chunk.size());
+        ao.setLeadFrames(11520);              // raised WHILE PLAYING
+        CHECK(ao.primed());                   // the raise does not stop it
+        float dst[480];
+        CHECK(AudioOut::pullBlock(&ao, dst, 480) == 480u);        // and it still plays
+        CHECK(ao.underruns() == 0u);
+        // Now starve it: 2520 frames are queued, 3000 are asked for.
+        float big[3000];
+        CHECK(AudioOut::pullBlock(&ao, big, 3000) == 2520u);
+        CHECK(ao.underruns() == 1u);
+        CHECK(!ao.primed());                  // back to priming...
+        // ...and priming now needs the NEW lead: 8000 frames clear the old 5760
+        // and not the 11520.
+        std::vector<float> refill(8000, 0.25f);
+        CHECK(ao.write(refill.data(), refill.size()) == refill.size());
+        CHECK(AudioOut::pullBlock(&ao, dst, 480) == 0u);
+        CHECK(!ao.primed());
+        CHECK(ao.underruns() == 1u);          // priming is not a second underrun
+        std::vector<float> rest(11520 - 8000, 0.25f);
+        CHECK(ao.write(rest.data(), rest.size()) == rest.size());
+        CHECK(AudioOut::pullBlock(&ao, dst, 480) == 480u);
+        CHECK(ao.primed());
+        CHECK(ao.underruns() == 1u);
+    }
+    {
+        // THE RING HOLDS THE DEEPEST LEAD AND THE MATCHER'S MARGIN WITHOUT A RESIZE
+        // (mono here; the stereo case is below, with a real open): 960 ms plus 40 ms.
+        AudioOut ao;
+        ao.setLeadFrames(AudioOut::kMaxLeadFrames);
+        const std::size_t want = ao.targetFrames();               // 48000 frames
+        CHECK(want == 48000u);
+        std::vector<float> fill(want, 0.1f);
+        CHECK(ao.write(fill.data(), fill.size()) == fill.size());
+        CHECK(ao.ringFrames() == want);
+        float dst[480];
+        ao.setVolume(1.0f);
+        CHECK(AudioOut::pullBlock(&ao, dst, 480) == 480u);        // primed at 960 ms
+        CHECK(ao.primed());
+    }
+    {
+        // A lower lead drops the OLDEST queued sound in the callback, down to
+        // the new target. The first played sample must come from the newest
+        // 160 ms, rather than the 960 ms backlog left by the old setting.
+        AudioOut ao;
+        ao.setVolume(1.0f);
+        ao.setLeadFrames(AudioOut::kMaxLeadFrames);
+        std::vector<float> old(48000);
+        for (std::size_t i = 0; i < old.size(); ++i) { old[i] = static_cast<float>(i); }
+        CHECK(ao.write(old.data(), old.size()) == old.size());
+        float first[480];
+        CHECK(AudioOut::pullBlock(&ao, first, 480) == 480u);
+        CHECK(ao.ringFrames() == 47520u);
+        const std::uint64_t primingBefore = ao.primingCallbacks();
+        ao.setLeadFrames(AudioOut::kPrimeFrames);
+        CHECK(ao.ringFrames() == 47520u);  // setter is not a competing ring reader
+        float fresh[480];
+        CHECK(AudioOut::pullBlock(&ao, fresh, 480) == 480u);
+        CHECK(fresh[0] == 40320.0f);
+        CHECK(fresh[479] == 40799.0f);
+        CHECK(ao.ringFrames() == 7200u);  // 160 ms target less this 10 ms callback
+        CHECK(ao.primingCallbacks() == primingBefore + 1);
+        CHECK(ao.primed());
+        CHECK(ao.underruns() == 0u);
+    }
+    {
+        // Lowering a setting with less than the new target already queued
+        // must preserve every sample and keep continuous playback.
+        AudioOut ao;
+        ao.setVolume(1.0f);
+        primeAndDrain(ao, 1);
+        ao.setLeadFrames(11520);
+        std::vector<float> queued(7000);
+        for (std::size_t i = 0; i < queued.size(); ++i) { queued[i] = static_cast<float>(i); }
+        CHECK(ao.write(queued.data(), queued.size()) == queued.size());
+        const std::uint64_t primingBefore = ao.primingCallbacks();
+        ao.setLeadFrames(AudioOut::kPrimeFrames);
+        float dst[480];
+        CHECK(AudioOut::pullBlock(&ao, dst, 480) == 480u);
+        CHECK(dst[0] == 0.0f);
+        CHECK(dst[479] == 479.0f);
+        CHECK(ao.ringFrames() == 6520u);
+        CHECK(ao.primingCallbacks() == primingBefore);
+        CHECK(ao.primed());
+    }
+
     // --- ringFrames() / ringCapacityFrames(): mono, then stereo after open --
     {
         AudioOut ao;
-        CHECK(ao.ringCapacityFrames() == (std::size_t{1} << 15));  // mono: 32768
+        CHECK(ao.ringCapacityFrames() == (std::size_t{1} << 17));  // mono: 131072 (2.73 s)
         CHECK(ao.ringFrames() == 0u);
         float one = 0.25f;
         CHECK(ao.write(&one, 1) == 1u);
@@ -309,14 +463,45 @@ int main() {
 
         // A real open()'s own drain empties the ring first (see AudioOut::
         // open's comment), so this checks the CAPACITY figure, which is what
-        // changes with the layout — 32768 samples is 16384 stereo FRAMES,
-        // half the mono figure because a frame costs two samples.
+        // changes with the layout — 131072 samples is 65536 stereo FRAMES
+        // (1.37 s), half the mono figure because a frame costs two samples.
+        // (It was 1 << 15 samples until 0.99.73: 16384 stereo frames, 341 ms.)
         const bool ok = ao.open(-1, 48000.0, 2);
         CHECK(ok);
         if (ok) {
             ao.close();
             CHECK(ao.channels() == 2);
-            CHECK(ao.ringCapacityFrames() == (std::size_t{1} << 14));  // stereo: 16384
+            CHECK(ao.ringCapacityFrames() == (std::size_t{1} << 16));  // stereo: 65536
+
+            // THE DEEPEST LEAD FITS IN STEREO, with the matcher's 40 ms and 365 ms to
+            // spare: 960 ms is 46080 frames, the target 48000 of the 65536. The old
+            // 16384-frame ring could not have held it.
+            ao.setLeadFrames(AudioOut::kMaxLeadFrames);
+            std::vector<float> frames(2 * 48000);   // the deepest target, whatever the sink says
+            for (std::size_t i = 0; i < 48000; ++i) {
+                frames[2 * i] = 0.1f;
+                frames[2 * i + 1] = 0.2f;
+            }
+            // The lead is counted in FRAMES, not samples: one frame short of 46080 is
+            // silent, and the frame that completes it primes - in stereo as in mono.
+            ao.setVolume(1.0f);
+            float dst2[960];
+            CHECK(ao.writeStereo(frames.data(), 46079) == 46079u);
+            CHECK(AudioOut::pullBlock(&ao, dst2, 480) == 0u);
+            CHECK(!ao.primed());
+            // ...and the rest of the target (48000 frames in all) still fits.
+            CHECK(ao.targetFrames() == 48000u);
+            CHECK(ao.writeStereo(frames.data(), 48000 - 46079) == 48000u - 46079u);
+            CHECK(ao.ringFrames() == 48000u);
+            CHECK(AudioOut::pullBlock(&ao, dst2, 480) == 960u);   // 480 frames = 960 samples
+            CHECK(ao.primed());
+            ao.setLeadFrames(AudioOut::kPrimeFrames);
+            CHECK(AudioOut::pullBlock(&ao, dst2, 480) == 960u);
+            CHECK(ao.ringFrames() == 7200u);
+            for (std::size_t i = 0; i < 480; ++i) {
+                CHECK(dst2[2 * i] == 0.1f);
+                CHECK(dst2[2 * i + 1] == 0.2f);
+            }
         } else {
             printOpenFailureDiagnostics(48000.0);
         }

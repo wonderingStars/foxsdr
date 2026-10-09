@@ -52,7 +52,8 @@ void DriftMatcher::reset() {
     pos_ = 1.0;
 }
 
-void DriftMatcher::observe(std::size_t fillFrames, bool playing, std::size_t blockFrames) {
+void DriftMatcher::observe(std::size_t fillFrames, bool playing, std::size_t blockFrames,
+                           double targetFrames) {
     if (!playing) {
         // Priming, re-priming after a starvation, or no device at all. The
         // fill is climbing towards the prime threshold for reasons that have
@@ -73,7 +74,11 @@ void DriftMatcher::observe(std::size_t fillFrames, bool playing, std::size_t blo
         fillAvgFrames_ += a * (fill - fillAvgFrames_);
     }
     // Positive when the lead is short: play more frames than arrive.
-    const double errMs = (kTargetFrames - fillAvgFrames_) * 1000.0 / rateHz_;
+    // Against the caller's target - the sink's lead plus 40 ms - and not a
+    // constant: see the header. A target that is not a number (it never is) would
+    // poison the loop, so it falls back to the default rather than steer by NaN.
+    const double target = targetFrames > 0.0 ? targetFrames : kTargetFrames;
+    const double errMs = (target - fillAvgFrames_) * 1000.0 / rateHz_;
     integralPpm_ = std::clamp(integralPpm_ + kKiPpmPerMsS * errMs * dt,
                               -kMaxDriftPpm, kMaxDriftPpm);
     correctionPpm_ = std::clamp(kKpPpmPerMs * errMs + integralPpm_,

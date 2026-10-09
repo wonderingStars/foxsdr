@@ -10,9 +10,11 @@
 
 #include <cstdio>
 #include <cstring>
+#include <memory>
 #include <string>
 #include <vector>
 
+#include "core/plugin_api.hpp"
 #include "core/plugin_runner.hpp"
 #include "test_check.hpp"
 
@@ -255,6 +257,61 @@ LoadedPlugin makeImgPlugin(const char* name, const CascadeImageDecoderApi* api) 
 }
 
 void resetImg() { g_img = FakeImg{}; }
+
+// --- Per-plugin fakes, for the per-plugin start and stop (0.99.73) --------
+//
+// The fakes above are single objects: two plugins built on one of them cannot be told apart by a
+// counter. N makes a fake of its own, with its own counters and its own handle, so a call that
+// reached the wrong plugin moves the wrong counter - which is exactly what the per-plugin tests
+// have to be able to see.
+template <int N>
+struct PerPlugin {
+    static inline int created = 0;
+    static inline int destroyed = 0;
+    static inline uint32_t lastRate = 0;
+    static inline std::size_t samples = 0;
+    static inline std::string queued;
+    static inline bool failCreate = false;
+    static inline bool failPoll = false;
+    static inline int handle = 0;  // its address is the handle
+
+    static void reset() {
+        created = 0;
+        destroyed = 0;
+        lastRate = 0;
+        samples = 0;
+        queued.clear();
+        failCreate = false;
+        failPoll = false;
+    }
+    static void* create(uint32_t rateHz) {
+        if (failCreate) { return nullptr; }
+        ++created;
+        lastRate = rateHz;
+        return &handle;
+    }
+    static void process(void*, const float*, size_t count) { samples += count; }
+    static int32_t poll(void*, char* buf, size_t cap) {
+        if (failPoll) { return -1; }
+        if (queued.empty()) { return 0; }
+        std::size_t n = queued.size();
+        if (n > cap) { n = cap; }
+        std::memcpy(buf, queued.data(), n);
+        queued.erase(0, n);
+        return static_cast<int32_t>(n);
+    }
+    static void destroy(void*) { ++destroyed; }
+    static CascadeDecoderApi api() {
+        CascadeDecoderApi a{};
+        a.structSize = static_cast<uint32_t>(sizeof(CascadeDecoderApi));
+        a.requiredRateHz = 0u;
+        a.create = &create;
+        a.process = &process;
+        a.poll_text = &poll;
+        a.destroy = &destroy;
+        return a;
+    }
+};
 
 // Bounds-safe element access for the assertions below. CHECK records a failure
 // and CARRIES ON, so a plain v[0] guarded only by a preceding size CHECK is an
@@ -1332,6 +1389,307 @@ int main() {
         CHECK(g_iq.frames == iqFramesAtFailure);
         CHECK(g_iq.polls == iqPollsAtFailure);
         CHECK(r.iqFramesFed() == 128u);
+    }
+
+    // =========================================================================
+    // PER-PLUGIN START AND STOP, and the stop set kept by plugin ID (0.99.73).
+    //
+    // A fitted plugin runs only while it is used: the owner wakes and puts to sleep ONE plugin at a
+    // time. What this section pins is what that must NOT do - touch another plugin's instance, its
+    // counters, its status row, or the stream epoch - and what it must do exactly once.
+    // =========================================================================
+    {
+        // TWO TEXT PLUGINS, each with its own fake (a handle that points at its own counters), so a
+        // call that reached the wrong plugin moves the wrong counter.
+        PerPlugin<0>::reset();
+        PerPlugin<1>::reset();
+        const CascadeDecoderApi apiA = PerPlugin<0>::api();
+        const CascadeDecoderApi apiB = PerPlugin<1>::api();
+        LoadedPlugin a = makePlugin("Alpha", &apiA);
+        a.path = "C:/plugins/alpha-decoder-1.0.0-abi3-win-x64.dll";
+        LoadedPlugin b = makePlugin("Bravo", &apiB);
+        b.path = "C:/plugins/bravo-decoder-1.0.0-abi3-win-x64.dll";
+        const std::string aKey = "alpha-decoder-1.0.0-abi3-win-x64.dll";
+        const std::string bKey = "bravo-decoder-1.0.0-abi3-win-x64.dll";
+
+        auto clock = std::make_shared<cascade::core::StreamClock>();
+        PluginRunner r;
+        r.setStreamClock(clock);
+        // BOTH ASLEEP at the wholesale rebuild: a dormant plugin is given no instance and no row.
+        r.setDormant({aKey, bKey});
+        r.rebuild({a, b}, 48000.0, kIqRate, kCentre);
+        CHECK(PerPlugin<0>::created == 0);
+        CHECK(PerPlugin<1>::created == 0);
+        CHECK(r.activeCount() == 0u);
+        CHECK(r.status().empty());
+        CHECK(r.isDormant(aKey));
+        CHECK(!r.hasInstances(aKey));
+        CHECK(!r.isFeeding(aKey));
+        cascade::core::StreamFacts epoch0;
+        CHECK(clock->read(epoch0));
+        std::vector<float> block(256, 0.25f);
+        r.processAudio(block.data(), block.size());
+        CHECK(PerPlugin<0>::samples == 0u);  // a dormant plugin is handed no samples
+
+        // START A: exactly A is created, once, against the rate the last rebuild left.
+        CHECK(r.startPlugin(a));
+        CHECK(PerPlugin<0>::created == 1);
+        CHECK(PerPlugin<1>::created == 0);
+        CHECK(PerPlugin<0>::lastRate == 48000u);
+        CHECK(r.hasInstances(aKey));
+        CHECK(!r.hasInstances(bKey));
+        CHECK(r.isFeeding(aKey));
+        CHECK(!r.isDormant(aKey));
+        CHECK(r.isDormant(bKey));
+        CHECK(r.activeCount() == 1u);
+        CHECK(r.status().size() == 1u);
+        CHECK(rowFor(r.status(), aKey).reason == DecoderIdleReason::Running);
+        // A SECOND START changes nothing: a second instance would feed the plugin twice.
+        CHECK(!r.startPlugin(a));
+        CHECK(PerPlugin<0>::created == 1);
+        CHECK(r.activeCount() == 1u);
+        // ...and it is fed, B is not.
+        r.processAudio(block.data(), block.size());
+        CHECK(PerPlugin<0>::samples == 256u);
+        CHECK(PerPlugin<1>::samples == 0u);
+        CHECK(r.audioFramesFed() == 256u);
+
+        // START B: A is not touched - not destroyed, not re-created, its counters carried on.
+        CHECK(r.startPlugin(b));
+        CHECK(PerPlugin<1>::created == 1);
+        CHECK(PerPlugin<0>::created == 1);
+        CHECK(PerPlugin<0>::destroyed == 0);
+        CHECK(r.activeCount() == 2u);
+        CHECK(r.status().size() == 2u);
+        CHECK(r.audioFramesFed() == 256u);  // the count is the runner's, and was not reset
+        r.processAudio(block.data(), block.size());
+        CHECK(PerPlugin<0>::samples == 512u);
+        CHECK(PerPlugin<1>::samples == 256u);
+        CHECK(r.audioFramesFed() == 512u);
+        // THE STREAM EPOCH was not begun again by either start.
+        cascade::core::StreamFacts epoch1;
+        CHECK(clock->read(epoch1));
+        CHECK(epoch1.epoch == epoch0.epoch);
+        // The clock counts the STREAM, not what any plugin took: the three blocks of 256 handed to the
+        // runner since the epoch began (one while both slept) are all in it, and neither start reset it.
+        CHECK(epoch1.audioFrames == 768u);
+
+        // STOP A: exactly A's instance goes, once; B keeps its instance, its state and its row.
+        PerPlugin<1>::queued = "BRAVO LINE\n";
+        r.stopPlugin(aKey);
+        CHECK(PerPlugin<0>::destroyed == 1);
+        CHECK(PerPlugin<1>::destroyed == 0);
+        CHECK(!r.hasInstances(aKey));
+        CHECK(r.hasInstances(bKey));
+        CHECK(r.activeCount() == 1u);
+        CHECK(r.status().size() == 1u);
+        CHECK(!r.isFeeding(aKey));
+        CHECK(r.isFeeding(bKey));
+        CHECK(r.isDormant(aKey));
+        CHECK(r.audioFramesFed() == 512u);
+        r.processAudio(block.data(), block.size());
+        CHECK(PerPlugin<0>::samples == 512u);  // A is handed nothing more
+        CHECK(PerPlugin<1>::samples == 512u);
+        const std::vector<DecodedLine> bLines = r.drainText();
+        CHECK(bLines.size() == 1u);
+        CHECK(at(bLines, 0).plugin == "Bravo");
+        // A SECOND STOP is harmless, and does not destroy again.
+        r.stopPlugin(aKey);
+        CHECK(PerPlugin<0>::destroyed == 1);
+        cascade::core::StreamFacts epoch2;
+        CHECK(clock->read(epoch2));
+        CHECK(epoch2.epoch == epoch0.epoch);
+
+        // THE STATUS ROW OF THE SURVIVOR FOLLOWED THE REMOVAL: B was row 1 and is row 0 now, and
+        // when B later fails permanently it is B's own row that says so - not a row that is gone.
+        PerPlugin<1>::failPoll = true;
+        r.processAudio(block.data(), block.size());
+        CHECK(rowFor(r.status(), bKey).reason == DecoderIdleReason::PollFailed);
+        CHECK(!r.isFeeding(bKey));
+        CHECK(r.status().size() == 1u);
+        PerPlugin<1>::failPoll = false;
+
+        // A WHOLESALE REBUILD KEEPS THE RUNNER AS THE PER-PLUGIN CALLS LEFT IT: A was put to sleep,
+        // so it stays asleep; B is running, so it is created again.
+        r.rebuild({a, b}, 48000.0, kIqRate, kCentre);
+        CHECK(PerPlugin<0>::created == 1);
+        CHECK(PerPlugin<1>::created == 2);
+        CHECK(r.activeCount() == 1u);
+        // ...and a start puts A back in the set the next rebuild builds.
+        CHECK(r.startPlugin(a));
+        CHECK(PerPlugin<0>::created == 2);
+        r.rebuild({a, b}, 48000.0, kIqRate, kCentre);
+        CHECK(PerPlugin<0>::created == 3);
+        CHECK(r.activeCount() == 2u);
+        // The rebuild DID begin a new epoch: the contrast the start and stop above are tested against.
+        cascade::core::StreamFacts epoch3;
+        CHECK(clock->read(epoch3));
+        CHECK(epoch3.epoch != epoch0.epoch);
+
+        // The dormant set survives clear() - a rescan - as the stop set does.
+        r.setDormant({aKey});
+        r.clear();
+        r.rebuild({a, b}, 48000.0, kIqRate, kCentre);
+        CHECK(!r.hasInstances(aKey));
+        CHECK(r.hasInstances(bKey));
+    }
+
+    // --- startPlugin refuses what it must ---------------------------------
+    {
+        PerPlugin<0>::reset();
+        const CascadeDecoderApi apiA = PerPlugin<0>::api();
+        LoadedPlugin a = makePlugin("Alpha", &apiA);
+        a.path = "C:/plugins/alpha-decoder-1.0.0.dll";
+        PluginRunner r;
+        // Before any rebuild there is no rate to create an instance against.
+        CHECK(!r.startPlugin(a));
+        CHECK(PerPlugin<0>::created == 0);
+        r.rebuild({}, 48000.0, kIqRate, kCentre);
+        // A plugin that did not load is not started.
+        LoadedPlugin refused = a;
+        refused.loaded = false;
+        CHECK(!r.startPlugin(refused));
+        CHECK(PerPlugin<0>::created == 0);
+        // A STOPPED plugin is not started by startPlugin: only setStopped reverses a stop.
+        r.setStopped({"alpha-decoder-1.0.0.dll"});
+        CHECK(!r.startPlugin(a));
+        CHECK(PerPlugin<0>::created == 0);
+        r.setStopped({});
+        CHECK(r.startPlugin(a));
+        CHECK(PerPlugin<0>::created == 1);
+        // A failed create() is a status row, as it is in a rebuild - and no instance.
+        PerPlugin<1>::reset();
+        PerPlugin<1>::failCreate = true;
+        const CascadeDecoderApi apiB = PerPlugin<1>::api();
+        LoadedPlugin b = makePlugin("Bravo", &apiB);
+        b.path = "C:/plugins/bravo-decoder-1.0.0.dll";
+        CHECK(r.startPlugin(b));
+        CHECK(!r.hasInstances("bravo-decoder-1.0.0.dll"));
+        CHECK(rowFor(r.status(), "bravo-decoder-1.0.0.dll").reason == DecoderIdleReason::CreateFailed);
+        CHECK(r.activeCount() == 1u);
+    }
+
+    // --- THE STOP LIST IS KEPT BY ID: the versioned file name no longer matters ------------
+    {
+        PerPlugin<0>::reset();
+        const CascadeDecoderApi apiA = PerPlugin<0>::api();
+        LoadedPlugin oldBuild = makePlugin("Pocsag", &apiA);
+        oldBuild.path = "C:/plugins/pocsag-decoder-1.0.2-abi3-win-x64.dll";
+        LoadedPlugin newBuild = makePlugin("Pocsag", &apiA);
+        newBuild.path = "C:/plugins/pocsag-decoder-1.0.3-abi3-win-x64.dll";
+
+        PluginRunner r;
+        // What an older config held: the FILE NAME of the build the user stopped...
+        r.setStopped({"pocsag-decoder-1.0.2-abi3-win-x64.dll"});
+        r.rebuild({oldBuild}, 48000.0, kIqRate, kCentre);
+        CHECK(PerPlugin<0>::created == 0);
+        CHECK(r.isStopped("pocsag-decoder-1.0.2-abi3-win-x64.dll"));
+        // ...is still the stop after the plugin updates: the new build is the same plugin.
+        CHECK(r.isStopped("pocsag-decoder-1.0.3-abi3-win-x64.dll"));
+        r.clear();
+        r.rebuild({newBuild}, 48000.0, kIqRate, kCentre);
+        CHECK(PerPlugin<0>::created == 0);
+        CHECK(r.activeCount() == 0u);
+        CHECK(!r.startPlugin(newBuild));
+        // The same list given as IDS - what the application passes - stops it too.
+        r.setStopped({"pocsag-decoder"});
+        CHECK(r.isStopped("pocsag-decoder-1.0.3-abi3-win-x64.dll"));
+        r.rebuild({newBuild}, 48000.0, kIqRate, kCentre);
+        CHECK(PerPlugin<0>::created == 0);
+        // A DIFFERENT plugin is not caught by it.
+        PerPlugin<1>::reset();
+        const CascadeDecoderApi apiB = PerPlugin<1>::api();
+        LoadedPlugin other = makePlugin("Other", &apiB);
+        other.path = "C:/plugins/pocsag-encoder-1.0.0-abi3-win-x64.dll";
+        r.rebuild({newBuild, other}, 48000.0, kIqRate, kCentre);
+        CHECK(PerPlugin<1>::created == 1);
+        CHECK(r.activeCount() == 1u);
+        // And lifted, it runs.
+        r.setStopped({});
+        r.rebuild({newBuild, other}, 48000.0, kIqRate, kCentre);
+        CHECK(PerPlugin<0>::created == 1);
+    }
+
+    // --- an I/Q decoder and an image decoder stop and start alone too ----------------------
+    {
+        resetIq();
+        resetImg();
+        const CascadeIqDecoderApi iApi = makeIqApi(0.0, true);
+        const CascadeImageDecoderApi gApi = makeImgApi(CASCADE_INPUT_AUDIO, 0.0, false);
+        LoadedPlugin iq = makeIqPlugin("Iq", &iApi);
+        iq.path = "C:/plugins/iq-decoder-1.0.0.dll";
+        LoadedPlugin img = makeImgPlugin("Pic", &gApi);
+        img.path = "C:/plugins/pic-decoder-1.0.0.dll";
+        PluginRunner r;
+        r.setDormant({"iq-decoder", "pic-decoder"});
+        r.rebuild({iq, img}, 48000.0, kIqRate, kCentre);
+        CHECK(r.activeCount() == 0u);
+        // The I/Q decoder starts against the CENTRE the runner holds now (a retune while it slept
+        // was recorded), and a retune after that reaches it.
+        r.retune(kCentre + 5.0e5);
+        CHECK(r.startPlugin(iq));
+        CHECK(g_iq.created == 1);
+        CHECK(g_iq.lastCentre == kCentre + 5.0e5);
+        CHECK(g_iq.lastRate == kIqRate);
+        r.retune(kCentre + 6.0e5);
+        CHECK(g_iq.retunes == 1);
+        // The image decoder starts and is fed audio; stopping the I/Q one leaves it counting.
+        CHECK(r.startPlugin(img));
+        CHECK(g_img.created == 1);
+        std::vector<float> audio(128, 0.1f);
+        r.processAudio(audio.data(), audio.size());
+        CHECK(g_img.frames == 128u);
+        r.stopPlugin("iq-decoder-1.0.0.dll");
+        CHECK(g_iq.destroyed == 1);
+        CHECK(g_img.destroyed == 0);
+        r.processAudio(audio.data(), audio.size());
+        CHECK(g_img.frames == 256u);
+        // The I/Q instance is gone: nothing reaches it, and a retune finds nobody.
+        std::vector<float> iqBlock(256, 0.1f);
+        r.processIq(iqBlock.data(), 128);
+        CHECK(g_iq.frames == 0u);
+        r.retune(kCentre + 7.0e5);
+        CHECK(g_iq.retunes == 1);
+    }
+
+    // --- A PICTURE SURVIVES ANOTHER PLUGIN BEING STOPPED --------------------------------------
+    //
+    // A decoder offers a picture when it changes, so one already received is never offered again.
+    // The caller's picture list is re-seeded when the set of image instances changes; re-seeding
+    // every slot from empty - harmless while the set changed only wholesale - would blank the
+    // survivor's picture the moment a neighbour went to sleep.
+    {
+        resetImg();
+        const CascadeImageDecoderApi gApi = makeImgApi(CASCADE_INPUT_AUDIO, 0.0, false);
+        LoadedPlugin one = makeImgPlugin("PicOne", &gApi);
+        one.path = "C:/plugins/pic-one-1.0.0.dll";
+        LoadedPlugin two = makeImgPlugin("PicTwo", &gApi);
+        two.path = "C:/plugins/pic-two-1.0.0.dll";
+        PluginRunner r;
+        r.rebuild({one, two}, 48000.0, kIqRate, kCentre);
+        std::vector<cascade::core::HostImage> shown;
+        offerGray2x2(2, 7);
+        r.pollImages(shown);
+        CHECK(shown.size() == 2u);
+        CHECK(at(shown, 0).width == 2u);
+        CHECK(at(shown, 1).width == 2u);
+        const std::uint64_t revOne = at(shown, 0).revision;
+        g_img.offer = 0;  // nothing new from now on: whatever is shown is carried
+        r.stopPlugin("pic-two-1.0.0.dll");
+        r.pollImages(shown);
+        CHECK(shown.size() == 1u);
+        CHECK(at(shown, 0).plugin == "PicOne");
+        CHECK(at(shown, 0).width == 2u);          // THE PICTURE WAS KEPT
+        CHECK(at(shown, 0).pixels.size() == 4u);
+        CHECK(at(shown, 0).revision == revOne);
+        // The plugin started again begins with no picture of its own.
+        CHECK(r.startPlugin(two));
+        r.pollImages(shown);
+        CHECK(shown.size() == 2u);
+        CHECK(at(shown, 0).plugin == "PicOne");
+        CHECK(at(shown, 0).width == 2u);
+        CHECK(at(shown, 1).plugin == "PicTwo");
+        CHECK(at(shown, 1).width == 0u);
     }
 
     return testSummary("test_plugin_runner");

@@ -533,6 +533,26 @@ test('0.99.70 CLIENT (an rtltcp token) -> OLD WORKER: a 204, that token dropped 
   assert.equal(bad.usage[0].blobs[12], '');
 });
 
+test('0.99.73 CLIENT (a recovered.audiolead token) -> OLD WORKER (0.99.67): a 204, that token dropped and the rest read; the NEW Worker keeps it', async () => {
+  // THE SAME ORDER OF DEPLOYMENT, for the audio buffer that deepens itself: telemetry-worker/worker.js
+  // must be deployed BEFORE a client that sends `recovered.audiolead` ships (the release preflight asks
+  // for -WorkerDeployed), or the count that says whether the deeper buffer ever fires is silently
+  // dropped (the record itself is still taken). The Worker that predates the word is the fixture here.
+  const was = (await import('./test-fixtures/worker-0.99.67.js')).default;
+  const sent = 'radio_open.rtlsdr=1,recovered.audio=1,recovered.audiolead=1';
+  const old = await postTo(was, { ...newRecord(), v: '0.99.73', stalls: 0, health: sent });
+  assert.equal(old.status, 204);
+  assert.equal(old.usage[0].blobs[12], 'radio_open.rtlsdr=1,recovered.audio=1');
+  const now = await post({ ...newRecord(), v: '0.99.73', stalls: 0, health: sent });
+  assert.equal(now.usage[0].blobs[12], 'radio_open.rtlsdr=1,recovered.audio=1,recovered.audiolead=1');
+  // It is a word of the `recovered` family and nothing more: it counts in double12 (the recoveries) ...
+  assert.equal(now.usage[0].doubles[11], 2);
+  // ... and it is not a way to write anything else.
+  const bad = await post({ ...newRecord(), v: '0.99.73', stalls: 0,
+    health: 'recovered.audiolead.x=1,recovered.audio_lead=1,recovered.AudioLead=1,audiolead=1' });
+  assert.equal(bad.usage[0].blobs[12], '');
+});
+
 test('0.99.64 CLIENT (failure counts only) -> NEW WORKER: the row the 0.99.64 Worker wrote, and zeros in the new columns', async () => {
   for (const body of [oldRecord(), { ...record064(), stalls: 2 }, { ...record064(), stalls: 2, health: HEALTH },
     { ...record064(), health: '' }]) {

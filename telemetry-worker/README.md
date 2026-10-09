@@ -29,7 +29,12 @@ recoveries (`slow.*`, `recovered.*`) are exactly that case: 0.99.64 shipped the
 failure counts and the Worker that goes with them (kept byte for byte in
 `test-fixtures/worker-health-counts.js`), and 0.99.65 adds the two new families, so
 **this Worker is deployed before 0.99.65 ships** - the 0.99.64 Worker drops every
-`slow.*` and `recovered.*` word it is sent.
+`slow.*` and `recovered.*` word it is sent. The same is true of **0.99.73**, which
+adds one word, `recovered.audiolead` (the audio buffer was made deeper because the
+computer fell behind): deploy this Worker before it ships (the release preflight
+asks for `-WorkerDeployed`), or the count that says whether the deeper buffer ever
+fires is dropped. The Worker as 0.99.67 shipped it, kept in
+`test-fixtures/worker-0.99.67.js`, is the one `worker.test.mjs` shows dropping it.
 
 ## The columns of `foxsdr_usage`
 
@@ -158,7 +163,7 @@ them. The record carries one string, `health`, of `token=count` pairs
 
 **Encoding, and why one string.** One blob (`blob13`) for all the tokens plus one
 marker blob and seven doubles, instead of a column per event: the vocabulary is
-277 tokens wide (13 drivers x 8 reasons alone is 104) and a column per token would
+288 tokens wide (14 drivers x 8 reasons alone is 112) and a column per token would
 not fit in 20, and every new event would be a schema change. As one string it is
 still queryable - `startsWith(blob13, 'radio_fail.rtlsdr.busy=') OR
 position(',radio_fail.rtlsdr.busy=' IN blob13) > 0` is "sessions with that failure",

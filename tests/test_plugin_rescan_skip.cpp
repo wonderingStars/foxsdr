@@ -101,6 +101,10 @@ struct AppWindowTestAccess {
         return false;
     }
     static void rescan(AppWindow& a) { a.rescanPlugins(); }
+    // The "keep running" tick: the plugin is pinned to ALWAYS and its decoder created alone.
+    static void keepRunning(AppWindow& a, const std::string& file) {
+        a.setPluginRun(file, cascade::core::PluginRun::Always);
+    }
     static void forgetSignature(AppWindow& a) { a.pluginScanSigValid_ = false; }
     // What a removal does before its rescan: every instance destroyed, every
     // module unmapped - and nothing loaded again until a scan says so.
@@ -424,8 +428,21 @@ void testTheWindow() {
     show("after the start-up scan (a full scan)", t0);
     CHECK(Access::loadedCount(app) == 1u);
     CHECK(t0.aAttach == 1u);
-    CHECK(t0.create == 1u);
+    // 0.99.73: A FITTED PLUGIN RUNS ONLY WHILE IT IS USED. The scan maps the module and creates
+    // NOTHING - no window is open, no map, no patch - where it used to create the decoder at once
+    // (this line was `create == 1`).
+    CHECK(t0.create == 0u);
     CHECK(Access::signatureTrusted(app));  // it left a signature to compare with
+    // What this test is about is what a rescan DESTROYS, and a plugin nobody is using has nothing to
+    // destroy: so the module is pinned ("keep running"), which is exactly one decoder created, by the
+    // start of that one plugin and not by a rebuild. Every step below then tears a real instance down
+    // or leaves it alone, as before.
+    Access::keepRunning(app, moduleFile("a").filename().string());
+    t0 = tally();
+    show("after keeping it running", t0);
+    CHECK(t0.create == 1u);
+    CHECK(t0.destroy == 0u);
+    CHECK(t0.aAttach == 1u);  // the module was not mapped again to start it
 
     // 1. THE FAULT: the folder is as the scan left it, the fetch finds nothing
     //    new. No module is unmapped, no decoder destroyed.

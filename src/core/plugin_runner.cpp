@@ -9,6 +9,7 @@
 #include <cstring>
 
 #include "core/diag_log.hpp"
+#include "core/plugin_run.hpp"
 
 namespace cascade::core {
 namespace {
@@ -106,6 +107,34 @@ bool PluginRunner::isStopped(const std::string& pluginKey) const {
     return stopped_.contains(pluginKey);
 }
 
+void PluginRunner::setDormant(std::vector<std::string> keys) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    dormant_.set(std::move(keys));
+}
+
+bool PluginRunner::isDormant(const std::string& pluginKey) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return dormant_.contains(pluginKey);
+}
+
+bool PluginRunner::hasInstances(const std::string& pluginKey) const {
+    if (pluginKey.empty()) { return false; }
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (const Instance& i : instances_) {
+        if (i.key == pluginKey) { return true; }
+    }
+    for (const IqInstance& i : iqInstances_) {
+        if (i.key == pluginKey) { return true; }
+    }
+    for (const ImageInstance& i : imageInstances_) {
+        if (i.key == pluginKey) { return true; }
+    }
+    for (const ProcessorInstance& p : processors_) {
+        if (p.key == pluginKey) { return true; }
+    }
+    return false;
+}
+
 void PluginRunner::rebuild(const std::vector<LoadedPlugin>& plugins, double audioRateHz,
                            double iqRateHz, double centreHz) {
     std::unique_lock<std::mutex> lock(mutex_);
@@ -138,257 +167,315 @@ void PluginRunner::rebuild(const std::vector<LoadedPlugin>& plugins, double audi
         // needs explaining - the row they stopped it from says so already, and
         // an orange "not being fed" warning for a deliberate choice would
         // train them to ignore the ones that matter.
-        if (stopped_.contains(lp)) { continue; }
+        //
+        // AND A DORMANT ONE (0.99.73): AUTO and not wanted, so it is given no
+        // instance either, and for the same reason no status line - it is not
+        // idle for a fault, and the Fitted modules window says IDLE against it
+        // from the run state, not from a row it does not have.
+        if (stopped_.contains(lp) || dormant_.contains(lp)) { continue; }
+        buildPluginLocked(lp);
+    }
+}
 
-        // STAMPED ON EVERY LINE THIS PLUGIN PRODUCES, at the end of the loop
-        // body rather than at each of the eight places a DecoderStatus is
-        // built. One assignment cannot be forgotten by the ninth; eight can,
-        // and the one that was forgotten would be a plugin isFeeding could
-        // never see.
-        const std::string key = pluginKey(lp);
-        const std::size_t statusBegin = status_.size();
-
-        // A plugin may declare both. Each declared capability gets its own
-        // instance and its own stream, which is why this is two independent
-        // blocks rather than an else-if.
-        bool started = false;
-
-        // THE HANDLE CASCADE_CAP_AUDIO_OUT RIDES ON. That table has no
-        // create() of its own - the sound a decoder makes is the same object
-        // as the decode - so it borrows the first instance this plugin
-        // produces, in the fixed order the ABI states: decoder, then I/Q
-        // decoder, then image decoder. Taken here, once, rather than at three
-        // call sites, so the order cannot drift from what the header promises.
-        void* audioHandle = nullptr;
-
-        if (lp.decoder != nullptr) {
-            // requiredRateHz == 0 means "any rate"; anything else is the rate
-            // the decoder is BUILT around, and the host resamples the pipeline's
-            // audio to it (plugin_abi.h promises exactly that). Feeding a
-            // 48 kHz decoder 44.1 kHz audio and hoping is how a bit clock
-            // drifts; feeding it 44.1 kHz audio resampled to 48 kHz is how a
-            // decoder written for one clock runs on any receiver.
-            const double want = static_cast<double>(lp.decoder->requiredRateHz);
-            const bool resample = want != 0.0 && want != audioRateHz;
-            {
-                void* h = lp.decoder->create(want != 0.0 ? static_cast<uint32_t>(want)
-                                                         : static_cast<uint32_t>(audioRateHz));
-                if (h == nullptr) {
-                    DecoderStatus st;
-                    st.plugin = lp.name;
-                    st.reason = DecoderIdleReason::CreateFailed;
-                    st.stream = DecoderStream::Audio;
-                    st.detail =
-                        "\"" + lp.name + "\" failed to start (its create() returned nothing).";
-                    status_.push_back(std::move(st));
-                } else {
-                    Instance inst;
-                    inst.api = lp.decoder;
-                    inst.handle = h;
-                    inst.name = lp.name;
-                    if (resample) { setUpResample(inst.resample, audioRateHz, want); }
-                    // The row pushed immediately below, taken BEFORE the push
-                    // so the instance can rewrite its own reason later if the
-                    // decoder gives up mid-run.
-                    inst.statusIndex = status_.size();
-                    if (audioHandle == nullptr) { audioHandle = h; }
-                    instances_.push_back(std::move(inst));
-                    DecoderStatus st;
-                    st.plugin = lp.name;
-                    st.reason = DecoderIdleReason::Running;
-                    st.stream = DecoderStream::Audio;
-                    st.detail = resample ? resampleSentence(lp.name, audioRateHz, want)
-                                         : "\"" + lp.name + "\" is decoding the tuned audio.";
-                    status_.push_back(std::move(st));
-                    started = true;
-                }
-            }
+bool PluginRunner::startPlugin(const LoadedPlugin& lp) {
+    std::unique_lock<std::mutex> lock(mutex_);
+    if (!lp.loaded) { return false; }
+    // A stop is a decision; only the owner's setStopped() reverses it.
+    if (stopped_.contains(lp)) { return false; }
+    const std::string key = pluginKey(lp);
+    // Awake from here on, so a later rebuild() builds it too.
+    {
+        const std::string id = pluginRunId(key);
+        std::vector<std::string> rest;
+        for (const std::string& k : dormant_.keys()) {
+            if (k != id) { rest.push_back(k); }
         }
+        dormant_.set(std::move(rest));
+    }
+    // The rates are the last rebuild()'s: until one has run there is nothing to
+    // create an instance against.
+    if (!(audioRateHz_ > 0.0) && !(iqRateHz_ > 0.0)) { return false; }
+    // Already running: a second set of instances would feed the plugin twice.
+    for (const Instance& i : instances_) {
+        if (i.key == key) { return false; }
+    }
+    for (const IqInstance& i : iqInstances_) {
+        if (i.key == key) { return false; }
+    }
+    for (const ImageInstance& i : imageInstances_) {
+        if (i.key == key) { return false; }
+    }
+    for (const ProcessorInstance& p : processors_) {
+        if (p.key == key) { return false; }
+    }
+    if (pollBuf_.size() < kPollBufBytes) { pollBuf_.resize(kPollBufBytes); }
+    chainBuf_.reserve(2u * kChainReserveFrames);
+    // The create() calls run with the lock held, as rebuild()'s do (see there).
+    buildPluginLocked(lp);
+    return true;
+}
 
-        if (lp.iqDecoder != nullptr) {
-            const double want = lp.iqDecoder->requiredRateHz;
-            if (want != 0.0 && want != iqRateHz) {
+void PluginRunner::stopPlugin(const std::string& pluginKey) {
+    std::unique_lock<std::mutex> lock(mutex_);
+    // Down until startPlugin(): a rebuild() in between must not bring it back.
+    std::vector<std::string> keys = dormant_.keys();
+    keys.push_back(pluginKey);
+    dormant_.set(std::move(keys));
+    removePluginLocked(pluginKey, lock);
+}
+
+void PluginRunner::buildPluginLocked(const LoadedPlugin& lp) {
+    // STAMPED ON EVERY LINE THIS PLUGIN PRODUCES, at the end of the loop
+    // body rather than at each of the eight places a DecoderStatus is
+    // built. One assignment cannot be forgotten by the ninth; eight can,
+    // and the one that was forgotten would be a plugin isFeeding could
+    // never see.
+    const std::string key = pluginKey(lp);
+    const std::size_t statusBegin = status_.size();
+    // A plugin may declare both. Each declared capability gets its own
+    // instance and its own stream, which is why this is two independent
+    // blocks rather than an else-if.
+    bool started = false;
+
+    // THE HANDLE CASCADE_CAP_AUDIO_OUT RIDES ON. That table has no
+    // create() of its own - the sound a decoder makes is the same object
+    // as the decode - so it borrows the first instance this plugin
+    // produces, in the fixed order the ABI states: decoder, then I/Q
+    // decoder, then image decoder. Taken here, once, rather than at three
+    // call sites, so the order cannot drift from what the header promises.
+    void* audioHandle = nullptr;
+
+    if (lp.decoder != nullptr) {
+        // requiredRateHz == 0 means "any rate"; anything else is the rate
+        // the decoder is BUILT around, and the host resamples the pipeline's
+        // audio to it (plugin_abi.h promises exactly that). Feeding a
+        // 48 kHz decoder 44.1 kHz audio and hoping is how a bit clock
+        // drifts; feeding it 44.1 kHz audio resampled to 48 kHz is how a
+        // decoder written for one clock runs on any receiver.
+        const double want = static_cast<double>(lp.decoder->requiredRateHz);
+        const bool resample = want != 0.0 && want != audioRateHz_;
+        {
+            void* h = lp.decoder->create(want != 0.0 ? static_cast<uint32_t>(want)
+                                                     : static_cast<uint32_t>(audioRateHz_));
+            if (h == nullptr) {
                 DecoderStatus st;
                 st.plugin = lp.name;
-                st.reason = DecoderIdleReason::RateMismatch;
-                st.stream = DecoderStream::Iq;
-                st.wantRateHz = want;
-                st.detail = rateSentence(lp.name, want, iqRateHz, "raw I/Q");
+                st.reason = DecoderIdleReason::CreateFailed;
+                st.stream = DecoderStream::Audio;
+                st.detail =
+                    "\"" + lp.name + "\" failed to start (its create() returned nothing).";
                 status_.push_back(std::move(st));
             } else {
-                void* h = lp.iqDecoder->create(want != 0.0 ? want : iqRateHz, centreHz);
-                if (h == nullptr) {
-                    DecoderStatus st;
-                    st.plugin = lp.name;
-                    st.reason = DecoderIdleReason::CreateFailed;
-                    st.stream = DecoderStream::Iq;
-                    st.detail =
-                        "\"" + lp.name + "\" failed to start (its create() returned nothing).";
-                    status_.push_back(std::move(st));
-                } else {
-                    IqInstance inst;
-                    inst.api = lp.iqDecoder;
-                    inst.handle = h;
-                    inst.name = lp.name;
-                    inst.statusIndex = status_.size();
-                    if (audioHandle == nullptr) { audioHandle = h; }
-                    iqInstances_.push_back(std::move(inst));
-                    DecoderStatus st;
-                    st.plugin = lp.name;
-                    st.reason = DecoderIdleReason::Running;
-                    st.stream = DecoderStream::Iq;
-                    st.detail = "\"" + lp.name +
-                                "\" is decoding the raw receiver band (it ignores the VFO).";
-                    status_.push_back(std::move(st));
-                    started = true;
-                }
-            }
-        }
-
-        if (lp.imageDecoder != nullptr) {
-            // WHICH STREAM is the plugin's own declaration, and it decides
-            // everything else here: an SSTV decoder asks for demodulated audio
-            // and an LRPT decoder for complex baseband, and the rate it is
-            // matched against has to be the rate of the stream it asked for.
-            const bool isIq = lp.imageDecoder->inputKind == CASCADE_INPUT_IQ;
-            const double have = isIq ? iqRateHz : audioRateHz;
-            const double want = lp.imageDecoder->requiredRateHz;
-            // Audio is resampled to what the decoder asked for, as for the
-            // text decoders above; raw I/Q is not - the band is what the
-            // device produces, and only the device can change it.
-            const bool resample = !isIq && want != 0.0 && want != have;
-            DecoderStatus st;
-            st.plugin = lp.name;
-            st.output = DecoderOutput::Image;
-            st.stream = isIq ? DecoderStream::Iq : DecoderStream::Audio;
-            if (isIq && want != 0.0 && want != have) {
-                st.reason = DecoderIdleReason::RateMismatch;
-                st.wantRateHz = want;
-                st.detail = rateSentence(lp.name, want, have, isIq ? "raw I/Q" : "audio");
-                status_.push_back(std::move(st));
-            } else {
-                // centerHz is 0 for an audio-input decoder, per the ABI: the
-                // audio it receives has already been tuned and demodulated, so
-                // an RF frequency would be a number it could only misuse.
-                void* h = lp.imageDecoder->create(want != 0.0 ? want : have,
-                                                  isIq ? centreHz : 0.0);
-                if (h == nullptr) {
-                    st.reason = DecoderIdleReason::CreateFailed;
-                    st.detail =
-                        "\"" + lp.name + "\" failed to start (its create() returned nothing).";
-                    status_.push_back(std::move(st));
-                } else {
-                    ImageInstance inst;
-                    inst.api = lp.imageDecoder;
-                    inst.handle = h;
-                    inst.name = lp.name;
-                    inst.inputKind = isIq ? CASCADE_INPUT_IQ : CASCADE_INPUT_AUDIO;
-                    if (resample) { setUpResample(inst.resample, have, want); }
-                    inst.statusIndex = status_.size();
-                    if (audioHandle == nullptr) { audioHandle = h; }
-                    imageInstances_.push_back(std::move(inst));
-                    if (isIq) { ++iqImageCount_; } else { ++audioImageCount_; }
-                    st.reason = DecoderIdleReason::Running;
-                    st.detail = "\"" + lp.name + "\" is building an image from the " +
-                                (isIq ? std::string("raw receiver band (it ignores the VFO).")
-                                      : resample ? "tuned audio, resampled from " +
-                                                       rateWord(have) + " to " +
-                                                       rateWord(want) + "."
-                                                 : std::string("tuned audio."));
-                    status_.push_back(std::move(st));
-                    started = true;
-                }
-            }
-        }
-
-        // THE SPEAKERS. Registered last, because it needs an instance to ride
-        // on and the three blocks above are what produce one. A plugin that
-        // declares the capability but got no instance (its create() failed,
-        // or its decoder wants a rate this receiver is not producing) is
-        // simply not registered: it has nothing to play from, and the status
-        // row its decoder already pushed says why in the words the user needs.
-        if (lp.audioOut != nullptr && audioHandle != nullptr) {
-            AudioInstance a;
-            a.api = lp.audioOut;
-            a.handle = audioHandle;
-            a.name = lp.name;
-            a.key = key;
-            a.rateHz = lp.audioOut->sampleRateHz;
-            a.channels = lp.audioOut->channels;
-            // The plugin's rate is validated non-zero and in range at load
-            // time, so this ratio is always meaningful. Built once here, not
-            // on the first block: the audio thread must not construct a
-            // resampler (it allocates, and it computes a filter).
-            if (static_cast<double>(a.rateHz) != audioRateHz && audioRateHz > 0.0) {
-                a.rsL = std::make_unique<cascade::dsp::RationalResampler>(
-                    static_cast<unsigned>(audioRateHz), a.rateHz);
-                a.rsR = std::make_unique<cascade::dsp::RationalResampler>(
-                    static_cast<unsigned>(audioRateHz), a.rateHz);
-            }
-            // Reserved, never resized down: every append below stays inside
-            // this capacity, so the steady-state path allocates nothing.
-            a.fifoL.reserve(kAudioFifoFrames);
-            a.fifoR.reserve(kAudioFifoFrames);
-            a.pullBuf.reserve(kAudioFifoFrames * 2u);
-            a.inL.reserve(kAudioFifoFrames);
-            a.inR.reserve(kAudioFifoFrames);
-            audioInstances_.push_back(std::move(a));
-        }
-
-        // AN IN-CHAIN AUDIO PROCESSOR (host API level 1). Its own instance,
-        // not riding on a decoder's the way the audio-out table does: it is
-        // fed the audio the user hears, not a decoder's stream, and a plugin
-        // that only processes has no decoder to ride on. Stereo at the audio
-        // rate, because that is the shape of the chain where it runs (see
-        // processAudioChain and the ABI's CascadeAudioProcessorApi).
-        if (lp.audioProcessor != nullptr && audioRateHz > 0.0) {
-            void* h = lp.audioProcessor->create(static_cast<uint32_t>(audioRateHz), 2u);
-            if (h != nullptr) {
-                ProcessorInstance p;
-                p.api = lp.audioProcessor;
-                p.handle = h;
-                p.name = lp.name;
-                p.title = lp.audioProcessor->title != nullptr ? lp.audioProcessor->title
-                                                              : lp.name;
-                processors_.push_back(std::move(p));
-                // A ROW LIKE ANY DECODER'S, so the module reads FED on its
-                // plate while its processor runs (isFeeding answers from these
-                // rows) instead of "takes no signal" - which a module rewriting
-                // the audio the user hears plainly does not deserve.
+                Instance inst;
+                inst.api = lp.decoder;
+                inst.handle = h;
+                inst.name = lp.name;
+                inst.key = key;
+                if (resample) { setUpResample(inst.resample, audioRateHz_, want); }
+                // The row pushed immediately below, taken BEFORE the push
+                // so the instance can rewrite its own reason later if the
+                // decoder gives up mid-run.
+                inst.statusIndex = status_.size();
+                if (audioHandle == nullptr) { audioHandle = h; }
+                instances_.push_back(std::move(inst));
                 DecoderStatus st;
                 st.plugin = lp.name;
                 st.reason = DecoderIdleReason::Running;
                 st.stream = DecoderStream::Audio;
-                st.detail = "\"" + lp.name + "\" is processing the audio you hear.";
+                st.detail = resample ? resampleSentence(lp.name, audioRateHz_, want)
+                                     : "\"" + lp.name + "\" is decoding the tuned audio.";
                 status_.push_back(std::move(st));
-            } else {
+                started = true;
+            }
+        }
+    }
+
+    if (lp.iqDecoder != nullptr) {
+        const double want = lp.iqDecoder->requiredRateHz;
+        if (want != 0.0 && want != iqRateHz_) {
+            DecoderStatus st;
+            st.plugin = lp.name;
+            st.reason = DecoderIdleReason::RateMismatch;
+            st.stream = DecoderStream::Iq;
+            st.wantRateHz = want;
+            st.detail = rateSentence(lp.name, want, iqRateHz_, "raw I/Q");
+            status_.push_back(std::move(st));
+        } else {
+            void* h = lp.iqDecoder->create(want != 0.0 ? want : iqRateHz_, centreHz_);
+            if (h == nullptr) {
                 DecoderStatus st;
                 st.plugin = lp.name;
                 st.reason = DecoderIdleReason::CreateFailed;
-                st.stream = DecoderStream::None;
-                st.detail = "\"" + lp.name +
-                            "\" failed to start its audio processor (its create() returned "
-                            "nothing), so the audio is not being processed.";
+                st.stream = DecoderStream::Iq;
+                st.detail =
+                    "\"" + lp.name + "\" failed to start (its create() returned nothing).";
                 status_.push_back(std::move(st));
+            } else {
+                IqInstance inst;
+                inst.api = lp.iqDecoder;
+                inst.handle = h;
+                inst.name = lp.name;
+                inst.key = key;
+                inst.statusIndex = status_.size();
+                if (audioHandle == nullptr) { audioHandle = h; }
+                iqInstances_.push_back(std::move(inst));
+                DecoderStatus st;
+                st.plugin = lp.name;
+                st.reason = DecoderIdleReason::Running;
+                st.stream = DecoderStream::Iq;
+                st.detail = "\"" + lp.name +
+                            "\" is decoding the raw receiver band (it ignores the VFO).";
+                status_.push_back(std::move(st));
+                started = true;
             }
         }
+    }
 
-        // No table this runner drives: say so rather than leaving the plugin
-        // looking loaded-and-working. A plugin that ONLY processes audio is
-        // driven all the same - it is simply not a decoder.
-        if (!started && lp.audioProcessor == nullptr && lp.decoder == nullptr &&
-            lp.iqDecoder == nullptr && lp.imageDecoder == nullptr) {
+    if (lp.imageDecoder != nullptr) {
+        // WHICH STREAM is the plugin's own declaration, and it decides
+        // everything else here: an SSTV decoder asks for demodulated audio
+        // and an LRPT decoder for complex baseband, and the rate it is
+        // matched against has to be the rate of the stream it asked for.
+        const bool isIq = lp.imageDecoder->inputKind == CASCADE_INPUT_IQ;
+        const double have = isIq ? iqRateHz_ : audioRateHz_;
+        const double want = lp.imageDecoder->requiredRateHz;
+        // Audio is resampled to what the decoder asked for, as for the
+        // text decoders above; raw I/Q is not - the band is what the
+        // device produces, and only the device can change it.
+        const bool resample = !isIq && want != 0.0 && want != have;
+        DecoderStatus st;
+        st.plugin = lp.name;
+        st.output = DecoderOutput::Image;
+        st.stream = isIq ? DecoderStream::Iq : DecoderStream::Audio;
+        if (isIq && want != 0.0 && want != have) {
+            st.reason = DecoderIdleReason::RateMismatch;
+            st.wantRateHz = want;
+            st.detail = rateSentence(lp.name, want, have, isIq ? "raw I/Q" : "audio");
+            status_.push_back(std::move(st));
+        } else {
+            // centerHz is 0 for an audio-input decoder, per the ABI: the
+            // audio it receives has already been tuned and demodulated, so
+            // an RF frequency would be a number it could only misuse.
+            void* h = lp.imageDecoder->create(want != 0.0 ? want : have,
+                                              isIq ? centreHz_ : 0.0);
+            if (h == nullptr) {
+                st.reason = DecoderIdleReason::CreateFailed;
+                st.detail =
+                    "\"" + lp.name + "\" failed to start (its create() returned nothing).";
+                status_.push_back(std::move(st));
+            } else {
+                ImageInstance inst;
+                inst.api = lp.imageDecoder;
+                inst.handle = h;
+                inst.name = lp.name;
+                inst.key = key;
+                inst.inputKind = isIq ? CASCADE_INPUT_IQ : CASCADE_INPUT_AUDIO;
+                if (resample) { setUpResample(inst.resample, have, want); }
+                inst.statusIndex = status_.size();
+                if (audioHandle == nullptr) { audioHandle = h; }
+                imageInstances_.push_back(std::move(inst));
+                if (isIq) { ++iqImageCount_; } else { ++audioImageCount_; }
+                st.reason = DecoderIdleReason::Running;
+                st.detail = "\"" + lp.name + "\" is building an image from the " +
+                            (isIq ? std::string("raw receiver band (it ignores the VFO).")
+                                  : resample ? "tuned audio, resampled from " +
+                                                   rateWord(have) + " to " +
+                                                   rateWord(want) + "."
+                                             : std::string("tuned audio."));
+                status_.push_back(std::move(st));
+                started = true;
+            }
+        }
+    }
+
+    // THE SPEAKERS. Registered last, because it needs an instance to ride
+    // on and the three blocks above are what produce one. A plugin that
+    // declares the capability but got no instance (its create() failed,
+    // or its decoder wants a rate this receiver is not producing) is
+    // simply not registered: it has nothing to play from, and the status
+    // row its decoder already pushed says why in the words the user needs.
+    if (lp.audioOut != nullptr && audioHandle != nullptr) {
+        AudioInstance a;
+        a.api = lp.audioOut;
+        a.handle = audioHandle;
+        a.name = lp.name;
+        a.key = key;
+        a.rateHz = lp.audioOut->sampleRateHz;
+        a.channels = lp.audioOut->channels;
+        // The plugin's rate is validated non-zero and in range at load
+        // time, so this ratio is always meaningful. Built once here, not
+        // on the first block: the audio thread must not construct a
+        // resampler (it allocates, and it computes a filter).
+        if (static_cast<double>(a.rateHz) != audioRateHz_ && audioRateHz_ > 0.0) {
+            a.rsL = std::make_unique<cascade::dsp::RationalResampler>(
+                static_cast<unsigned>(audioRateHz_), a.rateHz);
+            a.rsR = std::make_unique<cascade::dsp::RationalResampler>(
+                static_cast<unsigned>(audioRateHz_), a.rateHz);
+        }
+        // Reserved, never resized down: every append below stays inside
+        // this capacity, so the steady-state path allocates nothing.
+        a.fifoL.reserve(kAudioFifoFrames);
+        a.fifoR.reserve(kAudioFifoFrames);
+        a.pullBuf.reserve(kAudioFifoFrames * 2u);
+        a.inL.reserve(kAudioFifoFrames);
+        a.inR.reserve(kAudioFifoFrames);
+        audioInstances_.push_back(std::move(a));
+    }
+
+    // AN IN-CHAIN AUDIO PROCESSOR (host API level 1). Its own instance,
+    // not riding on a decoder's the way the audio-out table does: it is
+    // fed the audio the user hears, not a decoder's stream, and a plugin
+    // that only processes has no decoder to ride on. Stereo at the audio
+    // rate, because that is the shape of the chain where it runs (see
+    // processAudioChain and the ABI's CascadeAudioProcessorApi).
+    if (lp.audioProcessor != nullptr && audioRateHz_ > 0.0) {
+        void* h = lp.audioProcessor->create(static_cast<uint32_t>(audioRateHz_), 2u);
+        if (h != nullptr) {
+            ProcessorInstance p;
+            p.api = lp.audioProcessor;
+            p.handle = h;
+            p.name = lp.name;
+            p.key = key;
+            p.title = lp.audioProcessor->title != nullptr ? lp.audioProcessor->title
+                                                          : lp.name;
+            processors_.push_back(std::move(p));
+            // A ROW LIKE ANY DECODER'S, so the module reads FED on its
+            // plate while its processor runs (isFeeding answers from these
+            // rows) instead of "takes no signal" - which a module rewriting
+            // the audio the user hears plainly does not deserve.
             DecoderStatus st;
             st.plugin = lp.name;
-            st.reason = DecoderIdleReason::NoAudioTable;
+            st.reason = DecoderIdleReason::Running;
+            st.stream = DecoderStream::Audio;
+            st.detail = "\"" + lp.name + "\" is processing the audio you hear.";
+            status_.push_back(std::move(st));
+        } else {
+            DecoderStatus st;
+            st.plugin = lp.name;
+            st.reason = DecoderIdleReason::CreateFailed;
             st.stream = DecoderStream::None;
-            st.detail = "\"" + lp.name + "\" provides no decoder this build can drive.";
+            st.detail = "\"" + lp.name +
+                        "\" failed to start its audio processor (its create() returned "
+                        "nothing), so the audio is not being processed.";
             status_.push_back(std::move(st));
         }
+    }
 
-        for (std::size_t i = statusBegin; i < status_.size(); ++i) {
-            status_[i].key = key;
-        }
+    // No table this runner drives: say so rather than leaving the plugin
+    // looking loaded-and-working. A plugin that ONLY processes audio is
+    // driven all the same - it is simply not a decoder.
+    if (!started && lp.audioProcessor == nullptr && lp.decoder == nullptr &&
+        lp.iqDecoder == nullptr && lp.imageDecoder == nullptr) {
+        DecoderStatus st;
+        st.plugin = lp.name;
+        st.reason = DecoderIdleReason::NoAudioTable;
+        st.stream = DecoderStream::None;
+        st.detail = "\"" + lp.name + "\" provides no decoder this build can drive.";
+        status_.push_back(std::move(st));
+    }
+
+    for (std::size_t i = statusBegin; i < status_.size(); ++i) {
+        status_[i].key = key;
     }
 }
 
@@ -560,6 +647,116 @@ void PluginRunner::destroyInstances(std::unique_lock<std::mutex>& lock) {
     }
     // The moved-out vectors are released here, with the lock still down: a
     // resampler's buffers are a free() and belong outside it too.
+    deadAudio.clear();
+    deadIq.clear();
+    deadImage.clear();
+    deadProc.clear();
+    lock.lock();
+}
+
+namespace {
+
+// Moves every element of `live` whose key is `key` into `dead`, keeping the rest in order.
+template <typename T>
+void moveOutKey(std::vector<T>& live, const std::string& key, std::vector<T>& dead) {
+    std::vector<T> keep;
+    keep.reserve(live.size());
+    for (T& t : live) {
+        if (t.key == key) {
+            dead.push_back(std::move(t));
+        } else {
+            keep.push_back(std::move(t));
+        }
+    }
+    live = std::move(keep);
+}
+
+}  // namespace
+
+void PluginRunner::removePluginLocked(const std::string& key,
+                                      std::unique_lock<std::mutex>& lock) {
+    if (key.empty()) { return; }
+
+    // THE SPEAKERS FIRST, as destroyInstances does it: an AudioInstance borrows
+    // a decoder instance's handle, so it has to go before the instance does. If
+    // this plugin was the one playing, that is said (the log line of the
+    // takeover transition) and the demodulated audio returns; otherwise the
+    // playing index is re-pointed at the same instance in the shorter vector.
+    {
+        std::vector<AudioInstance> keep;
+        keep.reserve(audioInstances_.size());
+        std::size_t newPlaying = kNoAudio;
+        for (std::size_t i = 0; i < audioInstances_.size(); ++i) {
+            if (audioInstances_[i].key == key) {
+                if (i == playing_) {
+                    noteAudioEventLocked(AudioEvent::Kind::Stopped, audioInstances_[i], nullptr);
+                }
+                continue;
+            }
+            if (i == playing_) { newPlaying = keep.size(); }
+            keep.push_back(std::move(audioInstances_[i]));
+        }
+        audioInstances_ = std::move(keep);
+        playing_ = newPlaying;
+    }
+
+    // THIS PLUGIN'S INSTANCES OUT, everyone else's left exactly as they are.
+    std::vector<Instance> deadAudio;
+    std::vector<IqInstance> deadIq;
+    std::vector<ImageInstance> deadImage;
+    std::vector<ProcessorInstance> deadProc;
+    moveOutKey(instances_, key, deadAudio);
+    moveOutKey(iqInstances_, key, deadIq);
+    moveOutKey(imageInstances_, key, deadImage);
+    moveOutKey(processors_, key, deadProc);
+
+    // ITS STATUS ROWS OUT, and the survivors' row indices follow: an instance
+    // reports through the index it was created with (see Instance::statusIndex),
+    // and the rows after the removed ones have moved up.
+    {
+        constexpr std::size_t kGone = static_cast<std::size_t>(-1);
+        std::vector<std::size_t> moved(status_.size(), kGone);
+        std::vector<DecoderStatus> kept;
+        kept.reserve(status_.size());
+        for (std::size_t i = 0; i < status_.size(); ++i) {
+            if (status_[i].key == key) { continue; }
+            moved[i] = kept.size();
+            kept.push_back(std::move(status_[i]));
+        }
+        status_ = std::move(kept);
+        const auto follow = [&moved, kGone](std::size_t idx) {
+            return idx < moved.size() && moved[idx] != kGone ? moved[idx] : idx;
+        };
+        for (Instance& i : instances_) { i.statusIndex = follow(i.statusIndex); }
+        for (IqInstance& i : iqInstances_) { i.statusIndex = follow(i.statusIndex); }
+        for (ImageInstance& i : imageInstances_) { i.statusIndex = follow(i.statusIndex); }
+    }
+    audioImageCount_ = 0;
+    iqImageCount_ = 0;
+    for (const ImageInstance& i : imageInstances_) {
+        if (i.inputKind == CASCADE_INPUT_IQ) {
+            ++iqImageCount_;
+        } else {
+            ++audioImageCount_;
+        }
+    }
+
+    // DESTROYED WITH THE LOCK DROPPED, for the reason destroyInstances gives: a
+    // plugin's destroy() may call the host back, and the host's tune service
+    // comes straight back into retune() and this mutex.
+    lock.unlock();
+    for (Instance& i : deadAudio) {
+        if (i.api != nullptr && i.handle != nullptr) { i.api->destroy(i.handle); }
+    }
+    for (IqInstance& i : deadIq) {
+        if (i.api != nullptr && i.handle != nullptr) { i.api->destroy(i.handle); }
+    }
+    for (ImageInstance& i : deadImage) {
+        if (i.api != nullptr && i.handle != nullptr) { i.api->destroy(i.handle); }
+    }
+    for (ProcessorInstance& p : deadProc) {
+        if (p.api != nullptr && p.handle != nullptr) { p.api->destroy(p.handle); }
+    }
     deadAudio.clear();
     deadIq.clear();
     deadImage.clear();
@@ -1011,19 +1208,37 @@ void PluginRunner::pollImages(std::vector<HostImage>& out) {
     std::lock_guard<std::mutex> lock(mutex_);
 
     // Re-seed `out` whenever the instance set changed under it - a rescan, a
-    // source switch. Comparing the NAMES rather than just the count is what
-    // makes a swap of one plugin for another impossible to miss: the count
-    // alone would leave the new decoder's picture labelled with the old
-    // plugin's name.
+    // source switch, a plugin woken or put to sleep. Comparing the NAMES rather
+    // than just the count is what makes a swap of one plugin for another
+    // impossible to miss: the count alone would leave the new decoder's picture
+    // labelled with the old plugin's name.
+    //
+    // AN ENTRY THAT SURVIVES THE CHANGE KEEPS ITS PICTURE (0.99.73). Re-seeding
+    // every slot from empty was harmless while the set changed only wholesale,
+    // but a plugin woken or put to sleep changes it under every OTHER plugin's
+    // picture, and a decoder offers a picture only when it changes: the one
+    // already received would never be offered again, and a window showing it
+    // would go blank. So the entries are matched by name and carried over; only
+    // a name with no entry yet starts empty, and a plugin that has gone loses
+    // its entry (its picture is part of the instance that made it).
     bool shapeChanged = out.size() != imageInstances_.size();
     for (std::size_t i = 0; !shapeChanged && i < imageInstances_.size(); ++i) {
         if (out[i].plugin != imageInstances_[i].name) { shapeChanged = true; }
     }
     if (shapeChanged) {
-        out.assign(imageInstances_.size(), HostImage{});
+        std::vector<HostImage> next(imageInstances_.size());
+        std::vector<bool> taken(out.size(), false);
         for (std::size_t i = 0; i < imageInstances_.size(); ++i) {
-            out[i].plugin = imageInstances_[i].name;
+            for (std::size_t k = 0; k < out.size(); ++k) {
+                if (!taken[k] && out[k].plugin == imageInstances_[i].name) {
+                    taken[k] = true;
+                    next[i] = std::move(out[k]);
+                    break;
+                }
+            }
+            next[i].plugin = imageInstances_[i].name;
         }
+        out = std::move(next);
     }
 
     for (std::size_t i = 0; i < imageInstances_.size(); ++i) {

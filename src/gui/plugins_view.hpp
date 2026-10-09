@@ -10,7 +10,7 @@
 // here.
 //
 // SIMPLE, BY THE OWNER'S WORDS (2026-10-08: "I want to keep separate windows but
-// they both need to be simple"). A top bar - search, the five feed-state chips,
+// they both need to be simple"). A top bar - search, the six feed-state chips,
 // SCAN AGAIN and RESET WINDOW SIZES - the one verdict line, and one full-width row
 // per module: glyph, name, version, the reach warning or the refusal under the
 // name, the state word with its lamp, STOP or START, and a two-step REMOVE. A
@@ -32,18 +32,24 @@
 //     descriptor and REFUSED it. LoadedPlugin::error has carried the exact reason
 //     since the host was written, and it is printed here, verbatim.
 //
-// So this window distinguishes five states, and every one of them is derived from
+// So this window distinguishes six states, and every one of them is derived from
 // a predicate that already exists in the product rather than from a new opinion:
 //
 //   FED           loaded, not stopped, PluginRunner::isFeeding(key), and the
 //                 receiver is running.
-//   NOT FED       loaded, not stopped, and something is between it and the
+//   IDLE          loaded, not stopped, set to AUTO and DORMANT (0.99.73): nothing is
+//                 using it, so it has no instance and costs nothing. It starts by
+//                 itself when its window, map or output is opened. Not a fault.
+//   NOT FED       loaded, not stopped, running, and something is between it and the
 //                 samples. The reason is the runner's own sentence, quoted.
 //                 (Lettered NOT DECODING, the word of the chip that counts it.)
 //   TAKES NO      loaded, not stopped, and it declares no decoder at all. A
 //   SIGNAL        basemap or a track source is fed nothing by design.
 //   STOPPED       in the stop set. The user's own choice, lettered as a choice.
 //   REFUSED       the file was found and rejected; `error` says why.
+//
+// PRECEDENCE, which is the order a module is asked in: REFUSED, STOPPED, TAKES NO
+// SIGNAL, FED, IDLE, NOT DECODING.
 //
 // WHAT THIS WINDOW DOES NOT COVER, deliberately: the catalogue, held updates, and
 // the RETIRED modules the version policy quarantines out of the scan. Those are
@@ -80,6 +86,7 @@ enum class FittedState {
     NoSignal,   // takes no signal by design - not a decoder
     Stopped,    // the user stopped it
     Refused,    // found on disk and rejected at load
+    Idle,       // AUTO and dormant: not in use, so not running (0.99.73)
 };
 
 // One module as this window shows it. EVERY FIELD NAMES ITS SOURCE, because the
@@ -118,6 +125,12 @@ struct FittedModule {
 
     // AppWindow::pluginIsStopped(file) - the durable stop set.
     bool stopped = false;
+    // AppWindow::pluginIsIdle(file): the module is set to AUTO and is dormant - it has no
+    // instance because nothing is using it (core/plugin_run.hpp). False for a module with
+    // nothing to start (a basemap, say) and for one that is running.
+    bool idle = false;
+    // The module is set to ALWAYS ("keep running"): the tick on its page.
+    bool keepRunning = false;
     // PluginRunner::isFeeding(file) - the runner has an instance for this module
     // MATCHED to the rate the pipeline is delivering.
     bool fed = false;
@@ -216,7 +229,7 @@ struct FittedModulesModel {
 // The window's own persistent state, owned by the caller so it survives the frame.
 struct FittedModulesDeck {
     char search[128] = {0};
-    // The five chips, each a toggle, all on by default.
+    // The six chips, each a toggle, all on by default.
     bool showFed = true;
     bool showIdle = true;      // NotFed only - see showNoSignal
     // ITS OWN KEY, because it is its own state: one key over both NotFed and NoSignal
@@ -225,6 +238,8 @@ struct FittedModulesDeck {
     bool showNoSignal = true;
     bool showStopped = true;
     bool showRefused = true;
+    // The IDLE chip (0.99.73): modules that are dormant because nothing is using them.
+    bool showIdleDormant = true;
     // The module file name awaiting a second press (CONFIRM), and the ImGui time the
     // arming lapses (five seconds). A file name rather than an index for the reason
     // the whole product keys on file names: a rescan reorders the list.
@@ -248,8 +263,11 @@ struct FittedModulesAction {
     enum class Kind {
         None,
         Rescan,    // AppWindow::rescanPlugins()
-        Start,     // AppWindow::setPluginStopped(file, false)
+        Start,     // AppWindow::setPluginStopped(file, false): the module is set to ALWAYS
         Stop,      // AppWindow::setPluginStopped(file, true)
+        // The "keep running" tick on the module's page: AppWindow::setPluginRun(file,
+        // flag ? ALWAYS : AUTO). `flag` is the state being asked for.
+        SetKeepRunning,
         Remove,    // AppWindow::removeInstalledPlugin(file)
         // AppWindow::removeOrphanedPlugin(file) (0.99.69): the same two-step key on a
         // file that is not in the plugin index and not running - and the app re-checks
@@ -283,6 +301,13 @@ FittedState fittedState(const FittedModule& m, bool receiverRunning);
 // The word printed on the row, in capitals. Never null.
 const char* fittedStateWord(FittedState s);
 
+// WHICH KEY THE ROW OFFERS (0.99.73): START for a module that is not running - stopped, or idle -
+// and STOP for one that is. The label is the ACTION, never the state, so a key reading "RUNNING"
+// can never leave anyone guessing whether pressing it stops the module. START on an idle module
+// pins it ("keep running"), the same thing a preset press does.
+bool fittedOffersStart(const FittedModule& m);
+const char* fittedKeyWord(const FittedModule& m);
+
 // The sentence on the page: why the module is in that state, and what would change
 // it. For NotFed this is the RUNNER'S OWN sentence wherever it recorded one, quoted
 // rather than rewritten.
@@ -310,6 +335,7 @@ FittedRowNote fittedRowNote(const FittedModule& m, bool receiverRunning);
 // way to the chips.
 struct FittedCounts {
     int fed = 0;
+    int idle = 0;      // Idle: dormant, nothing is using it
     int notFed = 0;    // NotFed: could be fed, and is not
     int noSignal = 0;  // NoSignal: takes no signal by design
     int stopped = 0;
@@ -338,8 +364,11 @@ std::string fittedDateText(const FittedModule& m);
 // record's (LoadedPlugin::fileBytes, measured once by the scan); 0 is "not measured".
 // NOTHING HERE OR IN THE CALLER MAY STAT THE FILE: this is built for every module on
 // every frame the window is open (tests/test_fitted_modules_no_disk).
+// `idle` and `keepRunning` (0.99.73) default to false - a module that is running and set to
+// AUTO - so a caller that knows nothing of run states gets what it always got.
 FittedModule makeFittedModule(const cascade::core::LoadedPlugin& p, bool stopped, bool fed,
-                              std::string idleDetail, bool tuneAllowed);
+                              std::string idleDetail, bool tuneAllowed, bool idle = false,
+                              bool keepRunning = false);
 
 // --- the window --------------------------------------------------------------
 

@@ -7,6 +7,10 @@
 // THREADING, which is the whole difficulty here:
 //
 //   rebuild()/clear()   control thread. Creates and destroys instances.
+//   startPlugin()/stopPlugin()
+//                       control thread. Create or destroy ONE plugin's instances
+//                       under the same lock, leaving every other plugin's state and
+//                       the stream epoch as they are (0.99.73, see below).
 //   processAudio()      DSP thread, real-time. Must not block or allocate.
 //   pullPluginAudio()   DSP thread, real-time, the same thread and the same
 //                       lock as processAudio - which is what lets the ABI
@@ -158,8 +162,49 @@ public:
     // Takes the same lock rebuild() does: both run on the control thread
     // today, but a set that is read under a lock and written without one is a
     // race waiting for the first caller who forgets that.
+    //
+    // KEYED ON THE PLUGIN'S ID (core/plugin_run.hpp), so what is handed in may
+    // be file names or ids, and a stop outlives an update of the module.
     void setStopped(std::vector<std::string> keys);
     bool isStopped(const std::string& pluginKey) const;
+
+    // ----- Per-plugin start and stop (0.99.73) --------------------------------
+    //
+    // A FITTED PLUGIN RUNS ONLY WHILE IT IS USED (core/plugin_run.hpp). The
+    // owner decides, once a frame, which plugins are wanted; these two make the
+    // decision real for ONE plugin without the wholesale rebuild:
+    //
+    //   startPlugin(lp)   creates that plugin's instances, against the rates
+    //                     and centre the last rebuild() and retune() left, and
+    //                     appends their status rows. Every other plugin's
+    //                     instances, counters and status rows are untouched and
+    //                     so is the stream epoch - which means a plugin started
+    //                     mid-epoch has been handed only the frames since its
+    //                     start, while the clock counts the stream. Returns
+    //                     false, and creates nothing, when the plugin did not
+    //                     load, is STOPPED, already has instances, or no
+    //                     rebuild() has given the runner a rate yet.
+    //   stopPlugin(key)   destroys exactly that plugin's instances (with the
+    //                     lock dropped, as destroyInstances does), removes its
+    //                     status rows and its claim on the speakers, and leaves
+    //                     every other plugin as it was. Safe for a key with no
+    //                     instances.
+    //
+    // rebuild() stays for the wholesale cases: a new source, rate, centre or
+    // rescan, where every instance has to be created again anyway.
+    //
+    // THE DORMANT SET is the plugins the owner has put to sleep (AUTO and not
+    // wanted): like the stop set it is applied by rebuild() - a dormant plugin
+    // gets no instance - and survives clear(); stopPlugin() adds its plugin to
+    // it and startPlugin() takes it out, so a later rebuild() keeps the runner
+    // as the per-plugin calls left it. Keyed on id, like the stop set.
+    bool startPlugin(const LoadedPlugin& lp);
+    void stopPlugin(const std::string& pluginKey);
+    void setDormant(std::vector<std::string> keys);
+    bool isDormant(const std::string& pluginKey) const;
+    // Whether this plugin (by module file name) has any instance at all,
+    // working or failed. A dormant or stopped plugin has none.
+    bool hasInstances(const std::string& pluginKey) const;
 
     // Whether this plugin has at least one instance the runner is ACTUALLY
     // FEEDING - created, and matched to the rate the pipeline is delivering.
@@ -295,6 +340,12 @@ public:
     // DSP thread takes, because the borrow must not overlap a process() call on
     // that instance. The copy therefore happens with the lock held; it is only
     // paid when an image actually changed.
+    //
+    // WHEN THE SET OF IMAGE INSTANCES CHANGES (a rebuild, or one plugin started
+    // or stopped, 0.99.73), `out` is re-seeded BY NAME: an entry whose plugin is
+    // still there keeps its picture and revision - a decoder offers a picture
+    // when it changes, so one already received would otherwise never come back -
+    // and only a plugin with no entry yet starts empty.
     void pollImages(std::vector<HostImage>& out);
 
     // GUI thread. What each loaded decoder is doing, or why it is not.
@@ -326,6 +377,9 @@ private:
         const CascadeDecoderApi* api = nullptr;
         void* handle = nullptr;
         std::string name;
+        // The module file name (pluginKey): which plugin owns this instance,
+        // so stopPlugin() can take out exactly its instances and no one else's.
+        std::string key;
         AudioResample resample;
         // poll_text writes no NUL and splits only on code-point boundaries,
         // so a line can arrive across two polls. Carried here between calls.
@@ -349,6 +403,7 @@ private:
         const CascadeIqDecoderApi* api = nullptr;
         void* handle = nullptr;
         std::string name;
+        std::string key;  // as Instance::key
         std::string partial;
         std::size_t statusIndex = 0;
         bool failed = false;
@@ -361,6 +416,7 @@ private:
         const CascadeImageDecoderApi* api = nullptr;
         void* handle = nullptr;
         std::string name;
+        std::string key;  // as Instance::key
         std::string partial;
         std::uint32_t inputKind = CASCADE_INPUT_AUDIO;
         AudioResample resample;  // audio-input image decoders only
@@ -467,6 +523,14 @@ private:
     // the moved-out copies, and the lock is retaken before returning, so a
     // caller sees exactly the state a function that never let go would leave.
     void destroyInstances(std::unique_lock<std::mutex>& lock);
+    // Creates every instance ONE plugin declares and appends their status rows,
+    // against audioRateHz_/iqRateHz_/centreHz_. Lock held; the body rebuild()
+    // runs for each plugin, and what startPlugin() runs for one.
+    void buildPluginLocked(const LoadedPlugin& lp);
+    // The per-plugin counterpart of destroyInstances(): moves ONE plugin's
+    // instances out (the rest stay, with their status rows re-indexed), drops
+    // the lock, destroys them, retakes it.
+    void removePluginLocked(const std::string& key, std::unique_lock<std::mutex>& lock);
     void pollLocked();
     void pollIqLocked();
     // Status text from the image decoders fed by `inputKind`, into the same
@@ -493,6 +557,7 @@ private:
         const CascadeAudioProcessorApi* api = nullptr;
         void* handle = nullptr;
         std::string name;
+        std::string key;  // as Instance::key
         std::string title;
     };
     // Frames the interleaved scratch is sized for at rebuild; a larger block
@@ -508,6 +573,9 @@ private:
     // a stop that arrives while the DSP thread is running cannot race the
     // instance vectors it decides the contents of.
     PluginStopSet stopped_;
+    // The plugins put to sleep (AUTO and not wanted), applied by rebuild() the
+    // way stopped_ is and under the same lock; see setDormant().
+    PluginStopSet dormant_;
     std::vector<Instance> instances_;
     std::vector<IqInstance> iqInstances_;
     std::vector<ImageInstance> imageInstances_;

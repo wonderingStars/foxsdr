@@ -131,8 +131,33 @@ using cascade::i18n::trId;
 // The ImGui identity of an INSTRUMENT window. ImGui hashes only what follows
 // "###", so the plugin name alone would fold two instruments from one module
 // - or two demonstrations - into a single window; the title goes in as well.
+static std::string instrumentWindowIdFor(const std::string& plugin, const std::string& title) {
+    return title + "###instrument_" + plugin + "|" + title;
+}
 static std::string instrumentWindowId(const cascade::core::HostInstrument& in) {
-    return in.title + "###instrument_" + in.plugin + "|" + in.title;
+    return instrumentWindowIdFor(in.plugin, in.title);
+}
+
+// THE IDENTITIES OF A PLUGIN'S OTHER TWO KINDS OF WINDOW, built from what the MODULE DECLARES
+// (its display name and its static panel / instrument tables) and not from an instance
+// (0.99.73): a plugin that is dormant has no instance, and its windows must still be listed on the
+// rail and be recognised as shown, because opening one is how it is woken. The strings are the
+// ones the draw loops in drawPluginWindows build from the instance's own copies of the same
+// declared names, so the two cannot disagree.
+static std::string imageWindowId(const std::string& plugin) {
+    return plugin + " image###image_" + plugin;
+}
+static std::string panelWindowId(const std::string& plugin, const std::string& title) {
+    return title + "###panel_" + plugin;
+}
+// A panel's / an instrument's window title: the table's own, or the plugin's name when it gave none
+// (PluginUi::rebuild's rule).
+static std::string panelTitleOf(const cascade::core::LoadedPlugin& p) {
+    return (p.panel != nullptr && p.panel->title != nullptr) ? std::string(p.panel->title) : p.name;
+}
+static std::string instrumentTitleOf(const cascade::core::LoadedPlugin& p) {
+    return (p.instrument != nullptr && p.instrument->title != nullptr) ? std::string(p.instrument->title)
+                                                                      : p.name;
 }
 
 namespace {
@@ -637,6 +662,9 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            a.iqFilePath == b.iqFilePath && a.centerHz == b.centerHz &&
            a.mode == b.mode && a.bandwidthHz == b.bandwidthHz &&
            a.squelchDb == b.squelchDb && a.volume == b.volume &&
+           // The Sinks rail's AUDIO BUFFER (0.99.73): a combo whose pick saves
+           // nothing by itself, so the debounce has to see it here.
+           a.audioBufferMs == b.audioBufferMs && a.audioBufferAutoMs == b.audioBufferAutoMs &&
            a.dbMin == b.dbMin && a.dbMax == b.dbMax &&
            a.splitRatio == b.splitRatio && a.vfoOffsetHz == b.vfoOffsetHz &&
            a.sampleRateHz == b.sampleRateHz &&
@@ -736,6 +764,8 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            a.pluginSettingsAllowed == b.pluginSettingsAllowed &&
            a.pluginSettings == b.pluginSettings &&
            a.pluginsStopped == b.pluginsStopped &&
+           // How each plugin runs (0.99.73): a "keep running" tick must reach the file.
+           a.pluginRun == b.pluginRun &&
            a.pluginMuteOverride == b.pluginMuteOverride &&
            a.userPresets == b.userPresets &&
            // Without this a close is remembered in memory and never written:
@@ -3596,6 +3626,11 @@ bool benchSwitchRow(const char* label, bool on, const char* chipText,
     ImGui::PushID(label);
     const ImVec2 tl = ImGui::GetCursorScreenPos();
     const ImVec2 br(tl.x + w, tl.y + kRowH);
+    // WHERE THE ROW IS, by its visible name (0.99.73), so a test can press it the way a hand does:
+    // the note above says a row was drawn, this says where. Only when the census is asked for.
+    if (cascade::gui::census::enabled()) {
+        cascade::gui::census::rect("switchrow:" + shown, tl.x, tl.y, br.x, br.y);
+    }
 
     ImGui::BeginDisabled(!enabled);
     ImGui::SetNextItemAllowOverlap();
@@ -3765,6 +3800,11 @@ void AppWindow::drawUi() {
         flushBookmarkSave(false);
         flushMarkerSave(false);
     }
+    // WHICH PLUGINS RUN THIS FRAME (0.99.73): wake what has just been wanted, put to sleep what has
+    // not been for 30 seconds. Before anything is drawn, so a window the user opened last frame
+    // finds its plugin's instances already there, and before the snapshots below, so they describe
+    // the plugins that exist.
+    updatePluginLifecycle();
     publishWebSnapshot();
     publishWebAudio();
     publishWebImages();
@@ -4236,31 +4276,15 @@ void AppWindow::pollAudioHealth() {
 
     const double now = ImGui::GetTime();
 
-    // Once-a-minute starvation digest. Silent unless something actually
-    // starved in the window just closed — same "quiet unless it has news"
-    // posture as the recorder's own status lines, and the only way a number
-    // nobody watches (this goes to the log, not the screen) stays worth
-    // reading when it does fire.
+    // Once-a-minute starvation digest, and the buffer that deepens itself from
+    // it (closeAudioMinute). Silent unless something actually starved in the
+    // window just closed — same "quiet unless it has news" posture as the
+    // recorder's own status lines, and the only way a number nobody watches
+    // (this goes to the log, not the screen) stays worth reading when it does
+    // fire.
     if (now - lastAudioLogSec_ >= 60.0) {
-        const std::uint64_t underrunsNow = out.underruns();
-        const std::uint64_t primingNow = out.primingCallbacks();
-        if (underrunsNow > audioUnderrunsAtLogStart_) {
-            const double rateHz = cascade::core::Pipeline::kAudioRateHz;
-            const double lowWaterMs =
-                1000.0 * static_cast<double>(audioRingLowWaterFrames_) / rateHz;
-            const double capacityMs =
-                1000.0 * static_cast<double>(out.ringCapacityFrames()) / rateHz;
-            cascade::core::diagLogf(
-                "audio: %llu starved callbacks in the last minute (%llu priming), "
-                "ring low water %.0f ms of %.0f ms",
-                static_cast<unsigned long long>(underrunsNow - audioUnderrunsAtLogStart_),
-                static_cast<unsigned long long>(primingNow - audioPrimingAtLogStart_),
-                lowWaterMs, capacityMs);
-        }
-        audioUnderrunsAtLogStart_ = underrunsNow;
-        audioPrimingAtLogStart_ = primingNow;
-        audioRingLowWaterFrames_ = ringFrames;  // next minute's mark starts here
         lastAudioLogSec_ = now;
+        closeAudioMinute(ringFrames);
     }
 
     // 1 Hz. Fast enough that a dropout is a hiccup rather than an outage,
@@ -4295,6 +4319,128 @@ void AppWindow::pollAudioHealth() {
     // has not replied inside the bound; the result lands in pollAudioOpen when
     // it does, and this tick goes back to rendering.
     (void)requestAudioOpen(target, true);
+}
+
+void AppWindow::closeAudioMinute(std::size_t ringFramesNow) {
+    cascade::sink::AudioOut& out = pipeline_.audio();
+    const std::uint64_t underrunsNow = out.underruns();
+    const std::uint64_t primingNow = out.primingCallbacks();
+    // The minute's starved callbacks. The counter is monotonic; the guard is for
+    // a sink that was replaced under a window that kept its mark.
+    const std::uint64_t starved =
+        underrunsNow >= audioUnderrunsAtLogStart_ ? underrunsNow - audioUnderrunsAtLogStart_ : 0;
+    if (starved > 0) {
+        const double rateHz = cascade::core::Pipeline::kAudioRateHz;
+        const double lowWaterMs = 1000.0 * static_cast<double>(audioRingLowWaterFrames_) / rateHz;
+        const double capacityMs = 1000.0 * static_cast<double>(out.ringCapacityFrames()) / rateHz;
+        cascade::core::diagLogf(
+            "audio: %llu starved callbacks in the last minute (%llu priming), "
+            "ring low water %.0f ms of %.0f ms",
+            static_cast<unsigned long long>(starved),
+            static_cast<unsigned long long>(primingNow - audioPrimingAtLogStart_), lowWaterMs,
+            capacityMs);
+    }
+    audioUnderrunsAtLogStart_ = underrunsNow;
+    audioPrimingAtLogStart_ = primingNow;
+    audioRingLowWaterFrames_ = ringFramesNow;  // next minute's mark starts here
+
+    // THE BUFFER THAT DEEPENS ITSELF (0.99.73). The 12CF report - 110 to 126
+    // starved callbacks every minute at a fixed 120 ms - is the case: when a
+    // minute closes with three or more, the lead steps up one rung
+    // (sink::nextAudioLead, which is also where "never down", the ceiling and "a
+    // fixed setting never steps" live). The step is one relaxed store the audio
+    // callback reads at its next re-prime; this is the window's thread and the
+    // callback is never involved. Counted once a session as `recovered.
+    // audiolead`, so the effect of the release can be measured.
+    const auto sayRaised = [](int toMs, std::uint64_t starvedCount, const char* who) {
+        const int shown = static_cast<int>(std::min<std::uint64_t>(starvedCount, 1000000u));
+        cascade::core::diagLogf("audio: buffer raised to %d ms after %d starved callbacks in a minute%s",
+                                toMs, shown, who);
+        cascade::core::health::noteRecovered(cascade::core::health::Recovered::AudioLead);
+        return shown;
+    };
+    const int leadMs = cascade::sink::audioLeadMs(out.leadFrames());
+    const int nextMs = cascade::sink::nextAudioLead(starved, leadMs, audioBufferMs_);
+    if (nextMs > leadMs) {
+        out.setLeadFrames(cascade::sink::audioLeadFrames(nextMs));
+        audioLeadRaisedToMs_ = nextMs;
+        audioLeadRaisedStarved_ = sayRaised(nextMs, starved, "");
+        // REMEMBERED FOR THE NEXT LAUNCH: a computer that fell behind this often is slow every time,
+        // and starting at 120 ms again costs the same bad minutes at every start. Only the
+        // receiver's own raise is kept (the patch speakers are seeded from it when they are made),
+        // and only in AUTOMATIC - nextAudioLead never raises a fixed setting. Saved by the normal
+        // config save, as audioBufferAutoMs; audioBufferMs itself stays 0, because a raise is the
+        // session's and not a choice.
+        audioBufferAutoMs_ = nextMs;
+    }
+
+    // EACH PATCH SPEAKER THAT IS A SOUND DEVICE has a sink of its own, a matcher of
+    // its own and so a count of its own: the same rule on its minute. A speaker
+    // seen for the first time only sets its baseline - what it starved before the
+    // window looked is not this minute's. Files have no buffer (leadMs() is 0).
+    std::set<cascade::core::patch::NodeId> speakers;
+    for (const auto& [node, dest] : patchDests_) {
+        if (!dest || dest->leadMs() <= 0) { continue; }
+        speakers.insert(node);
+        const std::uint64_t total = dest->starvedCallbacks();
+        const auto was = patchStarvedAtMinute_.find(node);
+        const std::uint64_t before = was == patchStarvedAtMinute_.end() ? total : was->second;
+        const std::uint64_t minute = total >= before ? total - before : 0;
+        patchStarvedAtMinute_[node] = total;
+        const int speakerMs = dest->leadMs();
+        const int speakerNext = cascade::sink::nextAudioLead(minute, speakerMs, audioBufferMs_);
+        if (speakerNext > speakerMs) {
+            dest->setLeadMs(speakerNext);
+            (void)sayRaised(speakerNext, minute, " (patch speaker)");
+        }
+    }
+    for (auto it = patchStarvedAtMinute_.begin(); it != patchStarvedAtMinute_.end();) {
+        it = speakers.count(it->first) != 0 ? std::next(it) : patchStarvedAtMinute_.erase(it);
+    }
+}
+
+void AppWindow::setAudioBufferMs(int ms) {
+    if (!cascade::sink::validAudioBufferSetting(ms)) { ms = 0; }
+    const bool changed = ms != audioBufferMs_;
+    audioBufferMs_ = ms;
+    cascade::sink::AudioOut& out = pipeline_.audio();
+    // A fixed value is the lead from now on (and applying it again is harmless:
+    // a restore from the saved file does it before the first prime). AUTOMATIC
+    // starts again from the default - but only when it is a CHANGE to automatic: a
+    // restore that names automatic for a window that is already automatic must not
+    // undo what the session has had to do.
+    int toMs = 0;
+    if (ms != 0) {
+        toMs = ms;
+    } else if (changed) {
+        toMs = cascade::sink::audioLeadMs(cascade::sink::AudioOut::kPrimeFrames);
+        // CHOOSING AUTOMATIC (from a fixed value) IS A FRESH START, and forgets the depth it had
+        // remembered across launches: the person asking for it is asking not to be held at what an
+        // earlier session had to do. Picking a fixed value does NOT forget it (it is kept, and
+        // ignored while the fixed value is in force).
+        audioBufferAutoMs_ = 0;
+    }
+    if (toMs != 0) {
+        out.setLeadFrames(cascade::sink::audioLeadFrames(toMs));
+        audioLeadRaisedToMs_ = 0;   // the notice was about automatic mode's last step
+        audioLeadRaisedStarved_ = 0;
+        for (const auto& entry : patchDests_) {
+            if (entry.second && entry.second->leadMs() > 0) { entry.second->setLeadMs(toMs); }
+        }
+    }
+}
+
+int AppWindow::audioLeadNowMs() {
+    return cascade::sink::audioLeadMs(pipeline_.audio().leadFrames());
+}
+
+std::string AppWindow::audioLeadNotice() const {
+    if (audioLeadRaisedToMs_ <= 0) { return std::string(); }
+    std::string s;
+    cascade::core::formatUtf8(
+        s, tr("Audio buffer raised to %d ms: this computer fell behind %d times in the last minute."),
+        audioLeadRaisedToMs_, audioLeadRaisedStarved_);
+    return s;
 }
 
 // What the Sinks panel says while a device has not answered yet. Named because
@@ -4819,10 +4965,11 @@ void AppWindow::drawStatusColumn() {
         const double ringMs = shownAudio.ringMs;
         const double capMs = shownAudio.capMs;
         cascade::core::formatUtf8(l1, tr("ring %.0f of %.0f ms"), ringMs, capMs);
-        StatusLine lines[3] = {
+        StatusLine lines[4] = {
             {under == 0 ? tr("no callback has starved yet") : tr("starved callbacks, since start"),
              under == 0 ? kFaint : cascade::gui::theme::kAlarm},
             {l1.c_str(), kFaint},
+            {nullptr, kFaint},
             {nullptr, kFaint}};
         int n = 2;
         if (!audioFrom.empty()) {
@@ -4837,6 +4984,12 @@ void AppWindow::drawStatusColumn() {
             cascade::core::formatUtf8(l2, tr("plugin gaps %llu, %llu frames"), gaps, gapFrames);
             lines[n++] = {l2.c_str(), gaps == 0 ? kFaint : cascade::gui::theme::kAlarm};
         }
+        // THE BUFFER THAT DEEPENED ITSELF (0.99.73), said once it has: the same
+        // sentence the Sinks rail carries (audioLeadNotice). Absent, and so the
+        // card exactly as it was, until a minute has closed with the computer
+        // falling behind.
+        const std::string leadNote = audioLeadNotice();
+        if (!leadNote.empty()) { lines[n++] = {leadNote.c_str(), cascade::gui::theme::kAmber}; }
         card(tr("AUDIO - UNDERRUNS"), cascade::gui::theme::kAmber, v.c_str(), lines, n);
     }
 
@@ -4928,6 +5081,12 @@ void AppWindow::drawStatusColumn() {
     // that had stopped working. loadedDecoderCount() asks the runner's own
     // question instead: does this module supply a decoder table at all.
     const std::size_t installed = loadedDecoderCount();
+    // IDLE IS NOT "NOT FED" (0.99.73): a decoder set to AUTO that nothing is using has no
+    // instance by design, and "28 not fed" under a card of 30 fitted decoders would report as
+    // a fault the thing the owner asked for. It is counted on its own.
+    const std::size_t idleDecoders = idleDecoderCount();
+    const std::size_t notFedDecoders =
+        installed > feeding + idleDecoders ? installed - feeding - idleDecoders : 0u;
     if (!rxRunning) {
         // READY, NOT RUNNING. The instances are built and matched; the receiver
         // that would feed them is stopped, so nothing is decoding and the card
@@ -4936,9 +5095,11 @@ void AppWindow::drawStatusColumn() {
         cascade::core::formatUtf8(l0, tr("of %zu fitted - receiver stopped"), installed);
     } else {
         cascade::core::formatUtf8(v, tr("%zu running"), feeding);
-        if (installed > feeding) {
+        if (notFedDecoders > 0) {
             cascade::core::formatUtf8(l0, tr("of %zu fitted, %zu not fed"), installed,
-                          installed - feeding);
+                          notFedDecoders);
+        } else if (idleDecoders > 0) {
+            cascade::core::formatUtf8(l0, tr("of %zu fitted, %zu idle"), installed, idleDecoders);
         } else {
             cascade::core::formatUtf8(l0, tr("of %zu fitted"), installed);
         }
@@ -7357,6 +7518,55 @@ void AppWindow::drawSinksSection() {
         if (!audioHealthNote_.empty()) {
             ImGui::TextColored(cascade::gui::theme::warning(), "%s",
                                audioHealthNote_.c_str());
+        }
+        // THE AUDIO BUFFER (0.99.73): how much sound is held back before it
+        // plays. AUTOMATIC starts at 120 ms and deepens itself when this computer
+        // falls behind (closeAudioMinute); the rest are fixed and never step. The
+        // preview carries the value in force - "AUTOMATIC  240 ms" - because that
+        // is the number the person came here to find, and the notice below it
+        // says when and why automatic mode moved it. Opening the list never
+        // changes it; only a pick does (the same BeginCombo discipline as the
+        // bandwidth). The "ms" is the unit, written as the rail's sliders write
+        // theirs ("%.0f kHz"), not a sentence to translate.
+        {
+            // std::string and formatUtf8, not a fixed buffer: a translation of AUTOMATIC
+            // is whatever length the language makes it (tests/test_i18n.cpp refuses a
+            // translated format into a sizeof'd buffer).
+            std::string preview;
+            if (audioBufferMs_ == 0) {
+                cascade::core::formatUtf8(preview, "%s  %d ms", tr("AUTOMATIC"), audioLeadNowMs());
+            } else {
+                cascade::core::formatUtf8(preview, "%d ms", audioBufferMs_);
+            }
+            if (ImGui::BeginCombo(cascade::gui::labelAboveIfNeeded(trId("Audio buffer")),
+                                  preview.c_str())) {
+                for (const int choice : {0, 120, 240, 480, 960}) {
+                    std::string item;
+                    if (choice == 0) {
+                        item = tr("AUTOMATIC");
+                    } else {
+                        cascade::core::formatUtf8(item, "%d ms", choice);
+                    }
+                    if (ImGui::Selectable(item.c_str(), audioBufferMs_ == choice)) {
+                        setAudioBufferMs(choice);
+                    }
+                    if (audioBufferMs_ == choice) { ImGui::SetItemDefaultFocus(); }
+                }
+                ImGui::EndCombo();
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip(
+                    tr("How much sound is held back before it plays. A larger buffer rides "
+                       "out a slow computer, at the cost of a longer delay between the radio "
+                       "and the speakers. AUTOMATIC starts at 120 ms and deepens itself, to "
+                       "at most 960 ms, when this computer falls behind."));
+            }
+            const std::string leadNote = audioLeadNotice();
+            if (!leadNote.empty()) {
+                ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
+                ImGui::TextWrapped("%s", leadNote.c_str());
+                ImGui::PopStyleColor();
+            }
         }
         // WHY THERE IS NO SOUND, said where the sound settings are. This is the
         // panel a user goes to when the speakers are silent, and finding a
@@ -12670,6 +12880,7 @@ void AppWindow::drawDecodersSection() {
         rd.key = cascade::core::pluginKey(lp);
         rd.stopped = pluginIsStopped(rd.key);
         rd.feeding = pluginRunner_.isFeeding(rd.key);
+        rd.idle = pluginIsIdle(rd.key);
         runnable.push_back(std::move(rd));
     }
     const int runningNow = cascade::gui::runningCount(runnable, pipeline_.running());
@@ -12730,6 +12941,7 @@ void AppWindow::drawDecodersSection() {
             row.key = cascade::core::pluginKey(p);
             row.stopped = pluginIsStopped(row.key);
             row.feeding = pluginRunner_.isFeeding(row.key);
+            row.idle = pluginIsIdle(row.key);
             if (ImGui::Button(cascade::gui::rowKeyLabel(row), ImVec2(-1.0f, 0.0f))) {
                 stopKey = row.key;
                 stopTo = cascade::gui::rowOffersStop(row);
@@ -12739,6 +12951,12 @@ void AppWindow::drawDecodersSection() {
                     ImGui::SetTooltip(tr("Stop this decoder. It stays fitted and keeps its "
                                       "presets; nothing else is touched. Start it again "
                                       "with this key or with one of its presets."));
+                } else if (row.idle && !row.stopped) {
+                    // IDLE, not stopped (0.99.73): the decoder is working as designed.
+                    ImGui::SetTooltip(tr("This decoder is idle: nothing is using it, so it is "
+                                      "not running. It starts by itself when you open its "
+                                      "window or the Decoder output window. START keeps it "
+                                      "running all the time."));
                 } else {
                     ImGui::SetTooltip(tr("Start this decoder again. It begins decoding as "
                                       "soon as the receiver is on a frequency it can "
@@ -12860,7 +13078,13 @@ void AppWindow::drawPluginsSection() {
     for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
         if (!p.loaded) { ++refused; }
     }
-    const bool notFed = pipeline_.running() && decoders > fedPlugins;
+    // AN IDLE DECODER IS NOT A FAULT (0.99.73): a decoder set to AUTO that nothing is using is not
+    // running by design, and counting it here would put "28 fitted decoders are not being fed" on
+    // a rail whose owner asked for exactly that.
+    const std::size_t idlePlugins = idleDecoderCount();
+    const std::size_t notFedPlugins =
+        decoders > fedPlugins + idlePlugins ? decoders - fedPlugins - idlePlugins : 0u;
+    const bool notFed = pipeline_.running() && notFedPlugins > 0u;
     if (refused > 0 || notFed) {
         ImGui::PushStyleColor(ImGuiCol_Text,
                               refused > 0 ? kErrorRed : cascade::gui::theme::warning());
@@ -12871,10 +13095,10 @@ void AppWindow::drawPluginsSection() {
                                refused);
         } else {
             ImGui::TextWrapped(
-                (decoders - fedPlugins) == 1u
+                notFedPlugins == 1u
                     ? tr("%zu fitted decoder is not being fed. The window says why.")
                     : tr("%zu fitted decoders are not being fed. The window says why."),
-                decoders - fedPlugins);
+                notFedPlugins);
         }
         ImGui::PopStyleColor();
     }
@@ -13794,8 +14018,28 @@ void AppWindow::refreshPluginRunner() {
     // it changes: this function runs after every rescan, and a rescan is
     // exactly when the two halves have been cleared and could otherwise start a
     // plugin the user stopped.
-    pluginRunner_.setStopped(pluginsStopped_);
-    pluginUi_.setStopped(pluginsStopped_);
+    //
+    // AND THE DORMANT SET WITH IT (0.99.73): the plugins set to AUTO that nothing is
+    // using are given no instance by these wholesale rebuilds either, so a new
+    // source or rate recreates only what is running. A plugin pinned to ALWAYS is
+    // running by definition; it is marked so here, before the sets are worked out
+    // - and so is one that is in use for as long as it is fitted (a processor in
+    // the audio chain), which this rebuild builds like an ALWAYS one, so its first
+    // lifecycle step has nothing to wake.
+    for (const cascade::core::LoadedPlugin& lp : pluginHost_.plugins()) {
+        if (!lp.loaded) { continue; }
+        const std::string lkey = cascade::core::pluginKey(lp);
+        if (lkey.empty()) { continue; }
+        const cascade::core::PluginRun mode = pluginRunMode(lkey);
+        if (mode == cascade::core::PluginRun::Always ||
+            (mode == cascade::core::PluginRun::Auto &&
+             cascade::core::pluginCapsStandingDuty(lp.capabilities))) {
+            pluginLife_[cascade::core::pluginRunId(lkey)].running = true;
+        } else if (mode == cascade::core::PluginRun::Stopped) {
+            pluginLife_[cascade::core::pluginRunId(lkey)].running = false;
+        }
+    }
+    pushPluginHoldSets();
     // THE HOST TABLE FIRST, THEN THE DECODERS (0.99.31). The ABI promises that
     // attach() runs before any capability's create() (CascadeHostClientApi);
     // the runner used to be rebuilt first, so on the first rebuild of a
@@ -13879,6 +14123,16 @@ void AppWindow::refreshPluginRunner() {
         }
     }
 
+    attachBasemapAndTrackInfo();
+    // Grants LAST, and every time. rescanPlugins() calls PluginUi::clear(),
+    // which drops the permission set along with the instances, so without this
+    // a rescan would silently revoke every permission the user had given — and
+    // the tracker that worked a moment ago would go quiet with no explanation.
+    applyPluginTuneGrants();
+    applyPluginSettingsGrants();
+}
+
+void AppWindow::attachBasemapAndTrackInfo() {
     // THE BASEMAP, if a plugin supplies one. The first loaded plugin declaring
     // the capability wins: two basemaps cannot both be the map, and picking
     // silently by load order is more predictable than picking by some quality
@@ -13890,6 +14144,11 @@ void AppWindow::refreshPluginRunner() {
     // coastlines rather than keeping tiles from a plugin the user has switched
     // off. Skipping it in the runner and the UI half but not here would leave
     // the stopped plugin drawing the entire map background.
+    //
+    // A DORMANT plugin (0.99.73, AUTO and not in use) is NOT skipped: a basemap is a
+    // static table the map draws from, with no instance to create or poll, so being
+    // dormant changes nothing about it. Only STOPPED does - which is why this is a
+    // function of its own that stopping or starting ONE plugin can call without a rebuild.
     const CascadeBasemapApi* wantBasemap = nullptr;
     for (const cascade::core::LoadedPlugin& lp : pluginHost_.plugins()) {
         if (lp.loaded && lp.basemap != nullptr &&
@@ -13913,12 +14172,6 @@ void AppWindow::refreshPluginRunner() {
         }
     }
     trackInfo_.attach(wantTrackInfo);
-    // Grants LAST, and every time. rescanPlugins() calls PluginUi::clear(),
-    // which drops the permission set along with the instances, so without this
-    // a rescan would silently revoke every permission the user had given — and
-    // the tracker that worked a moment ago would go quiet with no explanation.
-    applyPluginTuneGrants();
-    applyPluginSettingsGrants();
 }
 
 // GL_CLAMP_TO_EDGE is OpenGL 1.2; the headers Windows ships stop at 1.1, and
@@ -17109,7 +17362,11 @@ void AppWindow::drawScopeModeControl() {
     // one whose tracker the host refused; this line used to read "no aircraft
     // source installed" in all three, which is a lie in two of them and sends
     // the user to buy what they already own. See gui/module_census.hpp.
-    if (pluginUi_.trackPluginNames().empty()) {
+    //
+    // (0.99.73: asked of the module's DECLARATION, not of its instances. A tracker set to AUTO
+    // that nothing is using has no instance - and the scope switch above is what wakes it - so
+    // an empty instance list is no longer evidence that there is no tracker.)
+    if (declaredTrackPluginNames().empty()) {
         const cascade::gui::ModuleCensus census = cascade::gui::censusModules(
             pluginHost_.plugins(), CASCADE_CAP_TRACK_SOURCE,
             [this](const std::string& key) { return pluginIsStopped(key); });
@@ -18387,7 +18644,8 @@ void AppWindow::drawFittedModulesWindow() {
             }
             cascade::gui::FittedModule m = cascade::gui::makeFittedModule(
                 p, pluginIsStopped(file), pluginRunner_.isFeeding(file), std::move(idleDetail),
-                pluginUi_.tuneAllowed(cascade::core::PluginUi::tuneKey(p)));
+                pluginUi_.tuneAllowed(cascade::core::PluginUi::tuneKey(p)), pluginIsIdle(file),
+                pluginRunMode(file) == cascade::core::PluginRun::Always);
             // Host API level 1: the settings grant (offered only to a module that has asked),
             // its command keys and its newest warning.
             m.settingsCapable = std::find(settingsAskers.begin(), settingsAskers.end(), file) !=
@@ -18505,6 +18763,12 @@ void AppWindow::drawFittedModulesWindow() {
                 break;
             case cascade::gui::FittedModulesAction::Kind::Stop:
                 setPluginStopped(act.file, true);
+                break;
+            case cascade::gui::FittedModulesAction::Kind::SetKeepRunning:
+                // The "keep running" tick: ALWAYS, or back to AUTO (running until the clock
+                // takes it down, if nothing is using it).
+                setPluginRun(act.file, act.flag ? cascade::core::PluginRun::Always
+                                                : cascade::core::PluginRun::Auto);
                 break;
             case cascade::gui::FittedModulesAction::Kind::Remove:
                 removeInstalledPlugin(act.file);
@@ -18681,7 +18945,7 @@ void AppWindow::drawPluginWindows() {
     }
 
     // --- the map pages ------------------------------------------------------
-    // ONE PAGE PER PLUGIN THAT HAS A TRACK INSTANCE. The single "Map" window
+    // ONE PAGE PER PLUGIN THAT DECLARES A TRACK SOURCE. The single "Map" window
     // this replaces drew every plugin's targets merged, so switching from the
     // Satellites plugin to ADS-B still showed "the satellite map". The page
     // set is decided by CAPABILITY, not content: an ADS-B page with no
@@ -18689,7 +18953,13 @@ void AppWindow::drawPluginWindows() {
     // empty" answers the user's question and "the page is missing" does not.
     // Pages are created lazily here and never destroyed while the app runs;
     // rescanPlugins() leaves them in place.
-    for (const std::string& name : pluginUi_.trackPluginNames()) {
+    //
+    // CAPABILITY, NOT INSTANCE (0.99.73): a tracker set to AUTO that nothing is
+    // using is dormant and has no track instance, yet its page must exist - the
+    // page's row on the rail, and opening it, is how the tracker is woken. The
+    // names come from the module's declaration, not from PluginUi's instances.
+    const std::vector<std::string> declaredTrackers = declaredTrackPluginNames();
+    for (const std::string& name : declaredTrackers) {
         ensureMapPage(name);
     }
     // A page whose plugin is GONE (removed, or a rescan came back without it)
@@ -18698,7 +18968,7 @@ void AppWindow::drawPluginWindows() {
     // than in rescanPlugins is what lets live pages survive a rescan with
     // their view state intact (see there).
     {
-        const std::vector<std::string>& live = pluginUi_.trackPluginNames();
+        const std::vector<std::string>& live = declaredTrackers;
         bool anyDead = false;
         for (const MapPage& pg : mapPages_) {
             if (std::find(live.begin(), live.end(), pg.plugin) == live.end()) {
@@ -19660,51 +19930,94 @@ void AppWindow::drawPluginWindowRows() {
         const std::string key = pluginKeyForDisplayName(displayName);
         if (!key.empty()) { maybeAutoPresetOnShow(key); }
     };
-    for (const cascade::core::HostImage& im : pluginImages_) {
-        const std::string id = im.plugin + " image###image_" + im.plugin;
+    // LISTED FROM WHAT EACH MODULE DECLARES, NOT FROM ITS INSTANCES (0.99.73). A plugin set to AUTO
+    // that nothing is using is dormant and has no instance, yet its window rows must be here:
+    // pressing one is how a dormant plugin is woken (updatePluginLifecycle sees the window shown
+    // on the next frame and starts that plugin alone). A row of a plugin that is running reads
+    // as it always did; one of a dormant plugin reads IDLE, there being nothing to count or to
+    // wait for yet. A STOPPED plugin has no rows, as before - stopped means no windows at all.
+    for (const cascade::core::LoadedPlugin& lp : pluginHost_.plugins()) {
+        if (!lp.loaded || lp.imageDecoder == nullptr ||
+            pluginIsStopped(cascade::core::pluginKey(lp))) {
+            continue;
+        }
+        const cascade::core::HostImage* live = nullptr;
+        for (const cascade::core::HostImage& cand : pluginImages_) {
+            if (cand.plugin == lp.name) {
+                live = &cand;
+                break;
+            }
+        }
+        const std::string id = imageWindowId(lp.name);
         const bool on = pluginWindows_.shown(id);
-        const char* chip = (im.width == 0u || im.height == 0u) ? tr("WAIT")
-                                                               : (im.complete ? tr("IMG") : "RX");
+        const char* chip = live == nullptr
+                               ? tr("IDLE")
+                               : ((live->width == 0u || live->height == 0u)
+                                      ? tr("WAIT")
+                                      : (live->complete ? tr("IMG") : "RX"));
         // The visible half as one format string; the id after ### is unchanged.
         std::string rowShown;
-        cascade::core::formatUtf8(rowShown, tr("%s image"), ident(im.plugin).c_str());
-        const std::string row = rowShown + "###imgrow:" + ident(im.plugin);
+        cascade::core::formatUtf8(rowShown, tr("%s image"), ident(lp.name).c_str());
+        const std::string row = rowShown + "###imgrow:" + ident(lp.name);
         if (benchSwitchRow(row.c_str(), on, chip, cascade::gui::theme::kPhosphor, on, true,
                            tr("Opens this decoder's picture window. WAIT until the first\n"
                               "picture arrives, RX while one is coming in, IMG when it is\n"
                               "complete. Nothing opens this window for you - opening it\n"
                               "also tunes and starts the decoder, just like its preset."))) {
             pluginWindows_.toggle(id);
-            autoPresetOnClick(on, im.plugin);
+            autoPresetOnClick(on, lp.name);
         }
     }
-    for (const cascade::core::HostPanel& p : pluginUi_.panels()) {
-        const std::string id = p.title + "###panel_" + p.plugin;
+    for (const cascade::core::LoadedPlugin& lp : pluginHost_.plugins()) {
+        if (!lp.loaded || lp.panel == nullptr || pluginIsStopped(cascade::core::pluginKey(lp))) {
+            continue;
+        }
+        const std::string title = panelTitleOf(lp);
+        const cascade::core::HostPanel* live = nullptr;
+        for (const cascade::core::HostPanel& cand : pluginUi_.panels()) {
+            if (cand.plugin == lp.name && cand.title == title) {
+                live = &cand;
+                break;
+            }
+        }
+        const std::string id = panelWindowId(lp.name, title);
         const bool on = pluginWindows_.shown(id);
         std::string chip;
-        cascade::core::formatUtf8(chip, tr("%d ROW"), static_cast<int>(p.rows.size()));
+        if (live == nullptr) {
+            chip = tr("IDLE");
+        } else {
+            cascade::core::formatUtf8(chip, tr("%d ROW"), static_cast<int>(live->rows.size()));
+        }
         const std::string row =
-            ident(p.title) + "###panelrow:" + ident(p.plugin) + ":" + ident(p.title);
+            ident(title) + "###panelrow:" + ident(lp.name) + ":" + ident(title);
         if (benchSwitchRow(row.c_str(), on, chip.c_str(), cascade::gui::theme::kPhosphor, on, true,
                            tr("Opens this plugin's own window. Nothing opens it for you;\n"
                               "close it from its key and it stays closed - opening it also\n"
                               "tunes and starts the decoder, just like its preset."))) {
             pluginWindows_.toggle(id);
-            autoPresetOnClick(on, p.plugin);
+            autoPresetOnClick(on, lp.name);
         }
     }
-    for (const cascade::core::HostInstrument& in : pluginUi_.instruments()) {
-        const std::string id = instrumentWindowId(in);
+    // INSTRUMENTS: every live one first (the demonstration faces among them, which belong to no
+    // module), then the declared ones of a module that has no instance because it is dormant.
+    const auto instrumentRow = [&](const std::string& pluginName, const std::string& title,
+                                   const cascade::core::HostInstrument* in) {
+        const std::string id = instrumentWindowIdFor(pluginName, title);
         const bool on = pluginWindows_.shown(id);
         // NEW while an event has arrived that the window has not drawn - the
         // chip is how a closed pager still says it has a message.
-        const auto seen = instrumentSeen_.find(id);
-        const bool unread =
-            in.have && (seen == instrumentSeen_.end() || seen->second.seq != in.state.seq);
-        char chip[24];
-        cascade::gui::instrumentChip(in, unread, chip, sizeof chip);
+        bool unread = false;
+        char chipBuf[24] = {0};
+        const char* chip = chipBuf;
+        if (in != nullptr) {
+            const auto seen = instrumentSeen_.find(id);
+            unread = in->have && (seen == instrumentSeen_.end() || seen->second.seq != in->state.seq);
+            cascade::gui::instrumentChip(*in, unread, chipBuf, sizeof chipBuf);
+        } else {
+            chip = tr("IDLE");
+        }
         const std::string row =
-            ident(in.title) + "###instrow:" + ident(in.plugin) + ":" + ident(in.title);
+            ident(title) + "###instrow:" + ident(pluginName) + ":" + ident(title);
         if (benchSwitchRow(row.c_str(), on, chip,
                            unread ? cascade::gui::theme::kGold : cascade::gui::theme::kPhosphor,
                            on || unread, true,
@@ -19713,8 +20026,25 @@ void AppWindow::drawPluginWindowRows() {
                               "for you; close it from its key and it stays closed - opening\n"
                               "it also tunes and starts the decoder, just like its preset."))) {
             pluginWindows_.toggle(id);
-            autoPresetOnClick(on, in.plugin);
+            autoPresetOnClick(on, pluginName);
         }
+    };
+    for (const cascade::core::HostInstrument& in : pluginUi_.instruments()) {
+        instrumentRow(in.plugin, in.title, &in);
+    }
+    for (const cascade::core::LoadedPlugin& lp : pluginHost_.plugins()) {
+        if (!lp.loaded || lp.instrument == nullptr || pluginIsStopped(cascade::core::pluginKey(lp))) {
+            continue;
+        }
+        const std::string title = instrumentTitleOf(lp);
+        bool hasInstance = false;
+        for (const cascade::core::HostInstrument& in : pluginUi_.instruments()) {
+            if (in.plugin == lp.name && in.title == title) {
+                hasInstance = true;
+                break;
+            }
+        }
+        if (!hasInstance) { instrumentRow(lp.name, title, nullptr); }
     }
 }
 
@@ -20548,7 +20878,7 @@ void AppWindow::consumePendingUserPresetEdit() {
 }
 
 void AppWindow::applyPluginPreset(const cascade::core::LoadedPlugin& p,
-                                  const CascadePreset& ps) {
+                                  const CascadePreset& ps, bool pin) {
     // A PRESET ON A STOPPED PLUGIN STARTS IT. Pressing "ADS-B 1090 MHz" is an
     // unambiguous "I want this plugin now", and the alternative is the worst
     // outcome this feature can produce: the radio dutifully retunes to 1090 MHz
@@ -20558,7 +20888,12 @@ void AppWindow::applyPluginPreset(const cascade::core::LoadedPlugin& p,
     // the instances, and it has to happen after the receiver has moved anyway.
     //
     // The row keeps its Stop button, so this is undone with one click.
-    recordPluginStopped(cascade::core::pluginKey(p), false);
+    //
+    // AND IT PINS THE PLUGIN TO ALWAYS (0.99.73): a preset press is the deliberate "run this", so
+    // the plugin goes on running when its window is closed. The tune that merely OPENING a window
+    // does (pin == false) leaves the run state alone - the window wants the plugin while it is
+    // open, and that is all it should do.
+    if (pin) { recordPluginStopped(cascade::core::pluginKey(p), false); }
 
     // MODE FIRST, because the mode's default bandwidth would otherwise
     // overwrite the one the preset asked for.
@@ -20672,37 +21007,25 @@ void AppWindow::applyPluginPreset(const cascade::core::LoadedPlugin& p,
 }
 
 void AppWindow::openPluginWindowsFor(const cascade::core::LoadedPlugin& p) {
-    {
-        const std::vector<std::string>& trackNames = pluginUi_.trackPluginNames();
-        if (std::find(trackNames.begin(), trackNames.end(), p.name) != trackNames.end()) {
-            MapPage& pg = ensureMapPage(p.name);
-            pg.open = true;
-        }
+    // DECIDED FROM WHAT THE MODULE DECLARES (0.99.73), not from instances: a plugin that was
+    // dormant a moment ago has none yet, and this runs before the next frame wakes it. Each id is
+    // the one the draw loops and the rail rows build from the same declared names.
+    const bool tracker = p.trackSource != nullptr && !pluginIsStopped(cascade::core::pluginKey(p));
+    if (tracker) {
+        MapPage& pg = ensureMapPage(p.name);
+        pg.open = true;
     }
     if (p.imageDecoder != nullptr) {
-        pluginWindows_.show(p.name + " image###image_" + p.name);
+        pluginWindows_.show(imageWindowId(p.name));
     }
-    // A panel's id carries the panel's OWN TITLE, which only the instance
-    // knows, so this asks the instances rebuilt a moment ago rather than the
-    // descriptor. A module may publish more than one.
-    for (const cascade::core::HostPanel& hp : pluginUi_.panels()) {
-        if (hp.plugin == p.name) { pluginWindows_.show(hp.title + "###panel_" + hp.plugin); }
+    // A panel's id carries the panel's OWN TITLE, which is the module's declared one.
+    if (p.panel != nullptr) {
+        pluginWindows_.show(panelWindowId(p.name, panelTitleOf(p)));
     }
-    bool ownWindow = p.imageDecoder != nullptr;
-    {
-        const std::vector<std::string>& trackNames = pluginUi_.trackPluginNames();
-        if (std::find(trackNames.begin(), trackNames.end(), p.name) != trackNames.end()) {
-            ownWindow = true;
-        }
-    }
-    for (const cascade::core::HostPanel& hp : pluginUi_.panels()) {
-        if (hp.plugin == p.name) { ownWindow = true; }
-    }
-    for (const cascade::core::HostInstrument& in : pluginUi_.instruments()) {
-        if (in.plugin == p.name) {
-            pluginWindows_.show(instrumentWindowId(in));
-            ownWindow = true;
-        }
+    bool ownWindow = p.imageDecoder != nullptr || tracker || p.panel != nullptr;
+    if (p.instrument != nullptr) {
+        pluginWindows_.show(instrumentWindowIdFor(p.name, instrumentTitleOf(p)));
+        ownWindow = true;
     }
     // A TEXT DECODER WITH NO WINDOW OF ITS OWN is read in the shared Decoder
     // output window, so that is the window this press opens - otherwise
@@ -20992,39 +21315,316 @@ bool AppWindow::pluginIsStopped(const std::string& pluginKey) const {
     // An empty key is what a record with no path produces; it must never
     // match, or one stray entry would stop every path-less plugin at once.
     if (pluginKey.empty()) { return false; }
-    return std::find(pluginsStopped_.begin(), pluginsStopped_.end(), pluginKey) !=
-           pluginsStopped_.end();
+    return pluginRunMode(pluginKey) == cascade::core::PluginRun::Stopped;
+}
+
+cascade::core::PluginRun AppWindow::pluginRunMode(const std::string& pluginKey) const {
+    const std::string id = cascade::core::pluginRunId(pluginKey);
+    if (id.empty()) { return cascade::core::PluginRun::Auto; }
+    const auto it = pluginRun_.find(id);
+    return it == pluginRun_.end() ? cascade::core::PluginRun::Auto : it->second;
+}
+
+bool AppWindow::pluginShouldRun(const cascade::core::LoadedPlugin& p) const {
+    const std::string key = cascade::core::pluginKey(p);
+    switch (pluginRunMode(key)) {
+        case cascade::core::PluginRun::Stopped: return false;
+        case cascade::core::PluginRun::Always: return true;
+        case cascade::core::PluginRun::Auto: break;
+    }
+    // A module with nothing to start has no run state to speak of, and one that is in use for as
+    // long as it is fitted (a processor in the audio chain) is never put to sleep.
+    if (!cascade::core::pluginCapsHaveLifecycle(p.capabilities) ||
+        cascade::core::pluginCapsStandingDuty(p.capabilities)) {
+        return true;
+    }
+    const auto it = pluginLife_.find(cascade::core::pluginRunId(key));
+    return it != pluginLife_.end() && it->second.running;
+}
+
+bool AppWindow::pluginIsIdle(const std::string& pluginKey) const {
+    if (pluginKey.empty()) { return false; }
+    for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
+        if (!p.loaded || cascade::core::pluginKey(p) != pluginKey) { continue; }
+        return pluginRunMode(pluginKey) == cascade::core::PluginRun::Auto && !pluginShouldRun(p);
+    }
+    return false;
+}
+
+void AppWindow::pushPluginHoldSets() {
+    // THE TWO SETS THE REBUILDS OBEY, by plugin id: who the user stopped, and who is set to AUTO
+    // and asleep. A plugin in the first is held by its stop (and has no run state to speak of);
+    // one in the second is held because nothing is using it. A module with nothing to start is in
+    // neither.
+    std::vector<std::string> stopped;
+    for (const auto& [id, mode] : pluginRun_) {
+        if (mode == cascade::core::PluginRun::Stopped) { stopped.push_back(id); }
+    }
+    std::vector<std::string> dormant;
+    for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
+        if (!p.loaded) { continue; }
+        const std::string key = cascade::core::pluginKey(p);
+        if (key.empty() || pluginIsStopped(key)) { continue; }
+        if (!cascade::core::pluginCapsHaveLifecycle(p.capabilities)) { continue; }
+        if (!pluginShouldRun(p)) { dormant.push_back(cascade::core::pluginRunId(key)); }
+    }
+    pluginRunner_.setStopped(stopped);
+    pluginUi_.setStopped(stopped);
+    pluginRunner_.setDormant(dormant);
+    pluginUi_.setDormant(std::move(dormant));
+}
+
+void AppWindow::startPluginInstances(const cascade::core::LoadedPlugin& p) {
+    // ONE PLUGIN'S INSTANCES, ALONE (0.99.73). The UI half attaches its host client and creates its
+    // track source, panel and instrument; the runner creates its decoders against the rates and
+    // centre it was last built for. Nothing else is rebuilt, so the other plugins keep their
+    // state and the stream keeps its epoch.
+    //
+    // NO RECEIVER DECODERS WHILE THE PATCH RUNS (see refreshPluginRunner): the patch has its own
+    // instances of these plugins, and a second set fed the generator's noise would overwrite what
+    // the patch finds. Stopping the patch rebuilds the receiver's set from the run states.
+    pluginUi_.startPlugin(p);
+    if (!patchRunning_) { pluginRunner_.startPlugin(p); }
+    // The mute snapshot carries "is it actually decoding", and that has just changed.
+    rebuildMuteStates();
+}
+
+void AppWindow::stopPluginInstances(const std::string& pluginKey) {
+    pluginRunner_.stopPlugin(pluginKey);
+    pluginUi_.stopPlugin(pluginKey);
+    rebuildMuteStates();
+}
+
+std::vector<std::string> AppWindow::declaredTrackPluginNames() const {
+    std::vector<std::string> out;
+    for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
+        if (!p.loaded || p.trackSource == nullptr) { continue; }
+        if (pluginIsStopped(cascade::core::pluginKey(p))) { continue; }
+        out.push_back(p.name);
+    }
+    return out;
+}
+
+std::size_t AppWindow::idleDecoderCount() const {
+    std::size_t n = 0;
+    for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
+        if (!p.loaded) { continue; }
+        if (p.decoder == nullptr && p.iqDecoder == nullptr && p.imageDecoder == nullptr) { continue; }
+        if (pluginIsIdle(cascade::core::pluginKey(p))) { ++n; }
+    }
+    return n;
+}
+
+std::size_t AppWindow::wakeableTextDecoderCount() const {
+    std::size_t n = 0;
+    for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
+        if (!p.loaded || (p.decoder == nullptr && p.iqDecoder == nullptr)) { continue; }
+        if (!pluginIsStopped(cascade::core::pluginKey(p))) { ++n; }
+    }
+    return n;
+}
+
+cascade::core::PluginUse AppWindow::pluginUseOf(const cascade::core::LoadedPlugin& p,
+                                                const std::string& playingKey,
+                                                std::size_t browserSessions) const {
+    // THE SIGNALS AND NOTHING ELSE (core/plugin_run.hpp). Coverage accumulation, the web snapshot
+    // and the aircraft-info lookups are passive consumers and do not appear here: a user who
+    // wants background feeding ticks "keep running".
+    cascade::core::PluginUse u;
+    const std::string key = cascade::core::pluginKey(p);
+    // One of its image, panel or instrument windows is shown.
+    if (p.imageDecoder != nullptr && pluginWindows_.shown(imageWindowId(p.name))) { u.window = true; }
+    if (p.panel != nullptr && pluginWindows_.shown(panelWindowId(p.name, panelTitleOf(p)))) {
+        u.window = true;
+    }
+    if (p.instrument != nullptr &&
+        pluginWindows_.shown(instrumentWindowIdFor(p.name, instrumentTitleOf(p)))) {
+        u.window = true;
+    }
+    if (p.trackSource != nullptr) {
+        // Its map page is open, or the radar scope is showing (the scope draws every track
+        // source's targets).
+        for (const MapPage& pg : mapPages_) {
+            if (pg.plugin == p.name && pg.open) {
+                u.mapPage = true;
+                break;
+            }
+        }
+        u.radarScope = scopeMode_;
+    }
+    // A running patch node names it - by file name, as the node stores it - and, of those, a decoder
+    // whose output is wired to a Text sink (the only way its lines are shown).
+    if (patchRunning_ && !key.empty()) {
+        for (const cascade::core::patch::Node& n : patchGraph_.nodes()) {
+            if (n.kind != cascade::core::patch::NodeKind::Decoder || !n.on || n.plugin != key) {
+                continue;
+            }
+            u.patchNode = true;
+            if (patchDecoderIsShown(n.id)) { u.textSink = true; }
+        }
+    }
+    // A manual tune offers an audio-output decoder its first chance to play.
+    // Once it does, only the actual holder remains wanted by playback; the
+    // tune signal is consumed after this frame's lifecycle pass.
+    u.playingAudio = p.audioOut != nullptr &&
+                     (audioOutputTunePending_ || (!playingKey.empty() && playingKey == key));
+    // The Decoder output window is open and this is a text decoder: the audio decoder and the I/Q
+    // decoder both write their lines there (a picture decoder has a window of its own).
+    u.decoderOutput = decoderWindowOpen_ && (p.decoder != nullptr || p.iqDecoder != nullptr);
+    // A browser is watching, and this plugin publishes what a browser shows: targets or pictures.
+    u.browserSession = browserSessions > 0u && (p.trackSource != nullptr || p.imageDecoder != nullptr);
+    u.standing = cascade::core::pluginCapsStandingDuty(p.capabilities);
+    return u;
+}
+
+namespace {
+
+// The hysteresis, read once: 30 s, or FOXSDR_DORMANT_AFTER_MS for a test that cannot wait that
+// long (docs/DIAGNOSTICS.md). A value that is not a positive whole number is ignored.
+std::int64_t dormantAfterMsFromEnvironment() {
+    static const std::int64_t value = [] {
+        const char* s = std::getenv("FOXSDR_DORMANT_AFTER_MS");
+        if (s == nullptr || *s == '\0') { return cascade::core::kPluginDormantAfterMs; }
+        char* end = nullptr;
+        const long long v = std::strtoll(s, &end, 10);
+        if (end == s || *end != '\0' || v <= 0 || v > 3600000) {
+            return cascade::core::kPluginDormantAfterMs;
+        }
+        return static_cast<std::int64_t>(v);
+    }();
+    return value;
+}
+
+std::int64_t pluginClockMs() {
+    return static_cast<std::int64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch())
+            .count());
+}
+
+}  // namespace
+
+void AppWindow::updatePluginLifecycle() {
+    pluginDormantAfterMs_ = dormantAfterMsFromEnvironment();
+    const std::int64_t nowMs = pluginClockMs();
+    // Read once for the frame: the speakers' holder takes the runner's lock, and the session count
+    // the web server's.
+    const std::string playingKey = pluginRunner_.playingPluginKey();
+    const std::size_t sessions = webServer_.running() ? webServer_.sessionCount() : 0u;
+    for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
+        if (!p.loaded || !cascade::core::pluginCapsHaveLifecycle(p.capabilities)) { continue; }
+        const std::string key = cascade::core::pluginKey(p);
+        if (key.empty()) { continue; }
+        const cascade::core::PluginRun mode = pluginRunMode(key);
+        const cascade::core::PluginUse use = pluginUseOf(p, playingKey, sessions);
+        cascade::core::PluginLife& life = pluginLife_[cascade::core::pluginRunId(key)];
+        switch (cascade::core::stepPluginLife(mode, cascade::core::pluginWanted(use), nowMs,
+                                              pluginDormantAfterMs_, life)) {
+            case cascade::core::PluginLifeStep::Wake:
+                // A WAKE IS LOGGED when the signal made it: a plugin pinned to ALWAYS is started by
+                // the user's own press, which has its own line, and has no signal to name.
+                if (mode == cascade::core::PluginRun::Auto) {
+                    const char* reason = audioOutputTunePending_ && p.audioOut != nullptr &&
+                                                 playingKey != key
+                                             ? "manual tune"
+                                             : cascade::core::pluginUseSignal(use);
+                    cascade::core::diagLogf("plugin: %s woke - %s", p.name.c_str(),
+                                            reason);
+                }
+                startPluginInstances(p);
+                break;
+            case cascade::core::PluginLifeStep::Sleep:
+                if (mode == cascade::core::PluginRun::Auto) {
+                    cascade::core::diagLogf("plugin: %s dormant after 30 s without a use",
+                                            p.name.c_str());
+                }
+                stopPluginInstances(key);
+                break;
+            case cascade::core::PluginLifeStep::None:
+                break;
+        }
+    }
+    audioOutputTunePending_ = false;
+}
+
+void AppWindow::setPluginRun(const std::string& pluginKey, cascade::core::PluginRun mode) {
+    const std::string id = cascade::core::pluginRunId(pluginKey);
+    if (id.empty()) { return; }
+    const cascade::core::PluginRun was = pluginRunMode(pluginKey);
+    if (mode == cascade::core::PluginRun::Auto) {
+        pluginRun_.erase(id);  // AUTO is the absence of an entry
+    } else {
+        pluginRun_[id] = mode;
+    }
+    const cascade::core::LoadedPlugin* found = nullptr;
+    for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
+        if (p.loaded && cascade::core::pluginKey(p) == pluginKey) {
+            found = &p;
+            break;
+        }
+    }
+    cascade::core::PluginLife& life = pluginLife_[id];
+    const std::int64_t nowMs = pluginClockMs();
+    switch (mode) {
+        case cascade::core::PluginRun::Stopped:
+            life.running = false;
+            pushPluginHoldSets();
+            if (found != nullptr && was != cascade::core::PluginRun::Stopped) {
+                stopPluginInstances(pluginKey);
+            }
+            attachBasemapAndTrackInfo();
+            break;
+        case cascade::core::PluginRun::Always:
+            life.running = true;
+            life.lastWantedMs = nowMs;
+            pushPluginHoldSets();
+            if (found != nullptr) { startPluginInstances(*found); }
+            attachBasemapAndTrackInfo();
+            break;
+        case cascade::core::PluginRun::Auto:
+            // UN-PINNED (or un-stopped): the plugin is left as it is. One that was running goes on
+            // until nothing has wanted it for the hysteresis - counted from now, so unticking
+            // "keep running" does not put a plugin out the very next frame. One that was stopped
+            // stays asleep until something wants it.
+            if (was == cascade::core::PluginRun::Stopped) { life.running = false; }
+            life.lastWantedMs = nowMs;
+            pushPluginHoldSets();
+            attachBasemapAndTrackInfo();
+            break;
+    }
 }
 
 void AppWindow::recordPluginStopped(const std::string& pluginKey, bool stopped) {
-    if (pluginKey.empty()) { return; }
-    const auto it = std::find(pluginsStopped_.begin(), pluginsStopped_.end(), pluginKey);
-    if (stopped && it == pluginsStopped_.end()) {
-        pluginsStopped_.push_back(pluginKey);
-    } else if (!stopped && it != pluginsStopped_.end()) {
-        pluginsStopped_.erase(it);
+    const std::string id = cascade::core::pluginRunId(pluginKey);
+    if (id.empty()) { return; }
+    // A STOP IS STOPPED; A START IS ALWAYS (0.99.73): pressing a preset, or START, is the
+    // deliberate "run this", and it must outlast the window being closed - so it is the pinned
+    // state, not AUTO. Only recorded here: the instances are created by the rebuild that the
+    // caller (applyPluginPreset) follows with, or by the next frame's lifecycle step, which finds
+    // an ALWAYS plugin that is not running and wakes it.
+    if (stopped) {
+        pluginRun_[id] = cascade::core::PluginRun::Stopped;
+        pluginLife_[id].running = false;
+    } else {
+        pluginRun_[id] = cascade::core::PluginRun::Always;
     }
     // Down into both halves immediately. refreshPluginRunner pushes them again
     // before every rebuild, but a caller that only records (the preset path
-    // does) still leaves the live objects agreeing with the durable list.
-    pluginRunner_.setStopped(pluginsStopped_);
-    pluginUi_.setStopped(pluginsStopped_);
+    // does) still leaves the live objects agreeing with the durable state.
+    pushPluginHoldSets();
     // The mute snapshot holds the same running state and is read every frame,
     // so it has to follow here too, not only at the next rebuild.
     rebuildMuteStates();
 }
 
 void AppWindow::setPluginStopped(const std::string& pluginKey, bool stopped) {
-    // THE SAME LIFECYCLE PATH AS EVERYTHING ELSE, deliberately. Stopping could
-    // have destroyed one plugin's instances in place, and that is precisely
-    // the second lifecycle this avoids: the retune grant, the basemap, the
-    // track-info client and the panel windows are all wired up in
-    // refreshPluginRunner, so a bespoke teardown would have to repeat every one
-    // of them and would drift from the original the first time one changed.
-    // Rebuilding costs the other plugins one create()/destroy() pair on a user
-    // action that happens seconds apart at worst.
-    recordPluginStopped(pluginKey, stopped);
-    refreshPluginRunner();
+    // ONE PLUGIN'S INSTANCES, NOT A WHOLESALE REBUILD (0.99.73). This used to record the stop and
+    // rebuild everything, "so the retune grant, the basemap, the track-info client and the panel
+    // windows would be wired up in one place". They still are: setPluginRun does the part that
+    // belongs to this plugin - its instances, its mute state, the basemap and track-info attach -
+    // and the other plugins keep their state, and the stream its epoch.
+    setPluginRun(pluginKey, stopped ? cascade::core::PluginRun::Stopped
+                                    : cascade::core::PluginRun::Always);
 
     // ONLY ON A START, and only through THIS path. This is the "Start" key on
     // the fitted-modules row (drawFittedModulesWindow's FittedModulesAction::
@@ -21038,14 +21638,17 @@ void AppWindow::setPluginStopped(const std::string& pluginKey, bool stopped) {
 }
 
 void AppWindow::maybeAutoPresetOnStart(const std::string& pluginKey) {
-    maybeAutoPreset(pluginKey, "started");
+    maybeAutoPreset(pluginKey, "started", /*pin=*/true);
 }
 
 void AppWindow::maybeAutoPresetOnShow(const std::string& pluginKey) {
-    maybeAutoPreset(pluginKey, "window opened");
+    // NOT PINNED: the window that was just opened wants the plugin for as long as it is open, and
+    // closing it lets the plugin go dormant 30 seconds later. A preset PRESS pins; this is the tune
+    // that opening a window does for you.
+    maybeAutoPreset(pluginKey, "window opened", /*pin=*/false);
 }
 
-void AppWindow::maybeAutoPreset(const std::string& pluginKey, const char* verb) {
+void AppWindow::maybeAutoPreset(const std::string& pluginKey, const char* verb, bool pin) {
     // FIND THE PLUGIN THIS KEY NAMES. Both callers only carry a file name —
     // the same identity recordPluginStopped and the tune grant use — never a
     // LoadedPlugin, so the object with its preset table has to be looked back
@@ -21094,7 +21697,7 @@ void AppWindow::maybeAutoPreset(const std::string& pluginKey, const char* verb) 
     // tune itself and the plugin's own windows. Starting a decoder (or
     // opening its window) is meant to feel like pressing its preset for it,
     // not a cut-down copy of doing so.
-    applyPluginPreset(*found, ps);
+    applyPluginPreset(*found, ps, pin);
 
     char label[CASCADE_PRESET_LABEL_CHARS + 1];
     std::snprintf(label, sizeof(label), "%.*s", CASCADE_PRESET_LABEL_CHARS,
@@ -21914,11 +22517,18 @@ void AppWindow::drawDecoderStatusRows() {
     // has a status line (the "provides no decoder this build can drive" one)
     // and no instances, and "No decoder is running" would put an idle decoder
     // on a machine that has none.
+    //
+    // AND A DORMANT DECODER IS COUNTED AS WHAT IT IS (0.99.73): fitted, working as designed, and
+    // asleep because nothing is using it. Its status list is empty for the same reason a stopped
+    // one's is - rebuild gives a sleeping plugin no instance and no row - so the census is what
+    // tells "idle" from "nothing fitted", and it must not read an idle decoder as a live one that
+    // failed to start.
     const cascade::gui::ModuleCensus decoders = cascade::gui::censusModules(
         pluginHost_.plugins(), cascade::gui::kDecoderCaps,
-        [this](const std::string& key) { return pluginIsStopped(key); });
+        [this](const std::string& key) { return pluginIsStopped(key); },
+        [this](const std::string& key) { return pluginIsIdle(key); });
     const bool anyDecoderFitted =
-        decoders.live + decoders.stopped + decoders.refused > 0;
+        decoders.live + decoders.stopped + decoders.refused + decoders.idle > 0;
     if (st.empty() || (pluginRunner_.activeCount() == 0 && !anyDecoderFitted)) {
         // WRAPPED, not TextDisabled: this rail is narrow and a user may drag it
         // narrower, and a sentence that runs off the edge says nothing at all.
@@ -21937,11 +22547,21 @@ void AppWindow::drawDecoderStatusRows() {
     // function for what it used to be. Anything held is enough to earn the
     // key; so is anything running, because a decoder that has not spoken yet
     // still deserves a window to speak into.
-    if (!decoderLog_.empty() || pluginRunner_.activeCount() > 0) {
+    //
+    // AND SO DOES A TEXT DECODER THAT IS FITTED AND IDLE (0.99.73): opening this window is how a
+    // dormant text decoder is woken (updatePluginLifecycle sees it open), so with nothing running
+    // the key has to be here or such a decoder could never start without a preset.
+    if (!decoderLog_.empty() || pluginRunner_.activeCount() > 0 || wakeableTextDecoderCount() > 0) {
         if (ImGui::Button(decoderWindowOpen_ ? trId("Hide decoder output")
                                              : trId("Show decoder output"),
                           ImVec2(-1.0f, 0.0f))) {
             decoderWindowOpen_ = !decoderWindowOpen_;
+        }
+        // Where the key is, for a test that presses it (0.99.73).
+        if (cascade::gui::census::enabled()) {
+            const ImVec2 a = ImGui::GetItemRectMin();
+            const ImVec2 b = ImGui::GetItemRectMax();
+            cascade::gui::census::rect("decoder:showkey", a.x, a.y, b.x, b.y);
         }
         // WHAT WAS DECODED, NOT WHAT IS BEING HELD. This printed
         // decoderLog_.size(), and decoderLog_ is a display tail trimmed to
@@ -23765,9 +24385,29 @@ void AppWindow::reportPluginStatus() {
     // "stopped=0"), because "no line" and "nothing stopped" have to be
     // distinguishable in a bounded run's output - the same rule the counts
     // above follow.
-    std::printf("plugin stopped: count=%d\n", static_cast<int>(pluginsStopped_.size()));
-    for (const std::string& k : pluginsStopped_) {
-        std::printf("plugin stopped: file=%s\n", k.c_str());
+    {
+        int stoppedCount = 0;
+        for (const auto& [id, mode] : pluginRun_) {
+            if (mode == cascade::core::PluginRun::Stopped) { ++stoppedCount; }
+        }
+        std::printf("plugin stopped: count=%d\n", stoppedCount);
+        // (0.99.73: the plugin's ID, not its file name - a stop outlives an update.)
+        for (const auto& [id, mode] : pluginRun_) {
+            if (mode == cascade::core::PluginRun::Stopped) {
+                std::printf("plugin stopped: file=%s\n", id.c_str());
+            }
+        }
+        // HOW EVERY OTHER PLUGIN RUNS: pinned ("always") ones, and which plugins are dormant right
+        // now. Printed in every run, including "none", for the reason the counts above are.
+        int always = 0;
+        for (const auto& [id, mode] : pluginRun_) {
+            if (mode == cascade::core::PluginRun::Always) { ++always; }
+        }
+        int idle = 0;
+        for (const cascade::core::LoadedPlugin& p : list) {
+            if (p.loaded && pluginIsIdle(cascade::core::pluginKey(p))) { ++idle; }
+        }
+        std::printf("plugin run: always=%d idle=%d\n", always, idle);
     }
     // THE SNAPSHOT THE MUTE DECISION IS TAKEN FROM, one line per loaded
     // plugin. `mutes` is the setting the checkbox shows - the capability
@@ -25667,6 +26307,9 @@ void AppWindow::tuneAbsoluteHz(double absHz, bool isPluginPreset) {
     // applyPluginPreset, forwarded so a mismatch this produces can say which
     // plugin's button asked for it — see applyRetuneNow.
     retuneSourceHz(absHz - pipeline_.vfoOffsetHz(), isPluginPreset);
+    if (pipeline_.running() && !scanner_.active() && !isPluginPreset) {
+        audioOutputTunePending_ = true;
+    }
 }
 
 namespace {
@@ -26297,6 +26940,9 @@ void AppWindow::publishWebSnapshot() {
         s.audioRingMs = 1000.0 * static_cast<double>(sink.ringFrames()) / rateHz;
         s.audioRingCapacityMs =
             1000.0 * static_cast<double>(sink.ringCapacityFrames()) / rateHz;
+        // The buffer in force (0.99.73): the figure the Sinks rail shows beside
+        // AUTOMATIC, so the browser and the desktop say the same number.
+        s.audioLeadMs = cascade::sink::audioLeadMs(sink.leadFrames());
     }
     // WHO THE SPEAKERS BELONG TO, from the same runner the SINK card asks, so
     // the browser and the bench cannot tell different stories about what is
@@ -28503,6 +29149,34 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     // fail; load() already range-sanitized volume/split/db*).
     volume_ = cfg.volume;
     pipeline_.audio().setVolume(volume_);
+    // The audio buffer (0.99.73): a fixed value is applied at once, before the
+    // first prime has had time to matter; AUTOMATIC leaves the 120 ms start.
+    setAudioBufferMs(cfg.audioBufferMs);
+    // THE DEPTH AUTOMATIC REACHED LAST TIME (audioBufferAutoMs): an AUTOMATIC session starts there
+    // - never below the 120 ms it would start at, never above 960 - so a slow computer does not
+    // pay the same bad minutes at every launch. A fixed setting ignores it (and keeps it for the
+    // file). It only ever starts DEEPER: a restore on a window whose session has already gone
+    // deeper than the file says leaves that alone, as AUTOMATIC -> AUTOMATIC does above. A restored
+    // depth is not a raise, so there is no notice, no log line and no health count.
+    {
+        const int remembered = cascade::sink::validAudioBufferSetting(cfg.audioBufferAutoMs)
+                                   ? cfg.audioBufferAutoMs
+                                   : 0;
+        if (audioBufferMs_ == 0) {
+            const int depth = std::clamp(remembered,
+                                         cascade::sink::audioLeadMs(cascade::sink::AudioOut::kPrimeFrames),
+                                         960);
+            if (remembered != 0 && depth > audioLeadNowMs()) {
+                pipeline_.audio().setLeadFrames(cascade::sink::audioLeadFrames(depth));
+                for (const auto& entry : patchDests_) {
+                    if (entry.second && entry.second->leadMs() > 0) { entry.second->setLeadMs(depth); }
+                }
+            }
+            if (remembered > audioBufferAutoMs_) { audioBufferAutoMs_ = remembered; }
+        } else {
+            audioBufferAutoMs_ = remembered;
+        }
+    }
     dbMin_ = cfg.dbMin;
     dbMax_ = cfg.dbMax;
     spectrum_->setRange(dbMin_, dbMax_);
@@ -28776,7 +29450,29 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     // rebuilds it without the stopped ones, which is also what the restored
     // source needs; doing it here means a stopped plugin never survives a
     // launch even for a frame.
-    pluginsStopped_ = cfg.pluginsStopped;
+    //
+    // HOW EACH PLUGIN RUNS (0.99.73), and the one-time migration of the old stop list. The list
+    // was kept by module FILE NAME, which carries the version, so a stop was lost the day the plugin
+    // updated; each entry becomes pluginRun[<id>] = stopped here, by id, and currentConfig() saves
+    // the list empty from then on. An id the new map already names keeps what the map says (a
+    // config written by this build and then read by an older one and back). Every other plugin is
+    // AUTO, which is the absence of an entry: nothing the user is looking at stops, because nothing
+    // the user is looking at is open at launch.
+    pluginRun_.clear();
+    for (const auto& [id, word] : cfg.pluginRun) {
+        cascade::core::PluginRun r = cascade::core::PluginRun::Auto;
+        // Keep an explicit AUTO long enough to win over a stale legacy stop
+        // below. currentConfig() omits AUTO again when it writes the new file.
+        if (cascade::core::parsePluginRun(word, r)) {
+            pluginRun_[id] = r;
+        }
+    }
+    for (const std::string& file : cfg.pluginsStopped) {
+        const std::string id = cascade::core::pluginRunId(file);
+        if (!id.empty() && pluginRun_.find(id) == pluginRun_.end()) {
+            pluginRun_[id] = cascade::core::PluginRun::Stopped;
+        }
+    }
     // AppConfig::closedWindows is no longer applied. Until 0.79.1 every plugin
     // window appeared by itself and this list kept the ones the user had shut
     // from coming back; now no plugin window appears until the user opens it
@@ -29935,6 +30631,8 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.bandwidthHz = vfoBandwidthHz_;
     cfg.squelchDb = squelchDb_;
     cfg.volume = volume_;
+    cfg.audioBufferMs = audioBufferMs_;
+    cfg.audioBufferAutoMs = audioBufferAutoMs_;
     cfg.dbMin = dbMin_;
     cfg.dbMax = dbMax_;
     cfg.splitRatio = splitRatio_;
@@ -30030,7 +30728,16 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.pluginTuneAllowed = pluginTuneAllowed_;
     cfg.pluginSettingsAllowed = pluginSettingsAllowed_;
     cfg.pluginSettings = pluginSettings_;
-    cfg.pluginsStopped = pluginsStopped_;
+    // The old file-name list is dropped (0.99.73): applyConfig migrated it, by id, into pluginRun,
+    // and an older build that reads this file sees nothing stopped rather than a stale list.
+    cfg.pluginsStopped.clear();
+    cfg.pluginRun.clear();
+    for (const auto& [id, mode] : pluginRun_) {
+        // AUTO is the default and is never written.
+        if (mode != cascade::core::PluginRun::Auto) {
+            cfg.pluginRun[id] = cascade::core::pluginRunWord(mode);
+        }
+    }
     // closedWindows is written empty: nothing reads it since 0.79.1 (see
     // applyConfig), and an empty list is what an older build would take to
     // mean "no window was shut" - the nearest true statement it can make

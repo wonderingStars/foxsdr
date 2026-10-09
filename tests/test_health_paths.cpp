@@ -259,6 +259,7 @@ void testRecoveriesAreCountedOnlyWhereTheSurveySaysAndNeverOnASignalThread() {
         {"Audio", "src/gui/app_window.cpp", 1},      {"Reopen", "src/gui/app_window.cpp", 1},
         {"CfgSave", "src/gui/app_window.cpp", 1},    {"PatchLoad", "src/gui/app_window.cpp", 1},
         {"SdrEnum", "src/gui/app_window.cpp", 1},    {"SdrLost", "src/gui/app_window.cpp", 1},
+        {"AudioLead", "src/gui/app_window.cpp", 1},
         {"EnumChild", "src/source/soapy_enum_proc.cpp", 1},
         {"PluginApi", "src/core/plugin_ui.cpp", 1},  {"WebRoute", "src/net/web_server.cpp", 1},
     };

@@ -828,10 +828,13 @@ void AppWindow::patchPublishSets() {
                 break;
             }
             case pc::OutputKind::Speakers:
-                dest = pc::makeDeviceDest(std::string{}, err);
+                // With the receiver's buffer (0.99.73): a fixed setting, or a
+                // lead the receiver has had to deepen, is not lost on a speaker
+                // made afterwards.
+                dest = pc::makeDeviceDest(std::string{}, err, audioLeadNowMs());
                 break;
             case pc::OutputKind::Device:
-                dest = pc::makeDeviceDest(pc::outputDeviceName(key), err);
+                dest = pc::makeDeviceDest(pc::outputDeviceName(key), err, audioLeadNowMs());
                 break;
         }
         bool replaced = false;

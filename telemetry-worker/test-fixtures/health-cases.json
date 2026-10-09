@@ -45,9 +45,19 @@
     "expected": "recovered.reopen=2,recovered.srcthread=3,recovered.vendorcall=4,recovered.ringdrop=5,recovered.dspexc=6,recovered.cfgsave=7,recovered.enumchild=8,recovered.pluginapi=9"
   },
   {
-    "name": "recovered, thirteen at one count: the earlier eight in the written order stay",
-    "input": "recovered.sdrlost=1,recovered.sdrenum=1,recovered.patchload=1,recovered.webroute=1,recovered.pluginapi=1,recovered.enumchild=1,recovered.cfgsave=1,recovered.dspexc=1,recovered.ringdrop=1,recovered.vendorcall=1,recovered.srcthread=1,recovered.reopen=1,recovered.audio=1",
+    "name": "recovered, fourteen at one count: the earlier eight in the written order stay",
+    "input": "recovered.audiolead=1,recovered.sdrlost=1,recovered.sdrenum=1,recovered.patchload=1,recovered.webroute=1,recovered.pluginapi=1,recovered.enumchild=1,recovered.cfgsave=1,recovered.dspexc=1,recovered.ringdrop=1,recovered.vendorcall=1,recovered.srcthread=1,recovered.reopen=1,recovered.audio=1",
     "expected": "recovered.audio=1,recovered.reopen=1,recovered.srcthread=1,recovered.vendorcall=1,recovered.ringdrop=1,recovered.dspexc=1,recovered.cfgsave=1,recovered.enumchild=1"
+  },
+  {
+    "name": "audiolead (0.99.73) is the last recovered word in the written order",
+    "input": "recovered.audiolead=3,recovered.audio=1",
+    "expected": "recovered.audio=1,recovered.audiolead=3"
+  },
+  {
+    "name": "audiolead (0.99.73) with a higher count than the eighth is kept over it",
+    "input": "recovered.audiolead=2,recovered.enumchild=1,recovered.cfgsave=1,recovered.dspexc=1,recovered.ringdrop=1,recovered.vendorcall=1,recovered.srcthread=1,recovered.reopen=1,recovered.audio=1",
+    "expected": "recovered.audio=1,recovered.reopen=1,recovered.srcthread=1,recovered.vendorcall=1,recovered.ringdrop=1,recovered.dspexc=1,recovered.cfgsave=1,recovered.audiolead=2"
   },
   {
     "name": "all the families, given backwards, come out in the written order",

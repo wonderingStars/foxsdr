@@ -489,6 +489,15 @@ private:
 
 class DeviceDest final : public AudioDest {
 public:
+    // The buffer this speaker starts with: the receiver's, handed over by the
+    // maker (0 leaves the sink's own default of 120 ms).
+    void seedLead(int ms) {
+        if (ms > 0) { out_.setLeadFrames(sink::audioLeadFrames(ms)); }
+    }
+    std::uint64_t starvedCallbacks() const override { return out_.underruns(); }
+    int leadMs() const override { return sink::audioLeadMs(out_.leadFrames()); }
+    void setLeadMs(int ms) override { out_.setLeadFrames(sink::audioLeadFrames(ms)); }
+
     bool open(const std::string& name, std::string& error) {
         const std::vector<sink::AudioDevice> devs = out_.listOutputDevices();
         int index = -1;
@@ -516,7 +525,11 @@ public:
         // same as the receiver's own sink: hold the lead with the same
         // matcher (sink/drift_matcher.hpp) rather than let each hiccup eat
         // into it for good.
-        matcher_.observe(out_.ringFrames(), out_.running() && out_.primed(), n);
+        // ...to ITS OWN lead plus 40 ms (0.99.73): this sink's buffer may have
+        // been deepened apart from the receiver's, and a matcher steering to the
+        // default would bleed it back down.
+        matcher_.observe(out_.ringFrames(), out_.running() && out_.primed(), n,
+                         static_cast<double>(out_.targetFrames()));
         const std::size_t cap = sink::DriftMatcher::maxOut(n);
         matched_.resize(cap);
         out_.write(matched_.data(), matcher_.process(s, n, 1, matched_.data(), cap));
@@ -590,8 +603,10 @@ std::shared_ptr<AudioDest> makeMp3Dest(const std::string& directory, const std::
                                                       : std::function<bool()>{});
 }
 
-std::shared_ptr<AudioDest> makeDeviceDest(const std::string& deviceName, std::string& error) {
+std::shared_ptr<AudioDest> makeDeviceDest(const std::string& deviceName, std::string& error,
+                                          int leadMs) {
     auto d = std::make_shared<DeviceDest>();
+    d->seedLead(leadMs);  // before the stream exists: the first prime already uses it
     if (!d->open(deviceName, error)) { return nullptr; }
     return d;
 }

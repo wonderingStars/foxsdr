@@ -17,6 +17,7 @@
 
 #include "core/i18n.hpp"
 #include "core/plugin_abi.h"
+#include "core/plugin_run.hpp"
 #include "core/utf8_text.hpp"
 #include "gui/fonts.hpp"
 #include "gui/scope_face.hpp"
@@ -69,6 +70,11 @@ FittedState fittedState(const FittedModule& m, bool receiverRunning) {
     // stopped, that instance is handed nothing. Reading it as FED would put a green lamp
     // on a silent radio.
     if (m.fed && receiverRunning) { return FittedState::Fed; }
+    // IDLE sits BETWEEN FED AND NOT DECODING (0.99.73), and the order is the point. A dormant
+    // module has no instance, so it can never be fed - but it is not failing to be: nothing is
+    // using it, and it starts by itself when something does. Calling that NOT DECODING would put
+    // a warning on every module the owner asked to cost nothing while unused.
+    if (m.idle) { return FittedState::Idle; }
     return FittedState::NotFed;
 }
 
@@ -83,8 +89,15 @@ const char* fittedStateWord(FittedState s) {
         // sentence ("You stopped this module. ..."), not by the state word.
         case FittedState::Stopped: return tr("STOPPED");
         case FittedState::Refused: return tr("REFUSED");
+        case FittedState::Idle: return tr("IDLE");
     }
     return tr("UNKNOWN");
+}
+
+bool fittedOffersStart(const FittedModule& m) { return m.stopped || m.idle; }
+
+const char* fittedKeyWord(const FittedModule& m) {
+    return fittedOffersStart(m) ? tr("START") : tr("STOP");
 }
 
 std::string fittedStateSentence(const FittedModule& m, bool receiverRunning) {
@@ -108,6 +121,11 @@ std::string fittedStateSentence(const FittedModule& m, bool receiverRunning) {
         case FittedState::Fed:
             return tr("Fitted and being fed. The receiver is running and this module has a "
                       "decoder matched to the rate it is producing.");
+        case FittedState::Idle:
+            return tr("Fitted, and idle. Nothing is using this module, so it is not running and "
+                      "costs nothing. It starts by itself when you open its window, its map or "
+                      "the output it writes to, and goes quiet again 30 seconds after you finish "
+                      "with it. Tick KEEP RUNNING to have it run all the time.");
         case FittedState::NotFed:
             break;
     }
@@ -239,6 +257,7 @@ FittedCounts countStates(const std::vector<FittedModule>& modules, bool receiver
             case FittedState::NoSignal: ++c.noSignal; break;
             case FittedState::Stopped: ++c.stopped; break;
             case FittedState::Refused: ++c.refused; break;
+            case FittedState::Idle: ++c.idle; break;
         }
     }
     return c;
@@ -272,6 +291,7 @@ std::vector<int> fittedVisibleRows(const std::vector<FittedModule>& modules, boo
             case FittedState::NoSignal: show = deck.showNoSignal; break;
             case FittedState::Stopped: show = deck.showStopped; break;
             case FittedState::Refused: show = deck.showRefused; break;
+            case FittedState::Idle: show = deck.showIdleDormant; break;
         }
         if (!show) { continue; }
         if (!q.empty()) {
@@ -308,7 +328,8 @@ std::string fittedDateText(const FittedModule& m) {
 }
 
 FittedModule makeFittedModule(const cascade::core::LoadedPlugin& p, bool stopped, bool fed,
-                              std::string idleDetail, bool tuneAllowed) {
+                              std::string idleDetail, bool tuneAllowed, bool idle,
+                              bool keepRunning) {
     FittedModule m;
     m.file = cascade::core::pluginKey(p);
     m.id = m.file;
@@ -322,6 +343,8 @@ FittedModule makeFittedModule(const cascade::core::LoadedPlugin& p, bool stopped
     m.error = p.error;
     m.stopped = stopped;
     m.fed = fed;
+    m.idle = idle;
+    m.keepRunning = keepRunning;
     m.idleDetail = std::move(idleDetail);
     // From the TABLE POINTER and not from the capability bit. The host clears a table it
     // could not accept, so a module that declared the bit and supplied nothing usable would
@@ -370,6 +393,9 @@ ImU32 stateLamp(FittedState s) {
         case FittedState::NoSignal: return theme::kBrassTint;
         case FittedState::Stopped: return theme::kBrassTint;
         case FittedState::Refused: return theme::kAlarm;
+        // A dormant module is working as designed: the same quiet brass as a stopped one, and
+        // never gold, which is reserved for something that wants looking at.
+        case FittedState::Idle: return theme::kBrassTint;
     }
     return theme::kBrassTint;
 }
@@ -384,6 +410,7 @@ ImU32 stateInk(FittedState s) {
         case FittedState::NoSignal: return theme::kInkMuted;
         case FittedState::Stopped: return theme::kCream;
         case FittedState::Refused: return theme::kAlarmHot;
+        case FittedState::Idle: return theme::kInkMuted;
     }
     return theme::kInkMuted;
 }
@@ -393,9 +420,17 @@ ImU32 stateInk(FittedState s) {
 // something.
 bool stateLampLit(FittedState s) { return s == FittedState::Fed || s == FittedState::Refused; }
 
-const char* censusStateName(int i) {
-    static const char* const names[5] = {"fed", "notfed", "nosignal", "stopped", "refused"};
-    return names[i];
+// The census word of a state: what the tests read a row's state and a chip's rectangle by.
+const char* censusStateName(FittedState s) {
+    switch (s) {
+        case FittedState::Fed: return "fed";
+        case FittedState::NotFed: return "notfed";
+        case FittedState::NoSignal: return "nosignal";
+        case FittedState::Stopped: return "stopped";
+        case FittedState::Refused: return "refused";
+        case FittedState::Idle: return "idle";
+    }
+    return "unknown";
 }
 
 // The kind's glyph for a module the catalogue does not know: from what it declares, and the
@@ -501,7 +536,7 @@ float stateColumnWidth() {
     const float px = fonts::tinyPx();
     float w = 0.0f;
     for (FittedState s : {FittedState::Fed, FittedState::NotFed, FittedState::NoSignal,
-                          FittedState::Stopped, FittedState::Refused}) {
+                          FittedState::Stopped, FittedState::Refused, FittedState::Idle}) {
         w = std::max(w, trackedWidth(lf, px, fittedStateWord(s), px * 0.10f));
     }
     return w + 22.0f * S();
@@ -665,6 +700,37 @@ float drawOnThisMachine(ImDrawList* dl, const FittedModule& m, const ModulePlate
             }
             cy += h + 10.0f * k;
         }
+        // 3b. KEEP RUNNING (0.99.73): the tick that pins a module to ALWAYS. Offered to a module that
+        // can be idle at all - not to a refused one, a stopped one (START is its key), a module with
+        // nothing to start, or one that is always in use (a processor in the audio chain).
+        if (m.loaded && !m.stopped && cascade::core::pluginCapsHaveLifecycle(m.capabilities) &&
+            !cascade::core::pluginCapsStandingDuty(m.capabilities)) {
+            const ImGuiStyle& gs = ImGui::GetStyle();
+            const float tickH = px + gs.FramePadding.y * 2.0f;
+            if (draw) {
+                bool ticked = m.keepRunning;
+                ImGui::SetCursorScreenPos(ImVec2(x + pad, cy));
+                ImGui::PushStyleColor(ImGuiCol_Text, theme::vec(theme::kIvory));
+                ImGui::PushStyleColor(ImGuiCol_CheckMark, theme::vec(theme::kPhosphor));
+                ImGui::PushFont(uf, px / uiscale::factor());
+                if (ImGui::Checkbox(trId("Keep running"), &ticked)) {
+                    act.kind = FittedModulesAction::Kind::SetKeepRunning;
+                    act.file = m.file;
+                    act.flag = ticked;
+                }
+                censusRect("fitted:page:keeprunning", ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y,
+                           ImGui::GetItemRectMax().x, ImGui::GetItemRectMax().y);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("%s", tr("Ticked, this module runs all the time, as every module used to. "
+                                               "Unticked, it runs only while something is using it - its window or "
+                                               "map, the radar scope, a patch, the Decoder output window - and goes "
+                                               "quiet 30 seconds after."));
+                }
+                ImGui::PopFont();
+                ImGui::PopStyleColor(2);
+            }
+            cy += tickH + 8.0f * k;
+        }
         // 4. the notes: an orphan, a changed file, the module's own warning
         const auto note = [&](const std::string& text, ImU32 col) {
             if (text.empty()) { return; }
@@ -784,13 +850,20 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck, const Fitted
         ImU32 lamp;
         bool lit;
         bool* flag;
+        const char* census;  // the state's census word (censusStateName)
     };
-    const Chip chips[5] = {
-        {tr("FED"), counts.fed, theme::kPhosphor, counts.fed > 0, &deck.showFed},
-        {tr("NOT DECODING"), counts.notFed, theme::kGold, counts.notFed > 0, &deck.showIdle},
-        {tr("TAKES NO SIGNAL"), counts.noSignal, theme::kBrassTint, false, &deck.showNoSignal},
-        {tr("STOPPED"), counts.stopped, theme::kBrassTint, false, &deck.showStopped},
-        {tr("REFUSED"), counts.refused, theme::kAlarm, counts.refused > 0, &deck.showRefused},
+    // IDLE sits right after FED, as it does in the order a module is asked in (0.99.73): the
+    // modules that cost nothing, beside the ones that are working.
+    const Chip chips[6] = {
+        {tr("FED"), counts.fed, theme::kPhosphor, counts.fed > 0, &deck.showFed, "fed"},
+        {tr("IDLE"), counts.idle, theme::kBrassTint, false, &deck.showIdleDormant, "idle"},
+        {tr("NOT DECODING"), counts.notFed, theme::kGold, counts.notFed > 0, &deck.showIdle,
+         "notfed"},
+        {tr("TAKES NO SIGNAL"), counts.noSignal, theme::kBrassTint, false, &deck.showNoSignal,
+         "nosignal"},
+        {tr("STOPPED"), counts.stopped, theme::kBrassTint, false, &deck.showStopped, "stopped"},
+        {tr("REFUSED"), counts.refused, theme::kAlarm, counts.refused > 0, &deck.showRefused,
+         "refused"},
     };
     float chipsW = 0.0f;
     for (const Chip& c : chips) { chipsW += chipWidth(c.word, c.n) + 8.0f * k; }
@@ -836,7 +909,7 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck, const Fitted
         // the chips
         float cx = twoRows ? origin.x + pad : origin.x + pad + searchW + 18.0f * k;
         const float cyc = twoRows ? origin.y + 56.0f * k + chipH * 0.5f - 4.0f * k : cy1;
-        for (int i = 0; i < 5; ++i) {
+        for (int i = 0; i < 6; ++i) {
             const float w = chipWidth(chips[i].word, chips[i].n);
             char id[24];
             std::snprintf(id, sizeof id, "chip%d", i);
@@ -845,9 +918,9 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck, const Fitted
                 *chips[i].flag = !*chips[i].flag;
             }
             if (census::enabled()) {
-                census::rect(std::string("fitted:chip:") + censusStateName(i), cx, cyc - chipH * 0.5f, cx + w,
+                census::rect(std::string("fitted:chip:") + chips[i].census, cx, cyc - chipH * 0.5f, cx + w,
                              cyc + chipH * 0.5f);
-                census::note("fitted:count:", std::string(censusStateName(i)) + ":" + std::to_string(chips[i].n));
+                census::note("fitted:count:", std::string(chips[i].census) + ":" + std::to_string(chips[i].n));
             }
             cx += w + 8.0f * k;
         }
@@ -959,9 +1032,12 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck, const Fitted
                 const ImVec2 ktl(hbr.x - hpad - stopW, htl.y + (headH - kh) * 0.5f);
                 KeyRect kr;
                 // The chassis-grey key of the mock-up: proud metal, the action engraved on it.
-                if (drawChassisKey(cdl, ktl, ImVec2(ktl.x + stopW, ktl.y + kh), m.stopped ? tr("START") : tr("STOP"),
+                // START for a module that is not running - stopped, or idle (0.99.73) - and STOP for one
+                // that is. The key's label is its action, never the state.
+                const bool offersStart = fittedOffersStart(m);
+                if (drawChassisKey(cdl, ktl, ImVec2(ktl.x + stopW, ktl.y + kh), fittedKeyWord(m),
                                    true, "pagestop", &kr)) {
-                    act.kind = m.stopped ? FittedModulesAction::Kind::Start : FittedModulesAction::Kind::Stop;
+                    act.kind = offersStart ? FittedModulesAction::Kind::Start : FittedModulesAction::Kind::Stop;
                     act.file = m.file;
                 }
                 censusRect("fitted:page:key", kr.tl.x, kr.tl.y, kr.br.x, kr.br.y);
@@ -1093,9 +1169,12 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck, const Fitted
                     } else if (m.loaded) {
                         // THE LABEL IS THE ACTION, never the state: a key saying "RUNNING" leaves the user
                         // guessing whether pressing it stops the module or is simply a badge.
+                        // (0.99.73) START for an IDLE module as well as a STOPPED one: pressing it pins the
+                        // module to ALWAYS, the same thing a preset press or the page's tick does.
+                        const bool offersStart = fittedOffersStart(m);
                         if (drawChassisKey(cdl, ImVec2(rx - stopW, ky), ImVec2(rx, ky + kh),
-                                           m.stopped ? tr("START") : tr("STOP"), true, "stop", &sk)) {
-                            act.kind = m.stopped ? FittedModulesAction::Kind::Start : FittedModulesAction::Kind::Stop;
+                                           fittedKeyWord(m), true, "stop", &sk)) {
+                            act.kind = offersStart ? FittedModulesAction::Kind::Start : FittedModulesAction::Kind::Stop;
                             act.file = m.file;
                         }
                         haveKey = true;
@@ -1121,7 +1200,7 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck, const Fitted
                 if (census::enabled()) {
                     census::rect("fitted:row:" + m.id, rtl.x, rtl.y, rbr.x, rbr.y);
                     census::rect("fitted:row:" + m.id + ":name", tx, ty, tx + nw, ty + nameH);
-                    census::note("fitted:state:", m.id + ":" + censusStateName(static_cast<int>(st)));
+                    census::note("fitted:state:", m.id + ":" + censusStateName(st));
                 }
                 ImGui::PopID();
                 cy += rowH + 8.0f * k;

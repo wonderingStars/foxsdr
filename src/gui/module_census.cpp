@@ -67,7 +67,7 @@ bool moduleProvides(const LoadedPlugin& p, std::uint32_t capMask) {
 }
 
 ModuleCensus censusModules(const std::vector<LoadedPlugin>& plugins, std::uint32_t capMask,
-                           const ModuleStoppedFn& isStopped) {
+                           const ModuleStoppedFn& isStopped, const ModuleIdleFn& isIdle) {
     ModuleCensus c;
     for (const LoadedPlugin& p : plugins) {
         const std::string file = cascade::core::pluginKey(p);
@@ -95,6 +95,14 @@ ModuleCensus censusModules(const std::vector<LoadedPlugin>& plugins, std::uint32
         if (isStopped(file)) {
             ++c.stopped;
             if (c.stoppedName.empty()) { c.stoppedName = named; }
+            continue;
+        }
+        // DORMANT IS NOT LIVE (0.99.73): the module is fitted, working as designed, and holds no
+        // instance because nothing is using it. Counting it live would make a surface whose own
+        // list is empty report a module that "did not start".
+        if (isIdle && isIdle(file)) {
+            ++c.idle;
+            if (c.idleName.empty()) { c.idleName = named; }
             continue;
         }
         ++c.live;
@@ -241,6 +249,28 @@ std::string decoderAbsenceNote(const ModuleCensus& c) {
         s += tr(" It is on the disk already, so there is nothing to fetch: the Fitted "
                 "modules window letters it REFUSED and prints the host's own reason, "
                 "verbatim.");
+        return s;
+    }
+    if (c.idle > 0) {
+        // NOT A FAULT, AND SAID TO BE NONE (0.99.73). The decoder is fitted and set to start
+        // when it is used; nothing is using it, so it is not running. The remedy is a window,
+        // not a download and not a repair.
+        std::string s;
+        if (c.idle == 1 && !c.idleName.empty()) {
+            cascade::core::formatUtf8(buf,
+                          tr("Nothing is decoding: \"%s\" carries a decoder and it is idle."),
+                          c.idleName.c_str());
+            s = buf;
+        } else {
+            cascade::core::formatUtf8(buf,
+                          c.idle == 1 ? tr("Nothing is decoding: %d fitted decoder is idle.")
+                                      : tr("Nothing is decoding: %d fitted decoders are idle."),
+                          c.idle);
+            s = buf;
+        }
+        s += tr(" An idle decoder is not in use, so it is not running, and that is not a fault: "
+                "it starts by itself when you open the Decoder output window or its own "
+                "window, and the Fitted modules window letters it IDLE with a START key.");
         return s;
     }
     if (c.live > 0) {

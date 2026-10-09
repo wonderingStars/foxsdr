@@ -306,13 +306,20 @@ std::string pluginKey(const LoadedPlugin& p);
 // disagree, and a disagreement here means a plugin the user stopped is still
 // half-running — still on the map, or still holding the receiver.
 //
-// Keyed on pluginKey(), for the reason stated there.
+// KEYED ON THE PLUGIN'S ID, not on its file name (0.99.73, core/plugin_run.hpp): the module
+// file name carries the version, so a stop kept against "pocsag-decoder-1.0.2-...dll" was lost
+// the day the plugin updated to 1.0.3 and the stopped decoder came back to life. Each entry
+// is reduced to its id when it is set (a legacy file name and an id both work), and a key is
+// reduced the same way when it is asked about, so the versioned file name no longer matters.
+// pluginKey() is still the identity the tune grant and the mute override use, for the reason
+// stated there.
 class PluginStopSet {
 public:
     // Replaces the whole set. The caller (the GUI) owns the durable copy and
     // pushes it down; nothing here reads or writes a config.
-    void set(std::vector<std::string> keys) { keys_ = std::move(keys); }
+    void set(std::vector<std::string> keys);
 
+    // The ids held, in the order given, without duplicates or empties.
     const std::vector<std::string>& keys() const { return keys_; }
 
     bool contains(const std::string& key) const;

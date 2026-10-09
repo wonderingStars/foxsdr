@@ -59,6 +59,18 @@ public:
     // Non-empty once the destination has stopped taking sound, with why.
     virtual std::string error() const = 0;
 
+    // A SOUND DEVICE'S BUFFER (0.99.73). A speaker has its own sink::AudioOut and
+    // its own DriftMatcher, so the receiver's mechanism for a computer that falls
+    // behind - a lead that deepens, a matcher that steers to it - belongs to each
+    // of them and not to the receiver alone. Files have no lead: the defaults say
+    // "not a sound card", and AppWindow's once-a-minute poll skips them.
+    //   starvedCallbacks()  starved callbacks since the destination was made
+    //   leadMs()            the lead in force, in milliseconds; 0 = not a device
+    //   setLeadMs(ms)       the poll deepens it (never from the callback)
+    virtual std::uint64_t starvedCallbacks() const { return 0; }
+    virtual int leadMs() const { return 0; }
+    virtual void setLeadMs(int /*ms*/) {}
+
     // For the face's meter and counter, readable from any thread.
     float peak() const { return peak_.load(std::memory_order_relaxed); }
     std::uint64_t samples() const { return samples_.load(std::memory_order_relaxed); }
@@ -126,7 +138,11 @@ std::shared_ptr<AudioDest> makeWavDest(const std::string& directory, const std::
                                        std::string& error, const DestSeams* seams = nullptr);
 std::shared_ptr<AudioDest> makeMp3Dest(const std::string& directory, const std::string& prefix,
                                        std::string& error, const DestSeams* seams = nullptr);
-// `deviceName` empty means the default output device.
-std::shared_ptr<AudioDest> makeDeviceDest(const std::string& deviceName, std::string& error);
+// `deviceName` empty means the default output device. `leadMs` is the buffer the
+// speaker starts with (0 = the sink's default, 120 ms): the caller passes the
+// receiver's, so a fixed setting - or a lead the receiver has already had to
+// deepen - is not lost on a speaker made afterwards.
+std::shared_ptr<AudioDest> makeDeviceDest(const std::string& deviceName, std::string& error,
+                                          int leadMs = 0);
 
 }  // namespace cascade::core::patch

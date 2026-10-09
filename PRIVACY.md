@@ -467,6 +467,7 @@ by itself, so a count of 1 means "this session had it".
 | `patchload` | a saved patch loaded with connections left out. |
 | `sdrenum` | the SDRplay service did not answer a scan, and the scan was let go. Once a session. |
 | `sdrlost` | the SDRplay API session was lost and SDRplay is shut for the rest of the session. Once a session. |
+| `audiolead` | the audio buffer was made deeper, by itself, because this computer fell behind: a minute in which the sound card ran out of audio three times or more. Once a session. |
 
 ### The "still running" beat
 

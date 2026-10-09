@@ -68,6 +68,12 @@ struct ModuleCensus {
     int live = 0;
     // Loaded, and in the stop set. Fitted, still mapped, given nothing.
     int stopped = 0;
+    // Loaded, not stopped, and DORMANT (0.99.73): set to AUTO and not in use, so it has no
+    // instance and is fed nothing - by design, and NOT a fault. Counted apart from `live`
+    // because `live` is "the object should hold an instance for this", which a dormant module
+    // does not, and a surface that read an idle module as a live one with no instance would
+    // report a module that failed to start. Zero when the caller supplies no idle predicate.
+    int idle = 0;
     // Not loaded, and its descriptor declared the capability. The duplicate
     // resolver's outcome: it nulls the borrowed tables but keeps the
     // capability word it read (plugin_host.cpp:829-843), so this file's
@@ -85,12 +91,15 @@ struct ModuleCensus {
     // in the host's scan order.
     std::string stoppedName;
     std::string refusedName;
+    std::string idleName;
 };
 
 // Takes a module FILE NAME - core::pluginKey - which is the identity the stop
 // set, the tune grant and the mute override are all keyed on. Never the display
 // name, which the module itself chooses and two modules may share.
 using ModuleStoppedFn = std::function<bool(const std::string& moduleFile)>;
+// The same file-name identity, for "is this module dormant" (AUTO and not in use).
+using ModuleIdleFn = std::function<bool(const std::string& moduleFile)>;
 
 // Does this LOADED record carry a table behind any bit in `capMask`?
 //
@@ -102,9 +111,12 @@ using ModuleStoppedFn = std::function<bool(const std::string& moduleFile)>;
 // way out.
 bool moduleProvides(const cascade::core::LoadedPlugin& p, std::uint32_t capMask);
 
-// Count the host's records against one capability word.
+// Count the host's records against one capability word. `isIdle` is optional (0.99.73): a
+// module that is loaded, not stopped and idle by it is counted in `idle` and NOT in `live`.
+// Left empty, nothing is idle, which is what every caller before run states meant.
 ModuleCensus censusModules(const std::vector<cascade::core::LoadedPlugin>& plugins,
-                           std::uint32_t capMask, const ModuleStoppedFn& isStopped);
+                           std::uint32_t capMask, const ModuleStoppedFn& isStopped,
+                           const ModuleIdleFn& isIdle = ModuleIdleFn());
 
 // --- the notes ---------------------------------------------------------------
 //
@@ -113,9 +125,11 @@ ModuleCensus censusModules(const std::vector<cascade::core::LoadedPlugin>& plugi
 // four states the machine is in and points at the thing that would change it,
 // and only the last one mentions installing anything.
 //
-// THE ORDER IS STOPPED, REFUSED, LIVE, ABSENT in both, and it is the order
+// THE ORDER IS STOPPED, REFUSED, (IDLE,) LIVE, ABSENT in both, and it is the order
 // gui::fittedState uses: the user's own choice is not a fault, and it is the
-// one state where the module they need is already on the disk.
+// one state where the module they need is already on the disk. IDLE is a module that is
+// there and working as designed - not in use, so not running - and the note says so rather
+// than reporting a decoder that failed to start.
 
 // `subject` completes "publishes ..." and names what the calling surface would
 // have drawn; `installRemedy` is the one clause that cannot be shared, because

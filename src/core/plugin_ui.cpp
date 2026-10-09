@@ -3,6 +3,7 @@
 #include "core/plugin_ui.hpp"
 
 #include "core/health_events.hpp"
+#include "core/plugin_run.hpp"
 #include "core/version.hpp"
 
 #include <algorithm>
@@ -617,7 +618,7 @@ void PluginUi::rebuild(const std::vector<LoadedPlugin>& plugins) {
     {
         std::vector<std::string> live;
         for (const LoadedPlugin& lp : plugins) {
-            if (!lp.loaded || stopped_.contains(lp)) { continue; }
+            if (!lp.loaded || stopped_.contains(lp) || dormant_.contains(lp)) { continue; }
             if (lp.hostClient == nullptr || lp.hostClient->attach == nullptr) { continue; }
             const std::string key = tuneKey(lp);
             if (key.empty()) { continue; }
@@ -633,128 +634,308 @@ void PluginUi::rebuild(const std::vector<LoadedPlugin>& plugins) {
         // before the host bridge in particular - handing a stopped plugin the
         // host API would give it a fresh way to ask for the receiver, and the
         // one thing a stopped plugin must not do is act.
-        if (stopped_.contains(lp)) { continue; }
-
-        // Host services FIRST. The ABI says attach() runs before any other
-        // capability's create(), so a tracker can read the receiver while
-        // building its initial state instead of waiting a frame for it.
-        if (lp.hostClient != nullptr && lp.hostClient->attach != nullptr) {
-            // The permission key, NOT the display name: the name is the
-            // plugin's own to choose, so keying on it would let any module
-            // inherit a granted one's permission by adopting its name.
-            const std::string key = tuneKey(lp);
-            // ONE BRIDGE PER PLUGIN, REUSED, not a fresh one per rebuild.
-            //
-            // rebuild() runs on every source change, so a bridge per call grew
-            // the store without limit and - worse - left the plugin holding
-            // the table from its FIRST attach while the host considered a
-            // later one current. The ABI says attach() is called once with a
-            // table valid for as long as the plugin is loaded; handing back
-            // the same table makes the host's repeated call the no-op the
-            // plugin is entitled to assume it is.
-            HostCtx* bridge = findBridge(this, key);
-            if (bridge == nullptr) {
-                auto owned = std::make_unique<HostCtx>();
-                owned->self = this;
-                owned->plugin = key;
-                owned->api.structSize = static_cast<std::uint32_t>(sizeof(CascadeHostApi));
-                owned->api.ctx = owned.get();
-                owned->api.centre_hz = &hostCentre;
-                owned->api.sample_rate_hz = &hostRate;
-                owned->api.request_tune = &hostTune;
-                owned->api.unix_time_ms = &hostTime;
-                // HOST API LEVEL 1: the same table, grown at the end. A plugin
-                // built before level 1 reads only the four members above at
-                // the offsets they have always had (plugin_abi.h, VERSIONING).
-                owned->core = api_;
-                if (!key.empty()) {
-                    owned->client = &api_->client(key, lp.name, lp.capabilities);
-                }
-                fillLevel1(*owned);
-                bridge = owned.get();
-                ctxStore().push_back(std::move(owned));
-            }
-            lp.hostClient->attach(&bridge->api);
-        }
-
-        if (lp.trackSource != nullptr) {
-            void* h = lp.trackSource->create();
-            if (h != nullptr) {
-                TrackInstance ti;
-                ti.api = lp.trackSource;
-                ti.handle = h;
-                ti.name = lp.name;
-                // The name mirror rides with the instance, so the two can
-                // never disagree about which plugins have a track source.
-                trackPluginNames_.push_back(ti.name);
-                trackInstances_.push_back(std::move(ti));
-            }
-        }
-
-        // NOTE: no image-decoder instance is created here. An image decoder
-        // consumes samples, so PluginRunner owns it - see the header.
-
-        if (lp.panel != nullptr) {
-            void* h = lp.panel->create();
-            if (h != nullptr) {
-                HostPanel hp;
-                hp.plugin = lp.name;
-                hp.title = lp.panel->title != nullptr ? lp.panel->title : lp.name;
-
-                // Columns are read ONCE: the ABI fixes a panel's shape for its
-                // lifetime, so rediscovering it every frame would be work that
-                // can only ever return the same answer.
-                char headings[CASCADE_PANEL_MAX_COLUMNS][CASCADE_PANEL_CELL_CHARS] = {};
-                std::uint32_t cols = lp.panel->columns(h, headings);
-                if (cols == 0u) { cols = 1u; }
-                if (cols > CASCADE_PANEL_MAX_COLUMNS) { cols = CASCADE_PANEL_MAX_COLUMNS; }
-                for (std::uint32_t c = 0; c < cols; ++c) {
-                    hp.headings.push_back(bounded(headings[c], CASCADE_PANEL_CELL_CHARS));
-                }
-
-                PanelInstance pi;
-                pi.api = lp.panel;
-                pi.handle = h;
-                pi.name = lp.name;
-                pi.panelIndex = panels_.size();
-                panels_.push_back(std::move(hp));
-                panelInstances_.push_back(std::move(pi));
-            }
-        }
-
-        if (lp.instrument != nullptr) {
-            void* h = lp.instrument->create();
-            if (h != nullptr) {
-                HostInstrument hi;
-                hi.plugin = lp.name;
-                hi.title = lp.instrument->title != nullptr ? lp.instrument->title : lp.name;
-                hi.kind = lp.instrument->kind;
-                // The memory feed is a pair (the loader refuses half of one),
-                // and its columns are read once, as a panel's are.
-                if (lp.instrument->columns != nullptr && lp.instrument->poll_rows != nullptr) {
-                    char headings[CASCADE_PANEL_MAX_COLUMNS][CASCADE_PANEL_CELL_CHARS] = {};
-                    std::uint32_t cols = lp.instrument->columns(h, headings);
-                    if (cols == 0u) { cols = 1u; }
-                    if (cols > CASCADE_PANEL_MAX_COLUMNS) { cols = CASCADE_PANEL_MAX_COLUMNS; }
-                    for (std::uint32_t c = 0; c < cols; ++c) {
-                        hi.headings.push_back(bounded(headings[c], CASCADE_PANEL_CELL_CHARS));
-                    }
-                }
-                InstrumentInstance ii;
-                ii.api = lp.instrument;
-                ii.handle = h;
-                ii.name = lp.name;
-                ii.index = instruments_.size();
-                instruments_.push_back(std::move(hi));
-                instrumentInstances_.push_back(std::move(ii));
-            }
-        }
+        //
+        // AND A DORMANT ONE (0.99.73), AUTO and not wanted: nothing is created
+        // for it either, and it is not live - it wakes through startPlugin().
+        if (stopped_.contains(lp) || dormant_.contains(lp)) { continue; }
+        buildPluginLocked(lp);
     }
 
     // Demonstration faces LAST, so every real instance's index stays valid.
     if (const char* demo = std::getenv("FOXSDR_DEMO_INSTRUMENT");
         demo != nullptr && demo[0] != '\0') {
         addDemoInstruments(demo);
+    }
+}
+
+bool PluginUi::startPlugin(const LoadedPlugin& lp) {
+    if (!lp.loaded) { return false; }
+    if (stopped_.contains(lp)) { return false; }
+    const std::string key = tuneKey(lp);
+    // Awake from here on, so a later rebuild() builds it too.
+    {
+        const std::string id = pluginRunId(key);
+        std::vector<std::string> rest;
+        for (const std::string& k : dormant_.keys()) {
+            if (k != id) { rest.push_back(k); }
+        }
+        dormant_.set(std::move(rest));
+    }
+    if (hasInstances(key)) { return false; }
+    // Live BEFORE the attach, as rebuild() has it: a plugin that reads the
+    // receiver or its settings from inside attach() must find itself live.
+    if (lp.hostClient != nullptr && lp.hostClient->attach != nullptr && !key.empty()) {
+        api_->client(key, lp.name, lp.capabilities);
+        api_->setLive(key, true);
+    }
+    buildPluginLocked(lp);
+    return true;
+}
+
+void PluginUi::stopPlugin(const std::string& pluginKey) {
+    // Down until startPlugin(): a rebuild() in between must not bring it back.
+    {
+        std::vector<std::string> keys = dormant_.keys();
+        keys.push_back(pluginKey);
+        dormant_.set(std::move(keys));
+    }
+    if (pluginKey.empty()) { return; }
+
+    // The targets, trails and rows this plugin put up leave with its instances.
+    // The names it published under are its instances' (the display name), read
+    // before the instances go.
+    std::vector<std::string> names;
+    for (const TrackInstance& t : trackInstances_) {
+        if (t.key == pluginKey) { names.push_back(t.name); }
+    }
+    for (const PanelInstance& p : panelInstances_) {
+        if (p.key == pluginKey) { names.push_back(p.name); }
+    }
+    for (const InstrumentInstance& in : instrumentInstances_) {
+        if (in.key == pluginKey) { names.push_back(in.name); }
+    }
+    const auto ofThisPlugin = [&names](const std::string& display) {
+        return std::find(names.begin(), names.end(), display) != names.end();
+    };
+
+    // Track sources: destroyed, and out of the name mirror with them.
+    {
+        std::vector<TrackInstance> keep;
+        for (TrackInstance& t : trackInstances_) {
+            if (t.key == pluginKey) {
+                if (t.api != nullptr && t.handle != nullptr) { t.api->destroy(t.handle); }
+            } else {
+                keep.push_back(std::move(t));
+            }
+        }
+        trackInstances_ = std::move(keep);
+        trackPluginNames_.clear();
+        for (const TrackInstance& t : trackInstances_) { trackPluginNames_.push_back(t.name); }
+    }
+    if (!names.empty()) {
+        tracks_.erase(std::remove_if(tracks_.begin(), tracks_.end(),
+                                     [&](const HostTrack& h) { return ofThisPlugin(h.plugin); }),
+                      tracks_.end());
+        paths_.erase(std::remove_if(paths_.begin(), paths_.end(),
+                                    [&](const HostPath& h) { return ofThisPlugin(h.plugin); }),
+                     paths_.end());
+        // Its altitude history is part of the instance that observed it (see
+        // destroyInstances). remove_if is stable, so the store stays sorted.
+        altTrails_.erase(std::remove_if(altTrails_.begin(), altTrails_.end(),
+                                        [&](const AltTrail& a) { return ofThisPlugin(a.plugin); }),
+                         altTrails_.end());
+    }
+
+    // Panels: the instance goes, the HostPanel it published goes, and every
+    // later panel's index moves up with it.
+    {
+        std::vector<std::size_t> goneAt;
+        std::vector<PanelInstance> keep;
+        for (PanelInstance& p : panelInstances_) {
+            if (p.key == pluginKey) {
+                if (p.api != nullptr && p.handle != nullptr) { p.api->destroy(p.handle); }
+                goneAt.push_back(p.panelIndex);
+            } else {
+                keep.push_back(std::move(p));
+            }
+        }
+        panelInstances_ = std::move(keep);
+        if (!goneAt.empty()) {
+            std::vector<HostPanel> kept;
+            for (std::size_t i = 0; i < panels_.size(); ++i) {
+                if (std::find(goneAt.begin(), goneAt.end(), i) == goneAt.end()) {
+                    kept.push_back(std::move(panels_[i]));
+                }
+            }
+            panels_ = std::move(kept);
+            for (PanelInstance& p : panelInstances_) {
+                std::size_t below = 0;
+                for (std::size_t g : goneAt) {
+                    if (g < p.panelIndex) { ++below; }
+                }
+                p.panelIndex -= below;
+            }
+        }
+    }
+
+    // Instruments: the same, except that the demonstration faces sit at the end
+    // of instruments_ with no instance behind them and are left where they are.
+    {
+        std::vector<std::size_t> goneAt;
+        std::vector<InstrumentInstance> keep;
+        for (InstrumentInstance& in : instrumentInstances_) {
+            if (in.key == pluginKey) {
+                if (in.api != nullptr && in.handle != nullptr) { in.api->destroy(in.handle); }
+                goneAt.push_back(in.index);
+            } else {
+                keep.push_back(std::move(in));
+            }
+        }
+        instrumentInstances_ = std::move(keep);
+        if (!goneAt.empty()) {
+            std::vector<HostInstrument> kept;
+            for (std::size_t i = 0; i < instruments_.size(); ++i) {
+                if (std::find(goneAt.begin(), goneAt.end(), i) == goneAt.end()) {
+                    kept.push_back(std::move(instruments_[i]));
+                }
+            }
+            instruments_ = std::move(kept);
+            for (InstrumentInstance& in : instrumentInstances_) {
+                std::size_t below = 0;
+                for (std::size_t g : goneAt) {
+                    if (g < in.index) { ++below; }
+                }
+                in.index -= below;
+            }
+        }
+    }
+
+    // Its level-1 client sleeps: marks, commands, pending presses and queued
+    // requests leave. AFTER the destroys, so a plugin saving its settings from
+    // destroy() still finds itself live (clear() has the same order).
+    api_->setLive(pluginKey, false);
+}
+
+bool PluginUi::hasInstances(const std::string& pluginKey) const {
+    if (pluginKey.empty()) { return false; }
+    for (const TrackInstance& t : trackInstances_) {
+        if (t.key == pluginKey) { return true; }
+    }
+    for (const PanelInstance& p : panelInstances_) {
+        if (p.key == pluginKey) { return true; }
+    }
+    for (const InstrumentInstance& in : instrumentInstances_) {
+        if (in.key == pluginKey) { return true; }
+    }
+    return false;
+}
+
+void PluginUi::buildPluginLocked(const LoadedPlugin& lp) {
+    // The module file name every instance below is filed under, so
+    // stopPlugin() can take out exactly this plugin's.
+    const std::string modKey = tuneKey(lp);
+    // Host services FIRST. The ABI says attach() runs before any other
+    // capability's create(), so a tracker can read the receiver while
+    // building its initial state instead of waiting a frame for it.
+    if (lp.hostClient != nullptr && lp.hostClient->attach != nullptr) {
+        // The permission key, NOT the display name: the name is the
+        // plugin's own to choose, so keying on it would let any module
+        // inherit a granted one's permission by adopting its name.
+        const std::string key = tuneKey(lp);
+        // ONE BRIDGE PER PLUGIN, REUSED, not a fresh one per rebuild.
+        //
+        // rebuild() runs on every source change, so a bridge per call grew
+        // the store without limit and - worse - left the plugin holding
+        // the table from its FIRST attach while the host considered a
+        // later one current. The ABI says attach() is called once with a
+        // table valid for as long as the plugin is loaded; handing back
+        // the same table makes the host's repeated call the no-op the
+        // plugin is entitled to assume it is.
+        HostCtx* bridge = findBridge(this, key);
+        if (bridge == nullptr) {
+            auto owned = std::make_unique<HostCtx>();
+            owned->self = this;
+            owned->plugin = key;
+            owned->api.structSize = static_cast<std::uint32_t>(sizeof(CascadeHostApi));
+            owned->api.ctx = owned.get();
+            owned->api.centre_hz = &hostCentre;
+            owned->api.sample_rate_hz = &hostRate;
+            owned->api.request_tune = &hostTune;
+            owned->api.unix_time_ms = &hostTime;
+            // HOST API LEVEL 1: the same table, grown at the end. A plugin
+            // built before level 1 reads only the four members above at
+            // the offsets they have always had (plugin_abi.h, VERSIONING).
+            owned->core = api_;
+            if (!key.empty()) {
+                owned->client = &api_->client(key, lp.name, lp.capabilities);
+            }
+            fillLevel1(*owned);
+            bridge = owned.get();
+            ctxStore().push_back(std::move(owned));
+        }
+        lp.hostClient->attach(&bridge->api);
+    }
+
+    if (lp.trackSource != nullptr) {
+        void* h = lp.trackSource->create();
+        if (h != nullptr) {
+            TrackInstance ti;
+            ti.api = lp.trackSource;
+            ti.handle = h;
+            ti.name = lp.name;
+            ti.key = modKey;
+            // The name mirror rides with the instance, so the two can
+            // never disagree about which plugins have a track source.
+            trackPluginNames_.push_back(ti.name);
+            trackInstances_.push_back(std::move(ti));
+        }
+    }
+
+    // NOTE: no image-decoder instance is created here. An image decoder
+    // consumes samples, so PluginRunner owns it - see the header.
+
+    if (lp.panel != nullptr) {
+        void* h = lp.panel->create();
+        if (h != nullptr) {
+            HostPanel hp;
+            hp.plugin = lp.name;
+            hp.title = lp.panel->title != nullptr ? lp.panel->title : lp.name;
+
+            // Columns are read ONCE: the ABI fixes a panel's shape for its
+            // lifetime, so rediscovering it every frame would be work that
+            // can only ever return the same answer.
+            char headings[CASCADE_PANEL_MAX_COLUMNS][CASCADE_PANEL_CELL_CHARS] = {};
+            std::uint32_t cols = lp.panel->columns(h, headings);
+            if (cols == 0u) { cols = 1u; }
+            if (cols > CASCADE_PANEL_MAX_COLUMNS) { cols = CASCADE_PANEL_MAX_COLUMNS; }
+            for (std::uint32_t c = 0; c < cols; ++c) {
+                hp.headings.push_back(bounded(headings[c], CASCADE_PANEL_CELL_CHARS));
+            }
+
+            PanelInstance pi;
+            pi.api = lp.panel;
+            pi.handle = h;
+            pi.name = lp.name;
+            pi.key = modKey;
+            pi.panelIndex = panels_.size();
+            panels_.push_back(std::move(hp));
+            panelInstances_.push_back(std::move(pi));
+        }
+    }
+
+    if (lp.instrument != nullptr) {
+        void* h = lp.instrument->create();
+        if (h != nullptr) {
+            HostInstrument hi;
+            hi.plugin = lp.name;
+            hi.title = lp.instrument->title != nullptr ? lp.instrument->title : lp.name;
+            hi.kind = lp.instrument->kind;
+            // The memory feed is a pair (the loader refuses half of one),
+            // and its columns are read once, as a panel's are.
+            if (lp.instrument->columns != nullptr && lp.instrument->poll_rows != nullptr) {
+                char headings[CASCADE_PANEL_MAX_COLUMNS][CASCADE_PANEL_CELL_CHARS] = {};
+                std::uint32_t cols = lp.instrument->columns(h, headings);
+                if (cols == 0u) { cols = 1u; }
+                if (cols > CASCADE_PANEL_MAX_COLUMNS) { cols = CASCADE_PANEL_MAX_COLUMNS; }
+                for (std::uint32_t c = 0; c < cols; ++c) {
+                    hi.headings.push_back(bounded(headings[c], CASCADE_PANEL_CELL_CHARS));
+                }
+            }
+            InstrumentInstance ii;
+            ii.api = lp.instrument;
+            ii.handle = h;
+            ii.name = lp.name;
+            ii.key = modKey;
+            // BEFORE THE DEMONSTRATION FACES, which sit at the end of
+            // instruments_ with no instance behind them: a plugin started
+            // after they were added (startPlugin) must not push them out of
+            // the tail, and every real instance's index stays valid. In
+            // rebuild() there are none yet, so this is the end.
+            ii.index = instruments_.size() - demoCount_;
+            instruments_.insert(instruments_.begin() + static_cast<std::ptrdiff_t>(ii.index),
+                                std::move(hi));
+            instrumentInstances_.push_back(std::move(ii));
+        }
     }
 }
 

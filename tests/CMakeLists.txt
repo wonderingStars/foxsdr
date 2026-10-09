@@ -55,6 +55,16 @@ set_target_properties(image_probe_fixture PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_image/$<CONFIG>"
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_image/$<CONFIG>")
 
+# A REAL PLUGIN MODULE WITH A PRESET, for test_plugin_inuse_app (0.99.73): a text decoder with one
+# preset, so that the two gestures that tune a plugin - pressing the preset (which pins the plugin)
+# and merely opening its window (which must not) - both have something to apply. Its own directory.
+add_library(preset_probe_fixture MODULE "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/preset_probe_plugin.cpp")
+target_include_directories(preset_probe_fixture PRIVATE "${CMAKE_SOURCE_DIR}/src/core")
+set_target_properties(preset_probe_fixture PROPERTIES
+    PREFIX ""
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_preset/$<CONFIG>"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_preset/$<CONFIG>")
+
 # A REAL PLUGIN MODULE THAT DECLARES THE WRONG ABI, for test_health_paths: the
 # plugin host loads it as any plugin and refuses it, which is the "abi" word of
 # the anonymous failure count (core/health_events.hpp). Its own directory.
@@ -242,6 +252,13 @@ foreach(src ${CASCADE_TESTS})
         add_dependencies(${name} rescan_probe_a image_probe_fixture cascade)
         add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:rescan_probe_a>"
                  "$<TARGET_FILE:image_probe_fixture>")
+    elseif(name STREQUAL "test_plugin_inuse_app")
+        # Runs the real cascade.exe (built first) with the same two modules fitted, and the preset
+        # probe beside them, and reads from the modules' own event logs WHEN the host creates and
+        # destroys their decoders (0.99.73: a plugin runs only while it is used).
+        add_dependencies(${name} rescan_probe_a image_probe_fixture preset_probe_fixture cascade)
+        add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:rescan_probe_a>"
+                 "$<TARGET_FILE:image_probe_fixture>" "$<TARGET_FILE:preset_probe_fixture>")
     elseif(name STREQUAL "test_soapy_enum_proc" AND TARGET soapy_fault_fixture)
         # Hands the fault fixture's directory to the real enumeration child;
         # cascade.exe is built first because that block runs it.
@@ -329,6 +346,18 @@ set_tests_properties(test_plugin_store_app PROPERTIES TIMEOUT 600)
 # 100 to 110 frames each.
 # The same bound, for the same reason, as the store test.
 set_tests_properties(test_decoder_window_app PROPERTIES TIMEOUT 600)
+# The in-use test starts the real application about twenty times (the scenarios in its header: a
+# layout run and a scripted run each, three of them paced at 16 ms a frame for a few seconds so an
+# interval in milliseconds can pass). Linux runners are half this desktop's speed, so it is given
+# the generous bound its siblings are.
+set_tests_properties(test_plugin_inuse_app PROPERTIES TIMEOUT 600)
+# The audio-buffer test builds the real AppWindow three times (its sink opened and then closed, which
+# is a device open each) and makes a few hundred starved callbacks against it by hand. A few seconds
+# here; the Linux runners are half this desktop's speed and open ALSA's `null` device slowly, so it is
+# given the generous bound its siblings are rather than the loop's two minutes.
+set_tests_properties(test_audio_lead_app PROPERTIES TIMEOUT 300)
+# The priority test starts a real pipeline twice (a stop and a start is a new thread and a new request).
+set_tests_properties(test_dsp_priority PROPERTIES TIMEOUT 120)
 
 add_test(NAME app_smoke COMMAND cascade --frames 3)
 set_tests_properties(app_smoke PROPERTIES
@@ -407,6 +436,7 @@ if(CASCADE_SANITIZE_ENABLED)
         # 700, a 1 kHz patch tone at 0.006 where it must exceed 0.01.
         "app_selftest|it measures the CW sidetone of the built-in generator through the real pipeline and the instrumented DSP thread falls behind the clock (ring overflow drops samples) so the tone reads 773 Hz instead of 700 with no sanitizer report"
         "test_patch_audio|its pipeline cases measure tone levels against a real-time source and the instrumented DSP thread falls behind the clock (ring overflow drops samples, the patch's own ring starves) so levels fail with no sanitizer report"
+        "test_pipeline_audio_lead|it reads the drift matcher's correction while a pipeline plays to the real output, and the instrumented DSP thread falls behind the clock (sink underruns un-prime the ring, where the matcher holds) so the correction is never seen to move, with no sanitizer report"
         "test_plugin_audio|its takeover case measures the length of a changeover in the real pipeline's audio against a real-time source and the instrumented DSP thread falls behind the clock: the fade read 68 frames where it is 240 with no sanitizer report (1896 of its 1897 checks passed, so this one is a loss of coverage worth revisiting)")
 
     # TESTS THAT FAULT A CHILD PROCESS ON PURPOSE, to prove the crash handler

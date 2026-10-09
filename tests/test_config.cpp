@@ -133,6 +133,8 @@ AppConfig junkConfig() {
     c.bandwidthHz = -2.0;
     c.squelchDb = 999.0f;
     c.volume = 42.0f;
+    c.audioBufferMs = 777;   // not one of the four buffers: a load that forgets the field keeps it
+    c.audioBufferAutoMs = 777;  // likewise for the depth AUTOMATIC remembered
     c.dbMin = 5.0f;
     c.dbMax = -5.0f;
     c.splitRatio = 77.0f;
@@ -282,6 +284,9 @@ AppConfig junkConfig() {
     // mention stopped plugins has stopped none, and a leftover here would
     // silence a decoder the user never switched off.
     c.pluginsStopped = {"junk-stop.dll"};
+    // And a run state: a config that says nothing about how plugins run has set none (every plugin
+    // AUTO), and a leftover here would pin or stop a plugin the user never touched (0.99.73).
+    c.pluginRun = {{"junk-run", "stopped"}};
     // A closed window that must not survive either: a config that says
     // nothing about closed windows has closed none, and a leftover here would
     // hide a panel the user never shut.
@@ -331,6 +336,8 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     CHECK(a.bandwidthHz == b.bandwidthHz);
     CHECK(a.squelchDb == b.squelchDb);
     CHECK(a.volume == b.volume);
+    CHECK(a.audioBufferMs == b.audioBufferMs);
+    CHECK(a.audioBufferAutoMs == b.audioBufferAutoMs);
     CHECK(a.dbMin == b.dbMin);
     CHECK(a.dbMax == b.dbMax);
     CHECK(a.splitRatio == b.splitRatio);
@@ -411,6 +418,7 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     CHECK(a.pluginLastUpdateCheck == b.pluginLastUpdateCheck);
     CHECK(a.pluginTuneAllowed == b.pluginTuneAllowed);
     CHECK(a.pluginsStopped == b.pluginsStopped);
+    CHECK(a.pluginRun == b.pluginRun);
     CHECK(a.closedWindows == b.closedWindows);
     CHECK(a.pluginMuteOverride == b.pluginMuteOverride);
     CHECK(a.keyBindings == b.keyBindings);
@@ -748,6 +756,8 @@ int main() {
         in.bandwidthHz = 2700.0;
         in.squelchDb = -63.5f;
         in.volume = 0.85f;
+        in.audioBufferMs = 480;   // the Sinks rail's AUDIO BUFFER (0.99.73): a fixed 480 ms
+        in.audioBufferAutoMs = 960;  // ...and the depth AUTOMATIC had reached (kept, ignored while fixed)
         in.dbMin = -97.0f;
         in.dbMax = -12.5f;  // -97 < -22.5: survives the span rule
         in.splitRatio = 0.62f;
@@ -886,6 +896,8 @@ int main() {
         // and deliberately different names from the grants above so a save
         // that crossed the two lists would show up here.
         in.pluginsStopped = {"sstv-decoder.dll", "ais-decoder.dll"};
+        // How each plugin runs (0.99.73), by id, with all three words present.
+        in.pluginRun = {{"pocsag-decoder", "always"}, {"ais-decoder", "stopped"}, {"adsb", "auto"}};
         // Windows the user shut, in ImGui's identity form rather than a
         // plugin file name, so a save that confused this list with the plugin
         // lists either side of it would be visible here. This is what makes a
@@ -1729,6 +1741,107 @@ int main() {
         CHECK(next.sourceKind == "siggen");
         CHECK(next.nativeArgs.empty());
         CHECK(next.soapyArgs.empty());
+    }
+
+    // --- the audio buffer (0.99.73): 0 or one of the four steps, nothing between ----
+    {
+        const std::string path = p("audio_buffer.json");
+        AppConfig out;
+        std::string err;
+        // The default is AUTOMATIC, and a file that never mentions it is automatic.
+        CHECK(AppConfig{}.audioBufferMs == 0);
+        CHECK(writeText(path, "{}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.audioBufferMs == 0);
+        // Each legal value survives.
+        for (const int ok : {0, 120, 240, 480, 960}) {
+            CHECK(writeText(path, "{\"audioBufferMs\":" + std::to_string(ok) + "}\n"));
+            CHECK(ConfigStore::load(path, out, err));
+            CHECK(out.audioBufferMs == ok);
+        }
+        // Anything else is AUTOMATIC again - not the nearest step, not clamped: a
+        // hand-edited 5000 must not become a five second delay, and 300 is not
+        // "nearly 240". Wrong-typed values keep the default like every other field.
+        for (const char* bad : {"-1", "1", "100", "121", "300", "1000", "5000", "2147483647",
+                                "1.5", "\"480\"", "null", "true", "[240]"}) {
+            CHECK(writeText(path, std::string("{\"audioBufferMs\":") + bad + "}\n"));
+            AppConfig fresh = junkConfig();   // starts at 777: a load that leaves it fails below
+            CHECK(ConfigStore::load(path, fresh, err));
+            if (fresh.audioBufferMs != 0) {
+                std::printf("FAIL audioBufferMs %s loaded as %d\n", bad, fresh.audioBufferMs);
+            }
+            CHECK(fresh.audioBufferMs == 0);
+        }
+        // It is written under its own name, and only once.
+        AppConfig in;
+        in.audioBufferMs = 240;
+        const std::string text = ConfigStore::serialize(in);
+        CHECK(text.find("\"audioBufferMs\": 240") != std::string::npos ||
+              text.find("\"audioBufferMs\":240") != std::string::npos);
+        // THE SAVE DEBOUNCE HAS TO SEE IT: a combo pick calls no save of its own, so
+        // configsEqual is the only thing that writes it before a clean exit.
+        const AppConfig base;
+        CHECK(cascade::gui::configsEqual(base, base));
+        for (const int ms : {120, 240, 480, 960}) {
+            AppConfig other = base;
+            other.audioBufferMs = ms;
+            CHECK(!cascade::gui::configsEqual(base, other));
+            CHECK(!cascade::gui::configsEqual(other, base));
+        }
+    }
+
+    // --- the depth AUTOMATIC reached, remembered across launches (0.99.73 follow-up) ---------------
+    //
+    // audioBufferAutoMs: the same legal set as audioBufferMs and the same repair (anything else is 0,
+    // "it never had to deepen"), written under its own name, and seen by the save debounce - the raise
+    // that fills it happens in the frame loop and calls no save of its own.
+    {
+        const std::string path = p("audio_buffer_auto.json");
+        AppConfig out;
+        std::string err;
+        CHECK(AppConfig{}.audioBufferAutoMs == 0);
+        CHECK(writeText(path, "{}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.audioBufferAutoMs == 0);
+        for (const int ok : {0, 120, 240, 480, 960}) {
+            CHECK(writeText(path, "{\"audioBufferAutoMs\":" + std::to_string(ok) + "}\n"));
+            CHECK(ConfigStore::load(path, out, err));
+            CHECK(out.audioBufferAutoMs == ok);
+        }
+        for (const char* bad : {"-1", "1", "100", "121", "300", "1000", "5000", "2147483647", "1.5", "\"480\"",
+                                "null", "true", "[240]"}) {
+            CHECK(writeText(path, std::string("{\"audioBufferAutoMs\":") + bad + "}\n"));
+            AppConfig fresh = junkConfig();
+            fresh.audioBufferAutoMs = 777;  // a load that forgets the field would keep this
+            CHECK(ConfigStore::load(path, fresh, err));
+            if (fresh.audioBufferAutoMs != 0) {
+                std::printf("FAIL audioBufferAutoMs %s loaded as %d\n", bad, fresh.audioBufferAutoMs);
+            }
+            CHECK(fresh.audioBufferAutoMs == 0);
+        }
+        // The two settings are independent: a fixed buffer beside a remembered depth round-trips as both.
+        AppConfig in;
+        in.audioBufferMs = 240;
+        in.audioBufferAutoMs = 480;
+        const std::string text = ConfigStore::serialize(in);
+        CHECK(text.find("\"audioBufferAutoMs\": 480") != std::string::npos ||
+              text.find("\"audioBufferAutoMs\":480") != std::string::npos);
+        CHECK(text.find("\"audioBufferMs\": 240") != std::string::npos ||
+              text.find("\"audioBufferMs\":240") != std::string::npos);
+        const std::string rt = p("audio_buffer_auto_rt.json");
+        CHECK(ConfigStore::save(rt, in, err));
+        AppConfig back = junkConfig();
+        CHECK(ConfigStore::load(rt, back, err));
+        CHECK(back.audioBufferMs == 240);
+        CHECK(back.audioBufferAutoMs == 480);
+        // THE SAVE DEBOUNCE HAS TO SEE IT.
+        const AppConfig base;
+        for (const int ms : {120, 240, 480, 960}) {
+            AppConfig other = base;
+            other.audioBufferAutoMs = ms;
+            CHECK(!cascade::gui::configsEqual(base, other));
+            CHECK(!cascade::gui::configsEqual(other, base));
+        }
     }
 
     // --- P7 clamps (documented in config.hpp) --------------------------------
@@ -3709,6 +3822,102 @@ int main() {
         CHECK(ConfigStore::load(rt, back, err));
         CHECK(back.pluginsStopped == Names({"adsb-decoder-1.0.1-abi3-win-x64.dll"}));
         CHECK(back.pluginTuneAllowed == Names({"tracker.dll"}));
+    }
+
+    // --- How each plugin runs (0.99.73) ----------------------------------------
+    //
+    // plugin id -> "auto" | "always" | "stopped". Sanitised ENTRY BY ENTRY: one bad line costs
+    // nothing else. A decision about a plugin must survive the plugin being absent for a while, so
+    // an id that matches nothing installed is kept; and it is kept by ID, so an update (a new file
+    // name) leaves it alone. The old file-name list is still READ, for the application to migrate
+    // once, and is separate.
+    {
+        const std::string path = p("plugin_run.json");
+        const AppConfig d;
+        using Run = std::map<std::string, std::string>;
+
+        // EVERY PLUGIN IS AUTO BY DEFAULT: a fresh install, a missing field and a wrong-typed field
+        // all mean no plugin has been pinned or stopped.
+        CHECK(d.pluginRun.empty());
+        AppConfig out = junkConfig();
+        std::string err;
+        CHECK(writeText(path, "{\"volume\":0.5}\n"));  // field absent entirely
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.pluginRun.empty());
+
+        out = junkConfig();
+        CHECK(writeText(path, "{\"pluginRun\":[\"adsb\"]}\n"));  // an array, not an object
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.pluginRun.empty());
+        out = junkConfig();
+        CHECK(writeText(path, "{\"pluginRun\":\"always\"}\n"));  // a string
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.pluginRun.empty());
+
+        // An ordinary object loads verbatim.
+        CHECK(writeText(path, "{\"pluginRun\":{\"adsb\":\"always\",\"ais\":\"stopped\",\"dmr\":\"auto\"}}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.pluginRun == Run({{"adsb", "always"}, {"ais", "stopped"}, {"dmr", "auto"}}));
+
+        // A VALUE THAT IS NOT ONE OF THE THREE WORDS is dropped, and so is one that is not a string -
+        // the rest survive.
+        CHECK(writeText(path,
+                        "{\"pluginRun\":{\"adsb\":\"always\",\"a\":\"ALWAYS\",\"b\":\"running\",\"c\":\"\","
+                        "\"d\":7,\"e\":null,\"f\":true,\"ais\":\"stopped\"}}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.pluginRun == Run({{"adsb", "always"}, {"ais", "stopped"}}));
+
+        // An EMPTY id names no plugin and one longer than 128 bytes is not a plugin id.
+        CHECK(writeText(path, "{\"pluginRun\":{\"\":\"stopped\",\"" + std::string(129, 'x') +
+                                  "\":\"always\",\"" + std::string(128, 'y') +
+                                  "\":\"always\",\"adsb\":\"stopped\"}}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.pluginRun.size() == 2u);
+        CHECK(out.pluginRun.count("") == 0u);
+        CHECK(out.pluginRun.count(std::string(129, 'x')) == 0u);
+        CHECK(out.pluginRun.count(std::string(128, 'y')) == 1u);
+        CHECK(out.pluginRun.count("adsb") == 1u);
+
+        // The cap, for the reason the lists beside it have one.
+        {
+            std::string big = "{\"pluginRun\":{";
+            for (std::size_t i = 0; i < AppConfig::kMaxTuneGrants + 50u; ++i) {
+                if (i != 0) { big += ","; }
+                big += "\"p" + std::to_string(i) + "\":\"always\"";
+            }
+            big += "}}\n";
+            CHECK(writeText(path, big));
+            CHECK(ConfigStore::load(path, out, err));
+            CHECK(out.pluginRun.size() == AppConfig::kMaxTuneGrants);
+        }
+
+        // THE OLD LIST IS STILL READ, beside the new map, for the one-time migration; neither
+        // replaces the other at this layer.
+        CHECK(writeText(path,
+                        "{\"pluginsStopped\":[\"sstv-decoder-1.0.0-abi3-win-x64.dll\"],"
+                        "\"pluginRun\":{\"adsb\":\"always\"}}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.pluginsStopped.size() == 1u);
+        CHECK(out.pluginRun == Run({{"adsb", "always"}}));
+
+        // THE ROUND TRIP: a decision made in one session is still there in the next, and the other
+        // lists neither feed it nor are fed by it.
+        AppConfig in;
+        in.pluginRun = {{"pocsag-decoder", "always"}, {"ais-decoder", "stopped"}};
+        in.pluginTuneAllowed = {"tracker.dll"};
+        const std::string rt = p("plugin_run_rt.json");
+        CHECK(ConfigStore::save(rt, in, err));
+        AppConfig back = junkConfig();
+        CHECK(ConfigStore::load(rt, back, err));
+        CHECK(back.pluginRun == in.pluginRun);
+        CHECK(back.pluginTuneAllowed == std::vector<std::string>({"tracker.dll"}));
+        CHECK(back.pluginsStopped.empty());
+        // ...and an empty map round-trips as an empty map, not as a leftover.
+        AppConfig none;
+        CHECK(ConfigStore::save(rt, none, err));
+        back = junkConfig();
+        CHECK(ConfigStore::load(rt, back, err));
+        CHECK(back.pluginRun.empty());
     }
 
     // --- Plugins whose mute setting is not the default -----------------------

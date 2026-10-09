@@ -505,6 +505,10 @@ struct AppWindowTestAccess {
     static int audioRecoveries(AppWindow& a) { return a.audioRecoveries_; }
     static void sdrPlayPoll(AppWindow& a) { a.pollSdrPlayService(); }
     static std::uint64_t ringDropped(AppWindow& a) { return a.pipeline_.ringDroppedSamples(); }
+    // A minute of audio closes (the once-a-minute poll's own body, without the clock),
+    // and the Sinks rail's AUDIO BUFFER setting.
+    static void closeAudioMinute(AppWindow& a) { a.closeAudioMinute(a.pipeline_.audio().ringFrames()); }
+    static void setAudioBuffer(AppWindow& a, int ms) { a.setAudioBufferMs(ms); }
 };
 
 }  // namespace cascade::gui
@@ -1104,6 +1108,51 @@ void testRecoveriesAreCountedWhereTheWindowMeetsThem() {
         Access::audioOpen(app, /*byWatchdog=*/true, /*opens=*/true);
         CHECK(Access::audioRecoveries(app) == 2);
         CHECK(countOf(g->counts(), "recovered.audio") == 1);     // once a session
+    }
+    // `audiolead` (0.99.73) - REAL starved callbacks in the window's own sink (its stream closed so
+    // that no device thread reads the ring; each is a primed ring asked for more than it holds), and
+    // the close of the minute they were in, which is where the buffer deepens. A quiet minute and a
+    // minute that was too mild count nothing; a FIXED buffer never deepens and so never counts. Once
+    // a session: the lead steps up to three times and "this session had it" is the fact.
+    {
+        auto starve = [](cascade::sink::AudioOut& out, int times) {
+            // (a stereo sink counts its lead in frames of two samples)
+            const std::size_t chan = out.channels() == 2 ? 2 : 1;
+            for (int i = 0; i < times; ++i) {
+                const std::size_t lead = out.leadFrames();
+                std::vector<float> pad(lead * chan, 0.0f);
+                CHECK(out.write(pad.data(), pad.size()) == pad.size());
+                std::vector<float> dst((lead + 480) * chan);
+                CHECK(cascade::sink::AudioOut::pullBlock(&out, dst.data(), lead) == pad.size());
+                cascade::sink::AudioOut::pullBlock(&out, dst.data(), 480);
+            }
+        };
+        auto g = fresh();
+        cascade::gui::AppWindow app;
+        cascade::sink::AudioOut& out = Access::audio(app);
+        out.close();
+        Access::closeAudioMinute(app);                           // a quiet minute
+        CHECK(countOf(g->counts(), "recovered.audiolead") == 0);
+        starve(out, 2);
+        Access::closeAudioMinute(app);                           // two: a stutter, not a machine that fell behind
+        CHECK(countOf(g->counts(), "recovered.audiolead") == 0);
+        CHECK(out.leadFrames() == cascade::sink::AudioOut::kPrimeFrames);
+        starve(out, 3);
+        Access::closeAudioMinute(app);                           // three: the buffer deepens, and it is counted
+        CHECK(out.leadFrames() == 11520u);
+        CHECK(countOf(g->counts(), "recovered.audiolead") == 1);
+        starve(out, 3);
+        Access::closeAudioMinute(app);                           // deepens again: still one this session
+        CHECK(out.leadFrames() == 23040u);
+        CHECK(countOf(g->counts(), "recovered.audiolead") == 1);
+        CHECK(g->counts().size() == 1);                          // and nothing else was counted
+
+        auto g2 = fresh();
+        Access::setAudioBuffer(app, 240);                        // the person's own fixed buffer
+        starve(out, 20);
+        Access::closeAudioMinute(app);
+        CHECK(out.leadFrames() == 11520u);
+        CHECK(g2->counts().empty());
     }
     // `patchload` - REAL: restoring a saved patch whose wire the rules forbid (the loader offers every
     // wire to connect() and drops what it refuses) - the very path the start-up restore takes.

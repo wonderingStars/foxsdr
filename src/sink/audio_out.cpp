@@ -9,6 +9,7 @@
 #include "core/health_events.hpp"
 #include "sink/pa_init.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -25,6 +26,8 @@ static_assert(std::atomic<std::uint64_t>::is_always_lock_free,
               "underrun counter must be lock-free for the audio callback");
 static_assert(std::atomic<bool>::is_always_lock_free,
               "primed latch must be lock-free for the audio callback");
+static_assert(std::atomic<std::size_t>::is_always_lock_free,
+              "lead must be lock-free for the audio callback");
 
 namespace {
 
@@ -413,12 +416,40 @@ std::size_t AudioOut::pullBlock(void* self, float* dst, std::size_t frames) {
         static_cast<std::size_t>(ao->channels_.load(std::memory_order_relaxed) == 2 ? 2 : 1);
     const std::size_t n = frames * chan;
 
+    if (ao->trimPending_.exchange(false, std::memory_order_acq_rel)) {
+        // Only this callback consumes the ring. Drop complete stereo frames
+        // from the OLD end, retaining at most the new lead plus the matcher's
+        // margin. A fixed stack buffer keeps the realtime path allocation-free;
+        // the ring bounds this loop even if the producer is writing at once.
+        const std::size_t target =
+            (ao->leadFrames_.load(std::memory_order_relaxed) + kTargetMarginFrames) * chan;
+        const std::size_t queued = ao->ring_.size();
+        std::size_t discard = queued > target ? queued - target : 0;
+        discard -= discard % chan;
+        if (discard != 0) {
+            float scratch[256];
+            while (discard != 0) {
+                const std::size_t take = std::min(discard, sizeof(scratch) / sizeof(scratch[0]));
+                const std::size_t got = ao->ring_.read(scratch, take);
+                if (got == 0) { break; }
+                discard -= got;
+            }
+            ao->primed_.store(false, std::memory_order_relaxed);
+        }
+    }
+
     if (!ao->primed_.load(std::memory_order_relaxed)) {
         // Charged as a priming callback whether or not this is the one that
         // crosses the threshold — the count is "how many callbacks ran while
         // building the lead", and the last of them is one of those too.
         ao->primingCallbacks_.fetch_add(1, std::memory_order_relaxed);
-        if (ao->ring_.size() < kPrimeFrames * chan) {
+        // THE LEAD IS READ HERE, on every unprimed block, from the atomic the
+        // window's once-a-minute poll writes (setLeadFrames): the callback never
+        // sees a half-written value and never waits for one. It is a runtime
+        // value since 0.99.73 - a computer that cannot keep up at 120 ms is
+        // given more, and this is where the sink starts to honour it.
+        const std::size_t lead = ao->leadFrames_.load(std::memory_order_relaxed);
+        if (ao->ring_.size() < lead * chan) {
             // Still short of the lead: silence, and NOT an underrun — nothing
             // has failed to arrive, because playback was never promised yet.
             std::memset(dst, 0, n * sizeof(float));
@@ -465,6 +496,41 @@ std::size_t AudioOut::ringFrames() const {
 std::size_t AudioOut::ringCapacityFrames() const {
     const std::size_t chan = static_cast<std::size_t>(channels() == 2 ? 2 : 1);
     return ring_.capacity() / chan;
+}
+
+void AudioOut::setLeadFrames(std::size_t frames) {
+    // Never below today's 120 ms (a smaller lead is the stutter the whole feature
+    // exists to avoid) and never above what the ring can hold with the matcher's
+    // margin and headroom to spare (kMaxLeadFrames, 960 ms). Called from the
+    // window's thread, never the callback: one relaxed store.
+    if (frames < kPrimeFrames) { frames = kPrimeFrames; }
+    if (frames > kMaxLeadFrames) { frames = kMaxLeadFrames; }
+    const std::size_t before = leadFrames_.exchange(frames, std::memory_order_relaxed);
+    if (frames < before) { trimPending_.store(true, std::memory_order_release); }
+}
+
+bool validAudioBufferSetting(int ms) {
+    if (ms == 0) { return true; }   // AUTOMATIC
+    for (const int step : kAudioLeadStepsMs) {
+        if (ms == step) { return true; }
+    }
+    return false;
+}
+
+int nextAudioLead(std::uint64_t underrunsLastMinute, int currentLeadMs, int configuredMs) {
+    // A fixed setting never steps, whatever the minute was.
+    if (configuredMs != 0) { return currentLeadMs; }
+    // Fewer than three is a stutter, not a computer that fell behind. And there
+    // is no way down: a quiet minute at a raised lead answers with the same lead.
+    if (underrunsLastMinute < static_cast<std::uint64_t>(kAudioLeadStarvedPerMinute)) {
+        return currentLeadMs;
+    }
+    // One rung up, the first above where the lead is now. At (or above) the top
+    // there is none, and the lead is left exactly as it is.
+    for (const int step : kAudioLeadStepsMs) {
+        if (step > currentLeadMs) { return step; }
+    }
+    return currentLeadMs;
 }
 
 }  // namespace cascade::sink

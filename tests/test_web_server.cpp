@@ -1922,6 +1922,7 @@ void testPluginAudioSourceReachesTheBrowser() {
     playing.audioPrimingCallbacks = 9;
     playing.audioRingMs = 41.0;
     playing.audioRingCapacityMs = 200.0;
+    playing.audioLeadMs = 480;   // 0.99.73: the buffer in force (the Sinks rail's number)
     playing.audioSource = "Fake DAB";
     playing.audioPluginGaps = 3;
     playing.audioPluginGapFrames = 480;
@@ -1955,6 +1956,9 @@ void testPluginAudioSourceReachesTheBrowser() {
             CHECK(j.value("audioPrimingCallbacks", 0ULL) == 9ULL);
             CHECK(j.value("audioRingMs", -1.0) == 41.0);
             CHECK(j.value("audioRingCapacityMs", -1.0) == 200.0);
+            // The buffer in force, milliseconds (0.99.73), beside the ring it sits in.
+            CHECK(j.contains("audioLeadMs"));
+            CHECK(j.value("audioLeadMs", -1) == 480);
             CHECK(j.contains("audioMutedBy"));
         }
     }

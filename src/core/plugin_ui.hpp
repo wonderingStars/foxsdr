@@ -633,6 +633,9 @@ public:
     // The level-1 API is told too (PluginApiCore::setStopped), so a stopped
     // plugin's marks and commands leave the screen at once and its queued
     // requests are refused rather than applied.
+    //
+    // KEYED ON THE PLUGIN'S ID (core/plugin_run.hpp): what is handed in may be
+    // file names or ids, and a stop outlives an update of the module.
     void setStopped(std::vector<std::string> keys) {
         api_->setStopped(keys);
         stopped_.set(std::move(keys));
@@ -640,6 +643,31 @@ public:
     bool isStopped(const std::string& pluginKey) const {
         return stopped_.contains(pluginKey);
     }
+
+    // --- Per-plugin start and stop (0.99.73) -----------------------------------
+    //
+    // A FITTED PLUGIN RUNS ONLY WHILE IT IS USED (core/plugin_run.hpp), and these
+    // make that real for ONE plugin without the wholesale rebuild: startPlugin
+    // attaches its host client and creates its track source, panel and
+    // instrument instances; stopPlugin destroys exactly those, takes its
+    // targets, trails and rows off the map and the lists, and puts its level-1
+    // client to sleep (its marks and commands leave the screen). Every other
+    // plugin's instances, panels, instruments and altitude history are left as
+    // they are. rebuild() stays for the wholesale cases.
+    //
+    // THE DORMANT SET works as the stop set does for rebuild() - a dormant
+    // plugin is given nothing - and survives clear(). startPlugin takes its
+    // plugin out of it and stopPlugin puts it in, so a later rebuild() keeps the
+    // state the per-plugin calls left. Keyed on id, like the stop set.
+    //
+    // startPlugin returns false, and creates nothing, for a plugin that did not
+    // load, is STOPPED, or already has instances here.
+    bool startPlugin(const LoadedPlugin& lp);
+    void stopPlugin(const std::string& pluginKey);
+    void setDormant(std::vector<std::string> keys) { dormant_.set(std::move(keys)); }
+    bool isDormant(const std::string& pluginKey) const { return dormant_.contains(pluginKey); }
+    // Whether this plugin (by module file name) has any UI instance now.
+    bool hasInstances(const std::string& pluginKey) const;
 
     // --- HOST API LEVEL 1 ---------------------------------------------------
     //
@@ -752,21 +780,27 @@ public:
     std::int32_t tuneRequestFromPlugin(const std::string& plugin, double centreHz);
 
 private:
+    // `key` on all three is the module file name (tuneKey), which is what
+    // stopPlugin() takes out by - the display name is the plugin's own to
+    // choose and two modules may share one.
     struct TrackInstance {
         const CascadeTrackSourceApi* api = nullptr;
         void* handle = nullptr;
         std::string name;
+        std::string key;
     };
     struct PanelInstance {
         const CascadePanelApi* api = nullptr;
         void* handle = nullptr;
         std::string name;
+        std::string key;
         std::size_t panelIndex = 0;  // into panels_
     };
     struct InstrumentInstance {
         const CascadeInstrumentApi* api = nullptr;
         void* handle = nullptr;
         std::string name;
+        std::string key;
         std::size_t index = 0;  // into instruments_
     };
 
@@ -810,6 +844,10 @@ private:
     static constexpr std::uint32_t kMaxPathPoints = 20000;
 
     void destroyInstances();
+    // Attaches and creates what ONE plugin declares - the body rebuild() runs
+    // for each plugin, and what startPlugin() runs for one. Appends to the
+    // instance vectors; demonstration instruments stay last.
+    void buildPluginLocked(const LoadedPlugin& lp);
 
     std::vector<TrackInstance> trackInstances_;
     std::vector<PanelInstance> panelInstances_;
@@ -838,6 +876,8 @@ private:
     mutable std::mutex servicesMutex_;
     HostServices services_;
     PluginStopSet stopped_;
+    // The plugins put to sleep (AUTO and not wanted); see setDormant().
+    PluginStopSet dormant_;
     // Created with this object, shared with every bridge. See api().
     std::shared_ptr<PluginApiCore> api_ = std::make_shared<PluginApiCore>();
     std::vector<std::string> tuneRequesters_;

@@ -24,6 +24,7 @@
 // disagree with the one the update check uses about which of two versions is
 // newer, and then the host would keep a plugin the updater calls stale.
 #include "core/plugin_repo.hpp"
+#include "core/plugin_run.hpp"
 // For registerOwnModuleFolder: a plugin and the DLLs beside it are FoxSDR's own to load, so
 // the diagnostic log's "other software's DLLs" list must not name them (0.99.69).
 #include "core/foreign_modules.hpp"
@@ -1058,12 +1059,25 @@ std::string pluginKey(const LoadedPlugin& p) {
     return fs::path(p.path).filename().string();
 }
 
+void PluginStopSet::set(std::vector<std::string> keys) {
+    keys_.clear();
+    for (const std::string& k : keys) {
+        // An empty entry names no plugin and a duplicate names the same one twice.
+        const std::string id = pluginRunId(k);
+        if (id.empty()) { continue; }
+        if (std::find(keys_.begin(), keys_.end(), id) != keys_.end()) { continue; }
+        keys_.push_back(id);
+    }
+}
+
 bool PluginStopSet::contains(const std::string& key) const {
     // An empty key is what a record with no path produces, and it must never
     // match: otherwise one stray "" in a hand-edited config would stop every
     // path-less plugin at once.
     if (key.empty()) { return false; }
-    return std::find(keys_.begin(), keys_.end(), key) != keys_.end();
+    const std::string id = pluginRunId(key);
+    if (id.empty()) { return false; }
+    return std::find(keys_.begin(), keys_.end(), id) != keys_.end();
 }
 
 // ---------------------------------------------------------------------------

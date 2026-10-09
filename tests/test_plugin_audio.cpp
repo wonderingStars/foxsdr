@@ -716,6 +716,72 @@ void testPipelineTakeover() {
 
 }  // namespace
 
+// ---------------------------------------------------------------------------
+// 4. One plugin stopped alone (0.99.73): the speakers follow the right instance
+// ---------------------------------------------------------------------------
+//
+// PluginRunner::stopPlugin takes ONE plugin's instances out and leaves every other plugin as it
+// was. The speakers' claim rides on an instance by INDEX (playing_), so removing an instance that
+// sits before the playing one shifts that index - and a claim not re-pointed would hand the
+// speakers to, or pull from, the wrong plugin. Three plugins: A (silent), B (playing), C (silent).
+void testStoppingOnePluginKeepsTheSpeakersOnTheRightInstance() {
+    resetFakes();
+    g_b.wantsSpeakers = 1;
+    g_b.toneHz = 1000.0;
+    const CascadeIqDecoderApi ia = makeIqApi(&createA);
+    const CascadeIqDecoderApi ib = makeIqApi(&createB);
+    const CascadeAudioOutApi aa = makeAudioApi(48000u, 1u);
+    const CascadeAudioOutApi ab = makeAudioApi(48000u, 1u);
+    LoadedPlugin pa = makePlugin("Plugin A", "C:/plugins/a-decoder-1.0.0.dll", &ia, &aa);
+    LoadedPlugin pb = makePlugin("Plugin B", "C:/plugins/b-decoder-1.0.0.dll", &ib, &ab);
+    PluginRunner runner;
+    runner.rebuild({pa, pb}, kSinkRateHz, 2048000.0, 222.064e6);
+    CHECK(g_a.created == 1);
+    CHECK(g_b.created == 1);
+
+    std::vector<float> l(256, 0.0f);
+    std::vector<float> r(256, 0.0f);
+    CHECK(runner.pullPluginAudio(l.data(), r.data(), 256) == true);
+    CHECK(runner.playingPlugin() == "Plugin B");
+    CHECK(runner.playingPluginKey() == "b-decoder-1.0.0.dll");
+    const int bPulls = g_b.pulls;
+
+    // A, which sits BEFORE the playing plugin, is stopped alone: B is untouched, still playing,
+    // and the claim has followed it to its new place.
+    runner.stopPlugin("a-decoder-1.0.0.dll");
+    CHECK(g_a.destroyed == 1);
+    CHECK(g_b.destroyed == 0);
+    CHECK(runner.playingPlugin() == "Plugin B");
+    CHECK(runner.playingPluginKey() == "b-decoder-1.0.0.dll");
+    CHECK(runner.pullPluginAudio(l.data(), r.data(), 256) == true);
+    CHECK(g_b.pulls > bPulls);
+    CHECK(g_a.pulls == 0);
+    CHECK(toneAmplitude(l.data(), 256, 1000.0, kSinkRateHz) > 0.45);
+    // The audio counters belong to the speakers, not to one plugin, and survive.
+    CHECK(runner.audioGaps() == 0u);
+
+    // Start A again: B is not interrupted (its instance and its claim are not rebuilt), and A is
+    // asked, as every instance is every block, and answers no.
+    CHECK(runner.startPlugin(pa));
+    CHECK(g_a.created == 2);
+    CHECK(g_b.created == 1);
+    CHECK(runner.playingPlugin() == "Plugin B");
+    CHECK(runner.pullPluginAudio(l.data(), r.data(), 256) == true);
+
+    // Now the PLAYING plugin is stopped: the speakers go back to the demodulated audio, at once,
+    // and the caller's buffers are left alone.
+    runner.stopPlugin("b-decoder-1.0.0.dll");
+    CHECK(g_b.destroyed == 1);
+    CHECK(runner.playingPlugin().empty());
+    std::fill(l.begin(), l.end(), 7.0f);
+    CHECK(runner.pullPluginAudio(l.data(), r.data(), 256) == false);
+    CHECK(l[0] == 7.0f);
+    // ...and A, which is still there, can take them when it asks.
+    g_a.wantsSpeakers = 1;
+    CHECK(runner.pullPluginAudio(l.data(), r.data(), 256) == true);
+    CHECK(runner.playingPlugin() == "Plugin A");
+}
+
 int main() {
     testAbiSurface();
     testPullOnlyOnTheAudioPath();
@@ -725,5 +791,6 @@ int main() {
     testNegativePullEndsTheTakeover();
     testFirstActiveWins();
     testPipelineTakeover();
+    testStoppingOnePluginKeepsTheSpeakersOnTheRightInstance();
     return testSummary("test_plugin_audio");
 }

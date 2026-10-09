@@ -19,6 +19,12 @@
 // Range sanitization on load (bad values are repaired, not rejected — a
 // hand-edited file should degrade gracefully, never brick the GUI):
 //   - volume      clamped to [0, 1]        (sink contract)
+//   - audioBufferMs  0 | 120 | 240 | 480 | 960; anything else -> 0 (automatic).
+//                 A value between the steps is not "nearly 240": the sink's
+//                 lead only has those four (sink/audio_out.hpp), and a hand-
+//                 edited 5000 must not become a 5 s delay.
+//   - audioBufferAutoMs  the same set, the same rule: the depth AUTOMATIC had
+//                 deepened to when the application last ran (0 = it had not).
 //   - splitRatio  clamped to [0.1, 0.9]    (either panel collapsing to zero
 //                                           height makes the divider
 //                                           ungrabbable — the user could
@@ -82,6 +88,16 @@
 //     file could not express (an empty name) or states twice (a duplicate) is
 //     noise from a hand-edit, and a stopped plugin that is not installed right
 //     now must stay stopped for when it comes back.
+//     SINCE 0.99.73 THIS LIST IS READ ONCE AND NEVER WRITTEN AGAIN: the application
+//     migrates each entry, by plugin id, into pluginRun as "stopped" at the first
+//     start after the update, and saves an empty list from then on.
+//   - pluginRun: an object of plugin id -> "auto" | "always" | "stopped". A
+//     non-object resets to empty (every plugin AUTO, which is what a fresh install
+//     has). An entry whose key is empty or longer than 128 bytes, or whose value is
+//     not one of the three words, is dropped one entry at a time; the rest survive.
+//     At most kMaxTuneGrants entries are kept (the first by key). An id that
+//     matches no installed plugin is KEPT, like a stop: a decision about a plugin
+//     must survive the plugin being removed for a while.
 //   - pluginMuteOverride: the same rules again, from the same code. It lists
 //     the plugins whose "mute audio while running" setting DIFFERS from the
 //     default their capabilities imply, so a duplicate would be a preference
@@ -297,6 +313,20 @@ struct AppConfig {
     double bandwidthHz = 150000.0;
     float squelchDb = -120.0f;
     float volume = 0.5f;
+    // THE AUDIO BUFFER (0.99.73, the Sinks rail): how much sound is held back
+    // before it plays. 0 is AUTOMATIC - 120 ms, deepened by itself through 240,
+    // 480 and 960 ms when this computer falls behind (sink::nextAudioLead) and
+    // never brought back down by itself; 120, 240, 480 or 960 is a FIXED buffer
+    // that never steps. Anything else on load becomes 0.
+    int audioBufferMs = 0;
+    // THE DEPTH AUTOMATIC HAD REACHED (0.99.73, a follow-up to the item above): written when a
+    // minute's starved callbacks deepened the buffer, so that the next launch starts there instead
+    // of paying the same three bad minutes again on a computer that is slow every time. Read only
+    // while audioBufferMs is 0 (a fixed setting ignores it), and only ever to START deeper:
+    // never below the 120 ms default, never above 960. Choosing AUTOMATIC by hand, from a fixed
+    // value, forgets it - that is the person asking for a fresh start. Same legal set as
+    // audioBufferMs; 0 means "AUTOMATIC has never had to deepen".
+    int audioBufferAutoMs = 0;
     float dbMin = -110.0f, dbMax = 0.0f;
     float splitRatio = 0.4f;
     double vfoOffsetHz = 300000.0;
@@ -917,7 +947,21 @@ struct AppConfig {
     // file cannot grow the config without bound.
     std::vector<std::string> closedWindows;
 
+    // READ FOR MIGRATION ONLY (0.99.73): the file-name list above, which lost a
+    // stop whenever the plugin updated (the file name carries the version). The
+    // application turns each entry into pluginRun[<id>] = "stopped" when it
+    // starts, and saves this list empty.
     std::vector<std::string> pluginsStopped;
+
+    // --- How each plugin runs (0.99.73) ----------------------------------------
+    // Plugin id (the module file name without its extension and its version,
+    // core::pluginRunId) -> "auto", "always" or "stopped" (core::PluginRun).
+    // AUTO runs the plugin while something wants it (a window, a map, the radar
+    // scope, a patch, ...) and puts it to sleep 30 seconds after the last want;
+    // ALWAYS is "keep running" - what every plugin used to do; STOPPED is the old
+    // stop. An id with no entry is AUTO, and the application writes no entry for
+    // AUTO. Keyed on the id, not on the file name, so an update keeps the choice.
+    std::map<std::string, std::string> pluginRun;
 
     // --- Plugins whose MUTE setting is not the default -------------------------
     // Module FILE NAMES again, and a list of OVERRIDES rather than of settings:

@@ -218,6 +218,19 @@ public:
     int dspThreadExceptions() const {
         return dspExceptions_.load(std::memory_order_relaxed);
     }
+    // What the DSP thread's request for scheduling priority came to the last time
+    // that thread started (0.99.73, core/thread_priority.hpp): "mmcss",
+    // "above-normal", "sched-rr" or "none: <reason>"; empty until a DSP thread
+    // has started. The same words are in the log (`dsp: thread priority ...`).
+    // sourceThreadPriority() is the same for the thread that fills the I/Q ring.
+    std::string dspThreadPriority() const;
+    std::string sourceThreadPriority() const;
+    // Diagnostics/tests (0.99.73): the correction the DriftMatcher is asking for
+    // right now, in ppm - positive while it plays more audio than arrives to
+    // deepen the sink's ring towards AudioOut::targetFrames(), negative while the
+    // ring is deeper than that. What a test reads to see that the pipeline hands
+    // the matcher the SINK's target and not a constant.
+    double driftCorrectionPpm();
     // Diagnostics/tests: samples the source thread read but the ring had no
     // room for (SpscRing::write accepts only what fits). Never reset, so a
     // caller measures a window by taking a difference. Before this counter
@@ -719,8 +732,27 @@ private:
     // entirely different shared_ptr, which is what lets stop() abandon a
     // stuck thread without that thread ever mistaking a NEW session's flags
     // for permission to keep running.
+    //
+    // `priority` is where this generation writes how its priority request came
+    // out (see sourceThreadPriority()): a shared_ptr captured by value, like the
+    // token, so that a thread the session abandoned and that wakes up late
+    // writes into memory it owns a share of and not into a Pipeline that has
+    // gone.
+    struct PriorityNote {
+        std::mutex m;
+        std::string text;
+        void set(const std::string& s) {
+            std::lock_guard<std::mutex> lk(m);
+            text = s;
+        }
+        std::string get() {
+            std::lock_guard<std::mutex> lk(m);
+            return text;
+        }
+    };
     void sourceThreadMain(double chainRateHz,
-                          std::shared_ptr<std::atomic<bool>> stopToken);
+                          std::shared_ptr<std::atomic<bool>> stopToken,
+                          std::shared_ptr<PriorityNote> priority);
     void dspThreadMain();
     void sourceThreadBody(double chainRateHz, const std::atomic<bool>& stopToken);
     void dspThreadBody();
@@ -1042,6 +1074,12 @@ private:
     std::atomic<bool> dspRun_{false};
     std::thread srcThread_;
     std::thread dspThread_;
+    // How each thread's priority request came out (dspThreadPriority(),
+    // sourceThreadPriority()). Both are shared_ptrs because the source thread's
+    // generation holds its own share (spawnSourceThread); the DSP thread is
+    // always joined, so its note is only ever touched while the Pipeline lives.
+    std::shared_ptr<PriorityNote> dspPriority_ = std::make_shared<PriorityNote>();
+    std::shared_ptr<PriorityNote> srcPriority_ = std::make_shared<PriorityNote>();
 
     // Per-generation shutdown state for the source thread — zombie-safety
     // for stop()'s bounded join (field report 4214EAE4; see stop() and

@@ -597,5 +597,97 @@ int main() {
         CHECK(contains(decoderAbsenceNote(c), "No fitted module carries a decoder"));
     }
 
+    // --- IDLE (0.99.73): a fitted decoder that nothing is using ---------------------------------
+    //
+    // A decoder set to AUTO that nothing is using has no instance, so the runner's list is empty of
+    // it exactly as it is of a stopped one's. It is NOT a decoder that failed to start, and the
+    // census must not call it one: "live" is "the object should hold an instance for this", which a
+    // sleeping module does not. Counted by itself, and the note says so without blaming anything.
+    {
+        LoadedPlugin p = loadedRecord("C:/p/dmr-1.0.0.dll", "DMR Monitor", CASCADE_CAP_DECODER);
+        p.decoder = &kAudioApi;
+        const cascade::gui::ModuleIdleFn idleSet = [](const std::string& file) {
+            return file == "dmr-1.0.0.dll";
+        };
+        // Without the idle predicate nothing is idle: the module is live, which is what every caller
+        // before run states meant.
+        const ModuleCensus live = censusModules({p}, kDecoderCaps, nothingStopped());
+        CHECK(live.live == 1);
+        CHECK(live.idle == 0);
+        // With it, the module is idle and NOT live.
+        const ModuleCensus c = censusModules({p}, kDecoderCaps, nothingStopped(), idleSet);
+        CHECK(c.idle == 1);
+        CHECK(c.live == 0);
+        CHECK(c.stopped == 0);
+        CHECK(c.refused == 0);
+        CHECK(c.idleName == "DMR Monitor");
+        // STOPPED outranks IDLE for the same module (a record cannot honestly be both).
+        const ModuleCensus stoppedToo =
+            censusModules({p}, kDecoderCaps, stopSet({"dmr-1.0.0.dll"}), idleSet);
+        CHECK(stoppedToo.stopped == 1);
+        CHECK(stoppedToo.idle == 0);
+        // A module that is not a decoder is not counted, idle or not.
+        LoadedPlugin m = loadedRecord("C:/p/map-1.dll", "Basemap", CASCADE_CAP_BASEMAP);
+        m.basemap = &kBasemapApi;
+        const ModuleCensus none = censusModules({m}, kDecoderCaps, nothingStopped(),
+                                                [](const std::string&) { return true; });
+        CHECK(none.idle == 0);
+        // The idle predicate is asked of the FILE NAME, like the stop set.
+        const ModuleCensus byName =
+            censusModules({p}, kDecoderCaps, nothingStopped(), [](const std::string& f) { return f == "DMR Monitor"; });
+        CHECK(byName.idle == 0);
+        CHECK(byName.live == 1);
+
+        // THE NOTE: names the module, says it is idle and that this is not a fault, and sends the user
+        // nowhere - nothing is broken and nothing is missing.
+        const std::string s = decoderAbsenceNote(c);
+        CHECK(contains(s, "\"DMR Monitor\""));
+        CHECK(contains(s, "it is idle"));
+        CHECK(contains(s, "not a fault"));
+        CHECK(contains(s, "IDLE"));
+        CHECK(contains(s, "START"));
+        CHECK(!mentionsInstalling(s));
+        CHECK(!contains(s, "Plugin store"));
+        // IT IS NOT THE "LIVE" SENTENCE: an idle decoder is not "not in the receiver's decoder list".
+        CHECK(!contains(s, "not in the receiver's decoder list"));
+        CHECK(!contains(s, "did not start"));
+        // ...nor the absent one.
+        CHECK(!contains(s, "No fitted module carries a decoder"));
+    }
+    // IDLE, MORE THAN ONE, and with no name: counted, singular and plural, never an empty quote.
+    {
+        ModuleCensus c;
+        c.idle = 28;
+        c.idleName = "DMR Monitor";
+        const std::string many = decoderAbsenceNote(c);
+        CHECK(contains(many, "28 fitted decoders are idle"));
+        CHECK(!contains(many, "\"\""));
+        CHECK(!mentionsInstalling(many));
+        ModuleCensus one;
+        one.idle = 1;
+        const std::string single = decoderAbsenceNote(one);
+        CHECK(contains(single, "1 fitted decoder is idle"));
+        CHECK(!contains(single, "\"\""));
+    }
+    // THE ORDER: stopped, refused, IDLE, live, absent. Idle outranks live (an idle decoder is the
+    // explanation for an empty runner list) and yields to the user's own stop and to a refusal.
+    {
+        ModuleCensus c;
+        c.stopped = 1;
+        c.stoppedName = "Stopped";
+        c.refused = 1;
+        c.refusedName = "Refused";
+        c.idle = 1;
+        c.idleName = "Idle";
+        c.live = 1;
+        CHECK(contains(decoderAbsenceNote(c), "you stopped it"));
+        c.stopped = 0;
+        CHECK(contains(decoderAbsenceNote(c), "the host refused it"));
+        c.refused = 0;
+        CHECK(contains(decoderAbsenceNote(c), "\"Idle\" carries a decoder and it is idle"));
+        c.idle = 0;
+        CHECK(contains(decoderAbsenceNote(c), "not in the receiver's decoder list"));
+    }
+
     return testSummary("test_module_census");
 }

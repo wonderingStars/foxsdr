@@ -275,29 +275,32 @@ by that digest, and removed again when the catalogue stops naming it); a request
 picture's address and nothing else, and a plugin that comes from the regional list shows none.
 Nothing is fetched for the grid.
 
-**Fitted modules** is the operating panel. Along its top bar: a search field, five filter chips
-with their lamps and counts - **FED**, **NOT DECODING**, **TAKES NO SIGNAL**, **STOPPED**,
+**Fitted modules** is the operating panel. Along its top bar: a search field, six filter chips
+with their lamps and counts - **FED**, **IDLE**, **NOT DECODING**, **TAKES NO SIGNAL**, **STOPPED**,
 **REFUSED**, each a toggle - and **SCAN AGAIN** and **RESET WINDOW SIZES**. Under it one muted line
 says whether the receiver is running (a module with a matched decoder is only fed while it is) and,
 after a dot, which folder the modules were read from. Then one row per module, sorted by name: its
 drawing, name and version, under the name an amber warning when it reaches beyond FoxSDR ("asks to
 move the receiver", "may fetch from a server it chose" - nothing for a module that publishes to the
 host only) or, for a module the host refused, the host's own reason; at the right what it is doing -
-**FED**, **NOT DECODING**, **TAKES NO SIGNAL**, **STOPPED** or **REFUSED**, with its lamp - then
-**STOP** (or **START**) and **REMOVE**, which asks twice: **CONFIRM** appears beside it for five
-seconds. **CLEAN UP OLD VERSIONS (n)** is at the foot when an update left copies behind. A click on
-a module's name opens its **page**: its header with the same **STOP** key, then **ON THIS MACHINE**
-- the state with its lamp, what the module reaches, the sentence that explains the state (for a
-refused module, why it is not running, in the host's words), the file it was loaded from, its
-plugin ABI and the day it was fitted - and, for a module the catalogue knows, the same pictures,
-description and notes the store's page shows, and the facts behind **SHOW DETAILS**.
+**FED**, **IDLE**, **NOT DECODING**, **TAKES NO SIGNAL**, **STOPPED** or **REFUSED**, with its lamp
+- then **STOP** (or **START**: a stopped module and an idle one both offer it) and **REMOVE**, which
+asks twice: **CONFIRM** appears beside it for five seconds. **CLEAN UP OLD VERSIONS (n)** is at the
+foot when an update left copies behind. A click on a module's name opens its **page**: its header
+with the same **STOP** (or **START**) key, then **ON THIS MACHINE** - the state with its lamp, what
+the module reaches, the sentence that explains the state (for a refused module, why it is not
+running, in the host's words), the **Keep running** tick (see **When a plugin runs**, below), the
+file it was loaded from, its plugin ABI and the day it was fitted - and, for a module the
+catalogue knows, the same pictures, description and notes the store's page shows, and the facts
+behind **SHOW DETAILS**.
 
 Neither window reopens by itself: since 0.79.1 FoxSDR always starts on the main window alone,
 whatever was showing when it was closed - no page, no map, no decoder output, and the bench rather
 than the radar scope. Every one of them is a key on the rail away, and nothing opens a window but
 your own hand. A plugin's own window - a decoded picture, a plugin's panel - has a row of its own
 under DECODE, with a chip saying what it holds (WAIT, RX or IMG for a picture, a row count for a
-panel): press the row to open it, its key to close it. A decoder with no window of its own - the
+panel, **IDLE** while the plugin is not running): press the row to open it - which also starts the
+plugin, see **When a plugin runs** - and its key to close it. A decoder with no window of its own - the
 POCSAG and DMR decoders, say - writes its lines in the shared **Decoder output** window, which a
 preset on such a decoder opens for you. That window, and a decoded picture's, opens INSIDE the main
 window, in the middle of it, wherever the main window is on the screen: it used to open past the
@@ -358,24 +361,64 @@ UNDERRUNS** card carries the plugin path's own gap count beside the sink's
 starved-callback count — a decoder that cannot keep up and a device that is
 starving sound identical and are repaired in different places — and the browser
 reads the same two facts from `/api/status` as `audioSource`,
-`audioPluginGaps` and `audioPluginGapFrames`. In the **Plugin store**, a module
+`audioPluginGaps` and `audioPluginGapFrames` (and the audio buffer in force, in
+milliseconds, as `audioLeadMs`). In the **Plugin store**, a module
 that can do this says so on its page, under REACHES, before you fit it.
 
+**When a plugin runs** (0.99.73). A fitted plugin does not run all the time: it runs while
+something is *using* it, and is dormant the rest of the time — no decoder, no map target, no polling,
+nothing handed to it. Each plugin is in one of three states, kept against the plugin's **id** (its
+file name without the extension and the version, so an update does not lose your choice):
+
+- **AUTO** — the default for every plugin. It starts, within a frame, the moment it is *in use*,
+  and goes dormant 30 seconds after the last use ends, so opening and closing a window does not
+  start and stop it each time.
+- **ALWAYS** — the plugin runs all the time, as every plugin used to. It is what **Keep running**
+  (the tick on the module's page in the Fitted modules window) sets, and what **START** and a
+  preset press set: a preset is a deliberate "run this".
+- **STOPPED** — as below.
+
+A plugin is *in use* while any of these is true, and nothing else counts: one of its windows (a
+picture, a panel, an instrument) is open; its map page is open; the radar scope is showing and it is
+a track source; a running patch has a node using it; it is the plugin playing through the host's
+speakers; the Decoder output window is open and it is a text decoder; a browser is connected to the
+web remote and it publishes targets or pictures; its decoded output is wired to a Text sink in a
+patch. A plugin that reports only to the host, or that processes the audio you hear, has nothing to
+open and is in use as long as it is fitted. **Coverage accumulation, the web snapshot and aircraft
+look-ups do not keep a plugin running** — a plugin you want collecting coverage with its map closed,
+or answering a browser that arrives later, wants the **Keep running** tick. A window you have open,
+a map page you have open or a patch that is running starts its plugin at once, so nothing you are
+looking at stops. Opening a plugin's window from its row on the rail starts it (a dormant plugin's
+rows are still there, reading **IDLE**), and closing the window lets it go dormant after the 30
+seconds. A dormant plugin reads **IDLE** in the Fitted modules window and on the rail's DECODERS
+section — not as a fault: it is never counted as "not being fed", and the module page says what it
+is waiting for. The log records both changes: `plugin: <name> woke - <what started it>` and
+`plugin: <name> dormant after 30 s without a use`.
+
+If you upgrade from a release that ran every plugin all the time, every plugin becomes AUTO (those
+you had stopped stay stopped, now remembered by id) — so a decoder that used to collect data with
+nothing on the screen stops doing that until you tick **Keep running** for it.
+
 **Stop and start.** In the Fitted modules window every loaded module's row
-carries a **STOP** key, and a stopped one carries **START**; the module's
+carries a **STOP** key, and a stopped or an idle one carries **START** (which pins
+it: it sets ALWAYS); the module's
 page carries the same key at the right of its header.
 Stopping destroys everything that plugin had
 running — its decoders, its map targets and trails, its window, its basemap
 tiles — while leaving the module loaded and the row where it was, so a stopped
-plugin decodes nothing, draws nothing, and cannot move the receiver. The row
+plugin decodes nothing, draws nothing, and cannot move the receiver. Only that
+plugin is touched: the others, and the stream they are fed from, carry on as they were. The row
 then reads **STOPPED**, lettered in plain ivory rather than in anything
 that reads as a fault, because a module you switched off is a choice — and a
 plugin that produces nothing for a reason you have forgotten choosing is
 exactly what this must not become. It is
-remembered between sessions and across a rescan. Pressing one of the plugin's
+remembered between sessions and across a rescan, and across an update of the plugin (it is kept
+against the plugin's id, not its versioned file name). Pressing one of the plugin's
 own preset buttons starts it first: pressing "ADS-B 1090 MHz" is an unambiguous
 request for that plugin, and tuning there with the decoder still switched off
-would be worse than useless.
+would be worse than useless — and it pins the plugin to ALWAYS, so it goes on running when you
+close its window. Opening a window from its rail row also tunes to the plugin's preset, but does
+not pin it.
 
 **Mute audio while running.** A decoder that consumes raw I/Q is handed the
 whole receiver band and tunes inside it, so the channel your speakers are fed
@@ -864,6 +907,46 @@ the rail opens on whichever bank you left it on — the only part of this the
 configuration file records, so a section comes back at its usual state on
 the next launch. Every chip on a row still reports what that section is
 doing without opening it.
+
+**Sinks**, in SIGNAL, is where the sound goes: the output device, the reason
+when there is no sound ("Muted by ..."), and, since 0.99.73, the **Audio
+buffer** - how much sound FoxSDR holds back before it plays. A fuller buffer is
+what lets the speakers ride out a computer that is busy for a moment; the price
+is that what you hear is that much behind the radio. The choices are
+**AUTOMATIC** (the default), **120**, **240**, **480** and **960 ms**, and the
+value in force is shown in the box ("AUTOMATIC  240 ms").
+
+- **AUTOMATIC** starts at 120 ms, as FoxSDR always did, and watches the sound
+  card. When a minute closes with the card having run out of audio three times
+  or more, the buffer is made one step deeper (120, 240, 480, 960 ms, and never
+  beyond 960), and FoxSDR says so in the **AUDIO - UNDERRUNS** card, under the
+  setting ("Audio buffer raised to 240 ms: this computer fell behind 5 times in
+  the last minute.") and in the log. It keeps that depth for the rest of the
+  session and never gives it back by itself, because a computer that fell behind
+  once will fall behind again; a quiet minute changes nothing. **The depth it
+  reached is remembered**: the next launch starts AUTOMATIC at that depth (never
+  below 120 ms, never above 960) instead of paying the same bad minutes again,
+  and shows no "raised" sentence for it - nothing has just happened. Choosing
+  AUTOMATIC again, from one of the fixed values, starts from 120 ms once more and
+  forgets the remembered depth.
+- **A fixed value** is the buffer from the moment it is chosen and never changes
+  by itself. It is remembered between sessions, and a remembered AUTOMATIC depth
+  is ignored while a fixed value is in force (and kept, in case you go back).
+  Choosing a shorter buffer drops the oldest queued sound on the next playback
+  callback, so the shorter delay takes effect promptly; you may hear one jump.
+- **What a deeper buffer costs.** The new depth is used when the sound next runs
+  out and starts again, so the step is paid for once, as about that many
+  milliseconds of silence at that moment; and everything you hear is that much
+  later than the radio. A speaker on the patch page that is a sound card has a
+  buffer of its own and follows the same setting.
+
+FoxSDR also asks Windows to schedule its signal-processing threads ahead of
+ordinary programs (the Multimedia Class Scheduler, class "Pro Audio"; on Linux a
+round-robin priority where the system allows it), so that the thread making the
+sound is not kept waiting by a busy machine. The first lines of the log say how
+that came out (`dsp: thread priority mmcss`). Neither change is a promise about
+any one computer: a machine that is too slow still is, and the buffer is what
+gives it room.
 
 The **Demod scope**, under VIEW, is the other instrument on the bench, and it
 is deliberately not drawn like the radar one. That is a plan-position

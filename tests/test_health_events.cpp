@@ -130,8 +130,8 @@ void testEveryTokenIsLegalAndNothingElseIs() {
     // + 1 catalogue + 4 + 3 plugin + 1 recording = 220 failure tokens (0.99.66: the
     // thirteenth driver word, hydrasdr, added one open, one data and eight fail
     // tokens; 0.99.70: the fourteenth, rtltcp, adds the same ten again); then 54
-    // slow (18 countable scopes x 3 tiers) and 13 recovered.
-    CHECK(all.size() == 220 + 54 + 13);
+    // slow (18 countable scopes x 3 tiers) and 14 recovered (0.99.73: audiolead).
+    CHECK(all.size() == 220 + 54 + 14);
     std::set<std::string> unique(all.begin(), all.end());
     CHECK(unique.size() == all.size());
     for (const std::string& t : all) {
@@ -890,7 +890,7 @@ void testSlowTokensPerRecordKeepTheWorst() {
 void testRecoveredWordsAndCap() {
     const std::vector<std::string> words = {"audio",    "reopen",    "srcthread", "vendorcall", "ringdrop",
                                             "dspexc", "cfgsave",  "enumchild", "pluginapi",  "webroute",
-                                            "patchload", "sdrenum",  "sdrlost"};
+                                            "patchload", "sdrenum",  "sdrlost",   "audiolead"};
     CHECK(health::recoveredWords() == words);
     CHECK(health::kRecoveredCount == words.size());
     for (std::size_t i = 0; i < words.size(); ++i) {
@@ -908,7 +908,7 @@ void testRecoveredWordsAndCap() {
     }
     // Once a session for what repeats by itself; once an occurrence for the rest.
     const std::set<std::string> once = {"audio", "reopen", "ringdrop", "cfgsave", "enumchild", "pluginapi",
-                                        "webroute", "sdrenum", "sdrlost"};
+                                        "webroute", "sdrenum", "sdrlost", "audiolead"};
     for (std::size_t i = 0; i < words.size(); ++i) {
         CHECK(health::recoveredOncePerSession(static_cast<health::Recovered>(i)) == (once.count(words[i]) == 1));
     }

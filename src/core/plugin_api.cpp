@@ -10,6 +10,7 @@
 #include <cstring>
 
 #include "core/maidenhead.hpp"
+#include "core/plugin_run.hpp"
 #include "core/utf8_text.hpp"
 // The web API's own bounds, reused rather than restated: a value a browser is
 // refused is refused to a plugin too, for the same stated reason, and the two
@@ -236,6 +237,16 @@ void PluginApiCore::setLiveSet(const std::vector<std::string>& keys) {
     }
 }
 
+void PluginApiCore::setLive(const std::string& key, bool live) {
+    std::lock_guard<std::mutex> lk(mutex_);
+    for (const std::unique_ptr<PluginApiClient>& c : clients_) {
+        if (c->key != key) { continue; }
+        const bool was = c->live.exchange(live, std::memory_order_acq_rel);
+        if (was && !live) { clearClientLocked(c->index); }
+        return;
+    }
+}
+
 void PluginApiCore::setAttached(bool attached) {
     attached_.store(attached, std::memory_order_release);
 }
@@ -244,7 +255,8 @@ void PluginApiCore::refreshGrantsLocked(PluginApiClient& c) {
     std::uint32_t g = 0;
     if (contains(tuneGranted_, c.key)) { g |= CASCADE_STATE_TUNE_GRANTED; }
     if (contains(settingsGranted_, c.key)) { g |= CASCADE_STATE_SETTINGS_GRANTED; }
-    if (contains(stopped_, c.key)) { g |= CASCADE_STATE_STOPPED; }
+    // BY ID, like the host's own stop set: a stop survives the plugin's update.
+    if (contains(stopped_, pluginRunId(c.key))) { g |= CASCADE_STATE_STOPPED; }
     c.grants.store(g, std::memory_order_release);
 }
 
@@ -262,12 +274,20 @@ void PluginApiCore::setSettingsGranted(const std::string& key, bool granted) {
 
 void PluginApiCore::setStopped(const std::vector<std::string>& keys) {
     std::lock_guard<std::mutex> lk(mutex_);
-    stopped_ = keys;
+    // Reduced to ids (file names are accepted and reduced), so the match below
+    // does not depend on the version in a file name.
+    stopped_.clear();
+    for (const std::string& k : keys) {
+        const std::string id = pluginRunId(k);
+        if (!id.empty() && std::find(stopped_.begin(), stopped_.end(), id) == stopped_.end()) {
+            stopped_.push_back(id);
+        }
+    }
     for (const std::unique_ptr<PluginApiClient>& c : clients_) {
         refreshGrantsLocked(*c);
         // A stopped plugin's marks and commands leave the screen at once, not
         // at the next rebuild: stopping is the user saying "not this one".
-        if (contains(stopped_, c->key)) { clearClientLocked(c->index); }
+        if (contains(stopped_, pluginRunId(c->key))) { clearClientLocked(c->index); }
     }
 }
 

@@ -68,6 +68,12 @@ void forceMaxRatio(DriftMatcher& dm) {
 // simulated time against a real AudioOut. `lossEveryS` > 0 throws away
 // `lossMs` of the radio's output at that interval (a USB stall that dropped
 // I/Q). `steer` false freezes the matcher at 1:1 - the old FoxSDR.
+//
+// `leadMs` is the sink's lead (0.99.73: AudioOut::setLeadFrames; 120 is the
+// default). `followLead` true hands the matcher the sink's own target, which is
+// what the application does (AudioOut::targetFrames, the lead plus 40 ms); false
+// hands it the OLD fixed 160 ms whatever the lead - the matcher as it was before
+// the lead was adjustable, which bleeds a deeper lead back down.
 struct LoopResult {
     std::uint64_t underruns = 0;
     std::uint64_t droppedFrames = 0;  // producer frames the full ring refused
@@ -76,8 +82,9 @@ struct LoopResult {
 };
 
 LoopResult runLoop(double seconds, double radioPpm, double cardPpm, double lossEveryS,
-                   double lossMs, bool steer) {
+                   double lossMs, bool steer, int leadMs = 120, bool followLead = true) {
     AudioOut ao;  // never opened: mono, and pullBlock is driven by hand
+    ao.setLeadFrames(cascade::sink::audioLeadFrames(leadMs));
     DriftMatcher dm(kRate);
     constexpr std::size_t kBlock = 1024;   // a demod block
     constexpr std::size_t kPeriod = 480;   // a 10 ms device period
@@ -102,7 +109,11 @@ LoopResult runLoop(double seconds, double radioPpm, double cardPpm, double lossE
                 skipFrames -= static_cast<double>(kBlock);  // this block never arrived
                 continue;
             }
-            if (steer) { dm.observe(ao.ringFrames(), ao.primed(), kBlock); }
+            if (steer) {
+                dm.observe(ao.ringFrames(), ao.primed(), kBlock,
+                           followLead ? static_cast<double>(ao.targetFrames())
+                                      : DriftMatcher::kTargetFrames);
+            }
             const std::size_t m =
                 dm.process(block.data(), kBlock, 1, matched.data(), matched.size());
             const std::size_t took = ao.write(matched.data(), m);
@@ -236,10 +247,14 @@ int main() {
         CHECK(newR.underruns == 0);
     }
     {
-        // A radio 600 ppm FAST: the old sink filled its 682 ms mono ring in
-        // under 16 minutes and then threw audio away on every write.
-        const LoopResult oldR = runLoop(1200.0, 600.0, 0.0, 0.0, 0.0, false);
-        const LoopResult newR = runLoop(1200.0, 600.0, 0.0, 0.0, 0.0, true);
+        // A radio 600 ppm FAST: a frozen sink fills its mono ring and then
+        // throws audio away on every write. The ring was 682 ms until 0.99.73,
+        // which filled in under 16 minutes; it is 2.73 s since the lead became
+        // adjustable (131072 mono frames), so the same fault needs 100 simulated
+        // minutes to show: 600 ppm adds 3.6 s, and the frozen ring is full after
+        // about 73 of them.
+        const LoopResult oldR = runLoop(6000.0, 600.0, 0.0, 0.0, 0.0, false);
+        const LoopResult newR = runLoop(6000.0, 600.0, 0.0, 0.0, 0.0, true);
         std::printf("fast radio: frozen dropped %llu frames, steered %llu (fill %.1f ms, drift %+.0f ppm)\n",
                     static_cast<unsigned long long>(oldR.droppedFrames),
                     static_cast<unsigned long long>(newR.droppedFrames), newR.finalFillMs,
@@ -249,6 +264,79 @@ int main() {
         CHECK(newR.underruns == 0);
         CHECK_NEAR(newR.finalFillMs, 160.0, 15.0);
         CHECK_NEAR(newR.driftPpm, -600.0, 40.0);
+    }
+
+    // --- 4. The target follows the lead (0.99.73) ---------------------------------
+    //
+    // The sink's lead is adjustable (AudioOut::setLeadFrames) and a matcher still
+    // steering to the old fixed 160 ms would bleed a deeper lead back down: the
+    // buffer the application had just deepened would be gone within a minute or
+    // two. The target is the sink's own (its lead plus 40 ms), handed over with
+    // every observation.
+    {
+        // The controller: the same fill is "just right" against its own target and
+        // "far too full" against the default one, and the default argument is the
+        // old 160 ms.
+        auto pushAfterHalfASecond = [](double fillFrames, double target) {
+            DriftMatcher dm;
+            for (int i = 0; i < 50; ++i) {
+                dm.observe(static_cast<std::size_t>(fillFrames), true, 480, target);
+            }
+            return dm.correctionPpm();
+        };
+        CHECK(pushAfterHalfASecond(13440.0, 13440.0) == 0.0);                    // at its own target
+        CHECK(pushAfterHalfASecond(13440.0, DriftMatcher::kTargetFrames) < -100.0);   // ...too full for 160 ms
+        CHECK(pushAfterHalfASecond(7680.0, 13440.0) > 100.0);                    // 160 ms is short of 280 ms
+        CHECK(pushAfterHalfASecond(7680.0, 7680.0) == 0.0);
+        DriftMatcher defaults;
+        for (int i = 0; i < 50; ++i) { defaults.observe(7680, true, 480); }       // no fourth argument
+        CHECK(defaults.correctionPpm() == 0.0);
+        CHECK(DriftMatcher::kTargetFrames == 7680.0);
+        // The target of a sink at each rung is its lead plus 40 ms.
+        for (const int ms : {120, 240, 480, 960}) {
+            AudioOut ao;
+            ao.setLeadFrames(cascade::sink::audioLeadFrames(ms));
+            CHECK(ao.targetFrames() == cascade::sink::audioLeadFrames(ms) + 1920u);
+        }
+    }
+    {
+        // THE CLOSED LOOP at a 240 ms lead: a radio 300 ppm slow, 20 minutes. The
+        // fill settles at 280 ms (the lead plus 40), not at the 160 of a matcher that
+        // does not follow the lead - which is what the second run, the old target on
+        // the same ring, is here to show.
+        const LoopResult r = runLoop(1200.0, -300.0, 0.0, 0.0, 0.0, true, 240, true);
+        const LoopResult bled = runLoop(1200.0, -300.0, 0.0, 0.0, 0.0, true, 240, false);
+        std::printf("240 ms lead, slow radio: following the lead %.1f ms, %llu underruns; "
+                    "the old fixed target %.1f ms\n",
+                    r.finalFillMs, static_cast<unsigned long long>(r.underruns), bled.finalFillMs);
+        CHECK(r.underruns == 0);
+        CHECK_NEAR(r.finalFillMs, 280.0, 15.0);
+        CHECK_NEAR(r.driftPpm, 300.0, 30.0);
+        CHECK_NEAR(bled.finalFillMs, 160.0, 15.0);   // the old target bleeds 240 ms back down
+    }
+    {
+        // The same at the other rungs: 480 ms settles at 520, and the deepest, 960 ms,
+        // at 1000 with a fast radio (the ring takes it without a drop).
+        const LoopResult mid = runLoop(1200.0, -300.0, 0.0, 0.0, 0.0, true, 480, true);
+        CHECK(mid.underruns == 0);
+        CHECK_NEAR(mid.finalFillMs, 520.0, 15.0);
+        const LoopResult top = runLoop(1200.0, 600.0, 0.0, 0.0, 0.0, true, 960, true);
+        std::printf("960 ms lead, fast radio: fill %.1f ms, dropped %llu frames, drift %+.0f ppm\n",
+                    top.finalFillMs, static_cast<unsigned long long>(top.droppedFrames), top.driftPpm);
+        CHECK(top.droppedFrames == 0);
+        CHECK(top.underruns == 0);
+        CHECK_NEAR(top.finalFillMs, 1000.0, 20.0);
+        CHECK_NEAR(top.driftPpm, -600.0, 40.0);
+    }
+    {
+        // A hiccup at a deeper lead is rebuilt to the DEEPER target: 80 ms lost every 45 s,
+        // 10 minutes, 240 ms lead - no underrun, and the fill is back near 280 ms.
+        // The last loss is 15 s before the end, so the fill may still be recovering
+        // (an 80 ms loss decays with a 20 s time constant: 38 ms short at worst) -
+        // hence a band, not a point: well above the 160 ms of the old target.
+        const LoopResult r = runLoop(600.0, 0.0, 0.0, 45.0, 80.0, true, 240, true);
+        CHECK(r.underruns == 0);
+        CHECK(r.finalFillMs > 220.0 && r.finalFillMs < 320.0);
     }
 
     return testSummary("test_drift_matcher");

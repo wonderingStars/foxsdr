@@ -2028,5 +2028,211 @@ int main() {
         CHECK(odd.load() == 0);
     }
 
+    // =========================================================================
+    // PER-PLUGIN START AND STOP (0.99.73): a fitted plugin runs only while it is used.
+    //
+    // PluginUi::startPlugin attaches one plugin's host client and creates its track source, panel
+    // and instrument; stopPlugin destroys exactly those and puts its level-1 client to sleep. What
+    // is pinned is what neither may do: touch another plugin's instances, panels, instruments or
+    // targets - and what both must do exactly once. The stop set is kept by plugin ID.
+    // =========================================================================
+    {
+        resetAll();
+        g_in = FakeInstrument{};
+        const CascadeTrackSourceApi trApi = makeTrackApi(false);
+        const CascadePanelApi pnApi = makePanelApi();
+        const CascadeInstrumentApi inApi = makeInstrumentApi(false);
+        const CascadeTrackSourceApi tr2Api = makeTrackApi2();
+        const CascadeHostClientApi hcApi = makeHostClientApi();
+        LoadedPlugin sat = plugAt("Sat", "C:/plugins/sat-tracker-1.0.0-abi3-win-x64.dll");
+        sat.trackSource = &trApi;
+        sat.panel = &pnApi;
+        sat.instrument = &inApi;
+        LoadedPlugin other = plugAt("Other", "C:/plugins/other-tracker-1.0.0-abi3-win-x64.dll");
+        other.trackSource = &tr2Api;
+        other.hostClient = &hcApi;
+        const std::string satKey = "sat-tracker-1.0.0-abi3-win-x64.dll";
+        const std::string otherKey = "other-tracker-1.0.0-abi3-win-x64.dll";
+        g_tr.emit = {track("SAT1", 51.0, -1.0)};
+        g_tr2.emit = {track("OTH1", 52.0, -2.0)};
+        g_in.answer = 1;
+
+        PluginUi ui;
+        // BOTH ASLEEP at the wholesale rebuild: nothing is created, nothing attached, nothing on the
+        // map or in the lists, and neither client is live.
+        ui.setDormant({satKey, otherKey});
+        ui.rebuild({sat, other});
+        CHECK(g_tr.created == 0);
+        CHECK(g_pn.created == 0);
+        CHECK(g_in.created == 0);
+        CHECK(g_hc.attaches == 0);
+        CHECK(ui.trackPluginNames().empty());
+        CHECK(ui.panels().empty());
+        CHECK(ui.instruments().empty());
+        CHECK(ui.isDormant(satKey));
+        CHECK(!ui.hasInstances(satKey));
+        ui.poll();
+        CHECK(ui.tracks().empty());
+
+        // START Sat: exactly its three instances, once.
+        CHECK(ui.startPlugin(sat));
+        CHECK(g_tr.created == 1);
+        CHECK(g_pn.created == 1);
+        CHECK(g_in.created == 1);
+        CHECK(g_hc.attaches == 0);  // it declares no host client
+        CHECK(ui.hasInstances(satKey));
+        CHECK(!ui.hasInstances(otherKey));
+        CHECK(!ui.isDormant(satKey));
+        CHECK(ui.isDormant(otherKey));
+        CHECK(ui.trackPluginNames().size() == 1u);
+        CHECK(ui.panels().size() == 1u);
+        CHECK(ui.instruments().size() == 1u);
+        // a second start is a no-op, not a second set of instances
+        CHECK(!ui.startPlugin(sat));
+        CHECK(g_tr.created == 1);
+        CHECK(g_pn.created == 1);
+        ui.poll();
+        CHECK(ui.tracks().size() == 1u);
+        CHECK(ui.tracks()[0].plugin == "Sat");
+        CHECK(g_in.stateCalls == 1);
+
+        // START Other: its host client is attached, and Sat is not touched at all.
+        CHECK(ui.startPlugin(other));
+        CHECK(g_hc.attaches == 1);
+        CHECK(g_tr.created == 1);
+        CHECK(g_tr.destroyed == 0);
+        CHECK(g_pn.destroyed == 0);
+        CHECK(g_in.destroyed == 0);
+        CHECK(ui.trackPluginNames().size() == 2u);
+        CHECK(ui.api().client(otherKey, "Other").live.load());
+        ui.poll();
+        CHECK(ui.tracks().size() == 2u);
+
+        // STOP Sat: its track source, panel and instrument are destroyed once, and its targets
+        // leave the list AT ONCE (not on the next poll) - nothing of a sleeping plugin stays drawn.
+        ui.stopPlugin(satKey);
+        CHECK(g_tr.destroyed == 1);
+        CHECK(g_pn.destroyed == 1);
+        CHECK(g_in.destroyed == 1);
+        CHECK(!ui.hasInstances(satKey));
+        CHECK(ui.hasInstances(otherKey));
+        CHECK(ui.isDormant(satKey));
+        CHECK(ui.trackPluginNames().size() == 1u);
+        CHECK(ui.trackPluginNames()[0] == "Other");
+        CHECK(ui.panels().empty());
+        CHECK(ui.instruments().empty());
+        CHECK(ui.tracks().size() == 1u);
+        CHECK(ui.tracks()[0].plugin == "Other");
+        CHECK(g_hc.attaches == 1);  // Other was not re-attached
+        // Other still works, and a second stop of Sat destroys nothing more.
+        ui.stopPlugin(satKey);
+        CHECK(g_tr.destroyed == 1);
+        ui.poll();
+        CHECK(ui.tracks().size() == 1u);
+        CHECK(std::string(ui.tracks()[0].t.id) == "OTH1");
+
+        // STOP Other: its level-1 client sleeps - a plugin that kept the bridge is answered DETACHED.
+        ui.stopPlugin(otherKey);
+        CHECK(!ui.api().client(otherKey, "Other").live.load());
+        CHECK(ui.trackPluginNames().empty());
+
+        // A WHOLESALE REBUILD KEEPS THE STATE THE PER-PLUGIN CALLS LEFT: both are asleep, neither is
+        // created; start one, and the next rebuild builds it.
+        ui.rebuild({sat, other});
+        CHECK(g_tr.created == 1);
+        CHECK(ui.trackPluginNames().empty());
+        CHECK(ui.startPlugin(sat));
+        CHECK(g_tr.created == 2);
+        ui.rebuild({sat, other});
+        CHECK(g_tr.created == 3);
+        CHECK(ui.trackPluginNames().size() == 1u);
+
+        // THE STOP SET IS KEPT BY ID: a stop kept against the 1.0.0 build is the plugin after it
+        // updates to 1.2.0, and startPlugin refuses it.
+        ui.setStopped({"sat-tracker-1.2.0-abi3-win-x64.dll"});
+        CHECK(ui.isStopped("sat-tracker-1.0.0-abi3-win-x64.dll"));
+        CHECK(ui.isStopped("sat-tracker-9.9.9-abi3-win-x64.dll"));
+        CHECK(!ui.isStopped(otherKey));
+        ui.rebuild({sat, other});
+        CHECK(!ui.hasInstances(satKey));
+        CHECK(!ui.startPlugin(sat));
+        LoadedPlugin satUpdated = sat;
+        satUpdated.path = "C:/plugins/sat-tracker-1.2.0-abi3-win-x64.dll";
+        CHECK(!ui.startPlugin(satUpdated));
+        ui.setStopped({});
+        CHECK(ui.startPlugin(satUpdated));
+        CHECK(ui.hasInstances("sat-tracker-1.2.0-abi3-win-x64.dll"));
+    }
+
+    // --- instruments and panels keep their index through a neighbour's removal ---------------
+    {
+        resetAll();
+        g_in = FakeInstrument{};
+        const CascadeInstrumentApi inApi = makeInstrumentApi(false);
+        const CascadePanelApi pnApi = makePanelApi();
+        LoadedPlugin p1 = plugAt("Pager One", "C:/plugins/pager-one-1.0.0.dll");
+        p1.instrument = &inApi;
+        p1.panel = &pnApi;
+        LoadedPlugin p2 = plugAt("Pager Two", "C:/plugins/pager-two-1.0.0.dll");
+        p2.instrument = &inApi;
+        p2.panel = &pnApi;
+        g_in.answer = 1;
+        g_pn.rows = {CascadePanelRow{}};
+        PluginUi ui;
+        ui.rebuild({p1, p2});
+        CHECK(ui.instruments().size() == 2u);
+        CHECK(ui.panels().size() == 2u);
+        // Remove the FIRST: the second's instance index and panel index move up by one, and
+        // poll() must still write the second's own entries, not read past the end.
+        ui.stopPlugin("pager-one-1.0.0.dll");
+        CHECK(ui.instruments().size() == 1u);
+        CHECK(ui.instruments()[0].plugin == "Pager Two");
+        CHECK(ui.panels().size() == 1u);
+        CHECK(ui.panels()[0].plugin == "Pager Two");
+        const int callsBefore = g_in.stateCalls;
+        g_in.seq = 41u;
+        ui.poll();
+        CHECK(g_in.stateCalls == callsBefore + 1);  // one instance, polled once
+        CHECK(ui.instruments()[0].have);
+        CHECK(ui.instruments()[0].state.seq == 41u);
+        CHECK(ui.panels()[0].rows.size() == 1u);
+        // Start the first again: it comes back and polls, and the second is undisturbed.
+        CHECK(ui.startPlugin(p1));
+        CHECK(ui.instruments().size() == 2u);
+        CHECK(ui.panels().size() == 2u);
+        g_in.seq = 42u;
+        ui.poll();
+        CHECK(ui.instruments()[0].state.seq == 42u);
+        CHECK(ui.instruments()[1].state.seq == 42u);
+    }
+
+    // --- the demonstration faces stay at the end of the instrument list ------------------------
+    {
+        resetAll();
+        g_in = FakeInstrument{};
+        const CascadeInstrumentApi inApi = makeInstrumentApi(false);
+        LoadedPlugin p1 = plugAt("Pager One", "C:/plugins/pager-one-1.0.0.dll");
+        p1.instrument = &inApi;
+        g_in.answer = 1;
+        PluginUi ui;
+        ui.setDormant({"pager-one-1.0.0.dll"});
+        ui.rebuild({p1});
+        ui.addDemoInstruments("pager");
+        CHECK(ui.instruments().size() == 1u);
+        CHECK(ui.instruments()[0].plugin == "Demonstration");
+        // A plugin started AFTER the demonstrations were added goes in before them, so their place
+        // at the tail (which stepDemos relies on) is kept and the real instance's index is valid.
+        CHECK(ui.startPlugin(p1));
+        CHECK(ui.instruments().size() == 2u);
+        CHECK(ui.instruments()[0].plugin == "Pager One");
+        CHECK(ui.instruments()[1].plugin == "Demonstration");
+        ui.poll();
+        CHECK(ui.instruments()[0].have);
+        // Stopping it leaves the demonstration where it was.
+        ui.stopPlugin("pager-one-1.0.0.dll");
+        CHECK(ui.instruments().size() == 1u);
+        CHECK(ui.instruments()[0].plugin == "Demonstration");
+    }
+
     return testSummary("test_plugin_ui");
 }

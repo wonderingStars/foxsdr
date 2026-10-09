@@ -205,7 +205,8 @@ public:
     // time it runs late by more than what's left in the ring. So pullBlock
     // keeps a "primed" latch: while not primed, every callback plays SILENCE
     // and charges NO underrun (there was never a promise of audio yet), and
-    // primes the instant the ring holds kPrimeFrames or more — at which point
+    // primes the instant the ring holds leadFrames() or more (kPrimeFrames
+    // until setLeadFrames() says otherwise) — at which point
     // THAT SAME callback plays real audio (the lead is already there to
     // support it). Once primed, a starved callback zero-fills the shortfall,
     // charges exactly one underrun as before, and drops back to unprimed:
@@ -222,13 +223,38 @@ public:
     static std::size_t pullBlock(void* self, float* dst, std::size_t frames);
 
     // 120 ms of frames at the sink rate (Pipeline::kAudioRateHz = 48 kHz):
-    // the lead pullBlock demands before it starts playing. Chosen to clear
+    // the lead pullBlock demands before it starts playing, AS A NEW SINK
+    // STARTS - since 0.99.73 it is the default of a runtime value (leadFrames()
+    // below), not a constant the callback compares against. Chosen to clear
     // the ~64 ms worst-case producer gap measured against a USRP B200 with
-    // margin, while staying well inside the ring (see kRingCapacity below —
-    // the ring must hold the prime plus a full callback's worth with room to
-    // spare, and 5760 of 16384 stereo frames leaves plenty). Public so tests
-    // can prime a ring to the exact threshold instead of guessing at it.
+    // margin, while staying well inside the ring (see kRingCapacity below).
+    // Public so tests can prime a ring to the exact threshold instead of
+    // guessing at it.
     static constexpr std::size_t kPrimeFrames = 5760;
+
+    // THE LEAD IS A RUNTIME VALUE (0.99.73), held per instance. The 12CF report
+    // (110 to 126 starved callbacks a minute on a slow machine) showed that a
+    // fixed 120 ms is not enough everywhere, and that a deeper lead is useless
+    // unless the DriftMatcher's target moves with it - a matcher still steering
+    // the fill to 160 ms bleeds a 480 ms lead back down. So the AudioOut owns
+    // both: the lead pullBlock demands before it plays, and targetFrames(), the
+    // fill the producer's matcher steers to, which is always the lead plus
+    // kTargetMarginFrames (today's 120 -> 160 ms relation kept).
+    //
+    // setLeadFrames() is for the GUI thread (never the callback). A raise
+    // changes the matcher's target and takes effect at the next prime after an
+    // underrun. A decrease also requests a callback-owned trim: on its next
+    // invocation the callback drops the oldest samples above the new target
+    // and re-primes from the retained sound. The setter never reads the ring.
+    // Clamped to [kPrimeFrames, kMaxLeadFrames].
+    static constexpr std::size_t kTargetMarginFrames = 1920;  // 40 ms
+    // 960 ms: the ceiling. With the ring at 1 << 17 samples it leaves 400 ms of
+    // headroom in the narrower, stereo case (see kRingCapacity).
+    static constexpr std::size_t kMaxLeadFrames = 46080;
+    void setLeadFrames(std::size_t frames);
+    std::size_t leadFrames() const { return leadFrames_.load(std::memory_order_relaxed); }
+    // The fill, in frames, the producer's DriftMatcher should steer to.
+    std::size_t targetFrames() const { return leadFrames() + kTargetMarginFrames; }
 
 private:
     // The body of close(), for the paths that already hold apiMutex_ (open()
@@ -252,19 +278,27 @@ private:
     // The body of open() once apiMutex_ is held. Fills `note`.
     bool openLocked(int deviceIndex, double sampleRateHz, int channels, OpenNote& note);
 
-    // 32768 samples: 32768 mono frames (682 ms at 48 kHz) or 16384 STEREO
-    // frames (341 ms — a stereo frame is one L+R pair, so it costs two
-    // samples). Deep enough to ride out GUI-thread hiccups on the producer
-    // side and hold a full kPrimeFrames lead with room to spare; shallow
-    // enough that a full ring is well under a second of latency even for the
-    // narrower stereo case. Power of two as SpscRing requires.
-    static constexpr std::size_t kRingCapacity = std::size_t{1} << 15;
+    // 131072 samples: 131072 mono frames (2.73 s at 48 kHz) or 65536 STEREO
+    // frames (1.37 s - a stereo frame is one L+R pair, so it costs two
+    // samples). It was 1 << 15 (341 ms in stereo) until 0.99.73, when the lead
+    // became adjustable: the deepest lead (kMaxLeadFrames, 960 ms) plus the
+    // matcher's margin leaves 365 ms of headroom in the stereo case, so no
+    // resize is ever needed while audio runs. 512 KiB per sink. Power of two as
+    // SpscRing requires.
+    static constexpr std::size_t kRingCapacity = std::size_t{1} << 17;
 
     dsp::SpscRing<float> ring_;
     std::atomic<float> volume_{1.0f};
     std::atomic<std::uint64_t> underruns_{0};
+    // The lead pullBlock demands before it plays, in frames. Read by the
+    // callback on every unprimed block, written by setLeadFrames(): it must be
+    // lock-free (asserted in the .cpp).
+    std::atomic<std::size_t> leadFrames_{kPrimeFrames};
+    // Set by the control thread on a decrease, consumed by the callback. Only
+    // the callback may discard from ring_, preserving its single reader.
+    std::atomic<bool> trimPending_{false};
     // Starts false: playback is unprimed until the first callback observes
-    // kPrimeFrames or more in the ring, exactly as a fresh stream should be.
+    // leadFrames_ or more in the ring, exactly as a fresh stream should be.
     std::atomic<bool> primed_{false};
     std::atomic<std::uint64_t> primingCallbacks_{0};
     // PaStream*, stored as void* so this public header does not force
@@ -334,5 +368,42 @@ int recoveryDeviceIndex(int lastRequested, const std::string& lastName,
 // wrong device, but the panel says so through the watchdog note, and a wrong
 // name is survivable where reading past the end of the vector is not.
 int clampDeviceRow(int row, const std::vector<AudioDevice>& present);
+
+// ---------------------------------------------------------------------------
+// THE POLICY THAT DEEPENS THE LEAD (0.99.73)
+//
+// The 12CF report: a slow machine starved 110 to 126 callbacks a minute at a
+// 120 ms lead, and a bigger buffer is the one thing that can help once the
+// producer cannot be made faster. The lead steps up through 120 -> 240 -> 480
+// -> 960 ms when a MINUTE closes with kAudioLeadStarvedPerMinute or more
+// starved callbacks, and never above 960 ms (which leaves 365 ms of ring
+// headroom). A minute with fewer does nothing - in particular there is NO
+// stepping down: a machine that fell behind once will again, and a lead that
+// came down by itself would put the stutter back; the person can set it back
+// in the Sinks rail. A fixed setting (`audioBufferMs` in the config, anything
+// but 0) never steps.
+//
+// Pure, so every transition is a table test (tests/test_audio_lead.cpp). It is
+// applied from the GUI thread's minute poll (AppWindow::closeAudioMinute), never
+// from the audio callback.
+// ---------------------------------------------------------------------------
+
+inline constexpr int kAudioLeadStepsMs[4] = {120, 240, 480, 960};
+inline constexpr int kAudioLeadStarvedPerMinute = 3;
+
+// Milliseconds <-> frames at the sink's 48 kHz rate (Pipeline::kAudioRateHz).
+constexpr std::size_t audioLeadFrames(int ms) { return static_cast<std::size_t>(ms) * 48u; }
+constexpr int audioLeadMs(std::size_t frames) { return static_cast<int>(frames / 48u); }
+
+// True for 0 (automatic) and for each of the four steps - the only values the
+// `audioBufferMs` setting may hold.
+bool validAudioBufferSetting(int ms);
+
+// The lead, in milliseconds, for the minute that has just closed with
+// `underrunsLastMinute` starved callbacks while the lead was `currentLeadMs`.
+// `configuredMs` is the setting: 0 is automatic; anything else is a fixed value
+// and the answer is `currentLeadMs`, unchanged. At the ceiling the answer is
+// `currentLeadMs` unchanged as well, whatever it is.
+int nextAudioLead(std::uint64_t underrunsLastMinute, int currentLeadMs, int configuredMs = 0);
 
 }  // namespace cascade::sink
