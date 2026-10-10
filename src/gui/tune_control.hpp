@@ -280,6 +280,8 @@ inline int autoPresetIndexOnStart(const std::vector<CascadePreset>& presets,
                                    double deviceCentreHz, double vfoOffsetHz,
                                    double deviceRateHz) {
     if (presets.empty()) { return -1; }
+    // Reception templates must repair mode/bandwidth even on a listed channel.
+    if ((presets.front().flags & CASCADE_PRESET_KEEP_TUNED_ON_START) != 0u) { return 0; }
     for (const CascadePreset& ps : presets) {
         if (detail::presetAlreadyTunedTo(ps, deviceCentreHz, vfoOffsetHz, deviceRateHz)) {
             return -1;
@@ -330,9 +332,12 @@ inline bool autoPresetTriggersOnWindowClick(bool clicked, bool wasShownBeforeCli
 // window of its own opens the Decoder output window. A text decoder WITH a
 // window of its own (FLEX's pager, the teleprinter) keeps opening just that -
 // its face is where its output is read - and a module that decodes nothing to
-// text never opens it.
-inline bool presetOpensDecoderOutput(bool isTextDecoder, bool hasOwnWindow) {
-    return isTextDecoder && !hasOwnWindow;
+// text never opens it. A settings-only page may instead request the shared
+// text window explicitly with CASCADE_PRESET_SHOW_TEXT_OUTPUT.
+inline bool presetOpensDecoderOutput(bool isTextDecoder, bool hasOwnWindow,
+                                    std::uint32_t presetFlags = 0u) {
+    return isTextDecoder &&
+           (!hasOwnWindow || (presetFlags & CASCADE_PRESET_SHOW_TEXT_OUTPUT) != 0u);
 }
 
 // --- Preset bars: one key per valid preset, on the plugin's OWN window -----
@@ -1833,6 +1838,12 @@ inline CascadePreset userPresetToCascade(const cascade::core::UserPreset& u) {
 inline std::vector<CascadePreset> autoPresetCandidates(
     const std::vector<cascade::core::UserPreset>& user,
     const std::vector<CascadePreset>& plugin) {
+    // An opt-in reception template configures the channel the user has already
+    // chosen; saved frequency buttons remain explicit user actions.
+    if (!plugin.empty() &&
+        (plugin.front().flags & CASCADE_PRESET_KEEP_TUNED_ON_START) != 0u) {
+        return plugin;
+    }
     std::vector<CascadePreset> out;
     out.reserve(user.size() + plugin.size());
     for (const cascade::core::UserPreset& u : user) { out.push_back(userPresetToCascade(u)); }

@@ -34,6 +34,20 @@ plugin would, and its test drives the real module against a fake host.
 
 ## What changed, and what did not
 
+FoxSDR 0.99.74 adds three optional `CascadePreset.flags` bits without changing
+ABI 3 or the preset structure. `CASCADE_PRESET_KEEP_TUNED_ON_START` (0x2) on a
+plugin's first declared preset makes automatic start/window opening apply that
+preset's reception settings at the current device-centre-plus-VFO frequency.
+It applies even on a listed channel, so stale mode or bandwidth is corrected,
+and takes priority over saved user presets for this automatic setup. Explicit
+preset presses, including saved user presets, retain their normal frequency
+behavior. `CASCADE_PRESET_FLAT_AUDIO` (0x4) sets receiver de-emphasis to Off,
+for automatic setup and explicit preset presses. `CASCADE_PRESET_SHOW_TEXT_OUTPUT`
+(0x8) opens the shared Decoder output window for a text decoder even when its
+own settings panel or another window is also open. Plugins without
+`CASCADE_CAP_DECODER` ignore that request. Older hosts ignore these bits;
+plugins that omit them retain the existing automatic tuning behavior.
+
 **The plugin ABI is still 3.** Nothing about the descriptor changed, no
 existing table changed, and every plugin built before level 1 loads and runs
 unchanged - the host's test suite loads all 27 published plugin binaries to

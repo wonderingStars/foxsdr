@@ -19,6 +19,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <cstdlib>
 #include <new>
 
 #if defined(_WIN32)
@@ -94,6 +95,14 @@ const CascadeImageDecoderApi kImageDecoder = {
     &destroy,
 };
 
+// Optional text capability for the shared-output regression. Its lifetime is
+// independent of the image decoder's event counts used by the existing tests.
+void* createText(uint32_t) { return new (std::nothrow) Instance(); }
+void destroyText(void* handle) { delete static_cast<Instance*>(handle); }
+const CascadeDecoderApi kTextDecoder = {
+    static_cast<uint32_t>(sizeof(CascadeDecoderApi)), 0u, &createText, &process, &pollText, &destroyText,
+};
+
 uint32_t presetCount() { return 1u; }
 
 int32_t presetGet(uint32_t index, CascadePreset* out) {
@@ -106,6 +115,14 @@ int32_t presetGet(uint32_t index, CascadePreset* out) {
     out->bandwidthHz = 0.0;
     out->sampleRateHz = 0.0;
     out->flags = 0u;
+    if (std::getenv("PRESET_PROBE_KEEP_TUNED") != nullptr) {
+        out->demodMode = CASCADE_DEMOD_NFM;
+        out->bandwidthHz = 12500.0;
+        out->flags = CASCADE_PRESET_KEEP_TUNED_ON_START | CASCADE_PRESET_FLAT_AUDIO;
+    }
+    if (std::getenv("PRESET_PROBE_SHOW_TEXT") != nullptr) {
+        out->flags |= CASCADE_PRESET_SHOW_TEXT_OUTPUT;
+    }
     return 1;
 }
 
@@ -124,7 +141,7 @@ const CascadePluginDesc kDesc = {
     static_cast<uint32_t>(sizeof(CascadePluginDesc)),
     CASCADE_PLUGIN_ABI_VERSION,
     "Preset Probe",
-    "1.0.0",
+    "1.0.1",
     "FoxSDR tests",
     "PolyForm-Noncommercial-1.0.0",
     CASCADE_CAP_IMAGE_DECODER | CASCADE_CAP_PRESET,
@@ -132,11 +149,24 @@ const CascadePluginDesc kDesc = {
     kCapabilities,
 };
 
+const CascadeCapabilityEntry kTextCapabilities[] = {
+    {CASCADE_CAP_IMAGE_DECODER, static_cast<uint32_t>(sizeof(CascadeImageDecoderApi)), &kImageDecoder},
+    {CASCADE_CAP_PRESET, static_cast<uint32_t>(sizeof(CascadePresetApi)), &kPreset},
+    {CASCADE_CAP_DECODER, static_cast<uint32_t>(sizeof(CascadeDecoderApi)), &kTextDecoder},
+};
+const CascadePluginDesc kTextDesc = {
+    static_cast<uint32_t>(sizeof(CascadePluginDesc)), CASCADE_PLUGIN_ABI_VERSION,
+    "Preset Probe", "1.0.1", "FoxSDR tests", "PolyForm-Noncommercial-1.0.0",
+    CASCADE_CAP_IMAGE_DECODER | CASCADE_CAP_PRESET | CASCADE_CAP_DECODER,
+    static_cast<uint32_t>(sizeof(kTextCapabilities) / sizeof(kTextCapabilities[0])), kTextCapabilities,
+};
+
 }  // namespace
 
 extern "C" CASCADE_PLUGIN_EXPORT const CascadePluginDesc* cascade_plugin_query(
     uint32_t hostAbiVersion) {
     if (hostAbiVersion != CASCADE_PLUGIN_ABI_VERSION) { return nullptr; }
+    if (std::getenv("PRESET_PROBE_TEXT_CAP") != nullptr) { return &kTextDesc; }
     return &kDesc;
 }
 

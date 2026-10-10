@@ -224,6 +224,9 @@ struct RunOptions {
     std::string press;            // FOXSDR_PRESS_PRESET: the plugin whose first preset is pressed at frame 30
     std::string extraJson;        // more config JSON (a leading comma)
     bool keepConfig = false;      // keep the config the previous run with this tag wrote
+    bool keepTuned = false;       // fixture requests automatic reception setup without retuning
+    bool textDecoder = false;    // fixture also declares text output, alongside its own image window
+    bool showTextOutput = false;  // preset requests the shared output window despite its own window
 };
 
 Result once(const std::string& tag, const RunOptions& o) {
@@ -264,6 +267,9 @@ Result once(const std::string& tag, const RunOptions& o) {
     setEnv("FOXSDR_OPEN_DECODER_OUTPUT", o.openDecoderOutput ? "1" : "");
     setEnv("FOXSDR_DORMANT_AFTER_MS", o.dormantAfterMs);
     setEnv("FOXSDR_PRESS_PRESET", o.press);
+    setEnv("PRESET_PROBE_KEEP_TUNED", o.keepTuned ? "1" : "");
+    setEnv("PRESET_PROBE_TEXT_CAP", o.textDecoder ? "1" : "");
+    setEnv("PRESET_PROBE_SHOW_TEXT", o.showTextOutput ? "1" : "");
     r.out = run("\"" + exePath() + "\" --frames " + std::to_string(o.frames) + " 2>&1");
     r.log = readTree(diag);
     r.probe = readFile(probe);
@@ -628,12 +634,69 @@ int main(int argc, char** argv) {
             CHECK(l.count("preset", "create") == 0);  // fitted and idle, like the others
         }
 
+        // Real AppWindow: opening from a UK tune and from a listed frequency must repair
+        // AM/75-us/40-kHz settings without changing the centre or VFO offset.
+        for (const double centre : {153.0e6, 100.15e6}) {
+            RunOptions setup;
+            setup.frames = 65;
+            setup.keepTuned = true;
+            setup.script = click(30, presetRow);
+            setup.extraJson = ", \"centerHz\": " + std::to_string(centre) +
+                ", \"vfoOffsetHz\": 350000, \"mode\": \"AM\", \"bandwidthHz\": 40000, \"deemphasisIndex\": 1";
+            const Result a = once(centre > 150.0e6 ? "preset-uk" : "preset-matched", setup);
+            CHECK(a.ok);
+            if (a.ok) {
+                std::printf("    automatic reception setup at %.3f MHz: %s\n", (centre + 350000.0) / 1e6,
+                            a.logHas("applied its preset") ? "applied" : "skipped");
+                CHECK(a.config.find("\"centerHz\": " + std::to_string(static_cast<int>(centre)) + ".0") != std::string::npos);
+                CHECK(a.config.find("\"vfoOffsetHz\": 350000.0") != std::string::npos);
+                CHECK(a.config.find("\"mode\": \"NFM\"") != std::string::npos);
+                CHECK(a.config.find("\"bandwidthHz\": 12500.0") != std::string::npos);
+                CHECK(a.config.find("\"deemphasisIndex\": 2") != std::string::npos);
+                CHECK(a.count("preset", "create") == 1);
+            }
+        }
+
+        RunOptions explicitTune;
+        explicitTune.frames = 65;
+        explicitTune.keepTuned = true;
+        explicitTune.press = "Preset Probe";
+        explicitTune.extraJson = ", \"centerHz\": 153000000, \"vfoOffsetHz\": 350000, \"deemphasisIndex\": 1";
+        const Result e = once("preset-explicit-tune", explicitTune);
+        CHECK(e.ok);
+        if (e.ok) {
+            CHECK(e.config.find("\"centerHz\": 100150000.0") != std::string::npos);
+            CHECK(e.config.find("\"vfoOffsetHz\": 350000.0") != std::string::npos);
+            CHECK(e.config.find("\"deemphasisIndex\": 2") != std::string::npos);
+        }
+
+        for (int scenario = 0; scenario < 4; ++scenario) {
+            RunOptions output;
+            output.frames = 65;
+            output.press = "Preset Probe";
+            output.textDecoder = scenario != 2;
+            output.showTextOutput = scenario != 1;
+            output.openDecoderOutput = scenario == 3;
+            const Result t = once("preset-own-window-text-" + std::to_string(scenario), output);
+            CHECK(t.ok);
+            if (t.ok) {
+                CHECK(t.rect("image:window:Preset Probe") != nullptr);
+                const bool expected = scenario == 0 || scenario == 3;
+                CHECK((t.rect("decoder:window") != nullptr) == expected);
+                const int opens = t.logCount("preset: opened the Decoder output window for Preset Probe");
+                CHECK(opens == (scenario == 0 ? 1 : 0));
+                std::printf("    own window with text-output request scenario %d: shared %s, opens %d\n",
+                            scenario, t.rect("decoder:window") != nullptr ? "shown" : "hidden", opens);
+            }
+        }
+
         // THE PRESS (the capture seam presses the plugin's first preset at frame 30): the plugin is created,
         // PINNED - saved against its id - and, paced past the interval, never goes dormant.
         installPlugins("", "", presetFile);
         RunOptions press;
         press.frames = 110;
         press.press = "Preset Probe";
+        press.extraJson = ", \"deemphasisIndex\": 1";
         press.dormantAfterMs = "200";
         press.script = pace(35, 105);
         const Result p = once("preset-press", press);
@@ -643,6 +706,7 @@ int main(int argc, char** argv) {
                         p.config.find("\"preset_probe\": \"always\"") != std::string::npos ? "yes" : "no");
             CHECK(p.logHas("capture: preset for 'Preset Probe' pressed"));
             CHECK(p.count("preset", "create") == 1);
+            CHECK(p.config.find("\"deemphasisIndex\": 1") != std::string::npos);
             CHECK(p.config.find("\"preset_probe\": \"always\"") != std::string::npos);
             CHECK(!p.logHas("dormant after"));
             CHECK(p.count("preset", "destroy") == 1);  // only the application ending

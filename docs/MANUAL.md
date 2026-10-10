@@ -417,8 +417,19 @@ against the plugin's id, not its versioned file name). Pressing one of the plugi
 own preset buttons starts it first: pressing "ADS-B 1090 MHz" is an unambiguous
 request for that plugin, and tuning there with the decoder still switched off
 would be worse than useless — and it pins the plugin to ALWAYS, so it goes on running when you
-close its window. Opening a window from its rail row also tunes to the plugin's preset, but does
-not pin it.
+close its window. Opening a window from its rail row also applies the plugin's preset, but does
+not pin it. A plugin can request reception setup at the current tuned frequency (0.99.74):
+opening or starting POCSAG 1.0.3 or newer in FoxSDR 0.99.74 or newer keeps the channel you tuned manually and applies its NFM bandwidth
+and flat audio settings, including when already on a listed channel. Explicit frequency preset
+buttons still tune to their named channels.
+POCSAG opens its settings page and the shared **Decoder output** window together,
+so configuring the plugin does not hide received message text.
+
+On the **POCSAG settings** page, **Numeric messages** and **Use function codes**
+are both off by default, so all functions decode as text. **Numeric messages**
+forces numeric decoding. **Use function codes** takes precedence when enabled:
+function 3 decodes as text and functions 0-2 decode as numeric messages. Baud
+rate and discriminator polarity are detected automatically.
 
 **Mute audio while running.** A decoder that consumes raw I/Q is handed the
 whole receiver band and tunes inside it, so the channel your speakers are fed

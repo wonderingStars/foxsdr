@@ -1862,6 +1862,21 @@ typedef struct CascadeSettingsUiApi {
  */
 #define CASCADE_PRESET_DEVICE_CENTRE 0x00000001u
 
+/* On automatic start/window opening, apply the first declared preset's
+ * reception settings at the current tuned frequency (device centre + VFO),
+ * even when already on a listed channel. Explicit preset presses still tune
+ * frequencyHz. Opt-in; older hosts ignore this bit. */
+#define CASCADE_PRESET_KEEP_TUNED_ON_START 0x00000002u
+
+/* Use flat demodulated audio: set receiver de-emphasis to Off. Applies to
+ * automatic setup and explicit preset presses. Older hosts ignore this bit. */
+#define CASCADE_PRESET_FLAT_AUDIO 0x00000004u
+
+/* Open the shared Decoder output window when applying this preset, including
+ * when the plugin also declares a settings panel or another window. Requires
+ * CASCADE_CAP_DECODER; plugins without text output ignore this request. */
+#define CASCADE_PRESET_SHOW_TEXT_OUTPUT 0x00000008u
+
 typedef struct CascadePreset {
     /* sizeof(CascadePreset) as the HOST compiled it; the host fills this in
      * before the call so the plugin can tell what it is filling. */

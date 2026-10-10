@@ -20955,6 +20955,11 @@ void AppWindow::applyPluginPreset(const cascade::core::LoadedPlugin& p,
         if (vfoBandwidthHz_ != bwBefore) { logBandwidthChange("decoder preset"); }
     }
 
+    if ((ps.flags & CASCADE_PRESET_FLAT_AUDIO) != 0u) {
+        deemphIndex_ = 2;  // Off, the same state saved and shown by the receiver control.
+        pipeline_.setDeemphasisUs(kDeemphUs[deemphIndex_]);
+    }
+
     // WHERE the frequency goes differs by decoder kind, and getting it wrong
     // half-works in a way that is hard to diagnose. An I/Q decoder is handed
     // the whole raw device band and tunes inside it, so the BAND must contain
@@ -20999,6 +21004,15 @@ void AppWindow::applyPluginPreset(const cascade::core::LoadedPlugin& p,
     // says it is waiting - the truth, and what was asked to be seen. Each id
     // is the one drawPluginWindows draws by, built from the same display name.
     openPluginWindowsFor(p);
+
+    // An own page may contain settings rather than received message text.
+    // Only the explicit preset flag overrides the normal own-window policy.
+    if (cascade::gui::presetOpensDecoderOutput(p.decoder != nullptr, /*hasOwnWindow=*/true,
+                                              ps.flags) && !decoderWindowOpen_) {
+        decoderWindowOpen_ = true;
+        cascade::core::diagLogf("preset: opened the Decoder output window for %s",
+                                p.name.c_str());
+    }
 
     std::string note;
     cascade::core::formatUtf8(note, tr("Tuned to %.4f MHz for %s"), ps.frequencyHz / 1.0e6,
@@ -21692,7 +21706,11 @@ void AppWindow::maybeAutoPreset(const std::string& pluginKey, const char* verb, 
                                                           deviceRateHz);
     if (idx < 0) { return; }
 
-    const CascadePreset& ps = presets[static_cast<std::size_t>(idx)];
+    CascadePreset ps = presets[static_cast<std::size_t>(idx)];
+    if ((ps.flags & CASCADE_PRESET_KEEP_TUNED_ON_START) != 0u) {
+        ps.frequencyHz = deviceCentreHz + vfoOffsetHz;
+        ps.flags &= ~CASCADE_PRESET_DEVICE_CENTRE;
+    }
     // THE IDENTICAL PATH THE BUTTON TAKES: mode, bandwidth, device rate, the
     // tune itself and the plugin's own windows. Starting a decoder (or
     // opening its window) is meant to feel like pressing its preset for it,

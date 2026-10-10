@@ -311,6 +311,21 @@ int main() {
 
     // --- autoPresetTriggersOnWindowClick: the DECODE-row gesture ---------------
     {
+        CascadePreset ps = audioPreset(439.9875e6, 12500.0);
+        ps.flags = CASCADE_PRESET_KEEP_TUNED_ON_START | CASCADE_PRESET_FLAT_AUDIO;
+        // Already on a declared channel must still apply the required demod settings.
+        CHECK(autoPresetIndexOnStart({ps}, 439.9875e6, 0.0, 2.4e6) == 0);
+        // A manually tuned UK channel requires no saved preset first.
+        CHECK(autoPresetIndexOnStart({ps}, 153.0e6, 350000.0, 2.4e6) == 0);
+        cascade::core::UserPreset saved{};
+        saved.frequencyHz = 100.0e6;
+        const auto candidates = cascade::gui::autoPresetCandidates({saved}, {ps});
+        CHECK(!candidates.empty());
+        CHECK(candidates.at(0).flags == ps.flags);
+        CHECK(candidates.at(0).bandwidthHz == 12500.0);
+    }
+
+    {
         // SHOWN BY CLICK: a row pressed while its window was hidden - the
         // gesture this feature exists to catch.
         CHECK(autoPresetTriggersOnWindowClick(true, false) == true);
