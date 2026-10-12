@@ -1,23 +1,23 @@
-**FoxSDR 0.99.74 puts GAIN and SQUELCH dials, each with an AUTO key, beside VOLUME on the top bar; folds the STATUS column and each decoder's settings away; renames the rail's VIEW bank TOOLS and moves the Display settings to the top of SYSTEM, folded; lets the ADS-B map list only the aircraft in view and draws an aircraft with no altitude in grey; accepts the address of a third-party plugin site in the plugin store; gives a plugin setting that names a file a BROWSE FILES key; and lets a plugin you have granted and armed send transmit audio through FoxSDR.** Switching automatic gain off now gives the radio its manual gains back and reads them again, so the Source sliders and the GAIN dial show what the radio holds (on a B200 the radio fell about 35 dB while the readback still said 76.0 dB). POCSAG 1.0.3 now sets up the receiver itself, defaults to text, offers numeric and function-code modes, detects baud rate and polarity, and opens its settings and the received messages together. Opening Language & country no longer freezes the window while FoxSDR looks for Chinese, Japanese and Korean fonts. The new interface words are in all 33 languages. The plugin catalogue also gained four plugins on 12 October 2026, Packet TNC, Radio Email, Propagation Tools (with VOACAP) and Solar System View, each marked EXPERIMENTAL and available for Windows only. The plugin ABI is still 3; the host API level goes from 1 to 2.
+**FoxSDR 0.99.74 puts GAIN and SQUELCH dials, each with an AUTO key, beside VOLUME on the top bar; folds the STATUS column and each decoder's settings away; renames the rail's VIEW bank TOOLS and moves the Display settings to the top of SYSTEM, folded; lets the ADS-B map list only the aircraft in view and draws an aircraft with no altitude in grey; accepts the address of a third-party plugin site in the plugin store; gives a plugin setting that names a file a BROWSE FILES key; and lets a plugin you have granted and armed send transmit audio through FoxSDR.** Switching automatic gain off now gives the radio its manual gains back and reads them again, so the Source sliders and the GAIN dial show what the radio holds (on a B200 the radio fell about 35 dB while the readback still said 76.0 dB). POCSAG 1.0.3 now sets up the receiver itself, defaults to text, offers numeric and function-code modes, detects baud rate and polarity, and opens its settings and the received messages together. Opening Language & country no longer freezes the window while FoxSDR looks for Chinese, Japanese and Korean fonts. The new interface words are in all 33 languages. The plugin catalogue also gained five plugins on 12 October 2026, Packet TNC, Radio Email, Propagation Tools (with VOACAP built in), Solar System View and DAB / DAB+ Radio (whose DAB+ sound needs an ffmpeg you install yourself; the plugin ships no AAC decoder), each marked EXPERIMENTAL and available for Windows only. The plugin ABI is still 3; the host API level goes from 1 to 2.
 
 Still not fixed, and known: no real radio has been driven by the new dials, only a fake one, and automatic squelch has been measured on synthetic noise, not on air, so a continuous broadcast tuned in from a quiet frequency is still taken for the noise floor and automatic squelch will close on it; the B200 itself has not been tried since the gain readback fix; nothing has transmitted, because no Pluto was attached and no RF was radiated, and the only module that has ever asked for the transmitter is a test fixture; the ADS-B on-screen list has not been seen with real aircraft, nor the grey over real map tiles; nothing was fetched from a real plugin site, and a plugin module with no install record (hand-copied, or its record lost) still competes by version as hand-copied modules always have; nobody has looked at the folded Display on screen; the Linux builds, including the file dialog that uses `zenity` or `kdialog`, are compiled by CI only and have not been run; the language list was tested against a simulated slow disk only, and a user whose Windows language is Chinese, Japanese or Korean while the interface is in another language still waits for the font search once, on that section's first frame; the specific POCSAG transmission originally reported as missing was not available for comparison; the new words in thirty-three languages are machine translations that nobody has read; and one start-up test (`test_startup_state`) lost its captured output in one whole-suite run and again in 1 of 44 runs on its own, for a reason that is not established, although it passed in the last whole-suite run.
 
 ---
 
 **SHA-256 of `foxsdr-setup-0.99.74.exe`:**
-`TBD`
+`3fad3bc9dd6b824b36ffe1674b9e5376ebd615eba4466a6f1c70dce9c86b401f`
 
 **SHA-256 of `FoxSDR-0.99.74-x86_64.AppImage`:**
-`TBD`
+`a841ae0cb18bffe46b32e97ec597d0e9a338fbb82d6248697896591b0e9723ef`
 
 **SHA-256 of `foxsdr-0.99.74-linux-x64.tar.gz`:**
-`TBD`
+`784adb11b59d5003018ad01ca1427218cf8f0d0a22626d969cb8e53fef5a4475`
 
 **SHA-256 of `FoxSDR-0.99.74-aarch64.AppImage`:**
-`TBD`
+`8cf5b26c9d1899f4ecec9243de9e1f3fe99ec9e35eae375a99d05d3f5b45f5ea`
 
 **SHA-256 of `foxsdr-0.99.74-linux-arm64.tar.gz`:**
-`TBD`
+`833f2db1243fa9b25db549519d6cf7e4b537b1b7a4f03c5eb2ad2bb6c473b2c0`
 
 ## POCSAG
 
